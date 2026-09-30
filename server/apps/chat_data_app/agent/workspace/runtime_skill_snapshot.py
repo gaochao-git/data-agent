@@ -20,9 +20,9 @@ import hashlib
 import json
 import shutil
 import stat
-import sys
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 from uuid import uuid4
 
 from utils.logger import get_logger
@@ -175,11 +175,8 @@ def _describe_fingerprint_changes(stored: dict[str, str] | None, current: dict[s
 
 
 def _rmtree(path: Path) -> None:
-    """兼容各 Python 版本的 rmtree：3.12+ 用 onexc，更早版本用 onerror。"""
-    if sys.version_info >= (3, 12):
-        shutil.rmtree(path, onexc=_on_rm_error)
-    else:
-        shutil.rmtree(path, onerror=_on_rm_error)
+    """rmtree 兼容层：3.12+ 用 onexc 参数（基线已是 3.12，旧版 onerror 分支移除）。"""
+    shutil.rmtree(path, onexc=_on_rm_error)
 
 
 def _copy_skill_dir(src: Path, dst: Path) -> None:

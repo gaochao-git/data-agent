@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from sqlalchemy import and_, func, or_, select, update
 
@@ -53,7 +53,7 @@ class SkillDao:
     @staticmethod
     def _skill_row_to_dict(
         row: ChatDataSkill, draft_skill_version_no: Any = None, favorite_flag: Any = 0
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         return {
             "skill_id": row.skill_id,
             "skill_name": row.skill_name,
@@ -77,7 +77,7 @@ class SkillDao:
         }
 
     @staticmethod
-    def _version_row_to_dict(row: ChatDataSkillVersion) -> Dict[str, Any]:
+    def _version_row_to_dict(row: ChatDataSkillVersion) -> dict[str, Any]:
         return {
             "skill_id": row.skill_id,
             "skill_version_no": row.skill_version_no,
@@ -118,7 +118,7 @@ class SkillDao:
         )
         return stmt
 
-    async def list_skills_async(self, user_id: str = "", include_disabled: bool = False) -> List[Dict[str, Any]]:
+    async def list_skills_async(self, user_id: str = "", include_disabled: bool = False) -> list[dict[str, Any]]:
         stmt = self._skill_select(user_id, include_disabled=include_disabled).order_by(ChatDataSkill.update_time.desc())
         async with get_session() as db:
             result = await db.execute(stmt)
@@ -127,7 +127,7 @@ class SkillDao:
                 for row, draft_no, favorite_id in result.all()
             ]
 
-    async def get_skill_async(self, skill_id_or_name: str, user_id: str = "") -> Optional[Dict[str, Any]]:
+    async def get_skill_async(self, skill_id_or_name: str, user_id: str = "") -> dict[str, Any] | None:
         value = str(skill_id_or_name or "").strip()
         if not value:
             return None
@@ -154,7 +154,7 @@ class SkillDao:
             result = await db.execute(stmt)
             return result.first() is not None
 
-    async def get_published_version_async(self, skill_id: str, skill_version_no: int) -> Optional[Dict[str, Any]]:
+    async def get_published_version_async(self, skill_id: str, skill_version_no: int) -> dict[str, Any] | None:
         stmt = (
             select(ChatDataSkillVersion)
             .where(
@@ -170,7 +170,7 @@ class SkillDao:
             row = (await db.execute(stmt)).scalars().first()
             return self._version_row_to_dict(row) if row else None
 
-    async def list_versions_async(self, skill_id: str) -> List[Dict[str, Any]]:
+    async def list_versions_async(self, skill_id: str) -> list[dict[str, Any]]:
         stmt = (
             select(ChatDataSkillVersion)
             .where(
@@ -184,7 +184,7 @@ class SkillDao:
             rows = (await db.execute(stmt)).scalars().all()
             return [self._version_row_to_dict(row) for row in rows]
 
-    async def get_version_async(self, skill_id: str, skill_version_no: int) -> Optional[Dict[str, Any]]:
+    async def get_version_async(self, skill_id: str, skill_version_no: int) -> dict[str, Any] | None:
         stmt = (
             select(ChatDataSkillVersion)
             .where(
@@ -199,13 +199,13 @@ class SkillDao:
             row = (await db.execute(stmt)).scalars().first()
             return self._version_row_to_dict(row) if row else None
 
-    async def get_latest_draft_version_async(self, skill_id: str) -> Optional[Dict[str, Any]]:
+    async def get_latest_draft_version_async(self, skill_id: str) -> dict[str, Any] | None:
         return await self._get_latest_version_by_status_async(skill_id, "draft")
 
-    async def get_latest_published_version_async(self, skill_id: str) -> Optional[Dict[str, Any]]:
+    async def get_latest_published_version_async(self, skill_id: str) -> dict[str, Any] | None:
         return await self._get_latest_version_by_status_async(skill_id, "published")
 
-    async def _get_latest_version_by_status_async(self, skill_id: str, status: str) -> Optional[Dict[str, Any]]:
+    async def _get_latest_version_by_status_async(self, skill_id: str, status: str) -> dict[str, Any] | None:
         stmt = (
             select(ChatDataSkillVersion)
             .where(
@@ -231,7 +231,7 @@ class SkillDao:
             max_version_no = (await db.execute(stmt)).scalar_one()
             return int(max_version_no or 0) + 1
 
-    async def create_skill_with_version_async(self, skill: Dict[str, Any], version: Dict[str, Any]) -> None:
+    async def create_skill_with_version_async(self, skill: dict[str, Any], version: dict[str, Any]) -> None:
         async with get_session() as db:
             db.add(
                 ChatDataSkill(
@@ -255,7 +255,7 @@ class SkillDao:
             db.add(self._build_version_model(version))
 
     async def update_skill_async(
-        self, skill_id: str, values: Dict[str, Any], update_by: str = "", update_by_name: str = ""
+        self, skill_id: str, values: dict[str, Any], update_by: str = "", update_by_name: str = ""
     ) -> int:
         allowed = {
             "skill_title",
@@ -282,12 +282,12 @@ class SkillDao:
             result = await db.execute(stmt)
             return int(result.rowcount or 0)
 
-    async def insert_version_async(self, version: Dict[str, Any]) -> int:
+    async def insert_version_async(self, version: dict[str, Any]) -> int:
         async with get_session() as db:
             db.add(self._build_version_model(version))
             return 1
 
-    def _build_version_model(self, version: Dict[str, Any]) -> ChatDataSkillVersion:
+    def _build_version_model(self, version: dict[str, Any]) -> ChatDataSkillVersion:
         return ChatDataSkillVersion(
             skill_id=version.get("skill_id") or "",
             skill_version_no=int(version.get("skill_version_no") or 0),

@@ -88,7 +88,7 @@ def build_sql_concurrency_key(user_id: str | None, execution_target: dict[str, A
     return f"{normalized_user_id}:{datasource_key}"
 
 
-async def run_with_sql_user_datasource_limit(
+async def run_with_sql_user_datasource_limit[T](
     user_id: str | None,
     execution_target: dict[str, Any] | None,
     operation: Callable[[], Awaitable[T]],

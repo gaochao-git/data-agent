@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Set
 
 
 @dataclass
@@ -11,7 +10,7 @@ class SqlParseResult:
     """SQL 解析结果。"""
 
     success: bool
-    tables: Set[str] = field(default_factory=set)
+    tables: set[str] = field(default_factory=set)
     error: str = ""
 
 
@@ -362,7 +361,7 @@ def extract_top_level_limit_count(sql: str, source_type: str | None = None) -> i
         return None
 
 
-def _collect_physical_tables_from_expression(expression, tables: Set[str]) -> None:
+def _collect_physical_tables_from_expression(expression, tables: set[str]) -> None:
     """从单条 SQL 表达式中收集物理表名，排除 CTE 名称，写入 tables。"""
     from sqlglot import exp
 
@@ -391,7 +390,7 @@ def extract_physical_tables(sql: str, source_type: str | None = None) -> SqlPars
     except Exception as err:
         return SqlParseResult(success=False, error=str(err) or "SQL 解析失败")
 
-    tables: Set[str] = set()
+    tables: set[str] = set()
     for expression in expressions:
         _collect_physical_tables_from_expression(expression, tables)
 

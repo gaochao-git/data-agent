@@ -12,10 +12,10 @@ JSON 字符串甚至双层编码字符串（``"{\\"a\\": 1}"``）。下游三处
 """
 
 import json
-from typing import Any, Optional
+from typing import Any
 
 
-def coerce_tool_call_args(value: Any, max_unwrap_layers: int = 2) -> Optional[dict]:
+def coerce_tool_call_args(value: Any, max_unwrap_layers: int = 2) -> dict | None:
     """尽力把工具调用参数规整为 dict；无法规整时返回 None。
 
     规整规则：

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import shlex
 from pathlib import Path, PurePosixPath
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 from uuid import uuid4
 
 from utils.logger import get_logger
@@ -89,10 +89,7 @@ async def sandbox_render_office_html(
         if Path(target).suffix.lower() not in {".docx", ".xlsx", ".pptx"}:
             raise ValueError("OfficeCLI HTML 预览仅支持 .docx、.xlsx、.pptx 文件")
         preview_path = f"/tmp/chat-data-office-preview-{uuid4().hex}.html"
-        command = "officecli view {source} html --out {preview}".format(
-            source=shlex.quote(target),
-            preview=shlex.quote(preview_path),
-        )
+        command = f"officecli view {shlex.quote(target)} html --out {shlex.quote(preview_path)}"
         try:
             exit_code, _stdout, stderr = await run_command_in_sandbox(
                 session=session,
@@ -171,7 +168,7 @@ async def _prepare_sandbox_text_reader(
     session: Any,
     target: Any,
     entry: Any,
-) -> tuple[Any, Optional[dict[str, Any]]]:
+) -> tuple[Any, dict[str, Any] | None]:
     """确认目标是可读文本；目录/二进制文件时返回 (None, 提前返回结果)。"""
     path_kind = await _sandbox_path_kind(session=session, path=target, entry=entry)
     if path_kind == "dir":
@@ -186,7 +183,7 @@ async def _prepare_sandbox_text_reader(
     return reader, None
 
 
-async def _sandbox_total_lines_or_none(session: Any, target: Any, entry: Any) -> Optional[int]:
+async def _sandbox_total_lines_or_none(session: Any, target: Any, entry: Any) -> int | None:
     """统计总行数；统计失败时记 warning 并返回 None，不阻塞正文读取。"""
     try:
         return await _sandbox_text_line_count(session=session, path=target, entry=entry)

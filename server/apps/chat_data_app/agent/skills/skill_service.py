@@ -8,7 +8,7 @@ import shutil
 import tempfile
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from sqlalchemy.exc import IntegrityError
 
@@ -98,7 +98,7 @@ def _resolve_user_skill_version_dir(path_value: Any, field_name: str = "技能�
     return _resolve_user_skill_path(Path(raw), field_name)
 
 
-def _list_skill_files(skill_path: str) -> Dict[str, List[str]]:
+def _list_skill_files(skill_path: str) -> dict[str, list[str]]:
     """列出技能参考文档和素材（含后缀的真实文件名，references 不限文档格式）。"""
     root = Path(skill_path).parent
     references_root = root / "references"
@@ -165,7 +165,7 @@ def _safe_copy_skill_subdir(source_subdir: Path, target_subdir: Path) -> None:
 
 async def _append_runtime_user_skill_source(
     out: list[tuple[str, Path]],
-    row: Dict[str, Any],
+    row: dict[str, Any],
     dao: "SkillDao",
 ) -> None:
     """按一行用户技能记录解析并追加其运行期版本目录到 ``out``。
@@ -229,7 +229,7 @@ def _copy_version_dir(source_dir: Path, target_dir: Path) -> None:
 def _alpha_suffix(index: int) -> str:
     """生成不含数字的序号后缀。"""
     value = int(index or 0)
-    chars: List[str] = []
+    chars: list[str] = []
     while value > 0:
         value -= 1
         chars.append(chr(ord("a") + value % 26))
@@ -237,22 +237,22 @@ def _alpha_suffix(index: int) -> str:
     return "".join(reversed(chars)) or "a"
 
 
-def _get_creator_name(row: Dict[str, Any], user_names: Optional[Dict[str, str]] = None) -> str:
+def _get_creator_name(row: dict[str, Any], user_names: dict[str, str] | None = None) -> str:
     creator_id = str(row.get("create_by") or row.get("owner_user_id") or "").strip()
     return str(row.get("create_by_name") or (user_names or {}).get(creator_id) or "").strip()
 
 
-def _is_skill_owner(row: Dict[str, Any], user_id: str = "") -> bool:
+def _is_skill_owner(row: dict[str, Any], user_id: str = "") -> bool:
     return bool(user_id and str(row.get("owner_user_id") or "") == str(user_id))
 
 
-def _can_manage_skill(row: Dict[str, Any], user_id: str = "") -> bool:
+def _can_manage_skill(row: dict[str, Any], user_id: str = "") -> bool:
     return bool(row.get("skill_source") == "user" and _is_skill_owner(row, user_id))
 
 
 def _skill_row_to_info(
-    row: Dict[str, Any], user_id: str = "", user_names: Optional[Dict[str, str]] = None
-) -> Dict[str, Any]:
+    row: dict[str, Any], user_id: str = "", user_names: dict[str, str] | None = None
+) -> dict[str, Any]:
     """将数据库技能行转换为前端技能对象。"""
     can_manage = _can_manage_skill(row, user_id)
     info = _skill_row_base_info(row)
@@ -260,7 +260,7 @@ def _skill_row_to_info(
     return info
 
 
-def _skill_row_base_info(row: Dict[str, Any]) -> Dict[str, Any]:
+def _skill_row_base_info(row: dict[str, Any]) -> dict[str, Any]:
     """技能行的身份与展示字段。"""
     return {
         "skill_id": row.get("skill_id"),
@@ -276,11 +276,11 @@ def _skill_row_base_info(row: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _skill_row_manage_info(
-    row: Dict[str, Any],
+    row: dict[str, Any],
     can_manage: bool,
     user_id: str,
-    user_names: Optional[Dict[str, str]],
-) -> Dict[str, Any]:
+    user_names: dict[str, str] | None,
+) -> dict[str, Any]:
     """技能行的版本/权限/审计字段。"""
     creator_id = str(row.get("create_by") or row.get("owner_user_id") or "").strip()
     return {
@@ -301,7 +301,7 @@ def _skill_row_manage_info(
     }
 
 
-def _skill_version_to_info(version: Dict[str, Any], current_version_no: int = 0) -> Dict[str, Any]:
+def _skill_version_to_info(version: dict[str, Any], current_version_no: int = 0) -> dict[str, Any]:
     """将技能版本行转换为前端版本对象。"""
     version_no = int(version.get("skill_version_no") or 0)
     return {
@@ -318,7 +318,7 @@ def _skill_version_to_info(version: Dict[str, Any], current_version_no: int = 0)
     }
 
 
-def _system_metadata_to_info(item: Dict[str, Any]) -> Dict[str, Any]:
+def _system_metadata_to_info(item: dict[str, Any]) -> dict[str, Any]:
     """将文件系统系统技能元数据转换为前端技能对象。"""
     return {
         "skill_id": item.get("name"),
@@ -339,7 +339,7 @@ def _system_metadata_to_info(item: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _plugin_skill_rows(existing_names: set[str]) -> List[Dict[str, Any]]:
+def _plugin_skill_rows(existing_names: set[str]) -> list[dict[str, Any]]:
     """将已启用插件声明的技能转为前端展示行（source=plugin）。
 
     与会话技能快照同语义：与系统/用户技能同名时跳过（快照为扁平 /mnt/skills/<name>）。
@@ -347,7 +347,7 @@ def _plugin_skill_rows(existing_names: set[str]) -> List[Dict[str, Any]]:
     from ..plugins.loader import enabled_plugin_skill_sources
     from .loader import parse_metadata
 
-    rows: List[Dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []
     for name, skill_dir in enabled_plugin_skill_sources():
         if name in existing_names:
             continue
@@ -366,7 +366,7 @@ def _plugin_skill_rows(existing_names: set[str]) -> List[Dict[str, Any]]:
     return rows
 
 
-def _build_skill_md(payload: Dict[str, Any]) -> str:
+def _build_skill_md(payload: dict[str, Any]) -> str:
     """根据用户输入生成标准 SKILL.md 内容。"""
     skill_name = str(payload.get("skill_name") or payload.get("name") or "").strip()
     skill_title = str(payload.get("skill_title") or payload.get("title") or skill_name).strip()
@@ -392,7 +392,7 @@ def _build_skill_md(payload: Dict[str, Any]) -> str:
     )
 
 
-def _validate_skill_payload(payload: Dict[str, Any]) -> None:
+def _validate_skill_payload(payload: dict[str, Any]) -> None:
     """校验用户技能基础字段。"""
     skill_name = str(payload.get("skill_name") or payload.get("name") or "").strip()
     skill_title = str(payload.get("skill_title") or payload.get("title") or "").strip()
@@ -404,7 +404,7 @@ def _validate_skill_payload(payload: Dict[str, Any]) -> None:
         raise ValueError("技能标题不能为空")
 
 
-def _write_skill_md(version_dir: Path, payload: Dict[str, Any]) -> Path:
+def _write_skill_md(version_dir: Path, payload: dict[str, Any]) -> Path:
     """写入技能版本目录的 SKILL.md 并校验元数据。"""
     version_dir.mkdir(parents=True, exist_ok=True)
     _ensure_skill_dirs(version_dir)
@@ -417,7 +417,7 @@ def _write_skill_md(version_dir: Path, payload: Dict[str, Any]) -> Path:
 
 
 def _resolve_new_skill_text_fields(
-    normalized_payload: Dict[str, Any], parsed: Dict[str, Any], skill_name: str
+    normalized_payload: dict[str, Any], parsed: dict[str, Any], skill_name: str
 ) -> tuple:
     """按 payload 别名、SKILL.md 元数据、默认值的优先级解析标题/描述/分类。"""
     title = (
@@ -450,7 +450,7 @@ class SkillService:
 
     async def _safe_db_skills_async(
         self, user_id: str = "", include_disabled: bool = False
-    ) -> Optional[List[Dict[str, Any]]]:
+    ) -> list[dict[str, Any]] | None:
         """异步读取数据库用户技能；表未初始化时仍可使用文件系统系统技能。"""
         try:
             return await self.dao.list_skills_async(user_id=user_id, include_disabled=include_disabled)
@@ -459,8 +459,8 @@ class SkillService:
             return None
 
     def _collect_skill_source_rows(
-        self, db_rows, system_metadata, user_id: str, user_names: Optional[Dict[str, str]]
-    ) -> List[Dict[str, Any]]:
+        self, db_rows, system_metadata, user_id: str, user_names: dict[str, str] | None
+    ) -> list[dict[str, Any]]:
         """合并 DB 用户技能行、文件系统系统技能与插件技能为统一的展示行。"""
         source_rows = (
             [
@@ -477,7 +477,7 @@ class SkillService:
         return source_rows
 
     @staticmethod
-    def _skill_matches_scope(item: Dict[str, Any], scope: str, user_id: str) -> bool:
+    def _skill_matches_scope(item: dict[str, Any], scope: str, user_id: str) -> bool:
         if scope == "favorites" and not item.get("favorite"):
             return False
         if scope == "mine" and str(item.get("owner_user_id") or "") != str(user_id or ""):
@@ -489,7 +489,7 @@ class SkillService:
         )
 
     @staticmethod
-    def _skill_matches_filter(item: Dict[str, Any], keyword: str, normalized_category: str) -> bool:
+    def _skill_matches_filter(item: dict[str, Any], keyword: str, normalized_category: str) -> bool:
         if normalized_category and item.get("category") != normalized_category:
             return False
         searchable = " ".join(
@@ -505,17 +505,17 @@ class SkillService:
 
     async def list_skills_async(
         self,
-        search: Optional[str] = None,
-        category: Optional[str] = None,
+        search: str | None = None,
+        category: str | None = None,
         user_id: str = "",
         scope: str = "all",
-        user_names: Optional[Dict[str, str]] = None,
-    ) -> List[Dict[str, Any]]:
+        user_names: dict[str, str] | None = None,
+    ) -> list[dict[str, Any]]:
         await refresh_plugin_state()
         db_rows = await self._safe_db_skills_async(user_id=user_id)
         keyword = str(search or "").strip().lower()
         normalized_category = str(category or "").strip()
-        skills: List[Dict[str, Any]] = []
+        skills: list[dict[str, Any]] = []
         system_metadata = await asyncio.to_thread(load_metadata)
         source_rows = self._collect_skill_source_rows(db_rows, system_metadata, user_id, user_names)
         for item in source_rows:
@@ -527,8 +527,8 @@ class SkillService:
         return sorted(skills, key=lambda value: (str(value.get("source") or ""), str(value.get("name") or "")))
 
     async def get_skill_async(
-        self, name: str, include_draft: bool = False, user_id: str = "", user_names: Optional[Dict[str, str]] = None
-    ) -> Optional[Dict[str, Any]]:
+        self, name: str, include_draft: bool = False, user_id: str = "", user_names: dict[str, str] | None = None
+    ) -> dict[str, Any] | None:
         skill = await self._get_system_skill_detail_async(name)
         if skill:
             return skill
@@ -536,7 +536,7 @@ class SkillService:
             name, include_draft=include_draft, user_id=user_id, user_names=user_names
         )
 
-    async def resolve_skill_path_async(self, name: str, user_id: str = "") -> Optional[Dict[str, Any]]:
+    async def resolve_skill_path_async(self, name: str, user_id: str = "") -> dict[str, Any] | None:
         """异步解析可加载技能的 SKILL.md 路径。"""
         system_meta = await self._get_system_skill_metadata_async(name)
         if system_meta:
@@ -576,7 +576,7 @@ class SkillService:
                 continue
         return out
 
-    async def _get_system_skill_metadata_async(self, name: str) -> Optional[Dict[str, Any]]:
+    async def _get_system_skill_metadata_async(self, name: str) -> dict[str, Any] | None:
         """异步读取文件系统系统技能元数据，不访问技能数据库。"""
         metadata = (await asyncio.to_thread(load_metadata)).get(name)
         if not metadata:
@@ -589,7 +589,7 @@ class SkillService:
             "source": "system",
         }
 
-    async def _get_system_skill_detail_async(self, name: str) -> Optional[Dict[str, Any]]:
+    async def _get_system_skill_detail_async(self, name: str) -> dict[str, Any] | None:
         """读取部署管理的系统技能详情。"""
         skill = await asyncio.to_thread(activate_skill, name)
         if not skill:
@@ -609,8 +609,8 @@ class SkillService:
         }
 
     async def create_user_skill_async(
-        self, payload: Dict[str, Any], user_id: str, operator_name: str = ""
-    ) -> Dict[str, Any]:
+        self, payload: dict[str, Any], user_id: str, operator_name: str = ""
+    ) -> dict[str, Any]:
         """异步创建用户技能草稿版本。"""
         normalized_payload = dict(payload or {})
         _validate_skill_payload(normalized_payload)
@@ -678,7 +678,7 @@ class SkillService:
 
     async def import_user_skill_from_directory_async(
         self, source_dir: Path, user_id: str, operator_name: str = ""
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """异步从已生成的技能目录导入为用户技能草稿。"""
         resolved_source = source_dir.resolve()
         if not await asyncio.to_thread(resolved_source.is_dir):
@@ -711,7 +711,7 @@ class SkillService:
         clear_metadata_cache()
         return await self.get_skill_async(skill_id, include_draft=True, user_id=user_id) or skill
 
-    async def copy_user_skill_async(self, skill_id: str, user_id: str, operator_name: str = "") -> Dict[str, Any]:
+    async def copy_user_skill_async(self, skill_id: str, user_id: str, operator_name: str = "") -> dict[str, Any]:
         """异步复制可见用户技能为当前用户私有草稿。"""
         source_skill = await self._resolve_copy_source_skill_async(skill_id, user_id)
         source_version = await self._get_copy_source_version_async(source_skill, user_id)
@@ -738,7 +738,7 @@ class SkillService:
         )
         return await self._finalize_copied_skill_async(copied_skill, source_dir, user_id)
 
-    async def _resolve_copy_source_skill_async(self, skill_id: str, user_id: str) -> Dict[str, Any]:
+    async def _resolve_copy_source_skill_async(self, skill_id: str, user_id: str) -> dict[str, Any]:
         """校验并取回复制来源技能：系统技能不支持复制，不存在抛 ValueError。"""
         if await self._get_system_skill_metadata_async(skill_id):
             raise PermissionError("系统技能不支持复制")
@@ -749,7 +749,7 @@ class SkillService:
             raise PermissionError("系统技能不支持复制")
         return source_skill
 
-    async def _read_copy_source_content_async(self, source_dir: Path) -> tuple[Dict[str, Any], str]:
+    async def _read_copy_source_content_async(self, source_dir: Path) -> tuple[dict[str, Any], str]:
         """读取来源 SKILL.md：目录无效抛 ValueError，返回 (frontmatter 元数据, 去 frontmatter 正文)。"""
         skill_md_path = source_dir / "SKILL.md"
         if not await asyncio.to_thread(skill_md_path.is_file):
@@ -760,10 +760,10 @@ class SkillService:
 
     async def _finalize_copied_skill_async(
         self,
-        copied_skill: Dict[str, Any],
+        copied_skill: dict[str, Any],
         source_dir: Path,
         user_id: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """把来源目录整体拷入新技能草稿版本，清缓存并返回最终详情。"""
         copied_skill_id = str(copied_skill.get("skill_id") or "")
         draft_version_no = int(copied_skill.get("draft_version_no") or 1)
@@ -773,8 +773,8 @@ class SkillService:
         return await self.get_skill_async(copied_skill_id, include_draft=True, user_id=user_id) or copied_skill
 
     async def update_user_skill_draft_async(
-        self, skill_id: str, payload: Dict[str, Any], user_id: str, operator_name: str = ""
-    ) -> Dict[str, Any]:
+        self, skill_id: str, payload: dict[str, Any], user_id: str, operator_name: str = ""
+    ) -> dict[str, Any]:
         """异步更新用户技能；只有正文变更才写入草稿版本。"""
         skill = await self.dao.get_skill_async(skill_id, user_id=user_id)
         if not skill:
@@ -810,12 +810,12 @@ class SkillService:
 
     async def _write_skill_draft_if_needed(
         self,
-        skill: Dict[str, Any],
-        normalized_payload: Dict[str, Any],
+        skill: dict[str, Any],
+        normalized_payload: dict[str, Any],
         user_id: str,
         *,
         operator_name: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """payload 携带正文时写入草稿版本并解析元数据；否则返回空 dict。"""
         if "content" not in normalized_payload:
             return {}
@@ -829,7 +829,7 @@ class SkillService:
         return await asyncio.to_thread(parse_metadata, skill_md_path) or {}
 
     @staticmethod
-    def _resolve_skill_visibility(payload: Dict[str, Any], skill: Dict[str, Any]) -> str:
+    def _resolve_skill_visibility(payload: dict[str, Any], skill: dict[str, Any]) -> str:
         """可见性取 payload > 现值 > private，非法值回退 private。"""
         visibility_type = str(payload.get("visibility_type") or skill.get("visibility_type") or "private").strip()
         if visibility_type not in {"private", "global"}:
@@ -838,13 +838,13 @@ class SkillService:
 
     @staticmethod
     def _build_skill_update_fields(
-        payload: Dict[str, Any],
-        skill: Dict[str, Any],
-        normalized_payload: Dict[str, Any],
-        parsed: Dict[str, Any],
+        payload: dict[str, Any],
+        skill: dict[str, Any],
+        normalized_payload: dict[str, Any],
+        parsed: dict[str, Any],
         visibility_type: str,
         current_version_no: int,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         return {
             "skill_title": normalized_payload.get("skill_title") or parsed.get("title") or skill.get("skill_name"),
             "skill_desc": payload.get("skill_desc")
@@ -857,7 +857,7 @@ class SkillService:
             "skill_publish_status": "published" if current_version_no > 0 else "draft",
         }
 
-    async def publish_user_skill_async(self, skill_id: str, user_id: str, operator_name: str = "") -> Dict[str, Any]:
+    async def publish_user_skill_async(self, skill_id: str, user_id: str, operator_name: str = "") -> dict[str, Any]:
         """异步发布用户技能最新草稿版本。"""
         skill = await self.dao.get_skill_async(skill_id, user_id=user_id)
         if not skill:
@@ -878,7 +878,7 @@ class SkillService:
         clear_metadata_cache()
         return await self.get_skill_async(str(skill.get("skill_id")), include_draft=True, user_id=user_id) or {}
 
-    async def list_skill_versions_async(self, skill_id: str, user_id: str) -> List[Dict[str, Any]]:
+    async def list_skill_versions_async(self, skill_id: str, user_id: str) -> list[dict[str, Any]]:
         """列出系统技能固定版本或用户技能版本。"""
         system_version_dir = await self._get_system_version_dir_async(skill_id, 1)
         if system_version_dir is not None:
@@ -901,7 +901,7 @@ class SkillService:
 
     async def get_skill_version_detail_async(
         self, skill_id: str, skill_version_no: int, user_id: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """读取系统技能固定版本或用户技能指定版本详情。"""
         system_version_dir = await self._get_system_version_dir_async(skill_id, skill_version_no)
         if system_version_dir is not None:
@@ -943,7 +943,7 @@ class SkillService:
 
     async def list_skill_version_files_async(
         self, skill_id: str, skill_version_no: int, user_id: str
-    ) -> Dict[str, List[str]]:
+    ) -> dict[str, list[str]]:
         """列出系统技能或用户技能版本固定目录文件。"""
         version_dir = await self._get_readable_version_dir_async(skill_id, skill_version_no, user_id)
         return await asyncio.to_thread(_list_skill_files, str(version_dir / "SKILL.md"))
@@ -956,7 +956,7 @@ class SkillService:
         file_path: str,
         user_id: str,
         max_bytes: int | None = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """异步读取用户技能版本目录文件。
 
         上限语义与主对话工作区文本预览（read_workspace_text_file）对齐：
@@ -1016,7 +1016,7 @@ class SkillService:
 
     async def render_skill_office_preview_async(
         self, skill_id: str, skill_version_no: int, dir_name: str, file_path: str, user_id: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """渲染技能版本目录 Office 文件的 HTML 预览。
 
         复用主对话工作区的 OfficeCLI 渲染引擎（WorkspaceOfficePreviewService）。
@@ -1108,7 +1108,7 @@ class SkillService:
         content: str,
         user_id: str,
         operator_name: str = "",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """异步保存用户技能版本目录文件。"""
         draft, target = await self._resolve_writable_draft_file_async(
             skill_id, dir_name, file_path, user_id, operator_name=operator_name
@@ -1132,7 +1132,7 @@ class SkillService:
         file_stream: Any,
         user_id: str,
         operator_name: str = "",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """异步上传二进制/文本文件到用户技能草稿版本固定目录。
 
         file_stream 为带 ``async read(n)`` 的文件对象（FastAPI UploadFile）：流式落盘
@@ -1177,7 +1177,7 @@ class SkillService:
 
     async def delete_skill_version_file_async(
         self, skill_id: str, skill_version_no: int, dir_name: str, file_path: str, user_id: str, operator_name: str = ""
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """异步删除用户技能草稿版本目录文件。"""
         draft, target = await self._resolve_writable_draft_file_async(
             skill_id, dir_name, file_path, user_id, operator_name=operator_name
@@ -1194,7 +1194,7 @@ class SkillService:
 
     async def rollback_user_skill_async(
         self, skill_id: str, skill_version_no: int, user_id: str, operator_name: str = ""
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """异步将用户技能切回指定历史版本。"""
         skill = await self.dao.get_skill_async(skill_id, user_id=user_id)
         if not skill:
@@ -1214,7 +1214,7 @@ class SkillService:
 
     async def favorite_skill_async(
         self, skill_id_or_name: str, user_id: str, favorite: bool, operator_name: str = ""
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """异步收藏或取消收藏技能。"""
         if await self._get_system_skill_metadata_async(skill_id_or_name):
             raise ValueError("系统技能不支持收藏")
@@ -1227,7 +1227,7 @@ class SkillService:
         return {"skill_id": skill.get("skill_id"), "favorite": favorite}
 
     @staticmethod
-    def _db_skill_row_loadable(row: Dict[str, Any], include_draft: bool) -> bool:
+    def _db_skill_row_loadable(row: dict[str, Any], include_draft: bool) -> bool:
         """用户技能行是否可加载：仅 published（或管理者看 draft）且已有版本号。"""
         if row.get("skill_source") != "user":
             return False
@@ -1238,11 +1238,11 @@ class SkillService:
 
     @staticmethod
     def _build_db_skill_metadata(
-        row: Dict[str, Any],
+        row: dict[str, Any],
         skill_path: Path,
         can_manage: bool,
-        user_names: Dict[str, str],
-    ) -> Dict[str, Any]:
+        user_names: dict[str, str],
+    ) -> dict[str, Any]:
         parsed = parse_metadata(skill_path)
         base = dict(parsed or {})
         base.update(
@@ -1271,8 +1271,8 @@ class SkillService:
         return base
 
     async def _get_db_skill_metadata_async(
-        self, name: str, include_draft: bool = False, user_id: str = "", user_names: Optional[Dict[str, str]] = None
-    ) -> Optional[Dict[str, Any]]:
+        self, name: str, include_draft: bool = False, user_id: str = "", user_names: dict[str, str] | None = None
+    ) -> dict[str, Any] | None:
         """异步从数据库读取可加载技能元数据。"""
         try:
             row = await self.dao.get_skill_async(name, user_id=user_id)
@@ -1312,9 +1312,9 @@ class SkillService:
     }
 
     @classmethod
-    def _apply_metadata_defaults(cls, metadata: Dict[str, Any]) -> Dict[str, Any]:
+    def _apply_metadata_defaults(cls, metadata: dict[str, Any]) -> dict[str, Any]:
         """为详情字段填充与原 `or` 链一致的缺省值；name 原样透传（无兜底）。"""
-        detail: Dict[str, Any] = {"name": metadata.get("name")}
+        detail: dict[str, Any] = {"name": metadata.get("name")}
         for key, default in cls._DETAIL_FIELD_DEFAULTS.items():
             value = metadata.get(key)
             if default is None:
@@ -1330,8 +1330,8 @@ class SkillService:
         return detail
 
     async def _get_db_skill_detail_async(
-        self, name: str, include_draft: bool = False, user_id: str = "", user_names: Optional[Dict[str, str]] = None
-    ) -> Optional[Dict[str, Any]]:
+        self, name: str, include_draft: bool = False, user_id: str = "", user_names: dict[str, str] | None = None
+    ) -> dict[str, Any] | None:
         """异步从数据库读取技能详情。"""
         metadata = await self._get_db_skill_metadata_async(
             name, include_draft=include_draft, user_id=user_id, user_names=user_names
@@ -1355,7 +1355,7 @@ class SkillService:
         )
         return detail
 
-    async def _resolve_db_skill_md_path_async(self, row: Dict[str, Any], include_draft: bool = False) -> Optional[Path]:
+    async def _resolve_db_skill_md_path_async(self, row: dict[str, Any], include_draft: bool = False) -> Path | None:
         """异步根据技能主表和版本表定位 SKILL.md。"""
         version = None
         if include_draft:
@@ -1399,8 +1399,8 @@ class SkillService:
         )
 
     async def _ensure_user_skill_draft_version_async(
-        self, skill: Dict[str, Any], user_id: str, operator_name: str = ""
-    ) -> Dict[str, Any]:
+        self, skill: dict[str, Any], user_id: str, operator_name: str = ""
+    ) -> dict[str, Any]:
         """异步复用已有草稿；没有草稿时基于当前发布版本复制出新草稿。"""
         skill_id = str(skill.get("skill_id") or "")
         skill_name = str(skill.get("skill_name") or skill_id)
@@ -1447,7 +1447,7 @@ class SkillService:
             "update_by_name": operator_name,
         }
 
-    async def _get_copy_source_version_async(self, skill: Dict[str, Any], user_id: str) -> Dict[str, Any]:
+    async def _get_copy_source_version_async(self, skill: dict[str, Any], user_id: str) -> dict[str, Any]:
         """异步确定复制技能时使用的源版本。"""
         skill_id = str(skill.get("skill_id") or "")
         if str(skill.get("owner_user_id") or "") == user_id:
@@ -1563,7 +1563,7 @@ class SkillService:
             raise PermissionError("无权删除该技能")
         await self._archive_user_skill_async(skill, user_id, operator_name=operator_name)
 
-    async def _archive_user_skill_async(self, skill: Dict[str, Any], user_id: str, operator_name: str = "") -> None:
+    async def _archive_user_skill_async(self, skill: dict[str, Any], user_id: str, operator_name: str = "") -> None:
         """异步归档用户技能记录和目录，释放技能名。
 
         物理目录随技能根目录整体改名归档；物理路径不入库，无需回填归档后的路径。

@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from datetime import time as datetime_time
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
+from typing import Any
 from urllib.parse import unquote
 
 from utils.logger import get_logger
@@ -45,7 +46,7 @@ def _first_text(*values: Any) -> str:
     return ""
 
 
-def _task_runtime_data(task: Any) -> Dict[str, Any]:
+def _task_runtime_data(task: Any) -> dict[str, Any]:
     if task is None:
         return {}
     try:
@@ -64,11 +65,11 @@ def _task_runtime_data(task: Any) -> Dict[str, Any]:
 class QueryHistoryService:
     """查询历史列表、详情和批量停止编排。"""
 
-    def __init__(self, dao: Optional[QueryHistoryDao] = None):
+    def __init__(self, dao: QueryHistoryDao | None = None):
         self.dao = dao or QueryHistoryDao()
 
     @staticmethod
-    def normalize_source_filter(source: Optional[str]) -> Optional[List[str]]:
+    def normalize_source_filter(source: str | None) -> list[str] | None:
         normalized = str(source or "").strip().lower()
         if not normalized or normalized == "all":
             return None
@@ -83,18 +84,18 @@ class QueryHistoryService:
         return None
 
     @staticmethod
-    def normalize_status_filter(status: Optional[str]) -> Optional[str]:
+    def normalize_status_filter(status: str | None) -> str | None:
         normalized = str(status or "").strip().lower()
         if normalized in {"pending", "running", "succeeded", "failed", "cancelled", "timeout", "kill_failed"}:
             return normalized
         return None
 
     @staticmethod
-    def clean_optional_text(value: Optional[str]) -> str:
+    def clean_optional_text(value: str | None) -> str:
         return str(value or "").strip()
 
     @classmethod
-    def parse_history_time(cls, value: Optional[str], *, end_of_day: bool = False) -> Optional[datetime]:
+    def parse_history_time(cls, value: str | None, *, end_of_day: bool = False) -> datetime | None:
         raw_value = cls.clean_optional_text(value)
         if not raw_value:
             return None
@@ -111,7 +112,7 @@ class QueryHistoryService:
         raise ValueError("时间格式错误，请使用 YYYY-MM-DD HH:mm:ss")
 
     @staticmethod
-    def get_history_source(query_type: Optional[str]) -> str:
+    def get_history_source(query_type: str | None) -> str:
         normalized_type = str(query_type or "").strip().lower()
         if normalized_type == "builder":
             return "可视化查询"
@@ -122,12 +123,12 @@ class QueryHistoryService:
         return "SQL编辑器"
 
     @staticmethod
-    def task_operator_name(task_data: Dict[str, Any]) -> str:
+    def task_operator_name(task_data: dict[str, Any]) -> str:
         payload = _safe_json_loads(task_data.get("request_payload"), {}) or {}
         return str((payload or {}).get("operator_name") or "").strip()
 
     @staticmethod
-    def task_user_id(task_data: Dict[str, Any]) -> str:
+    def task_user_id(task_data: dict[str, Any]) -> str:
         payload = _safe_json_loads(task_data.get("request_payload"), {}) or {}
         return str(
             (payload or {}).get("user_id") or task_data.get("create_by") or task_data.get("update_by") or ""
@@ -136,8 +137,8 @@ class QueryHistoryService:
     @staticmethod
     def _history_operator_name(
         item: ChatDataQueryExecution,
-        task: Optional[ChatDataQueryTask],
-        task_data: Dict[str, Any],
+        task: ChatDataQueryTask | None,
+        task_data: dict[str, Any],
     ) -> str:
         return _first_text(
             getattr(item, "create_by_name", ""),
@@ -148,7 +149,7 @@ class QueryHistoryService:
         )
 
     @staticmethod
-    def _history_display_time(payload: Dict[str, Any]) -> Any:
+    def _history_display_time(payload: dict[str, Any]) -> Any:
         return payload.get("finished_time") or payload.get("started_time") or payload.get("create_time")
 
     @staticmethod
@@ -158,7 +159,7 @@ class QueryHistoryService:
         return sql_status or str(item.sql_status or "")
 
     @classmethod
-    def build_history_payload(cls, item: ChatDataQueryExecution, task: Optional[ChatDataQueryTask]) -> Dict[str, Any]:
+    def build_history_payload(cls, item: ChatDataQueryExecution, task: ChatDataQueryTask | None) -> dict[str, Any]:
         query_type = task.query_type if task else "sql"
         task_status = str(task.task_status or "").strip().lower() if task else ""
         task_data = _task_runtime_data(task)
@@ -193,11 +194,11 @@ class QueryHistoryService:
         user_id: str,
         page: int = 1,
         page_size: int = 10,
-        source: Optional[str] = None,
-        status: Optional[str] = None,
-        start_time: Optional[str] = None,
-        end_time: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        source: str | None = None,
+        status: str | None = None,
+        start_time: str | None = None,
+        end_time: str | None = None,
+    ) -> dict[str, Any]:
         normalized_page = max(1, page)
         normalized_page_size = max(1, min(page_size, 100))
         rows, total = await self.dao.list_user_history(
@@ -220,18 +221,18 @@ class QueryHistoryService:
     async def list_admin_history(
         self,
         *,
-        datasource_id: Optional[str] = None,
-        semantic_config_id: Optional[str] = None,
-        user_id: Optional[str] = None,
-        username: Optional[str] = None,
-        keyword: Optional[str] = None,
+        datasource_id: str | None = None,
+        semantic_config_id: str | None = None,
+        user_id: str | None = None,
+        username: str | None = None,
+        keyword: str | None = None,
         page: int = 1,
         page_size: int = 20,
-        source: Optional[str] = None,
-        status: Optional[str] = None,
-        start_time: Optional[str] = None,
-        end_time: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        source: str | None = None,
+        status: str | None = None,
+        start_time: str | None = None,
+        end_time: str | None = None,
+    ) -> dict[str, Any]:
         normalized_page = max(1, page)
         normalized_page_size = max(1, min(page_size, 100))
         rows, total = await self.dao.list_admin_history(
@@ -259,7 +260,7 @@ class QueryHistoryService:
         return bool(str(getattr(execution, "remote_task_id", "") or "").strip())
 
     @staticmethod
-    def resolve_remote_history_source_type(execution: ChatDataQueryExecution, task: Optional[ChatDataQueryTask]) -> str:
+    def resolve_remote_history_source_type(execution: ChatDataQueryExecution, task: ChatDataQueryTask | None) -> str:
         member_datasource_id = str(execution.member_datasource_id or "").strip()
         for remote_task in query_runtime.load_remote_tasks(task.remote_task_payload if task else None):
             if str(remote_task.get("member_datasource_id") or "").strip() == member_datasource_id:
@@ -267,7 +268,7 @@ class QueryHistoryService:
         return "hive"
 
     @staticmethod
-    def _remote_operator_name(execution: ChatDataQueryExecution, task: Optional[ChatDataQueryTask]) -> str:
+    def _remote_operator_name(execution: ChatDataQueryExecution, task: ChatDataQueryTask | None) -> str:
         return _first_text(
             getattr(execution, "create_by_name", ""),
             getattr(execution, "update_by_name", ""),
@@ -276,8 +277,8 @@ class QueryHistoryService:
 
     @staticmethod
     def _remote_execution_time_ms(
-        execution: ChatDataQueryExecution, remote_result: Optional[Dict[str, Any]] = None
-    ) -> Optional[int]:
+        execution: ChatDataQueryExecution, remote_result: dict[str, Any] | None = None
+    ) -> int | None:
         remote_time = (remote_result or {}).get("execution_time_ms")
         return query_runtime.resolve_execution_time_ms(
             remote_time if remote_time is not None else getattr(execution, "execution_time_ms", None),
@@ -286,7 +287,7 @@ class QueryHistoryService:
         )
 
     @classmethod
-    def _remote_unavailable_payload(cls, execution: ChatDataQueryExecution) -> Dict[str, Any]:
+    def _remote_unavailable_payload(cls, execution: ChatDataQueryExecution) -> dict[str, Any]:
         return {
             "status": "failed",
             "columns": [],
@@ -301,9 +302,9 @@ class QueryHistoryService:
     def _remote_not_succeeded_payload(
         cls,
         execution: ChatDataQueryExecution,
-        remote_result: Dict[str, Any],
+        remote_result: dict[str, Any],
         status: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         error_message = str((remote_result or {}).get("error") or "").strip() or "历史结果已不可用或仍在处理中"
         return {
             "status": status or "failed",
@@ -319,9 +320,9 @@ class QueryHistoryService:
     def _remote_success_payload(
         cls,
         execution: ChatDataQueryExecution,
-        remote_result: Dict[str, Any],
+        remote_result: dict[str, Any],
         status: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         return {
             "status": "succeeded",
             "columns": (remote_result or {}).get("columns") or [],
@@ -333,7 +334,7 @@ class QueryHistoryService:
         }
 
     @staticmethod
-    def _history_raw_status(payload: Dict[str, Any], execution: ChatDataQueryExecution) -> Any:
+    def _history_raw_status(payload: dict[str, Any], execution: ChatDataQueryExecution) -> Any:
         """兼容 success 旧口径，推断成员结果的原始状态。
 
         读侧兼容（勿删）：result_payload 持久化在执行记录里，status 契约
@@ -349,7 +350,7 @@ class QueryHistoryService:
         return raw_status
 
     @staticmethod
-    def _history_total_count(payload: Dict[str, Any], execution: ChatDataQueryExecution) -> int:
+    def _history_total_count(payload: dict[str, Any], execution: ChatDataQueryExecution) -> int:
         total_count = payload.get("total_count")
         if total_count is None:
             total_count = payload.get("row_count")
@@ -363,7 +364,7 @@ class QueryHistoryService:
             return 0
 
     @staticmethod
-    def _history_error_message(payload: Dict[str, Any], execution: ChatDataQueryExecution) -> Optional[str]:
+    def _history_error_message(payload: dict[str, Any], execution: ChatDataQueryExecution) -> str | None:
         if payload["status"] == "succeeded":
             return None
         return str(payload.get("error") or getattr(execution, "error_message", None) or "").strip() or None
@@ -373,8 +374,8 @@ class QueryHistoryService:
         cls,
         result_payload: Any,
         execution: ChatDataQueryExecution,
-        execution_time_ms: Optional[int],
-    ) -> Optional[Dict[str, Any]]:
+        execution_time_ms: int | None,
+    ) -> dict[str, Any] | None:
         """归一化历史详情里的单成员查询结果，避免继续暴露 success 旧口径。"""
         if not isinstance(result_payload, dict):
             return None
@@ -399,10 +400,10 @@ class QueryHistoryService:
     async def build_remote_history_result_payload(
         self,
         execution: ChatDataQueryExecution,
-        task: Optional[ChatDataQueryTask] = None,
+        task: ChatDataQueryTask | None = None,
         *,
-        fetch_remote_result: Callable[..., Awaitable[Dict[str, Any]]],
-    ) -> Optional[Dict[str, Any]]:
+        fetch_remote_result: Callable[..., Awaitable[dict[str, Any]]],
+    ) -> dict[str, Any] | None:
         remote_task_id = str(execution.remote_task_id or "").strip()
         if not remote_task_id:
             return None
@@ -432,8 +433,8 @@ class QueryHistoryService:
         *,
         execution_id: str,
         user_id: str,
-        fetch_remote_result: Callable[..., Awaitable[Dict[str, Any]]],
-    ) -> Optional[Dict[str, Any]]:
+        fetch_remote_result: Callable[..., Awaitable[dict[str, Any]]],
+    ) -> dict[str, Any] | None:
         execution, task = await self.dao.get_user_history_execution(execution_id=execution_id, user_id=user_id)
         if not execution:
             return None
@@ -459,10 +460,10 @@ class QueryHistoryService:
             "result_payload": result_payload,
         }
 
-    async def get_execution_models(self, task_id: str) -> List[ChatDataQueryExecution]:
+    async def get_execution_models(self, task_id: str) -> list[ChatDataQueryExecution]:
         return await self.dao.get_execution_models_by_task(task_id)
 
-    async def get_execution_model(self, execution_id: str) -> Optional[ChatDataQueryExecution]:
+    async def get_execution_model(self, execution_id: str) -> ChatDataQueryExecution | None:
         return await self.dao.get_execution_model(execution_id)
 
     @staticmethod
@@ -472,7 +473,7 @@ class QueryHistoryService:
         source.sql_status = str(getattr(target, "sql_status", "") or source.sql_status or "").strip()
 
     @staticmethod
-    def build_cancel_task_status(execution_results: List[Dict[str, Any]]) -> str:
+    def build_cancel_task_status(execution_results: list[dict[str, Any]]) -> str:
         if not execution_results:
             return "cancelled"
         statuses = {str(item.get("status") or "").strip().lower() for item in execution_results}
@@ -486,10 +487,10 @@ class QueryHistoryService:
 
     @staticmethod
     def group_cancel_results_by_task(
-        rows: List[Tuple[ChatDataQueryExecution, Optional[ChatDataQueryTask]]],
-        execution_results: List[Dict[str, Any]],
-    ) -> Dict[str, List[Dict[str, Any]]]:
-        grouped: Dict[str, List[Dict[str, Any]]] = {}
+        rows: list[tuple[ChatDataQueryExecution, ChatDataQueryTask | None]],
+        execution_results: list[dict[str, Any]],
+    ) -> dict[str, list[dict[str, Any]]]:
+        grouped: dict[str, list[dict[str, Any]]] = {}
         for (execution, _task), cancel_result in zip(rows, execution_results, strict=False):
             task_id = str(execution.task_id or "").strip()
             if task_id:
@@ -500,8 +501,8 @@ class QueryHistoryService:
     def execution_cancel_operator_name(
         cls,
         execution: ChatDataQueryExecution,
-        task: Optional[ChatDataQueryTask],
-        fallback: Optional[str],
+        task: ChatDataQueryTask | None,
+        fallback: str | None,
     ) -> str:
         execution_operator = str(execution.create_by_name or execution.update_by_name or "").strip()
         task_name = str(task.create_by_name or task.update_by_name or "").strip() if task else ""
@@ -512,10 +513,10 @@ class QueryHistoryService:
         self,
         execution: ChatDataQueryExecution,
         *,
-        cancel_execution: Callable[..., Awaitable[Dict[str, Any]]],
+        cancel_execution: Callable[..., Awaitable[dict[str, Any]]],
         update_execution: Callable[..., Awaitable[None]],
-        operator_name: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        operator_name: str | None = None,
+    ) -> dict[str, Any]:
         try:
             return await cancel_execution(execution, operator_name=operator_name)
         except Exception as err:
@@ -543,13 +544,13 @@ class QueryHistoryService:
     async def cancel_running_query_history(
         self,
         *,
-        datasource_id: Optional[str] = None,
-        user_id: Optional[str] = None,
-        operator_name: Optional[str] = None,
-        cancel_execution: Callable[..., Awaitable[Dict[str, Any]]],
+        datasource_id: str | None = None,
+        user_id: str | None = None,
+        operator_name: str | None = None,
+        cancel_execution: Callable[..., Awaitable[dict[str, Any]]],
         update_execution: Callable[..., Awaitable[None]],
-        update_task: Callable[..., Awaitable[Optional[Dict[str, Any]]]],
-    ) -> Dict[str, Any]:
+        update_task: Callable[..., Awaitable[dict[str, Any] | None]],
+    ) -> dict[str, Any]:
         rows = await self.dao.list_running_executions(
             running_statuses=RUNNING_SQL_STATUSES,
             datasource_id=self.clean_optional_text(datasource_id),
@@ -588,8 +589,8 @@ class QueryHistoryService:
         self,
         rows: list,
         execution_results: list,
-        task_by_id: Dict[str, Any],
-        update_task: Callable[..., Awaitable[Optional[Dict[str, Any]]]],
+        task_by_id: dict[str, Any],
+        update_task: Callable[..., Awaitable[dict[str, Any] | None]],
     ) -> None:
         """按任务聚合停止结果，回写尚未到达终态任务的状态。"""
         for task_id, task_results in self.group_cancel_results_by_task(rows, execution_results).items():

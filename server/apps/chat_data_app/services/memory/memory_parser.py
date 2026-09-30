@@ -9,8 +9,8 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import Iterable, Sequence
 
 MEMORY_ITEM_LINE_RE = re.compile(r"^- \[(?P<category>[^\[\]]+)\]\s?(?P<body>.+)$")
 

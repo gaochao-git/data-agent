@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from datetime import datetime
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any
 
 from sqlalchemy import select
 
@@ -17,7 +18,7 @@ logger = get_logger(__name__)
 
 def _apply_cache_item_update(
     cache_item: ChatDataSqlResultCache,
-    identity_fields: Dict[str, str],
+    identity_fields: dict[str, str],
     sql_text: str,
     payload_json: str,
     result_row_count: int,
@@ -46,7 +47,7 @@ def _apply_cache_item_update(
 class SqlResultCacheDao:
     """封装 chat_data_sql_result_cache 表读写。"""
 
-    def __init__(self, session_context: Optional[Callable] = None):
+    def __init__(self, session_context: Callable | None = None):
         self._session_context = session_context or default_get_session
 
     async def read_and_touch_cache(
@@ -54,7 +55,7 @@ class SqlResultCacheDao:
         cache_key: str,
         *,
         now: datetime,
-    ) -> Optional[Tuple[ChatDataSqlResultCache, Optional[Dict[str, Any]]]]:
+    ) -> tuple[ChatDataSqlResultCache, dict[str, Any] | None] | None:
         """读取未过期缓存并累计命中计数，返回 (缓存行, payload 字典)。
 
         payload 为 None 表示该行 JSON 解析失败，已就地作废（标记删除），
@@ -85,7 +86,7 @@ class SqlResultCacheDao:
         self,
         *,
         cache_key: str,
-        identity_fields: Dict[str, str],
+        identity_fields: dict[str, str],
         sql_text: str,
         payload_json: str,
         result_row_count: int,

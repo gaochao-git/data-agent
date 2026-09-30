@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable
 from datetime import datetime
-from typing import Any, Callable, Iterable, Optional
+from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy import update as sa_update
@@ -19,7 +20,7 @@ class ConversationEventDao:
     # 轮次闭包迭代上限：每轮至少吞并一个更早轮次，真实数据 2 轮内收敛，这里只作防御性停止条件。
     _TURN_CLOSURE_MAX_ROUNDS = 16
 
-    def __init__(self, session_context: Optional[Callable] = None):
+    def __init__(self, session_context: Callable | None = None):
         self._session_context = session_context or default_get_session
 
     @property
@@ -350,7 +351,7 @@ class ConversationEventDao:
         )
         return probe is not None
 
-    async def get_latest_token_usage_payload(self, *, conversation_id: str, user_id: str) -> Optional[str]:
+    async def get_latest_token_usage_payload(self, *, conversation_id: str, user_id: str) -> str | None:
         """读取会话级 token_usage 快照（event_key 固定为 token_usage:latest 的单行 upsert）。"""
         async with self._session_context() as session:
             return await self.get_latest_token_usage_payload_in_session(
@@ -365,7 +366,7 @@ class ConversationEventDao:
         *,
         conversation_id: str,
         user_id: str,
-    ) -> Optional[str]:
+    ) -> str | None:
         """在调用方事务内读取会话级 token_usage 快照。"""
         result = await session.execute(
             select(ChatDataConversationEvent.payload)
@@ -380,7 +381,7 @@ class ConversationEventDao:
         )
         return result.scalar_one_or_none()
 
-    async def get_first_user_message_payload(self, *, conversation_id: str, user_id: str) -> Optional[str]:
+    async def get_first_user_message_payload(self, *, conversation_id: str, user_id: str) -> str | None:
         """只读取首条用户消息，供标题生成使用。"""
         async with self._session_context() as session:
             result = await session.execute(

@@ -1,7 +1,8 @@
 """语义 SQL 的 WHERE/HAVING 过滤编译。"""
 
 import re
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from collections.abc import Callable
+from typing import Any
 
 #: 过滤操作符唯一白名单：WHERE/HAVING、AI/BI 各链路统一在编译层收口。
 #: operator 字段来自请求侧，不允许携带任意 SQL 片段进入拼接。
@@ -63,7 +64,7 @@ def _scan_parenthesis_char(
     in_single: bool,
     in_double: bool,
     balance: int,
-) -> Tuple[bool, bool, bool, int]:
+) -> tuple[bool, bool, bool, int]:
     """按字符推进括号/引号扫描状态；字符串内的内容一律不计入括号。"""
     if escaped:
         return in_single, in_double, False, balance
@@ -118,7 +119,7 @@ def _unwrap_quoted_literal(raw: str) -> str:
     return raw[1:-1].strip() if len(raw) >= 3 and raw[0] == raw[-1] and raw[0] in "'\"" else ""
 
 
-def _sql_literal(value: Any, value_type: Any = None, safe_functions: Optional[set[str]] = None) -> str:
+def _sql_literal(value: Any, value_type: Any = None, safe_functions: set[str] | None = None) -> str:
     if value is None:
         return "NULL"
     if _is_numeric_literal(value):
@@ -137,7 +138,7 @@ def _sql_literal(value: Any, value_type: Any = None, safe_functions: Optional[se
     return _escape_sql_string(value)
 
 
-def _value_type_for_index(value_type: Any, index: int) -> Optional[str]:
+def _value_type_for_index(value_type: Any, index: int) -> str | None:
     if isinstance(value_type, list):
         return value_type[index] if index < len(value_type) else None
     return value_type if isinstance(value_type, str) else None
@@ -158,19 +159,19 @@ def _sql_list_literal(values: Any, value_type: Any, safe_functions: set[str]) ->
     )
 
 
-def _effective_table_ref(item: Dict[str, Any], fallback: str = "") -> str:
+def _effective_table_ref(item: dict[str, Any], fallback: str = "") -> str:
     return str(item.get("tableAlias") or item.get("table") or fallback or "").strip()
 
 
-def _physical_table_ref(item: Dict[str, Any], fallback: str = "") -> str:
+def _physical_table_ref(item: dict[str, Any], fallback: str = "") -> str:
     return str(item.get("table") or fallback or "").strip()
 
 
 def _operator_clause(
     expression: str,
-    leaf: Dict[str, Any],
+    leaf: dict[str, Any],
     *,
-    right_expression: Optional[str] = None,
+    right_expression: str | None = None,
     safe_functions: set[str],
 ) -> str:
     operator = str(leaf.get("operator", "=")).upper()
@@ -201,7 +202,7 @@ def _escape_like_value(value: str) -> str:
     return value.replace(chr(39), chr(39) * 2)
 
 
-def _render_special_operator_clause(expression: str, operator: str, leaf: Dict[str, Any]) -> Optional[str]:
+def _render_special_operator_clause(expression: str, operator: str, leaf: dict[str, Any]) -> str | None:
     """渲染 EMPTY STRING / STARTS WITH / ENDS WITH / LIKE 族；不匹配返回 None。"""
     if operator == "EMPTY STRING":
         return f"{expression} = ''"
@@ -219,7 +220,7 @@ def _render_special_operator_clause(expression: str, operator: str, leaf: Dict[s
 def _render_value_operator_clause(
     expression: str,
     operator: str,
-    leaf: Dict[str, Any],
+    leaf: dict[str, Any],
     safe_functions: set[str],
 ) -> str:
     """渲染 IN / BETWEEN / 通用标量值的子句（兜底分支）。"""
@@ -234,10 +235,10 @@ def _render_value_operator_clause(
 
 
 def build_where_leaf_clause(
-    leaf: Dict[str, Any],
+    leaf: dict[str, Any],
     *,
     is_multi_table: bool,
-    dimension_expr_map: Dict[Tuple[str, str], str],
+    dimension_expr_map: dict[tuple[str, str], str],
     main_table: str,
     normalize_raw_expression: Callable[..., str],
     get_column_expr: Callable[..., str],
@@ -262,14 +263,14 @@ def build_where_leaf_clause(
 
 
 def _match_aggregation(
-    leaf: Dict[str, Any],
-    agg_by_id: Dict[str, Dict[str, Any]],
-    aggregations: List[Dict[str, Any]],
+    leaf: dict[str, Any],
+    agg_by_id: dict[str, dict[str, Any]],
+    aggregations: list[dict[str, Any]],
     main_table: str,
     table: str,
     column: Any,
     agg_func: str,
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """优先按 aggId 匹配聚合定义，否则按表/列/聚合函数兜底匹配。"""
     matched = agg_by_id.get(str(leaf.get("aggId"))) if leaf.get("aggId") else None
     if not matched and not str(leaf.get("expression") or "").strip():
@@ -296,8 +297,8 @@ def _aggregate_expression_output(
     normalize_expression: bool,
     normalize_raw_expression: Callable[..., str],
     normalize_aggregate_expression: Callable[..., str],
-    is_aggregate_expression: Callable[[Optional[str]], bool],
-) -> Optional[str]:
+    is_aggregate_expression: Callable[[str | None], bool],
+) -> str | None:
     """RAW/聚合表达式命中时返回规整后的表达式，未命中返回 None。"""
     if agg_func == "RAW" and str(expression or "").strip():
         if normalize_expression:
@@ -319,16 +320,16 @@ def _apply_aggregation_func(agg_func: str, column_expression: str) -> str:
 
 
 def _build_aggregate_expr(
-    leaf: Dict[str, Any],
+    leaf: dict[str, Any],
     *,
     is_multi_table: bool,
     main_table: str,
-    aggregations: List[Dict[str, Any]],
-    agg_by_id: Dict[str, Dict[str, Any]],
+    aggregations: list[dict[str, Any]],
+    agg_by_id: dict[str, dict[str, Any]],
     normalize_raw_expression: Callable[..., str],
     normalize_aggregate_expression: Callable[..., str],
     get_column_expr: Callable[..., str],
-    is_aggregate_expression: Callable[[Optional[str]], bool],
+    is_aggregate_expression: Callable[[str | None], bool],
     safe_functions: set[str],
     normalize_expression: bool = False,
 ) -> str:
@@ -363,7 +364,7 @@ def _rewrite_expression_table_qualifier(expression: str, table: str, physical_ta
     return re.sub(rf"(?<![\w`])`?{escaped}`?\.", f"{table}.", expression)
 
 
-def build_having_leaf_clause(leaf: Dict[str, Any], **kwargs: Any) -> str:
+def build_having_leaf_clause(leaf: dict[str, Any], **kwargs: Any) -> str:
     expression = _build_aggregate_expr(
         leaf,
         is_multi_table=kwargs["is_multi_table"],
@@ -404,7 +405,7 @@ def build_having_leaf_clause(leaf: Dict[str, Any], **kwargs: Any) -> str:
     )
 
 
-def build_having_operand_expr(operand: Dict[str, Any], **kwargs: Any) -> str:
+def build_having_operand_expr(operand: dict[str, Any], **kwargs: Any) -> str:
     operand_type = str(operand.get("type") or "").strip().lower()
     if operand_type == "metric":
         return _build_aggregate_expr(
@@ -429,7 +430,7 @@ def build_having_operand_expr(operand: Dict[str, Any], **kwargs: Any) -> str:
     return "NULL"
 
 
-def build_filter_tree_clause(node: Dict[str, Any], *, for_having: bool, is_root: bool = False, **kwargs: Any) -> str:
+def build_filter_tree_clause(node: dict[str, Any], *, for_having: bool, is_root: bool = False, **kwargs: Any) -> str:
     key = "and" if "and" in node else "or" if "or" in node else ""
     if key:
         children = [

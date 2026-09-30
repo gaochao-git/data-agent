@@ -7,7 +7,7 @@ import time
 from contextlib import suppress
 from dataclasses import dataclass
 from functools import partial
-from typing import Any, Dict, List, Optional
+from typing import Any
 from uuid import uuid4
 
 import openai
@@ -153,7 +153,7 @@ def _model_failure_user_message(exc: Exception) -> str:
     return "智能问数执行失败，请稍后重试。"
 
 
-def _file_selection_mention_suffix(file_selections: List[str]) -> str:
+def _file_selection_mention_suffix(file_selections: list[str]) -> str:
     """用户在输入框 @ 引用工作区文件时，给 Human 消息追加模型可见的引用短句。
 
     前端 @ 菜单数据源是会话工作区（uploads/outputs/workspace）文件树，chip 随
@@ -168,7 +168,7 @@ def _file_selection_mention_suffix(file_selections: List[str]) -> str:
 
 def _build_user_message(
     content: str | list[dict[str, Any]],
-    file_selections: List[str] | None = None,
+    file_selections: list[str] | None = None,
     *,
     message_id: str | None = None,
     **extra_kwargs: Any,
@@ -372,7 +372,7 @@ def _format_tool_lifecycle_event(
     return _format_sse(event_type, data)
 
 
-def _validate_workspace_file_selections(file_selections: List[str], workspace_root: str) -> List[str]:
+def _validate_workspace_file_selections(file_selections: list[str], workspace_root: str) -> list[str]:
     """校验 @ 引用文件：必须落在当前会话工作区白名单目录内且真实存在。
 
     白名单校验复用 WORKSPACE_PATH_POLICY（拒越界/裸别名），系统结果区
@@ -381,7 +381,7 @@ def _validate_workspace_file_selections(file_selections: List[str], workspace_ro
     """
     if not file_selections:
         return []
-    valid: List[str] = []
+    valid: list[str] = []
     for relative_path in file_selections:
         try:
             logical = WORKSPACE_PATH_POLICY.parse(f"{USER_DATA_VIRTUAL_ROOT}/{relative_path}")
@@ -1423,7 +1423,7 @@ class TurnUserInput:
 
     user_query: str
     message_content: str
-    file_selections: List[str]
+    file_selections: list[str]
     vision_attachments: list[dict[str, Any]]
     skill_names: list[str]
     adopted_messages: list[HumanMessage] | None = None
@@ -1835,7 +1835,7 @@ async def _run_chat_data_agent_stream(
 async def sql_completion_handler(
     conversation_id: str,
     query: str,
-    options: Optional[Dict[str, Any]] = None,
+    options: dict[str, Any] | None = None,
     user_id: str = "system",
     username: str | None = None,
     request: Request | None = None,

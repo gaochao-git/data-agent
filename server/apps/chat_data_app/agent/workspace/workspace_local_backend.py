@@ -1106,10 +1106,7 @@ class LocalWorkspaceBackend:
             workspace_root=runtime.workspace_root,
             runtime_skills_dir=runtime.runtime_skills_dir,
         )
-        inner = "cd {cwd} && {command}".format(
-            cwd=shlex.quote(str(local_cwd)),
-            command=path_mapping.translate(command),
-        )
+        inner = f"cd {shlex.quote(str(local_cwd))} && {path_mapping.translate(command)}"
         process = await asyncio.create_subprocess_exec(
             "bash",
             "-o",

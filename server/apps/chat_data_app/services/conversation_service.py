@@ -7,11 +7,12 @@
 
 import base64
 import binascii
+import builtins
 import json
 import re
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from langchain_core.prompts import ChatPromptTemplate
 
@@ -47,7 +48,7 @@ def _llm_model_id(llm: Any) -> str:
     return str(getattr(llm, "model_name", None) or getattr(llm, "model", None) or "unknown")
 
 
-def _format_thread(t: UserThread, run_status: Optional[str] = None) -> Dict[str, Any]:
+def _format_thread(t: UserThread, run_status: str | None = None) -> dict[str, Any]:
     """转换会话列表返回结构"""
     result = {
         "id": t.thread_id,
@@ -62,7 +63,7 @@ def _format_thread(t: UserThread, run_status: Optional[str] = None) -> Dict[str,
     return result
 
 
-async def _format_threads(rows: List[UserThread], user_id: Optional[str]) -> List[Dict[str, Any]]:
+async def _format_threads(rows: list[UserThread], user_id: str | None) -> list[dict[str, Any]]:
     statuses = await conversation_dao.list_active_run_statuses(
         [thread.thread_id for thread in rows],
         user_id,
@@ -117,7 +118,7 @@ async def get_or_create_conversation(agent_id: str, conversation_id: str, user_i
     return conversation_id
 
 
-async def create(agent_id: str, user_id: str = "system", datasource_id: str | None = None) -> Dict[str, Any]:
+async def create(agent_id: str, user_id: str = "system", datasource_id: str | None = None) -> dict[str, Any]:
     """
     创建新会话
 
@@ -144,7 +145,7 @@ async def create(agent_id: str, user_id: str = "system", datasource_id: str | No
     return {"id": thread_id, "create_time": now.strftime("%Y-%m-%d %H:%M:%S")}
 
 
-async def list(agent_id: str, user_id: str = None, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
+async def list(agent_id: str, user_id: str = None, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
     """
     获取历史会话列表
 
@@ -163,8 +164,8 @@ async def list(agent_id: str, user_id: str = None, limit: int = 50, offset: int 
 
 
 async def list_by_agent_ids(
-    agent_ids: List[str], user_id: str = None, limit: int = 50, offset: int = 0
-) -> List[Dict[str, Any]]:
+    agent_ids: builtins.list[str], user_id: str = None, limit: int = 50, offset: int = 0
+) -> builtins.list[dict[str, Any]]:
     """获取多个智能体的历史会话列表"""
     if not agent_ids:
         return []
@@ -183,7 +184,7 @@ def _thread_group_key(thread: UserThread) -> str:
     return f"{DATASOURCE_GROUP_PREFIX}{datasource_id}" if datasource_id else UNCLASSIFIED_GROUP_KEY
 
 
-def _parse_group_key(group_key: str) -> tuple[str, Optional[str]]:
+def _parse_group_key(group_key: str) -> tuple[str, str | None]:
     normalized = str(group_key or "").strip()
     if normalized == PINNED_GROUP_KEY:
         return "pinned", None
@@ -204,7 +205,7 @@ def _encode_group_cursor(thread: UserThread) -> str:
     return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
 
 
-def _decode_group_cursor(cursor: Optional[str]) -> tuple[Optional[datetime], Optional[int]]:
+def _decode_group_cursor(cursor: str | None) -> tuple[datetime | None, int | None]:
     normalized = str(cursor or "").strip()
     if not normalized:
         return None, None
@@ -218,11 +219,11 @@ def _decode_group_cursor(cursor: Optional[str]) -> tuple[Optional[datetime], Opt
 
 def _format_conversation_group(
     group_key: str,
-    rows: List[UserThread],
+    rows: builtins.list[UserThread],
     page: int,
     page_size: int,
-    statuses: Optional[Dict[str, str]] = None,
-) -> Dict[str, Any]:
+    statuses: dict[str, str] | None = None,
+) -> dict[str, Any]:
     datasource_id = group_key[len(DATASOURCE_GROUP_PREFIX) :] if group_key.startswith(DATASOURCE_GROUP_PREFIX) else None
     visible_rows = rows[:page_size]
     has_more = len(rows) > page_size
@@ -242,10 +243,10 @@ async def list_grouped(
     user_id: str,
     page_size: int,
     *,
-    group_key: Optional[str] = None,
+    group_key: str | None = None,
     page: int = 1,
-    cursor: Optional[str] = None,
-) -> Dict[str, Any]:
+    cursor: str | None = None,
+) -> dict[str, Any]:
     """返回全部分组首屏，或返回指定分组的一页，不执行总量统计。"""
     if group_key:
         if page > 1 and not cursor:
@@ -272,7 +273,7 @@ async def list_grouped(
         user_id=user_id,
         limit_per_group=page_size + 1,
     )
-    grouped_rows: Dict[str, List[UserThread]] = {}
+    grouped_rows: dict[str, builtins.list[UserThread]] = {}
     for thread in rows:
         grouped_rows.setdefault(_thread_group_key(thread), []).append(thread)
     statuses = await conversation_dao.list_active_run_statuses(
@@ -288,8 +289,8 @@ async def list_grouped(
 
 
 async def list_all(
-    agent_configs: Dict[str, Dict[str, Any]], user_id: str = None, limit: int = 50
-) -> List[Dict[str, Any]]:
+    agent_configs: dict[str, dict[str, Any]], user_id: str = None, limit: int = 50
+) -> builtins.list[dict[str, Any]]:
     """
     获取所有智能体的历史会话列表
 
@@ -321,7 +322,7 @@ async def list_all(
     return all_conversations[:limit]
 
 
-async def get_datasource_id(conversation_id: str, user_id: str) -> Optional[str]:
+async def get_datasource_id(conversation_id: str, user_id: str) -> str | None:
     """从业务会话表读取绑定的数据源组。"""
     return await conversation_dao.get_datasource_id(
         conversation_id=conversation_id,
@@ -333,7 +334,7 @@ async def resolve_datasource_binding(
     conversation_id: str,
     user_id: str,
     requested_datasource_id: str,
-) -> Optional[str]:
+) -> str | None:
     """读取会话数据源绑定，首次请求时在行锁内完成绑定。"""
     return await conversation_dao.resolve_datasource_binding(
         conversation_id=conversation_id,
@@ -344,12 +345,12 @@ async def resolve_datasource_binding(
 
 async def get_detail(
     conversation_id: str,
-    user_id: Optional[str] = None,
+    user_id: str | None = None,
     *,
     include_derived_history: bool = True,
-    limit: Optional[int] = None,
-    before_sequence: Optional[int] = None,
-) -> Optional[Dict[str, Any]]:
+    limit: int | None = None,
+    before_sequence: int | None = None,
+) -> dict[str, Any] | None:
     """从业务表和事件表获取会话详情。
 
     limit 指定时只返回历史事件的尾部窗口，配合 has_more 支持向上翻页。
@@ -386,7 +387,7 @@ async def get_detail(
     }
 
 
-async def update_title(conversation_id: str, title: str, user_id: Optional[str] = None) -> bool:
+async def update_title(conversation_id: str, title: str, user_id: str | None = None) -> bool:
     """
     更新会话标题
 
@@ -405,7 +406,7 @@ async def update_title(conversation_id: str, title: str, user_id: Optional[str] 
     return True
 
 
-async def generate_title(conversation_id: str, user_id: Optional[str] = None) -> Optional[str]:
+async def generate_title(conversation_id: str, user_id: str | None = None) -> str | None:
     """根据事件表中的第一条用户消息生成会话标题。
 
     标题仍是占位符（""/新会话/未命名会话）时才生成，已命名直接返回；
@@ -432,7 +433,7 @@ async def generate_title(conversation_id: str, user_id: Optional[str] = None) ->
 async def _generate_and_update_title(
     conversation_id: str,
     first_message: str,
-    user_id: Optional[str],
+    user_id: str | None,
 ) -> str:
     """根据首条用户消息生成并更新会话标题。"""
     query = first_message.strip()[:500]
@@ -464,7 +465,7 @@ async def _generate_and_update_title(
     return title
 
 
-async def toggle_favorite(conversation_id: str, user_id: Optional[str] = None) -> Optional[bool]:
+async def toggle_favorite(conversation_id: str, user_id: str | None = None) -> bool | None:
     """
     切换会话收藏状态
 
@@ -482,7 +483,7 @@ async def toggle_favorite(conversation_id: str, user_id: Optional[str] = None) -
     return new_favorited
 
 
-async def get_agent_id(conversation_id: str, user_id: Optional[str] = None) -> Optional[str]:
+async def get_agent_id(conversation_id: str, user_id: str | None = None) -> str | None:
     """
     通过会话ID获取对应的agent_id
 

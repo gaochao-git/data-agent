@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from typing import Callable, List, Optional, Set
+from collections.abc import Callable
 
 from sqlalchemy import select, update
 
@@ -17,16 +17,16 @@ from utils.models import ChatDataPlugin
 class PluginDao:
     """封装 chat_data_plugin 表读写。"""
 
-    def __init__(self, session_context: Optional[Callable] = None):
+    def __init__(self, session_context: Callable | None = None):
         self._session_context = session_context or default_get_session
 
-    async def list_enabled_names(self) -> Set[str]:
+    async def list_enabled_names(self) -> set[str]:
         """返回当前启用且未删除的插件名集合（供装配/技能快照读取）。"""
         async with self._session_context() as db:
             result = await db.execute(select(ChatDataPlugin.plugin_name).filter_by(enabled_flag=1, delete_flag=0))
             return {str(name) for name in result.scalars().all()}
 
-    async def list_active(self) -> List[ChatDataPlugin]:
+    async def list_active(self) -> list[ChatDataPlugin]:
         """返回全部未删除插件记录（供管理端列表）。"""
         async with self._session_context() as db:
             result = await db.execute(select(ChatDataPlugin).filter_by(delete_flag=0).order_by(ChatDataPlugin.id.asc()))

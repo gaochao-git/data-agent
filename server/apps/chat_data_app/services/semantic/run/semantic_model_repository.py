@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Literal
 
 from ...datasource.manager import get_datasource_manager
 from .semantic_config_service import SemanticConfigService, get_semantic_config_service
@@ -14,7 +14,7 @@ async def load_runtime_semantic_config(
     datasource_id: str | None,
     semantic_config_id: str | None,
     user_id: str | None = None,
-) -> Dict[str, Any] | None:
+) -> dict[str, Any] | None:
     """Load an authorized runtime model for query and conversation services."""
     normalized_datasource_id = str(datasource_id or "").strip()
     normalized_config_id = str(semantic_config_id or "").strip()
@@ -35,7 +35,7 @@ async def load_runtime_semantic_config(
 async def list_runtime_semantic_config_directory(
     datasource_id: str | None,
     user_id: str | None = None,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """List the lightweight authorized model directory for a datasource."""
     normalized_datasource_id = str(datasource_id or "").strip()
     normalized_user_id = str(user_id or "").strip()
@@ -56,13 +56,13 @@ async def list_runtime_semantic_config_directory(
 
 async def load_semantic_model(
     datasource_id: str,
-    semantic_config_id: Optional[str],
+    semantic_config_id: str | None,
     *,
-    user_id: Optional[str] = None,
+    user_id: str | None = None,
     mode: SemanticModelLoadMode = "runtime",
     manager: Any = None,
     semantic_service: Any = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """按明确用途加载当前用户可用的语义模型。"""
     normalized_datasource_id = str(datasource_id or "").strip()
     normalized_config_id = str(semantic_config_id or "").strip()
@@ -97,13 +97,13 @@ async def load_semantic_model(
 
 
 async def _finalize_semantic_model(
-    selected: Dict[str, Any],
-    datasource: Dict[str, Any],
+    selected: dict[str, Any],
+    datasource: dict[str, Any],
     mode: SemanticModelLoadMode,
     normalized_config_id: str,
     normalized_datasource_id: str,
     ds_manager: Any,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """按加载模式补齐模型元数据（ID 归一、joins 别名、来源与表结构）。"""
     result = dict(selected)
     result["id"] = str(result.get("id") or normalized_config_id).strip()
@@ -123,7 +123,7 @@ async def _load_selected_config(
     semantic_config_id: str,
     user_id: str,
     mode: SemanticModelLoadMode,
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     if mode == "runtime":
         return await semantic_service.get_runtime_config_async(
             datasource_id,

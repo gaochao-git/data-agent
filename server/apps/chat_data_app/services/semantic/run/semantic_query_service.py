@@ -7,8 +7,9 @@
 本文件只保留对外编译/执行门面与结果装配，所有存量调用方继续从这里导入。
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any
 
 from ...datasource.manager import get_datasource_manager
 from ...setting_service import get_runtime_setting
@@ -29,7 +30,7 @@ from .semantic_query_plan_builder import normalize_text
 
 async def load_runtime_semantic_config_strict(
     datasource_id: str, semantic_config_id: str, user_id: str | None = None
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """加载运行时语义配置并做错误映射；与 repository 的静默版(load_runtime_semantic_config)
     不同：未找到/未启用时抛出带用户可读信息的 LookupError/ValueError，供编译流程直出错误。"""
     normalized_datasource_id = normalize_text(datasource_id)
@@ -59,9 +60,9 @@ async def load_runtime_semantic_config_strict(
 async def compile_semantic_builder_sql(
     datasource_id: str,
     semantic_config_id: str,
-    semantic_builder_config: Dict[str, Any],
+    semantic_builder_config: dict[str, Any],
     user_id: str | None = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     semantic_config = await load_runtime_semantic_config_strict(datasource_id, semantic_config_id, user_id=user_id)
     result = compile_semantic_bi_dsl(
         semantic_config,
@@ -77,18 +78,18 @@ async def compile_semantic_builder_sql(
 class SemanticCompileOptions:
     """语义 DSL 编译选项；应用层负责注入，不由编译器读取环境变量。"""
 
-    max_rows: Optional[int] = None
-    offset: Optional[int] = None
+    max_rows: int | None = None
+    offset: int | None = None
 
 
 def compile_semantic_ai_dsl(
-    semantic_config: Dict[str, Any],
-    dsl: Dict[str, Any],
+    semantic_config: dict[str, Any],
+    dsl: dict[str, Any],
     *,
-    options: Optional[SemanticCompileOptions] = None,
-    generator_cls: Optional[Callable[[Dict[str, Any]], Any]] = None,
+    options: SemanticCompileOptions | None = None,
+    generator_cls: Callable[[dict[str, Any]], Any] | None = None,
     generator: Any = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """统一语义 DSL 编译门面，所有应用入口应通过本函数编译。"""
     if not isinstance(semantic_config, dict):
         return {"success": False, "sql": "", "error": "语义模型必须是对象"}
@@ -116,11 +117,11 @@ def compile_semantic_ai_dsl(
 
 
 def compile_semantic_bi_dsl(
-    semantic_config: Dict[str, Any],
-    dsl: Dict[str, Any],
+    semantic_config: dict[str, Any],
+    dsl: dict[str, Any],
     *,
-    max_rows: Optional[int] = None,
-) -> Dict[str, Any]:
+    max_rows: int | None = None,
+) -> dict[str, Any]:
     """编译 BI 可视化语义 DSL，返回 SQL 和内部查询计划。
 
     max_rows 为行数上限热值（async 调用方从配置变量表解析后传入；未传走适配器兜底）。
@@ -143,9 +144,9 @@ def compile_semantic_bi_dsl(
     }
 
 
-def normalize_member_datasource_ids(member_datasource_ids: Any) -> List[str]:
+def normalize_member_datasource_ids(member_datasource_ids: Any) -> list[str]:
     """Normalize member datasource ids while preserving the first-seen order."""
-    normalized_ids: List[str] = []
+    normalized_ids: list[str] = []
     for item in member_datasource_ids or []:
         member_id = str(item or "").strip()
         if member_id and member_id not in normalized_ids:
@@ -156,14 +157,14 @@ def normalize_member_datasource_ids(member_datasource_ids: Any) -> List[str]:
 async def execute_semantic_query_sql(
     *,
     sql: str,
-    datasource_id: Optional[str],
-    member_datasource_ids: Optional[List[str]] = None,
-    user_id: Optional[str] = None,
-    semantic_config_id: Optional[str] = None,
-    query_text: Optional[str] = None,
-    conversation_id: Optional[str] = None,
-    operator_name: Optional[str] = None,
-) -> Dict[str, Any]:
+    datasource_id: str | None,
+    member_datasource_ids: list[str] | None = None,
+    user_id: str | None = None,
+    semantic_config_id: str | None = None,
+    query_text: str | None = None,
+    conversation_id: str | None = None,
+    operator_name: str | None = None,
+) -> dict[str, Any]:
     """Execute semantic query SQL through the unified query runtime."""
     # 延迟导入避免 query_runtime 的 BI 编译入口与本服务形成模块循环。
     from ...sql_run import runtime as query_runtime
@@ -181,11 +182,11 @@ async def execute_semantic_query_sql(
 
 
 def build_member_query_result(
-    base_result: Dict[str, Any],
+    base_result: dict[str, Any],
     sql: str,
-    member_datasource_id: Optional[str] = None,
-    member_name: Optional[str] = None,
-) -> Dict[str, Any]:
+    member_datasource_id: str | None = None,
+    member_name: str | None = None,
+) -> dict[str, Any]:
     """Build a normalized member query result."""
     return {
         "status": query_result_status(base_result),

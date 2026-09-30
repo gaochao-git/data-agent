@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from typing import Optional
 
 from fastapi import Request, status
 from fastapi.security import APIKeyHeader
@@ -32,7 +31,7 @@ class AuthenticatedUser:
     username: str
 
 
-def _normalize_header_text(value: Optional[str]) -> str:
+def _normalize_header_text(value: str | None) -> str:
     if not value:
         return ""
     try:
@@ -41,7 +40,7 @@ def _normalize_header_text(value: Optional[str]) -> str:
         return value.strip()
 
 
-def validate_service_token(token: Optional[str]) -> None:
+def validate_service_token(token: str | None) -> None:
     """Validate a service-to-service token value."""
     if not SERVICE_AUTH_TOKEN:
         raise AuthenticationError("Missing or invalid service token.", status_code=status.HTTP_401_UNAUTHORIZED)

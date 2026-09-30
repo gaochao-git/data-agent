@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime
-from typing import Callable, Optional
 
 from sqlalchemy import select
 
@@ -14,10 +14,10 @@ from utils.models import ChatDataQueryTask
 class QueryTaskDao:
     """封装 chat_data_query_task 表读写，含行锁状态流转。"""
 
-    def __init__(self, session_context: Optional[Callable] = None):
+    def __init__(self, session_context: Callable | None = None):
         self._session_context = session_context or default_get_session
 
-    async def get_task(self, task_id: str) -> Optional[ChatDataQueryTask]:
+    async def get_task(self, task_id: str) -> ChatDataQueryTask | None:
         """按任务 ID 读取未删除任务。"""
         async with self._session_context() as db:
             result = await db.execute(select(ChatDataQueryTask).filter_by(task_id=task_id, delete_flag=0))
@@ -61,7 +61,7 @@ class QueryTaskDao:
         self,
         task_id: str,
         apply_updates: Callable[[ChatDataQueryTask], bool],
-    ) -> Optional[ChatDataQueryTask]:
+    ) -> ChatDataQueryTask | None:
         """行锁读取任务并应用变更；apply_updates 返回 False 表示保持原状不落库。
 
         行锁读取：与取消操作互斥，防止快照读守卫失效导致终态被回写覆盖。

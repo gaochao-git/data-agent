@@ -8,7 +8,7 @@ import json
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from utils.database import get_session
 from utils.logger import get_logger
@@ -29,24 +29,24 @@ class PanelWritePayload:
     ``add_panel`` 的默认值（table / 4 / 4）在该方法内回落到 concrete 值。
     """
 
-    name: Optional[str] = None
-    sql: Optional[str] = None
-    chart_type: Optional[str] = None
-    chart_config: Optional[Dict] = None
-    layout_x: Optional[int] = None
-    layout_y: Optional[int] = None
-    layout_w: Optional[int] = None
-    layout_h: Optional[int] = None
-    refresh_interval: Optional[int] = None
-    source_thread_id: Optional[str] = None
-    datasource_id: Optional[str] = None
-    member_datasource_id: Optional[str] = None
+    name: str | None = None
+    sql: str | None = None
+    chart_type: str | None = None
+    chart_config: dict | None = None
+    layout_x: int | None = None
+    layout_y: int | None = None
+    layout_w: int | None = None
+    layout_h: int | None = None
+    refresh_interval: int | None = None
+    source_thread_id: str | None = None
+    datasource_id: str | None = None
+    member_datasource_id: str | None = None
 
 
 class DashboardService:
     """分析大屏服务（异步）"""
 
-    def __init__(self, dao: Optional[DashboardDao] = None):
+    def __init__(self, dao: DashboardDao | None = None):
         self.dao = dao or DashboardDao(session_context=lambda: get_session())
 
     async def create_dashboard(
@@ -57,7 +57,7 @@ class DashboardService:
         datasource_id: str = None,
         theme: str = "light",
         operator_name: str = "",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """创建新的分析大屏"""
         dashboard_id = str(uuid.uuid4())
         now = datetime.now()
@@ -76,7 +76,7 @@ class DashboardService:
 
     async def set_dashboard_public(
         self, dashboard_id: str, user_id: str, is_public: bool, operator_name: str = ""
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """更新看板发布状态。"""
         dashboard = await self.dao.set_dashboard_public(
             dashboard_id=dashboard_id,
@@ -92,7 +92,7 @@ class DashboardService:
 
     async def get_dashboard(
         self, dashboard_id: str, user_id: str = None, include_public: bool = True
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """获取大屏详情（含面板）"""
         dashboard, panels = await self.dao.get_dashboard_with_panels(
             dashboard_id=dashboard_id,
@@ -105,7 +105,7 @@ class DashboardService:
         dashboard_dict["panels"] = [self._panel_to_dict(panel) for panel in panels]
         return dashboard_dict
 
-    async def list_dashboards(self, user_id: str = None, scope: str = "mine") -> List[Dict[str, Any]]:
+    async def list_dashboards(self, user_id: str = None, scope: str = "mine") -> list[dict[str, Any]]:
         """获取大屏列表"""
         dashboards = await self.dao.list_dashboards(user_id=user_id, scope=scope)
         return [self._dashboard_to_dict(dashboard) for dashboard in dashboards]
@@ -119,7 +119,7 @@ class DashboardService:
         background_id: str = None,
         user_id: str = None,
         operator_name: str = "",
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """更新大屏信息"""
         dashboard = await self.dao.update_dashboard(
             dashboard_id=dashboard_id,
@@ -153,7 +153,7 @@ class DashboardService:
         payload: PanelWritePayload,
         user_id: str = None,
         operator_name: str = "",
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """添加面板到大屏（面板属性经 ``PanelWritePayload`` 传入）。"""
         panel_id = str(uuid.uuid4())
         panel = await self.dao.add_panel(
@@ -190,7 +190,7 @@ class DashboardService:
         payload: PanelWritePayload,
         user_id: str = None,
         operator_name: str = "",
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """更新面板（只写入 payload 中显式提供的字段）。"""
         panel = await self.dao.update_panel(
             dashboard_id=dashboard_id,
@@ -219,10 +219,10 @@ class DashboardService:
     async def update_panels_layout(
         self,
         dashboard_id: str,
-        layouts: List[Dict[str, Any]],
+        layouts: list[dict[str, Any]],
         user_id: str = None,
         operator_name: str = "",
-    ) -> Optional[int]:
+    ) -> int | None:
         """批量更新面板布局"""
         updated_count = await self.dao.update_panels_layout(
             dashboard_id=dashboard_id,
@@ -253,7 +253,7 @@ class DashboardService:
 
     async def get_panel(
         self, panel_id: str, dashboard_id: str = None, user_id: str = None, include_public: bool = True
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """获取单个面板"""
         panel = await self.dao.get_panel(
             panel_id=panel_id,
@@ -268,8 +268,8 @@ class DashboardService:
     @staticmethod
     def _dashboard_update_values(
         name: str = None, description: str = None, theme: str = None, background_id: str = None
-    ) -> Dict[str, Any]:
-        values: Dict[str, Any] = {}
+    ) -> dict[str, Any]:
+        values: dict[str, Any] = {}
         if name is not None:
             values["dashboard_name"] = name
         if description is not None:
@@ -286,7 +286,7 @@ class DashboardService:
         name: str,
         sql: str,
         chart_type: str,
-        chart_config: Dict = None,
+        chart_config: dict = None,
         layout_x: int = None,
         layout_y: int = None,
         layout_w: int = 4,
@@ -295,7 +295,7 @@ class DashboardService:
         source_thread_id: str = None,
         datasource_id: str = None,
         member_datasource_id: str = "",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         return {
             "panel_name": name,
             "panel_sql": sql,
@@ -317,15 +317,15 @@ class DashboardService:
         name: str = None,
         sql: str = None,
         chart_type: str = None,
-        chart_config: Dict = None,
+        chart_config: dict = None,
         layout_x: int = None,
         layout_y: int = None,
         layout_w: int = None,
         layout_h: int = None,
         refresh_interval: int = None,
         member_datasource_id: str = None,
-    ) -> Dict[str, Any]:
-        values: Dict[str, Any] = {}
+    ) -> dict[str, Any]:
+        values: dict[str, Any] = {}
         optional_fields = {
             "panel_name": name,
             "panel_sql": sql,
@@ -345,7 +345,7 @@ class DashboardService:
             values["member_datasource_id"] = str(member_datasource_id or "").strip()
         return values
 
-    def _dashboard_to_dict(self, dashboard: ChatDataDashboard) -> Dict[str, Any]:
+    def _dashboard_to_dict(self, dashboard: ChatDataDashboard) -> dict[str, Any]:
         """将 ChatDataDashboard 对象转换为字典"""
         return {
             "id": dashboard.dashboard_id,
@@ -364,7 +364,7 @@ class DashboardService:
             "update_by_name": getattr(dashboard, "update_by_name", ""),
         }
 
-    def _panel_to_dict(self, panel: ChatDataDashboardPanel) -> Dict[str, Any]:
+    def _panel_to_dict(self, panel: ChatDataDashboardPanel) -> dict[str, Any]:
         """将 ChatDataDashboardPanel 对象转换为字典"""
         chart_config = None
         if panel.chart_config:

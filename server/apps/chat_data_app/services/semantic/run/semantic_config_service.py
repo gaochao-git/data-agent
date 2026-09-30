@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from hashlib import sha1
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any
 from uuid import uuid4
 
 from utils.logger import get_logger
@@ -27,15 +27,15 @@ logger = get_logger(__name__)
 TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
-def _scope_type(config: Dict[str, Any]) -> str:
+def _scope_type(config: dict[str, Any]) -> str:
     return str((config or {}).get("scope_type") or "public").strip().lower()
 
 
-def is_public_semantic_config(config: Dict[str, Any]) -> bool:
+def is_public_semantic_config(config: dict[str, Any]) -> bool:
     return bool(config and _scope_type(config) == "public")
 
 
-def is_private_semantic_config_owner(config: Dict[str, Any], user_id: str) -> bool:
+def is_private_semantic_config_owner(config: dict[str, Any], user_id: str) -> bool:
     return bool(
         config
         and _scope_type(config) == "private"
@@ -43,14 +43,14 @@ def is_private_semantic_config_owner(config: Dict[str, Any], user_id: str) -> bo
     )
 
 
-def can_mutate_semantic_config(config: Dict[str, Any], user_id: str, admin_manage: bool = False) -> bool:
+def can_mutate_semantic_config(config: dict[str, Any], user_id: str, admin_manage: bool = False) -> bool:
     return is_public_semantic_config(config) if admin_manage else is_private_semantic_config_owner(config, user_id)
 
 
-def dedupe_semantic_config_ids(config_ids: Optional[List[str]]) -> List[str]:
+def dedupe_semantic_config_ids(config_ids: list[str] | None) -> list[str]:
     """清洗并去重指标集 ID，保持传入顺序，空值与重复项丢弃。"""
-    result: List[str] = []
-    seen: Set[str] = set()
+    result: list[str] = []
+    seen: set[str] = set()
     for config_id in config_ids or []:
         normalized = str(config_id or "").strip()
         if not normalized or normalized in seen:
@@ -60,18 +60,18 @@ def dedupe_semantic_config_ids(config_ids: Optional[List[str]]) -> List[str]:
     return result
 
 
-def empty_batch_toggle_result() -> Dict[str, Any]:
+def empty_batch_toggle_result() -> dict[str, Any]:
     """批量切换启用状态的空结果，保证路由返回字段口径恒定。"""
     return {"updated_ids": [], "skipped_ids": [], "not_found_ids": [], "updated_count": 0}
 
 
 def classify_batch_toggle_ids(
-    requested: List[str],
-    current_map: Dict[str, Dict[str, Any]],
+    requested: list[str],
+    current_map: dict[str, dict[str, Any]],
     enabled: bool,
     user_id: str,
     admin_manage: bool,
-) -> Dict[str, List[str]]:
+) -> dict[str, list[str]]:
     """把请求 ID 按「不存在 / 无权限 / 已处于目标状态 / 需要变更」分类，全部保持请求顺序。
 
     ``settled`` 指已处于目标状态的 ID：算成功但不写库。MySQL 的 UPDATE rowcount
@@ -79,10 +79,10 @@ def classify_batch_toggle_ids(
     前端成功数与 updated_ids 对不上，后端还会刷误导性的行数不一致告警。
     ``updated`` = updatable + settled，按请求顺序合并，便于前端逐条对照。
     """
-    updatable: List[str] = []
-    settled: List[str] = []
-    skipped: List[str] = []
-    not_found: List[str] = []
+    updatable: list[str] = []
+    settled: list[str] = []
+    skipped: list[str] = []
+    not_found: list[str] = []
     for config_id in requested:
         config = current_map.get(config_id)
         if not config:
@@ -103,7 +103,7 @@ def classify_batch_toggle_ids(
     }
 
 
-def column_dict_has_enum_mapping(column_dict: Optional[Dict[str, Any]]) -> bool:
+def column_dict_has_enum_mapping(column_dict: dict[str, Any] | None) -> bool:
     enum_values = (column_dict or {}).get("enum_values") if isinstance(column_dict, dict) else []
     if not isinstance(enum_values, list):
         return False
@@ -113,10 +113,10 @@ def column_dict_has_enum_mapping(column_dict: Optional[Dict[str, Any]]) -> bool:
 async def validate_semantic_logical_types(
     ds_manager: Any,
     datasource_id: str,
-    dimensions: List[Dict],
+    dimensions: list[dict],
     *,
-    column_dicts: Optional[Dict[Tuple[str, str], Dict[str, Any]]] = None,
-) -> Optional[str]:
+    column_dicts: dict[tuple[str, str], dict[str, Any]] | None = None,
+) -> str | None:
     """校验枚举维度都已在字段字典维护枚举值。
 
     ``column_dicts`` 传入数据源级字典映射（键为 (table, column)）时本地匹配，
@@ -140,14 +140,14 @@ async def validate_semantic_logical_types(
 async def validate_semantic_config_for_save(
     ds_manager: Any,
     datasource_id: str,
-    datasource: Dict,
-    metrics: List[Dict],
-    dimensions: List[Dict],
-    relationships: Optional[List[Dict]] = None,
+    datasource: dict,
+    metrics: list[dict],
+    dimensions: list[dict],
+    relationships: list[dict] | None = None,
     *,
-    table_columns_map: Optional[Dict[str, Set[str]]] = None,
-    column_dicts: Optional[Dict[Tuple[str, str], Dict[str, Any]]] = None,
-) -> Optional[str]:
+    table_columns_map: dict[str, set[str]] | None = None,
+    column_dicts: dict[tuple[str, str], dict[str, Any]] | None = None,
+) -> str | None:
     structure_error = first_structure_error(
         metrics,
         dimensions,
@@ -162,12 +162,12 @@ async def validate_semantic_config_for_save(
 class SemanticConfigService:
     """语义配置业务服务，负责权限范围内的查询、运行时增强和 CRUD。"""
 
-    def __init__(self, datasource_manager: Any, dao: Optional[SemanticConfigDao] = None) -> None:
+    def __init__(self, datasource_manager: Any, dao: SemanticConfigDao | None = None) -> None:
         self.datasource_manager = datasource_manager
         self.dao = dao or SemanticConfigDao()
 
     @staticmethod
-    def _normalize_relationships(config: Dict[str, Any]) -> Dict[str, Any]:
+    def _normalize_relationships(config: dict[str, Any]) -> dict[str, Any]:
         normalized = dict(config or {})
         relationships = []
         for relation in normalized.get("relationships") or []:
@@ -193,7 +193,7 @@ class SemanticConfigService:
         return normalized
 
     @staticmethod
-    def _enrich_model_context(config: Dict[str, Any], datasource: Dict[str, Any]) -> Dict[str, Any]:
+    def _enrich_model_context(config: dict[str, Any], datasource: dict[str, Any]) -> dict[str, Any]:
         result = dict(config or {})
         result["source_type"] = result.get("source_type") or datasource.get("source_type") or "mysql"
         result["tables"] = result.get("tables") or datasource.get("ds_tables") or []
@@ -201,11 +201,11 @@ class SemanticConfigService:
             result["joins"] = result["relationships"]
         return result
 
-    async def _group_id_async(self, datasource_id: str) -> Optional[str]:
+    async def _group_id_async(self, datasource_id: str) -> str | None:
         datasource = await self.datasource_manager.get_datasource_meta_async(datasource_id)
         return str((datasource or {}).get("group_id") or "").strip() or None
 
-    async def get_configs_async(self, datasource_id: str, user_id: str = "") -> List[Dict[str, Any]]:
+    async def get_configs_async(self, datasource_id: str, user_id: str = "") -> list[dict[str, Any]]:
         datasource = await self.datasource_manager.get_datasource_async(datasource_id)
         group_id = str((datasource or {}).get("group_id") or "").strip()
         if not datasource or not group_id:
@@ -215,11 +215,11 @@ class SemanticConfigService:
             for item in await self.dao.get_by_group_id_async(group_id, user_id)
         ]
 
-    async def get_directory_async(self, datasource_id: str, user_id: str = "") -> List[Dict[str, Any]]:
+    async def get_directory_async(self, datasource_id: str, user_id: str = "") -> list[dict[str, Any]]:
         group_id = await self._group_id_async(datasource_id)
         return await self.dao.get_directory_by_group_id_async(group_id or "", user_id)
 
-    async def get_config_async(self, datasource_id: str, config_id: str, user_id: str = "") -> Optional[Dict[str, Any]]:
+    async def get_config_async(self, datasource_id: str, config_id: str, user_id: str = "") -> dict[str, Any] | None:
         datasource = await self.datasource_manager.get_datasource_async(datasource_id)
         group_id = str((datasource or {}).get("group_id") or "").strip()
         if not datasource or not group_id:
@@ -228,13 +228,13 @@ class SemanticConfigService:
         return self._enrich_model_context(self._normalize_relationships(config), datasource) if config else None
 
     @staticmethod
-    def _extract_metric_source_column(metric: Dict[str, Any]) -> str:
+    def _extract_metric_source_column(metric: dict[str, Any]) -> str:
         """委托 importer 模块的同名实现（导出标注与导入回填定位同一物理列）。"""
         return extract_metric_source_column(metric)
 
     @staticmethod
-    def _format_column_dict_supplement(column_dict: Dict[str, Any]) -> str:
-        parts: List[str] = []
+    def _format_column_dict_supplement(column_dict: dict[str, Any]) -> str:
+        parts: list[str] = []
         enum_values = [
             f"{item.get('value')}={item.get('label')}" if item.get("label") else str(item.get("value"))
             for item in column_dict.get("enum_values") or []
@@ -257,7 +257,7 @@ class SemanticConfigService:
         return current_text if not addition or addition in current_text else f"{current_text}\n{addition}"
 
     @staticmethod
-    def _enum_values(column_dict: Dict[str, Any]) -> List[str]:
+    def _enum_values(column_dict: dict[str, Any]) -> list[str]:
         return [
             str(item.get("label") or item.get("value")).strip()
             for item in column_dict.get("enum_values") or []
@@ -265,7 +265,7 @@ class SemanticConfigService:
         ]
 
     @staticmethod
-    def _enum_mapping(column_dict: Dict[str, Any]) -> Dict[str, str]:
+    def _enum_mapping(column_dict: dict[str, Any]) -> dict[str, str]:
         return {
             str(item.get("label") or item.get("value")).strip(): str(item.get("value")).strip()
             for item in column_dict.get("enum_values") or []
@@ -273,7 +273,7 @@ class SemanticConfigService:
         }
 
     @staticmethod
-    def _enum_mapping_covers_values(values: List[str], mapping: Dict[str, str]) -> bool:
+    def _enum_mapping_covers_values(values: list[str], mapping: dict[str, str]) -> bool:
         value_set = {str(value).strip() for value in values if str(value or "").strip()}
         mapping_keys = {
             str(key).strip() for key, value in mapping.items() if str(key or "").strip() and str(value or "").strip()
@@ -281,7 +281,7 @@ class SemanticConfigService:
         return bool(value_set and value_set <= mapping_keys)
 
     @classmethod
-    def _merge_dimension_column_dict(cls, dimension: Dict[str, Any], column_dict: Dict[str, Any]) -> Dict[str, Any]:
+    def _merge_dimension_column_dict(cls, dimension: dict[str, Any], column_dict: dict[str, Any]) -> dict[str, Any]:
         """把字段数据字典信息合并进单个维度：枚举值/映射/逻辑类型/补充说明。"""
         values = cls._enum_values(column_dict)
         mapping = cls._enum_mapping(column_dict)
@@ -300,14 +300,14 @@ class SemanticConfigService:
         return dimension
 
     @classmethod
-    def _merge_metric_column_dict(cls, metric: Dict[str, Any], column_dict: Dict[str, Any]) -> Dict[str, Any]:
+    def _merge_metric_column_dict(cls, metric: dict[str, Any], column_dict: dict[str, Any]) -> dict[str, Any]:
         supplement = cls._format_column_dict_supplement(column_dict)
         if supplement:
             metric["metadata_supplement"] = cls._merge_supplement(metric.get("metadata_supplement"), supplement)
         return metric
 
     @classmethod
-    def _column_dict_key(cls, item: Dict[str, Any], *, metric: bool) -> tuple[str, str]:
+    def _column_dict_key(cls, item: dict[str, Any], *, metric: bool) -> tuple[str, str]:
         """条目的字典定位键 (table, column)；与运行时合并使用同一口径。"""
         table = str(item.get("table") or "").strip()
         if metric:
@@ -317,9 +317,9 @@ class SemanticConfigService:
     @classmethod
     def annotate_export_column_dicts(
         cls,
-        config: Dict[str, Any],
-        column_dicts: Dict[tuple[str, str], Dict[str, Any]],
-    ) -> Dict[str, Any]:
+        config: dict[str, Any],
+        column_dicts: dict[tuple[str, str], dict[str, Any]],
+    ) -> dict[str, Any]:
         """导出专用：把命中的字段字典原文挂到各条目的 ``_column_dict`` 键（返回副本，不改原配置）。
 
         供物化导出链路把字典四项（enum_values/synonyms/storage_format/unit）写入
@@ -340,11 +340,11 @@ class SemanticConfigService:
     @classmethod
     def _with_export_column_dict(
         cls,
-        raw_item: Dict[str, Any],
-        column_dicts: Dict[tuple[str, str], Dict[str, Any]],
+        raw_item: dict[str, Any],
+        column_dicts: dict[tuple[str, str], dict[str, Any]],
         *,
         metric: bool,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         item = dict(raw_item or {})
         column_dict = column_dicts.get(cls._column_dict_key(item, metric=metric))
         if column_dict:
@@ -353,8 +353,8 @@ class SemanticConfigService:
 
     @classmethod
     def _merge_column_dict(
-        cls, config: Dict[str, Any], column_dicts: Dict[tuple[str, str], Dict[str, Any]]
-    ) -> Dict[str, Any]:
+        cls, config: dict[str, Any], column_dicts: dict[tuple[str, str], dict[str, Any]]
+    ) -> dict[str, Any]:
         result = dict(config or {})
         dimensions = []
         for raw_dimension in result.get("dimensions") or []:
@@ -380,7 +380,7 @@ class SemanticConfigService:
         self,
         datasource_id: str,
         user_id: str = "",
-    ) -> tuple[List[Dict[str, Any]], Dict[tuple[str, str], Dict[str, Any]]]:
+    ) -> tuple[list[dict[str, Any]], dict[tuple[str, str], dict[str, Any]]]:
         """一次加载「全量可见配置 + 字段字典」，供批量链路复用。
 
         批量物化（预物化/按需物化）既要配置也要字典；分开取会让字典查库次数
@@ -398,11 +398,11 @@ class SemanticConfigService:
         column_dicts = await self.get_column_dicts_async(datasource_id)
         return [self._merge_column_dict(config, column_dicts) for config in configs], column_dicts
 
-    async def get_runtime_configs_async(self, datasource_id: str, user_id: str = "") -> List[Dict[str, Any]]:
+    async def get_runtime_configs_async(self, datasource_id: str, user_id: str = "") -> list[dict[str, Any]]:
         configs, _ = await self.get_runtime_bundle_async(datasource_id, user_id)
         return configs
 
-    async def get_column_dicts_async(self, datasource_id: str) -> Dict[tuple[str, str], Dict[str, Any]]:
+    async def get_column_dicts_async(self, datasource_id: str) -> dict[tuple[str, str], dict[str, Any]]:
         """读取数据源字段字典；失败降级为空 dict（与 get_runtime_config_async 的容错口径一致）。"""
         try:
             return await self.datasource_manager.get_datasource_column_dicts_async(datasource_id)
@@ -416,8 +416,8 @@ class SemanticConfigService:
         config_id: str,
         user_id: str = "",
         *,
-        column_dicts: Optional[Dict[tuple[str, str], Dict[str, Any]]] = None,
-    ) -> Optional[Dict[str, Any]]:
+        column_dicts: dict[tuple[str, str], dict[str, Any]] | None = None,
+    ) -> dict[str, Any] | None:
         config = await self.get_config_async(datasource_id, config_id, user_id)
         if not config:
             return None
@@ -431,7 +431,7 @@ class SemanticConfigService:
 
     @staticmethod
     def _name_exists(
-        configs: List[Dict[str, Any]],
+        configs: list[dict[str, Any]],
         name: str,
         *,
         exclude_id: str = "",
@@ -459,7 +459,7 @@ class SemanticConfigService:
                 return True
         return False
 
-    async def create_async(self, datasource_id: str, **kwargs: Any) -> Optional[Dict[str, Any]]:
+    async def create_async(self, datasource_id: str, **kwargs: Any) -> dict[str, Any] | None:
         group_id = await self._group_id_async(datasource_id)
         if not group_id:
             return None
@@ -488,12 +488,12 @@ class SemanticConfigService:
 
     async def _process_basic_single_table(
         self,
-        table: Dict[str, Any],
+        table: dict[str, Any],
         *,
         group_id: str,
-        datasource: Dict[str, Any],
+        datasource: dict[str, Any],
         datasource_id: str,
-        table_columns_map: Dict[str, Set[str]],
+        table_columns_map: dict[str, set[str]],
         configured_tables: set,
         existing_names: set,
         all_configs: list,
@@ -544,9 +544,9 @@ class SemanticConfigService:
         self,
         group_id: str,
         datasource_id: str,
-        pending_configs: List[tuple[str, Dict[str, Any]]],
-        result: Dict[str, Any],
-        item_order: List[str],
+        pending_configs: list[tuple[str, dict[str, Any]]],
+        result: dict[str, Any],
+        item_order: list[str],
     ) -> None:
         """批量写入基础模型；批量失败回退单表写入。"""
         persisted_configs = [config for _, config in pending_configs]
@@ -592,7 +592,7 @@ class SemanticConfigService:
         *,
         create_by: str = "",
         create_by_name: str = "",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """为尚未建模的物理表创建公共基础单表模型（默认启用）。"""
         datasource = await self.datasource_manager.get_datasource_async(datasource_id)
         if not datasource:
@@ -602,7 +602,7 @@ class SemanticConfigService:
         configured_tables, existing_names, all_configs = await self._scan_existing_single_table_state(group_id)
         result = {"created": 0, "skipped": 0, "failed": 0, "items": []}
         pending_configs = []
-        item_order: List[str] = []
+        item_order: list[str] = []
         seen_tables: set[str] = set()
         table_columns_map = build_table_columns_map(datasource)
         for table in datasource.get("ds_tables") or []:
@@ -645,7 +645,7 @@ class SemanticConfigService:
 
     @staticmethod
     def _set_generation_item(
-        result: Dict[str, Any], table_name: str, item: Dict[str, Any], item_order: List[str]
+        result: dict[str, Any], table_name: str, item: dict[str, Any], item_order: list[str]
     ) -> None:
         for index, current in enumerate(result["items"]):
             if current.get("table") == table_name:
@@ -656,7 +656,7 @@ class SemanticConfigService:
         result["items"] = [existing_by_table[table] for table in item_order if table in existing_by_table]
 
     @staticmethod
-    def _build_persisted_config(group_id: str, **kwargs: Any) -> Dict[str, Any]:
+    def _build_persisted_config(group_id: str, **kwargs: Any) -> dict[str, Any]:
         """构造统一的持久化配置，供单条和批量创建复用。"""
         operator = str(kwargs.get("create_by") or "").strip()
         now = datetime.now().strftime(TIME_FORMAT)
@@ -698,7 +698,7 @@ class SemanticConfigService:
         return f"{prefix}{table_name[:available]}{suffix}"[:128]
 
     @staticmethod
-    def _config_physical_tables(config: Dict[str, Any]) -> set[str]:
+    def _config_physical_tables(config: dict[str, Any]) -> set[str]:
         tables: set[str] = set()
         for item in [*(config.get("metrics") or []), *(config.get("dimensions") or [])]:
             if isinstance(item, dict) and item.get("table"):
@@ -715,12 +715,12 @@ class SemanticConfigService:
     @classmethod
     def _build_basic_single_table_config(
         cls,
-        table: Dict[str, Any],
+        table: dict[str, Any],
         *,
         name: str,
         create_by: str,
         create_by_name: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         table_name = str(table.get("table_name") or "").strip()
         dimensions = []
         used_names: set[str] = set()
@@ -791,7 +791,7 @@ class SemanticConfigService:
             return "number"
         return "text"
 
-    async def update_async(self, datasource_id: str, config_id: str, **kwargs: Any) -> Optional[Dict[str, Any]]:
+    async def update_async(self, datasource_id: str, config_id: str, **kwargs: Any) -> dict[str, Any] | None:
         current = await self.get_config_async(datasource_id, config_id)
         if not current:
             return None
@@ -807,7 +807,7 @@ class SemanticConfigService:
         return await self.get_config_async(datasource_id, config_id)
 
     @staticmethod
-    def _resolve_updated_value(kwargs: Dict[str, Any], current: Dict[str, Any], key: str, fallback: Any = None) -> Any:
+    def _resolve_updated_value(kwargs: dict[str, Any], current: dict[str, Any], key: str, fallback: Any = None) -> Any:
         """显式传参（非 None）优先，否则沿用当前值；fallback 为当前值缺省。"""
         value = kwargs.get(key)
         if value is not None:
@@ -815,7 +815,7 @@ class SemanticConfigService:
         return current.get(key, fallback)
 
     @classmethod
-    def _build_update_payload(cls, current: Dict[str, Any], kwargs: Dict[str, Any], name: str) -> Dict[str, Any]:
+    def _build_update_payload(cls, current: dict[str, Any], kwargs: dict[str, Any], name: str) -> dict[str, Any]:
         return {
             **current,
             "name": name,
@@ -846,12 +846,12 @@ class SemanticConfigService:
     async def batch_toggle_enabled_async(
         self,
         datasource_id: str,
-        config_ids: List[str],
+        config_ids: list[str],
         enabled: bool,
         user_id: str = "",
         username: str = "",
         admin_manage: bool = False,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """批量切换指标集启用状态。
 
         越权与不存在的 ID 分别计入 skipped_ids / not_found_ids 并跳过，不中断整批；
@@ -888,7 +888,7 @@ class SemanticConfigService:
         }
 
 
-_semantic_config_service: Optional[SemanticConfigService] = None
+_semantic_config_service: SemanticConfigService | None = None
 
 
 def get_semantic_config_service() -> SemanticConfigService:
@@ -900,7 +900,7 @@ def get_semantic_config_service() -> SemanticConfigService:
     return _semantic_config_service
 
 
-def _add_table_physical_columns(columns: Set[Tuple[str, str]], table: Any) -> None:
+def _add_table_physical_columns(columns: set[tuple[str, str]], table: Any) -> None:
     """把单个物理表的列登记进 columns 集合（{(table, column)}）。"""
     if not isinstance(table, dict):
         return
@@ -913,7 +913,7 @@ def _add_table_physical_columns(columns: Set[Tuple[str, str]], table: Any) -> No
             columns.add((table_name, column_name))
 
 
-async def load_semantic_physical_columns(ds_manager: Any, datasource_id: str) -> Optional[Set[Tuple[str, str]]]:
+async def load_semantic_physical_columns(ds_manager: Any, datasource_id: str) -> set[tuple[str, str]] | None:
     """加载数据源物理列清单 {(table, column)}（get_cached_schema_async 的全量表结构）。
 
     导入预览 / 质量检查 / semantic_yaml_check 工具共用，保证物理清单口径一致。
@@ -926,7 +926,7 @@ async def load_semantic_physical_columns(ds_manager: Any, datasource_id: str) ->
     except Exception as e:
         logger.warning("加载物理表结构失败，质量检查跳过清单类检查项: datasource_id=%s error=%s", datasource_id, e)
         return None
-    columns: Set[Tuple[str, str]] = set()
+    columns: set[tuple[str, str]] = set()
     for table in tables or []:
         _add_table_physical_columns(columns, table)
     return columns
@@ -934,12 +934,12 @@ async def load_semantic_physical_columns(ds_manager: Any, datasource_id: str) ->
 
 async def prepare_ossie_import_models(
     ds_manager: Any,
-    datasource: Dict,
+    datasource: dict,
     datasource_id: str,
     yaml_content: str,
-    semantic_service: Optional["SemanticConfigService"] = None,
+    semantic_service: SemanticConfigService | None = None,
     user_id: str = "",
-) -> Tuple[List[OssieSemanticModelImport], Optional[str]]:
+) -> tuple[list[OssieSemanticModelImport], str | None]:
     """Ossie 模型导入与 check_yaml 工具共用的校验前置（唯一权威实现，两侧各不再单独维护）。
 
     步骤：
@@ -978,15 +978,15 @@ async def prepare_ossie_import_models(
 def _build_existing_config_index(
     existing_configs: Any,
     user_id: str,
-) -> Tuple[Dict[str, Dict[str, Any]], Set[str]]:
+) -> tuple[dict[str, dict[str, Any]], set[str]]:
     """构建同名配置索引。
 
     同组内模型名全局唯一（不区分 scope/create_by）。冲突表只收录 admin_manage 口径下
     可操作的配置（即公共配置）；他人私有配置等不可操作的同名配置不进入冲突表
     （不允许 replace，也不泄露其元信息），改为收集到 locked 集合以便标记强制跳过。
     """
-    configs_by_name: Dict[str, Dict[str, Any]] = {}
-    locked_conflict_names: Set[str] = set()
+    configs_by_name: dict[str, dict[str, Any]] = {}
+    locked_conflict_names: set[str] = set()
     for config in existing_configs or []:
         config_name = str(config.get("name") or "").strip()
         config_id = str(config.get("id") or "").strip()
@@ -1006,12 +1006,12 @@ def _build_existing_config_index(
 
 
 async def _apply_physical_validation(
-    imports: List[OssieSemanticModelImport],
+    imports: list[OssieSemanticModelImport],
     ds_manager: Any,
     datasource_id: str,
-    datasource: Dict,
-    configs_by_name: Dict[str, Dict[str, Any]],
-    locked_conflict_names: Set[str],
+    datasource: dict,
+    configs_by_name: dict[str, dict[str, Any]],
+    locked_conflict_names: set[str],
 ) -> None:
     """逐个可导入模型做物理校验（复用 validate_semantic_config_for_save），并落同名标记。
 
@@ -1051,7 +1051,7 @@ async def _apply_physical_validation(
         item.conflict_locked = not item.existing_config and item.name in locked_conflict_names
 
 
-def _cross_model_comparison_pool(existing_configs: List[Dict[str, Any]], user_id: str) -> List[Dict[str, Any]]:
+def _cross_model_comparison_pool(existing_configs: list[dict[str, Any]], user_id: str) -> list[dict[str, Any]]:
     """跨模型比较池：公共配置 + 当前用户自己的私有配置。
 
     他人私有模型的指标名属业务元信息，不得泄进报告；自己的私有模型
@@ -1068,11 +1068,11 @@ def _cross_model_comparison_pool(existing_configs: List[Dict[str, Any]], user_id
 
 
 async def cross_model_findings_for_imports(
-    imports: List[OssieSemanticModelImport],
+    imports: list[OssieSemanticModelImport],
     datasource_id: str,
-    semantic_service: Optional["SemanticConfigService"] = None,
+    semantic_service: SemanticConfigService | None = None,
     user_id: str = "",
-) -> Dict[str, List[Dict[str, Any]]]:
+) -> dict[str, list[dict[str, Any]]]:
     """导入链路的跨模型指标口径检查（ossie-import/preview 与 check_yaml 工具共用）。
 
     对每个可导入模型，计算它与「组内其他公共配置 + 同批其他导入模型」之间的
@@ -1093,7 +1093,7 @@ async def cross_model_findings_for_imports(
         logger.warning("跨模型口径检查读取存量配置失败，已跳过: datasource_id=%s error=%s", datasource_id, exc)
         return {}
     import_names = {item.name for item in importable}
-    comparison_pool: List[Dict[str, Any]] = [{**item.to_config_payload(), "enabled": False} for item in importable]
+    comparison_pool: list[dict[str, Any]] = [{**item.to_config_payload(), "enabled": False} for item in importable]
     comparison_pool.extend(
         config
         for config in _cross_model_comparison_pool(existing_configs, user_id)
@@ -1103,13 +1103,13 @@ async def cross_model_findings_for_imports(
 
 
 async def quality_findings_for_imports(
-    imports: List[OssieSemanticModelImport],
+    imports: list[OssieSemanticModelImport],
     datasource_id: str,
     *,
-    physical_columns: Optional[Set[Tuple[str, str]]] = None,
-    semantic_service: Optional["SemanticConfigService"] = None,
+    physical_columns: set[tuple[str, str]] | None = None,
+    semantic_service: SemanticConfigService | None = None,
     user_id: str = "",
-) -> Dict[str, List[Dict[str, Any]]]:
+) -> dict[str, list[dict[str, Any]]]:
     """导入链路逐模型质量检查编排（ossie-import/preview 与 check_yaml 工具共用）。
 
     单模型 5 维规则（check_config）与跨模型口径（cross_model_findings_for_imports）
@@ -1139,13 +1139,13 @@ async def quality_findings_for_save(
     datasource_id: str,
     *,
     name: str,
-    metrics: List[Dict[str, Any]],
-    dimensions: List[Dict[str, Any]],
-    relationships: Optional[List[Dict[str, Any]]] = None,
-    exclude_config_id: Optional[str] = None,
-    semantic_service: Optional["SemanticConfigService"] = None,
+    metrics: list[dict[str, Any]],
+    dimensions: list[dict[str, Any]],
+    relationships: list[dict[str, Any]] | None = None,
+    exclude_config_id: str | None = None,
+    semantic_service: SemanticConfigService | None = None,
     user_id: str = "",
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """编辑器保存链路的质量检查（单模型 5 维规则 + 跨模型口径，与导入/工具同源）。
 
     校验方法多处统一的单一入口：导入 preview、check_yaml 工具、admin 质量报告
@@ -1179,7 +1179,7 @@ async def quality_findings_for_save(
         logger.warning("保存链路单模型质量检查失败，已跳过: name=%s error=%s", name, exc)
         single_findings = []
 
-    cross_findings: List[Dict[str, Any]] = []
+    cross_findings: list[dict[str, Any]] = []
     try:
         existing_configs = await service.get_configs_async(datasource_id, user_id) or []
         comparison_pool = [
@@ -1197,7 +1197,7 @@ async def quality_findings_for_save(
     return _strip_self_name_from_messages(single_findings + cross_findings, name)
 
 
-def _strip_self_name_from_messages(findings: List[Dict[str, Any]], config_name: str) -> List[Dict[str, Any]]:
+def _strip_self_name_from_messages(findings: list[dict[str, Any]], config_name: str) -> list[dict[str, Any]]:
     """单模型保存上下文里，目标是配置名本身的提示去掉消息尾部的配置名。
 
     保存前校验弹窗就挂在被编辑的模型之下，「…: auth_group_permissions基础模型」这类
@@ -1205,7 +1205,7 @@ def _strip_self_name_from_messages(findings: List[Dict[str, Any]], config_name: 
     「模型.指标」目标仍然保留——导入预览等多模型场景不加此处理，名称在那里是有用定位。
     """
     suffix = f": {config_name}"
-    stripped: List[Dict[str, Any]] = []
+    stripped: list[dict[str, Any]] = []
     for item in findings:
         if list(item.get("targets") or []) == [config_name] and str(item.get("message") or "").endswith(suffix):
             item = {**item, "message": item["message"][: -len(suffix)]}
@@ -1224,12 +1224,12 @@ class OssieImportWriteError(Exception):
 
 async def persist_one_ossie_model(
     item: Any,
-    conflict_actions: Dict[str, str],
+    conflict_actions: dict[str, str],
     semantic_service: Any,
     datasource_id: str,
     user_id: str,
     username: str,
-) -> Tuple[str, Dict[str, Any]]:
+) -> tuple[str, dict[str, Any]]:
     """落库单个模型，返回 ``(kind, payload)``，kind ∈ created / replaced / skipped。"""
     if item.conflict_locked:
         # 同名配置不可操作（如他人私有配置）：无论 conflict_actions 是什么都跳过，
@@ -1278,13 +1278,13 @@ async def fill_ossie_column_dicts(
     datasource_id: str,
     user_id: str,
     username: str,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """把模型携带的字典条目按「仅填空」写入 datasource_column_dict（须在事务内调用）。
 
     只处理实际落库（created/replaced）的模型：被跳过的模型不写字典，与用户
     「不导入该模型」的动作语义一致。写入失败（含物理列不存在）抛错触发整批回滚。
     """
-    filled: List[Dict[str, Any]] = []
+    filled: list[dict[str, Any]] = []
     for entry in item.column_dicts:
         fields = await ds_manager.fill_column_dict_async(
             datasource_id,
@@ -1302,22 +1302,22 @@ async def fill_ossie_column_dicts(
 
 
 async def persist_ossie_imports(
-    imports: List[Any],
-    conflict_actions: Dict[str, str],
+    imports: list[Any],
+    conflict_actions: dict[str, str],
     semantic_service: Any,
     ds_manager: Any,
     datasource_id: str,
     user_id: str,
     username: str,
-) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     """整批落库（须在 transaction_scope 内调用），返回 (created, replaced, skipped)。
 
     created/replaced 的模型随后在同一事务内执行字典仅填空写入，
     实际填充明细挂在各自 payload 的 column_dict_filled 上。
     """
-    created: List[Dict[str, Any]] = []
-    replaced: List[Dict[str, Any]] = []
-    skipped: List[Dict[str, Any]] = []
+    created: list[dict[str, Any]] = []
+    replaced: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
     buckets = {"created": created, "replaced": replaced, "skipped": skipped}
     for item in imports:
         kind, payload = await persist_one_ossie_model(
@@ -1336,14 +1336,14 @@ async def persist_ossie_imports(
 
 
 async def persist_ossie_imports_in_transaction(
-    imports: List[Any],
-    conflict_actions: Dict[str, str],
+    imports: list[Any],
+    conflict_actions: dict[str, str],
     semantic_service: Any,
     ds_manager: Any,
     datasource_id: str,
     user_id: str,
     username: str,
-) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     """整批落库的事务边界（全有或全无）：任一模型写入失败即整体回滚，不留半批草稿。
 
     字典仅填空写入与模型写入在同一事务内，模型与字典要么一起落库、要么一起回滚。

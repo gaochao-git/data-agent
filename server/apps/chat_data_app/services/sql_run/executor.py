@@ -9,10 +9,11 @@ import asyncio
 import inspect
 import os
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 from decimal import Decimal
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any
 
 from utils.alarm import (
     DB_FAIL_DATASOURCE,
@@ -76,7 +77,7 @@ HTTP_AUTH_TOKEN = get_http_auth_token()
 _HIVE_EXECUTOR_THREAD_POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="chatdata-hive-query")
 
 
-def _http_payload_summary(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def _http_payload_summary(payload: dict[str, Any] | None) -> dict[str, Any]:
     """生成 HTTP 日志用的请求摘要。"""
     summary = dict(payload or {})
     if "sql" in summary:
@@ -92,7 +93,7 @@ def _first_not_none(*values: Any) -> Any:
     return None
 
 
-def _http_response_summary(payload: Any) -> Dict[str, Any]:
+def _http_response_summary(payload: Any) -> dict[str, Any]:
     """生成 HTTP 日志用的响应摘要，避免打印查询结果明细。"""
     if not isinstance(payload, dict):
         return {"payload_type": type(payload).__name__}
@@ -126,7 +127,7 @@ def _http_response_summary(payload: Any) -> Dict[str, Any]:
     return {key: value for key, value in summary.items() if value is not None}
 
 
-async def resolve_query_timeout(source_type: str, timeout: Optional[int] = None) -> int:
+async def resolve_query_timeout(source_type: str, timeout: int | None = None) -> int:
     """解析查询超时时间：显式传参优先（封顶 MAX_QUERY_TIMEOUT_SECONDS），
     否则按数据源类型读配置变量表热值（表 > env > 注册表默认 60/600 秒）。"""
     if timeout is not None:
@@ -174,17 +175,17 @@ def _serialize_value(value: Any) -> Any:
     return value
 
 
-def _serialize_row(row: Dict[str, Any]) -> Dict[str, Any]:
+def _serialize_row(row: dict[str, Any]) -> dict[str, Any]:
     """序列化整行数据"""
     return {k: _serialize_value(v) for k, v in row.items()}
 
 
-def _extract_response_payload(payload: Any) -> Dict[str, Any]:
+def _extract_response_payload(payload: Any) -> dict[str, Any]:
     """提取接口响应主体。"""
     return payload if isinstance(payload, dict) else {}
 
 
-def _extract_remote_data(payload: Dict[str, Any]) -> Dict[str, Any]:
+def _extract_remote_data(payload: dict[str, Any]) -> dict[str, Any]:
     """提取远端 data 节点。"""
     if not isinstance(payload, dict):
         return {}
@@ -192,7 +193,7 @@ def _extract_remote_data(payload: Dict[str, Any]) -> Dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def _extract_task_id(payload: Dict[str, Any]) -> str:
+def _extract_task_id(payload: dict[str, Any]) -> str:
     """从提交响应中提取任务 ID。"""
     for source in (payload, _extract_remote_data(payload)):
         if not isinstance(source, dict):
@@ -204,7 +205,7 @@ def _extract_task_id(payload: Dict[str, Any]) -> str:
     return ""
 
 
-def _extract_remote_code(payload: Dict[str, Any]) -> Optional[int]:
+def _extract_remote_code(payload: dict[str, Any]) -> int | None:
     """提取远端业务码。"""
     if not isinstance(payload, dict) or "code" not in payload:
         return None
@@ -214,7 +215,7 @@ def _extract_remote_code(payload: Dict[str, Any]) -> Optional[int]:
         return None
 
 
-def _extract_remote_message(payload: Dict[str, Any], default: str = "") -> str:
+def _extract_remote_message(payload: dict[str, Any], default: str = "") -> str:
     """提取远端错误或提示信息。"""
     if not isinstance(payload, dict):
         return default
@@ -241,13 +242,13 @@ def _normalize_remote_task_status(status: Any) -> str:
     return normalized or "pending"
 
 
-def _extract_remote_status(payload: Dict[str, Any]) -> str:
+def _extract_remote_status(payload: dict[str, Any]) -> str:
     """提取远端任务状态。"""
     data_payload = _extract_remote_data(payload)
     return _normalize_remote_task_status(data_payload.get("status") or payload.get("status"))
 
 
-def _extract_result_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+def _extract_result_payload(payload: dict[str, Any]) -> dict[str, Any]:
     """从远端结果中提取真正的查询结果。"""
     if not isinstance(payload, dict):
         return {}
@@ -264,7 +265,7 @@ def _extract_result_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     return {}
 
 
-def _normalize_http_execution_time_ms(payload: Dict[str, Any], result_payload: Dict[str, Any]) -> Optional[int]:
+def _normalize_http_execution_time_ms(payload: dict[str, Any], result_payload: dict[str, Any]) -> int | None:
     """提取远端执行耗时，优先使用业务 status 接口 cost 字段。"""
     sources = (_extract_remote_data(payload), payload, result_payload)
     for key in ("cost", "execution_time_ms", "duration_ms"):
@@ -281,7 +282,7 @@ def _normalize_http_execution_time_ms(payload: Dict[str, Any], result_payload: D
     return None
 
 
-def _parse_start_time_from_source(source: Any) -> Optional[datetime]:
+def _parse_start_time_from_source(source: Any) -> datetime | None:
     """从单个数据源字典解析开始时间；无法解析返回 None。"""
     if not isinstance(source, dict):
         return None
@@ -302,7 +303,7 @@ def _parse_start_time_from_source(source: Any) -> Optional[datetime]:
         return None
 
 
-def _parse_http_start_time(payload: Dict[str, Any], result_payload: Dict[str, Any]) -> Optional[datetime]:
+def _parse_http_start_time(payload: dict[str, Any], result_payload: dict[str, Any]) -> datetime | None:
     """解析远端开始时间，业务接口格式为 yyyy-MM-dd HH:mm:ss。"""
     for source in (result_payload, _extract_remote_data(payload), payload):
         parsed = _parse_start_time_from_source(source)
@@ -311,7 +312,7 @@ def _parse_http_start_time(payload: Dict[str, Any], result_payload: Dict[str, An
     return None
 
 
-def _build_http_execution_times(payload: Dict[str, Any], result_payload: Dict[str, Any]) -> Dict[str, Any]:
+def _build_http_execution_times(payload: dict[str, Any], result_payload: dict[str, Any]) -> dict[str, Any]:
     """按远端 cost/startTime 生成内部统一执行时间字段。"""
     execution_time_ms = _normalize_http_execution_time_ms(payload, result_payload)
     started_time = _parse_http_start_time(payload, result_payload)
@@ -369,12 +370,12 @@ def _normalize_http_rows(raw_rows: Any, columns: list[str]) -> list[dict[str, An
     return result
 
 
-def _get_sql_operation_type(sql: str, source_type: Optional[str] = None) -> str:
+def _get_sql_operation_type(sql: str, source_type: str | None = None) -> str:
     """解析 SQL 类型，用于白名单校验，不改写 SQL（实现收敛在 sql_guard）。"""
     return sql_operation_type(sql, source_type)
 
 
-def validate_sql(sql: str, source_type: Optional[str] = None, max_rows: Optional[int] = None) -> Tuple[bool, str]:
+def validate_sql(sql: str, source_type: str | None = None, max_rows: int | None = None) -> tuple[bool, str]:
     """
     验证 SQL 是否安全（历史兼容门面，规则实现在 sql_guard 管线）
 
@@ -392,7 +393,7 @@ def validate_sql(sql: str, source_type: Optional[str] = None, max_rows: Optional
     return True, ""
 
 
-def _should_auto_add_limit(sql: str, source_type: Optional[str] = None) -> bool:
+def _should_auto_add_limit(sql: str, source_type: str | None = None) -> bool:
     """判断 SQL 是否需要自动追加 LIMIT。"""
     normalized_sql = str(sql or "").strip().lstrip("(").strip()
     if not normalized_sql:
@@ -402,7 +403,7 @@ def _should_auto_add_limit(sql: str, source_type: Optional[str] = None) -> bool:
     return _get_sql_operation_type(normalized_sql, source_type=source_type) == "SELECT"
 
 
-def _consume_comment_scan_quote(line: str, i: int, in_quote: Optional[str]) -> tuple[int, Optional[str]]:
+def _consume_comment_scan_quote(line: str, i: int, in_quote: str | None) -> tuple[int, str | None]:
     """处理 _line_has_comment_marker 引号内字符，返回 (新索引, 引号状态)。"""
     char = line[i]
     next_char = line[i + 1] if i + 1 < len(line) else ""
@@ -417,7 +418,7 @@ def _consume_comment_scan_quote(line: str, i: int, in_quote: Optional[str]) -> t
 
 def _line_has_comment_marker(line: str) -> bool:
     """判断单行非字符串位置是否存在 -- 注释。"""
-    in_quote: Optional[str] = None
+    in_quote: str | None = None
     i = 0
     n = len(line)
     while i < n:
@@ -443,9 +444,7 @@ def _append_limit(sql: str, limit: int) -> str:
     return f"{base_sql}{separator}LIMIT {limit}"
 
 
-def _add_limit_if_needed(
-    sql: str, limit: int, source_type: Optional[str] = None, max_rows: Optional[int] = None
-) -> str:
+def _add_limit_if_needed(sql: str, limit: int, source_type: str | None = None, max_rows: int | None = None) -> str:
     """仅对查询型 SQL 自动追加 LIMIT；max_rows 为行数上限热值（未传回退兜底值）。"""
     effective_max_rows = DEFAULT_ROW_LIMIT if max_rows is None else max_rows
     normalized_limit = normalize_row_limit(limit, max_rows=effective_max_rows)
@@ -458,11 +457,11 @@ def _add_limit_if_needed(
 def build_effective_sql(
     sql: str,
     limit: int = DEFAULT_ROW_LIMIT,
-    source_type: Optional[str] = None,
+    source_type: str | None = None,
     *,
-    datasource_id: Optional[str] = None,
-    user_id: Optional[str] = None,
-    max_rows: Optional[int] = None,
+    datasource_id: str | None = None,
+    user_id: str | None = None,
+    max_rows: int | None = None,
 ) -> str:
     """生成真实执行 SQL：仅按需追加 LIMIT，出口终检强制行数上限。
 
@@ -567,9 +566,9 @@ def _is_hive_connection_exception(err: Exception) -> bool:
     return any(marker in text for marker in markers)
 
 
-def _http_error_result(error: Optional[str], **extra: Any) -> Dict[str, Any]:
+def _http_error_result(error: str | None, **extra: Any) -> dict[str, Any]:
     """HTTP 链路统一错误结果结构；extra 携带 status、耗时等补充字段。"""
-    result: Dict[str, Any] = {"status": "failed", "error": error, "columns": [], "data": [], "total_count": 0}
+    result: dict[str, Any] = {"status": "failed", "error": error, "columns": [], "data": [], "total_count": 0}
     result.update(extra)
     return result
 
@@ -582,12 +581,12 @@ class SQLExecutor(ABC):
         self,
         sql: str,
         limit: int = DEFAULT_ROW_LIMIT,
-        timeout: Optional[int] = None,
-        user_id: Optional[str] = None,
-        datasource_id: Optional[str] = None,
-        remote_task_callback: Optional[Callable[[Dict[str, Any]], Any]] = None,
-        db_connection_callback: Optional[Callable[[Dict[str, Any]], Any]] = None,
-    ) -> Dict[str, Any]:
+        timeout: int | None = None,
+        user_id: str | None = None,
+        datasource_id: str | None = None,
+        remote_task_callback: Callable[[dict[str, Any]], Any] | None = None,
+        db_connection_callback: Callable[[dict[str, Any]], Any] | None = None,
+    ) -> dict[str, Any]:
         """
         执行 SQL 并返回结果
 
@@ -665,7 +664,7 @@ class MySQLExecutor(SQLExecutor):
     @staticmethod
     async def _maybe_invoke_db_connection_callback(
         connection_id: str,
-        db_connection_callback: Optional[Callable[[Dict[str, Any]], Any]],
+        db_connection_callback: Callable[[dict[str, Any]], Any] | None,
     ) -> None:
         """连接 ID 就绪且回调存在时调用回调；若为 awaitable 协程则 await。"""
         if not (connection_id and db_connection_callback is not None):
@@ -678,12 +677,12 @@ class MySQLExecutor(SQLExecutor):
         self,
         sql: str,
         limit: int = DEFAULT_ROW_LIMIT,
-        timeout: Optional[int] = None,
-        user_id: Optional[str] = None,
-        datasource_id: Optional[str] = None,
-        remote_task_callback: Optional[Callable[[Dict[str, Any]], Any]] = None,
-        db_connection_callback: Optional[Callable[[Dict[str, Any]], Any]] = None,
-    ) -> Dict[str, Any]:
+        timeout: int | None = None,
+        user_id: str | None = None,
+        datasource_id: str | None = None,
+        remote_task_callback: Callable[[dict[str, Any]], Any] | None = None,
+        db_connection_callback: Callable[[dict[str, Any]], Any] | None = None,
+    ) -> dict[str, Any]:
         import time
 
         resolved_timeout = await resolve_query_timeout("mysql", timeout)
@@ -722,7 +721,7 @@ class MySQLExecutor(SQLExecutor):
 
                 try:
                     rows = await asyncio.wait_for(_execute_and_fetch(), timeout=resolved_timeout)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     # 超时 = 服务端终止 + 废弃连接：客户端取消不会让服务端停跑，
                     # 半读状态的连接也绝不能释放回连接池（否则污染后续复用者）
                     await self._kill_timed_out_query(connection_id)
@@ -747,7 +746,7 @@ class MySQLExecutor(SQLExecutor):
                     "execution_time_ms": execution_time_ms,
                     "db_connection_id": connection_id,
                 }
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.error(f"[MySQL] 执行 SQL 超时（{resolved_timeout}s）")
             return {
                 "status": "failed",
@@ -790,7 +789,7 @@ class MySQLExecutor(SQLExecutor):
             logger.error(f"[MySQL] 连接测试失败: {e}")
             return False
 
-    async def kill_query(self, connection_id: str) -> Dict[str, Any]:
+    async def kill_query(self, connection_id: str) -> dict[str, Any]:
         """使用独立连接停止指定 MySQL 会话上的当前查询。"""
         normalized_connection_id = str(connection_id or "").strip()
         if not normalized_connection_id.isdigit():
@@ -860,12 +859,12 @@ class HiveExecutor(SQLExecutor):
         self,
         sql: str,
         limit: int = DEFAULT_ROW_LIMIT,
-        timeout: Optional[int] = None,
-        user_id: Optional[str] = None,
-        datasource_id: Optional[str] = None,
-        remote_task_callback: Optional[Callable[[Dict[str, Any]], Any]] = None,
-        db_connection_callback: Optional[Callable[[Dict[str, Any]], Any]] = None,
-    ) -> Dict[str, Any]:
+        timeout: int | None = None,
+        user_id: str | None = None,
+        datasource_id: str | None = None,
+        remote_task_callback: Callable[[dict[str, Any]], Any] | None = None,
+        db_connection_callback: Callable[[dict[str, Any]], Any] | None = None,
+    ) -> dict[str, Any]:
         resolved_timeout = await resolve_query_timeout("hive", timeout)
         # 行数上限热值：校验与 LIMIT 补全/终检共用同一运行时配置（同步线程路径经参数下传）
         max_rows = await get_runtime_setting("CHATDATA_ROW_LIMIT")
@@ -897,7 +896,7 @@ class HiveExecutor(SQLExecutor):
                 ),
                 timeout=resolved_timeout,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.error(f"[Hive] 执行 SQL 超时（{resolved_timeout}s）")
             return {
                 "status": "failed",
@@ -908,8 +907,8 @@ class HiveExecutor(SQLExecutor):
             }
 
     def _execute_sync(
-        self, sql: str, limit: int, datasource_id: str = "", user_id: str = "", max_rows: Optional[int] = None
-    ) -> Dict[str, Any]:
+        self, sql: str, limit: int, datasource_id: str = "", user_id: str = "", max_rows: int | None = None
+    ) -> dict[str, Any]:
         """同步执行 SQL（在线程池中运行；max_rows 为异步侧解析的热值）"""
         import time
 
@@ -999,7 +998,7 @@ class HiveHttpExecutor(SQLExecutor):
         self.org_code = str(org_code or "").strip()
         self.org_name = str(org_name or "").strip()
 
-    def _build_headers(self) -> Dict[str, str]:
+    def _build_headers(self) -> dict[str, str]:
         return build_http_auth_headers(HTTP_AUTH_TOKEN)
 
     def _render_url(self, template: str, task_id: str) -> str:
@@ -1012,11 +1011,11 @@ class HiveHttpExecutor(SQLExecutor):
         method: str,
         url: str,
         *,
-        json_payload: Optional[Dict[str, Any]] = None,
+        json_payload: dict[str, Any] | None = None,
         task_id: str = "",
-        params: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        request_kwargs: Dict[str, Any] = {}
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        request_kwargs: dict[str, Any] = {}
         if method.upper() == "GET":
             query_params = dict(params or {})
             if task_id and "{task_id}" not in url:
@@ -1065,8 +1064,8 @@ class HiveHttpExecutor(SQLExecutor):
             raise
 
     def _build_submit_payload(
-        self, sql: str, limit: int, user_id: Optional[str] = None, username: Optional[str] = None
-    ) -> Dict[str, Any]:
+        self, sql: str, limit: int, user_id: str | None = None, username: str | None = None
+    ) -> dict[str, Any]:
         payload = {
             "sql": sql,
             "database": self.database,
@@ -1077,7 +1076,7 @@ class HiveHttpExecutor(SQLExecutor):
         add_http_user_params(payload, user_id, username)
         return payload
 
-    def _normalize_result(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def _normalize_result(self, payload: dict[str, Any]) -> dict[str, Any]:
         result_payload = _extract_result_payload(payload)
         raw_rows = result_payload.get("data")
         if not isinstance(raw_rows, list):
@@ -1103,7 +1102,7 @@ class HiveHttpExecutor(SQLExecutor):
 
     async def _notify_remote_task_created(
         self,
-        remote_task_callback: Optional[Callable[[Dict[str, Any]], Any]],
+        remote_task_callback: Callable[[dict[str, Any]], Any] | None,
         remote_task_id: str,
     ) -> None:
         """在 HTTP 任务提交成功后通知上层记录远端任务映射。"""
@@ -1123,13 +1122,13 @@ class HiveHttpExecutor(SQLExecutor):
         self,
         sql: str,
         limit: int = DEFAULT_ROW_LIMIT,
-        timeout: Optional[int] = None,
-        user_id: Optional[str] = None,
-        username: Optional[str] = None,
-        datasource_id: Optional[str] = None,
-        remote_task_callback: Optional[Callable[[Dict[str, Any]], Any]] = None,
-        db_connection_callback: Optional[Callable[[Dict[str, Any]], Any]] = None,
-    ) -> Dict[str, Any]:
+        timeout: int | None = None,
+        user_id: str | None = None,
+        username: str | None = None,
+        datasource_id: str | None = None,
+        remote_task_callback: Callable[[dict[str, Any]], Any] | None = None,
+        db_connection_callback: Callable[[dict[str, Any]], Any] | None = None,
+    ) -> dict[str, Any]:
         resolved_timeout = await resolve_query_timeout(self.source_type, timeout)
         # 行数上限热值：校验与 LIMIT 补全/终检共用同一运行时配置
         max_rows = await get_runtime_setting("CHATDATA_ROW_LIMIT")
@@ -1151,7 +1150,7 @@ class HiveHttpExecutor(SQLExecutor):
             if submit_error:
                 return submit_error
             return await self._poll_http_result(task_id, resolved_timeout, user_id, username)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.error("[HTTPExecutor] 执行 SQL 超时（%ss）", resolved_timeout)
             return _http_error_result(f"查询超时（{resolved_timeout}秒）")
         except ValueError as e:
@@ -1166,10 +1165,10 @@ class HiveHttpExecutor(SQLExecutor):
         self,
         sql: str,
         *,
-        datasource_id: Optional[str] = None,
-        user_id: Optional[str] = None,
-        max_rows: Optional[int] = None,
-    ) -> Optional[Dict[str, Any]]:
+        datasource_id: str | None = None,
+        user_id: str | None = None,
+        max_rows: int | None = None,
+    ) -> dict[str, Any] | None:
         """SQL 校验失败时告警并返回错误结果；合法返回 None。"""
         is_valid, error_msg = validate_sql(sql, source_type=self.source_type, max_rows=max_rows)
         if is_valid:
@@ -1185,7 +1184,7 @@ class HiveHttpExecutor(SQLExecutor):
         return _http_error_result(error_msg)
 
     @staticmethod
-    def _http_config_error() -> Optional[Dict[str, Any]]:
+    def _http_config_error() -> dict[str, Any] | None:
         """执行前置配置检查；缺配置返回错误结果，否则 None。"""
         if not HTTP_SUBMIT_URL or not HTTP_STATUS_URL:
             return _http_error_result(
@@ -1197,12 +1196,12 @@ class HiveHttpExecutor(SQLExecutor):
         self,
         sql: str,
         limit: int,
-        user_id: Optional[str],
-        username: Optional[str],
-        remote_task_callback: Optional[Callable[[Dict[str, Any]], Any]],
-        datasource_id: Optional[str] = None,
-        max_rows: Optional[int] = None,
-    ) -> tuple[Optional[Dict[str, Any]], Optional[str]]:
+        user_id: str | None,
+        username: str | None,
+        remote_task_callback: Callable[[dict[str, Any]], Any] | None,
+        datasource_id: str | None = None,
+        max_rows: int | None = None,
+    ) -> tuple[dict[str, Any] | None, str | None]:
         """提交查询并认领远端任务；返回 (错误结果, None) 或 (None, task_id)。"""
         sql_with_limit = build_effective_sql(
             sql, limit, source_type=self.source_type, datasource_id=datasource_id, user_id=user_id, max_rows=max_rows
@@ -1227,9 +1226,9 @@ class HiveHttpExecutor(SQLExecutor):
         self,
         task_id: str,
         resolved_timeout: int,
-        user_id: Optional[str],
-        username: Optional[str],
-    ) -> Dict[str, Any]:
+        user_id: str | None,
+        username: str | None,
+    ) -> dict[str, Any]:
         """轮询远端任务直到成功、失败或超时，返回结构化结果。"""
         loop = asyncio.get_running_loop()
         deadline = loop.time() + resolved_timeout
@@ -1259,7 +1258,7 @@ class HiveHttpExecutor(SQLExecutor):
                 return self._cancelled_or_failed_result(status_payload, normalized_status)
             await asyncio.sleep(max(0.2, poll_interval_ms / 1000))
 
-    def _cancelled_or_failed_result(self, status_payload: Dict[str, Any], normalized_status: str) -> Dict[str, Any]:
+    def _cancelled_or_failed_result(self, status_payload: dict[str, Any], normalized_status: str) -> dict[str, Any]:
         default_message = "查询已取消" if normalized_status == "cancelled" else "HTTP 查询失败"
         return _http_error_result(
             _extract_remote_message(status_payload, default_message),
@@ -1277,8 +1276,8 @@ class HiveHttpExecutor(SQLExecutor):
 
 
 async def fetch_http_query_task_result(
-    remote_task_id: str, source_type: str = "hive", user_id: Optional[str] = None, username: Optional[str] = None
-) -> Dict[str, Any]:
+    remote_task_id: str, source_type: str = "hive", user_id: str | None = None, username: str | None = None
+) -> dict[str, Any]:
     """按远端任务 ID 查询 HTTP 任务状态与结果。"""
     executor = HiveHttpExecutor(namespace="_remote_task_lookup_", source_type=source_type)
     status_params = add_http_user_params({}, user_id, username)
@@ -1318,8 +1317,8 @@ async def fetch_http_query_task_result(
 
 
 async def stop_http_query_task(
-    remote_task_id: str, source_type: str = "hive", user_id: Optional[str] = None, username: Optional[str] = None
-) -> Dict[str, Any]:
+    remote_task_id: str, source_type: str = "hive", user_id: str | None = None, username: str | None = None
+) -> dict[str, Any]:
     """按远端任务 ID 调用 HTTP 停止接口。"""
     normalized_task_id = str(remote_task_id or "").strip()
     if not normalized_task_id:
@@ -1339,7 +1338,7 @@ async def stop_http_query_task(
         return {"status": "failed", "error": _friendly_sql_error("HTTP", e)}
 
 
-async def kill_mysql_query(datasource: dict, db_connection_id: str) -> Dict[str, Any]:
+async def kill_mysql_query(datasource: dict, db_connection_id: str) -> dict[str, Any]:
     """按数据源配置停止 MySQL 连接上的当前查询。"""
     executor = None
     try:

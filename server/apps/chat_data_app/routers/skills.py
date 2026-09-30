@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import Response
 
@@ -23,7 +21,7 @@ router = APIRouter(tags=["ChatData 技能"], responses=JSON_API_RESPONSES)
 
 @router.get("/skills")
 async def list_skills(
-    request: Request, search: Optional[str] = None, category: Optional[str] = None, scope: Optional[str] = None
+    request: Request, search: str | None = None, category: str | None = None, scope: str | None = None
 ):
     """获取可用专家技能列表。"""
     try:

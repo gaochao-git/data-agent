@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -39,7 +39,7 @@ def _current_user(request: Request) -> Any:
     return _get_current_user(request)
 
 
-def _with_dashboard_permission(dashboard: Optional[Dict[str, Any]], user_id: str) -> Optional[Dict[str, Any]]:
+def _with_dashboard_permission(dashboard: dict[str, Any] | None, user_id: str) -> dict[str, Any] | None:
     """补充当前用户对看板的管理权限。"""
     if not dashboard:
         return dashboard
@@ -48,7 +48,7 @@ def _with_dashboard_permission(dashboard: Optional[Dict[str, Any]], user_id: str
     return item
 
 
-def _with_dashboards_permission(dashboards: List[Dict[str, Any]], user_id: str) -> List[Dict[str, Any]]:
+def _with_dashboards_permission(dashboards: list[dict[str, Any]], user_id: str) -> list[dict[str, Any]]:
     """批量补充当前用户对看板的管理权限。"""
     return [_with_dashboard_permission(item, user_id) for item in dashboards]
 
@@ -86,7 +86,7 @@ def _build_panel_name_fallback(chart_type: str, max_length: int = 24) -> str:
     return _truncate_text(fallback, max_length)
 
 
-async def _resolve_panel_name(sql: str, chart_type: str, provided_name: Optional[str], max_length: int = 24) -> str:
+async def _resolve_panel_name(sql: str, chart_type: str, provided_name: str | None, max_length: int = 24) -> str:
     """生成面板标题：优先显式名称，其次LLM，最后本地兜底。"""
     explicit_name = _truncate_text(provided_name or "", max_length)
     if explicit_name:
@@ -167,12 +167,12 @@ async def create_dashboard(request: DashboardCreateRequest, http_request: Reques
         )
 
 
-def _spec_cards_have_semantic_config(cards: List[Any]) -> bool:
+def _spec_cards_have_semantic_config(cards: list[Any]) -> bool:
     """判断规格卡片中是否任一携带语义模型 ID。"""
     return any(isinstance(card, dict) and str(card.get("semantic_config_id") or "").strip() for card in cards)
 
 
-def _dashboard_spec_error_response(request: DashboardFromSpecRequest, spec: Dict[str, Any], cards: List[Any]):
+def _dashboard_spec_error_response(request: DashboardFromSpecRequest, spec: dict[str, Any], cards: list[Any]):
     """校验 AI 看板规格；非法时返回错误响应，合法时返回 None。"""
     datasource_id = str(request.datasource_id or "").strip()
     if not datasource_id:
@@ -565,8 +565,8 @@ async def update_layout(dashboard_id: str, request: LayoutUpdateRequest, http_re
 
 
 def _resolve_panel_batch_request(
-    request: Optional[PanelBatchExecuteRequest | List[str]],
-) -> Tuple[Optional[List[str]], Dict[str, str]]:
+    request: PanelBatchExecuteRequest | list[str] | None,
+) -> tuple[list[str] | None, dict[str, str]]:
     """解析看板批量执行请求的面板 ID 列表与成员数据源映射。"""
     if isinstance(request, list):
         return request, {}
@@ -582,9 +582,9 @@ def _resolve_panel_batch_request(
 
 
 def _resolve_batch_task_datasource_id(
-    dashboard: Optional[Dict[str, Any]],
-    panel_ids: List[str],
-    panel_map: Dict[str, Dict[str, Any]],
+    dashboard: dict[str, Any] | None,
+    panel_ids: list[str],
+    panel_map: dict[str, dict[str, Any]],
 ) -> str:
     """解析批量执行任务数据源：优先大屏自身，回退第一个有效面板。"""
     task_datasource_id = str((dashboard or {}).get("datasource_id") or "").strip()
@@ -600,9 +600,9 @@ def _resolve_batch_task_datasource_id(
     )
 
 
-def _collect_dashboard_panels(dashboard: Optional[Dict[str, Any]]) -> List[Tuple[str, Dict[str, Any]]]:
+def _collect_dashboard_panels(dashboard: dict[str, Any] | None) -> list[tuple[str, dict[str, Any]]]:
     """返回大屏面板的 (panel_id, panel) 规范化列表。"""
-    entries: List[Tuple[str, Dict[str, Any]]] = []
+    entries: list[tuple[str, dict[str, Any]]] = []
     for panel in (dashboard or {}).get("panels") or []:
         panel_id = str(panel.get("id") or "").strip()
         if panel_id:
@@ -614,7 +614,7 @@ def _collect_dashboard_panels(dashboard: Optional[Dict[str, Any]]) -> List[Tuple
 async def execute_panels_batch(
     dashboard_id: str,
     http_request: Request,
-    request: Optional[PanelBatchExecuteRequest | List[str]] = None,
+    request: PanelBatchExecuteRequest | list[str] | None = None,
 ):
     """
     批量执行面板 SQL 并流式返回数据
@@ -630,7 +630,7 @@ async def execute_panels_batch(
     """
     current_user = _current_user(http_request)
     service = get_dashboard_service()
-    dashboard: Optional[Dict[str, Any]] = None
+    dashboard: dict[str, Any] | None = None
 
     # 如果没有指定 panel_ids，获取该大屏下所有面板
     panel_ids, panel_member_datasource_ids = _resolve_panel_batch_request(request)
@@ -716,7 +716,7 @@ async def execute_panels_batch(
 async def create_dashboard_query_task(
     dashboard_id: str,
     http_request: Request,
-    request: Optional[PanelBatchExecuteRequest | List[str]] = None,
+    request: PanelBatchExecuteRequest | list[str] | None = None,
 ):
     """创建看板批量异步执行任务。"""
     try:

@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from sqlalchemy import select, update
 from sqlalchemy.dialects.mysql import insert as mysql_insert
@@ -48,7 +48,7 @@ def _or_value(value: Any, default: Any) -> Any:
 
 
 def _append_group_relation_rows(
-    relation_rows: List[Dict[str, Any]],
+    relation_rows: list[dict[str, Any]],
     seen: set,
     group_id: str,
     table_group_name: str,
@@ -88,7 +88,7 @@ class DataSourceDao:
     _session_scope = staticmethod(session_scope)
     transaction_async = staticmethod(transaction_scope)
 
-    def _group_model_to_row(self, model: DatasourceGroup) -> Dict[str, Any]:
+    def _group_model_to_row(self, model: DatasourceGroup) -> dict[str, Any]:
         return {
             "group_id": model.group_id,
             "group_name": model.group_name,
@@ -108,7 +108,7 @@ class DataSourceDao:
             "update_by_name": model.update_by_name,
         }
 
-    def _datasource_table_model_to_row(self, model: DatasourceTable) -> Dict[str, Any]:
+    def _datasource_table_model_to_row(self, model: DatasourceTable) -> dict[str, Any]:
         return {
             "group_id": model.group_id,
             "table_name": model.table_names,
@@ -118,12 +118,12 @@ class DataSourceDao:
             "indexes_json": getattr(model, "indexes_json", None),
         }
 
-    def _normalize_recommended_questions(self, value: Any) -> List[str]:
+    def _normalize_recommended_questions(self, value: Any) -> list[str]:
         raw_items = _load_json(value, [])
         if not isinstance(raw_items, list):
             return []
 
-        result: List[str] = []
+        result: list[str] = []
         seen: set[str] = set()
         for item in raw_items:
             question = str(item or "").strip()
@@ -136,7 +136,7 @@ class DataSourceDao:
         return result
 
     @staticmethod
-    def _resolve_group_template_info(row: Dict[str, Any]) -> tuple[str, Dict[str, Any], str]:
+    def _resolve_group_template_info(row: dict[str, Any]) -> tuple[str, dict[str, Any], str]:
         """解析分组模板来源；返回 (template_source, 模板解析结果, 模板成员 ID)。"""
         template_source = str(row.get("template_source") or "").strip()
         parsed_template = (
@@ -158,7 +158,7 @@ class DataSourceDao:
         template_member_id = member_entries[0]["datasource_id"] if member_entries else template_source
         return template_source, parsed_template, template_member_id
 
-    def _map_group_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
+    def _map_group_row(self, row: dict[str, Any]) -> dict[str, Any]:
         group_id = row.get("group_id") or ""
         template_source, parsed_template, template_member_id = self._resolve_group_template_info(row)
         return {
@@ -191,7 +191,7 @@ class DataSourceDao:
             },
         }
 
-    def _map_datasource_table_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
+    def _map_datasource_table_row(self, row: dict[str, Any]) -> dict[str, Any]:
         columns = _load_json(row.get("columns_json"), [])
         indexes = _normalize_table_indexes_payload(row.get("indexes_json"), columns)
         physical_indexes = indexes["physical"]
@@ -216,13 +216,13 @@ class DataSourceDao:
             "groups": [],
         }
 
-    def _map_table_group_model(self, model: DatasourceTableGroupRel) -> Dict[str, Any]:
+    def _map_table_group_model(self, model: DatasourceTableGroupRel) -> dict[str, Any]:
         return {
             "table_group_name": model.table_group_name or "",
             "table_name": model.table_name or "",
         }
 
-    async def _attach_table_groups_async(self, group_id: str, tables: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    async def _attach_table_groups_async(self, group_id: str, tables: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not group_id or not tables:
             return tables
         table_names = _unique_non_empty_texts([table.get("table_name") for table in tables])
@@ -233,12 +233,12 @@ class DataSourceDao:
             table["groups"] = groups_by_table.get(table.get("table_name"), [])
         return tables
 
-    def _build_member_sources(self, row: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def _build_member_sources(self, row: dict[str, Any]) -> list[dict[str, Any]]:
         source_type = row.get("source_type") or ""
         query_executor_type = None
         template_source = row.get("template_source")
         group_name = row.get("group_name") or ""
-        result: List[Dict[str, Any]] = []
+        result: list[dict[str, Any]] = []
         for parsed in _parse_member_source_entries(
             row.get("member_sources_text"),
             template_source,
@@ -267,7 +267,7 @@ class DataSourceDao:
             )
         return result
 
-    async def _get_group_row_by_id_async(self, datasource_id: str) -> Optional[Dict[str, Any]]:
+    async def _get_group_row_by_id_async(self, datasource_id: str) -> dict[str, Any] | None:
         if not datasource_id:
             return None
         async with self._session_scope() as session:
@@ -287,7 +287,7 @@ class DataSourceDao:
             return False
         return await self._get_group_row_by_id_async(datasource_id) is not None
 
-    async def _get_group_row_by_name_async(self, group_name: str) -> Optional[Dict[str, Any]]:
+    async def _get_group_row_by_name_async(self, group_name: str) -> dict[str, Any] | None:
         if not group_name:
             return None
         async with self._session_scope() as session:
@@ -303,7 +303,7 @@ class DataSourceDao:
             row = query_result.scalars().first()
         return self._group_model_to_row(row) if row else None
 
-    async def get_group_member_datasource_ids_async(self, group_id: str) -> List[str]:
+    async def get_group_member_datasource_ids_async(self, group_id: str) -> list[str]:
         row = await self._get_group_row_by_id_async(group_id)
         if not row:
             return []
@@ -314,7 +314,7 @@ class DataSourceDao:
             None,
         )
 
-    async def get_all_datasources_async(self, include_tables: bool = True) -> List[Dict[str, Any]]:
+    async def get_all_datasources_async(self, include_tables: bool = True) -> list[dict[str, Any]]:
         async with self._session_scope() as session:
             query_result = await session.execute(
                 select(DatasourceGroup)
@@ -322,7 +322,7 @@ class DataSourceDao:
                 .order_by(DatasourceGroup.is_default.desc(), DatasourceGroup.id.asc())
             )
             rows = [self._group_model_to_row(row) for row in query_result.scalars().all()]
-        tables_map: Dict[str, List[Dict[str, Any]]] = {}
+        tables_map: dict[str, list[dict[str, Any]]] = {}
         if include_tables:
             group_ids = [row.get("group_id") for row in rows if row.get("group_id")]
             tables_map = await self._get_group_tables_map_async(group_ids)
@@ -341,7 +341,7 @@ class DataSourceDao:
             result.append(datasource)
         return result
 
-    async def _get_group_tables_map_async(self, group_ids: List[str]) -> Dict[str, List[Dict[str, Any]]]:
+    async def _get_group_tables_map_async(self, group_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
         if not group_ids:
             return {}
         async with self._session_scope() as session:
@@ -354,7 +354,7 @@ class DataSourceDao:
                 .order_by(DatasourceTable.group_id.asc(), DatasourceTable.sort_no.asc(), DatasourceTable.id.asc())
             )
             rows = [self._datasource_table_model_to_row(row) for row in query_result.scalars().all()]
-        result: Dict[str, List[Dict[str, Any]]] = {group_id: [] for group_id in group_ids}
+        result: dict[str, list[dict[str, Any]]] = {group_id: [] for group_id in group_ids}
         for row in rows:
             group_id = row.get("group_id")
             if not group_id:
@@ -367,7 +367,7 @@ class DataSourceDao:
                 table["groups"] = groups_by_table.get(table.get("table_name"), [])
         return result
 
-    async def get_datasource_tables_by_group_id_async(self, group_id: str) -> List[Dict[str, Any]]:
+    async def get_datasource_tables_by_group_id_async(self, group_id: str) -> list[dict[str, Any]]:
         if not group_id:
             return []
         async with self._session_scope() as session:
@@ -384,8 +384,8 @@ class DataSourceDao:
         return await self._attach_table_groups_async(group_id, tables)
 
     async def get_table_groups_by_group_ids_async(
-        self, group_ids: List[str]
-    ) -> Dict[str, Dict[str, List[Dict[str, Any]]]]:
+        self, group_ids: list[str]
+    ) -> dict[str, dict[str, list[dict[str, Any]]]]:
         normalized_group_ids = _unique_non_empty_texts(group_ids)
         if not normalized_group_ids:
             return {}
@@ -403,7 +403,7 @@ class DataSourceDao:
                 )
             )
             rows = list(query_result.scalars().all())
-        result: Dict[str, Dict[str, List[Dict[str, Any]]]] = {group_id: {} for group_id in normalized_group_ids}
+        result: dict[str, dict[str, list[dict[str, Any]]]] = {group_id: {} for group_id in normalized_group_ids}
         seen: set[tuple[str, str, str]] = set()
         for row in rows:
             group_id = str(row.group_id or "").strip()
@@ -419,8 +419,8 @@ class DataSourceDao:
         return result
 
     async def get_table_groups_by_table_names_async(
-        self, group_id: str, table_names: List[str]
-    ) -> Dict[str, List[Dict[str, Any]]]:
+        self, group_id: str, table_names: list[str]
+    ) -> dict[str, list[dict[str, Any]]]:
         normalized_group_id = str(group_id or "").strip()
         normalized_table_names = _unique_non_empty_texts(table_names)
         if not normalized_group_id or not normalized_table_names:
@@ -440,7 +440,7 @@ class DataSourceDao:
                 )
             )
             rows = list(query_result.scalars().all())
-        result: Dict[str, List[Dict[str, Any]]] = {table_name: [] for table_name in normalized_table_names}
+        result: dict[str, list[dict[str, Any]]] = {table_name: [] for table_name in normalized_table_names}
         seen: set[tuple[str, str]] = set()
         for row in rows:
             table_name = str(row.table_name or "").strip()
@@ -454,7 +454,7 @@ class DataSourceDao:
             result.setdefault(table_name, []).append({"table_group_name": table_group_name})
         return result
 
-    async def get_table_group_relations_async(self, group_id: str) -> List[Dict[str, Any]]:
+    async def get_table_group_relations_async(self, group_id: str) -> list[dict[str, Any]]:
         if not group_id:
             return []
         async with self._session_scope() as session:
@@ -479,7 +479,7 @@ class DataSourceDao:
     async def replace_table_group_relations_async(
         self,
         group_id: str,
-        groups: List[Dict[str, Any]],
+        groups: list[dict[str, Any]],
         create_by: str = "",
         update_by: str = "",
         create_by_name: str = "",
@@ -522,13 +522,13 @@ class DataSourceDao:
     @staticmethod
     def _build_group_relation_rows(
         group_id: str,
-        groups: List[Dict[str, Any]],
+        groups: list[dict[str, Any]],
         *,
         create_by: str,
         create_by_name: str,
         update_by: str,
         update_by_name: str,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """按 (table_group_name, table_name) 去重构建关系行。"""
         relation_rows = []
         seen: set[tuple[str, str]] = set()
@@ -551,7 +551,7 @@ class DataSourceDao:
 
     @staticmethod
     async def _insert_group_relation_rows(
-        session, relation_rows: List[Dict[str, Any]], *, update_by: str, update_by_name: str
+        session, relation_rows: list[dict[str, Any]], *, update_by: str, update_by_name: str
     ) -> None:
         for batch in _batch_items(relation_rows):
             stmt = mysql_insert(DatasourceTableGroupRel).values(batch)
@@ -563,7 +563,7 @@ class DataSourceDao:
                 )
             )
 
-    async def get_datasource_async(self, datasource_id: str) -> Optional[Dict[str, Any]]:
+    async def get_datasource_async(self, datasource_id: str) -> dict[str, Any] | None:
         row = await self._get_group_row_by_id_async(datasource_id)
         if not row:
             return None
@@ -575,7 +575,7 @@ class DataSourceDao:
         datasource["member_sources"] = self._build_member_sources(row)
         return datasource
 
-    async def get_datasource_meta_async(self, datasource_id: str) -> Optional[Dict[str, Any]]:
+    async def get_datasource_meta_async(self, datasource_id: str) -> dict[str, Any] | None:
         row = await self._get_group_row_by_id_async(datasource_id)
         if not row:
             return None
@@ -589,7 +589,7 @@ class DataSourceDao:
         datasource["member_sources"] = self._build_member_sources(row)
         return datasource
 
-    async def get_datasource_by_group_name_async(self, group_name: str) -> Optional[Dict[str, Any]]:
+    async def get_datasource_by_group_name_async(self, group_name: str) -> dict[str, Any] | None:
         row = await self._get_group_row_by_name_async(group_name)
         if not row:
             return None
@@ -601,7 +601,7 @@ class DataSourceDao:
         datasource["member_sources"] = self._build_member_sources(row)
         return datasource
 
-    async def get_datasource_meta_by_group_name_async(self, group_name: str) -> Optional[Dict[str, Any]]:
+    async def get_datasource_meta_by_group_name_async(self, group_name: str) -> dict[str, Any] | None:
         row = await self._get_group_row_by_name_async(group_name)
         if not row:
             return None
@@ -615,7 +615,7 @@ class DataSourceDao:
         datasource["member_sources"] = self._build_member_sources(row)
         return datasource
 
-    async def get_default_datasource_async(self) -> Optional[Dict[str, Any]]:
+    async def get_default_datasource_async(self) -> dict[str, Any] | None:
         async with self._session_scope() as session:
             query_result = await session.execute(
                 select(DatasourceGroup)
@@ -642,12 +642,12 @@ class DataSourceDao:
         self,
         group_id: str,
         group_name: str,
-        group_desc: Optional[str] = None,
+        group_desc: str | None = None,
         source_type: str = "",
         template_source: str = "",
-        member_sources_text: Optional[str] = None,
-        query_context: Optional[str] = None,
-        recommended_questions: Optional[List[str]] = None,
+        member_sources_text: str | None = None,
+        query_context: str | None = None,
+        recommended_questions: list[str] | None = None,
         create_by: str = "",
         update_by: str = "",
         create_by_name: str = "",
@@ -699,7 +699,7 @@ class DataSourceDao:
         update_by: str = "",
         update_by_name: str = "",
     ) -> None:
-        values: Dict[str, Any] = {}
+        values: dict[str, Any] = {}
 
         if group_name is not _UNSET:
             values["group_name"] = group_name
@@ -745,17 +745,17 @@ class DataSourceDao:
     @staticmethod
     def _build_table_sync_rows(
         group_id: str,
-        tables: List[Dict[str, Any]],
-        existing_by_name: Dict[str, Any],
+        tables: list[dict[str, Any]],
+        existing_by_name: dict[str, Any],
         *,
         create_by: str,
         create_by_name: str,
         update_by: str,
         update_by_name: str,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         # 与拆分前的 dict 构建保持一致：同名表 last-wins 去重，
         # 保留最后一次出现的行（含其 sort_no）。
-        rows_by_name: Dict[str, Dict[str, Any]] = {}
+        rows_by_name: dict[str, dict[str, Any]] = {}
         for index, table in enumerate(tables):
             table_name = str((table or {}).get("table_name") or "").strip()
             if not table_name:
@@ -780,7 +780,7 @@ class DataSourceDao:
             }
         return list(rows_by_name.values())
 
-    async def _upsert_table_rows(self, session, rows: List[Dict[str, Any]]) -> None:
+    async def _upsert_table_rows(self, session, rows: list[dict[str, Any]]) -> None:
         for batch in _batch_items(rows):
             stmt = mysql_insert(DatasourceTable).values(batch)
             await session.execute(
@@ -796,7 +796,7 @@ class DataSourceDao:
             )
 
     @staticmethod
-    async def _load_existing_table_rows(session, group_id: str, active_table_names: List[str]) -> Dict[str, Any]:
+    async def _load_existing_table_rows(session, group_id: str, active_table_names: list[str]) -> dict[str, Any]:
         existing_result = await session.execute(
             select(DatasourceTable)
             .where(
@@ -814,7 +814,7 @@ class DataSourceDao:
     async def replace_datasource_tables_async(
         self,
         group_id: str,
-        tables: List[Dict[str, Any]],
+        tables: list[dict[str, Any]],
         create_by: str = "",
         update_by: str = "",
         create_by_name: str = "",
@@ -856,7 +856,7 @@ class DataSourceDao:
             )
             await self._upsert_table_rows(session, table_rows)
 
-    async def get_datasource_table_indexes_async(self, group_id: str, table_name: str) -> Optional[Dict[str, Any]]:
+    async def get_datasource_table_indexes_async(self, group_id: str, table_name: str) -> dict[str, Any] | None:
         """读取单表索引 JSON，供管理服务只更新 manual 分区。"""
         if not group_id or not table_name:
             return None
@@ -878,10 +878,10 @@ class DataSourceDao:
         self,
         group_id: str,
         table_name: str,
-        manual_indexes: List[Dict[str, Any]],
+        manual_indexes: list[dict[str, Any]],
         update_by: str = "",
         update_by_name: str = "",
-    ) -> Optional[List[Dict[str, Any]]]:
+    ) -> list[dict[str, Any]] | None:
         """只更新单表索引 JSON 的 manual 分区。"""
         if not group_id or not table_name:
             return None
@@ -936,7 +936,7 @@ class DataSourceDao:
                 )
             )
 
-    async def get_column_dict_async(self, group_id: str, table_name: str, column_name: str) -> Dict[str, Any]:
+    async def get_column_dict_async(self, group_id: str, table_name: str, column_name: str) -> dict[str, Any]:
         if not group_id or not table_name or not column_name:
             return _normalize_column_dict({})
         async with self._session_scope() as session:
@@ -958,7 +958,7 @@ class DataSourceDao:
             return _normalize_column_dict({})
         return _normalize_column_dict(_load_json(row.dict_json, {}))
 
-    async def get_column_dicts_by_group_id_async(self, group_id: str) -> Dict[tuple[str, str], Dict[str, Any]]:
+    async def get_column_dicts_by_group_id_async(self, group_id: str) -> dict[tuple[str, str], dict[str, Any]]:
         if not group_id:
             return {}
         async with self._session_scope() as session:
@@ -974,7 +974,7 @@ class DataSourceDao:
                 .scalars()
                 .all()
             )
-        result: Dict[tuple[str, str], Dict[str, Any]] = {}
+        result: dict[tuple[str, str], dict[str, Any]] = {}
         for row in rows:
             table_name = str(row.table_name or "").strip()
             column_name = str(row.column_name or "").strip()
@@ -986,7 +986,7 @@ class DataSourceDao:
             result[(table_name, column_name)] = column_dict
         return result
 
-    async def get_column_dicts_by_table_async(self, group_id: str, table_name: str) -> Dict[str, Dict[str, Any]]:
+    async def get_column_dicts_by_table_async(self, group_id: str, table_name: str) -> dict[str, dict[str, Any]]:
         if not group_id or not table_name:
             return {}
         async with self._session_scope() as session:
@@ -1003,7 +1003,7 @@ class DataSourceDao:
                 .scalars()
                 .all()
             )
-        result: Dict[str, Dict[str, Any]] = {}
+        result: dict[str, dict[str, Any]] = {}
         for row in rows:
             column_name = str(row.column_name or "").strip()
             if not column_name:
@@ -1019,12 +1019,12 @@ class DataSourceDao:
         group_id: str,
         table_name: str,
         column_name: str,
-        column_dict: Dict[str, Any],
+        column_dict: dict[str, Any],
         create_by: str = "",
         update_by: str = "",
         create_by_name: str = "",
         update_by_name: str = "",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         if not group_id or not table_name or not column_name:
             return _normalize_column_dict({})
         normalized_dict = _normalize_column_dict(column_dict)
@@ -1071,12 +1071,12 @@ class DataSourceDao:
         group_id: str,
         table_name: str,
         column_name: str,
-        column_dict: Dict[str, Any],
+        column_dict: dict[str, Any],
         create_by: str = "",
         update_by: str = "",
         create_by_name: str = "",
         update_by_name: str = "",
-    ) -> List[str]:
+    ) -> list[str]:
         """仅填空写单个字段数据字典：现值为空的字段用导入值填充，已有值一律保留。
 
         返回实际填充的字段名列表；无可填充内容时不产生任何写入。

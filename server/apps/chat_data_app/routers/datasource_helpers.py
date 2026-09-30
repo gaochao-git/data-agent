@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Optional, Set
+from typing import Any
 
 from utils.error_codes import ErrorCode
 from utils.response import business_response
@@ -68,8 +68,8 @@ def _validate_source_item_params(
     normalized_org_name: str,
     normalized_org_code: str,
     normalized_executor_type: str,
-    port: Optional[int],
-) -> Optional[str]:
+    port: int | None,
+) -> str | None:
     """校验数据源连接项参数，返回错误信息；None 表示通过。"""
     if not normalized_org_name:
         return "机构名称不能为空"
@@ -89,12 +89,12 @@ def _validate_source_item_params(
 def _build_source_item_result(
     source_type: str,
     normalized_host: str,
-    port: Optional[int],
+    port: int | None,
     normalized_database: str,
     normalized_org_name: str,
     normalized_org_code: str,
     normalized_executor_type: str,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """按执行方式构造标准化数据源连接项。"""
     if normalized_executor_type == "direct":
         result = {
@@ -116,12 +116,12 @@ def _build_source_item_result(
 def _normalize_source_item(
     source_type: str,
     host: str,
-    port: Optional[int],
+    port: int | None,
     database: str,
-    org_name: Optional[str] = None,
-    org_code: Optional[str] = None,
-    query_executor_type: Optional[str] = None,
-) -> Dict[str, Any]:
+    org_name: str | None = None,
+    org_code: str | None = None,
+    query_executor_type: str | None = None,
+) -> dict[str, Any]:
     """标准化数据源连接项。"""
     normalized_host = str(host or "").strip()
     normalized_database = str(database or "").strip()
@@ -149,14 +149,14 @@ def _normalize_source_item(
     )
 
 
-def _column_type_label(column: Dict[str, Any]) -> str:
+def _column_type_label(column: dict[str, Any]) -> str:
     """提取字段类型用于表结构差异比较。"""
     return str(column.get("mysql_type") or column.get("hive_type") or column.get("type") or "").strip().lower()
 
 
-def _build_table_schema_map(tables: List[Dict[str, Any]]) -> Dict[str, Dict[str, str]]:
+def _build_table_schema_map(tables: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
     """构建表字段类型索引。"""
-    schema: Dict[str, Dict[str, str]] = {}
+    schema: dict[str, dict[str, str]] = {}
     for table in tables or []:
         table_name = str(table.get("table_name") or "").strip()
         if not table_name:
@@ -169,16 +169,16 @@ def _build_table_schema_map(tables: List[Dict[str, Any]]) -> Dict[str, Dict[str,
     return schema
 
 
-def _schema_health_issue(level: str, issue_type: str, message: str, target: str) -> Dict[str, Any]:
+def _schema_health_issue(level: str, issue_type: str, message: str, target: str) -> dict[str, Any]:
     """构造表结构校验问题项。"""
     return {"level": level, "type": issue_type, "message": message, "target": target}
 
 
 def _collect_column_schema_issues(
-    cached_columns: Dict[str, str],
-    physical_columns: Dict[str, str],
+    cached_columns: dict[str, str],
+    physical_columns: dict[str, str],
     table_name: str,
-    issues: List[Dict[str, Any]],
+    issues: list[dict[str, Any]],
 ) -> None:
     """收集单表字段级结构差异（缺失与类型变化）。"""
     for column_name in sorted(set(cached_columns) - set(physical_columns)):
@@ -205,12 +205,12 @@ def _collect_column_schema_issues(
 
 
 def _compare_datasource_schema(
-    cached_tables: List[Dict[str, Any]], physical_tables: List[Dict[str, Any]]
-) -> Dict[str, Any]:
+    cached_tables: list[dict[str, Any]], physical_tables: list[dict[str, Any]]
+) -> dict[str, Any]:
     """校验缓存表结构是否仍存在于真实物理表结构中。"""
     cached_schema = _build_table_schema_map(cached_tables)
     physical_schema = _build_table_schema_map(physical_tables)
-    issues: List[Dict[str, Any]] = []
+    issues: list[dict[str, Any]] = []
 
     for table_name in sorted(set(cached_schema) - set(physical_schema)):
         issues.append(
@@ -237,10 +237,10 @@ def _compare_datasource_schema(
 
 
 def _build_datasource_schema_health(
-    datasource: Dict[str, Any],
-    physical_tables: Optional[List[Dict[str, Any]]] = None,
-    error: Optional[Exception] = None,
-) -> Dict[str, Any]:
+    datasource: dict[str, Any],
+    physical_tables: list[dict[str, Any]] | None = None,
+    error: Exception | None = None,
+) -> dict[str, Any]:
     """根据实时物理表结构校验当前缓存表字段是否仍存在。"""
     source_type = datasource.get("source_type")
     if source_type not in ("mysql", "hive"):
@@ -281,7 +281,7 @@ def _build_datasource_schema_health(
     return _compare_datasource_schema(datasource.get("ds_tables") or [], physical_tables or [])
 
 
-def _extract_expression_identifiers(expression: str) -> Set[str]:
+def _extract_expression_identifiers(expression: str) -> set[str]:
     """从简单 SQL 表达式中提取可能的字段标识符。"""
     text = str(expression or "")
     if not text:
@@ -341,8 +341,8 @@ def _is_count_all_expression(expression: str) -> bool:
 
 
 def _semantic_health_issue(
-    level: str, issue_type: str, message: str, target: str, config: Optional[Dict] = None
-) -> Dict[str, Any]:
+    level: str, issue_type: str, message: str, target: str, config: dict | None = None
+) -> dict[str, Any]:
     """构造语义健康检查问题项。"""
     issue = {
         "level": level,
@@ -356,7 +356,7 @@ def _semantic_health_issue(
     return issue
 
 
-def _build_semantic_health_result(config: Dict, issues: List[Dict[str, Any]]) -> Dict[str, Any]:
+def _build_semantic_health_result(config: dict, issues: list[dict[str, Any]]) -> dict[str, Any]:
     """构造单个指标集健康检查结果。"""
     status = "invalid" if any(item["level"] == "error" for item in issues) else "warning" if issues else "ok"
     return {
@@ -368,10 +368,10 @@ def _build_semantic_health_result(config: Dict, issues: List[Dict[str, Any]]) ->
 
 
 def _validate_semantic_dimension_health(
-    dim: Dict[str, Any],
-    table_columns_map: Dict[str, Set[str]],
-    config: Dict,
-) -> List[Dict[str, Any]]:
+    dim: dict[str, Any],
+    table_columns_map: dict[str, set[str]],
+    config: dict,
+) -> list[dict[str, Any]]:
     """校验单个语义维度是否匹配物理表。"""
     dim_name = dim.get("name") or dim.get("field_name") or ""
     table_name = dim.get("table")
@@ -384,7 +384,7 @@ def _validate_semantic_dimension_health(
             )
         ]
 
-    issues: List[Dict[str, Any]] = []
+    issues: list[dict[str, Any]] = []
     if not column_name or column_name not in table_columns_map[table_name]:
         issues.append(
             _semantic_health_issue(
@@ -407,10 +407,10 @@ def _validate_semantic_dimension_health(
 
 
 def _validate_semantic_metric_health(
-    metric: Dict[str, Any],
-    table_columns_map: Dict[str, Set[str]],
-    config: Dict,
-) -> List[Dict[str, Any]]:
+    metric: dict[str, Any],
+    table_columns_map: dict[str, set[str]],
+    config: dict,
+) -> list[dict[str, Any]]:
     """校验单个语义指标是否匹配物理表。"""
     metric_name = metric.get("name") or metric.get("field_name") or ""
     # 派生/复合指标不直接携带物理引用：派生复用基础指标，复合口径由成员表达式决定，与 config_validator 口径一致
@@ -453,11 +453,11 @@ def _validate_semantic_metric_health(
 
 
 def _validate_semantic_relationship_health(
-    rel: Dict[str, Any],
+    rel: dict[str, Any],
     index: int,
-    table_columns_map: Dict[str, Set[str]],
-    config: Dict,
-) -> List[Dict[str, Any]]:
+    table_columns_map: dict[str, set[str]],
+    config: dict,
+) -> list[dict[str, Any]]:
     """校验单个语义关系是否匹配物理表。"""
     left_table = rel.get("left_table")
     right_table = rel.get("right_table")
@@ -471,7 +471,7 @@ def _validate_semantic_relationship_health(
             _semantic_health_issue("error", "missing_table", f"关系 {index} 右表不存在: {right_table}", target, config)
         ]
 
-    issues: List[Dict[str, Any]] = []
+    issues: list[dict[str, Any]] = []
     conditions = rel.get("join_conditions") or [
         {"left_column": rel.get("left_column"), "right_column": rel.get("right_column")}
     ]
@@ -501,10 +501,10 @@ def _validate_semantic_relationship_health(
     return issues
 
 
-def _validate_semantic_config_health(datasource: Dict, config: Dict) -> Dict[str, Any]:
+def _validate_semantic_config_health(datasource: dict, config: dict) -> dict[str, Any]:
     """校验单个指标集是否仍匹配当前物理表结构。"""
     table_columns_map = build_table_columns_map(datasource)
-    issues: List[Dict[str, Any]] = []
+    issues: list[dict[str, Any]] = []
     if not table_columns_map:
         issues.append(
             _semantic_health_issue(
@@ -529,7 +529,7 @@ def _validate_semantic_config_health(datasource: Dict, config: Dict) -> Dict[str
     return _build_semantic_health_result(config, issues)
 
 
-def _build_datasource_semantic_health(datasource: Dict, configs: List[Dict]) -> Dict[str, Any]:
+def _build_datasource_semantic_health(datasource: dict, configs: list[dict]) -> dict[str, Any]:
     """构造数据源下所有指标集的健康检查结果。"""
     config_results = [_validate_semantic_config_health(datasource, config) for config in configs or []]
     all_issues = [issue for result in config_results for issue in result.get("issues") or []]

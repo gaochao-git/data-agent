@@ -4,7 +4,6 @@ SQLAlchemy 数据模型定义
 
 import json
 from datetime import datetime
-from typing import Optional
 
 from sqlalchemy import BigInteger, DateTime, Index, Integer, SmallInteger, String, Text, UniqueConstraint
 from sqlalchemy.dialects.mysql import MEDIUMTEXT
@@ -34,13 +33,13 @@ class UserThread(Base):
     id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
     user_id: Mapped[str] = mapped_column(String(255), nullable=False)
     thread_id: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
-    thread_title: Mapped[Optional[str]] = mapped_column(String(255), default="未命名会话")
-    agent_id: Mapped[Optional[str]] = mapped_column(String(255))
+    thread_title: Mapped[str | None] = mapped_column(String(255), default="未命名会话")
+    agent_id: Mapped[str | None] = mapped_column(String(255))
     datasource_id: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
     is_favorited: Mapped[int] = mapped_column(SmallInteger, default=0)
     delete_flag: Mapped[int] = mapped_column(SmallInteger, default=0)  # 0-未删除, 1-已删除
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    update_time: Mapped[Optional[datetime]] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+    update_time: Mapped[datetime | None] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
     create_by: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
     create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     update_by: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
@@ -62,7 +61,7 @@ class ChatDataConversationEvent(Base):
     payload: Mapped[str] = mapped_column(MediumTextType, nullable=False)
     delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    update_time: Mapped[Optional[datetime]] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+    update_time: Mapped[datetime | None] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
     create_by: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
     create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     update_by: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
@@ -84,7 +83,7 @@ class ChatDataAgentInbox(Base):
     conversation_id: Mapped[str] = mapped_column(String(255), nullable=False)
     user_id: Mapped[str] = mapped_column(String(255), nullable=False)
     run_id: Mapped[str] = mapped_column(String(64), nullable=False)
-    owner_token: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    owner_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
     message_id: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
     record_type: Mapped[str] = mapped_column(String(16), nullable=False)
     queue_type: Mapped[str] = mapped_column(
@@ -98,14 +97,14 @@ class ChatDataAgentInbox(Base):
     record_content: Mapped[str] = mapped_column(MediumTextType, nullable=False, default="", server_default="")
     # 排队消息随行元数据（JSON 文本）：{file_selections, file_ids}。附件/引用只存引用，
     # 消费（续跑构建 HumanMessage → agent_stream 采纳）时才校验解析。
-    record_meta: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    record_meta: Mapped[str | None] = mapped_column(Text, nullable=True)
     record_status: Mapped[str] = mapped_column(String(16), nullable=False)
-    claimed_time: Mapped[Optional[datetime]] = mapped_column(DateTime)
-    consumed_time: Mapped[Optional[datetime]] = mapped_column(DateTime)
-    lease_expire_time: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    claimed_time: Mapped[datetime | None] = mapped_column(DateTime)
+    consumed_time: Mapped[datetime | None] = mapped_column(DateTime)
+    lease_expire_time: Mapped[datetime | None] = mapped_column(DateTime)
     delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    update_time: Mapped[Optional[datetime]] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+    update_time: Mapped[datetime | None] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
     create_by: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
     create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     update_by: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
@@ -124,17 +123,17 @@ class UploadedFile(Base):
     __tablename__ = "uploaded_files"
 
     id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
-    file_id: Mapped[Optional[str]] = mapped_column(String(255), unique=True)
+    file_id: Mapped[str | None] = mapped_column(String(255), unique=True)
     thread_id: Mapped[str] = mapped_column(String(255), nullable=False)
     original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
     file_type: Mapped[str] = mapped_column(String(50), nullable=False)
     file_size: Mapped[int] = mapped_column(BigInteger, nullable=False)
     storage_dir: Mapped[str] = mapped_column(String(500), nullable=False)
     parse_status: Mapped[str] = mapped_column(String(50), default="pending")
-    parse_filename: Mapped[Optional[str]] = mapped_column(String(255))
+    parse_filename: Mapped[str | None] = mapped_column(String(255))
     delete_flag: Mapped[int] = mapped_column(SmallInteger, default=0)  # 0-未删除, 1-已删除
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    update_time: Mapped[Optional[datetime]] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+    update_time: Mapped[datetime | None] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
     create_by: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
     create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     update_by: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
@@ -149,15 +148,15 @@ class ChatDataDashboard(Base):
     id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
     dashboard_id: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
     dashboard_name: Mapped[str] = mapped_column(String(255), nullable=False)
-    dashboard_desc: Mapped[Optional[str]] = mapped_column(String(1000))
+    dashboard_desc: Mapped[str | None] = mapped_column(String(1000))
     user_id: Mapped[str] = mapped_column(String(255), nullable=False)
-    datasource_id: Mapped[Optional[str]] = mapped_column(String(255))
+    datasource_id: Mapped[str | None] = mapped_column(String(255))
     dashboard_theme: Mapped[str] = mapped_column(String(50), default="light")
-    background_id: Mapped[Optional[str]] = mapped_column(String(50))  # 背景图片ID
+    background_id: Mapped[str | None] = mapped_column(String(50))  # 背景图片ID
     is_public: Mapped[int] = mapped_column(SmallInteger, default=0)
     delete_flag: Mapped[int] = mapped_column(SmallInteger, default=0)  # 0-未删除, 1-已删除
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    update_time: Mapped[Optional[datetime]] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+    update_time: Mapped[datetime | None] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
     create_by: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
     create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     update_by: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
@@ -175,8 +174,8 @@ class ChatDataDashboardPanel(Base):
     panel_name: Mapped[str] = mapped_column(String(255), nullable=False)
     panel_sql: Mapped[str] = mapped_column(String(5000), nullable=False)
     chart_type: Mapped[str] = mapped_column(String(50), default="table")
-    chart_config: Mapped[Optional[str]] = mapped_column(String(2000))  # JSON 格式的图表配置
-    datasource_id: Mapped[Optional[str]] = mapped_column(String(255))  # 数据源ID
+    chart_config: Mapped[str | None] = mapped_column(String(2000))  # JSON 格式的图表配置
+    datasource_id: Mapped[str | None] = mapped_column(String(255))  # 数据源ID
     member_datasource_id: Mapped[str] = mapped_column(
         String(128), nullable=False, default="", server_default=""
     )  # 成员数据源ID
@@ -186,12 +185,12 @@ class ChatDataDashboardPanel(Base):
     layout_w: Mapped[int] = mapped_column(Integer, default=6)
     layout_h: Mapped[int] = mapped_column(Integer, default=4)
     # 数据刷新
-    refresh_interval: Mapped[Optional[int]] = mapped_column(Integer)  # 刷新间隔（秒）
+    refresh_interval: Mapped[int | None] = mapped_column(Integer)  # 刷新间隔（秒）
     # 来源信息
-    source_thread_id: Mapped[Optional[str]] = mapped_column(String(255))
+    source_thread_id: Mapped[str | None] = mapped_column(String(255))
     delete_flag: Mapped[int] = mapped_column(SmallInteger, default=0)  # 0-未删除, 1-已删除
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    update_time: Mapped[Optional[datetime]] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+    update_time: Mapped[datetime | None] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
     create_by: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
     create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     update_by: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
@@ -205,24 +204,24 @@ class SqlQueryHistory(Base):
 
     id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
     datasource_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
-    user_id: Mapped[Optional[str]] = mapped_column(String(255), index=True)
+    user_id: Mapped[str | None] = mapped_column(String(255), index=True)
 
     # 查询信息
     sql_text: Mapped[str] = mapped_column(Text, nullable=False)
-    query_title: Mapped[Optional[str]] = mapped_column(String(255))
-    query_type: Mapped[Optional[str]] = mapped_column(String(20), default="sql")  # sql | builder
-    builder_config: Mapped[Optional[str]] = mapped_column(Text)  # JSON string for builder mode
+    query_title: Mapped[str | None] = mapped_column(String(255))
+    query_type: Mapped[str | None] = mapped_column(String(20), default="sql")  # sql | builder
+    builder_config: Mapped[str | None] = mapped_column(Text)  # JSON string for builder mode
 
-    last_used: Mapped[Optional[datetime]] = mapped_column(DateTime)
-    execution_time_ms: Mapped[Optional[int]] = mapped_column(Integer)
-    result_row_count: Mapped[Optional[int]] = mapped_column(Integer)
+    last_used: Mapped[datetime | None] = mapped_column(DateTime)
+    execution_time_ms: Mapped[int | None] = mapped_column(Integer)
+    result_row_count: Mapped[int | None] = mapped_column(Integer)
     success_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=1, server_default="1")
-    error_message: Mapped[Optional[str]] = mapped_column(Text)
+    error_message: Mapped[str | None] = mapped_column(Text)
 
     # 统一元数据字段
     delete_flag: Mapped[int] = mapped_column(SmallInteger, default=0)  # 0-未删除, 1-已删除
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    update_time: Mapped[Optional[datetime]] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+    update_time: Mapped[datetime | None] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
     create_by: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
     create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     update_by: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
@@ -263,17 +262,17 @@ class SqlQueryFavorite(Base):
 
     id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
     datasource_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
-    user_id: Mapped[Optional[str]] = mapped_column(String(255), index=True)
-    semantic_config_id: Mapped[Optional[str]] = mapped_column(String(255), index=True)
+    user_id: Mapped[str | None] = mapped_column(String(255), index=True)
+    semantic_config_id: Mapped[str | None] = mapped_column(String(255), index=True)
 
     query_type: Mapped[str] = mapped_column(String(20), nullable=False, default="sql")  # conversation | builder | sql
     favorite_title: Mapped[str] = mapped_column(String(255), nullable=False)
     query_text: Mapped[str] = mapped_column(Text, nullable=False)
-    builder_config: Mapped[Optional[str]] = mapped_column(Text)  # JSON string for builder mode
+    builder_config: Mapped[str | None] = mapped_column(Text)  # JSON string for builder mode
 
     delete_flag: Mapped[int] = mapped_column(SmallInteger, default=0)  # 0-未删除, 1-已删除
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    update_time: Mapped[Optional[datetime]] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+    update_time: Mapped[datetime | None] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
     create_by: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
     create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     update_by: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
@@ -324,16 +323,16 @@ class ChatDataQueryTask(Base):
     task_status: Mapped[str] = mapped_column(
         String(32), nullable=False, default="pending", server_default="pending", index=True
     )
-    progress_text: Mapped[Optional[str]] = mapped_column(String(255))
+    progress_text: Mapped[str | None] = mapped_column(String(255))
     request_payload: Mapped[str] = mapped_column(MediumTextType, nullable=False)
-    result_payload: Mapped[Optional[str]] = mapped_column(MediumTextType)
-    remote_task_payload: Mapped[Optional[str]] = mapped_column(Text)
-    error_message: Mapped[Optional[str]] = mapped_column(Text)
-    started_time: Mapped[Optional[datetime]] = mapped_column(DateTime)
-    finished_time: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    result_payload: Mapped[str | None] = mapped_column(MediumTextType)
+    remote_task_payload: Mapped[str | None] = mapped_column(Text)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    started_time: Mapped[datetime | None] = mapped_column(DateTime)
+    finished_time: Mapped[datetime | None] = mapped_column(DateTime)
     delete_flag: Mapped[int] = mapped_column(SmallInteger, default=0)
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    update_time: Mapped[Optional[datetime]] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+    update_time: Mapped[datetime | None] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
     create_by: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
     create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     update_by: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
@@ -405,15 +404,15 @@ class ChatDataQueryExecution(Base):
     sql_status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending", server_default="pending")
     remote_task_id: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
     db_connection_id: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
-    execution_time_ms: Mapped[Optional[int]] = mapped_column(Integer)
-    result_row_count: Mapped[Optional[int]] = mapped_column(Integer)
-    result_payload: Mapped[Optional[str]] = mapped_column(MediumTextType)
-    error_message: Mapped[Optional[str]] = mapped_column(Text)
-    started_time: Mapped[Optional[datetime]] = mapped_column(DateTime)
-    finished_time: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    execution_time_ms: Mapped[int | None] = mapped_column(Integer)
+    result_row_count: Mapped[int | None] = mapped_column(Integer)
+    result_payload: Mapped[str | None] = mapped_column(MediumTextType)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    started_time: Mapped[datetime | None] = mapped_column(DateTime)
+    finished_time: Mapped[datetime | None] = mapped_column(DateTime)
     delete_flag: Mapped[int] = mapped_column(SmallInteger, default=0)
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    update_time: Mapped[Optional[datetime]] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+    update_time: Mapped[datetime | None] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
     create_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     update_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
@@ -483,9 +482,9 @@ class ChatDataSqlResultCache(Base):
     sql_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
     sql_text: Mapped[str] = mapped_column(Text, nullable=False)
     result_payload: Mapped[str] = mapped_column(MediumTextType, nullable=False)
-    result_row_count: Mapped[Optional[int]] = mapped_column(Integer)
+    result_row_count: Mapped[int | None] = mapped_column(Integer)
     expire_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    last_hit_time: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    last_hit_time: Mapped[datetime | None] = mapped_column(DateTime)
     hit_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
@@ -676,15 +675,15 @@ class ChatDataEvalRun(Base):
     run_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="live", server_default="live")
     run_status: Mapped[str] = mapped_column(String(32), nullable=False, default="running", server_default="running")
     request_payload: Mapped[str] = mapped_column(MediumTextType, nullable=False)
-    summary_payload: Mapped[Optional[str]] = mapped_column(MediumTextType)
+    summary_payload: Mapped[str | None] = mapped_column(MediumTextType)
     total_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     scored_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     passed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     failed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     semantic_accuracy_bp: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
-    error_message: Mapped[Optional[str]] = mapped_column(Text)
-    started_time: Mapped[Optional[datetime]] = mapped_column(DateTime)
-    finished_time: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    started_time: Mapped[datetime | None] = mapped_column(DateTime)
+    finished_time: Mapped[datetime | None] = mapped_column(DateTime)
     delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
     update_time: Mapped[datetime] = mapped_column(
@@ -712,10 +711,10 @@ class ChatDataEvalRunCase(Base):
     run_id: Mapped[str] = mapped_column(String(64), nullable=False)
     case_id: Mapped[str] = mapped_column(String(128), nullable=False)
     case_status: Mapped[str] = mapped_column(String(32), nullable=False, default="running", server_default="running")
-    result_payload: Mapped[Optional[str]] = mapped_column(MediumTextType)
+    result_payload: Mapped[str | None] = mapped_column(MediumTextType)
     semantic_accuracy_bp: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
-    elapsed_ms: Mapped[Optional[int]] = mapped_column(Integer)
-    error_message: Mapped[Optional[str]] = mapped_column(Text)
+    elapsed_ms: Mapped[int | None] = mapped_column(Integer)
+    error_message: Mapped[str | None] = mapped_column(Text)
     delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
     update_time: Mapped[datetime] = mapped_column(
@@ -742,13 +741,13 @@ class DatasourceGroup(Base):
     id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
     group_id: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
     group_name: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
-    group_desc: Mapped[Optional[str]] = mapped_column(String(128))
-    query_context: Mapped[Optional[str]] = mapped_column(Text)
-    recommended_questions_json: Mapped[Optional[str]] = mapped_column(Text)
+    group_desc: Mapped[str | None] = mapped_column(String(128))
+    query_context: Mapped[str | None] = mapped_column(Text)
+    recommended_questions_json: Mapped[str | None] = mapped_column(Text)
     source_type: Mapped[str] = mapped_column(String(32), nullable=False, default="", server_default="")
     template_source: Mapped[str] = mapped_column(String(256), nullable=False)
-    member_sources_text: Mapped[Optional[str]] = mapped_column(Text)
-    mapped_modules_json: Mapped[Optional[str]] = mapped_column(Text)
+    member_sources_text: Mapped[str | None] = mapped_column(Text)
+    mapped_modules_json: Mapped[str | None] = mapped_column(Text)
     is_default: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
     delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
@@ -769,10 +768,10 @@ class DatasourceTable(Base):
     id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
     group_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     table_names: Mapped[str] = mapped_column(String(128), nullable=False)
-    table_desc: Mapped[Optional[str]] = mapped_column(String(128))
+    table_desc: Mapped[str | None] = mapped_column(String(128))
     table_business_desc: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
-    columns_json: Mapped[Optional[str]] = mapped_column(Text)
-    indexes_json: Mapped[Optional[str]] = mapped_column(Text)
+    columns_json: Mapped[str | None] = mapped_column(Text)
+    indexes_json: Mapped[str | None] = mapped_column(Text)
     sort_no: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
@@ -818,7 +817,7 @@ class DatasourceColumnDict(Base):
     group_id: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
     table_name: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
     column_name: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
-    dict_json: Mapped[Optional[str]] = mapped_column(Text)
+    dict_json: Mapped[str | None] = mapped_column(Text)
     delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
     update_time: Mapped[datetime] = mapped_column(
@@ -875,12 +874,12 @@ class ChatDataAgentSchedule(Base):
     job_prompt: Mapped[str] = mapped_column(Text, nullable=False)
     schedule_type: Mapped[str] = mapped_column(String(16), nullable=False, default="cron", server_default="cron")
     cron_expr: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
-    plan_time: Mapped[Optional[datetime]] = mapped_column(DateTime)
-    effective_end_time: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    plan_time: Mapped[datetime | None] = mapped_column(DateTime)
+    effective_end_time: Mapped[datetime | None] = mapped_column(DateTime)
     enabled_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=1, server_default="1")
-    next_trigger_time: Mapped[Optional[datetime]] = mapped_column(DateTime)
-    last_trigger_time: Mapped[Optional[datetime]] = mapped_column(DateTime)
-    options_json: Mapped[Optional[str]] = mapped_column(Text)
+    next_trigger_time: Mapped[datetime | None] = mapped_column(DateTime)
+    last_trigger_time: Mapped[datetime | None] = mapped_column(DateTime)
+    options_json: Mapped[str | None] = mapped_column(Text)
     delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
     update_time: Mapped[datetime] = mapped_column(
@@ -946,9 +945,9 @@ class ChatDataAgentScheduleRun(Base):
     owner_node: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
     run_id: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
     error_message: Mapped[str] = mapped_column(String(1000), nullable=False, default="", server_default="")
-    claimed_time: Mapped[Optional[datetime]] = mapped_column(DateTime)
-    dispatched_time: Mapped[Optional[datetime]] = mapped_column(DateTime)
-    finished_time: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    claimed_time: Mapped[datetime | None] = mapped_column(DateTime)
+    dispatched_time: Mapped[datetime | None] = mapped_column(DateTime)
+    finished_time: Mapped[datetime | None] = mapped_column(DateTime)
     delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
     update_time: Mapped[datetime] = mapped_column(
@@ -1022,12 +1021,12 @@ class SemanticConfig(Base):
     semantic_config_id: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
     group_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     semantic_config_name: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
-    semantic_config_desc: Mapped[Optional[str]] = mapped_column(String(128))
-    business_notes: Mapped[Optional[str]] = mapped_column(Text)
+    semantic_config_desc: Mapped[str | None] = mapped_column(String(128))
+    business_notes: Mapped[str | None] = mapped_column(Text)
     enabled_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=1, server_default="1")
-    metrics_json: Mapped[Optional[str]] = mapped_column(Text)
-    dimensions_json: Mapped[Optional[str]] = mapped_column(Text)
-    relationships_json: Mapped[Optional[str]] = mapped_column(Text)
+    metrics_json: Mapped[str | None] = mapped_column(Text)
+    dimensions_json: Mapped[str | None] = mapped_column(Text)
+    relationships_json: Mapped[str | None] = mapped_column(Text)
     scope_type: Mapped[str] = mapped_column(String(20), nullable=False, default="public", server_default="public")
     sort_no: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
@@ -1052,7 +1051,7 @@ class ChatDataPlugin(Base):
     display_name: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
     description: Mapped[str] = mapped_column(String(500), nullable=False, default="", server_default="")
     enabled_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=1, server_default="1")
-    manifest_text: Mapped[Optional[str]] = mapped_column(Text)
+    manifest_text: Mapped[str | None] = mapped_column(Text)
     delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
     update_time: Mapped[datetime] = mapped_column(

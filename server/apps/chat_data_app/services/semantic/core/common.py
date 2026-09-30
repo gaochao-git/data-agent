@@ -1,6 +1,6 @@
 """语义核心共享的纯函数和常量。"""
 
-from typing import Any, Dict, Set
+from typing import Any
 
 LOGICAL_TYPE_VALUES = {"text", "number", "date", "datetime", "enum"}
 SUPPORTED_RELATIONSHIP_TYPES = frozenset({"one_to_one", "one_to_many", "many_to_one"})
@@ -17,8 +17,8 @@ def normalize_relationship_type(value: Any) -> str:
     return normalized
 
 
-def build_table_columns_map(datasource: Dict) -> Dict[str, Set[str]]:
-    table_columns: Dict[str, Set[str]] = {}
+def build_table_columns_map(datasource: dict) -> dict[str, set[str]]:
+    table_columns: dict[str, set[str]] = {}
     for table in datasource.get("ds_tables", []) or []:
         table_name = table.get("table_name")
         if table_name:
@@ -33,12 +33,12 @@ def normalize_logical_type(value: Any) -> str:
     return logical_type if logical_type in LOGICAL_TYPE_VALUES else ""
 
 
-def ensure_dimension_logical_type(dimension: Dict[str, Any]) -> Dict[str, Any]:
+def ensure_dimension_logical_type(dimension: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(dimension or {})
     normalized["logical_type"] = normalize_logical_type(normalized.get("logical_type")) or "text"
     normalized.pop("type", None)
     return normalized
 
 
-def is_time_logical_dimension(config: Dict[str, Any]) -> bool:
+def is_time_logical_dimension(config: dict[str, Any]) -> bool:
     return normalize_logical_type((config or {}).get("logical_type")) in {"date", "datetime"}

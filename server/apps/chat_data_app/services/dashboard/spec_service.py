@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import inspect
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from utils.logger import get_logger
 
@@ -72,21 +72,21 @@ def normalize_dashboard_spec_chart_type(chart_type: Any) -> str:
     return normalize_chart_type(chart_type)
 
 
-def _normalize_dimension_dict(item: Dict[str, Any]) -> Dict[str, Any] | None:
+def _normalize_dimension_dict(item: dict[str, Any]) -> dict[str, Any] | None:
     """规整单个 dict 形态维度；无有效名称返回 None。"""
     name = str(item.get("name") or item.get("dimension") or "").strip()
     if not name:
         return None
-    next_item: Dict[str, Any] = {"name": name}
+    next_item: dict[str, Any] = {"name": name}
     time_grain = str(item.get("time_grain") or item.get("grain") or "").strip()
     if time_grain:
         next_item["time_grain"] = time_grain
     return next_item
 
 
-def normalize_dashboard_spec_dimensions(dimensions: Any) -> List[Any]:
+def normalize_dashboard_spec_dimensions(dimensions: Any) -> list[Any]:
     """规整 AI 看板规格中的维度参数。"""
-    result: List[Any] = []
+    result: list[Any] = []
     for item in dimensions or []:
         if isinstance(item, dict):
             normalized = _normalize_dimension_dict(item)
@@ -99,9 +99,9 @@ def normalize_dashboard_spec_dimensions(dimensions: Any) -> List[Any]:
     return result
 
 
-def normalize_dashboard_spec_metrics(metrics: Any) -> List[str]:
+def normalize_dashboard_spec_metrics(metrics: Any) -> list[str]:
     """规整 AI 看板规格中的指标参数，兼容 name/metric/field 对象写法。"""
-    result: List[str] = []
+    result: list[str] = []
     for item in metrics or []:
         if isinstance(item, dict):
             name = str(item.get("name") or item.get("metric") or item.get("field") or "").strip()
@@ -130,18 +130,18 @@ def _normalize_filter_node(node: Any) -> Any:
     return normalized
 
 
-def normalize_dashboard_spec_filters(filters: Any) -> List[Dict[str, Any]]:
+def normalize_dashboard_spec_filters(filters: Any) -> list[dict[str, Any]]:
     """规整 AI 看板规格中的 filters 参数。"""
     if not isinstance(filters, list):
         return []
     return [_normalize_filter_node(item) for item in filters if isinstance(item, dict)]
 
 
-def normalize_dashboard_spec_having(having: Any) -> List[Dict[str, Any]]:
+def normalize_dashboard_spec_having(having: Any) -> list[dict[str, Any]]:
     """规整 AI 看板规格中的 having 参数。"""
     if not isinstance(having, list):
         return []
-    result: List[Dict[str, Any]] = []
+    result: list[dict[str, Any]] = []
     for item in having:
         if not isinstance(item, dict):
             continue
@@ -156,11 +156,11 @@ def normalize_dashboard_spec_having(having: Any) -> List[Dict[str, Any]]:
     return result
 
 
-def normalize_dashboard_spec_order_by(order_by: Any) -> List[Dict[str, Any]]:
+def normalize_dashboard_spec_order_by(order_by: Any) -> list[dict[str, Any]]:
     """规整 AI 看板规格中的 order_by 参数。"""
     if not isinstance(order_by, list):
         return []
-    result: List[Dict[str, Any]] = []
+    result: list[dict[str, Any]] = []
     for item in order_by:
         if not isinstance(item, dict):
             continue
@@ -172,7 +172,7 @@ def normalize_dashboard_spec_order_by(order_by: Any) -> List[Dict[str, Any]]:
     return result
 
 
-def normalize_semantic_dsl_payload(dsl: Dict[str, Any]) -> Dict[str, Any]:
+def normalize_semantic_dsl_payload(dsl: dict[str, Any]) -> dict[str, Any]:
     """规整模型生成 DSL，使其符合智能问数语义工具格式。"""
     payload = dict(dsl or {})
     payload["metrics"] = normalize_dashboard_spec_metrics(payload.get("metrics") or [])
@@ -185,7 +185,7 @@ def normalize_semantic_dsl_payload(dsl: Dict[str, Any]) -> Dict[str, Any]:
     return payload
 
 
-def _is_aggregate_metric(metric: Dict[str, Any]) -> bool:
+def _is_aggregate_metric(metric: dict[str, Any]) -> bool:
     # 派生指标编译时展开为基础原子指标的聚合表达式；复合指标代入成员聚合表达式，均按聚合指标处理
     if is_derived_metric(metric) or is_composite_metric(metric):
         return True
@@ -194,22 +194,22 @@ def _is_aggregate_metric(metric: Dict[str, Any]) -> bool:
 
 
 def _selected_semantic_metrics(
-    metrics: List[Any], semantic_config: Dict[str, Any]
-) -> tuple[Dict[Any, Dict[str, Any]], List[Any]]:
+    metrics: list[Any], semantic_config: dict[str, Any]
+) -> tuple[dict[Any, dict[str, Any]], list[Any]]:
     """按名字索引语义指标定义，并筛出 DSL 选中的那些。"""
     metrics_map = {item.get("name"): item for item in semantic_config.get("metrics") or [] if item.get("name")}
     selected = [metrics_map.get(name) for name in metrics if name in metrics_map]
     return metrics_map, selected
 
 
-def _aggregate_metric_names(metrics: List[Any], metrics_map: Dict[Any, Dict[str, Any]]) -> List[Any]:
+def _aggregate_metric_names(metrics: list[Any], metrics_map: dict[Any, dict[str, Any]]) -> list[Any]:
     """metrics 中聚合指标的名字列表（保持原顺序）。"""
     return [name for name in metrics if metrics_map.get(name) and _is_aggregate_metric(metrics_map[name])]
 
 
 def remove_mixed_raw_metrics_for_aggregate_dsl(
-    dsl: Dict[str, Any], semantic_config: Dict[str, Any]
-) -> tuple[Dict[str, Any], List[str]]:
+    dsl: dict[str, Any], semantic_config: dict[str, Any]
+) -> tuple[dict[str, Any], list[str]]:
     """聚合 DSL 中出现原始值和聚合指标混用时，优先保留聚合指标。"""
     payload = normalize_semantic_dsl_payload(dsl)
     metrics = payload.get("metrics") or []
@@ -225,8 +225,8 @@ def remove_mixed_raw_metrics_for_aggregate_dsl(
 
 
 async def get_dashboard_spec_semantic_config(
-    datasource_id: str, semantic_config_id: Optional[str], user_id: Optional[str] = None
-) -> Dict[str, Any]:
+    datasource_id: str, semantic_config_id: str | None, user_id: str | None = None
+) -> dict[str, Any]:
     """读取看板 DSL 校验和 SQL 生成所需语义配置。"""
     try:
         return await load_semantic_model(
@@ -246,8 +246,8 @@ async def get_dashboard_spec_semantic_config(
 
 
 def resolve_dashboard_card_semantic_config_id(
-    card: Dict[str, Any],
-    default_semantic_config_id: Optional[str] = None,
+    card: dict[str, Any],
+    default_semantic_config_id: str | None = None,
 ) -> str:
     """解析卡片语义模型；新规格优先使用卡片级 ID，旧规格回退到顶层默认值。"""
     card_id = str((card or {}).get("semantic_config_id") or "").strip()
@@ -255,10 +255,10 @@ def resolve_dashboard_card_semantic_config_id(
 
 
 def build_panel_sql_from_dashboard_card(
-    card: Dict[str, Any],
+    card: dict[str, Any],
     generator: SemanticAIQueryAdapter,
-    warnings: Optional[List[str]] = None,
-    max_rows: Optional[int] = None,
+    warnings: list[str] | None = None,
+    max_rows: int | None = None,
 ) -> str:
     """将看板卡片 DSL 转为面板 SQL。
 
@@ -287,7 +287,7 @@ def build_panel_sql_from_dashboard_card(
     return str(result.get("sql") or "").strip()
 
 
-def _merge_card_dsl_payload(dsl: Dict[str, Any], card: Dict[str, Any]) -> Dict[str, Any]:
+def _merge_card_dsl_payload(dsl: dict[str, Any], card: dict[str, Any]) -> dict[str, Any]:
     """卡片级字段兜底合并的唯一入口：dsl 字段缺省时回退 card 顶层字段（含 limit/offset）。"""
     return {
         **dsl,
@@ -301,9 +301,9 @@ def _merge_card_dsl_payload(dsl: Dict[str, Any], card: Dict[str, Any]) -> Dict[s
     }
 
 
-def validate_dashboard_card_structure(card: Dict[str, Any], index: int) -> List[str]:
+def validate_dashboard_card_structure(card: dict[str, Any], index: int) -> list[str]:
     """严格校验看板卡片结构，避免模型漏掉布局、图表类型或 DSL。"""
-    errors: List[str] = []
+    errors: list[str] = []
     title = card.get("title") or f"卡片{index + 1}"
     if not is_supported_chart_type_input(card.get("chart_type")):
         errors.append(f"卡片「{title}」chart_type 缺失或不支持")
@@ -320,10 +320,10 @@ def validate_dashboard_card_structure(card: Dict[str, Any], index: int) -> List[
     return errors
 
 
-def _validate_card_layout(title: str, layout: Dict[str, Any]) -> List[str]:
+def _validate_card_layout(title: str, layout: dict[str, Any]) -> list[str]:
     """校验卡片 layout 数值合法性；字段缺失或不合法时不做范围检查。"""
-    errors: List[str] = []
-    values: Dict[str, int] = {}
+    errors: list[str] = []
+    values: dict[str, int] = {}
     for key in ("x", "y", "w", "h"):
         value = layout.get(key)
         if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -348,9 +348,9 @@ def _validate_card_layout(title: str, layout: Dict[str, Any]) -> List[str]:
     return errors
 
 
-def _validate_spec_cards(cards: List[Any], default_semantic_config_id: str) -> List[str]:
+def _validate_spec_cards(cards: list[Any], default_semantic_config_id: str) -> list[str]:
     """逐卡校验结构，并检查卡片级语义模型可解析。"""
-    errors: List[str] = []
+    errors: list[str] = []
     for index, card in enumerate(cards[:12]):
         if not isinstance(card, dict):
             errors.append(f"卡片{index + 1} 必须是对象")
@@ -362,11 +362,11 @@ def _validate_spec_cards(cards: List[Any], default_semantic_config_id: str) -> L
 
 
 def validate_dashboard_spec_structure(
-    dashboard_spec: Dict[str, Any],
-    default_semantic_config_id: Optional[str] = None,
-) -> List[str]:
+    dashboard_spec: dict[str, Any],
+    default_semantic_config_id: str | None = None,
+) -> list[str]:
     """严格校验看板规格结构。"""
-    errors: List[str] = []
+    errors: list[str] = []
     spec = dashboard_spec or {}
     if not str(spec.get("dashboard_name") or "").strip():
         errors.append("dashboard_name 必填")
@@ -387,9 +387,9 @@ def validate_dashboard_spec_structure(
 
 
 def _resolve_panel_generator(
-    generators: Dict[str, SemanticAIQueryAdapter],
-    semantic_config_generators: Optional[Dict[str, SemanticAIQueryAdapter]],
-    sql_generator: Optional[SemanticAIQueryAdapter],
+    generators: dict[str, SemanticAIQueryAdapter],
+    semantic_config_generators: dict[str, SemanticAIQueryAdapter] | None,
+    sql_generator: SemanticAIQueryAdapter | None,
     semantic_config_id: str,
 ) -> SemanticAIQueryAdapter:
     generator = generators.get(semantic_config_id) if semantic_config_generators is not None else sql_generator
@@ -399,8 +399,8 @@ def _resolve_panel_generator(
 
 
 def _failed_panel_plan(
-    card: Dict[str, Any], index: int, default_semantic_config_id: Optional[str], error: str
-) -> Dict[str, Any]:
+    card: dict[str, Any], index: int, default_semantic_config_id: str | None, error: str
+) -> dict[str, Any]:
     return {
         "index": index,
         "card": card,
@@ -412,19 +412,19 @@ def _failed_panel_plan(
 
 
 def build_dashboard_panel_plans(
-    cards: List[Any],
-    sql_generator: Optional[SemanticAIQueryAdapter] = None,
+    cards: list[Any],
+    sql_generator: SemanticAIQueryAdapter | None = None,
     *,
-    semantic_config_generators: Optional[Dict[str, SemanticAIQueryAdapter]] = None,
-    default_semantic_config_id: Optional[str] = None,
-    max_rows: Optional[int] = None,
-) -> tuple[List[Dict[str, Any]], List[str]]:
+    semantic_config_generators: dict[str, SemanticAIQueryAdapter] | None = None,
+    default_semantic_config_id: str | None = None,
+    max_rows: int | None = None,
+) -> tuple[list[dict[str, Any]], list[str]]:
     """预生成看板面板 SQL，避免无有效卡片时先创建空看板。
 
     max_rows 为行数上限热值（async 调用方从配置变量表解析后传入；未传走适配器兜底）。
     """
-    panel_plans: List[Dict[str, Any]] = []
-    warnings: List[str] = []
+    panel_plans: list[dict[str, Any]] = []
+    warnings: list[str] = []
     generators = semantic_config_generators or {}
     for index, card in enumerate(cards[:12]):
         if not isinstance(card, dict):
@@ -434,7 +434,7 @@ def build_dashboard_panel_plans(
             generator = _resolve_panel_generator(
                 generators, semantic_config_generators, sql_generator, semantic_config_id
             )
-            card_warnings: List[str] = []
+            card_warnings: list[str] = []
             sql = build_panel_sql_from_dashboard_card(card, generator, warnings=card_warnings, max_rows=max_rows)
             for warning in card_warnings:
                 warnings.append(f"卡片「{card.get('title') or index + 1}」{warning}")
@@ -458,7 +458,7 @@ def build_dashboard_panel_plans(
 
 
 async def execute_dashboard_panel_sql_preflight(
-    datasource_id: str, sql: str, user_id: str = "system", username: Optional[str] = None
+    datasource_id: str, sql: str, user_id: str = "system", username: str | None = None
 ) -> tuple[bool, str]:
     """写入看板前实际执行 SQL，避免不可执行面板进入看板。"""
     ds_manager = get_datasource_manager()
@@ -496,15 +496,15 @@ async def execute_dashboard_panel_sql_preflight(
 
 
 async def filter_executable_dashboard_panel_plans(
-    panel_plans: List[Dict[str, Any]],
+    panel_plans: list[dict[str, Any]],
     *,
     datasource_id: str,
     user_id: str = "system",
-    username: Optional[str] = None,
-) -> tuple[List[Dict[str, Any]], List[str]]:
+    username: str | None = None,
+) -> tuple[list[dict[str, Any]], list[str]]:
     """标记写入前无法执行的面板 SQL，保留原卡片用于看板占位展示。"""
-    marked_plans: List[Dict[str, Any]] = []
-    warnings: List[str] = []
+    marked_plans: list[dict[str, Any]] = []
+    warnings: list[str] = []
     for plan in panel_plans:
         card = plan.get("card") if isinstance(plan.get("card"), dict) else {}
         if plan.get("error"):
@@ -523,8 +523,8 @@ async def filter_executable_dashboard_panel_plans(
     return marked_plans, warnings
 
 
-def _collect_spec_semantic_config_ids(cards: List[Any], default_semantic_config_id: Optional[str]) -> List[str]:
-    semantic_config_ids: List[str] = []
+def _collect_spec_semantic_config_ids(cards: list[Any], default_semantic_config_id: str | None) -> list[str]:
+    semantic_config_ids: list[str] = []
     for card in cards[:12]:
         if not isinstance(card, dict):
             continue
@@ -536,10 +536,10 @@ def _collect_spec_semantic_config_ids(cards: List[Any], default_semantic_config_
 
 async def _build_spec_generators(
     datasource_id: str,
-    semantic_config_ids: List[str],
+    semantic_config_ids: list[str],
     user_id: str,
-) -> Dict[str, SemanticAIQueryAdapter]:
-    semantic_config_generators: Dict[str, SemanticAIQueryAdapter] = {}
+) -> dict[str, SemanticAIQueryAdapter]:
+    semantic_config_generators: dict[str, SemanticAIQueryAdapter] = {}
     # 行数上限热值：适配器不再落回导入期 DEFAULT_ROW_LIMIT（否则后台改表对本链路不生效，
     # 与 CHATDATA_ROW_LIMIT 的 EFFECT_IMMEDIATE 标注矛盾）
     row_limit = await get_runtime_setting("CHATDATA_ROW_LIMIT")
@@ -550,10 +550,10 @@ async def _build_spec_generators(
 
 
 def _summarize_dashboard_validation(
-    panel_plans: List[Dict[str, Any]],
-    warnings: List[str],
-    semantic_config_ids: List[str],
-) -> Dict[str, Any]:
+    panel_plans: list[dict[str, Any]],
+    warnings: list[str],
+    semantic_config_ids: list[str],
+) -> dict[str, Any]:
     return {
         "valid": any(not plan.get("error") for plan in panel_plans),
         "valid_count": len([plan for plan in panel_plans if not plan.get("error")]),
@@ -575,13 +575,13 @@ def _summarize_dashboard_validation(
 
 async def validate_dashboard_spec_payload(
     *,
-    dashboard_spec: Dict[str, Any],
+    dashboard_spec: dict[str, Any],
     datasource_id: str,
-    semantic_config_id: Optional[str] = None,
+    semantic_config_id: str | None = None,
     execute_sql: bool = False,
     user_id: str = "system",
-    username: Optional[str] = None,
-) -> Dict[str, Any]:
+    username: str | None = None,
+) -> dict[str, Any]:
     """校验看板规格并返回每张有效卡片的 SQL。"""
     datasource_id = str(datasource_id or "").strip()
     if not datasource_id:
@@ -645,7 +645,7 @@ def _clamp_int(value: int, min_value: int, max_value: int) -> int:
     return max(min_value, min(max_value, value))
 
 
-def normalize_dashboard_card_layout(card: Dict[str, Any], index: int, chart_type: str) -> Dict[str, int]:
+def normalize_dashboard_card_layout(card: dict[str, Any], index: int, chart_type: str) -> dict[str, int]:
     """规整 AI 看板规格中的卡片布局，未指定时保持原有两列默认布局。"""
     layout = card.get("layout") if isinstance(card.get("layout"), dict) else {}
     default_h = 3 if chart_type == "kpi" else 4
@@ -665,16 +665,16 @@ def normalize_dashboard_card_layout(card: Dict[str, Any], index: int, chart_type
     }
 
 
-def _normalize_dashboard_style_color(value: Any) -> Optional[str]:
+def _normalize_dashboard_style_color(value: Any) -> str | None:
     """校验模型输出的看板样式颜色。"""
     color = str(value or "").strip()
     return color if color.lower() in DASHBOARD_ALLOWED_STYLE_COLORS else None
 
 
-def normalize_dashboard_card_chart_config(card: Dict[str, Any]) -> Dict[str, Any]:
+def normalize_dashboard_card_chart_config(card: dict[str, Any]) -> dict[str, Any]:
     """提取模型可选择的前端图表样式配置。"""
     chart_config = card.get("chart_config") if isinstance(card.get("chart_config"), dict) else {}
-    result: Dict[str, Any] = {
+    result: dict[str, Any] = {
         "purpose": card.get("purpose") or "",
         "diagnosis": card.get("diagnosis") or "",
     }
@@ -705,7 +705,7 @@ def _shorten_dashboard_panel_error(error: Any, max_length: int = 180) -> str:
     return text[:max_length].rstrip() + ("..." if len(text) > max_length else "")
 
 
-def _build_dashboard_panel_chart_config(card: Dict[str, Any], error: str = "") -> Dict[str, Any]:
+def _build_dashboard_panel_chart_config(card: dict[str, Any], error: str = "") -> dict[str, Any]:
     """构造面板图表配置，并记录无效卡片的短错误。"""
     config = normalize_dashboard_card_chart_config(card)
     short_error = _shorten_dashboard_panel_error(error)
@@ -717,18 +717,18 @@ def _build_dashboard_panel_chart_config(card: Dict[str, Any], error: str = "") -
 
 async def _add_panel_from_card(
     service: Any,
-    dashboard: Dict[str, Any],
-    card: Dict[str, Any],
-    plan: Optional[Dict[str, Any]],
+    dashboard: dict[str, Any],
+    card: dict[str, Any],
+    plan: dict[str, Any] | None,
     *,
     chart_type: str,
-    layout: Dict[str, Any],
+    layout: dict[str, Any],
     panel_error: str,
-    conversation_id: Optional[str],
+    conversation_id: str | None,
     datasource_id: str,
     user_id: str,
-    username: Optional[str],
-) -> Optional[Dict[str, Any]]:
+    username: str | None,
+) -> dict[str, Any] | None:
     return await service.add_panel(
         dashboard_id=dashboard["id"],
         payload=PanelWritePayload(
@@ -750,18 +750,18 @@ async def _add_panel_from_card(
 
 async def _create_dashboard_panels(
     service: Any,
-    dashboard: Dict[str, Any],
-    spec: Dict[str, Any],
-    validation: Dict[str, Any],
+    dashboard: dict[str, Any],
+    spec: dict[str, Any],
+    validation: dict[str, Any],
     *,
-    conversation_id: Optional[str],
+    conversation_id: str | None,
     datasource_id: str,
     user_id: str,
-    username: Optional[str],
-) -> tuple[List[Dict[str, Any]], List[str]]:
+    username: str | None,
+) -> tuple[list[dict[str, Any]], list[str]]:
     """按校验结果逐卡片创建面板；单卡失败记入 warnings 不中断。"""
     warnings = list(validation["warnings"])
-    panels: List[Dict[str, Any]] = []
+    panels: list[dict[str, Any]] = []
     valid_sql_by_index = {int(item["index"]): item for item in validation["panels"]}
     cards = spec.get("cards") if isinstance(spec.get("cards"), list) else []
     for index, card in enumerate(cards[:12]):
@@ -794,9 +794,9 @@ async def _create_dashboard_panels(
 
 async def _verify_dashboard_persisted(
     service: Any,
-    dashboard: Dict[str, Any],
-    warnings: List[str],
-) -> Optional[Dict[str, Any]]:
+    dashboard: dict[str, Any],
+    warnings: list[str],
+) -> dict[str, Any] | None:
     """回读看板确认持久化；失败时删除并返回 None。"""
     persisted_dashboard = await service.get_dashboard(dashboard["id"])
     persisted_panels = (persisted_dashboard or {}).get("panels") or []
@@ -810,13 +810,13 @@ async def _verify_dashboard_persisted(
 
 async def create_dashboard_from_spec_payload(
     *,
-    dashboard_spec: Dict[str, Any],
+    dashboard_spec: dict[str, Any],
     datasource_id: str,
-    semantic_config_id: Optional[str] = None,
-    conversation_id: Optional[str] = None,
+    semantic_config_id: str | None = None,
+    conversation_id: str | None = None,
     user_id: str = "system",
-    username: Optional[str] = None,
-) -> Dict[str, Any]:
+    username: str | None = None,
+) -> dict[str, Any]:
     """根据 AI 看板规格创建大屏和面板。"""
     spec = dict(dashboard_spec or {})
     effective_semantic_config_id = str(semantic_config_id or spec.get("semantic_config_id") or "").strip() or None

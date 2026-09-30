@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
 
 from fastapi import HTTPException, Request, status
 
@@ -21,7 +21,7 @@ def _get_current_user(request: Request):
     return user
 
 
-def _current_user_names(user: Any) -> Dict[str, str]:
+def _current_user_names(user: Any) -> dict[str, str]:
     """构造当前用户 ID 到用户名的映射。"""
     user_id = str(getattr(user, "user_id", "") or "").strip()
     username = str(getattr(user, "username", "") or "").strip()

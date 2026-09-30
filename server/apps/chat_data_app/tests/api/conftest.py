@@ -52,7 +52,7 @@ def auth_headers():
     return {
         "X-Service-Token": SERVICE_AUTH_TOKEN_PLAIN,
         "X-User-Id": "user_a",
-        "X-Username": "测试用户".encode("utf-8"),
+        "X-Username": "测试用户".encode(),
     }
 
 

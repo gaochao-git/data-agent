@@ -5,8 +5,9 @@ from __future__ import annotations
 import hashlib
 import json
 import time
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
-from typing import Any, Awaitable, Callable, Dict, Optional
+from typing import Any
 
 from utils.database import get_session
 from utils.logger import get_logger
@@ -22,12 +23,12 @@ HTTP_REMOTE_REF_CACHE_TYPE = "http_remote_ref"
 sql_result_cache_dao = SqlResultCacheDao(session_context=lambda: get_session())
 
 
-def is_http_execution_target(execution_target: Dict[str, Any]) -> bool:
+def is_http_execution_target(execution_target: dict[str, Any]) -> bool:
     """Return whether the execution target uses the HTTP query executor."""
     return str((execution_target or {}).get("query_executor_type") or "").strip().lower() == "http"
 
 
-def is_http_remote_ref_cache(payload: Optional[Dict[str, Any]]) -> bool:
+def is_http_remote_ref_cache(payload: dict[str, Any] | None) -> bool:
     """Return whether a cache payload stores an HTTP remote task reference."""
     return (
         isinstance(payload, dict)
@@ -42,10 +43,10 @@ def normalize_sql_cache_text(sql: str) -> str:
 
 
 def build_sql_result_cache_identity(
-    execution_target: Dict[str, Any],
+    execution_target: dict[str, Any],
     effective_sql: str,
-    datasource_id: Optional[str] = None,
-) -> Dict[str, Any]:
+    datasource_id: str | None = None,
+) -> dict[str, Any]:
     """Build identity fields for SQL result cache lookup."""
     normalized_datasource_id = str(
         datasource_id or (execution_target or {}).get("datasource_id") or (execution_target or {}).get("id") or ""
@@ -81,7 +82,7 @@ async def is_sql_result_cache_enabled(skip_query_cache: bool) -> bool:
     return bool(cache_enabled) and not skip_query_cache
 
 
-async def get_sql_result_cache(cache_identity: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+async def get_sql_result_cache(cache_identity: dict[str, Any]) -> dict[str, Any] | None:
     """Read a non-expired SQL result cache payload."""
     started_at = time.perf_counter()
     cache_key = str(cache_identity.get("cache_key") or "").strip()
@@ -108,10 +109,10 @@ async def get_sql_result_cache(cache_identity: Dict[str, Any]) -> Optional[Dict[
 
 
 async def save_sql_result_cache(
-    cache_identity: Dict[str, Any],
-    result: Dict[str, Any],
-    operator_id: Optional[str] = None,
-    operator_name: Optional[str] = None,
+    cache_identity: dict[str, Any],
+    result: dict[str, Any],
+    operator_id: str | None = None,
+    operator_name: str | None = None,
 ) -> None:
     """Save a successful SQL result cache payload."""
     if not query_result_succeeded(result):
@@ -139,10 +140,10 @@ async def save_sql_result_cache(
 
 
 async def save_http_remote_ref_sql_result_cache(
-    cache_identity: Dict[str, Any],
-    result: Dict[str, Any],
-    operator_id: Optional[str] = None,
-    operator_name: Optional[str] = None,
+    cache_identity: dict[str, Any],
+    result: dict[str, Any],
+    operator_id: str | None = None,
+    operator_name: str | None = None,
 ) -> None:
     """Save an HTTP remote task reference instead of local rows."""
     if not query_result_succeeded(result):
@@ -171,7 +172,7 @@ async def save_http_remote_ref_sql_result_cache(
     )
 
 
-def _http_cache_ref_identifiers(cached_result: Optional[Dict[str, Any]]) -> tuple[str, str]:
+def _http_cache_ref_identifiers(cached_result: dict[str, Any] | None) -> tuple[str, str]:
     """从缓存 payload 提取远端任务 ID 与来源类型（缺省 hive）。"""
     cached_result = cached_result or {}
     remote_task_id = str(cached_result.get("remote_task_id") or "").strip()
@@ -186,7 +187,7 @@ def _http_cache_ref_unavailable(
     columns: Any = None,
     data: Any = None,
     total_count: int = 0,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """缓存远端引用不可用的统一返回形态。"""
     return {
         "_cache_ref_unavailable": True,
@@ -199,12 +200,12 @@ def _http_cache_ref_unavailable(
 
 
 async def fetch_http_remote_ref_cache_result(
-    cached_result: Dict[str, Any],
+    cached_result: dict[str, Any],
     *,
-    fetch_remote_result: Callable[..., Awaitable[Dict[str, Any]]],
-    user_id: Optional[str] = None,
-    username: Optional[str] = None,
-) -> Dict[str, Any]:
+    fetch_remote_result: Callable[..., Awaitable[dict[str, Any]]],
+    user_id: str | None = None,
+    username: str | None = None,
+) -> dict[str, Any]:
     """Read a cached HTTP remote task result and preserve cache hit metadata."""
     remote_task_id, source_type = _http_cache_ref_identifiers(cached_result)
     if not remote_task_id:
@@ -243,7 +244,7 @@ async def fetch_http_remote_ref_cache_result(
     }
 
 
-def _cache_identity_fields(cache_identity: Dict[str, Any]) -> Dict[str, str]:
+def _cache_identity_fields(cache_identity: dict[str, Any]) -> dict[str, str]:
     """提取缓存身份五元组，供更新与新建分支共用。"""
     return {
         "datasource_id": str(cache_identity.get("datasource_id") or ""),
@@ -255,11 +256,11 @@ def _cache_identity_fields(cache_identity: Dict[str, Any]) -> Dict[str, str]:
 
 
 async def _upsert_sql_result_cache_payload(
-    cache_identity: Dict[str, Any],
-    payload: Dict[str, Any],
+    cache_identity: dict[str, Any],
+    payload: dict[str, Any],
     result_row_count: int,
-    operator_id: Optional[str] = None,
-    operator_name: Optional[str] = None,
+    operator_id: str | None = None,
+    operator_name: str | None = None,
 ) -> None:
     """Upsert a SQL query cache payload."""
     cache_key = str(cache_identity.get("cache_key") or "").strip()

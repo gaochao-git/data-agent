@@ -1226,7 +1226,7 @@ def test_sandbox_artifact_payload_branches(tmp_path, monkeypatch):
         == {}
     )
     sandbox.remote_kinds["/mnt/user-data/outputs/report.md"] = "file"
-    sandbox.remote_files["/mnt/user-data/outputs/report.md"] = "# 结论".encode("utf-8")
+    sandbox.remote_files["/mnt/user-data/outputs/report.md"] = "# 结论".encode()
     payload = asyncio.run(
         we_ops.sandbox_artifact_payload(
             session_ref=ref,

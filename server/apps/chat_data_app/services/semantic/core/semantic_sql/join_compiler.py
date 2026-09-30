@@ -1,9 +1,9 @@
 """语义 SQL 的 FROM/JOIN 片段编译。"""
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
-def _build_from_ref(table: str, alias: Optional[str] = None) -> str:
+def _build_from_ref(table: str, alias: str | None = None) -> str:
     table_name = str(table or "").strip()
     alias_name = str(alias or "").strip()
     if not table_name:
@@ -14,10 +14,10 @@ def _build_from_ref(table: str, alias: Optional[str] = None) -> str:
 
 
 def _condition_left_table(
-    condition: Dict[str, Any],
-    join: Dict[str, Any],
+    condition: dict[str, Any],
+    join: dict[str, Any],
     effective_main_alias: str,
-) -> Optional[str]:
+) -> str | None:
     return (
         condition.get("leftAlias")
         or condition.get("leftTable")
@@ -28,8 +28,8 @@ def _condition_left_table(
 
 
 def _build_condition_pairs(
-    join: Dict[str, Any],
-    join_conditions: List[Dict[str, Any]],
+    join: dict[str, Any],
+    join_conditions: list[dict[str, Any]],
     right_alias: str,
     effective_main_alias: str,
 ) -> str:
@@ -45,7 +45,7 @@ def _build_condition_pairs(
 
 
 def _build_single_condition_expr(
-    join: Dict[str, Any],
+    join: dict[str, Any],
     right_alias: str,
     effective_main_alias: str,
 ) -> str:
@@ -61,7 +61,7 @@ def _build_single_condition_expr(
 
 
 def _build_join_on_expr(
-    join: Dict[str, Any],
+    join: dict[str, Any],
     right_alias: str,
     effective_main_alias: str,
 ) -> str:
@@ -73,12 +73,12 @@ def _build_join_on_expr(
 
 def build_join_clauses(
     main_table: str,
-    joins: List[Dict[str, Any]],
-    main_alias: Optional[str] = None,
-) -> List[str]:
+    joins: list[dict[str, Any]],
+    main_alias: str | None = None,
+) -> list[str]:
     """生成 FROM 和 JOIN 片段，保持 Builder DSL 的原有字段兼容。"""
     effective_main_alias = main_alias or main_table
-    parts: List[str] = [f"FROM {_build_from_ref(main_table, effective_main_alias)}"]
+    parts: list[str] = [f"FROM {_build_from_ref(main_table, effective_main_alias)}"]
     for join in joins:
         right_table = join.get("rightTable")
         if not right_table:

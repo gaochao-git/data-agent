@@ -1,7 +1,8 @@
 """Shared runtime helpers for ChatData agents."""
 
+from collections.abc import Callable
 from datetime import datetime
-from typing import Any, Callable
+from typing import Any
 
 from langchain.agents.middleware import TodoListMiddleware, ToolErrorMiddleware, wrap_model_call
 from langchain_core.language_models import BaseChatModel

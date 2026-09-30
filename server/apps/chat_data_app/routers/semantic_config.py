@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 
@@ -67,14 +67,14 @@ router = APIRouter(tags=["ChatData 语义模型"], responses=JSON_API_RESPONSES)
 SEMANTIC_BATCH_TOGGLE_MAX_IDS = 200
 
 
-def _can_manage_semantic_config(config: Dict[str, Any], user_id: str) -> bool:
+def _can_manage_semantic_config(config: dict[str, Any], user_id: str) -> bool:
     """普通用户只能管理自己创建的个人指标集。"""
     return is_private_semantic_config_owner(config, user_id)
 
 
 def _with_semantic_config_permissions(
-    config: Dict[str, Any], user_id: str, username: str = "", admin_manage: bool = False
-) -> Dict[str, Any]:
+    config: dict[str, Any], user_id: str, username: str = "", admin_manage: bool = False
+) -> dict[str, Any]:
     """补充指标集权限字段。"""
     item = dict(config or {})
     item["scope_type"] = item.get("scope_type") or "public"
@@ -84,7 +84,7 @@ def _with_semantic_config_permissions(
 
 async def _get_semantic_configs_for_user(
     semantic_service: Any, datasource_id: str, user_id: str, username: str = ""
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """读取查询链路可见指标集：公共指标集 + 当前用户个人指标集。"""
     configs = await semantic_service.get_configs_async(datasource_id, user_id)
     return [_with_semantic_config_permissions(config, user_id, username) for config in (configs or [])]
@@ -92,7 +92,7 @@ async def _get_semantic_configs_for_user(
 
 async def _get_my_semantic_configs(
     semantic_service: Any, datasource_id: str, user_id: str, username: str = ""
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """读取普通维护页可维护的个人指标集。"""
     configs = await semantic_service.get_configs_async(datasource_id, user_id)
     return [
@@ -104,7 +104,7 @@ async def _get_my_semantic_configs(
 
 async def _get_admin_semantic_configs(
     semantic_service: Any, datasource_id: str, user_id: str, username: str = ""
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """读取后台维护页可维护的公共指标集。"""
     configs = await semantic_service.get_configs_async(datasource_id)
     return [
@@ -120,12 +120,12 @@ def _history_table_parser(sql: str, source_type: str):
 
 def _history_belongs_to_config(
     query_type: str,
-    task_payload: Dict[str, Any],
+    task_payload: dict[str, Any],
     sql: str,
     config_id: str,
-    config: Dict[str, Any],
+    config: dict[str, Any],
     source_type: str,
-) -> tuple[bool, str, List[str], str]:
+) -> tuple[bool, str, list[str], str]:
     """判断历史记录是否属于当前指标集。"""
     return _service_history_belongs_to_config(
         query_type,
@@ -139,10 +139,10 @@ def _history_belongs_to_config(
 
 
 async def _generate_history_learning_suggestions_by_llm(
-    datasource: Dict[str, Any],
-    config: Dict[str, Any],
-    samples: List[Dict[str, Any]],
-) -> Dict[str, List[Dict[str, Any]]]:
+    datasource: dict[str, Any],
+    config: dict[str, Any],
+    samples: list[dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
     """调用大模型基于历史生成指标集维护建议。"""
     return await _service_generate_history_learning_suggestions_by_llm(
         datasource,
@@ -414,7 +414,7 @@ async def preview_admin_ossie_semantic_import(
         )
 
 
-def _collect_metric_dimension_tables(config: Dict[str, Any]) -> set:
+def _collect_metric_dimension_tables(config: dict[str, Any]) -> set:
     """收集单个配置中指标/维度引用的物理表名。"""
     tables: set = set()
     for item in [*(config.get("metrics") or []), *(config.get("dimensions") or [])]:
@@ -423,7 +423,7 @@ def _collect_metric_dimension_tables(config: Dict[str, Any]) -> set:
     return tables
 
 
-def _collect_relationship_tables(config: Dict[str, Any]) -> set:
+def _collect_relationship_tables(config: dict[str, Any]) -> set:
     """收集单个配置中关系两侧引用的物理表名。"""
     tables: set = set()
     for relationship in config.get("relationships") or []:
@@ -435,7 +435,7 @@ def _collect_relationship_tables(config: Dict[str, Any]) -> set:
     return tables
 
 
-def _collect_modeled_tables(configs: List[Dict[str, Any]]) -> set:
+def _collect_modeled_tables(configs: list[dict[str, Any]]) -> set:
     """汇总所有配置引用过的物理表名：指标/维度的 table，以及关系两侧表名。"""
     modeled_tables: set = set()
     for config in configs:
@@ -574,7 +574,7 @@ async def import_admin_ossie_semantic_configs(
         )
 
 
-def _normalize_conflict_actions(payload: SemanticOssieImportRequest) -> Tuple[Dict[str, str], Optional[str]]:
+def _normalize_conflict_actions(payload: SemanticOssieImportRequest) -> tuple[dict[str, str], str | None]:
     """归一化 conflict_actions 为「模型名 -> 小写动作」。
 
     存在 replace/skip 之外的动作时返回错误文案，调用方据此直接回错误响应。
@@ -668,9 +668,9 @@ _SEMANTIC_UPDATE_PLAIN_FIELDS = ("name", "description", "business_notes", "enabl
 _SEMANTIC_UPDATE_LIST_FIELDS = ("metrics", "dimensions", "relationships")
 
 
-def _build_semantic_update_kwargs(payload: SemanticConfigUpdateRequest) -> Dict[str, Any]:
+def _build_semantic_update_kwargs(payload: SemanticConfigUpdateRequest) -> dict[str, Any]:
     """将更新请求转换为语义配置更新参数；None 字段不参与更新。"""
-    update_kwargs: Dict[str, Any] = {}
+    update_kwargs: dict[str, Any] = {}
     for field in _SEMANTIC_UPDATE_PLAIN_FIELDS:
         value = getattr(payload, field)
         if value is not None:
@@ -938,7 +938,7 @@ async def delete_admin_semantic_config(datasource_id: str, config_id: str, reque
     return await _delete_semantic_config(datasource_id, config_id, request, admin_manage=True)
 
 
-def _build_batch_toggle_message(result: Dict[str, Any], enabled: bool) -> str:
+def _build_batch_toggle_message(result: dict[str, Any], enabled: bool) -> str:
     """拼装批量切换结果提示：主结果 + 跳过原因统计。"""
     action = "启用" if enabled else "禁用"
     parts = [f"已{action} {len(result.get('updated_ids') or [])} 个指标集"]

@@ -1,14 +1,14 @@
 """历史案例学习提示词。"""
 
 import json
-from typing import Any, Dict, List
+from typing import Any
 
 
 def build_history_learning_prompt(
     *,
-    semantic_config_payload: Dict[str, Any],
-    table_context: List[Dict[str, Any]],
-    compact_samples: List[Dict[str, Any]],
+    semantic_config_payload: dict[str, Any],
+    table_context: list[dict[str, Any]],
+    compact_samples: list[dict[str, Any]],
 ) -> str:
     """构造历史学习维护建议生成提示词。"""
     return f"""

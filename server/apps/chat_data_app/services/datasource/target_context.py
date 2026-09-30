@@ -1,11 +1,11 @@
 """执行对象上下文格式化。"""
 
-from typing import Any, Dict, List
+from typing import Any
 
 
-def normalize_member_datasource_ids(member_datasource_ids: List[str] | None) -> List[str]:
+def normalize_member_datasource_ids(member_datasource_ids: list[str] | None) -> list[str]:
     """规整执行对象数据源 ID。"""
-    normalized_ids: List[str] = []
+    normalized_ids: list[str] = []
     for item in member_datasource_ids or []:
         member_id = str(item).strip()
         if member_id and member_id not in normalized_ids:
@@ -13,12 +13,12 @@ def normalize_member_datasource_ids(member_datasource_ids: List[str] | None) -> 
     return normalized_ids
 
 
-def get_execution_target_member_id(target: Dict[str, Any]) -> str:
+def get_execution_target_member_id(target: dict[str, Any]) -> str:
     """Return the stable member datasource identifier for an execution target."""
     return str(target.get("member_datasource_id") or target.get("id") or "").strip()
 
 
-def get_execution_target_name(target: Dict[str, Any], index: int) -> str:
+def get_execution_target_name(target: dict[str, Any], index: int) -> str:
     """Return the user-facing execution target name."""
     source_config = target.get("source_config") if isinstance(target.get("source_config"), dict) else {}
     return str(
@@ -31,7 +31,7 @@ def get_execution_target_name(target: Dict[str, Any], index: int) -> str:
     ).strip()
 
 
-def get_execution_target_org_code(target: Dict[str, Any]) -> str:
+def get_execution_target_org_code(target: dict[str, Any]) -> str:
     """Return the organization code for matching and prompt display."""
     source_config = target.get("source_config") if isinstance(target.get("source_config"), dict) else {}
     return str(

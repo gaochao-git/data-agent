@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 OFFICECLI_BANNED_SUBCOMMANDS = frozenset({"plugins", "watch", "unwatch", "open", "close", "mcp", "install", "skills"})
 OFFICECLI_READONLY_SUBCOMMANDS = frozenset({"view", "get", "query", "validate", "dump", "raw"})

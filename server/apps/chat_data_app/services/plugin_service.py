@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import shutil
-from typing import Any, Dict
+from typing import Any
 
 from utils.logger import get_logger
 from utils.models import ChatDataPlugin
@@ -47,7 +47,7 @@ def _format_db_time(value: Any) -> str:
     return value.strftime("%Y-%m-%d %H:%M:%S") if value else ""
 
 
-async def list_plugins(*, limit: int = 50, offset: int = 0) -> Dict[str, Any]:
+async def list_plugins(*, limit: int = 50, offset: int = 0) -> dict[str, Any]:
     """已安装插件分页列表（含禁用项），启停与创建人/创建时间来自 DB。
 
     磁盘扫描提供内容（manifest），DB 提供状态与审计字段；半装态孤儿插件
@@ -56,7 +56,7 @@ async def list_plugins(*, limit: int = 50, offset: int = 0) -> Dict[str, Any]:
     """
     await refresh_plugin_state()
     items = [item.to_dict() for item in load_plugins_metadata().values()]
-    audit_by_name: Dict[str, ChatDataPlugin] = {}
+    audit_by_name: dict[str, ChatDataPlugin] = {}
     try:
         audit_by_name = {row.plugin_name: row for row in await PluginDao().list_active()}
     except Exception as err:

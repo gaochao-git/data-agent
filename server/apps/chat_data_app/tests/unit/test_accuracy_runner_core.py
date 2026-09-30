@@ -281,7 +281,7 @@ async def test_consume_internal_completion_reads_handler_stream(monkeypatch):
 
         async def body():
             payload = {"tool_name": "data_analyzing_tool", "status": "done", "content": "select 1"}
-            yield f"event: tool\ndata: {json.dumps(payload)}\n\n".encode("utf-8")
+            yield f"event: tool\ndata: {json.dumps(payload)}\n\n".encode()
 
         return StreamingResponse(body(), media_type="text/event-stream")
 

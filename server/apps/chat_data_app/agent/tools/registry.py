@@ -19,8 +19,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable, Sequence
+from typing import TYPE_CHECKING, Any
 
 from .ask_user_question import ask_user_question_tool
 from .bash_run import create_bash_run_tool
@@ -47,11 +48,11 @@ class ToolBuildContext:
     这里仅作类型标注引用，避免模块级循环导入。
     """
 
-    runtime_options: "AgentRuntimeOptions"
-    workspace_runtime: "ConversationWorkspaceRuntime"
-    identity: "IdentityContext"
-    datasource: "DatasourceContext"
-    model_invocation: "ModelInvocationConfig"
+    runtime_options: AgentRuntimeOptions
+    workspace_runtime: ConversationWorkspaceRuntime
+    identity: IdentityContext
+    datasource: DatasourceContext
+    model_invocation: ModelInvocationConfig
 
 
 @dataclass(frozen=True)

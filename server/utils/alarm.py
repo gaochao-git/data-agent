@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from typing import Any, Iterable
+from collections.abc import Iterable, Mapping, Sequence
+from typing import Any
 
 from langchain_core.exceptions import ModelConnectionError, ModelTimeoutError
 

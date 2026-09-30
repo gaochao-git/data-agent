@@ -25,10 +25,11 @@ import asyncio
 import fcntl
 import os
 import tempfile
+from collections.abc import Iterable
 from contextlib import suppress
 from functools import partial
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from langchain_core.messages import HumanMessage
 

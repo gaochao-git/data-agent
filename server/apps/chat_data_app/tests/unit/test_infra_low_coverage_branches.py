@@ -1259,7 +1259,7 @@ async def test_api_access_log_middleware_sets_and_clears_context(monkeypatch):
         "method": "GET",
         "path": "/demo",
         "query_string": b"a=1",
-        "headers": [(b"x-user-id", b"user-1"), (b"x-username", "测试用户".encode("utf-8")), (b"user-agent", b"pytest")],
+        "headers": [(b"x-user-id", b"user-1"), (b"x-username", "测试用户".encode()), (b"user-agent", b"pytest")],
         "client": ("127.0.0.1", 12345),
     }
     sent = []

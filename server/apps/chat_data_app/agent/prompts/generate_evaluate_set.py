@@ -1,7 +1,7 @@
 """智能问数评测集生成提示词。"""
 
 import json
-from typing import Any, Dict, List
+from typing import Any
 
 
 def build_evaluation_draft_case_prompt(
@@ -10,8 +10,8 @@ def build_evaluation_draft_case_prompt(
     is_sql_input: bool,
     nl_example: str,
     business_domain: str,
-    existing_questions: List[str],
-    semantic_config_payload: Dict[str, Any],
+    existing_questions: list[str],
+    semantic_config_payload: dict[str, Any],
 ) -> str:
     """构造单条评测用例草稿生成提示词。"""
     return f"""

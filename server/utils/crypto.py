@@ -9,7 +9,6 @@
 
 import base64
 import os
-from typing import Optional
 
 from gmssl.sm4 import SM4_DECRYPT, SM4_ENCRYPT, CryptSM4
 
@@ -18,7 +17,7 @@ from utils.logger import get_logger
 logger = get_logger(__name__)
 
 
-def _get_sm4_key() -> Optional[bytes]:
+def _get_sm4_key() -> bytes | None:
     """
     获取 SM4 密钥（16字节）
 

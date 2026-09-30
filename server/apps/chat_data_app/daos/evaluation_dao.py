@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any
 
 from sqlalchemy import and_, func, select
 
@@ -15,7 +16,7 @@ class EvaluationDao:
 
     async def load_scene_case_set(
         self, db: Any, case_set_id: str
-    ) -> Tuple[Optional[ChatDataEvalCaseSet], List[ChatDataEvalCase]]:
+    ) -> tuple[ChatDataEvalCaseSet | None, list[ChatDataEvalCase]]:
         set_result = await db.execute(select(ChatDataEvalCaseSet).filter_by(case_set_id=case_set_id, delete_flag=0))
         case_set = set_result.scalar_one_or_none()
         if not case_set:
@@ -36,7 +37,7 @@ class EvaluationDao:
         semantic_config_id: str,
         case_set_name: str,
         business_domain: str,
-        cases: Sequence[Dict[str, Any]],
+        cases: Sequence[dict[str, Any]],
         operator_id: str,
         operator_name: str,
         now: datetime,
@@ -81,7 +82,7 @@ class EvaluationDao:
         semantic_config_id: str,
         case_set_name: str,
         business_domain: str,
-        cases: Sequence[Dict[str, Any]],
+        cases: Sequence[dict[str, Any]],
         operator_id: str,
         operator_name: str,
         now: datetime,
@@ -105,7 +106,7 @@ class EvaluationDao:
         semantic_config_id: str,
         case_set_name: str,
         business_domain: str,
-        cases: Sequence[Dict[str, Any]],
+        cases: Sequence[dict[str, Any]],
         operator_id: str,
         operator_name: str,
         now: datetime,
@@ -134,8 +135,8 @@ class EvaluationDao:
         db: Any,
         case_set_id: str,
         business_domain: str,
-        cases: Sequence[Dict[str, Any]],
-        existing_cases: Dict[str, ChatDataEvalCase],
+        cases: Sequence[dict[str, Any]],
+        existing_cases: dict[str, ChatDataEvalCase],
         operator_id: str,
         operator_name: str,
         now: datetime,
@@ -160,7 +161,7 @@ class EvaluationDao:
         row.update_by_name = operator_name
 
     @staticmethod
-    def _case_values(case: Dict[str, Any], business_domain: str, index: int) -> Dict[str, Any]:
+    def _case_values(case: dict[str, Any], business_domain: str, index: int) -> dict[str, Any]:
         return {
             "case_id": str(case.get("id") or "").strip(),
             "nl_text": str(case.get("nl") or "").strip(),
@@ -179,7 +180,7 @@ class EvaluationDao:
     def _update_case_row(
         cls,
         row: ChatDataEvalCase,
-        case: Dict[str, Any],
+        case: dict[str, Any],
         business_domain: str,
         index: int,
         operator_id: str,
@@ -196,7 +197,7 @@ class EvaluationDao:
     def _new_case_row(
         cls,
         case_set_id: str,
-        case: Dict[str, Any],
+        case: dict[str, Any],
         business_domain: str,
         index: int,
         operator_id: str,
@@ -218,11 +219,11 @@ class EvaluationDao:
     async def create_eval_run(self, db: Any, row: ChatDataEvalRun) -> None:
         db.add(row)
 
-    async def get_eval_run(self, db: Any, run_id: str) -> Optional[ChatDataEvalRun]:
+    async def get_eval_run(self, db: Any, run_id: str) -> ChatDataEvalRun | None:
         result = await db.execute(select(ChatDataEvalRun).filter_by(run_id=run_id, delete_flag=0))
         return result.scalar_one_or_none()
 
-    async def list_eval_run_cases(self, db: Any, run_id: str) -> List[ChatDataEvalRunCase]:
+    async def list_eval_run_cases(self, db: Any, run_id: str) -> list[ChatDataEvalRunCase]:
         result = await db.execute(
             select(ChatDataEvalRunCase).filter_by(run_id=run_id, delete_flag=0).order_by(ChatDataEvalRunCase.id.asc())
         )
@@ -235,7 +236,7 @@ class EvaluationDao:
         conditions: Sequence[Any],
         page: int,
         page_size: int,
-    ) -> Tuple[List[ChatDataEvalRun], int]:
+    ) -> tuple[list[ChatDataEvalRun], int]:
         total_result = await db.execute(select(func.count()).select_from(ChatDataEvalRun).where(and_(*conditions)))
         total = int(total_result.scalar_one() or 0)
         result = await db.execute(
@@ -247,7 +248,7 @@ class EvaluationDao:
         )
         return list(result.scalars().all()), total
 
-    async def upsert_eval_run_case(self, db: Any, row_data: Dict[str, Any]) -> None:
+    async def upsert_eval_run_case(self, db: Any, row_data: dict[str, Any]) -> None:
         query_result = await db.execute(
             select(ChatDataEvalRunCase).filter_by(run_id=row_data["run_id"], case_id=row_data["case_id"])
         )
@@ -259,7 +260,7 @@ class EvaluationDao:
         else:
             db.add(ChatDataEvalRunCase(**row_data))
 
-    async def update_eval_run(self, db: Any, run_id: str, values: Dict[str, Any]) -> None:
+    async def update_eval_run(self, db: Any, run_id: str, values: dict[str, Any]) -> None:
         query_result = await db.execute(select(ChatDataEvalRun).filter_by(run_id=run_id, delete_flag=0))
         row = query_result.scalar_one_or_none()
         if not row:

@@ -15,13 +15,12 @@ import os
 from contextvars import ContextVar
 from datetime import datetime
 from logging.handlers import TimedRotatingFileHandler
-from typing import Optional
 
 from utils.common_util import get_active_idc, get_local_ip
 
 DEFAULT_BACKUP_COUNT = 30  # 保留30天
-request_id_ctx: ContextVar[Optional[str]] = ContextVar("request_id", default=None)
-user_ctx: ContextVar[Optional[str]] = ContextVar("user", default=None)
+request_id_ctx: ContextVar[str | None] = ContextVar("request_id", default=None)
+user_ctx: ContextVar[str | None] = ContextVar("user", default=None)
 _STANDARD_LOG_RECORD_FIELDS = {
     "name",
     "msg",
@@ -554,7 +553,7 @@ class LoggerManager:
             logger.setLevel(log_level)
 
 
-def get_logger(name: str, log_level: Optional[str] = None, console_output: Optional[bool] = None) -> logging.Logger:
+def get_logger(name: str, log_level: str | None = None, console_output: bool | None = None) -> logging.Logger:
     """
     获取 logger 的便捷函数
 
@@ -582,7 +581,7 @@ def get_logger(name: str, log_level: Optional[str] = None, console_output: Optio
     )
 
 
-def get_access_logger(name: str = "access", log_level: Optional[str] = None) -> logging.Logger:
+def get_access_logger(name: str = "access", log_level: str | None = None) -> logging.Logger:
     """获取访问日志 logger。"""
     return LoggerManager.get_access_logger(
         name=name,
@@ -593,7 +592,7 @@ def get_access_logger(name: str = "access", log_level: Optional[str] = None) -> 
     )
 
 
-def get_alarm_logger(name: str = "alarm", log_level: Optional[str] = None) -> logging.Logger:
+def get_alarm_logger(name: str = "alarm", log_level: str | None = None) -> logging.Logger:
     """获取告警日志 logger。"""
     return LoggerManager.get_alarm_logger(
         name=name,

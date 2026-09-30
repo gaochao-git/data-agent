@@ -11,8 +11,9 @@ import inspect
 import json
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 from datetime import datetime
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Set
+from typing import Any
 
 from utils.alarm import emit_dangerous_sql_alarm
 from utils.database import get_session
@@ -44,7 +45,7 @@ query_task_dao = QueryTaskDao(session_context=lambda: get_session())
 query_execution_dao = QueryExecutionDao(session_context=lambda: get_session())
 
 
-def _datasource_source_type(datasource: Optional[Dict[str, Any]]) -> Optional[str]:
+def _datasource_source_type(datasource: dict[str, Any] | None) -> str | None:
     """读取数据源组方言，用于任务创建阶段的快速 SQL 预校验。"""
     source_type = str((datasource or {}).get("source_type") or "").strip().lower()
     return source_type or None
@@ -52,7 +53,7 @@ def _datasource_source_type(datasource: Optional[Dict[str, Any]]) -> Optional[st
 
 def _validate_sql_before_task_submit(
     request: ExecuteSqlRequest | QueryTaskCreateRequest,
-    datasource: Optional[Dict[str, Any]],
+    datasource: dict[str, Any] | None,
 ) -> None:
     """创建任务前仅当场拒绝多语句，其余违规延迟到执行期统一拦截与展示。
 
@@ -83,8 +84,8 @@ def _validate_sql_before_task_submit(
 
 
 async def fetch_http_remote_ref_cache_result(
-    cached_result: Dict[str, Any], user_id: Optional[str] = None, username: Optional[str] = None
-) -> Dict[str, Any]:
+    cached_result: dict[str, Any], user_id: str | None = None, username: str | None = None
+) -> dict[str, Any]:
     """按 HTTP 远端任务引用读取结果，并保留本次缓存命中元信息。"""
     return await query_cache.fetch_http_remote_ref_cache_result(
         cached_result,
@@ -94,7 +95,7 @@ async def fetch_http_remote_ref_cache_result(
     )
 
 
-def get_execution_id_by_member(execution_map: Dict[str, str], execution_target: Dict[str, Any]) -> Optional[str]:
+def get_execution_id_by_member(execution_map: dict[str, str], execution_target: dict[str, Any]) -> str | None:
     """根据成员数据源获取执行记录 ID。"""
     member_datasource_id = str((execution_target or {}).get("member_datasource_id") or "").strip()
     if member_datasource_id and member_datasource_id in execution_map:
@@ -102,14 +103,14 @@ def get_execution_id_by_member(execution_map: Dict[str, str], execution_target: 
     return execution_map.get("")
 
 
-def has_running_member_result(results: List[Dict[str, Any]]) -> bool:
+def has_running_member_result(results: list[dict[str, Any]]) -> bool:
     """判断成员结果中是否仍有未完成任务。"""
     return any(
         str((item or {}).get("status") or "").strip().lower() in {"pending", "running"} for item in results or []
     )
 
 
-def normalize_execution_time_ms(value: Any) -> Optional[int]:
+def normalize_execution_time_ms(value: Any) -> int | None:
     """将执行耗时规整为非负毫秒值。"""
     if value is None or isinstance(value, bool):
         return None
@@ -119,7 +120,7 @@ def normalize_execution_time_ms(value: Any) -> Optional[int]:
         return None
 
 
-def _parse_datetime_value(value: Any) -> Optional[datetime]:
+def _parse_datetime_value(value: Any) -> datetime | None:
     """解析模型或接口中的时间值。"""
     if isinstance(value, datetime):
         return value
@@ -134,7 +135,7 @@ def _parse_datetime_value(value: Any) -> Optional[datetime]:
         return None
 
 
-def resolve_execution_time_ms(value: Any = None, started_time: Any = None, finished_time: Any = None) -> Optional[int]:
+def resolve_execution_time_ms(value: Any = None, started_time: Any = None, finished_time: Any = None) -> int | None:
     """优先使用显式耗时；缺失时用开始和结束时间计算。"""
     explicit_value = normalize_execution_time_ms(value)
     if explicit_value is not None:
@@ -150,7 +151,7 @@ def resolve_execution_time_ms(value: Any = None, started_time: Any = None, finis
         return None
 
 
-def execution_time_ms_for_storage(value: Optional[int], execution_id: str) -> Optional[int]:
+def execution_time_ms_for_storage(value: int | None, execution_id: str) -> int | None:
     """将异常执行耗时限制在 24 小时，避免污染历史展示和落库失败。"""
     if value is None or value <= MAX_EXECUTION_TIME_MS:
         return value
@@ -163,7 +164,7 @@ def execution_time_ms_for_storage(value: Optional[int], execution_id: str) -> Op
     return MAX_EXECUTION_TIME_MS
 
 
-def attach_execution_time_to_payload(result_payload: Any, execution_time_ms: Optional[int]) -> Any:
+def attach_execution_time_to_payload(result_payload: Any, execution_time_ms: int | None) -> Any:
     """将最终耗时同步写入结果负载。"""
     if not isinstance(result_payload, dict) or execution_time_ms is None or "execution_time_ms" not in result_payload:
         return result_payload
@@ -173,8 +174,8 @@ def attach_execution_time_to_payload(result_payload: Any, execution_time_ms: Opt
 
 
 async def create_query_executions_for_task(
-    task_id: str, request: ExecuteSqlRequest, operator_name: Optional[str] = None
-) -> Dict[str, str]:
+    task_id: str, request: ExecuteSqlRequest, operator_name: str | None = None
+) -> dict[str, str]:
     """为任务预创建每个成员数据源的 SQL 执行记录。"""
     ds_manager = get_datasource_manager()
     execution_targets = await ds_manager.get_authorized_execution_datasources_async(
@@ -184,8 +185,8 @@ async def create_query_executions_for_task(
         username=operator_name,
     )
     operator_user_id = str(request.user_id or "").strip()
-    member_ids: List[str] = []
-    specs: List[Dict[str, str]] = []
+    member_ids: list[str] = []
+    specs: list[dict[str, str]] = []
     for target in execution_targets:
         member_datasource_id = str((target or {}).get("member_datasource_id") or "").strip()
         member_name = str((target or {}).get("member_name") or (target or {}).get("group_name") or "").strip()
@@ -212,15 +213,15 @@ async def create_query_executions_for_task(
 async def update_query_execution(
     execution_id: str,
     *,
-    sql_status: Optional[str] = None,
-    remote_task_id: Optional[str] = None,
-    db_connection_id: Optional[str] = None,
-    execution_time_ms: Optional[int] = None,
-    result_row_count: Optional[int] = None,
+    sql_status: str | None = None,
+    remote_task_id: str | None = None,
+    db_connection_id: str | None = None,
+    execution_time_ms: int | None = None,
+    result_row_count: int | None = None,
     result_payload: Any = None,
-    error_message: Optional[str] = None,
-    started_time: Optional[datetime] = None,
-    finished_time: Optional[datetime] = None,
+    error_message: str | None = None,
+    started_time: datetime | None = None,
+    finished_time: datetime | None = None,
 ) -> None:
     """更新 SQL 执行明细。"""
     if not execution_id:
@@ -259,10 +260,10 @@ def _resolve_execution_time_for_update(
     execution: ChatDataQueryExecution,
     execution_id: str,
     *,
-    execution_time_ms: Optional[int],
-    started_time: Optional[datetime],
-    finished_time: Optional[datetime],
-) -> Optional[int]:
+    execution_time_ms: int | None,
+    started_time: datetime | None,
+    finished_time: datetime | None,
+) -> int | None:
     """有结束时间或显式耗时入参时，归一化执行耗时（回退到行内已存时间）。"""
     if execution_time_ms is None and finished_time is None:
         return None
@@ -279,15 +280,15 @@ def _resolve_execution_time_for_update(
 def _apply_execution_field_updates(
     execution: ChatDataQueryExecution,
     *,
-    sql_status: Optional[str],
-    remote_task_id: Optional[str],
-    db_connection_id: Optional[str],
-    resolved_execution_time_ms: Optional[int],
-    result_row_count: Optional[int],
+    sql_status: str | None,
+    remote_task_id: str | None,
+    db_connection_id: str | None,
+    resolved_execution_time_ms: int | None,
+    result_row_count: int | None,
     result_payload: Any,
-    error_message: Optional[str],
-    started_time: Optional[datetime],
-    finished_time: Optional[datetime],
+    error_message: str | None,
+    started_time: datetime | None,
+    finished_time: datetime | None,
 ) -> None:
     """仅更新显式传入（非 None）的字段。"""
     if sql_status is not None:
@@ -313,7 +314,7 @@ def _apply_execution_field_updates(
         execution.finished_time = finished_time
 
 
-def _execution_result_payload(status: str, result: Dict[str, Any]) -> Dict[str, Any]:
+def _execution_result_payload(status: str, result: dict[str, Any]) -> dict[str, Any]:
     """构造执行明细的 result_payload 落库快照。"""
     return {
         "status": status,
@@ -329,7 +330,7 @@ def _execution_result_payload(status: str, result: Dict[str, Any]) -> Dict[str, 
 
 
 async def update_query_execution_from_result(
-    execution_id: str, result: Dict[str, Any], store_result_payload: bool = True
+    execution_id: str, result: dict[str, Any], store_result_payload: bool = True
 ) -> None:
     """按 SQL 执行结果更新执行明细。"""
     result = result or {}
@@ -355,7 +356,7 @@ async def get_query_execution_status(execution_id: str) -> str:
     return await query_execution_dao.get_execution_status(execution_id)
 
 
-def _normalize_remote_task_entry(remote_task: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _normalize_remote_task_entry(remote_task: dict[str, Any]) -> dict[str, Any] | None:
     """归一化远端任务映射，缺关键字段时返回 None。"""
     normalized = {
         "member_datasource_id": str((remote_task or {}).get("member_datasource_id") or "").strip(),
@@ -370,7 +371,7 @@ def _normalize_remote_task_entry(remote_task: Dict[str, Any]) -> Optional[Dict[s
     return normalized
 
 
-def _remote_task_entry_exists(remote_tasks: list, entry: Dict[str, Any]) -> bool:
+def _remote_task_entry_exists(remote_tasks: list, entry: dict[str, Any]) -> bool:
     return any(
         item.get("member_datasource_id") == entry["member_datasource_id"]
         and item.get("remote_task_id") == entry["remote_task_id"]
@@ -379,7 +380,7 @@ def _remote_task_entry_exists(remote_tasks: list, entry: Dict[str, Any]) -> bool
     )
 
 
-async def append_query_task_remote_task(task_id: str, remote_task: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+async def append_query_task_remote_task(task_id: str, remote_task: dict[str, Any]) -> dict[str, Any] | None:
     """向异步任务中追加远端 HTTP 任务映射。"""
     normalized_remote_task = _normalize_remote_task_entry(remote_task)
     if normalized_remote_task is None:
@@ -399,7 +400,7 @@ async def append_query_task_remote_task(task_id: str, remote_task: Dict[str, Any
     return build_query_task_response_data(build_query_task_runtime_data(task))
 
 
-def _coerce_member_result(item: Any) -> Dict[str, Any]:
+def _coerce_member_result(item: Any) -> dict[str, Any]:
     """gather(return_exceptions=True) 的异常项隔离为失败结果，保证聚合形状一致。
 
     execute_sql_for_member 内部已全捕获，这里兜底的是收尾阶段（关闭/落库）
@@ -414,13 +415,13 @@ def _coerce_member_result(item: Any) -> Dict[str, Any]:
 
 
 async def _notify_remote_task_created(
-    payload: Dict[str, Any],
+    payload: dict[str, Any],
     *,
-    execution_id: Optional[str],
-    query_task_id: Optional[str],
+    execution_id: str | None,
+    query_task_id: str | None,
     member_datasource_id: Any,
     member_name: str,
-    statement_index: Optional[int],
+    statement_index: int | None,
 ) -> None:
     remote_task_id = str((payload or {}).get("remote_task_id") or "").strip()
     if not remote_task_id:
@@ -440,7 +441,7 @@ async def _notify_remote_task_created(
         )
 
 
-async def _notify_db_connection_created(payload: Dict[str, Any], execution_id: Optional[str]) -> None:
+async def _notify_db_connection_created(payload: dict[str, Any], execution_id: str | None) -> None:
     if not execution_id:
         return
     db_connection_id = str((payload or {}).get("db_connection_id") or "").strip()
@@ -456,7 +457,7 @@ async def _guard_running_execution(execution_id: str) -> bool:
     return await get_query_execution_status(execution_id) == "cancelled"
 
 
-def _cancelled_member_result(member_datasource_id: Any, member_name: str, effective_sql: str) -> Dict[str, Any]:
+def _cancelled_member_result(member_datasource_id: Any, member_name: str, effective_sql: str) -> dict[str, Any]:
     return {
         "member_datasource_id": member_datasource_id,
         "member_name": member_name,
@@ -472,7 +473,7 @@ def _cancelled_member_result(member_datasource_id: Any, member_name: str, effect
     }
 
 
-async def _fetch_sql_cached_result(cache_identity: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+async def _fetch_sql_cached_result(cache_identity: dict[str, Any]) -> dict[str, Any] | None:
     """读取 SQL 结果缓存，读缓存失败时降级为未命中。"""
     try:
         return await query_cache.get_sql_result_cache(cache_identity)
@@ -488,14 +489,14 @@ async def _fetch_sql_cached_result(cache_identity: Dict[str, Any]) -> Optional[D
 
 async def _resolve_cached_query_result(
     http_target: bool,
-    cached_result: Dict[str, Any],
-    cache_identity: Dict[str, Any],
-    execution_target: Dict[str, Any],
-    user_id: Optional[str],
-    username: Optional[str],
+    cached_result: dict[str, Any],
+    cache_identity: dict[str, Any],
+    execution_target: dict[str, Any],
+    user_id: str | None,
+    username: str | None,
     execute_query_and_update_cache,
     on_remote_task_created,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """命中缓存时按执行目标类型解析结果；远端引用不可用时重新提交查询。"""
     if http_target:
         if query_cache.is_http_remote_ref_cache(cached_result):
@@ -526,9 +527,9 @@ def _build_member_query_response(
     member_datasource_id: Any,
     member_name: str,
     effective_sql: str,
-    result: Dict[str, Any],
+    result: dict[str, Any],
     status: str,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     return {
         "member_datasource_id": member_datasource_id,
         "member_name": member_name,
@@ -551,13 +552,13 @@ def _build_member_query_response(
 
 async def _execute_query_and_save_cache(
     execute_query,
-    user_id: Optional[str],
-    execution_target: Dict[str, Any],
+    user_id: str | None,
+    execution_target: dict[str, Any],
     skip_query_cache: bool,
     http_target: bool,
-    cache_identity: Dict[str, Any],
-    username: Optional[str],
-) -> Dict[str, Any]:
+    cache_identity: dict[str, Any],
+    username: str | None,
+) -> dict[str, Any]:
     query_result = await run_with_sql_user_datasource_limit(user_id, execution_target, execute_query)
     if not await query_cache.is_sql_result_cache_enabled(skip_query_cache):
         return query_result
@@ -581,8 +582,8 @@ async def _execute_query_and_save_cache(
 
 
 async def _finalize_member_query_result(
-    execution_id: Optional[str],
-    result: Dict[str, Any],
+    execution_id: str | None,
+    result: dict[str, Any],
     http_target: bool,
     member_datasource_id: Any,
     local_started_at: float,
@@ -606,13 +607,13 @@ async def _finalize_member_query_result(
 
 
 async def _notify_remote_task_created_for_member(
-    payload: Dict[str, Any],
+    payload: dict[str, Any],
     *,
-    execution_id: Optional[str],
-    query_task_id: Optional[str],
+    execution_id: str | None,
+    query_task_id: str | None,
     member_datasource_id: Any,
     member_name: Any,
-    statement_index: Optional[int],
+    statement_index: int | None,
 ) -> None:
     """成员远程任务创建回调：透传执行上下文通知上游。"""
     await _notify_remote_task_created(
@@ -626,20 +627,20 @@ async def _notify_remote_task_created_for_member(
 
 
 async def _notify_db_connection_created_for_member(
-    payload: Dict[str, Any],
+    payload: dict[str, Any],
     *,
-    execution_id: Optional[str],
+    execution_id: str | None,
 ) -> None:
     """成员数据库连接创建回调：透传执行上下文通知上游。"""
     await _notify_db_connection_created(payload, execution_id)
 
 
 def _create_member_executor(
-    execution_target: Dict[str, Any],
-    execute_kwargs: Dict[str, Any],
-    username: Optional[str],
-    on_remote_task_created: Callable[[Dict[str, Any]], Awaitable[None]],
-    on_db_connection_created: Callable[[Dict[str, Any]], Awaitable[None]],
+    execution_target: dict[str, Any],
+    execute_kwargs: dict[str, Any],
+    username: str | None,
+    on_remote_task_created: Callable[[dict[str, Any]], Awaitable[None]],
+    on_db_connection_created: Callable[[dict[str, Any]], Awaitable[None]],
 ) -> Any:
     """创建执行器并按签名绑定回调，返回执行器实例。"""
     executor = get_executor(execution_target)
@@ -653,19 +654,19 @@ def _create_member_executor(
 
 
 async def execute_sql_for_member(
-    execution_target: Dict[str, Any],
+    execution_target: dict[str, Any],
     sql: str,
     limit: int,
-    timeout: Optional[int],
-    user_id: Optional[str] = None,
-    username: Optional[str] = None,
-    query_task_id: Optional[str] = None,
-    execution_id: Optional[str] = None,
-    statement_index: Optional[int] = None,
+    timeout: int | None,
+    user_id: str | None = None,
+    username: str | None = None,
+    query_task_id: str | None = None,
+    execution_id: str | None = None,
+    statement_index: int | None = None,
     skip_query_cache: bool = False,
-    datasource_id: Optional[str] = None,
-    max_rows: Optional[int] = None,
-) -> Dict[str, Any]:
+    datasource_id: str | None = None,
+    max_rows: int | None = None,
+) -> dict[str, Any]:
     """执行单个成员数据源 SQL。"""
     member_datasource_id = execution_target.get("member_datasource_id")
     member_name = execution_target.get("member_name") or execution_target.get("group_name") or ""
@@ -696,7 +697,7 @@ async def execute_sql_for_member(
 
     executor = None
 
-    async def execute_query() -> Dict[str, Any]:
+    async def execute_query() -> dict[str, Any]:
         nonlocal executor
         # 先赋值再执行：execute 抛异常时 finally 仍能关闭执行器资源
         executor = _create_member_executor(
@@ -767,11 +768,11 @@ async def execute_sql_for_member(
 
 async def build_execute_sql_result_data(
     request: ExecuteSqlRequest,
-    query_task_id: Optional[str] = None,
-    execution_map: Optional[Dict[str, str]] = None,
-    username: Optional[str] = None,
-    statement_index: Optional[int] = None,
-) -> Dict[str, Any]:
+    query_task_id: str | None = None,
+    execution_map: dict[str, str] | None = None,
+    username: str | None = None,
+    statement_index: int | None = None,
+) -> dict[str, Any]:
     """执行 SQL 并返回统一结果数据。"""
     start_time = time.time()
     ds_manager = get_datasource_manager()
@@ -822,7 +823,7 @@ async def build_execute_sql_result_data(
     )
 
 
-def build_query_task_runtime_data(task: ChatDataQueryTask) -> Dict[str, Any]:
+def build_query_task_runtime_data(task: ChatDataQueryTask) -> dict[str, Any]:
     """将任务模型转换为可脱离 session 使用的字典。"""
     return {
         "task_id": task.task_id,
@@ -846,7 +847,7 @@ def build_query_task_runtime_data(task: ChatDataQueryTask) -> Dict[str, Any]:
     }
 
 
-def _normalize_remote_task_item(item: Any) -> Dict[str, Any] | None:
+def _normalize_remote_task_item(item: Any) -> dict[str, Any] | None:
     """归一化单个远端任务项；缺 remote_task_id/member_datasource_id 返回 None。"""
     if not isinstance(item, dict):
         return None
@@ -856,7 +857,7 @@ def _normalize_remote_task_item(item: Any) -> Dict[str, Any] | None:
     source_type = str(item.get("source_type") or "").strip().lower() or "hive"
     if not remote_task_id or not member_datasource_id:
         return None
-    normalized_remote_task: Dict[str, Any] = {
+    normalized_remote_task: dict[str, Any] = {
         "member_datasource_id": member_datasource_id,
         "member_name": member_name,
         "remote_task_id": remote_task_id,
@@ -867,7 +868,7 @@ def _normalize_remote_task_item(item: Any) -> Dict[str, Any] | None:
     return normalized_remote_task
 
 
-def load_remote_tasks(raw_payload: Any) -> List[Dict[str, Any]]:
+def load_remote_tasks(raw_payload: Any) -> list[dict[str, Any]]:
     """解析远端任务映射列表。"""
     if not raw_payload:
         return []
@@ -880,7 +881,7 @@ def load_remote_tasks(raw_payload: Any) -> List[Dict[str, Any]]:
             return []
     if not isinstance(payload, list):
         return []
-    result: List[Dict[str, Any]] = []
+    result: list[dict[str, Any]] = []
     for item in payload:
         normalized = _normalize_remote_task_item(item)
         if normalized is not None:
@@ -888,7 +889,7 @@ def load_remote_tasks(raw_payload: Any) -> List[Dict[str, Any]]:
     return result
 
 
-async def are_all_sql_execution_targets_http(request: ExecuteSqlRequest, operator_name: Optional[str] = None) -> bool:
+async def are_all_sql_execution_targets_http(request: ExecuteSqlRequest, operator_name: str | None = None) -> bool:
     """判断 SQL 任务选中的执行对象是否全部为 HTTP 执行。"""
     ds_manager = get_datasource_manager()
     execution_targets = await ds_manager.get_authorized_execution_datasources_async(
@@ -902,7 +903,7 @@ async def are_all_sql_execution_targets_http(request: ExecuteSqlRequest, operato
     )
 
 
-async def get_http_execution_member_ids(request: ExecuteSqlRequest, operator_name: Optional[str] = None) -> Set[str]:
+async def get_http_execution_member_ids(request: ExecuteSqlRequest, operator_name: str | None = None) -> set[str]:
     """读取本次 SQL 任务中走 HTTP 的成员数据源 ID。"""
     ds_manager = get_datasource_manager()
     execution_targets = await ds_manager.get_authorized_execution_datasources_async(
@@ -919,8 +920,8 @@ async def get_http_execution_member_ids(request: ExecuteSqlRequest, operator_nam
 
 
 async def build_persistent_query_task_result_for_request(
-    request: ExecuteSqlRequest, result_data: Dict[str, Any], operator_name: Optional[str] = None
-) -> Optional[Dict[str, Any]]:
+    request: ExecuteSqlRequest, result_data: dict[str, Any], operator_name: str | None = None
+) -> dict[str, Any] | None:
     """按执行配置构建任务落库结果，HTTP 结果不落库。"""
     try:
         all_http_targets = await are_all_sql_execution_targets_http(request, operator_name=operator_name)
@@ -938,8 +939,8 @@ async def build_persistent_query_task_result_for_request(
 
 
 def build_persistent_query_task_result_payload(
-    result_data: Dict[str, Any], http_member_ids: Set[str]
-) -> Optional[Dict[str, Any]]:
+    result_data: dict[str, Any], http_member_ids: set[str]
+) -> dict[str, Any] | None:
     """构建可落库的任务结果，过滤 HTTP 返回数据。"""
     if not http_member_ids:
         return result_data
@@ -956,7 +957,7 @@ def build_persistent_query_task_result_payload(
     )
 
 
-def _filter_local_member_results(result_data: Dict[str, Any], http_member_ids: Set[str]) -> list:
+def _filter_local_member_results(result_data: dict[str, Any], http_member_ids: set[str]) -> list:
     """从结果集中剔除 HTTP 成员的子结果。"""
     return [
         item
@@ -965,7 +966,7 @@ def _filter_local_member_results(result_data: Dict[str, Any], http_member_ids: S
     ]
 
 
-def build_query_task_response_data(task_data: Dict[str, Any]) -> Dict[str, Any]:
+def build_query_task_response_data(task_data: dict[str, Any]) -> dict[str, Any]:
     """将任务运行态字典转换为接口返回结构。"""
     result_payload = None
     if task_data.get("result_payload"):
@@ -998,7 +999,7 @@ def build_query_task_response_data(task_data: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def get_task_operator_name(task_data: Dict[str, Any]) -> str:
+def get_task_operator_name(task_data: dict[str, Any]) -> str:
     """从任务请求负载中解析发起用户名。"""
     try:
         payload = json.loads(task_data.get("request_payload") or "{}")
@@ -1007,7 +1008,7 @@ def get_task_operator_name(task_data: Dict[str, Any]) -> str:
     return str((payload or {}).get("operator_name") or "").strip()
 
 
-async def get_query_executions(task_id: str) -> List[Dict[str, Any]]:
+async def get_query_executions(task_id: str) -> list[dict[str, Any]]:
     """读取任务下的 SQL 执行明细。"""
     if not task_id:
         return []
@@ -1028,9 +1029,9 @@ async def create_task_record(
     task_type: str,
     datasource_id: str,
     query_type: str,
-    request_payload: Dict[str, Any],
+    request_payload: dict[str, Any],
     progress_text: str = "任务已创建，等待执行",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """创建异步任务记录。"""
     operator_user_id = str((request_payload or {}).get("user_id") or "").strip()
     operator_name = str((request_payload or {}).get("operator_name") or "").strip()
@@ -1047,7 +1048,7 @@ async def create_task_record(
     return build_query_task_response_data(build_query_task_runtime_data(task))
 
 
-async def create_query_task(payload: QueryTaskCreateRequest) -> Dict[str, Any]:
+async def create_query_task(payload: QueryTaskCreateRequest) -> dict[str, Any]:
     """创建 SQL 异步查询任务。"""
     statements = list(payload.sql)
     task_type = "sql_batch" if len(statements) > 1 else "sql"
@@ -1063,7 +1064,7 @@ async def create_query_task(payload: QueryTaskCreateRequest) -> Dict[str, Any]:
 
 
 async def prepare_sql_request_for_execution(
-    request: ExecuteSqlRequest | QueryTaskCreateRequest, datasource: Optional[Dict[str, Any]] = None
+    request: ExecuteSqlRequest | QueryTaskCreateRequest, datasource: dict[str, Any] | None = None
 ):
     """保留 SQL 原文；创建任务前快速校验，执行器边界按成员数据源复检。"""
     query_type = str(getattr(request, "query_type", "") or "").strip().lower()
@@ -1097,7 +1098,7 @@ async def prepare_sql_request_for_execution(
 
 async def prepare_sql_batch_request_for_execution(
     request: QueryTaskCreateRequest,
-    datasource: Optional[Dict[str, Any]] = None,
+    datasource: dict[str, Any] | None = None,
 ) -> QueryTaskCreateRequest:
     """逐条校验批次 SQL，保持每个实际执行单元只能是一条安全 SQL。"""
     if str(request.query_type or "").strip().lower() == "builder":
@@ -1121,9 +1122,9 @@ async def prepare_sql_batch_request_for_execution(
 async def create_task_for_execute_request(
     request: ExecuteSqlRequest,
     *,
-    query_type: Optional[str] = None,
-    operator_name: Optional[str] = None,
-) -> Dict[str, Any]:
+    query_type: str | None = None,
+    operator_name: str | None = None,
+) -> dict[str, Any]:
     """为直接执行或智能体执行创建任务主记录。"""
     payload = InternalQueryTaskCreateRequest(
         datasource_id=request.datasource_id,
@@ -1144,7 +1145,7 @@ async def create_task_for_execute_request(
     return await create_query_task(payload)
 
 
-async def get_query_task(task_id: str) -> Optional[Dict[str, Any]]:
+async def get_query_task(task_id: str) -> dict[str, Any] | None:
     """读取异步查询任务。"""
     task = await query_task_dao.get_task(task_id)
     if not task:
@@ -1160,12 +1161,12 @@ async def is_query_task_cancelled(task_id: str) -> bool:
 
 def _apply_query_task_updates(
     task: ChatDataQueryTask,
-    status: Optional[str],
-    progress_text: Optional[str],
+    status: str | None,
+    progress_text: str | None,
     result_payload: Any,
-    error_message: Optional[str],
-    started_time: Optional[datetime],
-    finished_time: Optional[datetime],
+    error_message: str | None,
+    started_time: datetime | None,
+    finished_time: datetime | None,
 ) -> bool:
     """行锁读取后校验终态守卫：与取消操作互斥，防止快照读守卫失效导致终态被回写覆盖。"""
     if task.task_status == "cancelled" and status in {"running", "succeeded", "failed", "partial_success"}:
@@ -1188,13 +1189,13 @@ def _apply_query_task_updates(
 async def update_query_task(
     task_id: str,
     *,
-    status: Optional[str] = None,
-    progress_text: Optional[str] = None,
+    status: str | None = None,
+    progress_text: str | None = None,
     result_payload: Any = None,
-    error_message: Optional[str] = None,
-    started_time: Optional[datetime] = None,
-    finished_time: Optional[datetime] = None,
-) -> Optional[Dict[str, Any]]:
+    error_message: str | None = None,
+    started_time: datetime | None = None,
+    finished_time: datetime | None = None,
+) -> dict[str, Any] | None:
     """更新异步查询任务。"""
     updater = functools.partial(
         _apply_query_task_updates,
@@ -1211,7 +1212,7 @@ async def update_query_task(
     return build_query_task_response_data(build_query_task_runtime_data(task))
 
 
-async def run_sql_query_task(task_id: str, task: Dict[str, Any]) -> None:
+async def run_sql_query_task(task_id: str, task: dict[str, Any]) -> None:
     """后台执行 SQL 查询任务。"""
     if await is_query_task_cancelled(task_id):
         return
@@ -1270,8 +1271,8 @@ async def run_sql_query_task(task_id: str, task: Dict[str, Any]) -> None:
 
 async def mark_sql_batch_remaining_cancelled(
     task_id: str,
-    statement_results: List[Dict[str, Any]],
-    execution_maps: Optional[Dict[int, Dict[str, str]]] = None,
+    statement_results: list[dict[str, Any]],
+    execution_maps: dict[int, dict[str, str]] | None = None,
     start_index: int = 0,
 ) -> None:
     """保留已完成 SQL 结果，仅把未完成语句标记为已停止。"""
@@ -1303,8 +1304,8 @@ async def mark_sql_batch_remaining_cancelled(
 
 
 async def mark_sql_batch_precreation_failed(
-    statement_results: List[Dict[str, Any]],
-    execution_maps: Dict[int, Dict[str, str]],
+    statement_results: list[dict[str, Any]],
+    execution_maps: dict[int, dict[str, str]],
     start_index: int,
     error_message: str,
 ) -> None:
@@ -1333,13 +1334,13 @@ async def mark_sql_batch_precreation_failed(
 
 async def _precreate_sql_batch_executions(
     task_id: str,
-    request_payload: Dict[str, Any],
-    statements: List[str],
-    operator_name: Optional[str],
-    statement_results: List[Dict[str, Any]],
-) -> Dict[int, Dict[str, str]] | None:
+    request_payload: dict[str, Any],
+    statements: list[str],
+    operator_name: str | None,
+    statement_results: list[dict[str, Any]],
+) -> dict[int, dict[str, str]] | None:
     """预创建全部语句的执行记录；失败时落库失败态并返回 None。"""
-    execution_maps: Dict[int, Dict[str, str]] = {}
+    execution_maps: dict[int, dict[str, str]] = {}
     for index, statement in enumerate(statements):
         execute_request = ExecuteSqlRequest(**{**request_payload, "sql": statement})
         try:
@@ -1365,14 +1366,14 @@ async def _precreate_sql_batch_executions(
 
 
 async def _execute_batch_statement(
-    request_payload: Dict[str, Any],
+    request_payload: dict[str, Any],
     statement: str,
     *,
     task_id: str,
-    execution_map: Dict[str, str],
-    operator_name: Optional[str],
+    execution_map: dict[str, str],
+    operator_name: str | None,
     statement_index: int,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """执行单条批次语句，返回 statement_results[index] 的增量更新。"""
     execute_request = ExecuteSqlRequest(**{**request_payload, "sql": statement})
     try:
@@ -1404,8 +1405,8 @@ async def _execute_batch_statement(
 
 
 def _resolve_sql_batch_final_status(
-    statement_results: List[Dict[str, Any]],
-) -> tuple[str, str, Optional[str]]:
+    statement_results: list[dict[str, Any]],
+) -> tuple[str, str, str | None]:
     """按各语句结果聚合批次终态，返回（status, progress_text, error_message）。"""
     statement_statuses = [query_result_status(item) for item in statement_results]
     has_succeeded = QUERY_SUCCEEDED_STATUS in statement_statuses
@@ -1423,11 +1424,11 @@ def _resolve_sql_batch_final_status(
     return "failed", "执行失败", "SQL 执行失败"
 
 
-def _parse_batch_statements(request_payload: Dict[str, Any]) -> List[str]:
+def _parse_batch_statements(request_payload: dict[str, Any]) -> list[str]:
     return [str(item or "").strip() for item in request_payload.get("sql") or [] if str(item or "").strip()]
 
 
-async def run_sql_batch_query_task(task_id: str, task: Dict[str, Any]) -> None:
+async def run_sql_batch_query_task(task_id: str, task: dict[str, Any]) -> None:
     """顺序执行 SQL 批次；启动时预创建全部语句的历史执行记录。"""
     if await is_query_task_cancelled(task_id):
         return
@@ -1444,7 +1445,7 @@ async def run_sql_batch_query_task(task_id: str, task: Dict[str, Any]) -> None:
         return
 
     operator_name = str(request_payload.get("operator_name") or "").strip() or None
-    statement_results: List[Dict[str, Any]] = [
+    statement_results: list[dict[str, Any]] = [
         {"statement_index": index, "sql": statement, "status": "pending", "results": []}
         for index, statement in enumerate(statements)
     ]
@@ -1504,7 +1505,7 @@ async def run_sql_batch_query_task(task_id: str, task: Dict[str, Any]) -> None:
     )
 
 
-async def _fail_agent_sql_task(task_info: Optional[Dict[str, Any]], error_message: str) -> None:
+async def _fail_agent_sql_task(task_info: dict[str, Any] | None, error_message: str) -> None:
     """智能体 SQL 任务失败落库；尽力而为，不覆盖原始异常。"""
     if not task_info:
         return
@@ -1522,11 +1523,11 @@ async def _fail_agent_sql_task(task_info: Optional[Dict[str, Any]], error_messag
 
 async def _create_agent_sql_task(
     execute_request: ExecuteSqlRequest,
-    operator_name: Optional[str],
-) -> tuple[Optional[Dict[str, Any]], Dict[str, str], Optional[str]]:
+    operator_name: str | None,
+) -> tuple[dict[str, Any] | None, dict[str, str], str | None]:
     """创建查询任务与执行记录，返回 (task_info, execution_map, error_message)。"""
-    task_info: Optional[Dict[str, Any]] = None
-    execution_map: Dict[str, str] = {}
+    task_info: dict[str, Any] | None = None
+    execution_map: dict[str, str] = {}
     try:
         task_info = await create_task_for_execute_request(
             execute_request, query_type="agent", operator_name=operator_name
@@ -1548,8 +1549,8 @@ async def _create_agent_sql_task(
 
 
 async def _finalize_agent_sql_task(
-    task_info: Dict[str, Any],
-    final_result: Dict[str, Any],
+    task_info: dict[str, Any],
+    final_result: dict[str, Any],
     persistent_result_payload: Any,
 ) -> None:
     succeeded = query_result_succeeded(final_result)
@@ -1567,14 +1568,14 @@ async def _run_agent_sql_execution(
     execute_request: ExecuteSqlRequest,
     sql: str,
     *,
-    datasource_id: Optional[str],
-    member_datasource_ids: Optional[List[str]],
-    user_id: Optional[str],
-    operator_name: Optional[str],
-    task_info: Optional[Dict[str, Any]],
-    execution_map: Dict[str, str],
+    datasource_id: str | None,
+    member_datasource_ids: list[str] | None,
+    user_id: str | None,
+    operator_name: str | None,
+    task_info: dict[str, Any] | None,
+    execution_map: dict[str, str],
     ds_manager: Any,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     execution_targets = await ds_manager.get_authorized_execution_datasources_async(
         datasource_id,
         member_datasource_ids,
@@ -1625,14 +1626,14 @@ async def _run_agent_sql_execution(
 
 async def execute_agent_sql(
     sql: str,
-    datasource_id: Optional[str],
-    member_datasource_ids: Optional[List[str]] = None,
-    user_id: Optional[str] = None,
-    semantic_config_id: Optional[str] = None,
-    query_text: Optional[str] = None,
-    conversation_id: Optional[str] = None,
-    operator_name: Optional[str] = None,
-) -> Dict[str, Any]:
+    datasource_id: str | None,
+    member_datasource_ids: list[str] | None = None,
+    user_id: str | None = None,
+    semantic_config_id: str | None = None,
+    query_text: str | None = None,
+    conversation_id: str | None = None,
+    operator_name: str | None = None,
+) -> dict[str, Any]:
     """智能体 SQL 执行入口，复用统一查询运行时。"""
     if not datasource_id:
         logger.error("未指定数据源ID，无法执行真实查询")

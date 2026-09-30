@@ -7,7 +7,7 @@ import os
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 from fastapi import UploadFile
 
@@ -54,7 +54,7 @@ def _get_file_extension(filename: str) -> str:
     return ext[1:] if ext else ""
 
 
-def _file_info(row: Any) -> Dict[str, Any]:
+def _file_info(row: Any) -> dict[str, Any]:
     return {
         "file_id": row.file_id,
         "thread_id": row.thread_id,
@@ -68,7 +68,7 @@ def _file_info(row: Any) -> Dict[str, Any]:
     }
 
 
-def _file_summary(row: Any) -> Dict[str, Any]:
+def _file_summary(row: Any) -> dict[str, Any]:
     return {
         "file_id": row.file_id,
         "original_filename": row.original_filename,
@@ -82,10 +82,10 @@ def _file_summary(row: Any) -> Dict[str, Any]:
 class UploadedFileService:
     """上传文件保存、解析和查询编排。"""
 
-    def __init__(self, dao: Optional[UploadedFileDao] = None):
+    def __init__(self, dao: UploadedFileDao | None = None):
         self.dao = dao or UploadedFileDao()
 
-    async def upload_file(self, file: UploadFile, thread_id: str, user_id: str = "system") -> Dict[str, Any]:
+    async def upload_file(self, file: UploadFile, thread_id: str, user_id: str = "system") -> dict[str, Any]:
         if not await self.dao.thread_belongs_to_user(thread_id, user_id=user_id):
             raise ValueError("会话不存在或无权访问")
         file_id = str(uuid.uuid4())
@@ -132,9 +132,7 @@ class UploadedFileService:
             "storage_dir": storage_name,
         }
 
-    async def get_file_info(
-        self, file_id: str, user_id: str = "system", thread_id: str = ""
-    ) -> Optional[Dict[str, Any]]:
+    async def get_file_info(self, file_id: str, user_id: str = "system", thread_id: str = "") -> dict[str, Any] | None:
         row = await self.dao.get_file(file_id, user_id=user_id)
         if row and thread_id and row.thread_id != thread_id:
             return None
@@ -163,7 +161,7 @@ class UploadedFileService:
         logger.info("文件删除成功: %s", file_id)
         return True
 
-    async def get_file_content(self, file_id: str, user_id: str = "system", thread_id: str = "") -> Optional[bytes]:
+    async def get_file_content(self, file_id: str, user_id: str = "system", thread_id: str = "") -> bytes | None:
         info = await self.get_file_info(file_id, user_id=user_id, thread_id=thread_id)
         if not info:
             return None
@@ -194,7 +192,7 @@ class UploadedFileService:
             for row in rows
         ]
 
-    async def get_file_path_by_id(self, file_id: str, user_id: str = "system", thread_id: str = "") -> Optional[str]:
+    async def get_file_path_by_id(self, file_id: str, user_id: str = "system", thread_id: str = "") -> str | None:
         info = await self.get_file_info(file_id, user_id=user_id, thread_id=thread_id)
         if not info:
             return None
@@ -205,7 +203,7 @@ class UploadedFileService:
         return str(file_path) if file_path.exists() else None
 
 
-_uploaded_file_service: Optional[UploadedFileService] = None
+_uploaded_file_service: UploadedFileService | None = None
 
 
 def get_uploaded_file_service() -> UploadedFileService:
@@ -216,11 +214,11 @@ def get_uploaded_file_service() -> UploadedFileService:
     return _uploaded_file_service
 
 
-async def upload_file(file: UploadFile, thread_id: str, user_id: str = "system") -> Dict[str, Any]:
+async def upload_file(file: UploadFile, thread_id: str, user_id: str = "system") -> dict[str, Any]:
     return await get_uploaded_file_service().upload_file(file, thread_id, user_id=user_id)
 
 
-async def get_file_info(file_id: str, user_id: str = "system", thread_id: str = "") -> Optional[Dict[str, Any]]:
+async def get_file_info(file_id: str, user_id: str = "system", thread_id: str = "") -> dict[str, Any] | None:
     return await get_uploaded_file_service().get_file_info(file_id, user_id=user_id, thread_id=thread_id)
 
 
@@ -228,7 +226,7 @@ async def delete_file(file_id: str, user_id: str = "system", thread_id: str = ""
     return await get_uploaded_file_service().delete_file(file_id, user_id=user_id, thread_id=thread_id)
 
 
-async def get_file_content(file_id: str, user_id: str = "system", thread_id: str = "") -> Optional[bytes]:
+async def get_file_content(file_id: str, user_id: str = "system", thread_id: str = "") -> bytes | None:
     return await get_uploaded_file_service().get_file_content(file_id, user_id=user_id, thread_id=thread_id)
 
 
@@ -240,5 +238,5 @@ async def get_files_by_thread(thread_id: str, user_id: str = "system") -> list:
     return await get_uploaded_file_service().get_files_by_thread(thread_id, user_id=user_id)
 
 
-async def get_file_path_by_id(file_id: str, user_id: str = "system", thread_id: str = "") -> Optional[str]:
+async def get_file_path_by_id(file_id: str, user_id: str = "system", thread_id: str = "") -> str | None:
     return await get_uploaded_file_service().get_file_path_by_id(file_id, user_id=user_id, thread_id=thread_id)

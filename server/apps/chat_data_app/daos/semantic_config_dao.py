@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from sqlalchemy import and_, case, func, or_, select, update
 from sqlalchemy.dialects.mysql import insert as mysql_insert
@@ -37,7 +37,7 @@ _DELETED_NAME_EXPR = func.concat(
 )
 
 
-def _semantic_config_json_columns(config: Dict[str, Any]) -> Dict[str, str]:
+def _semantic_config_json_columns(config: dict[str, Any]) -> dict[str, str]:
     """序列化语义配置的三个 JSON 落库列。"""
     return {
         "metrics_json": json.dumps(config.get("metrics") or [], ensure_ascii=False),
@@ -50,7 +50,7 @@ class SemanticConfigDao:
     """基于 MySQL 的语义配置数据访问对象。"""
 
     @staticmethod
-    def _model_to_row(model: SemanticConfig) -> Dict[str, Any]:
+    def _model_to_row(model: SemanticConfig) -> dict[str, Any]:
         return {
             "semantic_config_id": model.semantic_config_id,
             "group_id": model.group_id,
@@ -71,7 +71,7 @@ class SemanticConfigDao:
         }
 
     @staticmethod
-    def _map_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    def _map_row(row: dict[str, Any]) -> dict[str, Any]:
         return {
             "id": row["semantic_config_id"],
             "semantic_config_id": row["semantic_config_id"],
@@ -106,7 +106,7 @@ class SemanticConfigDao:
         return conditions
 
     @staticmethod
-    def _map_directory_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    def _map_directory_row(row: dict[str, Any]) -> dict[str, Any]:
         metrics = _load_json(row.get("metrics_json"), [])
         dimensions = _load_json(row.get("dimensions_json"), [])
         return {
@@ -118,7 +118,7 @@ class SemanticConfigDao:
             "dimensions_total": len(dimensions) if isinstance(dimensions, list) else 0,
         }
 
-    async def get_by_group_id_async(self, group_id: str, user_id: str = "") -> List[Dict[str, Any]]:
+    async def get_by_group_id_async(self, group_id: str, user_id: str = "") -> list[dict[str, Any]]:
         if not group_id:
             return []
         async with session_scope() as session:
@@ -134,7 +134,7 @@ class SemanticConfigDao:
             rows = [self._model_to_row(row) for row in result.scalars().all()]
         return [self._map_row(row) for row in rows]
 
-    async def get_directory_by_group_id_async(self, group_id: str, user_id: str = "") -> List[Dict[str, Any]]:
+    async def get_directory_by_group_id_async(self, group_id: str, user_id: str = "") -> list[dict[str, Any]]:
         if not group_id:
             return []
         async with session_scope() as session:
@@ -157,7 +157,7 @@ class SemanticConfigDao:
             rows = [dict(row) for row in result.mappings().all()]
         return [self._map_directory_row(row) for row in rows]
 
-    async def get_by_id_async(self, group_id: str, config_id: str, user_id: str = "") -> Optional[Dict[str, Any]]:
+    async def get_by_id_async(self, group_id: str, config_id: str, user_id: str = "") -> dict[str, Any] | None:
         if not group_id or not config_id:
             return None
         conditions = self._visibility_conditions(group_id, user_id)
@@ -167,13 +167,13 @@ class SemanticConfigDao:
             model = result.scalars().first()
         return self._map_row(self._model_to_row(model)) if model else None
 
-    async def upsert_async(self, group_id: str, config: Dict[str, Any]) -> bool:
+    async def upsert_async(self, group_id: str, config: dict[str, Any]) -> bool:
         if not group_id or not ((config or {}).get("id") or (config or {}).get("semantic_config_id")):
             return False
         return await self.upsert_many_async(group_id, [config])
 
     @staticmethod
-    def _map_config_to_row(group_id: str, config: Dict[str, Any]) -> Dict[str, Any]:
+    def _map_config_to_row(group_id: str, config: dict[str, Any]) -> dict[str, Any]:
         config = config or {}
         row = {
             "semantic_config_id": config.get("id") or config.get("semantic_config_id"),
@@ -194,7 +194,7 @@ class SemanticConfigDao:
         return row
 
     @staticmethod
-    def _upsert_batch_statement(batch: List[Dict[str, Any]]):
+    def _upsert_batch_statement(batch: list[dict[str, Any]]):
         statement = mysql_insert(SemanticConfig).values(batch)
         return statement.on_duplicate_key_update(
             group_id=statement.inserted.group_id,
@@ -212,7 +212,7 @@ class SemanticConfigDao:
             delete_flag=0,
         )
 
-    async def upsert_many_async(self, group_id: str, configs: List[Dict[str, Any]]) -> bool:
+    async def upsert_many_async(self, group_id: str, configs: list[dict[str, Any]]) -> bool:
         """在一个事务中批量保存语义配置。"""
         if not group_id or not configs:
             return False
@@ -230,7 +230,7 @@ class SemanticConfigDao:
     async def batch_update_enabled_async(
         self,
         group_id: str,
-        config_ids: List[str],
+        config_ids: list[str],
         enabled: bool,
         update_by: str = "",
         update_by_name: str = "",

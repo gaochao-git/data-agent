@@ -11,7 +11,7 @@ import os
 import re
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from utils.logger import get_logger
 
@@ -99,7 +99,7 @@ def _validate_table_index_name(index_type: str, index_name: Any, physical_names:
     return normalized
 
 
-def _validate_table_index_columns(raw_columns: Any, available_columns: set[str]) -> List[str]:
+def _validate_table_index_columns(raw_columns: Any, available_columns: set[str]) -> list[str]:
     columns = [str(value or "").strip() for value in (raw_columns or [])]
     if not columns or any(not value for value in columns):
         raise ValueError("索引至少需要一个字段")
@@ -113,7 +113,7 @@ def _validate_table_index_columns(raw_columns: Any, available_columns: set[str])
     return columns
 
 
-def _normalize_query_executor_type(source_type: str, query_executor_type: Optional[str] = None) -> str:
+def _normalize_query_executor_type(source_type: str, query_executor_type: str | None = None) -> str:
     """标准化查询执行方式，并校验数据源类型约束。"""
     normalized_executor_type = str(query_executor_type or "direct").strip().lower() or "direct"
     if normalized_executor_type not in SUPPORTED_QUERY_EXECUTOR_TYPES:
@@ -121,7 +121,7 @@ def _normalize_query_executor_type(source_type: str, query_executor_type: Option
     return normalized_executor_type
 
 
-def _build_source_line(source_config: Optional[dict]) -> str:
+def _build_source_line(source_config: dict | None) -> str:
     """将连接配置格式化为 host:port:database。"""
     config = sanitize_source_config(source_config)
     host = str(config.get("host") or "").strip()
@@ -134,8 +134,8 @@ def _build_source_line(source_config: Optional[dict]) -> str:
 
 def _build_persisted_source_line(
     source_type: str,
-    source_config: Optional[dict],
-    default_query_executor_type: Optional[str] = None,
+    source_config: dict | None,
+    default_query_executor_type: str | None = None,
 ) -> str:
     """将成员执行源配置格式化为落库文本。"""
     normalized_config = _normalize_member_source_config(source_type, source_config, default_query_executor_type)
@@ -150,8 +150,8 @@ def _build_persisted_source_line(
 
 def _build_template_source_line(
     source_type: str,
-    source_config: Optional[dict],
-    default_query_executor_type: Optional[str] = None,
+    source_config: dict | None,
+    default_query_executor_type: str | None = None,
 ) -> str:
     """将模板执行源配置格式化为落库文本。"""
     config = sanitize_source_config(source_config)
@@ -166,9 +166,9 @@ def _build_template_source_line(
 
 def _normalize_member_source_config(
     source_type: str,
-    source_config: Optional[dict],
-    default_query_executor_type: Optional[str] = None,
-) -> Dict[str, Any]:
+    source_config: dict | None,
+    default_query_executor_type: str | None = None,
+) -> dict[str, Any]:
     """标准化成员执行源配置。"""
     config = sanitize_source_config(source_config)
     normalized_org_name = str(config.get("org_name") or "").strip()
@@ -195,9 +195,9 @@ def _normalize_member_source_config(
 
 
 def _build_member_source_identity(
-    source_config: Optional[dict],
+    source_config: dict | None,
     source_type: str,
-    default_query_executor_type: Optional[str] = None,
+    default_query_executor_type: str | None = None,
 ) -> str:
     """根据执行方式生成成员唯一标识。"""
     normalized_config = _normalize_member_source_config(source_type, source_config, default_query_executor_type)
@@ -209,20 +209,20 @@ def _build_member_source_identity(
 
 def _build_member_source_text_line(
     source_type: str,
-    source_config: Optional[dict],
-    default_query_executor_type: Optional[str] = None,
+    source_config: dict | None,
+    default_query_executor_type: str | None = None,
 ) -> str:
     """将成员执行源配置格式化为持久化文本。"""
     return _build_persisted_source_line(source_type, source_config, default_query_executor_type)
 
 
 def _dedupe_member_source_configs(
-    source_configs: List[Dict[str, Any]],
+    source_configs: list[dict[str, Any]],
     source_type: str,
-    default_query_executor_type: Optional[str] = None,
-) -> List[Dict[str, Any]]:
+    default_query_executor_type: str | None = None,
+) -> list[dict[str, Any]]:
     """按成员执行身份去重成员执行源配置。"""
-    result: List[Dict[str, Any]] = []
+    result: list[dict[str, Any]] = []
     seen: set[str] = set()
     for source_config in source_configs:
         normalized_config = _normalize_member_source_config(source_type, source_config, default_query_executor_type)
@@ -235,13 +235,13 @@ def _dedupe_member_source_configs(
 
 
 def _validate_member_source_configs(
-    source_configs: List[Dict[str, Any]],
+    source_configs: list[dict[str, Any]],
     source_type: str,
-    default_query_executor_type: Optional[str] = None,
-) -> List[Dict[str, Any]]:
+    default_query_executor_type: str | None = None,
+) -> list[dict[str, Any]]:
     """校验成员执行源配置，禁止成员身份重复录入。"""
-    result: List[Dict[str, Any]] = []
-    seen: Dict[str, int] = {}
+    result: list[dict[str, Any]] = []
+    seen: dict[str, int] = {}
     for index, source_config in enumerate(source_configs, start=1):
         normalized_config = _normalize_member_source_config(source_type, source_config, default_query_executor_type)
         member_identity = _build_member_source_identity(normalized_config, source_type, default_query_executor_type)
@@ -256,10 +256,10 @@ def _validate_member_source_configs(
 def _extract_member_source_configs(
     datasource: dict,
     source_type: str,
-    default_query_executor_type: Optional[str] = None,
-) -> List[Dict[str, Any]]:
+    default_query_executor_type: str | None = None,
+) -> list[dict[str, Any]]:
     """从数据源对象中提取成员执行源配置。"""
-    configs: List[Dict[str, Any]] = []
+    configs: list[dict[str, Any]] = []
     for member in datasource.get("member_sources") or []:
         configs.append(
             _normalize_member_source_config(
@@ -280,13 +280,13 @@ def _extract_member_source_configs(
 
 def _merge_member_source_lines(
     current: dict,
-    next_template_source_config: Dict[str, Any],
+    next_template_source_config: dict[str, Any],
     source_type: str,
-    default_query_executor_type: Optional[str] = None,
-    member_source_configs: Optional[List[Dict[str, Any]]] = None,
-) -> List[Dict[str, Any]]:
+    default_query_executor_type: str | None = None,
+    member_source_configs: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     """合并模板源和成员源，模板源始终排在首位。"""
-    merged_configs: List[Dict[str, Any]] = [
+    merged_configs: list[dict[str, Any]] = [
         _normalize_member_source_config(source_type, next_template_source_config, default_query_executor_type)
     ]
 
@@ -310,10 +310,10 @@ def _merge_member_source_lines(
 
 def _build_member_sources_text(
     source_type: str,
-    member_source_configs: List[Dict[str, Any]],
+    member_source_configs: list[dict[str, Any]],
     query_executor_type: str,
 ) -> str:
-    lines: List[str] = []
+    lines: list[str] = []
     for item in _dedupe_member_source_configs(member_source_configs, source_type, query_executor_type):
         member_line = _build_member_source_text_line(source_type, item, query_executor_type)
         if member_line:
@@ -321,7 +321,7 @@ def _build_member_sources_text(
     return "\n".join(lines)
 
 
-def _get_template_member_source_config(datasource: dict) -> Dict[str, Any]:
+def _get_template_member_source_config(datasource: dict) -> dict[str, Any]:
     """提取当前模板成员配置，避免仅刷新表结构时破坏模板成员名称。"""
     template_member_id = str(datasource.get("template_datasource_id") or "").strip()
     for member in datasource.get("member_sources") or []:
@@ -332,7 +332,7 @@ def _get_template_member_source_config(datasource: dict) -> Dict[str, Any]:
     return {}
 
 
-def _member_source_config_fields(member: Any, datasource: dict) -> Dict[str, Any]:
+def _member_source_config_fields(member: Any, datasource: dict) -> dict[str, Any]:
     """按模板成员字段提取源配置；query_executor_type 缺省回退数据源配置再回退直连。"""
     member = member or {}
     return {
@@ -345,7 +345,7 @@ def _member_source_config_fields(member: Any, datasource: dict) -> Dict[str, Any
     }
 
 
-def _build_meta_source_config(datasource: dict) -> Dict[str, Any]:
+def _build_meta_source_config(datasource: dict) -> dict[str, Any]:
     """构建元数据接口使用的模板源配置。"""
     source_config = dict(datasource.get("source_config") or {})
     source_config.pop("namespace", None)
@@ -374,7 +374,7 @@ class DataSourceManager:
 
     def __init__(
         self,
-        metadata_adapter_registry: Optional[DataSourceMetadataAdapterRegistry] = None,
+        metadata_adapter_registry: DataSourceMetadataAdapterRegistry | None = None,
     ):
         self.datasource_dao = DataSourceDao()
         self.metadata_adapter_registry = metadata_adapter_registry or get_metadata_adapter_registry()
@@ -401,7 +401,7 @@ class DataSourceManager:
             raise ValueError(f"数据源写入后读取失败: {datasource_id}")
         return datasource
 
-    def _build_physical_metadata_source_config(self, datasource: Dict[str, Any]) -> Dict[str, Any]:
+    def _build_physical_metadata_source_config(self, datasource: dict[str, Any]) -> dict[str, Any]:
         """构建物理元数据读取使用的模板源配置。"""
         source_type = datasource.get("source_type")
         if source_type == "hive":
@@ -411,11 +411,11 @@ class DataSourceManager:
     def _create_metadata_adapter(
         self,
         source_type: str,
-        source_config: Dict[str, Any],
+        source_config: dict[str, Any],
         *,
         operation: str,
-        user_id: Optional[str] = None,
-        username: Optional[str] = None,
+        user_id: str | None = None,
+        username: str | None = None,
     ) -> DataSourceMetadataAdapter:
         if not source_config:
             raise ValueError("数据源连接配置不完整")
@@ -437,11 +437,11 @@ class DataSourceManager:
     async def _load_physical_schema_async(
         self,
         source_type: str,
-        source_config: Dict[str, Any],
-        table_names: Optional[List[str]] = None,
-        user_id: Optional[str] = None,
-        username: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
+        source_config: dict[str, Any],
+        table_names: list[str] | None = None,
+        user_id: str | None = None,
+        username: str | None = None,
+    ) -> list[dict[str, Any]]:
         """按物理连接配置读取完整表结构。"""
         adapter = self._create_metadata_adapter(
             source_type,
@@ -458,10 +458,10 @@ class DataSourceManager:
     async def _load_physical_table_names_async(
         self,
         source_type: str,
-        source_config: Dict[str, Any],
-        user_id: Optional[str] = None,
-        username: Optional[str] = None,
-    ) -> List[Any]:
+        source_config: dict[str, Any],
+        user_id: str | None = None,
+        username: str | None = None,
+    ) -> list[Any]:
         """按物理连接配置读取表名列表。"""
         adapter = self._create_metadata_adapter(
             source_type,
@@ -483,13 +483,13 @@ class DataSourceManager:
         source_type: str,
         query_executor_type: str,
         template_source: str,
-        member_source_configs: List[Dict[str, Any]],
+        member_source_configs: list[dict[str, Any]],
         tables: Any = _UNSET,
         mapped_modules: Any = _UNSET,
         is_default: Any = _UNSET,
         query_context: str = "",
-        recommended_questions: Optional[List[str]] = None,
-        audit: Optional[DatasourceWriteAudit] = None,
+        recommended_questions: list[str] | None = None,
+        audit: DatasourceWriteAudit | None = None,
     ) -> dict:
         """异步写入数据源组及表结构缓存。"""
         # 原写法把 DatasourceWriteAudit() 实例放在默认参数上（跨调用共享同一对象），
@@ -502,7 +502,7 @@ class DataSourceManager:
             source_type,
             normalized_query_executor_type,
         )
-        persisted_member_source_lines: List[str] = []
+        persisted_member_source_lines: list[str] = []
         for item in _dedupe_member_source_configs(
             validated_member_source_configs, source_type, normalized_query_executor_type
         ):
@@ -533,7 +533,7 @@ class DataSourceManager:
                 create_by_name=audit.create_by_name,
                 update_by_name=audit.update_by_name,
             )
-            update_kwargs: Dict[str, Any] = {
+            update_kwargs: dict[str, Any] = {
                 "group_id": datasource_id,
                 "mapped_modules": [] if mapped_modules is _UNSET else mapped_modules,
                 "update_by": audit.update_by,
@@ -553,16 +553,16 @@ class DataSourceManager:
                 )
         return await self._load_datasource_async(datasource_id)
 
-    async def get_all_datasources_async(self, include_tables: bool = True) -> List[Dict[str, Any]]:
+    async def get_all_datasources_async(self, include_tables: bool = True) -> list[dict[str, Any]]:
         """异步获取所有数据源。"""
         return await self.datasource_dao.get_all_datasources_async(include_tables=include_tables)
 
     async def get_authorized_datasources_async(
         self,
         include_tables: bool = True,
-        user_id: Optional[str] = None,
-        username: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
+        user_id: str | None = None,
+        username: str | None = None,
+    ) -> list[dict[str, Any]]:
         """异步获取当前用户有机构权限的数据源。"""
         datasources = await self.get_all_datasources_async(include_tables=include_tables)
         include_http_permission = any(
@@ -583,8 +583,8 @@ class DataSourceManager:
     async def can_access_datasource_async(
         self,
         datasource_id: str,
-        user_id: Optional[str] = None,
-        username: Optional[str] = None,
+        user_id: str | None = None,
+        username: str | None = None,
     ) -> bool:
         """判断当前用户是否有权读取指定数据源。"""
         authorized = await self.get_authorized_datasources_async(
@@ -599,24 +599,24 @@ class DataSourceManager:
         """异步判断数据源是否存在。"""
         return await self.datasource_dao.has_datasource_async(datasource_id)
 
-    async def get_datasource_async(self, datasource_id: str) -> Optional[Dict[str, Any]]:
+    async def get_datasource_async(self, datasource_id: str) -> dict[str, Any] | None:
         """异步获取指定数据源。"""
         return await self.datasource_dao.get_datasource_async(datasource_id)
 
-    async def get_datasource_meta_async(self, datasource_id: str) -> Optional[Dict[str, Any]]:
+    async def get_datasource_meta_async(self, datasource_id: str) -> dict[str, Any] | None:
         """异步获取数据源轻量元信息，不加载表结构和语义配置。"""
         return await self.datasource_dao.get_datasource_meta_async(datasource_id)
 
-    async def get_datasource_meta_by_group_name_async(self, group_name: str) -> Optional[Dict[str, Any]]:
+    async def get_datasource_meta_by_group_name_async(self, group_name: str) -> dict[str, Any] | None:
         """异步根据数据源组名称获取轻量元信息，不加载表结构和语义配置。"""
         return await self.datasource_dao.get_datasource_meta_by_group_name_async(group_name)
 
     @staticmethod
-    def _member_source_map(member_sources: List[Any]) -> Dict[str, Dict[str, Any]]:
+    def _member_source_map(member_sources: list[Any]) -> dict[str, dict[str, Any]]:
         """按 member_datasource_id 建立成员索引，空配置直接报错。"""
         if not member_sources:
             raise ValueError("当前数据源组下没有可执行的数据源")
-        member_map: Dict[str, Dict[str, Any]] = {}
+        member_map: dict[str, dict[str, Any]] = {}
         for item in member_sources:
             member_id = str(item.get("member_datasource_id") or "").strip()
             if member_id:
@@ -626,7 +626,7 @@ class DataSourceManager:
         return member_map
 
     @staticmethod
-    def _default_member_id(datasource: dict, member_map: Dict[str, Dict[str, Any]]) -> str:
+    def _default_member_id(datasource: dict, member_map: dict[str, dict[str, Any]]) -> str:
         default_member_id = str(datasource.get("template_datasource_id") or "").strip()
         if not default_member_id or default_member_id not in member_map:
             default_member_id = next(iter(member_map.keys()))
@@ -635,11 +635,11 @@ class DataSourceManager:
     @staticmethod
     def _normalize_selected_member_ids(
         datasource: dict,
-        member_datasource_ids: Optional[List[str]],
-        member_map: Dict[str, Dict[str, Any]],
-    ) -> List[str]:
+        member_datasource_ids: list[str] | None,
+        member_map: dict[str, dict[str, Any]],
+    ) -> list[str]:
         """去重归一化指定成员；未指定时回落到模板成员或首个成员。"""
-        normalized_selected_ids: List[str] = []
+        normalized_selected_ids: list[str] = []
         for member_id in member_datasource_ids or []:
             normalized_member_id = str(member_id or "").strip()
             if normalized_member_id and normalized_member_id not in normalized_selected_ids:
@@ -649,7 +649,7 @@ class DataSourceManager:
         return normalized_selected_ids
 
     @staticmethod
-    def _build_execution_target(datasource: dict, member_id: str, member: Dict[str, Any]) -> Dict[str, Any]:
+    def _build_execution_target(datasource: dict, member_id: str, member: dict[str, Any]) -> dict[str, Any]:
         source_type = member.get("source_type") or datasource.get("source_type") or ""
         query_executor_type = member.get("query_executor_type") or datasource.get("query_executor_type") or "direct"
         org_code = str(member.get("org_code") or "").strip()
@@ -678,8 +678,8 @@ class DataSourceManager:
         }
 
     def _build_execution_datasource_targets(
-        self, datasource: dict, member_datasource_ids: Optional[List[str]] = None
-    ) -> List[Dict[str, Any]]:
+        self, datasource: dict, member_datasource_ids: list[str] | None = None
+    ) -> list[dict[str, Any]]:
         """根据数据源配置构造可执行成员数据源。"""
         member_map = self._member_source_map(datasource.get("member_sources") or [])
         normalized_selected_ids = self._normalize_selected_member_ids(datasource, member_datasource_ids, member_map)
@@ -692,8 +692,8 @@ class DataSourceManager:
         ]
 
     async def get_execution_datasources_async(
-        self, datasource_id: str, member_datasource_ids: Optional[List[str]] = None
-    ) -> List[Dict[str, Any]]:
+        self, datasource_id: str, member_datasource_ids: list[str] | None = None
+    ) -> list[dict[str, Any]]:
         """异步解析逻辑数据源下可执行的成员数据源列表。"""
         datasource = await self._get_datasource_meta_or_raise_async(datasource_id)
         return self._build_execution_datasource_targets(datasource, member_datasource_ids)
@@ -701,8 +701,8 @@ class DataSourceManager:
     async def _filter_authorized_datasource(
         self,
         datasource: dict,
-        user_id: Optional[str] = None,
-        username: Optional[str] = None,
+        user_id: str | None = None,
+        username: str | None = None,
     ) -> dict:
         """按当前用户机构权限过滤数据源成员，过滤后无任何可用成员时报错。"""
         if datasource_requires_http_permission(datasource):
@@ -721,10 +721,10 @@ class DataSourceManager:
     async def authorize_execution_datasources_async(
         self,
         datasource: dict,
-        member_datasource_ids: Optional[List[str]] = None,
-        user_id: Optional[str] = None,
-        username: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
+        member_datasource_ids: list[str] | None = None,
+        user_id: str | None = None,
+        username: str | None = None,
+    ) -> list[dict[str, Any]]:
         """按当前用户机构权限过滤已读取的数据源执行对象。"""
         filtered_datasource = await self._filter_authorized_datasource(datasource, user_id, username)
         return self._build_execution_datasource_targets(filtered_datasource, member_datasource_ids)
@@ -732,9 +732,9 @@ class DataSourceManager:
     async def list_authorized_execution_targets_async(
         self,
         datasource_id: str,
-        user_id: Optional[str] = None,
-        username: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
+        user_id: str | None = None,
+        username: str | None = None,
+    ) -> list[dict[str, Any]]:
         """列出当前用户在数据源组下有权限执行的全部成员数据源（不限定选中范围）。"""
         datasource = await self._get_datasource_meta_or_raise_async(datasource_id)
         filtered_datasource = await self._filter_authorized_datasource(datasource, user_id, username)
@@ -747,10 +747,10 @@ class DataSourceManager:
     async def get_authorized_execution_datasources_async(
         self,
         datasource_id: str,
-        member_datasource_ids: Optional[List[str]] = None,
-        user_id: Optional[str] = None,
-        username: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
+        member_datasource_ids: list[str] | None = None,
+        user_id: str | None = None,
+        username: str | None = None,
+    ) -> list[dict[str, Any]]:
         """异步解析当前用户有机构权限的可执行成员数据源列表。"""
         datasource = await self._get_datasource_meta_or_raise_async(datasource_id)
         return await self.authorize_execution_datasources_async(
@@ -760,17 +760,17 @@ class DataSourceManager:
             username,
         )
 
-    async def get_datasource_by_group_name_async(self, group_name: str) -> Optional[Dict[str, Any]]:
+    async def get_datasource_by_group_name_async(self, group_name: str) -> dict[str, Any] | None:
         """异步根据数据源组名称获取数据源。"""
         return await self.datasource_dao.get_datasource_by_group_name_async(group_name)
 
-    async def get_table_groups_async(self, datasource_id: str) -> List[Dict[str, Any]]:
+    async def get_table_groups_async(self, datasource_id: str) -> list[dict[str, Any]]:
         """异步获取数据源内的表分组关系。"""
         datasource = await self.datasource_dao.get_datasource_async(datasource_id)
         if not datasource:
             return []
         relations = await self.datasource_dao.get_table_group_relations_async(datasource.get("group_id"))
-        groups: Dict[str, List[str]] = {}
+        groups: dict[str, list[str]] = {}
         for relation in relations:
             group_name = str(relation.get("table_group_name") or "").strip()
             table_name = str(relation.get("table_name") or "").strip()
@@ -782,9 +782,9 @@ class DataSourceManager:
         return [{"table_group_name": name, "table_names": table_names} for name, table_names in groups.items()]
 
     @staticmethod
-    def _normalize_group_table_names(group: Dict[str, Any], existing_tables: set[str]) -> List[str]:
+    def _normalize_group_table_names(group: dict[str, Any], existing_tables: set[str]) -> list[str]:
         """归一化单个分组的表名列表：过滤不存在/重复/空的表名。"""
-        table_names: List[str] = []
+        table_names: list[str] = []
         for table_name in (group or {}).get("table_names") or []:
             normalized_table_name = str(table_name or "").strip()
             if (
@@ -796,9 +796,9 @@ class DataSourceManager:
         return table_names
 
     @staticmethod
-    def _normalize_table_groups(groups: List[Dict[str, Any]], existing_tables: set[str]) -> List[Dict[str, Any]]:
+    def _normalize_table_groups(groups: list[dict[str, Any]], existing_tables: set[str]) -> list[dict[str, Any]]:
         """过滤掉空组名、不存在的表名与重复表名。"""
-        normalized_groups: List[Dict[str, Any]] = []
+        normalized_groups: list[dict[str, Any]] = []
         for group in groups or []:
             group_name = str((group or {}).get("table_group_name") or "").strip()
             if not group_name:
@@ -809,7 +809,7 @@ class DataSourceManager:
         return normalized_groups
 
     async def replace_table_groups_async(
-        self, datasource_id: str, groups: List[Dict[str, Any]], operator: str = "", operator_name: str = ""
+        self, datasource_id: str, groups: list[dict[str, Any]], operator: str = "", operator_name: str = ""
     ) -> bool:
         """异步覆盖保存数据源内的表分组关系。"""
         datasource = await self.datasource_dao.get_datasource_async(datasource_id)
@@ -829,7 +829,7 @@ class DataSourceManager:
 
     async def update_table_business_desc_async(
         self, datasource_id: str, table_name: str, business_desc: str, operator: str = "", operator_name: str = ""
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """异步更新单张表的业务说明。"""
         normalized_table_name = str(table_name or "").strip()
         if not normalized_table_name:
@@ -857,7 +857,7 @@ class DataSourceManager:
 
     async def get_column_dict_async(
         self, datasource_id: str, table_name: str, column_name: str
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """异步获取单个字段的数据字典。"""
         datasource = await self.datasource_dao.get_datasource_async(datasource_id)
         table = self._find_table_column(datasource, table_name, column_name)
@@ -869,7 +869,7 @@ class DataSourceManager:
 
     async def get_table_column_dicts_async(
         self, datasource_id: str, table_name: str
-    ) -> Optional[Dict[str, Dict[str, Any]]]:
+    ) -> dict[str, dict[str, Any]] | None:
         """异步获取单张表所有已维护字段的数据字典。"""
         normalized_table_name = str(table_name or "").strip()
         if not normalized_table_name:
@@ -893,7 +893,7 @@ class DataSourceManager:
             column_name: column_dict for column_name, column_dict in column_dicts.items() if column_name in column_names
         }
 
-    async def get_datasource_column_dicts_async(self, datasource_id: str) -> Dict[tuple[str, str], Dict[str, Any]]:
+    async def get_datasource_column_dicts_async(self, datasource_id: str) -> dict[tuple[str, str], dict[str, Any]]:
         """异步获取数据源下全部已维护字段字典。"""
         datasource = await self.get_datasource_meta_async(datasource_id)
         group_id = str((datasource or {}).get("group_id") or "").strip()
@@ -906,10 +906,10 @@ class DataSourceManager:
         datasource_id: str,
         table_name: str,
         column_name: str,
-        column_dict: Dict[str, Any],
+        column_dict: dict[str, Any],
         operator: str = "",
         operator_name: str = "",
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """异步覆盖保存单个字段的数据字典。"""
         datasource = await self.datasource_dao.get_datasource_async(datasource_id)
         table = self._find_table_column(datasource, table_name, column_name)
@@ -931,10 +931,10 @@ class DataSourceManager:
         datasource_id: str,
         table_name: str,
         column_name: str,
-        column_dict: Dict[str, Any],
+        column_dict: dict[str, Any],
         operator: str = "",
         operator_name: str = "",
-    ) -> Optional[List[str]]:
+    ) -> list[str] | None:
         """仅填空保存单个字段的数据字典（Ossie 导入闭环用）。
 
         只填充现有字典为空的字段，已有值一律保留；返回实际填充的字段名列表，
@@ -959,7 +959,7 @@ class DataSourceManager:
         self,
         datasource_id: str,
         table_name: str,
-    ) -> Optional[List[Dict[str, Any]]]:
+    ) -> list[dict[str, Any]] | None:
         """异步获取数据源表的手动索引配置。"""
         datasource = await self.datasource_dao.get_datasource_async(datasource_id)
         if not datasource:
@@ -978,10 +978,10 @@ class DataSourceManager:
         self,
         datasource_id: str,
         table_name: str,
-        indexes: List[Dict[str, Any]],
+        indexes: list[dict[str, Any]],
         operator: str = "",
         operator_name: str = "",
-    ) -> Optional[List[Dict[str, Any]]]:
+    ) -> list[dict[str, Any]] | None:
         """异步覆盖保存数据源表的手动索引配置。"""
         datasource = await self.datasource_dao.get_datasource_async(datasource_id)
         if not datasource:
@@ -999,7 +999,7 @@ class DataSourceManager:
         )
 
     @staticmethod
-    def _find_table(datasource: Optional[Dict[str, Any]], table_name: str) -> Optional[Dict[str, Any]]:
+    def _find_table(datasource: dict[str, Any] | None, table_name: str) -> dict[str, Any] | None:
         normalized = str(table_name or "").strip()
         if not datasource or not normalized:
             return None
@@ -1013,7 +1013,7 @@ class DataSourceManager:
         )
 
     @staticmethod
-    def _table_column_names(table: Dict[str, Any]) -> set[str]:
+    def _table_column_names(table: dict[str, Any]) -> set[str]:
         return {
             str(column.get("name") or "").strip()
             for column in table.get("columns") or []
@@ -1021,7 +1021,7 @@ class DataSourceManager:
         }
 
     @staticmethod
-    def _existing_physical_index_names(table: Dict[str, Any]) -> set[str]:
+    def _existing_physical_index_names(table: dict[str, Any]) -> set[str]:
         return {
             str(item.get("name") or "").strip().lower()
             for item in [*(table.get("unique_indexes") or []), *(table.get("indexes") or [])]
@@ -1031,12 +1031,12 @@ class DataSourceManager:
     @staticmethod
     def _validate_and_normalize_index_item(
         item: Any,
-        table: Dict[str, Any],
+        table: dict[str, Any],
         columns: set[str],
         physical_names: set[str],
         seen: set[tuple[str, str]],
         primary_seen: bool,
-    ) -> tuple[Dict[str, Any], bool]:
+    ) -> tuple[dict[str, Any], bool]:
         """校验并归一化单个手工索引项，返回 (索引项, 是否已出现主键)。"""
         if not isinstance(item, dict):
             raise ValueError("索引项必须是对象")
@@ -1062,12 +1062,12 @@ class DataSourceManager:
         }, primary_seen
 
     @staticmethod
-    def _validate_table_indexes(table: Dict[str, Any], indexes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _validate_table_indexes(table: dict[str, Any], indexes: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if len(indexes or []) > MAX_TABLE_INDEX_COUNT:
             raise ValueError(f"单表手工索引不能超过 {MAX_TABLE_INDEX_COUNT} 个")
         columns = DataSourceManager._table_column_names(table)
         physical_names = DataSourceManager._existing_physical_index_names(table)
-        normalized: List[Dict[str, Any]] = []
+        normalized: list[dict[str, Any]] = []
         seen: set[tuple[str, str]] = set()
         primary_seen = False
         for item in indexes or []:
@@ -1083,8 +1083,8 @@ class DataSourceManager:
         return _normalize_table_index_items(normalized)
 
     def _match_table_column(
-        self, datasource: Optional[Dict[str, Any]], normalized_table_name: str, normalized_column_name: str
-    ) -> Optional[Dict[str, Any]]:
+        self, datasource: dict[str, Any] | None, normalized_table_name: str, normalized_column_name: str
+    ) -> dict[str, Any] | None:
         """在数据源缓存中匹配指定表字段，命中返回表记录否则 None。"""
         for table in datasource.get("ds_tables") or []:
             if str(table.get("table_name") or "").strip() != normalized_table_name:
@@ -1095,8 +1095,8 @@ class DataSourceManager:
         return None
 
     def _find_table_column(
-        self, datasource: Optional[Dict[str, Any]], table_name: str, column_name: str
-    ) -> Optional[Dict[str, Any]]:
+        self, datasource: dict[str, Any] | None, table_name: str, column_name: str
+    ) -> dict[str, Any] | None:
         """校验数据源缓存中是否存在指定表字段。"""
         normalized_table_name = str(table_name or "").strip()
         normalized_column_name = str(column_name or "").strip()
@@ -1109,13 +1109,13 @@ class DataSourceManager:
         group_name: str,
         group_desc: str,
         source_type: str,
-        template_source_config: Dict[str, Any],
-        member_source_configs: Optional[List[Dict[str, Any]]] = None,
+        template_source_config: dict[str, Any],
+        member_source_configs: list[dict[str, Any]] | None = None,
         query_context: str = "",
-        recommended_questions: Optional[List[str]] = None,
+        recommended_questions: list[str] | None = None,
         create_by: str = "",
         create_by_name: str = "",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """异步按模板源和成员连接信息创建数据源组。"""
         now = datetime.now()
         datasource_id = f"ds_{now.strftime('%Y%m%d%H%M%S')}_{now.microsecond}"
@@ -1159,13 +1159,13 @@ class DataSourceManager:
         group_name: str,
         group_desc: str,
         source_type: str,
-        template_source_config: Dict[str, Any],
-        member_source_configs: Optional[List[Dict[str, Any]]] = None,
+        template_source_config: dict[str, Any],
+        member_source_configs: list[dict[str, Any]] | None = None,
         query_context: str = "",
-        recommended_questions: Optional[List[str]] = None,
+        recommended_questions: list[str] | None = None,
         update_by: str = "",
         update_by_name: str = "",
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """异步按模板源和成员连接信息更新数据源组。"""
         current = await self.get_datasource_meta_async(datasource_id)
         if not current:
@@ -1203,10 +1203,10 @@ class DataSourceManager:
     async def sync_datasource_tables_async(
         self,
         datasource_id: str,
-        tables: List[Dict[str, Any]],
+        tables: list[dict[str, Any]],
         update_by: str = "",
         update_by_name: str = "",
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """异步同步数据源组表结构缓存。"""
         current = await self.get_datasource_async(datasource_id)
         if not current:
@@ -1226,12 +1226,12 @@ class DataSourceManager:
     async def sync_datasource_schema_from_source_async(
         self,
         datasource_id: str,
-        table_names: Optional[List[str]] = None,
+        table_names: list[str] | None = None,
         update_by: str = "",
         update_by_name: str = "",
-        user_id: Optional[str] = None,
-        username: Optional[str] = None,
-    ) -> Optional[Dict[str, Any]]:
+        user_id: str | None = None,
+        username: str | None = None,
+    ) -> dict[str, Any] | None:
         """从模板物理源读取表结构并写入数据源缓存。"""
         if not await self.get_datasource_async(datasource_id):
             return None
@@ -1250,15 +1250,15 @@ class DataSourceManager:
 
     @staticmethod
     def _resolve_template_source_update(
-        current: Dict[str, Any],
-        source_type: Optional[str],
-        source_config: Optional[dict],
-    ) -> tuple[str, Dict[str, Any]]:
+        current: dict[str, Any],
+        source_type: str | None,
+        source_config: dict | None,
+    ) -> tuple[str, dict[str, Any]]:
         """解析更新后的模板源行与模板源配置。"""
         next_template_source = str(
             current.get("template_source") or current.get("template_datasource_id") or ""
         ).strip()
-        next_template_source_config: Dict[str, Any] = _get_template_member_source_config(current)
+        next_template_source_config: dict[str, Any] = _get_template_member_source_config(current)
         if source_config is not None:
             sanitized_source_config = sanitize_source_config(source_config)
             next_template_source_config = {
@@ -1274,13 +1274,13 @@ class DataSourceManager:
 
     @staticmethod
     def _build_update_identity_fields(
-        current: Dict[str, Any],
+        current: dict[str, Any],
         datasource_id: str,
-        name: Optional[str],
-        description: Optional[str],
+        name: str | None,
+        description: str | None,
         update_by: str,
         update_by_name: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """构造更新时的名称/描述/操作人字段（未提供时沿用现值）。"""
         return {
             "group_name": name if name is not None else current.get("group_name") or datasource_id,
@@ -1295,13 +1295,13 @@ class DataSourceManager:
 
     @staticmethod
     def _build_update_content_fields(
-        current: Dict[str, Any],
-        source_type: Optional[str],
-        tables: Optional[List[dict]],
-        mapped_modules: Optional[List[str]],
+        current: dict[str, Any],
+        source_type: str | None,
+        tables: list[dict] | None,
+        mapped_modules: list[str] | None,
         next_template_source: str,
-        next_template_source_config: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        next_template_source_config: dict[str, Any],
+    ) -> dict[str, Any]:
         """构造更新时的源配置/表结构/模块映射字段（未提供时沿用现值）。"""
         return {
             "query_context": current.get("query_context") or "",
@@ -1323,15 +1323,15 @@ class DataSourceManager:
     async def update_datasource_async(
         self,
         datasource_id: str,
-        name: Optional[str] = None,
-        description: Optional[str] = None,
-        tables: Optional[List[dict]] = None,
-        source_type: Optional[str] = None,
-        source_config: Optional[dict] = None,
-        mapped_modules: Optional[List[str]] = None,
+        name: str | None = None,
+        description: str | None = None,
+        tables: list[dict] | None = None,
+        source_type: str | None = None,
+        source_config: dict | None = None,
+        mapped_modules: list[str] | None = None,
         update_by: str = "",
         update_by_name: str = "",
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """异步更新数据源。"""
         current = await self.get_datasource_async(datasource_id)
         if not current:
@@ -1395,7 +1395,7 @@ class DataSourceManager:
         logger.info("设置默认数据源: %s", datasource_id)
         return True
 
-    async def get_default_datasource_async(self) -> Optional[Dict[str, Any]]:
+    async def get_default_datasource_async(self) -> dict[str, Any] | None:
         """异步获取默认数据源。"""
         return await self.datasource_dao.get_default_datasource_async()
 
@@ -1419,8 +1419,8 @@ class DataSourceManager:
     async def get_cached_schema_async(
         self,
         datasource_id: str,
-        table_names: Optional[List[str]] = None,
-    ) -> List[Dict[str, Any]]:
+        table_names: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
         """从业务库缓存读取数据源表结构。"""
         datasource = await self.get_datasource_async(datasource_id)
         if not datasource:
@@ -1436,10 +1436,10 @@ class DataSourceManager:
     async def get_live_schema_async(
         self,
         datasource_id: str,
-        table_names: Optional[List[str]] = None,
-        user_id: Optional[str] = None,
-        username: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
+        table_names: list[str] | None = None,
+        user_id: str | None = None,
+        username: str | None = None,
+    ) -> list[dict[str, Any]]:
         """从模板物理源实时读取数据源表结构。"""
         datasource = await self.get_datasource_async(datasource_id)
         if not datasource:
@@ -1457,7 +1457,7 @@ class DataSourceManager:
                 user_id=user_id,
                 username=username,
             )
-        except asyncio.TimeoutError as err:
+        except TimeoutError as err:
             logger.error(
                 "异步获取表结构超时: datasource_id=%s source_type=%s timeout=%ss",
                 datasource_id,
@@ -1474,10 +1474,10 @@ class DataSourceManager:
     async def get_physical_table_names_async(
         self,
         source_type: str,
-        source_config: Dict[str, Any],
-        user_id: Optional[str] = None,
-        username: Optional[str] = None,
-    ) -> List[Any]:
+        source_config: dict[str, Any],
+        user_id: str | None = None,
+        username: str | None = None,
+    ) -> list[Any]:
         """从物理源实时读取表名列表。"""
         sync_timeout = await get_datasource_sync_timeout_seconds()
         try:
@@ -1487,7 +1487,7 @@ class DataSourceManager:
                 user_id=user_id,
                 username=username,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.error("获取表列表超时: source_type=%s timeout=%ss", source_type, sync_timeout)
             raise
         except ValueError:
@@ -1497,7 +1497,7 @@ class DataSourceManager:
             raise ConnectionError(f"数据库连接失败: {str(err)}") from err
 
 
-_datasource_manager_instance: Optional[DataSourceManager] = None
+_datasource_manager_instance: DataSourceManager | None = None
 
 
 def get_datasource_manager() -> DataSourceManager:

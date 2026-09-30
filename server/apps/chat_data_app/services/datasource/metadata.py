@@ -7,7 +7,7 @@ import os
 import re
 from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Dict, List, Optional, Type
+from typing import Any
 
 import aiomysql
 from pyhive import hive
@@ -92,7 +92,7 @@ class MySQLSyncService:
             connect_timeout=MYSQL_CONNECT_TIMEOUT_SECONDS,
         )
 
-    async def get_tables_async(self) -> List[str]:
+    async def get_tables_async(self) -> list[str]:
         conn = await self._get_connection()
         try:
             async with conn.cursor(aiomysql.DictCursor) as cursor:
@@ -105,8 +105,8 @@ class MySQLSyncService:
 
     async def get_full_schema_async(
         self,
-        table_names: Optional[List[str]] = None,
-    ) -> List[Dict[str, Any]]:
+        table_names: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
         conn = await self._get_connection()
         try:
             async with conn.cursor(aiomysql.DictCursor) as cursor:
@@ -120,7 +120,7 @@ class MySQLSyncService:
             conn.close()
             await conn.ensure_closed()
 
-    async def _fetch_table_column_rows(self, cursor) -> List[Dict[str, Any]]:
+    async def _fetch_table_column_rows(self, cursor) -> list[dict[str, Any]]:
         await cursor.execute(
             """
             SELECT
@@ -143,7 +143,7 @@ class MySQLSyncService:
         )
         return await cursor.fetchall()
 
-    async def _fetch_index_stat_rows(self, cursor) -> List[Dict[str, Any]]:
+    async def _fetch_index_stat_rows(self, cursor) -> list[dict[str, Any]]:
         await cursor.execute(
             """
             SELECT TABLE_NAME, INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME
@@ -156,10 +156,8 @@ class MySQLSyncService:
         return await cursor.fetchall()
 
     @staticmethod
-    def _group_rows_into_tables(
-        rows: List[Dict[str, Any]], table_names: Optional[List[str]]
-    ) -> Dict[str, Dict[str, Any]]:
-        tables_by_name: Dict[str, Dict[str, Any]] = {}
+    def _group_rows_into_tables(rows: list[dict[str, Any]], table_names: list[str] | None) -> dict[str, dict[str, Any]]:
+        tables_by_name: dict[str, dict[str, Any]] = {}
         for row in rows:
             table_name = row["TABLE_NAME"]
             if table_names and table_name not in table_names:
@@ -193,9 +191,9 @@ class MySQLSyncService:
 
     @staticmethod
     def _group_index_stats(
-        stat_rows: List[Dict[str, Any]], table_names: Optional[List[str]]
-    ) -> Dict[str, List[Dict[str, Any]]]:
-        stats_by_table: Dict[str, List[Dict[str, Any]]] = {}
+        stat_rows: list[dict[str, Any]], table_names: list[str] | None
+    ) -> dict[str, list[dict[str, Any]]]:
+        stats_by_table: dict[str, list[dict[str, Any]]] = {}
         for sr in stat_rows:
             table_name = sr.get("TABLE_NAME")
             if not table_name:
@@ -213,9 +211,9 @@ class MySQLSyncService:
         return stats_by_table
 
     @staticmethod
-    def _build_index_groups(stats_list: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    def _build_index_groups(stats_list: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
         """将统计行按索引名分组，返回 {index_name: {non_unique, columns}}。"""
-        by_index: Dict[str, Dict[str, Any]] = {}
+        by_index: dict[str, dict[str, Any]] = {}
         for s in stats_list:
             index_name = s["index_name"]
             if not index_name or not s["column_name"]:
@@ -226,11 +224,11 @@ class MySQLSyncService:
         return by_index
 
     @staticmethod
-    def _classify_index_groups(by_index: Dict[str, Dict[str, Any]]):
+    def _classify_index_groups(by_index: dict[str, dict[str, Any]]):
         """把分组后的索引拆成主键 / 唯一索引 / 普通索引三类。"""
-        primary_keys: List[List[str]] = []
-        unique_indexes: List[Dict[str, Any]] = []
-        indexes: List[Dict[str, Any]] = []
+        primary_keys: list[list[str]] = []
+        unique_indexes: list[dict[str, Any]] = []
+        indexes: list[dict[str, Any]] = []
         for index_name, info in by_index.items():
             columns = [col for _, col in sorted(info["columns"])]
             if index_name == "PRIMARY":
@@ -243,7 +241,7 @@ class MySQLSyncService:
 
     @staticmethod
     def _apply_index_stats(
-        tables_by_name: Dict[str, Dict[str, Any]], stats_by_table: Dict[str, List[Dict[str, Any]]]
+        tables_by_name: dict[str, dict[str, Any]], stats_by_table: dict[str, list[dict[str, Any]]]
     ) -> None:
         for table_name, stats_list in stats_by_table.items():
             table = tables_by_name.get(table_name)
@@ -257,8 +255,8 @@ class MySQLSyncService:
 
     @staticmethod
     def _select_requested_tables(
-        tables_by_name: Dict[str, Dict[str, Any]], table_names: Optional[List[str]]
-    ) -> List[Dict[str, Any]]:
+        tables_by_name: dict[str, dict[str, Any]], table_names: list[str] | None
+    ) -> list[dict[str, Any]]:
         if table_names:
             return [tables_by_name[name] for name in table_names if name in tables_by_name]
         return list(tables_by_name.values())
@@ -272,8 +270,8 @@ class HiveSyncService:
         host: str,
         port: int = 10000,
         database: str = "default",
-        username: Optional[str] = None,
-        password: Optional[str] = None,
+        username: str | None = None,
+        password: str | None = None,
     ) -> None:
         self.host = host
         self.port = port
@@ -294,7 +292,7 @@ class HiveSyncService:
         apply_hive_socket_timeout(getattr(conn, "_transport", None), SOCKET_TIMEOUT_SECONDS)
         return conn
 
-    def _get_tables(self, conn=None) -> List[str]:
+    def _get_tables(self, conn=None) -> list[str]:
         should_close = conn is None
         conn = conn or self._get_connection()
         try:
@@ -306,7 +304,7 @@ class HiveSyncService:
                 conn.close()
 
     @staticmethod
-    def _hive_section_marker(col_name: str) -> Optional[str]:
+    def _hive_section_marker(col_name: str) -> str | None:
         """识别 DESCRIBE FORMATTED 输出中的分段标记行，非标记行返回 None。"""
         if col_name == "# Partition Information":
             return "partition"
@@ -325,7 +323,7 @@ class HiveSyncService:
 
     @staticmethod
     def _append_hive_column(
-        columns: List[Dict[str, Any]],
+        columns: list[dict[str, Any]],
         partition_columns: set[str],
         seen_columns: set[str],
         section: str,
@@ -358,8 +356,8 @@ class HiveSyncService:
         return table_comment
 
     @classmethod
-    def _parse_hive_metadata_rows(cls, rows) -> Dict[str, Any]:
-        columns: List[Dict[str, Any]] = []
+    def _parse_hive_metadata_rows(cls, rows) -> dict[str, Any]:
+        columns: list[dict[str, Any]] = []
         partition_columns: set[str] = set()
         table_comment = ""
         seen_columns: set[str] = set()
@@ -386,7 +384,7 @@ class HiveSyncService:
             "partition_columns": partition_columns,
         }
 
-    def _get_table_metadata(self, table_name: str, conn=None) -> Dict[str, Any]:
+    def _get_table_metadata(self, table_name: str, conn=None) -> dict[str, Any]:
         should_close = conn is None
         conn = conn or self._get_connection()
         try:
@@ -403,9 +401,9 @@ class HiveSyncService:
 
     def _get_full_schema(
         self,
-        table_names: Optional[List[str]] = None,
+        table_names: list[str] | None = None,
         max_workers: int = DEFAULT_MAX_WORKERS,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         selected_names = self._get_tables() if table_names is None else list(table_names)
         invalid_names = [name for name in selected_names if not _is_valid_hive_identifier(name)]
         if invalid_names:
@@ -413,7 +411,7 @@ class HiveSyncService:
         if not selected_names:
             return []
 
-        def load_table(table_name: str) -> Dict[str, Any]:
+        def load_table(table_name: str) -> dict[str, Any]:
             conn = self._get_connection()
             try:
                 metadata = self._get_table_metadata(table_name, conn)
@@ -428,8 +426,8 @@ class HiveSyncService:
             finally:
                 conn.close()
 
-        tables: List[Dict[str, Any]] = []
-        failed_tables: List[str] = []
+        tables: list[dict[str, Any]] = []
+        failed_tables: list[str] = []
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {executor.submit(load_table, name): name for name in selected_names}
             for future in as_completed(futures):
@@ -445,14 +443,14 @@ class HiveSyncService:
         tables.sort(key=lambda item: table_order.get(item["table_name"], len(table_order)))
         return tables
 
-    async def get_tables_async(self) -> List[str]:
+    async def get_tables_async(self) -> list[str]:
         return await asyncio.to_thread(self._get_tables)
 
     async def get_full_schema_async(
         self,
-        table_names: Optional[List[str]] = None,
-        max_workers: Optional[int] = None,
-    ) -> List[Dict[str, Any]]:
+        table_names: list[str] | None = None,
+        max_workers: int | None = None,
+    ) -> list[dict[str, Any]]:
         """异步读取完整表结构；max_workers=None 时运行期经配置服务解析并发上限。"""
         if max_workers is None:
             hive_schema_max_workers = await get_runtime_setting("CHAT_DATA_HIVE_SCHEMA_MAX_WORKERS")
@@ -465,11 +463,11 @@ def validate_hive_meta_config() -> None:
         raise ValueError("元数据 HTTP 模式需要配置 CHAT_DATA_META_TABLES_URL/CHAT_DATA_META_SCHEMA_URL")
 
 
-def _build_headers() -> Dict[str, str]:
+def _build_headers() -> dict[str, str]:
     return build_http_auth_headers(HTTP_AUTH_TOKEN)
 
 
-def _meta_payload_summary(payload: Dict[str, Any]) -> Dict[str, Any]:
+def _meta_payload_summary(payload: dict[str, Any]) -> dict[str, Any]:
     summary = dict(payload or {})
     table_names = summary.get("table_names")
     if isinstance(table_names, list):
@@ -479,7 +477,7 @@ def _meta_payload_summary(payload: Dict[str, Any]) -> Dict[str, Any]:
     return summary
 
 
-def _meta_response_summary(payload: Any) -> Dict[str, Any]:
+def _meta_response_summary(payload: Any) -> dict[str, Any]:
     if not isinstance(payload, dict):
         return {"payload_type": type(payload).__name__}
     data = payload.get("data")
@@ -492,15 +490,15 @@ def _meta_response_summary(payload: Any) -> Dict[str, Any]:
 
 
 def _build_payload(
-    source_config: Dict[str, Any],
-    table_names: Optional[List[str]] = None,
-    user_id: Optional[str] = None,
-    username: Optional[str] = None,
-) -> Dict[str, Any]:
+    source_config: dict[str, Any],
+    table_names: list[str] | None = None,
+    user_id: str | None = None,
+    username: str | None = None,
+) -> dict[str, Any]:
     org_code = str(source_config.get("org_code") or "").strip()
     if not org_code:
         raise ValueError("元数据 HTTP 请求缺少 orgCode")
-    payload: Dict[str, Any] = {
+    payload: dict[str, Any] = {
         "source_type": "hive",
         "orgCode": org_code,
         "orgName": str(source_config.get("org_name") or "").strip(),
@@ -516,7 +514,7 @@ def _build_payload(
     return payload
 
 
-def _extract_response_data(payload: Dict[str, Any]) -> Dict[str, Any]:
+def _extract_response_data(payload: dict[str, Any]) -> dict[str, Any]:
     code = payload.get("code")
     try:
         normalized_code = int(code) if code is not None else None
@@ -529,11 +527,11 @@ def _extract_response_data(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _normalize_schema_tables(
-    tables: List[Any],
-    table_descriptions: Optional[Dict[str, str]] = None,
-) -> List[Dict[str, Any]]:
+    tables: list[Any],
+    table_descriptions: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
     description_map = table_descriptions or {}
-    validated_tables: List[Dict[str, Any]] = []
+    validated_tables: list[dict[str, Any]] = []
     for table_index, table in enumerate(tables, start=1):
         if not isinstance(table, dict):
             raise RuntimeError(f"Hive 元数据表结构第 {table_index} 项不是对象")
@@ -560,7 +558,7 @@ def _normalize_schema_tables(
     return validated_tables
 
 
-def _normalize_hive_column(table_name: str, column: Any, column_index: int) -> Dict[str, Any]:
+def _normalize_hive_column(table_name: str, column: Any, column_index: int) -> dict[str, Any]:
     """校验并标准化单个 Hive 字段描述。"""
     if not isinstance(column, dict):
         raise RuntimeError(f"Hive 元数据表结构 {table_name} 第 {column_index} 个字段不是对象")
@@ -586,8 +584,8 @@ def _normalize_hive_column(table_name: str, column: Any, column_index: int) -> D
     }
 
 
-def _normalize_table_items(tables: List[Any]) -> List[Dict[str, str]]:
-    table_items: List[Dict[str, str]] = []
+def _normalize_table_items(tables: list[Any]) -> list[dict[str, str]]:
+    table_items: list[dict[str, str]] = []
     for table_index, table in enumerate(tables, start=1):
         if not isinstance(table, dict):
             raise RuntimeError(f"Hive 元数据表列表第 {table_index} 项不是对象")
@@ -603,7 +601,7 @@ def _normalize_table_items(tables: List[Any]) -> List[Dict[str, str]]:
     return table_items
 
 
-async def _post_json(url: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+async def _post_json(url: str, payload: dict[str, Any]) -> dict[str, Any]:
     logger.info("[HiveMetaHTTP] 请求对方接口: url=%s payload=%s", url, _meta_payload_summary(payload))
     try:
         async with open_http_client(
@@ -632,10 +630,10 @@ async def _post_json(url: str, payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 async def get_hive_meta_tables_async(
-    source_config: Dict[str, Any],
-    user_id: Optional[str] = None,
-    username: Optional[str] = None,
-) -> List[str]:
+    source_config: dict[str, Any],
+    user_id: str | None = None,
+    username: str | None = None,
+) -> list[str]:
     validate_hive_meta_config()
     data = await _post_json(
         META_TABLES_URL,
@@ -648,10 +646,10 @@ async def get_hive_meta_tables_async(
 
 
 async def _fetch_hive_meta_table_index(
-    source_config: Dict[str, Any],
-    user_id: Optional[str],
-    username: Optional[str],
-) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    source_config: dict[str, Any],
+    user_id: str | None,
+    username: str | None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """请求表列表接口并归一化，返回 (table_items, 表名→描述 索引)。"""
     data = await _post_json(
         META_TABLES_URL,
@@ -665,23 +663,23 @@ async def _fetch_hive_meta_table_index(
     return table_items, descriptions
 
 
-def _normalize_selected_table_names(table_names: Optional[List[str]], table_items: List[Dict[str, Any]]) -> List[str]:
+def _normalize_selected_table_names(table_names: list[str] | None, table_items: list[dict[str, Any]]) -> list[str]:
     """按请求名单（缺省全量）归一化待加载表名，剔除空值。"""
     selected_names = [item["table_name"] for item in table_items] if table_names is None else table_names
     return [str(name).strip() for name in selected_names if str(name or "").strip()]
 
 
 async def _load_hive_table_schemas(
-    source_config: Dict[str, Any],
-    normalized_names: List[str],
-    descriptions: Dict[str, Any],
-    user_id: Optional[str],
-    username: Optional[str],
-) -> List[Dict[str, Any]]:
+    source_config: dict[str, Any],
+    normalized_names: list[str],
+    descriptions: dict[str, Any],
+    user_id: str | None,
+    username: str | None,
+) -> list[dict[str, Any]]:
     """并发加载各表结构并按请求顺序排列；接口未返回的表抛 RuntimeError。"""
     semaphore = asyncio.Semaphore(META_SCHEMA_MAX_CONCURRENCY)
 
-    async def load_table(table_name: str) -> List[Dict[str, Any]]:
+    async def load_table(table_name: str) -> list[dict[str, Any]]:
         async with semaphore:
             table_data = await _post_json(
                 META_SCHEMA_URL,
@@ -701,11 +699,11 @@ async def _load_hive_table_schemas(
 
 
 async def get_hive_meta_schema_async(
-    source_config: Dict[str, Any],
-    table_names: Optional[List[str]] = None,
-    user_id: Optional[str] = None,
-    username: Optional[str] = None,
-) -> List[Dict[str, Any]]:
+    source_config: dict[str, Any],
+    table_names: list[str] | None = None,
+    user_id: str | None = None,
+    username: str | None = None,
+) -> list[dict[str, Any]]:
     validate_hive_meta_config()
     table_items, descriptions = await _fetch_hive_meta_table_index(source_config, user_id, username)
     normalized_names = _normalize_selected_table_names(table_names, table_items)
@@ -719,29 +717,29 @@ class DataSourceMetadataAdapter(ABC):
 
     def __init__(
         self,
-        source_config: Dict[str, Any],
+        source_config: dict[str, Any],
         *,
-        user_id: Optional[str] = None,
-        username: Optional[str] = None,
+        user_id: str | None = None,
+        username: str | None = None,
     ) -> None:
         self.source_config = dict(source_config or {})
         self.user_id = user_id
         self.username = username
 
     @abstractmethod
-    async def list_tables(self) -> List[Any]:
+    async def list_tables(self) -> list[Any]:
         """读取物理表名列表。"""
 
     @abstractmethod
     async def load_schema(
         self,
-        table_names: Optional[List[str]] = None,
-    ) -> List[Dict[str, Any]]:
+        table_names: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
         """读取指定或全部物理表结构。"""
 
 
 class MySQLMetadataAdapter(DataSourceMetadataAdapter):
-    def __init__(self, source_config: Dict[str, Any], **kwargs: Any) -> None:
+    def __init__(self, source_config: dict[str, Any], **kwargs: Any) -> None:
         super().__init__(source_config, **kwargs)
         credentials = resolve_mysql_credentials(self.source_config)
         self._service = MySQLSyncService(
@@ -752,15 +750,15 @@ class MySQLMetadataAdapter(DataSourceMetadataAdapter):
             password=credentials["password"],
         )
 
-    async def list_tables(self) -> List[Any]:
+    async def list_tables(self) -> list[Any]:
         return await self._service.get_tables_async()
 
-    async def load_schema(self, table_names: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    async def load_schema(self, table_names: list[str] | None = None) -> list[dict[str, Any]]:
         return await self._service.get_full_schema_async(table_names)
 
 
 class HiveDirectMetadataAdapter(DataSourceMetadataAdapter):
-    def __init__(self, source_config: Dict[str, Any], **kwargs: Any) -> None:
+    def __init__(self, source_config: dict[str, Any], **kwargs: Any) -> None:
         super().__init__(source_config, **kwargs)
         credentials = resolve_hive_credentials(self.source_config)
         self._service = HiveSyncService(
@@ -771,22 +769,22 @@ class HiveDirectMetadataAdapter(DataSourceMetadataAdapter):
             password=credentials.get("password"),
         )
 
-    async def list_tables(self) -> List[Any]:
+    async def list_tables(self) -> list[Any]:
         return await self._service.get_tables_async()
 
-    async def load_schema(self, table_names: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    async def load_schema(self, table_names: list[str] | None = None) -> list[dict[str, Any]]:
         return await self._service.get_full_schema_async(table_names)
 
 
 class HiveHttpMetadataAdapter(DataSourceMetadataAdapter):
-    async def list_tables(self) -> List[Any]:
+    async def list_tables(self) -> list[Any]:
         return await get_hive_meta_tables_async(
             self.source_config,
             user_id=self.user_id,
             username=self.username,
         )
 
-    async def load_schema(self, table_names: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    async def load_schema(self, table_names: list[str] | None = None) -> list[dict[str, Any]]:
         return await get_hive_meta_schema_async(
             self.source_config,
             table_names,
@@ -806,7 +804,7 @@ class DataSourceMetadataAdapterRegistry:
     """仅由服务端代码维护的元数据适配器注册表。"""
 
     def __init__(self) -> None:
-        self._adapter_types: Dict[tuple[str, str], Type[DataSourceMetadataAdapter]] = {}
+        self._adapter_types: dict[tuple[str, str], type[DataSourceMetadataAdapter]] = {}
 
     @staticmethod
     def _key(source_type: str, access_type: str) -> tuple[str, str]:
@@ -818,7 +816,7 @@ class DataSourceMetadataAdapterRegistry:
         self,
         source_type: str,
         access_type: str,
-        adapter_type: Type[DataSourceMetadataAdapter],
+        adapter_type: type[DataSourceMetadataAdapter],
     ) -> None:
         key = self._key(source_type, access_type)
         if key in self._adapter_types:
@@ -831,10 +829,10 @@ class DataSourceMetadataAdapterRegistry:
         self,
         source_type: str,
         access_type: str,
-        source_config: Dict[str, Any],
+        source_config: dict[str, Any],
         *,
-        user_id: Optional[str] = None,
-        username: Optional[str] = None,
+        user_id: str | None = None,
+        username: str | None = None,
     ) -> DataSourceMetadataAdapter:
         key = self._key(source_type, access_type)
         adapter_type = self._adapter_types.get(key)
@@ -842,7 +840,7 @@ class DataSourceMetadataAdapterRegistry:
             raise MetadataAdapterNotFoundError(*key)
         return adapter_type(source_config, user_id=user_id, username=username)
 
-    def supported_keys(self) -> List[tuple[str, str]]:
+    def supported_keys(self) -> list[tuple[str, str]]:
         return sorted(self._adapter_types)
 
 

@@ -3,7 +3,7 @@ import json
 import os
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from pydantic import ValidationError
@@ -21,7 +21,7 @@ from apps.chat_data_app.services.sql_run import runtime as query_runtime
 
 
 def test_current_time_tool_returns_detail_only_when_requested():
-    current_time = datetime(2026, 7, 24, 10, 30, 0, tzinfo=timezone.utc)
+    current_time = datetime(2026, 7, 24, 10, 30, 0, tzinfo=UTC)
     assert get_current_time_payload(current_time, detail=False) == {
         "current_time": "2026-07-24 18:30:00",
     }

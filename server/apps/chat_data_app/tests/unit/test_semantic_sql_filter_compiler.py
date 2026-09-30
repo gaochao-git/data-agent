@@ -7,6 +7,7 @@ from apps.chat_data_app.services.semantic.core.semantic_sql.filter_compiler impo
 def test_build_where_leaf_clause_supports_between_and_field_reference():
     def column(table, name, multi):
         return f"{table}.`{name}`" if multi else f"`{name}`"
+
     result = build_where_leaf_clause(
         {"table": "orders", "column": "amount", "operator": "BETWEEN", "value": [10, 20]},
         is_multi_table=False,
@@ -23,6 +24,7 @@ def test_build_where_leaf_clause_supports_between_and_field_reference():
 def test_build_filter_tree_clause_preserves_nested_parentheses():
     def column(table, name, multi):
         return f"`{name}`"
+
     result = build_filter_tree_clause(
         {
             "and": [
@@ -53,6 +55,7 @@ def test_build_where_leaf_clause_rejects_operator_outside_whitelist():
 
     def column(table, name, multi):
         return f"`{name}`"
+
     with pytest.raises(ValueError, match="不支持的筛选操作符"):
         build_where_leaf_clause(
             {"table": "orders", "column": "amount", "operator": "= 1 OR (SELECT 1)", "value": 1},
@@ -70,6 +73,7 @@ def test_build_where_leaf_clause_rejects_unsafe_right_expression():
 
     def column(table, name, multi):
         return f"`{name}`"
+
     for unsafe in ("1; DROP TABLE users", "1 -- comment", "1 /* block */", "1 OR INSERT INTO t VALUES(1)"):
         with pytest.raises(ValueError, match="只允许单条只读 SQL 表达式"):
             build_where_leaf_clause(
@@ -93,6 +97,7 @@ def test_build_where_leaf_clause_allows_subquery_in_expression():
     # IN (SELECT ...) 是 Builder 的显式产品能力，黑名单不拦，由执行层 sql_guard 兜底
     def column(table, name, multi):
         return f"`{name}`"
+
     result = build_where_leaf_clause(
         {
             "table": "orders",
@@ -117,6 +122,7 @@ def test_build_where_leaf_clause_rejects_unsafe_dimension_expression():
 
     def column(table, name, multi):
         return f"`{name}`"
+
     with pytest.raises(ValueError, match="维度表达式"):
         build_where_leaf_clause(
             {

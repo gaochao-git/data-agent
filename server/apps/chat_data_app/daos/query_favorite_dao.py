@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime
-from typing import Callable, List, Optional
 
 from sqlalchemy import select
 
@@ -14,7 +14,7 @@ from utils.models import SqlQueryFavorite
 class QueryFavoriteDao:
     """封装查询收藏相关 ORM 读写。"""
 
-    def __init__(self, session_context: Optional[Callable] = None):
+    def __init__(self, session_context: Callable | None = None):
         self._session_context = session_context or default_get_session
 
     async def list_favorites(
@@ -22,9 +22,9 @@ class QueryFavoriteDao:
         *,
         datasource_id: str,
         user_id: str,
-        query_type: Optional[str],
+        query_type: str | None,
         limit: int,
-    ) -> List[SqlQueryFavorite]:
+    ) -> list[SqlQueryFavorite]:
         async with self._session_context() as db:
             stmt = select(SqlQueryFavorite).filter_by(datasource_id=datasource_id, user_id=user_id, delete_flag=0)
             if query_type:
@@ -39,11 +39,11 @@ class QueryFavoriteDao:
         datasource_id: str,
         user_id: str,
         username: str,
-        semantic_config_id: Optional[str],
+        semantic_config_id: str | None,
         query_type: str,
         favorite_title: str,
         query_text: str,
-        builder_config: Optional[str],
+        builder_config: str | None,
         now: datetime,
     ) -> SqlQueryFavorite:
         async with self._session_context() as db:
@@ -67,7 +67,7 @@ class QueryFavoriteDao:
             await db.flush()
             return item
 
-    async def get_user_favorite(self, *, favorite_id: int, user_id: str) -> Optional[SqlQueryFavorite]:
+    async def get_user_favorite(self, *, favorite_id: int, user_id: str) -> SqlQueryFavorite | None:
         async with self._session_context() as db:
             result = await db.execute(
                 select(SqlQueryFavorite).filter_by(id=favorite_id, user_id=user_id, delete_flag=0)
@@ -80,12 +80,12 @@ class QueryFavoriteDao:
         favorite_id: int,
         user_id: str,
         username: str,
-        favorite_title: Optional[str] = None,
-        query_text: Optional[str] = None,
-        builder_config: Optional[str] = None,
-        semantic_config_id: Optional[str] = None,
-        now: Optional[datetime] = None,
-    ) -> Optional[SqlQueryFavorite]:
+        favorite_title: str | None = None,
+        query_text: str | None = None,
+        builder_config: str | None = None,
+        semantic_config_id: str | None = None,
+        now: datetime | None = None,
+    ) -> SqlQueryFavorite | None:
         async with self._session_context() as db:
             result = await db.execute(
                 select(SqlQueryFavorite).filter_by(id=favorite_id, user_id=user_id, delete_flag=0)
@@ -113,7 +113,7 @@ class QueryFavoriteDao:
         favorite_id: int,
         user_id: str,
         username: str,
-        now: Optional[datetime] = None,
+        now: datetime | None = None,
     ) -> bool:
         async with self._session_context() as db:
             result = await db.execute(

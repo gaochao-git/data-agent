@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Optional, Set
+from typing import Any
 
 from langchain_core.messages import HumanMessage
 
@@ -20,7 +20,7 @@ from ..llm_config import get_chat_data_llm
 logger = get_logger(__name__)
 
 
-def build_column_dict_generate_prompt(table_name: str, column_name: str, column: Dict[str, Any], text: str) -> str:
+def build_column_dict_generate_prompt(table_name: str, column_name: str, column: dict[str, Any], text: str) -> str:
     """构造字段数据字典生成提示词。"""
     payload = {
         "table_name": table_name,
@@ -43,10 +43,10 @@ def build_column_dict_generate_prompt(table_name: str, column_name: str, column:
     )
 
 
-def parse_column_enum_values(raw_enums: Any) -> List[Dict[str, str]]:
+def parse_column_enum_values(raw_enums: Any) -> list[dict[str, str]]:
     """解析字段枚举候选值列表，去重并截断长度。"""
-    enum_values: List[Dict[str, str]] = []
-    seen: Set[str] = set()
+    enum_values: list[dict[str, str]] = []
+    seen: set[str] = set()
     if not isinstance(raw_enums, list):
         return enum_values
     for item in raw_enums:
@@ -61,7 +61,7 @@ def parse_column_enum_values(raw_enums: Any) -> List[Dict[str, str]]:
     return enum_values
 
 
-def parse_column_dict_generate_response(content: str) -> Dict[str, Any]:
+def parse_column_dict_generate_response(content: str) -> dict[str, Any]:
     """解析字段数据字典生成模型返回。"""
     parsed = parse_llm_json(str(content or ""), strict=False)
     raw_dict = parsed.get("dict") if isinstance(parsed, dict) else {}
@@ -77,8 +77,8 @@ def parse_column_dict_generate_response(content: str) -> Dict[str, Any]:
 
 
 def find_datasource_column(
-    datasource: Optional[Dict[str, Any]], table_name: str, column_name: str
-) -> Optional[Dict[str, Any]]:
+    datasource: dict[str, Any] | None, table_name: str, column_name: str
+) -> dict[str, Any] | None:
     """在数据源表结构中定位指定字段。"""
     target_column = None
     for table in (datasource or {}).get("ds_tables") or []:
@@ -112,12 +112,12 @@ async def invoke_column_dict_llm(prompt: str, datasource_id: str, table_name: st
 
 
 async def generate_column_dict_candidates(
-    target_column: Dict[str, Any],
+    target_column: dict[str, Any],
     table_name: str,
     column_name: str,
     text: str,
     datasource_id: str,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """生成字段数据字典候选值（提示词 → LLM → 解析），不直接保存。"""
     prompt = build_column_dict_generate_prompt(table_name, column_name, target_column, text)
     content = await invoke_column_dict_llm(prompt, datasource_id, table_name, column_name)

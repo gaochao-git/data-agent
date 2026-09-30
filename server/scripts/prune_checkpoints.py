@@ -34,8 +34,7 @@ import json
 import re
 import sys
 import time
-from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional, Set, Tuple
+from datetime import UTC, datetime, timedelta
 
 try:
     import pymysql
@@ -93,7 +92,7 @@ def _chunks(items: list, size: int):
         yield items[i : i + size]
 
 
-def _zone_offset(raw: Optional[str]) -> timedelta:
+def _zone_offset(raw: str | None) -> timedelta:
     """ISO 时区后缀转 timedelta；缺省按 UTC。"""
     if not raw or raw == "Z":
         return timedelta(0)
@@ -102,7 +101,7 @@ def _zone_offset(raw: Optional[str]) -> timedelta:
     return sign * timedelta(hours=int(body[:2]), minutes=int(body[2:4]))
 
 
-def _parse_ts(raw) -> Optional[datetime]:
+def _parse_ts(raw) -> datetime | None:
     """解析 checkpoint ts 并统一成 UTC aware。
 
     Python 3.6 既没有 datetime.fromisoformat，其 %z 也不认 "+00:00" 带冒号写法，
@@ -116,18 +115,18 @@ def _parse_ts(raw) -> Optional[datetime]:
         local = datetime(
             int(year), int(month), int(day), int(hour), int(minute), int(second), int((frac or "0")[:6].ljust(6, "0"))
         )
-        return (local - _zone_offset(zone)).replace(tzinfo=timezone.utc)
+        return (local - _zone_offset(zone)).replace(tzinfo=UTC)
     except ValueError:
         return None
 
 
-def _idle_too_short(last: Optional[datetime]) -> bool:
+def _idle_too_short(last: datetime | None) -> bool:
     """判不出活动时间一律返回 True（不碰），避免 ts 异常导致误删活跃会话。"""
     if last is None:
         return True
     if last.tzinfo is None:
-        last = last.replace(tzinfo=timezone.utc)
-    return datetime.now(timezone.utc) - last < timedelta(days=MIN_IDLE_DAYS)
+        last = last.replace(tzinfo=UTC)
+    return datetime.now(UTC) - last < timedelta(days=MIN_IDLE_DAYS)
 
 
 def run_with_retry(conn, sql: str, params: tuple) -> int:
@@ -162,11 +161,11 @@ def _idle_cutoff_id(days: int) -> str:
     unix_ns = int(time.time()) * 10**9 - days * 86400 * 10**9
     ts100 = unix_ns // 100 + _UUID_EPOCH_100NS_OFFSET
     value = (((ts100 >> 12) & 0xFFFFFFFFFFFF) << 80) | (6 << 76) | ((ts100 & 0x0FFF) << 64) | (0x8000 << 48)
-    hex32 = "%032x" % value
-    return "%s-%s-%s-%s-%s" % (hex32[:8], hex32[8:12], hex32[12:16], hex32[16:20], hex32[20:32])
+    hex32 = f"{value:032x}"
+    return f"{hex32[:8]}-{hex32[8:12]}-{hex32[12:16]}-{hex32[16:20]}-{hex32[20:32]}"
 
 
-def discover_prune_targets(cur) -> List[dict]:
+def discover_prune_targets(cur) -> list[dict]:
     """体积超阈值且闲置超期的会话（两段式，避免全表扫 blob/JSON 大列）。
 
     第一步：GROUP BY thread_id 取 MAX(checkpoint_id)，thread_id/checkpoint_id
@@ -196,7 +195,7 @@ def discover_prune_targets(cur) -> List[dict]:
 # ---------------- keep-latest 裁剪 ----------------
 
 
-def load_keepers(cur, thread_id: str) -> List[dict]:
+def load_keepers(cur, thread_id: str) -> list[dict]:
     """每个命名空间保留最新一份快照（checkpoint_id 为时间序 UUID，字典序即时间序）。"""
     cur.execute(
         """SELECT checkpoint_ns_hash, MAX(checkpoint_id) AS keep_id, COUNT(*) AS total
@@ -206,7 +205,7 @@ def load_keepers(cur, thread_id: str) -> List[dict]:
     return [{"ns_hash": r[0], "keep_id": r[1], "total": r[2]} for r in cur.fetchall()]
 
 
-def keeper_activity(cur, thread_id: str, keepers: List[dict]) -> Optional[datetime]:
+def keeper_activity(cur, thread_id: str, keepers: list[dict]) -> datetime | None:
     """取保留快照里最新的 ts，用于删除前复核该会话是否仍然闲置。"""
     stamps = []
     for k in keepers:
@@ -222,7 +221,7 @@ def keeper_activity(cur, thread_id: str, keepers: List[dict]) -> Optional[dateti
     return max(stamps) if stamps else None
 
 
-def referenced_versions(cur, thread_id: str, keepers: List[dict]) -> Dict[tuple, Set[str]]:
+def referenced_versions(cur, thread_id: str, keepers: list[dict]) -> dict[tuple, set[str]]:
     """保留快照的 channel_versions 引用集。按引用取而非最大版本（见模块 docstring）。"""
     refs = {}  # type: Dict[tuple, Set[str]]
     for k in keepers:
@@ -238,7 +237,7 @@ def referenced_versions(cur, thread_id: str, keepers: List[dict]) -> Dict[tuple,
     return refs
 
 
-def plan_blobs(cur, thread_id: str, refs: Dict[tuple, Set[str]]) -> Tuple[dict, int, int, int]:
+def plan_blobs(cur, thread_id: str, refs: dict[tuple, set[str]]) -> tuple[dict, int, int, int]:
     """blob 行按"是否被保留快照引用"切分。返回 (待删分组, 待删行数, 待删字节, 保留行数)。
 
     待删分组值为 (version, 字节数) 列表，prune_blobs 据此按累计字节分批。
@@ -260,7 +259,7 @@ def plan_blobs(cur, thread_id: str, refs: Dict[tuple, Set[str]]) -> Tuple[dict, 
     return plan, del_rows, del_bytes, kept_rows
 
 
-def plan_old_snapshots(cur, thread_id: str, keepers: List[dict]) -> Dict[bytes, list]:
+def plan_old_snapshots(cur, thread_id: str, keepers: list[dict]) -> dict[bytes, list]:
     """按命名空间收集待删的旧 checkpoint_id；writes 用同一批 id 一起清。"""
     out = {}  # type: Dict[bytes, list]
     for k in keepers:
@@ -273,7 +272,7 @@ def plan_old_snapshots(cur, thread_id: str, keepers: List[dict]) -> Dict[bytes, 
     return out
 
 
-def keeper_old_format_ids(cur, thread_id: str, keepers: List[dict]) -> List[str]:
+def keeper_old_format_ids(cur, thread_id: str, keepers: list[dict]) -> list[str]:
     """keeper 中 checkpoint 格式 v<4 的旧格式快照 id。
 
     v<4 时 saver 续聊会读父快照的 pending sends 做迁移：aio_base.py 的
@@ -296,7 +295,7 @@ def keeper_old_format_ids(cur, thread_id: str, keepers: List[dict]) -> List[str]
     return old_ids
 
 
-def prune_blobs(conn, thread_id: str, plan: Dict[tuple, list]) -> int:
+def prune_blobs(conn, thread_id: str, plan: dict[tuple, list]) -> int:
     """删除待删 blob。plan 值为 (version, 字节数) 列表（见 plan_blobs），
     按累计字节 ≤ BLOB_BATCH_MB 且行数 ≤ BATCH_ROWS 双限分批。"""
     sql_tpl = (
@@ -324,7 +323,7 @@ def prune_blobs(conn, thread_id: str, plan: Dict[tuple, list]) -> int:
     return deleted
 
 
-def prune_snapshots(conn, thread_id: str, old_ids: Dict[bytes, list]) -> Tuple[int, int]:
+def prune_snapshots(conn, thread_id: str, old_ids: dict[bytes, list]) -> tuple[int, int]:
     """先清 writes 再清 checkpoints（同批 checkpoint_id）。"""
     ck_sql = "DELETE FROM checkpoints WHERE thread_id = %s AND checkpoint_ns_hash = %s AND checkpoint_id IN ({ph})"
     wr_sql = (
@@ -342,7 +341,7 @@ def prune_snapshots(conn, thread_id: str, old_ids: Dict[bytes, list]) -> Tuple[i
     return ck_del, wr_del
 
 
-def collect_orphan_writes(cur, thread_id: str) -> Dict[bytes, list]:
+def collect_orphan_writes(cur, thread_id: str) -> dict[bytes, list]:
     """checkpoint_id 已不在 checkpoints 表的 writes 行（异常中断残留）。
 
     plan_old_snapshots 只覆盖 checkpoints 表出现过的 id，这类孤儿行
@@ -369,7 +368,7 @@ def collect_orphan_writes(cur, thread_id: str) -> Dict[bytes, list]:
     return out
 
 
-def prune_orphan_writes(conn, thread_id: str, orphans: Dict[bytes, list]) -> int:
+def prune_orphan_writes(conn, thread_id: str, orphans: dict[bytes, list]) -> int:
     wr_sql = (
         "DELETE FROM checkpoint_writes WHERE thread_id = %s AND checkpoint_ns_hash = %s AND checkpoint_id IN ({ph})"
     )
@@ -382,7 +381,7 @@ def prune_orphan_writes(conn, thread_id: str, orphans: Dict[bytes, list]) -> int
     return deleted
 
 
-def _missing_messages(cur, thread_id: str, keeper: dict) -> Optional[str]:
+def _missing_messages(cur, thread_id: str, keeper: dict) -> str | None:
     """messages 通道是续聊的关键，必须仍可解析。"""
     cur.execute(
         """SELECT JSON_UNQUOTE(JSON_EXTRACT(`checkpoint`, '$.channel_versions.messages'))
@@ -401,11 +400,11 @@ def _missing_messages(cur, thread_id: str, keeper: dict) -> Optional[str]:
     )
     if cur.fetchone()[0] == 0:
         ns = keeper["ns_hash"].hex()[:8] if isinstance(keeper["ns_hash"], bytes) else "?"
-        return "命名空间 %s 的 messages 快照缺失@%s" % (ns, version)
+        return f"命名空间 {ns} 的 messages 快照缺失@{version}"
     return None
 
 
-def verify_kept(cur, thread_id: str, keepers: List[dict], expected_blobs: int) -> List[str]:
+def verify_kept(cur, thread_id: str, keepers: list[dict], expected_blobs: int) -> list[str]:
     """对账式自检。
 
     只应删掉"未被引用"的行，所以保留行必须精确等于计划数——不多不少。
@@ -416,12 +415,12 @@ def verify_kept(cur, thread_id: str, keepers: List[dict], expected_blobs: int) -
     cur.execute("SELECT COUNT(*) FROM checkpoint_blobs WHERE thread_id = %s", (thread_id,))
     left = cur.fetchone()[0]
     if left != expected_blobs:
-        problems.append("blob 残留 %d 行 != 计划保留 %d 行" % (left, expected_blobs))
+        problems.append(f"blob 残留 {left} 行 != 计划保留 {expected_blobs} 行")
 
     cur.execute("SELECT COUNT(*) FROM checkpoints WHERE thread_id = %s", (thread_id,))
     ck_left = cur.fetchone()[0]
     if ck_left != len(keepers):
-        problems.append("checkpoint 残留 %d != 命名空间数 %d" % (ck_left, len(keepers)))
+        problems.append(f"checkpoint 残留 {ck_left} != 命名空间数 {len(keepers)}")
 
     for k in keepers:
         missing = _missing_messages(cur, thread_id, k)
@@ -447,8 +446,8 @@ def prune_one(conn, target: dict, apply_delete: bool) -> dict:
                 return result
             last = keeper_activity(cur, thread_id, keepers)
             if _idle_too_short(last):
-                reason = ("已重新活跃 %s" % last.strftime("%m-%d %H:%M")) if last else "无法判定活动时间"
-                result["status"] = "skip(%s)" % reason
+                reason = f"已重新活跃 {last.strftime('%m-%d %H:%M')}" if last else "无法判定活动时间"
+                result["status"] = f"skip({reason})"
                 return result
             refs = referenced_versions(cur, thread_id, keepers)
             blob_plan, blob_rows, blob_bytes, kept_rows = plan_blobs(cur, thread_id, refs)
@@ -459,22 +458,13 @@ def prune_one(conn, target: dict, apply_delete: bool) -> dict:
             old_keepers = keeper_old_format_ids(cur, thread_id, keepers)
 
         print(
-            "  [裁剪] %s… %.0fMB, 闲置至 %s | 待删 blob %d 行/%.1fMB, 旧快照 %d, 孤儿 writes %d, 保留 %d 行"
-            % (
-                thread_id[:13],
-                target["mb"],
-                last.strftime("%m-%d"),
-                blob_rows,
-                blob_bytes / MB,
-                ck_rows,
-                orphan_rows,
-                kept_rows,
-            )
+            f"  [裁剪] {thread_id[:13]}… {target['mb']:.0f}MB, 闲置至 {last.strftime('%m-%d')} | "
+            f"待删 blob {blob_rows} 行/{blob_bytes / MB:.1f}MB, 旧快照 {ck_rows}, 孤儿 writes {orphan_rows}, 保留 {kept_rows} 行"
         )
         if old_keepers:
             print(
-                "    !! 警告：keeper 含 %d 个 v<4 旧格式快照，父快照裁剪后 pending-sends "
-                "将不可迁移（仅影响中断续跑），请人工确认" % len(old_keepers)
+                f"    !! 警告：keeper 含 {len(old_keepers)} 个 v<4 旧格式快照，父快照裁剪后 pending-sends "
+                "将不可迁移（仅影响中断续跑），请人工确认"
             )
         result["reclaim_mb"] = round(blob_bytes / MB, 1)
         if not apply_delete:
@@ -488,15 +478,10 @@ def prune_one(conn, target: dict, apply_delete: bool) -> dict:
     deleted = prune_blobs(conn, thread_id, blob_plan)
     with conn.cursor() as cur:
         problems = verify_kept(cur, thread_id, keepers, kept_rows)
-    result["status"] = "ok(blob %d/ckpt %d/writes %d/孤儿 %d) 自检 %s" % (
-        deleted,
-        ck_del,
-        wr_del,
-        orphan_del,
-        "PASS" if not problems else "FAIL",
-    )
+    check = "PASS" if not problems else "FAIL"
+    result["status"] = f"ok(blob {deleted}/ckpt {ck_del}/writes {wr_del}/孤儿 {orphan_del}) 自检 {check}"
     for problem in problems[:5]:
-        print("    !! 自检异常：%s" % problem)
+        print(f"    !! 自检异常：{problem}")
     return result
 
 
@@ -507,10 +492,9 @@ def main() -> int:
     started_at = datetime.now()
     apply_delete = parse_mode()
     mode = "EXECUTE(真删)" if apply_delete else "DRY-RUN(只统计)"
-    print("开始时间 %s" % started_at.strftime("%Y-%m-%d %H:%M:%S"))
+    print(f"开始时间 {started_at.strftime('%Y-%m-%d %H:%M:%S')}")
     print(
-        "目标库 %s:%s/%s  模式 %s  策略: 体积>%sMB 且闲置>%s天 → keep-latest 裁剪"
-        % (DB_HOST, DB_PORT, DB_NAME, mode, MIN_MB, MIN_IDLE_DAYS)
+        f"目标库 {DB_HOST}:{DB_PORT}/{DB_NAME}  模式 {mode}  策略: 体积>{MIN_MB}MB 且闲置>{MIN_IDLE_DAYS}天 → keep-latest 裁剪"
     )
     conn = connect(DB_NAME)
     results = []  # type: List[dict]
@@ -518,33 +502,31 @@ def main() -> int:
         with conn.cursor() as cur:
             prune_targets = discover_prune_targets(cur)
         # autocommit=True：发现阶段各 SELECT 已自提交，无遗留事务
-        print("发现裁剪目标 %d 个" % len(prune_targets))
+        print(f"发现裁剪目标 {len(prune_targets)} 个")
         for target in prune_targets:
             try:
                 results.append(prune_one(conn, target, apply_delete))
             except Exception as err:  # 单会话失败不影响其余（prune_one 的
                 # finally 已收口其规划事务，此处无遗留事务需要 rollback）
-                print("    !! 裁剪失败 %s: %s: %s" % (target["thread_id"], type(err).__name__, err))
-                results.append({"thread_id": target["thread_id"], "status": "error:%s" % err, "reclaim_mb": 0.0})
+                print(f"    !! 裁剪失败 {target['thread_id']}: {type(err).__name__}: {err}")
+                results.append({"thread_id": target["thread_id"], "status": f"error:{err}", "reclaim_mb": 0.0})
     finally:
         conn.close()
 
     total_mb = sum(r.get("reclaim_mb", 0.0) for r in results)
     print("\n===== 汇总 =====")
     for r in results:
-        print("  %-38s %-46s 回收 %sMB" % (r["thread_id"][:36], r.get("status", ""), r.get("reclaim_mb", 0.0)))
-    print("合计 %.1fMB" % total_mb)
+        print(f"  {r['thread_id'][:36]:<38} {r.get('status', ''):<46} 回收 {r.get('reclaim_mb', 0.0)}MB")
+    print(f"合计 {total_mb:.1f}MB")
     if not apply_delete:
         print("（dry-run 未做任何修改；确认无误后把参数换成 execute）")
     else:
         print("提示：InnoDB 不自动归还磁盘空间，页仅作 free 复用；确需缩表低峰执行 OPTIMIZE TABLE。")
     failed = [r for r in results if str(r.get("status", "")).startswith("error") or "FAIL" in str(r.get("status", ""))]
     ended_at = datetime.now()
-    print(
-        "结束时间 %s  耗时 %.1f 秒" % (ended_at.strftime("%Y-%m-%d %H:%M:%S"), (ended_at - started_at).total_seconds())
-    )
+    print(f"结束时间 {ended_at.strftime('%Y-%m-%d %H:%M:%S')}  耗时 {(ended_at - started_at).total_seconds():.1f} 秒")
     if failed:
-        print("!! %d 个会话失败或自检未通过，请人工复核" % len(failed))
+        print(f"!! {len(failed)} 个会话失败或自检未通过，请人工复核")
         return 1
     return 0
 

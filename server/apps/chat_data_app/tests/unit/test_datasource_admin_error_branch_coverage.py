@@ -264,7 +264,7 @@ def test_sync_metadata_reports_timeout(monkeypatch):
         admin,
         "get_datasource_manager",
         lambda: _MethodManager(
-            sync_datasource_schema_from_source_async=asyncio.TimeoutError(),
+            sync_datasource_schema_from_source_async=TimeoutError(),
         ),
     )
     payload = _payload(asyncio.run(admin.sync_datasource_group_metadata("ds_a", _AnyBody(), SimpleNamespace())))
@@ -292,7 +292,7 @@ def test_get_db_tables_reports_connection_timeout(monkeypatch):
         admin,
         "get_datasource_manager",
         lambda: _MethodManager(
-            get_physical_table_names_async=asyncio.TimeoutError(),
+            get_physical_table_names_async=TimeoutError(),
         ),
     )
     payload = _payload(asyncio.run(admin.get_db_tables(_AnyBody(), SimpleNamespace())))

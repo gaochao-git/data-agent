@@ -8,7 +8,7 @@ BI 可视化入口见 semantic_bi_query_adapter.SemanticBIQueryAdapter，两者�
 
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from utils.logger import get_logger
 
@@ -35,7 +35,7 @@ from .semantic_query_plan_builder import (
 logger = get_logger(__name__)
 
 
-def _error(error: str) -> Dict[str, Any]:
+def _error(error: str) -> dict[str, Any]:
     """统一引擎各阶段的错误返回形状。"""
     return {"success": False, "error": error}
 
@@ -44,25 +44,25 @@ def _error(error: str) -> Dict[str, Any]:
 class _UnifiedEnginePlan:
     """统一引擎流水线（校验 → 映射 → 组装 → 编译）的中间产物，按组装顺序填充。"""
 
-    matched_metrics: List[Dict[str, Any]] = field(default_factory=list)
-    matched_dimensions: List[Any] = field(default_factory=list)
-    dimension_names: List[str] = field(default_factory=list)
-    having_metric_names: List[str] = field(default_factory=list)
-    validated_filters: List[Dict[str, Any]] = field(default_factory=list)
-    validated_having: List[Dict[str, Any]] = field(default_factory=list)
-    validated_order_by: List[Dict[str, Any]] = field(default_factory=list)
-    validated_limit: Optional[int] = None
-    validated_offset: Optional[int] = None
+    matched_metrics: list[dict[str, Any]] = field(default_factory=list)
+    matched_dimensions: list[Any] = field(default_factory=list)
+    dimension_names: list[str] = field(default_factory=list)
+    having_metric_names: list[str] = field(default_factory=list)
+    validated_filters: list[dict[str, Any]] = field(default_factory=list)
+    validated_having: list[dict[str, Any]] = field(default_factory=list)
+    validated_order_by: list[dict[str, Any]] = field(default_factory=list)
+    validated_limit: int | None = None
+    validated_offset: int | None = None
     requires_grouping_for_raw_fields: bool = False
-    main_table: Optional[str] = None
-    main_table_alias: Optional[str] = None
-    builder_dimensions: List[Dict[str, Any]] = field(default_factory=list)
+    main_table: str | None = None
+    main_table_alias: str | None = None
+    builder_dimensions: list[dict[str, Any]] = field(default_factory=list)
     builder_dimension_keys: set = field(default_factory=set)
-    builder_aggregations: List[Dict[str, Any]] = field(default_factory=list)
-    builder_filters: List[Dict[str, Any]] = field(default_factory=list)
-    builder_having: List[Dict[str, Any]] = field(default_factory=list)
-    builder_order_by: List[Dict[str, Any]] = field(default_factory=list)
-    metric_alias_to_id: Dict[str, str] = field(default_factory=dict)
+    builder_aggregations: list[dict[str, Any]] = field(default_factory=list)
+    builder_filters: list[dict[str, Any]] = field(default_factory=list)
+    builder_having: list[dict[str, Any]] = field(default_factory=list)
+    builder_order_by: list[dict[str, Any]] = field(default_factory=list)
+    metric_alias_to_id: dict[str, str] = field(default_factory=dict)
     tables_needed: set = field(default_factory=set)
 
     @property
@@ -73,7 +73,7 @@ class _UnifiedEnginePlan:
 class SemanticAIQueryAdapter:
     """语义 DSL 输入适配器。"""
 
-    def __init__(self, semantic_config: Dict, max_rows: Optional[int] = None):
+    def __init__(self, semantic_config: dict, max_rows: int | None = None):
         """
         初始化语义 DSL 适配器
 
@@ -104,17 +104,17 @@ class SemanticAIQueryAdapter:
         return str(dim_item)
 
     @staticmethod
-    def _extract_time_grain(dim_item: Any) -> Optional[str]:
+    def _extract_time_grain(dim_item: Any) -> str | None:
         if isinstance(dim_item, dict):
             return dim_item.get("time_grain")
         return None
 
     @staticmethod
-    def _parse_aggregate_expression(expression: str) -> Optional[tuple[str, str]]:
+    def _parse_aggregate_expression(expression: str) -> tuple[str, str] | None:
         return parse_aggregate_expression(expression)
 
     @staticmethod
-    def _table_alias(item: Dict[str, Any]) -> str:
+    def _table_alias(item: dict[str, Any]) -> str:
         return semantic_table_alias(item)
 
     @staticmethod
@@ -146,17 +146,17 @@ class SemanticAIQueryAdapter:
         return re.sub(rf"(?<![\w`])`?{escaped}`?\.", f"{table_alias}.", expr)
 
     @staticmethod
-    def _relationship_left_alias(rel: Dict[str, Any]) -> str:
+    def _relationship_left_alias(rel: dict[str, Any]) -> str:
         return str((rel or {}).get("left_alias") or (rel or {}).get("left_table") or "").strip()
 
     @staticmethod
-    def _relationship_right_alias(rel: Dict[str, Any]) -> str:
+    def _relationship_right_alias(rel: dict[str, Any]) -> str:
         return str((rel or {}).get("right_alias") or (rel or {}).get("right_table") or "").strip()
 
-    def _collect_tables_from_filter_node(self, node: Dict[str, Any], tables_needed: set[str]):
+    def _collect_tables_from_filter_node(self, node: dict[str, Any], tables_needed: set[str]):
         collect_filter_node_tables(node, tables_needed, self._extract_filter_leaf_tables)
 
-    def _extract_filter_leaf_tables(self, node: Dict[str, Any], tables_needed: set[str]):
+    def _extract_filter_leaf_tables(self, node: dict[str, Any], tables_needed: set[str]):
         table_name = node.get("tableAlias") or node.get("table")
         if table_name:
             tables_needed.add(table_name)
@@ -169,12 +169,12 @@ class SemanticAIQueryAdapter:
         collect_operand_tables(operand, tables_needed, self._extract_metric_operand_table)
 
     @staticmethod
-    def _extract_metric_operand_table(operand: Dict[str, Any], tables_needed: set[str]):
+    def _extract_metric_operand_table(operand: dict[str, Any], tables_needed: set[str]):
         table_name = operand.get("tableAlias") or operand.get("table")
         if table_name:
             tables_needed.add(table_name)
 
-    def _map_filter_node_for_builder(self, node: Dict[str, Any]) -> Dict[str, Any]:
+    def _map_filter_node_for_builder(self, node: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(node, dict):
             return {}
 
@@ -209,7 +209,7 @@ class SemanticAIQueryAdapter:
         return {"and": builder_nodes}
 
     @staticmethod
-    def _copy_filter_value_type(source: Dict[str, Any], target: Dict[str, Any]):
+    def _copy_filter_value_type(source: dict[str, Any], target: dict[str, Any]):
         """透传固定值类型或已通过输入校验的自由右侧表达式。"""
         if "value_type" in source:
             target["value_type"] = source.get("value_type")
@@ -217,7 +217,7 @@ class SemanticAIQueryAdapter:
             target["valueType"] = "expression"
             target["rightExpression"] = source.get("rightExpression")
 
-    def _filter_leaf_to_builder_node(self, fil: Dict[str, Any], dim_cfg: Dict[str, Any]) -> Dict[str, Any]:
+    def _filter_leaf_to_builder_node(self, fil: dict[str, Any], dim_cfg: dict[str, Any]) -> dict[str, Any]:
         node = assemble_dimension_filter_node(
             dim_cfg,
             node_id=f"filter-{fil.get('dimension', '')}",
@@ -228,16 +228,16 @@ class SemanticAIQueryAdapter:
         self._copy_filter_value_type(fil, node)
         return node
 
-    def _map_filter_value_for_builder(self, node: Dict[str, Any], dim_config: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def _map_filter_value_for_builder(self, node: dict[str, Any], dim_config: dict[str, Any]) -> list[dict[str, Any]]:
         return normalize_time_filter_leaf(node, dim_config)
 
-    def _append_filter_nodes_for_builder(self, builder_filters: List[Dict[str, Any]], fil: Dict[str, Any]) -> None:
+    def _append_filter_nodes_for_builder(self, builder_filters: list[dict[str, Any]], fil: dict[str, Any]) -> None:
         dim_cfg = self.dimensions_map.get(fil.get("dimension"), {})
         for normalized_filter in self._map_filter_value_for_builder(fil, dim_cfg):
             builder_filters.append(self._filter_leaf_to_builder_node(normalized_filter, dim_cfg))
 
     @staticmethod
-    def _is_expression_filter_node(node: Dict[str, Any]) -> bool:
+    def _is_expression_filter_node(node: dict[str, Any]) -> bool:
         return isinstance(node, dict) and isinstance(node.get("left"), dict) and "right" in node
 
     def _dimension_sql_expression(self, dim_name: str) -> tuple[str, set[str]]:
@@ -255,7 +255,7 @@ class SemanticAIQueryAdapter:
             column_expr = f"{dim_table_alias}.{column_expr}"
         return column_expr, {dim_table_alias} if dim_table_alias else set()
 
-    def _compile_filter_operand(self, operand: Dict[str, Any]) -> tuple[str, set[str]]:
+    def _compile_filter_operand(self, operand: dict[str, Any]) -> tuple[str, set[str]]:
         operand_type = str((operand or {}).get("type") or "").strip().lower()
         if operand_type == "dimension":
             return self._dimension_sql_expression(str(operand.get("name") or "").strip())
@@ -268,7 +268,7 @@ class SemanticAIQueryAdapter:
             return f"({left_expr} {operator} {right_expr})", left_tables | right_tables
         return "NULL", set()
 
-    def _map_expression_filter_node_for_builder(self, node: Dict[str, Any]) -> Dict[str, Any]:
+    def _map_expression_filter_node_for_builder(self, node: dict[str, Any]) -> dict[str, Any]:
         left = node.get("left") or {}
         left_dim_name = str(left.get("name") or "").strip()
         left_dim_cfg = self.dimensions_map.get(left_dim_name, {})
@@ -289,10 +289,10 @@ class SemanticAIQueryAdapter:
         }
 
     @staticmethod
-    def _is_expression_having_node(node: Dict[str, Any]) -> bool:
+    def _is_expression_having_node(node: dict[str, Any]) -> bool:
         return isinstance(node, dict) and isinstance(node.get("left"), dict) and "right" in node
 
-    def _metric_aggregation_node(self, metric_name: str, main_table: str) -> Dict[str, Any]:
+    def _metric_aggregation_node(self, metric_name: str, main_table: str) -> dict[str, Any]:
         metric_cfg = self._metric_base_cfgs.get(metric_name) or self.metrics_map.get(metric_name, {})
         metric_table = metric_cfg.get("table") or main_table
         metric_table_alias = self._table_alias(metric_cfg) or metric_table
@@ -313,10 +313,10 @@ class SemanticAIQueryAdapter:
 
     def _map_having_operand_for_builder(
         self,
-        operand: Dict[str, Any],
-        metric_alias_to_id: Dict[str, str],
+        operand: dict[str, Any],
+        metric_alias_to_id: dict[str, str],
         main_table: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         operand_type = str((operand or {}).get("type") or "").strip().lower()
         if operand_type == "metric":
             metric_name = str((operand or {}).get("name") or "").strip()
@@ -345,7 +345,7 @@ class SemanticAIQueryAdapter:
         return {"type": "literal", "value": None}
 
     @staticmethod
-    def _add_having_metric_name(name: Any, seen: set[str], metric_names: List[str]) -> None:
+    def _add_having_metric_name(name: Any, seen: set[str], metric_names: list[str]) -> None:
         """去重登记一个 HAVING 指标名（用于.metrics_map 引用收集）。"""
         metric_name = str(name or "").strip()
         if metric_name and metric_name not in seen:
@@ -353,7 +353,7 @@ class SemanticAIQueryAdapter:
             metric_names.append(metric_name)
 
     @staticmethod
-    def _collect_having_operand(operand: Any, seen: set[str], metric_names: List[str]) -> None:
+    def _collect_having_operand(operand: Any, seen: set[str], metric_names: list[str]) -> None:
         """递归收集 HAVING 操作数树（metric/binary）涉及的指标名。"""
         if not isinstance(operand, dict):
             return
@@ -364,8 +364,8 @@ class SemanticAIQueryAdapter:
             SemanticAIQueryAdapter._collect_having_operand(operand.get("left"), seen, metric_names)
             SemanticAIQueryAdapter._collect_having_operand(operand.get("right"), seen, metric_names)
 
-    def _collect_having_metric_names(self, having: List[Dict[str, Any]]) -> List[str]:
-        metric_names: List[str] = []
+    def _collect_having_metric_names(self, having: list[dict[str, Any]]) -> list[str]:
+        metric_names: list[str] = []
         seen: set[str] = set()
         for item in having or []:
             if not isinstance(item, dict):
@@ -376,11 +376,11 @@ class SemanticAIQueryAdapter:
                 self._collect_having_operand(item.get("right"), seen, metric_names)
         return metric_names
 
-    def _build_builder_joins(self, main_table: str, tables_needed: set[str]) -> List[Dict[str, Any]]:
+    def _build_builder_joins(self, main_table: str, tables_needed: set[str]) -> list[dict[str, Any]]:
         return self.query_plan_context.build_joins(main_table, tables_needed)
 
     @staticmethod
-    def _resolve_dimension_raw_expression(dim_cfg: Dict[str, Any]) -> str:
+    def _resolve_dimension_raw_expression(dim_cfg: dict[str, Any]) -> str:
         """维度转 RAW 指标时的表达式：优先 physical expression，缺则按 table.column 拼，再缺则取列名。"""
         raw_expression = dim_cfg.get("expression")
         if raw_expression:
@@ -391,7 +391,7 @@ class SemanticAIQueryAdapter:
             return f"{dim_table}.{dim_column}"
         return dim_column or ""
 
-    def _build_dimension_raw_metric(self, name: str, dim_cfg: Dict[str, Any]) -> Dict[str, Any]:
+    def _build_dimension_raw_metric(self, name: str, dim_cfg: dict[str, Any]) -> dict[str, Any]:
         """把命中维度的 name 构建成 RAW 指标（用于明细展示）。"""
         raw_expression = SemanticAIQueryAdapter._resolve_dimension_raw_expression(dim_cfg)
         return {
@@ -404,14 +404,14 @@ class SemanticAIQueryAdapter:
             "_from_dimension": True,
         }
 
-    def _normalize_metrics_allow_dimension_raw(self, metrics: List[str]) -> tuple[List[Dict[str, Any]], Optional[str]]:
+    def _normalize_metrics_allow_dimension_raw(self, metrics: list[str]) -> tuple[list[dict[str, Any]], str | None]:
         """
         允许 metrics 里包含维度字段：
         - 命中指标：按指标处理
         - 命中维度：转为 RAW 指标（用于明细展示）
         - 未命中：报错
         """
-        normalized_metrics: List[Dict[str, Any]] = []
+        normalized_metrics: list[dict[str, Any]] = []
         valid_metric_names = list(self.metrics_map.keys())
         valid_dimension_names = list(self.dimensions_map.keys())
         for name in metrics or []:
@@ -457,7 +457,7 @@ class SemanticAIQueryAdapter:
             self._register_unvalidated_tables("metrics")
             self._register_unvalidated_tables("dimensions")
 
-    def _validate_table_column(self, table_name: str, column_name: str) -> Optional[str]:
+    def _validate_table_column(self, table_name: str, column_name: str) -> str | None:
         """
         校验表和字段是否存在
 
@@ -484,14 +484,14 @@ class SemanticAIQueryAdapter:
 
     def generate_sql(
         self,
-        metrics: List[str],
-        dimensions: List[str],
-        filters: List[Dict],
-        having: List[Dict],
-        order_by: List[Dict] = None,
+        metrics: list[str],
+        dimensions: list[str],
+        filters: list[dict],
+        having: list[dict],
+        order_by: list[dict] = None,
         limit: int = None,
         offset: int = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         生成 SQL（统一入口）
 
@@ -517,14 +517,14 @@ class SemanticAIQueryAdapter:
 
     def _generate_sql_via_unified_engine(
         self,
-        metrics: List[str],
-        dimensions: List[str],
-        filters: List[Dict],
-        having: List[Dict],
-        order_by: List[Dict] = None,
+        metrics: list[str],
+        dimensions: list[str],
+        filters: list[dict],
+        having: list[dict],
+        order_by: list[dict] = None,
         limit: int = None,
         offset: int = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """统一引擎流水线：校验 → 主表推断 → 维度/指标映射 → 过滤/排序映射 → 编译。"""
         plan = _UnifiedEnginePlan()
         err = self._validate_unified_engine_inputs(plan, metrics, dimensions, filters, having, order_by, limit, offset)
@@ -555,14 +555,14 @@ class SemanticAIQueryAdapter:
     def _validate_unified_engine_inputs(
         self,
         plan: _UnifiedEnginePlan,
-        metrics: List[str],
-        dimensions: List[str],
-        filters: List[Dict],
-        having: List[Dict],
-        order_by: List[Dict],
+        metrics: list[str],
+        dimensions: list[str],
+        filters: list[dict],
+        having: list[dict],
+        order_by: list[dict],
         limit: int,
         offset: int,
-    ) -> Optional[str]:
+    ) -> str | None:
         """串行校验各入参并填充校验结果；任一失败返回错误文案，全部通过返回 None。"""
         err = self._validate_and_fill_query_fields(plan, metrics, dimensions, filters, having, order_by, limit, offset)
         if err:
@@ -573,14 +573,14 @@ class SemanticAIQueryAdapter:
     def _validate_and_fill_query_fields(
         self,
         plan: _UnifiedEnginePlan,
-        metrics: List[str],
-        dimensions: List[str],
-        filters: List[Dict],
-        having: List[Dict],
-        order_by: List[Dict],
+        metrics: list[str],
+        dimensions: list[str],
+        filters: list[dict],
+        having: list[dict],
+        order_by: list[dict],
         limit: int,
         offset: int,
-    ) -> Optional[str]:
+    ) -> str | None:
         """逐项校验指标/维度/过滤/HAVING/排序/limit/offset 并写入 plan。"""
         if metrics:
             plan.matched_metrics, err = self._normalize_metrics_allow_dimension_raw(metrics)
@@ -707,10 +707,10 @@ class SemanticAIQueryAdapter:
         self,
         plan: _UnifiedEnginePlan,
         metric_name: Any,
-        metric_table: Optional[str],
-        metric_table_alias: Optional[str],
+        metric_table: str | None,
+        metric_table_alias: str | None,
         metric_expression: str,
-        metric_column: Optional[str],
+        metric_column: str | None,
     ) -> None:
         """RAW 指标映射：存在聚合输出时转分组字段，否则作为 RAW 聚合块。"""
         raw_table = metric_table or plan.main_table
@@ -814,7 +814,7 @@ class SemanticAIQueryAdapter:
             for leaf in self._derived_fixed_leaves.get(name) or []:
                 self._append_filter_nodes_for_builder(plan.builder_filters, leaf)
 
-    def _append_order_by_entry(self, plan: _UnifiedEnginePlan, od: Dict[str, Any]) -> None:
+    def _append_order_by_entry(self, plan: _UnifiedEnginePlan, od: dict[str, Any]) -> None:
         """把单个 ORDER BY 条目按指标/维度口径映射为 builder 排序节点。"""
         field_name = od.get("field")
         direction = od.get("direction", "DESC")
@@ -858,7 +858,7 @@ class SemanticAIQueryAdapter:
             self._append_order_by_entry(plan, od)
 
     @staticmethod
-    def _block_table_alias(block: Dict[str, Any]) -> Optional[str]:
+    def _block_table_alias(block: dict[str, Any]) -> str | None:
         return block.get("tableAlias") or block.get("table")
 
     def _collect_tables_needed(self, plan: _UnifiedEnginePlan) -> None:
@@ -882,11 +882,11 @@ class SemanticAIQueryAdapter:
     def _compile_unified_engine_sql(
         self,
         plan: _UnifiedEnginePlan,
-        metrics: List[str],
-        dimensions: List[str],
-        filters: List[Dict],
-        having: List[Dict],
-    ) -> Dict[str, Any]:
+        metrics: list[str],
+        dimensions: list[str],
+        filters: list[dict],
+        having: list[dict],
+    ) -> dict[str, Any]:
         try:
             query_plan = {
                 "mainTable": plan.main_table,

@@ -1,7 +1,8 @@
 """语义 SQL 的 SELECT 字段编译。"""
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any
 
 from .filter_compiler import _effective_table_ref, _physical_table_ref
 
@@ -10,10 +11,10 @@ from .filter_compiler import _effective_table_ref, _physical_table_ref
 class SelectCompilation:
     """SELECT 片段以及后续分组、过滤和排序需要的字段映射。"""
 
-    fields: List[str]
-    dimension_expr_map: Dict[Tuple[str, str], str]
-    group_expr_map: Dict[Tuple[str, str], str]
-    dimension_alias_map: Dict[Tuple[str, str], str]
+    fields: list[str]
+    dimension_expr_map: dict[tuple[str, str], str]
+    group_expr_map: dict[tuple[str, str], str]
+    dimension_alias_map: dict[tuple[str, str], str]
 
 
 class _AliasAllocator:
@@ -37,7 +38,7 @@ class _AliasAllocator:
 
 
 def _compile_dimension_field(
-    dimension: Dict[str, Any],
+    dimension: dict[str, Any],
     *,
     main_alias: str,
     is_multi_table: bool,
@@ -45,10 +46,10 @@ def _compile_dimension_field(
     quote_identifier: Callable[[str], str],
     normalize_raw_expression: Callable[..., str],
     allocator: _AliasAllocator,
-    fields: List[str],
-    dimension_expr_map: Dict[Tuple[str, str], str],
-    group_expr_map: Dict[Tuple[str, str], str],
-    dimension_alias_map: Dict[Tuple[str, str], str],
+    fields: list[str],
+    dimension_expr_map: dict[tuple[str, str], str],
+    group_expr_map: dict[tuple[str, str], str],
+    dimension_alias_map: dict[tuple[str, str], str],
 ) -> None:
     """编译单个维度字段；transform 非 raw 时按日期变换展开。"""
     table = _effective_table_ref(dimension, fallback=main_alias)
@@ -87,7 +88,7 @@ def _aggregate_function_value(
     return f"{function}({column_expression})"
 
 
-def _metric_display_name(aggregation: Dict[str, Any], column: str) -> str:
+def _metric_display_name(aggregation: dict[str, Any], column: str) -> str:
     return aggregation.get("displayName") or aggregation.get("alias") or ("all" if column == "*" else column)
 
 
@@ -96,7 +97,7 @@ def _metric_fallback_alias(column: str) -> str:
 
 
 def _compile_aggregation_field(
-    aggregation: Dict[str, Any],
+    aggregation: dict[str, Any],
     *,
     main_alias: str,
     is_multi_table: bool,
@@ -104,9 +105,9 @@ def _compile_aggregation_field(
     normalize_raw_expression: Callable[..., str],
     normalize_aggregate_expression: Callable[..., str],
     get_column_expr: Callable[..., str],
-    is_aggregate_expression: Callable[[Optional[str]], bool],
+    is_aggregate_expression: Callable[[str | None], bool],
     allocator: _AliasAllocator,
-    fields: List[str],
+    fields: list[str],
 ) -> None:
     """编译单个指标字段，落入 SELECT 列表。"""
     table = _effective_table_ref(aggregation, fallback=main_alias)
@@ -132,8 +133,8 @@ def _compile_aggregation_field(
 
 def compile_select_fields(
     *,
-    dimensions: List[Dict[str, Any]],
-    aggregations: List[Dict[str, Any]],
+    dimensions: list[dict[str, Any]],
+    aggregations: list[dict[str, Any]],
     main_alias: str,
     is_multi_table: bool,
     dialect: Any,
@@ -142,14 +143,14 @@ def compile_select_fields(
     normalize_raw_expression: Callable[..., str],
     normalize_aggregate_expression: Callable[..., str],
     get_column_expr: Callable[..., str],
-    is_aggregate_expression: Callable[[Optional[str]], bool],
+    is_aggregate_expression: Callable[[str | None], bool],
 ) -> SelectCompilation:
     """编译维度和指标，保持 Builder 字段兼容。"""
     allocator = _AliasAllocator(to_sql_alias)
-    fields: List[str] = []
-    dimension_expr_map: Dict[Tuple[str, str], str] = {}
-    group_expr_map: Dict[Tuple[str, str], str] = {}
-    dimension_alias_map: Dict[Tuple[str, str], str] = {}
+    fields: list[str] = []
+    dimension_expr_map: dict[tuple[str, str], str] = {}
+    group_expr_map: dict[tuple[str, str], str] = {}
+    dimension_alias_map: dict[tuple[str, str], str] = {}
 
     for dimension in dimensions:
         _compile_dimension_field(

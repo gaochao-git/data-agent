@@ -7,7 +7,7 @@
 import logging
 import re
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from .filter_normalization import split_text_between_filter, time_equal_value_to_range
 
@@ -61,8 +61,8 @@ class InputValidator:
 
     def __init__(
         self,
-        metrics_map: Dict[str, Dict],
-        dimensions_map: Dict[str, Dict],
+        metrics_map: dict[str, dict],
+        dimensions_map: dict[str, dict],
         max_limit: int = 100,
     ):
         """
@@ -76,7 +76,7 @@ class InputValidator:
         self.dimensions_map = dimensions_map
         self.max_limit = max_limit
 
-    def validate_metrics(self, metrics: List[str]) -> Tuple[List[Dict], Optional[str]]:
+    def validate_metrics(self, metrics: list[str]) -> tuple[list[dict], str | None]:
         """
         验证指标参数
 
@@ -98,7 +98,7 @@ class InputValidator:
 
         return matched_metrics, None
 
-    def validate_dimensions(self, dimensions: List[Any]) -> Tuple[List[Any], Optional[str]]:
+    def validate_dimensions(self, dimensions: list[Any]) -> tuple[list[Any], str | None]:
         """
         验证维度参数
 
@@ -131,7 +131,7 @@ class InputValidator:
 
         return validated_dimensions, None
 
-    def validate_filters(self, filters: List[Dict]) -> Tuple[List[Dict], Optional[str]]:
+    def validate_filters(self, filters: list[dict]) -> tuple[list[dict], str | None]:
         """
         验证 WHERE 过滤条件（支持树形和平铺两种格式）
 
@@ -164,7 +164,7 @@ class InputValidator:
 
         return validated_filters, None
 
-    def _validate_tree_filter_children(self, children: Any, node_label: str) -> Optional[str]:
+    def _validate_tree_filter_children(self, children: Any, node_label: str) -> str | None:
         """递归校验树形过滤的子节点列表；任一子节点非法即返回其错误文案。"""
         if not isinstance(children, list):
             return f"错误：{node_label} 节点的值必须是数组"
@@ -174,7 +174,7 @@ class InputValidator:
                 return err
         return None
 
-    def _validate_tree_filter(self, filter_node: Dict) -> Optional[str]:
+    def _validate_tree_filter(self, filter_node: dict) -> str | None:
         """
         递归验证树形过滤条件
 
@@ -200,7 +200,7 @@ class InputValidator:
             return err
         return None
 
-    def _validate_dimension_filter_leaf(self, filter_node: Dict) -> Optional[str]:
+    def _validate_dimension_filter_leaf(self, filter_node: dict) -> str | None:
         """验证维度过滤叶子（'dimension' 分支），返回错误文案或 None。"""
         dim_name = filter_node.get("dimension")
         if dim_name not in self.dimensions_map:
@@ -225,7 +225,7 @@ class InputValidator:
             return err
         return None
 
-    def _validate_filter_leaf(self, filter_node: Dict) -> Optional[str]:
+    def _validate_filter_leaf(self, filter_node: dict) -> str | None:
         """验证普通过滤叶子或结构化表达式过滤叶子。"""
         if not isinstance(filter_node, dict):
             return "错误：无效的过滤条件格式，必须是对象"
@@ -241,7 +241,7 @@ class InputValidator:
         return "错误：无效的过滤条件格式，必须是叶子节点或 and/or 组合节点"
 
     @staticmethod
-    def _validate_filter_value_type(filter_node: Dict) -> Optional[str]:
+    def _validate_filter_value_type(filter_node: dict) -> str | None:
         if "valueType" in filter_node:
             if filter_node.get("valueType") != FREE_EXPRESSION_VALUE_TYPE:
                 return "错误：valueType 仅支持 expression"
@@ -258,7 +258,7 @@ class InputValidator:
         return None
 
     @staticmethod
-    def _validate_free_right_expression(node: Dict) -> Optional[str]:
+    def _validate_free_right_expression(node: dict) -> str | None:
         has_value_type = "valueType" in node
         has_expression = "rightExpression" in node
         if not has_value_type and not has_expression:
@@ -278,10 +278,10 @@ class InputValidator:
         return None
 
     @staticmethod
-    def _is_expression_filter(filter_node: Dict) -> bool:
+    def _is_expression_filter(filter_node: dict) -> bool:
         return isinstance(filter_node, dict) and isinstance(filter_node.get("left"), dict) and "right" in filter_node
 
-    def _validate_expression_filter(self, filter_node: Dict) -> Optional[str]:
+    def _validate_expression_filter(self, filter_node: dict) -> str | None:
         operator = str(filter_node.get("operator", "=")).upper()
         if operator not in EXPRESSION_OPERATORS:
             return f"错误：表达式过滤暂不支持操作符 '{operator}'。可选值：{', '.join(sorted(EXPRESSION_OPERATORS))}"
@@ -305,7 +305,7 @@ class InputValidator:
             return err
         return self._validate_expression_allowed_value(left_name, operator, right)
 
-    def validate_dimension_operator(self, dim_name: str, operator: Any) -> Optional[str]:
+    def validate_dimension_operator(self, dim_name: str, operator: Any) -> str | None:
         """Enforce the optional per-dimension operator contract."""
         normalized_operator = str(operator or "=").strip().upper()
         if normalized_operator not in FILTER_OPERATORS:
@@ -321,7 +321,7 @@ class InputValidator:
             return f"错误：维度 '{dim_name}' 不允许操作符 '{normalized_operator}'。可选值：{', '.join(sorted(allowed))}"
         return None
 
-    def _validate_expression_operand(self, operand: Any, path: str) -> Optional[str]:
+    def _validate_expression_operand(self, operand: Any, path: str) -> str | None:
         if not isinstance(operand, dict):
             return f"错误：表达式过滤 {path} 必须是对象"
         operand_type = str(operand.get("type") or "").strip().lower()
@@ -336,14 +336,14 @@ class InputValidator:
             return self._validate_binary_operand(operand, path)
         return f"错误：表达式过滤 {path}.type 只支持 dimension、literal、binary"
 
-    def _validate_dimension_operand(self, operand: Any) -> Optional[str]:
+    def _validate_dimension_operand(self, operand: Any) -> str | None:
         """校验表达式过滤中的维度引用。"""
         dim_name = str(operand.get("name") or "").strip()
         if dim_name not in self.dimensions_map:
             return f"错误：表达式过滤引用的维度 '{dim_name}' 不存在。可用维度：{', '.join(self.dimensions_map.keys())}"
         return None
 
-    def _validate_binary_operand(self, operand: Any, path: str) -> Optional[str]:
+    def _validate_binary_operand(self, operand: Any, path: str) -> str | None:
         """校验二元表达式：运算符合法性、两侧递归校验、禁止除以 0。"""
         operator = str(operand.get("operator") or "").strip()
         if operator not in BINARY_OPERATORS:
@@ -372,7 +372,7 @@ class InputValidator:
         except Exception:
             return False
 
-    def _validate_expression_allowed_value(self, left_dim_name: str, operator: str, right: Dict) -> Optional[str]:
+    def _validate_expression_allowed_value(self, left_dim_name: str, operator: str, right: dict) -> str | None:
         """结构化过滤右侧为 literal 时，沿用枚举维度值校验。"""
         dim_config = self.dimensions_map.get(left_dim_name) or {}
         allowed_values = dim_config.get("allowed_values") or []
@@ -394,7 +394,7 @@ class InputValidator:
             return f"错误：维度 '{left_dim_name}' 的值 '{value}' 不在允许值范围内。可用值：{', '.join(allowed_set)}"
         return None
 
-    def _validate_filter_logical_value(self, dim_name: str, filter_node: Dict) -> Optional[str]:
+    def _validate_filter_logical_value(self, dim_name: str, filter_node: dict) -> str | None:
         dim_config = self.dimensions_map.get(dim_name) or {}
         operator = str(filter_node.get("operator", "=")).upper()
         if operator in ("IS NULL", "IS NOT NULL"):
@@ -403,14 +403,14 @@ class InputValidator:
         values = self._filter_literal_values(filter_node)
         return self._validate_logical_values(dim_name, dim_config, values, operator)
 
-    def _validate_expression_logical_value(self, left_dim_name: str, right: Dict) -> Optional[str]:
+    def _validate_expression_logical_value(self, left_dim_name: str, right: dict) -> str | None:
         if not isinstance(right, dict) or right.get("type") != "literal":
             return None
         dim_config = self.dimensions_map.get(left_dim_name) or {}
         return self._validate_logical_values(left_dim_name, dim_config, [right.get("value")], "=")
 
     @staticmethod
-    def _filter_literal_values(filter_node: Dict) -> List[Any]:
+    def _filter_literal_values(filter_node: dict) -> list[Any]:
         value = filter_node.get("value")
         values = value if isinstance(value, list) else [value]
         value_type = filter_node.get("value_type")
@@ -423,9 +423,7 @@ class InputValidator:
             literal_values.append(item)
         return literal_values
 
-    def _validate_logical_values(
-        self, dim_name: str, dim_config: Dict, values: List[Any], operator: str
-    ) -> Optional[str]:
+    def _validate_logical_values(self, dim_name: str, dim_config: dict, values: list[Any], operator: str) -> str | None:
         logical_type = self._logical_type(dim_config)
         if not logical_type or logical_type == "text":
             return None
@@ -468,7 +466,7 @@ class InputValidator:
         )
 
     @staticmethod
-    def _validate_enum_config(dim_name: str, dim_config: Dict) -> Optional[str]:
+    def _validate_enum_config(dim_name: str, dim_config: dict) -> str | None:
         allowed_values = dim_config.get("allowed_values")
         mapping = dim_config.get("mapping")
         allowed_set = InputValidator._enum_allowed_set(allowed_values)
@@ -481,11 +479,11 @@ class InputValidator:
         return None
 
     @staticmethod
-    def _logical_type(dim_config: Dict) -> str:
+    def _logical_type(dim_config: dict) -> str:
         return str((dim_config or {}).get("logical_type") or "").strip().lower()
 
     @staticmethod
-    def _validate_single_logical_value(dim_name: str, logical_type: str, value: Any) -> Optional[str]:
+    def _validate_single_logical_value(dim_name: str, logical_type: str, value: Any) -> str | None:
         if logical_type == "text":
             return None
         if logical_type == "number":
@@ -509,7 +507,7 @@ class InputValidator:
         return bool(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*\([^;]*\)", value.strip()))
 
     @staticmethod
-    def _is_supported_time_filter_shorthand(dim_config: Dict, logical_type: str, operator: str, value: Any) -> bool:
+    def _is_supported_time_filter_shorthand(dim_config: dict, logical_type: str, operator: str, value: Any) -> bool:
         if logical_type not in {"date", "datetime"}:
             return False
         if not InputValidator._has_physical_field(dim_config):
@@ -519,7 +517,7 @@ class InputValidator:
         return False
 
     @staticmethod
-    def _has_physical_field(dim_config: Dict) -> bool:
+    def _has_physical_field(dim_config: dict) -> bool:
         return any((dim_config or {}).get(key) for key in ("column", "expression", "field_name"))
 
     @staticmethod
@@ -548,7 +546,7 @@ class InputValidator:
             return False
         return True
 
-    def _validate_filter_allowed_value(self, filter_node: Dict) -> Optional[str]:
+    def _validate_filter_allowed_value(self, filter_node: dict) -> str | None:
         """校验枚举维度过滤值是否在 allowed_values 范围内。"""
         dim_name = filter_node.get("dimension")
         dim_config = self.dimensions_map.get(dim_name) or {}
@@ -576,12 +574,12 @@ class InputValidator:
             )
         return None
 
-    def _normalize_filter_leaf(self, filter_node: Dict) -> Dict:
+    def _normalize_filter_leaf(self, filter_node: dict) -> dict:
         if self._is_expression_filter(filter_node):
             return self._normalize_expression_filter_allowed_value(filter_node)
         return self._normalize_filter_allowed_value(filter_node)
 
-    def _normalize_expression_filter_allowed_value(self, filter_node: Dict) -> Dict:
+    def _normalize_expression_filter_allowed_value(self, filter_node: dict) -> dict:
         left = filter_node.get("left") or {}
         right = filter_node.get("right")
         left_dim_name = left.get("name")
@@ -600,7 +598,7 @@ class InputValidator:
         return normalized
 
     @staticmethod
-    def _normalize_allowed_value(dim_config: Dict, value: Any) -> Any:
+    def _normalize_allowed_value(dim_config: dict, value: Any) -> Any:
         """按维度 mapping 将同义词值规范到枚举值。"""
         mapping = dim_config.get("mapping") or {}
         if not isinstance(mapping, dict) or value is None:
@@ -611,7 +609,7 @@ class InputValidator:
                 return mapped_value
         return value
 
-    def _normalize_filter_allowed_value(self, filter_node: Dict) -> Dict:
+    def _normalize_filter_allowed_value(self, filter_node: dict) -> dict:
         """返回应用 mapping 后的过滤条件副本。"""
         dim_name = filter_node.get("dimension")
         dim_config = self.dimensions_map.get(dim_name) or {}
@@ -625,7 +623,7 @@ class InputValidator:
             normalized["value"] = self._normalize_allowed_value(dim_config, value)
         return normalized
 
-    def _normalize_tree_filter_allowed_values(self, filter_node: Dict) -> Dict:
+    def _normalize_tree_filter_allowed_values(self, filter_node: dict) -> dict:
         """递归规范化树形过滤中的枚举同义词值。"""
         if "and" in filter_node:
             return {"and": [self._normalize_tree_filter_allowed_values(child) for child in filter_node.get("and", [])]}
@@ -634,18 +632,18 @@ class InputValidator:
         return self._normalize_filter_leaf(filter_node)
 
     @staticmethod
-    def _should_validate_allowed_values(dim_config: Dict) -> bool:
+    def _should_validate_allowed_values(dim_config: dict) -> bool:
         logical_type = InputValidator._logical_type(dim_config)
         return logical_type == "enum"
 
     @staticmethod
-    def _should_normalize_allowed_values(dim_config: Dict) -> bool:
+    def _should_normalize_allowed_values(dim_config: dict) -> bool:
         mapping = (dim_config or {}).get("mapping")
         return bool(
             isinstance(mapping, dict) and mapping and InputValidator._should_validate_allowed_values(dim_config)
         )
 
-    def _validate_expression_having_item(self, h: Dict) -> Tuple[Optional[Dict], Optional[str]]:
+    def _validate_expression_having_item(self, h: dict) -> tuple[dict | None, str | None]:
         """校验结构化表达式 HAVING 条目，返回 (条目, 错误文案)。"""
         if {"valueType", "rightExpression"} & set(h.keys()):
             return None, "错误：结构化 left/right 与自由 rightExpression 不能混用"
@@ -654,7 +652,7 @@ class InputValidator:
             return None, err
         return h, None
 
-    def _validate_having_item(self, h: Dict) -> Tuple[Optional[Dict], Optional[str]]:
+    def _validate_having_item(self, h: dict) -> tuple[dict | None, str | None]:
         """校验单个 HAVING 条目，返回 (条目或 None, 错误文案或 None)。"""
         if not isinstance(h, dict):
             return None, "错误：HAVING 条件格式错误，必须是对象"
@@ -673,7 +671,7 @@ class InputValidator:
             )
         return None, None
 
-    def validate_having(self, having: List[Dict]) -> Tuple[List[Dict], Optional[str]]:
+    def validate_having(self, having: list[dict]) -> tuple[list[dict], str | None]:
         """
         验证 HAVING 过滤条件
 
@@ -693,10 +691,10 @@ class InputValidator:
         return validated_having, None
 
     @staticmethod
-    def _is_expression_having(having_node: Dict) -> bool:
+    def _is_expression_having(having_node: dict) -> bool:
         return isinstance(having_node, dict) and isinstance(having_node.get("left"), dict) and "right" in having_node
 
-    def _validate_expression_having(self, having_node: Dict) -> Optional[str]:
+    def _validate_expression_having(self, having_node: dict) -> str | None:
         operator = str(having_node.get("operator", "=")).upper()
         if operator not in EXPRESSION_OPERATORS:
             return f"错误：HAVING 表达式暂不支持操作符 '{operator}'。可选值：{', '.join(sorted(EXPRESSION_OPERATORS))}"
@@ -711,7 +709,7 @@ class InputValidator:
 
         return self._validate_metric_expression_operand(right, path="right")
 
-    def _validate_metric_expression_operand(self, operand: Any, path: str) -> Optional[str]:
+    def _validate_metric_expression_operand(self, operand: Any, path: str) -> str | None:
         if not isinstance(operand, dict):
             return f"错误：HAVING 表达式 {path} 必须是对象"
         operand_type = str(operand.get("type") or "").strip().lower()
@@ -726,7 +724,7 @@ class InputValidator:
             return self._validate_metric_binary_operand(operand, path)
         return f"错误：HAVING 表达式 {path}.type 只支持 metric、literal、binary"
 
-    def _validate_metric_name_operand(self, operand: Any) -> Optional[str]:
+    def _validate_metric_name_operand(self, operand: Any) -> str | None:
         """校验 HAVING 表达式中的指标引用。"""
         metric_name = str(operand.get("name") or "").strip()
         if metric_name not in self.metrics_map:
@@ -735,7 +733,7 @@ class InputValidator:
             )
         return None
 
-    def _validate_metric_binary_operand(self, operand: Any, path: str) -> Optional[str]:
+    def _validate_metric_binary_operand(self, operand: Any, path: str) -> str | None:
         """校验 HAVING 二元表达式：运算符合法性、两侧递归校验、禁止除以 0。"""
         operator = str(operand.get("operator") or "").strip()
         if operator not in BINARY_OPERATORS:
@@ -758,8 +756,8 @@ class InputValidator:
         return None
 
     def validate_order_by(
-        self, order_by: List[Dict], metrics: List[str], dimensions: List[str]
-    ) -> Tuple[List[Dict], Optional[str]]:
+        self, order_by: list[dict], metrics: list[str], dimensions: list[str]
+    ) -> tuple[list[dict], str | None]:
         """
         验证 ORDER BY 排序条件，只允许按当前查询输出字段排序
 
@@ -806,9 +804,7 @@ class InputValidator:
 
         return validated_order_by, None
 
-    def validate_limit(
-        self, limit: Optional[int], max_limit: Optional[int] = None
-    ) -> Tuple[Optional[int], Optional[str]]:
+    def validate_limit(self, limit: int | None, max_limit: int | None = None) -> tuple[int | None, str | None]:
         """
         验证 LIMIT 限制条数
 
@@ -833,7 +829,7 @@ class InputValidator:
 
         return limit, None
 
-    def validate_offset(self, offset: Optional[int]) -> Tuple[Optional[int], Optional[str]]:
+    def validate_offset(self, offset: int | None) -> tuple[int | None, str | None]:
         """
         验证 OFFSET 跳过条数。
 

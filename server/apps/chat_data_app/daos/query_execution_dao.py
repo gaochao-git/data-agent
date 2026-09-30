@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from datetime import datetime
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from sqlalchemy import select
 
@@ -14,10 +14,10 @@ from utils.models import ChatDataQueryExecution, ChatDataQueryTask
 class QueryExecutionDao:
     """封装 chat_data_query_execution 表读写。"""
 
-    def __init__(self, session_context: Optional[Callable] = None):
+    def __init__(self, session_context: Callable | None = None):
         self._session_context = session_context or default_get_session
 
-    async def create_pending_executions(self, specs: Sequence[Dict[str, str]]) -> List[str]:
+    async def create_pending_executions(self, specs: Sequence[dict[str, str]]) -> list[str]:
         """批量预创建 pending 状态执行明细，同一事务提交，返回按传入顺序的 execution_id。
 
         每个 spec 需要 execution_id、task_id、user_id、datasource_id、
@@ -54,7 +54,7 @@ class QueryExecutionDao:
         self,
         execution_id: str,
         apply_updates: Callable[[ChatDataQueryExecution], bool],
-    ) -> Optional[ChatDataQueryExecution]:
+    ) -> ChatDataQueryExecution | None:
         """行锁读取执行明细并应用变更；apply_updates 返回 False 表示保持原状。
 
         行锁读取：取消操作与执行线程并发写时，先锁定再由 apply_updates 校验
@@ -84,7 +84,7 @@ class QueryExecutionDao:
     async def list_executions_with_task(
         self,
         task_id: str,
-    ) -> Tuple[List[ChatDataQueryExecution], Optional[ChatDataQueryTask]]:
+    ) -> tuple[list[ChatDataQueryExecution], ChatDataQueryTask | None]:
         """读取任务下全部执行明细；存在明细时附带读取任务主记录。"""
         async with self._session_context() as db:
             result = await db.execute(

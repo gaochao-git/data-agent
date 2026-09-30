@@ -7,8 +7,9 @@ import json
 import re
 import time
 import uuid
+from collections.abc import Callable, Sequence
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import Any
 
 from langchain_core.messages import HumanMessage
 
@@ -27,17 +28,17 @@ def sanitize_scene_segment(value: str, fallback: str) -> str:
     return text or fallback
 
 
-def scene_case_paths(datasource_id: str, semantic_config_id: str) -> Dict[str, str]:
+def scene_case_paths(datasource_id: str, semantic_config_id: str) -> dict[str, str]:
     ds_segment = sanitize_scene_segment(datasource_id, "datasource")
     config_segment = sanitize_scene_segment(semantic_config_id, "semantic_config")
     return {"scene_id": f"{ds_segment}__{config_segment}"}
 
 
 def scene_case_set_id(datasource_id: str, semantic_config_id: str) -> str:
-    return hashlib.sha256(f"{datasource_id}::{semantic_config_id}".encode("utf-8")).hexdigest()[:32]
+    return hashlib.sha256(f"{datasource_id}::{semantic_config_id}".encode()).hexdigest()[:32]
 
 
-def safe_json_loads(text: Optional[str], default: Any = None) -> Any:
+def safe_json_loads(text: str | None, default: Any = None) -> Any:
     if not text:
         return default
     try:
@@ -46,7 +47,7 @@ def safe_json_loads(text: Optional[str], default: Any = None) -> Any:
         return default
 
 
-def case_row_to_payload(row: ChatDataEvalCase) -> Dict[str, Any]:
+def case_row_to_payload(row: ChatDataEvalCase) -> dict[str, Any]:
     return {
         "id": row.case_id,
         "nl": row.nl_text,
@@ -59,7 +60,7 @@ def case_row_to_payload(row: ChatDataEvalCase) -> Dict[str, Any]:
     }
 
 
-def validate_eval_case_ids(cases: Sequence[Dict[str, Any]]) -> None:
+def validate_eval_case_ids(cases: Sequence[dict[str, Any]]) -> None:
     seen = set()
     for index, case in enumerate(cases, start=1):
         case_id_value = str(case.get("id") or "").strip()
@@ -77,7 +78,7 @@ def accuracy_bp(value: Any) -> int:
         return 0
 
 
-def is_eval_case_passed(result: Dict[str, Any]) -> bool:
+def is_eval_case_passed(result: dict[str, Any]) -> bool:
     return (
         str(result.get("status") or "") != "failed"
         and float(result.get("semantic_accuracy") or 0) >= 1
@@ -86,11 +87,11 @@ def is_eval_case_passed(result: Dict[str, Any]) -> bool:
     )
 
 
-def format_datetime(value: Optional[datetime]) -> Optional[str]:
+def format_datetime(value: datetime | None) -> str | None:
     return value.strftime("%Y-%m-%d %H:%M:%S") if value else None
 
 
-def eval_run_row_to_payload(row: ChatDataEvalRun) -> Dict[str, Any]:
+def eval_run_row_to_payload(row: ChatDataEvalRun) -> dict[str, Any]:
     request_payload = safe_json_loads(row.request_payload, {}) or {}
     tester_name = str(row.create_by_name or row.update_by_name or request_payload.get("operator_name") or "").strip()
     return {
@@ -121,7 +122,7 @@ def eval_run_row_to_payload(row: ChatDataEvalRun) -> Dict[str, Any]:
     }
 
 
-def eval_run_case_row_to_payload(row: ChatDataEvalRunCase) -> Dict[str, Any]:
+def eval_run_case_row_to_payload(row: ChatDataEvalRunCase) -> dict[str, Any]:
     result_payload = safe_json_loads(row.result_payload, {}) or {}
     if isinstance(result_payload, dict):
         result_payload.setdefault("id", row.case_id)
@@ -142,7 +143,7 @@ def eval_run_case_row_to_payload(row: ChatDataEvalRunCase) -> Dict[str, Any]:
     }
 
 
-def _storage_cases(cases: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _storage_cases(cases: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
     return [
         {
             **case,
@@ -155,7 +156,7 @@ def _storage_cases(cases: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
 class EvaluationService:
     """准确率评测测试集和运行记录编排服务。"""
 
-    def __init__(self, dao: Optional[EvaluationDao] = None, session_context: Optional[Callable] = None):
+    def __init__(self, dao: EvaluationDao | None = None, session_context: Callable | None = None):
         self.dao = dao or EvaluationDao()
         self._session_context = session_context or default_get_session
 
@@ -165,7 +166,7 @@ class EvaluationService:
         if commit:
             await commit()
 
-    async def load_scene_case_set(self, datasource_id: str, semantic_config_id: str) -> Dict[str, Any]:
+    async def load_scene_case_set(self, datasource_id: str, semantic_config_id: str) -> dict[str, Any]:
         case_set_id = scene_case_set_id(datasource_id, semantic_config_id)
         async with self._session_context() as db:
             case_set, case_rows = await self.dao.load_scene_case_set(db, case_set_id)
@@ -183,9 +184,9 @@ class EvaluationService:
         semantic_config_id: str,
         case_set_name: str,
         business_domain: str,
-        cases: Sequence[Dict[str, Any]],
-        operator_id: Optional[str] = None,
-        operator_name: Optional[str] = None,
+        cases: Sequence[dict[str, Any]],
+        operator_id: str | None = None,
+        operator_name: str | None = None,
     ) -> str:
         validate_eval_case_ids(cases)
         case_set_id = scene_case_set_id(datasource_id, semantic_config_id)
@@ -205,7 +206,7 @@ class EvaluationService:
             await self._commit(db)
         return case_set_id
 
-    async def load_scene_runner_cases(self, datasource_id: str, semantic_config_id: str) -> List[Dict[str, Any]]:
+    async def load_scene_runner_cases(self, datasource_id: str, semantic_config_id: str) -> list[dict[str, Any]]:
         loaded = await self.load_scene_case_set(datasource_id, semantic_config_id)
         cases = loaded.get("cases") or []
         if not cases:
@@ -254,9 +255,9 @@ class EvaluationService:
         self,
         run_id: str,
         case_id_value: str,
-        result: Dict[str, Any],
-        operator_id: Optional[str] = None,
-        operator_name: Optional[str] = None,
+        result: dict[str, Any],
+        operator_id: str | None = None,
+        operator_name: str | None = None,
     ) -> None:
         now = datetime.now()
         async with self._session_context() as db:
@@ -286,11 +287,11 @@ class EvaluationService:
         self,
         run_id: str,
         *,
-        status: Optional[str] = None,
-        summary: Optional[Dict[str, Any]] = None,
-        error_message: Optional[str] = None,
+        status: str | None = None,
+        summary: dict[str, Any] | None = None,
+        error_message: str | None = None,
     ) -> None:
-        values: Dict[str, Any] = {"update_time": datetime.now()}
+        values: dict[str, Any] = {"update_time": datetime.now()}
         if status:
             values["run_status"] = status
             if status in {"succeeded", "failed", "cancelled"}:
@@ -315,11 +316,11 @@ class EvaluationService:
     async def list_eval_runs(
         self,
         *,
-        datasource_id: Optional[str] = None,
-        semantic_config_id: Optional[str] = None,
+        datasource_id: str | None = None,
+        semantic_config_id: str | None = None,
         page: int = 1,
         page_size: int = 20,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         normalized_page = max(1, int(page or 1))
         normalized_size = min(100, max(1, int(page_size or 20)))
         conditions = [ChatDataEvalRun.delete_flag == 0]
@@ -341,7 +342,7 @@ class EvaluationService:
             "page_size": normalized_size,
         }
 
-    async def get_eval_run_detail(self, run_id: str) -> Optional[Dict[str, Any]]:
+    async def get_eval_run_detail(self, run_id: str) -> dict[str, Any] | None:
         async with self._session_context() as db:
             run_row = await self.dao.get_eval_run(db, run_id)
             if not run_row:
@@ -353,7 +354,7 @@ class EvaluationService:
         }
 
 
-def build_evaluation_service(session_context: Optional[Callable] = None) -> EvaluationService:
+def build_evaluation_service(session_context: Callable | None = None) -> EvaluationService:
     """构建评测服务。"""
     return EvaluationService(session_context=session_context or default_get_session)
 
@@ -388,7 +389,7 @@ async def invoke_evaluation_draft_llm(prompt: str, config_id: str):
         raise
 
 
-async def generate_draft_case_by_llm(config_id: str, config: Dict[str, Any], payload) -> Dict[str, Any]:
+async def generate_draft_case_by_llm(config_id: str, config: dict[str, Any], payload) -> dict[str, Any]:
     """用 LLM 基于用户问题和当前语义配置生成 gold_dsl 草稿。"""
     user_input = str(payload.hint or "").strip()
     if not user_input:

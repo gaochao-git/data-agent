@@ -19,9 +19,10 @@ import shlex
 import shutil
 import subprocess
 import tempfile
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable, Literal, Mapping, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
 from apps.chat_data_app.agent.workspace.runtime_skill_snapshot import (
     build_runtime_skill_snapshot_async,
@@ -56,7 +57,7 @@ class WorkspaceBackend(Protocol):
 
     async def read_text_file(
         self,
-        runtime: "ConversationWorkspaceRuntime",
+        runtime: ConversationWorkspaceRuntime,
         *,
         file_path: str,
         offset: int,
@@ -66,7 +67,7 @@ class WorkspaceBackend(Protocol):
 
     async def write_text_file(
         self,
-        runtime: "ConversationWorkspaceRuntime",
+        runtime: ConversationWorkspaceRuntime,
         *,
         file_path: str,
         content: str,
@@ -75,7 +76,7 @@ class WorkspaceBackend(Protocol):
 
     async def replace_text_file(
         self,
-        runtime: "ConversationWorkspaceRuntime",
+        runtime: ConversationWorkspaceRuntime,
         *,
         file_path: str,
         old_content: str,
@@ -84,7 +85,7 @@ class WorkspaceBackend(Protocol):
 
     async def list_dir(
         self,
-        runtime: "ConversationWorkspaceRuntime",
+        runtime: ConversationWorkspaceRuntime,
         *,
         path: str,
         max_depth: int,
@@ -92,14 +93,14 @@ class WorkspaceBackend(Protocol):
 
     async def create_dir(
         self,
-        runtime: "ConversationWorkspaceRuntime",
+        runtime: ConversationWorkspaceRuntime,
         *,
         path: str,
     ) -> dict[str, Any]: ...
 
     async def delete_path(
         self,
-        runtime: "ConversationWorkspaceRuntime",
+        runtime: ConversationWorkspaceRuntime,
         *,
         path: str,
         recursive: bool,
@@ -108,7 +109,7 @@ class WorkspaceBackend(Protocol):
 
     async def move_path(
         self,
-        runtime: "ConversationWorkspaceRuntime",
+        runtime: ConversationWorkspaceRuntime,
         *,
         source_path: str,
         destination_path: str,
@@ -116,7 +117,7 @@ class WorkspaceBackend(Protocol):
 
     async def copy_path(
         self,
-        runtime: "ConversationWorkspaceRuntime",
+        runtime: ConversationWorkspaceRuntime,
         *,
         source_path: str,
         destination_path: str,
@@ -124,7 +125,7 @@ class WorkspaceBackend(Protocol):
 
     async def search_files(
         self,
-        runtime: "ConversationWorkspaceRuntime",
+        runtime: ConversationWorkspaceRuntime,
         *,
         path: str,
         pattern: str,
@@ -133,7 +134,7 @@ class WorkspaceBackend(Protocol):
 
     async def grep_text(
         self,
-        runtime: "ConversationWorkspaceRuntime",
+        runtime: ConversationWorkspaceRuntime,
         *,
         path: str,
         patterns: list[str],
@@ -153,14 +154,14 @@ class ExecutableWorkspaceBackend(WorkspaceBackend, Protocol):
 
     async def validate_bash_paths(
         self,
-        runtime: "ConversationWorkspaceRuntime",
+        runtime: ConversationWorkspaceRuntime,
         *,
         command: str,
     ) -> None: ...
 
     async def run_bash(
         self,
-        runtime: "ConversationWorkspaceRuntime",
+        runtime: ConversationWorkspaceRuntime,
         *,
         command: str,
         cwd: str | None,
@@ -169,7 +170,7 @@ class ExecutableWorkspaceBackend(WorkspaceBackend, Protocol):
 
     async def run_officecli(
         self,
-        runtime: "ConversationWorkspaceRuntime",
+        runtime: ConversationWorkspaceRuntime,
         *,
         args: list[str],
         cwd: str | None,
@@ -183,7 +184,7 @@ class ConversationWorkspaceRuntime:
 
     workspace_root: str
     user_id: str
-    backend: "WorkspaceBackend | str" = "local"
+    backend: WorkspaceBackend | str = "local"
     # 当前用户有权访问的全部技能名（由请求入口按 user_id 解析得到）。
     # 仅用于说明/调试，不作为本地读取的前置条件。
     available_skill_names: list[str] = field(default_factory=list)

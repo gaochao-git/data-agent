@@ -6,7 +6,6 @@ SQL 方言适配
 
 import logging
 from abc import ABC, abstractmethod
-from typing import Dict, List
 
 logger = logging.getLogger(__name__)
 
@@ -251,7 +250,7 @@ class DialectRegistry:
     支持动态注册和获取方言。
     """
 
-    _dialects: Dict[str, SQLDialect] = {}
+    _dialects: dict[str, SQLDialect] = {}
 
     @classmethod
     def register(cls, dialect: SQLDialect) -> None:
@@ -284,7 +283,7 @@ class DialectRegistry:
         return cls._dialects[name]
 
     @classmethod
-    def list(cls) -> List[str]:
+    def list(cls) -> list[str]:
         """列出所有可用方言"""
         return list(cls._dialects.keys())
 

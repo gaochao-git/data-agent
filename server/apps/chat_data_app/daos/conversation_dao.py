@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime
-from typing import Any, Callable, List, Optional
+from typing import Any
 
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy import update as sa_update
@@ -15,22 +16,22 @@ from utils.models import ChatDataAgentInbox, UserThread
 class ConversationDao:
     """封装 user_threads 表读写。"""
 
-    def __init__(self, session_context: Optional[Callable] = None):
+    def __init__(self, session_context: Callable | None = None):
         self._session_context = session_context or default_get_session
 
     @staticmethod
-    def _thread_conditions(conversation_id: str, user_id: Optional[str] = None) -> list[Any]:
+    def _thread_conditions(conversation_id: str, user_id: str | None = None) -> list[Any]:
         conditions = [UserThread.thread_id == conversation_id, UserThread.delete_flag == 0]
         if user_id:
             conditions.append(UserThread.user_id == user_id)
         return conditions
 
-    async def get_thread(self, conversation_id: str, user_id: Optional[str] = None) -> Optional[UserThread]:
+    async def get_thread(self, conversation_id: str, user_id: str | None = None) -> UserThread | None:
         async with self._session_context() as session:
             result = await session.execute(select(UserThread).where(*self._thread_conditions(conversation_id, user_id)))
             return result.scalar_one_or_none()
 
-    async def get_thread_by_id_any_status(self, conversation_id: str) -> Optional[UserThread]:
+    async def get_thread_by_id_any_status(self, conversation_id: str) -> UserThread | None:
         async with self._session_context() as session:
             result = await session.execute(select(UserThread).where(UserThread.thread_id == conversation_id))
             return result.scalar_one_or_none()
@@ -41,7 +42,7 @@ class ConversationDao:
         user_id: str,
         thread_id: str,
         agent_id: str,
-        title: Optional[str] = None,
+        title: str | None = None,
         datasource_id: str = "",
         now: datetime,
     ) -> UserThread:
@@ -65,10 +66,10 @@ class ConversationDao:
         self,
         *,
         agent_id: str,
-        user_id: Optional[str],
+        user_id: str | None,
         limit: int,
         offset: int,
-    ) -> List[UserThread]:
+    ) -> list[UserThread]:
         async with self._session_context() as session:
             query = select(UserThread).where(UserThread.agent_id == agent_id, UserThread.delete_flag == 0)
             if user_id:
@@ -84,11 +85,11 @@ class ConversationDao:
     async def list_threads_by_agent_ids(
         self,
         *,
-        agent_ids: List[str],
-        user_id: Optional[str],
+        agent_ids: list[str],
+        user_id: str | None,
         limit: int,
         offset: int,
-    ) -> List[UserThread]:
+    ) -> list[UserThread]:
         async with self._session_context() as session:
             query = select(UserThread).where(UserThread.agent_id.in_(agent_ids), UserThread.delete_flag == 0)
             if user_id:
@@ -104,7 +105,7 @@ class ConversationDao:
     async def list_active_run_statuses(
         self,
         conversation_ids: list[str],
-        user_id: Optional[str],
+        user_id: str | None,
     ) -> dict[str, str]:
         """批量读取会话的有效运行状态，避免历史列表产生 N+1 查询。"""
         if not conversation_ids:
@@ -137,7 +138,7 @@ class ConversationDao:
             return statuses
 
     @staticmethod
-    def _list_conditions(agent_id: str, user_id: Optional[str]) -> list[Any]:
+    def _list_conditions(agent_id: str, user_id: str | None) -> list[Any]:
         conditions = [UserThread.agent_id == agent_id, UserThread.delete_flag == 0]
         if user_id:
             conditions.append(UserThread.user_id == user_id)
@@ -147,9 +148,9 @@ class ConversationDao:
         self,
         *,
         agent_id: str,
-        user_id: Optional[str],
+        user_id: str | None,
         limit_per_group: int,
-    ) -> List[UserThread]:
+    ) -> list[UserThread]:
         """返回每个历史会话分组的首屏，每组多取一条用于判断 has_more。
 
         MySQL 5.7 不支持窗口函数（row_number() OVER），改为先查出分组清单，
@@ -164,12 +165,12 @@ class ConversationDao:
             )
             datasource_ids = {value for value in result.scalars().all() if value is not None}
 
-        groups: List[tuple[str, Optional[str]]] = [("pinned", None)]
+        groups: list[tuple[str, str | None]] = [("pinned", None)]
         if "" in datasource_ids:
             groups.append(("unclassified", None))
         groups.extend(("datasource", datasource_id) for datasource_id in sorted(datasource_ids) if datasource_id)
 
-        rows: List[UserThread] = []
+        rows: list[UserThread] = []
         for group_type, datasource_id in groups:
             rows.extend(
                 await self.list_threads_in_group(
@@ -190,13 +191,13 @@ class ConversationDao:
         self,
         *,
         agent_id: str,
-        user_id: Optional[str],
+        user_id: str | None,
         group_type: str,
-        datasource_id: Optional[str],
+        datasource_id: str | None,
         limit: int,
-        cursor_update_time: Optional[datetime] = None,
-        cursor_id: Optional[int] = None,
-    ) -> List[UserThread]:
+        cursor_update_time: datetime | None = None,
+        cursor_id: int | None = None,
+    ) -> list[UserThread]:
         """按稳定分组筛选会话；收藏会话只属于 pinned 分组。"""
         conditions = self._list_conditions(agent_id, user_id)
         normalized_datasource = func.trim(func.coalesce(UserThread.datasource_id, ""))
@@ -224,7 +225,7 @@ class ConversationDao:
             )
             return list(result.scalars().all())
 
-    async def update_title(self, *, conversation_id: str, title: str, user_id: Optional[str]) -> bool:
+    async def update_title(self, *, conversation_id: str, title: str, user_id: str | None) -> bool:
         async with self._session_context() as session:
             result = await session.execute(select(UserThread).where(*self._thread_conditions(conversation_id, user_id)))
             if not result.scalar_one_or_none():
@@ -239,7 +240,7 @@ class ConversationDao:
             )
             return True
 
-    async def toggle_favorite(self, *, conversation_id: str, user_id: Optional[str]) -> Optional[bool]:
+    async def toggle_favorite(self, *, conversation_id: str, user_id: str | None) -> bool | None:
         async with self._session_context() as session:
             result = await session.execute(select(UserThread).where(*self._thread_conditions(conversation_id, user_id)))
             thread = result.scalar_one_or_none()
@@ -252,14 +253,14 @@ class ConversationDao:
             await session.execute(sa_update(UserThread).where(*update_conditions).values(is_favorited=new_favorited))
             return bool(new_favorited)
 
-    async def get_agent_id(self, *, conversation_id: str, user_id: Optional[str]) -> Optional[str]:
+    async def get_agent_id(self, *, conversation_id: str, user_id: str | None) -> str | None:
         async with self._session_context() as session:
             result = await session.execute(
                 select(UserThread.agent_id).where(*self._thread_conditions(conversation_id, user_id))
             )
             return result.scalar_one_or_none()
 
-    async def get_datasource_id(self, *, conversation_id: str, user_id: str) -> Optional[str]:
+    async def get_datasource_id(self, *, conversation_id: str, user_id: str) -> str | None:
         """读取会话绑定的数据源组。"""
         async with self._session_context() as session:
             result = await session.execute(
@@ -268,7 +269,7 @@ class ConversationDao:
             datasource_id = result.scalar_one_or_none()
             return str(datasource_id or "").strip() or None
 
-    async def list_unbound_threads(self, *, limit: int) -> List[UserThread]:
+    async def list_unbound_threads(self, *, limit: int) -> list[UserThread]:
         """列出仍需从旧 checkpoint 回填数据源绑定的有效会话。"""
         async with self._session_context() as session:
             result = await session.execute(
@@ -313,7 +314,7 @@ class ConversationDao:
         conversation_id: str,
         user_id: str,
         requested_datasource_id: str,
-    ) -> Optional[str]:
+    ) -> str | None:
         """在行锁内读取绑定，未绑定时写入请求值。"""
         async with self._session_context() as session:
             result = await session.execute(

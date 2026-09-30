@@ -7,7 +7,7 @@ run/semantic_quality_checker.first_structure_error（本模块不再提供独立
 """
 
 import re
-from typing import Any, Dict, List, Optional, Set
+from typing import Any
 
 from .common import is_time_logical_dimension
 from .input_validator import _NO_VALUE_FILTER_OPERATORS, FILTER_OPERATORS
@@ -26,7 +26,7 @@ def normalize_semantic_text(value: Any) -> str:
     return str(value or "").strip().lower().replace("`", "")
 
 
-def expression_uses_physical_column(expression: str, table_columns: Set[str]) -> bool:
+def expression_uses_physical_column(expression: str, table_columns: set[str]) -> bool:
     if not expression:
         return False
     expression_without_quotes = expression.replace("`", "")
@@ -38,9 +38,9 @@ def expression_uses_physical_column(expression: str, table_columns: Set[str]) ->
     return False
 
 
-def _validate_field_display_names(dimensions: List[Dict], metrics: List[Dict]) -> Optional[str]:
+def _validate_field_display_names(dimensions: list[dict], metrics: list[dict]) -> str | None:
     """维度/指标的显示名称不能为空且不能重复。"""
-    seen_names: Set[str] = set()
+    seen_names: set[str] = set()
     for item in [*(dimensions or []), *(metrics or [])]:
         display_name = str((item or {}).get("name") or "").strip()
         normalized_name = normalize_semantic_text(display_name)
@@ -52,9 +52,7 @@ def _validate_field_display_names(dimensions: List[Dict], metrics: List[Dict]) -
     return None
 
 
-def _validate_dimensions_against_tables(
-    dimensions: List[Dict], table_columns_map: Dict[str, Set[str]]
-) -> Optional[str]:
+def _validate_dimensions_against_tables(dimensions: list[dict], table_columns_map: dict[str, set[str]]) -> str | None:
     for dimension in dimensions or []:
         table_name = dimension.get("table")
         column_name = dimension.get("column")
@@ -74,7 +72,7 @@ _FUNCTION_CALL_NAME_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\s*\(")
 # 函数名/表前缀保持 ASCII：SQL 函数名与物理表名就是 ASCII 命名。
 _IDENTIFIER_TOKEN_PATTERN = re.compile(r"[^\W\d][\w]*", re.UNICODE)
 _TABLE_PREFIX_PATTERN = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\.")
-_SQL_KEYWORD_TOKENS: Set[str] = {
+_SQL_KEYWORD_TOKENS: set[str] = {
     "select",
     "from",
     "where",
@@ -119,7 +117,7 @@ def _strip_expression_literals(expression: str) -> str:
     return without_double.replace("`", "")
 
 
-def _find_unknown_expression_columns(expression: str, table_columns: Set[str]) -> List[str]:
+def _find_unknown_expression_columns(expression: str, table_columns: set[str]) -> list[str]:
     """找出表达式中引用了不存在物理列的标识符。
 
     锚定校验（expression_uses_physical_column）只保证表达式至少命中一个物理列，
@@ -130,7 +128,7 @@ def _find_unknown_expression_columns(expression: str, table_columns: Set[str]) -
     without_functions = _FUNCTION_CALL_NAME_PATTERN.sub(" ", cleaned)
     without_prefixes = _TABLE_PREFIX_PATTERN.sub(" ", without_functions)
     lowered_columns = {column.lower() for column in table_columns}
-    unknown: List[str] = []
+    unknown: list[str] = []
     for token in _IDENTIFIER_TOKEN_PATTERN.findall(without_prefixes):
         if token.lower() in _SQL_KEYWORD_TOKENS or token.lower() in lowered_columns:
             continue
@@ -152,7 +150,7 @@ def _is_constant_aggregate_expression(expression: str) -> bool:
     return not _IDENTIFIER_TOKEN_PATTERN.search(without_functions)
 
 
-def _validate_metrics_against_tables(metrics: List[Dict], table_columns_map: Dict[str, Set[str]]) -> Optional[str]:
+def _validate_metrics_against_tables(metrics: list[dict], table_columns_map: dict[str, set[str]]) -> str | None:
     for metric in metrics or []:
         if is_derived_metric(metric) or is_composite_metric(metric):
             continue  # 派生/复合指标不直接携带物理引用：派生复用基础指标，复合口径由成员表达式决定
@@ -172,7 +170,7 @@ def _validate_metrics_against_tables(metrics: List[Dict], table_columns_map: Dic
     return None
 
 
-def _validate_derived_metrics(metrics: List[Dict], dimensions: List[Dict]) -> Optional[str]:
+def _validate_derived_metrics(metrics: list[dict], dimensions: list[dict]) -> str | None:
     """派生指标结构校验：基础指标、统计周期与修饰词过滤的合法性。"""
     if not any(is_derived_metric(metric) for metric in metrics or []):
         return None
@@ -188,10 +186,10 @@ def _validate_derived_metrics(metrics: List[Dict], dimensions: List[Dict]) -> Op
 
 
 def _validate_derived_metric_item(
-    metric: Dict[str, Any],
-    metrics_map: Dict[str, Dict[str, Any]],
-    dimensions_map: Dict[str, Dict[str, Any]],
-) -> Optional[str]:
+    metric: dict[str, Any],
+    metrics_map: dict[str, dict[str, Any]],
+    dimensions_map: dict[str, dict[str, Any]],
+) -> str | None:
     name = metric.get("name", "")
     if str(metric.get("expression") or "").strip():
         return f"派生指标 {name} 不能配置 expression，口径由基础指标决定"
@@ -214,8 +212,8 @@ def _validate_derived_metric_item(
 def _validate_derived_period(
     metric_name: str,
     period: Any,
-    dimensions_map: Dict[str, Dict[str, Any]],
-) -> Optional[str]:
+    dimensions_map: dict[str, dict[str, Any]],
+) -> str | None:
     label = f"派生指标 {metric_name} 的统计周期"
     if period in (None, {}):
         return None
@@ -230,7 +228,7 @@ def _validate_derived_period(
     return _validate_period_time_dimension(label, period, dimensions_map)
 
 
-def _validate_derived_period_range(label: str, kind: str, period: Dict[str, Any]) -> Optional[str]:
+def _validate_derived_period_range(label: str, kind: str, period: dict[str, Any]) -> str | None:
     """周期区间参数校验：last_n_days 需要正整数 n，between 需要起止值。"""
     if kind == "last_n_days":
         n = period.get("n")
@@ -243,9 +241,9 @@ def _validate_derived_period_range(label: str, kind: str, period: Dict[str, Any]
 
 def _validate_period_time_dimension(
     label: str,
-    period: Dict[str, Any],
-    dimensions_map: Dict[str, Dict[str, Any]],
-) -> Optional[str]:
+    period: dict[str, Any],
+    dimensions_map: dict[str, dict[str, Any]],
+) -> str | None:
     """周期的时间维度必须存在且为日期/时间型逻辑字段。"""
     time_dimension = str(period.get("time_dimension") or "").strip()
     dim_config = dimensions_map.get(time_dimension)
@@ -259,8 +257,8 @@ def _validate_period_time_dimension(
 def _validate_derived_filters(
     metric_name: str,
     filters: Any,
-    dimensions_map: Dict[str, Dict[str, Any]],
-) -> Optional[str]:
+    dimensions_map: dict[str, dict[str, Any]],
+) -> str | None:
     if filters in (None, []):
         return None
     if not isinstance(filters, list):
@@ -276,8 +274,8 @@ def _validate_derived_filter_item(
     metric_name: str,
     index: int,
     item: Any,
-    dimensions_map: Dict[str, Dict[str, Any]],
-) -> Optional[str]:
+    dimensions_map: dict[str, dict[str, Any]],
+) -> str | None:
     label = f"派生指标 {metric_name} 的修饰词过滤[{index + 1}]"
     if not isinstance(item, dict):
         return f"{label}必须是对象"
@@ -296,7 +294,7 @@ def _is_blank_text(value: Any) -> bool:
     return not str(value or "").strip()
 
 
-def _validate_derived_filter_value(label: str, operator: str, value: Any) -> Optional[str]:
+def _validate_derived_filter_value(label: str, operator: str, value: Any) -> str | None:
     if operator in _NO_VALUE_FILTER_OPERATORS:
         return None
     if operator == "BETWEEN":
@@ -308,19 +306,19 @@ def _validate_derived_filter_value(label: str, operator: str, value: Any) -> Opt
     return None
 
 
-def _validate_between_filter_value(label: str, value: Any) -> Optional[str]:
+def _validate_between_filter_value(label: str, value: Any) -> str | None:
     if not isinstance(value, list) or len(value) != 2 or any(_is_blank_text(part) for part in value):
         return f"{label}BETWEEN 需要完整的起止值"
     return None
 
 
-def _validate_in_filter_value(label: str, value: Any) -> Optional[str]:
+def _validate_in_filter_value(label: str, value: Any) -> str | None:
     if not isinstance(value, list) or not value or any(_is_blank_text(part) for part in value):
         return f"{label}IN 过滤需要至少一个有效值"
     return None
 
 
-def _validate_composite_metrics(metrics: List[Dict]) -> Optional[str]:
+def _validate_composite_metrics(metrics: list[dict]) -> str | None:
     """复合指标结构校验：公式语法、成员存在性、同表聚合原子约束。"""
     if not any(is_composite_metric(metric) for metric in metrics or []):
         return None
@@ -335,9 +333,9 @@ def _validate_composite_metrics(metrics: List[Dict]) -> Optional[str]:
 
 
 def _validate_composite_metric_item(
-    metric: Dict[str, Any],
-    metrics_map: Dict[str, Dict[str, Any]],
-) -> Optional[str]:
+    metric: dict[str, Any],
+    metrics_map: dict[str, dict[str, Any]],
+) -> str | None:
     name = metric.get("name", "")
     if str(metric.get("expression") or "").strip():
         return f"复合指标 {name} 不能配置 expression，口径由 formula 决定"
@@ -361,16 +359,16 @@ def _validate_composite_metric_item(
     return None
 
 
-def _metric_table(metric: Optional[Dict[str, Any]]) -> str:
+def _metric_table(metric: dict[str, Any] | None) -> str:
     return str((metric or {}).get("table") or "").strip()
 
 
 def _validate_composite_member(
     name: str,
     ref: str,
-    metrics_map: Dict[str, Dict[str, Any]],
+    metrics_map: dict[str, dict[str, Any]],
     member_table: str,
-) -> Optional[str]:
+) -> str | None:
     """复合指标单个公式成员校验：存在性、类型、聚合性与同表约束。"""
     member_metric = metrics_map.get(ref)
     if not member_metric:
@@ -389,7 +387,7 @@ def _validate_composite_member(
     return None
 
 
-def _validate_allowed_operators(dimension: Dict[str, Any]) -> Optional[str]:
+def _validate_allowed_operators(dimension: dict[str, Any]) -> str | None:
     configured = dimension.get("allowed_operators")
     if configured is None:
         return None
@@ -402,15 +400,15 @@ def _validate_allowed_operators(dimension: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-def _semantic_alias(item: Dict[str, Any]) -> str:
+def _semantic_alias(item: dict[str, Any]) -> str:
     return str(item.get("table_alias") or item.get("table") or "").strip()
 
 
-def _relationship_alias(relationship: Dict[str, Any], side: str) -> str:
+def _relationship_alias(relationship: dict[str, Any], side: str) -> str:
     return str(relationship.get(f"{side}_alias") or relationship.get(f"{side}_table") or "").strip()
 
 
-def _relationship_conditions(relationship: Dict[str, Any]) -> List[Dict[str, str]]:
+def _relationship_conditions(relationship: dict[str, Any]) -> list[dict[str, str]]:
     conditions = relationship.get("join_conditions") or []
     if conditions:
         return conditions
@@ -424,7 +422,7 @@ def _relationship_conditions(relationship: Dict[str, Any]) -> List[Dict[str, str
     return []
 
 
-def _register_alias(alias_tables: Dict[str, str], alias: str, table: str) -> Optional[str]:
+def _register_alias(alias_tables: dict[str, str], alias: str, table: str) -> str | None:
     existing = alias_tables.get(alias)
     if existing and existing != table:
         return f"语义表别名 {alias} 同时指向了 {existing} 和 {table}"
@@ -433,11 +431,11 @@ def _register_alias(alias_tables: Dict[str, str], alias: str, table: str) -> Opt
 
 
 def _register_field_aliases(
-    alias_tables: Dict[str, str],
-    field_aliases: Set[str],
-    dimensions: List[Dict],
-    metrics: List[Dict],
-) -> Optional[str]:
+    alias_tables: dict[str, str],
+    field_aliases: set[str],
+    dimensions: list[dict],
+    metrics: list[dict],
+) -> str | None:
     for item in [*dimensions, *metrics]:
         table = str((item or {}).get("table") or "").strip()
         alias = _semantic_alias(item or {})
@@ -450,12 +448,12 @@ def _register_field_aliases(
 
 
 def _validate_relationship_conditions(
-    table_columns_map: Dict[str, Set[str]],
+    table_columns_map: dict[str, set[str]],
     label: str,
     left_table: str,
     right_table: str,
-    conditions: List[Dict],
-) -> Optional[str]:
+    conditions: list[dict],
+) -> str | None:
     for condition_index, condition in enumerate(conditions):
         left_column = str((condition or {}).get("left_column") or "").strip()
         right_column = str((condition or {}).get("right_column") or "").strip()
@@ -470,11 +468,11 @@ def _validate_relationship_conditions(
 
 
 def _validate_relationship_sides(
-    table_columns_map: Dict[str, Set[str]],
-    alias_tables: Dict[str, str],
+    table_columns_map: dict[str, set[str]],
+    alias_tables: dict[str, str],
     label: str,
     sides: tuple[tuple[str, str, str], ...],
-) -> Optional[str]:
+) -> str | None:
     for side_name, table, alias in sides:
         if not table or table not in table_columns_map:
             return f"{label}{side_name}不存在: {table}"
@@ -487,12 +485,12 @@ def _validate_relationship_sides(
 
 
 def _validate_single_relationship(
-    table_columns_map: Dict[str, Set[str]],
-    alias_tables: Dict[str, str],
-    adjacency: Dict[str, Set[str]],
+    table_columns_map: dict[str, set[str]],
+    alias_tables: dict[str, str],
+    adjacency: dict[str, set[str]],
     index: int,
-    relationship: Dict,
-) -> Optional[str]:
+    relationship: dict,
+) -> str | None:
     left_table = str((relationship or {}).get("left_table") or "").strip()
     right_table = str((relationship or {}).get("right_table") or "").strip()
     left_alias = _relationship_alias(relationship or {}, "left")
@@ -529,7 +527,7 @@ def _validate_single_relationship(
     return None
 
 
-def _find_disconnected_aliases(field_aliases: Set[str], adjacency: Dict[str, Set[str]]) -> List[str]:
+def _find_disconnected_aliases(field_aliases: set[str], adjacency: dict[str, set[str]]) -> list[str]:
     if len(field_aliases) <= 1:
         return []
     start = next(iter(field_aliases))
@@ -545,19 +543,19 @@ def _find_disconnected_aliases(field_aliases: Set[str], adjacency: Dict[str, Set
 
 
 def validate_semantic_relationships(
-    table_columns_map: Dict[str, Set[str]],
-    metrics: List[Dict],
-    dimensions: List[Dict],
-    relationships: List[Dict],
-) -> Optional[str]:
+    table_columns_map: dict[str, set[str]],
+    metrics: list[dict],
+    dimensions: list[dict],
+    relationships: list[dict],
+) -> str | None:
     """Validate relationship endpoints, aliases, columns and field connectivity."""
-    alias_tables: Dict[str, str] = {}
-    field_aliases: Set[str] = set()
+    alias_tables: dict[str, str] = {}
+    field_aliases: set[str] = set()
     error = _register_field_aliases(alias_tables, field_aliases, dimensions, metrics)
     if error:
         return error
 
-    adjacency: Dict[str, Set[str]] = {}
+    adjacency: dict[str, set[str]] = {}
     for index, relationship in enumerate(relationships):
         error = _validate_single_relationship(
             table_columns_map,

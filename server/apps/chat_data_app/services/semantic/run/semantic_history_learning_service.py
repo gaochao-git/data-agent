@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, Tuple
+from typing import Any
 
 from langchain_core.messages import HumanMessage
 
@@ -38,7 +39,7 @@ SKIP_COUNTER_TEMPLATE = {
 }
 
 
-def _parse_json_object(raw: Any) -> Dict[str, Any]:
+def _parse_json_object(raw: Any) -> dict[str, Any]:
     """解析 JSON 对象字符串。"""
     if isinstance(raw, dict):
         return raw
@@ -51,17 +52,17 @@ def _parse_json_object(raw: Any) -> Dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
-def _extract_history_task_semantic_id(payload: Dict[str, Any]) -> str:
+def _extract_history_task_semantic_id(payload: dict[str, Any]) -> str:
     """从任务请求中提取语义配置ID。"""
     return str((payload or {}).get("semantic_config_id") or "").strip()
 
 
-def _extract_history_task_query_text(payload: Dict[str, Any]) -> str:
+def _extract_history_task_query_text(payload: dict[str, Any]) -> str:
     """从任务请求中提取原始问题或查询说明。"""
     return str((payload or {}).get("query_text") or "").strip()
 
 
-def _extract_history_task_conversation_id(payload: Dict[str, Any]) -> str:
+def _extract_history_task_conversation_id(payload: dict[str, Any]) -> str:
     """从任务请求中提取来源会话ID。"""
     return str((payload or {}).get("conversation_id") or "").strip()
 
@@ -76,7 +77,7 @@ def _history_message_text(content: Any) -> str:
     if isinstance(content, str):
         return content.strip()
     if isinstance(content, list):
-        parts: List[str] = []
+        parts: list[str] = []
         for item in content:
             if isinstance(item, str):
                 parts.append(item)
@@ -134,8 +135,8 @@ def _is_history_tool_error_message(text: str) -> bool:
 def _collect_user_turn(
     text: str,
     timestamp: str,
-    user_turns: List[Dict[str, str]],
-    negative_feedback: List[str],
+    user_turns: list[dict[str, str]],
+    negative_feedback: list[str],
 ) -> None:
     """记录用户发言（截断至 500 字），负反馈文本额外收集。"""
     clipped = text[:500]
@@ -144,7 +145,7 @@ def _collect_user_turn(
         negative_feedback.append(clipped)
 
 
-def _collect_tool_error(msg: Dict[str, Any], text: str, timestamp: str, tool_errors: List[Dict[str, str]]) -> None:
+def _collect_tool_error(msg: dict[str, Any], text: str, timestamp: str, tool_errors: list[dict[str, str]]) -> None:
     """记录工具错误消息（截断至 600 字）。"""
     tool_errors.append(
         {
@@ -155,7 +156,7 @@ def _collect_tool_error(msg: Dict[str, Any], text: str, timestamp: str, tool_err
     )
 
 
-def _append_assistant_turn(msg: Any, text: str, timestamp: str, assistant_turns: List[Dict[str, str]]) -> None:
+def _append_assistant_turn(msg: Any, text: str, timestamp: str, assistant_turns: list[dict[str, str]]) -> None:
     """非 tool_calls 的 assistant 发言裁剪后登记。"""
     if (msg or {}).get("tool_calls"):
         return
@@ -164,10 +165,10 @@ def _append_assistant_turn(msg: Any, text: str, timestamp: str, assistant_turns:
 
 def _compact_one_history_message(
     msg: Any,
-    user_turns: List[Dict[str, str]],
-    assistant_turns: List[Dict[str, str]],
-    tool_errors: List[Dict[str, str]],
-    negative_feedback: List[str],
+    user_turns: list[dict[str, str]],
+    assistant_turns: list[dict[str, str]],
+    tool_errors: list[dict[str, str]],
+    negative_feedback: list[str],
 ) -> None:
     """裁剪单条对话消息，按角色登记到对应收集列表。"""
     text = _history_message_text((msg or {}).get("content"))
@@ -183,12 +184,12 @@ def _compact_one_history_message(
         _collect_tool_error(msg, text, timestamp, tool_errors)
 
 
-def _compact_history_conversation_messages(messages: List[Dict[str, Any]]) -> Dict[str, Any]:
+def _compact_history_conversation_messages(messages: list[dict[str, Any]]) -> dict[str, Any]:
     """裁剪智能问数对话上下文，保留用户意图、反馈和工具错误。"""
-    user_turns: List[Dict[str, str]] = []
-    assistant_turns: List[Dict[str, str]] = []
-    tool_errors: List[Dict[str, str]] = []
-    negative_feedback: List[str] = []
+    user_turns: list[dict[str, str]] = []
+    assistant_turns: list[dict[str, str]] = []
+    tool_errors: list[dict[str, str]] = []
+    negative_feedback: list[str] = []
     for msg in messages or []:
         _compact_one_history_message(msg, user_turns, assistant_turns, tool_errors, negative_feedback)
     return {
@@ -199,7 +200,7 @@ def _compact_history_conversation_messages(messages: List[Dict[str, Any]]) -> Di
     }
 
 
-async def _load_history_conversation_context(conversation_id: str, user_id: str) -> Optional[Dict[str, Any]]:
+async def _load_history_conversation_context(conversation_id: str, user_id: str) -> dict[str, Any] | None:
     """读取智能问数对话上下文，用于历史学习。"""
     normalized_id = str(conversation_id or "").strip()
     if not normalized_id:
@@ -228,9 +229,9 @@ _SEMANTIC_SCOPE_FIELD_SPECS = (
 )
 
 
-def _semantic_scope_tables(config: Dict[str, Any]) -> Set[str]:
+def _semantic_scope_tables(config: dict[str, Any]) -> set[str]:
     """提取指标集涉及的表。"""
-    tables: Set[str] = set()
+    tables: set[str] = set()
     for collection_key, field_names in _SEMANTIC_SCOPE_FIELD_SPECS:
         for item in config.get(collection_key) or []:
             for field_name in field_names:
@@ -242,14 +243,14 @@ def _semantic_scope_tables(config: Dict[str, Any]) -> Set[str]:
 
 def _history_belongs_to_config(
     query_type: str,
-    task_payload: Dict[str, Any],
+    task_payload: dict[str, Any],
     sql: str,
     config_id: str,
-    config: Dict[str, Any],
+    config: dict[str, Any],
     source_type: str,
     *,
-    table_parser: Optional[Callable[[str, str], Any]] = None,
-) -> Tuple[bool, str, List[str], str]:
+    table_parser: Callable[[str, str], Any] | None = None,
+) -> tuple[bool, str, list[str], str]:
     """判断历史记录是否属于当前指标集。"""
     task_config_id = _extract_history_task_semantic_id(task_payload)
     if query_type in {"agent", "builder"}:
@@ -272,9 +273,9 @@ def _history_belongs_to_config(
     return True, "matched_table_scope", sorted(history_tables), ""
 
 
-def _history_learning_table_columns(table: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _history_learning_table_columns(table: dict[str, Any]) -> list[dict[str, Any]]:
     """裁剪单表字段列表，保留名称/类型/描述。"""
-    columns: List[Dict[str, Any]] = []
+    columns: list[dict[str, Any]] = []
     for col in table.get("columns", []) or []:
         col_name = str((col or {}).get("name") or "").strip()
         if not col_name:
@@ -289,10 +290,10 @@ def _history_learning_table_columns(table: Dict[str, Any]) -> List[Dict[str, Any
     return columns
 
 
-def _build_history_learning_table_context(datasource: Dict[str, Any], config: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _build_history_learning_table_context(datasource: dict[str, Any], config: dict[str, Any]) -> list[dict[str, Any]]:
     """裁剪指标集相关表结构给历史学习模型。"""
     scope_tables = _semantic_scope_tables(config)
-    items: List[Dict[str, Any]] = []
+    items: list[dict[str, Any]] = []
     for table in datasource.get("ds_tables", []) or []:
         table = table or {}
         table_name = str(table.get("table_name") or "").strip()
@@ -308,13 +309,13 @@ def _build_history_learning_table_context(datasource: Dict[str, Any], config: Di
     return items[:20]
 
 
-def _compact_history_sample_for_llm(sample: Dict[str, Any]) -> Dict[str, Any]:
+def _compact_history_sample_for_llm(sample: dict[str, Any]) -> dict[str, Any]:
     """压缩单条历史，控制 LLM 输入长度。"""
     semantic_builder_config = (
         sample.get("semantic_builder_config") if isinstance(sample.get("semantic_builder_config"), dict) else None
     )
     builder_config = sample.get("builder_config") if isinstance(sample.get("builder_config"), dict) else None
-    compact: Dict[str, Any] = {
+    compact: dict[str, Any] = {
         "execution_id": sample.get("execution_id"),
         "source": sample.get("source"),
         "status": sample.get("status"),
@@ -333,9 +334,9 @@ def _compact_history_sample_for_llm(sample: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _compact_builder_config_payload(
-    semantic_builder_config: Optional[Dict[str, Any]],
-    builder_config: Optional[Dict[str, Any]],
-) -> Optional[Dict[str, Any]]:
+    semantic_builder_config: dict[str, Any] | None,
+    builder_config: dict[str, Any] | None,
+) -> dict[str, Any] | None:
     """压缩 builder 配置；两类配置都缺失时返回 None。"""
     if not semantic_builder_config and not builder_config:
         return None
@@ -350,7 +351,7 @@ def _compact_builder_config_payload(
     }
 
 
-def _sample_map_by_execution_id(samples: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+def _sample_map_by_execution_id(samples: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     """按执行ID索引历史样例。"""
     return {str(item.get("execution_id") or ""): item for item in samples if str(item.get("execution_id") or "")}
 
@@ -365,7 +366,7 @@ def _normalize_semantic_expression(value: Any) -> str:
     return re.sub(r"\s+", "", str(value or "").strip().strip("`").lower())
 
 
-def _extract_expression_columns(expression: Any) -> Set[str]:
+def _extract_expression_columns(expression: Any) -> set[str]:
     """从指标表达式中提取可能引用的物理字段。"""
     text = str(expression or "").strip()
     if not text:
@@ -404,7 +405,7 @@ def _extract_expression_columns(expression: Any) -> Set[str]:
         "month",
         "day",
     }
-    columns: Set[str] = set()
+    columns: set[str] = set()
     for match in re.finditer(r"`([^`]+)`|(?<!['\"])\b([A-Za-z_][A-Za-z0-9_]*)\b(?!['\"])", text):
         token = str(match.group(1) or match.group(2) or "").strip()
         if not token:
@@ -417,7 +418,7 @@ def _extract_expression_columns(expression: Any) -> Set[str]:
     return columns
 
 
-def _index_metric_item(item: Any, indexes: Dict[str, Set[str]]) -> None:
+def _index_metric_item(item: Any, indexes: dict[str, set[str]]) -> None:
     """登记单个指标的名字与 表.表达式 索引。"""
     if not isinstance(item, dict):
         return
@@ -430,7 +431,7 @@ def _index_metric_item(item: Any, indexes: Dict[str, Set[str]]) -> None:
         indexes["metric_expressions"].add(f"{table}.{expression}")
 
 
-def _index_dimension_item(item: Any, indexes: Dict[str, Set[str]]) -> None:
+def _index_dimension_item(item: Any, indexes: dict[str, set[str]]) -> None:
     """登记单个维度的名字与 表.列 / 表.字段 索引。"""
     if not isinstance(item, dict):
         return
@@ -446,9 +447,9 @@ def _index_dimension_item(item: Any, indexes: Dict[str, Set[str]]) -> None:
         indexes["dimension_fields"].add(f"{table}.{field_name}")
 
 
-def _build_existing_semantic_indexes(config: Dict[str, Any]) -> Dict[str, Set[str]]:
+def _build_existing_semantic_indexes(config: dict[str, Any]) -> dict[str, set[str]]:
     """构建当前指标集已维护字段索引，用于过滤历史学习重复建议。"""
-    indexes: Dict[str, Set[str]] = {
+    indexes: dict[str, set[str]] = {
         "metric_names": set(),
         "metric_expressions": set(),
         "dimension_names": set(),
@@ -462,7 +463,7 @@ def _build_existing_semantic_indexes(config: Dict[str, Any]) -> Dict[str, Set[st
     return indexes
 
 
-def _is_existing_history_suggestion(item: Dict[str, Any], category: str, indexes: Dict[str, Set[str]]) -> bool:
+def _is_existing_history_suggestion(item: dict[str, Any], category: str, indexes: dict[str, set[str]]) -> bool:
     """判断历史学习建议是否已在当前指标集维护。"""
     if category == "metrics":
         table = _normalize_semantic_text(item.get("table"))
@@ -485,8 +486,8 @@ def _is_existing_history_suggestion(item: Dict[str, Any], category: str, indexes
 
 
 def _normalize_history_base_fields(
-    item: Dict[str, Any], sample_map: Dict[str, Dict[str, Any]]
-) -> Optional[Dict[str, Any]]:
+    item: dict[str, Any], sample_map: dict[str, dict[str, Any]]
+) -> dict[str, Any] | None:
     source = str(item.get("source") or "").strip().lower()
     confidence = str(item.get("confidence") or "").strip().lower()
     sample_ids = item.get("sample_execution_ids")
@@ -511,8 +512,8 @@ def _normalize_history_base_fields(
 
 
 def _normalize_metric_or_dimension_suggestion(
-    item: Dict[str, Any], category: str, normalized: Dict[str, Any]
-) -> Optional[Dict[str, Any]]:
+    item: dict[str, Any], category: str, normalized: dict[str, Any]
+) -> dict[str, Any] | None:
     normalized.update(
         {
             "name": str(item.get("name") or "").strip(),
@@ -532,7 +533,7 @@ def _normalize_metric_or_dimension_suggestion(
     return normalized if normalized["name"] and normalized["reason"] else None
 
 
-def _normalize_issue_suggestion(item: Dict[str, Any], normalized: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _normalize_issue_suggestion(item: dict[str, Any], normalized: dict[str, Any]) -> dict[str, Any] | None:
     normalized.update(
         {
             "title": str(item.get("title") or "").strip(),
@@ -542,17 +543,17 @@ def _normalize_issue_suggestion(item: Dict[str, Any], normalized: Dict[str, Any]
     return normalized if normalized["title"] and normalized["content"] and normalized["reason"] else None
 
 
-def _empty_history_learning_skip_counts() -> Dict[str, Dict[str, int]]:
+def _empty_history_learning_skip_counts() -> dict[str, dict[str, int]]:
     """初始化历史学习建议过滤计数。"""
     return {category: {"invalid": 0, "existing": 0, "duplicate": 0} for category in ("metrics", "dimensions", "issues")}
 
 
 def _dimension_review_reasons(
-    normalized: Dict[str, Any],
+    normalized: dict[str, Any],
     table_name: str,
-    table_columns: Dict[str, Set[str]],
-) -> List[str]:
-    reasons: List[str] = []
+    table_columns: dict[str, set[str]],
+) -> list[str]:
+    reasons: list[str] = []
     column_name = str(normalized.get("column") or normalized.get("field_name") or "").strip()
     if not column_name:
         reasons.append("缺少字段名，需要人工确认")
@@ -562,11 +563,11 @@ def _dimension_review_reasons(
 
 
 def _metric_review_reasons(
-    normalized: Dict[str, Any],
+    normalized: dict[str, Any],
     table_name: str,
-    table_columns: Dict[str, Set[str]],
-) -> List[str]:
-    reasons: List[str] = []
+    table_columns: dict[str, set[str]],
+) -> list[str]:
+    reasons: list[str] = []
     expression = str(normalized.get("expression") or "").strip()
     if not expression:
         reasons.append("缺少指标表达式，需要人工确认")
@@ -580,13 +581,13 @@ def _metric_review_reasons(
 
 
 def _history_suggestion_review_reasons(
-    normalized: Dict[str, Any],
+    normalized: dict[str, Any],
     category: str,
-    datasource: Dict[str, Any],
-) -> List[str]:
+    datasource: dict[str, Any],
+) -> list[str]:
     table_columns = build_table_columns_map(datasource)
     table_name = str(normalized.get("table") or "").strip()
-    review_reasons: List[str] = []
+    review_reasons: list[str] = []
     if category in {"metrics", "dimensions"} and not table_name:
         review_reasons.append("缺少表名，需要人工确认")
     if table_name and table_name not in table_columns:
@@ -601,9 +602,9 @@ def _history_suggestion_review_reasons(
 def _normalize_history_suggestion_item(
     item: Any,
     category: str,
-    sample_map: Dict[str, Dict[str, Any]],
-    datasource: Dict[str, Any],
-) -> Optional[Dict[str, Any]]:
+    sample_map: dict[str, dict[str, Any]],
+    datasource: dict[str, Any],
+) -> dict[str, Any] | None:
     """校验并标准化 LLM 输出的历史学习建议。"""
     if not isinstance(item, dict):
         return None
@@ -625,16 +626,16 @@ def _normalize_history_suggestion_item(
 def _normalize_history_suggestion_category(
     category: str,
     suggestions: Any,
-    sample_map: Dict[str, Dict[str, Any]],
-    datasource: Dict[str, Any],
-    existing_indexes: Dict[str, Set[str]],
-    skip_counts: Dict[str, Dict[str, int]],
-) -> tuple[List[Dict[str, Any]], int]:
+    sample_map: dict[str, dict[str, Any]],
+    datasource: dict[str, Any],
+    existing_indexes: dict[str, set[str]],
+    skip_counts: dict[str, dict[str, int]],
+) -> tuple[list[dict[str, Any]], int]:
     """归一化单个类别的建议：剔除非法、已有维护项与重复项；返回 (items, 原始条数)。"""
-    seen: Set[str] = set()
+    seen: set[str] = set()
     raw_items = suggestions.get(category) if isinstance(suggestions, dict) else []
     limited_items = (raw_items if isinstance(raw_items, list) else [])[:30]
-    items: List[Dict[str, Any]] = []
+    items: list[dict[str, Any]] = []
     for raw_item in limited_items:
         item = _normalize_history_suggestion_item(raw_item, category, sample_map, datasource)
         if not item:
@@ -658,17 +659,17 @@ def _normalize_history_suggestion_category(
 
 def _normalize_history_learning_result(
     raw_result: Any,
-    samples: List[Dict[str, Any]],
-    datasource: Dict[str, Any],
-    config: Dict[str, Any],
-) -> Dict[str, List[Dict[str, Any]]]:
+    samples: list[dict[str, Any]],
+    datasource: dict[str, Any],
+    config: dict[str, Any],
+) -> dict[str, list[dict[str, Any]]]:
     """校验 LLM 历史学习 JSON 输出。"""
     parsed = raw_result if isinstance(raw_result, dict) else {}
     suggestions = parsed.get("suggestions") if isinstance(parsed.get("suggestions"), dict) else parsed
     sample_map = _sample_map_by_execution_id(samples)
     existing_indexes = _build_existing_semantic_indexes(config)
-    result: Dict[str, List[Dict[str, Any]]] = {"metrics": [], "dimensions": [], "issues": []}
-    raw_counts: Dict[str, int] = {}
+    result: dict[str, list[dict[str, Any]]] = {"metrics": [], "dimensions": [], "issues": []}
+    raw_counts: dict[str, int] = {}
     skip_counts = _empty_history_learning_skip_counts()
     for category in result:
         result[category], raw_counts[category] = _normalize_history_suggestion_category(
@@ -689,12 +690,12 @@ def _normalize_history_learning_result(
 
 
 async def _generate_history_learning_suggestions_by_llm(
-    datasource: Dict[str, Any],
-    config: Dict[str, Any],
-    samples: List[Dict[str, Any]],
+    datasource: dict[str, Any],
+    config: dict[str, Any],
+    samples: list[dict[str, Any]],
     *,
-    llm_factory: Optional[Callable[..., Any]] = None,
-) -> Dict[str, List[Dict[str, Any]]]:
+    llm_factory: Callable[..., Any] | None = None,
+) -> dict[str, list[dict[str, Any]]]:
     """调用大模型基于历史生成指标集维护建议。"""
     if not samples:
         return dict(HISTORY_LEARNING_EMPTY_RESULT)
@@ -729,15 +730,17 @@ class SemanticHistoryLearningService:
 
     def __init__(
         self,
-        dao: Optional[SemanticHistoryLearningDao] = None,
+        dao: SemanticHistoryLearningDao | None = None,
         *,
-        context_loader: Optional[Callable[[str, str], Awaitable[Optional[Dict[str, Any]]]]] = None,
-        suggestion_loader: Optional[
-            Callable[[Dict[str, Any], Dict[str, Any], List[Dict[str, Any]]], Awaitable[Dict[str, List[Dict[str, Any]]]]]
-        ] = None,
-        history_matcher: Optional[
-            Callable[[str, Dict[str, Any], str, str, Dict[str, Any], str], Tuple[bool, str, List[str], str]]
-        ] = None,
+        context_loader: Callable[[str, str], Awaitable[dict[str, Any] | None]] | None = None,
+        suggestion_loader: Callable[
+            [dict[str, Any], dict[str, Any], list[dict[str, Any]]], Awaitable[dict[str, list[dict[str, Any]]]]
+        ]
+        | None = None,
+        history_matcher: Callable[
+            [str, dict[str, Any], str, str, dict[str, Any], str], tuple[bool, str, list[str], str]
+        ]
+        | None = None,
     ):
         self.dao = dao or SemanticHistoryLearningDao()
         self.context_loader = context_loader or _load_history_conversation_context
@@ -745,7 +748,7 @@ class SemanticHistoryLearningService:
         self.history_matcher = history_matcher or _history_belongs_to_config
 
     @staticmethod
-    def normalize_sources(sources: List[str]) -> Set[str]:
+    def normalize_sources(sources: list[str]) -> set[str]:
         source_set = {str(item or "").strip().lower() for item in (sources or []) if str(item or "").strip()}
         if not source_set:
             raise ValueError("请至少选择一个学习来源")
@@ -755,22 +758,22 @@ class SemanticHistoryLearningService:
         return source_set
 
     @staticmethod
-    def build_status_values(include_failed: bool) -> List[str]:
+    def build_status_values(include_failed: bool) -> list[str]:
         status_values = ["succeeded", "partial_success"]
         if include_failed:
             status_values.append("failed")
         return status_values
 
     @staticmethod
-    def _source_stats() -> Dict[str, Dict[str, int]]:
+    def _source_stats() -> dict[str, dict[str, int]]:
         return {
             source: {"scanned": 0, "matched": 0, "skipped": 0} for source in sorted(ALLOWED_HISTORY_LEARNING_SOURCES)
         }
 
     @staticmethod
     def _build_sample(
-        execution: Any, task: Any, task_payload: Dict[str, Any], query_type: str, history_tables: List[str]
-    ) -> Dict[str, Any]:
+        execution: Any, task: Any, task_payload: dict[str, Any], query_type: str, history_tables: list[str]
+    ) -> dict[str, Any]:
         executed_time = execution.finished_time or execution.started_time or execution.create_time
         sample = {
             "execution_id": execution.execution_id,
@@ -792,9 +795,9 @@ class SemanticHistoryLearningService:
 
     async def _attach_agent_context(
         self,
-        sample: Dict[str, Any],
+        sample: dict[str, Any],
         user_id: str,
-        cache: Dict[str, Optional[Dict[str, Any]]],
+        cache: dict[str, dict[str, Any] | None],
     ) -> bool:
         conversation_id = str(sample.get("conversation_id") or "").strip()
         if not conversation_id:
@@ -810,19 +813,19 @@ class SemanticHistoryLearningService:
     async def _collect_samples(
         self,
         *,
-        rows: List[Tuple[Any, Any]],
+        rows: list[tuple[Any, Any]],
         datasource_id: str,
-        source_set: Set[str],
-        datasource: Dict[str, Any],
-        config: Dict[str, Any],
+        source_set: set[str],
+        datasource: dict[str, Any],
+        config: dict[str, Any],
         config_id: str,
         user_id: str,
         limit: int,
-        skipped: Dict[str, int],
-        source_stats: Dict[str, Dict[str, int]],
-    ) -> List[Dict[str, Any]]:
-        samples: List[Dict[str, Any]] = []
-        context_cache: Dict[str, Optional[Dict[str, Any]]] = {}
+        skipped: dict[str, int],
+        source_stats: dict[str, dict[str, int]],
+    ) -> list[dict[str, Any]]:
+        samples: list[dict[str, Any]] = []
+        context_cache: dict[str, dict[str, Any] | None] = {}
         for execution, task in rows:
             task_payload = _parse_json_object(task.request_payload if task else None)
             query_type = _history_row_query_type(task)
@@ -855,9 +858,9 @@ class SemanticHistoryLearningService:
     @staticmethod
     def _should_consider_source(
         query_type: str,
-        source_set: Set[str],
-        skipped: Dict[str, int],
-        source_stats: Dict[str, Dict[str, int]],
+        source_set: set[str],
+        skipped: dict[str, int],
+        source_stats: dict[str, dict[str, int]],
     ) -> bool:
         if query_type not in source_stats:
             skipped["source"] += 1
@@ -873,8 +876,8 @@ class SemanticHistoryLearningService:
     def _record_config_skip(
         query_type: str,
         skip_reason: str,
-        skipped: Dict[str, int],
-        source_stats: Dict[str, Dict[str, int]],
+        skipped: dict[str, int],
+        source_stats: dict[str, dict[str, int]],
         datasource_id: str,
         config_id: str,
         execution: Any,
@@ -900,13 +903,13 @@ class SemanticHistoryLearningService:
         datasource_id: str,
         config_id: str,
         user_id: str,
-        datasource: Dict[str, Any],
-        config: Dict[str, Any],
+        datasource: dict[str, Any],
+        config: dict[str, Any],
         days: int,
         limit: int,
-        sources: List[str],
+        sources: list[str],
         include_failed: bool,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         source_set = self.normalize_sources(sources)
         scan_limit = min(max(limit * 5, limit), 1000)
         rows = await self.dao.list_learning_history(
@@ -959,14 +962,14 @@ class SemanticHistoryLearningService:
 
 def build_semantic_history_learning_service(
     *,
-    context_loader: Optional[Callable[[str, str], Awaitable[Optional[Dict[str, Any]]]]] = None,
-    suggestion_loader: Optional[
-        Callable[[Dict[str, Any], Dict[str, Any], List[Dict[str, Any]]], Awaitable[Dict[str, List[Dict[str, Any]]]]]
-    ] = None,
-    history_matcher: Optional[
-        Callable[[str, Dict[str, Any], str, str, Dict[str, Any], str], Tuple[bool, str, List[str], str]]
-    ] = None,
-    session_context: Optional[Callable[[], Any]] = None,
+    context_loader: Callable[[str, str], Awaitable[dict[str, Any] | None]] | None = None,
+    suggestion_loader: Callable[
+        [dict[str, Any], dict[str, Any], list[dict[str, Any]]], Awaitable[dict[str, list[dict[str, Any]]]]
+    ]
+    | None = None,
+    history_matcher: Callable[[str, dict[str, Any], str, str, dict[str, Any], str], tuple[bool, str, list[str], str]]
+    | None = None,
+    session_context: Callable[[], Any] | None = None,
 ) -> SemanticHistoryLearningService:
     """构建指标集历史学习服务。"""
     return SemanticHistoryLearningService(

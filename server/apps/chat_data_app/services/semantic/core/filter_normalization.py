@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from .common import is_time_logical_dimension
 
 
-def split_text_between_filter(node: Dict[str, Any]) -> Dict[str, Any]:
+def split_text_between_filter(node: dict[str, Any]) -> dict[str, Any]:
     """Convert text BETWEEN values like ``a AND b`` into the list form expected by the SQL compiler."""
     operator = str(node.get("operator", "")).strip().upper()
     value = node.get("value")
@@ -23,12 +23,12 @@ def split_text_between_filter(node: Dict[str, Any]) -> Dict[str, Any]:
     return normalized
 
 
-def is_time_dimension(config: Dict[str, Any]) -> bool:
+def is_time_dimension(config: dict[str, Any]) -> bool:
     """Return whether a semantic field is configured as a time dimension."""
     return is_time_logical_dimension(config)
 
 
-def time_equal_value_to_range(value: Any) -> Optional[tuple[str, str]]:
+def time_equal_value_to_range(value: Any) -> tuple[str, str] | None:
     """Map year/month/day equality values to a half-open timestamp range."""
     if isinstance(value, int) and 1000 <= value <= 9999:
         return f"{value:04d}-01-01 00:00:00", f"{value + 1:04d}-01-01 00:00:00"
@@ -60,7 +60,7 @@ def time_equal_value_to_range(value: Any) -> Optional[tuple[str, str]]:
     return None
 
 
-def normalize_time_filter_leaf(node: Dict[str, Any], dim_config: Dict[str, Any]) -> List[Dict[str, Any]]:
+def normalize_time_filter_leaf(node: dict[str, Any], dim_config: dict[str, Any]) -> list[dict[str, Any]]:
     """Normalize a single semantic time filter leaf for builder compilation."""
     normalized_node = split_text_between_filter(node)
     if normalized_node is not node:

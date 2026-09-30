@@ -3,7 +3,8 @@ LLM 公共工具函数
 """
 
 import os
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 from langchain.chat_models import init_chat_model
 from langchain_core.language_models import BaseChatModel

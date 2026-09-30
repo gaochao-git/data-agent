@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
 
 from . import query_plan_compiler
 from .dialect import get_dialect
@@ -16,7 +16,7 @@ class SemanticSQLCompiler:
         self.max_rows = max_rows
         self.dialect_adapter = get_dialect(self.dialect)
 
-    def compile(self, query_plan: Dict[str, Any]) -> str:
+    def compile(self, query_plan: dict[str, Any]) -> str:
         """编译一次查询计划，不跨请求保存可变状态。"""
         return query_plan_compiler.compile_query_plan_sql(
             query_plan,
@@ -26,7 +26,7 @@ class SemanticSQLCompiler:
 
 
 def compile_semantic_sql(
-    query_plan: Dict[str, Any],
+    query_plan: dict[str, Any],
     *,
     dialect: str = "mysql",
     max_rows: int = 100,

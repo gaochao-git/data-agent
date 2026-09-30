@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 PHONE_PATTERN = re.compile(r"(?<!\d)(1\d{10})(?!\d)")
 ID_CARD_PATTERN = re.compile(r"(?<![0-9Xx])(\d{17}[0-9Xx]|\d{15})(?![0-9Xx])")

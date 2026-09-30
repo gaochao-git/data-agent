@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from collections import deque
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from .common import ensure_dimension_logical_type
 
@@ -39,9 +39,9 @@ def is_composite_metric(metric_cfg: Any) -> bool:
     return str((metric_cfg or {}).get("metric_kind") or "").strip().lower() == COMPOSITE_METRIC_KIND
 
 
-def parse_formula_refs(formula: str) -> List[str]:
+def parse_formula_refs(formula: str) -> list[str]:
     """提取公式中的 {指标引用}，按首次出现顺序去重。"""
-    refs: List[str] = []
+    refs: list[str] = []
     seen: set[str] = set()
     for match in FORMULA_REF_PATTERN.finditer(str(formula or "")):
         name = match.group(1).strip()
@@ -51,7 +51,7 @@ def parse_formula_refs(formula: str) -> List[str]:
     return refs
 
 
-def parse_aggregate_expression(expression: str) -> Optional[tuple[str, str]]:
+def parse_aggregate_expression(expression: str) -> tuple[str, str] | None:
     """解析语义指标支持的聚合表达式。"""
     match = AGGREGATE_EXPRESSION_PATTERN.match(str(expression or "").strip())
     if not match:
@@ -63,18 +63,18 @@ def parse_aggregate_expression(expression: str) -> Optional[tuple[str, str]]:
     return function, column_expression
 
 
-def semantic_table_alias(item: Dict[str, Any]) -> str:
+def semantic_table_alias(item: dict[str, Any]) -> str:
     return str((item or {}).get("table_alias") or (item or {}).get("alias") or (item or {}).get("table") or "").strip()
 
 
-def _relationship_alias(relationship: Dict[str, Any], side: str) -> str:
+def _relationship_alias(relationship: dict[str, Any], side: str) -> str:
     return str((relationship or {}).get(f"{side}_alias") or (relationship or {}).get(f"{side}_table") or "").strip()
 
 
 class SemanticQueryPlanContext:
     """两种输入适配器共享的只读语义模型索引和 JOIN 规划。"""
 
-    def __init__(self, semantic_config: Dict[str, Any]):
+    def __init__(self, semantic_config: dict[str, Any]):
         normalized_config = dict(semantic_config or {})
         normalized_config["dimensions"] = [
             ensure_dimension_logical_type(item) for item in normalized_config.get("dimensions") or []
@@ -86,7 +86,7 @@ class SemanticQueryPlanContext:
         }
         self.dialect_name = str(normalized_config.get("source_type") or "mysql").strip().lower() or "mysql"
 
-    def build_joins(self, main_alias: str, tables_needed: set[str]) -> List[Dict[str, Any]]:
+    def build_joins(self, main_alias: str, tables_needed: set[str]) -> list[dict[str, Any]]:
         tables_needed = {str(table or "").strip() for table in tables_needed if str(table or "").strip()}
         relationships = self.semantic_config.get("relationships") or []
         if len(tables_needed) <= 1:
@@ -94,7 +94,7 @@ class SemanticQueryPlanContext:
         if not relationships:
             self._raise_disconnected_tables(main_alias, tables_needed - {main_alias})
 
-        adjacency: Dict[str, List[tuple[Dict[str, Any], str]]] = {}
+        adjacency: dict[str, list[tuple[dict[str, Any], str]]] = {}
         for relationship in relationships:
             left = _relationship_alias(relationship, "left")
             right = _relationship_alias(relationship, "right")
@@ -121,9 +121,9 @@ class SemanticQueryPlanContext:
     @staticmethod
     def _find_paths(
         main_alias: str,
-        adjacency: Dict[str, List[tuple[Dict[str, Any], str]]],
-    ) -> Dict[str, tuple[str, Dict[str, Any]]]:
-        previous: Dict[str, tuple[str, Dict[str, Any]]] = {}
+        adjacency: dict[str, list[tuple[dict[str, Any], str]]],
+    ) -> dict[str, tuple[str, dict[str, Any]]]:
+        previous: dict[str, tuple[str, dict[str, Any]]] = {}
         visited = {main_alias}
         queue = deque([main_alias])
         while queue:
@@ -140,10 +140,10 @@ class SemanticQueryPlanContext:
     def _collect_required_paths(
         main_alias: str,
         tables_needed: set[str],
-        previous: Dict[str, tuple[str, Dict[str, Any]]],
-    ) -> tuple[set[str], List[Dict[str, Any]]]:
+        previous: dict[str, tuple[str, dict[str, Any]]],
+    ) -> tuple[set[str], list[dict[str, Any]]]:
         required_nodes = {main_alias}
-        required_relationships: List[Dict[str, Any]] = []
+        required_relationships: list[dict[str, Any]] = []
         seen_relationships: set[int] = set()
         for target in tables_needed:
             node = target
@@ -162,9 +162,9 @@ class SemanticQueryPlanContext:
         cls,
         main_alias: str,
         required_nodes: set[str],
-        relationships: List[Dict[str, Any]],
-    ) -> List[Dict[str, Any]]:
-        joins: List[Dict[str, Any]] = []
+        relationships: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        joins: list[dict[str, Any]] = []
         added = {main_alias}
         while len(added) < len(required_nodes):
             selected = cls._select_next_relationship(added, required_nodes, relationships)
@@ -179,8 +179,8 @@ class SemanticQueryPlanContext:
     def _select_next_relationship(
         added: set[str],
         required_nodes: set[str],
-        relationships: List[Dict[str, Any]],
-    ) -> Optional[tuple[Dict[str, Any], str, str, bool]]:
+        relationships: list[dict[str, Any]],
+    ) -> tuple[dict[str, Any], str, str, bool] | None:
         for relationship in relationships:
             left = _relationship_alias(relationship, "left")
             right = _relationship_alias(relationship, "right")
@@ -192,12 +192,12 @@ class SemanticQueryPlanContext:
 
     @staticmethod
     def _relationship_condition(
-        relationship: Dict[str, Any],
+        relationship: dict[str, Any],
         left_alias: str,
         reversed_pair: bool,
         left_column: Any,
         right_column: Any,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """单条关联条件；reversed_pair 时左右列互换。"""
         return {
             "leftTable": relationship.get("right_table") if reversed_pair else relationship.get("left_table"),
@@ -209,11 +209,11 @@ class SemanticQueryPlanContext:
     @classmethod
     def _relationship_join_conditions(
         cls,
-        relationship: Dict[str, Any],
+        relationship: dict[str, Any],
         left_alias: str,
         right_alias: str,
         reversed_pair: bool,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """收集 join_conditions；为空时回退关系级单条件。"""
         conditions = []
         for condition in relationship.get("join_conditions") or []:
@@ -239,11 +239,11 @@ class SemanticQueryPlanContext:
     @classmethod
     def _relationship_to_join(
         cls,
-        relationship: Dict[str, Any],
+        relationship: dict[str, Any],
         left_alias: str,
         right_alias: str,
         reversed_pair: bool,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         conditions = cls._relationship_join_conditions(relationship, left_alias, right_alias, reversed_pair)
         if not conditions:
             raise ValueError(f"语义关系 {left_alias} -> {right_alias} 缺少有效关联条件")

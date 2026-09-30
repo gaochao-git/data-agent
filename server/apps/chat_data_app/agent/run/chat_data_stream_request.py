@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any
 
 from fastapi import Request
 from langchain_core.messages import HumanMessage
@@ -43,7 +43,7 @@ class ChatDataStreamRequest:
     enable_thinking: bool | None = None
     thinking_effort: str | None = None
     skill_names: list[str] | None = None
-    options: Optional[Dict[str, Any]] = None
+    options: dict[str, Any] | None = None
     file_ids: list[str] | None = None
     run_id: str | None = None
     adopted_messages: list[HumanMessage] | None = None

@@ -18,9 +18,10 @@
 """
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from itertools import count
-from typing import Annotated, Any, Callable
+from typing import Annotated, Any
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import AgentMiddleware, AgentState, ToolErrorMiddleware

@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
-from typing import Any, Dict, List
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 
@@ -41,7 +40,7 @@ from . import JSON_API_RESPONSES
 router = APIRouter(tags=["ChatData 数据源管理（Admin）"], responses=JSON_API_RESPONSES)
 
 
-def _selected_table_names(raw_table_names: List[str]) -> List[str]:
+def _selected_table_names(raw_table_names: list[str]) -> list[str]:
     selected_table_names = []
     for table_name in raw_table_names or []:
         normalized_table_name = str(table_name or "").strip()
@@ -52,7 +51,7 @@ def _selected_table_names(raw_table_names: List[str]) -> List[str]:
 
 def _normalize_group_sources(
     body: DatasourceGroupCreateRequest | DatasourceGroupUpdateRequest,
-) -> tuple[Dict[str, Any], List[Dict[str, Any]]]:
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     template_source = _normalize_template_source(body)
     member_sources = [
         _normalize_source_item(
@@ -69,7 +68,7 @@ def _normalize_group_sources(
     return template_source, member_sources
 
 
-def _normalize_template_source(body: DatasourceGroupCreateRequest | DatasourceGroupUpdateRequest) -> Dict[str, Any]:
+def _normalize_template_source(body: DatasourceGroupCreateRequest | DatasourceGroupUpdateRequest) -> dict[str, Any]:
     return _normalize_source_item(
         body.source_type,
         body.template_source.host,
@@ -268,7 +267,7 @@ async def sync_datasource_group_metadata(
         )
     except ValueError as e:
         return business_response(msg=str(e), code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
-    except asyncio.TimeoutError:
+    except TimeoutError:
         sync_timeout = await get_datasource_sync_timeout_seconds()
         logger.error("同步数据源组元数据超时: datasource_id=%s timeout=%ss", datasource_id, sync_timeout)
         return business_response(
@@ -796,7 +795,7 @@ async def get_db_tables(request: DbConnectionRequest, http_request: Request):
         return business_response(data={"tables": tables, "total": len(tables)}, msg=f"获取成功，共 {len(tables)} 个表")
     except ValueError as e:
         return business_response(msg=str(e), code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
-    except asyncio.TimeoutError:
+    except TimeoutError:
         sync_timeout = await get_datasource_sync_timeout_seconds()
         logger.error(
             "获取表列表超时: source_type=%s host=%s port=%s database=%s timeout=%ss",

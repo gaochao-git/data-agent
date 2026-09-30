@@ -5,9 +5,10 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from collections.abc import Sequence
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Set
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi import status as http_status
@@ -70,7 +71,7 @@ def _sanitize_scene_segment(value: str, fallback: str) -> str:
     return sanitize_scene_segment(value, fallback)
 
 
-def _scene_case_paths(datasource_id: str, semantic_config_id: str) -> Dict[str, str]:
+def _scene_case_paths(datasource_id: str, semantic_config_id: str) -> dict[str, str]:
     """解析当前场景标识。"""
     return scene_case_paths(datasource_id, semantic_config_id)
 
@@ -80,22 +81,22 @@ def _scene_case_set_id(datasource_id: str, semantic_config_id: str) -> str:
     return scene_case_set_id(datasource_id, semantic_config_id)
 
 
-def _safe_json_loads(text: Optional[str], default: Any = None) -> Any:
+def _safe_json_loads(text: str | None, default: Any = None) -> Any:
     """安全解析 JSON 字符串。"""
     return safe_json_loads(text, default)
 
 
-def _case_row_to_payload(row: Any) -> Dict[str, Any]:
+def _case_row_to_payload(row: Any) -> dict[str, Any]:
     """将评测用例行转换为接口 7 元组。"""
     return case_row_to_payload(row)
 
 
-def _validate_eval_case_ids(cases: List[Dict[str, Any]]) -> None:
+def _validate_eval_case_ids(cases: list[dict[str, Any]]) -> None:
     """校验评测用例 ID 不能为空且不能重复。"""
     validate_eval_case_ids(cases)
 
 
-async def _load_scene_case_set(datasource_id: str, semantic_config_id: str) -> Dict[str, Any]:
+async def _load_scene_case_set(datasource_id: str, semantic_config_id: str) -> dict[str, Any]:
     """从数据库读取当前场景测试集。"""
     return await _build_evaluation_service().load_scene_case_set(datasource_id, semantic_config_id)
 
@@ -105,9 +106,9 @@ async def _save_scene_case_set(
     semantic_config_id: str,
     case_set_name: str,
     business_domain: str,
-    cases: List[Dict[str, Any]],
-    operator_id: Optional[str] = None,
-    operator_name: Optional[str] = None,
+    cases: list[dict[str, Any]],
+    operator_id: str | None = None,
+    operator_name: str | None = None,
 ) -> str:
     """保存当前场景测试集到数据库。"""
     return await _build_evaluation_service().save_scene_case_set(
@@ -121,12 +122,12 @@ async def _save_scene_case_set(
     )
 
 
-async def _load_scene_runner_cases(datasource_id: str, semantic_config_id: str) -> List[Dict[str, Any]]:
+async def _load_scene_runner_cases(datasource_id: str, semantic_config_id: str) -> list[dict[str, Any]]:
     """读取 runner 使用的当前场景数据库测试集。"""
     return await _build_evaluation_service().load_scene_runner_cases(datasource_id, semantic_config_id)
 
 
-def _metric_names(config: Dict[str, Any]) -> List[str]:
+def _metric_names(config: dict[str, Any]) -> list[str]:
     return [
         str(item.get("name") or "").strip()
         for item in config.get("metrics") or []
@@ -134,26 +135,26 @@ def _metric_names(config: Dict[str, Any]) -> List[str]:
     ]
 
 
-def _dimension_items(config: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _dimension_items(config: dict[str, Any]) -> list[dict[str, Any]]:
     return [item for item in config.get("dimensions") or [] if str(item.get("name") or "").strip()]
 
 
-def _time_dimensions(config: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _time_dimensions(config: dict[str, Any]) -> list[dict[str, Any]]:
     return [item for item in _dimension_items(config) if is_time_logical_dimension(item)]
 
 
-def _dimension_match_text(item: Dict[str, Any]) -> str:
+def _dimension_match_text(item: dict[str, Any]) -> str:
     """提取维度字段的匹配文本（小写）。"""
     return str(item.get("name") or item.get("field_name") or item.get("column") or "").lower()
 
 
-def _dimension_matches_any_token(item: Dict[str, Any], tokens: Sequence[str]) -> bool:
+def _dimension_matches_any_token(item: dict[str, Any], tokens: Sequence[str]) -> bool:
     """判断维度字段文本是否包含任一关键词。"""
     text = _dimension_match_text(item)
     return any(token in text for token in tokens)
 
 
-def _categorical_dimensions(config: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _categorical_dimensions(config: dict[str, Any]) -> list[dict[str, Any]]:
     blocked_tokens = ("id", "编号", "号码", "邮箱", "email", "phone", "手机")
     candidate_tokens = ("状态", "分类", "类型", "名称", "status", "category", "type", "name")
     candidates = [item for item in _dimension_items(config) if not is_time_logical_dimension(item)]
@@ -170,8 +171,8 @@ def _build_case_id(config_id: str, index: int) -> str:
 
 
 def _new_case_payload(
-    case_id: str, nl: str, gold_dsl: Dict[str, Any], query_type: str, difficulty: str, business_domain: str
-) -> Dict[str, Any]:
+    case_id: str, nl: str, gold_dsl: dict[str, Any], query_type: str, difficulty: str, business_domain: str
+) -> dict[str, Any]:
     return {
         "id": case_id,
         "nl": nl,
@@ -184,26 +185,26 @@ def _new_case_payload(
     }
 
 
-def _next_case_index(cases: List[Dict[str, Any]], start_index: int) -> int:
+def _next_case_index(cases: list[dict[str, Any]], start_index: int) -> int:
     return start_index + len(cases)
 
 
-def _dimension_name(item: Dict[str, Any]) -> str:
+def _dimension_name(item: dict[str, Any]) -> str:
     return str(item.get("name") or "").strip()
 
 
-def _first_allowed_value(item: Dict[str, Any]) -> Any:
+def _first_allowed_value(item: dict[str, Any]) -> Any:
     allowed_values = item.get("allowed_values") or []
     return allowed_values[0] if allowed_values else None
 
 
 def _build_detail_seed_cases(
     config_id: str,
-    dimensions: List[Dict[str, Any]],
-    cat_dims: List[Dict[str, Any]],
+    dimensions: list[dict[str, Any]],
+    cat_dims: list[dict[str, Any]],
     business_domain: str,
     start_index: int,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     detail_dimension_names = [_dimension_name(item) for item in dimensions[:6] if _dimension_name(item)]
     if not detail_dimension_names:
         return []
@@ -242,8 +243,8 @@ def _build_detail_seed_cases(
 
 
 def _build_metric_seed_cases(
-    config_id: str, metrics: List[str], business_domain: str, start_index: int
-) -> List[Dict[str, Any]]:
+    config_id: str, metrics: list[str], business_domain: str, start_index: int
+) -> list[dict[str, Any]]:
     return [
         _new_case_payload(
             _build_case_id(config_id, start_index + offset),
@@ -259,12 +260,12 @@ def _build_metric_seed_cases(
 
 def _build_dimension_group_seed_cases(
     config_id: str,
-    metrics: List[str],
-    cat_dims: List[Dict[str, Any]],
+    metrics: list[str],
+    cat_dims: list[dict[str, Any]],
     business_domain: str,
     start_index: int,
-) -> List[Dict[str, Any]]:
-    cases: List[Dict[str, Any]] = []
+) -> list[dict[str, Any]]:
+    cases: list[dict[str, Any]] = []
     for metric in metrics[:4]:
         for dimension in cat_dims[:3]:
             dimension_name = _dimension_name(dimension)
@@ -285,12 +286,12 @@ def _build_dimension_group_seed_cases(
 
 def _build_time_seed_cases(
     config_id: str,
-    metrics: List[str],
-    time_dims: List[Dict[str, Any]],
+    metrics: list[str],
+    time_dims: list[dict[str, Any]],
     business_domain: str,
     start_index: int,
-) -> List[Dict[str, Any]]:
-    cases: List[Dict[str, Any]] = []
+) -> list[dict[str, Any]]:
+    cases: list[dict[str, Any]] = []
     for metric in metrics[:3]:
         for dimension in time_dims[:2]:
             dimension_name = _dimension_name(dimension)
@@ -317,12 +318,12 @@ def _build_time_seed_cases(
 
 def _build_filter_seed_cases(
     config_id: str,
-    metrics: List[str],
-    cat_dims: List[Dict[str, Any]],
+    metrics: list[str],
+    cat_dims: list[dict[str, Any]],
     business_domain: str,
     start_index: int,
-) -> List[Dict[str, Any]]:
-    cases: List[Dict[str, Any]] = []
+) -> list[dict[str, Any]]:
+    cases: list[dict[str, Any]] = []
     for metric in metrics[:3]:
         for dimension in cat_dims[:3]:
             dimension_name = _dimension_name(dimension)
@@ -348,7 +349,7 @@ def _build_filter_seed_cases(
     return cases
 
 
-def _metric_table(config: Dict[str, Any], metric: str) -> str:
+def _metric_table(config: dict[str, Any], metric: str) -> str:
     return next(
         (str(item.get("table") or "").strip() for item in config.get("metrics") or [] if item.get("name") == metric), ""
     )
@@ -356,15 +357,15 @@ def _metric_table(config: Dict[str, Any], metric: str) -> str:
 
 def _build_join_seed_cases(
     config_id: str,
-    config: Dict[str, Any],
-    metrics: List[str],
-    cat_dims: List[Dict[str, Any]],
+    config: dict[str, Any],
+    metrics: list[str],
+    cat_dims: list[dict[str, Any]],
     business_domain: str,
     start_index: int,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     if not config.get("relationships"):
         return []
-    cases: List[Dict[str, Any]] = []
+    cases: list[dict[str, Any]] = []
     for metric in metrics[:3]:
         for dimension in cat_dims[:3]:
             dimension_name = _dimension_name(dimension)
@@ -388,9 +389,9 @@ def _build_join_seed_cases(
     return cases
 
 
-def _dedupe_seed_cases(cases: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    deduped: List[Dict[str, Any]] = []
-    seen_questions: Set[str] = set()
+def _dedupe_seed_cases(cases: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: list[dict[str, Any]] = []
+    seen_questions: set[str] = set()
     for case in cases:
         question = str(case.get("nl") or "").strip()
         if not question or question in seen_questions:
@@ -400,13 +401,13 @@ def _dedupe_seed_cases(cases: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return deduped[:30]
 
 
-def _build_seed_case_candidates(config_id: str, config: Dict[str, Any], business_domain: str) -> List[Dict[str, Any]]:
+def _build_seed_case_candidates(config_id: str, config: dict[str, Any], business_domain: str) -> list[dict[str, Any]]:
     """基于当前语义配置生成黄金集草稿。"""
     metrics = _metric_names(config)
     dimensions = _dimension_items(config)
     time_dims = _time_dimensions(config)
     cat_dims = _categorical_dimensions(config)
-    cases: List[Dict[str, Any]] = []
+    cases: list[dict[str, Any]] = []
     if not metrics and dimensions:
         cases.extend(_build_detail_seed_cases(config_id, dimensions, cat_dims, business_domain, 1))
     cases.extend(_build_metric_seed_cases(config_id, metrics, business_domain, _next_case_index(cases, 1)))
@@ -453,7 +454,7 @@ async def _build_accuracy_runner_args(payload: AccuracyEvaluationRunRequest, cur
     )
 
 
-async def _load_accuracy_runner_cases(payload: AccuracyEvaluationRunRequest, args: Any) -> List[Dict[str, Any]]:
+async def _load_accuracy_runner_cases(payload: AccuracyEvaluationRunRequest, args: Any) -> list[dict[str, Any]]:
     """读取当前指标集数据库评测用例。"""
     from ..evaluate.accuracy.runner import select_cases, validate_cases
 
@@ -488,7 +489,7 @@ async def _run_accuracy_evaluation_payload(payload: AccuracyEvaluationRunRequest
 
 
 async def _persist_accuracy_event_record(
-    run_id: str, event: Dict[str, Any], operator_id: str, operator_name: str
+    run_id: str, event: dict[str, Any], operator_id: str, operator_name: str
 ) -> None:
     """按事件类型落库评测运行记录；其他事件类型忽略。"""
     event_name = str(event.get("event") or "")
@@ -549,7 +550,7 @@ def _accuracy_bp(value: Any) -> int:
     return accuracy_bp(value)
 
 
-def _is_eval_case_passed(result: Dict[str, Any]) -> bool:
+def _is_eval_case_passed(result: dict[str, Any]) -> bool:
     """判断单条评测结果是否通过。"""
     return is_eval_case_passed(result)
 
@@ -562,9 +563,9 @@ async def _create_eval_run_record(run_id: str, payload: AccuracyEvaluationRunReq
 async def _upsert_eval_run_case_record(
     run_id: str,
     case_id_value: str,
-    result: Dict[str, Any],
-    operator_id: Optional[str] = None,
-    operator_name: Optional[str] = None,
+    result: dict[str, Any],
+    operator_id: str | None = None,
+    operator_name: str | None = None,
 ) -> None:
     """保存单条评测用例结果。"""
     await _build_evaluation_service().upsert_eval_run_case_record(
@@ -579,9 +580,9 @@ async def _upsert_eval_run_case_record(
 async def _update_eval_run_record(
     run_id: str,
     *,
-    status: Optional[str] = None,
-    summary: Optional[Dict[str, Any]] = None,
-    error_message: Optional[str] = None,
+    status: str | None = None,
+    summary: dict[str, Any] | None = None,
+    error_message: str | None = None,
 ) -> None:
     """更新评测运行汇总。"""
     await _build_evaluation_service().update_eval_run_record(
@@ -592,17 +593,17 @@ async def _update_eval_run_record(
     )
 
 
-def _format_datetime(value: Any) -> Optional[str]:
+def _format_datetime(value: Any) -> str | None:
     """格式化接口返回时间。"""
     return format_datetime(value)
 
 
-def _eval_run_row_to_payload(row: Any) -> Dict[str, Any]:
+def _eval_run_row_to_payload(row: Any) -> dict[str, Any]:
     """转换评测运行记录。"""
     return eval_run_row_to_payload(row)
 
 
-def _eval_run_case_row_to_payload(row: Any) -> Dict[str, Any]:
+def _eval_run_case_row_to_payload(row: Any) -> dict[str, Any]:
     """转换评测单用例结果。"""
     return eval_run_case_row_to_payload(row)
 
@@ -613,7 +614,7 @@ async def _ensure_evaluation_semantic_permission(
     current_user: Any,
     *,
     admin_manage: bool = False,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """评测入口按指标集维护权限校验。"""
     config = await get_semantic_config_service().get_config_async(datasource_id, config_id)
     if not config:
@@ -646,8 +647,8 @@ async def _run_accuracy_evaluation_stream_route(
 async def _list_accuracy_evaluation_runs_route(
     request: Request,
     *,
-    datasource_id: Optional[str] = None,
-    semantic_config_id: Optional[str] = None,
+    datasource_id: str | None = None,
+    semantic_config_id: str | None = None,
     page: int = 1,
     page_size: int = 20,
     admin_manage: bool = False,
@@ -728,8 +729,8 @@ async def run_admin_accuracy_evaluation_stream(payload: AccuracyEvaluationRunReq
 @router.get("/evaluations/accuracy/runs")
 async def list_accuracy_evaluation_runs(
     request: Request,
-    datasource_id: Optional[str] = None,
-    semantic_config_id: Optional[str] = None,
+    datasource_id: str | None = None,
+    semantic_config_id: str | None = None,
     page: int = 1,
     page_size: int = 20,
 ):
@@ -747,8 +748,8 @@ async def list_accuracy_evaluation_runs(
 @router.get("/admin/evaluations/accuracy/runs")
 async def list_admin_accuracy_evaluation_runs(
     request: Request,
-    datasource_id: Optional[str] = None,
-    semantic_config_id: Optional[str] = None,
+    datasource_id: str | None = None,
+    semantic_config_id: str | None = None,
     page: int = 1,
     page_size: int = 20,
 ):
@@ -778,8 +779,8 @@ async def get_admin_accuracy_evaluation_run_detail(run_id: str, request: Request
 
 
 async def _compile_scene_case_gold_sql(
-    datasource_id: str, semantic_config_id: str, case_payload: Dict[str, Any]
-) -> Dict[str, Any]:
+    datasource_id: str, semantic_config_id: str, case_payload: dict[str, Any]
+) -> dict[str, Any]:
     """为当前场景用例编译标准 SQL。"""
     from ..evaluate.accuracy.runner import compile_dsl_locally
 
@@ -846,7 +847,7 @@ async def _save_scene_evaluation_cases_route(
         )
         cases = [item.model_dump() for item in payload.cases]
         business_domain = str(payload.business_domain or _sanitize_scene_segment(config_id, "scene")).strip()
-        compiled_cases: List[Dict[str, Any]] = []
+        compiled_cases: list[dict[str, Any]] = []
         for case in cases:
             case["business_domain"] = business_domain
             compiled_cases.append(await _compile_scene_case_gold_sql(datasource_id, config_id, case))
@@ -893,7 +894,7 @@ async def _generate_scene_evaluation_cases_route(
         )
         business_domain = _sanitize_scene_segment(config.get("name") or config_id, "scene")
         draft_cases = _build_seed_case_candidates(config_id, config, business_domain)
-        compiled_cases: List[Dict[str, Any]] = []
+        compiled_cases: list[dict[str, Any]] = []
         for case in draft_cases:
             compiled_cases.append(await _compile_scene_case_gold_sql(datasource_id, config_id, case))
         scene_paths = _scene_case_paths(datasource_id, config_id)

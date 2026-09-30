@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from datetime import datetime
-from typing import Any, Callable, List, Optional, Sequence, Tuple
+from typing import Any
 
 from sqlalchemy import func, or_, select
 
@@ -14,7 +15,7 @@ from utils.models import ChatDataQueryExecution, ChatDataQueryTask
 class QueryHistoryDao:
     """封装查询历史相关 SQL/ORM 读写。"""
 
-    def __init__(self, session_context: Optional[Callable] = None):
+    def __init__(self, session_context: Callable | None = None):
         self._session_context = session_context or default_get_session
 
     @staticmethod
@@ -28,9 +29,9 @@ class QueryHistoryDao:
     @classmethod
     def _append_time_conditions(
         cls,
-        conditions: List[Any],
-        start_time: Optional[datetime],
-        end_time: Optional[datetime],
+        conditions: list[Any],
+        start_time: datetime | None,
+        end_time: datetime | None,
     ) -> None:
         executed_time_expr = cls._executed_time_expr()
         if start_time:
@@ -39,7 +40,7 @@ class QueryHistoryDao:
             conditions.append(executed_time_expr <= end_time)
 
     @staticmethod
-    def _append_source_condition(conditions: List[Any], source_filter: Optional[List[str]]) -> None:
+    def _append_source_condition(conditions: list[Any], source_filter: list[str] | None) -> None:
         if not source_filter:
             return
         source_values = [item for item in source_filter if item]
@@ -51,14 +52,14 @@ class QueryHistoryDao:
         conditions.append(ChatDataQueryTask.query_type.in_(source_filter))
 
     @staticmethod
-    def _append_status_condition(conditions: List[Any], status_filter: Optional[str]) -> None:
+    def _append_status_condition(conditions: list[Any], status_filter: str | None) -> None:
         if not status_filter:
             return
         conditions.append(ChatDataQueryExecution.sql_status == status_filter)
 
     @staticmethod
     def _append_admin_conditions(
-        conditions: List[Any],
+        conditions: list[Any],
         *,
         datasource_id: str,
         semantic_config_id: str,
@@ -92,7 +93,7 @@ class QueryHistoryDao:
         *,
         page: int,
         page_size: int,
-    ) -> Tuple[List[Tuple[ChatDataQueryExecution, Optional[ChatDataQueryTask]]], int]:
+    ) -> tuple[list[tuple[ChatDataQueryExecution, ChatDataQueryTask | None]], int]:
         async with self._session_context() as db:
             count_stmt = (
                 select(func.count())
@@ -121,12 +122,12 @@ class QueryHistoryDao:
         user_id: str,
         page: int,
         page_size: int,
-        source_filter: Optional[List[str]],
-        status_filter: Optional[str],
-        start_time: Optional[datetime],
-        end_time: Optional[datetime],
-    ) -> Tuple[List[Tuple[ChatDataQueryExecution, Optional[ChatDataQueryTask]]], int]:
-        conditions: List[Any] = [
+        source_filter: list[str] | None,
+        status_filter: str | None,
+        start_time: datetime | None,
+        end_time: datetime | None,
+    ) -> tuple[list[tuple[ChatDataQueryExecution, ChatDataQueryTask | None]], int]:
+        conditions: list[Any] = [
             ChatDataQueryExecution.datasource_id == datasource_id,
             ChatDataQueryExecution.user_id == user_id,
             ChatDataQueryExecution.delete_flag == 0,
@@ -146,12 +147,12 @@ class QueryHistoryDao:
         keyword: str,
         page: int,
         page_size: int,
-        source_filter: Optional[List[str]],
-        status_filter: Optional[str],
-        start_time: Optional[datetime],
-        end_time: Optional[datetime],
-    ) -> Tuple[List[Tuple[ChatDataQueryExecution, Optional[ChatDataQueryTask]]], int]:
-        conditions: List[Any] = [ChatDataQueryExecution.delete_flag == 0]
+        source_filter: list[str] | None,
+        status_filter: str | None,
+        start_time: datetime | None,
+        end_time: datetime | None,
+    ) -> tuple[list[tuple[ChatDataQueryExecution, ChatDataQueryTask | None]], int]:
+        conditions: list[Any] = [ChatDataQueryExecution.delete_flag == 0]
         self._append_admin_conditions(
             conditions,
             datasource_id=datasource_id,
@@ -170,7 +171,7 @@ class QueryHistoryDao:
         *,
         execution_id: str,
         user_id: str,
-    ) -> Tuple[Optional[ChatDataQueryExecution], Optional[ChatDataQueryTask]]:
+    ) -> tuple[ChatDataQueryExecution | None, ChatDataQueryTask | None]:
         async with self._session_context() as db:
             result = await db.execute(
                 select(ChatDataQueryExecution, ChatDataQueryTask)
@@ -184,7 +185,7 @@ class QueryHistoryDao:
             row = result.first()
             return (row[0], row[1]) if row else (None, None)
 
-    async def get_execution_models_by_task(self, task_id: str) -> List[ChatDataQueryExecution]:
+    async def get_execution_models_by_task(self, task_id: str) -> list[ChatDataQueryExecution]:
         if not task_id:
             return []
         async with self._session_context() as db:
@@ -195,7 +196,7 @@ class QueryHistoryDao:
             )
             return list(result.scalars().all())
 
-    async def get_execution_model(self, execution_id: str) -> Optional[ChatDataQueryExecution]:
+    async def get_execution_model(self, execution_id: str) -> ChatDataQueryExecution | None:
         if not execution_id:
             return None
         async with self._session_context() as db:
@@ -210,8 +211,8 @@ class QueryHistoryDao:
         running_statuses: Sequence[str],
         datasource_id: str = "",
         user_id: str = "",
-    ) -> List[Tuple[ChatDataQueryExecution, Optional[ChatDataQueryTask]]]:
-        conditions: List[Any] = [
+    ) -> list[tuple[ChatDataQueryExecution, ChatDataQueryTask | None]]:
+        conditions: list[Any] = [
             ChatDataQueryExecution.delete_flag == 0,
             ChatDataQueryExecution.sql_status.in_(sorted(running_statuses)),
         ]

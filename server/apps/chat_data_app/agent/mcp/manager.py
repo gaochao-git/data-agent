@@ -21,10 +21,11 @@ from __future__ import annotations
 import asyncio
 import re
 import time
+from collections.abc import AsyncIterator, Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Any, AsyncIterator, Callable
+from typing import Any
 
 from langchain_core.tools import StructuredTool
 from mcp import Client, StdioServerParameters

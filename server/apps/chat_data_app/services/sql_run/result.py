@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 QUERY_SUCCEEDED_STATUS = "succeeded"
 QUERY_FAILED_STATUS = "failed"
@@ -10,7 +10,7 @@ QUERY_RUNNING_STATUS = "running"
 QUERY_CANCELLED_STATUS = "cancelled"
 
 
-def query_result_status(result: Dict[str, Any]) -> str:
+def query_result_status(result: dict[str, Any]) -> str:
     """Return the normalized status for a query result payload."""
     raw_status = str((result or {}).get("status") or "").strip().lower()
     if raw_status in {
@@ -31,13 +31,13 @@ def query_result_status(result: Dict[str, Any]) -> str:
     return QUERY_FAILED_STATUS
 
 
-def query_result_succeeded(result: Dict[str, Any]) -> bool:
+def query_result_succeeded(result: dict[str, Any]) -> bool:
     """Return whether a member or aggregate query result succeeded."""
     return query_result_status(result) == QUERY_SUCCEEDED_STATUS
 
 
-def _normalize_member_results(member_results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    normalized_results: List[Dict[str, Any]] = []
+def _normalize_member_results(member_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized_results: list[dict[str, Any]] = []
     for item in member_results or []:
         member_result = dict(item or {})
         member_result["status"] = query_result_status(member_result)
@@ -47,10 +47,10 @@ def _normalize_member_results(member_results: List[Dict[str, Any]]) -> List[Dict
 
 
 def _resolve_query_result_status(
-    normalized_results: List[Dict[str, Any]],
-    succeeded_results: List[Dict[str, Any]],
-    fallback_error: Optional[str],
-) -> tuple[str, Optional[str]]:
+    normalized_results: list[dict[str, Any]],
+    succeeded_results: list[dict[str, Any]],
+    fallback_error: str | None,
+) -> tuple[str, str | None]:
     """根据成员结果推导聚合状态与错误信息。"""
     has_running = any(query_result_status(item) in {"pending", QUERY_RUNNING_STATUS} for item in normalized_results)
     has_results = bool(normalized_results)
@@ -68,9 +68,9 @@ def _resolve_query_result_status(
 
 
 def _aggregate_execution_time_ms(
-    normalized_results: List[Dict[str, Any]],
-    fallback_execution_time_ms: Optional[int],
-) -> Optional[int]:
+    normalized_results: list[dict[str, Any]],
+    fallback_execution_time_ms: int | None,
+) -> int | None:
     execution_times = [
         int(item.get("execution_time_ms") or 0)
         for item in normalized_results
@@ -82,10 +82,10 @@ def _aggregate_execution_time_ms(
 def build_query_result_payload(
     *,
     sql: str,
-    member_results: List[Dict[str, Any]],
-    fallback_error: Optional[str] = None,
-    fallback_execution_time_ms: Optional[int] = None,
-) -> Dict[str, Any]:
+    member_results: list[dict[str, Any]],
+    fallback_error: str | None = None,
+    fallback_execution_time_ms: int | None = None,
+) -> dict[str, Any]:
     """Build the public query result payload; row data only lives in results[].
 
     聚合约定（消费方必读），状态按序判定：
@@ -113,6 +113,6 @@ def build_query_result_payload(
     }
 
 
-def _join_member_errors(results: List[Dict[str, Any]]) -> str:
+def _join_member_errors(results: list[dict[str, Any]]) -> str:
     """Join member errors into a single user-facing message."""
     return "；".join(text for text in (str(item.get("error") or "").strip() for item in results) if text)

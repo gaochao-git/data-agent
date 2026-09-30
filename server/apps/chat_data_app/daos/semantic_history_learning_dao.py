@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from datetime import datetime
-from typing import Callable, List, Sequence, Tuple
 
 from sqlalchemy import select
 
@@ -25,7 +25,7 @@ class SemanticHistoryLearningDao:
         cutoff_time: datetime,
         status_values: Sequence[str],
         scan_limit: int,
-    ) -> List[Tuple[ChatDataQueryExecution, ChatDataQueryTask | None]]:
+    ) -> list[tuple[ChatDataQueryExecution, ChatDataQueryTask | None]]:
         stmt = (
             select(ChatDataQueryExecution, ChatDataQueryTask)
             .outerjoin(ChatDataQueryTask, ChatDataQueryTask.task_id == ChatDataQueryExecution.task_id)

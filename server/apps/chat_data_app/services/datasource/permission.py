@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, Iterable, List, Optional, Set
+from collections.abc import Iterable
+from typing import Any
 
 from utils.alarm import emit_external_api_alarm
 from utils.logger import get_logger
@@ -17,10 +18,10 @@ HTTP_PERMISSION_URL = str(os.getenv("CHAT_DATA_HTTP_PERMISSION_URL") or "").stri
 HTTP_PERMISSION_TIMEOUT_SECONDS = read_positive_int_env("CHAT_DATA_HTTP_PERMISSION_TIMEOUT_SECONDS", 5)
 
 
-def normalize_org_codes(items: Any) -> Set[str]:
+def normalize_org_codes(items: Any) -> set[str]:
     """Normalize org code payloads returned by permission providers."""
     raw_items = items if isinstance(items, list) else []
-    result: Set[str] = set()
+    result: set[str] = set()
     for item in raw_items:
         if not isinstance(item, str):
             continue
@@ -30,7 +31,7 @@ def normalize_org_codes(items: Any) -> Set[str]:
     return result
 
 
-async def get_http_permission_org_codes(user_id: Optional[str], username: Optional[str]) -> Set[str]:
+async def get_http_permission_org_codes(user_id: str | None, username: str | None) -> set[str]:
     """Read HTTP execution org permissions from the configured permission service."""
     normalized_user_id = str(user_id or "").strip()
     normalized_username = str(username or "").strip()
@@ -84,11 +85,11 @@ async def get_http_permission_org_codes(user_id: Optional[str], username: Option
 
 
 async def get_allowed_org_codes_by_executor(
-    user_id: Optional[str],
-    username: Optional[str],
+    user_id: str | None,
+    username: str | None,
     *,
     include_http_permission: bool = True,
-) -> Dict[str, Set[str]]:
+) -> dict[str, set[str]]:
     """Return allowed org codes grouped by executor type.
 
     HTTP permission lookup is optional because direct-only datasource groups do
@@ -101,7 +102,7 @@ async def get_allowed_org_codes_by_executor(
     }
 
 
-def datasource_requires_http_permission(datasource: Dict[str, Any]) -> bool:
+def datasource_requires_http_permission(datasource: dict[str, Any]) -> bool:
     """Return whether a datasource may contain an HTTP execution target.
 
     Unknown or incomplete member metadata keeps the conservative old path and
@@ -123,7 +124,7 @@ def datasource_requires_http_permission(datasource: Dict[str, Any]) -> bool:
     return False
 
 
-def _resolve_member_executor_type(member: Dict[str, Any], default_executor_type: str) -> str:
+def _resolve_member_executor_type(member: dict[str, Any], default_executor_type: str) -> str:
     executor_type = str((member or {}).get("query_executor_type") or default_executor_type).strip().lower() or "direct"
     if executor_type not in {"direct", "http"}:
         executor_type = "direct"
@@ -131,16 +132,16 @@ def _resolve_member_executor_type(member: Dict[str, Any], default_executor_type:
 
 
 def _member_allowed_by_org_codes(
-    member: Dict[str, Any],
+    member: dict[str, Any],
     default_executor_type: str,
-    allowed_org_codes: Dict[str, Set[str]],
+    allowed_org_codes: dict[str, set[str]],
 ) -> bool:
     executor_type = _resolve_member_executor_type(member, default_executor_type)
     org_code = str((member or {}).get("org_code") or "").strip()
     return bool(org_code) and org_code in allowed_org_codes.get(executor_type, set())
 
 
-def _allowed_member_id_set(allowed_members: List[Dict[str, Any]]) -> Set[str]:
+def _allowed_member_id_set(allowed_members: list[dict[str, Any]]) -> set[str]:
     return {
         str((member or {}).get("member_datasource_id") or "").strip()
         for member in allowed_members
@@ -149,9 +150,9 @@ def _allowed_member_id_set(allowed_members: List[Dict[str, Any]]) -> Set[str]:
 
 
 def _filter_member_datasource_ids(
-    datasource: Dict[str, Any],
-    allowed_member_ids: Set[str],
-) -> List[str]:
+    datasource: dict[str, Any],
+    allowed_member_ids: set[str],
+) -> list[str]:
     return [
         member_id
         for member_id in (datasource.get("member_datasource_ids") or [])
@@ -160,8 +161,8 @@ def _filter_member_datasource_ids(
 
 
 def filter_datasource_members_by_allowed_org_codes(
-    datasource: Dict[str, Any], allowed_org_codes: Dict[str, Set[str]]
-) -> Optional[Dict[str, Any]]:
+    datasource: dict[str, Any], allowed_org_codes: dict[str, set[str]]
+) -> dict[str, Any] | None:
     """Filter datasource member_sources by executor-specific org permissions."""
     member_sources = list(datasource.get("member_sources") or [])
     if not member_sources:
@@ -189,10 +190,10 @@ def filter_datasource_members_by_allowed_org_codes(
 
 
 def filter_datasources_by_allowed_org_codes(
-    datasources: Iterable[Dict[str, Any]], allowed_org_codes: Dict[str, Set[str]]
-) -> List[Dict[str, Any]]:
+    datasources: Iterable[dict[str, Any]], allowed_org_codes: dict[str, set[str]]
+) -> list[dict[str, Any]]:
     """Filter datasource list by execution target permissions."""
-    result: List[Dict[str, Any]] = []
+    result: list[dict[str, Any]] = []
     for datasource in datasources or []:
         filtered = filter_datasource_members_by_allowed_org_codes(datasource, allowed_org_codes)
         if filtered:

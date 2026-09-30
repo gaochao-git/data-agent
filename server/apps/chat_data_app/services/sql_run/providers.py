@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Awaitable, Callable, Dict
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from utils.database import get_session
 
@@ -41,6 +42,6 @@ def get_query_favorite_service() -> QueryFavoriteService:
     return query_favorite_service
 
 
-def get_query_history_remote_result_fetcher() -> Callable[..., Awaitable[Dict[str, Any]]]:
+def get_query_history_remote_result_fetcher() -> Callable[..., Awaitable[dict[str, Any]]]:
     """获取查询历史远端结果读取函数。"""
     return fetch_http_query_task_result

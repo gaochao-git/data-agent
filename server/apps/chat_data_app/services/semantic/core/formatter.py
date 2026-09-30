@@ -4,7 +4,7 @@
 提供语义查询参数的格式化功能。
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
 def _format_expression_operand(operand: Any) -> str:
@@ -23,12 +23,12 @@ def _format_expression_operand(operand: Any) -> str:
     return ""
 
 
-def _format_filter_displays(filters: List[Dict]) -> List[str]:
+def _format_filter_displays(filters: list[dict]) -> list[str]:
     """把过滤条件格式化为「维度 操作符 值」片段。"""
     return [f"{f.get('dimension', '')} {f.get('operator', '=')} {f.get('value', '')}" for f in filters]
 
 
-def _format_having_displays(having: List[Dict]) -> List[str]:
+def _format_having_displays(having: list[dict]) -> list[str]:
     """把 HAVING 条件格式化为片段；表达式操作数递归格式化。"""
     having_displays = []
     for h in having:
@@ -45,7 +45,7 @@ def _format_having_displays(having: List[Dict]) -> List[str]:
     return having_displays
 
 
-def _format_order_displays(order_by: List[Dict]) -> List[str]:
+def _format_order_displays(order_by: list[dict]) -> list[str]:
     """把排序条件格式化为「字段 升序/降序」片段。"""
     order_displays = []
     for o in order_by:
@@ -57,11 +57,11 @@ def _format_order_displays(order_by: List[Dict]) -> List[str]:
 
 
 def format_params_for_display(
-    metrics: List[str],
-    dimensions: List[str],
-    filters: List[Dict],
-    having: List[Dict],
-    order_by: List[Dict] = None,
+    metrics: list[str],
+    dimensions: list[str],
+    filters: list[dict],
+    having: list[dict],
+    order_by: list[dict] = None,
     limit: int = None,
     offset: int = None,
 ) -> str:
@@ -124,7 +124,7 @@ def format_sql_for_display(sql: str, max_length: int = 500) -> str:
     return sql
 
 
-def format_error_message(error: str, context: Optional[str] = None) -> str:
+def format_error_message(error: str, context: str | None = None) -> str:
     """
     格式化错误消息
 

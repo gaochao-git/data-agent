@@ -5,9 +5,9 @@ SQLAlchemy 数据库引擎和会话管理
 """
 
 import os
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from threading import RLock
-from typing import AsyncGenerator
 
 from sqlalchemy import text
 from sqlalchemy.engine import URL

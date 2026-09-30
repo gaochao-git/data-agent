@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Any, Optional
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
@@ -34,7 +34,7 @@ def _resolve_current_user(request: Request, current_user: Any | None) -> Any:
 async def get_query_favorites(
     request: Request,
     datasource_id: str,
-    query_type: Optional[str] = None,
+    query_type: str | None = None,
     limit: int = 50,
     favorite_service: Annotated[QueryFavoriteService | None, Depends(get_query_favorite_service)] = None,
 ):

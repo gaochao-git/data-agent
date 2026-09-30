@@ -9,8 +9,9 @@ InputValidator 校验故宽松，BI 侧直面原始前端输入故严格）。
 
 import logging
 import re
+from collections.abc import Callable
 from datetime import datetime, timedelta
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from typing import Any
 
 from ..core.common import is_time_logical_dimension
 from ..core.query_plan import (
@@ -29,7 +30,7 @@ def normalize_text(value: Any) -> str:
     return str(value or "").strip()
 
 
-def metric_func_column(expression: Any) -> Tuple[str, str] | None:
+def metric_func_column(expression: Any) -> tuple[str, str] | None:
     """解析 `SUM(col)` / `COUNT_DISTINCT(col)` 形态的聚合表达式。
 
     返回 (聚合函数, 列名)：列名取最后一个列段并去除反引号与空白，`*` 原样保留；
@@ -52,13 +53,13 @@ def builder_node_alias(item: Any) -> str:
 
 
 def assemble_dimension_filter_node(
-    dim_cfg: Dict[str, Any],
+    dim_cfg: dict[str, Any],
     *,
     node_id: str,
     operator: Any,
     logic: Any = "AND",
     expression: Any = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """组装维度过滤计划节点的身份字段（表定位/操作符/逻辑）。
 
     值字段（value/valueType/rightExpression 等）语义两条入口不同，由各适配器
@@ -79,8 +80,8 @@ def assemble_dimension_filter_node(
 
 def collect_filter_node_tables(
     node: Any,
-    tables_needed: Set[str],
-    leaf_table_extractor: Callable[[Dict[str, Any], Set[str]], None],
+    tables_needed: set[str],
+    leaf_table_extractor: Callable[[dict[str, Any], set[str]], None],
 ) -> None:
     """递归收集 and/or 过滤树涉及的表。
 
@@ -101,8 +102,8 @@ def collect_filter_node_tables(
 
 def collect_operand_tables(
     operand: Any,
-    tables_needed: Set[str],
-    metric_table_extractor: Callable[[Dict[str, Any], Set[str]], None],
+    tables_needed: set[str],
+    metric_table_extractor: Callable[[dict[str, Any], set[str]], None],
 ) -> None:
     """递归收集 HAVING 操作数树（metric/binary）涉及的表。"""
     if not isinstance(operand, dict):
@@ -138,7 +139,7 @@ def _day_start(value: datetime) -> datetime:
     return value.replace(hour=0, minute=0, second=0, microsecond=0)
 
 
-def derive_period_date_range(period: Dict[str, Any], now: datetime) -> tuple[str, str]:
+def derive_period_date_range(period: dict[str, Any], now: datetime) -> tuple[str, str]:
     """把派生指标周期翻译为半开时间区间 [start, end)，与时间维度等值过滤的规范化语义一致。"""
     kind = normalize_text(period.get("kind")).lower()
     if kind == "today":
@@ -165,7 +166,7 @@ def derive_period_date_range(period: Dict[str, Any], now: datetime) -> tuple[str
     raise ValueError(f"不支持的派生指标周期类型: {kind or '(空)'}")
 
 
-def _between_period_range(period: Dict[str, Any]) -> tuple[str, str]:
+def _between_period_range(period: dict[str, Any]) -> tuple[str, str]:
     """自定义区间：end 为日期（含当日）时转次日零点半开，为日期时间时原样半开。"""
     raw_start = normalize_text(period.get("start"))
     raw_end = normalize_text(period.get("end"))
@@ -184,7 +185,7 @@ def _between_period_range(period: Dict[str, Any]) -> tuple[str, str]:
     return _timestamp(_day_start(start)), _timestamp(end)
 
 
-def _describe_period(period: Dict[str, Any]) -> str:
+def _describe_period(period: dict[str, Any]) -> str:
     kind = normalize_text(period.get("kind")).lower()
     if kind == "last_n_days":
         return f"近{period.get('n')}天"
@@ -193,7 +194,7 @@ def _describe_period(period: Dict[str, Any]) -> str:
     return _PERIOD_LABELS.get(kind, kind)
 
 
-def _mapped_dimension_value(dim_cfg: Dict[str, Any], value: Any) -> Any:
+def _mapped_dimension_value(dim_cfg: dict[str, Any], value: Any) -> Any:
     """按维度 mapping 把过滤值规范到枚举值（键忽略大小写），与用户过滤链路口径一致。"""
     mapping = dim_cfg.get("mapping") if isinstance(dim_cfg.get("mapping"), dict) else None
     if not mapping or value is None:
@@ -208,17 +209,17 @@ def _mapped_dimension_value(dim_cfg: Dict[str, Any], value: Any) -> Any:
 
 
 def derived_metric_filter_leaves(
-    metric_cfg: Dict[str, Any],
-    dimensions_map: Dict[str, Dict[str, Any]],
+    metric_cfg: dict[str, Any],
+    dimensions_map: dict[str, dict[str, Any]],
     *,
     now: datetime | None = None,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """把派生指标的周期与修饰词翻译成语义过滤叶子（AI DSL 形态：dimension 键）。
 
     叶子走各适配器既有的过滤映射链路（时间区间规范化/操作符校验/值拷贝），
     因此这里只产出 {dimension, operator, value} 形状，不直接产出 builder 节点。
     """
-    leaves: List[Dict[str, Any]] = []
+    leaves: list[dict[str, Any]] = []
     period = (metric_cfg or {}).get("period") or {}
     if period:
         dim_name = normalize_text(period.get("time_dimension"))
@@ -243,12 +244,12 @@ def derived_metric_filter_leaves(
 
 
 def resolve_derived_metric(
-    metric_cfg: Dict[str, Any],
-    metrics_map: Dict[str, Dict[str, Any]],
-    dimensions_map: Dict[str, Dict[str, Any]],
+    metric_cfg: dict[str, Any],
+    metrics_map: dict[str, dict[str, Any]],
+    dimensions_map: dict[str, dict[str, Any]],
     *,
     now: datetime | None = None,
-) -> tuple[Dict[str, Any], List[Dict[str, Any]]]:
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """解析指标配置：派生指标返回 (基础原子指标配置副本, 固定过滤叶子)；原子指标原样返回。
 
     基础指标缺失、仍是派生指标或为复合指标时抛 ValueError（保存侧 config_validator
@@ -268,7 +269,7 @@ def resolve_derived_metric(
     return dict(base_cfg), derived_metric_filter_leaves(cfg, dimensions_map, now=now)
 
 
-def _append_derived_metric_filter_part(parts: List[str], item: Any) -> None:
+def _append_derived_metric_filter_part(parts: list[str], item: Any) -> None:
     """把派生指标的单个修饰词过滤翻译成人类可读片段并追加到 parts。"""
     dimension = normalize_text((item or {}).get("dimension"))
     operator = normalize_text((item or {}).get("operator")) or "="
@@ -278,10 +279,10 @@ def _append_derived_metric_filter_part(parts: List[str], item: Any) -> None:
         parts.append(f"{dimension}{operator}{value_text}")
 
 
-def derived_metric_verbalization(metric_cfg: Dict[str, Any]) -> str:
+def derived_metric_verbalization(metric_cfg: dict[str, Any]) -> str:
     """派生指标的人类可读口径描述，供指标集摘要（AI 检索）与 Ossie 导出使用。"""
     cfg = metric_cfg or {}
-    parts: List[str] = []
+    parts: list[str] = []
     base_name = normalize_text(cfg.get("base_metric"))
     if base_name:
         parts.append(f"指标[{base_name}]")
@@ -296,8 +297,8 @@ def derived_metric_verbalization(metric_cfg: Dict[str, Any]) -> str:
 def _resolve_composite_member(
     name: Any,
     ref: str,
-    member_cfg: Dict[str, Any],
-) -> Dict[str, Any]:
+    member_cfg: dict[str, Any],
+) -> dict[str, Any]:
     """校验单个复合指标成员并返回其编译形态 {name, expression, table}；配置无效抛 ValueError。"""
     if is_composite_metric(member_cfg):
         raise ValueError(f"复合指标 '{name}' 不能引用其他复合指标: {ref}")
@@ -313,9 +314,9 @@ def _resolve_composite_member(
 
 
 def resolve_composite_metric(
-    metric_cfg: Dict[str, Any],
-    metrics_map: Dict[str, Dict[str, Any]],
-) -> Optional[Dict[str, Any]]:
+    metric_cfg: dict[str, Any],
+    metrics_map: dict[str, dict[str, Any]],
+) -> dict[str, Any] | None:
     """解析复合指标：返回 {formula, members, table}；非复合指标返回 None。
 
     v1 约束（保存侧 config_validator 同步校验）：
@@ -330,7 +331,7 @@ def resolve_composite_metric(
     refs = parse_formula_refs(formula)
     if not refs:
         raise ValueError(f"复合指标 '{cfg.get('name')}' 的公式没有任何 {{指标}} 引用")
-    members: List[Dict[str, Any]] = []
+    members: list[dict[str, Any]] = []
     member_table = ""
     for ref in refs:
         member_cfg = metrics_map.get(ref) or {}
@@ -346,7 +347,7 @@ def resolve_composite_metric(
     return {"formula": formula, "members": members, "table": member_table}
 
 
-def substitute_composite_formula(formula: str, members: List[Dict[str, Any]]) -> str:
+def substitute_composite_formula(formula: str, members: list[dict[str, Any]]) -> str:
     """把公式中的 {指标引用} 代入成员聚合表达式，除号后的引用自动包 NULLIF 防除零。
 
     仅处理 `{a} / {b}` 形态的直接除法；除数是括号组合（如 `{a} / ({b} + {c})`）时
@@ -367,8 +368,8 @@ def substitute_composite_formula(formula: str, members: List[Dict[str, Any]]) ->
 
 
 def composite_metric_verbalization(
-    metric_cfg: Dict[str, Any],
-    metrics_map: Dict[str, Dict[str, Any]],
+    metric_cfg: dict[str, Any],
+    metrics_map: dict[str, dict[str, Any]],
 ) -> str:
     """复合指标的人类可读口径描述：公式 + 各成员指标表达式；非复合指标返回空串。"""
     cfg = metric_cfg or {}
@@ -384,7 +385,7 @@ def composite_metric_verbalization(
             {"name": ref, "expression": normalize_text((metrics_map.get(ref) or {}).get("expression"))}
             for ref in parse_formula_refs(formula)
         ]
-    descriptions: List[str] = []
+    descriptions: list[str] = []
     for member in members:
         expression = member.get("expression")
         if expression:
@@ -399,9 +400,9 @@ def composite_metric_verbalization(
 
 def _composite_base_cfg(
     metric_name: str,
-    base_cfg: Dict[str, Any],
-    metrics_map: Dict[str, Dict[str, Any]],
-) -> Dict[str, Any]:
+    base_cfg: dict[str, Any],
+    metrics_map: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
     """复合指标预解析：formula 代入成员聚合表达式，产出 RAW 形态的编译配置。
 
     编译期直接复用既有 RAW 表达式通道（select_compiler 原样直出），
@@ -424,9 +425,9 @@ def _composite_base_cfg(
 
 
 def build_metric_base_configs(
-    metrics_map: Dict[str, Dict[str, Any]],
-    dimensions_map: Dict[str, Dict[str, Any]],
-) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, List[Dict[str, Any]]]]:
+    metrics_map: dict[str, dict[str, Any]],
+    dimensions_map: dict[str, dict[str, Any]],
+) -> tuple[dict[str, dict[str, Any]], dict[str, list[dict[str, Any]]]]:
     """派生/复合指标统一预解析（AI/BI 适配器共享入口）。
 
     返回 (metric_base_cfgs, derived_fixed_leaves)：
@@ -434,8 +435,8 @@ def build_metric_base_configs(
     - derived_fixed_leaves: 派生指标的周期/修饰词固定过滤叶子。
     配置无效时回退原始配置并记录告警（保存侧 config_validator 已拦截）。
     """
-    base_cfgs: Dict[str, Dict[str, Any]] = {}
-    fixed_leaves_map: Dict[str, List[Dict[str, Any]]] = {}
+    base_cfgs: dict[str, dict[str, Any]] = {}
+    fixed_leaves_map: dict[str, list[dict[str, Any]]] = {}
     for metric_name, metric_cfg in metrics_map.items():
         try:
             base_cfg, fixed_leaves = resolve_derived_metric(
@@ -452,16 +453,16 @@ def build_metric_base_configs(
 
 
 def check_mixed_derived_periods(
-    metric_names: List[str],
-    metrics_map: Dict[str, Dict[str, Any]],
-) -> Optional[str]:
+    metric_names: list[str],
+    metrics_map: dict[str, dict[str, Any]],
+) -> str | None:
     """检测同一查询是否混用了不同周期的派生指标。
 
     v1 固定过滤注入整条 WHERE，多个不同周期的派生指标取交集会得到错误结果
     （如 今日成交额 vs 近7天成交额 同查会被卡成同值）。周期相同的派生指标
     可安全混用；返回错误描述或 None。
     """
-    period_groups: Dict[str, List[str]] = {}
+    period_groups: dict[str, list[str]] = {}
     for name in metric_names:
         cfg = metrics_map.get(name) or {}
         if not is_derived_metric(cfg):

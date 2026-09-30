@@ -4,7 +4,8 @@
 """
 
 import inspect
-from typing import Any, Callable, Dict, List, Literal, Optional
+from collections.abc import Callable
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi import status as http_status
@@ -43,7 +44,7 @@ class CreateConversationRequest(BaseModel):
     """创建会话请求"""
 
     agent_id: str
-    datasource_id: Optional[str] = None  # 建会话即绑定的数据源组（问数 agent 用）
+    datasource_id: str | None = None  # 建会话即绑定的数据源组（问数 agent 用）
 
 
 class UpdateTitleRequest(BaseModel):
@@ -57,9 +58,9 @@ class CompletionRequest(BaseModel):
 
     query: str = ""
     agent_id: str
-    options: Optional[Dict[str, Any]] = None  # 通用扩展参数
-    file_ids: Optional[List[str]] = None  # 本次消息关联的文件ID列表
-    queued_message_id: Optional[str] = None  # 停止后从队列中明确执行的消息
+    options: dict[str, Any] | None = None  # 通用扩展参数
+    file_ids: list[str] | None = None  # 本次消息关联的文件ID列表
+    queued_message_id: str | None = None  # 停止后从队列中明确执行的消息
     preserve_queued_messages: bool = False  # 新输入作为当前任务，不提前接管旧队列
 
 
@@ -78,9 +79,9 @@ class SteerRequest(BaseModel):
     # 与主链路 USER_INPUT_OFFLOAD_THRESHOLD 对齐：steering 语义是运行中追加短指令，
     # 超长输入会原样进 state/checkpoint 每步重复落库，必须在入口拦下
     query: str = Field(..., min_length=1, max_length=4000)
-    queue_type: Optional[SteerQueueType] = None  # 缺省 next-turn：本轮结束后作为下一轮处理
-    file_selections: Optional[List[str]] = None  # @ 引用的会话工作区相对路径列表
-    file_ids: Optional[List[str]] = None  # 本次消息关联的上传文件ID列表（附件/截图）
+    queue_type: SteerQueueType | None = None  # 缺省 next-turn：本轮结束后作为下一轮处理
+    file_selections: list[str] | None = None  # @ 引用的会话工作区相对路径列表
+    file_ids: list[str] | None = None  # 本次消息关联的上传文件ID列表（附件/截图）
 
 
 # 随行元数据单类引用数量上限：meta 列为 TEXT（64KB），引用均人工逐个添加，
@@ -92,15 +93,15 @@ class SteerMessageUpdateRequest(BaseModel):
     """编辑排队中的追加消息；content 和 queue_type 至少提供一个。"""
 
     # 编辑后的内容同样经 inbox 进 state/checkpoint，与 SteerRequest 同限
-    content: Optional[str] = Field(default=None, min_length=1, max_length=4000)
-    queue_type: Optional[SteerQueueType] = None
+    content: str | None = Field(default=None, min_length=1, max_length=4000)
+    queue_type: SteerQueueType | None = None
 
 
-def _normalize_string_list(values: Optional[List[str]]) -> List[str]:
+def _normalize_string_list(values: list[str] | None) -> list[str]:
     """strip、去空、按序去重的通用字符串列表归一。"""
     if not values:
         return []
-    normalized: List[str] = []
+    normalized: list[str] = []
     for value in values:
         item = str(value or "").strip()
         if item and item not in normalized:
@@ -108,7 +109,7 @@ def _normalize_string_list(values: Optional[List[str]]) -> List[str]:
     return normalized
 
 
-def _normalize_steer_meta(request: SteerRequest) -> Optional[Dict[str, List[str]]]:
+def _normalize_steer_meta(request: SteerRequest) -> dict[str, list[str]] | None:
     """归一排队消息随行元数据；两类引用都为空时返回 None（不占列）。
 
     file_selections 复用主链路的 parse_file_selections（strip/去重/首尾斜杠
@@ -121,7 +122,7 @@ def _normalize_steer_meta(request: SteerRequest) -> Optional[Dict[str, List[str]
     file_ids = _normalize_string_list(request.file_ids)[:_STEER_META_MAX_ITEMS]
     if not file_selections and not file_ids:
         return None
-    meta: Dict[str, List[str]] = {}
+    meta: dict[str, list[str]] = {}
     if file_selections:
         meta["file_selections"] = file_selections
     if file_ids:
@@ -131,19 +132,19 @@ def _normalize_steer_meta(request: SteerRequest) -> Optional[Dict[str, List[str]
 
 class QuestionAnswerItem(BaseModel):
     id: str
-    selected: List[str] = Field(default_factory=list)
+    selected: list[str] = Field(default_factory=list)
     custom: str = ""
     skipped: bool = False
 
 
 class QuestionAnswerRequest(BaseModel):
-    answers: List[QuestionAnswerItem]
+    answers: list[QuestionAnswerItem]
 
 
 # ============ Agent 配置注册 ============
 
-_agent_configs: Dict[str, Dict[str, Any]] = {}
-_completion_handlers: Dict[str, Callable] = {}
+_agent_configs: dict[str, dict[str, Any]] = {}
+_completion_handlers: dict[str, Callable] = {}
 
 
 def register_agent(
@@ -177,14 +178,12 @@ def register_completion_handler(agent_id: str, handler: Callable):
     _completion_handlers[agent_id] = handler
 
 
-def get_agent_config(agent_id: str) -> Optional[Dict[str, Any]]:
+def get_agent_config(agent_id: str) -> dict[str, Any] | None:
     """获取 agent 配置"""
     return _agent_configs.get(agent_id)
 
 
-async def get_agent_config_by_conversation(
-    conversation_id: str, user_id: Optional[str] = None
-) -> Optional[Dict[str, Any]]:
+async def get_agent_config_by_conversation(conversation_id: str, user_id: str | None = None) -> dict[str, Any] | None:
     """
     通过 conversation_id 获取 agent 配置
 
@@ -204,9 +203,7 @@ async def get_agent_config_by_conversation(
     return _agent_configs.get(agent_id)
 
 
-async def _get_existing_agent_for_completion(
-    conversation_id: str, request_agent_id: str, user_id: str
-) -> Optional[str]:
+async def _get_existing_agent_for_completion(conversation_id: str, request_agent_id: str, user_id: str) -> str | None:
     """校验会话归属并读取本用户会话的 agent_id。"""
     existing_agent_id = await conversation.get_agent_id(conversation_id, user_id)
     if existing_agent_id and existing_agent_id != request_agent_id:
@@ -238,11 +235,11 @@ def _build_completion_handler_kwargs(
     handler: Callable,
     conversation_id: str,
     request: CompletionRequest,
-    options: Dict[str, Any],
+    options: dict[str, Any],
     req: Request,
     user_id: str,
     username: str,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """按 handler 签名构造 completion 入参。"""
     sig = inspect.signature(handler)
     kwargs = {
@@ -356,7 +353,7 @@ async def create_conversation(request: CreateConversationRequest, req: Request):
         )
 
 
-def _flat_conversation_page_result(rows: List[Dict[str, Any]], page: int, page_size: int) -> Dict[str, Any]:
+def _flat_conversation_page_result(rows: list[dict[str, Any]], page: int, page_size: int) -> dict[str, Any]:
     """构造平铺会话列表分页结果。"""
     return {
         "conversations": rows[:page_size],
@@ -366,24 +363,24 @@ def _flat_conversation_page_result(rows: List[Dict[str, Any]], page: int, page_s
     }
 
 
-def _parse_requested_agent_ids(agent_ids: str) -> List[str]:
+def _parse_requested_agent_ids(agent_ids: str) -> list[str]:
     """解析逗号分隔的 agent_id 列表。"""
     return [item.strip() for item in agent_ids.split(",") if item.strip()]
 
 
-def _unknown_agent_ids(requested_agent_ids: List[str]) -> List[str]:
+def _unknown_agent_ids(requested_agent_ids: list[str]) -> list[str]:
     """筛选配置中不存在的 agent_id。"""
     return [item for item in requested_agent_ids if not get_agent_config(item)]
 
 
 async def _list_grouped_conversations_response(
-    agent_id: Optional[str],
-    agent_ids: Optional[str],
+    agent_id: str | None,
+    agent_ids: str | None,
     user_id: str,
     page: int,
     page_size: int,
-    group_key: Optional[str],
-    cursor: Optional[str],
+    group_key: str | None,
+    cursor: str | None,
 ):
     """分组视图会话查询响应。"""
     if agent_ids or not agent_id:
@@ -417,8 +414,8 @@ async def list_conversations(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     view: Literal["flat", "grouped"] = Query(default="flat"),
-    group_key: Optional[str] = Query(default=None),
-    cursor: Optional[str] = Query(default=None),
+    group_key: str | None = Query(default=None),
+    cursor: str | None = Query(default=None),
 ):
     """
     获取会话列表
@@ -489,8 +486,8 @@ async def get_conversation_detail(
     conversation_id: str,
     req: Request,
     view: Literal["full", "timeline"] = "full",
-    limit: Optional[int] = Query(default=None, ge=1, le=600, description="仅返回最近 limit 条历史事件，用于长会话分页"),
-    before_sequence: Optional[int] = Query(
+    limit: int | None = Query(default=None, ge=1, le=600, description="仅返回最近 limit 条历史事件，用于长会话分页"),
+    before_sequence: int | None = Query(
         default=None, ge=0, description="翻页游标：只返回 sequence_no 小于该值的历史事件"
     ),
 ):
@@ -669,7 +666,7 @@ def _validate_completion_request(conversation_id: str, request: CompletionReques
     return None
 
 
-async def _apply_completion_datasource_binding(conversation_id: str, user_id: str, options: Dict[str, Any]):
+async def _apply_completion_datasource_binding(conversation_id: str, user_id: str, options: dict[str, Any]):
     """绑定会话数据源；需要拦截时返回错误响应，否则原地回填 options。"""
     requested_datasource_id = str(options.get("datasource_id") or "").strip()
     bound_datasource_id, datasource_binding_response = await _completion_datasource_binding_response(

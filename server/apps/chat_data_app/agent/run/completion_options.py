@@ -6,7 +6,7 @@
 """
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any
 
 
 @dataclass
@@ -67,7 +67,7 @@ def parse_file_selections(value: Any) -> list[str]:
     return selections
 
 
-def parse_completion_run_options(options: Optional[Dict[str, Any]]) -> CompletionRunOptions:
+def parse_completion_run_options(options: dict[str, Any] | None) -> CompletionRunOptions:
     options_data = options or {}
     raw_skill_names = options_data.get("skill_names") or []
     if isinstance(raw_skill_names, str):

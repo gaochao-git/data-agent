@@ -3390,7 +3390,7 @@ def test_get_schema_and_db_tables_error_branches(monkeypatch):
             assert source_config["host"] == "127.0.0.1"
             assert source_config["port"] == 3306
             assert kwargs == {"user_id": "u1", "username": "用户1"}
-            raise asyncio.TimeoutError()
+            raise TimeoutError()
 
     _mock_datasource_manager(monkeypatch, SchemaManager())
     _mock_authenticated_user(monkeypatch, user_id="u1", username="用户1")
@@ -4365,7 +4365,7 @@ def test_get_db_tables_uses_manager_for_direct_http_and_error_branches(monkeypat
 
     class TimeoutManager(_FakeDatasourceManager):
         async def get_physical_table_names_async(self, *_args, **_kwargs):
-            raise asyncio.TimeoutError()
+            raise TimeoutError()
 
     _mock_datasource_manager(monkeypatch, TimeoutManager())
     timeout_body = _payload(

@@ -373,8 +373,8 @@ def test_grep_local_workspace_text_skill_paths(tmp_path, monkeypatch):
     monkeypatch.setattr(lb, "_rg_available", True)
 
     match_line = (
-        '{"type": "match", "data": {"path": {"text": "%s"}, "line_number": 1, '
-        '"lines": {"text": "# guide"}}}' % skill_guide
+        f'{{"type": "match", "data": {{"path": {{"text": "{skill_guide}"}}, "line_number": 1, '
+        '"lines": {"text": "# guide"}}}'
     )
 
     def ok(*_args, **_kwargs):

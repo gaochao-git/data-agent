@@ -555,7 +555,7 @@ def test_mysql_http_executor_uses_mysql_timeout(monkeypatch):
     executor = sql_executor.HiveHttpExecutor(namespace="mysql-http-a", source_type="mysql")
 
     async def fake_request_json(self, method: str, url: str, *, json_payload=None, task_id="", params=None):
-        raise asyncio.TimeoutError()
+        raise TimeoutError()
 
     monkeypatch.setattr(sql_executor, "HTTP_SUBMIT_URL", "http://query/submit")
     monkeypatch.setattr(sql_executor, "HTTP_STATUS_URL", "http://query/status/{task_id}")
@@ -1216,7 +1216,7 @@ def test_mysql_executor_error_timeout_test_connection_and_invalid_kill(monkeypat
             if sql == "SELECT CONNECTION_ID()":
                 await super().execute(sql)
                 return
-            raise asyncio.TimeoutError()
+            raise TimeoutError()
 
     timeout_pool = _FakePool(TimeoutCursor())
     monkeypatch.setattr(executor, "_get_pool", lambda: asyncio.sleep(0, result=timeout_pool))

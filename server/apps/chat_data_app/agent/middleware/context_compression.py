@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 from langchain.agents.middleware import before_model
 from langchain_core.messages import BaseMessage, HumanMessage, RemoveMessage, SystemMessage, ToolMessage

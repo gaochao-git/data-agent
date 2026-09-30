@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any
 
 from sqlalchemy import or_, select, update
 
@@ -14,18 +15,18 @@ from utils.models import ChatDataDashboard, ChatDataDashboardPanel
 class DashboardDao:
     """封装看板和面板配置表读写。"""
 
-    def __init__(self, session_context: Optional[Callable] = None):
+    def __init__(self, session_context: Callable | None = None):
         self._session_context = session_context or default_get_session
 
     @staticmethod
-    def _dashboard_owner_filters(dashboard_id: str, user_id: Optional[str]) -> list[Any]:
+    def _dashboard_owner_filters(dashboard_id: str, user_id: str | None) -> list[Any]:
         filters = [ChatDataDashboard.dashboard_id == dashboard_id, ChatDataDashboard.delete_flag == 0]
         if user_id:
             filters.append(ChatDataDashboard.user_id == user_id)
         return filters
 
     @staticmethod
-    def _dashboard_access_filters(dashboard_id: str, user_id: Optional[str], include_public: bool) -> list[Any]:
+    def _dashboard_access_filters(dashboard_id: str, user_id: str | None, include_public: bool) -> list[Any]:
         filters = [ChatDataDashboard.dashboard_id == dashboard_id, ChatDataDashboard.delete_flag == 0]
         if user_id:
             access_filter = ChatDataDashboard.user_id == user_id
@@ -35,7 +36,7 @@ class DashboardDao:
         return filters
 
     @staticmethod
-    def _panel_filters(panel_id: str, dashboard_id: Optional[str]) -> list[Any]:
+    def _panel_filters(panel_id: str, dashboard_id: str | None) -> list[Any]:
         filters = [ChatDataDashboardPanel.panel_id == panel_id, ChatDataDashboardPanel.delete_flag == 0]
         if dashboard_id:
             filters.append(ChatDataDashboardPanel.dashboard_id == dashboard_id)
@@ -48,7 +49,7 @@ class DashboardDao:
         name: str,
         user_id: str,
         description: str,
-        datasource_id: Optional[str],
+        datasource_id: str | None,
         theme: str,
         operator_name: str,
         now: datetime,
@@ -81,7 +82,7 @@ class DashboardDao:
         is_public: bool,
         operator_name: str,
         now: datetime,
-    ) -> Optional[ChatDataDashboard]:
+    ) -> ChatDataDashboard | None:
         async with self._session_context() as session:
             dashboard = await self._get_owner_dashboard(session, dashboard_id, user_id)
             if not dashboard:
@@ -97,9 +98,9 @@ class DashboardDao:
         self,
         *,
         dashboard_id: str,
-        user_id: Optional[str],
+        user_id: str | None,
         include_public: bool,
-    ) -> Tuple[Optional[ChatDataDashboard], List[ChatDataDashboardPanel]]:
+    ) -> tuple[ChatDataDashboard | None, list[ChatDataDashboardPanel]]:
         async with self._session_context() as session:
             result = await session.execute(
                 select(ChatDataDashboard).where(*self._dashboard_access_filters(dashboard_id, user_id, include_public))
@@ -110,7 +111,7 @@ class DashboardDao:
             panels = await self.list_dashboard_panels(session, dashboard_id)
             return dashboard, panels
 
-    async def list_dashboards(self, *, user_id: Optional[str], scope: str) -> List[ChatDataDashboard]:
+    async def list_dashboards(self, *, user_id: str | None, scope: str) -> list[ChatDataDashboard]:
         async with self._session_context() as session:
             query = select(ChatDataDashboard).where(ChatDataDashboard.delete_flag == 0)
             normalized_scope = (scope or "mine").strip().lower()
@@ -125,11 +126,11 @@ class DashboardDao:
         self,
         *,
         dashboard_id: str,
-        user_id: Optional[str],
-        values: Dict[str, Any],
+        user_id: str | None,
+        values: dict[str, Any],
         operator_name: str,
         now: datetime,
-    ) -> Optional[ChatDataDashboard]:
+    ) -> ChatDataDashboard | None:
         async with self._session_context() as session:
             dashboard = await self._get_owner_dashboard(session, dashboard_id, user_id)
             if not dashboard:
@@ -142,7 +143,7 @@ class DashboardDao:
         self,
         *,
         dashboard_id: str,
-        user_id: Optional[str],
+        user_id: str | None,
         operator_name: str,
         now: datetime,
     ) -> bool:
@@ -159,11 +160,11 @@ class DashboardDao:
         *,
         dashboard_id: str,
         panel_id: str,
-        user_id: Optional[str],
-        panel_values: Dict[str, Any],
+        user_id: str | None,
+        panel_values: dict[str, Any],
         operator_name: str,
         now: datetime,
-    ) -> Optional[ChatDataDashboardPanel]:
+    ) -> ChatDataDashboardPanel | None:
         async with self._session_context() as session:
             dashboard = await self._get_owner_dashboard(session, dashboard_id, user_id)
             if not dashboard:
@@ -189,11 +190,11 @@ class DashboardDao:
         *,
         dashboard_id: str,
         panel_id: str,
-        user_id: Optional[str],
-        values: Dict[str, Any],
+        user_id: str | None,
+        values: dict[str, Any],
         operator_name: str,
         now: datetime,
-    ) -> Optional[ChatDataDashboardPanel]:
+    ) -> ChatDataDashboardPanel | None:
         async with self._session_context() as session:
             dashboard = await self._get_owner_dashboard(session, dashboard_id, user_id)
             if not dashboard:
@@ -210,11 +211,11 @@ class DashboardDao:
         self,
         *,
         dashboard_id: str,
-        layouts: List[Dict[str, Any]],
-        user_id: Optional[str],
+        layouts: list[dict[str, Any]],
+        user_id: str | None,
         operator_name: str,
         now: datetime,
-    ) -> Optional[int]:
+    ) -> int | None:
         async with self._session_context() as session:
             dashboard = await self._get_owner_dashboard(session, dashboard_id, user_id)
             if not dashboard:
@@ -230,7 +231,7 @@ class DashboardDao:
         *,
         dashboard_id: str,
         panel_id: str,
-        user_id: Optional[str],
+        user_id: str | None,
         operator_name: str,
         now: datetime,
     ) -> bool:
@@ -256,10 +257,10 @@ class DashboardDao:
         self,
         *,
         panel_id: str,
-        dashboard_id: Optional[str],
-        user_id: Optional[str],
+        dashboard_id: str | None,
+        user_id: str | None,
         include_public: bool,
-    ) -> Optional[ChatDataDashboardPanel]:
+    ) -> ChatDataDashboardPanel | None:
         async with self._session_context() as session:
             query = (
                 select(ChatDataDashboardPanel)
@@ -278,14 +279,14 @@ class DashboardDao:
             return result.scalar_one_or_none()
 
     async def _get_owner_dashboard(
-        self, session: Any, dashboard_id: str, user_id: Optional[str]
-    ) -> Optional[ChatDataDashboard]:
+        self, session: Any, dashboard_id: str, user_id: str | None
+    ) -> ChatDataDashboard | None:
         result = await session.execute(
             select(ChatDataDashboard).where(*self._dashboard_owner_filters(dashboard_id, user_id))
         )
         return result.scalar_one_or_none()
 
-    async def list_dashboard_panels(self, session: Any, dashboard_id: str) -> List[ChatDataDashboardPanel]:
+    async def list_dashboard_panels(self, session: Any, dashboard_id: str) -> list[ChatDataDashboardPanel]:
         result = await session.execute(
             select(ChatDataDashboardPanel).where(
                 ChatDataDashboardPanel.dashboard_id == dashboard_id,
@@ -294,7 +295,7 @@ class DashboardDao:
         )
         return list(result.scalars().all())
 
-    async def _resolve_panel_layout(self, session: Any, dashboard_id: str, values: Dict[str, Any]) -> Tuple[int, int]:
+    async def _resolve_panel_layout(self, session: Any, dashboard_id: str, values: dict[str, Any]) -> tuple[int, int]:
         layout_x = values.get("layout_x")
         layout_y = values.get("layout_y")
         if layout_x is not None and layout_y is not None:
@@ -306,8 +307,8 @@ class DashboardDao:
         self,
         session: Any,
         dashboard_id: str,
-        layouts: List[Dict[str, Any]],
-    ) -> Dict[str, ChatDataDashboardPanel]:
+        layouts: list[dict[str, Any]],
+    ) -> dict[str, ChatDataDashboardPanel]:
         panel_ids = [
             layout.get("panel_id") or layout.get("i") for layout in layouts if layout.get("panel_id") or layout.get("i")
         ]
@@ -324,7 +325,7 @@ class DashboardDao:
 
     async def _get_panel_for_update(
         self, session: Any, dashboard_id: str, panel_id: str
-    ) -> Optional[ChatDataDashboardPanel]:
+    ) -> ChatDataDashboardPanel | None:
         result = await session.execute(
             select(ChatDataDashboardPanel).where(
                 ChatDataDashboardPanel.dashboard_id == dashboard_id,
@@ -338,7 +339,7 @@ class DashboardDao:
         self,
         session: Any,
         dashboard_id: str,
-        user_id: Optional[str],
+        user_id: str | None,
         operator_name: str,
         now: datetime,
     ) -> None:
@@ -352,7 +353,7 @@ class DashboardDao:
         self,
         session: Any,
         dashboard_id: str,
-        user_id: Optional[str],
+        user_id: str | None,
         operator_name: str,
         now: datetime,
     ) -> bool:
@@ -366,8 +367,8 @@ class DashboardDao:
     @staticmethod
     def _apply_dashboard_values(
         dashboard: ChatDataDashboard,
-        values: Dict[str, Any],
-        user_id: Optional[str],
+        values: dict[str, Any],
+        user_id: str | None,
         operator_name: str,
         now: datetime,
     ) -> None:
@@ -381,8 +382,8 @@ class DashboardDao:
     @staticmethod
     def _apply_panel_values(
         panel: ChatDataDashboardPanel,
-        values: Dict[str, Any],
-        user_id: Optional[str],
+        values: dict[str, Any],
+        user_id: str | None,
         operator_name: str,
         now: datetime,
     ) -> None:
@@ -396,9 +397,9 @@ class DashboardDao:
     @classmethod
     def _apply_panel_layouts(
         cls,
-        panel_map: Dict[str, ChatDataDashboardPanel],
-        layouts: List[Dict[str, Any]],
-        user_id: Optional[str],
+        panel_map: dict[str, ChatDataDashboardPanel],
+        layouts: list[dict[str, Any]],
+        user_id: str | None,
         operator_name: str,
         now: datetime,
     ) -> int:
@@ -413,7 +414,7 @@ class DashboardDao:
         return updated_count
 
     @staticmethod
-    def _layout_values(panel: ChatDataDashboardPanel, layout: Dict[str, Any]) -> Dict[str, Any]:
+    def _layout_values(panel: ChatDataDashboardPanel, layout: dict[str, Any]) -> dict[str, Any]:
         return {
             "layout_x": layout.get("x", panel.layout_x),
             "layout_y": layout.get("y", panel.layout_y),
@@ -422,17 +423,15 @@ class DashboardDao:
         }
 
     @staticmethod
-    def _touch_dashboard(
-        dashboard: ChatDataDashboard, user_id: Optional[str], operator_name: str, now: datetime
-    ) -> None:
+    def _touch_dashboard(dashboard: ChatDataDashboard, user_id: str | None, operator_name: str, now: datetime) -> None:
         dashboard.update_time = now
         if user_id:
             dashboard.update_by = user_id
         dashboard.update_by_name = operator_name or ""
 
     @staticmethod
-    def _delete_panel_values(user_id: Optional[str], operator_name: str, now: datetime) -> Dict[str, Any]:
-        values: Dict[str, Any] = {"delete_flag": 1, "update_time": now}
+    def _delete_panel_values(user_id: str | None, operator_name: str, now: datetime) -> dict[str, Any]:
+        values: dict[str, Any] = {"delete_flag": 1, "update_time": now}
         if user_id:
             values["update_by"] = user_id
         if operator_name:
@@ -440,8 +439,8 @@ class DashboardDao:
         return values
 
     @staticmethod
-    def _delete_dashboard_values(user_id: Optional[str], operator_name: str, now: datetime) -> Dict[str, Any]:
-        values: Dict[str, Any] = {"delete_flag": 1, "update_time": now}
+    def _delete_dashboard_values(user_id: str | None, operator_name: str, now: datetime) -> dict[str, Any]:
+        values: dict[str, Any] = {"delete_flag": 1, "update_time": now}
         if user_id:
             values["update_by"] = user_id
         if operator_name:
@@ -453,12 +452,12 @@ class DashboardDao:
         *,
         dashboard_id: str,
         panel_id: str,
-        user_id: Optional[str],
+        user_id: str | None,
         operator_name: str,
         now: datetime,
         layout_x: int,
         layout_y: int,
-        panel_values: Dict[str, Any],
+        panel_values: dict[str, Any],
     ) -> ChatDataDashboardPanel:
         return ChatDataDashboardPanel(
             panel_id=panel_id,

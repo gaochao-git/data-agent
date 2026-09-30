@@ -38,7 +38,7 @@ async def _fetch_full_read_page(
     raw_path: str,
     offset: int,
     max_chars: int,
-) -> tuple[str, "int | None"]:
+) -> tuple[str, int | None]:
     """拉取单页并做存在性/类型/越界/超限校验。
 
     返回 ``(page_text, next_offset)``：``next_offset`` 为 ``None`` 表示应当停止翻页

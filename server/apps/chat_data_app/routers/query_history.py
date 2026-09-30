@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Any, Awaitable, Callable, Dict, Optional
+from collections.abc import Awaitable, Callable
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
@@ -25,7 +26,7 @@ from . import JSON_API_RESPONSES
 
 router = APIRouter(tags=["ChatData 查询历史"], responses=JSON_API_RESPONSES)
 
-RemoteResultFetcher = Callable[..., Awaitable[Dict[str, Any]]]
+RemoteResultFetcher = Callable[..., Awaitable[dict[str, Any]]]
 
 
 def _resolve_current_user(request: Request, current_user: Any | None) -> Any:
@@ -38,10 +39,10 @@ async def get_query_history(
     datasource_id: str,
     page: int = 1,
     page_size: int = 10,
-    source: Optional[str] = None,
-    status: Optional[str] = None,
-    start_time: Optional[str] = None,
-    end_time: Optional[str] = None,
+    source: str | None = None,
+    status: str | None = None,
+    start_time: str | None = None,
+    end_time: str | None = None,
     history_service: Annotated[QueryHistoryService | None, Depends(get_query_history_service)] = None,
 ):
     """获取当前用户的查询历史。"""
@@ -72,17 +73,17 @@ async def get_query_history(
 @router.get("/admin/query-history")
 async def get_admin_query_history(
     request: Request,
-    datasource_id: Optional[str] = None,
-    semantic_config_id: Optional[str] = None,
-    user_id: Optional[str] = None,
-    username: Optional[str] = None,
-    keyword: Optional[str] = None,
+    datasource_id: str | None = None,
+    semantic_config_id: str | None = None,
+    user_id: str | None = None,
+    username: str | None = None,
+    keyword: str | None = None,
     page: int = 1,
     page_size: int = 20,
-    source: Optional[str] = None,
-    status: Optional[str] = None,
-    start_time: Optional[str] = None,
-    end_time: Optional[str] = None,
+    source: str | None = None,
+    status: str | None = None,
+    start_time: str | None = None,
+    end_time: str | None = None,
     history_service: Annotated[QueryHistoryService | None, Depends(get_query_history_service)] = None,
 ):
     """获取后台全局 SQL 查询历史。"""
@@ -116,7 +117,7 @@ async def get_admin_query_history(
 @router.post("/query-history/cancel-running")
 async def cancel_my_running_query_history(
     request: Request,
-    datasource_id: Optional[str] = None,
+    datasource_id: str | None = None,
     task_service: Annotated[QueryTaskService | None, Depends(get_query_task_service)] = None,
 ):
     """停止当前用户所有执行中的 SQL。"""
@@ -168,7 +169,7 @@ async def cancel_query_history_execution(
 @router.post("/admin/query-history/cancel-running")
 async def cancel_admin_running_query_history(
     request: Request,
-    datasource_id: Optional[str] = None,
+    datasource_id: str | None = None,
     task_service: Annotated[QueryTaskService | None, Depends(get_query_task_service)] = None,
 ):
     """停止全局所有执行中的 SQL。"""

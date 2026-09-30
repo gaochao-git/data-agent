@@ -27,7 +27,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any
 
 from ..core.config_validator import (
     _validate_composite_metrics,
@@ -42,7 +42,7 @@ SCORE_DEDUCTION = {"error": 8, "warning": 3, "info": 1}
 MAX_TARGET_EXAMPLES = 5
 
 # 规则目录：code -> (severity, category, label)。与技能 references/governance/quality-rules.md 同源。
-RULES: Dict[str, Tuple[str, str, str]] = {
+RULES: dict[str, tuple[str, str, str]] = {
     # 结构校验 structure：阻断级硬门槛（保存链路 first_structure_error 从本域提取第一条错误）。
     # 判定逻辑与用户文案单点复用 core/config_validator 的编排函数，message 即完整错误句子，
     # RULES 第三位的 label 仅作目录用途、不拼进 message。
@@ -121,7 +121,7 @@ class QualityFinding:
     severity: str
     category: str
     message: str
-    targets: List[str] = dataclass_field(default_factory=list)
+    targets: list[str] = dataclass_field(default_factory=list)
 
 
 @dataclass
@@ -133,10 +133,10 @@ class ConfigQualityReport:
     enabled: bool
     score: int
     grade: str
-    stats: Dict[str, Any]
-    findings: List[QualityFinding]
+    stats: dict[str, Any]
+    findings: list[QualityFinding]
 
-    def to_payload(self) -> Dict[str, Any]:
+    def to_payload(self) -> dict[str, Any]:
         return {
             "config_id": self.config_id,
             "config_name": self.config_name,
@@ -171,7 +171,7 @@ def grade_for_score(score: int) -> str:
 _grade = grade_for_score
 
 
-def _metric_source_column(metric: Dict[str, Any]) -> str:
+def _metric_source_column(metric: dict[str, Any]) -> str:
     """解析原子指标可对应的物理列；复杂表达式返回空串（无法可靠解析则不判）。"""
     expression = str(metric.get("expression") or "").strip()
     match = _SIMPLE_AGG_COLUMN.match(expression)
@@ -188,11 +188,11 @@ class SemanticQualityChecker:
 
     def check_config(
         self,
-        config: Dict[str, Any],
+        config: dict[str, Any],
         *,
-        physical_columns: Optional[Set[Tuple[str, str]]] = None,
+        physical_columns: set[tuple[str, str]] | None = None,
     ) -> ConfigQualityReport:
-        raw: List[Tuple[str, str]] = []  # (code, target)
+        raw: list[tuple[str, str]] = []  # (code, target)
         metrics = [item for item in config.get("metrics") or [] if isinstance(item, dict)]
         dimensions = [item for item in config.get("dimensions") or [] if isinstance(item, dict)]
         relationships = [item for item in config.get("relationships") or [] if isinstance(item, dict)]
@@ -220,12 +220,12 @@ class SemanticQualityChecker:
 
     def _check_structure(
         self,
-        config: Dict[str, Any],
-        metrics: List[Dict[str, Any]],
-        dimensions: List[Dict[str, Any]],
-        relationships: List[Dict[str, Any]],
-        raw: List[Tuple[str, str]],
-        physical_columns: Optional[Set[Tuple[str, str]]],
+        config: dict[str, Any],
+        metrics: list[dict[str, Any]],
+        dimensions: list[dict[str, Any]],
+        relationships: list[dict[str, Any]],
+        raw: list[tuple[str, str]],
+        physical_columns: set[tuple[str, str]] | None,
     ) -> None:
         """结构校验：阻断级硬门槛，判定与文案单点复用 core/config_validator 编排函数。
 
@@ -235,7 +235,7 @@ class SemanticQualityChecker:
         error = _validate_field_display_names(dimensions, metrics)
         if error:
             raw.append(("STR_FIELD_NAME_INVALID", error))
-        table_columns_map: Dict[str, Set[str]] = {}
+        table_columns_map: dict[str, set[str]] = {}
         if physical_columns is not None:
             for table, column in physical_columns:
                 table_columns_map.setdefault(table, set()).add(column)
@@ -262,7 +262,7 @@ class SemanticQualityChecker:
                 raw.append(("STR_RELATIONSHIP_INVALID", error))
 
     def _check_provenance(
-        self, metrics: List[Dict[str, Any]], dimensions: List[Dict[str, Any]], raw: List[Tuple[str, str]]
+        self, metrics: list[dict[str, Any]], dimensions: list[dict[str, Any]], raw: list[tuple[str, str]]
     ) -> None:
         for metric in metrics:
             if metric.get("metric_kind"):
@@ -278,8 +278,8 @@ class SemanticQualityChecker:
 
     def _check_executability(
         self,
-        metrics: List[Dict[str, Any]],
-        raw: List[Tuple[str, str]],
+        metrics: list[dict[str, Any]],
+        raw: list[tuple[str, str]],
     ) -> None:
         """可执行性提示（结构硬门槛已由 _check_structure 承载，这里只做质量提示）。"""
         metric_names = {_clean(metric.get("name")) for metric in metrics if _clean(metric.get("name"))}
@@ -290,9 +290,9 @@ class SemanticQualityChecker:
 
     @staticmethod
     def _check_derived_or_composite(
-        metric: Dict[str, Any],
-        metric_names: Set[str],
-        raw: List[Tuple[str, str]],
+        metric: dict[str, Any],
+        metric_names: set[str],
+        raw: list[tuple[str, str]],
     ) -> None:
         """派生/复合指标的可执行性提示（基础缺失/公式缺失属于结构硬门槛，由 structure 域承载）。"""
         name = _clean(metric.get("name")) or "<未命名>"
@@ -312,14 +312,14 @@ class SemanticQualityChecker:
             raw.append(("EXE_COMPOSITE_UNRESOLVED", f"{name}({','.join(unresolved[:3])})"))
 
     @staticmethod
-    def _unresolved_formula_tokens(formula: str, metric_names: Set[str]) -> List[str]:
+    def _unresolved_formula_tokens(formula: str, metric_names: set[str]) -> list[str]:
         """把 formula 中已知指标名剥掉后，剩余标识符即无法解析的片段。"""
         remaining = formula
         for name in sorted(metric_names, key=len, reverse=True):
             if name:
                 remaining = remaining.replace(name, " ")
         tokens = [token for token in _IDENTIFIER_TOKEN.findall(remaining) if token not in metric_names]
-        unique: List[str] = []
+        unique: list[str] = []
         for token in tokens:
             if token not in unique:
                 unique.append(token)
@@ -327,17 +327,17 @@ class SemanticQualityChecker:
 
     def _check_coverage(
         self,
-        metrics: List[Dict[str, Any]],
-        dimensions: List[Dict[str, Any]],
-        raw: List[Tuple[str, str]],
-        physical_columns: Optional[Set[Tuple[str, str]]],
+        metrics: list[dict[str, Any]],
+        dimensions: list[dict[str, Any]],
+        raw: list[tuple[str, str]],
+        physical_columns: set[tuple[str, str]] | None,
     ) -> None:
         if dimensions and not metrics:
             raw.append(("COV_NO_METRICS", _clean(dimensions[0].get("table")) or "-"))
         if metrics and not dimensions:
             raw.append(("COV_NO_DIMENSIONS", _clean(metrics[0].get("table")) or "-"))
 
-        seen: Dict[Tuple[str, str], List[str]] = {}
+        seen: dict[tuple[str, str], list[str]] = {}
         for dimension in dimensions:
             key = (_clean(dimension.get("table")), _clean(dimension.get("column")))
             if key[0] and key[1]:
@@ -351,10 +351,10 @@ class SemanticQualityChecker:
 
     @staticmethod
     def _append_unmodeled_columns(
-        metrics: List[Dict[str, Any]],
+        metrics: list[dict[str, Any]],
         dimension_keys,
-        raw: List[Tuple[str, str]],
-        physical_columns: Set[Tuple[str, str]],
+        raw: list[tuple[str, str]],
+        physical_columns: set[tuple[str, str]],
     ) -> None:
         """已建模表上未被任何维度/指标引用的物理列，按首列 + 总列数记一条问题。"""
         referenced = set(dimension_keys)
@@ -376,11 +376,11 @@ class SemanticQualityChecker:
 
     def _check_consistency(
         self,
-        config: Dict[str, Any],
-        metrics: List[Dict[str, Any]],
-        dimensions: List[Dict[str, Any]],
-        relationships: List[Dict[str, Any]],
-        raw: List[Tuple[str, str]],
+        config: dict[str, Any],
+        metrics: list[dict[str, Any]],
+        dimensions: list[dict[str, Any]],
+        relationships: list[dict[str, Any]],
+        raw: list[tuple[str, str]],
     ) -> None:
         """一致性检查：重名、名称白名单、重复表达式、关系自环/重复/未引用表/键覆盖、关系环。
 
@@ -406,9 +406,9 @@ class SemanticQualityChecker:
 
     @staticmethod
     def _collect_duplicate_names(
-        metrics: List[Dict[str, Any]],
-        dimensions: List[Dict[str, Any]],
-        raw: List[Tuple[str, str]],
+        metrics: list[dict[str, Any]],
+        dimensions: list[dict[str, Any]],
+        raw: list[tuple[str, str]],
     ) -> None:
         """指标内 / 维度内各自查重名（对齐 Ossie 唯一名检查的 namespace 口径）。
 
@@ -428,9 +428,9 @@ class SemanticQualityChecker:
 
     @staticmethod
     def _collect_name_chars(
-        metrics: List[Dict[str, Any]],
-        dimensions: List[Dict[str, Any]],
-        raw: List[Tuple[str, str]],
+        metrics: list[dict[str, Any]],
+        dimensions: list[dict[str, Any]],
+        raw: list[tuple[str, str]],
     ) -> None:
         """名称白名单检查（warning 提示，不阻断）：仅允许中文/英文/数字/下划线。
 
@@ -445,9 +445,9 @@ class SemanticQualityChecker:
                     raw.append(("CON_NAME_CHARS", f"{label}:{name}"))
 
     @staticmethod
-    def _collect_table_raw_keys(table: Dict[str, Any]) -> List[Any]:
+    def _collect_table_raw_keys(table: dict[str, Any]) -> list[Any]:
         """收集单表声明的原始键定义：primary_keys + unique_indexes + manual_indexes。"""
-        raw_keys: List[Any] = list(table.get("primary_keys") or [])
+        raw_keys: list[Any] = list(table.get("primary_keys") or [])
         for item in table.get("unique_indexes") or []:
             raw_keys.append(item.get("columns") if isinstance(item, dict) else None)
         for item in table.get("manual_indexes") or []:
@@ -456,7 +456,7 @@ class SemanticQualityChecker:
         return raw_keys
 
     @staticmethod
-    def _declared_table_keys(config: Dict[str, Any]) -> Dict[str, List[Set[str]]]:
+    def _declared_table_keys(config: dict[str, Any]) -> dict[str, list[set[str]]]:
         """从 config.tables 收集每张表声明的主键/唯一键列集合（表名/列名 casefold）。
 
         键来源与 chat_data_ossie_converter._dataset_keys 同一版图：
@@ -464,7 +464,7 @@ class SemanticQualityChecker:
         表没有任何声明键时不出现在结果里，调用方据此跳过——键声明是可选元数据，
         缺失不算问题（与 Ossie validate.py 对 undeclared keys 的处理一致）。
         """
-        declared: Dict[str, List[Set[str]]] = {}
+        declared: dict[str, list[set[str]]] = {}
         for table in config.get("tables") or []:
             if not isinstance(table, dict):
                 continue
@@ -477,9 +477,9 @@ class SemanticQualityChecker:
         return declared
 
     @staticmethod
-    def _normalize_table_keys(raw_keys: List[Any]) -> List[Set[str]]:
+    def _normalize_table_keys(raw_keys: list[Any]) -> list[set[str]]:
         """把原始键定义规范化为去重后的列名集合列表（列名 casefold，空列剔除）。"""
-        keys: List[Set[str]] = []
+        keys: list[set[str]] = []
         for value in raw_keys:
             columns = {
                 str(column).strip().casefold()
@@ -492,9 +492,9 @@ class SemanticQualityChecker:
 
     @staticmethod
     def _check_relationship_key_coverage(
-        relationships: List[Dict[str, Any]],
-        raw: List[Tuple[str, str]],
-        declared_keys: Dict[str, List[Set[str]]],
+        relationships: list[dict[str, Any]],
+        raw: list[tuple[str, str]],
+        declared_keys: dict[str, list[set[str]]],
     ) -> None:
         """one 端（right_table，按平台约定 left=多端/right=一端）的 join 列应覆盖
         该表某条声明键。对齐 Ossie validate.py 的 to_columns/声明键覆盖检查：
@@ -521,11 +521,11 @@ class SemanticQualityChecker:
 
     @staticmethod
     def _collect_duplicate_expressions(
-        metrics: List[Dict[str, Any]],
-        raw: List[Tuple[str, str]],
-    ) -> Dict[str, str]:
+        metrics: list[dict[str, Any]],
+        raw: list[tuple[str, str]],
+    ) -> dict[str, str]:
         """统计重复的 expression（跳过派生/复合与空表达式），返回 expression -> 首个指标名。"""
-        owner: Dict[str, str] = {}
+        owner: dict[str, str] = {}
         for metric in metrics:
             if metric.get("metric_kind"):
                 continue
@@ -541,11 +541,11 @@ class SemanticQualityChecker:
 
     @staticmethod
     def _add_relationship_edge(
-        relationship: Dict[str, Any],
-        modeled_tables: Set[str],
-        raw: List[Tuple[str, str]],
-        seen_pairs: Dict[Tuple[str, str, str], int],
-        edges: Dict[str, Set[str]],
+        relationship: dict[str, Any],
+        modeled_tables: set[str],
+        raw: list[tuple[str, str]],
+        seen_pairs: dict[tuple[str, str, str], int],
+        edges: dict[str, set[str]],
     ) -> None:
         """累计单条关系的 (left, right, columns) 计数并构建无向边邻接表；同时记录自环与未建模表。"""
         left = _clean(relationship.get("left_table"))
@@ -573,22 +573,22 @@ class SemanticQualityChecker:
 
     @staticmethod
     def _collect_relationship_edges(
-        relationships: List[Dict[str, Any]],
-        modeled_tables: Set[str],
-        raw: List[Tuple[str, str]],
-    ) -> Tuple[Dict[Tuple[str, str, str], int], Dict[str, Set[str]]]:
+        relationships: list[dict[str, Any]],
+        modeled_tables: set[str],
+        raw: list[tuple[str, str]],
+    ) -> tuple[dict[tuple[str, str, str], int], dict[str, set[str]]]:
         """累计关系 (left, right, columns) 计数并构建无向边邻接表。
 
         同时记录自环与未被建模的表；两侧表名为空时不参与边与表引用校验。
         """
-        seen_pairs: Dict[Tuple[str, str, str], int] = {}
-        edges: Dict[str, Set[str]] = {}
+        seen_pairs: dict[tuple[str, str, str], int] = {}
+        edges: dict[str, set[str]] = {}
         for relationship in relationships:
             SemanticQualityChecker._add_relationship_edge(relationship, modeled_tables, raw, seen_pairs, edges)
         return seen_pairs, edges
 
     @staticmethod
-    def _find_cycle(edges: Dict[str, Set[str]]) -> List[str]:
+    def _find_cycle(edges: dict[str, set[str]]) -> list[str]:
         """无向图找一条环路径（表关系方向不构成 DAG 语义，按连通环判定）。"""
         for start in sorted(edges):
             path = [start]
@@ -599,7 +599,7 @@ class SemanticQualityChecker:
 
     @staticmethod
     def _dfs(
-        node: str, start: str, parent: Optional[str], edges: Dict[str, Set[str]], visited: Set[str], path: List[str]
+        node: str, start: str, parent: str | None, edges: dict[str, set[str]], visited: set[str], path: list[str]
     ) -> bool:
         for neighbor in sorted(edges.get(node, set())):
             if neighbor == parent:
@@ -618,10 +618,10 @@ class SemanticQualityChecker:
 
     def _check_documentation(
         self,
-        config: Dict[str, Any],
-        metrics: List[Dict[str, Any]],
-        dimensions: List[Dict[str, Any]],
-        raw: List[Tuple[str, str]],
+        config: dict[str, Any],
+        metrics: list[dict[str, Any]],
+        dimensions: list[dict[str, Any]],
+        raw: list[tuple[str, str]],
     ) -> None:
         for metric in metrics:
             if not str(metric.get("description") or "").strip():
@@ -634,11 +634,11 @@ class SemanticQualityChecker:
 
     # ---- 聚合与统计 ----
 
-    def _aggregate(self, raw: List[Tuple[str, str]]) -> List[QualityFinding]:
-        grouped: Dict[str, List[str]] = {}
+    def _aggregate(self, raw: list[tuple[str, str]]) -> list[QualityFinding]:
+        grouped: dict[str, list[str]] = {}
         for code, target in raw:
             grouped.setdefault(code, []).append(target)
-        findings: List[QualityFinding] = []
+        findings: list[QualityFinding] = []
         # 按 category -> severity 稳定排序，报告可读性优先；structure 是阻断级门槛排最前
         category_order = {
             name: index
@@ -665,8 +665,8 @@ class SemanticQualityChecker:
         return findings
 
     def _stats(
-        self, metrics: List[Dict[str, Any]], dimensions: List[Dict[str, Any]], relationships: List[Dict[str, Any]]
-    ) -> Dict[str, Any]:
+        self, metrics: list[dict[str, Any]], dimensions: list[dict[str, Any]], relationships: list[dict[str, Any]]
+    ) -> dict[str, Any]:
         atomic = sum(1 for metric in metrics if not metric.get("metric_kind"))
         derived = sum(1 for metric in metrics if metric.get("metric_kind") == "derived")
         composite = sum(1 for metric in metrics if metric.get("metric_kind") == "composite")
@@ -684,7 +684,7 @@ class SemanticQualityChecker:
         }
 
 
-def _normalize_metric_expression(metric: Dict[str, Any]) -> str:
+def _normalize_metric_expression(metric: dict[str, Any]) -> str:
     """原子指标表达式的跨模型归一化形式：去全部空白、大写。
 
     比单模型查重（仅压空白）更严：跨模型同名异式是 error 级结论，
@@ -694,8 +694,8 @@ def _normalize_metric_expression(metric: Dict[str, Any]) -> str:
 
 
 def _add_config_metric_owners(
-    config: Dict[str, Any],
-    name_owners: Dict[str, Dict[str, str]],
+    config: dict[str, Any],
+    name_owners: dict[str, dict[str, str]],
 ) -> None:
     """把单个配置的原子指标写入归属索引（派生/复合与空名/空表达式跳过）。"""
     model_name = str(config.get("name") or "").strip()
@@ -712,9 +712,9 @@ def _add_config_metric_owners(
         name_owners.setdefault(name, {}).setdefault(model_name, expression)
 
 
-def _collect_metric_owners(configs: List[Dict[str, Any]]) -> Dict[str, Dict[str, str]]:
+def _collect_metric_owners(configs: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
     """扫描各配置的原子指标，构建 指标名->模型->表达式 归属索引。"""
-    name_owners: Dict[str, Dict[str, str]] = {}
+    name_owners: dict[str, dict[str, str]] = {}
     for config in configs:
         if not isinstance(config, dict):
             continue
@@ -722,15 +722,15 @@ def _collect_metric_owners(configs: List[Dict[str, Any]]) -> Dict[str, Dict[str,
     return name_owners
 
 
-def _involves_focus(owners: Dict[str, str], focus_config_name: Optional[str]) -> bool:
+def _involves_focus(owners: dict[str, str], focus_config_name: str | None) -> bool:
     """该冲突组是否与 focus 模型相关；未指定 focus 时全量报告。"""
     return focus_config_name is None or focus_config_name in owners
 
 
 def _append_cross_name_findings(
-    name_owners: Dict[str, Dict[str, str]],
-    focus_config_name: Optional[str],
-    raw: List[Tuple[str, str]],
+    name_owners: dict[str, dict[str, str]],
+    focus_config_name: str | None,
+    raw: list[tuple[str, str]],
 ) -> None:
     """同名指标跨模型两组规则：表达式一致记重复定义，不一致记口径冲突。"""
     for name, owners in name_owners.items():
@@ -744,10 +744,10 @@ def _append_cross_name_findings(
 
 
 def check_cross_model_metrics(
-    configs: List[Dict[str, Any]],
+    configs: list[dict[str, Any]],
     *,
-    focus_config_name: Optional[str] = None,
-) -> List[Dict[str, Any]]:
+    focus_config_name: str | None = None,
+) -> list[dict[str, Any]]:
     """跨模型指标口径检查：只判同名指标，比较域为组内多个模型的原子指标之间。
 
     与单模型 check_config 互补的第二层校验——单模型层保证「模型内部自洽」，
@@ -768,7 +768,7 @@ def check_cross_model_metrics(
     单模型 findings；本函数不参与任何评分。
     """
     name_owners = _collect_metric_owners(configs)
-    raw: List[Tuple[str, str]] = []
+    raw: list[tuple[str, str]] = []
     _append_cross_name_findings(name_owners, focus_config_name, raw)
     if not raw:
         return []
@@ -802,12 +802,12 @@ _STRUCTURE_RULE_ORDER = (
 
 
 def first_structure_error(
-    metrics: List[Dict[str, Any]],
-    dimensions: List[Dict[str, Any]],
-    relationships: List[Dict[str, Any]],
+    metrics: list[dict[str, Any]],
+    dimensions: list[dict[str, Any]],
+    relationships: list[dict[str, Any]],
     *,
-    table_columns_map: Optional[Dict[str, Set[str]]] = None,
-) -> Optional[str]:
+    table_columns_map: dict[str, set[str]] | None = None,
+) -> str | None:
     """保存/导入前的结构硬门槛薄壳：跑 check_config，返回第一条结构错误句子。
 
     判定与文案单点在 core/config_validator 编排函数（由 _check_structure 复用），

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime
-from typing import Callable, List, Optional
 
 from sqlalchemy import select
 from sqlalchemy import update as sa_update
@@ -15,7 +15,7 @@ from utils.models import UploadedFile, UserThread
 class UploadedFileDao:
     """封装上传文件表读写。"""
 
-    def __init__(self, session_context: Optional[Callable] = None):
+    def __init__(self, session_context: Callable | None = None):
         self._session_context = session_context or default_get_session
 
     async def thread_belongs_to_user(self, thread_id: str, *, user_id: str) -> bool:
@@ -55,7 +55,7 @@ class UploadedFileDao:
             await session.flush()
             return uploaded_file
 
-    async def get_file(self, file_id: str, *, user_id: str) -> Optional[UploadedFile]:
+    async def get_file(self, file_id: str, *, user_id: str) -> UploadedFile | None:
         async with self._session_context() as session:
             result = await session.execute(
                 select(UploadedFile)
@@ -92,7 +92,7 @@ class UploadedFileDao:
         file_id: str,
         status: str,
         user_id: str,
-        parse_filename: Optional[str] = None,
+        parse_filename: str | None = None,
     ) -> None:
         values = {"parse_status": status, "update_time": datetime.now()}
         if parse_filename is not None:
@@ -119,7 +119,7 @@ class UploadedFileDao:
         *,
         user_id: str,
         ascending: bool = False,
-    ) -> List[UploadedFile]:
+    ) -> list[UploadedFile]:
         order_by = UploadedFile.create_time.asc() if ascending else UploadedFile.create_time.desc()
         async with self._session_context() as session:
             result = await session.execute(

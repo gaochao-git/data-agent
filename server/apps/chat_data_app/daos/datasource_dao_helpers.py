@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import threading
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from utils.logger import get_logger
 
@@ -28,7 +28,7 @@ def _warn_parse_once(message: str, text: str) -> None:
     logger.warning(message, text)
 
 
-def _format_time(value: Any) -> Optional[str]:
+def _format_time(value: Any) -> str | None:
     if value is None:
         return None
     if isinstance(value, datetime):
@@ -55,8 +55,8 @@ def _load_json(value: Any, default: Any) -> Any:
     return default
 
 
-def _unique_non_empty_texts(values: List[Any]) -> List[str]:
-    result: List[str] = []
+def _unique_non_empty_texts(values: list[Any]) -> list[str]:
+    result: list[str] = []
     for value in values or []:
         text = str(value or "").strip()
         if text and text not in result:
@@ -64,9 +64,9 @@ def _unique_non_empty_texts(values: List[Any]) -> List[str]:
     return result
 
 
-def _normalize_column_enum_values(raw_enums: Any) -> List[Dict[str, str]]:
+def _normalize_column_enum_values(raw_enums: Any) -> list[dict[str, str]]:
     """标准化枚举值列表（最多 100 个，按 value 去重）。"""
-    enum_values: List[Dict[str, str]] = []
+    enum_values: list[dict[str, str]] = []
     if not isinstance(raw_enums, list):
         return enum_values
     seen_values: set[str] = set()
@@ -88,9 +88,9 @@ def _normalize_column_enum_values(raw_enums: Any) -> List[Dict[str, str]]:
     return enum_values
 
 
-def _normalize_column_synonyms(raw_synonyms: Any) -> List[str]:
+def _normalize_column_synonyms(raw_synonyms: Any) -> list[str]:
     """标准化同义词列表（最多 50 个，去重）。"""
-    synonyms: List[str] = []
+    synonyms: list[str] = []
     if not isinstance(raw_synonyms, list):
         return synonyms
     seen_synonyms: set[str] = set()
@@ -105,7 +105,7 @@ def _normalize_column_synonyms(raw_synonyms: Any) -> List[str]:
     return synonyms
 
 
-def _normalize_column_dict(raw_dict: Dict[str, Any] | None) -> Dict[str, Any]:
+def _normalize_column_dict(raw_dict: dict[str, Any] | None) -> dict[str, Any]:
     """标准化字段数据字典内容。"""
     payload = raw_dict if isinstance(raw_dict, dict) else {}
     return {
@@ -116,7 +116,7 @@ def _normalize_column_dict(raw_dict: Dict[str, Any] | None) -> Dict[str, Any]:
     }
 
 
-def _column_dict_is_empty(payload: Dict[str, Any]) -> bool:
+def _column_dict_is_empty(payload: dict[str, Any]) -> bool:
     """判断字段数据字典是否为空。"""
     normalized = _normalize_column_dict(payload)
     return (
@@ -127,7 +127,7 @@ def _column_dict_is_empty(payload: Dict[str, Any]) -> bool:
     )
 
 
-def _normalize_table_index_item(raw_item: Any) -> Optional[Dict[str, Any]]:
+def _normalize_table_index_item(raw_item: Any) -> dict[str, Any] | None:
     """Normalize a single persisted table index; return None for invalid items."""
     if not isinstance(raw_item, dict):
         return None
@@ -148,11 +148,11 @@ def _normalize_table_index_item(raw_item: Any) -> Optional[Dict[str, Any]]:
     }
 
 
-def _normalize_table_index_items(items: Any) -> List[Dict[str, Any]]:
+def _normalize_table_index_items(items: Any) -> list[dict[str, Any]]:
     """Normalize persisted table indexes without inventing missing metadata."""
     if not isinstance(items, list):
         return []
-    result: List[Dict[str, Any]] = []
+    result: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
     for raw_item in items:
         item = _normalize_table_index_item(raw_item)
@@ -167,7 +167,7 @@ def _normalize_table_index_items(items: Any) -> List[Dict[str, Any]]:
     return result
 
 
-def _legacy_physical_indexes(columns: Any) -> List[Dict[str, Any]]:
+def _legacy_physical_indexes(columns: Any) -> list[dict[str, Any]]:
     """Best-effort fallback for rows written before indexes_json existed."""
     if not isinstance(columns, list):
         return []
@@ -176,7 +176,7 @@ def _legacy_physical_indexes(columns: Any) -> List[Dict[str, Any]]:
         for column in columns
         if isinstance(column, dict) and column.get("primary_key") and str(column.get("name") or "").strip()
     ]
-    result: List[Dict[str, Any]] = []
+    result: list[dict[str, Any]] = []
     if primary_columns:
         result.append({"index_type": "primary", "index_name": "PRIMARY", "columns": primary_columns})
     for column in columns:
@@ -192,7 +192,7 @@ def _legacy_physical_indexes(columns: Any) -> List[Dict[str, Any]]:
     return result
 
 
-def _normalize_table_indexes_payload(raw_payload: Any, columns: Any = None) -> Dict[str, List[Dict[str, Any]]]:
+def _normalize_table_indexes_payload(raw_payload: Any, columns: Any = None) -> dict[str, list[dict[str, Any]]]:
     """Return the canonical {physical, manual} indexes_json payload."""
     payload = _load_json(raw_payload, None)
     if not isinstance(payload, dict):
@@ -206,7 +206,7 @@ def _normalize_table_indexes_payload(raw_payload: Any, columns: Any = None) -> D
     }
 
 
-def _physical_index_entry(item: Any, index_type: str) -> Dict[str, Any]:
+def _physical_index_entry(item: Any, index_type: str) -> dict[str, Any]:
     """把 unique/secondary 索引条目转换为统一结构，非 dict 条目按空名处理。"""
     if isinstance(item, dict):
         return {
@@ -217,8 +217,8 @@ def _physical_index_entry(item: Any, index_type: str) -> Dict[str, Any]:
     return {"index_type": index_type, "index_name": "", "columns": []}
 
 
-def _physical_indexes_from_table(table: Dict[str, Any]) -> List[Dict[str, Any]]:
-    result: List[Dict[str, Any]] = []
+def _physical_indexes_from_table(table: dict[str, Any]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
     for columns in table.get("primary_keys") or []:
         result.append({"index_type": "primary", "index_name": "PRIMARY", "columns": columns})
     for item in table.get("unique_indexes") or []:
@@ -228,7 +228,7 @@ def _physical_indexes_from_table(table: Dict[str, Any]) -> List[Dict[str, Any]]:
     return _normalize_table_index_items(result)
 
 
-def _merge_table_indexes_for_sync(table: Dict[str, Any], existing_payload: Any) -> Dict[str, List[Dict[str, Any]]]:
+def _merge_table_indexes_for_sync(table: dict[str, Any], existing_payload: Any) -> dict[str, list[dict[str, Any]]]:
     """Refresh physical metadata while retaining user-maintained indexes."""
     existing = _normalize_table_indexes_payload(existing_payload, table.get("columns"))
     has_physical_metadata = any(key in table for key in ("primary_keys", "unique_indexes", "indexes"))
@@ -236,7 +236,7 @@ def _merge_table_indexes_for_sync(table: Dict[str, Any], existing_payload: Any) 
     return {"physical": physical, "manual": existing["manual"]}
 
 
-def _batch_items(items: List[Dict[str, Any]], batch_size: int = UPSERT_BATCH_SIZE) -> List[List[Dict[str, Any]]]:
+def _batch_items(items: list[dict[str, Any]], batch_size: int = UPSERT_BATCH_SIZE) -> list[list[dict[str, Any]]]:
     return [items[index : index + batch_size] for index in range(0, len(items), batch_size)]
 
 
@@ -249,12 +249,12 @@ def _build_source_line(host: Any, port: Any, database: Any) -> str | None:
     return f"{normalized_host}:{normalized_port}:{normalized_database}"
 
 
-def _normalized_source_config_field(source_config: Dict[str, Any] | None, key: str) -> str:
+def _normalized_source_config_field(source_config: dict[str, Any] | None, key: str) -> str:
     """读取 source_config 字段并归一化为去除首尾空白的字符串。"""
     return str((source_config or {}).get(key) or "").strip()
 
 
-def _build_member_source_text_line(source_config: Dict[str, Any] | None) -> str | None:
+def _build_member_source_text_line(source_config: dict[str, Any] | None) -> str | None:
     org_name = _normalized_source_config_field(source_config, "org_name")
     org_code = _normalized_source_config_field(source_config, "org_code")
     if not org_name or not org_code:
@@ -288,7 +288,7 @@ def _normalize_query_executor_type_for_parse(source_type: Any, query_executor_ty
     return normalized_query_executor_type
 
 
-def _parse_source_line(source_line: Any) -> Optional[Dict[str, Any]]:
+def _parse_source_line(source_line: Any) -> dict[str, Any] | None:
     text = str(source_line or "").strip()
     if not text:
         return None
@@ -314,7 +314,7 @@ def _parse_source_line(source_line: Any) -> Optional[Dict[str, Any]]:
     }
 
 
-def _parse_member_source_entry(raw_line: Any, source_type: Any, query_executor_type: Any) -> Optional[Dict[str, Any]]:
+def _parse_member_source_entry(raw_line: Any, source_type: Any, query_executor_type: Any) -> dict[str, Any] | None:
     text = str(raw_line or "").strip()
     if not text:
         return None
@@ -346,7 +346,7 @@ def _parse_member_source_entry(raw_line: Any, source_type: Any, query_executor_t
     return parsed
 
 
-def _split_member_source_fields(text: str) -> Optional[tuple[str, str, str, str]]:
+def _split_member_source_fields(text: str) -> tuple[str, str, str, str] | None:
     """校验并拆分「机构名称|机构编码|执行方式|源描述」四段格式。"""
     parts = [part.strip() for part in text.split("|")]
     if len(parts) != 4:
@@ -368,7 +368,7 @@ def _split_member_source_fields(text: str) -> Optional[tuple[str, str, str, str]
     return org_name, org_code, executor_type, source_text
 
 
-def _parse_http_member_source(source_text: str, raw_text: str) -> Optional[Dict[str, Any]]:
+def _parse_http_member_source(source_text: str, raw_text: str) -> dict[str, Any] | None:
     """解析 HTTP 成员的数据库名，兼容旧版 ip:port:db_name 格式。"""
     database = source_text
     parsed_legacy_source = _parse_source_line(source_text) if ":" in source_text else None
@@ -390,10 +390,10 @@ def _parse_member_source_entries(
     template_source: Any,
     source_type: Any,
     query_executor_type: Any,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     template_line = str(template_source or "").strip()
     seen: set[str] = set()
-    parsed_entries: List[Dict[str, Any]] = []
+    parsed_entries: list[dict[str, Any]] = []
 
     for raw_line in str(member_sources_text or "").splitlines():
         entry = _parse_member_source_entry(raw_line, source_type, query_executor_type)
@@ -406,7 +406,7 @@ def _parse_member_source_entries(
         parsed_entries.append(entry)
 
     template_entry = _resolve_template_entry(parsed_entries, template_line, seen, source_type, query_executor_type)
-    result: List[Dict[str, Any]] = []
+    result: list[dict[str, Any]] = []
     if template_entry is not None:
         result.append(template_entry)
     result.extend(
@@ -416,14 +416,14 @@ def _parse_member_source_entries(
 
 
 def _resolve_template_entry(
-    parsed_entries: List[Dict[str, Any]],
+    parsed_entries: list[dict[str, Any]],
     template_line: str,
     seen: set[str],
     source_type: Any,
     query_executor_type: Any,
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """确定模板成员条目：优先匹配行文本，其次解析模板行，最后取首个条目。"""
-    template_entry: Optional[Dict[str, Any]] = None
+    template_entry: dict[str, Any] | None = None
     if template_line:
         template_entry = next(
             (
@@ -444,7 +444,7 @@ def _resolve_template_entry(
 
 def _parse_member_sources_text(
     member_sources_text: Any, template_source: Any, source_type: Any, query_executor_type: Any
-) -> List[str]:
+) -> list[str]:
     return [
         item["datasource_id"]
         for item in _parse_member_source_entries(member_sources_text, template_source, source_type, query_executor_type)

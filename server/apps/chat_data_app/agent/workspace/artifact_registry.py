@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import PurePosixPath
-from typing import Any, Callable
+from typing import Any
 
 from ...chart_types import (
     chart_type_max_y_fields,

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from contextlib import asynccontextmanager
-from typing import Any, Dict, Optional
+from typing import Any
 
 from utils.crypto import decrypt_password
 from utils.logger import get_logger
@@ -34,7 +34,7 @@ def get_http_auth_token() -> str:
     return _get_env_password("CHAT_DATA_HTTP_AUTH_TOKEN") or ""
 
 
-def build_http_auth_headers(auth_token: str) -> Dict[str, str]:
+def build_http_auth_headers(auth_token: str) -> dict[str, str]:
     """构造外部 HTTP 接口统一请求头。
 
     token 由调用方传入（调用方模块级解析、可测试 patch），本函数只负责组装。
@@ -46,10 +46,10 @@ def build_http_auth_headers(auth_token: str) -> Dict[str, str]:
 
 
 def add_http_user_params(
-    payload: Dict[str, Any],
+    payload: dict[str, Any],
     user_id: str | None = None,
     username: str | None = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """补充外部 HTTP 接口统一用户参数（仅边界层使用对方要求的驼峰命名）。"""
     normalized_user_id = str(user_id or "").strip()
     normalized_username = str(username or "").strip()
@@ -61,7 +61,7 @@ def add_http_user_params(
 
 
 @asynccontextmanager
-async def open_http_client(*, timeout_seconds: float, headers: Optional[Dict[str, str]] = None):
+async def open_http_client(*, timeout_seconds: float, headers: dict[str, str] | None = None):
     """统一构造外部 HTTP AsyncClient，TLS 校验口径单点。
 
     headers 由调用方传入（各调用方模块的 token 解析保留模块级测试 patch seam）；
@@ -114,7 +114,7 @@ def apply_hive_socket_timeout(transport: Any, timeout_seconds: int) -> None:
         _apply_timeout_to_node(current, timeout_ms, timeout_seconds, visited, stack)
 
 
-def sanitize_source_config(source_config: Dict[str, Any] | None) -> Dict[str, Any]:
+def sanitize_source_config(source_config: dict[str, Any] | None) -> dict[str, Any]:
     """移除不应落盘的账号密码字段。"""
     result = dict(source_config or {})
     result.pop("user", None)
@@ -123,7 +123,7 @@ def sanitize_source_config(source_config: Dict[str, Any] | None) -> Dict[str, An
     return result
 
 
-def resolve_mysql_credentials(source_config: Dict[str, Any] | None = None) -> Dict[str, str]:
+def resolve_mysql_credentials(source_config: dict[str, Any] | None = None) -> dict[str, str]:
     """获取 MySQL 统一连接凭证。"""
     user = _get_env_value("CHAT_DATA_MYSQL_USER")
     password = _get_env_password("CHAT_DATA_MYSQL_PASSWORD")
@@ -134,14 +134,14 @@ def resolve_mysql_credentials(source_config: Dict[str, Any] | None = None) -> Di
     return {"user": user, "password": password}
 
 
-def resolve_hive_credentials(source_config: Dict[str, Any] | None = None) -> Dict[str, str]:
+def resolve_hive_credentials(source_config: dict[str, Any] | None = None) -> dict[str, str]:
     """获取 Hive 统一连接凭证，免认证 Hive 可返回空凭证。"""
     username = _get_env_value("CHAT_DATA_HIVE_USER")
     password = _get_env_password("CHAT_DATA_HIVE_PASSWORD")
     if password and not username:
         raise ValueError("缺少 Hive 统一连接账号配置: CHAT_DATA_HIVE_USER")
 
-    result: Dict[str, str] = {}
+    result: dict[str, str] = {}
     if username:
         result["username"] = username
     if password:
@@ -152,11 +152,11 @@ def resolve_hive_credentials(source_config: Dict[str, Any] | None = None) -> Dic
 def resolve_execution_source_config(
     source_type: str,
     query_executor_type: str,
-    source_config: Dict[str, Any] | None,
+    source_config: dict[str, Any] | None,
     *,
     org_code: str = "",
     org_name: str = "",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """构造执行器使用的完整配置，统一处理身份与服务端凭据。"""
     normalized_source_type = str(source_type or "").strip().lower()
     normalized_executor_type = str(query_executor_type or "direct").strip().lower() or "direct"
@@ -173,7 +173,7 @@ def resolve_execution_source_config(
     return resolved
 
 
-def _apply_http_source_identity(resolved: Dict[str, Any], *, org_code: str, org_name: str) -> None:
+def _apply_http_source_identity(resolved: dict[str, Any], *, org_code: str, org_name: str) -> None:
     """HTTP 执行：身份参数优先于配置内取值，机构编码必填。"""
     resolved_org_code = str(org_code or resolved.get("org_code") or "").strip()
     if not resolved_org_code:
@@ -182,7 +182,7 @@ def _apply_http_source_identity(resolved: Dict[str, Any], *, org_code: str, org_
     resolved["org_name"] = str(org_name or resolved.get("org_name") or "").strip()
 
 
-def _apply_direct_source_credentials(normalized_source_type: str, resolved: Dict[str, Any]) -> None:
+def _apply_direct_source_credentials(normalized_source_type: str, resolved: dict[str, Any]) -> None:
     """直连执行：凭据不完整时从服务端凭据通道补齐。"""
     if normalized_source_type == "mysql":
         if not resolved.get("user") or "password" not in resolved:
@@ -198,9 +198,9 @@ def build_hive_connect_params(
     database: str = "default",
     username: str | None = None,
     password: str | None = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """构造 PyHive 连接参数，免认证模式不传空账号密码。"""
-    params: Dict[str, Any] = {
+    params: dict[str, Any] = {
         "host": host,
         "port": port,
         "database": database,

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Iterable
 from datetime import datetime
-from typing import Any, Iterable
+from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 

@@ -7,7 +7,7 @@ LLM JSON 响应解析工具
 import json
 import logging
 import re
-from typing import Any, Dict, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +18,7 @@ class JSONParseError(Exception):
     pass
 
 
-def parse_llm_json(content: str, strict: bool = True) -> Dict[str, Any]:
+def parse_llm_json(content: str, strict: bool = True) -> dict[str, Any]:
     """
     解析 LLM 返回的 JSON 内容
 
@@ -89,7 +89,7 @@ def parse_llm_json(content: str, strict: bool = True) -> Dict[str, Any]:
     return {}
 
 
-def _try_fix_json(content: str) -> Optional[str]:
+def _try_fix_json(content: str) -> str | None:
     """
     尝试修复常见的 JSON 格式问题
 

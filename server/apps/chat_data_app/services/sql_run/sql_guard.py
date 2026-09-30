@@ -14,7 +14,6 @@
 import os
 import re
 from dataclasses import dataclass
-from typing import Optional, Tuple
 
 from sqlglot import exp
 
@@ -65,14 +64,14 @@ class SqlGuardViolation:
     message: str
     internal: bool = False
     syntax_error: bool = False
-    reason_code: Optional[str] = None
+    reason_code: str | None = None
 
 
 def _violation(rule: str, message: str, **kwargs) -> SqlGuardViolation:
     return SqlGuardViolation(rule=rule, message=message, **kwargs)
 
 
-def sql_operation_type(sql: str, source_type: Optional[str] = None) -> str:
+def sql_operation_type(sql: str, source_type: str | None = None) -> str:
     """解析 SQL 命令类型；解析失败返回空串（由单语句规则负责拦截）。"""
     try:
         expressions = _parse_sql(sql, source_type)
@@ -90,7 +89,7 @@ def sql_operation_type(sql: str, source_type: Optional[str] = None) -> str:
     return str(getattr(expression, "key", "") or "").strip().upper()
 
 
-def check_single_statement(sql: str, source_type: Optional[str] = None) -> Optional[SqlGuardViolation]:
+def check_single_statement(sql: str, source_type: str | None = None) -> SqlGuardViolation | None:
     """恰好一条语句；解析失败先分类 INTO 副作用族（安全拦截），否则记为语法错误。"""
     result = validate_raw_single_sql_statement(sql, source_type=source_type)
     if result.success:
@@ -105,8 +104,8 @@ def check_single_statement(sql: str, source_type: Optional[str] = None) -> Optio
 
 
 def check_select_into(
-    sql: str, source_type: Optional[str] = None, max_rows: Optional[int] = None
-) -> Optional[SqlGuardViolation]:
+    sql: str, source_type: str | None = None, max_rows: int | None = None
+) -> SqlGuardViolation | None:
     """SELECT ... INTO OUTFILE/DUMPFILE/@var：写出服务器文件或服务端变量。
 
     sqlglot 对该族语法解析失败，因此基于剥离注释与字面量后的文本识别，
@@ -124,8 +123,8 @@ def check_select_into(
 
 
 def check_command_type(
-    sql: str, source_type: Optional[str] = None, max_rows: Optional[int] = None
-) -> Optional[SqlGuardViolation]:
+    sql: str, source_type: str | None = None, max_rows: int | None = None
+) -> SqlGuardViolation | None:
     """命令类型白名单（默认仅 SELECT，可按部署放开只读命令）。"""
     operation_type = sql_operation_type(sql, source_type)
     if operation_type and operation_type.upper() in ALLOWED_SQL_TYPES:
@@ -138,8 +137,8 @@ def check_command_type(
 
 
 def check_dangerous_functions(
-    sql: str, source_type: Optional[str] = None, max_rows: Optional[int] = None
-) -> Optional[SqlGuardViolation]:
+    sql: str, source_type: str | None = None, max_rows: int | None = None
+) -> SqlGuardViolation | None:
     """高危函数黑名单：LOAD_FILE/SLEEP/BENCHMARK/GET_LOCK/RELEASE_LOCK。"""
     try:
         expressions = _parse_sql(sql, source_type)
@@ -161,8 +160,8 @@ def check_dangerous_functions(
 
 
 def check_locking_reads(
-    sql: str, source_type: Optional[str] = None, max_rows: Optional[int] = None
-) -> Optional[SqlGuardViolation]:
+    sql: str, source_type: str | None = None, max_rows: int | None = None
+) -> SqlGuardViolation | None:
     """锁定读（FOR UPDATE/FOR SHARE）属于写意图，只读链路一律拒绝。"""
     try:
         expressions = _parse_sql(sql, source_type)
@@ -180,8 +179,8 @@ def check_locking_reads(
 
 
 def check_limit_bound(
-    sql: str, source_type: Optional[str] = None, max_rows: Optional[int] = None
-) -> Optional[SqlGuardViolation]:
+    sql: str, source_type: str | None = None, max_rows: int | None = None
+) -> SqlGuardViolation | None:
     """显式 LIMIT 超过系统行数上限：响亮拒绝，不做静默截断。
 
     max_rows 由调用方传入运行时热值；未传时回退导入期兜底值。
@@ -198,8 +197,8 @@ def check_limit_bound(
 
 
 def check_effective_limit_gate(
-    effective_sql: str, source_type: Optional[str] = None, max_rows: Optional[int] = None
-) -> Optional[SqlGuardViolation]:
+    effective_sql: str, source_type: str | None = None, max_rows: int | None = None
+) -> SqlGuardViolation | None:
     """终检门：进入执行的 SELECT 产物必须带合法最外层 LIMIT。
 
     与 check_limit_bound 的差别：LIMIT 缺失在这里是违规（补全阶段应已写入；
@@ -227,11 +226,11 @@ _GUARD_RULES = (
 
 def run_sql_guard(
     sql: str,
-    source_type: Optional[str] = None,
-    max_rows: Optional[int] = None,
+    source_type: str | None = None,
+    max_rows: int | None = None,
     *,
     defer_syntax_error: bool = False,
-) -> Optional[SqlGuardViolation]:
+) -> SqlGuardViolation | None:
     """按序执行全部规则，首个违规即返回；全部通过返回 None。
 
     max_rows 为行数上限热值（调用方从配置变量表解析后传入；未传回退兜底值）。
@@ -250,7 +249,7 @@ def run_sql_guard(
     return None
 
 
-def validate_sql(sql: str, source_type: Optional[str] = None) -> Tuple[bool, str]:
+def validate_sql(sql: str, source_type: str | None = None) -> tuple[bool, str]:
     """历史兼容门面：(is_valid, error_message) 二元组形式执行全部规则。"""
     violation = run_sql_guard(sql, source_type=source_type)
     if violation is not None:
@@ -258,9 +257,7 @@ def validate_sql(sql: str, source_type: Optional[str] = None) -> Tuple[bool, str
     return True, ""
 
 
-def _consume_guard_literal_quote(
-    sql: str, i: int, in_quote: Optional[str], result: list[str]
-) -> tuple[int, Optional[str]]:
+def _consume_guard_literal_quote(sql: str, i: int, in_quote: str | None, result: list[str]) -> tuple[int, str | None]:
     """处理 _text_without_literals 引号内字符，返回 (新索引, 引号状态)。"""
     char = sql[i]
     next_char = sql[i + 1] if i + 1 < len(sql) else ""
@@ -277,7 +274,7 @@ def _consume_guard_literal_quote(
 def _text_without_literals(sql: str) -> str:
     """剥离字符串/标识符字面量，保留 SQL 结构，供注释后文本做关键词判定。"""
     result: list[str] = []
-    in_quote: Optional[str] = None
+    in_quote: str | None = None
     i = 0
     n = len(sql)
     while i < n:

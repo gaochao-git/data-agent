@@ -304,7 +304,7 @@ class SandboxWorkspaceBackend:
         if session is None:
             raise ValueError("OpenSandbox 执行环境未准备")
         async with session.operation_lock:
-            inner = "cd {cwd} && {command}".format(cwd=shlex.quote(sandbox_cwd), command=command)
+            inner = f"cd {shlex.quote(sandbox_cwd)} && {command}"
             exit_code, stdout, stderr = await run_command_in_sandbox(
                 session=session,
                 command=f"bash -o pipefail -lc {shlex.quote(inner)}",

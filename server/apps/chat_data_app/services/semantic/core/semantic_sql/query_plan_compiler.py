@@ -2,7 +2,7 @@
 
 import re
 from contextvars import ContextVar
-from typing import Any, Dict, List, NamedTuple, Optional, Tuple
+from typing import Any, NamedTuple
 
 from . import filter_compiler
 from .dialect import get_dialect
@@ -99,7 +99,7 @@ SQL_SAFE_FUNCTIONS = {
 }
 
 
-_DIALECT_CONTEXT: ContextVar[Optional[str]] = ContextVar(
+_DIALECT_CONTEXT: ContextVar[str | None] = ContextVar(
     "semantic_builder_sql_dialect",
     default=None,
 )
@@ -141,7 +141,7 @@ def _is_sql_function(value: Any) -> bool:
     return filter_compiler._is_sql_function(value, SQL_SAFE_FUNCTIONS)
 
 
-def _unwrap_quoted_function(value: str) -> Optional[str]:
+def _unwrap_quoted_function(value: str) -> str | None:
     text = (value or "").strip()
     if len(text) < 3 or text[0] not in "'\"" or text[-1] != text[0]:
         return None
@@ -152,11 +152,11 @@ def _sql_literal(value: Any, value_type: Any = None) -> str:
     return filter_compiler._sql_literal(value, value_type, SQL_SAFE_FUNCTIONS)
 
 
-def _value_type_for_index(value_type: Any, idx: int) -> Optional[str]:
+def _value_type_for_index(value_type: Any, idx: int) -> str | None:
     return filter_compiler._value_type_for_index(value_type, idx)
 
 
-def _normalize_filter_value_type(value_type: Any) -> Optional[str]:
+def _normalize_filter_value_type(value_type: Any) -> str | None:
     if not isinstance(value_type, str):
         return None
     normalized = value_type.strip().lower()
@@ -175,11 +175,11 @@ def _is_qualified_column_expr(expr: str) -> bool:
     return bool(re.match(r"^`?[\w\u4e00-\u9fa5]+`?\.`?[\w\u4e00-\u9fa5]+`?$", expr or ""))
 
 
-def _is_filter_tree_node(node: Dict[str, Any]) -> bool:
+def _is_filter_tree_node(node: dict[str, Any]) -> bool:
     return isinstance(node, dict) and ("and" in node or "or" in node)
 
 
-def _get_filter_tree_scope(node: Dict[str, Any]) -> Optional[str]:
+def _get_filter_tree_scope(node: dict[str, Any]) -> str | None:
     if not isinstance(node, dict):
         return None
     if _is_filter_tree_node(node):
@@ -200,7 +200,7 @@ def _is_real_aggregation_func(func: Any) -> bool:
     return str(func or "RAW").upper() != "RAW"
 
 
-def _filter_has_real_aggregation(node: Dict[str, Any]) -> bool:
+def _filter_has_real_aggregation(node: dict[str, Any]) -> bool:
     if not isinstance(node, dict):
         return False
     if _is_filter_tree_node(node):
@@ -230,7 +230,7 @@ def _having_operand_has_real_aggregation(operand: Any) -> bool:
     return False
 
 
-def _order_by_has_real_aggregation(item: Dict[str, Any]) -> bool:
+def _order_by_has_real_aggregation(item: dict[str, Any]) -> bool:
     if not isinstance(item, dict):
         return False
     agg_func = item.get("aggFunc")
@@ -242,7 +242,7 @@ def _order_by_has_real_aggregation(item: Dict[str, Any]) -> bool:
 
 
 def _normalize_raw_expression(
-    expression: Optional[str], table: str, column: str, is_multi_table: bool, physical_table: Optional[str] = None
+    expression: str | None, table: str, column: str, is_multi_table: bool, physical_table: str | None = None
 ) -> str:
     expr = (expression or "").strip()
     if not expr:
@@ -267,13 +267,13 @@ def _get_column_expr(table: str, column: str, is_multi_table: bool) -> str:
     return f"{table}.{col_expr}" if is_multi_table else col_expr
 
 
-def _is_aggregate_expression(expression: Optional[str]) -> bool:
+def _is_aggregate_expression(expression: str | None) -> bool:
     expr = (expression or "").strip()
     return bool(expr) and bool(AGG_EXPR_PATTERN.match(expr))
 
 
 def _normalize_aggregate_expression(
-    expression: Optional[str], table: str, column: str, is_multi_table: bool, physical_table: Optional[str] = None
+    expression: str | None, table: str, column: str, is_multi_table: bool, physical_table: str | None = None
 ) -> str:
     expr = (expression or "").strip()
     if not expr:
@@ -289,9 +289,9 @@ def _normalize_aggregate_expression(
 
 
 def _build_where_leaf_clause(
-    leaf: Dict[str, Any],
+    leaf: dict[str, Any],
     is_multi_table: bool,
-    dimension_expr_map: Dict[Tuple[str, str], str],
+    dimension_expr_map: dict[tuple[str, str], str],
     main_table: str,
 ) -> str:
     return compile_where_leaf_clause(
@@ -306,11 +306,11 @@ def _build_where_leaf_clause(
 
 
 def _build_having_leaf_clause(
-    leaf: Dict[str, Any],
+    leaf: dict[str, Any],
     is_multi_table: bool,
     main_table: str,
-    aggregations: List[Dict[str, Any]],
-    agg_by_id: Dict[str, Dict[str, Any]],
+    aggregations: list[dict[str, Any]],
+    agg_by_id: dict[str, dict[str, Any]],
     normalize_expression: bool = False,
 ) -> str:
     return compile_having_leaf_clause(
@@ -328,19 +328,19 @@ def _build_having_leaf_clause(
     )
 
 
-def _build_join_clauses(main_table: str, joins: List[Dict[str, Any]]) -> List[str]:
+def _build_join_clauses(main_table: str, joins: list[dict[str, Any]]) -> list[str]:
     return build_join_clauses(main_table, joins)
 
 
 def _build_filter_tree_clause(
-    node: Dict[str, Any],
+    node: dict[str, Any],
     *,
     for_having: bool,
     is_multi_table: bool,
     main_table: str,
-    dimension_expr_map: Dict[Tuple[str, str], str],
-    aggregations: List[Dict[str, Any]],
-    agg_by_id: Dict[str, Dict[str, Any]],
+    dimension_expr_map: dict[tuple[str, str], str],
+    aggregations: list[dict[str, Any]],
+    agg_by_id: dict[str, dict[str, Any]],
     is_root: bool = False,
 ) -> str:
     return compile_filter_tree_clause(
@@ -360,7 +360,7 @@ def _build_filter_tree_clause(
     )
 
 
-def _validate_query_plan(query_plan: Dict[str, Any]) -> None:
+def _validate_query_plan(query_plan: dict[str, Any]) -> None:
     """编译前置校验；不合法直接 raise ValueError。"""
     if not isinstance(query_plan, dict):
         raise ValueError("查询计划格式错误")
@@ -377,10 +377,10 @@ def _validate_query_plan(query_plan: Dict[str, Any]) -> None:
         raise ValueError("指标区不支持原始值与聚合函数混用，请统一为原始值或聚合函数")
 
 
-def _split_where_and_having(filters: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+def _split_where_and_having(filters: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """按节点类型把过滤分流到 WHERE / HAVING 两桶；混合筛选树不合法。"""
-    where_filters: List[Dict[str, Any]] = []
-    having_filters: List[Dict[str, Any]] = []
+    where_filters: list[dict[str, Any]] = []
+    having_filters: list[dict[str, Any]] = []
     for f in filters:
         if _is_filter_tree_node(f):
             tree_scope = _get_filter_tree_scope(f)
@@ -399,15 +399,15 @@ def _split_where_and_having(filters: List[Dict[str, Any]]) -> Tuple[List[Dict[st
 
 
 def _append_filter_clause(
-    parts: List[str],
-    filter_list: List[Dict[str, Any]],
+    parts: list[str],
+    filter_list: list[dict[str, Any]],
     *,
     for_having: bool,
     is_multi_table: bool,
     main_alias: str,
-    dimension_expr_map: Dict[Tuple[str, str], str],
-    aggregations: List[Dict[str, Any]],
-    agg_by_id: Dict[str, Dict[str, Any]],
+    dimension_expr_map: dict[tuple[str, str], str],
+    aggregations: list[dict[str, Any]],
+    agg_by_id: dict[str, dict[str, Any]],
 ) -> None:
     """WHERE / HAVING 共用的子句组装：单棵筛选树走树编译器，否则平铺拼接。"""
     if not filter_list:
@@ -451,15 +451,15 @@ def _append_filter_clause(
 
 
 def _find_agg_block(
-    aggregations: List[Dict[str, Any]],
-    agg_by_id: Dict[str, Dict[str, Any]],
+    aggregations: list[dict[str, Any]],
+    agg_by_id: dict[str, dict[str, Any]],
     main_alias: str,
     agg_func: str,
     table: str,
     column: str,
-    agg_id: Optional[str],
-    expression: Optional[str],
-) -> Optional[Dict[str, Any]]:
+    agg_id: str | None,
+    expression: str | None,
+) -> dict[str, Any] | None:
     """按 aggId 优先、表列特征次之回溯聚合块。"""
     matched = agg_by_id.get(str(agg_id)) if agg_id else None
     if not matched and not (expression or "").strip():
@@ -475,16 +475,16 @@ def _find_agg_block(
 
 
 def _resolve_agg_expr(
-    aggregations: List[Dict[str, Any]],
-    agg_by_id: Dict[str, Dict[str, Any]],
+    aggregations: list[dict[str, Any]],
+    agg_by_id: dict[str, dict[str, Any]],
     main_alias: str,
     is_multi_table: bool,
     agg_func: str,
     table: str,
     column: str,
-    agg_id: Optional[str],
-    expression: Optional[str] = None,
-    physical_table: Optional[str] = None,
+    agg_id: str | None,
+    expression: str | None = None,
+    physical_table: str | None = None,
 ) -> str:
     """按 aggId / 表列特征回溯聚合块，产出聚合表达式。"""
     matched = _find_agg_block(aggregations, agg_by_id, main_alias, agg_func, table, column, agg_id, expression)
@@ -505,11 +505,11 @@ def _resolve_agg_expr(
 
 
 def _match_aggregation_for_order(
-    aggregations: List[Dict[str, Any]],
+    aggregations: list[dict[str, Any]],
     main_alias: str,
     table: str,
     column: str,
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """聚合查询按明细字段排序时，回溯唯一的非 RAW 聚合块。"""
     matched_aggs = [
         a
@@ -524,17 +524,17 @@ def _match_aggregation_for_order(
 
 
 def _build_order_by_fields(
-    order_by: List[Dict[str, Any]],
+    order_by: list[dict[str, Any]],
     *,
-    aggregations: List[Dict[str, Any]],
-    agg_by_id: Dict[str, Dict[str, Any]],
+    aggregations: list[dict[str, Any]],
+    agg_by_id: dict[str, dict[str, Any]],
     main_alias: str,
     is_multi_table: bool,
-    dimension_alias_map: Dict[Tuple[str, str], str],
-    group_expr_map: Dict[Tuple[str, str], str],
-    dimension_expr_map: Dict[Tuple[str, str], str],
+    dimension_alias_map: dict[tuple[str, str], str],
+    group_expr_map: dict[tuple[str, str], str],
+    dimension_expr_map: dict[tuple[str, str], str],
     has_real_aggregation: bool,
-) -> List[str]:
+) -> list[str]:
     """ORDER BY 字段解析：aggFunc > 维度别名 > 分组表达式 > 维度表达式 > 聚合回溯 > 裸列。"""
     order_fields = []
     for o in order_by:
@@ -567,9 +567,9 @@ def _build_order_by_fields(
 
 
 def _has_real_aggregation(
-    aggregations: List[Dict[str, Any]],
-    having_filters: List[Dict[str, Any]],
-    order_by: List[Dict[str, Any]],
+    aggregations: list[dict[str, Any]],
+    having_filters: list[dict[str, Any]],
+    order_by: list[dict[str, Any]],
 ) -> bool:
     """聚合判定：输出、HAVING、ORDER BY 任一含真实聚合函数。"""
     return (
@@ -580,10 +580,10 @@ def _has_real_aggregation(
 
 
 def _append_limit_offset(
-    parts: List[str],
+    parts: list[str],
     sql_dialect: Any,
-    limit: Optional[int],
-    offset: Optional[int],
+    limit: int | None,
+    offset: int | None,
 ) -> None:
     """校验并追加 LIMIT/OFFSET 子句。"""
     if offset is not None:
@@ -600,16 +600,16 @@ class _QueryPlanInputs(NamedTuple):
 
     main_table: str
     main_alias: str
-    dimensions: List[Dict[str, Any]]
-    aggregations: List[Dict[str, Any]]
-    joins: List[Dict[str, Any]]
-    filters: List[Dict[str, Any]]
-    order_by: List[Dict[str, Any]]
+    dimensions: list[dict[str, Any]]
+    aggregations: list[dict[str, Any]]
+    joins: list[dict[str, Any]]
+    filters: list[dict[str, Any]]
+    order_by: list[dict[str, Any]]
     offset: Any
-    limit: Optional[int]
+    limit: int | None
 
 
-def _plan_compilation_inputs(query_plan: Dict[str, Any], max_rows: int) -> _QueryPlanInputs:
+def _plan_compilation_inputs(query_plan: dict[str, Any], max_rows: int) -> _QueryPlanInputs:
     """提取编译输入；行数限制在此归一化（先于结构校验，保持原报错优先级）。"""
     raw_limit = query_plan.get("limit")
     main_table = (query_plan.get("mainTable") or "").strip()
@@ -627,7 +627,7 @@ def _plan_compilation_inputs(query_plan: Dict[str, Any], max_rows: int) -> _Quer
 
 
 def _compile_query_plan_sql(
-    query_plan: Dict[str, Any],
+    query_plan: dict[str, Any],
     dialect: str = "mysql",
     max_rows: int = 100,
 ) -> str:
@@ -663,7 +663,7 @@ def _compile_query_plan_sql(
     is_multi_table = len(selected_tables) > 1
     sql_dialect = get_dialect(dialect)
 
-    agg_by_id: Dict[str, Dict[str, Any]] = {str(a.get("id")): a for a in aggregations if a.get("id")}
+    agg_by_id: dict[str, dict[str, Any]] = {str(a.get("id")): a for a in aggregations if a.get("id")}
     select_compilation = compile_select_fields(
         dimensions=dimensions,
         aggregations=aggregations,
@@ -682,7 +682,7 @@ def _compile_query_plan_sql(
     group_expr_map = select_compilation.group_expr_map
     dimension_alias_map = select_compilation.dimension_alias_map
 
-    parts: List[str] = [f"SELECT {', '.join(select_fields)}"]
+    parts: list[str] = [f"SELECT {', '.join(select_fields)}"]
     parts.extend(build_join_clauses(main_table, joins, main_alias))
 
     where_filters, having_filters = _split_where_and_having(filters)
@@ -734,7 +734,7 @@ def _compile_query_plan_sql(
 
 
 def compile_query_plan_sql(
-    query_plan: Dict[str, Any],
+    query_plan: dict[str, Any],
     dialect: str = "mysql",
     max_rows: int = 100,
 ) -> str:
