@@ -755,7 +755,7 @@ def create_data_analyzing_tool(
             action_payload: 操作参数，结构随 action 变化：
         - validate_dsl: {"dsl": {...}, "semantic_config_id": "..."}
         - validate_dashboard: {"dsl": <含 dashboard_name 和 cards 的完整 dashboard_spec>, "semantic_config_id": "卡片缺省值，可选"}
-        - execute_query: {"dsl": {...} 或 "sql": "...", "semantic_config_id": "...", "member_datasource_ids": [...]}
+        - execute_query: {"dsl": {...} 或 "sql": "...", "semantic_config_id": "...", "member_datasource_ids": ["<ID>"]}（member_datasource_ids 必须是 ID 字符串数组，单个机构也传数组，如 ["ORG_CODE1"]）
         - check_yaml: {"file_path": "/mnt/user-data/workspace/model.yaml"}（工作区 YAML 文件路径，后端直读，不要把 YAML 全文复制进参数）
         - list_execution_targets: {}（无参数，范围由服务端会话上下文决定）
             intent: 一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示。

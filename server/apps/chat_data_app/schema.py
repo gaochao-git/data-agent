@@ -834,7 +834,7 @@ class SemanticQueryInput(BaseModel):
     member_datasource_ids: list[str] = Field(
         ...,
         min_length=1,
-        description="本次查询要执行的成员数据源 ID 列表；必须从系统提示词列出的当前可用执行对象中选择",
+        description='本次查询要执行的成员数据源 ID 列表（JSON 字符串数组，单个机构也传数组，如 ["ORG_CODE1"]）；必须从 list_execution_targets 返回的当前可用执行对象中选择',
     )
     intent: str = Field(
         default="",
@@ -972,7 +972,7 @@ class DataAnalyzingInput(BaseModel):
             'validate_dashboard 传 {"dsl": <含 dashboard_name 和 cards 的完整 dashboard_spec>, '
             '"semantic_config_id": "卡片缺省值，可选"}；'
             'execute_query 传 {"dsl": <完整语义DSL> 或 "sql": "...", "semantic_config_id": "...", '
-            '"member_datasource_ids": [...]}；'
+            '"member_datasource_ids": ["<ID>"]}（member_datasource_ids 必须是 ID 字符串数组，单个机构也传数组）；'
             'check_yaml 传 {"file_path": "/mnt/user-data/workspace/model.yaml"}；'
             "list_execution_targets 传 {}"
         ),
@@ -994,7 +994,10 @@ class DataAnalyzingInput(BaseModel):
                 f"{'.'.join(str(part) for part in error.get('loc', ())) or 'action_payload'}: {error.get('msg', '')}"
                 for error in exc.errors()
             )
-            raise ValueError(f"action={self.action} 的 action_payload 校验失败：{detail}") from None
+            hint = ""
+            if "member_datasource_ids" in detail:
+                hint = '；member_datasource_ids 必须传 ID 字符串数组，如 ["ORG_CODE1"]，不要传对象或裸字符串'
+            raise ValueError(f"action={self.action} 的 action_payload 校验失败：{detail}{hint}") from None
         if self.action == "execute_query":
             # SemanticQueryInput 只做字段级校验；dsl/sql 二选一在入口统一拦截
             has_dsl = self.action_payload.get("dsl") is not None

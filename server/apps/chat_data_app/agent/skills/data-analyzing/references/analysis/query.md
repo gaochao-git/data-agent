@@ -167,7 +167,8 @@ DSL 顶层只使用以下字段：
 
 1. 生成完整 DSL。
 2. 调用 `data_analyzing_tool(action="validate_dsl", action_payload={"dsl": <同一份 DSL>, "semantic_config_id": "<同一模型>"})` 做校验/生成 SQL。
-3. 校验成功后调用 `data_analyzing_tool(action="execute_query", action_payload={"dsl": <同一份 DSL>, "semantic_config_id": "<同一模型>", "member_datasource_ids": [...]})`。
+3. 校验成功后调用 `data_analyzing_tool(action="execute_query", action_payload={"dsl": <同一份 DSL>, "semantic_config_id": "<同一模型>", "member_datasource_ids": ["<清单里的 member_datasource_id>"]})`。
+   - `member_datasource_ids` 必须是 ID 字符串**数组**：单个机构传 `["ORG_CODE1"]`，多个机构传 `["ORG_CODE1", "ORG_CODE2"]`。
 4. 不要把 DSL 字段提升到 `action_payload` 之外，也不要修改校验返回的 SQL。
 
 ## SQL 模式
