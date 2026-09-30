@@ -50,7 +50,7 @@ _TEXT_LINE_SEPARATOR_RE = re.compile(r"\n")
 _TEXT_GREP_MAX_FILE_BYTES = 2 * 1024 * 1024
 
 
-def _iter_text_line_fragments(file_obj: Any) -> Iterator[str]:
+def _iter_text_line_fragments(file_obj: Any) -> Iterator[tuple[str, bool]]:
     """逐块产出 LF 分隔的物理文本行片段，并去除 CRLF 中的 CR。"""
     trailing_cr = False
     while chunk := file_obj.read(_TEXT_READ_CHUNK_CHARS):
@@ -143,7 +143,7 @@ def _count_local_text_lines(target: Path) -> int:
 
 def _read_text_page_prefixes(path: Path, selected_lines: list[dict[str, int]], budgets: list[int]) -> list[str]:
     selected_by_index = {item["line_number"] - 1: (position, item) for position, item in enumerate(selected_lines)}
-    captured_parts = [[] for _ in selected_lines]
+    captured_parts: list[list[str]] = [[] for _ in selected_lines]
     captured_chars = [0 for _ in selected_lines]
     current_line_index = 0
     current_line_char = 0

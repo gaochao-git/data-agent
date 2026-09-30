@@ -769,7 +769,7 @@ class DataSourceManager:
         datasource = await self.datasource_dao.get_datasource_async(datasource_id)
         if not datasource:
             return []
-        relations = await self.datasource_dao.get_table_group_relations_async(datasource.get("group_id"))
+        relations = await self.datasource_dao.get_table_group_relations_async(str(datasource.get("group_id") or ""))
         groups: dict[str, list[str]] = {}
         for relation in relations:
             group_name = str(relation.get("table_group_name") or "").strip()
@@ -818,7 +818,7 @@ class DataSourceManager:
         existing_tables = {str(table.get("table_name") or "").strip() for table in datasource.get("ds_tables") or []}
         normalized_groups = self._normalize_table_groups(groups, existing_tables)
         await self.datasource_dao.replace_table_group_relations_async(
-            datasource.get("group_id"),
+            str(datasource.get("group_id") or ""),
             normalized_groups,
             create_by=operator or "",
             update_by=operator or "",
@@ -1086,6 +1086,8 @@ class DataSourceManager:
         self, datasource: dict[str, Any] | None, normalized_table_name: str, normalized_column_name: str
     ) -> dict[str, Any] | None:
         """在数据源缓存中匹配指定表字段，命中返回表记录否则 None。"""
+        if not datasource:
+            return None
         for table in datasource.get("ds_tables") or []:
             if str(table.get("table_name") or "").strip() != normalized_table_name:
                 continue
@@ -1387,7 +1389,7 @@ class DataSourceManager:
         operator_name = update_by_name or datasource.get("update_by_name") or ""
         await self.datasource_dao.clear_all_default_datasources_async(update_by=operator, update_by_name=operator_name)
         await self.datasource_dao.update_datasource_group_async(
-            datasource.get("group_id"),
+            str(datasource.get("group_id") or ""),
             is_default=True,
             update_by=operator,
             update_by_name=operator_name,
@@ -1408,7 +1410,7 @@ class DataSourceManager:
             return False
 
         await self.datasource_dao.update_datasource_group_async(
-            datasource.get("group_id"),
+            str(datasource.get("group_id") or ""),
             is_default=False,
             update_by=update_by or datasource.get("update_by") or "",
             update_by_name=update_by_name or datasource.get("update_by_name") or "",
@@ -1445,7 +1447,7 @@ class DataSourceManager:
         if not datasource:
             raise ValueError(f"数据源不存在: {datasource_id}")
 
-        source_type = datasource.get("source_type")
+        source_type = str(datasource.get("source_type") or "")
         source_config = self._build_physical_metadata_source_config(datasource)
         sync_timeout = await get_datasource_sync_timeout_seconds()
 

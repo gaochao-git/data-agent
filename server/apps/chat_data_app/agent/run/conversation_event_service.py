@@ -540,7 +540,7 @@ def _build_turn_events_flush_unanchored(
 
 
 def _build_turn_events_human_message(
-    message: BaseMessage,
+    message: HumanMessage,
     events: list[dict[str, Any]],
     compression_events_by_anchor: dict[str, list[dict[str, Any]]],
     unanchored_compression_events: list[dict[str, Any]],
@@ -563,7 +563,7 @@ def _build_turn_events_human_message(
 
 
 def _build_turn_events_ai_message(
-    message: BaseMessage,
+    message: AIMessage,
     message_index: int,
     events: list[dict[str, Any]],
     state: dict[str, Any],
@@ -586,7 +586,7 @@ def _build_turn_events_ai_message(
 
 
 def _build_turn_events_tool_message(
-    message: BaseMessage,
+    message: ToolMessage,
     message_index: int,
     events: list[dict[str, Any]],
     compression_events_by_anchor: dict[str, list[dict[str, Any]]],
@@ -768,6 +768,8 @@ def _execution_timing(message: BaseMessage) -> dict[str, int]:
         value = additional_kwargs.get(key)
         if isinstance(value, bool):
             continue
+        if value is None:  # int(None) 原走 TypeError 分支跳过，显式提前等价
+            continue
         try:
             timestamp_ms = int(value)
         except (TypeError, ValueError):
@@ -850,7 +852,7 @@ def _serialize_ai_message(message: AIMessage) -> dict[str, Any]:
 
 def _serialize_tool_message(message: ToolMessage) -> dict[str, Any]:
     tool_name = str(getattr(message, "name", "") or "")
-    payload = {
+    payload: dict[str, Any] = {
         "id": _message_id(message),
         "role": "tool",
         "content": message.content,

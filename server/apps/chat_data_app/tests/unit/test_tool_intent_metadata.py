@@ -6,6 +6,7 @@ intent 是面向用户的调用目的说明（前端时间线默认展示，技�
 """
 
 from types import SimpleNamespace
+from typing import cast
 
 from apps.chat_data_app.agent.tools.ask_user_question import ask_user_question_tool
 from apps.chat_data_app.agent.tools.bash_run import create_bash_run_tool
@@ -17,10 +18,12 @@ from apps.chat_data_app.agent.tools.officecli_run import create_officecli_run_to
 from apps.chat_data_app.agent.tools.parse_document import create_parse_document_tool
 from apps.chat_data_app.agent.tools.present_artifacts import create_present_artifacts_tool
 from apps.chat_data_app.agent.tools.read_image import create_read_image_tool
+from apps.chat_data_app.agent.workspace.runtime import ConversationWorkspaceRuntime
 
 
 def _collect_model_visible_tools() -> list:
-    runtime = SimpleNamespace()
+    # 元数据收集只读工具 factory 的 spec 生成路径，不触达 runtime 行为，用空壳即可
+    runtime = cast(ConversationWorkspaceRuntime, SimpleNamespace())
     return [
         *create_filesystem_tools(runtime),
         *create_parse_document_tool(runtime),

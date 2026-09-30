@@ -7,8 +7,9 @@ import re
 import shutil
 import tempfile
 import uuid
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy.exc import IntegrityError
 
@@ -318,7 +319,7 @@ def _skill_version_to_info(version: dict[str, Any], current_version_no: int = 0)
     }
 
 
-def _system_metadata_to_info(item: dict[str, Any]) -> dict[str, Any]:
+def _system_metadata_to_info(item: Mapping[str, Any]) -> dict[str, Any]:
     """将文件系统系统技能元数据转换为前端技能对象。"""
     return {
         "skill_id": item.get("name"),
@@ -417,7 +418,7 @@ def _write_skill_md(version_dir: Path, payload: dict[str, Any]) -> Path:
 
 
 def _resolve_new_skill_text_fields(
-    normalized_payload: dict[str, Any], parsed: dict[str, Any], skill_name: str
+    normalized_payload: dict[str, Any], parsed: Mapping[str, Any], skill_name: str
 ) -> tuple:
     """按 payload 别名、SKILL.md 元数据、默认值的优先级解析标题/描述/分类。"""
     title = (
@@ -638,7 +639,8 @@ class SkillService:
         # 物理路径不入库，按 owner_user_id + skill_name + version_no 推导。
         version_dir = _derive_user_version_dir(user_id, skill_name, version_no)
         skill_md_path = await asyncio.to_thread(_write_skill_md, version_dir, normalized_payload)
-        parsed = await asyncio.to_thread(parse_metadata, skill_md_path)
+        # SKILL.md 由上一步刚写入，正常必可解析；防御解析失败时不再 AttributeError
+        parsed: Mapping[str, Any] = await asyncio.to_thread(parse_metadata, skill_md_path) or {}
         visibility_type = str(normalized_payload.get("visibility_type") or "private").strip()
         if visibility_type not in {"private", "global"}:
             visibility_type = "private"
@@ -758,7 +760,7 @@ class SkillService:
         skill_md_path = source_dir / "SKILL.md"
         if not await asyncio.to_thread(skill_md_path.is_file):
             raise ValueError("技能版本目录无效")
-        parsed = await asyncio.to_thread(parse_metadata, skill_md_path) or {}
+        parsed = cast("dict[str, Any]", await asyncio.to_thread(parse_metadata, skill_md_path) or {})
         raw_content = await asyncio.to_thread(skill_md_path.read_text, encoding="utf-8", errors="replace")
         return parsed, _strip_frontmatter(raw_content)
 
@@ -830,7 +832,7 @@ class SkillService:
             draft.get("skill_version_no"),
         )
         skill_md_path = await asyncio.to_thread(_write_skill_md, version_dir, normalized_payload)
-        return await asyncio.to_thread(parse_metadata, skill_md_path) or {}
+        return cast("dict[str, Any]", await asyncio.to_thread(parse_metadata, skill_md_path) or {})
 
     @staticmethod
     def _resolve_skill_visibility(payload: dict[str, Any], skill: dict[str, Any]) -> str:

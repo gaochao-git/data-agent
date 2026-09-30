@@ -2,6 +2,7 @@ import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from fastapi import FastAPI
@@ -42,8 +43,10 @@ auth.SERVICE_AUTH_TOKEN = SERVICE_AUTH_TOKEN_PLAIN
 
 
 app = FastAPI(title="ChatData API Contract Test")
-app.add_exception_handler(StarletteHTTPException, chatdata_http_exception_handler)
-app.add_exception_handler(RequestValidationError, chatdata_validation_exception_handler)
+# Starlette 的 handler 类型标注要求 exc 为 Exception；注册时按异常类型精确分发，
+# 收窄签名（HTTPException / RequestValidationError）是运行时安全的。
+app.add_exception_handler(StarletteHTTPException, chatdata_http_exception_handler)  # type: ignore[arg-type]
+app.add_exception_handler(RequestValidationError, chatdata_validation_exception_handler)  # type: ignore[arg-type]
 app.include_router(chat_data_router)
 
 
@@ -300,9 +303,9 @@ class FakeSemanticConfigService:
 
     def __init__(self, datasource_manager: FakeDatasourceManager):
         self.datasource_manager = datasource_manager
-        self.created_kwargs = None
-        self.updated_kwargs = None
-        self.deleted_config_id = None
+        self.created_kwargs: dict[str, Any] | None = None
+        self.updated_kwargs: dict[str, Any] | None = None
+        self.deleted_config_id: str | None = None
 
     def _all_configs(self, datasource_id: str):
         return (self.datasource_manager.datasources.get(datasource_id) or {}).get("semantic_configs") or []
