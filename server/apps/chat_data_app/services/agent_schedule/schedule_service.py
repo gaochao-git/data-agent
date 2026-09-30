@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from apps.chat_data_app.daos.agent_schedule_dao import (
     SCHEDULE_RUN_STATUS_PENDING,
     TRIGGER_TYPE_MANUAL,
+    AgentScheduleDao,
     agent_schedule_dao,
 )
 from apps.chat_data_app.services.setting_service import get_runtime_setting
@@ -142,7 +143,7 @@ def _resolve_schedule_fields(
 class AgentScheduleService:
     """定时任务定义的管理入口；触发与派发由 agent_schedule_runtime 负责。"""
 
-    def __init__(self, dao=agent_schedule_dao) -> None:
+    def __init__(self, dao: AgentScheduleDao = agent_schedule_dao) -> None:
         self._dao = dao
 
     async def create_job(
@@ -588,7 +589,12 @@ class AgentScheduleService:
             return control.to_dict()
 
     @staticmethod
-    def _build_job_list_item(job, stats, titles, latest_runs) -> dict:
+    def _build_job_list_item(
+        job: ChatDataAgentSchedule,
+        stats: dict[str, Any],
+        titles: dict[str, str | None],
+        latest_runs: dict[str, ChatDataAgentScheduleRun | None],
+    ) -> dict[str, Any]:
         """组装单条任务列表项，含会话标题与最近一次执行状态（裸 datetime 转 ISO）。"""
         item = job.to_dict()
         item.update(stats)

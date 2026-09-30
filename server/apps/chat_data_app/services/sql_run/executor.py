@@ -13,9 +13,12 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 from decimal import Decimal
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import aiomysql
+
+if TYPE_CHECKING:
+    from pyhive.hive import Connection as HiveConnection
 
 from utils.alarm import (
     DB_FAIL_DATASOURCE,
@@ -616,7 +619,7 @@ class SQLExecutor(ABC):
         pass
 
     @abstractmethod
-    async def close(self):
+    async def close(self) -> None:
         """关闭连接/连接池"""
         pass
 
@@ -633,7 +636,7 @@ class MySQLExecutor(SQLExecutor):
         self.password = password or None
         self._pool = None
 
-    async def _get_pool(self):
+    async def _get_pool(self) -> aiomysql.Pool:
         """获取连接池（懒加载）"""
         if self._pool is None:
             import aiomysql
@@ -823,7 +826,7 @@ class MySQLExecutor(SQLExecutor):
         except Exception as exc:
             logger.warning("[MySQL] 超时查询 KILL 异常: connection_id=%s error=%s", normalized_connection_id, exc)
 
-    async def close(self):
+    async def close(self) -> None:
         """关闭连接池"""
         if self._pool:
             self._pool.close()
@@ -842,7 +845,7 @@ class HiveExecutor(SQLExecutor):
         # 密码已由 datasource_manager 解密，直接使用
         self.password = password or None
 
-    def _get_connection(self):
+    def _get_connection(self) -> "HiveConnection":
         """获取 Hive 连接"""
         from pyhive import hive
 
@@ -983,7 +986,7 @@ class HiveExecutor(SQLExecutor):
             if conn:
                 conn.close()
 
-    async def close(self):
+    async def close(self) -> None:
         """Hive 每次创建新连接，无需关闭池"""
         pass
 
@@ -1272,7 +1275,7 @@ class HiveHttpExecutor(SQLExecutor):
         """Hive HTTP 模式不再校验直连，仅校验必要配置。"""
         return bool(HTTP_SUBMIT_URL and HTTP_STATUS_URL)
 
-    async def close(self):
+    async def close(self) -> None:
         """HTTP 客户端按请求创建，无需显式关闭。"""
         pass
 

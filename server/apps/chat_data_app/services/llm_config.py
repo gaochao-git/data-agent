@@ -11,6 +11,7 @@
 
 import json
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -185,7 +186,7 @@ def _parse_model_entry(entry: Any, *, path: str) -> dict[str, Any]:
     if not model_id:
         raise ValueError(f"{path} 中存在缺少 id 的模型条目")
 
-    def _require(key: str, check, describe: str):
+    def _require(key: str, check: Callable[[Any], bool], describe: str) -> Any:
         value = entry.get(key)
         if not check(value):
             raise ValueError(f"{path} 中模型 {model_id} 的 {key} 无效: {value!r}（{describe}）")

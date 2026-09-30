@@ -153,10 +153,10 @@ class SemanticAIQueryAdapter:
     def _relationship_right_alias(rel: dict[str, Any]) -> str:
         return str((rel or {}).get("right_alias") or (rel or {}).get("right_table") or "").strip()
 
-    def _collect_tables_from_filter_node(self, node: dict[str, Any], tables_needed: set[str]):
+    def _collect_tables_from_filter_node(self, node: dict[str, Any], tables_needed: set[str]) -> None:
         collect_filter_node_tables(node, tables_needed, self._extract_filter_leaf_tables)
 
-    def _extract_filter_leaf_tables(self, node: dict[str, Any], tables_needed: set[str]):
+    def _extract_filter_leaf_tables(self, node: dict[str, Any], tables_needed: set[str]) -> None:
         table_name = node.get("tableAlias") or node.get("table")
         if table_name:
             tables_needed.add(table_name)
@@ -165,11 +165,11 @@ class SemanticAIQueryAdapter:
                 tables_needed.add(table_name)
         self._collect_tables_from_having_operand(node.get("rightOperand"), tables_needed)
 
-    def _collect_tables_from_having_operand(self, operand: Any, tables_needed: set[str]):
+    def _collect_tables_from_having_operand(self, operand: Any, tables_needed: set[str]) -> None:
         collect_operand_tables(operand, tables_needed, self._extract_metric_operand_table)
 
     @staticmethod
-    def _extract_metric_operand_table(operand: dict[str, Any], tables_needed: set[str]):
+    def _extract_metric_operand_table(operand: dict[str, Any], tables_needed: set[str]) -> None:
         table_name = operand.get("tableAlias") or operand.get("table")
         if table_name:
             tables_needed.add(table_name)
@@ -209,7 +209,7 @@ class SemanticAIQueryAdapter:
         return {"and": builder_nodes}
 
     @staticmethod
-    def _copy_filter_value_type(source: dict[str, Any], target: dict[str, Any]):
+    def _copy_filter_value_type(source: dict[str, Any], target: dict[str, Any]) -> None:
         """透传固定值类型或已通过输入校验的自由右侧表达式。"""
         if "value_type" in source:
             target["value_type"] = source.get("value_type")
@@ -443,7 +443,7 @@ class SemanticAIQueryAdapter:
             if table and table not in self.tables_map:
                 self.tables_map[table] = None
 
-    def _build_table_column_map(self):
+    def _build_table_column_map(self) -> None:
         """构建表和字段的映射，用于存在性校验"""
         self.tables_map = {}  # table_name -> {column_name: column_info}
 

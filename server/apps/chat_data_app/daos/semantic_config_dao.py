@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from sqlalchemy import and_, case, func, or_, select, update
+from sqlalchemy import Insert, and_, case, func, or_, select, update
 from sqlalchemy.dialects.mysql import insert as mysql_insert
 
 from utils.logger import get_logger
@@ -194,7 +194,7 @@ class SemanticConfigDao:
         return row
 
     @staticmethod
-    def _upsert_batch_statement(batch: list[dict[str, Any]]):
+    def _upsert_batch_statement(batch: list[dict[str, Any]]) -> Insert:
         statement = mysql_insert(SemanticConfig).values(batch)
         return statement.on_duplicate_key_update(
             group_id=statement.inserted.group_id,

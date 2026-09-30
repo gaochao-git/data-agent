@@ -25,6 +25,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from typing import Any
@@ -352,7 +353,7 @@ class SemanticQualityChecker:
     @staticmethod
     def _append_unmodeled_columns(
         metrics: list[dict[str, Any]],
-        dimension_keys,
+        dimension_keys: Iterable[str],
         raw: list[tuple[str, str]],
         physical_columns: set[tuple[str, str]],
     ) -> None:

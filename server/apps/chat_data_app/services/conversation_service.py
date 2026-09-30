@@ -14,6 +14,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
+from langchain_core.language_models import BaseChatModel
 from langchain_core.prompts import ChatPromptTemplate
 
 from apps.chat_data_app.agent.prompts.conversation_title import TITLE_GENERATION_PROMPT
@@ -38,7 +39,7 @@ DATASOURCE_GROUP_PREFIX = "datasource:"
 # ============ 内部函数 ============
 
 
-def _get_title_llm():
+def _get_title_llm() -> BaseChatModel:
     """获取标题生成用的LLM"""
     return get_chat_data_llm(streaming=False, max_tokens=30)
 

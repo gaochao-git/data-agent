@@ -115,7 +115,7 @@ class QueryTaskCreateRequest(BaseModel):
     skip_query_cache: bool = Field(default=False, description="是否跳过 SQL 查询结果缓存")
 
     @model_validator(mode="after")
-    def validate_sql_list(self):
+    def validate_sql_list(self) -> "QueryTaskCreateRequest":
         self.sql = [str(item or "").strip() for item in self.sql if str(item or "").strip()]
         query_type = str(self.query_type or "sql").strip().lower()
         if query_type == "builder":
@@ -285,7 +285,7 @@ class DbConnectionRequest(BaseModel):
     org_name: str | None = Field(default=None, description="机构名称")
 
     @model_validator(mode="after")
-    def validate_connection_fields(self):
+    def validate_connection_fields(self) -> "DbConnectionRequest":
         self.host = str(self.host or "").strip()
         self.database = str(self.database or "").strip()
         self.org_code = str(self.org_code or "").strip() or None
@@ -420,7 +420,7 @@ class DatasourceSourceItem(BaseModel):
     database: str = Field(..., min_length=1, description="数据库名")
 
     @model_validator(mode="after")
-    def validate_required_fields(self):
+    def validate_required_fields(self) -> "DatasourceSourceItem":
         self.org_name = str(self.org_name or "").strip()
         self.org_code = str(self.org_code or "").strip()
         self.host = str(self.host or "").strip()
@@ -805,7 +805,7 @@ having 只用于聚合结果过滤。""",
 
     @model_validator(mode="before")
     @classmethod
-    def reject_legacy_mode(cls, data: Any):
+    def reject_legacy_mode(cls, data: Any) -> Any:
         """显式拒绝已废弃的 mode 参数，同时允许工具运行时注入的内部字段。"""
         if isinstance(data, dict) and "mode" in data:
             raise ValueError("参数 mode 已废弃，请移除 mode 字段")

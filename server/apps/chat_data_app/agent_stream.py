@@ -137,6 +137,23 @@ class AgentRunStreamFailedError(RuntimeError):
     """SSE 已发送用户可见错误，外层只需按失败状态收口 Run。"""
 
 
+def _is_omlx_prefill_memory_rejected(exc: Exception) -> bool:
+    """识别 oMLX 内存护栏拒绝（prefill_memory_exceeded）。
+
+    openai SDK 已把 400 响应体解析进 ``APIStatusError.body``，按结构取 code；
+    body 缺失或形状变化时按 message 关键字兜底。命中时重试无效——上下文
+    体量不变则服务端仍会拒绝。
+    """
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        error = body.get("error")
+        payload = error if isinstance(error, dict) else body
+        code = str(payload.get("omlx_code") or payload.get("code") or "")
+        if code == "prefill_memory_exceeded":
+            return True
+    return "prefill_memory_exceeded" in str(exc)
+
+
 def _model_failure_user_message(exc: Exception) -> str:
     """将模型服务异常映射为用户可读文案；不向用户透出原始错误细节。"""
     if isinstance(exc, openai.APITimeoutError):
@@ -151,6 +168,10 @@ def _model_failure_user_message(exc: Exception) -> str:
         # 含 langchain-openai StreamChunkTimeoutError（其为内置 TimeoutError 子类）：
         # TCP 连接存活但长时间无任何流式内容返回（模型服务挂起/过载），由分块超时看门狗主动中断
         return "模型服务长时间未返回内容，请点击继续重试，或稍后再试。"
+    if _is_omlx_prefill_memory_rejected(exc):
+        # oMLX 内存护栏拒绝的 400：上下文体量超服务端推理内存上限，重试无效，
+        # 引导用户缩减上下文而不是反复点击重试
+        return "本轮对话上下文超出模型服务的内存上限，请新开会话，或减少本条消息引用的文件后重试。"
     return "智能问数执行失败，请稍后重试。"
 
 

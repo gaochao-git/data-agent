@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Coroutine
 from dataclasses import dataclass
 from typing import Any
 
@@ -131,8 +132,8 @@ async def prepare_semantic_conversation_context(
 
 async def _load_semantic_inputs(
     *,
-    datasource_meta_task,
-    selected_config_task,
+    datasource_meta_task: Coroutine[Any, Any, dict[str, Any] | None],
+    selected_config_task: Coroutine[Any, Any, dict[str, Any] | None] | None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     tasks = [datasource_meta_task]
     if selected_config_task is not None:

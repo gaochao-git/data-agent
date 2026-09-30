@@ -494,8 +494,8 @@ async def _resolve_cached_query_result(
     execution_target: dict[str, Any],
     user_id: str | None,
     username: str | None,
-    execute_query_and_update_cache,
-    on_remote_task_created,
+    execute_query_and_update_cache: Callable[[], Awaitable[dict[str, Any]]],
+    on_remote_task_created: Callable[[dict[str, Any]], Awaitable[None]],
 ) -> dict[str, Any]:
     """命中缓存时按执行目标类型解析结果；远端引用不可用时重新提交查询。"""
     if http_target:
@@ -551,7 +551,7 @@ def _build_member_query_response(
 
 
 async def _execute_query_and_save_cache(
-    execute_query,
+    execute_query: Callable[[], Awaitable[dict[str, Any]]],
     user_id: str | None,
     execution_target: dict[str, Any],
     skip_query_cache: bool,
@@ -1065,7 +1065,7 @@ async def create_query_task(payload: QueryTaskCreateRequest) -> dict[str, Any]:
 
 async def prepare_sql_request_for_execution(
     request: ExecuteSqlRequest | QueryTaskCreateRequest, datasource: dict[str, Any] | None = None
-):
+) -> ExecuteSqlRequest | QueryTaskCreateRequest:
     """保留 SQL 原文；创建任务前快速校验，执行器边界按成员数据源复检。"""
     query_type = str(getattr(request, "query_type", "") or "").strip().lower()
     semantic_builder_config = getattr(request, "semantic_builder_config", None)

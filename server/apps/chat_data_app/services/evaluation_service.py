@@ -9,9 +9,9 @@ import time
 import uuid
 from collections.abc import Callable, Sequence
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import BaseMessage, HumanMessage
 
 from utils.alarm import emit_llm_connection_alarm_if_needed
 from utils.database import get_session as default_get_session
@@ -21,6 +21,9 @@ from utils.models import ChatDataEvalCase, ChatDataEvalRun, ChatDataEvalRunCase
 from ..agent.prompts.generate_evaluate_set import build_evaluation_draft_case_prompt
 from ..daos.evaluation_dao import EvaluationDao
 from .llm_config import get_chat_data_llm
+
+if TYPE_CHECKING:
+    from ..schema import AccuracyEvaluationDraftCaseRequest
 
 
 def sanitize_scene_segment(value: str, fallback: str) -> str:
@@ -376,7 +379,7 @@ def looks_like_sql(text: str) -> bool:
     )
 
 
-async def invoke_evaluation_draft_llm(prompt: str, config_id: str):
+async def invoke_evaluation_draft_llm(prompt: str, config_id: str) -> BaseMessage:
     """调用评测用例草稿生成模型，失败时上报连接报警。"""
     llm = get_chat_data_llm(streaming=False, max_tokens=2000)
     try:
@@ -389,7 +392,9 @@ async def invoke_evaluation_draft_llm(prompt: str, config_id: str):
         raise
 
 
-async def generate_draft_case_by_llm(config_id: str, config: dict[str, Any], payload) -> dict[str, Any]:
+async def generate_draft_case_by_llm(
+    config_id: str, config: dict[str, Any], payload: AccuracyEvaluationDraftCaseRequest
+) -> dict[str, Any]:
     """用 LLM 基于用户问题和当前语义配置生成 gold_dsl 草稿。"""
     user_input = str(payload.hint or "").strip()
     if not user_input:

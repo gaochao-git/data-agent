@@ -6,6 +6,7 @@ import asyncio
 import os
 import re
 from abc import ABC, abstractmethod
+from collections.abc import Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
@@ -81,7 +82,7 @@ class MySQLSyncService:
         self.user = user
         self.password = password
 
-    async def _get_connection(self):
+    async def _get_connection(self) -> aiomysql.Connection:
         return await aiomysql.connect(
             host=self.host,
             port=self.port,
@@ -120,7 +121,7 @@ class MySQLSyncService:
             conn.close()
             await conn.ensure_closed()
 
-    async def _fetch_table_column_rows(self, cursor) -> list[dict[str, Any]]:
+    async def _fetch_table_column_rows(self, cursor: aiomysql.Cursor) -> list[dict[str, Any]]:
         await cursor.execute(
             """
             SELECT
@@ -143,7 +144,7 @@ class MySQLSyncService:
         )
         return await cursor.fetchall()
 
-    async def _fetch_index_stat_rows(self, cursor) -> list[dict[str, Any]]:
+    async def _fetch_index_stat_rows(self, cursor: aiomysql.Cursor) -> list[dict[str, Any]]:
         await cursor.execute(
             """
             SELECT TABLE_NAME, INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME
@@ -224,7 +225,9 @@ class MySQLSyncService:
         return by_index
 
     @staticmethod
-    def _classify_index_groups(by_index: dict[str, dict[str, Any]]):
+    def _classify_index_groups(
+        by_index: dict[str, dict[str, Any]],
+    ) -> tuple[list[list[str]], list[dict[str, Any]], list[dict[str, Any]]]:
         """把分组后的索引拆成主键 / 唯一索引 / 普通索引三类。"""
         primary_keys: list[list[str]] = []
         unique_indexes: list[dict[str, Any]] = []
@@ -279,7 +282,7 @@ class HiveSyncService:
         self.username = username
         self.password = password
 
-    def _get_connection(self):
+    def _get_connection(self) -> hive.Connection:
         conn = hive.connect(
             **build_hive_connect_params(
                 host=self.host,
@@ -315,7 +318,7 @@ class HiveSyncService:
         return None
 
     @staticmethod
-    def _extract_hive_row_fields(row) -> tuple[str, str, str]:
+    def _extract_hive_row_fields(row: Sequence[Any]) -> tuple[str, str, str]:
         col_name = str(row[0] or "").strip()
         col_type = str(row[1] if len(row) > 1 and row[1] else "").strip()
         col_comment = str(row[2] if len(row) > 2 and row[2] else "").strip()
@@ -356,7 +359,7 @@ class HiveSyncService:
         return table_comment
 
     @classmethod
-    def _parse_hive_metadata_rows(cls, rows) -> dict[str, Any]:
+    def _parse_hive_metadata_rows(cls, rows: Iterable[Sequence[Any]]) -> dict[str, Any]:
         columns: list[dict[str, Any]] = []
         partition_columns: set[str] = set()
         table_comment = ""
@@ -384,7 +387,7 @@ class HiveSyncService:
             "partition_columns": partition_columns,
         }
 
-    def _get_table_metadata(self, table_name: str, conn=None) -> dict[str, Any]:
+    def _get_table_metadata(self, table_name: str, conn: hive.Connection | None = None) -> dict[str, Any]:
         should_close = conn is None
         conn = conn or self._get_connection()
         try:

@@ -21,6 +21,50 @@ def test_build_where_leaf_clause_supports_between_and_field_reference():
     assert result == "`amount` BETWEEN 10 AND 20"
 
 
+def test_build_where_leaf_clause_respects_sql_native_quoted_value():
+    """筛选值按 SQL 原生语法解释："'paid'" 编译为 'paid' 而非 '''paid'''。
+
+    回归背景：模型/界面把 SQL 字面量引号带进 value 时，二次 escape 产出
+    '''paid'''（语义为比较带引号字符串，等值恒假，结果错误）。
+    """
+
+    def column(table, name, multi):
+        return f"{table}.`{name}`" if multi else f"`{name}`"
+
+    kwargs = {
+        "is_multi_table": False,
+        "dimension_expr_map": {},
+        "main_table": "orders",
+        "normalize_raw_expression": lambda expression, *args: expression,
+        "get_column_expr": column,
+        "safe_functions": set(),
+    }
+    # 成对单引号包裹形态：剥引号后统一 escape，输出规范字面量
+    result = build_where_leaf_clause(
+        {"table": "orders", "column": "status", "operator": "=", "value": "'paid'"},
+        **kwargs,
+    )
+    assert result == "`status` = 'paid'"
+    # 裸值兜底行为不变
+    result = build_where_leaf_clause(
+        {"table": "orders", "column": "status", "operator": "=", "value": "paid"},
+        **kwargs,
+    )
+    assert result == "`status` = 'paid'"
+    # SQL 转义字面量形态（内部 '' 转义）解析还原后恒等输出
+    result = build_where_leaf_clause(
+        {"table": "orders", "column": "customer", "operator": "=", "value": "'O''Brien'"},
+        **kwargs,
+    )
+    assert result == "`customer` = 'O''Brien'"
+    # 含未转义单引号的非法字面量形态不放大错误，按裸值 escape
+    result = build_where_leaf_clause(
+        {"table": "orders", "column": "customer", "operator": "=", "value": "'O'Brien'"},
+        **kwargs,
+    )
+    assert result == "`customer` = '''O''Brien'''"
+
+
 def test_build_filter_tree_clause_preserves_nested_parentheses():
     def column(table, name, multi):
         return f"`{name}`"

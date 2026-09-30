@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import BaseMessage, HumanMessage
 
 from utils.alarm import emit_llm_connection_alarm_if_needed
 from utils.llm_json import parse_llm_json
@@ -92,7 +92,7 @@ def find_datasource_column(
     return target_column
 
 
-async def invoke_column_dict_llm(prompt: str, datasource_id: str, table_name: str, column_name: str):
+async def invoke_column_dict_llm(prompt: str, datasource_id: str, table_name: str, column_name: str) -> BaseMessage:
     """调用字段数据字典生成模型，失败时上报连接报警。"""
     llm = get_chat_data_llm(streaming=False, max_tokens=1200)
     try:

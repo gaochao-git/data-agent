@@ -568,7 +568,7 @@ async def read_conversation_query_result(
     )
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> Any:
     """向后兼容：Local/Sandbox 后端实现类转发到 agent.workspace.runtime。"""
     if name in {"LocalWorkspaceBackend", "SandboxWorkspaceBackend"}:
         import importlib

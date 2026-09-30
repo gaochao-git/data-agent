@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from sqlglot import exp
 
 
 @dataclass
@@ -40,7 +44,7 @@ def _normalize_dialect(source_type: str | None) -> str:
     return "mysql"
 
 
-def _parse_sql(sql: str, source_type: str | None = None):
+def _parse_sql(sql: str, source_type: str | None = None) -> list[exp.Expression]:
     """使用 sqlglot 解析 SQL。"""
     import sqlglot
 
@@ -361,7 +365,7 @@ def extract_top_level_limit_count(sql: str, source_type: str | None = None) -> i
         return None
 
 
-def _collect_physical_tables_from_expression(expression, tables: set[str]) -> None:
+def _collect_physical_tables_from_expression(expression: exp.Expression, tables: set[str]) -> None:
     """从单条 SQL 表达式中收集物理表名，排除 CTE 名称，写入 tables。"""
     from sqlglot import exp
 

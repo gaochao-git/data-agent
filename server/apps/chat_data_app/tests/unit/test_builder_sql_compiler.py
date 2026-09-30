@@ -2441,9 +2441,12 @@ def test_builder_sql_compiler_remaining_helper_edges():
     assert compiler._sql_literal({"bad": True}) == "'{''bad'': True}'"
     assert compiler._sql_literal("current_timestamp()") == "current_timestamp()"
     assert compiler._sql_literal('"current_timestamp()"') == "current_timestamp()"
+    # SQL 原生语法口径：成对引号包裹的值先解析出裸值再 escape，输出仍是安全
+    # 字面量（分号与写操作关键字不会执行，安全语义由 escape 与执行层兜底保证），
+    # 仅不再二次包裹产出三引号
     assert (
         compiler._sql_literal("'current_date(); drop table orders'", "sql_function")
-        == "'''current_date(); drop table orders'''"
+        == "'current_date(); drop table orders'"
     )
     assert compiler._sql_list_literal(["a", "current_date()"], ["literal"]) == "('a', current_date())"
 

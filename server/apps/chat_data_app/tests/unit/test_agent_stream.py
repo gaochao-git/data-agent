@@ -519,10 +519,10 @@ def test_is_tool_result_error_prefers_native_status():
     assert _is_tool_result_error("正常结果") is False
 
 
-def _make_openai_status_error(exc_cls, status_code: int) -> Exception:
+def _make_openai_status_error(exc_cls, status_code: int, body: dict | None = None) -> Exception:
     request = httpx.Request("POST", "https://model.example.com/v1/chat/completions")
     response = httpx.Response(status_code, request=request)
-    return exc_cls("model service error", response=response, body=None)
+    return exc_cls("model service error", response=response, body=body)
 
 
 def test_model_failure_user_message_maps_friendly_text():
@@ -547,6 +547,24 @@ def test_model_failure_user_message_maps_friendly_text():
 
     stream_chunk_timeout_error = StreamChunkTimeoutError(120.0, model_name="stealth/union-alpha", chunks_received=0)
     assert "长时间未返回内容" in _model_failure_user_message(stream_chunk_timeout_error)
+    # oMLX 内存护栏拒绝（prefill_memory_exceeded，400）：重试无效，须命中专用文案而非通用兜底
+    omlx_body = {
+        "error": {
+            "message": "oMLX prefill memory guard rejected this prompt",
+            "type": "invalid_request_error",
+            "code": "prefill_memory_exceeded",
+            "omlx_code": "prefill_memory_exceeded",
+        },
+        "type": "error",
+    }
+    omlx_error = _make_openai_status_error(openai.BadRequestError, 400, body=omlx_body)
+    assert "内存上限" in _model_failure_user_message(omlx_error)
+    # body 形状变化时按 message 关键字兜底（langchain 侧包装异常可能丢 body）
+    wrapped_error = _make_openai_status_error(openai.BadRequestError, 400)
+    plain = httpx.Response(400, request=httpx.Request("POST", "https://model.example.com"))
+    assert "内存上限" in _model_failure_user_message(
+        type(wrapped_error)("Error code: 400 - prefill_memory_exceeded rejected", response=plain, body=None)
+    )
     # 其他异常一律兜底通用文案，不透出原始错误
     assert _model_failure_user_message(ValueError("raw internal detail")) == "智能问数执行失败，请稍后重试。"
 

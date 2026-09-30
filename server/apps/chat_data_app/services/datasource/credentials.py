@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import os
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import httpx
 
 from utils.crypto import decrypt_password
 from utils.logger import get_logger
@@ -61,7 +65,9 @@ def add_http_user_params(
 
 
 @asynccontextmanager
-async def open_http_client(*, timeout_seconds: float, headers: dict[str, str] | None = None):
+async def open_http_client(
+    *, timeout_seconds: float, headers: dict[str, str] | None = None
+) -> AsyncIterator[httpx.AsyncClient]:
     """统一构造外部 HTTP AsyncClient，TLS 校验口径单点。
 
     headers 由调用方传入（各调用方模块的 token 解析保留模块级测试 patch seam）；

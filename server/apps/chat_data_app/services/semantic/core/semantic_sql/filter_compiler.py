@@ -119,6 +119,31 @@ def _unwrap_quoted_literal(raw: str) -> str:
     return raw[1:-1].strip() if len(raw) >= 3 and raw[0] == raw[-1] and raw[0] in "'\"" else ""
 
 
+def _parse_quoted_sql_literal(raw: str) -> str | None:
+    """值整体为成对引号包裹的 SQL 字面量时解析出裸值；非包裹形态返回 None。
+
+    筛选值按 SQL 原生语法填写（"'paid'" 即字符串 paid）：包裹形态先解析出
+    裸值再统一 escape，避免二次包裹产出 '''paid'''（等值比较恒假）。
+    单引号形态内部只允许 ``''`` 转义对（'O''Brien' → O'Brien），出现孤立
+    单引号即非法字面量形态返回 None，交回裸值 escape 兜底，不放大错误。
+    """
+    inner = _unwrap_quoted_literal(raw)
+    if not inner and raw not in ("''", '""'):
+        return None
+    if not raw.startswith("'"):
+        return inner
+    index = 0
+    while index < len(inner):
+        if inner[index] != "'":
+            index += 1
+            continue
+        if index + 1 < len(inner) and inner[index + 1] == "'":
+            index += 2
+            continue
+        return None
+    return inner.replace("''", "'")
+
+
 def _sql_literal(value: Any, value_type: Any = None, safe_functions: set[str] | None = None) -> str:
     if value is None:
         return "NULL"
@@ -135,7 +160,10 @@ def _sql_literal(value: Any, value_type: Any = None, safe_functions: set[str] | 
         return raw
     if unwrapped and _is_sql_function(unwrapped, functions):
         return unwrapped
-    return _escape_sql_string(value)
+    # SQL 原生语法口径：值已是成对引号包裹的字面量形态时解析出裸值再 escape，
+    # 保证 "'paid'" 编译为 'paid' 而非 '''paid'''；非包裹形态保持原值兜底
+    parsed = _parse_quoted_sql_literal(raw)
+    return _escape_sql_string(value if parsed is None else parsed)
 
 
 def _value_type_for_index(value_type: Any, index: int) -> str | None:
