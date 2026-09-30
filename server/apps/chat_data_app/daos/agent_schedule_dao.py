@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any, cast
 
-from sqlalchemy import case, func, or_, select, update
+from sqlalchemy import CursorResult, case, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from utils.logger import get_logger
@@ -225,7 +226,7 @@ class AgentScheduleDao:
                 update_time=now,
             )
         )
-        return result.rowcount or 0
+        return cast(CursorResult[Any], result).rowcount or 0
 
     async def count_dispatched_by_users(self, session: AsyncSession, user_ids: list[str]) -> dict[str, int]:
         """统计用户在途（已派发未收口）的定时执行数，用于个人并发闸门。"""

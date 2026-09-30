@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from typing import Annotated, Any
 
 from langchain_core.messages import HumanMessage
-from langchain_core.tools import StructuredTool, tool
+from langchain_core.tools import BaseTool, tool
 from langgraph.prebuilt import InjectedState
 
 from apps.chat_data_app.agent.workspace.runtime import ConversationWorkspaceRuntime
@@ -733,7 +733,7 @@ def create_data_analyzing_tool(
     user_id: str | None = None,
     operator_name: str | None = None,
     workspace_runtime: ConversationWorkspaceRuntime | None = None,
-) -> StructuredTool:
+) -> BaseTool:
     bound_datasource_id = str(datasource_id or "").strip()
     bound_user_id = str(user_id or "system").strip() or "system"
     bound_operator_name = str(operator_name or "").strip() or None

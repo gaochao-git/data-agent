@@ -9,6 +9,7 @@ from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware, ToolCallRequest, wrap_tool_call
 from langchain_core.messages import ToolMessage
+from langgraph.types import Command
 
 from apps.chat_data_app.agent.workspace.runtime import workspace_runtime_from_state
 from apps.chat_data_app.services.runtime_config import TOOL_RESULT_OFFLOAD_SIZE
@@ -33,8 +34,9 @@ def create_tool_result_middleware() -> AgentMiddleware:
 
     @wrap_tool_call(name="ToolResultMiddleware")
     async def tool_result_middleware(
-        request: ToolCallRequest, handler: Callable[[ToolCallRequest], Awaitable[ToolMessage]]
-    ) -> ToolMessage:
+        request: ToolCallRequest,
+        handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]],
+    ) -> ToolMessage | Command[Any]:
         result = await handler(request)
         if not isinstance(result, ToolMessage) or result.status == "error":
             return result

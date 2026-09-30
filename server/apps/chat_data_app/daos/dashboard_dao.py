@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 
-from sqlalchemy import or_, select, update
+from sqlalchemy import CursorResult, or_, select, update
 
 from utils.database import get_session as default_get_session
 from utils.models import ChatDataDashboard, ChatDataDashboardPanel
@@ -248,7 +248,7 @@ class DashboardDao:
                 )
                 .values(**self._delete_panel_values(user_id, operator_name, now))
             )
-            deleted = result.rowcount > 0
+            deleted = cast(CursorResult[Any], result).rowcount > 0
             if deleted:
                 self._touch_dashboard(dashboard, user_id, operator_name, now)
             return deleted
@@ -405,7 +405,9 @@ class DashboardDao:
     ) -> int:
         updated_count = 0
         for layout in layouts:
-            panel_id = layout.get("panel_id") or layout.get("i")
+            panel_id = str(layout.get("panel_id") or layout.get("i") or "")
+            if not panel_id:  # 与原 None 键查询未命中走 continue 等价
+                continue
             panel = panel_map.get(panel_id)
             if not panel:
                 continue

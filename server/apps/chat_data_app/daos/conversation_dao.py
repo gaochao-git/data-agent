@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import CursorResult, and_, func, or_, select
 from sqlalchemy import update as sa_update
 
 from utils.database import get_session as default_get_session
@@ -306,7 +306,7 @@ class ConversationDao:
                     update_by=user_id,
                 )
             )
-            return bool(result.rowcount)
+            return bool(cast(CursorResult[Any], result).rowcount)
 
     async def resolve_datasource_binding(
         self,

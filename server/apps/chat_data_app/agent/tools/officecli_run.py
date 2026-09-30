@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from langchain_core.tools import StructuredTool, tool
+from langchain_core.tools import BaseTool, tool
 
 from apps.chat_data_app.agent.workspace.officecli_adapter import (
     OfficeCliCommand,
@@ -134,7 +134,7 @@ async def run_officecli_command(
     }
 
 
-def create_officecli_run_tool(workspace_runtime: ConversationWorkspaceRuntime) -> StructuredTool:
+def create_officecli_run_tool(workspace_runtime: ConversationWorkspaceRuntime) -> BaseTool:
     @tool("officecli_run", parse_docstring=True)
     async def officecli_run(
         command_args: list[str],

@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from contextlib import AbstractAsyncContextManager
-from typing import Any
+from typing import Any, cast
 
-from sqlalchemy import ColumnElement, Select, and_, func, or_, select, update
+from sqlalchemy import ColumnElement, CursorResult, Select, and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from utils.models import ChatDataSkill, ChatDataSkillFavorite, ChatDataSkillVersion
@@ -282,7 +282,7 @@ class SkillDao:
         )
         async with get_session() as db:
             result = await db.execute(stmt)
-            return int(result.rowcount or 0)
+            return int(cast(CursorResult[Any], result).rowcount or 0)
 
     async def insert_version_async(self, version: dict[str, Any]) -> int:
         async with get_session() as db:
@@ -363,7 +363,7 @@ class SkillDao:
         )
         async with get_session() as db:
             result = await db.execute(stmt)
-            return int(result.rowcount or 0)
+            return int(cast(CursorResult[Any], result).rowcount or 0)
 
     async def set_favorite_async(
         self, favorite_user_id: str, skill_id: str, favorite: bool, operator: str = "", operator_name: str = ""

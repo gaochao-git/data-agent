@@ -7,8 +7,9 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import Any, cast
 
-from sqlalchemy import select, update
+from sqlalchemy import CursorResult, select, update
 
 from utils.database import get_session as default_get_session
 from utils.models import ChatDataPlugin
@@ -134,4 +135,4 @@ class PluginDao:
                     update_by_name=operator_name,
                 )
             )
-            return int(result.rowcount or 0) > 0
+            return int(cast(CursorResult[Any], result).rowcount or 0) > 0

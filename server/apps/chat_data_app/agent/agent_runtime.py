@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any
 
 from langchain.agents.middleware import (
+    AgentMiddleware,
     ModelCallResult,
     ModelRequest,
     TodoListMiddleware,
@@ -72,7 +73,7 @@ def create_streaming_chat_model(
     return llm_factory(**kwargs)
 
 
-def create_response_timestamp_middleware() -> Callable[[ModelRequest], Awaitable[ModelCallResult]]:
+def create_response_timestamp_middleware() -> AgentMiddleware:
     """创建模型响应时间戳 middleware，确保 checkpoint 中助手消息有服务端时间。"""
 
     @wrap_model_call(name="ResponseTimestampMiddleware")
@@ -84,7 +85,9 @@ def create_response_timestamp_middleware() -> Callable[[ModelRequest], Awaitable
             return timestamp_message(response)
         result = list(getattr(response, "result", []) or [])
         if result:
-            response.result = [timestamp_message(message) for message in result]
+            # ExtendedModelResponse 无 result 属性；能进入本分支说明 getattr 已取到
+            # 非空 result，response 必为 ModelResponse。
+            response.result = [timestamp_message(message) for message in result]  # type: ignore[union-attr]
         return response
 
     return response_timestamp_middleware
@@ -124,7 +127,8 @@ def on_tool_error(exc: Exception, request: Any) -> str:
         # 工具名提取失败不能阻断错误兜底,降级为无名工具继续格式化错误消息。
         logger.warning("工具错误回调提取工具名失败,按无名工具兜底: error=%s", exc)
         tool_name = ""
-    return _format_tool_error(exc, tool_name)
+    # 此处 exc 是本函数形参（except 块内同名绑定仅块内存活），无删除变量问题。
+    return _format_tool_error(exc, tool_name)  # type: ignore[misc]
 
 
 # 中间件规范顺序（外层 -> 内层，按注册名）。新增 middleware 必须先在此表登记

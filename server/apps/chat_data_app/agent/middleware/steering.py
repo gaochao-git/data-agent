@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from langchain.agents.middleware import AgentState, Runtime, before_model
+from langchain.agents.middleware import AgentMiddleware, AgentState, Runtime, before_model
 from langchain_core.messages import HumanMessage, ToolMessage
 from langgraph.config import get_stream_writer
 
@@ -36,7 +36,7 @@ def create_steering_middleware(
     admit_messages: Callable[[list[HumanMessage]], Awaitable[None]],
     tracker: SteeringMessageTracker,
     state_schema: Any | None = None,
-) -> Callable[[AgentState, Runtime], None]:
+) -> AgentMiddleware:
     """创建共享 inbox 驱动的 ``before_model`` middleware。
 
     只领取 ``next-step`` 类型的消息。领取后先持久化为 admitted 用户历史，
@@ -44,7 +44,7 @@ def create_steering_middleware(
     """
 
     @before_model(name="SteeringMiddleware", state_schema=state_schema)
-    async def inject_steering_messages(state: AgentState, _runtime: Runtime) -> None:
+    async def inject_steering_messages(state: AgentState, _runtime: Runtime) -> dict[str, Any] | None:
         messages = state.get("messages") or []
         # A next-step steer is an interruption at the tool boundary. A plain
         # model turn must finish first; otherwise a message sent while text is

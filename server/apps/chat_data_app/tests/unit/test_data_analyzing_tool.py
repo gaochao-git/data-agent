@@ -11,6 +11,7 @@ import os
 import sys
 import tempfile
 from pathlib import Path
+from typing import cast
 
 import pytest
 from pydantic import ValidationError
@@ -21,6 +22,7 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 
 from apps.chat_data_app.agent.tools import data_analyzing, filesystem
+from apps.chat_data_app.agent.workspace.runtime import ConversationWorkspaceRuntime
 from apps.chat_data_app.schema import (
     DATA_ANALYZING_ACTION_PAYLOAD_MODELS,
     DataAnalyzingInput,
@@ -1155,7 +1157,7 @@ def _invoke_check_yaml(
         workspace_dir = Path(tmp) / "workspace"
         workspace_dir.mkdir()
         (workspace_dir / file_name).write_text(yaml_text, encoding="utf-8")
-        runtime = _FakeWorkspaceRuntime(Path(tmp), page_size=runtime_page_size)
+        runtime = cast("ConversationWorkspaceRuntime", _FakeWorkspaceRuntime(Path(tmp), page_size=runtime_page_size))
         raw = asyncio.run(
             data_analyzing.create_data_analyzing_tool(datasource_id, workspace_runtime=runtime).ainvoke(
                 {

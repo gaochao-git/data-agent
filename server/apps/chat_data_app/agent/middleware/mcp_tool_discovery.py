@@ -114,15 +114,17 @@ class MCPToolDiscoveryMiddleware(AgentMiddleware):
     # ---- 检索结果捕获 ----
 
     def wrap_tool_call(
-        self, request: ToolCallRequest, handler: Callable[[ToolCallRequest], ToolMessage]
-    ) -> ToolMessage:
+        self, request: ToolCallRequest, handler: Callable[[ToolCallRequest], ToolMessage | Command[Any]]
+    ) -> ToolMessage | Command[Any]:
         if not self._is_search_request(request):
             return handler(request)
         return self._capture_discovery(handler(request))
 
     async def awrap_tool_call(
-        self, request: ToolCallRequest, handler: Callable[[ToolCallRequest], Awaitable[ToolMessage]]
-    ) -> ToolMessage:
+        self,
+        request: ToolCallRequest,
+        handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]],
+    ) -> ToolMessage | Command[Any]:
         if not self._is_search_request(request):
             return await handler(request)
         return self._capture_discovery(await handler(request))

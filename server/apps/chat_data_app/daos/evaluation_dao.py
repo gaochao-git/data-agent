@@ -147,9 +147,10 @@ class EvaluationDao:
                 cls._mark_case_deleted(row, operator_id, operator_name, now)
         for index, case in enumerate(cases, start=1):
             case_id_value = str(case.get("id") or "").strip()
-            row = existing_cases.get(case_id_value)
-            if row:
-                cls._update_case_row(row, case, business_domain, index, operator_id, operator_name, now)
+            # 变量名与上方 for 循环解包的 row（非 None）区分开，避免 Optional 污染类型推断
+            existing_row = existing_cases.get(case_id_value)
+            if existing_row:
+                cls._update_case_row(existing_row, case, business_domain, index, operator_id, operator_name, now)
             else:
                 db.add(cls._new_case_row(case_set_id, case, business_domain, index, operator_id, operator_name, now))
 

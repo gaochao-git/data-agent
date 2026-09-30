@@ -25,9 +25,10 @@ from __future__ import annotations
 
 import base64
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any
 
-from langchain.agents.middleware import ModelCallResult, ModelRequest, wrap_model_call
+from langchain.agents.middleware import AgentMiddleware, ModelCallResult, ModelRequest, wrap_model_call
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from apps.chat_data_app.agent.workspace.runtime import (
@@ -53,7 +54,7 @@ def create_image_injection_middleware(
     model_id: str | None = None,
     *,
     state_schema: Any | None = None,
-) -> Callable[[ModelRequest], Awaitable[ModelCallResult]]:
+) -> AgentMiddleware:
     """创建视觉注入 middleware（read_image 结果 + 用户上传图片附件）。"""
 
     @wrap_model_call(name="ImageInjectionMiddleware", state_schema=state_schema)
@@ -221,17 +222,17 @@ def _load_injection_images(
         physical_key = str(physical)
         if physical_key in loaded_paths:
             continue
-        block, failure = _read_image_block(physical, file_path, max_image_size=max_image_size)
-        if failure:
-            failures.append(failure)
+        outcome = _read_image_block(physical, file_path, max_image_size=max_image_size)
+        if outcome[0] is None:  # 不变量：block 为 None 当且仅当失败
+            failures.append(outcome[1])
             continue
-        image_blocks.append(block)
+        image_blocks.append(outcome[0])
         loaded_paths.add(physical_key)
         loaded_sources[source].append(file_path)
     return image_blocks, loaded_sources, failures
 
 
-def _resolve_injection_image_path(workspace_root: Any, file_path: str, failures: list[str]) -> str | None:
+def _resolve_injection_image_path(workspace_root: Any, file_path: str, failures: list[str]) -> Path | None:
     """把注入目标解析为可读的物理 Path；解析失败记录原因并返回 None。"""
     try:
         return resolve_workspace_path(workspace_root, file_path, writable=False)
@@ -245,7 +246,8 @@ def _read_image_block(
     file_path: str,
     *,
     max_image_size: int,
-) -> tuple[dict[str, Any] | None, str | None]:
+# 返回形状绑定不变量：block 为 None 当且仅当 failure 非 None。
+    ) -> tuple[dict[str, Any], None] | tuple[None, str]:
     """读取单张图片并编码为 base64 block；超限/格式不支持返回失败原因（文案用原始 file_path）。"""
     try:
         data = physical.read_bytes()

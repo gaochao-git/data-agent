@@ -4,16 +4,18 @@ from __future__ import annotations
 
 import time
 from collections.abc import Awaitable, Callable
+from typing import Any
 
-from langchain.agents.middleware import ToolCallRequest, wrap_tool_call
+from langchain.agents.middleware import AgentMiddleware, ToolCallRequest, wrap_tool_call
 from langchain_core.messages import ToolMessage
+from langgraph.types import Command
 
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 
-def create_tool_timing_middleware() -> Callable[[ToolCallRequest], Awaitable[ToolMessage]]:
+def create_tool_timing_middleware() -> AgentMiddleware:
     """创建工具执行起止时间 middleware。
 
     位于租约围栏内侧、其余工具 wrapper 外侧（覆盖 ToolErrorMiddleware 与结果
@@ -24,8 +26,9 @@ def create_tool_timing_middleware() -> Callable[[ToolCallRequest], Awaitable[Too
 
     @wrap_tool_call(name="ToolTimingMiddleware")
     async def tool_timing_middleware(
-        request: ToolCallRequest, handler: Callable[[ToolCallRequest], Awaitable[ToolMessage]]
-    ) -> ToolMessage:
+        request: ToolCallRequest,
+        handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]],
+    ) -> ToolMessage | Command[Any]:
         started_at_ms = int(time.time() * 1000)
         result = await handler(request)
         ended_at_ms = int(time.time() * 1000)

@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import Any
 
-from langchain.agents.middleware import AgentState, Runtime, before_model
+from langchain.agents.middleware import AgentMiddleware, AgentState, Runtime, before_model
 from langchain_core.messages import RemoveMessage
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
 
@@ -18,7 +17,7 @@ logger = get_logger(__name__)
 
 def create_tool_call_history_repair_middleware(
     *, state_schema: Any | None = None
-) -> Callable[[AgentState, Runtime], dict[str, Any] | None]:
+) -> AgentMiddleware:
     """Create a state middleware that removes incomplete persisted tool groups."""
 
     @before_model(name="ToolCallHistoryRepairMiddleware", state_schema=state_schema)

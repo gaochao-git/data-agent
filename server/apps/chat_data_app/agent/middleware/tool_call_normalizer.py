@@ -3,7 +3,7 @@
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from langchain.agents.middleware import ModelCallResult, ModelRequest, wrap_model_call
+from langchain.agents.middleware import AgentMiddleware, ModelCallResult, ModelRequest, wrap_model_call
 from langchain_core.messages import AIMessage
 
 from utils.logger import get_logger
@@ -105,7 +105,7 @@ def _normalize_single_tool_call(tool_call: Any, available_tool_names: set[str]) 
 
 def create_tool_call_name_normalizer_middleware(
     tools: list[Any],
-) -> Callable[[ModelRequest], Awaitable[ModelCallResult]]:
+) -> AgentMiddleware:
     """创建模型工具调用名称归一化 middleware。
 
     Args:
@@ -134,7 +134,9 @@ def create_tool_call_name_normalizer_middleware(
         if not result:
             return response
         normalized_result = [normalize_response_tool_call_names(message, candidate_tools) for message in result]
-        response.result = normalized_result
+        # ExtendedModelResponse 无 result 属性；走到这里说明上方 getattr 已取到非空
+        # result，即 response 必为 ModelResponse，setattr 不会触发 AttributeError。
+        response.result = normalized_result  # type: ignore[union-attr]
         return response
 
     return normalize_tool_call_name_middleware

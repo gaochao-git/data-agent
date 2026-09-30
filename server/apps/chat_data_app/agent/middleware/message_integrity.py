@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
@@ -67,7 +68,7 @@ def complete_message_boundaries(messages: list[BaseMessage]) -> list[int]:
     return boundaries
 
 
-def repair_tool_call_messages(messages: list[BaseMessage]) -> tuple[list[BaseMessage], dict[str, Any]]:
+def repair_tool_call_messages(messages: Sequence[BaseMessage]) -> tuple[list[BaseMessage], dict[str, Any]]:
     """Remove incomplete tool-call groups without fabricating tool results."""
     repaired: list[BaseMessage] = []
     removed_call_ids: list[str] = []
@@ -104,7 +105,7 @@ def repair_tool_call_messages(messages: list[BaseMessage]) -> tuple[list[BaseMes
 
 
 def _consume_contiguous_tool_results(
-    messages: list[BaseMessage],
+    messages: Sequence[BaseMessage],
     index: int,
     repaired: list[BaseMessage],
     call_ids: tuple[str, ...],
@@ -126,7 +127,7 @@ def _consume_contiguous_tool_results(
 
 
 def _skip_orphan_tool_results(
-    messages: list[BaseMessage],
+    messages: Sequence[BaseMessage],
     index: int,
     call_ids: tuple[str, ...],
 ) -> tuple[int, int]:
@@ -143,7 +144,7 @@ def _skip_orphan_tool_results(
 
 
 def _has_contiguous_tool_results(
-    messages: list[BaseMessage],
+    messages: Sequence[BaseMessage],
     ai_index: int,
     call_ids: tuple[str, ...],
 ) -> bool:
