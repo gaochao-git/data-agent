@@ -3,7 +3,7 @@
 #
 # 用法:
 #   scripts/verify            # 等价 --fast
-#   scripts/verify --fast     # 改完必跑：import + 全量 pytest + 复杂度 + 参数 + 行数 + lint + 前端类型检查
+#   scripts/verify --fast     # 改完必跑：import + 全量 pytest + 复杂度 + 参数 + 行数 + lint + 格式 + 前端类型检查
 #   scripts/verify --all      # 推送前：import + 覆盖率（含全量 pytest）+ 静态检查 + 前端三步并行 + openapi 快照
 #
 # 提速说明：
@@ -52,8 +52,11 @@ fi
 step "complexity"     bash -c "cd server && '$PY' apps/chat_data_app/tests/scan_cognitive_complexity.py --baseline ../scripts/checks/baselines/cognitive_complexity.txt"
 step "params"         bash -c "'$PY' scripts/checks/params.py"
 step "file-lines"     bash -c "'$PY' scripts/checks/file_lines.py"
-# lint：规则集与豁免见仓库根 ruff.toml（只开 F/B/SIM bug 级规则），存量为零即通过
+# lint：规则集与豁免见仓库根 ruff.toml（bug 级三类 + I/W 排序与空白符 + E7 三码），存量为零即通过
 step "ruff"          bash -c "'$PY' scripts/checks/ruff.py"
+# 格式检查：与 lint 同源 ruff.toml（line-length 120）。2026-09-29 全库 format 一次到位后纳入，
+# 防风格再漂移；E501 不在 lint select（字符串/注释折不掉），超长行的治理口径就是 format 本身
+step "ruff-format"    bash -c "'$PY' -m ruff format --check server"
 # baseline 防滥用报警：本轮改动触碰 scripts/checks/（含 baselines/）时提醒人工确认，不阻断。
 # 往 baseline 加一行即可让门禁变绿，所以动它们必须有人看过——合法修债（真实复杂度下降）也允许改。
 step "baseline-watch" bash -c "{ git diff --name-only origin/master...HEAD -- scripts/checks; git diff --name-only HEAD -- scripts/checks; git ls-files --others --exclude-standard scripts/checks; } | sort -u | { grep . && echo '    ⚠ 本轮改动了 scripts/checks/：往 baseline 加行会使门禁失效，请人工确认登记是否合法（新文件不允许登记）' || true; }"
