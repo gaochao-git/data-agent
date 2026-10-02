@@ -178,6 +178,34 @@ def test_install_plugin_rejects_zip_slip():
         install_plugin_from_zip_bytes(_build_zip(VALID_MANIFEST, files=files))
 
 
+def test_safe_extract_enforces_actual_bytes_budget(monkeypatch):
+    """伪造 file_size 的压缩炸弹：声明值预检通过后，真实解压字节仍被二次拦截。
+
+    直接对 _safe_extract 单测（预算调小绕过声明值预检），验证按实际字节的第二道闸。
+    """
+    data = _build_zip(VALID_MANIFEST)
+    monkeypatch.setattr(plugin_installer, "PLUGIN_ZIP_MAX_UNCOMPRESSED_BYTES", 32)
+    import shutil
+
+    staging = plugin_installer.plugin_dir(VALID_MANIFEST["name"]).with_name("staging-test")
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        members = [m for m in archive.infolist() if not m.is_dir()]
+        with pytest.raises(PluginInstallError, match="实际解压总量"):
+            plugin_installer._safe_extract(archive, members, staging, "")
+    shutil.rmtree(staging, ignore_errors=True)
+
+
+def test_validate_zip_members_rejects_encrypted_member():
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("plugin.json", json.dumps(VALID_MANIFEST))
+    with zipfile.ZipFile(io.BytesIO(buffer.getvalue())) as archive:
+        member = archive.infolist()[0]
+        member.flag_bits |= 0x1
+        with pytest.raises(PluginInstallError, match="加密成员"):
+            plugin_installer._validate_zip_members(archive)
+
+
 def test_install_plugin_rejects_symlink_member():
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:

@@ -3,6 +3,7 @@
 安全边界：
 - 大小上限：压缩包 50MB（与上传文件限制一致）、解压总量 200MB、成员数 5000（防 zip 炸弹）；
 - 路径安全：成员名禁止绝对路径与 ``..``，逐条 resolve 后必须落在插件目录内（防 zip-slip）；
+- 禁止加密成员；解压按块限流读取并累计真实字节二次校验（头声明 file_size 可伪造）；
 - 禁止符号链接成员（防把管理域外内容带进插件目录）；
 - manifest 必须存在且合法，``manifest.name`` 即插件目录名，目录名不一致拒绝安装。
 
@@ -32,6 +33,8 @@ logger = get_logger(__name__)
 PLUGIN_ZIP_MAX_BYTES = 50 * 1024 * 1024
 PLUGIN_ZIP_MAX_UNCOMPRESSED_BYTES = 200 * 1024 * 1024
 PLUGIN_ZIP_MAX_MEMBERS = 5000
+# 解压限流的读取块大小：真实字节预算按块扣减，超限即中止（误差不超过一个块）
+_PLUGIN_ZIP_CHUNK_BYTES = 1024 * 1024
 
 
 class PluginInstallError(ValueError):
@@ -71,14 +74,21 @@ def _validate_zip_members(archive: zipfile.ZipFile) -> None:
         # Unix 文件类型位：S_IFLNK 表示符号链接成员。
         if ((member.external_attr >> 16) & 0o170000) == 0o120000:
             raise PluginInstallError(f"zip 内不允许符号链接成员: {member.filename}")
+        if member.flag_bits & 0x1:
+            raise PluginInstallError(f"zip 内不允许加密成员: {member.filename}")
         name = member.filename.replace("\\", "/")
         if name.startswith("/") or ".." in Path(name).parts:
             raise PluginInstallError(f"zip 成员路径非法: {member.filename}")
 
 
 def _safe_extract(archive: zipfile.ZipFile, members: list[zipfile.ZipInfo], target_root: Path, zip_root: str) -> None:
-    """把包内 ``zip_root`` 下的成员解压到 ``target_root``，逐条防越界。"""
+    """把包内 ``zip_root`` 下的成员解压到 ``target_root``，逐条防越界。
+
+    解压按块限流读取并累计真实字节：``_validate_zip_members`` 的声明值预检之后，
+    这是对"头声明 ``file_size`` 可伪造"的第二道闸（压缩炸弹的变形绕过）。
+    """
     target_root_resolved = target_root.resolve()
+    total_actual = 0
     for member in members:
         name = member.filename.replace("\\", "/")
         if zip_root and not name.startswith(zip_root):
@@ -92,7 +102,18 @@ def _safe_extract(archive: zipfile.ZipFile, members: list[zipfile.ZipInfo], targ
             raise PluginInstallError(f"zip 成员越界: {member.filename}")
         destination.parent.mkdir(parents=True, exist_ok=True)
         with archive.open(member) as source, destination.open("wb") as target:
-            shutil.copyfileobj(source, target)
+            while True:
+                chunk = source.read(_PLUGIN_ZIP_CHUNK_BYTES)
+                if not chunk:
+                    break
+                total_actual += len(chunk)
+                if total_actual > PLUGIN_ZIP_MAX_UNCOMPRESSED_BYTES:
+                    raise PluginInstallError(
+                        "zip 实际解压总量超过上限 "
+                        f"{PLUGIN_ZIP_MAX_UNCOMPRESSED_BYTES // (1024 * 1024)}MB"
+                        f"（成员 {member.filename} 声明 {member.file_size} 字节与实际不符，疑似伪造大小的压缩炸弹）"
+                    )
+                target.write(chunk)
 
 
 def install_plugin_from_zip_bytes(data: bytes) -> PluginManifest:
