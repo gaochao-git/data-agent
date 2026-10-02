@@ -14,6 +14,8 @@ describe('ConversationTokenUsage', () => {
     const wrapper = mount(ConversationTokenUsage, {
       props: { usage: cacheUsage, isGenerating: true },
       attachTo: document.body,
+      // 面板经 <Teleport to="body"> 挂到 body，stub 后内容留在组件内以便 wrapper 查询
+      global: { stubs: { teleport: true } },
     })
 
     await wrapper.get('button').trigger('click')
@@ -33,6 +35,8 @@ describe('ConversationTokenUsage', () => {
     const wrapper = mount(ConversationTokenUsage, {
       props: { usage: cacheUsage, isGenerating: false },
       attachTo: document.body,
+      // 面板经 <Teleport to="body"> 挂到 body，stub 后内容留在组件内以便 wrapper 查询
+      global: { stubs: { teleport: true } },
     })
 
     await wrapper.get('button').trigger('click')
@@ -57,6 +61,8 @@ describe('ConversationTokenUsage', () => {
         },
       },
       attachTo: document.body,
+      // 面板经 <Teleport to="body"> 挂到 body，stub 后内容留在组件内以便 wrapper 查询
+      global: { stubs: { teleport: true } },
     })
 
     await wrapper.get('button').trigger('click')
@@ -91,6 +97,8 @@ describe('ConversationTokenUsage', () => {
         },
       },
       attachTo: document.body,
+      // 面板经 <Teleport to="body"> 挂到 body，stub 后内容留在组件内以便 wrapper 查询
+      global: { stubs: { teleport: true } },
     })
 
     await wrapper.get('button').trigger('click')
@@ -120,6 +128,8 @@ describe('ConversationTokenUsage', () => {
         },
       },
       attachTo: document.body,
+      // 面板经 <Teleport to="body"> 挂到 body，stub 后内容留在组件内以便 wrapper 查询
+      global: { stubs: { teleport: true } },
     })
 
     await wrapper.get('button').trigger('click')
@@ -149,6 +159,8 @@ describe('ConversationTokenUsage', () => {
         },
       },
       attachTo: document.body,
+      // 面板经 <Teleport to="body"> 挂到 body，stub 后内容留在组件内以便 wrapper 查询
+      global: { stubs: { teleport: true } },
     })
 
     await wrapper.get('button').trigger('click')
@@ -209,6 +221,8 @@ describe('ConversationTokenUsage', () => {
         ],
       },
       attachTo: document.body,
+      // 面板经 <Teleport to="body"> 挂到 body，stub 后内容留在组件内以便 wrapper 查询
+      global: { stubs: { teleport: true } },
     })
 
     await wrapper.get('button').trigger('click')

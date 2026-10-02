@@ -488,119 +488,124 @@ defineExpose({
       </span>
       <span v-if="!compact" class="toolbar-label">上下文</span>
     </button>
-    <div
-      v-if="panelOpen"
-      ref="panelRef"
-      class="fixed max-h-[calc(100vh-32px)] overflow-y-auto rounded-lg border border-gray-200 bg-white p-3 text-xs text-gray-600 shadow-lg"
-      :style="{ ...panelStyle, zIndex: PANEL_Z_INDEX }"
-    >
-      <div class="flex items-center justify-between mb-2">
-        <div class="font-semibold text-gray-800">上下文占用明细</div>
-        <button type="button" class="border-none bg-transparent text-gray-400 cursor-pointer hover:text-gray-600" @click="closePanel">
-          <i class="fa-solid fa-xmark"></i>
-        </button>
-      </div>
-      <div class="mb-2">
-        <div class="mb-1 flex items-center justify-between gap-3 text-[11px] text-gray-400">
-          <span class="min-w-0 truncate" :title="contextSummary">{{ contextSummary }}</span>
-          <span class="shrink-0">{{ usagePercentageText }}%</span>
+    <!-- 面板挂到 body：宿主页嵌入时任何带 transform/backdrop-filter 的祖先都会把 position:fixed 的
+         包含块从视口改为该祖先，夹紧计算用的却是真实视口宽，导致面板错位/右侧被裁。
+         Teleport 后 fixed 始终相对视口，坐标计算与渲染坐标系一致 -->
+    <Teleport to="body">
+      <div
+        v-if="panelOpen"
+        ref="panelRef"
+        class="fixed max-h-[calc(100vh-32px)] overflow-y-auto rounded-lg border border-gray-200 bg-white p-3 text-xs text-gray-600 shadow-lg"
+        :style="{ ...panelStyle, zIndex: PANEL_Z_INDEX }"
+      >
+        <div class="flex items-center justify-between mb-2">
+          <div class="font-semibold text-gray-800">上下文占用明细</div>
+          <button type="button" class="border-none bg-transparent text-gray-400 cursor-pointer hover:text-gray-600" @click="closePanel">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
         </div>
-        <div class="relative h-1.5 overflow-hidden rounded-full bg-gray-100">
-          <div class="h-full rounded-full bg-blue-400" :style="{ width: `${usagePercentage}%` }"></div>
-          <span
-            v-if="compressionTriggerPercentage !== null"
-            class="absolute top-0 h-full w-px bg-amber-500"
-            :style="{ left: `${compressionTriggerPercentage}%` }"
-            title="自动压缩阈值"
-          ></span>
-        </div>
-      </div>
-      <div v-if="cacheUsageRows.length" class="mb-2 border-t border-gray-100 pt-2">
-        <div class="mb-1 text-[11px] text-gray-400">模型缓存</div>
-        <div class="grid grid-cols-2 gap-2 sm:grid-cols-4">
-          <div v-for="row in cacheUsageRows" :key="row.label" class="rounded bg-emerald-50 px-2 py-1">
-            <div class="text-[11px] text-emerald-600">{{ row.label }}</div>
-            <div class="font-medium text-emerald-800">{{ row.value }}</div>
+        <div class="mb-2">
+          <div class="mb-1 flex items-center justify-between gap-3 text-[11px] text-gray-400">
+            <span class="min-w-0 truncate" :title="contextSummary">{{ contextSummary }}</span>
+            <span class="shrink-0">{{ usagePercentageText }}%</span>
+          </div>
+          <div class="relative h-1.5 overflow-hidden rounded-full bg-gray-100">
+            <div class="h-full rounded-full bg-blue-400" :style="{ width: `${usagePercentage}%` }"></div>
+            <span
+              v-if="compressionTriggerPercentage !== null"
+              class="absolute top-0 h-full w-px bg-amber-500"
+              :style="{ left: `${compressionTriggerPercentage}%` }"
+              title="自动压缩阈值"
+            ></span>
           </div>
         </div>
-      </div>
-      <div v-if="messageRows.length" class="space-y-1.5">
-        <div class="flex items-center justify-between">
-          <span class="text-[11px] text-gray-400">本次输入内容</span>
-          <div class="inline-flex rounded bg-gray-100 p-0.5">
-            <button
-              type="button"
-              class="border-none rounded px-2 py-0.5 text-[11px] cursor-pointer"
-              :class="sortMode === 'round' ? 'bg-white text-gray-700 shadow-sm' : 'bg-transparent text-gray-400'"
-              @click="sortMode = 'round'"
-            >
-              时序
-            </button>
-            <button
-              type="button"
-              class="border-none rounded px-2 py-0.5 text-[11px] cursor-pointer"
-              :class="sortMode === 'desc' ? 'bg-white text-gray-700 shadow-sm' : 'bg-transparent text-gray-400'"
-              @click="sortMode = 'desc'"
-            >
-              Token↓
-            </button>
-            <button
-              type="button"
-              class="border-none rounded px-2 py-0.5 text-[11px] cursor-pointer"
-              :class="sortMode === 'asc' ? 'bg-white text-gray-700 shadow-sm' : 'bg-transparent text-gray-400'"
-              @click="sortMode = 'asc'"
-            >
-              Token↑
-            </button>
-          </div>
-        </div>
-        <div class="max-h-[250px] overflow-auto rounded border border-gray-100 bg-white">
-          <div class="sticky top-0 z-10 grid grid-cols-[minmax(0,1fr)_minmax(72px,0.5fr)_34px_42px_44px_48px] items-center gap-2 border-b border-gray-100 bg-slate-50 px-2 py-1 text-[10px] text-gray-400">
-            <span>内容</span>
-            <span>占比</span>
-            <span class="text-center">轮次</span>
-            <span class="text-center">类型</span>
-            <span class="text-right">耗时</span>
-            <span class="text-right">Token</span>
-          </div>
-          <div v-for="item in messageRows" :key="item.key" class="border-b border-gray-50 last:border-b-0">
-            <button type="button" class="grid w-full grid-cols-[minmax(0,1fr)_minmax(72px,0.5fr)_34px_42px_44px_48px] items-center gap-2 border-none bg-transparent px-2 py-1 text-left text-[11px] cursor-pointer hover:bg-slate-50" @click="toggleMessage(item.key)">
-              <span class="truncate text-gray-700" :title="item.content || getRowContent(item)">{{ getRowContent(item) }}</span>
-              <span class="flex min-w-0 items-center gap-1.5">
-                <span class="h-1 flex-1 overflow-hidden rounded-full bg-gray-100">
-                  <span class="block h-full rounded-full bg-blue-400" :style="{ width: `${Math.min(Math.abs(item.percentage), 100)}%` }"></span>
-                </span>
-                <span class="w-8 text-right font-mono text-[10px] text-gray-400">{{ item.percentage.toFixed(item.percentage % 1 === 0 ? 0 : 1) }}%</span>
-              </span>
-              <span class="text-center text-gray-400">{{ item.round || '-' }}</span>
-              <span :class="['justify-self-center whitespace-nowrap rounded px-1 py-0.5 text-[10px]', getTypeClass(item)]" :title="getTypeTitle(item)">{{ getTypeLabel(item) }}</span>
-              <span class="text-right font-mono text-[10px] text-gray-400" :title="formatTimingTitle(item)">{{ formatDuration(item) }}</span>
-              <span class="text-right font-mono text-gray-500">{{ formatTokenUsageDisplay({ used: item.tokens, total: 1 }).split(' / ')[0] }}</span>
-            </button>
-            <div v-if="expandedMessageKeys.has(item.key) && item.children?.length" class="space-y-1 border-t border-gray-100 bg-slate-50 px-2 py-1.5">
-              <div v-for="child in item.children" :key="child.key" class="rounded bg-white">
-                <button
-                  type="button"
-                  class="flex w-full items-center justify-between gap-2 border-none bg-transparent p-1.5 text-left text-[11px] text-gray-500 cursor-pointer hover:bg-slate-50"
-                  @click="toggleChild(child.key)"
-                >
-                  <span class="flex min-w-0 items-center gap-1">
-                    <i :class="['fa-solid text-[9px] text-gray-400', expandedChildKeys.has(child.key) ? 'fa-chevron-down' : 'fa-chevron-right']"></i>
-                    <span class="truncate">{{ child.label }}</span>
-                  </span>
-                  <span class="shrink-0 font-mono">{{ formatTokenUsageDisplay({ used: child.tokens, total: 1 }).split(' / ')[0] }}</span>
-                </button>
-                <pre
-                  v-if="expandedChildKeys.has(child.key)"
-                  class="m-0 max-h-48 overflow-auto whitespace-pre-wrap border-t border-gray-100 px-1.5 py-1 text-[11px] leading-relaxed text-gray-600"
-                >{{ child.content || child.description || '' }}</pre>
-              </div>
+        <div v-if="cacheUsageRows.length" class="mb-2 border-t border-gray-100 pt-2">
+          <div class="mb-1 text-[11px] text-gray-400">模型缓存</div>
+          <div class="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <div v-for="row in cacheUsageRows" :key="row.label" class="rounded bg-emerald-50 px-2 py-1">
+              <div class="text-[11px] text-emerald-600">{{ row.label }}</div>
+              <div class="font-medium text-emerald-800">{{ row.value }}</div>
             </div>
-            <pre v-else-if="expandedMessageKeys.has(item.key)" class="max-h-40 overflow-auto whitespace-pre-wrap border-t border-gray-100 bg-slate-50 px-2 py-1.5 text-[11px] leading-relaxed text-gray-600">{{ item.content || item.description || '' }}</pre>
           </div>
         </div>
+        <div v-if="messageRows.length" class="space-y-1.5">
+          <div class="flex items-center justify-between">
+            <span class="text-[11px] text-gray-400">本次输入内容</span>
+            <div class="inline-flex rounded bg-gray-100 p-0.5">
+              <button
+                type="button"
+                class="border-none rounded px-2 py-0.5 text-[11px] cursor-pointer"
+                :class="sortMode === 'round' ? 'bg-white text-gray-700 shadow-sm' : 'bg-transparent text-gray-400'"
+                @click="sortMode = 'round'"
+              >
+                时序
+              </button>
+              <button
+                type="button"
+                class="border-none rounded px-2 py-0.5 text-[11px] cursor-pointer"
+                :class="sortMode === 'desc' ? 'bg-white text-gray-700 shadow-sm' : 'bg-transparent text-gray-400'"
+                @click="sortMode = 'desc'"
+              >
+                Token↓
+              </button>
+              <button
+                type="button"
+                class="border-none rounded px-2 py-0.5 text-[11px] cursor-pointer"
+                :class="sortMode === 'asc' ? 'bg-white text-gray-700 shadow-sm' : 'bg-transparent text-gray-400'"
+                @click="sortMode = 'asc'"
+              >
+                Token↑
+              </button>
+            </div>
+          </div>
+          <div class="max-h-[250px] overflow-auto rounded border border-gray-100 bg-white">
+            <div class="sticky top-0 z-10 grid grid-cols-[minmax(0,1fr)_minmax(72px,0.5fr)_34px_42px_44px_48px] items-center gap-2 border-b border-gray-100 bg-slate-50 px-2 py-1 text-[10px] text-gray-400">
+              <span>内容</span>
+              <span>占比</span>
+              <span class="text-center">轮次</span>
+              <span class="text-center">类型</span>
+              <span class="text-right">耗时</span>
+              <span class="text-right">Token</span>
+            </div>
+            <div v-for="item in messageRows" :key="item.key" class="border-b border-gray-50 last:border-b-0">
+              <button type="button" class="grid w-full grid-cols-[minmax(0,1fr)_minmax(72px,0.5fr)_34px_42px_44px_48px] items-center gap-2 border-none bg-transparent px-2 py-1 text-left text-[11px] cursor-pointer hover:bg-slate-50" @click="toggleMessage(item.key)">
+                <span class="truncate text-gray-700" :title="item.content || getRowContent(item)">{{ getRowContent(item) }}</span>
+                <span class="flex min-w-0 items-center gap-1.5">
+                  <span class="h-1 flex-1 overflow-hidden rounded-full bg-gray-100">
+                    <span class="block h-full rounded-full bg-blue-400" :style="{ width: `${Math.min(Math.abs(item.percentage), 100)}%` }"></span>
+                  </span>
+                  <span class="w-8 text-right font-mono text-[10px] text-gray-400">{{ item.percentage.toFixed(item.percentage % 1 === 0 ? 0 : 1) }}%</span>
+                </span>
+                <span class="text-center text-gray-400">{{ item.round || '-' }}</span>
+                <span :class="['justify-self-center whitespace-nowrap rounded px-1 py-0.5 text-[10px]', getTypeClass(item)]" :title="getTypeTitle(item)">{{ getTypeLabel(item) }}</span>
+                <span class="text-right font-mono text-[10px] text-gray-400" :title="formatTimingTitle(item)">{{ formatDuration(item) }}</span>
+                <span class="text-right font-mono text-gray-500">{{ formatTokenUsageDisplay({ used: item.tokens, total: 1 }).split(' / ')[0] }}</span>
+              </button>
+              <div v-if="expandedMessageKeys.has(item.key) && item.children?.length" class="space-y-1 border-t border-gray-100 bg-slate-50 px-2 py-1.5">
+                <div v-for="child in item.children" :key="child.key" class="rounded bg-white">
+                  <button
+                    type="button"
+                    class="flex w-full items-center justify-between gap-2 border-none bg-transparent p-1.5 text-left text-[11px] text-gray-500 cursor-pointer hover:bg-slate-50"
+                    @click="toggleChild(child.key)"
+                  >
+                    <span class="flex min-w-0 items-center gap-1">
+                      <i :class="['fa-solid text-[9px] text-gray-400', expandedChildKeys.has(child.key) ? 'fa-chevron-down' : 'fa-chevron-right']"></i>
+                      <span class="truncate">{{ child.label }}</span>
+                    </span>
+                    <span class="shrink-0 font-mono">{{ formatTokenUsageDisplay({ used: child.tokens, total: 1 }).split(' / ')[0] }}</span>
+                  </button>
+                  <pre
+                    v-if="expandedChildKeys.has(child.key)"
+                    class="m-0 max-h-48 overflow-auto whitespace-pre-wrap border-t border-gray-100 px-1.5 py-1 text-[11px] leading-relaxed text-gray-600"
+                  >{{ child.content || child.description || '' }}</pre>
+                </div>
+              </div>
+              <pre v-else-if="expandedMessageKeys.has(item.key)" class="max-h-40 overflow-auto whitespace-pre-wrap border-t border-gray-100 bg-slate-50 px-2 py-1.5 text-[11px] leading-relaxed text-gray-600">{{ item.content || item.description || '' }}</pre>
+            </div>
+          </div>
+        </div>
+        <div v-else class="text-gray-400">暂无可拆分明细。</div>
       </div>
-      <div v-else class="text-gray-400">暂无可拆分明细。</div>
-    </div>
+    </Teleport>
   </div>
 </template>
