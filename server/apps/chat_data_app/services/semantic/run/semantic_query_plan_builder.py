@@ -379,7 +379,10 @@ def composite_metric_verbalization(
     if not formula:
         return ""
     try:
-        members = resolve_composite_metric(cfg, metrics_map)["members"]
+        resolved = resolve_composite_metric(cfg, metrics_map)
+        if resolved is None:  # 不可达：上方 is_composite_metric 已保证是复合指标
+            raise ValueError("非复合指标")
+        members = resolved["members"]
     except ValueError:
         members = [
             {"name": ref, "expression": normalize_text((metrics_map.get(ref) or {}).get("expression"))}

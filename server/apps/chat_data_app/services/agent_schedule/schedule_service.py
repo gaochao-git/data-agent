@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
@@ -121,7 +122,8 @@ def _resolve_schedule_fields(
         if plan_time <= now:
             raise AgentScheduleValidationError("单次任务的执行时间必须晚于当前时间")
         resolved_cron = ""
-        next_trigger = plan_time
+        # cron 分支的 compute_next_trigger 可能返回 None，故声明为 Optional
+        next_trigger: datetime | None = plan_time
     else:
         resolved_cron = validate_cron_expr(cron_expr or "")
         plan_time = None
@@ -135,7 +137,13 @@ def _resolve_schedule_fields(
         if next_trigger is None:
             raise AgentScheduleValidationError("cron 表达式在有效期内没有可触发的时间点")
 
-    if resolved_type == SCHEDULE_TYPE_ONCE and resolved_end is not None and plan_time > resolved_end:
+    # ONCE 分支的 plan_time 必为 datetime；plan_time is not None 仅作类型收窄，运行时恒真
+    if (
+        resolved_type == SCHEDULE_TYPE_ONCE
+        and resolved_end is not None
+        and plan_time is not None
+        and plan_time > resolved_end
+    ):
         raise AgentScheduleValidationError("单次任务的执行时间不能晚于有效期结束时间")
     return resolved_type, resolved_cron, plan_time, resolved_end, next_trigger
 
@@ -592,8 +600,8 @@ class AgentScheduleService:
     def _build_job_list_item(
         job: ChatDataAgentSchedule,
         stats: dict[str, Any],
-        titles: dict[str, str | None],
-        latest_runs: dict[str, ChatDataAgentScheduleRun | None],
+        titles: Mapping[str, str | None],
+        latest_runs: Mapping[str, ChatDataAgentScheduleRun | None],
     ) -> dict[str, Any]:
         """组装单条任务列表项，含会话标题与最近一次执行状态（裸 datetime 转 ISO）。"""
         item = job.to_dict()

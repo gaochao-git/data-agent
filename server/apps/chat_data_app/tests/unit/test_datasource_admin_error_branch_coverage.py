@@ -12,6 +12,7 @@ import json
 import os
 import sys
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from fastapi import HTTPException
@@ -105,7 +106,7 @@ def _mock_boom(monkeypatch):
 
 
 # (端点, 位置参数, 关键字参数)
-ENDPOINTS = [
+ENDPOINTS: list[tuple[Any, tuple[Any, ...], dict[str, Any]]] = [
     (admin.get_admin_datasources, (), {}),
     (admin.create_datasource_group, (_AnyBody(),), {}),
     (admin.update_datasource_meta, ("ds_a", _AnyBody()), {}),

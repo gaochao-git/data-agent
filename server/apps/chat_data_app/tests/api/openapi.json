@@ -9317,8 +9317,15 @@
             "name": "tables",
             "required": false,
             "schema": {
-              "title": "Tables",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tables"
             }
           }
         ],

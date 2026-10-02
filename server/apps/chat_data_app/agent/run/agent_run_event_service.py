@@ -279,7 +279,9 @@ class AgentRunEventService:
     @staticmethod
     async def _client_disconnected(is_disconnected: Callable[[], Awaitable[bool]] | None) -> bool:
         """与原内联写法一致：未传回调时不短路触发额外逻辑。"""
-        return bool(is_disconnected) and bool(await is_disconnected())
+        if is_disconnected is None:
+            return False
+        return bool(await is_disconnected())
 
     @staticmethod
     def _terminal_events(stop: bool, fallback: dict[str, str] | None) -> Iterator[dict[str, str]]:

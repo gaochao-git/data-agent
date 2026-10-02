@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 
 from utils.logger import get_logger
 from utils.models import ChatDataQueryExecution
@@ -251,8 +251,13 @@ class QueryTaskService:
         return task_response
 
     @staticmethod
-    def build_query_task_execution_views(executions: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """构造任务状态接口使用的轻量执行视图，避免和 results[] 重复返回业务结果。"""
+    def build_query_task_execution_views(
+        executions: Sequence[dict[str, Any] | ChatDataQueryExecution],
+    ) -> list[dict[str, Any]]:
+        """构造任务状态接口使用的轻量执行视图，避免和 results[] 重复返回业务结果。
+
+        入参同时兼容 ORM 行（.to_dict()）与已转 dict 的执行数据（历史调用两种形态都有）。
+        """
         view_fields = (
             "execution_id",
             "task_id",
@@ -623,7 +628,8 @@ class QueryTaskService:
         execution_by_remote_task_id: dict[str, dict[str, Any]],
     ) -> None:
         try:
-            statement_index = int(remote_task.get("statement_index"))
+            # 缺省/非法值经 TypeError/ValueError 统一走早退（int(None) 即 TypeError）
+            statement_index = int(cast(int, remote_task.get("statement_index")))
         except (TypeError, ValueError):
             return
         if statement_index < 0 or statement_index >= len(statements):
@@ -844,7 +850,8 @@ class QueryTaskService:
         cancelled_execution_map = self.build_cancelled_execution_map(executions)
         remote_results: list[dict[str, Any]] = []
         for remote_task, fetched in zip(remote_tasks, fetched_results, strict=True):
-            if isinstance(fetched, Exception):
+            # gather(return_exceptions=True) 会返回 BaseException（含 CancelledError），一并降级
+            if isinstance(fetched, BaseException):
                 logger.warning(
                     "拉取 HTTP 远端结果失败，降级本地执行状态: remote_task_id=%s error=%s",
                     remote_task.get("remote_task_id"),
@@ -868,7 +875,7 @@ class QueryTaskService:
         ]
 
     @staticmethod
-    def _degraded_remote_result(error: Exception, local_execution: dict[str, Any] | None) -> dict[str, Any]:
+    def _degraded_remote_result(error: BaseException, local_execution: dict[str, Any] | None) -> dict[str, Any]:
         """远端状态接口异常时的降级结果：沿用本地执行状态，不武断终态化。
 
         status 收敛到远端结果契约枚举内（见 result.query_result_status）：本地专属状态
@@ -896,7 +903,7 @@ class QueryTaskService:
         local_cancelled_execution: dict[str, Any] | None,
     ) -> dict[str, Any]:
         """构造单个成员远端实时结果。"""
-        base = {
+        base: dict[str, Any] = {
             "member_datasource_id": remote_task.get("member_datasource_id"),
             "member_name": remote_task.get("member_name"),
             "sql": ((response_data.get("request_payload") or {}).get("sql") or ""),

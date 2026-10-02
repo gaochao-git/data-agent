@@ -8,6 +8,7 @@
 
 import json
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 from langchain_core.messages import HumanMessage
@@ -15,6 +16,8 @@ from sqlalchemy.exc import OperationalError
 
 from apps.chat_data_app.agent.run.agent_inbox_service import AgentRunLeaseLostError
 from apps.chat_data_app.agent.run.conversation_event_service import ConversationEventService
+from apps.chat_data_app.daos.agent_inbox_dao import AgentInboxDao
+from apps.chat_data_app.daos.conversation_event_dao import ConversationEventDao
 
 _build_history_payload = ConversationEventService._build_history_payload
 
@@ -74,8 +77,11 @@ class InboxDao:
         return self.run
 
 
-def _service(dao=None, inbox_dao=None) -> ConversationEventService:
-    return ConversationEventService(dao or SnapshotDao(), inbox_dao or InboxDao())
+def _service(dao: Any = None, inbox_dao: Any = None) -> ConversationEventService:
+    return ConversationEventService(
+        cast("ConversationEventDao | None", dao or SnapshotDao()),
+        cast(AgentInboxDao, inbox_dao or InboxDao()),
+    )
 
 
 async def _persist(service, *, stream_id="5-0", **overrides):

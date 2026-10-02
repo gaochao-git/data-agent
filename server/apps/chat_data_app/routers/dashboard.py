@@ -47,9 +47,7 @@ def _with_dashboard_permission(dashboard: dict[str, Any], user_id: str) -> dict[
 def _with_dashboard_permission(dashboard: None, user_id: str) -> None: ...
 
 
-def _with_dashboard_permission(
-    dashboard: dict[str, Any] | None, user_id: str
-) -> dict[str, Any] | None:
+def _with_dashboard_permission(dashboard: dict[str, Any] | None, user_id: str) -> dict[str, Any] | None:
     """补充当前用户对看板的管理权限。
 
     输入非 None 时输出必非 None（overload 表达该契约，供列表推导等调用点收窄）。

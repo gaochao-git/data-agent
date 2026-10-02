@@ -10,7 +10,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 
 from utils.database import get_session
 from utils.logger import get_logger
@@ -79,7 +79,7 @@ async def execute_dashboard_panel_sql(
     sql = panel.get("sql") or ""
 
     if not datasource_id:
-        member_result = {
+        member_result: dict[str, Any] = {
             "member_datasource_id": None,
             "member_name": None,
             "sql": sql,
@@ -654,8 +654,9 @@ async def run_dashboard_panel_task(task_id: str, task: dict[str, Any]) -> None:
         operator_name=operator_name,
         query_task_id=task_id,
     )
-    result_data = (
-        panel_entry.get("payload")
+    # payload 契约恒为 dict；dict.get 桩返回 Any | None 故需显式 cast
+    result_data: dict[str, Any] = (
+        cast(dict[str, Any], panel_entry.get("payload"))
         if panel_entry.get("status") == "succeeded"
         else {
             "panel_id": panel.get("id"),
@@ -669,13 +670,15 @@ async def run_dashboard_panel_task(task_id: str, task: dict[str, Any]) -> None:
             },
         }
     )
-    if not query_result_succeeded(result_data.get("result") or {}):
+    raw_result = result_data.get("result")
+    result_payload: dict[str, Any] = raw_result if isinstance(raw_result, dict) else {}
+    if not query_result_succeeded(result_payload):
         await dashboard_runtime().update_query_task(
             task_id,
             status="failed",
             progress_text="执行失败",
             result_payload=result_data,
-            error_message=(result_data.get("result") or {}).get("error") or "面板执行失败",
+            error_message=result_payload.get("error") or "面板执行失败",
             finished_time=datetime.now(),
         )
         return

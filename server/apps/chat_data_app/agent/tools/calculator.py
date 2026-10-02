@@ -4,6 +4,7 @@ import ast
 import json
 import operator
 import re
+from collections.abc import Callable
 from decimal import ROUND_HALF_UP, Decimal, getcontext
 from typing import Annotated, Any
 
@@ -16,7 +17,9 @@ from ...schema import CalculatorItem
 
 logger = get_logger(__name__)
 
-_OPERATORS = {
+# 一元(pos/neg)与二元(add/sub/mul/truediv)签名不同，统一按任意参数调用后返回 Decimal/Any；
+# 键需同时容纳 ast.operator 与 ast.unaryop 两个分支，故用 ast.AST
+_OPERATORS: dict[type[ast.AST], Callable[..., Any]] = {
     ast.Add: operator.add,
     ast.Sub: operator.sub,
     ast.Mult: operator.mul,

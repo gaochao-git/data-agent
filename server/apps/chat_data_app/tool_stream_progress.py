@@ -7,6 +7,7 @@
 """
 
 import json
+from typing import Any
 
 from .agent_run_support import _get_timestamp
 
@@ -90,7 +91,7 @@ def _format_tool_progress_event(
 
     行数与 intent 字段按需携带：非行数统计工具的事件只带 intent，避免前端把 0 当成有效行数。
     """
-    data = {
+    data: dict[str, Any] = {
         "type": "tool_progress",
         "tool_call_id": tool_call_id,
         "tool_name": tool_name,

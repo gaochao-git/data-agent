@@ -435,12 +435,13 @@ def _build_memory_compression_hook(
     仅闭包绑定定位记忆文件所需的最小上下文，调度侧的开关与空快照守卫在
     ``schedule_memory_extraction_now`` 内统一执行。
     """
-    if not str(conversation_id or "").strip():
+    normalized_conversation_id = str(conversation_id or "").strip()
+    if not normalized_conversation_id:
         return None
 
     def _on_dropped_messages(dropped: list[Any]) -> None:
         schedule_memory_extraction_now(
-            conversation_id=conversation_id,
+            conversation_id=normalized_conversation_id,
             workspace_root=workspace_root,
             model_id=model_id,
             messages=dropped,

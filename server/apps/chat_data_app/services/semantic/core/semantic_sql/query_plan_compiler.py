@@ -2,7 +2,7 @@
 
 import re
 from contextvars import ContextVar
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, cast
 
 from . import filter_compiler
 from .dialect import get_dialect
@@ -592,7 +592,8 @@ def _append_limit_offset(
         if limit is None:
             raise ValueError("OFFSET 必须配合 LIMIT 使用")
     if limit is not None or offset is not None:
-        parts.append(sql_dialect.limit_offset(int(limit), int(offset or 0)))
+        # offset 非 None 时上方已强制 limit 非 None；否则本分支条件保证 limit 非 None
+        parts.append(sql_dialect.limit_offset(int(cast(int, limit)), int(offset or 0)))
 
 
 class _QueryPlanInputs(NamedTuple):

@@ -7,7 +7,7 @@ continues to use the authoritative ChatData configuration stored in the DB.
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, cast
 
 import yaml
 
@@ -214,7 +214,8 @@ def _metric_extension_data(item: dict[str, Any], datatype: str | None) -> dict[s
             {
                 "metric_kind": "composite",
                 "formula": _text(item.get("formula")),
-                "metric_refs": parse_formula_refs(item.get("formula")),
+                # formula 已由上方 _text/分支保证非空（_is_composite_metric 要求 formula 存在）
+                "metric_refs": parse_formula_refs(cast(str, item.get("formula"))),
             }
         )
     return data
@@ -223,7 +224,9 @@ def _metric_extension_data(item: dict[str, Any], datatype: str | None) -> dict[s
 def _metrics_by_name(config: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """指标名 → 配置：派生/复合指标解析成员时复用同一份索引。"""
     return {
-        item.get("name"): item for item in config.get("metrics") or [] if isinstance(item, dict) and item.get("name")
+        cast(str, item.get("name")): item
+        for item in config.get("metrics") or []
+        if isinstance(item, dict) and item.get("name")
     }
 
 
@@ -494,7 +497,7 @@ class ChatDataToOssieConverter:
         datatype_type: Any,
     ) -> list[Any]:
         """把属于当前表的维度转换为 OSI 字段。"""
-        fields = []
+        fields: list[Any] = []
         for item in config.get("dimensions") or []:
             self._append_dataset_field(
                 fields,
@@ -593,7 +596,7 @@ class ChatDataToOssieConverter:
                 continue
             physical_type = ChatDataToOssieConverter._resolve_column_physical_type(table.get("columns"), column_name)
             if physical_type:
-                return _datatype(physical_type)
+                return _datatype(physical_type) or ""
         return ""
 
     @staticmethod

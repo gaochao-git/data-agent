@@ -273,7 +273,7 @@ async def sandbox_read_text_file(
             source_offset,
         )
         has_more_lines = has_more_lines or budget_trimmed
-        result = {
+        result: dict[str, Any] = {
             "exists": True,
             "is_dir": False,
             "is_binary": False,
@@ -319,7 +319,10 @@ async def _build_sandbox_list_entry(
         == "dir"
     )
     modified_at = getattr(entry, "modified_at", None)
-    mtime = modified_at.strftime("%Y-%m-%d %H:%M") if hasattr(modified_at, "strftime") else str(modified_at or "")
+    if modified_at is not None and hasattr(modified_at, "strftime"):
+        mtime = modified_at.strftime("%Y-%m-%d %H:%M")
+    else:
+        mtime = str(modified_at or "")
     visible_path = sandbox_path_to_visible(entry_path)
     return {
         "type": "dir" if is_dir else "file",
@@ -632,7 +635,7 @@ async def sandbox_write_internal_text_files(
             session=session,
             changed_paths=[target for target, _ in targets],
         )
-        results = [
+        results: list[dict[str, Any]] = [
             {
                 "operation": "write",
                 "file_path": sandbox_path_to_visible(target),

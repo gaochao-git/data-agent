@@ -77,7 +77,8 @@ SQL:
                 ext1={"purpose": "query_metadata"},
             )
             raise
-        content = response.content.strip()
+        # 纯文本提示词的响应 content 恒为 str；多模态块列表仅出现在图片输入场景
+        content = str(response.content).strip()
 
         # 移除可能的markdown代码块标记
         if content.startswith("```"):

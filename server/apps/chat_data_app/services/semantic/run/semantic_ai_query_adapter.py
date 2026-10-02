@@ -8,7 +8,7 @@ BI 可视化入口见 semantic_bi_query_adapter.SemanticBIQueryAdapter，两者�
 
 import re
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 from utils.logger import get_logger
 
@@ -635,14 +635,14 @@ class SemanticAIQueryAdapter:
         if plan.matched_dimensions:
             first_dim_name = self._extract_dimension_name(plan.matched_dimensions[0])
             first_dim_cfg = self.dimensions_map.get(first_dim_name) or {}
-            plan.main_table = first_dim_cfg.get("table")
+            plan.main_table = first_dim_cfg.get("table") or ""
             plan.main_table_alias = self._table_alias(first_dim_cfg)
         if not plan.main_table and plan.matched_metrics:
             first_metric = plan.matched_metrics[0]
-            plan.main_table = first_metric.get("table")
+            plan.main_table = first_metric.get("table") or ""
             plan.main_table_alias = self._table_alias(first_metric)
         if not plan.main_table and plan.having_metric_names:
-            plan.main_table = (self.metrics_map.get(plan.having_metric_names[0]) or {}).get("table")
+            plan.main_table = (self.metrics_map.get(plan.having_metric_names[0]) or {}).get("table") or ""
         plan.main_table_alias = plan.main_table_alias or plan.main_table
 
     def _build_builder_dimensions(self, plan: _UnifiedEnginePlan) -> None:
@@ -829,7 +829,8 @@ class SemanticAIQueryAdapter:
             if parsed and parsed[1]:
                 column = parsed[1]
             elif metric_cfg.get("column"):
-                column = metric_cfg.get("column")
+                # elif 条件已保证非 None
+                column = cast(str, metric_cfg.get("column"))
             plan.builder_order_by.append(
                 {
                     "id": f"order-{field_name}",

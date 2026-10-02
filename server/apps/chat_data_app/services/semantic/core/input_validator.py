@@ -7,7 +7,7 @@
 import logging
 import re
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 
 from .filter_normalization import split_text_between_filter, time_equal_value_to_range
 
@@ -300,10 +300,11 @@ class InputValidator:
         err = self._validate_expression_operand(right, path="right")
         if err:
             return err
-        err = self._validate_expression_logical_value(left_name, right)
+        # _validate_expression_operand 已保证 right 是 literal/合法结构
+        err = self._validate_expression_logical_value(left_name, cast(dict, right))
         if err:
             return err
-        return self._validate_expression_allowed_value(left_name, operator, right)
+        return self._validate_expression_allowed_value(left_name, operator, cast(dict, right))
 
     def validate_dimension_operator(self, dim_name: str, operator: Any) -> str | None:
         """Enforce the optional per-dimension operator contract."""
@@ -549,7 +550,7 @@ class InputValidator:
     def _validate_filter_allowed_value(self, filter_node: dict) -> str | None:
         """校验枚举维度过滤值是否在 allowed_values 范围内。"""
         dim_name = filter_node.get("dimension")
-        dim_config = self.dimensions_map.get(dim_name) or {}
+        dim_config = self.dimensions_map.get(cast(str, dim_name)) or {}
         allowed_values = dim_config.get("allowed_values") or []
         if not allowed_values or not self._should_validate_allowed_values(dim_config):
             return None
@@ -583,7 +584,7 @@ class InputValidator:
         left = filter_node.get("left") or {}
         right = filter_node.get("right")
         left_dim_name = left.get("name")
-        dim_config = self.dimensions_map.get(left_dim_name) or {}
+        dim_config = self.dimensions_map.get(cast(str, left_dim_name)) or {}
         if (
             not self._should_normalize_allowed_values(dim_config)
             or not isinstance(right, dict)
@@ -612,7 +613,7 @@ class InputValidator:
     def _normalize_filter_allowed_value(self, filter_node: dict) -> dict:
         """返回应用 mapping 后的过滤条件副本。"""
         dim_name = filter_node.get("dimension")
-        dim_config = self.dimensions_map.get(dim_name) or {}
+        dim_config = self.dimensions_map.get(cast(str, dim_name)) or {}
         if not self._should_normalize_allowed_values(dim_config):
             return filter_node
         normalized = dict(filter_node)

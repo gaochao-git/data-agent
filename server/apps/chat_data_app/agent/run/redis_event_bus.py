@@ -215,7 +215,8 @@ class RedisEventBus:
         return self._read_redis
 
     async def start(self) -> None:
-        await self.redis.ping()
+        # redis-py 桩对 sync/async 双客户端返回联合类型，asyncio 客户端实际返回 Awaitable
+        await self.redis.ping()  # type: ignore[misc]
 
     async def close(self) -> None:
         if self._redis is not None:
@@ -252,7 +253,7 @@ class RedisEventBus:
                 payload,
                 str(STREAM_TTL_SECONDS),
                 owner_token,
-            )
+            )  # type: ignore[misc]
         except ResponseError as exc:
             if "RUN_OWNER_MISMATCH" in str(exc):
                 raise RedisRunOwnerMismatchError(run_id) from exc
@@ -266,12 +267,12 @@ class RedisEventBus:
             self.run_owner_key(run_id),
             owner_token,
             str(STREAM_TTL_SECONDS),
-        )
+        )  # type: ignore[misc]
         if int(claimed or 0) != 1:
             raise RedisRunOwnerMismatchError(run_id)
 
     async def release_run_owner(self, run_id: str, owner_token: str) -> None:
-        await self.redis.eval(_RELEASE_OWNER_SCRIPT, 1, self.run_owner_key(run_id), owner_token)
+        await self.redis.eval(_RELEASE_OWNER_SCRIPT, 1, self.run_owner_key(run_id), owner_token)  # type: ignore[misc]
 
     async def renew_run_owner(self, run_id: str, owner_token: str) -> None:
         renewed = await self.redis.eval(
@@ -280,7 +281,7 @@ class RedisEventBus:
             self.run_owner_key(run_id),
             owner_token,
             str(STREAM_TTL_SECONDS),
-        )
+        )  # type: ignore[misc]
         if int(renewed or 0) != 1:
             raise RedisRunOwnerMismatchError(run_id)
 

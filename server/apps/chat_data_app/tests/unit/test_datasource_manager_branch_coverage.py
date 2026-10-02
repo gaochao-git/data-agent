@@ -9,6 +9,7 @@
 import os
 import sys
 from types import SimpleNamespace  # noqa: F401  # 测试按模块属性引用 SimpleNamespace，属有意重导出
+from typing import cast
 
 import pytest
 
@@ -17,6 +18,7 @@ os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 
+from apps.chat_data_app.daos.datasource_dao import DataSourceDao
 from apps.chat_data_app.services.datasource import manager as datasource_manager_module
 from apps.chat_data_app.services.datasource.manager import (
     DataSourceManager,
@@ -43,7 +45,7 @@ class _FakeDao:
 
 def _manager(**dao_returns) -> DataSourceManager:
     manager = DataSourceManager.__new__(DataSourceManager)
-    manager.datasource_dao = _FakeDao(**dao_returns)
+    manager.datasource_dao = cast(DataSourceDao, _FakeDao(**dao_returns))
     return manager
 
 

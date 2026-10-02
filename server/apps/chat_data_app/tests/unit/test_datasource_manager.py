@@ -2,6 +2,7 @@ import asyncio
 import copy
 import os
 import sys
+from typing import cast
 
 import httpx
 import pytest
@@ -11,6 +12,7 @@ os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 
+from apps.chat_data_app.daos.datasource_dao import DataSourceDao
 from apps.chat_data_app.services.datasource import credentials as datasource_credentials
 from apps.chat_data_app.services.datasource import manager as datasource_manager_module
 from apps.chat_data_app.services.datasource import permission as execution_permission
@@ -253,8 +255,8 @@ class _FakeStore:
 
 def _build_manager(fake_store: _FakeStore) -> DataSourceManager:
     manager = DataSourceManager.__new__(DataSourceManager)
-    manager.base_dir = None
-    manager.datasource_dao = fake_store
+    manager.base_dir = None  # type: ignore[attr-defined]  # __new__ 绕过 __init__，测试直填实例属性
+    manager.datasource_dao = cast(DataSourceDao, fake_store)
     return manager
 
 

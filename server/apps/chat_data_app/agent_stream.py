@@ -602,7 +602,9 @@ class _ToolStreamState:
         if intent:
             self.progress_intents[tool_call_id] = intent
         # 行数未变化的合并事件不携带行数字段，前端保留已有值
-        event_counts: tuple[int, int] | tuple[None, None] = counts if counts_changed else (None, None)
+        event_counts: tuple[int, int] | tuple[None, None] = (
+            counts if counts_changed and counts is not None else (None, None)
+        )
         return [
             _format_tool_progress_event(
                 tool_call_id,
@@ -854,8 +856,8 @@ class _AgentSseStreamAdapter:
                 continue
 
             message_chunk, metadata = payload
-            async for sse_event in self._iter_message_chunk_events(message_chunk, metadata, started_at):
-                yield sse_event
+            async for chunk_event in self._iter_message_chunk_events(message_chunk, metadata, started_at):
+                yield chunk_event
 
     async def _mark_stream_started(self) -> None:
         """流首个事件到达：置位标记并触发外部回调（仅一次）。"""
@@ -865,7 +867,7 @@ class _AgentSseStreamAdapter:
 
     async def _iter_message_chunk_events(
         self, message_chunk: Any, metadata: Any, started_at: float
-    ) -> AsyncIterator[dict[str, Any] | str]:
+    ) -> AsyncIterator[str]:
         """按可见性过滤并处理单个消息 chunk，产出 SSE 事件。"""
         if self.visible_message_filter and not self.visible_message_filter(message_chunk, metadata):
             return
@@ -1031,9 +1033,7 @@ class _AgentSseStreamAdapter:
             ext2=ext2 or {"elapsed_ms": elapsed_ms, "threshold_seconds": threshold_seconds},
         )
 
-    async def _handle_message_chunk(
-        self, message_chunk: Any, metadata: dict[str, Any]
-    ) -> AsyncIterator[dict[str, Any] | str]:
+    async def _handle_message_chunk(self, message_chunk: Any, metadata: dict[str, Any]) -> AsyncIterator[str]:
         flags = _MessageChunkFlags.of(message_chunk)
         if not flags.has_visible_payload and not (self.include_empty_tool_messages and flags.is_tool_message):
             return
@@ -1105,7 +1105,7 @@ def _is_chat_data_visible_stream_message(message_chunk: Any, metadata: dict[str,
 
 async def _generate_chat_data_stream(
     req: ChatDataStreamRequest,
-) -> AsyncIterator[dict[str, Any] | str]:
+) -> AsyncIterator[str]:
     """流式执行单一 ChatData Agent。"""
     # 入参对象在此拆成局部变量：函数体与拆分前保持一致，避免大范围表达式改写造成的
     # 语义漂移；签名的收窄已经让「一次执行的完整入参」成为可复用的一等公民。
@@ -1592,7 +1592,7 @@ async def _run_chat_data_agent_stream(
     *,
     req: ChatDataStreamRequest,
     log_phase: Callable[[str], None],
-) -> AsyncIterator[dict[str, Any] | str]:
+) -> AsyncIterator[str]:
     """执行已注册 active run 的 Agent 流，生命周期由外层统一收口。"""
     # 与 _generate_chat_data_stream 同一口径：入参对象在此还原为局部变量，函数体保持不变。
     thread_id = req.thread_id

@@ -4,7 +4,7 @@ ChatData API 数据模型定义
 
 import json
 from datetime import datetime
-from typing import Any, ForwardRef, Literal
+from typing import Any, ForwardRef, Literal, cast
 
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
@@ -132,7 +132,8 @@ class QueryTaskCreateRequest(BaseModel):
 class InternalQueryTaskCreateRequest(QueryTaskCreateRequest):
     """服务端内部查询任务请求，额外允许标记智能体来源。"""
 
-    query_type: Literal["sql", "builder", "agent"] = Field(default="sql", description="内部查询类型")
+    # 有意放宽：内部请求额外允许 agent 来源（基类对外仅暴露 sql/builder）
+    query_type: Literal["sql", "builder", "agent"] = Field(default="sql", description="内部查询类型")  # type: ignore[assignment]
 
 
 class CompileSemanticBuilderSqlRequest(BaseModel):
@@ -688,13 +689,20 @@ class SemanticConfigBatchToggleRequest(BaseModel):
     enabled: bool = Field(..., description="目标启用状态")
 
 
+_ALL_LEARNING_SOURCES: list[Literal["agent", "builder", "sql"]] = ["agent", "builder", "sql"]
+
+
+def _all_learning_sources() -> list[Literal["agent", "builder", "sql"]]:
+    return list(_ALL_LEARNING_SOURCES)
+
+
 class SemanticHistoryLearningRequest(BaseModel):
     """从当前指标集查询历史生成维护建议。"""
 
     days: int = Field(default=7, ge=1, le=90, description="学习最近多少天的历史")
     limit: int = Field(default=50, ge=1, le=200, description="最大学习历史条数")
     sources: list[Literal["agent", "builder", "sql"]] = Field(
-        default_factory=lambda: ["agent", "builder", "sql"], description="学习来源"
+        default_factory=_all_learning_sources, description="学习来源"
     )
     include_failed: bool = Field(default=True, description="是否包含失败的智能问数/可视化查询")
 
@@ -930,7 +938,7 @@ class _ListExecutionTargetsActionPayload(BaseModel):
 
 # action -> action_payload 校验模型。新增 action 时在此登记对应 payload 模型，
 # 入参校验与 handler 内的解析共用同一张表，保证两处口径一致。
-DATA_ANALYZING_ACTION_PAYLOAD_MODELS = {
+DATA_ANALYZING_ACTION_PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
     "validate_dsl": _ValidateDslActionPayload,
     "validate_dashboard": _ValidateDashboardActionPayload,
     "execute_query": SemanticQueryInput,
@@ -1009,8 +1017,9 @@ def validate_data_analyzing_payload(action: str, action_payload: dict[str, Any])
         raise ValueError(f"action={action} 的 action_payload 校验失败：{detail}{hint}") from None
     if action == "execute_query":
         # SemanticQueryInput 只做字段级校验；dsl/sql 二选一在此统一拦截
-        has_dsl = payload.dsl is not None
-        has_sql = bool(str(payload.sql or "").strip())
+        query_payload = cast(SemanticQueryInput, payload)
+        has_dsl = query_payload.dsl is not None
+        has_sql = bool(str(query_payload.sql or "").strip())
         if has_dsl == has_sql:
             raise ValueError("action=execute_query 必须且只能传入 dsl 或 sql 其中一个")
     return payload

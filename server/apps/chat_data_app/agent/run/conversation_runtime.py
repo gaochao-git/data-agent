@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from dataclasses import dataclass
 from typing import Any
 
@@ -21,7 +21,8 @@ class TurnPersistenceHooks:
     ``stream_agent_turn`` 的形参控制在 AGENTS.md §3 的阈值内。
     """
 
-    persist_user_message: AsyncHook
+    # persist_user_message 会被 asyncio.create_task 调度，必须是协程函数（其余两个仅 await）
+    persist_user_message: Callable[[], Coroutine[Any, Any, None]]
     persist_turn_history: AsyncHook
     persist_partial_history: AsyncHook
 

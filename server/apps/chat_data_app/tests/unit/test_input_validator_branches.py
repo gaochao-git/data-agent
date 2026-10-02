@@ -14,6 +14,8 @@ number/date/datetime 三种。这两条分支只能直接调用静态方法触�
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from apps.chat_data_app.services.semantic.core.input_validator import InputValidator
@@ -22,7 +24,7 @@ from apps.chat_data_app.services.semantic.core.input_validator import InputValid
 # 维度/指标配置：刻意包含各类「坏配置」以驱动配置校验分支
 # ---------------------------------------------------------------------------
 
-DIMENSIONS = {
+DIMENSIONS: dict[str, dict[str, Any]] = {
     # 枚举维度，带 allowed_values + mapping
     "city": {
         "logical_type": "enum",

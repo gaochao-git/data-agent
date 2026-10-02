@@ -9,14 +9,18 @@ cancel_run 走本地取消、终态发布失败与 owner 释放失败的兜底�
 
 import asyncio
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
 from apps.chat_data_app.agent.run.agent_inbox_service import (
+    AgentInboxService,
     AgentRunCancellationResult,
     AgentRunReapResult,
 )
+from apps.chat_data_app.agent.run.agent_run_event_service import AgentRunEventService
 from apps.chat_data_app.agent.run.agent_run_runtime import AgentRunRuntime
+from apps.chat_data_app.agent.run.redis_event_bus import RedisEventBus
 
 _REAL_SLEEP = asyncio.sleep
 
@@ -89,11 +93,11 @@ class _Inbox:
         return "active"
 
 
-def _runtime(inbox=None, events=None, bus=None) -> AgentRunRuntime:
+def _runtime(inbox: Any = None, events: Any = None, bus: Any = None) -> AgentRunRuntime:
     return AgentRunRuntime(
-        inbox_service=inbox or _Inbox(),
-        event_service=events or _Events(),
-        event_bus=bus or _EventBus(),
+        inbox_service=cast(AgentInboxService, inbox or _Inbox()),
+        event_service=cast(AgentRunEventService, events or _Events()),
+        event_bus=cast(RedisEventBus | None, bus or _EventBus()),
     )
 
 

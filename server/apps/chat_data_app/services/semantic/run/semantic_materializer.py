@@ -127,8 +127,10 @@ def _safe_file_name(config: dict[str, Any]) -> str:
 
 
 def _directory_item(config: dict[str, Any], path: str = "") -> dict[str, Any]:
-    metrics = config.get("metrics") if isinstance(config.get("metrics"), list) else []
-    dimensions = config.get("dimensions") if isinstance(config.get("dimensions"), list) else []
+    raw_metrics = config.get("metrics")
+    metrics = raw_metrics if isinstance(raw_metrics, list) else []
+    raw_dimensions = config.get("dimensions")
+    dimensions = raw_dimensions if isinstance(raw_dimensions, list) else []
     config_id = _config_id(config)
     item = {
         "id": config_id,
@@ -158,7 +160,7 @@ async def _load_selected_semantic_config(
     datasource_id: str | None,
     semantic_config_id: str,
     user_id: str | None,
-    column_dicts: dict[str, Any] | None = None,
+    column_dicts: dict[tuple[str, str], dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     """Reload one selected model with the current user's authorization."""
     normalized_datasource_id = str(datasource_id or "").strip()
@@ -334,7 +336,8 @@ async def _render_selected_configs(
     cache_hits = 0
     failed_ids: list[str] = []
     for config, result in zip(configs, rendered, strict=True):
-        if isinstance(result, Exception):
+        # gather(return_exceptions=True) 会把 BaseException（含 CancelledError）放进结果集
+        if isinstance(result, BaseException):
             logger.error("转换选中语义模型失败: config_id=%s error=%s", _config_id(config), result)
             failed_ids.append(_config_id(config))
             continue

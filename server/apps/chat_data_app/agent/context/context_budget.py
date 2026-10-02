@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -72,7 +73,7 @@ def estimate_tokens(text: str) -> int:
     return max(heuristic, byte_floor)
 
 
-def count_messages_tokens(messages: list[BaseMessage]) -> int:
+def count_messages_tokens(messages: Sequence[BaseMessage]) -> int:
     """估算 LangChain messages 的 token 数。"""
     return sum(_message_tokens(message) for message in messages or [])
 
@@ -137,6 +138,7 @@ def count_tools_tokens(tools: list[Any] | None) -> int:
     """估算工具 schema 的 token 数。"""
     total = 0
     for tool in tools or []:
+        payload: dict[str, Any] | str
         try:
             payload = tool if isinstance(tool, dict) else convert_to_openai_tool(tool)
         except Exception as exc:

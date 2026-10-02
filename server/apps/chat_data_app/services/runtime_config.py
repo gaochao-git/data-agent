@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import os
+from typing import Literal, cast
 
 from utils.builtin_skills import DATA_ANALYZING_SKILL
 from utils.logger import get_logger
@@ -119,15 +120,15 @@ DEFAULT_CONTEXT_WINDOW = 128000
 #   （local+true 即子进程以宿主权限执行代码，仅在可信 / 纯本地开发场景使用）。两个维度正交，组合交给部署者。
 # - bash_enabled=false（受控模式）时文件工具仍严格路径管控，用 local 即可，无需 sandbox 开销。
 # 完整选型矩阵见 chat_data_app/README.md「运行环境后端与 Bash 安全模型」。
-CHAT_DATA_DEFAULT_WORKSPACE_BACKEND = (
-    str(os.getenv("CHAT_DATA_DEFAULT_WORKSPACE_BACKEND") or "local").strip().lower() or "local"
-)
-if CHAT_DATA_DEFAULT_WORKSPACE_BACKEND not in ("local", "sandbox"):
+_raw_workspace_backend = str(os.getenv("CHAT_DATA_DEFAULT_WORKSPACE_BACKEND") or "local").strip().lower() or "local"
+if _raw_workspace_backend not in ("local", "sandbox"):
     logger.warning(
         "CHAT_DATA_DEFAULT_WORKSPACE_BACKEND=%r 非法，回退 local",
-        CHAT_DATA_DEFAULT_WORKSPACE_BACKEND,
+        _raw_workspace_backend,
     )
-    CHAT_DATA_DEFAULT_WORKSPACE_BACKEND = "local"
+    _raw_workspace_backend = "local"
+# 上面已做合法性校验回退，此处收紧为 Literal 供 AgentRuntimeOptions 使用
+CHAT_DATA_DEFAULT_WORKSPACE_BACKEND = cast('Literal["local", "sandbox"]', _raw_workspace_backend)
 # 注意：bash_run 另有代码级总闸（agent/tools/bash_run.py 的 BASH_RUN_DISABLED=True）：
 # env 或请求覆盖误开时，工具执行只会返回「功能已禁用」，命令不会真正触达运行时。
 CHAT_DATA_DEFAULT_BASH_ENABLED = read_bool_env("CHAT_DATA_DEFAULT_BASH_ENABLED", False)

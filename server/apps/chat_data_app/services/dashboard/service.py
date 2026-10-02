@@ -161,8 +161,9 @@ class DashboardService:
             panel_id=panel_id,
             user_id=user_id,
             panel_values=self._panel_create_values(
-                name=payload.name,
-                sql=payload.sql,
+                # add_panel 是创建语义：payload 缺省字段回落为 concrete 空值
+                name=payload.name or "",
+                sql=payload.sql or "",
                 chart_type=payload.chart_type or "table",
                 chart_config=payload.chart_config,
                 layout_x=payload.layout_x,

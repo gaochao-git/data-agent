@@ -36,7 +36,8 @@ def _chart_spec_graph_passthrough(chart_type: str, payload: dict[str, Any]) -> b
     """graph 类型只要 nodes/links 合法即通过，无需 data/encoding。"""
     if chart_type != "graph":
         return False
-    graph_payload = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+    data_payload = payload.get("data")
+    graph_payload: dict[str, Any] = data_payload if isinstance(data_payload, dict) else payload
     links = graph_payload.get("links") if isinstance(graph_payload.get("links"), list) else graph_payload.get("edges")
     return bool(
         isinstance(graph_payload.get("nodes"), list)
@@ -91,7 +92,7 @@ def parse_chart_spec_payload_value(payload: Any) -> dict[str, Any] | None:
     if chart_type_requires_data(chart_type) and not data:
         return None
     encoding = payload.get("encoding")
-    if not _chart_spec_encoding_valid(chart_type, encoding):
+    if not isinstance(encoding, dict) or not _chart_spec_encoding_valid(chart_type, encoding):
         return None
     if data and not _chart_spec_fields_exist(chart_type, data, encoding, encoding.get("y")):
         return None

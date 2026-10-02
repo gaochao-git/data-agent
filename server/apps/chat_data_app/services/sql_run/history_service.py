@@ -20,7 +20,7 @@ from .result import query_result_status
 logger = get_logger(__name__)
 
 QUERY_TASK_FINAL_STATUSES = {"succeeded", "failed", "cancelled", "partial_success"}
-RUNNING_SQL_STATUSES = {"pending", "running"}
+RUNNING_SQL_STATUSES = ("pending", "running")
 
 
 def _safe_json_loads(text: Any, default: Any = None) -> Any:

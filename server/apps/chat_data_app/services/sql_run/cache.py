@@ -152,7 +152,7 @@ async def save_http_remote_ref_sql_result_cache(
     if not remote_task_id:
         return
     source_type = str(result.get("source_type") or cache_identity.get("source_type") or "").strip().lower() or "hive"
-    payload = {
+    payload: dict[str, Any] = {
         "status": "succeeded",
         "cache_type": HTTP_REMOTE_REF_CACHE_TYPE,
         "remote_task_id": remote_task_id,

@@ -274,7 +274,8 @@ def get_chat_data_model_config(model: str | None = None) -> dict[str, Any]:
 
 def get_chat_data_temperature(model: str | None = None) -> float:
     """读取模型温度。"""
-    return float(get_chat_data_model_config(model).get("temperature"))
+    raw_temperature = get_chat_data_model_config(model).get("temperature")
+    return float(raw_temperature) if raw_temperature is not None else 0.7
 
 
 def get_chat_data_model_max_output_tokens(model: str | None = None) -> int:

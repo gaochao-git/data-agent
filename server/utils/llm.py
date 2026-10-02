@@ -44,7 +44,8 @@ def _patch_langchain_openai_reasoning_fields() -> None:
             }
         return chunk
 
-    openai_chat_base._convert_delta_to_message_chunk = patched_convert_delta_to_message_chunk
+    # 三方内部函数替换：patched 签名（-> Any）与原函数（-> BaseMessageChunk）不严格一致，运行时行为为原函数超集
+    openai_chat_base._convert_delta_to_message_chunk = patched_convert_delta_to_message_chunk  # type: ignore[assignment]
     _REASONING_PATCHED = True
 
 
@@ -78,7 +79,7 @@ def get_llm(
     """
     _patch_langchain_openai_reasoning_fields()
 
-    kwargs = {
+    kwargs: dict[str, Any] = {
         "model": model or os.getenv("OPENAI_ANALYSIS_MODEL", "gpt-4o-mini"),
         "model_provider": os.getenv("LLM_PROVIDER", "openai"),
         "temperature": temperature,

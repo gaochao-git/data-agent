@@ -10,6 +10,7 @@ import json
 from contextlib import asynccontextmanager
 from datetime import datetime
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -25,6 +26,7 @@ from apps.chat_data_app.agent.run.agent_inbox_service import (
     is_valid_redis_stream_id,
     normalize_history_checkpoint,
 )
+from apps.chat_data_app.daos.agent_inbox_dao import AgentInboxDao
 
 NOW = datetime(2026, 1, 1, 12, 0, 0)
 
@@ -58,7 +60,7 @@ def _fake_session(monkeypatch):
 
 
 def _service(**returns) -> AgentInboxService:
-    return AgentInboxService(dao=FakeDao(**returns))
+    return AgentInboxService(dao=cast(AgentInboxDao, FakeDao(**returns)))
 
 
 def _run(**overrides):

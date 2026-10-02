@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import time
 import weakref
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
 
 from langchain.agents.middleware import ModelCallResult, ModelRequest, wrap_model_call
@@ -344,8 +344,9 @@ def build_tools_breakdown(tools: list[Any]) -> list[dict[str, Any]]:
     工具定义无法像消息正文一样从会话历史反查，因此保留完整 schema 正文；
     工具数量有界（不随轮数增长），且 token_usage 每会话仅一行，体积可控。
     """
-    items = []
+    items: list[dict[str, Any]] = []
     for index, tool in enumerate(tools or []):
+        payload: dict[str, Any] | str
         try:
             payload = tool if isinstance(tool, dict) else convert_to_openai_tool(tool)
         except Exception:
@@ -353,7 +354,8 @@ def build_tools_breakdown(tools: list[Any]) -> list[dict[str, Any]]:
         content = json.dumps(payload, ensure_ascii=False, indent=2, default=str)
         name = ""
         if isinstance(payload, dict):
-            function = payload.get("function") if isinstance(payload.get("function"), dict) else {}
+            raw_function = payload.get("function")
+            function = raw_function if isinstance(raw_function, dict) else {}
             name = str(function.get("name") or payload.get("name") or "")
         items.append(
             {
@@ -471,7 +473,7 @@ def _build_message_breakdown_item(
 
 
 def build_message_breakdown(
-    messages: list[BaseMessage],
+    messages: Sequence[BaseMessage],
     *,
     scale: float = 1.0,
     start_index: int = 0,

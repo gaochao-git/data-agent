@@ -246,8 +246,8 @@ def _read_image_block(
     file_path: str,
     *,
     max_image_size: int,
-# 返回形状绑定不变量：block 为 None 当且仅当 failure 非 None。
-    ) -> tuple[dict[str, Any], None] | tuple[None, str]:
+    # 返回形状绑定不变量：block 为 None 当且仅当 failure 非 None。
+) -> tuple[dict[str, Any], None] | tuple[None, str]:
     """读取单张图片并编码为 base64 block；超限/格式不支持返回失败原因（文案用原始 file_path）。"""
     try:
         data = physical.read_bytes()

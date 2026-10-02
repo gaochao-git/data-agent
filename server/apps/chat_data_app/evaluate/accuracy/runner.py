@@ -10,12 +10,12 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 try:
     from .scorers import score_dsl
 except ImportError:
-    from scorers import score_dsl
+    from scorers import score_dsl  # type: ignore[no-redef]  # 脚本直跑时无包上下文的回退导入
 
 
 def _result_succeeded(result: Any) -> bool:
@@ -138,7 +138,8 @@ def validate_seven_tuple_fields(case: dict[str, Any], path: Path, index: int) ->
 
 
 def normalize_case_source(case: dict[str, Any], path: Path, index: int) -> None:
-    source = _LEGACY_SOURCE_MAP.get(case.get("source"), case.get("source"))
+    raw_source = case.get("source")
+    source = _LEGACY_SOURCE_MAP.get(cast(str, raw_source), raw_source)
     if source not in SOURCES:
         raise ValueError(f"source 非法: {path}#{index} value={case.get('source')}")
     case["source"] = source

@@ -371,7 +371,8 @@ def validate_dashboard_spec_structure(
     spec = dashboard_spec or {}
     if not str(spec.get("dashboard_name") or "").strip():
         errors.append("dashboard_name 必填")
-    cards = spec.get("cards") if isinstance(spec.get("cards"), list) else []
+    raw_cards = spec.get("cards")
+    cards = raw_cards if isinstance(raw_cards, list) else []
     if not cards:
         errors.append("cards 必须是非空数组")
         return errors
@@ -515,7 +516,8 @@ async def filter_executable_dashboard_panel_plans(
     marked_plans: list[dict[str, Any]] = []
     warnings: list[str] = []
     for plan in panel_plans:
-        card = plan.get("card") if isinstance(plan.get("card"), dict) else {}
+        raw_card = plan.get("card")
+        card = raw_card if isinstance(raw_card, dict) else {}
         if plan.get("error"):
             marked_plans.append(plan)
             continue
@@ -598,7 +600,8 @@ async def validate_dashboard_spec_payload(
     spec = dashboard_spec or {}
     if spec.get("need_clarify"):
         raise ValueError("当前方案仍需补充确认，暂不能写入看板")
-    cards = spec.get("cards") if isinstance(spec.get("cards"), list) else []
+    raw_cards = spec.get("cards")
+    cards = raw_cards if isinstance(raw_cards, list) else []
     if not cards:
         raise ValueError("看板规格缺少卡片，无法创建看板")
     default_semantic_config_id = str(semantic_config_id or spec.get("semantic_config_id") or "").strip() or None
@@ -774,7 +777,8 @@ async def _create_dashboard_panels(
     warnings = list(validation["warnings"])
     panels: list[dict[str, Any]] = []
     valid_sql_by_index = {int(item["index"]): item for item in validation["panels"]}
-    cards = spec.get("cards") if isinstance(spec.get("cards"), list) else []
+    raw_cards = spec.get("cards")
+    cards = raw_cards if isinstance(raw_cards, list) else []
     for index, card in enumerate(cards[:12]):
         plan = valid_sql_by_index.get(index)
         if not isinstance(card, dict):

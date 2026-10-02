@@ -7,7 +7,7 @@ run/semantic_quality_checker.first_structure_error（本模块不再提供独立
 """
 
 import re
-from typing import Any
+from typing import Any, cast
 
 from .common import is_time_logical_dimension
 from .input_validator import _NO_VALUE_FILTER_OPERATORS, FILTER_OPERATORS
@@ -170,12 +170,12 @@ def _validate_metrics_against_tables(metrics: list[dict], table_columns_map: dic
     return None
 
 
-def _validate_derived_metrics(metrics: list[dict], dimensions: list[dict]) -> str | None:
+def _validate_derived_metrics(metrics: list[dict[str, Any]], dimensions: list[dict[str, Any]]) -> str | None:
     """派生指标结构校验：基础指标、统计周期与修饰词过滤的合法性。"""
     if not any(is_derived_metric(metric) for metric in metrics or []):
         return None
-    metrics_map = {metric.get("name"): metric for metric in metrics or [] if metric.get("name")}
-    dimensions_map = {dim.get("name"): dim for dim in dimensions or [] if dim.get("name")}
+    metrics_map = {cast(str, metric.get("name")): metric for metric in metrics or [] if metric.get("name")}
+    dimensions_map = {cast(str, dim.get("name")): dim for dim in dimensions or [] if dim.get("name")}
     for metric in metrics or []:
         if not is_derived_metric(metric):
             continue
@@ -318,11 +318,11 @@ def _validate_in_filter_value(label: str, value: Any) -> str | None:
     return None
 
 
-def _validate_composite_metrics(metrics: list[dict]) -> str | None:
+def _validate_composite_metrics(metrics: list[dict[str, Any]]) -> str | None:
     """复合指标结构校验：公式语法、成员存在性、同表聚合原子约束。"""
     if not any(is_composite_metric(metric) for metric in metrics or []):
         return None
-    metrics_map = {metric.get("name"): metric for metric in metrics or [] if metric.get("name")}
+    metrics_map = {cast(str, metric.get("name")): metric for metric in metrics or [] if metric.get("name")}
     for metric in metrics or []:
         if not is_composite_metric(metric):
             continue
@@ -413,10 +413,11 @@ def _relationship_conditions(relationship: dict[str, Any]) -> list[dict[str, str
     if conditions:
         return conditions
     if relationship.get("left_column") or relationship.get("right_column"):
+        # 单列关系：另一列可能缺省为 None，消费方按 str() 渲染
         return [
             {
-                "left_column": relationship.get("left_column"),
-                "right_column": relationship.get("right_column"),
+                "left_column": cast(str, relationship.get("left_column")),
+                "right_column": cast(str, relationship.get("right_column")),
             }
         ]
     return []

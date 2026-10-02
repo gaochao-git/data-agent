@@ -6,7 +6,7 @@ import json
 import re
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 from langchain_core.messages import HumanMessage
 
@@ -26,7 +26,7 @@ from ..core.common import LOGICAL_TYPE_VALUES, build_table_columns_map
 logger = get_logger(__name__)
 
 ALLOWED_HISTORY_LEARNING_SOURCES = {"agent", "builder", "sql"}
-HISTORY_LEARNING_EMPTY_RESULT = {"metrics": [], "dimensions": [], "issues": []}
+HISTORY_LEARNING_EMPTY_RESULT: dict[str, list[dict[str, Any]]] = {"metrics": [], "dimensions": [], "issues": []}
 SKIP_COUNTER_TEMPLATE = {
     "source": 0,
     "semantic_config": 0,
@@ -499,7 +499,8 @@ def _normalize_history_base_fields(
     if not samples:
         return None
     try:
-        support_count = max(1, int(item.get("support_count")))
+        # 缺省/非法值经异常统一走早退（int(None) 即 TypeError）
+        support_count = max(1, int(cast(int, item.get("support_count"))))
     except Exception:
         return None
     return {

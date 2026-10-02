@@ -61,8 +61,9 @@ def _env_flag(key: str, default: bool = True) -> bool:
 
 
 app = FastAPI(title="data-agent", lifespan=lifespan)
-app.add_exception_handler(StarletteHTTPException, chatdata_http_exception_handler)
-app.add_exception_handler(RequestValidationError, chatdata_validation_exception_handler)
+# Starlette 的 handler 泛型签名比实际注册粒度宽（按异常类分发后入参必然匹配），框架类型噪音
+app.add_exception_handler(StarletteHTTPException, chatdata_http_exception_handler)  # type: ignore[arg-type]
+app.add_exception_handler(RequestValidationError, chatdata_validation_exception_handler)  # type: ignore[arg-type]
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,

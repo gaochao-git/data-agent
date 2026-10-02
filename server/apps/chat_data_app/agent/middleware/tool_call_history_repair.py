@@ -15,9 +15,7 @@ from .message_integrity import repair_tool_call_messages
 logger = get_logger(__name__)
 
 
-def create_tool_call_history_repair_middleware(
-    *, state_schema: Any | None = None
-) -> AgentMiddleware:
+def create_tool_call_history_repair_middleware(*, state_schema: Any | None = None) -> AgentMiddleware:
     """Create a state middleware that removes incomplete persisted tool groups."""
 
     @before_model(name="ToolCallHistoryRepairMiddleware", state_schema=state_schema)

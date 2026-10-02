@@ -56,6 +56,7 @@ def _normalize_hosts_config(raw_config: Any) -> dict[str, tuple[str, ...]]:
         raise ValueError("deploy_env_hosts.json 必须是对象格式")
     result: dict[str, tuple[str, ...]] = {}
     for env_name, hosts in raw_config.items():
+        host_values: tuple[str, ...]
         if isinstance(hosts, str):
             host_values = (hosts,)
         elif isinstance(hosts, list):

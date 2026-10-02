@@ -25,7 +25,7 @@
   - 裁剪后回收孤儿 checkpoint_writes（checkpoint_id 已不在 checkpoints 表的行）。
   - 删除后做对账式自检：保留行必须一根不少。
 
-兼容性：语法按 Python 3.6 收敛（无 __future__ annotations、无 fromisoformat）。
+兼容性：按 Python 3.11+ 编写（datetime.UTC、内置泛型注解；不依赖项目代码）。
 依赖：pip install pymysql
 """
 
@@ -223,7 +223,7 @@ def keeper_activity(cur, thread_id: str, keepers: list[dict]) -> datetime | None
 
 def referenced_versions(cur, thread_id: str, keepers: list[dict]) -> dict[tuple, set[str]]:
     """保留快照的 channel_versions 引用集。按引用取而非最大版本（见模块 docstring）。"""
-    refs = {}  # type: Dict[tuple, Set[str]]
+    refs: dict[tuple, set[str]] = {}
     for k in keepers:
         cur.execute(
             """SELECT `checkpoint` FROM checkpoints
@@ -247,7 +247,7 @@ def plan_blobs(cur, thread_id: str, refs: dict[tuple, set[str]]) -> tuple[dict, 
            FROM checkpoint_blobs WHERE thread_id = %s""",
         (thread_id,),
     )
-    plan = {}  # type: Dict[tuple, list]
+    plan: dict[tuple, list] = {}
     del_rows = del_bytes = kept_rows = 0
     for ns_hash, channel, version, nbytes in cur.fetchall():
         if str(version) in refs.get((ns_hash, channel), ()):
@@ -261,7 +261,7 @@ def plan_blobs(cur, thread_id: str, refs: dict[tuple, set[str]]) -> tuple[dict, 
 
 def plan_old_snapshots(cur, thread_id: str, keepers: list[dict]) -> dict[bytes, list]:
     """按命名空间收集待删的旧 checkpoint_id；writes 用同一批 id 一起清。"""
-    out = {}  # type: Dict[bytes, list]
+    out: dict[bytes, list] = {}
     for k in keepers:
         cur.execute(
             """SELECT checkpoint_id FROM checkpoints
@@ -305,7 +305,7 @@ def prune_blobs(conn, thread_id: str, plan: dict[tuple, list]) -> int:
     byte_limit = BLOB_BATCH_MB * MB
     deleted = 0
     for (ns_hash, channel), items in plan.items():
-        chunk = []  # type: List[str]
+        chunk: list[str] = []
         chunk_bytes = 0
         for version, nbytes in items:
             chunk.append(version)
@@ -362,7 +362,7 @@ def collect_orphan_writes(cur, thread_id: str) -> dict[bytes, list]:
            WHERE cw.thread_id = %s AND c.thread_id IS NULL""",
         (thread_id,),
     )
-    out = {}  # type: Dict[bytes, list]
+    out: dict[bytes, list] = {}
     for ns_hash, ck_id in cur.fetchall():
         out.setdefault(ns_hash, []).append(ck_id)
     return out
@@ -449,6 +449,8 @@ def prune_one(conn, target: dict, apply_delete: bool) -> dict:
                 reason = f"已重新活跃 {last.strftime('%m-%d %H:%M')}" if last else "无法判定活动时间"
                 result["status"] = f"skip({reason})"
                 return result
+            # _idle_too_short 对 None 恒 True（上方已 skip），此后 last 必非 None
+            assert last is not None
             refs = referenced_versions(cur, thread_id, keepers)
             blob_plan, blob_rows, blob_bytes, kept_rows = plan_blobs(cur, thread_id, refs)
             old_ids = plan_old_snapshots(cur, thread_id, keepers)
@@ -497,7 +499,7 @@ def main() -> int:
         f"目标库 {DB_HOST}:{DB_PORT}/{DB_NAME}  模式 {mode}  策略: 体积>{MIN_MB}MB 且闲置>{MIN_IDLE_DAYS}天 → keep-latest 裁剪"
     )
     conn = connect(DB_NAME)
-    results = []  # type: List[dict]
+    results: list[dict] = []
     try:
         with conn.cursor() as cur:
             prune_targets = discover_prune_targets(cur)

@@ -20,7 +20,8 @@ def get_execution_target_member_id(target: dict[str, Any]) -> str:
 
 def get_execution_target_name(target: dict[str, Any], index: int) -> str:
     """Return the user-facing execution target name."""
-    source_config = target.get("source_config") if isinstance(target.get("source_config"), dict) else {}
+    raw_config = target.get("source_config")
+    source_config = raw_config if isinstance(raw_config, dict) else {}
     return str(
         target.get("member_name")
         or target.get("name")
@@ -33,7 +34,8 @@ def get_execution_target_name(target: dict[str, Any], index: int) -> str:
 
 def get_execution_target_org_code(target: dict[str, Any]) -> str:
     """Return the organization code for matching and prompt display."""
-    source_config = target.get("source_config") if isinstance(target.get("source_config"), dict) else {}
+    raw_config = target.get("source_config")
+    source_config = raw_config if isinstance(raw_config, dict) else {}
     return str(
         target.get("org_code") or source_config.get("org_code") or get_execution_target_member_id(target) or ""
     ).strip()

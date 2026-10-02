@@ -640,7 +640,8 @@ class SkillService:
         version_dir = _derive_user_version_dir(user_id, skill_name, version_no)
         skill_md_path = await asyncio.to_thread(_write_skill_md, version_dir, normalized_payload)
         # SKILL.md 由上一步刚写入，正常必可解析；防御解析失败时不再 AttributeError
-        parsed: Mapping[str, Any] = await asyncio.to_thread(parse_metadata, skill_md_path) or {}
+        parsed_metadata = await asyncio.to_thread(parse_metadata, skill_md_path)
+        parsed: Mapping[str, Any] = parsed_metadata or {}
         visibility_type = str(normalized_payload.get("visibility_type") or "private").strip()
         if visibility_type not in {"private", "global"}:
             visibility_type = "private"

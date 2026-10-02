@@ -605,7 +605,7 @@ def _get_database_type() -> str:
     raise ValueError("缺少业务数据库配置: FXCJG_DB_*")
 
 
-def get_tables(db_type: str = None) -> list:
+def get_tables(db_type: str | None = None) -> list:
     """根据数据库类型获取表结构"""
     if db_type and db_type.lower() != "mysql":
         raise ValueError(f"业务表仅支持 mysql，当前传入: {db_type}")

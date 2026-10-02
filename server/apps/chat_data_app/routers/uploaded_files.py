@@ -33,9 +33,7 @@ router = APIRouter(prefix="/uploaded-files", tags=["ChatData 上传文件"], res
 
 
 @router.post("/upload", operation_id="upload_chatdata_file")
-async def upload_file_api(
-    req: Request, file: UploadFile = File(...), thread_id: str = Form(...)
-) -> JSONResponse:
+async def upload_file_api(req: Request, file: UploadFile = File(...), thread_id: str = Form(...)) -> JSONResponse:
     """
     上传文件
 

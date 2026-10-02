@@ -20,9 +20,8 @@ import hashlib
 import json
 import shutil
 import stat
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
-from types import TracebackType
 from typing import Any
 from uuid import uuid4
 
@@ -87,7 +86,7 @@ def list_snapshot_skill_metadata(snapshot_dir: Path) -> list[dict[str, Any]]:
         skill_md = Path(snapshot_dir) / name / "SKILL.md"
         if not skill_md.is_file() or skill_md.is_symlink():
             continue
-        metadata = parse_metadata(skill_md) or {}
+        metadata: Mapping[str, Any] = parse_metadata(skill_md) or {}
         entries.append(
             {
                 "name": name,
@@ -191,12 +190,12 @@ def _copy_skill_dir(src: Path, dst: Path) -> None:
 def _on_rm_error(
     func: Callable[..., Any],
     path: str,
-    exc_info: tuple[type[BaseException], BaseException, TracebackType] | None,
+    exc: BaseException,
 ) -> None:
     try:
         Path(path).chmod(stat.S_IWRITE | stat.S_IREAD | stat.S_IRGRP | stat.S_IROTH)
         if Path(path).is_dir():
-            _rmtree(path)
+            _rmtree(Path(path))
         else:
             Path(path).unlink()
     except OSError:

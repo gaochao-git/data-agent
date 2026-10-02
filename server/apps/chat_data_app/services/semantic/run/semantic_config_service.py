@@ -600,7 +600,7 @@ class SemanticConfigService:
 
         group_id = str(datasource.get("group_id") or "").strip()
         configured_tables, existing_names, all_configs = await self._scan_existing_single_table_state(group_id)
-        result = {"created": 0, "skipped": 0, "failed": 0, "items": []}
+        result: dict[str, Any] = {"created": 0, "skipped": 0, "failed": 0, "items": []}
         pending_configs = []
         item_order: list[str] = []
         seen_tables: set[str] = set()

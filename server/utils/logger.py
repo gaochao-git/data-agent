@@ -15,6 +15,7 @@ import os
 from contextvars import ContextVar
 from datetime import datetime
 from logging.handlers import TimedRotatingFileHandler
+from typing import Any
 
 from utils.common_util import get_active_idc, get_local_ip
 
@@ -296,7 +297,7 @@ class AlarmLogFormatter(logging.Formatter):
 class LoggerManager:
     """日志管理器"""
 
-    _loggers = {}  # 缓存已创建的 logger
+    _loggers: dict[str, Any] = {}  # 缓存已创建的 logger
     _file_handler = None  # 全局唯一的文件 handler
     _file_handler_key = None  # 当前文件 handler 对应的配置
     _access_logger = None  # 访问日志 logger

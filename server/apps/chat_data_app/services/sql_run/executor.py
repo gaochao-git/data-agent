@@ -591,6 +591,8 @@ class SQLExecutor(ABC):
         limit: int = DEFAULT_ROW_LIMIT,
         timeout: int | None = None,
         user_id: str | None = None,
+        # HTTP 执行器需要 username 做审计口径，其余子类忽略该参数（签名保持与子类一致）
+        username: str | None = None,
         datasource_id: str | None = None,
         remote_task_callback: Callable[[dict[str, Any]], Any] | None = None,
         db_connection_callback: Callable[[dict[str, Any]], Any] | None = None,
@@ -687,6 +689,7 @@ class MySQLExecutor(SQLExecutor):
         limit: int = DEFAULT_ROW_LIMIT,
         timeout: int | None = None,
         user_id: str | None = None,
+        username: str | None = None,
         datasource_id: str | None = None,
         remote_task_callback: Callable[[dict[str, Any]], Any] | None = None,
         db_connection_callback: Callable[[dict[str, Any]], Any] | None = None,
@@ -871,6 +874,7 @@ class HiveExecutor(SQLExecutor):
         limit: int = DEFAULT_ROW_LIMIT,
         timeout: int | None = None,
         user_id: str | None = None,
+        username: str | None = None,
         datasource_id: str | None = None,
         remote_task_callback: Callable[[dict[str, Any]], Any] | None = None,
         db_connection_callback: Callable[[dict[str, Any]], Any] | None = None,
@@ -1409,7 +1413,7 @@ def get_executor(datasource: dict) -> SQLExecutor:
         )
     elif source_type == "hive":
         return HiveExecutor(
-            host=config.get("host"),
+            host=str(config.get("host") or ""),
             port=config.get("port", 10000),
             database=config.get("database", "default"),
             username=config.get("username"),

@@ -19,7 +19,7 @@ import json
 import re
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
-from typing import Any
+from typing import Any, cast
 
 import yaml
 from ossie import OSIDataType, OSIDocument, OSISemanticModel
@@ -508,7 +508,7 @@ class OssieToChatDataImporter:
             return
 
         table, attribution = _resolve_table(
-            extension.get("table"), dataset_names, result.errors, result.warnings, label
+            cast(str, extension.get("table")), dataset_names, result.errors, result.warnings, label
         )
         result.bump(f"attribution_{attribution}")
         if table is None:
@@ -598,7 +598,7 @@ class OssieToChatDataImporter:
             result.errors.append(f"{label} 缺少 ANSI_SQL 方言表达式，无法导入")
             return
         table, attribution = _resolve_table(
-            extension.get("table"), dataset_names, result.errors, result.warnings, label
+            cast(str, extension.get("table")), dataset_names, result.errors, result.warnings, label
         )
         result.bump(f"attribution_{attribution}")
         if table is None:

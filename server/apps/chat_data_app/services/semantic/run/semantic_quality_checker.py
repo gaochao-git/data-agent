@@ -353,7 +353,7 @@ class SemanticQualityChecker:
     @staticmethod
     def _append_unmodeled_columns(
         metrics: list[dict[str, Any]],
-        dimension_keys: Iterable[str],
+        dimension_keys: Iterable[tuple[str, str]],
         raw: list[tuple[str, str]],
         physical_columns: set[tuple[str, str]],
     ) -> None:

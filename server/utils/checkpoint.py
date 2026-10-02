@@ -94,8 +94,8 @@ class _SqliteCheckpointerContext:
 
     def __init__(self, db_path: str) -> None:
         self.db_path = db_path
-        self.conn: "aiosqlite.Connection | None" = None
-        self.checkpointer: "AsyncSqliteSaver | None" = None
+        self.conn: aiosqlite.Connection | None = None
+        self.checkpointer: AsyncSqliteSaver | None = None
 
     async def __aenter__(self) -> "AsyncSqliteSaver":
         import aiosqlite
@@ -160,13 +160,14 @@ class _MySQLCheckpointerFailoverContext:
         exc_type: type[BaseException] | None,
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
-    ) -> bool:
+    ) -> bool | None:
         if self.context is None:
             return False
         try:
             return await self.context.__aexit__(exc_type, exc_val, exc_tb)
         finally:
-            if self.endpoint is not None and exc_val is not None and is_mysql_connection_error(exc_val):
+            # 仅连接类 Exception 触发节点切换；KeyboardInterrupt 等 BaseException 不应推进端点
+            if self.endpoint is not None and isinstance(exc_val, Exception) and is_mysql_connection_error(exc_val):
                 _advance_checkpointer_endpoint(self.endpoint, exc_val)
 
 

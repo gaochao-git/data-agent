@@ -7,7 +7,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 
 from langchain.agents.middleware import AgentState, Runtime, before_model
 from langchain_core.messages import BaseMessage, HumanMessage, RemoveMessage, SystemMessage, ToolMessage
@@ -173,6 +173,8 @@ async def compress_messages_for_state(
         )
     _notify_dropped_messages_hook(on_dropped_messages, messages_to_summarize)
     _notify_compression_started(on_compression_started)
+    # 显式 str | None：后续 _run_compression_passes 会把 None 摘要（摘要失败）回填给同一变量
+    summary_text: str | None
     summary_text, summary_input_report = await _summarize_for_compression(
         messages_to_summarize,
         previous_summary=effective_previous_summary,
@@ -489,7 +491,7 @@ def create_context_compression_middleware(
             )
         if not message_updates:
             return {"context_compression": report}
-        update = {
+        update: dict[str, Any] = {
             "messages": message_updates,
             "context_summary": summary_text,
             "context_compression": report,
@@ -576,7 +578,8 @@ def _reference_tool_results_to_target(
         current_tokens = static_input_tokens + count_messages_tokens(working) + _summary_tokens(summary_text)
         if current_tokens <= target_tokens:
             break
-        referenced_message = _build_referenced_tool_message(working[index])
+        # candidates 已按 isinstance(message, ToolMessage) 过滤，index 处必为 ToolMessage
+        referenced_message = _build_referenced_tool_message(cast(ToolMessage, working[index]))
         if referenced_message is working[index]:
             continue
         working[index] = referenced_message
@@ -1084,7 +1087,7 @@ def _prepare_summary_input(
         previous_summary=previous_summary,
         todo_snapshot=todo_snapshot,
     )
-    report = {
+    report: dict[str, Any] = {
         "summary_input_limit_tokens": None,
         "summary_input_tokens_before": before_tokens,
         "summary_input_tokens_after": before_tokens,
@@ -1112,7 +1115,8 @@ def _prepare_summary_input(
         key=lambda item: (-item[1], item[0]),
     )
     for index, _tokens in candidates:
-        compacted = _compact_tool_result_for_summary(prepared_messages[index])
+        # candidates 已按 isinstance(message, ToolMessage) 过滤，index 处必为 ToolMessage
+        compacted = _compact_tool_result_for_summary(cast(ToolMessage, prepared_messages[index]))
         if compacted is prepared_messages[index]:
             continue
         prepared_messages[index] = compacted

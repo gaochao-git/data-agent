@@ -9,6 +9,8 @@
 import json
 import os
 import sys
+from collections.abc import Awaitable, Callable
+from typing import Any, cast
 
 import pytest
 
@@ -259,7 +261,13 @@ class _Args(BaseModel):
 def _named_tool(name: str):
     from langchain_core.tools import StructuredTool
 
-    return StructuredTool(name=name, description=name, args_schema=_Args, coroutine=lambda **kw: None)
+    # 仅用于 catalog 解析路径，协程钩子不会被实际 await
+    return StructuredTool(
+        name=name,
+        description=name,
+        args_schema=_Args,
+        coroutine=cast("Callable[..., Awaitable[Any]]", lambda **kw: None),
+    )
 
 
 def _request_tools():

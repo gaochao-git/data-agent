@@ -14,7 +14,7 @@
 """
 
 from dataclasses import dataclass, replace
-from typing import Literal
+from typing import Literal, cast
 
 WorkspaceBackend = Literal["local", "sandbox"]
 
@@ -83,7 +83,7 @@ def resolve_agent_runtime_options(
         if backend not in ("local", "sandbox"):
             backend = base.workspace_backend
         return AgentRuntimeOptions(
-            workspace_backend=backend,
+            workspace_backend=cast(WorkspaceBackend, backend),
             bash_enabled=_coerce_bool(override.get("bash_enabled"), base.bash_enabled),
             explore_subagent_enabled=_coerce_bool(
                 override.get("explore_subagent_enabled"), base.explore_subagent_enabled

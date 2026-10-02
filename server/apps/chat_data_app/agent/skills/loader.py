@@ -104,9 +104,12 @@ def parse_metadata_text(text: str, *, path: str = "") -> SkillMetadata | None:
     metadata = frontmatter.get("metadata", {})
     if not isinstance(metadata, dict):
         metadata = {}
-    input_schema = frontmatter.get("input_schema")
-    if not isinstance(input_schema, dict):
-        input_schema = metadata.get("input_schema") if isinstance(metadata.get("input_schema"), dict) else {}
+    input_schema: dict[str, Any]
+    if isinstance(frontmatter.get("input_schema"), dict):
+        input_schema = frontmatter["input_schema"]
+    else:
+        fallback_schema = metadata.get("input_schema")
+        input_schema = fallback_schema if isinstance(fallback_schema, dict) else {}
 
     return SkillMetadata(
         name=name,

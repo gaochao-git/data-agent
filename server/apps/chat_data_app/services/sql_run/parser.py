@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from sqlglot import exp
@@ -49,13 +49,14 @@ def _parse_sql(sql: str, source_type: str | None = None) -> list[exp.Expression]
     import sqlglot
 
     dialect = _normalize_dialect(source_type)
-    expressions = []
+    expressions: list[exp.Expression] = []
     for expr in sqlglot.parse(sql, read=dialect):
         if expr is None:
             continue
         if not expr.sql(dialect=dialect, comments=False).strip():
             continue
-        expressions.append(expr)
+        # sqlglot 桩返回 Expr 基类；实际解析产物恒为 Expression 子类
+        expressions.append(cast("exp.Expression", expr))
     return expressions
 
 
