@@ -8,11 +8,12 @@
     python apps/chat_data_app/tests/scan_cognitive_complexity.py --explain _run_subagent_with_events
     python apps/chat_data_app/tests/scan_cognitive_complexity.py --baseline ../scripts/checks/baselines/cognitive_complexity.txt
 
-口径来源：SonarSource/sonar-python 仓库（SSAL v1，旧版 LGPL-3.0）
+口径来源：SonarSource/sonar-python 仓库（SSAL v1）
 ``python-frontend/src/main/java/org/sonar/python/metrics/CognitiveComplexityVisitor.java``，
-逐条移植其计分规则，锚点校准至与 SonarQube 实测逐分一致（officecli
-``_officecli_file_indices``=17、subagents ``_run_subagent_with_events``=21，
-后者 13 个计分项与 Sonar issue 面板逐项一致）。
+逐条移植其计分规则。校准实证（10-08）：``get_executor``（executor.py，改动前版本）与
+``_build_builder_filters_and_having``（semantic_ai_query_adapter.py，改动前版本）修复
+前后均为 本地 15→16，与 SonarQube 面板实测 16 逐分一致；布尔链 flatten 语义与 Java
+flattenOperators 严格对齐（只沿链展开，不进其他子表达式）。
 
 计分规则（与 Java 实现一一对应）：
 - if +1+嵌套；elif 恒 +1（不带嵌套罚）；else 恒 +1；
@@ -186,16 +187,19 @@ class CognitiveComplexityVisitor:
             previous = op
 
     def _flatten_ops(self, node, operators: list[str]) -> None:
-        # 对应 flattenOperators + alreadyConsideredOperators：子链先展开再记本节点，
-        # 链上所有 BoolOp 节点标记为已消化（Java 用运算符 Token 集合防重，等价）
+        # 对应 Java flattenOperators：只沿本布尔链的 BoolOp 操作数展开（左/右操作数
+        # 本身是 AND/OR 才递归，含括号嵌套的同链 bool），绝不下钻其他子表达式——
+        # call 参数等内部嵌套的同类型链是独立序列，由后续 scan_expr 访问另行计分
+        # （Java 用运算符 Token 集合防重，此处用 _consumed_boolops 等价防重）。
+        # 10-08 教训：旧实现无差别 iter_child_nodes 下钻 + 后序追加，会把
+        # ``str(x or "d").strip().lower() or "d"`` 的内外两条 or 链合并成一条，
+        # 恰好低估 1 分（get_executor 15 vs Sonar 16 实证）。
         if isinstance(node, ast.BoolOp):
             self._consumed_boolops.add(id(node))
             for value in node.values:
-                self._flatten_ops(value, operators)
+                if isinstance(value, ast.BoolOp):
+                    self._flatten_ops(value, operators)
             operators.append(type(node.op).__name__)
-        else:
-            for child in ast.iter_child_nodes(node):
-                self._flatten_ops(child, operators)
 
 
 def _is_wrapper(parent_func, child_func) -> bool:

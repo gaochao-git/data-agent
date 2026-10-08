@@ -751,6 +751,12 @@ class SemanticAIQueryAdapter:
             )
 
     def _build_builder_filters_and_having(self, plan: _UnifiedEnginePlan) -> None:
+        self._build_builder_filters(plan)
+        self._inject_derived_fixed_filters(plan)
+        self._build_builder_having(plan)
+
+    def _build_builder_filters(self, plan: _UnifiedEnginePlan) -> None:
+        """把已校验过滤映射为 builder 过滤节点（单包裹节点直映射，其余逐条展开）。"""
         validated_filters = plan.validated_filters
         if (
             len(validated_filters) == 1
@@ -765,39 +771,46 @@ class SemanticAIQueryAdapter:
                     continue
                 self._append_filter_nodes_for_builder(plan.builder_filters, fil)
 
-        self._inject_derived_fixed_filters(plan)
-
+    def _build_builder_having(self, plan: _UnifiedEnginePlan) -> None:
+        """把已校验 HAVING 逐条映射为 builder 聚合节点（表达式型与普通型分派）。"""
         for hv in plan.validated_having:
             if self._is_expression_having_node(hv):
-                left_metric_name = str(((hv.get("left") or {}).get("name")) or "").strip()
-                having_node = self._metric_aggregation_node(left_metric_name, plan.main_table)
-                having_node.update(
-                    {
-                        "id": f"having-{left_metric_name}",
-                        "operator": hv.get("operator", "="),
-                        "logic": hv.get("logic", "AND"),
-                        "aggId": plan.metric_alias_to_id.get(left_metric_name),
-                        "rightOperand": self._map_having_operand_for_builder(
-                            hv.get("right") or {}, plan.metric_alias_to_id, plan.main_table
-                        ),
-                    }
-                )
-                plan.builder_having.append(having_node)
+                self._append_expression_having_node(plan, hv)
                 continue
+            self._append_plain_having_node(plan, hv)
 
-            metric_name = str(hv.get("metric") or "")
-            having_node = self._metric_aggregation_node(metric_name, plan.main_table)
-            having_node.update(
-                {
-                    "id": f"having-{metric_name}",
-                    "operator": hv.get("operator", "="),
-                    "value": hv.get("value"),
-                    "logic": hv.get("logic", "AND"),
-                    "aggId": plan.metric_alias_to_id.get(metric_name),
-                }
-            )
-            plan.builder_having.append(having_node)
-            self._copy_filter_value_type(hv, having_node)
+    def _append_expression_having_node(self, plan: _UnifiedEnginePlan, hv: dict[str, Any]) -> None:
+        """表达式型 HAVING：操作数引用指标聚合，右操作数走 builder 映射。"""
+        left_metric_name = str(((hv.get("left") or {}).get("name")) or "").strip()
+        having_node = self._metric_aggregation_node(left_metric_name, plan.main_table)
+        having_node.update(
+            {
+                "id": f"having-{left_metric_name}",
+                "operator": hv.get("operator", "="),
+                "logic": hv.get("logic", "AND"),
+                "aggId": plan.metric_alias_to_id.get(left_metric_name),
+                "rightOperand": self._map_having_operand_for_builder(
+                    hv.get("right") or {}, plan.metric_alias_to_id, plan.main_table
+                ),
+            }
+        )
+        plan.builder_having.append(having_node)
+
+    def _append_plain_having_node(self, plan: _UnifiedEnginePlan, hv: dict[str, Any]) -> None:
+        """普通型 HAVING：指标 + 阈值直映射，并回拷过滤值类型。"""
+        metric_name = str(hv.get("metric") or "")
+        having_node = self._metric_aggregation_node(metric_name, plan.main_table)
+        having_node.update(
+            {
+                "id": f"having-{metric_name}",
+                "operator": hv.get("operator", "="),
+                "value": hv.get("value"),
+                "logic": hv.get("logic", "AND"),
+                "aggId": plan.metric_alias_to_id.get(metric_name),
+            }
+        )
+        plan.builder_having.append(having_node)
+        self._copy_filter_value_type(hv, having_node)
 
     def _inject_derived_fixed_filters(self, plan: _UnifiedEnginePlan) -> None:
         """把查询涉及的派生指标的周期/修饰词固定过滤注入 WHERE。

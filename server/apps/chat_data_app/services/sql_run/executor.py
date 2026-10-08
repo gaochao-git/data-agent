@@ -1370,6 +1370,11 @@ async def kill_mysql_query(datasource: dict, db_connection_id: str) -> dict[str,
             await executor.close()
 
 
+def _config_str(config: dict, key: str, default: str = "") -> str:
+    """取字符串配置项：None/缺省回落 default（集中 ``or`` 回落，避免逐处抬升复杂度）。"""
+    return str(config.get(key) or default)
+
+
 def get_executor(datasource: dict) -> SQLExecutor:
     """
     根据数据源配置返回对应的执行器
@@ -1383,37 +1388,37 @@ def get_executor(datasource: dict) -> SQLExecutor:
     Raises:
         ValueError: 不支持的数据源类型
     """
-    source_type = str(datasource.get("source_type") or "")
-    query_executor_type = str(datasource.get("query_executor_type") or "direct").strip().lower() or "direct"
+    source_type = _config_str(datasource, "source_type")
+    query_executor_type = _config_str(datasource, "query_executor_type", "direct").strip().lower() or "direct"
     config = resolve_execution_source_config(
         source_type,
         query_executor_type,
         datasource.get("source_config", {}),
-        org_code=datasource.get("org_code") or "",
+        org_code=_config_str(datasource, "org_code"),
         org_name="",
     )
 
     if query_executor_type == "http":
-        org_code = str(config.get("org_code") or "").strip()
+        org_code = _config_str(config, "org_code").strip()
         return HiveHttpExecutor(
             namespace=org_code,
             source_type=source_type,
-            database=str(config.get("database") or "").strip(),
+            database=_config_str(config, "database").strip(),
             org_code=org_code,
-            org_name=str(config.get("org_name") or "").strip(),
+            org_name=_config_str(config, "org_name").strip(),
         )
 
     if source_type == "mysql":
         return MySQLExecutor(
-            host=str(config.get("host") or ""),
+            host=_config_str(config, "host"),
             port=int(config.get("port") or 3306),
-            database=str(config.get("database") or ""),
-            user=str(config.get("user") or ""),
+            database=_config_str(config, "database"),
+            user=_config_str(config, "user"),
             password=config.get("password"),
         )
     elif source_type == "hive":
         return HiveExecutor(
-            host=str(config.get("host") or ""),
+            host=_config_str(config, "host"),
             port=config.get("port", 10000),
             database=config.get("database", "default"),
             username=config.get("username"),
