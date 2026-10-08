@@ -204,7 +204,8 @@ export async function generatePanelName(params: {
   const res = await request({
     url: `/agents/api/chatdata/panel-name-generate`,
     method: 'post',
-    data: params
+    data: params,
+    timeout: 120000, // LLM 生成面板名，超过全局 30s
   })
   return res.data
 }

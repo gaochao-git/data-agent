@@ -706,7 +706,8 @@ export function generateAdminDatasourceColumnDict(
   return request({
     url: `${ADMIN_DATASOURCE_API_PREFIX}/${datasourceId}/tables/${encodeURIComponent(tableName)}/columns/${encodeURIComponent(columnName)}/dict/generate`,
     method: 'post',
-    data: { text }
+    data: { text },
+    timeout: 120000, // LLM 生成，超过全局 30s
   })
 }
 
@@ -806,7 +807,8 @@ export function syncAdminDatasourceMetadata(
   return request({
     url: `${ADMIN_DATASOURCE_API_PREFIX}/${datasourceId}/metadata-sync`,
     method: 'post',
-    data
+    data,
+    timeout: 120000, // 回源拉全量表结构，慢数据源可能超全局 30s
   })
 }
 
@@ -953,7 +955,8 @@ export function importConversationWorkspaceSkill(conversationId: string, data: {
   return request({
     url: `/agents/api/chatdata/conversations/${conversationId}/workspace-skills/import`,
     method: 'post',
-    data: { skill_dir_path: toCanonicalWorkspacePath(data.skill_dir_path) }
+    data: { skill_dir_path: toCanonicalWorkspacePath(data.skill_dir_path) },
+    timeout: 120000, // 目录打包下载，超过全局 30s
   })
 }
 
@@ -1168,7 +1171,8 @@ export function previewAdminOssieSemanticImport(
   return request({
     url: `${ADMIN_DATASOURCE_API_PREFIX}/${datasourceId}/semantic-configs/ossie-import/preview`,
     method: 'post',
-    data: { yaml_content: yamlContent }
+    data: { yaml_content: yamlContent },
+    timeout: 120000, // 大 YAML 解析 + 质量检查，超过全局 30s
   })
 }
 
@@ -1185,7 +1189,8 @@ export function importAdminOssieSemanticConfigs(
   return request({
     url: `${ADMIN_DATASOURCE_API_PREFIX}/${datasourceId}/semantic-configs/ossie-import`,
     method: 'post',
-    data: { yaml_content: yamlContent, conflict_actions: conflictActions }
+    data: { yaml_content: yamlContent, conflict_actions: conflictActions },
+    timeout: 120000, // 导入落库 + 跨模型校验，超过全局 30s
   })
 }
 
@@ -1251,7 +1256,8 @@ export function validateSemanticConfig(
     url: `/agents/api/chatdata/datasources/${datasourceId}/semantic-configs/validate`,
     method: 'post',
     params: excludeConfigId ? { exclude_config_id: excludeConfigId } : undefined,
-    data
+    data,
+    timeout: 120000, // 物理字段校验实时回源拉全量表结构，超过全局 30s
   })
 }
 
@@ -1265,7 +1271,8 @@ export function validateAdminSemanticConfig(
     url: `${ADMIN_DATASOURCE_API_PREFIX}/${datasourceId}/semantic-configs/validate`,
     method: 'post',
     params: excludeConfigId ? { exclude_config_id: excludeConfigId } : undefined,
-    data
+    data,
+    timeout: 120000, // 物理字段校验实时回源拉全量表结构，超过全局 30s
   })
 }
 
