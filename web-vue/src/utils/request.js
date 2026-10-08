@@ -17,7 +17,8 @@ axios.defaults.headers['Content-Type'] = 'application/json;charset=utf-8'
 // 创建 axios 实例
 const service = axios.create({
   baseURL: import.meta.env.VITE_APP_BASE_API,
-  timeout: 6000000,
+  // 全局 30 秒：长耗时接口（打包下载等）在各自请求里单独覆盖 timeout
+  timeout: 30000,
   withCredentials: true
 })
 
