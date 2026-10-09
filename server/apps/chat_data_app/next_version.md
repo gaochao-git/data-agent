@@ -170,7 +170,7 @@ ALTER TABLE user_threads ADD COLUMN datasource_id varchar(255) NOT NULL DEFAULT 
 -- 唯一索引改造
 -- 清理后复查应返回空，再建索引
 DELETE FROM semantic_config WHERE id NOT IN (SELECT min_id FROM (SELECT MIN(id) AS min_id FROM semantic_config GROUP BY group_id, semantic_config_name, delete_flag) t);
-ALTER TABLE semantic_config   ADD UNIQUE KEY uniq_group_id_config_name_delete_flag (group_id, semantic_config_name,delete_flag);
+ALTER TABLE semantic_config ADD UNIQUE KEY uniq_grp_id_cfg_name_del_flag (group_id, semantic_config_name,delete_flag);
 
 -- CHANGE 一步完成改名+改注释（RENAME COLUMN 不会更新列注释）
 ALTER TABLE semantic_config CHANGE COLUMN ontology_rules business_notes text COMMENT '业务说明';
