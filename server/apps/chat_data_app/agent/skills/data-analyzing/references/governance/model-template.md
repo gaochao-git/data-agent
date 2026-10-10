@@ -9,93 +9,97 @@
 ## 一、模型 YAML 骨架
 
 ```yaml
-version: "0.2.0.dev0"            # 必须是带引号字符串（写成数字 1.0 会被 YAML 解析失败）
-semantic_model:
-  - name: 用户-订单模型
-    description: 模型一句话短描述
-    ai_context: 业务说明          # 字符串；内容多时用下方结构化写法
-    # ai_context:               # 结构化写法（Ossie 规范推荐字段，补 DOC_NO_BUSINESS_NOTES 用这个）
-    #   instructions: 这个模型用于什么分析、怎么用
-    #   synonyms: [别名1, 别名2]
-    #   examples: [示例问题1, 示例问题2]
-    datasets:                    # 维度来源：每个物理表一个 dataset
-      - name: orders
-        source: orders
-        primary_key: [id]        # 可选，声明键；无则留 []
-        unique_keys:
-          - [order_no]           # 可选，每条一个唯一键
-        fields:
-          - name: 订单编号
-            expression:
-              dialects:
-                - dialect: ANSI_SQL
-                  expression: '`order_id`'
-            dimension:
-              is_time: false
-            description: 订单唯一标识，一行代表一笔订单   # 可选；补 DOC_DIMENSION_NO_DESCRIPTION 写这里
-            datatype: String
-            custom_extensions:
-              - vendor_name: CHAT_DATA
-                data: '{"table": "orders", "column": "order_id", "column_dict": {}}'   # 物理归属必带；column_dict 每列留位，无信息写空对象
-          - name: 下单时间        # 时间维度范例
-            expression:
-              dialects:
-                - dialect: ANSI_SQL
-                  expression: '`order_time`'
-            dimension:
-              is_time: true
-            datatype: DateTime
-            custom_extensions:
-              - vendor_name: CHAT_DATA
-                data: '{"table": "orders", "column": "order_time", "column_dict": {}}'
-          - name: 订单状态         # 枚举维度范例：枚举口径以结构化 column_dict 随 YAML 携带，不抄进 description
-            expression:
-              dialects:
-                - dialect: ANSI_SQL
-                  expression: '`status`'
-            description: 订单状态   # 只写业务概述；枚举清单不抄进描述，权威在 column_dict/字典表
-            datatype: String
-            custom_extensions:
-              - vendor_name: CHAT_DATA
-                # data 是 JSON 字符串：table.column 是字典绑定键；column_dict 四项结构化随 YAML 携带，
-                # 导入时按「仅填空」回填字典表（已有值保留）。value 必须真实入库值，拿不准先抽样确认。
-                data: '{"table": "orders", "column": "status", "logical_type": "enum", "column_dict": {"enum_values": [{"value": "0", "label": "待支付"}, {"value": "1", "label": "已支付"}, {"value": "2", "label": "已取消"}], "unit": "", "synonyms": [], "storage_format": ""}}'
-    metrics:
-      - name: 销售额             # 原子指标范例
-        description: 已支付订单金额合计   # 必写（DOC 类 finding）
-        datatype: Decimal
+version: "0.2.0.dev0"            # 必须是带引号字符串；规范钉死此值（模型字段平铺在根级，一文档一模型）
+name: 用户-订单模型
+description: 模型一句话短描述
+ai_context: 业务说明          # 字符串；内容多时用下方结构化写法
+# ai_context:               # 结构化写法（Ossie 规范推荐字段，补 DOC_NO_BUSINESS_NOTES 用这个）
+#   instructions: 这个模型用于什么分析、怎么用
+#   synonyms: [别名1, 别名2]
+#   examples: [示例问题1, 示例问题2]
+datasets:                    # 维度来源：每个物理表一个 dataset
+  - name: orders
+    source: orders
+    primary_key: [id]        # 可选，声明键；无则留 []
+    unique_keys:
+      - [order_no]           # 可选，每条一个唯一键
+    fields:
+      - name: 订单编号
         expression:
           dialects:
             - dialect: ANSI_SQL
-              expression: SUM(amount)
+              expression: '`order_id`'
+        dimension:
+          is_time: false
+        description: 订单唯一标识，一行代表一笔订单   # 可选；补 DOC_DIMENSION_NO_DESCRIPTION 写这里
+        datatype: String
         custom_extensions:
           - vendor_name: CHAT_DATA
-            # 原子指标可带单位；来源列由表达式解析（SUM(amount) → amount），拿不准物理列就别带 column_dict
-            data: '{"table": "orders", "column_dict": {"enum_values": [], "synonyms": [], "storage_format": "", "unit": "元"}}'
-      - name: 近7日销售额         # 派生指标范例：expression 必须留空字符串
-        description: 最近7天滚动销售额
-        datatype: Decimal
+            data: '{"table": "orders", "column": "order_id", "column_dict": {}}'   # 物理归属必带；column_dict 每列留位，无信息写空对象
+      - name: 下单时间        # 时间维度范例
         expression:
           dialects:
             - dialect: ANSI_SQL
-              expression: ""
+              expression: '`order_time`'
+        dimension:
+          is_time: true
+        datatype: DateTime
         custom_extensions:
           - vendor_name: CHAT_DATA
-            data: '{"metric_kind": "derived", "base_metric": "销售额", "period": {"kind": "last_n_days", "n": 7, "time_dimension": "下单时间"}}'
-      - name: 客单价             # 复合指标范例：无 expression 键
-        description: 平均单笔成交金额
-        datatype: Decimal
+            data: '{"table": "orders", "column": "order_time", "column_dict": {}}'
+      - name: 订单状态         # 枚举维度范例：枚举口径以结构化 column_dict 随 YAML 携带，不抄进 description
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: '`status`'
+        description: 订单状态   # 只写业务概述；枚举清单不抄进描述，权威在 column_dict/字典表
+        datatype: String
         custom_extensions:
           - vendor_name: CHAT_DATA
-            data: '{"metric_kind": "composite", "formula": "({销售额} / {订单数})"}'
-    relationships:
-      - from_dataset: orders
-        to: users
-        from_columns: [user_id]  # 与 to_columns 一一对应、数量相等（导入闸门）
-        to_columns: [id]         # 应覆盖 to 表声明的键（KEY_UNCOVERED 检查）
-        custom_extensions:
-          - vendor_name: CHAT_DATA
-            data: '{"left_table": "orders", "right_table": "users", "relationship_type": "one_to_many", "join_type": "left"}'
+            # data 是 JSON 字符串：table.column 是字典绑定键；column_dict 四项结构化随 YAML 携带，
+            # 导入时按「仅填空」回填字典表（已有值保留）。value 必须真实入库值，拿不准先抽样确认。
+            data: '{"table": "orders", "column": "status", "logical_type": "enum", "column_dict": {"enum_values": [{"value": "0", "label": "待支付"}, {"value": "1", "label": "已支付"}, {"value": "2", "label": "已取消"}], "unit": "", "synonyms": [], "storage_format": ""}}'
+metrics:
+  - name: 销售额             # 原子指标范例
+    description: 已支付订单金额合计   # 必写（DOC 类 finding）
+    datatype: Decimal
+    expression:
+      dialects:
+        - dialect: ANSI_SQL
+          expression: SUM(amount)
+    custom_extensions:
+      - vendor_name: CHAT_DATA
+        # 原子指标可带单位；来源列由表达式解析（SUM(amount) → amount），拿不准物理列就别带 column_dict
+        data: '{"table": "orders", "column_dict": {"enum_values": [], "synonyms": [], "storage_format": "", "unit": "元"}}'
+  - name: 近7日销售额         # 派生指标范例：expression 必须留空字符串
+    description: 最近7天滚动销售额
+    datatype: Decimal
+    expression:
+      dialects:
+        - dialect: ANSI_SQL
+          expression: ""
+    custom_extensions:
+      - vendor_name: CHAT_DATA
+        data: '{"metric_kind": "derived", "base_metric": "销售额", "period": {"kind": "last_n_days", "n": 7, "time_dimension": "下单时间"}}'
+  - name: 客单价             # 复合指标范例
+    description: 平均单笔成交金额
+    datatype: Decimal
+    expression:              # 键必须存在（官方规范必填）；值留空，口径权威在下方扩展 formula
+      dialects:
+        - dialect: ANSI_SQL
+          expression: ""
+    custom_extensions:
+      - vendor_name: CHAT_DATA
+        data: '{"metric_kind": "composite", "formula": "({销售额} / {订单数})"}'
+relationships:
+  - name: orders__users__1   # 官方必填；平台导出格式 {from}__{to}__{序号}
+    from_dataset: orders     # YAML 也可写别名 from:，与平台导出等价
+    to: users
+    from_columns: [user_id]  # 与 to_columns 一一对应、数量相等（导入闸门）
+    to_columns: [id]         # 应覆盖 to 表声明的键（KEY_UNCOVERED 检查）
+    custom_extensions:
+      - vendor_name: CHAT_DATA
+        data: '{"left_table": "orders", "right_table": "users", "relationship_type": "one_to_many", "join_type": "left"}'
 ```
 
 ## 二、可回导规则备注（写文件前逐条核对）
@@ -119,12 +123,12 @@ semantic_model:
 ### 指标
 
 - 原子指标表达式支持任意 SQL（配置页指标管理区展示全部指标，复杂表达式如 CASE WHEN 也可正常回导）；CHAT_DATA 扩展必须带 `table`，多 dataset 模型缺 table 直接阻断。
-- 派生指标（对基础指标加时间窗/过滤）**不能带 expression**，口径完全由基础指标 + 周期 + 过滤决定，expression 必须留空字符串，写了会被拒绝：
+- 派生指标（对基础指标加时间窗/过滤）**不能写表达式内容**，口径完全由基础指标 + 周期 + 过滤决定：expression 键必须存在（官方规范必填）但内层 expression 留空字符串，写了内容会被拒绝：
   - `base_metric` 必填，同模型内已存在的指标名；
   - `period`（可选，固定统计周期）：`kind` 仅限 `today` / `yesterday` / `last_n_days` / `this_week` / `this_month` / `between`；`last_n_days` 需 `n`（≥1 整数）；`between` 需 `start`/`end`（YYYY-MM-DD）；`time_dimension` 可选，指定周期过滤用的时间维度名；
   - `filters`（可选，修饰词过滤，数组）：每项 `{"dimension": "维度名", "operator": "=", "value": "值"}`；`operator` 合法集合：`=` `!=` `<>` `>` `<` `>=` `<=` `IN` `NOT IN` `LIKE` `NOT LIKE` `STARTS WITH` `ENDS WITH` `IS NULL` `IS NOT NULL` `BETWEEN` `EMPTY STRING`（IN/NOT IN/BETWEEN 的 value 为数组）；`dimension` 必须引用同模型内已定义的维度名；
   - period 与 filters 都缺省时口径与基础指标重复（warning，对应 EXE_DERIVED_NO_CONSTRAINT）。
-- 复合指标 formula 成员用**花括号**引用同模型内已定义的指标名（如 `{销售额}`），数字与 `+ - * /` 运算符可自由组合；**禁止**用代入后的 expression 反推复合指标——导入器只认 metric_kind 扩展里的 formula。
+- 复合指标 formula 成员用**花括号**引用同模型内已定义的指标名（如 `{销售额}`），数字与 `+ - * /` 运算符可自由组合；expression 键必须存在（官方规范必填）但内层 expression 留空字符串；**禁止**用代入后的 expression 反推复合指标——导入器只认 metric_kind 扩展里的 formula。
 
 ### 表关系
 

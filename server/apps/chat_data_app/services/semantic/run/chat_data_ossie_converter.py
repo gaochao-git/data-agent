@@ -268,46 +268,47 @@ _OssieYamlDumper.add_representer(_FlowStyleList, _represent_flow_style_list)
 
 
 def _load_ossie_types() -> tuple[Any, ...]:
-    """按 convert 解包顺序加载 Ossie 类型；未安装时抛 RuntimeError。"""
+    """按 convert 解包顺序加载 Ossie 类型；未安装时抛 RuntimeError。
+
+    2026-10 起对齐 ossie main（#551/#552）：类型更名 Ossie*（旧 OSI* 已删除），
+    文档根形状由 `version + semantic_model 列表` 改为「根即单模型」。
+    """
     try:
         from ossie import (
-            OSICustomExtension,
-            OSIDataset,
-            OSIDataType,
-            OSIDialectExpression,
-            OSIDimension,
-            OSIDocument,
-            OSIExpression,
-            OSIField,
-            OSIMetric,
-            OSIRelationship,
-            OSISemanticModel,
+            OssieCustomExtension,
+            OssieDataset,
+            OssieDataType,
+            OssieDialectExpression,
+            OssieDimension,
+            OssieDocument,
+            OssieExpression,
+            OssieField,
+            OssieMetric,
+            OssieRelationship,
         )
     except ImportError as exc:
         raise RuntimeError("Apache Ossie Python 包未安装，无法生成语义模型快照；请安装 apache-ossie") from exc
     return (
-        OSICustomExtension,
-        OSIDataset,
-        OSIDataType,
-        OSIDimension,
-        OSIDocument,
-        OSIField,
-        OSIExpression,
-        OSIDialectExpression,
-        OSIMetric,
-        OSIRelationship,
-        OSISemanticModel,
+        OssieCustomExtension,
+        OssieDataset,
+        OssieDataType,
+        OssieDimension,
+        OssieDocument,
+        OssieField,
+        OssieExpression,
+        OssieDialectExpression,
+        OssieMetric,
+        OssieRelationship,
     )
 
 
 def _wrap_ossie_key_lists(data: dict[str, Any]) -> None:
     """把主键/唯一键列表包成 YAML flow style，就地修改 document dump 结果。"""
-    for semantic_model in data.get("semantic_model") or []:
-        for dataset in semantic_model.get("datasets") or []:
-            if "primary_key" in dataset:
-                dataset["primary_key"] = _FlowStyleList(dataset["primary_key"])
-            if "unique_keys" in dataset:
-                dataset["unique_keys"] = [_FlowStyleList(columns) for columns in dataset["unique_keys"]]
+    for dataset in data.get("datasets") or []:
+        if "primary_key" in dataset:
+            dataset["primary_key"] = _FlowStyleList(dataset["primary_key"])
+        if "unique_keys" in dataset:
+            dataset["unique_keys"] = [_FlowStyleList(columns) for columns in dataset["unique_keys"]]
 
 
 class ChatDataToOssieConverter:
@@ -319,17 +320,16 @@ class ChatDataToOssieConverter:
         if not config_id:
             raise ValueError("语义配置缺少 semantic_config_id，无法生成 Ossie 快照")
         (
-            OSICustomExtension,
-            OSIDataset,
-            OSIDataType,
-            OSIDimension,
-            OSIDocument,
-            OSIField,
-            OSIExpression,
-            OSIDialectExpression,
-            OSIMetric,
-            OSIRelationship,
-            OSISemanticModel,
+            OssieCustomExtension,
+            OssieDataset,
+            OssieDataType,
+            OssieDimension,
+            OssieDocument,
+            OssieField,
+            OssieExpression,
+            OssieDialectExpression,
+            OssieMetric,
+            OssieRelationship,
         ) = _load_ossie_types()
 
         tables = self._table_names(normalized)
@@ -337,23 +337,23 @@ class ChatDataToOssieConverter:
             self._dataset(
                 table,
                 normalized,
-                OSIDataset,
-                OSIField,
-                OSIExpression,
-                OSIDialectExpression,
-                OSIDimension,
-                OSICustomExtension,
-                OSIDataType,
+                OssieDataset,
+                OssieField,
+                OssieExpression,
+                OssieDialectExpression,
+                OssieDimension,
+                OssieCustomExtension,
+                OssieDataType,
             )
             for table in tables
         ]
         relationships = self._relationships(
             normalized,
-            OSIRelationship,
-            OSICustomExtension,
+            OssieRelationship,
+            OssieCustomExtension,
         )
         metrics = self._metrics(
-            normalized, OSIMetric, OSIExpression, OSIDialectExpression, OSICustomExtension, OSIDataType
+            normalized, OssieMetric, OssieExpression, OssieDialectExpression, OssieCustomExtension, OssieDataType
         )
         extension = _extension(
             {
@@ -367,19 +367,17 @@ class ChatDataToOssieConverter:
                 "dimension_order": _dimension_order(normalized.get("dimensions")),
             }
         )
-        model = OSISemanticModel(
+        # 最新规范（ossie main 2026-10）：文档根即单模型（version/name/datasets/...），
+        # 官方 schema required=[version, name, datasets]，version 由 Literal 钉死默认值。
+        document = OssieDocument(
             name=_text(normalized.get("name") or config_id),
             description=_text(normalized.get("description")) or None,
             ai_context=_text(normalized.get("business_notes")) or None,
             datasets=datasets,
             relationships=relationships or None,
             metrics=metrics or None,
-            custom_extensions=[OSICustomExtension(**item) for item in extension or []],
+            custom_extensions=[OssieCustomExtension(**item) for item in extension or []],
         )
-        # The current core JSON schema is strict at the document root and
-        # allows only version and semantic_model. Keep optional model metadata
-        # out of the root so the serialized snapshot passes that schema too.
-        document = OSIDocument(semantic_model=[model])
         data = document.model_dump(by_alias=True, exclude_none=True, mode="json")
         _wrap_ossie_key_lists(data)
         return yaml.dump(

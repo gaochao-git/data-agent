@@ -62,17 +62,17 @@ def _config_with_indexes():
 
 
 def test_convert_is_valid_ossie_pydantic_document():
-    from ossie import OSIDocument
+    from ossie import OssieDocument
 
     document = yaml.safe_load(ChatDataToOssieConverter().convert(_config()))
-    parsed = OSIDocument.model_validate(document)
+    parsed = OssieDocument.model_validate(document)
 
-    assert parsed.semantic_model[0].name == "订单分析"
-    assert parsed.semantic_model[0].ai_context == "用户下单后生成订单，支付成功后计入有效成交。"
-    assert parsed.semantic_model[0].metrics[0].expression.dialects[0].expression == "SUM(orders.amount)"
-    assert parsed.semantic_model[0].relationships[0].from_dataset == "orders"
-    assert parsed.semantic_model[0].relationships[0].to == "users"
-    dataset = document["semantic_model"][0]["datasets"][0]
+    assert parsed.name == "订单分析"
+    assert parsed.ai_context == "用户下单后生成订单，支付成功后计入有效成交。"
+    assert parsed.metrics[0].expression.dialects[0].expression == "SUM(orders.amount)"
+    assert parsed.relationships[0].from_dataset == "orders"
+    assert parsed.relationships[0].to == "users"
+    dataset = document["datasets"][0]
     assert dataset["primary_key"] == []
     assert dataset["unique_keys"] == [[]]
     assert dataset["fields"]
@@ -86,19 +86,19 @@ def test_convert_passes_official_json_schema():
     document = yaml.safe_load(ChatDataToOssieConverter().convert(_config("one_to_many")))
 
     validate(document, schema)
-    relationship = document["semantic_model"][0]["relationships"][0]
-    assert document["semantic_model"][0]["ai_context"] == "用户下单后生成订单，支付成功后计入有效成交。"
+    relationship = document["relationships"][0]
+    assert document["ai_context"] == "用户下单后生成订单，支付成功后计入有效成交。"
     assert relationship["from"] == "users"
     assert relationship["to"] == "orders"
-    assert all(dataset["primary_key"] == [] for dataset in document["semantic_model"][0]["datasets"])
-    assert all(dataset["unique_keys"] == [[]] for dataset in document["semantic_model"][0]["datasets"])
+    assert all(dataset["primary_key"] == [] for dataset in document["datasets"])
+    assert all(dataset["unique_keys"] == [[]] for dataset in document["datasets"])
     assert "  - []" in ChatDataToOssieConverter().convert(_config("one_to_many"))
 
 
 def test_convert_maps_physical_and_manual_table_keys():
     content = ChatDataToOssieConverter().convert(_config_with_indexes())
     document = yaml.safe_load(content)
-    datasets = {dataset["name"]: dataset for dataset in document["semantic_model"][0]["datasets"]}
+    datasets = {dataset["name"]: dataset for dataset in document["datasets"]}
 
     assert datasets["orders"]["primary_key"] == ["order_id"]
     assert datasets["orders"]["unique_keys"] == [
@@ -151,7 +151,7 @@ def test_convert_uses_physical_column_type_and_minimal_field_extension():
     }
 
     document = yaml.safe_load(ChatDataToOssieConverter().convert(config))
-    field = document["semantic_model"][0]["datasets"][0]["fields"][0]
+    field = document["datasets"][0]["fields"][0]
     extension_data = json.loads(field["custom_extensions"][0]["data"])
 
     assert field["name"] == "类别ID"
@@ -163,7 +163,7 @@ def test_convert_uses_physical_column_type_and_minimal_field_extension():
 
 def test_convert_falls_back_to_logical_type_without_physical_column_type():
     document = yaml.safe_load(ChatDataToOssieConverter().convert(_config()))
-    orders = next(dataset for dataset in document["semantic_model"][0]["datasets"] if dataset["name"] == "orders")
+    orders = next(dataset for dataset in document["datasets"] if dataset["name"] == "orders")
 
     assert orders["fields"][0]["datatype"] == "String"
 
@@ -186,9 +186,9 @@ def test_convert_writes_field_name_and_table_alias_into_extension():
 
     document = yaml.safe_load(ChatDataToOssieConverter().convert(config))
 
-    metric_ext = json.loads(document["semantic_model"][0]["metrics"][0]["custom_extensions"][0]["data"])
+    metric_ext = json.loads(document["metrics"][0]["custom_extensions"][0]["data"])
     dimension_ext = json.loads(
-        document["semantic_model"][0]["datasets"][0]["fields"][0]["custom_extensions"][0]["data"]
+        document["datasets"][0]["fields"][0]["custom_extensions"][0]["data"]
     )
     assert metric_ext["field_name"] == "sales_amount"
     assert metric_ext["table_alias"] == "o"
@@ -200,7 +200,7 @@ def test_convert_omits_empty_field_name_and_table_alias():
     """空值不写扩展键：保持既有扩展内容最小化，旧断言行为不变。"""
     document = yaml.safe_load(ChatDataToOssieConverter().convert(_config()))
     dimension_ext = json.loads(
-        document["semantic_model"][0]["datasets"][0]["fields"][0]["custom_extensions"][0]["data"]
+        document["datasets"][0]["fields"][0]["custom_extensions"][0]["data"]
     )
     assert "field_name" not in dimension_ext
     assert "table_alias" not in dimension_ext
@@ -215,9 +215,9 @@ def test_convert_omits_field_name_equal_to_column_and_alias_equal_to_table():
 
     document = yaml.safe_load(ChatDataToOssieConverter().convert(config))
 
-    metric_ext = json.loads(document["semantic_model"][0]["metrics"][0]["custom_extensions"][0]["data"])
+    metric_ext = json.loads(document["metrics"][0]["custom_extensions"][0]["data"])
     dimension_ext = json.loads(
-        document["semantic_model"][0]["datasets"][0]["fields"][0]["custom_extensions"][0]["data"]
+        document["datasets"][0]["fields"][0]["custom_extensions"][0]["data"]
     )
     assert metric_ext == {"table": "orders", "column": "amount"}
     assert dimension_ext == {"table": "orders", "column": "city"}
@@ -244,7 +244,7 @@ def test_convert_maps_longtext_physical_type_to_string():
     config["dimensions"][0]["column"] = "amount"
 
     document = yaml.safe_load(ChatDataToOssieConverter().convert(config))
-    field = document["semantic_model"][0]["datasets"][0]["fields"][0]
+    field = document["datasets"][0]["fields"][0]
     assert field["datatype"] == "String"
 
 
@@ -259,7 +259,7 @@ def test_convert_writes_logical_type_into_extension_only_when_lossy():
     }
 
     document = yaml.safe_load(ChatDataToOssieConverter().convert(config))
-    field = document["semantic_model"][0]["datasets"][0]["fields"][0]
+    field = document["datasets"][0]["fields"][0]
     extension = json.loads(field["custom_extensions"][0]["data"])
     assert extension["logical_type"] == "enum"
 
@@ -271,7 +271,7 @@ def test_convert_writes_logical_type_into_extension_only_when_lossy():
         "logical_type": "text",
     }
     document = yaml.safe_load(ChatDataToOssieConverter().convert(config))
-    field = document["semantic_model"][0]["datasets"][0]["fields"][0]
+    field = document["datasets"][0]["fields"][0]
     extension = json.loads(field["custom_extensions"][0]["data"])
     assert "logical_type" not in extension
 
@@ -285,7 +285,7 @@ def test_convert_writes_data_type_into_extension_only_when_lossy():
     ]
 
     document = yaml.safe_load(ChatDataToOssieConverter().convert(config))
-    metrics = document["semantic_model"][0]["metrics"]
+    metrics = document["metrics"]
     lossy_ext = json.loads(metrics[0]["custom_extensions"][0]["data"])
     assert lossy_ext["data_type"] == "decimal(10,2)"
     lossless = metrics[1]
@@ -301,5 +301,5 @@ def test_convert_records_dimension_order_for_round_trip():
         {"name": "状态", "table": "orders", "column": "status", "logical_type": "string"},
     ]
     document = yaml.safe_load(ChatDataToOssieConverter().convert(config))
-    ext = json.loads(document["semantic_model"][0]["custom_extensions"][0]["data"])
+    ext = json.loads(document["custom_extensions"][0]["data"])
     assert ext["dimension_order"] == ["orders.city", "users.nickname", "orders.status"]

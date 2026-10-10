@@ -22,7 +22,7 @@ from dataclasses import field as dataclass_field
 from typing import Any, cast
 
 import yaml
-from ossie import OSIDataType, OSIDocument, OSISemanticModel
+from ossie import OssieDataType, OssieDocument, OssieSemanticModel
 from pydantic import ValidationError
 
 from utils.logger import get_logger
@@ -37,26 +37,26 @@ _ANSI_SQL_DIALECT = "ANSI_SQL"
 _PLAIN_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 _OSIE_DATATYPE_TO_LOGICAL_TYPE = {
-    OSIDataType.STRING: "text",
-    OSIDataType.INTEGER: "number",
-    OSIDataType.DECIMAL: "number",
-    OSIDataType.FLOAT: "number",
-    OSIDataType.DATE: "date",
-    OSIDataType.TIME: "datetime",
-    OSIDataType.DATE_TIME: "datetime",
-    OSIDataType.DATE_TIME_TZ: "datetime",
+    OssieDataType.STRING: "text",
+    OssieDataType.INTEGER: "number",
+    OssieDataType.DECIMAL: "number",
+    OssieDataType.FLOAT: "number",
+    OssieDataType.DATE: "date",
+    OssieDataType.TIME: "datetime",
+    OssieDataType.DATE_TIME: "datetime",
+    OssieDataType.DATE_TIME_TZ: "datetime",
 }
 
 _OSIE_DATATYPE_TO_DATA_TYPE = {
-    OSIDataType.STRING: "string",
-    OSIDataType.INTEGER: "int",
-    OSIDataType.DECIMAL: "decimal",
-    OSIDataType.FLOAT: "float",
-    OSIDataType.BOOLEAN: "boolean",
-    OSIDataType.DATE: "date",
-    OSIDataType.TIME: "time",
-    OSIDataType.DATE_TIME: "timestamp",
-    OSIDataType.DATE_TIME_TZ: "timestamp",
+    OssieDataType.STRING: "string",
+    OssieDataType.INTEGER: "int",
+    OssieDataType.DECIMAL: "decimal",
+    OssieDataType.FLOAT: "float",
+    OssieDataType.BOOLEAN: "boolean",
+    OssieDataType.DATE: "date",
+    OssieDataType.TIME: "time",
+    OssieDataType.DATE_TIME: "timestamp",
+    OssieDataType.DATE_TIME_TZ: "timestamp",
 }
 
 # AI 生成/外部导出的 YAML 常用 SQL 类型名而非 OSI 枚举名（如 FLOAT、BIGINT、varchar），
@@ -155,8 +155,32 @@ class OssieSemanticModelImport:
         return payload
 
 
-def parse_ossie_document(yaml_content: str) -> OSIDocument:
-    """解析 Ossie YAML 全文为 OSIDocument；格式非法抛 ValueError（消息面向用户）。"""
+def _normalize_document_root(data: dict[str, Any]) -> dict[str, Any]:
+    """归一文档根形状为最新规范（根即单模型）。
+
+    最新规范（ossie main 2026-10）：根 = version/name/datasets/... 平铺；
+    旧版（PyPI 0.2.0.dev0 早期）根 = version + semantic_model 列表。外部存量
+    文件仍可能是旧形状：单模型文档就地平铺，多模型文档明确报错不支持。
+    """
+    models = data.pop("semantic_model", None)
+    if models is None:
+        return data
+    if not isinstance(models, list) or not models:
+        raise ValueError("Ossie 文档 semantic_model 必须是非空列表")
+    if len(models) > 1:
+        raise ValueError(f"该 Ossie 文档包含 {len(models)} 个语义模型，当前仅支持单模型文档；请拆分后分别导入")
+    model = models[0]
+    if not isinstance(model, dict):
+        raise ValueError("Ossie 文档 semantic_model 条目必须是映射")
+    # 只搬模型字段，旧根上的 dialects/vendors 等历史键随根丢弃
+    return dict(model)
+
+
+def parse_ossie_document(yaml_content: str) -> OssieDocument:
+    """解析 Ossie YAML 全文为 OssieDocument；格式非法抛 ValueError（消息面向用户）。
+
+    兼容两种根形状：最新「根即单模型」与旧版「version + semantic_model 列表」。
+    """
     try:
         data = yaml.safe_load(yaml_content)
     except yaml.YAMLError as exc:
@@ -168,13 +192,15 @@ def parse_ossie_document(yaml_content: str) -> OSIDocument:
             raise ValueError(f"Ossie 文档 YAML 语法错误（第 {mark.line + 1} 行第 {mark.column + 1} 列）") from exc
         raise ValueError("Ossie 文档不是合法的 YAML") from exc
     if not isinstance(data, dict):
-        raise ValueError("Ossie 文档必须是 YAML 映射（顶层为 version / semantic_model）")
-    # yaml 会把 version: 1.0 解析成 float，而 OSI schema 要求字符串，做一次容错
-    if "version" in data and not isinstance(data["version"], (str, type(None))):
-        data["version"] = str(data["version"])
+        raise ValueError("Ossie 文档必须是 YAML 映射（顶层为 version / name / datasets）")
+    # 官方 schema 把 version 钉死为 const（0.2.0.dev0）。版本对导入侧只是元数据、
+    # 不参与任何分支消费：非钉死值（含旧文件 version: 1.0 或 yaml 解析成 float）一律
+    # 丢弃，交给模型默认值填充，避免把「版本字段不认识」上升为整份文档拒绝。
+    data.pop("version", None)
+    data = _normalize_document_root(data)
     _normalize_ossie_datatypes(data)
     try:
-        return OSIDocument.model_validate(data)
+        return OssieDocument.model_validate(data)
     except ValidationError as exc:
         first_error = exc.errors()[0]
         location = ".".join(str(part) for part in first_error.get("loc", []))
@@ -204,21 +230,17 @@ def _normalize_item_list_datatypes(items: Any) -> None:
 def _normalize_ossie_datatypes(data: dict[str, Any]) -> None:
     """原地归一 YAML 中各 datatype 节点的别名（仅接受确定映射，不做猜测）。
 
-    OSSI 中 datatype 出现在 semantic_model[].metrics[] 与
-    semantic_model[].datasets[].fields[]（维度即 dataset 字段）。
+    datatype 出现在根级 metrics[] 与 datasets[].fields[]（维度即 dataset 字段）；
+    调用前文档根已归一为最新形状（根即单模型）。
     """
-    models = data.get("semantic_model")
-    if not isinstance(models, list):
+    if not isinstance(data, dict):
         return
-    for model in models:
-        if not isinstance(model, dict):
-            continue
-        item_lists = [model.get("metrics")]
-        datasets = model.get("datasets")
-        if isinstance(datasets, list):
-            item_lists.extend(dataset.get("fields") for dataset in datasets if isinstance(dataset, dict))
-        for items in item_lists:
-            _normalize_item_list_datatypes(items)
+    item_lists = [data.get("metrics")]
+    datasets = data.get("datasets")
+    if isinstance(datasets, list):
+        item_lists.extend(dataset.get("fields") for dataset in datasets if isinstance(dataset, dict))
+    for items in item_lists:
+        _normalize_item_list_datatypes(items)
 
 
 def _optional_str(value: Any) -> str | None:
@@ -422,13 +444,11 @@ class OssieToChatDataImporter:
         """解析 YAML 后复用 import_document（两者唯一差别在文档来源）。"""
         return self.import_document(parse_ossie_document(yaml_content))
 
-    def import_document(self, document: OSIDocument) -> list[OssieSemanticModelImport]:
-        models = document.semantic_model or []
-        if not models:
-            raise ValueError("Ossie 文档不包含 semantic_model，没有可导入的内容")
-        return [self._convert_model(model) for model in models]
+    def import_document(self, document: OssieDocument) -> list[OssieSemanticModelImport]:
+        # 最新规范：文档根即单模型，一份文档一个业务域
+        return [self._convert_model(document)]
 
-    def _convert_model(self, model: OSISemanticModel) -> OssieSemanticModelImport:
+    def _convert_model(self, model: OssieSemanticModel) -> OssieSemanticModelImport:
         result = self._new_import_result(model)
         if not result.name:
             result.errors.append("semantic_model 缺少 name，无法导入")
@@ -473,7 +493,7 @@ class OssieToChatDataImporter:
         )
 
     @staticmethod
-    def _new_import_result(model: OSISemanticModel) -> OssieSemanticModelImport:
+    def _new_import_result(model: OssieSemanticModel) -> OssieSemanticModelImport:
         """构造导入结果骨架；名称/描述/业务说明的空值与 None 归一集中在此。"""
         return OssieSemanticModelImport(
             name=str(model.name or "").strip(),
@@ -483,7 +503,7 @@ class OssieToChatDataImporter:
 
     @staticmethod
     def _resolve_dataset_names(
-        model: OSISemanticModel,
+        model: OssieSemanticModel,
         label: str,
         result: OssieSemanticModelImport,
     ) -> list[str] | None:

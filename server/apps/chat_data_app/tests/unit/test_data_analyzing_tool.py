@@ -1065,7 +1065,7 @@ def _good_yaml() -> str:
 version: "1.0"
 semantic_model:
   - name: 订单模型
-    business_notes: 电商订单核心口径
+    ai_context: 电商订单核心口径
     datasets:
       - name: orders
         source: orders
@@ -1333,17 +1333,16 @@ def test_check_yaml_marks_locked_same_name_conflict(monkeypatch):
     assert "无操作权限" in by_name["模型名冲突"]["message"]
 
 
-def test_check_yaml_rejects_duplicate_names_in_request(monkeypatch):
-    """请求内重名整体拒绝，与导入预览同口径（stage=duplicate_names）。"""
+def test_check_yaml_rejects_multi_model_document(monkeypatch):
+    """最新规范一份文档一个模型：多模型文档在解析层整体拒绝（stage=parse）。"""
     good = _good_yaml()
     _, sep, entry = good.partition("  - name: 订单模型")
     assert sep
-    # 复制完整模型条目（同名「订单模型」），构造单文档内的请求内重名
     duplicated = good + "  - name: 订单模型" + entry
     payload = _invoke_check_yaml(monkeypatch, duplicated)
     assert payload["success"] is False
-    assert payload["stage"] == "duplicate_names"
-    assert "重名模型" in payload["error"]
+    assert payload["stage"] == "parse"
+    assert "单模型" in payload["error"]
     assert payload["models"] == []
 
 

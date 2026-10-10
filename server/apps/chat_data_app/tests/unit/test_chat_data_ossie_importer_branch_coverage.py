@@ -11,8 +11,6 @@ import os
 import sys
 from types import SimpleNamespace
 
-import pytest
-
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
@@ -67,7 +65,7 @@ def _model(name="模型", datasets=None, metrics=None, relationships=None, exten
 
 
 def _import(model) -> OssieSemanticModelImport:
-    results = OssieToChatDataImporter().import_document(SimpleNamespace(semantic_model=[model]))
+    results = OssieToChatDataImporter().import_document(model)
     assert len(results) == 1
     return results[0]
 
@@ -75,29 +73,27 @@ def _import(model) -> OssieSemanticModelImport:
 # ---------------------------------------------------------------- _normalize_ossie_datatypes
 
 
-def test_normalize_datatypes_returns_early_when_models_not_list():
-    data = {"semantic_model": "not-a-list"}
-    _normalize_ossie_datatypes(data)  # 不抛错即走 156->157 早返回
-    assert data["semantic_model"] == "not-a-list"
+def test_normalize_datatypes_returns_early_when_data_not_dict():
+    _normalize_ossie_datatypes("not-a-dict")  # 不抛错即走非 dict 早返回
 
 
-def test_normalize_datatypes_skips_non_dict_model():
-    data = {"semantic_model": ["junk", {"metrics": [{"datatype": "varchar"}]}]}
+def test_normalize_datatypes_tolerates_non_list_metrics_and_datasets():
+    data = {"metrics": [{"datatype": "varchar"}], "datasets": "junk"}
     _normalize_ossie_datatypes(data)
-    assert data["semantic_model"][1]["metrics"][0]["datatype"] == "String"
+    assert data["metrics"][0]["datatype"] == "String"
 
 
 def test_normalize_datatypes_skips_non_list_datasets():
     item = {"datatype": "bigint"}
     model = {"metrics": [item]}  # 无 datasets 键
-    _normalize_ossie_datatypes({"semantic_model": [model]})
+    _normalize_ossie_datatypes(model)
     assert item["datatype"] == "Integer"
 
 
 def test_normalize_datatypes_skips_non_dict_item():
     item = "junk"
     model = {"metrics": [item], "datasets": [{"fields": [123]}]}
-    _normalize_ossie_datatypes({"semantic_model": [model]})
+    _normalize_ossie_datatypes(model)
     assert item == "junk"  # 非 dict 项原样保留
 
 
@@ -130,11 +126,6 @@ def test_ansi_sql_expression_returns_none_without_ansi_dialect():
 
 
 # ---------------------------------------------------------------- import_document / _convert_model
-
-
-def test_import_document_raises_on_empty_models():
-    with pytest.raises(ValueError, match="不包含 semantic_model"):
-        OssieToChatDataImporter().import_document(SimpleNamespace(semantic_model=[]))
 
 
 def test_convert_model_error_when_name_missing():

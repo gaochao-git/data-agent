@@ -12,7 +12,7 @@ os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 
-from ossie import OSIDataType
+from ossie import OssieDataType
 
 from apps.chat_data_app.services.semantic.run.chat_data_ossie_converter import ChatDataToOssieConverter
 from apps.chat_data_app.services.semantic.run.chat_data_ossie_importer import (
@@ -421,7 +421,7 @@ def test_parse_ossie_document_rejects_invalid_yaml_and_empty_models():
         parse_ossie_document("version: [unclosed")
     with pytest.raises(ValueError, match="必须是 YAML 映射"):
         parse_ossie_document("- just\n- a\n- list\n")
-    with pytest.raises(ValueError, match="不包含 semantic_model"):
+    with pytest.raises(ValueError, match="必须是非空列表"):
         OssieToChatDataImporter().import_yaml('version: "1.0"\nsemantic_model: []\n')
 
 
@@ -484,10 +484,10 @@ semantic_model:
         datatype: BIGINT
 """
     document_model = parse_ossie_document(document)
-    metric = document_model.semantic_model[0].metrics[0]
-    field = document_model.semantic_model[0].datasets[0].fields[0]
-    assert metric.datatype == OSIDataType.INTEGER
-    assert field.datatype == OSIDataType.STRING
+    metric = document_model.metrics[0]
+    field = document_model.datasets[0].fields[0]
+    assert metric.datatype == OssieDataType.INTEGER
+    assert field.datatype == OssieDataType.STRING
 
     with pytest.raises(ValueError, match="结构校验失败.*datatype"):
         parse_ossie_document(document.replace("datatype: BIGINT", "datatype: SUPER_BIG_INT"))
@@ -975,8 +975,8 @@ def test_import_route_rejects_invalid_conflict_action(monkeypatch):
     assert manager.updated_kwargs == {}
 
 
-def test_import_route_rejects_duplicate_model_names_in_request(monkeypatch):
-    """请求内同名模型会让落库顺序互相踩踏，必须在写库前整体拒绝。"""
+def test_import_route_rejects_multi_model_document(monkeypatch):
+    """最新规范一份文档一个模型：多模型文档在解析层整体拒绝，不产生任何落库。"""
     manager = FakeManager()
     monkeypatch.setattr(semantic_config, "get_datasource_manager", lambda: manager)
     monkeypatch.setattr(semantic_config, "get_semantic_config_service", lambda: manager)
@@ -997,7 +997,7 @@ def test_import_route_rejects_duplicate_model_names_in_request(monkeypatch):
         )
     )
     assert response["status"] == "error"
-    assert "重名" in response["msg"]
+    assert "单模型" in response["msg"]
     assert manager.created_kwargs == []
 
 
@@ -1124,9 +1124,9 @@ class _RecordingTransaction:
         self.committed = True
 
 
-def test_import_route_rolls_back_all_models_on_write_failure(monkeypatch):
-    """任一个模型写入失败即整批回滚（异常必须穿透事务边界），不留半批草稿。"""
-    manager = _FailingCreateManager(fail_at=2)
+def test_import_route_rolls_back_on_write_failure(monkeypatch):
+    """模型写入失败即整体回滚（异常必须穿透事务边界），不留半批草稿。"""
+    manager = _FailingCreateManager(fail_at=1)
     transaction = _RecordingTransaction()
     monkeypatch.setattr(semantic_config, "get_datasource_manager", lambda: manager)
     monkeypatch.setattr(semantic_config, "get_semantic_config_service", lambda: manager)
@@ -1137,17 +1137,16 @@ def test_import_route_rolls_back_all_models_on_write_failure(monkeypatch):
         asyncio.run(
             semantic_config.import_admin_ossie_semantic_configs(
                 "ds1",
-                SemanticOssieImportRequest(yaml_content=_two_model_yaml()),
+                SemanticOssieImportRequest(yaml_content=_single_dataset_yaml()),
                 _request(),
             )
         )
     )
     assert response["status"] == "error"
     assert "已回滚" in response["msg"]
-    assert "用户模型" in response["msg"]
     assert transaction.rolled_back is True
     assert transaction.committed is False
-    assert len(manager.created_kwargs) == 2
+    assert len(manager.created_kwargs) == 1
 
 
 def test_checklist_conflict_row_only_for_locked_conflict():
@@ -1296,26 +1295,25 @@ semantic_model:
 # ============ prepare_ossie_import_models / _build_existing_config_index 直接契约 ============
 
 
-def test_prepare_models_returns_duplicate_error_without_models():
-    """请求内同名模型：唯一权威实现返回空模型列表 + 重名错误，不进入冲突/物理校验。"""
+def test_prepare_models_rejects_multi_model_document():
+    """最新规范一份文档一个模型：多模型文档在解析层直接抛错。"""
     manager = FakeManager()
     yaml_text = _single_dataset_yaml().replace(
         "semantic_model:",
         "semantic_model:\n  - name: 商品模型\n    datasets: []\n    metrics: []",
         1,
     )
-    models, error = asyncio.run(
-        semantic_config_service.prepare_ossie_import_models(
-            manager,
-            _DATASOURCE,
-            "ds1",
-            yaml_text,
-            semantic_service=manager,
-            user_id="user_a",
+    with pytest.raises(ValueError, match="单模型"):
+        asyncio.run(
+            semantic_config_service.prepare_ossie_import_models(
+                manager,
+                _DATASOURCE,
+                "ds1",
+                yaml_text,
+                semantic_service=manager,
+                user_id="user_a",
+            )
         )
-    )
-    assert models == []
-    assert "重名" in error
 
 
 def test_prepare_models_public_conflict_sets_existing_config_not_locked():
@@ -1581,7 +1579,7 @@ def test_column_dict_extension_round_trip_via_ossie_yaml():
     }
     yaml_text = ChatDataToOssieConverter().convert(config, source_type="mysql")
     document = yaml.safe_load(yaml_text)
-    field = document["semantic_model"][0]["datasets"][0]["fields"][0]
+    field = document["datasets"][0]["fields"][0]
     ext_data = json.loads(field["custom_extensions"][0]["data"])
     # 空的 unit 不写，避免扩展噪音；description 不承载字典信息
     assert ext_data["column_dict"] == {
@@ -1589,7 +1587,7 @@ def test_column_dict_extension_round_trip_via_ossie_yaml():
         "synonyms": ["支付状态"],
         "storage_format": "0/1",
     }
-    metric_ext = json.loads(document["semantic_model"][0]["metrics"][0]["custom_extensions"][0]["data"])
+    metric_ext = json.loads(document["metrics"][0]["custom_extensions"][0]["data"])
     assert "column_dict" not in metric_ext
 
     result = OssieToChatDataImporter().import_yaml(yaml_text)[0]
@@ -1964,10 +1962,9 @@ def test_round_trip_restores_interleaved_dimension_order():
 
     # 外部文件（无 dimension_order 扩展）：回退 dataset 遍历序，不做重排
     document = yaml.safe_load(yaml_text)
-    for model in document["semantic_model"]:
-        model["custom_extensions"] = [
-            ext for ext in model.get("custom_extensions") or [] if "dimension_order" not in json.loads(ext["data"])
-        ]
+    document["custom_extensions"] = [
+        ext for ext in document.get("custom_extensions") or [] if "dimension_order" not in json.loads(ext["data"])
+    ]
     stripped = OssieToChatDataImporter().import_document(
         parse_ossie_document(yaml.safe_dump(document, allow_unicode=True))
     )[0]
