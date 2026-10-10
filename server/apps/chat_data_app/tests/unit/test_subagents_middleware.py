@@ -1073,7 +1073,7 @@ def _over_threshold_request():
 
 
 def test_budget_alert_middleware_appends_warning_over_threshold(monkeypatch):
-    """上下文估算达到阈值时，本轮请求尾部追加预算收尾提示（软约束，不摘工具）。"""
+    """上下文估算达到阈值时，本轮请求尾部追加预算收尾提示 + tool_choice="none"（双层收尾）。"""
     monkeypatch.setattr(
         subagents_module,
         "get_model_context_budget",
@@ -1104,10 +1104,12 @@ def test_budget_alert_middleware_appends_warning_over_threshold(monkeypatch):
     assert "续接任务书为" not in content
     assert seen["request"].system_message.content == "主提示词"
     assert "建议" not in content
-    # 软约束：工具集保持不变，是否收尾由模型自行决定
+    # 工具 schema 保留（与已废弃的 override(tools=[]) 的本质区别：schema 消失才是
+    # Qwen 裸 <tool_call> 正文退化的诱因），仅 API 参数层禁止本轮调用
     assert seen["request"].tools == ["file_read"]
+    assert seen["request"].tool_choice == "none"
 
-    # 低于阈值零注入
+    # 低于阈值零注入，tool_choice 不设置（模型正常自主决策）
     fresh = _FakeModelRequest(
         system_message=SystemMessage(content="主提示词"),
         messages=[AIMessage(content="短")],
@@ -1115,6 +1117,7 @@ def test_budget_alert_middleware_appends_warning_over_threshold(monkeypatch):
     )
     assert middleware.wrap_model_call(fresh, handler) == "done"
     assert seen["request"].system_message.content == "主提示词"
+    assert getattr(seen["request"], "tool_choice", None) is None
 
 
 def test_budget_alert_middleware_env_override_takes_precedence(monkeypatch):

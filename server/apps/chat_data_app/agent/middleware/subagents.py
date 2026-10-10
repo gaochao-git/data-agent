@@ -329,7 +329,8 @@ def create_subagent_budget_alert_middleware(
       同样盖 trail 快照与用量，主智能体可据失败原因降级接手）。
     每个超限轮次都注入（水位不降提示会重复出现，属预期）；低于阈值零注入。
     注入通道是隐藏 HumanMessage 追加在消息尾部（见 ``_with_budget_alert`` 内注释），
-    不走 system prompt 追加。
+    不走 system prompt 追加。超限轮次同时设置 ``tool_choice="none"``（API 层禁止
+    工具调用，双层收尾的保险丝；提示为引导层），工具 schema 保留在请求里。
     阈值默认与主图压缩触发阈值同源（同一 ``ContextBudget.compression_trigger_tokens``，
     同一 env 口径），可用 CHAT_DATA_SUBAGENT_BUDGET_ALERT_TRIGGER_RATIO
     按窗口比例单独覆盖（仅子图，主图不受影响）。
@@ -375,7 +376,14 @@ def create_subagent_budget_alert_middleware(
             ),
             additional_kwargs={"budget_alert": True, "hide_from_ui": True},
         )
-        return request.override(messages=[*messages, alert_message])
+        # 双层收尾（2026-10-10 接入）：①上方隐藏 HumanMessage=引导层；②tool_choice="none"
+        # =保险丝——API 参数层禁止本轮工具调用，模型只能输出文本、自然走向总结。
+        # 与 09-20/09-21 失败的 override(tools=[]) 本质不同：工具 schema 完整保留在请求里
+        # （Qwen 裸 <tool_call> 正文退化的诱因是 schema 消失，本参数不触碰 schema）。
+        # 服从性已实测通过（oMLX Qwen3.6-35B 三场景：诱导下不调工具、无退化；脚本与
+        # 判据见 2026-10-10 日志）。防御纵深照留：_StreamingToolCallMarkupFilter +
+        # recursion_limit。只改当轮请求，不写 state、不落 checkpoint。
+        return request.override(messages=[*messages, alert_message], tool_choice="none")
 
     class _SubagentBudgetAlertMiddleware(AgentMiddleware):
         def wrap_model_call(
