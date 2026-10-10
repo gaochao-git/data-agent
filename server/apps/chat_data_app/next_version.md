@@ -190,6 +190,14 @@ python -m pip install opensandbox==0.1.15
 python -m pip install redis==7.0.1
 ```
 
+apache-ossie 离线 wheel 已重打（commit 7c03c46e：根形状平铺 + Ossie* 换名 + 严格校验）。**存量机器上 `pip install -r requirements.txt` 会因版本号未变（仍 0.2.0.dev0）静默跳过该 wheel，必须单独强制重装**：
+
+```bash
+python -m pip install --force-reinstall --no-deps wheels/apache_ossie-0.2.0.dev0-py3-none-any.whl
+# 验证：应输出 <class 'ossie.models.OssieDocument'>（旧包是 OSI 前缀类名，装到旧包说明没换成功）
+python -c "import ossie; print(ossie.OssieDocument)"
+```
+
 Redis 配置（密码为 SM4 密文，加密方式：`CHAT_DATA_ENV=dev python scripts/crypto.py encrypt <明文密码>`）：
 
 ```env

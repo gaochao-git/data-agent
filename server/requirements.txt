@@ -54,11 +54,20 @@ pyshacl==0.31.0
 opensandbox==0.1.15
 sqlglot==30.8.0
 # Apache Ossie has no PyPI release yet; the offline wheel below was built from
-# the pinned upstream commit 88e0011148283302c9a04cd0287e00e0b9d87354
-# (apache/ossie python/ subdirectory), so intranet hosts can install without
-# GitHub access. To upgrade: rebuild the wheel from the new pinned commit with
+# the pinned upstream commit 7c03c46eae6c9946f50d9aa6c36918cdfb28f540
+# (apache/ossie python/ subdirectory, 2026-10-10 main: flat single-model root +
+# Ossie* class names + strict extra=forbid / pinned version Literal), so
+# intranet hosts can install without GitHub access. NOTE: the version string
+# stayed 0.2.0.dev0 across the breaking reshaping — same filename, different
+# schema; always verify the wheel contents after replacing. To upgrade: rebuild
+# the wheel from the new pinned commit with
 #   pip wheel 'apache-ossie @ git+https://github.com/apache/ossie.git@<commit>#subdirectory=python' -w wheels/
-# and replace the file here.
+# and replace the file here. UPGRADE CAUTION: on hosts that already have the
+# old wheel installed, plain `pip install -r requirements.txt` SKIPS this file
+# silently ("already installed with the same version" — version string did not
+# change across the breaking reshaping). Re-run it explicitly with:
+#   pip install --force-reinstall --no-deps wheels/apache_ossie-0.2.0.dev0-py3-none-any.whl
+# then verify: python -c "import ossie; print(ossie.OssieDocument)"
 wheels/apache_ossie-0.2.0.dev0-py3-none-any.whl
 # numpy / onnxruntime are transitive deps of markitdown -> magika. They are
 # vendored as offline wheels because the intranet PyPI mirror (pypi.nucc.com)
