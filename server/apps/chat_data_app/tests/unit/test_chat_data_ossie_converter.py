@@ -292,8 +292,8 @@ def test_convert_writes_data_type_into_extension_only_when_lossy():
     assert "data_type" not in json.loads(lossless["custom_extensions"][0]["data"])
 
 
-def test_convert_records_dimension_order_for_round_trip():
-    """维度平铺顺序在 dataset→field 结构里没有位置，写入模型扩展供导入侧还原保序。"""
+def test_convert_omits_dimension_order_extension():
+    """导出不再携带 dimension_order 顺序清单：replace 保序由导入侧按库内现成顺序完成。"""
     config = _config()
     config["dimensions"] = [
         {"name": "城市", "table": "orders", "column": "city", "logical_type": "string"},
@@ -302,4 +302,5 @@ def test_convert_records_dimension_order_for_round_trip():
     ]
     document = yaml.safe_load(ChatDataToOssieConverter().convert(config))
     ext = json.loads(document["custom_extensions"][0]["data"])
-    assert ext["dimension_order"] == ["orders.city", "users.nickname", "orders.status"]
+    assert "dimension_order" not in ext
+    assert ext["semantic_config_id"] == _config()["id"]

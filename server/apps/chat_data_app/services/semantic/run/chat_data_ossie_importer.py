@@ -467,30 +467,11 @@ class OssieToChatDataImporter:
         for dataset in model.datasets or []:
             for ossie_field in dataset.fields or []:
                 self._convert_field(ossie_field, dataset_names, result)
-        self._restore_dimension_order(result, model_extension)
         for metric in model.metrics or []:
             self._convert_metric(metric, dataset_names, result)
         for index, relationship in enumerate(model.relationships or [], start=1):
             self._convert_relationship(relationship, index, result)
         return result
-
-    @staticmethod
-    def _restore_dimension_order(result: OssieSemanticModelImport, model_extension: dict[str, Any]) -> None:
-        """按导出时记录的平铺顺序还原 dimensions（就地稳定排序）。
-
-        Ossie 的 dataset→field 结构天然把维度按表聚簇，与库中平铺顺序不一致；
-        导出侧在模型扩展 dimension_order 里记录原始 `table.column` 顺序，这里还原。
-        清单缺失（外部文件/旧快照）时不动；不在清单里的维度（手工新增）稳定排在已知维度之后。
-        """
-        keys = [key for key in model_extension.get("dimension_order") or [] if isinstance(key, str) and key]
-        if not keys or not result.dimensions:
-            return
-        order_index: dict[str, int] = {}
-        for index, key in enumerate(keys):
-            order_index.setdefault(key, index)
-        result.dimensions.sort(
-            key=lambda entry: order_index.get(f"{entry.get('table')}.{entry.get('column')}", len(order_index))
-        )
 
     @staticmethod
     def _new_import_result(model: OssieSemanticModel) -> OssieSemanticModelImport:

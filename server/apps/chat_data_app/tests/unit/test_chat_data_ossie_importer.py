@@ -1417,6 +1417,201 @@ def test_prepare_models_enum_without_dict_values_blocks_import():
     assert getattr(manager, "column_dict_calls", 0) == 0
 
 
+def test_prepare_models_replace_keeps_existing_dimension_order():
+    """同名替换导入时按库内现成顺序保序，YAML 新增维度稳定追加在后。
+
+    Ossie 的 dataset→field 结构把维度按表聚簇，跨表交错顺序无法用 YAML 表达；
+    replace 语义下库内配置本身就有一份顺序（用户手排结果），保序是导入合并
+    行为而非导出物职责（dimension_order 扩展已废弃）。
+    """
+    config = {
+        "id": "sc_pub",
+        "name": "订单分析",
+        "metrics": [{"name": "总额", "table": "orders", "expression": "SUM(orders.amount)"}],
+        "dimensions": [
+            {"name": "用户昵称", "table": "users", "column": "nickname", "logical_type": "string"},
+            {"name": "订单状态", "table": "orders", "column": "status", "logical_type": "string"},
+            {"name": "订单时间", "table": "orders", "column": "order_time", "logical_type": "date"},
+        ],
+        "relationships": [
+            {
+                "left_table": "orders",
+                "right_table": "users",
+                "join_conditions": [{"left_column": "user_id", "right_column": "id"}],
+                "relationship_type": "many_to_one",
+            }
+        ],
+    }
+    yaml_text = ChatDataToOssieConverter().convert(config, source_type="mysql")
+    # 库内顺序与 YAML 交错序不同：状态在前、昵称在后；订单时间是 YAML 新增
+    manager = FakeManager(
+        configs=[
+            {
+                "id": "sc_pub",
+                "name": "订单分析",
+                "scope_type": "public",
+                "enabled": True,
+                "dimensions": [
+                    {"name": "订单状态", "table": "orders", "column": "status"},
+                    {"name": "用户昵称", "table": "users", "column": "nickname"},
+                ],
+            }
+        ]
+    )
+    models, error = asyncio.run(
+        semantic_config_service.prepare_ossie_import_models(
+            manager,
+            _DATASOURCE,
+            "ds1",
+            yaml_text,
+            semantic_service=manager,
+            user_id="user_a",
+        )
+    )
+    assert error is None
+    item = models[0]
+    assert item.importable is True
+    assert [dim["name"] for dim in item.dimensions] == ["订单状态", "用户昵称", "订单时间"]
+    # existing_config 保持三键摘要形态，不携带库内维度明细
+    assert item.existing_config == {"config_id": "sc_pub", "name": "订单分析", "enabled": True}
+
+    # 首次导入（无同名可操作配置）不重排：按 dataset 遍历序聚簇展开
+    fresh_models, fresh_error = asyncio.run(
+        semantic_config_service.prepare_ossie_import_models(
+            FakeManager(),
+            _DATASOURCE,
+            "ds1",
+            yaml_text,
+            semantic_service=FakeManager(),
+            user_id="user_a",
+        )
+    )
+    assert fresh_error is None
+    assert [dim["name"] for dim in fresh_models[0].dimensions] == ["订单状态", "订单时间", "用户昵称"]
+
+
+def test_prepare_models_order_restore_tolerates_dirty_inputs():
+    """保序合并对脏输入容错：库内维度脏条目跳过、同名配置只取首个、无维度模型不炸。"""
+    config = {
+        "id": "sc_pub",
+        "name": "订单分析",
+        "metrics": [{"name": "总额", "table": "orders", "expression": "SUM(orders.amount)"}],
+        "dimensions": [
+            {"name": "用户昵称", "table": "users", "column": "nickname", "logical_type": "string"},
+            {"name": "订单状态", "table": "orders", "column": "status", "logical_type": "string"},
+        ],
+        "relationships": [
+            {
+                "left_table": "orders",
+                "right_table": "users",
+                "join_conditions": [{"left_column": "user_id", "right_column": "id"}],
+                "relationship_type": "many_to_one",
+            }
+        ],
+    }
+    yaml_text = ChatDataToOssieConverter().convert(config, source_type="mysql")
+    # 库内配置 1：dimensions 混入缺 table/缺 column/非 dict 的脏条目（跳过不参与排序）；
+    # 库内配置 2：同名冗余记录（order_by_name 只取首个，行为与同名冲突索引一致）
+    manager = FakeManager(
+        configs=[
+            {
+                "id": "sc_pub",
+                "name": "订单分析",
+                "scope_type": "public",
+                "enabled": True,
+                "dimensions": [
+                    {"name": "订单状态", "table": "orders", "column": "status"},
+                    {"name": "坏条目-缺column", "table": "users"},
+                    {"name": "重复键-不覆盖首现", "table": "orders", "column": "status"},
+                    "不是字典",
+                ],
+            },
+            {
+                "id": "sc_pub_dup",
+                "name": "订单分析",
+                "scope_type": "public",
+                "enabled": False,
+                "dimensions": [{"name": "干扰序", "table": "orders", "column": "order_time"}],
+            },
+        ]
+    )
+    models, error = asyncio.run(
+        semantic_config_service.prepare_ossie_import_models(
+            manager,
+            _DATASOURCE,
+            "ds1",
+            yaml_text,
+            semantic_service=manager,
+            user_id="user_a",
+        )
+    )
+    assert error is None
+    item = models[0]
+    assert item.importable is True
+    # 脏条目不影响保序：状态按库内序在前，昵称在后
+    assert [dim["name"] for dim in item.dimensions] == ["订单状态", "用户昵称"]
+
+    # 无维度模型：保序合并直接跳过，不炸
+    no_dim_config = {
+        "id": "sc_pub2",
+        "name": "订单分析",
+        "metrics": [{"name": "总额", "table": "orders", "expression": "SUM(orders.amount)"}],
+        "dimensions": [],
+    }
+    no_dim_yaml = ChatDataToOssieConverter().convert(no_dim_config, source_type="mysql")
+    manager_no_dim = FakeManager(
+        configs=[{"id": "sc_pub", "name": "订单分析", "scope_type": "public", "enabled": True}]
+    )
+    no_dim_models, no_dim_error = asyncio.run(
+        semantic_config_service.prepare_ossie_import_models(
+            manager_no_dim,
+            _DATASOURCE,
+            "ds1",
+            no_dim_yaml,
+            semantic_service=manager_no_dim,
+            user_id="user_a",
+        )
+    )
+    assert no_dim_error is None
+    assert no_dim_models[0].importable is True
+    assert no_dim_models[0].dimensions == []
+
+
+def test_import_legacy_snapshot_with_dimension_order_key_still_imports():
+    """旧下载件兼容：模型扩展里遗留的 dimension_order 键被自然忽略，导入不受影响。
+
+    dimension_order 废弃前的存量导出件仍可导入（多余键无害），解析层
+    _extension_data 只消费身份键（semantic_config_id 等）。
+    """
+    yaml_text = """
+version: "0.2.0.dev0"
+name: 订单分析
+description: 旧快照兼容
+ai_context: ""
+datasets:
+  - name: orders
+    source: orders
+    fields:
+      - name: 状态
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: '`status`'
+        datatype: String
+        custom_extensions:
+          - vendor_name: CHAT_DATA
+            data: '{"table": "orders", "column": "status", "column_dict": {}}'
+metrics: []
+custom_extensions:
+  - vendor_name: CHAT_DATA
+    data: '{"semantic_config_id": "sc_old", "source_type": "mysql", "update_time": "2026-09-26 06:40:42", "snapshot_role": "model_reference_only", "dimension_order": ["orders.status", "orders.city"]}'
+"""
+    result = OssieToChatDataImporter().import_yaml(yaml_text)[0]
+    assert result.errors == []
+    assert result.source_config_id == "sc_old"
+    assert [dim["name"] for dim in result.dimensions] == ["状态"]
+
+
 def test_prepare_models_others_private_conflict_locked_without_existing():
     """他人同名私有配置：conflict_locked=True 且 existing_config 保持 None（不泄露元信息）。"""
     manager = FakeManager(
@@ -1941,8 +2136,13 @@ def test_import_route_rolls_back_when_dict_fill_fails(monkeypatch):
     assert rollback_calls == ["entered", "rolled_back"]
 
 
-def test_round_trip_restores_interleaved_dimension_order():
-    """往返保序：跨表交错的维度经导出→导入后顺序与原配置一致（不被 dataset 聚簇打乱）。"""
+def test_import_without_order_extension_clusters_by_dataset():
+    """导入侧不再做顺序还原：维度按 dataset 遍历序（按表聚簇）展开。
+
+    跨表交错顺序在 dataset→field 结构里没有位置可放；replace 场景的保序
+    由 service 层按库内现成顺序完成（_restore_existing_dimension_order），
+    解析层保持无库状态的纯解析。
+    """
     config = {
         "id": "sc_rt",
         "name": "订单分析",
@@ -1955,66 +2155,7 @@ def test_round_trip_restores_interleaved_dimension_order():
         ],
     }
     yaml_text = ChatDataToOssieConverter().convert(config, source_type="mysql")
-
-    # 无保序时 dataset 遍历会产生聚簇序（orders 在前）；保序后必须还原交错序
     restored = OssieToChatDataImporter().import_yaml(yaml_text)[0]
-    assert [dim["name"] for dim in restored.dimensions] == ["用户昵称", "订单状态", "用户等级", "订单金额"]
-
-    # 外部文件（无 dimension_order 扩展）：回退 dataset 遍历序，不做重排
-    document = yaml.safe_load(yaml_text)
-    document["custom_extensions"] = [
-        ext for ext in document.get("custom_extensions") or [] if "dimension_order" not in json.loads(ext["data"])
-    ]
-    stripped = OssieToChatDataImporter().import_document(
-        parse_ossie_document(yaml.safe_dump(document, allow_unicode=True))
-    )[0]
-    assert [dim["name"] for dim in stripped.dimensions] == ["订单状态", "订单金额", "用户昵称", "用户等级"]
-
-
-def test_restore_dimension_order_appends_unknown_dims_stably():
-    """手工新增的维度不在顺序清单里：稳定追加在已知维度之后，不丢不重排相对顺序。"""
-    extension_json = json.dumps(
-        {
-            "semantic_config_id": "sc_old",
-            "dimension_order": ["orders.status", "orders.city"],
-        },
-        ensure_ascii=False,
-    )
-    yaml_text = f"""
-version: "1.0"
-semantic_model:
-  - name: 订单分析
-    datasets:
-      - name: orders
-        source: orders
-        fields:
-          - name: 城市
-            expression:
-              dialects:
-                - dialect: ANSI_SQL
-                  expression: '`city`'
-            custom_extensions:
-              - vendor_name: CHAT_DATA
-                data: '{{"table": "orders", "column": "city"}}'
-          - name: 状态
-            expression:
-              dialects:
-                - dialect: ANSI_SQL
-                  expression: '`status`'
-            custom_extensions:
-              - vendor_name: CHAT_DATA
-                data: '{{"table": "orders", "column": "status"}}'
-          - name: 手工新增
-            expression:
-              dialects:
-                - dialect: ANSI_SQL
-                  expression: '`extra`'
-            custom_extensions:
-              - vendor_name: CHAT_DATA
-                data: '{{"table": "orders", "column": "extra"}}'
-    custom_extensions:
-      - vendor_name: CHAT_DATA
-        data: '{extension_json}'
-"""
-    result = OssieToChatDataImporter().import_yaml(yaml_text)[0]
-    assert [dim["name"] for dim in result.dimensions] == ["状态", "城市", "手工新增"]
+    # orders 表在库内配置中先出现字段（users.nickname 之后才是 orders.status），
+    # 但 dataset 遍历按 _table_names 序（orders 在前）聚簇展开
+    assert [dim["name"] for dim in restored.dimensions] == ["订单状态", "订单金额", "用户昵称", "用户等级"]

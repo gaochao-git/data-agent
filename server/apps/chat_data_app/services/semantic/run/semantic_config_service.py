@@ -972,7 +972,43 @@ async def prepare_ossie_import_models(
         configs_by_name,
         locked_conflict_names,
     )
+    _restore_existing_dimension_order(imports, existing_configs)
     return imports, None
+
+
+def _restore_existing_dimension_order(
+    imports: list[OssieSemanticModelImport],
+    existing_configs: Any,
+) -> None:
+    """同名替换导入时保持库内已有维度的平铺顺序，新增维度稳定追加在后。
+
+    Ossie 的 dataset→field 结构把维度按表聚簇，跨表交错顺序在 YAML 里没有
+    位置可放（曾用模型扩展 dimension_order 携带清单，已废弃：replace 语义下
+    库内配置本身就有一份现成顺序，保序是导入合并行为而非导出物职责）。
+    命中库内 (table.column) 的维度按原序稳定保留，YAML 新增的维度排后；
+    首次导入（无同名可操作配置）不重排，按 dataset 遍历序展示。
+    """
+    order_by_name: dict[str, dict[str, int]] = {}
+    for config in existing_configs or []:
+        name = str((config or {}).get("name") or "").strip()
+        if not name or name in order_by_name:
+            continue
+        existing_index: dict[str, int] = {}
+        for entry in config.get("dimensions") or []:
+            if not isinstance(entry, dict) or not entry.get("table") or not entry.get("column"):
+                continue
+            existing_index.setdefault(f"{entry.get('table')}.{entry.get('column')}", len(existing_index))
+        order_by_name[name] = existing_index
+    for item in imports:
+        order_index = order_by_name.get(item.name)
+        if not order_index or not item.dimensions:
+            continue
+        fallback = len(order_index)
+        item.dimensions.sort(
+            key=lambda entry: order_index.get(
+                f"{entry.get('table')}.{entry.get('column')}", fallback
+            )
+        )
 
 
 def _build_existing_config_index(
