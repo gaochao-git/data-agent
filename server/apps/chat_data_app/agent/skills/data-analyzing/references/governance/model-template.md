@@ -67,6 +67,9 @@ relationships:               # 段序对齐官方/平台导出：datasets → re
     to_columns: [id]         # 应覆盖 to 表声明的键（KEY_UNCOVERED 检查）
     custom_extensions:
       - vendor_name: CHAT_DATA
+        # 自关联（from 与 to 同表）必须在 data 里加 "left_alias"/"right_alias" 区分两侧角色
+        # （仅在与表名不同时写，如 '{"left_table": "employees", "right_table": "employees", "relationship_type": "many_to_one", "join_type": "left", "right_alias": "mgr"}'），
+        # 否则查询层不会生成自连接，依赖它的维度会读到本表字段。
         data: '{"left_table": "orders", "right_table": "users", "relationship_type": "one_to_many", "join_type": "left"}'
 metrics:
   - name: 销售额             # 原子指标范例

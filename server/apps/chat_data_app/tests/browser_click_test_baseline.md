@@ -1986,3 +1986,13 @@ ChatData
 | 背景 | 预览区头部新增「复制文件内容」「复制文件路径」两个图标按钮（样式与相邻刷新/放大按钮同款），全屏态补浮动复制按钮（全屏容器不包头部的盲区，复用退出全屏浮动按钮先例位置）。改动单文件 ConversationWorkspacePanel.vue。 |
 | 实测 | ①入口链：会话页 → 「Office技能分析语义模型生」会话 → 展开工作区 → workspace/semantic → 选中 YAML。②YAML 预览 → 原生点击复制内容 → 「已复制文件内容」✅、复制路径 → 「已复制文件路径」✅。③JSON 文件表格模式 → 「已复制表格内容（TSV，6 行）」✅（动态实际行数，非硬编码 50）。④全屏 → 浮动「复制文件内容」可点 ✅、退出全屏正常 ✅。 |
 | 边界与已知 | ①验证必须用 CDP 可信点击（agent-browser click），eval 合成点击无 user activation，剪贴板/全屏 API 均拒；②聊天消息里文件名 `<code>` 芯片与树节点同名，自动化选节点必须限定在 aside 容器内；③复制口径=预览所见（文本受 1MB 截断、表格取展示行），按钮 title 已注明；④剪贴板走 secure context 判断 + textarea 兜底（同 AgentScheduleManager 惯例），内网 http 可用。 |
+
+### §5.30 自关联 Ossie 关系别名往返定向回归（2026-10-11 15:45，agent-browser）
+
+| 项 | 内容 |
+| --- | --- |
+| 背景 | 自关联（from==to）靠表别名机制支持（字段 `table_alias`、关系 `left_alias`/`right_alias`），本轮补齐关系级别名进 Ossie 往返：converter 新增 `_relationship_extension_data`（别名≠表名才写，与字段 table_alias 同去噪口径）、importer 透传 left_alias/right_alias + 对 from==to 且有效别名相同的模型给可操作 warning。单测（ossie 四文件 115 passed）+ 端到端回环探针（SELF_JOIN_ROUNDTRIP_OK：`LEFT JOIN categories parent ON categories.parent_id = parent.category_id`）已过，本轮为 SEM-18 定向浏览器回归，前端零改动。 |
+| 后端代码生效探针 | 5001 重启新代码后 curl preview 断言：converter 生成两份探针 YAML（categories 表自关联 `parent_id = category_id`，真实物理列）——带 `right_alias: parent` → importable=True、零自关联警告、关系草稿还原 `right_alias=parent`；无别名 → errors `关系[1]左右表别名不能相同: categories`（config_validator 显式报错）+ warning `…查询层不会生成自连接；请为关系两侧配置不同的表别名（如 right_alias）`、importable=False。 |
+| 实测 | ①入口链：会话页（`?parentComponentName=执法检查`）→ 后台管理 → hive-localhost「模型」→ 导入弹窗。②上传带别名探针 → 「模型校验」：模式=**新增**、可导入（2 维度 · 0 指标 · 1 关系）、物理校验通过（关系 1 全部命中数据源物理元数据）、**无自关联警告**（唯一警告 COV_NO_METRICS 质量发现，属预期）✅。③追加无别名探针 → footer 门禁 `1 个文件尚未校验，请点「模型校验」` ✅ → 校验后：文件行模式=**错误**、物理校验未通过 `关系[1]左右表别名不能相同: categories`、自连接警告文案可见、质量规则核对=跳过（不可导入不执行）✅。④存在阻断问题时「确认导入」`disabled=true` ✅。⑤「取消」关弹窗 → API 复查配置数仍 6、无探针模型残留 → **零落库** ✅。 |
+| 边界与已知 | ①探针模型名「自关联探针模型」本身含「自关联」字样，全文 `includes('自关联')` 断言会误命中模型名——自动化判据要用警告完整句式或先排除模型名节点；②开弹窗用 eval 合成 click 即可（无需 user activation），只有剪贴板/全屏 API 必须 CDP 可信点击（§5.29 结论不泛化）；③后台管理入口是 `title="后台管理"` 的无名图标按钮（快照里不可见），「语义模型配置」面板不承装导入入口；④eval 全局作用域跨调用共享，`const` 重复声明报 SyntaxError——一律 IIFE 包裹（已知坑复现）；⑤弹窗文案「同名替换保留原配置的启用状态」与后端一致：d9dcf0b（09-26，已入 master）起 replace 为 enabled 不传参沿用原状态，旧「强制为禁用」语义已废止。 |
+

@@ -759,6 +759,19 @@ class OssieToChatDataImporter:
         if join_conditions:
             entry["left_column"] = join_conditions[0]["left_column"]
             entry["right_column"] = join_conditions[0]["right_column"]
+        # 查询别名：与表名不同的别名才由导出侧写入（去噪口径），非空即还原；
+        # 查询层别名缺省等于表名，缺省时无需写回。
+        left_alias = _optional_str(extension.get("left_alias")) or ""
+        right_alias = _optional_str(extension.get("right_alias")) or ""
+        if left_alias:
+            entry["left_alias"] = left_alias
+        if right_alias:
+            entry["right_alias"] = right_alias
+        if left_table == right_table and (left_alias or left_table) == (right_alias or right_table):
+            result.warnings.append(
+                f"{label}为自关联（{left_table}）且未配置左右表别名，查询层不会生成自连接；"
+                "请为关系两侧配置不同的表别名（如 right_alias）"
+            )
         result.relationships.append(entry)
 
     @staticmethod

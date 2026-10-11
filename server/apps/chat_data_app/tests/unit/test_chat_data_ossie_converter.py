@@ -310,3 +310,24 @@ def test_convert_omits_dimension_order_extension():
     ext = json.loads(document["custom_extensions"][0]["data"])
     assert "dimension_order" not in ext
     assert ext["semantic_config_id"] == _config()["id"]
+
+
+def test_convert_writes_relationship_alias_only_when_differs_from_table():
+    """关系查询别名与字段 table_alias 同口径：与所属表名不同才写入，缺省（=表名）是冗余不写。"""
+    config = _config()
+    config["relationships"][0].update({"left_alias": "o", "right_alias": "users"})
+
+    document = yaml.safe_load(ChatDataToOssieConverter().convert(config))
+    ext = json.loads(document["relationships"][0]["custom_extensions"][0]["data"])
+    assert ext["left_alias"] == "o"
+    assert "right_alias" not in ext
+
+
+def test_convert_omits_relationship_default_aliases():
+    config = _config()
+    config["relationships"][0].update({"left_alias": "orders", "right_alias": ""})
+
+    document = yaml.safe_load(ChatDataToOssieConverter().convert(config))
+    ext = json.loads(document["relationships"][0]["custom_extensions"][0]["data"])
+    assert "left_alias" not in ext
+    assert "right_alias" not in ext

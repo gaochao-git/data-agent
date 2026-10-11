@@ -226,6 +226,30 @@ def _relationship_type(value: Any) -> str:
     return normalize_relationship_type(value)
 
 
+def _relationship_extension_data(item: dict[str, Any], rel_type: str) -> dict[str, str]:
+    """关系方向元数据与查询别名，写入 CHAT_DATA 扩展供导入侧无损还原。
+
+    left_alias / right_alias 仅在与所属表名不同时写入：查询层别名缺省即等于表名，
+    等于表名时写入是冗余噪音（与字段 table_alias 的去噪口径一致）。
+    """
+    left = _text(item.get("left_table"))
+    right = _text(item.get("right_table"))
+    left_alias = _text(item.get("left_alias"))
+    right_alias = _text(item.get("right_alias"))
+    return {
+        key: value
+        for key, value in {
+            "relationship_type": rel_type,
+            "join_type": _text(item.get("join_type")),
+            "left_table": left,
+            "right_table": right,
+            "left_alias": left_alias if left_alias and left_alias != left else "",
+            "right_alias": right_alias if right_alias and right_alias != right else "",
+        }.items()
+        if value
+    }
+
+
 def _key_columns(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
@@ -688,17 +712,7 @@ class ChatDataToOssieConverter:
                     to_columns=to_columns,
                     custom_extensions=[
                         extension_type(**x)
-                        for x in (
-                            _extension(
-                                {
-                                    "relationship_type": rel_type,
-                                    "join_type": _text(item.get("join_type")),
-                                    "left_table": left,
-                                    "right_table": right,
-                                }
-                            )
-                            or []
-                        )
+                        for x in (_extension(_relationship_extension_data(item, rel_type)) or [])
                     ],
                 )
             )

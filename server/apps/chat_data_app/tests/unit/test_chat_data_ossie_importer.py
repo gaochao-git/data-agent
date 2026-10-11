@@ -2159,3 +2159,43 @@ def test_import_without_order_extension_clusters_by_dataset():
     # orders 表在库内配置中先出现字段（users.nickname 之后才是 orders.status），
     # 但 dataset 遍历按 _table_names 序（orders 在前）聚簇展开
     assert [dim["name"] for dim in restored.dimensions] == ["订单状态", "订单金额", "用户昵称", "用户等级"]
+
+
+def test_import_relationship_aliases_round_trip_and_self_join_without_alias_warns():
+    """关系查询别名透传还原；自关联未配置区分别名时给可操作 warning（查询层不生成自连接）。"""
+    document = """
+version: "1.0"
+semantic_model:
+  - name: 员工模型
+    datasets:
+      - name: employees
+        source: employees
+        fields: []
+    relationships:
+      - name: employees__employees__1
+        from: employees
+        to: employees
+        from_columns: [manager_id]
+        to_columns: [id]
+        custom_extensions:
+          - vendor_name: CHAT_DATA
+            data: '{"relationship_type": "many_to_one", "join_type": "left", "left_table": "employees", "right_table": "employees"}'
+"""
+    result = OssieToChatDataImporter().import_yaml(document)[0]
+    assert result.importable
+    relationship = result.relationships[0]
+    assert relationship["left_table"] == "employees"
+    assert relationship["right_table"] == "employees"
+    assert "left_alias" not in relationship and "right_alias" not in relationship
+    assert any("自关联" in warning and "别名" in warning for warning in result.warnings)
+
+    aliased = document.replace(
+        '"left_table": "employees", "right_table": "employees"}',
+        '"left_table": "employees", "right_table": "employees", "left_alias": "employees", "right_alias": "mgr"}',
+    )
+    aliased_result = OssieToChatDataImporter().import_yaml(aliased)[0]
+    assert aliased_result.importable
+    aliased_relationship = aliased_result.relationships[0]
+    assert aliased_relationship["left_alias"] == "employees"
+    assert aliased_relationship["right_alias"] == "mgr"
+    assert not any("自关联" in warning for warning in aliased_result.warnings)
