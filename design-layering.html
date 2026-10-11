@@ -101,12 +101,12 @@
   <div class="question"><div class="q-box">用户问题</div></div>
   <div class="v-arrow" style="padding:6px 0;">↓ <small>自然语言提问</small></div>
   <div class="tier-label">智能体层（消费）</div>
-  <div class="agent"><div class="agent-box">会话智能体：@ 引用指定 / 意图映射选模型 → 产出 DSL（模型不写 SQL，确定性编译兜底）&nbsp;&nbsp;·&nbsp;&nbsp;BI / 数据大屏同走此层</div></div>
+  <div class="agent"><div class="agent-box">会话智能体：理解问题 → 选择语义模型 → 产出 DSL → 确定性编译 SQL（模型只做语义映射，不写 SQL）</div></div>
   <div class="route-note">
-    <span>@ 显式指定优先</span><span>·</span>
-    <span>默认最高层（ADS &gt; DWS &gt; DWD）</span><span>·</span>
-    <span>下钻显式降层</span><span>·</span>
-    <span>ODS 探索级仅点名可达</span>
+    <span>问口径 → 认证级模型，默认最高层</span><span>·</span>
+    <span>看明细 → DWD 下钻</span><span>·</span>
+    <span>探索贴源 → ODS 探索级</span><span>·</span>
+    <span>原始记录 → SQL 旁路</span>
   </div>
 
   <div class="group">
@@ -178,7 +178,7 @@
   <div class="row"><div class="l">L1 数据源</div><div class="c">MySQL / Hive 等真实库表；数仓加工链路（ODS→DWD→DWS→ADS）的产物在此接入</div><div class="n">Source layer</div></div>
   <div class="row"><div class="l">L2 配置元数据</div><div class="c">表结构缓存、数据字典、表分组（分层标记 / 主题域）</div><div class="n">Metadata layer · Data Dictionary</div></div>
   <div class="row"><div class="l">L3 语义层</div><div class="c">业务模型 + 业务指标 + 业务知识；物化 runtime + 质量治理 + Ossie 导入导出</div><div class="n">Semantic / Metrics Layer（governed）</div></div>
-  <div class="row"><div class="l">L4 智能体使用</div><div class="c">会话问数（@ 引用 → DSL → 确定性编译 SQL）、BI、数据大屏</div><div class="n">Consumption layer · Semantic Layer for AI</div></div>
+  <div class="row"><div class="l">L4 智能体使用</div><div class="c">会话问数：@ 引用 → 意图映射 → DSL → 确定性编译 SQL</div><div class="n">Consumption layer · Semantic Layer for AI</div></div>
 </div>
 <div class="footnote">两条正交的轴：数仓加工链路横向流动数据本体（把数据做对）；我们的四层栈纵向流动语义定义（把含义做对）。语义层只挂建模纪律完成的表：ODS 禁正式挂载、DWD 带粒度声明挂、DWS/ADS 主力。</div>
 
