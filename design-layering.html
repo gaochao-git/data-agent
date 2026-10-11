@@ -32,6 +32,18 @@
   .question { display: flex; justify-content: center; }
   .q-box { background: var(--coral-50); border: 1px solid var(--coral-600); color: var(--coral-800);
            border-radius: 10px; padding: 10px 36px; font-size: 15px; font-weight: 600; }
+  .agent { display: flex; justify-content: center; }
+  .agent-box { background: #fff; border: 1px solid var(--ink-3); border-radius: 10px;
+               padding: 10px 24px; font-size: 13.5px; color: var(--ink); }
+  .group { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px 14px;
+           margin-top: 14px; background: #fff; position: relative; }
+  .chip { font-size: 12px; color: var(--ink-3); letter-spacing: 2px; margin: 0 0 8px; }
+  .conn-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; position: relative;
+              z-index: 2; height: 42px; margin: -14px 14px -13px; }
+  .conn { position: relative; }
+  .conn::before { content: ""; position: absolute; left: calc(50% - 0.75px); top: 7px; bottom: -1px; border-left: 1.5px solid var(--ink-3); }
+  .conn::after { content: ""; position: absolute; left: 50%; top: 0; transform: translateX(-50%);
+                 border-left: 5px solid transparent; border-right: 5px solid transparent; border-bottom: 7px solid var(--ink-3); }
   .route-note { text-align: center; font-size: 12px; color: var(--ink-2); margin: 10px 0 6px; }
   .route-note span { margin: 0 10px; }
   .grid4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px 14px; margin-top: 6px; align-items: stretch; }
@@ -44,7 +56,12 @@
   .m-cert .name { color: var(--teal-800); } .m-cert .sub { color: var(--teal-600); }
   .m-explo { background: var(--amber-50); border: 1px solid var(--amber-600); }
   .m-explo .name { color: var(--amber-800); } .m-explo .sub { color: var(--amber-600); }
-  .layer { border-radius: 10px; padding: 10px 12px; min-height: 64px; background: var(--blue-50); border: 1px solid var(--blue-600); }
+  .layer { border-radius: 10px; padding: 10px 12px; min-height: 64px; background: var(--blue-50); border: 1px solid var(--blue-600); position: relative; }
+  .layers-grid .layer:not(:first-child)::before { content: "→"; position: absolute; left: -14px; top: 50%;
+    transform: translate(-50%, -50%); color: var(--ink-3); font-size: 14px; font-weight: 500; }
+  .rule-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-top: 5px;
+              font-size: 11px; color: var(--ink-2); }
+  .rule-row span:not(:first-child) { justify-self: start; transform: translateX(calc(-50% - 7px)); white-space: nowrap; }
   .layer .name { font-size: 14px; font-weight: 600; color: var(--blue-800); }
   .layer .sub { font-size: 12px; color: var(--blue-600); margin-top: 2px; }
   .bypass { border-top: 1.5px dashed var(--ink-3); margin: 14px 4px 0; padding-top: 8px;
@@ -82,6 +99,9 @@
 <div class="board">
   <div class="tier-label">消费层</div>
   <div class="question"><div class="q-box">用户问题</div></div>
+  <div class="v-arrow" style="padding:6px 0;">↓ <small>自然语言提问</small></div>
+  <div class="tier-label">智能体层（消费）</div>
+  <div class="agent"><div class="agent-box">会话智能体：@ 引用指定 / 意图映射选模型 → 产出 DSL（模型不写 SQL，确定性编译兜底）&nbsp;&nbsp;·&nbsp;&nbsp;BI / 数据大屏同走此层</div></div>
   <div class="route-note">
     <span>@ 显式指定优先</span><span>·</span>
     <span>默认最高层（ADS &gt; DWS &gt; DWD）</span><span>·</span>
@@ -89,34 +109,49 @@
     <span>ODS 探索级仅点名可达</span>
   </div>
 
-  <div class="tier-label" style="margin-top:14px;">语义层（按主题域 = 数据源组组织）</div>
-  <div class="grid4">
-    <div class="v-arrow">↓ <small>默认口径</small></div>
-    <div class="v-arrow">↓ <small>主题汇总</small></div>
-    <div class="v-arrow">↓ <small>明细下钻</small></div>
-    <div class="v-arrow">↓ <small>点名探索</small></div>
+  <div class="group">
+    <div class="tier-label" style="margin-top:0;">语义层</div>
+    <div class="grid4">
+      <div class="v-arrow">↓ <small>点名探索</small></div>
+      <div class="v-arrow">↓ <small>明细下钻</small></div>
+      <div class="v-arrow">↓ <small>主题汇总</small></div>
+      <div class="v-arrow">↓ <small>默认口径</small></div>
 
-    <div class="model m-cert"><div class="name">ADS 语义模型</div><div class="sub">认证级 · 对外口径</div></div>
-    <div class="model m-cert"><div class="name">DWS 语义模型</div><div class="sub">认证级 · 主题口径</div></div>
-    <div class="model m-cert"><div class="name">DWD 语义模型</div><div class="sub">认证级 · 带粒度声明</div></div>
-    <div class="model m-explo"><div class="name">ODS 语义模型</div><div class="sub">探索级 · 不默认路由</div></div>
+      <div class="model m-explo"><div class="name">ODS 语义模型</div><div class="sub">探索级 · 不默认路由</div></div>
+      <div class="model m-cert"><div class="name">DWD 语义模型</div><div class="sub">认证级 · 带粒度声明</div></div>
+      <div class="model m-cert"><div class="name">DWS 语义模型</div><div class="sub">认证级 · 主题口径</div></div>
+      <div class="model m-cert"><div class="name">ADS 语义模型</div><div class="sub">认证级 · 对外口径</div></div>
+    </div>
+  </div>
 
-    <div class="v-arrow">↓ <small>挂载</small></div>
-    <div class="v-arrow">↓ <small>挂载</small></div>
-    <div class="v-arrow">↓ <small>挂载</small></div>
-    <div class="v-arrow">↓ <small>挂载</small></div>
+  <div class="conn-row">
+    <div class="conn"></div>
+    <div class="conn"></div>
+    <div class="conn"></div>
+    <div class="conn"></div>
+  </div>
 
-    <div class="layer"><div class="name">ADS 应用层</div><div class="sub">口径已收敛，面向应用</div></div>
-    <div class="layer"><div class="name">DWS 轻度汇总层</div><div class="sub">通用聚合，语义层底座</div></div>
-    <div class="layer"><div class="name">DWD 明细层</div><div class="sub">明细事实 + 一致维度</div></div>
-    <div class="layer"><div class="name">ODS 贴源层</div><div class="sub">未清洗 · 禁正式挂载</div></div>
+  <div class="group">
+    <div class="chip">数仓层</div>
+    <div class="grid4 layers-grid" style="margin-top:2px;">
+      <div class="layer"><div class="name">ODS 贴源层</div><div class="sub">未清洗 · 禁正式挂载</div></div>
+      <div class="layer"><div class="name">DWD 明细层</div><div class="sub">明细事实 + 一致维度</div></div>
+      <div class="layer"><div class="name">DWS 轻度汇总层</div><div class="sub">通用聚合，语义层底座</div></div>
+      <div class="layer"><div class="name">ADS 应用层</div><div class="sub">口径已收敛，面向应用</div></div>
+    </div>
+    <div class="rule-row">
+      <span></span>
+      <span>清洗 · 明细化</span>
+      <span>轻度汇总</span>
+      <span>口径收敛</span>
+    </div>
   </div>
   <div class="bypass">
     <span>⤷ SQL 旁路（drill-through）：原始行不走语义层，经受控 SQL 通道直达任意层</span>
     <span>权限 · ROW_LIMIT · 审计兜底</span>
   </div>
 </div>
-<div class="footnote">覆盖目标：全数据源 × 全层 × 全表都有对应语义模型——ODS 用生成基础模型渠道批量铺探索级（零人工），DWD/DWS/ADS 按主题域建认证级；探索级补齐字典/指标/关系/粒度并通过质量规则后升级认证级。</div>
+<div class="footnote">图中两种血缘：数仓层间的横向箭头 = <b>加工血缘</b>（表→表，发生在上游数仓平台）；数仓层到语义模型的纵向连线 = <b>语义血缘</b>（模型 ↔ 物理表/列，由挂载与编译关系显式化）——两段血缘在语义层接续。覆盖目标：全数据源 × 全层 × 全表都有对应语义模型——ODS 用生成基础模型渠道批量铺探索级（零人工），DWD/DWS/ADS 按主题域建认证级；探索级补齐字典/指标/关系/粒度并通过质量规则后升级认证级。</div>
 
 <h2>二、一份语义模型的四要素构成</h2>
 <div class="cards">
