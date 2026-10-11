@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>chat-data 未来设计分层</title>
+<style>
+  :root {
+    --ink: #2c2c2a; --ink-2: #5f5e5a; --ink-3: #888780;
+    --line: rgba(0,0,0,.12);
+    --coral-50: #FAECE7; --coral-600: #993C1D; --coral-800: #712B13;
+    --teal-50: #E1F5EE;  --teal-600: #0F6E56;  --teal-800: #085041;
+    --blue-50: #E6F1FB;  --blue-600: #185FA5;  --blue-800: #0C447C;
+    --amber-50: #FAEEDA; --amber-600: #854F0B; --amber-800: #633806;
+    --gray-50: #F4F3EE;  --gray-100: #ECEAE3;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "PingFang SC", "Microsoft YaHei", -apple-system, sans-serif;
+    color: var(--ink); background: #fff; line-height: 1.6;
+    max-width: 1080px; margin: 0 auto; padding: 40px 32px 64px;
+  }
+  h1 { font-size: 22px; font-weight: 600; }
+  h2 { font-size: 16px; font-weight: 600; margin: 40px 0 12px; }
+  .meta { color: var(--ink-3); font-size: 13px; margin-top: 6px; }
+  .slogan { margin-top: 14px; font-size: 14px; color: var(--ink-2); }
+  .slogan b { color: var(--ink); }
+
+  /* ===== 主分层图 ===== */
+  .board { border: 1px solid var(--line); border-radius: 16px; padding: 28px 24px 20px; margin-top: 20px; background: var(--gray-50); }
+  .tier-label { font-size: 12px; color: var(--ink-3); letter-spacing: 2px; margin: 0 0 8px 4px; }
+  .question { display: flex; justify-content: center; }
+  .q-box { background: var(--coral-50); border: 1px solid var(--coral-600); color: var(--coral-800);
+           border-radius: 10px; padding: 10px 36px; font-size: 15px; font-weight: 600; }
+  .route-note { text-align: center; font-size: 12px; color: var(--ink-2); margin: 10px 0 6px; }
+  .route-note span { margin: 0 10px; }
+  .grid4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px 14px; margin-top: 6px; align-items: stretch; }
+  .v-arrow { text-align: center; color: var(--ink-3); font-size: 13px; line-height: 1.1; padding: 3px 0; }
+  .v-arrow small { display: block; font-size: 11px; color: var(--ink-2); }
+  .model { border-radius: 10px; padding: 10px 12px; min-height: 64px; }
+  .model .name { font-size: 14px; font-weight: 600; }
+  .model .sub { font-size: 12px; margin-top: 2px; }
+  .m-cert { background: var(--teal-50); border: 1px solid var(--teal-600); }
+  .m-cert .name { color: var(--teal-800); } .m-cert .sub { color: var(--teal-600); }
+  .m-explo { background: var(--amber-50); border: 1px solid var(--amber-600); }
+  .m-explo .name { color: var(--amber-800); } .m-explo .sub { color: var(--amber-600); }
+  .layer { border-radius: 10px; padding: 10px 12px; min-height: 64px; background: var(--blue-50); border: 1px solid var(--blue-600); }
+  .layer .name { font-size: 14px; font-weight: 600; color: var(--blue-800); }
+  .layer .sub { font-size: 12px; color: var(--blue-600); margin-top: 2px; }
+  .bypass { border-top: 1.5px dashed var(--ink-3); margin: 14px 4px 0; padding-top: 8px;
+            font-size: 12px; color: var(--ink-2); display: flex; justify-content: space-between; }
+
+  /* ===== 通用卡片/表格 ===== */
+  .cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+  .card { border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; background: #fff; }
+  .card .t { font-size: 14px; font-weight: 600; }
+  .card .d { font-size: 12.5px; color: var(--ink-2); margin-top: 6px; }
+  .card .p { font-size: 12px; color: var(--ink-3); margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--line); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { border: 1px solid var(--line); padding: 8px 12px; text-align: left; vertical-align: top; }
+  th { background: var(--gray-100); font-weight: 600; }
+  td.muted { color: var(--ink-2); }
+  .tag { display: inline-block; font-size: 11px; border-radius: 6px; padding: 1px 8px; margin-left: 6px; vertical-align: 1px; }
+  .tag-cert { background: var(--teal-50); color: var(--teal-600); border: 1px solid var(--teal-600); }
+  .tag-explo { background: var(--amber-50); color: var(--amber-600); border: 1px solid var(--amber-600); }
+  .footnote { font-size: 12px; color: var(--ink-3); margin-top: 10px; }
+  .stack { display: flex; flex-direction: column-reverse; gap: 8px; margin-top: 12px; }
+  .stack .row { display: grid; grid-template-columns: 130px 1fr 220px; gap: 12px; align-items: center;
+                border: 1px solid var(--line); border-radius: 10px; padding: 9px 14px; background: #fff; }
+  .stack .l { font-size: 13px; font-weight: 600; }
+  .stack .c { font-size: 12.5px; color: var(--ink-2); }
+  .stack .n { font-size: 12px; color: var(--ink-3); text-align: right; }
+</style>
+</head>
+<body>
+
+<h1>chat-data 未来设计分层</h1>
+<div class="meta">2026-10-11 架构讨论定稿 · data-agent / chat-data 语义建模体系</div>
+<div class="slogan">数仓建模把<b>数据</b>做对（可信的表），语义建模把<b>含义</b>做对（可信的答案），两条链在<b>智能体消费</b>处汇合。</div>
+
+<h2>一、主分层：用户问题 → 语义模型 → 数仓分层</h2>
+<div class="board">
+  <div class="tier-label">消费层</div>
+  <div class="question"><div class="q-box">用户问题</div></div>
+  <div class="route-note">
+    <span>@ 显式指定优先</span><span>·</span>
+    <span>默认最高层（ADS &gt; DWS &gt; DWD）</span><span>·</span>
+    <span>下钻显式降层</span><span>·</span>
+    <span>ODS 探索级仅点名可达</span>
+  </div>
+
+  <div class="tier-label" style="margin-top:14px;">语义层（按主题域 = 数据源组组织）</div>
+  <div class="grid4">
+    <div class="v-arrow">↓ <small>默认口径</small></div>
+    <div class="v-arrow">↓ <small>主题汇总</small></div>
+    <div class="v-arrow">↓ <small>明细下钻</small></div>
+    <div class="v-arrow">↓ <small>点名探索</small></div>
+
+    <div class="model m-cert"><div class="name">ADS 语义模型</div><div class="sub">认证级 · 对外口径</div></div>
+    <div class="model m-cert"><div class="name">DWS 语义模型</div><div class="sub">认证级 · 主题口径</div></div>
+    <div class="model m-cert"><div class="name">DWD 语义模型</div><div class="sub">认证级 · 带粒度声明</div></div>
+    <div class="model m-explo"><div class="name">ODS 语义模型</div><div class="sub">探索级 · 不默认路由</div></div>
+
+    <div class="v-arrow">↓ <small>挂载</small></div>
+    <div class="v-arrow">↓ <small>挂载</small></div>
+    <div class="v-arrow">↓ <small>挂载</small></div>
+    <div class="v-arrow">↓ <small>挂载</small></div>
+
+    <div class="layer"><div class="name">ADS 应用层</div><div class="sub">口径已收敛，面向应用</div></div>
+    <div class="layer"><div class="name">DWS 轻度汇总层</div><div class="sub">通用聚合，语义层底座</div></div>
+    <div class="layer"><div class="name">DWD 明细层</div><div class="sub">明细事实 + 一致维度</div></div>
+    <div class="layer"><div class="name">ODS 贴源层</div><div class="sub">未清洗 · 禁正式挂载</div></div>
+  </div>
+  <div class="bypass">
+    <span>⤷ SQL 旁路（drill-through）：原始行不走语义层，经受控 SQL 通道直达任意层</span>
+    <span>权限 · ROW_LIMIT · 审计兜底</span>
+  </div>
+</div>
+<div class="footnote">覆盖目标：全数据源 × 全层 × 全表都有对应语义模型——ODS 用生成基础模型渠道批量铺探索级（零人工），DWD/DWS/ADS 按主题域建认证级；探索级补齐字典/指标/关系/粒度并通过质量规则后升级认证级。</div>
+
+<h2>二、一份语义模型的四要素构成</h2>
+<div class="cards">
+  <div class="card"><div class="t">业务元数据</div><div class="d">枚举 / 同义词 / 单位、列与表的业务描述</div><div class="p">落点：L2 数据字典（权威）＋模型内绑定副本</div></div>
+  <div class="card"><div class="t">业务模型</div><div class="d">表选择、字段绑定、维度声明、关联（join / 自关联别名）</div><div class="p">落点：datasets + relationships，驱动 join 编译</div></div>
+  <div class="card"><div class="t">业务指标</div><div class="d">原子 / 派生 / 复合指标口径</div><div class="p">落点：metrics，DSL → 确定性编译 SQL</div></div>
+  <div class="card"><div class="t">业务知识</div><div class="d">模型用途说明、别名、示例问题</div><div class="p">落点：ai_context / business_notes，兼作路由依据</div></div>
+</div>
+<div class="footnote">四要素之外贯穿一条质量闸门：check_yaml 工具 / 导入 preview / 管理端 quality-check 三入口同一套规则（单模型 25 条 + 跨模型 3 条）。</div>
+
+<h2>三、层路由规则（用户不选层，系统路由）</h2>
+<table>
+  <tr><th style="width:34%">情形</th><th>路由</th></tr>
+  <tr><td>用户 @ 显式指定模型</td><td>使用指定模型（最高优先）</td></tr>
+  <tr><td>问业务口径（“上月销售额”）</td><td>主题域内匹配认证级模型；同指标多层命中取最高层（ADS &gt; DWS &gt; DWD）</td></tr>
+  <tr><td>问明细下钻（“某天某渠道”）</td><td>切到 DWD 明细模型换粒度重新编译</td></tr>
+  <tr><td>问原始记录 / 贴源探索</td><td>SQL 旁路或 ODS 探索级模型（结果带「口径未治理」标注）</td></tr>
+  <tr><td>跨主题问题</td><td>多模型组合 / 多查询，主题域边界不拦正式口径消费</td></tr>
+</table>
+<div class="footnote">配套约束：对外口径只在最高层定义一次（同名异式已被跨模型规则拦截）；business_notes 写清层归属与上下层关系，作为路由的确定性依据。</div>
+
+<h2>四、资产四层栈（与数仓加工分层正交）</h2>
+<div class="stack">
+  <div class="row"><div class="l">L1 数据源</div><div class="c">MySQL / Hive 等真实库表；数仓加工链路（ODS→DWD→DWS→ADS）的产物在此接入</div><div class="n">Source layer</div></div>
+  <div class="row"><div class="l">L2 配置元数据</div><div class="c">表结构缓存、数据字典、表分组（分层标记 / 主题域）</div><div class="n">Metadata layer · Data Dictionary</div></div>
+  <div class="row"><div class="l">L3 语义层</div><div class="c">业务模型 + 业务指标 + 业务知识；物化 runtime + 质量治理 + Ossie 导入导出</div><div class="n">Semantic / Metrics Layer（governed）</div></div>
+  <div class="row"><div class="l">L4 智能体使用</div><div class="c">会话问数（@ 引用 → DSL → 确定性编译 SQL）、BI、数据大屏</div><div class="n">Consumption layer · Semantic Layer for AI</div></div>
+</div>
+<div class="footnote">两条正交的轴：数仓加工链路横向流动数据本体（把数据做对）；我们的四层栈纵向流动语义定义（把含义做对）。语义层只挂建模纪律完成的表：ODS 禁正式挂载、DWD 带粒度声明挂、DWS/ADS 主力。</div>
+
+</body>
+</html>
