@@ -1978,3 +1978,11 @@ ChatData
 | 后端代码生效探针 | 5001 已重启（新 PID）。curl 乱序探针（同名「用户模型」命中 replace，YAML 维度序 status→email→amount）打 preview → 返回重排为库内序 `users.email → users.status → orders.amount`（未命中键追加尾部）——新代码行为坐实，旧代码会原样返回 YAML 序。探针补 `from_dataset` 关系后 importable=True / 0 错。 |
 | 实测 | ①入口链：会话页（`?parentComponentName=执法检查`）→ 后台管理 → hive-localhost「模型」→ 导入弹窗。②空态门禁：未选文件「模型校验」disabled ✅。③上传保序探针 → 「模型校验」→ 模式=**替换**、徽标=警告（质量发现非阻断）、操作列=查看详情/查看差异、「确认导入」解禁 ✅。④**核心判据**：查看差异 → `.cm-editor`=2，右侧（导入草稿）「用户邮箱」索引 150 < 「用户状态」索引 253——库内序重排在 UI 差异视图可见 ✅。⑤差异↔详情互斥：收起差异后点查看详情 → cm=0、「收起详情」出现 ✅。⑥「取消」关弹窗，全程零落库。 |
 | 边界与已知 | ①探针建模要点：关系用 `from_dataset`/`to`/`from_columns`/`to_columns`（converter 同形），关联列必须是目标表真实列（users 无 `id` 用 `user_id`）；②徽标「警告」而非「通过」是质量发现（quality findings）正常形态，不属回归；③本记录为 SEM-18 定向回归，不构成发布裁决，发布前需全量执行基线。 |
+
+### §5.29 工作区预览区复制按钮（复制内容/路径）新功能验证（2026-10-11 09:00，agent-browser）
+
+| 项 | 内容 |
+| --- | --- |
+| 背景 | 预览区头部新增「复制文件内容」「复制文件路径」两个图标按钮（样式与相邻刷新/放大按钮同款），全屏态补浮动复制按钮（全屏容器不包头部的盲区，复用退出全屏浮动按钮先例位置）。改动单文件 ConversationWorkspacePanel.vue。 |
+| 实测 | ①入口链：会话页 → 「Office技能分析语义模型生」会话 → 展开工作区 → workspace/semantic → 选中 YAML。②YAML 预览 → 原生点击复制内容 → 「已复制文件内容」✅、复制路径 → 「已复制文件路径」✅。③JSON 文件表格模式 → 「已复制表格内容（TSV，6 行）」✅（动态实际行数，非硬编码 50）。④全屏 → 浮动「复制文件内容」可点 ✅、退出全屏正常 ✅。 |
+| 边界与已知 | ①验证必须用 CDP 可信点击（agent-browser click），eval 合成点击无 user activation，剪贴板/全屏 API 均拒；②聊天消息里文件名 `<code>` 芯片与树节点同名，自动化选节点必须限定在 aside 容器内；③复制口径=预览所见（文本受 1MB 截断、表格取展示行），按钮 title 已注明；④剪贴板走 secure context 判断 + textarea 兜底（同 AgentScheduleManager 惯例），内网 http 可用。 |

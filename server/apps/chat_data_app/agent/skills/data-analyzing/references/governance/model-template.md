@@ -20,9 +20,9 @@ ai_context: 业务说明          # 字符串；内容多时用下方结构化�
 datasets:                    # 维度来源：每个物理表一个 dataset
   - name: orders
     source: orders
-    primary_key: [id]        # 可选，声明键；无则留 []
+    primary_key: [id]        # 可选，声明键；无则省略整行（官方示例与平台导出都不输出空键）
     unique_keys:
-      - [order_no]           # 可选，每条一个唯一键
+      - [order_no]           # 可选，每条一个唯一键；无则整个 unique_keys 也省略
     fields:
       - name: 订单编号
         expression:
@@ -59,6 +59,15 @@ datasets:                    # 维度来源：每个物理表一个 dataset
             # data 是 JSON 字符串：table.column 是字典绑定键；column_dict 四项结构化随 YAML 携带，
             # 导入时按「仅填空」回填字典表（已有值保留）。value 必须真实入库值，拿不准先抽样确认。
             data: '{"table": "orders", "column": "status", "logical_type": "enum", "column_dict": {"enum_values": [{"value": "0", "label": "待支付"}, {"value": "1", "label": "已支付"}, {"value": "2", "label": "已取消"}], "unit": "", "synonyms": [], "storage_format": ""}}'
+relationships:               # 段序对齐官方/平台导出：datasets → relationships → metrics
+  - name: orders__users__1   # 官方必填；平台导出格式 {from}__{to}__{序号}
+    from: orders             # 官方字段名，=many 侧（一对多时指向一端）；写别名 from_dataset: 导入也接受
+    to: users                # =一端
+    from_columns: [user_id]  # 与 to_columns 一一对应、数量相等（导入闸门）
+    to_columns: [id]         # 应覆盖 to 表声明的键（KEY_UNCOVERED 检查）
+    custom_extensions:
+      - vendor_name: CHAT_DATA
+        data: '{"left_table": "orders", "right_table": "users", "relationship_type": "one_to_many", "join_type": "left"}'
 metrics:
   - name: 销售额             # 原子指标范例
     description: 已支付订单金额合计   # 必写（DOC 类 finding）
@@ -91,15 +100,6 @@ metrics:
     custom_extensions:
       - vendor_name: CHAT_DATA
         data: '{"metric_kind": "composite", "formula": "({销售额} / {订单数})"}'
-relationships:
-  - name: orders__users__1   # 官方必填；平台导出格式 {from}__{to}__{序号}
-    from_dataset: orders     # YAML 也可写别名 from:，与平台导出等价
-    to: users
-    from_columns: [user_id]  # 与 to_columns 一一对应、数量相等（导入闸门）
-    to_columns: [id]         # 应覆盖 to 表声明的键（KEY_UNCOVERED 检查）
-    custom_extensions:
-      - vendor_name: CHAT_DATA
-        data: '{"left_table": "orders", "right_table": "users", "relationship_type": "one_to_many", "join_type": "left"}'
 ```
 
 ## 二、可回导规则备注（写文件前逐条核对）

@@ -243,6 +243,8 @@ class _FlowStyleList(list):
 
 class _OssieYamlDumper(yaml.SafeDumper):
     def increase_indent(self, flow: bool = False, indentless: bool = False) -> Any:
+        # 保持默认缩进（序列整体缩进两格）。官方示例是 indentless 风格，但 pyyaml
+        # 强制 indentless 会连嵌套 mapping 一起顶格、产出非法 YAML（实测），不改。
         return super().increase_indent(flow, False)
 
 
@@ -288,13 +290,19 @@ def _load_ossie_types() -> tuple[Any, ...]:
     )
 
 
-def _wrap_ossie_key_lists(data: dict[str, Any]) -> None:
-    """把主键/唯一键列表包成 YAML flow style，就地修改 document dump 结果。"""
+def _wrap_ossie_flow_style_lists(data: dict[str, Any]) -> None:
+    """把短数组包成 YAML flow style（`[col]`），对齐官方示例的书写形态：数据集
+    主键/唯一键 + 关系两端关联列（from_columns/to_columns）。就地修改 dump 结果。"""
     for dataset in data.get("datasets") or []:
         if "primary_key" in dataset:
             dataset["primary_key"] = _FlowStyleList(dataset["primary_key"])
         if "unique_keys" in dataset:
             dataset["unique_keys"] = [_FlowStyleList(columns) for columns in dataset["unique_keys"]]
+    for relationship in data.get("relationships") or []:
+        if "from_columns" in relationship:
+            relationship["from_columns"] = _FlowStyleList(relationship["from_columns"])
+        if "to_columns" in relationship:
+            relationship["to_columns"] = _FlowStyleList(relationship["to_columns"])
 
 
 class ChatDataToOssieConverter:
@@ -361,7 +369,7 @@ class ChatDataToOssieConverter:
             custom_extensions=[OssieCustomExtension(**item) for item in extension or []],
         )
         data = document.model_dump(by_alias=True, exclude_none=True, mode="json")
-        _wrap_ossie_key_lists(data)
+        _wrap_ossie_flow_style_lists(data)
         return yaml.dump(
             data,
             Dumper=_OssieYamlDumper,
@@ -418,8 +426,9 @@ class ChatDataToOssieConverter:
         return dataset_type(
             name=table,
             source=table,
-            primary_key=primary_key,
-            unique_keys=unique_keys or [[]],
+            # 官方示例与规范里 primary_key/unique_keys 均可选且未知时省略；不输出空键噪音。
+            primary_key=primary_key or None,
+            unique_keys=unique_keys or None,
             fields=fields,
             custom_extensions=[
                 extension_type(**x) for x in (_extension({"semantic_config_id": _config_id(config)}) or [])

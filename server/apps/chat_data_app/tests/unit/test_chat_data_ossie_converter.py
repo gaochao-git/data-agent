@@ -73,8 +73,9 @@ def test_convert_is_valid_ossie_pydantic_document():
     assert parsed.relationships[0].from_dataset == "orders"
     assert parsed.relationships[0].to == "users"
     dataset = document["datasets"][0]
-    assert dataset["primary_key"] == []
-    assert dataset["unique_keys"] == [[]]
+    # 官方示例与规范：primary_key/unique_keys 可选，未知时省略，不输出空键噪音
+    assert "primary_key" not in dataset
+    assert "unique_keys" not in dataset
     assert dataset["fields"]
 
 
@@ -83,16 +84,21 @@ def test_convert_passes_official_json_schema():
 
     schema_path = Path(__file__).parents[1] / "fixtures" / "ossie" / "osi-schema.json"
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
-    document = yaml.safe_load(ChatDataToOssieConverter().convert(_config("one_to_many")))
+    content = ChatDataToOssieConverter().convert(_config("one_to_many"))
+    document = yaml.safe_load(content)
 
     validate(document, schema)
     relationship = document["relationships"][0]
     assert document["ai_context"] == "用户下单后生成订单，支付成功后计入有效成交。"
     assert relationship["from"] == "users"
     assert relationship["to"] == "orders"
-    assert all(dataset["primary_key"] == [] for dataset in document["datasets"])
-    assert all(dataset["unique_keys"] == [[]] for dataset in document["datasets"])
-    assert "  - []" in ChatDataToOssieConverter().convert(_config("one_to_many"))
+    # 官方示例与规范：primary_key/unique_keys 可选，未知时省略，不输出空键噪音
+    assert all("primary_key" not in dataset for dataset in document["datasets"])
+    assert all("unique_keys" not in dataset for dataset in document["datasets"])
+    assert "  - []" not in content
+    # 关系列对齐官方 flow style（`from_columns: [col]`）
+    assert "from_columns: [" in content
+    assert "to_columns: [" in content
 
 
 def test_convert_maps_physical_and_manual_table_keys():

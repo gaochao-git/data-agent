@@ -10,7 +10,7 @@ from apps.chat_data_app.services.semantic.run.chat_data_ossie_converter import (
     _datatype,
     _extension,
     _key_columns,
-    _wrap_ossie_key_lists,
+    _wrap_ossie_flow_style_lists,
 )
 
 
@@ -56,9 +56,9 @@ def test_table_names_empty_falls_back_to_config_id():
     assert converter._table_names({"semantic_config_id": "cfg-9"}) == ["cfg-9"]
 
 
-def test_wrap_ossie_key_lists_without_keys_keeps_dataset_untouched():
+def test_wrap_ossie_flow_style_lists_without_keys_keeps_dataset_untouched():
     data = {"semantic_model": [{"datasets": [{"name": "t1"}]}, {}]}
-    _wrap_ossie_key_lists(data)
+    _wrap_ossie_flow_style_lists(data)
     assert data["semantic_model"][0]["datasets"][0] == {"name": "t1"}
 
 

@@ -531,6 +531,59 @@ const selectedConsoleTableColumns = computed<string[]>(() => {
 const selectedConsolePreviewRows = computed(() => selectedConsoleTableRows.value.slice(0, 50))
 const hasSelectedConsoleTable = computed(() => selectedConsoleTableColumns.value.length > 0 && selectedConsoleTableRows.value.length > 0)
 
+// ===== 预览区复制（内容 / 路径） =====
+// 复制口径 = 预览所见：文本受 capWorkspaceTextPreview 截断、表格取展示的前 50 行，复制不超出所见范围。
+// navigator.clipboard 需 secure context，内网 http 部署走 textarea 兜底（同 AgentScheduleManager 口径）。
+const copyPreviewText = async (text: string, successMessage: string) => {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text)
+    } else {
+      const textarea = document.createElement('textarea')
+      textarea.value = text
+      textarea.style.position = 'fixed'
+      textarea.style.opacity = '0'
+      document.body.appendChild(textarea)
+      textarea.select()
+      document.execCommand('copy')
+      textarea.remove()
+    }
+    ElMessage.success(successMessage)
+  } catch (err) {
+    console.error('复制失败:', err)
+    ElMessage.error('复制失败，请手动复制')
+  }
+}
+
+const handleCopyWorkspacePreviewContent = () => {
+  // 表格模式复制所见表格（TSV，粘进 Excel/WPS 即成表格）；单元格用全值文本，非界面截断的显示文本。
+  if (hasSelectedConsoleTable.value && consoleFilePreviewMode.value === 'table') {
+    const escapeTsvCell = (value: string) => value.replace(/\t/g, '    ').replace(/\r?\n/g, ' ')
+    const lines = [selectedConsoleTableColumns.value.join('\t')]
+    selectedConsolePreviewRows.value.forEach((row) => {
+      lines.push(selectedConsoleTableColumns.value.map((col) => escapeTsvCell(formatToolTableCell(row[col]))).join('\t'))
+    })
+    void copyPreviewText(lines.join('\n'), `已复制表格内容（TSV，${selectedConsolePreviewRows.value.length} 行）`)
+    return
+  }
+  if (loadingWorkspaceFilePath.value === selectedConsoleFilePath.value) {
+    ElMessage.warning('文件内容加载中，请稍后再复制')
+    return
+  }
+  const text = selectedConsoleFileText.value
+  if (!text) {
+    ElMessage.warning('暂无可复制的内容')
+    return
+  }
+  void copyPreviewText(text, '已复制文件内容')
+}
+
+const handleCopyWorkspacePreviewPath = () => {
+  const path = selectedConsoleFile.value?.displayPath || ''
+  if (!path) return
+  void copyPreviewText(path, '已复制文件路径')
+}
+
 // 工作区里的文件（uploads / workspace / outputs）都可直接下载，不依赖智能体是否调用过展示工具。
 // 后端 raw 接口对三个目录一视同仁，此前的 outputs 限制只是前端产品决策，已放开。
 // SQL 查询结果与工具结果卸载缓存除外——见 utils/consoleFileTree.ts 的下载白名单说明。
@@ -1104,6 +1157,28 @@ defineExpose({
                 源码
               </button>
             </div>
+            <!-- 复制内容/路径：内容口径=预览所见（表格模式=所见表格 TSV，文本类=全文，超大文件受预览截断）。
+                 路径=/mnt/user-data 沙箱可见路径（与 @ 引用、智能体视角一致）。 -->
+            <button
+              v-if="selectedConsoleFile"
+              type="button"
+              class="flex h-6 w-6 items-center justify-center rounded border border-slate-200 bg-white text-[11px] text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700"
+              title="复制文件内容（表格模式复制 TSV）"
+              data-console-preview-copy-content="true"
+              @click="handleCopyWorkspacePreviewContent"
+            >
+              <i class="fa-regular fa-copy"></i>
+            </button>
+            <button
+              v-if="selectedConsoleFile"
+              type="button"
+              class="flex h-6 w-6 items-center justify-center rounded border border-slate-200 bg-white text-[11px] text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700"
+              title="复制文件路径"
+              data-console-preview-copy-path="true"
+              @click="handleCopyWorkspacePreviewPath"
+            >
+              <i class="fa-solid fa-link"></i>
+            </button>
             <!-- 下载已下沉到文件树每行右端（和文件名同处一行，不必先选中再来这里找）。
                  这里改为刷新：tool_result / run 结束本就会自动刷新，此按钮是手动兜底。 -->
             <button
@@ -1129,6 +1204,15 @@ defineExpose({
           </div>
         </div>
         <div ref="workspaceFilePreviewRef" class="workspace-file-preview relative bg-white" :class="isWorkspaceFilePreviewFullscreen ? 'h-screen w-screen overflow-auto p-6' : ''">
+          <button
+            v-if="isWorkspaceFilePreviewFullscreen"
+            type="button"
+            class="absolute right-14 top-3 z-20 flex h-8 w-8 items-center justify-center rounded border border-slate-200 bg-white text-xs text-slate-600 shadow-sm hover:bg-slate-50"
+            title="复制文件内容"
+            @click="handleCopyWorkspacePreviewContent"
+          >
+            <i class="fa-regular fa-copy"></i>
+          </button>
           <button
             v-if="isWorkspaceFilePreviewFullscreen"
             type="button"
