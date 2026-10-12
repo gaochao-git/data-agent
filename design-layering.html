@@ -100,8 +100,27 @@
   .grid4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px 16px; align-items: stretch; }
   .route-arrow { text-align: center; color: var(--ink-3); font-size: 14px; padding: 6px 0 0; line-height: 1.15; }
   .route-arrow small { display: block; font-size: 11px; color: var(--ink-2); margin-top: 1px; }
-  .mount-arrow { text-align: center; color: var(--teal-600); font-size: 15px; padding: 1px 0 5px; line-height: 1.15; }
+  .mount-arrow { text-align: center; color: var(--teal-600); font-size: 15px; padding: 0 0 3px; line-height: 1.15; }
   .mount-arrow small { display: block; font-size: 10.5px; color: var(--teal-600); margin-top: 1px; }
+  .wh-arrows { display: grid; grid-template-columns: 1fr 86px 1fr 86px 1fr 86px 1fr; align-items: end; margin-bottom: 2px; }
+
+  /* 语义层内两个子框：语义模型 / 业务上下文 */
+  .sub-frame { position: relative; border: 1px solid var(--line); border-radius: 10px; padding: 13px 12px 9px; }
+  .sf-label { position: absolute; top: -8px; left: 12px; background: #fff; padding: 0 8px;
+    font-size: 10.5px; letter-spacing: 1px; color: var(--ink-3); }
+  .compose-arrow { text-align: center; color: var(--blue-600); font-size: 14px; line-height: 1.15; padding: 3px 0; }
+  .compose-arrow small { display: block; font-size: 10.5px; color: var(--ink-2); }
+
+  /* 语义模型四要素（融入语义层行内） */
+  .four-strip { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px 14px;
+    margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--line); }
+  .fs { font-size: 11px; color: var(--ink-2); line-height: 1.45; }
+  .fs b { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--ink); }
+  .fs b::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--dot, var(--ink-3)); }
+  .fs small { display: block; color: var(--ink-3); margin-top: 1px; }
+  .fs .gate { display: block; margin-top: 5px; padding-top: 5px; border-top: 1px dashed var(--line); color: var(--ink-2); }
+  .fs .gate b { font-size: 11px; gap: 0; }
+  .fs .gate b::before { display: none; }
 
   .model { border-radius: 10px; padding: 8px 12px; min-height: 56px; position: relative; }
   .model .name { font-size: 14px; font-weight: 650; }
@@ -133,17 +152,6 @@
   }
   .footnote { font-size: 12px; color: var(--ink-3); margin-top: 12px; line-height: 1.7; }
   .footnote b { color: var(--ink-2); }
-
-  /* ===== 四要素卡片 ===== */
-  .cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
-  .card {
-    border: 1px solid var(--line); border-radius: 14px; padding: 16px 16px 14px;
-    background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.04);
-  }
-  .card .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 8px; vertical-align: 2px; }
-  .card .t { font-size: 14px; font-weight: 650; }
-  .card .d { font-size: 12.5px; color: var(--ink-2); margin-top: 8px; line-height: 1.6; }
-  .card .p { font-size: 12px; color: var(--ink-3); margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line); line-height: 1.6; }
 
   /* ===== 路由表 ===== */
   .tbl-wrap { border: 1px solid var(--line); border-radius: 14px; overflow: hidden; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.04); }
@@ -200,11 +208,14 @@
   .lg-legend b { color: var(--ink); }
 
   @media (max-width: 900px) {
-    .grid4, .cards { grid-template-columns: repeat(2, 1fr); }
+    .grid4 { grid-template-columns: repeat(2, 1fr); }
     .prow { grid-template-columns: 1fr; }
     .rail { border-right: none; padding: 14px 0 0; flex-direction: row; gap: 8px; }
     .stage { padding: 10px 0 18px; }
     .wh { grid-template-columns: 1fr; gap: 8px; }
+    .wh-arrows { grid-template-columns: 1fr; }
+    .wh-arrows .mount-arrow { padding: 2px 0 0; }
+    .wh-arrows .mount-arrow small { display: inline; margin-left: 6px; }
     .h-edge { transform: rotate(90deg); }
     .stack .row { grid-template-columns: 1fr; gap: 4px; }
     .stack .n { text-align: left; }
@@ -277,19 +288,27 @@
     <div class="rail">语义层<span class="en">SEMANTIC</span></div>
     <div class="stage" style="padding-top:8px;">
       <div class="stage-box">
-      <div class="grid4">
-        <div class="model m-explo"><span class="lv">探索级</span><div class="name">ODS 语义模型</div><div class="sub">原始数据问题命中，结果带「口径未治理」标注</div></div>
-        <div class="model m-cert"><span class="lv">认证级</span><div class="name">DWD 语义模型</div><div class="sub">带粒度声明，明细下钻换粒度重新编译</div></div>
-        <div class="model m-cert"><span class="lv">认证级</span><div class="name">DWS 语义模型</div><div class="sub">主题口径，语义层底座</div></div>
-        <div class="model m-cert"><span class="lv">认证级</span><div class="name">ADS 语义模型</div><div class="sub">对外口径，同指标多层命中取最高层</div></div>
+      <div class="sub-frame">
+        <span class="sf-label">语义模型</span>
+        <div class="grid4">
+          <div class="model m-explo"><span class="lv">探索级</span><div class="name">ODS 语义模型</div><div class="sub">原始数据问题命中，结果带「口径未治理」标注</div></div>
+          <div class="model m-cert"><span class="lv">认证级</span><div class="name">DWD 语义模型</div><div class="sub">带粒度声明，明细下钻换粒度重新编译</div></div>
+          <div class="model m-cert"><span class="lv">认证级</span><div class="name">DWS 语义模型</div><div class="sub">主题口径，语义层底座</div></div>
+          <div class="model m-cert"><span class="lv">认证级</span><div class="name">ADS 语义模型</div><div class="sub">对外口径，同指标多层命中取最高层</div></div>
+        </div>
       </div>
-      <div class="grid4" style="margin-top:2px;">
-        <div class="mount-arrow">↑<small>挂载 · 语义血缘</small></div>
-        <div class="mount-arrow">↑<small>挂载 · 语义血缘</small></div>
-        <div class="mount-arrow">↑<small>挂载 · 语义血缘</small></div>
-        <div class="mount-arrow">↑<small>挂载 · 语义血缘</small></div>
+      <div class="compose-arrow">↑<small>四要素构成 · 注入语义模型</small></div>
+      <div class="sub-frame">
+        <span class="sf-label">业务上下文</span>
+        <div class="four-strip">
+        <span class="fs" style="--dot:var(--blue-600);"><b>业务元数据</b>枚举 / 同义词 / 单位、列与表的业务描述<small>落点：L2 数据字典（权威）＋模型内绑定副本</small></span>
+        <span class="fs" style="--dot:var(--teal-600);"><b>业务模型</b>表选择、字段绑定、维度声明、关联（join / 自关联别名）<small>落点：datasets + relationships，驱动 join 编译</small></span>
+        <span class="fs" style="--dot:var(--coral-600);"><b>业务指标</b>原子 / 派生 / 复合指标口径<small>落点：metrics，DSL → 确定性编译 SQL</small></span>
+        <span class="fs" style="--dot:var(--amber-600);"><b>业务知识</b>模型用途说明、别名、示例问题<small>落点：ai_context / business_notes，兼作路由依据</small></span>
       </div>
+      <div class="fs gate"><b>质量闸门</b>check_yaml 工具 / 导入 preview / 管理端 quality-check 三入口同一套规则（单模型 25 条 + 跨模型 3 条）；探索级补齐四要素并过关后升级认证级</div>
       </div>
+    </div>
     </div>
   </div>
 
@@ -297,6 +316,12 @@
     <div class="rail">数仓层<span class="en">WAREHOUSE</span></div>
     <div class="stage" style="padding-top:8px;">
       <div class="stage-box">
+      <div class="wh-arrows">
+        <div class="mount-arrow">↑<small>挂载 · 语义血缘</small></div><span></span>
+        <div class="mount-arrow">↑<small>挂载 · 语义血缘</small></div><span></span>
+        <div class="mount-arrow">↑<small>挂载 · 语义血缘</small></div><span></span>
+        <div class="mount-arrow">↑<small>挂载 · 语义血缘</small></div>
+      </div>
       <div class="wh">
         <div class="layer" style="background:var(--gray-100);border-color:var(--ink-3);">
           <div class="name" style="color:var(--ink);">ODS 贴源层</div><div class="sub" style="color:var(--ink-2);">业务原始数据 · 全链溯源锚点</div>
@@ -319,16 +344,7 @@
 </div>
 <div class="footnote">图中两种血缘：数仓层间的横向箭头 = <b>加工血缘</b>（表→表，发生在上游数仓平台）；数仓层到语义模型的纵向连线 = <b>语义血缘</b>（模型 ↔ 物理表/列，由挂载与编译关系显式化）——两段血缘在语义层接续。覆盖目标：全数据源 × 全层 × 全表都有对应语义模型——ODS 用生成基础模型渠道批量铺探索级（零人工），DWD/DWS/ADS 按主题域建认证级；探索级补齐字典/指标/关系/粒度并通过质量规则后升级认证级。</div>
 
-<h2><span class="no">2</span>一份语义模型的四要素构成</h2>
-<div class="cards">
-  <div class="card"><div class="t"><span class="dot" style="background:var(--blue-600);"></span>业务元数据</div><div class="d">枚举 / 同义词 / 单位、列与表的业务描述</div><div class="p">落点：L2 数据字典（权威）＋模型内绑定副本</div></div>
-  <div class="card"><div class="t"><span class="dot" style="background:var(--teal-600);"></span>业务模型</div><div class="d">表选择、字段绑定、维度声明、关联（join / 自关联别名）</div><div class="p">落点：datasets + relationships，驱动 join 编译</div></div>
-  <div class="card"><div class="t"><span class="dot" style="background:var(--coral-600);"></span>业务指标</div><div class="d">原子 / 派生 / 复合指标口径</div><div class="p">落点：metrics，DSL → 确定性编译 SQL</div></div>
-  <div class="card"><div class="t"><span class="dot" style="background:var(--amber-600);"></span>业务知识</div><div class="d">模型用途说明、别名、示例问题</div><div class="p">落点：ai_context / business_notes，兼作路由依据</div></div>
-</div>
-<div class="footnote">四要素之外贯穿一条质量闸门：check_yaml 工具 / 导入 preview / 管理端 quality-check 三入口同一套规则（单模型 25 条 + 跨模型 3 条）。</div>
-
-<h2><span class="no">3</span>层路由规则（用户不选层，系统路由）</h2>
+<h2><span class="no">2</span>层路由规则（用户不选层，系统路由）</h2>
 <div class="tbl-wrap">
   <table>
     <tr><th style="width:36%">情形</th><th>路由</th></tr>
@@ -341,7 +357,7 @@
 </div>
 <div class="footnote">配套约束：对外口径只在最高层定义一次（同名异式已被跨模型规则拦截）；business_notes 写清层归属与上下层关系，作为路由的确定性依据。</div>
 
-<h2><span class="no">4</span>资产四层栈（与数仓加工分层正交）</h2>
+<h2><span class="no">3</span>资产四层栈（与数仓加工分层正交）</h2>
 <div class="stack">
   <div class="row top"><div class="l">L4 智能体使用</div><div class="c">UI 交互层（会话 / 结果展示 / 工作区 / 管理后台，只渲染不定义口径）＋ 会话问数：@ 引用 → 意图映射 → DSL → 确定性编译 SQL</div><div class="n">Consumption layer · Semantic Layer for AI</div></div>
   <div class="row l3"><div class="l">L3 语义层</div><div class="c">业务模型 + 业务指标 + 业务知识；物化 runtime + 质量治理 + Ossie 导入导出</div><div class="n">Semantic / Metrics Layer（governed）</div></div>
@@ -350,7 +366,7 @@
 </div>
 <div class="footnote">两条正交的轴：数仓加工链路横向流动数据本体（把数据做对）；我们的四层栈纵向流动语义定义（把含义做对）。语义层只挂建模纪律完成的表：ODS 仅探索级挂载（不进认证级、不默认参与口径路由）、DWD 带粒度声明挂、DWS/ADS 主力。ODS 资产规格最高：全链唯一未加工的事实记录，加工层每层都可能引入偏差，争议数据最终回 ODS 仲裁、逻辑 bug 从 ODS 重放修复——资产重要性最高与口径可信度最低是两回事，前者要求永久保留（业内 bronze 层 immutable），后者才约束语义分级。</div>
 
-<h2><span class="no">5</span>血缘视图（节点 + 边 + 边属性）</h2>
+<h2><span class="no">4</span>血缘视图（节点 + 边 + 边属性）</h2>
 <div class="lg-intro">血缘 = <b>节点</b>（表 / 列）+ <b>边</b>（来源去向）+ <b>边属性</b>（这条边上发生了什么：加工规则 / 口径定义）。主图里的两条箭头只画了"边"，这里把边属性显式展开——完整血缘资产 = 图 + 图上的注记。</div>
 
 <div class="lg-panel">
