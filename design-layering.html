@@ -7,184 +7,284 @@
 <style>
   :root {
     --ink: #2c2c2a; --ink-2: #5f5e5a; --ink-3: #888780;
-    --line: rgba(0,0,0,.12);
+    --line: rgba(0,0,0,.10);
     --coral-50: #FAECE7; --coral-600: #993C1D; --coral-800: #712B13;
-    --teal-50: #E1F5EE;  --teal-600: #0F6E56;  --teal-800: #085041;
-    --blue-50: #E6F1FB;  --blue-600: #185FA5;  --blue-800: #0C447C;
+    --teal-50: #E1F5EE;  --teal-100:#D0EDE3; --teal-600: #0F6E56; --teal-800: #085041;
+    --blue-50: #E6F1FB;  --blue-100:#D6E8F8; --blue-600: #185FA5; --blue-800: #0C447C;
     --amber-50: #FAEEDA; --amber-600: #854F0B; --amber-800: #633806;
-    --gray-50: #F4F3EE;  --gray-100: #ECEAE3;
+    --gray-50: #F7F6F2;  --gray-100: #EFEEE7;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
     font-family: "PingFang SC", "Microsoft YaHei", -apple-system, sans-serif;
-    color: var(--ink); background: #fff; line-height: 1.6;
-    max-width: 1080px; margin: 0 auto; padding: 40px 32px 64px;
+    color: var(--ink); background: var(--gray-50); line-height: 1.6;
+    max-width: 1120px; margin: 0 auto; padding: 48px 32px 80px;
   }
-  h1 { font-size: 22px; font-weight: 600; }
-  h2 { font-size: 16px; font-weight: 600; margin: 40px 0 12px; }
+
+  /* ===== 头部 ===== */
+  header h1 { font-size: 24px; font-weight: 650; letter-spacing: .5px; }
   .meta { color: var(--ink-3); font-size: 13px; margin-top: 6px; }
-  .slogan { margin-top: 14px; font-size: 14px; color: var(--ink-2); }
+  .slogan {
+    margin-top: 18px; font-size: 14px; color: var(--ink-2);
+    background: #fff; border: 1px solid var(--line); border-left: 4px solid var(--coral-600);
+    border-radius: 10px; padding: 12px 18px;
+  }
   .slogan b { color: var(--ink); }
 
+  /* ===== 章节标题 ===== */
+  h2 { font-size: 17px; font-weight: 650; margin: 48px 0 16px; display: flex; align-items: center; gap: 10px; }
+  h2 .no {
+    flex-shrink: 0; width: 26px; height: 26px; border-radius: 8px;
+    background: var(--ink); color: #fff; font-size: 13px; font-weight: 600;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+
   /* ===== 主分层图 ===== */
-  .board { border: 1px solid var(--line); border-radius: 16px; padding: 28px 24px 20px; margin-top: 20px; background: var(--gray-50); }
-  .tier-label { font-size: 12px; color: var(--ink-3); letter-spacing: 2px; margin: 0 0 8px 4px; }
-  .question { display: flex; justify-content: center; }
-  .q-box { background: var(--coral-50); border: 1px solid var(--coral-600); color: var(--coral-800);
-           border-radius: 10px; padding: 10px 36px; font-size: 15px; font-weight: 600; }
-  .agent { }
-  .agent-box { background: #fff; border: 1px solid var(--ink-3); border-radius: 12px;
-               padding: 14px 18px 14px; color: var(--ink); }
-  .flow-line { text-align: center; font-size: 13.5px; font-weight: 600; }
-  .flow-line .sep { color: var(--ink-3); font-weight: 400; padding: 0 4px; }
+  .board {
+    border: 1px solid var(--line); border-radius: 18px; background: #fff;
+    padding: 8px 24px 0; box-shadow: 0 1px 3px rgba(0,0,0,.04);
+  }
+  .prow { display: grid; grid-template-columns: 108px 1fr; align-items: stretch; }
+  .prow + .prow { border-top: 1px dashed var(--line); }
+  .rail {
+    padding: 22px 0; font-size: 12px; color: var(--ink-3); letter-spacing: 1.5px;
+    border-right: 1px solid var(--line); padding-right: 14px;
+    display: flex; flex-direction: column; justify-content: center; gap: 2px;
+  }
+  .rail .en { font-size: 10px; letter-spacing: .5px; color: var(--ink-3); opacity: .75; }
+  .stage { padding: 20px 0 20px 22px; }
+
+  .q-box {
+    display: inline-block; background: var(--coral-50); border: 1.5px solid var(--coral-600);
+    color: var(--coral-800); border-radius: 12px; padding: 10px 40px;
+    font-size: 15px; font-weight: 650; box-shadow: 0 2px 6px rgba(153,60,29,.10);
+  }
+  .center { text-align: center; }
+  .v-arrow { text-align: center; color: var(--ink-3); font-size: 14px; line-height: 1.2; padding: 8px 0 2px; }
+  .v-arrow small { display: block; font-size: 11px; color: var(--ink-2); margin-top: 1px; }
+
+  .ui-box, .agent-box {
+    background: var(--gray-50); border: 1px solid var(--line); border-radius: 12px;
+    padding: 13px 18px; font-size: 12.5px; color: var(--ink-2);
+  }
+  .ui-box b { color: var(--ink); }
+  .agent-box { background: #fff; border-color: var(--ink-3); }
+  .flow { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+  .flow .step {
+    background: var(--blue-50); color: var(--blue-800); border: 1px solid var(--blue-100);
+    border-radius: 8px; padding: 4px 12px; font-size: 12.5px; font-weight: 600; white-space: nowrap;
+  }
+  .flow .arr { color: var(--ink-3); font-size: 12px; }
   .adj-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 12px; }
-  .adj-card { background: #faf9f6; border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; }
-  .adj-card .t { font-size: 12.5px; font-weight: 600; }
-  .adj-card .t em { font-style: normal; color: var(--ink-3); font-weight: 400; margin-left: 4px; font-size: 11.5px; }
+  .adj-card { background: var(--gray-50); border: 1px solid var(--line); border-radius: 10px; padding: 9px 13px; }
+  .adj-card .t { font-size: 12.5px; font-weight: 650; }
+  .adj-card .t em { font-style: normal; color: var(--ink-3); font-weight: 400; margin-left: 5px; font-size: 11.5px; }
   .adj-card .d { font-size: 11.5px; color: var(--ink-2); margin-top: 3px; line-height: 1.55; }
 
+  /* 语义层 / 数仓层 四列 */
+  .grid4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px 16px; align-items: stretch; }
+  .route-arrow { text-align: center; color: var(--ink-3); font-size: 14px; padding: 10px 0 0; line-height: 1.15; }
+  .route-arrow small { display: block; font-size: 11px; color: var(--ink-2); margin-top: 1px; }
+  .mount-arrow { text-align: center; color: var(--teal-600); font-size: 15px; padding: 4px 0 10px; line-height: 1.15; }
+  .mount-arrow small { display: block; font-size: 10.5px; color: var(--teal-600); margin-top: 1px; }
+
+  .model { border-radius: 12px; padding: 12px 14px; min-height: 72px; position: relative; }
+  .model .name { font-size: 14px; font-weight: 650; }
+  .model .sub { font-size: 11.5px; margin-top: 3px; line-height: 1.5; }
+  .model .lv {
+    position: absolute; top: 10px; right: 10px; font-size: 10px; border-radius: 5px;
+    padding: 1px 7px; font-weight: 600;
+  }
+  .m-cert { background: var(--teal-50); border: 1px solid var(--teal-600); }
+  .m-cert .name { color: var(--teal-800); } .m-cert .sub { color: var(--teal-600); }
+  .m-cert .lv { background: var(--teal-600); color: #fff; }
+  .m-explo { background: var(--amber-50); border: 1px dashed var(--amber-600); }
+  .m-explo .name { color: var(--amber-800); } .m-explo .sub { color: var(--amber-600); }
+  .m-explo .lv { background: #fff; color: var(--amber-600); border: 1px solid var(--amber-600); }
+
+  .wh { display: grid; grid-template-columns: 1fr 86px 1fr 86px 1fr 86px 1fr; align-items: center; }
+  .layer {
+    border-radius: 12px; padding: 12px 14px; min-height: 76px;
+    background: var(--blue-50); border: 1px solid var(--blue-600);
+  }
+  .layer .name { font-size: 14px; font-weight: 650; color: var(--blue-800); }
+  .layer .sub { font-size: 11.5px; color: var(--blue-600); margin-top: 3px; line-height: 1.5; }
+  .h-edge { text-align: center; color: var(--ink-3); font-size: 15px; line-height: 1.2; }
+  .h-edge small { display: block; font-size: 10.5px; color: var(--ink-2); }
+
+  .bypass {
+    border-top: 1.5px dashed var(--ink-3); margin: 16px 0 0; padding: 12px 4px 16px;
+    font-size: 12px; color: var(--ink-2); display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+  }
+  .footnote { font-size: 12px; color: var(--ink-3); margin-top: 12px; line-height: 1.7; }
+  .footnote b { color: var(--ink-2); }
+
+  /* ===== 四要素卡片 ===== */
+  .cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+  .card {
+    border: 1px solid var(--line); border-radius: 14px; padding: 16px 16px 14px;
+    background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.04);
+  }
+  .card .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 8px; vertical-align: 2px; }
+  .card .t { font-size: 14px; font-weight: 650; }
+  .card .d { font-size: 12.5px; color: var(--ink-2); margin-top: 8px; line-height: 1.6; }
+  .card .p { font-size: 12px; color: var(--ink-3); margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line); line-height: 1.6; }
+
+  /* ===== 路由表 ===== */
+  .tbl-wrap { border: 1px solid var(--line); border-radius: 14px; overflow: hidden; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.04); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { padding: 10px 16px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+  tr:last-child td { border-bottom: none; }
+  th { background: var(--gray-100); font-weight: 650; font-size: 12.5px; color: var(--ink-2); }
+  td.muted { color: var(--ink-2); }
+
+  /* ===== 资产四层栈 ===== */
+  .stack { display: flex; flex-direction: column; gap: 10px; }
+  .stack .row {
+    display: grid; grid-template-columns: 132px 1fr 230px; gap: 14px; align-items: center;
+    border: 1px solid var(--line); border-radius: 12px; padding: 12px 18px; background: #fff;
+  }
+  .stack .row.top { border-color: var(--coral-600); background: var(--coral-50); }
+  .stack .row.l3  { border-color: var(--teal-600);  background: var(--teal-50); }
+  .stack .row.l2  { border-color: var(--blue-600);  background: var(--blue-50); }
+  .stack .l { font-size: 13.5px; font-weight: 650; }
+  .stack .c { font-size: 12.5px; color: var(--ink-2); line-height: 1.6; }
+  .stack .n { font-size: 11.5px; color: var(--ink-3); text-align: right; }
+
   /* ===== 血缘视图 ===== */
-  .lg-intro { font-size: 13px; color: var(--ink-2); margin: 10px 0 4px; }
+  .lg-intro { font-size: 13px; color: var(--ink-2); margin: 10px 0 4px; line-height: 1.7; }
   .lg-intro b { color: var(--ink); }
-  .lg-chain { display: flex; align-items: stretch; justify-content: center; margin-top: 14px; }
-  .lg-node { background: var(--blue-50); border: 1px solid var(--blue-600); border-radius: 10px;
-             padding: 9px 12px; min-width: 118px; text-align: center; flex-shrink: 0; }
-  .lg-node .n { font-weight: 600; font-size: 13px; color: var(--blue-800); }
-  .lg-node .s { font-size: 10.5px; color: var(--blue-600); margin-top: 1px; }
+  .lg-panel { border: 1px solid var(--line); border-radius: 14px; background: #fff; padding: 22px 20px; margin-top: 12px; box-shadow: 0 1px 3px rgba(0,0,0,.04); }
+  .lg-chain { display: flex; align-items: stretch; justify-content: center; }
+  .lg-node {
+    background: var(--blue-50); border: 1px solid var(--blue-600); border-radius: 12px;
+    padding: 10px 14px; min-width: 128px; text-align: center; flex-shrink: 0;
+    display: flex; flex-direction: column; justify-content: center;
+  }
+  .lg-node .n { font-weight: 650; font-size: 13px; color: var(--blue-800); }
+  .lg-node .s { font-size: 10.5px; color: var(--blue-600); margin-top: 2px; }
   .lg-node.src { background: var(--gray-100); border-color: var(--ink-3); }
   .lg-node.src .n { color: var(--ink); } .lg-node.src .s { color: var(--ink-3); }
   .lg-node.tl { background: var(--teal-50); border-color: var(--teal-600); }
   .lg-node.tl .n { color: var(--teal-800); } .lg-node.tl .s { color: var(--teal-600); }
-  .lg-edge { display: flex; flex-direction: column; align-items: center; justify-content: center;
-             min-width: 138px; padding: 0 6px; flex-shrink: 0; }
-  .lg-edge .arrow { color: var(--ink-3); font-size: 15px; line-height: 1; }
-  .lg-edge .tag { background: #fff; border: 1px dashed var(--ink-3); border-radius: 8px;
-                  padding: 5px 9px; font-size: 10.5px; color: var(--ink-2); text-align: center;
-                  margin-top: 6px; line-height: 1.5; }
+  .lg-edge { display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 148px; padding: 0 8px; flex-shrink: 0; }
+  .lg-edge .arrow { color: var(--ink-3); font-size: 16px; line-height: 1; }
+  .lg-edge .tag {
+    background: var(--gray-50); border: 1px dashed var(--ink-3); border-radius: 9px;
+    padding: 5px 10px; font-size: 10.5px; color: var(--ink-2); text-align: center;
+    margin-top: 7px; line-height: 1.5;
+  }
   .lg-edge .tag b { color: var(--ink); font-size: 11.5px; display: block; }
-  .lg-legend { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 16px; padding: 10px 14px;
-               border: 1px solid var(--line); border-radius: 10px; background: var(--gray-50); }
+  .lg-cap { font-size: 12px; color: var(--ink-2); margin-top: 12px; }
+  .lg-cap b { color: var(--ink); }
+  .lg-legend {
+    display: flex; gap: 20px; flex-wrap: wrap; margin-top: 18px; padding: 12px 16px;
+    border: 1px solid var(--line); border-radius: 12px; background: #fff;
+  }
   .lg-legend span { font-size: 12px; color: var(--ink-2); }
   .lg-legend b { color: var(--ink); }
-  .group { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px 14px;
-           margin-top: 14px; background: #fff; position: relative; }
-  .chip { font-size: 12px; color: var(--ink-3); letter-spacing: 2px; margin: 0 0 8px; }
-  .conn-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; position: relative;
-              z-index: 2; height: 42px; margin: -14px 14px -13px; }
-  .conn { position: relative; }
-  .conn::before { content: ""; position: absolute; left: calc(50% - 0.75px); top: 7px; bottom: -1px; border-left: 1.5px solid var(--ink-3); }
-  .conn::after { content: ""; position: absolute; left: 50%; top: 0; transform: translateX(-50%);
-                 border-left: 5px solid transparent; border-right: 5px solid transparent; border-bottom: 7px solid var(--ink-3); }
-  .route-note { text-align: center; font-size: 12px; color: var(--ink-2); margin: 10px 0 6px; }
-  .route-note span { margin: 0 10px; }
-  .grid4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px 14px; margin-top: 6px; align-items: stretch; }
-  .v-arrow { text-align: center; color: var(--ink-3); font-size: 13px; line-height: 1.1; padding: 3px 0; }
-  .v-arrow small { display: block; font-size: 11px; color: var(--ink-2); }
-  .model { border-radius: 10px; padding: 10px 12px; min-height: 64px; }
-  .model .name { font-size: 14px; font-weight: 600; }
-  .model .sub { font-size: 12px; margin-top: 2px; }
-  .m-cert { background: var(--teal-50); border: 1px solid var(--teal-600); }
-  .m-cert .name { color: var(--teal-800); } .m-cert .sub { color: var(--teal-600); }
-  .m-explo { background: var(--amber-50); border: 1px solid var(--amber-600); }
-  .m-explo .name { color: var(--amber-800); } .m-explo .sub { color: var(--amber-600); }
-  .layer { border-radius: 10px; padding: 10px 12px; min-height: 64px; background: var(--blue-50); border: 1px solid var(--blue-600); position: relative; }
-  .layers-grid { gap: 6px 92px; }
-  .layers-grid .layer:not(:first-child)::before {
-    content: attr(data-rule); position: absolute; top: calc(50% - 24px);
-    left: calc(-92px + 8px); width: calc(92px - 16px); text-align: center;
-    font-size: 10.5px; color: var(--ink-2); white-space: nowrap; }
-  .layers-grid .layer:not(:first-child)::after {
-    content: ""; position: absolute; top: 50%; margin-top: -0.75px;
-    left: calc(-92px + 12px); width: calc(92px - 24px); height: 9px;
-    background:
-      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='9'%3E%3Cpath d='M0 0 L8 4.5 L0 9 z' fill='%23888780'/%3E%3C/svg%3E") right center / 8px 9px no-repeat,
-      linear-gradient(var(--ink-3), var(--ink-3)) left center / calc(100% - 10px) 1.5px no-repeat; }
-  .layer .name { font-size: 14px; font-weight: 600; color: var(--blue-800); }
-  .layer .sub { font-size: 12px; color: var(--blue-600); margin-top: 2px; }
-  .bypass { border-top: 1.5px dashed var(--ink-3); margin: 14px 4px 0; padding-top: 8px;
-            font-size: 12px; color: var(--ink-2); display: flex; justify-content: space-between; }
 
-  /* ===== 通用卡片/表格 ===== */
-  .cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
-  .card { border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; background: #fff; }
-  .card .t { font-size: 14px; font-weight: 600; }
-  .card .d { font-size: 12.5px; color: var(--ink-2); margin-top: 6px; }
-  .card .p { font-size: 12px; color: var(--ink-3); margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--line); }
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th, td { border: 1px solid var(--line); padding: 8px 12px; text-align: left; vertical-align: top; }
-  th { background: var(--gray-100); font-weight: 600; }
-  td.muted { color: var(--ink-2); }
-  .tag { display: inline-block; font-size: 11px; border-radius: 6px; padding: 1px 8px; margin-left: 6px; vertical-align: 1px; }
-  .tag-cert { background: var(--teal-50); color: var(--teal-600); border: 1px solid var(--teal-600); }
-  .tag-explo { background: var(--amber-50); color: var(--amber-600); border: 1px solid var(--amber-600); }
-  .footnote { font-size: 12px; color: var(--ink-3); margin-top: 10px; }
-  .stack { display: flex; flex-direction: column-reverse; gap: 8px; margin-top: 12px; }
-  .stack .row { display: grid; grid-template-columns: 130px 1fr 220px; gap: 12px; align-items: center;
-                border: 1px solid var(--line); border-radius: 10px; padding: 9px 14px; background: #fff; }
-  .stack .l { font-size: 13px; font-weight: 600; }
-  .stack .c { font-size: 12.5px; color: var(--ink-2); }
-  .stack .n { font-size: 12px; color: var(--ink-3); text-align: right; }
+  @media (max-width: 900px) {
+    .grid4, .cards { grid-template-columns: repeat(2, 1fr); }
+    .prow { grid-template-columns: 1fr; }
+    .rail { border-right: none; padding: 14px 0 0; flex-direction: row; gap: 8px; }
+    .stage { padding: 10px 0 18px; }
+    .wh { grid-template-columns: 1fr; gap: 8px; }
+    .h-edge { transform: rotate(90deg); }
+    .stack .row { grid-template-columns: 1fr; gap: 4px; }
+    .stack .n { text-align: left; }
+  }
 </style>
 </head>
 <body>
 
-<h1>chat-data 未来设计分层</h1>
-<div class="meta">2026-10-11 架构讨论定稿 · data-agent / chat-data 语义建模体系</div>
-<div class="slogan">数仓建模把<b>数据</b>做对（可信的表），语义建模把<b>含义</b>做对（可信的答案），两条链在<b>智能体消费</b>处汇合。</div>
+<header>
+  <h1>chat-data 未来设计分层</h1>
+  <div class="meta">2026-10-11 架构讨论定稿 · data-agent / chat-data 语义建模体系</div>
+  <div class="slogan">数仓建模把<b>数据</b>做对（可信的表），语义建模把<b>含义</b>做对（可信的答案），两条链在<b>智能体消费</b>处汇合。</div>
+</header>
 
-<h2>一、主分层：用户问题 → 语义模型 → 数仓分层</h2>
+<h2><span class="no">1</span>主分层：用户问题 → 语义模型 → 数仓分层</h2>
 <div class="board">
-  <div class="tier-label">消费层</div>
-  <div class="question"><div class="q-box">用户问题</div></div>
-  <div class="v-arrow" style="padding:6px 0;">↓ <small>自然语言提问</small></div>
-  <div class="tier-label">UI 交互层（展示）</div>
-  <div class="agent">
-    <div class="agent-box" style="font-size:12.5px;">会话问答（答案卡 / 澄清反问） · 结果展示（表格 / 图表 / 指标卡） · 工作区（文件目录 / 预览 / 下载） · 管理后台（模型 / 字典 / 导入导出）——只渲染不定义口径</div>
+
+  <div class="prow">
+    <div class="rail">消费层<span class="en">CONSUMPTION</span></div>
+    <div class="stage center">
+      <div class="q-box">用户问题</div>
+      <div class="v-arrow">↓<small>自然语言提问</small></div>
+    </div>
   </div>
-  <div class="v-arrow" style="padding:6px 0;">↓ <small>会话消息 / 工作台操作</small></div>
-  <div class="tier-label">智能体层（消费）</div>
-  <div class="agent">
-    <div class="agent-box">
-      <div class="flow-line">理解问题 <span class="sep">→</span> 明确意图 <span class="sep">→</span> 搜索匹配（0 / 1 / 多个候选） <span class="sep">→</span> 规则裁决选模型 <span class="sep">→</span> 产出 DSL <span class="sep">→</span> 确定性编译 SQL</div>
-      <div class="adj-grid">
-        <div class="adj-card"><div class="t">命中 0 个<em>如实交底</em></div><div class="d">告知无模型覆盖，不硬猜；建议 SQL 旁路探索或先补建模</div></div>
-        <div class="adj-card"><div class="t">命中 1 个<em>直接选用</em></div><div class="d">候选唯一，无需裁决，直接进入 DSL 产出</div></div>
-        <div class="adj-card"><div class="t">命中多个<em>规则裁决</em></div><div class="d">同指标取最高层（ADS &gt; DWS &gt; DWD）；粒度指向明细落 DWD；仍歧义反问用户</div></div>
+
+  <div class="prow">
+    <div class="rail">UI 交互层<span class="en">PRESENTATION</span></div>
+    <div class="stage">
+      <div class="ui-box"><b>会话问答</b>（答案卡 / 澄清反问） · <b>结果展示</b>（表格 / 图表 / 指标卡） · <b>工作区</b>（文件目录 / 预览 / 下载） · <b>管理后台</b>（模型 / 字典 / 导入导出） —— 只渲染，不定义口径</div>
+      <div class="v-arrow">↓<small>会话消息 / 工作台操作</small></div>
+    </div>
+  </div>
+
+  <div class="prow">
+    <div class="rail">智能体层<span class="en">AGENT</span></div>
+    <div class="stage">
+      <div class="agent-box">
+        <div class="flow">
+          <span class="step">理解问题</span><span class="arr">→</span>
+          <span class="step">明确意图</span><span class="arr">→</span>
+          <span class="step">搜索匹配（0 / 1 / 多）</span><span class="arr">→</span>
+          <span class="step">规则裁决选模型</span><span class="arr">→</span>
+          <span class="step">产出 DSL</span><span class="arr">→</span>
+          <span class="step">确定性编译 SQL</span>
+        </div>
+        <div class="adj-grid">
+          <div class="adj-card"><div class="t">命中 0 个<em>如实交底</em></div><div class="d">告知无模型覆盖，不硬猜；建议 SQL 旁路探索或先补建模</div></div>
+          <div class="adj-card"><div class="t">命中 1 个<em>直接选用</em></div><div class="d">候选唯一，无需裁决，直接进入 DSL 产出</div></div>
+          <div class="adj-card"><div class="t">命中多个<em>规则裁决</em></div><div class="d">同指标取最高层（ADS &gt; DWS &gt; DWD）；粒度指向明细落 DWD；仍歧义反问用户</div></div>
+        </div>
+      </div>
+      <div class="grid4" style="margin-top:2px;">
+        <div class="route-arrow">↓<small>原始数据</small></div>
+        <div class="route-arrow">↓<small>明细下钻</small></div>
+        <div class="route-arrow">↓<small>主题汇总</small></div>
+        <div class="route-arrow">↓<small>默认口径</small></div>
       </div>
     </div>
   </div>
 
-  <div class="group">
-    <div class="tier-label" style="margin-top:0;">语义层</div>
-    <div class="grid4">
-      <div class="v-arrow">↓ <small>原始数据</small></div>
-      <div class="v-arrow">↓ <small>明细下钻</small></div>
-      <div class="v-arrow">↓ <small>主题汇总</small></div>
-      <div class="v-arrow">↓ <small>默认口径</small></div>
-
-      <div class="model m-explo"><div class="name">ODS 语义模型</div><div class="sub">探索级 · 原始数据问题命中</div></div>
-      <div class="model m-cert"><div class="name">DWD 语义模型</div><div class="sub">认证级 · 带粒度声明</div></div>
-      <div class="model m-cert"><div class="name">DWS 语义模型</div><div class="sub">认证级 · 主题口径</div></div>
-      <div class="model m-cert"><div class="name">ADS 语义模型</div><div class="sub">认证级 · 对外口径</div></div>
+  <div class="prow">
+    <div class="rail">语义层<span class="en">SEMANTIC</span></div>
+    <div class="stage" style="padding-top:8px;">
+      <div class="grid4">
+        <div class="model m-explo"><span class="lv">探索级</span><div class="name">ODS 语义模型</div><div class="sub">原始数据问题命中，结果带「口径未治理」标注</div></div>
+        <div class="model m-cert"><span class="lv">认证级</span><div class="name">DWD 语义模型</div><div class="sub">带粒度声明，明细下钻换粒度重新编译</div></div>
+        <div class="model m-cert"><span class="lv">认证级</span><div class="name">DWS 语义模型</div><div class="sub">主题口径，语义层底座</div></div>
+        <div class="model m-cert"><span class="lv">认证级</span><div class="name">ADS 语义模型</div><div class="sub">对外口径，同指标多层命中取最高层</div></div>
+      </div>
+      <div class="grid4" style="margin-top:2px;">
+        <div class="mount-arrow">↑<small>挂载 · 语义血缘</small></div>
+        <div class="mount-arrow">↑<small>挂载 · 语义血缘</small></div>
+        <div class="mount-arrow">↑<small>挂载 · 语义血缘</small></div>
+        <div class="mount-arrow">↑<small>挂载 · 语义血缘</small></div>
+      </div>
     </div>
   </div>
 
-  <div class="conn-row">
-    <div class="conn"></div>
-    <div class="conn"></div>
-    <div class="conn"></div>
-    <div class="conn"></div>
-  </div>
-
-  <div class="group">
-    <div class="chip">数仓层</div>
-    <div class="grid4 layers-grid" style="margin-top:2px;">
-      <div class="layer"><div class="name">ODS 贴源层</div><div class="sub">业务原始数据 · 全链溯源锚点</div></div>
-      <div class="layer" data-rule="清洗 · 明细化"><div class="name">DWD 明细层</div><div class="sub">明细事实 + 一致维度</div></div>
-      <div class="layer" data-rule="轻度汇总"><div class="name">DWS 轻度汇总层</div><div class="sub">通用聚合，语义层底座</div></div>
-      <div class="layer" data-rule="口径收敛"><div class="name">ADS 应用层</div><div class="sub">口径已收敛，面向应用</div></div>
+  <div class="prow">
+    <div class="rail">数仓层<span class="en">WAREHOUSE</span></div>
+    <div class="stage" style="padding-top:8px;">
+      <div class="wh">
+        <div class="layer" style="background:var(--gray-100);border-color:var(--ink-3);">
+          <div class="name" style="color:var(--ink);">ODS 贴源层</div><div class="sub" style="color:var(--ink-2);">业务原始数据 · 全链溯源锚点</div>
+        </div>
+        <div class="h-edge">⟶<small>清洗 · 明细化</small></div>
+        <div class="layer"><div class="name">DWD 明细层</div><div class="sub">明细事实 + 一致维度</div></div>
+        <div class="h-edge">⟶<small>轻度汇总</small></div>
+        <div class="layer"><div class="name">DWS 轻度汇总层</div><div class="sub">通用聚合，语义层底座</div></div>
+        <div class="h-edge">⟶<small>口径收敛</small></div>
+        <div class="layer"><div class="name">ADS 应用层</div><div class="sub">口径已收敛，面向应用</div></div>
+      </div>
     </div>
   </div>
+
   <div class="bypass">
     <span>⤷ SQL 旁路（drill-through）：原始行不走语义层，经受控 SQL 通道直达任意层</span>
     <span>权限 · ROW_LIMIT · 审计兜底</span>
@@ -192,60 +292,66 @@
 </div>
 <div class="footnote">图中两种血缘：数仓层间的横向箭头 = <b>加工血缘</b>（表→表，发生在上游数仓平台）；数仓层到语义模型的纵向连线 = <b>语义血缘</b>（模型 ↔ 物理表/列，由挂载与编译关系显式化）——两段血缘在语义层接续。覆盖目标：全数据源 × 全层 × 全表都有对应语义模型——ODS 用生成基础模型渠道批量铺探索级（零人工），DWD/DWS/ADS 按主题域建认证级；探索级补齐字典/指标/关系/粒度并通过质量规则后升级认证级。</div>
 
-<h2>二、一份语义模型的四要素构成</h2>
+<h2><span class="no">2</span>一份语义模型的四要素构成</h2>
 <div class="cards">
-  <div class="card"><div class="t">业务元数据</div><div class="d">枚举 / 同义词 / 单位、列与表的业务描述</div><div class="p">落点：L2 数据字典（权威）＋模型内绑定副本</div></div>
-  <div class="card"><div class="t">业务模型</div><div class="d">表选择、字段绑定、维度声明、关联（join / 自关联别名）</div><div class="p">落点：datasets + relationships，驱动 join 编译</div></div>
-  <div class="card"><div class="t">业务指标</div><div class="d">原子 / 派生 / 复合指标口径</div><div class="p">落点：metrics，DSL → 确定性编译 SQL</div></div>
-  <div class="card"><div class="t">业务知识</div><div class="d">模型用途说明、别名、示例问题</div><div class="p">落点：ai_context / business_notes，兼作路由依据</div></div>
+  <div class="card"><div class="t"><span class="dot" style="background:var(--blue-600);"></span>业务元数据</div><div class="d">枚举 / 同义词 / 单位、列与表的业务描述</div><div class="p">落点：L2 数据字典（权威）＋模型内绑定副本</div></div>
+  <div class="card"><div class="t"><span class="dot" style="background:var(--teal-600);"></span>业务模型</div><div class="d">表选择、字段绑定、维度声明、关联（join / 自关联别名）</div><div class="p">落点：datasets + relationships，驱动 join 编译</div></div>
+  <div class="card"><div class="t"><span class="dot" style="background:var(--coral-600);"></span>业务指标</div><div class="d">原子 / 派生 / 复合指标口径</div><div class="p">落点：metrics，DSL → 确定性编译 SQL</div></div>
+  <div class="card"><div class="t"><span class="dot" style="background:var(--amber-600);"></span>业务知识</div><div class="d">模型用途说明、别名、示例问题</div><div class="p">落点：ai_context / business_notes，兼作路由依据</div></div>
 </div>
 <div class="footnote">四要素之外贯穿一条质量闸门：check_yaml 工具 / 导入 preview / 管理端 quality-check 三入口同一套规则（单模型 25 条 + 跨模型 3 条）。</div>
 
-<h2>三、层路由规则（用户不选层，系统路由）</h2>
-<table>
-  <tr><th style="width:34%">情形</th><th>路由</th></tr>
-  <tr><td>用户 @ 显式指定模型</td><td>使用指定模型（最高优先）</td></tr>
-  <tr><td>问业务口径（“上月销售额”）</td><td>主题域内匹配认证级模型；同指标多层命中取最高层（ADS &gt; DWS &gt; DWD）</td></tr>
-  <tr><td>问明细下钻（“某天某渠道”）</td><td>切到 DWD 明细模型换粒度重新编译</td></tr>
-  <tr><td>问原始记录 / 贴源探索</td><td>SQL 旁路或 ODS 探索级模型（结果带「口径未治理」标注）</td></tr>
-  <tr><td>跨主题问题</td><td>多模型组合 / 多查询，主题域边界不拦正式口径消费</td></tr>
-</table>
+<h2><span class="no">3</span>层路由规则（用户不选层，系统路由）</h2>
+<div class="tbl-wrap">
+  <table>
+    <tr><th style="width:36%">情形</th><th>路由</th></tr>
+    <tr><td>用户 @ 显式指定模型</td><td class="muted">使用指定模型（最高优先）</td></tr>
+    <tr><td>问业务口径（“上月销售额”）</td><td class="muted">主题域内匹配认证级模型；同指标多层命中取最高层（ADS &gt; DWS &gt; DWD）</td></tr>
+    <tr><td>问明细下钻（“某天某渠道”）</td><td class="muted">切到 DWD 明细模型换粒度重新编译</td></tr>
+    <tr><td>问原始记录 / 贴源探索</td><td class="muted">SQL 旁路或 ODS 探索级模型（结果带「口径未治理」标注）</td></tr>
+    <tr><td>跨主题问题</td><td class="muted">多模型组合 / 多查询，主题域边界不拦正式口径消费</td></tr>
+  </table>
+</div>
 <div class="footnote">配套约束：对外口径只在最高层定义一次（同名异式已被跨模型规则拦截）；business_notes 写清层归属与上下层关系，作为路由的确定性依据。</div>
 
-<h2>四、资产四层栈（与数仓加工分层正交）</h2>
+<h2><span class="no">4</span>资产四层栈（与数仓加工分层正交）</h2>
 <div class="stack">
+  <div class="row top"><div class="l">L4 智能体使用</div><div class="c">UI 交互层（会话 / 结果展示 / 工作区 / 管理后台，只渲染不定义口径）＋ 会话问数：@ 引用 → 意图映射 → DSL → 确定性编译 SQL</div><div class="n">Consumption layer · Semantic Layer for AI</div></div>
+  <div class="row l3"><div class="l">L3 语义层</div><div class="c">业务模型 + 业务指标 + 业务知识；物化 runtime + 质量治理 + Ossie 导入导出</div><div class="n">Semantic / Metrics Layer（governed）</div></div>
+  <div class="row l2"><div class="l">L2 配置元数据</div><div class="c">表结构缓存、数据字典、表分组（分层标记 / 主题域）</div><div class="n">Metadata layer · Data Dictionary</div></div>
   <div class="row"><div class="l">L1 数据源</div><div class="c">MySQL / Hive 等真实库表；数仓加工链路（ODS→DWD→DWS→ADS）的产物在此接入</div><div class="n">Source layer</div></div>
-  <div class="row"><div class="l">L2 配置元数据</div><div class="c">表结构缓存、数据字典、表分组（分层标记 / 主题域）</div><div class="n">Metadata layer · Data Dictionary</div></div>
-  <div class="row"><div class="l">L3 语义层</div><div class="c">业务模型 + 业务指标 + 业务知识；物化 runtime + 质量治理 + Ossie 导入导出</div><div class="n">Semantic / Metrics Layer（governed）</div></div>
-  <div class="row"><div class="l">L4 智能体使用</div><div class="c">UI 交互层（会话 / 结果展示 / 工作区 / 管理后台，只渲染不定义口径）＋ 会话问数：@ 引用 → 意图映射 → DSL → 确定性编译 SQL</div><div class="n">Consumption layer · Semantic Layer for AI</div></div>
 </div>
 <div class="footnote">两条正交的轴：数仓加工链路横向流动数据本体（把数据做对）；我们的四层栈纵向流动语义定义（把含义做对）。语义层只挂建模纪律完成的表：ODS 仅探索级挂载（不进认证级、不默认参与口径路由）、DWD 带粒度声明挂、DWS/ADS 主力。ODS 资产规格最高：全链唯一未加工的事实记录，加工层每层都可能引入偏差，争议数据最终回 ODS 仲裁、逻辑 bug 从 ODS 重放修复——资产重要性最高与口径可信度最低是两回事，前者要求永久保留（业内 bronze 层 immutable），后者才约束语义分级。</div>
 
-<h2>五、血缘视图（节点 + 边 + 边属性）</h2>
+<h2><span class="no">5</span>血缘视图（节点 + 边 + 边属性）</h2>
 <div class="lg-intro">血缘 = <b>节点</b>（表 / 列）+ <b>边</b>（来源去向）+ <b>边属性</b>（这条边上发生了什么：加工规则 / 口径定义）。主图里的两条箭头只画了"边"，这里把边属性显式展开——完整血缘资产 = 图 + 图上的注记。</div>
 
-<div class="lg-chain">
-  <div class="lg-node src"><div class="n">raw_orders</div><div class="s">ODS · 业务原样</div></div>
-  <div class="lg-edge"><div class="arrow">⟶</div><div class="tag"><b>清洗 · 明细化</b>去重 / 补齐 / 声明 grain</div></div>
-  <div class="lg-node"><div class="n">dwd_orders</div><div class="s">DWD · 明细事实</div></div>
-  <div class="lg-edge"><div class="arrow">⟶</div><div class="tag"><b>轻度汇总</b>按 user_id + day 聚合</div></div>
-  <div class="lg-node"><div class="n">dws_user_day</div><div class="s">DWS · 日汇总</div></div>
-  <div class="lg-edge"><div class="arrow">⟶</div><div class="tag"><b>口径收敛</b>面向应用宽表</div></div>
-  <div class="lg-node"><div class="n">ads_sales_wide</div><div class="s">ADS · 应用层</div></div>
+<div class="lg-panel">
+  <div class="lg-chain">
+    <div class="lg-node src"><div class="n">raw_orders</div><div class="s">ODS · 业务原样</div></div>
+    <div class="lg-edge"><div class="arrow">⟶</div><div class="tag"><b>清洗 · 明细化</b>去重 / 补齐 / 声明 grain</div></div>
+    <div class="lg-node"><div class="n">dwd_orders</div><div class="s">DWD · 明细事实</div></div>
+    <div class="lg-edge"><div class="arrow">⟶</div><div class="tag"><b>轻度汇总</b>按 user_id + day 聚合</div></div>
+    <div class="lg-node"><div class="n">dws_user_day</div><div class="s">DWS · 日汇总</div></div>
+    <div class="lg-edge"><div class="arrow">⟶</div><div class="tag"><b>口径收敛</b>面向应用宽表</div></div>
+    <div class="lg-node"><div class="n">ads_sales_wide</div><div class="s">ADS · 应用层</div></div>
+  </div>
+  <div class="lg-cap">↑ <b>加工血缘（表级）</b>：归数仓建模侧所有，边属性 = 加工规则——影响分析向下追（改 raw_orders 波及谁）、根因追溯向上追（ADS 数字错了查哪层）。</div>
 </div>
-<div class="lg-intro" style="margin-top:10px;">↑ <b>加工血缘（表级）</b>：归数仓建模侧所有，边属性 = 加工规则——影响分析向下追（改 raw_orders 波及谁）、根因追溯向上追（ADS 数字错了查哪层）。</div>
 
-<div class="lg-chain">
-  <div class="lg-node"><div class="n">dwd_orders.user_id</div><div class="s">物理列 · DWD</div></div>
-  <div class="lg-edge"><div class="arrow">⟶</div><div class="tag"><b>语义绑定</b>字段绑定 table.column ＋ 维度声明</div></div>
-  <div class="lg-node tl"><div class="n">维度：用户 ID</div><div class="s">DWD 语义模型内</div></div>
-  <div class="lg-edge"><div class="arrow">⟶</div><div class="tag"><b>聚合口径</b>COUNT(DISTINCT user_id)</div></div>
-  <div class="lg-node tl"><div class="n">指标：活跃用户数</div><div class="s">metrics · 对外口径</div></div>
+<div class="lg-panel">
+  <div class="lg-chain">
+    <div class="lg-node"><div class="n">dwd_orders.user_id</div><div class="s">物理列 · DWD</div></div>
+    <div class="lg-edge"><div class="arrow">⟶</div><div class="tag"><b>语义绑定</b>字段绑定 table.column ＋ 维度声明</div></div>
+    <div class="lg-node tl"><div class="n">维度：用户 ID</div><div class="s">DWD 语义模型内</div></div>
+    <div class="lg-edge"><div class="arrow">⟶</div><div class="tag"><b>聚合口径</b>COUNT(DISTINCT user_id)</div></div>
+    <div class="lg-node tl"><div class="n">指标：活跃用户数</div><div class="s">metrics · 对外口径</div></div>
+  </div>
+  <div class="lg-cap">↑ <b>语义血缘（列级）</b>：归语义建模侧所有，边属性 = 口径定义——物理列 → 模型字段 → 指标的翻译链。两段血缘在语义层接续（加工血缘的终点 = 语义血缘的起点）。</div>
 </div>
-<div class="lg-intro" style="margin-top:10px;">↑ <b>语义血缘（列级）</b>：归语义建模侧所有，边属性 = 口径定义——物理列 → 模型字段 → 指标的翻译链。两段血缘在语义层接续（加工血缘的终点 = 语义血缘的起点）。</div>
 
 <div class="lg-legend">
-  <span><b>主图图例</b></span>
+  <span><b>图例</b></span>
   <span>⟶ 横向 = 加工血缘（边属性：加工规则）</span>
   <span>↑ 纵向 = 语义血缘挂载（模型 ↔ 物理表/列）</span>
   <span>↓ = 问题路由（消费命中，不是血缘）</span>
