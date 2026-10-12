@@ -32,9 +32,16 @@
   .question { display: flex; justify-content: center; }
   .q-box { background: var(--coral-50); border: 1px solid var(--coral-600); color: var(--coral-800);
            border-radius: 10px; padding: 10px 36px; font-size: 15px; font-weight: 600; }
-  .agent { display: flex; justify-content: center; }
-  .agent-box { background: #fff; border: 1px solid var(--ink-3); border-radius: 10px;
-               padding: 10px 24px; font-size: 13.5px; color: var(--ink); }
+  .agent { }
+  .agent-box { background: #fff; border: 1px solid var(--ink-3); border-radius: 12px;
+               padding: 14px 18px 14px; color: var(--ink); }
+  .flow-line { text-align: center; font-size: 13.5px; font-weight: 600; }
+  .flow-line .sep { color: var(--ink-3); font-weight: 400; padding: 0 4px; }
+  .adj-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 12px; }
+  .adj-card { background: #faf9f6; border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; }
+  .adj-card .t { font-size: 12.5px; font-weight: 600; }
+  .adj-card .t em { font-style: normal; color: var(--ink-3); font-weight: 400; margin-left: 4px; font-size: 11.5px; }
+  .adj-card .d { font-size: 11.5px; color: var(--ink-2); margin-top: 3px; line-height: 1.55; }
   .group { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px 14px;
            margin-top: 14px; background: #fff; position: relative; }
   .chip { font-size: 12px; color: var(--ink-3); letter-spacing: 2px; margin: 0 0 8px; }
@@ -101,17 +108,15 @@
   <div class="question"><div class="q-box">用户问题</div></div>
   <div class="v-arrow" style="padding:6px 0;">↓ <small>自然语言提问</small></div>
   <div class="tier-label">智能体层（消费）</div>
-  <div class="agent"><div class="agent-box">理解问题 → 明确意图 → 搜索匹配（候选可跨多层）→ 规则裁决选模型 → 产出 DSL → 确定性编译 SQL</div></div>
-  <div class="route-note">
-    <span>多层命中裁决：同指标取最高层（ADS &gt; DWS &gt; DWD）</span><span>·</span>
-    <span>粒度信号指向明细 → 压过层级优先，落 DWD</span><span>·</span>
-    <span>裁决后仍歧义 → 反问用户</span>
-  </div>
-  <div class="route-note">
-    <span>问口径 → 认证级模型，默认最高层</span><span>·</span>
-    <span>看明细 → DWD 下钻</span><span>·</span>
-    <span>问原始数据 → ODS 探索级</span><span>·</span>
-    <span>看原始行 → SQL 旁路</span>
+  <div class="agent">
+    <div class="agent-box">
+      <div class="flow-line">理解问题 <span class="sep">→</span> 明确意图 <span class="sep">→</span> 搜索匹配（0 / 1 / 多个候选） <span class="sep">→</span> 规则裁决选模型 <span class="sep">→</span> 产出 DSL <span class="sep">→</span> 确定性编译 SQL</div>
+      <div class="adj-grid">
+        <div class="adj-card"><div class="t">命中 0 个<em>如实交底</em></div><div class="d">告知无模型覆盖，不硬猜；建议 SQL 旁路探索或先补建模</div></div>
+        <div class="adj-card"><div class="t">命中 1 个<em>直接选用</em></div><div class="d">候选唯一，无需裁决，直接进入 DSL 产出</div></div>
+        <div class="adj-card"><div class="t">命中多个<em>规则裁决</em></div><div class="d">同指标取最高层（ADS &gt; DWS &gt; DWD）；粒度指向明细落 DWD；仍歧义反问用户</div></div>
+      </div>
+    </div>
   </div>
 
   <div class="group">
