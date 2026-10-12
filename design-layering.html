@@ -69,17 +69,32 @@
   }
   .ui-box b { color: var(--ink); }
   .agent-box { background: #fff; border-color: var(--ink-3); }
-  .flow { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
-  .flow .step {
-    background: var(--blue-50); color: var(--blue-800); border: 1px solid var(--blue-100);
+  .stage-box { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
+  .vflow { display: flex; flex-direction: column; gap: 8px; }
+  .vflow-row { display: flex; align-items: stretch; flex-wrap: wrap; gap: 6px; }
+  .vflow-row .step { background: var(--blue-50); color: var(--blue-800); border: 1px solid var(--blue-100);
     border-radius: 8px; padding: 4px 12px; font-size: 12.5px; font-weight: 600; white-space: nowrap;
-  }
-  .flow .arr { color: var(--ink-3); font-size: 12px; }
-  .adj-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 12px; }
-  .adj-card { background: var(--gray-50); border: 1px solid var(--line); border-radius: 10px; padding: 9px 13px; }
-  .adj-card .t { font-size: 12.5px; font-weight: 650; }
-  .adj-card .t em { font-style: normal; color: var(--ink-3); font-weight: 400; margin-left: 5px; font-size: 11.5px; }
-  .adj-card .d { font-size: 11.5px; color: var(--ink-2); margin-top: 3px; line-height: 1.55; }
+    display: inline-flex; align-items: center; align-self: center; }
+  .vflow-row .arr { color: var(--ink-3); font-size: 12px; align-self: center; }
+  .step-box { flex: 1 1 300px; min-width: 300px; background: var(--gray-50); border: 1px solid var(--ink-3);
+    border-radius: 10px; padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; }
+  .sb-head { font-size: 12px; font-weight: 650; color: var(--ink); padding-left: 2px; }
+  .sb-head em { font-style: normal; font-weight: 400; font-size: 10.5px; color: var(--ink-3); margin-left: 6px; }
+  .sb-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  .sb-cards.col { grid-template-columns: 1fr; }
+  .sb-cards.col .sb-card b { display: inline; margin-right: 6px; }
+  .sb-cards.col .sb-card b i { margin-left: 4px; }
+  .sb-card { background: #fff; border: 1px solid var(--line); border-radius: 7px; padding: 6px 9px;
+             font-size: 10.5px; color: var(--ink-2); line-height: 1.5; }
+  .sb-card b { display: block; font-size: 11px; color: var(--ink); margin-bottom: 2px; }
+  .sb-card b i { font-style: normal; font-weight: 400; color: var(--ink-3); margin-left: 4px; font-size: 10px; }
+  .sb-card.sb-dsl { background: var(--blue-50); border-color: var(--blue-600); }
+  .sb-card.sb-dsl b { color: var(--blue-800); }
+  .sb-card.sb-dsl b i { background: var(--blue-600); color: #fff; border-radius: 4px; padding: 0 5px; }
+  .sb-card.sb-sql { background: var(--amber-50); border: 1px dashed var(--amber-600); }
+  .sb-card.sb-sql b { color: var(--amber-800); }
+  .sb-card.sb-sql b i { background: #fff; color: var(--amber-600); border: 1px solid var(--amber-600); border-radius: 4px; padding: 0 5px; }
+  .sb-card.sb-sql > b + b { display: block; margin-top: 3px; color: var(--amber-800); font-weight: 600; }
 
   /* 语义层 / 数仓层 四列 */
   .grid4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px 16px; align-items: stretch; }
@@ -227,18 +242,26 @@
     <div class="rail">智能体层<span class="en">AGENT</span></div>
     <div class="stage">
       <div class="agent-box">
-        <div class="flow">
-          <span class="step">理解问题</span><span class="arr">→</span>
-          <span class="step">明确意图</span><span class="arr">→</span>
-          <span class="step">搜索匹配（0 / 1 / 多）</span><span class="arr">→</span>
-          <span class="step">规则裁决选模型</span><span class="arr">→</span>
-          <span class="step">产出 DSL</span><span class="arr">→</span>
-          <span class="step">确定性编译 SQL</span>
-        </div>
-        <div class="adj-grid">
-          <div class="adj-card"><div class="t">命中 0 个<em>如实交底</em></div><div class="d">告知无模型覆盖，不硬猜；建议 SQL 旁路探索或先补建模</div></div>
-          <div class="adj-card"><div class="t">命中 1 个<em>直接选用</em></div><div class="d">候选唯一，无需裁决，直接进入 DSL 产出</div></div>
-          <div class="adj-card"><div class="t">命中多个<em>规则裁决</em></div><div class="d">同指标取最高层（ADS &gt; DWS &gt; DWD）；粒度指向明细落 DWD；仍歧义反问用户</div></div>
+        <div class="vflow">
+          <div class="vflow-row">
+            <span class="step">理解问题</span><span class="arr">→</span>
+            <span class="step">明确意图</span><span class="arr">→</span>
+            <span class="step-box">
+              <span class="sb-head">搜索匹配 <em>0 / 1 / 多个候选</em></span>
+              <span class="sb-cards col">
+                <span class="sb-card"><b>命中 0 个<i>如实交底</i></b>无覆盖不硬猜、不用 SQL 绕过；说明缺什么，引导先补建模</span>
+                <span class="sb-card"><b>命中 1 个<i>直接选用</i></b>候选唯一，无需裁决，直接进入 DSL 产出</span>
+                <span class="sb-card"><b>命中多个<i>规则裁决</i></b>同指标取最高层（ADS&gt;DWS&gt;DWD）；明细落 DWD；仍歧义反问</span>
+              </span>
+            </span><span class="arr">→</span>
+            <span class="step-box">
+              <span class="sb-head">产出查询 <em>二选一</em></span>
+              <span class="sb-cards col">
+                <span class="sb-card sb-dsl"><b>DSL → 确定性编译 SQL<i>默认路径</i></b>一切指标口径类查询：聚合 / 分组 / 筛选 / join / 时间维度；口径来自语义模型，可信可复用</span>
+                <span class="sb-card sb-sql"><b>原生 SQL<i>仅 DSL 表达不了的计算</i></b>窗口 / 漏斗 / 多步中间结果；sql_guard + 权限 + ROW_LIMIT + 审计，带「非治理口径」标注。<b>口径仍只能来自语义模型——只补「怎么算」，不自创「算什么」</b></span>
+              </span>
+            </span>
+          </div>
         </div>
       </div>
       <div class="grid4" style="margin-top:2px;">
@@ -253,6 +276,7 @@
   <div class="prow">
     <div class="rail">语义层<span class="en">SEMANTIC</span></div>
     <div class="stage" style="padding-top:8px;">
+      <div class="stage-box">
       <div class="grid4">
         <div class="model m-explo"><span class="lv">探索级</span><div class="name">ODS 语义模型</div><div class="sub">原始数据问题命中，结果带「口径未治理」标注</div></div>
         <div class="model m-cert"><span class="lv">认证级</span><div class="name">DWD 语义模型</div><div class="sub">带粒度声明，明细下钻换粒度重新编译</div></div>
@@ -265,12 +289,14 @@
         <div class="mount-arrow">↑<small>挂载 · 语义血缘</small></div>
         <div class="mount-arrow">↑<small>挂载 · 语义血缘</small></div>
       </div>
+      </div>
     </div>
   </div>
 
   <div class="prow">
     <div class="rail">数仓层<span class="en">WAREHOUSE</span></div>
     <div class="stage" style="padding-top:8px;">
+      <div class="stage-box">
       <div class="wh">
         <div class="layer" style="background:var(--gray-100);border-color:var(--ink-3);">
           <div class="name" style="color:var(--ink);">ODS 贴源层</div><div class="sub" style="color:var(--ink-2);">业务原始数据 · 全链溯源锚点</div>
@@ -282,12 +308,13 @@
         <div class="h-edge">⟶<small>口径收敛</small></div>
         <div class="layer"><div class="name">ADS 应用层</div><div class="sub">口径已收敛，面向应用</div></div>
       </div>
+      </div>
     </div>
   </div>
 
   <div class="bypass">
-    <span>⤷ SQL 旁路（drill-through）：原始行不走语义层，经受控 SQL 通道直达任意层</span>
-    <span>权限 · ROW_LIMIT · 审计兜底</span>
+    <span>问原始记录 / 贴源探索：走 ODS 探索级语义模型，不绕过语义层；明细下钻由 DWD 模型换粒度重新编译承接</span>
+    <span>全链路约束：权限 · ROW_LIMIT · 审计兜底</span>
   </div>
 </div>
 <div class="footnote">图中两种血缘：数仓层间的横向箭头 = <b>加工血缘</b>（表→表，发生在上游数仓平台）；数仓层到语义模型的纵向连线 = <b>语义血缘</b>（模型 ↔ 物理表/列，由挂载与编译关系显式化）——两段血缘在语义层接续。覆盖目标：全数据源 × 全层 × 全表都有对应语义模型——ODS 用生成基础模型渠道批量铺探索级（零人工），DWD/DWS/ADS 按主题域建认证级；探索级补齐字典/指标/关系/粒度并通过质量规则后升级认证级。</div>
@@ -308,7 +335,7 @@
     <tr><td>用户 @ 显式指定模型</td><td class="muted">使用指定模型（最高优先）</td></tr>
     <tr><td>问业务口径（“上月销售额”）</td><td class="muted">主题域内匹配认证级模型；同指标多层命中取最高层（ADS &gt; DWS &gt; DWD）</td></tr>
     <tr><td>问明细下钻（“某天某渠道”）</td><td class="muted">切到 DWD 明细模型换粒度重新编译</td></tr>
-    <tr><td>问原始记录 / 贴源探索</td><td class="muted">SQL 旁路或 ODS 探索级模型（结果带「口径未治理」标注）</td></tr>
+    <tr><td>问原始记录 / 贴源探索</td><td class="muted">ODS 探索级模型（结果带「口径未治理」标注）</td></tr>
     <tr><td>跨主题问题</td><td class="muted">多模型组合 / 多查询，主题域边界不拦正式口径消费</td></tr>
   </table>
 </div>
@@ -355,7 +382,6 @@
   <span>⟶ 横向 = 加工血缘（边属性：加工规则）</span>
   <span>↑ 纵向 = 语义血缘挂载（模型 ↔ 物理表/列）</span>
   <span>↓ = 问题路由（消费命中，不是血缘）</span>
-  <span>⤷ = SQL 旁路（drill-through 通道）</span>
 </div>
 <div class="footnote">平台落点：语义血缘的料已在 relationships / 物化产物里（模型→表→列→字典条目的完整映射），缺的是显式化——批次 3 治理视图把它做成可查询资产（字典条目反查引用模型、变更影响面分析）；加工血缘在上游数仓平台，不归我们生产。</div>
 
