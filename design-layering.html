@@ -137,6 +137,11 @@
   <div class="tier-label">消费层</div>
   <div class="question"><div class="q-box">用户问题</div></div>
   <div class="v-arrow" style="padding:6px 0;">↓ <small>自然语言提问</small></div>
+  <div class="tier-label">UI 交互层（展示）</div>
+  <div class="agent">
+    <div class="agent-box" style="font-size:12.5px;">会话问答（答案卡 / 澄清反问） · 结果展示（表格 / 图表 / 指标卡） · 工作区（文件目录 / 预览 / 下载） · 管理后台（模型 / 字典 / 导入导出）——只渲染不定义口径</div>
+  </div>
+  <div class="v-arrow" style="padding:6px 0;">↓ <small>会话消息 / 工作台操作</small></div>
   <div class="tier-label">智能体层（消费）</div>
   <div class="agent">
     <div class="agent-box">
@@ -212,7 +217,7 @@
   <div class="row"><div class="l">L1 数据源</div><div class="c">MySQL / Hive 等真实库表；数仓加工链路（ODS→DWD→DWS→ADS）的产物在此接入</div><div class="n">Source layer</div></div>
   <div class="row"><div class="l">L2 配置元数据</div><div class="c">表结构缓存、数据字典、表分组（分层标记 / 主题域）</div><div class="n">Metadata layer · Data Dictionary</div></div>
   <div class="row"><div class="l">L3 语义层</div><div class="c">业务模型 + 业务指标 + 业务知识；物化 runtime + 质量治理 + Ossie 导入导出</div><div class="n">Semantic / Metrics Layer（governed）</div></div>
-  <div class="row"><div class="l">L4 智能体使用</div><div class="c">会话问数：@ 引用 → 意图映射 → DSL → 确定性编译 SQL</div><div class="n">Consumption layer · Semantic Layer for AI</div></div>
+  <div class="row"><div class="l">L4 智能体使用</div><div class="c">UI 交互层（会话 / 结果展示 / 工作区 / 管理后台，只渲染不定义口径）＋ 会话问数：@ 引用 → 意图映射 → DSL → 确定性编译 SQL</div><div class="n">Consumption layer · Semantic Layer for AI</div></div>
 </div>
 <div class="footnote">两条正交的轴：数仓加工链路横向流动数据本体（把数据做对）；我们的四层栈纵向流动语义定义（把含义做对）。语义层只挂建模纪律完成的表：ODS 仅探索级挂载（不进认证级、不默认参与口径路由）、DWD 带粒度声明挂、DWS/ADS 主力。ODS 资产规格最高：全链唯一未加工的事实记录，加工层每层都可能引入偏差，争议数据最终回 ODS 仲裁、逻辑 bug 从 ODS 重放修复——资产重要性最高与口径可信度最低是两回事，前者要求永久保留（业内 bronze 层 immutable），后者才约束语义分级。</div>
 
