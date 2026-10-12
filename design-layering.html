@@ -42,6 +42,30 @@
   .adj-card .t { font-size: 12.5px; font-weight: 600; }
   .adj-card .t em { font-style: normal; color: var(--ink-3); font-weight: 400; margin-left: 4px; font-size: 11.5px; }
   .adj-card .d { font-size: 11.5px; color: var(--ink-2); margin-top: 3px; line-height: 1.55; }
+
+  /* ===== 血缘视图 ===== */
+  .lg-intro { font-size: 13px; color: var(--ink-2); margin: 10px 0 4px; }
+  .lg-intro b { color: var(--ink); }
+  .lg-chain { display: flex; align-items: stretch; justify-content: center; margin-top: 14px; }
+  .lg-node { background: var(--blue-50); border: 1px solid var(--blue-600); border-radius: 10px;
+             padding: 9px 12px; min-width: 118px; text-align: center; flex-shrink: 0; }
+  .lg-node .n { font-weight: 600; font-size: 13px; color: var(--blue-800); }
+  .lg-node .s { font-size: 10.5px; color: var(--blue-600); margin-top: 1px; }
+  .lg-node.src { background: var(--gray-100); border-color: var(--ink-3); }
+  .lg-node.src .n { color: var(--ink); } .lg-node.src .s { color: var(--ink-3); }
+  .lg-node.tl { background: var(--teal-50); border-color: var(--teal-600); }
+  .lg-node.tl .n { color: var(--teal-800); } .lg-node.tl .s { color: var(--teal-600); }
+  .lg-edge { display: flex; flex-direction: column; align-items: center; justify-content: center;
+             min-width: 138px; padding: 0 6px; flex-shrink: 0; }
+  .lg-edge .arrow { color: var(--ink-3); font-size: 15px; line-height: 1; }
+  .lg-edge .tag { background: #fff; border: 1px dashed var(--ink-3); border-radius: 8px;
+                  padding: 5px 9px; font-size: 10.5px; color: var(--ink-2); text-align: center;
+                  margin-top: 6px; line-height: 1.5; }
+  .lg-edge .tag b { color: var(--ink); font-size: 11.5px; display: block; }
+  .lg-legend { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 16px; padding: 10px 14px;
+               border: 1px solid var(--line); border-radius: 10px; background: var(--gray-50); }
+  .lg-legend span { font-size: 12px; color: var(--ink-2); }
+  .lg-legend b { color: var(--ink); }
   .group { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px 14px;
            margin-top: 14px; background: #fff; position: relative; }
   .chip { font-size: 12px; color: var(--ink-3); letter-spacing: 2px; margin: 0 0 8px; }
@@ -64,11 +88,17 @@
   .m-explo { background: var(--amber-50); border: 1px solid var(--amber-600); }
   .m-explo .name { color: var(--amber-800); } .m-explo .sub { color: var(--amber-600); }
   .layer { border-radius: 10px; padding: 10px 12px; min-height: 64px; background: var(--blue-50); border: 1px solid var(--blue-600); position: relative; }
-  .layers-grid .layer:not(:first-child)::before { content: "→"; position: absolute; left: -14px; top: 50%;
-    transform: translate(-50%, -50%); color: var(--ink-3); font-size: 14px; font-weight: 500; }
-  .rule-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-top: 5px;
-              font-size: 11px; color: var(--ink-2); }
-  .rule-row span:not(:first-child) { justify-self: start; transform: translateX(calc(-50% - 7px)); white-space: nowrap; }
+  .layers-grid { gap: 6px 92px; }
+  .layers-grid .layer:not(:first-child)::before {
+    content: attr(data-rule); position: absolute; top: calc(50% - 24px);
+    left: calc(-92px + 8px); width: calc(92px - 16px); text-align: center;
+    font-size: 10.5px; color: var(--ink-2); white-space: nowrap; }
+  .layers-grid .layer:not(:first-child)::after {
+    content: ""; position: absolute; top: 50%; margin-top: -0.75px;
+    left: calc(-92px + 12px); width: calc(92px - 24px); height: 9px;
+    background:
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='9'%3E%3Cpath d='M0 0 L8 4.5 L0 9 z' fill='%23888780'/%3E%3C/svg%3E") right center / 8px 9px no-repeat,
+      linear-gradient(var(--ink-3), var(--ink-3)) left center / calc(100% - 10px) 1.5px no-repeat; }
   .layer .name { font-size: 14px; font-weight: 600; color: var(--blue-800); }
   .layer .sub { font-size: 12px; color: var(--blue-600); margin-top: 2px; }
   .bypass { border-top: 1.5px dashed var(--ink-3); margin: 14px 4px 0; padding-top: 8px;
@@ -144,16 +174,10 @@
   <div class="group">
     <div class="chip">数仓层</div>
     <div class="grid4 layers-grid" style="margin-top:2px;">
-      <div class="layer"><div class="name">ODS 贴源层</div><div class="sub">未清洗 · 禁正式挂载</div></div>
-      <div class="layer"><div class="name">DWD 明细层</div><div class="sub">明细事实 + 一致维度</div></div>
-      <div class="layer"><div class="name">DWS 轻度汇总层</div><div class="sub">通用聚合，语义层底座</div></div>
-      <div class="layer"><div class="name">ADS 应用层</div><div class="sub">口径已收敛，面向应用</div></div>
-    </div>
-    <div class="rule-row">
-      <span></span>
-      <span>清洗 · 明细化</span>
-      <span>轻度汇总</span>
-      <span>口径收敛</span>
+      <div class="layer"><div class="name">ODS 贴源层</div><div class="sub">业务原始数据 · 全链溯源锚点</div></div>
+      <div class="layer" data-rule="清洗 · 明细化"><div class="name">DWD 明细层</div><div class="sub">明细事实 + 一致维度</div></div>
+      <div class="layer" data-rule="轻度汇总"><div class="name">DWS 轻度汇总层</div><div class="sub">通用聚合，语义层底座</div></div>
+      <div class="layer" data-rule="口径收敛"><div class="name">ADS 应用层</div><div class="sub">口径已收敛，面向应用</div></div>
     </div>
   </div>
   <div class="bypass">
@@ -190,7 +214,39 @@
   <div class="row"><div class="l">L3 语义层</div><div class="c">业务模型 + 业务指标 + 业务知识；物化 runtime + 质量治理 + Ossie 导入导出</div><div class="n">Semantic / Metrics Layer（governed）</div></div>
   <div class="row"><div class="l">L4 智能体使用</div><div class="c">会话问数：@ 引用 → 意图映射 → DSL → 确定性编译 SQL</div><div class="n">Consumption layer · Semantic Layer for AI</div></div>
 </div>
-<div class="footnote">两条正交的轴：数仓加工链路横向流动数据本体（把数据做对）；我们的四层栈纵向流动语义定义（把含义做对）。语义层只挂建模纪律完成的表：ODS 禁正式挂载、DWD 带粒度声明挂、DWS/ADS 主力。</div>
+<div class="footnote">两条正交的轴：数仓加工链路横向流动数据本体（把数据做对）；我们的四层栈纵向流动语义定义（把含义做对）。语义层只挂建模纪律完成的表：ODS 仅探索级挂载（不进认证级、不默认参与口径路由）、DWD 带粒度声明挂、DWS/ADS 主力。ODS 资产规格最高：全链唯一未加工的事实记录，加工层每层都可能引入偏差，争议数据最终回 ODS 仲裁、逻辑 bug 从 ODS 重放修复——资产重要性最高与口径可信度最低是两回事，前者要求永久保留（业内 bronze 层 immutable），后者才约束语义分级。</div>
+
+<h2>五、血缘视图（节点 + 边 + 边属性）</h2>
+<div class="lg-intro">血缘 = <b>节点</b>（表 / 列）+ <b>边</b>（来源去向）+ <b>边属性</b>（这条边上发生了什么：加工规则 / 口径定义）。主图里的两条箭头只画了"边"，这里把边属性显式展开——完整血缘资产 = 图 + 图上的注记。</div>
+
+<div class="lg-chain">
+  <div class="lg-node src"><div class="n">raw_orders</div><div class="s">ODS · 业务原样</div></div>
+  <div class="lg-edge"><div class="arrow">⟶</div><div class="tag"><b>清洗 · 明细化</b>去重 / 补齐 / 声明 grain</div></div>
+  <div class="lg-node"><div class="n">dwd_orders</div><div class="s">DWD · 明细事实</div></div>
+  <div class="lg-edge"><div class="arrow">⟶</div><div class="tag"><b>轻度汇总</b>按 user_id + day 聚合</div></div>
+  <div class="lg-node"><div class="n">dws_user_day</div><div class="s">DWS · 日汇总</div></div>
+  <div class="lg-edge"><div class="arrow">⟶</div><div class="tag"><b>口径收敛</b>面向应用宽表</div></div>
+  <div class="lg-node"><div class="n">ads_sales_wide</div><div class="s">ADS · 应用层</div></div>
+</div>
+<div class="lg-intro" style="margin-top:10px;">↑ <b>加工血缘（表级）</b>：归数仓建模侧所有，边属性 = 加工规则——影响分析向下追（改 raw_orders 波及谁）、根因追溯向上追（ADS 数字错了查哪层）。</div>
+
+<div class="lg-chain">
+  <div class="lg-node"><div class="n">dwd_orders.user_id</div><div class="s">物理列 · DWD</div></div>
+  <div class="lg-edge"><div class="arrow">⟶</div><div class="tag"><b>语义绑定</b>字段绑定 table.column ＋ 维度声明</div></div>
+  <div class="lg-node tl"><div class="n">维度：用户 ID</div><div class="s">DWD 语义模型内</div></div>
+  <div class="lg-edge"><div class="arrow">⟶</div><div class="tag"><b>聚合口径</b>COUNT(DISTINCT user_id)</div></div>
+  <div class="lg-node tl"><div class="n">指标：活跃用户数</div><div class="s">metrics · 对外口径</div></div>
+</div>
+<div class="lg-intro" style="margin-top:10px;">↑ <b>语义血缘（列级）</b>：归语义建模侧所有，边属性 = 口径定义——物理列 → 模型字段 → 指标的翻译链。两段血缘在语义层接续（加工血缘的终点 = 语义血缘的起点）。</div>
+
+<div class="lg-legend">
+  <span><b>主图图例</b></span>
+  <span>⟶ 横向 = 加工血缘（边属性：加工规则）</span>
+  <span>↑ 纵向 = 语义血缘挂载（模型 ↔ 物理表/列）</span>
+  <span>↓ = 问题路由（消费命中，不是血缘）</span>
+  <span>⤷ = SQL 旁路（drill-through 通道）</span>
+</div>
+<div class="footnote">平台落点：语义血缘的料已在 relationships / 物化产物里（模型→表→列→字典条目的完整映射），缺的是显式化——批次 3 治理视图把它做成可查询资产（字典条目反查引用模型、变更影响面分析）；加工血缘在上游数仓平台，不归我们生产。</div>
 
 </body>
 </html>
