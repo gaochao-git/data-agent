@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>chat-data 未来设计分层</title>
+<title>智能问数分层</title>
 <style>
   :root {
     --ink: #2c2c2a; --ink-2: #5f5e5a; --ink-3: #888780;
@@ -60,8 +60,8 @@
     font-size: 15px; font-weight: 650; box-shadow: 0 2px 6px rgba(153,60,29,.10);
   }
   .center { text-align: center; }
-  .v-arrow { text-align: center; color: var(--ink-3); font-size: 14px; line-height: 1.2; padding: 8px 0 2px; }
-  .v-arrow small { display: block; font-size: 11px; color: var(--ink-2); margin-top: 1px; }
+  .v-arrow { text-align: center; color: var(--ink-3); font-size: 14px; line-height: 1.2; padding: 6px 0 2px; }
+  .v-arrow small { display: inline; font-size: 11px; color: var(--ink-2); margin-left: 6px; }
 
   .ui-box, .agent-box {
     background: var(--gray-50); border: 1px solid var(--line); border-radius: 12px;
@@ -98,10 +98,10 @@
 
   /* 语义层 / 数仓层 四列 */
   .grid4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px 16px; align-items: stretch; }
-  .route-arrow { text-align: center; color: var(--ink-3); font-size: 14px; padding: 6px 0 0; line-height: 1.15; }
-  .route-arrow small { display: block; font-size: 11px; color: var(--ink-2); margin-top: 1px; }
+  .route-arrow { text-align: center; color: var(--ink-3); font-size: 14px; padding: 4px 0 0; line-height: 1.15; }
+  .route-arrow small { display: inline; font-size: 11px; color: var(--ink-2); margin-left: 6px; }
   .mount-arrow { text-align: center; color: var(--teal-600); font-size: 15px; padding: 0 0 3px; line-height: 1.15; }
-  .mount-arrow small { display: block; font-size: 10.5px; color: var(--teal-600); margin-top: 1px; }
+  .mount-arrow small { display: inline; font-size: 10.5px; color: var(--teal-600); margin-left: 5px; }
   .wh-arrows { display: grid; grid-template-columns: 1fr 86px 1fr 86px 1fr 86px 1fr; align-items: end; margin-bottom: 2px; }
 
   /* 语义层内两个子框：语义模型 / 业务上下文 */
@@ -223,12 +223,12 @@
 <body>
 
 <header>
-  <h1>chat-data 未来设计分层</h1>
+  <h1>智能问数分层</h1>
   <div class="meta">2026-10-11 架构讨论定稿 · data-agent / chat-data 语义建模体系</div>
   <div class="slogan">数仓建模把<b>数据</b>做对（可信的表），语义建模把<b>含义</b>做对（可信的答案），两条链在<b>智能体消费</b>处汇合。</div>
 </header>
 
-<h2><span class="no">1</span>主分层：用户问题 → 语义模型 → 数仓分层</h2>
+<h2><span class="no">1</span>主分层：用户问题 → UI 展示 → 智能体 → 语义模型 → 数仓分层</h2>
 <div class="board">
 
   <div class="prow">
