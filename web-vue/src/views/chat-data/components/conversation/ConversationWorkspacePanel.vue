@@ -22,6 +22,7 @@ import ChartSpecRenderer from '../ChartSpecRenderer.vue'
 import MarkdownFilePreview from './MarkdownFilePreview.vue'
 import HtmlPagePreview from './HtmlPagePreview.vue'
 import CodeFilePreview from './CodeFilePreview.vue'
+import MermaidFilePreview from './MermaidFilePreview.vue'
 import ToolCallDetailPanel from './ToolCallDetailPanel.vue'
 import {
   deleteConversationWorkspaceFile,
@@ -453,6 +454,7 @@ const selectedConsoleIsPdf = computed(() => selectedConsoleFileExt.value === 'pd
 const selectedConsoleIsOfficeFile = computed(() => OFFICE_HTML_PREVIEW_EXTENSIONS.has(selectedConsoleFileExt.value))
 const selectedConsoleIsImage = computed(() => IMAGE_PREVIEW_EXTENSIONS.has(selectedConsoleFileExt.value))
 const selectedConsoleIsMarkdown = computed(() => selectedConsoleFileExt.value === 'md')
+const selectedConsoleIsMermaid = computed(() => selectedConsoleFileExt.value === 'mmd')
 const selectedConsoleIsYaml = computed(() => ['yaml', 'yml'].includes(selectedConsoleFileExt.value))
 const selectedConsoleIsHtml = computed(() => selectedConsoleFileExt.value === 'html' || selectedConsoleFileExt.value === 'htm')
 // HTML 渲染必须用原始文本：展示层的路径改写会破坏内联 JSON 数据与代码。仅源码视图走替换后的展示文案。
@@ -841,6 +843,7 @@ watch(
     Boolean(selectedConsoleChartSpec.value),
     Boolean(hasSelectedConsoleTable.value),
     selectedConsoleIsMarkdown.value,
+    selectedConsoleIsMermaid.value,
     selectedConsoleIsHtml.value,
     selectedConsoleIsYaml.value,
   ] as const,
@@ -853,7 +856,7 @@ watch(
       consoleFilePreviewMode.value = 'table'
       return
     }
-    if (selectedConsoleIsMarkdown.value || selectedConsoleIsHtml.value) {
+    if (selectedConsoleIsMarkdown.value || selectedConsoleIsMermaid.value || selectedConsoleIsHtml.value) {
       consoleFilePreviewMode.value = 'render'
       return
     }
@@ -1112,7 +1115,7 @@ defineExpose({
             {{ selectedConsoleFile?.displayPath }}
           </div>
           <div class="flex shrink-0 items-center gap-2">
-            <div v-if="selectedConsoleFile && (selectedConsoleChartSpec || hasSelectedConsoleTable || selectedConsoleIsMarkdown || selectedConsoleIsHtml)" class="flex rounded-md border border-slate-200 bg-white p-0.5">
+            <div v-if="selectedConsoleFile && (selectedConsoleChartSpec || hasSelectedConsoleTable || selectedConsoleIsMarkdown || selectedConsoleIsMermaid || selectedConsoleIsHtml)" class="flex rounded-md border border-slate-200 bg-white p-0.5">
               <button
                 v-if="selectedConsoleChartSpec"
                 type="button"
@@ -1136,7 +1139,7 @@ defineExpose({
                 表格
               </button>
               <button
-                v-if="selectedConsoleIsMarkdown || selectedConsoleIsHtml"
+                v-if="selectedConsoleIsMarkdown || selectedConsoleIsMermaid || selectedConsoleIsHtml"
                 type="button"
                 :class="[
                   'h-6 rounded px-2 text-[10px] transition-colors',
@@ -1144,7 +1147,7 @@ defineExpose({
                 ]"
                 @click="consoleFilePreviewMode = 'render'"
               >
-                预览
+                {{ selectedConsoleIsMermaid ? '图' : '预览' }}
               </button>
               <button
                 type="button"
@@ -1228,6 +1231,11 @@ defineExpose({
           />
           <MarkdownFilePreview
             v-else-if="selectedConsoleIsMarkdown && consoleFilePreviewMode === 'render'"
+            :content="selectedConsoleFileText"
+            :class="workspaceFilePreviewHeightClass"
+          />
+          <MermaidFilePreview
+            v-else-if="selectedConsoleIsMermaid && consoleFilePreviewMode === 'render'"
             :content="selectedConsoleFileText"
             :class="workspaceFilePreviewHeightClass"
           />

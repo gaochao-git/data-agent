@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>mermaid native layout test</title>
+  <link rel="stylesheet" href="/src/views/chat-data/styles/markdown.css">
+  <style>
+    body { margin: 0; background: #f1f5f9; }
+    #panel { height: 46vh; padding: 16px; box-sizing: border-box; }
+    #host { height: 100%; }
+  </style>
+</head>
+<body>
+  <div id="panel"><div id="host" class="mermaid-file-preview-host"></div></div>
+  <script type="module">
+    import { renderMermaidSourceBlock } from '/src/views/chat-data/utils/mermaid.ts'
+    await renderMermaidSourceBlock(document.getElementById('host'), `flowchart TD
+    A[用户下单] --> B{库存是否充足?}
+    B -- 是 --> C[生成订单]
+    B -- 否 --> D[提示缺货]
+    D --> E[建议补货或换货]
+    E --> A
+    C --> F{支付是否成功?}
+    F -- 是 --> G[锁定库存]
+    F -- 否 --> H[订单挂起]
+    H --> I{30分钟内完成支付?}
+    I -- 是 --> G
+    I -- 否 --> J[释放库存并取消订单]
+    G --> K[仓库拣货打包]
+    K --> L[物流配送]
+    L --> M{用户签收?}
+    M -- 是 --> N[确认收货]
+    M -- 否 --> O[联系物流核实]
+    O --> M
+    N --> P{7天内申请售后?}
+    P -- 是 --> Q[进入退换货流程]
+    P -- 否 --> R[订单完成]
+    Q --> S[退款/换货处理]
+    S --> R`)
+  </script>
+</body>
+</html>

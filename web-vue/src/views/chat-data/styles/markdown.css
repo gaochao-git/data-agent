@@ -91,10 +91,14 @@
  * 全局而非 scoped：会话正文、子智能体中间文本、文件预览、技能预览
  * 四类消费位共用一份定义（与 .conversation-markdown 同理）。
  */
+/*
+ * 内联展示（消息流 / 文件预览）走原生布局：svg 宽度自适应容器、高度按比例，
+ * 放不下就滚动。不要再把这里改成 transform 画布模型——试过，定位 bug 一串。
+ */
 .mermaid-diagram {
-  display: flex;
+  display: block;
   max-width: 100%;
-  /* 竖向长图不给消息流无限撑高：超出上限双向滚动，全屏查看器里再看整图 */
+  /* 会话消息里不给无限高度：超出上限滚动查看（要看全图/细节点全屏） */
   max-height: 420px;
   margin: 8px 0;
   padding: 12px;
@@ -106,10 +110,63 @@
 }
 
 .mermaid-diagram svg {
-  /* 居中走 margin:auto：justify-content:center 在子项溢出时左侧滚不到（缩放场景） */
-  margin: auto;
-  max-width: 100%;
-  height: auto;
+  /* mermaid.ts 放开为 width:100%（内联 max-width 锁天然宽度会让图不跟随容器）；
+     height:auto 按比例撑开，超出容器由 .mermaid-diagram 滚动 */
+  display: block;
+  margin: 0 auto;
+}
+
+/* 图/源码切换：源码视图与图表互斥显示（切换按钮控制 wrap 上的类） */
+.mermaid-source {
+  display: none;
+  max-height: 420px;
+  margin: 8px 0;
+  padding: 12px;
+  overflow: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.mermaid-source-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre;
+}
+
+.mermaid-wrap.mermaid-show-source .mermaid-source {
+  display: block;
+}
+
+.mermaid-wrap.mermaid-show-source .mermaid-diagram {
+  display: none;
+}
+
+/* 工作区文件预览上下文：高度由面板容器决定（非全屏跟随面板、全屏铺满），
+   图按宽度自适应后纵向溢出走滚动——不做等比缩放，避免缩到不可读 */
+.mermaid-file-preview-host {
+  height: 100%;
+}
+
+.mermaid-file-preview-host .mermaid-wrap {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.mermaid-file-preview-host .mermaid-diagram {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+  margin: 0;
+}
+
+.mermaid-file-preview-host .mermaid-source {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+  margin: 0;
 }
 
 /* 图表外框与悬浮工具条：工具条挂在无 overflow 的外框上，避免随容器滚动 */
@@ -155,16 +212,14 @@
   z-index: var(--z-fullscreen-layer);
   display: flex;
   flex-direction: column;
-  background: rgba(15, 23, 42, 0.82);
+  /* 不透明深底：全屏即独立画布，不透出底层页面（半透明会显得像渲染缺陷） */
+  background: #0f172a;
 }
 
 .mermaid-viewer-body {
   position: relative;
   flex: 1;
   overflow: hidden;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   cursor: grab;
   user-select: none;
   touch-action: none;
@@ -174,9 +229,14 @@
   cursor: grabbing;
 }
 
+/* 画布定位完全交给 JS（translate+scale，origin 0 0）：不能靠 flex 居中——
+   flex 居中 + JS 平移会双重偏移，图被推出视口 */
 .mermaid-viewer-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
   line-height: 0;
-  transform-origin: center center;
+  transform-origin: 0 0;
   will-change: transform;
 }
 
@@ -186,33 +246,41 @@
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
 }
 
+/* 工具条与消息内图表同布局：右上角悬浮，不占布局行（画布整幅可用） */
 .mermaid-viewer-bar {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 1;
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 10px;
+  gap: 6px;
 }
 
 .mermaid-viewer-zoom {
-  min-width: 48px;
+  min-width: 44px;
+  padding: 2px 8px;
   text-align: center;
-  font-size: 12px;
-  color: #e2e8f0;
+  font-size: 11px;
+  line-height: 1.7;
+  color: #475569;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
   font-variant-numeric: tabular-nums;
 }
 
 .mermaid-viewer-btn {
   cursor: pointer;
-  padding: 4px 14px;
-  font-size: 12px;
-  line-height: 1.6;
-  color: #e2e8f0;
-  background: rgba(255, 255, 255, 0.12);
-  border: 1px solid rgba(255, 255, 255, 0.25);
+  padding: 2px 10px;
+  font-size: 11px;
+  line-height: 1.7;
+  color: #334155;
+  background: #fff;
+  border: 1px solid #e2e8f0;
   border-radius: 6px;
 }
 
 .mermaid-viewer-btn:hover {
-  background: rgba(255, 255, 255, 0.22);
+  background: #f8fafc;
 }
