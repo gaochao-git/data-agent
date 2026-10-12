@@ -6,13 +6,12 @@
  * 出现 mermaid 代码块时才动态加载。解析或渲染失败（含流式期间语法不完整）
  * 一律保持原代码块展示，不放大错误。
  *
- * 展示约定（刻意保持简单，不要再引入 transform 画布模型）：
- * - 内联展示（会话消息、文件预览）= 原生布局：svg 宽度自适应容器、高度按比例，
- *   超出容器走 overflow 滚动。曾经的版本用 translate/scale 画布模型做「整图适配 +
- *   拖拽」，代价是一连串定位 bug（双重偏移、克隆残留、居中误算、flex 收缩），
- *   收益抵不过浏览器原生滚动。
- * - 全屏查看器 = 唯一保留交互（拖拽平移、滚轮/按钮缩放、复制源码）的一层，
- *   在那儿才有足够空间做这些事。
+ * 展示约定（刻意保持简单，内联不要再引入 transform 画布模型或 JS 缩放/拖动）：
+ * - 内联展示（会话消息、文件预览）= 整图可见：容器按图的宽高比定尺寸并显示全貌，
+ *   放大/缩小/拖动不在这里做。曾经的两版（transform 画布模型、JS 缩放 + 原生滚动）
+ *   都留下了成串的定位/互通 bug，收益远低于这份 CSS-only 的写法。
+ * - 全屏查看器 = 唯一保留交互的一层：拖拽平移、滚轮/按钮缩放、复制源码，在那儿才有
+ *   足够空间做这些事。
  *
  * 安全：mermaid 全程 securityLevel: 'strict'（模型输出不可信，禁交互与外部
  * 内容），svg 为 mermaid 在该模式下产出的受控结果。
@@ -313,16 +312,22 @@ const createToolButton = (text: string, datasetKey: 'mermaidCopy' | 'mermaidTogg
 }
 
 /**
- * mermaid 产出的 svg 自带内联 `style="max-width: NNNpx"`（锁死天然宽度），容器更宽时
- * 图不跟随、两侧留大片空白。这里放开为「宽度自适应容器、高度按比例」，放不下的部分
- * 交给容器 overflow 滚动——浏览器原生行为，无需 JS 参与换算。
+ * 内联展示：整图可见（全貌），不裁剪、不滚动、父容器也不被撑爆（见 markdown.css）。
+ * mermaid 产出的 svg 自带内联 `max-width`（锁死天然宽度）且没有内在像素尺寸——
+ * 交给 CSS 收缩会塌成 0 宽（实测）。这里只做两件事：摘掉内联 max-width，
+ * 把 viewBox 的宽高比写成 CSS 变量 --mermaid-ratio（见 markdown.css），
+ * 容器据此定尺寸、svg 用 object-fit:contain 完整铺入。比例与数值都不在 JS 里算，窗口/面板变化自动跟随。
+ * 要放大缩小拖动就点开全屏查看器——交互只在那一层。
  */
-const relaxSvgSizing = (diagram: HTMLElement) => {
+const applyInlineFit = (diagram: HTMLElement) => {
   const svg = diagram.querySelector(':scope > svg')
   if (!(svg instanceof SVGSVGElement)) return
-  svg.style.maxWidth = '100%'
-  svg.style.width = '100%'
-  svg.style.height = 'auto'
+  const { width, height } = svg.viewBox.baseVal
+  // 宽高比交给 CSS：画布铺满容器宽度、高度按比例推导（见 markdown.css 的 --mermaid-ratio）。
+  // 用「宽 / 高」原样字符串而不是相除：aspect-ratio 原生语法，无精度损失
+  if (width > 0 && height > 0) diagram.style.setProperty('--mermaid-ratio', `${width} / ${height}`)
+  // 内联样式优先级高于 CSS：不清掉它会压住 .mermaid-diagram svg 的 width/height: 100%
+  svg.style.removeProperty('max-width')
 }
 
 const buildDiagramBlock = (svg: string, source: string): HTMLElement => {
@@ -339,7 +344,7 @@ const buildDiagramBlock = (svg: string, source: string): HTMLElement => {
   const diagram = document.createElement('div')
   diagram.className = 'mermaid-diagram'
   diagram.innerHTML = svg
-  relaxSvgSizing(diagram)
+  applyInlineFit(diagram)
   // 源码视图：与图表互斥显示（切换按钮控制）。code 不用 language-mermaid 类，
   // 避免 renderMermaidBlocks 的代码块选择器把源码视图再次替换成图表。
   const sourceView = document.createElement('pre')
@@ -363,7 +368,9 @@ const ensureViewerDelegation = () => {
   const onDocumentClick = (event: MouseEvent) => {
     if (viewer) return
     const target = event.target
-    if (!(target instanceof HTMLElement)) return
+    // 必须是 Element 而不是 HTMLElement：点在 svg 图形上时 target 是 SVG 元素，
+    // 用 HTMLElement 判会因为「不是 HTML」而早退，表现为点图没反应
+    if (!(target instanceof Element)) return
     const copyTrigger = target.closest<HTMLElement>('[data-mermaid-copy]')
     if (copyTrigger) {
       event.preventDefault()

@@ -92,17 +92,31 @@
  * 四类消费位共用一份定义（与 .conversation-markdown 同理）。
  */
 /*
- * 内联展示（消息流 / 文件预览）走原生布局：svg 宽度自适应容器、高度按比例，
- * 放不下就滚动。不要再把这里改成 transform 画布模型——试过，定位 bug 一串。
+ * 内联展示（消息流 / 文件预览）= 显示全貌：画布铺满容器宽度，高度按图的宽高比从
+ * 宽度推导、再被 --mermaid-max-height 夹住（消息流 420px，预览上下文覆盖为面板
+ * 高度的 100%）。svg 用 object-fit:contain 完整铺入——不裁剪、不滚动，宽图的框会
+ * 自然变矮所以不留纵向空白，长竖图停在上限、图横向居中。
+ * 两个坑（都实测过，别再试）：① SVG 没有内在像素尺寸，别写 width:fit-content 让
+ * 容器去缩包裹子，实测塌成 0×0，必须靠 aspect-ratio 定尺寸；② mermaid 的内联
+ * max-width 优先级压过 CSS，mermaid.ts 渲染时会先摘掉它。
+ * 放大缩小拖动只在全屏查看器里（见 mermaid.ts），这里不做。
  */
 .mermaid-diagram {
   display: block;
-  max-width: 100%;
-  /* 会话消息里不给无限高度：超出上限滚动查看（要看全图/细节点全屏） */
-  max-height: 420px;
+  box-sizing: border-box;
+  /* 画布宽度铺满容器（对话也好预览也好，宽度一致，视觉更整齐） */
+  width: 100%;
+  /* 图的宽高比，mermaid.ts 渲染时内联写入 */
+  --mermaid-ratio: 1;
+  /* 高度上限：会话消息里不让长竖图把消息流撑成几千像素（预览上下文覆盖为面板高度） */
+  --mermaid-max-height: 420px;
+  /* 高度按图比例从宽度推导，再被上限夹住：宽图的框自然变矮（不留纵向空白），
+     长竖图的框停在上限、图横向居中（完整可见）。与宽度铺满配合，两个方向都不溢出 */
+  aspect-ratio: var(--mermaid-ratio);
+  max-height: var(--mermaid-max-height);
   margin: 8px 0;
   padding: 12px;
-  overflow: auto;
+  overflow: hidden;
   border: 1px solid #e2e8f0;
   border-radius: 8px;
   background: #fff;
@@ -110,10 +124,11 @@
 }
 
 .mermaid-diagram svg {
-  /* mermaid.ts 放开为 width:100%（内联 max-width 锁天然宽度会让图不跟随容器）；
-     height:auto 按比例撑开，超出容器由 .mermaid-diagram 滚动 */
   display: block;
-  margin: 0 auto;
+  width: 100%;
+  height: 100%;
+  /* 整图完整可见且不形变（等价于图片的「适应」，纯浏览器行为） */
+  object-fit: contain;
 }
 
 /* 图/源码切换：源码视图与图表互斥显示（切换按钮控制 wrap 上的类） */
@@ -143,8 +158,8 @@
   display: none;
 }
 
-/* 工作区文件预览上下文：高度由面板容器决定（非全屏跟随面板、全屏铺满），
-   图按宽度自适应后纵向溢出走滚动——不做等比缩放，避免缩到不可读 */
+/* 工作区文件预览上下文：高度跟随面板（非全屏 46vh、全屏 calc(100vh-48px)），
+   图仍然是整图可见并按比例居中 */
 .mermaid-file-preview-host {
   height: 100%;
 }
@@ -152,13 +167,14 @@
 .mermaid-file-preview-host .mermaid-wrap {
   display: flex;
   flex-direction: column;
+  align-items: center;
+  justify-content: center;
   height: 100%;
 }
 
 .mermaid-file-preview-host .mermaid-diagram {
-  flex: 1;
-  min-height: 0;
-  max-height: none;
+  /* 跟着面板高度（非全屏 46vh、全屏 calc(100vh-48px)） */
+  --mermaid-max-height: 100%;
   margin: 0;
 }
 
