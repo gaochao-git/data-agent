@@ -108,19 +108,17 @@
   .sub-frame { position: relative; border: 1px solid var(--line); border-radius: 10px; padding: 13px 12px 9px; }
   .sf-label { position: absolute; top: -8px; left: 12px; background: #fff; padding: 0 8px;
     font-size: 10.5px; letter-spacing: 1px; color: var(--ink-3); }
-  .compose-arrow { text-align: center; color: var(--blue-600); font-size: 14px; line-height: 1.15; padding: 3px 0; }
-  .compose-arrow small { display: block; font-size: 10.5px; color: var(--ink-2); }
+  .gate-bar { display: flex; align-items: center; justify-content: center; gap: 6px; flex-wrap: wrap;
+    border: 1px dashed var(--amber-600); background: var(--amber-50); border-radius: 8px;
+    padding: 5px 12px; font-size: 11px; color: var(--ink-2); margin: 6px 0; }
+  .gate-bar b { color: var(--amber-800); font-size: 12px; }
+  .gate-bar .up { color: var(--blue-600); font-weight: 700; font-size: 13px; }
 
   /* 语义模型四要素（融入语义层行内） */
   .four-strip { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px 14px;
     margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--line); }
   .fs { font-size: 11px; color: var(--ink-2); line-height: 1.45; }
-  .fs b { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--ink); }
-  .fs b::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--dot, var(--ink-3)); }
-  .fs small { display: block; color: var(--ink-3); margin-top: 1px; }
-  .fs .gate { display: block; margin-top: 5px; padding-top: 5px; border-top: 1px dashed var(--line); color: var(--ink-2); }
-  .fs .gate b { font-size: 11px; gap: 0; }
-  .fs .gate b::before { display: none; }
+  .fs b { font-size: 12px; color: var(--dot, var(--ink)); margin-right: 4px; }
 
   .model { border-radius: 10px; padding: 8px 12px; min-height: 56px; position: relative; }
   .model .name { font-size: 14px; font-weight: 650; }
@@ -297,16 +295,15 @@
           <div class="model m-cert"><span class="lv">认证级</span><div class="name">ADS 语义模型</div><div class="sub">对外口径，同指标多层命中取最高层</div></div>
         </div>
       </div>
-      <div class="compose-arrow">↑<small>四要素构成 · 注入语义模型</small></div>
+      <div class="gate-bar"><span class="up">↑</span><b>质量闸门</b><span>check_yaml 工具 / 导入 preview / 管理端 quality-check 三入口同一套规则（单模型 25 条 + 跨模型 3 条）；通过后构成语义模型，探索级补齐四要素并过关后升级认证级</span></div>
       <div class="sub-frame">
         <span class="sf-label">业务上下文</span>
-        <div class="four-strip">
-        <span class="fs" style="--dot:var(--blue-600);"><b>业务元数据</b>枚举 / 同义词 / 单位、列与表的业务描述<small>落点：L2 数据字典（权威）＋模型内绑定副本</small></span>
-        <span class="fs" style="--dot:var(--teal-600);"><b>业务模型</b>表选择、字段绑定、维度声明、关联（join / 自关联别名）<small>落点：datasets + relationships，驱动 join 编译</small></span>
-        <span class="fs" style="--dot:var(--coral-600);"><b>业务指标</b>原子 / 派生 / 复合指标口径<small>落点：metrics，DSL → 确定性编译 SQL</small></span>
-        <span class="fs" style="--dot:var(--amber-600);"><b>业务知识</b>模型用途说明、别名、示例问题<small>落点：ai_context / business_notes，兼作路由依据</small></span>
+        <div class="four-strip" style="margin-top:0;">
+        <span class="fs" style="--dot:var(--blue-600);"><b>业务元数据</b>枚举 / 同义词 / 单位、列与表的业务描述</span>
+        <span class="fs" style="--dot:var(--teal-600);"><b>业务模型</b>表选择、字段绑定、维度声明、关联（join / 自关联别名）</span>
+        <span class="fs" style="--dot:var(--coral-600);"><b>业务指标</b>原子 / 派生 / 复合指标口径，DSL → 确定性编译 SQL</span>
+        <span class="fs" style="--dot:var(--amber-600);"><b>业务知识</b>模型用途说明、别名、示例问题，兼作路由依据</span>
       </div>
-      <div class="fs gate"><b>质量闸门</b>check_yaml 工具 / 导入 preview / 管理端 quality-check 三入口同一套规则（单模型 25 条 + 跨模型 3 条）；探索级补齐四要素并过关后升级认证级</div>
       </div>
     </div>
     </div>
