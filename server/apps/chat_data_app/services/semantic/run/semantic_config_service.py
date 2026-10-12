@@ -976,6 +976,16 @@ async def prepare_ossie_import_models(
     return imports, None
 
 
+def _dimension_order_index(config: dict) -> dict[str, int]:
+    """单个库内配置的 (table.column) -> 首现顺序索引（跳过缺 table/column 的脏条目）。"""
+    existing_index: dict[str, int] = {}
+    for entry in config.get("dimensions") or []:
+        if not isinstance(entry, dict) or not entry.get("table") or not entry.get("column"):
+            continue
+        existing_index.setdefault(f"{entry.get('table')}.{entry.get('column')}", len(existing_index))
+    return existing_index
+
+
 def _restore_existing_dimension_order(
     imports: list[OssieSemanticModelImport],
     existing_configs: Any,
@@ -991,14 +1001,8 @@ def _restore_existing_dimension_order(
     order_by_name: dict[str, dict[str, int]] = {}
     for config in existing_configs or []:
         name = str((config or {}).get("name") or "").strip()
-        if not name or name in order_by_name:
-            continue
-        existing_index: dict[str, int] = {}
-        for entry in config.get("dimensions") or []:
-            if not isinstance(entry, dict) or not entry.get("table") or not entry.get("column"):
-                continue
-            existing_index.setdefault(f"{entry.get('table')}.{entry.get('column')}", len(existing_index))
-        order_by_name[name] = existing_index
+        if name and name not in order_by_name:
+            order_by_name[name] = _dimension_order_index(config)
     for item in imports:
         order_index = order_by_name.get(item.name)
         if not order_index or not item.dimensions:
