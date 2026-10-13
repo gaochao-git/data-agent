@@ -4,6 +4,8 @@
  * 支持表格、卡片、图表多种展示模式
  */
 import { ref, computed, watch, useAttrs } from 'vue'
+import { format as formatSQL } from 'sql-formatter'
+import { ElMessage } from 'element-plus'
 import ResizableTable from './ResizableTable.vue'
 import MetricCards from './MetricCards.vue'
 import ResultChart from './ResultChart.vue'
@@ -28,6 +30,10 @@ interface SemanticParams {
     value?: unknown
     [key: string]: unknown
   }>
+  having?: Array<Record<string, unknown>>
+  order_by?: Array<Record<string, unknown>>
+  limit?: number
+  offset?: number
 }
 
 interface VisualizationConfig {
@@ -242,6 +248,34 @@ const queryModeTitle = computed(() => {
   if (mode === 'sql' || mode === 'nl2sql') return 'SQL 模式'
   return ''
 })
+
+// 查询详情弹窗：DSL 模式展示 DSL + 编译 SQL，SQL 模式仅展示 SQL
+const showQueryDetail = ref(false)
+const isDslQueryMode = computed(() => {
+  const mode = String(activeResult.value?.query_mode || '').trim().toLowerCase()
+  return mode === 'dsl' || mode === 'dsl2sql'
+})
+const queryDetailSql = computed(() => activeResult.value?.sql || props.sql || '')
+const queryDetailDsl = computed(() => (isDslQueryMode.value ? props.semanticParams : null))
+const hasQueryDetail = computed(() => Boolean(queryDetailSql.value || queryDetailDsl.value))
+const formattedDetailSql = computed(() => {
+  const sql = queryDetailSql.value
+  if (!sql) return ''
+  try {
+    return formatSQL(sql, { language: 'mysql', tabWidth: 2, keywordCase: 'upper' })
+  } catch {
+    return sql
+  }
+})
+const formattedDetailDsl = computed(() => JSON.stringify(queryDetailDsl.value, null, 2))
+
+const copyDetailText = (text: string, message: string) => {
+  navigator.clipboard.writeText(text).then(() => {
+    ElMessage.success(message)
+  }).catch(() => {
+    ElMessage.error('复制失败')
+  })
+}
 
 const semanticConfigLabel = computed(() => {
   const result = activeResult.value
@@ -490,8 +524,18 @@ const getDimensionKey = (dim: string | { name: string }): string => {
           >
             {{ semanticConfigLabel }}
           </span>
+          <button
+            v-if="queryModeBadge && hasQueryDetail"
+            type="button"
+            data-testid="query-mode-badge"
+            class="shrink-0 whitespace-nowrap text-xs text-slate-500 px-1.5 py-0.5 bg-black/[0.04] rounded cursor-pointer transition-colors duration-150 hover:bg-black/[0.08] hover:text-[#1f82d9]"
+            :title="`${queryModeTitle}，点击查看${queryDetailDsl ? ' DSL 与 SQL' : ' SQL'}`"
+            @click="showQueryDetail = true"
+          >
+            {{ queryModeBadge }}
+          </button>
           <span
-            v-if="queryModeBadge"
+            v-else-if="queryModeBadge"
             class="shrink-0 whitespace-nowrap text-xs text-slate-500 px-1.5 py-0.5 bg-black/[0.04] rounded"
             :title="queryModeTitle"
           >
@@ -647,6 +691,50 @@ const getDimensionKey = (dim: string | { name: string }): string => {
         :fill-chart-height="true"
         :initial-view-mode="viewMode"
       />
+    </div>
+  </el-dialog>
+
+  <!-- 查询详情：DSL 模式展示 DSL + 编译 SQL，SQL 模式仅展示 SQL -->
+  <el-dialog
+    v-model="showQueryDetail"
+    width="680px"
+    top="10vh"
+    append-to-body
+    :z-index="Z_INDEX.DIALOG_NESTED"
+    title="查询详情"
+    class="query-detail-dialog"
+  >
+    <div class="flex flex-col gap-4">
+      <div v-if="queryDetailDsl">
+        <div class="mb-1.5 flex items-center justify-between gap-2">
+          <span class="text-xs font-semibold text-slate-600">DSL（语义层查询条件）</span>
+          <button
+            type="button"
+            data-testid="copy-query-dsl"
+            class="flex h-6 items-center gap-1 rounded border border-black/10 bg-white px-2 text-[11px] text-gray-600 cursor-pointer transition-colors duration-150 hover:border-[#1f82d9]/40 hover:text-[#1f82d9]"
+            @click="copyDetailText(formattedDetailDsl, '已复制 DSL')"
+          >
+            <i class="fa-regular fa-copy text-[10px]"></i>
+            <span>复制 DSL</span>
+          </button>
+        </div>
+        <pre class="max-h-[320px] overflow-auto whitespace-pre-wrap break-words rounded-md border border-black/10 bg-slate-50 px-3 py-2 font-mono text-xs leading-5 text-slate-800">{{ formattedDetailDsl }}</pre>
+      </div>
+      <div v-if="queryDetailSql">
+        <div class="mb-1.5 flex items-center justify-between gap-2">
+          <span class="text-xs font-semibold text-slate-600">SQL{{ queryDetailDsl ? '（由 DSL 编译生成）' : '' }}</span>
+          <button
+            type="button"
+            data-testid="copy-query-sql"
+            class="flex h-6 items-center gap-1 rounded border border-black/10 bg-white px-2 text-[11px] text-gray-600 cursor-pointer transition-colors duration-150 hover:border-[#1f82d9]/40 hover:text-[#1f82d9]"
+            @click="copyDetailText(formattedDetailSql, '已复制 SQL')"
+          >
+            <i class="fa-regular fa-copy text-[10px]"></i>
+            <span>复制 SQL</span>
+          </button>
+        </div>
+        <pre class="max-h-[320px] overflow-auto whitespace-pre-wrap break-words rounded-md border border-black/10 bg-slate-50 px-3 py-2 font-mono text-xs leading-5 text-slate-800">{{ formattedDetailSql }}</pre>
+      </div>
     </div>
   </el-dialog>
 </template>
