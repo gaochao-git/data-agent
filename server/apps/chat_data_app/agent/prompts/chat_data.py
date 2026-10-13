@@ -88,7 +88,7 @@ ENVIRONMENT_BLOCK = """## 环境
 /mnt/
 ├── user-data/
 │   ├── workspace/   中间文件写入该工作区（可读写，脚本、草稿、中间文件）
-│   │   └── semantic/  本轮启用语义模型的只读 YAML 快照（文件名 {模型名}__{id后缀}.yaml，由系统预物化，模型不可写）
+│   │   └── semantic/  本轮启用语义模型的只读 YAML 快照（文件名 {模型名}__{id后缀}.yaml，由系统预物化，模型不可写）；_semantic_catalog.yaml 为语义资产目录（系统生成，检索先读）
 │   ├── outputs/     给用户展示的文件产物区（可读写，最终交付文件）
 │   │   ├── query_result/  查询结果卸载文件（系统写入，按工具返回的 result_path 读取）
 │   │   └── .tool-offload/ 其它工具大结果卸载文件（系统写入，按工具返回的 result_path 读取）
@@ -144,7 +144,7 @@ DATA_EXPLORE_SUBAGENT_PROMPT = f"""# 角色
 ## 工作方式
 - 严格围绕任务书目标收集，任务书没要求的扩展动作不要做。
 - 任务书指定了相关技能（含用户自定义技能）时，先 `file_read` 其 `SKILL.md` 并严格按其执行；任务书未提及的技能不要虚构路径。
-- 涉及语义模型时，第一步先用 `file_read` 读取 `{builtin_skill_file(DATA_ANALYZING_SKILL)}` 并严格按其执行；当前数据源组全部启用语义模型的 YAML 已预物化到 `/mnt/user-data/workspace/semantic/`。
+- 涉及语义模型时，第一步先用 `file_read` 读取 `{builtin_skill_file(DATA_ANALYZING_SKILL)}` 并严格按其执行；当前数据源组全部启用语义模型的 YAML 已预物化到 `/mnt/user-data/workspace/semantic/`（含语义资产目录 _semantic_catalog.yaml，检索先读）。
 - 遍历多模型/多表/多指标做批量盘点时，逐项收集，按任务书要求的结构整理。
 
 ## 进度与收尾

@@ -2,6 +2,8 @@ import asyncio
 import sys
 from pathlib import Path
 
+import yaml
+
 sys.path.insert(0, str(Path(__file__).parents[4]))
 
 from apps.chat_data_app.services.semantic.run import semantic_materializer
@@ -327,6 +329,7 @@ def test_prematerialize_writes_all_enabled_models(monkeypatch):
     assert [path for path, _ in runtime.entries] == [
         "/mnt/user-data/workspace/semantic/订单模型__a.yaml",
         "/mnt/user-data/workspace/semantic/订单模型__b.yaml",
+        "/mnt/user-data/workspace/semantic/_semantic_catalog.yaml",
     ]
     assert runtime.deleted == []
 
@@ -360,7 +363,7 @@ def test_prematerialize_loads_once_instead_of_per_model(monkeypatch):
     assert manager.bundle_calls == 1
     assert manager.single_loads == 0, "禁止按模型 ID 逐个回源加载（N+1）"
     assert manager.column_dict_calls == 1
-    assert len(runtime.entries) == 20
+    assert len(runtime.entries) == 21  # 20 个模型快照 + 1 份语义资产目录
 
 
 def test_materializer_reuses_caller_supplied_configs(monkeypatch):
@@ -690,3 +693,127 @@ def test_materializer_annotates_column_dicts_into_conversion_input(monkeypatch):
 
     assert captured[0]["dimensions"][0]["_column_dict"] == {"unit": "个"}
     assert "_column_dict" not in config["dimensions"][0]
+
+
+def _prematerialize(runtime, configs, monkeypatch):
+    semantic_materializer._YAML_CACHE.clear()
+    monkeypatch.setattr(
+        semantic_materializer,
+        "get_semantic_config_service",
+        lambda: _FakeDatasourceManager(configs),
+    )
+    monkeypatch.setattr(
+        semantic_materializer.ChatDataToOssieConverter,
+        "convert",
+        lambda self, config, *, source_type="": f"semantic_model: {config['id']}\n",
+    )
+    return asyncio.run(
+        semantic_materializer.prematerialize_enabled_semantic_models(
+            workspace_runtime=runtime,
+            datasource_id="ds_1",
+            user_id="user_1",
+            source_type="mysql",
+        )
+    )
+
+
+def _catalog_content(runtime) -> str | None:
+    return next(
+        (
+            content
+            for path, content in runtime.entries
+            if path.endswith(semantic_materializer.SEMANTIC_CATALOG_FILE_NAME)
+        ),
+        None,
+    )
+
+
+def test_prematerialize_writes_semantic_catalog(monkeypatch):
+    """全量物化生成语义资产目录：name/config_id/description/business_notes 四字段，停用模型不出现。"""
+    configs = [
+        dict(_config("sc_a"), business_notes="【业务运转说明】订单口径说明"),
+        _config("sc_off", enabled=False),
+    ]
+    runtime = _FakeRuntime()
+    result = _prematerialize(runtime, configs, monkeypatch)
+
+    assert result == {"total": 1, "failed_ids": []}
+    catalog_entry = _catalog_content(runtime)
+    assert catalog_entry is not None
+    payload = yaml.safe_load(catalog_entry)
+    assert payload["generated_at"]
+    assert [model["config_id"] for model in payload["models"]] == ["sc_a"]
+    model = payload["models"][0]
+    assert model["name"] == "订单模型"
+    assert model["description"] == "订单分析"
+    assert model["business_notes"] == "【业务运转说明】订单口径说明"
+
+
+def test_single_model_materialization_skips_catalog(monkeypatch):
+    """单模型物化不写目录：拿本次选择集重写会把全量目录覆盖成残缺版。"""
+    semantic_materializer._YAML_CACHE.clear()
+    monkeypatch.setattr(
+        semantic_materializer,
+        "get_semantic_config_service",
+        lambda: _FakeDatasourceManager([_config("sc_keep")]),
+    )
+    monkeypatch.setattr(
+        semantic_materializer.ChatDataToOssieConverter,
+        "convert",
+        lambda self, config, *, source_type="": f"semantic_model: {config['id']}\n",
+    )
+    runtime = _FakeRuntime()
+    _materialize(runtime)
+
+    assert _catalog_content(runtime) is None
+
+
+def test_prune_keeps_semantic_catalog(monkeypatch):
+    """残留清理只删停用模型遗留文件，语义资产目录始终在保留集内。"""
+    stale = "/mnt/user-data/workspace/semantic/已停用模型__deadbeef.yaml"
+    runtime = _FakeRuntime()
+    runtime.files.add(
+        semantic_materializer.SEMANTIC_SNAPSHOT_DIR + "/" + semantic_materializer.SEMANTIC_CATALOG_FILE_NAME
+    )
+    runtime.files.add(stale)
+    _prematerialize(runtime, [_config("sc_keep")], monkeypatch)
+
+    assert runtime.deleted == [stale]
+
+
+def test_catalog_render_failure_does_not_block_models(monkeypatch):
+    """目录渲染失败只告警：模型快照照常写盘、残留清理照常执行。"""
+    semantic_materializer._YAML_CACHE.clear()
+    monkeypatch.setattr(
+        semantic_materializer,
+        "get_semantic_config_service",
+        lambda: _FakeDatasourceManager([_config("sc_keep")]),
+    )
+    monkeypatch.setattr(
+        semantic_materializer.ChatDataToOssieConverter,
+        "convert",
+        lambda self, config, *, source_type="": f"semantic_model: {config['id']}\n",
+    )
+    monkeypatch.setattr(
+        semantic_materializer,
+        "_render_semantic_catalog",
+        lambda configs: (_ for _ in ()).throw(RuntimeError("render broken")),
+    )
+    stale = "/mnt/user-data/workspace/semantic/已停用模型__deadbeef.yaml"
+    runtime = _FakeRuntime()
+    runtime.files.add(stale)
+
+    result = asyncio.run(
+        semantic_materializer.materialize_runtime_semantic_models(
+            workspace_runtime=runtime,
+            datasource_id="ds_1",
+            user_id="user_1",
+            source_type="mysql",
+            semantic_config_ids=["sc_keep"],
+            prune_stale=True,
+        )
+    )
+
+    assert result["paths"] == {"sc_keep": "/mnt/user-data/workspace/semantic/订单模型__keep.yaml"}
+    assert _catalog_content(runtime) is None
+    assert runtime.deleted == [stale]

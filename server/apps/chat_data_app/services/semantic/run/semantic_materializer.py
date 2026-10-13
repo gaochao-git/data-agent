@@ -11,6 +11,8 @@ from collections import OrderedDict
 from pathlib import PurePosixPath
 from typing import Any
 
+import yaml
+
 from utils.logger import get_logger
 
 from .chat_data_ossie_converter import ChatDataToOssieConverter
@@ -24,6 +26,8 @@ _CACHE_HARD_LIMIT = 4096
 _YAML_CACHE: OrderedDict[str, str] = OrderedDict()
 # 语义模型 YAML 快照目录（受管只读区，仅供 file_grep/file_read）
 SEMANTIC_SNAPSHOT_DIR = "/mnt/user-data/workspace/semantic"
+# 语义资产目录文件（agent 检索第一步整读；下划线前缀置顶排序并与模型快照 `{模型名}__{id后缀}.yaml` 区分）
+SEMANTIC_CATALOG_FILE_NAME = "_semantic_catalog.yaml"
 # unicode 感知：保留中文，仅把空白/路径分隔等不安全字符折叠成下划线
 _FILE_COMPONENT_RE = re.compile(r"[^\w.-]+")
 _MODEL_NAME_MAX_CHARS = 40
@@ -196,8 +200,9 @@ async def prematerialize_enabled_semantic_models(
 ) -> dict[str, Any]:
     """Run 启动前把当前数据源组全部启用模型物化到 workspace/semantic/。
 
-    让模型无需先触发 semantic_search 即可用 dir_list/file_grep/file_read
-    检索语义目录；YAML 内容有 sha256 缓存，只有首次或配置变更才真正写盘。
+    让模型无需先触发 semantic_search 即可用 file_read 读语义资产目录
+    （semantic_catalog.yaml）、用 file_grep/file_read 检索语义模型；
+    YAML 内容有 sha256 缓存，只有首次或配置变更才真正写盘。
     返回 {"total": 物化文件数, "failed_ids": 物化失败并跳过的模型 ID}；
     未绑定数据源组或无启用模型时 total 为 0。整体异常由调用方 fail-fast，
     部分失败（failed_ids）由调用方决定是否提示用户与注入上下文。
@@ -273,6 +278,30 @@ async def _prune_stale_semantic_files(workspace_runtime: Any, keep_paths: set[st
             logger.info("清理语义目录残留文件: %s", path)
         except Exception as exc:  # noqa: BLE001 - 清理属尽力而为
             logger.warning("清理语义目录残留文件失败: path=%s error=%s", path, exc)
+
+
+def _render_semantic_catalog(configs: list[dict[str, Any]]) -> str:
+    """生成语义资产目录：每个启用模型一条 name/config_id/description/business_notes。
+
+    供 agent 检索第一步整读，替代盲目 dir_list；仅在全量物化（prune_stale）
+    时刷新，单模型物化不覆盖，避免把目录写成残缺集。
+    """
+    models = []
+    for config in configs:
+        config_id = _config_id(config)
+        models.append(
+            {
+                "name": str(config.get("name") or config.get("semantic_config_name") or config_id).strip(),
+                "config_id": config_id,
+                "description": str(config.get("description") or config.get("semantic_config_desc") or "").strip(),
+                "business_notes": str(config.get("business_notes") or "").strip(),
+            }
+        )
+    payload = {
+        "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "models": models,
+    }
+    return yaml.safe_dump(payload, allow_unicode=True, sort_keys=False)
 
 
 def _normalize_config_ids(semantic_config_ids: list[str] | None) -> list[str]:
@@ -406,6 +435,15 @@ async def materialize_runtime_semantic_models(
     render_ms = (time.perf_counter() - rendered_at) * 1000
     failed_ids.extend(render_failed_ids)
 
+    # 语义资产目录只在全量物化时刷新：单模型物化只覆盖部分集合，
+    # 拿它重写目录会把目录写成残缺版。渲染失败不阻塞模型快照写盘。
+    catalog_path = str(PurePosixPath(SEMANTIC_SNAPSHOT_DIR) / SEMANTIC_CATALOG_FILE_NAME)
+    if prune_stale:
+        try:
+            entries = [*entries, (catalog_path, _render_semantic_catalog(selected_configs))]
+        except Exception as exc:  # noqa: BLE001 - 目录属尽力而为，模型快照不受影响
+            logger.warning("生成语义资产目录失败（模型快照不受影响）: %s", exc)
+
     written_at = time.perf_counter()
     await workspace_runtime.write_internal_text_files(entries)
     write_ms = (time.perf_counter() - written_at) * 1000
@@ -415,6 +453,7 @@ async def materialize_runtime_semantic_models(
         keep_paths = {
             str(PurePosixPath(SEMANTIC_SNAPSHOT_DIR) / _safe_file_name(config)) for config in selected_configs
         }
+        keep_paths.add(catalog_path)
         await _prune_stale_semantic_files(workspace_runtime, keep_paths)
     logger.info(
         "语义模型按需物料化完成: datasource_id=%s files=%s cache_hits=%s backend=%s 渲染=%.0fms 写盘=%.0fms",
@@ -445,4 +484,5 @@ async def materialize_runtime_semantic_models(
 __all__ = [
     "materialize_runtime_semantic_models",
     "SEMANTIC_SNAPSHOT_DIR",
+    "SEMANTIC_CATALOG_FILE_NAME",
 ]

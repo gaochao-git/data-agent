@@ -174,15 +174,15 @@ def test_quality_check_capability_requires_tool_self_check():
 def test_query_capability_contains_complete_query_contract():
     query = _skill_doc(DATA_ANALYZING_SKILL, "references/analysis/query.md", "references/analysis/dialect.md")
 
-    # AI coding 式目录路线：dir_list -> file_grep -> file_read，不引导 semantic_search
+    # AI coding 式目录路线：file_read(semantic_catalog) -> file_grep -> file_read，不引导 semantic_search
     assert "当前用户可见（当前数据源组）的全部启用语义模型" in query
     assert "`/mnt/user-data/workspace/semantic/`" in query
+    assert "_semantic_catalog.yaml" in query
     assert "禁止为找模型逐个读取目录里的 YAML" in query
     # grep 无命中即判定缺失：不得靠逐个读文件碰运气
     assert "无命中" in query
-    assert "dir_list" in query
-    assert "file_grep" in query
     assert "file_read" in query
+    assert "file_grep" in query
     assert "value_type" in query
     assert "literal" in query
     assert "sql_function" in query
