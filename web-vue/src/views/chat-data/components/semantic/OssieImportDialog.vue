@@ -8,7 +8,7 @@ import {
   type OssieChecklistRow,
   type OssieImportModelPreview,
 } from '../../api'
-import type { SemanticConfigItem } from '../../types'
+import type { SemanticConfigItem, SemanticYamlFile } from '../../types'
 import { QualityFindingsList } from './qualityFindings'
 import OssieMergeDiff from './OssieMergeDiff.vue'
 
@@ -79,10 +79,44 @@ const resetState = () => {
   diffLoading.value = {}
 }
 
+/** 追加 yaml 文件并默认全部勾选：手动上传与工作区「一键导入」预置共用同一条装入路径 */
+const appendYamlFiles = (items: SemanticYamlFile[]) => {
+  if (!items.length) return
+  const checked = { ...fileChecked.value }
+  const loaded = items.map(item => ({ id: ++fileSeq, name: item.name, content: item.content }))
+  files.value = [...files.value, ...loaded]
+  loaded.forEach(file => {
+    checked[file.id] = true
+  })
+  fileChecked.value = checked
+}
+
+/** 「从会话一键导入」待装入的文件，随 visible 打开在 resetState 之后装入 */
+let pendingPresetFiles: SemanticYamlFile[] | null = null
+
 watch(visible, value => {
   if (!value) return
   resetState()
+  if (pendingPresetFiles?.length) {
+    const preset = pendingPresetFiles
+    pendingPresetFiles = null
+    appendYamlFiles(preset)
+  }
 })
+
+/** 跳过本地文件选择，直接以工作区文件内容打开导入弹窗（按钮入口仍可追加文件） */
+const openWithFiles = (preset: SemanticYamlFile[]) => {
+  if (!preset?.length) return
+  if (visible.value) {
+    // 弹窗已打开时 watch 不会再次触发：直接追加兜底（正常入口被弹窗覆盖层挡住，不可达）
+    appendYamlFiles(preset)
+    return
+  }
+  pendingPresetFiles = preset
+  visible.value = true
+}
+
+defineExpose({ openWithFiles })
 
 /** 模型校验的并发上限：文件多时逐个串行请求太慢（N 次完整往返），但并发过猛会
  * 打爆后端（每个 preview 都要加载数据源+字段字典）。6 是体验与压力的折中。 */
@@ -175,10 +209,9 @@ const modelSummary = (model: OssieImportModelPreview) => {
 }
 
 const readYamlFile = (file: File) =>
-  new Promise<LoadedYamlFile>((resolve, reject) => {
+  new Promise<SemanticYamlFile>((resolve, reject) => {
     const reader = new FileReader()
-    const fileId = ++fileSeq
-    reader.onload = () => resolve({ id: fileId, name: file.name, content: String(reader.result || '') })
+    reader.onload = () => resolve({ name: file.name, content: String(reader.result || '') })
     reader.onerror = () => reject(new Error(file.name))
     reader.readAsText(file)
   })
@@ -192,19 +225,14 @@ const handleFileChange = async (event: Event) => {
   // 追加上传：新文件追加进列表，保留已选文件的勾选与校验状态
   const results = await Promise.allSettled(selected.map(readYamlFile))
   const loaded = results
-    .filter((result): result is PromiseFulfilledResult<LoadedYamlFile> => result.status === 'fulfilled')
+    .filter((result): result is PromiseFulfilledResult<SemanticYamlFile> => result.status === 'fulfilled')
     .map(result => result.value)
   const failedCount = results.length - loaded.length
   if (failedCount) {
     ElMessage.error(`${failedCount} 个文件读取失败，已跳过`)
   }
   if (!loaded.length) return
-  const checked = { ...fileChecked.value }
-  loaded.forEach(file => {
-    checked[file.id] = true
-  })
-  files.value = [...files.value, ...loaded]
-  fileChecked.value = checked
+  appendYamlFiles(loaded)
 }
 
 const isFileChecked = (fileId: number) => fileChecked.value[fileId] !== false
@@ -562,7 +590,7 @@ const reportImportResult = ({ created, replaced, skipped }: FileImportResult) =>
     skipped ? `忽略 ${skipped}` : '',
   ].filter(Boolean)
   if (created + replaced > 0) {
-    ElMessage.success(`导入完成（${parts.join(' · ')}）`)
+    ElMessage.success(`导入完成（${parts.join(' · ')}），下一轮会话自动生效`)
   } else if (skipped > 0) {
     ElMessage.info('全部模型因同名冲突被忽略，未做任何变更')
   }
@@ -709,7 +737,7 @@ const diffExistingFor = (muid: string) => {
   >
     <div class="space-y-3">
       <div class="text-xs leading-5 text-gray-500">
-        上传 Ossie 语义模型 YAML 文件，模型校验通过后导入：新模型直接启用，同名替换保留原配置的启用状态。
+        上传 Ossie 语义模型 YAML 文件，模型校验通过后导入：新模型直接启用、下一轮会话自动生效，同名替换保留原配置的启用状态。
       </div>
 
       <div class="flex items-center gap-2">

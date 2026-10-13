@@ -5,6 +5,12 @@
 import type { ChartType } from '../chartTypes'
 export type { MemberQueryResult, QueryResult } from './query'
 
+/** Ossie 语义模型 yaml 文件载荷（展示名 + 文本内容）：会话工作区「一键导入」与导入弹窗装载共用 */
+export interface SemanticYamlFile {
+  name: string
+  content: string
+}
+
 // 表信息
 export interface TableIndex {
   name: string

@@ -15,7 +15,7 @@ import '../styles/z-index.css'
 import useUserStore from '@/store/modules/user'
 import { getDatasources, createConversation, generateConversationTitle, getConversationContext, getSemanticConfigs, getMySemanticConfigs, createSemanticConfig, getDatasourceSchema } from '../api'
 import { listDashboards, type Dashboard } from '../api/dashboard'
-import type { BuilderDragFieldData, DataSource, ViewMode, ChatDataOptions, SemanticConfigItem, ExecutionTargetOption, TableInfo } from '../types'
+import type { BuilderDragFieldData, DataSource, ViewMode, ChatDataOptions, SemanticConfigItem, SemanticYamlFile, ExecutionTargetOption, TableInfo } from '../types'
 import Conversation from '../components/conversation/Conversation.vue'
 import SqlEditor from '../components/SqlEditor.vue'
 import QueryBuilder from '../components/QueryBuilder/index.vue'
@@ -27,6 +27,7 @@ import BuilderSidebar from '../components/sidebars/BuilderSidebar.vue'
 import EditorSidebar from '../components/sidebars/EditorSidebar.vue'
 import DashboardEditor from '../components/Dashboard/DashboardEditor.vue'
 import SemanticConfigPanel from '../components/SemanticConfigPanel.vue'
+import OssieImportDialog from '../components/semantic/OssieImportDialog.vue'
 import ChatDataAdminManager from '../components/ChatDataAdminManager.vue'
 import AgentScheduleManager from '../components/AgentScheduleManager.vue'
 import IconModeConversation from '../components/icons/IconModeConversation.vue'
@@ -494,6 +495,26 @@ const handleOpenSemanticConfig = (datasourceId?: string, datasource?: DataSource
 const handleCloseSemanticConfig = () => {
   isSemanticConfigPanelOpen.value = false
   semanticConfigDatasourceId.value = ''
+}
+
+/**
+ * 会话工作区 yaml「一键导入」：权限与配置入口同源（canManageDatasource 门禁），
+ * 直接打开 Ossie 导入弹窗并预置文件（弹窗挂在本页，不经配置面板中转），
+ * 省去「下载 → 配置页 → 导入按钮 → 选文件」的中间步骤。
+ */
+const conversationOssieImportVisible = ref(false)
+const conversationOssieImportDatasourceId = ref('')
+const conversationOssieImportDialogRef = ref<InstanceType<typeof OssieImportDialog> | null>(null)
+
+const handleImportSemanticYamlFromConversation = (files: SemanticYamlFile[]) => {
+  if (!canManageDatasource.value || !files?.length) return
+  const datasourceId = currentConversationDatasourceId.value || selectedDatasourceId.value
+  if (!datasourceId) {
+    ElMessage.warning('未找到会话绑定的数据源组，无法导入')
+    return
+  }
+  conversationOssieImportDatasourceId.value = datasourceId
+  conversationOssieImportDialogRef.value?.openWithFiles(files)
 }
 
 // 会话
@@ -1797,6 +1818,8 @@ onMounted(async () => {
                   :execution-target-multiple="true"
                   :selected-member-datasource-ids="conversationMemberDatasourceIds"
                   v-model:selected-model-id="selectedConversationModelId"
+                  :can-import-semantic-model="canManageDatasource"
+                  @import-semantic-yaml="handleImportSemanticYamlFromConversation"
                   class="h-full"
                   @first-message-started="handleFirstMessageStarted"
                   @run-status-changed="handleConversationRunStatusChanged"
@@ -1871,6 +1894,13 @@ onMounted(async () => {
         @close="handleCloseSemanticConfig"
       />
     </div>
+
+    <!-- 会话工作区 yaml「一键导入」弹窗：由 ConversationWorkspacePanel 的导入按钮触发（管理员门禁） -->
+    <OssieImportDialog
+      ref="conversationOssieImportDialogRef"
+      v-model:visible="conversationOssieImportVisible"
+      :datasource-id="conversationOssieImportDatasourceId"
+    />
 
     <el-dialog
       v-model="showContextSelectorDialog"

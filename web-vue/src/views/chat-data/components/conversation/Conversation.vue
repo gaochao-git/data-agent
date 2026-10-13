@@ -5,7 +5,7 @@
  */
 import { computed, nextTick, onMounted, onUnmounted, ref, toRef, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import type { ChatDataContextCompressionEvent, ChatDataTokenUsage, DashboardSpecPayload, DataSource, ExecutionTargetOption, LangGraphMessage, Message, MessageAttachment, PendingUserQuestion, SkillInfo, SubagentContextUsage, SubagentTrailItem, ThinkingSegment, ToolCallInfo, ToolLifecycleEventData, UserQuestionAnswer } from '../../types'
+import type { ChatDataContextCompressionEvent, ChatDataTokenUsage, DashboardSpecPayload, DataSource, ExecutionTargetOption, LangGraphMessage, Message, MessageAttachment, PendingUserQuestion, SemanticYamlFile, SkillInfo, SubagentContextUsage, SubagentTrailItem, ThinkingSegment, ToolCallInfo, ToolLifecycleEventData, UserQuestionAnswer } from '../../types'
 import { useSqlGenerator, type RunDoneStatus } from '../../composables/useSqlGenerator'
 import { useConversationHistory } from '../../composables/useConversationHistory'
 import { useDeepThinking } from '../../composables/useDeepThinking'
@@ -68,6 +68,8 @@ interface Props {
   executionTargetMultiple?: boolean
   selectedMemberDatasourceIds?: string[]
   selectedModelId?: string
+  /** 工作区 yaml「导入为语义模型」行操作的可见性（管理员权限，与配置入口同源） */
+  canImportSemanticModel?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -76,6 +78,7 @@ const props = withDefaults(defineProps<Props>(), {
   executionTargetMultiple: true,
   selectedMemberDatasourceIds: () => [],
   selectedModelId: '',
+  canImportSemanticModel: false,
 })
 
 const emit = defineEmits<{
@@ -86,6 +89,8 @@ const emit = defineEmits<{
   dashboardCreated: [dashboard: Dashboard]
   /** 控制台面板可见性广播：页面右上角的控制台开关按钮据此切换图标与提示。 */
   consoleVisibilityChanged: [visible: boolean]
+  /** 工作区 yaml 一键导入：由页面层直接打开 Ossie 导入弹窗并预置文件 */
+  importSemanticYaml: [files: SemanticYamlFile[]]
 }>()
 
 const { generateSqlStream, stopGeneration } = useSqlGenerator()
@@ -2869,9 +2874,11 @@ const handleKeyDown = (event: KeyboardEvent) => {
       :active-tool-call="activeToolCall"
       :conversation-id="localConversationId"
       :run-busy="runBusy"
+      :can-import-semantic-model="props.canImportSemanticModel"
       :format-text="replaceVisiblePathsForDisplay"
       :ensure-conversation-id="ensureConversationId"
       @conversation-created="handlePanelConversationCreated"
+      @import-semantic-yaml="emit('importSemanticYaml', $event)"
     />
 
     <el-dialog v-model="isSkillManagerOpen" width="min(1280px, 92vw)" title="技能管理" append-to-body>

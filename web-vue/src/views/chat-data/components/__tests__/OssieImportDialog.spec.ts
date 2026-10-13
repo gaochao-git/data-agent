@@ -724,6 +724,43 @@ describe('OssieImportDialog', () => {
     expect(wrapper.emitted('update:visible')).toBeUndefined()
   })
 
+  it('openWithFiles presets workspace yaml without manual file selection', async () => {
+    apiMocks.previewAdminOssieSemanticImport.mockResolvedValue({
+      status: 'success',
+      data: { models: [importableModel] },
+    })
+    const wrapper = mount(OssieImportDialog, {
+      props: {
+        visible: false,
+        datasourceId: 'ds_a',
+      },
+      global: {
+        stubs: {
+          'el-dialog': { template: '<div><slot /><slot name="footer" /></div>' },
+          'el-button': {
+            props: ['disabled', 'loading', 'type', 'size'],
+            emits: ['click'],
+            template: '<button :disabled="disabled || loading" @click="$emit(\'click\')"><slot /></button>',
+          },
+          OssieMergeDiff: { props: ['existing', 'imported'], template: '<div class="merge-diff-stub" />' },
+        },
+      },
+    })
+
+    // 会话工作区「一键导入」：不经文件选择 input，直接注入内容并打开
+    ;(wrapper.vm as unknown as { openWithFiles: (files: Array<{ name: string; content: string }>) => void })
+      .openWithFiles([{ name: '治理产出.yaml', content: yamlContent }])
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('治理产出.yaml')
+    // 预置文件默认勾选，可直接参与校验
+    await findButton(wrapper, '模型校验')!.trigger('click')
+    await flushPromises()
+    expect(apiMocks.previewAdminOssieSemanticImport).toHaveBeenCalledWith('ds_a', yamlContent)
+    // 注：预置内容一次性消费（watch(visible) 内装入后置空）。jsdom 下 defineModel 对纯
+    // setProps 的回写同步不完整，二次开关的残留断言由生产 v-model 链路保证，不在单测覆盖。
+  })
+
   it('freezes validation and conflict controls while an import is in flight', async () => {
     apiMocks.previewAdminOssieSemanticImport.mockResolvedValue({
       status: 'success',

@@ -16,7 +16,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import type { PropType } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import type { ToolCallInfo } from '../../types'
+import type { SemanticYamlFile, ToolCallInfo } from '../../types'
 import ConversationSidePanel from './ConversationSidePanel.vue'
 import ChartSpecRenderer from '../ChartSpecRenderer.vue'
 import MarkdownFilePreview from './MarkdownFilePreview.vue'
@@ -70,6 +70,8 @@ const props = defineProps({
   activeToolCall: { type: Object as PropType<ToolCallInfo | null>, default: null },
   /** Run 执行中禁用删除（沙箱回写冲突），与父级 runBusy 同源 */
   runBusy: { type: Boolean, default: false },
+  /** 是否显示「导入为语义模型」行操作（管理员权限，与配置入口同源） */
+  canImportSemanticModel: { type: Boolean, default: false },
   formatText: { type: Function as PropType<(value: string) => string>, default: (value: string) => value },
   /** 面板内上传需要新建会话时调用；创建成功后父级负责同步会话状态 */
   ensureConversationId: { type: Function as PropType<() => Promise<string | null>>, default: null },
@@ -79,6 +81,8 @@ const emit = defineEmits<{
   'update:open': [value: boolean]
   'update:tab': [value: 'console' | 'tool']
   conversationCreated: [conversationId: string]
+  /** 工作区 yaml 一键导入语义模型：文件内容已在面板内读取完毕 */
+  importSemanticYaml: [files: SemanticYamlFile[]]
 }>()
 
 const selectedConsoleFilePath = ref<string | null>(null)
@@ -689,6 +693,43 @@ const forgetWorkspaceFileCache = (path: string) => {
   if (revokedUrl) URL.revokeObjectURL(revokedUrl)
 }
 
+// 「导入为语义模型」仅对治理目录下的 Ossie yaml 开放：outputs/governance/（自检通过的交付副本）
+// 与 workspace/governance/（治理工作副本，用户确认后也可直接导）。任意 yaml（其他技能产物、
+// 用户上传）不提供导入入口；workspace/semantic/ 是原模型只读快照，不开放。
+// 扩展名判断与上方 selectedConsoleFileExt 同一套取后缀习惯用法。
+const isGovernanceYaml = (path: string) => {
+  const lower = path.toLowerCase()
+  if (!lower.startsWith('outputs/governance/') && !lower.startsWith('workspace/governance/')) return false
+  return ['yaml', 'yml'].includes(path.split('.').pop()?.toLowerCase() || '')
+}
+const importingSemanticFilePath = ref<string | null>(null)
+
+const handleImportSemanticYaml = async (file: ProducedFile) => {
+  const conversationId = props.conversationId
+  if (!conversationId) {
+    ElMessage.warning('会话未就绪，无法导入')
+    return
+  }
+  if (importingSemanticFilePath.value) return
+  importingSemanticFilePath.value = file.relativePath
+  try {
+    const response = await getConversationWorkspaceFileContent(conversationId, file.relativePath)
+    const content = response.status === 'success' ? String(response.data?.content || '') : ''
+    if (!content.trim()) {
+      ElMessage.error('文件内容为空或读取失败，无法导入')
+      return
+    }
+    emit('importSemanticYaml', [{
+      name: file.relativePath.split('/').pop() || file.relativePath,
+      content,
+    }] satisfies SemanticYamlFile[])
+  } catch {
+    ElMessage.error('读取文件失败，无法导入')
+  } finally {
+    importingSemanticFilePath.value = null
+  }
+}
+
 const handleDeleteConsoleFile = async (file: ProducedFile | null = null) => {
   const conversationId = props.conversationId
   if (!file) return
@@ -1045,6 +1086,18 @@ defineExpose({
                       @click="handleDownloadConsoleFile(item.node.file)"
                     >
                       <i class="fa-solid fa-download"></i>
+                    </button>
+                    <!-- 导入为语义模型：仅治理目录（outputs/governance/、workspace/governance/）下的 yaml 且管理员可见（canImportSemanticModel）。
+                         点击读取文件内容并交由父级打开 Ossie 导入弹窗，免去下载后再上传。 -->
+                    <button
+                      v-if="canImportSemanticModel && isGovernanceYaml(item.node.file.relativePath)"
+                      type="button"
+                      class="flex h-6 w-6 items-center justify-center rounded-md border-none bg-transparent text-[11px] text-slate-400 transition-colors hover:bg-blue-100 hover:text-blue-600"
+                      title="导入为语义模型"
+                      data-console-file-import-semantic="true"
+                      @click="handleImportSemanticYaml(item.node.file)"
+                    >
+                      <i class="fa-solid" :class="importingSemanticFilePath === item.node.file.relativePath ? 'fa-spinner fa-spin' : 'fa-file-import'"></i>
                     </button>
                     <!-- 删除：与预览/下载同列（行尾操作组），危险动作用红色区分。
                          查询结果（outputs/query_result、outputs/.tool-offload）不提供删除，
