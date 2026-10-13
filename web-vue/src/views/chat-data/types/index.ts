@@ -259,6 +259,8 @@ export interface ChatDataContextCompressionEvent {
 export interface ChatDataMessageEndPayload {
   usage?: ChatDataTokenUsage | null
   timestamp?: string
+  /** 后端服务端口径生成统计（snake_case 原始结构，经 toGenerationStats 校验后挂 message.generationStats） */
+  generation_stats?: unknown
 }
 
 export interface ChatDataTokenUsageBreakdown {
@@ -371,11 +373,12 @@ export interface Message {
   toolCallId?: string
   toolName?: string
   contextCompression?: ChatDataContextCompressionEvent
-  /** 助手气泡生成统计（输出 tokens / 纯模型生成时长 / 速度），message_end 时由 usage 现算，历史消息暂无 */
+  // 助手气泡生成统计（首 token / 输出 tokens / 纯模型生成时长 / 速度）：
+  // 后端 finish 时服务端口径计算，随 message_end 下发（本轮）与 AI 消息持久化（历史回放）
   generationStats?: MessageGenerationStats
 }
 
-// 助手气泡生成统计：分母 ≈ 整轮墙钟时间 − 工具执行时间（纯模型生成时间）
+// 助手气泡生成统计：分母 ≈ 模型流墙钟时间 − 工具执行时间（纯模型生成时间，服务端计算）
 export interface MessageGenerationStats {
   /** 输出 token 总数（后端按模型返回的 usage 累加，非估算） */
   outputTokens: number
@@ -383,7 +386,7 @@ export interface MessageGenerationStats {
   durationMs: number
   /** 生成速度（tokens/s） */
   tokensPerSecond: number
-  /** 首 token 耗时（毫秒，发起 → 首个模型流事件的客户端墙钟）；首个事件晚于发起记录失败时缺省 */
+  /** 首 token 耗时（毫秒，模型流开始 → 首个可见 payload，服务端口径） */
   firstTokenMs?: number
 }
 

@@ -15,6 +15,7 @@ import type {
   ThinkingSegment,
 } from '../types'
 import { extractSemanticParamsFromArgs, getQueryResultError, getRenderableQueryResultData } from '../utils/semanticTool'
+import { toGenerationStats } from '../utils/generationSpeed'
 
 const parseHistoryTimestamp = (value: unknown): Date | null => {
   if (typeof value !== 'string' || !value.trim()) return null
@@ -130,6 +131,7 @@ interface HistoryMessagePayload {
   reasoning_turn_id?: unknown
   subagent_trail?: unknown
   subagent_context_usage?: unknown
+  generation_stats?: unknown
 }
 
 interface HistoryEventPayload {
@@ -370,6 +372,9 @@ export const buildHistoryMessagesFromEvents = (historyEvents: unknown): Message[
     if (eventType === 'assistant_message') {
       const assistant = ensureActiveAssistant(messagePayload, turnId)
       assistant.timestamp = parseHistoryTimestamp(messagePayload.timestamp) || assistant.timestamp
+      // 生成统计随 assistant_message 持久化（服务端口径），与本轮直播口径同源
+      const generationStats = toGenerationStats(messagePayload.generation_stats)
+      if (generationStats) assistant.generationStats = generationStats
       const fallbackReasoning = normalizeReasoningContent(messagePayload.reasoning_content)
       if (fallbackReasoning && (!turnId || !persistedReasoningTurnIds.has(turnId))) {
         appendHistoryThinkingSegment(assistant, {
@@ -491,6 +496,8 @@ export const buildHistoryMessages = (
       if (legacyReasoningGroupIndex < 0 && currentReasoningSegments.length === 0) startReasoningTurn()
       const assistant = ensureActiveAssistant(rawMessage)
       assistant.timestamp = parseHistoryTimestamp(rawMessage.timestamp) || assistant.timestamp
+      const generationStats = toGenerationStats(rawMessage.generation_stats)
+      if (generationStats) assistant.generationStats = generationStats
       appendPendingThinkingSegments(assistant)
 
       const fallbackReasoning = normalizeReasoningContent(rawMessage.reasoning_content)

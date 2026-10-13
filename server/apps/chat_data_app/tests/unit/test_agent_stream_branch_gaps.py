@@ -93,7 +93,7 @@ async def test_persist_timestamp_handles_none_state_and_empty_messages():
 
 @pytest.mark.asyncio
 async def test_persist_timestamp_skips_when_timestamp_already_present():
-    """latest AI 消息已带 timestamp 时不重复回填（311->312）。"""
+    """latest AI 消息已带 timestamp 且无统计要写时不重复回填（311->312）。"""
     agent = _FakeTimestampAgent()
     state = _state_with(
         [
@@ -106,6 +106,34 @@ async def test_persist_timestamp_skips_when_timestamp_already_present():
 
     assert result is state
     assert agent.aupdate_calls == []
+
+
+@pytest.mark.asyncio
+async def test_persist_generation_stats_writes_even_when_timestamp_present():
+    """回归：ResponseTimestampMiddleware 已给消息盖 timestamp，generation_stats 仍必须写入。
+
+    旧实现把「时间戳已存在」当整体短路条件，导致 chat_data 主链路（middleware 盖戳）上
+    生成统计永远落不了 checkpoint，历史回放读不到。
+    """
+    agent = _FakeTimestampAgent()
+    state = _state_with(
+        [
+            HumanMessage(content="问题"),
+            AIMessage(content="答案", additional_kwargs={"timestamp": "2026-10-13 10:00:00"}),
+        ]
+    )
+    stats = {"first_token_ms": 1800, "duration_ms": 2400, "output_tokens": 6, "tokens_per_second": 2}
+
+    result = await agent_stream._persist_latest_ai_message_timestamp(
+        agent, {"configurable": {}}, state, generation_stats=stats
+    )
+
+    assert result is not state
+    assert len(agent.aupdate_calls) == 1
+    patched = agent.aupdate_calls[0]["values"]["messages"][0]
+    assert patched.additional_kwargs["generation_stats"] == stats
+    # 时间戳已由 middleware 盖章，不得被本函数覆盖
+    assert patched.additional_kwargs["timestamp"] == "2026-10-13 10:00:00"
 
 
 @pytest.mark.asyncio

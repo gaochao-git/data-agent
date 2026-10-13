@@ -1,69 +1,25 @@
-import type { ChatDataTokenUsage, MessageGenerationStats } from '../types'
+import type { MessageGenerationStats } from '../types'
 
 /**
- * 助手气泡生成速度统计（纯前端，message_end 收口时计算一次）。
- *
- * 口径：
- * - 分子 = usage.output_tokens：后端按每次模型调用返回的 usage_metadata 累加，run 级精确值；
- * - 分母 = 本轮墙钟时间 − 工具执行时间 ≈ 纯模型生成时间。工具执行时长取 breakdown 中
- *   role === 'tool' 行的 started/ended（tool_timing 中间件盖戳、随消息持久化），并按本轮
- *   时间窗过滤，避免把历史轮次的工具时间算进来；
- * - 已知偏差：模型调用之外的开销（checkpoint 写入、事件下发，通常几十毫秒级）计入分母，
- *   以及含 ask_user 等待的轮次会把等待时间计入分母——速度会被低估，不做美化；
- * - 任一关键数据缺失（模型未回 usage / 无结束时间）返回 null，前端不展示，不用估算冒充精确值。
+ * 助手气泡生成统计：后端服务端口径，finish 时随 message_end 下发并随 AI 消息持久化，
+ * 本轮与历史回放共用同一份数据（toGenerationStats 校验转换）。字段缺失/非法时整体
+ * 不展示，不用估算冒充精确值。生成中的实时速率仍由前端估算（computeLiveGenerationSpeed）。
  */
-export interface GenerationStatsInput {
-  /** 本轮发起时间（客户端时钟，Date.now()） */
-  runStartedAtMs: number
-  /** 本轮收口时间（客户端时钟，onMessageEnd 时刻） */
-  runEndedAtMs: number
-  /** 首个模型流事件到达时间（客户端时钟）；缺失时不产出首 token 耗时 */
-  firstChunkAtMs?: number | null
-}
-
-const SKEW_GUARD_MS = 2000
-
-export const computeGenerationStats = (
-  usage: ChatDataTokenUsage | null | undefined,
-  timing: GenerationStatsInput,
-): MessageGenerationStats | null => {
-  const outputTokens = Math.floor(Number(usage?.output_tokens) || 0)
-  if (outputTokens <= 0) return null
-
-  const { runStartedAtMs, runEndedAtMs } = timing
-  if (
-    !Number.isFinite(runStartedAtMs) || !Number.isFinite(runEndedAtMs)
-    || runEndedAtMs <= runStartedAtMs
-  ) return null
-
-  // 工具执行时间：breakdown 里 tool 行的精确起止，只统计落在本轮窗口内的行
-  let toolDurationMs = 0
-  for (const item of usage?.breakdown || []) {
-    if (item.role !== 'tool') continue
-    const { started_at_ms, ended_at_ms } = item
-    if (
-      typeof started_at_ms !== 'number' || !Number.isFinite(started_at_ms)
-      || typeof ended_at_ms !== 'number' || !Number.isFinite(ended_at_ms)
-      || ended_at_ms <= started_at_ms
-    ) continue
-    if (started_at_ms < runStartedAtMs - SKEW_GUARD_MS || ended_at_ms > runEndedAtMs + SKEW_GUARD_MS) continue
-    toolDurationMs += ended_at_ms - started_at_ms
-  }
-
-  const durationMs = (runEndedAtMs - runStartedAtMs) - toolDurationMs
-  if (durationMs <= 0) return null
-
-  const tokensPerSecond = Math.round(outputTokens / (durationMs / 1000))
+export const toGenerationStats = (raw: unknown): MessageGenerationStats | null => {
+  if (!raw || typeof raw !== 'object') return null
+  const record = raw as Record<string, unknown>
+  const outputTokens = Math.floor(Number(record.output_tokens) || 0)
+  const durationMs = Number(record.duration_ms)
+  const tokensPerSecond = Number(record.tokens_per_second)
+  const firstTokenMs = Number(record.first_token_ms)
+  if (outputTokens <= 0 || !Number.isFinite(durationMs) || durationMs <= 0) return null
   if (!Number.isFinite(tokensPerSecond) || tokensPerSecond <= 0) return null
-
-  // 首 token 耗时：发起 → 首个模型流事件（含 thinking / tool_calls chunk），纯客户端墙钟
-  const { firstChunkAtMs } = timing
-  const firstTokenMs
-    = typeof firstChunkAtMs === 'number' && Number.isFinite(firstChunkAtMs) && firstChunkAtMs >= runStartedAtMs
-      ? firstChunkAtMs - runStartedAtMs
-      : undefined
-
-  return { outputTokens, durationMs, tokensPerSecond, firstTokenMs }
+  return {
+    outputTokens,
+    durationMs,
+    tokensPerSecond,
+    firstTokenMs: Number.isFinite(firstTokenMs) && firstTokenMs > 0 ? firstTokenMs : undefined,
+  }
 }
 
 const formatCompactTokens = (value: number): string => {

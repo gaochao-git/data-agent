@@ -50,6 +50,7 @@ from .agent.run.conversation_event_service import conversation_event_service
 from .agent.run.conversation_runtime import (
     TurnLifecycleHooks,
     TurnPersistenceHooks,
+    TurnResourceOptions,
     stream_agent_turn,
 )
 from .agent.workspace.runtime import is_system_result_workspace_path, resolve_workspace_path
@@ -245,6 +246,55 @@ def _message_end_payload_from_state(state: Any, usage: Any | None = None) -> dic
     if persisted_timestamp:
         payload["timestamp"] = persisted_timestamp
     return payload
+
+
+def _tool_duration_in_window(breakdown: Any, window_start_ms: int, window_end_ms: int) -> int:
+    """统计 usage.breakdown 中落在时间窗内的 tool 行执行时长总和（毫秒）。
+
+    只认带精确起止毫秒戳的 tool 行（tool_timing 中间件盖章）；窗口外或数据不完整的行跳过。
+    """
+    tool_duration_ms = 0
+    for item in breakdown or []:
+        if not isinstance(item, dict) or item.get("role") != "tool":
+            continue
+        started_at_ms, ended_at_ms = item.get("started_at_ms"), item.get("ended_at_ms")
+        if not isinstance(started_at_ms, int) or not isinstance(ended_at_ms, int) or ended_at_ms <= started_at_ms:
+            continue
+        if started_at_ms < window_start_ms or ended_at_ms > window_end_ms:
+            continue
+        tool_duration_ms += ended_at_ms - started_at_ms
+    return tool_duration_ms
+
+
+def _generation_stats_from_usage(
+    *,
+    first_token_ms: int | None,
+    stream_started_wall_ms: int | None,
+    usage: Any | None,
+) -> dict[str, int] | None:
+    """汇总本轮生成统计（服务端口径）：首 token 耗时 + 纯模型生成时长 + 速度。
+
+    口径与前端旧算法一致：分母 = 流墙钟 − 工具执行时间（usage.breakdown 中 tool 行的
+    精确起止，只统计落在流窗口内的行）；任一关键数据缺失不产 stats，不用估算冒充。
+    """
+    if first_token_ms is None or stream_started_wall_ms is None:
+        return None
+    output_tokens = int((usage or {}).get("output_tokens") or 0) if isinstance(usage, dict) else 0
+    if output_tokens <= 0:
+        return None
+    ended_wall_ms = int(time.time() * 1000)
+    tool_duration_ms = _tool_duration_in_window(
+        (usage or {}).get("breakdown"), stream_started_wall_ms, ended_wall_ms
+    )
+    duration_ms = (ended_wall_ms - stream_started_wall_ms) - tool_duration_ms
+    if duration_ms <= 0:
+        return None
+    return {
+        "first_token_ms": first_token_ms,
+        "duration_ms": duration_ms,
+        "output_tokens": output_tokens,
+        "tokens_per_second": round(output_tokens / (duration_ms / 1000)),
+    }
 
 
 def _collect_reasoning_candidates(message_chunk: Any, msg_data: dict[str, Any] | None) -> list[Any]:
@@ -800,6 +850,10 @@ class _AgentSseStreamAdapter:
         self._first_token_timeout_alarm_emitted = False
         self._queued_events: list[str] = []
         self.graph_started = False
+        # 生成统计锚点（服务端口径）：流起止墙钟（工具时间窗口过滤用），
+        # finish 时汇总为 generation_stats。
+        self._stream_started_wall_ms: int | None = None
+        self.first_token_ms: int | None = None
 
     def set_input_state(self, input_state: dict[str, Any]) -> None:
         """设置下一次 graph 调用的增量输入。"""
@@ -814,6 +868,7 @@ class _AgentSseStreamAdapter:
         while self._queued_events:
             yield self._queued_events.pop(0)
         started_at = time.perf_counter()
+        self._stream_started_wall_ms = int(time.time() * 1000)
         timeout_task = asyncio.create_task(self._first_token_timeout_watchdog(started_at))
         try:
             async for sse_event in self._iter_agent_stream_events(started_at):
@@ -882,10 +937,20 @@ class _AgentSseStreamAdapter:
     ) -> dict[str, Any]:
         """读取最终状态并构造 message_end payload。"""
         self.state = await self.agent.aget_state(self.config) if hasattr(self.agent, "aget_state") else None
-        if persist_latest_ai_timestamp:
-            self.state = await _persist_latest_ai_message_timestamp(self.agent, self.config, self.state)
         usage = self._resolve_end_usage(prefer_latest_usage)
-        return _message_end_payload_from_state(self.state, usage)
+        # 生成统计（服务端口径）随最后一条 AIMessage 持久化（历史回放可见），并随 message_end 下发。
+        stats = _generation_stats_from_usage(
+            first_token_ms=self.first_token_ms,
+            stream_started_wall_ms=self._stream_started_wall_ms,
+            usage=usage,
+        )
+        if persist_latest_ai_timestamp:
+            self.state = await _persist_latest_ai_message_timestamp(
+                self.agent, self.config, self.state, generation_stats=stats
+            )
+        payload = _message_end_payload_from_state(self.state, usage)
+        payload["generation_stats"] = stats
+        return payload
 
     def pending_interrupt(self) -> dict[str, Any] | None:
         """Return the single durable LangGraph interrupt payload, if present."""
@@ -1009,6 +1074,7 @@ class _AgentSseStreamAdapter:
         if self._first_visible_payload_seen:
             return
         self._first_visible_payload_seen = True
+        self.first_token_ms = int((time.perf_counter() - started_at) * 1000)
         self._emit_first_token_timeout_if_needed(started_at)
         if self.on_first_message:
             self.on_first_message()
@@ -1851,6 +1917,11 @@ async def _run_chat_data_agent_stream(
                     ),
                     after_stream=partial(_confirm_agent_consumed_messages, callbacks),
                     on_interrupt=partial(_mark_agent_waiting_for_user, callbacks),
+                ),
+                # finish 时把完成时间与生成统计回写最后一条 AIMessage（随 checkpoint
+                # 进入 turn 历史持久化），message_end 的时间戳与统计也取持久化值。
+                resources=TurnResourceOptions(
+                    finalize_stream_kwargs={"persist_latest_ai_timestamp": True}
                 ),
             ):
                 yield sse_event

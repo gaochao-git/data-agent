@@ -321,6 +321,7 @@ export function useSqlGenerator() {
               onMessageEnd?.({
                 usage: usage && typeof usage === 'object' ? usage as ChatDataTokenUsage : null,
                 timestamp: typeof data?.timestamp === 'string' ? data.timestamp : undefined,
+                generation_stats: data?.generation_stats,
               })
             } catch (err) {
               console.error('解析 message_end 数据失败:', err, dataStr)

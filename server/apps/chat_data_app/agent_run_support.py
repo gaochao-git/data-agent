@@ -145,19 +145,35 @@ def _build_agent_context_state(
     return state
 
 
-async def _persist_latest_ai_message_timestamp(agent: Any, config: dict[str, Any], state: Any | None) -> Any | None:
-    """为 create_agent 产生的最新 AIMessage 补充完成时间，保持历史消息时间口径一致。"""
+def _latest_ai_message_in_state(state: Any | None) -> Any | None:
+    """取 checkpoint 状态里最后一条 AIMessage；没有则 None。"""
     values = getattr(state, "values", None) if state is not None else None
     messages = values.get("messages") if isinstance(values, dict) else []
-    latest_ai_message = None
     for message in reversed(messages or []):
         if isinstance(message, AIMessage):
-            latest_ai_message = message
-            break
+            return message
+    return None
+
+
+async def _persist_latest_ai_message_timestamp(
+    agent: Any,
+    config: dict[str, Any],
+    state: Any | None,
+    generation_stats: dict[str, int] | None = None,
+) -> Any | None:
+    """为最新 AIMessage 补充完成时间与生成统计，保持历史消息时间口径一致。
+
+    generation_stats（服务端口径生成统计）与 timestamp 同通道写入 additional_kwargs，
+    随 checkpoint 进入 turn 历史持久化，历史回放可见。
+    """
+    latest_ai_message = _latest_ai_message_in_state(state)
     if latest_ai_message is None:
         return state
     additional_kwargs = getattr(latest_ai_message, "additional_kwargs", None) or {}
-    if additional_kwargs.get("timestamp") or not hasattr(agent, "aupdate_state"):
+    # 时间戳已由 ResponseTimestampMiddleware 在模型响应时盖章进 checkpoint，本函数对
+    # chat_data 主链路只剩 generation_stats 补写职责——有 stats 不能因时间戳已存在而提前返回。
+    has_timestamp = bool(additional_kwargs.get("timestamp"))
+    if (has_timestamp or not hasattr(agent, "aupdate_state")) and not generation_stats:
         return state
     try:
         patched_message = (
@@ -166,7 +182,10 @@ async def _persist_latest_ai_message_timestamp(agent: Any, config: dict[str, Any
             else latest_ai_message.copy(deep=True)
         )
         patched_message.additional_kwargs = dict(additional_kwargs)
-        patched_message.additional_kwargs["timestamp"] = _get_timestamp()
+        if not has_timestamp:
+            patched_message.additional_kwargs["timestamp"] = _get_timestamp()
+        if generation_stats:
+            patched_message.additional_kwargs["generation_stats"] = generation_stats
         await agent.aupdate_state(config, {"messages": [patched_message]}, as_node="model")
         return await agent.aget_state(config) if hasattr(agent, "aget_state") else state
     except Exception as exc:

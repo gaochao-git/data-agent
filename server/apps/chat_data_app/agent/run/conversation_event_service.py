@@ -828,6 +828,11 @@ def _serialize_ai_message(message: AIMessage) -> dict[str, Any]:
         "timestamp": _timestamp(message),
     }
     payload.update(_execution_timing(message))
+    # 生成统计（首 token / 时长 / tokens，服务端口径，finish 时盖章到 additional_kwargs）：
+    # 随 assistant_message 事件持久化，历史回放时前端气泡 footer 可展示。
+    generation_stats = (getattr(message, "additional_kwargs", None) or {}).get("generation_stats")
+    if isinstance(generation_stats, dict) and generation_stats:
+        payload["generation_stats"] = generation_stats
     tool_calls = []
     for tool_call in getattr(message, "tool_calls", None) or []:
         if not isinstance(tool_call, dict):
