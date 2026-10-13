@@ -57,6 +57,33 @@ REDIS_OPS_RETRY = Retry(
     supported_errors=(RedisConnectionError, TimeoutError, ReadOnlyError, socket.timeout),
 )
 
+
+def _socket_keepalive_options() -> dict[int, int]:
+    """跨平台 keepalive 探测参数：空闲 30s 即探测，按 10s 间隔连探 3 次判死。
+
+    ``socket_keepalive=True`` 不带 options 时用 OS 默认间隔（Linux tcp_keepalive_time
+    默认 7200s），对公网链路 NAT 空闲回收（通常 300s 内静默掐断半开连接）形同虚设，
+    操作档间歇使用的连接池连接会在下次取用时 PING 挂满 socket_timeout。显式缩短
+    探测间隔，让死连接在一分钟内被主动清理。Linux/macOS 的 setsockopt 键名不同，
+    逐键探测构建，未知平台退化为空表（等价于系统默认行为）。
+    """
+    options: dict[int, int] = {}
+    idle = getattr(socket, "TCP_KEEPIDLE", None)
+    if idle is not None:
+        options[idle] = 30
+    else:
+        mac_idle = getattr(socket, "TCP_KEEPALIVE", None)
+        if mac_idle is not None:
+            options[mac_idle] = 30
+    interval = getattr(socket, "TCP_KEEPINTVL", None)
+    if interval is not None:
+        options[interval] = 10
+    count = getattr(socket, "TCP_KEEPCNT", None)
+    if count is not None:
+        options[count] = 3
+    return options
+
+
 _PUBLISH_SCRIPT = """
 local current_owner = redis.call('GET', KEYS[4])
 if not current_owner or current_owner ~= ARGV[8] then
@@ -192,6 +219,7 @@ class RedisEventBus:
                 decode_responses=True,
                 health_check_interval=REDIS_HEALTH_CHECK_INTERVAL_SECONDS,
                 socket_keepalive=True,
+                socket_keepalive_options=_socket_keepalive_options(),
                 socket_connect_timeout=REDIS_CONNECT_TIMEOUT_SECONDS,
                 socket_timeout=REDIS_OPS_SOCKET_TIMEOUT_SECONDS,
                 retry=REDIS_OPS_RETRY,
@@ -208,6 +236,7 @@ class RedisEventBus:
                 decode_responses=True,
                 health_check_interval=REDIS_HEALTH_CHECK_INTERVAL_SECONDS,
                 socket_keepalive=True,
+                socket_keepalive_options=_socket_keepalive_options(),
                 socket_connect_timeout=REDIS_CONNECT_TIMEOUT_SECONDS,
                 socket_timeout=REDIS_READ_SOCKET_TIMEOUT_SECONDS,
                 retry=REDIS_READ_RETRY,

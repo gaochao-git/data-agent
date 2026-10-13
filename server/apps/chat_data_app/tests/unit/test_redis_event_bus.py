@@ -7,7 +7,11 @@ from redis.exceptions import ResponseError
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 
-from apps.chat_data_app.agent.run.redis_event_bus import RedisEventBus, RedisRunOwnerMismatchError
+from apps.chat_data_app.agent.run.redis_event_bus import (
+    RedisEventBus,
+    RedisRunOwnerMismatchError,
+    _socket_keepalive_options,
+)
 from utils.crypto import encrypt_password
 
 
@@ -311,3 +315,32 @@ def test_invalid_sentinel_addr_raises(monkeypatch):
     monkeypatch.setenv("CHAT_DATA_REDIS_SENTINELS", "no-port-here")
     with pytest.raises(ValueError, match="host:port"):
         RedisEventBus()
+
+
+def test_socket_keepalive_options_linux_keys(monkeypatch):
+    from apps.chat_data_app.agent.run import redis_event_bus
+
+    monkeypatch.setattr(redis_event_bus.socket, "TCP_KEEPIDLE", 4, raising=False)
+    monkeypatch.setattr(redis_event_bus.socket, "TCP_KEEPINTVL", 5, raising=False)
+    monkeypatch.setattr(redis_event_bus.socket, "TCP_KEEPCNT", 6, raising=False)
+    assert redis_event_bus._socket_keepalive_options() == {4: 30, 5: 10, 6: 3}
+
+
+def test_socket_keepalive_options_macos_fallback(monkeypatch):
+    from apps.chat_data_app.agent.run import redis_event_bus
+
+    monkeypatch.delattr(redis_event_bus.socket, "TCP_KEEPIDLE", raising=False)
+    monkeypatch.setattr(redis_event_bus.socket, "TCP_KEEPALIVE", 16, raising=False)
+    monkeypatch.setattr(redis_event_bus.socket, "TCP_KEEPINTVL", 5, raising=False)
+    monkeypatch.setattr(redis_event_bus.socket, "TCP_KEEPCNT", 6, raising=False)
+    options = redis_event_bus._socket_keepalive_options()
+    assert options[16] == 30
+    assert options[5] == 10
+    assert options[6] == 3
+    assert 4 not in options
+
+
+def test_socket_keepalive_options_current_platform():
+    options = _socket_keepalive_options()
+    assert options
+    assert all(value in (30, 10, 3) for value in options.values())
