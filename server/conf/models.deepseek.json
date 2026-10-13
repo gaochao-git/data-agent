@@ -8,7 +8,7 @@
     "thinking": {
       "mode": "optional",
       "dialect": "reasoning_effort",
-      "default_on": false,
+      "default_on": true,
       "efforts": [
         "low",
         "medium",
