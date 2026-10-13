@@ -42,6 +42,7 @@ import {
 import { buildExecutionTargets, isSameStringArray } from '../utils/executionTargets'
 import type { ConversationSortBy, ConversationViewMode } from '../utils/conversationHistory'
 import { useConversationHistoryBrowser } from '../composables/useConversationHistoryBrowser'
+import { useModelOptions } from '../composables/useModelOptions'
 
 // 模式图标组件映射（经典样式使用）
 const MODE_ICON_COMPONENTS: Record<string, typeof IconModeConversation> = {
@@ -655,11 +656,16 @@ watch(visibleModes, () => {
 })
 
 // 新建会话（只清空状态；选数据源确认时创建会话，发送消息兜底创建）
+const { load: loadModelOptions } = useModelOptions()
 const handleNewConversation = () => {
   currentConversationId.value = null
   currentConversationTitle.value = '新会话'
   currentConversationDatasourceId.value = null
   conversationKey.value++ // 强制重新渲染以清空消息
+  // 模型注册表是模块级会话期缓存，后端改配置重启后本页不会自动感知；
+  // 新建会话时强制重拉 /config（后台静默），拉回后由 Conversation 内的
+  // watch(modelOptions) 把不在新注册表中的选中模型回填为最新默认模型。
+  loadModelOptions(true)
 }
 
 const loadConversationDatasourceId = async (conversationId: string): Promise<string | null | undefined> => {
