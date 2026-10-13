@@ -449,6 +449,14 @@ def _resolve_agent_turn_id(
     )
 
 
+async def _resolve_workspace_created_date(thread_id: str, user_id: str | None) -> str | None:
+    """解析会话创建日期（工作区日期分层）；无依赖的准备项，供准备段并行调用。
+
+    经本模块命名空间转发 get_conversation_created_date，测试桩与既有口径一致。
+    """
+    return await get_conversation_created_date(thread_id, user_id=user_id or "system")
+
+
 async def _prepare_agent_semantic_context(
     *,
     thread_id: str,
@@ -496,14 +504,15 @@ async def _prepare_agent_workspace_runtime(
     user_id: str | None,
     semantic_context: SemanticConversationContext,
     runtime_options: AgentRuntimeOptions,
+    created_date: str | None,
 ) -> tuple[dict[str, str], ConversationWorkspaceRuntime, str]:
     """准备会话工作区并预物化语义目录；目录整体失败抛 _AgentRunPreparationError。
 
+    created_date 由调用方在准备段并行解析后传入（只依赖 thread_id，与本函数无依赖）；
+    会话不存在时为 None，prepare_conversation_workspace 回退当前日期。
     返回（workspace 路径表, workspace 运行时, 语义物化缺失说明）。
     """
-    # 工作区按会话创建日期归档；先查 DB 权威解析，避免与 uploads/技能快照等入口分裂出多个日期目录。
     user_id_str = user_id or "system"
-    created_date = await get_conversation_created_date(thread_id, user_id=user_id_str)
     workspace_paths = await prepare_conversation_workspace(thread_id, user_id_str, created_date=created_date)
     workspace_runtime = ConversationWorkspaceRuntime(
         workspace_root=workspace_paths["root"],

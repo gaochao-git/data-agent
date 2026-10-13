@@ -17,6 +17,8 @@ export interface GenerationStatsInput {
   runStartedAtMs: number
   /** 本轮收口时间（客户端时钟，onMessageEnd 时刻） */
   runEndedAtMs: number
+  /** 首个模型流事件到达时间（客户端时钟）；缺失时不产出首 token 耗时 */
+  firstChunkAtMs?: number | null
 }
 
 const SKEW_GUARD_MS = 2000
@@ -54,7 +56,14 @@ export const computeGenerationStats = (
   const tokensPerSecond = Math.round(outputTokens / (durationMs / 1000))
   if (!Number.isFinite(tokensPerSecond) || tokensPerSecond <= 0) return null
 
-  return { outputTokens, durationMs, tokensPerSecond }
+  // 首 token 耗时：发起 → 首个模型流事件（含 thinking / tool_calls chunk），纯客户端墙钟
+  const { firstChunkAtMs } = timing
+  const firstTokenMs
+    = typeof firstChunkAtMs === 'number' && Number.isFinite(firstChunkAtMs) && firstChunkAtMs >= runStartedAtMs
+      ? firstChunkAtMs - runStartedAtMs
+      : undefined
+
+  return { outputTokens, durationMs, tokensPerSecond, firstTokenMs }
 }
 
 const formatCompactTokens = (value: number): string => {
@@ -83,10 +92,12 @@ export const formatGenerationSpeed = (stats: MessageGenerationStats): string => 
   return `${stats.tokensPerSecond} tok/s`
 }
 
-/** 悬浮明细，如「输出 1.8k tokens · 生成 12.3s」。 */
-export const formatGenerationStatsDetail = (stats: MessageGenerationStats): string => (
-  `输出 ${formatCompactTokens(stats.outputTokens)} tokens · 生成 ${formatDurationMs(stats.durationMs)}`
-)
+/** 悬浮明细，如「首 token 2.1s · 输出 1.8k tokens · 生成 12.3s」；首 token 缺失时不追加。 */
+export const formatGenerationStatsDetail = (stats: MessageGenerationStats): string => {
+  const parts = [`输出 ${formatCompactTokens(stats.outputTokens)} tokens`, `生成 ${formatDurationMs(stats.durationMs)}`]
+  if (typeof stats.firstTokenMs === 'number') parts.unshift(`首 token ${formatDurationMs(stats.firstTokenMs)}`)
+  return parts.join(' · ')
+}
 
 const CJK_CHAR_REGEX = /[\u3400-\u9FFF\uF900-\uFAFF\u3000-\u303F\uFF01-\uFF5E]/
 

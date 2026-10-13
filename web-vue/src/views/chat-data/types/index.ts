@@ -383,6 +383,8 @@ export interface MessageGenerationStats {
   durationMs: number
   /** 生成速度（tokens/s） */
   tokensPerSecond: number
+  /** 首 token 耗时（毫秒，发起 → 首个模型流事件的客户端墙钟）；首个事件晚于发起记录失败时缺省 */
+  firstTokenMs?: number
 }
 
 // 用户消息附件（文件卡片展示用）

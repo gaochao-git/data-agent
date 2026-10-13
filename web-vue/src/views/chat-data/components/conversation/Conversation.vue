@@ -1510,15 +1510,24 @@ const updateAssistantFinishedAt = (messageId: string, timestamp?: string) => {
 
 // 生成速度统计（输出 tokens / 估算纯模型生成时长 / tok/s）：message_end 收口时现算现挂，
 // 历史消息与本轮未收口的气泡没有该数据，footer 不展示。
-const attachGenerationStats = (messageId: string, usage: ChatDataTokenUsage | null | undefined, runStartedAtMs: number) => {
+const attachGenerationStats = (
+  messageId: string,
+  usage: ChatDataTokenUsage | null | undefined,
+  runStartedAtMs: number,
+  firstChunkAtMs: number | null,
+) => {
   const message = messages.value.find(item => item.id === messageId && item.role === 'assistant')
     ?? (activeAssistantMessageId.value
       ? messages.value.find(item => item.id === activeAssistantMessageId.value && item.role === 'assistant')
       : null)
   if (message?.role === 'assistant') {
-    message.generationStats = computeGenerationStats(usage, { runStartedAtMs, runEndedAtMs: Date.now() }) ?? undefined
+    message.generationStats = computeGenerationStats(usage, { runStartedAtMs, runEndedAtMs: Date.now(), firstChunkAtMs }) ?? undefined
   }
 }
+
+// 首个模型流事件到达时刻（客户端时钟，submit 时重置）：首 token 耗时的终点。
+// 口径 = 第一个非 tool 结果的 LangGraph 消息（thinking / 正文 / tool_calls chunk 均为模型产物）。
+let firstStreamChunkAtMs: number | null = null
 
 // ---- 生成中的实时速率（500ms 节拍）----
 // 分子 = 流出正文/思考的 token 粗估（CJK 1 字/token，其余 4 字符/token）
@@ -1836,6 +1845,9 @@ const appendThinkingSegment = (content: string) => {
 }
 
 const handleLangGraphMessage = (msg: LangGraphMessage) => {
+  if (msg.type !== 'tool') {
+    firstStreamChunkAtMs ??= Date.now()
+  }
   if (msg.type === 'thinking') {
     const reasoningContent = typeof msg.content === 'string'
       ? msg.content
@@ -1943,6 +1955,7 @@ const submitAnalysisQuery = async (
   isGenerating.value = true
   // 本轮发起时刻（客户端时钟）：生成速度分母的起点，与 onMessageEnd 的客户端时刻同源，无跨机时钟偏差
   const runStartedAtMs = Date.now()
+  firstStreamChunkAtMs = null
   serverArgsChars.value = 0
   liveGenerationSpeed.value = null
   liveSpeedTimerId = setInterval(() => {
@@ -2039,7 +2052,7 @@ const submitAnalysisQuery = async (
         skillNames: options.skillNames?.length ? options.skillNames : null,
         onMessageEnd: (payload) => {
           if (payload.usage) tokenUsage.value = payload.usage
-          attachGenerationStats(assistantMessageId, payload.usage, runStartedAtMs)
+          attachGenerationStats(assistantMessageId, payload.usage, runStartedAtMs, firstStreamChunkAtMs)
           updateAssistantFinishedAt(assistantMessageId, payload.timestamp)
         },
         onTokenUsage: (usage) => {

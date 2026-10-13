@@ -77,6 +77,7 @@ from .agent_run_support import (
     _resolve_agent_initial_state,
     _resolve_checkpointed_turn_state,
     _resolve_file_attachments,
+    _resolve_workspace_created_date,
     _write_agent_model_snapshot,
 )
 from .services import conversation_service as conversation
@@ -1139,7 +1140,7 @@ async def _generate_chat_data_stream(
     def log_phase(phase: str) -> None:
         nonlocal last_phase_at
         now = time.perf_counter()
-        logger.info(
+        logger.debug(
             "ChatData 阶段耗时: conversation_id=%s phase=%s elapsed_ms=%d total_ms=%d",
             thread_id,
             phase,
@@ -1621,32 +1622,42 @@ async def _run_chat_data_agent_stream(
     stream_event_id_provider = req.stream_event_id_provider
     selected_files = parse_file_selections(file_selections)
     try:
-        semantic_context = await _prepare_agent_semantic_context(
-            thread_id=thread_id,
-            user_query=user_query,
-            datasource_id=datasource_id,
-            user_id=user_id,
-            username=username,
-            member_datasource_ids=member_datasource_ids,
-            semantic_config_id=semantic_config_id,
+        # 无依赖的准备项一次并行：语义上下文（含数据源校验）/ 子智能体热默认 /
+        # 会话创建日期 / 附件解析。语义上下文失败仍按 _AgentRunPreparationError
+        # 终止本轮；其余任务异常与串行版相同直接冒泡，不改变错误处理边界。
+        semantic_context, hot_defaults, created_date, file_attachments = await asyncio.gather(
+            _prepare_agent_semantic_context(
+                thread_id=thread_id,
+                user_query=user_query,
+                datasource_id=datasource_id,
+                user_id=user_id,
+                username=username,
+                member_datasource_ids=member_datasource_ids,
+                semantic_config_id=semantic_config_id,
+            ),
+            get_subagent_hot_defaults(),
+            _resolve_workspace_created_date(thread_id, user_id),
+            _resolve_file_attachments(file_ids, user_id=user_id, thread_id=thread_id),
         )
         datasource_id = semantic_context.datasource_id
         runtime_options = resolve_agent_runtime_options(
             user_id=user_id,
             override=(options or {}).get("runtime_options"),
-            **await get_subagent_hot_defaults(),
+            **hot_defaults,
         )
+        log_phase("prepare_inputs")
         workspace_paths, workspace_runtime, semantic_materialize_note = await _prepare_agent_workspace_runtime(
             thread_id=thread_id,
             datasource_id=datasource_id,
             user_id=user_id,
             semantic_context=semantic_context,
             runtime_options=runtime_options,
+            created_date=created_date,
         )
+        log_phase("workspace_runtime")
     except _AgentRunPreparationError as exc:
         yield _format_sse("error", {"error": exc.message})
         raise AgentRunStreamFailedError from None
-    log_phase("prepare_semantic_context")
     # 引用文件校验必须在 workspace 就绪之后：@ 菜单可引用的文件以工作区实际内容为准。
     valid_file_selections = _validate_workspace_file_selections(selected_files, workspace_paths["root"])
 
@@ -1684,14 +1695,6 @@ async def _run_chat_data_agent_stream(
 
     steering_tracker = SteeringMessageTracker()
 
-    # 解析 file_ids 对应的文件信息，用于追加到用户消息。
-    # 上传与解析已解耦：只要求文件存在且归属当前会话，不再要求预解析完成。
-    file_attachments = await _resolve_file_attachments(
-        file_ids,
-        user_id=user_id,
-        thread_id=thread_id,
-    )
-
     # 用户输入超长时自动转为文件写入 workspace outputs
     user_message_content = user_query
     if len(user_query) > USER_INPUT_OFFLOAD_THRESHOLD:
@@ -1714,37 +1717,42 @@ async def _run_chat_data_agent_stream(
             attachment_text = build_file_attachment_text(file_attachments)
             message_content = f"{user_message_content}{attachment_text}"
 
-            user_message, initial_state, system_prompt, adopted_messages = await _resolve_agent_turn_inputs(
-                checkpointer,
-                config,
-                user_input=TurnUserInput(
-                    user_query=user_query,
-                    message_content=message_content,
-                    file_selections=valid_file_selections,
-                    vision_attachments=vision_attachments,
-                    skill_names=skill_names or [],
-                    adopted_messages=adopted_messages,
+            # 插件启停快照刷新与 turn 输入解析无依赖，并行后一并计入 build_system_prompt 段；
+            # refresh 内部 fail-closed 不抛异常，create_data_agent 读到的快照必然已刷新。
+            (user_message, initial_state, system_prompt, adopted_messages), _ = await asyncio.gather(
+                _resolve_agent_turn_inputs(
+                    checkpointer,
+                    config,
+                    user_input=TurnUserInput(
+                        user_query=user_query,
+                        message_content=message_content,
+                        file_selections=valid_file_selections,
+                        vision_attachments=vision_attachments,
+                        skill_names=skill_names or [],
+                        adopted_messages=adopted_messages,
+                    ),
+                    resume=TurnResumeContext(
+                        recovering=recovering,
+                        resume_answer=resume_answer,
+                        resume_started=resume_started,
+                        turn_id=turn_id,
+                        run_id=run_id,
+                        owner_token=owner_token,
+                    ),
+                    runtime=TurnRuntimeContext(
+                        user_id=user_id,
+                        username=username,
+                        thread_id=thread_id,
+                        datasource_id=datasource_id,
+                        semantic_context=semantic_context,
+                        runtime_options=runtime_options,
+                        workspace_root=workspace_paths["root"],
+                        data_context=data_context,
+                        available_skills_xml=available_skills_xml,
+                        memory_block=memory_block,
+                    ),
                 ),
-                resume=TurnResumeContext(
-                    recovering=recovering,
-                    resume_answer=resume_answer,
-                    resume_started=resume_started,
-                    turn_id=turn_id,
-                    run_id=run_id,
-                    owner_token=owner_token,
-                ),
-                runtime=TurnRuntimeContext(
-                    user_id=user_id,
-                    username=username,
-                    thread_id=thread_id,
-                    datasource_id=datasource_id,
-                    semantic_context=semantic_context,
-                    runtime_options=runtime_options,
-                    workspace_root=workspace_paths["root"],
-                    data_context=data_context,
-                    available_skills_xml=available_skills_xml,
-                    memory_block=memory_block,
-                ),
+                refresh_plugin_state(),
             )
             log_phase("build_system_prompt")
 
@@ -1772,7 +1780,6 @@ async def _run_chat_data_agent_stream(
             )
             callbacks.model_snapshot_writer = model_snapshot_writer
 
-            await refresh_plugin_state()
             agent = create_data_agent(
                 runtime_options,
                 checkpointer=checkpointer,
@@ -1872,6 +1879,10 @@ async def sql_completion_handler(
     """
     智能问数 completion 处理器。
     """
+    # TTFT 观测：本函数是「HTTP 入口 → 后台 run 启动」盲区的主要耗时段
+    # （start_run 的 adopt/落库 + 提交调度），此前零日志、波动 2~6s 无法归因。
+    # 与 graph 内 log_phase 共用「ChatData 阶段耗时」前缀，一条 grep 串起全链路。
+    handler_started_at = time.perf_counter()
     run_options = parse_completion_run_options(options)
 
     # 保持懒创建会话；数据源组在生成流开始时写入业务会话表并校验。
@@ -1900,12 +1911,24 @@ async def sql_completion_handler(
         adopt_pending_messages=not queued_message_id and not preserve_queued_messages,
         selected_message_id=queued_message_id,
     )
+    logger.info(
+        "ChatData 阶段耗时: conversation_id=%s phase=completion.start_run elapsed_ms=%d total_ms=%d",
+        conversation_id,
+        int((time.perf_counter() - handler_started_at) * 1000),
+        int((time.perf_counter() - handler_started_at) * 1000),
+    )
 
     agent_run_runtime.submit(
         run_id=run_id,
         conversation_id=conversation_id,
         user_id=user_id,
         operator_name=username or user_id,
+    )
+    logger.info(
+        "ChatData 阶段耗时: conversation_id=%s phase=completion.handler_done elapsed_ms=%d total_ms=%d",
+        conversation_id,
+        int((time.perf_counter() - handler_started_at) * 1000),
+        int((time.perf_counter() - handler_started_at) * 1000),
     )
     return StreamingResponse(
         _stream_run_events(run_id, request=request),

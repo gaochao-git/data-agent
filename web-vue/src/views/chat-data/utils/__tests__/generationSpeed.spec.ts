@@ -72,6 +72,23 @@ describe('computeGenerationStats', () => {
       runEndedAtMs: RUN_END,
     })).toBeNull()
   })
+
+  it('首 token 耗时 = 首个流事件时刻 − 发起时刻', () => {
+    const stats = computeGenerationStats(buildUsage({ output_tokens: 1000 }), {
+      runStartedAtMs: RUN_START,
+      runEndedAtMs: RUN_END,
+      firstChunkAtMs: RUN_START + 2100,
+    })
+    expect(stats?.firstTokenMs).toBe(2100)
+  })
+
+  it('首 token 时刻缺失、非法或早于发起时不产出', () => {
+    const timing = { runStartedAtMs: RUN_START, runEndedAtMs: RUN_END }
+    expect(computeGenerationStats(buildUsage({ output_tokens: 1000 }), timing)?.firstTokenMs).toBeUndefined()
+    expect(computeGenerationStats(buildUsage({ output_tokens: 1000 }), { ...timing, firstChunkAtMs: null })?.firstTokenMs).toBeUndefined()
+    expect(computeGenerationStats(buildUsage({ output_tokens: 1000 }), { ...timing, firstChunkAtMs: Number.NaN })?.firstTokenMs).toBeUndefined()
+    expect(computeGenerationStats(buildUsage({ output_tokens: 1000 }), { ...timing, firstChunkAtMs: RUN_START - 1 })?.firstTokenMs).toBeUndefined()
+  })
 })
 
 describe('formatGenerationSpeed', () => {
@@ -97,6 +114,15 @@ describe('formatGenerationStatsDetail', () => {
   it('tokens 紧凑展示', () => {
     expect(formatGenerationStatsDetail({ outputTokens: 1842, durationMs: 12300, tokensPerSecond: 150 }))
       .toBe('输出 1.8k tokens · 生成 12.3s')
+  })
+
+  it('含首 token 耗时时置于明细开头', () => {
+    expect(formatGenerationStatsDetail({ outputTokens: 1842, durationMs: 12300, tokensPerSecond: 150, firstTokenMs: 2100 }))
+      .toBe('首 token 2.1s · 输出 1.8k tokens · 生成 12.3s')
+    expect(formatGenerationStatsDetail({ outputTokens: 100, durationMs: 860, tokensPerSecond: 10, firstTokenMs: 860 }))
+      .toContain('首 token 860ms')
+    expect(formatGenerationStatsDetail({ outputTokens: 100, durationMs: 860, tokensPerSecond: 10 }))
+      .not.toContain('首 token')
   })
 })
 

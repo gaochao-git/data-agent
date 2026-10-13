@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import suppress
 from dataclasses import dataclass
@@ -483,6 +484,10 @@ class AgentRunRuntime:
         user_id: str,
         operator_name: str,
     ) -> None:
+        # TTFT 观测：run_dispatch = submit → 本任务实际开跑（事件循环调度 +
+        # 下方运行时设置读取 + 并发闸排队）；claim_pending_run = 领取的 DB/Redis 耗时。
+        # 两段此前零日志，是「HTTP 入口 → graph 启动」2~6s 波动的嫌疑段。
+        execute_started_at = time.perf_counter()
         try:
             desired_capacity = await get_runtime_setting("CHAT_DATA_AGENT_MAX_CONCURRENCY")
         except Exception:
@@ -491,6 +496,13 @@ class AgentRunRuntime:
             self._semaphore_capacity = desired_capacity
             self._semaphore = asyncio.Semaphore(desired_capacity)
         async with self._semaphore:
+            dispatch_ms = int((time.perf_counter() - execute_started_at) * 1000)
+            logger.debug(
+                "ChatData 阶段耗时: conversation_id=%s phase=run_dispatch elapsed_ms=%d total_ms=%d",
+                conversation_id,
+                dispatch_ms,
+                dispatch_ms,
+            )
             state = _RunExecutionState(
                 run_id=run_id,
                 conversation_id=conversation_id,
@@ -499,7 +511,15 @@ class AgentRunRuntime:
             )
             prepared: dict | None = None
             try:
+                claim_started_at = time.perf_counter()
                 prepared = await self._claim_pending_run(state)
+                claim_ms = int((time.perf_counter() - claim_started_at) * 1000)
+                logger.debug(
+                    "ChatData 阶段耗时: conversation_id=%s phase=claim_pending_run elapsed_ms=%d total_ms=%d",
+                    conversation_id,
+                    claim_ms,
+                    dispatch_ms + claim_ms,
+                )
                 if prepared is None:
                     return
                 state.terminal_payload = await self._stream_and_finalize(state, prepared)
