@@ -15,6 +15,19 @@ const props = defineProps({
 
 const formatJson = (value: unknown) => props.formatText(JSON.stringify(value || {}, null, 2))
 
+// 结果文本为 JSON 对象/数组时美化展示（与参数区的 formatJson 口径一致）；解析失败或纯文本回退原文。
+// 超大文本不做解析（>1MB），避免主线程卡顿；正常工具结果已被 >32k 卸载机制兜底。
+const prettyJsonIfPossible = (raw: string): string => {
+  const text = raw.trim()
+  if (!text.startsWith('{') && !text.startsWith('[')) return raw
+  if (text.length > 1024 * 1024) return raw
+  try {
+    return JSON.stringify(JSON.parse(text), null, 2)
+  } catch {
+    return raw
+  }
+}
+
 // 标题链：后端下发展示名（MCP tool_labels）优先，内置映射/限定名兜底，与 ToolCallCard 口径一致
 const toolDisplayName = computed(() => props.toolCall?.display_name?.trim() || getToolDisplayName(props.toolCall?.tool_name))
 // 数据分析合并工具在标题露出动作中文名（如「语义模型自检」），只看卡片名分不清具体动作
@@ -53,7 +66,7 @@ const toolResult = computed(() => {
   const toolCall = props.toolCall
   if (!toolCall) return ''
   const fallback = toolCall.status === 'completed' ? '已完成，工具未返回文本内容。' : '执行中...'
-  return props.formatText(toolCall.result || fallback)
+  return props.formatText(prettyJsonIfPossible(toolCall.result || fallback))
 })
 
 // 执行信息：状态 + 起止时间/耗时（数据来自 ToolTimingMiddleware 盖章，历史与直播同源）

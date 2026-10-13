@@ -169,6 +169,12 @@ async def _persist_latest_ai_message_timestamp(
     latest_ai_message = _latest_ai_message_in_state(state)
     if latest_ai_message is None:
         return state
+    # 图停在 LangGraph interrupt（如 ask_user_question 人工应答）时禁止补写：
+    # aupdate_state(as_node="model") 会创建新 checkpoint 并抹掉 pending interrupt，
+    # 导致 question_requested 不下发、Run 被误判为 completed（0cb2fdd 引入的回归）。
+    # 本轮 generation_stats 一并跳过，待用户应答恢复后的下一轮 finish 再盖章。
+    if getattr(state, "interrupts", None):
+        return state
     additional_kwargs = getattr(latest_ai_message, "additional_kwargs", None) or {}
     # 时间戳已由 ResponseTimestampMiddleware 在模型响应时盖章进 checkpoint，本函数对
     # chat_data 主链路只剩 generation_stats 补写职责——有 stats 不能因时间戳已存在而提前返回。

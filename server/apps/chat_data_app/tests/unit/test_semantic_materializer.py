@@ -729,7 +729,7 @@ def _catalog_content(runtime) -> str | None:
 
 
 def test_prematerialize_writes_semantic_catalog(monkeypatch):
-    """全量物化生成语义资产目录：name/config_id/description/business_notes 四字段，停用模型不出现。"""
+    """全量物化生成语义资产目录：file/description/business_notes 字段，停用模型不出现。"""
     configs = [
         dict(_config("sc_a"), business_notes="【业务运转说明】订单口径说明"),
         _config("sc_off", enabled=False),
@@ -742,11 +742,11 @@ def test_prematerialize_writes_semantic_catalog(monkeypatch):
     assert catalog_entry is not None
     payload = yaml.safe_load(catalog_entry)
     assert payload["generated_at"]
-    assert [model["config_id"] for model in payload["models"]] == ["sc_a"]
+    assert [model["file"] for model in payload["models"]] == ["订单模型__a.yaml"]
     model = payload["models"][0]
-    assert model["name"] == "订单模型"
     assert model["description"] == "订单分析"
     assert model["business_notes"] == "【业务运转说明】订单口径说明"
+    assert "config_id" not in model
 
 
 def test_single_model_materialization_skips_catalog(monkeypatch):

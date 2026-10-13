@@ -20,7 +20,7 @@
 
 ### 1. 定位语义模型
 
-1. 当前用户可见（当前数据源组）的语义模型 Ossie YAML 已预物化到 `/mnt/user-data/workspace/semantic/`，文件名为 `{模型名}__{id后缀}.yaml`；同目录的 `_semantic_catalog.yaml` 是系统生成的语义资产目录。先用 `file_read` 整读目录得到模型清单。
+1. 当前用户可见（当前数据源组）的语义模型 Ossie YAML 已预物化到 `/mnt/user-data/workspace/semantic/`，文件名为 `{模型名}__{id后缀}.yaml`；同目录的 `_semantic_catalog.yaml` 是系统生成的语义资产目录（每个启用模型一条 file/description/business_notes）。先用 `file_read` 整读目录得到模型清单。
 2. 用户指定模型时按名称/文件名匹配；未指定时结合业务话题用 `file_grep` 按关键词定位候选，再 `file_read` 分页精读。禁止为找模型逐个读取目录里的全部 YAML。
 3. 用户没有现成模型、从零开始讨论时，先确认业务主题与涉及的物理表，再进入差距分析。
 

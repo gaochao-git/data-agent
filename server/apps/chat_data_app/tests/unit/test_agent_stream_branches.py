@@ -803,6 +803,35 @@ async def test_persist_latest_ai_message_timestamp_uses_langchain_agent_model_no
 
 
 @pytest.mark.asyncio
+async def test_persist_latest_ai_message_timestamp_skips_update_when_interrupt_pending():
+    """图停在 LangGraph interrupt 时禁止 aupdate_state：as_node="model" 补写会抹掉
+    pending interrupt，导致 ask_user_question 的 question_requested 不下发（0cb2fdd 回归）。"""
+
+    class Agent:
+        def __init__(self):
+            self.updated = []
+
+        async def aupdate_state(self, config, values, as_node=None):
+            self.updated.append((config, values, as_node))
+
+    agent = Agent()
+    state = SimpleNamespace(
+        interrupts=[SimpleNamespace(value={"question_id": "q1"})],
+        values={
+            "messages": [
+                AIMessage(content="提问", id="ai_1", additional_kwargs={"timestamp": "2026-10-13T11:50:00"}),
+            ]
+        },
+    )
+    result = await agent_stream._persist_latest_ai_message_timestamp(
+        agent, {"thread_id": "t"}, state, generation_stats={"first_token_ms": 1}
+    )
+
+    assert agent.updated == []  # 未触发任何状态补写
+    assert result is state  # 原状态原样返回，interrupt 保持 pending
+
+
+@pytest.mark.asyncio
 async def test_generate_chat_data_stream_tool_chunks_retrieval_completes(monkeypatch):
     class Graph:
         async def aget_state(self, _config):

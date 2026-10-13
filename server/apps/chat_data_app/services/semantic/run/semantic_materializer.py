@@ -281,18 +281,17 @@ async def _prune_stale_semantic_files(workspace_runtime: Any, keep_paths: set[st
 
 
 def _render_semantic_catalog(configs: list[dict[str, Any]]) -> str:
-    """生成语义资产目录：每个启用模型一条 name/config_id/description/business_notes。
+    """生成语义资产目录：每个启用模型一条 file/description/business_notes。
 
-    供 agent 检索第一步整读，替代盲目 dir_list；仅在全量物化（prune_stale）
-    时刷新，单模型物化不覆盖，避免把目录写成残缺集。
+    file 即快照文件名（{模型名}__{id后缀}.yaml），agent 命中后可直接
+    file_read，无需自行拼接路径；仅在全量物化（prune_stale）时刷新，
+    单模型物化不覆盖，避免把目录写成残缺集。
     """
     models = []
     for config in configs:
-        config_id = _config_id(config)
         models.append(
             {
-                "name": str(config.get("name") or config.get("semantic_config_name") or config_id).strip(),
-                "config_id": config_id,
+                "file": _safe_file_name(config),
                 "description": str(config.get("description") or config.get("semantic_config_desc") or "").strip(),
                 "business_notes": str(config.get("business_notes") or "").strip(),
             }
