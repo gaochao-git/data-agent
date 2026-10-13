@@ -25,6 +25,11 @@ const mountList = (messages: Message[], extraProps: Record<string, unknown> = {}
       ElTooltip: { template: '<div><slot /><slot name="content" /></div>' },
       // shallowMount 的自动 stub 不渲染默认 slot，footer 内的复制按钮与 AI 声明需显式透出
       AssistantMessageFooter: { template: '<div><slot /><span>本回答由 AI 生成</span></div>' },
+      // 思考正文抽为 ThinkingSegmentBody（流式粘底跟随），stub 需保留容器类与内容供断言
+      ThinkingSegmentBody: {
+        props: ['content', 'active'],
+        template: '<div class="bg-slate-50">{{ content }}</div>',
+      },
     },
   },
 })

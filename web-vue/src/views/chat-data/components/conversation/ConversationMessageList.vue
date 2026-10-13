@@ -8,6 +8,7 @@ import { formatDateTimeValue, formatGenerationSpeed, formatGenerationStatsDetail
 import AssistantMessageFooter from '../AssistantMessageFooter.vue'
 import QueryResultPanel from '../QueryResultPanel.vue'
 import ToolCallList from '../ToolCallList.vue'
+import ThinkingSegmentBody from './ThinkingSegmentBody.vue'
 
 interface Props {
   messages: Message[]
@@ -379,12 +380,11 @@ const handleCopyAssistantMessage = async (message: Message) => {
                       class="min-w-0 flex-1 truncate text-xs font-normal text-slate-400/80"
                     >{{ getThinkingPreviewText(message, segment.thinkingSegmentId) }}</span>
                   </button>
-                  <div
+                  <ThinkingSegmentBody
                     v-if="!isThinkingSegmentCollapsed(message, segment.thinkingSegmentId)"
-                    class="mb-1.5 max-h-[210px] overflow-y-auto whitespace-pre-wrap rounded-md bg-slate-50 px-3 py-2 text-sm leading-relaxed text-slate-400"
-                  >
-                    {{ getThinkingSegment(message, segment.thinkingSegmentId)!.content }}
-                  </div>
+                    :content="getThinkingSegment(message, segment.thinkingSegmentId)!.content"
+                    :active="getActiveThinkingSegmentId(message) === segment.thinkingSegmentId"
+                  />
                 </div>
 
                 <div v-else-if="segment.type === 'toolCall' && resolveToolCall(message, segment.toolCallId)" class="min-w-0">
