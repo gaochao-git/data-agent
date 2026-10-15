@@ -47,7 +47,6 @@ export interface DatasourceColumnDictInfo {
     value: string
     label?: string
   }>
-  synonyms?: string[]
   storage_format?: string
   unit?: string
 }
@@ -985,4 +984,32 @@ export interface ChatDataSettingItem {
   value_invalid: boolean
   update_time: string
   update_by_name: string
+}
+
+// ============ 元数据管理（全局枚举） ============
+
+// 全局枚举值项（value 入库真实值，label 用户可读含义）
+export interface MetaGlobalEnumValueItem {
+  value: string
+  label: string
+}
+
+// 全局枚举条目（全系统枚举值域唯一权威，跨数据源跨环境共享；不同业务域同名枚举互相隔离）
+export interface MetaGlobalEnum {
+  business_domain: string
+  enum_name: string
+  enum_desc: string
+  enum_items: MetaGlobalEnumValueItem[]
+  ref_count?: number
+  create_time?: string
+  update_time?: string
+  update_by_name?: string
+}
+
+// 全局枚举的数据字典引用方定位（数据源组 / 表 / 列）
+export interface MetaGlobalEnumRef {
+  group_id: string
+  group_name?: string
+  table_name: string
+  column_name: string
 }

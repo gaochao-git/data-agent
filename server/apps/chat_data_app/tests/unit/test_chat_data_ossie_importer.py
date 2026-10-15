@@ -1690,7 +1690,6 @@ def _dict_extension_data() -> dict:
                 {"value": "1", "label": "重复值应去重"},
                 {"value": "", "label": "空值应丢弃"},
             ],
-            "synonyms": ["支付状态", "支付状态", ""],
             "storage_format": "0/1",
             "unit": "",
         },
@@ -1752,7 +1751,7 @@ def test_annotate_export_column_dicts_attaches_matches_without_mutating_source()
 
 
 def test_column_dict_extension_round_trip_via_ossie_yaml():
-    """导出侧把字典四项写入 CHAT_DATA 扩展，导入侧提取为仅填空条目（结构化，不压进 description）。"""
+    """导出侧把字典内容写入 CHAT_DATA 扩展，导入侧提取为仅填空条目（结构化，不压进 description）。"""
     config = {
         "id": "sc_dict",
         "dimensions": [
@@ -1764,7 +1763,6 @@ def test_column_dict_extension_round_trip_via_ossie_yaml():
                 "logical_type": "enum",
                 "_column_dict": {
                     "enum_values": [{"value": "1", "label": "已支付"}],
-                    "synonyms": ["支付状态"],
                     "storage_format": "0/1",
                     "unit": "",
                 },
@@ -1779,7 +1777,6 @@ def test_column_dict_extension_round_trip_via_ossie_yaml():
     # 空的 unit 不写，避免扩展噪音；description 不承载字典信息
     assert ext_data["column_dict"] == {
         "enum_values": [{"value": "1", "label": "已支付"}],
-        "synonyms": ["支付状态"],
         "storage_format": "0/1",
     }
     metric_ext = json.loads(document["metrics"][0]["custom_extensions"][0]["data"])
@@ -1792,7 +1789,6 @@ def test_column_dict_extension_round_trip_via_ossie_yaml():
             "column": "status",
             "dict": {
                 "enum_values": [{"value": "1", "label": "已支付"}],
-                "synonyms": ["支付状态"],
                 "storage_format": "0/1",
             },
         }
@@ -1832,7 +1828,7 @@ semantic_model:
 
 
 def test_import_normalizes_and_dedupes_column_dict_payload():
-    """提取口径：枚举按 value 去重并丢空值，同义词去重丢空，空 unit 不保留；同字段取首见。"""
+    """提取口径：枚举按 value 去重并丢空值，空 unit 不保留；同字段取首见。"""
     result = OssieToChatDataImporter().import_yaml(_dict_extension_yaml())[0]
     assert result.column_dicts == [
         {
@@ -1840,7 +1836,6 @@ def test_import_normalizes_and_dedupes_column_dict_payload():
             "column": "status",
             "dict": {
                 "enum_values": [{"value": "1", "label": "已支付"}],
-                "synonyms": ["支付状态"],
                 "storage_format": "0/1",
             },
         }
@@ -1857,7 +1852,6 @@ def test_plan_column_dict_fills_only_targets_empty_fields():
                 "column": "status",
                 "dict": {
                     "enum_values": [{"value": "1", "label": "已支付"}],
-                    "synonyms": ["支付状态"],
                     "storage_format": "0/1",
                     "unit": "元",
                 },
@@ -1867,19 +1861,17 @@ def test_plan_column_dict_fills_only_targets_empty_fields():
     existing = {
         ("orders", "status"): {
             "enum_values": [{"value": "2", "label": "已有值"}],
-            "synonyms": [],
             "storage_format": "",
             "unit": "元",
         },
     }
     assert plan_column_dict_fills(item, existing) == [
-        {"table": "orders", "column": "status", "fields": ["synonyms", "storage_format"]},
+        {"table": "orders", "column": "status", "fields": ["storage_format"]},
     ]
     # 现有字典已全覆盖 → 计划为空
     covered = {
         ("orders", "status"): {
             "enum_values": [{"value": "2", "label": "已有值"}],
-            "synonyms": ["已有"],
             "storage_format": "x",
             "unit": "元",
         },
@@ -1892,7 +1884,6 @@ def test_merge_carried_column_dicts_fills_empty_only():
     existing = {
         ("orders", "status"): {
             "enum_values": [{"value": "2", "label": "已有值"}],
-            "synonyms": [],
             "storage_format": "",
             "unit": "元",
         },
@@ -1904,7 +1895,6 @@ def test_merge_carried_column_dicts_fills_empty_only():
             "column": "status",
             "dict": {
                 "enum_values": [{"value": "0", "label": "待支付"}],
-                "synonyms": ["支付"],
                 "unit": "不该覆盖",
             },
         },
@@ -1916,7 +1906,6 @@ def test_merge_carried_column_dicts_fills_empty_only():
     # 既有枚举值/单位保留，仅空缺字段被补齐
     assert merged[("orders", "status")] == {
         "enum_values": [{"value": "2", "label": "已有值"}],
-        "synonyms": ["支付"],
         "storage_format": "",
         "unit": "元",
     }
@@ -1926,7 +1915,7 @@ def test_merge_carried_column_dicts_fills_empty_only():
     assert merged[("orders", "new_col")] == {"unit": "秒"}
     assert ("orders", "blank") not in merged
     # 原入参不被修改
-    assert existing[("orders", "status")]["synonyms"] == []
+    assert existing[("orders", "status")]["unit"] == "元"
 
 
 def test_merge_carried_column_dicts_none_passthrough():
@@ -2012,7 +2001,6 @@ def test_preview_route_includes_dict_fill_plan_and_checklist_row(monkeypatch):
         column_dicts={
             ("orders", "status"): {
                 "enum_values": [],
-                "synonyms": ["支付状态"],
                 "storage_format": "",
                 "unit": "",
             },

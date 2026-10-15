@@ -6,6 +6,9 @@ const apiMocks = vi.hoisted(() => ({
   getAdminDatasourceColumnDict: vi.fn(),
   updateAdminDatasourceColumnDict: vi.fn(),
   generateAdminDatasourceColumnDict: vi.fn(),
+  getAdminMetaEnums: vi.fn(),
+  getAdminMetaEnum: vi.fn(),
+  upsertAdminMetaEnum: vi.fn(),
 }))
 
 vi.mock('../../api', () => apiMocks)
@@ -25,7 +28,6 @@ const columnDictResponse = {
   data: {
     dict: {
       enum_values: [{ value: '1', label: '有效' }],
-      synonyms: [],
       storage_format: 'tinyint',
       unit: '',
     },

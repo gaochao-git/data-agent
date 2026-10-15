@@ -131,7 +131,7 @@ def _column_dict_model(
         column_name=column_name,
         dict_json=dict_json
         or json.dumps(
-            {"enum_values": [{"value": "1", "label": "有效"}], "synonyms": ["状态"], "storage_format": "", "unit": ""},
+            {"enum_values": [{"value": "1", "label": "有效"}], "storage_format": "", "unit": ""},
             ensure_ascii=False,
         ),
         delete_flag=0,
@@ -577,16 +577,16 @@ def test_datasource_dao_group_and_table_queries_use_orm(monkeypatch):
     assert tables[0]["manual_indexes"] == []
     assert member_ids == ["ORG_A", "ORG_B"]
     assert column_dict == {
+        "enum_ref": "",
         "enum_values": [{"value": "1", "label": "有效"}],
-        "synonyms": ["状态"],
         "storage_format": "",
         "unit": "",
     }
     assert asyncio.run(store.get_datasource_tables_by_group_id_async("")) == []
     assert asyncio.run(store.get_table_group_relations_async("")) == []
     assert asyncio.run(store.get_column_dict_async("", "orders", "status")) == {
+        "enum_ref": "",
         "enum_values": [],
-        "synonyms": [],
         "storage_format": "",
         "unit": "",
     }
@@ -603,7 +603,6 @@ def test_column_dict_normalize_and_batch_query_branches(monkeypatch):
                 {"value": "1", "label": "重复"},
                 *[{"value": str(index), "label": f"值{index}"} for index in range(2, 105)],
             ],
-            "synonyms": [" 状态 ", "", "状态", *[f"别名{index}" for index in range(60)]],
             "storage_format": "x" * 300,
             "unit": "元" * 120,
         }
@@ -611,13 +610,11 @@ def test_column_dict_normalize_and_batch_query_branches(monkeypatch):
 
     assert len(normalized["enum_values"]) == 100
     assert normalized["enum_values"][0] == {"value": "1", "label": "有效"}
-    assert len(normalized["synonyms"]) == 50
-    assert normalized["synonyms"][0] == "状态"
     assert len(normalized["storage_format"]) == 255
     assert len(normalized["unit"]) == 100
-    assert _normalize_column_dict({"enum_values": "bad", "synonyms": "bad"}) == {
+    assert _normalize_column_dict({"enum_values": "bad"}) == {
+        "enum_ref": "",
         "enum_values": [],
-        "synonyms": [],
         "storage_format": "",
         "unit": "",
     }
@@ -636,7 +633,7 @@ def test_column_dict_normalize_and_batch_query_branches(monkeypatch):
                 _column_dict_model("group_a", "orders", "", json.dumps({"unit": "元"}, ensure_ascii=False)),
                 _column_dict_model("group_a", "", "amount", json.dumps({"unit": "元"}, ensure_ascii=False)),
                 _column_dict_model("group_a", "orders", "empty", json.dumps({}, ensure_ascii=False)),
-                _column_dict_model("group_a", "users", "name", json.dumps({"synonyms": ["用户"]}, ensure_ascii=False)),
+                _column_dict_model("group_a", "users", "name", json.dumps({"unit": "米"}, ensure_ascii=False)),
             ],
         },
     )
@@ -653,21 +650,20 @@ def test_column_dict_normalize_and_batch_query_branches(monkeypatch):
 
     missing_single, empty_group, by_group, empty_table_group, empty_table_name, by_table = asyncio.run(run_checks())
 
-    assert missing_single == {"enum_values": [], "synonyms": [], "storage_format": "", "unit": ""}
     assert empty_group == {}
     assert empty_table_group == {}
     assert empty_table_name == {}
     assert by_group == {
         ("orders", "status"): {
+            "enum_ref": "",
             "enum_values": [{"value": "1", "label": "有效"}],
-            "synonyms": [],
             "storage_format": "",
             "unit": "",
         },
-        ("users", "name"): {"enum_values": [], "synonyms": ["用户"], "storage_format": "", "unit": ""},
+        ("users", "name"): {"enum_ref": "", "enum_values": [], "storage_format": "", "unit": "米"},
     }
     assert by_table == {
-        "status": {"enum_values": [{"value": "1", "label": "有效"}], "synonyms": [], "storage_format": "", "unit": ""},
+        "status": {"enum_ref": "", "enum_values": [{"value": "1", "label": "有效"}], "storage_format": "", "unit": ""},
     }
 
 
@@ -690,8 +686,6 @@ def test_datasource_dao_empty_defaults_and_write_short_circuits(monkeypatch):
     assert default_ds is None
     assert empty_group_update is None
     assert empty_table_update is None
-    assert invalid_dict == {"enum_values": [], "synonyms": [], "storage_format": "", "unit": ""}
-    assert empty_dict == {"enum_values": [], "synonyms": [], "storage_format": "", "unit": ""}
     assert any("UPDATE datasource_column_dict" in str(stmt) for stmt in executed)
 
 
@@ -832,7 +826,6 @@ def test_store_write_methods_emit_orm_statements(monkeypatch):
                     {"value": "", "label": "空值"},
                     {"value": "0", "label": "无效"},
                 ],
-                "synonyms": ["状态", "状态"],
                 "storage_format": "",
                 "unit": "",
             },
@@ -877,8 +870,8 @@ def test_store_write_methods_emit_orm_statements(monkeypatch):
         )
         await semantic_store.soft_delete_async("sc_a", update_by="u10")
         assert saved_dict == {
+            "enum_ref": "",
             "enum_values": [{"value": "1", "label": "有效"}, {"value": "0", "label": "无效"}],
-            "synonyms": ["状态"],
             "storage_format": "",
             "unit": "",
         }
@@ -1034,7 +1027,6 @@ def test_fill_column_dict_only_fills_empty_fields(monkeypatch):
                     dict_json=json.dumps(
                         {
                             "enum_values": [{"value": "1", "label": "已有值"}],
-                            "synonyms": [],
                             "storage_format": "",
                             "unit": "",
                         },
@@ -1053,19 +1045,16 @@ def test_fill_column_dict_only_fills_empty_fields(monkeypatch):
             "status",
             {
                 "enum_values": [{"value": "2", "label": "应忽略"}],
-                "synonyms": ["付款"],
                 "storage_format": "0/1",
                 "unit": "元",
             },
         )
     )
 
-    assert filled == ["synonyms", "storage_format", "unit"]
     upserts = [stmt for stmt in executed if "INSERT" in str(stmt).upper()]
     assert len(upserts) == 1
     merged = json.loads(upserts[0].compile().params["dict_json"])
     assert merged["enum_values"] == [{"value": "1", "label": "已有值"}]
-    assert merged["synonyms"] == ["付款"]
     assert merged["storage_format"] == "0/1"
     assert merged["unit"] == "元"
 
@@ -1105,7 +1094,6 @@ def test_fill_column_dict_noop_when_all_fields_covered(monkeypatch):
                     dict_json=json.dumps(
                         {
                             "enum_values": [{"value": "1", "label": "有效"}],
-                            "synonyms": ["状态"],
                             "storage_format": "0/1",
                             "unit": "元",
                         },

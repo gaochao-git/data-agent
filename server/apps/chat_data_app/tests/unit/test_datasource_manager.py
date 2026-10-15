@@ -710,19 +710,17 @@ def test_get_all_datasources_supports_lightweight_mode():
 def test_datasource_manager_column_dict_async_boundaries():
     class DictStore(_FakeStore):
         async def get_column_dict_async(self, group_id: str, table_name: str, column_name: str):
-            return {"enum_values": [{"value": "1", "label": "有效"}], "synonyms": [], "storage_format": "", "unit": ""}
+            return {"enum_values": [{"value": "1", "label": "有效"}], "storage_format": "", "unit": ""}
 
         async def get_column_dicts_by_table_async(self, group_id: str, table_name: str):
             return {
                 "status": {
                     "enum_values": [{"value": "1", "label": "有效"}],
-                    "synonyms": [],
                     "storage_format": "",
                     "unit": "",
                 },
                 "ghost": {
                     "enum_values": [{"value": "X", "label": "不存在"}],
-                    "synonyms": [],
                     "storage_format": "",
                     "unit": "",
                 },

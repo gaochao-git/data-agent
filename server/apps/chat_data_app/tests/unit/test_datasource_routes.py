@@ -177,7 +177,6 @@ class _FakeDatasourceManager:
         self.column_dicts = {
             ("ds_a", "t_a", "status"): {
                 "enum_values": [{"value": "1", "label": "有效"}],
-                "synonyms": ["状态"],
                 "storage_format": "",
                 "unit": "",
             },
@@ -326,7 +325,7 @@ class _FakeDatasourceManager:
                 return copy.deepcopy(
                     self.column_dicts.get(
                         (datasource_id, table_name, column_name),
-                        {"enum_values": [], "synonyms": [], "storage_format": "", "unit": ""},
+                        {"enum_values": [], "storage_format": "", "unit": ""},
                     )
                 )
         return None
@@ -2658,7 +2657,6 @@ def test_datasource_column_dict_get_and_save(monkeypatch):
                 {"value": "1", "label": "有效"},
                 {"value": "0", "label": "无效"},
             ],
-            "synonyms": ["状态"],
             "storage_format": "",
             "unit": "",
         }
@@ -2721,7 +2719,6 @@ def test_parse_column_dict_generate_response_normalizes_invalid_items():
                         {"value": "1", "label": "重复"},
                         {"value": "0", "label": "无效"},
                     ],
-                    "synonyms": [" 状态 ", "", "状态", "启停状态"],
                     "storage_format": "yyyyMMdd",
                     "unit": "万元",
                 }
@@ -2732,19 +2729,11 @@ def test_parse_column_dict_generate_response_normalizes_invalid_items():
 
     assert parsed == {
         "enum_values": [{"value": "1", "label": "有效"}, {"value": "0", "label": "无效"}],
-        "synonyms": [],
         "storage_format": "",
         "unit": "万元",
     }
     assert _parse_column_dict_generate_response('{"dict": "bad"}') == {
         "enum_values": [],
-        "synonyms": [],
-        "storage_format": "",
-        "unit": "",
-    }
-    assert _parse_column_dict_generate_response('{"dict": {"enum_values": "bad", "synonyms": "bad"}}') == {
-        "enum_values": [],
-        "synonyms": [],
         "storage_format": "",
         "unit": "",
     }
@@ -2755,7 +2744,7 @@ def test_generate_datasource_column_dict_uses_llm(monkeypatch):
         async def ainvoke(self, messages):
             assert "1 表示有效" in messages[0].content
             return SimpleNamespace(
-                content='{"dict":{"enum_values":[{"value":"1","label":"有效"},{"value":"0","label":"无效"}],"synonyms":["订单状态"],"storage_format":"","unit":""}}'
+                content='{"dict":{"enum_values":[{"value":"1","label":"有效"},{"value":"0","label":"无效"}],"storage_format":"","unit":""}}'
             )
 
     manager = _FakeDatasourceManager()
@@ -2772,14 +2761,13 @@ def test_generate_datasource_column_dict_uses_llm(monkeypatch):
         {"value": "1", "label": "有效"},
         {"value": "0", "label": "无效"},
     ]
-    assert data["data"]["dict"]["synonyms"] == []
 
 
 def test_generate_datasource_column_dict_accepts_non_message_response(monkeypatch):
     class _FakeLlm:
         async def ainvoke(self, messages):
             assert "status" in messages[0].content
-            return '{"dict":{"enums":[{"enum_value":"1","enum_label":"有效"}],"synonyms":"bad","storage_format":"tinyint","unit":""}}'
+            return '{"dict":{"enums":[{"enum_value":"1","enum_label":"有效"}],"storage_format":"tinyint","unit":""}}'
 
     manager = _FakeDatasourceManager()
     _mock_authenticated_user(monkeypatch, user_id="dict_generator", username="字典生成人")
@@ -2796,7 +2784,6 @@ def test_generate_datasource_column_dict_accepts_non_message_response(monkeypatc
     assert data["status"] == "success"
     assert data["data"]["dict"] == {
         "enum_values": [{"value": "1", "label": "有效"}],
-        "synonyms": [],
         "storage_format": "",
         "unit": "",
     }

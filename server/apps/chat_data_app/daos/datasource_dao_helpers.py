@@ -88,40 +88,23 @@ def _normalize_column_enum_values(raw_enums: Any) -> list[dict[str, str]]:
     return enum_values
 
 
-def _normalize_column_synonyms(raw_synonyms: Any) -> list[str]:
-    """标准化同义词列表（最多 50 个，去重）。"""
-    synonyms: list[str] = []
-    if not isinstance(raw_synonyms, list):
-        return synonyms
-    seen_synonyms: set[str] = set()
-    for value in raw_synonyms:
-        if len(synonyms) >= 50:
-            break
-        text = str(value or "").strip()[:100]
-        if not text or text in seen_synonyms:
-            continue
-        seen_synonyms.add(text)
-        synonyms.append(text)
-    return synonyms
-
-
 def _normalize_column_dict(raw_dict: dict[str, Any] | None) -> dict[str, Any]:
     """标准化字段数据字典内容。"""
     payload = raw_dict if isinstance(raw_dict, dict) else {}
     return {
+        "enum_ref": str(payload.get("enum_ref") or "").strip()[:128],
         "enum_values": _normalize_column_enum_values(payload.get("enum_values") or payload.get("enums") or []),
-        "synonyms": _normalize_column_synonyms(payload.get("synonyms") or []),
         "storage_format": str(payload.get("storage_format") or "").strip()[:255],
         "unit": str(payload.get("unit") or "").strip()[:100],
     }
 
 
 def _column_dict_is_empty(payload: dict[str, Any]) -> bool:
-    """判断字段数据字典是否为空。"""
+    """判断字段数据字典是否为空（引用了全局枚举不算空）。"""
     normalized = _normalize_column_dict(payload)
     return (
-        not normalized["enum_values"]
-        and not normalized["synonyms"]
+        not normalized["enum_ref"]
+        and not normalized["enum_values"]
         and not normalized["storage_format"]
         and not normalized["unit"]
     )

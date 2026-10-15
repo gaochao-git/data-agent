@@ -5,6 +5,23 @@
 上线前执行：
 
 ```sql
+CREATE TABLE `chat_data_meta_global_enum` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `business_domain` varchar(128) NOT NULL DEFAULT '' COMMENT '业务域（如支付业务、信贷业务），空为通用域；不同域同名枚举互相隔离',
+  `enum_name` varchar(128) NOT NULL COMMENT '全局枚举名，仅字母数字下划线，域内唯一',
+  `enum_desc` varchar(512) NOT NULL DEFAULT '' COMMENT '枚举说明',
+  `enum_json` text NOT NULL COMMENT '枚举值JSON文本: [{"value":"...","label":"..."}]',
+  `delete_flag` tinyint NOT NULL DEFAULT '0' COMMENT '删除标识: 0-未删除, 1-已删除',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `create_by` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人ID',
+  `create_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人名称',
+  `update_by` varchar(100) NOT NULL DEFAULT '' COMMENT '修改人ID',
+  `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '修改人名称',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_domain_enum_name` (`business_domain`,`enum_name`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='全局枚举表';
+
 CREATE TABLE `chat_data_setting` (
   `id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键ID',
   `setting_key` varchar(128) NOT NULL COMMENT '变量名，与 env 同名',

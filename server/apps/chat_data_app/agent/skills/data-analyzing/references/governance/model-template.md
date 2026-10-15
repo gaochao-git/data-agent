@@ -56,9 +56,9 @@ datasets:                    # 维度来源：每个物理表一个 dataset
         datatype: String
         custom_extensions:
           - vendor_name: CHAT_DATA
-            # data 是 JSON 字符串：table.column 是字典绑定键；column_dict 四项结构化随 YAML 携带，
+            # data 是 JSON 字符串：table.column 是字典绑定键；column_dict 内容结构化随 YAML 携带，
             # 导入时按「仅填空」回填字典表（已有值保留）。value 必须真实入库值，拿不准先抽样确认。
-            data: '{"table": "orders", "column": "status", "logical_type": "enum", "column_dict": {"enum_values": [{"value": "0", "label": "待支付"}, {"value": "1", "label": "已支付"}, {"value": "2", "label": "已取消"}], "unit": "", "synonyms": [], "storage_format": ""}}'
+            data: '{"table": "orders", "column": "status", "logical_type": "enum", "column_dict": {"enum_values": [{"value": "0", "label": "待支付"}, {"value": "1", "label": "已支付"}, {"value": "2", "label": "已取消"}], "unit": "", "storage_format": ""}}'
 relationships:               # 段序对齐官方/平台导出：datasets → relationships → metrics
   - name: orders__users__1   # 官方必填；平台导出格式 {from}__{to}__{序号}
     from: orders             # 官方字段名，=many 侧（一对多时指向一端）；写别名 from_dataset: 导入也接受
@@ -82,7 +82,7 @@ metrics:
     custom_extensions:
       - vendor_name: CHAT_DATA
         # 原子指标可带单位；来源列由表达式解析（SUM(amount) → amount），拿不准物理列就别带 column_dict
-        data: '{"table": "orders", "column_dict": {"enum_values": [], "synonyms": [], "storage_format": "", "unit": "元"}}'
+        data: '{"table": "orders", "column_dict": {"enum_values": [], "storage_format": "", "unit": "元"}}'
   - name: 近7日销售额         # 派生指标范例：expression 必须留空字符串
     description: 最近7天滚动销售额
     datatype: Decimal
@@ -118,7 +118,7 @@ metrics:
 ### 字段数据字典（column_dict）
 
 - 每个字段的 CHAT_DATA 扩展 `data` JSON 都带 `column_dict` 键（与 `table`/`column` 同层，**这是 Ossie 规范里唯一能开的扩展槽**——扩展条目本身只允许 vendor_name + data 两个属性，平级新开键会挂官方 schema 校验）。字典内容**结构化随 YAML 携带**，大模型与代码都可直接解析；导入时按「仅填空」回填数据字典表（已有值一律保留），运行时展示由平台按 `表.列` 绑定键从字典注入。没有字典信息就写空对象 `{}`；编辑既有文件时只给新增/修改的字段写，未动字段保持逐字一致（最小 diff）。
-- 四项口径：`enum_values` 的 value 必须是**真实入库值**（如 `0`、`1`、`RUNNING`）、label 是业务含义，拿不准就少量抽样确认禁止编造；`unit` 是数值单位（元、万元、秒），没有就留空串；`synonyms` / `storage_format` 一律留空、不猜（字段类型 ≠ 真实存储格式）。样例见「订单状态」「销售额」范例。
+- 三项口径：`enum_values` 的 value 必须是**真实入库值**（如 `0`、`1`、`RUNNING`）、label 是业务含义，拿不准就少量抽样确认禁止编造；`unit` 是数值单位（元、万元、秒），没有就留空串；`storage_format` 一律留空、不猜（字段类型 ≠ 真实存储格式）。样例见「订单状态」「销售额」范例。
 - **枚举维度**必须带 `logical_type: enum` 扩展，且 `column_dict.enum_values` 不可缺——随 YAML 携带的枚举值会计入导入校验，首次导入即可自足通过；**不要**靠去掉 enum 标记绕过——那会让维度失去枚举过滤能力。
 - 派生/复合指标无物理列，不携带 `column_dict`；原子指标不确定来源列时也不带。
 - `description` 只写业务概述，**不抄**枚举清单或单位——字典是唯一权威，抄进描述必然漂移（字典改了 YAML 就是旧口径）。

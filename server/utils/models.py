@@ -860,6 +860,37 @@ class ChatDataSetting(Base):
     __table_args__ = (UniqueConstraint("setting_key", name="uniq_setting_key"),)
 
 
+class ChatDataMetaGlobalEnum(Base):
+    """全局枚举表：全系统枚举值域唯一权威（跨数据源、跨环境共享）。
+
+    数据字典列通过 dict_json 中的 enum_ref 引用本表（二选一：引用后本地
+    enum_values 必须为空）。enum_ref 格式：通用域为 "enum_name"，业务域为
+    "business_domain:enum_name"。软删 + (business_domain, enum_name) 唯一：
+    重新创建同名枚举走 upsert 复用原行（翻回 delete_flag=0 并更新内容），
+    不插入新行；不同业务域的同名枚举互相隔离，防止跨域干扰与误引用。
+    """
+
+    __tablename__ = "chat_data_meta_global_enum"
+
+    id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
+    business_domain: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
+    enum_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    enum_desc: Mapped[str] = mapped_column(String(512), nullable=False, default="", server_default="")
+    # 枚举值 JSON 文本：[{"value": "...", "label": "..."}]
+    enum_json: Mapped[str] = mapped_column(Text, nullable=False)
+    delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
+    create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
+    update_time: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+    create_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+
+    __table_args__ = (UniqueConstraint("business_domain", "enum_name", name="uniq_domain_enum_name"),)
+
+
 class ChatDataAgentSchedule(Base):
     """智能体定时任务定义（用户在会话里创建，到点自动执行一次智能问数）。"""
 

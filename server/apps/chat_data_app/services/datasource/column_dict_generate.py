@@ -70,7 +70,6 @@ def parse_column_dict_generate_response(content: str) -> dict[str, Any]:
     raw_enums = raw_dict.get("enum_values") or raw_dict.get("enums") or []
     return {
         "enum_values": parse_column_enum_values(raw_enums)[:100],
-        "synonyms": [],
         "storage_format": "",
         "unit": str(raw_dict.get("unit") or "").strip()[:100],
     }
@@ -111,6 +110,22 @@ async def invoke_column_dict_llm(prompt: str, datasource_id: str, table_name: st
     return response.content if hasattr(response, "content") else str(response)
 
 
+async def generate_dict_candidates_from_text(
+    text: str,
+    table_name: str = "",
+    column_name: str = "",
+    column: dict[str, Any] | None = None,
+    datasource_id: str = "",
+) -> dict[str, Any]:
+    """文本 → 字段字典候选（提示词 → LLM → 解析）。
+
+    表/字段上下文可选，供无具体字段场景复用（如全局枚举维护的枚举值填充）。
+    """
+    prompt = build_column_dict_generate_prompt(table_name, column_name, column or {}, text)
+    content = await invoke_column_dict_llm(prompt, datasource_id, table_name, column_name)
+    return parse_column_dict_generate_response(str(content))
+
+
 async def generate_column_dict_candidates(
     target_column: dict[str, Any],
     table_name: str,
@@ -119,6 +134,10 @@ async def generate_column_dict_candidates(
     datasource_id: str,
 ) -> dict[str, Any]:
     """生成字段数据字典候选值（提示词 → LLM → 解析），不直接保存。"""
-    prompt = build_column_dict_generate_prompt(table_name, column_name, target_column, text)
-    content = await invoke_column_dict_llm(prompt, datasource_id, table_name, column_name)
-    return parse_column_dict_generate_response(str(content))
+    return await generate_dict_candidates_from_text(
+        text,
+        table_name=table_name,
+        column_name=column_name,
+        column=target_column,
+        datasource_id=datasource_id,
+    )

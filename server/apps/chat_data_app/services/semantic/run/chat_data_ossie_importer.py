@@ -268,12 +268,11 @@ def _extension_data(extensions: Any, warnings: list[str], label: str) -> dict[st
     return {}
 
 
-# 字段数据字典四项内容键（与 datasource_column_dict.dict_json 结构一致）
-_COLUMN_DICT_FIELD_KEYS = ("enum_values", "synonyms", "storage_format", "unit")
+# 字段数据字典内容键（与 datasource_column_dict.dict_json 结构一致；enum_ref 是环境内引用不随导入携带）
+_COLUMN_DICT_FIELD_KEYS = ("enum_values", "storage_format", "unit")
 # 仅填空填充明细的展示名（preview 清单 / checklist 消息共用）
 _COLUMN_DICT_FIELD_LABELS = {
     "enum_values": "枚举值",
-    "synonyms": "同义词",
     "storage_format": "存储格式",
     "unit": "单位",
 }
@@ -296,20 +295,8 @@ def _enum_values_from_raw(raw_enums: Any) -> list[dict[str, str]]:
     return enum_values[:100]
 
 
-def _synonyms_from_raw(raw_synonyms: Any) -> list[str]:
-    """清洗同义词列表（保序去重截断）。"""
-    if not isinstance(raw_synonyms, list):
-        return []
-    synonyms: list[str] = []
-    for value in raw_synonyms:
-        text = str(value or "").strip()[:100]
-        if text and text not in synonyms:
-            synonyms.append(text)
-    return synonyms[:50]
-
-
 def _column_dict_from_extension(extension: dict[str, Any]) -> dict[str, Any]:
-    """从 CHAT_DATA 扩展提取字段字典四项（宽松归一，结构不合法的键忽略）。
+    """从 CHAT_DATA 扩展提取字段字典内容（宽松归一，结构不合法的键忽略）。
 
     只做提取与基础清洗；落库前的权威归一由 DAO 侧 _normalize_column_dict 兜底。
     """
@@ -320,9 +307,6 @@ def _column_dict_from_extension(extension: dict[str, Any]) -> dict[str, Any]:
     enum_values = _enum_values_from_raw(raw.get("enum_values"))
     if enum_values:
         payload["enum_values"] = enum_values
-    synonyms = _synonyms_from_raw(raw.get("synonyms"))
-    if synonyms:
-        payload["synonyms"] = synonyms
     for key, max_length in (("storage_format", 255), ("unit", 100)):
         text = str(raw.get(key) or "").strip()[:max_length]
         if text:

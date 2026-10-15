@@ -6,7 +6,6 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
-
 from utils.error_codes import ErrorCode
 from utils.logger import get_logger
 from utils.response import business_response
@@ -24,6 +23,11 @@ from ..schema import (
     DbConnectionRequest,
 )
 from ..services.datasource.manager import get_datasource_manager, get_datasource_sync_timeout_seconds
+from ..services.meta.global_enum_service import (
+    MetaGlobalEnumInvalidError,
+    MetaGlobalEnumNameInvalidError,
+    MetaGlobalEnumNotFoundError,
+)
 from ..services.semantic.run.semantic_config_service import get_semantic_config_service
 from .datasource_helpers import (
     _build_datasource_schema_health,
@@ -483,6 +487,12 @@ async def update_datasource_column_dict(
         )
     except HTTPException:
         raise
+    except MetaGlobalEnumNameInvalidError as e:
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_META_ENUM_NAME_INVALID, status="error")
+    except MetaGlobalEnumInvalidError as e:
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_META_ENUM_INVALID, status="error")
+    except MetaGlobalEnumNotFoundError as e:
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_META_ENUM_NOT_FOUND, status="error")
     except Exception as e:
         logger.error(
             "保存字段数据字典失败: datasource_id=%s table_name=%s column_name=%s error=%s",

@@ -11,6 +11,7 @@ from utils.logger import get_logger
 
 from ....daos.dao_session import transaction_scope
 from ....daos.semantic_config_dao import SemanticConfigDao
+from ...meta.global_enum_service import global_enum_service
 from ..core.common import build_table_columns_map, ensure_dimension_logical_type, normalize_relationship_type
 from ..core.config_validator import (
     expression_uses_physical_column,  # noqa: F401  # 测试按模块属性引用 expression_uses_physical_column，属有意重导出
@@ -110,6 +111,27 @@ def column_dict_has_enum_mapping(column_dict: dict[str, Any] | None) -> bool:
     return any(str((item or {}).get("value") or "").strip() for item in enum_values if isinstance(item, dict))
 
 
+async def _collect_enum_dim_dicts(
+    ds_manager: Any,
+    datasource_id: str,
+    dimensions: list[dict],
+    column_dicts: dict[tuple[str, str], dict[str, Any]] | None,
+) -> dict[tuple[str, str], dict[str, Any]]:
+    """收集枚举维度的原始字段字典（批量映射直接取，缺失时逐维度回源）。"""
+    raw: dict[tuple[str, str], dict[str, Any]] = {}
+    for dim in dimensions or []:
+        if str((dim or {}).get("logical_type") or "").strip().lower() != "enum":
+            continue
+        key = (str((dim or {}).get("table") or "").strip(), str((dim or {}).get("column") or "").strip())
+        if key in raw:
+            continue
+        if column_dicts is not None:
+            raw[key] = column_dicts.get(key)
+        else:
+            raw[key] = await ds_manager.get_column_dict_async(datasource_id, key[0], key[1])
+    return raw
+
+
 async def validate_semantic_logical_types(
     ds_manager: Any,
     datasource_id: str,
@@ -122,18 +144,22 @@ async def validate_semantic_logical_types(
     ``column_dicts`` 传入数据源级字典映射（键为 (table, column)）时本地匹配，
     不再逐维度回源——批量校验（Ossie 导入预览/导入）下逐维度查询会放大成
     N×(整份数据源重载+单字典查询) 的数据库压力；不传时保持逐条查询（单模型保存链路）。
+    引用态字典（enum_ref 非空、本地枚举值为空）先经 resolve_column_dicts_async
+    统一解析全局枚举（单一公共入口），解析后仍无枚举值才判不达标。
     """
-    for dim in dimensions or []:
-        if str((dim or {}).get("logical_type") or "").strip().lower() != "enum":
-            continue
-        table_name = str((dim or {}).get("table") or "").strip()
-        column_name = str((dim or {}).get("column") or "").strip()
-        if column_dicts is not None:
-            column_dict = column_dicts.get((table_name, column_name))
-        else:
-            column_dict = await ds_manager.get_column_dict_async(datasource_id, table_name, column_name)
-        if not column_dict_has_enum_mapping(column_dict):
-            return f"维度 {dim.get('name', '')} 选择了枚举逻辑类型，请先维护字段字典枚举值: {table_name}.{column_name}"
+    enum_dims = [dim for dim in dimensions or [] if str((dim or {}).get("logical_type") or "").strip().lower() == "enum"]
+    if not enum_dims:
+        return None
+    raw_dicts = await _collect_enum_dim_dicts(ds_manager, datasource_id, enum_dims, column_dicts)
+    try:
+        resolved = await global_enum_service.resolve_column_dicts_async(raw_dicts)
+    except Exception as exc:
+        logger.warning("校验前解析全局枚举引用失败，按原始字典校验: datasource_id=%s error=%s", datasource_id, exc)
+        resolved = {key: payload for key, payload in raw_dicts.items() if isinstance(payload, dict)}
+    for dim in enum_dims:
+        key = (str((dim or {}).get("table") or "").strip(), str((dim or {}).get("column") or "").strip())
+        if not column_dict_has_enum_mapping(resolved.get(key)):
+            return f"维度 {dim.get('name', '')} 选择了枚举逻辑类型，请先维护字段字典枚举值: {key[0]}.{key[1]}"
     return None
 
 
@@ -322,7 +348,7 @@ class SemanticConfigService:
     ) -> dict[str, Any]:
         """导出专用：把命中的字段字典原文挂到各条目的 ``_column_dict`` 键（返回副本，不改原配置）。
 
-        供物化导出链路把字典四项（enum_values/synonyms/storage_format/unit）写入
+        供物化导出链路把字典内容（enum_values/storage_format/unit）写入
         Ossie CHAT_DATA 扩展，导入侧据此按「仅填空」策略回写字典，形成闭环；
         只在导出副本上挂载，运行时查询配置不受影响。
         """
@@ -403,12 +429,21 @@ class SemanticConfigService:
         return configs
 
     async def get_column_dicts_async(self, datasource_id: str) -> dict[tuple[str, str], dict[str, Any]]:
-        """读取数据源字段字典；失败降级为空 dict（与 get_runtime_config_async 的容错口径一致）。"""
+        """读取数据源字段字典（已完成全局枚举引用解析）；失败降级为空 dict（与 get_runtime_config_async 的容错口径一致）。
+
+        解析后的 enum_values 会参与物化缓存盐计算，全局枚举内容一变缓存即失效，
+        自动物化自然感知，无需手动刷新。
+        """
         try:
-            return await self.datasource_manager.get_datasource_column_dicts_async(datasource_id)
+            raw_dicts = await self.datasource_manager.get_datasource_column_dicts_async(datasource_id)
         except Exception as exc:
             logger.warning("读取字段数据字典失败，使用原始语义配置: datasource_id=%s error=%s", datasource_id, exc)
             return {}
+        try:
+            return await global_enum_service.resolve_column_dicts_async(raw_dicts)
+        except Exception as exc:
+            logger.warning("解析全局枚举引用失败，使用未解析字段字典: datasource_id=%s error=%s", datasource_id, exc)
+            return raw_dicts
 
     async def get_runtime_config_async(
         self,
@@ -1069,6 +1104,12 @@ async def _apply_physical_validation(
             "批量读取字段数据字典失败，枚举校验降级逐维度查询: datasource_id=%s error=%s", datasource_id, exc
         )
         column_dicts = None
+    if column_dicts is not None:
+        # 引用态字典（enum_ref）先统一解析全局枚举，与落库/预览链路口径一致
+        try:
+            column_dicts = await global_enum_service.resolve_column_dicts_async(column_dicts)
+        except Exception as exc:
+            logger.warning("解析全局枚举引用失败，按原始字典校验: datasource_id=%s error=%s", datasource_id, exc)
     for item in imports:
         if not item.importable:
             continue

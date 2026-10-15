@@ -339,8 +339,9 @@ class DatasourceColumnDictEnumItem(BaseModel):
 class DatasourceColumnDictPayload(BaseModel):
     """数据源字段字典内容"""
 
+    # 引用全局枚举（chat_data_meta_global_enum 的 enum_name）；非空时 enum_values 必须为空
+    enum_ref: str = Field(default="", max_length=128, description="引用的全局枚举名，空表示使用本地枚举")
     enum_values: list[DatasourceColumnDictEnumItem] = Field(default_factory=list, description="枚举值列表")
-    synonyms: list[str] = Field(default_factory=list, description="字段同义词")
     storage_format: str = Field(default="", max_length=255, description="数据存储格式")
     unit: str = Field(default="", max_length=100, description="数值单位")
 
@@ -359,6 +360,31 @@ class DatasourceColumnDictGenerateRequest(BaseModel):
     """数据源字段字典生成请求"""
 
     text: str = Field(..., min_length=1, max_length=10000, description="用于生成字段字典的文本")
+
+
+class MetaGlobalEnumItem(BaseModel):
+    """全局枚举值项"""
+
+    value: str = Field(..., min_length=1, max_length=128, description="枚举值")
+    label: str = Field(default="", max_length=255, description="枚举含义")
+
+
+class MetaGlobalEnumGenerateRequest(BaseModel):
+    """全局枚举值 AI 填充请求（复用字段字典生成链路，无表/字段上下文）"""
+
+    text: str = Field(..., min_length=1, max_length=10000, description="用于提取枚举值的文本")
+
+
+class MetaGlobalEnumUpsertRequest(BaseModel):
+    """全局枚举创建/更新请求（enum_name 由路径参数携带，body 只含内容字段）"""
+
+    business_domain: str = Field(
+        default="", max_length=128, description="业务域（如支付业务），空为通用域；不同域同名枚举互相隔离"
+    )
+    enum_desc: str = Field(default="", max_length=512, description="枚举说明")
+    enum_items: list[MetaGlobalEnumItem] = Field(..., min_length=1, description="枚举值列表（非空）")
+    # 编辑既有枚举时为 True（允许覆盖内容）；新建/存为模板保持 False，同域同名活跃枚举已存在则拒绝
+    allow_overwrite: bool = Field(default=False, description="是否允许覆盖已存在的活跃枚举（仅编辑场景为 True）")
 
 
 class TableIndexItem(BaseModel):

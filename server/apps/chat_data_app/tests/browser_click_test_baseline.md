@@ -1900,7 +1900,7 @@ ChatData
 | 背景 | 验证 09-25 未提交改动 `merge_carried_column_dicts`（YAML 携带的 column_dict 按「仅填空」并入导入物理校验 + 落库回填）。修复前：枚举维度字典未维护时 preview 必被「请先维护字段字典枚举值」卡住，携带字典形同虚设。 |
 | 素材 | 复制真实导出件 `产品分类模型__634279.yaml`，模型改名 `浏览器验证_字典回填`（唯一名 → 新建分支），`categories.is_active` 的 CHAT_DATA data 加 `logical_type: enum` + 携带 `column_dict`（enum_values 1=是/0=否）。靶子选择依据：库中 `is_active` 字典存在但 `enum_values: []`（空条目，正好测「仅填空」），`level` 已维护（测不覆盖）。 |
 | 步骤与结果 | ①空态门禁：`模型校验`/`确认导入` 均 disabled ✓；②上传（⚠ 页面共 3 个 `input[type=file]`，首个选择器命中会话页隐藏 input，**必须先给弹窗内 input 打标记再 upload**）；③模型校验：行徽标 **通过**、「新增」标签、全文**无**「请先维护字段字典枚举值」（核心断言 ✓）；④查看详情清单五项全过（结构合法性/datatype/表归属/派生还原/物理校验/22 条质量规则）；⑤确认导入 → toast「导入完成（新建 1）」、弹窗关闭、无前端报错；⑥服务端验证：`is_active` 字典 enum_values 空 → [{1,是},{0,否}]（仅填空回填 ✓）、`level` 六级枚举与 unit=秒 原样保留（不覆盖 ✓）、模型 `sc_20260925081126_7ca4c62ba6de` 创建且 enabled=True（新模型直接启用 ✓）。 |
-| 数据还原 | 删除测试模型；`is_active` 字典 PUT 回空态（enum_values/synonyms/storage_format/unit 全空）。环境与测试前一致。 |
+| 数据还原 | 删除测试模型；`is_active` 字典 PUT 回空态（enum_values/storage_format/unit 全空）。环境与测试前一致。 |
 | 截图 | `.workbuddy/screenshots/colordict_e2e_0925/01_checklist_pass.png` |
 | 待办 | 本次为定向记录，发布前需按 §2 全量执行；AG-20 浏览器首跑仍未执行。 |
 

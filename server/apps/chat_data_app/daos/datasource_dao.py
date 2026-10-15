@@ -1104,7 +1104,7 @@ class DataSourceDao:
             existing = _normalize_column_dict(_load_json(row.dict_json, {}) if row else {})
             filled = [
                 key
-                for key in ("enum_values", "synonyms", "storage_format", "unit")
+                for key in ("enum_values", "storage_format", "unit")
                 if normalized_incoming[key] and not existing[key]
             ]
             if not filled:

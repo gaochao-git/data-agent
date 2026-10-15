@@ -31,6 +31,9 @@ import type {
   AgentScheduleRunItem,
   PluginInfo,
   ChatDataSettingItem,
+  MetaGlobalEnum,
+  MetaGlobalEnumRef,
+  MetaGlobalEnumValueItem,
 } from '../types'
 import type { Dashboard } from './dashboard'
 
@@ -599,8 +602,9 @@ export interface DatasourceColumnDictEnumItem {
 }
 
 export interface DatasourceColumnDictPayload {
+  // 引用全局枚举名；非空时 enum_values 必须为空（二选一），缺省为本地枚举
+  enum_ref?: string
   enum_values: DatasourceColumnDictEnumItem[]
-  synonyms: string[]
   storage_format: string
   unit: string
 }
@@ -1865,5 +1869,77 @@ export function resetAllAdminSettings(): Promise<ApiResponse<{ reset_count: numb
   return request({
     url: `${CHATDATA_API_PREFIX}/admin/settings`,
     method: 'delete'
+  })
+}
+
+// ============ 元数据管理 API（Admin：全局枚举） ============
+
+/** 后台：全局枚举列表（keyword 按名称/说明模糊过滤；businessDomain 按域过滤，不传返回全部域） */
+export function getAdminMetaEnums(params?: { keyword?: string; business_domain?: string }): Promise<ApiResponse<MetaGlobalEnum[]>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/meta/enums`,
+    method: 'get',
+    params
+  })
+}
+
+/** 后台：已有全局枚举的业务域去重清单（供域选择器） */
+export function getAdminMetaEnumDomains(): Promise<ApiResponse<{ domains: string[] }>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/meta/enums/domains`,
+    method: 'get'
+  })
+}
+
+/** 后台：全局枚举详情（按业务域 + 枚举名定位） */
+export function getAdminMetaEnum(enumName: string, businessDomain?: string): Promise<ApiResponse<MetaGlobalEnum>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/meta/enums/${encodeURIComponent(enumName)}`,
+    method: 'get',
+    params: businessDomain ? { business_domain: businessDomain } : undefined
+  })
+}
+
+/** 后台：查询全局枚举的数据字典引用方（删除前确认引用范围） */
+export function getAdminMetaEnumRefs(
+  enumName: string,
+  businessDomain?: string
+): Promise<ApiResponse<{ business_domain: string; enum_name: string; refs: MetaGlobalEnumRef[]; ref_count: number }>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/meta/enums/${encodeURIComponent(enumName)}/refs`,
+    method: 'get',
+    params: businessDomain ? { business_domain: businessDomain } : undefined
+  })
+}
+
+/** 后台：按 (business_domain, enum_name) 创建/更新全局枚举（软删行自动复用恢复）。
+ * allow_overwrite 仅编辑既有枚举时传 true；新建/存为模板保持 false，同域同名活跃枚举已存在时后端拒绝。 */
+export function upsertAdminMetaEnum(
+  enumName: string,
+  data: { business_domain?: string; enum_desc: string; enum_items: MetaGlobalEnumValueItem[]; allow_overwrite?: boolean }
+): Promise<ApiResponse<MetaGlobalEnum>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/meta/enums/${encodeURIComponent(enumName)}`,
+    method: 'put',
+    data
+  })
+}
+
+/** 后台：删除全局枚举（软删；仍被引用时后端拒绝并返回引用位置） */
+export function deleteAdminMetaEnum(enumName: string, businessDomain?: string): Promise<ApiResponse<{ business_domain: string; enum_name: string }>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/meta/enums/${encodeURIComponent(enumName)}`,
+    method: 'delete',
+    params: businessDomain ? { business_domain: businessDomain } : undefined
+  })
+}
+
+/** 后台：从文本提取全局枚举值候选（复用字段字典生成链路），不直接保存 */
+export function generateAdminMetaEnumItems(text: string): Promise<ApiResponse<{ enum_items: MetaGlobalEnumValueItem[] }>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/meta/enums/generate`,
+    method: 'post',
+    data: { text },
+    timeout: 120000 // LLM 生成，超过全局 30s
   })
 }

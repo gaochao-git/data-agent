@@ -116,7 +116,7 @@ def test_column_dict_api_contract(client, fake_datasource_manager, monkeypatch, 
         async def ainvoke(self, messages):
             assert "1 表示有效" in messages[0].content
             return SimpleNamespace(
-                content='{"dict":{"enum_values":[{"value":"1","label":"有效"},{"value":"0","label":"无效"}],"synonyms":["订单状态"],"storage_format":"","unit":""}}'
+                content='{"dict":{"enum_values":[{"value":"1","label":"有效"},{"value":"0","label":"无效"}],"storage_format":"","unit":""}}'
             )
 
     patch_datasource_manager(fake_datasource_manager)
@@ -139,7 +139,6 @@ def test_column_dict_api_contract(client, fake_datasource_manager, monkeypatch, 
         json={
             "dict": {
                 "enum_values": [{"value": "1", "label": "有效"}, {"value": "0", "label": "无效"}],
-                "synonyms": ["状态"],
                 "storage_format": "",
                 "unit": "",
             }
@@ -171,7 +170,7 @@ def test_column_dict_api_contract(client, fake_datasource_manager, monkeypatch, 
         {"value": "1", "label": "有效"},
         {"value": "0", "label": "无效"},
     ]
-    assert generate_response.json()["data"]["dict"]["synonyms"] == []
+    assert generate_response.json()["data"]["dict"]["storage_format"] == ""
 
 
 def test_column_dict_routes_require_auth(client, fake_datasource_manager, patch_datasource_manager):

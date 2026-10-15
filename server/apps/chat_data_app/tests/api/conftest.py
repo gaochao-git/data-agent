@@ -235,7 +235,6 @@ class FakeDatasourceManager:
             if any(column.get("name") == column_name for column in table.get("columns") or []):
                 return {
                     "enum_values": [{"value": "1", "label": "有效"}],
-                    "synonyms": ["状态"],
                     "storage_format": "",
                     "unit": "",
                 }

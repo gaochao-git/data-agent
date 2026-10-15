@@ -131,11 +131,12 @@ _OSSI_DATATYPE_TO_DATA_TYPE = {
 
 
 def _column_dict_extension_data(item: dict[str, Any]) -> dict[str, Any]:
-    """字段数据字典四项（enum_values/synonyms/storage_format/unit）的导出形态。
+    """字段数据字典（enum_ref 之外的 enum_values/storage_format/unit）的导出形态。
 
     物化链路在配置副本上预挂 ``_column_dict``（见 SemanticConfigService.annotate_export_column_dicts，
     键提取口径与运行时合并一致）；此处只做防御性结构过滤后原样透传，导入侧据此
     按「仅填空」策略回写 datasource_column_dict，形成字典导出 → 导入闭环。
+    enum_ref 是环境内引用（跨环境不保证存在），不随导出携带。
     """
     raw = item.get("_column_dict")
     if not isinstance(raw, dict):
@@ -148,9 +149,6 @@ def _column_dict_extension_data(item: dict[str, Any]) -> dict[str, Any]:
     ]
     if enum_values:
         payload["enum_values"] = enum_values
-    synonyms = [_text(synonym) for synonym in raw.get("synonyms") or [] if _text(synonym)]
-    if synonyms:
-        payload["synonyms"] = synonyms
     for key in ("storage_format", "unit"):
         if _text(raw.get(key)):
             payload[key] = _text(raw.get(key))

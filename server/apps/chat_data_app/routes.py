@@ -14,6 +14,7 @@ from .routers.dashboard import router as dashboard_router
 from .routers.datasource_admin import router as datasource_admin_router
 from .routers.datasource_public import router as datasource_public_router
 from .routers.evaluation import router as evaluation_router
+from .routers.meta_admin import router as meta_admin_router
 from .routers.plugins import router as plugins_router
 from .routers.query_execution import router as query_execution_router
 from .routers.query_favorites import router as query_favorites_router
@@ -57,3 +58,4 @@ router.include_router(agent_schedules_router)
 router.include_router(agent_schedule_admin_router)
 router.include_router(plugins_router)
 router.include_router(setting_admin_router)
+router.include_router(meta_admin_router)

@@ -10,6 +10,7 @@ import GlobalSqlHistory from './GlobalSqlHistory.vue'
 import AgentScheduleAdminPanel from './AgentScheduleAdminPanel.vue'
 import PluginAdminPanel from './PluginAdminPanel.vue'
 import SettingAdminPanel from './SettingAdminPanel.vue'
+import MetaManagementPanel from './MetaManagementPanel.vue'
 import { getAdminDatasources } from '../api'
 import type { DataSource } from '../types'
 
@@ -23,8 +24,9 @@ const emit = defineEmits<{
   'open-semantic-config': [datasourceId: string, datasource?: DataSource]
 }>()
 
-const activeTab = ref<'datasource' | 'sqlHistory' | 'schedule' | 'plugins' | 'setting'>('datasource')
+const activeTab = ref<'datasource' | 'meta' | 'sqlHistory' | 'schedule' | 'plugins' | 'setting'>('datasource')
 const datasourceManagerRef = ref<InstanceType<typeof DataSourceManager> | null>(null)
+const metaPanelRef = ref<InstanceType<typeof MetaManagementPanel> | null>(null)
 const sqlHistoryRef = ref<InstanceType<typeof GlobalSqlHistory> | null>(null)
 const schedulePanelRef = ref<InstanceType<typeof AgentScheduleAdminPanel> | null>(null)
 const pluginPanelRef = ref<InstanceType<typeof PluginAdminPanel> | null>(null)
@@ -40,6 +42,7 @@ const visible = computed({
 
 const tabs = [
   { key: 'datasource', label: '数据源管理', icon: 'fa-database' },
+  { key: 'meta', label: '元数据管理', icon: 'fa-tags' },
   { key: 'sqlHistory', label: '全局历史 SQL', icon: 'fa-clock-rotate-left' },
   { key: 'schedule', label: '定时任务', icon: 'fa-stopwatch' },
   { key: 'plugins', label: '插件管理', icon: 'fa-plug' },
@@ -74,8 +77,13 @@ const handleDatasourcesUpdated = () => {
   emit('datasources-updated')
 }
 
-const switchTab = async (tab: 'datasource' | 'sqlHistory' | 'schedule' | 'plugins' | 'setting') => {
+const switchTab = async (tab: 'datasource' | 'meta' | 'sqlHistory' | 'schedule' | 'plugins' | 'setting') => {
   activeTab.value = tab
+  if (tab === 'meta') {
+    await nextTick()
+    metaPanelRef.value?.ensureLoaded()
+    return
+  }
   if (tab === 'schedule') {
     await nextTick()
     schedulePanelRef.value?.ensureLoaded()
@@ -136,6 +144,11 @@ const switchTab = async (tab: 'datasource' | 'sqlHistory' | 'schedule' | 'plugin
         class="h-full"
         @datasources-updated="handleDatasourcesUpdated"
         @open-semantic-config="(datasourceId, datasource) => emit('open-semantic-config', datasourceId, datasource)"
+      />
+      <MetaManagementPanel
+        v-show="activeTab === 'meta'"
+        ref="metaPanelRef"
+        class="h-full"
       />
       <GlobalSqlHistory
         v-show="activeTab === 'sqlHistory'"

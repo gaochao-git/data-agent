@@ -17,6 +17,7 @@ from utils.logger import get_logger
 
 from ...daos.datasource_dao import DataSourceDao
 from ...daos.datasource_dao_helpers import VALID_TABLE_INDEX_TYPES, _normalize_table_index_items
+from ..meta.global_enum_service import global_enum_service
 from .credentials import resolve_execution_source_config, sanitize_source_config
 from .metadata import (
     DataSourceMetadataAdapter,
@@ -915,6 +916,8 @@ class DataSourceManager:
         table = self._find_table_column(datasource, table_name, column_name)
         if not datasource or table is None:
             return None
+        # enum_ref 二选一约束与引用存在性校验（非法写入在此拦截，异常由路由映射业务码）
+        await global_enum_service.validate_column_dict_for_write_async(column_dict)
         return await self.datasource_dao.replace_column_dict_async(
             datasource.get("group_id") or "",
             table_name,
