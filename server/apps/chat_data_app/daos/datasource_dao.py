@@ -1081,6 +1081,8 @@ class DataSourceDao:
         返回实际填充的字段名列表；无可填充内容时不产生任何写入。
         与 replace 的语义差异：replace 以传入内容全量覆盖（含清空），fill 只补空缺，
         供 Ossie 导入闭环使用（拍板：冲突策略=仅填空，不走草稿）。
+        引用态列（enum_ref 非空）的本地枚举为空是设计使然，禁止回填 enum_values
+        （二选一不变量：enum_ref 与 enum_values 不可并存）。
         """
         if not group_id or not table_name or not column_name:
             return []
@@ -1105,7 +1107,9 @@ class DataSourceDao:
             filled = [
                 key
                 for key in ("enum_values", "storage_format", "unit")
-                if normalized_incoming[key] and not existing[key]
+                if normalized_incoming[key]
+                and not existing[key]
+                and not (key == "enum_values" and existing["enum_ref"])
             ]
             if not filled:
                 return []

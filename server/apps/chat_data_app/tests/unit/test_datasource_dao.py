@@ -1118,6 +1118,52 @@ def test_fill_column_dict_noop_when_all_fields_covered(monkeypatch):
     assert not [stmt for stmt in executed if "INSERT" in str(stmt).upper()]
 
 
+def test_fill_column_dict_skips_enum_values_when_enum_ref_set(monkeypatch):
+    """引用态列（enum_ref 非空、本地枚举为空）：enum_values 禁止回填（二选一不变量），其余空缺照常填充。"""
+    store = DataSourceDao.__new__(DataSourceDao)
+    executed = []
+    _patch_store_session(
+        monkeypatch,
+        {
+            "datasource_column_dict": [
+                _column_dict_model(
+                    dict_json=json.dumps(
+                        {
+                            "enum_ref": "pay_status",
+                            "enum_values": [],
+                            "storage_format": "",
+                            "unit": "",
+                        },
+                        ensure_ascii=False,
+                    )
+                ),
+            ]
+        },
+        executed=executed,
+    )
+
+    filled = asyncio.run(
+        store.fill_column_dict_async(
+            "group_a",
+            "orders",
+            "status",
+            {
+                "enum_values": [{"value": "0", "label": "智能体采样值"}],
+                "storage_format": "0/1/2",
+                "unit": "",
+            },
+        )
+    )
+
+    assert filled == ["storage_format"]
+    upserts = [stmt for stmt in executed if "INSERT" in str(stmt).upper()]
+    assert len(upserts) == 1
+    merged = json.loads(upserts[0].compile().params["dict_json"])
+    assert merged["enum_ref"] == "pay_status"
+    assert merged["enum_values"] == []
+    assert merged["storage_format"] == "0/1/2"
+
+
 def test_fill_column_dict_short_circuits_on_invalid_args(monkeypatch):
     """空键或空内容：直接短路返回空清单，不产生任何写入。"""
     store = DataSourceDao.__new__(DataSourceDao)

@@ -1925,6 +1925,27 @@ def test_merge_carried_column_dicts_none_passthrough():
     assert merge_carried_column_dicts({}, []) == {}
 
 
+def test_merge_carried_column_dicts_skips_enum_values_when_enum_ref_set():
+    """引用态列（enum_ref 非空、本地枚举为空）：enum_values 不并入校验映射，与落库 fill 守卫同口径。"""
+    existing = {
+        ("orders", "status"): {"enum_ref": "pay_status", "enum_values": [], "storage_format": "", "unit": ""},
+    }
+    carried = [
+        {
+            "table": "orders",
+            "column": "status",
+            "dict": {"enum_values": [{"value": "0", "label": "智能体采样值"}], "storage_format": "0/1/2"},
+        },
+    ]
+    merged = merge_carried_column_dicts(existing, carried)
+    assert merged[("orders", "status")] == {
+        "enum_ref": "pay_status",
+        "enum_values": [],
+        "storage_format": "0/1/2",
+        "unit": "",
+    }
+
+
 def test_apply_physical_validation_counts_carried_dicts(monkeypatch):
     """物理校验使用「库内字典 + 携带字典仅填空合并」后的映射做枚举校验。"""
     from apps.chat_data_app.services.semantic.run import semantic_config_service

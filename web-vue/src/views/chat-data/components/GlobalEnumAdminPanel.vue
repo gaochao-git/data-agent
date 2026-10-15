@@ -81,8 +81,8 @@ const loadEnums = async () => {
       ElMessage.error(res.msg || '获取全局枚举列表失败')
     }
   } catch (err) {
+    // axios 拦截器已对业务错误（ElNotification）与网络错误（ElMessage）弹出具体原因，此处不再重复提示
     console.error('获取全局枚举列表失败:', err)
-    ElMessage.error('获取全局枚举列表失败，请稍后重试')
   } finally {
     loading.value = false
   }
@@ -195,8 +195,8 @@ const aiFillItems = async () => {
     formItems.value = nextRows.length > 0 ? nextRows : [{ value: '', label: '' }]
     ElMessage.success(`已生成候选，新增枚举 ${addedCount} 个，补充含义 ${filledCount} 个`)
   } catch (err) {
+    // 拦截器已弹出具体错误原因，不再重复提示
     console.error('AI 生成全局枚举值失败:', err)
-    ElMessage.error('生成失败，请稍后重试')
   } finally {
     aiGenerating.value = false
   }
@@ -245,8 +245,8 @@ const saveEnum = async () => {
       ElMessage.error(res.msg || '保存失败')
     }
   } catch (err) {
+    // 拦截器已弹出具体错误原因，不再重复提示
     console.error('保存全局枚举失败:', err)
-    ElMessage.error('保存失败，请稍后重试')
   } finally {
     saving.value = false
   }
@@ -272,8 +272,8 @@ const openRefs = async (row: MetaGlobalEnum) => {
     }
   } catch (err) {
     if (seq !== refsLoadSeq) return
+    // 拦截器已弹出具体错误原因，不再重复提示
     console.error('查询全局枚举引用方失败:', err)
-    ElMessage.error('查询引用方失败，请稍后重试')
   } finally {
     if (seq === refsLoadSeq) {
       refsLoading.value = false
@@ -300,8 +300,8 @@ const removeEnum = async (row: MetaGlobalEnum) => {
       ElMessage.error(res.msg || '删除失败')
     }
   } catch (err) {
+    // 拦截器已弹出具体错误原因（如「仍被引用（…），请先解除引用」），不再重复提示
     console.error('删除全局枚举失败:', err)
-    ElMessage.error('删除失败，请稍后重试')
   }
 }
 

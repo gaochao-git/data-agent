@@ -352,8 +352,14 @@ def plan_column_dict_fills(
 
 
 def _merge_carried_entry_fields(target: dict[str, Any], carried: dict[str, Any]) -> None:
-    """把一条携带字典的非空字段按「仅填空」并入 target（既有值一律保留）。"""
+    """把一条携带字典的非空字段按「仅填空」并入 target（既有值一律保留）。
+
+    引用态列（enum_ref 非空）的本地枚举为空是设计使然，跳过 enum_values 并入，
+    与落库 fill 的 enum_ref 守卫保持同一状态口径。
+    """
     for field_key in _COLUMN_DICT_FIELD_KEYS:
+        if field_key == "enum_values" and target.get("enum_ref"):
+            continue
         if not target.get(field_key) and carried.get(field_key):
             target[field_key] = carried[field_key]
 
