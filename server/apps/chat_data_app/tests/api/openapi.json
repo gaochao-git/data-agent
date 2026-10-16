@@ -1658,13 +1658,6 @@
             "title": "Domain",
             "type": "string"
           },
-          "plural_display_name": {
-            "default": "",
-            "description": "复数展示名",
-            "maxLength": 128,
-            "title": "Plural Display Name",
-            "type": "string"
-          },
           "properties": {
             "description": "属性集（整体提交）",
             "items": {
@@ -1673,17 +1666,6 @@
             "minItems": 1,
             "title": "Properties",
             "type": "array"
-          },
-          "visibility": {
-            "default": "normal",
-            "description": "上下文可见性",
-            "enum": [
-              "prominent",
-              "normal",
-              "hidden"
-            ],
-            "title": "Visibility",
-            "type": "string"
           }
         },
         "required": [

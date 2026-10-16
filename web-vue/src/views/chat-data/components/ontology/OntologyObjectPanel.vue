@@ -210,11 +210,6 @@ defineExpose({ ensureLoaded, reload })
             </el-tooltip>
           </template>
         </el-table-column>
-        <el-table-column label="可见性" width="80" align="center">
-          <template #default="{ row }">
-            <span class="text-xs text-slate-500">{{ ONTOLOGY_VISIBILITY_META[row.visibility as keyof typeof ONTOLOGY_VISIBILITY_META]?.label || row.visibility }}</span>
-          </template>
-        </el-table-column>
         <el-table-column label="业务域" width="110" show-overflow-tooltip>
           <template #default="{ row }">
             <el-tag v-if="row.domain" size="small" type="info" effect="plain">{{ row.domain }}</el-tag>
