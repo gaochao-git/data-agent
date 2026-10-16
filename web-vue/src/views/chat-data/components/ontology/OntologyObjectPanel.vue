@@ -2,11 +2,11 @@
 /**
  * 后台管理 · 本体对象列表面板（左树右详情）。
  * 对象/属性/关系为本体三等实体；本面板负责对象资产治理：
- * 左侧「业务域 → 对象 → 属性/关系/绑定」完全树形导航（对象子节点懒加载），
+ * 左侧「业务域 → 对象 → 属性/关系/映射」完全树形导航（对象子节点懒加载），
  * 右侧按选中节点类型渲染详情卡（对象卡含编辑/状态迁移/删除操作）。
  * 层级对标 Palantir object type groups（扁平分类原语，展示层分组，非对象父子建模）。
  */
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { TreeInstance } from 'element-plus'
 import {
@@ -16,7 +16,7 @@ import {
   getAdminOntologyRelations
 } from '../../api'
 import type {
-  OntologyBindingItem,
+  OntologyMappingItem,
   OntologyObjectItem,
   OntologyObjectStatus,
   OntologyPropertyItem,
@@ -24,9 +24,19 @@ import type {
 } from '../../types'
 import OntologyObjectForm from './OntologyObjectForm.vue'
 import OntologyStatusDialog from './OntologyStatusDialog.vue'
-import { bindingIdentityText, ONTOLOGY_MULTIPLICITY_META, ONTOLOGY_RENDER_HINTS, ONTOLOGY_STATUS_META } from './ontologyMeta'
+import { mappingIdentityText, ONTOLOGY_MULTIPLICITY_META, ONTOLOGY_RENDER_HINTS, ONTOLOGY_STATUS_META } from './ontologyMeta'
+import { useSemanticConfigOptions } from './useSemanticConfigOptions'
 
 const emit = defineEmits<{ changed: [] }>()
+
+// 语义模型选项（映射行回显「模型名（组名）」）
+const { load: loadSemanticOptions, optionOf } = useSemanticConfigOptions()
+onMounted(() => {
+  void loadSemanticOptions()
+})
+
+const mappingLabel = (mapping: OntologyMappingItem): string =>
+  optionOf(mapping.semantic_config_id)?.label || mappingIdentityText(mapping)
 
 const loading = ref(false)
 const items = ref<OntologyObjectItem[]>([])
@@ -64,7 +74,7 @@ interface ObjectNodeData {
   status: OntologyObjectStatus
   domain: string
   description: string
-  bindings_count: number
+  mappings_count: number
   update_time: string
   update_by_name: string
   is_leaf: false
@@ -82,10 +92,10 @@ interface RelationNode {
   relation_direction: 'from' | 'to'
   is_leaf: true
 }
-interface BindingNode {
+interface MappingNode {
   row_key: string
-  kind: 'binding'
-  binding: OntologyBindingItem
+  kind: 'mapping'
+  mapping: OntologyMappingItem
   is_leaf: true
 }
 interface EmptyNode {
@@ -94,7 +104,7 @@ interface EmptyNode {
   label: string
   is_leaf: true
 }
-type TreeRow = DomainNode | ObjectNodeData | PropertyNode | RelationNode | BindingNode | EmptyNode
+type TreeRow = DomainNode | ObjectNodeData | PropertyNode | RelationNode | MappingNode | EmptyNode
 
 // 数据版本号：编入对象节点 key，列表刷新/保存后懒加载缓存整体失效，防止展示脏数据
 const dataVersion = ref(0)
@@ -123,7 +133,7 @@ const treeData = computed<DomainNode[]>(() => {
       status: item.status,
       domain: item.domain,
       description: item.description,
-      bindings_count: item.bindings_count ?? (item.bindings || []).length,
+      mappings_count: item.mappings_count ?? (item.mappings || []).length,
       update_time: item.update_time || '',
       update_by_name: item.update_by_name || '',
       is_leaf: false
@@ -158,11 +168,11 @@ const buildChildRows = (objectNode: ObjectNodeData, entry: ObjectDetailEntry): T
   for (const rel of entry.toRelations) {
     rows.push({ row_key: `${objectNode.row_key}:rel:${rel.relation_name}:to`, kind: 'relation', relation: rel, relation_direction: 'to', is_leaf: true })
   }
-  for (const binding of entry.detail.bindings || []) {
-    rows.push({ row_key: `${objectNode.row_key}:binding:${bindingIdentityText(binding)}`, kind: 'binding', binding, is_leaf: true })
+  for (const mapping of entry.detail.mappings || []) {
+    rows.push({ row_key: `${objectNode.row_key}:mapping:${mappingIdentityText(mapping)}`, kind: 'mapping', mapping, is_leaf: true })
   }
   if (rows.length === 0) {
-    rows.push({ row_key: `${objectNode.row_key}:empty`, kind: 'empty', label: '暂无属性、关系与绑定', is_leaf: true })
+    rows.push({ row_key: `${objectNode.row_key}:empty`, kind: 'empty', label: '暂无属性、关系与映射', is_leaf: true })
   }
   return rows
 }
@@ -245,10 +255,10 @@ const selectedObjectStatusMeta = computed(() => {
 const renderHintLabels = (hints: Record<string, boolean>) =>
   ONTOLOGY_RENDER_HINTS.filter(hint => hints[hint.key]).map(hint => hint.label)
 
-const bindingMappingText = (binding: OntologyBindingItem) => {
-  const entries = Object.entries(binding.column_mappings || {})
-  if (entries.length === 0) return '暂无列映射'
-  return entries.map(([prop, col]) => `${prop} → ${col}`).join('，')
+const mappingMappingText = (mapping: OntologyMappingItem) => {
+  const entries = Object.entries(mapping.column_mappings || {})
+  if (entries.length === 0) return '暂无字段映射'
+  return entries.map(([prop, dim]) => `${prop} → ${dim}`).join('，')
 }
 
 // ---------- 列表加载与过滤 ----------
@@ -365,7 +375,7 @@ defineExpose({ ensureLoaded, reload })
     <!-- 说明条 -->
     <div class="shrink-0 border-b border-slate-100 px-4 py-2 text-xs text-slate-500">
       本体对象是语义层的外圈导航索引：认证态进入 agent 上下文；口径计算始终由语义层管理。
-      树形导航：业务域 → 对象 → 属性/关系/绑定（对象子节点按需加载）。
+      树形导航：业务域 → 对象 → 属性/关系/映射（对象子节点按需加载）。
     </div>
 
     <!-- 工具栏 -->
@@ -470,10 +480,10 @@ defineExpose({ ensureLoaded, reload })
                     : `← ${data.relation.from_display_name || data.relation.from_object_name || '-'}` }}
                 </span>
               </span>
-              <!-- 绑定节点 -->
-              <span v-else-if="data.kind === 'binding'" class="flex items-center gap-1.5 py-0.5">
+              <!-- 映射节点 -->
+              <span v-else-if="data.kind === 'mapping'" class="flex items-center gap-1.5 py-0.5">
                 <i class="fa-solid fa-link text-[10px] text-teal-500"></i>
-                <span class="font-mono text-xs text-slate-700">{{ bindingIdentityText(data.binding) }}</span>
+                <span class="text-xs text-slate-700">{{ mappingLabel(data.mapping) }}</span>
               </span>
               <!-- 占位节点 -->
               <span v-else class="text-xs text-slate-400">{{ data.label }}</span>
@@ -499,7 +509,7 @@ defineExpose({ ensureLoaded, reload })
         <div v-if="!selectedNode" class="flex h-full items-center justify-center">
           <div class="text-center text-xs text-slate-400">
             <i class="fa-solid fa-sitemap mb-2 block text-2xl text-slate-300"></i>
-            在左侧选择对象、属性、关系或绑定查看详情
+            在左侧选择对象、属性、关系或映射查看详情
           </div>
         </div>
 
@@ -538,7 +548,7 @@ defineExpose({ ensureLoaded, reload })
               <div>业务域：<span class="text-slate-700">{{ selectedNode.domain || '-' }}</span></div>
               <div>更新时间：<span class="text-slate-700">{{ selectedNode.update_time || '-' }}</span></div>
               <div>修改人员：<span class="text-slate-700">{{ selectedNode.update_by_name || '-' }}</span></div>
-              <div>绑定数：<span class="text-slate-700">{{ selectedNode.bindings_count }}</span></div>
+              <div>映射数：<span class="text-slate-700">{{ selectedNode.mappings_count }}</span></div>
               <div class="col-span-2">描述：<span class="text-slate-700">{{ selectedNode.description || '-' }}</span></div>
             </div>
 
@@ -610,23 +620,23 @@ defineExpose({ ensureLoaded, reload })
             </div>
             <div v-else class="py-1 text-xs text-slate-400">未参与任何关系</div>
 
-            <!-- 绑定摘要 -->
+            <!-- 映射摘要 -->
             <div class="mb-1 mt-4 flex items-center gap-2">
               <i class="fa-solid fa-link text-[10px] text-teal-500"></i>
-              <span class="text-xs font-medium text-slate-600">绑定摘要</span>
-              <span class="text-xs text-slate-400">{{ (selectedObject.entry.detail.bindings || []).length }} 条</span>
+              <span class="text-xs font-medium text-slate-600">映射摘要</span>
+              <span class="text-xs text-slate-400">{{ (selectedObject.entry.detail.mappings || []).length }} 条</span>
             </div>
-            <div v-if="(selectedObject.entry.detail.bindings || []).length > 0" class="flex flex-col gap-1.5 pb-2">
+            <div v-if="(selectedObject.entry.detail.mappings || []).length > 0" class="flex flex-col gap-1.5 pb-2">
               <div
-                v-for="binding in selectedObject.entry.detail.bindings"
-                :key="bindingIdentityText(binding)"
+                v-for="mapping in selectedObject.entry.detail.mappings"
+                :key="mappingIdentityText(mapping)"
                 class="rounded border border-slate-100 bg-slate-50/60 px-2 py-1.5"
               >
                 <div class="flex items-center gap-2">
-                  <span class="font-mono text-xs text-slate-700">{{ bindingIdentityText(binding) }}</span>
+                  <span class="text-xs text-slate-700">{{ mappingLabel(mapping) }}</span>
                   <span class="text-[11px] text-slate-400">绑定语义模型</span>
                 </div>
-                <div class="mt-0.5 font-mono text-[11px] text-slate-500">{{ bindingMappingText(binding) }}</div>
+                <div class="mt-0.5 font-mono text-[11px] text-slate-500">{{ mappingMappingText(mapping) }}</div>
               </div>
             </div>
             <div v-else class="py-1 text-xs text-slate-400">未绑定语义模型</div>
@@ -660,6 +670,13 @@ defineExpose({ ensureLoaded, reload })
             <el-tag size="small" :type="selectedNode.relation_direction === 'from' ? 'primary' : 'info'" effect="plain">
               {{ selectedNode.relation_direction === 'from' ? '当前对象发起' : '当前对象参与' }}
             </el-tag>
+            <el-tag
+              size="small"
+              :type="ONTOLOGY_STATUS_META[selectedNode.relation.status as keyof typeof ONTOLOGY_STATUS_META]?.tagType || 'info'"
+              effect="plain"
+            >
+              {{ ONTOLOGY_STATUS_META[selectedNode.relation.status as keyof typeof ONTOLOGY_STATUS_META]?.label || selectedNode.relation.status }}
+            </el-tag>
           </div>
           <div class="grid grid-cols-2 gap-x-6 gap-y-1 text-xs text-slate-500">
             <div>发起方：<span class="text-slate-700">{{ selectedNode.relation.from_display_name || selectedNode.relation.from_object_name || '-' }}</span></div>
@@ -672,26 +689,26 @@ defineExpose({ ensureLoaded, reload })
           </div>
         </div>
 
-        <!-- 绑定详情卡 -->
-        <div v-else-if="selectedNode.kind === 'binding'" class="max-w-xl">
+        <!-- 映射详情卡 -->
+        <div v-else-if="selectedNode.kind === 'mapping'" class="max-w-xl">
           <div class="mb-3 flex items-center gap-2">
             <i class="fa-solid fa-link text-[11px] text-teal-500"></i>
-            <span class="font-mono text-sm font-medium text-slate-800">{{ bindingIdentityText(selectedNode.binding) }}</span>
+            <span class="text-sm font-medium text-slate-800">{{ mappingLabel(selectedNode.mapping) }}</span>
             <span class="text-xs text-slate-400">绑定语义模型</span>
           </div>
-          <div class="mb-1 text-xs font-medium text-slate-600">列映射（属性 API 名 → 物理列名）</div>
-          <div v-if="Object.keys(selectedNode.binding.column_mappings || {}).length > 0" class="flex flex-col gap-1">
+          <div class="mb-1 text-xs font-medium text-slate-600">字段映射（属性 API 名 → 模型维度名）</div>
+          <div v-if="Object.keys(selectedNode.mapping.column_mappings || {}).length > 0" class="flex flex-col gap-1">
             <div
-              v-for="(col, propName) in selectedNode.binding.column_mappings"
+              v-for="(dim, propName) in selectedNode.mapping.column_mappings"
               :key="propName"
               class="flex items-center gap-2 font-mono text-xs text-slate-600"
             >
               <span>{{ propName }}</span>
               <i class="fa-solid fa-arrow-right text-[10px] text-slate-300"></i>
-              <span>{{ col }}</span>
+              <span>{{ dim }}</span>
             </div>
           </div>
-          <div v-else class="text-xs text-slate-400">暂无列映射</div>
+          <div v-else class="text-xs text-slate-400">暂无字段映射</div>
         </div>
       </div>
     </div>

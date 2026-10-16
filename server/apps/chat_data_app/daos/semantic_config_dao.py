@@ -169,7 +169,7 @@ class SemanticConfigDao:
     async def filter_existing_config_ids_async(self, config_ids: list[str]) -> set[str]:
         """按 semantic_config_id 批量过滤出真实存在的活跃配置 ID（软删不算存在）。
 
-        本体绑定存在性校验用：跨数据源组全局查询，不做 public/private 可见性过滤
+        本体映射存在性校验用：跨数据源组全局查询，不做 public/private 可见性过滤
         （本体是公司级治理目录，只关心配置是否真实存在）。
         """
         ids = {str(config_id).strip() for config_id in config_ids if str(config_id).strip()}
@@ -188,6 +188,38 @@ class SemanticConfigDao:
                 .all()
             )
         return {str(row) for row in rows}
+
+    async def get_config_dimensions_async(self, config_ids: list[str]) -> dict[str, dict[str, str]]:
+        """按 ID 批量读取语义模型维度索引（本体映射维度校验用，跨组全局查询）。
+
+        返回 {semantic_config_id: {维度名: 所属物理表名}}；软删/不存在的 ID 不出现在
+        结果中（调用方据此区分「模型不存在」与「维度不存在」两种报错）。
+        """
+        ids = {str(config_id).strip() for config_id in config_ids if str(config_id).strip()}
+        if not ids:
+            return {}
+        async with session_scope() as session:
+            rows = (
+                (
+                    await session.execute(
+                        select(SemanticConfig.semantic_config_id, SemanticConfig.dimensions_json).where(
+                            SemanticConfig.semantic_config_id.in_(ids), SemanticConfig.delete_flag == 0
+                        )
+                    )
+                )
+                .all()
+            )
+        index: dict[str, dict[str, str]] = {}
+        for config_id, dimensions_json in rows:
+            dimensions = _load_json(dimensions_json, [])
+            if not isinstance(dimensions, list):
+                continue
+            index[str(config_id)] = {
+                str(dim.get("name") or "").strip(): str(dim.get("table") or "").strip()
+                for dim in dimensions
+                if isinstance(dim, dict) and str(dim.get("name") or "").strip()
+            }
+        return index
 
     async def upsert_async(self, group_id: str, config: dict[str, Any]) -> bool:
         if not group_id or not ((config or {}).get("id") or (config or {}).get("semantic_config_id")):

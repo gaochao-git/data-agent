@@ -36,7 +36,7 @@ export const ONTOLOGY_MULTIPLICITY_META: Record<string, string> = {
 // API 名规则与后端 API_NAME_PATTERN 一致
 export const ONTOLOGY_NAME_PATTERN = /^[A-Za-z0-9_]{1,128}$/
 
-/** 绑定行唯一键（用于列表渲染 key 与归属展示） */
-export function bindingIdentityText(binding: { semantic_config_id?: string; table_alias?: string }): string {
-  return `${binding.semantic_config_id || '?'} / ${binding.table_alias || '?'}`
+/** 映射行展示文本（语义模型 ID；模型名由调用方经 useSemanticConfigOptions 解析后另行展示） */
+export function mappingIdentityText(mapping: { semantic_config_id?: string }): string {
+  return mapping.semantic_config_id || '?'
 }

@@ -1,7 +1,7 @@
 """本体服务：CRUD 编排、状态机与治理门禁（对齐 Palantir Ontology Manager）。
 
 分层边界：DAO 只做持久化；本层负责业务规则——确定性校验器（ontology_validator）
-红线检查、certified 冻结门禁、破坏性变更显式确认、状态机与关系级联、绑定
+红线检查、certified 冻结门禁、破坏性变更显式确认、状态机与关系级联、映射
 「一源一对象」唯一归属检查与全局枚举引用存在性校验。
 """
 
@@ -25,10 +25,13 @@ from .errors import (
 
 logger = get_logger(__name__)
 
-# 绑定存在性校验用（模块级单例，测试经 monkeypatch 打桩，同 global_enum_service 模式）
+# 映射存在性/维度校验用（模块级单例，测试经 monkeypatch 打桩，同 global_enum_service 模式）
 semantic_config_dao = SemanticConfigDao()
 
 STATUS_ORDER = {"draft": 0, "experimental": 1, "certified": 2}
+
+# 关系状态手动迁移的封闭词表（deprecated 仅随对象级联）
+RELATION_MANUAL_STATUSES = ("draft", "experimental", "certified")
 
 
 def _text(value: Any) -> str:
@@ -60,16 +63,16 @@ class OntologyService:
         objects = await self._dao.list_objects_async(keyword, status, domain)
         counts = await self._dao.count_mappings_by_object_ids_async([int(item["id"]) for item in objects])
         for item in objects:
-            item["bindings_count"] = counts.get(int(item["id"]), 0)
+            item["mappings_count"] = counts.get(int(item["id"]), 0)
         return objects
 
     async def get_object_async(self, object_name: str) -> dict[str, Any] | None:
-        """对象详情（含属性集与语义模型绑定；软删行视为不存在）。"""
+        """对象详情（含属性集与语义模型映射；软删行视为不存在）。"""
         data = await self._dao.get_object_row_async(object_name)
         if data is None:
             return None
         data["properties"] = await self._dao.list_properties_async(int(data["id"]))
-        data["bindings"] = await self._dao.list_object_mappings_async(int(data["id"]))
+        data["mappings"] = await self._dao.list_object_mappings_async(int(data["id"]))
         return data
 
     # ---------- 对象创建/编辑 ----------
@@ -83,19 +86,19 @@ class OntologyService:
         operator_name: str = "",
         allow_overwrite: bool = False,
     ) -> dict[str, Any]:
-        """创建或整体编辑对象（元数据 + 属性集 + 映射表绑定原子提交）。
+        """创建或整体编辑对象（元数据 + 属性集 + 映射表映射原子提交）。
 
         - 新建：allow_overwrite 可为 False（无行即插入）；
         - 编辑既有活跃对象：allow_overwrite 必须为 True；
         - certified 门禁：主键组合/标题键冻结、既有属性禁删禁改名；
-        - 破坏性变更（绑定变更、主键组合变化）需 payload.confirm_destructive；
+        - 破坏性变更（映射变更、主键组合变化）需 payload.confirm_destructive；
         - 「一源一对象」：service 先查占用给友好报错，映射表唯一索引 DB 兜底。
         """
         name = validator.validate_api_name(object_name, "对象API名")
         meta_payload = validator.validate_object_payload(payload)
         properties = validator.validate_property_items(payload.get("properties"))
         property_names = {item["property_name"] for item in properties}
-        bindings = validator.validate_bindings(payload.get("bindings"), property_names, name)
+        mappings = validator.validate_mappings(payload.get("mappings"), property_names, name)
         existing = await self._dao.get_object_row_async(name, include_deleted=True)
         allow_property_delete = True
         saved_status = "draft"
@@ -108,18 +111,19 @@ class OntologyService:
                 raise OntologyStateInvalidError(
                     f"对象已废弃且不可逆，禁止编辑: {name}（如需继续请基于替代对象重建）"
                 )
-            await self._enforce_edit_guards(existing, properties, bindings, payload)
+            await self._enforce_edit_guards(existing, properties, mappings, payload)
             exclude_object_id = int(existing["id"])
             allow_property_delete = _text(existing.get("status")) != "certified"
             saved_status = _text(existing.get("status"))
         await self._validate_enum_refs(properties)
-        await self._validate_binding_targets(bindings)
-        await self._check_binding_ownership(bindings, exclude_object_id)
+        await self._validate_mapping_targets(mappings)
+        await self._validate_mapping_dimensions(mappings)
+        await self._check_mapping_ownership(mappings, exclude_object_id)
         saved = await self._dao.upsert_object_full_async(
             name,
             meta_payload,
             properties,
-            bindings,
+            mappings,
             allow_property_delete=allow_property_delete,
             create_by=operator,
             create_by_name=operator_name,
@@ -135,7 +139,7 @@ class OntologyService:
         self,
         existing: dict[str, Any],
         properties: list[dict[str, Any]],
-        bindings: list[dict[str, Any]],
+        mappings: list[dict[str, Any]],
         payload: dict[str, Any],
     ) -> None:
         """编辑既有对象时的冻结与破坏性变更门禁。"""
@@ -149,17 +153,17 @@ class OntologyService:
             self._enforce_certified_freeze(
                 existing, old_properties, old_identifiers, new_identifiers, old_titles, new_titles, properties
             )
-            if not bindings:
+            if not mappings:
                 raise OntologyStateInvalidError(
-                    "certified 对象必须保持至少一个语义模型绑定，请先降级为 experimental 再变更"
+                    "certified 对象必须保持至少一个语义模型映射，请先降级为 experimental 再变更"
                 )
         elif old_identifiers != new_identifiers or old_titles != new_titles:
             self._require_destructive_confirm(payload, "主键组合或标题键变更")
-        old_bindings = await self._dao.list_object_mappings_async(int(existing["id"]))
-        if json.dumps(_normalize_bindings(old_bindings), ensure_ascii=False) != json.dumps(
-            _normalize_bindings(bindings), ensure_ascii=False
+        old_mappings = await self._dao.list_object_mappings_async(int(existing["id"]))
+        if json.dumps(_normalize_mappings(old_mappings), ensure_ascii=False) != json.dumps(
+            _normalize_mappings(mappings), ensure_ascii=False
         ):
-            self._require_destructive_confirm(payload, "绑定变更")
+            self._require_destructive_confirm(payload, "映射变更")
 
     def _enforce_certified_freeze(
         self,
@@ -261,10 +265,10 @@ class OntologyService:
         return (await self._dao.get_object_row_async(_text(existing.get("object_name")))) or existing
 
     async def _require_certifiable(self, object_name: str) -> None:
-        """升 certified 前置：必须有属性（含主键）且至少一个绑定（绑定统一为语义模型轨）。
+        """升 certified 前置：必须有属性（含主键）且至少一个映射（映射统一为语义模型轨）。
 
         本体物化根基对齐项目路线：Palantir 物化物理表，我们物化语义模型——
-        绑定只指向语义模型，认证对象必然能在语义层拿到口径。
+        映射只指向语义模型，认证对象必然能在语义层拿到口径。
         """
         detail = await self.get_object_async(object_name)
         if detail is None:
@@ -272,8 +276,8 @@ class OntologyService:
         properties = detail.get("properties") or []
         if not any(item.get("is_identifier") for item in properties):
             raise OntologyInvalidError("认证前对象必须至少定义一个标识属性（is_identifier）作为主键")
-        if not detail.get("bindings"):
-            raise OntologyInvalidError("认证前对象必须至少配置一个语义模型绑定（semantic_config_id + table_alias）")
+        if not detail.get("mappings"):
+            raise OntologyInvalidError("认证前对象必须至少配置一个语义模型映射（semantic_config_id + 字段映射）")
 
     async def _cascade_relation_statuses(self, object_name: str, operator: str, operator_name: str) -> None:
         """对象状态变化后级联关系状态：仅自动降级，升级需手动确认。"""
@@ -379,6 +383,51 @@ class OntologyService:
             raise OntologyNotFoundError(f"关系不存在: {relation_name}")
         await self._dao.soft_delete_relation_async(relation_name, operator, operator_name)
 
+    async def set_relation_status_async(
+        self,
+        relation_name: str,
+        target_status: str,
+        *,
+        operator: str = "",
+        operator_name: str = "",
+    ) -> dict[str, Any]:
+        """关系状态手动迁移（升级/降级），补齐「升级需手动」的操作入口。
+
+        规则：
+        - 目标状态只允许 draft/experimental/certified（deprecated 仅随对象级联）；
+        - 上限 = 两侧对象状态的较低者（关系不得高于任一端，先升对象再升关系）；
+        - 任一端对象已废弃时拒绝手动迁移（关系状态随对象级联，语义只可能是废弃）。
+        """
+        target = _text(target_status)
+        existing = await self._dao.get_relation_row_async(relation_name)
+        if existing is None:
+            raise OntologyNotFoundError(f"关系不存在: {relation_name}")
+        current = _text(existing.get("status"))
+        if target not in RELATION_MANUAL_STATUSES:
+            raise OntologyStateInvalidError(
+                f"目标状态必须是 {'/'.join(RELATION_MANUAL_STATUSES)} 之一（deprecated 仅随对象级联，不可手动迁移）"
+            )
+        if current == "deprecated":
+            raise OntologyStateInvalidError("deprecated 为终态且不可逆")
+        if target == current:
+            return existing
+        object_map = await self._dao.get_objects_by_ids_async(
+            [int(existing["from_object_id"]), int(existing["to_object_id"])]
+        )
+        from_status = _text(object_map.get(int(existing["from_object_id"]), {}).get("status"))
+        to_status = _text(object_map.get(int(existing["to_object_id"]), {}).get("status"))
+        if from_status == "deprecated" or to_status == "deprecated":
+            raise OntologyStateInvalidError("连接对象已废弃，关系状态随对象级联，不可手动迁移")
+        if not from_status or not to_status:
+            raise OntologyStateInvalidError("关系连接的对象不存在或已被删除，无法迁移关系状态")
+        bound = _derived_relation_status(from_status, to_status)
+        if _status_rank(target) > _status_rank(bound):
+            raise OntologyStateInvalidError(
+                f"关系状态不得高于两侧对象的较低者（当前上限: {bound}），请先升级对象状态"
+            )
+        await self._dao.set_relations_status_async([int(existing["id"])], target, operator, operator_name)
+        return await self._dao.get_relation_row_async(relation_name) or existing
+
     # ---------- 内部校验 ----------
 
     def _require_destructive_confirm(self, payload: dict[str, Any], action: str) -> None:
@@ -434,26 +483,58 @@ class OntologyService:
             if found is None:
                 raise OntologyInvalidError(f"属性 {item['property_name']} 引用的全局枚举不存在: {enum_ref}")
 
-    async def _check_binding_ownership(
-        self, bindings: list[dict[str, Any]], exclude_object_id: int | None
+    async def _check_mapping_ownership(
+        self, mappings: list[dict[str, Any]], exclude_object_id: int | None
     ) -> None:
-        """「一源一对象」：每个绑定键全局只能归属一个对象（唯一索引兜底，预检给友好报错）。"""
-        owners = await self._dao.find_mapping_owners_async(bindings, exclude_object_id=exclude_object_id)
-        for (config_id, table_alias), owner_name in sorted(owners.items()):
+        """「一源一对象」：每个映射键全局只能归属一个对象（唯一索引兜底，预检给友好报错）。"""
+        owners = await self._dao.find_mapping_owners_async(mappings, exclude_object_id=exclude_object_id)
+        for config_id, owner_name in sorted(owners.items()):
             raise OntologyInvalidError(
-                f"绑定 {config_id}:{table_alias} 已被对象 {owner_name} 占用"
-                "（一个语义模型绑定只能归属一个对象），请先解除原对象绑定"
+                f"映射 {config_id} 已被对象 {owner_name} 占用"
+                "（一个语义模型映射只能归属一个对象），请先解除原对象映射"
             )
 
-    async def _validate_binding_targets(self, bindings: list[dict[str, Any]]) -> None:
-        """绑定的语义模型必须真实存在（存在性校验；与「一源一对象」归属检查互补）。"""
-        config_ids = {_text(binding.get("semantic_config_id")) for binding in bindings} - {""}
+    async def _validate_mapping_targets(self, mappings: list[dict[str, Any]]) -> None:
+        """映射的语义模型必须真实存在（存在性校验；与「一源一对象」归属检查互补）。"""
+        config_ids = {_text(mapping.get("semantic_config_id")) for mapping in mappings} - {""}
         if not config_ids:
             return
         existing_ids = await semantic_config_dao.filter_existing_config_ids_async(sorted(config_ids))
         missing = sorted(config_ids - existing_ids)
         if missing:
-            raise OntologyInvalidError(f"绑定的语义模型不存在: {', '.join(missing)}")
+            raise OntologyInvalidError(f"映射的语义模型不存在: {', '.join(missing)}")
+
+    async def _validate_mapping_dimensions(self, mappings: list[dict[str, Any]]) -> None:
+        """映射右值必须是所选语义模型里真实存在的维度，且全部维度同表（实体锚点唯一）。
+
+        层级红线：本体层只引用模型维度名，不重复定义物理列；实体锚点（行结构
+        落在哪张表）由映射维度的所属表派生，跨表映射意味着对象没有确定行结构。
+        """
+        config_ids = {_text(mapping.get("semantic_config_id")) for mapping in mappings} - {""}
+        if not config_ids:
+            return
+        dimension_index = await semantic_config_dao.get_config_dimensions_async(sorted(config_ids))
+        for mapping in mappings:
+            config_id = _text(mapping.get("semantic_config_id"))
+            column_mappings = mapping.get("column_mappings") or {}
+            if not column_mappings:
+                continue
+            dimensions = dimension_index.get(config_id)
+            if dimensions is None:
+                continue  # 模型不存在由 _validate_mapping_targets 报错，此处不重复
+            anchor_tables: set[str] = set()
+            for prop, dimension_name in column_mappings.items():
+                table = _text(dimensions.get(_text(dimension_name)))
+                if not table:
+                    raise OntologyInvalidError(
+                        f"映射 {config_id} 的属性 {prop} 引用了模型中不存在的维度: {dimension_name}"
+                    )
+                anchor_tables.add(table)
+            if len(anchor_tables) > 1:
+                raise OntologyInvalidError(
+                    f"映射 {config_id} 的维度跨多张表（{', '.join(sorted(anchor_tables))}）："
+                    "同一映射的维度必须同表，实体锚点才能唯一确定；跨表口径请拆分映射或建 join 模型"
+                )
 
     async def _attach_object_names(self, relations: list[dict[str, Any]]) -> list[dict[str, Any]]:
         object_map = await self._dao.get_objects_by_ids_async(
@@ -467,17 +548,16 @@ class OntologyService:
         return relations
 
 
-def _normalize_bindings(bindings: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """绑定排序后规范化（仅保留结构键），用于编辑前后 diff 判断。"""
+def _normalize_mappings(mappings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """映射排序后规范化（仅保留结构键），用于编辑前后 diff 判断。"""
     normalized = []
-    for binding in bindings:
+    for mapping in mappings:
         normalized.append(
             {
-                "binding_type": _text(binding.get("binding_type")),
-                "semantic_config_id": _text(binding.get("semantic_config_id")),
-                "table_alias": _text(binding.get("table_alias")),
+                "binding_type": _text(mapping.get("binding_type")),
+                "semantic_config_id": _text(mapping.get("semantic_config_id")),
                 "column_mappings": {
-                    _text(key): _text(value) for key, value in (binding.get("column_mappings") or {}).items()
+                    _text(key): _text(value) for key, value in (mapping.get("column_mappings") or {}).items()
                 },
             }
         )

@@ -2,13 +2,20 @@
 /**
  * 后台管理 · 本体关系面板。
  * 关系连接两个对象（多对多走 junction 对象表达，这里只支持 N:1 / 1:1）；
- * 关系状态 = 两侧对象状态的较低者（降级自动级联、升级手动）。
+ * 关系状态 = 两侧对象状态的较低者（降级自动级联、升级手动迁移）。
  * 连接对象/关联列/基数变更属破坏性，提交前需显式确认。
  */
 import { computed, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { deleteAdminOntologyRelation, getAdminOntologyObject, getAdminOntologyObjects, getAdminOntologyRelations, upsertAdminOntologyRelation } from '../../api'
-import type { OntologyObjectItem, OntologyPropertyItem, OntologyRelationItem } from '../../types'
+import {
+  changeAdminOntologyRelationStatus,
+  deleteAdminOntologyRelation,
+  getAdminOntologyObject,
+  getAdminOntologyObjects,
+  getAdminOntologyRelations,
+  upsertAdminOntologyRelation
+} from '../../api'
+import type { OntologyObjectItem, OntologyObjectStatus, OntologyPropertyItem, OntologyRelationItem } from '../../types'
 import { ONTOLOGY_MULTIPLICITY_META, ONTOLOGY_NAME_PATTERN, ONTOLOGY_STATUS_META } from './ontologyMeta'
 
 const emit = defineEmits<{ changed: [] }>()
@@ -276,6 +283,76 @@ const removeRelation = async (row: OntologyRelationItem) => {
   }
 }
 
+// ---------- 状态迁移（升级手动，上限 = 两侧对象状态的较低者） ----------
+
+const MANUAL_STATUSES: Array<Exclude<OntologyObjectStatus, 'deprecated'>> = ['draft', 'experimental', 'certified']
+
+const statusRankOf = (status: OntologyObjectStatus | undefined): number =>
+  MANUAL_STATUSES.indexOf((status || 'draft') as Exclude<OntologyObjectStatus, 'deprecated'>)
+
+const statusDialogVisible = ref(false)
+const statusSaving = ref(false)
+const statusRow = ref<OntologyRelationItem | null>(null)
+const statusTarget = ref<Exclude<OntologyObjectStatus, 'deprecated'>>('experimental')
+
+const objectStatusOf = (objectName: string | undefined): OntologyObjectStatus | undefined =>
+  objects.value.find(item => item.object_name === objectName)?.status
+
+// 上限 = 两侧对象状态的较低者；任一端废弃时关系只随对象级联，不可手动迁移
+const statusUpperBound = computed<Exclude<OntologyObjectStatus, 'deprecated'> | 'deprecated' | null>(() => {
+  if (!statusRow.value) return null
+  const fromStatus = objectStatusOf(statusRow.value.from_object_name)
+  const toStatus = objectStatusOf(statusRow.value.to_object_name)
+  if (fromStatus === 'deprecated' || toStatus === 'deprecated') return 'deprecated'
+  const bound = Math.min(statusRankOf(fromStatus), statusRankOf(toStatus))
+  return MANUAL_STATUSES[bound] ?? null
+})
+
+const statusOptions = computed(() => {
+  const bound = statusUpperBound.value
+  if (!bound || bound === 'deprecated') return []
+  const boundRank = statusRankOf(bound)
+  return MANUAL_STATUSES.filter(status => status !== statusRow.value?.status && statusRankOf(status) <= boundRank)
+})
+
+const boundHint = computed(() => {
+  const bound = statusUpperBound.value
+  if (!statusRow.value) return ''
+  if (bound === 'deprecated') return '连接对象已废弃：关系状态随对象级联为废弃，不可手动迁移。'
+  if (!bound) return '无法确定两侧对象状态，请刷新后重试。'
+  return `关系状态不得高于两侧对象的较低者（当前上限：${ONTOLOGY_STATUS_META[bound].label}）；对象升级后可再升级关系。`
+})
+
+const openStatus = (row: OntologyRelationItem) => {
+  statusRow.value = row
+  const current = row.status
+  statusTarget.value = (MANUAL_STATUSES.includes(current as Exclude<OntologyObjectStatus, 'deprecated'>)
+    ? current
+    : 'draft') as Exclude<OntologyObjectStatus, 'deprecated'>
+  statusDialogVisible.value = true
+}
+
+const confirmStatus = async () => {
+  if (!statusRow.value) return
+  statusSaving.value = true
+  try {
+    const res = await changeAdminOntologyRelationStatus(statusRow.value.relation_name, { status: statusTarget.value })
+    if (res.status === 'success') {
+      ElMessage.success(`状态已更新为 ${ONTOLOGY_STATUS_META[statusTarget.value].label}`)
+      statusDialogVisible.value = false
+      await reload()
+      emit('changed')
+    } else {
+      ElMessage.error(res.msg || '状态变更失败')
+    }
+  } catch (err) {
+    // 拦截器已弹出具体错误原因（如超过对象状态上限），不再重复提示
+    console.error('本体关系状态变更失败:', err)
+  } finally {
+    statusSaving.value = false
+  }
+}
+
 defineExpose({ ensureLoaded, reload })
 </script>
 
@@ -356,10 +433,13 @@ defineExpose({ ensureLoaded, reload })
             <span class="text-xs text-slate-500">{{ row.update_time || '-' }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="140" fixed="right" class-name="relation-op-col">
+        <el-table-column label="操作" width="180" fixed="right" class-name="relation-op-col">
           <template #default="{ row }">
             <el-button link size="small" @click="openEdit(row)">
               <i class="fa-solid fa-pen text-[11px]"></i> 编辑
+            </el-button>
+            <el-button link size="small" @click="openStatus(row)">
+              <i class="fa-solid fa-arrow-right-arrow-left text-[11px]"></i> 状态
             </el-button>
             <el-button link size="small" type="danger" @click="removeRelation(row)">
               <i class="fa-solid fa-trash text-[11px]"></i> 删除
@@ -504,6 +584,64 @@ defineExpose({ ensureLoaded, reload })
       <template #footer>
         <el-button size="small" @click="dialogVisible = false">取消</el-button>
         <el-button type="primary" size="small" :loading="saving" @click="saveRelation">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 状态迁移弹窗 -->
+    <el-dialog v-model="statusDialogVisible" width="min(520px, 94vw)" :append-to-body="true">
+      <template #header>
+        <span class="text-base font-medium text-slate-800">状态迁移：{{ statusRow?.relation_name }}</span>
+      </template>
+      <div v-if="statusRow" class="flex flex-col gap-3">
+        <div class="flex items-center gap-2 text-xs text-slate-500">
+          <span>当前状态</span>
+          <el-tag
+            size="small"
+            :type="ONTOLOGY_STATUS_META[statusRow.status as keyof typeof ONTOLOGY_STATUS_META]?.tagType || 'info'"
+            effect="plain"
+          >
+            {{ ONTOLOGY_STATUS_META[statusRow.status as keyof typeof ONTOLOGY_STATUS_META]?.label || statusRow.status }}
+          </el-tag>
+          <span>{{ ONTOLOGY_STATUS_META[statusRow.status as keyof typeof ONTOLOGY_STATUS_META]?.hint }}</span>
+        </div>
+        <div
+          v-if="statusRow.status !== 'deprecated'"
+          class="rounded-lg border border-blue-100 bg-blue-50 p-2.5 text-[11px] leading-5 text-blue-700"
+        >
+          {{ boundHint }}
+        </div>
+        <div
+          v-else
+          class="rounded-lg border border-red-100 bg-red-50 p-2.5 text-[11px] leading-5 text-red-600"
+        >
+          deprecated 为终态且不可逆；关系状态随连接对象级联。
+        </div>
+        <div v-if="statusRow.status !== 'deprecated'">
+          <div class="mb-1 text-xs text-slate-500">目标状态</div>
+          <el-select v-model="statusTarget" size="small" :empty-values="[null, undefined]" class="!w-full">
+            <el-option
+              v-for="status in statusOptions"
+              :key="status"
+              :label="`${ONTOLOGY_STATUS_META[status].label}（${ONTOLOGY_STATUS_META[status].hint}）`"
+              :value="status"
+            />
+          </el-select>
+          <div v-if="statusOptions.length === 0" class="mt-1 text-[11px] text-slate-400">
+            当前无可选目标状态（已达上限或与当前状态相同）。
+          </div>
+        </div>
+      </div>
+      <template #footer>
+        <el-button size="small" @click="statusDialogVisible = false">取消</el-button>
+        <el-button
+          v-if="statusRow?.status !== 'deprecated' && statusOptions.length > 0"
+          type="primary"
+          size="small"
+          :loading="statusSaving"
+          @click="confirmStatus"
+        >
+          确认迁移
+        </el-button>
       </template>
     </el-dialog>
   </div>

@@ -13,7 +13,12 @@ from utils.error_codes import ErrorCode
 from utils.logger import get_logger
 from utils.response import business_response
 
-from ..schema import OntologyObjectStatusRequest, OntologyObjectUpsertRequest, OntologyRelationUpsertRequest
+from ..schema import (
+    OntologyObjectStatusRequest,
+    OntologyObjectUpsertRequest,
+    OntologyRelationStatusRequest,
+    OntologyRelationUpsertRequest,
+)
 from ..services.ontology import (
     OntologyAlreadyExistsError,
     OntologyInvalidError,
@@ -188,3 +193,23 @@ async def delete_ontology_relation(relation_name: str, request: Request) -> JSON
         raise
     except Exception as e:
         return _error_response(e, "删除本体关系失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
+
+
+@router.post("/admin/meta/ontology/relations/{relation_name}/status")
+async def change_ontology_relation_status(
+    relation_name: str, payload: OntologyRelationStatusRequest, request: Request
+) -> JSONResponse:
+    """本体关系状态手动迁移（升级/降级；上限=两侧对象状态的较低者，deprecated 仅随对象级联）。"""
+    try:
+        current_user = _get_current_user(request)
+        data = await ontology_service.set_relation_status_async(
+            relation_name,
+            payload.status,
+            operator=str(current_user.user_id),
+            operator_name=str(current_user.username or ""),
+        )
+        return business_response(data=data, msg="状态更新成功")
+    except HTTPException:
+        raise
+    except Exception as e:
+        return _error_response(e, "本体关系状态变更失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)

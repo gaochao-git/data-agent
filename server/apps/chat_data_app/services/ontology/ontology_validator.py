@@ -131,67 +131,59 @@ def _validate_render_hints(property_name: str, raw_hints: Any) -> dict[str, bool
     return hints
 
 
-def validate_bindings(raw_bindings: Any, property_names: set[str], object_name_for_error: str) -> list[dict[str, Any]]:
-    """校验并规范化语义模型绑定列表，返回标准化条目。
+def validate_mappings(raw_mappings: Any, property_names: set[str], object_name_for_error: str) -> list[dict[str, Any]]:
+    """校验并规范化语义模型映射列表，返回标准化条目。
 
     本体统一基于语义模型（Palantir 物化物理表，我们物化语义模型），不触碰物理表。
-    存在性校验（semantic_config 是否真实存在）与「一源一对象」唯一归属检查由
-    service 层完成；本函数只做结构与封闭词表红线。
+    映射层级 = 组 → 模型 → 维度映射（Ossie 映射文档只引用语义模型，物理表解析是
+    模型文档内部的事）。存在性校验（semantic_config 是否真实存在）、维度存在性、
+    同表锚点与「一源一对象」唯一归属检查由 service 层完成；本函数只做结构红线。
     """
-    if raw_bindings is None:
+    if raw_mappings is None:
         return []
-    if not isinstance(raw_bindings, list):
-        raise _invalid(f"对象 {object_name_for_error} 的绑定必须是数组")
-    identities: set[tuple[str, str, str]] = set()
-    return [_validate_binding_item(raw, identities, property_names, object_name_for_error) for raw in raw_bindings]
+    if not isinstance(raw_mappings, list):
+        raise _invalid(f"对象 {object_name_for_error} 的映射必须是数组")
+    identities: set[str] = set()
+    return [_validate_mapping_item(raw, identities, property_names, object_name_for_error) for raw in raw_mappings]
 
 
-def _validate_binding_item(
+def _validate_mapping_item(
     raw: Any,
-    identities: set[tuple[str, str, str]],
+    identities: set[str],
     property_names: set[str],
     object_name_for_error: str,
 ) -> dict[str, Any]:
-    """校验单条绑定：semantic_config_id + table_alias 必填、列映射引用已定义属性。"""
+    """校验单条映射：semantic_config_id 必填、字段映射引用已定义属性且维度名非空。"""
     if not isinstance(raw, dict):
-        raise _invalid(f"对象 {object_name_for_error} 的绑定条目格式非法")
-    subject, table = _binding_subject_and_table(raw)
-    identity = (BINDING_TYPE_SEMANTIC, subject, table)
-    if identity in identities:
-        raise _invalid(f"对象 {object_name_for_error} 存在重复绑定: {subject}:{table}")
-    identities.add(identity)
+        raise _invalid(f"对象 {object_name_for_error} 的映射条目格式非法")
+    subject = _normalized_text(raw.get("semantic_config_id"))
+    if not subject:
+        raise _invalid("映射必须提供 semantic_config_id")
+    if subject in identities:
+        raise _invalid(f"对象 {object_name_for_error} 存在重复映射: {subject}")
+    identities.add(subject)
     return {
         "binding_type": BINDING_TYPE_SEMANTIC,
         "semantic_config_id": subject,
-        "table_alias": table,
         "column_mappings": _validate_column_mappings(raw.get("column_mappings"), property_names, object_name_for_error),
     }
-
-
-def _binding_subject_and_table(raw: dict[str, Any]) -> tuple[str, str]:
-    """提取绑定主体与表标识（缺失即拒绝）。"""
-    subject = _normalized_text(raw.get("semantic_config_id"))
-    table = _normalized_text(raw.get("table_alias"))
-    if not subject or not table:
-        raise _invalid("绑定必须同时提供 semantic_config_id 与 table_alias")
-    return subject, table
 
 
 def _validate_column_mappings(
     raw_mappings: Any, property_names: set[str], object_name_for_error: str
 ) -> dict[str, str]:
-    """列映射红线：必须是对象且引用的属性已定义、物理列名非空。"""
+    """字段映射红线：必须是对象且引用的属性已定义、维度名非空。"""
     if not isinstance(raw_mappings, dict):
-        raise _invalid("column_mappings 必须是 {属性API名: 物理列名} 对象")
+        raise _invalid("column_mappings 必须是 {属性API名: 模型维度名} 对象")
     normalized: dict[str, str] = {}
-    for prop, column in raw_mappings.items():
+    for prop, dimension in raw_mappings.items():
         prop_name = _normalized_text(prop)
-        column_name = _normalized_text(column)
+        dimension_name = _normalized_text(dimension)
         if prop_name not in property_names:
-            raise _invalid(f"绑定 column_mappings 引用了未定义属性: {prop_name}（对象 {object_name_for_error}）")
-        if not column_name:
-            raise _invalid(f"属性 {prop_name} 的绑定列名不能为空")
-        normalized[prop_name] = column_name
+            raise _invalid(f"映射 column_mappings 引用了未定义属性: {prop_name}（对象 {object_name_for_error}）")
+        if not dimension_name:
+            raise _invalid(f"属性 {prop_name} 的映射维度名不能为空")
+        normalized[prop_name] = dimension_name
     return normalized
 
 

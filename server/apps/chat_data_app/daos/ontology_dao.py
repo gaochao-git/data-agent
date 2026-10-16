@@ -2,7 +2,7 @@
 
 对象/属性/关系为三等实体（对齐 Palantir Object/Property/Link Type）。删除均为
 软删：对象与关系同名重建走复活复用原行（翻回 delete_flag=0 并更新内容），属性
-按 (object_id, property_name) 复活。语义模型绑定独立存映射表
+按 (object_id, property_name) 复活。语义模型映射独立存映射表
 chat_data_ontology_object_mapping（对齐 ossie 概念层/映射层分离），随对象
 upsert 同事务硬删+重插全量重写；「一源一对象」由映射表唯一索引约束，
 service 层先查占用对象给友好报错，数据库唯一键兜底。
@@ -119,12 +119,11 @@ def _relation_row_to_dict(row: ChatDataOntologyRelation) -> dict[str, Any]:
 
 
 def _mapping_row_to_dict(row: ChatDataOntologyObjectMapping) -> dict[str, Any]:
-    """映射行 → 绑定视图（binding_type 固定 semantic，对外 API 形状与旧 bindings 一致）。"""
+    """映射行 → 映射视图（binding_type 固定 semantic，对外 API 形状与旧 mappings 一致）。"""
     return {
         "object_id": int(row.object_id),
         "binding_type": _BINDING_TYPE_SEMANTIC,
         "semantic_config_id": _text(row.semantic_config_id),
-        "table_alias": _text(row.table_alias),
         "column_mappings": _parse_json(row.column_mappings_json, dict),
     }
 
@@ -223,7 +222,7 @@ class OntologyDao:
         object_name: str,
         row_payload: dict[str, Any],
         properties: list[dict[str, Any]],
-        bindings: list[dict[str, Any]],
+        mappings: list[dict[str, Any]],
         *,
         allow_property_delete: bool,
         create_by: str = "",
@@ -238,7 +237,7 @@ class OntologyDao:
         - 属性按 property_name 对齐 upsert（allow_property_delete 控制缺失属性软删）；
         - 映射软删+重插全量重写（软删行 delete_flag 置为行 id，腾出唯一索引槽位；
           唯一索引含 delete_flag，活跃行仍兜底一源一对象）；
-        - 返回完整视图；理论冲突（并发占用同一绑定）由唯一键 IntegrityError 兜底。
+        - 返回完整视图；理论冲突（并发占用同一映射）由唯一键 IntegrityError 兜底。
         """
         name = _text(object_name)
         incoming = {str(item.get("property_name") or "").strip(): item for item in properties}
@@ -294,20 +293,19 @@ class OntologyDao:
                 )
                 .values(delete_flag=ChatDataOntologyObjectMapping.id)
             )
-            for binding in bindings:
+            for mapping in mappings:
                 session.add(
                     ChatDataOntologyObjectMapping(
                         object_id=object_id,
-                        semantic_config_id=_text(binding.get("semantic_config_id")),
-                        table_alias=_text(binding.get("table_alias")),
-                        column_mappings_json=json.dumps(binding.get("column_mappings") or {}, ensure_ascii=False),
+                        semantic_config_id=_text(mapping.get("semantic_config_id")),
+                        column_mappings_json=json.dumps(mapping.get("column_mappings") or {}, ensure_ascii=False),
                         create_by=create_by or "",
                         create_by_name=create_by_name or "",
                         update_by=update_by or "",
                         update_by_name=update_by_name or "",
                     )
                 )
-        return {"object_name": name, **row_payload, "bindings": bindings}
+        return {"object_name": name, **row_payload, "mappings": mappings}
 
     async def soft_delete_object_async(self, object_name: str, update_by: str = "", update_by_name: str = "") -> None:
         name = _text(object_name)
@@ -355,30 +353,21 @@ class OntologyDao:
 
     async def find_mapping_owners_async(
         self,
-        bindings: list[dict[str, Any]],
+        mappings: list[dict[str, Any]],
         exclude_object_id: int | None = None,
-    ) -> dict[tuple[str, str], str]:
-        """查绑定键已被其他活跃对象占用的映射（「一源一对象」友好预检，唯一索引兜底）。
+    ) -> dict[str, str]:
+        """查映射键已被其他活跃对象占用的映射（「一源一对象」友好预检，唯一索引兜底）。
 
-        返回 {(semantic_config_id, table_alias): object_name}；exclude_object_id
-        用于编辑自身时排除。
+        返回 {semantic_config_id: object_name}；exclude_object_id 用于编辑自身时排除。
         """
-        pairs = {
-            (_text(binding.get("semantic_config_id")), _text(binding.get("table_alias")))
-            for binding in bindings
-        } - {("", "")}
-        if not pairs:
+        config_ids = {_text(mapping.get("semantic_config_id")) for mapping in mappings} - {""}
+        if not config_ids:
             return {}
-        conditions = [
-            (ChatDataOntologyObjectMapping.semantic_config_id == config_id)
-            & (ChatDataOntologyObjectMapping.table_alias == table_alias)
-            for config_id, table_alias in pairs
-        ]
         stmt = (
             select(ChatDataOntologyObjectMapping, ChatDataOntologyObject.object_name)
             .join(ChatDataOntologyObject, ChatDataOntologyObject.id == ChatDataOntologyObjectMapping.object_id)
             .where(
-                or_(*conditions),
+                ChatDataOntologyObjectMapping.semantic_config_id.in_(config_ids),
                 ChatDataOntologyObject.delete_flag == 0,
                 ChatDataOntologyObjectMapping.delete_flag == 0,
             )
@@ -387,12 +376,10 @@ class OntologyDao:
             stmt = stmt.where(ChatDataOntologyObjectMapping.object_id != int(exclude_object_id))
         async with session_scope() as session:
             rows = (await session.execute(stmt)).all()
-        return {
-            (_text(row.semantic_config_id), _text(row.table_alias)): _text(object_name) for row, object_name in rows
-        }
+        return {_text(row.semantic_config_id): _text(object_name) for row, object_name in rows}
 
     async def list_object_mappings_async(self, object_id: int) -> list[dict[str, Any]]:
-        """列出对象的全部活跃映射（绑定视图，按语义配置ID+表别名排序）。"""
+        """列出对象的全部活跃映射（映射视图，按语义配置ID排序）。"""
         oid = int(object_id)
         async with session_scope() as session:
             rows = (
@@ -403,10 +390,7 @@ class OntologyDao:
                             ChatDataOntologyObjectMapping.object_id == oid,
                             ChatDataOntologyObjectMapping.delete_flag == 0,
                         )
-                        .order_by(
-                            ChatDataOntologyObjectMapping.semantic_config_id.asc(),
-                            ChatDataOntologyObjectMapping.table_alias.asc(),
-                        )
+                        .order_by(ChatDataOntologyObjectMapping.semantic_config_id.asc())
                     )
                 )
                 .scalars()

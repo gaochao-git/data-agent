@@ -1532,14 +1532,14 @@
         "title": "MetaGlobalEnumUpsertRequest",
         "type": "object"
       },
-      "OntologyBindingItem": {
-        "description": "本体绑定项（语义模型绑定：口径权威在语义层）",
+      "OntologyMappingItem": {
+        "description": "本体映射项（语义模型映射：口径权威在语义层，层级=组→模型→维度映射，不触碰物理表）",
         "properties": {
           "column_mappings": {
             "additionalProperties": {
               "type": "string"
             },
-            "description": "列映射: {属性API名: 物理列名}",
+            "description": "字段映射: {属性API名: 模型维度名}",
             "title": "Column Mappings",
             "type": "object"
           },
@@ -1549,20 +1549,12 @@
             "minLength": 1,
             "title": "Semantic Config Id",
             "type": "string"
-          },
-          "table_alias": {
-            "description": "语义模型表别名",
-            "maxLength": 128,
-            "minLength": 1,
-            "title": "Table Alias",
-            "type": "string"
           }
         },
         "required": [
-          "semantic_config_id",
-          "table_alias"
+          "semantic_config_id"
         ],
-        "title": "OntologyBindingItem",
+        "title": "OntologyMappingItem",
         "type": "object"
       },
       "OntologyObjectStatusRequest": {
@@ -1616,14 +1608,6 @@
             "title": "Allow Overwrite",
             "type": "boolean"
           },
-          "bindings": {
-            "description": "语义模型绑定列表（独立存映射表，随对象提交全量重写）",
-            "items": {
-              "$ref": "#/components/schemas/OntologyBindingItem"
-            },
-            "title": "Bindings",
-            "type": "array"
-          },
           "business_notes": {
             "default": "",
             "description": "业务说明（建模背景，不入 agent 上下文）",
@@ -1633,7 +1617,7 @@
           },
           "confirm_destructive": {
             "default": false,
-            "description": "破坏性变更（绑定/主键/标题键变更）显式确认",
+            "description": "破坏性变更（映射/主键/标题键变更）显式确认",
             "title": "Confirm Destructive",
             "type": "boolean"
           },
@@ -1657,6 +1641,14 @@
             "maxLength": 128,
             "title": "Domain",
             "type": "string"
+          },
+          "mappings": {
+            "description": "语义模型映射列表（独立存映射表，随对象提交全量重写）",
+            "items": {
+              "$ref": "#/components/schemas/OntologyMappingItem"
+            },
+            "title": "Mappings",
+            "type": "array"
           },
           "properties": {
             "description": "属性集（整体提交）",
@@ -1746,6 +1738,26 @@
           "property_name"
         ],
         "title": "OntologyPropertyItem",
+        "type": "object"
+      },
+      "OntologyRelationStatusRequest": {
+        "description": "本体关系状态迁移请求（deprecated 仅随对象级联，不接受手动迁移）",
+        "properties": {
+          "status": {
+            "description": "目标状态（上限=两侧对象状态的较低者，关系不得高于任一端）",
+            "enum": [
+              "draft",
+              "experimental",
+              "certified"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "OntologyRelationStatusRequest",
         "type": "object"
       },
       "OntologyRelationUpsertRequest": {
@@ -7146,6 +7158,64 @@
           }
         ],
         "summary": "Upsert Ontology Relation",
+        "tags": [
+          "ChatData 本体管理（Admin）"
+        ]
+      }
+    },
+    "/api/chatdata/admin/meta/ontology/relations/{relation_name}/status": {
+      "post": {
+        "description": "本体关系状态手动迁移（升级/降级；上限=两侧对象状态的较低者，deprecated 仅随对象级联）。",
+        "operationId": "change_ontology_relation_status_api_chatdata_admin_meta_ontology_relations__relation_name__status_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "relation_name",
+            "required": true,
+            "schema": {
+              "title": "Relation Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OntologyRelationStatusRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Change Ontology Relation Status",
         "tags": [
           "ChatData 本体管理（Admin）"
         ]

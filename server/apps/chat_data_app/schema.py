@@ -416,12 +416,11 @@ class OntologyPropertyItem(BaseModel):
     is_title: bool = Field(default=False, description="标题属性：对象标题键（每对象至多一个）")
 
 
-class OntologyBindingItem(BaseModel):
-    """本体绑定项（语义模型绑定：口径权威在语义层）"""
+class OntologyMappingItem(BaseModel):
+    """本体映射项（语义模型映射：口径权威在语义层，层级=组→模型→维度映射，不触碰物理表）"""
 
     semantic_config_id: str = Field(..., min_length=1, max_length=128, description="语义模型配置ID")
-    table_alias: str = Field(..., min_length=1, max_length=128, description="语义模型表别名")
-    column_mappings: dict[str, str] = Field(default_factory=dict, description="列映射: {属性API名: 物理列名}")
+    column_mappings: dict[str, str] = Field(default_factory=dict, description="字段映射: {属性API名: 模型维度名}")
 
 
 class OntologyObjectUpsertRequest(BaseModel):
@@ -432,11 +431,11 @@ class OntologyObjectUpsertRequest(BaseModel):
     business_notes: str = Field(default="", max_length=10000, description="业务说明（建模背景，不入 agent 上下文）")
     domain: str = Field(default="", max_length=128, description="业务域扁平标签")
     properties: list[OntologyPropertyItem] = Field(..., min_length=1, description="属性集（整体提交）")
-    bindings: list[OntologyBindingItem] = Field(
-        default_factory=list, description="语义模型绑定列表（独立存映射表，随对象提交全量重写）"
+    mappings: list[OntologyMappingItem] = Field(
+        default_factory=list, description="语义模型映射列表（独立存映射表，随对象提交全量重写）"
     )
     allow_overwrite: bool = Field(default=False, description="编辑既有活跃对象时为 True")
-    confirm_destructive: bool = Field(default=False, description="破坏性变更（绑定/主键/标题键变更）显式确认")
+    confirm_destructive: bool = Field(default=False, description="破坏性变更（映射/主键/标题键变更）显式确认")
 
 
 class OntologyObjectStatusRequest(BaseModel):
@@ -446,6 +445,14 @@ class OntologyObjectStatusRequest(BaseModel):
     deprecation_reason: str = Field(default="", max_length=512, description="废弃原因，status=deprecated 时必填")
     deprecated_until: str = Field(default="", max_length=19, description="废弃删除期限（YYYY-MM-DD HH:MM:SS），可选")
     successor_object_name: str = Field(default="", max_length=128, description="替代对象API名，可选但必须存在")
+
+
+class OntologyRelationStatusRequest(BaseModel):
+    """本体关系状态迁移请求（deprecated 仅随对象级联，不接受手动迁移）"""
+
+    status: Literal["draft", "experimental", "certified"] = Field(
+        ..., description="目标状态（上限=两侧对象状态的较低者，关系不得高于任一端）"
+    )
 
 
 class OntologyRelationUpsertRequest(BaseModel):

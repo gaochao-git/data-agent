@@ -1,15 +1,15 @@
 <script setup lang="ts">
 /**
- * 本体对象创建/编辑弹窗：元数据 + 属性集 + 绑定一次性整体提交（对齐后端 upsert 语义）。
- * 门禁交互：certified 冻结主键/标题键并禁删属性；绑定/主键/标题键变更属破坏性，
+ * 本体对象创建/编辑弹窗：元数据 + 属性集 + 映射一次性整体提交（对齐后端 upsert 语义）。
+ * 门禁交互：certified 冻结主键/标题键并禁删属性；映射/主键/标题键变更属破坏性，
  * 提交前弹显式确认（confirm_destructive=true）；deprecated 对象禁止编辑。
  */
 import { computed, ref, watch } from 'vue'
 import type { PropType } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getAdminOntologyObject, upsertAdminOntologyObject } from '../../api'
-import type { OntologyBindingItem, OntologyObjectItem, OntologyPropertyItem } from '../../types'
-import OntologyBindingEditor from './OntologyBindingEditor.vue'
+import type { OntologyMappingItem, OntologyObjectItem, OntologyPropertyItem } from '../../types'
+import OntologyMappingEditor from './OntologyMappingEditor.vue'
 import OntologyPropertyEditor from './OntologyPropertyEditor.vue'
 import { ONTOLOGY_NAME_PATTERN } from './ontologyMeta'
 
@@ -35,10 +35,10 @@ const formDescription = ref('')
 const formBusinessNotes = ref('')
 const formDomain = ref('')
 const propertyRows = ref<OntologyPropertyItem[]>([])
-const bindingRows = ref<OntologyBindingItem[]>([])
+const mappingRows = ref<OntologyMappingItem[]>([])
 
 const propertyEditorRef = ref<InstanceType<typeof OntologyPropertyEditor> | null>(null)
-const bindingEditorRef = ref<InstanceType<typeof OntologyBindingEditor> | null>(null)
+const mappingEditorRef = ref<InstanceType<typeof OntologyMappingEditor> | null>(null)
 
 // certified 冻结名单：既有属性禁删禁改名禁改主键/标题标记
 const frozenNames = computed(() =>
@@ -52,7 +52,7 @@ const resetForm = () => {
   formBusinessNotes.value = ''
   formDomain.value = ''
   propertyRows.value = [{ property_name: '', display_name: '', description: '', value_type: 'String', enum_ref: '', render_hints: {}, is_identifier: true, is_title: true }]
-  bindingRows.value = []
+  mappingRows.value = []
   loadedDetail.value = null
 }
 
@@ -75,7 +75,7 @@ const openLoad = async () => {
     formBusinessNotes.value = detail.business_notes
     formDomain.value = detail.domain
     propertyRows.value = (detail.properties || []).map(item => ({ ...item, render_hints: { ...(item.render_hints || {}) } }))
-    bindingRows.value = (detail.bindings || []).map(item => ({ ...item, column_mappings: { ...(item.column_mappings || {}) } }))
+    mappingRows.value = (detail.mappings || []).map(item => ({ ...item, column_mappings: { ...(item.column_mappings || {}) } }))
   } catch (err) {
     // 拦截器已弹出具体错误原因，不再重复提示
     console.error('获取本体对象详情失败:', err)
@@ -91,12 +91,11 @@ watch(visible, value => {
 
 // ---------- 破坏性变更检测 ----------
 
-const normalizeBindings = (rows: OntologyBindingItem[]) =>
+const normalizeMappings = (rows: OntologyMappingItem[]) =>
   JSON.stringify(
     rows
       .map(row => ({
         semantic_config_id: (row.semantic_config_id || '').trim(),
-        table_alias: (row.table_alias || '').trim(),
         column_mappings: Object.fromEntries(
           Object.entries(row.column_mappings || {})
             .map(([k, v]) => [k.trim(), (v || '').trim()])
@@ -118,8 +117,8 @@ const destructiveActions = computed(() => {
   if (JSON.stringify(oldIds) !== JSON.stringify(newIds) || JSON.stringify(oldTitles) !== JSON.stringify(newTitles)) {
     actions.push('主键组合或标题键变更')
   }
-  if (JSON.stringify(detail.bindings || []) !== normalizeBindings(bindingRows.value)) {
-    actions.push('绑定变更')
+  if (JSON.stringify(detail.mappings || []) !== normalizeMappings(mappingRows.value)) {
+    actions.push('映射变更')
   }
   return actions
 })
@@ -187,9 +186,8 @@ const saveObject = async () => {
         is_identifier: row.is_identifier,
         is_title: row.is_title
       })),
-      bindings: bindingRows.value.map(row => ({
+      mappings: mappingRows.value.map(row => ({
         semantic_config_id: row.semantic_config_id.trim(),
-        table_alias: row.table_alias.trim(),
         column_mappings: Object.fromEntries(
           Object.entries(row.column_mappings || {})
             .map(([k, v]) => [k.trim(), (v || '').trim()])
@@ -261,20 +259,20 @@ const saveObject = async () => {
         <OntologyPropertyEditor ref="propertyEditorRef" :rows="propertyRows" :frozen-names="frozenNames" />
       </div>
 
-      <!-- 语义模型绑定 -->
+      <!-- 语义模型映射 -->
       <div>
         <div class="mb-1.5 flex items-center justify-between">
           <div class="flex flex-col">
-            <span class="text-xs font-medium text-slate-600">语义模型绑定</span>
+            <span class="text-xs font-medium text-slate-600">语义模型映射</span>
             <span class="text-[11px] text-slate-400">
-              统一绑语义模型（不触碰物理表）：口径权威在语义层；每个语义模型绑定只能归属一个对象；认证前至少需要一个绑定
+              层级 = 数据源组 → 语义模型 → 维度映射（不触碰物理表）：口径权威在语义层；每个语义模型映射只能归属一个对象；认证前至少需要一个映射
             </span>
           </div>
-          <el-button size="small" link type="primary" @click="bindingEditorRef?.addRow()">
-            <i class="fa-solid fa-plus text-[11px]"></i> 添加绑定
+          <el-button size="small" link type="primary" @click="mappingEditorRef?.addRow()">
+            <i class="fa-solid fa-plus text-[11px]"></i> 添加映射
           </el-button>
         </div>
-        <OntologyBindingEditor ref="bindingEditorRef" :rows="bindingRows" :properties="propertyRows" />
+        <OntologyMappingEditor ref="mappingEditorRef" :rows="mappingRows" :properties="propertyRows" />
       </div>
 
       <!-- 业务说明 -->

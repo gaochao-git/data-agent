@@ -2,7 +2,7 @@
 /**
  * 本体对象状态迁移弹窗：升级（draft→experimental→certified）/ 降级 / 废弃。
  * 废弃为终态不可逆：必填原因，可选替代对象与删除期限；认证前置条件
- * （≥1 标识属性 + ≥1 绑定）由后端校验，这里做基础提示。
+ * （≥1 标识属性 + ≥1 语义模型映射）由后端校验，这里做基础提示。
  */
 import { computed, ref, watch } from 'vue'
 import type { PropType } from 'vue'
@@ -118,13 +118,13 @@ const confirmStatus = async () => {
           v-if="targetStatus === 'certified'"
           class="rounded-lg border border-blue-100 bg-blue-50 p-2.5 text-[11px] leading-5 text-blue-700"
         >
-          认证前置：对象需至少一个标识属性（主键）且至少一个语义模型绑定；认证后主键/标题键冻结、禁止删除属性。
+          认证前置：对象需至少一个标识属性（主键）且至少一个语义模型映射；认证后主键/标题键冻结、禁止删除属性。
         </div>
         <div
-          v-if="targetStatus === 'certified' && object && (object.bindings || []).length === 0"
+          v-if="targetStatus === 'certified' && object && (object.mappings || []).length === 0"
           class="rounded-lg border border-amber-100 bg-amber-50 p-2.5 text-[11px] leading-5 text-amber-700"
         >
-          当前对象暂无语义模型绑定，认证会被拒绝；请先在编辑页添加绑定。
+          当前对象暂无语义模型映射，认证会被拒绝；请先在编辑页添加映射。
         </div>
 
         <template v-if="isDeprecating">

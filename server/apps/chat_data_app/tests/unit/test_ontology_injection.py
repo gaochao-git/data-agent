@@ -84,14 +84,12 @@ def _bundle() -> dict[str, Any]:
             {
                 "object_id": 1,
                 "semantic_config_id": "sc_order",
-                "table_alias": "orders",
-                "column_mappings": {"order_id": "ORDER_ID", "amount": "AMOUNT"},
+                "column_mappings": {"order_id": "订单编号", "amount": "订单金额", "user_id": "下单用户"},
             },
             {
                 "object_id": 2,
                 "semantic_config_id": "sc_user",
-                "table_alias": "users",
-                "column_mappings": {"user_id": "UID"},
+                "column_mappings": {"user_id": "用户编号"},
             },
         ],
     }
@@ -107,18 +105,43 @@ def test_disabled_by_default(monkeypatch):
     assert ontology_injection.ontology_injection_enabled() is False
 
 
+# 维度索引：属性 → 维度名 → 物理列 的第二级翻译来源
+_DIMENSION_COLUMNS = {
+    "sc_order": {"订单编号": "ORDER_ID", "订单金额": "AMOUNT", "下单用户": "USER_ID"},
+    "sc_user": {"用户编号": "UID"},
+}
+
+
 def test_render_catalog_shapes_objects_and_relations():
-    content = ontology_injection._render_catalog(_bundle(), {"sc_order": "订单模型", "sc_user": "用户模型"})
+    content = ontology_injection._render_catalog(
+        _bundle(), {"sc_order": "订单模型", "sc_user": "用户模型"}, _DIMENSION_COLUMNS
+    )
     doc = yaml.safe_load(content)
     assert [obj["object"] for obj in doc["objects"]] == ["order", "user"]
     order = doc["objects"][0]
     assert order["display_name"] == "订单"
     assert {prop["name"] for prop in order["properties"]} == {"order_id", "amount"}
-    assert order["bindings"][0]["semantic_config_name"] == "订单模型"
-    assert order["bindings"][0]["column_mappings"]["amount"] == "AMOUNT"
+    assert order["mappings"][0]["semantic_config_name"] == "订单模型"
+    # 映射右值是模型维度名（概念层不重复定义物理列）
+    assert order["mappings"][0]["column_mappings"]["amount"] == "订单金额"
+    assert "table_alias" not in order["mappings"][0]
     rel = doc["relations"][0]
     assert rel["from"] == "order" and rel["to"] == "user"
-    assert rel["from_columns"] == ["user_id"]
+    # 关系列两级翻译：属性 user_id → 维度（下单用户/用户编号）→ 物理列
+    assert rel["from_columns"] == ["USER_ID"]
+    assert rel["to_columns"] == ["UID"]
+
+
+def test_translate_keeps_unknown_dimension_name():
+    """维度/映射任一级未知时保留原文（等价映射天然兼容）。"""
+    columns = ontology_injection._translate_to_physical_columns(
+        ["user_id"], [{"semantic_config_id": "sc_user", "column_mappings": {"user_id": "用户编号"}}], _DIMENSION_COLUMNS
+    )
+    assert columns == ["UID"]
+    fallback = ontology_injection._translate_to_physical_columns(
+        ["raw_col"], [{"semantic_config_id": "sc_user", "column_mappings": {}}], _DIMENSION_COLUMNS
+    )
+    assert fallback == ["raw_col"]
 
 
 def test_materialize_writes_catalog_and_counts_objects(enabled, monkeypatch):

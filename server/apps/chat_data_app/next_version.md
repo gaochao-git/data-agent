@@ -277,8 +277,8 @@ CREATE TABLE `chat_data_ontology_relation` (
   KEY `idx_relation_to` (`to_object_id`,`delete_flag`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='本体关系表';
 
--- 对象映射表：语义模型绑定独立成表（对齐 ossie 本体文档/映射文档分离）。
--- 绑定随对象 payload 提交、随对象 upsert 同事务全量重写（软删+重插，无独立生命周期）；
+-- 对象映射表：语义模型映射独立成表（对齐 ossie 本体文档/映射文档分离）。
+-- 映射随对象 payload 提交、随对象 upsert 同事务全量重写（软删+重插，无独立生命周期）；
 -- delete_flag 语义特殊：0=活跃，软删时置为行 id——软删行不占唯一索引槽位，同源可重绑；
 -- 「一源一对象」由 uniq_mapping_semantic_source(含 delete_flag) 对活跃行直接约束
 -- （DB 兜底，service 先查给友好报错）
@@ -286,8 +286,7 @@ CREATE TABLE `chat_data_ontology_object_mapping` (
   `id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键ID',
   `object_id` bigint NOT NULL COMMENT '所属本体对象ID（chat_data_ontology_object.id，逻辑关联无外键）',
   `semantic_config_id` varchar(128) NOT NULL COMMENT '语义模型配置ID（口径唯一权威在语义层，不触碰物理表）',
-  `table_alias` varchar(128) NOT NULL COMMENT '表别名（语义模型物化快照内的逻辑表标识）',
-  `column_mappings_json` text COMMENT '列映射JSON文本: {属性API名: 物理列名}',
+  `column_mappings_json` text COMMENT '字段映射JSON文本: {属性API名: 模型维度名}',
   `delete_flag` bigint NOT NULL DEFAULT '0' COMMENT '删除标识: 0-活跃, 软删时置为行id（腾出唯一索引槽位）',
   `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
@@ -296,19 +295,36 @@ CREATE TABLE `chat_data_ontology_object_mapping` (
   `update_by` varchar(100) NOT NULL DEFAULT '' COMMENT '修改人ID',
   `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '修改人名称',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uniq_mapping_object_source` (`object_id`,`semantic_config_id`,`table_alias`,`delete_flag`),
-  UNIQUE KEY `uniq_mapping_semantic_source` (`semantic_config_id`,`table_alias`,`delete_flag`),
+  UNIQUE KEY `uniq_mapping_object_source` (`object_id`,`semantic_config_id`,`delete_flag`),
+  UNIQUE KEY `uniq_mapping_semantic_source` (`semantic_config_id`,`delete_flag`),
   KEY `idx_mapping_object` (`object_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='本体对象映射表';
 ```
 
 ## 功能变更
 
-### 本体关系状态手动升级入口（缺口修复，2026-10-16 发现）
+### 本体关系状态手动升级入口（2026-10-16 落地）
 
-现状：关系状态只在创建时按两侧对象状态较低者计算（`ontology_service.py` `_derived_relation_status`），级联只降不升（`_cascade_relation_statuses` 仅在 derived < current 或 deprecated 时写），编辑（PUT upsert）时状态原样保留——面板提示「升级需手动」但**不存在任何手动升级入口**（payload 无 status 字段、无状态迁移端点）。且删除重建无效：DAO 对软删行复活复用（`ontology_dao.py` `upsert_relation_async`），service 侧 `existing is not None` 分支沿用旧状态，同名校验（`include_deleted=True`）也挡不住，旧草稿状态会被带回。
+现状（修复前）：关系状态只在创建时按两侧对象状态较低者计算，级联只降不升，编辑时状态原样保留——「升级需手动」没有操作入口；且删除重建无效（软删行复活复用旧状态）。
 
-修复方案：新增 `POST /admin/meta/ontology/relations/{relation_name}/status` 迁移端点（与对象状态端点对齐），语义——目标状态只允许 draft/experimental/certified（deprecated 仅随对象级联），且**上限 = 两侧对象状态的较低者**（关系不得高于任一端）；前端关系面板加「状态」操作，复用对象状态弹窗交互。涉及：schema（新请求模型）、ontology_service（迁移校验方法）、ontology_admin 路由、前端 RelationPanel、openapi 快照重生成、单测。
+已实现：`POST /admin/meta/ontology/relations/{relation_name}/status` 迁移端点（目标状态只允许 draft/experimental/certified，deprecated 仅随对象级联；上限 = 两侧对象状态的较低者，关系不得高于任一端；任一端废弃时拒绝手动迁移）。前端关系面板加「状态」操作弹窗。涉及：schema（OntologyRelationStatusRequest）、ontology_service.set_relation_status_async、ontology_admin 路由、前端 RelationPanel、openapi 快照、单测。
+
+### 本体映射层级重构：组 → 模型 → 维度映射（2026-10-16 落地，含 bindings→mapping 重命名）
+
+绑定语义从「config_id + table_alias + 属性→物理列」改为「config_id + 属性→模型维度名」：本体层只引用模型维度（Ossie 映射文档同构），物理列解析归语义模型；实体锚点由映射维度所属表派生（同一映射全部维度必须同表，service 校验）；唯一键收紧为 (object_id, config_id) 与 (config_id)。API/payload/目录 YAML 键同步 bindings→mappings，table_alias 全链路删除。
+
+上线前对已建环境的 DDL（新环境直接按上方建表语句）：
+
+```sql
+ALTER TABLE `chat_data_ontology_object_mapping`
+  DROP INDEX `uniq_mapping_object_source`,
+  DROP INDEX `uniq_mapping_semantic_source`,
+  DROP COLUMN `table_alias`,
+  ADD UNIQUE KEY `uniq_mapping_object_source` (`object_id`,`semantic_config_id`,`delete_flag`),
+  ADD UNIQUE KEY `uniq_mapping_semantic_source` (`semantic_config_id`,`delete_flag`);
+```
+
+存量数据迁移：column_mappings_json 右值由物理列名改写为对应模型维度名（按语义模型 dimensions 的 name/column 对照，dev 库 2026-10-16 已执行；生产若已有存量映射需按同口径生成 UPDATE）。
 
 ## 依赖变更
 

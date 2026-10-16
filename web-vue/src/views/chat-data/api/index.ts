@@ -34,7 +34,7 @@ import type {
   MetaGlobalEnum,
   MetaGlobalEnumRef,
   MetaGlobalEnumValueItem,
-  OntologyBindingItem,
+  OntologyMappingItem,
   OntologyObjectItem,
   OntologyObjectStatus,
   OntologyPropertyItem,
@@ -1972,8 +1972,8 @@ export function getAdminOntologyObject(objectName: string): Promise<ApiResponse<
   })
 }
 
-/** 后台：创建/整体编辑本体对象（元数据 + 属性集 + 绑定一次性提交）。
- * 编辑既有活跃对象 allow_overwrite=true；绑定/主键/标题键等破坏性变更需 confirm_destructive=true。 */
+/** 后台：创建/整体编辑本体对象（元数据 + 属性集 + 映射一次性提交）。
+ * 编辑既有活跃对象 allow_overwrite=true；映射/主键/标题键等破坏性变更需 confirm_destructive=true。 */
 export function upsertAdminOntologyObject(
   objectName: string,
   data: {
@@ -1982,7 +1982,7 @@ export function upsertAdminOntologyObject(
     business_notes?: string
     domain?: string
     properties: OntologyPropertyItem[]
-    bindings?: OntologyBindingItem[]
+    mappings?: OntologyMappingItem[]
     allow_overwrite?: boolean
     confirm_destructive?: boolean
   }
@@ -2063,5 +2063,17 @@ export function deleteAdminOntologyRelation(relationName: string): Promise<ApiRe
   return request({
     url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/relations/${encodeURIComponent(relationName)}`,
     method: 'delete'
+  })
+}
+
+/** 后台：本体关系状态手动迁移（上限=两侧对象状态的较低者；deprecated 仅随对象级联不可手动迁移） */
+export function changeAdminOntologyRelationStatus(
+  relationName: string,
+  data: { status: Exclude<OntologyObjectStatus, 'deprecated'> }
+): Promise<ApiResponse<OntologyRelationItem>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/relations/${encodeURIComponent(relationName)}/status`,
+    method: 'post',
+    data
   })
 }

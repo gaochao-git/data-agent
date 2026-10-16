@@ -1033,15 +1033,14 @@ export interface OntologyPropertyItem {
   is_title: boolean
 }
 
-// 本体绑定项（统一绑语义模型：semantic_config_id + table_alias，口径权威在语义层，不触碰物理表）
-export interface OntologyBindingItem {
+// 本体映射项（语义模型映射：层级=组→模型→维度映射，口径权威在语义层，不触碰物理表）
+export interface OntologyMappingItem {
   semantic_config_id: string
-  table_alias: string
-  // 列映射: {属性API名: 物理列名}
+  // 字段映射: {属性API名: 模型维度名}
   column_mappings: Record<string, string>
 }
 
-// 本体对象（列表行含 bindings_count；详情同构且含完整 properties 与 bindings）
+// 本体对象（列表行含 mappings_count；详情同构且含完整 properties 与 mappings）
 export interface OntologyObjectItem {
   id?: number
   object_name: string
@@ -1053,8 +1052,8 @@ export interface OntologyObjectItem {
   deprecation_reason: string
   deprecated_until: string
   successor_object_name: string
-  bindings?: OntologyBindingItem[]
-  bindings_count?: number
+  mappings?: OntologyMappingItem[]
+  mappings_count?: number
   properties?: OntologyPropertyItem[]
   create_time?: string
   update_time?: string
