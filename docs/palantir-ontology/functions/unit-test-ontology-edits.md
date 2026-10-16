@@ -1,0 +1,734 @@
+# Palantir Foundry Docs — /docs/foundry/functions/unit-test-ontology-edits
+
+> 来源: https://www.palantir.com/docs/foundry/functions/unit-test-ontology-edits/
+> 抓取: 2026-10-17（本地参考副本，版权属 Palantir）
+
+---
+
+# Verify Ontology edits
+
+You can use the `verifyOntologyEditFunction()` API to verify edits performed by your function. You need to import it from `"@foundry/functions-testing-lib"`. This allows you to create unit tests around the workflows listed below.
+
+#### Singular and plural verification methods
+
+Each kind of edit can be verified with either a singular or a plural method. The singular method verifies one edit and takes a single value, while the plural method verifies several edits of the same kind and takes an array of those values. The two forms are not interchangeable, and using the wrong one is a type error.
+
+Edit to verify| Verify one edit| Verify several edits  
+---|---|---  
+Object creation| `.createsObject({ objectType, properties })`| `.createsObjects([{ objectType, properties }])`  
+Object property edits| `.modifiesObject({ object, properties })`| `.modifiesObjects([{ object, properties }])`  
+Object deletion| `.deletesObject(object)`| `.deletesObjects([object])`  
+Link creation| `.addsLink({ link, linkedObject })`| `.addsLinks([{ link, linkedObject }])`  
+Link removal| `.removesLink({ link, unlinkedObject })`| `.removesLinks([{ link, unlinkedObject }])`  
+  
+The four link methods also accept a callback that receives the edits collected so far, which is useful when the object to link was created by the function under test. In that case, `.addsLink` and `.removesLink` return a single link from the callback, while `.addsLinks` and `.removesLinks` return an array. For an example, see Verify edits on a newly created object.
+
+`.hasNoMoreEdits()` has no plural form, and because it does not return a result, it must come last in a chain of verifications.
+
+#### Verify object creation
+
+You can use the `.createsObject` method to verify an object creation. To verify the creation of several objects in one call, use `.createsObjects` instead. Here is an example:
+    
+    
+    Copied!
+    
+    1
+    2
+    3
+    4
+    5
+    6
+    7
+    8
+    9
+    10
+    11
+    12
+    13
+    14
+    15
+    16
+    17
+    18
+    19
+    20
+    import { MyFunctions } from ".."
+    
+    import { Objects , ExampleDataAirport } from "@foundry/ontology-api";
+    import { verifyOntologyEditFunction } from "@foundry/functions-testing-lib";
+    
+    describe("example test suite", () => {
+        const myFunctions = new MyFunctions();
+    
+        test("create airport", () => { 
+            verifyOntologyEditFunction(() => myFunctions.createAirport("airportCode", "airportDisplayName"))
+                .createsObject(
+                    {
+                        objectType: ExampleDataAirport,
+                        properties: {
+                            airport: "airportCode",
+                            displayAirportName: "airportDisplayName",
+                        },
+                    });
+        });
+    });
+
+This can be used to test the following function:
+    
+    
+    Copied!
+    
+    1
+    2
+    3
+    4
+    5
+    6
+    7
+    8
+    9
+    10
+    11
+    12
+    import { Function, OntologyEditFunction, Edits } from "@foundry/functions-api";
+    import { Objects, ExampleDataAirport } from "@foundry/ontology-api";
+    
+    export class MyFunctions {
+    
+        @Edits(ExampleDataAirport)
+        @OntologyEditFunction()
+        public createAirport(airport: string, displayName: string): void {
+            const newAirport = Objects.create().exampleDataAirport(airport);
+            newAirport.displayAirportName = displayName;
+        }
+    }
+
+#### Verify edits on a newly created object
+
+You can verify edits that are created involving a newly created object. For example, you may want to create a new `ExampleDataFlight` object and verify that the link is created to the `new-flight-delay-0`. Here is an example:
+    
+    
+    Copied!
+    
+    1
+    2
+    3
+    4
+    5
+    6
+    7
+    8
+    9
+    10
+    11
+    12
+    13
+    14
+    15
+    16
+    17
+    18
+    19
+    20
+    21
+    22
+    23
+    import { MyFunctions } from ".."
+    
+    import { Objects , ExampleDataFlight, ExampleFlightDelayEvent } from "@foundry/ontology-api";
+    import { verifyOntologyEditFunction } from "@foundry/functions-testing-lib";
+    
+    describe("example test suite", () => {
+        const myFunctions = new MyFunctions();
+    
+        test("single key with single created object", () => {
+                const flight = Objects.create().exampleDataFlight("flightTest");
+                verifyOntologyEditFunction(() => myFunctions.createAndLinkDelays(flight, 1))
+                    .createsObject({
+                        objectType: ExampleFlightDelayEvent,
+                        properties: {
+                            eventId: "new-flight-delay-0",
+                        },
+                    })
+                    .addsLink(edits => ({
+                        link: flight.flightDelayEvent,
+                        linkedObject: edits.createdObjects.byObjectType(ExampleFlightDelayEvent)[0],
+                    }))
+            });
+    });
+
+This can be used to test the following function:
+    
+    
+    Copied!
+    
+    1
+    2
+    3
+    4
+    5
+    6
+    7
+    8
+    9
+    10
+    11
+    12
+    13
+    14
+    import { Function, Integer, OntologyEditFunction, Edits } from "@foundry/functions-api";
+    import { Objects, ExampleDataFlight, ExampleFlightDelayEvent } from "@foundry/ontology-api";
+    
+    export class MyFunctions {
+    
+        @Edits(ExampleDataFlight, ExampleFlightDelayEvent )
+        @OntologyEditFunction()
+        public createAndLinkDelays(flight: ExampleDataFlight, numDelay: Integer): void {
+            for (let n = 0; n < numDelay; n++) {
+                const delay = Objects.create().exampleFlightDelayEvent(`new-flight-delay-${n}`);
+                flight.flightDelayEvent.add(delay);
+            }
+        }
+    }
+
+#### Verify object property edits
+
+You can verify edits to the property using `.modifiesObject`. To verify property edits on several objects in one call, pass an array to `.modifiesObjects`. Here is an example:
+    
+    
+    Copied!
+    
+    1
+    2
+    3
+    4
+    5
+    6
+    7
+    8
+    9
+    10
+    11
+    12
+    13
+    14
+    15
+    16
+    17
+    18
+    19
+    20
+    21
+    22
+    23
+    import { MyFunctions } from ".."
+    
+    import { Objects , ExampleDataFlight, ExampleFlightDelayEvent } from "@foundry/ontology-api";
+    import { verifyOntologyEditFunction } from "@foundry/functions-testing-lib";
+    
+    describe("example test suite", () => {
+        const myFunctions = new MyFunctions();
+    
+        test("modifies aircraft of the flight", () => {
+            const flight = Objects.create().exampleDataFlight("NY -> LA");
+            const oldAircraft = Objects.create().exampleDataAircraft("N11111");
+            flight.aircraft.set(oldAircraft);
+            const newAircraft = Objects.create().exampleDataAircraft("A00000");
+            verifyOntologyEditFunction(() => myFunctions.assignAircraftToFlight(flight, newAircraft))
+                .modifiesObject(
+                    { 
+                        object: flight, 
+                        properties: { 
+                            tailNumber: "A00000" 
+                        } 
+                    })
+            });
+    });
+
+This can be used to test the following function:
+    
+    
+    Copied!
+    
+    1
+    2
+    3
+    4
+    5
+    6
+    7
+    8
+    9
+    10
+    11
+    12
+    13
+    import { Function, OntologyEditFunction, Edits } from "@foundry/functions-api";
+    import { Objects, ExampleDataFlight, ExampleFlightDelayEvent } from "@foundry/ontology-api";
+    
+    export class MyFunctions {
+    
+        @Edits(ExampleDataFlight)
+        @OntologyEditFunction()
+        public assignAircraftToFlight(flight: ExampleDataFlight, aircraft: ExampleDataAircraft): void {
+            flight.aircraft.clear();
+            aircraft.flight.set(flight);
+            flight.tailNumber = aircraft.tailNumber;
+        }
+    }
+
+#### Verify no other edits to an object
+
+You can ensure there are no other edits using the optional `.hasNoMoreEdits()`. This means that only the specified edits are allowed, and the verification will fail if other edits are detected. Here is an example:
+    
+    
+    Copied!
+    
+    1
+    2
+    3
+    4
+    5
+    6
+    7
+    8
+    9
+    10
+    11
+    12
+    13
+    14
+    15
+    16
+    import { MyFunctions } from ".."
+    
+    import { Objects , ExampleDataFlight, ExampleFlightDelayEvent } from "@foundry/ontology-api";
+    import { verifyOntologyEditFunction } from "@foundry/functions-testing-lib";
+    
+    describe("example test suite", () => {
+        const myFunctions = new MyFunctions();
+    
+        test("single key with linked object", () => {
+                const flight = Objects.create().exampleDataFlight("flightAnotherTest");
+                const delay = Objects.create().exampleFlightDelayEvent("new-flight-delay")
+                verifyOntologyEditFunction(() => myFunctions.linkDelays(flight, delay))
+                    .addsLink({link: flight.flightDelayEvent, linkedObject: delay })
+                    .hasNoMoreEdits();
+            });
+    });
+
+When using `.hasNoMoreEdits()`, you can ignore specific kinds of edits that take place. You do this by passing an object with some or all of the following:
+
+  * `ignoreExtraCreatedObjects: true`
+  * `ignoreExtraModifiedObjects: true`
+  * `ignoreExtraDeletedObjects: true`
+  * `ignoreExtraLinkedObjects: true`
+  * `ignoreExtraUnlinkedObjects: true`
+
+
+
+#### Verify link creation to an object
+
+You can verify link creation on an object using `.addsLink`. Here is an example:
+    
+    
+    Copied!
+    
+    1
+    2
+    3
+    4
+    5
+    6
+    7
+    8
+    9
+    10
+    11
+    12
+    13
+    14
+    15
+    16
+    import { MyFunctions } from ".."
+    
+    import { Objects , ExampleDataFlight, ExampleFlightDelayEvent } from "@foundry/ontology-api";
+    import { verifyOntologyEditFunction } from "@foundry/functions-testing-lib";
+    
+    describe("example test suite", () => {
+        const myFunctions = new MyFunctions();
+    
+        test("single key with linked object", () => {
+                const flight = Objects.create().exampleDataFlight("flightAnotherTest");
+                const delay = Objects.create().exampleFlightDelayEvent("new-flight-delay")
+                verifyOntologyEditFunction(() => myFunctions.linkDelays(flight, delay))
+                    .addsLink({link: flight.flightDelayEvent, linkedObject: delay })
+                    .hasNoMoreEdits();
+            });
+    });
+
+This test is equivalent to testing for the same link going in the opposite direction:
+    
+    
+    Copied!
+    
+    1
+    2
+    3
+    4
+    5
+    6
+    7
+    8
+    9
+    10
+    11
+    12
+    13
+    14
+    15
+    16
+    import { MyFunctions } from ".."
+    
+    import { Objects , ExampleDataFlight, ExampleFlightDelayEvent } from "@foundry/ontology-api";
+    import { verifyOntologyEditFunction } from "@foundry/functions-testing-lib";
+    
+    describe("example test suite", () => {
+        const myFunctions = new MyFunctions();
+    
+        test("single key with linked object reverse", () => {
+                const flight = Objects.create().exampleDataFlight("flightAnotherTest");
+                const delay = Objects.create().exampleFlightDelayEvent("new-flight-delay")
+                verifyOntologyEditFunction(() => myFunctions.linkDelays(flight, delay))
+                    .addsLink({link: delay.flight, linkedObject: flight })
+                    .hasNoMoreEdits();
+            });
+    });
+
+This can be used to test the following function:
+    
+    
+    Copied!
+    
+    1
+    2
+    3
+    4
+    5
+    6
+    7
+    8
+    9
+    10
+    11
+    import { Function, OntologyEditFunction, Edits } from "@foundry/functions-api";
+    import { Objects, ExampleDataFlight, ExampleFlightDelayEvent } from "@foundry/ontology-api";
+    
+    export class MyFunctions {
+    
+        @Edits(ExampleDataFlight, ExampleFlightDelayEvent )
+        @OntologyEditFunction()
+        public linkDelays(flight: ExampleDataFlight, delay: ExampleFlightDelayEvent): void {
+            flight.flightDelayEvent.add(delay);
+        }
+    }
+
+#### Verify link removal from an object
+
+You can verify link removal from an object using `.removesLink`. Here is an example:
+    
+    
+    Copied!
+    
+    1
+    2
+    3
+    4
+    5
+    6
+    7
+    8
+    9
+    10
+    11
+    12
+    13
+    14
+    15
+    16
+    17
+    import { MyFunctions } from ".."
+    
+    import { Objects , ExampleDataFlight, ExampleFlightDelayEvent } from "@foundry/ontology-api";
+    import { verifyOntologyEditFunction } from "@foundry/functions-testing-lib";
+    
+    describe("example test suite", () => {
+        const myFunctions = new MyFunctions();
+    
+        test("test link removal", () => {
+                const flight = Objects.create().exampleDataFlight("flightAnotherTest");
+                const delay = Objects.create().exampleFlightDelayEvent("new-flight-delay")
+                flight.flightDelayEvent.add(delay);
+                verifyOntologyEditFunction(() => myFunctions.removeAllDelays(flight))
+                    .removesLink({link: flight.flightDelayEvent, unlinkedObject: delay })
+                    .hasNoMoreEdits();
+            });
+    });
+
+This can be used to test the following function:
+    
+    
+    Copied!
+    
+    1
+    2
+    3
+    4
+    5
+    6
+    7
+    8
+    9
+    10
+    11
+    import { Function, OntologyEditFunction, Edits } from "@foundry/functions-api";
+    import { Objects, ExampleDataFlight, ExampleFlightDelayEvent } from "@foundry/ontology-api";
+    
+    export class MyFunctions {
+    
+        @Edits(ExampleDataFlight, ExampleFlightDelayEvent)
+        @OntologyEditFunction()
+        public removeAllDelays(flight: ExampleDataFlight): void {
+            flight.flightDelayEvent.clear();
+        }
+    }
+
+#### Verify deleting an object
+
+You can verify deleting an object using `.deletesObject`. Here is an example:
+    
+    
+    Copied!
+    
+    1
+    2
+    3
+    4
+    5
+    6
+    7
+    8
+    9
+    10
+    11
+    12
+    13
+    14
+    15
+    import { MyFunctions } from ".."
+    
+    import { Objects , ExampleDataFlight } from "@foundry/ontology-api";
+    import { verifyOntologyEditFunction } from "@foundry/functions-testing-lib";
+    
+    describe("example test suite", () => {
+        const myFunctions = new MyFunctions();
+    
+        test("test object deletion", () => {
+                const flight = Objects.create().exampleDataFlight("flightAnotherTest");
+                verifyOntologyEditFunction(() => myFunctions.deleteFlight(flight))
+                    .deletesObject(flight)
+                    .hasNoMoreEdits();
+            });
+    });
+
+This can be used to test the following function:
+    
+    
+    Copied!
+    
+    1
+    2
+    3
+    4
+    5
+    6
+    7
+    8
+    9
+    10
+    11
+    import { Function, OntologyEditFunction, Edits } from "@foundry/functions-api";
+    import { Objects, ExampleDataFlight } from "@foundry/ontology-api";
+    
+    export class MyFunctions {
+    
+        @Edits(ExampleDataFlight)
+        @OntologyEditFunction()
+        public deleteFlight(flight: ExampleDataFlight): void {
+            flight.delete();
+        }
+    }
+
+#### Verify multiple objects were created
+
+You can use the `.createsObjects` method and pass in an array of object specifications to verify that multiple objects were created. Here is an example:
+    
+    
+    Copied!
+    
+    1
+    2
+    3
+    4
+    5
+    6
+    7
+    8
+    9
+    10
+    11
+    12
+    13
+    14
+    15
+    16
+    17
+    18
+    19
+    20
+    21
+    22
+    23
+    24
+    25
+    26
+    27
+    28
+    import { MyFunctions } from ".."
+    
+    import { Objects , ExampleDataFlight, ExampleFlightDelayEvent } from "@foundry/ontology-api";
+    import { verifyOntologyEditFunction } from "@foundry/functions-testing-lib";
+    
+    describe("example test suite", () => {
+        const myFunctions = new MyFunctions();
+    
+        test("single key with many created objects", () => {
+                const flight = Objects.create().exampleDataFlight("flightTest");
+                verifyOntologyEditFunction(() => myFunctions.createAndLinkDelays(flight, 3))
+                    .createsObjects(
+                        [0, 1, 2].map(i => ({
+                            objectType: ExampleFlightDelayEvent,
+                            properties: {
+                                eventId: "new-flight-delay-" + i,
+                            },
+                        })),
+                    )
+                    .addsLinks(edits =>
+                        edits.createdObjects.byObjectType(ExampleFlightDelayEvent).map(event => ({
+                            link: flight.flightDelayEvent,
+                            linkedObject: event,
+                        })),
+                    )
+                    .hasNoMoreEdits();
+            });
+    });
+
+This can be used to test the following function:
+    
+    
+    Copied!
+    
+    1
+    2
+    3
+    4
+    5
+    6
+    7
+    8
+    9
+    10
+    11
+    12
+    13
+    14
+    import { Function, Integer, OntologyEditFunction, Edits } from "@foundry/functions-api";
+    import { Objects, ExampleDataFlight, ExampleFlightDelayEvent } from "@foundry/ontology-api";
+    
+    export class MyFunctions {
+    
+        @Edits(ExampleDataFlight, ExampleFlightDelayEvent )
+        @OntologyEditFunction()
+        public createAndLinkDelays(flight: ExampleDataFlight, numDelay: Integer): void {
+            for (let n = 0; n < numDelay; n++) {
+                const delay = Objects.create().exampleFlightDelayEvent(`new-flight-delay-${n}`);
+                flight.flightDelayEvent.add(delay);
+            }
+        }
+    }
+
+### Asynchronous ontology edits
+
+You can verify asynchronous ontology edits as follows:
+    
+    
+    Copied!
+    
+    1
+    2
+    3
+    4
+    5
+    6
+    7
+    8
+    9
+    10
+    11
+    import { verifyOntologyEditFunction } from "@foundry/functions-testing-lib";
+    
+    test("test async edit function", async () => {
+            const obj = Objects.create().objectWithAllPropertyTypes(1);
+            (await verifyOntologyEditFunction(() => myFunctions.setDateAndTimestampToNow(obj))).modifiesObject({
+                object: obj,
+                properties: {
+                    timestampProperty: makeTimestamp(),
+                },
+            });
+        });
+
+### Multiple verifications
+
+As we have seen in the examples above, we can chain verifications. The following pattern illustrates this:
+    
+    
+    Copied!
+    
+    1
+    2
+    3
+    4
+    5
+    6
+    7
+    8
+    9
+    10
+    11
+    12
+    import { verifyOntologyEditFunction } from "@foundry/functions-testing-lib";
+    import { Objects, ExampleDataObject } from "@foundry/ontology-api";
+    
+    test("multiple action edit", () => { 
+        verifyOntologyEditFunction(() => myFunctions.multistageEdits("objectId", "objectName"))
+            .createsObject({...})
+            .modifiesObjects([{...}])
+            .addsLinks([{...}])
+            .removesLinks([{...}])
+            .deletesObject(...)
+            .hasNoMoreEdits(); 
+    });
+
+[âPREVIOUSCreate stub objects](/docs/foundry/functions/unit-test-stub-objects/)
+
+[NEXTStub object searches and aggregationsâ](/docs/foundry/functions/unit-test-object-searches/)

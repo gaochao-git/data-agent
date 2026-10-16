@@ -1,0 +1,62 @@
+# Palantir Foundry Docs — /docs/foundry/object-explorer/search-objects
+
+> 来源: https://www.palantir.com/docs/foundry/object-explorer/search-objects/
+> 抓取: 2026-10-17（本地参考副本，版权属 Palantir）
+
+---
+
+# Search for objects
+
+The results of a search with the global search bar from the Object Explorer [home page](/docs/foundry/object-explorer/getting-started/) will be shown on the search result page:
+
+Your query is visible and editable in the search bar (shown as A below).
+
+The page is divided into tabs **(B)** :
+
+  * The **All** tab is displayed by default and contains all results.
+  * Matching results can be filtered down into separate tabs: 
+    * Objects **(C)** ,
+    * Object types **(D)** , and
+    * Artifacts **(E)**.
+
+
+
+This search results page also contains a sidebar (**F** below).
+
+## Navigate using the sidebar
+
+These results are all categorized by their type. The navigation menu to the left (shown as **F** in the image above) can help you navigate the different categories.
+
+Selecting the title of any section will also filter you to results of that type. This will also show you all of the results of that type in the event that there are more than the default number shown when in the **All results** view (indicated by **1** in the image below).
+
+  * The first item, **All results** (shown as **1** in the image above), displays a sample of matches for each category. This is active by default when landing on the page.
+  * Next are **âObject type filtersâ (2)**. Clicking on any of them will show a longer list of matches for the specific object type. Clicking on **âView X other filters >â** at the bottom of the section will switch the tab from âAllâ to âObjectsâ, where you can explore the full list of object results and filters.
+  * **âObject type groupsâ (3)** filters the results by the associated group. Click on **âView all filters >â** at the bottom of the section to switch the tab from âAllâ to âObject typesâ, where you can explore the full list of object types results.
+  * Lastly are matches on **âArtifactsâ (4)** , divided into "Explorations & Lists", "Comparison Views", and "Modules". Click on **âView all filters >â** at the bottom of the section to switch the tab from âAllâ to âArtifactsâ, where you can explore the full list of results.
+
+
+
+## Types of results
+
+The Object Explorer search bar searches across all Objects in the platform (**(C)** in the top image), as well as object-related resources such as Object types **(D)** , saved Explorations, Lists, Comparisons, and Modules **(E)**.
+
+Hidden object and property types are never displayed as search results, or anywhere else in Object Explorer.
+
+### Sorting results
+
+Within the individual object results section, the results are sorted as follows:
+
+  * All prominent object types are shown before non-prominent object types.
+  * Within the prominent and non-prominent results, object types are sorted (in ascending order) by the number of individual object results for that type. In other words, the prominent object type with the least results will display first, then prominent object types with more results, then the non-prominent object type with the least results (compared to other non-prominent types), and so on.
+
+
+
+### Exploring objects linked to a particular result
+
+For matches on individual objects (**2** in the image above), hovering over the result gives you options for starting an exploration of objects across a particular link to that individual result.
+
+Example: If you search for the airport âSFOâ, you can hover over the result and start an exploration on flights arriving at the airport.
+
+[âPREVIOUSGetting started](/docs/foundry/object-explorer/getting-started/)
+
+[NEXTSearch syntaxâ](/docs/foundry/object-explorer/search-syntax/)

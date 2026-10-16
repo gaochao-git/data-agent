@@ -1,0 +1,240 @@
+# Palantir Foundry Docs — /docs/foundry/functions/language-models
+
+> 来源: https://www.palantir.com/docs/foundry/functions/language-models/
+> 抓取: 2026-10-17（本地参考副本，版权属 Palantir）
+
+---
+
+# Language models in TypeScript v1 functions
+
+This page documents TypeScript v1 functions. For TypeScript v2 or Python, see [Language models in TypeScript v2 and Python functions](/docs/foundry/functions/language-models-python-tsv2/). To use the Ontology SDK and configurable resource requests, [migrate to TypeScript v2](/docs/foundry/functions/typescript-v2-migration/).
+
+Palantir provides a set of language models which can be used within functions. [Read more about Palantir-provided LLMs](/docs/foundry/aip/supported-llms/).
+
+## Prerequisites
+
+To use Palantir-provided language models, ensure that:
+
+  * [AIP is enabled on your enrollment](/docs/foundry/aip/enable-aip-features/).
+  * You have permissions to use [AIP builder capabilities](/docs/foundry/aip/aip-features/#aip-applications-and-builder-capabilities).
+
+
+
+## Import a language model
+
+To begin using a language model, you must import the specific model into the code repository where you are writing your functions by following the steps below:
+
+  1. Navigate and open the **Model Imports** side panel to see all existing imported models.
+
+
+
+  2. To import a new language model, select **Add** in the upper right corner of the **Resource Imports** panel, then select **Models**. This will open a new window where you will be able to see Palantir-provided models that are available to you.
+
+
+
+  3. You will also see a tab where you can view custom models created through the Modeling Objectives application or direct model deployments previously. More information on using those models can be found in the [functions on models](/docs/foundry/functions/functions-on-models/) documentation.
+
+  4. Choose the models you would like to import, then select **Confirm selection** to import these models into your repository. Task runner will execute the `localDev` task, generating code bindings to interact with these models.
+
+  5. After importing the language models, select the model in the sidebar to view the detailed capabilities offered by this model. You can also copy code snippets to help you import and author functions with the model.
+
+
+
+
+## Write a function that uses a language model
+
+At this stage, you can now write a function that uses the language model you imported. For this example, assume that you imported GPT-4.1.
+
+Begin by adding the following import statement to your file:
+    
+    
+    Copied!
+    
+    1
+    2
+    import { Function, Uses } from "@foundry/functions-api";
+    import { Gpt41 } from "@foundry/languagemodelservice/models";
+
+Each language model will have generated methods available with strongly typed inputs and outputs. For example, the GPT-4.1 model provides `createChatCompletion`, `createChatVisionCompletion`, and `createChatCompletionStreamed` as different APIs to interact with the model. The list of capabilities could expand in later versions of the imported model.
+
+Foundry must know which model methods you call from a published function. Static analysis detects most calls automatically; a call that static analysis misses leads to a runtime error instructing you to add the `@Uses` decorator, which augments the automatically detected usage. Declare model methods under the decorator's `queries` key, as shown below and in the code snippets in the model details panel.
+
+In the following illustrative example, the provided GPT-4.1 model is used to run a simple sentiment analysis on a piece of text or image provided by a user. The function will classify the text as "Good", "Bad", or "Uncertain".
+    
+    
+    Copied!
+    
+    1
+    2
+    3
+    4
+    5
+    6
+    7
+    8
+    9
+    10
+    11
+    12
+    13
+    14
+    15
+    16
+    17
+    18
+    19
+    20
+    21
+    22
+    23
+    24
+    25
+    26
+    27
+    28
+    29
+    30
+    31
+    32
+    33
+    34
+    35
+    36
+    37
+    38
+    39
+    40
+    41
+    42
+    43
+    44
+    45
+    46
+    47
+    48
+    49
+    50
+    51
+    52
+    53
+    54
+    55
+    56
+    57
+    const SYSTEM_PROMPT =
+        "Provide an estimation of the sentiment the text the user has provided. \
+    You may respond with either Good, Bad, or Uncertain. Only choose Good or Bad if you are overwhelmingly \
+    sure that the text is either good or bad. If the text is neutral, or you are unable to determine, choose Uncertain.";
+    
+    export class MyFunctions {
+        @Function()
+        @Uses({ queries: [Gpt41.createChatCompletion] })
+        public async llmFunction_createChatCompletion(userPrompt: string): Promise<string | undefined> {
+            const response = await Gpt41.createChatCompletion({
+                messages: [
+                    {
+                        role: "SYSTEM",
+                        content: SYSTEM_PROMPT,
+                    },
+                    {
+                        role: "USER",
+                        content: userPrompt,
+                    },
+                ],
+                params: {
+                    temperature: 0,
+                },
+            });
+            return response.type === "ok" ? response.value.completion : "error";
+        }
+    
+        @Function()
+        @Uses({ queries: [Gpt41.createChatVisionCompletion] })
+        public async llmFunction_createChatVisionCompletion(
+            userPrompt: string,
+            pngBase64String: string,
+        ): Promise<string | undefined> {
+            const response = await Gpt41.createChatVisionCompletion({
+                messages: [
+                    {
+                        role: "USER",
+                        content: [
+                            { type: "text", text: userPrompt },
+                            {
+                                type: "genericMedia",
+                                genericMedia: {
+                                    mimeType: "IMAGE_PNG",
+                                    // Base64 encoded PNG String
+                                    content: pngBase64String,
+                                },
+                            },
+                        ],
+                    },
+                ],
+                params: {
+                    temperature: 0,
+                },
+            });
+            return response.type === "ok" ? response.value.completion : "error";
+        }
+    }
+
+This function can then be used throughout the platform.
+
+The [`@Uses` decorator](/docs/foundry/functions/query-functions/#call-a-query-function) also applies to imported models. Declare these calls under `queries`, for example `@Uses({ queries: [Gpt41.createChatCompletion] })`.
+
+## Embeddings
+
+Along with generative language models, Palantir also provides models that can be used to generate embeddings. A simple example is as follows:
+    
+    
+    Copied!
+    
+    1
+    2
+    3
+    4
+    5
+    6
+    @Function()
+    @Uses({ queries: [Textembedding3large.createEmbeddings] })
+    public async llmFunction_embeddings(inputs: string[]): Promise<Double[][]> {
+        const response = await Textembedding3large.createEmbeddings({ inputs });
+        return response.type === "ok" ? response.value.embeddings : [[]];
+    }
+
+This is most commonly used to perform [semantic search](/docs/foundry/ontology/using-palantir-provided-models-to-create-a-semantic-search-workflow/) workflows.
+
+## Upgrade from legacy language models within functions
+
+The updated language models in functions offer more advanced capabilities, such as better support for vision and streaming. We highly recommend upgrading your repository to take advantage of the latest AIP offerings. If you are starting from a new repository with no [legacy language models](/docs/foundry/functions/language-models-legacy/) imported, you can skip the steps below.
+
+The following process will result in a compile-time break in your code repository, as the code syntax will be updated. Refer to the code snippets in the sidebar for each updated model to update your code.
+
+  1. If you have existing [legacy language models](/docs/foundry/functions/language-models-legacy/) imported, a warning icon to upgrade will appear in the sidebar. Choose **Select imports** to open the model import dialog.
+
+
+
+  2. In the model import dialog, select **Fix** to remove any deprecated legacy language models.
+
+
+
+  3. Reselect the models to migrate to the updated language model versions. You can view additional capabilities supported by this version in the details panel in the center of the dialog.
+
+
+
+  4. Now, you can view the updated model imports in the sidebar. Selecting a model will show you a details panel with code snippets to help you update your code to take advantage of the additional capabilities.
+
+
+
+## Performance considerations
+
+Certain models may have rate limits applied, limiting the number of tokens that may be passed over a certain time period. This will be enforced along with any standard limits that apply to functions.
+
+* * *
+
+Note: AIP feature availability is subject to change and may differ between customers.
+
+[âPREVIOUSLanguage models in TypeScript v2 and Python functions](/docs/foundry/functions/language-models-python-tsv2/)
+
+[NEXTLegacy language models in functionsâ](/docs/foundry/functions/language-models-legacy/)
