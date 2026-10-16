@@ -1098,3 +1098,123 @@ class ChatDataPlugin(Base):
         UniqueConstraint("plugin_name", name="uniq_plugin_name"),
         Index("idx_plugin_enabled_delete", "enabled_flag", "delete_flag"),
     )
+
+
+class ChatDataOntologyObject(Base):
+    """本体对象表：对象/属性/关系三等实体之一（属性一等实体见 Property 表）。
+
+    绑定双轨：semantic 路径绑语义模型（semantic_config_id，口径唯一权威在
+    语义层），dataset 路径直接绑物理表（datasource_id + table_name，属性自身
+    元数据即口径，对齐 Palantir backing dataset 原生模式）；同一对象 bindings[]
+    允许混合两种类型。主键=标识属性（is_identifier）组合，标题键=is_title 属性，
+    均由属性表表达，本表不冗余存储。
+    """
+
+    __tablename__ = "chat_data_ontology_object"
+
+    id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
+    object_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
+    plural_display_name: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
+    description: Mapped[str] = mapped_column(String(1024), nullable=False, default="", server_default="")
+    business_notes: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="draft", server_default="draft")
+    visibility: Mapped[str] = mapped_column(String(16), nullable=False, default="normal", server_default="normal")
+    domain: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
+    deprecation_reason: Mapped[str] = mapped_column(String(512), nullable=False, default="", server_default="")
+    deprecated_until: Mapped[datetime | None] = mapped_column(DateTime)
+    successor_object_name: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
+    # 绑定 JSON 文本（双轨）: [{"binding_type": "semantic"|"dataset", ...}]
+    bindings_json: Mapped[str | None] = mapped_column(Text)
+    delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
+    create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
+    update_time: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+    create_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+
+    __table_args__ = (
+        UniqueConstraint("object_name", name="uniq_object_name"),
+        Index("idx_object_status", "status", "delete_flag"),
+        Index("idx_object_domain", "domain", "delete_flag"),
+    )
+
+
+class ChatDataOntologyProperty(Base):
+    """本体属性表：属性一等实体（对齐 Palantir Property Type）。
+
+    value_type 为内建类型（String/Integer/Decimal/Boolean/Date/DateTime）或
+    "enum"（enum_ref 引用全局枚举表 chat_data_meta_global_enum，格式与列字典
+    enum_ref 一致）。不存枚举值/单位/聚合口径：semantic 绑定的口径唯一权威在
+    语义层，dataset 绑定的口径即属性自身元数据，防双记账。
+    """
+
+    __tablename__ = "chat_data_ontology_property"
+
+    id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
+    object_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    property_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
+    description: Mapped[str] = mapped_column(String(1024), nullable=False, default="", server_default="")
+    value_type: Mapped[str] = mapped_column(String(32), nullable=False, default="String", server_default="String")
+    enum_ref: Mapped[str] = mapped_column(String(260), nullable=False, default="", server_default="")
+    render_hints_json: Mapped[str | None] = mapped_column(Text)
+    is_identifier: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
+    is_title: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
+    delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
+    create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
+    update_time: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+    create_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+
+    __table_args__ = (UniqueConstraint("object_id", "property_name", name="uniq_object_property"),)
+
+
+class ChatDataOntologyRelation(Base):
+    """本体关系表：对齐 Palantir Link Type。
+
+    基数仅 many_to_one/one_to_one（多对多走 junction 对象 + 两条 many_to_one
+    表达）。from_columns/to_columns 为等长数组 JSON 文本，顺序一一对应，目标侧
+    列必须引用对方标识属性。status 随对象级联：对象降级自动同步，升级手动确认。
+    """
+
+    __tablename__ = "chat_data_ontology_relation"
+
+    id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
+    relation_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    from_object_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    to_object_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    from_columns_json: Mapped[str | None] = mapped_column(Text)
+    to_columns_json: Mapped[str | None] = mapped_column(Text)
+    multiplicity: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="many_to_one", server_default="many_to_one"
+    )
+    from_display_name: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
+    to_display_name: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
+    from_verbalize: Mapped[str] = mapped_column(String(512), nullable=False, default="", server_default="")
+    to_verbalize: Mapped[str] = mapped_column(String(512), nullable=False, default="", server_default="")
+    description: Mapped[str] = mapped_column(String(1024), nullable=False, default="", server_default="")
+    business_notes: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="draft", server_default="draft")
+    delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
+    create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
+    update_time: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+    create_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+
+    __table_args__ = (
+        UniqueConstraint("relation_name", name="uniq_relation_name"),
+        Index("idx_relation_from", "from_object_id", "delete_flag"),
+        Index("idx_relation_to", "to_object_id", "delete_flag"),
+    )

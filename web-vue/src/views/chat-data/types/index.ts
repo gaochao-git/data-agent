@@ -1013,3 +1013,73 @@ export interface MetaGlobalEnumRef {
   table_name: string
   column_name: string
 }
+
+// ============ 元数据管理（本体 Ontology） ============
+
+// 本体对象状态机：draft → experimental → certified；deprecated 为终态不可逆
+export type OntologyObjectStatus = 'draft' | 'experimental' | 'certified' | 'deprecated'
+export type OntologyVisibility = 'prominent' | 'normal' | 'hidden'
+
+// 本体属性项（属性一等实体，随对象表单整体提交）
+export interface OntologyPropertyItem {
+  property_name: string
+  display_name: string
+  description: string
+  value_type: 'String' | 'Integer' | 'Decimal' | 'Boolean' | 'Date' | 'DateTime' | 'enum'
+  // value_type=enum 时的全局枚举引用："enum_name" 或 "domain:enum_name"
+  enum_ref: string
+  render_hints: Record<string, boolean>
+  // 标识属性：参与对象主键组合（业务主键，禁自增行号）；标题属性：对象标题键（至多一个）
+  is_identifier: boolean
+  is_title: boolean
+}
+
+// 本体绑定项（统一绑语义模型：semantic_config_id + table_alias，口径权威在语义层，不触碰物理表）
+export interface OntologyBindingItem {
+  semantic_config_id: string
+  table_alias: string
+  // 列映射: {属性API名: 物理列名}
+  column_mappings: Record<string, string>
+}
+
+// 本体对象（列表行与详情同构；详情含完整 properties）
+export interface OntologyObjectItem {
+  id?: number
+  object_name: string
+  display_name: string
+  plural_display_name: string
+  description: string
+  business_notes: string
+  status: OntologyObjectStatus
+  visibility: OntologyVisibility
+  domain: string
+  deprecation_reason: string
+  deprecated_until: string
+  successor_object_name: string
+  bindings: OntologyBindingItem[]
+  properties?: OntologyPropertyItem[]
+  create_time?: string
+  update_time?: string
+  update_by_name?: string
+}
+
+// 本体关系项（关系状态 = 两侧对象状态的较低者，降级自动级联、升级手动）
+export interface OntologyRelationItem {
+  id?: number
+  relation_name: string
+  from_object_name?: string
+  to_object_name?: string
+  from_columns: string[]
+  to_columns: string[]
+  multiplicity: 'many_to_one' | 'one_to_one'
+  from_display_name: string
+  to_display_name: string
+  from_verbalize: string
+  to_verbalize: string
+  description: string
+  business_notes: string
+  status: OntologyObjectStatus
+  create_time?: string
+  update_time?: string
+  update_by_name?: string
+}

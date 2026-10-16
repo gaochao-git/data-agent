@@ -8,16 +8,19 @@
 import { nextTick, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import GlobalEnumAdminPanel from './GlobalEnumAdminPanel.vue'
+import OntologyAdminPanel from './ontology/OntologyAdminPanel.vue'
 
-type MetaTypeKey = 'enum' | 'lineage'
+type MetaTypeKey = 'enum' | 'ontology' | 'lineage'
 
 const META_TYPES: Array<{ key: MetaTypeKey; label: string; icon: string; enabled: boolean; hint?: string }> = [
   { key: 'enum', label: '枚举值', icon: 'fa-list-check', enabled: true },
+  { key: 'ontology', label: '本体', icon: 'fa-cubes', enabled: true },
   { key: 'lineage', label: '数据血缘', icon: 'fa-diagram-project', enabled: false, hint: '数据血缘管理规划中' }
 ]
 
 const activeType = ref<MetaTypeKey>('enum')
 const enumPanelRef = ref<InstanceType<typeof GlobalEnumAdminPanel> | null>(null)
+const ontologyPanelRef = ref<InstanceType<typeof OntologyAdminPanel> | null>(null)
 const hasLoaded = ref(false)
 
 const switchType = async (meta: (typeof META_TYPES)[number]) => {
@@ -29,6 +32,9 @@ const switchType = async (meta: (typeof META_TYPES)[number]) => {
   if (meta.key === 'enum') {
     await nextTick()
     enumPanelRef.value?.ensureLoaded()
+  } else if (meta.key === 'ontology') {
+    await nextTick()
+    ontologyPanelRef.value?.ensureLoaded()
   }
 }
 
@@ -38,6 +44,9 @@ const ensureLoaded = async () => {
   if (activeType.value === 'enum') {
     await nextTick()
     enumPanelRef.value?.ensureLoaded()
+  } else if (activeType.value === 'ontology') {
+    await nextTick()
+    ontologyPanelRef.value?.ensureLoaded()
   }
 }
 
@@ -69,6 +78,7 @@ defineExpose({ ensureLoaded })
     <!-- 右侧类型内容区 -->
     <div class="min-w-0 flex-1 overflow-hidden">
       <GlobalEnumAdminPanel v-show="activeType === 'enum'" ref="enumPanelRef" class="h-full" />
+      <OntologyAdminPanel v-show="activeType === 'ontology'" ref="ontologyPanelRef" class="h-full" />
     </div>
   </div>
 </template>

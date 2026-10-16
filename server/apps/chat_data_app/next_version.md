@@ -196,6 +196,85 @@ ALTER TABLE semantic_config CHANGE COLUMN ontology_rules business_notes text COM
 ALTER TABLE chat_data_skill DROP COLUMN skill_scope;
 ALTER TABLE chat_data_skill DROP COLUMN skill_root_dir;
 ALTER TABLE chat_data_skill_version DROP COLUMN skill_version_dir;
+
+-- 本体重建三张表：对象/属性/关系（属性一等实体；口径不落本体，唯一权威在语义层；
+-- bindings 内嵌为 JSON 文本，主键=标识属性组合、标题键=标题属性，均由属性表表达）
+CREATE TABLE `chat_data_ontology_object` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `object_name` varchar(128) NOT NULL COMMENT '对象API名，仅字母数字下划线，certified 后冻结',
+  `display_name` varchar(128) NOT NULL DEFAULT '' COMMENT '展示名',
+  `plural_display_name` varchar(128) NOT NULL DEFAULT '' COMMENT '复数展示名',
+  `description` varchar(1024) NOT NULL DEFAULT '' COMMENT '对象描述',
+  `business_notes` text COMMENT '业务说明（建模背景、口径边界等，不入 agent 上下文）',
+  `status` varchar(16) NOT NULL DEFAULT 'draft' COMMENT '生命周期: draft-草稿, experimental-实验, certified-认证, deprecated-废弃(不可逆)',
+  `visibility` varchar(16) NOT NULL DEFAULT 'normal' COMMENT '上下文可见性: prominent-优先进入, normal-常规, hidden-不进 agent 上下文',
+  `domain` varchar(128) NOT NULL DEFAULT '' COMMENT '业务域扁平标签（语义归属，与数据源组采集范围解耦）',
+  `deprecation_reason` varchar(512) NOT NULL DEFAULT '' COMMENT '废弃原因，status=deprecated 时有效',
+  `deprecated_until` datetime DEFAULT NULL COMMENT '废弃删除期限，status=deprecated 时有效',
+  `successor_object_name` varchar(128) NOT NULL DEFAULT '' COMMENT '替代对象API名，status=deprecated 时有效',
+  `bindings_json` text COMMENT '语义模型绑定JSON文本: [{"binding_type":"semantic","semantic_config_id":"...","table_alias":"...","column_mappings":{...}}]（统一语义模型轨，不触碰物理表）',
+  `delete_flag` tinyint NOT NULL DEFAULT '0' COMMENT '删除标识: 0-未删除, 1-已删除',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `create_by` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人ID',
+  `create_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人名称',
+  `update_by` varchar(100) NOT NULL DEFAULT '' COMMENT '修改人ID',
+  `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '修改人名称',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_object_name` (`object_name`),
+  KEY `idx_object_status` (`status`,`delete_flag`),
+  KEY `idx_object_domain` (`domain`,`delete_flag`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='本体对象表';
+
+CREATE TABLE `chat_data_ontology_property` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `object_id` bigint NOT NULL COMMENT '所属本体对象ID（chat_data_ontology_object.id，逻辑关联无外键）',
+  `property_name` varchar(128) NOT NULL COMMENT '属性API名，仅字母数字下划线，对象内唯一，certified 后禁删',
+  `display_name` varchar(128) NOT NULL DEFAULT '' COMMENT '展示名',
+  `description` varchar(1024) NOT NULL DEFAULT '' COMMENT '属性描述',
+  `value_type` varchar(32) NOT NULL DEFAULT 'String' COMMENT '值类型: String/Integer/Decimal/Boolean/Date/DateTime 或 enum(引用全局枚举)',
+  `enum_ref` varchar(260) NOT NULL DEFAULT '' COMMENT '全局枚举引用，value_type=enum 时非空: "enum_name" 或 "business_domain:enum_name"',
+  `render_hints_json` text COMMENT '渲染提示JSON文本: {"searchable":true,"sortable":true,"low_cardinality":false}',
+  `is_identifier` tinyint NOT NULL DEFAULT '0' COMMENT '标识属性: 1-参与对象主键组合（业务主键，禁自增行号）',
+  `is_title` tinyint NOT NULL DEFAULT '0' COMMENT '标题属性: 1-对象标题键（每对象至多一个）',
+  `delete_flag` tinyint NOT NULL DEFAULT '0' COMMENT '删除标识: 0-未删除, 1-已删除',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `create_by` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人ID',
+  `create_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人名称',
+  `update_by` varchar(100) NOT NULL DEFAULT '' COMMENT '修改人ID',
+  `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '修改人名称',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_object_property` (`object_id`,`property_name`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='本体属性表';
+
+CREATE TABLE `chat_data_ontology_relation` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `relation_name` varchar(128) NOT NULL COMMENT '关系API名，仅字母数字下划线，全局唯一',
+  `from_object_id` bigint NOT NULL COMMENT '起始对象ID（chat_data_ontology_object.id）',
+  `to_object_id` bigint NOT NULL COMMENT '目标对象ID（chat_data_ontology_object.id）',
+  `from_columns_json` text COMMENT '起始侧关联列JSON文本: ["属性名"], 与目标侧等长顺序一一对应',
+  `to_columns_json` text COMMENT '目标侧关联列JSON文本: ["属性名"], 必须引用对方标识属性',
+  `multiplicity` varchar(16) NOT NULL DEFAULT 'many_to_one' COMMENT '基数: many_to_one, one_to_one（多对多走 junction 对象表达）',
+  `from_display_name` varchar(128) NOT NULL DEFAULT '' COMMENT '正向方向展示名',
+  `to_display_name` varchar(128) NOT NULL DEFAULT '' COMMENT '反向方向展示名',
+  `from_verbalize` varchar(512) NOT NULL DEFAULT '' COMMENT '正向自然语言模式串，如 "{from} 归属于 {to}"',
+  `to_verbalize` varchar(512) NOT NULL DEFAULT '' COMMENT '反向自然语言模式串',
+  `description` varchar(1024) NOT NULL DEFAULT '' COMMENT '关系描述',
+  `business_notes` text COMMENT '业务说明',
+  `status` varchar(16) NOT NULL DEFAULT 'draft' COMMENT '生命周期随对象级联: 对象降级自动同步，升级需手动确认',
+  `delete_flag` tinyint NOT NULL DEFAULT '0' COMMENT '删除标识: 0-未删除, 1-已删除',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `create_by` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人ID',
+  `create_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人名称',
+  `update_by` varchar(100) NOT NULL DEFAULT '' COMMENT '修改人ID',
+  `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '修改人名称',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_relation_name` (`relation_name`),
+  KEY `idx_relation_from` (`from_object_id`,`delete_flag`),
+  KEY `idx_relation_to` (`to_object_id`,`delete_flag`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='本体关系表';
 ```
 
 ## 依赖变更

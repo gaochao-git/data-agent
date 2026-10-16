@@ -395,6 +395,79 @@ class TableIndexItem(BaseModel):
     columns: list[str] = Field(default_factory=list, max_length=5, description="索引列名列表")
 
 
+class OntologyPropertyItem(BaseModel):
+    """本体属性项（属性一等实体，随对象表单整体提交）"""
+
+    property_name: str = Field(..., min_length=1, max_length=128, description="属性API名，对象内唯一")
+    display_name: str = Field(default="", max_length=128, description="展示名")
+    description: str = Field(default="", max_length=1024, description="属性描述")
+    value_type: Literal["String", "Integer", "Decimal", "Boolean", "Date", "DateTime", "enum"] = Field(
+        default="String", description="值类型：内建类型或 enum（引用全局枚举）"
+    )
+    enum_ref: str = Field(
+        default="",
+        max_length=260,
+        description='全局枚举引用，value_type=enum 时必填："enum_name" 或 "domain:enum_name"',
+    )
+    render_hints: dict[str, bool] = Field(
+        default_factory=dict, description="渲染提示: searchable/sortable/low_cardinality"
+    )
+    is_identifier: bool = Field(default=False, description="标识属性：参与对象主键组合（业务主键，禁自增行号）")
+    is_title: bool = Field(default=False, description="标题属性：对象标题键（每对象至多一个）")
+
+
+class OntologyBindingItem(BaseModel):
+    """本体绑定项（语义模型绑定：口径权威在语义层）"""
+
+    semantic_config_id: str = Field(..., min_length=1, max_length=128, description="语义模型配置ID")
+    table_alias: str = Field(..., min_length=1, max_length=128, description="语义模型表别名")
+    column_mappings: dict[str, str] = Field(default_factory=dict, description="列映射: {属性API名: 物理列名}")
+
+
+class OntologyObjectUpsertRequest(BaseModel):
+    """本体对象创建/编辑请求（object_name 由路径参数携带；状态走独立接口）"""
+
+    display_name: str = Field(..., min_length=1, max_length=128, description="展示名")
+    plural_display_name: str = Field(default="", max_length=128, description="复数展示名")
+    description: str = Field(default="", max_length=1024, description="对象描述")
+    business_notes: str = Field(default="", max_length=10000, description="业务说明（建模背景，不入 agent 上下文）")
+    visibility: Literal["prominent", "normal", "hidden"] = Field(default="normal", description="上下文可见性")
+    domain: str = Field(default="", max_length=128, description="业务域扁平标签")
+    properties: list[OntologyPropertyItem] = Field(..., min_length=1, description="属性集（整体提交）")
+    bindings: list[OntologyBindingItem] = Field(default_factory=list, description="绑定列表（双轨，可混合）")
+    allow_overwrite: bool = Field(default=False, description="编辑既有活跃对象时为 True")
+    confirm_destructive: bool = Field(default=False, description="破坏性变更（绑定/主键/标题键变更）显式确认")
+
+
+class OntologyObjectStatusRequest(BaseModel):
+    """本体对象状态迁移请求"""
+
+    status: Literal["draft", "experimental", "certified", "deprecated"] = Field(..., description="目标状态")
+    deprecation_reason: str = Field(default="", max_length=512, description="废弃原因，status=deprecated 时必填")
+    deprecated_until: str = Field(default="", max_length=19, description="废弃删除期限（YYYY-MM-DD HH:MM:SS），可选")
+    successor_object_name: str = Field(default="", max_length=128, description="替代对象API名，可选但必须存在")
+
+
+class OntologyRelationUpsertRequest(BaseModel):
+    """本体关系创建/编辑请求（relation_name 由路径参数携带）"""
+
+    from_object_name: str = Field(..., min_length=1, max_length=128, description="起始对象API名")
+    to_object_name: str = Field(..., min_length=1, max_length=128, description="目标对象API名")
+    multiplicity: Literal["many_to_one", "one_to_one"] = Field(
+        default="many_to_one", description="基数（多对多走 junction 对象表达）"
+    )
+    from_columns: list[str] = Field(..., min_length=1, description="起始侧关联列（属性API名）")
+    to_columns: list[str] = Field(..., min_length=1, description="目标侧关联列（必须引用对方标识属性）")
+    from_display_name: str = Field(default="", max_length=128, description="正向方向展示名")
+    to_display_name: str = Field(default="", max_length=128, description="反向方向展示名")
+    from_verbalize: str = Field(default="", max_length=512, description='正向自然语言模式串，如 "{from} 归属于 {to}"')
+    to_verbalize: str = Field(default="", max_length=512, description="反向自然语言模式串")
+    description: str = Field(default="", max_length=1024, description="关系描述")
+    business_notes: str = Field(default="", max_length=10000, description="业务说明")
+    allow_overwrite: bool = Field(default=False, description="编辑既有关系时为 True")
+    confirm_destructive: bool = Field(default=False, description="破坏性变更（连接对象/关联列/基数变更）显式确认")
+
+
 class DatasourceTableIndexesUpdateRequest(BaseModel):
     """数据源表索引配置更新请求（整体覆盖）"""
 

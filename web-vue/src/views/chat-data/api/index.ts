@@ -34,6 +34,12 @@ import type {
   MetaGlobalEnum,
   MetaGlobalEnumRef,
   MetaGlobalEnumValueItem,
+  OntologyBindingItem,
+  OntologyObjectItem,
+  OntologyObjectStatus,
+  OntologyPropertyItem,
+  OntologyRelationItem,
+  OntologyVisibility,
 } from '../types'
 import type { Dashboard } from './dashboard'
 
@@ -1941,5 +1947,124 @@ export function generateAdminMetaEnumItems(text: string): Promise<ApiResponse<{ 
     method: 'post',
     data: { text },
     timeout: 120000 // LLM 生成，超过全局 30s
+  })
+}
+
+// ============ 元数据管理 API（Admin：本体 Ontology） ============
+
+/** 后台：本体对象列表（keyword 按名称/展示名/描述模糊过滤；status/domain 精确过滤） */
+export function getAdminOntologyObjects(params?: {
+  keyword?: string
+  status?: string
+  domain?: string
+}): Promise<ApiResponse<{ objects: OntologyObjectItem[] }>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/objects`,
+    method: 'get',
+    params
+  })
+}
+
+/** 后台：本体对象详情（含属性集与绑定） */
+export function getAdminOntologyObject(objectName: string): Promise<ApiResponse<OntologyObjectItem>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/objects/${encodeURIComponent(objectName)}`,
+    method: 'get'
+  })
+}
+
+/** 后台：创建/整体编辑本体对象（元数据 + 属性集 + 绑定一次性提交）。
+ * 编辑既有活跃对象 allow_overwrite=true；绑定/主键/标题键等破坏性变更需 confirm_destructive=true。 */
+export function upsertAdminOntologyObject(
+  objectName: string,
+  data: {
+    display_name: string
+    plural_display_name?: string
+    description?: string
+    business_notes?: string
+    visibility?: OntologyVisibility
+    domain?: string
+    properties: OntologyPropertyItem[]
+    bindings?: OntologyBindingItem[]
+    allow_overwrite?: boolean
+    confirm_destructive?: boolean
+  }
+): Promise<ApiResponse<OntologyObjectItem>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/objects/${encodeURIComponent(objectName)}`,
+    method: 'put',
+    data
+  })
+}
+
+/** 后台：删除本体对象（软删；certified 拒绝，级联软删属性与关系） */
+export function deleteAdminOntologyObject(objectName: string): Promise<ApiResponse<{ object_name: string }>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/objects/${encodeURIComponent(objectName)}`,
+    method: 'delete'
+  })
+}
+
+/** 后台：本体对象状态迁移（升级/降级/废弃；关系状态按对象自动级联降级，升级手动） */
+export function changeAdminOntologyObjectStatus(
+  objectName: string,
+  data: {
+    status: OntologyObjectStatus
+    deprecation_reason?: string
+    deprecated_until?: string
+    successor_object_name?: string
+  }
+): Promise<ApiResponse<OntologyObjectItem>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/objects/${encodeURIComponent(objectName)}/status`,
+    method: 'post',
+    data
+  })
+}
+
+/** 后台：本体关系列表（keyword 模糊过滤；from_object/to_object 按对象 API 名过滤） */
+export function getAdminOntologyRelations(params?: {
+  keyword?: string
+  from_object?: string
+  to_object?: string
+}): Promise<ApiResponse<{ relations: OntologyRelationItem[] }>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/relations`,
+    method: 'get',
+    params
+  })
+}
+
+/** 后台：创建/编辑本体关系（连接对象/关联列/基数变更属破坏性，需 confirm_destructive=true） */
+export function upsertAdminOntologyRelation(
+  relationName: string,
+  data: {
+    from_object_name: string
+    to_object_name: string
+    multiplicity?: 'many_to_one' | 'one_to_one'
+    from_columns: string[]
+    to_columns: string[]
+    from_display_name?: string
+    to_display_name?: string
+    from_verbalize?: string
+    to_verbalize?: string
+    description?: string
+    business_notes?: string
+    allow_overwrite?: boolean
+    confirm_destructive?: boolean
+  }
+): Promise<ApiResponse<OntologyRelationItem>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/relations/${encodeURIComponent(relationName)}`,
+    method: 'put',
+    data
+  })
+}
+
+/** 后台：删除本体关系（软删） */
+export function deleteAdminOntologyRelation(relationName: string): Promise<ApiResponse<{ relation_name: string }>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/relations/${encodeURIComponent(relationName)}`,
+    method: 'delete'
   })
 }
