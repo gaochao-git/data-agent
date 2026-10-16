@@ -11,7 +11,7 @@ from langchain_core.messages import (
     ToolMessageChunk,
 )
 
-from apps.chat_data_app import agent_run_support, agent_stream
+from apps.chat_data_app import agent_run_support, agent_stream, agent_stream_events
 from apps.chat_data_app.agent.run.chat_data_stream_request import ChatDataStreamRequest
 from apps.chat_data_app.services.semantic.run.semantic_conversation_context import SemanticConversationContext
 
@@ -1465,7 +1465,8 @@ async def test_generate_chat_data_stream_forced_missing_buffer_and_empty_selecti
                 {"langgraph_node": "tools"},
             )
 
-    monkeypatch.setattr(agent_stream, "_resolve_active_tool_call_id", lambda *_args: "forced")
+    # _ToolStreamState 已迁入 agent_stream_events，方法内名字解析走该模块命名空间
+    monkeypatch.setattr(agent_stream_events, "_resolve_active_tool_call_id", lambda *_args: "forced")
     monkeypatch.setattr(agent_stream, "get_checkpointer", lambda: FakeCheckpointer())
     monkeypatch.setattr(agent_stream, "create_data_agent", lambda *_args, **_kwargs: Graph())
 

@@ -408,3 +408,120 @@ def test_validate_logical_types_accepts_enum_ref_dimension(monkeypatch):
 
     # 非枚举维度不校验
     assert asyncio.run(validate_semantic_logical_types(_DsManager(), "ds_a", [{**dim, "logical_type": "cat"}])) is None
+
+
+# ---------------------------------------------------------------------------
+# service 透传 / 写入校验 / resolve 混合场景（覆盖率补充 + 行为契约）
+# ---------------------------------------------------------------------------
+
+
+def test_service_passthroughs():
+    """domains/get/refs 三个只读透传：入参原样转发、返回值不加工。"""
+    calls: list[tuple] = []
+
+    class _PassthroughDao:
+        async def list_enum_domains_async(self):
+            calls.append(("domains",))
+            return ["订单", ""]
+
+        async def get_enum_by_name_async(self, enum_name, business_domain=""):
+            calls.append(("get", enum_name, business_domain))
+            return {"enum_name": enum_name}
+
+        async def find_column_dict_refs_async(self, enum_name, business_domain=""):
+            calls.append(("refs", enum_name, business_domain))
+            return [{"group_id": "g1"}]
+
+    service = _service(_PassthroughDao())
+    assert asyncio.run(service.list_enum_domains_async()) == ["订单", ""]
+    assert asyncio.run(service.get_enum_async("pay_status", "订单")) == {"enum_name": "pay_status"}
+    assert asyncio.run(service.get_enum_async("pay_status")) == {"enum_name": "pay_status"}
+    assert asyncio.run(service.list_enum_refs_async("pay_status", "订单")) == [{"group_id": "g1"}]
+    assert calls == [
+        ("domains",),
+        ("get", "pay_status", "订单"),
+        ("get", "pay_status", ""),
+        ("refs", "pay_status", "订单"),
+    ]
+
+
+def test_validate_column_dict_for_write_branches():
+    """enum_ref 二选一约束：未引用放行 / 名非法 / 双维护 / 引用不存在 / 合法引用放行。"""
+    service = _service(_FakeDao(enums=[{"business_domain": "", "enum_name": "pay_status"}]))
+
+    assert asyncio.run(service.validate_column_dict_for_write_async({"enum_values": [{"value": "1"}]})) is None
+    assert asyncio.run(service.validate_column_dict_for_write_async("不是字典")) is None
+    with pytest.raises(MetaGlobalEnumNameInvalidError):
+        asyncio.run(service.validate_column_dict_for_write_async({"enum_ref": "非法名!"}))
+    with pytest.raises(MetaGlobalEnumInvalidError):
+        asyncio.run(
+            service.validate_column_dict_for_write_async(
+                {"enum_ref": "pay_status", "enum_values": [{"value": "1", "label": "成功"}]}
+            )
+        )
+    with pytest.raises(MetaGlobalEnumNotFoundError):
+        asyncio.run(service.validate_column_dict_for_write_async({"enum_ref": "missing_enum"}))
+    assert asyncio.run(service.validate_column_dict_for_write_async({"enum_ref": "pay_status"})) is None
+
+
+def test_resolve_column_dicts_mixed_payloads():
+    """resolve：无引用原样返回 / 引用缺失保留本地 / 引用命中合并为枚举项拷贝。"""
+    dao = _FakeDao(
+        enums=[
+            {
+                "business_domain": "",
+                "enum_name": "pay_status",
+                "enum_items": [{"value": "1", "label": "成功"}, {"value": "2", "label": "失败"}],
+            }
+        ]
+    )
+    service = _service(dao)
+
+    # 无任何引用：原样返回且过滤非 dict 载荷
+    plain = {"a": {"enum_values": [{"value": "0"}]}}
+    assert asyncio.run(service.resolve_column_dicts_async({"a": plain["a"], "b": "非字典"})) == plain
+
+    local_items = [{"value": "9", "label": "本地"}]
+    column_dicts = {
+        "hit": {"enum_ref": "pay_status", "enum_values": local_items},
+        "miss": {"enum_ref": "missing_enum", "enum_values": local_items},
+        "plain": {"enum_values": local_items},
+    }
+    resolved = asyncio.run(service.resolve_column_dicts_async(column_dicts))
+    # 命中：合并为全局枚举项的深拷贝（改合并结果不影响 dao 持有的原列表）
+    assert resolved["hit"]["enum_values"] == [{"value": "1", "label": "成功"}, {"value": "2", "label": "失败"}]
+    resolved["hit"]["enum_values"].append({"value": "X", "label": "污染"})
+    assert dao.enums[0]["enum_items"] == [{"value": "1", "label": "成功"}, {"value": "2", "label": "失败"}]
+    # 未命中：保留本地枚举值
+    assert resolved["miss"]["enum_values"] == local_items
+    # 无引用：原样
+    assert resolved["plain"] == {"enum_values": local_items}
+
+
+def test_delete_enum_rejects_when_in_use_with_many_refs():
+    """>5 处引用时提示「等 N 处」；删除链路空名报不存在。"""
+    dao = _FakeDao(
+        enums=[{"business_domain": "", "enum_name": "pay_status"}],
+        refs=[{"group_id": f"g{i}", "table_name": f"t{i}", "column_name": "status"} for i in range(6)],
+    )
+    service = _service(dao)
+    with pytest.raises(MetaGlobalEnumInUseError) as exc_info:
+        asyncio.run(service.delete_enum_async("pay_status"))
+    assert "等6处" in str(exc_info.value)
+
+    with pytest.raises(MetaGlobalEnumNotFoundError):
+        asyncio.run(service.delete_enum_async(""))
+
+
+def test_resolve_skips_non_dict_payload_when_refs_exist():
+    """存在引用时循环里的非 dict 载荷跳过分支（不进 resolved 也不崩）。"""
+    dao = _FakeDao(enums=[{"business_domain": "", "enum_name": "pay_status", "enum_items": [{"value": "1"}]}])
+    service = _service(dao)
+    resolved = asyncio.run(
+        service.resolve_column_dicts_async(
+            {"hit": {"enum_ref": "pay_status"}, "junk": "非字典", "plain": {"enum_values": []}}
+        )
+    )
+    assert "junk" not in resolved
+    assert resolved["hit"]["enum_values"] == [{"value": "1"}]
+    assert resolved["plain"] == {"enum_values": []}
