@@ -729,6 +729,18 @@ async def test_run_bash_reports_observed_changed_files(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_run_bash_inherits_officecli_resident_opt_out(tmp_path):
+    """agent 可能经 bash_run 调 officecli：子 shell 环境同样禁用 resident 自动拉起。"""
+    runtime, _root = _runtime(tmp_path)
+    if shutil.which("bash") is None:
+        pytest.skip("宿主机未安装 bash")
+
+    result = await runtime.run_bash(command="echo $OFFICECLI_NO_AUTO_RESIDENT", cwd=None, timeout_seconds=30)
+    assert result["exit_code"] == 0
+    assert result["stdout"].strip() == "1"
+
+
+@pytest.mark.asyncio
 async def test_run_bash_timeout_still_attributes_writes(tmp_path):
     """超时命令可能已写入部分产物：超时路径同样归因（宁可不错过）。"""
     runtime, _root = _runtime(tmp_path)

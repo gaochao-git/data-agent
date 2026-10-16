@@ -19,6 +19,7 @@ from typing import Any, Literal
 
 from apps.chat_data_app.agent.workspace.artifact_registry import parse_output_artifact
 from apps.chat_data_app.agent.workspace.officecli_adapter import (
+    OFFICECLI_NO_AUTO_RESIDENT_ENV,
     command_path_values,
     parse_officecli_args,
     translate_command_args,
@@ -1122,7 +1123,12 @@ class LocalWorkspaceBackend:
             "-lc",
             inner,
             cwd=str(local_cwd),
-            env={"PATH": os.environ.get("PATH", ""), "HOME": str(local_cwd), "LANG": "C.UTF-8"},
+            env={
+                "PATH": os.environ.get("PATH", ""),
+                "HOME": str(local_cwd),
+                "LANG": "C.UTF-8",
+                **OFFICECLI_NO_AUTO_RESIDENT_ENV,
+            },
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -1219,6 +1225,7 @@ class LocalWorkspaceBackend:
                 "PATH": os.environ.get("PATH", ""),
                 "HOME": str(runtime.workspace_root),
                 "LANG": "C.UTF-8",
+                **OFFICECLI_NO_AUTO_RESIDENT_ENV,
             },
             stdin=asyncio.subprocess.DEVNULL,  # batch 等子命令会读 stdin，避免继承并卡到超时
             stdout=asyncio.subprocess.PIPE,

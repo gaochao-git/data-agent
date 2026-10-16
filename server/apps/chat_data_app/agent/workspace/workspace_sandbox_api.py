@@ -10,6 +10,7 @@ from typing import Any, Literal
 
 from utils.logger import get_logger
 
+from .officecli_adapter import OFFICECLI_NO_AUTO_RESIDENT_ENV
 from .workspace_sandbox_paths import (
     _SANDBOX_WRITABLE_FILE_MODE,
     _is_outputs_sandbox_path,
@@ -267,7 +268,9 @@ async def run_command_in_sandbox(
         "timeout": timedelta(seconds=max(1, timeout_seconds)),
         "uid": _SANDBOX_COMMAND_UID,
         "gid": _SANDBOX_COMMAND_GID,
-        "envs": {"HOME": "/tmp", "LANG": "C.UTF-8"},
+        # 禁用 officecli resident 自动拉起：常驻进程把写入延迟到 idle auto-flush，
+        # 与「命令返回即同步/归因」的时序假设冲突（见 officecli_adapter 注释）。
+        "envs": {"HOME": "/tmp", "LANG": "C.UTF-8", **OFFICECLI_NO_AUTO_RESIDENT_ENV},
     }
     execution = await session.sandbox.commands.run(command, opts=RunCommandOpts(**options))
     command_status = None
