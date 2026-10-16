@@ -38,8 +38,7 @@ import type {
   OntologyObjectItem,
   OntologyObjectStatus,
   OntologyPropertyItem,
-  OntologyRelationItem,
-  OntologyVisibility,
+  OntologyRelationItem
 } from '../types'
 import type { Dashboard } from './dashboard'
 
@@ -1979,10 +1978,8 @@ export function upsertAdminOntologyObject(
   objectName: string,
   data: {
     display_name: string
-    plural_display_name?: string
     description?: string
     business_notes?: string
-    visibility?: OntologyVisibility
     domain?: string
     properties: OntologyPropertyItem[]
     bindings?: OntologyBindingItem[]

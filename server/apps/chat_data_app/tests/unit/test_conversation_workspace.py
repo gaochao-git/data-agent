@@ -363,8 +363,8 @@ async def test_internal_semantic_model_delete_cleans_residual_file(tmp_path, mon
     assert result["path"] == "/mnt/user-data/workspace/semantic/已停用模型__deadbeef.yaml"
     assert result["type"] == "file"
 
-    # 通道限定语义 YAML：semantic 之外的文件即使走内部通道也必须被拒
-    with pytest.raises(ValueError, match="内部语义模型写入"):
+    # 通道限定语义/本体 YAML：semantic、ontology 之外的文件即使走内部通道也必须被拒
+    with pytest.raises(ValueError, match="内部系统写入"):
         await runtime.delete_internal_text_files(path="/mnt/user-data/workspace/plan.md")
 
 

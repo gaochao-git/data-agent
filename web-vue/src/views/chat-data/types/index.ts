@@ -1018,7 +1018,6 @@ export interface MetaGlobalEnumRef {
 
 // 本体对象状态机：draft → experimental → certified；deprecated 为终态不可逆
 export type OntologyObjectStatus = 'draft' | 'experimental' | 'certified' | 'deprecated'
-export type OntologyVisibility = 'prominent' | 'normal' | 'hidden'
 
 // 本体属性项（属性一等实体，随对象表单整体提交）
 export interface OntologyPropertyItem {
@@ -1042,21 +1041,20 @@ export interface OntologyBindingItem {
   column_mappings: Record<string, string>
 }
 
-// 本体对象（列表行与详情同构；详情含完整 properties）
+// 本体对象（列表行含 bindings_count；详情同构且含完整 properties 与 bindings）
 export interface OntologyObjectItem {
   id?: number
   object_name: string
   display_name: string
-  plural_display_name: string
   description: string
   business_notes: string
   status: OntologyObjectStatus
-  visibility: OntologyVisibility
   domain: string
   deprecation_reason: string
   deprecated_until: string
   successor_object_name: string
-  bindings: OntologyBindingItem[]
+  bindings?: OntologyBindingItem[]
+  bindings_count?: number
   properties?: OntologyPropertyItem[]
   create_time?: string
   update_time?: string

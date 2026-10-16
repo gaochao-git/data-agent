@@ -8,13 +8,13 @@ import { computed, ref, watch } from 'vue'
 import type { PropType } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getAdminOntologyObject, upsertAdminOntologyObject } from '../../api'
-import type { OntologyBindingItem, OntologyObjectItem, OntologyPropertyItem, OntologyVisibility } from '../../types'
+import type { OntologyBindingItem, OntologyObjectItem, OntologyPropertyItem } from '../../types'
 import OntologyBindingEditor from './OntologyBindingEditor.vue'
 import OntologyPropertyEditor from './OntologyPropertyEditor.vue'
-import { ONTOLOGY_NAME_PATTERN, ONTOLOGY_VISIBILITY_META } from './ontologyMeta'
+import { ONTOLOGY_NAME_PATTERN } from './ontologyMeta'
 
 const props = defineProps({
-  // 编辑的对象 API 名；空串表示新建
+  // 编辑的对象名；空串表示新建
   objectName: { type: String, default: '' }
 })
 
@@ -31,10 +31,8 @@ const loadedDetail = ref<OntologyObjectItem | null>(null)
 
 const formName = ref('')
 const formDisplayName = ref('')
-const formPluralName = ref('')
 const formDescription = ref('')
 const formBusinessNotes = ref('')
-const formVisibility = ref<OntologyVisibility>('normal')
 const formDomain = ref('')
 const propertyRows = ref<OntologyPropertyItem[]>([])
 const bindingRows = ref<OntologyBindingItem[]>([])
@@ -50,10 +48,8 @@ const frozenNames = computed(() =>
 const resetForm = () => {
   formName.value = ''
   formDisplayName.value = ''
-  formPluralName.value = ''
   formDescription.value = ''
   formBusinessNotes.value = ''
-  formVisibility.value = 'normal'
   formDomain.value = ''
   propertyRows.value = [{ property_name: '', display_name: '', description: '', value_type: 'String', enum_ref: '', render_hints: {}, is_identifier: true, is_title: true }]
   bindingRows.value = []
@@ -75,10 +71,8 @@ const openLoad = async () => {
     loadedDetail.value = detail
     formName.value = detail.object_name
     formDisplayName.value = detail.display_name
-    formPluralName.value = detail.plural_display_name
     formDescription.value = detail.description
     formBusinessNotes.value = detail.business_notes
-    formVisibility.value = detail.visibility
     formDomain.value = detail.domain
     propertyRows.value = (detail.properties || []).map(item => ({ ...item, render_hints: { ...(item.render_hints || {}) } }))
     bindingRows.value = (detail.bindings || []).map(item => ({ ...item, column_mappings: { ...(item.column_mappings || {}) } }))
@@ -133,8 +127,8 @@ const destructiveActions = computed(() => {
 // ---------- 提交 ----------
 
 const validateForm = (): string => {
-  if (!formName.value.trim()) return '请填写对象 API 名'
-  if (!ONTOLOGY_NAME_PATTERN.test(formName.value.trim())) return '对象 API 名仅允许字母、数字、下划线，长度 1-128'
+  if (!formName.value.trim()) return '请填写对象名'
+  if (!ONTOLOGY_NAME_PATTERN.test(formName.value.trim())) return '对象名仅允许字母、数字、下划线，长度 1-128'
   if (!formDisplayName.value.trim()) return '请填写展示名'
   const rows = propertyRows.value
   if (rows.length === 0) return '对象至少需要一个属性'
@@ -180,10 +174,8 @@ const saveObject = async () => {
   try {
     const res = await upsertAdminOntologyObject(formName.value.trim(), {
       display_name: formDisplayName.value.trim(),
-      plural_display_name: formPluralName.value.trim(),
       description: formDescription.value.trim(),
       business_notes: formBusinessNotes.value.trim(),
-      visibility: formVisibility.value,
       domain: formDomain.value.trim(),
       properties: propertyRows.value.map(row => ({
         property_name: row.property_name.trim(),
@@ -241,31 +233,16 @@ const saveObject = async () => {
       <!-- 基本信息 -->
       <div class="grid grid-cols-2 gap-3">
         <div>
-          <div class="mb-1 text-xs text-slate-500">对象 API 名（创建后不可改）</div>
+          <div class="mb-1 text-xs text-slate-500">对象名（创建后不可改）</div>
           <el-input v-model="formName" size="small" :disabled="editing" placeholder="仅字母、数字、下划线，如 sales_order" class="font-mono" />
         </div>
         <div>
           <div class="mb-1 text-xs text-slate-500">展示名</div>
-          <el-input v-model="formDisplayName" size="small" maxlength="128" placeholder="用户可见名称，如 销售订单" />
-        </div>
-        <div>
-          <div class="mb-1 text-xs text-slate-500">复数展示名</div>
-          <el-input v-model="formPluralName" size="small" maxlength="128" placeholder="可选，如 销售订单列表" />
+          <el-input v-model="formDisplayName" size="small" maxlength="128" placeholder="用户可见名称，如 订单" />
         </div>
         <div>
           <div class="mb-1 text-xs text-slate-500">业务域（扁平标签，用于目录切片）</div>
           <el-input v-model="formDomain" size="small" maxlength="128" placeholder="如 供应链" />
-        </div>
-        <div>
-          <div class="mb-1 text-xs text-slate-500">上下文可见性</div>
-          <el-select v-model="formVisibility" size="small" :empty-values="[null, undefined]" class="!w-full">
-            <el-option
-              v-for="(meta, key) in ONTOLOGY_VISIBILITY_META"
-              :key="key"
-              :label="`${meta.label}（${meta.hint}）`"
-              :value="key"
-            />
-          </el-select>
         </div>
         <div>
           <div class="mb-1 text-xs text-slate-500">描述</div>

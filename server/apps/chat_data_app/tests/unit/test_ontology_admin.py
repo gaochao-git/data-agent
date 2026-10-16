@@ -123,7 +123,7 @@ def test_object_create_rejects_bad_api_name(harness, deps_ok):
 
 def test_object_create_and_get(harness, deps_ok):
     saved = asyncio.run(
-        ontology_service.upsert_object_async("Order", _object_payload(visibility="prominent", domain="交易"))
+        ontology_service.upsert_object_async("Order", _object_payload(domain="交易"))
     )
     assert saved["display_name"] == "订单"
     assert saved["status"] == "draft"
@@ -505,3 +505,50 @@ def test_relation_from_columns_must_reference_defined_property(harness, deps_ok)
         )
     )
     assert saved["relation_name"] == "r1"
+
+
+def test_bindings_roundtrip_via_mapping_table(harness, deps_ok):
+    """绑定独立存映射表：详情回读、编辑全量重写无残留、删除后归属释放。"""
+    binding = dict(SEMANTIC_BINDING)
+    asyncio.run(ontology_service.upsert_object_async("Order", _object_payload(bindings=[dict(binding)])))
+    detail = asyncio.run(ontology_service.get_object_async("Order"))
+    assert {k: v for k, v in detail["bindings"][0].items() if k != "object_id"} == {
+        "binding_type": "semantic",
+        "semantic_config_id": "cfg-1",
+        "table_alias": "dwd_order",
+        "column_mappings": {"order_id": "order_no"},
+    }
+    assert detail["bindings"][0]["object_id"] == detail["id"]
+    # 编辑换表别名：映射表全量重写，旧行不残留（同对象重绑自身放行）
+    edited = {**binding, "table_alias": "dwd_order_2"}
+    asyncio.run(
+        ontology_service.upsert_object_async(
+            "Order", _object_payload(bindings=[dict(edited)], confirm_destructive=True), allow_overwrite=True
+        )
+    )
+    detail = asyncio.run(ontology_service.get_object_async("Order"))
+    assert [item["table_alias"] for item in detail["bindings"]] == ["dwd_order_2"]
+    # 删除对象后归属释放：其他对象可占用同一绑定
+    asyncio.run(ontology_service.delete_object_async("Order"))
+    asyncio.run(
+        ontology_service.upsert_object_async(
+            "Order2", _object_payload(properties=[dict(VALID_PROPERTY)], bindings=[dict(binding)])
+        )
+    )
+    detail = asyncio.run(ontology_service.get_object_async("Order2"))
+    assert detail["bindings"][0]["semantic_config_id"] == "cfg-1"
+
+
+def test_binding_same_object_rebind_allowed(harness, deps_ok):
+    """编辑自身携带原绑定：归属检查排除自身，不误报占用。"""
+    binding = dict(SEMANTIC_BINDING)
+    asyncio.run(ontology_service.upsert_object_async("Order", _object_payload(bindings=[dict(binding)])))
+    saved = asyncio.run(
+        ontology_service.upsert_object_async(
+            "Order",
+            _object_payload(display_name="订单A", bindings=[dict(binding)], confirm_destructive=False),
+            allow_overwrite=True,
+        )
+    )
+    assert saved["display_name"] == "订单A"
+    assert saved["bindings"][0]["table_alias"] == "dwd_order"

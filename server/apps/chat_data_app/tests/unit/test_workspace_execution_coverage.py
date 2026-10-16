@@ -1889,7 +1889,7 @@ def test_sandbox_write_text_file(tmp_path, monkeypatch):
 
 def test_sandbox_write_internal_text_files(tmp_path, monkeypatch):
     root, sandbox, session = _session_with_root(tmp_path, monkeypatch)
-    with pytest.raises(ValueError, match="语义模型"):
+    with pytest.raises(ValueError, match="内部系统写入"):
         asyncio.run(
             we_ops.sandbox_write_internal_text_files(
                 session_ref=_ref(session),
@@ -1923,8 +1923,8 @@ def test_sandbox_delete_internal_text_file(tmp_path, monkeypatch):
     sandbox.remote_kinds[stale] = "file"
     sandbox.remote_files[stale] = b"stale"
 
-    # 策略层先拒：内部通道只允许 semantic 下的 YAML
-    with pytest.raises(ValueError, match="内部语义模型写入"):
+    # 策略层先拒：内部通道只允许 semantic/ontology 下的 YAML
+    with pytest.raises(ValueError, match="内部系统写入"):
         asyncio.run(
             we_ops.sandbox_delete_internal_text_file(
                 session_ref=_ref(session),
@@ -2115,11 +2115,11 @@ def test_resolve_sandbox_target_for_batch_is_guarded_upstream():
     """非语义模型路径在 sandbox_visible_path 阶段即被拒绝（1927 是不可达的二次校验）。
 
     ``sandbox_visible_path(..., allow_managed_semantic_model_write=True)`` 已保证只有
-    ``workspace/semantic/*.yaml`` 能通过，故 1926 的
+    ``workspace/semantic|ontology/*.yaml`` 能通过，故 1926 的
     ``_is_managed_semantic_model_sandbox_path`` 判定恒为 True，1927 的 raise 无法从
     公开入口触发。此处锁定上游的真实报错，防止该防御被误删后行为漂移。
     """
-    with pytest.raises(ValueError, match="内部语义模型写入只能覆盖"):
+    with pytest.raises(ValueError, match="内部系统写入"):
         we_ops._resolve_sandbox_target_for_batch(
             None,
             "/mnt/user-data/workspace/notes.txt",

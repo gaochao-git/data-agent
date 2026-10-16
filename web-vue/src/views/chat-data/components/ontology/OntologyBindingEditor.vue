@@ -62,16 +62,38 @@ const loadAllConfigs = async () => {
 const configOf = (configId: string): SemanticConfigItem | undefined => allConfigs.value.find(c => c.id === configId)
 
 // 表别名候选：从配置的指标/维度中提取唯一别名，同时支持手输
+// 手工配置的模型只带 table（物理表名），基础模型才带 table_alias；两者同源回退
 const aliasOptionsOf = (config: SemanticConfigItem | undefined): string[] => {
   if (!config) return []
   const aliases = new Set<string>()
-  ;(config.metrics || []).forEach(m => m.table_alias && aliases.add(m.table_alias))
-  ;(config.dimensions || []).forEach(d => d.table_alias && aliases.add(d.table_alias))
+  ;(config.metrics || []).forEach(m => (m.table_alias || m.table) && aliases.add(m.table_alias || m.table))
+  ;(config.dimensions || []).forEach(d => (d.table_alias || d.table) && aliases.add(d.table_alias || d.table))
   return Array.from(aliases)
 }
 
 const onConfigChange = (row: OntologyBindingItem) => {
   row.table_alias = ''
+  prefillMappings(row)
+}
+
+// 同名预填：属性名与模型维度的物理列同名时自动生成等价映射，不同名的留给用户手填。
+// 映射概念不可省（业务词≠数据词是常态，如 order_no→order_id），这里只消除等价映射的手工成本。
+const prefillMappings = (row: OntologyBindingItem) => {
+  if (!row.semantic_config_id || props.properties.length === 0) return
+  const config = configOf(row.semantic_config_id)
+  if (!config) return
+  const columns = new Set<string>()
+  ;(config.dimensions || []).forEach(d => d.column && columns.add(d.column))
+  const prefilled = { ...row.column_mappings }
+  let added = 0
+  props.properties.forEach(p => {
+    if (!p.property_name || p.property_name in prefilled) return
+    if (columns.has(p.property_name)) {
+      prefilled[p.property_name] = p.property_name
+      added += 1
+    }
+  })
+  if (added > 0) row.column_mappings = prefilled
 }
 
 // ---------- 列映射 ----------

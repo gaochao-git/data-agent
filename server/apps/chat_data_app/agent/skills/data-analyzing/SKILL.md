@@ -36,11 +36,12 @@ assets/dashboard/examples/   看板示例（需求宽泛时按需取一个）
 
 ## 共享前置：语义模型与字段口径
 
-查询与看板依赖同一套语义模型检索与口径确认规则，**唯一依据是 `references/analysis/query.md`「标准流程」的「1. 检索语义模型」与「2. 通过查询门禁」**；本文件与 `references/dashboard/workflow.md` 都不重复定义。
+查询与看板依赖同一套语义模型检索与口径确认规则，**唯一依据是 `references/analysis/query.md`「标准流程」的「2. 读本体语义层」「3. 检索指标语义层」「4. 精读完整语义层」与「5. 通过查询门禁」**；本文件与 `references/dashboard/workflow.md` 都不重复定义。
 
 以下硬约束不因走哪条路径而放宽：
 
-- 当前用户可见（当前数据源组）的启用语义模型 Ossie YAML 已预物化到 `/mnt/user-data/workspace/semantic/`，文件名为 `{模型名}__{id后缀}.yaml`；同目录的 `_semantic_catalog.yaml` 是系统生成的语义资产目录（每个启用模型一条 file/description/business_notes，file 即快照文件名）。先用 `file_read` 整读目录定位候选模型，再用 `file_grep` 按业务关键词在语义目录内定位细节（宽泛词命中过多时先 `output_mode="files_with_matches"` 收敛到文件），只有命中候选才 `file_read` 分页精读。**禁止为找模型逐个读取目录里的 YAML。**
+- **本体层可选增强，缺失不破坏原有路线**：标准链路是「读本体语义层 → grep 指标语义层 → 精读完整语义层 → DSL/SQL」。先探测 `/mnt/user-data/workspace/ontology/_ontology_catalog.yaml`——存在则读它识别业务对象，按对象绑定定位取数模型、按对象关系推导跨模型关联，再精读对应语义模型 YAML 确认口径；**指标语义层必然存在，本体层按对象逐步建设、可能没有**——目录不存在或无相关对象时，直接走原有指标语义层检索路线，不得报错、重试或向用户提及缺失。细则见 `references/analysis/query.md`「2. 读本体语义层」。
+- 当前用户可见（当前数据源组）的启用语义模型 Ossie YAML 已预物化到 `/mnt/user-data/workspace/semantic/`，文件名为 `{模型名}__{id后缀}.yaml`；同目录的 `_semantic_catalog.yaml` 是系统生成的语义资产目录（每个启用模型一条 file/description/business_notes，file 即快照文件名）。检索以 `file_grep` 按业务关键词在语义目录内定位为主（宽泛词命中过多时先 `output_mode="files_with_matches"` 收敛到文件），整读目录是模型很少或关键词难抽象时的辅助手段；只有 grep 命中或本体指向的候选才 `file_read` 分页精读。**禁止为找模型逐个读取目录里的 YAML。**
 - 指标、维度、业务口径不明确时必须澄清，不能凭常识编造，也不能用 SQL 绕过。
 - 当前用户的可用执行对象清单不进系统提示词：涉及查询时先调 `data_analyzing_tool` 的 `list_execution_targets` 实时获取，`member_datasource_ids` 只能从返回清单中选（细则见 `references/analysis/query.md`「1. 获取执行对象清单」）。
 - 一次 `data_analyzing_tool` 调用只使用一个 `semantic_config_id`，不混合多个模型的字段、分组或 JOIN。

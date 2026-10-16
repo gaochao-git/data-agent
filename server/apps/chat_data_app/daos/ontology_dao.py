@@ -1,10 +1,11 @@
-"""本体 DAO：对象/属性/关系三张表的读写与绑定冲突粗筛。
+"""本体 DAO：对象/属性/关系/对象映射四张表的读写。
 
 对象/属性/关系为三等实体（对齐 Palantir Object/Property/Link Type）。删除均为
 软删：对象与关系同名重建走复活复用原行（翻回 delete_flag=0 并更新内容），属性
-按 (object_id, property_name) 复活。绑定双轨存于对象 bindings_json：semantic
-绑语义模型、dataset 绑物理表；「一源一对象」唯一归属检查遵循「禁止数据库原生
-JSON 语法」约束，LIKE 粗筛 + 应用层 JSON 解析精确确认（两步法）。
+按 (object_id, property_name) 复活。语义模型绑定独立存映射表
+chat_data_ontology_object_mapping（对齐 ossie 概念层/映射层分离），随对象
+upsert 同事务硬删+重插全量重写；「一源一对象」由映射表唯一索引约束，
+service 层先查占用对象给友好报错，数据库唯一键兜底。
 """
 
 from __future__ import annotations
@@ -12,9 +13,14 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from sqlalchemy import or_, select, update
+from sqlalchemy import func, or_, select, update
 from utils.logger import get_logger
-from utils.models import ChatDataOntologyObject, ChatDataOntologyProperty, ChatDataOntologyRelation
+from utils.models import (
+    ChatDataOntologyObject,
+    ChatDataOntologyObjectMapping,
+    ChatDataOntologyProperty,
+    ChatDataOntologyRelation,
+)
 
 from .dao_session import session_scope
 
@@ -46,39 +52,18 @@ def _parse_json(value: Any, expect_type: type) -> Any:
     return parsed if isinstance(parsed, expect_type) else expect_type()
 
 
-def _parse_bindings(raw: Any) -> list[dict[str, Any]]:
-    """解析对象绑定 JSON 文本（统一语义模型绑定），非法条目过滤并告警。
-
-    dataset 轨已下线：历史数据若残留 dataset 绑定则过滤并告警，不进入运行时。
-    """
-    bindings = _parse_json(raw, list)
-    result: list[dict[str, Any]] = []
-    for item in bindings:
-        if not isinstance(item, dict):
-            continue
-        binding_type = _text(item.get("binding_type"))
-        if binding_type != _BINDING_TYPE_SEMANTIC:
-            logger.warning("本体绑定 binding_type 非法（仅支持 semantic），已过滤: %s", binding_type)
-            continue
-        result.append({**item, "binding_type": binding_type})
-    return result
-
-
 def _object_row_to_dict(row: ChatDataOntologyObject, *, include_audit: bool = True) -> dict[str, Any]:
     data: dict[str, Any] = {
         "id": int(row.id),
         "object_name": _text(row.object_name),
         "display_name": _text(row.display_name),
-        "plural_display_name": _text(row.plural_display_name),
         "description": _text(row.description),
         "business_notes": _text(row.business_notes),
         "status": _text(row.status),
-        "visibility": _text(row.visibility),
         "domain": _text(row.domain),
         "deprecation_reason": _text(row.deprecation_reason),
         "deprecated_until": _format_datetime(row.deprecated_until),
         "successor_object_name": _text(row.successor_object_name),
-        "bindings": _parse_bindings(row.bindings_json),
         "delete_flag": int(row.delete_flag or 0),
     }
     if include_audit:
@@ -133,16 +118,19 @@ def _relation_row_to_dict(row: ChatDataOntologyRelation) -> dict[str, Any]:
     }
 
 
-def _binding_identity(binding: dict[str, Any]) -> tuple[str, str, str] | None:
-    """提取绑定的唯一归属键：(binding_type, 语义配置ID, 表别名)。"""
-    config_id = _text(binding.get("semantic_config_id"))
-    if not config_id:
-        return None
-    return (_BINDING_TYPE_SEMANTIC, config_id, _text(binding.get("table_alias")))
+def _mapping_row_to_dict(row: ChatDataOntologyObjectMapping) -> dict[str, Any]:
+    """映射行 → 绑定视图（binding_type 固定 semantic，对外 API 形状与旧 bindings 一致）。"""
+    return {
+        "object_id": int(row.object_id),
+        "binding_type": _BINDING_TYPE_SEMANTIC,
+        "semantic_config_id": _text(row.semantic_config_id),
+        "table_alias": _text(row.table_alias),
+        "column_mappings": _parse_json(row.column_mappings_json, dict),
+    }
 
 
 class OntologyDao:
-    """本体三表访问对象。"""
+    """本体对象/属性/关系/映射访问对象。"""
 
     # ---------- 对象 ----------
 
@@ -189,11 +177,12 @@ class OntologyDao:
         update_by: str = "",
         update_by_name: str = "",
     ) -> dict[str, Any] | None:
-        """按 object_name upsert 对象，返回写入后的完整视图。
+        """按 object_name 部分量 upsert 对象（仅状态机等窄写路径使用）。
 
         - 无行（含从未创建）→ 插入新行；
         - 软删行 → 复活复用原行，不算覆盖；
         - 活跃行 → 仅 allow_overwrite=True 时更新内容，否则返回 None。
+        完整编辑（对象+属性+映射原子提交）走 upsert_object_full_async。
         """
         name = _text(object_name)
         async with session_scope() as session:
@@ -218,7 +207,7 @@ class OntologyDao:
                         **payload,
                     )
                 )
-                return self._build_object_view(name, payload)
+                return {"object_name": name, **payload}
             if int(row.delete_flag or 0) == 1:
                 row.delete_flag = 0
             elif not allow_overwrite:
@@ -227,7 +216,98 @@ class OntologyDao:
                 setattr(row, field, value)
             row.update_by = update_by or ""
             row.update_by_name = update_by_name or ""
-        return self._build_object_view(name, payload)
+        return {"object_name": name, **payload}
+
+    async def upsert_object_full_async(
+        self,
+        object_name: str,
+        row_payload: dict[str, Any],
+        properties: list[dict[str, Any]],
+        bindings: list[dict[str, Any]],
+        *,
+        allow_property_delete: bool,
+        create_by: str = "",
+        create_by_name: str = "",
+        update_by: str = "",
+        update_by_name: str = "",
+    ) -> dict[str, Any] | None:
+        """完整编辑对象：对象行 + 属性集 + 映射表单事务原子提交。
+
+        - 无行 → 插入；软删行 → 复活；活跃行 → 覆盖（service 层已完成
+          allow_overwrite 门禁，此处恒覆盖）；
+        - 属性按 property_name 对齐 upsert（allow_property_delete 控制缺失属性软删）；
+        - 映射软删+重插全量重写（软删行 delete_flag 置为行 id，腾出唯一索引槽位；
+          唯一索引含 delete_flag，活跃行仍兜底一源一对象）；
+        - 返回完整视图；理论冲突（并发占用同一绑定）由唯一键 IntegrityError 兜底。
+        """
+        name = _text(object_name)
+        incoming = {str(item.get("property_name") or "").strip(): item for item in properties}
+        async with session_scope() as session:
+            row = (
+                (
+                    await session.execute(
+                        select(ChatDataOntologyObject).where(ChatDataOntologyObject.object_name == name)
+                    )
+                )
+                .scalars()
+                .first()
+            )
+            if row is None:
+                row = ChatDataOntologyObject(
+                    object_name=name,
+                    delete_flag=0,
+                    create_by=create_by or "",
+                    create_by_name=create_by_name or "",
+                    update_by=update_by or "",
+                    update_by_name=update_by_name or "",
+                    **row_payload,
+                )
+                session.add(row)
+            else:
+                row.delete_flag = 0
+                for field, value in row_payload.items():
+                    setattr(row, field, value)
+                row.update_by = update_by or ""
+                row.update_by_name = update_by_name or ""
+            await session.flush()
+            object_id = int(row.id)
+            rows = (
+                (
+                    await session.execute(
+                        select(ChatDataOntologyProperty).where(ChatDataOntologyProperty.object_id == object_id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            rows_by_name = {_text(item.property_name): item for item in rows}
+            self._upsert_property_rows(
+                session, object_id, incoming, rows_by_name, create_by, create_by_name, update_by, update_by_name
+            )
+            if allow_property_delete:
+                self._soft_delete_missing_properties(rows_by_name, incoming, update_by, update_by_name)
+            await session.execute(
+                update(ChatDataOntologyObjectMapping)
+                .where(
+                    ChatDataOntologyObjectMapping.object_id == object_id,
+                    ChatDataOntologyObjectMapping.delete_flag == 0,
+                )
+                .values(delete_flag=ChatDataOntologyObjectMapping.id)
+            )
+            for binding in bindings:
+                session.add(
+                    ChatDataOntologyObjectMapping(
+                        object_id=object_id,
+                        semantic_config_id=_text(binding.get("semantic_config_id")),
+                        table_alias=_text(binding.get("table_alias")),
+                        column_mappings_json=json.dumps(binding.get("column_mappings") or {}, ensure_ascii=False),
+                        create_by=create_by or "",
+                        create_by_name=create_by_name or "",
+                        update_by=update_by or "",
+                        update_by_name=update_by_name or "",
+                    )
+                )
+        return {"object_name": name, **row_payload, "bindings": bindings}
 
     async def soft_delete_object_async(self, object_name: str, update_by: str = "", update_by_name: str = "") -> None:
         name = _text(object_name)
@@ -273,38 +353,176 @@ class OntologyDao:
             )
         return {_text(row) for row in rows}
 
-    async def find_binding_owner_async(
-        self, semantic_config_id: str, table_alias: str, exclude_object_name: str = ""
-    ) -> dict[str, Any] | None:
-        """查找占用指定绑定唯一键的活跃对象（一源一对象检查，两步法）。
+    async def find_mapping_owners_async(
+        self,
+        bindings: list[dict[str, Any]],
+        exclude_object_id: int | None = None,
+    ) -> dict[tuple[str, str], str]:
+        """查绑定键已被其他活跃对象占用的映射（「一源一对象」友好预检，唯一索引兜底）。
 
-        唯一键 = (binding_type, 语义配置ID, 表别名)；先按语义配置 ID LIKE 粗筛
-        bindings_json，再在应用层解析精确确认；exclude_object_name 用于编辑自身时排除。
+        返回 {(semantic_config_id, table_alias): object_name}；exclude_object_id
+        用于编辑自身时排除。
         """
-        subject = _text(semantic_config_id)
-        if not subject:
-            return None
-        identity = (_BINDING_TYPE_SEMANTIC, subject, _text(table_alias))
+        pairs = {
+            (_text(binding.get("semantic_config_id")), _text(binding.get("table_alias")))
+            for binding in bindings
+        } - {("", "")}
+        if not pairs:
+            return {}
+        conditions = [
+            (ChatDataOntologyObjectMapping.semantic_config_id == config_id)
+            & (ChatDataOntologyObjectMapping.table_alias == table_alias)
+            for config_id, table_alias in pairs
+        ]
+        stmt = (
+            select(ChatDataOntologyObjectMapping, ChatDataOntologyObject.object_name)
+            .join(ChatDataOntologyObject, ChatDataOntologyObject.id == ChatDataOntologyObjectMapping.object_id)
+            .where(
+                or_(*conditions),
+                ChatDataOntologyObject.delete_flag == 0,
+                ChatDataOntologyObjectMapping.delete_flag == 0,
+            )
+        )
+        if exclude_object_id is not None:
+            stmt = stmt.where(ChatDataOntologyObjectMapping.object_id != int(exclude_object_id))
+        async with session_scope() as session:
+            rows = (await session.execute(stmt)).all()
+        return {
+            (_text(row.semantic_config_id), _text(row.table_alias)): _text(object_name) for row, object_name in rows
+        }
+
+    async def list_object_mappings_async(self, object_id: int) -> list[dict[str, Any]]:
+        """列出对象的全部活跃映射（绑定视图，按语义配置ID+表别名排序）。"""
+        oid = int(object_id)
         async with session_scope() as session:
             rows = (
                 (
                     await session.execute(
-                        select(ChatDataOntologyObject).where(
-                            ChatDataOntologyObject.bindings_json.like(f"%{subject}%"),
-                            ChatDataOntologyObject.delete_flag == 0,
+                        select(ChatDataOntologyObjectMapping)
+                        .where(
+                            ChatDataOntologyObjectMapping.object_id == oid,
+                            ChatDataOntologyObjectMapping.delete_flag == 0,
+                        )
+                        .order_by(
+                            ChatDataOntologyObjectMapping.semantic_config_id.asc(),
+                            ChatDataOntologyObjectMapping.table_alias.asc(),
                         )
                     )
                 )
                 .scalars()
                 .all()
             )
-        for row in rows:
-            if _text(row.object_name) == _text(exclude_object_name):
-                continue
-            bindings = _parse_bindings(row.bindings_json)
-            if any(_binding_identity(binding) == identity for binding in bindings):
-                return _object_row_to_dict(row, include_audit=False)
-        return None
+        return [_mapping_row_to_dict(row) for row in rows]
+
+    async def count_mappings_by_object_ids_async(self, object_ids: list[int]) -> dict[int, int]:
+        """按对象批量统计活跃映射数（列表页绑定计数）。"""
+        ids = {int(oid) for oid in object_ids if oid}
+        if not ids:
+            return {}
+        async with session_scope() as session:
+            rows = (
+                (
+                    await session.execute(
+                        select(ChatDataOntologyObjectMapping.object_id, func.count())
+                        .where(
+                            ChatDataOntologyObjectMapping.object_id.in_(ids),
+                            ChatDataOntologyObjectMapping.delete_flag == 0,
+                        )
+                        .group_by(ChatDataOntologyObjectMapping.object_id)
+                    )
+                )
+                .all()
+            )
+        return {int(object_id): int(count) for object_id, count in rows}
+
+    async def delete_object_mappings_async(self, object_id: int) -> None:
+        """软删对象全部映射（对象删除时级联；映射无独立生命周期，软删行置 delete_flag=id）。"""
+        async with session_scope() as session:
+            await session.execute(
+                update(ChatDataOntologyObjectMapping)
+                .where(
+                    ChatDataOntologyObjectMapping.object_id == int(object_id),
+                    ChatDataOntologyObjectMapping.delete_flag == 0,
+                )
+                .values(delete_flag=ChatDataOntologyObjectMapping.id)
+            )
+
+    async def load_injection_bundle_async(self, semantic_config_ids: list[str]) -> dict[str, Any]:
+        """按启用语义模型集合一次性装载本体注入数据（消费侧专用，单事务四次查询）。
+
+        返回 {"objects", "properties", "relations", "mappings"}：
+        - 对象：绑定到给定语义模型、活跃、状态 certified/experimental；
+        - 属性：上述对象的全部活跃属性；
+        - 关系：两端对象都在上述集合内的活跃关系（单端在场无法导航，不注入）；
+        - 映射：绑定给定语义模型的活跃映射行（渲染侧按通过过滤的对象归属裁剪）。
+        """
+        empty: dict[str, Any] = {"objects": [], "properties": [], "relations": [], "mappings": []}
+        ids = sorted({_text(item) for item in semantic_config_ids} - {""})
+        if not ids:
+            return empty
+        async with session_scope() as session:
+            mapping_rows = (
+                (
+                    await session.execute(
+                        select(ChatDataOntologyObjectMapping).where(
+                            ChatDataOntologyObjectMapping.semantic_config_id.in_(ids),
+                            ChatDataOntologyObjectMapping.delete_flag == 0,
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            candidate_ids = sorted({int(row.object_id) for row in mapping_rows})
+            if not candidate_ids:
+                return empty
+            object_rows = (
+                (
+                    await session.execute(
+                        select(ChatDataOntologyObject).where(
+                            ChatDataOntologyObject.id.in_(candidate_ids),
+                            ChatDataOntologyObject.delete_flag == 0,
+                            ChatDataOntologyObject.status.in_(("certified", "experimental")),
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            kept_ids = {int(row.id) for row in object_rows}
+            if not kept_ids:
+                return empty
+            property_rows = (
+                (
+                    await session.execute(
+                        select(ChatDataOntologyProperty).where(
+                            ChatDataOntologyProperty.object_id.in_(kept_ids),
+                            ChatDataOntologyProperty.delete_flag == 0,
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            relation_rows = (
+                (
+                    await session.execute(
+                        select(ChatDataOntologyRelation).where(
+                            ChatDataOntologyRelation.delete_flag == 0,
+                            ChatDataOntologyRelation.from_object_id.in_(kept_ids),
+                            ChatDataOntologyRelation.to_object_id.in_(kept_ids),
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        return {
+            "objects": [_object_row_to_dict(row, include_audit=False) for row in object_rows],
+            "properties": [_property_row_to_dict(row) for row in property_rows],
+            "relations": [_relation_row_to_dict(row) for row in relation_rows],
+            "mappings": [_mapping_row_to_dict(row) for row in mapping_rows],
+        }
 
     # ---------- 属性 ----------
 
@@ -562,14 +780,6 @@ class OntologyDao:
             )
 
     # ---------- 视图构造 ----------
-
-    def _build_object_view(self, object_name: str, payload: dict[str, Any]) -> dict[str, Any]:
-        """upsert 返回视图（与行内容字段同源，审计时间由数据库生成不回显）。"""
-        return {
-            "object_name": object_name,
-            **payload,
-            "bindings": _parse_bindings(payload.get("bindings_json")),
-        }
 
     def _build_relation_view(self, relation_name: str, payload: dict[str, Any]) -> dict[str, Any]:
         return {

@@ -1617,7 +1617,7 @@
             "type": "boolean"
           },
           "bindings": {
-            "description": "绑定列表（双轨，可混合）",
+            "description": "语义模型绑定列表（独立存映射表，随对象提交全量重写）",
             "items": {
               "$ref": "#/components/schemas/OntologyBindingItem"
             },

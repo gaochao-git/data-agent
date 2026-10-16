@@ -197,22 +197,23 @@ ALTER TABLE chat_data_skill DROP COLUMN skill_scope;
 ALTER TABLE chat_data_skill DROP COLUMN skill_root_dir;
 ALTER TABLE chat_data_skill_version DROP COLUMN skill_version_dir;
 
--- 本体重建三张表：对象/属性/关系（属性一等实体；口径不落本体，唯一权威在语义层；
--- bindings 内嵌为 JSON 文本，主键=标识属性组合、标题键=标题属性，均由属性表表达）
+-- 本体对象表删除「复数展示名 / 上下文可见性」两列（实验期裁剪，Palantir 对齐字段确认无用；仅 dev 已建表需执行）
+ALTER TABLE chat_data_ontology_object DROP COLUMN plural_display_name;
+ALTER TABLE chat_data_ontology_object DROP COLUMN visibility;
+
+-- 本体重建四张表：对象/属性/关系/对象映射（属性一等实体；口径不落本体，唯一权威在语义层；
+-- 绑定独立成映射表对齐 ossie 概念层/映射层分离，主键=标识属性组合、标题键=标题属性，均由属性表表达）
 CREATE TABLE `chat_data_ontology_object` (
   `id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键ID',
   `object_name` varchar(128) NOT NULL COMMENT '对象API名，仅字母数字下划线，certified 后冻结',
   `display_name` varchar(128) NOT NULL DEFAULT '' COMMENT '展示名',
-  `plural_display_name` varchar(128) NOT NULL DEFAULT '' COMMENT '复数展示名',
   `description` varchar(1024) NOT NULL DEFAULT '' COMMENT '对象描述',
   `business_notes` text COMMENT '业务说明（建模背景、口径边界等，不入 agent 上下文）',
   `status` varchar(16) NOT NULL DEFAULT 'draft' COMMENT '生命周期: draft-草稿, experimental-实验, certified-认证, deprecated-废弃(不可逆)',
-  `visibility` varchar(16) NOT NULL DEFAULT 'normal' COMMENT '上下文可见性: prominent-优先进入, normal-常规, hidden-不进 agent 上下文',
   `domain` varchar(128) NOT NULL DEFAULT '' COMMENT '业务域扁平标签（语义归属，与数据源组采集范围解耦）',
   `deprecation_reason` varchar(512) NOT NULL DEFAULT '' COMMENT '废弃原因，status=deprecated 时有效',
   `deprecated_until` datetime DEFAULT NULL COMMENT '废弃删除期限，status=deprecated 时有效',
   `successor_object_name` varchar(128) NOT NULL DEFAULT '' COMMENT '替代对象API名，status=deprecated 时有效',
-  `bindings_json` text COMMENT '语义模型绑定JSON文本: [{"binding_type":"semantic","semantic_config_id":"...","table_alias":"...","column_mappings":{...}}]（统一语义模型轨，不触碰物理表）',
   `delete_flag` tinyint NOT NULL DEFAULT '0' COMMENT '删除标识: 0-未删除, 1-已删除',
   `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
@@ -275,6 +276,30 @@ CREATE TABLE `chat_data_ontology_relation` (
   KEY `idx_relation_from` (`from_object_id`,`delete_flag`),
   KEY `idx_relation_to` (`to_object_id`,`delete_flag`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='本体关系表';
+
+-- 对象映射表：语义模型绑定独立成表（对齐 ossie 本体文档/映射文档分离）。
+-- 绑定随对象 payload 提交、随对象 upsert 同事务全量重写（软删+重插，无独立生命周期）；
+-- delete_flag 语义特殊：0=活跃，软删时置为行 id——软删行不占唯一索引槽位，同源可重绑；
+-- 「一源一对象」由 uniq_mapping_semantic_source(含 delete_flag) 对活跃行直接约束
+-- （DB 兜底，service 先查给友好报错）
+CREATE TABLE `chat_data_ontology_object_mapping` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `object_id` bigint NOT NULL COMMENT '所属本体对象ID（chat_data_ontology_object.id，逻辑关联无外键）',
+  `semantic_config_id` varchar(128) NOT NULL COMMENT '语义模型配置ID（口径唯一权威在语义层，不触碰物理表）',
+  `table_alias` varchar(128) NOT NULL COMMENT '表别名（语义模型物化快照内的逻辑表标识）',
+  `column_mappings_json` text COMMENT '列映射JSON文本: {属性API名: 物理列名}',
+  `delete_flag` bigint NOT NULL DEFAULT '0' COMMENT '删除标识: 0-活跃, 软删时置为行id（腾出唯一索引槽位）',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `create_by` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人ID',
+  `create_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人名称',
+  `update_by` varchar(100) NOT NULL DEFAULT '' COMMENT '修改人ID',
+  `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '修改人名称',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_mapping_object_source` (`object_id`,`semantic_config_id`,`table_alias`,`delete_flag`),
+  UNIQUE KEY `uniq_mapping_semantic_source` (`semantic_config_id`,`table_alias`,`delete_flag`),
+  KEY `idx_mapping_object` (`object_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='本体对象映射表';
 ```
 
 ## 依赖变更

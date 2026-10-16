@@ -10,7 +10,7 @@ import { deleteAdminOntologyObject, getAdminOntologyObjects } from '../../api'
 import type { OntologyObjectItem, OntologyObjectStatus } from '../../types'
 import OntologyObjectForm from './OntologyObjectForm.vue'
 import OntologyStatusDialog from './OntologyStatusDialog.vue'
-import { ONTOLOGY_STATUS_META, ONTOLOGY_VISIBILITY_META } from './ontologyMeta'
+import { ONTOLOGY_STATUS_META } from './ontologyMeta'
 
 const emit = defineEmits<{ changed: [] }>()
 
@@ -223,7 +223,7 @@ defineExpose({ ensureLoaded, reload })
         </el-table-column>
         <el-table-column label="绑定" width="70" align="center">
           <template #default="{ row }">
-            <span class="text-xs text-slate-500">{{ (row.bindings || []).length }}</span>
+            <span class="text-xs text-slate-500">{{ row.bindings_count ?? (row.bindings || []).length }}</span>
           </template>
         </el-table-column>
         <el-table-column label="描述" min-width="160" show-overflow-tooltip>

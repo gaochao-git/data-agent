@@ -428,13 +428,13 @@ class OntologyObjectUpsertRequest(BaseModel):
     """本体对象创建/编辑请求（object_name 由路径参数携带；状态走独立接口）"""
 
     display_name: str = Field(..., min_length=1, max_length=128, description="展示名")
-    plural_display_name: str = Field(default="", max_length=128, description="复数展示名")
     description: str = Field(default="", max_length=1024, description="对象描述")
     business_notes: str = Field(default="", max_length=10000, description="业务说明（建模背景，不入 agent 上下文）")
-    visibility: Literal["prominent", "normal", "hidden"] = Field(default="normal", description="上下文可见性")
     domain: str = Field(default="", max_length=128, description="业务域扁平标签")
     properties: list[OntologyPropertyItem] = Field(..., min_length=1, description="属性集（整体提交）")
-    bindings: list[OntologyBindingItem] = Field(default_factory=list, description="绑定列表（双轨，可混合）")
+    bindings: list[OntologyBindingItem] = Field(
+        default_factory=list, description="语义模型绑定列表（独立存映射表，随对象提交全量重写）"
+    )
     allow_overwrite: bool = Field(default=False, description="编辑既有活跃对象时为 True")
     confirm_destructive: bool = Field(default=False, description="破坏性变更（绑定/主键/标题键变更）显式确认")
 

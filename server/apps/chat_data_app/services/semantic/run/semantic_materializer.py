@@ -17,6 +17,7 @@ from utils.logger import get_logger
 
 from .chat_data_ossie_converter import ChatDataToOssieConverter
 from .semantic_config_service import SemanticConfigService, get_semantic_config_service
+from ...ontology.ontology_injection import materialize_ontology_catalog_async
 
 logger = get_logger(__name__)
 
@@ -233,6 +234,14 @@ async def prematerialize_enabled_semantic_models(
         loaded_ms,
         (time.perf_counter() - started) * 1000,
     )
+    # 本体目录随语义模型预物化同批落盘（绑定到本轮启用模型的对象+关系子图）；
+    # 尽力而为：开关关闭/无对象/异常都静默跳过，不影响语义物化结果。
+    enabled_ids = enabled_candidate_ids(runtime_configs)
+    ontology_objects = await materialize_ontology_catalog_async(
+        workspace_runtime, enabled_ids, configs=runtime_configs
+    )
+    if ontology_objects:
+        logger.info("本体目录随预物化写入: objects=%s datasource_id=%s", ontology_objects, normalized_datasource_id)
     return {
         "total": len(materialized.get("directory") or []),
         "failed_ids": list(materialized.get("failed_ids") or []),
@@ -298,6 +307,11 @@ def _render_semantic_catalog(configs: list[dict[str, Any]]) -> str:
         )
     payload = {
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "comment": (
+            "若 workspace/ontology/_ontology_catalog.yaml 存在，涉及业务对象识别或"
+            "跨模型关联的题目先读它：对象→语义模型绑定告诉你去哪个模型取数，"
+            "对象间关系（from/to 列）告诉你怎么 join"
+        ),
         "models": models,
     }
     return yaml.safe_dump(payload, allow_unicode=True, sort_keys=False)

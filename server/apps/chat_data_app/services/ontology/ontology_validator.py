@@ -24,7 +24,6 @@ ALLOWED_VALUE_TYPES = (*BUILTIN_VALUE_TYPES, VALUE_TYPE_ENUM)
 
 OBJECT_STATUSES = ("draft", "experimental", "certified", "deprecated")
 ACTIVE_STATUSES = ("draft", "experimental", "certified")
-OBJECT_VISIBILITIES = ("prominent", "normal", "hidden")
 RELATION_MULTIPLICITIES = ("many_to_one", "one_to_one")
 RENDER_HINT_KEYS = ("searchable", "sortable", "low_cardinality")
 
@@ -54,24 +53,16 @@ def validate_object_payload(payload: dict[str, Any]) -> dict[str, Any]:
     display_name = _normalized_text(payload.get("display_name"))
     if not display_name or len(display_name) > 128:
         raise _invalid("对象展示名必填且不超过 128 字符")
-    plural = _normalized_text(payload.get("plural_display_name"))
-    if len(plural) > 128:
-        raise _invalid("复数展示名不超过 128 字符")
     description = _normalized_text(payload.get("description"))
     if len(description) > 1024:
         raise _invalid("对象描述不超过 1024 字符")
-    visibility = _normalized_text(payload.get("visibility")) or "normal"
-    if visibility not in OBJECT_VISIBILITIES:
-        raise _invalid(f"对象可见性必须是 {'/'.join(OBJECT_VISIBILITIES)} 之一")
     domain = _normalized_text(payload.get("domain"))
     if len(domain) > 128:
         raise _invalid("业务域标签不超过 128 字符")
     return {
         "display_name": display_name,
-        "plural_display_name": plural,
         "description": description,
         "business_notes": _normalized_text(payload.get("business_notes")),
-        "visibility": visibility,
         "domain": domain,
     }
 

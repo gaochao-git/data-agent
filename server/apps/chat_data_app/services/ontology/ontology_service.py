@@ -57,14 +57,19 @@ class OntologyService:
     # ---------- 对象查询 ----------
 
     async def list_objects_async(self, keyword: str = "", status: str = "", domain: str = "") -> list[dict[str, Any]]:
-        return await self._dao.list_objects_async(keyword, status, domain)
+        objects = await self._dao.list_objects_async(keyword, status, domain)
+        counts = await self._dao.count_mappings_by_object_ids_async([int(item["id"]) for item in objects])
+        for item in objects:
+            item["bindings_count"] = counts.get(int(item["id"]), 0)
+        return objects
 
     async def get_object_async(self, object_name: str) -> dict[str, Any] | None:
-        """对象详情（含属性集；软删行视为不存在）。"""
+        """对象详情（含属性集与语义模型绑定；软删行视为不存在）。"""
         data = await self._dao.get_object_row_async(object_name)
         if data is None:
             return None
         data["properties"] = await self._dao.list_properties_async(int(data["id"]))
+        data["bindings"] = await self._dao.list_object_mappings_async(int(data["id"]))
         return data
 
     # ---------- 对象创建/编辑 ----------
@@ -78,12 +83,13 @@ class OntologyService:
         operator_name: str = "",
         allow_overwrite: bool = False,
     ) -> dict[str, Any]:
-        """创建或整体编辑对象（元数据 + 属性集 + 绑定一次性提交）。
+        """创建或整体编辑对象（元数据 + 属性集 + 映射表绑定原子提交）。
 
         - 新建：allow_overwrite 可为 False（无行即插入）；
         - 编辑既有活跃对象：allow_overwrite 必须为 True；
         - certified 门禁：主键组合/标题键冻结、既有属性禁删禁改名；
-        - 破坏性变更（绑定变更、主键组合变化）需 payload.confirm_destructive。
+        - 破坏性变更（绑定变更、主键组合变化）需 payload.confirm_destructive；
+        - 「一源一对象」：service 先查占用给友好报错，映射表唯一索引 DB 兜底。
         """
         name = validator.validate_api_name(object_name, "对象API名")
         meta_payload = validator.validate_object_payload(payload)
@@ -91,21 +97,30 @@ class OntologyService:
         property_names = {item["property_name"] for item in properties}
         bindings = validator.validate_bindings(payload.get("bindings"), property_names, name)
         existing = await self._dao.get_object_row_async(name, include_deleted=True)
-        if existing is not None and int(existing.get("delete_flag") or 0) == 0 and not allow_overwrite:
-            raise OntologyStateInvalidError(f"对象已存在: {name}，编辑请携带 allow_overwrite")
-        if existing is not None and _text(existing.get("status")) == "deprecated":
-            raise OntologyStateInvalidError(f"对象已废弃且不可逆，禁止编辑: {name}（如需继续请基于替代对象重建）")
+        allow_property_delete = True
+        saved_status = "draft"
+        exclude_object_id: int | None = None
+        existing_active = existing is not None and int(existing.get("delete_flag") or 0) == 0
+        if existing is not None and existing_active:
+            if not allow_overwrite:
+                raise OntologyStateInvalidError(f"对象已存在: {name}，编辑请携带 allow_overwrite")
+            if _text(existing.get("status")) == "deprecated":
+                raise OntologyStateInvalidError(
+                    f"对象已废弃且不可逆，禁止编辑: {name}（如需继续请基于替代对象重建）"
+                )
+            await self._enforce_edit_guards(existing, properties, bindings, payload)
+            exclude_object_id = int(existing["id"])
+            allow_property_delete = _text(existing.get("status")) != "certified"
+            saved_status = _text(existing.get("status"))
         await self._validate_enum_refs(properties)
         await self._validate_binding_targets(bindings)
-        await self._check_binding_ownership(bindings, name)
-        if existing is not None and int(existing.get("delete_flag") or 0) == 0:
-            await self._enforce_edit_guards(existing, properties, bindings, payload)
-        bindings_json = json.dumps(bindings, ensure_ascii=False)
-        row_payload = {**meta_payload, "bindings_json": bindings_json}
-        saved = await self._dao.upsert_object_async(
+        await self._check_binding_ownership(bindings, exclude_object_id)
+        saved = await self._dao.upsert_object_full_async(
             name,
-            row_payload,
-            allow_overwrite=True,
+            meta_payload,
+            properties,
+            bindings,
+            allow_property_delete=allow_property_delete,
             create_by=operator,
             create_by_name=operator_name,
             update_by=operator,
@@ -113,19 +128,7 @@ class OntologyService:
         )
         if saved is None:
             raise OntologyStateInvalidError(f"对象已存在: {name}")
-        saved_row = await self._dao.get_object_row_async(name)
-        if saved_row is None:
-            raise OntologyNotFoundError(f"对象不存在: {name}")
-        saved["properties"] = await self._dao.replace_properties_async(
-            int(saved_row["id"]),
-            properties,
-            allow_delete=self._allow_property_delete(existing),
-            create_by=operator,
-            create_by_name=operator_name,
-            update_by=operator,
-            update_by_name=operator_name,
-        )
-        saved["status"] = _text(existing.get("status")) if existing else "draft"
+        saved["status"] = saved_status
         return saved
 
     async def _enforce_edit_guards(
@@ -152,7 +155,7 @@ class OntologyService:
                 )
         elif old_identifiers != new_identifiers or old_titles != new_titles:
             self._require_destructive_confirm(payload, "主键组合或标题键变更")
-        old_bindings = existing.get("bindings") or []
+        old_bindings = await self._dao.list_object_mappings_async(int(existing["id"]))
         if json.dumps(_normalize_bindings(old_bindings), ensure_ascii=False) != json.dumps(
             _normalize_bindings(bindings), ensure_ascii=False
         ):
@@ -180,7 +183,7 @@ class OntologyService:
             )
 
     async def delete_object_async(self, object_name: str, operator: str = "", operator_name: str = "") -> None:
-        """删除对象（软删）：certified 拒绝；同时软删其全部属性与参与的关系。"""
+        """删除对象（软删）：certified 拒绝；同时硬删其映射、软删属性与参与的关系。"""
         existing = await self._dao.get_object_row_async(object_name)
         if existing is None:
             raise OntologyNotFoundError(f"对象不存在: {object_name}")
@@ -190,6 +193,7 @@ class OntologyService:
         for relation in relations:
             await self._dao.soft_delete_relation_async(_text(relation.get("relation_name")), operator, operator_name)
         await self._dao.replace_properties_async(int(existing["id"]), [], allow_delete=True)
+        await self._dao.delete_object_mappings_async(int(existing["id"]))
         await self._dao.soft_delete_object_async(object_name, operator, operator_name)
 
     # ---------- 对象状态机 ----------
@@ -430,19 +434,16 @@ class OntologyService:
             if found is None:
                 raise OntologyInvalidError(f"属性 {item['property_name']} 引用的全局枚举不存在: {enum_ref}")
 
-    async def _check_binding_ownership(self, bindings: list[dict[str, Any]], object_name: str) -> None:
-        """「一源一对象」：每个绑定唯一键全局只能归属一个对象（对齐 Palantir backing 约束）。"""
-        for binding in bindings:
-            config_id = _text(binding.get("semantic_config_id"))
-            if not config_id:
-                raise OntologyInvalidError("绑定缺少主体标识（semantic_config_id）")
-            table_alias = _text(binding.get("table_alias"))
-            owner = await self._dao.find_binding_owner_async(config_id, table_alias, exclude_object_name=object_name)
-            if owner is not None:
-                raise OntologyInvalidError(
-                    f"绑定 {config_id}:{table_alias} 已被对象 {owner.get('object_name')} 占用"
-                    "（一个语义模型绑定只能归属一个对象），请先解除原对象绑定"
-                )
+    async def _check_binding_ownership(
+        self, bindings: list[dict[str, Any]], exclude_object_id: int | None
+    ) -> None:
+        """「一源一对象」：每个绑定键全局只能归属一个对象（唯一索引兜底，预检给友好报错）。"""
+        owners = await self._dao.find_mapping_owners_async(bindings, exclude_object_id=exclude_object_id)
+        for (config_id, table_alias), owner_name in sorted(owners.items()):
+            raise OntologyInvalidError(
+                f"绑定 {config_id}:{table_alias} 已被对象 {owner_name} 占用"
+                "（一个语义模型绑定只能归属一个对象），请先解除原对象绑定"
+            )
 
     async def _validate_binding_targets(self, bindings: list[dict[str, Any]]) -> None:
         """绑定的语义模型必须真实存在（存在性校验；与「一源一对象」归属检查互补）。"""

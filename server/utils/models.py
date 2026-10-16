@@ -10,7 +10,6 @@ from sqlalchemy import BigInteger, DateTime, Index, Integer, SmallInteger, Strin
 from sqlalchemy.dialects.mysql import MEDIUMTEXT
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.sql import func
-
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -1103,11 +1102,10 @@ class ChatDataPlugin(Base):
 class ChatDataOntologyObject(Base):
     """本体对象表：对象/属性/关系三等实体之一（属性一等实体见 Property 表）。
 
-    绑定双轨：semantic 路径绑语义模型（semantic_config_id，口径唯一权威在
-    语义层），dataset 路径直接绑物理表（datasource_id + table_name，属性自身
-    元数据即口径，对齐 Palantir backing dataset 原生模式）；同一对象 bindings[]
-    允许混合两种类型。主键=标识属性（is_identifier）组合，标题键=is_title 属性，
-    均由属性表表达，本表不冗余存储。
+    语义模型绑定独立成映射表 chat_data_ontology_object_mapping（对齐 ossie
+    概念层/映射层分离，「一源一对象」由映射表唯一索引约束），本表只存概念层
+    元数据。主键=标识属性（is_identifier）组合，标题键=is_title 属性，均由属性
+    表表达，本表不冗余存储。
     """
 
     __tablename__ = "chat_data_ontology_object"
@@ -1115,17 +1113,13 @@ class ChatDataOntologyObject(Base):
     id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
     object_name: Mapped[str] = mapped_column(String(128), nullable=False)
     display_name: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
-    plural_display_name: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
     description: Mapped[str] = mapped_column(String(1024), nullable=False, default="", server_default="")
     business_notes: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="draft", server_default="draft")
-    visibility: Mapped[str] = mapped_column(String(16), nullable=False, default="normal", server_default="normal")
     domain: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
     deprecation_reason: Mapped[str] = mapped_column(String(512), nullable=False, default="", server_default="")
     deprecated_until: Mapped[datetime | None] = mapped_column(DateTime)
     successor_object_name: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
-    # 绑定 JSON 文本（双轨）: [{"binding_type": "semantic"|"dataset", ...}]
-    bindings_json: Mapped[str | None] = mapped_column(Text)
     delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
     update_time: Mapped[datetime] = mapped_column(
@@ -1217,4 +1211,41 @@ class ChatDataOntologyRelation(Base):
         UniqueConstraint("relation_name", name="uniq_relation_name"),
         Index("idx_relation_from", "from_object_id", "delete_flag"),
         Index("idx_relation_to", "to_object_id", "delete_flag"),
+    )
+
+
+class ChatDataOntologyObjectMapping(Base):
+    """本体对象映射表：语义模型绑定独立成表（对齐 ossie 映射文档）。
+
+    随对象 payload 提交、随对象 upsert 同事务全量重写（软删+重插，无独立生命
+    周期与状态机）。delete_flag 语义特殊：0=活跃，软删时置为行 id——使软删行
+    不再占据唯一索引槽位，同源可重绑到其他对象。uniq_mapping_semantic_source
+    含 delete_flag，仍直接约束「一源一对象」：活跃行中一个 (语义模型, 表) 绑定
+    全局只能归属一个对象；column_mappings 口径同 ossie referent——物化单表内
+    裸列名，不存 SQL 表达式。
+    """
+
+    __tablename__ = "chat_data_ontology_object_mapping"
+
+    id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
+    object_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    semantic_config_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    table_alias: Mapped[str] = mapped_column(String(128), nullable=False)
+    column_mappings_json: Mapped[str | None] = mapped_column(Text)
+    delete_flag: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
+    create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
+    update_time: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+    create_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "object_id", "semantic_config_id", "table_alias", "delete_flag", name="uniq_mapping_object_source"
+        ),
+        UniqueConstraint("semantic_config_id", "table_alias", "delete_flag", name="uniq_mapping_semantic_source"),
+        Index("idx_mapping_object", "object_id"),
     )

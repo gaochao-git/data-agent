@@ -1,8 +1,8 @@
 /**
- * 本体管理共享元数据：状态机、可见性、值类型、基数等展示口径。
+ * 本体管理共享元数据：状态机、值类型、基数等展示口径。
  * 对象/关系面板与表单组件统一引用，避免各处散落魔法字符串。
  */
-import type { OntologyObjectStatus, OntologyVisibility } from '../../types'
+import type { OntologyObjectStatus } from '../../types'
 
 export interface OntologyStatusMeta {
   label: string
@@ -16,12 +16,6 @@ export const ONTOLOGY_STATUS_META: Record<OntologyObjectStatus, OntologyStatusMe
   experimental: { label: '试验', tagType: 'warning', hint: '可试运行验证，尚未认证' },
   certified: { label: '已认证', tagType: 'success', hint: '进入 agent 上下文；主键/标题键冻结' },
   deprecated: { label: '已废弃', tagType: 'danger', hint: '终态不可逆，请使用替代对象' }
-}
-
-export const ONTOLOGY_VISIBILITY_META: Record<OntologyVisibility, { label: string; hint: string }> = {
-  prominent: { label: '突出', hint: '优先进入 agent 上下文' },
-  normal: { label: '常规', hint: '正常进入 agent 上下文' },
-  hidden: { label: '隐藏', hint: '不进入 agent 上下文' }
 }
 
 // 与后端 validator 封闭词表一致
