@@ -302,6 +302,14 @@ CREATE TABLE `chat_data_ontology_object_mapping` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='本体对象映射表';
 ```
 
+## 功能变更
+
+### 本体关系状态手动升级入口（缺口修复，2026-10-16 发现）
+
+现状：关系状态只在创建时按两侧对象状态较低者计算（`ontology_service.py` `_derived_relation_status`），级联只降不升（`_cascade_relation_statuses` 仅在 derived < current 或 deprecated 时写），编辑（PUT upsert）时状态原样保留——面板提示「升级需手动」但**不存在任何手动升级入口**（payload 无 status 字段、无状态迁移端点）。且删除重建无效：DAO 对软删行复活复用（`ontology_dao.py` `upsert_relation_async`），service 侧 `existing is not None` 分支沿用旧状态，同名校验（`include_deleted=True`）也挡不住，旧草稿状态会被带回。
+
+修复方案：新增 `POST /admin/meta/ontology/relations/{relation_name}/status` 迁移端点（与对象状态端点对齐），语义——目标状态只允许 draft/experimental/certified（deprecated 仅随对象级联），且**上限 = 两侧对象状态的较低者**（关系不得高于任一端）；前端关系面板加「状态」操作，复用对象状态弹窗交互。涉及：schema（新请求模型）、ontology_service（迁移校验方法）、ontology_admin 路由、前端 RelationPanel、openapi 快照重生成、单测。
+
 ## 依赖变更
 
 上线前执行：
