@@ -66,7 +66,7 @@ describe('ToolCallDetailPanel', () => {
         },
       },
     })
-    const resultPre = wrapper.findAll('pre')[1]
+    const resultPre = wrapper.findAll('pre')[1]!
     expect(resultPre.text()).toContain('{\n  "type": "query_result",\n  "status": "succeeded",\n  "total_count": 1\n}')
   })
 
@@ -82,7 +82,7 @@ describe('ToolCallDetailPanel', () => {
         },
       },
     })
-    expect(rawText.findAll('pre')[1].text()).toBe('普通文本结果\n第二行')
+    expect(rawText.findAll('pre')[1]!.text()).toBe('普通文本结果\n第二行')
 
     const malformed = mount(ToolCallDetailPanel, {
       props: {
@@ -95,6 +95,6 @@ describe('ToolCallDetailPanel', () => {
         },
       },
     })
-    expect(malformed.findAll('pre')[1].text()).toBe('{"broken": json')
+    expect(malformed.findAll('pre')[1]!.text()).toBe('{"broken": json')
   })
 })

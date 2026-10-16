@@ -14,6 +14,7 @@ from utils.logger import get_logger
 
 from ...daos.meta_global_enum_dao import _split_enum_ref
 from ...daos.ontology_dao import OntologyDao
+from ...daos.semantic_config_dao import SemanticConfigDao
 from ..meta.global_enum_service import MetaGlobalEnumNotFoundError, global_enum_service
 from . import ontology_validator as validator
 from .errors import (
@@ -23,6 +24,9 @@ from .errors import (
 )
 
 logger = get_logger(__name__)
+
+# 绑定存在性校验用（模块级单例，测试经 monkeypatch 打桩，同 global_enum_service 模式）
+semantic_config_dao = SemanticConfigDao()
 
 STATUS_ORDER = {"draft": 0, "experimental": 1, "certified": 2}
 
@@ -92,6 +96,7 @@ class OntologyService:
         if existing is not None and _text(existing.get("status")) == "deprecated":
             raise OntologyStateInvalidError(f"对象已废弃且不可逆，禁止编辑: {name}（如需继续请基于替代对象重建）")
         await self._validate_enum_refs(properties)
+        await self._validate_binding_targets(bindings)
         await self._check_binding_ownership(bindings, name)
         if existing is not None and int(existing.get("delete_flag") or 0) == 0:
             await self._enforce_edit_guards(existing, properties, bindings, payload)
@@ -319,6 +324,7 @@ class OntologyService:
         from_object = await self._resolve_active_object(payload.get("from_object_name"))
         to_object = await self._resolve_active_object(payload.get("to_object_name"))
         self._reject_relations_on_deprecated(from_object, to_object)
+        await self._validate_relation_from_columns(from_object, fields["from_columns"])
         await self._validate_relation_columns(to_object, fields["to_columns"])
         existing = await self._dao.get_relation_row_async(name, include_deleted=True)
         if existing is not None and int(existing.get("delete_flag") or 0) == 0:
@@ -400,6 +406,16 @@ class OntologyService:
                 f"目标侧关联列必须引用对象 {to_object.get('object_name')} 的标识属性，非法列: {', '.join(invalid)}"
             )
 
+    async def _validate_relation_from_columns(self, from_object: dict[str, Any], from_columns: list[str]) -> None:
+        """起始侧关联列必须引用 from 对象已定义的属性（外键侧不要求是标识属性）。"""
+        properties = await self._dao.list_properties_async(int(from_object["id"]))
+        property_names = {item["property_name"] for item in properties}
+        invalid = [column for column in from_columns if column not in property_names]
+        if invalid:
+            raise OntologyInvalidError(
+                f"起始侧关联列必须引用对象 {from_object.get('object_name')} 已定义的属性，非法列: {', '.join(invalid)}"
+            )
+
     async def _validate_enum_refs(self, properties: list[dict[str, Any]]) -> None:
         """value_type=enum 的属性：全局枚举引用必须真实存在（格式非法直接拒绝）。"""
         for item in properties:
@@ -416,18 +432,27 @@ class OntologyService:
 
     async def _check_binding_ownership(self, bindings: list[dict[str, Any]], object_name: str) -> None:
         """「一源一对象」：每个绑定唯一键全局只能归属一个对象（对齐 Palantir backing 约束）。"""
-        from ...daos.ontology_dao import _binding_identity
-
         for binding in bindings:
-            identity = _binding_identity(binding)
-            if identity is None:
+            config_id = _text(binding.get("semantic_config_id"))
+            if not config_id:
                 raise OntologyInvalidError("绑定缺少主体标识（semantic_config_id）")
-            owner = await self._dao.find_binding_owner_async(identity, exclude_object_name=object_name)
+            table_alias = _text(binding.get("table_alias"))
+            owner = await self._dao.find_binding_owner_async(config_id, table_alias, exclude_object_name=object_name)
             if owner is not None:
                 raise OntologyInvalidError(
-                    f"绑定 {identity[1]}:{identity[2]} 已被对象 {owner.get('object_name')} 占用"
+                    f"绑定 {config_id}:{table_alias} 已被对象 {owner.get('object_name')} 占用"
                     "（一个语义模型绑定只能归属一个对象），请先解除原对象绑定"
                 )
+
+    async def _validate_binding_targets(self, bindings: list[dict[str, Any]]) -> None:
+        """绑定的语义模型必须真实存在（存在性校验；与「一源一对象」归属检查互补）。"""
+        config_ids = {_text(binding.get("semantic_config_id")) for binding in bindings} - {""}
+        if not config_ids:
+            return
+        existing_ids = await semantic_config_dao.filter_existing_config_ids_async(sorted(config_ids))
+        missing = sorted(config_ids - existing_ids)
+        if missing:
+            raise OntologyInvalidError(f"绑定的语义模型不存在: {', '.join(missing)}")
 
     async def _attach_object_names(self, relations: list[dict[str, Any]]) -> list[dict[str, Any]]:
         object_map = await self._dao.get_objects_by_ids_async(

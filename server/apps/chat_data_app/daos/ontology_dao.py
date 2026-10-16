@@ -13,7 +13,6 @@ import json
 from typing import Any
 
 from sqlalchemy import or_, select, update
-
 from utils.logger import get_logger
 from utils.models import ChatDataOntologyObject, ChatDataOntologyProperty, ChatDataOntologyRelation
 
@@ -275,16 +274,17 @@ class OntologyDao:
         return {_text(row) for row in rows}
 
     async def find_binding_owner_async(
-        self, identity: tuple[str, str, str], exclude_object_name: str = ""
+        self, semantic_config_id: str, table_alias: str, exclude_object_name: str = ""
     ) -> dict[str, Any] | None:
         """查找占用指定绑定唯一键的活跃对象（一源一对象检查，两步法）。
 
-        先按绑定主体标识 LIKE 粗筛 bindings_json，再在应用层解析精确确认；
-        exclude_object_name 用于编辑自身时排除。
+        唯一键 = (binding_type, 语义配置ID, 表别名)；先按语义配置 ID LIKE 粗筛
+        bindings_json，再在应用层解析精确确认；exclude_object_name 用于编辑自身时排除。
         """
-        _, subject, _ = identity
+        subject = _text(semantic_config_id)
         if not subject:
             return None
+        identity = (_BINDING_TYPE_SEMANTIC, subject, _text(table_alias))
         async with session_scope() as session:
             rows = (
                 (

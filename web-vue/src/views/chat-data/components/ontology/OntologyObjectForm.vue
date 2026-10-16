@@ -107,7 +107,7 @@ const normalizeBindings = (rows: OntologyBindingItem[]) =>
           Object.entries(row.column_mappings || {})
             .map(([k, v]) => [k.trim(), (v || '').trim()])
             .filter(([k]) => k)
-            .sort(([a], [b]) => a.localeCompare(b))
+            .sort(([a], [b]) => (a ?? '').localeCompare(b ?? ''))
         )
       }))
       .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))

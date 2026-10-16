@@ -1532,6 +1532,349 @@
         "title": "MetaGlobalEnumUpsertRequest",
         "type": "object"
       },
+      "OntologyBindingItem": {
+        "description": "本体绑定项（语义模型绑定：口径权威在语义层）",
+        "properties": {
+          "column_mappings": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "列映射: {属性API名: 物理列名}",
+            "title": "Column Mappings",
+            "type": "object"
+          },
+          "semantic_config_id": {
+            "description": "语义模型配置ID",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Semantic Config Id",
+            "type": "string"
+          },
+          "table_alias": {
+            "description": "语义模型表别名",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Table Alias",
+            "type": "string"
+          }
+        },
+        "required": [
+          "semantic_config_id",
+          "table_alias"
+        ],
+        "title": "OntologyBindingItem",
+        "type": "object"
+      },
+      "OntologyObjectStatusRequest": {
+        "description": "本体对象状态迁移请求",
+        "properties": {
+          "deprecated_until": {
+            "default": "",
+            "description": "废弃删除期限（YYYY-MM-DD HH:MM:SS），可选",
+            "maxLength": 19,
+            "title": "Deprecated Until",
+            "type": "string"
+          },
+          "deprecation_reason": {
+            "default": "",
+            "description": "废弃原因，status=deprecated 时必填",
+            "maxLength": 512,
+            "title": "Deprecation Reason",
+            "type": "string"
+          },
+          "status": {
+            "description": "目标状态",
+            "enum": [
+              "draft",
+              "experimental",
+              "certified",
+              "deprecated"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "successor_object_name": {
+            "default": "",
+            "description": "替代对象API名，可选但必须存在",
+            "maxLength": 128,
+            "title": "Successor Object Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "OntologyObjectStatusRequest",
+        "type": "object"
+      },
+      "OntologyObjectUpsertRequest": {
+        "description": "本体对象创建/编辑请求（object_name 由路径参数携带；状态走独立接口）",
+        "properties": {
+          "allow_overwrite": {
+            "default": false,
+            "description": "编辑既有活跃对象时为 True",
+            "title": "Allow Overwrite",
+            "type": "boolean"
+          },
+          "bindings": {
+            "description": "绑定列表（双轨，可混合）",
+            "items": {
+              "$ref": "#/components/schemas/OntologyBindingItem"
+            },
+            "title": "Bindings",
+            "type": "array"
+          },
+          "business_notes": {
+            "default": "",
+            "description": "业务说明（建模背景，不入 agent 上下文）",
+            "maxLength": 10000,
+            "title": "Business Notes",
+            "type": "string"
+          },
+          "confirm_destructive": {
+            "default": false,
+            "description": "破坏性变更（绑定/主键/标题键变更）显式确认",
+            "title": "Confirm Destructive",
+            "type": "boolean"
+          },
+          "description": {
+            "default": "",
+            "description": "对象描述",
+            "maxLength": 1024,
+            "title": "Description",
+            "type": "string"
+          },
+          "display_name": {
+            "description": "展示名",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Display Name",
+            "type": "string"
+          },
+          "domain": {
+            "default": "",
+            "description": "业务域扁平标签",
+            "maxLength": 128,
+            "title": "Domain",
+            "type": "string"
+          },
+          "plural_display_name": {
+            "default": "",
+            "description": "复数展示名",
+            "maxLength": 128,
+            "title": "Plural Display Name",
+            "type": "string"
+          },
+          "properties": {
+            "description": "属性集（整体提交）",
+            "items": {
+              "$ref": "#/components/schemas/OntologyPropertyItem"
+            },
+            "minItems": 1,
+            "title": "Properties",
+            "type": "array"
+          },
+          "visibility": {
+            "default": "normal",
+            "description": "上下文可见性",
+            "enum": [
+              "prominent",
+              "normal",
+              "hidden"
+            ],
+            "title": "Visibility",
+            "type": "string"
+          }
+        },
+        "required": [
+          "display_name",
+          "properties"
+        ],
+        "title": "OntologyObjectUpsertRequest",
+        "type": "object"
+      },
+      "OntologyPropertyItem": {
+        "description": "本体属性项（属性一等实体，随对象表单整体提交）",
+        "properties": {
+          "description": {
+            "default": "",
+            "description": "属性描述",
+            "maxLength": 1024,
+            "title": "Description",
+            "type": "string"
+          },
+          "display_name": {
+            "default": "",
+            "description": "展示名",
+            "maxLength": 128,
+            "title": "Display Name",
+            "type": "string"
+          },
+          "enum_ref": {
+            "default": "",
+            "description": "全局枚举引用，value_type=enum 时必填：\"enum_name\" 或 \"domain:enum_name\"",
+            "maxLength": 260,
+            "title": "Enum Ref",
+            "type": "string"
+          },
+          "is_identifier": {
+            "default": false,
+            "description": "标识属性：参与对象主键组合（业务主键，禁自增行号）",
+            "title": "Is Identifier",
+            "type": "boolean"
+          },
+          "is_title": {
+            "default": false,
+            "description": "标题属性：对象标题键（每对象至多一个）",
+            "title": "Is Title",
+            "type": "boolean"
+          },
+          "property_name": {
+            "description": "属性API名，对象内唯一",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Property Name",
+            "type": "string"
+          },
+          "render_hints": {
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "description": "渲染提示: searchable/sortable/low_cardinality",
+            "title": "Render Hints",
+            "type": "object"
+          },
+          "value_type": {
+            "default": "String",
+            "description": "值类型：内建类型或 enum（引用全局枚举）",
+            "enum": [
+              "String",
+              "Integer",
+              "Decimal",
+              "Boolean",
+              "Date",
+              "DateTime",
+              "enum"
+            ],
+            "title": "Value Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "property_name"
+        ],
+        "title": "OntologyPropertyItem",
+        "type": "object"
+      },
+      "OntologyRelationUpsertRequest": {
+        "description": "本体关系创建/编辑请求（relation_name 由路径参数携带）",
+        "properties": {
+          "allow_overwrite": {
+            "default": false,
+            "description": "编辑既有关系时为 True",
+            "title": "Allow Overwrite",
+            "type": "boolean"
+          },
+          "business_notes": {
+            "default": "",
+            "description": "业务说明",
+            "maxLength": 10000,
+            "title": "Business Notes",
+            "type": "string"
+          },
+          "confirm_destructive": {
+            "default": false,
+            "description": "破坏性变更（连接对象/关联列/基数变更）显式确认",
+            "title": "Confirm Destructive",
+            "type": "boolean"
+          },
+          "description": {
+            "default": "",
+            "description": "关系描述",
+            "maxLength": 1024,
+            "title": "Description",
+            "type": "string"
+          },
+          "from_columns": {
+            "description": "起始侧关联列（属性API名）",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "From Columns",
+            "type": "array"
+          },
+          "from_display_name": {
+            "default": "",
+            "description": "正向方向展示名",
+            "maxLength": 128,
+            "title": "From Display Name",
+            "type": "string"
+          },
+          "from_object_name": {
+            "description": "起始对象API名",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "From Object Name",
+            "type": "string"
+          },
+          "from_verbalize": {
+            "default": "",
+            "description": "正向自然语言模式串，如 \"{from} 归属于 {to}\"",
+            "maxLength": 512,
+            "title": "From Verbalize",
+            "type": "string"
+          },
+          "multiplicity": {
+            "default": "many_to_one",
+            "description": "基数（多对多走 junction 对象表达）",
+            "enum": [
+              "many_to_one",
+              "one_to_one"
+            ],
+            "title": "Multiplicity",
+            "type": "string"
+          },
+          "to_columns": {
+            "description": "目标侧关联列（必须引用对方标识属性）",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "To Columns",
+            "type": "array"
+          },
+          "to_display_name": {
+            "default": "",
+            "description": "反向方向展示名",
+            "maxLength": 128,
+            "title": "To Display Name",
+            "type": "string"
+          },
+          "to_object_name": {
+            "description": "目标对象API名",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "To Object Name",
+            "type": "string"
+          },
+          "to_verbalize": {
+            "default": "",
+            "description": "反向自然语言模式串",
+            "maxLength": 512,
+            "title": "To Verbalize",
+            "type": "string"
+          }
+        },
+        "required": [
+          "from_object_name",
+          "to_object_name",
+          "from_columns",
+          "to_columns"
+        ],
+        "title": "OntologyRelationUpsertRequest",
+        "type": "object"
+      },
       "PanelBatchExecuteRequest": {
         "description": "批量执行面板请求",
         "properties": {
@@ -6337,6 +6680,492 @@
         "summary": "List Meta Global Enum Refs",
         "tags": [
           "ChatData 元数据管理（Admin）"
+        ]
+      }
+    },
+    "/api/chatdata/admin/meta/ontology/objects": {
+      "get": {
+        "description": "本体对象列表（keyword 按名称/展示名/描述模糊过滤；status/domain 精确过滤）。",
+        "operationId": "list_ontology_objects_api_chatdata_admin_meta_ontology_objects_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "keyword",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Keyword"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "domain",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Domain"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "List Ontology Objects",
+        "tags": [
+          "ChatData 本体管理（Admin）"
+        ]
+      }
+    },
+    "/api/chatdata/admin/meta/ontology/objects/{object_name}": {
+      "delete": {
+        "description": "删除本体对象（软删；certified 拒绝，级联软删属性与关系）。",
+        "operationId": "delete_ontology_object_api_chatdata_admin_meta_ontology_objects__object_name__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "object_name",
+            "required": true,
+            "schema": {
+              "title": "Object Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Delete Ontology Object",
+        "tags": [
+          "ChatData 本体管理（Admin）"
+        ]
+      },
+      "get": {
+        "description": "本体对象详情（含属性集与绑定）。",
+        "operationId": "get_ontology_object_api_chatdata_admin_meta_ontology_objects__object_name__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "object_name",
+            "required": true,
+            "schema": {
+              "title": "Object Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Get Ontology Object",
+        "tags": [
+          "ChatData 本体管理（Admin）"
+        ]
+      },
+      "put": {
+        "description": "创建/整体编辑本体对象（元数据 + 属性集 + 绑定一次性提交）。",
+        "operationId": "upsert_ontology_object_api_chatdata_admin_meta_ontology_objects__object_name__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "object_name",
+            "required": true,
+            "schema": {
+              "title": "Object Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OntologyObjectUpsertRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Upsert Ontology Object",
+        "tags": [
+          "ChatData 本体管理（Admin）"
+        ]
+      }
+    },
+    "/api/chatdata/admin/meta/ontology/objects/{object_name}/status": {
+      "post": {
+        "description": "本体对象状态迁移（升级/降级/废弃；关系状态按对象级联，降级自动、升级手动）。",
+        "operationId": "change_ontology_object_status_api_chatdata_admin_meta_ontology_objects__object_name__status_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "object_name",
+            "required": true,
+            "schema": {
+              "title": "Object Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OntologyObjectStatusRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Change Ontology Object Status",
+        "tags": [
+          "ChatData 本体管理（Admin）"
+        ]
+      }
+    },
+    "/api/chatdata/admin/meta/ontology/relations": {
+      "get": {
+        "description": "本体关系列表（keyword 模糊过滤；from_object/to_object 按 API 名过滤）。",
+        "operationId": "list_ontology_relations_api_chatdata_admin_meta_ontology_relations_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "keyword",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Keyword"
+            }
+          },
+          {
+            "in": "query",
+            "name": "from_object",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "From Object"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to_object",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "To Object"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "List Ontology Relations",
+        "tags": [
+          "ChatData 本体管理（Admin）"
+        ]
+      }
+    },
+    "/api/chatdata/admin/meta/ontology/relations/{relation_name}": {
+      "delete": {
+        "description": "删除本体关系（软删）。",
+        "operationId": "delete_ontology_relation_api_chatdata_admin_meta_ontology_relations__relation_name__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "relation_name",
+            "required": true,
+            "schema": {
+              "title": "Relation Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Delete Ontology Relation",
+        "tags": [
+          "ChatData 本体管理（Admin）"
+        ]
+      },
+      "put": {
+        "description": "创建/编辑本体关系（连接对象、关联列、基数变更需破坏性确认）。",
+        "operationId": "upsert_ontology_relation_api_chatdata_admin_meta_ontology_relations__relation_name__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "relation_name",
+            "required": true,
+            "schema": {
+              "title": "Relation Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OntologyRelationUpsertRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Upsert Ontology Relation",
+        "tags": [
+          "ChatData 本体管理（Admin）"
         ]
       }
     },

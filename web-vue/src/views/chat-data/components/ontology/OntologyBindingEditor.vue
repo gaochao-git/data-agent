@@ -191,7 +191,7 @@ defineExpose({ addRow })
               size="small"
               filterable
               class="!w-44 shrink-0 font-mono"
-              @change="newKey => renameMappingKey(row, key, newKey)"
+              @change="(newKey: string) => renameMappingKey(row, key, newKey)"
             >
               <el-option
                 v-for="name in availablePropertyNames(row, key)"

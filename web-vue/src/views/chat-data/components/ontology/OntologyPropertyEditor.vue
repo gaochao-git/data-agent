@@ -118,7 +118,7 @@ defineExpose({ addRow })
         <el-checkbox v-model="row.is_identifier" :disabled="isFrozen(row.property_name)" />
       </div>
       <div class="flex w-14 shrink-0 justify-center">
-        <el-checkbox v-model="row.is_title" :disabled="isFrozen(row.property_name)" @change="checked => onTitleChange(row, checked)" />
+        <el-checkbox v-model="row.is_title" :disabled="isFrozen(row.property_name)" @change="(checked: boolean | string | number) => onTitleChange(row, checked)" />
       </div>
       <div class="flex w-16 shrink-0 justify-center">
         <el-popover placement="bottom" :width="180" trigger="click">
@@ -133,7 +133,7 @@ defineExpose({ addRow })
               v-for="hint in ONTOLOGY_RENDER_HINTS"
               :key="hint.key"
               :model-value="!!row.render_hints[hint.key]"
-              @change="checked => toggleHint(row, hint.key, checked)"
+              @change="(checked: boolean | string | number) => toggleHint(row, hint.key, checked)"
             >
               {{ hint.label }}
             </el-checkbox>

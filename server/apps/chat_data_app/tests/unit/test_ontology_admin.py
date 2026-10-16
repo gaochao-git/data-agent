@@ -29,6 +29,10 @@ def _stub_enum_service(handler):
     return type("StubEnumService", (), {"get_enum_async": staticmethod(handler)})()
 
 
+def _stub_semantic_config_dao(handler):
+    return type("StubSemanticConfigDao", (), {"filter_existing_config_ids_async": staticmethod(handler)})()
+
+
 VALID_PROPERTY = {
     "property_name": "order_id",
     "display_name": "订单ID",
@@ -81,16 +85,23 @@ def harness(monkeypatch):
 
 
 @pytest.fixture()
-def no_enum_error(monkeypatch):
-    """全局枚举存在性放行（枚举引用校验单独用例再收紧）。"""
+def deps_ok(monkeypatch):
+    """外部存在性校验放行（全局枚举 + 绑定的语义模型存在性），专项用例单独收紧。"""
 
     async def fake_get_enum(enum_name, business_domain=""):
         return {"business_domain": business_domain, "enum_name": enum_name}
 
     monkeypatch.setattr(ontology_service_module, "global_enum_service", _stub_enum_service(fake_get_enum))
 
+    async def fake_existing_ids(config_ids):
+        return set(config_ids)
 
-def test_object_create_requires_identifier(harness, no_enum_error):
+    monkeypatch.setattr(
+        ontology_service_module, "semantic_config_dao", _stub_semantic_config_dao(fake_existing_ids)
+    )
+
+
+def test_object_create_requires_identifier(harness, deps_ok):
     with pytest.raises(OntologyInvalidError, match="标识属性"):
         asyncio.run(
             ontology_service.upsert_object_async(
@@ -100,7 +111,7 @@ def test_object_create_requires_identifier(harness, no_enum_error):
         )
 
 
-def test_object_create_rejects_bad_api_name(harness, no_enum_error):
+def test_object_create_rejects_bad_api_name(harness, deps_ok):
     with pytest.raises(OntologyNameInvalidError):
         asyncio.run(
             ontology_service.upsert_object_async(
@@ -110,7 +121,7 @@ def test_object_create_rejects_bad_api_name(harness, no_enum_error):
         )
 
 
-def test_object_create_and_get(harness, no_enum_error):
+def test_object_create_and_get(harness, deps_ok):
     saved = asyncio.run(
         ontology_service.upsert_object_async("Order", _object_payload(visibility="prominent", domain="交易"))
     )
@@ -122,13 +133,13 @@ def test_object_create_and_get(harness, no_enum_error):
     assert detail["properties"][0]["is_identifier"] is True
 
 
-def test_object_create_rejects_duplicate_without_overwrite(harness, no_enum_error):
+def test_object_create_rejects_duplicate_without_overwrite(harness, deps_ok):
     asyncio.run(ontology_service.upsert_object_async("Order", _object_payload()))
     with pytest.raises(OntologyStateInvalidError, match="已存在"):
         asyncio.run(ontology_service.upsert_object_async("Order", _object_payload()))
 
 
-def test_binding_column_mapping_unknown_property_rejected(harness, no_enum_error):
+def test_binding_column_mapping_unknown_property_rejected(harness, deps_ok):
     with pytest.raises(OntologyInvalidError, match="未定义属性"):
         asyncio.run(
             ontology_service.upsert_object_async(
@@ -146,7 +157,7 @@ def test_binding_column_mapping_unknown_property_rejected(harness, no_enum_error
         )
 
 
-def test_binding_ownership_conflict_rejected(harness, no_enum_error):
+def test_binding_ownership_conflict_rejected(harness, deps_ok):
     binding = dict(SEMANTIC_BINDING)
     asyncio.run(ontology_service.upsert_object_async("Order", _object_payload(bindings=[binding])))
     with pytest.raises(OntologyInvalidError, match="已被对象"):
@@ -158,7 +169,7 @@ def test_binding_ownership_conflict_rejected(harness, no_enum_error):
         )
 
 
-def test_binding_change_requires_destructive_confirm(harness, no_enum_error):
+def test_binding_change_requires_destructive_confirm(harness, deps_ok):
     binding = dict(SEMANTIC_BINDING)
     asyncio.run(ontology_service.upsert_object_async("Order", _object_payload(bindings=[dict(binding)])))
     edited_binding = {**binding, "table_alias": "dwd_order_2"}
@@ -178,7 +189,7 @@ def test_binding_change_requires_destructive_confirm(harness, no_enum_error):
     assert saved["bindings"][0]["table_alias"] == "dwd_order_2"
 
 
-def test_certified_requires_binding(harness, no_enum_error):
+def test_certified_requires_binding(harness, deps_ok):
     asyncio.run(ontology_service.upsert_object_async("Order", _object_payload()))
     # 无绑定：拒绝
     with pytest.raises(OntologyInvalidError, match="语义模型绑定"):
@@ -199,7 +210,7 @@ def test_certified_requires_binding(harness, no_enum_error):
         )
 
 
-def test_certified_freeze_blocks_key_and_property_change(harness, no_enum_error):
+def test_certified_freeze_blocks_key_and_property_change(harness, deps_ok):
     binding = dict(SEMANTIC_BINDING)
     asyncio.run(
         ontology_service.upsert_object_async(
@@ -237,7 +248,7 @@ def test_certified_freeze_blocks_key_and_property_change(harness, no_enum_error)
         )
 
 
-def test_status_deprecation_rules_and_finality(harness, no_enum_error):
+def test_status_deprecation_rules_and_finality(harness, deps_ok):
     asyncio.run(ontology_service.upsert_object_async("Order", _object_payload()))
     asyncio.run(ontology_service.upsert_object_async("Payment", _object_payload()))
     with pytest.raises(OntologyStateInvalidError, match="废弃原因"):
@@ -259,7 +270,7 @@ def test_status_deprecation_rules_and_finality(harness, no_enum_error):
         asyncio.run(ontology_service.upsert_object_async("Order", _object_payload(), allow_overwrite=True))
 
 
-def test_relation_column_must_reference_target_identifier(harness, no_enum_error):
+def test_relation_column_must_reference_target_identifier(harness, deps_ok):
     asyncio.run(
         ontology_service.upsert_object_async(
             "Order",
@@ -297,7 +308,7 @@ def test_relation_column_must_reference_target_identifier(harness, no_enum_error
     assert relations[0]["to_object_name"] == "User"
 
 
-def test_relation_multiplicity_closed_vocabulary(harness, no_enum_error):
+def test_relation_multiplicity_closed_vocabulary(harness, deps_ok):
     asyncio.run(ontology_service.upsert_object_async("Order", _object_payload()))
     with pytest.raises(OntologyInvalidError, match="基数"):
         asyncio.run(
@@ -314,7 +325,7 @@ def test_relation_multiplicity_closed_vocabulary(harness, no_enum_error):
         )
 
 
-def test_relation_structural_change_requires_confirm(harness, no_enum_error):
+def test_relation_structural_change_requires_confirm(harness, deps_ok):
     for name, prop in (("Order", dict(VALID_PROPERTY)), ("User", dict(VALID_PROPERTY))):
         asyncio.run(ontology_service.upsert_object_async(name, _object_payload(properties=[prop])))
     asyncio.run(
@@ -356,7 +367,7 @@ def test_relation_structural_change_requires_confirm(harness, no_enum_error):
     )
 
 
-def test_object_downgrade_cascades_relations(harness, no_enum_error):
+def test_object_downgrade_cascades_relations(harness, deps_ok):
     order_binding = dict(SEMANTIC_BINDING)
     user_binding = {
         "semantic_config_id": "cfg-user",
@@ -412,7 +423,7 @@ def test_enum_ref_must_exist(harness, monkeypatch):
         )
 
 
-def test_delete_object_cascades_and_certified_blocked(harness, no_enum_error):
+def test_delete_object_cascades_and_certified_blocked(harness, deps_ok):
     asyncio.run(ontology_service.upsert_object_async("Order", _object_payload()))
     asyncio.run(ontology_service.upsert_object_async("User", _object_payload(properties=[dict(VALID_PROPERTY)])))
     asyncio.run(
@@ -443,3 +454,54 @@ def test_delete_object_cascades_and_certified_blocked(harness, no_enum_error):
     detail = asyncio.run(ontology_service.get_object_async("Order"))
     assert detail["status"] == "draft"
     assert json.dumps(detail["properties"], ensure_ascii=False)
+
+
+def test_binding_semantic_config_must_exist(harness, monkeypatch):
+    """绑定引用的语义模型必须真实存在（存在性校验；归属检查不覆盖悬空 ID）。"""
+
+    async def missing_ids(config_ids):
+        return set()
+
+    monkeypatch.setattr(ontology_service_module, "semantic_config_dao", _stub_semantic_config_dao(missing_ids))
+    with pytest.raises(OntologyInvalidError, match="语义模型不存在"):
+        asyncio.run(
+            ontology_service.upsert_object_async("Order", _object_payload(bindings=[dict(SEMANTIC_BINDING)]))
+        )
+    # 无绑定的对象不受影响
+    asyncio.run(ontology_service.upsert_object_async("Order", _object_payload()))
+
+
+def test_relation_from_columns_must_reference_defined_property(harness, deps_ok):
+    """起始侧关联列必须引用 from 对象已定义的属性（外键侧不要求是标识属性）。"""
+    asyncio.run(
+        ontology_service.upsert_object_async(
+            "Order",
+            _object_payload(properties=[dict(VALID_PROPERTY), {"property_name": "user_name", "value_type": "String"}]),
+        )
+    )
+    asyncio.run(ontology_service.upsert_object_async("User", _object_payload(properties=[dict(VALID_PROPERTY)])))
+    with pytest.raises(OntologyInvalidError, match="已定义的属性"):
+        asyncio.run(
+            ontology_service.upsert_relation_async(
+                "r1",
+                {
+                    "from_object_name": "Order",
+                    "to_object_name": "User",
+                    "from_columns": ["ghost_col"],
+                    "to_columns": ["order_id"],
+                },
+            )
+        )
+    # 引用已定义的非标识属性：放行
+    saved = asyncio.run(
+        ontology_service.upsert_relation_async(
+            "r1",
+            {
+                "from_object_name": "Order",
+                "to_object_name": "User",
+                "from_columns": ["user_name"],
+                "to_columns": ["order_id"],
+            },
+        )
+    )
+    assert saved["relation_name"] == "r1"

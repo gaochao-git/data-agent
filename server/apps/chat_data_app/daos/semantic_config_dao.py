@@ -7,7 +7,6 @@ from typing import Any
 
 from sqlalchemy import Insert, and_, case, func, or_, select, update
 from sqlalchemy.dialects.mysql import insert as mysql_insert
-
 from utils.logger import get_logger
 from utils.models import SemanticConfig
 
@@ -166,6 +165,29 @@ class SemanticConfigDao:
             result = await session.execute(select(SemanticConfig).where(*conditions).limit(1))
             model = result.scalars().first()
         return self._map_row(self._model_to_row(model)) if model else None
+
+    async def filter_existing_config_ids_async(self, config_ids: list[str]) -> set[str]:
+        """按 semantic_config_id 批量过滤出真实存在的活跃配置 ID（软删不算存在）。
+
+        本体绑定存在性校验用：跨数据源组全局查询，不做 public/private 可见性过滤
+        （本体是公司级治理目录，只关心配置是否真实存在）。
+        """
+        ids = {str(config_id).strip() for config_id in config_ids if str(config_id).strip()}
+        if not ids:
+            return set()
+        async with session_scope() as session:
+            rows = (
+                (
+                    await session.execute(
+                        select(SemanticConfig.semantic_config_id).where(
+                            SemanticConfig.semantic_config_id.in_(ids), SemanticConfig.delete_flag == 0
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        return {str(row) for row in rows}
 
     async def upsert_async(self, group_id: str, config: dict[str, Any]) -> bool:
         if not group_id or not ((config or {}).get("id") or (config or {}).get("semantic_config_id")):
