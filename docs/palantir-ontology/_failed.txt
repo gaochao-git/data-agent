@@ -1,0 +1,2 @@
+/docs/foundry/api-reference	no_markdown
+/docs/foundry/announcements/release-notes	no_markdown
