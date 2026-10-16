@@ -283,9 +283,7 @@ def _generation_stats_from_usage(
     if output_tokens <= 0:
         return None
     ended_wall_ms = int(time.time() * 1000)
-    tool_duration_ms = _tool_duration_in_window(
-        (usage or {}).get("breakdown"), stream_started_wall_ms, ended_wall_ms
-    )
+    tool_duration_ms = _tool_duration_in_window((usage or {}).get("breakdown"), stream_started_wall_ms, ended_wall_ms)
     duration_ms = (ended_wall_ms - stream_started_wall_ms) - tool_duration_ms
     if duration_ms <= 0:
         return None
@@ -1920,9 +1918,7 @@ async def _run_chat_data_agent_stream(
                 ),
                 # finish 时把完成时间与生成统计回写最后一条 AIMessage（随 checkpoint
                 # 进入 turn 历史持久化），message_end 的时间戳与统计也取持久化值。
-                resources=TurnResourceOptions(
-                    finalize_stream_kwargs={"persist_latest_ai_timestamp": True}
-                ),
+                resources=TurnResourceOptions(finalize_stream_kwargs={"persist_latest_ai_timestamp": True}),
             ):
                 yield sse_event
 

@@ -67,9 +67,7 @@ async def list_meta_global_enum_domains(request: Request) -> JSONResponse:
 
 
 @router.get("/admin/meta/enums/{enum_name}")
-async def get_meta_global_enum(
-    enum_name: str, request: Request, business_domain: str | None = None
-) -> JSONResponse:
+async def get_meta_global_enum(enum_name: str, request: Request, business_domain: str | None = None) -> JSONResponse:
     """全局枚举详情（按业务域 + 枚举名定位）。"""
     try:
         _get_current_user(request)
@@ -159,9 +157,7 @@ async def upsert_meta_global_enum(
 
 
 @router.delete("/admin/meta/enums/{enum_name}")
-async def delete_meta_global_enum(
-    enum_name: str, request: Request, business_domain: str | None = None
-) -> JSONResponse:
+async def delete_meta_global_enum(enum_name: str, request: Request, business_domain: str | None = None) -> JSONResponse:
     """删除全局枚举（软删）；仍被数据字典引用时拒绝并返回引用位置。"""
     try:
         current_user = _get_current_user(request)

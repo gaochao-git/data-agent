@@ -137,6 +137,6 @@ describe('AsyncQueryResult', () => {
     await Promise.resolve()
 
     expect(writeText).toHaveBeenCalledTimes(1)
-    expect(String(writeText.mock.calls[0][0])).toContain('SELECT')
+    expect(String(writeText.mock.calls[0]?.[0])).toContain('SELECT')
   })
 })

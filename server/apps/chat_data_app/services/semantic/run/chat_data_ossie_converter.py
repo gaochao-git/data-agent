@@ -709,8 +709,7 @@ class ChatDataToOssieConverter:
                     from_columns=from_columns,
                     to_columns=to_columns,
                     custom_extensions=[
-                        extension_type(**x)
-                        for x in (_extension(_relationship_extension_data(item, rel_type)) or [])
+                        extension_type(**x) for x in (_extension(_relationship_extension_data(item, rel_type)) or [])
                     ],
                 )
             )

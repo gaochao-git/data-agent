@@ -131,9 +131,7 @@ class GlobalEnumService:
             raise MetaGlobalEnumNotFoundError(f"全局枚举不存在: {domain}:{name}" if domain else name)
         refs = await self._dao.find_column_dict_refs_async(name, domain)
         if refs:
-            sample = ", ".join(
-                f"{ref['group_id']}/{ref['table_name']}/{ref['column_name']}" for ref in refs[:5]
-            )
+            sample = ", ".join(f"{ref['group_id']}/{ref['table_name']}/{ref['column_name']}" for ref in refs[:5])
             more = f" 等{len(refs)}处" if len(refs) > 5 else ""
             raise MetaGlobalEnumInUseError(f"全局枚举 {name} 仍被引用（{sample}{more}），请先解除引用")
         await self._dao.soft_delete_enum_async(

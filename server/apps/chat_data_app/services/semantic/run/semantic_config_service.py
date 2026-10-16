@@ -116,9 +116,14 @@ async def _collect_enum_dim_dicts(
     datasource_id: str,
     dimensions: list[dict],
     column_dicts: dict[tuple[str, str], dict[str, Any]] | None,
-) -> dict[tuple[str, str], dict[str, Any]]:
-    """收集枚举维度的原始字段字典（批量映射直接取，缺失时逐维度回源）。"""
-    raw: dict[tuple[str, str], dict[str, Any]] = {}
+) -> dict[tuple[str, str], dict[str, Any] | None]:
+    """收集枚举维度的原始字段字典（批量映射直接取，缺失时逐维度回源）。
+
+    值允许 None：column_dicts.get 与逐维度回源都可能查无字典，
+    None 语义由 resolve_column_dicts_async（dict[Any, dict | None] 口径）与
+    下游 column_dict_has_enum_mapping 的空值处理承接。
+    """
+    raw: dict[tuple[str, str], dict[str, Any] | None] = {}
     for dim in dimensions or []:
         if str((dim or {}).get("logical_type") or "").strip().lower() != "enum":
             continue
@@ -147,7 +152,9 @@ async def validate_semantic_logical_types(
     引用态字典（enum_ref 非空、本地枚举值为空）先经 resolve_column_dicts_async
     统一解析全局枚举（单一公共入口），解析后仍无枚举值才判不达标。
     """
-    enum_dims = [dim for dim in dimensions or [] if str((dim or {}).get("logical_type") or "").strip().lower() == "enum"]
+    enum_dims = [
+        dim for dim in dimensions or [] if str((dim or {}).get("logical_type") or "").strip().lower() == "enum"
+    ]
     if not enum_dims:
         return None
     raw_dicts = await _collect_enum_dim_dicts(ds_manager, datasource_id, enum_dims, column_dicts)
@@ -1043,11 +1050,7 @@ def _restore_existing_dimension_order(
         if not order_index or not item.dimensions:
             continue
         fallback = len(order_index)
-        item.dimensions.sort(
-            key=lambda entry: order_index.get(
-                f"{entry.get('table')}.{entry.get('column')}", fallback
-            )
-        )
+        item.dimensions.sort(key=lambda entry: order_index.get(f"{entry.get('table')}.{entry.get('column')}", fallback))
 
 
 def _build_existing_config_index(

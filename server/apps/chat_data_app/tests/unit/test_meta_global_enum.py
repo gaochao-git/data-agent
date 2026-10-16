@@ -11,6 +11,7 @@ import asyncio
 import json
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -179,8 +180,14 @@ def test_upsert_enum_insert_revive_and_overwrite_rules(monkeypatch):
     # 2) 软删行 → 复活复用（不算覆盖，False 也允许）
     row = _enum_row(delete_flag=1)
     _patch_meta_session(monkeypatch, [row])
-    asyncio.run(dao.upsert_enum_async("", "pay_status", "新说明", [{"value": "2", "label": "x"}], allow_overwrite=False))
-    assert row.delete_flag == 0 and row.enum_desc == "新说明" and json.loads(row.enum_json) == [{"value": "2", "label": "x"}]
+    asyncio.run(
+        dao.upsert_enum_async("", "pay_status", "新说明", [{"value": "2", "label": "x"}], allow_overwrite=False)
+    )
+    assert (
+        row.delete_flag == 0
+        and row.enum_desc == "新说明"
+        and json.loads(row.enum_json) == [{"value": "2", "label": "x"}]
+    )
 
     # 3) 活跃行 + 不允许覆盖 → None（service 层拒绝）
     row = _enum_row()
@@ -193,7 +200,9 @@ def test_upsert_enum_insert_revive_and_overwrite_rules(monkeypatch):
     # 4) 活跃行 + 允许覆盖 → 更新
     row = _enum_row()
     _patch_meta_session(monkeypatch, [row])
-    asyncio.run(dao.upsert_enum_async("", "pay_status", "覆盖说明", [{"value": "3", "label": "y"}], allow_overwrite=True))
+    asyncio.run(
+        dao.upsert_enum_async("", "pay_status", "覆盖说明", [{"value": "3", "label": "y"}], allow_overwrite=True)
+    )
     assert row.enum_desc == "覆盖说明" and json.loads(row.enum_json) == [{"value": "3", "label": "y"}]
 
 
@@ -243,10 +252,16 @@ class _FakeDao:
             for item in self.enums
         ):
             return None
-        return {"business_domain": business_domain, "enum_name": enum_name, "enum_desc": enum_desc, "enum_items": enum_items}
+        return {
+            "business_domain": business_domain,
+            "enum_name": enum_name,
+            "enum_desc": enum_desc,
+            "enum_items": enum_items,
+        }
 
 
-def _service(dao: _FakeDao) -> GlobalEnumService:
+def _service(dao: Any) -> GlobalEnumService:
+    """_FakeDao 以鸭子类型满足 DAO 协议（服务端标注为具体类，测试注入走 Any）。"""
     return GlobalEnumService(dao=dao)
 
 
@@ -263,7 +278,9 @@ def test_service_upsert_validation_and_already_exists():
 
     # 新建成功：items 原样透传 DAO（strip 归一是 DAO 层职责），allow_overwrite 透传
     result = asyncio.run(
-        service.upsert_enum_async(" pay_status ", " 支付状态 ", [{"value": " 1 ", "label": "已支付"}], "", allow_overwrite=True)
+        service.upsert_enum_async(
+            " pay_status ", " 支付状态 ", [{"value": " 1 ", "label": "已支付"}], "", allow_overwrite=True
+        )
     )
     assert result["enum_name"] == "pay_status"
     assert dao.upserts[-1]["enum_items"] == [{"value": " 1 ", "label": "已支付"}]
@@ -299,7 +316,9 @@ def test_service_validate_column_dict_write_rules():
     # 二选一：引用态不允许本地枚举值
     with pytest.raises(MetaGlobalEnumInvalidError):
         asyncio.run(
-            service.validate_column_dict_for_write_async({"enum_ref": "pay_status", "enum_values": [{"value": "1", "label": ""}]})
+            service.validate_column_dict_for_write_async(
+                {"enum_ref": "pay_status", "enum_values": [{"value": "1", "label": ""}]}
+            )
         )
     # 引用名非法 / 引用不存在
     with pytest.raises(MetaGlobalEnumNameInvalidError):
@@ -340,7 +359,10 @@ def test_service_resolve_missing_enum_degrades_to_local(monkeypatch):
 
 def test_service_list_injects_ref_count():
     dao = _FakeDao(
-        enums=[{"business_domain": "", "enum_name": "pay_status"}, {"business_domain": "支付业务", "enum_name": "order_type"}],
+        enums=[
+            {"business_domain": "", "enum_name": "pay_status"},
+            {"business_domain": "支付业务", "enum_name": "order_type"},
+        ],
         counts={("", "pay_status"): 3},
     )
     service = _service(dao)
@@ -367,7 +389,8 @@ def test_validate_logical_types_accepts_enum_ref_dimension(monkeypatch):
     from apps.chat_data_app.services.semantic.run.semantic_config_service import validate_semantic_logical_types
 
     _patch_singleton_dao(
-        monkeypatch, enums=[{"business_domain": "", "enum_name": "pay_status", "enum_items": [{"value": "1", "label": "已支付"}]}]
+        monkeypatch,
+        enums=[{"business_domain": "", "enum_name": "pay_status", "enum_items": [{"value": "1", "label": "已支付"}]}],
     )
 
     class _DsManager:

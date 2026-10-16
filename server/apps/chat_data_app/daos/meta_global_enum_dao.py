@@ -79,8 +79,7 @@ class MetaGlobalEnumDao:
             if keyword_text:
                 like = f"%{keyword_text}%"
                 stmt = stmt.where(
-                    (ChatDataMetaGlobalEnum.enum_name.like(like))
-                    | (ChatDataMetaGlobalEnum.enum_desc.like(like))
+                    (ChatDataMetaGlobalEnum.enum_name.like(like)) | (ChatDataMetaGlobalEnum.enum_desc.like(like))
                 )
             stmt = stmt.order_by(ChatDataMetaGlobalEnum.business_domain.asc(), ChatDataMetaGlobalEnum.enum_name.asc())
             rows = (await session.execute(stmt)).scalars().all()
@@ -247,16 +246,13 @@ class MetaGlobalEnumDao:
             return {}
         async with session_scope() as session:
             rows = (
-                (
-                    await session.execute(
-                        select(DatasourceGroup.group_id, DatasourceGroup.group_name).where(
-                            DatasourceGroup.group_id.in_(ids),
-                            DatasourceGroup.delete_flag == 0,
-                        )
+                await session.execute(
+                    select(DatasourceGroup.group_id, DatasourceGroup.group_name).where(
+                        DatasourceGroup.group_id.in_(ids),
+                        DatasourceGroup.delete_flag == 0,
                     )
                 )
-                .all()
-            )
+            ).all()
         return {str(row.group_id): str(row.group_name or "") for row in rows if row.group_name}
 
     async def count_column_dict_refs_batch_async(self, targets: list[tuple[str, str]]) -> dict[tuple[str, str], int]:
