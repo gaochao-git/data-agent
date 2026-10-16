@@ -21,6 +21,8 @@ API_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_]{1,128}$")
 BUILTIN_VALUE_TYPES = ("String", "Integer", "Decimal", "Boolean", "Date", "DateTime")
 VALUE_TYPE_ENUM = "enum"
 ALLOWED_VALUE_TYPES = (*BUILTIN_VALUE_TYPES, VALUE_TYPE_ENUM)
+# 浮点/小数类型不可做主键（对齐 Palantir PK 红线：Float/Double/Decimal 禁用，Date/Timestamp 不建议）
+NON_IDENTIFIER_VALUE_TYPES = ("Decimal",)
 
 OBJECT_STATUSES = ("draft", "experimental", "certified", "deprecated")
 ACTIVE_STATUSES = ("draft", "experimental", "certified")
@@ -103,6 +105,12 @@ def _validate_property_item(raw: Any, seen: set[str]) -> dict[str, Any]:
         raise _invalid(f"属性 {name} 值类型为 enum 时必须提供全局枚举引用 enum_ref")
     if value_type != VALUE_TYPE_ENUM and enum_ref:
         raise _invalid(f"属性 {name} 值类型非 enum 时不能携带 enum_ref")
+    is_identifier = bool(raw.get("is_identifier"))
+    if is_identifier and value_type in NON_IDENTIFIER_VALUE_TYPES:
+        raise _invalid(
+            f"属性 {name} 值类型为 {value_type}，禁止作为标识属性（is_identifier）："
+            "浮点/小数类型不可做主键"
+        )
     return {
         "property_name": name,
         "display_name": _normalized_text(raw.get("display_name")),
@@ -110,7 +118,7 @@ def _validate_property_item(raw: Any, seen: set[str]) -> dict[str, Any]:
         "value_type": value_type,
         "enum_ref": enum_ref,
         "render_hints": _validate_render_hints(name, raw.get("render_hints")),
-        "is_identifier": bool(raw.get("is_identifier")),
+        "is_identifier": is_identifier,
         "is_title": bool(raw.get("is_title")),
     }
 

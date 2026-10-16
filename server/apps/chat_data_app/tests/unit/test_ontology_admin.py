@@ -678,3 +678,86 @@ def test_mapping_same_object_rebind_allowed(harness, deps_ok):
     )
     assert saved["display_name"] == "订单A"
     assert saved["mappings"][0]["semantic_config_id"] == "cfg-1"
+
+
+def test_property_identifier_rejects_decimal(harness, deps_ok):
+    """PK 红线（对齐 Palantir）：浮点/小数类型不可做标识属性，非标识 Decimal 正常放行。"""
+    with pytest.raises(OntologyInvalidError, match="不可做主键"):
+        asyncio.run(
+            ontology_service.upsert_object_async(
+                "Order",
+                _object_payload(
+                    properties=[{**VALID_PROPERTY, "property_name": "amount", "value_type": "Decimal"}]
+                ),
+            )
+        )
+    asyncio.run(
+        ontology_service.upsert_object_async(
+            "Order",
+            _object_payload(
+                properties=[
+                    dict(VALID_PROPERTY),
+                    {
+                        "property_name": "amount",
+                        "display_name": "金额",
+                        "value_type": "Decimal",
+                        "is_identifier": False,
+                    },
+                ]
+            ),
+        )
+    )
+    saved = asyncio.run(ontology_service.get_object_async("Order"))
+    assert {item["property_name"] for item in saved["properties"]} == {"order_id", "amount"}
+
+
+def test_injection_bundle_excludes_non_active_relations(harness, deps_ok):
+    """AI 目录只注入 certified/experimental 关系：draft 手动降级后不进目录（deprecated 随对象级联同验证）。"""
+    from apps.chat_data_app.daos.ontology_dao import OntologyDao
+
+    order_mapping = dict(SEMANTIC_MAPPING)
+    user_mapping = {"semantic_config_id": "cfg-user", "column_mappings": {"order_id": "用户编号"}}
+    asyncio.run(
+        ontology_service.upsert_object_async(
+            "Order", _object_payload(properties=[dict(VALID_PROPERTY)], mappings=[order_mapping])
+        )
+    )
+    asyncio.run(
+        ontology_service.upsert_object_async(
+            "User", _object_payload(properties=[dict(VALID_PROPERTY)], mappings=[user_mapping])
+        )
+    )
+    asyncio.run(ontology_service.set_object_status_async("Order", "certified", {}))
+    asyncio.run(ontology_service.set_object_status_async("User", "certified", {}))
+    asyncio.run(
+        ontology_service.upsert_relation_async(
+            "r1",
+            {
+                "from_object_name": "Order",
+                "to_object_name": "User",
+                "from_columns": ["order_id"],
+                "to_columns": ["order_id"],
+            },
+        )
+    )
+    # certified 关系注入
+    bundle = asyncio.run(OntologyDao().load_injection_bundle_async(["cfg-1", "cfg-user"]))
+    assert [item["relation_name"] for item in bundle["relations"]] == ["r1"]
+    # 手动降级 draft → 不注入（对象仍 certified，排除只可能来自关系状态过滤）
+    asyncio.run(ontology_service.set_relation_status_async("r1", "draft"))
+    bundle = asyncio.run(OntologyDao().load_injection_bundle_async(["cfg-1", "cfg-user"]))
+    assert bundle["relations"] == []
+    # 手动升回 experimental → 恢复注入
+    asyncio.run(ontology_service.set_relation_status_async("r1", "experimental"))
+    bundle = asyncio.run(OntologyDao().load_injection_bundle_async(["cfg-1", "cfg-user"]))
+    assert len(bundle["relations"]) == 1
+    # Order 对象废弃 → 级联 deprecated，对象与关系双双退出目录
+    asyncio.run(
+        ontology_service.set_object_status_async(
+            "Order", "deprecated", {"deprecation_reason": "口径迁移", "successor_object_name": "User"}
+        )
+    )
+    bundle = asyncio.run(OntologyDao().load_injection_bundle_async(["cfg-1", "cfg-user"]))
+    # Order 退出目录；User 仍 certified 合法保留
+    assert [item["object_name"] for item in bundle["objects"]] == ["User"]
+    assert bundle["relations"] == []

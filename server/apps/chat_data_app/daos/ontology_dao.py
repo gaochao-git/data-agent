@@ -437,7 +437,8 @@ class OntologyDao:
         返回 {"objects", "properties", "relations", "mappings"}：
         - 对象：绑定到给定语义模型、活跃、状态 certified/experimental；
         - 属性：上述对象的全部活跃属性；
-        - 关系：两端对象都在上述集合内的活跃关系（单端在场无法导航，不注入）；
+        - 关系：两端对象都在上述集合内、状态 certified/experimental 的关系
+          （单端在场无法导航不注入；draft/deprecated 不进 AI 目录，对齐对象侧口径）；
         - 映射：绑定给定语义模型的活跃映射行（渲染侧按通过过滤的对象归属裁剪）。
         """
         empty: dict[str, Any] = {"objects": [], "properties": [], "relations": [], "mappings": []}
@@ -493,6 +494,7 @@ class OntologyDao:
                     await session.execute(
                         select(ChatDataOntologyRelation).where(
                             ChatDataOntologyRelation.delete_flag == 0,
+                            ChatDataOntologyRelation.status.in_(("certified", "experimental")),
                             ChatDataOntologyRelation.from_object_id.in_(kept_ids),
                             ChatDataOntologyRelation.to_object_id.in_(kept_ids),
                         )
