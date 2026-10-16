@@ -60,7 +60,7 @@ import {
 import { evictWorkspaceFileCache } from '../../utils/workspacePreviewCache'
 import { formatEpochDateTime, IMAGE_PREVIEW_EXTENSIONS, IMAGE_PREVIEW_MIME, OFFICE_HTML_PREVIEW_EXTENSIONS, isBinaryPreviewPath } from '../../utils'
 import { formatToolTableCell, parseChartSpecValue, replaceVisiblePathsForDisplay } from '../../utils/messageArtifacts'
-import { extractWrittenFilePathCandidates } from '../../utils/toolDisplay'
+import { extractChangedFilePathsFromResult, extractWrittenFilePathCandidates } from '../../utils/toolDisplay'
 import { ACCEPTED_FILE_TYPES, MAX_FILE_SIZE } from '../../utils/uploadLimits'
 
 const props = defineProps({
@@ -362,13 +362,17 @@ const isCurrentWorkspaceFilePreviewRequest = (
 // 预览内容缓存按路径命中短路（见 utils/workspacePreviewCache.ts），磁盘上的新内容不会自愈，
 // 必须由「知道文件已变」的一方显式 forceReload；工具 args 里的路径先归一化成与
 // selectedConsoleFilePath 同一口径（剥掉 /mnt/user-data 前缀）再比较。
-// bash_run / officecli_run 的间接写入没有结构化路径，覆盖不到，只能靠手动刷新兜底。
+// bash_run / officecli_run 的间接写入没有结构化 args 路径，从结果 payload 的
+// changed_files（服务端 manifest 前后对比产出）补齐归因。
 const reloadPreviewIfSelected = (toolInfo?: ToolCallInfo | null) => {
   const conversationId = props.conversationId
   const selectedPath = selectedConsoleFilePath.value
   if (!conversationId || !selectedPath) return
   const args = (toolInfo?.args || {}) as Record<string, unknown>
-  const writtenPaths = extractWrittenFilePathCandidates(args).map(normalizeVisiblePath)
+  const writtenPaths = [
+    ...extractWrittenFilePathCandidates(args).map(normalizeVisiblePath),
+    ...extractChangedFilePathsFromResult(toolInfo?.result).map(normalizeVisiblePath),
+  ]
   if (writtenPaths.some(path => path === selectedPath)) {
     void loadWorkspaceFileContent(conversationId, selectedPath, { forceReload: true })
   }

@@ -13,6 +13,7 @@ from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 import pytest
+
 from apps.chat_data_app.daos.meta_global_enum_dao import (
     MetaGlobalEnumDao,
     _split_enum_ref,

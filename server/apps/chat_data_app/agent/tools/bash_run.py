@@ -99,6 +99,9 @@ async def run_bash_command(
         "stderr": stderr,
         "stdout_truncated": stdout_truncated,
         "stderr_truncated": stderr_truncated,
+        # 间接写入变更归因（manifest 前后对比）：created/updated/deleted + truncated。
+        # 让模型与前端都能看到命令实际落盘了哪些文件，不再只靠手动刷新兜底。
+        "changed_files": execution.get("changed_files"),
         "next_required_action": (
             "如果命令生成了 workspace 中间产物，请校验后复制或写入 outputs，并使用 .chart.json / .dashboard.json 等产物后缀。"
             if success

@@ -95,6 +95,58 @@ def _mutable_application_manifest(workspace_root: Path) -> dict[str, tuple[int, 
     return manifest
 
 
+def capture_mutable_manifest(workspace_root: Path | str) -> dict[str, tuple[int, int, str]]:
+    """公开的 manifest 采集入口：命令执行前抓工作区基线，供间接写入归因使用。"""
+    return _mutable_application_manifest(Path(workspace_root))
+
+
+# 间接写入归因的单类清单上限：超出部分丢弃明细只保留 truncated 标记，
+# 防止命令批量生成大量文件时把工具结果撑爆（结果 >32k 会走卸载指针链路）。
+OBSERVED_CHANGES_LIST_LIMIT = 50
+
+
+def _empty_observed_changes() -> dict[str, Any]:
+    """每次返回全新结构：空结果对象若共享底层列表，调用方原地 append 会污染后续结果。"""
+    return {"created": [], "updated": [], "deleted": [], "truncated": False}
+
+
+def diff_mutable_manifests(
+    previous: dict[str, tuple[int, int, str]] | None,
+    current: dict[str, tuple[int, int, str]] | None,
+) -> dict[str, Any]:
+    """对比两次应用侧可变区 manifest，产出可见路径口径的间接写入变更归因。
+
+    返回 ``{"created": [...], "updated": [...], "deleted": [...], "truncated": bool}``，
+    路径为 ``/mnt/user-data/<workspace|outputs>/...`` 可见形式，与工具结果口径一致。
+    previous/current 任一为 None（无基线，如会话尚未初始化 manifest）时诚实返回空结果——
+    无法归因就不编造归因；空 dict 是「空工作区」的合法基线，不是无基线。
+    更新判断基于 (size, mtime_ns, sha256) 三元组整体不等。
+    """
+    if previous is None or current is None:
+        return _empty_observed_changes()
+    created: list[str] = []
+    updated: list[str] = []
+    deleted: list[str] = []
+    for relative, fingerprint in current.items():
+        if relative not in previous:
+            created.append(relative)
+        elif previous[relative] != fingerprint:
+            updated.append(relative)
+    for relative in previous:
+        if relative not in current:
+            deleted.append(relative)
+    truncated = False
+    observed: dict[str, Any] = {}
+    for key, entries in (("created", created), ("updated", updated), ("deleted", deleted)):
+        entries.sort()
+        if len(entries) > OBSERVED_CHANGES_LIST_LIMIT:
+            entries = entries[:OBSERVED_CHANGES_LIST_LIMIT]
+            truncated = True
+        observed[key] = [f"{sandbox_thread_root()}/{relative}" for relative in entries]
+    observed["truncated"] = truncated
+    return observed
+
+
 def _mutable_application_metadata_manifest(workspace_root: Path) -> dict[str, tuple[int, int]]:
     """Return path, size and mtime for cheap cached-session validation."""
     manifest: dict[str, tuple[int, int]] = {}
@@ -428,8 +480,15 @@ def _collect_local_application_paths(application_root: Path) -> tuple[list[Path]
     return local_files, local_directories
 
 
-async def _sync_sandbox_working_trees(session: SandboxExecutionSession) -> None:
-    """Persist the sandbox-owned mutable trees after commands with unknown file effects."""
+async def _sync_sandbox_working_trees(session: SandboxExecutionSession) -> dict[str, Any]:
+    """Persist the sandbox-owned mutable trees after commands with unknown file effects.
+
+    返回本次同步观察到的间接写入变更归因（相对同步前 manifest 的 created/updated/deleted），
+    供命令类工具（bash_run / officecli_run）透传进结果 payload。
+    """
+    # 同步前的基线：application_manifest 在每次持久化完成后刷新（含所有文件工具写入），
+    # 因此命令执行时它恰好反映「命令执行前」的应用侧状态，无需额外预扫描。
+    previous_manifest = session.application_manifest
     remote_set, remote_directory_set = await _collect_sandbox_remote_paths(session)
     application_root = _application_workspace_root(session.workspace_root)
     local_files, local_directories = _collect_local_application_paths(application_root)
@@ -452,11 +511,15 @@ async def _sync_sandbox_working_trees(session: SandboxExecutionSession) -> None:
         sandbox_path = f"{sandbox_thread_root()}/{local_path.relative_to(application_root).as_posix()}"
         if sandbox_path not in remote_directory_set and local_path.exists():
             await asyncio.to_thread(local_path.rmdir)
+    return diff_mutable_manifests(previous_manifest, session.application_manifest)
 
 
-async def sync_sandbox_working_trees(session: SandboxExecutionSession) -> None:
-    """Persist workspace and outputs after one sandbox command has completed."""
-    await _sync_sandbox_working_trees(session)
+async def sync_sandbox_working_trees(session: SandboxExecutionSession) -> dict[str, Any]:
+    """Persist workspace and outputs after one sandbox command has completed.
+
+    返回值：本次命令的间接写入变更归因（见 diff_mutable_manifests）。
+    """
+    return await _sync_sandbox_working_trees(session)
 
 
 async def _recover_pending_persistence(session: SandboxExecutionSession) -> None:

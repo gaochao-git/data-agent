@@ -39,6 +39,10 @@ from apps.chat_data_app.agent.workspace.workspace_search import (
     parse_rg_files_or_counts,
     parse_rg_output,
 )
+from apps.chat_data_app.agent.workspace.workspace_sync import (
+    capture_mutable_manifest,
+    diff_mutable_manifests,
+)
 from apps.chat_data_app.agent.workspace.workspace_text_budget import allocate_file_read_line_budgets
 from utils.logger import get_logger
 from utils.skill_paths import SKILLS_VIRTUAL_ROOT, resolve_skill_snapshot_path
@@ -1108,6 +1112,9 @@ class LocalWorkspaceBackend:
             runtime_skills_dir=runtime.runtime_skills_dir,
         )
         inner = f"cd {shlex.quote(str(local_cwd))} && {path_mapping.translate(command)}"
+        # 间接写入归因：命令副作用不可预知（超时/失败也可能已写入），执行前后各采一次
+        # 工作区 manifest 做对比，成功与超时两条路径都归因。
+        manifest_before = await asyncio.to_thread(capture_mutable_manifest, runtime.workspace_root)
         process = await asyncio.create_subprocess_exec(
             "bash",
             "-o",
@@ -1129,6 +1136,7 @@ class LocalWorkspaceBackend:
                 "stdout": path_mapping.mask(stdout_bytes.decode("utf-8", errors="replace")),
                 "stderr": path_mapping.mask(stderr_bytes.decode("utf-8", errors="replace")),
                 "timed_out": False,
+                "changed_files": await self._observed_changes(runtime, manifest_before),
             }
         except TimeoutError:
             process.kill()
@@ -1141,7 +1149,17 @@ class LocalWorkspaceBackend:
                 "stdout": "",
                 "stderr": "command timed out",
                 "timed_out": True,
+                "changed_files": await self._observed_changes(runtime, manifest_before),
             }
+
+    @staticmethod
+    async def _observed_changes(
+        runtime: ConversationWorkspaceRuntime,
+        manifest_before: dict[str, tuple[int, int, str]],
+    ) -> dict[str, Any]:
+        """命令执行后采集 manifest 并与基线对比，产出间接写入变更归因。"""
+        manifest_after = await asyncio.to_thread(capture_mutable_manifest, runtime.workspace_root)
+        return diff_mutable_manifests(manifest_before, manifest_after)
 
     async def run_officecli(
         self,
@@ -1186,6 +1204,12 @@ class LocalWorkspaceBackend:
         )
         translated_args = translate_command_args(command_spec, visible_cwd, path_mapping.translate)
 
+        # 间接写入归因：与沙箱后端同口径，只对写入类命令计算（成功/超时都归因——
+        # 失败也可能已写入部分产物）；只读命令不产生归因（字段缺省）。
+        attribute_writes = bool(command_spec.mutates or command_spec.write_indices)
+        manifest_before = (
+            await asyncio.to_thread(capture_mutable_manifest, runtime.workspace_root) if attribute_writes else None
+        )
         process = await asyncio.create_subprocess_exec(
             officecli_bin,
             *translated_args,
@@ -1202,7 +1226,7 @@ class LocalWorkspaceBackend:
         )
         try:
             stdout_bytes, stderr_bytes = await asyncio.wait_for(process.communicate(), timeout=timeout_seconds)
-            return {
+            result = {
                 "backend": self.name,
                 "sandbox_id": "",
                 "cwd": to_visible_path(runtime.workspace_root, local_cwd),
@@ -1215,7 +1239,7 @@ class LocalWorkspaceBackend:
         except TimeoutError:
             process.kill()
             await process.wait()
-            return {
+            result = {
                 "backend": self.name,
                 "sandbox_id": "",
                 "cwd": to_visible_path(runtime.workspace_root, local_cwd),
@@ -1225,3 +1249,6 @@ class LocalWorkspaceBackend:
                 "stderr": "officecli 执行超时",
                 "timed_out": True,
             }
+        if manifest_before is not None:
+            result["changed_files"] = await self._observed_changes(runtime, manifest_before)
+        return result

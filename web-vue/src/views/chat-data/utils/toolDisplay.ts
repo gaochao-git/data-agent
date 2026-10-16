@@ -312,8 +312,8 @@ export function getToolTechnicalDescription(
  * 覆盖：文件类工具的 file_path/target_path/destination_path/path、
  * data_analyzing_tool execute_query 的 action_payload.save_as、
  * present_artifacts 的 files[]（字符串数组）。
- * 已知覆盖不到：bash_run / officecli_run 的间接写入（命令文本里没有结构化路径），
- * 这类改动只能靠手动刷新兜底。
+ * 间接写入（bash_run / officecli_run）改走 extractChangedFilePathsFromResult：
+ * 服务端在命令执行后用工作区 manifest 前后对比产出 changed_files，是权威归因来源。
  * 返回值未做可见路径归一化，由调用方按自己的口径（如剥 /mnt/user-data 前缀）再处理。
  */
 export function extractWrittenFilePathCandidates(args: ToolArgs = {}): string[] {
@@ -327,4 +327,30 @@ export function extractWrittenFilePathCandidates(args: ToolArgs = {}): string[] 
   ]
   return candidates
     .filter((value): value is string => typeof value === 'string' && value.trim() !== '')
+}
+
+/**
+ * 从工具结果 payload 中提取命令类工具（bash_run / officecli_run）的间接写入路径。
+ * 服务端 payload 形如 ``[tool_name]\n{"changed_files":{"created":[...],"updated":[...],"deleted":[...]}}``，
+ * 覆盖 ``-o``/重定向等命令文本里没有结构化路径的写入。解析失败或字段缺省返回空数组。
+ * 返回值未做可见路径归一化，由调用方按自己的口径再处理。
+ */
+export function extractChangedFilePathsFromResult(result?: string | null): string[] {
+  if (!result) return []
+  const jsonStart = result.indexOf('\n')
+  if (jsonStart < 0) return []
+  try {
+    const payload = JSON.parse(result.slice(jsonStart + 1)) as {
+      changed_files?: { created?: unknown; updated?: unknown; deleted?: unknown }
+    }
+    const changed = payload?.changed_files
+    if (!changed || typeof changed !== 'object') return []
+    return (['created', 'updated', 'deleted'] as const).flatMap((key) =>
+      Array.isArray(changed[key])
+        ? changed[key].filter((value): value is string => typeof value === 'string' && value.trim() !== '')
+        : [],
+    )
+  } catch {
+    return []
+  }
 }

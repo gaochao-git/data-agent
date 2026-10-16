@@ -311,7 +311,8 @@ class SandboxWorkspaceBackend:
                 timeout_seconds=timeout_seconds,
             )
             try:
-                await sync_sandbox_working_trees(session)
+                # 命令对文件的副作用不可预知（unknown file effects），同步并归因间接写入。
+                changed_files = await sync_sandbox_working_trees(session)
             except Exception as exc:
                 raise ValueError(f"Bash 执行后的工作区同步失败: {exc}") from exc
         return {
@@ -322,6 +323,7 @@ class SandboxWorkspaceBackend:
             "stdout": stdout,
             "stderr": stderr,
             "timed_out": "timeout" in stderr.lower() or "timed out" in stderr.lower(),
+            "changed_files": changed_files,
         }
 
     async def run_officecli(
@@ -362,10 +364,14 @@ class SandboxWorkspaceBackend:
             )
             if exit_code == 0 and (command_spec.mutates or command_spec.write_indices):
                 try:
-                    await sync_sandbox_working_trees(session)
+                    # 写入类 officecli 命令的间接产物同步并归因；只读命令不产生变更。
+                    changed_files = await sync_sandbox_working_trees(session)
                 except Exception as exc:
                     raise ValueError(f"officecli 执行后的工作区同步失败: {exc}") from exc
-        return {
+                changed_files_payload = changed_files
+            else:
+                changed_files_payload = None
+        result = {
             "backend": OPENSANDBOX_BACKEND,
             "sandbox_id": session.sandbox_id,
             "cwd": sandbox_path_to_visible(sandbox_cwd),
@@ -375,3 +381,6 @@ class SandboxWorkspaceBackend:
             "stderr": stderr,
             "timed_out": "timeout" in stderr.lower() or "timed out" in stderr.lower(),
         }
+        if changed_files_payload is not None:
+            result["changed_files"] = changed_files_payload
+        return result

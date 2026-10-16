@@ -126,6 +126,10 @@ async def run_officecli_command(
         "stderr_truncated": stderr_truncated,
         "saved_stdout_to": saved_stdout_to,
         "saved_stdout_error": saved_stdout_error,
+        # 间接写入变更归因（manifest 前后对比）：created/updated/deleted + truncated。
+        # 写入类命令实际落盘的文件以此为准（-o/--out 路径之外的新增产物也在这里）；
+        # 只读命令该字段为 None。让模型与前端都能看到命令实际改动了哪些文件。
+        "changed_files": execution.get("changed_files"),
         "next_required_action": (
             "编辑后执行 officecli validate 与 view 校验；确认无误再继续或调用 present_artifacts。"
             if success

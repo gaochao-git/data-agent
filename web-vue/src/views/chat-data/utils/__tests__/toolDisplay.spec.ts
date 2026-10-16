@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { extractWrittenFilePathCandidates, getDataAnalyzingActionName, getToolCompactDescription, getToolDisplayName, getToolTechnicalDescription, isFileDiffOffloaded, splitFileDiffLines } from '../toolDisplay'
+import { extractChangedFilePathsFromResult, extractWrittenFilePathCandidates, getDataAnalyzingActionName, getToolCompactDescription, getToolDisplayName, getToolTechnicalDescription, isFileDiffOffloaded, splitFileDiffLines } from '../toolDisplay'
 
 describe('toolDisplay', () => {
   it('maps every current ChatData tool to a user-facing name', () => {
@@ -261,5 +261,39 @@ describe('extractWrittenFilePathCandidates', () => {
       action_payload: { save_as: 42 },
     })).toEqual([])
     expect(extractWrittenFilePathCandidates({})).toEqual([])
+  })
+})
+
+describe('extractChangedFilePathsFromResult', () => {
+  it('parses changed_files from bash_run/officecli_run result payload', () => {
+    const result = '[officecli_run]\n' + JSON.stringify({
+      success: true,
+      changed_files: {
+        created: ['/mnt/user-data/workspace/report.pdf'],
+        updated: ['/mnt/user-data/workspace/a.docx'],
+        deleted: [],
+        truncated: false,
+      },
+    })
+    expect(extractChangedFilePathsFromResult(result)).toEqual([
+      '/mnt/user-data/workspace/report.pdf',
+      '/mnt/user-data/workspace/a.docx',
+    ])
+  })
+
+  it('returns empty for read-only commands without changed_files', () => {
+    const result = '[officecli_run]\n' + JSON.stringify({ success: true, changed_files: null })
+    expect(extractChangedFilePathsFromResult(result)).toEqual([])
+  })
+
+  it('skips non-string entries and tolerates malformed payloads', () => {
+    const result = '[bash_run]\n' + JSON.stringify({
+      changed_files: { created: ['/mnt/user-data/outputs/x.csv', 42, ''], updated: null },
+    })
+    expect(extractChangedFilePathsFromResult(result)).toEqual(['/mnt/user-data/outputs/x.csv'])
+    expect(extractChangedFilePathsFromResult('[bash_run]\nnot-json')).toEqual([])
+    expect(extractChangedFilePathsFromResult('no-newline')).toEqual([])
+    expect(extractChangedFilePathsFromResult('')).toEqual([])
+    expect(extractChangedFilePathsFromResult(null)).toEqual([])
   })
 })
