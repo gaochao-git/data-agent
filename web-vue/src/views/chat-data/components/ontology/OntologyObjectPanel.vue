@@ -127,6 +127,15 @@ const objectDomainMap = computed(() => {
   return map
 })
 
+// 对象 API 名 → 展示名（关系的树行/详情卡直接显示两端对象，避免角色短语造成歧义）
+const objectDisplayMap = computed(() => {
+  const map = new Map<string, string>()
+  for (const item of allObjects.value) map.set(item.object_name, item.display_name || item.object_name)
+  return map
+})
+const objectDisplayOf = (objectName: string | undefined) =>
+  (objectName && objectDisplayMap.value.get(objectName)) || objectName || '-'
+
 // 域筛选项已由领域清单接口提供（domains ref），不再从对象行提取
 
 // ---------- 树节点类型：根域 → 领域 → 对象/关系 → 属性/映射 ----------
@@ -721,8 +730,10 @@ const openCtxMenu = (event: MouseEvent, node: TreeRow | null) => {
       { key: 'status-relation', label: '状态迁移', icon: 'fa-arrow-right-arrow-left', handler: () => relationFormRef.value?.openStatus(node.relation) },
       { key: 'delete-relation', label: '删除关系', icon: 'fa-trash', danger: true, handler: () => relationFormRef.value?.remove(node.relation) }
     )
-  } else {
-    // 树空白处：等同于根域层级
+  } else if (!node) {
+    // 树空白处（容器级右键 node=null）：等同于根域层级。
+    // 注意兜底只允许 null——未显式处理的节点类型（属性/映射条目、对象子树的属性/映射分组、
+    // 空态占位）必须落空，否则「新增业务领域」等根域动作会泄漏到叶子节点上。
     menuItems.push({ key: 'create-domain', label: '新增业务领域', icon: 'fa-plus', handler: () => openDomainCreate() })
   }
   // 无菜单项的节点（未归领域虚拟节点、对象子树的属性/映射分组）不弹菜单
@@ -861,7 +872,7 @@ const onRelationSaved = (objectNames: string[]) => {
                 <i
                   :class="[
                     'fa-solid text-[10px]',
-                    data.group === 'objects' ? 'fa-cube text-blue-400' : 'fa-arrows-left-right text-violet-400'
+                    data.group === 'objects' ? 'fa-cube text-blue-400' : 'fa-circle-nodes text-violet-400'
                   ]"
                 ></i>
                 <span class="text-xs text-slate-600">{{ data.label }}</span>
@@ -899,13 +910,13 @@ const onRelationSaved = (objectNames: string[]) => {
                 <el-tag v-if="data.property.is_identifier" size="small" type="warning" effect="plain">标识</el-tag>
                 <el-tag v-if="data.property.is_title" size="small" type="success" effect="plain">标题</el-tag>
               </span>
-              <!-- 关系节点（挂领域下，展示两端对象：关系是对象和对象之间的；API 名不重复展示，点击看右侧详情卡） -->
+              <!-- 关系节点（挂领域下，直接显示两端对象；角色短语/详情在右侧卡片） -->
               <span v-else-if="data.kind === 'relation'" class="flex items-center gap-1.5 py-0.5">
-                <i class="fa-solid fa-arrow-right-arrow-left text-[10px] text-violet-500"></i>
+                <i class="fa-solid fa-circle-nodes text-[10px] text-violet-500"></i>
                 <span class="truncate text-xs text-slate-700" :title="data.relation.relation_name">
-                  {{ data.relation.from_display_name || data.relation.from_object_name || '-' }}
+                  {{ objectDisplayOf(data.relation.from_object_name) }}
                   <i class="fa-solid fa-arrow-right-long mx-0.5 text-[9px] text-slate-300"></i>
-                  {{ data.relation.to_display_name || data.relation.to_object_name || '-' }}
+                  {{ objectDisplayOf(data.relation.to_object_name) }}
                 </span>
                 <el-tag v-if="data.is_cross_domain" size="small" type="warning" effect="plain">跨域</el-tag>
               </span>
@@ -993,7 +1004,7 @@ const onRelationSaved = (objectNames: string[]) => {
 
             <!-- 参与关系 -->
             <div class="mb-1 mt-4 flex items-center gap-2">
-              <i class="fa-solid fa-arrow-right-arrow-left text-[10px] text-violet-500"></i>
+              <i class="fa-solid fa-circle-nodes text-[10px] text-violet-500"></i>
               <span class="text-xs font-medium text-slate-600">参与关系</span>
               <span class="text-xs text-slate-400">
                 {{ selectedObject.entry.fromRelations.length + selectedObject.entry.toRelations.length }} 条
@@ -1070,7 +1081,7 @@ const onRelationSaved = (objectNames: string[]) => {
         <!-- 关系详情卡 -->
         <div v-else-if="selectedNode.kind === 'relation'" class="max-w-xl">
           <div class="mb-3 flex items-center gap-2">
-            <i class="fa-solid fa-arrow-right-arrow-left text-[11px] text-violet-500"></i>
+            <i class="fa-solid fa-circle-nodes text-[11px] text-violet-500"></i>
             <span class="font-mono text-sm font-medium text-slate-800">{{ selectedNode.relation.relation_name }}</span>
             <el-tag
               size="small"
@@ -1081,12 +1092,16 @@ const onRelationSaved = (objectNames: string[]) => {
             </el-tag>
           </div>
           <div class="grid grid-cols-2 gap-x-6 gap-y-1 text-xs text-slate-500">
-            <div>发起方：<span class="text-slate-700">{{ selectedNode.relation.from_display_name || selectedNode.relation.from_object_name || '-' }}</span></div>
-            <div>目标方：<span class="text-slate-700">{{ selectedNode.relation.to_display_name || selectedNode.relation.to_object_name || '-' }}</span></div>
+            <div>发起方：<span class="text-slate-700">{{ objectDisplayOf(selectedNode.relation.from_object_name) }}</span></div>
+            <div>目标方：<span class="text-slate-700">{{ objectDisplayOf(selectedNode.relation.to_object_name) }}</span></div>
             <div>基数：<span class="text-slate-700">{{ ONTOLOGY_MULTIPLICITY_META[selectedNode.relation.multiplicity] || selectedNode.relation.multiplicity }}</span></div>
             <div>状态：<span class="text-slate-700">{{ selectedNode.relation.status }}</span></div>
             <div class="col-span-2">发起列：<span class="font-mono text-slate-700">{{ selectedNode.relation.from_columns.join('、') || '-' }}</span></div>
             <div class="col-span-2">目标列：<span class="font-mono text-slate-700">{{ selectedNode.relation.to_columns.join('、') || '-' }}</span></div>
+            <div class="col-span-2">
+              导航名：<span class="text-slate-700">正向「{{ selectedNode.relation.to_display_name || '-' }}」；反向「{{ selectedNode.relation.from_display_name || '-' }}」</span>
+              <span class="text-[11px] text-slate-300">（图谱边 label 取正向）</span>
+            </div>
             <div class="col-span-2">描述：<span class="text-slate-700">{{ selectedNode.relation.description || '-' }}</span></div>
           </div>
         </div>
