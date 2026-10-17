@@ -147,6 +147,15 @@ const handleCreateConfig = () => {
         <i class="fa-solid fa-plus"></i>
         <span>新建</span>
       </button>
+      <button
+        class="h-8 shrink-0 flex items-center gap-1.5 whitespace-nowrap border border-slate-200 rounded-lg bg-white px-3 text-[12px] text-slate-600 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+        title="导入 Ossie 语义模型 YAML，生成待人工确认的草稿配置"
+        :disabled="!selectedDatasourceId"
+        @click="configPanelRef?.openOssieImport()"
+      >
+        <i class="fa-solid fa-file-import"></i>
+        <span>导入</span>
+      </button>
       <span v-if="loadingSchema" class="text-xs text-slate-400"><i class="fa-solid fa-spinner fa-spin"></i> 表结构加载中</span>
     </AdminPanelToolbar>
     <div class="min-h-0 flex-1 overflow-hidden">

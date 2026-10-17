@@ -233,10 +233,6 @@ const getConfigIndex = (config: SemanticConfigItem) => {
   return configs.value.findIndex(item => item.id === config.id)
 }
 
-const formatConfigOptionLabel = (config: SemanticConfigItem) => {
-  return formatSemanticConfigOptionLabel(config, getConfigIndex(config))
-}
-
 const syncTableScopes = () => {
   const next: Record<string, TableScopeEntry[]> = {}
   configs.value.forEach(config => {
@@ -618,12 +614,6 @@ const applyBatchToggle = async (configIds: string[], enabled: boolean) => {
 // 更新配置（本地）
 const updateConfig = (configId: string, updates: Partial<SemanticConfigItem>) => {
   configs.value = configs.value.map(c => c.id === configId ? { ...c, ...updates } : c)
-}
-
-// 切换展开
-const toggleExpand = (configId: string) => {
-  expandedId.value = configId
-  emit('update:selectedConfigId', configId)
 }
 
 // 监听数据源变化
@@ -2084,115 +2074,22 @@ const saveBusinessNotes = (businessNotes: string) => {
   updateConfig(activeConfig.value.id, { business_notes: businessNotes })
 }
 
-// 宿主顶栏动作入口（批量初始化 / 批量启停 / 新建）
+const openOssieImport = () => {
+  ossieImportVisible.value = true
+}
+
+// 宿主顶栏动作入口（批量初始化 / 批量启停 / 新建 / Ossie 导入）
 defineExpose({
   generateBasicConfigs,
   openBatchToggle,
   createConfig,
+  openOssieImport,
 })
 
 </script>
 
 <template>
   <div class="h-full flex flex-col bg-white">
-    <!-- 头部 -->
-    <div v-if="!embedded" class="h-12 shrink-0 flex items-center gap-4 px-4 border-b border-gray-200 bg-white">
-      <div class="flex items-center gap-3 shrink-0">
-        <button
-          v-if="props.adminMode"
-          class="w-8 h-8 flex items-center justify-center border-none rounded-lg bg-transparent text-gray-500 cursor-pointer transition-all duration-200 hover:bg-gray-100 hover:text-gray-700"
-          title="返回"
-          @click="emit('close')"
-        >
-          <i class="fa-solid fa-arrow-left"></i>
-        </button>
-        <div class="text-sm font-semibold text-gray-800">模型管理</div>
-      </div>
-      <div class="flex min-w-0 flex-1 flex-nowrap items-center gap-3">
-        <span class="shrink-0 whitespace-nowrap text-[13px] font-medium text-slate-700">数据源组</span>
-        <div class="h-8 w-[280px] max-w-[24vw] shrink-0 flex items-center rounded-lg border border-slate-200 bg-slate-50 px-3 text-[13px] text-slate-700 truncate">
-          {{ datasourceName || '暂无数据源' }}
-        </div>
-        <span class="ml-2 shrink-0 whitespace-nowrap text-[13px] font-medium text-slate-700">语义模型</span>
-        <el-select
-          :model-value="activeConfig?.id || ''"
-          class="min-w-0 flex-1"
-          filterable
-          :disabled="loading || configs.length === 0"
-          :title="activeConfig ? formatConfigOptionLabel(activeConfig) : ''"
-          placeholder="请选择语义模型"
-          fit-input-width
-          popper-class="chatdata-semantic-config-select-popper"
-          @change="toggleExpand"
-        >
-          <el-option v-if="loading" value="" label="加载中" />
-          <el-option v-else-if="configs.length === 0" value="" label="暂无语义模型" />
-          <el-option
-            v-for="(config, configIndex) in configs"
-            :key="config.id"
-            :value="config.id"
-            :label="formatSemanticConfigOptionLabel(config, configIndex)"
-            :title="formatSemanticConfigOptionLabel(config, configIndex)"
-          >
-            <div class="flex items-center justify-between gap-3">
-              <span class="min-w-0 truncate">{{ formatSemanticConfigOptionLabel(config, configIndex) }}</span>
-              <span
-                class="shrink-0 rounded border px-1.5 py-px text-[11px] leading-4"
-                :class="config.enabled
-                  ? 'border-emerald-200 bg-emerald-50 text-emerald-600'
-                  : 'border-slate-200 bg-slate-100 text-slate-500'"
-              >{{ config.enabled ? '已启用' : '已禁用' }}</span>
-            </div>
-          </el-option>
-        </el-select>
-        <button
-          v-if="props.adminMode"
-          class="h-8 shrink-0 flex items-center gap-1.5 border border-blue-200 rounded-lg bg-blue-50 px-3 text-[13px] text-blue-600 transition-colors hover:bg-blue-100 disabled:opacity-60 disabled:cursor-not-allowed"
-          title="为尚未建模的物理表初始化基础模型（默认启用）"
-          :disabled="generatingBasicConfigs || props.tables.length === 0"
-          @click="generateBasicConfigs"
-        >
-          <i :class="['fa-solid', generatingBasicConfigs ? 'fa-spinner fa-spin' : 'fa-layer-group']"></i>
-          <span>批量初始化</span>
-        </button>
-        <button
-          class="h-8 shrink-0 flex items-center gap-1.5 border border-gray-200 rounded-lg bg-white px-3 text-[13px] text-gray-600 transition-colors hover:bg-gray-50 disabled:opacity-60 disabled:cursor-not-allowed"
-          title="批量启动选中的语义模型"
-          :disabled="batchToggling || configs.length === 0"
-          @click="openBatchToggle(true)"
-        >
-          <i :class="['fa-solid', 'fa-play']"></i>
-          <span>批量启动</span>
-        </button>
-        <button
-          class="h-8 shrink-0 flex items-center gap-1.5 border border-gray-200 rounded-lg bg-white px-3 text-[13px] text-gray-600 transition-colors hover:bg-gray-50 disabled:opacity-60 disabled:cursor-not-allowed"
-          title="批量暂停选中的语义模型"
-          :disabled="batchToggling || configs.length === 0"
-          @click="openBatchToggle(false)"
-        >
-          <i :class="['fa-solid', 'fa-pause']"></i>
-          <span>批量暂停</span>
-        </button>
-        <button
-          v-if="props.adminMode"
-          class="h-8 shrink-0 flex items-center gap-1.5 border border-gray-200 rounded-lg bg-white px-3 text-[13px] text-gray-600 transition-colors hover:bg-gray-50 disabled:opacity-60 disabled:cursor-not-allowed"
-          title="导入 Ossie 语义模型 YAML，生成待人工确认的草稿配置"
-          @click="ossieImportVisible = true"
-        >
-          <i class="fa-solid fa-file-import"></i>
-          <span>导入</span>
-        </button>
-        <button
-          class="h-8 w-8 shrink-0 flex items-center justify-center border-none rounded-lg bg-blue-500 text-white text-[13px] transition-all duration-150 hover:bg-blue-600 disabled:opacity-60 disabled:cursor-not-allowed"
-          title="新建语义模型"
-          :disabled="creatingConfig"
-          @click="createConfig"
-        >
-          <i :class="['fa-solid', creatingConfig ? 'fa-spinner fa-spin' : 'fa-plus']"></i>
-        </button>
-      </div>
-    </div>
-
     <!-- 加载状态 -->
     <div v-if="loading" class="flex-1 flex items-center justify-center text-gray-400 text-2xl">
       <i class="fa-solid fa-spinner fa-spin"></i>
