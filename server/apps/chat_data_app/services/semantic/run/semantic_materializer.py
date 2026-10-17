@@ -17,7 +17,11 @@ from utils.logger import get_logger
 
 from .chat_data_ossie_converter import ChatDataToOssieConverter
 from .semantic_config_service import SemanticConfigService, get_semantic_config_service
-from ...ontology.ontology_injection import materialize_ontology_catalog_async
+from ...ontology.ontology_injection import (
+    ONTOLOGY_CATALOG_FILE_NAME,
+    ONTOLOGY_SNAPSHOT_DIR,
+    materialize_ontology_catalog_async,
+)
 
 logger = get_logger(__name__)
 
@@ -217,15 +221,33 @@ async def prematerialize_enabled_semantic_models(
     # 每个模型都重新拉一遍数据源全量表结构，模型数上百时退化为 N+1 查库。
     runtime_configs, column_dicts = await service.get_runtime_bundle_async(normalized_datasource_id, str(user_id or ""))
     loaded_ms = (time.perf_counter() - started) * 1000
+    enabled_ids = enabled_candidate_ids(runtime_configs)
+    # 本体目录先物化（同放 semantic/ 目录）：成功即与语义资产目录二选一，
+    # mappings.file 直接给出模型快照文件名，覆盖语义目录的索引职责。
+    # 尽力而为：开关关闭/无对象/异常都静默跳过，不影响语义物化结果。
+    model_files = {_config_id(config): _safe_file_name(config) for config in runtime_configs if _config_id(config)}
+    ontology_objects = await materialize_ontology_catalog_async(
+        workspace_runtime, enabled_ids, configs=runtime_configs, model_files=model_files
+    )
+    if ontology_objects:
+        logger.info(
+            "本体目录随预物化写入（语义资产目录跳过）: objects=%s datasource_id=%s",
+            ontology_objects,
+            normalized_datasource_id,
+        )
     materialized = await materialize_runtime_semantic_models(
         workspace_runtime=workspace_runtime,
         datasource_id=normalized_datasource_id,
         user_id=str(user_id or ""),
         source_type=str(source_type or ""),
-        semantic_config_ids=enabled_candidate_ids(runtime_configs),
+        semantic_config_ids=enabled_ids,
         configs=runtime_configs,
         column_dicts=column_dicts,
         prune_stale=True,
+        include_semantic_catalog=not ontology_objects,
+        keep_extra_paths=(
+            {str(PurePosixPath(ONTOLOGY_SNAPSHOT_DIR) / ONTOLOGY_CATALOG_FILE_NAME)} if ontology_objects else None
+        ),
     )
     logger.info(
         "语义模型预物化耗时: datasource_id=%s configs=%s 加载=%.0fms 总计=%.0fms",
@@ -234,14 +256,6 @@ async def prematerialize_enabled_semantic_models(
         loaded_ms,
         (time.perf_counter() - started) * 1000,
     )
-    # 本体目录随语义模型预物化同批落盘（绑定到本轮启用模型的对象+关系子图）；
-    # 尽力而为：开关关闭/无对象/异常都静默跳过，不影响语义物化结果。
-    enabled_ids = enabled_candidate_ids(runtime_configs)
-    ontology_objects = await materialize_ontology_catalog_async(
-        workspace_runtime, enabled_ids, configs=runtime_configs
-    )
-    if ontology_objects:
-        logger.info("本体目录随预物化写入: objects=%s datasource_id=%s", ontology_objects, normalized_datasource_id)
     return {
         "total": len(materialized.get("directory") or []),
         "failed_ids": list(materialized.get("failed_ids") or []),
@@ -308,9 +322,8 @@ def _render_semantic_catalog(configs: list[dict[str, Any]]) -> str:
     payload = {
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "comment": (
-            "若 workspace/ontology/_ontology_catalog.yaml 存在，涉及业务对象识别或"
-            "跨模型关联的题目先读它：对象→语义模型绑定告诉你去哪个模型取数，"
-            "对象间关系（from/to 列）告诉你怎么 join"
+            "语义资产目录（系统生成，只读）：每个启用模型一条 file/description/business_notes；"
+            "若本目录不存在，说明本体目录 _ontology_catalog.yaml 已接管索引职责（二选一），从它读取"
         ),
         "models": models,
     }
@@ -401,6 +414,8 @@ async def materialize_runtime_semantic_models(
     prune_stale: bool = False,
     configs: list[dict[str, Any]] | None = None,
     column_dicts: dict[tuple[str, str], dict[str, Any]] | None = None,
+    include_semantic_catalog: bool = True,
+    keep_extra_paths: set[str] | None = None,
 ) -> dict[str, Any]:
     """Reload and overwrite only the selected semantic model files.
 
@@ -413,6 +428,9 @@ async def materialize_runtime_semantic_models(
     ``prune_stale`` 仅应在传入“全部启用模型”完整范围时开启（预物化 /
     search_models），会删除目录里不属于本次物化清单的残留 YAML；
     单模型物化（list_fields）禁止开启，否则会误删其它模型文件。
+    ``include_semantic_catalog=False`` 用于本体目录接管索引职责时跳过
+    语义资产目录（二选一，见 materialize_ontology_catalog_async）。
+    ``keep_extra_paths``：prune 时额外保留的系统文件（如本体目录）。
     """
     normalized_ids = _normalize_config_ids(semantic_config_ids)
     if not normalized_ids:
@@ -450,8 +468,10 @@ async def materialize_runtime_semantic_models(
 
     # 语义资产目录只在全量物化时刷新：单模型物化只覆盖部分集合，
     # 拿它重写目录会把目录写成残缺版。渲染失败不阻塞模型快照写盘。
+    # 本体目录接管索引时（include_semantic_catalog=False）不写，
+    # prune 会顺带清掉上一轮可能残留的语义目录文件。
     catalog_path = str(PurePosixPath(SEMANTIC_SNAPSHOT_DIR) / SEMANTIC_CATALOG_FILE_NAME)
-    if prune_stale:
+    if prune_stale and include_semantic_catalog:
         try:
             entries = [*entries, (catalog_path, _render_semantic_catalog(selected_configs))]
         except Exception as exc:  # noqa: BLE001 - 目录属尽力而为，模型快照不受影响
@@ -466,7 +486,9 @@ async def materialize_runtime_semantic_models(
         keep_paths = {
             str(PurePosixPath(SEMANTIC_SNAPSHOT_DIR) / _safe_file_name(config)) for config in selected_configs
         }
-        keep_paths.add(catalog_path)
+        if include_semantic_catalog:
+            keep_paths.add(catalog_path)
+        keep_paths.update(path for path in (keep_extra_paths or {}) if path)
         await _prune_stale_semantic_files(workspace_runtime, keep_paths)
     logger.info(
         "语义模型按需物料化完成: datasource_id=%s files=%s cache_hits=%s backend=%s 渲染=%.0fms 写盘=%.0fms",

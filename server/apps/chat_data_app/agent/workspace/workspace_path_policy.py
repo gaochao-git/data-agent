@@ -33,12 +33,6 @@ class LogicalWorkspacePath:
         )
 
     @property
-    def is_ontology_catalog(self) -> bool:
-        return self.kind == "workspace" and (
-            self.relative_path == "ontology" or self.relative_path.startswith("ontology/")
-        )
-
-    @property
     def is_tool_offload(self) -> bool:
         return self.kind == "outputs" and (
             self.relative_path == TOOL_OFFLOAD_DIR_NAME or self.relative_path.startswith(f"{TOOL_OFFLOAD_DIR_NAME}/")
@@ -128,11 +122,11 @@ class WorkspacePathPolicy:
         if logical_path.is_semantic_model and not allow_managed_semantic_model_write:
             raise ValueError("/mnt/user-data/workspace/semantic/ 是本轮语义模型只读快照，不能修改")
         if allow_managed_semantic_model_write and (
-            not logical_path.is_semantic_model and not logical_path.is_ontology_catalog
+            not logical_path.is_semantic_model
             or not logical_path.relative_path.lower().endswith(".yaml")
         ):
             raise ValueError(
-                "内部系统写入只允许 /mnt/user-data/workspace/semantic/ 或 ontology/ 下的 YAML 文件"
+                "内部系统写入只允许 /mnt/user-data/workspace/semantic/ 下的 YAML 文件"
             )
 
     def to_sandbox_path(self, logical_path: LogicalWorkspacePath) -> str:

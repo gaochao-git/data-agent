@@ -2,8 +2,10 @@
 
 消费链路（对齐语义层预物化的形状）：run 启动前语义模型预物化的同一步，把
 certified/experimental、绑定到本轮启用语义模型的对象
-连同属性摘要与关系子图，物化成 `workspace/ontology/_ontology_catalog.yaml`
-只读目录；提示词只声明「存在时先读」，实体识别与关系导航由模型运行时完成。
+连同属性摘要与关系子图，物化成 `workspace/semantic/_ontology_catalog.yaml`
+只读目录。目录二选一：本体目录物化成功时语义资产目录（_semantic_catalog.yaml）
+不写——本体目录的 mappings.file 直接给出模型快照文件名，覆盖语义目录的索引职责。
+提示词只声明「存在时先读」，实体识别与关系导航由模型运行时完成。
 目录为尽力而为：任何异常只告警，不阻塞语义模型物化与会话启动。
 
 开关 `CHAT_DATA_ONTOLOGY_INJECTION_ENABLED` 默认关闭（实验分支验证期开启）。
@@ -22,8 +24,11 @@ from ...daos.ontology_dao import OntologyDao
 
 logger = get_logger(__name__)
 
-ONTOLOGY_SNAPSHOT_DIR = "/mnt/user-data/workspace/ontology"
+# 本体目录与语义资产同放 workspace/semantic/（不再单开 ontology/ 目录）
+ONTOLOGY_SNAPSHOT_DIR = "/mnt/user-data/workspace/semantic"
 ONTOLOGY_CATALOG_FILE_NAME = "_ontology_catalog.yaml"
+# 旧版独立目录残留（历史会话 workspace 里可能存在），物化新目录时顺手清理
+ONTOLOGY_LEGACY_CATALOG_PATH = "/mnt/user-data/workspace/ontology/_ontology_catalog.yaml"
 
 _TRUTHY = {"1", "true", "yes", "on"}
 
@@ -80,9 +85,15 @@ def _render_object_entry(
     mappings_by_object: dict[int, list[dict[str, Any]]],
     config_names: dict[str, str],
     domain_names: dict[int, str] | None = None,
+    model_files: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """单个对象 → 目录条目（属性摘要 + 语义模型映射列表；domain=领域名，未分域为空）。"""
+    """单个对象 → 目录条目（属性摘要 + 语义模型映射列表；domain=领域名，未分域为空）。
+
+    mappings.file = 该模型在工作区 semantic/ 下的快照文件名：本体目录与语义资产目录
+    二选一物化后，模型凭它直接 file_read 取数模型，不再依赖 _semantic_catalog.yaml。
+    """
     domain_names = domain_names or {}
+    model_files = model_files or {}
     object_id = int(obj.get("id") or 0)
     properties = [
         {
@@ -101,6 +112,7 @@ def _render_object_entry(
         {
             "semantic_config_id": str(mapping.get("semantic_config_id") or ""),
             "semantic_config_name": config_names.get(str(mapping.get("semantic_config_id") or ""), ""),
+            "file": model_files.get(str(mapping.get("semantic_config_id") or ""), ""),
             "column_mappings": mapping.get("column_mappings") or {},
         }
         for mapping in sorted(
@@ -177,15 +189,22 @@ def _render_catalog(
     config_names: dict[str, str],
     dimension_columns: dict[str, dict[str, str]] | None = None,
     domain_names: dict[int, str] | None = None,
+    model_files: dict[str, str] | None = None,
 ) -> str:
     """渲染本体目录 YAML（对象 → 属性摘要/语义模型映射/关系邻接，给模型检索用）。"""
     properties_by_object = _group_by_object_id(bundle.get("properties"))
     mappings_by_object = _group_by_object_id(bundle.get("mappings"))
     object_names = {int(obj.get("id") or 0): str(obj.get("object_name") or "") for obj in bundle.get("objects") or []}
     payload = {
-        "comment": "本体目录（系统生成，只读）：业务对象 → 属性/语义模型映射/对象间关系；跨模型关联先查此目录",
+        "comment": (
+            "本体目录（系统生成，只读）：业务对象 → 属性/语义模型映射/对象间关系；"
+            "跨模型关联先查此目录。mappings.file 即取数模型快照文件名（semantic/ 下），"
+            "本目录存在时不另发语义资产目录"
+        ),
         "objects": [
-            _render_object_entry(obj, properties_by_object, mappings_by_object, config_names, domain_names)
+            _render_object_entry(
+                obj, properties_by_object, mappings_by_object, config_names, domain_names, model_files
+            )
             for obj in bundle.get("objects") or []
         ],
         "relations": [
@@ -200,9 +219,12 @@ async def materialize_ontology_catalog_async(
     workspace_runtime: Any,
     semantic_config_ids: list[str],
     configs: list[dict[str, Any]] | None = None,
+    model_files: dict[str, str] | None = None,
 ) -> int:
-    """物化本体目录到 workspace/ontology/，返回写入对象数（开关关或无对象返回 0）。
+    """物化本体目录到 workspace/semantic/，返回写入对象数（开关关或无对象返回 0）。
 
+    model_files：semantic_config_id → 模型快照文件名，写入 mappings.file 供模型
+    直接 file_read（本体目录与语义资产目录二选一的取数索引）。
     尽力而为：内部异常只告警不抛出，本体故障不阻塞语义模型预物化与会话启动。
     """
     if workspace_runtime is None or not ontology_injection_enabled():
@@ -221,12 +243,28 @@ async def materialize_ontology_catalog_async(
             for row in domain_rows
         }
         content = _render_catalog(
-            bundle, _config_display_names(configs), _config_dimension_columns(configs), domain_names
+            bundle,
+            _config_display_names(configs),
+            _config_dimension_columns(configs),
+            domain_names,
+            model_files,
         )
         catalog_path = str(PurePosixPath(ONTOLOGY_SNAPSHOT_DIR) / ONTOLOGY_CATALOG_FILE_NAME)
         await workspace_runtime.write_internal_text_files([(catalog_path, content)])
         logger.info("本体目录物化完成: objects=%s relations=%s", len(objects), len(bundle.get("relations") or []))
+        await _cleanup_legacy_ontology_dir(workspace_runtime)
         return len(objects)
     except Exception as exc:  # noqa: BLE001 - 目录属尽力而为，不阻塞会话启动
         logger.warning("本体目录物化失败（不影响会话启动）: %s", exc)
         return 0
+
+
+async def _cleanup_legacy_ontology_dir(workspace_runtime: Any) -> None:
+    """清理旧版独立 ontology/ 目录残留，避免模型读到过期目录文本。尽力而为。"""
+    try:
+        await workspace_runtime.delete_internal_text_files(path=ONTOLOGY_LEGACY_CATALOG_PATH)
+        logger.info("已清理旧版本体目录残留: %s", ONTOLOGY_LEGACY_CATALOG_PATH)
+    except FileNotFoundError:
+        return
+    except Exception as exc:  # noqa: BLE001 - 清理属尽力而为
+        logger.warning("清理旧版本体目录失败: %s", exc)

@@ -528,13 +528,6 @@ def is_managed_semantic_model_workspace_path(workspace_root: str, path: Path) ->
     return target == semantic_root or semantic_root in target.parents
 
 
-def is_managed_ontology_catalog_workspace_path(workspace_root: str, path: Path) -> bool:
-    """Return whether a path belongs to the system-owned ontology catalog directory."""
-    ontology_root = (Path(workspace_root).resolve() / "workspace" / "ontology").resolve()
-    target = path.resolve()
-    return target == ontology_root or ontology_root in target.parents
-
-
 def to_visible_path(workspace_root: str, path: Path) -> str:
     """把物理路径转为模型/前端可见路径（统一规范前缀 /mnt/user-data/）。"""
     root = Path(workspace_root).resolve()

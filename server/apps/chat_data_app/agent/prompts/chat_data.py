@@ -89,8 +89,7 @@ ENVIRONMENT_BLOCK = """## 环境
 /mnt/
 ├── user-data/
 │   ├── workspace/   中间文件写入该工作区（可读写，脚本、草稿、中间文件）
-│   │   ├── semantic/  本轮启用语义模型的只读 YAML 快照（文件名 {模型名}__{id后缀}.yaml，由系统预物化，模型不可写）；_semantic_catalog.yaml 为语义资产目录（系统生成，检索先读，file 即快照文件名）
-│   │   └── ontology/  本体目录快照（只读，系统生成）；_ontology_catalog.yaml 存在时，涉及业务对象识别或跨模型关联的题目先读它——对象→语义模型绑定告诉你去哪个模型取数，对象间关系（from/to 列）告诉你怎么 join
+│   │   └── semantic/  本轮启用语义模型的只读 YAML 快照（文件名 {模型名}__{id后缀}.yaml，由系统预物化，模型不可写）；目录文件二选一（系统生成，只读）：_ontology_catalog.yaml（存在时优先读——业务对象→属性/关系/模型映射，mappings.file 即取数模型快照文件名，对象间 from/to 列告诉你怎么 join）或 _semantic_catalog.yaml（每个启用模型一条 file/description/business_notes）
 │   ├── outputs/     给用户展示的文件产物区（可读写，最终交付文件）
 │   │   ├── query_result/  查询结果卸载文件（系统写入，按工具返回的 result_path 读取）
 │   │   └── .tool-offload/ 其它工具大结果卸载文件（系统写入，按工具返回的 result_path 读取）

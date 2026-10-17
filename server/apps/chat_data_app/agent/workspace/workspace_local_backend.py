@@ -29,7 +29,6 @@ from apps.chat_data_app.agent.workspace.runtime import (
     _absolute_command_path_tokens,
     _ensure_workspace_root_in_chat_data_home,
     _render_local_office_html,
-    is_managed_ontology_catalog_workspace_path,
     is_managed_semantic_model_workspace_path,
     is_system_result_workspace_path,
     resolve_workspace_path,
@@ -302,11 +301,10 @@ def _write_local_text_file(
     )
     if allow_managed_semantic_model_write and (
         not is_managed_semantic_model_workspace_path(workspace_root, target)
-        and not is_managed_ontology_catalog_workspace_path(workspace_root, target)
         or target.suffix.lower() != ".yaml"
     ):
         raise ValueError(
-            "内部系统写入只允许 /mnt/user-data/workspace/semantic/ 或 ontology/ 下的 YAML 文件"
+            "内部系统写入只允许 /mnt/user-data/workspace/semantic/ 下的 YAML 文件"
         )
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary_path: Path | None = None

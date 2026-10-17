@@ -42,9 +42,9 @@
 
 本体层按对象持续逐步建设，**任何会话都可能没有本体目录**：指标语义层必然存在，本体层是可选增强，缺失时完全按原有指标语义层路线继续，不得报错、重试或向用户提及缺失。
 
-1. 先用 `file_read` 读取 `/mnt/user-data/workspace/ontology/_ontology_catalog.yaml`。文件不存在：当前会话未物化本体层，直接进入「3. 检索指标语义层」，不要重试或猜测路径。
+1. 先用 `file_read` 读取 `/mnt/user-data/workspace/semantic/_ontology_catalog.yaml`。文件不存在：当前会话未物化本体层（此时 semantic/ 下会有 `_semantic_catalog.yaml` 语义资产目录），直接进入「3. 检索指标语义层」，不要重试或猜测路径。两份目录二选一：本体目录存在时不发语义资产目录。
 2. 目录存在时，在其中识别与用户问题相关的业务对象：
-   - 命中对象：按该对象 `mappings` 的 `semantic_config_id` 定位取数模型（`column_mappings` 是「属性 → 模型维度名」的概念映射，物理列以模型 YAML 为准）；涉及多个对象时，用 `relations` 的 `from`/`to` 对象与 `from_columns`/`to_columns`（已翻译为物理列）推导 join 路径，锁定候选后直接进入「4. 精读完整语义层」。
+   - 命中对象：按该对象 `mappings` 的 `file` 字段（取数模型快照文件名，semantic/ 下）定位模型并 `file_read`（`semantic_config_id` 为辅助键；`column_mappings` 是「属性 → 模型维度名」的概念映射，物理列以模型 YAML 为准）（`column_mappings` 是「属性 → 模型维度名」的概念映射，物理列以模型 YAML 为准）；涉及多个对象时，用 `relations` 的 `from`/`to` 对象与 `from_columns`/`to_columns`（已翻译为物理列）推导 join 路径，锁定候选后直接进入「4. 精读完整语义层」。
    - 目录中没有任何相关对象：同样进入「3. 检索指标语义层」——这只说明本体尚未覆盖该对象，不代表系统能力缺失。
 3. 本体层只负责「识别业务对象 + 选模型 + 定关联路径」；指标口径、维度枚举、时间格式等细节仍以对象映射指向的语义模型 YAML 为准，不能只凭目录描述直接写查询。
 4. 跨对象的关联查询超出「一次调用一个 `semantic_config_id`」的约束，走 SQL 模式：join 条件优先采用本体 `relations` 的 `from_columns`/`to_columns`，表名与列名以两个模型 YAML 确认的原始表/列为准，两个模型的口径都不明确时仍先澄清。

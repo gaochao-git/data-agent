@@ -16,10 +16,14 @@ class _FakeRuntime:
 
     def __init__(self):
         self.written: dict[str, str] = {}
+        self.deleted: list[str] = []
 
     async def write_internal_text_files(self, entries):
         for path, content in entries:
             self.written[path] = content
+
+    async def delete_internal_text_files(self, path):
+        self.deleted.append(str(path))
 
 
 def _bundle() -> dict[str, Any]:
@@ -114,7 +118,10 @@ _DIMENSION_COLUMNS = {
 
 def test_render_catalog_shapes_objects_and_relations():
     content = ontology_injection._render_catalog(
-        _bundle(), {"sc_order": "订单模型", "sc_user": "用户模型"}, _DIMENSION_COLUMNS
+        _bundle(),
+        {"sc_order": "订单模型", "sc_user": "用户模型"},
+        _DIMENSION_COLUMNS,
+        model_files={"sc_order": "订单模型__1234.yaml", "sc_user": "用户模型__5678.yaml"},
     )
     doc = yaml.safe_load(content)
     assert [obj["object"] for obj in doc["objects"]] == ["order", "user"]
@@ -122,6 +129,8 @@ def test_render_catalog_shapes_objects_and_relations():
     assert order["display_name"] == "订单"
     assert {prop["name"] for prop in order["properties"]} == {"order_id", "amount"}
     assert order["mappings"][0]["semantic_config_name"] == "订单模型"
+    # mappings.file = 模型快照文件名：本体目录接管语义目录索引职责后的取数入口
+    assert order["mappings"][0]["file"] == "订单模型__1234.yaml"
     # 映射右值是模型维度名（概念层不重复定义物理列）
     assert order["mappings"][0]["column_mappings"]["amount"] == "订单金额"
     assert "table_alias" not in order["mappings"][0]
@@ -153,13 +162,23 @@ def test_materialize_writes_catalog_and_counts_objects(enabled, monkeypatch):
 
     monkeypatch.setattr(ontology_injection.OntologyDao, "load_injection_bundle_async", staticmethod(fake_bundle))
     count = asyncio.run(
-        ontology_injection.materialize_ontology_catalog_async(runtime, ["sc_order", "sc_user"], configs=[])
+        ontology_injection.materialize_ontology_catalog_async(
+            runtime,
+            ["sc_order", "sc_user"],
+            configs=[],
+            model_files={"sc_order": "订单模型__1234.yaml", "sc_user": "用户模型__5678.yaml"},
+        )
     )
     assert count == 2
     path = f"{ontology_injection.ONTOLOGY_SNAPSHOT_DIR}/{ontology_injection.ONTOLOGY_CATALOG_FILE_NAME}"
     assert path in runtime.written
+    # 本体目录与语义资产同放 workspace/semantic/（不再单开 ontology/ 目录）
+    assert "/workspace/semantic/_ontology_catalog.yaml" in path
     doc = yaml.safe_load(runtime.written[path])
     assert len(doc["objects"]) == 2
+    assert doc["objects"][0]["mappings"][0]["file"] == "订单模型__1234.yaml"
+    # 旧版独立 ontology/ 目录残留被顺手清理
+    assert runtime.deleted == [ontology_injection.ONTOLOGY_LEGACY_CATALOG_PATH]
 
 
 def test_materialize_skips_when_disabled(monkeypatch):
@@ -182,18 +201,27 @@ def test_materialize_swallows_dao_errors(enabled, monkeypatch):
 
 
 def test_prematerialize_invokes_ontology_injection(monkeypatch, enabled):
-    """预物化主链路把启用模型 ID 与 configs 透传给本体目录物化。"""
+    """预物化主链路把启用模型 ID、configs 与模型文件名映射透传给本体目录物化，
+    并在本体目录接管时跳过语义资产目录（二选一）。"""
     runtime = _FakeRuntime()
-    calls: list[tuple[list[str], list[dict[str, Any]]]] = []
+    catalog_calls: list[dict[str, Any]] = []
+    materialize_kwargs: list[dict[str, Any]] = []
 
-    async def fake_catalog(workspace_runtime, config_ids, configs=None):
-        calls.append((list(config_ids), list(configs or [])))
+    async def fake_catalog(workspace_runtime, config_ids, configs=None, model_files=None):
+        catalog_calls.append(
+            {
+                "config_ids": list(config_ids),
+                "configs": list(configs or []),
+                "model_files": dict(model_files or {}),
+            }
+        )
         return 1
 
     async def fake_bundle(datasource_id, user_id):
         return [{"id": "sc_order", "enabled": True, "name": "订单模型"}], {}
 
     async def fake_materialize(**kwargs):
+        materialize_kwargs.append(kwargs)
         return {"directory": [{"id": "sc_order"}], "failed_ids": []}
 
     # semantic_materializer 在 import 时绑定了函数引用，patch 必须落在它的命名空间
@@ -210,5 +238,35 @@ def test_prematerialize_invokes_ontology_injection(monkeypatch, enabled):
         )
     )
     assert result["total"] == 1
-    assert calls and calls[0][0] == ["sc_order"]
-    assert calls[0][1] == [{"id": "sc_order", "enabled": True, "name": "订单模型"}]
+    assert catalog_calls and catalog_calls[0]["config_ids"] == ["sc_order"]
+    assert catalog_calls[0]["configs"] == [{"id": "sc_order", "enabled": True, "name": "订单模型"}]
+    assert catalog_calls[0]["model_files"] == {"sc_order": "订单模型__order.yaml"}
+    # 本体目录接管 → 语义资产目录跳过；本体目录路径进 prune 保留集
+    assert materialize_kwargs[0]["include_semantic_catalog"] is False
+    assert materialize_kwargs[0]["keep_extra_paths"] == {"/mnt/user-data/workspace/semantic/_ontology_catalog.yaml"}
+
+
+def test_prematerialize_semantic_catalog_when_no_objects(monkeypatch, enabled):
+    """无本体对象时语义资产目录照常物化（二选一回落）。"""
+    runtime = _FakeRuntime()
+    materialize_kwargs: list[dict[str, Any]] = []
+
+    async def fake_bundle(datasource_id, user_id):
+        return [{"id": "sc_order", "enabled": True, "name": "订单模型"}], {}
+
+    async def fake_materialize(**kwargs):
+        materialize_kwargs.append(kwargs)
+        return {"directory": [{"id": "sc_order"}], "failed_ids": []}
+
+    class _StubService:
+        get_runtime_bundle_async = staticmethod(fake_bundle)
+
+    monkeypatch.setattr(semantic_materializer, "get_semantic_config_service", lambda: _StubService())
+    monkeypatch.setattr(semantic_materializer, "materialize_runtime_semantic_models", fake_materialize)
+    asyncio.run(
+        semantic_materializer.prematerialize_enabled_semantic_models(
+            workspace_runtime=runtime, datasource_id="ds_1", user_id="u1"
+        )
+    )
+    assert materialize_kwargs[0]["include_semantic_catalog"] is True
+    assert materialize_kwargs[0]["keep_extra_paths"] is None
