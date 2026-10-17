@@ -11,6 +11,10 @@
 - ``list_execution_targets``：实时获取当前用户可用执行对象清单（只读发现通道，
   为后续语义查询插件化预留的工具内数据源切口）；方言与智能问数说明随本返回
   透出，系统提示词不再静态注入。
+- ``query_object``：本体对象明细查询——只收对象/属性级意图，服务端按本体
+  column_mappings 翻译成 dimensions-only builder DSL 后走既有编译执行链
+  （翻译纯函数见 services/ontology/object_query.py，开关
+  ``CHAT_DATA_ONTOLOGY_QUERY_ENABLED`` 默认关闭）。
 
 入参契约在 ``schema.DataAnalyzingInput``：``action`` + ``action_payload``（结构随
 action 变化）+ ``intent``；每个 action 的 payload 在工具实现入口经
@@ -30,6 +34,7 @@ from langchain_core.tools import BaseTool, tool
 from langgraph.prebuilt import InjectedState
 
 from apps.chat_data_app.agent.workspace.runtime import ConversationWorkspaceRuntime
+from apps.chat_data_app.daos.ontology_dao import OntologyDao
 from apps.chat_data_app.services.dashboard.spec_service import (
     remove_mixed_raw_metrics_for_aggregate_dsl,
     validate_dashboard_spec_payload,
@@ -41,6 +46,11 @@ from apps.chat_data_app.services.datasource.target_context import (
     get_execution_target_org_code,
     source_type_to_dialect,
 )
+from apps.chat_data_app.services.ontology.object_query import (
+    build_object_query_plan,
+    build_relation_hint,
+    object_query_enabled,
+)
 from apps.chat_data_app.services.runtime_config import SEMANTIC_MODEL_DISCOVERY_HINT
 from apps.chat_data_app.services.semantic.run.chat_data_ossie_importer import (
     build_model_checklist,
@@ -51,6 +61,7 @@ from apps.chat_data_app.services.semantic.run.semantic_config_service import (
     prepare_ossie_import_models,
     quality_findings_for_imports,
 )
+from apps.chat_data_app.services.semantic.run.semantic_materializer import enabled_candidate_ids
 from apps.chat_data_app.services.semantic.run.semantic_model_repository import (
     load_runtime_semantic_config,
     load_semantic_model,
@@ -58,10 +69,16 @@ from apps.chat_data_app.services.semantic.run.semantic_model_repository import (
 from apps.chat_data_app.services.semantic.run.semantic_query_service import (
     SemanticCompileOptions,
     compile_semantic_ai_dsl,
+    compile_semantic_bi_dsl,
     execute_semantic_query_sql,
     normalize_member_datasource_ids,
 )
 from apps.chat_data_app.services.setting_service import get_runtime_setting
+from apps.chat_data_app.services.sql_run.result import (
+    QUERY_SUCCEEDED_STATUS,
+    query_result_status,
+    query_result_succeeded,
+)
 from utils.logger import get_logger
 
 from ...schema import (
@@ -664,6 +681,111 @@ async def _run_list_execution_targets(
 
 
 # ---------------------------------------------------------------------------
+# query_object：本体对象明细查询（对象级意图 → 服务端翻译 DSL → 既有编译执行链）
+# ---------------------------------------------------------------------------
+
+
+async def _run_query_object(
+    *,
+    payload: Any,
+    state: dict | None,
+    bound_datasource_id: str,
+    bound_user_id: str,
+    bound_operator_name: str | None,
+) -> str:
+    """本体对象明细查询：翻译（object_query 纯函数）→ BI DSL 编译 → 统一执行链。
+
+    可查范围结构性收敛：注入 bundle 按「本轮启用语义模型」加载（与本体目录物化
+    同源），对象/属性不在范围内即报错。一期固定在数据源组主库执行（不传
+    member_datasource_ids）；跨机构查询与对象聚合仍走 execute_query。
+    """
+    if not object_query_enabled():
+        raise ValueError("对象明细查询未启用：需设置环境变量 CHAT_DATA_ONTOLOGY_QUERY_ENABLED=1")
+    state = state or {}
+    datasource_id = _get_datasource_id_from_state(state) or bound_datasource_id
+    if not datasource_id:
+        raise ValueError("当前会话未绑定数据源")
+    user_id = str(state.get("user_id") or "").strip() or bound_user_id
+    operator_name = str(state.get("operator_name") or "").strip() or bound_operator_name
+
+    service = get_semantic_config_service()
+    configs = await service.get_configs_async(datasource_id, str(user_id or ""))
+    enabled_ids = enabled_candidate_ids(configs)
+    if not enabled_ids:
+        raise ValueError("当前数据源组没有启用语义模型，无法执行对象查询")
+    bundle = await OntologyDao().load_injection_bundle_async(enabled_ids)
+
+    plan = build_object_query_plan(
+        bundle,
+        object_name=payload.object,
+        properties=payload.properties,
+        filters=payload.filters,
+        order_by=payload.order_by,
+        limit=payload.limit,
+        offset=payload.offset,
+        semantic_config_id=payload.semantic_config_id,
+    )
+
+    config = await load_runtime_semantic_config(
+        datasource_id, plan.semantic_config_id, user_id=str(user_id or "") or None
+    )
+    if not config:
+        raise ValueError(f"语义模型不可用: {plan.semantic_config_id}")
+    compile_result = compile_semantic_bi_dsl(
+        config,
+        plan.dsl,
+        max_rows=await get_runtime_setting("CHATDATA_ROW_LIMIT"),
+    )
+    if not compile_result.get("success"):
+        raise ValueError(compile_result.get("error") or "对象查询 DSL 编译失败")
+    sql = str(compile_result.get("sql") or "").strip()
+    if not sql:
+        raise ValueError("对象查询未生成 SQL")
+
+    query_result = await execute_semantic_query_sql(
+        sql=sql,
+        datasource_id=datasource_id,
+        member_datasource_ids=None,
+        user_id=str(user_id or "") or None,
+        semantic_config_id=plan.semantic_config_id,
+        query_text=_latest_human_query(state.get("messages") or []),
+        conversation_id=str(state.get("conversation_id") or "").strip() or None,
+        operator_name=operator_name,
+    )
+
+    # execute_agent_sql 聚合契约（build_query_result_payload）：顶层无 data，
+    # 行数据只存在于 results[] 成员内；必须从成功成员里取数回填。
+    member_results = list(query_result.get("results") or [])
+    succeeded_members = [item for item in member_results if query_result_succeeded(item)]
+    succeeded = query_result_status(query_result) == QUERY_SUCCEEDED_STATUS
+    rows: list[Any] = []
+    for member in succeeded_members:
+        rows.extend(member.get("data") or [])
+    # 执行失败不抛异常（execute_agent_sql 返回 status=failed 字典），success 必须从
+    # 结果推导，不能写死——否则模型会把失败误读成「查无数据」。
+    body = {
+        "success": succeeded,
+        "source": {
+            "object": plan.object_name,
+            "object_display_name": plan.object_display_name,
+            "semantic_config_id": plan.semantic_config_id,
+        },
+        "columns": plan.columns,
+        "property_dimensions": plan.property_dimensions,
+        "sql": query_result.get("sql") or sql,
+        "data": rows,
+        "total_count": query_result.get("total_count"),
+        "error": query_result.get("error"),
+        "relation_hint": build_relation_hint(bundle, plan.object_name),
+    }
+    if not succeeded:
+        # 失败时正文以错误为主，避免空 data 抢占模型注意力。
+        body["data"] = []
+        body["total_count"] = 0
+    return tool_result_payload(DATA_ANALYZING_TOOL_NAME, body)
+
+
+# ---------------------------------------------------------------------------
 # 合并工具本体
 # ---------------------------------------------------------------------------
 
@@ -717,6 +839,14 @@ async def _run_data_analyzing_impl(
             bound_user_id=bound_user_id,
             bound_operator_name=bound_operator_name,
         )
+    if action == "query_object":
+        return await _run_query_object(
+            payload=payload,
+            state=state,
+            bound_datasource_id=bound_datasource_id,
+            bound_user_id=bound_user_id,
+            bound_operator_name=bound_operator_name,
+        )
     # check_yaml
     if not bound_datasource_id:
         raise ValueError("当前会话未绑定数据源")
@@ -746,7 +876,7 @@ def create_data_analyzing_tool(
         intent: str = "",
     ) -> str:
         """
-        数据分析合并工具：按 action 执行 DSL 校验、查询执行或语义模型 YAML 自检。常规查数流程（检索语义模型、确认字段口径、生成 DSL、校验、执行）以 `data-analyzing` 技能为准，本工具不重复定义。
+        数据分析合并工具：按 action 执行 DSL 校验、查询执行、语义模型 YAML 自检或本体对象明细查询。常规查数流程（检索语义模型、确认字段口径、生成 DSL、校验、执行）以 `data-analyzing` 技能为准，本工具不重复定义。
 
         Args:
             action: 操作类型，枚举：
@@ -755,12 +885,14 @@ def create_data_analyzing_tool(
         - execute_query: 执行查询（DSL 或 SQL 二选一），结果落盘到 outputs/query_result/
         - check_yaml: 语义模型 YAML 质量自检
         - list_execution_targets: 实时获取当前用户可用的执行对象清单（execute_query 前用于确认 member_datasource_ids 取值范围）
+        - query_object: 按本体对象查询明细数据——只传对象/属性级意图，服务端翻译成 DSL 后执行；可查对象见本体目录（_ontology_catalog.yaml）
             action_payload: 操作参数，结构随 action 变化：
         - validate_dsl: {"dsl": {...}, "semantic_config_id": "..."}
         - validate_dashboard: {"dsl": <含 dashboard_name 和 cards 的完整 dashboard_spec>, "semantic_config_id": "卡片缺省值，可选"}
         - execute_query: {"dsl": {...} 或 "sql": "...", "semantic_config_id": "...", "member_datasource_ids": ["<ID>"]}（member_datasource_ids 必须是 ID 字符串数组，单个机构也传数组，如 ["ORG_CODE1"]）
         - check_yaml: {"file_path": "/mnt/user-data/workspace/model.yaml"}（工作区 YAML 文件路径，后端直读，不要把 YAML 全文复制进参数）
         - list_execution_targets: {}（无参数，范围由服务端会话上下文决定）
+        - query_object: {"object": <对象API名>, "properties": [属性API名]可选缺省全部, "filters": [{"property": 属性API名, "operator": 操作符, "value": 值}]可选支持 and/or 嵌套, "order_by": [{"property": 属性API名, "direction": "ASC|DESC"}]可选, "limit": 默认50, "offset": 默认0, "semantic_config_id": 对象绑定多模型时必填}
             intent: 一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示。
         """
         return await _run_data_analyzing_impl(

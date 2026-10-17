@@ -140,7 +140,12 @@ def test_plan_filters_translation() -> None:
         filters=[
             {"property": "city", "operator": "=", "value": "上海"},
             {"and": [{"property": "amount", "operator": ">=", "value": 100}]},
-            {"or": [{"property": "order_id", "operator": "IS NULL"}, {"property": "city", "operator": "LIKE", "value": "%东%"}]},
+            {
+                "or": [
+                    {"property": "order_id", "operator": "IS NULL"},
+                    {"property": "city", "operator": "LIKE", "value": "%东%"},
+                ]
+            },
         ],
     )
     assert plan.dsl["filters"] == [
@@ -167,7 +172,9 @@ def test_plan_filter_unmapped_property_rejected() -> None:
 def test_plan_filter_unknown_key_rejected() -> None:
     with pytest.raises(ValueError, match="含不支持的字段: column"):
         object_query.build_object_query_plan(
-            _bundle(), object_name="order", filters=[{"property": "city", "column": "city", "operator": "=", "value": "x"}]
+            _bundle(),
+            object_name="order",
+            filters=[{"property": "city", "column": "city", "operator": "=", "value": "x"}],
         )
 
 
@@ -188,8 +195,27 @@ def test_plan_order_by_appends_column() -> None:
     assert plan.dsl["orderBy"] == [{"name": "订单编号", "direction": "DESC"}]
     # 排序属性自动并入返回列
     assert plan.columns == ["amount", "order_id"]
-    dim_names = [item["name"] for item in plan.dsl["dimensions"]]
-    assert "订单编号" in dim_names
+    # 追加列同样带 displayName=属性名，SQL 结果列别名与 columns 一一对应
+    assert plan.dsl["dimensions"] == [
+        {"name": "订单金额", "displayName": "amount"},
+        {"name": "订单编号", "displayName": "order_id"},
+    ]
+    assert plan.property_dimensions == {"amount": "订单金额", "order_id": "订单编号"}
+
+
+def test_plan_filter_depth_capped() -> None:
+    # 构造 11 层嵌套 or 树：超过上限即拒绝
+    node: dict[str, Any] = {"property": "city", "operator": "=", "value": "上海"}
+    for _ in range(11):
+        node = {"or": [node]}
+    with pytest.raises(ValueError, match="filters 嵌套层级超过上限 10"):
+        object_query.build_object_query_plan(_bundle(), object_name="order", filters=[node])
+    # 恰好 10 层不报错
+    node = {"property": "city", "operator": "=", "value": "上海"}
+    for _ in range(9):
+        node = {"or": [node]}
+    plan = object_query.build_object_query_plan(_bundle(), object_name="order", filters=[node])
+    assert "filters" in plan.dsl
 
 
 def test_plan_order_by_invalid_direction_rejected() -> None:

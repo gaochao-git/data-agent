@@ -29,6 +29,7 @@ _DEFAULT_LIMIT = 50
 _MAX_LIMIT = 1000
 _MAX_HINT_RELATIONS = 8
 _MAX_ERROR_CANDIDATES = 20
+_MAX_FILTER_DEPTH = 10
 
 _TRUTHY = {"1", "true", "yes", "on"}
 
@@ -71,7 +72,9 @@ def _find_object(bundle: dict[str, Any], object_name: str) -> dict[str, Any]:
             return obj
     available = sorted(str((obj or {}).get("object_name") or "") for obj in objects if (obj or {}).get("object_name"))
     if available:
-        raise ValueError(f"本体对象不存在或未绑定本轮启用语义模型: {normalized}；可查对象: {_candidate_summary(available)}")
+        raise ValueError(
+            f"本体对象不存在或未绑定本轮启用语义模型: {normalized}；可查对象: {_candidate_summary(available)}"
+        )
     raise ValueError(f"本体对象不存在: {normalized}；当前启用语义模型没有绑定任何本体对象")
 
 
@@ -90,7 +93,9 @@ def _mapping_column_map(mapping: dict[str, Any] | None) -> dict[str, str]:
     raw = (mapping or {}).get("column_mappings") or {}
     if not isinstance(raw, dict):
         return {}
-    return {str(key).strip(): str(value).strip() for key, value in raw.items() if str(key).strip() and str(value).strip()}
+    return {
+        str(key).strip(): str(value).strip() for key, value in raw.items() if str(key).strip() and str(value).strip()
+    }
 
 
 def _usable_mappings(mappings: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
@@ -141,8 +146,7 @@ def _resolve_columns(
     if unknown:
         available = _object_property_names(property_entries)
         raise ValueError(
-            f"对象 {object_name} 不存在属性: {', '.join(unknown)}；"
-            f"对象属性: {_candidate_summary(available) or '无'}"
+            f"对象 {object_name} 不存在属性: {', '.join(unknown)}；对象属性: {_candidate_summary(available) or '无'}"
         )
     unmapped = [str(item).strip() for item in requested if str(item).strip() not in column_map]
     if unmapped:
@@ -160,13 +164,20 @@ def _resolve_columns(
     return ordered
 
 
-def _translate_filter_nodes(nodes: list[dict[str, Any]], column_map: dict[str, str]) -> list[dict[str, Any]]:
+def _translate_filter_nodes(
+    nodes: list[dict[str, Any]],
+    column_map: dict[str, str],
+    depth: int = 1,
+) -> list[dict[str, Any]]:
     """把属性谓词翻译成 builder DSL 过滤树：属性 → 维度名，operator/value 原样透传。
 
     operator 白名单与 value 转义由编译层（SemanticBIQueryAdapter / SQL 编译器）
     负责，本层只做形状校验与属性名解析；属性未映射即报错，绝不把原始属性名
-    放进 DSL（防未经验证的标识符进入编译输入）。
+    放进 DSL（防未经验证的标识符进入编译输入）。嵌套树深度上限 ``_MAX_FILTER_DEPTH``
+    （防病态深递归，正常谓词远达不到）。
     """
+    if depth > _MAX_FILTER_DEPTH:
+        raise ValueError(f"filters 嵌套层级超过上限 {_MAX_FILTER_DEPTH}")
     if not nodes:
         return []
     if not isinstance(nodes, list):
@@ -180,13 +191,13 @@ def _translate_filter_nodes(nodes: list[dict[str, Any]], column_map: dict[str, s
             children = node.get(key)
             if not isinstance(children, list) or not children:
                 raise ValueError(f"filters[{index}].{key} 必须是非空数组")
-            translated.append({key: _translate_filter_nodes(children, column_map)})
+            translated.append({key: _translate_filter_nodes(children, column_map, depth + 1)})
             continue
         unknown_keys = set(node.keys()) - _FILTER_LEAF_KEYS
         if unknown_keys:
             raise ValueError(
                 f"filters[{index}] 含不支持的字段: {', '.join(sorted(unknown_keys))}；"
-                f'叶子节点仅支持 {{property, operator, value}}'
+                f"叶子节点仅支持 {{property, operator, value}}"
             )
         property_name = str(node.get("property") or "").strip()
         if not property_name:
@@ -194,8 +205,7 @@ def _translate_filter_nodes(nodes: list[dict[str, Any]], column_map: dict[str, s
         dimension_name = column_map.get(property_name)
         if dimension_name is None:
             raise ValueError(
-                f"过滤属性未映射到语义模型维度: {property_name}；"
-                "仅支持该对象 column_mappings 中已映射的属性"
+                f"过滤属性未映射到语义模型维度: {property_name}；仅支持该对象 column_mappings 中已映射的属性"
             )
         leaf: dict[str, Any] = {"name": dimension_name}
         operator = str(node.get("operator") or "=").strip()
@@ -210,10 +220,15 @@ def _translate_order_by(
     items: list[dict[str, Any]] | None,
     column_map: dict[str, str],
     columns: list[str],
-) -> tuple[list[dict[str, Any]], list[str]]:
-    """把排序项翻译成 builder DSL orderBy；排序属性自动并入返回列（保证列对齐）。"""
+) -> tuple[list[dict[str, Any]], list[str], list[str]]:
+    """把排序项翻译成 builder DSL orderBy；排序属性自动并入返回列（保证列对齐）。
+
+    返回 (order_nodes, columns, extra_properties)：extra_properties 是仅用于排序、
+    追加进返回列的属性名（保序），调用方据此补 dimension 的 displayName 与
+    property_dimensions，保证 SQL 结果列别名与 columns 数组一一对应。
+    """
     if not items:
-        return [], list(columns)
+        return [], list(columns), []
     if not isinstance(items, list):
         raise ValueError("order_by 必须是数组")
     order_nodes: list[dict[str, Any]] = []
@@ -235,7 +250,7 @@ def _translate_order_by(
         if property_name not in known_columns:
             known_columns.add(property_name)
             extra_columns.append(property_name)
-    return order_nodes, list(columns) + extra_columns
+    return order_nodes, list(columns) + extra_columns, extra_columns
 
 
 def build_object_query_plan(
@@ -282,11 +297,15 @@ def build_object_query_plan(
         emitted_dimensions.add(dimension_name)
         dimensions.append({"name": dimension_name, "displayName": property_name})
 
-    order_nodes, columns = _translate_order_by(order_by, column_map, columns)
-    for node in order_nodes:
-        if node["name"] not in emitted_dimensions:
-            emitted_dimensions.add(node["name"])
-            dimensions.append({"name": node["name"]})
+    order_nodes, columns, extra_properties = _translate_order_by(order_by, column_map, columns)
+    # 仅用于排序的追加列同样带 displayName=属性名，SQL 结果列别名与 columns 数组
+    # 保持一致（否则别名退回维度名，数据列与 columns 错位）。
+    for property_name in extra_properties:
+        dimension_name = column_map[property_name]
+        property_dimensions[property_name] = dimension_name
+        if dimension_name not in emitted_dimensions:
+            emitted_dimensions.add(dimension_name)
+            dimensions.append({"name": dimension_name, "displayName": property_name})
 
     normalized_limit = max(1, min(int(limit or _DEFAULT_LIMIT), _MAX_LIMIT))
     normalized_offset = max(0, int(offset or 0))
@@ -321,7 +340,8 @@ def build_relation_hint(bundle: dict[str, Any], object_name: str) -> str:
         return ""
     obj_id = int(obj.get("id") or 0)
     object_names = {
-        int((item or {}).get("id") or 0): str((item or {}).get("object_name") or "") for item in bundle.get("objects") or []
+        int((item or {}).get("id") or 0): str((item or {}).get("object_name") or "")
+        for item in bundle.get("objects") or []
     }
     descriptions: list[str] = []
     for rel in bundle.get("relations") or []:

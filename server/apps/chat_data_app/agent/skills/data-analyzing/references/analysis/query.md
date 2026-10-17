@@ -45,6 +45,7 @@
 2. 目录存在时，在其中识别与用户问题相关的业务对象：
    - 目录可能带 `truncated: true`：此时 `objects` 只包含按对象名排序的前一部分，不能据此判定「没有相关对象」；先用 `file_grep` 在 `/mnt/user-data/workspace/semantic/` 下按对象名/业务关键词检索，找不到再走「3. 检索指标语义层」。
    - 命中对象：按该对象 `mappings` 的 `file` 字段（取数模型快照文件名，semantic/ 下）定位模型并 `file_read`（`semantic_config_id` 为辅助键；`column_mappings` 是「属性 → 模型维度名」的概念映射，物理列以模型 YAML 为准）；涉及多个对象时，用 `relations` 的 `from`/`to` 对象与 `from_columns`/`to_columns` 推导 join 路径，锁定候选后直接进入「4. 精读完整语义层」。
+   - 命中对象且用户要的是该对象的**明细数据**（非聚合统计）时，优先调用 `data_analyzing_tool` 的 `query_object`：只传对象/属性级意图（`object`=对象 API 名，`properties`/`filters`/`order_by` 用属性 API 名，对象绑定多个模型时传 `semantic_config_id`），服务端负责翻译 DSL 并执行，返回带编译后 SQL 与来源说明；工具报错（范围/映射/开关）或属于聚合、跨对象关联场景时，才继续走下方精读与 DSL/SQL 路径。
    - 目录中没有任何相关对象：同样进入「3. 检索指标语义层」——这只说明本体尚未覆盖该对象，不代表系统能力缺失。
 3. 本体层只负责「识别业务对象 + 选模型 + 定关联路径」；指标口径、维度枚举、时间格式等细节仍以对象映射指向的语义模型 YAML 为准，不能只凭目录描述直接写查询。
 4. 跨对象的关联查询超出「一次调用一个 `semantic_config_id`」的约束，走 SQL 模式：join 条件优先参考本体 `relations` 的 `from_columns`/`to_columns`；**关系列是尽力翻译的物理列**：带 `unresolved: true` 时表示有列回退为原始属性/维度名，必须回读涉及模型的 YAML 确认表名与物理列后再写 join；一个对象绑定多个模型时，用 `from_columns_by_model`/`to_columns_by_model`（`{semantic_config_id: [物理列]}`）取对应模型的列。两个模型的口径都不明确时仍先澄清。

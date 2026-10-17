@@ -458,3 +458,12 @@ Run 实时事件使用 Redis Streams：
 - `chatdata:run:{run_id}:events`：前端 SSE 实时订阅和断线续传（TTL 内唯一可重放事件源，Run 事件不落 MySQL）。
 - 问答恢复的持久兜底在 `chat_data_agent_inbox` Run 行 `content.terminal_event`（done 发布成功后写入其 Redis 游标）。
 - `chat_data_conversation_event` 保存用户消息以及每次模型调用完成后的会话展示快照；同一消息通过 `event_key` 幂等更新，整轮结束时再做最终收口。LangGraph checkpoint 只保存 Agent 执行状态。
+### query_object：本体对象明细查询（2026-10-17）
+
+`data_analyzing_tool` 新增 `query_object` action：本体消费从「目录注入 + AI 手写 SQL」升级为「对象级意图 → 服务端确定性路由翻译」。无 DDL。
+
+- **链路**：入参只收本体词汇（`object`/`properties`/`filters`/`order_by`/`limit`/`offset`/`semantic_config_id`）；服务端按「本轮启用语义模型」加载本体注入 bundle（`OntologyDao.load_injection_bundle_async`，与目录物化同源），翻译纯函数在 `services/ontology/object_query.py`：对象查找（不在 bundle 即报错，可查范围结构性收敛 ⊆ 启用模型绑定对象）→ 选映射（显式 semantic_config_id > 唯一自动 > 多绑定报候选）→ 属性→维度（column_mappings，未映射明确报错）→ dimensions-only builder DSL。SQL 由既有 `compile_semantic_bi_dsl`（BI 门面，dimensions-only 合法、无聚合不 GROUP BY）编译，执行走 `execute_semantic_query_sql` 统一运行时（转义/操作符白名单/并发闸/落盘全继承，翻译层不生成任何 SQL 字符串）。dimensions 带 `displayName=属性名`，结果列别名即本体属性。
+- **一期口径**：只做单对象明细；聚合走指标层、跨对象关联走 SQL 模式（返回带 relation_hint 引导分步查询）；固定在数据源组主库执行（不传 member_datasource_ids），跨机构仍走 execute_query。
+- **开关**：新增环境变量 `CHAT_DATA_ONTOLOGY_QUERY_ENABLED`（默认 false，已登记 `server/.env.example`）；关闭时 action 报错、系统提示词不注入引导块（`OBJECT_QUERY_HINT_BLOCK` 条件注入）。建议与 `CHAT_DATA_ONTOLOGY_INJECTION_ENABLED` 同开。
+- **改动面**：`schema.py`（`_QueryObjectActionPayload` + 注册）、`agent/tools/data_analyzing.py`（分发 + `_run_query_object` + docstring）、`services/ontology/object_query.py`（新，纯函数）、`agent/prompts/chat_data.py`（条件引导块）、data-analyzing 技能 `references/analysis/query.md`（本体层明细优先 query_object，已 cp 同步运行时根）。
+- **测试**：`tests/unit/test_object_query.py`（翻译器 19 例）+ `test_data_analyzing_tool.py` query_object 分发用例。

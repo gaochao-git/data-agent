@@ -1505,3 +1505,226 @@ def test_validate_member_scope_error_includes_available_list():
             available_member_datasource_ids=["m1", "m2"],
             matched_member_datasource_ids=[],
         )
+
+
+# ---------------------------------------------------------------------------
+# query_object（本体对象明细查询）
+# ---------------------------------------------------------------------------
+
+_ONTOLOGY_BUNDLE = {
+    "objects": [{"id": 1, "object_name": "order", "display_name": "订单", "status": "certified"}],
+    "properties": [
+        {"object_id": 1, "property_name": "order_id", "is_identifier": True},
+        {"object_id": 1, "property_name": "city", "is_identifier": False},
+    ],
+    "relations": [],
+    "mappings": [
+        {
+            "object_id": 1,
+            "semantic_config_id": "sc_order",
+            "column_mappings": {"order_id": "订单编号", "city": "城市"},
+        }
+    ],
+}
+
+
+class _FakeOntologyConfigService:
+    async def get_configs_async(self, datasource_id, user_id=""):
+        return [
+            {"id": "sc_order", "enabled": True},
+            {"id": "sc_disabled", "enabled": False},
+        ]
+
+
+class _FakeOntologyDao:
+    def __init__(self):
+        self.captured_ids = None
+
+    async def load_injection_bundle_async(self, config_ids):
+        self.captured_ids = list(config_ids)
+        return _ONTOLOGY_BUNDLE
+
+
+def _patch_query_object_chain(monkeypatch, *, execute_result=None):
+    fake_dao = _FakeOntologyDao()
+    captured = {}
+
+    def fake_compile(config, dsl, max_rows=None):
+        captured["config"] = config
+        captured["dsl"] = dsl
+        captured["max_rows"] = max_rows
+        return {"success": True, "sql": "SELECT `订单编号` FROM t"}
+
+    async def fake_execute(**kwargs):
+        captured["execute"] = kwargs
+        member = execute_result.pop("member", None) if isinstance(execute_result, dict) else None
+        if member is not None:
+            # 真实聚合契约：行数据只在 results[] 成员内
+            return execute_result | {"results": [member]}
+        return execute_result or {
+            "status": "succeeded",
+            "sql": "SELECT `订单编号` FROM t",
+            "total_count": 1,
+            "error": None,
+            "results": [
+                {
+                    "status": "succeeded",
+                    "sql": "SELECT `订单编号` FROM t",
+                    "columns": ["order_id", "city"],
+                    "data": [["o1", "上海"]],
+                    "total_count": 1,
+                }
+            ],
+        }
+
+    async def fake_setting(key):
+        captured["row_limit_key"] = key
+        return 1000
+
+    async def fake_load_config(datasource_id, config_id, user_id=None):
+        captured["load_config"] = {"datasource_id": datasource_id, "config_id": config_id, "user_id": user_id}
+        return {"id": config_id}
+
+    monkeypatch.setattr(data_analyzing, "get_semantic_config_service", lambda: _FakeOntologyConfigService())
+    monkeypatch.setattr(data_analyzing, "OntologyDao", lambda: fake_dao)
+    monkeypatch.setattr(data_analyzing, "compile_semantic_bi_dsl", fake_compile)
+    monkeypatch.setattr(data_analyzing, "execute_semantic_query_sql", fake_execute)
+    monkeypatch.setattr(data_analyzing, "get_runtime_setting", fake_setting)
+    monkeypatch.setattr(data_analyzing, "load_runtime_semantic_config", fake_load_config)
+    return captured, fake_dao
+
+
+def _invoke_query_object(monkeypatch, *, action_payload=None, state=None, execute_result=None):
+    captured, fake_dao = _patch_query_object_chain(monkeypatch, execute_result=execute_result)
+    raw = asyncio.run(
+        data_analyzing.create_data_analyzing_tool().ainvoke(
+            {
+                "action": "query_object",
+                "action_payload": action_payload or {"object": "order"},
+                "state": state if state is not None else _semantic_query_state(user_id="u1", conversation_id="c1"),
+            }
+        )
+    )
+    return json.loads(raw.replace(RESULT_PREFIX, "", 1)), captured, fake_dao
+
+
+def test_input_query_object_payload_model_registered():
+    assert DATA_ANALYZING_ACTION_PAYLOAD_MODELS["query_object"].model_validate(
+        {"object": "order", "filters": [{"property": "city", "operator": "=", "value": "上海"}]}
+    )
+    with pytest.raises(ValueError, match=r"action=query_object 的 action_payload 校验失败：object: Field required"):
+        validate_data_analyzing_payload("query_object", {})
+
+
+def test_query_object_disabled_by_default(monkeypatch):
+    monkeypatch.delenv("CHAT_DATA_ONTOLOGY_QUERY_ENABLED", raising=False)
+    with pytest.raises(ValueError, match="CHAT_DATA_ONTOLOGY_QUERY_ENABLED"):
+        asyncio.run(
+            data_analyzing.create_data_analyzing_tool().ainvoke(
+                {"action": "query_object", "action_payload": {"object": "order"}, "state": _semantic_query_state()}
+            )
+        )
+
+
+def test_query_object_happy_path(monkeypatch):
+    monkeypatch.setenv("CHAT_DATA_ONTOLOGY_QUERY_ENABLED", "1")
+    payload, captured, fake_dao = _invoke_query_object(
+        monkeypatch,
+        action_payload={
+            "object": "order",
+            "properties": ["city", "order_id"],
+            "filters": [{"property": "city", "operator": "=", "value": "上海"}],
+            "order_by": [{"property": "order_id", "direction": "DESC"}],
+            "limit": 10,
+            "offset": 5,
+        },
+    )
+    # 启用模型集 = 服务端从可见配置推导（disabled 被剔除）
+    assert fake_dao.captured_ids == ["sc_order"]
+    # 编译走 BI DSL 门面：dimensions 带 displayName=属性名，谓词已翻译成维度名
+    assert captured["dsl"]["dimensions"] == [
+        {"name": "城市", "displayName": "city"},
+        {"name": "订单编号", "displayName": "order_id"},
+    ]
+    assert captured["dsl"]["filters"] == [{"name": "城市", "operator": "=", "value": "上海"}]
+    assert captured["dsl"]["orderBy"] == [{"name": "订单编号", "direction": "DESC"}]
+    assert captured["dsl"]["limit"] == 10
+    assert captured["dsl"]["offset"] == 5
+    assert captured["load_config"] == {"datasource_id": "ds_a", "config_id": "sc_order", "user_id": "u1"}
+    # 执行在数据源组主库（一期不带 member），审计字段齐全
+    assert captured["execute"]["member_datasource_ids"] is None
+    assert captured["execute"]["semantic_config_id"] == "sc_order"
+    assert captured["execute"]["datasource_id"] == "ds_a"
+    assert captured["execute"]["conversation_id"] == "c1"
+    # 返回协议：来源 + 属性列 + 编译后 SQL
+    assert payload["success"] is True
+    assert payload["source"] == {"object": "order", "object_display_name": "订单", "semantic_config_id": "sc_order"}
+    assert payload["columns"] == ["city", "order_id"]
+    assert payload["property_dimensions"] == {"city": "城市", "order_id": "订单编号"}
+    assert payload["sql"] == "SELECT `订单编号` FROM t"
+    assert payload["data"] == [["o1", "上海"]]
+
+
+def test_query_object_execution_failure_reported(monkeypatch):
+    """执行失败（execute_agent_sql 返回 status=failed，不抛异常）时 success 必须为 False。"""
+    monkeypatch.setenv("CHAT_DATA_ONTOLOGY_QUERY_ENABLED", "1")
+    payload, _captured, _fake_dao = _invoke_query_object(
+        monkeypatch,
+        execute_result={"status": "failed", "error": "SQL 执行超时", "total_count": 0, "results": []},
+    )
+    assert payload["success"] is False
+    assert payload["error"] == "SQL 执行超时"
+    # 失败正文不携带空数据，避免模型把失败误读成「查无数据」
+    assert payload["data"] == []
+    assert payload["total_count"] == 0
+
+
+def test_query_object_rows_read_from_member_results(monkeypatch):
+    """聚合契约：顶层无 data，行数据必须从 results[] 成功成员回填（实测踩坑回归）。"""
+    monkeypatch.setenv("CHAT_DATA_ONTOLOGY_QUERY_ENABLED", "1")
+    payload, _captured, _fake_dao = _invoke_query_object(
+        monkeypatch,
+        execute_result={
+            "status": "succeeded",
+            "sql": "SELECT `订单编号` FROM t",
+            "total_count": 3,
+            "error": None,
+            "member": {
+                "status": "succeeded",
+                "columns": ["order_id", "city"],
+                "data": [["o1", "上海"], ["o2", "北京"], ["o3", "上海"]],
+                "total_count": 3,
+            },
+        },
+    )
+    assert payload["success"] is True
+    # total_count=3 但顶层无 data 的场景，行必须从 results[] 成员取到
+    assert payload["data"] == [["o1", "上海"], ["o2", "北京"], ["o3", "上海"]]
+    assert payload["total_count"] == 3
+
+
+def test_query_object_requires_enabled_models(monkeypatch):
+    monkeypatch.setenv("CHAT_DATA_ONTOLOGY_QUERY_ENABLED", "1")
+
+    class _EmptyService:
+        async def get_configs_async(self, datasource_id, user_id=""):
+            return []
+
+    monkeypatch.setattr(data_analyzing, "get_semantic_config_service", lambda: _EmptyService())
+    with pytest.raises(ValueError, match="没有启用语义模型"):
+        asyncio.run(
+            data_analyzing.create_data_analyzing_tool().ainvoke(
+                {"action": "query_object", "action_payload": {"object": "order"}, "state": _semantic_query_state()}
+            )
+        )
+
+
+def test_query_object_requires_datasource(monkeypatch):
+    monkeypatch.setenv("CHAT_DATA_ONTOLOGY_QUERY_ENABLED", "1")
+    monkeypatch.setattr(data_analyzing, "get_semantic_config_service", lambda: _FakeOntologyConfigService())
+    with pytest.raises(ValueError, match="当前会话未绑定数据源"):
+        asyncio.run(
+            data_analyzing.create_data_analyzing_tool().ainvoke(
+                {"action": "query_object", "action_payload": {"object": "order"}, "state": {}}
+            )
+        )
