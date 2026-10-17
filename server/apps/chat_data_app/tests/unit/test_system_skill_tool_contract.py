@@ -204,7 +204,7 @@ def test_query_capability_contains_complete_query_contract():
     assert "不是 `mode` 参数" in query
     assert "CTE" in query
     assert "年度总量对比" in query
-    assert "读取候选后确认当前配置不存在" in query
+    assert "精读后确认当前配置不存在" in query
     assert "用户必须补充公式和统计周期" in query
     assert "查询成功后系统始终将完整结果保存" in query
     assert "result_path" in query
