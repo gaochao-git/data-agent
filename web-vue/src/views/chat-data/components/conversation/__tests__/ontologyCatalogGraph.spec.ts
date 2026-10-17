@@ -178,12 +178,13 @@ describe('buildGraphOption', () => {
     expect(amountNode.symbolSize).toBe(12)
   })
 
-  it('关系边 label 用语义名（from_display_name），多重性只进 tooltip；初值坐标成环不重叠', () => {
+  it('关系边 label 与箭头同向（取 to_display_name），多重性只进 tooltip；初值坐标成环不重叠', () => {
     const catalog = parseOntologyCatalog(SAMPLE_YAML)!
     const option = buildGraphOption(catalog)
     const graph = getGraph(option)
     const relationLink = (graph.links as Array<Record<string, unknown>>).find(link => 'relation' in link)!
-    expect((relationLink.label as Record<string, unknown>).formatter).toBe('下单用户')
+    // 箭头 customer→sales_order（one→many），label 描述到达的 many 侧（订单）=「名下订单」
+    expect((relationLink.label as Record<string, unknown>).formatter).toBe('名下订单')
     // 两个对象节点在圆周上不重合（两节点时上下对称：x 相同、y 相反，比较坐标对）
     const nodes = (graph.data as Array<Record<string, unknown>>).filter(node => node.catalogObject)
     expect([nodes[0]!.x, nodes[0]!.y]).not.toEqual([nodes[1]!.x, nodes[1]!.y])

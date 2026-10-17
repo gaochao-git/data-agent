@@ -243,16 +243,16 @@ const layoutCatalog = (catalog: OntologyCatalog): { nodes: LayoutNode[]; relatio
   for (const relation of catalog.relations) {
     const fromDisplay = displayByObject.get(relation.from) || relation.from
     const toDisplay = displayByObject.get(relation.to) || relation.to
-    // 边 label 用语义名（from 侧显示名，如「下单用户」「所属分类」）——多重性是 ER 概念，
-    // 图谱语境下退到 tooltip；from_display_name 缺省时回落关系 API 名。
-    // 箭头方向对齐 Palantir Vertex 默认（many_to_one 从 one 端指向 many 端）：
-    // 边的 target 落在 many 侧（from 对象，持 FK 的一端），箭头符号在 target 端。
+    // 边 label 与箭头同向（one→many，对齐 Palantir Vertex 默认）：取 to_display_name——
+    // 官方约定某侧 display name 描述「沿链路到达该侧」的称呼（link-types-overview），
+    // 箭头从 one 走向 many，label 应描述到达的 many 侧（即反向展示名 to_display_name）。
+    // from_display_name 缺省时回落关系 API 名。
     relationLinks.push({
       source: relation.to,
       target: relation.from,
       label: {
         show: true,
-        formatter: relation.from_display_name || relation.name,
+        formatter: relation.to_display_name || relation.from_display_name || relation.name,
         fontSize: 10,
         color: '#64748b',
       },
@@ -304,7 +304,8 @@ const formatGraphTooltip = (params: unknown, objectByName: Map<string, CatalogOb
     const relation = link.relation
     const lines = [
       `<b>${escapeHtml(relation.name)}</b>`,
-      `${escapeHtml(link.fromDisplay)} → ${escapeHtml(link.toDisplay)}（${escapeHtml(MULTIPLICITY_LABELS[relation.multiplicity] || relation.multiplicity)}）`,
+      // 方向行与画布箭头一致（one 端 → many 端 = toDisplay → fromDisplay）
+      `${escapeHtml(link.toDisplay)} → ${escapeHtml(link.fromDisplay)}（${escapeHtml(MULTIPLICITY_LABELS[relation.multiplicity] || relation.multiplicity)}）`,
     ]
     const fromVerbalize = renderVerbalize(relation.from_verbalize || '', relation.from, link.fromDisplay, relation.to, link.toDisplay)
     const toVerbalize = renderVerbalize(relation.to_verbalize || '', relation.from, link.fromDisplay, relation.to, link.toDisplay)
