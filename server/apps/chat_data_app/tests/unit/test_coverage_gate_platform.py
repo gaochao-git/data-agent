@@ -888,31 +888,38 @@ def test_generation_stats_requires_positive_duration_and_tokens(monkeypatch):
     import time
 
     now_ms = int(time.time() * 1000)
+    # 首 token 锚点缺失 → 不产 stats
     assert (
-        agent_stream._generation_stats_from_usage(first_token_ms=None, stream_started_wall_ms=now_ms, usage={}) is None
+        agent_stream._generation_stats_from_usage(
+            first_token_ms=None, first_token_wall_ms=now_ms, stream_ended_wall_ms=now_ms, usage={}
+        )
+        is None
     )
+    # 无输出 token → 不产 stats
     assert (
         agent_stream._generation_stats_from_usage(
             first_token_ms=10,
-            stream_started_wall_ms=now_ms,
+            first_token_wall_ms=now_ms,
+            stream_ended_wall_ms=now_ms,
             usage={"output_tokens": 0},
         )
         is None
     )
-    # 流已开始但统计窗口为 0 → 无法得到正时长
-    monkeypatch.setattr(agent_stream.time, "time", lambda: now_ms / 1000)
+    # 解码窗口为 0 → 无法得到正时长
     assert (
         agent_stream._generation_stats_from_usage(
             first_token_ms=10,
-            stream_started_wall_ms=now_ms,
+            first_token_wall_ms=now_ms,
+            stream_ended_wall_ms=now_ms,
             usage={"output_tokens": 10},
         )
         is None
     )
-    # 正常路径：窗口 1000ms，其中 250ms 为工具耗时 → 生成时长 750ms
+    # 正常路径：解码窗口 1000ms（首 token → 流结束），其中 250ms 为工具耗时 → 生成时长 750ms
     stats = agent_stream._generation_stats_from_usage(
         first_token_ms=10,
-        stream_started_wall_ms=now_ms - 1000,
+        first_token_wall_ms=now_ms - 1000,
+        stream_ended_wall_ms=now_ms,
         usage={
             "output_tokens": 30,
             "breakdown": [{"role": "tool", "started_at_ms": now_ms - 900, "ended_at_ms": now_ms - 650}],
@@ -922,6 +929,17 @@ def test_generation_stats_requires_positive_duration_and_tokens(monkeypatch):
     assert stats["duration_ms"] == 750
     assert stats["output_tokens"] == 30
     assert stats["tokens_per_second"] == 40
+    # 流结束锚点缺失（异常中断路径）→ 回退当前时刻，仍可产 stats
+    monkeypatch.setattr(agent_stream.time, "time", lambda: now_ms / 1000)
+    stats_fallback = agent_stream._generation_stats_from_usage(
+        first_token_ms=10,
+        first_token_wall_ms=now_ms - 1000,
+        stream_ended_wall_ms=None,
+        usage={"output_tokens": 30},
+    )
+    assert stats_fallback is not None
+    assert stats_fallback["duration_ms"] == 1000
+    assert stats_fallback["tokens_per_second"] == 30
 
 
 def test_handle_message_chunk_emits_tool_call_chunk_events():

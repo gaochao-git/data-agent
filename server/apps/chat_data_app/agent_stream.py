@@ -1,7 +1,9 @@
 """ChatData completion handler."""
 
 import asyncio
+import re
 import time
+from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass
@@ -260,22 +262,25 @@ def _tool_duration_in_window(breakdown: Any, window_start_ms: int, window_end_ms
 def _generation_stats_from_usage(
     *,
     first_token_ms: int | None,
-    stream_started_wall_ms: int | None,
+    first_token_wall_ms: int | None,
+    stream_ended_wall_ms: int | None,
     usage: Any | None,
 ) -> dict[str, int] | None:
-    """汇总本轮生成统计（服务端口径）：首 token 耗时 + 纯模型生成时长 + 速度。
+    """汇总本轮生成统计（服务端口径）：首 token 耗时 + 解码时长 + 解码吞吐。
 
-    口径与前端旧算法一致：分母 = 流墙钟 − 工具执行时间（usage.breakdown 中 tool 行的
-    精确起止，只统计落在流窗口内的行）；任一关键数据缺失不产 stats，不用估算冒充。
+    口径对齐解码吞吐（业界 tok/s 惯例）：分母 = 首 token → 流结束的墙钟 − 工具
+    执行时间（usage.breakdown 中 tool 行的精确起止，只统计落在解码窗口内的行）；
+    TTFT 由 first_token_ms 单独表达，不进分母。流结束锚点缺失（异常中断路径）
+    回退当前时刻。任一关键数据缺失不产 stats，不用估算冒充。
     """
-    if first_token_ms is None or stream_started_wall_ms is None:
+    if first_token_ms is None or first_token_wall_ms is None:
         return None
     output_tokens = int((usage or {}).get("output_tokens") or 0) if isinstance(usage, dict) else 0
     if output_tokens <= 0:
         return None
-    ended_wall_ms = int(time.time() * 1000)
-    tool_duration_ms = _tool_duration_in_window((usage or {}).get("breakdown"), stream_started_wall_ms, ended_wall_ms)
-    duration_ms = (ended_wall_ms - stream_started_wall_ms) - tool_duration_ms
+    ended_wall_ms = int(stream_ended_wall_ms or time.time() * 1000)
+    tool_duration_ms = _tool_duration_in_window((usage or {}).get("breakdown"), first_token_wall_ms, ended_wall_ms)
+    duration_ms = (ended_wall_ms - first_token_wall_ms) - tool_duration_ms
     if duration_ms <= 0:
         return None
     return {
@@ -284,6 +289,30 @@ def _generation_stats_from_usage(
         "output_tokens": output_tokens,
         "tokens_per_second": round(output_tokens / (duration_ms / 1000)),
     }
+
+
+# 实时生成速率（generation_speed SSE）：滑窗口径的「当前速率」，与收口的整体平均
+# （generation_stats）是两个指标。滑窗 = 最近 N 毫秒内流出的模型输出粗估 token ÷
+# 活跃跨度；窗口静默（工具执行、调用间隙）不推送，前端保持上次值自然冻结。
+_SPEED_WINDOW_MS = 2000
+_SPEED_EMIT_INTERVAL_MS = 500
+_SPEED_MIN_SPAN_MS = 300
+# 与前端 estimateTokensFromText 同口径：CJK 字符 1 token/字，其余非空白 4 字符/token
+_SPEED_CJK_CHAR_REGEX = re.compile(r"[\u3400-\u9fff\uf900-\ufaff\u3000-\u303f\uff01-\uff5e]")
+
+
+def _estimate_stream_tokens(text: str) -> int:
+    """流式文本的 token 粗估（与前端实时估算同公式），仅用于生成中的实时速率展示。"""
+    cjk_count = 0
+    other_count = 0
+    for char in text:
+        if char.isspace():
+            continue
+        if _SPEED_CJK_CHAR_REGEX.match(char):
+            cjk_count += 1
+        else:
+            other_count += 1
+    return cjk_count + (other_count + 3) // 4
 
 
 def _validate_workspace_file_selections(file_selections: list[str], workspace_root: str) -> list[str]:
@@ -402,10 +431,15 @@ class _AgentSseStreamAdapter:
         self._first_token_timeout_alarm_emitted = False
         self._queued_events: list[str] = []
         self.graph_started = False
-        # 生成统计锚点（服务端口径）：流起止墙钟（工具时间窗口过滤用），
+        # 生成统计锚点（服务端口径）：首 token 墙钟与流结束墙钟（解码窗口用），
         # finish 时汇总为 generation_stats。
-        self._stream_started_wall_ms: int | None = None
+        self._first_token_wall_ms: int | None = None
         self.first_token_ms: int | None = None
+        self._stream_ended_wall_ms: int | None = None
+        # 实时生成速率（generation_speed）：滑窗 token 样本 (墙钟ms, 粗估token)，
+        # 仅本轮流内有效；节流推送，窗口静默不推送。
+        self._speed_samples: deque[tuple[int, int]] = deque()
+        self._last_speed_emit_ms = 0
 
     def set_input_state(self, input_state: dict[str, Any]) -> None:
         """设置下一次 graph 调用的增量输入。"""
@@ -420,7 +454,6 @@ class _AgentSseStreamAdapter:
         while self._queued_events:
             yield self._queued_events.pop(0)
         started_at = time.perf_counter()
-        self._stream_started_wall_ms = int(time.time() * 1000)
         timeout_task = asyncio.create_task(self._first_token_timeout_watchdog(started_at))
         try:
             async for sse_event in self._iter_agent_stream_events(started_at):
@@ -440,6 +473,9 @@ class _AgentSseStreamAdapter:
             timeout_task.cancel()
             with suppress(asyncio.CancelledError):
                 await timeout_task
+            # 解码窗口终点：流退出（正常结束/异常/客户端断开）即盖章，避免 finish()
+            # 里的 aget_state 等收尾耗时被算进生成时长。
+            self._stream_ended_wall_ms = int(time.time() * 1000)
 
     async def _iter_agent_stream_events(self, started_at: float) -> AsyncIterator[dict[str, Any] | str]:
         """消费 agent.astream 原始事件流并转成 SSE 事件；客户端断开时提前结束。"""
@@ -483,6 +519,9 @@ class _AgentSseStreamAdapter:
             self._record_first_visible_payload(started_at)
         async for sse_event in self._handle_message_chunk(message_chunk, metadata):
             yield sse_event
+        speed_event = self._maybe_emit_generation_speed()
+        if speed_event:
+            yield speed_event
 
     async def finish(
         self, *, persist_latest_ai_timestamp: bool = False, prefer_latest_usage: bool = False
@@ -493,7 +532,8 @@ class _AgentSseStreamAdapter:
         # 生成统计（服务端口径）随最后一条 AIMessage 持久化（历史回放可见），并随 message_end 下发。
         stats = _generation_stats_from_usage(
             first_token_ms=self.first_token_ms,
-            stream_started_wall_ms=self._stream_started_wall_ms,
+            first_token_wall_ms=self._first_token_wall_ms,
+            stream_ended_wall_ms=self._stream_ended_wall_ms,
             usage=usage,
         )
         if persist_latest_ai_timestamp:
@@ -627,6 +667,7 @@ class _AgentSseStreamAdapter:
             return
         self._first_visible_payload_seen = True
         self.first_token_ms = int((time.perf_counter() - started_at) * 1000)
+        self._first_token_wall_ms = int(time.time() * 1000)
         self._emit_first_token_timeout_if_needed(started_at)
         if self.on_first_message:
             self.on_first_message()
@@ -656,10 +697,12 @@ class _AgentSseStreamAdapter:
         flags = _MessageChunkFlags.of(message_chunk)
         if not flags.has_visible_payload and not (self.include_empty_tool_messages and flags.is_tool_message):
             return
+        self._sample_chunk_generation_speed(message_chunk, flags)
         if flags.thinking_event:
+            reasoning_content = _extract_reasoning_content(message_chunk)
             _append_reasoning_segment(
                 self.reasoning_segments,
-                _extract_reasoning_content(message_chunk),
+                reasoning_content,
                 self.tool_stream_state.visible_tool_count(),
                 self.reasoning_turn_id,
             )
@@ -682,6 +725,50 @@ class _AgentSseStreamAdapter:
         msg_data = message_chunk.model_dump()
         msg_data["timestamp"] = _get_timestamp()
         yield _format_sse("message", msg_data)
+
+    def _sample_chunk_generation_speed(self, message_chunk: Any, flags: _MessageChunkFlags) -> None:
+        """按 chunk 载荷形态采样实时速率：thinking / 参数片段 / 正文均为模型输出，工具结果不计。"""
+        if flags.thinking_event:
+            self._sample_generation_speed(_extract_reasoning_content(message_chunk))
+        if flags.has_tool_call_chunks:
+            self._sample_generation_speed(
+                "".join(
+                    str(chunk.get("args") or "")
+                    for chunk in getattr(message_chunk, "tool_call_chunks", []) or []
+                    if isinstance(chunk, dict)
+                )
+            )
+            return
+        if flags.is_tool_message:
+            return
+        content = getattr(message_chunk, "content", None)
+        if isinstance(content, str):
+            self._sample_generation_speed(content)
+
+    def _sample_generation_speed(self, text: str) -> None:
+        """把一段流式模型输出按 token 粗估记入滑窗样本（墙钟毫秒戳）。"""
+        tokens = _estimate_stream_tokens(text)
+        if tokens > 0:
+            self._speed_samples.append((int(time.time() * 1000), tokens))
+
+    def _maybe_emit_generation_speed(self) -> str | None:
+        """节流推送实时生成速率（generation_speed）；窗口静默返回 None，前端保持上次值。"""
+        now_ms = int(time.time() * 1000)
+        if now_ms - self._last_speed_emit_ms < _SPEED_EMIT_INTERVAL_MS:
+            return None
+        window_start_ms = now_ms - _SPEED_WINDOW_MS
+        while self._speed_samples and self._speed_samples[0][0] <= window_start_ms:
+            self._speed_samples.popleft()
+        if not self._speed_samples:
+            return None
+        window_tokens = sum(tokens for _, tokens in self._speed_samples)
+        earliest_ms = min(timestamp for timestamp, _ in self._speed_samples)
+        span_ms = max(now_ms - earliest_ms, _SPEED_MIN_SPAN_MS)
+        self._last_speed_emit_ms = now_ms
+        return _format_sse(
+            "generation_speed",
+            {"tokens_per_second": round(window_tokens / (span_ms / 1000), 1), "window_ms": _SPEED_WINDOW_MS},
+        )
 
     def _resolve_end_usage(self, prefer_latest_usage: bool) -> Any | None:
         state_usage = None

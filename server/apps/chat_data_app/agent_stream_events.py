@@ -23,7 +23,6 @@ from .tool_stream_progress import (
     _extract_streaming_progress_inputs,
     _format_sse,
     _format_tool_progress_event,
-    next_stream_stats_event,
 )
 
 logger = get_logger(__name__)
@@ -293,10 +292,6 @@ class _ToolStreamState:
         self.progress_line_counts: dict[str, tuple[int, int]] = {}
         # 已推送的流式 intent，用于 intent 未变化时去重
         self.progress_intents: dict[str, str] = {}
-        # 本轮累计流式输出的 args 字符数（含全部工具调用）：前端实时生成速度的分子来源
-        self.streamed_args_chars = 0
-        # 已通过 stream_stats 事件上报的字符数（跨步长去重）
-        self.reported_args_chars = 0
 
     def visible_tool_count(self) -> int:
         return _visible_tool_count(self.tool_names)
@@ -321,11 +316,6 @@ class _ToolStreamState:
         if isinstance(raw_args, str) and raw_args.strip():
             # 字符串形态的 args（含双层编码）进 buffer，完成后由 _parse_tool_args_buffer 统一解析。
             self.args_buffer[tool_call_id] = self.args_buffer.get(tool_call_id, "") + raw_args
-            self.streamed_args_chars += len(raw_args)
-            stats_event = next_stream_stats_event(self.streamed_args_chars, self.reported_args_chars)
-            if stats_event is not None:
-                self.reported_args_chars, stats_sse = stats_event
-                events.append(stats_sse)
         return events
 
     def handle_tool_calls(self, tool_calls: Any) -> list[str]:
@@ -412,11 +402,6 @@ class _ToolStreamState:
             current_tool_call_id = self._resolve_chunk_tool_call_id(chunk_id, chunk_index)
             if current_tool_call_id and chunk_args:
                 self.args_buffer[current_tool_call_id] = self.args_buffer.get(current_tool_call_id, "") + chunk_args
-                self.streamed_args_chars += len(chunk_args)
-                stats_event = next_stream_stats_event(self.streamed_args_chars, self.reported_args_chars)
-                if stats_event is not None:
-                    self.reported_args_chars, stats_sse = stats_event
-                    events.append(stats_sse)
                 # file_write / file_edit 生成 content 期间实时统计行数，前端工具卡片显示 "+N -M"
                 tool_name = self.tool_names.get(current_tool_call_id, "")
                 events.extend(
