@@ -2,8 +2,8 @@
  * 本体目录图谱的数据转换纯函数（配合 OntologyCatalogGraph.vue 使用）。
  * 输入 = 物化产物 _ontology_catalog.yaml 的文本，输出 = echarts graph option。
  * 三要素全上图：对象节点 + 属性节点（环绕各自对象的小节点）+
- * 关系边（本体 relations 一比一，箭头=one端→many端，对齐 Palantir Vertex 默认：
- * many_to_one 链接的箭头从 one 侧指向 many 侧）。
+ * 关系边（本体 relations 一比一，箭头=one端→many端、label=名词角色名 to_display_name，
+ * 领属读法——对标 Palantir Vertex 默认与官方 Link Type 命名规则，用户拍板）。
  * 布局对齐官方 Vertex 默认体验：力导向（Auto），节点可拖拽重排、画布 roam 缩放；
  * 环形坐标仅作为力的初值传入（收敛快、不乱飞）。
  * 解析失败/结构缺失返回 null，由组件降级为提示文案——此处不抛错。
@@ -243,9 +243,9 @@ const layoutCatalog = (catalog: OntologyCatalog, showProperties: boolean): { nod
   for (const relation of catalog.relations) {
     const fromDisplay = displayByObject.get(relation.from) || relation.from
     const toDisplay = displayByObject.get(relation.to) || relation.to
-    // 边 label 与箭头同向（one→many，对齐 Palantir Vertex 默认）：取 to_display_name——
-    // 官方约定某侧 display name 描述「沿链路到达该侧」的称呼（link-types-overview），
-    // 箭头从 one 走向 many，label 应描述到达的 many 侧（即反向展示名 to_display_name）。
+    // Palantir 约定（用户拍板对标）：箭头 one→many（Vertex 默认展示约定），label=名词
+    // 角色名 to_display_name——官方命名规则「side 表示通往该侧的链路」，one→many 方向
+    // 的 label 命名到达的 many 侧（领属读法：用户 的 名下订单 = 订单）。
     // from_display_name 缺省时回落关系 API 名。
     relationLinks.push({
       source: relation.to,

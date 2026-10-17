@@ -153,8 +153,8 @@ describe('buildGraphOption', () => {
     const relationLinks = links.filter(link => 'relation' in link)
     expect(relationLinks).toHaveLength(1)
     expect(links).toHaveLength(4)
-    // 关系边来自本体 relations；箭头方向对齐 Palantir Vertex 默认（many_to_one 从
-    // one 端指向 many 端）：source=to 对象（one 侧），target=from 对象（many 侧）
+    // 关系边来自本体 relations；箭头 one→many（Palantir Vertex 默认，用户拍板对标），
+    // label=名词角色名 to_display_name（官方命名规则「side 表示通往该侧的链路」）
     expect(relationLinks[0]).toMatchObject({ source: 'customer', target: 'sales_order' })
     expect(graph.edgeSymbol).toEqual(['none', 'arrow'])
     // 力导向布局（对齐官方 Vertex 默认 Auto）：可拖拽缩放；环形坐标仅作初值
@@ -178,12 +178,12 @@ describe('buildGraphOption', () => {
     expect(amountNode.symbolSize).toBe(12)
   })
 
-  it('关系边 label 与箭头同向（取 to_display_name），多重性只进 tooltip；初值坐标成环不重叠', () => {
+  it('关系边 label=名词角色名（to_display_name）沿 Palantir 约定；初值坐标成环不重叠', () => {
     const catalog = parseOntologyCatalog(SAMPLE_YAML)!
     const option = buildGraphOption(catalog)
     const graph = getGraph(option)
     const relationLink = (graph.links as Array<Record<string, unknown>>).find(link => 'relation' in link)!
-    // 箭头 customer→sales_order（one→many），label 描述到达的 many 侧（订单）=「名下订单」
+    // 箭头 customer→sales_order（one→many），label 命名到达的 many 侧 =「名下订单」
     expect((relationLink.label as Record<string, unknown>).formatter).toBe('名下订单')
     // 两个对象节点在圆周上不重合（两节点时上下对称：x 相同、y 相反，比较坐标对）
     const nodes = (graph.data as Array<Record<string, unknown>>).filter(node => node.catalogObject)
