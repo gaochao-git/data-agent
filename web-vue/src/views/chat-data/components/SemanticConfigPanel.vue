@@ -66,7 +66,6 @@ import {
   LOGICAL_TYPE_OPTIONS,
   atomicMetricColumn,
   buildAliasAwareDefaultDisplayName,
-  buildConfigMaintainerTitle,
   buildConfigSignature,
   buildDimensionPreserveKey,
   buildFieldRowKey,
@@ -81,7 +80,6 @@ import {
   formatJoinTypeLabel,
   formatRelationshipTypeLabel,
   generateScopeAlias,
-  getConfigCreatorName,
   getColumnDictKey,
   getFieldColumnDictKey,
   getFieldPhysicalColumn,
@@ -197,6 +195,9 @@ const isActiveConfigDirty = computed(() => {
 
 const hasUnsavedSemanticConfig = computed(() => isActiveConfigDirty.value || isFieldRowsDirty.value)
 const canOpenEvaluation = computed(() => Boolean(activeConfig.value && props.datasourceId))
+
+// 评测 / 历史学习入口开关：当前阶段暂停暴露（组件、composable 与后端 API 均保留，置 true 即恢复）
+const SHOW_EVALUATION_ENTRY = false
 
 // 语义模型健康校验（管理员入口，校验范围=当前数据源的缓存表结构 + 全部语义模型）
 const checkingHealth = ref(false)
@@ -2222,7 +2223,9 @@ defineExpose({
               <input
                 type="text"
                 :value="activeConfig.name"
-                class="w-[200px] shrink-0 px-3 py-1.5 border border-gray-200 rounded-md bg-white text-[13px] text-gray-700 outline-none focus:border-blue-500"
+                class="max-w-full shrink-0 px-3 py-1.5 border border-gray-200 rounded-md bg-white text-[13px] text-gray-700 outline-none focus:border-blue-500"
+                :class="sourceTablePanelCollapsed ? 'min-w-[200px] flex-1' : ''"
+                :style="sourceTablePanelCollapsed ? undefined : { width: `${sourceTablePanelWidth + 20}px` }"
                 placeholder="语义模型名称"
                 :disabled="!canManageConfig(activeConfig)"
                 @input="updateConfig(activeConfig.id, { name: ($event.target as HTMLInputElement).value })"
@@ -2239,14 +2242,6 @@ defineExpose({
                 <i class="fa-regular fa-note-sticky mr-1"></i>业务说明{{ activeConfig.business_notes ? '' : '（未填写）' }}
               </button>
               <div class="flex flex-wrap items-center gap-2 ml-auto shrink-0">
-                <div
-                  class="h-8 max-w-[168px] shrink-0 inline-flex items-center gap-1.5 rounded-md border border-transparent bg-transparent px-1 text-[12px] text-gray-400"
-                  :title="buildConfigMaintainerTitle(activeConfig)"
-                >
-                  <i class="fa-regular fa-user text-[11px]"></i>
-                  <span class="shrink-0">创建人</span>
-                  <span class="truncate">{{ getConfigCreatorName(activeConfig) }}</span>
-                </div>
                 <button
                   v-if="props.adminMode"
                   class="px-3 py-1.5 rounded-md text-xs whitespace-nowrap border border-gray-200 bg-white text-gray-600 transition-all duration-150 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -2272,6 +2267,7 @@ defineExpose({
                   </template>
                 </button>
                 <button
+                  v-if="SHOW_EVALUATION_ENTRY"
                   class="px-3 py-1.5 rounded-md text-xs whitespace-nowrap border border-gray-200 bg-white text-gray-600 transition-all duration-150 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
                   :disabled="!activeConfig || !canManageConfig(activeConfig)"
                   @click="openHistoryLearningDialog"
@@ -2279,6 +2275,7 @@ defineExpose({
                   <i class="fa-solid fa-graduation-cap mr-1"></i>历史学习
                 </button>
                 <button
+                  v-if="SHOW_EVALUATION_ENTRY"
                   class="px-3 py-1.5 rounded-md text-xs whitespace-nowrap border border-gray-200 bg-white text-gray-600 transition-all duration-150 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
                   :disabled="!canOpenEvaluation"
                   @click="openEvaluateDrawer"

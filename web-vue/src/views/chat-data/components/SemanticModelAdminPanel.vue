@@ -10,6 +10,7 @@ import AdminPanelToolbar from './AdminPanelToolbar.vue'
 import SemanticConfigPanel from './SemanticConfigPanel.vue'
 import { getDatasourceSchema } from '../api'
 import type { DataSource, SemanticConfigItem, TableInfo } from '../types'
+import { getConfigCreatorName } from './semantic/panelModelUtils'
 import { normalizeTableInfoList, resolveDatasourceType } from '../utils/datasourceSchema'
 
 const props = defineProps<{
@@ -87,7 +88,7 @@ const handleCreateConfig = () => {
       <span class="shrink-0 whitespace-nowrap text-[13px] font-medium text-slate-700">语义模型</span>
       <el-select
         v-model="selectedConfigId"
-        class="!w-[320px] shrink-0"
+        class="min-w-[320px] flex-1"
         filterable
         :disabled="!selectedDatasourceId || configOptions.length === 0"
         placeholder="请选择语义模型"
@@ -99,13 +100,14 @@ const handleCreateConfig = () => {
           :label="config.name"
         >
           <div class="flex items-center justify-between gap-3">
-            <span class="min-w-0 truncate">{{ config.name }}</span>
-            <span
-              class="shrink-0 rounded border px-1.5 py-px text-[11px] leading-4"
-              :class="config.enabled
-                ? 'border-emerald-200 bg-emerald-50 text-emerald-600'
-                : 'border-slate-200 bg-slate-100 text-slate-500'"
-            >{{ config.enabled ? '已启用' : '已禁用' }}</span>
+            <span class="flex min-w-0 items-center gap-2">
+              <span
+                class="h-1.5 w-1.5 shrink-0 rounded-full"
+                :class="config.enabled ? 'bg-emerald-500' : 'bg-slate-300'"
+              ></span>
+              <span class="min-w-0 truncate">{{ config.name }}</span>
+            </span>
+            <span class="shrink-0 text-[11px] text-slate-400">{{ getConfigCreatorName(config) }}</span>
           </div>
         </el-option>
       </el-select>
