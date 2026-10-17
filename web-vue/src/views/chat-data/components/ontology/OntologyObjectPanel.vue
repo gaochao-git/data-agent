@@ -1,12 +1,11 @@
 <script setup lang="ts">
 /**
  * 后台管理 · 本体对象列表面板（左树右详情）。
- * 对象/属性/关系为本体三等实体；本面板负责对象资产治理：
- * 左侧「业务领域 → 对象 → 属性/关系/映射」完全树形导航（对象子节点懒加载），
- * 右侧按选中节点类型渲染详情卡（对象卡含编辑/状态迁移/删除操作）。
- * 领域=业务域实体，一对一绑定数据源组（对象挂领域继承其组）；
- * 右键菜单：空白→新增领域，领域节点→新建对象/编辑领域/删除领域。
- * 层级对标 Palantir object type groups（展示层分组，非对象父子建模）。
+ * 左侧「根域 → 业务领域 → 对象/关系 → 属性/映射」完全树形导航（对象子节点懒加载），
+ * 右侧按选中节点类型渲染只读详情卡；全部写操作（新建/编辑/状态/删除）收敛到右键菜单。
+ * 归属口径：属性/映射是对象自有物，挂对象下；关系是对象之间的边（双规范对齐 Palantir link type / Ossie
+ * top-level relationships），挂领域下（两端同域一条、跨域两端各一条带「跨域」标记），不放对象里。
+ * 领域=业务域实体，一对一绑定数据源组（对象挂领域继承其组）；领域子节点为常驻「对象/关系」分组锚点。
  */
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -31,6 +30,7 @@ import type {
 } from '../../types'
 import OntologyDomainForm from './OntologyDomainForm.vue'
 import OntologyObjectForm from './OntologyObjectForm.vue'
+import OntologyRelationForm from './OntologyRelationForm.vue'
 import OntologyStatusDialog from './OntologyStatusDialog.vue'
 import { mappingIdentityText, ONTOLOGY_MULTIPLICITY_META, ONTOLOGY_RENDER_HINTS, ONTOLOGY_STATUS_META } from './ontologyMeta'
 import { useSemanticConfigOptions } from './useSemanticConfigOptions'
@@ -80,9 +80,12 @@ const loadGroupNames = async () => {
 }
 
 onMounted(() => {
+  // 宿主用 v-show 承载本面板且切换页签时只调 AdminPanel.ensureLoaded；自加载保证任何进入路径都有数据
+  void ensureLoaded()
   void loadSemanticOptions()
   void loadDomains()
   void loadGroupNames()
+  void loadRelationSources()
   document.addEventListener('click', closeCtxMenu)
 })
 
@@ -100,13 +103,38 @@ const filterStatus = ref<OntologyObjectStatus | undefined>(undefined)
 const filterDomainId = ref<number | undefined>(undefined)
 const hasLoaded = ref(false)
 
+// 关系分组数据源（不受工具栏筛选影响）：全量对象用于「对象→领域」映射，全量关系用于领域关系组
+const allObjects = ref<OntologyObjectItem[]>([])
+const relations = ref<OntologyRelationItem[]>([])
+
+const loadRelationSources = async () => {
+  try {
+    const [objectRes, relationRes] = await Promise.all([
+      getAdminOntologyObjects({}),
+      getAdminOntologyRelations({})
+    ])
+    if (objectRes.status === 'success') allObjects.value = objectRes.data?.objects || []
+    if (relationRes.status === 'success') relations.value = relationRes.data?.relations || []
+  } catch (err) {
+    console.error('获取本体关系分组数据失败:', err)
+  }
+}
+
+// 对象 API 名 → 领域主键（null=未归领域）；关系按两端对象的领域归组
+const objectDomainMap = computed(() => {
+  const map = new Map<string, number | null>()
+  for (const item of allObjects.value) map.set(item.object_name, item.domain_id)
+  return map
+})
+
 // 域筛选项已由领域清单接口提供（domains ref），不再从对象行提取
 
-// ---------- 树节点类型：根域 → 领域 → 对象 → 属性/关系/绑定 ----------
+// ---------- 树节点类型：根域 → 领域 → 对象/关系 → 属性/映射 ----------
 
 const UNGROUPED_DOMAIN = '未归领域'
 // 常驻根域：展示层锚点（右键新增业务领域），非数据实体，DB 无层级字段
 const ROOT_ROW_KEY = 'ontology-root'
+const domainBucketKey = (domainId: number | null) => (domainId == null ? '__ungrouped__' : String(domainId))
 
 interface RootNode {
   row_key: string
@@ -123,7 +151,9 @@ interface DomainNode {
   domain_label: string
   group_id: string
   is_ungrouped: boolean
-  children: ObjectNodeData[]
+  /** 领域下对象数（领域行直接展示，不必展开「对象」分组） */
+  object_count: number
+  children: TreeRow[]
 }
 interface ObjectNodeData {
   row_key: string
@@ -149,8 +179,29 @@ interface RelationNode {
   row_key: string
   kind: 'relation'
   relation: OntologyRelationItem
-  relation_direction: 'from' | 'to'
+  /** 两端对象分属不同领域（跨域关系在两端领域各显示一次，带「跨域」标记） */
+  is_cross_domain: boolean
   is_leaf: true
+}
+/** 对象子树分组节点（属性/映射）：UI 导航原语，非本体层级 */
+interface GroupNode {
+  row_key: string
+  kind: 'group'
+  group: 'property' | 'mapping'
+  label: string
+  object_name: string
+  children: TreeRow[]
+  is_leaf: false
+}
+/** 领域子节点分组（对象/关系）：常驻右键锚点——对象组管新建对象，关系组管新建关系 */
+interface DomainGroupNode {
+  row_key: string
+  kind: 'domain-group'
+  group: 'objects' | 'relations'
+  label: string
+  domain_id: number | null
+  children: TreeRow[]
+  is_leaf: false
 }
 interface MappingNode {
   row_key: string
@@ -164,13 +215,86 @@ interface EmptyNode {
   label: string
   is_leaf: true
 }
-type TreeRow = RootNode | DomainNode | ObjectNodeData | PropertyNode | RelationNode | MappingNode | EmptyNode
+type TreeRow = RootNode | DomainNode | DomainGroupNode | ObjectNodeData | GroupNode | PropertyNode | RelationNode | MappingNode | EmptyNode
 
 // 数据版本号：编入对象节点 key，列表刷新/保存后懒加载缓存整体失效，防止展示脏数据
 const dataVersion = ref(0)
 
+const toObjectNode = (item: OntologyObjectItem): ObjectNodeData => ({
+  row_key: `object:${item.object_name}:v${dataVersion.value}`,
+  kind: 'object',
+  object_name: item.object_name,
+  display_name: item.display_name,
+  status: item.status,
+  domain_id: item.domain_id,
+  domain_label: domainLabelOf(item.domain_id),
+  description: item.description,
+  mappings_count: item.mappings_count ?? (item.mappings || []).length,
+  update_time: item.update_time || '',
+  update_by_name: item.update_by_name || '',
+  is_leaf: false
+})
+
+// 关系按两端对象的领域归组：同域一条；跨域在两端领域各显示一条（同一关系、不同出现位置）
+const relationNodesByDomain = computed(() => {
+  const map = new Map<number | null, RelationNode[]>()
+  for (const rel of relations.value) {
+    const fromDomain = objectDomainMap.value.get(rel.from_object_name || '')
+    const toDomain = objectDomainMap.value.get(rel.to_object_name || '')
+    if (fromDomain === undefined && toDomain === undefined) continue
+    const isCrossDomain = fromDomain !== undefined && toDomain !== undefined && fromDomain !== toDomain
+    const buckets = new Set<number | null>()
+    if (fromDomain !== undefined) buckets.add(fromDomain)
+    if (toDomain !== undefined) buckets.add(toDomain)
+    for (const bucket of buckets) {
+      if (!map.has(bucket)) map.set(bucket, [])
+      map.get(bucket)!.push({
+        row_key: `rel:${domainBucketKey(bucket)}:${rel.relation_name}`,
+        kind: 'relation',
+        relation: rel,
+        is_cross_domain: isCrossDomain,
+        is_leaf: true
+      })
+    }
+  }
+  return map
+})
+
+// 领域子节点=常驻「对象/关系」两个分组锚点（空组保留占位，右键入口始终可用）
+const buildDomainChildren = (domainId: number | null, domainObjects: OntologyObjectItem[]): TreeRow[] => {
+  const bucket = domainBucketKey(domainId)
+  const objectNodes: TreeRow[] = domainObjects.map(toObjectNode)
+  if (objectNodes.length === 0) {
+    objectNodes.push({ row_key: `domain-group:${bucket}:objects:empty`, kind: 'empty', label: '暂无对象', is_leaf: true })
+  }
+  const relationNodes: TreeRow[] = relationNodesByDomain.value.get(domainId) || []
+  if (relationNodes.length === 0) {
+    relationNodes.push({ row_key: `domain-group:${bucket}:relations:empty`, kind: 'empty', label: '暂无关系', is_leaf: true })
+  }
+  return [
+    {
+      row_key: `domain-group:${bucket}:objects`,
+      kind: 'domain-group',
+      group: 'objects',
+      label: '对象',
+      domain_id: domainId,
+      children: objectNodes,
+      is_leaf: false
+    },
+    {
+      row_key: `domain-group:${bucket}:relations`,
+      kind: 'domain-group',
+      group: 'relations',
+      label: '关系',
+      domain_id: domainId,
+      children: relationNodes,
+      is_leaf: false
+    }
+  ]
+}
+
 const treeData = computed<RootNode[]>(() => {
-  // 对象按 domain_id 分组挂到领域；未挂领域的进「未归领域」常驻兜底节点（右键可新建对象）
+  // 对象按 domain_id 分组挂到领域；未挂领域的进「未归领域」常驻兜底节点
   const grouped = new Map<number, OntologyObjectItem[]>()
   const ungrouped: OntologyObjectItem[] = []
   for (const item of items.value) {
@@ -180,20 +304,6 @@ const treeData = computed<RootNode[]>(() => {
       grouped.get(item.domain_id)!.push(item)
     }
   }
-  const toObjectNode = (item: OntologyObjectItem): ObjectNodeData => ({
-    row_key: `object:${item.object_name}:v${dataVersion.value}`,
-    kind: 'object',
-    object_name: item.object_name,
-    display_name: item.display_name,
-    status: item.status,
-    domain_id: item.domain_id,
-    domain_label: domainLabelOf(item.domain_id),
-    description: item.description,
-    mappings_count: item.mappings_count ?? (item.mappings || []).length,
-    update_time: item.update_time || '',
-    update_by_name: item.update_by_name || '',
-    is_leaf: false
-  })
   const domainNodes: DomainNode[] = domains.value.map(domain => ({
     row_key: `domain:${domain.domain_name}`,
     kind: 'domain',
@@ -202,7 +312,8 @@ const treeData = computed<RootNode[]>(() => {
     domain_label: domain.display_name || domain.domain_name,
     group_id: domain.group_id,
     is_ungrouped: false,
-    children: (grouped.get(domain.id) || []).map(toObjectNode)
+    object_count: (grouped.get(domain.id) || []).length,
+    children: buildDomainChildren(domain.id, grouped.get(domain.id) || [])
   }))
   domainNodes.push({
     row_key: 'domain:__ungrouped__',
@@ -212,13 +323,15 @@ const treeData = computed<RootNode[]>(() => {
     domain_label: UNGROUPED_DOMAIN,
     group_id: '',
     is_ungrouped: true,
-    children: ungrouped.map(toObjectNode)
+    object_count: ungrouped.length,
+    children: buildDomainChildren(null, ungrouped)
   })
   // 常驻根域单顶层：业务领域全部挂根域下（展示层锚点，非数据实体）
   return [{ row_key: ROOT_ROW_KEY, kind: 'root', label: '根域', children: domainNodes }]
 })
 
-// 根域与领域节点默认展开（key 稳定；对象节点 key 带版本号，保存/刷新后重新折叠）
+// 根域/领域/对象分组默认展开（key 稳定；对象节点 key 带版本号，保存/刷新后重新折叠）
+// 默认只展开根域与领域层；对象/关系分组默认收起（保持树紧凑），展开与否随用户操作
 const defaultExpandedKeys = computed(() => [
   ROOT_ROW_KEY,
   ...treeData.value[0]?.children.map(row => row.row_key) || []
@@ -238,21 +351,29 @@ const detailStore = ref<Record<string, ObjectDetailEntry>>({})
 const objectLoadState = ref<Record<string, 'loading' | 'error' | 'ready'>>({})
 
 const buildChildRows = (objectNode: ObjectNodeData, entry: ObjectDetailEntry): TreeRow[] => {
+  // 分组树：属性/映射各成组（带计数），空组不展示；关系不在此处（关系是对象之间的，挂领域下）
+  const propertyChildren: TreeRow[] = (entry.detail.properties || []).map(prop => ({
+    row_key: `${objectNode.row_key}:prop:${prop.property_name}`,
+    kind: 'property',
+    property: prop,
+    is_leaf: true
+  }))
+  const mappingChildren: TreeRow[] = (entry.detail.mappings || []).map(mapping => ({
+    row_key: `${objectNode.row_key}:mapping:${mappingIdentityText(mapping)}`,
+    kind: 'mapping',
+    mapping,
+    is_leaf: true
+  }))
   const rows: TreeRow[] = []
-  for (const prop of entry.detail.properties || []) {
-    rows.push({ row_key: `${objectNode.row_key}:prop:${prop.property_name}`, kind: 'property', property: prop, is_leaf: true })
+  const pushGroup = (group: GroupNode['group'], label: string, children: TreeRow[]) => {
+    if (children.length > 0) {
+      rows.push({ row_key: `${objectNode.row_key}:group:${group}`, kind: 'group', group, label, object_name: objectNode.object_name, children, is_leaf: false })
+    }
   }
-  for (const rel of entry.fromRelations) {
-    rows.push({ row_key: `${objectNode.row_key}:rel:${rel.relation_name}:from`, kind: 'relation', relation: rel, relation_direction: 'from', is_leaf: true })
-  }
-  for (const rel of entry.toRelations) {
-    rows.push({ row_key: `${objectNode.row_key}:rel:${rel.relation_name}:to`, kind: 'relation', relation: rel, relation_direction: 'to', is_leaf: true })
-  }
-  for (const mapping of entry.detail.mappings || []) {
-    rows.push({ row_key: `${objectNode.row_key}:mapping:${mappingIdentityText(mapping)}`, kind: 'mapping', mapping, is_leaf: true })
-  }
+  pushGroup('property', '属性', propertyChildren)
+  pushGroup('mapping', '映射', mappingChildren)
   if (rows.length === 0) {
-    rows.push({ row_key: `${objectNode.row_key}:empty`, kind: 'empty', label: '暂无属性、关系与映射', is_leaf: true })
+    rows.push({ row_key: `${objectNode.row_key}:empty`, kind: 'empty', label: '暂无属性与映射', is_leaf: true })
   }
   return rows
 }
@@ -305,8 +426,8 @@ const currentNodeKey = ref('')
 const selectedNode = ref<TreeRow | null>(null)
 
 const onNodeClick = (data: TreeRow) => {
-  // 根域是常驻锚点非数据实体，点击不改变右侧详情
-  if (data.kind === 'root') return
+  // 根域/领域分组/对象分组节点是导航容器非数据实体，点击不改变右侧详情
+  if (data.kind === 'root' || data.kind === 'group' || data.kind === 'domain-group') return
   selectedNode.value = data
   currentNodeKey.value = data.row_key
   if (data.kind === 'object') ensureObjectData(data)
@@ -415,6 +536,7 @@ const openStatus = (objectName: string) => {
 
 const onSaved = async () => {
   await loadObjects()
+  void loadRelationSources()
   emit('changed')
 }
 
@@ -500,25 +622,38 @@ const removeDomain = async (domainName: string, displayName: string) => {
 
 // ---------- 拖拽换域（仅对象节点拖入领域节点内部；API 名不可改，归属迁移靠拖拽） ----------
 
-// 只允许对象节点发起拖拽（领域/根域等锚点不可拖）
+// 只允许对象节点发起拖拽（领域/根域/分组等锚点不可拖）
 const allowDrag = (draggingNode: { data: TreeRow }) => draggingNode.data.kind === 'object'
 
-// 只允许放到领域节点内部（inner）；禁止排序（prev/next）与拖到对象/属性节点
-const allowDrop = (draggingNode: { data: TreeRow }, dropNode: { data: TreeRow }, type: string) =>
-  draggingNode.data.kind === 'object' && type === 'inner' && dropNode.data.kind === 'domain'
+// 只允许放到领域节点或其「对象」分组内部（inner）；禁止排序（prev/next）与拖到其他节点
+const allowDrop = (draggingNode: { data: TreeRow }, dropNode: { data: TreeRow }, type: string) => {
+  if (draggingNode.data.kind !== 'object' || type !== 'inner') return false
+  const target = dropNode.data
+  if (target.kind === 'domain') return true
+  return target.kind === 'domain-group' && target.group === 'objects'
+}
 
 const onNodeDrop = async (draggingNode: { data: TreeRow }, dropNode: { data: TreeRow }, dropType: string) => {
-  if (draggingNode.data.kind !== 'object' || dropType !== 'inner' || dropNode.data.kind !== 'domain') return
+  if (draggingNode.data.kind !== 'object' || dropType !== 'inner') return
+  const target = dropNode.data
+  let targetDomainId: number | null
+  if (target.kind === 'domain') {
+    targetDomainId = target.is_ungrouped ? null : target.domain_id
+  } else if (target.kind === 'domain-group' && target.group === 'objects') {
+    targetDomainId = target.domain_id
+  } else {
+    return
+  }
   const objectNode = draggingNode.data
-  const targetDomainId = dropNode.data.is_ungrouped ? null : dropNode.data.domain_id
   if (objectNode.domain_id === targetDomainId) return
+  const targetLabel = target.kind === 'domain' ? target.domain_label : domainLabelOf(targetDomainId)
   try {
     const res = await changeAdminOntologyObjectDomain(objectNode.object_name, targetDomainId)
     if (res.status === 'success') {
       ElMessage.success(
         targetDomainId == null
           ? `已移出领域：${objectNode.display_name || objectNode.object_name}`
-          : `已移动到「${dropNode.data.domain_label}」`
+          : `已移动到「${targetLabel}」`
       )
     } else {
       ElMessage.error(res.msg || '移动失败')
@@ -529,6 +664,7 @@ const onNodeDrop = async (draggingNode: { data: TreeRow }, dropNode: { data: Tre
   } finally {
     // el-tree 已就地移动节点；无论成败都重拉列表纠正视图（对象 key 带版本号，懒加载缓存一并失效）
     await loadObjects()
+    void loadRelationSources()
   }
 }
 
@@ -560,30 +696,69 @@ const openCtxMenu = (event: MouseEvent, node: TreeRow | null) => {
     // 根域：只新增业务领域（对象必须挂在具体领域下，根域不直接建对象）
     menuItems.push({ key: 'create-domain', label: '新增业务领域', icon: 'fa-plus', handler: () => openDomainCreate() })
   } else if (node && node.kind === 'domain' && !node.is_ungrouped) {
-    // 领域节点：新建对象（预选领域）/ 编辑领域 / 删除领域
+    // 领域节点：治理动作（编辑/删除）；新建对象/关系由领域下的分组锚点承担（容器管新增，不重复挂）
     menuItems.push(
-      { key: 'create-object', label: '新建对象', icon: 'fa-cube', handler: () => openCreate(node.domain_id) },
       { key: 'edit-domain', label: '编辑领域', icon: 'fa-pen', handler: () => openDomainEdit(node.domain_name) },
       { key: 'delete-domain', label: '删除领域', icon: 'fa-trash', danger: true, handler: () => removeDomain(node.domain_name, node.domain_label) }
     )
   } else if (node && node.kind === 'object') {
-    // 对象节点：编辑 / 状态 / 删除（与右侧详情卡操作一致）
+    // 对象节点：编辑 / 状态 / 删除
     menuItems.push(
       { key: 'edit-object', label: '编辑对象', icon: 'fa-pen', handler: () => openEdit(node.object_name) },
       { key: 'status-object', label: '状态迁移', icon: 'fa-arrow-right-arrow-left', handler: () => openStatus(node.object_name) },
       { key: 'delete-object', label: '删除对象', icon: 'fa-trash', danger: true, handler: () => removeObject(node.object_name, node.status, node.display_name) }
     )
-  } else if (node && node.kind === 'domain' && node.is_ungrouped) {
-    // 未归领域：只能新建未挂域对象；新增业务领域是根域专属（领域不嵌套）
-    menuItems.push({ key: 'create-object', label: '新建对象', icon: 'fa-cube', handler: () => openCreate(null) })
+  } else if (node && node.kind === 'domain-group' && node.group === 'objects') {
+    // 领域的「对象」分组：新建对象（预选本领域；未归领域分组预选 null）
+    menuItems.push({ key: 'create-object', label: '新建对象', icon: 'fa-cube', handler: () => openCreate(node.domain_id) })
+  } else if (node && node.kind === 'domain-group' && node.group === 'relations') {
+    // 领域的「关系」分组：新建关系（两端手选，关系是对象之间的，不再预选单一对象）
+    menuItems.push({ key: 'create-relation', label: '新建关系', icon: 'fa-plus', handler: () => relationFormRef.value?.openCreate() })
+  } else if (node && node.kind === 'relation') {
+    // 关系条目节点：编辑 / 状态 / 删除
+    menuItems.push(
+      { key: 'edit-relation', label: '编辑关系', icon: 'fa-pen', handler: () => relationFormRef.value?.openEdit(node.relation) },
+      { key: 'status-relation', label: '状态迁移', icon: 'fa-arrow-right-arrow-left', handler: () => relationFormRef.value?.openStatus(node.relation) },
+      { key: 'delete-relation', label: '删除关系', icon: 'fa-trash', danger: true, handler: () => relationFormRef.value?.remove(node.relation) }
+    )
   } else {
     // 树空白处：等同于根域层级
-    menuItems.push(
-      { key: 'create-domain', label: '新增业务领域', icon: 'fa-plus', handler: () => openDomainCreate() },
-      { key: 'create-object', label: '新建对象', icon: 'fa-cube', handler: () => openCreate(null) }
-    )
+    menuItems.push({ key: 'create-domain', label: '新增业务领域', icon: 'fa-plus', handler: () => openDomainCreate() })
   }
+  // 无菜单项的节点（未归领域虚拟节点、对象子树的属性/映射分组）不弹菜单
+  if (menuItems.length === 0) return
   ctxMenu.value = { visible: true, x: event.clientX, y: event.clientY, items: menuItems }
+}
+
+// ---------- 关系写操作（右键 → OntologyRelationForm） ----------
+
+const relationFormRef = ref<InstanceType<typeof OntologyRelationForm> | null>(null)
+
+const findObjectNode = (objectName: string): ObjectNodeData | null => {
+  for (const root of treeData.value) {
+    for (const domain of root.children) {
+      for (const group of domain.children) {
+        if (group.kind !== 'domain-group' || group.group !== 'objects') continue
+        const found = group.children.find(
+          (item): item is ObjectNodeData => item.kind === 'object' && item.object_name === objectName
+        )
+        if (found) return found
+      }
+    }
+  }
+  return null
+}
+
+// 关系保存/状态/删除后：重拉关系源（领域关系组就地更新，key 不变不塌缩展开状态）；
+// 受影响对象的详情卡「参与关系」同步原地刷新（未展开的对象在展开时自然取新数据）
+const onRelationSaved = (objectNames: string[]) => {
+  void loadRelationSources()
+  for (const name of objectNames) {
+    if (!name) continue
+    const objectNode = findObjectNode(name)
+    if (objectNode && objectLoadState.value[objectNode.row_key] === 'ready') void fetchObjectEntry(objectNode)
+  }
+  emit('changed')
 }
 </script>
 
@@ -592,7 +767,8 @@ const openCtxMenu = (event: MouseEvent, node: TreeRow | null) => {
     <!-- 说明条 -->
     <div class="shrink-0 border-b border-slate-100 px-4 py-2 text-xs text-slate-500">
       本体对象是语义层的外圈导航索引：认证态进入 agent 上下文；口径计算始终由语义层管理。
-      树形导航：根域 → 业务领域（绑定数据源组）→ 对象 → 属性/关系/映射（对象子节点按需加载）；右键根域新增业务领域。
+      树形导航：根域 → 业务领域 → 对象/关系 → 属性/映射分组；属性与映射挂对象，关系是对象之间的边、挂领域（跨域关系两端各显示）。
+      右键：根域新增业务领域，对象分组新建对象，关系分组新建关系。
     </div>
 
     <!-- 工具栏 -->
@@ -644,7 +820,7 @@ const openCtxMenu = (event: MouseEvent, node: TreeRow | null) => {
     <!-- 左树右详情 -->
     <div class="flex min-h-0 flex-1 overflow-hidden">
       <!-- 左：完全树形导航（空白/节点右键菜单） -->
-      <div class="flex w-[340px] shrink-0 flex-col border-r border-slate-100 px-2 pb-2" @contextmenu="openCtxMenu($event, null)">
+      <div class="flex min-h-0 w-[340px] shrink-0 flex-col border-r border-slate-100 px-2 pb-2" @contextmenu="openCtxMenu($event, null)">
         <div class="min-h-0 flex-1 overflow-y-auto pt-1">
           <el-tree
             ref="treeRef"
@@ -678,7 +854,18 @@ const openCtxMenu = (event: MouseEvent, node: TreeRow | null) => {
                 <span v-if="!data.is_ungrouped && data.group_id" class="text-[11px] text-slate-400">
                   {{ groupNameOf(data.group_id) }}
                 </span>
-                <span class="text-[11px] text-slate-400">{{ data.children.length }} 个对象</span>
+                <span class="text-[11px] text-slate-400">{{ data.object_count }} 个对象</span>
+              </span>
+              <!-- 领域分组节点（对象/关系，常驻锚点） -->
+              <span v-else-if="data.kind === 'domain-group'" class="flex items-center gap-1.5 py-0.5">
+                <i
+                  :class="[
+                    'fa-solid text-[10px]',
+                    data.group === 'objects' ? 'fa-cube text-blue-400' : 'fa-arrows-left-right text-violet-400'
+                  ]"
+                ></i>
+                <span class="text-xs text-slate-600">{{ data.label }}</span>
+                <span class="text-[11px] text-slate-400">{{ data.children[0]?.kind === 'empty' ? 0 : data.children.length }}</span>
               </span>
               <!-- 对象节点 -->
               <span v-else-if="data.kind === 'object'" class="flex items-center gap-1.5 py-0.5">
@@ -693,6 +880,17 @@ const openCtxMenu = (event: MouseEvent, node: TreeRow | null) => {
                   {{ ONTOLOGY_STATUS_META[data.status as keyof typeof ONTOLOGY_STATUS_META]?.label || data.status }}
                 </el-tag>
               </span>
+              <!-- 分组节点（属性/映射，带计数） -->
+              <span v-else-if="data.kind === 'group'" class="flex items-center gap-1.5 py-0.5">
+                <i
+                  :class="[
+                    'fa-solid text-[10px]',
+                    data.group === 'property' ? 'fa-list text-sky-400' : 'fa-link text-teal-400'
+                  ]"
+                ></i>
+                <span class="text-xs text-slate-600">{{ data.label }}</span>
+                <span class="text-[11px] text-slate-400">{{ data.children.length }}</span>
+              </span>
               <!-- 属性节点 -->
               <span v-else-if="data.kind === 'property'" class="flex items-center gap-1.5 py-0.5">
                 <i class="fa-solid fa-tag text-[10px] text-sky-500"></i>
@@ -701,16 +899,15 @@ const openCtxMenu = (event: MouseEvent, node: TreeRow | null) => {
                 <el-tag v-if="data.property.is_identifier" size="small" type="warning" effect="plain">标识</el-tag>
                 <el-tag v-if="data.property.is_title" size="small" type="success" effect="plain">标题</el-tag>
               </span>
-              <!-- 关系节点 -->
+              <!-- 关系节点（挂领域下，展示两端对象：关系是对象和对象之间的；API 名不重复展示，点击看右侧详情卡） -->
               <span v-else-if="data.kind === 'relation'" class="flex items-center gap-1.5 py-0.5">
                 <i class="fa-solid fa-arrow-right-arrow-left text-[10px] text-violet-500"></i>
-                <span class="font-mono text-xs text-slate-700">{{ data.relation.relation_name }}</span>
-                <span class="text-[11px] text-slate-400">
-                  {{ data.relation_direction === 'from' ? '发起' : '参与' }}
-                  {{ data.relation_direction === 'from'
-                    ? `→ ${data.relation.to_display_name || data.relation.to_object_name || '-'}`
-                    : `← ${data.relation.from_display_name || data.relation.from_object_name || '-'}` }}
+                <span class="truncate text-xs text-slate-700" :title="data.relation.relation_name">
+                  {{ data.relation.from_display_name || data.relation.from_object_name || '-' }}
+                  <i class="fa-solid fa-arrow-right-long mx-0.5 text-[9px] text-slate-300"></i>
+                  {{ data.relation.to_display_name || data.relation.to_object_name || '-' }}
                 </span>
+                <el-tag v-if="data.is_cross_domain" size="small" type="warning" effect="plain">跨域</el-tag>
               </span>
               <!-- 映射节点 -->
               <span v-else-if="data.kind === 'mapping'" class="flex items-center gap-1.5 py-0.5">
@@ -731,7 +928,7 @@ const openCtxMenu = (event: MouseEvent, node: TreeRow | null) => {
           <div class="text-center text-xs text-slate-400">
             <i class="fa-solid fa-sitemap mb-2 block text-2xl text-slate-300"></i>
             在左侧选择对象、属性、关系或映射查看详情
-            <div class="mt-1 text-[11px] text-slate-300">左侧树支持右键：根域上新增业务领域，领域节点可新建对象</div>
+            <div class="mt-1 text-[11px] text-slate-300">左侧树支持右键：根域新增业务领域，领域的对象/关系分组可新建</div>
           </div>
         </div>
 
@@ -751,20 +948,6 @@ const openCtxMenu = (event: MouseEvent, node: TreeRow | null) => {
               <el-tooltip v-if="selectedObjectStatusMeta" :content="selectedObjectStatusMeta.hint" placement="top">
                 <el-tag size="small" :type="selectedObjectStatusMeta.tagType" effect="plain">{{ selectedObjectStatusMeta.label }}</el-tag>
               </el-tooltip>
-              <div class="flex-1"></div>
-              <el-button size="small" @click="openEdit(selectedNode.object_name)">
-                <i class="fa-solid fa-pen text-[11px]"></i> 编辑
-              </el-button>
-              <el-button size="small" @click="openStatus(selectedNode.object_name)">
-                <i class="fa-solid fa-arrow-right-arrow-left text-[11px]"></i> 状态
-              </el-button>
-              <el-button
-                size="small"
-                type="danger"
-                @click="removeObject(selectedNode.object_name, selectedNode.status, selectedNode.display_name)"
-              >
-                <i class="fa-solid fa-trash text-[11px]"></i> 删除
-              </el-button>
             </div>
             <div class="mb-3 grid grid-cols-2 gap-x-6 gap-y-1 text-xs text-slate-500">
               <div>业务领域：<span class="text-slate-700">{{ selectedNode.domain_label || '-' }}</span></div>
@@ -889,9 +1072,6 @@ const openCtxMenu = (event: MouseEvent, node: TreeRow | null) => {
           <div class="mb-3 flex items-center gap-2">
             <i class="fa-solid fa-arrow-right-arrow-left text-[11px] text-violet-500"></i>
             <span class="font-mono text-sm font-medium text-slate-800">{{ selectedNode.relation.relation_name }}</span>
-            <el-tag size="small" :type="selectedNode.relation_direction === 'from' ? 'primary' : 'info'" effect="plain">
-              {{ selectedNode.relation_direction === 'from' ? '当前对象发起' : '当前对象参与' }}
-            </el-tag>
             <el-tag
               size="small"
               :type="ONTOLOGY_STATUS_META[selectedNode.relation.status as keyof typeof ONTOLOGY_STATUS_META]?.tagType || 'info'"
@@ -949,6 +1129,9 @@ const openCtxMenu = (event: MouseEvent, node: TreeRow | null) => {
 
     <!-- 状态迁移弹窗 -->
     <OntologyStatusDialog v-model:visible="statusDialogVisible" :object="statusTarget" :objects="items" @saved="onSaved" />
+
+    <!-- 关系新建/编辑/状态/删除（右键发起） -->
+    <OntologyRelationForm ref="relationFormRef" :objects="items" @saved="onRelationSaved" />
 
     <!-- 树右键菜单（fixed 浮层，宿主页嵌入时必须 Teleport 防 transform 包含块错位） -->
     <Teleport to="body">
