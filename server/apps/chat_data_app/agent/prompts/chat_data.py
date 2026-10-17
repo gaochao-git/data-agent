@@ -6,7 +6,7 @@ from utils.builtin_skills import (
     builtin_skill_file,
 )
 
-from ...services.ontology.object_query import object_query_enabled
+from ...services.ontology.object_locator import object_locator_enabled
 from ..runtime_options import AgentRuntimeOptions
 from .security_prompt import SECURITY_PROMPT
 
@@ -64,9 +64,9 @@ SEMANTIC_QUERY_GATE_BLOCK = f"""## 语义查询门禁
 - 进入查询与分析路径后，语义模型检索、字段确认、DSL/SQL 模式选择、查询执行、结果读取和分析全部遵循 `{DATA_ANALYZING_SKILL}` 技能的 `{SEMANTIC_MODEL_AUTHORITY_DOC}`；系统层不重复定义这些具体规则。
 - 当前可用技能中没有 `{DATA_ANALYZING_SKILL}` 时，不得虚构技能路径；向用户说明该技能当前不可用。"""
 
-# 本体对象明细查询引导：仅在 CHAT_DATA_ONTOLOGY_QUERY_ENABLED 开启时注入
-# （开关关闭时模型侧根本没有可用的 query_object，提示词不能提）。
-OBJECT_QUERY_HINT_BLOCK = f"""- 本体目录（_ontology_catalog.yaml）存在且问题能用单个本体对象的明细数据直接回答时，优先调用 `data_analyzing_tool` 的 `query_object`：只传对象/属性级意图（object/properties/filters/order_by/limit），服务端负责翻译成 DSL 并执行，返回带编译后 SQL 与可查范围说明。聚合统计、跨对象关联与复杂口径仍按 `{DATA_ANALYZING_SKILL}` 技能走 DSL/SQL 路径。"""
+# 本体对象定位引导：仅在 CHAT_DATA_ONTOLOGY_LOCATE_ENABLED 开启时注入
+# （开关关闭时模型侧根本没有可用的 locate_object，提示词不能提）。
+OBJECT_QUERY_HINT_BLOCK = f"""- 涉及本体对象、需要确认「对象在哪个语义模型/字段对应哪个维度」时，先调用 `data_analyzing_tool` 的 `locate_object`（objects 传对象 API 名列表，可多个）：返回绑定模型（含快照文件名）、属性→维度对照与对象关系，据此直接进入 `execute_query`，不要靠 grep/精读模型 YAML 猜定位。聚合统计、跨对象关联与复杂口径仍按 `{DATA_ANALYZING_SKILL}` 技能走 DSL/SQL 路径。"""
 
 OUTPUT_AND_FINAL_ANSWER_BLOCK = """## 输出与最终回答
 - 全程使用简体中文回复（包括思考过程和调用工具前后的过程说明短句）；用户使用其他语言提问时，跟随用户语言。
@@ -295,7 +295,7 @@ def build_unified_system_prompt(
             SEMANTIC_QUERY_GATE_BLOCK,
         ]
     )
-    if object_query_enabled():
+    if object_locator_enabled():
         sections.append(OBJECT_QUERY_HINT_BLOCK)
 
     sections.append(PRIORITY_BLOCK)

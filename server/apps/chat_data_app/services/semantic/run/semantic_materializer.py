@@ -112,6 +112,11 @@ def _batch_cache_salt(
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def model_snapshot_file_name(config: dict[str, Any]) -> str:
+    """模型快照文件名（``_safe_file_name`` 的公开别名，供本体定位器等外部消费方复用）。"""
+    return _safe_file_name(config)
+
+
 def _safe_file_name(config: dict[str, Any]) -> str:
     """生成 `{清洗后的模型名}__{id后缀}.yaml`，让 grep/list_dir 输出自带模型语义。
 
@@ -145,7 +150,9 @@ def _directory_item(config: dict[str, Any], path: str = "") -> dict[str, Any]:
         "id": config_id,
         "name": str(config.get("name") or config.get("semantic_config_name") or config_id).strip(),
         # description UI 已并入业务说明：description 为空时回退 business_notes，保证快照自述不缺
-        "description": str(config.get("description") or config.get("semantic_config_desc") or config.get("business_notes") or "").strip(),
+        "description": str(
+            config.get("description") or config.get("semantic_config_desc") or config.get("business_notes") or ""
+        ).strip(),
         "metrics_total": len(metrics),
         "dimensions_total": len(dimensions),
     }
@@ -316,7 +323,12 @@ def _render_semantic_catalog(configs: list[dict[str, Any]]) -> str:
         models.append(
             {
                 "file": _safe_file_name(config),
-                "description": str(config.get("description") or config.get("semantic_config_desc") or config.get("business_notes") or "").strip(),
+                "description": str(
+                    config.get("description")
+                    or config.get("semantic_config_desc")
+                    or config.get("business_notes")
+                    or ""
+                ).strip(),
                 "business_notes": str(config.get("business_notes") or "").strip(),
             }
         )

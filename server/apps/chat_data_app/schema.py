@@ -1055,41 +1055,22 @@ class _ListExecutionTargetsActionPayload(BaseModel):
     """
 
 
-class _QueryObjectActionPayload(BaseModel):
-    """``query_object`` 的入参结构：本体对象明细查询（对象级意图 → 服务端编译 DSL）。
+class _LocateObjectActionPayload(BaseModel):
+    """``locate_object`` 的入参结构：按本体对象批量定位语义模型（纯导航，不执行查询）。
 
-    只传本体词汇（对象 API 名 + 属性 API 名），服务端按 column_mappings 翻译成
-    语义模型 DSL 后走既有编译执行链；可查对象/属性由服务端结构性收敛
-    （⊆本轮启用模型绑定的对象及其已映射属性），模型不可指定范围。
+    可定位对象结构性收敛（⊆本轮启用模型绑定的对象）；返回绑定模型（含快照
+    文件名）、属性→维度对照与对象关系，供 AI 直接进入 execute_query，省掉
+    grep/精读模型 YAML 的定位轮次。
     """
 
-    object: str = Field(
+    objects: list[str] = Field(
         ...,
         min_length=1,
-        max_length=200,
-        description="本体对象 API 名（如 Customer），必须是本体目录中绑定本轮启用语义模型的对象",
+        description='本体对象 API 名列表（如 ["Customer", "Order"]），单次最多 10 个；必须是绑定本轮启用语义模型的对象',
     )
-    properties: list[str] | None = Field(
-        default=None,
-        description="要返回的属性 API 名列表；缺省返回全部已映射属性",
-    )
-    filters: list[dict[str, Any]] | None = Field(
-        default=None,
-        description=(
-            '属性谓词数组（同层隐式 AND），叶子节点 {"property": 属性API名, "operator": SQL风格操作符, "value": 值}'
-            '（IS NULL/IS NOT NULL 可省略 value），支持 {"and": [...]}/{"or": [...]} 嵌套；'
-            "仅支持该对象已映射属性"
-        ),
-    )
-    order_by: list[dict[str, Any]] | None = Field(
-        default=None,
-        description='排序 [{"property": 属性API名, "direction": "ASC" 或 "DESC"}]；排序属性自动并入返回列',
-    )
-    limit: int = Field(default=50, ge=1, le=1000, description="返回行数上限，默认 50")
-    offset: int = Field(default=0, ge=0, description="分页偏移量，默认 0")
     semantic_config_id: str | None = Field(
         default=None,
-        description="对象绑定了多个语义模型时必填其一；单绑定可省略",
+        description="可选；只看对象在该语义模型上的绑定（多绑定对象据此过滤）",
     )
 
 
@@ -1101,7 +1082,7 @@ DATA_ANALYZING_ACTION_PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
     "execute_query": SemanticQueryInput,
     "check_yaml": _CheckYamlActionPayload,
     "list_execution_targets": _ListExecutionTargetsActionPayload,
-    "query_object": _QueryObjectActionPayload,
+    "locate_object": _LocateObjectActionPayload,
 }
 
 
@@ -1111,7 +1092,7 @@ class DataAnalyzingInput(BaseModel):
     六个 action：``validate_dsl`` / ``validate_dashboard`` 校验（不执行）、
     ``execute_query`` 执行查询（DSL 或 SQL 二选一）、``check_yaml`` 语义模型 YAML 自检、
     ``list_execution_targets`` 实时获取可用执行对象（只读发现通道）、
-    ``query_object`` 本体对象明细查询（对象级意图，服务端翻译 DSL）。
+    ``locate_object`` 按本体对象批量定位语义模型（纯导航，不执行查询）。
     action_payload 不平铺成顶层字段（后续扩展 action 只加 payload 模型即可），
     payload 的跨字段校验在工具实现入口经 ``validate_data_analyzing_payload`` 完成——
     不能放进 model_validator：langgraph 的 ToolInvocationError 会过滤 loc 为空的
@@ -1125,7 +1106,7 @@ class DataAnalyzingInput(BaseModel):
         "execute_query",
         "check_yaml",
         "list_execution_targets",
-        "query_object",
+        "locate_object",
     ] = Field(
         ...,
         description=(
@@ -1133,7 +1114,7 @@ class DataAnalyzingInput(BaseModel):
             "validate_dashboard 批量校验完整 dashboard_spec 的所有卡片；"
             "execute_query 执行查询（DSL 或 SQL 二选一）；check_yaml 语义模型 YAML 交付前自检；"
             "list_execution_targets 实时获取当前用户可用执行对象清单；"
-            "query_object 按本体对象查询明细数据（对象级意图，服务端翻译 DSL 后执行）"
+            "locate_object 按本体对象批量定位语义模型（返回绑定模型/属性→维度对照/关系，不执行查询）"
         ),
     )
     action_payload: dict[str, Any] = Field(
@@ -1147,11 +1128,7 @@ class DataAnalyzingInput(BaseModel):
             '"member_datasource_ids": ["<ID>"]}（member_datasource_ids 必须是 ID 字符串数组，单个机构也传数组）；'
             'check_yaml 传 {"file_path": "/mnt/user-data/workspace/model.yaml"}；'
             "list_execution_targets 传 {}；"
-            'query_object 传 {"object": <对象API名>, "properties": [属性API名]可选, '
-            '"filters": [{"property": 属性API名, "operator": 操作符, "value": 值}]可选, '
-            '"order_by": [{"property": 属性API名, "direction": "ASC|DESC"}]可选, '
-            '"limit": 行数默认50, "offset": 偏移默认0, '
-            '"semantic_config_id": 对象绑定多模型时必填}'
+            'locate_object 传 {"objects": [<对象API名>...], "semantic_config_id": "可选，只看该模型的绑定"}'
         ),
     )
     intent: str = Field(
