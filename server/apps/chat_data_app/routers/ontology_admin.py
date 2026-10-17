@@ -14,6 +14,8 @@ from utils.logger import get_logger
 from utils.response import business_response
 
 from ..schema import (
+    OntologyDomainUpsertRequest,
+    OntologyObjectDomainRequest,
     OntologyObjectStatusRequest,
     OntologyObjectUpsertRequest,
     OntologyRelationStatusRequest,
@@ -51,14 +53,65 @@ def _error_response(e: Exception, fallback_msg: str, fallback_code: ErrorCode) -
     return business_response(msg=fallback_msg, code=fallback_code, status="error")
 
 
-@router.get("/admin/meta/ontology/objects")
-async def list_ontology_objects(
-    request: Request, keyword: str | None = None, status: str | None = None, domain: str | None = None
-) -> JSONResponse:
-    """本体对象列表（keyword 按名称/展示名/描述模糊过滤；status/domain 精确过滤）。"""
+@router.get("/admin/meta/ontology/domains")
+async def list_ontology_domains(request: Request) -> JSONResponse:
+    """本体领域列表（领域=业务域实体，一对一绑定数据源组）。"""
     try:
         _get_current_user(request)
-        data = await ontology_service.list_objects_async(keyword or "", status or "", domain or "")
+        data = await ontology_service.list_domains_async()
+        return business_response(data={"domains": data}, msg="获取成功")
+    except HTTPException:
+        raise
+    except Exception as e:
+        return _error_response(e, "获取本体领域列表失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
+
+
+@router.put("/admin/meta/ontology/domains/{domain_name}")
+async def upsert_ontology_domain(
+    domain_name: str, payload: OntologyDomainUpsertRequest, request: Request
+) -> JSONResponse:
+    """创建/编辑本体领域（绑定数据源组；编辑活跃领域需 allow_overwrite）。"""
+    try:
+        current_user = _get_current_user(request)
+        data = await ontology_service.upsert_domain_async(
+            domain_name,
+            payload.model_dump(),
+            operator=str(current_user.user_id),
+            operator_name=str(current_user.username or ""),
+            allow_overwrite=payload.allow_overwrite,
+        )
+        return business_response(data=data, msg="保存成功")
+    except HTTPException:
+        raise
+    except Exception as e:
+        return _error_response(e, "保存本体领域失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
+
+
+@router.delete("/admin/meta/ontology/domains/{domain_name}")
+async def delete_ontology_domain(domain_name: str, request: Request) -> JSONResponse:
+    """删除本体领域（软删；挂有活跃对象时拒绝）。"""
+    try:
+        current_user = _get_current_user(request)
+        await ontology_service.delete_domain_async(
+            domain_name,
+            operator=str(current_user.user_id),
+            operator_name=str(current_user.username or ""),
+        )
+        return business_response(data={"domain_name": domain_name}, msg="删除成功")
+    except HTTPException:
+        raise
+    except Exception as e:
+        return _error_response(e, "删除本体领域失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
+
+
+@router.get("/admin/meta/ontology/objects")
+async def list_ontology_objects(
+    request: Request, keyword: str | None = None, status: str | None = None, domain_id: int | None = None
+) -> JSONResponse:
+    """本体对象列表（keyword 按名称/展示名/描述模糊过滤；status/domain_id 精确过滤）。"""
+    try:
+        _get_current_user(request)
+        data = await ontology_service.list_objects_async(keyword or "", status or "", domain_id)
         return business_response(data={"objects": data}, msg="获取成功")
     except HTTPException:
         raise
@@ -140,6 +193,26 @@ async def change_ontology_object_status(
         raise
     except Exception as e:
         return _error_response(e, "本体对象状态变更失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
+
+
+@router.post("/admin/meta/ontology/objects/{object_name}/domain")
+async def change_ontology_object_domain(
+    object_name: str, payload: OntologyObjectDomainRequest, request: Request
+) -> JSONResponse:
+    """对象领域归属变更（拖拽换域窄写路径；domain_id=null 表示移出领域）。"""
+    try:
+        current_user = _get_current_user(request)
+        data = await ontology_service.set_object_domain_async(
+            object_name,
+            payload.domain_id,
+            operator=str(current_user.user_id),
+            operator_name=str(current_user.username or ""),
+        )
+        return business_response(data=data, msg="领域归属已更新")
+    except HTTPException:
+        raise
+    except Exception as e:
+        return _error_response(e, "对象领域归属变更失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
 
 
 @router.get("/admin/meta/ontology/relations")

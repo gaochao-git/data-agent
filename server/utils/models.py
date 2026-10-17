@@ -1099,13 +1099,44 @@ class ChatDataPlugin(Base):
     )
 
 
+class ChatDataOntologyDomain(Base):
+    """本体领域表：业务域实体，一对一绑定数据源组（一次绑定）。
+
+    领域是对象的业务切片（树面板分组）+ 取数后端锚点（组随领域继承）：对象挂
+    领域即确定其映射可选的模型范围（领域组内），关系两端对象同领域即合法。
+    组信息不在关系/映射层重复决策。领域名全局唯一；删除为软删，挂有对象时禁删。
+    """
+
+    __tablename__ = "chat_data_ontology_domain"
+
+    id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
+    domain_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    group_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
+    description: Mapped[str] = mapped_column(String(512), nullable=False, default="", server_default="")
+    delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
+    create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
+    update_time: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+    create_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+
+    __table_args__ = (
+        UniqueConstraint("domain_name", name="uniq_domain_name"),
+        Index("idx_domain_group", "group_id", "delete_flag"),
+    )
+
+
 class ChatDataOntologyObject(Base):
     """本体对象表：对象/属性/关系三等实体之一（属性一等实体见 Property 表）。
 
     语义模型绑定独立成映射表 chat_data_ontology_object_mapping（对齐 ossie
     概念层/映射层分离，「一源一对象」由映射表唯一索引约束），本表只存概念层
     元数据。主键=标识属性（is_identifier）组合，标题键=is_title 属性，均由属性
-    表表达，本表不冗余存储。
+    表表达，本表不冗余存储。domain_id 指向领域实体（组随领域继承），NULL=未分域。
     """
 
     __tablename__ = "chat_data_ontology_object"
@@ -1114,9 +1145,8 @@ class ChatDataOntologyObject(Base):
     object_name: Mapped[str] = mapped_column(String(128), nullable=False)
     display_name: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
     description: Mapped[str] = mapped_column(String(1024), nullable=False, default="", server_default="")
-    business_notes: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="draft", server_default="draft")
-    domain: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
+    domain_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, default=None)
     deprecation_reason: Mapped[str] = mapped_column(String(512), nullable=False, default="", server_default="")
     deprecated_until: Mapped[datetime | None] = mapped_column(DateTime)
     successor_object_name: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
@@ -1133,7 +1163,7 @@ class ChatDataOntologyObject(Base):
     __table_args__ = (
         UniqueConstraint("object_name", name="uniq_object_name"),
         Index("idx_object_status", "status", "delete_flag"),
-        Index("idx_object_domain", "domain", "delete_flag"),
+        Index("idx_object_domain_id", "domain_id", "delete_flag"),
     )
 
 
@@ -1195,7 +1225,6 @@ class ChatDataOntologyRelation(Base):
     from_verbalize: Mapped[str] = mapped_column(String(512), nullable=False, default="", server_default="")
     to_verbalize: Mapped[str] = mapped_column(String(512), nullable=False, default="", server_default="")
     description: Mapped[str] = mapped_column(String(1024), nullable=False, default="", server_default="")
-    business_notes: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="draft", server_default="draft")
     delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())

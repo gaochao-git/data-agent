@@ -79,8 +79,10 @@ def _render_object_entry(
     properties_by_object: dict[int, list[dict[str, Any]]],
     mappings_by_object: dict[int, list[dict[str, Any]]],
     config_names: dict[str, str],
+    domain_names: dict[int, str] | None = None,
 ) -> dict[str, Any]:
-    """单个对象 → 目录条目（属性摘要 + 语义模型映射列表）。"""
+    """单个对象 → 目录条目（属性摘要 + 语义模型映射列表；domain=领域名，未分域为空）。"""
+    domain_names = domain_names or {}
     object_id = int(obj.get("id") or 0)
     properties = [
         {
@@ -110,6 +112,7 @@ def _render_object_entry(
         "object": obj.get("object_name"),
         "display_name": obj.get("display_name"),
         "status": obj.get("status"),
+        "domain": domain_names.get(int(obj.get("domain_id") or 0), ""),
         "description": obj.get("description"),
         "properties": properties,
         "mappings": mappings,
@@ -173,6 +176,7 @@ def _render_catalog(
     bundle: dict[str, Any],
     config_names: dict[str, str],
     dimension_columns: dict[str, dict[str, str]] | None = None,
+    domain_names: dict[int, str] | None = None,
 ) -> str:
     """渲染本体目录 YAML（对象 → 属性摘要/语义模型映射/关系邻接，给模型检索用）。"""
     properties_by_object = _group_by_object_id(bundle.get("properties"))
@@ -181,7 +185,7 @@ def _render_catalog(
     payload = {
         "comment": "本体目录（系统生成，只读）：业务对象 → 属性/语义模型映射/对象间关系；跨模型关联先查此目录",
         "objects": [
-            _render_object_entry(obj, properties_by_object, mappings_by_object, config_names)
+            _render_object_entry(obj, properties_by_object, mappings_by_object, config_names, domain_names)
             for obj in bundle.get("objects") or []
         ],
         "relations": [
@@ -208,7 +212,17 @@ async def materialize_ontology_catalog_async(
         objects = bundle.get("objects") or []
         if not objects:
             return 0
-        content = _render_catalog(bundle, _config_display_names(configs), _config_dimension_columns(configs))
+        try:
+            domain_rows = await OntologyDao().list_domains_async()
+        except Exception:  # noqa: BLE001 - 领域名是展示增强，取不到按未分域渲染
+            domain_rows = []
+        domain_names = {
+            int(row.get("id") or 0): str(row.get("display_name") or row.get("domain_name") or "")
+            for row in domain_rows
+        }
+        content = _render_catalog(
+            bundle, _config_display_names(configs), _config_dimension_columns(configs), domain_names
+        )
         catalog_path = str(PurePosixPath(ONTOLOGY_SNAPSHOT_DIR) / ONTOLOGY_CATALOG_FILE_NAME)
         await workspace_runtime.write_internal_text_files([(catalog_path, content)])
         logger.info("本体目录物化完成: objects=%s relations=%s", len(objects), len(bundle.get("relations") or []))

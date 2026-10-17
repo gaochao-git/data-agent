@@ -395,6 +395,15 @@ class TableIndexItem(BaseModel):
     columns: list[str] = Field(default_factory=list, max_length=5, description="索引列名列表")
 
 
+class OntologyDomainUpsertRequest(BaseModel):
+    """本体领域创建/编辑请求（领域名由路径参数携带；一对一绑定数据源组）"""
+
+    group_id: str = Field(..., min_length=1, max_length=128, description="绑定的数据源组ID（一次绑定）")
+    display_name: str = Field(default="", max_length=128, description="展示名，缺省用领域名")
+    description: str = Field(default="", max_length=512, description="领域描述")
+    allow_overwrite: bool = Field(default=False, description="编辑既有活跃领域时为 True")
+
+
 class OntologyPropertyItem(BaseModel):
     """本体属性项（属性一等实体，随对象表单整体提交）"""
 
@@ -428,8 +437,7 @@ class OntologyObjectUpsertRequest(BaseModel):
 
     display_name: str = Field(..., min_length=1, max_length=128, description="展示名")
     description: str = Field(default="", max_length=1024, description="对象描述")
-    business_notes: str = Field(default="", max_length=10000, description="业务说明（建模背景，不入 agent 上下文）")
-    domain: str = Field(default="", max_length=128, description="业务域扁平标签")
+    domain_id: int | None = Field(default=None, description="领域ID（组随领域继承），缺省=未分域")
     properties: list[OntologyPropertyItem] = Field(..., min_length=1, description="属性集（整体提交）")
     mappings: list[OntologyMappingItem] = Field(
         default_factory=list, description="语义模型映射列表（独立存映射表，随对象提交全量重写）"
@@ -445,6 +453,12 @@ class OntologyObjectStatusRequest(BaseModel):
     deprecation_reason: str = Field(default="", max_length=512, description="废弃原因，status=deprecated 时必填")
     deprecated_until: str = Field(default="", max_length=19, description="废弃删除期限（YYYY-MM-DD HH:MM:SS），可选")
     successor_object_name: str = Field(default="", max_length=128, description="替代对象API名，可选但必须存在")
+
+
+class OntologyObjectDomainRequest(BaseModel):
+    """本体对象领域归属变更请求（拖拽换域等窄写路径；null=移出领域）"""
+
+    domain_id: int | None = Field(default=None, description="目标领域主键；null=移出领域")
 
 
 class OntologyRelationStatusRequest(BaseModel):
@@ -470,7 +484,6 @@ class OntologyRelationUpsertRequest(BaseModel):
     from_verbalize: str = Field(default="", max_length=512, description='正向自然语言模式串，如 "{from} 归属于 {to}"')
     to_verbalize: str = Field(default="", max_length=512, description="反向自然语言模式串")
     description: str = Field(default="", max_length=1024, description="关系描述")
-    business_notes: str = Field(default="", max_length=10000, description="业务说明")
     allow_overwrite: bool = Field(default=False, description="编辑既有关系时为 True")
     confirm_destructive: bool = Field(default=False, description="破坏性变更（连接对象/关联列/基数变更）显式确认")
 

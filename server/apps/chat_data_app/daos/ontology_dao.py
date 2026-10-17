@@ -16,6 +16,7 @@ from typing import Any
 from sqlalchemy import func, or_, select, update
 from utils.logger import get_logger
 from utils.models import (
+    ChatDataOntologyDomain,
     ChatDataOntologyObject,
     ChatDataOntologyObjectMapping,
     ChatDataOntologyProperty,
@@ -58,9 +59,8 @@ def _object_row_to_dict(row: ChatDataOntologyObject, *, include_audit: bool = Tr
         "object_name": _text(row.object_name),
         "display_name": _text(row.display_name),
         "description": _text(row.description),
-        "business_notes": _text(row.business_notes),
         "status": _text(row.status),
-        "domain": _text(row.domain),
+        "domain_id": int(row.domain_id) if row.domain_id else None,
         "deprecation_reason": _text(row.deprecation_reason),
         "deprecated_until": _format_datetime(row.deprecated_until),
         "successor_object_name": _text(row.successor_object_name),
@@ -109,7 +109,6 @@ def _relation_row_to_dict(row: ChatDataOntologyRelation) -> dict[str, Any]:
         "from_verbalize": _text(row.from_verbalize),
         "to_verbalize": _text(row.to_verbalize),
         "description": _text(row.description),
-        "business_notes": _text(row.business_notes),
         "status": _text(row.status),
         "create_time": _format_datetime(row.create_time),
         "update_time": _format_datetime(row.update_time),
@@ -129,11 +128,154 @@ def _mapping_row_to_dict(row: ChatDataOntologyObjectMapping) -> dict[str, Any]:
 
 
 class OntologyDao:
-    """本体对象/属性/关系/映射访问对象。"""
+    """本体领域/对象/属性/关系/映射访问对象。"""
+
+    # ---------- 领域 ----------
+
+    def _domain_row_to_dict(self, row: ChatDataOntologyDomain) -> dict[str, Any]:
+        return {
+            "id": int(row.id),
+            "domain_name": _text(row.domain_name),
+            "group_id": _text(row.group_id),
+            "display_name": _text(row.display_name),
+            "description": _text(row.description),
+            "create_time": _format_datetime(row.create_time),
+            "update_time": _format_datetime(row.update_time),
+            "update_by": _text(row.update_by),
+            "update_by_name": _text(row.update_by_name),
+        }
+
+    async def list_domains_async(self) -> list[dict[str, Any]]:
+        """列出领域（delete_flag=0），按领域名字典序。"""
+        async with session_scope() as session:
+            stmt = (
+                select(ChatDataOntologyDomain)
+                .where(ChatDataOntologyDomain.delete_flag == 0)
+                .order_by(ChatDataOntologyDomain.domain_name.asc())
+            )
+            rows = (await session.execute(stmt)).scalars().all()
+        return [self._domain_row_to_dict(row) for row in rows]
+
+    async def get_domain_row_async(self, domain_name: str, *, include_deleted: bool = False) -> dict[str, Any] | None:
+        """按 domain_name 读取领域行；include_deleted=True 时含软删行（复活判断用）。"""
+        name = _text(domain_name)
+        if not name:
+            return None
+        async with session_scope() as session:
+            stmt = select(ChatDataOntologyDomain).where(ChatDataOntologyDomain.domain_name == name)
+            if not include_deleted:
+                stmt = stmt.where(ChatDataOntologyDomain.delete_flag == 0)
+            row = (await session.execute(stmt)).scalars().first()
+        return self._domain_row_to_dict(row) if row is not None else None
+
+    async def get_domain_row_by_id_async(self, domain_id: int) -> dict[str, Any] | None:
+        """按 id 读取活跃领域行。"""
+        async with session_scope() as session:
+            row = (
+                (
+                    await session.execute(
+                        select(ChatDataOntologyDomain).where(
+                            ChatDataOntologyDomain.id == int(domain_id),
+                            ChatDataOntologyDomain.delete_flag == 0,
+                        )
+                    )
+                )
+                .scalars()
+                .first()
+            )
+        return self._domain_row_to_dict(row) if row is not None else None
+
+    async def upsert_domain_async(
+        self,
+        domain_name: str,
+        payload: dict[str, Any],
+        *,
+        allow_overwrite: bool,
+        create_by: str = "",
+        create_by_name: str = "",
+        update_by: str = "",
+        update_by_name: str = "",
+    ) -> dict[str, Any] | None:
+        """按 domain_name upsert 领域：无行插入 / 软删行复活 / 活跃行需 allow_overwrite。"""
+        name = _text(domain_name)
+        async with session_scope() as session:
+            row = (
+                (
+                    await session.execute(
+                        select(ChatDataOntologyDomain).where(ChatDataOntologyDomain.domain_name == name)
+                    )
+                )
+                .scalars()
+                .first()
+            )
+            if row is None:
+                row = ChatDataOntologyDomain(
+                    domain_name=name,
+                    delete_flag=0,
+                    create_by=create_by or "",
+                    create_by_name=create_by_name or "",
+                    update_by=update_by or "",
+                    update_by_name=update_by_name or "",
+                    **payload,
+                )
+                session.add(row)
+            else:
+                if int(row.delete_flag or 0) == 1:
+                    row.delete_flag = 0
+                elif not allow_overwrite:
+                    return None
+                for field, value in payload.items():
+                    setattr(row, field, value)
+                row.update_by = update_by or ""
+                row.update_by_name = update_by_name or ""
+        return {"domain_name": name, **payload}
+
+    async def soft_delete_domain_async(self, domain_name: str, *, update_by: str = "", update_by_name: str = "") -> bool:
+        """软删领域；领域不存在或已删返回 False。挂有对象时由 service 层先拦。"""
+        name = _text(domain_name)
+        async with session_scope() as session:
+            row = (
+                (
+                    await session.execute(
+                        select(ChatDataOntologyDomain).where(
+                            ChatDataOntologyDomain.domain_name == name,
+                            ChatDataOntologyDomain.delete_flag == 0,
+                        )
+                    )
+                )
+                .scalars()
+                .first()
+            )
+            if row is None:
+                return False
+            row.delete_flag = 1
+            row.update_by = update_by or ""
+            row.update_by_name = update_by_name or ""
+        return True
+
+    async def count_objects_by_domain_ids_async(self, domain_ids: list[int]) -> dict[int, int]:
+        """统计各领域挂靠的活跃对象数（领域删除门禁用）。"""
+        counts: dict[int, int] = {}
+        if not domain_ids:
+            return counts
+        async with session_scope() as session:
+            stmt = (
+                select(ChatDataOntologyObject.domain_id, func.count(ChatDataOntologyObject.id))
+                .where(
+                    ChatDataOntologyObject.delete_flag == 0,
+                    ChatDataOntologyObject.domain_id.in_(domain_ids),
+                )
+                .group_by(ChatDataOntologyObject.domain_id)
+            )
+            rows = (await session.execute(stmt)).all()
+        for domain_id, count in rows:
+            if domain_id is not None:
+                counts[int(domain_id)] = int(count)
+        return counts
 
     # ---------- 对象 ----------
 
-    async def list_objects_async(self, keyword: str = "", status: str = "", domain: str = "") -> list[dict[str, Any]]:
+    async def list_objects_async(self, keyword: str = "", status: str = "", domain_id: int | None = None) -> list[dict[str, Any]]:
         """列出对象（delete_flag=0），keyword 按名称/展示名/描述模糊过滤。"""
         async with session_scope() as session:
             stmt = select(ChatDataOntologyObject).where(ChatDataOntologyObject.delete_flag == 0)
@@ -147,8 +289,8 @@ class OntologyDao:
                 )
             if _text(status):
                 stmt = stmt.where(ChatDataOntologyObject.status == _text(status))
-            if _text(domain):
-                stmt = stmt.where(ChatDataOntologyObject.domain == _text(domain))
+            if domain_id is not None:
+                stmt = stmt.where(ChatDataOntologyObject.domain_id == int(domain_id))
             stmt = stmt.order_by(ChatDataOntologyObject.object_name.asc())
             rows = (await session.execute(stmt)).scalars().all()
         return [_object_row_to_dict(row) for row in rows]

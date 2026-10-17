@@ -123,6 +123,16 @@ const formDescription = ref('')
 // 活跃对象才可作为关系端点（后端同样拒绝 deprecated 端点）
 const activeObjectOptions = computed(() => objects.value.filter(item => item.status !== 'deprecated'))
 
+// 跨领域提示：两端对象挂在不同领域（或一侧未挂领域）时提醒确认
+const crossDomainHint = computed(() => {
+  if (!formFromObject.value || !formToObject.value) return ''
+  const fromObj = objects.value.find(item => item.object_name === formFromObject.value)
+  const toObj = objects.value.find(item => item.object_name === formToObject.value)
+  if (!fromObj || !toObj) return ''
+  if (fromObj.domain_id != null && fromObj.domain_id === toObj.domain_id) return ''
+  return '两端对象属于不同业务领域（或未挂领域）：这会是跨领域导航路径，请确认是有意为之。'
+})
+
 const resetForm = () => {
   formName.value = ''
   formFromObject.value = ''
@@ -519,6 +529,13 @@ defineExpose({ ensureLoaded, reload })
               />
             </el-select>
           </div>
+        </div>
+
+        <div
+          v-if="crossDomainHint"
+          class="rounded-lg border border-amber-100 bg-amber-50 p-2.5 text-[11px] leading-5 text-amber-600"
+        >
+          <i class="fa-solid fa-triangle-exclamation mr-1"></i>{{ crossDomainHint }}
         </div>
 
         <div class="grid grid-cols-2 gap-3">

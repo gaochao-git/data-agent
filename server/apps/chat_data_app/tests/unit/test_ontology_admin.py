@@ -761,3 +761,119 @@ def test_injection_bundle_excludes_non_active_relations(harness, deps_ok):
     # Order 退出目录；User 仍 certified 合法保留
     assert [item["object_name"] for item in bundle["objects"]] == ["User"]
     assert bundle["relations"] == []
+
+
+# ---------- 领域（组领域一次绑定，对象/关系继承） ----------
+
+
+class _StubDataSourceDao:
+    """数据源组 DAO 桩：组存在性放行/收紧。"""
+
+    def __init__(self, existing_ids: set[str] | None = None):
+        self._existing_ids = existing_ids
+
+    async def has_datasource_async(self, datasource_id: str) -> bool:
+        if self._existing_ids is None:
+            return True
+        return datasource_id in self._existing_ids
+
+
+def _domain_payload(**overrides):
+    payload = {"group_id": "grp-1", "display_name": "电商交易", "description": "交易域"}
+    payload.update(overrides)
+    return payload
+
+
+def test_domain_crud_lifecycle(harness, deps_ok, monkeypatch):
+    monkeypatch.setattr(ontology_service_module, "DataSourceDao", _StubDataSourceDao)
+    # 创建
+    saved = asyncio.run(ontology_service.upsert_domain_async("ecommerce_trade", _domain_payload()))
+    assert saved["group_id"] == "grp-1"
+    # 重复创建未带 allow_overwrite 拒绝
+    with pytest.raises(OntologyStateInvalidError, match="领域已存在"):
+        asyncio.run(ontology_service.upsert_domain_async("ecommerce_trade", _domain_payload()))
+    # 编辑（allow_overwrite）改组
+    saved = asyncio.run(
+        ontology_service.upsert_domain_async(
+            "ecommerce_trade", _domain_payload(group_id="grp-2"), allow_overwrite=True
+        )
+    )
+    assert saved["group_id"] == "grp-2"
+    # 列表
+    domains = asyncio.run(ontology_service.list_domains_async())
+    assert [item["domain_name"] for item in domains] == ["ecommerce_trade"]
+    # 删除
+    asyncio.run(ontology_service.delete_domain_async("ecommerce_trade"))
+    assert asyncio.run(ontology_service.list_domains_async()) == []
+    # 再删报不存在
+    with pytest.raises(OntologyNotFoundError):
+        asyncio.run(ontology_service.delete_domain_async("ecommerce_trade"))
+
+
+def test_domain_rejects_unknown_group(harness, deps_ok, monkeypatch):
+    monkeypatch.setattr(ontology_service_module, "DataSourceDao", lambda: _StubDataSourceDao(existing_ids={"grp-real"}))
+    with pytest.raises(OntologyInvalidError, match="数据源组不存在"):
+        asyncio.run(ontology_service.upsert_domain_async("ecommerce_trade", _domain_payload(group_id="grp-ghost")))
+
+
+def test_domain_delete_blocked_when_objects_attached(harness, deps_ok, monkeypatch):
+    monkeypatch.setattr(ontology_service_module, "DataSourceDao", _StubDataSourceDao)
+    domain = asyncio.run(ontology_service.upsert_domain_async("ecommerce_trade", _domain_payload()))
+    asyncio.run(
+        ontology_service.upsert_object_async(
+            "Order", _object_payload(domain_id=int(domain["id"])), allow_overwrite=False
+        )
+    )
+    with pytest.raises(OntologyStateInvalidError, match="1 个对象"):
+        asyncio.run(ontology_service.delete_domain_async("ecommerce_trade"))
+
+
+def test_object_domain_id_validation(harness, deps_ok, monkeypatch):
+    monkeypatch.setattr(ontology_service_module, "DataSourceDao", _StubDataSourceDao)
+    # 领域不存在拒绝
+    with pytest.raises(OntologyInvalidError, match="领域不存在"):
+        asyncio.run(ontology_service.upsert_object_async("Order", _object_payload(domain_id=999)))
+    # 合法领域挂接成功，详情回读 domain_id
+    domain = asyncio.run(ontology_service.upsert_domain_async("ecommerce_trade", _domain_payload()))
+    asyncio.run(ontology_service.upsert_object_async("Order", _object_payload(domain_id=int(domain["id"]))))
+    detail = asyncio.run(ontology_service.get_object_async("Order"))
+    assert detail["domain_id"] == int(domain["id"])
+    # 未分域（domain_id=None）合法
+    asyncio.run(
+        ontology_service.upsert_object_async(
+            "Misc",
+            _object_payload(
+                properties=[{**VALID_PROPERTY, "property_name": "misc_id"}],
+            ),
+        )
+    )
+
+
+def test_object_domain_reassign(harness, deps_ok, monkeypatch):
+    """拖拽换域窄写路径：改归属不动对象名/属性，移出领域=domain_id 置空。"""
+    monkeypatch.setattr(ontology_service_module, "DataSourceDao", _StubDataSourceDao)
+    domain_a = asyncio.run(ontology_service.upsert_domain_async("domain_a", _domain_payload()))
+    domain_b = asyncio.run(
+        ontology_service.upsert_domain_async("domain_b", _domain_payload(display_name="供应链"))
+    )
+    asyncio.run(ontology_service.upsert_object_async("Order", _object_payload(domain_id=int(domain_a["id"]))))
+
+    # 换到 domain_b
+    updated = asyncio.run(ontology_service.set_object_domain_async("Order", int(domain_b["id"])))
+    assert updated["domain_id"] == int(domain_b["id"])
+    detail = asyncio.run(ontology_service.get_object_async("Order"))
+    assert detail["domain_id"] == int(domain_b["id"])
+    # 属性不受影响（窄写只动 domain_id）
+    assert [p["property_name"] for p in detail["properties"]] == ["order_id"]
+
+    # 移出领域（null）
+    updated = asyncio.run(ontology_service.set_object_domain_async("Order", None))
+    assert updated["domain_id"] is None
+
+    # 目标领域不存在拒绝
+    with pytest.raises(OntologyNotFoundError, match="目标领域不存在"):
+        asyncio.run(ontology_service.set_object_domain_async("Order", 999))
+
+    # 对象不存在拒绝
+    with pytest.raises(OntologyNotFoundError, match="对象不存在"):
+        asyncio.run(ontology_service.set_object_domain_async("Ghost", None))

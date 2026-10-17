@@ -17,7 +17,9 @@ const props = defineProps({
   // 映射行（父组件持有，就地编辑）
   rows: { type: Array as PropType<OntologyMappingItem[]>, required: true },
   // 对象属性集：字段映射的键候选
-  properties: { type: Array as PropType<OntologyPropertyItem[]>, default: () => [] }
+  properties: { type: Array as PropType<OntologyPropertyItem[]>, default: () => [] },
+  // 可选：限定候选数据源组（领域绑定的组）；不传则展示全部组
+  groupIds: { type: Array as PropType<string[]>, default: () => [] }
 })
 
 const { options, loading: configsLoading, loaded: configsLoaded, load, optionOf, groupedOptions } =
@@ -31,15 +33,18 @@ const configOf = (configId: string): SemanticConfigItem | undefined => optionOf(
 
 // ---------- 模型级联选择（第一级=数据源组，第二级=语义模型） ----------
 
+// 领域锁定：仅展示限定组（对象挂领域后映射只能落在领域绑定的组内）
 const cascaderOptions = computed(() =>
-  groupedOptions().map(group => ({
-    value: group.groupId,
-    label: group.groupName,
-    children: group.configs.map(opt => ({
-      value: opt.config.id,
-      label: `${opt.config.name} (${opt.config.id})`
+  groupedOptions()
+    .filter(group => props.groupIds.length === 0 || props.groupIds.includes(group.groupId))
+    .map(group => ({
+      value: group.groupId,
+      label: group.groupName,
+      children: group.configs.map(opt => ({
+        value: opt.config.id,
+        label: `${opt.config.name} (${opt.config.id})`
+      }))
     }))
-  }))
 )
 
 // 行的级联值 = [groupId, configId]；行数据只存 config id，路径由 optionOf 反推（编辑回显）
@@ -156,7 +161,7 @@ defineExpose({ addRow })
           clearable
           :empty-values="[null, undefined]"
           placeholder="先选数据源组，再选语义模型"
-          class="!w-96"
+          class="!w-[464px] max-w-full"
           @change="(value: unknown) => onCascaderChange(row, value)"
         />
       </div>

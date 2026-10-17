@@ -58,14 +58,31 @@ def validate_object_payload(payload: dict[str, Any]) -> dict[str, Any]:
     description = _normalized_text(payload.get("description"))
     if len(description) > 1024:
         raise _invalid("对象描述不超过 1024 字符")
-    domain = _normalized_text(payload.get("domain"))
-    if len(domain) > 128:
-        raise _invalid("业务域标签不超过 128 字符")
+    domain_id = payload.get("domain_id")
+    if domain_id is not None and not isinstance(domain_id, int):
+        raise _invalid("领域ID必须为整数或空")
     return {
         "display_name": display_name,
         "description": description,
-        "business_notes": _normalized_text(payload.get("business_notes")),
-        "domain": domain,
+        "domain_id": domain_id,
+    }
+
+
+def validate_domain_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """校验并规范化领域元数据（domain_name 由路径参数携带，不在此列）。"""
+    group_id = _normalized_text(payload.get("group_id"))
+    if not group_id or len(group_id) > 128:
+        raise _invalid("领域必须绑定数据源组")
+    display_name = _normalized_text(payload.get("display_name"))
+    if len(display_name) > 128:
+        raise _invalid("领域展示名不超过 128 字符")
+    description = _normalized_text(payload.get("description"))
+    if len(description) > 512:
+        raise _invalid("领域描述不超过 512 字符")
+    return {
+        "group_id": group_id,
+        "display_name": display_name,
+        "description": description,
     }
 
 
@@ -221,7 +238,6 @@ def validate_relation_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "from_columns": from_columns,
         "to_columns": to_columns,
         **fields,
-        "business_notes": _normalized_text(payload.get("business_notes")),
     }
 
 

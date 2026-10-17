@@ -34,6 +34,7 @@ import type {
   MetaGlobalEnum,
   MetaGlobalEnumRef,
   MetaGlobalEnumValueItem,
+  OntologyDomainItem,
   OntologyMappingItem,
   OntologyObjectItem,
   OntologyObjectStatus,
@@ -1951,11 +1952,44 @@ export function generateAdminMetaEnumItems(text: string): Promise<ApiResponse<{ 
 
 // ============ 元数据管理 API（Admin：本体 Ontology） ============
 
-/** 后台：本体对象列表（keyword 按名称/展示名/描述模糊过滤；status/domain 精确过滤） */
+/** 后台：本体领域列表（领域=业务域实体，一对一绑定数据源组） */
+export function getAdminOntologyDomains(): Promise<ApiResponse<{ domains: OntologyDomainItem[] }>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/domains`,
+    method: 'get'
+  })
+}
+
+/** 后台：创建/编辑本体领域（绑定数据源组；编辑活跃领域需 allow_overwrite=true） */
+export function upsertAdminOntologyDomain(
+  domainName: string,
+  data: {
+    group_id: string
+    display_name?: string
+    description?: string
+    allow_overwrite?: boolean
+  }
+): Promise<ApiResponse<OntologyDomainItem>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/domains/${encodeURIComponent(domainName)}`,
+    method: 'put',
+    data
+  })
+}
+
+/** 后台：删除本体领域（软删；挂有活跃对象时拒绝） */
+export function deleteAdminOntologyDomain(domainName: string): Promise<ApiResponse<{ domain_name: string }>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/domains/${encodeURIComponent(domainName)}`,
+    method: 'delete'
+  })
+}
+
+/** 后台：本体对象列表（keyword 按名称/展示名/描述模糊过滤；status/domain_id 精确过滤） */
 export function getAdminOntologyObjects(params?: {
   keyword?: string
   status?: string
-  domain?: string
+  domain_id?: number
 }): Promise<ApiResponse<{ objects: OntologyObjectItem[] }>> {
   return request({
     url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/objects`,
@@ -1979,8 +2013,7 @@ export function upsertAdminOntologyObject(
   data: {
     display_name: string
     description?: string
-    business_notes?: string
-    domain?: string
+    domain_id?: number | null
     properties: OntologyPropertyItem[]
     mappings?: OntologyMappingItem[]
     allow_overwrite?: boolean
@@ -2019,6 +2052,18 @@ export function changeAdminOntologyObjectStatus(
   })
 }
 
+/** 后台：对象领域归属变更（拖拽换域窄写路径；domainId=null 表示移出领域） */
+export function changeAdminOntologyObjectDomain(
+  objectName: string,
+  domainId: number | null
+): Promise<ApiResponse<OntologyObjectItem>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/objects/${encodeURIComponent(objectName)}/domain`,
+    method: 'post',
+    data: { domain_id: domainId }
+  })
+}
+
 /** 后台：本体关系列表（keyword 模糊过滤；from_object/to_object 按对象 API 名过滤） */
 export function getAdminOntologyRelations(params?: {
   keyword?: string
@@ -2046,7 +2091,6 @@ export function upsertAdminOntologyRelation(
     from_verbalize?: string
     to_verbalize?: string
     description?: string
-    business_notes?: string
     allow_overwrite?: boolean
     confirm_destructive?: boolean
   }

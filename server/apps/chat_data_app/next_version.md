@@ -303,6 +303,61 @@ CREATE TABLE `chat_data_ontology_object_mapping` (
 
 ## 功能变更
 
+### 本体领域实体化：领域绑数据源组一次绑定（2026-10-17 落地）
+
+领域从对象上的扁平文本标签（`chat_data_ontology_object.domain`）升级为独立实体 `chat_data_ontology_domain`，一对一绑定数据源组：对象挂领域即继承组（映射级联第一级锁定领域组），关系两端同领域即同组必合法。对象表 `domain` 文本列与 `business_notes` 死列删除，关系表 `business_notes` 死列删除（三者均无消费方）。
+
+新环境建表 + 存量环境迁移 DDL：
+
+```sql
+-- 新表：本体领域（领域名唯一；组必填=取数后端锚点）
+CREATE TABLE `chat_data_ontology_domain` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `domain_name` varchar(64) NOT NULL COMMENT '领域API名，仅字母数字下划线，全局唯一',
+  `group_id` varchar(128) NOT NULL COMMENT '绑定的数据源组ID（一次绑定，映射与关系的组锚点）',
+  `display_name` varchar(128) NOT NULL DEFAULT '' COMMENT '展示名，缺省用领域名',
+  `description` varchar(512) NOT NULL DEFAULT '' COMMENT '领域描述',
+  `delete_flag` tinyint NOT NULL DEFAULT '0' COMMENT '删除标识: 0-未删除, 1-已删除（挂有活跃对象时禁删）',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `create_by` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人ID',
+  `create_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人名称',
+  `update_by` varchar(100) NOT NULL DEFAULT '' COMMENT '修改人ID',
+  `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '修改人名称',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_domain_name` (`domain_name`),
+  KEY `idx_domain_group` (`group_id`,`delete_flag`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='本体领域表';
+
+-- 对象表：加领域引用，删旧列（domain 文本 / business_notes 死列）
+ALTER TABLE `chat_data_ontology_object`
+  ADD COLUMN `domain_id` bigint DEFAULT NULL COMMENT '领域ID（chat_data_ontology_domain.id，组随领域继承），NULL=未分域',
+  ADD INDEX `idx_object_domain_id` (`domain_id`,`delete_flag`),
+  DROP INDEX `idx_object_domain`,
+  DROP COLUMN `domain`,
+  DROP COLUMN `business_notes`;
+
+-- 关系表：删业务说明死列（无 UI 无消费方）
+ALTER TABLE `chat_data_ontology_relation` DROP COLUMN `business_notes`;
+```
+
+存量数据迁移（先建领域再迁对象，dev 库 2026-10-17 已执行）：
+
+```sql
+-- 1) 按存量 domain 文本建领域（group_id 按环境实际数据源组填写）
+INSERT INTO chat_data_ontology_domain (domain_name, group_id, display_name, description)
+SELECT 'ecommerce_trade', '<数据源组ID>', '电商交易', '电商交易业务域'
+WHERE NOT EXISTS (SELECT 1 FROM chat_data_ontology_domain WHERE domain_name = 'ecommerce_trade');
+
+-- 2) 对象按旧 domain 文本挂领域
+UPDATE chat_data_ontology_object o
+JOIN chat_data_ontology_domain d ON d.display_name = o.domain OR d.domain_name = o.domain
+SET o.domain_id = d.id
+WHERE o.delete_flag = 0 AND o.domain_id IS NULL;
+```
+
+API 变化：`OntologyObjectUpsertRequest` 的 `domain`/`business_notes` 字段删除、新增 `domain_id`；`OntologyRelationUpsertRequest` 的 `business_notes` 删除；对象列表过滤参数 `domain` → `domain_id`；新增领域 CRUD 路由（GET/PUT/DELETE `/admin/meta/ontology/domains/{domain_name}`、GET `/admin/meta/ontology/domains`）。目录 YAML 对象行新增 `domain`（领域名，未分域为空）。
+
 ### 本体关系状态手动升级入口（2026-10-16 落地）
 
 现状（修复前）：关系状态只在创建时按两侧对象状态较低者计算，级联只降不升，编辑时状态原样保留——「升级需手动」没有操作入口；且删除重建无效（软删行复活复用旧状态）。

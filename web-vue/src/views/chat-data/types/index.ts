@@ -1040,15 +1040,27 @@ export interface OntologyMappingItem {
   column_mappings: Record<string, string>
 }
 
+// 本体领域（业务域实体，一对一绑定数据源组；对象挂领域后继承其组）
+export interface OntologyDomainItem {
+  id: number
+  domain_name: string
+  group_id: string
+  display_name: string
+  description: string
+  create_time?: string
+  update_time?: string
+  update_by_name?: string
+}
+
 // 本体对象（列表行含 mappings_count；详情同构且含完整 properties 与 mappings）
 export interface OntologyObjectItem {
   id?: number
   object_name: string
   display_name: string
   description: string
-  business_notes: string
   status: OntologyObjectStatus
-  domain: string
+  // 所属领域（领域实体绑定数据源组，对象继承其组）
+  domain_id: number | null
   deprecation_reason: string
   deprecated_until: string
   successor_object_name: string
@@ -1074,7 +1086,6 @@ export interface OntologyRelationItem {
   from_verbalize: string
   to_verbalize: string
   description: string
-  business_notes: string
   status: OntologyObjectStatus
   create_time?: string
   update_time?: string

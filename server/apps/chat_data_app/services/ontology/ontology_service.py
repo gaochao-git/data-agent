@@ -12,6 +12,7 @@ from typing import Any
 
 from utils.logger import get_logger
 
+from ...daos.datasource_dao import DataSourceDao
 from ...daos.meta_global_enum_dao import _split_enum_ref
 from ...daos.ontology_dao import OntologyDao
 from ...daos.semantic_config_dao import SemanticConfigDao
@@ -51,16 +52,72 @@ def _derived_relation_status(from_status: str, to_status: str) -> str:
 
 
 class OntologyService:
-    """本体对象/属性/关系业务规则与治理门禁。"""
+    """本体领域/对象/属性/关系业务规则与治理门禁。"""
 
     def __init__(self, dao: OntologyDao | None = None) -> None:
         # 允许注入 DAO（测试用），默认单例 DAO
         self._dao = dao or OntologyDao()
 
+    # ---------- 领域 ----------
+
+    async def list_domains_async(self) -> list[dict[str, Any]]:
+        return await self._dao.list_domains_async()
+
+    async def upsert_domain_async(
+        self,
+        domain_name: str,
+        payload: dict[str, Any],
+        *,
+        operator: str = "",
+        operator_name: str = "",
+        allow_overwrite: bool = False,
+    ) -> dict[str, Any]:
+        """创建或编辑领域（一对一绑定数据源组）。"""
+        name = validator.validate_api_name(domain_name, "领域API名")
+        normalized = validator.validate_domain_payload(payload)
+        existing = await self._dao.get_domain_row_async(name, include_deleted=True)
+        if existing is not None and int(existing.get("delete_flag") or 0) == 0 and not allow_overwrite:
+            raise OntologyStateInvalidError(f"领域已存在: {name}，编辑请携带 allow_overwrite")
+        await self._validate_group_exists(_text(normalized.get("group_id")))
+        saved = await self._dao.upsert_domain_async(
+            name,
+            normalized,
+            allow_overwrite=allow_overwrite,
+            create_by=operator,
+            create_by_name=operator_name,
+            update_by=operator,
+            update_by_name=operator_name,
+        )
+        if saved is None:
+            raise OntologyStateInvalidError(f"领域已存在: {name}")
+        detail = await self._dao.get_domain_row_async(name)
+        if detail is None:  # 理论不可达（upsert 刚成功）
+            raise OntologyStateInvalidError(f"领域保存后读取失败: {name}")
+        return detail
+
+    async def delete_domain_async(self, domain_name: str, *, operator: str = "", operator_name: str = "") -> None:
+        """删除领域（软删）：不存在报 404，挂有活跃对象时拒绝。"""
+        existing = await self._dao.get_domain_row_async(domain_name)
+        if existing is None:
+            raise OntologyNotFoundError(f"领域不存在: {domain_name}")
+        counts = await self._dao.count_objects_by_domain_ids_async([int(existing["id"])])
+        if counts.get(int(existing["id"]), 0) > 0:
+            raise OntologyStateInvalidError(
+                f"领域下仍有 {counts[int(existing['id'])]} 个对象，请先移出或删除对象后再删除领域"
+            )
+        await self._dao.soft_delete_domain_async(domain_name, update_by=operator, update_by_name=operator_name)
+
+    async def _validate_group_exists(self, group_id: str) -> None:
+        """领域绑定的数据源组必须存在。"""
+        if not group_id:
+            raise OntologyInvalidError("领域必须绑定数据源组")
+        if not await DataSourceDao().has_datasource_async(group_id):
+            raise OntologyInvalidError(f"数据源组不存在: {group_id}")
+
     # ---------- 对象查询 ----------
 
-    async def list_objects_async(self, keyword: str = "", status: str = "", domain: str = "") -> list[dict[str, Any]]:
-        objects = await self._dao.list_objects_async(keyword, status, domain)
+    async def list_objects_async(self, keyword: str = "", status: str = "", domain_id: int | None = None) -> list[dict[str, Any]]:
+        objects = await self._dao.list_objects_async(keyword, status, domain_id)
         counts = await self._dao.count_mappings_by_object_ids_async([int(item["id"]) for item in objects])
         for item in objects:
             item["mappings_count"] = counts.get(int(item["id"]), 0)
@@ -96,6 +153,11 @@ class OntologyService:
         """
         name = validator.validate_api_name(object_name, "对象API名")
         meta_payload = validator.validate_object_payload(payload)
+        domain_id = meta_payload.get("domain_id")
+        if domain_id is not None:
+            domain_row = await self._dao.get_domain_row_by_id_async(int(domain_id))
+            if domain_row is None:
+                raise OntologyInvalidError(f"领域不存在: domain_id={domain_id}")
         properties = validator.validate_property_items(payload.get("properties"))
         property_names = {item["property_name"] for item in properties}
         mappings = validator.validate_mappings(payload.get("mappings"), property_names, name)
@@ -231,6 +293,39 @@ class OntologyService:
             object_name, {"status": target}, allow_overwrite=True, update_by=operator, update_by_name=operator_name
         )
         await self._cascade_relation_statuses(object_name, operator, operator_name)
+        refreshed = await self._dao.get_object_row_async(object_name)
+        return refreshed or existing
+
+    async def set_object_domain_async(
+        self,
+        object_name: str,
+        domain_id: int | None,
+        *,
+        operator: str = "",
+        operator_name: str = "",
+    ) -> dict[str, Any]:
+        """对象领域归属变更（拖拽换域窄写路径；domain_id=None 表示移出领域）。
+
+        归属变更不动对象名/属性/映射，无破坏性；deprecated 对象也允许挪归属。
+        """
+        existing = await self._dao.get_object_row_async(object_name)
+        if existing is None:
+            raise OntologyNotFoundError(f"对象不存在: {object_name}")
+        normalized_domain_id: int | None = None
+        if domain_id is not None:
+            domain = await self._dao.get_domain_row_by_id_async(int(domain_id))
+            if domain is None:
+                raise OntologyNotFoundError(f"目标领域不存在: domain_id={domain_id}")
+            normalized_domain_id = int(domain["id"])
+        if existing.get("domain_id") == normalized_domain_id:
+            return existing
+        await self._dao.upsert_object_async(
+            object_name,
+            {"domain_id": normalized_domain_id},
+            allow_overwrite=True,
+            update_by=operator,
+            update_by_name=operator_name,
+        )
         refreshed = await self._dao.get_object_row_async(object_name)
         return refreshed or existing
 
