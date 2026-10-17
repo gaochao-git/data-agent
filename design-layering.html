@@ -224,7 +224,7 @@
 
 <header>
   <h1>智能问数分层</h1>
-  <div class="meta">2026-10-11 架构讨论定稿 · data-agent / chat-data 语义建模体系</div>
+  <div class="meta">2026-10-11 架构讨论定稿 · 2026-10-17 更新（纳入本体层 / 目录二选一 / 绑定守护，校准质量规则数） · data-agent / chat-data 语义建模体系</div>
   <div class="slogan">数仓建模把<b>数据</b>做对（可信的表），语义建模把<b>含义</b>做对（可信的答案），两条链在<b>智能体消费</b>处汇合。</div>
 </header>
 
@@ -251,6 +251,7 @@
     <div class="rail">智能体层<span class="en">AGENT</span></div>
     <div class="stage">
       <div class="agent-box">
+        <div style="font-size:11px;color:var(--ink-3);margin-bottom:8px;">消费入口：先读 <b>semantic/ 导航目录</b>（二选一：有本体对象写 _ontology_catalog.yaml，否则回落 _semantic_catalog.yaml），再选模型产出查询</div>
         <div class="vflow">
           <div class="vflow-row">
             <span class="step">理解问题</span><span class="arr">→</span>
@@ -287,6 +288,17 @@
     <div class="stage" style="padding-top:8px;">
       <div class="stage-box">
       <div class="sub-frame">
+        <span class="sf-label">本体 · 概念层</span>
+        <div class="four-strip" style="margin-top:0;">
+          <span class="fs" style="--dot:var(--teal-600);"><b>业务域</b>一对一绑定数据源组，组在本体中的切片</span>
+          <span class="fs" style="--dot:var(--blue-600);"><b>对象 / 属性</b>业务实体与标识属性，certified / experimental 两级</span>
+          <span class="fs" style="--dot:var(--coral-600);"><b>关系</b>对象间关联（from/to 列 + 基数 + 导航名），驱动跨模型 join</span>
+          <span class="fs" style="--dot:var(--amber-600);"><b>映射</b>对象 ↔ 语义模型（一源一对象），属性列映射到模型维度</span>
+        </div>
+        <div style="font-size:10.5px;color:var(--ink-3);margin-top:7px;border-top:1px dashed var(--line);padding-top:6px;">映射被语义模型删除/改维度前由绑定守护硬阻断（40070），映射永不悬空</div>
+      </div>
+      <div class="stack-arr">↑</div>
+      <div class="sub-frame">
         <span class="sf-label">语义模型</span>
         <div class="grid4">
           <div class="model m-explo"><span class="lv">探索级</span><div class="name">ODS 语义模型</div><div class="sub">原始数据问题命中，结果带「口径未治理」标注</div></div>
@@ -298,7 +310,7 @@
       <div class="stack-arr">↑</div>
       <div class="gate-frame">
         <span class="sf-label">质量闸门</span>
-        check_yaml 工具 / 导入 preview / 管理端 quality-check 三入口同一套规则（单模型 25 条 + 跨模型 3 条）；通过后构成语义模型，探索级补齐四要素并过关后升级认证级
+        check_yaml 工具 / 导入 preview / 管理端 quality-check 三入口同一套规则（单模型 26 条 + 跨模型 2 条）；通过后构成语义模型，探索级补齐四要素并过关后升级认证级
       </div>
       <div class="stack-arr">↑</div>
       <div class="sub-frame">
@@ -350,6 +362,7 @@
   <table>
     <tr><th style="width:36%">情形</th><th>路由</th></tr>
     <tr><td>用户 @ 显式指定模型</td><td class="muted">使用指定模型（最高优先）</td></tr>
+    <tr><td>问业务实体与关联（“订单属于哪个客户”）</td><td class="muted">本体目录导航：对象 / 关系 / 映射给出关联口径，join 列翻译来自关系定义；无本体对象时回落语义模型目录</td></tr>
     <tr><td>问业务口径（“上月销售额”）</td><td class="muted">主题域内匹配认证级模型；同指标多层命中取最高层（ADS &gt; DWS &gt; DWD）</td></tr>
     <tr><td>问明细下钻（“某天某渠道”）</td><td class="muted">切到 DWD 明细模型换粒度重新编译</td></tr>
     <tr><td>问原始记录 / 贴源探索</td><td class="muted">ODS 探索级模型（结果带「口径未治理」标注）</td></tr>
@@ -361,7 +374,7 @@
 <h2><span class="no">3</span>资产四层栈（与数仓加工分层正交）</h2>
 <div class="stack">
   <div class="row top"><div class="l">L4 智能体使用</div><div class="c">UI 交互层（会话 / 结果展示 / 工作区 / 管理后台，只渲染不定义口径）＋ 会话问数：@ 引用 → 意图映射 → DSL → 确定性编译 SQL</div><div class="n">Consumption layer · Semantic Layer for AI</div></div>
-  <div class="row l3"><div class="l">L3 语义层</div><div class="c">业务模型 + 业务指标 + 业务知识；物化 runtime + 质量治理 + Ossie 导入导出</div><div class="n">Semantic / Metrics Layer（governed）</div></div>
+  <div class="row l3"><div class="l">L3 语义层</div><div class="c">业务模型 + 业务指标 + 业务知识 + 业务本体（对象/属性/关系/映射，目录二选一物化 + 悬空绑定守护）；物化 runtime + 质量治理 + Ossie 导入导出</div><div class="n">Semantic / Metrics Layer（governed）</div></div>
   <div class="row l2"><div class="l">L2 配置元数据</div><div class="c">表结构缓存、数据字典、表分组（分层标记 / 主题域）</div><div class="n">Metadata layer · Data Dictionary</div></div>
   <div class="row"><div class="l">L1 数据源</div><div class="c">MySQL / Hive 等真实库表；数仓加工链路（ODS→DWD→DWS→ADS）的产物在此接入</div><div class="n">Source layer</div></div>
 </div>
@@ -391,7 +404,7 @@
     <div class="lg-edge"><div class="arrow">⟶</div><div class="tag"><b>聚合口径</b>COUNT(DISTINCT user_id)</div></div>
     <div class="lg-node tl"><div class="n">指标：活跃用户数</div><div class="s">metrics · 对外口径</div></div>
   </div>
-  <div class="lg-cap">↑ <b>语义血缘（列级）</b>：归语义建模侧所有，边属性 = 口径定义——物理列 → 模型字段 → 指标的翻译链。两段血缘在语义层接续（加工血缘的终点 = 语义血缘的起点）。</div>
+  <div class="lg-cap">↑ <b>语义血缘（列级）</b>：归语义建模侧所有，边属性 = 口径定义——物理列 → 模型字段 → 指标的翻译链。本体接入后翻译链再叠一级概念层：<b>本体属性 → 模型维度 → 物理列</b>（映射 column_mappings 承载），两段血缘在语义层接续（加工血缘的终点 = 语义血缘的起点）。</div>
 </div>
 
 <div class="lg-legend">

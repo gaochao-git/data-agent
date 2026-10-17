@@ -5,6 +5,7 @@
  */
 import { computed, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import AdminPanelToolbar from './AdminPanelToolbar.vue'
 import {
   getAdminAgentSchedules,
   getAdminAgentScheduleRuns,
@@ -302,7 +303,7 @@ defineExpose({ ensureLoaded })
     </div>
 
     <!-- 工具栏 -->
-    <div class="flex shrink-0 items-center gap-2 px-4 py-2">
+    <AdminPanelToolbar>
       <el-input
         v-model="keyword"
         size="small"
@@ -326,7 +327,7 @@ defineExpose({ ensureLoaded })
       <el-button size="small" :loading="loading" @click="loadAll">
         <i class="fa-solid fa-rotate-right" style="margin-right: 4px; font-size: 10px;"></i>刷新
       </el-button>
-    </div>
+    </AdminPanelToolbar>
 
     <!-- 任务列表：表格化，任务量增长后仍可扫读与扩展列 -->
     <div class="flex min-h-0 flex-1 flex-col px-4 pb-4">

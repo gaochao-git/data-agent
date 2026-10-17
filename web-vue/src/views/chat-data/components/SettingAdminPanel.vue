@@ -9,6 +9,7 @@ import { computed, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { deleteAdminSetting, getAdminSettings, resetAllAdminSettings, upsertAdminSetting } from '../api'
 import type { ChatDataSettingItem } from '../types'
+import AdminPanelToolbar from './AdminPanelToolbar.vue'
 
 const loading = ref(false)
 const items = ref<ChatDataSettingItem[]>([])
@@ -169,15 +170,8 @@ defineExpose({ ensureLoaded })
 
 <template>
   <div class="flex h-full min-h-0 flex-col overflow-hidden">
-    <!-- 说明条 -->
-    <div class="shrink-0 border-b border-slate-100 px-4 py-2 text-xs text-slate-500">
-      以下为全部可动态修改的变量（代码注册表白名单，变量名与 .env 同名）。
-      优先级：<span class="text-blue-600">表覆盖</span> &gt; <span class="text-amber-600">env</span> &gt; <span class="text-slate-500">代码默认</span>；
-      「重置」= 回退 env/默认；修改后最迟 30 秒全节点生效。密钥与启动级变量不在此列。
-    </div>
-
-    <!-- 工具栏 -->
-    <div class="flex shrink-0 items-center gap-2 px-4 py-2">
+    <!-- 顶区：说明条 + 工具栏 -->
+    <AdminPanelToolbar>
       <el-input
         v-model="keyword"
         size="small"
@@ -191,12 +185,13 @@ defineExpose({ ensureLoaded })
       <el-button size="small" :loading="loading" @click="loadSettings">
         <i class="fa-solid fa-rotate-right" style="margin-right: 4px; font-size: 10px;"></i>刷新
       </el-button>
-      <div class="flex-1"></div>
-      <el-button size="small" type="danger" plain round @click="resetAll">
-        <i class="fa-solid fa-arrow-rotate-left" style="margin-right: 4px; font-size: 10px;"></i>
-        全部重置
-      </el-button>
-    </div>
+      <template #actions>
+        <el-button size="small" type="danger" plain round @click="resetAll">
+          <i class="fa-solid fa-arrow-rotate-left" style="margin-right: 4px; font-size: 10px;"></i>
+          全部重置
+        </el-button>
+      </template>
+    </AdminPanelToolbar>
 
     <!-- 变量列表（按分类分组排序 + 客户端分页；分类列不合并单元格） -->
     <div class="flex min-h-0 flex-1 flex-col px-4 pb-4">

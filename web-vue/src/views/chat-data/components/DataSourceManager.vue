@@ -5,6 +5,7 @@
  */
 import { ref, computed, onMounted, h } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import AdminPanelToolbar from './AdminPanelToolbar.vue'
 import {
   getAdminDatasources,
   deleteAdminDatasource,
@@ -1267,6 +1268,15 @@ defineExpose({
 
 <template>
   <div class="chatdata-root flex h-full flex-col">
+    <!-- 面板顶区：工具栏（新建动作属于本面板，不放弹窗头部） -->
+    <AdminPanelToolbar>
+      <template #actions>
+        <el-button type="primary" size="small" round @click="openGroupModal">
+          <i class="fa-solid fa-plus" style="margin-right: 4px; font-size: 10px;"></i>
+          新建
+        </el-button>
+      </template>
+    </AdminPanelToolbar>
     <!-- 数据源列表 -->
     <div class="flex-1 overflow-y-auto">
       <!-- 加载状态 -->

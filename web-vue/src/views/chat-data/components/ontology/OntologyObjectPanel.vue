@@ -10,6 +10,7 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { TreeInstance } from 'element-plus'
+import AdminPanelToolbar from '../AdminPanelToolbar.vue'
 import {
   changeAdminOntologyObjectDomain,
   deleteAdminOntologyDomain,
@@ -775,15 +776,8 @@ const onRelationSaved = (objectNames: string[]) => {
 
 <template>
   <div class="flex h-full min-h-0 flex-col overflow-hidden">
-    <!-- 说明条 -->
-    <div class="shrink-0 border-b border-slate-100 px-4 py-2 text-xs text-slate-500">
-      本体对象是语义层的外圈导航索引：认证态进入 agent 上下文；口径计算始终由语义层管理。
-      树形导航：根域 → 业务领域 → 对象/关系 → 属性/映射分组；属性与映射挂对象，关系是对象之间的边、挂领域（跨域关系两端各显示）。
-      右键：根域新增业务领域，对象分组新建对象，关系分组新建关系。
-    </div>
-
     <!-- 工具栏 -->
-    <div class="flex shrink-0 items-center gap-2 px-4 py-2">
+    <AdminPanelToolbar>
       <el-select
         v-model="filterStatus"
         size="small"
@@ -825,8 +819,7 @@ const onRelationSaved = (objectNames: string[]) => {
       <el-button size="small" :loading="loading" @click="loadObjects">
         <i class="fa-solid fa-rotate-right" style="margin-right: 4px; font-size: 10px;"></i>刷新
       </el-button>
-      <div class="flex-1"></div>
-    </div>
+    </AdminPanelToolbar>
 
     <!-- 左树右详情 -->
     <div class="flex min-h-0 flex-1 overflow-hidden">

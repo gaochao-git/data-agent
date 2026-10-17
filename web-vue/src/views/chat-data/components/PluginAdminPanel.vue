@@ -134,27 +134,26 @@ defineExpose({ ensureLoaded })
 <template>
   <div class="flex h-full min-h-0 flex-col overflow-hidden">
     <!-- 工具栏 -->
-    <div class="flex shrink-0 items-center gap-2 px-4 py-2">
-      <span class="min-w-0 flex-1 text-xs text-slate-400">
-        安装 / 启停 / 卸载均对新会话生效，不影响进行中的会话
-      </span>
-      <el-upload
-        ref="uploadRef"
-        action="#"
-        accept=".zip"
-        :auto-upload="false"
-        :show-file-list="false"
-        @change="handleUploadChange"
-      >
-        <el-button type="primary" size="small" round :loading="installing">
-          <i class="fa-solid fa-plug" style="margin-right: 4px; font-size: 10px;"></i>
-          安装插件
+    <AdminPanelToolbar>
+      <template #actions>
+        <el-upload
+          ref="uploadRef"
+          action="#"
+          accept=".zip"
+          :auto-upload="false"
+          :show-file-list="false"
+          @change="handleUploadChange"
+        >
+          <el-button type="primary" size="small" round :loading="installing">
+            <i class="fa-solid fa-plug" style="margin-right: 4px; font-size: 10px;"></i>
+            安装插件
+          </el-button>
+        </el-upload>
+        <el-button size="small" :loading="loading" @click="loadPlugins">
+          <i class="fa-solid fa-rotate-right" style="margin-right: 4px; font-size: 10px;"></i>刷新
         </el-button>
-      </el-upload>
-      <el-button size="small" :loading="loading" @click="loadPlugins">
-        <i class="fa-solid fa-rotate-right" style="margin-right: 4px; font-size: 10px;"></i>刷新
-      </el-button>
-    </div>
+      </template>
+    </AdminPanelToolbar>
 
     <!-- 插件列表：服务端分页 -->
     <div class="flex min-h-0 flex-1 flex-col px-4 pb-4">

@@ -74,7 +74,6 @@ const emit = defineEmits<{
 }>()
 
 const activeNav = ref<AdminNavKey>('datasource')
-const datasourceManagerRef = ref<InstanceType<typeof DataSourceManager> | null>(null)
 const enumPanelRef = ref<InstanceType<typeof GlobalEnumAdminPanel> | null>(null)
 const ontologyPanelRef = ref<InstanceType<typeof OntologyAdminPanel> | null>(null)
 const sqlHistoryRef = ref<InstanceType<typeof GlobalSqlHistory> | null>(null)
@@ -89,11 +88,6 @@ const visible = computed({
   get: () => props.modelValue,
   set: (value: boolean) => emit('update:modelValue', value)
 })
-
-const openDatasourceGroupModal = () => {
-  activeNav.value = 'datasource'
-  datasourceManagerRef.value?.openGroupModal()
-}
 
 const loadAdminDatasourceOptions = async (force = false) => {
   if (loadingAdminDatasourceOptions.value) return
@@ -151,10 +145,6 @@ const switchNav = async (item: AdminNavItem) => {
           <span>后台管理</span>
         </div>
         <div class="flex items-center gap-2">
-          <el-button v-if="activeNav === 'datasource'" type="primary" size="small" round @click="openDatasourceGroupModal">
-            <i class="fa-solid fa-plus" style="margin-right: 4px; font-size: 10px;"></i>
-            新建
-          </el-button>
           <el-button :icon="Close" circle size="small" @click="visible = false" />
         </div>
       </div>
@@ -195,7 +185,6 @@ const switchNav = async (item: AdminNavItem) => {
       <div class="min-w-0 flex-1 overflow-hidden">
         <DataSourceManager
           v-show="activeNav === 'datasource'"
-          ref="datasourceManagerRef"
           class="h-full"
           @datasources-updated="handleDatasourcesUpdated"
           @open-semantic-config="(datasourceId, datasource) => emit('open-semantic-config', datasourceId, datasource)"

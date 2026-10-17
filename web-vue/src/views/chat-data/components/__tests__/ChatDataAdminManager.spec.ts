@@ -20,7 +20,7 @@ import ChatDataAdminManager from '../ChatDataAdminManager.vue'
 
 // 子面板桩：暴露 ensureLoaded/openGroupModal 供容器懒加载调用，根节点带 data-panel 便于断言
 const panelMocks = vi.hoisted(() => ({
-  datasource: { openGroupModal: vi.fn() },
+  datasource: {},
   enum: { ensureLoaded: vi.fn() },
   ontology: { ensureLoaded: vi.fn() },
   sqlHistory: { ensureLoaded: vi.fn() },
@@ -82,12 +82,13 @@ describe('ChatDataAdminManager 分组导航', () => {
     expect(navButton(wrapper, '数据血缘').find('i.fa-lock').exists()).toBe(true)
   })
 
-  it('默认激活数据源管理，其余面板隐藏', () => {
+  it('默认激活数据源管理，其余面板隐藏；新建按钮属于数据源面板而非弹窗头部', () => {
     const wrapper = mountManager()
     expect(isPanelVisible(wrapper, 'datasource')).toBe(true)
     for (const panel of ['enum', 'ontology', 'sqlHistory', 'schedule', 'plugins', 'setting']) {
       expect(isPanelVisible(wrapper, panel)).toBe(false)
     }
+    expect(wrapper.findAll('button').some(b => b.text().includes('新建'))).toBe(false)
   })
 
   it('点击本体切换面板并触发懒加载，重复进入不重复拉取由面板自管', async () => {
