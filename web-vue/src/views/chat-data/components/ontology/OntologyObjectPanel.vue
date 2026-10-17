@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
  * 后台管理 · 本体对象列表面板（左树右详情）。
- * 左侧「根域 → 业务领域 → 对象/关系 → 属性/映射」完全树形导航（对象子节点懒加载），
+ * 左侧「本体 → 业务领域 → 对象/关系 → 属性/映射」完全树形导航（对象子节点懒加载），
  * 右侧按选中节点类型渲染只读详情卡；全部写操作（新建/编辑/状态/删除）收敛到右键菜单。
  * 归属口径：属性/映射是对象自有物，挂对象下；关系是对象之间的边（双规范对齐 Palantir link type / Ossie
  * top-level relationships），挂领域下（两端同域一条、跨域两端各一条带「跨域」标记），不放对象里。
@@ -139,10 +139,10 @@ const objectDisplayOf = (objectName: string | undefined) =>
 
 // 域筛选项已由领域清单接口提供（domains ref），不再从对象行提取
 
-// ---------- 树节点类型：根域 → 领域 → 对象/关系 → 属性/映射 ----------
+// ---------- 树节点类型：本体 → 领域 → 对象/关系 → 属性/映射 ----------
 
 const UNGROUPED_DOMAIN = '未归领域'
-// 常驻根域：展示层锚点（右键新增业务领域），非数据实体，DB 无层级字段
+// 常驻本体：展示层锚点（右键新增业务领域），非数据实体，DB 无层级字段
 const ROOT_ROW_KEY = 'ontology-root'
 const domainBucketKey = (domainId: number | null) => (domainId == null ? '__ungrouped__' : String(domainId))
 
@@ -339,12 +339,12 @@ const treeData = computed<RootNode[]>(() => {
     object_count: ungrouped.length,
     children: buildDomainChildren(null, ungrouped)
   })
-  // 常驻根域单顶层：业务领域全部挂根域下（展示层锚点，非数据实体）
-  return [{ row_key: ROOT_ROW_KEY, kind: 'root', label: '根域', children: domainNodes }]
+  // 常驻本体单顶层：业务领域全部挂本体下（展示层锚点，非数据实体）
+  return [{ row_key: ROOT_ROW_KEY, kind: 'root', label: '本体', children: domainNodes }]
 })
 
-// 根域/领域/对象分组默认展开（key 稳定；对象节点 key 带版本号，保存/刷新后重新折叠）
-// 默认只展开根域与领域层；对象/关系分组默认收起（保持树紧凑），展开与否随用户操作
+// 本体/领域/对象分组默认展开（key 稳定；对象节点 key 带版本号，保存/刷新后重新折叠）
+// 默认只展开本体与领域层；对象/关系分组默认收起（保持树紧凑），展开与否随用户操作
 const defaultExpandedKeys = computed(() => [
   ROOT_ROW_KEY,
   ...treeData.value[0]?.children.map(row => row.row_key) || []
@@ -439,7 +439,7 @@ const currentNodeKey = ref('')
 const selectedNode = ref<TreeRow | null>(null)
 
 const onNodeClick = (data: TreeRow) => {
-  // 根域/对象子树分组/领域分组/空态占位是导航容器或提示节点，点击不改变右侧详情；
+  // 本体/对象子树分组/领域分组/空态占位是导航容器或提示节点，点击不改变右侧详情；
   // 领域节点有独立详情卡（否则点击后右侧空白）。
   if (data.kind === 'root' || data.kind === 'group' || data.kind === 'domain-group' || data.kind === 'empty') return
   selectedNode.value = data
@@ -651,7 +651,7 @@ const removeDomain = async (domainName: string, displayName: string) => {
 
 // ---------- 拖拽换域（仅对象节点拖入领域节点内部；API 名不可改，归属迁移靠拖拽） ----------
 
-// 只允许对象节点发起拖拽（领域/根域/分组等锚点不可拖）
+// 只允许对象节点发起拖拽（领域/本体/分组等锚点不可拖）
 const allowDrag = (draggingNode: { data: TreeRow }) => draggingNode.data.kind === 'object'
 
 // 只允许放到领域节点或其「对象」分组内部（inner）；禁止排序（prev/next）与拖到其他节点
@@ -724,7 +724,7 @@ const openCtxMenu = (event: MouseEvent, node: TreeRow | null) => {
   event.preventDefault()
   const menuItems: ContextMenuItem[] = []
   if (node && node.kind === 'root') {
-    // 根域：只新增业务领域（对象必须挂在具体领域下，根域不直接建对象）
+    // 本体：只新增业务领域（对象必须挂在具体领域下，本体不直接建对象）
     menuItems.push({ key: 'create-domain', label: '新增业务领域', icon: 'fa-plus', handler: () => openDomainCreate() })
   } else if (node && node.kind === 'domain' && !node.is_ungrouped) {
     // 领域节点：治理动作（编辑/删除）；新建对象/关系由领域下的分组锚点承担（容器管新增，不重复挂）
@@ -760,9 +760,9 @@ const openCtxMenu = (event: MouseEvent, node: TreeRow | null) => {
       { key: 'delete-relation', label: '删除关系', icon: 'fa-trash', danger: true, handler: () => relationFormRef.value?.remove(node.relation) }
     )
   } else if (!node) {
-    // 树空白处（容器级右键 node=null）：等同于根域层级。
+    // 树空白处（容器级右键 node=null）：等同于本体层级。
     // 注意兜底只允许 null——未显式处理的节点类型（属性/映射条目、对象子树的属性/映射分组、
-    // 空态占位）必须落空，否则「新增业务领域」等根域动作会泄漏到叶子节点上。
+    // 空态占位）必须落空，否则「新增业务领域」等本体动作会泄漏到叶子节点上。
     menuItems.push({ key: 'create-domain', label: '新增业务领域', icon: 'fa-plus', handler: () => openDomainCreate() })
   }
   // 无菜单项的节点（未归领域虚拟节点、对象子树的属性/映射分组）不弹菜单
@@ -879,7 +879,7 @@ const onRelationSaved = (objectNames: string[]) => {
             :default-expanded-keys="defaultExpandedKeys"
             :current-node-key="currentNodeKey"
             highlight-current
-            empty-text="暂无业务领域，右键根域可新增"
+            empty-text="暂无业务领域，右键本体可新增"
             draggable
             :allow-drag="allowDrag"
             :allow-drop="allowDrop"
@@ -889,7 +889,7 @@ const onRelationSaved = (objectNames: string[]) => {
             @node-contextmenu="(event: MouseEvent, data: TreeRow) => openCtxMenu(event, data)"
           >
             <template #default="{ data }">
-              <!-- 根域节点（常驻，右键新增业务领域） -->
+              <!-- 本体节点（常驻，右键新增业务领域） -->
               <span v-if="data.kind === 'root'" class="flex items-center gap-1.5 py-0.5">
                 <i class="fa-solid fa-sitemap text-[11px] text-slate-500"></i>
                 <span class="text-xs font-semibold text-slate-800">{{ data.label }}</span>
@@ -976,7 +976,7 @@ const onRelationSaved = (objectNames: string[]) => {
           <div class="text-center text-xs text-slate-400">
             <i class="fa-solid fa-sitemap mb-2 block text-2xl text-slate-300"></i>
             在左侧选择对象、属性、关系或映射查看详情
-            <div class="mt-1 text-[11px] text-slate-300">左侧树支持右键：根域新增业务领域，领域的对象/关系分组可新建</div>
+            <div class="mt-1 text-[11px] text-slate-300">左侧树支持右键：本体新增业务领域，领域的对象/关系分组可新建</div>
           </div>
         </div>
 
