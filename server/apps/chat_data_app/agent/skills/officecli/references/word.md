@@ -241,6 +241,32 @@ officecli_run(command_args=["merge", "/mnt/user-data/workspace/tpl.docx", "/mnt/
 
 > `refresh`（重算 TOC 页码 / PAGE / NUMPAGES / 交叉引用）：无 Word 的环境（1.0.147 起）自动走 **headless-HTML 回退**（返回 `backend: html`），但 HTML 分页与真实 Word 分页有偏差，算出的是**近似页码**——交付主路径仍是 `updateFields=true` 交给收件人 Word 打开时重算；`refresh` 只用于交付前预填一个比空白好的近似值并如实标注。`dump` 把子树序列化为可重放的 batch 脚本（辅助批量改造，回放配 `--best-effort` 容忍单条不支持项）。
 
+## 分节与页码控制
+
+docx 天然有一个**末节**（body 级 sectPr，路径 `/`）；`add / --type section` 在光标处插入**中间节**并产生分页。全部能力先 `help word section` 确认（schema 为准），以下是实测过（1.0.157）的标准路径。
+
+**标准流程：一步一验证**——每步结构操作后立即 `get`/`query` 回读确认，再叠加下一步：
+
+```text
+# 1) 插入中间节（nextPage=新页起节；titlePage=该节首页独立页眉脚；pageStart=该节起始页码）
+officecli_run(command_args=["add", "F", "/", "--type", "section", "--prop", "type=nextPage", "--prop", "titlePage=true", "--prop", "pageStart=1"])
+# 2) 回读确认（属性在 format 里，见下方解析陷阱）
+officecli_run(command_args=["get", "F", "/section[1]", "--json"])
+# 3) 加页脚（自动挂到【末节】；field=page 为页码域）
+officecli_run(command_args=["add", "F", "/", "--type", "footer", "--prop", "field=page", "--prop", "align=center"])
+# 4) 回读确认挂接关系
+officecli_run(command_args=["query", "F", "section", "--json"])
+```
+
+要点与实测边界：
+
+- **分节属性解析陷阱**：`get`/`query` 返回的 JSON 里，分节属性在 `data.results[N].format` 下（`titlePage`/`pageStart`/`type`/`pageWidth` 等），不在 `data` 顶层。写解析代码前先看原始返回。
+- **节属性写后持久**：`pageStart`（int）、`titlePage`（bool）、`pageNumFmt`、页边距、分栏数等 set 之后不会被后续段落/表格操作静默重置；若"看起来丢了"，先查解析路径再怀疑数据。
+- **末节限制**：body 级 `/` 指向的末节**没有分页类型**——对 `/` 设 `type` 会被拒绝并提示改用 `/section[N]`，这不是 bug。
+- **页脚挂接是单向的**：`add / --type footer`（type 取 `default`/`first`/`even`）自动挂到**末节**；中间节的 `footerRef`/`headerRef` 是**只读**属性，高层 API 无法把页脚挂到指定中间节。跨节自定义页脚只能 `raw-set` 往该节 sectPr 内插 `footerReference`（最后手段，插入位置错了会 schema 校验失败）——需求能简化成"全文档统一页脚 + 首页不同（titlePage+first 页脚）"就**不要**走跨节挂接。
+- **titlePage 语义**：`titlePage=true` 只是启用"该节首页用 first 引用"，还要有 `--prop type=first` 的页眉/页脚才有内容，否则首页是空的。
+- **验证以回读为准**：分节/页码是结构信息，`get`/`query` 回读是唯一可信依据。**HTML 预览是连续流，不反映分页与页码**（同 `refresh` 的 HTML 回退口径）；screenshot 的分页渲染也不保证体现 `pageStart`/分节符——不要用视觉渲染判断分节对错，避免"看着不对→盲改"循环。
+
 ## 报告级配方
 
 每一条都经 `validate` 通过。占位符写法 `F` 在真实调用时替换为完整路径（如 `/mnt/user-data/workspace/report.docx`），不能把字面量 `F` 传给工具。
@@ -336,3 +362,6 @@ officecli_run(command_args=["set", "F", "/body/tbl[1]/tr[1]/tc[1]/p[1]", "--prop
 | batch 条目漏 `command` 字段 | 每个条目必须有 `command`（裸动词 `add`/`set`/…），缺了整批被拒 `missing required 'command' field` |
 | batch/单条命令里属性裸写 `text=xxx` | 单条命令必须 `--prop text=xxx`；batch JSON 里属性是 `props` 对象的 key，不带 `--prop` 前缀，两种形态别混 |
 | 用 `file_write` 造 .docx，或指望 `add` 自动建文件 | .docx 是 ZIP 包，0 字节不是合法文档——新建唯一入口是 `officecli create`（或 `file_copy` 已有文件），`add`/`batch` 只能改已存在的合法文档 |
+| 在 `get`/`query` 的 JSON 顶层找分节属性 | 分节属性在 `data.results[N].format` 下（`pageStart`/`titlePage`/`type`…），先看原始返回再写解析 |
+| 用 HTML 预览/screenshot 判断分节、页码对错 | 结构回读（`get`/`query` section）是唯一可信依据；HTML 预览不分页、截图页码不保证反映 `pageStart` |
+| 想给中间节挂独立页脚就反复 `set` 试探 | 中间节 `footerRef` 只读，高层 API 挂不了；需求能收敛成"统一页脚 + titlePage + first 页脚"就别跨节挂接 |
