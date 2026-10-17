@@ -25,6 +25,8 @@ export interface CatalogObject {
   status: string
   description: string
   properties: CatalogProperty[]
+  /** 关联语义模型展示名（目录 YAML 的 mappings，辅助信息用于 tooltip） */
+  mappings: string[]
 }
 
 export interface CatalogRelation {
@@ -52,6 +54,18 @@ const OBJECT_STATUS_COLORS: Record<string, string> = {
 }
 
 const FALLBACK_STATUS_COLOR = '#64748b'
+
+/** 状态中文名（tooltip 用）：certified=权威、experimental=试用、draft=草稿、deprecated=已废弃 */
+const STATUS_LABELS: Record<string, string> = {
+  certified: '权威',
+  experimental: '试用',
+  draft: '草稿',
+  deprecated: '已废弃',
+}
+
+export function objectStatusLabel(status: string): string {
+  return STATUS_LABELS[status] || '未知'
+}
 
 export function objectStatusColor(status: string): string {
   return OBJECT_STATUS_COLORS[status] || FALLBACK_STATUS_COLOR
@@ -123,6 +137,11 @@ export function parseOntologyCatalog(content: string): OntologyCatalog | null {
       status: typeof item.status === 'string' ? item.status : '',
       description: typeof item.description === 'string' ? item.description : '',
       properties: Array.isArray(item.properties) ? (item.properties as CatalogProperty[]) : [],
+      mappings: Array.isArray(item.mappings)
+        ? (item.mappings as Array<Record<string, unknown>>)
+            .map(mapping => (mapping && typeof mapping === 'object' ? String((mapping as Record<string, unknown>).semantic_config_name ?? '') : ''))
+            .filter(Boolean)
+        : [],
     })
   }
   const rawRelations = (doc as { relations?: unknown }).relations
@@ -295,22 +314,32 @@ const formatGraphTooltip = (params: unknown, objectByName: Map<string, CatalogOb
   }
   // 属性节点
   if ('catalogProperty' in data) {
-    const property = (data as unknown as { catalogProperty: CatalogProperty }).catalogProperty
+    const node = data as unknown as { catalogProperty: CatalogProperty; ownerObject?: string }
+    const property = node.catalogProperty
+    const owner = node.ownerObject ? objectByName.get(node.ownerObject) : undefined
     const tags = [property.identifier ? '标识' : '', property.title ? '标题' : ''].filter(Boolean).join('，')
-    return [
+    const lines = [
       `<b>${escapeHtml(property.display_name || property.name)}</b>`,
       `类型：${escapeHtml(property.type)}`,
       tags ? `角色：${escapeHtml(tags)}` : '',
-    ].filter(Boolean).join('<br/>')
+    ]
+    if (owner) lines.push(`所属对象：${escapeHtml(owner.display_name || owner.object)}`)
+    return lines.filter(Boolean).join('<br/>')
   }
-  // 对象节点
+  // 对象节点 tooltip 分层：①名称+API名 ②状态徽章（色块） ③描述/关联模型（带标签前缀） ④属性分区
   const catalogObject = objectByName.get(String(data.name ?? ''))
   if (!catalogObject) return ''
+  const statusColor = objectStatusColor(catalogObject.status)
+  const titleText = escapeHtml(catalogObject.display_name || catalogObject.object)
   const lines = [
-    `<b>${escapeHtml(catalogObject.display_name || catalogObject.object)}</b>`,
-    `状态：${escapeHtml(catalogObject.status || '未知')}`,
+    `<b style="font-size:13px;">${titleText}</b>&nbsp;<span style="color:#94a3b8;font-size:11px;">${escapeHtml(catalogObject.object)}</span>`,
+    `<span style="color:#64748b;">对象状态：</span><span style="display:inline-block;background:${statusColor};color:#fff;border-radius:8px;padding:0 7px;font-size:11px;line-height:16px;">${escapeHtml(objectStatusLabel(catalogObject.status))}</span>`,
   ]
-  if (catalogObject.description) lines.push(escapeHtml(catalogObject.description))
+  if (catalogObject.description) lines.push(`<span style="color:#64748b;">描述：${escapeHtml(catalogObject.description)}</span>`)
+  if (catalogObject.mappings.length) lines.push(`<span style="color:#64748b;">关联模型：${escapeHtml(catalogObject.mappings.join('、'))}</span>`)
+  lines.push(
+    `<span style="color:#94a3b8;border-bottom:1px solid #e2e8f0;display:inline-block;width:100%;">属性（${catalogObject.properties.length}）</span>`
+  )
   for (const property of catalogObject.properties) {
     const tags = [property.identifier ? '标识' : '', property.title ? '标题' : ''].filter(Boolean).join('，')
     const tagSuffix = tags ? `（${tags}）` : ''

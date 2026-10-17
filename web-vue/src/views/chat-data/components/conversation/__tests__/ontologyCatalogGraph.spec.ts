@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest'
 import {
   buildGraphOption,
   objectStatusColor,
+  objectStatusLabel,
   parseOntologyCatalog,
   renderVerbalize,
 } from '../ontologyCatalogGraph'
@@ -16,6 +17,11 @@ objects:
   display_name: 订单
   status: certified
   description: 销售订单主表
+  mappings:
+  - semantic_config_id: sc_1
+    semantic_config_name: 订单模型
+    column_mappings:
+      order_no: 订单编号
   properties:
   - name: order_no
     display_name: 订单编号
@@ -55,6 +61,9 @@ describe('parseOntologyCatalog', () => {
     expect(catalog!.objects.map(item => item.object)).toEqual(['sales_order', 'customer'])
     expect(catalog!.objects[0]!.display_name).toBe('订单')
     expect(catalog!.objects[0]!.properties).toHaveLength(2)
+    // mappings 提取语义模型展示名（tooltip 辅助信息）
+    expect(catalog!.objects[0]!.mappings).toEqual(['订单模型'])
+    expect(catalog!.objects[1]!.mappings).toEqual([])
     expect(catalog!.relations).toHaveLength(1)
     expect(catalog!.relations[0]).toMatchObject({
       name: 'order_belongs_to_customer',
@@ -114,6 +123,16 @@ describe('objectStatusColor', () => {
   })
 })
 
+describe('objectStatusLabel', () => {
+  it('四态中文名，未知状态回落「未知」', () => {
+    expect(objectStatusLabel('certified')).toBe('权威')
+    expect(objectStatusLabel('experimental')).toBe('试用')
+    expect(objectStatusLabel('draft')).toBe('草稿')
+    expect(objectStatusLabel('deprecated')).toBe('已废弃')
+    expect(objectStatusLabel('whatever')).toBe('未知')
+  })
+})
+
 describe('buildGraphOption', () => {
   const getGraph = (option: ReturnType<typeof buildGraphOption>) =>
     (option.series as Array<Record<string, unknown>>).find(item => item.type === 'graph')!
@@ -168,5 +187,27 @@ describe('buildGraphOption', () => {
     // 两个对象节点在圆周上不重合（两节点时上下对称：x 相同、y 相反，比较坐标对）
     const nodes = (graph.data as Array<Record<string, unknown>>).filter(node => node.catalogObject)
     expect([nodes[0]!.x, nodes[0]!.y]).not.toEqual([nodes[1]!.x, nodes[1]!.y])
+  })
+
+  it('对象 tooltip：状态中文+色点、关联模型、属性单独分区标题', () => {
+    const catalog = parseOntologyCatalog(SAMPLE_YAML)!
+    const option = buildGraphOption(catalog)
+    const formatter = (option.tooltip as Record<string, unknown>).formatter as (params: unknown) => string
+    const html = formatter({ data: { name: 'sales_order' } })
+    expect(html).toContain('订单')
+    expect(html).toContain('权威')
+    expect(html).toContain('关联模型：订单模型')
+    expect(html).toContain('属性（2）')
+    expect(html).toContain('订单编号：String（标识，标题）')
+  })
+
+  it('属性 tooltip：类型/角色 + 所属对象', () => {
+    const catalog = parseOntologyCatalog(SAMPLE_YAML)!
+    const option = buildGraphOption(catalog)
+    const formatter = (option.tooltip as Record<string, unknown>).formatter as (params: unknown) => string
+    const html = formatter({ data: { catalogProperty: { name: 'user_id', display_name: '用户ID', type: 'String', identifier: true, title: true }, ownerObject: 'customer' } })
+    expect(html).toContain('类型：String')
+    expect(html).toContain('角色：标识，标题')
+    expect(html).toContain('所属对象：用户')
   })
 })
