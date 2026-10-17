@@ -1134,7 +1134,7 @@ class ChatDataOntologyDomain(Base):
 class ChatDataOntologyObject(Base):
     """本体对象表：对象/属性/关系三等实体之一（属性一等实体见 Property 表）。
 
-    语义模型绑定独立成映射表 chat_data_ontology_object_mapping（对齐 ossie
+    语义模型绑定独立成映射表 chat_data_ontology_mapping（对齐 ossie
     概念层/映射层分离，「一源一对象」由映射表唯一索引约束），本表只存概念层
     元数据。主键=标识属性（is_identifier）组合，标题键=is_title 属性，均由属性
     表表达，本表不冗余存储。domain_id 指向领域实体（组随领域继承），NULL=未分域。
@@ -1255,7 +1255,7 @@ class ChatDataOntologyObjectMapping(Base):
     只引用模型维度（Ossie 映射文档同构），物理列解析是语义模型内部的事。
     """
 
-    __tablename__ = "chat_data_ontology_object_mapping"
+    __tablename__ = "chat_data_ontology_mapping"
 
     id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
     object_id: Mapped[int] = mapped_column(BigInteger, nullable=False)

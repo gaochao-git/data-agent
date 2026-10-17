@@ -282,7 +282,7 @@ CREATE TABLE `chat_data_ontology_relation` (
 -- delete_flag 语义特殊：0=活跃，软删时置为行 id——软删行不占唯一索引槽位，同源可重绑；
 -- 「一源一对象」由 uniq_mapping_semantic_source(含 delete_flag) 对活跃行直接约束
 -- （DB 兜底，service 先查给友好报错）
-CREATE TABLE `chat_data_ontology_object_mapping` (
+CREATE TABLE `chat_data_ontology_mapping` (
   `id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键ID',
   `object_id` bigint NOT NULL COMMENT '所属本体对象ID（chat_data_ontology_object.id，逻辑关联无外键）',
   `semantic_config_id` varchar(128) NOT NULL COMMENT '语义模型配置ID（口径唯一权威在语义层，不触碰物理表）',
@@ -368,10 +368,14 @@ API 变化：`OntologyObjectUpsertRequest` 的 `domain`/`business_notes` 字段�
 
 绑定语义从「config_id + table_alias + 属性→物理列」改为「config_id + 属性→模型维度名」：本体层只引用模型维度（Ossie 映射文档同构），物理列解析归语义模型；实体锚点由映射维度所属表派生（同一映射全部维度必须同表，service 校验）；唯一键收紧为 (object_id, config_id) 与 (config_id)。API/payload/目录 YAML 键同步 bindings→mappings，table_alias 全链路删除。
 
-上线前对已建环境的 DDL（新环境直接按上方建表语句）：
+上线前对已建环境的 DDL（新环境直接按上方建表语句）。表名已于 2026-10-17 由 `chat_data_ontology_object_mapping`（33 字符，超 AGENTS 32 上限）收敛为 `chat_data_ontology_mapping`（26 字符），仍持旧表名的环境先执行改名（索引随表自动迁移，无数据变更）：
 
 ```sql
-ALTER TABLE `chat_data_ontology_object_mapping`
+RENAME TABLE `chat_data_ontology_object_mapping` TO `chat_data_ontology_mapping`;
+```
+
+```sql
+ALTER TABLE `chat_data_ontology_mapping`
   DROP INDEX `uniq_mapping_object_source`,
   DROP INDEX `uniq_mapping_semantic_source`,
   DROP COLUMN `table_alias`,
@@ -421,7 +425,7 @@ ALTER TABLE `chat_data_ontology_object_mapping`
 **门禁**
 - Sonar 认知复杂度本体相关函数全部 ≤15；`ruff check` 与 `ruff format --check` 全库通过；审计补测覆盖事务回滚/复活/认证门禁/组锚点/多映射翻译/目录截断。
 - 覆盖率门禁补测：新增 `test_coverage_gate_ontology.py` / `test_coverage_gate_platform.py`，全量后端行覆盖 97.70%、分支覆盖 96.03%（均 ≥95%）。
-- 已知遗留：`chat_data_ontology_object_mapping` 表名 33 字符，超 AGENTS 32 字符上限（需单独迁移评估）；多源对象「属性单源查重」仍属 §12 已知缺口；本体注入的数据源组授权沿用语义层既有口径，未在本轮收紧。
+- 已知遗留：多源对象「属性单源查重」仍属 §12 已知缺口；本体注入的数据源组授权沿用语义层既有口径，未在本轮收紧。（原遗留「映射表名 33 字符超限」已于同日改名收敛，见上。）
 
 ## 依赖变更
 

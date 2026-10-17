@@ -3,7 +3,7 @@
 对象/属性/关系为三等实体（对齐 Palantir Object/Property/Link Type）。删除均为
 软删：对象与关系同名重建走复活复用原行（翻回 delete_flag=0 并更新内容），属性
 按 (object_id, property_name) 复活。语义模型映射独立存映射表
-chat_data_ontology_object_mapping（对齐 ossie 概念层/映射层分离），随对象
+chat_data_ontology_mapping（对齐 ossie 概念层/映射层分离），随对象
 upsert 同事务软删（delete_flag=行 id）+重插全量重写；「一源一对象」由映射表唯一索引约束，
 service 层先查占用对象给友好报错，数据库唯一键兜底。
 """
