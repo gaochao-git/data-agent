@@ -32,7 +32,6 @@ const loadedDetail = ref<OntologyObjectItem | null>(null)
 const formName = ref('')
 const formDisplayName = ref('')
 const formDescription = ref('')
-const formBusinessNotes = ref('')
 const formDomain = ref('')
 const propertyRows = ref<OntologyPropertyItem[]>([])
 const mappingRows = ref<OntologyMappingItem[]>([])
@@ -49,7 +48,6 @@ const resetForm = () => {
   formName.value = ''
   formDisplayName.value = ''
   formDescription.value = ''
-  formBusinessNotes.value = ''
   formDomain.value = ''
   propertyRows.value = [{ property_name: '', display_name: '', description: '', value_type: 'String', enum_ref: '', render_hints: {}, is_identifier: true, is_title: true }]
   mappingRows.value = []
@@ -72,7 +70,6 @@ const openLoad = async () => {
     formName.value = detail.object_name
     formDisplayName.value = detail.display_name
     formDescription.value = detail.description
-    formBusinessNotes.value = detail.business_notes
     formDomain.value = detail.domain
     propertyRows.value = (detail.properties || []).map(item => ({ ...item, render_hints: { ...(item.render_hints || {}) } }))
     mappingRows.value = (detail.mappings || []).map(item => ({ ...item, column_mappings: { ...(item.column_mappings || {}) } }))
@@ -174,7 +171,6 @@ const saveObject = async () => {
     const res = await upsertAdminOntologyObject(formName.value.trim(), {
       display_name: formDisplayName.value.trim(),
       description: formDescription.value.trim(),
-      business_notes: formBusinessNotes.value.trim(),
       domain: formDomain.value.trim(),
       properties: propertyRows.value.map(row => ({
         property_name: row.property_name.trim(),
@@ -273,12 +269,6 @@ const saveObject = async () => {
           </el-button>
         </div>
         <OntologyMappingEditor ref="mappingEditorRef" :rows="mappingRows" :properties="propertyRows" />
-      </div>
-
-      <!-- 业务说明 -->
-      <div>
-        <div class="mb-1 text-xs text-slate-500">业务说明（建模背景，不进入 agent 上下文）</div>
-        <el-input v-model="formBusinessNotes" type="textarea" :rows="2" maxlength="10000" placeholder="建模决策、来源口径背景等（可选）" />
       </div>
     </div>
 

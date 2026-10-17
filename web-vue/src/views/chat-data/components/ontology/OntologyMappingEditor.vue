@@ -2,10 +2,11 @@
 /**
  * 本体映射编辑器：语义模型映射行内编辑（层级 = 组 → 模型 → 维度映射，不触碰物理表）。
  * 每条映射 = 语义配置（semantic_config_id）+ 字段映射 {属性API名: 模型维度名}；
- * 模型选择用 el-option-group 按数据源组分层（先组后模型的导航心智），实体锚点
- * （映射维度必须同表）由后端校验。映射随对象表单整体提交。
+ * 模型选择用 el-cascader 二级导航（第一级=数据源组、第二级=语义模型，行值只存 config id，
+ * 级联值 [groupId, configId] 由 optionOf 反推），实体锚点（映射维度必须同表）由后端校验。
+ * 映射随对象表单整体提交。
  */
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import type { PropType } from 'vue'
 import { ElMessage } from 'element-plus'
 import type { OntologyMappingItem, OntologyPropertyItem, SemanticConfigItem } from '../../types'
@@ -27,6 +28,33 @@ onMounted(() => {
 })
 
 const configOf = (configId: string): SemanticConfigItem | undefined => optionOf(configId)?.config
+
+// ---------- 模型级联选择（第一级=数据源组，第二级=语义模型） ----------
+
+const cascaderOptions = computed(() =>
+  groupedOptions().map(group => ({
+    value: group.groupId,
+    label: group.groupName,
+    children: group.configs.map(opt => ({
+      value: opt.config.id,
+      label: `${opt.config.name} (${opt.config.id})`
+    }))
+  }))
+)
+
+// 行的级联值 = [groupId, configId]；行数据只存 config id，路径由 optionOf 反推（编辑回显）
+const configPath = (configId: string): string[] => {
+  const option = configId ? optionOf(configId) : undefined
+  return option ? [option.groupId, configId] : []
+}
+
+const onCascaderChange = (row: OntologyMappingItem, value: unknown) => {
+  const path = Array.isArray(value) ? (value as string[]) : []
+  const configId = path[path.length - 1] || ''
+  if (configId === row.semantic_config_id) return
+  row.semantic_config_id = configId
+  onConfigChange(row)
+}
 
 const onConfigChange = (row: OntologyMappingItem) => {
   row.column_mappings = {}
@@ -119,29 +147,18 @@ defineExpose({ addRow })
       </div>
 
       <div class="flex flex-wrap items-center gap-2">
-        <el-select
-          v-model="row.semantic_config_id"
+        <el-cascader
+          :model-value="configPath(row.semantic_config_id)"
+          :options="cascaderOptions"
           v-loading="configsLoading && !configsLoaded"
           size="small"
           filterable
+          clearable
           :empty-values="[null, undefined]"
-          placeholder="选择数据源组下的语义模型"
+          placeholder="先选数据源组，再选语义模型"
           class="!w-96"
-          @change="onConfigChange(row)"
-        >
-          <el-option-group
-            v-for="group in groupedOptions()"
-            :key="group.groupId"
-            :label="group.groupName"
-          >
-            <el-option
-              v-for="opt in group.configs"
-              :key="opt.config.id"
-              :label="`${opt.config.name} (${opt.config.id})`"
-              :value="opt.config.id"
-            />
-          </el-option-group>
-        </el-select>
+          @change="(value: unknown) => onCascaderChange(row, value)"
+        />
       </div>
 
       <!-- 字段映射 -->
