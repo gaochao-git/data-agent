@@ -21,6 +21,7 @@ from ..schema import (
 )
 from ..services.datasource.manager import get_datasource_manager
 from ..services.llm_config import get_chat_data_llm
+from ..services.semantic.run import binding_guard
 from ..services.semantic.run.chat_data_ossie_importer import build_model_checklist, plan_column_dict_fills
 from ..services.semantic.run.semantic_config_service import (
     OssieImportWriteError as _OssieImportWriteError,
@@ -753,6 +754,10 @@ async def _update_semantic_config(
         return business_response(
             data=_with_semantic_config_permissions(config, user_id, username, admin_manage=admin_manage), msg="更新成功"
         )
+    except binding_guard.SemanticOntologyBoundError as e:
+        return business_response(
+            msg=str(e), code=ErrorCode.CHATDATA_SEMANTIC_ONTOLOGY_BOUND, status="error"
+        )
     except Exception as e:
         logger.error(f"更新语义配置失败: {str(e)}", exc_info=True)
         return business_response(msg=f"更新失败: {str(e)}", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
@@ -869,6 +874,10 @@ async def _delete_semantic_config(
 
         logger.info(f"删除语义配置: {config_id}")
         return business_response(data={"config_id": config_id}, msg="删除成功")
+    except binding_guard.SemanticOntologyBoundError as e:
+        return business_response(
+            msg=str(e), code=ErrorCode.CHATDATA_SEMANTIC_ONTOLOGY_BOUND, status="error"
+        )
     except Exception as e:
         logger.error(f"删除语义配置失败: {str(e)}", exc_info=True)
         return business_response(msg=f"删除失败: {str(e)}", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")

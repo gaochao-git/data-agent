@@ -169,6 +169,8 @@ class ErrorCode(IntEnum):
     CHATDATA_ONTOLOGY_NOT_FOUND = 40487
     CHATDATA_ONTOLOGY_OPERATION_FAILED = 50098
 
+    CHATDATA_SEMANTIC_ONTOLOGY_BOUND = 40070
+
 
 def _assert_unique_error_code_values() -> None:
     """防止 IntEnum 别名导致多个业务语义共用同一个错误码。"""

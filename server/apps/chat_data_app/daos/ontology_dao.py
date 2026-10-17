@@ -21,6 +21,7 @@ from utils.models import (
     ChatDataOntologyObjectMapping,
     ChatDataOntologyProperty,
     ChatDataOntologyRelation,
+    SemanticConfig,
 )
 
 from .dao_session import session_scope
@@ -519,6 +520,65 @@ class OntologyDao:
         async with session_scope() as session:
             rows = (await session.execute(stmt)).all()
         return {_text(row.semantic_config_id): _text(object_name) for row, object_name in rows}
+
+    @staticmethod
+    def _binding_row_to_dict(row: ChatDataOntologyObjectMapping, object_name: Any) -> dict[str, Any]:
+        return {
+            "semantic_config_id": _text(row.semantic_config_id),
+            "object_id": int(row.object_id),
+            "object_name": _text(object_name),
+            "column_mappings": _parse_json(row.column_mappings_json, dict),
+        }
+
+    async def find_bindings_for_configs_async(self, config_ids: list[str]) -> list[dict[str, Any]]:
+        """按语义模型 ID 集查活跃绑定（悬空绑定守护用）。
+
+        返回 [{semantic_config_id, object_id, object_name, column_mappings}]；
+        只统计对象仍活跃（delete_flag=0）的映射——对象已删的墓碑映射不阻止模型删除。
+        """
+        ids = sorted({_text(item) for item in config_ids} - {""})
+        if not ids:
+            return []
+        stmt = (
+            select(ChatDataOntologyObjectMapping, ChatDataOntologyObject.object_name)
+            .join(ChatDataOntologyObject, ChatDataOntologyObject.id == ChatDataOntologyObjectMapping.object_id)
+            .where(
+                ChatDataOntologyObjectMapping.semantic_config_id.in_(ids),
+                ChatDataOntologyObject.delete_flag == 0,
+                ChatDataOntologyObjectMapping.delete_flag == 0,
+            )
+            .order_by(ChatDataOntologyObjectMapping.semantic_config_id.asc())
+        )
+        async with session_scope() as session:
+            rows = (await session.execute(stmt)).all()
+        return [self._binding_row_to_dict(row, object_name) for row, object_name in rows]
+
+    async def find_bindings_for_group_async(self, group_id: str) -> list[dict[str, Any]]:
+        """按数据源组查活跃绑定（数据源组删除守护用，一次 join 带出组内全部绑定）。
+
+        语义模型侧限定该组活跃模型；对象/映射侧限定活跃。返回结构同 find_bindings_for_configs_async。
+        """
+        gid = _text(group_id)
+        if not gid:
+            return []
+        stmt = (
+            select(ChatDataOntologyObjectMapping, ChatDataOntologyObject.object_name)
+            .join(
+                SemanticConfig,
+                SemanticConfig.semantic_config_id == ChatDataOntologyObjectMapping.semantic_config_id,
+            )
+            .join(ChatDataOntologyObject, ChatDataOntologyObject.id == ChatDataOntologyObjectMapping.object_id)
+            .where(
+                SemanticConfig.group_id == gid,
+                SemanticConfig.delete_flag == 0,
+                ChatDataOntologyObject.delete_flag == 0,
+                ChatDataOntologyObjectMapping.delete_flag == 0,
+            )
+            .order_by(ChatDataOntologyObjectMapping.semantic_config_id.asc())
+        )
+        async with session_scope() as session:
+            rows = (await session.execute(stmt)).all()
+        return [self._binding_row_to_dict(row, object_name) for row, object_name in rows]
 
     async def list_object_mappings_async(self, object_id: int) -> list[dict[str, Any]]:
         """列出对象的全部活跃映射（映射视图，按语义配置ID排序）。"""

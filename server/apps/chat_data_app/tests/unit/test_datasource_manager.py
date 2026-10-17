@@ -31,6 +31,18 @@ from apps.chat_data_app.services.datasource.manager import (
     _validate_member_source_configs,
 )
 from apps.chat_data_app.services.datasource.metadata import MetadataAdapterNotFoundError
+from apps.chat_data_app.services.semantic.run import binding_guard
+from apps.chat_data_app.services.semantic.run.binding_guard import SemanticOntologyBoundError
+
+
+@pytest.fixture(autouse=True)
+def _stub_binding_guard(monkeypatch):
+    """默认旁路组级绑定守护（组删除阻断接线在专项测试覆盖）。"""
+
+    async def _allow(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(binding_guard, "ensure_group_unbound_async", _allow)
 
 
 class _FakeStore:
@@ -800,6 +812,24 @@ def test_delete_datasource_only_soft_deletes_group_when_member_source_is_shared(
     assert fake_store.soft_deleted_groups == ["group_ds_a"]
     assert fake_store.soft_deleted_datasources == []
     assert "ds_b" in fake_store.datasources
+
+
+def test_delete_datasource_blocked_when_group_bound_by_ontology(monkeypatch):
+    """组删除守护接线：组内模型被本体映射占用时 40070 阻断，且发生在软删之前。"""
+    calls = []
+
+    async def _block(group_id, action="删除数据源组"):
+        calls.append((group_id, action))
+        raise SemanticOntologyBoundError("占用")
+
+    monkeypatch.setattr(binding_guard, "ensure_group_unbound_async", _block)
+    fake_store = _FakeStore()
+    manager = _build_manager(fake_store)
+
+    with pytest.raises(SemanticOntologyBoundError):
+        asyncio.run(manager.delete_datasource_async("ds_a"))
+    assert calls == [("group_ds_a", "删除数据源组")]
+    assert fake_store.soft_deleted_groups == []
 
 
 def test_get_execution_datasources_injects_unified_mysql_credentials(monkeypatch):

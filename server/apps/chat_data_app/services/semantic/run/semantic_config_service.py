@@ -16,6 +16,7 @@ from ..core.common import build_table_columns_map, ensure_dimension_logical_type
 from ..core.config_validator import (
     expression_uses_physical_column,  # noqa: F401  # 测试按模块属性引用 expression_uses_physical_column，属有意重导出
 )
+from . import binding_guard
 from .chat_data_ossie_importer import (
     OssieSemanticModelImport,
     OssieToChatDataImporter,
@@ -837,6 +838,12 @@ class SemanticConfigService:
             raise ValueError(f"语义配置名称已存在: {name}")
         next_config = self._build_update_payload(current, kwargs, name)
         next_config = self._normalize_relationships(next_config)
+        # 悬空绑定守护：更新删维度（含改名）时，被本体映射引用的维度不允许删（40070）。
+        await binding_guard.ensure_config_dimensions_unreferenced_async(
+            config_id,
+            binding_guard.removed_dimension_names(current.get("dimensions"), next_config.get("dimensions")),
+            action="更新",
+        )
         if not await self.dao.upsert_async(str(current.get("group_id") or ""), next_config):
             return None
         return await self.get_config_async(datasource_id, config_id)
@@ -871,6 +878,8 @@ class SemanticConfigService:
         config = await self.get_config_async(datasource_id, config_id)
         if not config:
             return False
+        # 悬空绑定守护：被本体映射占用的模型不允许直接删除（40070），先解绑再删。
+        await binding_guard.ensure_configs_unbound_async([config_id], action="删除")
         await self.dao.soft_delete_async(
             config_id,
             update_by=update_by or config.get("update_by") or "",

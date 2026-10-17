@@ -18,6 +18,7 @@ from utils.logger import get_logger
 from ...daos.datasource_dao import DataSourceDao
 from ...daos.datasource_dao_helpers import VALID_TABLE_INDEX_TYPES, _normalize_table_index_items
 from ..meta.global_enum_service import global_enum_service
+from ..semantic.run import binding_guard
 from .credentials import resolve_execution_source_config, sanitize_source_config
 from .metadata import (
     DataSourceMetadataAdapter,
@@ -1370,6 +1371,11 @@ class DataSourceManager:
         datasource = await self.get_datasource_async(datasource_id)
         if not datasource:
             return False
+
+        # 悬空绑定守护：组内语义模型被本体映射占用时不允许整组删除（40070），先解绑再删。
+        await binding_guard.ensure_group_unbound_async(
+            str(datasource.get("group_id") or datasource_id), action="删除数据源组"
+        )
 
         async with self.datasource_dao.transaction_async():
             await self.datasource_dao.soft_delete_group_async(

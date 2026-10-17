@@ -28,6 +28,7 @@ from ..services.meta.global_enum_service import (
     MetaGlobalEnumNameInvalidError,
     MetaGlobalEnumNotFoundError,
 )
+from ..services.semantic.run import binding_guard
 from ..services.semantic.run.semantic_config_service import get_semantic_config_service
 from .datasource_helpers import (
     _build_datasource_schema_health,
@@ -761,6 +762,8 @@ async def delete_datasource(datasource_id: str, request: Request) -> JSONRespons
         return business_response(data={"datasource_id": datasource_id}, msg="删除成功")
     except HTTPException:
         raise
+    except binding_guard.SemanticOntologyBoundError as e:
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_SEMANTIC_ONTOLOGY_BOUND, status="error")
     except Exception as e:
         if isinstance(e, ValueError):
             return business_response(msg=str(e), code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")

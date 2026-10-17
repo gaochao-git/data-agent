@@ -1594,6 +1594,25 @@
         "title": "OntologyMappingItem",
         "type": "object"
       },
+      "OntologyObjectDomainRequest": {
+        "description": "本体对象领域归属变更请求（拖拽换域等窄写路径；null=移出领域）",
+        "properties": {
+          "domain_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "目标领域主键；null=移出领域",
+            "title": "Domain Id"
+          }
+        },
+        "title": "OntologyObjectDomainRequest",
+        "type": "object"
+      },
       "OntologyObjectStatusRequest": {
         "description": "本体对象状态迁移请求",
         "properties": {
@@ -7068,6 +7087,64 @@
           }
         ],
         "summary": "Upsert Ontology Object",
+        "tags": [
+          "ChatData 本体管理（Admin）"
+        ]
+      }
+    },
+    "/api/chatdata/admin/meta/ontology/objects/{object_name}/domain": {
+      "post": {
+        "description": "对象领域归属变更（拖拽换域窄写路径；domain_id=null 表示移出领域）。",
+        "operationId": "change_ontology_object_domain_api_chatdata_admin_meta_ontology_objects__object_name__domain_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "object_name",
+            "required": true,
+            "schema": {
+              "title": "Object Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OntologyObjectDomainRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Change Ontology Object Domain",
         "tags": [
           "ChatData 本体管理（Admin）"
         ]

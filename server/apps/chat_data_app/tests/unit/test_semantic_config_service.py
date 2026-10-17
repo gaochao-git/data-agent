@@ -6,9 +6,22 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 
+from apps.chat_data_app.services.semantic.run import binding_guard
 from apps.chat_data_app.services.semantic.run import semantic_config_service as semantic_config_service_module
+from apps.chat_data_app.services.semantic.run.binding_guard import SemanticOntologyBoundError
 from apps.chat_data_app.services.semantic.run.chat_data_ossie_importer import OssieSemanticModelImport
 from apps.chat_data_app.services.semantic.run.semantic_config_service import SemanticConfigService
+
+
+@pytest.fixture(autouse=True)
+def _stub_binding_guard(monkeypatch):
+    """默认旁路绑定守护（本文件聚焦服务自身行为；守护逻辑与阻断接线在专项测试覆盖）。"""
+
+    async def _allow(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(binding_guard, "ensure_configs_unbound_async", _allow)
+    monkeypatch.setattr(binding_guard, "ensure_config_dimensions_unreferenced_async", _allow)
 
 
 class _FakeDatasourceManager:
@@ -369,6 +382,41 @@ def test_create_update_delete_lifecycle_and_name_scope_rules():
 
     asyncio.run(run_checks())
     assert dao.deleted == ("sc_private", "u4", "用户4")
+
+
+def test_binding_guard_blocks_delete_and_dimension_removal(monkeypatch):
+    """守护接线：删除被本体映射占用的模型 / 删被引用维度均被阻断（40070），且发生在写库之前。"""
+    delete_calls = []
+    dimension_calls = []
+
+    async def _block_delete(config_ids, action="删除"):
+        delete_calls.append((list(config_ids), action))
+        raise SemanticOntologyBoundError("占用")
+
+    async def _track_dimensions(config_id, removed_names, action="更新"):
+        dimension_calls.append((config_id, set(removed_names), action))
+
+    monkeypatch.setattr(binding_guard, "ensure_configs_unbound_async", _block_delete)
+    monkeypatch.setattr(binding_guard, "ensure_config_dimensions_unreferenced_async", _track_dimensions)
+
+    service, _, dao = _build_service([_base_config()])
+    with pytest.raises(SemanticOntologyBoundError):
+        asyncio.run(service.delete_async("ds_a", "sc_a"))
+    assert delete_calls == [(["sc_a"], "删除")]
+    assert dao.deleted is None  # 守护在软删之前拦截
+
+    # 不删维度的更新（如 toggle 的 enabled 切换）走零差集路径
+    assert asyncio.run(service.update_async("ds_a", "sc_a", description="更新")) is not None
+    assert dimension_calls == [("sc_a", set(), "更新")]
+
+    # 删维度（含改名）触发差集守护：旧 {订单状态, 城市} → 新 {订单状态}
+    config = _base_config(
+        dimensions=[{"name": "订单状态", "table": "orders"}, {"name": "城市", "table": "orders"}]
+    )
+    service2, _, dao2 = _build_service([config])
+    asyncio.run(service2.update_async("ds_a", "sc_a", dimensions=[{"name": "订单状态", "table": "orders"}]))
+    assert dimension_calls[-1] == ("sc_a", {"城市"}, "更新")
+    assert dao2.upsert_calls == 1
 
 
 def test_persistence_failure_is_reported_as_empty_result():

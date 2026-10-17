@@ -10,7 +10,7 @@ import OntologyObjectPanel from './OntologyObjectPanel.vue'
 
 const objectPanelRef = ref<InstanceType<typeof OntologyObjectPanel> | null>(null)
 
-// 宿主（MetaManagementPanel）切换类型页签时会调 ensureLoaded：转发给对象面板（未加载才拉取）
+// 宿主（ChatDataAdminManager）切换导航项时会调 ensureLoaded：转发给对象面板（未加载才拉取）
 const ensureLoaded = async () => {
   await objectPanelRef.value?.ensureLoaded()
 }
