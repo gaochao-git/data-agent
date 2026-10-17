@@ -22,6 +22,7 @@ import ChartSpecRenderer from '../ChartSpecRenderer.vue'
 import MarkdownFilePreview from './MarkdownFilePreview.vue'
 import HtmlPagePreview from './HtmlPagePreview.vue'
 import CodeFilePreview from './CodeFilePreview.vue'
+import OntologyCatalogGraph from './OntologyCatalogGraph.vue'
 import MermaidFilePreview from './MermaidFilePreview.vue'
 import ToolCallDetailPanel from './ToolCallDetailPanel.vue'
 import {
@@ -88,7 +89,7 @@ const emit = defineEmits<{
 const selectedConsoleFilePath = ref<string | null>(null)
 // 默认只收起 uploads / workspace，outputs 保持展开——理由见 consoleFileTree.ts 里的常量注释。
 const collapsedConsoleDirectories = ref<Set<string>>(new Set(DEFAULT_COLLAPSED_CONSOLE_DIRECTORIES))
-const consoleFilePreviewMode = ref<'render' | 'table' | 'source'>('render')
+const consoleFilePreviewMode = ref<'render' | 'table' | 'source' | 'graph'>('render')
 const workspaceFiles = ref<ConversationWorkspaceFile[]>([])
 const workspaceFileContents = ref<Record<string, string>>({})
 const workspaceFileBlobs = ref<Record<string, { url: string; arrayBuffer: ArrayBuffer; ext: string; mime: string; error?: boolean }>>({})
@@ -460,6 +461,10 @@ const selectedConsoleIsImage = computed(() => IMAGE_PREVIEW_EXTENSIONS.has(selec
 const selectedConsoleIsMarkdown = computed(() => selectedConsoleFileExt.value === 'md')
 const selectedConsoleIsMermaid = computed(() => selectedConsoleFileExt.value === 'mmd')
 const selectedConsoleIsYaml = computed(() => ['yaml', 'yml'].includes(selectedConsoleFileExt.value))
+// 图谱预览只对本体目录物化产物开放（任意 YAML 画图会误判；语义模型 YAML 结构不同不适用）
+const selectedConsoleIsOntologyCatalog = computed(() =>
+  /workspace\/ontology\/_ontology_catalog\.(yaml|yml)$/.test(selectedConsoleFilePath.value || '')
+)
 const selectedConsoleIsHtml = computed(() => selectedConsoleFileExt.value === 'html' || selectedConsoleFileExt.value === 'htm')
 // HTML 渲染必须用原始文本：展示层的路径改写会破坏内联 JSON 数据与代码。仅源码视图走替换后的展示文案。
 const selectedConsoleHtmlDocument = computed(() => {
@@ -887,6 +892,7 @@ watch(
     selectedConsoleIsMermaid.value,
     selectedConsoleIsHtml.value,
     selectedConsoleIsYaml.value,
+    selectedConsoleIsOntologyCatalog.value,
   ] as const,
   () => {
     if (selectedConsoleChartSpec.value) {
@@ -899,6 +905,11 @@ watch(
     }
     if (selectedConsoleIsMarkdown.value || selectedConsoleIsMermaid.value || selectedConsoleIsHtml.value) {
       consoleFilePreviewMode.value = 'render'
+      return
+    }
+    // 本体目录默认进图谱（YAML 判定在其前，否则会被当作普通代码文件）
+    if (selectedConsoleIsOntologyCatalog.value) {
+      consoleFilePreviewMode.value = 'graph'
       return
     }
     if (selectedConsoleIsYaml.value) {
@@ -1168,7 +1179,18 @@ defineExpose({
             {{ selectedConsoleFile?.displayPath }}
           </div>
           <div class="flex shrink-0 items-center gap-2">
-            <div v-if="selectedConsoleFile && (selectedConsoleChartSpec || hasSelectedConsoleTable || selectedConsoleIsMarkdown || selectedConsoleIsMermaid || selectedConsoleIsHtml)" class="flex rounded-md border border-slate-200 bg-white p-0.5">
+            <div v-if="selectedConsoleFile && (selectedConsoleChartSpec || hasSelectedConsoleTable || selectedConsoleIsMarkdown || selectedConsoleIsMermaid || selectedConsoleIsHtml || selectedConsoleIsOntologyCatalog)" class="flex rounded-md border border-slate-200 bg-white p-0.5">
+              <button
+                v-if="selectedConsoleIsOntologyCatalog"
+                type="button"
+                :class="[
+                  'h-6 rounded px-2 text-[10px] transition-colors',
+                  consoleFilePreviewMode === 'graph' ? 'bg-blue-50 text-blue-700' : 'text-slate-500 hover:bg-slate-50'
+                ]"
+                @click="consoleFilePreviewMode = 'graph'"
+              >
+                图谱
+              </button>
               <button
                 v-if="selectedConsoleChartSpec"
                 type="button"
@@ -1324,6 +1346,11 @@ defineExpose({
             </tbody>
           </table>
           </div>
+          <OntologyCatalogGraph
+            v-else-if="selectedConsoleIsOntologyCatalog && consoleFilePreviewMode === 'graph'"
+            :content="selectedConsoleFileText"
+            :class="workspaceFilePreviewHeightClass"
+          />
           <CodeFilePreview
             v-else-if="selectedConsoleIsYaml && consoleFilePreviewMode === 'render'"
             :content="selectedConsoleFileText"
