@@ -467,4 +467,5 @@ Run 实时事件使用 Redis Streams：
 - **开关**：`CHAT_DATA_ONTOLOGY_LOCATE_ENABLED`（默认 false，登记 `server/.env.example`；替代原 `CHAT_DATA_ONTOLOGY_QUERY_ENABLED`）。关闭时 action 报错、系统提示词不注入引导块。
 - **改动面**：`schema.py`（`_LocateObjectActionPayload` + 注册 + Literal）、`agent/tools/data_analyzing.py`（分发 + `_run_locate_object` + docstring）、`services/ontology/object_locator.py`（新，纯函数；`object_query.py` 删除）、`semantic_materializer.py`（`model_snapshot_file_name` 公开别名）、`agent/prompts/chat_data.py`（条件引导块改导航口径）、data-analyzing 技能 `references/analysis/query.md`（已 cp 同步运行时根）。
 - **测试**：`tests/unit/test_object_locator.py`（定位纯函数）+ `test_data_analyzing_tool.py` locate_object 分发用例（原 query_object 用例删除）。
+- **门禁修复（当日 review）**：初版 `build_object_locator_report`（68 分）与 `_object_relations`（18 分）超复杂度阈值（>15）且新函数不许登记 baseline，verify 复杂度门禁会红——已纯搬移拆为「去重校验 / bundle 索引（NamedTuple）/ 绑定 / 属性 / 关系条目」小函数，全库扫描 0 超标，行为无漂移（61 例相关测试全过）；顺带修正模块 docstring「不读环境变量」与实际含 `object_locator_enabled` 的矛盾表述。
 - **遗留演进位**：本体 relations 与模型 relationships 的一致性校验（防定位报告指向 join 不出的路径）；二期关系可执行化（一跳导航服务端执行）优先于聚合。
