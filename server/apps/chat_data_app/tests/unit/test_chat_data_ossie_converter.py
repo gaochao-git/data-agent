@@ -193,9 +193,7 @@ def test_convert_writes_field_name_and_table_alias_into_extension():
     document = yaml.safe_load(ChatDataToOssieConverter().convert(config))
 
     metric_ext = json.loads(document["metrics"][0]["custom_extensions"][0]["data"])
-    dimension_ext = json.loads(
-        document["datasets"][0]["fields"][0]["custom_extensions"][0]["data"]
-    )
+    dimension_ext = json.loads(document["datasets"][0]["fields"][0]["custom_extensions"][0]["data"])
     assert metric_ext["field_name"] == "sales_amount"
     assert metric_ext["table_alias"] == "o"
     assert dimension_ext["field_name"] == "city_name"
@@ -205,9 +203,7 @@ def test_convert_writes_field_name_and_table_alias_into_extension():
 def test_convert_omits_empty_field_name_and_table_alias():
     """空值不写扩展键：保持既有扩展内容最小化，旧断言行为不变。"""
     document = yaml.safe_load(ChatDataToOssieConverter().convert(_config()))
-    dimension_ext = json.loads(
-        document["datasets"][0]["fields"][0]["custom_extensions"][0]["data"]
-    )
+    dimension_ext = json.loads(document["datasets"][0]["fields"][0]["custom_extensions"][0]["data"])
     assert "field_name" not in dimension_ext
     assert "table_alias" not in dimension_ext
 
@@ -222,9 +218,7 @@ def test_convert_omits_field_name_equal_to_column_and_alias_equal_to_table():
     document = yaml.safe_load(ChatDataToOssieConverter().convert(config))
 
     metric_ext = json.loads(document["metrics"][0]["custom_extensions"][0]["data"])
-    dimension_ext = json.loads(
-        document["datasets"][0]["fields"][0]["custom_extensions"][0]["data"]
-    )
+    dimension_ext = json.loads(document["datasets"][0]["fields"][0]["custom_extensions"][0]["data"])
     assert metric_ext == {"table": "orders", "column": "amount"}
     assert dimension_ext == {"table": "orders", "column": "city"}
 

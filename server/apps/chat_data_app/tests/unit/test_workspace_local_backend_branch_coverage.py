@@ -699,3 +699,77 @@ def test_local_rejects_symlink_operations_and_keeps_target_intact(tmp_path):
     paths = {item["path"] for item in listed}
     assert "/mnt/user-data/workspace/real.txt" in paths
     assert not any("link" in p for p in paths)
+
+
+# ---------------------------------------------------------------------------
+# 间接写入变更归因（manifest 前后对比）
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_run_bash_reports_observed_changed_files(tmp_path):
+    """命令落盘的文件按 created 归因；无写入命令返回空归因。"""
+    runtime, _root = _runtime(tmp_path)
+    if shutil.which("bash") is None:
+        pytest.skip("宿主机未安装 bash")
+
+    result = await runtime.run_bash(
+        command="echo hi > /mnt/user-data/workspace/gen.txt",
+        cwd=None,
+        timeout_seconds=30,
+    )
+    assert result["exit_code"] == 0
+    assert result["changed_files"]["created"] == ["/mnt/user-data/workspace/gen.txt"]
+    assert result["changed_files"]["updated"] == []
+    assert result["changed_files"]["deleted"] == []
+    assert result["changed_files"]["truncated"] is False
+
+    noop = await runtime.run_bash(command="true", cwd=None, timeout_seconds=30)
+    assert noop["changed_files"] == {"created": [], "updated": [], "deleted": [], "truncated": False}
+
+
+@pytest.mark.asyncio
+async def test_run_bash_inherits_officecli_resident_opt_out(tmp_path):
+    """agent 可能经 bash_run 调 officecli：子 shell 环境同样禁用 resident 自动拉起。"""
+    runtime, _root = _runtime(tmp_path)
+    if shutil.which("bash") is None:
+        pytest.skip("宿主机未安装 bash")
+
+    result = await runtime.run_bash(command="echo $OFFICECLI_NO_AUTO_RESIDENT", cwd=None, timeout_seconds=30)
+    assert result["exit_code"] == 0
+    assert result["stdout"].strip() == "1"
+
+
+@pytest.mark.asyncio
+async def test_run_bash_timeout_still_attributes_writes(tmp_path):
+    """超时命令可能已写入部分产物：超时路径同样归因（宁可不错过）。"""
+    runtime, _root = _runtime(tmp_path)
+    if shutil.which("bash") is None:
+        pytest.skip("宿主机未安装 bash")
+
+    result = await runtime.run_bash(
+        command="echo partial > /mnt/user-data/workspace/partial.txt && sleep 5",
+        cwd=None,
+        timeout_seconds=1,
+    )
+    assert result["timed_out"] is True
+    assert result["changed_files"]["created"] == ["/mnt/user-data/workspace/partial.txt"]
+
+
+@pytest.mark.asyncio
+async def test_run_officecli_reports_observed_changed_files(tmp_path, monkeypatch):
+    """officecli 写入类命令的产物按 created 归因（fake 二进制向 $4 写文件模拟 -o 输出）。"""
+    runtime, _root = _runtime(tmp_path)
+    (Path(runtime.workspace_root) / "workspace" / "a.docx").write_bytes(b"docx")
+    fake_bin = tmp_path / "fake-officecli.sh"
+    fake_bin.write_text('#!/bin/bash\necho pdf-data > "$4"\n')
+    fake_bin.chmod(0o755)
+    monkeypatch.setattr(lb.shutil, "which", lambda _name: str(fake_bin))
+
+    result = await runtime.run_officecli(
+        args=["view", "/mnt/user-data/workspace/a.docx", "--out", "/mnt/user-data/workspace/report.pdf"],
+        cwd="/mnt/user-data/workspace",
+        timeout_seconds=30,
+    )
+    assert result["exit_code"] == 0
+    assert result["changed_files"]["created"] == ["/mnt/user-data/workspace/report.pdf"]

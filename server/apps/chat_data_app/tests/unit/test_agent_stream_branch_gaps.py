@@ -432,7 +432,7 @@ def test_handle_tool_calls_accepts_json_string_args():
 def test_handle_tool_calls_accepts_double_encoded_json_args():
     """双层编码字符串也应剥出 dict 兜底，原始文本进 buffer 由完成时统一解析。"""
     state = agent_stream._ToolStreamState()
-    double_encoded = agent_stream.json.dumps(agent_stream.json.dumps({"a": 1}))
+    double_encoded = json.dumps(json.dumps({"a": 1}))
 
     state.handle_tool_calls([{"id": "call-1", "name": "file_read", "args": double_encoded}])
 

@@ -35,6 +35,7 @@ from utils.storage_paths import CHAT_DATA_HOME, conversation_thread_dir
 from utils.tool_result_store import QUERY_RESULT_DIR_NAME, TOOL_OFFLOAD_DIR_NAME
 
 from .artifact_registry import parse_output_artifact
+from .officecli_adapter import OFFICECLI_NO_AUTO_RESIDENT_ENV
 from .workspace_path_policy import WORKSPACE_PATH_POLICY
 from .workspace_special_services import (
     semantic_model_workspace_service,
@@ -670,6 +671,7 @@ def _render_local_office_html(
             capture_output=True,
             text=True,
             timeout=60,
+            env={**os.environ, **OFFICECLI_NO_AUTO_RESIDENT_ENV},
         )
         if exit_code.returncode != 0:
             stderr = (exit_code.stderr or "").strip()

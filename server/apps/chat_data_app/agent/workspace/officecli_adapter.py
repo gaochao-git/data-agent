@@ -10,6 +10,14 @@ OFFICECLI_BANNED_SUBCOMMANDS = frozenset({"plugins", "watch", "unwatch", "open",
 OFFICECLI_READONLY_SUBCOMMANDS = frozenset({"view", "get", "query", "validate", "dump", "raw"})
 _SOURCE_PROPERTIES = frozenset({"src", "path", "fallback", "image", "preview", "background"})
 
+# OfficeCLI 的 resident 常驻进程（首次触碰文件时自动拉起）会把写入延迟到 idle
+# auto-flush（自适应 2-10s）才落盘，与「命令返回即落盘」的时序假设冲突——工作区
+# 同步、变更归因、预览刷新都依赖该假设。嵌入场景一律禁用自动拉起，让每条命令
+# 独立完成 open/save 循环（officecli 自身 MCP server 同样自设此变量）。
+# 注意：旧版本二进制不识别该变量时静默忽略，注入无害。
+OFFICECLI_NO_AUTO_RESIDENT_ENV: dict[str, str] = {"OFFICECLI_NO_AUTO_RESIDENT": "1"}
+OFFICECLI_NO_AUTO_RESIDENT_SHELL = "OFFICECLI_NO_AUTO_RESIDENT=1"
+
 
 def _looks_like_selector(value: str) -> bool:
     """识别误放在文件参数位置的 OfficeCLI 文档选择器。"""

@@ -2550,3 +2550,72 @@ def test_sandbox_write_tool_result_reraises_unexpected_read_error(tmp_path, monk
                 content="{}",
             )
         )
+
+
+# ---------------------------------------------------------------------------
+# 间接写入变更归因（manifest 前后对比）
+# ---------------------------------------------------------------------------
+
+
+def test_diff_mutable_manifests_categories_and_baseline():
+    """created/updated/deleted 三类归因；可见路径口径；无基线诚实返回空结果。"""
+    previous = {
+        "workspace/a.txt": (1, 1, "h1"),
+        "workspace/b.txt": (2, 2, "h2"),
+        "outputs/old.csv": (3, 3, "h3"),
+    }
+    current = {
+        "workspace/a.txt": (9, 9, "h9"),
+        "workspace/new.txt": (1, 1, "h4"),
+        "outputs/old.csv": (3, 3, "h3"),
+    }
+    observed = we_sync.diff_mutable_manifests(previous, current)
+    assert observed["created"] == ["/mnt/user-data/workspace/new.txt"]
+    assert observed["updated"] == ["/mnt/user-data/workspace/a.txt"]
+    assert observed["deleted"] == ["/mnt/user-data/workspace/b.txt"]
+    assert observed["truncated"] is False
+
+    empty = {"created": [], "updated": [], "deleted": [], "truncated": False}
+    assert we_sync.diff_mutable_manifests(None, current) == empty
+    assert we_sync.diff_mutable_manifests(previous, None) == empty
+    # 空 dict 是「空工作区」的合法基线：current 全部计为 created（回归覆盖：不得当 None 处理）
+    all_created = we_sync.diff_mutable_manifests({}, current)
+    assert sorted(all_created["created"]) == [
+        "/mnt/user-data/outputs/old.csv",
+        "/mnt/user-data/workspace/a.txt",
+        "/mnt/user-data/workspace/new.txt",
+    ]
+
+
+def test_diff_mutable_manifests_caps_long_lists():
+    """单类清单超上限时截断并置 truncated，防止结果 payload 被撑爆。"""
+    previous = {}
+    current = {f"workspace/f{i}.txt": (1, i, str(i)) for i in range(80)}
+    observed = we_sync.diff_mutable_manifests(previous, current)
+    assert len(observed["created"]) == we_sync.OBSERVED_CHANGES_LIST_LIMIT
+    assert observed["truncated"] is True
+    assert observed["updated"] == [] and observed["deleted"] == []
+
+
+def test_sync_sandbox_working_trees_returns_observed_changes(tmp_path, monkeypatch):
+    """sync 返回本次命令的间接写入归因：远端新增=created、内容变化=updated、远端缺失=deleted。"""
+    root = _workspace_root(tmp_path)
+    monkeypatch.setattr(we_paths, "CHAT_DATA_HOME", str(tmp_path))
+    sandbox = FakeSandbox()
+    sandbox.remote_kinds["/mnt/user-data/workspace"] = "directory"
+    sandbox.remote_kinds["/mnt/user-data/outputs"] = "directory"
+    sandbox.remote_kinds["/mnt/user-data/workspace/a.txt"] = "file"
+    sandbox.remote_files["/mnt/user-data/workspace/a.txt"] = b"remote-a"
+    sandbox.remote_kinds["/mnt/user-data/workspace/new.txt"] = "file"
+    sandbox.remote_files["/mnt/user-data/workspace/new.txt"] = b"new"
+    (root / "workspace" / "a.txt").write_text("local-a")
+    (root / "workspace" / "b.txt").write_text("local-b")
+    session = _make_session(sandbox, root)
+    session.application_manifest = we_sync._mutable_application_manifest(root)
+
+    observed = asyncio.run(we_sync.sync_sandbox_working_trees(session))
+
+    assert observed["created"] == ["/mnt/user-data/workspace/new.txt"]
+    assert observed["updated"] == ["/mnt/user-data/workspace/a.txt"]
+    assert observed["deleted"] == ["/mnt/user-data/workspace/b.txt"]
+    assert observed["truncated"] is False

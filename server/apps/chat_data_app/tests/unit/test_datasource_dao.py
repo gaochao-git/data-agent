@@ -1051,6 +1051,8 @@ def test_fill_column_dict_only_fills_empty_fields(monkeypatch):
         )
     )
 
+    # enum_values 已有存量值不回填，只有空缺的 storage_format/unit 被填充
+    assert filled == ["storage_format", "unit"]
     upserts = [stmt for stmt in executed if "INSERT" in str(stmt).upper()]
     assert len(upserts) == 1
     merged = json.loads(upserts[0].compile().params["dict_json"])

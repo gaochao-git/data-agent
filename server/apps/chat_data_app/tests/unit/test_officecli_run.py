@@ -2,6 +2,7 @@
 
 import stat
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
@@ -40,6 +41,7 @@ def _write_fake_officecli(tmp_path, log_path) -> str:
         "echo OFFICECLI_CALLED\n"
         f'echo "ENV_HOME:$HOME" >> "{log_path}" 2>/dev/null\n'
         f'echo "ENV_SECRET:${{FXCJG_DB_PASSWORD:-<unset>}}" >> "{log_path}" 2>/dev/null\n'
+        f'echo "ENV_RESIDENT:${{OFFICECLI_NO_AUTO_RESIDENT:-<unset>}}" >> "{log_path}" 2>/dev/null\n'
         f'for a in "$@"; do echo "ARG:$a" >> "{log_path}" 2>/dev/null; done\n'
     )
     bin_path.chmod(bin_path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
@@ -217,6 +219,20 @@ async def test_local_run_officecli_does_not_leak_server_environment(monkeypatch,
     assert "ENV_SECRET:<unset>" in log_text
     assert "super-secret" not in log_text
     assert f"ENV_HOME:{runtime.workspace_root}" in log_text
+
+
+@pytest.mark.asyncio
+async def test_local_run_officecli_disables_resident_auto_start(monkeypatch, tmp_path):
+    """resident 常驻进程把写入延迟到 idle auto-flush（2-10s），破坏「命令返回即落盘」
+    的时序假设（变更归因/工作区同步/预览刷新都依赖它）——子进程必须禁用自动拉起。"""
+    log_path = tmp_path / "args.log"
+    fake_bin = _write_fake_officecli(tmp_path, log_path)
+    monkeypatch.setattr(cw_runtime_module.shutil, "which", lambda *a, **k: fake_bin)
+    runtime = _local_runtime(tmp_path)
+
+    await runtime.run_officecli(args=["--version"], cwd="/mnt/user-data/workspace", timeout_seconds=30)
+
+    assert "ENV_RESIDENT:1" in log_path.read_text()
 
 
 @pytest.mark.asyncio
@@ -638,3 +654,46 @@ async def test_save_stdout_to_writes_untruncated_stdout_over_limit(monkeypatch, 
     assert len(payload["stdout"]) < 20000
     saved_text = (Path(runtime.workspace_root) / "workspace" / "diff_big.txt").read_text()
     assert saved_text == big_marker
+
+
+# ---------------------------------------------------------------------------
+# 间接写入变更归因透传
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_run_officecli_command_passes_through_changed_files(monkeypatch, tmp_path):
+    """写入类命令的实际落盘产物经 changed_files 字段透传进工具 payload。"""
+    # 该文件未隔离 CHAT_DATA_HOME，会话工作区跨 pytest 运行持久化：
+    # 产物文件名带 uuid，避免上一次运行的残留把本次归因变成「无变化」。
+    output_name = f"report_{uuid4().hex[:8]}.pdf"
+    fake_bin = tmp_path / "fake-officecli-write.sh"
+    fake_bin.write_text('#!/bin/bash\necho pdf-data > "$4"\n')
+    fake_bin.chmod(stat.S_IRWXU)
+    monkeypatch.setattr(cw_runtime_module.shutil, "which", lambda *a, **k: str(fake_bin))
+    runtime = _local_runtime(tmp_path)
+    (Path(runtime.workspace_root) / "workspace" / "a.docx").write_bytes(b"docx")
+
+    payload = await run_officecli_command(
+        args=["view", "/mnt/user-data/workspace/a.docx", "--out", f"/mnt/user-data/workspace/{output_name}"],
+        cwd="/mnt/user-data/workspace",
+        timeout_seconds=30,
+        workspace_runtime=runtime,
+    )
+    assert payload["success"] is True
+    assert payload["changed_files"]["created"] == [f"/mnt/user-data/workspace/{output_name}"]
+
+
+@pytest.mark.asyncio
+async def test_run_officecli_command_readonly_has_no_changed_files(monkeypatch, tmp_path):
+    """只读命令不产生写入归因：changed_files 为 None。"""
+    log_path = tmp_path / "args.log"
+    fake_bin = _write_fake_officecli(tmp_path, log_path)
+    monkeypatch.setattr(cw_runtime_module.shutil, "which", lambda *a, **k: fake_bin)
+    runtime = _local_runtime(tmp_path)
+
+    payload = await run_officecli_command(
+        args=["--version"], cwd="/mnt/user-data/workspace", timeout_seconds=30, workspace_runtime=runtime
+    )
+    assert payload["success"] is True
+    assert payload["changed_files"] is None

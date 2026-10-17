@@ -202,3 +202,20 @@ async def test_bash_run_tool_reports_disabled(monkeypatch):
     assert payload["disabled"] is True
     assert "已在服务端禁用" in payload["message"]
     assert "不要重试" in payload["next_required_action"]
+
+
+# ---------------------------------------------------------------------------
+# 间接写入变更归因透传
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_run_bash_command_passes_through_changed_files():
+    """后端产出的间接写入归因原样透传进工具 payload；后端缺省时为 None。"""
+    changes = {"created": ["/mnt/user-data/outputs/x.csv"], "updated": [], "deleted": [], "truncated": False}
+    runtime = _FakeRuntime(_execution(changed_files=changes))
+    result = await run_bash_command(command="ls", workspace_runtime=runtime)
+    assert result["changed_files"] == changes
+
+    plain = await run_bash_command(command="ls", workspace_runtime=_FakeRuntime(_execution()))
+    assert plain["changed_files"] is None

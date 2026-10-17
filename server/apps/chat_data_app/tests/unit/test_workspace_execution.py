@@ -852,7 +852,11 @@ def test_sandbox_commands_run_as_unprivileged_user(monkeypatch):
     assert (exit_code, stdout, stderr) == (0, "", "")
     assert captured["uid"] == 65534
     assert captured["gid"] == 65534
-    assert captured["envs"] == {"HOME": "/tmp", "LANG": "C.UTF-8"}
+    assert captured["envs"] == {
+        "HOME": "/tmp",
+        "LANG": "C.UTF-8",
+        "OFFICECLI_NO_AUTO_RESIDENT": "1",
+    }
 
 
 def test_prepare_workspace_execution_session_uploads_snapshot_without_volumes(tmp_path, monkeypatch):
