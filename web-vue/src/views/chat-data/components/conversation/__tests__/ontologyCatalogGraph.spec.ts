@@ -137,9 +137,9 @@ describe('buildGraphOption', () => {
   const getGraph = (option: ReturnType<typeof buildGraphOption>) =>
     (option.series as Array<Record<string, unknown>>).find(item => item.type === 'graph')!
 
-  it('三要素全上图：节点=对象+属性，边=本体关系+属性挂接', () => {
+  it('三要素全上图（展开属性）：节点=对象+属性，边=本体关系+属性挂接', () => {
     const catalog = parseOntologyCatalog(SAMPLE_YAML)!
-    const option = buildGraphOption(catalog)
+    const option = buildGraphOption(catalog, { showProperties: true })
     const graph = getGraph(option)
     const nodes = graph.data as Array<Record<string, unknown>>
     const links = graph.links as Array<Record<string, unknown>>
@@ -167,7 +167,7 @@ describe('buildGraphOption', () => {
 
   it('属性节点样式按角色区分：标识=蓝、标题=琥珀、普通=浅灰', () => {
     const catalog = parseOntologyCatalog(SAMPLE_YAML)!
-    const option = buildGraphOption(catalog)
+    const option = buildGraphOption(catalog, { showProperties: true })
     const nodes = (getGraph(option).data as Array<Record<string, unknown>>).filter(node => node.catalogProperty)
     const byId = new Map(nodes.map(node => [node.name, node]))
     const identifierNode = byId.get('sales_order.order_no') as Record<string, unknown>
@@ -204,11 +204,23 @@ describe('buildGraphOption', () => {
 
   it('属性 tooltip：类型/角色 + 所属对象', () => {
     const catalog = parseOntologyCatalog(SAMPLE_YAML)!
-    const option = buildGraphOption(catalog)
+    const option = buildGraphOption(catalog, { showProperties: true })
     const formatter = (option.tooltip as Record<string, unknown>).formatter as (params: unknown) => string
     const html = formatter({ data: { catalogProperty: { name: 'user_id', display_name: '用户ID', type: 'String', identifier: true, title: true }, ownerObject: 'customer' } })
     expect(html).toContain('类型：String')
     expect(html).toContain('角色：标识，标题')
     expect(html).toContain('所属对象：用户')
+  })
+
+  it('默认折叠属性：只有对象节点和关系边，属性节点与挂接边不上图', () => {
+    const catalog = parseOntologyCatalog(SAMPLE_YAML)!
+    const option = buildGraphOption(catalog)
+    const graph = getGraph(option)
+    const nodes = graph.data as Array<Record<string, unknown>>
+    const links = graph.links as Array<Record<string, unknown>>
+    expect(nodes).toHaveLength(2)
+    expect(nodes.every(node => node.nodeKind === 'object')).toBe(true)
+    expect(links).toHaveLength(1)
+    expect(links[0]).toHaveProperty('relation')
   })
 })

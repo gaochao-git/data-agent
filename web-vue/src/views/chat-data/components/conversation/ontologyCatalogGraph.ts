@@ -175,7 +175,7 @@ const propertyLabelPosition = (angleCos: number, angleSin: number): 'bottom' | '
   return angleSin > 0 ? 'bottom' : 'top'
 }
 
-const layoutCatalog = (catalog: OntologyCatalog): { nodes: LayoutNode[]; relationLinks: Array<Record<string, unknown>>; propertyLinks: Array<Record<string, unknown>> } => {
+const layoutCatalog = (catalog: OntologyCatalog, showProperties: boolean): { nodes: LayoutNode[]; relationLinks: Array<Record<string, unknown>>; propertyLinks: Array<Record<string, unknown>> } => {
   const nodes: LayoutNode[] = []
   const relationLinks: Array<Record<string, unknown>> = []
   const propertyLinks: Array<Record<string, unknown>> = []
@@ -207,7 +207,7 @@ const layoutCatalog = (catalog: OntologyCatalog): { nodes: LayoutNode[]; relatio
       nodeKind: 'object',
       catalogObject: item,
     })
-    const properties = item.properties
+    const properties = showProperties ? item.properties : []
     properties.forEach((property, propertyIndex) => {
       const propertyAngle = (2 * Math.PI * propertyIndex) / properties.length - Math.PI / 2
       const angleCos = Math.cos(propertyAngle)
@@ -265,9 +265,16 @@ const layoutCatalog = (catalog: OntologyCatalog): { nodes: LayoutNode[]; relatio
   return { nodes, relationLinks, propertyLinks }
 }
 
-export function buildGraphOption(catalog: OntologyCatalog): EChartsOption {
+export interface GraphOptions {
+  /** 是否展开属性节点（默认折叠：对象多/属性多时图谱更清爽，悬停对象仍可见属性清单） */
+  showProperties?: boolean
+}
+
+export function buildGraphOption(catalog: OntologyCatalog, options: GraphOptions = {}): EChartsOption {
   const objectByName = new Map(catalog.objects.map(item => [item.object, item]))
-  const { nodes, relationLinks, propertyLinks } = layoutCatalog(catalog)
+  const { nodes, relationLinks, propertyLinks } = layoutCatalog(catalog, options.showProperties === true)
+  // 属性折叠时不参与布局，属性挂接边一并隐藏
+  const links = options.showProperties === true ? [...relationLinks, ...propertyLinks] : relationLinks
 
   return {
     tooltip: {
@@ -285,7 +292,7 @@ export function buildGraphOption(catalog: OntologyCatalog): EChartsOption {
         force: { repulsion: 320, edgeLength: [70, 150], gravity: 0.16, layoutAnimation: true },
         roam: true,
         data: nodes as never,
-        links: [...relationLinks, ...propertyLinks] as never,
+        links: links as never,
         // 边 label 逐条控制：关系边带多重性（label 已挂在 relationLinks），属性边不显示
         edgeSymbol: ['none', 'arrow'],
         edgeLabel: { show: false },
