@@ -1,0 +1,51 @@
+# Palantir Foundry Docs — /docs/foundry/assist/aip-assist-custom-docs-overview
+
+> 来源: https://www.palantir.com/docs/foundry/assist/aip-assist-custom-docs-overview/
+> 抓取: 2026-10-17（本地参考副本，版权属 Palantir）
+
+---
+
+# Custom content sources in AIP Assist
+
+You can use custom content sources to power AIP Assist responses and improve platform usability. Custom sources improve AIP Assist’s ability to respond to topics like operational workflows and platform navigation, providing tailored support and resources based on your operational needs. Focused content can be particularly beneficial for user onboarding, training sessions, and promoting self-service and automation. You can regulate and configure AIP Assist's level of access in Control Panel, granting access anywhere on the platform or only on selected resources.
+
+To provide a custom source to AIP Assist, you must first introduce it using one of two available options, register it with AIP Assist, and configure visibility and AIP Assist access in Control Panel.
+
+The following are examples of content that can be used to optimize AIP Assist responses:
+
+- Program documentation
+- Standard operating procedures (SOPs)
+- Company wikis
+- Permission request procedures
+- Data ingestion processes
+- Best practices
+- Use case and workflow documentation
+
+## Requirements
+
+Custom sources in AIP Assist are part of Palantir’s AIP offering and require your enrollment to have AIP [enabled in Control Panel](/docs/foundry/aip/enable-aip-features/).
+
+## Register custom content sources with AIP Assist
+
+There are currently two methods of adding custom content sources that can be registered with AIP Assist:
+
+1. **(Recommended)** Notepad documents
+2. In-platform [custom documentation](/docs/foundry/custom-docs/overview/) (Markdown files in a `documentation` type repository in Code Repositories).
+
+Refer to [registering custom content sources with AIP Assist](/docs/foundry/assist/aip-assist-registering-content/) for more information.
+
+## Use custom content sources in AIP Assist
+
+Once a custom source has been registered, there are two options for using it with AIP Assist. The first is adding it to the default AIP Assist knowledge base for your enrollment, or alternatively, creating an AIP Chatbot in Chatbot Studio. The following sections provide a high level overview of the differences between the two.
+
+### Add a content source to the default AIP Assist knowledge base
+
+When adding custom sources to the default AIP Assist knowledge base, custom content is added to the larger search context that AIP Assist uses to answer all questions. This method provides the option to make the content always available, regardless of the resource the user is viewing, or only when the user is viewing a specific resource or set of resources.
+
+Refer to [serving custom content sources to users](/docs/foundry/assist/adding-documentation-to-aip-assist/) for more information.
+
+### Create a custom source-backed AIP Assist chatbot
+
+The other method of using custom sources in AIP Assist involves creating an AIP Assist chatbot, or LLM-powered assistant, that **only** uses the provided content to answer queries. Each chatbot may have one or many documents added to its search context, and when selected, its answers will be based on this content alone. As a result, responses will be limited to the provided content source, but they will be more precise and targeted.
+
+Refer to [deploying custom source-backed AIP Chatbots](/docs/foundry/assist/agents-in-aip-assist/) to learn more.

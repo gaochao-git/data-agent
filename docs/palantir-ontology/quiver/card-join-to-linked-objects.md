@@ -1,0 +1,34 @@
+# Palantir Foundry Docs — /docs/foundry/quiver/card-join-to-linked-objects
+
+> 来源: https://www.palantir.com/docs/foundry/quiver/card-join-to-linked-objects/
+> 抓取: 2026-10-17（本地参考副本，版权属 Palantir）
+
+---
+
+# Join to linked objects
+
+Perform an inner join with linked objects using a link relation.
+
+This is useful if you are trying to perform a visualization or calculation using properties across linked objects in the ontology. The native object set card [switch to linked object set](/docs/foundry/quiver/card-switch-to-linked-object-set/) will only perform a link traversal, resulting in the linked objects, but will not retain the original object information in the same row.
+
+Alternatively, if your set is larger than 50,000 rows and cannot use the transform table, use a [join datasets](/docs/foundry/quiver/card-join-datasets/) card to join objects across links at scale.
+
+## Input type
+
+Transform table
+
+## Output type
+
+Transform table
+
+## Usage information
+
+| Functionality | Availability |
+| --- | --- |
+| [Standard Quiver card](/docs/foundry/quiver/core-concepts/#cards) | Unsupported |
+| [Transform table transform](/docs/foundry/quiver/cards-transform-table/) | Supported |
+
+## See also
+
+- [Join datasets](/docs/foundry/quiver/card-join-datasets/)
+- [Switch to linked object set](/docs/foundry/quiver/card-switch-to-linked-object-set/)

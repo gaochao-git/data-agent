@@ -1,0 +1,98 @@
+# Palantir Foundry Docs — /docs/foundry/assist/custom-documentation-best-practices
+
+> 来源: https://www.palantir.com/docs/foundry/assist/custom-documentation-best-practices/
+> 抓取: 2026-10-17（本地参考副本，版权属 Palantir）
+
+---
+
+# Custom content source best practices
+
+To improve AIP Assist responses, it is vital to understand [retrieval augmented generation ↗](https://aws.amazon.com/what-is/retrieval-augmented-generation/) (RAG), the underlying mechanism used. This process involves dividing your content into concise, focused paragraphs. When a question is asked, RAG identifies and retrieves the paragraphs most pertinent to the question. AIP Assist then uses these selected paragraphs, along with information from public documentation to formulate a response.
+
+Given this approach, the granularity of your content can significantly impact the quality of responses. The best practice is to organize your content into discrete sections based on headings and subheadings. Each heading should ideally be dedicated to a single topic or question, ensuring that the content under it is highly relevant and specific to that subject.
+
+## Structure for clarity
+
+Consider a section in your content discussing various features of a software product. Instead of creating a long, multi-topic paragraph like this:
+
+`Feature A helps with productivity by automating tasks. Feature B enhances security through encryption. Feature C offers real-time collaboration tools, and Feature D provides detailed analytics.`
+
+Break it down into focused sub-sections:
+
+```
+Copied!
+
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+## Feature A: Automation
+Feature A boosts productivity by automating repetitive tasks, streamlining workflows.
+
+## Feature B: Security
+Feature B secures data with advanced encryption techniques, protecting against unauthorized access.
+
+## Feature C: Collaboration
+Feature C enables real-time collaboration, allowing teams to work together seamlessly.
+
+## Feature D: Analytics
+Feature D offers comprehensive analytics, giving insights into performance metrics.
+```
+
+Structuring your content this way allows AIP Assist to more efficiently retrieve relevant information in response to specific inquiries, improving the accuracy and helpfulness of its answers.
+
+## Avoid collisions with public documentation
+
+AIP Assist also searches through the Palantir platform's [public documentation](/docs/foundry/) to craft answers. Therefore, it is crucial to ensure that your custom content does not unintentionally overlap or collide with the information found in these public documents. When using terms that are common or similar to those found in public documentation (for example, "build," "code repository"), it is important to clearly define or disambiguate them within your context. This clarification helps AIP Assist to distinguish between similarly named concepts and provide more accurate, context-specific responses.
+
+## Avoid deprecations or overrides
+
+When updates to processes or workflows occur, avoid marking obsolete documents as deprecated or adding overrides. Instead, update the content at its source or remove any invalid documents.
+
+For example, rather than using the following:
+
+```
+Copied!
+
+1
+2
+3
+(Note: This document is now deprecated.)
+
+In case of a high priority issue, contact abx@xyz.com directly.
+```
+
+or
+
+```
+Copied!
+
+1
+2
+3
+4
+5
+6
+In case of a high priority issue, contact abx@xyz.com directly.
+
+...
+...
+
+(Update: As of July 31, create a service ticket on the management system instead of sending an email to abx@xyz.com.)
+```
+
+Update the content to a consolidated and current form, such as:
+
+```
+Copied!
+
+1
+In case of a high priority issue, create a service ticket on the management system.
+```

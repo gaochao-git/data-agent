@@ -1,0 +1,87 @@
+# Palantir Foundry Docs — /docs/foundry/assist/application-integrations
+
+> 来源: https://www.palantir.com/docs/foundry/assist/application-integrations/
+> 抓取: 2026-10-17（本地参考副本，版权属 Palantir）
+
+---
+
+# AIP Assist application integrations
+
+AIP Assist offers various integration points with other applications on the Palantir platform, and we are continuously evaluating them to improve and expand AIP Assist’s footprint. These integrations streamline common workflows and reduce the frictional cost of getting help from AIP Assist. If you have any ideas for additional, high-value integrations, let us know by posting in the [Get Involved ↗](https://community.palantir.com/c/get-involved/9) section of our Developer Community forum. AIP Assist application integrations are designed to be highly visible in-platform, but you can also consult the reference below to explore the available integrations.
+
+## AIP Assist in Code Repositories
+
+### Ask AIP Assist
+
+When viewing a code file in Code Repositories, you will see the **Ask AIP Assist** helper, which provides a series of preconfigured, code-related actions that AIP Assist can take to aid development.
+
+![The "Ask AIP Assist" option in Code Repositories.](/docs/resources/foundry/assist/aip-assist-in-code-repos.png?width=500)
+
+### Code repository attachments
+
+In Code Repositories, the AIP Assist sidebar displays configuration options that allow you to include attachments to provide AIP Assist with additional context. You can choose to include a number of different components, including the entire repository, one or multiple files, or a highlighted snippet of code.
+
+![The AIP Assist attachment options in Code Repositories.](/docs/resources/foundry/assist/aip-assist-attachments.png?width=500)
+
+With this functionality you can ask AIP Assist to:
+
+- Explain the relationship between different files.
+- Optimize code snippets.
+- Search for particular code across the repository.
+- Summarize or explain snippets, files, or the entire repository.
+
+![A sample question to AIP Assist asking for optimized code.](/docs/resources/foundry/assist/aip-assist-optimize-code.png?width=500)
+
+AIP Assist will also have access to the metadata of referenced datasets and objects in attachments, enabling users to ask specific questions about Ontology objects and input or output datasets.
+
+![A sample question asking AIP Assist about dataset metadata.](/docs/resources/foundry/assist/aip-assist-input-dataset.png)
+
+## AIP Assist in Carbon workspaces
+
+You can select **Enable AIP Assist** in Carbon workspaces to allow users to interact with AIP Assist chatbots (formerly AIP Assist agents) that are tailored to support specific user groups. This requires that dedicated AIP Assist chatbots be configured in [AIP Chatbot Studio](/docs/foundry/chatbot-studio/overview/) for users to interact with.
+
+For more information refer to [enabling AIP Assist in Carbon workspaces](/docs/foundry/carbon/configuration-general/#enable-aip-assist).
+
+## AIP Assist in Contour
+
+When using the expression board in Contour, you can ask AIP Assist to perform a few different actions related to authoring expressions, such as explaining code, finding bugs, and translating code into expressions.
+
+![AIP Assist options in Contour.](/docs/resources/foundry/assist/aip-assist-in-contour.png)
+
+## AIP Assist in Workshop
+
+### Send to AIP Assist
+
+The Workshop Button widget allows developers to add a `Send to AIP Assist` event that will open AIP Assist and ask it a preconfigured prompt that is either based on static text or a dynamic variable value.
+
+This functionality is powerful when used in coordination with AIP Assist Agents that are trained on custom documentation about the Workshop application in which the Send to AIP Assist button widget is used. When configuring the `Send to AIP Assist` event in Workshop, it is possible to set the default AIP Assist Agent that will be used when responding to the configured prompt.
+
+For more information refer to the `Send to AIP Assist` event [documentation](/docs/foundry/workshop/concepts-events/#aip-assist).
+
+## AIP Assist in Slate
+
+### Ask AIP Assist
+
+You can use the `slate.askAIPAssist` action to open [AIP Assist](/docs/foundry/assist/overview/), and specify an optional `prompt` string argument that will be sent to AIP Assist as the user's message. The `prompt` can be derived from the current user's application state to enable targeted questions to AIP Assist.
+
+For more information refer to the [Slate Ask AIP Assist](/docs/foundry/slate/concepts-events-and-actions-index/#slateaskaipassist) documentation.
+
+## AIP Assist in Issues
+
+### AIP Assist in the issue submission form
+
+To facilitate in-platform support, AIP Assist has been incorporated into the issue filing flow in the Issues application. Users can select **Open AIP Assist and get immediate help** to consult AIP Assist before filing issues.
+
+![AIP Assist in the issue submission flow.](/docs/resources/foundry/assist/aip-assist-in-issues.png?width=500)
+
+### AIP Assist in issues
+
+If you have already created an issue, you can use integrated AIP Assist tools to get immediate support. AIP Assist can either provide an answer to the issue based on issue information and user questions, or summarize a lengthy issue to optimize issue resolution.
+
+![The option to ask AIP Assist to answer or summarize an issue.](/docs/resources/foundry/assist/aip-assist-answer-issue.png?width=500)
+
+## AIP Assist in Ontology Manager
+
+AIP Assist has been integrated with Ontology Manager to aid in the resolution of errors during Ontology updates. When updating an Ontology, navigate to the **Errors** tab and select **Explain with AIP Assist** on an error to have AIP Assist provide suggested actions for error resolution and error explanations.
+
+![The AIP Assist option in Ontology Manager.](/docs/resources/foundry/assist/aip-assist-ontology-manager.png)

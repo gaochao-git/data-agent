@@ -1,0 +1,265 @@
+# Palantir Foundry Docs — /docs/foundry/workshop/widgets-vega-chart
+
+> 来源: https://www.palantir.com/docs/foundry/workshop/widgets-vega-chart/
+> 抓取: 2026-10-17（本地参考副本，版权属 Palantir）
+
+---
+
+# Vega Chart
+
+The **Vega Chart** widget is used to create fully customizable and interactive visualizations in Workshop using the [Vega](https://vega.github.io/vega/) and [Vega-Lite ↗](https://vega.github.io/vega-lite/) grammars.
+
+## What is Vega?
+
+Vega allows you to create, save, and share interactive visualization designs in the form of a concise JSON spec that describes the appearance and behavior of the visualization.
+[Vega is a higher-level visualization specification language built on top of D3 ↗](https://vega.github.io/vega/about/vega-and-d3/), and Vega-Lite is a higher-level language built on top of Vega that provides a more concise and convenient way to author common visualizations.
+
+The Vega Chart widget offers more customizability than the standard [XY Chart widget](/docs/foundry/workshop/widgets-chart/), with support for visualizations such as those below, provided by the official [Vega-Lite Example Gallery ↗](https://vega.github.io/vega-lite/examples/).
+
+![Image showing several example Vega-Lite charts: 2D histogram heatmap, wind vector map, waterfall chart of monthly profit and loss, bar chart highlighting values over a threshold, radial plot, and layered plot with dual-axis.](/docs/resources/foundry/workshop/vega-examples.png)
+
+## Vega data inputs
+
+[Vega↗](https://vega.github.io/vega/docs/data/) data is a simple array of structs.
+
+```
+Copied!
+
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+"data": [
+  {
+    "name": "nba-player-data",
+    "values": [
+        { "name": "Michael Jordan", "height-in-inches": 78, "weight-in-lbs": 216, ... },
+        { "name": "Stephen Curry", "height-in-inches": 74, "weight-in-lbs": 185, ... },
+        ...
+    ]
+  }
+]
+```
+
+In [Vega-Lite ↗](https://vega.github.io/vega-lite/docs/data.html) you can specify multiple datasets in the following way:
+
+```
+Copied!
+
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+"datasets": {
+  "nba-player-data": [
+    { "name": "Michael Jordan", "height-in-inches": 78, "weight-in-lbs": 216, ... },
+    { "name": "Stephen Curry", "height-in-inches": 74, "weight-in-lbs": 185, ... },
+    ...
+  ],
+  "nba-team-data": [
+    { "name": "Toronto Raptors", "has-won-championship": true, ... },
+    { "name": "Memphis Grizzlies", "has-won-championship": false, ... },
+    ...
+  ]
+}
+```
+
+## Data configuration
+
+The Vega Chart widget has three different configuration options which allow you to flexibly transform object data from your Ontology into the expected Vega and Vega-Lite formats, and then inject it into your JSON spec.
+
+- **Object set:** Specify the object set and properties of that object that should be included in the data.   
+    
+  ![Vega object set data](/docs/resources/foundry/workshop/vega-object-set-data.png)
+- **Aggregation:** Specify the object set, group by properties with bucketing strategy, and aggregation. Each data point will contain the value of each group by property, as well as the aggregation value keyed by the specified aggregation name.   
+    
+  ![Vega aggregation data](/docs/resources/foundry/workshop/vega-aggregation-data.png)
+- **Function:** Specify a function that returns a list of structs that will be directly used as the data.
+
+The `Long` type does not mean the same thing in both TypeScript versions. In TypeScript v1, `Long` aliases `number`; in TypeScript v2, `Long` aliases `string`. A `marketCap` field typed as `Long` therefore reaches the chart as a string in TypeScript v2. Any Vega or Vega-Lite encoding that declares the field `quantitative` may not plot it as expected. Use `Double` when the value must be numeric on a chart axis, as `Double`, `Integer`, and `Float` alias `number` in both TypeScript versions. `Long` is imported from `@foundry/functions-api` in TypeScript v1 and from `@osdk/functions` in TypeScript v2. In Python, `Long` comes from `functions.api` and corresponds to `int`, so this difference does not apply; annotate the field with the `Long` alias rather than a bare `int`, which registers as `Integer`.
+
+The example below declares a [`CompanyData` custom type](/docs/foundry/functions/types-reference/#structcustom-type) and returns a list of those structs. The declaration form depends on the function version: [TypeScript v1](/docs/foundry/functions/typescript-v1-getting-started/) uses a decorated class method, [TypeScript v2](/docs/foundry/functions/typescript-v2-getting-started/) uses the default export of the file, and [Python](/docs/foundry/functions/python-getting-started/) uses a module-level function with the `@function` decorator.
+
+TypeScript v1TypeScript v2Python
+
+```
+Copied!
+
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+import { Function, Long } from "@foundry/functions-api";
+
+interface CompanyData {
+    name: string;
+    marketCap: Long;
+    logoUrl: string;
+}
+
+export class MyFunctions {
+    @Function()
+    public companyVegaData(): CompanyData[] {...}
+}
+```
+
+```
+Copied!
+
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+import { Long } from "@osdk/functions";
+
+interface CompanyData {
+    name: string;
+    // Long is a string in TypeScript v2; use Double if this field drives a quantitative encoding.
+    marketCap: Long;
+    logoUrl: string;
+}
+
+export default function companyVegaData(): CompanyData[] {...}
+```
+
+```
+Copied!
+
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+from dataclasses import dataclass
+from functions.api import function, Long
+
+@dataclass
+class CompanyData:
+    name: str
+    market_cap: Long
+    logo_url: str
+
+@function
+def company_vega_data() -> list[CompanyData]:
+    ...
+```
+
+![Vega function data](/docs/resources/foundry/workshop/vega-function-data.png)
+
+You can have multiple data inputs that can be referenced in the specification by their configured names. The data will be automatically injected into the JSON spec, which you can see in the [Preview tab](#inline-editor-preview) of the editor. Note than you can also inline data into the JSON spec by matching the [above data formats](#vega-data-inputs).
+
+## Specification
+
+The [spec ↗](https://vega.github.io/vega-lite/docs/spec.html) is the JSON that defines your visualization; the spec can be specified inline or by using a string variable.
+
+![Vega spec](/docs/resources/foundry/workshop/vega-spec.png)
+
+### Vega vs. Vega-Lite
+
+The widget allows you to specify whether you want to use Vega-Lite or Vega for your spec.
+
+![Vega spec library selection](/docs/resources/foundry/workshop/vega-spec-library.png)
+
+If you are making a common plot, we recommend using Vega-Lite for its more concise grammar, and support for [selection parameters](#selection-parameters-vega-lite-only). For more complex visualizations, you can use Vega. See the [Vega-Lite ↗](https://vega.github.io/vega-lite/examples/) and [Vega ↗](https://vega.github.io/vega/examples/) examples for an idea of what both can support. The widget uses Vega-Lite `5.18`.
+
+### Theme configuration
+
+For ease of reusability, you can configure a theme that will be injected into the spec. The default theme matches the Blueprint styling of the XY Charts widget, but you can also specify your own custom theme from a string variable, or turn off the theme entirely.
+
+![Vega theme](/docs/resources/foundry/workshop/vega-theme.png)
+
+See the [vega-themes repository ↗](https://github.com/vega/vega-themes) for examples when building out your own custom themes.
+
+If you want to modify our default Blueprint theme, you can find the config that is inserted in the **Preview Tab** of the Inline Editor and paste it directly to your spec with your changes.
+
+### Inline editor
+
+You can use AIP to create the initial version of your Vega chart. With your given data input, you can provide a prompt to AIP such as:
+
+`Make me a bar chart of average points per game, bucketed by the number of seasons played.`
+
+![Vega AIP chart](/docs/resources/foundry/workshop/vega-aip-chart.png)
+
+This will create a chart which you can iterate on with additional AIP prompts:
+
+`Remove the gridlines from this chart, and only show number of seasons greater than 4.`
+
+![Vega AIP chart 2](/docs/resources/foundry/workshop/vega-aip-chart2.png)
+
+If your AIP prompts do not provide the desired result, you can modify the spec directly. Refer to existing [Vega-Lite examples ↗](https://vega.github.io/vega-lite/examples/) and other Vega resources for guidance on how to modify the spec: for instance, you can start from an example and replace the example data with a reference to your input data.
+
+### Inline editor: Preview
+
+The **Preview** tab shows the complete spec with your data inputs and theme data injected into it. You are able to truncate the data for readability, and copy this complete spec to the clipboard. This allows you to verify that the data is in the expected format.
+
+The online [Vega Editor ↗](https://vega.github.io/editor/#/) is a valuable tool for debugging your spec. You can move your spec to the editor by copying the JSON to the clipboard in the inline editor **Preview** tab. There is also the option to truncate your data to limit the scale and more easily replace any sensitive data.
+
+## Selection Parameters (Vega-Lite Only)
+
+The primary reason that Workshop recommends using the Vega-Lite schema is because Vega-Lite supports [*selection parameters* ↗](https://vega.github.io/vega-lite/docs/selection.html). In the Vega Chart widget, you can configure multiple selection parameters, each of which has a name and an output variable. The output variable can be either an object set filter or a string.
+
+![Vega selection](/docs/resources/foundry/workshop/vega-selection.png)
+
+Because selection can be specified in several different places in the spec, this configuration is not auto-injected into the spec. As a builder, you are responsible for including a selection parameter in the spec for each of the configured parameter names.
+
+Here is an example selection parameter that would output range selections on the X-axis:
+
+```
+Copied!
+
+1
+2
+3
+4
+5
+6
+7
+8
+9
+...
+"params": [{
+  "name": "intervalSelection",
+  "select": {
+    "type": "interval",
+    "encodings": [ "x" ]
+  }
+}]
+...
+```
+
+Not all types of selections can be output to an Object Set Filter. If your data input is an object set with specified properties, or an Aggregation with a `group by`, this should translate easily, but otherwise you can use the string output variable, which is the selection returned in the JSON format used by Vega-Lite. You can manage this output with a function or variable transform.

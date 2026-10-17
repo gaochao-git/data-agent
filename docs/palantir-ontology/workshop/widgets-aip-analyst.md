@@ -1,0 +1,18 @@
+# Palantir Foundry Docs — /docs/foundry/workshop/widgets-aip-analyst
+
+> 来源: https://www.palantir.com/docs/foundry/workshop/widgets-aip-analyst/
+> 抓取: 2026-10-17（本地参考副本，版权属 Palantir）
+
+---
+
+# AIP Analyst
+
+AIP Analyst can be embedded as a Workshop widget to provide AI-powered analysis capabilities directly in Workshop modules. The widget supports extensive configuration options to control data access, tool availability, and user interface customization.
+
+For a full list of tools that can be enabled or disabled, see [Capabilities](/docs/foundry/aip-analyst/capabilities/).
+
+Platform administrators can also use the [Checkpoints](/docs/foundry/checkpoints/overview/) application to configure a checkpoint for opening AIP Analyst, requiring user interaction before the application is allowed to load.
+
+![AIP Analyst Workshop widget configuration.](/docs/resources/foundry/workshop/widgets-aip-analyst-widget-config.png)
+
+[Learn more about the AIP Analyst Workshop widget.](/docs/foundry/aip-analyst/workshop-widget/)

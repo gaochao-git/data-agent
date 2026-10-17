@@ -1,0 +1,149 @@
+# Palantir Foundry Docs — /docs/foundry/ontology-sdk/add-osdk-to-bootstrapped-repository
+
+> 来源: https://www.palantir.com/docs/foundry/ontology-sdk/add-osdk-to-bootstrapped-repository
+> 抓取: 2026-10-17（本地参考副本，版权属 Palantir）
+
+---
+
+# Add an OSDK to a bootstrapped repository
+
+This guide explains how to add an OSDK to a repository that was originally bootstrapped without one. It assumes that you bootstrapped your repository from Developer Console in Foundry or locally using the `@osdk/create-app` CLI. If you have a custom setup, some steps may need to be adjusted.
+
+## Required changes
+
+Follow the steps below to add an OSDK to your application.
+
+### 1. Update `index.html`
+
+Add the following meta tag inside the `<head>` section of your `index.html` file:
+
+```
+Copied!
+
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+<!DOCTYPE html>
+<html>
+  <head>
+    <!-- Other head content -->
+    <meta name="osdk-ontologyRid" content="%VITE_FOUNDRY_ONTOLOGY_RID%" />
+    <!-- Other head content -->
+  </head>
+  <body>
+    <!-- Body content -->
+  </body>
+</html>
+```
+
+### 2. Update environment files
+
+Add the following environment variable to all environment variable files present in your project. For example: `.env.development`, `.env.production`, and `.env.code-workspaces`:
+
+```
+VITE_FOUNDRY_ONTOLOGY_RID=<ri.ontology.main.ontology.your-ontology-rid>
+```
+
+Replace `<ri.ontology.main.ontology.your-ontology-rid>` with your OSDK's Ontology RID.
+
+You can find the Ontology RID in Ontology Manager.
+
+### 3. Update `client.ts`
+
+Read the Ontology RID and initialize the client object:
+
+```
+Copied!
+
+1
+2
+3
+4
+5
+6
+7
+- import { createPlatformClient, type PlatformClient } from "@osdk/client";
++ import { type Client, createClient } from "@osdk/client";
+
++ const ontologyRid = getMetaTagContent("osdk-ontologyRid");
+
+- export const client: PlatformClient = createPlatformClient(foundryUrl, auth);
++ export const client: Client = createClient(foundryUrl, ontologyRid, auth);
+```
+
+### 4. Update `package.json`
+
+Add your OSDK package as a dependency:
+
+```
+Copied!
+
+1
+2
+3
+4
+5
+6
+{
+  "dependencies": {
+    + "<osdk-package-name>/sdk": "latest"
+    // Other dependencies
+  }
+}
+```
+
+Replace `<osdk-package-name>` with your OSDK package name.
+
+You can find the OSDK package name under **Developer Console > Overview > Generated SDKs**.
+
+### 5. Update `.npmrc`
+
+You only need to perform this step if you bootstrapped the repository in a local development environment.   
+  
+If you bootstrapped the repository in Foundry, skip this step.
+
+Add the registry URL of your OSDK package.
+
+```
++ <osdk-package-name>:registry=<registry-url>
+```
+
+Replace `<osdk-package-name>` and `<registry-url>` with your OSDK package name and registry URL.
+
+- You can find the package name and registry URL under **Developer Console > Overview > Generated SDKs**.
+- Do not include `/sdk` in the OSDK package name.
+
+The following is an example `.npmrc` file:
+
+```
+//hostname.palantirfoundry.com/artifacts/api/:\_authToken=${FOUNDRY_TOKEN}
+@osdk-package:registry=https://hostname.palantirfoundry.com/artifacts/api/repositories/ri.artifacts.main.repository.45660bd6-de33-442e-9f48-a0c02372b906/contents/release/npm
+```
+
+For a repository bootstrapped in a local development environment, export the `FOUNDRY_TOKEN` environment variable in your terminal before running `npm install`:
+
+```
+Copied!
+
+1
+export FOUNDRY_TOKEN=<your-token-value>
+```
+
+Ensure the variable name in your `.npmrc` file is exactly `${FOUNDRY_TOKEN}` with no spaces. A common mistake is using `${FOUNDRY TOKEN}` (with a space), which causes 403 or 401 authentication errors.
+
+## Troubleshooting npm 404 errors
+
+If you receive a 404 error when running `npm install`, npm may be using a different registry than the one configured for your OSDK package. Inspect the following registry configurations and update any unintended overrides:
+
+- Run `npm config get registry` to inspect the globally configured npm registry.
+- Review other `.npmrc` files in your project or parent directories that may override your settings.
+
+For additional registry and token checks, review [Add an OSDK package to an existing application](/docs/foundry/developer-console/how-to-add-to-existing-typescript/#set-up-the-npm-registry).

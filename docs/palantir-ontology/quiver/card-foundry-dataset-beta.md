@@ -1,0 +1,29 @@
+# Palantir Foundry Docs — /docs/foundry/quiver/card-foundry-dataset-beta
+
+> 来源: https://www.palantir.com/docs/foundry/quiver/card-foundry-dataset-beta/
+> 抓取: 2026-10-17（本地参考副本，版权属 Palantir）
+
+---
+
+# Foundry dataset (Beta)
+
+Add a Foundry dataset to your analysis. This card can be used as an input to any cards that take a [dataset](/docs/foundry/quiver/cards-index-datasets/) as input.
+
+Beta
+
+The Foundry dataset card is in the [beta](/docs/foundry/platform-overview/development-life-cycle/) phase of development and may not be available on your enrollment. Functionality may change during active development. Contact the Palantir Support team if you would like to enable this on your enrollment.
+
+## Input type
+
+Flow start
+
+## Output type
+
+Dataset
+
+## Usage information
+
+| Functionality | Availability |
+| --- | --- |
+| [Standard Quiver card](/docs/foundry/quiver/core-concepts/#cards) | Supported |
+| [Transform table transform](/docs/foundry/quiver/cards-transform-table/) | Unsupported |
