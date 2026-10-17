@@ -50,9 +50,7 @@ assets/dashboard/examples/   看板示例（需求宽泛时按需取一个）
 
 ### 查询与分析
 
-读取 `references/analysis/query.md`，按其「标准流程」执行。
-
-补充必读：涉及 Hive 方言，或原生 SQL 的日期、字符串、窗口等方言差异时，读取 `references/analysis/dialect.md`。
+读取 `references/analysis/query.md`，按其「标准流程」执行（Hive/MySQL 方言对照已并入该文档「查询方言对照」章节）。
 
 ### 看板生成
 

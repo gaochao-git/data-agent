@@ -61,7 +61,6 @@ def test_data_analyzing_router_routes_to_every_capability_doc():
     router = _skill_doc(DATA_ANALYZING_SKILL, "SKILL.md")
     for relative_path in (
         "references/analysis/query.md",
-        "references/analysis/dialect.md",
         "references/dashboard/workflow.md",
         "references/dashboard/guide.md",
         "references/governance/quality-check.md",
@@ -172,7 +171,8 @@ def test_quality_check_capability_requires_tool_self_check():
 
 
 def test_query_capability_contains_complete_query_contract():
-    query = _skill_doc(DATA_ANALYZING_SKILL, "references/analysis/query.md", "references/analysis/dialect.md")
+    # dialect.md 已并入 query.md（小文件独立成文档的协调成本高于收益），单文档断言
+    query = _skill_doc(DATA_ANALYZING_SKILL, "references/analysis/query.md")
 
     # AI coding 式目录路线：file_read(semantic_catalog) -> file_grep -> file_read，不引导 semantic_search
     assert "当前用户可见（当前数据源组）的全部启用语义模型" in query
@@ -213,11 +213,13 @@ def test_query_capability_contains_complete_query_contract():
     assert "必须先读取 `result_path` 中的实际数据" in query
     assert "优先重新执行更小的 DSL/SQL" in query
     assert "禁止为了分析把大型结果逐页全部加载进模型上下文" in query
-    assert "/mnt/skills/data-analyzing/references/analysis/dialect.md" in query
     assert "## 必读资料" in query
+    # 方言对照已并入本文档：关键规则与两种日期格式必须在文内可查
+    assert "## 查询方言对照" in query
     assert "DSL 查询只使用 `time_grain`" in query
     assert "DATE_FORMAT(time_col, 'yyyy-MM')" in query
     assert "DATE_FORMAT(time_col, '%Y-%m')" in query
+    assert "不能把 Hive SQL 和 MySQL SQL 互相手工改写" in query
     # 查询能力文档不承担场景路由与跨域内容（那是路由层和各自文档的职责）
     assert "### 1. 判断场景" not in query
     assert "看板、图表、Office 文档" not in query

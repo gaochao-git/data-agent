@@ -9,8 +9,7 @@
 
 ## 必读资料
 
-- 当前数据库方言以 `list_execution_targets` 返回的 `dialect` 为准，调用该工具前不要假设方言；涉及原生 SQL 的日期、字符串、窗口等方言差异时，读取：
-  `/mnt/skills/data-analyzing/references/analysis/dialect.md`
+- 当前数据库方言以 `list_execution_targets` 返回的 `dialect` 为准，调用该工具前不要假设方言；涉及原生 SQL 的日期、字符串、窗口等方言差异时，直接参考本文档下方「查询方言对照」。
 - DSL 查询只使用 `time_grain`，不要把 SQL 日期格式串写入 DSL。
 
 ## 必须遵守的总原则
@@ -116,7 +115,7 @@ DSL 顶层只使用以下字段：
 
 复杂条件（包括同一字段多个候选值任一命中的场景）使用 `and` / `or` 树表达组合逻辑，不要依赖平铺数组；如果 `or` 条件还要叠加其他条件，必须用顶层 `and` 包住整个组合。字段间比较优先使用结构化 `left` / `right`：外层 `operator` 只能是 `=`、`!=`、`<>`、`>`、`<`、`>=`、`<=`，`left` 只允许 `{"type":"dimension","name":"维度名"}`，`right` 可以是维度、字面量或 `binary` 表达式，`binary.operator` 只能是 `+`、`-`、`*`、`/`。不要把“维度B * 10”作为固定值字符串。
 
-日期函数、计算式或只读子查询等无法用结构化 `right` 表达的右侧内容，可在普通维度过滤或 HAVING 中同时使用 `valueType: "expression"` 和非空 `rightExpression`。普通比较会直接使用该表达式；`IN` / `NOT IN` 会将表达式作为子查询或集合表达式并自动包裹括号。表达式叶子可以放入 `and` / `or` 树。禁止分号、SQL 注释和写操作；不能借此引用未确认的表列、绕过语义模型或弥补不明确的业务口径。涉及方言时先读取方言资料。
+日期函数、计算式或只读子查询等无法用结构化 `right` 表达的右侧内容，可在普通维度过滤或 HAVING 中同时使用 `valueType: "expression"` 和非空 `rightExpression`。普通比较会直接使用该表达式；`IN` / `NOT IN` 会将表达式作为子查询或集合表达式并自动包裹括号。表达式叶子可以放入 `and` / `or` 树。禁止分号、SQL 注释和写操作；不能借此引用未确认的表列、绕过语义模型或弥补不明确的业务口径。涉及方言时见下方「查询方言对照」。
 
 `having` 固定值过滤使用 `metric`、`operator`、`value`；指标间比较使用结构化 `left` / `right`，`left` 只允许 `{"type":"metric","name":"指标名"}`，`right` 只能是指标、字面量或 `binary` 表达式，`binary.operator` 只能是 `+`、`-`、`*`、`/`。不要把“指标B * 10”作为固定值字符串，也不要把指标结果条件放进 `filters`。
 
@@ -208,7 +207,42 @@ SQL 模式的 `action_payload` 必须同时传入 `semantic_config_id` 和 `memb
 
 SQL 只能是只读查询。规划 SQL 时只能使用当前语义模型维度中维护的原始表名、原始列名和 `relationships` 中确认的关联关系；关联字段只用于连接路径，不能当作未暴露业务字段随意查询或过滤。已维护指标的表达式代表业务口径，不能擅自改写。不能因为指标、维度或口径不清就回退 SQL。
 
-涉及时间格式或原生 SQL 方言时，按“必读资料”读取 `/mnt/skills/data-analyzing/references/analysis/dialect.md`；DSL 中仍然只写 `time_grain`，不要写 SQL 日期格式串。
+涉及时间格式或原生 SQL 方言时，直接参考下方「查询方言对照」；DSL 中仍然只写 `time_grain`，不要写 SQL 日期格式串。
+
+## 查询方言对照
+
+本节只处理 Hive 和 MySQL 的方言差异。当前使用的方言以本轮系统数据上下文中的 `source_type` 为准；上下文缺失时遵循系统默认方言。不要根据历史消息或模型常识猜测方言。
+
+### DSL 时间分组
+
+DSL 时间分组始终使用：
+
+```json
+{"name":"已确认的时间维度","time_grain":"month"}
+```
+
+不要在 DSL 中写 `DATE_FORMAT`、`%Y-%m`、`yyyy-MM` 或其他 SQL 格式串。具体格式由 DSL 编译器根据数据源方言生成。
+
+### Hive
+
+- 按月：`DATE_FORMAT(time_col, 'yyyy-MM')`
+- 按日：`DATE_FORMAT(time_col, 'yyyy-MM-dd')`
+- 按小时：`DATE_FORMAT(time_col, 'yyyy-MM-dd HH:00')`
+- 不要使用 MySQL 风格的 `%Y-%m`、`%Y-%m-%d`、`%H`。
+- 如果结果出现 `%2024-%0`、`%2025-%0` 等形式，通常是方言格式串错误。修正 DSL 或方言上下文后重新走 DSL 编译，不要手工改写生成 SQL。
+
+### MySQL
+
+- 按月：`DATE_FORMAT(time_col, '%Y-%m')`
+- 按日：`DATE_FORMAT(time_col, '%Y-%m-%d')`
+- 按小时：`DATE_FORMAT(time_col, '%Y-%m-%d %H:00')`
+- 不要使用 Hive 风格的 `yyyy-MM`、`yyyy-MM-dd`、`HH`。
+
+### 原生 SQL 回退
+
+- 原生 SQL 必须符合当前 `source_type` 的方言。
+- 如果工具或服务端已经生成 SQL，不要手工替换其中的日期格式或函数。
+- 看到方言上下文与生成结果明显不一致时，停止当前分支并说明方言上下文异常，不能把 Hive SQL 和 MySQL SQL 互相手工改写。
 
 ## 多步分析与结果处理
 

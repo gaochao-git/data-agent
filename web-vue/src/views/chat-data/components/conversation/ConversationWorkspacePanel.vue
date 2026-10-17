@@ -461,9 +461,10 @@ const selectedConsoleIsImage = computed(() => IMAGE_PREVIEW_EXTENSIONS.has(selec
 const selectedConsoleIsMarkdown = computed(() => selectedConsoleFileExt.value === 'md')
 const selectedConsoleIsMermaid = computed(() => selectedConsoleFileExt.value === 'mmd')
 const selectedConsoleIsYaml = computed(() => ['yaml', 'yml'].includes(selectedConsoleFileExt.value))
-// 图谱预览只对本体目录物化产物开放（任意 YAML 画图会误判；语义模型 YAML 结构不同不适用）
+// 图谱预览只对本体目录物化产物开放（任意 YAML 画图会误判；语义模型 YAML 结构不同不适用）。
+// 本体目录已与语义资产同放 semantic/（目录二选一），旧 ontology/ 路径保留兼容历史会话残留。
 const selectedConsoleIsOntologyCatalog = computed(() =>
-  /workspace\/ontology\/_ontology_catalog\.(yaml|yml)$/.test(selectedConsoleFilePath.value || '')
+  /workspace\/(semantic|ontology)\/_ontology_catalog\.(yaml|yml)$/.test(selectedConsoleFilePath.value || '')
 )
 const selectedConsoleIsHtml = computed(() => selectedConsoleFileExt.value === 'html' || selectedConsoleFileExt.value === 'htm')
 // HTML 渲染必须用原始文本：展示层的路径改写会破坏内联 JSON 数据与代码。仅源码视图走替换后的展示文案。

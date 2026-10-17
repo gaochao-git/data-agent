@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 本体目录图谱预览（workspace/ontology/_ontology_catalog.yaml 专用）。
+ * 本体目录图谱预览（workspace/semantic/_ontology_catalog.yaml 专用，兼容旧 ontology/ 路径残留）。
  * 三要素全上图：节点=业务对象（颜色=治理状态）+ 属性（环绕对象的小节点，标识=蓝、标题=琥珀）；
  * 边=本体 relations 一比一（箭头 one端→many端、label=名词角色名，对标 Palantir Vertex）。
  * 力导向布局（对齐官方 Vertex 默认 Auto）：节点可拖拽重排、连线跟随、roam 缩放画布。
