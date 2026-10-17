@@ -15,6 +15,7 @@ os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 
+from apps.chat_data_app import agent_stream as agent_stream_module
 from apps.chat_data_app.agent.context.context_budget import ContextInputLimitExceededError
 from apps.chat_data_app.agent.run.completion_options import normalize_enable_thinking, parse_file_selections
 from apps.chat_data_app.agent.tools import data_analyzing as agent_sql_tools
@@ -1880,3 +1881,62 @@ def test_extract_text_content_strips_attachment_lines():
     assert _extract_text_content("查订单\n[attachment] /mnt/x.xlsx") == "查订单"
     # 只发文件无文字 → 空字符串（标题生成走兜底）
     assert _extract_text_content([{"type": "text", "text": "[attachment] /x/a.png"}]) == ""
+
+
+def test_generation_stats_requires_positive_duration_and_tokens(monkeypatch):
+    """收口速率（generation_stats）口径：解码窗口 = 首 token→流结束 − 工具时间。"""
+    import time
+
+    now_ms = int(time.time() * 1000)
+    # 首 token 锚点缺失 → 不产 stats
+    assert (
+        agent_stream_module._generation_stats_from_usage(
+            first_token_ms=None, first_token_wall_ms=now_ms, stream_ended_wall_ms=now_ms, usage={}
+        )
+        is None
+    )
+    # 无输出 token → 不产 stats
+    assert (
+        agent_stream_module._generation_stats_from_usage(
+            first_token_ms=10,
+            first_token_wall_ms=now_ms,
+            stream_ended_wall_ms=now_ms,
+            usage={"output_tokens": 0},
+        )
+        is None
+    )
+    # 解码窗口为 0 → 无法得到正时长
+    assert (
+        agent_stream_module._generation_stats_from_usage(
+            first_token_ms=10,
+            first_token_wall_ms=now_ms,
+            stream_ended_wall_ms=now_ms,
+            usage={"output_tokens": 10},
+        )
+        is None
+    )
+    # 正常路径：解码窗口 1000ms（首 token → 流结束），其中 250ms 为工具耗时 → 生成时长 750ms
+    stats = agent_stream_module._generation_stats_from_usage(
+        first_token_ms=10,
+        first_token_wall_ms=now_ms - 1000,
+        stream_ended_wall_ms=now_ms,
+        usage={
+            "output_tokens": 30,
+            "breakdown": [{"role": "tool", "started_at_ms": now_ms - 900, "ended_at_ms": now_ms - 650}],
+        },
+    )
+    assert stats is not None
+    assert stats["duration_ms"] == 750
+    assert stats["output_tokens"] == 30
+    assert stats["tokens_per_second"] == 40
+    # 流结束锚点缺失（异常中断路径）→ 回退当前时刻，仍可产 stats
+    monkeypatch.setattr(agent_stream_module.time, "time", lambda: now_ms / 1000)
+    stats_fallback = agent_stream_module._generation_stats_from_usage(
+        first_token_ms=10,
+        first_token_wall_ms=now_ms - 1000,
+        stream_ended_wall_ms=None,
+        usage={"output_tokens": 30},
+    )
+    assert stats_fallback is not None
+    assert stats_fallback["duration_ms"] == 1000
+    assert stats_fallback["tokens_per_second"] == 30

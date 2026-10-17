@@ -1,9 +1,8 @@
 """工具参数流式进度与 SSE 事件格式化的纯函数集合。
 
-从 agent_stream.py 拆出（该文件顶在 2000 行红线），两块职责：
-1. SSE 事件格式化（``_format_sse``）与工具参数流式进度事件（行数统计 / intent 预渲染）；
-2. 参数流式期间的累计字符数上报（``next_stream_stats_event``）——供前端实时生成速度
-   使用：模型流式输出工具参数时后端只缓存不下发参数内容，前端凭本计数获得分子。
+从 agent_stream.py 拆出（该文件顶在 2000 行红线）：SSE 事件格式化（``_format_sse``）
+与工具参数流式进度事件（行数统计 / intent 预渲染）。实时生成速率由 agent_stream 的
+generation_speed 滑窗采样负责（原 stream_stats 参数字符上报已随前端本地估算下线）。
 """
 
 import json
@@ -131,19 +130,3 @@ def _extract_streaming_progress_inputs(
     if not intent_closed:
         intent = None
     return counts, intent
-
-
-# stream_stats 事件的上报步长（字符）：跨过才发一次，避免逐 chunk 的 SSE 洪峰；
-# 末尾不足一步长的部分由 message_end 的精确 usage 兜底，无需 flush。
-_ARGS_CHARS_REPORT_STEP = 256
-
-
-def next_stream_stats_event(streamed_args_chars: int, reported_args_chars: int) -> tuple[int, str] | None:
-    """参数累计字符跨过上报步长时生成一次 stream_stats 事件。
-
-    返回 ``(新的已上报值, SSE 文本)``；未跨步长返回 None。
-    """
-    if streamed_args_chars - reported_args_chars < _ARGS_CHARS_REPORT_STEP:
-        return None
-    reported = streamed_args_chars
-    return reported, _format_sse("stream_stats", {"args_chars": reported})

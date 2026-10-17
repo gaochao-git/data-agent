@@ -1075,3 +1075,80 @@ async def test_sql_completion_handler_normalizes_skill_names(_stub_completion_ru
     )
 
     assert _stub_completion_runtime["runtime_context"]["skill_names"] == expected
+
+
+# --------------------------------------------------------------------------- #
+# 实时生成速率（generation_speed）：token 粗估 + 滑窗节流推送
+# --------------------------------------------------------------------------- #
+
+
+def test_estimate_stream_tokens_matches_frontend_formula():
+    """CJK 1 token/字，其余非空白 4 字符/token，空白不计。"""
+    assert agent_stream._estimate_stream_tokens("") == 0
+    assert agent_stream._estimate_stream_tokens("   \n\t") == 0
+    assert agent_stream._estimate_stream_tokens("你好世界") == 4
+    assert agent_stream._estimate_stream_tokens("abcdefgh") == 2
+    assert agent_stream._estimate_stream_tokens("ab中cdefg") == 3  # 4 字符 ASCII → 1 + 中文 2
+    assert agent_stream._estimate_stream_tokens("a中") == 2
+
+
+def test_generation_speed_throttled_by_emit_interval(monkeypatch):
+    """500ms 节流：间隔内重复采样不重复推送。"""
+    now_ms = 1_000_000
+    adapter = _adapter_with()
+    monkeypatch.setattr(agent_stream.time, "time", lambda: now_ms / 1000)
+
+    adapter._last_speed_emit_ms = now_ms  # 刚推送过，处于节流间隔内
+    adapter._sample_generation_speed("abcdefgh")  # 2 tokens
+    assert adapter._maybe_emit_generation_speed() is None  # 间隔内不重复推送
+    adapter._last_speed_emit_ms = now_ms - agent_stream._SPEED_EMIT_INTERVAL_MS - 1
+    event = adapter._maybe_emit_generation_speed()
+    assert event is not None
+    assert event.startswith("event: generation_speed\n")
+
+
+def test_generation_speed_window_silent_returns_none(monkeypatch):
+    """窗口内无样本（工具执行/调用间隙）不推送，前端保持上次值。"""
+    now_ms = 2_000_000
+    adapter = _adapter_with()
+    monkeypatch.setattr(agent_stream.time, "time", lambda: now_ms / 1000)
+    adapter._last_speed_emit_ms = now_ms - agent_stream._SPEED_EMIT_INTERVAL_MS - 1
+
+    assert adapter._maybe_emit_generation_speed() is None
+
+
+def test_generation_speed_window_prunes_stale_samples(monkeypatch):
+    """滑窗只保留最近 _SPEED_WINDOW_MS 内的样本，旧样本丢弃不参与计算。"""
+    now_ms = 3_000_000
+    adapter = _adapter_with()
+    monkeypatch.setattr(agent_stream.time, "time", lambda: now_ms / 1000)
+    adapter._speed_samples.extend(
+        [
+            (now_ms - agent_stream._SPEED_WINDOW_MS - 500, 999),  # 窗口外，丢弃
+            (now_ms - 1000, 4),  # 窗口内
+            (now_ms - 400, 8),  # 窗口内
+        ]
+    )
+    adapter._last_speed_emit_ms = now_ms - agent_stream._SPEED_EMIT_INTERVAL_MS - 1
+
+    event = adapter._maybe_emit_generation_speed()
+    assert event is not None
+    payload = json.loads(event.split("\ndata: ", 1)[1].split("\n\n", 1)[0])
+    # span = now - 最早窗口内样本(1000ms) = 1000ms，4+8=12 tokens → 12 tok/s
+    assert payload["tokens_per_second"] == 12.0
+    assert payload["window_ms"] == agent_stream._SPEED_WINDOW_MS
+    assert [tokens for _, tokens in adapter._speed_samples] == [4, 8]
+
+
+def test_generation_speed_min_span_clamps_single_chunk_spike(monkeypatch):
+    """单 chunk 首推时活跃跨度用 _SPEED_MIN_SPAN_MS 兜底，防止单包爆数。"""
+    now_ms = 4_000_000
+    adapter = _adapter_with()
+    monkeypatch.setattr(agent_stream.time, "time", lambda: now_ms / 1000)
+    adapter._speed_samples.append((now_ms - 10, 20))
+    adapter._last_speed_emit_ms = now_ms - agent_stream._SPEED_EMIT_INTERVAL_MS - 1
+
+    event = adapter._maybe_emit_generation_speed()
+    assert event is not None
+    payload = json.loads(event.split("\ndata: ", 1)[1].split("\n\n", 1)[0])
+    assert payload["tokens_per_second"] == round(20 / (agent_stream._SPEED_MIN_SPAN_MS / 1000), 1)

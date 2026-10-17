@@ -120,8 +120,8 @@ export function useSqlGenerator() {
       onDashboardSpec?: (payload: DashboardSpecPayload) => void
       onMessageEnd?: (payload: ChatDataMessageEndPayload) => void
       onTokenUsage?: (payload: ChatDataTokenUsage) => void
-      /** 参数流式期间后端推送的累计 args 字符数（stream_stats 事件），实时生成速度的分子来源 */
-      onStreamStats?: (argsChars: number) => void
+      /** 后端滑窗口径推送的当前生成速率（generation_speed 事件）；窗口静默不推送，前端保持上次值 */
+      onGenerationSpeed?: (tokensPerSecond: number) => void
       fileSelections?: string[]
       enableThinking?: boolean | null
       thinkingEffort?: string | null
@@ -155,7 +155,7 @@ export function useSqlGenerator() {
       onDashboardSpec,
       onMessageEnd,
       onTokenUsage,
-      onStreamStats,
+      onGenerationSpeed,
       fileSelections,
       enableThinking,
       thinkingEffort,
@@ -342,14 +342,14 @@ export function useSqlGenerator() {
             continue
           }
 
-          if (event === 'stream_stats') {
+          if (event === 'generation_speed') {
             try {
               const data = JSON.parse(dataStr)
-              if (data && typeof data.args_chars === 'number' && Number.isFinite(data.args_chars)) {
-                onStreamStats?.(data.args_chars)
+              if (data && typeof data.tokens_per_second === 'number' && data.tokens_per_second > 0) {
+                onGenerationSpeed?.(data.tokens_per_second)
               }
             } catch (err) {
-              console.error('解析 stream_stats 数据失败:', err, dataStr)
+              console.error('解析 generation_speed 数据失败:', err, dataStr)
             }
             continue
           }
