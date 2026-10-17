@@ -1,9 +1,11 @@
 # Palantir Foundry Docs — /docs/foundry/aip/overview
 
-> 来源: https://www.palantir.com/docs/foundry/aip/overview/
+> 来源: https://www.palantir.com/docs/foundry/aip/overview
 > 抓取: 2026-10-17（本地参考副本，版权属 Palantir）
 
 ---
+
+![AIP header image.](/docs/resources/foundry/aip/AIP@4x.png?width=0.25)
 
 # AIP overview
 
@@ -13,7 +15,7 @@ AIP's builder tools like AIP Logic, AIP Chatbot Studio (formerly known as AIP Ag
 
 Together with Foundry (Palantir's data operations platform) and Apollo (Palantir's mission control for autonomous software deployment), AIP forms an operating system that can deliver a full range of AI-driven products, from LLM-powered web applications to mobile applications using vision-language models to edge applications that embed localized AI.
 
-The remainder of this page provides a brief overview of key AIP benefits. For more details about AIP's capabilities, we recommend reviewing the [AIP documentation](/docs/foundry/aip/aip-features/), including the [AIP application reference](/docs/foundry/aip/aip-features/#aip-application-reference). For hands-on practice, take the ["Speedrun: Your first AIP workflow" â](https://learn.palantir.com/speedrun-your-e2e-aip-workflow) course on [learn.palantir.com â](https://learn.palantir.com).
+The remainder of this page provides a brief overview of key AIP benefits. For more details about AIP's capabilities, we recommend reviewing the [AIP documentation](/docs/foundry/aip/aip-features/), including the [AIP application reference](/docs/foundry/aip/aip-features/#aip-application-reference). For hands-on practice, take the ["Speedrun: Your first AIP workflow" ↗](https://learn.palantir.com/speedrun-your-e2e-aip-workflow) course on [learn.palantir.com ↗](https://learn.palantir.com).
 
 ## Seamless integration
 
@@ -23,7 +25,7 @@ Palantir AIP can integrate seamlessly with your organization's existing data on 
 
 AIP incorporates all of Palantir's advanced [security measures](/docs/foundry/security/overview/) for the protection of sensitive data in compliance with industry regulations. AIP provides robust access controls, encryption, and auditing capabilities to maintain data integrity and transparency. Moreover, built-in governance tools help organizations maintain accountability and historical lineage in AI operations.
 
-To learn more about how LLMs securely process user prompts in the platform, review [FAQs: Security and Privacy of Palantir's AIP leveraging third-party-hosted LLMs â](https://palantir.safebase.us/?itemName=data_privacy&source=click) by selecting **Palantir AIP FAQs**.
+To learn more about how LLMs securely process user prompts in the platform, review [FAQs: Security and Privacy of Palantir's AIP leveraging third-party-hosted LLMs ↗](https://palantir.safebase.us/?itemName=data_privacy&source=click) by selecting **Palantir AIP FAQs**.
 
 ## Model management
 
@@ -39,8 +41,6 @@ To learn more about the tools that enable developers to monitor and optimize the
 
 Trust is critical when building AI workflows for production deployment; for LLMs, trust comes from explainability and transparency, as well as from rigorous evaluations. AIP provides tools for generating detailed audit trails, explanations, and evaluations of model decisions, helping users understand and trust the outcomes. This trust is vital for organizations to safely deploy AI in real-world situations and make informed and ethical decisions based on AI insights.
 
-* * *
+---
 
 Note: AIP feature availability is subject to change and may differ between customers.
-
-[NEXTAIP featuresâ](/docs/foundry/aip/aip-features/)
