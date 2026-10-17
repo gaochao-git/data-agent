@@ -28,6 +28,8 @@ export {
 } from './filePreview'
 export type { PreviewFileKind } from './filePreview'
 export { getToolDisplayName } from './toolDisplay'
+export { extractFileExtension, fileIconClass, fileIconNameByExtension } from './fileTypeIcon'
+export type { FileTypeIcon } from './fileTypeIcon'
 export { getSafeNumericColumns, isNumericValue, isSafeNumericValue, toSafeNumber } from './numeric'
 export {
   QUERY_MEMBER_ID_COLUMN,

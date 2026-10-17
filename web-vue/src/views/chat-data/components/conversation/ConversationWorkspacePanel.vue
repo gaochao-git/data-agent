@@ -58,7 +58,7 @@ import {
   type ProducedFile,
 } from '../../utils/consoleFileTree'
 import { evictWorkspaceFileCache } from '../../utils/workspacePreviewCache'
-import { formatEpochDateTime, IMAGE_PREVIEW_EXTENSIONS, IMAGE_PREVIEW_MIME, OFFICE_HTML_PREVIEW_EXTENSIONS, isBinaryPreviewPath } from '../../utils'
+import { formatEpochDateTime, fileIconClass, IMAGE_PREVIEW_EXTENSIONS, IMAGE_PREVIEW_MIME, OFFICE_HTML_PREVIEW_EXTENSIONS, isBinaryPreviewPath } from '../../utils'
 import { formatToolTableCell, parseChartSpecValue, replaceVisiblePathsForDisplay } from '../../utils/messageArtifacts'
 import { extractChangedFilePathsFromResult, extractWrittenFilePathCandidates } from '../../utils/toolDisplay'
 import { ACCEPTED_FILE_TYPES, MAX_FILE_SIZE } from '../../utils/uploadLimits'
@@ -706,6 +706,7 @@ const isGovernanceYaml = (path: string) => {
   if (!lower.startsWith('outputs/governance/') && !lower.startsWith('workspace/governance/')) return false
   return ['yaml', 'yml'].includes(path.split('.').pop()?.toLowerCase() || '')
 }
+
 const importingSemanticFilePath = ref<string | null>(null)
 
 const handleImportSemanticYaml = async (file: ProducedFile) => {
@@ -1057,7 +1058,7 @@ defineExpose({
                          比例摊到所有子项，这个 12px 占位和 16px 图标会被一起挤窄，
                          导致「长文件名那一行」的图标与文字比上下行左移 6px/12px。 -->
                     <span class="w-3 shrink-0"></span>
-                    <i class="fa-regular fa-file-lines w-4 shrink-0 text-center text-slate-400"></i>
+                    <i class="w-4 shrink-0 text-center" :class="fileIconClass(item.node.name)"></i>
                     <!-- 名字被截断时悬浮显示完整文件名：面板窄、长文件名必然省略号截断 -->
                     <span class="min-w-0 flex-1 truncate font-mono text-[13px]" @mouseenter="syncTruncatedTitle">{{ item.node.name }}</span>
                     <!-- 修改时间 + 文件大小：行尾两个扫读列（行内样式常量见 CONSOLE_TREE_TIME/SIZE_COLUMN_CLASS），

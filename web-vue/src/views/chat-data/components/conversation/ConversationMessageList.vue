@@ -4,6 +4,7 @@ import { ElMessage, ElTooltip } from 'element-plus'
 import type { ExecutionTargetOption, Message, MessageAttachment, MessageSegment, ToolCallInfo } from '../../types'
 import { useMermaidRenderer } from '../../composables/useMermaidRenderer'
 import { extractGeneratedSqlFromToolCall } from '../../utils/semanticTool'
+import { fileIconNameByExtension } from '../../utils/fileTypeIcon'
 import { formatDateTimeValue, formatGenerationSpeed, formatGenerationStatsDetail, renderMarkdown } from '../../utils'
 import AssistantMessageFooter from '../AssistantMessageFooter.vue'
 import QueryResultPanel from '../QueryResultPanel.vue'
@@ -201,15 +202,7 @@ const formatFileSize = (bytes?: number): string => {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-const getFileIconClass = (fileType?: string): string => {
-  const ext = String(fileType || '').toLowerCase()
-  if (['md', 'txt'].includes(ext)) return 'fa-regular fa-file-lines'
-  if (['sql'].includes(ext)) return 'fa-solid fa-database'
-  if (['pdf'].includes(ext)) return 'fa-solid fa-file-pdf'
-  if (['doc', 'docx'].includes(ext)) return 'fa-regular fa-file-word'
-  if (['xls', 'xlsx'].includes(ext)) return 'fa-regular fa-file-excel'
-  return 'fa-regular fa-file'
-}
+const getFileIconClass = (fileType?: string): string => fileIconNameByExtension(fileType)
 
 const handleAttachmentClick = (attachment: MessageAttachment) => {
   emit('openAttachment', attachment)
