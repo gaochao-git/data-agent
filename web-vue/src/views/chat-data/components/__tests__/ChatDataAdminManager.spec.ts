@@ -21,6 +21,7 @@ import ChatDataAdminManager from '../ChatDataAdminManager.vue'
 // 子面板桩：暴露 ensureLoaded/openGroupModal 供容器懒加载调用，根节点带 data-panel 便于断言
 const panelMocks = vi.hoisted(() => ({
   datasource: {},
+  semantic: {},
   enum: { ensureLoaded: vi.fn() },
   ontology: { ensureLoaded: vi.fn() },
   sqlHistory: { ensureLoaded: vi.fn() },
@@ -46,6 +47,7 @@ const mountManager = () =>
         'el-dialog': { template: '<div><slot name="header" /><slot /></div>' },
         'el-button': { template: '<button type="button" @click="$emit(\'click\')"><slot /></button>' },
         DataSourceManager: panelStub('DataSourceManager', 'datasource'),
+        SemanticModelAdminPanel: panelStub('SemanticModelAdminPanel', 'semantic'),
         GlobalEnumAdminPanel: panelStub('GlobalEnumAdminPanel', 'enum'),
         OntologyAdminPanel: panelStub('OntologyAdminPanel', 'ontology'),
         GlobalSqlHistory: panelStub('GlobalSqlHistory', 'sqlHistory'),
@@ -74,7 +76,7 @@ describe('ChatDataAdminManager 分组导航', () => {
   it('左侧渲染三组导航，枚举/本体/血缘与数据源同组', () => {
     const wrapper = mountManager()
     const text = wrapper.text()
-    for (const label of ['数据资产', '数据源管理', '枚举值', '本体', '数据血缘', '自动化', '定时任务', '插件管理', '系统', '运行配置', '全局历史 SQL']) {
+    for (const label of ['数据资产', '数据源管理', '模型管理', '枚举值', '本体', '数据血缘', '自动化', '定时任务', '插件管理', '系统', '运行配置', '全局历史 SQL']) {
       expect(text).toContain(label)
     }
     expect(text).not.toContain('元数据')
@@ -85,7 +87,7 @@ describe('ChatDataAdminManager 分组导航', () => {
   it('默认激活数据源管理，其余面板隐藏；新建按钮属于数据源面板而非弹窗头部', () => {
     const wrapper = mountManager()
     expect(isPanelVisible(wrapper, 'datasource')).toBe(true)
-    for (const panel of ['enum', 'ontology', 'sqlHistory', 'schedule', 'plugins', 'setting']) {
+    for (const panel of ['semantic', 'enum', 'ontology', 'sqlHistory', 'schedule', 'plugins', 'setting']) {
       expect(isPanelVisible(wrapper, panel)).toBe(false)
     }
     expect(wrapper.findAll('button').some(b => b.text().includes('新建'))).toBe(false)
@@ -118,5 +120,15 @@ describe('ChatDataAdminManager 分组导航', () => {
     expect(apiMocks.getAdminDatasources).toHaveBeenCalledWith({ include_tables: false })
     expect(panelMocks.sqlHistory.ensureLoaded).toHaveBeenCalledTimes(1)
     expect(isPanelVisible(wrapper, 'sqlHistory')).toBe(true)
+  })
+
+  it('点击模型管理切换面板并先拉数据源选项', async () => {
+    const wrapper = mountManager()
+    await navButton(wrapper, '模型管理').trigger('click')
+    await flushPromises()
+
+    expect(apiMocks.getAdminDatasources).toHaveBeenCalledWith({ include_tables: false })
+    expect(isPanelVisible(wrapper, 'semantic')).toBe(true)
+    expect(isPanelVisible(wrapper, 'datasource')).toBe(false)
   })
 })

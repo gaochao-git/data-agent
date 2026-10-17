@@ -11,6 +11,7 @@ import { ElMessage } from 'element-plus'
 import DataSourceManager from './DataSourceManager.vue'
 import GlobalEnumAdminPanel from './GlobalEnumAdminPanel.vue'
 import OntologyAdminPanel from './ontology/OntologyAdminPanel.vue'
+import SemanticModelAdminPanel from './SemanticModelAdminPanel.vue'
 import GlobalSqlHistory from './GlobalSqlHistory.vue'
 import AgentScheduleAdminPanel from './AgentScheduleAdminPanel.vue'
 import PluginAdminPanel from './PluginAdminPanel.vue'
@@ -20,6 +21,7 @@ import type { DataSource } from '../types'
 
 type AdminNavKey =
   | 'datasource'
+  | 'semantic'
   | 'enum'
   | 'ontology'
   | 'lineage'
@@ -42,6 +44,7 @@ const NAV_GROUPS: Array<{ label: string; items: AdminNavItem[] }> = [
     label: '数据资产',
     items: [
       { key: 'datasource', label: '数据源管理', icon: 'fa-database' },
+      { key: 'semantic', label: '模型管理', icon: 'fa-sitemap' },
       { key: 'enum', label: '枚举值', icon: 'fa-list-check' },
       { key: 'ontology', label: '本体', icon: 'fa-cubes' },
       { key: 'lineage', label: '数据血缘', icon: 'fa-diagram-project', disabled: true, hint: '数据血缘管理规划中' }
@@ -70,7 +73,6 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{
   'update:modelValue': [value: boolean]
   'datasources-updated': []
-  'open-semantic-config': [datasourceId: string, datasource?: DataSource]
 }>()
 
 const activeNav = ref<AdminNavKey>('datasource')
@@ -132,12 +134,14 @@ const switchNav = async (item: AdminNavItem) => {
   } else if (item.key === 'sqlHistory') {
     await loadAdminDatasourceOptions()
     sqlHistoryRef.value?.ensureLoaded()
+  } else if (item.key === 'semantic') {
+    await loadAdminDatasourceOptions()
   }
 }
 </script>
 
 <template>
-  <el-dialog v-model="visible" width="min(1320px, 94vw)" :show-close="false">
+  <el-dialog v-model="visible" width="min(1440px, 96vw)" :show-close="false">
     <template #header>
       <div class="flex items-center justify-between">
         <div class="flex items-center gap-2 text-sm font-medium text-slate-700">
@@ -187,7 +191,11 @@ const switchNav = async (item: AdminNavItem) => {
           v-show="activeNav === 'datasource'"
           class="h-full"
           @datasources-updated="handleDatasourcesUpdated"
-          @open-semantic-config="(datasourceId, datasource) => emit('open-semantic-config', datasourceId, datasource)"
+        />
+        <SemanticModelAdminPanel
+          v-show="activeNav === 'semantic'"
+          class="h-full"
+          :datasources="adminDatasourceOptions"
         />
         <GlobalEnumAdminPanel v-show="activeNav === 'enum'" ref="enumPanelRef" class="h-full" />
         <OntologyAdminPanel v-show="activeNav === 'ontology'" ref="ontologyPanelRef" class="h-full" />

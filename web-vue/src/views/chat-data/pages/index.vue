@@ -16,6 +16,7 @@ import useUserStore from '@/store/modules/user'
 import { getDatasources, createConversation, generateConversationTitle, getConversationContext, getSemanticConfigs, getMySemanticConfigs, createSemanticConfig, getDatasourceSchema } from '../api'
 import { listDashboards, type Dashboard } from '../api/dashboard'
 import type { BuilderDragFieldData, DataSource, ViewMode, ChatDataOptions, SemanticConfigItem, SemanticYamlFile, ExecutionTargetOption, TableInfo } from '../types'
+import { normalizeTableInfoList, resolveDatasourceType } from '../utils/datasourceSchema'
 import Conversation from '../components/conversation/Conversation.vue'
 import SqlEditor from '../components/SqlEditor.vue'
 import QueryBuilder from '../components/QueryBuilder/index.vue'
@@ -103,7 +104,6 @@ const currentUser = computed(() => ({
 // 数据源
 const allDatasources = ref<DataSource[]>([])
 const datasources = ref<DataSource[]>([])
-const adminDatasourceCache = ref<Record<string, DataSource>>({})
 const selectedDatasourceId = ref<string>('')
 const loadingDatasources = ref(true)
 const noMatchedDatasource = ref(false)
@@ -152,26 +152,6 @@ const handleOpenScheduledConversation = (conversationId: string) => {
 const openDatasourceManager = () => {
   if (!canManageAdmin.value) return
   showAdminModal.value = true
-}
-
-const normalizeTableInfoList = (tables: unknown): TableInfo[] => {
-  if (!Array.isArray(tables)) return []
-  return tables.map((item) => {
-    const table = item as Partial<TableInfo>
-    const columns = Array.isArray(table.columns) ? table.columns : []
-    return {
-      table_name: String(table.table_name || ''),
-      description: String(table.description || ''),
-      business_desc: table.business_desc,
-      groups: table.groups,
-      columns: columns.map((column) => ({
-        ...column,
-        name: String(column.name || ''),
-        type: String(column.type || ''),
-        description: String(column.description || ''),
-      })),
-    }
-  }).filter(table => table.table_name)
 }
 
 const cacheDatasourceSchema = (newDatasources: DataSource[]) => {
@@ -446,18 +426,10 @@ const handleCloseDashboard = () => {
   viewMode.value = 'dashboard'
 }
 
-// 语义配置面板状态
-const isSemanticConfigPanelOpen = ref(false)
-const semanticConfigDatasourceId = ref('')
-
-const activeMetricConfigDatasourceId = computed(() => {
-  return viewMode.value === 'metricConfig' ? selectedDatasourceId.value : semanticConfigDatasourceId.value
-})
-
+// 语义模型配置 tab 的数据源上下文（表结构缓存由 cacheDatasourceSchema/loadDatasourceSchema 维护）
 const metricConfigDatasource = computed(() => {
-  const datasourceId = activeMetricConfigDatasourceId.value
-  const datasource = adminDatasourceCache.value[datasourceId]
-    || allDatasources.value.find(ds => ds.id === datasourceId)
+  const datasourceId = selectedDatasourceId.value
+  const datasource = allDatasources.value.find(ds => ds.id === datasourceId)
     || datasources.value.find(ds => ds.id === datasourceId)
     || null
   if (!datasource) return null
@@ -471,30 +443,6 @@ const metricConfigDatasource = computed(() => {
 
 const handleCloseMetricConfigTab = () => {
   viewMode.value = 'conversation'
-}
-
-// 打开语义配置面板
-const handleOpenSemanticConfig = (datasourceId?: string, datasource?: DataSource) => {
-  if (!canManageDatasource.value) return
-  semanticConfigDatasourceId.value = datasourceId || selectedDatasourceId.value
-  if (datasource?.id) {
-    adminDatasourceCache.value = {
-      ...adminDatasourceCache.value,
-      [datasource.id]: datasource,
-    }
-    cacheDatasourceSchema([datasource])
-  }
-  showAdminModal.value = false
-  isSemanticConfigPanelOpen.value = true
-  if (semanticConfigDatasourceId.value) {
-    void loadDatasourceSchema(semanticConfigDatasourceId.value)
-  }
-}
-
-// 关闭语义配置面板
-const handleCloseSemanticConfig = () => {
-  isSemanticConfigPanelOpen.value = false
-  semanticConfigDatasourceId.value = ''
 }
 
 /**
@@ -987,31 +935,10 @@ const currentDatasource = computed(() => {
   }
 })
 
-const semanticConfigDatasource = computed(() => {
-  const datasource = adminDatasourceCache.value[semanticConfigDatasourceId.value]
-    || allDatasources.value.find(ds => ds.id === semanticConfigDatasourceId.value)
-    || datasources.value.find(ds => ds.id === semanticConfigDatasourceId.value)
-    || null
-  if (!datasource) return null
-  const cachedTables = datasourceSchemaCache.value[datasource.id]
-  if (!cachedTables) return datasource
-  return {
-    ...datasource,
-    ds_tables: cachedTables,
-  }
-})
-
-const resolveDatasourceType = (datasource: DataSource | null | undefined) => {
-  const sourceType = String(datasource?.source_type || '').trim().toLowerCase()
-  if (sourceType) return sourceType
-  const memberTypes = Array.from(new Set((datasource?.member_sources || [])
-    .map(member => String(member.source_type || '').trim().toLowerCase())
-    .filter(Boolean)))
-  return memberTypes.length === 1 ? memberTypes[0] : ''
-}
-
 const enabledSemanticConfigs = computed(() => semanticConfigs.value.filter(cfg => cfg.enabled))
 const enabledMetricSemanticConfigs = computed(() => metricSemanticConfigs.value.filter(cfg => cfg.enabled))
+
+// 表结构 schema (用于 SQL 编辑器自动补全)
 
 const currentSemanticConfig = computed(() => {
   if (!selectedSemanticConfigId.value) return null
@@ -1303,15 +1230,6 @@ watch(
     if (mode === 'builder' || mode === 'editor' || mode === 'metricConfig' || mode === 'conversation') {
       void loadDatasourceSchema(datasourceId)
     }
-  },
-  { immediate: true }
-)
-
-watch(
-  [semanticConfigDatasourceId, isSemanticConfigPanelOpen],
-  ([datasourceId, semanticPanelOpen]) => {
-    if (!semanticPanelOpen || !datasourceId) return
-    void loadDatasourceSchema(datasourceId)
   },
   { immediate: true }
 )
@@ -1883,18 +1801,6 @@ onMounted(async () => {
       </div>
     </div>
 
-    <!-- 语义配置页面（整页） -->
-    <div v-if="isSemanticConfigPanelOpen" class="absolute inset-0 z-[var(--z-page-overlay)] bg-[#F5F7FA]">
-      <SemanticConfigPanel
-        :datasource-id="semanticConfigDatasourceId"
-        :datasource-name="semanticConfigDatasource?.group_name || ''"
-        :datasource-type="resolveDatasourceType(semanticConfigDatasource)"
-        :tables="semanticConfigDatasource?.ds_tables || []"
-        admin-mode
-        @close="handleCloseSemanticConfig"
-      />
-    </div>
-
     <!-- 会话工作区 yaml「一键导入」弹窗：由 ConversationWorkspacePanel 的导入按钮触发（管理员门禁） -->
     <OssieImportDialog
       ref="conversationOssieImportDialogRef"
@@ -1973,7 +1879,6 @@ onMounted(async () => {
       v-if="canManageAdmin"
       v-model="showAdminModal"
       @datasources-updated="handleAdminDatasourcesUpdated"
-      @open-semantic-config="handleOpenSemanticConfig"
     />
 
     <AgentScheduleManager

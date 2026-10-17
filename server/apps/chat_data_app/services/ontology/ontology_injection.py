@@ -205,7 +205,8 @@ def _render_model_entry(config: dict[str, Any], model_files: dict[str, str]) -> 
         "semantic_config_id": config_id,
         "name": str(config.get("name") or config.get("semantic_config_name") or "").strip(),
         "file": str((model_files or {}).get(config_id) or ""),
-        "description": str(config.get("description") or config.get("semantic_config_desc") or "").strip(),
+        # description UI 已并入业务说明：description 为空时回退 business_notes，模型路由信息不缺
+        "description": str(config.get("description") or config.get("semantic_config_desc") or config.get("business_notes") or "").strip(),
         "business_notes": str(config.get("business_notes") or "").strip(),
     }
 

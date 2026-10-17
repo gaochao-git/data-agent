@@ -383,7 +383,8 @@ class ChatDataToOssieConverter:
         # 官方 schema required=[version, name, datasets]，version 由 Literal 钉死默认值。
         document = OssieDocument(
             name=_text(normalized.get("name") or config_id),
-            description=_text(normalized.get("description")) or None,
+            # description UI 已并入业务说明：description 为空时回退 business_notes，导出文档自述不缺
+            description=_text(normalized.get("description")) or _text(normalized.get("business_notes")) or None,
             ai_context=_text(normalized.get("business_notes")) or None,
             datasets=datasets,
             relationships=relationships or None,

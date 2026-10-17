@@ -144,7 +144,8 @@ def _directory_item(config: dict[str, Any], path: str = "") -> dict[str, Any]:
     item = {
         "id": config_id,
         "name": str(config.get("name") or config.get("semantic_config_name") or config_id).strip(),
-        "description": str(config.get("description") or config.get("semantic_config_desc") or "").strip(),
+        # description UI 已并入业务说明：description 为空时回退 business_notes，保证快照自述不缺
+        "description": str(config.get("description") or config.get("semantic_config_desc") or config.get("business_notes") or "").strip(),
         "metrics_total": len(metrics),
         "dimensions_total": len(dimensions),
     }
@@ -315,7 +316,7 @@ def _render_semantic_catalog(configs: list[dict[str, Any]]) -> str:
         models.append(
             {
                 "file": _safe_file_name(config),
-                "description": str(config.get("description") or config.get("semantic_config_desc") or "").strip(),
+                "description": str(config.get("description") or config.get("semantic_config_desc") or config.get("business_notes") or "").strip(),
                 "business_notes": str(config.get("business_notes") or "").strip(),
             }
         )
