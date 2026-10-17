@@ -5,10 +5,9 @@
  * 领域 API 名创建后不可改；编辑活跃领域提交 allow_overwrite=true。
  */
 import { computed, ref, watch } from 'vue'
-import type { PropType } from 'vue'
 import { ElMessage } from 'element-plus'
 import { getAdminDatasources, getAdminOntologyDomains, upsertAdminOntologyDomain } from '../../api'
-import type { DataSource, OntologyDomainItem } from '../../types'
+import type { DataSource } from '../../types'
 import { ONTOLOGY_NAME_PATTERN } from './ontologyMeta'
 
 const props = defineProps({

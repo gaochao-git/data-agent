@@ -381,6 +381,48 @@ ALTER TABLE `chat_data_ontology_object_mapping`
 
 存量数据迁移：column_mappings_json 右值由物理列名改写为对应模型维度名（按语义模型 dimensions 的 name/column 对照，dev 库 2026-10-16 已执行；生产若已有存量映射需按同口径生成 UPDATE）。
 
+### 本体实现审计修复（2026-10-17 落地）
+
+对本体四表/服务/注入/前端做了一轮全量正确性审计，修复以下问题（无 DDL；接口行为有增量变化，见末尾）：
+
+**后端核心**
+- 事务：`OntologyService` 写方法统一 `_transactional`（`transaction_scope` + DAO 环境会话复用），删除/状态迁移/领域写等多步操作整体回滚，不再产生半成功脏数据。
+- 软删复活：关系/领域视图补 `delete_flag`，删后同名重建不再被误判为「已存在」；对象/关系复活按新建语义重置状态（对象回 `draft` 并清空废弃三元数据，关系按两侧对象状态重新派生），杜绝「响应 draft / 库内 deprecated」与「关系状态高于两端」。
+- 关系状态：活跃编辑只降不升（`min(旧, 派生)`），结构编辑不再保留虚高状态。
+- 认证门禁：每条映射必须非空且覆盖全部标识属性，空映射/主键未落模型的认证被拒绝。
+- 编辑门禁：删除/改名属性或变更主键组合导致关系列悬空时直接拒绝。
+- 组锚点：对象挂领域时映射模型必须在领域数据源组内；对象换域、领域改组均校验既有映射；数据源组删除前阻断仍被本体领域引用的组（40070）。
+- 其他：`deprecated_until` 服务层解析（非法 40067）、领域名限 64、活跃同名重建改 40068（不再泄漏 allow_overwrite）、对象/关系写接口返回真实全量视图（关系不再泄漏 `*_json` 存储字段）、删除死代码、`upsert_object_full_async` 复杂度 18→达标。
+
+**消费链路**
+- 关系列翻译修复多映射串模型：按映射排序并用同一映射的 config 查维度列；新增 `from_columns_by_model`/`to_columns_by_model` 与 `unresolved` 标记（未解析必须回读模型 YAML）。
+- 本体目录新增顶层 `models`（全部启用模型的 file/description/business_notes），二选一后未建对象模型不丢索引。
+- 目录规模上限：`objects` 按名装入 40k 字符预算，超出 `truncated: true` + `omitted_objects`，其余交给 `file_grep`。
+- 空启用集清理旧 `_ontology_catalog.yaml`/`_semantic_catalog.yaml` 残留；旧 `ontology/` 目录清理在 sandbox 不再刷警告。
+- 属性补 description/enum_ref、关系补 description/status、空映射不渲染；objects/relations 确定性排序；提示词与 data-analyzing skill 同步新口径。
+
+**前端**
+- 修复未提交改动中 `PluginAdminPanel` 缺少 `AdminPanelToolbar` import（安装/刷新按钮不渲染）。
+- 对象编辑破坏性比较对后端映射行做同口径归一化（不再每次编辑恒弹确认）；关系状态上限/替代对象候选改用全量对象（不受工具栏筛选影响）。
+- 认证前置提示改用 `mappings_count`；废弃加二次确认；deprecated 禁编辑、certified 禁删；刷新后恢复选中详情；关系默认状态目标不再等于当前；保存后失效属性缓存；属性改名/删除同步映射键、切离 enum 清 `enum_ref`、Decimal 禁标识、标题勾选只影响非冻结行。
+
+**接口/契约变化**
+- PUT 对象返回全量详情（含 id/properties/mappings/status）；PUT 关系返回真实行 + `from_object_name`/`to_object_name`，不再返回 `*_json`。
+- 活跃同名重复创建错误码由 40069 改为 40068（文案不含内部参数）。
+- `_ontology_catalog.yaml` 新增 `models` / `truncated` / `omitted_objects` / `from_columns_by_model` / `to_columns_by_model` / `unresolved`；`objects[].properties[]` 可能含 `description`/`enum_ref`。
+- 新增环境变量 `CHAT_DATA_ONTOLOGY_INJECTION_ENABLED`（默认 false，已登记 `server/.env.example`）。
+
+**补充收紧（同日第二轮，审计遗留项）**
+- 多源对象属性单源：非标识属性只能出现在一个映射（标识属性可跨源作主键），保存时拒绝跨源重复；前端映射编辑器同步排除已被其他映射占用的非标识属性。
+- `one_to_one` 关系两侧都要求关联列引用标识属性（from 侧唯一性从"仅声明"升级为硬校验）；前端一对一模式起始列候选只保留标识属性。
+- 数据源组授权：建会话与每轮 completion 绑定数据源组前复用机构授权口径（`can_access_datasource_async`，403 拒绝），避免无权用户把该组语义快照/本体目录物化进工作区；历史会话每轮完成前重新校验。
+- 前端 ontology 目录 ESLint 清零（未使用导入、props 直改改为父组件持有数组 + 事件回传）。
+
+**门禁**
+- Sonar 认知复杂度本体相关函数全部 ≤15；`ruff check` 与 `ruff format --check` 全库通过；审计补测覆盖事务回滚/复活/认证门禁/组锚点/多映射翻译/目录截断。
+- 覆盖率门禁补测：新增 `test_coverage_gate_ontology.py` / `test_coverage_gate_platform.py`，全量后端行覆盖 97.70%、分支覆盖 96.03%（均 ≥95%）。
+- 已知遗留：`chat_data_ontology_object_mapping` 表名 33 字符，超 AGENTS 32 字符上限（需单独迁移评估）；多源对象「属性单源查重」仍属 §12 已知缺口；本体注入的数据源组授权沿用语义层既有口径，未在本轮收紧。
+
 ## 依赖变更
 
 上线前执行：

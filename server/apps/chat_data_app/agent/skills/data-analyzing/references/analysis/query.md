@@ -41,16 +41,17 @@
 
 本体层按对象持续逐步建设，**任何会话都可能没有本体目录**：指标语义层必然存在，本体层是可选增强，缺失时完全按原有指标语义层路线继续，不得报错、重试或向用户提及缺失。
 
-1. 先用 `file_read` 读取 `/mnt/user-data/workspace/semantic/_ontology_catalog.yaml`。文件不存在：当前会话未物化本体层（此时 semantic/ 下会有 `_semantic_catalog.yaml` 语义资产目录），直接进入「3. 检索指标语义层」，不要重试或猜测路径。两份目录二选一：本体目录存在时不发语义资产目录。
+1. 先用 `file_read` 读取 `/mnt/user-data/workspace/semantic/_ontology_catalog.yaml`。文件不存在：当前会话未物化本体层（此时 semantic/ 下会有 `_semantic_catalog.yaml` 语义资产目录），直接进入「3. 检索指标语义层」，不要重试或猜测路径。两份目录二选一：本体目录存在时不发语义资产目录，**`_semantic_catalog.yaml` 缺失属正常**；本体目录的 `models` 段是全部启用模型索引（含未建本体对象、不在 `objects` 中的模型），用它的 `file` 定位取数模型即可。
 2. 目录存在时，在其中识别与用户问题相关的业务对象：
-   - 命中对象：按该对象 `mappings` 的 `file` 字段（取数模型快照文件名，semantic/ 下）定位模型并 `file_read`（`semantic_config_id` 为辅助键；`column_mappings` 是「属性 → 模型维度名」的概念映射，物理列以模型 YAML 为准）（`column_mappings` 是「属性 → 模型维度名」的概念映射，物理列以模型 YAML 为准）；涉及多个对象时，用 `relations` 的 `from`/`to` 对象与 `from_columns`/`to_columns`（已翻译为物理列）推导 join 路径，锁定候选后直接进入「4. 精读完整语义层」。
+   - 目录可能带 `truncated: true`：此时 `objects` 只包含按对象名排序的前一部分，不能据此判定「没有相关对象」；先用 `file_grep` 在 `/mnt/user-data/workspace/semantic/` 下按对象名/业务关键词检索，找不到再走「3. 检索指标语义层」。
+   - 命中对象：按该对象 `mappings` 的 `file` 字段（取数模型快照文件名，semantic/ 下）定位模型并 `file_read`（`semantic_config_id` 为辅助键；`column_mappings` 是「属性 → 模型维度名」的概念映射，物理列以模型 YAML 为准）；涉及多个对象时，用 `relations` 的 `from`/`to` 对象与 `from_columns`/`to_columns` 推导 join 路径，锁定候选后直接进入「4. 精读完整语义层」。
    - 目录中没有任何相关对象：同样进入「3. 检索指标语义层」——这只说明本体尚未覆盖该对象，不代表系统能力缺失。
 3. 本体层只负责「识别业务对象 + 选模型 + 定关联路径」；指标口径、维度枚举、时间格式等细节仍以对象映射指向的语义模型 YAML 为准，不能只凭目录描述直接写查询。
-4. 跨对象的关联查询超出「一次调用一个 `semantic_config_id`」的约束，走 SQL 模式：join 条件优先采用本体 `relations` 的 `from_columns`/`to_columns`，表名与列名以两个模型 YAML 确认的原始表/列为准，两个模型的口径都不明确时仍先澄清。
+4. 跨对象的关联查询超出「一次调用一个 `semantic_config_id`」的约束，走 SQL 模式：join 条件优先参考本体 `relations` 的 `from_columns`/`to_columns`；**关系列是尽力翻译的物理列**：带 `unresolved: true` 时表示有列回退为原始属性/维度名，必须回读涉及模型的 YAML 确认表名与物理列后再写 join；一个对象绑定多个模型时，用 `from_columns_by_model`/`to_columns_by_model`（`{semantic_config_id: [物理列]}`）取对应模型的列。两个模型的口径都不明确时仍先澄清。
 
 ### 3. 检索指标语义层（grep 优先）
 
-1. 当前用户可见（当前数据源组）的全部启用语义模型 Ossie YAML 已预物化到会话工作区 `/mnt/user-data/workspace/semantic/`，文件名为 `{模型名}__{id后缀}.yaml`；同目录的 `_semantic_catalog.yaml` 是系统生成的语义资产目录（每个启用模型一条 file/description/business_notes，file 即快照文件名）。
+1. 当前用户可见（当前数据源组）的全部启用语义模型 Ossie YAML 已预物化到会话工作区 `/mnt/user-data/workspace/semantic/`，文件名为 `{模型名}__{id后缀}.yaml`；同目录的 `_semantic_catalog.yaml` 是系统生成的语义资产目录（每个启用模型一条 file/description/business_notes，file 即快照文件名）。**本体目录接管时 `_semantic_catalog.yaml` 不存在属正常**：此时用 `_ontology_catalog.yaml` 的 `models` 段取全部启用模型的 file/description/business_notes（`objects` 只是已建本体对象的子集，可能覆盖不全）。
 2. 检索手段以 `file_grep(path="/mnt/user-data/workspace/semantic/", pattern="<指标名|维度名|业务关键词>")` 按内容定位优先：英文关键词加 `ignore_case=true` 一次覆盖大小写变体；宽泛关键词命中过多（返回 `has_more=true`）时，先用 `output_mode="files_with_matches"` 看哪些文件命中、必要时再用 `output_mode="count"` 看热点分布，最后收敛 `pattern`/`glob` 后取默认 content 看具体行。整读 `_semantic_catalog.yaml` 是辅助手段：启用模型很少、或关键词难以抽象时可以先读目录得到模型清单再定 grep 词。
 3. 同一关键词无命中时，先换词再判无：至少覆盖三类换法——业务同义词（如“入金/来账/收款”）、中英文对照、词组拆分；三类换法全部落空才判定为「确认无命中」。
 4. 一旦确认无命中，就是当前语义目录不含该术语：立即停止检索，用业务语言说明当前缺少的指标或模型并向用户澄清，不得用相同或相近关键词重复检索。**禁止为找模型逐个读取目录里的 YAML**——逐个读取不是检索手段，目录里文件很多时会耗尽上下文，且读不到关键词一样无解。

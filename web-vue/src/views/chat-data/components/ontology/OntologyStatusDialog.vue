@@ -6,10 +6,10 @@
  */
 import { computed, ref, watch } from 'vue'
 import type { PropType } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { changeAdminOntologyObjectStatus } from '../../api'
 import type { OntologyObjectItem, OntologyObjectStatus } from '../../types'
-import { ONTOLOGY_STATUS_META } from './ontologyMeta'
+import { ONTOLOGY_STATUS_META, ontologyMappingCount } from './ontologyMeta'
 
 const props = defineProps({
   // 迁移目标对象（列表行即可）
@@ -40,6 +40,9 @@ const isDeprecating = computed(() => targetStatus.value === 'deprecated')
 
 const successorOptions = computed(() => props.objects.filter(item => item.object_name !== props.object?.object_name))
 
+// 认证前置提示：列表行只有 mappings_count（详情行才带 mappings 明细），不能只看 mappings 数组
+const mappingCount = computed(() => ontologyMappingCount(props.object))
+
 watch(visible, value => {
   if (!value) return
   deprecationReason.value = ''
@@ -54,6 +57,18 @@ const confirmStatus = async () => {
   if (isDeprecating.value && !deprecationReason.value.trim()) {
     ElMessage.warning('废弃对象必须填写废弃原因')
     return
+  }
+  // 废弃为终态不可逆：提交前再做一次独立确认，避免手滑点错目标状态（后端无法回滚）
+  if (isDeprecating.value) {
+    try {
+      await ElMessageBox.confirm(
+        `对象「${props.object?.display_name || props.object?.object_name}」将被标记为 deprecated，该状态终态且不可逆（关系状态会级联废弃）。确定继续？`,
+        '废弃对象确认',
+        { type: 'warning', confirmButtonText: '确认废弃', cancelButtonText: '取消' }
+      )
+    } catch {
+      return
+    }
   }
   saving.value = true
   try {
@@ -121,7 +136,7 @@ const confirmStatus = async () => {
           认证前置：对象需至少一个标识属性（主键）且至少一个语义模型映射；认证后主键/标题键冻结、禁止删除属性。
         </div>
         <div
-          v-if="targetStatus === 'certified' && object && (object.mappings || []).length === 0"
+          v-if="targetStatus === 'certified' && object && mappingCount === 0"
           class="rounded-lg border border-amber-100 bg-amber-50 p-2.5 text-[11px] leading-5 text-amber-700"
         >
           当前对象暂无语义模型映射，认证会被拒绝；请先在编辑页添加映射。

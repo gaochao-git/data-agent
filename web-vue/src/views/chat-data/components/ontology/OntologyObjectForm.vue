@@ -11,7 +11,14 @@ import { getAdminOntologyObject, upsertAdminOntologyObject } from '../../api'
 import type { OntologyDomainItem, OntologyMappingItem, OntologyObjectItem, OntologyPropertyItem } from '../../types'
 import OntologyMappingEditor from './OntologyMappingEditor.vue'
 import OntologyPropertyEditor from './OntologyPropertyEditor.vue'
-import { ONTOLOGY_NAME_PATTERN } from './ontologyMeta'
+import {
+  crossMappingPropertyConflicts,
+  haveMappingsChanged,
+  ONTOLOGY_NAME_PATTERN,
+  removeMappingPropertyKey,
+  renameMappingPropertyKey,
+  staleMappingPropertyNames
+} from './ontologyMeta'
 
 const props = defineProps({
   // 编辑的对象名；空串表示新建
@@ -40,8 +47,31 @@ const formDomainId = ref<number | null>(null)
 const propertyRows = ref<OntologyPropertyItem[]>([])
 const mappingRows = ref<OntologyMappingItem[]>([])
 
-const propertyEditorRef = ref<InstanceType<typeof OntologyPropertyEditor> | null>(null)
-const mappingEditorRef = ref<InstanceType<typeof OntologyMappingEditor> | null>(null)
+// 行增删由持有数组的父组件完成（子编辑器通过事件回传，避免直接改 props）
+const addPropertyRow = () => {
+  propertyRows.value.push({
+    property_name: '',
+    display_name: '',
+    description: '',
+    value_type: 'String',
+    enum_ref: '',
+    render_hints: {},
+    is_identifier: propertyRows.value.length === 0,
+    is_title: propertyRows.value.length === 0
+  })
+}
+
+const removePropertyRow = (index: number) => {
+  propertyRows.value.splice(index, 1)
+}
+
+const addMappingRow = () => {
+  mappingRows.value.push({ semantic_config_id: '', column_mappings: {} })
+}
+
+const removeMappingRow = (index: number) => {
+  mappingRows.value.splice(index, 1)
+}
 
 // 领域下拉标签：展示名（API 名）；映射候选组 = 领域绑定的组（未挂领域不限制）
 const domainLabel = (domain: OntologyDomainItem) =>
@@ -100,21 +130,6 @@ watch(visible, value => {
 
 // ---------- 破坏性变更检测 ----------
 
-const normalizeMappings = (rows: OntologyMappingItem[]) =>
-  JSON.stringify(
-    rows
-      .map(row => ({
-        semantic_config_id: (row.semantic_config_id || '').trim(),
-        column_mappings: Object.fromEntries(
-          Object.entries(row.column_mappings || {})
-            .map(([k, v]) => [k.trim(), (v || '').trim()])
-            .filter(([k]) => k)
-            .sort(([a], [b]) => (a ?? '').localeCompare(b ?? ''))
-        )
-      }))
-      .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))
-  )
-
 const destructiveActions = computed(() => {
   const detail = loadedDetail.value
   if (!detail) return []
@@ -126,11 +141,22 @@ const destructiveActions = computed(() => {
   if (JSON.stringify(oldIds) !== JSON.stringify(newIds) || JSON.stringify(oldTitles) !== JSON.stringify(newTitles)) {
     actions.push('主键组合或标题键变更')
   }
-  if (JSON.stringify(detail.mappings || []) !== normalizeMappings(mappingRows.value)) {
+  // 详情行由服务端附带 object_id/binding_type 等附加键，必须与表单行按同一口径规范化后再比较，
+  // 否则对象只要有映射就会误判为「映射变更」，每次编辑都弹破坏性确认。
+  if (haveMappingsChanged(detail.mappings, mappingRows.value)) {
     actions.push('映射变更')
   }
   return actions
 })
+
+// 属性改名/删除时同步映射键（后端按当前属性名校验，键不同步会拒绝提交）
+const onPropertyRenamed = (oldName: string, newName: string) => {
+  renameMappingPropertyKey(mappingRows.value, oldName, newName)
+}
+
+const onPropertyRemoved = (propertyName: string) => {
+  removeMappingPropertyKey(mappingRows.value, propertyName)
+}
 
 // ---------- 提交 ----------
 
@@ -150,11 +176,29 @@ const validateForm = (): string => {
     if (seen.has(name)) return `属性名重复: ${name}`
     seen.add(name)
     if (row.value_type === 'enum' && !row.enum_ref.trim()) return `属性 ${name} 引用枚举类型时必须选择全局枚举`
+    if (row.value_type === 'Decimal' && row.is_identifier) return `属性 ${name} 为 Decimal，浮点/小数类型禁止作为标识属性（主键）`
     if (row.is_identifier) identifierCount += 1
     if (row.is_title) titleCount += 1
   }
   if (identifierCount < 1) return '对象至少需要一个标识属性（主键），禁止用自增行号当主键'
   if (titleCount > 1) return '对象至多一个标题属性'
+  const staleMappingKeys = staleMappingPropertyNames(
+    mappingRows.value,
+    rows.map(row => row.property_name)
+  )
+  if (staleMappingKeys.length > 0) {
+    return `映射引用了不存在的属性：${staleMappingKeys.join('、')}，请先在映射编辑器中修正`
+  }
+  const conflicts = crossMappingPropertyConflicts(
+    mappingRows.value,
+    rows.filter(row => row.is_identifier).map(row => row.property_name.trim())
+  )
+  if (conflicts.length > 0) {
+    const details = conflicts
+      .map(item => `${item.property_name}（${item.config_ids.join(' / ')}）`)
+      .join('；')
+    return `非标识属性只能单源映射：${details}；标识属性才可作为跨源主键，请为属性只保留一个来源模型`
+  }
   return ''
 }
 
@@ -189,7 +233,8 @@ const saveObject = async () => {
         display_name: row.display_name.trim(),
         description: row.description.trim(),
         value_type: row.value_type,
-        enum_ref: row.enum_ref.trim(),
+        // 后端要求值类型非 enum 时不得携带 enum_ref，这里按值类型收敛，避免切换类型后残留旧引用被拒
+        enum_ref: row.value_type === 'enum' ? row.enum_ref.trim() : '',
         render_hints: { ...row.render_hints },
         is_identifier: row.is_identifier,
         is_title: row.is_title
@@ -270,11 +315,17 @@ const saveObject = async () => {
       <div>
         <div class="mb-1.5 flex items-center justify-between">
           <span class="text-xs font-medium text-slate-600">属性集（至少一个标识属性作主键；至多一个标题属性）</span>
-          <el-button size="small" type="primary" link @click="propertyEditorRef?.addRow()">
+          <el-button size="small" type="primary" link @click="addPropertyRow">
             <i class="fa-solid fa-plus text-[11px]"></i> 添加属性
           </el-button>
         </div>
-        <OntologyPropertyEditor ref="propertyEditorRef" :rows="propertyRows" :frozen-names="frozenNames" />
+        <OntologyPropertyEditor
+          :rows="propertyRows"
+          :frozen-names="frozenNames"
+          @property-renamed="onPropertyRenamed"
+          @property-removed="onPropertyRemoved"
+          @remove-row="removePropertyRow"
+        />
       </div>
 
       <!-- 语义模型映射 -->
@@ -286,11 +337,16 @@ const saveObject = async () => {
               层级 = 数据源组 → 语义模型 → 维度映射（不触碰物理表）：口径权威在语义层；每个语义模型映射只能归属一个对象；认证前至少需要一个映射
             </span>
           </div>
-          <el-button size="small" link type="primary" @click="mappingEditorRef?.addRow()">
+          <el-button size="small" link type="primary" @click="addMappingRow">
             <i class="fa-solid fa-plus text-[11px]"></i> 添加映射
           </el-button>
         </div>
-        <OntologyMappingEditor ref="mappingEditorRef" :rows="mappingRows" :properties="propertyRows" :group-ids="domainGroupIds" />
+        <OntologyMappingEditor
+          :rows="mappingRows"
+          :properties="propertyRows"
+          :group-ids="domainGroupIds"
+          @remove-row="removeMappingRow"
+        />
       </div>
     </div>
 

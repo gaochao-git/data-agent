@@ -159,6 +159,7 @@ interface DomainNode {
   domain_id: number | null
   domain_name: string
   domain_label: string
+  description: string
   group_id: string
   is_ungrouped: boolean
   /** 领域下对象数（领域行直接展示，不必展开「对象」分组） */
@@ -320,6 +321,7 @@ const treeData = computed<RootNode[]>(() => {
     domain_id: domain.id,
     domain_name: domain.domain_name,
     domain_label: domain.display_name || domain.domain_name,
+    description: domain.description || '',
     group_id: domain.group_id,
     is_ungrouped: false,
     object_count: (grouped.get(domain.id) || []).length,
@@ -331,6 +333,7 @@ const treeData = computed<RootNode[]>(() => {
     domain_id: null,
     domain_name: '',
     domain_label: UNGROUPED_DOMAIN,
+    description: '未挂业务领域的对象：不继承任何数据源组，建议补齐领域归属。',
     group_id: '',
     is_ungrouped: true,
     object_count: ungrouped.length,
@@ -436,8 +439,9 @@ const currentNodeKey = ref('')
 const selectedNode = ref<TreeRow | null>(null)
 
 const onNodeClick = (data: TreeRow) => {
-  // 根域/领域分组/对象分组节点是导航容器非数据实体，点击不改变右侧详情
-  if (data.kind === 'root' || data.kind === 'group' || data.kind === 'domain-group') return
+  // 根域/对象子树分组/领域分组/空态占位是导航容器或提示节点，点击不改变右侧详情；
+  // 领域节点有独立详情卡（否则点击后右侧空白）。
+  if (data.kind === 'root' || data.kind === 'group' || data.kind === 'domain-group' || data.kind === 'empty') return
   selectedNode.value = data
   currentNodeKey.value = data.row_key
   if (data.kind === 'object') ensureObjectData(data)
@@ -490,6 +494,8 @@ const loadObjects = async () => {
       dataVersion.value += 1
       detailStore.value = {}
       objectLoadState.value = {}
+      // 节点 key 内含版本号，详情缓存已整体失效：按 object_name 找回选中节点并重拉详情
+      restoreObjectSelection()
     } else {
       ElMessage.error(res.msg || '获取本体对象列表失败')
     }
@@ -534,13 +540,25 @@ const openCreate = (domainId: number | null = null) => {
 }
 
 const openEdit = (objectName: string) => {
+  // 右键菜单已置灰，这里兜底防止其他入口（键盘/程序调用）打开 deprecated 对象的编辑表单
+  const item =
+    items.value.find(candidate => candidate.object_name === objectName) ||
+    allObjects.value.find(candidate => candidate.object_name === objectName)
+  if (item?.status === 'deprecated') {
+    ElMessage.warning('已废弃对象为终态不可编辑；如需继续演进，请基于替代对象重建')
+    return
+  }
   formObjectName.value = objectName
   formVisible.value = true
 }
 
 const openStatus = (objectName: string) => {
   const key = Object.keys(detailStore.value).find(candidate => candidate.startsWith(`object:${objectName}:`))
-  statusTarget.value = (key && detailStore.value[key]?.detail) || items.value.find(item => item.object_name === objectName) || null
+  statusTarget.value =
+    (key && detailStore.value[key]?.detail) ||
+    items.value.find(item => item.object_name === objectName) ||
+    allObjects.value.find(item => item.object_name === objectName) ||
+    null
   statusDialogVisible.value = true
 }
 
@@ -551,13 +569,14 @@ const onSaved = async () => {
 }
 
 const removeObject = async (objectName: string, status: OntologyObjectStatus, displayName: string) => {
-  const statusHint =
-    status === 'certified'
-      ? 'certified 对象禁止删除，请先降级或标记废弃。'
-      : '删除后对象、其全部属性与参与的关系将一并移除（软删）。'
+  // 后端禁止删除 certified 对象；前端先拦一道，给出明确处置路径而不是让请求失败
+  if (status === 'certified') {
+    ElMessage.warning('已认证（certified）对象禁止删除：请先降级为试验/草稿，或标记为废弃')
+    return
+  }
   try {
     await ElMessageBox.confirm(
-      `确定删除本体对象「${displayName || objectName}」？${statusHint}`,
+      `确定删除本体对象「${displayName || objectName}」？删除后对象、其全部属性与参与的关系将一并移除（软删）。`,
       '删除本体对象',
       { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
     )
@@ -685,6 +704,8 @@ interface ContextMenuItem {
   label: string
   icon: string
   danger?: boolean
+  // 门禁动作置灰（如 deprecated 对象禁止编辑），仍展示原因避免用户误以为菜单丢了
+  disabled?: boolean
   handler: () => void
 }
 
@@ -712,9 +733,16 @@ const openCtxMenu = (event: MouseEvent, node: TreeRow | null) => {
       { key: 'delete-domain', label: '删除领域', icon: 'fa-trash', danger: true, handler: () => removeDomain(node.domain_name, node.domain_label) }
     )
   } else if (node && node.kind === 'object') {
-    // 对象节点：编辑 / 状态 / 删除
+    // 对象节点：编辑 / 状态 / 删除。deprecated 为终态不可再编辑（后端口径），菜单置灰
+    const deprecated = node.status === 'deprecated'
     menuItems.push(
-      { key: 'edit-object', label: '编辑对象', icon: 'fa-pen', handler: () => openEdit(node.object_name) },
+      {
+        key: 'edit-object',
+        label: deprecated ? '编辑对象（已废弃不可编辑）' : '编辑对象',
+        icon: 'fa-pen',
+        disabled: deprecated,
+        handler: () => openEdit(node.object_name)
+      },
       { key: 'status-object', label: '状态迁移', icon: 'fa-arrow-right-arrow-left', handler: () => openStatus(node.object_name) },
       { key: 'delete-object', label: '删除对象', icon: 'fa-trash', danger: true, handler: () => removeObject(node.object_name, node.status, node.display_name) }
     )
@@ -759,6 +787,22 @@ const findObjectNode = (objectName: string): ObjectNodeData | null => {
     }
   }
   return null
+}
+
+// 列表刷新会整体重建树节点与详情缓存（key 带版本号）：按 object_name 重新定位选中对象，
+// 否则右侧详情卡查旧 key 拿不到缓存会整块空白；对象被筛选条件排除时清空选中。
+const restoreObjectSelection = () => {
+  const current = selectedNode.value
+  if (!current || current.kind !== 'object') return
+  const node = findObjectNode(current.object_name)
+  if (!node) {
+    selectedNode.value = null
+    currentNodeKey.value = ''
+    return
+  }
+  selectedNode.value = node
+  currentNodeKey.value = node.row_key
+  ensureObjectData(node)
 }
 
 // 关系保存/状态/删除后：重拉关系源（领域关系组就地更新，key 不变不塌缩展开状态）；
@@ -1052,6 +1096,38 @@ const onRelationSaved = (objectNames: string[]) => {
           </template>
         </template>
 
+        <!-- 领域详情卡（领域节点是业务域实体，点击后给出归属/绑定组信息，不再整块空白） -->
+        <div v-else-if="selectedNode.kind === 'domain'" class="max-w-xl">
+          <div class="mb-3 flex items-center gap-2">
+            <i
+              :class="[
+                'fa-solid text-[11px]',
+                selectedNode.is_ungrouped ? 'fa-box-open text-slate-400' : 'fa-layer-group text-amber-500'
+              ]"
+            ></i>
+            <span class="text-sm font-medium text-slate-800">{{ selectedNode.domain_label }}</span>
+            <el-tag v-if="selectedNode.is_ungrouped" size="small" type="info" effect="plain">虚拟分组</el-tag>
+          </div>
+          <div class="grid grid-cols-2 gap-x-6 gap-y-1 text-xs text-slate-500">
+            <div>
+              领域 API 名：<span class="font-mono text-slate-700">{{ selectedNode.is_ungrouped ? '-' : selectedNode.domain_name }}</span>
+            </div>
+            <div>
+              绑定数据源组：
+              <span class="text-slate-700">
+                {{ selectedNode.is_ungrouped ? '未归领域对象不继承任何组' : groupNameOf(selectedNode.group_id) }}
+              </span>
+            </div>
+            <div class="col-span-2">对象数：<span class="text-slate-700">{{ selectedNode.object_count }} 个</span></div>
+            <div class="col-span-2">
+              描述：<span class="text-slate-700">{{ selectedNode.description || '-' }}</span>
+            </div>
+            <div class="col-span-2 text-[11px] text-slate-400">
+              对象挂领域后继承其数据源组；右键领域节点可编辑/删除领域，新建对象与关系在领域下「对象」「关系」分组节点右键发起。
+            </div>
+          </div>
+        </div>
+
         <!-- 属性详情卡 -->
         <div v-else-if="selectedNode.kind === 'property'" class="max-w-xl">
           <div class="mb-3 flex items-center gap-2">
@@ -1135,11 +1211,11 @@ const onRelationSaved = (objectNames: string[]) => {
       @saved="onSaved"
     />
 
-    <!-- 状态迁移弹窗 -->
-    <OntologyStatusDialog v-model:visible="statusDialogVisible" :object="statusTarget" :objects="items" @saved="onSaved" />
+    <!-- 状态迁移弹窗：替代对象候选与关系上限都应以全量对象为准，不能被工具栏筛选截断 -->
+    <OntologyStatusDialog v-model:visible="statusDialogVisible" :object="statusTarget" :objects="allObjects" @saved="onSaved" />
 
-    <!-- 关系新建/编辑/状态/删除（右键发起） -->
-    <OntologyRelationForm ref="relationFormRef" :objects="items" @saved="onRelationSaved" />
+    <!-- 关系新建/编辑/状态/删除（右键发起；端点候选/状态上限用全量对象） -->
+    <OntologyRelationForm ref="relationFormRef" :objects="allObjects" @saved="onRelationSaved" />
 
     <!-- 树右键菜单（fixed 浮层，宿主页嵌入时必须 Teleport 防 transform 包含块错位） -->
     <Teleport to="body">
@@ -1153,10 +1229,15 @@ const onRelationSaved = (objectNames: string[]) => {
           v-for="item in ctxMenu.items"
           :key="item.key"
           type="button"
+          :disabled="item.disabled"
           :class="[
             // chat-data 不引 preflight：裸 button 保留浏览器默认样式，须显式重置底色/边框/光标
-            'flex h-8 w-full cursor-pointer items-center gap-2 border-0 px-3 text-xs transition-colors',
-            item.danger ? 'bg-transparent text-red-600 hover:bg-red-50' : 'bg-transparent text-slate-700 hover:bg-slate-100'
+            'flex h-8 w-full items-center gap-2 border-0 px-3 text-xs transition-colors',
+            item.disabled
+              ? 'cursor-not-allowed bg-transparent text-slate-300'
+              : item.danger
+                ? 'cursor-pointer bg-transparent text-red-600 hover:bg-red-50'
+                : 'cursor-pointer bg-transparent text-slate-700 hover:bg-slate-100'
           ]"
           @click="item.handler(); closeCtxMenu()"
         >

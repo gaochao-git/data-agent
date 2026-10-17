@@ -27,6 +27,12 @@ def router_state(monkeypatch):
     original_configs = dict(conversation_router._agent_configs)
     original_completion = dict(conversation_router._completion_handlers)
 
+    class _AllowedDatasourceManager:
+        async def can_access_datasource_async(self, *_args, **_kwargs):
+            return True
+
+    # 数据源组绑定授权：默认放行，授权拒绝专项在 test_conversation_datasource_auth.py
+    monkeypatch.setattr(conversation_router, "get_datasource_manager", lambda: _AllowedDatasourceManager())
     user = SimpleNamespace(user_id="u1", username="用户一")
     monkeypatch.setattr(conversation_router, "get_forwarded_user", lambda _request: user)
     conversation_router._agent_configs.clear()

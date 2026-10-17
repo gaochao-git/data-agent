@@ -5,7 +5,7 @@
  * 关系状态 = 两侧对象状态的较低者（降级自动级联、升级手动迁移）；
  * 连接对象/关联列/基数变更属破坏性，提交前需显式确认。
  */
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   changeAdminOntologyRelationStatus,
@@ -14,7 +14,14 @@ import {
   upsertAdminOntologyRelation
 } from '../../api'
 import type { OntologyObjectItem, OntologyObjectStatus, OntologyPropertyItem, OntologyRelationItem } from '../../types'
-import { ONTOLOGY_NAME_PATTERN, ONTOLOGY_STATUS_META } from './ontologyMeta'
+import {
+  defaultRelationStatusTarget,
+  ONTOLOGY_NAME_PATTERN,
+  ONTOLOGY_STATUS_META,
+  relationStatusTargets,
+  relationStatusUpperBound,
+  type ManualOntologyStatus
+} from './ontologyMeta'
 
 const props = defineProps({
   // 对象清单：端点候选 + 状态上限计算（父面板已加载，直接复用）
@@ -41,11 +48,20 @@ const loadObjectProperties = async (objectName: string) => {
 
 const propertiesOf = (objectName: string): OntologyPropertyItem[] => propertyCache.value.get(objectName) || []
 
+// 保存后作废并重拉端点属性缓存：属性集可能刚被对象编辑弹窗改动过，
+// 缓存只增不减会让关联列候选长期陈旧（甚至引用已删除属性被后端拒绝）。
+const refreshObjectProperties = async (objectName: string) => {
+  if (!objectName) return
+  propertyCache.value.delete(objectName)
+  await loadObjectProperties(objectName)
+}
+
 // 目标侧关联列只能引用标识属性（FK→PK 红线，与后端校验一致）
 const identifiersOf = (objectName: string): string[] =>
   propertiesOf(objectName)
     .filter(p => p.is_identifier)
     .map(p => p.property_name)
+
 
 // ---------- 新建/编辑弹窗 ----------
 
@@ -66,6 +82,23 @@ const formToDisplayName = ref('')
 const formFromVerbalize = ref('')
 const formToVerbalize = ref('')
 const formDescription = ref('')
+
+// 起始侧关联列候选：one_to_one 要求 from 侧列也引用标识属性（两侧都唯一）
+const fromColumnCandidates = computed(() =>
+  formMultiplicity.value === 'one_to_one'
+    ? identifiersOf(formFromObject.value)
+    : propertiesOf(formFromObject.value).map(p => p.property_name)
+)
+
+// 切到 one_to_one 时清掉非标识起始列并提示（属性未加载时跳过，避免误清空）
+watch(formMultiplicity, value => {
+  if (value !== 'one_to_one' || propertiesOf(formFromObject.value).length === 0) return
+  const allowed = new Set(identifiersOf(formFromObject.value))
+  const invalid = formFromColumns.value.filter(name => !allowed.has(name))
+  if (invalid.length === 0) return
+  formFromColumns.value = formFromColumns.value.filter(name => allowed.has(name))
+  ElMessage.warning(`一对一关系的起始侧关联列必须是标识属性，已移除：${invalid.join('、')}`)
+})
 
 // 活跃对象才可作为关系端点（后端同样拒绝 deprecated 端点）
 const activeObjectOptions = computed(() => props.objects.filter(item => item.status !== 'deprecated'))
@@ -172,6 +205,14 @@ const saveRelation = async () => {
     ElMessage.warning('两侧关联列必须等长且一一对应')
     return
   }
+  if (formMultiplicity.value === 'one_to_one') {
+    const allowed = new Set(identifiersOf(formFromObject.value))
+    const invalid = formFromColumns.value.filter(name => !allowed.has(name))
+    if (invalid.length > 0) {
+      ElMessage.warning(`一对一关系的起始侧关联列必须引用起始对象的标识属性：${invalid.join('、')}`)
+      return
+    }
+  }
   let confirmDestructive = false
   if (!creating.value && editingRow && isStructuralChanged(editingRow)) {
     try {
@@ -204,6 +245,9 @@ const saveRelation = async () => {
     if (res.status === 'success') {
       ElMessage.success('保存成功')
       dialogVisible.value = false
+      // 端点属性集可能在本次编辑期间被改过：作废缓存并重拉，避免关联列候选陈旧
+      void refreshObjectProperties(formFromObject.value)
+      void refreshObjectProperties(formToObject.value)
       emit('saved', [formFromObject.value, formToObject.value])
     } else {
       ElMessage.error(res.msg || '保存失败')
@@ -244,35 +288,24 @@ const remove = async (row: OntologyRelationItem) => {
 
 // ---------- 状态迁移（升级手动，上限 = 两侧对象状态的较低者） ----------
 
-const MANUAL_STATUSES: Array<Exclude<OntologyObjectStatus, 'deprecated'>> = ['draft', 'experimental', 'certified']
-
-const statusRankOf = (status: OntologyObjectStatus | undefined): number =>
-  MANUAL_STATUSES.indexOf((status || 'draft') as Exclude<OntologyObjectStatus, 'deprecated'>)
-
 const statusDialogVisible = ref(false)
 const statusSaving = ref(false)
 const statusRow = ref<OntologyRelationItem | null>(null)
-const statusTarget = ref<Exclude<OntologyObjectStatus, 'deprecated'>>('experimental')
+const statusTarget = ref<ManualOntologyStatus>('experimental')
 
 const objectStatusOf = (objectName: string | undefined): OntologyObjectStatus | undefined =>
   props.objects.find(item => item.object_name === objectName)?.status
 
-// 上限 = 两侧对象状态的较低者；任一端废弃时关系只随对象级联，不可手动迁移
-const statusUpperBound = computed<Exclude<OntologyObjectStatus, 'deprecated'> | 'deprecated' | null>(() => {
-  if (!statusRow.value) return null
-  const fromStatus = objectStatusOf(statusRow.value.from_object_name)
-  const toStatus = objectStatusOf(statusRow.value.to_object_name)
-  if (fromStatus === 'deprecated' || toStatus === 'deprecated') return 'deprecated'
-  const bound = Math.min(statusRankOf(fromStatus), statusRankOf(toStatus))
-  return MANUAL_STATUSES[bound] ?? null
-})
+// 上限 = 两侧对象状态的较低者；任一端废弃时关系只随对象级联，不可手动迁移。
+// 对象清单由父面板传全量 allObjects（不受工具栏筛选影响），否则端点被筛掉会退化成 draft 上限、无法升级。
+const statusUpperBound = computed(() =>
+  relationStatusUpperBound(
+    objectStatusOf(statusRow.value?.from_object_name),
+    objectStatusOf(statusRow.value?.to_object_name)
+  )
+)
 
-const statusOptions = computed(() => {
-  const bound = statusUpperBound.value
-  if (!bound || bound === 'deprecated') return []
-  const boundRank = statusRankOf(bound)
-  return MANUAL_STATUSES.filter(status => status !== statusRow.value?.status && statusRankOf(status) <= boundRank)
-})
+const statusOptions = computed(() => relationStatusTargets(statusRow.value?.status, statusUpperBound.value))
 
 const boundHint = computed(() => {
   const bound = statusUpperBound.value
@@ -284,15 +317,22 @@ const boundHint = computed(() => {
 
 const openStatus = (row: OntologyRelationItem) => {
   statusRow.value = row
-  const current = row.status
-  statusTarget.value = (MANUAL_STATUSES.includes(current as Exclude<OntologyObjectStatus, 'deprecated'>)
-    ? current
-    : 'draft') as Exclude<OntologyObjectStatus, 'deprecated'>
+  // 默认选中第一个合法目标（合法目标已排除当前状态）：避免默认值与当前状态相同导致
+  // 「确认迁移」变成无操作提交却仍提示“状态已更新”。
+  statusTarget.value = defaultRelationStatusTarget(row.status, statusUpperBound.value) ?? 'experimental'
   statusDialogVisible.value = true
 }
 
 const confirmStatus = async () => {
   if (!statusRow.value) return
+  if (statusTarget.value === statusRow.value.status) {
+    ElMessage.warning('目标状态不能与当前状态相同，请选择其他目标状态')
+    return
+  }
+  if (!statusOptions.value.includes(statusTarget.value)) {
+    ElMessage.warning('目标状态超出两侧对象状态上限或不可迁移，请刷新后重试')
+    return
+  }
   statusSaving.value = true
   try {
     const res = await changeAdminOntologyRelationStatus(statusRow.value.relation_name, { status: statusTarget.value })
@@ -395,7 +435,7 @@ defineExpose({ openCreate, openEdit, openStatus, remove })
             class="!w-full"
           >
             <el-option
-              v-for="name in propertiesOf(formFromObject).map(p => p.property_name)"
+              v-for="name in fromColumnCandidates"
               :key="name"
               :label="name"
               :value="name"

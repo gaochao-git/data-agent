@@ -10,6 +10,7 @@ from sqlalchemy import BigInteger, DateTime, Index, Integer, SmallInteger, Strin
 from sqlalchemy.dialects.mysql import MEDIUMTEXT
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.sql import func
+
 from utils.logger import get_logger
 
 logger = get_logger(__name__)

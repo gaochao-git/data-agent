@@ -8,6 +8,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import type { UploadFile, UploadInstance } from 'element-plus'
 import { getAdminPlugins, installPlugin, setAdminPluginEnabled, uninstallPlugin } from '../api'
 import type { PluginInfo } from '../types'
+import AdminPanelToolbar from './AdminPanelToolbar.vue'
 
 // 与后端 installer 的 zip 上限一致（50MB）
 const PLUGIN_UPLOAD_MAX_BYTES = 50 * 1024 * 1024

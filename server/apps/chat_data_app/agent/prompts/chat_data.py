@@ -89,7 +89,7 @@ ENVIRONMENT_BLOCK = """## 环境
 /mnt/
 ├── user-data/
 │   ├── workspace/   中间文件写入该工作区（可读写，脚本、草稿、中间文件）
-│   │   └── semantic/  本轮启用语义模型的只读 YAML 快照（文件名 {模型名}__{id后缀}.yaml，由系统预物化，模型不可写）；目录文件二选一（系统生成，只读）：_ontology_catalog.yaml（存在时优先读——业务对象→属性/关系/模型映射，mappings.file 即取数模型快照文件名，对象间 from/to 列告诉你怎么 join）或 _semantic_catalog.yaml（每个启用模型一条 file/description/business_notes）
+│   │   └── semantic/  本轮启用语义模型的只读 YAML 快照（文件名 {模型名}__{id后缀}.yaml，由系统预物化，模型不可写）；目录文件（系统生成，只读）：_ontology_catalog.yaml（存在时优先读——models 列出全部启用模型与快照文件名，objects 是已建本体对象子集，relations 的 from/to 列用于推导 join；可能带 truncated: true，其余对象用 file_grep 检索；关系列是尽力翻译的物理列，unresolved: true 表示必须回读模型 YAML 确认）或 _semantic_catalog.yaml（存在时表示本体目录未接管，每个启用模型一条 file/description/business_notes；本体目录存在时该文件缺失属正常）
 │   ├── outputs/     给用户展示的文件产物区（可读写，最终交付文件）
 │   │   ├── query_result/  查询结果卸载文件（系统写入，按工具返回的 result_path 读取）
 │   │   └── .tool-offload/ 其它工具大结果卸载文件（系统写入，按工具返回的 result_path 读取）
@@ -145,7 +145,7 @@ DATA_EXPLORE_SUBAGENT_PROMPT = f"""# 角色
 ## 工作方式
 - 严格围绕任务书目标收集，任务书没要求的扩展动作不要做。
 - 任务书指定了相关技能（含用户自定义技能）时，先 `file_read` 其 `SKILL.md` 并严格按其执行；任务书未提及的技能不要虚构路径。
-- 涉及语义模型时，第一步先用 `file_read` 读取 `{builtin_skill_file(DATA_ANALYZING_SKILL)}` 并严格按其执行；当前数据源组全部启用语义模型的 YAML 已预物化到 `/mnt/user-data/workspace/semantic/`（含语义资产目录 _semantic_catalog.yaml，检索先读）。
+- 涉及语义模型时，第一步先用 `file_read` 读取 `{builtin_skill_file(DATA_ANALYZING_SKILL)}` 并严格按其执行；当前数据源组全部启用语义模型的 YAML 已预物化到 `/mnt/user-data/workspace/semantic/`（`_ontology_catalog.yaml` 的 models 段是全部启用模型索引、objects 段是本体对象导航子集；目录可能 `truncated: true`，其余对象用 `file_grep` 检索；`_semantic_catalog.yaml` 可能因本体目录接管而缺失，属正常）。
 - 遍历多模型/多表/多指标做批量盘点时，逐项收集，按任务书要求的结构整理。
 
 ## 进度与收尾

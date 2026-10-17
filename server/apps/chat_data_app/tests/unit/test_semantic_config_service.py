@@ -410,9 +410,7 @@ def test_binding_guard_blocks_delete_and_dimension_removal(monkeypatch):
     assert dimension_calls == [("sc_a", set(), "更新")]
 
     # 删维度（含改名）触发差集守护：旧 {订单状态, 城市} → 新 {订单状态}
-    config = _base_config(
-        dimensions=[{"name": "订单状态", "table": "orders"}, {"name": "城市", "table": "orders"}]
-    )
+    config = _base_config(dimensions=[{"name": "订单状态", "table": "orders"}, {"name": "城市", "table": "orders"}])
     service2, _, dao2 = _build_service([config])
     asyncio.run(service2.update_async("ds_a", "sc_a", dimensions=[{"name": "订单状态", "table": "orders"}]))
     assert dimension_calls[-1] == ("sc_a", {"城市"}, "更新")

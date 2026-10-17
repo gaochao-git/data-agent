@@ -15,13 +15,13 @@ import yaml
 
 from utils.logger import get_logger
 
-from .chat_data_ossie_converter import ChatDataToOssieConverter
-from .semantic_config_service import SemanticConfigService, get_semantic_config_service
 from ...ontology.ontology_injection import (
     ONTOLOGY_CATALOG_FILE_NAME,
     ONTOLOGY_SNAPSHOT_DIR,
     materialize_ontology_catalog_async,
 )
+from .chat_data_ossie_converter import ChatDataToOssieConverter
+from .semantic_config_service import SemanticConfigService, get_semantic_config_service
 
 logger = get_logger(__name__)
 
@@ -404,6 +404,16 @@ async def _render_selected_configs(
     return entries, directory, cache_hits, failed_ids
 
 
+async def _prune_empty_scope_semantic_files(workspace_runtime: Any, prune_stale: bool) -> None:
+    """空启用集时清空语义目录残留。
+
+    ``prune_stale`` 只在调用方传入“全量范围”语义时开启；空范围即保留集为空，
+    语义目录是系统受管目录，只剩 *.yaml 需要清理（含本体/语义资产目录）。
+    """
+    if prune_stale and workspace_runtime is not None:
+        await _prune_stale_semantic_files(workspace_runtime, set())
+
+
 async def materialize_runtime_semantic_models(
     *,
     workspace_runtime: Any,
@@ -434,6 +444,9 @@ async def materialize_runtime_semantic_models(
     """
     normalized_ids = _normalize_config_ids(semantic_config_ids)
     if not normalized_ids:
+        # 空启用集也必须清理：否则上一轮物化的 _ontology_catalog.yaml /
+        # _semantic_catalog.yaml 会残留，被后续 run 当作有效目录读取。
+        await _prune_empty_scope_semantic_files(workspace_runtime, prune_stale)
         return {"directory": [], "paths": {}, "configs": {}, "failed_ids": []}
 
     # 字段数据字典按数据源整体拉取一次，所有模型复用；

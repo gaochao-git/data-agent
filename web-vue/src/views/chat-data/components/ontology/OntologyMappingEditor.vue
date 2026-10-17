@@ -6,7 +6,7 @@
  * 级联值 [groupId, configId] 由 optionOf 反推），实体锚点（映射维度必须同表）由后端校验。
  * 映射随对象表单整体提交。
  */
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted } from 'vue'
 import type { PropType } from 'vue'
 import { ElMessage } from 'element-plus'
 import type { OntologyMappingItem, OntologyPropertyItem, SemanticConfigItem } from '../../types'
@@ -14,7 +14,7 @@ import { mappingIdentityText } from './ontologyMeta'
 import { useSemanticConfigOptions } from './useSemanticConfigOptions'
 
 const props = defineProps({
-  // 映射行（父组件持有，就地编辑）
+  // 映射行（父组件持有；子组件只改行内字段，增删行通过事件交给父组件）
   rows: { type: Array as PropType<OntologyMappingItem[]>, required: true },
   // 对象属性集：字段映射的键候选
   properties: { type: Array as PropType<OntologyPropertyItem[]>, default: () => [] },
@@ -22,7 +22,9 @@ const props = defineProps({
   groupIds: { type: Array as PropType<string[]>, default: () => [] }
 })
 
-const { options, loading: configsLoading, loaded: configsLoaded, load, optionOf, groupedOptions } =
+const emit = defineEmits<{ removeRow: [index: number] }>()
+
+const { loading: configsLoading, loaded: configsLoaded, load, optionOf, groupedOptions } =
   useSemanticConfigOptions()
 
 onMounted(() => {
@@ -89,11 +91,25 @@ const prefillMappings = (row: OntologyMappingItem) => {
 
 // ---------- 字段映射 ----------
 
-// 已被其他映射行占用的属性键从下拉中排除，避免同键覆盖
+// 已在其他映射行使用的属性：非标识属性只能单源映射（标识属性可作跨源主键，允许多映射）
+const usedByOtherMappings = (propertyName: string, mapping: OntologyMappingItem) =>
+  props.rows.some(
+    other =>
+      other !== mapping &&
+      Object.prototype.hasOwnProperty.call(other.column_mappings || {}, propertyName) &&
+      !props.properties.some(prop => prop.property_name === propertyName && prop.is_identifier)
+  )
+
+// 已被其他映射行占用的非标识属性键从下拉中排除，避免提交时被后端单源规则拒绝
 const availablePropertyNames = (mapping: OntologyMappingItem, currentKey: string) =>
   props.properties
     .map(p => p.property_name)
-    .filter(name => name && (name === currentKey || !(name in (mapping.column_mappings || {}))))
+    .filter(
+      name =>
+        name &&
+        (name === currentKey ||
+          (!(name in (mapping.column_mappings || {})) && !usedByOtherMappings(name, mapping)))
+    )
 
 // 改键保留原值：先取出旧值，删旧键再写新键
 const renameMappingKey = (mapping: OntologyMappingItem, oldKey: string, newKey: string) => {
@@ -119,18 +135,11 @@ const removeMapping = (mapping: OntologyMappingItem, key: string) => {
 
 // ---------- 行管理 ----------
 
-const addRow = () => {
-  props.rows.push({
-    semantic_config_id: '',
-    column_mappings: {}
-  })
-}
-
+// 增删由父组件持有数组完成（子组件不直接改 props）：
+// 添加按钮在父组件，删除通过事件回传索引。
 const removeRow = (index: number) => {
-  props.rows.splice(index, 1)
+  emit('removeRow', index)
 }
-
-defineExpose({ addRow })
 </script>
 
 <template>

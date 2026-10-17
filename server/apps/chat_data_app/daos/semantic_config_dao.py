@@ -7,6 +7,7 @@ from typing import Any
 
 from sqlalchemy import Insert, and_, case, func, or_, select, update
 from sqlalchemy.dialects.mysql import insert as mysql_insert
+
 from utils.logger import get_logger
 from utils.models import SemanticConfig
 
@@ -189,6 +190,25 @@ class SemanticConfigDao:
             )
         return {str(row) for row in rows}
 
+    async def get_config_group_ids_async(self, config_ids: list[str]) -> dict[str, str]:
+        """按 semantic_config_id 批量读取所属数据源组（本体映射组锚点校验用）。
+
+        返回 {semantic_config_id: group_id}；软删/不存在的 ID 不出现在结果中
+        （调用方按缺失区分「模型不存在」与「组不一致」两种报错）。
+        """
+        ids = {str(config_id).strip() for config_id in config_ids if str(config_id).strip()}
+        if not ids:
+            return {}
+        async with session_scope() as session:
+            rows = (
+                await session.execute(
+                    select(SemanticConfig.semantic_config_id, SemanticConfig.group_id).where(
+                        SemanticConfig.semantic_config_id.in_(ids), SemanticConfig.delete_flag == 0
+                    )
+                )
+            ).all()
+        return {str(config_id): str(group_id or "") for config_id, group_id in rows}
+
     async def get_config_dimensions_async(self, config_ids: list[str]) -> dict[str, dict[str, str]]:
         """按 ID 批量读取语义模型维度索引（本体映射维度校验用，跨组全局查询）。
 
@@ -200,15 +220,12 @@ class SemanticConfigDao:
             return {}
         async with session_scope() as session:
             rows = (
-                (
-                    await session.execute(
-                        select(SemanticConfig.semantic_config_id, SemanticConfig.dimensions_json).where(
-                            SemanticConfig.semantic_config_id.in_(ids), SemanticConfig.delete_flag == 0
-                        )
+                await session.execute(
+                    select(SemanticConfig.semantic_config_id, SemanticConfig.dimensions_json).where(
+                        SemanticConfig.semantic_config_id.in_(ids), SemanticConfig.delete_flag == 0
                     )
                 )
-                .all()
-            )
+            ).all()
         index: dict[str, dict[str, str]] = {}
         for config_id, dimensions_json in rows:
             dimensions = _load_json(dimensions_json, [])

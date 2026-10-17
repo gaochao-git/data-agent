@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 import yaml
+
 from apps.chat_data_app.services.ontology import ontology_injection
 from apps.chat_data_app.services.semantic.run import semantic_materializer
 
@@ -99,6 +100,29 @@ def _bundle() -> dict[str, Any]:
     }
 
 
+def _render(bundle: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+    content = ontology_injection._render_catalog(
+        bundle,
+        kwargs.pop("config_names", {}),
+        kwargs.pop("dimension_columns", None),
+        kwargs.pop("domain_names", None),
+        kwargs.pop("model_files", None),
+        kwargs.pop("configs", None),
+    )
+    assert not kwargs, f"未消费的渲染参数: {sorted(kwargs)}"
+    return yaml.safe_load(content)
+
+
+def _patch_bundle(monkeypatch, bundle: dict[str, Any] | None = None) -> dict[str, Any]:
+    resolved = bundle or _bundle()
+
+    async def fake_bundle(config_ids):
+        return resolved
+
+    monkeypatch.setattr(ontology_injection.OntologyDao, "load_injection_bundle_async", staticmethod(fake_bundle))
+    return resolved
+
+
 @pytest.fixture()
 def enabled(monkeypatch):
     monkeypatch.setenv("CHAT_DATA_ONTOLOGY_INJECTION_ENABLED", "1")
@@ -117,13 +141,14 @@ _DIMENSION_COLUMNS = {
 
 
 def test_render_catalog_shapes_objects_and_relations():
-    content = ontology_injection._render_catalog(
+    doc = _render(
         _bundle(),
-        {"sc_order": "订单模型", "sc_user": "用户模型"},
-        _DIMENSION_COLUMNS,
+        config_names={"sc_order": "订单模型", "sc_user": "用户模型"},
+        dimension_columns=_DIMENSION_COLUMNS,
         model_files={"sc_order": "订单模型__1234.yaml", "sc_user": "用户模型__5678.yaml"},
     )
-    doc = yaml.safe_load(content)
+    # 未传 configs 时不渲染 models 段（生产链路必传 runtime configs）
+    assert doc["models"] == []
     assert [obj["object"] for obj in doc["objects"]] == ["order", "user"]
     order = doc["objects"][0]
     assert order["display_name"] == "订单"
@@ -139,33 +164,254 @@ def test_render_catalog_shapes_objects_and_relations():
     # 关系列两级翻译：属性 user_id → 维度（下单用户/用户编号）→ 物理列
     assert rel["from_columns"] == ["USER_ID"]
     assert rel["to_columns"] == ["UID"]
+    assert rel["from_columns_by_model"] == {"sc_order": ["USER_ID"]}
+    assert rel["to_columns_by_model"] == {"sc_user": ["UID"]}
+    # 单映射全部解析成功时不出现 unresolved 噪声
+    assert "unresolved" not in rel
+    # 关系条目补齐 description/status 字段
+    assert "description" in rel and "status" in rel
+
+
+def test_render_catalog_models_section_lists_all_enabled_models():
+    """models 段是全部启用模型索引：停用/重复剔除，未建本体对象的模型也在其中。"""
+    configs = [
+        {
+            "id": "sc_order",
+            "name": "订单模型",
+            "enabled": True,
+            "description": "订单分析",
+            "business_notes": "口径说明",
+        },
+        {"id": "sc_user", "name": "用户模型", "enabled": True, "semantic_config_desc": "用户分析"},
+        {"id": "sc_orphan", "name": "未建对象模型", "enabled": True, "description": "没有本体对象"},
+        {"id": "sc_off", "name": "停用模型", "enabled": False},
+        {"id": "sc_order", "name": "重复模型", "enabled": True},
+    ]
+    doc = _render(
+        _bundle(),
+        dimension_columns=_DIMENSION_COLUMNS,
+        model_files={"sc_order": "订单模型__order.yaml", "sc_user": "用户模型__user.yaml"},
+        configs=configs,
+    )
+    models = doc["models"]
+    assert [model["semantic_config_id"] for model in models] == ["sc_order", "sc_orphan", "sc_user"]
+    assert models[0] == {
+        "semantic_config_id": "sc_order",
+        "name": "订单模型",
+        "file": "订单模型__order.yaml",
+        "description": "订单分析",
+        "business_notes": "口径说明",
+    }
+    # 未建对象的启用模型也保留 file/description 索引，二选一不丢信息
+    orphan = models[1]
+    assert orphan["name"] == "未建对象模型" and orphan["file"] == ""
+    assert orphan["description"] == "没有本体对象"
+    # 停用模型不出现
+    assert "sc_off" not in {model["semantic_config_id"] for model in models}
+    # comment 说明 models/objects 的关系
+    assert "models 是全部启用模型索引" in doc["comment"]
+    assert "模型可能不在 objects 中" in doc["comment"]
 
 
 def test_translate_keeps_unknown_dimension_name():
-    """维度/映射任一级未知时保留原文（等价映射天然兼容）。"""
-    columns = ontology_injection._translate_to_physical_columns(
+    """维度/映射任一级未知时保留原文，并标记未解析（等价映射天然兼容但不能当已验证）。"""
+    columns, unresolved = ontology_injection._translate_to_physical_columns(
         ["user_id"], [{"semantic_config_id": "sc_user", "column_mappings": {"user_id": "用户编号"}}], _DIMENSION_COLUMNS
     )
     assert columns == ["UID"]
-    fallback = ontology_injection._translate_to_physical_columns(
+    assert unresolved is False
+    fallback, fallback_unresolved = ontology_injection._translate_to_physical_columns(
         ["raw_col"], [{"semantic_config_id": "sc_user", "column_mappings": {}}], _DIMENSION_COLUMNS
     )
     assert fallback == ["raw_col"]
+    assert fallback_unresolved is True
+
+
+def _multi_mapping_bundle(mappings: list[dict[str, Any]]) -> dict[str, Any]:
+    bundle = _bundle()
+    bundle["mappings"] = mappings
+    return bundle
+
+
+def test_multi_mapping_translation_is_deterministic_and_never_mixes_models():
+    """多模型绑定时用「同一条映射」的 config_id 翻译，且行序不影响输出。"""
+    mappings = [
+        # 第一条 column_mappings 为空：旧实现会跳过它取列，却仍用 mappings[0] 的 config_id 查维度
+        {"object_id": 1, "semantic_config_id": "sc_a", "column_mappings": {}},
+        {"object_id": 1, "semantic_config_id": "sc_b", "column_mappings": {"user_id": "用户编号"}},
+        {"object_id": 2, "semantic_config_id": "sc_user", "column_mappings": {"user_id": "用户编号"}},
+    ]
+    dimension_columns = {
+        "sc_a": {"用户编号": "USER_FROM_A"},
+        "sc_b": {"用户编号": "UID"},
+        "sc_user": {"用户编号": "UID"},
+    }
+    for ordered in (mappings, list(reversed(mappings))):
+        doc = _render(_multi_mapping_bundle(ordered), dimension_columns=dimension_columns)
+        rel = doc["relations"][0]
+        # 旧实现会输出 sc_a 的 USER_FROM_A（串模型）；正确结果必须来自 sc_b
+        assert rel["from_columns"] == ["UID"]
+        assert rel["from_columns_by_model"] == {"sc_b": ["UID"]}
+        assert rel["to_columns"] == ["UID"]
+        assert rel["to_columns_by_model"] == {"sc_user": ["UID"]}
+        # 空 column_mappings 的映射行不渲染（对象上只剩 sc_b）
+        assert [mapping["semantic_config_id"] for mapping in doc["objects"][0]["mappings"]] == ["sc_b"]
+
+
+def test_relation_marks_unresolved_when_column_falls_back():
+    """属性未映射 / 维度只有 expression 时保留原文，并置 unresolved 供模型回读 YAML。"""
+    bundle = _bundle()
+    bundle["mappings"] = [
+        # from 侧 sc_order 没有 user_id 映射 → 回退原始属性名
+        {"object_id": 1, "semantic_config_id": "sc_order", "column_mappings": {"amount": "订单金额"}},
+        # to 侧映射到「用户编号」，但该维度是 expression 无物理列 → 回退维度名
+        {"object_id": 2, "semantic_config_id": "sc_user", "column_mappings": {"user_id": "用户编号"}},
+    ]
+    doc = _render(
+        bundle,
+        dimension_columns={"sc_order": {"订单金额": "AMOUNT"}, "sc_user": {}},
+    )
+    rel = doc["relations"][0]
+    assert rel["from_columns"] == ["user_id"]
+    assert rel["to_columns"] == ["用户编号"]
+    assert rel["from_columns_by_model"] == {"sc_order": ["user_id"]}
+    assert rel["to_columns_by_model"] == {"sc_user": ["用户编号"]}
+    assert rel["unresolved"] is True
+
+
+def test_object_mappings_filter_empty_and_object_survives():
+    """空 column_mappings 的映射行从对象条目剔除，对象本身保留。"""
+    bundle = _bundle()
+    bundle["mappings"] = [
+        {"object_id": 1, "semantic_config_id": "sc_empty", "column_mappings": {}},
+        {"object_id": 1, "semantic_config_id": "sc_order", "column_mappings": {"order_id": "订单编号"}},
+        {"object_id": 2, "semantic_config_id": "sc_user", "column_mappings": {}},
+    ]
+    doc = _render(bundle)
+    assert [obj["object"] for obj in doc["objects"]] == ["order", "user"]
+    assert [mapping["semantic_config_id"] for mapping in doc["objects"][0]["mappings"]] == ["sc_order"]
+    # user 只有空映射：对象保留，mappings 为空列表而不是 {}
+    assert doc["objects"][1]["mappings"] == []
+
+
+def test_relations_sorted_by_name_and_carry_description_status():
+    bundle = _bundle()
+    bundle["relations"] = [
+        dict(
+            bundle["relations"][0],
+            relation_name="order_belongs_to_user",
+            description="订单归属用户",
+            status="certified",
+        ),
+        dict(
+            bundle["relations"][0],
+            relation_name="aaa_user_has_orders",
+            description="用户拥有订单",
+            status="experimental",
+        ),
+    ]
+    doc = _render(bundle, dimension_columns=_DIMENSION_COLUMNS)
+    assert [rel["name"] for rel in doc["relations"]] == ["aaa_user_has_orders", "order_belongs_to_user"]
+    assert doc["relations"][0]["description"] == "用户拥有订单"
+    assert doc["relations"][0]["status"] == "experimental"
+    assert doc["relations"][1]["description"] == "订单归属用户"
+    assert doc["relations"][1]["status"] == "certified"
+
+
+def test_properties_carry_enum_ref_and_description():
+    bundle = _bundle()
+    bundle["properties"][0].update({"value_type": "enum", "enum_ref": "order_status", "description": "订单状态"})
+    doc = _render(bundle)
+    props = {prop["name"]: prop for prop in doc["objects"][0]["properties"]}
+    assert props["order_id"]["enum_ref"] == "order_status"
+    assert props["order_id"]["description"] == "订单状态"
+    # 非 enum 属性不带 enum_ref 噪声
+    assert "enum_ref" not in props["amount"]
+
+
+def _large_bundle(object_count: int = 20, property_count: int = 40) -> dict[str, Any]:
+    objects = []
+    properties = []
+    for index in range(object_count):
+        object_id = index + 1
+        objects.append(
+            {
+                "id": object_id,
+                "object_name": f"obj_{index:02d}",
+                "display_name": f"对象{index:02d}",
+                "status": "certified",
+                "description": f"第 {index} 个对象",
+            }
+        )
+        for prop_index in range(property_count):
+            properties.append(
+                {
+                    "object_id": object_id,
+                    "property_name": f"prop_{prop_index:02d}",
+                    "display_name": f"属性{prop_index:02d}",
+                    "value_type": "String",
+                    "is_identifier": prop_index == 0,
+                    "is_title": False,
+                }
+            )
+    relations = [
+        {
+            "relation_name": "rel_keep",
+            "from_object_id": 1,
+            "to_object_id": 2,
+            "from_columns": ["prop_00"],
+            "to_columns": ["prop_00"],
+            "multiplicity": "many_to_one",
+        },
+        {
+            "relation_name": "rel_dropped",
+            "from_object_id": 1,
+            "to_object_id": object_count,
+            "from_columns": ["prop_00"],
+            "to_columns": ["prop_00"],
+            "multiplicity": "many_to_one",
+        },
+    ]
+    return {"objects": objects, "properties": properties, "relations": relations, "mappings": []}
+
+
+def test_catalog_truncates_objects_by_character_budget():
+    """超预算时按对象名顺序截断，只保留截断后对象间的关系，models 照常输出。"""
+    bundle = _large_bundle()
+    doc = _render(
+        bundle,
+        model_files={"sc_order": "订单模型__order.yaml"},
+        configs=[{"id": "sc_order", "name": "订单模型", "enabled": True, "description": "订单分析"}],
+    )
+    assert doc["truncated"] is True
+    assert doc["omitted_objects"] > 0
+    assert len(doc["objects"]) + doc["omitted_objects"] == len(bundle["objects"])
+    assert len(doc["objects"]) < len(bundle["objects"])
+    kept_names = [obj["object"] for obj in doc["objects"]]
+    assert kept_names == sorted(kept_names)
+    # 截断后只保留两端都在目录里的关系（rel_dropped 的 to 对象已被截掉）
+    assert [rel["name"] for rel in doc["relations"]] == ["rel_keep"]
+    # models 段很小，不受截断影响
+    assert [model["semantic_config_id"] for model in doc["models"]] == ["sc_order"]
+
+
+def test_catalog_has_no_truncation_fields_within_budget():
+    doc = _render(_bundle(), dimension_columns=_DIMENSION_COLUMNS)
+    assert "truncated" not in doc
+    assert "omitted_objects" not in doc
 
 
 def test_materialize_writes_catalog_and_counts_objects(enabled, monkeypatch):
     runtime = _FakeRuntime()
-
-    async def fake_bundle(config_ids):
-        assert set(config_ids) == {"sc_order", "sc_user"}
-        return _bundle()
-
-    monkeypatch.setattr(ontology_injection.OntologyDao, "load_injection_bundle_async", staticmethod(fake_bundle))
+    _patch_bundle(monkeypatch)
     count = asyncio.run(
         ontology_injection.materialize_ontology_catalog_async(
             runtime,
             ["sc_order", "sc_user"],
-            configs=[],
+            configs=[
+                {"id": "sc_order", "name": "订单模型", "enabled": True, "description": "订单分析"},
+                {"id": "sc_user", "name": "用户模型", "enabled": True},
+            ],
             model_files={"sc_order": "订单模型__1234.yaml", "sc_user": "用户模型__5678.yaml"},
         )
     )
@@ -177,6 +423,8 @@ def test_materialize_writes_catalog_and_counts_objects(enabled, monkeypatch):
     doc = yaml.safe_load(runtime.written[path])
     assert len(doc["objects"]) == 2
     assert doc["objects"][0]["mappings"][0]["file"] == "订单模型__1234.yaml"
+    # 顶层 models 覆盖全部启用模型（含对象覆盖不到的模型）
+    assert [model["semantic_config_id"] for model in doc["models"]] == ["sc_order", "sc_user"]
     # 旧版独立 ontology/ 目录残留被顺手清理
     assert runtime.deleted == [ontology_injection.ONTOLOGY_LEGACY_CATALOG_PATH]
 
@@ -198,6 +446,22 @@ def test_materialize_swallows_dao_errors(enabled, monkeypatch):
     monkeypatch.setattr(ontology_injection.OntologyDao, "load_injection_bundle_async", staticmethod(broken_bundle))
     count = asyncio.run(ontology_injection.materialize_ontology_catalog_async(runtime, ["sc_x"], configs=[]))
     assert count == 0
+
+
+def test_materialize_survives_legacy_cleanup_sandbox_denial(enabled, monkeypatch):
+    """旧目录清理被沙箱拒绝只记一次 info，不影响目录写入与返回值。"""
+    monkeypatch.setattr(ontology_injection, "_legacy_cleanup_denied_logged", False)
+
+    class _DeniedRuntime(_FakeRuntime):
+        async def delete_internal_text_files(self, path):
+            raise ValueError(f"路径不在允许范围: {path}")
+
+    runtime = _DeniedRuntime()
+    _patch_bundle(monkeypatch)
+    count = asyncio.run(ontology_injection.materialize_ontology_catalog_async(runtime, ["sc_order"], configs=[]))
+    assert count == 2
+    assert runtime.written
+    assert ontology_injection._legacy_cleanup_denied_logged is True
 
 
 def test_prematerialize_invokes_ontology_injection(monkeypatch, enabled):

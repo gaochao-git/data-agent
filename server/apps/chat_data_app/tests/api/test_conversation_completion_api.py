@@ -155,6 +155,13 @@ async def fake_checkpointer():
 def _patch_completion_dependencies(monkeypatch, graph):
     handler_module = sys.modules[conversation_router._completion_handlers["chat_data"].__module__]
 
+    class _AllowedDatasourceManager:
+        async def can_access_datasource_async(self, *_args, **_kwargs):
+            return True
+
+    # 数据源组绑定授权：completion 现在会校验机构权限，测试默认放行
+    monkeypatch.setattr(conversation_router, "get_datasource_manager", lambda: _AllowedDatasourceManager())
+
     async def fake_get_agent_id(conversation_id, user_id=None):
         return "chat_data" if conversation_id.startswith("conv_") else None
 
@@ -364,6 +371,8 @@ class ToolCallingLLM:
 
 def test_completion_api_runs_real_validate_dsl_action_with_structured_having(client, auth_headers, monkeypatch):
     manager = FakeDatasourceManager()
+    # completion 绑定校验会取数据源管理器；与执行侧共用同一 fake，ds_a 视为已授权
+    monkeypatch.setattr(conversation_router, "get_datasource_manager", lambda: manager)
     semantic_service = FakeSemanticConfigService(manager)
     datasource = manager.datasources["ds_a"]
     datasource["ds_tables"].append(

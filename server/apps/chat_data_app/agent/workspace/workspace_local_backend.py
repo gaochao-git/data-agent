@@ -305,12 +305,9 @@ def _write_local_text_file(
         allow_managed_semantic_model_write=allow_managed_semantic_model_write,
     )
     if allow_managed_semantic_model_write and (
-        not is_managed_semantic_model_workspace_path(workspace_root, target)
-        or target.suffix.lower() != ".yaml"
+        not is_managed_semantic_model_workspace_path(workspace_root, target) or target.suffix.lower() != ".yaml"
     ):
-        raise ValueError(
-            "内部系统写入只允许 /mnt/user-data/workspace/semantic/ 下的 YAML 文件"
-        )
+        raise ValueError("内部系统写入只允许 /mnt/user-data/workspace/semantic/ 下的 YAML 文件")
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary_path: Path | None = None
     try:

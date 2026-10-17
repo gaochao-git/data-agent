@@ -25,20 +25,24 @@ ALLOWED_VALUE_TYPES = (*BUILTIN_VALUE_TYPES, VALUE_TYPE_ENUM)
 NON_IDENTIFIER_VALUE_TYPES = ("Decimal",)
 
 OBJECT_STATUSES = ("draft", "experimental", "certified", "deprecated")
-ACTIVE_STATUSES = ("draft", "experimental", "certified")
+DOMAIN_NAME_MAX_LENGTH = 64  # 落库列 chat_data_ontology_domain.domain_name = varchar(64)
 RELATION_MULTIPLICITIES = ("many_to_one", "one_to_one")
 RENDER_HINT_KEYS = ("searchable", "sortable", "low_cardinality")
 
 BINDING_TYPE_SEMANTIC = "semantic"
 
-_NAME_RULE_MSG = "仅允许字母、数字、下划线，长度 1-128"
+API_NAME_MAX_LENGTH = 128
 
 
-def validate_api_name(name: str, label: str) -> str:
-    """API 名（对象/属性/关系共用）格式校验，返回规范化名称。"""
+def validate_api_name(name: str, label: str, *, max_length: int = API_NAME_MAX_LENGTH) -> str:
+    """API 名（对象/属性/关系/领域共用）格式校验，返回规范化名称。
+
+    max_length 默认 128（对象/属性/关系落库列长度一致）；领域名落库列仅 64，
+    调用方必须显式传入，避免通过校验后写库触发 StatementError。
+    """
     text = str(name or "").strip()
-    if not API_NAME_PATTERN.match(text):
-        raise OntologyNameInvalidError(f"{label} {_NAME_RULE_MSG}")
+    if len(text) > max_length or not API_NAME_PATTERN.match(text):
+        raise OntologyNameInvalidError(f"{label} 仅允许字母、数字、下划线，长度 1-{max_length}")
     return text
 
 
@@ -124,10 +128,7 @@ def _validate_property_item(raw: Any, seen: set[str]) -> dict[str, Any]:
         raise _invalid(f"属性 {name} 值类型非 enum 时不能携带 enum_ref")
     is_identifier = bool(raw.get("is_identifier"))
     if is_identifier and value_type in NON_IDENTIFIER_VALUE_TYPES:
-        raise _invalid(
-            f"属性 {name} 值类型为 {value_type}，禁止作为标识属性（is_identifier）："
-            "浮点/小数类型不可做主键"
-        )
+        raise _invalid(f"属性 {name} 值类型为 {value_type}，禁止作为标识属性（is_identifier）：浮点/小数类型不可做主键")
     return {
         "property_name": name,
         "display_name": _normalized_text(raw.get("display_name")),

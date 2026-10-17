@@ -33,6 +33,7 @@ from ..agent.run.completion_options import parse_file_selections
 from ..agent.workspace.runtime_skill_snapshot import build_runtime_skill_snapshot_async
 from ..agent_run_support import materialize_conversation_semantic_models
 from ..services import conversation_service as conversation
+from ..services.datasource.manager import get_datasource_manager
 
 logger = get_logger(__name__)
 
@@ -318,6 +319,9 @@ async def create_conversation(request: CreateConversationRequest, req: Request) 
                 msg=f"未知的 agent_id: {request.agent_id}", code=ErrorCode.CHATDATA_UNKNOWN_AGENT, status="error"
             )
         normalized_datasource_id = str(request.datasource_id or "").strip()
+        access_denied = await _ensure_datasource_group_access(normalized_datasource_id, user_id, username)
+        if access_denied:
+            return access_denied
         result = await conversation.create(request.agent_id, user_id, datasource_id=normalized_datasource_id or None)
         conversation_id = str(result.get("id") or "")
         if request.agent_id == AGENT_ID:
@@ -666,8 +670,31 @@ def _validate_completion_request(conversation_id: str, request: CompletionReques
     return None
 
 
+async def _ensure_datasource_group_access(datasource_id: str, user_id: str, username: str) -> JSONResponse | None:
+    """校验当前用户对数据源组的访问权限；无权限时返回 403 业务响应。
+
+    会话绑定数据源组会把该组语义模型快照与本体目录物化进用户工作区（元数据暴露面），
+    因此绑定入口必须与数据源列表/查询执行复用同一机构授权口径（fail-close）。
+    """
+    normalized_id = str(datasource_id or "").strip()
+    if not normalized_id:
+        return None
+    allowed = await get_datasource_manager().can_access_datasource_async(
+        normalized_id, user_id=user_id, username=username
+    )
+    if allowed:
+        return None
+    logger.warning("拒绝绑定无权访问的数据源组: datasource_id=%s user_id=%s", normalized_id, user_id)
+    return business_response(
+        msg="无权访问该数据源组",
+        code=ErrorCode.CHATDATA_PERMISSION_DENIED,
+        status="error",
+        http_status_code=http_status.HTTP_403_FORBIDDEN,
+    )
+
+
 async def _apply_completion_datasource_binding(
-    conversation_id: str, user_id: str, options: dict[str, Any]
+    conversation_id: str, user_id: str, username: str, options: dict[str, Any]
 ) -> JSONResponse | None:
     """绑定会话数据源；需要拦截时返回错误响应，否则原地回填 options。"""
     requested_datasource_id = str(options.get("datasource_id") or "").strip()
@@ -679,6 +706,10 @@ async def _apply_completion_datasource_binding(
     if datasource_binding_response:
         return datasource_binding_response
     if bound_datasource_id:
+        # 历史会话可能在建会话授权收紧前绑定过无权数据源：每轮完成前再校验一次
+        access_denied = await _ensure_datasource_group_access(bound_datasource_id, user_id, username)
+        if access_denied:
+            return access_denied
         options["datasource_id"] = bound_datasource_id
     return None
 
@@ -711,7 +742,7 @@ async def completion(conversation_id: str, request: CompletionRequest, req: Requ
         if not existing_agent_id:
             await conversation.get_or_create_conversation(request.agent_id, conversation_id, user_id)
         options = dict(request.options or {})
-        binding_response = await _apply_completion_datasource_binding(conversation_id, user_id, options)
+        binding_response = await _apply_completion_datasource_binding(conversation_id, user_id, username, options)
         if binding_response:
             return binding_response
 

@@ -207,6 +207,63 @@ def test_materializer_returns_empty_catalog_without_writing(monkeypatch):
     assert result["paths"] == {}
     assert result["configs"] == {}
     assert runtime.entries == []
+    assert runtime.deleted == []
+
+
+def test_materializer_clears_stale_catalogs_when_scope_empty():
+    """空启用集 + prune_stale：上一轮残留的本体/语义目录必须被清掉。"""
+    runtime = _FakeRuntime()
+    stale_paths = {
+        f"{semantic_materializer.SEMANTIC_SNAPSHOT_DIR}/_ontology_catalog.yaml",
+        f"{semantic_materializer.SEMANTIC_SNAPSHOT_DIR}/_semantic_catalog.yaml",
+        f"{semantic_materializer.SEMANTIC_SNAPSHOT_DIR}/订单模型__a.yaml",
+    }
+    runtime.files.update(stale_paths)
+
+    result = asyncio.run(
+        semantic_materializer.materialize_runtime_semantic_models(
+            workspace_runtime=runtime,
+            datasource_id="ds_1",
+            user_id="user_1",
+            source_type="mysql",
+            semantic_config_ids=[],
+            prune_stale=True,
+        )
+    )
+
+    assert result == {"directory": [], "paths": {}, "configs": {}, "failed_ids": []}
+    assert runtime.files == set()
+    assert set(runtime.deleted) == stale_paths
+
+
+def test_prematerialize_empty_enabled_models_clears_stale_catalogs(monkeypatch):
+    """数据源组没有启用模型时预物化也要清目录，不能把上一轮目录留给后续 run。"""
+    semantic_materializer._YAML_CACHE.clear()
+    monkeypatch.setattr(
+        semantic_materializer,
+        "get_semantic_config_service",
+        lambda: _FakeDatasourceManager([]),
+    )
+    runtime = _FakeRuntime()
+    stale_paths = {
+        f"{semantic_materializer.SEMANTIC_SNAPSHOT_DIR}/_ontology_catalog.yaml",
+        f"{semantic_materializer.SEMANTIC_SNAPSHOT_DIR}/_semantic_catalog.yaml",
+    }
+    runtime.files.update(stale_paths)
+
+    result = asyncio.run(
+        semantic_materializer.prematerialize_enabled_semantic_models(
+            workspace_runtime=runtime,
+            datasource_id="ds_1",
+            user_id="user_1",
+            source_type="mysql",
+        )
+    )
+
+    assert result == {"total": 0, "failed_ids": []}
+    assert runtime.entries == []
+    assert runtime.files == set()
+    assert set(runtime.deleted) == stale_paths
 
 
 def test_materializer_only_overwrites_selected_models(monkeypatch):

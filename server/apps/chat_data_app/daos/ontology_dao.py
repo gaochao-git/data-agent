@@ -4,7 +4,7 @@
 软删：对象与关系同名重建走复活复用原行（翻回 delete_flag=0 并更新内容），属性
 按 (object_id, property_name) 复活。语义模型映射独立存映射表
 chat_data_ontology_object_mapping（对齐 ossie 概念层/映射层分离），随对象
-upsert 同事务硬删+重插全量重写；「一源一对象」由映射表唯一索引约束，
+upsert 同事务软删（delete_flag=行 id）+重插全量重写；「一源一对象」由映射表唯一索引约束，
 service 层先查占用对象给友好报错，数据库唯一键兜底。
 """
 
@@ -14,6 +14,7 @@ import json
 from typing import Any
 
 from sqlalchemy import func, or_, select, update
+
 from utils.logger import get_logger
 from utils.models import (
     ChatDataOntologyDomain,
@@ -111,6 +112,7 @@ def _relation_row_to_dict(row: ChatDataOntologyRelation) -> dict[str, Any]:
         "to_verbalize": _text(row.to_verbalize),
         "description": _text(row.description),
         "status": _text(row.status),
+        "delete_flag": int(row.delete_flag or 0),
         "create_time": _format_datetime(row.create_time),
         "update_time": _format_datetime(row.update_time),
         "update_by": _text(row.update_by),
@@ -140,6 +142,7 @@ class OntologyDao:
             "group_id": _text(row.group_id),
             "display_name": _text(row.display_name),
             "description": _text(row.description),
+            "delete_flag": int(row.delete_flag or 0),
             "create_time": _format_datetime(row.create_time),
             "update_time": _format_datetime(row.update_time),
             "update_by": _text(row.update_by),
@@ -231,7 +234,9 @@ class OntologyDao:
                 row.update_by_name = update_by_name or ""
         return {"domain_name": name, **payload}
 
-    async def soft_delete_domain_async(self, domain_name: str, *, update_by: str = "", update_by_name: str = "") -> bool:
+    async def soft_delete_domain_async(
+        self, domain_name: str, *, update_by: str = "", update_by_name: str = ""
+    ) -> bool:
         """软删领域；领域不存在或已删返回 False。挂有对象时由 service 层先拦。"""
         name = _text(domain_name)
         async with session_scope() as session:
@@ -274,9 +279,58 @@ class OntologyDao:
                 counts[int(domain_id)] = int(count)
         return counts
 
+    async def list_domain_object_mapping_configs_async(self, domain_id: int) -> list[dict[str, Any]]:
+        """列出领域内活跃对象及其映射的语义模型 ID（领域改组锚点校验用）。
+
+        返回 [{object_name, semantic_config_id}]；无映射的对象不出现在结果中。
+        """
+        async with session_scope() as session:
+            stmt = (
+                select(ChatDataOntologyObject.object_name, ChatDataOntologyObjectMapping.semantic_config_id)
+                .join(
+                    ChatDataOntologyObjectMapping,
+                    ChatDataOntologyObjectMapping.object_id == ChatDataOntologyObject.id,
+                )
+                .where(
+                    ChatDataOntologyObject.domain_id == int(domain_id),
+                    ChatDataOntologyObject.delete_flag == 0,
+                    ChatDataOntologyObjectMapping.delete_flag == 0,
+                )
+                .order_by(ChatDataOntologyObject.object_name.asc())
+            )
+            rows = (await session.execute(stmt)).all()
+        return [
+            {"object_name": _text(object_name), "semantic_config_id": _text(config_id)}
+            for object_name, config_id in rows
+        ]
+
+    async def list_active_domain_names_by_group_async(self, group_id: str) -> list[str]:
+        """列出绑定指定数据源组的活跃本体领域名（数据源组删除守护用）。"""
+        gid = _text(group_id)
+        if not gid:
+            return []
+        async with session_scope() as session:
+            rows = (
+                (
+                    await session.execute(
+                        select(ChatDataOntologyDomain.domain_name)
+                        .where(
+                            ChatDataOntologyDomain.group_id == gid,
+                            ChatDataOntologyDomain.delete_flag == 0,
+                        )
+                        .order_by(ChatDataOntologyDomain.domain_name.asc())
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        return [_text(name) for name in rows]
+
     # ---------- 对象 ----------
 
-    async def list_objects_async(self, keyword: str = "", status: str = "", domain_id: int | None = None) -> list[dict[str, Any]]:
+    async def list_objects_async(
+        self, keyword: str = "", status: str = "", domain_id: int | None = None
+    ) -> list[dict[str, Any]]:
         """列出对象（delete_flag=0），keyword 按名称/展示名/描述模糊过滤。"""
         async with session_scope() as session:
             stmt = select(ChatDataOntologyObject).where(ChatDataOntologyObject.delete_flag == 0)
@@ -385,70 +439,101 @@ class OntologyDao:
         name = _text(object_name)
         incoming = {str(item.get("property_name") or "").strip(): item for item in properties}
         async with session_scope() as session:
-            row = (
-                (
-                    await session.execute(
-                        select(ChatDataOntologyObject).where(ChatDataOntologyObject.object_name == name)
-                    )
-                )
-                .scalars()
-                .first()
+            row = await self._load_or_create_object_row(
+                session, name, row_payload, create_by, create_by_name, update_by, update_by_name
             )
-            if row is None:
-                row = ChatDataOntologyObject(
-                    object_name=name,
-                    delete_flag=0,
-                    create_by=create_by or "",
-                    create_by_name=create_by_name or "",
-                    update_by=update_by or "",
-                    update_by_name=update_by_name or "",
-                    **row_payload,
-                )
-                session.add(row)
-            else:
-                row.delete_flag = 0
-                for field, value in row_payload.items():
-                    setattr(row, field, value)
-                row.update_by = update_by or ""
-                row.update_by_name = update_by_name or ""
             await session.flush()
             object_id = int(row.id)
-            rows = (
-                (
-                    await session.execute(
-                        select(ChatDataOntologyProperty).where(ChatDataOntologyProperty.object_id == object_id)
-                    )
-                )
-                .scalars()
-                .all()
-            )
-            rows_by_name = {_text(item.property_name): item for item in rows}
+            rows_by_name = await self._load_property_rows(session, object_id)
             self._upsert_property_rows(
                 session, object_id, incoming, rows_by_name, create_by, create_by_name, update_by, update_by_name
             )
             if allow_property_delete:
                 self._soft_delete_missing_properties(rows_by_name, incoming, update_by, update_by_name)
-            await session.execute(
-                update(ChatDataOntologyObjectMapping)
-                .where(
-                    ChatDataOntologyObjectMapping.object_id == object_id,
-                    ChatDataOntologyObjectMapping.delete_flag == 0,
-                )
-                .values(delete_flag=ChatDataOntologyObjectMapping.id)
+            await self._replace_mapping_rows(
+                session, object_id, mappings, create_by, create_by_name, update_by, update_by_name
             )
-            for mapping in mappings:
-                session.add(
-                    ChatDataOntologyObjectMapping(
-                        object_id=object_id,
-                        semantic_config_id=_text(mapping.get("semantic_config_id")),
-                        column_mappings_json=json.dumps(mapping.get("column_mappings") or {}, ensure_ascii=False),
-                        create_by=create_by or "",
-                        create_by_name=create_by_name or "",
-                        update_by=update_by or "",
-                        update_by_name=update_by_name or "",
-                    )
-                )
         return {"object_name": name, **row_payload, "mappings": mappings}
+
+    async def _load_or_create_object_row(
+        self,
+        session: Any,
+        name: str,
+        row_payload: dict[str, Any],
+        create_by: str,
+        create_by_name: str,
+        update_by: str,
+        update_by_name: str,
+    ) -> ChatDataOntologyObject:
+        """读取对象行（含软删）；无行插入、软删行翻回复活、活跃行覆盖内容。"""
+        row = (
+            (await session.execute(select(ChatDataOntologyObject).where(ChatDataOntologyObject.object_name == name)))
+            .scalars()
+            .first()
+        )
+        if row is None:
+            row = ChatDataOntologyObject(
+                object_name=name,
+                delete_flag=0,
+                create_by=create_by or "",
+                create_by_name=create_by_name or "",
+                update_by=update_by or "",
+                update_by_name=update_by_name or "",
+                **row_payload,
+            )
+            session.add(row)
+            return row
+        row.delete_flag = 0
+        for field, value in row_payload.items():
+            setattr(row, field, value)
+        row.update_by = update_by or ""
+        row.update_by_name = update_by_name or ""
+        return row
+
+    async def _load_property_rows(self, session: Any, object_id: int) -> dict[str, ChatDataOntologyProperty]:
+        """按属性名索引对象全部属性行（含软删行，供复活对齐）。"""
+        rows = (
+            (
+                await session.execute(
+                    select(ChatDataOntologyProperty).where(ChatDataOntologyProperty.object_id == object_id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        return {_text(item.property_name): item for item in rows}
+
+    async def _replace_mapping_rows(
+        self,
+        session: Any,
+        object_id: int,
+        mappings: list[dict[str, Any]],
+        create_by: str,
+        create_by_name: str,
+        update_by: str,
+        update_by_name: str,
+    ) -> None:
+        """映射表全量重写：活跃行软删（delete_flag=行 id）后重插本次映射。"""
+        await session.execute(
+            update(ChatDataOntologyObjectMapping)
+            .where(
+                ChatDataOntologyObjectMapping.object_id == object_id,
+                ChatDataOntologyObjectMapping.delete_flag == 0,
+            )
+            .values(delete_flag=ChatDataOntologyObjectMapping.id)
+        )
+        for mapping in mappings:
+            session.add(
+                ChatDataOntologyObjectMapping(
+                    object_id=object_id,
+                    semantic_config_id=_text(mapping.get("semantic_config_id")),
+                    column_mappings_json=json.dumps(mapping.get("column_mappings") or {}, ensure_ascii=False),
+                    create_by=create_by or "",
+                    create_by_name=create_by_name or "",
+                    update_by=update_by or "",
+                    update_by_name=update_by_name or "",
+                )
+            )
 
     async def soft_delete_object_async(self, object_name: str, update_by: str = "", update_by_name: str = "") -> None:
         name = _text(object_name)
@@ -607,18 +692,15 @@ class OntologyDao:
             return {}
         async with session_scope() as session:
             rows = (
-                (
-                    await session.execute(
-                        select(ChatDataOntologyObjectMapping.object_id, func.count())
-                        .where(
-                            ChatDataOntologyObjectMapping.object_id.in_(ids),
-                            ChatDataOntologyObjectMapping.delete_flag == 0,
-                        )
-                        .group_by(ChatDataOntologyObjectMapping.object_id)
+                await session.execute(
+                    select(ChatDataOntologyObjectMapping.object_id, func.count())
+                    .where(
+                        ChatDataOntologyObjectMapping.object_id.in_(ids),
+                        ChatDataOntologyObjectMapping.delete_flag == 0,
                     )
+                    .group_by(ChatDataOntologyObjectMapping.object_id)
                 )
-                .all()
-            )
+            ).all()
         return {int(object_id): int(count) for object_id, count in rows}
 
     async def delete_object_mappings_async(self, object_id: int) -> None:

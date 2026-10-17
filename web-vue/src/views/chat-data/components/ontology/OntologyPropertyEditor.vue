@@ -3,11 +3,11 @@
  * 本体属性集编辑器：属性一等实体的行内编辑（名称/展示名/值类型/枚举引用/
  * 主键与标题标记/渲染提示）。属性随对象表单整体提交，这里不做独立保存。
  */
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import type { PropType } from 'vue'
 import { getAdminMetaEnums } from '../../api'
 import type { OntologyPropertyItem } from '../../types'
-import { ONTOLOGY_NAME_PATTERN, ONTOLOGY_RENDER_HINTS, ONTOLOGY_VALUE_TYPES } from './ontologyMeta'
+import { ONTOLOGY_RENDER_HINTS, ONTOLOGY_VALUE_TYPES } from './ontologyMeta'
 
 const props = defineProps({
   // 属性行（父组件持有，就地编辑）
@@ -16,7 +16,17 @@ const props = defineProps({
   frozenNames: { type: Array as PropType<string[]>, default: () => [] }
 })
 
+// 属性改名/删除要同步映射键（父组件持有映射行，由表单统一处理）
+const emit = defineEmits<{
+  propertyRenamed: [oldName: string, newName: string]
+  propertyRemoved: [propertyName: string]
+  removeRow: [index: number]
+}>()
+
 const isFrozen = (name: string) => props.frozenNames.includes(name)
+
+// 冻结的标题键不可被其他行顶掉：认证后标题键随主键组合一起冻结
+const titleLocked = computed(() => props.rows.some(row => isFrozen(row.property_name) && row.is_title))
 
 // 全局枚举候选：value_type=enum 时供引用选择（"enum_name" 或 "domain:enum_name"）
 const enumOptions = ref<Array<{ value: string; label: string }>>([])
@@ -36,28 +46,40 @@ onMounted(async () => {
   }
 })
 
-const addRow = () => {
-  props.rows.push({
-    property_name: '',
-    display_name: '',
-    description: '',
-    value_type: 'String',
-    enum_ref: '',
-    render_hints: {},
-    is_identifier: props.rows.length === 0,
-    is_title: props.rows.length === 0
-  })
-}
-
+// 增删由父组件持有数组完成（子组件不直接改 props）：添加按钮在父组件，删除通过事件回传索引。
 const removeRow = (index: number) => {
-  props.rows.splice(index, 1)
+  const removedName = (props.rows[index]?.property_name || '').trim()
+  emit('removeRow', index)
+  if (removedName) emit('propertyRemoved', removedName)
 }
 
-// 标题键至多一个：勾选某行时取消其他行的标题标记
+// 属性名改名前后的快照：el-input 的 change 只在失焦/回车触发，避免输入过程中逐字符联动映射
+const nameAtFocus = new WeakMap<OntologyPropertyItem, string>()
+
+const onNameFocus = (row: OntologyPropertyItem) => {
+  nameAtFocus.set(row, (row.property_name || '').trim())
+}
+
+const onNameChange = (row: OntologyPropertyItem) => {
+  const oldName = nameAtFocus.get(row) ?? ''
+  nameAtFocus.delete(row)
+  const newName = (row.property_name || '').trim()
+  if (oldName && newName && oldName !== newName) emit('propertyRenamed', oldName, newName)
+}
+
+// 值类型切走 enum 时清空枚举引用：后端要求非 enum 不得携带 enum_ref；
+// Decimal 为浮点/小数类型，禁止作为标识属性（主键组合），切换时同步取消标识标记
+const onValueTypeChange = (row: OntologyPropertyItem) => {
+  if (row.value_type !== 'enum') row.enum_ref = ''
+  if (row.value_type === 'Decimal') row.is_identifier = false
+}
+
+// 标题键至多一个：勾选某行时只取消其他「未冻结」行的标题标记，
+// 冻结行的标题键属于认证门禁（改动会被后端拒绝），不能被本地编辑顶掉。
 const onTitleChange = (row: OntologyPropertyItem, checked: boolean | string | number) => {
   if (!checked) return
   props.rows.forEach(item => {
-    if (item !== row) item.is_title = false
+    if (item !== row && !isFrozen(item.property_name)) item.is_title = false
   })
 }
 
@@ -71,7 +93,6 @@ const toggleHint = (row: OntologyPropertyItem, key: string, checked: boolean | s
 
 const hintCount = (row: OntologyPropertyItem) => Object.keys(row.render_hints || {}).length
 
-defineExpose({ addRow })
 </script>
 
 <template>
@@ -96,9 +117,17 @@ defineExpose({ addRow })
         :disabled="isFrozen(row.property_name)"
         placeholder="如 order_no"
         class="!w-36 shrink-0 font-mono"
+        @focus="onNameFocus(row)"
+        @change="onNameChange(row)"
       />
       <el-input v-model="row.display_name" size="small" placeholder="展示名" class="!w-28 shrink-0" />
-      <el-select v-model="row.value_type" size="small" class="!w-28 shrink-0" :empty-values="[null, undefined]">
+      <el-select
+        v-model="row.value_type"
+        size="small"
+        class="!w-28 shrink-0"
+        :empty-values="[null, undefined]"
+        @change="onValueTypeChange(row)"
+      >
         <el-option v-for="t in ONTOLOGY_VALUE_TYPES" :key="t" :label="t" :value="t" />
       </el-select>
       <el-select
@@ -115,10 +144,18 @@ defineExpose({ addRow })
         <el-option v-for="opt in enumOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
       </el-select>
       <div class="flex w-14 shrink-0 justify-center">
-        <el-checkbox v-model="row.is_identifier" :disabled="isFrozen(row.property_name)" />
+        <el-checkbox
+          v-model="row.is_identifier"
+          :disabled="isFrozen(row.property_name) || row.value_type === 'Decimal'"
+          :title="row.value_type === 'Decimal' ? 'Decimal 为浮点/小数类型，禁止作为标识属性' : undefined"
+        />
       </div>
       <div class="flex w-14 shrink-0 justify-center">
-        <el-checkbox v-model="row.is_title" :disabled="isFrozen(row.property_name)" @change="(checked: boolean | string | number) => onTitleChange(row, checked)" />
+        <el-checkbox
+          v-model="row.is_title"
+          :disabled="isFrozen(row.property_name) || (titleLocked && !row.is_title)"
+          @change="(checked: boolean | string | number) => onTitleChange(row, checked)"
+        />
       </div>
       <div class="flex w-16 shrink-0 justify-center">
         <el-popover placement="bottom" :width="180" trigger="click">
