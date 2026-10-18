@@ -13,7 +13,8 @@ from apps.chat_data_app.agent.skills.loader import format_skills_prompt
 from utils.builtin_skills import DATA_ANALYZING_SKILL
 
 
-def test_system_prompt_requires_semantic_skill_gate_before_query():
+def test_system_prompt_routes_queries_to_skill_without_gate_blocks():
+    """门禁/场景路由/优先级块已删除：技能路由单一来源是技能使用块 + available_skills 描述。"""
     prompt = build_unified_system_prompt(
         AgentRuntimeOptions(),
         available_skills_xml=format_skills_prompt(
@@ -27,17 +28,27 @@ def test_system_prompt_requires_semantic_skill_gate_before_query():
         ),
     )
 
-    assert "第一步必须调用 `file_read`" in prompt
+    # 已删除的块不再出现
+    assert "## 语义查询门禁" not in prompt
+    assert "## 场景路由" not in prompt
+    assert "## 优先级" not in prompt
+    assert "第一步必须调用 `file_read`" not in prompt
+    assert "get_current_time" not in prompt
+    assert "calculator_tool" not in prompt
+
+    # 技能使用规则仍在：意图命中读取技能 + 显式指定技能直接读取
+    assert "## 技能使用" in prompt
     assert f"<name>{DATA_ANALYZING_SKILL}</name>" in prompt
-    assert "## 语义查询门禁" in prompt
-    assert "不得在读取前调用 `data_analyzing_tool`" in prompt
-    assert "进入查询与分析路径后，语义模型检索、字段确认、DSL/SQL 模式选择" in prompt
+
+    # DSL 细节、查询专属回答规则不进系统提示词
     assert "**DSL 模式**和**SQL 模式**" not in prompt
     assert "DSL 模式传顶层 `dsl`" not in prompt
     assert "SQL 模式传顶层 `sql`" not in prompt
     assert "不是工具参数，不要传 `mode`" not in prompt
     assert "不能通过 SQL 绕过" not in prompt
     assert "每次查询只能使用一个 `semantic_config_id`" not in prompt
+    assert "单指标单值查询" not in prompt
+    assert "洞察只能基于" not in prompt
     assert "get_field" not in prompt
     assert "source_tool=semantic_search" not in prompt
     # 工具结果卸载规则段落已收敛进 ENVIRONMENT_BLOCK 目录树（目录名保留，段落标题不出现）

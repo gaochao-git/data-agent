@@ -90,6 +90,9 @@ async def calculator_tool(
 ) -> str:
     """对查询结果中的长数字、比例、差值或单位换算做确定性计算。
 
+    需要精确计算的数值一律调用本工具并以返回结果为准，不要心算。参数只有
+    `calculations` 一个数组，不要把 `expression` 提到顶层。
+
     Args:
         calculations: 批量计算项（1-20 条）；单个计算也只传一条记录，每项包含必填的 expression、可选的 name 和 decimal_places。
         intent: 一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示。
