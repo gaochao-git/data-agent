@@ -118,7 +118,7 @@ async def test_event_history_is_ordered_and_idempotent_across_turns(conversation
         token_usage={"used": 35, "total": 100, "llm_calls": [{"input_tokens": 35}]},
     )
 
-    history = await service.load_history(conversation_id="conv-1", user_id="user-1")
+    history = await service.load_history_with_recovery(conversation_id="conv-1", user_id="user-1")
 
     sequence_numbers = [event["sequence_no"] for event in history["history_events"]]
     assert sequence_numbers == sorted(sequence_numbers)
@@ -247,7 +247,7 @@ async def test_token_usage_is_single_upserted_row_per_conversation(conversation_
     assert rows[0].event_key == "token_usage:latest"
     assert rows[0].turn_id == "turn-3"
 
-    history = await service.load_history(conversation_id="conv-usage", user_id="user-1")
+    history = await service.load_history_with_recovery(conversation_id="conv-usage", user_id="user-1")
     assert history["token_usage"] == {"used": 60, "total": 100}
 
 
@@ -264,10 +264,10 @@ async def test_event_history_is_scoped_to_conversation_owner(conversation_event_
         message=message,
     )
 
-    assert (await service.load_history(conversation_id="conv-owner", user_id="user-1"))["messages"][0][
+    assert (await service.load_history_with_recovery(conversation_id="conv-owner", user_id="user-1"))["messages"][0][
         "content"
     ] == "只属于用户一"
-    assert (await service.load_history(conversation_id="conv-owner", user_id="user-2"))["history_events"] == []
+    assert (await service.load_history_with_recovery(conversation_id="conv-owner", user_id="user-2"))["history_events"] == []
 
 
 @pytest.mark.asyncio
@@ -319,7 +319,7 @@ async def test_context_compression_event_is_anchored_and_idempotent(conversation
         context_compression_events=[compression_event],
     )
 
-    history = await service.load_history(conversation_id="conv-compression", user_id="user-1")
+    history = await service.load_history_with_recovery(conversation_id="conv-compression", user_id="user-1")
     assert [event["event_type"] for event in history["history_events"]] == [
         "user_message",
         "assistant_message",
@@ -359,7 +359,7 @@ async def test_repeated_turn_snapshot_updates_existing_message(conversation_even
         reasoning_segments=[],
     )
 
-    history = await service.load_history(conversation_id="conv-snapshot", user_id="user-1")
+    history = await service.load_history_with_recovery(conversation_id="conv-snapshot", user_id="user-1")
 
     assert [event["event_type"] for event in history["history_events"]] == [
         "user_message",
@@ -714,20 +714,32 @@ async def test_token_usage_failure_does_not_clear_visible_history():
         turn_id = "turn-1"
         event_type = "user_message"
 
-    class TokenFailureDao:
-        async def list_visible_events(self, **_kwargs):
-            return [EventRow()]
+    @asynccontextmanager
+    async def _fake_session():
+        yield object()
 
-        async def get_latest_token_usage_payload(self, **_kwargs):
+    class TokenFailureDao:
+        def session_context(self):
+            return _fake_session()
+
+        async def list_visible_event_window_in_session(self, _session, **_kwargs):
+            return [EventRow()], False
+
+        async def get_latest_token_usage_payload_in_session(self, _session, **_kwargs):
             raise RuntimeError("token usage unavailable")
 
-    history = await ConversationEventService(TokenFailureDao()).load_history(
+        async def get_active_run_snapshot(self, _session, _conversation_id, _user_id):
+            return None
+
+    dao = TokenFailureDao()
+    history = await ConversationEventService(dao, dao).load_history_with_recovery(
         conversation_id="conv-1",
         user_id="user-1",
     )
 
     assert history["messages"][0]["content"] == "保留消息"
     assert history["token_usage"] is None
+    assert history["active_run"] is None
 
 
 def test_serialized_messages_carry_execution_timing_only_when_stamped():

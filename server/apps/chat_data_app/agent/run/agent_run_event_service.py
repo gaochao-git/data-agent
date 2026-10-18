@@ -353,9 +353,5 @@ class AgentRunEventService:
         match = _EVENT_NAME_RE.search(payload or "")
         return match.group(1).strip() if match else "message"
 
-    @classmethod
-    def is_terminal_payload(cls, payload: str) -> bool:
-        return cls._event_type(payload) == "done"
-
 
 agent_run_event_service = AgentRunEventService()

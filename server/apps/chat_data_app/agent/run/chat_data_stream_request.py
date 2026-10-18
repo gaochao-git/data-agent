@@ -48,10 +48,8 @@ class ChatDataStreamRequest:
     run_id: str | None = None
     adopted_messages: list[HumanMessage] | None = None
     resume_answer: dict[str, Any] | None = None
-    resume_started: bool = False
     resume_turn_id: str | None = None
     turn_id: str | None = None
-    recovering: bool = False
     owner_token: str | None = None
     stream_event_id_provider: Callable[[], str | None] | None = None
     # 请求到达墙钟（毫秒）：completion 入口 / 问答恢复 claim 盖章写入 Run 行，

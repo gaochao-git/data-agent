@@ -25,10 +25,12 @@ from apps.chat_data_app.agent_stream import AgentRunStreamFailedError
 
 
 def _adapter(**kwargs):
+    disconnect_log = agent_stream._DisconnectLog(id=kwargs.pop("disconnect_log_id", ""))
     return agent_stream._AgentSseStreamAdapter(
         agent=kwargs.pop("agent", SimpleNamespace()),
         initial_state=kwargs.pop("initial_state", {}),
         config=kwargs.pop("config", {"configurable": {"thread_id": "t1", "checkpoint_ns": ""}}),
+        disconnect_log=disconnect_log,
         **kwargs,
     )
 

@@ -297,10 +297,8 @@ class AgentRunRuntime:
                     stream_event_id_provider=prepared.get("stream_event_id_provider"),
                     adopted_messages=prepared.get("messages") or [],
                     resume_answer=prepared.get("resume_answer"),
-                    resume_started=bool(prepared.get("resume_started")),
                     resume_turn_id=prepared.get("resume_turn_id"),
                     turn_id=prepared.get("turn_id"),
-                    recovering=bool(prepared.get("recovering")),
                 )
             )
 

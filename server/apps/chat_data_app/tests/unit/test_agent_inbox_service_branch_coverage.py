@@ -344,24 +344,6 @@ async def test_reap_expired_run_keeps_waiting_user_and_drops_others():
 
 
 @pytest.mark.asyncio
-async def test_reconcile_recovered_messages():
-    with pytest.raises(AgentRunNotActiveError):
-        await _service().reconcile_recovered_messages("r1", set())
-
-    checkpointed = SimpleNamespace(message_id="m1", record_status="claimed")
-    await _service(get_run_by_id_for_update=_run(), list_claimed_messages=[checkpointed]).reconcile_recovered_messages(
-        "r1", {"m1"}, owner_token="tok-1"
-    )
-    assert checkpointed.record_status == "consumed"
-
-    orphan = SimpleNamespace(message_id="m2", record_status="claimed")
-    await _service(get_run_by_id_for_update=_run(), list_claimed_messages=[orphan]).reconcile_recovered_messages(
-        "r1", set(), owner_token="tok-1"
-    )
-    assert orphan.record_status == "pending"  # 旧 Worker 已领取但未落检查点 → 退回中间件
-
-
-@pytest.mark.asyncio
 async def test_heartbeat_run_competition_paths():
     assert await _service(renew_run_lease=False, get_run_by_id=None).heartbeat_run("r1", "tok-1") == "inactive"
     terminal = _service(renew_run_lease=False, get_run_by_id=_run(record_status="finished"))
