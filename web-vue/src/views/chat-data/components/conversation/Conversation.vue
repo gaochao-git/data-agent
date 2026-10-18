@@ -2126,11 +2126,6 @@ const submitAnalysisQuery = async (
         onFirstEvent: () => {
           if (isFirstMessage) emit('firstMessageStarted', resolvedConversationId)
         },
-        onRunRestarted: async () => {
-          activeAssistantMessageId.value = null
-          await loadHistory(resolvedConversationId, true)
-          syncHistoryToolCalls()
-        },
         onRunCompleted: (info) => {
           completedRunStatus = info.status
           completedNextRunId = info.nextRunId || null

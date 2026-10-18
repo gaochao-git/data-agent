@@ -23,7 +23,6 @@ describe('useSqlGenerator', () => {
     callbacks: {
       onResult?: () => void
       onError?: (message: string) => void
-      onRunRestarted?: () => void | Promise<void>
       onRunCompleted?: (info: { status: string; nextRunId?: string | null }) => void
     } = {},
   ) => {
@@ -39,7 +38,6 @@ describe('useSqlGenerator', () => {
         onError: callbacks.onError,
         agentId: 'chat_data',
         responseFactory: async () => streamResponse(chunks),
-        onRunRestarted: callbacks.onRunRestarted,
         onRunCompleted: callbacks.onRunCompleted,
       },
     )
@@ -126,19 +124,6 @@ describe('useSqlGenerator', () => {
 
     expect(onError).toHaveBeenCalledWith('数据源连接超时')
     expect(onResult).not.toHaveBeenCalled()
-  })
-
-  it('reloads durable history when the backend reports a recovered run', async () => {
-    const onRunRestarted = vi.fn()
-    const onResult = vi.fn()
-
-    await runStream([
-      'event: run_restarted\ndata: {"run_id":"run-1","turn_id":"turn-1"}\n\n',
-      'event: done\ndata: {"status":"finished"}\n\n',
-    ], { onRunRestarted, onResult })
-
-    expect(onRunRestarted).toHaveBeenCalledOnce()
-    expect(onResult).toHaveBeenCalledOnce()
   })
 })
 

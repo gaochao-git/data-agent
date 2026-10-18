@@ -137,7 +137,6 @@ export function useSqlGenerator() {
       responseFactory?: (signal: AbortSignal) => Promise<Response>
       onRunEvent?: (eventId: string) => void
       onFirstEvent?: () => void
-      onRunRestarted?: () => void | Promise<void>
       onRunCompleted?: (info: { status: RunDoneStatus; nextRunId?: string | null }) => void
     } = {},
   ): Promise<void> => {
@@ -171,7 +170,6 @@ export function useSqlGenerator() {
       responseFactory,
       onRunEvent,
       onFirstEvent,
-      onRunRestarted,
       onRunCompleted,
     } = options
     if (!conversationId) {
@@ -392,11 +390,6 @@ export function useSqlGenerator() {
             } catch (err) {
               console.error('解析 question_requested 数据失败:', err, dataStr)
             }
-            continue
-          }
-
-          if (event === 'run_restarted') {
-            await onRunRestarted?.()
             continue
           }
 
