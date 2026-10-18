@@ -19,7 +19,7 @@ openai==2.54.0
 tiktoken==0.12.0
 PyJWT==2.10.1
 diskcache==5.6.3
-langgraph-checkpoint==4.2.0
+langgraph-checkpoint==4.3.0
 langgraph-checkpoint-mysql==3.0.0
 langgraph-checkpoint-postgres==3.0.5
 langgraph-checkpoint-sqlite==3.0.3
@@ -29,11 +29,11 @@ pysqlite3-binary==0.5.4; sys_platform == "linux"
 pyhive==0.7.0
 sqlalchemy[asyncio]==2.0.45
 greenlet==3.3.0
-langchain==1.4.0
-langchain-core==1.6.2
+langchain==1.4.6
+langchain-core==1.6.12
 langchain-experimental==0.4.1
-langgraph==1.2.11
-langchain-openai==1.6.0
+langgraph==1.2.16
+langchain-openai==1.7.2
 python-docx==1.2.0
 mammoth==1.11.0
 aiofiles==25.1.0
