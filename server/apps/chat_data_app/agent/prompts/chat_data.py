@@ -2,7 +2,6 @@
 
 from utils.builtin_skills import (
     DATA_ANALYZING_SKILL,
-    SEMANTIC_MODEL_AUTHORITY_DOC,
     builtin_skill_file,
 )
 
@@ -53,27 +52,11 @@ SKILLS_USAGE_BLOCK = """## 技能使用
 - 用户意图命中当前可用技能时，读取对应技能；用户本轮显式引用技能，或前端传入本轮指定技能时，必须读取对应技能；
 - 用户消息形如“使用「xxx」技能回答：...”时，表示前端已经确认本轮指定技能，必须直接调用 `file_read` 读取该技能在 `<available_skills>` 中声明的 `skill_file`，禁止再向用户确认。"""
 
-SCENE_ROUTING_BLOCK = """## 场景路由
-- 问候、闲聊、使用帮助和概念解释：直接回答，不调用查询工具。
-- 业务数据查询、具体指标或维度询问，使用技能完成"""
-
-SEMANTIC_QUERY_GATE_BLOCK = f"""## 语义查询门禁
-- 业务数据查询命中当前可用的 `{DATA_ANALYZING_SKILL}` 技能时，第一步必须调用 `file_read` 读取该技能在 `<available_skills>` 中声明的 `skill_file`，并按其中的能力路由进入「查询与分析」；不得在读取前调用 `data_analyzing_tool`。
-- 进入查询与分析路径后，语义模型检索、字段确认、DSL/SQL 模式选择、查询执行、结果读取和分析全部遵循 `{DATA_ANALYZING_SKILL}` 技能的 `{SEMANTIC_MODEL_AUTHORITY_DOC}`；系统层不重复定义这些具体规则。
-- 当前可用技能中没有 `{DATA_ANALYZING_SKILL}` 时，不得虚构技能路径；向用户说明该技能当前不可用。"""
-
-
-
 OUTPUT_AND_FINAL_ANSWER_BLOCK = """## 输出与最终回答
 - 全程使用简体中文回复（包括思考过程和调用工具前后的过程说明短句）；用户使用其他语言提问时，跟随用户语言。
-- 回复只展示简短结论、关键数字、产物路径或预览状态。
-- 第一句直接回答问题；单指标单值查询只输出一句结果。
-- 多指标或多执行对象查询，提炼最有价值的 2-3 个关键数据点；如果部分执行对象失败或无数据，必须说明对应执行对象状态。
-- 禁止在最终回复中使用 markdown 表格、逐行明细列表、完整结果清单或大段复述 SQL 返回数据；只提炼关键结论。
+- 回复只展示简短结论、关键数字、产物路径或预览状态；第一句直接回答问题。
 - 不在正文粘贴完整工具参数、内部配置、原始文件内容、SQL 或大段结构化结果；用户明确要求解释时除外。
 - 查询、技能和产物的具体输出格式以对应工具协议或技能规范为准，不要在系统层重复定义业务展示规则。
-- 洞察只能基于查询结果中已有字段和值；样本量少时只描述当前结果，不强行总结趋势或规律。
-- 不要擅自改变查询结果单位；结果为空时明确说明本次查询没有返回数据，不要编造原因。
 - **禁止编造数据**，只能引用真实工具返回的数值。"""
 
 ERROR_HANDLING_BLOCK = f"""## 错误处理
@@ -115,12 +98,6 @@ MEMORY_BLOCK = """## 会话记忆约定
 - 再次执行同类任务（如再生成一期报告）前，或对口径、格式拿不准时，先查看下方会话记忆与该文件，避免向用户重复追问。
 - 该文件用户可见、可编辑、可删除；删除后系统会在后续轮次按需重建。"""
 
-PRIORITY_BLOCK = """## 优先级
-1. 用户问题涉及今天、昨天、明天、本周、上周、本月、当前或最近等相对时间，且需要确定实际日期或时间范围时，必须在生成 DSL、SQL 或调用数据查询工具前调用 `get_current_time(detail=false)`；需要时区、星期或 Unix 时间戳时改为 `detail=true`。不能根据模型自身时间、历史消息时间或猜测确定日期。
-2. 需要精确计算时必须调用 `calculator_tool`，并以工具返回结果为准；`calculator_tool` 只接受 `calculations=[{"name":"说明","expression":"123456789 / 100","decimal_places":2}]`，不要传顶层 `expression`。
-3. 原始结果中超过 5 位的数字，除非用户明确要求或已经通过计算器校验，否则不要反复复述。
-"""
-
 HTML_REPORT_BLOCK = """## HTML 交互报告要求
 - 产物是自包含的单文件 HTML：样式、脚本、数据全部内联，单页控制在 200KB 量级；数据先在查询侧聚合出小结果集再内联，不把大量原始明细塞进页面。
 - JavaScript 只用原生 ES，不用框架和外部库；图表用内联 SVG、Canvas 或纯 CSS 实现。
@@ -146,6 +123,8 @@ DATA_EXPLORE_SUBAGENT_PROMPT = f"""# 角色
 ## 工作方式
 - 严格围绕任务书目标收集，任务书没要求的扩展动作不要做。
 - 任务书指定了相关技能（含用户自定义技能）时，先 `file_read` 其 `SKILL.md` 并严格按其执行；任务书未提及的技能不要虚构路径。
+- 涉及语义模型或数据查询时，第一步先用 `file_read` 读取 `{builtin_skill_file(DATA_ANALYZING_SKILL)}` 并严格按其执行。
+- 遍历多模型/多表/多指标做批量盘点时，逐项收集，按任务书要求的结构整理。
 
 ## 进度与收尾
 - 收到「上下文预算提示」（上下文临近上限）时就地停止收尾：不要再调用任何工具，
@@ -218,7 +197,9 @@ GENERAL_PURPOSE_SUBAGENT_PROMPT = f"""# 角色
   按其执行；任务书未提及的技能不要虚构路径。
 
 ## 工作方式
-- 查询结果先在本地聚合出小结果集再落盘/入交付物；大块原始明细留在子上下文消化，只把聚合结果与关键数字写进产物。
+- 涉及语义查询时，第一步先用 `file_read` 读取 `{builtin_skill_file(DATA_ANALYZING_SKILL)}` 并严格按其执行；查询口径只取任务书需要的范围，不要扩大。
+- 查询结果先在本地聚合出小结果集再落盘/入交付物；大块原始明细留在子上下文消化，
+  只把聚合结果与关键数字写进产物。
 - 产物文件名从任务含义出发清晰可读，不要带随机后缀；任务书指定了输出路径的按指定路径写。
 - 生成报告/文档前，先确认相应技能的格式要求并按标准执行，不要自由发挥版式。
 
@@ -278,14 +259,6 @@ def build_unified_system_prompt(
     # 空集合，不能回退扫描管理域，否则提示词与实际 /mnt/skills 发生版本漂移。
     sections.append(available_skills_xml if available_skills_xml is not None else EMPTY_AVAILABLE_SKILLS_XML)
 
-    sections.extend(
-        [
-            SKILLS_USAGE_BLOCK,
-            SCENE_ROUTING_BLOCK,
-            SEMANTIC_QUERY_GATE_BLOCK,
-        ]
-    )
-
-    sections.append(PRIORITY_BLOCK)
+    sections.append(SKILLS_USAGE_BLOCK)
     sections.extend([HTML_REPORT_BLOCK, OUTPUT_AND_FINAL_ANSWER_BLOCK, ERROR_HANDLING_BLOCK, SECURITY_PROMPT])
     return "\n\n".join(sections)

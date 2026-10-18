@@ -74,7 +74,7 @@ def test_system_prompt_invariant_to_bash_flag():
     # 其余段落始终存在
     for block in (
         chat_data.ROLE_BLOCK,
-        chat_data.PRIORITY_BLOCK,
+        chat_data.HTML_REPORT_BLOCK,
         chat_data.ENVIRONMENT_BLOCK,
         chat_data.OUTPUT_AND_FINAL_ANSWER_BLOCK,
         chat_data.ERROR_HANDLING_BLOCK,
@@ -110,9 +110,9 @@ def test_system_prompt_environment_block_ignores_workspace_root():
 
     assert "## 环境" in with_root
     assert "├── workspace/   中间文件写入该工作区" in with_root
-    # semantic/ 与 /mnt/skills 在环境块集中声明一次
-    assert "└── semantic/  本轮启用语义模型的只读 YAML 快照" in with_root
-    assert "{模型名}__{id后缀}.yaml" in with_root
+    # semantic/ 与 /mnt/skills 在环境块集中声明一次（只写目录属性，检索流程在技能文档）
+    assert "└── semantic/  语义模型目录（只读，不可写）" in with_root
+    assert "_semantic_catalog.yaml" not in with_root
     assert "query_result/  查询结果卸载文件" in with_root
     assert ".tool-offload/ 其它工具大结果卸载文件" in with_root
     assert "└── skills/" in with_root
