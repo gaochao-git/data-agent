@@ -1954,6 +1954,33 @@ export function generateAdminMetaEnumItems(text: string): Promise<ApiResponse<{ 
 
 // ============ 元数据管理 API（Admin：本体 Ontology） ============
 
+/** 后台：本体一致性检查结果条目（与后端 findings 同构，category 恒为 ontology） */
+export interface OntologyConsistencyFinding {
+  code: string
+  severity: 'error' | 'warning' | 'info'
+  category: 'ontology'
+  message: string
+  targets: string[]
+}
+
+/** 后台：本体一致性健康巡检报告 */
+export interface OntologyConsistencyReport {
+  group_count: number
+  config_count: number
+  object_count: number
+  findings: OntologyConsistencyFinding[]
+  summary: { error: number; warning: number; info: number }
+  healthy: boolean
+}
+
+/** 后台：本体↔语义模型一致性健康巡检（手动触发，只巡检不阻断） */
+export function checkAdminOntologyConsistency(): Promise<ApiResponse<OntologyConsistencyReport>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/consistency-check`,
+    method: 'get'
+  })
+}
+
 /** 后台：本体领域列表（领域=业务域实体，一对一绑定数据源组） */
 export function getAdminOntologyDomains(): Promise<ApiResponse<{ domains: OntologyDomainItem[] }>> {
   return request({

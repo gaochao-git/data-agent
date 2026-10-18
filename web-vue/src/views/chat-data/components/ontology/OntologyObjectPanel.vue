@@ -29,6 +29,7 @@ import type {
   OntologyPropertyItem,
   OntologyRelationItem
 } from '../../types'
+import OntologyConsistencyDialog from './OntologyConsistencyDialog.vue'
 import OntologyDomainForm from './OntologyDomainForm.vue'
 import OntologyObjectForm from './OntologyObjectForm.vue'
 import OntologyRelationForm from './OntologyRelationForm.vue'
@@ -531,6 +532,8 @@ const formObjectName = ref('')
 const formDefaultDomainId = ref<number | null>(null)
 
 const statusDialogVisible = ref(false)
+// 一致性健康巡检弹窗开关（工具栏按钮触发）
+const consistencyDialogVisible = ref(false)
 const statusTarget = ref<OntologyObjectItem | null>(null)
 
 const openCreate = (domainId: number | null = null) => {
@@ -862,6 +865,9 @@ const onRelationSaved = (objectNames: string[]) => {
       <el-button size="small" @click="searchObjects">搜索</el-button>
       <el-button size="small" :loading="loading" @click="loadObjects">
         <i class="fa-solid fa-rotate-right" style="margin-right: 4px; font-size: 10px;"></i>刷新
+      </el-button>
+      <el-button size="small" @click="consistencyDialogVisible = true">
+        <i class="fa-solid fa-stethoscope" style="margin-right: 4px; font-size: 10px;"></i>一致性检查
       </el-button>
     </AdminPanelToolbar>
 
@@ -1213,6 +1219,9 @@ const onRelationSaved = (objectNames: string[]) => {
 
     <!-- 状态迁移弹窗：替代对象候选与关系上限都应以全量对象为准，不能被工具栏筛选截断 -->
     <OntologyStatusDialog v-model:visible="statusDialogVisible" :object="statusTarget" :objects="allObjects" @saved="onSaved" />
+
+    <!-- 一致性健康巡检弹窗：本体↔语义模型失修清单（手动触发，只读不阻断） -->
+    <OntologyConsistencyDialog v-model:visible="consistencyDialogVisible" />
 
     <!-- 关系新建/编辑/状态/删除（右键发起；端点候选/状态上限用全量对象） -->
     <OntologyRelationForm ref="relationFormRef" :objects="allObjects" @saved="onRelationSaved" />

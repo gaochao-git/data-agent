@@ -100,16 +100,18 @@ def test_report_single_object_full_shape() -> None:
         {"name": "city", "display_name": "城市", "value_type": "String", "is_identifier": False},
         {"name": "order_id", "display_name": "订单编号", "value_type": "String", "is_identifier": True},
     ]
-    # 绑定：模型名 + 快照文件名 + 属性→维度对照（按键排序）
+    # 绑定：模型名 + 快照文件名 + 属性→维度对照（按键排序）；无比对基准时不标失修
     assert entry["bindings"] == [
         {
             "semantic_config_id": "sc_order",
             "model_name": "订单模型",
             "model_file": "订单模型__1234.yaml",
             "column_mappings": {"city": "城市", "order_id": "订单编号"},
+            "healthy": True,
+            "stale_dimensions": [],
         }
     ]
-    # 关系：本对象为 from 端，取 from_verbalize
+    # 关系：本对象为 from 端，取 from_verbalize；无比对基准时不标失修
     assert entry["relations"] == [
         {
             "relation": "order_belongs_to_user",
@@ -119,6 +121,61 @@ def test_report_single_object_full_shape() -> None:
             "verbalize": "订单归属用户",
         }
     ]
+
+
+def test_report_marks_stale_dimensions_when_basis_provided() -> None:
+    """提供维度名基准后，映射右值不在基准内的条目标 stale（healthy=false）。"""
+    report = _report(
+        ["order"],
+        dimension_names={"sc_order": {"订单编号"}, "sc_user": {"用户编号"}},
+    )
+    binding = report["objects"][0]["bindings"][0]
+    assert binding["healthy"] is False
+    assert binding["stale_dimensions"] == [{"property": "city", "dimension": "城市"}]
+    # 健康条目不标注
+    assert binding["column_mappings"] == {"city": "城市", "order_id": "订单编号"}
+
+
+def test_report_marks_stale_relation_for_unmapped_attribute() -> None:
+    """本侧关系列属性存在但未映射（未出现在任何绑定左值）→ relation 标 stale。"""
+    bundle = _bundle()
+    bundle["relations"][0]["from_columns"] = ["order_id"]
+    del bundle["mappings"][0]["column_mappings"]["order_id"]
+    report = object_locator.build_object_locator_report(
+        bundle,
+        object_names=["order"],
+        dimension_names={"sc_order": {"订单编号", "城市"}},
+    )
+    relation = report["objects"][0]["relations"][0]
+    assert relation["stale"] is True
+    assert "order_id" in relation["stale_reason"]
+
+
+def test_report_marks_stale_relation_for_missing_attribute() -> None:
+    """本侧关系列属性已不存在于对象属性清单 → relation 标 stale。"""
+    bundle = _bundle()
+    bundle["relations"][0]["from_columns"] = ["ghost_column"]
+    report = object_locator.build_object_locator_report(
+        bundle,
+        object_names=["order"],
+        dimension_names={"sc_order": {"订单编号", "城市"}},
+    )
+    relation = report["objects"][0]["relations"][0]
+    assert relation["stale"] is True
+    assert "ghost_column" in relation["stale_reason"]
+
+
+def test_report_healthy_relation_not_marked_stale() -> None:
+    """关系列存在且已映射 → 不标 stale。"""
+    bundle = _bundle()
+    bundle["relations"][0]["from_columns"] = ["order_id"]
+    report = object_locator.build_object_locator_report(
+        bundle,
+        object_names=["order"],
+        dimension_names={"sc_order": {"订单编号", "城市"}},
+    )
+    relation = report["objects"][0]["relations"][0]
+    assert "stale" not in relation
 
 
 def test_report_relation_to_direction_verbalize() -> None:

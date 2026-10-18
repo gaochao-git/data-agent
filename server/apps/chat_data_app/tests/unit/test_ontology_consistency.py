@@ -1,0 +1,244 @@
+"""ontology_consistency 纯函数单测：ONT_* 规则族的触发/豁免/形状。"""
+
+from __future__ import annotations
+
+import pytest
+
+from apps.chat_data_app.services.ontology.ontology_consistency import (
+    RULES,
+    check_ontology_model_consistency,
+)
+
+
+def _bundle() -> dict:
+    """最小双对象 bundle：customer(id=1) / order(id=2)，一条关系 + 一条映射/对象。"""
+    return {
+        "objects": [
+            {"id": 1, "object_name": "customer", "display_name": "客户", "status": "certified"},
+            {"id": 2, "object_name": "sales_order", "display_name": "订单", "status": "certified"},
+        ],
+        "properties": [
+            {"id": 11, "object_id": 1, "property_name": "customer_id", "value_type": "String", "is_identifier": True},
+            {"id": 12, "object_id": 1, "property_name": "customer_name", "value_type": "String", "is_identifier": False},
+            {"id": 21, "object_id": 2, "property_name": "order_no", "value_type": "String", "is_identifier": True},
+            {"id": 22, "object_id": 2, "property_name": "amount", "value_type": "Decimal", "is_identifier": False},
+        ],
+        "relations": [
+            {
+                "id": 1,
+                "relation_name": "customer_has_orders",
+                "from_object_id": 1,
+                "to_object_id": 2,
+                "from_columns": ["customer_id"],
+                "to_columns": ["order_no"],
+                "multiplicity": "OneToMany",
+                "status": "certified",
+            }
+        ],
+        "mappings": [
+            {
+                "object_id": 1,
+                "semantic_config_id": "cfg-cust",
+                "column_mappings": {"customer_id": "客户ID", "customer_name": "客户名称"},
+            },
+            {
+                "object_id": 2,
+                "semantic_config_id": "cfg-order",
+                "column_mappings": {"order_no": "订单编号", "amount": "订单金额"},
+            },
+        ],
+    }
+
+
+def _configs() -> list[dict]:
+    return [
+        {
+            "id": "cfg-cust",
+            "name": "客户模型",
+            "dimensions": [
+                {"name": "客户ID", "column": "customer_id", "logical_type": "text"},
+                {"name": "客户名称", "column": "customer_name", "logical_type": "text"},
+            ],
+        },
+        {
+            "id": "cfg-order",
+            "name": "订单模型",
+            "dimensions": [
+                {"name": "订单编号", "column": "order_id", "logical_type": "text"},
+                {"name": "订单金额", "column": "amount", "logical_type": "number"},
+            ],
+        },
+    ]
+
+
+def _codes(findings: list[dict]) -> list[str]:
+    return [item["code"] for item in findings]
+
+
+# ---------- 基线 ----------
+
+
+def test_healthy_bundle_returns_empty():
+    """全部健康（维度存在、属性全映射、关系列有效且 to 侧标识、类型匹配）→ 无 findings。"""
+    assert check_ontology_model_consistency(_bundle(), _configs()) == []
+
+
+def test_empty_inputs_return_empty():
+    assert check_ontology_model_consistency({}, _configs()) == []
+    assert check_ontology_model_consistency(_bundle(), []) == []
+    assert check_ontology_model_consistency(None, _configs()) == []
+
+
+def test_findings_shape_matches_checker_contract():
+    """findings 形状与 checker 契约同构：code/severity/category/message/targets。"""
+    bundle = _bundle()
+    bundle["mappings"][1]["column_mappings"]["order_no"] = "已删除维度"
+    findings = check_ontology_model_consistency(bundle, _configs())
+    target = next(item for item in findings if item["code"] == "ONT_MAPPING_DIM_MISSING")
+    assert target["severity"] == "error"
+    assert target["category"] == "ontology"
+    assert isinstance(target["message"], str) and target["message"]
+    assert target["targets"] == ["sales_order", "cfg-order"]
+
+
+# ---------- ONT_MAPPING_DIM_MISSING ----------
+
+
+def test_missing_dimension_fires_error():
+    bundle = _bundle()
+    bundle["mappings"][1]["column_mappings"]["order_no"] = "已删除维度"
+    findings = check_ontology_model_consistency(bundle, _configs())
+    assert "ONT_MAPPING_DIM_MISSING" in _codes(findings)
+    finding = next(item for item in findings if item["code"] == "ONT_MAPPING_DIM_MISSING")
+    assert "已删除维度" in finding["message"]
+    assert "sales_order" in finding["message"]
+
+
+def test_mapping_to_model_outside_compare_scope_is_skipped():
+    """映射指向比较域外的模型（未传入 configs）不判——无法证明失修。"""
+    bundle = _bundle()
+    bundle["mappings"].append(
+        {"object_id": 2, "semantic_config_id": "cfg-other", "column_mappings": {"order_no": "不存在的维度"}}
+    )
+    assert "ONT_MAPPING_DIM_MISSING" not in _codes(check_ontology_model_consistency(bundle, _configs()))
+
+
+def test_draft_object_mapping_not_reported():
+    """映射行的对象不在 AI 可见对象集（bundle.objects）时不判。"""
+    bundle = _bundle()
+    bundle["mappings"].append(
+        {"object_id": 99, "semantic_config_id": "cfg-order", "column_mappings": {"x": "不存在"}}
+    )
+    assert "ONT_MAPPING_DIM_MISSING" not in _codes(check_ontology_model_consistency(bundle, _configs()))
+
+
+# ---------- ONT_PROP_UNMAPPED ----------
+
+
+def test_unmapped_property_fires_info():
+    bundle = _bundle()
+    del bundle["mappings"][1]["column_mappings"]["amount"]
+    findings = check_ontology_model_consistency(bundle, _configs())
+    finding = next(item for item in findings if item["code"] == "ONT_PROP_UNMAPPED")
+    assert finding["severity"] == "info"
+    assert "amount" in finding["message"]
+
+
+def test_object_without_mapping_rows_skips_unmapped_check():
+    """对象无任何映射行时跳过（另一条链路负责映射完整性，此处只查「有映射但漏属性」）。"""
+    bundle = _bundle()
+    bundle["mappings"] = [bundle["mappings"][0]]
+    assert "ONT_PROP_UNMAPPED" not in _codes(check_ontology_model_consistency(bundle, _configs()))
+
+
+# ---------- ONT_REL_COLUMN_INVALID / ONT_REL_TO_NOT_IDENTIFIER ----------
+
+
+def test_relation_column_not_a_property_fires_error():
+    bundle = _bundle()
+    bundle["relations"][0]["from_columns"] = ["not_a_prop"]
+    findings = check_ontology_model_consistency(bundle, _configs())
+    finding = next(item for item in findings if item["code"] == "ONT_REL_COLUMN_INVALID")
+    assert "not_a_prop" in finding["message"]
+
+
+def test_relation_column_unmapped_fires_error():
+    bundle = _bundle()
+    del bundle["mappings"][1]["column_mappings"]["order_no"]
+    findings = check_ontology_model_consistency(bundle, _configs())
+    assert "ONT_REL_COLUMN_INVALID" in _codes(findings)
+
+
+def test_relation_to_side_non_identifier_fires_warning():
+    bundle = _bundle()
+    bundle["properties"][2]["is_identifier"] = False  # order_no 非标识
+    findings = check_ontology_model_consistency(bundle, _configs())
+    finding = next(item for item in findings if item["code"] == "ONT_REL_TO_NOT_IDENTIFIER")
+    assert finding["severity"] == "warning"
+
+
+def test_relation_endpoint_outside_bundle_skipped():
+    """端点对象不在 bundle（对象名不可知）时不判该侧。"""
+    bundle = _bundle()
+    bundle["relations"][0]["to_object_id"] = 42
+    assert "ONT_REL_COLUMN_INVALID" not in _codes(check_ontology_model_consistency(bundle, _configs()))
+
+
+# ---------- ONT_TYPE_MISMATCH ----------
+
+
+@pytest.mark.parametrize(
+    ("prop_type", "dim_type", "should_fire"),
+    [
+        ("String", "number", True),  # 实测案例：金额标 String 实为数值
+        ("Decimal", "text", True),
+        ("Integer", "datetime", True),
+        ("Date", "text", True),
+        ("String", "text", False),
+        ("Decimal", "number", False),
+        ("Date", "datetime", False),
+        ("DateTime", "date", False),
+        ("Enum", "enum", False),
+        ("Boolean", "text", False),  # 维度侧无 boolean 类别，跳过
+        ("String", "unknown_type", False),  # 未知 logical_type 跳过
+    ],
+)
+def test_type_mismatch_matrix(prop_type, dim_type, should_fire):
+    bundle = _bundle()
+    configs = _configs()
+    # amount 属性 (object 2) 映射到「订单金额」维度
+    prop = next(item for item in bundle["properties"] if item["property_name"] == "amount")
+    prop["value_type"] = prop_type
+    dim = next(item for item in configs[1]["dimensions"] if item["name"] == "订单金额")
+    dim["logical_type"] = dim_type
+    codes = _codes(check_ontology_model_consistency(bundle, configs))
+    assert ("ONT_TYPE_MISMATCH" in codes) is should_fire
+
+
+def test_type_mismatch_skips_missing_dimension():
+    """维度不存在时类型比较跳过（失效维度由 ONT_MAPPING_DIM_MISSING 负责，不双报）。"""
+    bundle = _bundle()
+    bundle["mappings"][1]["column_mappings"]["amount"] = "已删除维度"
+    assert "ONT_TYPE_MISMATCH" not in _codes(check_ontology_model_consistency(bundle, _configs()))
+
+
+# ---------- 排序与登记 ----------
+
+
+def test_findings_sorted_deterministically():
+    bundle = _bundle()
+    bundle["mappings"][0]["column_mappings"]["customer_id"] = "失效A"
+    bundle["mappings"][1]["column_mappings"]["order_no"] = "已删除维度"
+    bundle["properties"][2]["is_identifier"] = False
+    bundle["relations"][0]["from_columns"] = ["ghost_prop"]
+    findings = check_ontology_model_consistency(bundle, _configs())
+    keys = [(item["targets"][0] if item["targets"] else "", item["code"]) for item in findings]
+    assert keys == sorted(keys)
+
+
+def test_rules_registry_severities():
+    assert RULES["ONT_MAPPING_DIM_MISSING"][0] == "error"
+    assert RULES["ONT_REL_COLUMN_INVALID"][0] == "error"
+    assert RULES["ONT_REL_TO_NOT_IDENTIFIER"][0] == "warning"
+    assert RULES["ONT_TYPE_MISMATCH"][0] == "warning"
+    assert RULES["ONT_PROP_UNMAPPED"][0] == "info"

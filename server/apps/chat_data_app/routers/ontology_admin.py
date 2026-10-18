@@ -14,6 +14,7 @@ from utils.error_codes import ErrorCode
 from utils.logger import get_logger
 from utils.response import business_response
 
+from ..daos.ontology_dao import OntologyDao
 from ..schema import (
     OntologyDomainUpsertRequest,
     OntologyObjectDomainRequest,
@@ -29,6 +30,11 @@ from ..services.ontology import (
     OntologyNotFoundError,
     OntologyStateInvalidError,
     ontology_service,
+)
+from ..services.ontology.ontology_consistency import check_ontology_model_consistency as _run_consistency_check
+from ..services.semantic.run.semantic_config_service import (
+    get_semantic_config_service,
+    is_public_semantic_config,
 )
 from . import JSON_API_RESPONSES
 from .dependencies import _get_current_user
@@ -287,3 +293,55 @@ async def change_ontology_relation_status(
         raise
     except Exception as e:
         return _error_response(e, "本体关系状态变更失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
+
+
+@router.get("/admin/meta/ontology/consistency-check")
+async def check_ontology_model_consistency(request: Request) -> JSONResponse:
+    """本体↔语义模型一致性健康巡检（管理端手动触发）。
+
+    比较域 = 全部领域挂载的数据源组下的公共语义配置 × AI 可见本体面
+    （bundle 与注入同源：活跃、certified/experimental、双端在集合内）。
+    只巡检不评分、不阻断任何操作——产出失修清单（映射维度失效/关系列失效/
+    类型冲突/属性未映射），供管理员修正映射或恢复维度。
+    """
+    try:
+        _get_current_user(request)
+        group_ids = sorted(
+            {
+                str((domain or {}).get("group_id") or "").strip()
+                for domain in await ontology_service.list_domains_async()
+            }
+            - {""}
+        )
+        service = get_semantic_config_service()
+        configs: list[dict] = []
+        seen_config_ids: set[str] = set()
+        for group_id in group_ids:
+            for config in await service.get_configs_async(group_id) or []:
+                config_id = str((config or {}).get("id") or "").strip()
+                if config_id and config_id not in seen_config_ids and is_public_semantic_config(config):
+                    seen_config_ids.add(config_id)
+                    configs.append(config)
+        bundle = await OntologyDao().load_injection_bundle_async(sorted(seen_config_ids)) if seen_config_ids else {}
+        findings = _run_consistency_check(bundle, configs)
+        summary = {"error": 0, "warning": 0, "info": 0}
+        for finding in findings:
+            severity = str(finding.get("severity") or "")
+            if severity in summary:
+                summary[severity] += 1
+        return business_response(
+            data={
+                "group_count": len(group_ids),
+                "config_count": len(configs),
+                "object_count": len(bundle.get("objects") or []),
+                "findings": findings,
+                "summary": summary,
+                "healthy": summary["error"] == 0 and summary["warning"] == 0,
+            },
+            msg="一致性检查完成",
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("本体一致性检查失败: %s", e, exc_info=True)
+        return _error_response(e, "本体一致性检查失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)

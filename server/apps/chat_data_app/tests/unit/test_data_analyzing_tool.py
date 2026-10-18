@@ -1568,7 +1568,13 @@ _ONTOLOGY_BUNDLE = {
 class _FakeOntologyConfigService:
     async def get_configs_async(self, datasource_id, user_id=""):
         return [
-            {"id": "sc_order", "name": "订单模型", "enabled": True},
+            {
+                "id": "sc_order",
+                "name": "订单模型",
+                "enabled": True,
+                # 失修比对基准：与 _FakeOntologyDao 的 column_mappings 右值一致 → healthy
+                "dimensions": [{"name": "订单编号"}, {"name": "城市"}],
+            },
             {"id": "sc_disabled", "name": "停用模型", "enabled": False},
         ]
 
@@ -1639,13 +1645,15 @@ def test_locate_object_happy_path_multiple_objects(monkeypatch):
         "value_type": "String",
         "is_identifier": True,
     } in order_entry["properties"]
-    # 绑定：模型名 + 快照文件名（materializer 公开别名产物）+ 属性→维度对照
+    # 绑定：模型名 + 快照文件名（materializer 公开别名产物）+ 属性→维度对照 + 失修标注（基准内 → healthy）
     assert order_entry["bindings"] == [
         {
             "semantic_config_id": "sc_order",
             "model_name": "订单模型",
             "model_file": model_snapshot_file_name({"id": "sc_order", "name": "订单模型"}),
             "column_mappings": {"city": "城市", "order_id": "订单编号"},
+            "healthy": True,
+            "stale_dimensions": [],
         }
     ]
     assert order_entry["relations"][0]["related_object"] == "user"

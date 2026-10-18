@@ -725,6 +725,15 @@ async def _run_locate_object(
             for config_id, config in zip(enabled_ids, enabled_configs, strict=True)
         },
         semantic_config_id=payload.semantic_config_id,
+        # 失修比对基准：启用模型当前维度名集合（映射右值不在集合内即标 stale）
+        dimension_names={
+            config_id: {
+                str((dim or {}).get("name") or "").strip()
+                for dim in (config.get("dimensions") or [])
+                if str((dim or {}).get("name") or "").strip()
+            }
+            for config_id, config in zip(enabled_ids, enabled_configs, strict=True)
+        },
     )
     return tool_result_payload(
         DATA_ANALYZING_TOOL_NAME,

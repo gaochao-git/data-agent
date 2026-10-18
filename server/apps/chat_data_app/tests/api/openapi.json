@@ -692,6 +692,18 @@
             "title": "Agent Id",
             "type": "string"
           },
+          "client_timestamp_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Timestamp Ms"
+          },
           "file_ids": {
             "anyOf": [
               {
@@ -6721,6 +6733,33 @@
         "summary": "List Meta Global Enum Refs",
         "tags": [
           "ChatData 元数据管理（Admin）"
+        ]
+      }
+    },
+    "/api/chatdata/admin/meta/ontology/consistency-check": {
+      "get": {
+        "description": "本体↔语义模型一致性健康巡检（管理端手动触发）。\n\n比较域 = 全部领域挂载的数据源组下的公共语义配置 × AI 可见本体面\n（bundle 与注入同源：活跃、certified/experimental、双端在集合内）。\n只巡检不评分、不阻断任何操作——产出失修清单（映射维度失效/关系列失效/\n类型冲突/属性未映射），供管理员修正映射或恢复维度。",
+        "operationId": "check_ontology_model_consistency_api_chatdata_admin_meta_ontology_consistency_check_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Check Ontology Model Consistency",
+        "tags": [
+          "ChatData 本体管理（Admin）"
         ]
       }
     },

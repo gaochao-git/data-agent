@@ -115,17 +115,32 @@ def _object_binding(
     mapping: dict[str, Any],
     config_names: dict[str, str] | None,
     model_files: dict[str, str] | None,
+    dimension_names: dict[str, set[str]] | None,
 ) -> dict[str, Any] | None:
-    """单条映射 → 绑定条目；缺 config_id 或映射为空时丢弃。"""
+    """单条映射 → 绑定条目；缺 config_id 或映射为空时丢弃。
+
+    失修标注（一致性巡检的消费场景 A）：column_mappings 右值维度不在绑定模型
+    当前维度清单中（维度被改名/删除）时逐条标 stale——模型可随时漂移，绑定
+    守护只拦删除/改名单点动作，报告必须在消费点让 AI 可见失修，否则地图
+    静默撒谎。
+    """
     column_mappings = _clean_mapping(mapping.get("column_mappings"))
     config_id = str(mapping.get("semantic_config_id") or "").strip()
     if not config_id or not column_mappings:
         return None
+    dims = (dimension_names or {}).get(config_id)
+    stale_dimensions = [
+        {"property": prop, "dimension": dim}
+        for prop, dim in sorted(column_mappings.items())
+        if dims is not None and dim not in dims
+    ]
     return {
         "semantic_config_id": config_id,
         "model_name": str((config_names or {}).get(config_id) or ""),
         "model_file": str((model_files or {}).get(config_id) or ""),
         "column_mappings": dict(sorted(column_mappings.items())),
+        "healthy": not stale_dimensions,
+        "stale_dimensions": stale_dimensions,
     }
 
 
@@ -135,10 +150,13 @@ def _object_bindings(
     config_filter: str,
     config_names: dict[str, str] | None,
     model_files: dict[str, str] | None,
+    dimension_names: dict[str, set[str]] | None,
 ) -> list[dict[str, Any]]:
     """对象的全部有效绑定（可选按模型过滤），按 config_id 升序。"""
     bindings = [
-        binding for binding in (_object_binding(mapping, config_names, model_files) for mapping in mappings) if binding
+        binding
+        for binding in (_object_binding(mapping, config_names, model_files, dimension_names) for mapping in mappings)
+        if binding
     ]
     if config_filter:
         bindings = [item for item in bindings if item["semantic_config_id"] == config_filter]
@@ -174,20 +192,34 @@ def _locate_entry(
     config_names: dict[str, str] | None,
     model_files: dict[str, str] | None,
     object_names_by_id: dict[int, str],
+    dimension_names: dict[str, set[str]] | None,
 ) -> dict[str, Any]:
     """单个命中对象的定位条目。"""
+    bindings = _object_bindings(
+        mappings,
+        config_filter=config_filter,
+        config_names=config_names,
+        model_files=model_files,
+        dimension_names=dimension_names,
+    )
+    property_names = {str(prop.get("property_name") or "").strip() for prop in properties}
+    property_names.discard("")
+    mapped_attrs: set[str] = set()
+    for binding in bindings:
+        mapped_attrs.update(binding["column_mappings"])
     return {
         "object": str(obj.get("object_name") or ""),
         "display_name": str(obj.get("display_name") or ""),
         "status": str(obj.get("status") or ""),
         "properties": _object_properties(properties),
-        "bindings": _object_bindings(
-            mappings,
-            config_filter=config_filter,
-            config_names=config_names,
-            model_files=model_files,
+        "bindings": bindings,
+        "relations": _object_relations(
+            relations,
+            obj_id,
+            object_names_by_id,
+            property_names=property_names,
+            mapped_attrs=mapped_attrs,
         ),
-        "relations": _object_relations(relations, obj_id, object_names_by_id),
     }
 
 
@@ -198,13 +230,17 @@ def build_object_locator_report(
     config_names: dict[str, str] | None = None,
     model_files: dict[str, str] | None = None,
     semantic_config_id: str | None = None,
+    dimension_names: dict[str, set[str]] | None = None,
 ) -> dict[str, Any]:
     """按对象名批量生成语义模型定位报告（纯函数，不触库）。
 
     - ``object_names``：1..``_MAX_LOCATE_OBJECTS`` 个对象 API 名，去重保序；
     - ``config_names`` / ``model_files``：semantic_config_id → 模型显示名 / 快照
       文件名（纯展示索引，缺省留空，不影响定位结论）；
-    - ``semantic_config_id``：可选，只保留该模型的绑定（多绑定对象据此过滤）。
+    - ``semantic_config_id``：可选，只保留该模型的绑定（多绑定对象据此过滤）；
+    - ``dimension_names``：semantic_config_id → 当前维度名集合（调用方从启用
+      模型 runtime configs 构建）。提供时对映射右值做失修比对并标注
+      ``stale_dimensions``；缺省不标（无比对基准时保持静默，不误报）。
 
     返回 ``{"objects": [命中对象的定位条目], "not_found": [未命中及候选]}``。
     """
@@ -242,6 +278,7 @@ def build_object_locator_report(
                 config_names=config_names,
                 model_files=model_files,
                 object_names_by_id=indexes.object_names_by_id,
+                dimension_names=dimension_names,
             )
         )
     return {"objects": located, "not_found": not_found}
@@ -251,8 +288,17 @@ def _relation_entry(
     relation: dict[str, Any],
     obj_id: int,
     object_names_by_id: dict[int, str],
+    *,
+    property_names: set[str] | None = None,
+    mapped_attrs: set[str] | None = None,
 ) -> dict[str, Any] | None:
-    """单条关系 → 对端对象视角条目；对端对象不可知时丢弃。"""
+    """单条关系 → 对端对象视角条目；对端对象不可知时丢弃。
+
+    失修标注：本对象侧（from 或 to）的关系列引用的属性不存在（模型/目录
+    漂移）或未映射到任何启用模型维度（翻译断链）时，标 ``stale`` + 原因——
+    该关系的 join 路径当前不可用，AI 不应按此 hint 拼 SQL。对端侧由对端对象
+    自己的定位条目负责（同一条关系挂在两端对象下）。
+    """
     from_id = int(relation.get("from_object_id") or 0)
     to_id = int(relation.get("to_object_id") or 0)
     is_from = from_id == obj_id
@@ -268,6 +314,16 @@ def _relation_entry(
     }
     if verbalize:
         entry["verbalize"] = verbalize
+    own_columns = relation.get("from_columns" if is_from else "to_columns") or []
+    if property_names is not None:
+        broken = [
+            attr
+            for attr in (str(column).strip() for column in own_columns)
+            if attr and (attr not in property_names or (mapped_attrs is not None and attr not in mapped_attrs))
+        ]
+        if broken:
+            entry["stale"] = True
+            entry["stale_reason"] = f"本侧关系列未映射或不存在：{('、'.join(broken))}"
     return entry
 
 
@@ -275,11 +331,20 @@ def _object_relations(
     relations: list[dict[str, Any]],
     obj_id: int,
     object_names_by_id: dict[int, str],
+    *,
+    property_names: set[str] | None = None,
+    mapped_attrs: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     """对象的关系条目（对端对象视角），超出单对象上限即截断。"""
     entries: list[dict[str, Any]] = []
     for relation in relations:
-        entry = _relation_entry(relation, obj_id, object_names_by_id)
+        entry = _relation_entry(
+            relation,
+            obj_id,
+            object_names_by_id,
+            property_names=property_names,
+            mapped_attrs=mapped_attrs,
+        )
         if not entry:
             continue
         entries.append(entry)
@@ -292,6 +357,8 @@ def build_locator_usage_hint() -> str:
     """定位报告的使用说明（引导 AI 从导航进入既有查询路径）。"""
     return (
         "查询执行走 data_analyzing_tool 的 execute_query（DSL 传上方绑定的 semantic_config_id；"
-        "维度名取对应 binding 的 column_mappings 值）；需要模型完整口径（指标/周期/relationships）时"
-        "file_read workspace 的 semantic/<model_file> 精读。跨对象关联在 SQL 模式下用模型 relationships 完成。"
+        "维度名取对应 binding 的 column_mappings 值）；binding 的 healthy=false 或 stale_dimensions "
+        "非空、relation 带 stale=true 时表示该条目已失修（维度可能被改名/删除），不要使用失修条目，"
+        "改用 file_read workspace 的 semantic/<model_file> 精读模型 YAML 核实当前口径。"
+        "需要模型完整口径（指标/周期/relationships）时同样 file_read 精读。跨对象关联在 SQL 模式下用模型 relationships 完成。"
     )
