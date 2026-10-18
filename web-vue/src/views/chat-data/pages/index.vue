@@ -113,8 +113,6 @@ const noMatchedDatasource = ref(false)
 // isNoDatasourceEmptyPage 条件与空态块随之还原，无需其他改动）。
 const SHOW_NO_DATASOURCE_EMPTY_PAGE = false
 const isNoDatasourceEmptyPage = computed(() => noMatchedDatasource.value && SHOW_NO_DATASOURCE_EMPTY_PAGE)
-// storage key 统一 chatdata: 前缀;按用户隔离,避免共享浏览器多账号互相可见
-const conversationModelStorageKey = () => `chatdata:conversation-model:${currentUser.value.id || 'anonymous'}`
 
 const noMatchedDatasourceTitle = computed(() => {
   if (parentComponentName.value) {
@@ -523,8 +521,8 @@ const currentConversationTitle = ref<string>('新会话')
 const currentConversationDatasourceId = ref<string | null>(null)
 const conversationPageSize = 20
 const conversationKey = ref(0)
+// 模型选择不持久化：始终以注册表默认模型（is_default）为起点，用户会话内可切
 const selectedConversationModelId = ref('')
-const conversationModelStorageUserKey = computed(() => currentUser.value.id || currentUser.value.name || 'default')
 
 // SqlEditor 组件引用
 const sqlEditorRef = ref<InstanceType<typeof SqlEditor> | null>(null)
@@ -683,9 +681,11 @@ const handleNewConversation = () => {
   currentConversationTitle.value = '新会话'
   currentConversationDatasourceId.value = null
   conversationKey.value++ // 强制重新渲染以清空消息
-  // 模型注册表是模块级会话期缓存，后端改配置重启后本页不会自动感知；
-  // 新建会话时强制重拉 /config（后台静默），拉回后由 Conversation 内的
-  // watch(modelOptions) 把不在新注册表中的选中模型回填为最新默认模型。
+  // 模型注册表是模块级会话期缓存，后端改配置后本页不会自动感知；
+  // 新建会话时强制重拉 /config（后台静默），并清空显式模型选择——
+  // 新会话一律回到注册表最新默认模型（is_default），由 Conversation
+  // 内的 watch(modelOptions) 在数据到达后回填。
+  selectedConversationModelId.value = ''
   loadModelOptions(true)
 }
 
@@ -847,40 +847,6 @@ const handleFirstMessageStarted = async (convId: string) => {
 // 数据源变更
 const handleDatasourceChange = (dsId: string) => {
   selectedDatasourceId.value = dsId
-}
-
-const getConversationModelStorageUserKey = () => {
-  return conversationModelStorageUserKey.value
-}
-
-const readConversationModelSelection = () => {
-  if (typeof window === 'undefined') return ''
-  try {
-    const raw = window.localStorage.getItem(conversationModelStorageKey())
-    if (!raw) return ''
-    const data = JSON.parse(raw) as Record<string, string>
-    return String(data?.[getConversationModelStorageUserKey()] || '').trim()
-  } catch (err) {
-    return ''
-  }
-}
-
-const writeConversationModelSelection = (modelId: string) => {
-  if (typeof window === 'undefined') return
-  try {
-    const raw = window.localStorage.getItem(conversationModelStorageKey())
-    const data = raw ? JSON.parse(raw) as Record<string, string> : {}
-    const userKey = getConversationModelStorageUserKey()
-    const normalizedModelId = String(modelId || '').trim()
-    if (normalizedModelId) {
-      data[userKey] = normalizedModelId
-    } else {
-      delete data[userKey]
-    }
-    window.localStorage.setItem(conversationModelStorageKey(), JSON.stringify(data))
-  } catch (err) {
-    // 本地存储不可用时保持当前页面内状态即可
-  }
 }
 
 const loadSemanticConfigs = async () => {
@@ -1223,11 +1189,14 @@ const handleConfirmContextSelector = () => {
   if (isConversationContextMode.value) {
     if (isGroupSwitchNewTask.value) {
       // 换组 = 基于新组新建任务：重置会话态（已有会话保留在历史），新任务在
-      // 首次使用会话工作区（发送首条消息 / 输入 @）时兜底创建
+      // 首次使用会话工作区（发送首条消息 / 输入 @）时兜底创建；模型选择同
+      // 「新建任务」口径——清空显式选择，回到注册表最新默认模型
       currentConversationId.value = null
       currentConversationTitle.value = '新会话'
       currentConversationDatasourceId.value = null
       conversationKey.value++
+      selectedConversationModelId.value = ''
+      loadModelOptions(true)
     }
     conversationMemberDatasourceIds.value = nextIds
     // 确认 = 草稿记录，与「新建任务」「分析模式切组」同口径（0 请求瞬时完成）。
@@ -1270,23 +1239,6 @@ watch(viewMode, (mode) => {
   if (mode === 'metricConfig') {
     loadMetricSemanticConfigs()
   }
-})
-
-watch(
-  conversationModelStorageUserKey,
-  () => {
-    const savedModelId = readConversationModelSelection()
-    if (savedModelId) {
-      selectedConversationModelId.value = savedModelId
-    } else if (selectedConversationModelId.value) {
-      writeConversationModelSelection(selectedConversationModelId.value)
-    }
-  },
-  { immediate: true }
-)
-
-watch(selectedConversationModelId, (modelId) => {
-  writeConversationModelSelection(modelId)
 })
 
 watch(

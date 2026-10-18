@@ -37,8 +37,12 @@ logger = get_logger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
+    from apps.chat_data_app.services.llm_config import refresh_registry_cache
     from utils.database import close_database
 
+    # 模型注册表启动预热必须最先执行：DB 是唯一真值，后续 context budget 校验
+    # 等启动逻辑都要读注册表；预热失败时服务路径明确报错而非回落配置文件
+    await refresh_registry_cache()
     validate_context_budget_startup_config()
     await setup_checkpointer()
     await agent_run_runtime.start()

@@ -13,7 +13,7 @@ python scripts/crypto.py encrypt '数据库密码'
 python scripts/crypto.py decrypt 'base64(iv):base64(ciphertext)'
 
 # 解密当前环境文件中的指定配置
-python scripts/crypto.py decrypt-env CHAT_DATA_API_KEY
+python scripts/crypto.py decrypt-env OPENSANDBOX_API_KEY
 ```
 
 通过 `CHAT_DATA_ENV` 显式指定环境，例如：

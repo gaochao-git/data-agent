@@ -1,24 +1,34 @@
 """智能问数 LLM 配置：模型注册表加载与思考能力分派。
 
-模型清单来自 ``CHAT_DATA_MODELS_FILE`` 指向的 JSON 注册表（每环境一份），
-启动即用、每次调用读取（文件几 KB，免重启换列表）。所有字段 fail-fast：
-配错宁可起不来，不静默误配。思考能力三层分离——
+模型清单存于 ``chat_data_model_registry`` 表（管理页维护，变更即时刷新进程内
+缓存，启动时预热一次）；表为空时自动从 ``CHAT_DATA_MODELS_FILE`` 指向的 JSON
+注册表导入一次（存量迁移种子）。服务路径（事件循环内）**只认 DB**，冷缓存
+直接报错不回落文件；无事件循环的脚本/测试场景才读该文件。所有字段 fail-fast：
+配错宁可拒绝保存，不静默误配。思考能力三层分离——
 
 - 语义层 ``ThinkingCapability``：模型固有能力（mode/dialect/efforts/default）；
 - 决策层 ``resolve_thinking``：模型能力 × 用户意图 → 本次请求怎么想（唯一裁决点）；
 - 协议层 ``_get_chat_data_extra_body``：按方言把决策序列化为 extra_body。
 """
 
+import asyncio
 import json
 import os
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
 from langchain_core.language_models import BaseChatModel
+from sqlalchemy.exc import IntegrityError
 
 from utils.crypto import decrypt_password
 from utils.llm import get_llm
+from utils.logger import get_logger
+
+from ..daos.model_registry_dao import ModelRegistryDao
+
+logger = get_logger(__name__)
 
 DEFAULT_CHAT_DATA_OUTPUT_MAX_TOKENS = 20000
 
@@ -116,6 +126,8 @@ def _parse_thinking_efforts(raw: dict, dialect: str, prefix: str) -> tuple[str, 
         return ()
     if not isinstance(efforts_raw, list) or not all(isinstance(item, str) for item in efforts_raw):
         raise ValueError(f"{prefix}: efforts 应为字符串数组")
+    if not efforts_raw:
+        return ()  # 空数组等同缺省（无档位），不触发方言冲突校验
     invalid = [item for item in efforts_raw if item not in EFFORT_LEVELS]
     if invalid:
         raise ValueError(f"{prefix}: efforts 含非法等级 {invalid}（支持: {list(EFFORT_LEVELS)}）")
@@ -178,6 +190,24 @@ def _parse_thinking(raw: Any, *, path: str, model_id: str) -> ThinkingCapability
     )
 
 
+def _thinking_cap_to_json(cap: ThinkingCapability) -> dict[str, Any]:
+    """ThinkingCapability -> 可落 params_json 的紧凑 dict（回读必须能再过 _parse_thinking）。
+
+    形状按校验规则裁剪：none 只带 mode；forced 不带 default_on；
+    efforts/default_effort 成对出现且仅在有值时序列化。
+    """
+    if cap.mode == THINKING_MODE_NONE:
+        return {"mode": THINKING_MODE_NONE}
+    out: dict[str, Any] = {"mode": cap.mode, "dialect": cap.dialect or ""}
+    if cap.mode == THINKING_MODE_OPTIONAL:
+        out["default_on"] = bool(cap.default_on)
+    if cap.efforts:
+        out["efforts"] = list(cap.efforts)
+        if cap.default_effort:
+            out["default_effort"] = cap.default_effort
+    return out
+
+
 def _parse_model_entry(entry: Any, *, path: str) -> dict[str, Any]:
     """解析注册表中的单个模型条目。"""
     if not isinstance(entry, dict):
@@ -213,16 +243,20 @@ def _parse_model_entry(entry: Any, *, path: str) -> dict[str, Any]:
     thinking = _parse_thinking(entry.get("thinking"), path=path, model_id=model_id)
     return {
         "id": model_id,
+        "request_model": model_id,
         "temperature": float(temperature),
         "context_window": int(context_window),
         "max_output_tokens": max_output_tokens,
         "vlm": vlm,
         "thinking": thinking,
+        # 连接信息可选（DB 不可用回落时也走同一 fail-fast 校验）
+        "base_url": str(entry.get("base_url") or "").strip(),
+        "api_key_cipher": str(entry.get("api_key_cipher") or "").strip(),
     }
 
 
 def load_chat_data_model_configs() -> list[dict[str, Any]]:
-    """读取并校验模型注册表；每次调用读文件，错误信息带路径与模型 id。"""
+    """读取并校验 JSON 文件注册表（存量迁移源与 DB 不可用时的回落）；每次调用读文件。"""
     path = get_chat_data_models_file_path()
     try:
         with open(path, encoding="utf-8") as fp:
@@ -243,9 +277,207 @@ def load_chat_data_model_configs() -> list[dict[str, Any]]:
     return configs
 
 
+# ---------------------------------------------------------------------------
+# DB 注册表读取（chat_data_model_registry 表）与进程内缓存
+# ---------------------------------------------------------------------------
+
+# 缓存主存 DB 读取结果，来源锚定：_registry_cache_origin 记录构建来源
+# （_REGISTRY_ORIGIN_DB=DB；否则为构建时的 CHAT_DATA_MODELS_FILE 路径），
+# 来源与当前 env 不符视为冷缓存——测试在同一用例内换注册表文件即自动失效，
+# 不再有「夹具预热污染显式注册表用例」的跨源污染。DB 刷新只发生在异步上下文：
+# 启动预热、管理端变更后、事件循环内过期重校验——避免跨 event loop 复用连接池。
+_REGISTRY_ORIGIN_DB = "\x00db"
+_registry_cache: list[dict[str, Any]] | None = None
+_registry_cache_loaded_at: float = 0.0
+_registry_cache_origin: str = ""
+_registry_refresh_task: asyncio.Task | None = None
+_DEFAULT_REGISTRY_CACHE_TTL_SECONDS = 30
+
+
+def _registry_cache_ttl() -> float:
+    """注册表缓存 TTL（秒）；多实例部署下其它实例的变更至多延迟 TTL 生效。"""
+    return float(
+        _read_positive_int_env("CHAT_DATA_MODEL_REGISTRY_CACHE_TTL_SECONDS", _DEFAULT_REGISTRY_CACHE_TTL_SECONDS)
+    )
+
+
+def reset_registry_cache() -> None:
+    """清空进程内注册表缓存（管理端失效与测试隔离用）。"""
+    global _registry_cache, _registry_cache_loaded_at, _registry_cache_origin
+    _registry_cache = None
+    _registry_cache_loaded_at = 0.0
+    _registry_cache_origin = ""
+
+
+def _parse_registry_params(params_json: str, *, model_id: str) -> dict[str, Any]:
+    """解析行内 params_json；非法 JSON 抛错由上层回落文件兜底（不静默吞掉）。"""
+    raw = str(params_json or "").strip() or "{}"
+    try:
+        params = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"模型 {model_id} 的 params_json 不是合法 JSON: {exc}") from exc
+    if not isinstance(params, dict):
+        raise ValueError(f"模型 {model_id} 的 params_json 应为 JSON 对象")
+    return params
+
+
+def _registry_row_to_config(row: dict[str, Any]) -> dict[str, Any]:
+    """DB 行 dict -> 消费方配置 dict；模型参数取自 params_json，统一 fail-fast 校验。"""
+    model_id = str(row["model_id"])
+    params = _parse_registry_params(str(row.get("params_json") or ""), model_id=model_id)
+    raw_thinking = params.get("thinking")
+    thinking = _parse_thinking(
+        raw_thinking if isinstance(raw_thinking, dict) and raw_thinking else {"mode": THINKING_MODE_NONE},
+        path="chat_data_model_registry",
+        model_id=model_id,
+    )
+    max_output = params.get("max_output_tokens")
+    # id=注册键（引用标识，会话/前端选择用它）；request_model=上游请求名（可重复，
+    # 同一请求名可接多个供应商）。存量行 model_key 为空时回落 model_id（迁移前兼容）。
+    model_key = str(row.get("model_key") or "").strip() or model_id
+    return {
+        "id": model_key,
+        "request_model": model_id,
+        "provider": str(row.get("provider") or "").strip(),
+        "display_name": str(row["display_name"] or ""),
+        "base_url": str(row["base_url"] or "").strip(),
+        "api_key_cipher": str(row["api_key_cipher"] or "").strip(),
+        "temperature": float(params.get("temperature", 0.2)),
+        "context_window": int(params.get("context_window", 48000)),
+        "max_output_tokens": int(max_output) if max_output is not None else None,
+        "vlm": bool(params.get("vlm", True)),
+        "thinking": thinking,
+        "is_default": bool(row["is_default"]),
+    }
+
+
+def _registry_config_to_row_fields(config: dict[str, Any], *, is_default: bool) -> dict[str, Any]:
+    """JSON 文件条目解析结果 -> 注册表行字段（首次导入用）。"""
+    cap: ThinkingCapability = config["thinking"]
+    params = {
+        "temperature": float(config["temperature"]),
+        "context_window": int(config["context_window"]),
+        # 必填缺省 = 上下文窗口的 1/4（与页面保存口径一致）
+        "max_output_tokens": config["max_output_tokens"]
+        if config["max_output_tokens"] is not None
+        else int(config["context_window"]) // 4,
+        "vlm": bool(config["vlm"]),
+        "thinking": _thinking_cap_to_json(cap),
+    }
+    return {
+        "display_name": str(config.get("display_name") or config["id"]),
+        # 文件种子：注册键=请求名（id 即 model_id）；连接信息随文件透传
+        # （旧格式文件无此二字段落库为空，需在管理页补全）
+        "base_url": str(config.get("base_url") or ""),
+        "api_key_cipher": str(config.get("api_key_cipher") or ""),
+        "params_json": json.dumps(params, ensure_ascii=False),
+        "is_default": 1 if is_default else 0,
+        "enabled_flag": 1,
+        "remark_text": "",
+    }
+
+
+async def _import_registry_from_file(dao: ModelRegistryDao) -> list[dict[str, Any]]:
+    """注册表从无到有时从 JSON 文件导入一次（存量迁移种子）；文件缺失/非法时跳过并告警。"""
+    try:
+        file_configs = load_chat_data_model_configs()
+    except ValueError as err:
+        logger.warning("模型注册表为空且 CHAT_DATA_MODELS_FILE 不可用，跳过自动导入: %s", err)
+        return []
+    for index, config in enumerate(file_configs):
+        fields = _registry_config_to_row_fields(config, is_default=(index == 0))
+        try:
+            await dao.upsert(model_key=str(config["id"]), fields=fields, operator_id="system", operator_name="系统迁移")
+        except IntegrityError:
+            # 多实例/多 worker 同时冷启动并发首导：唯一键撞车说明该行已被并发方写入，跳过即可
+            logger.info("模型 %s 首导撞唯一键（并发导入已写入），跳过", config["id"])
+    logger.info("模型注册表完成 JSON 文件首次导入: %s 个模型", len(file_configs))
+    return await dao.list_rows(enabled_only=True)
+
+
+async def load_registry_from_db() -> list[dict[str, Any]]:
+    """从 DB 读取启用模型配置；表从未有过行时从 JSON 文件导入一次（种子）。
+
+    「从未有过行」含软删墓碑与停用行——管理员删光/停光模型后不得回源文件复活。
+    """
+    dao = ModelRegistryDao()
+    rows = await dao.list_rows(enabled_only=True)
+    if not rows and not await dao.has_any_row():
+        rows = await _import_registry_from_file(dao)
+    return [_registry_row_to_config(row) for row in rows]
+
+
+async def refresh_registry_cache() -> None:
+    """刷新进程内注册表缓存（启动预热与管理端变更后调用）。
+
+    刷新失败时保留现有缓存（stale-while-revalidate 正语义：DB 抖动不放大为
+    服务不可用）；缓存为空（如启动预热失败）则维持冷态，服务路径会明确报错。
+    """
+    global _registry_cache, _registry_cache_loaded_at, _registry_cache_origin
+    try:
+        configs = await load_registry_from_db()
+    except Exception as err:
+        logger.warning("模型注册表 DB 读取失败，保留现有缓存继续服务: %s", err)
+        return
+    _registry_cache = configs
+    _registry_cache_loaded_at = time.monotonic()
+    _registry_cache_origin = _REGISTRY_ORIGIN_DB
+
+
+def _cache_origin_matches(origin: str) -> bool:
+    """缓存来源锚定校验：DB 来源恒匹配；文件来源需与当前 env 路径一致（env 变更即失效）。"""
+    return _registry_cache_origin in (_REGISTRY_ORIGIN_DB, origin)
+
+
+def _schedule_registry_refresh(loop: asyncio.AbstractEventLoop) -> None:
+    """在事件循环内调度一次后台注册表刷新（已有在途任务则不重复调度）。"""
+    global _registry_refresh_task
+    if _registry_refresh_task is None or _registry_refresh_task.done():
+        _registry_refresh_task = loop.create_task(refresh_registry_cache())
+
+
 def get_chat_data_model_configs() -> list[dict[str, Any]]:
-    """读取智能问数模型配置列表（首项为默认模型）。"""
-    return load_chat_data_model_configs()
+    """读取启用模型配置（进程内缓存优先，来源锚定校验）。
+
+    缓存 TTL 过期且处于事件循环内时触发后台刷新（stale-while-revalidate，先用
+    过期缓存不阻塞当次调用）。DB 为唯一真值：服务路径（事件循环内）冷缓存时
+    **禁止回落 JSON 文件**——启动预热已失败说明 DB 不可用，宁可报错也不提供
+    过期的文件数据；无事件循环（脚本/测试夹具）才允许读 CHAT_DATA_MODELS_FILE。
+    """
+    global _registry_cache, _registry_cache_loaded_at, _registry_cache_origin
+    origin = os.getenv("CHAT_DATA_MODELS_FILE") or ""
+    if (
+        _registry_cache is not None
+        and _cache_origin_matches(origin)
+        and time.monotonic() - _registry_cache_loaded_at < _registry_cache_ttl()
+    ):
+        return _registry_cache
+    if _registry_cache is not None and _cache_origin_matches(origin):
+        # 过期的缓存：优先返回旧值，事件循环内再补一次后台刷新
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop is not None:
+            _schedule_registry_refresh(loop)
+        return _registry_cache
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    if loop is not None:
+        # 冷缓存 + 服务路径：触发一次重试刷新并明确报错（不静默回落文件）
+        _schedule_registry_refresh(loop)
+        raise RuntimeError(
+            "模型注册表尚未从数据库加载成功（启动预热失败或数据库不可用），已拒绝回落配置文件；"
+            "请检查数据库连接后重启服务"
+        )
+    # 无事件循环（脚本/测试夹具）：读文件并落位缓存（来源锚定该路径，env 变更即失效）
+    configs = load_chat_data_model_configs()
+    _registry_cache = configs
+    _registry_cache_loaded_at = time.monotonic()
+    _registry_cache_origin = origin
+    return configs
 
 
 def get_chat_data_model_names() -> list[str]:
@@ -253,22 +485,40 @@ def get_chat_data_model_names() -> list[str]:
     return [config["id"] for config in get_chat_data_model_configs()]
 
 
+def _default_model_id(configs: list[dict[str, Any]]) -> str:
+    """默认模型 = 显式 is_default 标志位，无则取注册表首行兜底（文件路径无标志位）。"""
+    if not configs:
+        raise ValueError("模型注册表为空：请在模型管理面板新增并启用至少一个模型")
+    for config in configs:
+        if config.get("is_default"):
+            return str(config["id"])
+    return str(configs[0]["id"])
+
+
 def get_default_chat_data_model() -> str:
-    """读取默认模型（注册表首项）。"""
-    return get_chat_data_model_names()[0]
+    """读取默认模型。"""
+    return _default_model_id(get_chat_data_model_configs())
 
 
 def get_chat_data_model_config(model: str | None = None) -> dict[str, Any]:
-    """读取指定模型配置；未命中时抛错而非静默回退（fail-fast）。"""
+    """读取指定模型配置；未命中时抛错而非静默回退（fail-fast）。
+
+    优先按注册键（id）精确匹配；未命中再按请求名（request_model）匹配一次——
+    历史会话/定时任务存的是改造前的请求名，注册键迁移后与请求名同值，
+    新增同请求名供应商行时按列表序（默认行优先）取首个命中。
+    """
     selected = str(model or "").strip()
     configs = get_chat_data_model_configs()
     if not selected:
-        return configs[0]
+        return next(config for config in configs if config["id"] == _default_model_id(configs))
     for config in configs:
         if config["id"] == selected:
             return config
+    for config in configs:
+        if str(config.get("request_model") or "") == selected:
+            return config
     raise ValueError(
-        f"请求的模型不在 CHAT_DATA_MODELS_FILE 注册表中: {selected!r}（可用: {get_chat_data_model_names()}）"
+        f"请求的模型不在模型注册表中: {selected!r}（可用: {get_chat_data_model_names()}）"
     )
 
 
@@ -344,16 +594,22 @@ def _get_chat_data_extra_body(
 
 
 def get_chat_data_model_options() -> dict[str, Any]:
-    """读取智能问数前端可选模型列表（含思考能力声明）。"""
+    """读取智能问数前端可选模型列表（含思考能力声明）。
+
+    注册表为空（新装未配置模型）时返回空列表由前端引导，不抛错（避免 /config 500）。
+    """
     raw_models = get_chat_data_model_configs()
-    default_model = raw_models[0]["id"]
+    if not raw_models:
+        return {"models": [], "default_model": ""}
+    default_model = _default_model_id(raw_models)
     models = []
     for config in raw_models:
         cap: ThinkingCapability = config["thinking"]
         models.append(
             {
                 "id": config["id"],
-                "label": config["id"],
+                "label": str(config.get("display_name") or "") or str(config["id"]),
+                "provider": str(config.get("provider") or ""),
                 "value": config["id"],
                 "is_default": config["id"] == default_model,
                 "thinking": {
@@ -367,12 +623,15 @@ def get_chat_data_model_options() -> dict[str, Any]:
     return {"models": models, "default_model": default_model}
 
 
-def _get_chat_data_api_key() -> str | None:
-    """读取智能问数 API Key，CHAT_DATA_API_KEY 存储为 SM4 密文。"""
-    encrypted_api_key = str(os.getenv("CHAT_DATA_API_KEY") or "").strip()
-    if not encrypted_api_key:
-        return None
-    return decrypt_password(encrypted_api_key)
+def _resolve_chat_data_api_key(config: dict[str, Any]) -> str | None:
+    """解密模型行密文；行内未配置返回 None（连接信息只以模型行为准，无环境变量回退）。"""
+    cipher = str(config.get("api_key_cipher") or "").strip()
+    return decrypt_password(cipher) if cipher else None
+
+
+def _resolve_chat_data_base_url(config: dict[str, Any]) -> str | None:
+    """模型行 base_url；行内未配置返回 None（连接信息只以模型行为准，无环境变量回退）。"""
+    return str(config.get("base_url") or "").strip() or None
 
 
 def get_chat_data_llm(
@@ -388,15 +647,23 @@ def get_chat_data_llm(
     """读取模型注册表创建智能问数专用 LLM。"""
     selected_model = model or get_default_chat_data_model()
     selected_config = get_chat_data_model_config(selected_model)
+    api_key = _resolve_chat_data_api_key(selected_config)
+    base_url = _resolve_chat_data_base_url(selected_config)
+    # fail-fast：连接信息缺失给出可行动的中文报错，而非透传 OpenAI 的 "Missing credentials"
+    if not api_key or not base_url:
+        missing = "API Key 密文" if not api_key else "Base URL"
+        raise ValueError(
+            f"模型 {selected_model} 未配置{missing}：请在「模型管理」面板编辑该模型补全连接信息"
+        )
     return get_llm(
-        model=selected_model,
+        model=str(selected_config.get("request_model") or selected_model),
         streaming=streaming,
         stream_usage=stream_usage,
         temperature=selected_config["temperature"] if temperature is None else temperature,
         max_tokens=max_tokens or get_chat_data_model_max_output_tokens(selected_model),
         timeout=timeout,
-        api_key=_get_chat_data_api_key(),
-        base_url=os.getenv("CHAT_DATA_BASE_URL"),
+        api_key=api_key,
+        base_url=base_url,
         extra_body=_get_chat_data_extra_body(
             selected_config["thinking"],
             enable_thinking=enable_thinking,

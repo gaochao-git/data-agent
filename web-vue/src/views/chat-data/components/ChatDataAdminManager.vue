@@ -8,6 +8,7 @@ import { Close } from '@element-plus/icons-vue'
 import DataSourceManager from './DataSourceManager.vue'
 import GlobalSqlHistory from './GlobalSqlHistory.vue'
 import AgentScheduleAdminPanel from './AgentScheduleAdminPanel.vue'
+import ModelAdminPanel from './ModelAdminPanel.vue'
 import PluginAdminPanel from './PluginAdminPanel.vue'
 import SettingAdminPanel from './SettingAdminPanel.vue'
 import MetaManagementPanel from './MetaManagementPanel.vue'
@@ -24,13 +25,14 @@ const emit = defineEmits<{
   'open-semantic-config': [datasourceId: string, datasource?: DataSource]
 }>()
 
-const activeTab = ref<'datasource' | 'meta' | 'sqlHistory' | 'schedule' | 'plugins' | 'setting'>('datasource')
+const activeTab = ref<'datasource' | 'meta' | 'sqlHistory' | 'schedule' | 'models' | 'plugins' | 'setting'>('datasource')
 const datasourceManagerRef = ref<InstanceType<typeof DataSourceManager> | null>(null)
 const metaPanelRef = ref<InstanceType<typeof MetaManagementPanel> | null>(null)
 const sqlHistoryRef = ref<InstanceType<typeof GlobalSqlHistory> | null>(null)
 const schedulePanelRef = ref<InstanceType<typeof AgentScheduleAdminPanel> | null>(null)
 const pluginPanelRef = ref<InstanceType<typeof PluginAdminPanel> | null>(null)
 const settingPanelRef = ref<InstanceType<typeof SettingAdminPanel> | null>(null)
+const modelPanelRef = ref<InstanceType<typeof ModelAdminPanel> | null>(null)
 const adminDatasourceOptions = ref<DataSource[]>([])
 const adminDatasourceOptionsLoaded = ref(false)
 const loadingAdminDatasourceOptions = ref(false)
@@ -45,6 +47,7 @@ const tabs = [
   { key: 'meta', label: '元数据管理', icon: 'fa-tags' },
   { key: 'sqlHistory', label: '全局历史 SQL', icon: 'fa-clock-rotate-left' },
   { key: 'schedule', label: '定时任务', icon: 'fa-stopwatch' },
+  { key: 'models', label: '大模型管理', icon: 'fa-microchip' },
   { key: 'plugins', label: '插件管理', icon: 'fa-plug' },
   { key: 'setting', label: '运行配置', icon: 'fa-sliders' },
 ] as const
@@ -77,7 +80,7 @@ const handleDatasourcesUpdated = () => {
   emit('datasources-updated')
 }
 
-const switchTab = async (tab: 'datasource' | 'meta' | 'sqlHistory' | 'schedule' | 'plugins' | 'setting') => {
+const switchTab = async (tab: 'datasource' | 'meta' | 'sqlHistory' | 'schedule' | 'models' | 'plugins' | 'setting') => {
   activeTab.value = tab
   if (tab === 'meta') {
     await nextTick()
@@ -87,6 +90,11 @@ const switchTab = async (tab: 'datasource' | 'meta' | 'sqlHistory' | 'schedule' 
   if (tab === 'schedule') {
     await nextTick()
     schedulePanelRef.value?.ensureLoaded()
+    return
+  }
+  if (tab === 'models') {
+    await nextTick()
+    modelPanelRef.value?.ensureLoaded()
     return
   }
   if (tab === 'plugins') {
@@ -164,6 +172,11 @@ const switchTab = async (tab: 'datasource' | 'meta' | 'sqlHistory' | 'schedule' 
       <PluginAdminPanel
         v-show="activeTab === 'plugins'"
         ref="pluginPanelRef"
+        class="h-full"
+      />
+      <ModelAdminPanel
+        v-show="activeTab === 'models'"
+        ref="modelPanelRef"
         class="h-full"
       />
       <SettingAdminPanel

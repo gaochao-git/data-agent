@@ -20,6 +20,8 @@ interface ModelThinkingOption {
 interface ModelOption {
   id: string
   label: string
+  /** 提供商；有值时展示为 provider/label，区分同名模型 */
+  provider?: string
   is_default?: boolean
   /** 思考能力声明（/config 下发）；缺省按 optional 处理。 */
   thinking?: ModelThinkingOption
@@ -58,9 +60,14 @@ const menuOpen = ref(false)
 /** 两级筛选：null=主面板；'models'/'levels'=对应二级列表。打开与关闭时重置。 */
 const subView = ref<'models' | 'levels' | null>(null)
 
+/** 展示名：有提供商时用 provider/label 前缀，让用户知道模型来自哪个供应商。 */
+const displayLabel = (model: Pick<ModelOption, 'label' | 'provider'>) =>
+  model.provider ? `${model.provider}/${model.label}` : model.label
+
 const selectedModelLabel = computed(() => {
   if (!props.selectedModel) return '系统默认'
-  return props.modelOptions.find(model => model.id === props.selectedModel)?.label || props.selectedModel
+  const model = props.modelOptions.find(model => model.id === props.selectedModel)
+  return model ? displayLabel(model) : props.selectedModel
 })
 
 /** 当前选中模型的思考能力声明。 */
@@ -162,7 +169,7 @@ onBeforeUnmount(() => {
         title="模型设置"
         @click="openMenuPanel"
       >
-        <span class="model-trigger-label max-w-[150px] truncate text-gray-500">
+        <span class="model-trigger-label max-w-[200px] truncate text-gray-500">
           {{ selectedModelLabel }}
         </span>
         <span v-if="thinkingLevelLabel" class="shrink-0 text-gray-400">
@@ -174,7 +181,7 @@ onBeforeUnmount(() => {
     <div
       v-if="menuOpen"
       data-model-picker-menu
-      class="absolute right-0 bottom-8 z-50 w-[220px] overflow-hidden rounded-lg border border-gray-200 bg-white py-1 text-xs text-gray-600 shadow-lg"
+      class="absolute right-0 bottom-8 z-50 w-[280px] max-w-[calc(100vw-24px)] overflow-hidden rounded-lg border border-gray-200 bg-white py-1 text-xs text-gray-600 shadow-lg"
       @click.stop
     >
       <!-- 主面板：两行入口（模型 / 推理等级） -->
@@ -184,9 +191,9 @@ onBeforeUnmount(() => {
           class="flex w-full items-center justify-between gap-2 border-none bg-transparent px-3 py-2 text-left text-xs text-gray-600 cursor-pointer hover:bg-gray-50"
           @click="subView = 'models'"
         >
-          <span>模型</span>
+          <span class="shrink-0 whitespace-nowrap">模型</span>
           <span class="flex min-w-0 items-center gap-1.5 text-gray-400">
-            <span class="max-w-[110px] truncate">{{ selectedModelLabel }}</span>
+            <span class="max-w-[200px] truncate">{{ selectedModelLabel }}</span>
             <i class="fa-solid fa-chevron-right text-[8px]"></i>
           </span>
         </button>
@@ -199,7 +206,7 @@ onBeforeUnmount(() => {
           ]"
           @click="thinkingLevelOptions.length > 0 && (subView = 'levels')"
         >
-          <span>推理等级</span>
+          <span class="shrink-0 whitespace-nowrap">推理等级</span>
           <span class="flex items-center gap-1.5 text-gray-400">
             <span>{{ levelEntryValue }}</span>
             <i class="fa-solid fa-chevron-right text-[8px]"></i>
@@ -239,7 +246,7 @@ onBeforeUnmount(() => {
           ]"
           @click="selectModel(m.id)"
         >
-          <span class="truncate">{{ m.label }}</span>
+          <span class="truncate">{{ displayLabel(m) }}</span>
           <i v-if="selectedModel === m.id" class="fa-solid fa-check text-[10px]"></i>
         </button>
         <div v-if="modelOptions.length === 0" class="px-3 py-2 text-xs text-gray-400">暂无模型</div>
@@ -253,7 +260,7 @@ onBeforeUnmount(() => {
           @click="subView = null"
         >
           <i class="fa-solid fa-chevron-left text-[8px]"></i>
-          <span>推理等级</span>
+          <span class="shrink-0 whitespace-nowrap">推理等级</span>
         </button>
         <button
           v-for="level in thinkingLevelOptions"
@@ -278,7 +285,7 @@ onBeforeUnmount(() => {
 /* 窄容器下收紧触发文案宽度；容器由外层 ChatInputBox 声明 */
 @container (max-width: 560px) {
   .model-trigger-label {
-    max-width: 92px;
+    max-width: 130px;
   }
 }
 

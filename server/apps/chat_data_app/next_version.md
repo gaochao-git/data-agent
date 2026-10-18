@@ -196,6 +196,46 @@ ALTER TABLE semantic_config CHANGE COLUMN ontology_rules business_notes text COM
 ALTER TABLE chat_data_skill DROP COLUMN skill_scope;
 ALTER TABLE chat_data_skill DROP COLUMN skill_root_dir;
 ALTER TABLE chat_data_skill_version DROP COLUMN skill_version_dir;
+
+-- 模型注册表：智能问数模型清单页面化管理（替代 CHAT_DATA_MODELS_FILE JSON 文件）
+-- 除身份/连接/状态列外，全部模型参数收在 params_json（JSON 文本），扩参不改表结构
+-- 注册键 model_key：服务端自动生成的唯一引用键（会话/定时任务/管理路由以它定位行）；
+-- model_id 是上游请求名；业务唯一性=(provider, model_id, delete_flag)，软删行请求名
+-- 改写墓碑名（{原名}__d{id}_{日期}）不占用组合，重加同名生成全新行
+-- 【适用范围】新装库只跑本 CREATE TABLE；已建过旧版表的存量库跳过 CREATE，只执行下方「存量库迁移」的 ALTER 序列，两者不可都跑（列/键会重复报错）
+CREATE TABLE chat_data_model_registry (
+  id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键',
+  model_key varchar(128) NOT NULL DEFAULT '' COMMENT '注册键（服务端自动生成的唯一引用标识）',
+  model_id varchar(128) NOT NULL DEFAULT '' COMMENT '模型请求名（发给上游 API 的 model 参数）',
+  provider varchar(128) NOT NULL DEFAULT '' COMMENT '提供商（与请求名组成业务唯一键，如 DeepSeek/阿里云/本地 vLLM）',
+  display_name varchar(128) NOT NULL DEFAULT '' COMMENT '显示名（空则用 model_id）',
+  base_url varchar(500) NOT NULL DEFAULT '' COMMENT 'API Base URL（连接信息只以模型行为准）',
+  api_key_cipher text NOT NULL COMMENT 'API Key SM4 密文（base64:base64，管理端只接受密文；空则该模型未配置鉴权）',
+  params_json text NOT NULL COMMENT '模型参数 JSON（temperature/context_window/max_output_tokens/vlm/thinking 等，扩参不改表）',
+  is_default smallint NOT NULL DEFAULT 0 COMMENT '唯一默认模型标志（1=默认）',
+  enabled_flag smallint NOT NULL DEFAULT 1 COMMENT '启用标志（1=启用 0=停用）',
+  remark_text varchar(500) NOT NULL DEFAULT '' COMMENT '备注',
+  delete_flag smallint NOT NULL DEFAULT 0 COMMENT '软删标志（0=未删，非 0=已删；软删行请求名改写墓碑名）',
+  create_time datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  update_time datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  create_by varchar(100) NOT NULL DEFAULT '' COMMENT '创建人ID',
+  create_by_name varchar(100) NOT NULL DEFAULT '' COMMENT '创建人姓名',
+  update_by varchar(100) NOT NULL DEFAULT '' COMMENT '更新人ID',
+  update_by_name varchar(100) NOT NULL DEFAULT '' COMMENT '更新人姓名',
+  PRIMARY KEY (id),
+  UNIQUE KEY uniq_model_key (model_key),
+  UNIQUE KEY uniq_provider_model_del (provider, model_id, delete_flag),
+  KEY idx_model_enabled_delete (enabled_flag, delete_flag)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ChatData 模型注册表';
+
+-- 存量库迁移：注册键/提供商与请求名解耦（同一请求名可接多个供应商）
+-- 存量行注册键=请求名，历史会话/定时任务存的请求名继续可解析（读侧回落匹配）
+ALTER TABLE chat_data_model_registry ADD COLUMN model_key varchar(128) NOT NULL DEFAULT '' COMMENT '注册键（服务端自动生成的唯一引用标识）' AFTER id;
+ALTER TABLE chat_data_model_registry ADD COLUMN provider varchar(128) NOT NULL DEFAULT '' COMMENT '提供商（与请求名组成业务唯一键）' AFTER model_id;
+UPDATE chat_data_model_registry SET model_key = model_id WHERE model_key = '';
+ALTER TABLE chat_data_model_registry DROP KEY uniq_model_id;
+ALTER TABLE chat_data_model_registry ADD UNIQUE KEY uniq_model_key (model_key);
+ALTER TABLE chat_data_model_registry ADD UNIQUE KEY uniq_provider_model_del (provider, model_id, delete_flag);
 ```
 
 ## 依赖变更

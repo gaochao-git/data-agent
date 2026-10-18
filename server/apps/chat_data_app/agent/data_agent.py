@@ -23,7 +23,7 @@ from ..agent.context.context_budget import (
     count_tools_tokens,
     get_model_context_budget,
 )
-from ..services.llm_config import get_chat_data_llm
+from ..services.llm_config import get_chat_data_llm, get_chat_data_model_config, get_default_chat_data_model
 from ..services.memory.conversation_memory_service import schedule_memory_extraction_now
 from .agent_runtime import (
     build_standard_agent_middleware,
@@ -447,6 +447,24 @@ def _build_memory_compression_hook(
     return _on_dropped_messages
 
 
+def _normalize_model_id(model_id: str | None) -> str | None:
+    """历史会话可能携带已删除/停用的 model_id：降级到当前默认模型，避免整轮对话报错。
+
+    注册表是动态数据（管理页随时增删改），请求里的 model_id 只是当时的快照；
+    未命中时 fail-fast 会把整轮对话卡死在「模型不存在」，降级为默认模型并告警
+    是唯一可用的兜底。显式传 None（未选模型）不在此处理，由下游取默认。
+    """
+    if model_id is None:
+        return None
+    try:
+        get_chat_data_model_config(model_id)
+        return model_id
+    except ValueError:
+        fallback = get_default_chat_data_model()
+        logger.warning("请求模型 %r 不在模型注册表中（已删除或停用），降级为默认模型 %r", model_id, fallback)
+        return fallback
+
+
 def create_agent_from_spec(
     spec: AgentAssemblySpec,
     runtime_options: AgentRuntimeOptions | None = None,
@@ -477,7 +495,7 @@ def create_agent_from_spec(
     datasource = datasource_context or DatasourceContext()
     invocation = model_invocation or ModelInvocationConfig()
     user_id = identity.user_id
-    model_id = invocation.model_id
+    model_id = _normalize_model_id(invocation.model_id)
     enable_thinking = invocation.enable_thinking
     thinking_effort = invocation.thinking_effort
     runtime = workspace_runtime

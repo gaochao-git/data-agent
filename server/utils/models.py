@@ -1098,3 +1098,47 @@ class ChatDataPlugin(Base):
         UniqueConstraint("plugin_name", name="uniq_plugin_name"),
         Index("idx_plugin_enabled_delete", "enabled_flag", "delete_flag"),
     )
+
+
+class ChatDataModelRegistry(Base):
+    """ChatData 模型注册表：智能问数可用模型清单（页面化管理，替代 models.json 文件）。
+
+    连接信息按模型行自带（base_url / api_key SM4 密文），只以模型行为准，
+    无环境变量回退；api_key 管理端只接受密文形态（base64:base64）。
+    除身份/连接/状态外的全部模型参数收在 params_json
+    （JSON 文本），扩参不改表。
+    """
+
+    __tablename__ = "chat_data_model_registry"
+
+    id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
+    # 注册键（唯一引用标识，服务端自动生成）：会话/定时任务/管理路由都以它定位模型行；
+    # 与请求名解耦后，同一 model_id 可接多个供应商（base_url/key 不同的多行）
+    model_key: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
+    model_id: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
+    provider: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
+    display_name: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
+    base_url: Mapped[str] = mapped_column(String(500), nullable=False, default="", server_default="")
+    api_key_cipher: Mapped[str] = mapped_column(Text, nullable=False)
+    # 模型参数集（JSON 文本）：temperature/context_window/max_output_tokens/vlm/
+    # thinking{...}/extra_body/... 及后续新增参数都进该字段，扩参不改表结构。
+    params_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}", server_default="{}")
+    is_default: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
+    enabled_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=1, server_default="1")
+    remark_text: Mapped[str] = mapped_column(String(500), nullable=False, default="", server_default="")
+    delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
+    create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
+    update_time: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+    create_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+
+    __table_args__ = (
+        UniqueConstraint("model_key", name="uniq_model_key"),
+        # 业务唯一性=供应商+请求名（活跃行内）；软删行 model_id 改写墓碑名不占用组合
+        UniqueConstraint("provider", "model_id", "delete_flag", name="uniq_provider_model_del"),
+        Index("idx_model_enabled_delete", "enabled_flag", "delete_flag"),
+    )

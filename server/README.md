@@ -89,7 +89,7 @@ kill -9 $(lsof -ti :5001)
 - `SERVICE_AUTH_TOKEN`：服务间调用认证 Token，存放 SM4 加密后的密文
 - `DATABASE_URL` 或相关 MySQL 配置：业务库连接
 - `CHAT_DATA_HOME`：ChatData 应用**唯一的数据根目录**（**必填**，禁止回退到其它变量推导）；会话工作区、卸载的查询结果、系统技能（`skills/system`）、用户技能（`skills/user`）、SQLite 检查点（`checkpoints.db`）均派生自此
-- `CHAT_DATA_API_KEY` / `CHAT_DATA_BASE_URL` / `CHAT_DATA_MODELS_FILE`：智能问数模型配置，其中 `CHAT_DATA_API_KEY` 存放 SM4 加密后的密文；模型清单来自 `CHAT_DATA_MODELS_FILE` 指向的 JSON 注册表（`conf/` 下按供应商分文件，如 `models.openrouter.json`），数组首项为默认模型。每个条目包含 `id` / `temperature`（0~2）/ `context_window`（正整数）/ `vlm`（是否接受图片视觉输入，必须只配置给真实具备视觉能力的模型）/ `thinking`（思考能力声明：`mode` 为 `none`/`optional`/`forced`，`dialect` 为 `chat_template`/`reasoning_effort`/`openrouter`）。任何字段非法都会阻止服务启动；旧变量 `CHAT_DATA_MODEL` 已废弃，残留会导致启动报错
+- `CHAT_DATA_MODELS_FILE`（可选）：智能问数模型注册表 JSON，**仅作为首次部署的迁移种子**——模型清单真值是 DB 表 `chat_data_model_registry`（模型管理页维护）。只有「注册表从未有过任何行（含墓碑/停用）」时才从该文件导入一次；文件缺失或变量未设时跳过导入并告警，不影响启动，模型直接在管理页手工添加即可。条目含 `id` / `temperature`（0~2）/ `context_window`（正整数）/ `max_output_tokens`（缺省取 context_window 的 1/4）/ `vlm`（是否接受图片视觉输入，必须只配置给真实具备视觉能力的模型）/ `thinking`（思考能力声明：`mode` 为 `none`/`optional`/`forced`，`dialect` 为 `chat_template`/`reasoning_effort`/`openrouter`）。旧变量 `CHAT_DATA_MODEL` 已废弃，残留会导致启动报错。**连接信息（base_url / api_key）只以模型行为准**（管理页配置，api_key 密文存储），`CHAT_DATA_API_KEY` / `CHAT_DATA_BASE_URL` 环境变量已废弃
 - `CHAT_DATA_HTTP_*`：HTTP 模式下对接外部 Hive/查询服务，其中 `CHAT_DATA_HTTP_AUTH_TOKEN` 存放 SM4 加密后的密文
 - `OPENSANDBOX_API_KEY`：智能分析 OpenSandbox API Key，存放 SM4 加密后的密文；留空表示不传 API Key
 - `CHATDATA_ROW_LIMIT`：查询返回行数限制

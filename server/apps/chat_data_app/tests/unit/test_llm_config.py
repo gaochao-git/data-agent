@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+import time
 
 import pytest
 
@@ -23,6 +24,8 @@ def _set_registry(monkeypatch, tmp_path, models: list[dict]) -> str:
     path.write_text(json.dumps(models, ensure_ascii=False), encoding="utf-8")
     monkeypatch.setenv("CHAT_DATA_MODELS_FILE", str(path))
     monkeypatch.delenv("CHAT_DATA_MODEL", raising=False)
+    # 连接信息 fail-fast 要求模型行带 key：统一桩掉解密，避免真实 SM4 依赖
+    monkeypatch.setattr(llm_config, "decrypt_password", lambda value: "test-plain-key")
     return str(path)
 
 
@@ -32,6 +35,8 @@ def _ox_alpha(**overrides) -> dict:
         "temperature": 0.2,
         "context_window": 256000,
         "vlm": True,
+        "base_url": "http://127.0.0.1:9/v1",
+        "api_key_cipher": "dGVzdC1pdi12YWx1ZQ==:dGVzdC1jaXBoZXJ0ZXN0",
         "thinking": {
             "mode": "forced",
             "dialect": "openrouter",
@@ -49,6 +54,8 @@ def _glm_free() -> dict:
         "temperature": 0.2,
         "context_window": 256000,
         "vlm": False,
+        "base_url": "http://127.0.0.1:9/v1",
+        "api_key_cipher": "dGVzdC1pdi12YWx1ZQ==:dGVzdC1jaXBoZXJ0ZXN0",
         "thinking": {
             "mode": "optional",
             "dialect": "openrouter",
@@ -145,6 +152,17 @@ def test_registry_validation_fail_fast(monkeypatch, tmp_path, entry, match):
         llm_config.load_chat_data_model_configs()
 
 
+def test_registry_tolerates_empty_efforts_for_chat_template(monkeypatch, tmp_path):
+    """空 efforts 数组等同缺省（管理端表单会发空数组），不得触发方言冲突。"""
+    _set_registry(
+        monkeypatch,
+        tmp_path,
+        [_ox_alpha(thinking={"mode": "optional", "dialect": "chat_template", "default_on": True, "efforts": []})],
+    )
+    config = llm_config.get_chat_data_model_configs()[0]
+    assert config["thinking"].efforts == ()
+
+
 def test_registry_parses_thinking_capability(monkeypatch, tmp_path):
     deepseek = {
         "id": "deepseek-v4-flash",
@@ -192,6 +210,16 @@ def test_unknown_model_id_raises_instead_of_fallback(monkeypatch, tmp_path):
     _set_registry(monkeypatch, tmp_path, [_ox_alpha()])
     with pytest.raises(ValueError, match="不在"):
         llm_config.get_chat_data_model_config("nope-model")
+
+
+def test_normalize_model_id_downgrades_stale_model(monkeypatch, tmp_path):
+    """历史会话携带已删/停用 model_id 时降级默认模型；有效 id 与 None 原样透传。"""
+    from apps.chat_data_app.agent import data_agent
+
+    _set_registry(monkeypatch, tmp_path, [_ox_alpha()])
+    assert data_agent._normalize_model_id("stealth/ox-alpha") == "stealth/ox-alpha"
+    assert data_agent._normalize_model_id("nope-model") == "stealth/ox-alpha"
+    assert data_agent._normalize_model_id(None) is None
 
 
 # ---------------------------------------------------------------------------
@@ -329,8 +357,8 @@ def test_extra_body_forced_without_efforts_emits_nothing():
 def test_extra_body_optional_reasoning_effort_without_efforts_emits_nothing():
     """reasoning_effort 方言未声明档位时：开启也不发思考键。
 
-    配置文件是唯一事实源：需要思考的模型必须在注册表声明
-    efforts/default_effort（见 conf/models.deepseek.json），代码不做兼容兜底。
+    配置是唯一事实源：需要思考的模型必须在注册表（模型管理面板维护）
+    声明 efforts/default_effort，代码不做兼容兜底。
     历史教训：deepseek-v4-flash 曾缺档位声明，定时任务与手动聊天的
     「开启思考」被静默吞掉。
     """
@@ -374,7 +402,6 @@ def test_get_chat_data_llm_dispatches_by_registry(monkeypatch, tmp_path):
     captured = {}
     _set_registry(monkeypatch, tmp_path, [_ox_alpha(), _glm_free()])
     monkeypatch.setattr(llm_config, "get_llm", _fake_get_llm(captured))
-    monkeypatch.delenv("CHAT_DATA_API_KEY", raising=False)
 
     # 默认取首项 ox-alpha（forced），关思考请求被忽略，仍发 effort
     llm_config.get_chat_data_llm(enable_thinking=False)
@@ -392,16 +419,13 @@ def test_get_chat_data_llm_dispatches_by_registry(monkeypatch, tmp_path):
     assert captured["temperature"] == 0
 
 
-def test_chat_data_api_key_is_decrypted_from_existing_env_name(monkeypatch, tmp_path):
-    captured = {}
-    _set_registry(monkeypatch, tmp_path, [_ox_alpha()])
-    monkeypatch.setenv("CHAT_DATA_API_KEY", "encrypted-api-key")
+def test_chat_data_connection_info_resolves_from_model_row_only(monkeypatch):
+    """连接信息只以模型行为准：行内密文解密使用，行内为空返回 None（无环境变量回退）。"""
     monkeypatch.setattr(llm_config, "decrypt_password", lambda value: f"plain:{value}")
-    monkeypatch.setattr(llm_config, "get_llm", _fake_get_llm(captured))
-
-    llm_config.get_chat_data_llm()
-
-    assert captured["api_key"] == "plain:encrypted-api-key"
+    assert llm_config._resolve_chat_data_api_key({"api_key_cipher": "cipher-x"}) == "plain:cipher-x"
+    assert llm_config._resolve_chat_data_api_key({"api_key_cipher": ""}) is None
+    assert llm_config._resolve_chat_data_base_url({"base_url": "http://127.0.0.1:8100/v1"}) == "http://127.0.0.1:8100/v1"
+    assert llm_config._resolve_chat_data_base_url({"base_url": ""}) is None
 
 
 def test_get_chat_data_temperature_reads_registry(monkeypatch, tmp_path):
@@ -427,7 +451,6 @@ def test_get_chat_data_llm_uses_per_model_max_tokens(monkeypatch, tmp_path):
     captured = {}
     _set_registry(monkeypatch, tmp_path, [_ox_alpha(max_output_tokens=8192), _glm_free()])
     monkeypatch.setattr(llm_config, "get_llm", _fake_get_llm(captured))
-    monkeypatch.delenv("CHAT_DATA_API_KEY", raising=False)
     monkeypatch.setenv("CHAT_DATA_OUTPUT_MAX_TOKENS", "4096")
 
     llm_config.get_chat_data_llm()
@@ -478,10 +501,16 @@ def test_context_compression_summary_output_max_tokens_rejects_invalid_values(mo
 
 
 def test_chat_data_runtime_config_reads_runtime_options(monkeypatch, tmp_path):
-    _set_registry(monkeypatch, tmp_path, [_ox_alpha()])
+    registry_path = _set_registry(monkeypatch, tmp_path, [_ox_alpha()])
     monkeypatch.setattr("apps.chat_data_app.services.runtime_config.CHAT_DATA_DEFAULT_WORKSPACE_BACKEND", "sandbox")
     monkeypatch.setattr("apps.chat_data_app.services.runtime_config.CHAT_DATA_DEFAULT_BASH_ENABLED", True)
     monkeypatch.setattr("apps.chat_data_app.services.runtime_config.CHAT_DATA_CAPABILITY_USER_OVERRIDABLE", True)
+
+    # 服务路径冷缓存会拒绝回落文件（DB 唯一真值）：先模拟启动预热成功后的缓存落位
+    monkeypatch.setattr(llm_config, "_registry_cache", llm_config.load_chat_data_model_configs())
+    monkeypatch.setattr(llm_config, "_registry_cache_loaded_at", time.monotonic())
+    monkeypatch.setattr(llm_config, "_registry_cache_origin", registry_path)
+    monkeypatch.setattr(llm_config, "_registry_refresh_task", None)
 
     import asyncio
 
