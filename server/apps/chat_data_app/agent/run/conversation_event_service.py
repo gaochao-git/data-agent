@@ -203,52 +203,6 @@ class ConversationEventService:
 
         return None
 
-    async def load_history(
-        self,
-        *,
-        conversation_id: str,
-        user_id: str,
-        include_derived: bool = True,
-    ) -> dict[str, Any]:
-        rows = await self._dao.list_visible_events(conversation_id=conversation_id, user_id=user_id)
-        token_usage_payload = None
-        try:
-            token_usage_payload = await self._dao.get_latest_token_usage_payload(
-                conversation_id=conversation_id,
-                user_id=user_id,
-            )
-        except Exception:
-            logger.warning(
-                "读取会话 token 占用失败，历史消息继续返回: conversation_id=%s",
-                conversation_id,
-                exc_info=True,
-            )
-        messages: list[dict[str, Any]] = []
-        reasoning_segments: list[dict[str, Any]] = []
-        history_events: list[dict[str, Any]] = []
-        for row in rows:
-            payload = _load_payload(row.payload)
-            if not payload:
-                continue
-            history_events.append(
-                {
-                    "sequence_no": int(row.sequence_no),
-                    "turn_id": row.turn_id,
-                    "event_type": row.event_type,
-                    "payload": payload,
-                }
-            )
-            if include_derived and row.event_type == EVENT_REASONING:
-                reasoning_segments.append(payload)
-            elif include_derived and row.event_type in {EVENT_USER_MESSAGE, EVENT_ASSISTANT_MESSAGE, EVENT_TOOL_RESULT}:
-                messages.append(payload)
-        return {
-            "messages": messages,
-            "reasoning_segments": reasoning_segments,
-            "history_events": history_events,
-            "token_usage": _load_payload(token_usage_payload),
-        }
-
     async def load_history_with_recovery(
         self,
         *,
@@ -693,7 +647,7 @@ def _normalize_reasoning_segments(segments: list[dict[str, Any]], turn_id: str) 
             {
                 "id": str(raw.get("id") or f"reasoning-{turn_id}-{index}"),
                 "content": content,
-                "tool_call_count": _normalize_tool_call_count(raw.get("tool_call_count")),
+                "tool_call_count": _non_negative_int(raw.get("tool_call_count")),
                 "reasoning_turn_id": turn_id,
             }
         )
@@ -736,13 +690,6 @@ def _event(*, turn_id: str, event_key: str, event_type: str, payload: dict[str, 
         "event_type": event_type,
         "payload": json.dumps(payload, ensure_ascii=False, default=str),
     }
-
-
-def _normalize_tool_call_count(value: Any) -> int:
-    try:
-        return max(int(value or 0), 0)
-    except (TypeError, ValueError):
-        return 0
 
 
 def _non_negative_int(value: Any) -> int:

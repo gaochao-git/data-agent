@@ -15,23 +15,16 @@ from langchain_core.messages import BaseMessage
 
 from apps.chat_data_app.agent.middleware.context_usage import (
     SYSTEM_PROMPT_PLACEHOLDER,
-    _extract_result_messages,
-    _get_agent_context_usage,
     _merge_response_usage,
     _request_model_name,
-    bind_context_usage_middleware,
     build_message_breakdown,
-    build_prompt_breakdown,
     build_request_breakdown,
     build_usage_from_llm_calls,
     compact_token_usage_for_state,
     count_messages_tokens,
     count_tools_tokens,
     create_request_context_usage_middleware,
-    estimate_prompt_usage,
-    estimate_text_tokens,
     estimate_tokens,
-    invoke_with_context_usage,
 )
 
 
@@ -54,6 +47,7 @@ from apps.chat_data_app.agent.context.context_budget import (
     ContextInputLimitExceededError,
     ContextRequestBudget,
     build_context_usage_payload,
+    estimate_text_tokens,
     get_model_context_budget,
     hard_input_guard_tokens,
     sanitize_context_usage_for_response,
@@ -234,39 +228,6 @@ def test_count_tools_tokens_falls_back_when_tool_conversion_fails(monkeypatch):
     )
 
     assert count_tools_tokens([BadTool()]) == estimate_tokens('"bad tool schema"')
-
-
-def test_estimate_prompt_usage_marks_estimated(monkeypatch, tmp_path):
-    import json
-
-    registry = tmp_path / "models.json"
-    registry.write_text(
-        json.dumps(
-            [
-                {
-                    "id": "qwen3.5-35b-a3b",
-                    "temperature": 0.2,
-                    "context_window": 256000,
-                    "vlm": False,
-                    "thinking": {"mode": "optional", "dialect": "chat_template", "default_on": False},
-                },
-            ]
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("CHAT_DATA_MODELS_FILE", str(registry))
-    usage = estimate_prompt_usage(system_prompt="system", messages=[], model_id="qwen3.5-35b-a3b")
-
-    assert usage["used"] > 0
-    assert usage["input_tokens"] == usage["used"]
-    budget = get_model_context_budget("qwen3.5-35b-a3b")
-    assert usage["total"] == budget.context_window
-    assert usage["context_window"] == budget.context_window
-    assert usage["max_output_tokens"] == budget.max_output_tokens
-    assert usage["hard_input_limit_tokens"] == budget.hard_input_limit_tokens
-    assert usage["hard_input_guard_tokens"] == hard_input_guard_tokens(budget.hard_input_limit_tokens)
-    assert usage["compression_trigger_tokens"] == budget.compression_trigger_tokens
-    assert usage["estimated"] is True
 
 
 def test_model_context_budget_separates_output_reserve_from_compression_trigger(monkeypatch, tmp_path):
@@ -544,34 +505,6 @@ def test_build_message_breakdown_includes_tool_output_content():
     assert '{"rows": [{"count": 12}]}' in rows[0]["content"]
 
 
-def test_build_prompt_breakdown_keeps_current_input_context_only():
-    breakdown = build_prompt_breakdown(
-        system_tokens=10,
-        messages=[HumanMessage(content="统计订单数")],
-        message_tokens=10,
-        measured_input_tokens=20,
-    )
-
-    assert [item["key"] for item in breakdown] == ["system_prompt", "messages"]
-    assert breakdown[1]["children"][0]["content"] == "统计订单数"
-
-
-def test_build_prompt_breakdown_includes_provider_overhead_when_measured():
-    breakdown = build_prompt_breakdown(
-        system_tokens=100,
-        messages=[HumanMessage(content="你好")],
-        message_tokens=10,
-        measured_input_tokens=1000,
-    )
-
-    system_item = next(item for item in breakdown if item["key"] == "system_prompt")
-    message_item = next(item for item in breakdown if item["key"] == "messages")
-    assert system_item["tokens"] == 100
-    assert message_item["tokens"] == 10
-    overhead_item = next(item for item in breakdown if item["key"] == "request_overhead")
-    assert overhead_item["tokens"] == 890
-
-
 def test_build_request_breakdown_groups_tools_and_keeps_messages():
     breakdown = build_request_breakdown(
         messages=[
@@ -832,31 +765,6 @@ def test_merge_response_usage_extracts_normalized_and_openai_cache_metrics():
     assert "cached_input_tokens" not in unsupported_record
 
 
-def test_bind_and_get_agent_context_usage_handles_weakref_and_attribute_fallback():
-    class Agent:
-        pass
-
-    class NonWeakrefAgent:
-        __slots__ = ("_chat_data_context_usage_middleware",)
-
-    middleware = SimpleNamespace(get_context_usage=lambda: {"used": 10})
-    agent = Agent()
-    bind_context_usage_middleware(agent, middleware)
-    assert _get_agent_context_usage(agent) == {"used": 10}
-
-    fallback_agent = NonWeakrefAgent()
-    bind_context_usage_middleware(fallback_agent, middleware)
-    assert _get_agent_context_usage(fallback_agent) == {"used": 10}
-    assert _get_agent_context_usage(object()) is None
-
-
-def test_extract_result_messages_filters_non_messages():
-    messages = _extract_result_messages({"messages": [HumanMessage(content="ok"), "bad"]})
-    assert len(messages) == 1
-    assert messages[0].content == "ok"
-    assert _extract_result_messages({"messages": "bad"}) == []
-
-
 def test_create_request_context_usage_middleware_records_and_merges_usage():
     async def run():
         middleware = create_request_context_usage_middleware()
@@ -1028,40 +936,3 @@ def test_create_request_context_usage_middleware_keeps_tool_results(monkeypatch)
     assert "llm_calls" in middleware.get_context_usage()
     assert "breakdown" in middleware.get_context_usage()
     assert "context_editing" not in middleware.get_context_usage()
-
-
-def test_invoke_with_context_usage_prefers_runtime_usage_and_falls_back_to_estimate():
-    import asyncio
-
-    class Agent:
-        def __init__(self, result):
-            self.result = result
-
-        async def ainvoke(self, _state):
-            return self.result
-
-    middleware = SimpleNamespace(get_context_usage=lambda: {"used": 99, "total": 100})
-    agent = Agent({"messages": [AIMessage(content="完成")]})
-    bind_context_usage_middleware(agent, middleware)
-    result, usage = asyncio.run(
-        invoke_with_context_usage(
-            agent=agent,
-            state={"messages": [HumanMessage(content="问题")]},
-            system_prompt="系统",
-            model_id="qwen",
-        )
-    )
-    assert result["messages"][0].content == "完成"
-    assert usage == {"used": 99, "total": 100}
-
-    fallback_agent = Agent({"messages": [AIMessage(content="没有 runtime usage")]})
-    _result, fallback_usage = asyncio.run(
-        invoke_with_context_usage(
-            agent=fallback_agent,
-            state={"messages": [HumanMessage(content="问题")]},
-            system_prompt="系统",
-            model_id="qwen",
-        )
-    )
-    assert fallback_usage["estimated"] is True
-    assert fallback_usage["input_tokens"] > 0

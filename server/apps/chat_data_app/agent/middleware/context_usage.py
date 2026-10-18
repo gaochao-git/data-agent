@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import time
-import weakref
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
 
@@ -29,10 +28,8 @@ from ..context.context_budget import (
     build_runtime_context_summary_message,
     count_messages_tokens,
     count_tools_tokens,
-    estimate_text_tokens,
     estimate_tokens,
     extract_legacy_context_summary,
-    get_model_context_budget,
     hard_input_guard_tokens,
     latest_model_name_from_usage,
     merge_context_summaries,
@@ -41,8 +38,6 @@ from ..context.context_budget import (
 from .context_compression import format_todo_snapshot_lines, neutralize_stale_todo_tool_messages
 
 logger = get_logger(__name__)
-
-_AGENT_CONTEXT_USAGE_MIDDLEWARE: weakref.WeakKeyDictionary[Any, Any] = weakref.WeakKeyDictionary()
 
 
 def create_context_usage_middleware(
@@ -235,46 +230,6 @@ def compact_token_usage_for_state(usage: dict[str, Any] | None) -> dict[str, Any
     return compact or None
 
 
-def estimate_prompt_usage(*, system_prompt: str, messages: list[BaseMessage], model_id: str | None) -> dict[str, Any]:
-    """估算主执行 agent 本轮请求的上下文占用。"""
-    system_tokens = estimate_text_tokens(system_prompt)
-    message_tokens = count_messages_tokens(messages)
-    input_tokens = system_tokens + message_tokens + REQUEST_OVERHEAD_TOKENS
-    budget = get_model_context_budget(model_id)
-    payload = build_context_usage_payload(budget, input_tokens)
-    payload.update(
-        {
-            "input_tokens": input_tokens,
-            "output_tokens": 0,
-            "total_tokens": input_tokens,
-            "estimated": True,
-            "breakdown": build_prompt_breakdown(
-                system_tokens=system_tokens,
-                messages=messages,
-                message_tokens=message_tokens,
-                measured_input_tokens=input_tokens,
-            ),
-        }
-    )
-    return payload
-
-
-async def invoke_with_context_usage(
-    *, agent: Any, state: dict[str, Any], system_prompt: str, model_id: str | None
-) -> tuple[Any, dict[str, Any]]:
-    """执行主 agent，并返回结果和本次上下文占用。"""
-    result = await agent.ainvoke(state)
-    transcript_messages = _extract_result_messages(result)
-    runtime_usage = _get_agent_context_usage(agent)
-    if runtime_usage:
-        return result, runtime_usage
-    return result, estimate_prompt_usage(
-        system_prompt=system_prompt,
-        messages=transcript_messages or list(state.get("messages", [])),
-        model_id=model_id,
-    )
-
-
 def build_request_breakdown(
     *,
     messages: list[BaseMessage],
@@ -374,46 +329,6 @@ def build_tools_breakdown(tools: list[Any]) -> list[dict[str, Any]]:
     return items
 
 
-def build_prompt_breakdown(
-    *, system_tokens: int, messages: list[BaseMessage], message_tokens: int, measured_input_tokens: int
-) -> list[dict[str, Any]]:
-    """构造无 request middleware 时的上下文占用拆分。"""
-    items = [
-        {
-            "key": "system_prompt",
-            "label": "系统提示词与数据上下文",
-            "tokens": max(int(system_tokens or 0), 0),
-            "estimated_tokens": max(int(system_tokens or 0), 0),
-            "estimated": True,
-            "description": "仅统计服务端显式构造的 system prompt 文本，包含角色设定、工具说明、技能说明、数据源/语义层上下文。",
-        },
-        {
-            "key": "messages",
-            "label": "会话消息",
-            "tokens": max(int(message_tokens or 0), 0),
-            "estimated_tokens": max(int(message_tokens or 0), 0),
-            "estimated": True,
-            "description": "包含传入主执行 agent 的用户、AI、工具等消息。",
-            "children": build_message_breakdown(messages, scale=1.0),
-        },
-    ]
-    overhead_tokens = max(
-        int(measured_input_tokens or 0) - max(int(system_tokens or 0), 0) - max(int(message_tokens or 0), 0), 0
-    )
-    if overhead_tokens:
-        items.append(
-            {
-                "key": "request_overhead",
-                "label": "请求协议开销",
-                "tokens": overhead_tokens,
-                "estimated_tokens": overhead_tokens,
-                "estimated": True,
-                "description": "模型协议固定开销，已计入本次模型输入。",
-            }
-        )
-    return items
-
-
 def _resolve_breakdown_content(redacted: bool, message: BaseMessage) -> Any:
     """redacted 时回退占位文案，否则返回消息调试正文。"""
     if redacted:
@@ -439,7 +354,6 @@ def _build_message_breakdown_item(
     message: BaseMessage,
     index: int,
     round_index: int,
-    scale: float,
     hide_content: bool,
 ) -> tuple[dict[str, Any], int]:
     """构造单条消息的 token 用量明细，返回 (item, 更新后的 round_index)。"""
@@ -464,7 +378,7 @@ def _build_message_breakdown_item(
         # 其余消息无此字段，耗时由前端相减得出。
         "started_at_ms": _optional_non_negative_int(additional_kwargs.get("started_at_ms")),
         "ended_at_ms": _optional_non_negative_int(additional_kwargs.get("ended_at_ms")),
-        "tokens": _scale_tokens(estimated_tokens, scale),
+        "tokens": estimated_tokens,
         "estimated_tokens": estimated_tokens,
         "estimated": True,
         "content": content,
@@ -476,7 +390,6 @@ def _build_message_breakdown_item(
 def build_message_breakdown(
     messages: Sequence[BaseMessage],
     *,
-    scale: float = 1.0,
     start_index: int = 0,
     hide_content: bool = False,
 ) -> list[dict[str, Any]]:
@@ -485,7 +398,7 @@ def build_message_breakdown(
     round_index = 0
     for local_index, message in enumerate(messages or []):
         index = start_index + local_index
-        item, round_index = _build_message_breakdown_item(message, index, round_index, scale, hide_content)
+        item, round_index = _build_message_breakdown_item(message, index, round_index, hide_content)
         items.append(item)
     return items
 
@@ -529,23 +442,6 @@ def build_usage_from_llm_calls(calls: list[dict[str, Any]], budget: ContextBudge
     )
     _add_cached_input_usage(payload, calls, current_call)
     return payload
-
-
-def bind_context_usage_middleware(agent: Any, middleware: Any) -> None:
-    """关联 agent 与 context usage middleware。"""
-    try:
-        _AGENT_CONTEXT_USAGE_MIDDLEWARE[agent] = middleware
-        return
-    except TypeError:
-        pass
-    try:
-        agent._chat_data_context_usage_middleware = middleware
-    except Exception as exc:
-        # 挂载失败仅意味着该 agent 缺少上下文用量统计,不应阻断 agent 装配,故记录后返回。
-        logger.warning(
-            "上下文用量中间件挂载到 agent 失败,token 用量统计将缺失: agent=%s error=%s", type(agent).__name__, exc
-        )
-        return
 
 
 def _build_agent_context_usage(
@@ -938,25 +834,6 @@ def _optional_non_negative_int(value: Any) -> int | None:
     return token_count if token_count >= 0 else None
 
 
-def _get_agent_context_usage(agent: Any) -> dict[str, Any] | None:
-    try:
-        middleware = _AGENT_CONTEXT_USAGE_MIDDLEWARE.get(agent)
-    except TypeError:
-        middleware = None
-    if middleware is None:
-        middleware = getattr(agent, "_chat_data_context_usage_middleware", None)
-    getter = getattr(middleware, "get_context_usage", None)
-    if callable(getter):
-        return getter()
-    return None
-
-
-def _extract_result_messages(result: Any) -> list[BaseMessage]:
-    if isinstance(result, dict) and isinstance(result.get("messages"), list):
-        return [message for message in result.get("messages") or [] if isinstance(message, BaseMessage)]
-    return []
-
-
 def _message_debug_content(message: BaseMessage) -> str:
     parts = []
     content = getattr(message, "content", "") or ""
@@ -994,7 +871,3 @@ def _message_role(message: BaseMessage) -> str:
     if isinstance(message, ToolMessage):
         return "tool"
     return "message"
-
-
-def _scale_tokens(tokens: int, scale: float) -> int:
-    return max(int(round(max(int(tokens or 0), 0) * scale)), 0)

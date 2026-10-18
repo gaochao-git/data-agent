@@ -349,17 +349,3 @@ async def test_load_history_with_recovery_exposes_active_run_watermark():
     )
     assert history["token_usage"] == {"total": 5}
     assert history["active_run"]["run_id"] == "run-9"
-
-
-@pytest.mark.asyncio
-async def test_load_history_reports_none_when_no_active_run():
-    class Dao(SnapshotDao):
-        async def list_visible_events(self, **_kwargs):
-            return [_row(1, "assistant_message", '{"id":"t","role":"assistant","content":"ok"}')]
-
-        async def get_latest_token_usage_payload(self, **_kwargs):
-            return '{"total": 3}'
-
-    history = await _service(Dao()).load_history(conversation_id="conv-1", user_id="user-1")
-    assert history["token_usage"] == {"total": 3}
-    assert history["messages"][0]["role"] == "assistant"

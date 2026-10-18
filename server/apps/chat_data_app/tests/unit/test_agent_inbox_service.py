@@ -712,49 +712,6 @@ async def test_expired_run_rejects_steer_and_allows_new_run(inbox_service):
 
 
 @pytest.mark.asyncio
-async def test_recovered_messages_are_reconciled_against_checkpoint(inbox_service):
-    service, create_thread, get_session, owners = inbox_service
-    await create_thread()
-    run_id, _ = await service.start_run("conv-1", "user-1", "用户一")
-    checkpointed_id = await service.enqueue_message(
-        "conv-1",
-        "user-1",
-        "用户一",
-        "已写入 checkpoint",
-        queue_type="next-step",
-    )
-    pending_id = await service.enqueue_message(
-        "conv-1",
-        "user-1",
-        "用户一",
-        "尚未写入 checkpoint",
-        queue_type="next-step",
-    )
-    await service.claim_pending_messages(run_id, owner_token=owners[run_id])
-
-    await service.reconcile_recovered_messages(
-        run_id,
-        {checkpointed_id},
-        owners[run_id],
-    )
-
-    async with get_session() as session:
-        rows = list(
-            (
-                await session.execute(
-                    select(ChatDataAgentInbox)
-                    .where(ChatDataAgentInbox.record_type == "message")
-                    .order_by(ChatDataAgentInbox.id)
-                )
-            ).scalars()
-        )
-    assert [(row.message_id, row.record_status) for row in rows] == [
-        (checkpointed_id, "consumed"),
-        (pending_id, "pending"),
-    ]
-
-
-@pytest.mark.asyncio
 async def test_tool_execution_fence_rejects_stale_owner_before_handler():
     calls = {"handler": 0}
 

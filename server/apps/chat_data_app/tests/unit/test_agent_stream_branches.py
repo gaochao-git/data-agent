@@ -85,19 +85,6 @@ def sse_event_name(event: str) -> str:
     return event.split("\n", 1)[0].removeprefix("event: ")
 
 
-def test_checkpoint_resume_status_uses_pending_interrupts():
-    assert (
-        agent_run_support._checkpoint_resume_status(
-            SimpleNamespace(
-                pending_writes=[("task-1", "__interrupt__", [])],
-            )
-        )
-        is False
-    )
-    assert agent_run_support._checkpoint_resume_status(SimpleNamespace(pending_writes=[])) is True
-    assert agent_run_support._checkpoint_resume_status(SimpleNamespace()) is None
-
-
 @pytest.mark.asyncio
 async def test_generate_stream_emits_terminal_error_before_prepare_finishes(monkeypatch):
     async def fail_prepare(**_kwargs):
@@ -1220,108 +1207,6 @@ async def test_generate_chat_data_stream_injects_adopted_queue_messages(monkeypa
     state_messages = graph.initial_state["messages"]
     assert [message.content for message in state_messages] == ["遗留排队消息"]
     assert str(state_messages[0].id) == "adopted-1"
-
-
-@pytest.mark.asyncio
-async def test_recovery_resumes_only_when_checkpoint_contains_current_turn(monkeypatch):
-    class Checkpointer(FakeCheckpointer):
-        async def aget_tuple(self, _config):
-            return SimpleNamespace(
-                checkpoint={
-                    "channel_values": {"messages": [HumanMessage(content="当前问题", id="turn-1")]},
-                }
-            )
-
-    class Graph:
-        initial_state = "unset"
-
-        async def aget_state(self, _config):
-            return SimpleNamespace(values={"messages": [HumanMessage(content="当前问题", id="turn-1")]}, tasks=[])
-
-        async def astream(self, initial_state, *_args, **_kwargs):
-            self.initial_state = initial_state
-            yield FakeChunk(content="恢复回答", msg_type="ai"), {"langgraph_node": "model"}
-
-    reconciled = []
-
-    async def reconcile(run_id, message_ids, owner_token):
-        reconciled.append((run_id, message_ids, owner_token))
-
-    async def complete(*_args, **_kwargs):
-        return None
-
-    graph = Graph()
-    monkeypatch.setattr(agent_stream, "get_checkpointer", lambda: Checkpointer())
-    monkeypatch.setattr(agent_stream, "create_data_agent", lambda *_args, **_kwargs: graph)
-    monkeypatch.setattr(agent_stream.agent_inbox_service, "reconcile_recovered_messages", reconcile)
-    monkeypatch.setattr(agent_stream.agent_inbox_service, "complete_run", complete)
-
-    chunks = await collect_stream(
-        agent_stream._generate_chat_data_stream(
-            ChatDataStreamRequest(
-                thread_id="conv",
-                user_query="当前问题",
-                datasource_id="ds_a",
-                user_id="u1",
-                run_id="run-1",
-                owner_token="2:owner",
-                turn_id="turn-1",
-                recovering=True,
-            )
-        )
-    )
-
-    assert graph.initial_state is None
-    assert reconciled == [("run-1", {"turn-1"}, "2:owner")]
-    assert "run_restarted" in "".join(chunks)
-
-
-@pytest.mark.asyncio
-async def test_recovery_rebuilds_input_when_checkpoint_is_from_previous_turn(monkeypatch):
-    class Checkpointer(FakeCheckpointer):
-        async def aget_tuple(self, _config):
-            return SimpleNamespace(
-                checkpoint={
-                    "channel_values": {"messages": [HumanMessage(content="旧问题", id="old-turn")]},
-                }
-            )
-
-    class Graph:
-        initial_state = None
-
-        async def aget_state(self, _config):
-            return SimpleNamespace(values={}, tasks=[])
-
-        async def astream(self, initial_state, *_args, **_kwargs):
-            self.initial_state = initial_state
-            yield FakeChunk(content="新回答", msg_type="ai"), {"langgraph_node": "model"}
-
-    graph = Graph()
-
-    async def complete(*_args, **_kwargs):
-        return None
-
-    monkeypatch.setattr(agent_stream, "get_checkpointer", lambda: Checkpointer())
-    monkeypatch.setattr(agent_stream, "create_data_agent", lambda *_args, **_kwargs: graph)
-    monkeypatch.setattr(agent_stream.agent_inbox_service, "complete_run", complete)
-
-    await collect_stream(
-        agent_stream._generate_chat_data_stream(
-            ChatDataStreamRequest(
-                thread_id="conv",
-                user_query="新问题",
-                datasource_id="ds_a",
-                user_id="u1",
-                run_id="run-1",
-                owner_token="2:owner",
-                turn_id="turn-1",
-                recovering=True,
-            )
-        )
-    )
-
-    assert graph.initial_state is not None
-    assert [str(message.id) for message in graph.initial_state["messages"]] == ["turn-1"]
 
 
 @pytest.mark.asyncio

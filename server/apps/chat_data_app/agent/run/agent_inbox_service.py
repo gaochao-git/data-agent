@@ -273,10 +273,8 @@ class AgentInboxService:
                 "runtime_context": content.get("runtime_context") or {},
                 "turn_id": str(content.get("turn_id") or run_id),
                 "stream_started_wall_ms": content.get("stream_started_wall_ms"),
-                "recovering": False,
                 "messages": [self._to_human_message(row) for row in rows],
                 "resume_answer": pending_answer if isinstance(pending_answer, dict) else None,
-                "resume_started": content.get("resume_started") is True,
                 "resume_turn_id": (
                     str(resume_question.get("turn_id") or "") if isinstance(resume_question, dict) else None
                 ),
@@ -313,31 +311,6 @@ class AgentInboxService:
                 # 调度 tick 会重新扫到它；不能中断本轮其余候选的收口。
                 logger.exception("回收过期 Run 失败，等待下一周期重试: run_id=%s", run_id)
         return results
-
-    async def reconcile_recovered_messages(
-        self,
-        run_id: str,
-        checkpoint_message_ids: set[str],
-        owner_token: str | None = None,
-    ) -> None:
-        """Reconcile claimed inbox messages against a recovered checkpoint."""
-        async with get_session() as session:
-            now = await self._dao.now(session)
-            run = await self._dao.get_run_by_id_for_update(session, run_id)
-            if run is None or run.record_status != RUN_STATUS_ACTIVE:
-                raise AgentRunNotActiveError("当前运行已结束")
-            self._assert_owner(run, owner_token)
-            rows = await self._dao.list_claimed_messages(session, run_id)
-            for row in rows:
-                if row.message_id in checkpoint_message_ids:
-                    row.record_status = "consumed"
-                    row.consumed_time = now
-                else:
-                    # The old worker claimed but did not checkpoint this
-                    # message. Return it to the middleware for injection.
-                    row.record_status = "pending"
-                row.lease_expire_time = None
-                row.update_time = now
 
     async def heartbeat_run(self, run_id: str, owner_token: str | None = None) -> str:
         """只用一条带 owner fencing 的 UPDATE 续 Run 租约。

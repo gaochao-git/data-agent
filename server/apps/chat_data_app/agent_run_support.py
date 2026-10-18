@@ -402,34 +402,6 @@ def _stream_message_id(message: BaseMessage) -> str:
     return str(getattr(message, "id", "") or "").strip()
 
 
-def _checkpoint_message_ids(checkpoint_tuple: Any | None) -> set[str]:
-    """Read stable message IDs from a LangGraph checkpoint tuple."""
-    checkpoint = getattr(checkpoint_tuple, "checkpoint", None)
-    channel_values = checkpoint.get("channel_values") if isinstance(checkpoint, dict) else None
-    messages = channel_values.get("messages") if isinstance(channel_values, dict) else None
-    if not isinstance(messages, list):
-        return set()
-    return {message_id for message in messages if (message_id := _stream_message_id(message))}
-
-
-def _checkpoint_resume_status(checkpoint_tuple: Any | None) -> bool | None:
-    """Return whether a resume interrupt is still pending in the checkpoint.
-
-    ``None`` means the checkpointer implementation did not expose pending
-    writes, so callers can fall back to the durable Run marker used by older
-    checkpoints. An explicit interrupt write is the authoritative indication
-    that ``Command(resume=...)`` still needs to be submitted.
-    """
-    pending_writes = getattr(checkpoint_tuple, "pending_writes", None)
-    if pending_writes is None:
-        return None
-    has_pending_interrupt = any(
-        isinstance(write, (tuple, list)) and len(write) >= 2 and str(write[1]) == "__interrupt__"
-        for write in pending_writes
-    )
-    return not has_pending_interrupt
-
-
 async def _persist_partial_agent_turn_history(
     stream_adapter: "_AgentSseStreamAdapter | None",
     *,
@@ -684,50 +656,9 @@ async def _offload_oversized_user_input(
     }
 
 
-async def _resolve_checkpointed_turn_state(
-    checkpointer: Any,
-    config: dict[str, Any],
-    *,
-    recovering: bool,
-    resume_answer: dict[str, Any] | None,
-    resume_started: bool,
-    turn_id: str | None,
-    run_id: str | None,
-    owner_token: str | None,
-    adopted_messages: list[HumanMessage] | None,
-) -> tuple[bool, bool, list[HumanMessage] | None]:
-    """恢复场景下对齐 checkpoint 与 inbox，判定本轮的续跑形态。
-
-    返回（当前轮已 checkpoint, checkpoint 续跑生效, 接管消息列表）。
-    """
-    checkpoint_tuple = await checkpointer.aget_tuple(config) if recovering else None
-    checkpoint_message_ids = _checkpoint_message_ids(checkpoint_tuple)
-    current_turn_checkpointed = bool(turn_id and turn_id in checkpoint_message_ids)
-    checkpoint_resume_status = _checkpoint_resume_status(checkpoint_tuple)
-    resume_checkpointed = bool(
-        resume_answer is not None
-        and recovering
-        and checkpoint_tuple is not None
-        and (checkpoint_resume_status is True or (checkpoint_resume_status is None and resume_started))
-    )
-    if recovering and current_turn_checkpointed and run_id and owner_token:
-        await agent_inbox_service.reconcile_recovered_messages(
-            run_id,
-            checkpoint_message_ids,
-            owner_token,
-        )
-        # Checkpointed messages are already part of graph state; any
-        # claimed-but-uncheckpointed messages were returned to pending
-        # for the steering middleware to inject exactly once.
-        adopted_messages = []
-    return current_turn_checkpointed, resume_checkpointed, adopted_messages
-
-
 def _resolve_agent_initial_state(
     *,
-    resume_checkpointed: bool,
     resume_answer: dict[str, Any] | None,
-    current_turn_checkpointed: bool,
     user_id: str | None,
     operator_name: str | None,
     conversation_id: str,
@@ -738,13 +669,9 @@ def _resolve_agent_initial_state(
     runtime_options: AgentRuntimeOptions,
     workspace_root: str,
 ) -> Any:
-    """按恢复场景决定本轮 agent 的初始状态。"""
-    if resume_checkpointed:
-        return None
+    """决定本轮 agent 的初始状态：有恢复答案则续跑，否则构建全新上下文。"""
     if resume_answer is not None:
         return Command(resume=resume_answer)
-    if current_turn_checkpointed:
-        return None
     return _build_agent_context_state(
         user_id=user_id,
         operator_name=operator_name,
@@ -787,7 +714,6 @@ class _AgentRunStreamCallbacks:
     user_message: HumanMessage | None = None
     stream_adapter: "_AgentSseStreamAdapter | None" = None
     model_snapshot_writer: "_LatestModelSnapshotWriter | None" = None
-    recovering: bool = False
 
     @property
     def effective_turn_id(self) -> str:

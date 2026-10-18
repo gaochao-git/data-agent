@@ -32,10 +32,7 @@ from .agent_runtime import (
 from .agent_state import ChatDataAgentState
 from .middleware.after_model_history import create_after_model_history_middleware
 from .middleware.context_compression import create_context_compression_middleware
-from .middleware.context_usage import (
-    bind_context_usage_middleware,
-    create_request_context_usage_middleware,
-)
+from .middleware.context_usage import create_request_context_usage_middleware
 from .middleware.image_injection import create_image_injection_middleware
 from .middleware.mcp_tool_discovery import MCPToolDiscoveryMiddleware
 from .middleware.steering import create_steering_middleware
@@ -621,7 +618,6 @@ def create_agent_from_spec(
         checkpointer=checkpointer,
         name=spec.agent_name,
     )
-    bind_context_usage_middleware(agent, context_usage_middleware)
     return agent
 
 

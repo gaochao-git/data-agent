@@ -205,30 +205,6 @@ class ConversationEventDao:
         )
         return int(value or 0)
 
-    async def list_visible_events(self, *, conversation_id: str, user_id: str) -> list[ChatDataConversationEvent]:
-        """按服务端分配的全局会话序号返回可见历史事件。"""
-        async with self._session_context() as session:
-            return await self.list_visible_events_in_session(
-                session,
-                conversation_id=conversation_id,
-                user_id=user_id,
-            )
-
-    async def list_visible_events_in_session(
-        self,
-        session: AsyncSession,
-        *,
-        conversation_id: str,
-        user_id: str,
-    ) -> list[ChatDataConversationEvent]:
-        """在调用方事务内读取可见历史事件。"""
-        rows, _ = await self.list_visible_event_window_in_session(
-            session,
-            conversation_id=conversation_id,
-            user_id=user_id,
-        )
-        return rows
-
     @staticmethod
     def _visible_event_filters(*, conversation_id: str, user_id: str) -> list[Any]:
         """可见历史事件共用的过滤条件；每次返回新列表，调用方可安全追加条件。"""
@@ -350,15 +326,6 @@ class ConversationEventDao:
             .limit(1)
         )
         return probe is not None
-
-    async def get_latest_token_usage_payload(self, *, conversation_id: str, user_id: str) -> str | None:
-        """读取会话级 token_usage 快照（event_key 固定为 token_usage:latest 的单行 upsert）。"""
-        async with self._session_context() as session:
-            return await self.get_latest_token_usage_payload_in_session(
-                session,
-                conversation_id=conversation_id,
-                user_id=user_id,
-            )
 
     async def get_latest_token_usage_payload_in_session(
         self,

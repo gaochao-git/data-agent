@@ -339,9 +339,6 @@ class RedisEventBus:
         stream_id, fields = rows[0]
         return self._decode_event(stream_id, fields)
 
-    async def expire_run_stream(self, run_id: str) -> None:
-        await self.redis.expire(self.run_stream_key(run_id), STREAM_TTL_SECONDS)
-
     @staticmethod
     def run_stream_key(run_id: str) -> str:
         return f"{RUN_STREAM_PREFIX}{run_id}{RUN_STREAM_SUFFIX}"

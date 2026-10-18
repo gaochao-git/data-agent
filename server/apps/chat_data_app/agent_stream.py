@@ -78,7 +78,6 @@ from .agent_run_support import (
     _prepare_agent_semantic_context,
     _prepare_agent_workspace_runtime,
     _resolve_agent_initial_state,
-    _resolve_checkpointed_turn_state,
     _resolve_file_attachments,
     _resolve_workspace_created_date,
     _write_agent_model_snapshot,
@@ -369,15 +368,10 @@ def _usage_aux_stats(usage: Any | None, *, model_name: str | None = None) -> dic
         if isinstance(cache_hit_rate, (int, float)) and cache_hit_rate > 0:
             aux["cache_hit_rate"] = round(float(cache_hit_rate), 1)
     # 模型名：多工具来回时以最终回复的调用为准。
-    resolved_model_name = model_name or _latest_model_name_from_usage(usage)
+    resolved_model_name = model_name or latest_model_name_from_usage(usage)
     if resolved_model_name:
         aux["model"] = resolved_model_name
     return aux
-
-
-def _latest_model_name_from_usage(usage: dict[str, Any]) -> str:
-    """从 usage 的模型调用记录取最后一次调用的模型名；缺失返回空串。"""
-    return latest_model_name_from_usage(usage)
 
 
 # 实时生成速率（generation_speed SSE）：滑窗口径的「当前速率」，与收口的整体平均
@@ -477,6 +471,23 @@ class _MessageChunkFlags:
         )
 
 
+@dataclass(frozen=True)
+class _DurationRelayHooks:
+    """打断接力的耗时回调束（见 _resolve_task_durations）：计时起点墙钟 + Run 行读/写回调。"""
+
+    stream_started_wall_ms: int | None = None
+    resolve_inherited_duration: Callable[[], Awaitable[int]] | None = None
+    on_interrupt_finalize: Callable[[int], Awaitable[None]] | None = None
+
+
+@dataclass(frozen=True)
+class _DisconnectLog:
+    """客户端断开时的日志束：告警文案与标识。"""
+
+    message: str = "客户端已断开，停止流式输出: %s"
+    id: str = ""
+
+
 class _AgentSseStreamAdapter:
     """统一 create_agent 的 SSE 流处理，保留各 Agent 的可见消息过滤钩子。"""
 
@@ -488,25 +499,23 @@ class _AgentSseStreamAdapter:
         config: dict[str, Any],
         request: Request | None = None,
         visible_message_filter: Callable[[Any, dict[str, Any]], bool] | None = None,
-        disconnect_log_message: str = "客户端已断开，停止流式输出: %s",
-        disconnect_log_id: str = "",
+        disconnect_log: _DisconnectLog | None = None,
         include_empty_tool_messages: bool = False,
         on_first_message: Callable[[], None] | None = None,
         on_stream_started: Callable[[], Awaitable[None]] | None = None,
         debug_label: str | None = None,
         user_id: str | None = None,
         reasoning_turn_id: str | None = None,
-        stream_started_wall_ms: int | None = None,
-        resolve_inherited_duration: Callable[[], Awaitable[int]] | None = None,
-        on_interrupt_finalize: Callable[[int], Awaitable[None]] | None = None,
+        duration_relay: _DurationRelayHooks | None = None,
     ) -> None:
         self.agent = agent
         self.initial_state = initial_state
         self.config = config
         self.request = request
         self.visible_message_filter = visible_message_filter
-        self.disconnect_log_message = disconnect_log_message
-        self.disconnect_log_id = disconnect_log_id
+        log = disconnect_log or _DisconnectLog()
+        self.disconnect_log_message = log.message
+        self.disconnect_log_id = log.id
         self.include_empty_tool_messages = include_empty_tool_messages
         self.on_first_message = on_first_message
         self.on_stream_started = on_stream_started
@@ -530,12 +539,13 @@ class _AgentSseStreamAdapter:
         # 打断恢复段由 Run 行历史累计接力，见 _resolve_task_durations），finish 时汇总。
         self._first_token_wall_ms: int | None = None
         self.first_token_ms: int | None = None
-        self._stream_started_wall_ms = stream_started_wall_ms
+        relay = duration_relay or _DurationRelayHooks()
+        self._stream_started_wall_ms = relay.stream_started_wall_ms
         self._stream_ended_wall_ms: int | None = None
         # 打断接力（任务耗时累计）：恢复段惰性读取 Run 行历史累计；interrupt
         # 段结束时把累计值写回 Run 行，供恢复段接力。回调由装配层提供。
-        self._resolve_inherited_duration = resolve_inherited_duration
-        self._on_interrupt_finalize = on_interrupt_finalize
+        self._resolve_inherited_duration = relay.resolve_inherited_duration
+        self._on_interrupt_finalize = relay.on_interrupt_finalize
         self._inherited_durations: dict[str, int] | None = None
         # 实时生成速率（generation_speed）：滑窗 token 样本 (墙钟ms, 粗估token)，
         # 仅本轮流内有效；节流推送，窗口静默不推送。
@@ -997,10 +1007,8 @@ async def _generate_chat_data_stream(
     run_id = req.run_id
     adopted_messages = req.adopted_messages
     resume_answer = req.resume_answer
-    resume_started = req.resume_started
     resume_turn_id = req.resume_turn_id
     turn_id = req.turn_id
-    recovering = req.recovering
     owner_token = req.owner_token
     stream_event_id_provider = req.stream_event_id_provider
     stream_started_wall_ms = req.stream_started_wall_ms
@@ -1055,10 +1063,8 @@ async def _generate_chat_data_stream(
                 adopted_messages=adopted_messages,
                 stream_started_wall_ms=stream_started_wall_ms,
                 resume_answer=resume_answer,
-                resume_started=resume_started,
                 resume_turn_id=resume_turn_id,
                 turn_id=turn_id,
-                recovering=recovering,
                 owner_token=owner_token,
                 stream_event_id_provider=stream_event_id_provider,
             ),
@@ -1155,7 +1161,7 @@ def _create_agent_stream_adapter(
         config=config,
         request=request,
         visible_message_filter=_is_chat_data_visible_stream_message,
-        disconnect_log_id=callbacks.thread_id,
+        disconnect_log=_DisconnectLog(id=callbacks.thread_id),
         debug_label="AI Content from model",
         user_id=callbacks.user_id,
         include_empty_tool_messages=True,
@@ -1168,21 +1174,13 @@ def _create_agent_stream_adapter(
             if callbacks.user_message
             else None
         ),
-        resolve_inherited_duration=inherited_duration_reader,
-        on_interrupt_finalize=interrupt_duration_writer,
-        stream_started_wall_ms=stream_started_wall_ms,
+        duration_relay=_DurationRelayHooks(
+            stream_started_wall_ms=stream_started_wall_ms,
+            resolve_inherited_duration=inherited_duration_reader,
+            on_interrupt_finalize=interrupt_duration_writer,
+        ),
     )
     callbacks.stream_adapter = adapter
-    if callbacks.recovering:
-        adapter.queue_event(
-            _format_sse(
-                "run_restarted",
-                {
-                    "run_id": callbacks.run_id,
-                    "turn_id": callbacks.turn_id,
-                },
-            )
-        )
     return adapter
 
 
@@ -1341,14 +1339,10 @@ class TurnUserInput:
 
 @dataclass(frozen=True)
 class TurnResumeContext:
-    """checkpoint 恢复相关的上下文（是否恢复、恢复答案、所属 turn/run 与租约 token）。"""
+    """恢复相关的上下文（恢复答案、所属 turn）。"""
 
-    recovering: bool
     resume_answer: dict[str, Any] | None
-    resume_started: bool
     turn_id: str | None
-    run_id: str | None
-    owner_token: str | None
 
 
 @dataclass(frozen=True)
@@ -1368,17 +1362,14 @@ class TurnRuntimeContext:
 
 
 async def _resolve_agent_turn_inputs(
-    checkpointer: Any,
-    config: dict[str, Any],
     *,
     user_input: TurnUserInput,
     resume: TurnResumeContext,
     runtime: TurnRuntimeContext,
     receipt_timestamp_ms: int | None = None,
 ) -> tuple[HumanMessage | None, Any, str, list[HumanMessage] | None]:
-    """解析 checkpoint 恢复状态，构建用户消息、initial_state 与系统提示词。
+    """构建用户消息、initial_state 与系统提示词。
 
-    `adopted_messages` 可能在恢复对齐时被重置为空列表，须回传给主流程继续使用。
     receipt_timestamp_ms：计时起点墙钟（Run 行章，优先客户端点击时刻）。传入时
     把它格式化后覆盖用户消息时间戳——气泡显示、历史回放、harness 首 token/总耗时
     三者同锚；缺失回退消息构建时刻（_build_user_message 默认章）。
@@ -1390,12 +1381,8 @@ async def _resolve_agent_turn_inputs(
     vision_attachments = user_input.vision_attachments
     skill_names = user_input.skill_names
     adopted_messages = user_input.adopted_messages
-    recovering = resume.recovering
     resume_answer = resume.resume_answer
-    resume_started = resume.resume_started
     turn_id = resume.turn_id
-    run_id = resume.run_id
-    owner_token = resume.owner_token
     user_id = runtime.user_id
     username = runtime.username
     thread_id = runtime.thread_id
@@ -1414,19 +1401,8 @@ async def _resolve_agent_turn_inputs(
         message_kwargs["timestamp"] = time.strftime(
             "%Y-%m-%d %H:%M:%S", time.localtime(receipt_timestamp_ms / 1000)
         )
-    current_turn_checkpointed, resume_checkpointed, adopted_messages = await _resolve_checkpointed_turn_state(
-        checkpointer,
-        config,
-        recovering=recovering,
-        resume_answer=resume_answer,
-        resume_started=resume_started,
-        turn_id=turn_id,
-        run_id=run_id,
-        owner_token=owner_token,
-        adopted_messages=adopted_messages,
-    )
     user_message = None
-    if resume_answer is None and not current_turn_checkpointed and (user_query.strip() or not adopted_messages):
+    if resume_answer is None and (user_query.strip() or not adopted_messages):
         user_message = _build_user_message(
             message_content,
             file_selections,
@@ -1435,9 +1411,7 @@ async def _resolve_agent_turn_inputs(
             **message_kwargs,
         )
     initial_state = _resolve_agent_initial_state(
-        resume_checkpointed=resume_checkpointed,
         resume_answer=resume_answer,
-        current_turn_checkpointed=current_turn_checkpointed,
         user_id=user_id,
         operator_name=username,
         conversation_id=thread_id,
@@ -1506,10 +1480,8 @@ async def _run_chat_data_agent_stream(
     run_id = req.run_id
     adopted_messages = req.adopted_messages
     resume_answer = req.resume_answer
-    resume_started = req.resume_started
     resume_turn_id = req.resume_turn_id
     turn_id = req.turn_id
-    recovering = req.recovering
     owner_token = req.owner_token
     stream_event_id_provider = req.stream_event_id_provider
     stream_started_wall_ms = req.stream_started_wall_ms
@@ -1614,8 +1586,6 @@ async def _run_chat_data_agent_stream(
             # refresh 内部 fail-closed 不抛异常，create_data_agent 读到的快照必然已刷新。
             (user_message, initial_state, system_prompt, adopted_messages), _ = await asyncio.gather(
                 _resolve_agent_turn_inputs(
-                    checkpointer,
-                    config,
                     user_input=TurnUserInput(
                         user_query=user_query,
                         message_content=message_content,
@@ -1625,12 +1595,8 @@ async def _run_chat_data_agent_stream(
                         adopted_messages=adopted_messages,
                     ),
                     resume=TurnResumeContext(
-                        recovering=recovering,
                         resume_answer=resume_answer,
-                        resume_started=resume_started,
                         turn_id=turn_id,
-                        run_id=run_id,
-                        owner_token=owner_token,
                     ),
                     runtime=TurnRuntimeContext(
                         user_id=user_id,
@@ -1666,7 +1632,6 @@ async def _run_chat_data_agent_stream(
                 workspace_root=workspace_paths["root"],
                 adopted_messages=adopted_messages,
                 user_message=user_message,
-                recovering=recovering,
             )
             model_snapshot_writer = _LatestModelSnapshotWriter(
                 partial(_write_agent_model_snapshot, callbacks),

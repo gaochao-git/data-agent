@@ -94,7 +94,6 @@ def test_assemble_tools_registers_all_tools_except_optional_bash(tmp_path):
 
 def test_create_data_agent_uses_standard_middleware_without_model_fallback(monkeypatch, tmp_path):
     captured = {}
-    bound = []
     runtime, options = _runtime(tmp_path)
 
     class FakeLLM:
@@ -114,9 +113,6 @@ def test_create_data_agent_uses_standard_middleware_without_model_fallback(monke
     monkeypatch.setattr(data_agent, "create_request_context_usage_middleware", fake_context_usage_middleware)
     monkeypatch.setattr(data_agent, "assemble_tools", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(data_agent, "create_agent", fake_create_agent)
-    monkeypatch.setattr(
-        data_agent, "bind_context_usage_middleware", lambda agent, middleware: bound.append((agent, middleware))
-    )
 
     agent = data_agent.create_data_agent(
         options,
@@ -141,7 +137,6 @@ def test_create_data_agent_uses_standard_middleware_without_model_fallback(monke
     assert captured["middleware"][10].name == "ToolErrorMiddleware"
     assert context_kwargs["tools"] == []
     assert context_kwargs["state_schema"] is ChatDataAgentState
-    assert bound == [(agent, {"context_model": "primary-model"})]
 
 
 def test_create_data_agent_registers_after_model_history_middleware(monkeypatch, tmp_path):
