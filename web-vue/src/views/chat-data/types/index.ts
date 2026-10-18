@@ -160,6 +160,20 @@ export interface ChatDataModelThinking {
   default_effort: string | null
 }
 
+/** 管理端档位项：value 缺省 = 发档位名本身；参数值支持 string/bool/number。 */
+export interface ChatDataEffortLevel {
+  level: string
+  value?: string | number | boolean
+}
+
+/** 管理端 thinking 形状：efforts 兼容旧 string[]（编辑存量数据时出现）与新对象数组。 */
+export interface ChatDataModelThinkingAdmin {
+  mode: 'none' | 'optional' | 'forced'
+  dialect?: string
+  efforts?: Array<string | ChatDataEffortLevel>
+  default_effort?: string | null
+}
+
 export interface ChatDataModelOption {
   id: string
   label: string
@@ -1020,7 +1034,7 @@ export interface ChatDataModelRegistryItem {
     context_window?: number
     max_output_tokens?: number | null
     vlm?: boolean
-    thinking?: Partial<ChatDataModelThinking>
+    thinking?: ChatDataModelThinkingAdmin
   }
   is_default: boolean
   enabled_flag: number

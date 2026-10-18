@@ -65,7 +65,7 @@ def test_parse_thinking_accepts_all_declared_fields():
 
 
 def test_parse_thinking_rejects_non_list_efforts():
-    with pytest.raises(ValueError, match="efforts 应为字符串数组"):
+    with pytest.raises(ValueError, match="efforts 应为数组"):
         llm_config._parse_thinking(
             {
                 "mode": "optional",
@@ -80,7 +80,7 @@ def test_parse_thinking_rejects_non_list_efforts():
 
 
 def test_parse_thinking_rejects_mixed_type_efforts_list():
-    with pytest.raises(ValueError, match="efforts 应为字符串数组"):
+    with pytest.raises(ValueError, match="档位应为字符串或"):
         llm_config._parse_thinking(
             {
                 "mode": "optional",
@@ -94,13 +94,14 @@ def test_parse_thinking_rejects_mixed_type_efforts_list():
         )
 
 
-def test_parse_thinking_rejects_unknown_effort_level():
-    with pytest.raises(ValueError, match="efforts 含非法等级"):
+def test_parse_thinking_rejects_illegal_effort_level_name():
+    """档位名自由但受字符集约束：自定义 ultra 合法，含空格/非法字符拒绝。"""
+    with pytest.raises(ValueError, match="档位名"):
         llm_config._parse_thinking(
             {
                 "mode": "optional",
                 "dialect": "openrouter",
-                "efforts": ["low", "ultra"],
+                "efforts": ["low", "bad name!"],
                 "default_on": True,
                 "default_effort": "low",
             },
@@ -186,7 +187,7 @@ def test_extra_body_is_empty_for_undeclared_dialect_when_on():
     capability = llm_config.ThinkingCapability(
         mode=llm_config.THINKING_MODE_OPTIONAL,
         dialect="some-future-dialect",
-        efforts=("low", "high"),
+        efforts=(llm_config.EffortLevel(level="low"), llm_config.EffortLevel(level="high")),
         default_on=True,
         default_effort="low",
     )

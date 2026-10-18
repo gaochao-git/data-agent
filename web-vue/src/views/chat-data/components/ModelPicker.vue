@@ -52,8 +52,8 @@ const emit = defineEmits<{
   'update:thinkingEffort': [value: string]
 }>()
 
-/** off/on 是无 effort 声明时的哨兵档；其余键为模型元数据 effort 值。 */
-const LEVEL_LABELS: Record<string, string> = { off: '关闭', on: '开启', low: '低', medium: '中', high: '高' }
+/** off/on 是无 effort 声明时的哨兵档；其余键为模型元数据 effort 值（off/none 声明档后端按关形态发）。 */
+const LEVEL_LABELS: Record<string, string> = { off: '关闭', on: '开启', none: '关闭', low: '低', medium: '中', high: '高', minimal: '最低', xhigh: '超高', ultra: '极高', max: '最大' }
 
 const menuRef = ref<HTMLElement | null>(null)
 const menuOpen = ref(false)
@@ -83,14 +83,14 @@ const thinkingDisplayOn = computed(() => {
   if (mode === 'none') return false
   return props.enableDeepThinking ?? !!selectedModelThinking.value?.default_on
 })
-/** 档位选项：none 无档（不支持）；forced 恒开只列 efforts；optional 首列「关闭」。 */
+/** 档位选项：none 无档（不支持）；forced 恒开只列 efforts；optional 首列「关闭」（声明档已含 off 时去重）。 */
 const thinkingLevelOptions = computed(() => {
   const thinking = selectedModelThinking.value
   if (!thinking || thinking.mode === 'none') return []
   if (thinking.mode === 'forced') {
     return thinking.efforts.length > 0 ? [...thinking.efforts] : ['on']
   }
-  return ['off', ...(thinking.efforts.length > 0 ? thinking.efforts : ['on'])]
+  return [...new Set(['off', ...(thinking.efforts.length > 0 ? thinking.efforts : ['on'])])]
 })
 const thinkingEffortDisplay = computed(
   () => props.thinkingEffort ?? selectedModelThinking.value?.default_effort ?? null

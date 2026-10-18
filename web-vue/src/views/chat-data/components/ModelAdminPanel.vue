@@ -20,7 +20,9 @@ import {
 } from '../api'
 import type { ChatDataModelRegistryItem, ChatDataModelThinking } from '../types'
 
-const EFFORT_LEVELS = ['low', 'medium', 'high'] as const
+// 档位候选建议（allow-create 下拉的快捷项；档位名实际自由，受后端字符集/数量约束）；
+// off/none 选中时后端按「关」形态序列化，其余对齐 DeepSeek 新 API 档位族
+const EFFORT_SUGGESTIONS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'ultra', 'max'] as const
 const THINKING_DIALECTS = [
   { value: 'chat_template', label: 'chat_template（纯布尔）' },
   { value: 'reasoning_effort', label: 'reasoning_effort（档位）' },
@@ -77,14 +79,44 @@ const form = reactive({
   vlm: true,
   thinking_mode: 'none' as ChatDataModelThinking['mode'],
   thinking_dialect: 'reasoning_effort',
-  thinking_efforts: [] as string[],
-  thinking_default_on: false,
+  // 档位行编辑器：value 为 UI 字符串（空=与档位同名）；保存时按规则解析为 string/bool/number
+  thinking_efforts: [] as Array<{ level: string; value: string }>,
   thinking_default_effort: ''
 })
 
-// chat_template 为纯布尔协议不支持档位；default_effort 必须在 efforts 内
+// chat_template 为纯布尔协议不支持档位；default_effort 必须在档位列表内
 const effortsAvailable = computed(() => form.thinking_mode !== 'none' && form.thinking_dialect !== 'chat_template')
-const defaultEffortOptions = computed(() => form.thinking_efforts.map(level => ({ value: level, label: level })))
+
+// 参数值解析：空=同名省略；true/false→布尔；纯数字→number；其余按字符串（后端同规则校验）
+const parseWireValue = (raw: string): string | number | boolean | undefined => {
+  if (raw === '') return undefined
+  if (raw === 'true') return true
+  if (raw === 'false') return false
+  if (!Number.isNaN(Number(raw))) return Number(raw)
+  return raw
+}
+
+const addEffortRow = () => {
+  form.thinking_efforts.push({ level: '', value: '' })
+}
+
+const removeEffortRow = (index: number) => {
+  const [removed] = form.thinking_efforts.splice(index, 1)
+  // 默认档位联动：被删档位是当前默认时清空选择
+  if (removed && removed.level.trim() === form.thinking_default_effort) {
+    form.thinking_default_effort = ''
+  }
+}
+
+// 行内勾选=默认档位（单选语义：勾选即替换，取消勾选清空）
+const setDefaultEffortRow = (row: { level: string; value: string }, checked: boolean) => {
+  const level = row.level.trim()
+  if (checked) {
+    form.thinking_default_effort = level
+  } else if (form.thinking_default_effort === level) {
+    form.thinking_default_effort = ''
+  }
+}
 
 // 单次最大输出必填；未手动定制时随上下文窗口联动（默认取 1/4）
 const maxOutputTouched = ref(false)
@@ -114,7 +146,6 @@ const resetForm = () => {
   form.thinking_mode = 'none'
   form.thinking_dialect = 'reasoning_effort'
   form.thinking_efforts = []
-  form.thinking_default_on = false
   form.thinking_default_effort = ''
   testResult.value = null
   modelIdOptions.value = []
@@ -181,8 +212,12 @@ const fillForm = (row: ChatDataModelRegistryItem) => {
   const thinking = params.thinking
   form.thinking_mode = thinking?.mode ?? 'none'
   form.thinking_dialect = thinking?.dialect || 'reasoning_effort'
-  form.thinking_efforts = [...(thinking?.efforts || [])]
-  form.thinking_default_on = thinking?.default_on ?? false
+  // 兼容旧 string[]（存量数据）与新 [{level, value}] 两种形状，统一转为行编辑器
+  form.thinking_efforts = (thinking?.efforts || []).map(item =>
+    typeof item === 'string'
+      ? { level: item, value: '' }
+      : { level: item.level, value: item.value == null ? '' : String(item.value) }
+  )
   form.thinking_default_effort = thinking?.default_effort || ''
 }
 
@@ -216,11 +251,17 @@ const buildRequestParams = () => {
       mode: form.thinking_mode,
       dialect: form.thinking_dialect
     }
-    // 仅 optional 允许 default_on；档位与默认档位成对出现，无档位方言（chat_template）不发 efforts
-    if (form.thinking_mode === 'optional') thinking.default_on = form.thinking_default_on
-    if (effortsAvailable.value && form.thinking_efforts.length > 0) {
-      thinking.efforts = [...form.thinking_efforts]
-      if (form.thinking_default_effort) thinking.default_effort = form.thinking_default_effort
+    // 默认开启由后端按默认档位推导；无档位方言（chat_template）不发 efforts
+    if (effortsAvailable.value) {
+      if (form.thinking_efforts.length > 0) {
+        // 新形状 [{level, value?}]：value 空 = 与档位同名（省略键）
+        thinking.efforts = form.thinking_efforts.map(row => {
+          const level = row.level.trim()
+          const value = parseWireValue(row.value.trim())
+          return value === undefined ? { level } : { level, value }
+        })
+        if (form.thinking_default_effort) thinking.default_effort = form.thinking_default_effort
+      }
     }
     params.thinking = thinking
   }
@@ -243,6 +284,20 @@ const validateForm = (): string | null => {
     return '单次最大输出必须小于上下文窗口'
   }
   if (form.thinking_mode === 'optional' && !effortsAvailable.value) return '' // optional 无档位合法
+  // 档位行编辑器校验（与后端 _parse_thinking 同规则）
+  if (effortsAvailable.value) {
+    if (form.thinking_efforts.length > 10) return '档位数量超过上限 10'
+    const seen = new Set<string>()
+    for (const row of form.thinking_efforts) {
+      const level = row.level.trim()
+      if (!level) return '档位名不能为空'
+      if (!/^[A-Za-z0-9_.:-]{1,32}$/.test(level)) return `档位名 ${level} 非法（限 1~32 位字母/数字/_.:-）`
+      if (seen.has(level)) return `档位名重复: ${level}`
+      seen.add(level)
+      if (row.value.trim().length > 64) return '档位参数值字符串超长（≤64）'
+    }
+    if (form.thinking_default_effort && !seen.has(form.thinking_default_effort)) return '默认档位必须在档位列表中'
+  }
   return null
 }
 
@@ -374,7 +429,9 @@ const formatThinking = (row: ChatDataModelRegistryItem) => {
   if (!thinking || thinking.mode === 'none') return '不支持'
   const dialect = thinking.dialect || '-'
   if (thinking.mode === 'forced') return `强制 / ${dialect}`
-  return `可选 / ${dialect}${thinking.default_on ? '（默认开）' : '（默认关）'}`
+  // 默认开启由默认档位推导：默认档位为普通档=默认开；off/none 或未勾=默认关
+  const defaultOn = !!thinking.default_effort && !['off', 'none'].includes(thinking.default_effort)
+  return `可选 / ${dialect}${defaultOn ? '（默认开）' : '（默认关）'}`
 }
 
 defineExpose({ ensureLoaded })
@@ -582,25 +639,49 @@ defineExpose({ ensureLoaded })
           </div>
         </div>
         <div v-if="form.thinking_mode !== 'none'" class="rounded-md border border-slate-100 bg-slate-50/60 px-3 py-2.5">
-          <div v-if="effortsAvailable" class="mb-2.5">
-            <div class="mb-1 text-xs text-slate-500">支持档位</div>
-            <el-select v-model="form.thinking_efforts" size="small" multiple class="!w-full" placeholder="选择档位">
-              <el-option v-for="level in EFFORT_LEVELS" :key="level" :label="level" :value="level" />
-            </el-select>
+          <div v-if="effortsAvailable">
+            <div class="mb-1 flex items-center gap-2 text-xs text-slate-500">
+              <span>支持档位</span>
+              <span class="text-slate-400">勾选＝默认档位（不勾则按方言兜底）</span>
+            </div>
+            <div class="space-y-1.5">
+              <div v-for="(row, index) in form.thinking_efforts" :key="index" class="flex items-center gap-1.5">
+                <el-checkbox
+                  :model-value="row.level.trim() !== '' && row.level.trim() === form.thinking_default_effort"
+                  :disabled="!row.level.trim()"
+                  class="shrink-0"
+                  title="勾选设为默认档位"
+                  @change="setDefaultEffortRow(row, $event as boolean)"
+                />
+                <el-select
+                  v-model="row.level"
+                  size="small"
+                  filterable
+                  allow-create
+                  default-first-option
+                  class="!w-36 shrink-0"
+                  placeholder="档位名"
+                >
+                  <el-option v-for="level in EFFORT_SUGGESTIONS" :key="level" :label="level" :value="level" />
+                </el-select>
+                <i class="fa-solid fa-arrow-right shrink-0 text-[10px] text-slate-300"></i>
+                <el-input
+                  v-model="row.value"
+                  size="small"
+                  class="min-w-0 flex-1"
+                  placeholder="API 参数值（缺省与档位同名）"
+                />
+                <el-button link type="danger" size="small" class="shrink-0" title="删除该档位" @click="removeEffortRow(index)">
+                  <i class="fa-solid fa-trash text-[11px]"></i>
+                </el-button>
+              </div>
+              <el-button link type="primary" size="small" @click="addEffortRow">
+                <i class="fa-solid fa-plus text-[10px]" style="margin-right: 4px"></i>添加档位
+              </el-button>
+            </div>
           </div>
           <div class="flex flex-wrap items-end gap-4">
-            <div v-if="effortsAvailable && form.thinking_efforts.length > 0" class="min-w-[200px] flex-1">
-              <div class="mb-1 text-xs text-slate-500">默认档位</div>
-              <el-select v-model="form.thinking_default_effort" size="small" clearable class="!w-full" placeholder="不指定">
-                <el-option v-for="item in defaultEffortOptions" :key="item.value" :label="item.label" :value="item.value" />
-              </el-select>
-            </div>
-            <div v-if="form.thinking_mode === 'optional'" class="flex h-6 items-center gap-2">
-              <el-tooltip content="用户新对话时，思考开关的初始状态（用户仍可手动开关）" placement="top">
-                <span class="cursor-help text-xs text-slate-500">思考默认开启</span>
-              </el-tooltip>
-              <el-switch v-model="form.thinking_default_on" />
-            </div>
+            <div class="text-xs text-slate-400">默认开启与否由「默认档位」勾选推导：普通档=默认开；off/none 或不勾=默认关</div>
           </div>
         </div>
         <div class="grid grid-cols-2 items-center gap-3">

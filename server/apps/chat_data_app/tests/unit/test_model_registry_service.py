@@ -531,7 +531,9 @@ def test_load_registry_from_db_empty_imports_from_file(registry_env, tmp_path, m
         assert [config["id"] for config in configs] == ["file-model"]
         assert configs[0]["is_default"] is True  # 首项为默认
         assert configs[0]["vlm"] is False
-        assert configs[0]["thinking"].efforts == ("low", "high")
+        assert [effort.level for effort in configs[0]["thinking"].efforts] == ["low", "high"]
+
+        # 旧 string[] 读入自动升级为新形状（内存中，不回写源文件）
 
         # 落库的 params_json 回读仍过校验（往返一致）
         rows = await model_registry_dao.ModelRegistryDao().list_rows()
@@ -539,9 +541,8 @@ def test_load_registry_from_db_empty_imports_from_file(registry_env, tmp_path, m
         assert packed["thinking"] == {
             "mode": "optional",
             "dialect": "reasoning_effort",
-            "efforts": ["low", "high"],
-            "default_on": False,
-            "default_effort": "low",
+            "efforts": [{"level": "low"}, {"level": "high"}],
+            "default_effort": "low",  # default_on 不再落库（读侧由默认档位推导）
         }
 
     asyncio.run(run())
@@ -813,9 +814,13 @@ def test_read_positive_int_env_falls_back_on_non_int(monkeypatch):
 
 
 def test_thinking_cap_to_json_efforts_without_default_effort():
-    """有档位无默认档：只序列化 efforts（default_effort 缺省不落键）。"""
-    cap = llm_config.ThinkingCapability(mode="optional", dialect="openrouter", efforts=("low",))
-    assert llm_config._thinking_cap_to_json(cap) == {"mode": "optional", "dialect": "openrouter", "default_on": False, "efforts": ["low"]}
+    """有档位无默认档：只序列化 efforts（default_effort 缺省不落键；default_on 由读侧推导）。"""
+    cap = llm_config.ThinkingCapability(mode="optional", dialect="openrouter", efforts=(llm_config.EffortLevel(level="low"),))
+    assert llm_config._thinking_cap_to_json(cap) == {
+        "mode": "optional",
+        "dialect": "openrouter",
+        "efforts": [{"level": "low"}],
+    }
 
 
 def test_get_configs_stale_cache_without_event_loop_returns_old_value(registry_env, monkeypatch):
@@ -896,3 +901,186 @@ def test_discover_models_rejects_non_dict_json_body(registry_env, monkeypatch):
                 {"base_url": "http://127.0.0.1:8000/v1", "api_key": "AAAAAAAA:BBBBBBBB"}
             )
         )
+
+
+# ----------- 思考档位可配置化：save 落库/回读一致 -----------
+
+def test_save_model_persists_configurable_efforts_and_roundtrips(registry_env):
+    """新形状档位（含 value）保存后落库与回读一致；旧 string[] 也可保存；废弃 off_value 静默丢弃。"""
+    async def run():
+        await create_model(
+            _payload(
+                model_id="deepseek-v3",
+                params={
+                    "temperature": 0.2,
+                    "context_window": 64000,
+                    "max_output_tokens": 8000,
+                    "thinking": {
+                        "mode": "optional",
+                        "dialect": "reasoning_effort",
+                        "default_on": False,
+                        "efforts": [{"level": "low", "value": "minimal"}, {"level": "high"}],
+                        "default_effort": "low",
+                    },
+                },
+            ),
+            user_id="u1",
+            username="张三",
+        )
+        configs = await llm_config.load_registry_from_db()
+        cap = configs[0]["thinking"]
+        assert cap.efforts == (
+            llm_config.EffortLevel(level="low", value="minimal"),
+            llm_config.EffortLevel(level="high"),
+        )
+
+        # 旧前端发 string[] 也能保存（落为新形状）
+        await update_model(
+            "deepseek-v3",
+            _payload(
+                model_id="deepseek-v3",
+                params={
+                    "temperature": 0.2,
+                    "context_window": 64000,
+                    "max_output_tokens": 8000,
+                    "thinking": {
+                        "mode": "optional",
+                        "dialect": "reasoning_effort",
+                        "default_on": False,
+                        "efforts": ["low", "high"],
+                        "default_effort": "low",
+                        "off_value": "low",  # 废弃字段：容忍但不再落库
+                    },
+                },
+            ),
+            user_id="u1",
+            username="张三",
+        )
+        rows = await model_registry_dao.ModelRegistryDao().list_rows()
+        packed = json.loads(rows[0]["params_json"])
+        assert packed["thinking"]["efforts"] == [{"level": "low"}, {"level": "high"}]
+        assert "off_value" not in packed["thinking"]
+
+    asyncio.run(run())
+
+
+def test_save_model_rejects_illegal_effort_payload(registry_env):
+    """保存期校验：非法档位名/非法 value 直接拒绝，错误消息带 model_id。"""
+    async def run():
+        bad_name = _payload(
+            model_id="m-bad",
+            params={
+                "context_window": 64000,
+                "thinking": {
+                    "mode": "optional",
+                    "dialect": "reasoning_effort",
+                    "default_on": False,
+                    "efforts": [{"level": "bad name!"}],
+                    "default_effort": "bad name!",
+                },
+            },
+        )
+        with pytest.raises(ModelRegistryError, match="m-bad"):
+            await create_model(bad_name, user_id="u1", username="张三")
+
+        bad_value = _payload(
+            model_id="m-bad2",
+            params={
+                "context_window": 64000,
+                "thinking": {
+                    "mode": "optional",
+                    "dialect": "reasoning_effort",
+                    "default_on": False,
+                    "efforts": [{"level": "low", "value": [1]}],
+                    "default_effort": "low",
+                },
+            },
+        )
+        with pytest.raises(ModelRegistryError, match="参数值"):
+            await create_model(bad_value, user_id="u1", username="张三")
+
+    asyncio.run(run())
+
+
+def test_test_model_connection_probes_highest_effort(registry_env, monkeypatch):
+    """连接测试：声明档位时用最高档（末位）发 on 形态探测 wire 值；无档位保持 off 形态。"""
+    captured = {}
+
+    class _FakeLLM:
+        async def ainvoke(self, prompt):
+            captured["prompt"] = prompt
+            return type("R", (), {"content": "ok"})()
+
+    def fake_get_llm(**kwargs):
+        captured["extra_body"] = kwargs["extra_body"]
+        return _FakeLLM()
+
+    monkeypatch.setattr(model_registry_service, "get_llm", fake_get_llm)
+    monkeypatch.setattr(model_registry_service, "decrypt_password", lambda value: "plain-key")
+
+    with_efforts = _payload(
+        model_id="m-probe",
+        params={
+            "context_window": 64000,
+            "thinking": {
+                "mode": "optional",
+                "dialect": "reasoning_effort",
+                "default_on": False,
+                "efforts": [{"level": "low", "value": "minimal"}, {"level": "high"}],
+                "default_effort": "low",
+            },
+        },
+    )
+    result = asyncio.run(model_registry_service.test_model_connection(with_efforts))
+    assert result["success"] is True
+    assert captured["extra_body"] == {"reasoning_effort": "high"}  # 末位档=high，发档位名
+
+    # optional+方言但未声明档位：off 形态按方言兜底
+    plain = _payload(
+        model_id="m-plain",
+        params={"context_window": 64000, "thinking": {"mode": "optional", "dialect": "reasoning_effort", "default_on": False}},
+    )
+    asyncio.run(model_registry_service.test_model_connection(plain))
+    assert captured["extra_body"] == {"reasoning_effort": "none"}
+
+
+def test_test_model_connection_skips_off_sentinel_efforts(registry_env, monkeypatch):
+    """连接测试：关哨兵档位（off/none）不参与 on 形态探测；全是哨兵档时退回 off 形态。"""
+    captured = {}
+
+    class _FakeLLM:
+        async def ainvoke(self, prompt):
+            return type("R", (), {"content": "ok"})()
+
+    def fake_get_llm(**kwargs):
+        captured["extra_body"] = kwargs["extra_body"]
+        return _FakeLLM()
+
+    monkeypatch.setattr(model_registry_service, "get_llm", fake_get_llm)
+    monkeypatch.setattr(model_registry_service, "decrypt_password", lambda value: "plain-key")
+
+    def _thinking_payload(model_id: str, efforts: list[dict]):
+        return _payload(
+            model_id=model_id,
+            params={
+                "context_window": 64000,
+                "thinking": {
+                    "mode": "optional",
+                    "dialect": "reasoning_effort",
+                    "default_on": False,
+                    "efforts": efforts,
+                    "default_effort": efforts[0]["level"],
+                },
+            },
+        )
+
+    # 末位档是哨兵档：探测跳到非哨兵的最高档 low，而不是把 off 当 on wire 值发
+    trailing_sentinel = _thinking_payload("m-sentinel-tail", [{"level": "low"}, {"level": "off"}])
+    result = asyncio.run(model_registry_service.test_model_connection(trailing_sentinel))
+    assert result["success"] is True
+    assert captured["extra_body"] == {"reasoning_effort": "low"}
+
+    # 全是哨兵档：无 on 档可探测，退回 off 形态（只验证连通与鉴权）
+    all_sentinel = _thinking_payload("m-sentinel-only", [{"level": "off"}, {"level": "none"}])
+    asyncio.run(model_registry_service.test_model_connection(all_sentinel))
+    assert captured["extra_body"] == {"reasoning_effort": "none"}

@@ -1885,6 +1885,13 @@ export function getAdminModels(): Promise<ApiResponse<{ models: ChatDataModelReg
   })
 }
 
+/**
+ * params.thinking 形状（档位可配置）：
+ * efforts 为 [{level, value?}]（value 缺省=发档位名本身；参数值 string/bool/number），
+ * 旧 string[] 仍被后端接受；关形态参数值由后端按方言固定兜底（none / enabled:false）。
+ */
+export type ChatDataModelSaveParams = ChatDataModelRegistryItem['params']
+
 /** 后台：新建模型（注册键服务端自动生成；业务唯一性=提供商+请求名） */
 export function createAdminModel(data: {
   model_id: string
@@ -1892,7 +1899,7 @@ export function createAdminModel(data: {
   display_name?: string
   base_url?: string
   api_key?: string
-  params?: ChatDataModelRegistryItem['params']
+  params?: ChatDataModelSaveParams
   enabled?: boolean
   remark?: string
 }): Promise<ApiResponse<ChatDataModelRegistryItem>> {
@@ -1910,7 +1917,7 @@ export function updateAdminModel(modelKey: string, data: {
   display_name?: string
   base_url?: string
   api_key?: string
-  params?: ChatDataModelRegistryItem['params']
+  params?: ChatDataModelSaveParams
   enabled?: boolean
   remark?: string
 }): Promise<ApiResponse<ChatDataModelRegistryItem>> {

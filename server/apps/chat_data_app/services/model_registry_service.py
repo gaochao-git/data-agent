@@ -22,6 +22,7 @@ from utils.logger import get_logger
 
 from ..daos.model_registry_dao import ModelRegistryDao
 from .llm_config import (
+    OFF_EFFORT_SENTINELS,
     THINKING_MODE_NONE,
     _get_chat_data_extra_body,
     _parse_thinking,
@@ -38,7 +39,6 @@ _ALLOWED_PARAM_KEYS = frozenset(
 )
 
 _THINKING_MODES = ("none", "optional", "forced")
-_EFFORT_LEVELS = ("low", "medium", "high")
 # SM4 密文形态：base64(iv):base64(cipher)，两段 base64 以冒号连接
 _API_KEY_CIPHER_PATTERN = re.compile(r"^[A-Za-z0-9+/]{8,}={0,2}:[A-Za-z0-9+/]{8,}={0,2}$")
 
@@ -314,6 +314,19 @@ async def test_model_connection(payload: dict[str, Any]) -> dict[str, Any]:
         raise ModelRegistryError(str(err)) from err
 
     started = time.monotonic()
+    # 声明了档位时用最高档（末位）发 on 形态探测，提前发现 wire 值不可用（一次 RTT）；
+    # 关哨兵档位（off/none）不参与探测（它们序列化为关形态，探测不到 on wire 值），
+    # 全是哨兵档时保持 off 形态（只验证连通与鉴权）
+    probe_effort = next(
+        (effort.level for effort in reversed(capability.efforts) if effort.level not in OFF_EFFORT_SENTINELS),
+        None,
+    )
+    if probe_effort is not None:
+        extra_body = _get_chat_data_extra_body(
+            capability, enable_thinking=True, thinking_effort=probe_effort
+        )
+    else:
+        extra_body = _get_chat_data_extra_body(capability, enable_thinking=False, thinking_effort=None)
     try:
         llm = get_llm(
             model=model_id,
@@ -323,7 +336,7 @@ async def test_model_connection(payload: dict[str, Any]) -> dict[str, Any]:
             timeout=20,
             api_key=api_key,
             base_url=base_url,
-            extra_body=_get_chat_data_extra_body(capability, enable_thinking=False, thinking_effort=None),
+            extra_body=extra_body,
         )
         response = await llm.ainvoke("ping，只回复 ok")
         latency_ms = int((time.monotonic() - started) * 1000)

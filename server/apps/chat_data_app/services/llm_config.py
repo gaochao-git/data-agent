@@ -13,7 +13,9 @@
 
 import asyncio
 import json
+import math
 import os
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -47,16 +49,38 @@ _THINKING_DIALECTS = (
     THINKING_DIALECT_OPENROUTER,
 )
 
-EFFORT_LEVELS = ("low", "medium", "high")
+# 档位候选建议（仅供前端下拉候选，不作为校验依据——档位名由各模型自由声明）；
+# off/none 之外的对齐 DeepSeek 新 API 档位族（minimal/low/medium/high/xhigh/ultra/max）
+EFFORT_SUGGESTIONS = ("off", "minimal", "low", "medium", "high", "xhigh", "ultra", "max")
+
+# 关哨兵档位名：声明为这些名字的档位选中时按「关」形态序列化（不作为 on wire 值透出，
+# 防止 reasoning_effort: "off" 这类上游不认识的字面量导致 422）
+OFF_EFFORT_SENTINELS = frozenset({"off", "none"})
+
+# 档位名约束：1~32 位字母/数字/_.:-；数量上限 10；字符串参数值 ≤64
+_EFFORT_LEVEL_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]{1,32}$")
+_MAX_EFFORT_COUNT = 10
+_EFFORT_VALUE_MAX_LEN = 64
+
+# 档位参数值类型：string / bool / number（int/float，非 NaN）
+EffortValue = str | bool | int | float
+
+
+@dataclass(frozen=True)
+class EffortLevel:
+    """思考档位 → API 参数值映射；value 缺省（None）= 发档位名本身。"""
+
+    level: str
+    value: EffortValue | None = None
 
 
 @dataclass(frozen=True)
 class ThinkingCapability:
-    """模型的思考能力声明（来自 models.json 的 thinking 字段）。"""
+    """模型的思考能力声明（来自注册表 params_json.thinking 字段）。"""
 
     mode: str
     dialect: str | None = None
-    efforts: tuple[str, ...] = ()
+    efforts: tuple[EffortLevel, ...] = ()
     default_on: bool = False
     default_effort: str | None = None
 
@@ -119,33 +143,84 @@ def get_chat_data_models_file_path() -> str:
     return raw
 
 
-def _parse_thinking_efforts(raw: dict, dialect: str, prefix: str) -> tuple[str, ...]:
-    """校验并归一化 thinking.efforts；缺省返回空元组。"""
+def _parse_effort_value(value: Any, prefix: str) -> EffortValue:
+    """校验档位 API 参数值：string(≤64) / bool / number（非 NaN），禁止 dict/list。"""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        if len(value) > _EFFORT_VALUE_MAX_LEN:
+            raise ValueError(f"{prefix}: 字符串参数值超长（上限 {_EFFORT_VALUE_MAX_LEN}）: {value!r}")
+        return value
+    if isinstance(value, (int, float)):
+        if isinstance(value, float) and math.isnan(value):
+            raise ValueError(f"{prefix}: 参数值不允许 NaN")
+        return value
+    raise ValueError(f"{prefix}: 参数值应为字符串(≤64)/布尔/数字，当前 {value!r}")
+
+
+def _parse_effort_item(item: Any, prefix: str) -> EffortLevel:
+    """解析单个档位：旧格式字符串（档位名=参数值）或新格式 {level, value?} 对象。"""
+    if isinstance(item, str):
+        level, value = item.strip(), None
+    elif isinstance(item, dict):
+        unknown = set(item) - {"level", "value"}
+        if unknown:
+            raise ValueError(f"{prefix}: 档位对象含未知字段 {sorted(unknown)}（仅允许 level/value）")
+        level_raw = item.get("level")
+        if not isinstance(level_raw, str):
+            raise ValueError(f"{prefix}: 档位 level 应为字符串，当前 {level_raw!r}")
+        level = level_raw.strip()
+        value = item.get("value")
+        if value is not None:
+            value = _parse_effort_value(value, prefix)
+    else:
+        raise ValueError(f"{prefix}: 档位应为字符串或 {{level, value}} 对象，当前 {item!r}")
+    if not level:
+        raise ValueError(f"{prefix}: 档位名不能为空")
+    if not _EFFORT_LEVEL_PATTERN.match(level):
+        raise ValueError(f"{prefix}: 档位名 {level!r} 非法（限 1~32 位字母/数字/_.:-）")
+    return EffortLevel(level=level, value=value)
+
+
+def _parse_thinking_efforts(raw: dict, dialect: str, prefix: str) -> tuple[EffortLevel, ...]:
+    """校验并归一化 thinking.efforts；缺省/空数组返回空元组。
+
+    兼容两种形状：旧 ``["low", "high"]``（读入自动升级，不回写）与
+    新 ``[{"level": "low", "value": "minimal"}]``（value 缺省=档位同名）。
+    """
     efforts_raw = raw.get("efforts")
     if efforts_raw is None:
         return ()
-    if not isinstance(efforts_raw, list) or not all(isinstance(item, str) for item in efforts_raw):
-        raise ValueError(f"{prefix}: efforts 应为字符串数组")
+    if not isinstance(efforts_raw, list):
+        raise ValueError(f"{prefix}: efforts 应为数组（档位名或 {{level, value}} 对象）")
     if not efforts_raw:
         return ()  # 空数组等同缺省（无档位），不触发方言冲突校验
-    invalid = [item for item in efforts_raw if item not in EFFORT_LEVELS]
-    if invalid:
-        raise ValueError(f"{prefix}: efforts 含非法等级 {invalid}（支持: {list(EFFORT_LEVELS)}）")
     if dialect == THINKING_DIALECT_CHAT_TEMPLATE:
         raise ValueError(f"{prefix}: chat_template 方言为纯布尔协议不支持等级，请移除 efforts 或改用其它方言")
-    return tuple(efforts_raw)
+    levels: list[EffortLevel] = []
+    seen: set[str] = set()
+    for item in efforts_raw:
+        effort = _parse_effort_item(item, prefix)
+        if effort.level in seen:
+            raise ValueError(f"{prefix}: 档位名重复: {effort.level}")
+        seen.add(effort.level)
+        levels.append(effort)
+    if len(levels) > _MAX_EFFORT_COUNT:
+        raise ValueError(f"{prefix}: 档位数量 {len(levels)} 超过上限 {_MAX_EFFORT_COUNT}")
+    return tuple(levels)
 
 
-def _parse_thinking_default_effort(raw: dict, efforts: tuple[str, ...], prefix: str) -> Any:
-    """校验 default_effort 与 efforts 成对出现且取值合法。"""
+def _parse_thinking_default_effort(raw: dict, efforts: tuple[EffortLevel, ...], prefix: str) -> Any:
+    """校验 default_effort 与 efforts 成对出现且取值合法（取值为档位名）。"""
     default_effort_raw = raw.get("default_effort")
     if (default_effort_raw is None) != (not efforts):
         raise ValueError(
             f"{prefix}: default_effort 与 efforts 必须成对出现（当前 efforts={raw.get('efforts')!r}, "
             f"default_effort={default_effort_raw!r}）"
         )
-    if default_effort_raw is not None and default_effort_raw not in efforts:
-        raise ValueError(f"{prefix}: default_effort={default_effort_raw!r} 不在 efforts {list(efforts)} 中")
+    level_names = [effort.level for effort in efforts]
+    if default_effort_raw is not None and default_effort_raw not in level_names:
+        raise ValueError(f"{prefix}: default_effort={default_effort_raw!r} 不在档位 {level_names} 中")
     return default_effort_raw
 
 
@@ -154,7 +229,9 @@ def _parse_thinking(raw: Any, *, path: str, model_id: str) -> ThinkingCapability
     prefix = f"{path} 中模型 {model_id} 的 thinking 配置无效"
     if not isinstance(raw, dict):
         raise ValueError(f"{prefix}: 应为对象")
-    unknown_keys = set(raw) - {"mode", "dialect", "efforts", "default_on", "default_effort"}
+    # off_value/default_on 均为已废弃字段：存量配置里可能出现，容忍并静默丢弃——
+    # 关形态走方言默认兜底；默认开启与否由默认档位推导（default_effort 为普通档=默认开）
+    unknown_keys = set(raw) - {"mode", "dialect", "efforts", "default_on", "default_effort", "off_value"}
     if unknown_keys:
         raise ValueError(f"{prefix}: 未知字段 {sorted(unknown_keys)}")
 
@@ -172,20 +249,15 @@ def _parse_thinking(raw: Any, *, path: str, model_id: str) -> ThinkingCapability
         raise ValueError(f"{prefix}: dialect 必须是 {_THINKING_DIALECTS} 之一，当前值: {raw.get('dialect')!r}")
     efforts = _parse_thinking_efforts(raw, dialect, prefix)
     default_effort_raw = _parse_thinking_default_effort(raw, efforts, prefix)
-
-    default_on_raw = raw.get("default_on")
-    if mode == THINKING_MODE_FORCED:
-        if default_on_raw is not None:
-            raise ValueError(f"{prefix}: mode=forced 时不得配置 default_on")
-        return ThinkingCapability(mode=mode, dialect=dialect, efforts=efforts, default_effort=default_effort_raw)
-    # optional：default_on 必填（无隐式默认）
-    if not isinstance(default_on_raw, bool):
-        raise ValueError(f"{prefix}: mode=optional 时 default_on 必填且为布尔")
+    # 默认开启由默认档位推导（仅 optional 有「默认开」概念）：勾了普通档=默认开；勾了关哨兵（off/none）或未勾=默认关
+    default_on = (
+        mode == THINKING_MODE_OPTIONAL and bool(default_effort_raw) and default_effort_raw not in OFF_EFFORT_SENTINELS
+    )
     return ThinkingCapability(
         mode=mode,
         dialect=dialect,
         efforts=efforts,
-        default_on=default_on_raw,
+        default_on=default_on,
         default_effort=default_effort_raw,
     )
 
@@ -193,16 +265,18 @@ def _parse_thinking(raw: Any, *, path: str, model_id: str) -> ThinkingCapability
 def _thinking_cap_to_json(cap: ThinkingCapability) -> dict[str, Any]:
     """ThinkingCapability -> 可落 params_json 的紧凑 dict（回读必须能再过 _parse_thinking）。
 
-    形状按校验规则裁剪：none 只带 mode；forced 不带 default_on；
-    efforts/default_effort 成对出现且仅在有值时序列化。
+    形状按校验规则裁剪：none 只带 mode；default_on 不落键（读侧由 default_effort 推导）；
+    efforts/default_effort 成对出现且仅在有值时序列化；档位落新形状
+    ``[{"level": ..., "value": ...}]``（value 缺省不落键，读侧=档位同名）。
     """
     if cap.mode == THINKING_MODE_NONE:
         return {"mode": THINKING_MODE_NONE}
     out: dict[str, Any] = {"mode": cap.mode, "dialect": cap.dialect or ""}
-    if cap.mode == THINKING_MODE_OPTIONAL:
-        out["default_on"] = bool(cap.default_on)
     if cap.efforts:
-        out["efforts"] = list(cap.efforts)
+        out["efforts"] = [
+            {"level": effort.level, **({"value": effort.value} if effort.value is not None else {})}
+            for effort in cap.efforts
+        ]
         if cap.default_effort:
             out["default_effort"] = cap.default_effort
     return out
@@ -560,10 +634,34 @@ def resolve_thinking(
 
 
 def _pick_effort(capability: ThinkingCapability, user_effort: str | None) -> str | None:
-    """档位裁决：用户显式选择优先，但必须在注册表声明的 efforts 内。"""
-    if user_effort and user_effort in capability.efforts:
+    """档位裁决：用户显式选择优先，但必须在注册表声明的档位名内；返回档位名。"""
+    if user_effort and any(effort.level == user_effort for effort in capability.efforts):
         return user_effort
     return capability.default_effort
+
+
+def _effort_wire_value(capability: ThinkingCapability, level: str | None) -> EffortValue | None:
+    """档位名 → API 参数值；未声明 value 时发档位名本身（未声明的档位名原样透出）。"""
+    if level is None:
+        return None
+    for effort in capability.efforts:
+        if effort.level == level:
+            return effort.level if effort.value is None else effort.value
+    return level
+
+
+def _reasoning_effort_body(capability: ThinkingCapability, decision: str, level: str | None) -> dict[str, Any]:
+    """reasoning_effort 方言：on 发档位 wire 值；off 固定发 "none"（DeepSeek 新 API/OpenAI gpt-5 系标准关值）。"""
+    if decision == "on":
+        return {"reasoning_effort": _effort_wire_value(capability, level)}
+    return {"reasoning_effort": "none"}
+
+
+def _openrouter_body(capability: ThinkingCapability, decision: str, level: str | None) -> dict[str, Any]:
+    """openrouter 方言：on 发 {"effort": value}；off 固定发 {"enabled": false}（官方协议关形态）。"""
+    if decision == "on":
+        return {"reasoning": {"effort": _effort_wire_value(capability, level)}}
+    return {"reasoning": {"enabled": False}}
 
 
 def _get_chat_data_extra_body(
@@ -571,26 +669,29 @@ def _get_chat_data_extra_body(
     enable_thinking: bool | None = None,
     thinking_effort: str | None = None,
 ) -> dict[str, Any]:
-    """按方言把思考决策序列化为 extra_body；omit 时不含任何思考键。"""
+    """按方言把思考决策序列化为 extra_body；omit 时不含任何思考键。
+
+    选中档位名为关哨兵（off/none，见 OFF_EFFORT_SENTINELS）时降级为「关」形态，
+    避免把 "off" 这类上游不认识的字面量当 on wire 值发出（实测 422）。
+    """
     decision, level = resolve_thinking(capability, enable_thinking, thinking_effort)
-    extra_body: dict[str, Any] = {}
+    if decision == "on" and level is not None and level in OFF_EFFORT_SENTINELS:
+        decision, level = "off", None
     if decision == "omit":
-        return extra_body
+        return {}
     if capability.dialect == THINKING_DIALECT_CHAT_TEMPLATE:
         flag = decision == "on"
-        extra_body["enable_thinking"] = flag
-        extra_body["chat_template_kwargs"] = {"enable_thinking": flag}
-        return extra_body
-    elif decision == "on" and level is None:
-        # 未声明档位：不发任何思考键。配置文件是唯一事实源——
+        return {"enable_thinking": flag, "chat_template_kwargs": {"enable_thinking": flag}}
+    if decision == "on" and level is None:
+        # 未声明档位：不发任何思考键。注册表是唯一事实源——
         # 需要思考能力的模型必须在注册表声明 efforts/default_effort，
         # 代码不做配置缺失的兼容兜底。
         return {}
     if capability.dialect == THINKING_DIALECT_REASONING_EFFORT:
-        extra_body["reasoning_effort"] = level if decision == "on" else "none"
-    elif capability.dialect == THINKING_DIALECT_OPENROUTER:
-        extra_body["reasoning"] = {"effort": level} if decision == "on" else {"enabled": False}
-    return extra_body
+        return _reasoning_effort_body(capability, decision, level)
+    if capability.dialect == THINKING_DIALECT_OPENROUTER:
+        return _openrouter_body(capability, decision, level)
+    return {}
 
 
 def get_chat_data_model_options() -> dict[str, Any]:
@@ -614,7 +715,8 @@ def get_chat_data_model_options() -> dict[str, Any]:
                 "is_default": config["id"] == default_model,
                 "thinking": {
                     "mode": cap.mode,
-                    "efforts": list(cap.efforts),
+                    # 只下发档位名，不下发 wire 值（前端不与协议耦合）
+                    "efforts": [effort.level for effort in cap.efforts],
                     "default_on": cap.default_on,
                     "default_effort": cap.default_effort,
                 },
