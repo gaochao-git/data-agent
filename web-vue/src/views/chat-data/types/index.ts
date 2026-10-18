@@ -389,6 +389,10 @@ export interface MessageGenerationStats {
   outputTokens?: number
   /** 输入 token 总数（本轮全部模型调用输入累计；usage 未提供时省略） */
   inputTokens?: number
+  /** 缓存命中的输入 token 总数（本轮全部模型调用累计；模型未上报缓存信息时省略） */
+  cachedInputTokens?: number
+  /** 缓存命中率（百分比，缓存输入 / 实际输入；模型未上报或输入不可报时省略） */
+  cacheHitRate?: number
   /** 模型名（本轮最后一次模型调用的模型标识；usage 未提供时省略） */
   model?: string
   /** 估算的纯模型生成时长（毫秒；解码窗口缺失时省略） */

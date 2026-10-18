@@ -56,6 +56,19 @@ describe('toGenerationStats', () => {
     expect(toGenerationStats({ ...base, model: '  ' })?.model).toBeUndefined()
   })
 
+  it('cached_input_tokens / cache_hit_rate 合法时透出，缺失或非法时省略', () => {
+    const base = { duration_ms: 7000, output_tokens: 1000, tokens_per_second: 143 }
+    const full = toGenerationStats({ ...base, cached_input_tokens: 9650, cache_hit_rate: 79.1 })
+    expect(full?.cachedInputTokens).toBe(9650)
+    expect(full?.cacheHitRate).toBe(79.1)
+    // 模型未上报缓存信息 → 两字段省略
+    expect(toGenerationStats({ ...base })?.cachedInputTokens).toBeUndefined()
+    expect(toGenerationStats({ ...base })?.cacheHitRate).toBeUndefined()
+    expect(toGenerationStats({ ...base, cached_input_tokens: 0 })?.cachedInputTokens).toBeUndefined()
+    expect(toGenerationStats({ ...base, cached_input_tokens: 9650 })?.cacheHitRate).toBeUndefined()
+    expect(toGenerationStats({ ...base, cached_input_tokens: 9650, cache_hit_rate: -1 })?.cacheHitRate).toBeUndefined()
+  })
+
   it('usage 缺失时 total_duration_ms 独立支撑统计对象，解码字段逐个省略', () => {
     // 后端契约：模型未吐可见 payload / usage 缺失时，仍下发 {"total_duration_ms": X}
     expect(toGenerationStats({ total_duration_ms: 4200 })).toEqual({ totalDurationMs: 4200 })
@@ -101,6 +114,8 @@ describe('generationStatsRows', () => {
     const rows = generationStatsRows({
       outputTokens: 602,
       inputTokens: 12205,
+      cachedInputTokens: 9650,
+      cacheHitRate: 79.1,
       model: 'deepseek-v4-flash',
       durationMs: 13000,
       tokensPerSecond: 46,
@@ -110,14 +125,24 @@ describe('generationStatsRows', () => {
     })
     expect(rows.map((row: GenerationStatsRow) => `${row.label}=${row.value}`)).toEqual([
       '输入总token=12,205',
+      '缓存命中=79.1%',
       '输出总token=602',
       'token速率=46 tok/s',
       'llm 首 token=442ms',
       'harness 首 token=2.1s',
       'harness 总耗=15.6s',
     ])
-    expect(rows[3]?.divider).toBe(true)  // llm 首 token 行前分组分隔
+    expect(rows[4]?.divider).toBe(true)  // llm 首 token 行前分组分隔
     expect(rows[0]?.divider).toBeUndefined()
+  })
+
+  it('命中率缺失时退显 token 数，未上报时整行省略', () => {
+    const withoutRate = generationStatsRows({
+      outputTokens: 1842, durationMs: 12300, tokensPerSecond: 150, cachedInputTokens: 9650,
+    })
+    expect(withoutRate[0]).toEqual({ label: '缓存命中', value: '9,650' })
+    const withoutCache = generationStatsRows({ outputTokens: 1842, durationMs: 12300, tokensPerSecond: 150 })
+    expect(withoutCache.map((row: GenerationStatsRow) => row.label)).not.toContain('缓存命中')
   })
 
   it('辅助字段缺失（老历史数据）时对应行省略，harness 总耗回退解码时长', () => {

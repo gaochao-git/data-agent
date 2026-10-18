@@ -1963,6 +1963,8 @@ def test_generation_stats_requires_positive_duration_and_tokens(monkeypatch):
         usage={
             "output_tokens": 30,
             "cumulative_input_tokens": 12205,
+            "cumulative_cached_input_tokens": 9650,
+            "cumulative_cache_hit_rate": 79.1,
             "llm_calls": [{"model": "qwen3"}, {"model": "deepseek-v4-flash", "output_tokens": 30}],
             "breakdown": [
                 {"key": "system_prompt", "tokens": 100},
@@ -1987,6 +1989,8 @@ def test_generation_stats_requires_positive_duration_and_tokens(monkeypatch):
     assert stats["output_tokens"] == 30
     assert stats["tokens_per_second"] == 40
     assert stats["input_tokens"] == 12205
+    assert stats["cached_input_tokens"] == 9650
+    assert stats["cache_hit_rate"] == 79.1
     assert stats["model"] == "deepseek-v4-flash"  # 最后一次调用的模型名
     # 模型侧首 token：首 token 墙钟落在第一次调用窗口 [now-1250, now-350] 内 → 250ms；
     # 不再取「最早调用起点」做全局减法（那会把前置装配和调用间隙混进 TTFT）
@@ -2002,6 +2006,8 @@ def test_generation_stats_requires_positive_duration_and_tokens(monkeypatch):
     )
     assert stats_no_model is not None
     assert "input_tokens" not in stats_no_model
+    assert "cached_input_tokens" not in stats_no_model  # 模型未上报缓存信息 → 省略不硬凑
+    assert "cache_hit_rate" not in stats_no_model
     assert "model" not in stats_no_model
     assert "model_first_token_ms" not in stats_no_model
     # 流结束锚点缺失（异常中断路径）→ 回退当前时刻，仍可产 stats

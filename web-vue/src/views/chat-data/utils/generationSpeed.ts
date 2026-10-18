@@ -17,6 +17,8 @@ export const toGenerationStats = (raw: unknown): MessageGenerationStats | null =
   const totalDurationMs = Number(record.total_duration_ms)
   const modelFirstTokenMs = Number(record.model_first_token_ms)
   const inputTokens = Math.floor(Number(record.input_tokens) || 0)
+  const cachedInputTokens = Math.floor(Number(record.cached_input_tokens) || 0)
+  const cacheHitRate = Number(record.cache_hit_rate)
   const model = typeof record.model === 'string' ? record.model.trim() : ''
   const hasDecodeStats =
     outputTokens > 0 &&
@@ -31,6 +33,8 @@ export const toGenerationStats = (raw: unknown): MessageGenerationStats | null =
     firstTokenMs: Number.isFinite(firstTokenMs) && firstTokenMs > 0 ? firstTokenMs : undefined,
     totalDurationMs: hasTotalDuration ? totalDurationMs : undefined,
     inputTokens: inputTokens > 0 ? inputTokens : undefined,
+    cachedInputTokens: cachedInputTokens > 0 ? cachedInputTokens : undefined,
+    cacheHitRate: Number.isFinite(cacheHitRate) && cacheHitRate > 0 ? cacheHitRate : undefined,
     model: model || undefined,
     modelFirstTokenMs:
       Number.isFinite(modelFirstTokenMs) && modelFirstTokenMs > 0 ? modelFirstTokenMs : undefined,
@@ -83,6 +87,12 @@ export const generationStatsRows = (stats: MessageGenerationStats | null): Gener
   const rows: GenerationStatsRow[] = []
   if (typeof stats.inputTokens === 'number') {
     rows.push({ label: '输入总token', value: formatExactTokens(stats.inputTokens) })
+  }
+  if (typeof stats.cachedInputTokens === 'number' || typeof stats.cacheHitRate === 'number') {
+    // 命中率优先；仅输入不可报导致命中率缺失的罕见场景退显 token 数
+    const value =
+      typeof stats.cacheHitRate === 'number' ? `${stats.cacheHitRate}%` : formatExactTokens(stats.cachedInputTokens ?? 0)
+    rows.push({ label: '缓存命中', value })
   }
   if (typeof stats.outputTokens === 'number' && typeof stats.tokensPerSecond === 'number') {
     rows.push(
