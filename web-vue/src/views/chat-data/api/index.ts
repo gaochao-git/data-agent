@@ -1535,6 +1535,8 @@ export function streamCompletion(conversationId: string, data: {
   file_ids?: string[]
   queued_message_id?: string
   preserve_queued_messages?: boolean
+  /** 用户点击发送的客户端时刻（epoch 毫秒），服务端作 harness 计时起点 */
+  client_timestamp_ms?: number
 }, signal?: AbortSignal): Promise<Response> {
   return requestStream({
     url: `/agents/api/chatdata/conversations/${conversationId}/completion`,

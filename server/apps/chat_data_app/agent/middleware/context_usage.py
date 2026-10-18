@@ -34,6 +34,7 @@ from ..context.context_budget import (
     extract_legacy_context_summary,
     get_model_context_budget,
     hard_input_guard_tokens,
+    latest_model_name_from_usage,
     merge_context_summaries,
     sanitize_context_usage_for_response,
 )
@@ -656,7 +657,15 @@ def _emit_context_usage(usage: dict[str, Any] | None) -> None:
     if not usage:
         return
     try:
-        get_stream_writer()({"type": "token_usage", "usage": sanitize_context_usage_for_response(usage)})
+        payload = sanitize_context_usage_for_response(usage)
+        # sanitize 会剥掉 llm_calls，模型名必须在其前提取并单独透出：
+        # model 挂在 custom 事件外层（adapter 的 _handle_token_usage_payload
+        # 从 payload["model"] 读取，放 usage 内层会永远取不到）。
+        model_name = latest_model_name_from_usage(usage)
+        event: dict[str, Any] = {"type": "token_usage", "usage": payload}
+        if model_name:
+            event["model"] = model_name
+        get_stream_writer()(event)
     except Exception:
         logger.debug("当前执行上下文不支持推送 token_usage custom 事件", exc_info=True)
 

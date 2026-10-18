@@ -231,6 +231,9 @@ export function useSqlGenerator() {
         file_ids: fileIds,
         queued_message_id: queuedMessageId || undefined,
         preserve_queued_messages: preserveQueuedMessages || undefined,
+        // 用户点击发送的客户端时刻（epoch 毫秒）：harness 首 token/总耗时与用户
+        // 气泡时间同锚「点击时刻」，服务端校验钟偏后覆盖接收章，非法回退。
+        client_timestamp_ms: Date.now(),
       }, currentController.signal)
 
       if (!response.ok) {

@@ -4,7 +4,7 @@ import asyncio
 import re
 import time
 from collections import deque
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import suppress
 from dataclasses import dataclass
 from functools import partial
@@ -36,7 +36,11 @@ from .agent import (
     get_subagent_hot_defaults,
     resolve_agent_runtime_options,
 )
-from .agent.context.context_budget import ContextInputLimitExceededError, sanitize_context_usage_for_response
+from .agent.context.context_budget import (
+    ContextInputLimitExceededError,
+    latest_model_name_from_usage,
+    sanitize_context_usage_for_response,
+)
 from .agent.middleware.steering import SteeringMessageTracker
 from .agent.plugins.loader import refresh_plugin_state
 from .agent.run.agent_inbox_service import AgentRunLeaseLostError, agent_inbox_service
@@ -245,10 +249,11 @@ def _tool_duration_in_window(breakdown: Any, window_start_ms: int, window_end_ms
     """统计 usage.breakdown 中落在时间窗内的 tool 行执行时长总和（毫秒）。
 
     只认带精确起止毫秒戳的 tool 行（tool_timing 中间件盖章）；窗口外或数据不完整的行跳过。
+    breakdown 为嵌套结构（消息行挂在「会话消息」节点的 children 下），需递归遍历。
     """
     tool_duration_ms = 0
-    for item in breakdown or []:
-        if not isinstance(item, dict) or item.get("role") != "tool":
+    for item in _iter_breakdown_rows(breakdown):
+        if item.get("role") != "tool":
             continue
         started_at_ms, ended_at_ms = item.get("started_at_ms"), item.get("ended_at_ms")
         if not isinstance(started_at_ms, int) or not isinstance(ended_at_ms, int) or ended_at_ms <= started_at_ms:
@@ -259,19 +264,61 @@ def _tool_duration_in_window(breakdown: Any, window_start_ms: int, window_end_ms
     return tool_duration_ms
 
 
+def _iter_breakdown_rows(items: Any) -> Iterator[dict[str, Any]]:
+    """深度优先遍历 usage.breakdown（嵌套 children），产出所有 dict 节点。"""
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        yield item
+        yield from _iter_breakdown_rows(item.get("children"))
+
+
+def _model_first_token_from_messages(messages: Any, first_token_wall_ms: int | None) -> int | None:
+    """从 state 消息列表解析模型侧首 token 等待（毫秒）。
+
+    context_usage 中间件把每次模型调用起止（epoch 毫秒）盖进响应 AIMessage 的
+    additional_kwargs，随 checkpoint 持久化。模型侧首 token = 首 token 墙钟 −
+    「覆盖首 token 时刻的那次模型调用」起点：即该次调用内从被调用到吐出首个
+    可见 payload 的等待。首 token 不落在任何调用窗口内（调用间隙收包等数据
+    瑕疵）视为不可信返回 None。
+    """
+    if first_token_wall_ms is None:
+        return None
+    for message in messages or []:
+        additional_kwargs = getattr(message, "additional_kwargs", None) or {}
+        # 压缩摘要消息（context_summary）也是带戳 AIMessage，但摘要是编排行为，
+        # 不参与模型侧口径。
+        if additional_kwargs.get("context_summary"):
+            continue
+        started_at_ms = additional_kwargs.get("started_at_ms")
+        ended_at_ms = additional_kwargs.get("ended_at_ms")
+        if not isinstance(started_at_ms, int) or not isinstance(ended_at_ms, int):
+            continue
+        if started_at_ms <= first_token_wall_ms <= ended_at_ms:
+            return first_token_wall_ms - started_at_ms
+    return None
+
+
 def _generation_stats_from_usage(
     *,
     first_token_ms: int | None,
     first_token_wall_ms: int | None,
     stream_ended_wall_ms: int | None,
     usage: Any | None,
+    messages: Any | None = None,
+    model_name: str | None = None,
 ) -> dict[str, int] | None:
-    """汇总本轮生成统计（服务端口径）：首 token 耗时 + 解码时长 + 解码吞吐。
+    """汇总本轮生成统计：token 用量 + 速率 + 两侧首 token + 任务总耗时。
 
     口径对齐解码吞吐（业界 tok/s 惯例）：分母 = 首 token → 流结束的墙钟 − 工具
     执行时间（usage.breakdown 中 tool 行的精确起止，只统计落在解码窗口内的行）；
     TTFT 由 first_token_ms 单独表达，不进分母。流结束锚点缺失（异常中断路径）
     回退当前时刻。任一关键数据缺失不产 stats，不用估算冒充。
+    任务总耗时 total_duration_ms 由 finish 层负责（需叠加打断段历史累计），
+    不在本函数职责内。模型侧首 token（model_first_token_ms）从 state 消息列表
+    的盖章解析；输入总 token（input_tokens）取 usage 累计口径；模型名优先取
+    adapter 在 sanitize 前提取的记录（usage 的 llm_calls 已被剥离），回退从
+    usage 提取。任一辅助字段缺失时省略该字段，不硬凑。
     """
     if first_token_ms is None or first_token_wall_ms is None:
         return None
@@ -283,12 +330,54 @@ def _generation_stats_from_usage(
     duration_ms = (ended_wall_ms - first_token_wall_ms) - tool_duration_ms
     if duration_ms <= 0:
         return None
-    return {
+    stats = {
         "first_token_ms": first_token_ms,
         "duration_ms": duration_ms,
         "output_tokens": output_tokens,
         "tokens_per_second": round(output_tokens / (duration_ms / 1000)),
     }
+    # 模型侧首 token：覆盖首 token 的那次调用起点 → 首 token 的等待（首 token 不
+    # 落在任何调用窗口内则省略，不硬凑）。
+    model_first_token_ms = _model_first_token_from_messages(messages, first_token_wall_ms)
+    if model_first_token_ms is not None and model_first_token_ms > 0:
+        stats["model_first_token_ms"] = model_first_token_ms
+    stats.update(_usage_aux_stats(usage, model_name=model_name))
+    return stats
+
+
+def _usage_aux_stats(usage: Any | None, *, model_name: str | None = None) -> dict[str, Any]:
+    """从 usage 提取辅助统计字段：输入总 token、缓存命中与模型名；缺失时省略不硬凑。
+
+    model_name：adapter 在 sanitize 前从 llm_calls 提取的最后一次调用模型名，
+    显式传入优先——收口时的 usage 可能已被 sanitize（llm_calls 剥离）。
+    缓存命中：cumulative_cached_input_tokens / cumulative_cache_hit_rate 由
+    context_usage 侧按模型实际上报聚合（未上报缓存信息的模型不产出，与
+    ConversationTokenUsage 面板的「模型缓存」累计口径同源）。
+    """
+    if not isinstance(usage, dict):
+        return {}
+    aux: dict[str, Any] = {}
+    # 输入总 token：本轮全部模型调用的输入累计。
+    input_tokens = int(usage.get("cumulative_input_tokens") or usage.get("input_tokens") or 0)
+    if input_tokens > 0:
+        aux["input_tokens"] = input_tokens
+    # 缓存命中：本轮全部模型调用的缓存输入累计（命中率随行，仅在输入可报时存在）。
+    cached_input_tokens = int(usage.get("cumulative_cached_input_tokens") or 0)
+    if cached_input_tokens > 0:
+        aux["cached_input_tokens"] = cached_input_tokens
+        cache_hit_rate = usage.get("cumulative_cache_hit_rate")
+        if isinstance(cache_hit_rate, (int, float)) and cache_hit_rate > 0:
+            aux["cache_hit_rate"] = round(float(cache_hit_rate), 1)
+    # 模型名：多工具来回时以最终回复的调用为准。
+    resolved_model_name = model_name or _latest_model_name_from_usage(usage)
+    if resolved_model_name:
+        aux["model"] = resolved_model_name
+    return aux
+
+
+def _latest_model_name_from_usage(usage: dict[str, Any]) -> str:
+    """从 usage 的模型调用记录取最后一次调用的模型名；缺失返回空串。"""
+    return latest_model_name_from_usage(usage)
 
 
 # 实时生成速率（generation_speed SSE）：滑窗口径的「当前速率」，与收口的整体平均
@@ -407,6 +496,9 @@ class _AgentSseStreamAdapter:
         debug_label: str | None = None,
         user_id: str | None = None,
         reasoning_turn_id: str | None = None,
+        stream_started_wall_ms: int | None = None,
+        resolve_inherited_duration: Callable[[], Awaitable[int]] | None = None,
+        on_interrupt_finalize: Callable[[int], Awaitable[None]] | None = None,
     ) -> None:
         self.agent = agent
         self.initial_state = initial_state
@@ -425,6 +517,8 @@ class _AgentSseStreamAdapter:
         self.reasoning_segments: list[dict[str, Any]] = []
         self.archived_turn_messages: list[Any] = []
         self.latest_token_usage: dict[str, Any] | None = None
+        # 最后一次模型调用的模型名（token_usage 事件 sanitize 前提取），finish 时进 stats
+        self.latest_model_name: str = ""
         self.state: Any | None = None
         self.disconnected = False
         self._first_visible_payload_seen = False
@@ -432,10 +526,17 @@ class _AgentSseStreamAdapter:
         self._queued_events: list[str] = []
         self.graph_started = False
         # 生成统计锚点（服务端口径）：首 token 墙钟与流结束墙钟（解码窗口用），
-        # finish 时汇总为 generation_stats。
+        # 计时起点墙钟（任务用时起点：优先客户端点击时刻，兜底服务端接收时刻；
+        # 打断恢复段由 Run 行历史累计接力，见 _resolve_task_durations），finish 时汇总。
         self._first_token_wall_ms: int | None = None
         self.first_token_ms: int | None = None
+        self._stream_started_wall_ms = stream_started_wall_ms
         self._stream_ended_wall_ms: int | None = None
+        # 打断接力（任务耗时累计）：恢复段惰性读取 Run 行历史累计；interrupt
+        # 段结束时把累计值写回 Run 行，供恢复段接力。回调由装配层提供。
+        self._resolve_inherited_duration = resolve_inherited_duration
+        self._on_interrupt_finalize = on_interrupt_finalize
+        self._inherited_durations: dict[str, int] | None = None
         # 实时生成速率（generation_speed）：滑窗 token 样本 (墙钟ms, 粗估token)，
         # 仅本轮流内有效；节流推送，窗口静默不推送。
         self._speed_samples: deque[tuple[int, int]] = deque()
@@ -454,6 +555,8 @@ class _AgentSseStreamAdapter:
         while self._queued_events:
             yield self._queued_events.pop(0)
         started_at = time.perf_counter()
+        if self._stream_started_wall_ms is None:
+            self._stream_started_wall_ms = int(time.time() * 1000)
         timeout_task = asyncio.create_task(self._first_token_timeout_watchdog(started_at))
         try:
             async for sse_event in self._iter_agent_stream_events(started_at):
@@ -515,7 +618,10 @@ class _AgentSseStreamAdapter:
         """按可见性过滤并处理单个消息 chunk，产出 SSE 事件。"""
         if self.visible_message_filter and not self.visible_message_filter(message_chunk, metadata):
             return
-        if self._has_visible_payload(message_chunk):
+        # 首 token 锚定「用户看到的第一个字」：只认正文/thinking 流式字。工具调用
+        # 参数（tool_call_chunks）虽是模型产出但对用户不可见（界面只有工具行动画），
+        # 不能抢盖首 token 章，否则 TTFT 被低估（正文前的工具调用阶段全部漏计）。
+        if self._is_user_visible_text_chunk(message_chunk):
             self._record_first_visible_payload(started_at)
         async for sse_event in self._handle_message_chunk(message_chunk, metadata):
             yield sse_event
@@ -535,14 +641,69 @@ class _AgentSseStreamAdapter:
             first_token_wall_ms=self._first_token_wall_ms,
             stream_ended_wall_ms=self._stream_ended_wall_ms,
             usage=usage,
+            messages=(getattr(self.state, "values", None) or {}).get("messages"),
+            model_name=self.latest_model_name or None,
         )
+        # 任务耗时累计（总墙钟，含打断段接力）独立于解码 stats：
+        # 缺 token 数据时总耗时应照常产出；interrupt 段结束时累计值写回 Run 行接力。
+        durations = await self._resolve_task_durations()
+        if durations:
+            stats = dict(stats or {})
+            stats.update(durations)
         if persist_latest_ai_timestamp:
             self.state = await _persist_latest_ai_message_timestamp(
-                self.agent, self.config, self.state, generation_stats=stats
+                self.agent,
+                self.config,
+                self.state,
+                generation_stats=stats,
+                completed_at_ms=self._stream_ended_wall_ms,
             )
         payload = _message_end_payload_from_state(self.state, usage)
         payload["generation_stats"] = stats
         return payload
+
+    async def _load_inherited_durations(self) -> dict[str, int]:
+        """惰性读取 Run 行历史打断段累计耗时（毫秒），仅读一次；失败降级为空 dict。"""
+        if self._resolve_inherited_duration is None or self._inherited_durations is not None:
+            return self._inherited_durations or {}
+        try:
+            stored = await self._resolve_inherited_duration()
+            self._inherited_durations = dict(stored) if isinstance(stored, dict) else {}
+        except Exception:
+            logger.warning("读取打断段累计耗时失败，按 0 续算: run_id=%s", self.disconnect_log_id, exc_info=True)
+            self._inherited_durations = {}
+        return self._inherited_durations
+
+    async def _finalize_interrupt_durations(self, durations: dict[str, int]) -> None:
+        """interrupt 段结束时把累计耗时写回 Run 行，供恢复段接力；失败仅记日志。"""
+        if self._on_interrupt_finalize is None:
+            return
+        try:
+            await self._on_interrupt_finalize(durations)
+        except Exception:
+            logger.warning("打断段累计耗时写回失败: run_id=%s", self.disconnect_log_id, exc_info=True)
+
+    async def _resolve_task_durations(self) -> dict[str, int]:
+        """任务总耗时累计（毫秒）：本段 + Run 行历史打断段累计。
+
+        打断（interrupt）段结束写回 Run 行（_finalize_interrupt_durations），恢复
+        段惰性读取历史累计（_load_inherited_durations）接力相加——任务总用时只累计
+        后端真实执行时间，不含用户应答等待。请求到达锚点缺失返回空 dict（不估算）。
+        历史 Run 行可能残留 model_duration_ms 键，读取端忽略。
+        """
+        if self._stream_started_wall_ms is None:
+            return {}
+        ended_wall_ms = int(self._stream_ended_wall_ms or time.time() * 1000)
+        segment_ms = ended_wall_ms - int(self._stream_started_wall_ms)
+        if segment_ms < 0:
+            return {}
+        inherited = await self._load_inherited_durations()
+        durations = {
+            "total_duration_ms": segment_ms + max(int(inherited.get("total_duration_ms") or 0), 0),
+        }
+        if getattr(self.state, "interrupts", None):
+            await self._finalize_interrupt_durations(durations)
+        return {key: value for key, value in durations.items() if value > 0}
 
     def pending_interrupt(self) -> dict[str, Any] | None:
         """Return the single durable LangGraph interrupt payload, if present."""
@@ -579,7 +740,14 @@ class _AgentSseStreamAdapter:
 
     def _handle_token_usage_payload(self, payload: dict[str, Any]) -> list[str]:
         if payload.get("usage"):
-            self.latest_token_usage = sanitize_context_usage_for_response(payload.get("usage"))
+            raw_usage = payload.get("usage")
+            # 模型名由发射端在 sanitize（剥 llm_calls）前提取，放 payload["model"]。
+            # 非空才覆盖：subagent 等其他来源的 token_usage 事件可能无 model，
+            # 不能清掉主 agent 已记录的名字。
+            usage_model = str(payload.get("model") or "").strip()
+            if usage_model:
+                self.latest_model_name = usage_model
+            self.latest_token_usage = sanitize_context_usage_for_response(raw_usage)
             return [_format_sse("token_usage", self.latest_token_usage)]
         return []
 
@@ -649,25 +817,25 @@ class _AgentSseStreamAdapter:
             "user_id": self.user_id or "",
         }
 
-    def _has_visible_payload(self, message_chunk: Any) -> bool:
-        has_content = bool(getattr(message_chunk, "content", None))
-        has_tool_calls = bool(getattr(message_chunk, "tool_calls", None))
-        has_tool_call_chunks = bool(getattr(message_chunk, "tool_call_chunks", None))
-        is_tool_message = isinstance(message_chunk, (ToolMessage, ToolMessageChunk))
-        return bool(
-            has_content
-            or has_tool_calls
-            or has_tool_call_chunks
-            or _format_thinking_event(message_chunk)
-            or (self.include_empty_tool_messages and is_tool_message)
-        )
+    def _is_user_visible_text_chunk(self, message_chunk: Any) -> bool:
+        """chunk 是否包含用户肉眼可见的流式文字（正文或 thinking）。
+
+        首 token 锚定语义：用户看到的第一个字。工具调用参数虽经模型产出并被
+        SSE 下发，但界面只渲染工具行动画，不流式展示文字，不计入首 token。
+        """
+        return bool(getattr(message_chunk, "content", None)) or bool(_format_thinking_event(message_chunk))
 
     def _record_first_visible_payload(self, started_at: float) -> None:
         if self._first_visible_payload_seen:
             return
         self._first_visible_payload_seen = True
-        self.first_token_ms = int((time.perf_counter() - started_at) * 1000)
         self._first_token_wall_ms = int(time.time() * 1000)
+        # 首 token 起点对齐任务总耗时（点击/接收时刻）：用户视角「点发送 → 看到第一个字」
+        # 的完整等待，含前置装配。起点锚点缺失（直连调用等）回退流启动 perf 差。
+        if self._stream_started_wall_ms is not None:
+            self.first_token_ms = max(self._first_token_wall_ms - int(self._stream_started_wall_ms), 0)
+        else:
+            self.first_token_ms = int((time.perf_counter() - started_at) * 1000)
         self._emit_first_token_timeout_if_needed(started_at)
         if self.on_first_message:
             self.on_first_message()
@@ -839,6 +1007,7 @@ async def _generate_chat_data_stream(
     recovering = req.recovering
     owner_token = req.owner_token
     stream_event_id_provider = req.stream_event_id_provider
+    stream_started_wall_ms = req.stream_started_wall_ms
     started_at = time.perf_counter()
     last_phase_at = started_at
 
@@ -888,6 +1057,7 @@ async def _generate_chat_data_stream(
                 file_ids=file_ids,
                 run_id=run_id,
                 adopted_messages=adopted_messages,
+                stream_started_wall_ms=stream_started_wall_ms,
                 resume_answer=resume_answer,
                 resume_started=resume_started,
                 resume_turn_id=resume_turn_id,
@@ -967,12 +1137,21 @@ def _create_agent_stream_adapter(
     initial_state: Any,
     config: dict[str, Any],
     request: Request | None,
+    stream_started_wall_ms: int | None = None,
 ) -> "_AgentSseStreamAdapter":
     """装配本轮 Agent SSE 流适配器，挂到回调上下文并补发恢复重启事件。"""
     on_stream_started = (
         partial(agent_inbox_service.mark_question_resume_started, callbacks.run_id, callbacks.owner_token)
         if callbacks.resume_answer is not None and callbacks.run_id
         else None
+    )
+    # 打断接力回调：interrupt 段结束写回累计耗时、恢复段惰性读取接力（Run 行存储，
+    # 绕开 interrupt 期间禁止写 checkpoint 的红线）。run_id 缺失时跳过（无接力）。
+    inherited_duration_reader = (
+        partial(agent_inbox_service.get_executed_durations, callbacks.run_id) if callbacks.run_id else None
+    )
+    interrupt_duration_writer = (
+        partial(agent_inbox_service.add_executed_durations, callbacks.run_id) if callbacks.run_id else None
     )
     adapter = _AgentSseStreamAdapter(
         agent=agent,
@@ -993,6 +1172,9 @@ def _create_agent_stream_adapter(
             if callbacks.user_message
             else None
         ),
+        resolve_inherited_duration=inherited_duration_reader,
+        on_interrupt_finalize=interrupt_duration_writer,
+        stream_started_wall_ms=stream_started_wall_ms,
     )
     callbacks.stream_adapter = adapter
     if callbacks.recovering:
@@ -1196,10 +1378,14 @@ async def _resolve_agent_turn_inputs(
     user_input: TurnUserInput,
     resume: TurnResumeContext,
     runtime: TurnRuntimeContext,
+    receipt_timestamp_ms: int | None = None,
 ) -> tuple[HumanMessage | None, Any, str, list[HumanMessage] | None]:
     """解析 checkpoint 恢复状态，构建用户消息、initial_state 与系统提示词。
 
     `adopted_messages` 可能在恢复对齐时被重置为空列表，须回传给主流程继续使用。
+    receipt_timestamp_ms：计时起点墙钟（Run 行章，优先客户端点击时刻）。传入时
+    把它格式化后覆盖用户消息时间戳——气泡显示、历史回放、harness 首 token/总耗时
+    三者同锚；缺失回退消息构建时刻（_build_user_message 默认章）。
     """
     # 三个入参对象在此还原为局部变量：函数体与拆分前保持一致，避免表达式级改写。
     user_query = user_input.user_query
@@ -1227,6 +1413,11 @@ async def _resolve_agent_turn_inputs(
     message_kwargs: dict[str, Any] = {}
     if skill_names:
         message_kwargs["skill_names"] = skill_names
+    if receipt_timestamp_ms:
+        # _build_user_message 先盖构建时刻章、后 merge extra_kwargs，这里传即覆盖
+        message_kwargs["timestamp"] = time.strftime(
+            "%Y-%m-%d %H:%M:%S", time.localtime(receipt_timestamp_ms / 1000)
+        )
     current_turn_checkpointed, resume_checkpointed, adopted_messages = await _resolve_checkpointed_turn_state(
         checkpointer,
         config,
@@ -1325,6 +1516,7 @@ async def _run_chat_data_agent_stream(
     recovering = req.recovering
     owner_token = req.owner_token
     stream_event_id_provider = req.stream_event_id_provider
+    stream_started_wall_ms = req.stream_started_wall_ms
     selected_files = parse_file_selections(file_selections)
     try:
         # 无依赖的准备项一次并行：语义上下文（含数据源校验）/ 子智能体热默认 /
@@ -1456,6 +1648,7 @@ async def _run_chat_data_agent_stream(
                         available_skills_xml=available_skills_xml,
                         memory_block=memory_block,
                     ),
+                    receipt_timestamp_ms=stream_started_wall_ms,
                 ),
                 refresh_plugin_state(),
             )
@@ -1522,6 +1715,7 @@ async def _run_chat_data_agent_stream(
                 initial_state=initial_state,
                 config=config,
                 request=request,
+                stream_started_wall_ms=stream_started_wall_ms,
             )
 
             await _admit_adopted_messages(
@@ -1573,6 +1767,24 @@ async def _run_chat_data_agent_stream(
         raise AgentRunStreamFailedError from None
 
 
+def _resolve_client_timestamp_ms(raw: int | None, *, now_ms: int, max_skew_ms: int = 3_600_000) -> int:
+    """校验前端点击发送时刻（epoch 毫秒），非法或钟偏超界回退服务端接收章。
+
+    与用户气泡显示同源同锚「点击时刻」：气泡时间是浏览器本地钟，harness 首
+    token/总耗时起点跟随它，用户才能拿「气泡 → 首字 / AI 气泡」自行对账。
+    防护：非正数回退；客户端钟快于服务端时钳到 now（发送不可能在未来，避免
+    负等待）；钟偏超过 max_skew_ms（默认 1 小时，容忍传输延迟/排队重放）视为
+    客户端钟失真，回退服务端接收章。
+    """
+    if not raw or raw <= 0:
+        return now_ms
+    if now_ms < raw:  # 客户端钟偏快：钳到服务端当前时刻
+        return now_ms
+    if now_ms - raw > max_skew_ms:
+        return now_ms
+    return int(raw)
+
+
 async def sql_completion_handler(
     conversation_id: str,
     query: str,
@@ -1583,6 +1795,7 @@ async def sql_completion_handler(
     file_ids: list[str] | None = None,
     queued_message_id: str | None = None,
     preserve_queued_messages: bool = False,
+    client_timestamp_ms: int | None = None,
 ) -> StreamingResponse:
     """
     智能问数 completion 处理器。
@@ -1591,6 +1804,11 @@ async def sql_completion_handler(
     # （start_run 的 adopt/落库 + 提交调度），此前零日志、波动 2~6s 无法归因。
     # 与 graph 内 log_phase 共用「ChatData 阶段耗时」前缀，一条 grep 串起全链路。
     handler_started_at = time.perf_counter()
+    # 请求到达墙钟（毫秒）：用户气泡对齐口径的 harness 首 token / 任务总耗时
+    # 起点，随 Run 行透传到流工厂；后续落库/调度/prepare 盲区全部计入等待。
+    stream_started_wall_ms = int(time.time() * 1000)
+    # 前端点击发送时刻优先（与用户气泡显示同源同锚），校验后覆盖服务端接收章
+    stream_started_wall_ms = _resolve_client_timestamp_ms(client_timestamp_ms, now_ms=stream_started_wall_ms)
     run_options = parse_completion_run_options(options)
 
     # 保持懒创建会话；数据源组在生成流开始时写入业务会话表并校验。
@@ -1618,6 +1836,7 @@ async def sql_completion_handler(
         runtime_context,
         adopt_pending_messages=not queued_message_id and not preserve_queued_messages,
         selected_message_id=queued_message_id,
+        stream_started_wall_ms=stream_started_wall_ms,
     )
     logger.info(
         "ChatData 阶段耗时: conversation_id=%s phase=completion.start_run elapsed_ms=%d total_ms=%d",

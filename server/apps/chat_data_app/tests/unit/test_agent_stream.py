@@ -15,6 +15,7 @@ os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 
+from apps.chat_data_app import agent_stream as agent_stream_module
 from apps.chat_data_app.agent.context.context_budget import ContextInputLimitExceededError
 from apps.chat_data_app.agent.run.completion_options import normalize_enable_thinking, parse_file_selections
 from apps.chat_data_app.agent.tools import data_analyzing as agent_sql_tools
@@ -523,6 +524,39 @@ def _make_openai_status_error(exc_cls, status_code: int, body: dict | None = Non
     request = httpx.Request("POST", "https://model.example.com/v1/chat/completions")
     response = httpx.Response(status_code, request=request)
     return exc_cls("model service error", response=response, body=body)
+
+
+def test_resolve_client_timestamp_ms():
+    """客户端点击时刻校验：合法采信、非法/超界回退服务端接收章。"""
+    now = 1_000_000_000_000
+    resolve = agent_stream_module._resolve_client_timestamp_ms
+    # 合法：1 分钟前点击 → 采信（点击 → 请求到达的传输+建会话盲区计入等待）
+    assert resolve(now - 60_000, now_ms=now) == now - 60_000
+    # 客户端钟偏快（未来）→ 钳到服务端 now
+    assert resolve(now + 5_000, now_ms=now) == now
+    # 钟偏超界（> 1 小时）→ 回退服务端章
+    assert resolve(now - 3_600_001, now_ms=now) == now
+    # 非法：None / 0 / 负数 → 回退服务端章
+    assert resolve(None, now_ms=now) == now
+    assert resolve(0, now_ms=now) == now
+    assert resolve(-1, now_ms=now) == now
+
+
+def test_build_user_message_timestamp_override():
+    """用户消息时间戳覆盖语义：计时起点章（receipt）传入时覆盖默认构建时刻章。
+
+    气泡显示、历史回放、harness 首 token/总耗时三者同锚（客户端点击时刻优先，
+    兜底服务端接收时刻）。
+    """
+    # 未传覆盖 → 默认构建时刻章（YYYY-MM-DD HH:MM:SS）
+    default_message = agent_stream_module._build_user_message("你好")
+    assert default_message.additional_kwargs["timestamp"] == agent_stream_module._get_timestamp()
+    # 接收章经 message_kwargs 传入（_resolve_agent_turn_inputs 的覆盖路径）→ 生效
+    receipt_message = agent_stream_module._build_user_message("你好", timestamp="2026-10-18 08:47:39")
+    assert receipt_message.additional_kwargs["timestamp"] == "2026-10-18 08:47:39"
+    # 空值不覆盖（extra_kwargs 过滤 falsy）→ 保留默认章
+    fallback_message = agent_stream_module._build_user_message("你好", timestamp="")
+    assert fallback_message.additional_kwargs["timestamp"] == agent_stream_module._get_timestamp()
 
 
 def test_model_failure_user_message_maps_friendly_text():
@@ -1762,6 +1796,8 @@ def test_sql_completion_handler_wraps_stream(monkeypatch):
     assert runtime_context["member_datasource_ids"] == ["m1"]
     assert runtime_context["semantic_config_id"] == "cfg"
     assert runtime_context["model_id"] == "m1"
+    # 请求到达墙钟随 Run 行透传（harness 首 token / 任务总耗时起点）
+    assert captured["start_run_kwargs"]["stream_started_wall_ms"] > 0
     assert captured["submit_kwargs"] == {
         "run_id": "run-test",
         "conversation_id": "conv_sql",
@@ -1880,3 +1916,254 @@ def test_extract_text_content_strips_attachment_lines():
     assert _extract_text_content("查订单\n[attachment] /mnt/x.xlsx") == "查订单"
     # 只发文件无文字 → 空字符串（标题生成走兜底）
     assert _extract_text_content([{"type": "text", "text": "[attachment] /x/a.png"}]) == ""
+
+
+def test_generation_stats_requires_positive_duration_and_tokens(monkeypatch):
+    """收口速率（generation_stats）口径：解码窗口 = 首 token→流结束 − 工具时间。"""
+    import time
+
+    now_ms = int(time.time() * 1000)
+    # 首 token 锚点缺失 → 不产 stats
+    assert (
+        agent_stream_module._generation_stats_from_usage(
+            first_token_ms=None,
+            first_token_wall_ms=now_ms,
+            stream_ended_wall_ms=now_ms,
+            usage={},
+        )
+        is None
+    )
+    # 无输出 token → 不产 stats
+    assert (
+        agent_stream_module._generation_stats_from_usage(
+            first_token_ms=10,
+            first_token_wall_ms=now_ms,
+            stream_ended_wall_ms=now_ms,
+            usage={"output_tokens": 0},
+        )
+        is None
+    )
+    # 解码窗口为 0 → 无法得到正时长
+    assert (
+        agent_stream_module._generation_stats_from_usage(
+            first_token_ms=10,
+            first_token_wall_ms=now_ms,
+            stream_ended_wall_ms=now_ms,
+            usage={"output_tokens": 10},
+        )
+        is None
+    )
+    # 正常路径：解码窗口 1000ms（首 token → 流结束），其中 250ms 为工具耗时 → 生成时长 750ms
+    # 工具行挂在 breakdown「会话消息」节点的 children 下（嵌套结构），需递归找到
+    # 模型侧首 token = 首 token 墙钟 − 覆盖首 token 的那次调用起点；输入总 token 取 usage 累计
+    stats = agent_stream_module._generation_stats_from_usage(
+        first_token_ms=10,
+        first_token_wall_ms=now_ms - 1000,
+        stream_ended_wall_ms=now_ms,
+        usage={
+            "output_tokens": 30,
+            "cumulative_input_tokens": 12205,
+            "cumulative_cached_input_tokens": 9650,
+            "cumulative_cache_hit_rate": 79.1,
+            "llm_calls": [{"model": "qwen3"}, {"model": "deepseek-v4-flash", "output_tokens": 30}],
+            "breakdown": [
+                {"key": "system_prompt", "tokens": 100},
+                {
+                    "key": "messages",
+                    "children": [
+                        {"role": "ai", "started_at_ms": now_ms - 900, "ended_at_ms": now_ms - 650},
+                        {"role": "tool", "started_at_ms": now_ms - 900, "ended_at_ms": now_ms - 650},
+                    ],
+                },
+                {"role": "context_summary", "started_at_ms": now_ms - 2000, "ended_at_ms": now_ms - 1500},
+            ],
+        },
+        messages=[
+            _FakeStampedMessage(now_ms - 1250, now_ms - 350),
+            _FakeStampedMessage(now_ms - 300, now_ms - 100),
+            _FakeStampedMessage(now_ms - 2000, now_ms - 1500, context_summary=True),
+        ],
+    )
+    assert stats is not None
+    assert stats["duration_ms"] == 750
+    assert stats["output_tokens"] == 30
+    assert stats["tokens_per_second"] == 40
+    assert stats["input_tokens"] == 12205
+    assert stats["cached_input_tokens"] == 9650
+    assert stats["cache_hit_rate"] == 79.1
+    assert stats["model"] == "deepseek-v4-flash"  # 最后一次调用的模型名
+    # 模型侧首 token：首 token 墙钟落在第一次调用窗口 [now-1250, now-350] 内 → 250ms；
+    # 不再取「最早调用起点」做全局减法（那会把前置装配和调用间隙混进 TTFT）
+    assert stats["model_first_token_ms"] == 250
+    assert "total_duration_ms" not in stats  # 任务总耗时由 finish 层接力累计，不在此函数职责内
+    # usage 缺输入/模型记录 → 对应字段省略，不影响主 stats
+    stats_no_model = agent_stream_module._generation_stats_from_usage(
+        first_token_ms=10,
+        first_token_wall_ms=now_ms - 1000,
+        stream_ended_wall_ms=now_ms,
+        usage={"output_tokens": 30},
+        messages=[_FakeStampedMessage(None, None)],
+    )
+    assert stats_no_model is not None
+    assert "input_tokens" not in stats_no_model
+    assert "cached_input_tokens" not in stats_no_model  # 模型未上报缓存信息 → 省略不硬凑
+    assert "cache_hit_rate" not in stats_no_model
+    assert "model" not in stats_no_model
+    assert "model_first_token_ms" not in stats_no_model
+    # 流结束锚点缺失（异常中断路径）→ 回退当前时刻，仍可产 stats
+    monkeypatch.setattr(agent_stream_module.time, "time", lambda: now_ms / 1000)
+    stats_fallback = agent_stream_module._generation_stats_from_usage(
+        first_token_ms=10,
+        first_token_wall_ms=now_ms - 1000,
+        stream_ended_wall_ms=None,
+        usage={"output_tokens": 30},
+    )
+    assert stats_fallback is not None
+    assert stats_fallback["duration_ms"] == 1000
+    assert stats_fallback["tokens_per_second"] == 30
+    # 显式 model_name 优先（sanitize 前提取路径）：usage 已被剥离 llm_calls 仍可携带模型名
+    stats_explicit = agent_stream_module._generation_stats_from_usage(
+        first_token_ms=10,
+        first_token_wall_ms=now_ms - 1000,
+        stream_ended_wall_ms=now_ms,
+        usage={"output_tokens": 30, "cumulative_input_tokens": 500},
+        model_name="deepseek-v4-flash",
+    )
+    assert stats_explicit is not None
+    assert stats_explicit["model"] == "deepseek-v4-flash"
+    assert stats_explicit["input_tokens"] == 500
+
+
+def test_handle_token_usage_payload_extracts_model_before_sanitize():
+    """模型名契约：发射端在 sanitize（剥 llm_calls）前提取，放 payload["model"]。
+
+    adapter 读 payload["model"]（非空才覆盖——subagent 等无 model 事件不清空主记录）；
+    下发的 token_usage 仍被 sanitize 剥离 llm_calls 明细。
+    """
+    adapter = agent_stream_module._AgentSseStreamAdapter(
+        agent=None,
+        initial_state=None,
+        config={},
+        request=None,
+        stream_started_wall_ms=None,
+    )
+    # 主 agent 事件：payload["model"] 已由发射端提取 → 记录模型名
+    sanitized_usage = {"output_tokens": 30}
+    events = adapter._handle_token_usage_payload(
+        {"type": "token_usage", "usage": sanitized_usage, "model": "deepseek-v4-flash"}
+    )
+    assert adapter.latest_model_name == "deepseek-v4-flash"
+    assert events and "llm_calls" not in events[0]
+    # subagent 等无 model 的事件：不清空已记录的名字
+    adapter._handle_token_usage_payload({"type": "token_usage", "usage": {"output_tokens": 5}})
+    assert adapter.latest_model_name == "deepseek-v4-flash"
+    # 换模型（多轮调用最后一次为准）→ 覆盖
+    adapter._handle_token_usage_payload(
+        {"type": "token_usage", "usage": {"output_tokens": 8}, "model": "qwen3"}
+    )
+    assert adapter.latest_model_name == "qwen3"
+
+
+def test_emit_context_usage_payload_carries_model_name():
+    """发射端契约：sanitize 前提取模型名塞进 payload["model"]，usage 本体仍被剥离 llm_calls。"""
+    emitted: list[dict] = []
+
+    class _Writer:
+        def __call__(self, payload):
+            emitted.append(payload)
+
+    from apps.chat_data_app.agent.middleware import context_usage as context_usage_module
+
+    usage = {
+        "output_tokens": 30,
+        "llm_calls": [{"model": "qwen3"}, {"model": "deepseek-v4-flash"}],
+    }
+    # middleware 是 from-import 绑定，须打桩其模块命名空间
+    original = context_usage_module.get_stream_writer
+    context_usage_module.get_stream_writer = lambda: _Writer()
+    try:
+        context_usage_module._emit_context_usage(usage)
+    finally:
+        context_usage_module.get_stream_writer = original
+    assert emitted and emitted[0]["type"] == "token_usage"
+    assert emitted[0]["model"] == "deepseek-v4-flash"  # sanitize 前提取
+    assert "llm_calls" not in emitted[0]["usage"]  # usage 本体仍被剥离明细
+
+
+class _FakeStampedMessage:
+    """模拟带模型调用起止盖章的 AIMessage（context_usage 中间件盖章产物）。"""
+
+    def __init__(self, started_at_ms: int | None, ended_at_ms: int | None, *, context_summary: bool = False):
+        kwargs: dict = {}
+        if started_at_ms is not None:
+            kwargs["started_at_ms"] = started_at_ms
+        if ended_at_ms is not None:
+            kwargs["ended_at_ms"] = ended_at_ms
+        if context_summary:
+            kwargs["context_summary"] = True
+        self.additional_kwargs = kwargs
+
+
+def test_resolve_task_durations_interrupt_handover():
+    """任务总耗时接力：本段 + Run 行历史累计；interrupt 段写回 Run 行。"""
+    import asyncio
+    import time
+
+    adapter = agent_stream_module._AgentSseStreamAdapter(
+        agent=None,
+        initial_state=None,
+        config={},
+        request=None,
+        stream_started_wall_ms=None,
+    )
+    # 请求到达锚点缺失 → 不产耗时（不估算）
+    assert asyncio.run(adapter._resolve_task_durations()) == {}
+
+    now_ms = int(time.time() * 1000)
+    writes: list[dict[str, int]] = []
+
+    class _State:
+        interrupts = (object(),)  # interrupt 段
+
+    adapter = agent_stream_module._AgentSseStreamAdapter(
+        agent=None,
+        initial_state=None,
+        config={},
+        request=None,
+        stream_started_wall_ms=now_ms - 3000,
+        resolve_inherited_duration=_async_return({"total_duration_ms": 1200, "model_duration_ms": 900}),
+        on_interrupt_finalize=_AsyncAppend(writes),
+    )
+    adapter._stream_ended_wall_ms = now_ms
+    adapter.state = _State()
+    durations = asyncio.run(adapter._resolve_task_durations())
+    assert durations == {"total_duration_ms": 4200}  # 本段 3000 + 继承 1200；历史 model 键忽略
+    assert writes == [{"total_duration_ms": 4200}]  # interrupt 段写回 Run 行
+
+    # 非 interrupt 段（正常完成）→ 不写回，仅返回累计值
+    writes.clear()
+
+    class _DoneState:
+        interrupts = ()
+
+    adapter.state = _DoneState()
+    durations = asyncio.run(adapter._resolve_task_durations())
+    assert durations == {"total_duration_ms": 4200}
+    assert writes == []
+
+
+class _AsyncAppend:
+    """把 append 包装成 async callable，用于断言 on_interrupt_finalize 回调。"""
+
+    def __init__(self, sink: list[dict[str, int]]) -> None:
+        self._sink = sink
+
+    async def __call__(self, value: dict[str, int]) -> None:
+        self._sink.append(value)
+
+
+def _async_return(value):
+    async def _reader():
+        return value
+
+    return _reader

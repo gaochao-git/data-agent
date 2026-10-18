@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest'
 
 import {
   formatGenerationSpeed,
-  formatGenerationStatsDetail,
+  formatTotalDurationLabel,
+  generationStatsRows,
+  type GenerationStatsRow,
   toGenerationStats,
 } from '../generationSpeed'
 
@@ -27,6 +29,57 @@ describe('toGenerationStats', () => {
     })
   })
 
+  it('total_duration_ms 合法时透出，缺失或非法时省略', () => {
+    const base = { duration_ms: 7000, output_tokens: 1000, tokens_per_second: 143 }
+    expect(toGenerationStats({ ...base, total_duration_ms: 9000 })?.totalDurationMs).toBe(9000)
+    expect(toGenerationStats({ ...base })?.totalDurationMs).toBeUndefined()
+    expect(toGenerationStats({ ...base, total_duration_ms: 0 })?.totalDurationMs).toBeUndefined()
+    expect(toGenerationStats({ ...base, total_duration_ms: -5 })?.totalDurationMs).toBeUndefined()
+  })
+
+  it('model_first_token_ms / input_tokens / model 合法时透出，缺失或非法时省略', () => {
+    const base = { duration_ms: 7000, output_tokens: 1000, tokens_per_second: 143 }
+    const full = toGenerationStats({
+      ...base,
+      model_first_token_ms: 1800,
+      input_tokens: 12205,
+      model: 'deepseek-v4-flash',
+    })
+    expect(full?.modelFirstTokenMs).toBe(1800)
+    expect(full?.inputTokens).toBe(12205)
+    expect(full?.model).toBe('deepseek-v4-flash')
+    expect(toGenerationStats({ ...base })?.modelFirstTokenMs).toBeUndefined()
+    expect(toGenerationStats({ ...base })?.inputTokens).toBeUndefined()
+    expect(toGenerationStats({ ...base })?.model).toBeUndefined()
+    expect(toGenerationStats({ ...base, model_first_token_ms: -1 })?.modelFirstTokenMs).toBeUndefined()
+    expect(toGenerationStats({ ...base, input_tokens: 0 })?.inputTokens).toBeUndefined()
+    expect(toGenerationStats({ ...base, model: '  ' })?.model).toBeUndefined()
+  })
+
+  it('cached_input_tokens / cache_hit_rate 合法时透出，缺失或非法时省略', () => {
+    const base = { duration_ms: 7000, output_tokens: 1000, tokens_per_second: 143 }
+    const full = toGenerationStats({ ...base, cached_input_tokens: 9650, cache_hit_rate: 79.1 })
+    expect(full?.cachedInputTokens).toBe(9650)
+    expect(full?.cacheHitRate).toBe(79.1)
+    // 模型未上报缓存信息 → 两字段省略
+    expect(toGenerationStats({ ...base })?.cachedInputTokens).toBeUndefined()
+    expect(toGenerationStats({ ...base })?.cacheHitRate).toBeUndefined()
+    expect(toGenerationStats({ ...base, cached_input_tokens: 0 })?.cachedInputTokens).toBeUndefined()
+    expect(toGenerationStats({ ...base, cached_input_tokens: 9650 })?.cacheHitRate).toBeUndefined()
+    expect(toGenerationStats({ ...base, cached_input_tokens: 9650, cache_hit_rate: -1 })?.cacheHitRate).toBeUndefined()
+  })
+
+  it('usage 缺失时 total_duration_ms 独立支撑统计对象，解码字段逐个省略', () => {
+    // 后端契约：模型未吐可见 payload / usage 缺失时，仍下发 {"total_duration_ms": X}
+    expect(toGenerationStats({ total_duration_ms: 4200 })).toEqual({ totalDurationMs: 4200 })
+    expect(
+      toGenerationStats({ total_duration_ms: 4200, output_tokens: 0, duration_ms: -1, tokens_per_second: 0 }),
+    ).toEqual({ totalDurationMs: 4200 })
+    // total 也不合法时才整体为 null
+    expect(toGenerationStats({ total_duration_ms: 0 })).toBeNull()
+    expect(toGenerationStats({ total_duration_ms: -5, output_tokens: 100 })).toBeNull()
+  })
+
   it('关键数据缺失或非法时整体返回 null，不用估算冒充', () => {
     expect(toGenerationStats(null)).toBeNull()
     expect(toGenerationStats('x')).toBeNull()
@@ -48,28 +101,100 @@ describe('formatGenerationSpeed', () => {
   it('超高速度收敛为 k 展示', () => {
     expect(formatGenerationSpeed({ outputTokens: 50000, durationMs: 1000, tokensPerSecond: 50000 })).toBe('50k tok/s')
   })
+
+  it('解码统计缺失或整体为空时返回空串', () => {
+    expect(formatGenerationSpeed({ totalDurationMs: 4200 })).toBe('')
+    expect(formatGenerationSpeed(null)).toBe('')
+  })
 })
 
-describe('formatGenerationStatsDetail', () => {
+describe('generationStatsRows', () => {
 
-  it('毫秒 / 秒 / 分秒三档时长', () => {
+  it('辅助字段齐全时输出 token 组 + 耗时组，组间首行带分隔标记', () => {
+    const rows = generationStatsRows({
+      outputTokens: 602,
+      inputTokens: 12205,
+      cachedInputTokens: 9650,
+      cacheHitRate: 79.1,
+      model: 'deepseek-v4-flash',
+      durationMs: 13000,
+      tokensPerSecond: 46,
+      firstTokenMs: 2100,
+      totalDurationMs: 15600,
+      modelFirstTokenMs: 442,
+    })
+    expect(rows.map((row: GenerationStatsRow) => `${row.label}=${row.value}`)).toEqual([
+      '输入总token=12,205',
+      '缓存命中=79.1%',
+      '输出总token=602',
+      'token速率=46 tok/s',
+      'llm 首 token=442ms',
+      'harness 首 token=2.1s',
+      'harness 总耗=15.6s',
+    ])
+    expect(rows[4]?.divider).toBe(true)  // llm 首 token 行前分组分隔
+    expect(rows[0]?.divider).toBeUndefined()
+  })
+
+  it('命中率缺失时退显 token 数，未上报时整行省略', () => {
+    const withoutRate = generationStatsRows({
+      outputTokens: 1842, durationMs: 12300, tokensPerSecond: 150, cachedInputTokens: 9650,
+    })
+    expect(withoutRate[0]).toEqual({ label: '缓存命中', value: '9,650' })
+    const withoutCache = generationStatsRows({ outputTokens: 1842, durationMs: 12300, tokensPerSecond: 150 })
+    expect(withoutCache.map((row: GenerationStatsRow) => row.label)).not.toContain('缓存命中')
+  })
+
+  it('辅助字段缺失（老历史数据）时对应行省略，harness 总耗回退解码时长', () => {
+    const rows = generationStatsRows({ outputTokens: 1842, durationMs: 12300, tokensPerSecond: 150 })
+    expect(rows.map((row: GenerationStatsRow) => `${row.label}=${row.value}`)).toEqual([
+      '输出总token=1,842',
+      'token速率=150 tok/s',
+      'harness 总耗=12.3s',
+    ])
+    expect(rows[2]?.divider).toBe(true)
+    const withTotal = generationStatsRows({
+      outputTokens: 1842, durationMs: 12300, tokensPerSecond: 150, firstTokenMs: 2100, totalDurationMs: 15600,
+    })
+    expect(withTotal.map((row: GenerationStatsRow) => `${row.label}=${row.value}`)).toEqual([
+      '输出总token=1,842',
+      'token速率=150 tok/s',
+      'harness 首 token=2.1s',
+      'harness 总耗=15.6s',
+    ])
+  })
+
+  it('分秒档时长', () => {
     const base = { outputTokens: 100, tokensPerSecond: 10 }
-    expect(formatGenerationStatsDetail({ ...base, durationMs: 860 })).toContain('生成 860ms')
-    expect(formatGenerationStatsDetail({ ...base, durationMs: 12300 })).toContain('生成 12.3s')
-    expect(formatGenerationStatsDetail({ ...base, durationMs: 62000 })).toContain('生成 1m02s')
+    expect(generationStatsRows({ ...base, durationMs: 860 })[2]?.value).toBe('860ms')
+    expect(generationStatsRows({ ...base, durationMs: 62000 })[2]?.value).toBe('1m02s')
   })
 
-  it('tokens 紧凑展示', () => {
-    expect(formatGenerationStatsDetail({ outputTokens: 1842, durationMs: 12300, tokensPerSecond: 150 }))
-      .toBe('输出 1.8k tokens · 生成 12.3s')
+  it('usage 缺失（total-only）时只输出总耗时行', () => {
+    const rows = generationStatsRows({ totalDurationMs: 15600 })
+    expect(rows.map((row: GenerationStatsRow) => `${row.label}=${row.value}`)).toEqual([
+      'harness 总耗=15.6s',
+    ])
+    expect(rows[0]?.divider).toBe(true)
+    expect(generationStatsRows(null)).toEqual([])
+  })
+})
+
+describe('formatTotalDurationLabel', () => {
+
+  it('不足 1 分钟显示整秒（不足 1 秒按 1 秒兜底）', () => {
+    expect(formatTotalDurationLabel(500)).toBe('1 秒')
+    expect(formatTotalDurationLabel(42_000)).toBe('42 秒')
+    expect(formatTotalDurationLabel(59_900)).toBe('59 秒')
   })
 
-  it('含首 token 耗时时置于明细开头', () => {
-    expect(formatGenerationStatsDetail({ outputTokens: 1842, durationMs: 12300, tokensPerSecond: 150, firstTokenMs: 2100 }))
-      .toBe('首 token 2.1s · 输出 1.8k tokens · 生成 12.3s')
-    expect(formatGenerationStatsDetail({ outputTokens: 100, durationMs: 860, tokensPerSecond: 10, firstTokenMs: 860 }))
-      .toContain('首 token 860ms')
-    expect(formatGenerationStatsDetail({ outputTokens: 100, durationMs: 860, tokensPerSecond: 10 }))
-      .not.toContain('首 token')
+  it('超过 1 分钟显示分秒', () => {
+    expect(formatTotalDurationLabel(83_000)).toBe('1 分 23 秒')
+    expect(formatTotalDurationLabel(120_000)).toBe('2 分钟')
+  })
+
+  it('非法输入返回空串', () => {
+    expect(formatTotalDurationLabel(Number.NaN)).toBe('')
+    expect(formatTotalDurationLabel(-1)).toBe('')
   })
 })

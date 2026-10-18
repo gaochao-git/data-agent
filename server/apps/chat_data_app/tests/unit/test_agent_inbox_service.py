@@ -1,4 +1,5 @@
 import asyncio
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 
@@ -516,6 +517,67 @@ async def test_start_run_selected_message_only_executes_one_pending_message(inbo
         (first_id, new_run_id, "claimed"),
         (second_id, old_run_id, "pending"),
     ]
+
+
+@pytest.mark.asyncio
+async def test_start_run_persists_request_arrival_stamp_and_prepare_surfaces_it(inbox_service):
+    """completion 入口盖章随 Run 行 content 持久化，prepare 透出给流工厂；缺省不写。"""
+    service, create_thread, get_session, owners = inbox_service
+    await create_thread()
+    await create_thread(conversation_id="conv-2")
+    stamp = 1700000000000
+    stamped_run_id, _ = await AgentInboxService.start_run(
+        service,
+        "conv-1",
+        "user-1",
+        "用户一",
+        {"query": "查询"},
+        stream_started_wall_ms=stamp,
+    )
+    plain_run_id, _ = await AgentInboxService.start_run(service, "conv-2", "user-1", "用户一")
+
+    prepared = await service.prepare_pending_run(stamped_run_id)
+    owners[stamped_run_id] = prepared["owner_token"]
+    assert prepared["stream_started_wall_ms"] == stamp
+    plain_prepared = await service.prepare_pending_run(plain_run_id)
+    owners[plain_run_id] = plain_prepared["owner_token"]
+    assert plain_prepared["stream_started_wall_ms"] is None
+
+
+@pytest.mark.asyncio
+async def test_claim_question_answer_re_stamps_arrival_wall_ms(inbox_service):
+    """问答恢复段首 token/总耗时起点 = 回答到达时刻，覆盖原 Run 行旧盖章。"""
+    service, create_thread, get_session, owners = inbox_service
+    await create_thread()
+    run_id, _ = await service.start_run("conv-1", "user-1", "用户一", stream_started_wall_ms=1000)
+    question = {
+        "question_id": "question-1",
+        "turn_id": "turn-1",
+        "questions": [
+            {
+                "id": "scope",
+                "question": "选择范围",
+                "options": [{"label": "全部"}, {"label": "本月"}],
+                "multi_select": False,
+            }
+        ],
+    }
+    await service.mark_waiting_for_user(run_id, question, "user-1", "用户一", owners[run_id])
+    before_ms = int(time.time() * 1000)
+    answer = {"answers": [{"id": "scope", "selected": ["本月"], "custom": ""}]}
+    await service.claim_question_answer("conv-1", "user-1", "用户一", "question-1", answer)
+
+    async with get_session() as session:
+        run = (
+            await session.execute(
+                select(ChatDataAgentInbox).where(
+                    ChatDataAgentInbox.run_id == run_id,
+                    ChatDataAgentInbox.record_type == "run",
+                )
+            )
+        ).scalar_one()
+    content = inbox_module.load_run_content(run.record_content)
+    assert content["stream_started_wall_ms"] >= before_ms
 
 
 @pytest.mark.asyncio
@@ -1258,6 +1320,62 @@ async def test_record_terminal_event_supports_finished_run(inbox_service):
         ).scalar_one()
     assert run.record_status == "finished"
     assert json.loads(run.record_content)["terminal_event"]["stream_id"] == "1740000000001-0"
+
+
+@pytest.mark.asyncio
+async def test_executed_durations_accumulate_across_interrupt_segments(inbox_service):
+    """打断接力：总墙钟耗时累计写 Run 行，waiting_user 状态下仍可写。
+
+    model_duration_ms 已废弃（llm/harness 双行口径下线），服务层对 dict 透传
+    合并不感知字段——这里额外验证历史 Run 行残留的 model 键原样保留、新写入
+    只有 total_duration_ms。
+    """
+    import json
+
+    service, create_thread, get_session, owners = inbox_service
+    await create_thread()
+    run_id, _ = await service.start_run("conv-1", "user-1", "用户一")
+    question = {
+        "question_id": "question-1",
+        "turn_id": "turn-1",
+        "questions": [{"id": "scope", "question": "选择范围", "options": [{"label": "全部"}], "multi_select": False}],
+    }
+    await service.mark_waiting_for_user(run_id, question, "user-1", "用户一", owners[run_id])
+
+    # 历史段残留（旧口径写入的 model 键）原样保留；新段只写 total_duration_ms
+    await service.add_executed_durations(
+        run_id, {"total_duration_ms": 3000, "model_duration_ms": 2000}
+    )
+    await service.add_executed_durations(run_id, {"total_duration_ms": 1200})
+
+    assert await service.get_executed_durations(run_id) == {
+        "total_duration_ms": 4200,
+        "model_duration_ms": 2000,
+    }
+
+    async with get_session() as session:
+        run = (
+            await session.execute(
+                select(ChatDataAgentInbox).where(
+                    ChatDataAgentInbox.run_id == run_id,
+                    ChatDataAgentInbox.record_type == "run",
+                )
+            )
+        ).scalar_one()
+    content = json.loads(run.record_content)
+    assert content["executed_durations"] == {"total_duration_ms": 4200, "model_duration_ms": 2000}
+    # pending_question 不受影响，问答仍可恢复。
+    assert content["pending_question"]["question_id"] == "question-1"
+
+
+@pytest.mark.asyncio
+async def test_get_executed_durations_defaults_to_empty(inbox_service):
+    """行不存在或字段缺失时返回空 dict，不抛错。"""
+    service, create_thread, _get_session, _owners = inbox_service
+    await create_thread()
+    assert await service.get_executed_durations("missing-run") == {}
+    run_id, _ = await service.start_run("conv-1", "user-1", "用户一")
+    assert await service.get_executed_durations(run_id) == {}
 
 
 @pytest.mark.asyncio
