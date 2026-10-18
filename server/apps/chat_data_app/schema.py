@@ -1055,6 +1055,14 @@ class _ListExecutionTargetsActionPayload(BaseModel):
     """
 
 
+class _ListOntologyObjectsActionPayload(BaseModel):
+    """``list_objects`` 的入参结构：列出可定位本体对象（轻量清单，只读发现通道）。
+
+    无业务参数：范围由服务端结构性收敛（⊆本轮启用语义模型绑定的对象），
+    模型不可指定、也不可扩大——与 list_execution_targets 同一防越权口径。
+    """
+
+
 class _LocateObjectActionPayload(BaseModel):
     """``locate_object`` 的入参结构：按本体对象批量定位语义模型（纯导航，不执行查询）。
 
@@ -1082,6 +1090,7 @@ DATA_ANALYZING_ACTION_PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
     "execute_query": SemanticQueryInput,
     "check_yaml": _CheckYamlActionPayload,
     "list_execution_targets": _ListExecutionTargetsActionPayload,
+    "list_objects": _ListOntologyObjectsActionPayload,
     "locate_object": _LocateObjectActionPayload,
 }
 
@@ -1089,9 +1098,10 @@ DATA_ANALYZING_ACTION_PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
 class DataAnalyzingInput(BaseModel):
     """数据分析工具入参：按 ``action`` 分派，``action_payload`` 结构随 action 变化。
 
-    六个 action：``validate_dsl`` / ``validate_dashboard`` 校验（不执行）、
+    七个 action：``validate_dsl`` / ``validate_dashboard`` 校验（不执行）、
     ``execute_query`` 执行查询（DSL 或 SQL 二选一）、``check_yaml`` 语义模型 YAML 自检、
     ``list_execution_targets`` 实时获取可用执行对象（只读发现通道）、
+    ``list_objects`` 列出可定位本体对象（轻量清单，只读发现通道）、
     ``locate_object`` 按本体对象批量定位语义模型（纯导航，不执行查询）。
     action_payload 不平铺成顶层字段（后续扩展 action 只加 payload 模型即可），
     payload 的跨字段校验在工具实现入口经 ``validate_data_analyzing_payload`` 完成——
@@ -1106,6 +1116,7 @@ class DataAnalyzingInput(BaseModel):
         "execute_query",
         "check_yaml",
         "list_execution_targets",
+        "list_objects",
         "locate_object",
     ] = Field(
         ...,
@@ -1114,6 +1125,7 @@ class DataAnalyzingInput(BaseModel):
             "validate_dashboard 批量校验完整 dashboard_spec 的所有卡片；"
             "execute_query 执行查询（DSL 或 SQL 二选一）；check_yaml 语义模型 YAML 交付前自检；"
             "list_execution_targets 实时获取当前用户可用执行对象清单；"
+            "list_objects 列出可定位本体对象（轻量清单：对象名/显示名/描述 + 各自绑定模型，不执行查询）；"
             "locate_object 按本体对象批量定位语义模型（返回绑定模型/属性→维度对照/关系，不执行查询）"
         ),
     )
@@ -1128,6 +1140,7 @@ class DataAnalyzingInput(BaseModel):
             '"member_datasource_ids": ["<ID>"]}（member_datasource_ids 必须是 ID 字符串数组，单个机构也传数组）；'
             'check_yaml 传 {"file_path": "/mnt/user-data/workspace/model.yaml"}；'
             "list_execution_targets 传 {}；"
+            'list_objects 传 {}；'
             'locate_object 传 {"objects": [<对象API名>...], "semantic_config_id": "可选，只看该模型的绑定"}'
         ),
     )

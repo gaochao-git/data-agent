@@ -254,3 +254,66 @@ def test_usage_hint_mentions_execute_query() -> None:
     hint = object_locator.build_locator_usage_hint()
     assert "execute_query" in hint
     assert "semantic/<model_file>" in hint
+
+
+# ---------------------------------------------------------------------------
+# build_object_list_report（list_objects 轻量清单）
+# ---------------------------------------------------------------------------
+
+
+def test_object_list_lightweight_sorted_with_model_binding() -> None:
+    """清单按对象名升序；只含 名字/显示名/描述 + 绑定模型一跳，无详情。"""
+    report = object_locator.build_object_list_report(
+        _bundle(),
+        config_names={"sc_order": "订单模型", "sc_user": "用户模型"},
+        model_files={"sc_order": "订单模型__1234.yaml", "sc_user": "用户模型__5678.yaml"},
+    )
+    assert report["count"] == 2
+    assert [item["object"] for item in report["objects"]] == ["order", "user"]
+    order_entry = report["objects"][0]
+    assert order_entry["display_name"] == "订单"
+    assert order_entry["description"] == ""
+    assert order_entry["models"] == [
+        {"semantic_config_id": "sc_order", "model_name": "订单模型", "model_file": "订单模型__1234.yaml"}
+    ]
+    assert "properties" not in order_entry
+    assert "bindings" not in order_entry
+    assert "relations" not in order_entry
+    # user 绑定 sc_user，模型名/文件名取传入索引
+    assert report["objects"][1]["models"] == [
+        {"semantic_config_id": "sc_user", "model_name": "用户模型", "model_file": "用户模型__5678.yaml"}
+    ]
+
+
+def test_object_list_multi_binding_sorted_by_config_id() -> None:
+    """对象多模型绑定时按 semantic_config_id 升序；缺索引的模型名留空。"""
+    bundle = _bundle()
+    bundle["mappings"].append(
+        {"object_id": 1, "semantic_config_id": "sc_order_2", "column_mappings": {"order_id": "订单编号2"}}
+    )
+    report = object_locator.build_object_list_report(bundle)
+    order_models = report["objects"][0]["models"]
+    assert [item["semantic_config_id"] for item in order_models] == ["sc_order", "sc_order_2"]
+    assert order_models[1]["model_name"] == ""
+    assert order_models[1]["model_file"] == ""
+
+
+def test_object_list_skips_blank_object_names() -> None:
+    """bundle 里对象名空白的条目跳过，不进清单。"""
+    bundle = _bundle()
+    bundle["objects"].append({"id": 3, "object_name": "  ", "display_name": "空白"})
+    report = object_locator.build_object_list_report(_bundle())
+    assert report["count"] == 2
+
+
+def test_object_list_empty_bundle() -> None:
+    """空 bundle（无启用模型绑定对象）→ 空清单不报错。"""
+    report = object_locator.build_object_list_report({})
+    assert report == {"count": 0, "objects": []}
+
+
+def test_object_list_usage_hint_guides_next_steps() -> None:
+    """清单 usage 指引：单对象直查，详情升级 locate_object。"""
+    hint = object_locator.build_object_list_usage_hint()
+    assert "execute_query" in hint
+    assert "locate_object" in hint

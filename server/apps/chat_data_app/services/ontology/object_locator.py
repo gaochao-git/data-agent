@@ -362,3 +362,63 @@ def build_locator_usage_hint() -> str:
         "改用 file_read workspace 的 semantic/<model_file> 精读模型 YAML 核实当前口径。"
         "需要模型完整口径（指标/周期/relationships）时同样 file_read 精读。跨对象关联在 SQL 模式下用模型 relationships 完成。"
     )
+
+
+def build_object_list_report(
+    bundle: dict[str, Any],
+    *,
+    config_names: dict[str, str] | None = None,
+    model_files: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """列出可定位本体对象（``list_objects`` action 的轻量清单，纯函数，不触库）。
+
+    与 ``build_object_locator_report`` 的分层：清单只含「对象名/显示名/描述 +
+    对象→绑定模型」一跳（模型 id/名/快照文件名），**不含**属性、映射对照与
+    关系——详情一律走 locate_object。bundle 与 locate 同源（本轮启用语义模型
+    绑定的对象，不泄露全量本体），条目按对象名升序。
+    """
+    if not isinstance(bundle, dict):
+        raise ValueError("本体 bundle 必须是对象")
+    config_names = config_names or {}
+    model_files = model_files or {}
+    mappings_by_object: dict[int, list[dict[str, Any]]] = {}
+    for mapping in bundle.get("mappings") or []:
+        mapping = mapping or {}
+        mappings_by_object.setdefault(int(mapping.get("object_id") or 0), []).append(mapping)
+    entries: list[dict[str, Any]] = []
+    for obj in sorted(bundle.get("objects") or [], key=lambda item: str((item or {}).get("object_name") or "")):
+        obj = obj or {}
+        obj_name = str(obj.get("object_name") or "").strip()
+        if not obj_name:
+            continue
+        models: list[dict[str, str]] = []
+        for mapping in mappings_by_object.get(int(obj.get("id") or 0), []):
+            config_id = str(mapping.get("semantic_config_id") or "").strip()
+            if not config_id:
+                continue
+            models.append(
+                {
+                    "semantic_config_id": config_id,
+                    "model_name": str(config_names.get(config_id) or ""),
+                    "model_file": str(model_files.get(config_id) or ""),
+                }
+            )
+        models.sort(key=lambda item: item["semantic_config_id"])
+        entries.append(
+            {
+                "object": obj_name,
+                "display_name": str(obj.get("display_name") or ""),
+                "description": str(obj.get("description") or ""),
+                "models": models,
+            }
+        )
+    return {"count": len(entries), "objects": entries}
+
+
+def build_object_list_usage_hint() -> str:
+    """对象清单的使用说明（轻量列表 → 详情导航 → 查询）。"""
+    return (
+        "清单只含对象名与绑定模型。单对象取数：直接 execute_query（DSL 传 models 里的 semantic_config_id，"
+        "维度名先 file_read workspace 的 semantic/<model_file> 确认口径）；需要属性→维度对照、对象关系"
+        "或失修状态时，调 locate_object（objects 传对象 API 名）获取定位报告。"
+    )

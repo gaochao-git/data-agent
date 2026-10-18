@@ -1711,3 +1711,82 @@ def test_locate_object_over_batch_limit_rejected(monkeypatch):
                 }
             )
         )
+
+
+# ---------------------------------------------------------------------------
+# list_objects（本体对象清单，轻量发现通道）
+# ---------------------------------------------------------------------------
+
+
+def _invoke_list_objects(monkeypatch, *, state=None):
+    fake_dao = _FakeOntologyDao()
+    monkeypatch.setattr(data_analyzing, "get_semantic_config_service", lambda: _FakeOntologyConfigService())
+    monkeypatch.setattr(data_analyzing, "OntologyDao", lambda: fake_dao)
+    raw = asyncio.run(
+        data_analyzing.create_data_analyzing_tool().ainvoke(
+            {
+                "action": "list_objects",
+                "action_payload": {},
+                "state": state if state is not None else _semantic_query_state(user_id="u1", conversation_id="c1"),
+            }
+        )
+    )
+    return json.loads(raw.replace(RESULT_PREFIX, "", 1)), fake_dao
+
+
+def test_input_list_objects_payload_model_registered():
+    assert DATA_ANALYZING_ACTION_PAYLOAD_MODELS["list_objects"].model_validate({})
+    # 无业务参数：范围由服务端结构性收敛，与 list_execution_targets 同口径
+    assert validate_data_analyzing_payload("list_objects", {}) is not None
+
+
+def test_list_objects_disabled_by_default(monkeypatch):
+    monkeypatch.delenv("CHAT_DATA_ONTOLOGY_LOCATE_ENABLED", raising=False)
+    with pytest.raises(ValueError, match="CHAT_DATA_ONTOLOGY_LOCATE_ENABLED"):
+        asyncio.run(
+            data_analyzing.create_data_analyzing_tool().ainvoke(
+                {"action": "list_objects", "action_payload": {}, "state": _semantic_query_state()}
+            )
+        )
+
+
+def test_list_objects_lightweight_listing(monkeypatch):
+    monkeypatch.setenv("CHAT_DATA_ONTOLOGY_LOCATE_ENABLED", "1")
+    payload, fake_dao = _invoke_list_objects(monkeypatch)
+    # 范围收敛：只按启用模型取 bundle（disabled 被剔除）
+    assert fake_dao.captured_ids == ["sc_order"]
+    assert payload["success"] is True
+    assert payload["count"] == 2
+    # 轻量清单：按对象名升序，只含 名字/显示名/描述 + 绑定模型一跳，无属性/映射/关系详情
+    assert [item["object"] for item in payload["objects"]] == ["order", "user"]
+    order_entry = payload["objects"][0]
+    assert order_entry["display_name"] == "订单"
+    assert order_entry["models"] == [
+        {
+            "semantic_config_id": "sc_order",
+            "model_name": "订单模型",
+            "model_file": model_snapshot_file_name({"id": "sc_order", "name": "订单模型"}),
+        }
+    ]
+    assert "properties" not in order_entry
+    assert "bindings" not in order_entry
+    assert "relations" not in order_entry
+    # 使用说明引导：详情升级 locate_object，查询走 execute_query
+    assert "locate_object" in payload["usage"]
+    assert "execute_query" in payload["usage"]
+
+
+def test_list_objects_requires_enabled_models(monkeypatch):
+    monkeypatch.setenv("CHAT_DATA_ONTOLOGY_LOCATE_ENABLED", "1")
+
+    class _EmptyService:
+        async def get_configs_async(self, datasource_id, user_id=""):
+            return []
+
+    monkeypatch.setattr(data_analyzing, "get_semantic_config_service", lambda: _EmptyService())
+    with pytest.raises(ValueError, match="没有启用语义模型"):
+        asyncio.run(
+            data_analyzing.create_data_analyzing_tool().ainvoke(
+                {"action": "list_objects", "action_payload": {}, "state": _semantic_query_state()}
+            )
+        )
