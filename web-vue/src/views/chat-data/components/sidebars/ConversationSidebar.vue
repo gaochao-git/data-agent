@@ -698,8 +698,9 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <!-- 会话列表 -->
-      <div data-testid="conversation-scroll" class="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-4 pb-4 scrollbar-thin scrollbar-thumb-black/10" @scroll="handleConversationScroll">
+      <!-- 会话列表：右侧只留 4px（左侧的 16px 由分组缩进线承接），
+           让行的 hover 背景与行内操作贴近侧栏右缘，避免右侧一条明显空白带 -->
+      <div data-testid="conversation-scroll" class="min-h-0 flex-1 overflow-x-hidden overflow-y-auto pb-4 pl-4 pr-1 scrollbar-thin scrollbar-thumb-black/10" @scroll="handleConversationScroll">
         <div v-if="isLoading" class="flex flex-col items-center justify-center gap-2 p-8 text-gray-400 text-xs">
           <i class="fa-solid fa-spinner fa-spin text-2xl opacity-50"></i>
           <span>加载历史会话...</span>
@@ -771,17 +772,21 @@ onUnmounted(() => {
                         <i :class="conv.run_status === 'active' || conv.run_status === 'pending' ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-circle'" class="text-[9px]"></i>
                       </span>
                       <span class="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-sm leading-relaxed">{{ conv.title }}</span>
-                      <!-- 右侧固定角色区：时间展示随侧栏宽度三档切换（容器查询，拖拽侧栏即时生效）——
-                           <260px 隐藏时间；260-379px 相对时间；≥380px 完整时间（角色区同步加宽容纳 19 字符）。
-                           hover 淡出时间、淡入置顶/编辑按钮，两态共用同一固定宽度容器，互不挤占、不跳动。
-                           置顶状态不常驻展示（分组视图靠「置顶」分组、平铺视图靠排序置前感知），hover 时钉按状态着色提示。 -->
-                      <div data-testid="conversation-role-zone" class="conversation-role-zone relative h-6 w-[52px] shrink-0 @min-[380px]:w-[132px]">
+                      <!-- 右侧固定角色区：时间在静止态始终显示，行内操作与宽度无关、永远保留—— -->
+                      <!-- 任意宽度：相对时间（“1分钟前”，约 40px，80px 角色区装得下）；≥380px：完整时间（19 字符）。 -->
+                      <!-- 三枚操作（置顶 / 复制会话 ID / 改名）同属一个按钮束：hover 时整体淡入， -->
+                      <!-- 任何宽度都可用，不按宽度档位隐藏，也不做单个按钮的档位隐藏。 -->
+                      <!-- **宽度不变量**：角色区宽度恒定 ≥ 按钮束宽度（80px = 3×24 + 2×4）， -->
+                      <!-- 时间与按钮共用同一角色区、hover 互换，绝不溢出压标题。 -->
+                      <!-- 置顶状态不常驻展示（分组视图靠「置顶」分组、平铺视图靠排序置前感知），hover 时钉按状态着色提示。 -->
+                      <div data-testid="conversation-role-zone" class="conversation-role-zone relative h-6 w-[80px] shrink-0 overflow-hidden @min-[380px]:w-[132px]">
                         <span
                           data-testid="conversation-time"
                           class="conversation-time-text absolute inset-y-0 right-0 flex max-w-full items-center truncate text-[10px] text-gray-400 transition-opacity duration-150 group-hover:opacity-0"
                           :title="conv.updated_at || conv.create_time"
                         >
-                          <span data-testid="conversation-time-short" class="hidden @min-[260px]:block @min-[380px]:hidden">{{ getConversationTimeText(conv) }}</span>
+                          <!-- 静止态常显时间：窄档用相对时间（“1分钟前”约 40px，80px 角色区装得下），≥380px 换完整时间 -->
+                          <span data-testid="conversation-time-short" class="block @min-[380px]:hidden">{{ getConversationTimeText(conv) }}</span>
                           <span data-testid="conversation-time-full" class="hidden @min-[380px]:block">{{ getConversationFullTimeText(conv) }}</span>
                         </span>
                         <div
@@ -1049,25 +1054,19 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-/* 会话 Tab 作为容器查询上下文：侧栏拖窄时按宽度分级降级，
-   优先级「保标题 > 保时间」。
+/* 会话 Tab 作为容器查询上下文：侧栏宽度只影响「时间用相对还是完整格式」，
+   不影响时间与行内操作的显示与否（两者都常显/常可用）。
    工具栏（新建任务 / 技能管理 / 定时任务）文字始终显示；刷新与视图设置为纯图标按钮：
    侧栏最窄宽度也放得下，需要让位时由「搜索任务」输入框动态伸缩（flex-1 + min-w-0）。 */
 .conversation-tab-root {
   container-type: inline-size;
 }
 
-/* 窄侧栏（< 300px）：先让出时间占的 52px 给会话标题，
-   标题能多显示约 3~4 个汉字；hover 的置顶/编辑按钮仍在（absolute 临时盖在标题右端） */
-@container (max-width: 299px) {
-  .conversation-role-zone {
-    width: 0;
-  }
-
-  .conversation-time-text {
-    display: none;
-  }
-}
+/* 时间在静止态始终显示（窄档用相对时间，≥380px 换完整时间），不再按宽度隐藏——
+   行内三枚操作（置顶 / 复制会话 ID / 改名）也与宽度无关：hover 时整体淡入，
+   不按宽度档位隐藏、也不做单按钮隐藏（功能优先于标题多显示几个字）。
+   宽度不变量：角色区宽度恒为 80px（= 3×24 按钮 + 2×4 间距，≥380px 档 132px），
+   时间与按钮共用这块宽度、hover 互换，absolute 按钮束永远不会向左溢出压到标题。 */
 
 /* 更窄（< 260px）时只留图标的历史降级已停用：按钮文字不再随宽度隐藏，
    宽度压力全部交给搜索框。如需恢复「窄侧栏只留图标」，取消下面规则注释即可。

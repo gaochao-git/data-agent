@@ -1,8 +1,11 @@
 """ChatData 单一 Agent 的运行态定义。"""
 
-from typing import Annotated, Any
+from typing import Annotated, Any, Required
 
 from langchain.agents import AgentState
+from langchain_core.messages import AnyMessage
+from langgraph.channels import DeltaChannel
+from langgraph.graph.message import add_messages
 from typing_extensions import TypedDict
 
 
@@ -55,9 +58,53 @@ class ConversationWorkspaceContext(TypedDict, total=False):
     workspace_backend: str
 
 
-class ChatDataAgentState(AgentState, total=False):
-    """唯一 ChatData Agent 状态。"""
+def delta_messages_reducer(
+    state: list[AnyMessage] | None,
+    writes: list[Any],
+) -> list[AnyMessage]:
+    """DeltaChannel 批量 reducer 适配层。
 
+    DeltaChannel 契约：reducer(state, [w1, w2, ...])，wi 是单次写入的值——
+    对 messages 即节点返回的整批消息（list 或单条）。add_messages 只接受
+    一批消息，不能直接作为 DeltaChannel reducer（会把整批列表再包一层）。
+    这里按写入顺序逐次 fold，等价于原生 LastValue 通道的行为，满足
+    DeltaChannel 要求的批量结合律。
+    """
+    # add_messages 标注返回 Messages 联合（运行时恒为 list），以 Any 承接
+    # 避免 list 不变性引发的类型摩擦，边界仍由函数签名约束为 list[AnyMessage]。
+    result: Any = list(state or [])
+    for write in writes:
+        result = add_messages(result, write)
+    return list(result)
+
+
+class ChatDataAgentState(AgentState, total=False):
+    """唯一 ChatData Agent 状态。
+
+    messages 覆盖为 DeltaChannel（beta）：checkpoint 每步只写增量、每 25 步
+    落一次全量快照，避免长会话全量快照 O(N²) 膨胀。add_messages 满足
+    DeltaChannel 要求的批量结合律；压缩/子代理的 RemoveMessage(REMOVE_ALL)
+    整体替换按哨兵清空、不依赖消息 id，重放语义保持一致。代价：恢复重建的
+    消息对象 id 可能与 live 不同（无 id 消息由 add_messages 随机补 id），
+    业务无按消息 id 消费 checkpoint state 的场景，可接受。
+
+    已知偏差：langgraph-checkpoint-mysql 3.0.0 的 pending_writes 子查询无
+    ORDER BY 且反序列化丢弃 idx，单 checkpoint 内多任务写 messages 时重放
+    顺序不受上游 writes_sort_key 契约保护；当前图每超步仅一个任务写
+    messages，现实无影响，未来引入并行写 messages 的任务前需先自定义
+    saver 补排序。
+
+    红线：1) 永远不要新增 checkpoint 祖先行清理任务——祖先链断裂时
+    DeltaChannel 恢复会静默按空重建（无报错）；2) 上线 delta 后不可降级
+    回旧版本续聊 delta 格式写入的会话。
+    """
+
+    messages: Required[
+        Annotated[
+            list[AnyMessage],
+            DeltaChannel(reducer=delta_messages_reducer, snapshot_frequency=25),
+        ]
+    ]
     user_id: str | None
     operator_name: str | None
     conversation_id: str | None

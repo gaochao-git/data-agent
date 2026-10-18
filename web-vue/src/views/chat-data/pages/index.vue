@@ -1563,7 +1563,7 @@ onMounted(async () => {
 
             <!-- 智能问数：对话 / 语义模型 -->
             <template v-if="viewMode === 'conversation'">
-              <div v-show="activeSidebarTab === 'conversation'" class="sidebar-unified-shell h-full">
+              <div v-show="activeSidebarTab === 'conversation'" class="sidebar-unified-shell sidebar-unified-shell--conversation h-full">
                 <ConversationSidebar
                   active-tab="conversation"
                   :grouped-conversations="groupedConversations"
@@ -1588,7 +1588,7 @@ onMounted(async () => {
                   @open-skill-manager="handleOpenSkillManager"
                 />
               </div>
-              <div v-show="activeSidebarTab === 'metrics'" class="sidebar-unified-shell h-full">
+              <div v-show="activeSidebarTab === 'metrics'" class="sidebar-unified-shell sidebar-unified-shell--conversation h-full">
                 <ConversationSidebar
                   active-tab="metrics"
                   :datasource-id="selectedDatasourceId"
@@ -1998,6 +1998,13 @@ body.is-resizing {
   height: 100%;
   padding: 6px 16px 8px;
   background: #fff;
+}
+
+/* 对话/语义模型两个面板：会话行是"标题 + 右缘行内操作"的横向布局，
+   右内边距收窄到 8px，避免行内操作与侧栏右缘之间出现一条明显空白带
+   （左侧仍由分组缩进线承接视觉留白，所以只收右侧）。 */
+.sidebar-unified-shell--conversation {
+  padding-right: 8px;
 }
 
 .chatdata-message-box-overlay {

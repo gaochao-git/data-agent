@@ -165,10 +165,12 @@ describe('ConversationSidebar conversation row role zone', () => {
   it('stacks time and buttons in one fixed-width zone so the hover swap causes no layout shift', () => {
     const wrapper = mountSidebar([{ id: 'conv-role', title: '角色区会话', create_time: '2026-08-14 10:00:00' }])
 
-    // 两态共用同一固定宽度容器（2×24px 按钮 + 4px 间距），hover 时互不挤占
+    // 两态共用同一固定宽度容器（3×24px 按钮 + 2×4px 间距 = 80px），hover 时互不挤占
     const zone = wrapper.find('[data-testid="conversation-role-zone"]')
-    expect(zone.classes()).toContain('w-[52px]')
+    expect(zone.classes()).toContain('w-[80px]')
     expect(zone.classes()).toContain('relative')
+    // 兜底裁剪：按钮束宽度一旦超过角色区，绝不能溢出压到标题（曾因「复制会话 ID」导致）
+    expect(zone.classes()).toContain('overflow-hidden')
 
     const time = wrapper.find('[data-testid="conversation-time"]')
     expect(time.classes()).toContain('absolute')
@@ -177,31 +179,46 @@ describe('ConversationSidebar conversation row role zone', () => {
     const actions = wrapper.find('[data-testid="conversation-actions"]')
     expect(actions.classes()).toContain('absolute')
     expect(actions.classes()).toContain('group-hover:opacity-100')
+    // 三枚操作与宽度无关、任何档位都常驻在 DOM 里（hover 淡入即可，不做宽度档位的 display 隐藏）：
+    // 窄侧栏只把时间让位给按钮束，绝不隐藏按钮，也不允许溢出压标题
+    expect(actions.classes()).toContain('flex')
+    expect(actions.classes()).not.toContain('hidden')
+    expect(actions.classes().some(name => name.startsWith('@min-'))).toBe(false)
 
-    expect(actions.find('button[title="置顶"]').exists()).toBe(true)
-    expect(actions.find('button[title="修改标题"]').exists()).toBe(true)
+    // 原子性：三枚操作（置顶 / 复制会话 ID / 改名）同属一个按钮束，一起出现、一起消失，
+    // 不做单个按钮的档位隐藏（曾把复制按钮单独 hidden 到 380px）
+    const actionButtons = actions.findAll('button')
+    expect(actionButtons).toHaveLength(3)
+    expect(actionButtons.map(button => button.attributes('title'))).toEqual(['置顶', '复制会话 ID', '修改标题'])
+    for (const button of actionButtons) {
+      expect(button.classes()).not.toContain('hidden')
+      expect(button.classes().some(name => name.startsWith('@min-'))).toBe(false)
+    }
   })
 
-  it('switches time display in three tiers via container queries on the sidebar width', () => {
+  it('shows the time at every width and only switches relative/full format by tier', () => {
     const wrapper = mountSidebar([{ id: 'conv-tier', title: '宽度档位会话', create_time: '2026-08-14 10:00:00' }])
 
     // 容器上下文由组件 style 块的 .conversation-tab-root { container-type: inline-size } 声明，
-    // 侧栏拖拽范围 200-500px（index.vue），三档即时响应
+    // 侧栏拖拽范围 200-500px（index.vue）
     expect(wrapper.find('.conversation-tab-root').exists()).toBe(true)
 
-    // 窄（<260px）：隐藏；中（260-379px）：相对时间；宽（≥380px）：完整时间
+    // 时间在静止态始终显示：窄/中档是相对时间（80px 角色区装得下），只有 ≥380px 换成完整时间；
+    // 不再有「窄档隐藏时间」的 display:none 档位
     const shortTime = wrapper.find('[data-testid="conversation-time-short"]')
-    expect(shortTime.classes()).toContain('hidden')
-    expect(shortTime.classes()).toContain('@min-[260px]:block')
+    expect(shortTime.classes()).toContain('block')
     expect(shortTime.classes()).toContain('@min-[380px]:hidden')
+    expect(shortTime.classes()).not.toContain('hidden')
 
     const fullTime = wrapper.find('[data-testid="conversation-time-full"]')
     expect(fullTime.classes()).toContain('hidden')
     expect(fullTime.classes()).toContain('@min-[380px]:block')
     expect(fullTime.text()).toBe('2026-08-14 10:00:00')
 
-    // 宽档角色区同步加宽（132px ≈ 19 字符完整时间），中窄档维持 52px 不挤标题
-    expect(wrapper.find('[data-testid="conversation-role-zone"]').classes()).toContain('@min-[380px]:w-[132px]')
+    // 宽档角色区同步加宽（132px ≈ 19 字符完整时间），中窄档固定 80px（容得下三枚按钮/相对时间）
+    const zone = wrapper.find('[data-testid="conversation-role-zone"]')
+    expect(zone.classes()).toContain('w-[80px]')
+    expect(zone.classes()).toContain('@min-[380px]:w-[132px]')
   })
 
   it('keeps pinned rows quiet by default and reveals the pinned state only on hover', () => {
