@@ -895,19 +895,15 @@ class _AgentSseStreamAdapter:
         yield _format_sse("message", msg_data)
 
     def _sample_chunk_generation_speed(self, message_chunk: Any, flags: _MessageChunkFlags) -> None:
-        """按 chunk 载荷形态采样实时速率：thinking / 参数片段 / 正文均为模型输出，工具结果不计。"""
+        """按 chunk 载荷形态采样实时速率：只统计用户可见文本（thinking/正文）。
+
+        工具调用参数虽是模型产出，但界面只渲染工具行动画、不流式展示文字，且
+        JSON 片段批量到达会显著抬高滑窗速率（与 TTFT 的「用户可见」口径对齐）；
+        工具结果是工具执行产物不是模型输出，同样不计。
+        """
         if flags.thinking_event:
             self._sample_generation_speed(_extract_reasoning_content(message_chunk))
-        if flags.has_tool_call_chunks:
-            self._sample_generation_speed(
-                "".join(
-                    str(chunk.get("args") or "")
-                    for chunk in getattr(message_chunk, "tool_call_chunks", []) or []
-                    if isinstance(chunk, dict)
-                )
-            )
-            return
-        if flags.is_tool_message:
+        if flags.has_tool_call_chunks or flags.is_tool_message:
             return
         content = getattr(message_chunk, "content", None)
         if isinstance(content, str):

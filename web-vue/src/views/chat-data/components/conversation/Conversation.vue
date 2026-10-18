@@ -343,9 +343,13 @@ const recoverInterruptedPageRun = async () => {
   if (!conversationId || !hasActiveRun.value || !activeRunId.value) return
   if (activeRunStatus.value === 'waiting_user' || activeRunStatus.value === 'cancelling') return
   const runId = activeRunId.value
+  // 「用时」起点种子：正在生成的 run 在历史消息里有服务端盖章的用户消息时间戳
+  // （= 客户端点击时刻），恢复订阅时从它起算，避免 ticker 从 0 重计。
+  const elapsedSeedMs = [...messages.value].reverse().find(item => item.role === 'user')?.timestamp?.getTime()
   await submitAnalysisQuery('', {
       appendUserMessage: false,
       preserveAssistant: !activeRunIsContinuation.value,
+      elapsedSeedMs,
     responseFactory: signal => streamRunEvents(
       conversationId,
       runId,
@@ -675,6 +679,8 @@ type AnalysisSubmitOptions = {
   preserveQueuedMessages?: boolean
   userMessageId?: string
   attachments?: MessageAttachment[]
+  /** 恢复场景的「用时」起点种子（服务端盖章的 run 点击时刻，毫秒）；未传时从本地当下起算。 */
+  elapsedSeedMs?: number
   responseFactory?: (signal: AbortSignal) => Promise<Response>
   preserveAssistant?: boolean
   interruptedQuestion?: PendingUserQuestion
@@ -1542,10 +1548,16 @@ const stopLiveGenerationSpeed = () => {
   liveElapsedMs.value = null
 }
 
-const startLiveElapsedTicker = () => {
+const startLiveElapsedTicker = (startedAtMs?: number) => {
   stopLiveGenerationSpeed()
-  const runStartedAtMs = Date.now()
-  liveElapsedMs.value = 0
+  // 起点：恢复场景用种子（服务端盖章的点击时刻，与本页时钟同源校准过），
+  // 否则从本地当下起算。种子来自未来（时钟漂移）时退回本地当下。
+  const now = Date.now()
+  const runStartedAtMs =
+    typeof startedAtMs === 'number' && Number.isFinite(startedAtMs) && startedAtMs > 0 && startedAtMs <= now
+      ? startedAtMs
+      : now
+  liveElapsedMs.value = Math.max(now - runStartedAtMs, 0)
   elapsedTickerId = setInterval(() => {
     liveElapsedMs.value = Date.now() - runStartedAtMs
   }, 500)
@@ -1907,8 +1919,7 @@ const getExistingAssistantMessage = (messageId?: string) => {
 
 const submitAnalysisQuery = async (
   requestText: string,
-  options: AnalysisSubmitOptions & { skillNames?: string[]; messageSkills?: Message['skills']; restoreInputText?: string } = {}
-) => {
+  options: AnalysisSubmitOptions & { skillNames?: string[]; messageSkills?: Message['skills']; restoreInputText?: string } = {}) => {
   if ((!requestText.trim() && !options.fileIds?.length && !options.responseFactory && !options.queuedMessageId) || isGenerating.value) return
   const isFirstMessage = options.appendUserMessage !== false
     && !messages.value.some(item => item.role === 'user')
@@ -1954,7 +1965,7 @@ const submitAnalysisQuery = async (
     clearMentionFiles()
   }
   isGenerating.value = true
-  startLiveElapsedTicker()
+  startLiveElapsedTicker(options.elapsedSeedMs)
   activeToolCallId.value = null
   let startedRunId: string | null = null
   let completedNextRunId: string | null = null
