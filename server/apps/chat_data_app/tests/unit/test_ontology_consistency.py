@@ -234,6 +234,49 @@ def test_relation_endpoint_type_missing_property_skipped():
     assert "ONT_REL_COLUMN_INVALID" in codes
 
 
+# ---------- ONT_REL_CROSS_SOURCE ----------
+
+
+def test_relation_cross_source_fires_warning():
+    """两端对象映射的模型分属不同数据源组 → warning（join 可执行性红线）。"""
+    bundle = _bundle()
+    findings = check_ontology_model_consistency(bundle, _configs(), config_group_ids={"cfg-cust": "g1", "cfg-order": "g2"})
+    finding = next(item for item in findings if item["code"] == "ONT_REL_CROSS_SOURCE")
+    assert finding["severity"] == "warning"
+    assert "g1" in finding["message"] and "g2" in finding["message"]
+
+
+@pytest.mark.parametrize(
+    ("groups", "should_fire"),
+    [
+        ({"cfg-cust": "g1", "cfg-order": "g1"}, False),  # 同组可 join
+        ({"cfg-cust": "g1"}, False),  # to 侧组不可知 → 不误报
+        ({"cfg-order": "g2"}, False),  # from 侧组不可知 → 不误报
+        ({}, False),  # 组信息整体缺省 → 规则跳过
+        ({"cfg-cust": "g1", "cfg-order": "g2"}, True),
+    ],
+)
+def test_relation_cross_source_matrix(groups, should_fire):
+    codes = _codes(check_ontology_model_consistency(_bundle(), _configs(), config_group_ids=groups or None))
+    assert ("ONT_REL_CROSS_SOURCE" in codes) is should_fire
+
+
+def test_relation_cross_source_unmapped_endpoint_skipped():
+    """任一端对象无映射行时跳过（无 join 基准不误报）。"""
+    bundle = _bundle()
+    bundle["mappings"] = [bundle["mappings"][0]]  # 只剩 customer 的映射
+    codes = _codes(check_ontology_model_consistency(bundle, _configs(), config_group_ids={"cfg-cust": "g1", "cfg-order": "g2"}))
+    assert "ONT_REL_CROSS_SOURCE" not in codes
+
+
+def test_relation_cross_source_object_multiple_mappings_overlap():
+    """对象可映射多个模型：任一组相交即视为可达，不报。"""
+    bundle = _bundle()
+    bundle["mappings"].append({"object_id": 1, "semantic_config_id": "cfg-order", "column_mappings": {"customer_id": "订单编号"}})
+    codes = _codes(check_ontology_model_consistency(bundle, _configs(), config_group_ids={"cfg-cust": "g1", "cfg-order": "g2"}))
+    assert "ONT_REL_CROSS_SOURCE" not in codes
+
+
 # ---------- ONT_TYPE_MISMATCH ----------
 
 
@@ -293,5 +336,6 @@ def test_rules_registry_severities():
     assert RULES["ONT_REL_COLUMN_INVALID"][0] == "error"
     assert RULES["ONT_REL_TO_NOT_IDENTIFIER"][0] == "warning"
     assert RULES["ONT_REL_ENDPOINT_TYPE"][0] == "warning"
+    assert RULES["ONT_REL_CROSS_SOURCE"][0] == "warning"
     assert RULES["ONT_TYPE_MISMATCH"][0] == "warning"
     assert RULES["ONT_PROP_UNMAPPED"][0] == "info"

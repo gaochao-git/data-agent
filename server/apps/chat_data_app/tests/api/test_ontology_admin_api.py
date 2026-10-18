@@ -29,7 +29,7 @@ def _install_stubs(monkeypatch, *, domains, configs, bundle, findings=None):
     stub_dao = _StubDao()
     monkeypatch.setattr(ontology_admin_routes, "OntologyDao", lambda: stub_dao)
     if findings is not None:
-        monkeypatch.setattr(ontology_admin_routes, "_run_consistency_check", lambda bundle, configs: findings)
+        monkeypatch.setattr(ontology_admin_routes, "_run_consistency_check", lambda bundle, configs, *, config_group_ids=None: findings)
     return stub_dao
 
 

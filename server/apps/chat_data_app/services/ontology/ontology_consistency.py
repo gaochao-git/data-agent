@@ -31,6 +31,7 @@ RULES: dict[str, tuple[str, str]] = {
     "ONT_REL_COLUMN_INVALID": ("error", "本体关系列引用的属性不存在或未映射"),
     "ONT_REL_TO_NOT_IDENTIFIER": ("warning", "关系 to 侧列引用了非标识属性"),
     "ONT_REL_ENDPOINT_TYPE": ("warning", "关系两端 join 属性类型语义类别不一致"),
+    "ONT_REL_CROSS_SOURCE": ("warning", "关系两端对象映射的语义模型分属不同数据源组"),
     "ONT_TYPE_MISMATCH": ("warning", "属性 value_type 与维度 logical_type 不兼容"),
 }
 
@@ -387,15 +388,60 @@ def _check_type_mismatches(
     return findings
 
 
+def _check_relation_cross_source(
+    bundle: dict[str, Any],
+    config_group_ids: dict[str, str] | None,
+) -> list[dict[str, Any]]:
+    """ONT_REL_CROSS_SOURCE：关系两端对象映射的语义模型分属不同数据源组。
+
+    join 可执行性红线：跨组的对象之间不存在同库 join 路径，目录渲染出的导航边
+    会诱导 AI 拼出必然失败的 SQL（比没有本体更伤信任）。任一端无映射、或组信息
+    不可知时跳过——无比对基准不误报；列失效由 ONT_REL_COLUMN_INVALID 负责。
+    """
+    if not config_group_ids:
+        return []
+    groups_by_object: dict[int, set[str]] = {}
+    for mapping in bundle.get("mappings") or []:
+        mapping = mapping or {}
+        object_id = int(mapping.get("object_id") or 0)
+        group = _text((config_group_ids or {}).get(_text(mapping.get("semantic_config_id"))))
+        if object_id and group:
+            groups_by_object.setdefault(object_id, set()).add(group)
+    findings: list[dict[str, Any]] = []
+    for relation in bundle.get("relations") or []:
+        relation = relation or {}
+        relation_name = _text(relation.get("relation_name"))
+        if not relation_name:
+            continue
+        from_groups = sorted(groups_by_object.get(int(relation.get("from_object_id") or 0), set()))
+        to_groups = sorted(groups_by_object.get(int(relation.get("to_object_id") or 0), set()))
+        if not from_groups or not to_groups or set(from_groups) & set(to_groups):
+            continue
+        findings.append(
+            _make_finding(
+                "ONT_REL_CROSS_SOURCE",
+                f"本体关系「{relation_name}」两端对象绑定的语义模型分属不同数据源组"
+                f"（from: {'、'.join(from_groups)}；to: {'、'.join(to_groups)}），"
+                "跨组路径物理上无法 join，请修正关系两端或映射归属",
+                [relation_name],
+            )
+        )
+    return findings
+
+
 def check_ontology_model_consistency(
     bundle: dict[str, Any],
     configs: list[dict[str, Any]],
+    *,
+    config_group_ids: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """本体↔语义模型一致性巡检入口（纯函数）。
 
     - ``bundle``：``OntologyDao.load_injection_bundle_async`` 形状
       （objects/properties/relations/mappings，AI 可见面）；
-    - ``configs``：参与比较的语义模型 runtime configs（含 dimensions）。
+    - ``configs``：参与比较的语义模型 runtime configs（含 dimensions）；
+    - ``config_group_ids``：可选 {semantic_config_id: 数据源组}，供
+      ONT_REL_CROSS_SOURCE 判定关系 join 可执行性；缺省时该规则整体跳过。
 
     返回 findings 列表（code/severity/category/message/targets），确定性排序：
     对象/关系名 → 规则注册序。不参与任何评分；空 bundle/空 configs 返回空。
@@ -412,6 +458,7 @@ def check_ontology_model_consistency(
     findings = [
         *_check_mapping_dimensions(bundle, dimension_types, object_names),
         *_check_relations(bundle, object_names),
+        *_check_relation_cross_source(bundle, config_group_ids),
         *_check_type_mismatches(bundle, dimension_types, properties_by_object, object_names),
         *_check_unmapped_properties(bundle, object_names),
     ]

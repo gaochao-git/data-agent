@@ -315,6 +315,7 @@ async def check_ontology_model_consistency(request: Request) -> JSONResponse:
         )
         service = get_semantic_config_service()
         configs: list[dict] = []
+        config_group_ids: dict[str, str] = {}
         seen_config_ids: set[str] = set()
         for group_id in group_ids:
             for config in await service.get_configs_async(group_id) or []:
@@ -322,8 +323,9 @@ async def check_ontology_model_consistency(request: Request) -> JSONResponse:
                 if config_id and config_id not in seen_config_ids and is_public_semantic_config(config):
                     seen_config_ids.add(config_id)
                     configs.append(config)
+                    config_group_ids[config_id] = group_id
         bundle = await OntologyDao().load_injection_bundle_async(sorted(seen_config_ids)) if seen_config_ids else {}
-        findings = _run_consistency_check(bundle, configs)
+        findings = _run_consistency_check(bundle, configs, config_group_ids=config_group_ids)
         summary = {"error": 0, "warning": 0, "info": 0}
         for finding in findings:
             severity = str(finding.get("severity") or "")
