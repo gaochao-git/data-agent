@@ -2064,6 +2064,37 @@ def test_handle_token_usage_payload_extracts_model_before_sanitize():
     assert adapter.latest_model_name == "qwen3"
 
 
+def test_sample_chunk_generation_speed_excludes_tool_args_and_results():
+    """实时速率只统计用户可见文本（thinking/正文）：工具参数 JSON 与工具结果不进滑窗。
+
+    工具参数虽是模型产出，但界面只渲染工具动画不展示文字，且 JSON 片段批量到达
+    会显著抬高滑窗速率（与 TTFT 的「用户可见」口径对齐）；工具结果不是模型输出。
+    """
+    adapter = agent_stream_module._AgentSseStreamAdapter(
+        agent=None,
+        initial_state=None,
+        config={},
+        request=None,
+        stream_started_wall_ms=None,
+    )
+    flags_type = agent_stream_module._MessageChunkFlags
+    # 工具调用参数 chunk：不采样
+    tool_args_chunk = SimpleNamespace(
+        content="",
+        tool_call_chunks=[{"id": "c1", "name": "sql_tool", "args": '{"sql":"SELECT * FROM orders WHERE amount > 100"}'}],
+    )
+    adapter._sample_chunk_generation_speed(tool_args_chunk, flags_type.of(tool_args_chunk))
+    assert not adapter._speed_samples
+    # 工具结果消息：不采样
+    tool_result_chunk = ToolMessageChunk(content="查询结果 647 行", tool_call_id="c1")
+    adapter._sample_chunk_generation_speed(tool_result_chunk, flags_type.of(tool_result_chunk))
+    assert not adapter._speed_samples
+    # 正文：照常采样（CJK 1 字/token）
+    text_chunk = SimpleNamespace(content="已为你生成下单用户数查询")
+    adapter._sample_chunk_generation_speed(text_chunk, flags_type.of(text_chunk))
+    assert adapter._speed_samples and adapter._speed_samples[0][1] > 0
+
+
 def test_emit_context_usage_payload_carries_model_name():
     """发射端契约：sanitize 前提取模型名塞进 payload["model"]，usage 本体仍被剥离 llm_calls。"""
     emitted: list[dict] = []
