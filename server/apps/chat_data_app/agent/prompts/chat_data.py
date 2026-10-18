@@ -6,7 +6,6 @@ from utils.builtin_skills import (
     builtin_skill_file,
 )
 
-from ...services.ontology.object_locator import object_locator_enabled
 from ..runtime_options import AgentRuntimeOptions
 from .security_prompt import SECURITY_PROMPT
 
@@ -56,17 +55,14 @@ SKILLS_USAGE_BLOCK = """## 技能使用
 
 SCENE_ROUTING_BLOCK = """## 场景路由
 - 问候、闲聊、使用帮助和概念解释：直接回答，不调用查询工具。
-- 用户不知道能查什么、有哪些数据或如何开始（如询问有哪些数据源/集群/表）：先调用 `data_analyzing_tool` 的 `list_execution_targets` 获取当前可用数据源清单，再结合语义模型目录做引导，不把目录当作完整字段口径，也不编造具体查询示例。
-- 业务数据查询、具体指标或维度询问，以及“订单数、用户数、销售额”等短问法：按“语义查询门禁”处理。"""
+- 业务数据查询、具体指标或维度询问，使用技能完成"""
 
 SEMANTIC_QUERY_GATE_BLOCK = f"""## 语义查询门禁
 - 业务数据查询命中当前可用的 `{DATA_ANALYZING_SKILL}` 技能时，第一步必须调用 `file_read` 读取该技能在 `<available_skills>` 中声明的 `skill_file`，并按其中的能力路由进入「查询与分析」；不得在读取前调用 `data_analyzing_tool`。
 - 进入查询与分析路径后，语义模型检索、字段确认、DSL/SQL 模式选择、查询执行、结果读取和分析全部遵循 `{DATA_ANALYZING_SKILL}` 技能的 `{SEMANTIC_MODEL_AUTHORITY_DOC}`；系统层不重复定义这些具体规则。
 - 当前可用技能中没有 `{DATA_ANALYZING_SKILL}` 时，不得虚构技能路径；向用户说明该技能当前不可用。"""
 
-# 本体对象定位引导：仅在 CHAT_DATA_ONTOLOGY_LOCATE_ENABLED 开启时注入
-# （开关关闭时模型侧根本没有可用的 locate_object，提示词不能提）。
-OBJECT_QUERY_HINT_BLOCK = f"""- 涉及本体对象、需要确认「对象在哪个语义模型/字段对应哪个维度」时，先调用 `data_analyzing_tool` 的 `locate_object`（objects 传对象 API 名列表，可多个）：返回绑定模型（含快照文件名）、属性→维度对照与对象关系，据此直接进入 `execute_query`，不要靠 grep/精读模型 YAML 猜定位。聚合统计、跨对象关联与复杂口径仍按 `{DATA_ANALYZING_SKILL}` 技能走 DSL/SQL 路径。"""
+
 
 OUTPUT_AND_FINAL_ANSWER_BLOCK = """## 输出与最终回答
 - 全程使用简体中文回复（包括思考过程和调用工具前后的过程说明短句）；用户使用其他语言提问时，跟随用户语言。
@@ -94,7 +90,7 @@ ENVIRONMENT_BLOCK = """## 环境
 /mnt/
 ├── user-data/
 │   ├── workspace/   中间文件写入该工作区（可读写，脚本、草稿、中间文件）
-│   │   └── semantic/  本轮启用语义模型的只读 YAML 快照（文件名 {模型名}__{id后缀}.yaml，由系统预物化，模型不可写）；目录文件（系统生成，只读）：_ontology_catalog.yaml（存在时优先读——models 列出全部启用模型与快照文件名，objects 是已建本体对象子集，relations 的 from/to 列用于推导 join；可能带 truncated: true，其余对象用 file_grep 检索；关系列是尽力翻译的物理列，unresolved: true 表示必须回读模型 YAML 确认）或 _semantic_catalog.yaml（存在时表示本体目录未接管，每个启用模型一条 file/description/business_notes；本体目录存在时该文件缺失属正常）
+│   │   └── semantic/  语义模型目录（只读，不可写）
 │   ├── outputs/     给用户展示的文件产物区（可读写，最终交付文件）
 │   │   ├── query_result/  查询结果卸载文件（系统写入，按工具返回的 result_path 读取）
 │   │   └── .tool-offload/ 其它工具大结果卸载文件（系统写入，按工具返回的 result_path 读取）
@@ -150,8 +146,6 @@ DATA_EXPLORE_SUBAGENT_PROMPT = f"""# 角色
 ## 工作方式
 - 严格围绕任务书目标收集，任务书没要求的扩展动作不要做。
 - 任务书指定了相关技能（含用户自定义技能）时，先 `file_read` 其 `SKILL.md` 并严格按其执行；任务书未提及的技能不要虚构路径。
-- 涉及语义模型时，第一步先用 `file_read` 读取 `{builtin_skill_file(DATA_ANALYZING_SKILL)}` 并严格按其执行；当前数据源组全部启用语义模型的 YAML 已预物化到 `/mnt/user-data/workspace/semantic/`（`_ontology_catalog.yaml` 的 models 段是全部启用模型索引、objects 段是本体对象导航子集；目录可能 `truncated: true`，其余对象用 `file_grep` 检索；`_semantic_catalog.yaml` 可能因本体目录接管而缺失，属正常）。
-- 遍历多模型/多表/多指标做批量盘点时，逐项收集，按任务书要求的结构整理。
 
 ## 进度与收尾
 - 收到「上下文预算提示」（上下文临近上限）时就地停止收尾：不要再调用任何工具，
@@ -224,11 +218,7 @@ GENERAL_PURPOSE_SUBAGENT_PROMPT = f"""# 角色
   按其执行；任务书未提及的技能不要虚构路径。
 
 ## 工作方式
-- 涉及语义查询时，第一步先用 `file_read` 读取 `{builtin_skill_file(DATA_ANALYZING_SKILL)}`
-  并严格按其执行；当前数据源组全部启用语义模型的 YAML 已预物化到
-  `/mnt/user-data/workspace/semantic/`。查询口径只取任务书需要的范围，不要扩大。
-- 查询结果先在本地聚合出小结果集再落盘/入交付物；大块原始明细留在子上下文消化，
-  只把聚合结果与关键数字写进产物。
+- 查询结果先在本地聚合出小结果集再落盘/入交付物；大块原始明细留在子上下文消化，只把聚合结果与关键数字写进产物。
 - 产物文件名从任务含义出发清晰可读，不要带随机后缀；任务书指定了输出路径的按指定路径写。
 - 生成报告/文档前，先确认相应技能的格式要求并按标准执行，不要自由发挥版式。
 
@@ -295,8 +285,6 @@ def build_unified_system_prompt(
             SEMANTIC_QUERY_GATE_BLOCK,
         ]
     )
-    if object_locator_enabled():
-        sections.append(OBJECT_QUERY_HINT_BLOCK)
 
     sections.append(PRIORITY_BLOCK)
     sections.extend([HTML_REPORT_BLOCK, OUTPUT_AND_FINAL_ANSWER_BLOCK, ERROR_HANDLING_BLOCK, SECURITY_PROMPT])

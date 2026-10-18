@@ -178,7 +178,7 @@ def test_query_capability_contains_complete_query_contract():
     assert "当前用户可见（当前数据源组）的全部启用语义模型" in query
     assert "`/mnt/user-data/workspace/semantic/`" in query
     assert "_semantic_catalog.yaml" in query
-    assert "禁止为找模型逐个读取目录里的 YAML" in query
+    assert "禁止为找模型逐个读取清单里的 YAML" in query
     # grep 无命中即判定缺失：不得靠逐个读文件碰运气
     assert "无命中" in query
     assert "file_read" in query
