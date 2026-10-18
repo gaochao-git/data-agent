@@ -184,6 +184,56 @@ def test_relation_endpoint_outside_bundle_skipped():
     assert "ONT_REL_COLUMN_INVALID" not in _codes(check_ontology_model_consistency(bundle, _configs()))
 
 
+# ---------- ONT_REL_ENDPOINT_TYPE ----------
+
+
+def test_relation_endpoint_type_mismatch_fires_warning():
+    """两端 join 属性语义类别冲突（String ↔ Integer）→ warning（Palantir 硬约束同款）。"""
+    bundle = _bundle()
+    bundle["properties"][2]["value_type"] = "Integer"  # sales_order.order_no
+    findings = check_ontology_model_consistency(bundle, _configs())
+    finding = next(item for item in findings if item["code"] == "ONT_REL_ENDPOINT_TYPE")
+    assert finding["severity"] == "warning"
+    assert "customer.customer_id" in finding["message"] and "sales_order.order_no" in finding["message"]
+
+
+@pytest.mark.parametrize(
+    ("to_type", "should_fire"),
+    [
+        ("Integer", True),  # string ↔ numeric 冲突
+        ("Date", True),  # string ↔ temporal 冲突
+        ("enum", False),  # 小写 enum（validator 词表）与 String 同属 string 类
+        ("Boolean", False),  # 维度侧不可归类 → 跳过
+    ],
+)
+def test_relation_endpoint_type_matrix(to_type, should_fire):
+    bundle = _bundle()
+    bundle["properties"][2]["value_type"] = to_type
+    codes = _codes(check_ontology_model_consistency(bundle, _configs()))
+    assert ("ONT_REL_ENDPOINT_TYPE" in codes) is should_fire
+
+
+def test_relation_endpoint_type_composite_pairs_by_position():
+    """复合 join 按位置配对：第一对同类别、第二对冲突 → 报 1 对。"""
+    bundle = _bundle()
+    bundle["relations"][0]["from_columns"] = ["customer_id", "customer_name"]
+    bundle["relations"][0]["to_columns"] = ["order_no", "amount"]
+    finding = next(
+        item for item in check_ontology_model_consistency(bundle, _configs()) if item["code"] == "ONT_REL_ENDPOINT_TYPE"
+    )
+    assert "customer.customer_name" in finding["message"]
+
+
+def test_relation_endpoint_type_missing_property_skipped():
+    """任一侧属性不存在时跳过（失效列由 ONT_REL_COLUMN_INVALID 负责，不双报）。"""
+    bundle = _bundle()
+    bundle["relations"][0]["to_columns"] = ["not_a_prop"]
+    bundle["properties"][2]["value_type"] = "Integer"
+    codes = _codes(check_ontology_model_consistency(bundle, _configs()))
+    assert "ONT_REL_ENDPOINT_TYPE" not in codes
+    assert "ONT_REL_COLUMN_INVALID" in codes
+
+
 # ---------- ONT_TYPE_MISMATCH ----------
 
 
@@ -198,7 +248,9 @@ def test_relation_endpoint_outside_bundle_skipped():
         ("Decimal", "number", False),
         ("Date", "datetime", False),
         ("DateTime", "date", False),
-        ("Enum", "enum", False),
+        ("enum", "number", True),  # 回归：value_type 是小写 "enum"（validator 词表），映射到数值维度必须报
+        ("enum", "enum", False),
+        ("enum", "text", False),
         ("Boolean", "text", False),  # 维度侧无 boolean 类别，跳过
         ("String", "unknown_type", False),  # 未知 logical_type 跳过
     ],
@@ -240,5 +292,6 @@ def test_rules_registry_severities():
     assert RULES["ONT_MAPPING_DIM_MISSING"][0] == "error"
     assert RULES["ONT_REL_COLUMN_INVALID"][0] == "error"
     assert RULES["ONT_REL_TO_NOT_IDENTIFIER"][0] == "warning"
+    assert RULES["ONT_REL_ENDPOINT_TYPE"][0] == "warning"
     assert RULES["ONT_TYPE_MISMATCH"][0] == "warning"
     assert RULES["ONT_PROP_UNMAPPED"][0] == "info"

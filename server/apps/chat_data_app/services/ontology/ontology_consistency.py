@@ -22,12 +22,15 @@ from __future__ import annotations
 
 from typing import Any
 
+from .ontology_validator import BUILTIN_VALUE_TYPES, VALUE_TYPE_ENUM
+
 #: 规则登记：code → (severity, 中文名)。category 恒为 "ontology"。
 RULES: dict[str, tuple[str, str]] = {
     "ONT_MAPPING_DIM_MISSING": ("error", "映射指向的维度在绑定模型中不存在"),
     "ONT_PROP_UNMAPPED": ("info", "对象属性未映射到任何模型维度"),
     "ONT_REL_COLUMN_INVALID": ("error", "本体关系列引用的属性不存在或未映射"),
     "ONT_REL_TO_NOT_IDENTIFIER": ("warning", "关系 to 侧列引用了非标识属性"),
+    "ONT_REL_ENDPOINT_TYPE": ("warning", "关系两端 join 属性类型语义类别不一致"),
     "ONT_TYPE_MISMATCH": ("warning", "属性 value_type 与维度 logical_type 不兼容"),
 }
 
@@ -37,10 +40,13 @@ _CATEGORY = "ontology"
 #: 列表型 message 的最大展示条数（超出折叠为「等 N 项」）
 _MAX_MESSAGE_ITEMS = 6
 
-# value_type（本体属性）→ 语义类别
-_PROP_NUMERIC = {"Integer", "Decimal"}
-_PROP_TEMPORAL = {"Date", "DateTime"}
-_PROP_STRING = {"String", "Enum"}
+# value_type（本体属性）→ 语义类别。字面量必须引用校验器词表防大小写漂移：
+# 合法 value_type 只有 BUILTIN_VALUE_TYPES（首字母大写）+ VALUE_TYPE_ENUM（小写 "enum"），
+# 曾因手写 "Enum" 导致 enum 属性永远不进 ONT_TYPE_MISMATCH 检查。
+_STRING_T, _INTEGER_T, _DECIMAL_T, _BOOLEAN_T, _DATE_T, _DATETIME_T = BUILTIN_VALUE_TYPES
+_PROP_NUMERIC = {_INTEGER_T, _DECIMAL_T}
+_PROP_TEMPORAL = {_DATE_T, _DATETIME_T}
+_PROP_STRING = {_STRING_T, VALUE_TYPE_ENUM}
 
 # logical_type（模型维度）→ 语义类别
 _DIM_NUMERIC = {"number"}
@@ -208,11 +214,55 @@ def _relation_column_issues(
     return invalid, not_identifier
 
 
+def _relation_endpoint_type_issues(
+    relation: dict[str, Any],
+    properties_by_object: dict[int, list[dict[str, Any]]],
+    object_names: dict[int, str],
+) -> list[str]:
+    """单条关系的两端 join 类型检查，返回类型冲突描述。
+
+    Palantir 官方硬约束「关系两端 join 属性类型必须一致」：语义类别冲突的列
+    即便 SQL 能隐式转换，join 语义与索引利用都不可靠。from/to_columns 按位置
+    配对；任一侧属性缺失或类型不可归类时跳过（缺失由 ONT_REL_COLUMN_INVALID
+    负责，不双报）。
+    """
+
+    def _types(object_id: int) -> dict[str, str]:
+        return {
+            _text(prop.get("property_name")): _text(prop.get("value_type"))
+            for prop in properties_by_object.get(object_id, [])
+            if _text(prop.get("property_name"))
+        }
+
+    from_id = int(relation.get("from_object_id") or 0)
+    to_id = int(relation.get("to_object_id") or 0)
+    from_name = object_names.get(from_id, "")
+    to_name = object_names.get(to_id, "")
+    if not from_name or not to_name:
+        return []
+    from_types = _types(from_id)
+    to_types = _types(to_id)
+    from_columns = [_text(column) for column in relation.get("from_columns") or []]
+    to_columns = [_text(column) for column in relation.get("to_columns") or []]
+    issues: list[str] = []
+    for from_col, to_col in zip(from_columns, to_columns):
+        if not from_col or not to_col:
+            continue
+        from_category = _type_category_prop(from_types.get(from_col, ""))
+        to_category = _type_category_prop(to_types.get(to_col, ""))
+        if from_category and to_category and from_category != to_category:
+            issues.append(
+                f"「{from_name}.{from_col}」({from_types.get(from_col, '?')})"
+                f" ↔ 「{to_name}.{to_col}」({to_types.get(to_col, '?')})"
+            )
+    return issues
+
+
 def _check_relations(
     bundle: dict[str, Any],
     object_names: dict[int, str],
 ) -> list[dict[str, Any]]:
-    """ONT_REL_COLUMN_INVALID + ONT_REL_TO_NOT_IDENTIFIER：关系列健康巡检。"""
+    """ONT_REL_COLUMN_INVALID + ONT_REL_TO_NOT_IDENTIFIER + ONT_REL_ENDPOINT_TYPE：关系列健康巡检。"""
     properties_by_object = _group_by_object_id(bundle.get("properties"))
     mapped_attrs_by_object: dict[int, set[str]] = {}
     for mapping in bundle.get("mappings") or []:
@@ -232,6 +282,7 @@ def _check_relations(
         invalid, not_identifier = _relation_column_issues(
             relation, properties_by_object, mapped_attrs_by_object, object_names
         )
+        endpoint_type_issues = _relation_endpoint_type_issues(relation, properties_by_object, object_names)
         if invalid:
             findings.append(
                 _make_finding(
@@ -247,6 +298,16 @@ def _check_relations(
                     "ONT_REL_TO_NOT_IDENTIFIER",
                     f"本体关系「{relation_name}」的 to 侧列引用了非标识属性：{_join_items(not_identifier)}"
                     "（Ossie 规范要求 to_columns 为主/唯一键，非标识属性做 join 语义不可靠）",
+                    [relation_name],
+                )
+            )
+        if endpoint_type_issues:
+            findings.append(
+                _make_finding(
+                    "ONT_REL_ENDPOINT_TYPE",
+                    f"本体关系「{relation_name}」存在 {len(endpoint_type_issues)} 对 join 属性类型语义冲突："
+                    f"{_join_items(endpoint_type_issues)}"
+                    "（官方硬约束：关系两端 join 属性类型必须一致，类别冲突的 join 语义与索引利用不可靠）",
                     [relation_name],
                 )
             )
