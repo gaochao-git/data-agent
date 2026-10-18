@@ -1525,13 +1525,30 @@ const attachGenerationStats = (messageId: string, rawStats: unknown) => {
   }
 }
 
-// ---- 生成中的实时速率 ----
-// 后端滑窗口径推送「当前速率」（generation_speed SSE 事件，最近 2s 的模型输出粗估）；
-// message_end 收口后由 attachGenerationStats 的整体平均接管，二者是两个指标。
+// ---- 生成中的实时速率与执行耗时 ----
+// 实时速率由后端滑窗口径推送（generation_speed SSE 事件，最近 2s 的模型输出粗估）；
+// 执行耗时是前端本地 ticker：从本轮发起起算的墙钟实时递增，message_end 收口后由
+// generation_stats.totalDurationMs（服务端总墙钟，随消息持久化）接管，二者是两个来源。
 const liveGenerationSpeed = ref<number | null>(null)
+const liveElapsedMs = ref<number | null>(null)
+let elapsedTickerId: ReturnType<typeof setInterval> | null = null
 
 const stopLiveGenerationSpeed = () => {
   liveGenerationSpeed.value = null
+  if (elapsedTickerId !== null) {
+    clearInterval(elapsedTickerId)
+    elapsedTickerId = null
+  }
+  liveElapsedMs.value = null
+}
+
+const startLiveElapsedTicker = () => {
+  stopLiveGenerationSpeed()
+  const runStartedAtMs = Date.now()
+  liveElapsedMs.value = 0
+  elapsedTickerId = setInterval(() => {
+    liveElapsedMs.value = Date.now() - runStartedAtMs
+  }, 500)
 }
 
 const removeEmptyActiveAssistant = () => {
@@ -1937,7 +1954,7 @@ const submitAnalysisQuery = async (
     clearMentionFiles()
   }
   isGenerating.value = true
-  stopLiveGenerationSpeed()
+  startLiveElapsedTicker()
   activeToolCallId.value = null
   let startedRunId: string | null = null
   let completedNextRunId: string | null = null
@@ -2501,6 +2518,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
           :should-inline-render-result="shouldInlineRenderToolCall"
           :run-active="isGenerating || hasActiveRun"
           :live-generation-speed="liveGenerationSpeed"
+          :live-elapsed-ms="liveElapsedMs"
           @select-tool="selectToolCall"
           @open-attachment="handleOpenAttachment"
         >

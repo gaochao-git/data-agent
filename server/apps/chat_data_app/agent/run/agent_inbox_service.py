@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
@@ -152,11 +153,17 @@ class AgentInboxService:
         *,
         adopt_pending_messages: bool = True,
         selected_message_id: str | None = None,
+        stream_started_wall_ms: int | None = None,
     ) -> tuple[str, list[HumanMessage]]:
         """开启新运行，返回 (run_id, 遗留排队消息)。
 
         默认接管上一次运行遗留的排队消息（未消费的立即插入/下一轮）作为
         本轮首批输入，并在本事务内领取，避免被中间件重复注入。
+
+        ``stream_started_wall_ms``：请求到达墙钟（毫秒），由 completion 入口
+        盖章写入 Run 行 content，供流启动后作为 harness 首 token 与任务总
+        耗时的起点（覆盖落库/调度/prepare 的盲区）；不传则由流工厂按派发
+        时刻兜底盖章（定时任务/continuation 现状）。
 
         停止后发消息语义下有两种例外：
         - adopt_pending_messages=False（preserve）：新输入单独成 Run，
@@ -179,6 +186,9 @@ class AgentInboxService:
             if active_run:
                 raise AgentRunConflictError("当前会话已有运行中的任务")
             run_id = uuid4().hex
+            run_content: dict[str, Any] = {"runtime_context": runtime_context or {}, "turn_id": run_id}
+            if stream_started_wall_ms:
+                run_content["stream_started_wall_ms"] = int(stream_started_wall_ms)
             session.add(
                 ChatDataAgentInbox(
                     conversation_id=conversation_id,
@@ -186,9 +196,7 @@ class AgentInboxService:
                     run_id=run_id,
                     message_id=run_id,
                     record_type="run",
-                    record_content=json.dumps(
-                        {"runtime_context": runtime_context or {}, "turn_id": run_id}, ensure_ascii=False
-                    ),
+                    record_content=json.dumps(run_content, ensure_ascii=False),
                     record_status=RUN_STATUS_PENDING,
                     lease_expire_time=None,
                     delete_flag=0,
@@ -264,6 +272,7 @@ class AgentInboxService:
                 "operator_name": content.get("runtime_context", {}).get("operator_name") or run.user_id,
                 "runtime_context": content.get("runtime_context") or {},
                 "turn_id": str(content.get("turn_id") or run_id),
+                "stream_started_wall_ms": content.get("stream_started_wall_ms"),
                 "recovering": False,
                 "messages": [self._to_human_message(row) for row in rows],
                 "resume_answer": pending_answer if isinstance(pending_answer, dict) else None,
@@ -435,6 +444,8 @@ class AgentInboxService:
             content["resuming_question"] = content.pop("pending_question")
             content["pending_answer"] = answer
             content["resume_started"] = False
+            # 恢复段首 token/总耗时起点 = 回答到达时刻，覆盖原 Run 行的旧盖章。
+            content["stream_started_wall_ms"] = int(time.time() * 1000)
             run.record_content = json.dumps(content, ensure_ascii=False)
             # The answer is durable before dispatch. Runtime will atomically
             # claim the pending run, including after a worker restart.
@@ -462,6 +473,40 @@ class AgentInboxService:
             content["terminal_event"] = {"stream_id": stream_id, "event_type": "done"}
             run.record_content = json.dumps(content, ensure_ascii=False)
             run.update_time = now
+
+    async def add_executed_durations(self, run_id: str, durations: dict[str, int]) -> None:
+        """累加本段执行耗时到 Run 行，供打断恢复后接力累计任务总用时。
+
+        interrupt 段结束（SSE 流退出）时调用，durations 形如
+        {"total_duration_ms": x}；此时 Run 可能已处于
+        waiting_user 且 owner_token 已被 mark_waiting_for_user 清空，因此不筛
+        状态、不做 owner 断言。耗时仅服务展示统计，写失败不影响流程。
+        行不存在时静默忽略。
+        """
+        async with get_session() as session:
+            run = await self._dao.get_run_by_id_for_update(session, run_id)
+            if run is None:
+                return
+            content = self._load_run_content(run.record_content)
+            stored = content.get("executed_durations")
+            merged = dict(stored) if isinstance(stored, dict) else {}
+            for key, value in durations.items():
+                merged[key] = int(merged.get(key) or 0) + max(int(value or 0), 0)
+            content["executed_durations"] = merged
+            run.record_content = json.dumps(content, ensure_ascii=False)
+            run.update_time = await self._dao.now(session)
+
+    async def get_executed_durations(self, run_id: str) -> dict[str, int]:
+        """读取 Run 行累计执行耗时；行不存在或字段缺失返回空 dict。"""
+        async with get_session() as session:
+            run = await self._dao.get_run_by_id(session, run_id)
+            if run is None:
+                return {}
+            content = self._load_run_content(run.record_content)
+            stored = content.get("executed_durations")
+            if not isinstance(stored, dict):
+                return {}
+            return {str(key): int(value or 0) for key, value in stored.items()}
 
     async def mark_question_resume_started(self, run_id: str, owner_token: str | None = None) -> None:
         """Record that the checkpoint has advanced past the claimed answer."""

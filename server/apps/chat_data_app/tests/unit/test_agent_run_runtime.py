@@ -1,3 +1,5 @@
+import time
+
 import pytest
 
 from apps.chat_data_app.agent.run.agent_inbox_service import (
@@ -734,6 +736,56 @@ def test_set_stream_generator_is_used_by_stream_factory():
     assert captured["run_id"] == "run-1"
     assert captured["owner_token"] == "1:owner"
     assert captured["thread_id"] == "conv-1"
+    stream.aclose()
+
+
+def test_build_stream_factory_prefers_run_row_arrival_stamp():
+    """Run 行带的请求到达墙钟原样透传（用户气泡对齐口径）。"""
+    captured = {}
+
+    def fake_stream_generator(request):
+        captured["stream_started_wall_ms"] = request.stream_started_wall_ms
+
+        async def stream():
+            yield "event: done\ndata: [DONE]\n\n"
+
+        return stream()
+
+    runtime = AgentRunRuntime(
+        inbox_service=object(),
+        event_service=type("Events", (), {"bus": _EventBus()})(),
+        event_bus=_EventBus(),
+    )
+    runtime.set_stream_generator(fake_stream_generator)
+    prepared = _prepared()
+    prepared["stream_started_wall_ms"] = 1700000000000
+    stream = runtime._build_stream_factory(prepared)()
+    assert captured["stream_started_wall_ms"] == 1700000000000
+    stream.aclose()
+
+
+def test_build_stream_factory_falls_back_to_dispatch_wall_ms_without_stamp():
+    """Run 行无盖章（定时任务/continuation）时按派发时刻兜底，保持原行为。"""
+    captured = {}
+
+    def fake_stream_generator(request):
+        captured["stream_started_wall_ms"] = request.stream_started_wall_ms
+
+        async def stream():
+            yield "event: done\ndata: [DONE]\n\n"
+
+        return stream()
+
+    runtime = AgentRunRuntime(
+        inbox_service=object(),
+        event_service=type("Events", (), {"bus": _EventBus()})(),
+        event_bus=_EventBus(),
+    )
+    runtime.set_stream_generator(fake_stream_generator)
+    before_ms = int(time.time() * 1000)
+    stream = runtime._build_stream_factory(_prepared())()
+    after_ms = int(time.time() * 1000)
+    assert before_ms <= captured["stream_started_wall_ms"] <= after_ms
     stream.aclose()
 
 

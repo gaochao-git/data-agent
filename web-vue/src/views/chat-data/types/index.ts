@@ -383,16 +383,24 @@ export interface Message {
   generationStats?: MessageGenerationStats
 }
 
-// 助手气泡生成统计：分母 ≈ 模型流墙钟时间 − 工具执行时间（纯模型生成时间，服务端计算）
+// 助手气泡生成统计：速率分母 ≈ 首 token → 流结束墙钟 − 工具执行时间（服务端计算）
 export interface MessageGenerationStats {
-  /** 输出 token 总数（后端按模型返回的 usage 累加，非估算） */
-  outputTokens: number
-  /** 估算的纯模型生成时长（毫秒） */
-  durationMs: number
-  /** 生成速度（tokens/s） */
-  tokensPerSecond: number
-  /** 首 token 耗时（毫秒，模型流开始 → 首个可见 payload，服务端口径） */
+  /** 输出 token 总数（后端按模型返回的 usage 累加，非估算；usage 缺失时省略） */
+  outputTokens?: number
+  /** 输入 token 总数（本轮全部模型调用输入累计；usage 未提供时省略） */
+  inputTokens?: number
+  /** 模型名（本轮最后一次模型调用的模型标识；usage 未提供时省略） */
+  model?: string
+  /** 估算的纯模型生成时长（毫秒；解码窗口缺失时省略） */
+  durationMs?: number
+  /** 生成速度（tokens/s；usage 缺失时省略） */
+  tokensPerSecond?: number
+  /** harness 首 token 耗时（毫秒，请求到达 → 首个可见 payload，服务端口径） */
   firstTokenMs?: number
+  /** harness 总耗时（毫秒，请求到达 → 流结束的完整墙钟，含工具执行；后端锚点缺失时省略） */
+  totalDurationMs?: number
+  /** llm 首 token 耗时（毫秒，覆盖首 token 的模型调用起点 → 首个可见 payload；缺失时省略） */
+  modelFirstTokenMs?: number
 }
 
 // 用户消息附件（文件卡片展示用）

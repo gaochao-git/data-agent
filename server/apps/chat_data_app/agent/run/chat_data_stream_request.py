@@ -54,3 +54,12 @@ class ChatDataStreamRequest:
     recovering: bool = False
     owner_token: str | None = None
     stream_event_id_provider: Callable[[], str | None] | None = None
+    # 请求到达墙钟（毫秒）：completion 入口 / 问答恢复 claim 盖章写入 Run 行，
+    # runtime 透传到本对象，作为 harness 首 token 与任务总耗时 total_duration_ms
+    # 的起点（用户气泡对齐口径）；缺失时（定时任务/continuation）由流工厂按
+    # 派发时刻兜底盖章。
+    stream_started_wall_ms: int | None = None
+    # 客户端点击发送时刻（epoch 毫秒）：前端 Date.now() 随请求体上报，handler
+    # 校验钟偏后覆盖 stream_started_wall_ms，使 harness 计时与用户气泡显示同锚
+    # 「点击时刻」；非法/缺失回退服务端接收章。
+    client_timestamp_ms: int | None = None

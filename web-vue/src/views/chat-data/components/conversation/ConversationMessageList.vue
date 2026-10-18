@@ -5,7 +5,7 @@ import type { ExecutionTargetOption, Message, MessageAttachment, MessageSegment,
 import { useMermaidRenderer } from '../../composables/useMermaidRenderer'
 import { extractGeneratedSqlFromToolCall } from '../../utils/semanticTool'
 import { fileIconNameByExtension } from '../../utils/fileTypeIcon'
-import { formatDateTimeValue, formatGenerationSpeed, formatGenerationStatsDetail, renderMarkdown } from '../../utils'
+import { formatDateTimeValue, formatGenerationSpeed, formatTotalDurationLabel, generationStatsRows, renderMarkdown } from '../../utils'
 import AssistantMessageFooter from '../AssistantMessageFooter.vue'
 import QueryResultPanel from '../QueryResultPanel.vue'
 import ToolCallList from '../ToolCallList.vue'
@@ -23,8 +23,10 @@ interface Props {
   conversationId?: string | null
   /** 本轮 Run 仍活跃（流式进行中 / 链式接续 / 等待用户 / 恢复订阅）时抑制底部 footer */
   runActive?: boolean
-  /** 生成中的实时速率（tokens/s，前端估算）；null 表示暂不展示 */
+  /** 生成中的实时速率（tokens/s，后端滑窗推送）；null 表示暂不展示 */
   liveGenerationSpeed?: number | null
+  /** 本轮已执行耗时（毫秒，从本轮发起起算的墙钟，实时递增）；null 表示暂不展示 */
+  liveElapsedMs?: number | null
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -40,6 +42,7 @@ const props = withDefaults(defineProps<Props>(), {
   ),
   runActive: false,
   liveGenerationSpeed: null,
+  liveElapsedMs: null,
 })
 
 const emit = defineEmits<{
@@ -431,17 +434,45 @@ const handleCopyAssistantMessage = async (message: Message) => {
                 <i class="fa-regular fa-copy text-[11px]"></i>
                 <span>复制</span>
               </button>
+              <!-- 速率徽标仅在解码统计（usage）存在时展示；usage 缺失场景只有「用时 X」 -->
               <el-tooltip
-                v-if="message.generationStats"
-                :content="formatGenerationStatsDetail(message.generationStats)"
+                v-if="message.generationStats?.tokensPerSecond"
                 placement="top"
                 effect="light"
+                :show-arrow="true"
               >
+                <template #content>
+                  <div class="min-w-[224px] py-0.5 text-[11px] leading-[26px]">
+                    <div
+                      v-if="message.generationStats.model"
+                      class="mb-1 flex items-center justify-between gap-8 border-b border-gray-200 pb-1"
+                    >
+                      <span class="text-gray-400">模型</span>
+                      <span class="max-w-[180px] truncate font-medium text-gray-800" :title="message.generationStats.model">{{ message.generationStats.model }}</span>
+                    </div>
+                    <div
+                      v-for="row in generationStatsRows(message.generationStats)"
+                      :key="row.label"
+                      class="flex items-center justify-between gap-8"
+                      :class="row.divider ? 'mt-1 border-t border-gray-200 pt-1' : ''"
+                    >
+                      <span class="text-gray-400">{{ row.label }}</span>
+                      <span class="font-medium tabular-nums text-gray-800">{{ row.value }}</span>
+                    </div>
+                  </div>
+                </template>
                 <span class="inline-flex items-center gap-1 whitespace-nowrap text-[11px] text-gray-400">
                   <i class="fa-solid fa-bolt text-[10px]"></i>
                   {{ formatGenerationSpeed(message.generationStats) }}
                 </span>
               </el-tooltip>
+              <span
+                v-if="message.generationStats?.totalDurationMs"
+                class="inline-flex items-center gap-1 whitespace-nowrap text-[11px] text-gray-400"
+              >
+                <i class="fa-regular fa-clock text-[10px]"></i>
+                用时 {{ formatTotalDurationLabel(message.generationStats.totalDurationMs) }}
+              </span>
             </AssistantMessageFooter>
           </div>
 
@@ -451,6 +482,7 @@ const handleCopyAssistantMessage = async (message: Message) => {
             <span class="h-1.5 w-1.5 rounded-full bg-[#1677FF] animate-pulse [animation-delay:120ms]"></span>
             <span class="h-1.5 w-1.5 rounded-full bg-[#1677FF] animate-pulse [animation-delay:240ms]"></span>
             <span v-if="liveGenerationSpeed" class="whitespace-nowrap text-[11px] text-slate-400">~{{ liveGenerationSpeed }} tok/s</span>
+            <span v-if="liveElapsedMs" class="whitespace-nowrap text-[11px] text-slate-400">用时 {{ formatTotalDurationLabel(liveElapsedMs) }}</span>
           </div>
         </template>
       </div>

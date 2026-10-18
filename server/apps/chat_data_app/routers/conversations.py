@@ -62,6 +62,9 @@ class CompletionRequest(BaseModel):
     file_ids: list[str] | None = None  # 本次消息关联的文件ID列表
     queued_message_id: str | None = None  # 停止后从队列中明确执行的消息
     preserve_queued_messages: bool = False  # 新输入作为当前任务，不提前接管旧队列
+    # 客户端点击发送时刻（epoch 毫秒）：harness 计时与用户气泡显示同锚「点击时刻」；
+    # 服务端校验钟偏后采信，非法/缺失回退服务端接收章
+    client_timestamp_ms: int | None = Field(default=None, ge=0)
 
 
 SteerQueueType = Literal["next-step", "next-turn"]
@@ -253,6 +256,8 @@ def _build_completion_handler_kwargs(
         kwargs["queued_message_id"] = request.queued_message_id
     if "preserve_queued_messages" in sig.parameters:
         kwargs["preserve_queued_messages"] = request.preserve_queued_messages
+    if "client_timestamp_ms" in sig.parameters:
+        kwargs["client_timestamp_ms"] = request.client_timestamp_ms
     if "user_id" in sig.parameters:
         kwargs["user_id"] = user_id
     if "username" in sig.parameters:

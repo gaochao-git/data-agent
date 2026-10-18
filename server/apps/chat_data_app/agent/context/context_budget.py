@@ -296,6 +296,25 @@ def sanitize_context_usage_for_response(usage: Any) -> Any:
     return sanitized
 
 
+def latest_model_name_from_usage(usage: Any) -> str:
+    """取 usage 模型调用记录里最后一次调用的模型名；缺失返回空串。
+
+    llm_calls 会在 sanitize（sanitize_context_usage_for_response）中被剥掉，
+    需要模型名的消费方必须在 sanitize 前调用本函数提取。
+    """
+    if not isinstance(usage, dict):
+        return ""
+    calls = usage.get("llm_calls")
+    if not isinstance(calls, list):
+        return ""
+    for call in reversed(calls):
+        if isinstance(call, dict):
+            name = str(call.get("model") or "").strip()
+            if name:
+                return name
+    return ""
+
+
 def _strip_breakdown_content(items: Any) -> None:
     if not isinstance(items, list):
         return
