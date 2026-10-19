@@ -63,6 +63,10 @@ step "mypy"           bash -c "cd server && '$PY' -m mypy --config-file mypy.ini
 # baseline 防滥用报警：本轮改动触碰 scripts/checks/（含 baselines/）时提醒人工确认，不阻断。
 # 往 baseline 加一行即可让门禁变绿，所以动它们必须有人看过——合法修债（真实复杂度下降）也允许改。
 step "baseline-watch" bash -c "{ git diff --name-only origin/master...HEAD -- scripts/checks; git diff --name-only HEAD -- scripts/checks; git ls-files --others --exclude-standard scripts/checks; } | sort -u | { grep . && echo '    ⚠ 本轮改动了 scripts/checks/：往 baseline 加行会使门禁失效，请人工确认登记是否合法（新文件不允许登记）' || true; }"
+# 测试基线联动提醒：本轮改动触碰 browser_click_test_baseline.md 条目引用的文件时提醒智能体
+# 检查基线是否需要同步维护（§4 用例 / §5 执行记录）。只提醒不阻断（恒定退出码 0）——
+# 基线是否真的要更新由人/智能体判断，机器只负责不让「改了功能、忘了登记」静默发生。
+step "test-baseline-watch" bash -c "'$PY' scripts/checks/test_baseline_watch.py"
 
 if [[ "$MODE" == "--fast" ]]; then
   step "frontend-type"  bash -c "cd web-vue && npm run type-check"
