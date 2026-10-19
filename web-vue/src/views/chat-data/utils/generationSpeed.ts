@@ -68,8 +68,6 @@ export const formatGenerationSpeed = (stats: MessageGenerationStats | null): str
   return `${stats.tokensPerSecond} tok/s`
 }
 
-const formatExactTokens = (value: number): string => value.toLocaleString('en-US')
-
 export interface GenerationStatsRow {
   label: string
   value: string
@@ -86,17 +84,17 @@ export const generationStatsRows = (stats: MessageGenerationStats | null): Gener
   if (!stats) return []
   const rows: GenerationStatsRow[] = []
   if (typeof stats.inputTokens === 'number') {
-    rows.push({ label: '输入总token', value: formatExactTokens(stats.inputTokens) })
+    rows.push({ label: '输入总token', value: formatCompactTokens(stats.inputTokens) })
   }
   if (typeof stats.cachedInputTokens === 'number' || typeof stats.cacheHitRate === 'number') {
     // 命中率优先；仅输入不可报导致命中率缺失的罕见场景退显 token 数
     const value =
-      typeof stats.cacheHitRate === 'number' ? `${stats.cacheHitRate}%` : formatExactTokens(stats.cachedInputTokens ?? 0)
+      typeof stats.cacheHitRate === 'number' ? `${stats.cacheHitRate}%` : formatCompactTokens(stats.cachedInputTokens ?? 0)
     rows.push({ label: '缓存命中', value })
   }
   if (typeof stats.outputTokens === 'number' && typeof stats.tokensPerSecond === 'number') {
     rows.push(
-      { label: '输出总token', value: formatExactTokens(stats.outputTokens) },
+      { label: '输出总token', value: formatCompactTokens(stats.outputTokens) },
       { label: 'token速率', value: formatGenerationSpeed(stats) },
     )
   }
