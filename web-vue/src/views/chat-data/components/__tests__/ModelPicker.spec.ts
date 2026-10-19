@@ -34,6 +34,23 @@ const openLevelsView = async (wrapper: ReturnType<typeof mountPicker>) => {
 const findLevelButtons = (wrapper: ReturnType<typeof mountPicker>) =>
   wrapper.findAll('button').filter(b => (b.attributes('title') ?? '').startsWith('思考档位'))
 
+describe('ModelPicker 视觉能力标注', () => {
+  it('支持视觉的模型在模型列表标注「视觉」，不支持的不标注', async () => {
+    const wrapper = mountPicker({
+      selectedModel: 'model-a',
+      modelOptions: [
+        { id: 'model-a', label: '模型 A', vlm: true },
+        { id: 'model-b', label: '模型 B', vlm: false },
+        { id: 'model-c', label: '模型 C' },
+      ],
+    })
+    await openModelsView(wrapper)
+    const badges = wrapper.findAll('span[title="支持图片视觉输入"]')
+    expect(badges).toHaveLength(1)
+    expect(badges[0]?.text()).toBe('视觉')
+  })
+})
+
 describe('ModelPicker 模型选择', () => {
   it('主面板两行入口展示当前模型与等级，二级选中并回显', async () => {
     const wrapper = mountPicker({
@@ -77,6 +94,18 @@ describe('ModelPicker 模型选择', () => {
 
     const entry = await findEntry(wrapper, '模型')
     expect(entry.text()).toContain('系统默认')
+  })
+
+  it('会话场景无可用模型时入口展示「请配置模型」而非「系统默认」', async () => {
+    const wrapper = mountPicker({ selectedModel: '', modelOptions: [] })
+
+    const entry = await findEntry(wrapper, '模型')
+    expect(entry.text()).toContain('请配置模型')
+    expect(entry.text()).not.toContain('系统默认')
+
+    // 二级列表给配置引导
+    await openModelsView(wrapper)
+    expect(wrapper.text()).toContain('暂无可用模型，请在大模型管理页添加')
   })
 })
 

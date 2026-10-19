@@ -243,7 +243,9 @@ class ChatDataModelUpsertRequest(BaseModel):
     """
 
     model_id: str = Field("", max_length=128, description="模型请求名（发给上游 API 的 model 参数；同供应商内唯一）")
-    provider: str = Field("", max_length=128, description="提供商（如 DeepSeek/阿里云/本地 vLLM，与请求名组成业务唯一键）")
+    provider: str = Field(
+        "", max_length=128, description="提供商（如 DeepSeek/阿里云/本地 vLLM，与请求名组成业务唯一键）"
+    )
     display_name: str = Field("", max_length=128, description="显示名（空则用 model_id）")
     base_url: str = Field("", max_length=500, description="API Base URL（连接信息只以模型行为准）")
     api_key: str = Field("", max_length=512, description="API Key SM4 密文（必填，base64:base64；明文会被拒绝）")
@@ -273,7 +275,20 @@ class ChatDataModelDiscoverRequest(BaseModel):
 class ChatDataModelEnabledRequest(BaseModel):
     """后台模型启停请求（enabled 必须为严格布尔，防止字符串 "false" 被当真值）。"""
 
+    model_key: str = Field("", max_length=128, description="模型注册键（新 body 接口必填；旧路径接口忽略）")
     enabled: bool = Field(..., description="是否启用（true=启用 false=停用）")
+
+
+class ChatDataModelKeyRequest(BaseModel):
+    """按注册键定位的写操作请求：注册键走 body，避免 URL 路径编码在网关链路上被重复编码。"""
+
+    model_key: str = Field(..., max_length=128, description="模型注册键（服务端生成的唯一引用标识）")
+
+
+class ChatDataModelUpdateRequest(ChatDataModelUpsertRequest):
+    """更新模型请求：保存字段 + 注册键（新接口用 body 传键，旧路径接口保留兼容）。"""
+
+    model_key: str = Field(..., max_length=128, description="模型注册键（不可修改）")
 
 
 # ============ 表管理相关模型 ============

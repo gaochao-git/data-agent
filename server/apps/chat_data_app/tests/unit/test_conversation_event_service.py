@@ -267,7 +267,9 @@ async def test_event_history_is_scoped_to_conversation_owner(conversation_event_
     assert (await service.load_history_with_recovery(conversation_id="conv-owner", user_id="user-1"))["messages"][0][
         "content"
     ] == "只属于用户一"
-    assert (await service.load_history_with_recovery(conversation_id="conv-owner", user_id="user-2"))["history_events"] == []
+    assert (await service.load_history_with_recovery(conversation_id="conv-owner", user_id="user-2"))[
+        "history_events"
+    ] == []
 
 
 @pytest.mark.asyncio

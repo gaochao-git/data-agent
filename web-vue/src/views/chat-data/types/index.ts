@@ -179,6 +179,8 @@ export interface ChatDataModelOption {
   label: string
   /** 提供商（下拉展示为 provider/label，区分同名模型） */
   provider?: string
+  /** 是否接受图片视觉输入（/config 下发；true 时选择弹窗标注「视觉」） */
+  vlm?: boolean
   value: string
   is_default?: boolean
   thinking?: ChatDataModelThinking

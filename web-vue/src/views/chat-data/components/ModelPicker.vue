@@ -22,6 +22,8 @@ interface ModelOption {
   label: string
   /** 提供商；有值时展示为 provider/label，区分同名模型 */
   provider?: string
+  /** 是否接受图片视觉输入（/config 下发；true 时列表标注「视觉」） */
+  vlm?: boolean
   is_default?: boolean
   /** 思考能力声明（/config 下发）；缺省按 optional 处理。 */
   thinking?: ModelThinkingOption
@@ -65,7 +67,11 @@ const displayLabel = (model: Pick<ModelOption, 'label' | 'provider'>) =>
   model.provider ? `${model.provider}/${model.label}` : model.label
 
 const selectedModelLabel = computed(() => {
-  if (!props.selectedModel) return '系统默认'
+  if (!props.selectedModel) {
+    // 定时任务场景（allowEmpty）：不选=回退系统默认；会话场景：空只有一种可能——
+    // 注册表无可用模型，入口直接引导配置而不是误导性的「系统默认」
+    return props.allowEmpty ? '系统默认' : '请配置模型'
+  }
   const model = props.modelOptions.find(model => model.id === props.selectedModel)
   return model ? displayLabel(model) : props.selectedModel
 })
@@ -247,9 +253,18 @@ onBeforeUnmount(() => {
           @click="selectModel(m.id)"
         >
           <span class="truncate">{{ displayLabel(m) }}</span>
-          <i v-if="selectedModel === m.id" class="fa-solid fa-check text-[10px]"></i>
+          <span class="flex shrink-0 items-center gap-1.5">
+            <span
+              v-if="m.vlm"
+              class="rounded bg-emerald-50 px-1 py-0.5 text-[10px] leading-none text-emerald-600"
+              title="支持图片视觉输入"
+            >视觉</span>
+            <i v-if="selectedModel === m.id" class="fa-solid fa-check text-[10px]"></i>
+          </span>
         </button>
-        <div v-if="modelOptions.length === 0" class="px-3 py-2 text-xs text-gray-400">暂无模型</div>
+        <div v-if="modelOptions.length === 0" class="px-3 py-2 text-xs text-gray-400">
+          暂无可用模型，请在大模型管理页添加
+        </div>
       </template>
 
       <!-- 二级：推理等级列表 -->

@@ -7,14 +7,20 @@ model_key（注册键，唯一）定位；model_id 是上游请求名，同名�
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
 from utils.error_codes import ErrorCode
 from utils.logger import get_logger
 from utils.response import business_response
 
-from ..schema import ChatDataModelDiscoverRequest, ChatDataModelEnabledRequest, ChatDataModelUpsertRequest
+from ..schema import (
+    ChatDataModelDiscoverRequest,
+    ChatDataModelEnabledRequest,
+    ChatDataModelKeyRequest,
+    ChatDataModelUpdateRequest,
+    ChatDataModelUpsertRequest,
+)
 from ..services.model_registry_service import (
     ModelRegistryConflict,
     ModelRegistryError,
@@ -74,11 +80,8 @@ async def create_chat_data_model(payload: ChatDataModelUpsertRequest, request: R
         )
 
 
-@router.put("/admin/models/{model_key}")
-async def upsert_chat_data_model(
-    model_key: str, payload: ChatDataModelUpsertRequest, request: Request
-) -> JSONResponse:
-    """更新模型（按注册键定位身份）；成功后缓存即时刷新。"""
+async def _update_model_response(model_key: str, payload: ChatDataModelUpsertRequest, request: Request) -> JSONResponse:
+    """更新模型并统一错误码（旧路径接口与新 body 接口共用）。"""
     try:
         current_user = _get_current_user(request)
         data = await update_model(
@@ -103,20 +106,17 @@ async def upsert_chat_data_model(
         )
 
 
-@router.patch("/admin/models/{model_key}/enabled")
-async def toggle_chat_data_model(
-    model_key: str, payload: ChatDataModelEnabledRequest, request: Request
-) -> JSONResponse:
-    """启停模型（enabled 为严格布尔，字符串 "false" 会被 Pydantic 拒绝）。"""
+async def _enabled_response(model_key: str, enabled: bool, request: Request) -> JSONResponse:
+    """启停模型并统一错误码（旧路径接口与新 body 接口共用）。"""
     try:
         current_user = _get_current_user(request)
         await set_model_enabled(
             model_key,
-            enabled=payload.enabled,
+            enabled=enabled,
             user_id=str(current_user.user_id),
             username=str(current_user.username or ""),
         )
-        return business_response(data={"model_key": model_key, "enabled": payload.enabled}, msg="设置成功")
+        return business_response(data={"model_key": model_key, "enabled": enabled}, msg="设置成功")
     except ModelRegistryNotFoundError as e:
         return business_response(msg=str(e), code=ErrorCode.CHATDATA_MODEL_NOT_FOUND, status="error")
     except HTTPException:
@@ -128,14 +128,11 @@ async def toggle_chat_data_model(
         )
 
 
-@router.patch("/admin/models/{model_key}/default")
-async def set_default_chat_data_model(model_key: str, request: Request) -> JSONResponse:
-    """设唯一默认模型（同时启用该行）。"""
+async def _default_response(model_key: str, request: Request) -> JSONResponse:
+    """设默认模型并统一错误码（旧路径接口与新 body 接口共用）。"""
     try:
         current_user = _get_current_user(request)
-        await set_model_default(
-            model_key, user_id=str(current_user.user_id), username=str(current_user.username or "")
-        )
+        await set_model_default(model_key, user_id=str(current_user.user_id), username=str(current_user.username or ""))
         return business_response(data={"model_key": model_key, "is_default": True}, msg="默认模型已设置")
     except ModelRegistryNotFoundError as e:
         return business_response(msg=str(e), code=ErrorCode.CHATDATA_MODEL_NOT_FOUND, status="error")
@@ -148,14 +145,11 @@ async def set_default_chat_data_model(model_key: str, request: Request) -> JSONR
         )
 
 
-@router.delete("/admin/models/{model_key}")
-async def delete_chat_data_model(model_key: str, request: Request) -> JSONResponse:
-    """删除模型（软删；重加同注册键模型自动复活原行）。"""
+async def _delete_response(model_key: str, request: Request) -> JSONResponse:
+    """删除模型并统一错误码（旧路径接口与新 query 接口共用）。"""
     try:
         current_user = _get_current_user(request)
-        await delete_model(
-            model_key, user_id=str(current_user.user_id), username=str(current_user.username or "")
-        )
+        await delete_model(model_key, user_id=str(current_user.user_id), username=str(current_user.username or ""))
         return business_response(data={"model_key": model_key}, msg="已删除")
     except ModelRegistryNotFoundError as e:
         return business_response(msg=str(e), code=ErrorCode.CHATDATA_MODEL_NOT_FOUND, status="error")
@@ -166,6 +160,62 @@ async def delete_chat_data_model(model_key: str, request: Request) -> JSONRespon
         return business_response(
             msg="删除模型失败，请稍后重试", code=ErrorCode.CHATDATA_MODEL_OPERATION_FAILED, status="error"
         )
+
+
+@router.put("/admin/models")
+async def update_chat_data_model(payload: ChatDataModelUpdateRequest, request: Request) -> JSONResponse:
+    """更新模型（注册键走 body，避免 URL 路径编码被网关重复编码）。"""
+    return await _update_model_response(payload.model_key, payload, request)
+
+
+@router.patch("/admin/models/enabled")
+async def toggle_chat_data_model_body(payload: ChatDataModelEnabledRequest, request: Request) -> JSONResponse:
+    """启停模型（注册键走 body）；成功后缓存即时刷新。"""
+    if not payload.model_key:
+        return business_response(
+            msg="model_key（注册键）不能为空", code=ErrorCode.CHATDATA_MODEL_INVALID, status="error"
+        )
+    return await _enabled_response(payload.model_key, payload.enabled, request)
+
+
+@router.patch("/admin/models/default")
+async def set_default_chat_data_model_body(payload: ChatDataModelKeyRequest, request: Request) -> JSONResponse:
+    """设唯一默认模型（注册键走 body）。"""
+    return await _default_response(payload.model_key, request)
+
+
+@router.delete("/admin/models")
+async def delete_chat_data_model_query(
+    request: Request, model_key: str = Query(..., max_length=128, description="模型注册键")
+) -> JSONResponse:
+    """删除模型（注册键走 query；新前端使用该接口）。"""
+    return await _delete_response(model_key, request)
+
+
+@router.put("/admin/models/{model_key}", deprecated=True)
+async def upsert_chat_data_model(model_key: str, payload: ChatDataModelUpsertRequest, request: Request) -> JSONResponse:
+    """[兼容] 更新模型（路径传注册键，旧前端保留）；新前端改用 PUT /admin/models。"""
+    return await _update_model_response(model_key, payload, request)
+
+
+@router.patch("/admin/models/{model_key}/enabled", deprecated=True)
+async def toggle_chat_data_model(
+    model_key: str, payload: ChatDataModelEnabledRequest, request: Request
+) -> JSONResponse:
+    """[兼容] 启停模型（路径传注册键）；新前端改用 PATCH /admin/models/enabled。"""
+    return await _enabled_response(model_key, payload.enabled, request)
+
+
+@router.patch("/admin/models/{model_key}/default", deprecated=True)
+async def set_default_chat_data_model(model_key: str, request: Request) -> JSONResponse:
+    """[兼容] 设默认模型（路径传注册键）；新前端改用 PATCH /admin/models/default。"""
+    return await _default_response(model_key, request)
+
+
+@router.delete("/admin/models/{model_key}", deprecated=True)
+async def delete_chat_data_model(model_key: str, request: Request) -> JSONResponse:
+    """[兼容] 删除模型（路径传注册键）；新前端改用 DELETE /admin/models?model_key=...。"""
+    return await _delete_response(model_key, request)
 
 
 @router.post("/admin/models/discover")

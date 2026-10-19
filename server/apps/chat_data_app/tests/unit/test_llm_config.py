@@ -464,7 +464,9 @@ def test_chat_data_connection_info_resolves_from_model_row_only(monkeypatch):
     monkeypatch.setattr(llm_config, "decrypt_password", lambda value: f"plain:{value}")
     assert llm_config._resolve_chat_data_api_key({"api_key_cipher": "cipher-x"}) == "plain:cipher-x"
     assert llm_config._resolve_chat_data_api_key({"api_key_cipher": ""}) is None
-    assert llm_config._resolve_chat_data_base_url({"base_url": "http://127.0.0.1:8100/v1"}) == "http://127.0.0.1:8100/v1"
+    assert (
+        llm_config._resolve_chat_data_base_url({"base_url": "http://127.0.0.1:8100/v1"}) == "http://127.0.0.1:8100/v1"
+    )
     assert llm_config._resolve_chat_data_base_url({"base_url": ""}) is None
 
 
@@ -511,6 +513,8 @@ def test_get_chat_data_model_options_exposes_thinking(monkeypatch, tmp_path):
     assert result["default_model"] == "stealth/ox-alpha"
     first, second = result["models"]
     assert first["is_default"] is True
+    assert first["vlm"] is True  # 视觉能力随模型下发，前端选模型弹窗标注「视觉」
+    assert "vlm" in second
     assert first["thinking"] == {
         "mode": "forced",
         "efforts": ["low", "medium", "high"],
@@ -567,6 +571,31 @@ def test_chat_data_runtime_config_reads_runtime_options(monkeypatch, tmp_path):
     }
     assert result["user_overridable"] is True
     assert result["context_window"] == 256000
+
+
+def test_runtime_config_empty_registry_returns_empty_models_without_error(monkeypatch):
+    """注册表为空或全部停用：/config 正常返回空清单 + 缺省窗口，不得 500。
+
+    页面初始化依赖 /config；「请配置模型」入口引导由前端按空 models 呈现。
+    """
+    # 对齐「无 CHAT_DATA_MODELS_FILE」场景：autouse 夹具兜底时 setenv 了该变量，
+    # delenv 后 origin="" 恒匹配，缓存落位（空清单）才会命中而非冷缓存报错
+    monkeypatch.delenv("CHAT_DATA_MODELS_FILE", raising=False)
+    monkeypatch.setattr(llm_config, "_registry_cache", [])
+    monkeypatch.setattr(llm_config, "_registry_cache_loaded_at", time.monotonic())
+    monkeypatch.setattr(llm_config, "_registry_cache_origin", "")
+    monkeypatch.setattr(llm_config, "_registry_refresh_task", None)
+
+    import asyncio
+
+    result = asyncio.run(get_chat_data_runtime_config())
+
+    assert result["models"] == []
+    assert result["runtime_options"]["workspace_backend"]
+    # 空清单：context_window 回退缺省值而非 StopIteration/ValueError
+    from apps.chat_data_app.services.runtime_config import DEFAULT_CONTEXT_WINDOW
+
+    assert result["context_window"] == DEFAULT_CONTEXT_WINDOW
 
 
 def test_data_agent_uses_configured_model_without_fallback(monkeypatch, tmp_path):

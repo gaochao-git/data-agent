@@ -6,10 +6,13 @@ api_key）只以模型行为准，无环境变量回退；api_key 表单只接�
 （base64(iv):base64(cipher)，可用 scripts/crypto.py encrypt 生成），
 明文直接拒绝，落库原样存密文。任何写操作成功后即时刷新进程内注册表缓存。
 """
+
 from __future__ import annotations
 
+import hashlib
 import json
 import re
+import secrets
 import time
 from typing import Any
 from urllib.parse import unquote
@@ -35,9 +38,7 @@ from .llm_config import (
 logger = get_logger(__name__)
 
 # params_json 允许出现的参数键（新增参数：先加校验再进此集合，扩参不改表）
-_ALLOWED_PARAM_KEYS = frozenset(
-    {"temperature", "context_window", "max_output_tokens", "vlm", "thinking"}
-)
+_ALLOWED_PARAM_KEYS = frozenset({"temperature", "context_window", "max_output_tokens", "vlm", "thinking"})
 
 _THINKING_MODES = ("none", "optional", "forced")
 # SM4 密文形态：base64(iv):base64(cipher)，两段 base64 以冒号连接
@@ -117,7 +118,7 @@ def _to_api_key_cipher(api_key: str) -> str:
 
 
 def _validate_model_key(model_key: str) -> str:
-    """注册键校验：非空、无空白（唯一性由 DB 唯一键兜底）。"""
+    """注册键校验：非空、无空白（唯一性由 DB 唯一键兜底；老 key 可能含 # / 等字符）。"""
     if not model_key:
         raise ModelRegistryError("model_key（注册键）不能为空")
     if any(ch.isspace() for ch in model_key):
@@ -126,11 +127,11 @@ def _validate_model_key(model_key: str) -> str:
 
 
 def _normalize_incoming_model_key(raw: str) -> str:
-    """还原被网关/代理重复编码的注册键（如 ``%23232`` -> ``#232``）。
+    """还原被网关/代理重复编码的注册键（``%23232`` -> ``#232``）。
 
-    注册键会出现在管理端 URL 路径里，``#``、``/`` 等字符必须百分号编码；部分
-    网关会先解码再对整条路径重新编码，后端收到的就是 ``%23`` 字面量。键本身
-    由服务端生成、不含 ``%``，因此这里只做"有 % 就解开、最多两轮"的幂等还原。
+    注册键出现在管理端 URL 路径/查询参数里，``#``、``/`` 等字符必须百分号编码；
+    部分网关会先解码再对整条路径重新编码，后端收到的就是 ``%23`` 字面量。键由
+    服务端生成、正常不含 ``%``，因此这里只做"有 % 就解开、最多两轮"的幂等还原。
     """
     key = str(raw or "").strip()
     for _ in range(2):
@@ -143,28 +144,34 @@ def _normalize_incoming_model_key(raw: str) -> str:
     return key
 
 
-_URL_UNSAFE_KEY_PATTERN = re.compile(r"[^A-Za-z0-9._:-]+")
+# 注册键 = {请求名 slug}-{8 位随机 hex}：URL 安全、可读、并发唯一，避免 # / % 等
+# 特殊字符在网关链路上被误处理；长度 ≤ 100 + 1 + 8 = 109 < 128（列宽）。
+_MODEL_KEY_SLUG_UNSAFE_PATTERN = re.compile(r"[^a-z0-9._-]+")
+_MODEL_KEY_SLUG_DASH_RUN_PATTERN = re.compile(r"-{2,}")
+_MODEL_KEY_SLUG_MAX_LEN = 100
+_MODEL_KEY_RANDOM_BYTES = 4
+_MODEL_KEY_MAX_ATTEMPTS = 3
 
 
-def _to_url_safe_model_key(model_id: str) -> str:
-    """把请求名转为 URL 安全的注册键：``/``、``#``、``%`` 等替换为 ``-``。
+def _slugify_model_id(model_id: str) -> str:
+    """请求名 -> URL 安全 slug：非法字符替换为 -、折叠连续 -、转小写、截断。
 
-    注册键会出现在管理端 URL 路径，直接复用请求名会让 ``#``（片段符）、``/``
-    （被网关拆成多段）等字符在代理链路上被误处理。
+    请求名全是中文等非 ASCII 字符时 slug 为空，回落 ``model-{sha256 前 8 位}``：
+    既保留确定性（同一请求名得到同一 slug），也避免不同模型都显示成 model-xxxx。
     """
-    cleaned = _URL_UNSAFE_KEY_PATTERN.sub("-", model_id).strip("-")
-    return cleaned or "model"
+    raw = model_id.strip().lower()
+    slug = _MODEL_KEY_SLUG_UNSAFE_PATTERN.sub("-", raw)
+    slug = _MODEL_KEY_SLUG_DASH_RUN_PATTERN.sub("-", slug).strip("-")
+    slug = slug[:_MODEL_KEY_SLUG_MAX_LEN].strip("-")
+    if slug:
+        return slug
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:8]
+    return f"model-{digest}"
 
 
-async def _generate_model_key(dao: ModelRegistryDao, model_id: str) -> str:
-    """注册键服务端自动生成：默认=请求名 URL 安全化；被任何现存行（含软删墓碑）占用则追加 -n。"""
-    base = _to_url_safe_model_key(model_id)
-    candidate = base
-    suffix = 2
-    while await dao.get_by_model_key(model_key=candidate, include_deleted=True) is not None:
-        candidate = f"{base}-{suffix}"
-        suffix += 1
-    return candidate
+def _generate_model_key(model_id: str) -> str:
+    """注册键服务端自动生成：``{slug}-{8位随机hex}``（如 deepseek-v4-flash-3f2a9c1d）。"""
+    return f"{_slugify_model_id(model_id)}-{secrets.token_hex(_MODEL_KEY_RANDOM_BYTES)}"
 
 
 async def create_model(payload: dict[str, Any], *, user_id: str, username: str) -> dict[str, Any]:
@@ -179,14 +186,18 @@ async def create_model(payload: dict[str, Any], *, user_id: str, username: str) 
         raise ModelRegistryConflict(
             f"该供应商下已存在同名请求名的模型: {fields['model_id']}（如需修改请直接编辑该模型）"
         )
-    model_key = await _generate_model_key(dao, fields["model_id"])
-    try:
-        row_id = await dao.upsert(model_key=model_key, fields=fields, operator_id=user_id, operator_name=username)
-    except IntegrityError:
-        # 并发窗口：同请求名两请求同时通过查重/查键，唯一键（model_key 或业务组合）兜底撞车
-        raise ModelRegistryError(
-            f"模型保存冲突（注册键或供应商+请求名已被并发请求占用）: {fields['model_id']}，请重试"
-        ) from None
+    row_id = 0
+    model_key = ""
+    for _attempt in range(_MODEL_KEY_MAX_ATTEMPTS):
+        model_key = _generate_model_key(fields["model_id"])
+        try:
+            row_id = await dao.upsert(model_key=model_key, fields=fields, operator_id=user_id, operator_name=username)
+        except IntegrityError:
+            # 注册键随机后缀撞键时换一个重试；业务组合（供应商+请求名）并发撞车则重试无解
+            continue
+        break
+    else:
+        raise ModelRegistryError(f"模型保存冲突（注册键或供应商+请求名已被并发请求占用）: {fields['model_id']}，请重试")
     await _refresh_cache_best_effort()
     rows = await dao.list_rows()
     saved = next((row for row in rows if row["id"] == row_id), None)
@@ -204,9 +215,7 @@ async def update_model(model_key: str, payload: dict[str, Any], *, user_id: str,
     if await dao.has_active_provider_model(
         provider=fields["provider"], model_id=fields["model_id"], exclude_key=model_key
     ):
-        raise ModelRegistryConflict(
-            f"该供应商下已存在同名请求名的模型: {fields['model_id']}（同组合只能有一个模型）"
-        )
+        raise ModelRegistryConflict(f"该供应商下已存在同名请求名的模型: {fields['model_id']}（同组合只能有一个模型）")
     row_id = await dao.upsert(model_key=model_key, fields=fields, operator_id=user_id, operator_name=username)
     await _refresh_cache_best_effort()
     rows = await dao.list_rows()
@@ -272,9 +281,7 @@ async def set_model_enabled(model_key: str, *, enabled: bool, user_id: str, user
 async def set_model_default(model_key: str, *, user_id: str, username: str) -> None:
     """设唯一默认模型（同时启用该行）；成功后刷新注册表缓存。"""
     model_key = _normalize_incoming_model_key(model_key)
-    if not await ModelRegistryDao().set_default(
-        model_key=model_key, operator_id=user_id, operator_name=username
-    ):
+    if not await ModelRegistryDao().set_default(model_key=model_key, operator_id=user_id, operator_name=username):
         raise ModelRegistryNotFoundError(f"模型不存在: {model_key}")
     await _refresh_cache_best_effort()
 
@@ -282,9 +289,7 @@ async def set_model_default(model_key: str, *, user_id: str, username: str) -> N
 async def delete_model(model_key: str, *, user_id: str, username: str) -> None:
     """软删模型行；成功后刷新注册表缓存。"""
     model_key = _normalize_incoming_model_key(model_key)
-    if not await ModelRegistryDao().mark_deleted(
-        model_key=model_key, operator_id=user_id, operator_name=username
-    ):
+    if not await ModelRegistryDao().mark_deleted(model_key=model_key, operator_id=user_id, operator_name=username):
         raise ModelRegistryNotFoundError(f"模型不存在: {model_key}")
     await _refresh_cache_best_effort()
 
@@ -359,9 +364,7 @@ async def test_model_connection(payload: dict[str, Any]) -> dict[str, Any]:
         None,
     )
     if probe_effort is not None:
-        extra_body = _get_chat_data_extra_body(
-            capability, enable_thinking=True, thinking_effort=probe_effort
-        )
+        extra_body = _get_chat_data_extra_body(capability, enable_thinking=True, thinking_effort=probe_effort)
     else:
         extra_body = _get_chat_data_extra_body(capability, enable_thinking=False, thinking_effort=None)
     try:

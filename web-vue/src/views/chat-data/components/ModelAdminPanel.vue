@@ -3,7 +3,7 @@
  * 后台管理 · 模型注册表面板。
  * 智能问数可用模型清单的唯一维护入口（DB 为真值，变更即时刷新进程内缓存，
  * 多实例最迟一个 TTL 生效）。模型参数集中在 params 对象（temperature/
- * context_window/max_output_tokens/vlm/thinking），api_key 只写不读（掩码）。
+ * context_window/max_output_tokens/vlm/thinking），api_key 回填已存密文供编辑，不展示明文。
  * 连接测试用表单当前值发最小请求，不要求先保存。
  */
 import { computed, reactive, ref, watch } from 'vue'
@@ -437,6 +437,34 @@ const formatThinking = (row: ChatDataModelRegistryItem) => {
   return `可选 / ${dialect}${defaultOn ? '（默认开）' : '（默认关）'}`
 }
 
+/** 复制注册键：clipboard API 需 secure context，内网 http 部署走 textarea 兜底 */
+const copyModelKey = async (modelKey: string) => {
+  if (navigator.clipboard && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(modelKey)
+      ElMessage.success('已复制注册键')
+      return
+    } catch {
+      // 权限拒绝或文档非激活，降级 execCommand
+    }
+  }
+  const textarea = document.createElement('textarea')
+  textarea.value = modelKey
+  textarea.setAttribute('readonly', '')
+  textarea.style.position = 'fixed'
+  textarea.style.opacity = '0'
+  document.body.append(textarea)
+  textarea.select()
+  try {
+    document.execCommand('copy')
+    ElMessage.success('已复制注册键')
+  } catch {
+    ElMessage.error('复制失败，请手动选择')
+  } finally {
+    document.body.removeChild(textarea)
+  }
+}
+
 defineExpose({ ensureLoaded })
 </script>
 
@@ -484,6 +512,18 @@ defineExpose({ ensureLoaded })
         <el-table-column label="模型请求名" min-width="200">
           <template #default="{ row }">
             <span class="font-mono text-xs text-slate-800">{{ row.model_id }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="注册键" min-width="230">
+          <template #default="{ row }">
+            <div class="flex items-center gap-1">
+              <span class="min-w-0 truncate font-mono text-[11px] text-slate-500" :title="row.model_key">
+                {{ row.model_key }}
+              </span>
+              <el-button link size="small" title="复制注册键" @click="copyModelKey(row.model_key)">
+                <i class="fa-regular fa-copy text-[11px]"></i>
+              </el-button>
+            </div>
           </template>
         </el-table-column>
         <el-table-column label="供应商" min-width="110">

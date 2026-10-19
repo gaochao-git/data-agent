@@ -128,7 +128,7 @@ const hasColumnDictContent = (dict?: Partial<DatasourceColumnDictPayload> | null
   )
 }
 
-// 指标集健康校验已移入「模型管理」面板（SemanticModelAdminPanel + SemanticHealthModal）
+// 指标集健康校验已移入「语义模型管理」面板（SemanticModelAdminPanel + SemanticHealthModal）
 
 const openMappingPopover = (ds: DataSource) => {
   mappingDsId.value = ds.id

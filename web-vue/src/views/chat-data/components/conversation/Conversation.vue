@@ -109,7 +109,7 @@ const selectedModel = computed({
 })
 // 思考开关/档位为组件内临时状态（null=未触碰：请求不传字段，由后端按注册表
 // default_on/default_effort 落点）。不持久化、不跨模型/跨会话携带——切换即重置，
-// 默认永远以模型管理面板表里的配置为准。
+// 默认永远以语义模型管理面板表里的配置为准。
 const enableDeepThinking = ref<boolean | null>(null)
 const thinkingEffort = ref<string | null>(null)
 watch(selectedModel, () => {

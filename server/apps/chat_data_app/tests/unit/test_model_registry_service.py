@@ -10,6 +10,7 @@
 import asyncio
 import json
 import os
+import re
 import sys
 import time
 from contextlib import asynccontextmanager
@@ -24,8 +25,9 @@ from apps.chat_data_app.services import llm_config, model_registry_service  # no
 from apps.chat_data_app.services.model_registry_service import (  # noqa: E402
     ModelRegistryError,
     ModelRegistryNotFoundError,
+    _generate_model_key,
     _normalize_incoming_model_key,
-    _to_url_safe_model_key,
+    _slugify_model_id,
     _validate_params,
     _validate_payload_fields,
     create_model,
@@ -85,6 +87,7 @@ def _payload(**overrides):
 
 
 # ----------- 参数校验 -----------
+
 
 def test_validate_params_defaults_and_normalization():
     params = _validate_params({}, model_id="m1")
@@ -161,6 +164,7 @@ def test_validate_payload_fields_rejects_bad_identity_and_base_url():
 
 # ----------- 保存/读取/操作往返（sqlite） -----------
 
+
 def test_save_and_list_roundtrip(registry_env):
     async def run():
         saved = await create_model(_payload(), user_id="u1", username="张三")
@@ -200,19 +204,19 @@ def test_save_rejects_invalid_then_no_row_written(registry_env):
 
 def test_enable_default_delete_lifecycle(registry_env):
     async def run():
-        await create_model(_payload(model_id="a"), user_id="u1", username="张三")
-        await create_model(_payload(model_id="b"), user_id="u1", username="张三")
+        key_a = (await create_model(_payload(model_id="a"), user_id="u1", username="张三"))["model_key"]
+        key_b = (await create_model(_payload(model_id="b"), user_id="u1", username="张三"))["model_key"]
 
-        await set_model_default("b", user_id="u1", username="张三")
-        models = {m["model_id"]: m for m in await list_models()}
-        assert models["b"]["is_default"] is True and models["a"]["is_default"] is False
+        await set_model_default(key_b, user_id="u1", username="张三")
+        models = {m["model_key"]: m for m in await list_models()}
+        assert models[key_b]["is_default"] is True and models[key_a]["is_default"] is False
 
-        await set_model_enabled("a", enabled=False, user_id="u1", username="张三")
-        models = {m["model_id"]: m for m in await list_models()}
-        assert models["a"]["enabled_flag"] == 0 and models["a"]["enabled"] is False
+        await set_model_enabled(key_a, enabled=False, user_id="u1", username="张三")
+        models = {m["model_key"]: m for m in await list_models()}
+        assert models[key_a]["enabled_flag"] == 0 and models[key_a]["enabled"] is False
 
-        await delete_model("a", user_id="u1", username="张三")
-        assert [m["model_id"] for m in await list_models()] == ["b"]
+        await delete_model(key_a, user_id="u1", username="张三")
+        assert [m["model_key"] for m in await list_models()] == [key_b]
 
         for operation in (
             lambda: set_model_enabled("ghost", enabled=True, user_id="u1", username="张三"),
@@ -229,11 +233,19 @@ def test_save_persists_thinking_all_shapes(registry_env):
         shapes = [
             {},
             {"mode": "forced", "dialect": "chat_template"},
-            {"mode": "optional", "dialect": "reasoning_effort", "efforts": ["low", "high"], "default_on": True, "default_effort": "low"},
+            {
+                "mode": "optional",
+                "dialect": "reasoning_effort",
+                "efforts": ["low", "high"],
+                "default_on": True,
+                "default_effort": "low",
+            },
         ]
         for index, thinking in enumerate(shapes):
             model_id = f"m{index}"
-            await create_model(_payload(model_id=model_id, params={"thinking": thinking}), user_id="u1", username="张三")
+            await create_model(
+                _payload(model_id=model_id, params={"thinking": thinking}), user_id="u1", username="张三"
+            )
         for model in await list_models():
             # 回读的 params 必须仍能通过保存校验（可回写不死锁）
             revalidated = _validate_params(model["params"], model_id=model["model_id"])
@@ -243,6 +255,7 @@ def test_save_persists_thinking_all_shapes(registry_env):
 
 
 # ----------- 连接测试 -----------
+
 
 class _FakeLLM:
     def __init__(self, content: str = "ok"):
@@ -261,9 +274,7 @@ def test_test_model_connection_success(registry_env, monkeypatch):
 
     monkeypatch.setattr(model_registry_service, "get_llm", fake_get_llm)
     monkeypatch.setattr(model_registry_service, "decrypt_password", lambda value: "plain-key")
-    result = asyncio.run(
-        model_registry_service.test_model_connection(_payload())
-    )
+    result = asyncio.run(model_registry_service.test_model_connection(_payload()))
     assert result["success"] is True
     assert result["sample"] == "ok"
     assert captured["model"] == "qwen-test"
@@ -299,6 +310,7 @@ def test_test_model_connection_requires_key_from_form_or_row(registry_env, monke
 
 
 # ----------- 模型自动探测 -----------
+
 
 class _FakeDiscoverResponse:
     def __init__(self, status_code=200, payload=None, text=""):
@@ -348,9 +360,7 @@ def test_discover_models_success_dedup_sorted(registry_env, monkeypatch):
         _FakeDiscoverResponse(payload={"data": [{"id": "b-model"}, {"id": "a-model"}, {"id": "a-model"}]}),
     )
     models = asyncio.run(
-        model_registry_service.discover_models(
-            {"base_url": "http://127.0.0.1:8000/v1", "api_key": "AAAAAAAA:BBBBBBBB"}
-        )
+        model_registry_service.discover_models({"base_url": "http://127.0.0.1:8000/v1", "api_key": "AAAAAAAA:BBBBBBBB"})
     )
     assert models == ["a-model", "b-model"]
     assert captured["url"] == "http://127.0.0.1:8000/v1/models"
@@ -385,6 +395,7 @@ def test_discover_models_rejects_non_openai_payload(registry_env, monkeypatch):
 
 # ----------- llm_config 注册表加载与转换 -----------
 
+
 def test_registry_row_to_config_roundtrip_and_bad_json(registry_env):
     fields = _validate_payload_fields(_payload())
     row = {
@@ -417,6 +428,7 @@ def test_registry_row_to_config_roundtrip_and_bad_json(registry_env):
 
 def test_same_request_name_multiple_providers_coexist(registry_env):
     """同一请求名接多个供应商：提供商不同即可并存；引用按注册键、上游按请求名。"""
+
     async def run():
         saved1 = await create_model(
             _payload(model_id="deepseek-v3", provider="DeepSeek官方", base_url="https://api.deepseek.com"),
@@ -428,17 +440,18 @@ def test_same_request_name_multiple_providers_coexist(registry_env):
             user_id="u1",
             username="张三",
         )
-        # 注册键自动生成：首个=请求名，撞车追加 -n
-        assert saved1["model_key"] == "deepseek-v3"
-        assert saved2["model_key"] == "deepseek-v3-2"
+        # 注册键自动生成：{请求名slug}-{8位随机hex}，不因撞车追加 #n
+        assert re.fullmatch(r"deepseek-v3-[0-9a-f]{8}", saved1["model_key"])
+        assert re.fullmatch(r"deepseek-v3-[0-9a-f]{8}", saved2["model_key"])
+        assert saved1["model_key"] != saved2["model_key"]
 
         # 同供应商+同请求名重复新建：业务唯一键拦截
         with pytest.raises(ModelRegistryError, match="该供应商下已存在同名请求名"):
             await create_model(_payload(model_id="deepseek-v3", provider="DeepSeek官方"), user_id="u1", username="张三")
 
         # 引用按注册键精确命中
-        config = llm_config.get_chat_data_model_config("deepseek-v3-2")
-        assert config["id"] == "deepseek-v3-2"
+        config = llm_config.get_chat_data_model_config(saved2["model_key"])
+        assert config["id"] == saved2["model_key"]
         assert config["request_model"] == "deepseek-v3"
 
         # 历史引用（存的是请求名）：回落按请求名匹配，默认行优先
@@ -450,26 +463,36 @@ def test_same_request_name_multiple_providers_coexist(registry_env):
 
 def test_create_after_delete_generates_fresh_row(registry_env):
     """软删后重加同供应商同请求名：墓碑名不占组合，生成全新行（注册键递增）。"""
+
     async def run():
         first = await create_model(_payload(model_id="qwen", provider="阿里云"), user_id="u1", username="张三")
-        assert first["model_key"] == "qwen"
-        await delete_model("qwen", user_id="u1", username="张三")
+        assert re.fullmatch(r"qwen-[0-9a-f]{8}", first["model_key"])
+        await delete_model(first["model_key"], user_id="u1", username="张三")
 
         second = await create_model(_payload(model_id="qwen", provider="阿里云"), user_id="u1", username="张三")
-        assert second["model_key"] == "qwen-2"  # 墓碑键占用，自动递增
+        assert re.fullmatch(r"qwen-[0-9a-f]{8}", second["model_key"])
+        assert second["model_key"] != first["model_key"]  # 每次重建都是新注册键
         assert second["id"] != first["id"]
         models = await list_models()
-        assert [m["model_key"] for m in models] == ["qwen-2"]
+        assert [m["model_key"] for m in models] == [second["model_key"]]
 
     asyncio.run(run())
 
 
-def test_model_key_is_url_safe():
-    """注册键 URL 安全化：/、#、% 等替换为 -，避免网关拆路径或当片段处理。"""
-    assert _to_url_safe_model_key("deepseek-v4-flash") == "deepseek-v4-flash"
-    assert _to_url_safe_model_key("stealth/ox-alpha#1") == "stealth-ox-alpha-1"
-    assert _to_url_safe_model_key("a b%c?d") == "a-b-c-d"
-    assert _to_url_safe_model_key("///") == "model"
+def test_model_key_generation_is_url_safe_and_readable():
+    """注册键 = {slug}-{8hex}：URL 安全、可读、不依赖请求名原字符。"""
+    assert _slugify_model_id("stealth/ox-alpha#1") == "stealth-ox-alpha-1"
+    assert _slugify_model_id("DeepSeek-V4 Flash") == "deepseek-v4-flash"
+    assert _slugify_model_id("a//b") == "a-b"  # 连续非法字符折叠成单个 -
+    assert len(_slugify_model_id("x" * 300)) == 100
+    # 纯中文请求名：回落为 model-{sha256 前 8 位}，确定性且不同名不撞
+    chinese = _slugify_model_id("订单模型")
+    assert re.fullmatch(r"model-[0-9a-f]{8}", chinese)
+    assert chinese == _slugify_model_id("订单模型")
+    assert chinese != _slugify_model_id("用户模型")
+    key = _generate_model_key("deepseek-v4-flash")
+    assert re.fullmatch(r"deepseek-v4-flash-[0-9a-f]{8}", key)
+    assert _generate_model_key("deepseek-v4-flash") != key  # 随机后缀保证唯一
 
 
 def test_normalize_incoming_model_key_decodes_gateway_encoding():
@@ -480,10 +503,11 @@ def test_normalize_incoming_model_key_decodes_gateway_encoding():
     assert _normalize_incoming_model_key("  plain  ") == "plain"
 
 
-def test_gateway_encoded_key_resolves_on_mutations(registry_env):
-    """内网网关把 %23 再编码成 %2523 时，set_default/enabled/update/delete 仍需命中。"""
+def test_legacy_encoded_key_resolves_on_mutations(registry_env):
+    """老注册键（含 #）被网关编码后，默认/启停/更新/删除仍需命中。"""
+
     async def run():
-        saved = await create_model(_payload(model_id="flash", provider="p1"), user_id="u1", username="张三")
+        await create_model(_payload(model_id="flash", provider="p1"), user_id="u1", username="张三")
         dao = model_registry_dao.ModelRegistryDao()
         fields = _validate_payload_fields(_payload(model_id="legacy", provider="p2"))
         await dao.upsert(model_key="legacy#7", fields=fields, operator_id="u1", operator_name="张三")
@@ -499,30 +523,31 @@ def test_gateway_encoded_key_resolves_on_mutations(registry_env):
         await update_model("legacy%237", _payload(model_id="legacy", provider="p2"), user_id="u1", username="张三")
         await delete_model("legacy%25237", user_id="u1", username="张三")
         assert all(m["model_key"] != "legacy#7" for m in await list_models())
-        assert saved["model_key"] == "flash"
 
     asyncio.run(run())
 
 
 def test_update_model_by_key_and_combo_conflict(registry_env):
     """按注册键更新；改供应商/请求名时校验 (provider, model_id) 不撞其它活跃行。"""
+
     async def run():
-        await create_model(_payload(model_id="m1", provider="p1"), user_id="u1", username="张三")
+        key_m1 = (await create_model(_payload(model_id="m1", provider="p1"), user_id="u1", username="张三"))[
+            "model_key"
+        ]
         await create_model(_payload(model_id="m2", provider="p2"), user_id="u1", username="张三")
 
         saved = await update_model(
-            "m1",
+            key_m1,
             _payload(model_id="m1", provider="p1", display_name="改名"),
             user_id="u1",
             username="张三",
         )
         assert saved["display_name"] == "改名"
+        assert saved["model_key"] == key_m1  # 注册键不随编辑变化
 
         # 改成与 m2 相同的 (provider, model_id) 组合：拦截
         with pytest.raises(ModelRegistryError, match="该供应商下已存在同名请求名"):
-            await update_model(
-                "m1", _payload(model_id="m2", provider="p2"), user_id="u1", username="张三"
-            )
+            await update_model(key_m1, _payload(model_id="m2", provider="p2"), user_id="u1", username="张三")
 
         # 不存在的注册键：404 语义
         with pytest.raises(ModelRegistryNotFoundError):
@@ -533,64 +558,17 @@ def test_update_model_by_key_and_combo_conflict(registry_env):
 
 def test_load_registry_from_db_reads_enabled_rows(registry_env):
     async def run():
-        await create_model(_payload(model_id="on"), user_id="u1", username="张三")
+        key_on = (await create_model(_payload(model_id="on"), user_id="u1", username="张三"))["model_key"]
         await create_model(_payload(model_id="off", enabled=False), user_id="u1", username="张三")
         configs = await llm_config.load_registry_from_db()
-        assert [config["id"] for config in configs] == ["on"]
+        assert [config["id"] for config in configs] == [key_on]
         assert configs[0]["temperature"] == 0.3
 
     asyncio.run(run())
 
 
-def test_load_registry_from_db_empty_imports_from_file(registry_env, tmp_path, monkeypatch):
-    models_file = tmp_path / "models.json"
-    models_file.write_text(
-        json.dumps(
-            [
-                {
-                    "id": "file-model",
-                    "temperature": 0.1,
-                    "context_window": 64000,
-                    "max_output_tokens": 8192,
-                    "vlm": False,
-                    "thinking": {
-                        "mode": "optional",
-                        "dialect": "reasoning_effort",
-                        "efforts": ["low", "high"],
-                        "default_on": False,
-                        "default_effort": "low",
-                    },
-                }
-            ],
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("CHAT_DATA_MODELS_FILE", str(models_file))
-
-    async def run():
-        configs = await llm_config.load_registry_from_db()
-        assert [config["id"] for config in configs] == ["file-model"]
-        assert configs[0]["is_default"] is True  # 首项为默认
-        assert configs[0]["vlm"] is False
-        assert [effort.level for effort in configs[0]["thinking"].efforts] == ["low", "high"]
-
-        # 旧 string[] 读入自动升级为新形状（内存中，不回写源文件）
-
-        # 落库的 params_json 回读仍过校验（往返一致）
-        rows = await model_registry_dao.ModelRegistryDao().list_rows()
-        packed = json.loads(rows[0]["params_json"])
-        assert packed["thinking"] == {
-            "mode": "optional",
-            "dialect": "reasoning_effort",
-            "efforts": [{"level": "low"}, {"level": "high"}],
-            "default_effort": "low",  # default_on 不再落库（读侧由默认档位推导）
-        }
-
-    asyncio.run(run())
-
-
 # ----------- 参数/注册键校验补充分支 -----------
+
 
 def test_validate_params_none_and_non_dict():
     """params 缺省视为空对象；非对象（数组/标量）拒绝。"""
@@ -612,8 +590,10 @@ def test_validate_model_key_rules():
 
 # ----------- 写后缓存刷新失败与并发冲突 -----------
 
+
 def test_refresh_cache_best_effort_resets_cache_on_failure(registry_env, monkeypatch):
     """写后刷新失败：清空缓存进入冷态（服务路径明确报错），不回滚已落库写操作。"""
+
     async def run():
         monkeypatch.setattr(llm_config, "_registry_cache", [{"id": "stale"}])
         monkeypatch.setattr(llm_config, "_registry_cache_origin", llm_config._REGISTRY_ORIGIN_DB)
@@ -648,8 +628,10 @@ def test_create_model_concurrent_unique_conflict(registry_env, monkeypatch):
 
 # ----------- 缓存行为（stale-while-revalidate / 冷缓存拒绝回落） -----------
 
+
 def test_refresh_registry_cache_failure_keeps_existing_cache(registry_env, monkeypatch):
     """刷新失败保留 last-known-good：DB 抖动不放大为服务不可用。"""
+
     async def run():
         monkeypatch.setattr(llm_config, "_registry_cache", [{"id": "cached"}])
         monkeypatch.setattr(llm_config, "_registry_cache_origin", llm_config._REGISTRY_ORIGIN_DB)
@@ -666,6 +648,7 @@ def test_refresh_registry_cache_failure_keeps_existing_cache(registry_env, monke
 
 def test_get_configs_stale_cache_returns_old_value_and_schedules_refresh(registry_env, monkeypatch):
     """TTL 过期：先返回旧值不阻塞，事件循环内调度一次后台刷新（去重不叠加）。"""
+
     async def run():
         monkeypatch.setattr(llm_config, "_registry_cache", [{"id": "stale"}])
         monkeypatch.setattr(llm_config, "_registry_cache_origin", llm_config._REGISTRY_ORIGIN_DB)
@@ -690,6 +673,7 @@ def test_get_configs_stale_cache_returns_old_value_and_schedules_refresh(registr
 
 def test_get_configs_cold_cache_in_event_loop_rejects_file_fallback(registry_env):
     """冷缓存 + 服务路径：拒绝回落文件并明确报错，同时调度一次重试刷新。"""
+
     async def run():
         with pytest.raises(RuntimeError, match="拒绝回落"):
             llm_config.get_chat_data_model_configs()
@@ -702,6 +686,7 @@ def test_get_configs_cold_cache_in_event_loop_rejects_file_fallback(registry_env
 
 def test_get_configs_origin_mismatch_treated_as_cold(registry_env, monkeypatch):
     """来源锚定不匹配（env 指向其它文件）视同冷缓存，拒绝在服务路径使用。"""
+
     async def run():
         monkeypatch.setattr(llm_config, "_registry_cache", [{"id": "file-cached"}])
         monkeypatch.setattr(llm_config, "_registry_cache_origin", "/some/other/path.json")
@@ -712,6 +697,7 @@ def test_get_configs_origin_mismatch_treated_as_cold(registry_env, monkeypatch):
 
 
 # ----------- 默认模型与精确匹配 fail-fast -----------
+
 
 def test_default_model_id_rules():
     """默认模型：空表报错 > 显式 is_default > 首行兜底。"""
@@ -724,6 +710,7 @@ def test_default_model_id_rules():
 
 def test_get_chat_data_model_config_unknown_model_raises(registry_env, monkeypatch):
     """注册键与请求名都未命中：明确报错（不静默回退默认模型）。"""
+
     async def run():
         await create_model(_payload(model_id="m1"), user_id="u1", username="张三")
         configs = await llm_config.load_registry_from_db()
@@ -765,27 +752,14 @@ def test_get_chat_data_llm_missing_connection_info_fail_fast(registry_env, monke
 
 # ----------- 注册表首导分支（种子文件不可用 / 并发撞键） -----------
 
-def test_load_registry_empty_with_unavailable_seed_file_returns_empty(registry_env, monkeypatch, tmp_path):
-    """空表且种子文件不可用：跳过导入返回空列表（新装环境允许先不配模型）。"""
-    monkeypatch.setenv("CHAT_DATA_MODELS_FILE", str(tmp_path / "nope.json"))
 
-    async def run():
-        assert await llm_config.load_registry_from_db() == []
-
-    asyncio.run(run())
-
-
-def test_import_registry_skips_rows_on_concurrent_unique_conflict(registry_env, monkeypatch, tmp_path):
-    """多 worker 并发冷启动首导：唯一键撞车跳过该行（已被并发方写入），其余照常导入。"""
-    from sqlalchemy.exc import IntegrityError as SAIntegrityError
-
+def test_load_registry_empty_table_returns_empty_without_file_fallback(registry_env, monkeypatch, tmp_path):
+    """空表即空清单：不再回源 CHAT_DATA_MODELS_FILE 自动导入（DB 唯一真值）。"""
     models_file = tmp_path / "models.json"
     models_file.write_text(
         json.dumps(
-            [
-                {"id": "m-a", "temperature": 0.1, "context_window": 64000, "vlm": False, "thinking": {"mode": "none"}},
-                {"id": "m-b", "temperature": 0.1, "context_window": 64000, "vlm": False, "thinking": {"mode": "none"}},
-            ],
+            [{"id": "should-not-import", "temperature": 0.1, "context_window": 64000, "vlm": False,
+              "thinking": {"mode": "none"}}],
             ensure_ascii=False,
         ),
         encoding="utf-8",
@@ -793,25 +767,15 @@ def test_import_registry_skips_rows_on_concurrent_unique_conflict(registry_env, 
     monkeypatch.setenv("CHAT_DATA_MODELS_FILE", str(models_file))
 
     async def run():
-        dao = model_registry_dao.ModelRegistryDao()
-        real_upsert = dao.upsert
-        attempted: list[str] = []
-
-        async def flaky_upsert(*, model_key, **kwargs):
-            attempted.append(model_key)
-            if model_key == "m-a":
-                raise SAIntegrityError("dup", None, Exception("dup key"))
-            return await real_upsert(model_key=model_key, **kwargs)
-
-        monkeypatch.setattr(dao, "upsert", flaky_upsert)
-        rows = await llm_config._import_registry_from_file(dao)
-        assert attempted == ["m-a", "m-b"]
-        assert [row["model_key"] for row in rows] == ["m-b"]  # 撞键行被跳过
+        assert await llm_config.load_registry_from_db() == []
+        # 文件里 despite 存在条目，DB 也不落任何行
+        assert await model_registry_dao.ModelRegistryDao().list_rows() == []
 
     asyncio.run(run())
 
 
 # ----------- 探测异常分支补充 -----------
+
 
 def test_discover_models_network_error_becomes_chinese_message(registry_env, monkeypatch):
     class _BrokenClient:
@@ -849,6 +813,7 @@ def test_discover_models_rejects_non_json_body(registry_env, monkeypatch):
 
 # ----------- 残余分支收口（覆盖率门禁） -----------
 
+
 def test_read_positive_int_env_falls_back_on_non_int(monkeypatch):
     """数值环境变量非数字时回退默认值。"""
     monkeypatch.setenv("CHAT_DATA_OUTPUT_MAX_TOKENS", "abc")
@@ -857,7 +822,9 @@ def test_read_positive_int_env_falls_back_on_non_int(monkeypatch):
 
 def test_thinking_cap_to_json_efforts_without_default_effort():
     """有档位无默认档：只序列化 efforts（default_effort 缺省不落键；default_on 由读侧推导）。"""
-    cap = llm_config.ThinkingCapability(mode="optional", dialect="openrouter", efforts=(llm_config.EffortLevel(level="low"),))
+    cap = llm_config.ThinkingCapability(
+        mode="optional", dialect="openrouter", efforts=(llm_config.EffortLevel(level="low"),)
+    )
     assert llm_config._thinking_cap_to_json(cap) == {
         "mode": "optional",
         "dialect": "openrouter",
@@ -890,17 +857,20 @@ def test_get_model_options_empty_registry_returns_empty_list(registry_env, monke
 
 def test_get_chat_data_model_config_matches_request_model_after_rename(registry_env, monkeypatch):
     """请求名回落匹配：注册键仍在但请求名已改，历史引用按旧请求名命中改后的行。"""
+
     async def run():
-        await create_model(_payload(model_id="req-x", provider="p"), user_id="u1", username="张三")
-        # 请求名改成 req-y（注册键保持 req-x）
-        await update_model("req-x", _payload(model_id="req-y", provider="p"), user_id="u1", username="张三")
+        key_req = (await create_model(_payload(model_id="req-x", provider="p"), user_id="u1", username="张三"))[
+            "model_key"
+        ]
+        # 请求名改成 req-y（注册键不变）
+        await update_model(key_req, _payload(model_id="req-y", provider="p"), user_id="u1", username="张三")
         configs = await llm_config.load_registry_from_db()
         monkeypatch.setattr(llm_config, "_registry_cache", configs)
         monkeypatch.setattr(llm_config, "_registry_cache_loaded_at", time.monotonic())
         monkeypatch.setattr(llm_config, "_registry_cache_origin", llm_config._REGISTRY_ORIGIN_DB)
         # 历史会话存的旧请求名 req-y 命中
         config = llm_config.get_chat_data_model_config("req-y")
-        assert config["id"] == "req-x"
+        assert config["id"] == key_req
         assert config["request_model"] == "req-y"
 
     asyncio.run(run())
@@ -932,6 +902,7 @@ def test_validate_params_empty_thinking_dict_means_none():
 
 def test_discover_models_rejects_non_dict_json_body(registry_env, monkeypatch):
     """上游返回 JSON 数组/标量（非对象）：按非 OpenAI 兼容接口拒绝。"""
+
     class _ListResponse(_FakeDiscoverResponse):
         def json(self):
             return ["m1", "m2"]
@@ -947,8 +918,10 @@ def test_discover_models_rejects_non_dict_json_body(registry_env, monkeypatch):
 
 # ----------- 思考档位可配置化：save 落库/回读一致 -----------
 
+
 def test_save_model_persists_configurable_efforts_and_roundtrips(registry_env):
     """新形状档位（含 value）保存后落库与回读一致；旧 string[] 也可保存；废弃 off_value 静默丢弃。"""
+
     async def run():
         await create_model(
             _payload(
@@ -977,8 +950,9 @@ def test_save_model_persists_configurable_efforts_and_roundtrips(registry_env):
         )
 
         # 旧前端发 string[] 也能保存（落为新形状）
+        saved_key = (await list_models())[0]["model_key"]
         await update_model(
-            "deepseek-v3",
+            saved_key,
             _payload(
                 model_id="deepseek-v3",
                 params={
@@ -1008,6 +982,7 @@ def test_save_model_persists_configurable_efforts_and_roundtrips(registry_env):
 
 def test_save_model_rejects_illegal_effort_payload(registry_env):
     """保存期校验：非法档位名/非法 value 直接拒绝，错误消息带 model_id。"""
+
     async def run():
         bad_name = _payload(
             model_id="m-bad",
@@ -1080,7 +1055,10 @@ def test_test_model_connection_probes_highest_effort(registry_env, monkeypatch):
     # optional+方言但未声明档位：off 形态按方言兜底
     plain = _payload(
         model_id="m-plain",
-        params={"context_window": 64000, "thinking": {"mode": "optional", "dialect": "reasoning_effort", "default_on": False}},
+        params={
+            "context_window": 64000,
+            "thinking": {"mode": "optional", "dialect": "reasoning_effort", "default_on": False},
+        },
     )
     asyncio.run(model_registry_service.test_model_connection(plain))
     assert captured["extra_body"] == {"reasoning_effort": "none"}
