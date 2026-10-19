@@ -1910,7 +1910,7 @@ export function createAdminModel(data: {
   })
 }
 
-/** 后台：更新模型（行按注册键定位；api_key 必填密文，编辑时回填已存密文原样带回即可） */
+/** 后台：更新模型（注册键走 body，避免 URL 路径编码在网关链路上被重复编码） */
 export function updateAdminModel(modelKey: string, data: {
   model_id?: string
   provider?: string
@@ -1922,34 +1922,36 @@ export function updateAdminModel(modelKey: string, data: {
   remark?: string
 }): Promise<ApiResponse<ChatDataModelRegistryItem>> {
   return request({
-    url: `${CHATDATA_API_PREFIX}/admin/models/${encodeURIComponent(modelKey)}`,
+    url: `${CHATDATA_API_PREFIX}/admin/models`,
     method: 'put',
-    data
+    data: { ...data, model_key: modelKey }
   })
 }
 
-/** 后台：启停模型（停用默认模型不阻断，加载层有首行兜底） */
+/** 后台：启停模型（注册键走 body；停用默认模型不阻断，加载层有首行兜底） */
 export function setAdminModelEnabled(modelKey: string, enabled: boolean): Promise<ApiResponse<{ model_key: string; enabled: boolean }>> {
   return request({
-    url: `${CHATDATA_API_PREFIX}/admin/models/${encodeURIComponent(modelKey)}/enabled`,
+    url: `${CHATDATA_API_PREFIX}/admin/models/enabled`,
     method: 'patch',
-    data: { enabled }
+    data: { model_key: modelKey, enabled }
   })
 }
 
-/** 后台：设唯一默认模型（同时启用该行） */
+/** 后台：设唯一默认模型（注册键走 body，同时启用该行） */
 export function setAdminModelDefault(modelKey: string): Promise<ApiResponse<{ model_key: string; is_default: boolean }>> {
   return request({
-    url: `${CHATDATA_API_PREFIX}/admin/models/${encodeURIComponent(modelKey)}/default`,
-    method: 'patch'
+    url: `${CHATDATA_API_PREFIX}/admin/models/default`,
+    method: 'patch',
+    data: { model_key: modelKey }
   })
 }
 
-/** 后台：删除模型（软删；重加同注册键模型自动复活原行） */
+/** 后台：删除模型（注册键走 query；软删后重加同名模型生成新注册键） */
 export function deleteAdminModel(modelKey: string): Promise<ApiResponse<{ model_key: string }>> {
   return request({
-    url: `${CHATDATA_API_PREFIX}/admin/models/${encodeURIComponent(modelKey)}`,
-    method: 'delete'
+    url: `${CHATDATA_API_PREFIX}/admin/models`,
+    method: 'delete',
+    params: { model_key: modelKey }
   })
 }
 

@@ -199,7 +199,8 @@ ALTER TABLE chat_data_skill_version DROP COLUMN skill_version_dir;
 
 -- 模型注册表：智能问数模型清单页面化管理（替代 CHAT_DATA_MODELS_FILE JSON 文件）
 -- 除身份/连接/状态列外，全部模型参数收在 params_json（JSON 文本），扩参不改表结构
--- 注册键 model_key：服务端自动生成的唯一引用键（会话/定时任务/管理路由以它定位行）；
+-- 注册键 model_key：服务端自动生成的唯一引用键（格式 {请求名slug}-{8位随机hex}，URL 安全；
+-- 存量含 # / 等老键继续可用，管理端写接口用 body/query 传键不走 URL 路径）；
 -- model_id 是上游请求名；业务唯一性=(provider, model_id, delete_flag)，软删行请求名
 -- 改写墓碑名（{原名}__d{id}_{日期}）不占用组合，重加同名生成全新行
 -- 【适用范围】新装库只跑本 CREATE TABLE；已建过旧版表的存量库跳过 CREATE，只执行下方「存量库迁移」的 ALTER 序列，两者不可都跑（列/键会重复报错）

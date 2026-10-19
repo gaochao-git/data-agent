@@ -273,7 +273,20 @@ class ChatDataModelDiscoverRequest(BaseModel):
 class ChatDataModelEnabledRequest(BaseModel):
     """后台模型启停请求（enabled 必须为严格布尔，防止字符串 "false" 被当真值）。"""
 
+    model_key: str = Field("", max_length=128, description="模型注册键（新 body 接口必填；旧路径接口忽略）")
     enabled: bool = Field(..., description="是否启用（true=启用 false=停用）")
+
+
+class ChatDataModelKeyRequest(BaseModel):
+    """按注册键定位的写操作请求：注册键走 body，避免 URL 路径编码在网关链路上被重复编码。"""
+
+    model_key: str = Field(..., max_length=128, description="模型注册键（服务端生成的唯一引用标识）")
+
+
+class ChatDataModelUpdateRequest(ChatDataModelUpsertRequest):
+    """更新模型请求：保存字段 + 注册键（新接口用 body 传键，旧路径接口保留兼容）。"""
+
+    model_key: str = Field(..., max_length=128, description="模型注册键（不可修改）")
 
 
 # ============ 表管理相关模型 ============

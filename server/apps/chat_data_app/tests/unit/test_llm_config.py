@@ -511,6 +511,8 @@ def test_get_chat_data_model_options_exposes_thinking(monkeypatch, tmp_path):
     assert result["default_model"] == "stealth/ox-alpha"
     first, second = result["models"]
     assert first["is_default"] is True
+    assert first["vlm"] is True  # 视觉能力随模型下发，前端选模型弹窗标注「视觉」
+    assert "vlm" in second
     assert first["thinking"] == {
         "mode": "forced",
         "efforts": ["low", "medium", "high"],

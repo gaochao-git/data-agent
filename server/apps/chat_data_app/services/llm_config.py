@@ -711,6 +711,8 @@ def get_chat_data_model_options() -> dict[str, Any]:
                 "id": config["id"],
                 "label": str(config.get("display_name") or "") or str(config["id"]),
                 "provider": str(config.get("provider") or ""),
+                # 视觉能力随模型下发：前端选模型弹窗据此标注「视觉」，避免用户误选
+                "vlm": bool(config.get("vlm", True)),
                 "value": config["id"],
                 "is_default": config["id"] == default_model,
                 "thinking": {
