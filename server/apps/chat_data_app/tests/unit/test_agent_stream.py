@@ -603,6 +603,31 @@ def test_model_failure_user_message_maps_friendly_text():
     assert _model_failure_user_message(ValueError("raw internal detail")) == "智能问数执行失败，请稍后重试。"
 
 
+def test_model_failure_user_message_passthrough_provider_message():
+    """非枚举 APIStatusError（402 余额不足等）：透出服务商 message（提取+护栏），取不到回退兜底。"""
+    # 402：dict body 取 error.message，剥离 request_id 噪音，带固定中文前缀
+    balance_body = {"error": {"message": "Insufficient Balance (request_id: 245dcc9c)", "code": "invalid_request_error"}}
+    err = _make_openai_status_error(openai.APIStatusError, 402, body=balance_body)
+    assert _model_failure_user_message(err) == "模型服务返回错误：Insufficient Balance"
+    # body 为字符串（SDK 解析失败场景）取原文
+    request = httpx.Request("POST", "https://model.example.com/v1/chat/completions")
+    str_body_error = openai.APIStatusError(
+        "Error code: 402 - balance low", response=httpx.Response(402, request=request), body="balance low"
+    )
+    assert _model_failure_user_message(str_body_error) == "模型服务返回错误：balance low"
+    # body 缺失 / message 为空 / 超长（>200）→ 回退兜底文案
+    no_body = _make_openai_status_error(openai.APIStatusError, 402)
+    assert _model_failure_user_message(no_body) == "智能问数执行失败，请稍后重试。"
+    empty_body = {"error": {"message": "  "}}
+    assert _model_failure_user_message(_make_openai_status_error(openai.APIStatusError, 402, body=empty_body)) == (
+        "智能问数执行失败，请稍后重试。"
+    )
+    long_body = {"error": {"message": "x" * 201}}
+    assert _model_failure_user_message(_make_openai_status_error(openai.APIStatusError, 402, body=long_body)) == (
+        "智能问数执行失败，请稍后重试。"
+    )
+
+
 def test_prepare_conversation_workspace_sync_and_async(monkeypatch):
     import asyncio
 
