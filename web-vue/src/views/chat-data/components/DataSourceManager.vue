@@ -5,6 +5,7 @@
  */
 import { ref, computed, onMounted, h } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import AdminPanelToolbar from './AdminPanelToolbar.vue'
 import {
   getAdminDatasources,
   deleteAdminDatasource,
@@ -18,13 +19,11 @@ import {
   updateAdminDatasourceTableGroups,
   updateAdminDatasourceTableBusinessDesc,
   getAdminDatasourceTableColumnDicts,
-  getAdminDatasourceSemanticHealth,
   syncAdminDatasourceMetadata,
 } from '../api'
 import type { ColumnInfo, DataSource, TableInfo } from '../types'
 import type {
   DatasourceColumnDictPayload,
-  DatasourceSemanticHealthResult,
   DatasourceTableGroupItem,
 } from '../api'
 import TableIndexDialog from './TableIndexDialog.vue'
@@ -32,7 +31,6 @@ import ColumnDictEditDialog from './semantic/ColumnDictEditDialog.vue'
 
 const emit = defineEmits<{
   (e: 'datasources-updated'): void
-  (e: 'open-semantic-config', datasourceId: string, datasource?: DataSource): void
 }>()
 
 // 数据源列表
@@ -130,10 +128,7 @@ const hasColumnDictContent = (dict?: Partial<DatasourceColumnDictPayload> | null
   )
 }
 
-// 指标集健康校验
-const checkingHealthId = ref<string | null>(null)
-const showHealthModal = ref(false)
-const healthResult = ref<DatasourceSemanticHealthResult | null>(null)
+// 指标集健康校验已移入「模型管理」面板（SemanticModelAdminPanel + SemanticHealthModal）
 
 const openMappingPopover = (ds: DataSource) => {
   mappingDsId.value = ds.id
@@ -674,35 +669,6 @@ const toggleIndexGroup = (dsId: string, tableName: string) => {
   const s = new Set(collapsedIndexGroups.value)
   s.has(key) ? s.delete(key) : s.add(key)
   collapsedIndexGroups.value = s
-}
-
-const handleOpenSemanticConfig = (datasourceId: string) => {
-  emit('open-semantic-config', datasourceId, datasources.value.find(ds => ds.id === datasourceId))
-}
-
-const getHealthStatusLabel = (status?: string) => {
-  return status === 'ok' ? '正常' : '有问题'
-}
-
-const getHealthStatusBadgeClass = (status?: string) => {
-  return status === 'ok' ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'
-}
-
-const handleCheckSemanticHealth = async (ds: DataSource) => {
-  checkingHealthId.value = ds.id
-  try {
-    const res = await getAdminDatasourceSemanticHealth(ds.id)
-    if (res.status !== 'success' || !res.data) {
-      ElMessage.error(res.msg || '校验失败')
-      return
-    }
-    healthResult.value = res.data
-    showHealthModal.value = true
-  } catch {
-    ElMessage.error('校验失败')
-  } finally {
-    checkingHealthId.value = null
-  }
 }
 
 // 删除数据源
@@ -1267,6 +1233,15 @@ defineExpose({
 
 <template>
   <div class="chatdata-root flex h-full flex-col">
+    <!-- 面板顶区：工具栏（新建动作属于本面板，不放弹窗头部） -->
+    <AdminPanelToolbar>
+      <template #actions>
+        <el-button type="primary" size="small" round @click="openGroupModal">
+          <i class="fa-solid fa-plus" style="margin-right: 4px; font-size: 10px;"></i>
+          新建
+        </el-button>
+      </template>
+    </AdminPanelToolbar>
     <!-- 数据源列表 -->
     <div class="flex-1 overflow-y-auto">
       <!-- 加载状态 -->
@@ -1333,16 +1308,6 @@ defineExpose({
               >
                 <i class="fa-solid fa-layer-group text-xs"></i>
                 <span>分组</span>
-              </button>
-              <button
-                :disabled="checkingHealthId !== null"
-                :class="['flex h-7 min-w-[52px] items-center justify-center gap-1 rounded px-2 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50',
-                  checkingHealthId === ds.id ? 'text-blue-600' : 'text-slate-600 hover:bg-slate-200']"
-                title="校验语义模型"
-                @click.stop="handleCheckSemanticHealth(ds)"
-              >
-                <i :class="['fa-solid text-xs', checkingHealthId === ds.id ? 'fa-spinner fa-spin' : 'fa-shield-halved']"></i>
-                <span>校验</span>
               </button>
               <!-- 模块映射 -->
               <el-popover
@@ -1418,14 +1383,6 @@ defineExpose({
                   </div>
                 </div>
               </el-popover>
-              <button
-                class="flex h-7 min-w-[52px] items-center justify-center gap-1 rounded px-2 text-xs text-slate-600 transition-colors hover:bg-slate-200"
-                title="模型管理"
-                @click.stop="handleOpenSemanticConfig(ds.id)"
-              >
-                <i class="fa-solid fa-sitemap text-xs"></i>
-                <span>模型</span>
-              </button>
               <!-- 删除 -->
               <button
                 v-if="ds.id !== 'default'"
@@ -1764,107 +1721,6 @@ defineExpose({
         </section>
       </div>
 
-    </el-dialog>
-
-    <!-- 语义模型校验结果 -->
-    <el-dialog v-model="showHealthModal" width="860px" :show-close="false">
-      <template #header>
-        <div class="flex items-center justify-between">
-          <div class="flex items-center gap-2">
-            <i class="fa-solid fa-shield-halved text-blue-600"></i>
-            <h3 class="m-0 text-lg font-semibold text-slate-900">语义模型校验<span v-if="healthResult"> - {{ healthResult.group_name }}</span></h3>
-          </div>
-          <button class="flex h-8 w-8 items-center justify-center rounded-full text-slate-400 hover:bg-slate-100 hover:text-slate-600" @click="showHealthModal = false">
-            <i class="fa-solid fa-xmark"></i>
-          </button>
-        </div>
-      </template>
-
-      <div v-if="healthResult" class="max-h-[72vh] space-y-4 overflow-y-auto pr-1">
-        <div class="rounded-xl border border-slate-200 bg-white">
-          <div class="flex items-center justify-between border-b border-slate-100 px-4 py-3">
-            <div class="flex items-start gap-3">
-              <div class="mt-0.5 flex h-7 w-7 items-center justify-center rounded-full bg-blue-50 text-xs font-semibold text-blue-700">1</div>
-              <div>
-                <div class="text-sm font-semibold text-slate-900">物理库 ↔ 缓存表</div>
-                <div class="mt-0.5 text-xs text-slate-400">检查数据源缓存中的表和字段，在真实物理库中是否仍存在、类型是否变化。</div>
-              </div>
-            </div>
-            <span
-              :class="['rounded-full px-2 py-0.5 text-xs font-medium', getHealthStatusBadgeClass(healthResult.schema?.status)]"
-            >
-              {{ getHealthStatusLabel(healthResult.schema?.status) }}
-            </span>
-          </div>
-          <div class="border-b border-slate-100 px-4 py-3 text-xs text-slate-500">
-            已校验 {{ healthResult.schema?.summary.cached_table_count || 0 }} 张缓存表，发现 {{ healthResult.schema?.summary.issue_count || 0 }} 个问题
-          </div>
-          <div v-if="!healthResult.schema || healthResult.schema.issues.length === 0" class="border-t border-slate-100 px-4 py-3 text-xs text-slate-400">
-            缓存表和字段在物理库中均存在，未发现表结构漂移。
-          </div>
-          <div v-else class="space-y-2 border-t border-slate-100 p-3">
-            <div
-              v-for="(issue, index) in healthResult.schema.issues"
-              :key="`schema-${index}`"
-              class="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-xs leading-5 text-red-700"
-            >
-              {{ issue.message }}
-            </div>
-          </div>
-        </div>
-
-        <div v-if="healthResult.configs.length === 0" class="rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-400">
-          当前数据源还没有语义模型
-        </div>
-        <div v-else class="rounded-xl border border-slate-200 bg-white">
-          <div class="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
-            <div class="flex items-start gap-3">
-              <div class="mt-0.5 flex h-7 w-7 items-center justify-center rounded-full bg-blue-50 text-xs font-semibold text-blue-700">2</div>
-              <div>
-                <div class="text-sm font-semibold text-slate-900">缓存表 ↔ 语义模型</div>
-                <div class="mt-0.5 text-xs text-slate-400">检查指标、维度、关联关系引用的表字段，是否仍存在于当前缓存表结构。</div>
-              </div>
-            </div>
-            <span
-              :class="['rounded-full px-2 py-0.5 text-xs font-medium', getHealthStatusBadgeClass(healthResult.semantic?.status || healthResult.status)]"
-            >
-              {{ getHealthStatusLabel(healthResult.semantic?.status || healthResult.status) }}
-            </span>
-          </div>
-          <div class="border-b border-slate-100 px-4 py-3 text-xs text-slate-500">
-            已校验 {{ healthResult.semantic?.summary.config_count ?? healthResult.summary.config_count }} 个语义模型，发现 {{ healthResult.semantic?.summary.issue_count ?? healthResult.summary.issue_count }} 个问题
-          </div>
-          <div class="max-h-[360px] space-y-3 overflow-y-auto bg-slate-50/40 p-3">
-            <div v-for="config in healthResult.configs" :key="config.config_id" class="rounded-xl border border-slate-200 bg-white">
-              <div class="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
-                <div class="min-w-0 flex-1">
-                  <div class="truncate text-sm font-semibold text-slate-900">{{ config.config_name || config.config_id }}</div>
-                  <div class="mt-0.5 text-xs text-slate-400">
-                    {{ config.issues.length === 0 ? '未发现异常' : `${config.issues.length} 项需处理` }}
-                  </div>
-                </div>
-                <span
-                  :class="['rounded-full px-2 py-0.5 text-xs font-medium', getHealthStatusBadgeClass(config.status)]"
-                >
-                  {{ getHealthStatusLabel(config.status) }}
-                </span>
-              </div>
-              <div v-if="config.issues.length === 0" class="px-4 py-3 text-xs text-slate-400">
-                该语义模型引用的指标、维度和关联关系均能匹配当前缓存表结构。
-              </div>
-              <div v-else class="space-y-2 p-3">
-                <div
-                  v-for="(issue, index) in config.issues"
-                  :key="`${config.config_id}-${index}`"
-                  class="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-xs leading-5 text-red-700"
-                >
-                  {{ issue.message }}
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
     </el-dialog>
 
     <TableIndexDialog

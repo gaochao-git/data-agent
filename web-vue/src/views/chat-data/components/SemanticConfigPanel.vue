@@ -22,6 +22,7 @@ import {
   batchToggleSemanticConfig,
   getDatasourceTableColumnDicts,
   getAdminDatasourceTableColumnDicts,
+  getAdminDatasourceSemanticHealth,
   validateAdminSemanticConfig,
   validateSemanticConfig,
 } from '../api'
@@ -34,8 +35,9 @@ import {
   normalizeSemanticRelationship,
   syncRelationshipColumnsFromConditions,
 } from '../utils'
-import type { DatasourceColumnDictPayload, SemanticHistoryLearningSuggestion } from '../api'
+import type { DatasourceColumnDictPayload, DatasourceSemanticHealthResult, SemanticHistoryLearningSuggestion } from '../api'
 import SemanticEvaluationDrawer from './semantic/SemanticEvaluationDrawer.vue'
+import SemanticHealthModal from './semantic/SemanticHealthModal.vue'
 import SemanticHistoryLearningDialog from './semantic/SemanticHistoryLearningDialog.vue'
 import BusinessNotesDialog from './semantic/BusinessNotesDialog.vue'
 import ColumnDictEditDialog from './semantic/ColumnDictEditDialog.vue'
@@ -64,7 +66,6 @@ import {
   LOGICAL_TYPE_OPTIONS,
   atomicMetricColumn,
   buildAliasAwareDefaultDisplayName,
-  buildConfigMaintainerTitle,
   buildConfigSignature,
   buildDimensionPreserveKey,
   buildFieldRowKey,
@@ -79,7 +80,6 @@ import {
   formatJoinTypeLabel,
   formatRelationshipTypeLabel,
   generateScopeAlias,
-  getConfigCreatorName,
   getColumnDictKey,
   getFieldColumnDictKey,
   getFieldPhysicalColumn,
@@ -126,6 +126,7 @@ const props = withDefaults(defineProps<Props>(), {
 const emit = defineEmits<{
   close: []
   configChange: []
+  configListChange: [configs: SemanticConfigItem[]]
   'update:selectedConfigId': [configId: string | null]
 }>()
 
@@ -195,6 +196,32 @@ const isActiveConfigDirty = computed(() => {
 const hasUnsavedSemanticConfig = computed(() => isActiveConfigDirty.value || isFieldRowsDirty.value)
 const canOpenEvaluation = computed(() => Boolean(activeConfig.value && props.datasourceId))
 
+// 评测 / 历史学习入口开关：当前阶段暂停暴露（组件、composable 与后端 API 均保留，置 true 即恢复）
+const SHOW_EVALUATION_ENTRY = false
+
+// 语义模型健康校验（管理员入口，校验范围=当前数据源的缓存表结构 + 全部语义模型）
+const checkingHealth = ref(false)
+const showHealthModal = ref(false)
+const healthResult = ref<DatasourceSemanticHealthResult | null>(null)
+
+const handleCheckSemanticHealth = async () => {
+  if (!props.datasourceId || checkingHealth.value) return
+  checkingHealth.value = true
+  try {
+    const res = await getAdminDatasourceSemanticHealth(props.datasourceId)
+    if (res.status !== 'success' || !res.data) {
+      ElMessage.error(res.msg || '校验失败')
+      return
+    }
+    healthResult.value = res.data
+    showHealthModal.value = true
+  } catch {
+    ElMessage.error('校验失败')
+  } finally {
+    checkingHealth.value = false
+  }
+}
+
 const semanticConfigListApi = computed(() => props.adminMode ? getAdminSemanticConfigs : getMySemanticConfigs)
 const semanticConfigUpdateApi = computed(() => props.adminMode ? updateAdminSemanticConfig : updateSemanticConfig)
 const semanticConfigDeleteApi = computed(() => props.adminMode ? deleteAdminSemanticConfig : deleteSemanticConfig)
@@ -205,13 +232,6 @@ const columnDictListApi = computed(() => props.adminMode ? getAdminDatasourceTab
 const getConfigIndex = (config: SemanticConfigItem) => {
   return configs.value.findIndex(item => item.id === config.id)
 }
-
-const formatConfigOptionLabel = (config: SemanticConfigItem) => {
-  return formatSemanticConfigOptionLabel(config, getConfigIndex(config))
-}
-
-const showDatasetSelectorInHeader = computed(() => !props.embedded)
-const showDatasetSelectorInBody = computed(() => !props.hideDatasetSelector && !showDatasetSelectorInHeader.value)
 
 const syncTableScopes = () => {
   const next: Record<string, TableScopeEntry[]> = {}
@@ -426,7 +446,7 @@ const generateBasicConfigs = async () => {
   try {
     await ElMessageBox.confirm(
       `将根据当前 ${props.tables.length} 张物理表生成尚未存在的基础单表模型。新模型默认启用，可直接在会话中引用；生成结果只有字段骨架，建议复核后补充指标。已有模型不会被覆盖。`,
-      '模型初始化',
+      '批量初始化',
       {
         confirmButtonText: '开始生成',
         cancelButtonText: '取消',
@@ -596,14 +616,12 @@ const updateConfig = (configId: string, updates: Partial<SemanticConfigItem>) =>
   configs.value = configs.value.map(c => c.id === configId ? { ...c, ...updates } : c)
 }
 
-// 切换展开
-const toggleExpand = (configId: string) => {
-  expandedId.value = configId
-  emit('update:selectedConfigId', configId)
-}
-
 // 监听数据源变化
 watch(() => props.datasourceId, fetchConfigs, { immediate: true })
+// 模型列表同步给宿主（后台顶栏下拉选项）
+watch(configs, (list) => {
+  emit('configListChange', list)
+}, { deep: true, immediate: true })
 watch(configs, (list) => {
   if (list.length === 0) {
     expandedId.value = null
@@ -2056,108 +2074,22 @@ const saveBusinessNotes = (businessNotes: string) => {
   updateConfig(activeConfig.value.id, { business_notes: businessNotes })
 }
 
+const openOssieImport = () => {
+  ossieImportVisible.value = true
+}
+
+// 宿主顶栏动作入口（批量初始化 / 批量启停 / 新建 / Ossie 导入）
+defineExpose({
+  generateBasicConfigs,
+  openBatchToggle,
+  createConfig,
+  openOssieImport,
+})
+
 </script>
 
 <template>
   <div class="h-full flex flex-col bg-white">
-    <!-- 头部 -->
-    <div v-if="!embedded" class="h-12 shrink-0 flex items-center gap-4 px-4 border-b border-gray-200 bg-white">
-      <div class="flex items-center gap-3 shrink-0">
-        <button
-          v-if="props.adminMode"
-          class="w-8 h-8 flex items-center justify-center border-none rounded-lg bg-transparent text-gray-500 cursor-pointer transition-all duration-200 hover:bg-gray-100 hover:text-gray-700"
-          title="返回"
-          @click="emit('close')"
-        >
-          <i class="fa-solid fa-arrow-left"></i>
-        </button>
-        <div class="text-sm font-semibold text-gray-800">模型管理</div>
-      </div>
-      <div class="flex min-w-0 flex-1 flex-nowrap items-center gap-3">
-        <span class="shrink-0 whitespace-nowrap text-[13px] font-medium text-slate-700">数据源组</span>
-        <div class="h-8 w-[280px] max-w-[24vw] shrink-0 flex items-center rounded-lg border border-slate-200 bg-slate-50 px-3 text-[13px] text-slate-700 truncate">
-          {{ datasourceName || '暂无数据源' }}
-        </div>
-        <span class="ml-2 shrink-0 whitespace-nowrap text-[13px] font-medium text-slate-700">语义模型</span>
-        <el-select
-          :model-value="activeConfig?.id || ''"
-          class="min-w-0 flex-1"
-          filterable
-          :disabled="loading || configs.length === 0"
-          :title="activeConfig ? formatConfigOptionLabel(activeConfig) : ''"
-          placeholder="请选择语义模型"
-          fit-input-width
-          popper-class="chatdata-semantic-config-select-popper"
-          @change="toggleExpand"
-        >
-          <el-option v-if="loading" value="" label="加载中" />
-          <el-option v-else-if="configs.length === 0" value="" label="暂无语义模型" />
-          <el-option
-            v-for="(config, configIndex) in configs"
-            :key="config.id"
-            :value="config.id"
-            :label="formatSemanticConfigOptionLabel(config, configIndex)"
-            :title="formatSemanticConfigOptionLabel(config, configIndex)"
-          >
-            <div class="flex items-center justify-between gap-3">
-              <span class="min-w-0 truncate">{{ formatSemanticConfigOptionLabel(config, configIndex) }}</span>
-              <span
-                class="shrink-0 rounded border px-1.5 py-px text-[11px] leading-4"
-                :class="config.enabled
-                  ? 'border-emerald-200 bg-emerald-50 text-emerald-600'
-                  : 'border-slate-200 bg-slate-100 text-slate-500'"
-              >{{ config.enabled ? '已启用' : '已禁用' }}</span>
-            </div>
-          </el-option>
-        </el-select>
-        <button
-          v-if="props.adminMode"
-          class="h-8 shrink-0 flex items-center gap-1.5 border border-blue-200 rounded-lg bg-blue-50 px-3 text-[13px] text-blue-600 transition-colors hover:bg-blue-100 disabled:opacity-60 disabled:cursor-not-allowed"
-          title="为尚未建模的物理表初始化基础模型（默认启用）"
-          :disabled="generatingBasicConfigs || props.tables.length === 0"
-          @click="generateBasicConfigs"
-        >
-          <i :class="['fa-solid', generatingBasicConfigs ? 'fa-spinner fa-spin' : 'fa-layer-group']"></i>
-          <span>模型初始化</span>
-        </button>
-        <button
-          class="h-8 shrink-0 flex items-center gap-1.5 border border-gray-200 rounded-lg bg-white px-3 text-[13px] text-gray-600 transition-colors hover:bg-gray-50 disabled:opacity-60 disabled:cursor-not-allowed"
-          title="批量启动选中的语义模型"
-          :disabled="batchToggling || configs.length === 0"
-          @click="openBatchToggle(true)"
-        >
-          <i :class="['fa-solid', 'fa-play']"></i>
-          <span>批量启动</span>
-        </button>
-        <button
-          class="h-8 shrink-0 flex items-center gap-1.5 border border-gray-200 rounded-lg bg-white px-3 text-[13px] text-gray-600 transition-colors hover:bg-gray-50 disabled:opacity-60 disabled:cursor-not-allowed"
-          title="批量暂停选中的语义模型"
-          :disabled="batchToggling || configs.length === 0"
-          @click="openBatchToggle(false)"
-        >
-          <i :class="['fa-solid', 'fa-pause']"></i>
-          <span>批量暂停</span>
-        </button>
-        <button
-          v-if="props.adminMode"
-          class="h-8 shrink-0 flex items-center gap-1.5 border border-gray-200 rounded-lg bg-white px-3 text-[13px] text-gray-600 transition-colors hover:bg-gray-50 disabled:opacity-60 disabled:cursor-not-allowed"
-          title="导入 Ossie 语义模型 YAML，生成待人工确认的草稿配置"
-          @click="ossieImportVisible = true"
-        >
-          <i class="fa-solid fa-file-import"></i>
-          <span>导入</span>
-        </button>
-        <button
-          class="h-8 w-8 shrink-0 flex items-center justify-center border-none rounded-lg bg-blue-500 text-white text-[13px] transition-all duration-150 hover:bg-blue-600 disabled:opacity-60 disabled:cursor-not-allowed"
-          title="新建语义模型"
-          :disabled="creatingConfig"
-          @click="createConfig"
-        >
-          <i :class="['fa-solid', creatingConfig ? 'fa-spinner fa-spin' : 'fa-plus']"></i>
-        </button>
-      </div>
-    </div>
-
     <!-- 加载状态 -->
     <div v-if="loading" class="flex-1 flex items-center justify-center text-gray-400 text-2xl">
       <i class="fa-solid fa-spinner fa-spin"></i>
@@ -2176,111 +2108,49 @@ const saveBusinessNotes = (businessNotes: string) => {
           @click="generateBasicConfigs"
         >
           <i :class="['fa-solid', generatingBasicConfigs ? 'fa-spinner fa-spin' : 'fa-layer-group']"></i>
-          模型初始化
+          批量初始化
         </button>
       </div>
 
       <div v-else class="h-full min-h-0">
         <div v-if="activeConfig" class="h-full min-h-0 border border-gray-200 rounded-xl bg-white overflow-hidden flex flex-col">
           <div class="px-4 py-2 border-b border-gray-100 bg-gray-50">
-            <div
-              class="grid gap-3 items-center"
-              :class="showDatasetSelectorInBody ? 'grid-cols-[260px_220px_1fr_auto]' : 'grid-cols-[220px_1fr_auto]'"
-            >
-              <div v-if="showDatasetSelectorInBody" class="flex items-center gap-2 min-w-0">
-                <el-select
-                  :model-value="activeConfig.id"
-                  class="min-w-0 flex-1"
-                  filterable
-                  :title="formatConfigOptionLabel(activeConfig)"
-                  placeholder="请选择语义模型"
-                  fit-input-width
-                  popper-class="chatdata-semantic-config-select-popper"
-                  @change="toggleExpand"
-                >
-                  <el-option
-                    v-for="(config, configIndex) in configs"
-                    :key="config.id"
-                    :value="config.id"
-                    :label="formatSemanticConfigOptionLabel(config, configIndex)"
-                    :title="formatSemanticConfigOptionLabel(config, configIndex)"
-                  >
-                    <div class="flex items-center justify-between gap-3">
-                      <span class="min-w-0 truncate">{{ formatSemanticConfigOptionLabel(config, configIndex) }}</span>
-                      <span
-                        class="shrink-0 rounded border px-1.5 py-px text-[11px] leading-4"
-                        :class="config.enabled
-                          ? 'border-emerald-200 bg-emerald-50 text-emerald-600'
-                          : 'border-slate-200 bg-slate-100 text-slate-500'"
-                      >{{ config.enabled ? '已启用' : '已禁用' }}</span>
-                    </div>
-                  </el-option>
-                </el-select>
-                <button
-                  v-if="props.adminMode"
-                  class="h-9 shrink-0 flex items-center gap-1.5 border border-blue-200 rounded-md bg-blue-50 px-3 text-[12px] text-blue-600 transition-colors hover:bg-blue-100 disabled:opacity-60 disabled:cursor-not-allowed"
-                  title="为尚未建模的物理表初始化基础模型（默认启用）"
-                  :disabled="generatingBasicConfigs || props.tables.length === 0"
-                  @click="generateBasicConfigs"
-                >
-                  <i :class="['fa-solid', generatingBasicConfigs ? 'fa-spinner fa-spin' : 'fa-layer-group']"></i>
-                  <span>模型初始化</span>
-                </button>
-                <button
-                  class="h-9 shrink-0 flex items-center gap-1.5 border border-gray-200 rounded-md bg-white px-3 text-[12px] text-gray-600 transition-colors hover:bg-gray-50 disabled:opacity-60 disabled:cursor-not-allowed"
-                  title="批量启动选中的语义模型"
-                  :disabled="batchToggling || configs.length === 0"
-                  @click="openBatchToggle(true)"
-                >
-                  <i :class="['fa-solid', 'fa-play']"></i>
-                  <span>批量启动</span>
-                </button>
-                <button
-                  class="h-9 shrink-0 flex items-center gap-1.5 border border-gray-200 rounded-md bg-white px-3 text-[12px] text-gray-600 transition-colors hover:bg-gray-50 disabled:opacity-60 disabled:cursor-not-allowed"
-                  title="批量暂停选中的语义模型"
-                  :disabled="batchToggling || configs.length === 0"
-                  @click="openBatchToggle(false)"
-                >
-                  <i :class="['fa-solid', 'fa-pause']"></i>
-                  <span>批量暂停</span>
-                </button>
-                <button
-                  class="h-9 w-9 shrink-0 flex items-center justify-center border-none rounded-md bg-blue-500 text-white text-[12px] cursor-pointer transition-all duration-150 hover:bg-blue-600 disabled:opacity-60 disabled:cursor-not-allowed"
-                  title="新建语义模型"
-                  :disabled="creatingConfig"
-                  @click="createConfig"
-                >
-                  <i :class="['fa-solid', creatingConfig ? 'fa-spinner fa-spin' : 'fa-plus']"></i>
-                </button>
-              </div>
+            <!-- 单行：当前模型（名称 + 业务说明 + 状态与操作）；模型选择与批量管理由宿主顶栏承载 -->
+            <div class="flex flex-wrap items-center gap-2">
               <input
                 type="text"
                 :value="activeConfig.name"
-                class="px-3 py-1.5 border border-gray-200 rounded-md text-[13px] text-gray-700 outline-none focus:border-blue-500"
+                class="max-w-full shrink-0 px-3 py-1.5 border border-gray-200 rounded-md bg-white text-[13px] text-gray-700 outline-none focus:border-blue-500"
+                :class="sourceTablePanelCollapsed ? 'min-w-[200px] flex-1' : ''"
+                :style="sourceTablePanelCollapsed ? undefined : { width: `${sourceTablePanelWidth + 20}px` }"
                 placeholder="语义模型名称"
                 :disabled="!canManageConfig(activeConfig)"
                 @input="updateConfig(activeConfig.id, { name: ($event.target as HTMLInputElement).value })"
               />
-              <input
-                type="text"
-                :value="activeConfig.description"
-                placeholder="语义模型描述：简要说明这个语义模型是什么"
-                class="px-3 py-1.5 border border-gray-200 rounded-md text-[13px] text-gray-500 outline-none focus:border-blue-500"
+              <button
+                class="px-3 py-1.5 rounded-md text-xs whitespace-nowrap border transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed"
+                :class="activeConfig.business_notes
+                  ? 'border-emerald-200 bg-emerald-50 text-emerald-600 hover:bg-emerald-100'
+                  : 'border-gray-200 bg-white text-gray-500 hover:bg-gray-50'"
                 :disabled="!canManageConfig(activeConfig)"
-                @input="updateConfig(activeConfig.id, { description: ($event.target as HTMLInputElement).value })"
-              />
-              <div class="flex items-center gap-2 justify-end">
-                <div
-                  class="h-8 max-w-[168px] shrink-0 inline-flex items-center gap-1.5 rounded-md border border-gray-200 bg-white px-2 text-[12px] text-gray-500"
-                  :title="buildConfigMaintainerTitle(activeConfig)"
+                title="业务说明：建模背景、口径边界等，会注入 agent 上下文"
+                @click="openBusinessNotesDialog"
+              >
+                <i class="fa-regular fa-note-sticky mr-1"></i>业务说明{{ activeConfig.business_notes ? '' : '（未填写）' }}
+              </button>
+              <div class="flex flex-wrap items-center gap-2 ml-auto shrink-0">
+                <button
+                  v-if="props.adminMode"
+                  class="px-3 py-1.5 rounded-md text-xs whitespace-nowrap border border-gray-200 bg-white text-gray-600 transition-all duration-150 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                  :disabled="checkingHealth"
+                  title="校验语义模型（缓存表结构漂移 + 模型引用完整性）"
+                  @click="handleCheckSemanticHealth"
                 >
-                  <i class="fa-regular fa-user text-[11px] text-gray-400"></i>
-                  <span class="shrink-0 text-gray-400">创建人</span>
-                  <span class="truncate">{{ getConfigCreatorName(activeConfig) }}</span>
-                </div>
+                  <i :class="['fa-solid mr-1', checkingHealth ? 'fa-spinner fa-spin' : 'fa-shield-halved']"></i>校验
+                </button>
                 <button
                   :class="[
-                    'px-3 py-1.5 border-none rounded-md text-xs transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed',
+                    'px-3 py-1.5 border-none rounded-md text-xs whitespace-nowrap transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed',
                     activeConfig.enabled ? 'bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/15' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
                   ]"
                   :disabled="togglingEnabledId === activeConfig.id || !canManageConfig(activeConfig)"
@@ -2294,14 +2164,16 @@ const saveBusinessNotes = (businessNotes: string) => {
                   </template>
                 </button>
                 <button
-                  class="px-3 py-1.5 rounded-md text-xs border border-blue-200 bg-white text-blue-600 transition-all duration-150 hover:bg-blue-50 hover:border-blue-300 disabled:opacity-50 disabled:cursor-not-allowed"
+                  v-if="SHOW_EVALUATION_ENTRY"
+                  class="px-3 py-1.5 rounded-md text-xs whitespace-nowrap border border-gray-200 bg-white text-gray-600 transition-all duration-150 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
                   :disabled="!activeConfig || !canManageConfig(activeConfig)"
                   @click="openHistoryLearningDialog"
                 >
                   <i class="fa-solid fa-graduation-cap mr-1"></i>历史学习
                 </button>
                 <button
-                  class="px-3 py-1.5 rounded-md text-xs border border-indigo-200 bg-indigo-50 text-indigo-600 transition-all duration-150 hover:bg-indigo-100 hover:border-indigo-300 disabled:opacity-50 disabled:cursor-not-allowed"
+                  v-if="SHOW_EVALUATION_ENTRY"
+                  class="px-3 py-1.5 rounded-md text-xs whitespace-nowrap border border-gray-200 bg-white text-gray-600 transition-all duration-150 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
                   :disabled="!canOpenEvaluation"
                   @click="openEvaluateDrawer"
                 >
@@ -2309,7 +2181,7 @@ const saveBusinessNotes = (businessNotes: string) => {
                 </button>
                 <button
                   :class="[
-                    'px-3 py-1.5 border-none rounded-md text-xs transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed',
+                    'px-3 py-1.5 border-none rounded-md text-xs whitespace-nowrap transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed',
                     canSaveActiveConfig ? 'bg-[#1677FF] text-white cursor-pointer hover:bg-[#0958D9]' : 'bg-gray-100 text-gray-400 cursor-not-allowed'
                   ]"
                   :disabled="!canSaveActiveConfig"
@@ -2324,7 +2196,7 @@ const saveBusinessNotes = (businessNotes: string) => {
                   </template>
                 </button>
                 <button
-                  class="px-3 py-1.5 rounded-md text-xs border border-red-100 bg-white text-red-500 transition-all duration-150 hover:bg-red-50 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-white"
+                  class="px-3 py-1.5 rounded-md text-xs whitespace-nowrap border border-red-100 bg-white text-red-500 transition-all duration-150 hover:bg-red-50 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-white"
                   :disabled="!canManageConfig(activeConfig)"
                   title="删除语义模型"
                   @click="handleDeleteConfig(activeConfig.id, activeConfig.name)"
@@ -2585,15 +2457,6 @@ const saveBusinessNotes = (businessNotes: string) => {
                         @click="showFieldPhysicalDetails = !showFieldPhysicalDetails"
                       >
                         <i class="fa-regular fa-eye mr-1"></i>字段详情
-                      </button>
-                      <button
-                        :class="[
-                          'h-7 px-2.5 rounded border bg-white text-[11px] transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed',
-                          activeConfig.business_notes ? 'border-emerald-200 text-emerald-600 bg-emerald-50 hover:bg-emerald-100' : 'border-gray-200 text-gray-600 hover:border-blue-200 hover:text-blue-600'
-                        ]"
-                        @click="openBusinessNotesDialog"
-                      >
-                        <i class="fa-regular fa-note-sticky mr-1"></i>业务说明
                       </button>
                       <button
                         class="h-7 px-2.5 border border-gray-200 rounded bg-white text-[11px] text-gray-600 hover:border-blue-200 hover:text-blue-600"
@@ -2957,6 +2820,8 @@ const saveBusinessNotes = (businessNotes: string) => {
       :datasource-id="props.datasourceId"
       @imported="fetchConfigs"
     />
+
+    <SemanticHealthModal v-model:visible="showHealthModal" :result="healthResult" />
 
   </div>
 </template>

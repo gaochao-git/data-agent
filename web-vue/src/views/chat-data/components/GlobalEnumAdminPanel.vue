@@ -7,6 +7,7 @@
  */
 import { computed, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import AdminPanelToolbar from './AdminPanelToolbar.vue'
 import {
   deleteAdminMetaEnum,
   generateAdminMetaEnumItems,
@@ -310,13 +311,8 @@ defineExpose({ ensureLoaded })
 
 <template>
   <div class="flex h-full min-h-0 flex-col overflow-hidden">
-    <!-- 说明条 -->
-    <div class="shrink-0 border-b border-slate-100 px-4 py-2 text-xs text-slate-500">
-      全局枚举供所有数据源共享，数据字典列可引用为枚举模板；不同业务域之间互相隔离。
-    </div>
-
-    <!-- 工具栏 -->
-    <div class="flex shrink-0 items-center gap-2 px-4 py-2">
+    <!-- 说明条 + 工具栏 -->
+    <AdminPanelToolbar>
       <el-select
         v-model="filterDomain"
         size="small"
@@ -342,12 +338,13 @@ defineExpose({ ensureLoaded })
       <el-button size="small" :loading="loading" @click="loadEnums">
         <i class="fa-solid fa-rotate-right" style="margin-right: 4px; font-size: 10px;"></i>刷新
       </el-button>
-      <div class="flex-1"></div>
-      <el-button size="small" type="primary" round @click="openCreate">
-        <i class="fa-solid fa-plus" style="margin-right: 4px; font-size: 10px;"></i>
-        新建枚举
-      </el-button>
-    </div>
+      <template #actions>
+        <el-button size="small" type="primary" round @click="openCreate">
+          <i class="fa-solid fa-plus" style="margin-right: 4px; font-size: 10px;"></i>
+          新建枚举
+        </el-button>
+      </template>
+    </AdminPanelToolbar>
 
     <!-- 枚举列表 -->
     <div class="flex min-h-0 flex-1 flex-col px-4 pb-4">

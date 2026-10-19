@@ -1,19 +1,70 @@
 <script setup lang="ts">
 /**
  * 智能问数后台管理弹窗。
- * 只负责管理入口、页签和通用弹窗框架，具体能力由子组件承载。
+ * 只负责管理入口、左侧分组导航和通用弹窗框架，具体能力由子面板承载。
+ * 导航按性质分三组（数据资产/智能体/系统）：新功能先归组再挂载面板，
+ * 不要回退成平铺 tab 条；枚举/血缘与数据源同属数据资产组。
  */
 import { computed, nextTick, ref } from 'vue'
 import { Close } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
 import DataSourceManager from './DataSourceManager.vue'
+import GlobalEnumAdminPanel from './GlobalEnumAdminPanel.vue'
+import SemanticModelAdminPanel from './SemanticModelAdminPanel.vue'
 import GlobalSqlHistory from './GlobalSqlHistory.vue'
 import AgentScheduleAdminPanel from './AgentScheduleAdminPanel.vue'
 import ModelAdminPanel from './ModelAdminPanel.vue'
 import PluginAdminPanel from './PluginAdminPanel.vue'
 import SettingAdminPanel from './SettingAdminPanel.vue'
-import MetaManagementPanel from './MetaManagementPanel.vue'
 import { getAdminDatasources } from '../api'
 import type { DataSource } from '../types'
+
+type AdminNavKey =
+  | 'datasource'
+  | 'semantic'
+  | 'enum'
+  | 'lineage'
+  | 'schedule'
+  | 'plugins'
+  | 'setting'
+  | 'models'
+  | 'sqlHistory'
+
+interface AdminNavItem {
+  key: AdminNavKey
+  label: string
+  icon: string
+  disabled?: boolean
+  hint?: string
+}
+
+// 左侧分组导航：分组即信息架构（资产/自动化/系统），新增条目先归组
+const NAV_GROUPS: Array<{ label: string; items: AdminNavItem[] }> = [
+  {
+    label: '数据资产',
+    items: [
+      { key: 'datasource', label: '数据源管理', icon: 'fa-database' },
+      { key: 'semantic', label: '模型管理', icon: 'fa-sitemap' },
+      { key: 'enum', label: '枚举值', icon: 'fa-list-check' },
+      { key: 'lineage', label: '数据血缘', icon: 'fa-diagram-project', disabled: true, hint: '数据血缘管理规划中' }
+    ]
+  },
+  {
+    label: '智能体',
+    items: [
+      { key: 'models', label: '大模型管理', icon: 'fa-microchip' },
+      { key: 'schedule', label: '定时任务', icon: 'fa-stopwatch' },
+      { key: 'plugins', label: '插件管理', icon: 'fa-plug' }
+    ]
+  },
+  {
+    label: '系统',
+    items: [
+      { key: 'setting', label: '运行配置', icon: 'fa-sliders' },
+      { key: 'sqlHistory', label: '历史 SQL', icon: 'fa-clock-rotate-left' }
+    ]
+  }
+]
 
 const props = withDefaults(defineProps<{
   modelValue: boolean
@@ -22,40 +73,23 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{
   'update:modelValue': [value: boolean]
   'datasources-updated': []
-  'open-semantic-config': [datasourceId: string, datasource?: DataSource]
 }>()
 
-const activeTab = ref<'datasource' | 'meta' | 'sqlHistory' | 'schedule' | 'models' | 'plugins' | 'setting'>('datasource')
-const datasourceManagerRef = ref<InstanceType<typeof DataSourceManager> | null>(null)
-const metaPanelRef = ref<InstanceType<typeof MetaManagementPanel> | null>(null)
+const activeNav = ref<AdminNavKey>('datasource')
+const enumPanelRef = ref<InstanceType<typeof GlobalEnumAdminPanel> | null>(null)
 const sqlHistoryRef = ref<InstanceType<typeof GlobalSqlHistory> | null>(null)
 const schedulePanelRef = ref<InstanceType<typeof AgentScheduleAdminPanel> | null>(null)
+const modelPanelRef = ref<InstanceType<typeof ModelAdminPanel> | null>(null)
 const pluginPanelRef = ref<InstanceType<typeof PluginAdminPanel> | null>(null)
 const settingPanelRef = ref<InstanceType<typeof SettingAdminPanel> | null>(null)
-const modelPanelRef = ref<InstanceType<typeof ModelAdminPanel> | null>(null)
 const adminDatasourceOptions = ref<DataSource[]>([])
 const adminDatasourceOptionsLoaded = ref(false)
 const loadingAdminDatasourceOptions = ref(false)
 
 const visible = computed({
   get: () => props.modelValue,
-  set: (value: boolean) => emit('update:modelValue', value),
+  set: (value: boolean) => emit('update:modelValue', value)
 })
-
-const tabs = [
-  { key: 'datasource', label: '数据源管理', icon: 'fa-database' },
-  { key: 'meta', label: '元数据管理', icon: 'fa-tags' },
-  { key: 'sqlHistory', label: '全局历史 SQL', icon: 'fa-clock-rotate-left' },
-  { key: 'schedule', label: '定时任务', icon: 'fa-stopwatch' },
-  { key: 'models', label: '大模型管理', icon: 'fa-microchip' },
-  { key: 'plugins', label: '插件管理', icon: 'fa-plug' },
-  { key: 'setting', label: '运行配置', icon: 'fa-sliders' },
-] as const
-
-const openDatasourceGroupModal = () => {
-  activeTab.value = 'datasource'
-  datasourceManagerRef.value?.openGroupModal()
-}
 
 const loadAdminDatasourceOptions = async (force = false) => {
   if (loadingAdminDatasourceOptions.value) return
@@ -80,110 +114,101 @@ const handleDatasourcesUpdated = () => {
   emit('datasources-updated')
 }
 
-const switchTab = async (tab: 'datasource' | 'meta' | 'sqlHistory' | 'schedule' | 'models' | 'plugins' | 'setting') => {
-  activeTab.value = tab
-  if (tab === 'meta') {
-    await nextTick()
-    metaPanelRef.value?.ensureLoaded()
+const switchNav = async (item: AdminNavItem) => {
+  if (item.disabled) {
+    ElMessage.info(item.hint || '该功能暂未开放')
     return
   }
-  if (tab === 'schedule') {
-    await nextTick()
-    schedulePanelRef.value?.ensureLoaded()
-    return
-  }
-  if (tab === 'models') {
-    await nextTick()
-    modelPanelRef.value?.ensureLoaded()
-    return
-  }
-  if (tab === 'plugins') {
-    await nextTick()
-    pluginPanelRef.value?.ensureLoaded()
-    return
-  }
-  if (tab === 'setting') {
-    await nextTick()
-    settingPanelRef.value?.ensureLoaded()
-    return
-  }
-  if (tab !== 'sqlHistory') return
-  await loadAdminDatasourceOptions()
+  activeNav.value = item.key
   await nextTick()
-  sqlHistoryRef.value?.ensureLoaded()
+  if (item.key === 'enum') {
+    enumPanelRef.value?.ensureLoaded()
+  } else if (item.key === 'schedule') {
+    schedulePanelRef.value?.ensureLoaded()
+  } else if (item.key === 'plugins') {
+    pluginPanelRef.value?.ensureLoaded()
+  } else if (item.key === 'models') {
+    modelPanelRef.value?.ensureLoaded()
+  } else if (item.key === 'setting') {
+    settingPanelRef.value?.ensureLoaded()
+  } else if (item.key === 'sqlHistory') {
+    await loadAdminDatasourceOptions()
+    sqlHistoryRef.value?.ensureLoaded()
+  } else if (item.key === 'semantic') {
+    await loadAdminDatasourceOptions()
+  }
 }
 </script>
 
 <template>
-  <el-dialog v-model="visible" width="min(1320px, 94vw)" :show-close="false">
+  <el-dialog v-model="visible" width="min(1440px, 96vw)" :show-close="false">
     <template #header>
       <div class="flex items-center justify-between">
-        <div class="flex min-w-0 items-center gap-3">
-          <div class="flex items-center gap-1 rounded-lg bg-slate-100 p-1">
-            <button
-              v-for="tab in tabs"
-              :key="tab.key"
-              type="button"
-              :class="[
-                'flex h-7 items-center gap-1.5 rounded-md px-3 text-xs transition-colors',
-                activeTab === tab.key ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'
-              ]"
-              @click="switchTab(tab.key)"
-            >
-              <i :class="['fa-solid text-[10px]', tab.icon]"></i>
-              <span>{{ tab.label }}</span>
-            </button>
-          </div>
+        <div class="flex items-center gap-2 text-sm font-medium text-slate-700">
+          <i class="fa-solid fa-gear text-xs text-slate-400"></i>
+          <span>后台管理</span>
         </div>
         <div class="flex items-center gap-2">
-          <el-button v-if="activeTab === 'datasource'" type="primary" size="small" round @click="openDatasourceGroupModal">
-            <i class="fa-solid fa-plus" style="margin-right: 4px; font-size: 10px;"></i>
-            新建
-          </el-button>
           <el-button :icon="Close" circle size="small" @click="visible = false" />
         </div>
       </div>
     </template>
 
-    <div class="h-[min(700px,72vh)] overflow-hidden">
-      <DataSourceManager
-        v-show="activeTab === 'datasource'"
-        ref="datasourceManagerRef"
-        class="h-full"
-        @datasources-updated="handleDatasourcesUpdated"
-        @open-semantic-config="(datasourceId, datasource) => emit('open-semantic-config', datasourceId, datasource)"
-      />
-      <MetaManagementPanel
-        v-show="activeTab === 'meta'"
-        ref="metaPanelRef"
-        class="h-full"
-      />
-      <GlobalSqlHistory
-        v-show="activeTab === 'sqlHistory'"
-        ref="sqlHistoryRef"
-        class="h-full"
-        :datasources="adminDatasourceOptions"
-      />
-      <AgentScheduleAdminPanel
-        v-show="activeTab === 'schedule'"
-        ref="schedulePanelRef"
-        class="h-full"
-      />
-      <PluginAdminPanel
-        v-show="activeTab === 'plugins'"
-        ref="pluginPanelRef"
-        class="h-full"
-      />
-      <ModelAdminPanel
-        v-show="activeTab === 'models'"
-        ref="modelPanelRef"
-        class="h-full"
-      />
-      <SettingAdminPanel
-        v-show="activeTab === 'setting'"
-        ref="settingPanelRef"
-        class="h-full"
-      />
+    <div class="flex h-[min(700px,72vh)] overflow-hidden">
+      <!-- 左侧分组导航 -->
+      <div class="flex w-44 shrink-0 flex-col overflow-y-auto border-r border-slate-100 bg-slate-50/60 p-2">
+        <div v-for="(group, groupIndex) in NAV_GROUPS" :key="group.label">
+          <div
+            :class="[
+              'px-2.5 text-[10px] font-medium tracking-wide text-slate-400',
+              groupIndex === 0 ? 'pb-1 pt-1' : 'mt-2 border-t border-slate-200/60 pb-1 pt-2.5'
+            ]"
+          >
+            {{ group.label }}
+          </div>
+          <button
+            v-for="item in group.items"
+            :key="item.key"
+            type="button"
+            :class="[
+              'flex h-8 w-full items-center gap-2 rounded-md px-2.5 text-xs transition-colors',
+              activeNav === item.key && !item.disabled ? 'bg-white text-blue-600 shadow-sm' : '',
+              item.disabled ? 'cursor-not-allowed text-slate-300' : '',
+              !item.disabled && activeNav !== item.key ? 'text-slate-600 hover:bg-white/70 hover:text-slate-800' : ''
+            ]"
+            @click="switchNav(item)"
+          >
+            <i :class="['fa-solid text-[10px]', item.icon]"></i>
+            <span>{{ item.label }}</span>
+            <i v-if="item.disabled" class="fa-solid fa-lock ml-auto text-[8px]"></i>
+          </button>
+        </div>
+      </div>
+
+      <!-- 右侧内容区：面板只按导航键显隐，加载时机由 switchNav 触发 -->
+      <div class="min-w-0 flex-1 overflow-hidden">
+        <DataSourceManager
+          v-show="activeNav === 'datasource'"
+          class="h-full"
+          @datasources-updated="handleDatasourcesUpdated"
+        />
+        <SemanticModelAdminPanel
+          v-show="activeNav === 'semantic'"
+          class="h-full"
+          :datasources="adminDatasourceOptions"
+        />
+        <GlobalEnumAdminPanel v-show="activeNav === 'enum'" ref="enumPanelRef" class="h-full" />
+        <GlobalSqlHistory
+          v-show="activeNav === 'sqlHistory'"
+          ref="sqlHistoryRef"
+          class="h-full"
+          :datasources="adminDatasourceOptions"
+        />
+        <AgentScheduleAdminPanel v-show="activeNav === 'schedule'" ref="schedulePanelRef" class="h-full" />
+        <PluginAdminPanel v-show="activeNav === 'plugins'" ref="pluginPanelRef" class="h-full" />
+        <ModelAdminPanel v-show="activeNav === 'models'" ref="modelPanelRef" class="h-full" />
+        <SettingAdminPanel v-show="activeNav === 'setting'" ref="settingPanelRef" class="h-full" />
+      </div>
     </div>
   </el-dialog>
 </template>
