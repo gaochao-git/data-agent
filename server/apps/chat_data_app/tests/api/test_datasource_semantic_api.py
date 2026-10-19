@@ -71,6 +71,9 @@ def test_list_semantic_configs_api_contract(client, auth_headers, fake_datasourc
     assert own_config["can_manage"] is True
     assert public_config["scope_type"] == "public"
     assert public_config["can_manage"] is False
+    # 列表接口不注入 ds_tables：前端表结构走独立 /schema，避免同一份表结构按模型数展开 N 份
+    assert "tables" not in own_config
+    assert "tables" not in public_config
 
 
 def test_list_my_semantic_configs_api_contract(client, auth_headers, fake_datasource_manager, patch_datasource_manager):
@@ -83,6 +86,7 @@ def test_list_my_semantic_configs_api_contract(client, auth_headers, fake_dataso
     assert payload["status"] == "success"
     assert [item["id"] for item in payload["data"]["configs"]] == ["cfg_a"]
     assert payload["data"]["configs"][0]["can_manage"] is True
+    assert "tables" not in payload["data"]["configs"][0]
 
 
 def test_list_admin_semantic_configs_api_contract(
@@ -97,6 +101,7 @@ def test_list_admin_semantic_configs_api_contract(
     assert payload["status"] == "success"
     assert [item["id"] for item in payload["data"]["configs"]] == ["cfg_public"]
     assert payload["data"]["configs"][0]["can_manage"] is True
+    assert "tables" not in payload["data"]["configs"][0]
 
 
 def test_create_semantic_config_sets_private_scope_and_creator(

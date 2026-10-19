@@ -901,7 +901,7 @@ class _FakeSemanticConfigService:
     def __init__(self, manager):
         self.manager = manager
 
-    async def get_configs_async(self, datasource_id: str, user_id: str = ""):
+    async def get_configs_async(self, datasource_id: str, user_id: str = "", include_tables: bool = True):
         datasource = self.manager.datasources.get(datasource_id) or {}
         return copy.deepcopy(datasource.get("semantic_configs") or [])
 
@@ -1049,7 +1049,7 @@ def test_list_semantic_configs_uses_lightweight_existence_check(monkeypatch):
     _mock_datasource_manager(monkeypatch, manager)
 
     class LightweightSemanticService:
-        async def get_configs_async(self, datasource_id: str, user_id: str = ""):
+        async def get_configs_async(self, datasource_id: str, user_id: str = "", include_tables: bool = True):
             calls.append(("get_semantic_configs", datasource_id))
             return [{"semantic_config_id": "cfg_1"}]
 

@@ -108,7 +108,7 @@ async def test_quality_route_collects_modeled_tables(monkeypatch):
             return {"id": "ds_a"}
 
     class _Service:
-        async def get_configs_async(self, _ds_id):
+        async def get_configs_async(self, _ds_id, _user_id="", include_tables=True):
             return _quality_configs()
 
     _patch_user(monkeypatch)

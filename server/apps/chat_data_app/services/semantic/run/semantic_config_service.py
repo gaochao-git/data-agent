@@ -227,10 +227,21 @@ class SemanticConfigService:
         return normalized
 
     @staticmethod
-    def _enrich_model_context(config: dict[str, Any], datasource: dict[str, Any]) -> dict[str, Any]:
+    def _enrich_model_context(
+        config: dict[str, Any], datasource: dict[str, Any], *, include_tables: bool = True
+    ) -> dict[str, Any]:
+        """补充模型上下文（source_type/表结构/joins 别名）。
+
+        include_tables=False 供 HTTP 列表接口使用：前端表结构一律走独立的
+        /schema 接口，列表里注入 ds_tables 只会把同一份表结构按模型数展开
+        N 份白给传输与序列化；服务内部消费者（物化/查询/质检）保持默认 True。
+        """
         result = dict(config or {})
         result["source_type"] = result.get("source_type") or datasource.get("source_type") or "mysql"
-        result["tables"] = result.get("tables") or datasource.get("ds_tables") or []
+        if include_tables:
+            result["tables"] = result.get("tables") or datasource.get("ds_tables") or []
+        else:
+            result.pop("tables", None)
         if result.get("relationships") and not result.get("joins"):
             result["joins"] = result["relationships"]
         return result
@@ -239,13 +250,20 @@ class SemanticConfigService:
         datasource = await self.datasource_manager.get_datasource_meta_async(datasource_id)
         return str((datasource or {}).get("group_id") or "").strip() or None
 
-    async def get_configs_async(self, datasource_id: str, user_id: str = "") -> list[dict[str, Any]]:
+    async def get_configs_async(
+        self, datasource_id: str, user_id: str = "", *, include_tables: bool = True
+    ) -> list[dict[str, Any]]:
+        """组内模型列表（含个人可见性过滤）。
+
+        include_tables 语义见 _enrich_model_context：HTTP 列表路由传 False
+        减负，内部消费链路（物化/定位/质检等）默认 True 不受影响。
+        """
         datasource = await self.datasource_manager.get_datasource_async(datasource_id)
         group_id = str((datasource or {}).get("group_id") or "").strip()
         if not datasource or not group_id:
             return []
         return [
-            self._enrich_model_context(self._normalize_relationships(item), datasource)
+            self._enrich_model_context(self._normalize_relationships(item), datasource, include_tables=include_tables)
             for item in await self.dao.get_by_group_id_async(group_id, user_id)
         ]
 
