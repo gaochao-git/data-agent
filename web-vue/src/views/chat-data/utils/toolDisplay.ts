@@ -138,6 +138,7 @@ export function isDataAnalyzingTool(toolName?: string | null): boolean {
 const ONTOLOGY_ACTION_NAMES: Record<string, string> = {
   list_object_types: '对象类型清单',
   locate_object_type: '对象定位',
+  search_around: '关系探索',
 }
 
 /** 本体导航工具的动作中文名；非本体导航工具或未知动作返回空串。 */
@@ -149,9 +150,10 @@ export function getOntologyActionName(action?: string | null): string {
 const ontologyDescription: DescriptionBuilder = (args) => {
   const payload = (args.action_payload || {}) as ToolArgs
   const types = payload.object_types
-  return Array.isArray(types) && types.length > 0
-    ? compactInlineText(types.map(item => String(item || '').trim()).filter(Boolean).join('、'))
-    : ''
+  if (Array.isArray(types) && types.length > 0) {
+    return compactInlineText(types.map(item => String(item || '').trim()).filter(Boolean).join('、'))
+  }
+  return compactInlineText(payload.object_type)
 }
 
 const dataAnalyzingDescription: DescriptionBuilder = (args) => {

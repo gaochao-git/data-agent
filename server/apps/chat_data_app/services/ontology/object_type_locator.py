@@ -16,6 +16,8 @@ from __future__ import annotations
 import os
 from typing import Any, NamedTuple
 
+from apps.chat_data_app.services.ontology.ontology_injection import render_relation_join
+
 _MAX_LOCATE_OBJECTS = 10
 _MAX_ERROR_CANDIDATES = 20
 _MAX_RELATIONS_PER_OBJECT = 12
@@ -454,4 +456,226 @@ def build_object_list_usage_hint() -> str:
         "清单只含对象类型名与绑定模型。单对象类型取数：直接 execute_query（DSL 传 models 里的 semantic_config_id，"
         "维度名先 file_read workspace 的 semantic/<model_file> 确认口径）；需要属性→维度对照、对象类型间关系类型"
         "或失修状态时，调 locate_object_type（object_types 传对象类型 API 名）获取定位报告。"
+    )
+
+
+def build_search_around_report(
+    bundle: dict[str, Any],
+    *,
+    object_type: str,
+    relation: str | None = None,
+    semantic_config_id: str | None = None,
+    config_names: dict[str, str] | None = None,
+    model_files: dict[str, str] | None = None,
+    dimension_names: dict[str, set[str]] | None = None,
+    dimension_columns: dict[str, dict[str, str]] | None = None,
+) -> dict[str, Any]:
+    """search-around：以单个对象类型为中心沿关系「走一跳」的展开报告（纯函数，不触库）。
+
+    与 ``build_object_type_locator_report`` 的分层：locate 只给关系名文本（对端对象
+    类型名 + 失修标注），join 用什么物理列、对端对象里有什么，模型要再 grep YAML /
+    再调 locate——跨对象类型（2 跳）问题的定位成本逐跳放大。本报告对每条关系一次给出：
+
+    - ``join``：目录同源翻译的物理连接列（``from_columns_by_model``/``to_columns_by_model``，
+      多模型绑定时以 by_model 为准；任一列未解析标 ``unresolved: true``，须回读模型 YAML）；
+    - ``neighbor``：对端对象类型的完整定位条目（属性/绑定/映射/失修），其 ``relations``
+      只保留关系名列表提示下一跳，不递归展开——继续展开请以邻接对象为中心再次调用。
+
+    ``relation`` 可选过滤（只展开指定关系名，精准控量）；``dimension_columns`` 为
+    {semantic_config_id: {维度名: 物理列}}（调用方从启用模型 runtime configs 构建）。
+    返回 ``{"center", "hops", "not_found"}``：中心不可定位时 hops 为空并给候选。
+    """
+    if not isinstance(bundle, dict):
+        raise ValueError("本体 bundle 必须是对象")
+    name = str(object_type or "").strip()
+    if not name:
+        raise ValueError("object_type 不能为空：请传入中心对象类型 API 名")
+    indexes = _bundle_indexes(bundle)
+
+    obj = indexes.objects_by_name.get(name)
+    if not obj:
+        return {
+            "center": None,
+            "hops": [],
+            "not_found": [_not_found_entry(name, sorted(indexes.objects_by_name))],
+        }
+
+    obj_id = int(obj.get("id") or 0)
+    property_names, mapped_attrs = _center_context(
+        indexes,
+        obj_id,
+        semantic_config_id=str(semantic_config_id or "").strip(),
+        config_names=config_names,
+        model_files=model_files,
+        dimension_names=dimension_names,
+    )
+    hops: list[dict[str, Any]] = []
+    for rel in indexes.relations_by_object.get(obj_id, []):
+        hop = _search_around_hop(
+            rel,
+            obj_id,
+            indexes,
+            relation_filter=str(relation or "").strip(),
+            property_names=property_names,
+            mapped_attrs=mapped_attrs,
+            semantic_config_id=str(semantic_config_id or "").strip(),
+            config_names=config_names,
+            model_files=model_files,
+            dimension_names=dimension_names,
+            dimension_columns=dimension_columns,
+        )
+        if not hop:
+            continue
+        hops.append(hop)
+        if len(hops) >= _MAX_RELATIONS_PER_OBJECT:
+            break
+    return {
+        "center": {"object_type": name, "display_name": str(obj.get("display_name") or "")},
+        "hops": hops,
+        "not_found": [],
+    }
+
+
+def _not_found_entry(name: str, available: list[str]) -> dict[str, Any]:
+    """中心对象类型不可定位的 not_found 条目（与 locate 同口径：给可定位候选）。"""
+    return {
+        "object_type": name,
+        "reason": "对象类型不存在或未绑定本轮启用语义模型"
+        if available
+        else "当前启用语义模型没有绑定任何本体对象类型",
+        "available": _candidate_summary(available),
+    }
+
+
+def _center_context(
+    indexes: _BundleIndexes,
+    obj_id: int,
+    *,
+    semantic_config_id: str,
+    config_names: dict[str, str] | None,
+    model_files: dict[str, str] | None,
+    dimension_names: dict[str, set[str]] | None,
+) -> tuple[set[str], set[str]]:
+    """中心对象的（属性名集合, 已映射属性集合）：失修比对的比对基准。"""
+    properties = indexes.properties_by_object_type.get(obj_id, [])
+    property_names = {str(prop.get("property_name") or "").strip() for prop in properties}
+    property_names.discard("")
+    bindings = _object_bindings(
+        indexes.mappings_by_object.get(obj_id, []),
+        config_filter=semantic_config_id,
+        config_names=config_names,
+        model_files=model_files,
+        dimension_names=dimension_names,
+    )
+    mapped_attrs: set[str] = set()
+    for binding in bindings:
+        mapped_attrs.update(binding["column_mappings"])
+    return property_names, mapped_attrs
+
+
+def _search_around_hop(
+    rel: dict[str, Any],
+    obj_id: int,
+    indexes: _BundleIndexes,
+    *,
+    relation_filter: str,
+    property_names: set[str],
+    mapped_attrs: set[str],
+    semantic_config_id: str,
+    config_names: dict[str, str] | None,
+    model_files: dict[str, str] | None,
+    dimension_names: dict[str, set[str]] | None,
+    dimension_columns: dict[str, dict[str, str]] | None,
+) -> dict[str, Any] | None:
+    """单条关系的 hop 组装；对端不可知或未命中 relation 过滤时返回 None。"""
+    entry = _relation_entry(
+        rel,
+        obj_id,
+        indexes.object_type_names_by_id,
+        property_names=property_names,
+        mapped_attrs=mapped_attrs,
+    )
+    if not entry or (relation_filter and entry["relation"] != relation_filter):
+        return None
+    hop: dict[str, Any] = {
+        "relation": entry["relation"],
+        "direction": entry["direction"],
+        "multiplicity": entry["multiplicity"],
+    }
+    if entry.get("verbalize"):
+        hop["verbalize"] = entry["verbalize"]
+    if entry.get("stale"):
+        hop["stale"] = True
+        hop["stale_reason"] = entry["stale_reason"]
+    hop["join"] = _search_around_join(rel, indexes, dimension_columns)
+    hop["neighbor"] = _search_around_neighbor(
+        indexes,
+        entry["related_object"],
+        config_filter=semantic_config_id,
+        config_names=config_names,
+        model_files=model_files,
+        dimension_names=dimension_names,
+    )
+    return hop
+
+
+def _search_around_join(
+    rel: dict[str, Any],
+    indexes: _BundleIndexes,
+    dimension_columns: dict[str, dict[str, str]] | None,
+) -> dict[str, Any]:
+    """hop 的 join 块：目录同源翻译的物理连接列；只保留连接列相关键（关系名/方向/
+    口语化已在 hop 顶层，不重复透出）。"""
+    hop_full = render_relation_join(rel, indexes.object_type_names_by_id, indexes.mappings_by_object, dimension_columns)
+    join = {
+        key: hop_full[key]
+        for key in ("from_columns", "to_columns", "from_columns_by_model", "to_columns_by_model")
+        if hop_full.get(key) is not None
+    }
+    if hop_full.get("unresolved"):
+        join["unresolved"] = True
+    return join
+
+
+def _search_around_neighbor(
+    indexes: _BundleIndexes,
+    neighbor_name: str,
+    *,
+    config_filter: str,
+    config_names: dict[str, str] | None,
+    model_files: dict[str, str] | None,
+    dimension_names: dict[str, set[str]] | None,
+) -> dict[str, Any] | None:
+    """对端对象类型的完整定位条目；``relation_types`` 收敛为关系名列表（下一跳提示）。"""
+    neighbor_obj = indexes.objects_by_name.get(neighbor_name)
+    if not neighbor_obj:
+        return None
+    neighbor_id = int(neighbor_obj.get("id") or 0)
+    neighbor = _locate_entry(
+        neighbor_obj,
+        obj_id=neighbor_id,
+        mappings=indexes.mappings_by_object.get(neighbor_id, []),
+        properties=indexes.properties_by_object_type.get(neighbor_id, []),
+        relation_types=indexes.relations_by_object.get(neighbor_id, []),
+        config_filter=config_filter,
+        config_names=config_names,
+        model_files=model_files,
+        object_type_names_by_id=indexes.object_type_names_by_id,
+        dimension_names=dimension_names,
+    )
+    neighbor["relations"] = [
+        str(item.get("relation") or "") for item in neighbor.pop("relation_types", []) if str(item.get("relation") or "")
+    ]
+    return neighbor
+
+
+def build_search_around_usage_hint() -> str:
+    """search-around 报告的使用说明（一跳展开 → 直接 join → 继续展开再调用）。"""
+    return (
+        "每条 hop 的 join 给出物理连接列：单模型绑定用 from_columns/to_columns；多模型绑定以 "
+        "from_columns_by_model/to_columns_by_model 为准（键为 semantic_config_id）。unresolved=true 时该列未经验证，"
+        "join 前必须 file_read 对应模型 YAML 确认；hop 带 stale=true 或 neighbor 绑定 healthy=false 时不要使用该条目。"
+        "neighbor 是对端对象的完整定位条目（属性/绑定/映射），可先于 locate 使用；继续向更远对象展开时，以 neighbor 的 "
+        "object_type 为中心再次调用 search_around（relations 列出其对端关系名，可用 relation 参数精准展开其中一条）。"
+        "查询执行仍走 data_analyzing_tool 的 execute_query，SQL 模式按 join 列写关联。"
     )

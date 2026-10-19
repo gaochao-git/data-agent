@@ -160,6 +160,7 @@ describe('toolDisplay', () => {
   it('maps ontology_tool actions to Chinese names and leaves others empty', () => {
     expect(getOntologyActionName('list_object_types')).toBe('对象类型清单')
     expect(getOntologyActionName('locate_object_type')).toBe('对象定位')
+    expect(getOntologyActionName('search_around')).toBe('关系探索')
     expect(getOntologyActionName('unknown_action')).toBe('')
     expect(getOntologyActionName(null)).toBe('')
   })
@@ -169,6 +170,10 @@ describe('toolDisplay', () => {
       action: 'locate_object_type',
       action_payload: { object_types: ['order', 'user'] },
     })).toBe('order、user')
+    expect(getToolTechnicalDescription('ontology_tool', {
+      action: 'search_around',
+      action_payload: { object_type: 'order' },
+    })).toBe('order')
     expect(getToolTechnicalDescription('ontology_tool', { action: 'list_object_types', action_payload: {} })).toBe('')
     expect(getToolTechnicalDescription('ontology_tool', {})).toBe('')
   })

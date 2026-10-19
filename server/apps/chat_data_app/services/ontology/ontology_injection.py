@@ -83,6 +83,12 @@ def _config_dimension_columns(configs: list[dict[str, Any]] | None) -> dict[str,
     关系类型列翻译用：本体映射右值是模型维度名（概念层不重复定义物理列），
     目录渲染时经此索引把「属性 → 维度 → 物理列」翻译到物理列供 join 直接使用。
     """
+    return config_dimension_columns(configs)
+
+
+def config_dimension_columns(configs: list[dict[str, Any]] | None) -> dict[str, dict[str, str]]:
+    """``_config_dimension_columns`` 的公共入口：运行时消费方（search-around 等）
+    与目录渲染共用同一份「维度名 → 物理列」索引构建逻辑，保证翻译口径单源。"""
     index: dict[str, dict[str, str]] = {}
     for config in configs or []:
         config = config or {}
@@ -91,6 +97,18 @@ def _config_dimension_columns(configs: list[dict[str, Any]] | None) -> dict[str,
             continue
         index[config_id] = _dimension_column_map(config.get("dimensions"))
     return index
+
+
+def render_relation_join(
+    rel: dict[str, Any],
+    object_type_names: dict[int, str],
+    mappings_by_object: dict[int, list[dict[str, Any]]],
+    dimension_columns: dict[str, dict[str, str]] | None = None,
+) -> dict[str, Any]:
+    """``_render_relation_entry`` 的公共入口：目录与 search-around 共用同一份
+    关系条目渲染（对端名/方向/口语化 + 尽力翻译的物理连接列 + unresolved 标注），
+    保证两条消费链路的 join 口径单源。"""
+    return _render_relation_entry(rel, object_type_names, mappings_by_object, dimension_columns)
 
 
 def _group_by_object_type_id(items: list[dict[str, Any]] | None) -> dict[int, list[dict[str, Any]]]:

@@ -11,7 +11,10 @@
   绑定模型（含快照文件名）、属性→维度对照与对象类型间关系类型（含失修标注），供模型
   直接进入 data_analyzing_tool 的 execute_query（定位纯函数见
   services/ontology/object_type_locator.py，开关 ``CHAT_DATA_ONTOLOGY_LOCATE_ENABLED``
-  默认关闭）。
+  默认关闭）；
+- ``search_around``：以单个对象类型为中心沿关系走一跳——每条关系返回物理连接列
+  （目录同源翻译，多模型绑定以 by_model 为准，未解析标 unresolved）与对端对象完整
+  定位条目（其关系只留名字提示下一跳），跨对象类型关联不再靠模型 grep YAML 猜 join。
 
 入参契约与 ``data_analyzing_tool`` 同构：``action`` + ``action_payload``（结构随
 action 变化）+ ``intent``；payload 校验在工具实现入口经 ``validate_ontology_payload``
@@ -34,8 +37,11 @@ from apps.chat_data_app.services.ontology.object_type_locator import (
     build_object_list_report,
     build_object_list_usage_hint,
     build_object_type_locator_report,
+    build_search_around_report,
+    build_search_around_usage_hint,
     object_type_locator_enabled,
 )
+from apps.chat_data_app.services.ontology.ontology_injection import config_dimension_columns
 from apps.chat_data_app.services.semantic.run.semantic_config_service import (
     get_semantic_config_service,
 )
@@ -91,29 +97,53 @@ class _LocateObjectTypePayload(BaseModel):
     )
 
 
+class _SearchAroundPayload(BaseModel):
+    """``search_around`` 的入参结构：以单个对象类型为中心沿关系走一跳。
+
+    中心对象结构性收敛（⊆本轮启用语义模型绑定的对象类型）；``relation`` 可选
+    精准展开其中一条关系（控量），``semantic_config_id`` 可选过滤两端绑定。
+    """
+
+    object_type: str = Field(
+        ...,
+        description="中心对象类型 API 名（如 \"Order\"，单个）；通常是 locate_object_type 命中的对象",
+    )
+    relation: str | None = Field(
+        default=None,
+        description="可选；只展开指定关系名的那条关系（关系名来自 locate 返回的 relation_types 或上一次 search_around 的 neighbor.relations）",
+    )
+    semantic_config_id: str | None = Field(
+        default=None,
+        description="可选；只看绑定该语义模型的映射与连接列（多绑定对象类型据此过滤）",
+    )
+
+
 # action -> action_payload 校验模型。与 data_analyzing_tool 的同名机制一致：
 # 入参校验与 handler 内的解析共用一张表，保证两处口径一致。
 ONTOLOGY_ACTION_PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
     "list_object_types": _ListObjectTypesPayload,
     "locate_object_type": _LocateObjectTypePayload,
+    "search_around": _SearchAroundPayload,
 }
 
 
 class OntologyToolInput(BaseModel):
     """本体导航工具入参：按 ``action`` 分派，``action_payload`` 结构随 action 变化。
 
-    两个 action：``list_object_types`` 列出可定位本体对象类型（轻量清单，只读发现通道）、
-    ``locate_object_type`` 按本体对象类型批量定位语义模型（纯导航，不执行查询）。
+    三个 action：``list_object_types`` 列出可定位本体对象类型（轻量清单，只读发现通道）、
+    ``locate_object_type`` 按本体对象类型批量定位语义模型（纯导航，不执行查询）、
+    ``search_around`` 以单个对象类型为中心沿关系走一跳（返回物理连接列与对端完整定位条目）。
     action_payload 的校验在工具实现入口经 ``validate_ontology_payload`` 完成——不能放进
     model_validator：langgraph 的 ToolInvocationError 会过滤 loc 为空的校验错误，
     模型与用户都看不到原因；在工具函数体内抛错则走 ToolErrorMiddleware，详情完整可见。
     """
 
-    action: Literal["list_object_types", "locate_object_type"] = Field(
+    action: Literal["list_object_types", "locate_object_type", "search_around"] = Field(
         ...,
         description=(
             "操作类型：list_object_types 列出可定位本体对象类型（轻量清单：对象类型名/显示名/描述 + 各自绑定模型，不执行查询）；"
-            "locate_object_type 按本体对象类型批量定位语义模型（返回绑定模型/属性→维度对照/对象类型间关系类型，不执行查询）"
+            "locate_object_type 按本体对象类型批量定位语义模型（返回绑定模型/属性→维度对照/对象类型间关系类型，不执行查询）；"
+            "search_around 以单个对象类型为中心沿关系走一跳（返回物理连接列与对端对象完整定位条目，不执行查询）"
         ),
     )
     action_payload: dict[str, Any] = Field(
@@ -121,7 +151,8 @@ class OntologyToolInput(BaseModel):
         description=(
             "操作参数，结构随 action 变化："
             "list_object_types 传 {}；"
-            'locate_object_type 传 {"object_types": [<对象类型API名>...], "semantic_config_id": "可选，只看该模型的绑定"}'
+            'locate_object_type 传 {"object_types": [<对象类型API名>...], "semantic_config_id": "可选，只看该模型的绑定"}；'
+            'search_around 传 {"object_type": "<中心对象类型API名>", "relation": "可选，只展开该关系", "semantic_config_id": "可选"}'
         ),
     )
     intent: str = Field(
@@ -271,6 +302,56 @@ async def _run_list_object_types(
     )
 
 
+async def _run_search_around(
+    *,
+    payload: Any,
+    state: dict | None,
+    bound_datasource_id: str,
+    bound_user_id: str,
+) -> str:
+    """本体 search-around（``search_around`` action）：以单个对象类型为中心沿关系走一跳。
+
+    与 locate 同源同开关：bundle 按「本轮启用语义模型」加载；``dimension_columns``
+    从同一批启用模型 configs 构建（目录渲染同源的「维度名 → 物理列」索引），join
+    翻译口径与 _ontology_catalog.yaml 单源。定位不执行查询——join 列供模型直接写
+    关联 SQL。
+    """
+    if not object_type_locator_enabled():
+        raise ValueError("本体关系探索未启用：需设置环境变量 CHAT_DATA_ONTOLOGY_LOCATE_ENABLED=1")
+    state = state or {}
+    datasource_id = _get_datasource_id_from_state(state) or bound_datasource_id
+    if not datasource_id:
+        raise ValueError("当前会话未绑定数据源")
+    user_id = str(state.get("user_id") or "").strip() or bound_user_id
+
+    service = get_semantic_config_service()
+    configs = await service.get_configs_async(datasource_id, str(user_id or ""))
+    enabled_configs, enabled_ids = _locator_enabled_view(configs)
+    if not enabled_configs:
+        raise ValueError("当前数据源组没有启用语义模型，无法探索关系")
+    bundle = await OntologyDao().load_injection_bundle_async(enabled_ids)
+    config_names, model_files, dimension_names = _locator_model_index(enabled_ids, enabled_configs)
+
+    report = build_search_around_report(
+        bundle,
+        object_type=payload.object_type,
+        relation=payload.relation,
+        semantic_config_id=payload.semantic_config_id,
+        config_names=config_names,
+        model_files=model_files,
+        dimension_names=dimension_names,
+        dimension_columns=config_dimension_columns(enabled_configs),
+    )
+    return tool_result_payload(
+        ONTOLOGY_TOOL_NAME,
+        {
+            "success": True,
+            **report,
+            "usage": build_search_around_usage_hint(),
+        },
+    )
+
+
 async def _run_ontology_impl(
     action: str,
     action_payload: dict,
@@ -285,6 +366,13 @@ async def _run_ontology_impl(
 
     if action == "list_object_types":
         return await _run_list_object_types(
+            state=state,
+            bound_datasource_id=bound_datasource_id,
+            bound_user_id=bound_user_id,
+        )
+    if action == "search_around":
+        return await _run_search_around(
+            payload=payload,
             state=state,
             bound_datasource_id=bound_datasource_id,
             bound_user_id=bound_user_id,
@@ -315,15 +403,17 @@ def create_ontology_tool(
         intent: str = "",
     ) -> str:
         """
-        本体对象类型导航工具：按对象类型定位语义模型（纯导航，不执行查询）。适合「订单相关的数据在哪个模型里」「订单和用户怎么关联」这类业务对象导航问题；常规查数流程以 `data-analyzing` 技能为准。
+        本体对象类型导航工具：按对象类型定位语义模型、沿关系探索关联对象（纯导航，不执行查询）。适合「订单相关的数据在哪个模型里」「订单和用户怎么关联」「下单用户的地区分布」这类业务对象导航与跨对象关联问题；常规查数流程以 `data-analyzing` 技能为准。
 
         Args:
             action: 操作类型，枚举：
         - list_object_types: 列出可定位本体对象类型——轻量清单（对象类型API名/显示名/描述 + 各自绑定模型及快照文件名），不含属性与关系类型详情；范围限定为本轮启用语义模型绑定的对象类型
         - locate_object_type: 按本体对象类型批量定位语义模型——返回绑定模型（含快照文件名）、属性→维度对照、对象类型间关系类型与失修标注；纯导航不执行查询，可定位对象类型先用 list_object_types 获取
+        - search_around: 以单个对象类型为中心沿关系走一跳——每条关系返回物理连接列（from/to_columns，多模型绑定用 from/to_columns_by_model）与对端对象完整定位条目（属性/绑定/映射，其 relations 只留名字提示下一跳）；跨对象类型关联优先用它拿 join 列，不要靠 grep 模型 YAML 猜
             action_payload: 操作参数，结构随 action 变化：
         - list_object_types: {}（无参数，范围=本轮启用语义模型绑定的对象）
         - locate_object_type: {"object_types": [<对象API名>...]（单次最多10个）, "semantic_config_id": 可选只看该模型绑定}
+        - search_around: {"object_type": "<中心对象API名>", "relation": 可选只展开该关系名, "semantic_config_id": 可选}
             intent: 一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示。
         """
         return await _run_ontology_impl(
