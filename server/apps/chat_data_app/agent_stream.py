@@ -152,6 +152,26 @@ def _is_omlx_prefill_memory_rejected(exc: Exception) -> bool:
     return "prefill_memory_exceeded" in str(exc)
 
 
+def _extract_status_error_message(exc: Exception) -> str | None:
+    """从 APIStatusError 提取服务商 message 文本用于用户透出。
+
+    只取 body.error.message（body 为字符串时取原文），剥离 request_id 噪音；
+    空值或超长（>200 字符，防服务商透出大段内部诊断）返回 None，由调用方走
+    兜底文案。永不透出堆栈与响应原文全文。
+    """
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        error = body.get("error")
+        payload = error if isinstance(error, dict) else body
+        message = str(payload.get("message") or "").strip()
+    elif isinstance(body, str):
+        message = body.strip()
+    else:
+        return None
+    message = re.sub(r"\s*\(request_id[:：][^)]*\)", "", message, flags=re.IGNORECASE).strip()
+    return message if 0 < len(message) <= 200 else None
+
+
 def _model_failure_user_message(exc: Exception) -> str:
     """将模型服务异常映射为用户可读文案；不向用户透出原始错误细节。"""
     if isinstance(exc, openai.APITimeoutError):
@@ -170,6 +190,13 @@ def _model_failure_user_message(exc: Exception) -> str:
         # oMLX 内存护栏拒绝的 400：上下文体量超服务端推理内存上限，重试无效，
         # 引导用户缩减上下文而不是反复点击重试
         return "本轮对话上下文超出模型服务的内存上限，请新开会话，或减少本条消息引用的文件后重试。"
+    if isinstance(exc, openai.APIStatusError):
+        # 非枚举状态码（402 余额不足、403 配额、404 模型下线、5xx 网关错等）：
+        # 透出服务商 message（提取+护栏），取不到时走兜底。具体子类
+        # （超时/认证/限流）已在上方命中，不会进入本分支。
+        detail = _extract_status_error_message(exc)
+        if detail:
+            return f"模型服务返回错误：{detail}"
     return "智能问数执行失败，请稍后重试。"
 
 

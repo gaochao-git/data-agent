@@ -124,7 +124,7 @@ describe('generationStatsRows', () => {
       modelFirstTokenMs: 442,
     })
     expect(rows.map((row: GenerationStatsRow) => `${row.label}=${row.value}`)).toEqual([
-      '输入总token=12,205',
+      '输入总token=12.2k',
       '缓存命中=79.1%',
       '输出总token=602',
       'token速率=46 tok/s',
@@ -140,7 +140,7 @@ describe('generationStatsRows', () => {
     const withoutRate = generationStatsRows({
       outputTokens: 1842, durationMs: 12300, tokensPerSecond: 150, cachedInputTokens: 9650,
     })
-    expect(withoutRate[0]).toEqual({ label: '缓存命中', value: '9,650' })
+    expect(withoutRate[0]).toEqual({ label: '缓存命中', value: '9.7k' })
     const withoutCache = generationStatsRows({ outputTokens: 1842, durationMs: 12300, tokensPerSecond: 150 })
     expect(withoutCache.map((row: GenerationStatsRow) => row.label)).not.toContain('缓存命中')
   })
@@ -148,7 +148,7 @@ describe('generationStatsRows', () => {
   it('辅助字段缺失（老历史数据）时对应行省略，harness 总耗回退解码时长', () => {
     const rows = generationStatsRows({ outputTokens: 1842, durationMs: 12300, tokensPerSecond: 150 })
     expect(rows.map((row: GenerationStatsRow) => `${row.label}=${row.value}`)).toEqual([
-      '输出总token=1,842',
+      '输出总token=1.8k',
       'token速率=150 tok/s',
       'harness 总耗=12.3s',
     ])
@@ -157,7 +157,7 @@ describe('generationStatsRows', () => {
       outputTokens: 1842, durationMs: 12300, tokensPerSecond: 150, firstTokenMs: 2100, totalDurationMs: 15600,
     })
     expect(withTotal.map((row: GenerationStatsRow) => `${row.label}=${row.value}`)).toEqual([
-      '输出总token=1,842',
+      '输出总token=1.8k',
       'token速率=150 tok/s',
       'harness 首 token=2.1s',
       'harness 总耗=15.6s',
