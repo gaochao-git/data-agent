@@ -174,6 +174,38 @@ def _check_unmapped_properties(
     return findings
 
 
+def _prop_identifier_flags(properties: list[dict[str, Any]] | None) -> dict[str, bool]:
+    """属性列表 → {属性名: 是否标识属性}（缺属性名的条目跳过）。"""
+    return {
+        _text(prop.get("property_name")): bool(prop.get("is_identifier"))
+        for prop in properties or []
+        if _text(prop.get("property_name"))
+    }
+
+
+def _side_column_issues(
+    side: str,
+    object_type_name: str,
+    columns: list[Any],
+    prop_types: dict[str, bool],
+    mapped_attrs: set[str],
+) -> tuple[list[str], list[str]]:
+    """关系类型单侧列检查，返回 (失效列描述, to 侧非标识描述)。"""
+    invalid: list[str] = []
+    not_identifier: list[str] = []
+    for column in columns or []:
+        attr = _text(column)
+        if not attr:
+            continue
+        if attr not in prop_types:
+            invalid.append(f"{side} 侧「{object_type_name}.{attr}」不是该对象类型的属性")
+        elif attr not in mapped_attrs:
+            invalid.append(f"{side} 侧「{object_type_name}.{attr}」未映射到任何启用模型维度")
+        elif side == "to" and not prop_types[attr]:
+            not_identifier.append(f"「{object_type_name}.{attr}」")
+    return invalid, not_identifier
+
+
 def _relation_column_issues(
     relation: dict[str, Any],
     properties_by_object_type: dict[int, list[dict[str, Any]]],
@@ -196,23 +228,25 @@ def _relation_column_issues(
         object_type_name = object_type_names.get(object_type_id, "")
         if not object_type_name:
             continue
-        prop_types = {
-            _text(prop.get("property_name")): bool(prop.get("is_identifier"))
-            for prop in properties_by_object_type.get(object_type_id, [])
-            if _text(prop.get("property_name"))
-        }
-        mapped_attrs = mapped_attrs_by_object_type.get(object_type_id, set())
-        for column in columns or []:
-            attr = _text(column)
-            if not attr:
-                continue
-            if attr not in prop_types:
-                invalid.append(f"{side} 侧「{object_type_name}.{attr}」不是该对象类型的属性")
-            elif attr not in mapped_attrs:
-                invalid.append(f"{side} 侧「{object_type_name}.{attr}」未映射到任何启用模型维度")
-            elif side == "to" and not prop_types[attr]:
-                not_identifier.append(f"「{object_type_name}.{attr}」")
+        side_invalid, side_not_identifier = _side_column_issues(
+            side,
+            object_type_name,
+            columns,
+            _prop_identifier_flags(properties_by_object_type.get(object_type_id)),
+            mapped_attrs_by_object_type.get(object_type_id, set()),
+        )
+        invalid.extend(side_invalid)
+        not_identifier.extend(side_not_identifier)
     return invalid, not_identifier
+
+
+def _prop_value_types(properties: list[dict[str, Any]] | None) -> dict[str, str]:
+    """属性列表 → {属性名: value_type}（缺属性名的条目跳过）。"""
+    return {
+        _text(prop.get("property_name")): _text(prop.get("value_type"))
+        for prop in properties or []
+        if _text(prop.get("property_name"))
+    }
 
 
 def _relation_endpoint_type_issues(
@@ -227,26 +261,19 @@ def _relation_endpoint_type_issues(
     配对；任一侧属性缺失或类型不可归类时跳过（缺失由 ONT_REL_COLUMN_INVALID
     负责，不双报）。
     """
-
-    def _types(object_type_id: int) -> dict[str, str]:
-        return {
-            _text(prop.get("property_name")): _text(prop.get("value_type"))
-            for prop in properties_by_object_type.get(object_type_id, [])
-            if _text(prop.get("property_name"))
-        }
-
     from_id = int(relation.get("from_object_type_id") or 0)
     to_id = int(relation.get("to_object_type_id") or 0)
     from_name = object_type_names.get(from_id, "")
     to_name = object_type_names.get(to_id, "")
     if not from_name or not to_name:
         return []
-    from_types = _types(from_id)
-    to_types = _types(to_id)
+    from_types = _prop_value_types(properties_by_object_type.get(from_id))
+    to_types = _prop_value_types(properties_by_object_type.get(to_id))
     from_columns = [_text(column) for column in relation.get("from_columns") or []]
     to_columns = [_text(column) for column in relation.get("to_columns") or []]
     issues: list[str] = []
-    for from_col, to_col in zip(from_columns, to_columns):
+    # from/to_columns 按位置配对；长度漂移属数据失修，多余尾列自然截断（列失效由 ONT_REL_COLUMN_INVALID 负责）
+    for from_col, to_col in zip(from_columns, to_columns, strict=False):
         if not from_col or not to_col:
             continue
         from_category = _type_category_prop(from_types.get(from_col, ""))
@@ -259,59 +286,81 @@ def _relation_endpoint_type_issues(
     return issues
 
 
+def _mapped_attrs_by_object_type(mappings: list[Any] | None) -> dict[int, set[str]]:
+    """映射列表 → 对象类型 → 已映射属性名集合（来自 column_mappings 的左值）。"""
+    mapped: dict[int, set[str]] = {}
+    for mapping in mappings or []:
+        mapping = mapping or {}
+        object_type_id = int(mapping.get("object_type_id") or 0)
+        column_mappings = mapping.get("column_mappings")
+        if isinstance(column_mappings, dict):
+            mapped.setdefault(object_type_id, set()).update(
+                _text(key) for key in column_mappings if _text(key)
+            )
+    return mapped
+
+
+def _relation_health_findings(
+    relation: dict[str, Any],
+    properties_by_object_type: dict[int, list[dict[str, Any]]],
+    mapped_attrs_by_object_type: dict[int, set[str]],
+    object_type_names: dict[int, str],
+) -> list[dict[str, Any]]:
+    """单条关系类型的列健康 findings（失效列 / to 侧非标识 / 两端类型冲突）。"""
+    relation_type_name = _text(relation.get("relation_type_name"))
+    invalid, not_identifier = _relation_column_issues(
+        relation, properties_by_object_type, mapped_attrs_by_object_type, object_type_names
+    )
+    endpoint_type_issues = _relation_endpoint_type_issues(relation, properties_by_object_type, object_type_names)
+    findings: list[dict[str, Any]] = []
+    if invalid:
+        findings.append(
+            _make_finding(
+                "ONT_REL_COLUMN_INVALID",
+                f"本体关系类型「{relation_type_name}」存在 {len(invalid)} 个失效关系类型列：{_join_items(invalid)}"
+                "（join 路径不可用，AI 导航到该关系类型将无法翻译为物理列）",
+                [relation_type_name],
+            )
+        )
+    if not_identifier:
+        findings.append(
+            _make_finding(
+                "ONT_REL_TO_NOT_IDENTIFIER",
+                f"本体关系类型「{relation_type_name}」的 to 侧列引用了非标识属性：{_join_items(not_identifier)}"
+                "（Ossie 规范要求 to_columns 为主/唯一键，非标识属性做 join 语义不可靠）",
+                [relation_type_name],
+            )
+        )
+    if endpoint_type_issues:
+        findings.append(
+            _make_finding(
+                "ONT_REL_ENDPOINT_TYPE",
+                f"本体关系类型「{relation_type_name}」存在 {len(endpoint_type_issues)} 对 join 属性类型语义冲突："
+                f"{_join_items(endpoint_type_issues)}"
+                "（官方硬约束：关系类型两端 join 属性类型必须一致，类别冲突的 join 语义与索引利用不可靠）",
+                [relation_type_name],
+            )
+        )
+    return findings
+
+
 def _check_relations(
     bundle: dict[str, Any],
     object_type_names: dict[int, str],
 ) -> list[dict[str, Any]]:
     """ONT_REL_COLUMN_INVALID + ONT_REL_TO_NOT_IDENTIFIER + ONT_REL_ENDPOINT_TYPE：关系类型列健康巡检。"""
     properties_by_object_type = _group_by_object_type_id(bundle.get("properties"))
-    mapped_attrs_by_object_type: dict[int, set[str]] = {}
-    for mapping in bundle.get("mappings") or []:
-        mapping = mapping or {}
-        object_type_id = int(mapping.get("object_type_id") or 0)
-        column_mappings = mapping.get("column_mappings")
-        if isinstance(column_mappings, dict):
-            mapped_attrs_by_object_type.setdefault(object_type_id, set()).update(
-                _text(key) for key in column_mappings if _text(key)
-            )
+    mapped_attrs_by_object_type = _mapped_attrs_by_object_type(bundle.get("mappings"))
     findings: list[dict[str, Any]] = []
     for relation in bundle.get("relation_types") or []:
         relation = relation or {}
-        relation_type_name = _text(relation.get("relation_type_name"))
-        if not relation_type_name:
+        if not _text(relation.get("relation_type_name")):
             continue
-        invalid, not_identifier = _relation_column_issues(
-            relation, properties_by_object_type, mapped_attrs_by_object_type, object_type_names
+        findings.extend(
+            _relation_health_findings(
+                relation, properties_by_object_type, mapped_attrs_by_object_type, object_type_names
+            )
         )
-        endpoint_type_issues = _relation_endpoint_type_issues(relation, properties_by_object_type, object_type_names)
-        if invalid:
-            findings.append(
-                _make_finding(
-                    "ONT_REL_COLUMN_INVALID",
-                    f"本体关系类型「{relation_type_name}」存在 {len(invalid)} 个失效关系类型列：{_join_items(invalid)}"
-                    "（join 路径不可用，AI 导航到该关系类型将无法翻译为物理列）",
-                    [relation_type_name],
-                )
-            )
-        if not_identifier:
-            findings.append(
-                _make_finding(
-                    "ONT_REL_TO_NOT_IDENTIFIER",
-                    f"本体关系类型「{relation_type_name}」的 to 侧列引用了非标识属性：{_join_items(not_identifier)}"
-                    "（Ossie 规范要求 to_columns 为主/唯一键，非标识属性做 join 语义不可靠）",
-                    [relation_type_name],
-                )
-            )
-        if endpoint_type_issues:
-            findings.append(
-                _make_finding(
-                    "ONT_REL_ENDPOINT_TYPE",
-                    f"本体关系类型「{relation_type_name}」存在 {len(endpoint_type_issues)} 对 join 属性类型语义冲突："
-                    f"{_join_items(endpoint_type_issues)}"
-                    "（官方硬约束：关系类型两端 join 属性类型必须一致，类别冲突的 join 语义与索引利用不可靠）",
-                    [relation_type_name],
-                )
-            )
     return findings
 
 
@@ -333,6 +382,27 @@ def _type_category_dim(logical_type: str) -> str:
     if logical_type in _DIM_STRING:
         return "string"
     return ""
+
+
+def _mapping_type_mismatches(
+    column_mappings: dict[Any, Any],
+    prop_types: dict[str, str],
+    dims: dict[str, str],
+) -> list[str]:
+    """单条映射内的类型语义冲突描述（属性类别 vs 维度类别，按属性名排序保证确定性）。"""
+    mismatches: list[str] = []
+    for prop, dim in sorted(column_mappings.items()):
+        prop_name = _text(prop)
+        dim_name = _text(dim)
+        if not prop_name or dim_name not in dims:
+            continue
+        prop_category = _type_category_prop(prop_types.get(prop_name, ""))
+        dim_category = _type_category_dim(dims[dim_name])
+        if prop_category and dim_category and prop_category != dim_category:
+            mismatches.append(
+                f"{prop_name}({prop_types.get(prop_name, '?')})→{dim_name}({dims[dim_name]})"
+            )
+    return mismatches
 
 
 def _check_type_mismatches(
@@ -359,23 +429,11 @@ def _check_type_mismatches(
         column_mappings = mapping.get("column_mappings")
         if not isinstance(column_mappings, dict):
             continue
-        prop_types = {
-            _text(prop.get("property_name")): _text(prop.get("value_type"))
-            for prop in properties_by_object_type.get(object_type_id, [])
-            if _text(prop.get("property_name"))
-        }
-        mismatches: list[str] = []
-        for prop, dim in sorted(column_mappings.items()):
-            prop_name = _text(prop)
-            dim_name = _text(dim)
-            if not prop_name or dim_name not in dims:
-                continue
-            prop_category = _type_category_prop(prop_types.get(prop_name, ""))
-            dim_category = _type_category_dim(dims[dim_name])
-            if prop_category and dim_category and prop_category != dim_category:
-                mismatches.append(
-                    f"{prop_name}({prop_types.get(prop_name, '?')})→{dim_name}({dims[dim_name]})"
-                )
+        mismatches = _mapping_type_mismatches(
+            column_mappings,
+            _prop_value_types(properties_by_object_type.get(object_type_id)),
+            dims,
+        )
         if mismatches:
             findings.append(
                 _make_finding(
@@ -386,6 +444,21 @@ def _check_type_mismatches(
                 )
             )
     return findings
+
+
+def _groups_by_object_type(
+    mappings: list[Any] | None,
+    config_group_ids: dict[str, str],
+) -> dict[int, set[str]]:
+    """映射列表 → 对象类型 → 所属数据源组集合（组不可知的映射跳过）。"""
+    groups: dict[int, set[str]] = {}
+    for mapping in mappings or []:
+        mapping = mapping or {}
+        object_type_id = int(mapping.get("object_type_id") or 0)
+        group = _text(config_group_ids.get(_text(mapping.get("semantic_config_id"))))
+        if object_type_id and group:
+            groups.setdefault(object_type_id, set()).add(group)
+    return groups
 
 
 def _check_relation_cross_source(
@@ -400,13 +473,7 @@ def _check_relation_cross_source(
     """
     if not config_group_ids:
         return []
-    groups_by_object_type: dict[int, set[str]] = {}
-    for mapping in bundle.get("mappings") or []:
-        mapping = mapping or {}
-        object_type_id = int(mapping.get("object_type_id") or 0)
-        group = _text((config_group_ids or {}).get(_text(mapping.get("semantic_config_id"))))
-        if object_type_id and group:
-            groups_by_object_type.setdefault(object_type_id, set()).add(group)
+    groups_by_object_type = _groups_by_object_type(bundle.get("mappings"), config_group_ids)
     findings: list[dict[str, Any]] = []
     for relation in bundle.get("relation_types") or []:
         relation = relation or {}

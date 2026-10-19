@@ -284,6 +284,25 @@ def build_object_type_locator_report(
     return {"object_types": located, "not_found": not_found}
 
 
+def _stale_reason(
+    own_columns: list[Any],
+    property_names: set[str],
+    mapped_attrs: set[str] | None,
+) -> str | None:
+    """本侧关系类型列的失修原因；全部列健康时返回 None。
+
+    属性不存在（模型/目录漂移）或未映射到任何启用模型维度（翻译断链）均视为失修。
+    """
+    broken: list[str] = []
+    for column in own_columns or []:
+        attr = str(column).strip()
+        if not attr:
+            continue
+        if attr not in property_names or (mapped_attrs is not None and attr not in mapped_attrs):
+            broken.append(attr)
+    return f"本侧关系类型列未映射或不存在：{('、'.join(broken))}" if broken else None
+
+
 def _relation_entry(
     relation: dict[str, Any],
     obj_id: int,
@@ -301,29 +320,27 @@ def _relation_entry(
     """
     from_id = int(relation.get("from_object_type_id") or 0)
     to_id = int(relation.get("to_object_type_id") or 0)
-    is_from = from_id == obj_id
-    other = object_type_names_by_id.get(to_id if is_from else from_id, "")
+    if from_id == obj_id:
+        other_id, direction, verbalize_key, columns_key = to_id, "from", "from_verbalize", "from_columns"
+    else:
+        other_id, direction, verbalize_key, columns_key = from_id, "to", "to_verbalize", "to_columns"
+    other = object_type_names_by_id.get(other_id, "")
     if not other:
         return None
-    verbalize = str(relation.get("from_verbalize" if is_from else "to_verbalize") or "")
     entry: dict[str, Any] = {
         "relation": str(relation.get("relation_type_name") or ""),
         "related_object": other,
-        "direction": "from" if is_from else "to",
+        "direction": direction,
         "multiplicity": str(relation.get("multiplicity") or ""),
     }
+    verbalize = str(relation.get(verbalize_key) or "")
     if verbalize:
         entry["verbalize"] = verbalize
-    own_columns = relation.get("from_columns" if is_from else "to_columns") or []
     if property_names is not None:
-        broken = [
-            attr
-            for attr in (str(column).strip() for column in own_columns)
-            if attr and (attr not in property_names or (mapped_attrs is not None and attr not in mapped_attrs))
-        ]
-        if broken:
+        stale = _stale_reason(relation.get(columns_key) or [], property_names, mapped_attrs)
+        if stale:
             entry["stale"] = True
-            entry["stale_reason"] = f"本侧关系类型列未映射或不存在：{('、'.join(broken))}"
+            entry["stale_reason"] = stale
     return entry
 
 
@@ -364,6 +381,34 @@ def build_locator_usage_hint() -> str:
     )
 
 
+def _mappings_index(bundle: dict[str, Any]) -> dict[int, list[dict[str, Any]]]:
+    """bundle.mappings 按对象类型分组（对象类型 → 映射列表）。"""
+    index: dict[int, list[dict[str, Any]]] = {}
+    for mapping in bundle.get("mappings") or []:
+        mapping = mapping or {}
+        index.setdefault(int(mapping.get("object_type_id") or 0), []).append(mapping)
+    return index
+
+
+def _object_binding_models(
+    mappings: list[dict[str, Any]],
+    config_names: dict[str, str],
+    model_files: dict[str, str],
+) -> list[dict[str, str]]:
+    """对象类型的绑定模型条目（id/名/快照文件名），按模型 id 升序。"""
+    models = [
+        {
+            "semantic_config_id": config_id,
+            "model_name": str(config_names.get(config_id) or ""),
+            "model_file": str(model_files.get(config_id) or ""),
+        }
+        for mapping in mappings
+        if (config_id := str(mapping.get("semantic_config_id") or "").strip())
+    ]
+    models.sort(key=lambda item: item["semantic_config_id"])
+    return models
+
+
 def build_object_list_report(
     bundle: dict[str, Any],
     *,
@@ -381,35 +426,21 @@ def build_object_list_report(
         raise ValueError("本体 bundle 必须是对象")
     config_names = config_names or {}
     model_files = model_files or {}
-    mappings_by_object: dict[int, list[dict[str, Any]]] = {}
-    for mapping in bundle.get("mappings") or []:
-        mapping = mapping or {}
-        mappings_by_object.setdefault(int(mapping.get("object_type_id") or 0), []).append(mapping)
+    mappings_by_object = _mappings_index(bundle)
     entries: list[dict[str, Any]] = []
     for obj in sorted(bundle.get("object_types") or [], key=lambda item: str((item or {}).get("object_type_name") or "")):
         obj = obj or {}
         obj_name = str(obj.get("object_type_name") or "").strip()
         if not obj_name:
             continue
-        models: list[dict[str, str]] = []
-        for mapping in mappings_by_object.get(int(obj.get("id") or 0), []):
-            config_id = str(mapping.get("semantic_config_id") or "").strip()
-            if not config_id:
-                continue
-            models.append(
-                {
-                    "semantic_config_id": config_id,
-                    "model_name": str(config_names.get(config_id) or ""),
-                    "model_file": str(model_files.get(config_id) or ""),
-                }
-            )
-        models.sort(key=lambda item: item["semantic_config_id"])
         entries.append(
             {
                 "object_type": obj_name,
                 "display_name": str(obj.get("display_name") or ""),
                 "description": str(obj.get("description") or ""),
-                "models": models,
+                "models": _object_binding_models(
+                    mappings_by_object.get(int(obj.get("id") or 0), []), config_names, model_files
+                ),
             }
         )
     return {"count": len(entries), "object_types": entries}

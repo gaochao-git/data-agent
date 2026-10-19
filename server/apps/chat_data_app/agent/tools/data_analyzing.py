@@ -686,6 +686,36 @@ async def _run_list_execution_targets(
 # ---------------------------------------------------------------------------
 
 
+def _locator_enabled_view(configs: list[dict]) -> tuple[list[dict], list[str]]:
+    """按启用候选集过滤语义配置，返回 (启用配置列表, 对应 id 列表)，顺序一致。"""
+    enabled_id_set = set(enabled_candidate_ids(configs))
+    enabled_configs = [config for config in configs if str((config or {}).get("id") or "") in enabled_id_set]
+    enabled_ids = [str(config.get("id")) for config in enabled_configs]
+    return enabled_configs, enabled_ids
+
+
+def _locator_model_index(
+    enabled_ids: list[str],
+    enabled_configs: list[dict],
+) -> tuple[dict[str, str], dict[str, str], dict[str, set[str]]]:
+    """启用模型的三张索引：id→显示名、id→模型快照文件名、id→维度名集合。
+
+    维度名集合同时是失修比对基准：映射右值（模型维度名）不在集合内即标 stale。
+    """
+    config_names: dict[str, str] = {}
+    model_files: dict[str, str] = {}
+    dimension_names: dict[str, set[str]] = {}
+    for config_id, config in zip(enabled_ids, enabled_configs, strict=True):
+        config_names[config_id] = str(config.get("name") or config.get("semantic_config_name") or "")
+        model_files[config_id] = model_snapshot_file_name(config)
+        dimension_names[config_id] = {
+            str((dim or {}).get("name") or "").strip()
+            for dim in (config.get("dimensions") or [])
+            if str((dim or {}).get("name") or "").strip()
+        }
+    return config_names, model_files, dimension_names
+
+
 async def _run_locate_object_type(
     *,
     payload: Any,
@@ -710,34 +740,19 @@ async def _run_locate_object_type(
 
     service = get_semantic_config_service()
     configs = await service.get_configs_async(datasource_id, str(user_id or ""))
-    enabled_id_set = set(enabled_candidate_ids(configs))
-    enabled_configs = [config for config in configs if str((config or {}).get("id") or "") in enabled_id_set]
+    enabled_configs, enabled_ids = _locator_enabled_view(configs)
     if not enabled_configs:
         raise ValueError("当前数据源组没有启用语义模型，无法定位对象")
-    enabled_ids = [str(config.get("id")) for config in enabled_configs]
     bundle = await OntologyDao().load_injection_bundle_async(enabled_ids)
+    config_names, model_files, dimension_names = _locator_model_index(enabled_ids, enabled_configs)
 
     report = build_object_type_locator_report(
         bundle,
         object_type_names=payload.object_types,
-        config_names={
-            config_id: str(config.get("name") or config.get("semantic_config_name") or "")
-            for config_id, config in zip(enabled_ids, enabled_configs, strict=True)
-        },
-        model_files={
-            config_id: model_snapshot_file_name(config)
-            for config_id, config in zip(enabled_ids, enabled_configs, strict=True)
-        },
+        config_names=config_names,
+        model_files=model_files,
         semantic_config_id=payload.semantic_config_id,
-        # 失修比对基准：启用模型当前维度名集合（映射右值不在集合内即标 stale）
-        dimension_names={
-            config_id: {
-                str((dim or {}).get("name") or "").strip()
-                for dim in (config.get("dimensions") or [])
-                if str((dim or {}).get("name") or "").strip()
-            }
-            for config_id, config in zip(enabled_ids, enabled_configs, strict=True)
-        },
+        dimension_names=dimension_names,
     )
     return tool_result_payload(
         DATA_ANALYZING_TOOL_NAME,
@@ -771,23 +786,16 @@ async def _run_list_object_types(
 
     service = get_semantic_config_service()
     configs = await service.get_configs_async(datasource_id, str(user_id or ""))
-    enabled_id_set = set(enabled_candidate_ids(configs))
-    enabled_configs = [config for config in configs if str((config or {}).get("id") or "") in enabled_id_set]
+    enabled_configs, enabled_ids = _locator_enabled_view(configs)
     if not enabled_configs:
         raise ValueError("当前数据源组没有启用语义模型，无对象可列")
-    enabled_ids = [str(config.get("id")) for config in enabled_configs]
     bundle = await OntologyDao().load_injection_bundle_async(enabled_ids)
+    config_names, model_files, _ = _locator_model_index(enabled_ids, enabled_configs)
 
     report = build_object_list_report(
         bundle,
-        config_names={
-            config_id: str(config.get("name") or config.get("semantic_config_name") or "")
-            for config_id, config in zip(enabled_ids, enabled_configs, strict=True)
-        },
-        model_files={
-            config_id: model_snapshot_file_name(config)
-            for config_id, config in zip(enabled_ids, enabled_configs, strict=True)
-        },
+        config_names=config_names,
+        model_files=model_files,
     )
     return tool_result_payload(
         DATA_ANALYZING_TOOL_NAME,

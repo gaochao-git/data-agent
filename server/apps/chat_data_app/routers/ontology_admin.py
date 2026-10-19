@@ -295,6 +295,45 @@ async def change_ontology_relation_status(
         return _error_response(e, "本体关系类型状态变更失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
 
 
+def _domain_group_ids(domains: list[dict] | None) -> list[str]:
+    """领域列表 → 挂载的数据源组 ID（去空去重，升序）。"""
+    return sorted(
+        {str((domain or {}).get("group_id") or "").strip() for domain in domains or []} - {""}
+    )
+
+
+async def _collect_consistency_scope(
+    group_ids: list[str],
+) -> tuple[list[dict], dict[str, str], set[str]]:
+    """一致性检查比较域收集：各组公共语义配置去重合并。
+
+    返回 (configs, {config_id: group_id}, config_ids)——比较域 = 全部领域挂载的
+    数据源组下的公共语义配置。
+    """
+    service = get_semantic_config_service()
+    configs: list[dict] = []
+    config_group_ids: dict[str, str] = {}
+    seen_config_ids: set[str] = set()
+    for group_id in group_ids:
+        for config in await service.get_configs_async(group_id) or []:
+            config_id = str((config or {}).get("id") or "").strip()
+            if config_id and config_id not in seen_config_ids and is_public_semantic_config(config):
+                seen_config_ids.add(config_id)
+                configs.append(config)
+                config_group_ids[config_id] = group_id
+    return configs, config_group_ids, seen_config_ids
+
+
+def _severity_summary(findings: list[dict]) -> dict[str, int]:
+    """findings 按 severity 计数（仅 error/warning/info 三档）。"""
+    summary = {"error": 0, "warning": 0, "info": 0}
+    for finding in findings:
+        severity = str(finding.get("severity") or "")
+        if severity in summary:
+            summary[severity] += 1
+    return summary
+
+
 @router.get("/admin/meta/ontology/consistency-check")
 async def check_ontology_model_consistency(request: Request) -> JSONResponse:
     """本体↔语义模型一致性健康巡检（管理端手动触发）。
@@ -306,31 +345,11 @@ async def check_ontology_model_consistency(request: Request) -> JSONResponse:
     """
     try:
         _get_current_user(request)
-        group_ids = sorted(
-            {
-                str((domain or {}).get("group_id") or "").strip()
-                for domain in await ontology_service.list_domains_async()
-            }
-            - {""}
-        )
-        service = get_semantic_config_service()
-        configs: list[dict] = []
-        config_group_ids: dict[str, str] = {}
-        seen_config_ids: set[str] = set()
-        for group_id in group_ids:
-            for config in await service.get_configs_async(group_id) or []:
-                config_id = str((config or {}).get("id") or "").strip()
-                if config_id and config_id not in seen_config_ids and is_public_semantic_config(config):
-                    seen_config_ids.add(config_id)
-                    configs.append(config)
-                    config_group_ids[config_id] = group_id
+        group_ids = _domain_group_ids(await ontology_service.list_domains_async())
+        configs, config_group_ids, seen_config_ids = await _collect_consistency_scope(group_ids)
         bundle = await OntologyDao().load_injection_bundle_async(sorted(seen_config_ids)) if seen_config_ids else {}
         findings = _run_consistency_check(bundle, configs, config_group_ids=config_group_ids)
-        summary = {"error": 0, "warning": 0, "info": 0}
-        for finding in findings:
-            severity = str(finding.get("severity") or "")
-            if severity in summary:
-                summary[severity] += 1
+        summary = _severity_summary(findings)
         return business_response(
             data={
                 "group_count": len(group_ids),
