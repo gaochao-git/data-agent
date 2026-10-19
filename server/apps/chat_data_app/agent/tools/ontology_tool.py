@@ -326,7 +326,7 @@ def create_ontology_tool(
         - locate_object_type: {"object_types": [<对象API名>...]（单次最多10个）, "semantic_config_id": 可选只看该模型绑定}
             intent: 一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示。
         """
-        return await _run_onto_impl(
+        return await _run_ontology_impl(
             action,
             action_payload,
             state,
