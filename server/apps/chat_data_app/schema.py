@@ -1112,54 +1112,25 @@ class _ListExecutionTargetsActionPayload(BaseModel):
     """
 
 
-class _ListOntologyObjectTypesActionPayload(BaseModel):
-    """``list_object_types`` 的入参结构：列出可定位本体对象类型（轻量清单，只读发现通道）。
-
-    无业务参数：范围由服务端结构性收敛（⊆本轮启用语义模型绑定的对象类型），
-    模型不可指定、也不可扩大——与 list_execution_targets 同一防越权口径。
-    """
-
-
-class _LocateObjectTypeActionPayload(BaseModel):
-    """``locate_object_type`` 的入参结构：按本体对象类型批量定位语义模型（纯导航，不执行查询）。
-
-    可定位对象类型结构性收敛（⊆本轮启用模型绑定的对象类型）；返回绑定模型（含快照
-    文件名）、属性→维度对照与对象类型间关系类型，供 AI 直接进入 execute_query，省掉
-    grep/精读模型 YAML 的定位轮次。
-    """
-
-    object_types: list[str] = Field(
-        ...,
-        min_length=1,
-        description='本体对象类型 API 名列表（如 ["Customer", "Order"]），单次最多 10 个；必须是绑定本轮启用语义模型的对象类型',
-    )
-    semantic_config_id: str | None = Field(
-        default=None,
-        description="可选；只看对象类型在该语义模型上的绑定（多绑定对象类型据此过滤）",
-    )
-
-
 # action -> action_payload 校验模型。新增 action 时在此登记对应 payload 模型，
 # 入参校验与 handler 内的解析共用同一张表，保证两处口径一致。
+# 本体导航 action（list_object_types / locate_object_type）已于 2026-10-19 拆分至
+# 独立工具 ontology_tool（payload 模型随迁 agent/tools/ontology_tool.py），不再在此登记。
 DATA_ANALYZING_ACTION_PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
     "validate_dsl": _ValidateDslActionPayload,
     "validate_dashboard": _ValidateDashboardActionPayload,
     "execute_query": SemanticQueryInput,
     "check_yaml": _CheckYamlActionPayload,
     "list_execution_targets": _ListExecutionTargetsActionPayload,
-    "list_object_types": _ListOntologyObjectTypesActionPayload,
-    "locate_object_type": _LocateObjectTypeActionPayload,
 }
 
 
 class DataAnalyzingInput(BaseModel):
     """数据分析工具入参：按 ``action`` 分派，``action_payload`` 结构随 action 变化。
 
-    七个 action：``validate_dsl`` / ``validate_dashboard`` 校验（不执行）、
+    五个 action：``validate_dsl`` / ``validate_dashboard`` 校验（不执行）、
     ``execute_query`` 执行查询（DSL 或 SQL 二选一）、``check_yaml`` 语义模型 YAML 自检、
-    ``list_execution_targets`` 实时获取可用执行对象（只读发现通道）、
-    ``list_object_types`` 列出可定位本体对象类型（轻量清单，只读发现通道）、
-    ``locate_object_type`` 按本体对象类型批量定位语义模型（纯导航，不执行查询）。
+    ``list_execution_targets`` 实时获取可用执行对象（只读发现通道）。
     action_payload 不平铺成顶层字段（后续扩展 action 只加 payload 模型即可），
     payload 的跨字段校验在工具实现入口经 ``validate_data_analyzing_payload`` 完成——
     不能放进 model_validator：langgraph 的 ToolInvocationError 会过滤 loc 为空的
@@ -1173,17 +1144,13 @@ class DataAnalyzingInput(BaseModel):
         "execute_query",
         "check_yaml",
         "list_execution_targets",
-        "list_object_types",
-        "locate_object_type",
     ] = Field(
         ...,
         description=(
             "操作类型：validate_dsl 校验单个查询 DSL 并返回编译后 SQL（不执行）；"
             "validate_dashboard 批量校验完整 dashboard_spec 的所有卡片；"
             "execute_query 执行查询（DSL 或 SQL 二选一）；check_yaml 语义模型 YAML 交付前自检；"
-            "list_execution_targets 实时获取当前用户可用执行对象清单；"
-            "list_object_types 列出可定位本体对象类型（轻量清单：对象类型名/显示名/描述 + 各自绑定模型，不执行查询）；"
-            "locate_object_type 按本体对象类型批量定位语义模型（返回绑定模型/属性→维度对照/对象类型间关系类型，不执行查询）"
+            "list_execution_targets 实时获取当前用户可用执行对象清单"
         ),
     )
     action_payload: dict[str, Any] = Field(
@@ -1196,9 +1163,7 @@ class DataAnalyzingInput(BaseModel):
             'execute_query 传 {"dsl": <完整语义DSL> 或 "sql": "...", "semantic_config_id": "...", '
             '"member_datasource_ids": ["<ID>"]}（member_datasource_ids 必须是 ID 字符串数组，单个机构也传数组）；'
             'check_yaml 传 {"file_path": "/mnt/user-data/workspace/model.yaml"}；'
-            "list_execution_targets 传 {}；"
-            "list_object_types 传 {}；"
-            'locate_object_type 传 {"object_types": [<对象类型API名>...], "semantic_config_id": "可选，只看该模型的绑定"}'
+            "list_execution_targets 传 {}"
         ),
     )
     intent: str = Field(

@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import type { PropType } from 'vue'
 import type { ToolCallInfo } from '../../types'
-import { getToolCompactDescription, getToolDisplayName, getDataAnalyzingActionName, formatToolDuration, formatToolTimingText, parseFileDiffResult, isFileDiffOffloaded } from '../../utils/toolDisplay'
+import { getToolCompactDescription, getToolDisplayName, getDataAnalyzingActionName, getOntologyActionName, formatToolDuration, formatToolTimingText, parseFileDiffResult, isFileDiffOffloaded } from '../../utils/toolDisplay'
 import FileDiffViewer from '../FileDiffViewer.vue'
 
 // 注意：Props 用运行时声明 + PropType（不用外部类型做 defineProps<T> 泛型），
@@ -30,12 +30,15 @@ const prettyJsonIfPossible = (raw: string): string => {
 
 // 标题链：后端下发展示名（MCP tool_labels）优先，内置映射/限定名兜底，与 ToolCallCard 口径一致
 const toolDisplayName = computed(() => props.toolCall?.display_name?.trim() || getToolDisplayName(props.toolCall?.tool_name))
-// 数据分析合并工具在标题露出动作中文名（如「语义模型自检」），只看卡片名分不清具体动作
+// 合并工具/本体导航工具在标题露出动作中文名（如「语义模型自检」「对象定位」），只看卡片名分不清具体动作
 const toolActionName = computed(() => {
   const toolCall = props.toolCall
-  if (!toolCall || toolCall.tool_name !== 'data_analyzing_tool') return ''
+  if (!toolCall) return ''
   const action = (toolCall.args as Record<string, unknown> | undefined)?.action
-  return getDataAnalyzingActionName(typeof action === 'string' ? action : null)
+  const actionName = typeof action === 'string' ? action : null
+  if (toolCall.tool_name === 'data_analyzing_tool') return getDataAnalyzingActionName(actionName)
+  if (toolCall.tool_name === 'ontology_tool') return getOntologyActionName(actionName)
+  return ''
 })
 const toolDescription = computed(() => {
   const toolCall = props.toolCall

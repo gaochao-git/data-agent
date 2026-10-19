@@ -1,5 +1,6 @@
 const TOOL_DISPLAY_NAMES: Record<string, string> = {
   data_analyzing_tool: '数据分析',
+  ontology_tool: '本体导航',
   calculator_tool: '精确计算',
   file_read: '读取文件',
   file_glob: '查找文件',
@@ -133,6 +134,26 @@ export function isDataAnalyzingTool(toolName?: string | null): boolean {
   return String(toolName || '').trim() === 'data_analyzing_tool'
 }
 
+/** ontology_tool 的动作中文名。 */
+const ONTOLOGY_ACTION_NAMES: Record<string, string> = {
+  list_object_types: '对象类型清单',
+  locate_object_type: '对象定位',
+}
+
+/** 本体导航工具的动作中文名；非本体导航工具或未知动作返回空串。 */
+export function getOntologyActionName(action?: string | null): string {
+  const key = String(action || '').trim()
+  return ONTOLOGY_ACTION_NAMES[key] || ''
+}
+
+const ontologyDescription: DescriptionBuilder = (args) => {
+  const payload = (args.action_payload || {}) as ToolArgs
+  const types = payload.object_types
+  return Array.isArray(types) && types.length > 0
+    ? compactInlineText(types.map(item => String(item || '').trim()).filter(Boolean).join('、'))
+    : ''
+}
+
 const dataAnalyzingDescription: DescriptionBuilder = (args) => {
   const action = String(args.action || '').trim()
   if (action === 'execute_query') return normalizeVisiblePath((args.action_payload as ToolArgs)?.save_as)
@@ -157,6 +178,7 @@ const TOOL_DESCRIPTION_BUILDERS: Record<string, DescriptionBuilder> = {
   read_image: filePathDescription,
   present_artifacts: presentArtifactsDescription,
   data_analyzing_tool: dataAnalyzingDescription,
+  ontology_tool: ontologyDescription,
   calculator_tool: calculatorDescription,
   officecli_run: args => Array.isArray(args.command_args) ? compactInlineText(args.command_args.join(' ')) : '',
   bash_run: args => compactInlineText(args.command),

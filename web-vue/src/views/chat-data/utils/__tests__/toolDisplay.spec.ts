@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { extractChangedFilePathsFromResult, extractWrittenFilePathCandidates, getDataAnalyzingActionName, getToolCompactDescription, getToolDisplayName, getToolTechnicalDescription, isFileDiffOffloaded, splitFileDiffLines } from '../toolDisplay'
+import { extractChangedFilePathsFromResult, extractWrittenFilePathCandidates, getDataAnalyzingActionName, getOntologyActionName, getToolCompactDescription, getToolDisplayName, getToolTechnicalDescription, isFileDiffOffloaded, splitFileDiffLines } from '../toolDisplay'
 
 describe('toolDisplay', () => {
   it('maps every current ChatData tool to a user-facing name', () => {
@@ -21,6 +21,7 @@ describe('toolDisplay', () => {
       present_artifacts: '展示文件',
       get_current_time: '获取当前时间',
       data_analyzing_tool: '数据分析',
+      ontology_tool: '本体导航',
       calculator_tool: '精确计算',
       bash_run: '运行脚本',
       officecli_run: '运行 OfficeCLI',
@@ -154,6 +155,22 @@ describe('toolDisplay', () => {
     expect(getDataAnalyzingActionName('execute_query')).toBe('查询数据')
     expect(getDataAnalyzingActionName('unknown_action')).toBe('')
     expect(getDataAnalyzingActionName(null)).toBe('')
+  })
+
+  it('maps ontology_tool actions to Chinese names and leaves others empty', () => {
+    expect(getOntologyActionName('list_object_types')).toBe('对象类型清单')
+    expect(getOntologyActionName('locate_object_type')).toBe('对象定位')
+    expect(getOntologyActionName('unknown_action')).toBe('')
+    expect(getOntologyActionName(null)).toBe('')
+  })
+
+  it('builds ontology_tool technical description from located object types', () => {
+    expect(getToolTechnicalDescription('ontology_tool', {
+      action: 'locate_object_type',
+      action_payload: { object_types: ['order', 'user'] },
+    })).toBe('order、user')
+    expect(getToolTechnicalDescription('ontology_tool', { action: 'list_object_types', action_payload: {} })).toBe('')
+    expect(getToolTechnicalDescription('ontology_tool', {})).toBe('')
   })
 })
 

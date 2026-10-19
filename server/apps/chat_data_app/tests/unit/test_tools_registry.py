@@ -86,6 +86,17 @@ def test_bash_run_gated_by_runtime_options(tmp_path):
     assert names[:-1] == EXPECTED_WITHOUT_BASH
 
 
+def test_ontology_tool_gated_by_locate_env(tmp_path, monkeypatch):
+    """本体导航工具在注册层按 CHAT_DATA_ONTOLOGY_LOCATE_ENABLED 门控（默认关闭不装配）。"""
+    monkeypatch.delenv("CHAT_DATA_ONTOLOGY_LOCATE_ENABLED", raising=False)
+    assert "ontology_tool" not in _tool_names(tmp_path)
+
+    monkeypatch.setenv("CHAT_DATA_ONTOLOGY_LOCATE_ENABLED", "1")
+    names = _tool_names(tmp_path)
+    # 启用时紧随 data_analyzing_tool 之后装配（拆分来源，导航与问数相邻）
+    assert names.index("ontology_tool") == names.index("data_analyzing_tool") + 1
+
+
 def test_exclusion_sets_reference_registered_tools_only():
     """排除集出现注册表之外的工具名 = 拼写错误或忘了登记 provides。"""
     registered = provided_tool_names()

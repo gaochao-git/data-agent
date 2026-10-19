@@ -23,6 +23,8 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from apps.chat_data_app.services.ontology.object_type_locator import object_type_locator_enabled
+
 from .ask_user_question import ask_user_question_tool
 from .bash_run import create_bash_run_tool
 from .calculator import calculator_tool
@@ -30,6 +32,7 @@ from .current_time import get_current_time_tool
 from .data_analyzing import create_data_analyzing_tool
 from .filesystem import create_filesystem_tools
 from .officecli_run import create_officecli_run_tool
+from .ontology_tool import create_ontology_tool
 from .parse_document import create_parse_document_tool
 from .present_artifacts import create_present_artifacts_tool
 from .read_image import create_read_image_tool
@@ -116,6 +119,18 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
         note="数据分析合并工具：DSL/dashboard_spec 校验、语义查询执行、语义模型 YAML 自检（按 action 分派）",
     ),
     ToolSpec(
+        provides=("ontology_tool",),
+        # 本体灰度开关在注册层收口（可见性≠权限，对齐业内 tool-gating 惯例）：
+        # 未启用时工具不装配，模型看不到导航工具，自然回落语义清单检索；
+        # 工具实现内仍保留开关 raise 作为纵深防御（防运行中翻转/直调）。
+        build=lambda ctx: (
+            [create_ontology_tool(ctx.datasource.datasource_id, user_id=ctx.identity.user_id or "system")]
+            if object_type_locator_enabled()
+            else []
+        ),
+        note="本体对象类型导航：列对象类型/按对象类型定位语义模型（纯导航不执行查询；受 CHAT_DATA_ONTOLOGY_LOCATE_ENABLED 门控）",
+    ),
+    ToolSpec(
         provides=("calculator_tool",),
         build=lambda _ctx: [calculator_tool],
         note="精确数值计算",
@@ -165,7 +180,8 @@ DATA_EXPLORE_EXTRA_EXCLUDED_TOOL_NAMES = frozenset(
 
 # plan 在基础排除集之上额外排除执行类工具：规划子智能体只盘点资料与产出计划，
 # 不运行查询、不做计算、不编辑文档，保证规划与执行分离（执行由主智能体完成）。
-# data_analyzing_tool 为合并工具（含执行查询的 execute_query action），整工具排除。
+# data_analyzing_tool 为合并工具（含执行查询的 execute_query action），整工具排除；
+# ontology_tool 为纯导航工具，随拆分前「plan 无本体工具」的现状一并排除。
 PLAN_EXTRA_EXCLUDED_TOOL_NAMES = frozenset(
     {
         "file_edit",
@@ -177,6 +193,7 @@ PLAN_EXTRA_EXCLUDED_TOOL_NAMES = frozenset(
         "bash_run",
         "officecli_run",
         "data_analyzing_tool",
+        "ontology_tool",
         "calculator_tool",
         "read_image",
         "parse_document",
