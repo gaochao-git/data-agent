@@ -67,7 +67,11 @@ const displayLabel = (model: Pick<ModelOption, 'label' | 'provider'>) =>
   model.provider ? `${model.provider}/${model.label}` : model.label
 
 const selectedModelLabel = computed(() => {
-  if (!props.selectedModel) return '系统默认'
+  if (!props.selectedModel) {
+    // 定时任务场景（allowEmpty）：不选=回退系统默认；会话场景：空只有一种可能——
+    // 注册表无可用模型，入口直接引导配置而不是误导性的「系统默认」
+    return props.allowEmpty ? '系统默认' : '请配置模型'
+  }
   const model = props.modelOptions.find(model => model.id === props.selectedModel)
   return model ? displayLabel(model) : props.selectedModel
 })
@@ -258,7 +262,9 @@ onBeforeUnmount(() => {
             <i v-if="selectedModel === m.id" class="fa-solid fa-check text-[10px]"></i>
           </span>
         </button>
-        <div v-if="modelOptions.length === 0" class="px-3 py-2 text-xs text-gray-400">暂无模型</div>
+        <div v-if="modelOptions.length === 0" class="px-3 py-2 text-xs text-gray-400">
+          暂无可用模型，请在大模型管理页添加
+        </div>
       </template>
 
       <!-- 二级：推理等级列表 -->

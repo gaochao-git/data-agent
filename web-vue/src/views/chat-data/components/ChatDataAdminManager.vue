@@ -44,7 +44,7 @@ const NAV_GROUPS: Array<{ label: string; items: AdminNavItem[] }> = [
     label: '数据资产',
     items: [
       { key: 'datasource', label: '数据源管理', icon: 'fa-database' },
-      { key: 'semantic', label: '模型管理', icon: 'fa-sitemap' },
+      { key: 'semantic', label: '语义模型管理', icon: 'fa-sitemap' },
       { key: 'enum', label: '枚举值', icon: 'fa-list-check' },
       { key: 'lineage', label: '数据血缘', icon: 'fa-diagram-project', disabled: true, hint: '数据血缘管理规划中' }
     ]

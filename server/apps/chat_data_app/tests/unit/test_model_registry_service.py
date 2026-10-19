@@ -567,54 +567,6 @@ def test_load_registry_from_db_reads_enabled_rows(registry_env):
     asyncio.run(run())
 
 
-def test_load_registry_from_db_empty_imports_from_file(registry_env, tmp_path, monkeypatch):
-    models_file = tmp_path / "models.json"
-    models_file.write_text(
-        json.dumps(
-            [
-                {
-                    "id": "file-model",
-                    "temperature": 0.1,
-                    "context_window": 64000,
-                    "max_output_tokens": 8192,
-                    "vlm": False,
-                    "thinking": {
-                        "mode": "optional",
-                        "dialect": "reasoning_effort",
-                        "efforts": ["low", "high"],
-                        "default_on": False,
-                        "default_effort": "low",
-                    },
-                }
-            ],
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("CHAT_DATA_MODELS_FILE", str(models_file))
-
-    async def run():
-        configs = await llm_config.load_registry_from_db()
-        assert [config["id"] for config in configs] == ["file-model"]
-        assert configs[0]["is_default"] is True  # 首项为默认
-        assert configs[0]["vlm"] is False
-        assert [effort.level for effort in configs[0]["thinking"].efforts] == ["low", "high"]
-
-        # 旧 string[] 读入自动升级为新形状（内存中，不回写源文件）
-
-        # 落库的 params_json 回读仍过校验（往返一致）
-        rows = await model_registry_dao.ModelRegistryDao().list_rows()
-        packed = json.loads(rows[0]["params_json"])
-        assert packed["thinking"] == {
-            "mode": "optional",
-            "dialect": "reasoning_effort",
-            "efforts": [{"level": "low"}, {"level": "high"}],
-            "default_effort": "low",  # default_on 不再落库（读侧由默认档位推导）
-        }
-
-    asyncio.run(run())
-
-
 # ----------- 参数/注册键校验补充分支 -----------
 
 
@@ -801,27 +753,13 @@ def test_get_chat_data_llm_missing_connection_info_fail_fast(registry_env, monke
 # ----------- 注册表首导分支（种子文件不可用 / 并发撞键） -----------
 
 
-def test_load_registry_empty_with_unavailable_seed_file_returns_empty(registry_env, monkeypatch, tmp_path):
-    """空表且种子文件不可用：跳过导入返回空列表（新装环境允许先不配模型）。"""
-    monkeypatch.setenv("CHAT_DATA_MODELS_FILE", str(tmp_path / "nope.json"))
-
-    async def run():
-        assert await llm_config.load_registry_from_db() == []
-
-    asyncio.run(run())
-
-
-def test_import_registry_skips_rows_on_concurrent_unique_conflict(registry_env, monkeypatch, tmp_path):
-    """多 worker 并发冷启动首导：唯一键撞车跳过该行（已被并发方写入），其余照常导入。"""
-    from sqlalchemy.exc import IntegrityError as SAIntegrityError
-
+def test_load_registry_empty_table_returns_empty_without_file_fallback(registry_env, monkeypatch, tmp_path):
+    """空表即空清单：不再回源 CHAT_DATA_MODELS_FILE 自动导入（DB 唯一真值）。"""
     models_file = tmp_path / "models.json"
     models_file.write_text(
         json.dumps(
-            [
-                {"id": "m-a", "temperature": 0.1, "context_window": 64000, "vlm": False, "thinking": {"mode": "none"}},
-                {"id": "m-b", "temperature": 0.1, "context_window": 64000, "vlm": False, "thinking": {"mode": "none"}},
-            ],
+            [{"id": "should-not-import", "temperature": 0.1, "context_window": 64000, "vlm": False,
+              "thinking": {"mode": "none"}}],
             ensure_ascii=False,
         ),
         encoding="utf-8",
@@ -829,20 +767,9 @@ def test_import_registry_skips_rows_on_concurrent_unique_conflict(registry_env, 
     monkeypatch.setenv("CHAT_DATA_MODELS_FILE", str(models_file))
 
     async def run():
-        dao = model_registry_dao.ModelRegistryDao()
-        real_upsert = dao.upsert
-        attempted: list[str] = []
-
-        async def flaky_upsert(*, model_key, **kwargs):
-            attempted.append(model_key)
-            if model_key == "m-a":
-                raise SAIntegrityError("dup", None, Exception("dup key"))
-            return await real_upsert(model_key=model_key, **kwargs)
-
-        monkeypatch.setattr(dao, "upsert", flaky_upsert)
-        rows = await llm_config._import_registry_from_file(dao)
-        assert attempted == ["m-a", "m-b"]
-        assert [row["model_key"] for row in rows] == ["m-b"]  # 撞键行被跳过
+        assert await llm_config.load_registry_from_db() == []
+        # 文件里 despite 存在条目，DB 也不落任何行
+        assert await model_registry_dao.ModelRegistryDao().list_rows() == []
 
     asyncio.run(run())
 

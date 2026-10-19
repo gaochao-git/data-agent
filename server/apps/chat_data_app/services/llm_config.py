@@ -1,9 +1,8 @@
 """智能问数 LLM 配置：模型注册表加载与思考能力分派。
 
 模型清单存于 ``chat_data_model_registry`` 表（管理页维护，变更即时刷新进程内
-缓存，启动时预热一次）；表为空时自动从 ``CHAT_DATA_MODELS_FILE`` 指向的 JSON
-注册表导入一次（存量迁移种子）。服务路径（事件循环内）**只认 DB**，冷缓存
-直接报错不回落文件；无事件循环的脚本/测试场景才读该文件。所有字段 fail-fast：
+缓存，启动时预热一次）。DB 是唯一真值：表为空即空清单，不回源任何文件；
+服务路径（事件循环内）冷缓存直接报错。所有字段 fail-fast：
 配错宁可拒绝保存，不静默误配。思考能力三层分离——
 
 - 语义层 ``ThinkingCapability``：模型固有能力（mode/dialect/efforts/default）；
@@ -22,7 +21,6 @@ from dataclasses import dataclass
 from typing import Any
 
 from langchain_core.language_models import BaseChatModel
-from sqlalchemy.exc import IntegrityError
 
 from utils.crypto import decrypt_password
 from utils.llm import get_llm
@@ -425,59 +423,10 @@ def _registry_row_to_config(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _registry_config_to_row_fields(config: dict[str, Any], *, is_default: bool) -> dict[str, Any]:
-    """JSON 文件条目解析结果 -> 注册表行字段（首次导入用）。"""
-    cap: ThinkingCapability = config["thinking"]
-    params = {
-        "temperature": float(config["temperature"]),
-        "context_window": int(config["context_window"]),
-        # 必填缺省 = 上下文窗口的 1/4（与页面保存口径一致）
-        "max_output_tokens": config["max_output_tokens"]
-        if config["max_output_tokens"] is not None
-        else int(config["context_window"]) // 4,
-        "vlm": bool(config["vlm"]),
-        "thinking": _thinking_cap_to_json(cap),
-    }
-    return {
-        "display_name": str(config.get("display_name") or config["id"]),
-        # 文件种子：注册键=请求名（id 即 model_id）；连接信息随文件透传
-        # （旧格式文件无此二字段落库为空，需在管理页补全）
-        "base_url": str(config.get("base_url") or ""),
-        "api_key_cipher": str(config.get("api_key_cipher") or ""),
-        "params_json": json.dumps(params, ensure_ascii=False),
-        "is_default": 1 if is_default else 0,
-        "enabled_flag": 1,
-        "remark_text": "",
-    }
-
-
-async def _import_registry_from_file(dao: ModelRegistryDao) -> list[dict[str, Any]]:
-    """注册表从无到有时从 JSON 文件导入一次（存量迁移种子）；文件缺失/非法时跳过并告警。"""
-    try:
-        file_configs = load_chat_data_model_configs()
-    except ValueError as err:
-        logger.warning("模型注册表为空且 CHAT_DATA_MODELS_FILE 不可用，跳过自动导入: %s", err)
-        return []
-    for index, config in enumerate(file_configs):
-        fields = _registry_config_to_row_fields(config, is_default=(index == 0))
-        try:
-            await dao.upsert(model_key=str(config["id"]), fields=fields, operator_id="system", operator_name="系统迁移")
-        except IntegrityError:
-            # 多实例/多 worker 同时冷启动并发首导：唯一键撞车说明该行已被并发方写入，跳过即可
-            logger.info("模型 %s 首导撞唯一键（并发导入已写入），跳过", config["id"])
-    logger.info("模型注册表完成 JSON 文件首次导入: %s 个模型", len(file_configs))
-    return await dao.list_rows(enabled_only=True)
-
-
 async def load_registry_from_db() -> list[dict[str, Any]]:
-    """从 DB 读取启用模型配置；表从未有过行时从 JSON 文件导入一次（种子）。
-
-    「从未有过行」含软删墓碑与停用行——管理员删光/停光模型后不得回源文件复活。
-    """
+    """从 DB 读取启用模型配置；表为空即空清单（不回源任何文件，管理员页面手动添加）。"""
     dao = ModelRegistryDao()
     rows = await dao.list_rows(enabled_only=True)
-    if not rows and not await dao.has_any_row():
-        rows = await _import_registry_from_file(dao)
     return [_registry_row_to_config(row) for row in rows]
 
 
@@ -584,7 +533,8 @@ def get_chat_data_model_config(model: str | None = None) -> dict[str, Any]:
     selected = str(model or "").strip()
     configs = get_chat_data_model_configs()
     if not selected:
-        return next(config for config in configs if config["id"] == _default_model_id(configs))
+        default_id = _default_model_id(configs)
+        return next(config for config in configs if config["id"] == default_id)
     for config in configs:
         if config["id"] == selected:
             return config

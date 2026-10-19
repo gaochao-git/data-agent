@@ -220,9 +220,15 @@ LLM_FIRST_TOKEN_TIMEOUT_SECONDS = read_positive_int_env("CHAT_DATA_LLM_FIRST_TOK
 
 
 def get_context_window(model_id: str | None) -> int:
-    """按模型名返回上下文窗口大小。"""
-    from .llm_config import get_chat_data_model_config
+    """按模型名返回上下文窗口大小。
 
+    无可用模型（注册表为空或全部停用）时回退缺省窗口：/config 是页面初始化
+    请求，空清单必须正常返回（前端入口显示「请配置模型」），不得 500。
+    """
+    from .llm_config import get_chat_data_model_config, get_chat_data_model_configs
+
+    if not get_chat_data_model_configs():
+        return DEFAULT_CONTEXT_WINDOW
     return int(get_chat_data_model_config(model_id).get("context_window") or DEFAULT_CONTEXT_WINDOW)
 
 

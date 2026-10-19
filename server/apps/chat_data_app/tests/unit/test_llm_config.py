@@ -573,6 +573,31 @@ def test_chat_data_runtime_config_reads_runtime_options(monkeypatch, tmp_path):
     assert result["context_window"] == 256000
 
 
+def test_runtime_config_empty_registry_returns_empty_models_without_error(monkeypatch):
+    """注册表为空或全部停用：/config 正常返回空清单 + 缺省窗口，不得 500。
+
+    页面初始化依赖 /config；「请配置模型」入口引导由前端按空 models 呈现。
+    """
+    # 对齐「无 CHAT_DATA_MODELS_FILE」场景：autouse 夹具兜底时 setenv 了该变量，
+    # delenv 后 origin="" 恒匹配，缓存落位（空清单）才会命中而非冷缓存报错
+    monkeypatch.delenv("CHAT_DATA_MODELS_FILE", raising=False)
+    monkeypatch.setattr(llm_config, "_registry_cache", [])
+    monkeypatch.setattr(llm_config, "_registry_cache_loaded_at", time.monotonic())
+    monkeypatch.setattr(llm_config, "_registry_cache_origin", "")
+    monkeypatch.setattr(llm_config, "_registry_refresh_task", None)
+
+    import asyncio
+
+    result = asyncio.run(get_chat_data_runtime_config())
+
+    assert result["models"] == []
+    assert result["runtime_options"]["workspace_backend"]
+    # 空清单：context_window 回退缺省值而非 StopIteration/ValueError
+    from apps.chat_data_app.services.runtime_config import DEFAULT_CONTEXT_WINDOW
+
+    assert result["context_window"] == DEFAULT_CONTEXT_WINDOW
+
+
 def test_data_agent_uses_configured_model_without_fallback(monkeypatch, tmp_path):
     from apps.chat_data_app.agent import data_agent
     from apps.chat_data_app.agent.agent_state import ChatDataAgentState

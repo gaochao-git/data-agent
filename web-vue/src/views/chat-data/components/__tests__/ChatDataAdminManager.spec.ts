@@ -122,9 +122,9 @@ describe('ChatDataAdminManager 分组导航', () => {
     expect(isPanelVisible(wrapper, 'sqlHistory')).toBe(true)
   })
 
-  it('点击模型管理切换面板并先拉数据源选项', async () => {
+  it('点击语义模型管理切换面板并先拉数据源选项', async () => {
     const wrapper = mountManager()
-    await navButton(wrapper, '模型管理').trigger('click')
+    await navButton(wrapper, '语义模型管理').trigger('click')
     await flushPromises()
 
     expect(apiMocks.getAdminDatasources).toHaveBeenCalledWith({ include_tables: false })

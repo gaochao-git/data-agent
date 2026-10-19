@@ -78,12 +78,6 @@ class ModelRegistryDao:
             )
             return [registry_row_to_dict(row) for row in result.scalars().all()]
 
-    async def has_any_row(self) -> bool:
-        """表中是否存在过任意行（含软删墓碑与停用行）——种子导入只应在零行时发生。"""
-        async with self._session_context() as db:
-            row = (await db.execute(select(ChatDataModelRegistry.id).limit(1))).scalar_one_or_none()
-            return row is not None
-
     async def get_by_model_key(self, *, model_key: str, include_deleted: bool = False) -> dict[str, Any] | None:
         """按注册键精确读取；include_deleted 用于命中墓碑行（复活场景）。"""
         async with self._session_context() as db:

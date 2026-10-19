@@ -95,6 +95,18 @@ describe('ModelPicker 模型选择', () => {
     const entry = await findEntry(wrapper, '模型')
     expect(entry.text()).toContain('系统默认')
   })
+
+  it('会话场景无可用模型时入口展示「请配置模型」而非「系统默认」', async () => {
+    const wrapper = mountPicker({ selectedModel: '', modelOptions: [] })
+
+    const entry = await findEntry(wrapper, '模型')
+    expect(entry.text()).toContain('请配置模型')
+    expect(entry.text()).not.toContain('系统默认')
+
+    // 二级列表给配置引导
+    await openModelsView(wrapper)
+    expect(wrapper.text()).toContain('暂无可用模型，请在大模型管理页添加')
+  })
 })
 
 describe('ModelPicker 推理等级（两级筛选）', () => {

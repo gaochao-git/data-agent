@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 后台管理 · 模型管理面板（语义模型）。
+ * 后台管理 · 语义模型管理面板。
  * 顶栏一行承载数据源组选择、语义模型选择与批量管理动作（批量初始化 / 批量启停 / 新建），
  * 动作经 ref 转发给内嵌 SemanticConfigPanel（expose 契约），就地编辑不跳出后台弹窗。
  * 数据源列表由容器（ChatDataAdminManager）传入并保证已刷新。
