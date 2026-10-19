@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import time
+from typing import Any
 
 import pytest
 
@@ -765,6 +766,63 @@ def test_extra_body_off_sentinel_levels_serialize_as_off():
 def test_effort_suggestions_cover_deepseek_variants():
     """档位候选覆盖 DeepSeek 新 API 档位族（含关哨兵 off）。"""
     assert set(llm_config.EFFORT_SUGGESTIONS) >= {"off", "minimal", "low", "medium", "high", "xhigh", "ultra", "max"}
+
+
+def _deepseek_like_registry(off_value: Any = "none", default_level: str = "xhigh") -> list[dict]:
+    """截图配置原样：off 行声明 value，其余档位空 value（=同名），默认勾在指定档位。"""
+    efforts: list[dict[str, Any]] = [{"level": "off", "value": off_value}]
+    efforts += [{"level": name} for name in ("medium", "high", "xhigh", "ultra", "max")]
+    return [
+        _ox_alpha(
+            thinking={
+                "mode": "optional",
+                "dialect": "reasoning_effort",
+                "efforts": efforts,
+                "default_effort": default_level,
+            }
+        )
+    ]
+
+
+def test_effort_mapping_matrix_from_ui_saved_config(monkeypatch, tmp_path):
+    """端到端映射矩阵（按管理页保存产物形状）：档位名 → API 参数值正例。"""
+    _set_registry(monkeypatch, tmp_path, _deepseek_like_registry())
+    cap = llm_config.get_chat_data_model_configs()[0]["thinking"]
+    # 默认档勾在 xhigh（普通档）→ 推导默认开
+    assert cap.default_on is True and cap.default_effort == "xhigh"
+
+    # 正例 1：普通档位空 value → 发档位名本身
+    for level in ("medium", "high", "xhigh", "ultra", "max"):
+        assert llm_config._get_chat_data_extra_body(cap, True, level) == {"reasoning_effort": level}
+    # 正例 2：off 行虽声明 value="none"，但命中哨兵 → 关形态发固定兜底 "none"（结果一致）
+    assert llm_config._get_chat_data_extra_body(cap, True, "off") == {"reasoning_effort": "none"}
+    # 正例 3：新对话无用户选择 → 默认档 xhigh（on 形态）
+    assert llm_config._get_chat_data_extra_body(cap, None) == {"reasoning_effort": "xhigh"}
+    # 正例 4：用户显式关思考 → 关形态固定 "none"（DeepSeek 新 API 认的关值）
+    assert llm_config._get_chat_data_extra_body(cap, False) == {"reasoning_effort": "none"}
+
+
+def test_effort_mapping_negative_cases(monkeypatch, tmp_path):
+    """端到端映射反例：哨兵值优先、未声明档位回退、默认勾在哨兵档推导为关。"""
+    # 反例 1：off 行 value 填了上游不认识的误导值 → 选中 off 仍发固定兜底 "none"（声明值被忽略）
+    _set_registry(monkeypatch, tmp_path, _deepseek_like_registry(off_value="banana"))
+    llm_config.reset_registry_cache()
+    cap = llm_config.get_chat_data_model_configs()[0]["thinking"]
+    assert llm_config._get_chat_data_extra_body(cap, True, "off") == {"reasoning_effort": "none"}
+
+    # 反例 2：用户传未声明档位 "low" → 不透传，回退默认档 xhigh
+    assert llm_config._get_chat_data_extra_body(cap, True, "low") == {"reasoning_effort": "xhigh"}
+
+    # 反例 3：默认勾在 off（哨兵档）→ 推导默认关；无用户选择时发关形态
+    _set_registry(monkeypatch, tmp_path, _deepseek_like_registry(default_level="off"))
+    llm_config.reset_registry_cache()
+    cap_off_default = llm_config.get_chat_data_model_configs()[0]["thinking"]
+    assert cap_off_default.default_on is False
+    assert llm_config._get_chat_data_extra_body(cap_off_default, None) == {"reasoning_effort": "none"}
+
+    # 反例 4：/config 只下发档位名（含哨兵 off），value 不外泄（前端去重/标签按名字处理）
+    options = llm_config.get_chat_data_model_options()["models"][0]["thinking"]
+    assert options["efforts"] == ["off", "medium", "high", "xhigh", "ultra", "max"]
 
 
 def test_thinking_roundtrip_preserves_new_shape():

@@ -87,6 +87,9 @@ const form = reactive({
 // chat_template 为纯布尔协议不支持档位；default_effort 必须在档位列表内
 const effortsAvailable = computed(() => form.thinking_mode !== 'none' && form.thinking_dialect !== 'chat_template')
 
+// 关哨兵档位：选中即降级为「关」形态，参数值由后端按方言固定兜底，行内 value 不生效
+const isOffSentinelLevel = (level: string) => ['off', 'none'].includes(level.trim())
+
 // 参数值解析：空=同名省略；true/false→布尔；纯数字→number；其余按字符串（后端同规则校验）
 const parseWireValue = (raw: string): string | number | boolean | undefined => {
   if (raw === '') return undefined
@@ -665,12 +668,19 @@ defineExpose({ ensureLoaded })
                   <el-option v-for="level in EFFORT_SUGGESTIONS" :key="level" :label="level" :value="level" />
                 </el-select>
                 <i class="fa-solid fa-arrow-right shrink-0 text-[10px] text-slate-300"></i>
-                <el-input
-                  v-model="row.value"
-                  size="small"
-                  class="min-w-0 flex-1"
-                  placeholder="API 参数值（缺省与档位同名）"
-                />
+                <el-tooltip
+                  :disabled="!isOffSentinelLevel(row.level)"
+                  content="关哨兵档位：选中即按「关」形态发参，参数值固定由后端兜底（reasoning_effort→none），此处填写不生效"
+                  placement="top"
+                >
+                  <el-input
+                    v-model="row.value"
+                    size="small"
+                    class="min-w-0 flex-1"
+                    :disabled="isOffSentinelLevel(row.level)"
+                    :placeholder="isOffSentinelLevel(row.level) ? '关哨兵档位不使用参数值' : 'API 参数值（缺省与档位同名）'"
+                  />
+                </el-tooltip>
                 <el-button link type="danger" size="small" class="shrink-0" title="删除该档位" @click="removeEffortRow(index)">
                   <i class="fa-solid fa-trash text-[11px]"></i>
                 </el-button>
@@ -690,8 +700,13 @@ defineExpose({ ensureLoaded })
             <el-switch v-model="form.enabled" />
           </div>
           <div class="flex items-center gap-2">
-            <span class="text-xs text-slate-500">视觉能力（vlm）</span>
-            <el-switch v-model="form.vlm" />
+            <span class="text-xs text-slate-500">输入类型</span>
+            <el-tooltip content="对话模型必支持文本输入，不可取消" placement="top">
+              <el-checkbox :model-value="true" disabled size="small">文本</el-checkbox>
+            </el-tooltip>
+            <el-tooltip content="勾选表示模型接受图片视觉输入（vlm）" placement="top">
+              <el-checkbox v-model="form.vlm" size="small">图片</el-checkbox>
+            </el-tooltip>
           </div>
         </div>
         <div>
