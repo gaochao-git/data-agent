@@ -476,8 +476,8 @@ class _DurationRelayHooks:
     """打断接力的耗时回调束（见 _resolve_task_durations）：计时起点墙钟 + Run 行读/写回调。"""
 
     stream_started_wall_ms: int | None = None
-    resolve_inherited_duration: Callable[[], Awaitable[int]] | None = None
-    on_interrupt_finalize: Callable[[int], Awaitable[None]] | None = None
+    resolve_inherited_duration: Callable[[], Awaitable[dict[str, int]]] | None = None
+    on_interrupt_finalize: Callable[[dict[str, int]], Awaitable[None]] | None = None
 
 
 @dataclass(frozen=True)
@@ -1398,9 +1398,7 @@ async def _resolve_agent_turn_inputs(
         message_kwargs["skill_names"] = skill_names
     if receipt_timestamp_ms:
         # _build_user_message 先盖构建时刻章、后 merge extra_kwargs，这里传即覆盖
-        message_kwargs["timestamp"] = time.strftime(
-            "%Y-%m-%d %H:%M:%S", time.localtime(receipt_timestamp_ms / 1000)
-        )
+        message_kwargs["timestamp"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(receipt_timestamp_ms / 1000))
     user_message = None
     if resume_answer is None and (user_query.strip() or not adopted_messages):
         user_message = _build_user_message(

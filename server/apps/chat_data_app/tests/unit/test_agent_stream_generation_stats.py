@@ -171,9 +171,7 @@ def test_handle_token_usage_payload_extracts_model_before_sanitize():
     adapter._handle_token_usage_payload({"type": "token_usage", "usage": {"output_tokens": 5}})
     assert adapter.latest_model_name == "deepseek-v4-flash"
     # 换模型（多轮调用最后一次为准）→ 覆盖
-    adapter._handle_token_usage_payload(
-        {"type": "token_usage", "usage": {"output_tokens": 8}, "model": "qwen3"}
-    )
+    adapter._handle_token_usage_payload({"type": "token_usage", "usage": {"output_tokens": 8}, "model": "qwen3"})
     assert adapter.latest_model_name == "qwen3"
 
 
@@ -193,7 +191,9 @@ def test_sample_chunk_generation_speed_excludes_tool_args_and_results():
     # 工具调用参数 chunk：不采样
     tool_args_chunk = SimpleNamespace(
         content="",
-        tool_call_chunks=[{"id": "c1", "name": "sql_tool", "args": '{"sql":"SELECT * FROM orders WHERE amount > 100"}'}],
+        tool_call_chunks=[
+            {"id": "c1", "name": "sql_tool", "args": '{"sql":"SELECT * FROM orders WHERE amount > 100"}'}
+        ],
     )
     adapter._sample_chunk_generation_speed(tool_args_chunk, flags_type.of(tool_args_chunk))
     assert not adapter._speed_samples

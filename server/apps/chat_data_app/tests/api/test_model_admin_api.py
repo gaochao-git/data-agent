@@ -175,9 +175,7 @@ def test_models_enabled_default_delete_flow(client, auth_headers, registry_db):
     assert resp.json()["code"] == 40487
 
     # 旧路径接口仍兼容（启停/默认）
-    resp = client.patch(
-        f"/api/chatdata/admin/models/{key_a}/enabled", headers=auth_headers, json={"enabled": True}
-    )
+    resp = client.patch(f"/api/chatdata/admin/models/{key_a}/enabled", headers=auth_headers, json={"enabled": True})
     assert resp.status_code == 200
     resp = client.patch(f"/api/chatdata/admin/models/{key_a}/default", headers=auth_headers)
     assert resp.status_code == 200
@@ -193,6 +191,7 @@ def test_models_enabled_default_delete_flow(client, auth_headers, registry_db):
 
 def test_legacy_encoded_model_key_resolves_via_path(client, auth_headers, registry_db):
     """老注册键含 # 时，网关重复编码（%23 / %2523）仍需命中（兼容期兜底）。"""
+
     async def seed():
         async with registry_db() as session:
             session.add(
@@ -301,7 +300,13 @@ def test_models_internal_error_paths_return_structured_codes(client, auth_header
         ("patch", "/api/chatdata/admin/models/k/enabled", {"enabled": True}, "set_model_enabled", 50100),
         ("patch", "/api/chatdata/admin/models/k/default", None, "set_model_default", 50100),
         ("delete", "/api/chatdata/admin/models/k", None, "delete_model", 50100),
-        ("post", "/api/chatdata/admin/models/discover", {"base_url": "http://x", "api_key": CIPHER}, "discover_models", 50101),
+        (
+            "post",
+            "/api/chatdata/admin/models/discover",
+            {"base_url": "http://x", "api_key": CIPHER},
+            "discover_models",
+            50101,
+        ),
         ("post", "/api/chatdata/admin/models/test-connection", PAYLOAD, "test_model_connection", 50101),
     ]
     for method, url, body, func, expected_code in cases:

@@ -80,9 +80,7 @@ async def create_chat_data_model(payload: ChatDataModelUpsertRequest, request: R
         )
 
 
-async def _update_model_response(
-    model_key: str, payload: ChatDataModelUpsertRequest, request: Request
-) -> JSONResponse:
+async def _update_model_response(model_key: str, payload: ChatDataModelUpsertRequest, request: Request) -> JSONResponse:
     """更新模型并统一错误码（旧路径接口与新 body 接口共用）。"""
     try:
         current_user = _get_current_user(request)
@@ -134,9 +132,7 @@ async def _default_response(model_key: str, request: Request) -> JSONResponse:
     """设默认模型并统一错误码（旧路径接口与新 body 接口共用）。"""
     try:
         current_user = _get_current_user(request)
-        await set_model_default(
-            model_key, user_id=str(current_user.user_id), username=str(current_user.username or "")
-        )
+        await set_model_default(model_key, user_id=str(current_user.user_id), username=str(current_user.username or ""))
         return business_response(data={"model_key": model_key, "is_default": True}, msg="默认模型已设置")
     except ModelRegistryNotFoundError as e:
         return business_response(msg=str(e), code=ErrorCode.CHATDATA_MODEL_NOT_FOUND, status="error")
@@ -153,9 +149,7 @@ async def _delete_response(model_key: str, request: Request) -> JSONResponse:
     """删除模型并统一错误码（旧路径接口与新 query 接口共用）。"""
     try:
         current_user = _get_current_user(request)
-        await delete_model(
-            model_key, user_id=str(current_user.user_id), username=str(current_user.username or "")
-        )
+        await delete_model(model_key, user_id=str(current_user.user_id), username=str(current_user.username or ""))
         return business_response(data={"model_key": model_key}, msg="已删除")
     except ModelRegistryNotFoundError as e:
         return business_response(msg=str(e), code=ErrorCode.CHATDATA_MODEL_NOT_FOUND, status="error")
@@ -199,9 +193,7 @@ async def delete_chat_data_model_query(
 
 
 @router.put("/admin/models/{model_key}", deprecated=True)
-async def upsert_chat_data_model(
-    model_key: str, payload: ChatDataModelUpsertRequest, request: Request
-) -> JSONResponse:
+async def upsert_chat_data_model(model_key: str, payload: ChatDataModelUpsertRequest, request: Request) -> JSONResponse:
     """[兼容] 更新模型（路径传注册键，旧前端保留）；新前端改用 PUT /admin/models。"""
     return await _update_model_response(model_key, payload, request)
 

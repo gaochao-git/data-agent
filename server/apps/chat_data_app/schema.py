@@ -243,7 +243,9 @@ class ChatDataModelUpsertRequest(BaseModel):
     """
 
     model_id: str = Field("", max_length=128, description="模型请求名（发给上游 API 的 model 参数；同供应商内唯一）")
-    provider: str = Field("", max_length=128, description="提供商（如 DeepSeek/阿里云/本地 vLLM，与请求名组成业务唯一键）")
+    provider: str = Field(
+        "", max_length=128, description="提供商（如 DeepSeek/阿里云/本地 vLLM，与请求名组成业务唯一键）"
+    )
     display_name: str = Field("", max_length=128, description="显示名（空则用 model_id）")
     base_url: str = Field("", max_length=500, description="API Base URL（连接信息只以模型行为准）")
     api_key: str = Field("", max_length=512, description="API Key SM4 密文（必填，base64:base64；明文会被拒绝）")

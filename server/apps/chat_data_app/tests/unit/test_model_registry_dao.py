@@ -85,7 +85,10 @@ def test_upsert_insert_and_tombstone_rewrite(registry_db):
 
         # 重加同请求名：注册键自动避开墓碑键，插全新行（不复活）
         new_id = await dao.upsert(
-            model_key="qwen#2", fields=_fields(model_id="qwen", display_name="新版"), operator_id="u2", operator_name="李四"
+            model_key="qwen#2",
+            fields=_fields(model_id="qwen", display_name="新版"),
+            operator_id="u2",
+            operator_name="李四",
         )
         assert new_id != row_id
         rows = await dao.list_rows()
@@ -109,7 +112,10 @@ def test_upsert_empty_api_key_keeps_original(registry_db):
         await _install(dao)
         # api_key_cipher 传空串：保持原密文不动（编辑未改 key 场景）
         await dao.upsert(
-            model_key="qwen", fields=_fields(api_key_cipher="", display_name="改名"), operator_id="u", operator_name="张三"
+            model_key="qwen",
+            fields=_fields(api_key_cipher="", display_name="改名"),
+            operator_id="u",
+            operator_name="张三",
         )
         row = await dao.get_by_model_key(model_key="qwen")
         assert row["api_key_cipher"] == "cipher-old"

@@ -591,9 +591,7 @@ def get_chat_data_model_config(model: str | None = None) -> dict[str, Any]:
     for config in configs:
         if str(config.get("request_model") or "") == selected:
             return config
-    raise ValueError(
-        f"请求的模型不在模型注册表中: {selected!r}（可用: {get_chat_data_model_names()}）"
-    )
+    raise ValueError(f"请求的模型不在模型注册表中: {selected!r}（可用: {get_chat_data_model_names()}）")
 
 
 def get_chat_data_temperature(model: str | None = None) -> float:
@@ -756,9 +754,7 @@ def get_chat_data_llm(
     # fail-fast：连接信息缺失给出可行动的中文报错，而非透传 OpenAI 的 "Missing credentials"
     if not api_key or not base_url:
         missing = "API Key 密文" if not api_key else "Base URL"
-        raise ValueError(
-            f"模型 {selected_model} 未配置{missing}：请在「模型管理」面板编辑该模型补全连接信息"
-        )
+        raise ValueError(f"模型 {selected_model} 未配置{missing}：请在「模型管理」面板编辑该模型补全连接信息")
     return get_llm(
         model=str(selected_config.get("request_model") or selected_model),
         streaming=streaming,

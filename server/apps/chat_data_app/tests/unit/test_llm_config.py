@@ -464,7 +464,9 @@ def test_chat_data_connection_info_resolves_from_model_row_only(monkeypatch):
     monkeypatch.setattr(llm_config, "decrypt_password", lambda value: f"plain:{value}")
     assert llm_config._resolve_chat_data_api_key({"api_key_cipher": "cipher-x"}) == "plain:cipher-x"
     assert llm_config._resolve_chat_data_api_key({"api_key_cipher": ""}) is None
-    assert llm_config._resolve_chat_data_base_url({"base_url": "http://127.0.0.1:8100/v1"}) == "http://127.0.0.1:8100/v1"
+    assert (
+        llm_config._resolve_chat_data_base_url({"base_url": "http://127.0.0.1:8100/v1"}) == "http://127.0.0.1:8100/v1"
+    )
     assert llm_config._resolve_chat_data_base_url({"base_url": ""}) is None
 
 

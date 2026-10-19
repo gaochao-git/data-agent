@@ -1300,9 +1300,7 @@ async def test_executed_durations_accumulate_across_interrupt_segments(inbox_ser
     await service.mark_waiting_for_user(run_id, question, "user-1", "用户一", owners[run_id])
 
     # 历史段残留（旧口径写入的 model 键）原样保留；新段只写 total_duration_ms
-    await service.add_executed_durations(
-        run_id, {"total_duration_ms": 3000, "model_duration_ms": 2000}
-    )
+    await service.add_executed_durations(run_id, {"total_duration_ms": 3000, "model_duration_ms": 2000})
     await service.add_executed_durations(run_id, {"total_duration_ms": 1200})
 
     assert await service.get_executed_durations(run_id) == {

@@ -6,8 +6,10 @@ api_key）只以模型行为准，无环境变量回退；api_key 表单只接�
 （base64(iv):base64(cipher)，可用 scripts/crypto.py encrypt 生成），
 明文直接拒绝，落库原样存密文。任何写操作成功后即时刷新进程内注册表缓存。
 """
+
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import secrets
@@ -36,9 +38,7 @@ from .llm_config import (
 logger = get_logger(__name__)
 
 # params_json 允许出现的参数键（新增参数：先加校验再进此集合，扩参不改表）
-_ALLOWED_PARAM_KEYS = frozenset(
-    {"temperature", "context_window", "max_output_tokens", "vlm", "thinking"}
-)
+_ALLOWED_PARAM_KEYS = frozenset({"temperature", "context_window", "max_output_tokens", "vlm", "thinking"})
 
 _THINKING_MODES = ("none", "optional", "forced")
 # SM4 密文形态：base64(iv):base64(cipher)，两段 base64 以冒号连接
@@ -147,16 +147,26 @@ def _normalize_incoming_model_key(raw: str) -> str:
 # 注册键 = {请求名 slug}-{8 位随机 hex}：URL 安全、可读、并发唯一，避免 # / % 等
 # 特殊字符在网关链路上被误处理；长度 ≤ 100 + 1 + 8 = 109 < 128（列宽）。
 _MODEL_KEY_SLUG_UNSAFE_PATTERN = re.compile(r"[^a-z0-9._-]+")
+_MODEL_KEY_SLUG_DASH_RUN_PATTERN = re.compile(r"-{2,}")
 _MODEL_KEY_SLUG_MAX_LEN = 100
 _MODEL_KEY_RANDOM_BYTES = 4
 _MODEL_KEY_MAX_ATTEMPTS = 3
 
 
 def _slugify_model_id(model_id: str) -> str:
-    """请求名 -> URL 安全 slug：非法字符替换为 -、转小写、截断，空则回落 model。"""
-    slug = _MODEL_KEY_SLUG_UNSAFE_PATTERN.sub("-", model_id.strip().lower()).strip("-")
+    """请求名 -> URL 安全 slug：非法字符替换为 -、折叠连续 -、转小写、截断。
+
+    请求名全是中文等非 ASCII 字符时 slug 为空，回落 ``model-{sha256 前 8 位}``：
+    既保留确定性（同一请求名得到同一 slug），也避免不同模型都显示成 model-xxxx。
+    """
+    raw = model_id.strip().lower()
+    slug = _MODEL_KEY_SLUG_UNSAFE_PATTERN.sub("-", raw)
+    slug = _MODEL_KEY_SLUG_DASH_RUN_PATTERN.sub("-", slug).strip("-")
     slug = slug[:_MODEL_KEY_SLUG_MAX_LEN].strip("-")
-    return slug or "model"
+    if slug:
+        return slug
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:8]
+    return f"model-{digest}"
 
 
 def _generate_model_key(model_id: str) -> str:
@@ -181,17 +191,13 @@ async def create_model(payload: dict[str, Any], *, user_id: str, username: str) 
     for _attempt in range(_MODEL_KEY_MAX_ATTEMPTS):
         model_key = _generate_model_key(fields["model_id"])
         try:
-            row_id = await dao.upsert(
-                model_key=model_key, fields=fields, operator_id=user_id, operator_name=username
-            )
+            row_id = await dao.upsert(model_key=model_key, fields=fields, operator_id=user_id, operator_name=username)
         except IntegrityError:
             # 注册键随机后缀撞键时换一个重试；业务组合（供应商+请求名）并发撞车则重试无解
             continue
         break
     else:
-        raise ModelRegistryError(
-            f"模型保存冲突（注册键或供应商+请求名已被并发请求占用）: {fields['model_id']}，请重试"
-        )
+        raise ModelRegistryError(f"模型保存冲突（注册键或供应商+请求名已被并发请求占用）: {fields['model_id']}，请重试")
     await _refresh_cache_best_effort()
     rows = await dao.list_rows()
     saved = next((row for row in rows if row["id"] == row_id), None)
@@ -209,9 +215,7 @@ async def update_model(model_key: str, payload: dict[str, Any], *, user_id: str,
     if await dao.has_active_provider_model(
         provider=fields["provider"], model_id=fields["model_id"], exclude_key=model_key
     ):
-        raise ModelRegistryConflict(
-            f"该供应商下已存在同名请求名的模型: {fields['model_id']}（同组合只能有一个模型）"
-        )
+        raise ModelRegistryConflict(f"该供应商下已存在同名请求名的模型: {fields['model_id']}（同组合只能有一个模型）")
     row_id = await dao.upsert(model_key=model_key, fields=fields, operator_id=user_id, operator_name=username)
     await _refresh_cache_best_effort()
     rows = await dao.list_rows()
@@ -277,9 +281,7 @@ async def set_model_enabled(model_key: str, *, enabled: bool, user_id: str, user
 async def set_model_default(model_key: str, *, user_id: str, username: str) -> None:
     """设唯一默认模型（同时启用该行）；成功后刷新注册表缓存。"""
     model_key = _normalize_incoming_model_key(model_key)
-    if not await ModelRegistryDao().set_default(
-        model_key=model_key, operator_id=user_id, operator_name=username
-    ):
+    if not await ModelRegistryDao().set_default(model_key=model_key, operator_id=user_id, operator_name=username):
         raise ModelRegistryNotFoundError(f"模型不存在: {model_key}")
     await _refresh_cache_best_effort()
 
@@ -287,9 +289,7 @@ async def set_model_default(model_key: str, *, user_id: str, username: str) -> N
 async def delete_model(model_key: str, *, user_id: str, username: str) -> None:
     """软删模型行；成功后刷新注册表缓存。"""
     model_key = _normalize_incoming_model_key(model_key)
-    if not await ModelRegistryDao().mark_deleted(
-        model_key=model_key, operator_id=user_id, operator_name=username
-    ):
+    if not await ModelRegistryDao().mark_deleted(model_key=model_key, operator_id=user_id, operator_name=username):
         raise ModelRegistryNotFoundError(f"模型不存在: {model_key}")
     await _refresh_cache_best_effort()
 
@@ -364,9 +364,7 @@ async def test_model_connection(payload: dict[str, Any]) -> dict[str, Any]:
         None,
     )
     if probe_effort is not None:
-        extra_body = _get_chat_data_extra_body(
-            capability, enable_thinking=True, thinking_effort=probe_effort
-        )
+        extra_body = _get_chat_data_extra_body(capability, enable_thinking=True, thinking_effort=probe_effort)
     else:
         extra_body = _get_chat_data_extra_body(capability, enable_thinking=False, thinking_effort=None)
     try:
