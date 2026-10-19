@@ -69,7 +69,10 @@ def filter_bindings_by_dimensions(bindings: list[dict[str, Any]], removed_names:
 def build_unbound_message(bindings: list[dict[str, Any]], action: str) -> str:
     """整模型级阻断文案：列出占用对象，引导先解绑。"""
     owners = sorted(
-        {f"{item.get('object_type_name') or item.get('object_type_id')}({item.get('semantic_config_id')})" for item in bindings}
+        {
+            f"{item.get('object_type_name') or item.get('object_type_id')}({item.get('semantic_config_id')})"
+            for item in bindings
+        }
     )
     return (
         f"无法{action}：语义模型仍被本体对象类型映射占用（{', '.join(owners)}），"

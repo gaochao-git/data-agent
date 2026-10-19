@@ -157,7 +157,9 @@ def _validate_render_hints(property_name: str, raw_hints: Any) -> dict[str, bool
     return hints
 
 
-def validate_mappings(raw_mappings: Any, property_names: set[str], object_type_name_for_error: str) -> list[dict[str, Any]]:
+def validate_mappings(
+    raw_mappings: Any, property_names: set[str], object_type_name_for_error: str
+) -> list[dict[str, Any]]:
     """校验并规范化语义模型映射列表，返回标准化条目。
 
     本体统一基于语义模型（Palantir 物化物理表，我们物化语义模型），不触碰物理表。
@@ -191,7 +193,9 @@ def _validate_mapping_item(
     return {
         "binding_type": BINDING_TYPE_SEMANTIC,
         "semantic_config_id": subject,
-        "column_mappings": _validate_column_mappings(raw.get("column_mappings"), property_names, object_type_name_for_error),
+        "column_mappings": _validate_column_mappings(
+            raw.get("column_mappings"), property_names, object_type_name_for_error
+        ),
     }
 
 
@@ -206,7 +210,9 @@ def _validate_column_mappings(
         prop_name = _normalized_text(prop)
         dimension_name = _normalized_text(dimension)
         if prop_name not in property_names:
-            raise _invalid(f"映射 column_mappings 引用了未定义属性: {prop_name}（对象类型 {object_type_name_for_error}）")
+            raise _invalid(
+                f"映射 column_mappings 引用了未定义属性: {prop_name}（对象类型 {object_type_name_for_error}）"
+            )
         if not dimension_name:
             raise _invalid(f"属性 {prop_name} 的映射维度名不能为空")
         normalized[prop_name] = dimension_name

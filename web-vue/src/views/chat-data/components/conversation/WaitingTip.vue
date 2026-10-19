@@ -1,7 +1,8 @@
 <script setup lang="ts">
 /**
  * 等待提示：智能体生成/思考期间轮播产品小知识，把「等待时间」用来告诉用户怎么用得更好。
- * 仅 active 时渲染与计时；每次挂载随机起点，避免所有会话都从同一条开始。
+ * 内联在「正在生成 / 速率 / 用时」状态行末尾，不额外占一行；
+ * 仅 active 时渲染与计时，每次挂载随机起点，避免所有会话都从同一条开始。
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
@@ -60,12 +61,12 @@ onBeforeUnmount(stopTimer)
 </script>
 
 <template>
-  <div
+  <span
     v-if="active"
-    class="mt-1 flex min-w-0 items-start gap-1.5 pl-3 text-[11px] leading-4 text-slate-400/80"
+    class="inline-flex min-w-0 items-center gap-1 border-l border-slate-200 pl-2 text-[11px] text-slate-400"
     data-waiting-tip
   >
-    <i class="fa-regular fa-lightbulb mt-0.5 shrink-0 text-[10px] text-amber-400/80"></i>
-    <span class="min-w-0 truncate" :title="tip">{{ tip }}</span>
-  </div>
+    <i class="fa-regular fa-lightbulb shrink-0 text-[10px] text-amber-400/80"></i>
+    <span class="truncate" :title="tip">{{ tip }}</span>
+  </span>
 </template>

@@ -627,7 +627,9 @@ def test_mapping_semantic_config_must_exist(harness, monkeypatch):
         _StubSemanticConfigDao(existing_ids=set(), dimension_index=DIMENSION_INDEX),
     )
     with pytest.raises(OntologyInvalidError, match="语义模型不存在"):
-        asyncio.run(ontology_service.upsert_object_type_async("Order", _object_payload(mappings=[dict(SEMANTIC_MAPPING)])))
+        asyncio.run(
+            ontology_service.upsert_object_type_async("Order", _object_payload(mappings=[dict(SEMANTIC_MAPPING)]))
+        )
     # 无映射的对象类型不受影响
     asyncio.run(ontology_service.upsert_object_type_async("Order", _object_payload()))
 

@@ -484,9 +484,9 @@ const handleCopyAssistantMessage = async (message: Message) => {
             <span class="h-1.5 w-1.5 rounded-full bg-[#1677FF] animate-pulse [animation-delay:240ms]"></span>
             <span v-if="liveGenerationSpeed" class="whitespace-nowrap text-[11px] text-slate-400">~{{ liveGenerationSpeed }} tok/s</span>
             <span v-if="liveElapsedMs" class="whitespace-nowrap text-[11px] text-slate-400">用时 {{ formatTotalDurationLabel(liveElapsedMs) }}</span>
+            <!-- 等待期知识轮播：内联在用时之后，不额外占一行 -->
+            <WaitingTip :active="!!message.isStreaming" />
           </div>
-          <!-- 等待期知识轮播：把「等待时间」用来告诉用户怎么用得更好（仅流式中显示） -->
-          <WaitingTip :active="!!message.isStreaming" />
         </template>
       </div>
     </div>

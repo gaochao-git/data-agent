@@ -1197,7 +1197,7 @@ class DataAnalyzingInput(BaseModel):
             '"member_datasource_ids": ["<ID>"]}（member_datasource_ids 必须是 ID 字符串数组，单个机构也传数组）；'
             'check_yaml 传 {"file_path": "/mnt/user-data/workspace/model.yaml"}；'
             "list_execution_targets 传 {}；"
-            'list_object_types 传 {}；'
+            "list_object_types 传 {}；"
             'locate_object_type 传 {"object_types": [<对象类型API名>...], "semantic_config_id": "可选，只看该模型的绑定"}'
         ),
     )

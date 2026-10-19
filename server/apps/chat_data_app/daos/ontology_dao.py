@@ -301,7 +301,9 @@ class OntologyDao:
         """
         async with session_scope() as session:
             stmt = (
-                select(ChatDataOntologyObjectType.object_type_name, ChatDataOntologyObjectTypeMapping.semantic_config_id)
+                select(
+                    ChatDataOntologyObjectType.object_type_name, ChatDataOntologyObjectTypeMapping.semantic_config_id
+                )
                 .join(
                     ChatDataOntologyObjectTypeMapping,
                     ChatDataOntologyObjectTypeMapping.object_type_id == ChatDataOntologyObjectType.id,
@@ -365,7 +367,9 @@ class OntologyDao:
             rows = (await session.execute(stmt)).scalars().all()
         return [_object_type_row_to_dict(row) for row in rows]
 
-    async def get_object_type_row_async(self, object_type_name: str, *, include_deleted: bool = False) -> dict[str, Any] | None:
+    async def get_object_type_row_async(
+        self, object_type_name: str, *, include_deleted: bool = False
+    ) -> dict[str, Any] | None:
         """按 object_type_name 读取对象类型行；include_deleted=True 时含软删行（复活判断用）。"""
         name = _text(object_type_name)
         if not name:
@@ -482,7 +486,11 @@ class OntologyDao:
     ) -> ChatDataOntologyObjectType:
         """读取对象类型行（含软删）；无行插入、软删行翻回复活、活跃行覆盖内容。"""
         row = (
-            (await session.execute(select(ChatDataOntologyObjectType).where(ChatDataOntologyObjectType.object_type_name == name)))
+            (
+                await session.execute(
+                    select(ChatDataOntologyObjectType).where(ChatDataOntologyObjectType.object_type_name == name)
+                )
+            )
             .scalars()
             .first()
         )
@@ -550,7 +558,9 @@ class OntologyDao:
                 )
             )
 
-    async def soft_delete_object_type_async(self, object_type_name: str, update_by: str = "", update_by_name: str = "") -> None:
+    async def soft_delete_object_type_async(
+        self, object_type_name: str, update_by: str = "", update_by_name: str = ""
+    ) -> None:
         name = _text(object_type_name)
         if not name:
             return
@@ -586,7 +596,9 @@ class OntologyDao:
             rows = (
                 (
                     await session.execute(
-                        select(ChatDataOntologyObjectType.object_type_name).where(ChatDataOntologyObjectType.delete_flag == 0)
+                        select(ChatDataOntologyObjectType.object_type_name).where(
+                            ChatDataOntologyObjectType.delete_flag == 0
+                        )
                     )
                 )
                 .scalars()
@@ -608,7 +620,10 @@ class OntologyDao:
             return {}
         stmt = (
             select(ChatDataOntologyObjectTypeMapping, ChatDataOntologyObjectType.object_type_name)
-            .join(ChatDataOntologyObjectType, ChatDataOntologyObjectType.id == ChatDataOntologyObjectTypeMapping.object_type_id)
+            .join(
+                ChatDataOntologyObjectType,
+                ChatDataOntologyObjectType.id == ChatDataOntologyObjectTypeMapping.object_type_id,
+            )
             .where(
                 ChatDataOntologyObjectTypeMapping.semantic_config_id.in_(config_ids),
                 ChatDataOntologyObjectType.delete_flag == 0,
@@ -641,7 +656,10 @@ class OntologyDao:
             return []
         stmt = (
             select(ChatDataOntologyObjectTypeMapping, ChatDataOntologyObjectType.object_type_name)
-            .join(ChatDataOntologyObjectType, ChatDataOntologyObjectType.id == ChatDataOntologyObjectTypeMapping.object_type_id)
+            .join(
+                ChatDataOntologyObjectType,
+                ChatDataOntologyObjectType.id == ChatDataOntologyObjectTypeMapping.object_type_id,
+            )
             .where(
                 ChatDataOntologyObjectTypeMapping.semantic_config_id.in_(ids),
                 ChatDataOntologyObjectType.delete_flag == 0,
@@ -667,7 +685,10 @@ class OntologyDao:
                 SemanticConfig,
                 SemanticConfig.semantic_config_id == ChatDataOntologyObjectTypeMapping.semantic_config_id,
             )
-            .join(ChatDataOntologyObjectType, ChatDataOntologyObjectType.id == ChatDataOntologyObjectTypeMapping.object_type_id)
+            .join(
+                ChatDataOntologyObjectType,
+                ChatDataOntologyObjectType.id == ChatDataOntologyObjectTypeMapping.object_type_id,
+            )
             .where(
                 SemanticConfig.group_id == gid,
                 SemanticConfig.delete_flag == 0,
@@ -987,7 +1008,9 @@ class OntologyDao:
             row = (
                 (
                     await session.execute(
-                        select(ChatDataOntologyRelationType).where(ChatDataOntologyRelationType.relation_type_name == name)
+                        select(ChatDataOntologyRelationType).where(
+                            ChatDataOntologyRelationType.relation_type_name == name
+                        )
                     )
                 )
                 .scalars()
@@ -1025,7 +1048,10 @@ class OntologyDao:
         async with session_scope() as session:
             await session.execute(
                 update(ChatDataOntologyRelationType)
-                .where(ChatDataOntologyRelationType.relation_type_name == name, ChatDataOntologyRelationType.delete_flag == 0)
+                .where(
+                    ChatDataOntologyRelationType.relation_type_name == name,
+                    ChatDataOntologyRelationType.delete_flag == 0,
+                )
                 .values(delete_flag=1, update_by=update_by or "", update_by_name=update_by_name or "")
             )
 

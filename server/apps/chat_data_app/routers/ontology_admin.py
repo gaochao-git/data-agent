@@ -134,7 +134,9 @@ async def get_ontology_object_type(object_type_name: str, request: Request) -> J
         data = await ontology_service.get_object_type_async(object_type_name)
         if data is None:
             return business_response(
-                msg=f"本体对象类型不存在: {object_type_name}", code=ErrorCode.CHATDATA_ONTOLOGY_NOT_FOUND, status="error"
+                msg=f"本体对象类型不存在: {object_type_name}",
+                code=ErrorCode.CHATDATA_ONTOLOGY_NOT_FOUND,
+                status="error",
             )
         return business_response(data=data, msg="获取成功")
     except HTTPException:
@@ -297,9 +299,7 @@ async def change_ontology_relation_status(
 
 def _domain_group_ids(domains: list[dict] | None) -> list[str]:
     """领域列表 → 挂载的数据源组 ID（去空去重，升序）。"""
-    return sorted(
-        {str((domain or {}).get("group_id") or "").strip() for domain in domains or []} - {""}
-    )
+    return sorted({str((domain or {}).get("group_id") or "").strip() for domain in domains or []} - {""})
 
 
 async def _collect_consistency_scope(

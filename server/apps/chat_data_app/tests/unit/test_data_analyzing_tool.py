@@ -1618,7 +1618,11 @@ def test_locate_object_type_disabled_by_default(monkeypatch):
     with pytest.raises(ValueError, match="CHAT_DATA_ONTOLOGY_LOCATE_ENABLED"):
         asyncio.run(
             data_analyzing.create_data_analyzing_tool().ainvoke(
-                {"action": "locate_object_type", "action_payload": {"object_types": ["order"]}, "state": _semantic_query_state()}
+                {
+                    "action": "locate_object_type",
+                    "action_payload": {"object_types": ["order"]},
+                    "state": _semantic_query_state(),
+                }
             )
         )
 
@@ -1681,7 +1685,11 @@ def test_locate_object_type_requires_enabled_models(monkeypatch):
     with pytest.raises(ValueError, match="没有启用语义模型"):
         asyncio.run(
             data_analyzing.create_data_analyzing_tool().ainvoke(
-                {"action": "locate_object_type", "action_payload": {"object_types": ["order"]}, "state": _semantic_query_state()}
+                {
+                    "action": "locate_object_type",
+                    "action_payload": {"object_types": ["order"]},
+                    "state": _semantic_query_state(),
+                }
             )
         )
 

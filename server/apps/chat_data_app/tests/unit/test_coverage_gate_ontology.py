@@ -83,7 +83,10 @@ deps_ok = _imported_deps_ok
     [
         (lambda: validator.validate_object_type_payload({"display_name": ""}), "对象类型展示名必填"),
         (lambda: validator.validate_object_type_payload({"display_name": "x" * 129}), "对象类型展示名必填"),
-        (lambda: validator.validate_object_type_payload({"display_name": "x", "description": "d" * 1025}), "对象类型描述不超过"),
+        (
+            lambda: validator.validate_object_type_payload({"display_name": "x", "description": "d" * 1025}),
+            "对象类型描述不超过",
+        ),
         (lambda: validator.validate_object_type_payload({"display_name": "x", "domain_id": "1"}), "领域ID必须为整数"),
         (lambda: validator.validate_domain_payload({"group_id": ""}), "领域必须绑定数据源组"),
         (lambda: validator.validate_domain_payload({"group_id": "g" * 129}), "领域必须绑定数据源组"),
@@ -286,7 +289,11 @@ def _router_calls(payloads: dict[str, object]) -> list[tuple[str, object, tuple]
         ("delete_domain", ontology_admin_router.delete_ontology_domain, ("ecommerce", request)),
         ("list_object_types", ontology_admin_router.list_ontology_object_types, (request, "订单", "draft", 3)),
         ("get_object", ontology_admin_router.get_ontology_object_type, ("Order", request)),
-        ("upsert_object", ontology_admin_router.upsert_ontology_object_type, ("Order", payloads["object_type"], request)),
+        (
+            "upsert_object",
+            ontology_admin_router.upsert_ontology_object_type,
+            ("Order", payloads["object_type"], request),
+        ),
         ("delete_object", ontology_admin_router.delete_ontology_object_type, ("Order", request)),
         (
             "object_status",
@@ -936,7 +943,8 @@ def test_service_list_relations_filters_by_endpoint_names(harness, deps_ok):
         await ontology_service.upsert_relation_async("r1", _relation_payload())
         assert [item["relation_type_name"] for item in await ontology_service.list_relations_async()] == ["r1"]
         assert [
-            item["relation_type_name"] for item in await ontology_service.list_relations_async(to_object_type_name="User")
+            item["relation_type_name"]
+            for item in await ontology_service.list_relations_async(to_object_type_name="User")
         ] == ["r1"]
         assert await ontology_service.list_relations_async(from_object_type_name="User") == []
 
@@ -1154,7 +1162,9 @@ def test_service_relation_status_guards_for_inconsistent_endpoints(harness, deps
         row_values.update(values)
         async with session_factory() as session:
             await session.execute(
-                update(ChatDataOntologyObjectType).where(ChatDataOntologyObjectType.object_type_name == object_type_name).values(**row_values)
+                update(ChatDataOntologyObjectType)
+                .where(ChatDataOntologyObjectType.object_type_name == object_type_name)
+                .values(**row_values)
             )
             await session.commit()
 

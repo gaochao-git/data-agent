@@ -119,7 +119,9 @@ def _check_mapping_dimensions(
         if not isinstance(column_mappings, dict):
             continue
         missing = [
-            f"{prop}→{dim}" for prop, dim in sorted(column_mappings.items()) if _text(prop) and _text(dim) and _text(dim) not in dims
+            f"{prop}→{dim}"
+            for prop, dim in sorted(column_mappings.items())
+            if _text(prop) and _text(dim) and _text(dim) not in dims
         ]
         if missing:
             findings.append(
@@ -294,9 +296,7 @@ def _mapped_attrs_by_object_type(mappings: list[Any] | None) -> dict[int, set[st
         object_type_id = int(mapping.get("object_type_id") or 0)
         column_mappings = mapping.get("column_mappings")
         if isinstance(column_mappings, dict):
-            mapped.setdefault(object_type_id, set()).update(
-                _text(key) for key in column_mappings if _text(key)
-            )
+            mapped.setdefault(object_type_id, set()).update(_text(key) for key in column_mappings if _text(key))
     return mapped
 
 
@@ -399,9 +399,7 @@ def _mapping_type_mismatches(
         prop_category = _type_category_prop(prop_types.get(prop_name, ""))
         dim_category = _type_category_dim(dims[dim_name])
         if prop_category and dim_category and prop_category != dim_category:
-            mismatches.append(
-                f"{prop_name}({prop_types.get(prop_name, '?')})→{dim_name}({dims[dim_name]})"
-            )
+            mismatches.append(f"{prop_name}({prop_types.get(prop_name, '?')})→{dim_name}({dims[dim_name]})")
     return mismatches
 
 

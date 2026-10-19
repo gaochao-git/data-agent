@@ -398,7 +398,9 @@ class OntologyService:
             )
 
     @_transactional
-    async def delete_object_type_async(self, object_type_name: str, operator: str = "", operator_name: str = "") -> None:
+    async def delete_object_type_async(
+        self, object_type_name: str, operator: str = "", operator_name: str = ""
+    ) -> None:
         """删除对象类型（软删）：certified 拒绝；同时软删其映射、属性与参与的关系类型。"""
         existing = await self._dao.get_object_type_row_async(object_type_name)
         if existing is None:
@@ -407,7 +409,9 @@ class OntologyService:
             raise OntologyStateInvalidError("certified 对象类型禁止删除，请先降级或标记 deprecated")
         relation_types = await self._dao.list_relations_for_object_type_async(int(existing["id"]))
         for relation in relation_types:
-            await self._dao.soft_delete_relation_async(_text(relation.get("relation_type_name")), operator, operator_name)
+            await self._dao.soft_delete_relation_async(
+                _text(relation.get("relation_type_name")), operator, operator_name
+            )
         await self._dao.replace_properties_async(int(existing["id"]), [], allow_delete=True)
         await self._dao.delete_object_type_mappings_async(int(existing["id"]))
         await self._dao.soft_delete_object_type_async(object_type_name, operator, operator_name)
@@ -555,7 +559,8 @@ class OntologyService:
         object_type_id = int(detail["id"])
         relation_types = await self._dao.list_relations_for_object_type_async(object_type_id)
         object_type_status_map = await self._dao.get_objects_by_ids_async(
-            [int(r["from_object_type_id"]) for r in relation_types] + [int(r["to_object_type_id"]) for r in relation_types]
+            [int(r["from_object_type_id"]) for r in relation_types]
+            + [int(r["to_object_type_id"]) for r in relation_types]
         )
         downgrades: dict[str, list[int]] = {}
         for relation in relation_types:
@@ -653,7 +658,11 @@ class OntologyService:
         return old_status if _status_rank(old_status) <= _status_rank(derived) else derived
 
     def _relation_structural_changed(
-        self, existing: dict[str, Any], from_object_type: dict[str, Any], to_object_type: dict[str, Any], fields: dict[str, Any]
+        self,
+        existing: dict[str, Any],
+        from_object_type: dict[str, Any],
+        to_object_type: dict[str, Any],
+        fields: dict[str, Any],
     ) -> bool:
         """关系类型结构性字段（连接对象类型/关联列/基数）是否发生变化（破坏性确认触发条件）。"""
         return (
@@ -711,7 +720,9 @@ class OntologyService:
             raise OntologyStateInvalidError("关系类型连接的对象类型不存在或已被删除，无法迁移关系类型状态")
         bound = _derived_relation_status(from_status, to_status)
         if _status_rank(target) > _status_rank(bound):
-            raise OntologyStateInvalidError(f"关系类型状态不得高于两侧对象类型的较低者（当前上限: {bound}），请先升级对象类型状态")
+            raise OntologyStateInvalidError(
+                f"关系类型状态不得高于两侧对象类型的较低者（当前上限: {bound}），请先升级对象类型状态"
+            )
         await self._dao.set_relations_status_async([int(existing["id"])], target, operator, operator_name)
         return await self._dao.get_relation_row_async(relation_type_name) or existing
 
@@ -810,7 +821,9 @@ class OntologyService:
                 f"多源对象类型中非标识属性只能单源映射（标识属性可作为跨源主键）：{details}；请为属性选择唯一来源模型"
             )
 
-    async def _check_mapping_ownership(self, mappings: list[dict[str, Any]], exclude_object_type_id: int | None) -> None:
+    async def _check_mapping_ownership(
+        self, mappings: list[dict[str, Any]], exclude_object_type_id: int | None
+    ) -> None:
         """「一源一对象类型」：每个映射键全局只能归属一个对象类型（唯一索引兜底，预检给友好报错）。"""
         owners = await self._dao.find_mapping_owners_async(mappings, exclude_object_type_id=exclude_object_type_id)
         for config_id, owner_name in sorted(owners.items()):
@@ -880,7 +893,8 @@ class OntologyService:
 
     async def _attach_object_type_names(self, relation_types: list[dict[str, Any]]) -> list[dict[str, Any]]:
         object_type_map = await self._dao.get_objects_by_ids_async(
-            [int(r["from_object_type_id"]) for r in relation_types] + [int(r["to_object_type_id"]) for r in relation_types]
+            [int(r["from_object_type_id"]) for r in relation_types]
+            + [int(r["to_object_type_id"]) for r in relation_types]
         )
         for relation in relation_types:
             from_obj = object_type_map.get(int(relation["from_object_type_id"])) or {}

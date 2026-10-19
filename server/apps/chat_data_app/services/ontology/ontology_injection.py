@@ -206,7 +206,9 @@ def _render_model_entry(config: dict[str, Any], model_files: dict[str, str]) -> 
         "name": str(config.get("name") or config.get("semantic_config_name") or "").strip(),
         "file": str((model_files or {}).get(config_id) or ""),
         # description UI 已并入业务说明：description 为空时回退 business_notes，模型路由信息不缺
-        "description": str(config.get("description") or config.get("semantic_config_desc") or config.get("business_notes") or "").strip(),
+        "description": str(
+            config.get("description") or config.get("semantic_config_desc") or config.get("business_notes") or ""
+        ).strip(),
         "business_notes": str(config.get("business_notes") or "").strip(),
     }
 
@@ -390,14 +392,18 @@ def _render_catalog(
     mappings_by_object = _group_by_object_type_id(bundle.get("mappings"))
     object_types = sorted(bundle.get("object_types") or [], key=lambda obj: str(obj.get("object_type_name") or ""))
     rendered_objects = [
-        _render_object_entry(obj, properties_by_object_type, mappings_by_object, config_names, domain_names, model_files)
+        _render_object_entry(
+            obj, properties_by_object_type, mappings_by_object, config_names, domain_names, model_files
+        )
         for obj in object_types
     ]
     kept_objects, omitted_objects = _select_objects_within_budget(rendered_objects, _OBJECT_BUDGET_CHARS)
     kept_count = len(kept_objects)
     kept_ids = {int(obj.get("id") or 0) for obj in object_types[:kept_count]}
     kept_names = {int(obj.get("id") or 0): str(obj.get("object_type_name") or "") for obj in object_types[:kept_count]}
-    relation_types = sorted(bundle.get("relation_types") or [], key=lambda rel: str(rel.get("relation_type_name") or ""))
+    relation_types = sorted(
+        bundle.get("relation_types") or [], key=lambda rel: str(rel.get("relation_type_name") or "")
+    )
     payload: dict[str, Any] = {
         "comment": _CATALOG_COMMENT,
         "models": _render_models_section(configs, model_files),
@@ -405,7 +411,8 @@ def _render_catalog(
         "relation_types": [
             _render_relation_entry(rel, kept_names, mappings_by_object, dimension_columns)
             for rel in relation_types
-            if int(rel.get("from_object_type_id") or 0) in kept_ids and int(rel.get("to_object_type_id") or 0) in kept_ids
+            if int(rel.get("from_object_type_id") or 0) in kept_ids
+            and int(rel.get("to_object_type_id") or 0) in kept_ids
         ],
     }
     if omitted_objects:
@@ -451,7 +458,11 @@ async def materialize_ontology_catalog_async(
         )
         catalog_path = str(PurePosixPath(ONTOLOGY_SNAPSHOT_DIR) / ONTOLOGY_CATALOG_FILE_NAME)
         await workspace_runtime.write_internal_text_files([(catalog_path, content)])
-        logger.info("本体目录物化完成: object_types=%s relation_types=%s", len(object_types), len(bundle.get("relation_types") or []))
+        logger.info(
+            "本体目录物化完成: object_types=%s relation_types=%s",
+            len(object_types),
+            len(bundle.get("relation_types") or []),
+        )
         await _cleanup_legacy_ontology_dir(workspace_runtime)
         return len(object_types)
     except Exception as exc:  # noqa: BLE001 - 目录属尽力而为，不阻塞会话启动

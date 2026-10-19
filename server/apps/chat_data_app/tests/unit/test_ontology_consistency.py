@@ -18,8 +18,20 @@ def _bundle() -> dict:
             {"id": 2, "object_type_name": "sales_order", "display_name": "订单", "status": "certified"},
         ],
         "properties": [
-            {"id": 11, "object_type_id": 1, "property_name": "customer_id", "value_type": "String", "is_identifier": True},
-            {"id": 12, "object_type_id": 1, "property_name": "customer_name", "value_type": "String", "is_identifier": False},
+            {
+                "id": 11,
+                "object_type_id": 1,
+                "property_name": "customer_id",
+                "value_type": "String",
+                "is_identifier": True,
+            },
+            {
+                "id": 12,
+                "object_type_id": 1,
+                "property_name": "customer_name",
+                "value_type": "String",
+                "is_identifier": False,
+            },
             {"id": 21, "object_type_id": 2, "property_name": "order_no", "value_type": "String", "is_identifier": True},
             {"id": 22, "object_type_id": 2, "property_name": "amount", "value_type": "Decimal", "is_identifier": False},
         ],
@@ -240,7 +252,9 @@ def test_relation_endpoint_type_missing_property_skipped():
 def test_relation_cross_source_fires_warning():
     """两端对象类型映射的模型分属不同数据源组 → warning（join 可执行性红线）。"""
     bundle = _bundle()
-    findings = check_ontology_model_consistency(bundle, _configs(), config_group_ids={"cfg-cust": "g1", "cfg-order": "g2"})
+    findings = check_ontology_model_consistency(
+        bundle, _configs(), config_group_ids={"cfg-cust": "g1", "cfg-order": "g2"}
+    )
     finding = next(item for item in findings if item["code"] == "ONT_REL_CROSS_SOURCE")
     assert finding["severity"] == "warning"
     assert "g1" in finding["message"] and "g2" in finding["message"]
@@ -265,15 +279,21 @@ def test_relation_cross_source_unmapped_endpoint_skipped():
     """任一端对象类型无映射行时跳过（无 join 基准不误报）。"""
     bundle = _bundle()
     bundle["mappings"] = [bundle["mappings"][0]]  # 只剩 customer 的映射
-    codes = _codes(check_ontology_model_consistency(bundle, _configs(), config_group_ids={"cfg-cust": "g1", "cfg-order": "g2"}))
+    codes = _codes(
+        check_ontology_model_consistency(bundle, _configs(), config_group_ids={"cfg-cust": "g1", "cfg-order": "g2"})
+    )
     assert "ONT_REL_CROSS_SOURCE" not in codes
 
 
 def test_relation_cross_source_object_multiple_mappings_overlap():
     """对象类型可映射多个模型：任一组相交即视为可达，不报。"""
     bundle = _bundle()
-    bundle["mappings"].append({"object_type_id": 1, "semantic_config_id": "cfg-order", "column_mappings": {"customer_id": "订单编号"}})
-    codes = _codes(check_ontology_model_consistency(bundle, _configs(), config_group_ids={"cfg-cust": "g1", "cfg-order": "g2"}))
+    bundle["mappings"].append(
+        {"object_type_id": 1, "semantic_config_id": "cfg-order", "column_mappings": {"customer_id": "订单编号"}}
+    )
+    codes = _codes(
+        check_ontology_model_consistency(bundle, _configs(), config_group_ids={"cfg-cust": "g1", "cfg-order": "g2"})
+    )
     assert "ONT_REL_CROSS_SOURCE" not in codes
 
 

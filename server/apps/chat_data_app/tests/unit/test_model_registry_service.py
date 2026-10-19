@@ -758,8 +758,15 @@ def test_load_registry_empty_table_returns_empty_without_file_fallback(registry_
     models_file = tmp_path / "models.json"
     models_file.write_text(
         json.dumps(
-            [{"id": "should-not-import", "temperature": 0.1, "context_window": 64000, "vlm": False,
-              "thinking": {"mode": "none"}}],
+            [
+                {
+                    "id": "should-not-import",
+                    "temperature": 0.1,
+                    "context_window": 64000,
+                    "vlm": False,
+                    "thinking": {"mode": "none"},
+                }
+            ],
             ensure_ascii=False,
         ),
         encoding="utf-8",

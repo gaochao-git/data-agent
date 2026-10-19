@@ -8,9 +8,7 @@ _URL = "/api/chatdata/admin/meta/ontology/consistency-check"
 
 
 def _install_stubs(monkeypatch, *, domains, configs, bundle, findings=None):
-    monkeypatch.setattr(
-        ontology_admin_routes.ontology_service, "list_domains_async", _async_return(domains)
-    )
+    monkeypatch.setattr(ontology_admin_routes.ontology_service, "list_domains_async", _async_return(domains))
 
     class _StubService:
         async def get_configs_async(self, datasource_id, user_id=""):
@@ -29,7 +27,9 @@ def _install_stubs(monkeypatch, *, domains, configs, bundle, findings=None):
     stub_dao = _StubDao()
     monkeypatch.setattr(ontology_admin_routes, "OntologyDao", lambda: stub_dao)
     if findings is not None:
-        monkeypatch.setattr(ontology_admin_routes, "_run_consistency_check", lambda bundle, configs, *, config_group_ids=None: findings)
+        monkeypatch.setattr(
+            ontology_admin_routes, "_run_consistency_check", lambda bundle, configs, *, config_group_ids=None: findings
+        )
     return stub_dao
 
 
@@ -51,7 +51,12 @@ def test_consistency_check_contract(client, auth_headers, monkeypatch):
             {"id": "cfg-user", "name": "私有模型", "dimensions": [], "scope_type": "user"},
         ]
     }
-    bundle = {"object_types": [{"id": 1, "object_type_name": "customer"}], "properties": [], "relation_types": [], "mappings": []}
+    bundle = {
+        "object_types": [{"id": 1, "object_type_name": "customer"}],
+        "properties": [],
+        "relation_types": [],
+        "mappings": [],
+    }
     findings = [
         {
             "code": "ONT_MAPPING_DIM_MISSING",

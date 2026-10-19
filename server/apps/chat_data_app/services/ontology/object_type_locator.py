@@ -428,7 +428,9 @@ def build_object_list_report(
     model_files = model_files or {}
     mappings_by_object = _mappings_index(bundle)
     entries: list[dict[str, Any]] = []
-    for obj in sorted(bundle.get("object_types") or [], key=lambda item: str((item or {}).get("object_type_name") or "")):
+    for obj in sorted(
+        bundle.get("object_types") or [], key=lambda item: str((item or {}).get("object_type_name") or "")
+    ):
         obj = obj or {}
         obj_name = str(obj.get("object_type_name") or "").strip()
         if not obj_name:

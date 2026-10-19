@@ -19,6 +19,7 @@ describe('WaitingTip 等待期知识轮播', () => {
     await wrapper.setProps({ active: true })
     const first = wrapper.find('[data-waiting-tip]').text()
     expect(first.length).toBeGreaterThan(0)
+    expect(wrapper.find('[data-waiting-tip]').element.tagName).toBe('SPAN')  // 内联，不占整行
 
     await vi.advanceTimersByTimeAsync(8000)
     expect(wrapper.find('[data-waiting-tip]').text()).not.toBe(first)

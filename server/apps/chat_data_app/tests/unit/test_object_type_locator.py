@@ -247,7 +247,9 @@ def test_report_empty_objects_rejected() -> None:
 
 def test_report_over_batch_limit_rejected() -> None:
     with pytest.raises(ValueError, match="单次最多定位 10 个对象"):
-        object_type_locator.build_object_type_locator_report(_bundle(), object_type_names=[f"obj{i}" for i in range(11)])
+        object_type_locator.build_object_type_locator_report(
+            _bundle(), object_type_names=[f"obj{i}" for i in range(11)]
+        )
 
 
 def test_usage_hint_mentions_execute_query() -> None:
