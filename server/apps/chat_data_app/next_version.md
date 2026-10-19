@@ -227,15 +227,6 @@ CREATE TABLE chat_data_model_registry (
   UNIQUE KEY uniq_provider_model_del (provider, model_id, delete_flag),
   KEY idx_model_enabled_delete (enabled_flag, delete_flag)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ChatData 模型注册表';
-
--- 存量库迁移：注册键/提供商与请求名解耦（同一请求名可接多个供应商）
--- 存量行注册键=请求名，历史会话/定时任务存的请求名继续可解析（读侧回落匹配）
-ALTER TABLE chat_data_model_registry ADD COLUMN model_key varchar(128) NOT NULL DEFAULT '' COMMENT '注册键（服务端自动生成的唯一引用标识）' AFTER id;
-ALTER TABLE chat_data_model_registry ADD COLUMN provider varchar(128) NOT NULL DEFAULT '' COMMENT '提供商（与请求名组成业务唯一键）' AFTER model_id;
-UPDATE chat_data_model_registry SET model_key = model_id WHERE model_key = '';
-ALTER TABLE chat_data_model_registry DROP KEY uniq_model_id;
-ALTER TABLE chat_data_model_registry ADD UNIQUE KEY uniq_model_key (model_key);
-ALTER TABLE chat_data_model_registry ADD UNIQUE KEY uniq_provider_model_del (provider, model_id, delete_flag);
 ```
 
 ## 依赖变更
