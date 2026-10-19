@@ -1,12 +1,12 @@
-"""本体消费注入：把绑定到当前会话启用语义模型的本体对象物化成 workspace 目录。
+"""本体消费注入：把绑定到当前会话启用语义模型的本体对象类型物化成 workspace 目录。
 
 消费链路（对齐语义层预物化的形状）：run 启动前语义模型预物化的同一步，把
-certified/experimental、绑定到本轮启用语义模型的对象
-连同属性摘要与关系子图，物化成 `workspace/semantic/_ontology_catalog.yaml`
+certified/experimental、绑定到本轮启用语义模型的对象类型
+连同属性摘要与关系类型子图，物化成 `workspace/semantic/_ontology_catalog.yaml`
 只读目录。目录二选一：本体目录物化成功时语义资产目录（_semantic_catalog.yaml）
 不写——本体目录的 mappings.file 直接给出模型快照文件名，覆盖语义目录的索引职责；
-同时目录顶层 `models` 列出全部启用模型，本体对象覆盖不到的模型（未建本体对象）
-不会因二选一丢失索引。提示词只声明「存在时先读」，实体识别与关系导航由模型
+同时目录顶层 `models` 列出全部启用模型，本体对象类型覆盖不到的模型（未建本体对象类型）
+不会因二选一丢失索引。提示词只声明「存在时先读」，实体识别与关系类型导航由模型
 运行时完成。目录为尽力而为：任何异常只告警，不阻塞语义模型物化与会话启动。
 
 开关 `CHAT_DATA_ONTOLOGY_INJECTION_ENABLED` 默认关闭（实验分支验证期开启）。
@@ -32,9 +32,9 @@ ONTOLOGY_CATALOG_FILE_NAME = "_ontology_catalog.yaml"
 # 旧版独立目录残留（历史会话 workspace 里可能存在），物化新目录时顺手清理
 ONTOLOGY_LEGACY_CATALOG_PATH = "/mnt/user-data/workspace/ontology/_ontology_catalog.yaml"
 
-# 目录 objects 段的字符预算：40k 渲染字符 ≈ 14-20k tokens（中文约 1 字 1 token，
+# 目录 object_types 段的字符预算：40k 渲染字符 ≈ 14-20k tokens（中文约 1 字 1 token，
 # YAML 键名/缩进按英文估算），在 48k 上下文窗口里还要留给模型快照精读与工具往返，
-# 超过这个体积「先整读目录」就不可行。按对象名升序装入，剩余对象交给 file_grep。
+# 超过这个体积「先整读目录」就不可行。按对象类型名升序装入，剩余对象类型交给 file_grep。
 _OBJECT_BUDGET_CHARS = 40_000
 
 _TRUTHY = {"1", "true", "yes", "on"}
@@ -80,7 +80,7 @@ def _dimension_column_map(dimensions: list[dict[str, Any]] | None) -> dict[str, 
 def _config_dimension_columns(configs: list[dict[str, Any]] | None) -> dict[str, dict[str, str]]:
     """从 runtime configs 提取 {semantic_config_id: {维度名: 物理列名}}。
 
-    关系列翻译用：本体映射右值是模型维度名（概念层不重复定义物理列），
+    关系类型列翻译用：本体映射右值是模型维度名（概念层不重复定义物理列），
     目录渲染时经此索引把「属性 → 维度 → 物理列」翻译到物理列供 join 直接使用。
     """
     index: dict[str, dict[str, str]] = {}
@@ -93,10 +93,10 @@ def _config_dimension_columns(configs: list[dict[str, Any]] | None) -> dict[str,
     return index
 
 
-def _group_by_object_id(items: list[dict[str, Any]] | None) -> dict[int, list[dict[str, Any]]]:
+def _group_by_object_type_id(items: list[dict[str, Any]] | None) -> dict[int, list[dict[str, Any]]]:
     grouped: dict[int, list[dict[str, Any]]] = {}
     for item in items or []:
-        grouped.setdefault(int(item.get("object_id") or 0), []).append(item)
+        grouped.setdefault(int(item.get("object_type_id") or 0), []).append(item)
     return grouped
 
 
@@ -139,7 +139,7 @@ def _translate_with_mapping(
     mapping: dict[str, Any],
     dimension_columns: dict[str, dict[str, str]] | None,
 ) -> tuple[list[str], bool]:
-    """用指定映射把关系列翻译为物理列，返回 (物理列, 是否有列未解析)。
+    """用指定映射把关系类型列翻译为物理列，返回 (物理列, 是否有列未解析)。
 
     两级翻译：属性 → 维度名（该映射的 column_mappings）→ 物理列（该映射
     semantic_config_id 下的维度列索引）。任一级缺失时保留原文，并标记未解析：
@@ -217,8 +217,8 @@ def _render_models_section(
 ) -> list[dict[str, Any]]:
     """全部启用模型索引（按 semantic_config_id 排序去重）。
 
-    objects 只覆盖已绑定本体对象的模型；本段覆盖全部启用模型，
-    使「本体目录接管语义资产目录」后未建对象的模型仍有 description/business_notes
+    object_types 只覆盖已绑定本体对象类型的模型；本段覆盖全部启用模型，
+    使「本体目录接管语义资产目录」后未建对象类型的模型仍有 description/business_notes
     索引与 file 取数入口（二选一不丢信息）。
     """
     models: dict[str, dict[str, Any]] = {}
@@ -264,36 +264,36 @@ def _render_mapping_entry(
 
 def _render_object_entry(
     obj: dict[str, Any],
-    properties_by_object: dict[int, list[dict[str, Any]]],
+    properties_by_object_type: dict[int, list[dict[str, Any]]],
     mappings_by_object: dict[int, list[dict[str, Any]]],
     config_names: dict[str, str],
     domain_names: dict[int, str] | None = None,
     model_files: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """单个对象 → 目录条目（属性摘要 + 语义模型映射列表；domain=领域名，未分域为空）。
+    """单个对象类型 → 目录条目（属性摘要 + 语义模型映射列表；domain=领域名，未分域为空）。
 
     mappings.file = 该模型在工作区 semantic/ 下的快照文件名：本体目录与语义资产目录
     二选一物化后，模型凭它直接 file_read 取数模型，不再依赖 _semantic_catalog.yaml。
     空 column_mappings 的映射行对模型没有信息量（渲染成空字典只会造成歧义），
-    因此从对象条目中剔除；对象本身即使没有映射也保留。
+    因此从对象类型条目中剔除；对象类型本身即使没有映射也保留。
     """
     domain_names = domain_names or {}
     model_files = model_files or {}
-    object_id = int(obj.get("id") or 0)
+    object_type_id = int(obj.get("id") or 0)
     properties = [
         _render_property_entry(prop)
         for prop in sorted(
-            properties_by_object.get(object_id, []),
+            properties_by_object_type.get(object_type_id, []),
             key=lambda p: str(p.get("property_name") or ""),
         )
     ]
     mappings = [
         _render_mapping_entry(mapping, config_names, model_files)
-        for mapping in sorted(mappings_by_object.get(object_id, []), key=_mapping_config_id)
+        for mapping in sorted(mappings_by_object.get(object_type_id, []), key=_mapping_config_id)
         if _mapping_column_map(mapping)
     ]
     return {
-        "object": obj.get("object_name"),
+        "object_type": obj.get("object_type_name"),
         "display_name": obj.get("display_name"),
         "status": obj.get("status"),
         "domain": domain_names.get(int(obj.get("domain_id") or 0), ""),
@@ -305,27 +305,27 @@ def _render_object_entry(
 
 def _render_relation_entry(
     rel: dict[str, Any],
-    object_names: dict[int, str],
+    object_type_names: dict[int, str],
     mappings_by_object: dict[int, list[dict[str, Any]]],
     dimension_columns: dict[str, dict[str, str]] | None = None,
 ) -> dict[str, Any]:
-    """单条关系 → 目录条目（两端对象名 + 尽力翻译的关联列 + 自然语言模式）。
+    """单条关系类型 → 目录条目（两端对象类型名 + 尽力翻译的关联列 + 自然语言模式）。
 
     列翻译是尽力而为：`from_columns`/`to_columns` 是第一个可用端点映射的翻译结果
     （单映射时与旧输出一致）；`from_columns_by_model`/`to_columns_by_model` 给出
     每个绑定模型各自的翻译结果，多模型绑定时以它为准。任一列回退到原始属性/维度名
     时置 `unresolved: true`——模型必须回读对应模型 YAML 确认物理列后再写 join。
     """
-    from_mappings = mappings_by_object.get(int(rel.get("from_object_id") or 0))
-    to_mappings = mappings_by_object.get(int(rel.get("to_object_id") or 0))
+    from_mappings = mappings_by_object.get(int(rel.get("from_object_type_id") or 0))
+    to_mappings = mappings_by_object.get(int(rel.get("to_object_type_id") or 0))
     from_columns, from_unresolved = _translate_to_physical_columns(
         rel.get("from_columns"), from_mappings, dimension_columns
     )
     to_columns, to_unresolved = _translate_to_physical_columns(rel.get("to_columns"), to_mappings, dimension_columns)
     entry: dict[str, Any] = {
-        "name": rel.get("relation_name"),
-        "from": object_names.get(int(rel.get("from_object_id") or 0), ""),
-        "to": object_names.get(int(rel.get("to_object_id") or 0), ""),
+        "name": rel.get("relation_type_name"),
+        "from": object_type_names.get(int(rel.get("from_object_type_id") or 0), ""),
+        "to": object_type_names.get(int(rel.get("to_object_type_id") or 0), ""),
         "multiplicity": rel.get("multiplicity"),
         "from_columns": from_columns,
         "to_columns": to_columns,
@@ -344,7 +344,7 @@ def _render_relation_entry(
 
 
 def _yaml_render_size(value: Any) -> int:
-    """单条对象条目的 YAML 渲染字符数（截断预算度量）。"""
+    """单条对象类型条目的 YAML 渲染字符数（截断预算度量）。"""
     return len(yaml.safe_dump(value, allow_unicode=True, sort_keys=False, width=120))
 
 
@@ -352,10 +352,10 @@ def _select_objects_within_budget(
     entries: list[dict[str, Any]],
     budget: int,
 ) -> tuple[list[dict[str, Any]], int]:
-    """按对象名升序装入对象直到字符预算，返回 (保留对象, 省略对象数)。
+    """按对象类型名升序装入对象类型直到字符预算，返回 (保留对象类型, 省略对象类型数)。
 
-    预算按单条对象 YAML 的渲染长度累加（YAML 头部字段与 relations 段不计入，
-    实际文件略大于预算，量级足够）。首条对象即使超预算也保留，避免空目录。
+    预算按单条对象类型 YAML 的渲染长度累加（YAML 头部字段与 relation_types 段不计入，
+    实际文件略大于预算，量级足够）。首条对象类型即使超预算也保留，避免空目录。
     """
     kept: list[dict[str, Any]] = []
     used = 0
@@ -370,10 +370,10 @@ def _select_objects_within_budget(
 
 _CATALOG_COMMENT = (
     "本体目录（系统生成，只读）：models 是全部启用模型索引（file 即取数模型快照文件名，"
-    "含未建本体对象的模型）；objects 是已建本体对象的导航子集（属性/语义模型映射/对象间关系），"
-    "模型可能不在 objects 中。relations 的 from/to 列是尽力翻译的物理列，"
+    "含未建本体对象类型的模型）；object_types 是已建本体对象类型的导航子集（属性/语义模型映射/对象类型间关系类型），"
+    "模型可能不在 object_types 中。relation_types 的 from/to 列是尽力翻译的物理列，"
     "unresolved: true 表示存在未解析列（回退为原始属性/维度名），必须回读模型 YAML 确认；"
-    "truncated: true 时 objects 仅为按对象名排序的前一部分，剩余对象用 file_grep 检索。"
+    "truncated: true 时 object_types 仅为按对象类型名排序的前一部分，剩余对象类型用 file_grep 检索。"
 )
 
 
@@ -385,27 +385,27 @@ def _render_catalog(
     model_files: dict[str, str] | None = None,
     configs: list[dict[str, Any]] | None = None,
 ) -> str:
-    """渲染本体目录 YAML（模型索引 + 对象导航 + 关系邻接，给模型检索用）。"""
-    properties_by_object = _group_by_object_id(bundle.get("properties"))
-    mappings_by_object = _group_by_object_id(bundle.get("mappings"))
-    objects = sorted(bundle.get("objects") or [], key=lambda obj: str(obj.get("object_name") or ""))
+    """渲染本体目录 YAML（模型索引 + 对象类型导航 + 关系类型邻接，给模型检索用）。"""
+    properties_by_object_type = _group_by_object_type_id(bundle.get("properties"))
+    mappings_by_object = _group_by_object_type_id(bundle.get("mappings"))
+    object_types = sorted(bundle.get("object_types") or [], key=lambda obj: str(obj.get("object_type_name") or ""))
     rendered_objects = [
-        _render_object_entry(obj, properties_by_object, mappings_by_object, config_names, domain_names, model_files)
-        for obj in objects
+        _render_object_entry(obj, properties_by_object_type, mappings_by_object, config_names, domain_names, model_files)
+        for obj in object_types
     ]
     kept_objects, omitted_objects = _select_objects_within_budget(rendered_objects, _OBJECT_BUDGET_CHARS)
     kept_count = len(kept_objects)
-    kept_ids = {int(obj.get("id") or 0) for obj in objects[:kept_count]}
-    kept_names = {int(obj.get("id") or 0): str(obj.get("object_name") or "") for obj in objects[:kept_count]}
-    relations = sorted(bundle.get("relations") or [], key=lambda rel: str(rel.get("relation_name") or ""))
+    kept_ids = {int(obj.get("id") or 0) for obj in object_types[:kept_count]}
+    kept_names = {int(obj.get("id") or 0): str(obj.get("object_type_name") or "") for obj in object_types[:kept_count]}
+    relation_types = sorted(bundle.get("relation_types") or [], key=lambda rel: str(rel.get("relation_type_name") or ""))
     payload: dict[str, Any] = {
         "comment": _CATALOG_COMMENT,
         "models": _render_models_section(configs, model_files),
-        "objects": kept_objects,
-        "relations": [
+        "object_types": kept_objects,
+        "relation_types": [
             _render_relation_entry(rel, kept_names, mappings_by_object, dimension_columns)
-            for rel in relations
-            if int(rel.get("from_object_id") or 0) in kept_ids and int(rel.get("to_object_id") or 0) in kept_ids
+            for rel in relation_types
+            if int(rel.get("from_object_type_id") or 0) in kept_ids and int(rel.get("to_object_type_id") or 0) in kept_ids
         ],
     }
     if omitted_objects:
@@ -420,7 +420,7 @@ async def materialize_ontology_catalog_async(
     configs: list[dict[str, Any]] | None = None,
     model_files: dict[str, str] | None = None,
 ) -> int:
-    """物化本体目录到 workspace/semantic/，返回写入对象数（开关关或无对象返回 0）。
+    """物化本体目录到 workspace/semantic/，返回写入对象类型数（开关关或无对象类型返回 0）。
 
     model_files：semantic_config_id → 模型快照文件名，写入 mappings.file 供模型
     直接 file_read（本体目录与语义资产目录二选一的取数索引）。
@@ -431,8 +431,8 @@ async def materialize_ontology_catalog_async(
         return 0
     try:
         bundle = await OntologyDao().load_injection_bundle_async(list(semantic_config_ids or []))
-        objects = bundle.get("objects") or []
-        if not objects:
+        object_types = bundle.get("object_types") or []
+        if not object_types:
             return 0
         try:
             domain_rows = await OntologyDao().list_domains_async()
@@ -451,9 +451,9 @@ async def materialize_ontology_catalog_async(
         )
         catalog_path = str(PurePosixPath(ONTOLOGY_SNAPSHOT_DIR) / ONTOLOGY_CATALOG_FILE_NAME)
         await workspace_runtime.write_internal_text_files([(catalog_path, content)])
-        logger.info("本体目录物化完成: objects=%s relations=%s", len(objects), len(bundle.get("relations") or []))
+        logger.info("本体目录物化完成: object_types=%s relation_types=%s", len(object_types), len(bundle.get("relation_types") or []))
         await _cleanup_legacy_ontology_dir(workspace_runtime)
-        return len(objects)
+        return len(object_types)
     except Exception as exc:  # noqa: BLE001 - 目录属尽力而为，不阻塞会话启动
         logger.warning("本体目录物化失败（不影响会话启动）: %s", exc)
         return 0

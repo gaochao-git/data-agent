@@ -5,15 +5,15 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildGraphOption,
-  objectStatusColor,
-  objectStatusLabel,
+  objectTypeStatusColor,
+  objectTypeStatusLabel,
   parseOntologyCatalog,
   renderVerbalize,
 } from '../ontologyCatalogGraph'
 
 const SAMPLE_YAML = `comment: 本体目录（系统生成，只读）
-objects:
-- object: sales_order
+object_types:
+- object_type: sales_order
   display_name: 订单
   status: certified
   description: 销售订单主表
@@ -33,7 +33,7 @@ objects:
     type: Decimal
     identifier: false
     title: false
-- object: customer
+- object_type: customer
   display_name: 用户
   status: experimental
   description: 下单客户
@@ -43,7 +43,7 @@ objects:
     type: String
     identifier: true
     title: true
-relations:
+relation_types:
 - name: order_belongs_to_customer
   from: sales_order
   to: customer
@@ -55,17 +55,17 @@ relations:
 `
 
 describe('parseOntologyCatalog', () => {
-  it('解析正常目录：objects 与 relations 逐字段落位', () => {
+  it('解析正常目录：object_types 与 relation_types 逐字段落位', () => {
     const catalog = parseOntologyCatalog(SAMPLE_YAML)
     expect(catalog).not.toBeNull()
-    expect(catalog!.objects.map(item => item.object)).toEqual(['sales_order', 'customer'])
-    expect(catalog!.objects[0]!.display_name).toBe('订单')
-    expect(catalog!.objects[0]!.properties).toHaveLength(2)
+    expect(catalog!.object_types.map(item => item.object_type)).toEqual(['sales_order', 'customer'])
+    expect(catalog!.object_types[0]!.display_name).toBe('订单')
+    expect(catalog!.object_types[0]!.properties).toHaveLength(2)
     // mappings 提取语义模型展示名（tooltip 辅助信息）
-    expect(catalog!.objects[0]!.mappings).toEqual(['订单模型'])
-    expect(catalog!.objects[1]!.mappings).toEqual([])
-    expect(catalog!.relations).toHaveLength(1)
-    expect(catalog!.relations[0]).toMatchObject({
+    expect(catalog!.object_types[0]!.mappings).toEqual(['订单模型'])
+    expect(catalog!.object_types[1]!.mappings).toEqual([])
+    expect(catalog!.relation_types).toHaveLength(1)
+    expect(catalog!.relation_types[0]).toMatchObject({
       name: 'order_belongs_to_customer',
       from: 'sales_order',
       to: 'customer',
@@ -74,25 +74,25 @@ describe('parseOntologyCatalog', () => {
   })
 
   it('非法 YAML 返回 null（降级，不抛错）', () => {
-    expect(parseOntologyCatalog('objects: [unclosed')).toBeNull()
+    expect(parseOntologyCatalog('object_types: [unclosed')).toBeNull()
     expect(parseOntologyCatalog('\t- 非法缩进: {')).toBeNull()
   })
 
-  it('缺 objects 或 objects 为空返回 null', () => {
+  it('缺 object_types 或 object_types 为空返回 null', () => {
     expect(parseOntologyCatalog('comment: 只有注释')).toBeNull()
-    expect(parseOntologyCatalog('objects: []\nrelations: []')).toBeNull()
+    expect(parseOntologyCatalog('object_types: []\nrelations: []')).toBeNull()
   })
 
   it('对象缺 object 名返回 null（结构性损坏不硬渲染）', () => {
-    const broken = 'objects:\n- display_name: 无名对象\n'
+    const broken = 'object_types:\n- display_name: 无名对象\n'
     expect(parseOntologyCatalog(broken)).toBeNull()
   })
 
-  it('relations 缺省允许通过（孤立对象场景）', () => {
-    const solo = 'objects:\n- object: lone\n  display_name: 孤立对象\n'
+  it('relation_types 缺省允许通过（孤立对象场景）', () => {
+    const solo = 'object_types:\n- object_type: lone\n  display_name: 孤立对象\n'
     const catalog = parseOntologyCatalog(solo)
     expect(catalog).not.toBeNull()
-    expect(catalog!.relations).toEqual([])
+    expect(catalog!.relation_types).toEqual([])
   })
 })
 
@@ -113,23 +113,23 @@ describe('renderVerbalize', () => {
   })
 })
 
-describe('objectStatusColor', () => {
+describe('objectTypeStatusColor', () => {
   it('四态各有语义色，未知状态回落灰色', () => {
-    expect(objectStatusColor('certified')).toBe('#16a34a')
-    expect(objectStatusColor('experimental')).toBe('#2563eb')
-    expect(objectStatusColor('draft')).toBe('#94a3b8')
-    expect(objectStatusColor('deprecated')).toBe('#dc2626')
-    expect(objectStatusColor('whatever')).toBe('#64748b')
+    expect(objectTypeStatusColor('certified')).toBe('#16a34a')
+    expect(objectTypeStatusColor('experimental')).toBe('#2563eb')
+    expect(objectTypeStatusColor('draft')).toBe('#94a3b8')
+    expect(objectTypeStatusColor('deprecated')).toBe('#dc2626')
+    expect(objectTypeStatusColor('whatever')).toBe('#64748b')
   })
 })
 
-describe('objectStatusLabel', () => {
+describe('objectTypeStatusLabel', () => {
   it('四态中文名，未知状态回落「未知」', () => {
-    expect(objectStatusLabel('certified')).toBe('权威')
-    expect(objectStatusLabel('experimental')).toBe('试用')
-    expect(objectStatusLabel('draft')).toBe('草稿')
-    expect(objectStatusLabel('deprecated')).toBe('已废弃')
-    expect(objectStatusLabel('whatever')).toBe('未知')
+    expect(objectTypeStatusLabel('certified')).toBe('权威')
+    expect(objectTypeStatusLabel('experimental')).toBe('试用')
+    expect(objectTypeStatusLabel('draft')).toBe('草稿')
+    expect(objectTypeStatusLabel('deprecated')).toBe('已废弃')
+    expect(objectTypeStatusLabel('whatever')).toBe('未知')
   })
 })
 
@@ -145,7 +145,7 @@ describe('buildGraphOption', () => {
     const links = graph.links as Array<Record<string, unknown>>
     // 2 对象 + 3 属性（sales_order 2 个 + customer 1 个）
     expect(nodes).toHaveLength(5)
-    const objectNodes = nodes.filter(node => node.catalogObject)
+    const objectNodes = nodes.filter(node => node.catalogObjectType)
     const propertyNodes = nodes.filter(node => node.catalogProperty)
     expect(objectNodes).toHaveLength(2)
     expect(propertyNodes).toHaveLength(3)
@@ -153,7 +153,7 @@ describe('buildGraphOption', () => {
     const relationLinks = links.filter(link => 'relation' in link)
     expect(relationLinks).toHaveLength(1)
     expect(links).toHaveLength(4)
-    // 关系边来自本体 relations；箭头 one→many（Palantir Vertex 默认，用户拍板对标），
+    // 关系边来自本体 relation_types；箭头 one→many（Palantir Vertex 默认，用户拍板对标），
     // label=名词角色名 to_display_name（官方命名规则「side 表示通往该侧的链路」）
     expect(relationLinks[0]).toMatchObject({ source: 'customer', target: 'sales_order' })
     expect(graph.edgeSymbol).toEqual(['none', 'arrow'])
@@ -186,7 +186,7 @@ describe('buildGraphOption', () => {
     // 箭头 customer→sales_order（one→many），label 命名到达的 many 侧 =「名下订单」
     expect((relationLink.label as Record<string, unknown>).formatter).toBe('名下订单')
     // 两个对象节点在圆周上不重合（两节点时上下对称：x 相同、y 相反，比较坐标对）
-    const nodes = (graph.data as Array<Record<string, unknown>>).filter(node => node.catalogObject)
+    const nodes = (graph.data as Array<Record<string, unknown>>).filter(node => node.catalogObjectType)
     expect([nodes[0]!.x, nodes[0]!.y]).not.toEqual([nodes[1]!.x, nodes[1]!.y])
   })
 
@@ -206,7 +206,7 @@ describe('buildGraphOption', () => {
     const catalog = parseOntologyCatalog(SAMPLE_YAML)!
     const option = buildGraphOption(catalog, { showProperties: true })
     const formatter = (option.tooltip as Record<string, unknown>).formatter as (params: unknown) => string
-    const html = formatter({ data: { catalogProperty: { name: 'user_id', display_name: '用户ID', type: 'String', identifier: true, title: true }, ownerObject: 'customer' } })
+    const html = formatter({ data: { catalogProperty: { name: 'user_id', display_name: '用户ID', type: 'String', identifier: true, title: true }, ownerObjectType: 'customer' } })
     expect(html).toContain('类型：String')
     expect(html).toContain('角色：标识，标题')
     expect(html).toContain('所属对象：用户')

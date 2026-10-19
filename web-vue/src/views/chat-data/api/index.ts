@@ -37,10 +37,10 @@ import type {
   MetaGlobalEnumValueItem,
   OntologyDomainItem,
   OntologyMappingItem,
-  OntologyObjectItem,
-  OntologyObjectStatus,
+  OntologyObjectTypeItem,
+  OntologyObjectTypeStatus,
   OntologyPropertyItem,
-  OntologyRelationItem
+  OntologyRelationTypeItem
 } from '../types'
 import type { Dashboard } from './dashboard'
 
@@ -2074,7 +2074,7 @@ export interface OntologyConsistencyFinding {
 export interface OntologyConsistencyReport {
   group_count: number
   config_count: number
-  object_count: number
+  object_type_count: number
   findings: OntologyConsistencyFinding[]
   summary: { error: number; warning: number; info: number }
   healthy: boolean
@@ -2121,31 +2121,31 @@ export function deleteAdminOntologyDomain(domainName: string): Promise<ApiRespon
   })
 }
 
-/** 后台：本体对象列表（keyword 按名称/展示名/描述模糊过滤；status/domain_id 精确过滤） */
-export function getAdminOntologyObjects(params?: {
+/** 后台：本体对象类型列表（keyword 按名称/展示名/描述模糊过滤；status/domain_id 精确过滤） */
+export function getAdminOntologyObjectTypes(params?: {
   keyword?: string
   status?: string
   domain_id?: number
-}): Promise<ApiResponse<{ objects: OntologyObjectItem[] }>> {
+}): Promise<ApiResponse<{ object_types: OntologyObjectTypeItem[] }>> {
   return request({
-    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/objects`,
+    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/object-types`,
     method: 'get',
     params
   })
 }
 
-/** 后台：本体对象详情（含属性集与绑定） */
-export function getAdminOntologyObject(objectName: string): Promise<ApiResponse<OntologyObjectItem>> {
+/** 后台：本体对象类型详情（含属性集与绑定） */
+export function getAdminOntologyObjectType(objectTypeName: string): Promise<ApiResponse<OntologyObjectTypeItem>> {
   return request({
-    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/objects/${encodeURIComponent(objectName)}`,
+    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/object-types/${encodeURIComponent(objectTypeName)}`,
     method: 'get'
   })
 }
 
-/** 后台：创建/整体编辑本体对象（元数据 + 属性集 + 映射一次性提交）。
- * 编辑既有活跃对象 allow_overwrite=true；映射/主键/标题键等破坏性变更需 confirm_destructive=true。 */
-export function upsertAdminOntologyObject(
-  objectName: string,
+/** 后台：创建/整体编辑本体对象类型（元数据 + 属性集 + 映射一次性提交）。
+ * 编辑既有活跃对象类型 allow_overwrite=true；映射/主键/标题键等破坏性变更需 confirm_destructive=true。 */
+export function upsertAdminOntologyObjectType(
+  objectTypeName: string,
   data: {
     display_name: string
     description?: string
@@ -2155,70 +2155,70 @@ export function upsertAdminOntologyObject(
     allow_overwrite?: boolean
     confirm_destructive?: boolean
   }
-): Promise<ApiResponse<OntologyObjectItem>> {
+): Promise<ApiResponse<OntologyObjectTypeItem>> {
   return request({
-    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/objects/${encodeURIComponent(objectName)}`,
+    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/object-types/${encodeURIComponent(objectTypeName)}`,
     method: 'put',
     data
   })
 }
 
-/** 后台：删除本体对象（软删；certified 拒绝，级联软删属性与关系） */
-export function deleteAdminOntologyObject(objectName: string): Promise<ApiResponse<{ object_name: string }>> {
+/** 后台：删除本体对象类型（软删；certified 拒绝，级联软删属性与关系类型） */
+export function deleteAdminOntologyObjectType(objectTypeName: string): Promise<ApiResponse<{ object_type_name: string }>> {
   return request({
-    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/objects/${encodeURIComponent(objectName)}`,
+    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/object-types/${encodeURIComponent(objectTypeName)}`,
     method: 'delete'
   })
 }
 
-/** 后台：本体对象状态迁移（升级/降级/废弃；关系状态按对象自动级联降级，升级手动） */
-export function changeAdminOntologyObjectStatus(
-  objectName: string,
+/** 后台：本体对象类型状态迁移（升级/降级/废弃；关系类型状态按对象类型自动级联降级，升级手动） */
+export function changeAdminOntologyObjectTypeStatus(
+  objectTypeName: string,
   data: {
-    status: OntologyObjectStatus
+    status: OntologyObjectTypeStatus
     deprecation_reason?: string
     deprecated_until?: string
-    successor_object_name?: string
+    successor_object_type_name?: string
   }
-): Promise<ApiResponse<OntologyObjectItem>> {
+): Promise<ApiResponse<OntologyObjectTypeItem>> {
   return request({
-    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/objects/${encodeURIComponent(objectName)}/status`,
+    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/object-types/${encodeURIComponent(objectTypeName)}/status`,
     method: 'post',
     data
   })
 }
 
 /** 后台：对象领域归属变更（拖拽换域窄写路径；domainId=null 表示移出领域） */
-export function changeAdminOntologyObjectDomain(
-  objectName: string,
+export function changeAdminOntologyObjectTypeDomain(
+  objectTypeName: string,
   domainId: number | null
-): Promise<ApiResponse<OntologyObjectItem>> {
+): Promise<ApiResponse<OntologyObjectTypeItem>> {
   return request({
-    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/objects/${encodeURIComponent(objectName)}/domain`,
+    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/object-types/${encodeURIComponent(objectTypeName)}/domain`,
     method: 'post',
     data: { domain_id: domainId }
   })
 }
 
-/** 后台：本体关系列表（keyword 模糊过滤；from_object/to_object 按对象 API 名过滤） */
-export function getAdminOntologyRelations(params?: {
+/** 后台：本体关系列表（keyword 模糊过滤；from_object_type/to_object_type 按对象 API 名过滤） */
+export function getAdminOntologyRelationTypes(params?: {
   keyword?: string
-  from_object?: string
-  to_object?: string
-}): Promise<ApiResponse<{ relations: OntologyRelationItem[] }>> {
+  from_object_type?: string
+  to_object_type?: string
+}): Promise<ApiResponse<{ relation_types: OntologyRelationTypeItem[] }>> {
   return request({
-    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/relations`,
+    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/relation-types`,
     method: 'get',
     params
   })
 }
 
-/** 后台：创建/编辑本体关系（连接对象/关联列/基数变更属破坏性，需 confirm_destructive=true） */
-export function upsertAdminOntologyRelation(
-  relationName: string,
+/** 后台：创建/编辑本体关系类型（连接对象类型/关联列/基数变更属破坏性，需 confirm_destructive=true） */
+export function upsertAdminOntologyRelationType(
+  relationTypeName: string,
   data: {
-    from_object_name: string
-    to_object_name: string
+    from_object_type_name: string
+    to_object_type_name: string
     multiplicity?: 'many_to_one' | 'one_to_one'
     from_columns: string[]
     to_columns: string[]
@@ -2230,29 +2230,29 @@ export function upsertAdminOntologyRelation(
     allow_overwrite?: boolean
     confirm_destructive?: boolean
   }
-): Promise<ApiResponse<OntologyRelationItem>> {
+): Promise<ApiResponse<OntologyRelationTypeItem>> {
   return request({
-    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/relations/${encodeURIComponent(relationName)}`,
+    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/relation-types/${encodeURIComponent(relationTypeName)}`,
     method: 'put',
     data
   })
 }
 
 /** 后台：删除本体关系（软删） */
-export function deleteAdminOntologyRelation(relationName: string): Promise<ApiResponse<{ relation_name: string }>> {
+export function deleteAdminOntologyRelationType(relationTypeName: string): Promise<ApiResponse<{ relation_type_name: string }>> {
   return request({
-    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/relations/${encodeURIComponent(relationName)}`,
+    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/relation-types/${encodeURIComponent(relationTypeName)}`,
     method: 'delete'
   })
 }
 
 /** 后台：本体关系状态手动迁移（上限=两侧对象状态的较低者；deprecated 仅随对象级联不可手动迁移） */
-export function changeAdminOntologyRelationStatus(
-  relationName: string,
-  data: { status: Exclude<OntologyObjectStatus, 'deprecated'> }
-): Promise<ApiResponse<OntologyRelationItem>> {
+export function changeAdminOntologyRelationTypeStatus(
+  relationTypeName: string,
+  data: { status: Exclude<OntologyObjectTypeStatus, 'deprecated'> }
+): Promise<ApiResponse<OntologyRelationTypeItem>> {
   return request({
-    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/relations/${encodeURIComponent(relationName)}/status`,
+    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/relation-types/${encodeURIComponent(relationTypeName)}/status`,
     method: 'post',
     data
   })

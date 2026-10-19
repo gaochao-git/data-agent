@@ -9,9 +9,9 @@
 - Palantir 在保存/索引时硬校验并具名报错（FoundryColumnNameNotFound、
   IncompatibleFoundryFieldSchemaForPropertyType、SchemaMismatch、连 Precision/Scale
   都要求与背书列一致）；官方哲学「宁可硬报错，不静默产出错误数据」。
-- 关系侧官方硬约束「两端 join 属性类型必须一致」、to_columns 必须是标识属性。
+- 关系类型侧官方硬约束「两端 join 属性类型必须一致」、to_columns 必须是标识属性。
 - 我们的批式物化形态下对应解法是事后巡检（消费方=管理端健康检查 +
-  locate_object 失修标注），不是把保存校验做重。
+  locate_object_type 失修标注），不是把保存校验做重。
 
 比较域：传入 bundle（按 semantic_config_ids 装载的 AI 可见本体面）× 传入的
 语义模型 runtime configs。规则不参与任何评分；findings 形状与
@@ -27,11 +27,11 @@ from .ontology_validator import BUILTIN_VALUE_TYPES, VALUE_TYPE_ENUM
 #: 规则登记：code → (severity, 中文名)。category 恒为 "ontology"。
 RULES: dict[str, tuple[str, str]] = {
     "ONT_MAPPING_DIM_MISSING": ("error", "映射指向的维度在绑定模型中不存在"),
-    "ONT_PROP_UNMAPPED": ("info", "对象属性未映射到任何模型维度"),
-    "ONT_REL_COLUMN_INVALID": ("error", "本体关系列引用的属性不存在或未映射"),
-    "ONT_REL_TO_NOT_IDENTIFIER": ("warning", "关系 to 侧列引用了非标识属性"),
-    "ONT_REL_ENDPOINT_TYPE": ("warning", "关系两端 join 属性类型语义类别不一致"),
-    "ONT_REL_CROSS_SOURCE": ("warning", "关系两端对象映射的语义模型分属不同数据源组"),
+    "ONT_PROP_UNMAPPED": ("info", "对象类型属性未映射到任何模型维度"),
+    "ONT_REL_COLUMN_INVALID": ("error", "本体关系类型列引用的属性不存在或未映射"),
+    "ONT_REL_TO_NOT_IDENTIFIER": ("warning", "关系类型 to 侧列引用了非标识属性"),
+    "ONT_REL_ENDPOINT_TYPE": ("warning", "关系类型两端 join 属性类型语义类别不一致"),
+    "ONT_REL_CROSS_SOURCE": ("warning", "关系类型两端对象类型映射的语义模型分属不同数据源组"),
     "ONT_TYPE_MISMATCH": ("warning", "属性 value_type 与维度 logical_type 不兼容"),
 }
 
@@ -77,10 +77,10 @@ def _config_dimension_types(configs: list[dict[str, Any]] | None) -> dict[str, d
     return index
 
 
-def _group_by_object_id(items: Any) -> dict[int, list[dict[str, Any]]]:
+def _group_by_object_type_id(items: Any) -> dict[int, list[dict[str, Any]]]:
     grouped: dict[int, list[dict[str, Any]]] = {}
     for item in items or []:
-        grouped.setdefault(int((item or {}).get("object_id") or 0), []).append(item or {})
+        grouped.setdefault(int((item or {}).get("object_type_id") or 0), []).append(item or {})
     return grouped
 
 
@@ -98,7 +98,7 @@ def _join_items(items: list[str]) -> str:
 def _check_mapping_dimensions(
     bundle: dict[str, Any],
     dimension_types: dict[str, dict[str, str]],
-    object_names: dict[int, str],
+    object_type_names: dict[int, str],
 ) -> list[dict[str, Any]]:
     """ONT_MAPPING_DIM_MISSING：映射右值维度在绑定模型当前维度清单中不存在。
 
@@ -108,12 +108,12 @@ def _check_mapping_dimensions(
     findings: list[dict[str, Any]] = []
     for mapping in bundle.get("mappings") or []:
         mapping = mapping or {}
-        object_id = int(mapping.get("object_id") or 0)
-        object_name = object_names.get(object_id, "")
+        object_type_id = int(mapping.get("object_type_id") or 0)
+        object_type_name = object_type_names.get(object_type_id, "")
         config_id = _text(mapping.get("semantic_config_id"))
         dims = dimension_types.get(config_id)
-        if not object_name or not config_id or dims is None:
-            # 对象不可见（draft 等）或模型不在本轮比较域：不判
+        if not object_type_name or not config_id or dims is None:
+            # 对象类型不可见（draft 等）或模型不在本轮比较域：不判
             continue
         column_mappings = mapping.get("column_mappings")
         if not isinstance(column_mappings, dict):
@@ -125,9 +125,9 @@ def _check_mapping_dimensions(
             findings.append(
                 _make_finding(
                     "ONT_MAPPING_DIM_MISSING",
-                    f"对象「{object_name}」到模型 {config_id} 的映射存在 {len(missing)} 个失效维度引用：{_join_items(missing)}"
+                    f"对象类型「{object_type_name}」到模型 {config_id} 的映射存在 {len(missing)} 个失效维度引用：{_join_items(missing)}"
                     "（维度可能已被改名或删除，请修正映射或恢复维度）",
-                    [object_name, config_id],
+                    [object_type_name, config_id],
                 )
             )
     return findings
@@ -135,20 +135,20 @@ def _check_mapping_dimensions(
 
 def _check_unmapped_properties(
     bundle: dict[str, Any],
-    object_names: dict[int, str],
+    object_type_names: dict[int, str],
 ) -> list[dict[str, Any]]:
-    """ONT_PROP_UNMAPPED：有映射的对象中，未出现在任何映射左值的活跃属性。
+    """ONT_PROP_UNMAPPED：有映射的对象类型中，未出现在任何映射左值的活跃属性。
 
     Palantir FoundryColumnNameNotFound 的正向面（映射完整性）：未映射属性
     对 AI 不可见，属信息级而非错误——属性可以有意不映射。
     """
     findings: list[dict[str, Any]] = []
-    properties_by_object = _group_by_object_id(bundle.get("properties"))
+    properties_by_object_type = _group_by_object_type_id(bundle.get("properties"))
     for mapping in bundle.get("mappings") or []:
         mapping = mapping or {}
-        object_id = int(mapping.get("object_id") or 0)
-        object_name = object_names.get(object_id, "")
-        if not object_name:
+        object_type_id = int(mapping.get("object_type_id") or 0)
+        object_type_name = object_type_names.get(object_type_id, "")
+        if not object_type_name:
             continue
         column_mappings = mapping.get("column_mappings")
         if not isinstance(column_mappings, dict) or not column_mappings:
@@ -157,7 +157,7 @@ def _check_unmapped_properties(
         unmapped = sorted(
             {
                 _text(prop.get("property_name"))
-                for prop in properties_by_object.get(object_id, [])
+                for prop in properties_by_object_type.get(object_type_id, [])
                 if _text(prop.get("property_name"))
             }
             - mapped_names
@@ -166,9 +166,9 @@ def _check_unmapped_properties(
             findings.append(
                 _make_finding(
                     "ONT_PROP_UNMAPPED",
-                    f"对象「{object_name}」有 {len(unmapped)} 个属性未映射到模型维度：{_join_items(unmapped)}"
+                    f"对象类型「{object_type_name}」有 {len(unmapped)} 个属性未映射到模型维度：{_join_items(unmapped)}"
                     "（AI 导航时不可见；如属有意不映射可忽略）",
-                    [object_name],
+                    [object_type_name],
                 )
             )
     return findings
@@ -176,69 +176,69 @@ def _check_unmapped_properties(
 
 def _relation_column_issues(
     relation: dict[str, Any],
-    properties_by_object: dict[int, list[dict[str, Any]]],
-    mapped_attrs_by_object: dict[int, set[str]],
-    object_names: dict[int, str],
+    properties_by_object_type: dict[int, list[dict[str, Any]]],
+    mapped_attrs_by_object_type: dict[int, set[str]],
+    object_type_names: dict[int, str],
 ) -> tuple[list[str], list[str]]:
-    """单条关系的列健康检查，返回 (失效列描述, to 侧非标识描述)。
+    """单条关系类型的列健康检查，返回 (失效列描述, to 侧非标识描述)。
 
-    关系 from/to_columns 存「属性名」，两级翻译（属性→维度→物理列）后才可 join：
+    关系类型 from/to_columns 存「属性名」，两级翻译（属性→维度→物理列）后才可 join：
     属性不存在=硬失效；属性存在但未映射到任何启用模型=翻译断链。to 侧引用
     非标识属性时 join 语义不可靠（Ossie 规范明确 to_columns 是主/唯一键）。
     """
     invalid: list[str] = []
     not_identifier: list[str] = []
     endpoints = (
-        ("from", int(relation.get("from_object_id") or 0), relation.get("from_columns") or []),
-        ("to", int(relation.get("to_object_id") or 0), relation.get("to_columns") or []),
+        ("from", int(relation.get("from_object_type_id") or 0), relation.get("from_columns") or []),
+        ("to", int(relation.get("to_object_type_id") or 0), relation.get("to_columns") or []),
     )
-    for side, object_id, columns in endpoints:
-        object_name = object_names.get(object_id, "")
-        if not object_name:
+    for side, object_type_id, columns in endpoints:
+        object_type_name = object_type_names.get(object_type_id, "")
+        if not object_type_name:
             continue
         prop_types = {
             _text(prop.get("property_name")): bool(prop.get("is_identifier"))
-            for prop in properties_by_object.get(object_id, [])
+            for prop in properties_by_object_type.get(object_type_id, [])
             if _text(prop.get("property_name"))
         }
-        mapped_attrs = mapped_attrs_by_object.get(object_id, set())
+        mapped_attrs = mapped_attrs_by_object_type.get(object_type_id, set())
         for column in columns or []:
             attr = _text(column)
             if not attr:
                 continue
             if attr not in prop_types:
-                invalid.append(f"{side} 侧「{object_name}.{attr}」不是该对象的属性")
+                invalid.append(f"{side} 侧「{object_type_name}.{attr}」不是该对象类型的属性")
             elif attr not in mapped_attrs:
-                invalid.append(f"{side} 侧「{object_name}.{attr}」未映射到任何启用模型维度")
+                invalid.append(f"{side} 侧「{object_type_name}.{attr}」未映射到任何启用模型维度")
             elif side == "to" and not prop_types[attr]:
-                not_identifier.append(f"「{object_name}.{attr}」")
+                not_identifier.append(f"「{object_type_name}.{attr}」")
     return invalid, not_identifier
 
 
 def _relation_endpoint_type_issues(
     relation: dict[str, Any],
-    properties_by_object: dict[int, list[dict[str, Any]]],
-    object_names: dict[int, str],
+    properties_by_object_type: dict[int, list[dict[str, Any]]],
+    object_type_names: dict[int, str],
 ) -> list[str]:
-    """单条关系的两端 join 类型检查，返回类型冲突描述。
+    """单条关系类型的两端 join 类型检查，返回类型冲突描述。
 
-    Palantir 官方硬约束「关系两端 join 属性类型必须一致」：语义类别冲突的列
+    Palantir 官方硬约束「关系类型两端 join 属性类型必须一致」：语义类别冲突的列
     即便 SQL 能隐式转换，join 语义与索引利用都不可靠。from/to_columns 按位置
     配对；任一侧属性缺失或类型不可归类时跳过（缺失由 ONT_REL_COLUMN_INVALID
     负责，不双报）。
     """
 
-    def _types(object_id: int) -> dict[str, str]:
+    def _types(object_type_id: int) -> dict[str, str]:
         return {
             _text(prop.get("property_name")): _text(prop.get("value_type"))
-            for prop in properties_by_object.get(object_id, [])
+            for prop in properties_by_object_type.get(object_type_id, [])
             if _text(prop.get("property_name"))
         }
 
-    from_id = int(relation.get("from_object_id") or 0)
-    to_id = int(relation.get("to_object_id") or 0)
-    from_name = object_names.get(from_id, "")
-    to_name = object_names.get(to_id, "")
+    from_id = int(relation.get("from_object_type_id") or 0)
+    to_id = int(relation.get("to_object_type_id") or 0)
+    from_name = object_type_names.get(from_id, "")
+    to_name = object_type_names.get(to_id, "")
     if not from_name or not to_name:
         return []
     from_types = _types(from_id)
@@ -261,55 +261,55 @@ def _relation_endpoint_type_issues(
 
 def _check_relations(
     bundle: dict[str, Any],
-    object_names: dict[int, str],
+    object_type_names: dict[int, str],
 ) -> list[dict[str, Any]]:
-    """ONT_REL_COLUMN_INVALID + ONT_REL_TO_NOT_IDENTIFIER + ONT_REL_ENDPOINT_TYPE：关系列健康巡检。"""
-    properties_by_object = _group_by_object_id(bundle.get("properties"))
-    mapped_attrs_by_object: dict[int, set[str]] = {}
+    """ONT_REL_COLUMN_INVALID + ONT_REL_TO_NOT_IDENTIFIER + ONT_REL_ENDPOINT_TYPE：关系类型列健康巡检。"""
+    properties_by_object_type = _group_by_object_type_id(bundle.get("properties"))
+    mapped_attrs_by_object_type: dict[int, set[str]] = {}
     for mapping in bundle.get("mappings") or []:
         mapping = mapping or {}
-        object_id = int(mapping.get("object_id") or 0)
+        object_type_id = int(mapping.get("object_type_id") or 0)
         column_mappings = mapping.get("column_mappings")
         if isinstance(column_mappings, dict):
-            mapped_attrs_by_object.setdefault(object_id, set()).update(
+            mapped_attrs_by_object_type.setdefault(object_type_id, set()).update(
                 _text(key) for key in column_mappings if _text(key)
             )
     findings: list[dict[str, Any]] = []
-    for relation in bundle.get("relations") or []:
+    for relation in bundle.get("relation_types") or []:
         relation = relation or {}
-        relation_name = _text(relation.get("relation_name"))
-        if not relation_name:
+        relation_type_name = _text(relation.get("relation_type_name"))
+        if not relation_type_name:
             continue
         invalid, not_identifier = _relation_column_issues(
-            relation, properties_by_object, mapped_attrs_by_object, object_names
+            relation, properties_by_object_type, mapped_attrs_by_object_type, object_type_names
         )
-        endpoint_type_issues = _relation_endpoint_type_issues(relation, properties_by_object, object_names)
+        endpoint_type_issues = _relation_endpoint_type_issues(relation, properties_by_object_type, object_type_names)
         if invalid:
             findings.append(
                 _make_finding(
                     "ONT_REL_COLUMN_INVALID",
-                    f"本体关系「{relation_name}」存在 {len(invalid)} 个失效关系列：{_join_items(invalid)}"
-                    "（join 路径不可用，AI 导航到该关系将无法翻译为物理列）",
-                    [relation_name],
+                    f"本体关系类型「{relation_type_name}」存在 {len(invalid)} 个失效关系类型列：{_join_items(invalid)}"
+                    "（join 路径不可用，AI 导航到该关系类型将无法翻译为物理列）",
+                    [relation_type_name],
                 )
             )
         if not_identifier:
             findings.append(
                 _make_finding(
                     "ONT_REL_TO_NOT_IDENTIFIER",
-                    f"本体关系「{relation_name}」的 to 侧列引用了非标识属性：{_join_items(not_identifier)}"
+                    f"本体关系类型「{relation_type_name}」的 to 侧列引用了非标识属性：{_join_items(not_identifier)}"
                     "（Ossie 规范要求 to_columns 为主/唯一键，非标识属性做 join 语义不可靠）",
-                    [relation_name],
+                    [relation_type_name],
                 )
             )
         if endpoint_type_issues:
             findings.append(
                 _make_finding(
                     "ONT_REL_ENDPOINT_TYPE",
-                    f"本体关系「{relation_name}」存在 {len(endpoint_type_issues)} 对 join 属性类型语义冲突："
+                    f"本体关系类型「{relation_type_name}」存在 {len(endpoint_type_issues)} 对 join 属性类型语义冲突："
                     f"{_join_items(endpoint_type_issues)}"
-                    "（官方硬约束：关系两端 join 属性类型必须一致，类别冲突的 join 语义与索引利用不可靠）",
-                    [relation_name],
+                    "（官方硬约束：关系类型两端 join 属性类型必须一致，类别冲突的 join 语义与索引利用不可靠）",
+                    [relation_type_name],
                 )
             )
     return findings
@@ -338,8 +338,8 @@ def _type_category_dim(logical_type: str) -> str:
 def _check_type_mismatches(
     bundle: dict[str, Any],
     dimension_types: dict[str, dict[str, str]],
-    properties_by_object: dict[int, list[dict[str, Any]]],
-    object_names: dict[int, str],
+    properties_by_object_type: dict[int, list[dict[str, Any]]],
+    object_type_names: dict[int, str],
 ) -> list[dict[str, Any]]:
     """ONT_TYPE_MISMATCH：属性 value_type 与维度 logical_type 语义类别冲突。
 
@@ -350,18 +350,18 @@ def _check_type_mismatches(
     findings: list[dict[str, Any]] = []
     for mapping in bundle.get("mappings") or []:
         mapping = mapping or {}
-        object_id = int(mapping.get("object_id") or 0)
-        object_name = object_names.get(object_id, "")
+        object_type_id = int(mapping.get("object_type_id") or 0)
+        object_type_name = object_type_names.get(object_type_id, "")
         config_id = _text(mapping.get("semantic_config_id"))
         dims = dimension_types.get(config_id)
-        if not object_name or not config_id or dims is None:
+        if not object_type_name or not config_id or dims is None:
             continue
         column_mappings = mapping.get("column_mappings")
         if not isinstance(column_mappings, dict):
             continue
         prop_types = {
             _text(prop.get("property_name")): _text(prop.get("value_type"))
-            for prop in properties_by_object.get(object_id, [])
+            for prop in properties_by_object_type.get(object_type_id, [])
             if _text(prop.get("property_name"))
         }
         mismatches: list[str] = []
@@ -380,9 +380,9 @@ def _check_type_mismatches(
             findings.append(
                 _make_finding(
                     "ONT_TYPE_MISMATCH",
-                    f"对象「{object_name}」到模型 {config_id} 的映射存在 {len(mismatches)} 个类型语义冲突："
+                    f"对象类型「{object_type_name}」到模型 {config_id} 的映射存在 {len(mismatches)} 个类型语义冲突："
                     f"{_join_items(mismatches)}（请确认目录属性类型与维度类型口径一致）",
-                    [object_name, config_id],
+                    [object_type_name, config_id],
                 )
             )
     return findings
@@ -392,38 +392,38 @@ def _check_relation_cross_source(
     bundle: dict[str, Any],
     config_group_ids: dict[str, str] | None,
 ) -> list[dict[str, Any]]:
-    """ONT_REL_CROSS_SOURCE：关系两端对象映射的语义模型分属不同数据源组。
+    """ONT_REL_CROSS_SOURCE：关系类型两端对象类型映射的语义模型分属不同数据源组。
 
-    join 可执行性红线：跨组的对象之间不存在同库 join 路径，目录渲染出的导航边
+    join 可执行性红线：跨组的对象类型之间不存在同库 join 路径，目录渲染出的导航边
     会诱导 AI 拼出必然失败的 SQL（比没有本体更伤信任）。任一端无映射、或组信息
     不可知时跳过——无比对基准不误报；列失效由 ONT_REL_COLUMN_INVALID 负责。
     """
     if not config_group_ids:
         return []
-    groups_by_object: dict[int, set[str]] = {}
+    groups_by_object_type: dict[int, set[str]] = {}
     for mapping in bundle.get("mappings") or []:
         mapping = mapping or {}
-        object_id = int(mapping.get("object_id") or 0)
+        object_type_id = int(mapping.get("object_type_id") or 0)
         group = _text((config_group_ids or {}).get(_text(mapping.get("semantic_config_id"))))
-        if object_id and group:
-            groups_by_object.setdefault(object_id, set()).add(group)
+        if object_type_id and group:
+            groups_by_object_type.setdefault(object_type_id, set()).add(group)
     findings: list[dict[str, Any]] = []
-    for relation in bundle.get("relations") or []:
+    for relation in bundle.get("relation_types") or []:
         relation = relation or {}
-        relation_name = _text(relation.get("relation_name"))
-        if not relation_name:
+        relation_type_name = _text(relation.get("relation_type_name"))
+        if not relation_type_name:
             continue
-        from_groups = sorted(groups_by_object.get(int(relation.get("from_object_id") or 0), set()))
-        to_groups = sorted(groups_by_object.get(int(relation.get("to_object_id") or 0), set()))
+        from_groups = sorted(groups_by_object_type.get(int(relation.get("from_object_type_id") or 0), set()))
+        to_groups = sorted(groups_by_object_type.get(int(relation.get("to_object_type_id") or 0), set()))
         if not from_groups or not to_groups or set(from_groups) & set(to_groups):
             continue
         findings.append(
             _make_finding(
                 "ONT_REL_CROSS_SOURCE",
-                f"本体关系「{relation_name}」两端对象绑定的语义模型分属不同数据源组"
+                f"本体关系类型「{relation_type_name}」两端对象类型绑定的语义模型分属不同数据源组"
                 f"（from: {'、'.join(from_groups)}；to: {'、'.join(to_groups)}），"
-                "跨组路径物理上无法 join，请修正关系两端或映射归属",
-                [relation_name],
+                "跨组路径物理上无法 join，请修正关系类型两端或映射归属",
+                [relation_type_name],
             )
         )
     return findings
@@ -438,29 +438,29 @@ def check_ontology_model_consistency(
     """本体↔语义模型一致性巡检入口（纯函数）。
 
     - ``bundle``：``OntologyDao.load_injection_bundle_async`` 形状
-      （objects/properties/relations/mappings，AI 可见面）；
+      （object_types/properties/relation-types/mappings，AI 可见面）；
     - ``configs``：参与比较的语义模型 runtime configs（含 dimensions）；
     - ``config_group_ids``：可选 {semantic_config_id: 数据源组}，供
-      ONT_REL_CROSS_SOURCE 判定关系 join 可执行性；缺省时该规则整体跳过。
+      ONT_REL_CROSS_SOURCE 判定关系类型 join 可执行性；缺省时该规则整体跳过。
 
     返回 findings 列表（code/severity/category/message/targets），确定性排序：
-    对象/关系名 → 规则注册序。不参与任何评分；空 bundle/空 configs 返回空。
+    对象类型/关系类型名 → 规则注册序。不参与任何评分；空 bundle/空 configs 返回空。
     """
     if not isinstance(bundle, dict) or not configs:
         return []
     dimension_types = _config_dimension_types(configs)
-    object_names = {
-        int((obj or {}).get("id") or 0): _text((obj or {}).get("object_name"))
-        for obj in bundle.get("objects") or []
-        if _text((obj or {}).get("object_name"))
+    object_type_names = {
+        int((obj or {}).get("id") or 0): _text((obj or {}).get("object_type_name"))
+        for obj in bundle.get("object_types") or []
+        if _text((obj or {}).get("object_type_name"))
     }
-    properties_by_object = _group_by_object_id(bundle.get("properties"))
+    properties_by_object_type = _group_by_object_type_id(bundle.get("properties"))
     findings = [
-        *_check_mapping_dimensions(bundle, dimension_types, object_names),
-        *_check_relations(bundle, object_names),
+        *_check_mapping_dimensions(bundle, dimension_types, object_type_names),
+        *_check_relations(bundle, object_type_names),
         *_check_relation_cross_source(bundle, config_group_ids),
-        *_check_type_mismatches(bundle, dimension_types, properties_by_object, object_names),
-        *_check_unmapped_properties(bundle, object_names),
+        *_check_type_mismatches(bundle, dimension_types, properties_by_object_type, object_type_names),
+        *_check_unmapped_properties(bundle, object_type_names),
     ]
     findings.sort(key=lambda item: (item["targets"][0] if item["targets"] else "", item["code"], item["message"]))
     return findings

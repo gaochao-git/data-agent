@@ -27,7 +27,7 @@ logger = get_logger(__name__)
 
 
 class SemanticOntologyBoundError(RuntimeError):
-    """语义模型仍被本体对象映射占用（删除/删维度被阻断）→ 40070。"""
+    """语义模型仍被本体对象类型映射占用（删除/删维度被阻断）→ 40070。"""
 
 
 def removed_dimension_names(old_dimensions: Any, new_dimensions: Any) -> set[str]:
@@ -69,10 +69,10 @@ def filter_bindings_by_dimensions(bindings: list[dict[str, Any]], removed_names:
 def build_unbound_message(bindings: list[dict[str, Any]], action: str) -> str:
     """整模型级阻断文案：列出占用对象，引导先解绑。"""
     owners = sorted(
-        {f"{item.get('object_name') or item.get('object_id')}({item.get('semantic_config_id')})" for item in bindings}
+        {f"{item.get('object_type_name') or item.get('object_type_id')}({item.get('semantic_config_id')})" for item in bindings}
     )
     return (
-        f"无法{action}：语义模型仍被本体对象映射占用（{', '.join(owners)}），"
+        f"无法{action}：语义模型仍被本体对象类型映射占用（{', '.join(owners)}），"
         "删除会导致本体映射悬空。请先在本体管理中解除对应对象的映射，再执行删除。"
     )
 
@@ -81,7 +81,7 @@ def build_dimension_message(affected: list[dict[str, Any]], config_id: str, acti
     """维度差集阻断文案：只列受影响的对象与被引用维度。"""
     parts = sorted(
         {
-            f"{item['binding'].get('object_name') or item['binding'].get('object_id')}"
+            f"{item['binding'].get('object_type_name') or item['binding'].get('object_type_id')}"
             f"（引用维度: {', '.join(item['referenced_dimensions'])}）"
             for item in affected
         }

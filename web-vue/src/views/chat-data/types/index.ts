@@ -1075,10 +1075,10 @@ export interface MetaGlobalEnumRef {
 
 // ============ 元数据管理（本体 Ontology） ============
 
-// 本体对象状态机：draft → experimental → certified；deprecated 为终态不可逆
-export type OntologyObjectStatus = 'draft' | 'experimental' | 'certified' | 'deprecated'
+// 本体对象类型状态机：draft → experimental → certified；deprecated 为终态不可逆
+export type OntologyObjectTypeStatus = 'draft' | 'experimental' | 'certified' | 'deprecated'
 
-// 本体属性项（属性一等实体，随对象表单整体提交）
+// 本体属性项（属性一等实体，随对象类型表单整体提交）
 export interface OntologyPropertyItem {
   property_name: string
   display_name: string
@@ -1087,7 +1087,7 @@ export interface OntologyPropertyItem {
   // value_type=enum 时的全局枚举引用："enum_name" 或 "domain:enum_name"
   enum_ref: string
   render_hints: Record<string, boolean>
-  // 标识属性：参与对象主键组合（业务主键，禁自增行号）；标题属性：对象标题键（至多一个）
+  // 标识属性：参与对象类型主键组合（业务主键，禁自增行号）；标题属性：对象类型标题键（至多一个）
   is_identifier: boolean
   is_title: boolean
 }
@@ -1099,7 +1099,7 @@ export interface OntologyMappingItem {
   column_mappings: Record<string, string>
 }
 
-// 本体领域（业务域实体，一对一绑定数据源组；对象挂领域后继承其组）
+// 本体领域（业务域实体，一对一绑定数据源组；对象类型挂领域后继承其组）
 export interface OntologyDomainItem {
   id: number
   domain_name: string
@@ -1111,18 +1111,18 @@ export interface OntologyDomainItem {
   update_by_name?: string
 }
 
-// 本体对象（列表行含 mappings_count；详情同构且含完整 properties 与 mappings）
-export interface OntologyObjectItem {
+// 本体对象类型（列表行含 mappings_count；详情同构且含完整 properties 与 mappings）
+export interface OntologyObjectTypeItem {
   id?: number
-  object_name: string
+  object_type_name: string
   display_name: string
   description: string
-  status: OntologyObjectStatus
+  status: OntologyObjectTypeStatus
   // 所属领域（领域实体绑定数据源组，对象继承其组）
   domain_id: number | null
   deprecation_reason: string
   deprecated_until: string
-  successor_object_name: string
+  successor_object_type_name: string
   mappings?: OntologyMappingItem[]
   mappings_count?: number
   properties?: OntologyPropertyItem[]
@@ -1132,11 +1132,11 @@ export interface OntologyObjectItem {
 }
 
 // 本体关系项（关系状态 = 两侧对象状态的较低者，降级自动级联、升级手动）
-export interface OntologyRelationItem {
+export interface OntologyRelationTypeItem {
   id?: number
-  relation_name: string
-  from_object_name?: string
-  to_object_name?: string
+  relation_type_name: string
+  from_object_type_name?: string
+  to_object_type_name?: string
   from_columns: string[]
   to_columns: string[]
   multiplicity: 'many_to_one' | 'one_to_one'
@@ -1145,7 +1145,7 @@ export interface OntologyRelationItem {
   from_verbalize: string
   to_verbalize: string
   description: string
-  status: OntologyObjectStatus
+  status: OntologyObjectTypeStatus
   create_time?: string
   update_time?: string
   update_by_name?: string

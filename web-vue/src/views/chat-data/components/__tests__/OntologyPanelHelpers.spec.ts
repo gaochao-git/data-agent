@@ -15,13 +15,13 @@ import {
 } from '../ontology/ontologyMeta'
 
 // 服务端详情行附带的视图键（DAO 固定输出），比较映射时必须忽略
-type ServerMappingRow = OntologyMappingComparable & { object_id: number; binding_type: string }
+type ServerMappingRow = OntologyMappingComparable & { object_type_id: number; binding_type: string }
 
 describe('本体映射比较口径', () => {
-  it('忽略服务端附加键 object_id/binding_type 与键顺序：对象有映射时不再误判为映射变更', () => {
+  it('忽略服务端附加键 object_type_id/binding_type 与键顺序：对象有映射时不再误判为映射变更', () => {
     const serverRows: ServerMappingRow[] = [
       {
-        object_id: 7,
+        object_type_id: 7,
         binding_type: 'semantic',
         semantic_config_id: 'sc_orders',
         column_mappings: { order_no: '订单编号', amount: '金额' }
@@ -114,7 +114,7 @@ describe('本体关系状态上限与默认目标', () => {
   })
 })
 
-describe('本体对象映射计数（列表行只有 mappings_count）', () => {
+describe('本体对象类型映射计数（列表行只有 mappings_count）', () => {
   it('列表行以 mappings_count 判断认证前置提示', () => {
     expect(ontologyMappingCount({ mappings_count: 1 })).toBe(1)
     expect(ontologyMappingCount({ mappings_count: 0, mappings: [{ semantic_config_id: 'sc_1' }] })).toBe(0)

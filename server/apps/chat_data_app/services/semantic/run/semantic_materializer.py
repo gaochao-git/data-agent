@@ -239,7 +239,7 @@ async def prematerialize_enabled_semantic_models(
     )
     if ontology_objects:
         logger.info(
-            "本体目录随预物化写入（语义资产目录跳过）: objects=%s datasource_id=%s",
+            "本体目录随预物化写入（语义资产目录跳过）: object_types=%s datasource_id=%s",
             ontology_objects,
             normalized_datasource_id,
         )

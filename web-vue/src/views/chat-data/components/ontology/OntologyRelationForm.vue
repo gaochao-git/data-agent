@@ -3,17 +3,17 @@
  * 本体关系新建/编辑弹窗 + 状态迁移弹窗 + 删除确认（写操作单一入口，无列表 UI）。
  * 从对象树右键发起：关系分组节点→新建（可预选起始对象），关系条目节点→编辑/状态/删除。
  * 关系状态 = 两侧对象状态的较低者（降级自动级联、升级手动迁移）；
- * 连接对象/关联列/基数变更属破坏性，提交前需显式确认。
+ * 连接对象类型/关联列/基数变更属破坏性，提交前需显式确认。
  */
 import { computed, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  changeAdminOntologyRelationStatus,
-  deleteAdminOntologyRelation,
-  getAdminOntologyObject,
-  upsertAdminOntologyRelation
+  changeAdminOntologyRelationTypeStatus,
+  deleteAdminOntologyRelationType,
+  getAdminOntologyObjectType,
+  upsertAdminOntologyRelationType
 } from '../../api'
-import type { OntologyObjectItem, OntologyObjectStatus, OntologyPropertyItem, OntologyRelationItem } from '../../types'
+import type { OntologyObjectTypeItem, OntologyObjectTypeStatus, OntologyPropertyItem, OntologyRelationTypeItem } from '../../types'
 import {
   defaultRelationStatusTarget,
   ONTOLOGY_NAME_PATTERN,
@@ -25,40 +25,40 @@ import {
 
 const props = defineProps({
   // 对象清单：端点候选 + 状态上限计算（父面板已加载，直接复用）
-  objects: { type: Array as () => OntologyObjectItem[], default: () => [] }
+  object_types: { type: Array as () => OntologyObjectTypeItem[], default: () => [] }
 })
 
-const emit = defineEmits<{ saved: [objectNames: string[]] }>()
+const emit = defineEmits<{ saved: [objectTypeNames: string[]] }>()
 
 // ---------- 对象属性加载（关联列候选） ----------
 
 const propertyCache = ref<Map<string, OntologyPropertyItem[]>>(new Map())
 
-const loadObjectProperties = async (objectName: string) => {
-  if (!objectName || propertyCache.value.has(objectName)) return
+const loadObjectProperties = async (objectTypeName: string) => {
+  if (!objectTypeName || propertyCache.value.has(objectTypeName)) return
   try {
-    const res = await getAdminOntologyObject(objectName)
+    const res = await getAdminOntologyObjectType(objectTypeName)
     if (res.status === 'success' && res.data) {
-      propertyCache.value.set(objectName, res.data.properties || [])
+      propertyCache.value.set(objectTypeName, res.data.properties || [])
     }
   } catch (err) {
     console.error('获取对象属性失败:', err)
   }
 }
 
-const propertiesOf = (objectName: string): OntologyPropertyItem[] => propertyCache.value.get(objectName) || []
+const propertiesOf = (objectTypeName: string): OntologyPropertyItem[] => propertyCache.value.get(objectTypeName) || []
 
 // 保存后作废并重拉端点属性缓存：属性集可能刚被对象编辑弹窗改动过，
 // 缓存只增不减会让关联列候选长期陈旧（甚至引用已删除属性被后端拒绝）。
-const refreshObjectProperties = async (objectName: string) => {
-  if (!objectName) return
-  propertyCache.value.delete(objectName)
-  await loadObjectProperties(objectName)
+const refreshObjectProperties = async (objectTypeName: string) => {
+  if (!objectTypeName) return
+  propertyCache.value.delete(objectTypeName)
+  await loadObjectProperties(objectTypeName)
 }
 
 // 目标侧关联列只能引用标识属性（FK→PK 红线，与后端校验一致）
-const identifiersOf = (objectName: string): string[] =>
-  propertiesOf(objectName)
+const identifiersOf = (objectTypeName: string): string[] =>
+  propertiesOf(objectTypeName)
     .filter(p => p.is_identifier)
     .map(p => p.property_name)
 
@@ -69,8 +69,8 @@ const dialogVisible = ref(false)
 const saving = ref(false)
 const creating = ref(false)
 const editingName = ref('')
-// 编辑态缓存原始行：破坏性变更判定依据（连接对象/关联列/基数是否变化）
-let editingRow: OntologyRelationItem | null = null
+// 编辑态缓存原始行：破坏性变更判定依据（连接对象类型/关联列/基数是否变化）
+let editingRow: OntologyRelationTypeItem | null = null
 const formName = ref('')
 const formFromObject = ref('')
 const formToObject = ref('')
@@ -97,20 +97,20 @@ watch(formMultiplicity, value => {
   const invalid = formFromColumns.value.filter(name => !allowed.has(name))
   if (invalid.length === 0) return
   formFromColumns.value = formFromColumns.value.filter(name => allowed.has(name))
-  ElMessage.warning(`一对一关系的起始侧关联列必须是标识属性，已移除：${invalid.join('、')}`)
+  ElMessage.warning(`一对一关系类型的起始侧关联列必须是标识属性，已移除：${invalid.join('、')}`)
 })
 
 // 活跃对象才可作为关系端点（后端同样拒绝 deprecated 端点）
-const activeObjectOptions = computed(() => props.objects.filter(item => item.status !== 'deprecated'))
+const activeObjectOptions = computed(() => props.object_types.filter(item => item.status !== 'deprecated'))
 
 // 跨领域提示：两端对象挂在不同领域（或一侧未挂领域）时提醒确认
 const crossDomainHint = computed(() => {
   if (!formFromObject.value || !formToObject.value) return ''
-  const fromObj = props.objects.find(item => item.object_name === formFromObject.value)
-  const toObj = props.objects.find(item => item.object_name === formToObject.value)
+  const fromObj = props.object_types.find(item => item.object_type_name === formFromObject.value)
+  const toObj = props.object_types.find(item => item.object_type_name === formToObject.value)
   if (!fromObj || !toObj) return ''
   if (fromObj.domain_id != null && fromObj.domain_id === toObj.domain_id) return ''
-  return '两端对象属于不同业务领域（或未挂领域）：这会是跨领域导航路径，请确认是有意为之。'
+  return '两端对象类型属于不同业务领域（或未挂领域）：这会是跨领域导航路径，请确认是有意为之。'
 })
 
 const resetForm = () => {
@@ -138,14 +138,14 @@ const openCreate = (prefillFromObject = '') => {
   dialogVisible.value = true
 }
 
-const openEdit = (row: OntologyRelationItem) => {
+const openEdit = (row: OntologyRelationTypeItem) => {
   creating.value = false
-  editingName.value = row.relation_name
+  editingName.value = row.relation_type_name
   editingRow = row
   resetForm()
-  formName.value = row.relation_name
-  formFromObject.value = row.from_object_name || ''
-  formToObject.value = row.to_object_name || ''
+  formName.value = row.relation_type_name
+  formFromObject.value = row.from_object_type_name || ''
+  formToObject.value = row.to_object_type_name || ''
   formMultiplicity.value = row.multiplicity
   formFromColumns.value = [...(row.from_columns || [])]
   formToColumns.value = [...(row.to_columns || [])]
@@ -161,20 +161,20 @@ const openEdit = (row: OntologyRelationItem) => {
 }
 
 // 端点对象变化：清空关联列选择并预取属性
-const onFromObjectChange = (objectName: string) => {
+const onFromObjectChange = (objectTypeName: string) => {
   formFromColumns.value = []
-  if (objectName) void loadObjectProperties(objectName)
+  if (objectTypeName) void loadObjectProperties(objectTypeName)
 }
 
-const onToObjectChange = (objectName: string) => {
+const onToObjectChange = (objectTypeName: string) => {
   formToColumns.value = []
-  if (objectName) void loadObjectProperties(objectName)
+  if (objectTypeName) void loadObjectProperties(objectTypeName)
 }
 
-// 破坏性变更：连接对象/关联列/基数变化（编辑态）
-const isStructuralChanged = (row: OntologyRelationItem) =>
-  row.from_object_name !== formFromObject.value ||
-  row.to_object_name !== formToObject.value ||
+// 破坏性变更：连接对象类型/关联列/基数变化（编辑态）
+const isStructuralChanged = (row: OntologyRelationTypeItem) =>
+  row.from_object_type_name !== formFromObject.value ||
+  row.to_object_type_name !== formToObject.value ||
   JSON.stringify([...(row.from_columns || [])].sort()) !== JSON.stringify([...formFromColumns.value].sort()) ||
   JSON.stringify([...(row.to_columns || [])].sort()) !== JSON.stringify([...formToColumns.value].sort()) ||
   row.multiplicity !== formMultiplicity.value
@@ -182,19 +182,19 @@ const isStructuralChanged = (row: OntologyRelationItem) =>
 const saveRelation = async () => {
   const name = formName.value.trim()
   if (!name) {
-    ElMessage.warning('请填写关系 API 名')
+    ElMessage.warning('请填写关系类型 API 名')
     return
   }
   if (!ONTOLOGY_NAME_PATTERN.test(name)) {
-    ElMessage.warning('关系 API 名仅允许字母、数字、下划线，长度 1-128')
+    ElMessage.warning('关系类型 API 名仅允许字母、数字、下划线，长度 1-128')
     return
   }
   if (!formFromObject.value || !formToObject.value) {
-    ElMessage.warning('请选择起始对象与目标对象')
+    ElMessage.warning('请选择起始对象类型与目标对象类型')
     return
   }
   if (formFromObject.value === formToObject.value) {
-    ElMessage.warning('起始对象与目标对象不能相同（自关联请用 junction 对象表达）')
+    ElMessage.warning('起始对象类型与目标对象类型不能相同（自关联请用 junction 对象类型表达）')
     return
   }
   if (formFromColumns.value.length === 0 || formToColumns.value.length === 0) {
@@ -209,7 +209,7 @@ const saveRelation = async () => {
     const allowed = new Set(identifiersOf(formFromObject.value))
     const invalid = formFromColumns.value.filter(name => !allowed.has(name))
     if (invalid.length > 0) {
-      ElMessage.warning(`一对一关系的起始侧关联列必须引用起始对象的标识属性：${invalid.join('、')}`)
+      ElMessage.warning(`一对一关系类型的起始侧关联列必须引用起始对象类型的标识属性：${invalid.join('、')}`)
       return
     }
   }
@@ -217,7 +217,7 @@ const saveRelation = async () => {
   if (!creating.value && editingRow && isStructuralChanged(editingRow)) {
     try {
       await ElMessageBox.confirm(
-        '关系的连接对象、关联列或基数变更属于破坏性变更，可能影响已发布的本体导航路径，确定继续？',
+        '关系类型的连接对象类型、关联列或基数变更属于破坏性变更，可能影响已发布的本体导航路径，确定继续？',
         '破坏性变更确认',
         { type: 'warning', confirmButtonText: '继续提交', cancelButtonText: '取消' }
       )
@@ -228,9 +228,9 @@ const saveRelation = async () => {
   }
   saving.value = true
   try {
-    const res = await upsertAdminOntologyRelation(name, {
-      from_object_name: formFromObject.value,
-      to_object_name: formToObject.value,
+    const res = await upsertAdminOntologyRelationType(name, {
+      from_object_type_name: formFromObject.value,
+      to_object_type_name: formToObject.value,
       multiplicity: formMultiplicity.value,
       from_columns: formFromColumns.value,
       to_columns: formToColumns.value,
@@ -262,9 +262,9 @@ const saveRelation = async () => {
 
 // ---------- 删除（右键发起，确认框兜底） ----------
 
-const remove = async (row: OntologyRelationItem) => {
+const remove = async (row: OntologyRelationTypeItem) => {
   try {
-    await ElMessageBox.confirm(`确定删除关系「${row.relation_name}」？（软删）`, '删除本体关系', {
+    await ElMessageBox.confirm(`确定删除关系类型「${row.relation_type_name}」？（软删）`, '删除关系类型', {
       type: 'warning',
       confirmButtonText: '删除',
       cancelButtonText: '取消'
@@ -273,10 +273,10 @@ const remove = async (row: OntologyRelationItem) => {
     return
   }
   try {
-    const res = await deleteAdminOntologyRelation(row.relation_name)
+    const res = await deleteAdminOntologyRelationType(row.relation_type_name)
     if (res.status === 'success') {
       ElMessage.success('删除成功')
-      emit('saved', [row.from_object_name || '', row.to_object_name || ''])
+      emit('saved', [row.from_object_type_name || '', row.to_object_type_name || ''])
     } else {
       ElMessage.error(res.msg || '删除失败')
     }
@@ -290,18 +290,18 @@ const remove = async (row: OntologyRelationItem) => {
 
 const statusDialogVisible = ref(false)
 const statusSaving = ref(false)
-const statusRow = ref<OntologyRelationItem | null>(null)
+const statusRow = ref<OntologyRelationTypeItem | null>(null)
 const statusTarget = ref<ManualOntologyStatus>('experimental')
 
-const objectStatusOf = (objectName: string | undefined): OntologyObjectStatus | undefined =>
-  props.objects.find(item => item.object_name === objectName)?.status
+const objectStatusOf = (objectTypeName: string | undefined): OntologyObjectTypeStatus | undefined =>
+  props.object_types.find(item => item.object_type_name === objectTypeName)?.status
 
 // 上限 = 两侧对象状态的较低者；任一端废弃时关系只随对象级联，不可手动迁移。
 // 对象清单由父面板传全量 allObjects（不受工具栏筛选影响），否则端点被筛掉会退化成 draft 上限、无法升级。
 const statusUpperBound = computed(() =>
   relationStatusUpperBound(
-    objectStatusOf(statusRow.value?.from_object_name),
-    objectStatusOf(statusRow.value?.to_object_name)
+    objectStatusOf(statusRow.value?.from_object_type_name),
+    objectStatusOf(statusRow.value?.to_object_type_name)
   )
 )
 
@@ -310,12 +310,12 @@ const statusOptions = computed(() => relationStatusTargets(statusRow.value?.stat
 const boundHint = computed(() => {
   const bound = statusUpperBound.value
   if (!statusRow.value) return ''
-  if (bound === 'deprecated') return '连接对象已废弃：关系状态随对象级联为废弃，不可手动迁移。'
-  if (!bound) return '无法确定两侧对象状态，请刷新后重试。'
-  return `关系状态不得高于两侧对象的较低者（当前上限：${ONTOLOGY_STATUS_META[bound].label}）；对象升级后可再升级关系。`
+  if (bound === 'deprecated') return '连接对象类型已废弃：关系类型状态随对象类型级联为废弃，不可手动迁移。'
+  if (!bound) return '无法确定两侧对象类型状态，请刷新后重试。'
+  return `关系类型状态不得高于两侧对象类型的较低者（当前上限：${ONTOLOGY_STATUS_META[bound].label}）；对象类型升级后可再升级关系类型。`
 })
 
-const openStatus = (row: OntologyRelationItem) => {
+const openStatus = (row: OntologyRelationTypeItem) => {
   statusRow.value = row
   // 默认选中第一个合法目标（合法目标已排除当前状态）：避免默认值与当前状态相同导致
   // 「确认迁移」变成无操作提交却仍提示“状态已更新”。
@@ -330,16 +330,16 @@ const confirmStatus = async () => {
     return
   }
   if (!statusOptions.value.includes(statusTarget.value)) {
-    ElMessage.warning('目标状态超出两侧对象状态上限或不可迁移，请刷新后重试')
+    ElMessage.warning('目标状态超出两侧对象类型状态上限或不可迁移，请刷新后重试')
     return
   }
   statusSaving.value = true
   try {
-    const res = await changeAdminOntologyRelationStatus(statusRow.value.relation_name, { status: statusTarget.value })
+    const res = await changeAdminOntologyRelationTypeStatus(statusRow.value.relation_type_name, { status: statusTarget.value })
     if (res.status === 'success') {
       ElMessage.success(`状态已更新为 ${ONTOLOGY_STATUS_META[statusTarget.value].label}`)
       statusDialogVisible.value = false
-      emit('saved', [statusRow.value.from_object_name || '', statusRow.value.to_object_name || ''])
+      emit('saved', [statusRow.value.from_object_type_name || '', statusRow.value.to_object_type_name || ''])
     } else {
       ElMessage.error(res.msg || '状态变更失败')
     }
@@ -359,57 +359,57 @@ defineExpose({ openCreate, openEdit, openStatus, remove })
   <el-dialog v-model="dialogVisible" width="min(680px, 94vw)" :append-to-body="true" :close-on-click-modal="false">
     <template #header>
       <span class="text-base font-medium text-slate-800">
-        {{ creating ? '新建本体关系' : `编辑本体关系：${editingName}` }}
+        {{ creating ? '新建关系类型' : `编辑关系类型：${editingName}` }}
       </span>
     </template>
     <div class="flex max-h-[66vh] flex-col gap-3 overflow-y-auto pr-1">
       <div class="grid grid-cols-2 gap-3">
         <div>
-          <div class="mb-1 text-xs text-slate-500">关系 API 名（创建后不可改）</div>
+          <div class="mb-1 text-xs text-slate-500">关系类型 API 名（创建后不可改）</div>
           <el-input v-model="formName" size="small" :disabled="!creating" placeholder="如 order_belong_to_customer" class="font-mono" />
         </div>
         <div>
-          <div class="mb-1 text-xs text-slate-500">基数（多对多请用 junction 对象表达）</div>
+          <div class="mb-1 text-xs text-slate-500">基数（多对多请用 junction 对象类型表达）</div>
           <el-radio-group v-model="formMultiplicity" size="small">
             <el-radio-button value="many_to_one">多对一 (N:1)</el-radio-button>
             <el-radio-button value="one_to_one">一对一 (1:1)</el-radio-button>
           </el-radio-group>
         </div>
         <div>
-          <div class="mb-1 text-xs text-slate-500">起始对象（from）</div>
+          <div class="mb-1 text-xs text-slate-500">起始对象类型（from）</div>
           <el-select
             v-model="formFromObject"
             size="small"
             filterable
             :empty-values="[null, undefined]"
-            placeholder="选择起始对象"
+            placeholder="选择起始对象类型"
             class="!w-full"
             @change="onFromObjectChange"
           >
             <el-option
               v-for="item in activeObjectOptions"
-              :key="item.object_name"
-              :label="`${item.display_name} (${item.object_name})`"
-              :value="item.object_name"
+              :key="item.object_type_name"
+              :label="`${item.display_name} (${item.object_type_name})`"
+              :value="item.object_type_name"
             />
           </el-select>
         </div>
         <div>
-          <div class="mb-1 text-xs text-slate-500">目标对象（to）</div>
+          <div class="mb-1 text-xs text-slate-500">目标对象类型（to）</div>
           <el-select
             v-model="formToObject"
             size="small"
             filterable
             :empty-values="[null, undefined]"
-            placeholder="选择目标对象"
+            placeholder="选择目标对象类型"
             class="!w-full"
             @change="onToObjectChange"
           >
             <el-option
               v-for="item in activeObjectOptions"
-              :key="item.object_name"
-              :label="`${item.display_name} (${item.object_name})`"
-              :value="item.object_name"
+              :key="item.object_type_name"
+              :label="`${item.display_name} (${item.object_type_name})`"
+              :value="item.object_type_name"
             />
           </el-select>
         </div>
@@ -479,7 +479,7 @@ defineExpose({ openCreate, openEdit, openStatus, remove })
 
       <div>
         <div class="mb-1 text-xs text-slate-500">描述</div>
-        <el-input v-model="formDescription" size="small" maxlength="1024" placeholder="关系业务含义（可选）" />
+        <el-input v-model="formDescription" size="small" maxlength="1024" placeholder="关系类型业务含义（可选）" />
       </div>
     </div>
     <template #footer>
@@ -491,7 +491,7 @@ defineExpose({ openCreate, openEdit, openStatus, remove })
   <!-- 状态迁移弹窗 -->
   <el-dialog v-model="statusDialogVisible" width="min(520px, 94vw)" :append-to-body="true">
     <template #header>
-      <span class="text-base font-medium text-slate-800">状态迁移：{{ statusRow?.relation_name }}</span>
+      <span class="text-base font-medium text-slate-800">状态迁移：{{ statusRow?.relation_type_name }}</span>
     </template>
     <div v-if="statusRow" class="flex flex-col gap-3">
       <div class="flex items-center gap-2 text-xs text-slate-500">
@@ -515,7 +515,7 @@ defineExpose({ openCreate, openEdit, openStatus, remove })
         v-else
         class="rounded-lg border border-red-100 bg-red-50 p-2.5 text-[11px] leading-5 text-red-600"
       >
-        deprecated 为终态且不可逆；关系状态随连接对象级联。
+        deprecated 为终态且不可逆；关系类型状态随连接对象类型级联。
       </div>
       <div v-if="statusRow.status !== 'deprecated'">
         <div class="mb-1 text-xs text-slate-500">目标状态</div>

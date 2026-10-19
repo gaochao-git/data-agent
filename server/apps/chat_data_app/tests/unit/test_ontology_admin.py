@@ -1,4 +1,4 @@
-"""本体管理单测：对象/属性/关系 CRUD、校验器红线、治理门禁与状态机。
+"""本体管理单测：对象类型/属性/关系类型 CRUD、校验器红线、治理门禁与状态机。
 
 harness 与 test_setting_service 同模式：sqlite 内存库建全量表 + monkeypatch
 session_scope/transaction_scope，DAO 走真实 ORM（service 事务作用域复用同一
@@ -156,7 +156,7 @@ def deps_ok(monkeypatch):
 def test_object_create_requires_identifier(harness, deps_ok):
     with pytest.raises(OntologyInvalidError, match="标识属性"):
         asyncio.run(
-            ontology_service.upsert_object_async(
+            ontology_service.upsert_object_type_async(
                 "Order",
                 _object_payload(properties=[{**VALID_PROPERTY, "is_identifier": False}]),
             )
@@ -166,7 +166,7 @@ def test_object_create_requires_identifier(harness, deps_ok):
 def test_object_create_rejects_bad_api_name(harness, deps_ok):
     with pytest.raises(OntologyNameInvalidError):
         asyncio.run(
-            ontology_service.upsert_object_async(
+            ontology_service.upsert_object_type_async(
                 "bad name!",
                 _object_payload(properties=[{**VALID_PROPERTY, "property_name": "ok_id", "is_identifier": True}]),
             )
@@ -174,25 +174,25 @@ def test_object_create_rejects_bad_api_name(harness, deps_ok):
 
 
 def test_object_create_and_get(harness, deps_ok):
-    saved = asyncio.run(ontology_service.upsert_object_async("Order", _object_payload(domain="交易")))
+    saved = asyncio.run(ontology_service.upsert_object_type_async("Order", _object_payload(domain="交易")))
     assert saved["display_name"] == "订单"
     assert saved["status"] == "draft"
-    detail = asyncio.run(ontology_service.get_object_async("Order"))
-    assert detail["object_name"] == "Order"
+    detail = asyncio.run(ontology_service.get_object_type_async("Order"))
+    assert detail["object_type_name"] == "Order"
     assert detail["properties"][0]["property_name"] == "order_id"
     assert detail["properties"][0]["is_identifier"] is True
 
 
 def test_object_create_rejects_duplicate_without_overwrite(harness, deps_ok):
-    asyncio.run(ontology_service.upsert_object_async("Order", _object_payload()))
+    asyncio.run(ontology_service.upsert_object_type_async("Order", _object_payload()))
     with pytest.raises(OntologyAlreadyExistsError, match="已存在"):
-        asyncio.run(ontology_service.upsert_object_async("Order", _object_payload()))
+        asyncio.run(ontology_service.upsert_object_type_async("Order", _object_payload()))
 
 
 def test_mapping_column_mapping_unknown_property_rejected(harness, deps_ok):
     with pytest.raises(OntologyInvalidError, match="未定义属性"):
         asyncio.run(
-            ontology_service.upsert_object_async(
+            ontology_service.upsert_object_type_async(
                 "Order",
                 _object_payload(
                     mappings=[
@@ -210,7 +210,7 @@ def test_mapping_unknown_dimension_rejected(harness, deps_ok):
     """映射右值必须是所选模型中真实存在的维度（本体只引用模型维度，不定义物理列）。"""
     with pytest.raises(OntologyInvalidError, match="不存在的维度"):
         asyncio.run(
-            ontology_service.upsert_object_async(
+            ontology_service.upsert_object_type_async(
                 "Order",
                 _object_payload(
                     mappings=[
@@ -228,7 +228,7 @@ def test_mapping_cross_table_dimensions_rejected(harness, deps_ok):
     """同一映射的维度必须同表（实体锚点唯一），跨表映射拒绝。"""
     with pytest.raises(OntologyInvalidError, match="跨多张表"):
         asyncio.run(
-            ontology_service.upsert_object_async(
+            ontology_service.upsert_object_type_async(
                 "Order",
                 _object_payload(
                     properties=[
@@ -248,10 +248,10 @@ def test_mapping_cross_table_dimensions_rejected(harness, deps_ok):
 
 def test_mapping_ownership_conflict_rejected(harness, deps_ok):
     mapping = dict(SEMANTIC_MAPPING)
-    asyncio.run(ontology_service.upsert_object_async("Order", _object_payload(mappings=[mapping])))
-    with pytest.raises(OntologyInvalidError, match="已被对象"):
+    asyncio.run(ontology_service.upsert_object_type_async("Order", _object_payload(mappings=[mapping])))
+    with pytest.raises(OntologyInvalidError, match="已被对象类型"):
         asyncio.run(
-            ontology_service.upsert_object_async(
+            ontology_service.upsert_object_type_async(
                 "Order2",
                 _object_payload(properties=[dict(VALID_PROPERTY)], mappings=[dict(mapping)]),
             )
@@ -260,16 +260,16 @@ def test_mapping_ownership_conflict_rejected(harness, deps_ok):
 
 def test_mapping_change_requires_destructive_confirm(harness, deps_ok):
     mapping = dict(SEMANTIC_MAPPING)
-    asyncio.run(ontology_service.upsert_object_async("Order", _object_payload(mappings=[dict(mapping)])))
+    asyncio.run(ontology_service.upsert_object_type_async("Order", _object_payload(mappings=[dict(mapping)])))
     edited_mapping = {**mapping, "semantic_config_id": "cfg-2"}
     with pytest.raises(OntologyStateInvalidError, match="破坏性变更"):
         asyncio.run(
-            ontology_service.upsert_object_async(
+            ontology_service.upsert_object_type_async(
                 "Order", _object_payload(mappings=[edited_mapping]), allow_overwrite=True
             )
         )
     saved = asyncio.run(
-        ontology_service.upsert_object_async(
+        ontology_service.upsert_object_type_async(
             "Order",
             _object_payload(mappings=[edited_mapping], confirm_destructive=True),
             allow_overwrite=True,
@@ -279,21 +279,21 @@ def test_mapping_change_requires_destructive_confirm(harness, deps_ok):
 
 
 def test_certified_requires_mapping(harness, deps_ok):
-    asyncio.run(ontology_service.upsert_object_async("Order", _object_payload()))
+    asyncio.run(ontology_service.upsert_object_type_async("Order", _object_payload()))
     # 无映射：拒绝
     with pytest.raises(OntologyInvalidError, match="语义模型映射"):
-        asyncio.run(ontology_service.set_object_status_async("Order", "certified", {}))
+        asyncio.run(ontology_service.set_object_type_status_async("Order", "certified", {}))
     # 补上语义模型映射后可认证
     asyncio.run(
-        ontology_service.upsert_object_async(
+        ontology_service.upsert_object_type_async(
             "Order", _object_payload(mappings=[dict(SEMANTIC_MAPPING)], confirm_destructive=True), allow_overwrite=True
         )
     )
-    asyncio.run(ontology_service.set_object_status_async("Order", "certified", {}))
+    asyncio.run(ontology_service.set_object_type_status_async("Order", "certified", {}))
     # certified 编辑时移除唯一映射：冻结门禁拒绝
     with pytest.raises(OntologyStateInvalidError, match="语义模型映射"):
         asyncio.run(
-            ontology_service.upsert_object_async(
+            ontology_service.upsert_object_type_async(
                 "Order", _object_payload(mappings=[], confirm_destructive=True), allow_overwrite=True
             )
         )
@@ -302,7 +302,7 @@ def test_certified_requires_mapping(harness, deps_ok):
 def test_certified_freeze_blocks_key_and_property_change(harness, deps_ok):
     mapping = dict(SEMANTIC_MAPPING)
     asyncio.run(
-        ontology_service.upsert_object_async(
+        ontology_service.upsert_object_type_async(
             "Order",
             _object_payload(
                 properties=[dict(VALID_PROPERTY), {"property_name": "amount", "value_type": "Decimal"}],
@@ -310,11 +310,11 @@ def test_certified_freeze_blocks_key_and_property_change(harness, deps_ok):
             ),
         )
     )
-    asyncio.run(ontology_service.set_object_status_async("Order", "certified", {}))
+    asyncio.run(ontology_service.set_object_type_status_async("Order", "certified", {}))
     # 主键组合变更：certified 直接拒绝
     with pytest.raises(OntologyStateInvalidError, match="冻结"):
         asyncio.run(
-            ontology_service.upsert_object_async(
+            ontology_service.upsert_object_type_async(
                 "Order",
                 _object_payload(
                     mappings=[dict(mapping)],
@@ -329,7 +329,7 @@ def test_certified_freeze_blocks_key_and_property_change(harness, deps_ok):
     # 删除既有属性：certified 直接拒绝（删除非标识属性 amount）
     with pytest.raises(OntologyStateInvalidError, match="禁止删除属性"):
         asyncio.run(
-            ontology_service.upsert_object_async(
+            ontology_service.upsert_object_type_async(
                 "Order",
                 _object_payload(mappings=[dict(mapping)], properties=[dict(VALID_PROPERTY)]),
                 allow_overwrite=True,
@@ -338,42 +338,42 @@ def test_certified_freeze_blocks_key_and_property_change(harness, deps_ok):
 
 
 def test_status_deprecation_rules_and_finality(harness, deps_ok):
-    asyncio.run(ontology_service.upsert_object_async("Order", _object_payload()))
-    asyncio.run(ontology_service.upsert_object_async("Payment", _object_payload()))
+    asyncio.run(ontology_service.upsert_object_type_async("Order", _object_payload()))
+    asyncio.run(ontology_service.upsert_object_type_async("Payment", _object_payload()))
     with pytest.raises(OntologyStateInvalidError, match="废弃原因"):
-        asyncio.run(ontology_service.set_object_status_async("Order", "deprecated", {}))
-    with pytest.raises(OntologyNotFoundError, match="替代对象不存在"):
+        asyncio.run(ontology_service.set_object_type_status_async("Order", "deprecated", {}))
+    with pytest.raises(OntologyNotFoundError, match="替代对象类型不存在"):
         asyncio.run(
-            ontology_service.set_object_status_async(
-                "Order", "deprecated", {"deprecation_reason": "口径迁移", "successor_object_name": "Ghost"}
+            ontology_service.set_object_type_status_async(
+                "Order", "deprecated", {"deprecation_reason": "口径迁移", "successor_object_type_name": "Ghost"}
             )
         )
     asyncio.run(
-        ontology_service.set_object_status_async(
-            "Order", "deprecated", {"deprecation_reason": "口径迁移", "successor_object_name": "Payment"}
+        ontology_service.set_object_type_status_async(
+            "Order", "deprecated", {"deprecation_reason": "口径迁移", "successor_object_type_name": "Payment"}
         )
     )
     with pytest.raises(OntologyStateInvalidError, match="不可逆"):
-        asyncio.run(ontology_service.set_object_status_async("Order", "draft", {}))
+        asyncio.run(ontology_service.set_object_type_status_async("Order", "draft", {}))
     with pytest.raises(OntologyStateInvalidError, match="禁止编辑"):
-        asyncio.run(ontology_service.upsert_object_async("Order", _object_payload(), allow_overwrite=True))
+        asyncio.run(ontology_service.upsert_object_type_async("Order", _object_payload(), allow_overwrite=True))
 
 
 def test_relation_column_must_reference_target_identifier(harness, deps_ok):
     asyncio.run(
-        ontology_service.upsert_object_async(
+        ontology_service.upsert_object_type_async(
             "Order",
             _object_payload(properties=[dict(VALID_PROPERTY), {"property_name": "user_name", "value_type": "String"}]),
         )
     )
-    asyncio.run(ontology_service.upsert_object_async("User", _object_payload(properties=[dict(VALID_PROPERTY)])))
+    asyncio.run(ontology_service.upsert_object_type_async("User", _object_payload(properties=[dict(VALID_PROPERTY)])))
     with pytest.raises(OntologyInvalidError, match="标识属性"):
         asyncio.run(
             ontology_service.upsert_relation_async(
                 "order_belongs_user",
                 {
-                    "from_object_name": "Order",
-                    "to_object_name": "User",
+                    "from_object_type_name": "Order",
+                    "to_object_type_name": "User",
                     "from_columns": ["user_name"],
                     "to_columns": ["user_name"],
                 },
@@ -383,8 +383,8 @@ def test_relation_column_must_reference_target_identifier(harness, deps_ok):
         ontology_service.upsert_relation_async(
             "order_belongs_user",
             {
-                "from_object_name": "Order",
-                "to_object_name": "User",
+                "from_object_type_name": "Order",
+                "to_object_type_name": "User",
                 "from_columns": ["user_name"],
                 "to_columns": ["order_id"],
                 "from_verbalize": "{from} 归属于 {to}",
@@ -392,20 +392,20 @@ def test_relation_column_must_reference_target_identifier(harness, deps_ok):
         )
     )
     assert saved["status"] == "draft"
-    relations = asyncio.run(ontology_service.list_relations_async(from_object_name="Order"))
-    assert relations[0]["from_object_name"] == "Order"
-    assert relations[0]["to_object_name"] == "User"
+    relation_types = asyncio.run(ontology_service.list_relations_async(from_object_type_name="Order"))
+    assert relation_types[0]["from_object_type_name"] == "Order"
+    assert relation_types[0]["to_object_type_name"] == "User"
 
 
 def test_relation_multiplicity_closed_vocabulary(harness, deps_ok):
-    asyncio.run(ontology_service.upsert_object_async("Order", _object_payload()))
+    asyncio.run(ontology_service.upsert_object_type_async("Order", _object_payload()))
     with pytest.raises(OntologyInvalidError, match="基数"):
         asyncio.run(
             ontology_service.upsert_relation_async(
                 "r1",
                 {
-                    "from_object_name": "Order",
-                    "to_object_name": "Order",
+                    "from_object_type_name": "Order",
+                    "to_object_type_name": "Order",
                     "multiplicity": "many_to_many",
                     "from_columns": ["order_id"],
                     "to_columns": ["order_id"],
@@ -416,13 +416,13 @@ def test_relation_multiplicity_closed_vocabulary(harness, deps_ok):
 
 def test_relation_structural_change_requires_confirm(harness, deps_ok):
     for name, prop in (("Order", dict(VALID_PROPERTY)), ("User", dict(VALID_PROPERTY))):
-        asyncio.run(ontology_service.upsert_object_async(name, _object_payload(properties=[prop])))
+        asyncio.run(ontology_service.upsert_object_type_async(name, _object_payload(properties=[prop])))
     asyncio.run(
         ontology_service.upsert_relation_async(
             "r1",
             {
-                "from_object_name": "Order",
-                "to_object_name": "User",
+                "from_object_type_name": "Order",
+                "to_object_type_name": "User",
                 "from_columns": ["order_id"],
                 "to_columns": ["order_id"],
             },
@@ -433,8 +433,8 @@ def test_relation_structural_change_requires_confirm(harness, deps_ok):
             ontology_service.upsert_relation_async(
                 "r1",
                 {
-                    "from_object_name": "User",
-                    "to_object_name": "Order",
+                    "from_object_type_name": "User",
+                    "to_object_type_name": "Order",
                     "from_columns": ["order_id"],
                     "to_columns": ["order_id"],
                 },
@@ -445,8 +445,8 @@ def test_relation_structural_change_requires_confirm(harness, deps_ok):
         ontology_service.upsert_relation_async(
             "r1",
             {
-                "from_object_name": "User",
-                "to_object_name": "Order",
+                "from_object_type_name": "User",
+                "to_object_type_name": "Order",
                 "from_columns": ["order_id"],
                 "to_columns": ["order_id"],
                 "confirm_destructive": True,
@@ -463,59 +463,59 @@ def test_object_downgrade_cascades_relations(harness, deps_ok):
         "column_mappings": {"order_id": "用户编号"},
     }
     asyncio.run(
-        ontology_service.upsert_object_async(
+        ontology_service.upsert_object_type_async(
             "Order", _object_payload(properties=[dict(VALID_PROPERTY)], mappings=[order_mapping])
         )
     )
     asyncio.run(
-        ontology_service.upsert_object_async(
+        ontology_service.upsert_object_type_async(
             "User", _object_payload(properties=[dict(VALID_PROPERTY)], mappings=[user_mapping])
         )
     )
-    asyncio.run(ontology_service.set_object_status_async("Order", "certified", {}))
-    asyncio.run(ontology_service.set_object_status_async("User", "certified", {}))
+    asyncio.run(ontology_service.set_object_type_status_async("Order", "certified", {}))
+    asyncio.run(ontology_service.set_object_type_status_async("User", "certified", {}))
     asyncio.run(
         ontology_service.upsert_relation_async(
             "r1",
             {
-                "from_object_name": "Order",
-                "to_object_name": "User",
+                "from_object_type_name": "Order",
+                "to_object_type_name": "User",
                 "from_columns": ["order_id"],
                 "to_columns": ["order_id"],
             },
         )
     )
-    relations = asyncio.run(ontology_service.list_relations_async())
-    assert relations[0]["status"] == "certified"
-    # Order 降级 → 关系自动降级（升级手动）
-    asyncio.run(ontology_service.set_object_status_async("Order", "experimental", {}))
-    relations = asyncio.run(ontology_service.list_relations_async())
-    assert relations[0]["status"] == "experimental"
+    relation_types = asyncio.run(ontology_service.list_relations_async())
+    assert relation_types[0]["status"] == "certified"
+    # Order 降级 → 关系类型自动降级（升级手动）
+    asyncio.run(ontology_service.set_object_type_status_async("Order", "experimental", {}))
+    relation_types = asyncio.run(ontology_service.list_relations_async())
+    assert relation_types[0]["status"] == "experimental"
 
 
 def test_relation_status_manual_migration(harness, deps_ok):
-    """关系状态手动迁移：上限=两侧对象较低者；级联只降不升，升级走手动入口。"""
+    """关系类型状态手动迁移：上限=两侧对象类型较低者；级联只降不升，升级走手动入口。"""
     order_mapping = dict(SEMANTIC_MAPPING)
     user_mapping = {"semantic_config_id": "cfg-user", "column_mappings": {"order_id": "用户编号"}}
     asyncio.run(
-        ontology_service.upsert_object_async(
+        ontology_service.upsert_object_type_async(
             "Order", _object_payload(properties=[dict(VALID_PROPERTY)], mappings=[order_mapping])
         )
     )
     asyncio.run(
-        ontology_service.upsert_object_async(
+        ontology_service.upsert_object_type_async(
             "User", _object_payload(properties=[dict(VALID_PROPERTY)], mappings=[user_mapping])
         )
     )
-    asyncio.run(ontology_service.set_object_status_async("Order", "certified", {}))
-    # User 升 experimental → 关系创建时 derived = 两侧较低者 = experimental
-    asyncio.run(ontology_service.set_object_status_async("User", "experimental", {}))
+    asyncio.run(ontology_service.set_object_type_status_async("Order", "certified", {}))
+    # User 升 experimental → 关系类型创建时 derived = 两侧较低者 = experimental
+    asyncio.run(ontology_service.set_object_type_status_async("User", "experimental", {}))
     asyncio.run(
         ontology_service.upsert_relation_async(
             "r1",
             {
-                "from_object_name": "Order",
-                "to_object_name": "User",
+                "from_object_type_name": "Order",
+                "to_object_type_name": "User",
                 "from_columns": ["order_id"],
                 "to_columns": ["order_id"],
             },
@@ -527,41 +527,41 @@ def test_relation_status_manual_migration(harness, deps_ok):
     # 同状态迁移：幂等返回
     same = asyncio.run(ontology_service.set_relation_status_async("r1", "experimental"))
     assert same["status"] == "experimental"
-    # User 降级 draft → 关系自动级联降级
-    asyncio.run(ontology_service.set_object_status_async("User", "draft", {}))
+    # User 降级 draft → 关系类型自动级联降级
+    asyncio.run(ontology_service.set_object_type_status_async("User", "draft", {}))
     assert asyncio.run(ontology_service.list_relations_async())[0]["status"] == "draft"
-    # 对象仍是 draft：关系升 experimental 超上限，拒绝
+    # 对象类型仍是 draft：关系类型升 experimental 超上限，拒绝
     with pytest.raises(OntologyStateInvalidError, match="上限"):
         asyncio.run(ontology_service.set_relation_status_async("r1", "experimental"))
-    # User 升回 experimental（级联不升关系）→ 手动升级放行
-    asyncio.run(ontology_service.set_object_status_async("User", "experimental", {}))
+    # User 升回 experimental（级联不升关系类型）→ 手动升级放行
+    asyncio.run(ontology_service.set_object_type_status_async("User", "experimental", {}))
     assert asyncio.run(ontology_service.list_relations_async())[0]["status"] == "draft"
     upgraded = asyncio.run(ontology_service.set_relation_status_async("r1", "experimental"))
     assert upgraded["status"] == "experimental"
 
 
 def test_relation_status_deprecated_final_and_guard(harness, deps_ok):
-    """deprecated 仅随对象级联：手动迁移 deprecated 关系被拒；废弃对象的关系同样拒绝手动迁移。"""
-    asyncio.run(ontology_service.upsert_object_async("Order", _object_payload()))
-    asyncio.run(ontology_service.upsert_object_async("User", _object_payload(properties=[dict(VALID_PROPERTY)])))
+    """deprecated 仅随对象类型级联：手动迁移 deprecated 关系类型被拒；废弃对象类型的关系类型同样拒绝手动迁移。"""
+    asyncio.run(ontology_service.upsert_object_type_async("Order", _object_payload()))
+    asyncio.run(ontology_service.upsert_object_type_async("User", _object_payload(properties=[dict(VALID_PROPERTY)])))
     asyncio.run(
         ontology_service.upsert_relation_async(
             "r1",
             {
-                "from_object_name": "Order",
-                "to_object_name": "User",
+                "from_object_type_name": "Order",
+                "to_object_type_name": "User",
                 "from_columns": ["order_id"],
                 "to_columns": ["order_id"],
             },
         )
     )
     asyncio.run(
-        ontology_service.set_object_status_async(
-            "Order", "deprecated", {"deprecation_reason": "口径迁移", "successor_object_name": "User"}
+        ontology_service.set_object_type_status_async(
+            "Order", "deprecated", {"deprecation_reason": "口径迁移", "successor_object_type_name": "User"}
         )
     )
-    relations = asyncio.run(ontology_service.list_relations_async())
-    assert relations[0]["status"] == "deprecated"
+    relation_types = asyncio.run(ontology_service.list_relations_async())
+    assert relation_types[0]["status"] == "deprecated"
     with pytest.raises(OntologyStateInvalidError, match="终态"):
         asyncio.run(ontology_service.set_relation_status_async("r1", "draft"))
     with pytest.raises(OntologyStateInvalidError, match="deprecated"):
@@ -575,7 +575,7 @@ def test_enum_ref_must_exist(harness, monkeypatch):
     monkeypatch.setattr(ontology_service_module, "global_enum_service", _stub_enum_service(missing_enum))
     with pytest.raises(OntologyInvalidError, match="全局枚举不存在"):
         asyncio.run(
-            ontology_service.upsert_object_async(
+            ontology_service.upsert_object_type_async(
                 "Order",
                 _object_payload(
                     properties=[
@@ -587,14 +587,14 @@ def test_enum_ref_must_exist(harness, monkeypatch):
 
 
 def test_delete_object_cascades_and_certified_blocked(harness, deps_ok):
-    asyncio.run(ontology_service.upsert_object_async("Order", _object_payload()))
-    asyncio.run(ontology_service.upsert_object_async("User", _object_payload(properties=[dict(VALID_PROPERTY)])))
+    asyncio.run(ontology_service.upsert_object_type_async("Order", _object_payload()))
+    asyncio.run(ontology_service.upsert_object_type_async("User", _object_payload(properties=[dict(VALID_PROPERTY)])))
     asyncio.run(
         ontology_service.upsert_relation_async(
             "r1",
             {
-                "from_object_name": "Order",
-                "to_object_name": "User",
+                "from_object_type_name": "Order",
+                "to_object_type_name": "User",
                 "from_columns": ["order_id"],
                 "to_columns": ["order_id"],
             },
@@ -602,19 +602,19 @@ def test_delete_object_cascades_and_certified_blocked(harness, deps_ok):
     )
     mapping = dict(SEMANTIC_MAPPING)
     asyncio.run(
-        ontology_service.upsert_object_async(
+        ontology_service.upsert_object_type_async(
             "Cert", _object_payload(properties=[dict(VALID_PROPERTY)], mappings=[dict(mapping)])
         )
     )
-    asyncio.run(ontology_service.set_object_status_async("Cert", "certified", {}))
-    with pytest.raises(OntologyStateInvalidError, match="certified 对象禁止删除"):
-        asyncio.run(ontology_service.delete_object_async("Cert"))
-    asyncio.run(ontology_service.delete_object_async("Order"))
-    assert asyncio.run(ontology_service.get_object_async("Order")) is None
-    assert asyncio.run(ontology_service.list_relations_async(from_object_name="Order")) == []
+    asyncio.run(ontology_service.set_object_type_status_async("Cert", "certified", {}))
+    with pytest.raises(OntologyStateInvalidError, match="certified 对象类型禁止删除"):
+        asyncio.run(ontology_service.delete_object_type_async("Cert"))
+    asyncio.run(ontology_service.delete_object_type_async("Order"))
+    assert asyncio.run(ontology_service.get_object_type_async("Order")) is None
+    assert asyncio.run(ontology_service.list_relations_async(from_object_type_name="Order")) == []
     # 复活模式：同名重建复用原行
-    asyncio.run(ontology_service.upsert_object_async("Order", _object_payload()))
-    detail = asyncio.run(ontology_service.get_object_async("Order"))
+    asyncio.run(ontology_service.upsert_object_type_async("Order", _object_payload()))
+    detail = asyncio.run(ontology_service.get_object_type_async("Order"))
     assert detail["status"] == "draft"
     assert json.dumps(detail["properties"], ensure_ascii=False)
 
@@ -627,27 +627,27 @@ def test_mapping_semantic_config_must_exist(harness, monkeypatch):
         _StubSemanticConfigDao(existing_ids=set(), dimension_index=DIMENSION_INDEX),
     )
     with pytest.raises(OntologyInvalidError, match="语义模型不存在"):
-        asyncio.run(ontology_service.upsert_object_async("Order", _object_payload(mappings=[dict(SEMANTIC_MAPPING)])))
-    # 无映射的对象不受影响
-    asyncio.run(ontology_service.upsert_object_async("Order", _object_payload()))
+        asyncio.run(ontology_service.upsert_object_type_async("Order", _object_payload(mappings=[dict(SEMANTIC_MAPPING)])))
+    # 无映射的对象类型不受影响
+    asyncio.run(ontology_service.upsert_object_type_async("Order", _object_payload()))
 
 
 def test_relation_from_columns_must_reference_defined_property(harness, deps_ok):
-    """起始侧关联列必须引用 from 对象已定义的属性（外键侧不要求是标识属性）。"""
+    """起始侧关联列必须引用 from 对象类型已定义的属性（外键侧不要求是标识属性）。"""
     asyncio.run(
-        ontology_service.upsert_object_async(
+        ontology_service.upsert_object_type_async(
             "Order",
             _object_payload(properties=[dict(VALID_PROPERTY), {"property_name": "user_name", "value_type": "String"}]),
         )
     )
-    asyncio.run(ontology_service.upsert_object_async("User", _object_payload(properties=[dict(VALID_PROPERTY)])))
+    asyncio.run(ontology_service.upsert_object_type_async("User", _object_payload(properties=[dict(VALID_PROPERTY)])))
     with pytest.raises(OntologyInvalidError, match="已定义的属性"):
         asyncio.run(
             ontology_service.upsert_relation_async(
                 "r1",
                 {
-                    "from_object_name": "Order",
-                    "to_object_name": "User",
+                    "from_object_type_name": "Order",
+                    "to_object_type_name": "User",
                     "from_columns": ["ghost_col"],
                     "to_columns": ["order_id"],
                 },
@@ -658,53 +658,53 @@ def test_relation_from_columns_must_reference_defined_property(harness, deps_ok)
         ontology_service.upsert_relation_async(
             "r1",
             {
-                "from_object_name": "Order",
-                "to_object_name": "User",
+                "from_object_type_name": "Order",
+                "to_object_type_name": "User",
                 "from_columns": ["user_name"],
                 "to_columns": ["order_id"],
             },
         )
     )
-    assert saved["relation_name"] == "r1"
+    assert saved["relation_type_name"] == "r1"
 
 
 def test_mappings_roundtrip_via_mapping_table(harness, deps_ok):
     """映射独立存映射表：详情回读、编辑全量重写无残留、删除后归属释放。"""
     mapping = dict(SEMANTIC_MAPPING)
-    asyncio.run(ontology_service.upsert_object_async("Order", _object_payload(mappings=[dict(mapping)])))
-    detail = asyncio.run(ontology_service.get_object_async("Order"))
-    assert {k: v for k, v in detail["mappings"][0].items() if k != "object_id"} == {
+    asyncio.run(ontology_service.upsert_object_type_async("Order", _object_payload(mappings=[dict(mapping)])))
+    detail = asyncio.run(ontology_service.get_object_type_async("Order"))
+    assert {k: v for k, v in detail["mappings"][0].items() if k != "object_type_id"} == {
         "binding_type": "semantic",
         "semantic_config_id": "cfg-1",
         "column_mappings": {"order_id": "订单编号"},
     }
-    assert detail["mappings"][0]["object_id"] == detail["id"]
-    # 编辑换模型：映射表全量重写，旧行不残留（同对象重绑自身放行）
+    assert detail["mappings"][0]["object_type_id"] == detail["id"]
+    # 编辑换模型：映射表全量重写，旧行不残留（同对象类型重绑自身放行）
     edited = {**mapping, "semantic_config_id": "cfg-2"}
     asyncio.run(
-        ontology_service.upsert_object_async(
+        ontology_service.upsert_object_type_async(
             "Order", _object_payload(mappings=[dict(edited)], confirm_destructive=True), allow_overwrite=True
         )
     )
-    detail = asyncio.run(ontology_service.get_object_async("Order"))
+    detail = asyncio.run(ontology_service.get_object_type_async("Order"))
     assert [item["semantic_config_id"] for item in detail["mappings"]] == ["cfg-2"]
-    # 删除对象后归属释放：其他对象可占用同一映射
-    asyncio.run(ontology_service.delete_object_async("Order"))
+    # 删除对象类型后归属释放：其他对象类型可占用同一映射
+    asyncio.run(ontology_service.delete_object_type_async("Order"))
     asyncio.run(
-        ontology_service.upsert_object_async(
+        ontology_service.upsert_object_type_async(
             "Order2", _object_payload(properties=[dict(VALID_PROPERTY)], mappings=[dict(mapping)])
         )
     )
-    detail = asyncio.run(ontology_service.get_object_async("Order2"))
+    detail = asyncio.run(ontology_service.get_object_type_async("Order2"))
     assert detail["mappings"][0]["semantic_config_id"] == "cfg-1"
 
 
 def test_mapping_same_object_rebind_allowed(harness, deps_ok):
     """编辑自身携带原映射：归属检查排除自身，不误报占用。"""
     mapping = dict(SEMANTIC_MAPPING)
-    asyncio.run(ontology_service.upsert_object_async("Order", _object_payload(mappings=[dict(mapping)])))
+    asyncio.run(ontology_service.upsert_object_type_async("Order", _object_payload(mappings=[dict(mapping)])))
     saved = asyncio.run(
-        ontology_service.upsert_object_async(
+        ontology_service.upsert_object_type_async(
             "Order",
             _object_payload(display_name="订单A", mappings=[dict(mapping)], confirm_destructive=False),
             allow_overwrite=True,
@@ -718,13 +718,13 @@ def test_property_identifier_rejects_decimal(harness, deps_ok):
     """PK 红线（对齐 Palantir）：浮点/小数类型不可做标识属性，非标识 Decimal 正常放行。"""
     with pytest.raises(OntologyInvalidError, match="不可做主键"):
         asyncio.run(
-            ontology_service.upsert_object_async(
+            ontology_service.upsert_object_type_async(
                 "Order",
                 _object_payload(properties=[{**VALID_PROPERTY, "property_name": "amount", "value_type": "Decimal"}]),
             )
         )
     asyncio.run(
-        ontology_service.upsert_object_async(
+        ontology_service.upsert_object_type_async(
             "Order",
             _object_payload(
                 properties=[
@@ -739,63 +739,63 @@ def test_property_identifier_rejects_decimal(harness, deps_ok):
             ),
         )
     )
-    saved = asyncio.run(ontology_service.get_object_async("Order"))
+    saved = asyncio.run(ontology_service.get_object_type_async("Order"))
     assert {item["property_name"] for item in saved["properties"]} == {"order_id", "amount"}
 
 
 def test_injection_bundle_excludes_non_active_relations(harness, deps_ok):
-    """AI 目录只注入 certified/experimental 关系：draft 手动降级后不进目录（deprecated 随对象级联同验证）。"""
+    """AI 目录只注入 certified/experimental 关系类型：draft 手动降级后不进目录（deprecated 随对象类型级联同验证）。"""
     from apps.chat_data_app.daos.ontology_dao import OntologyDao
 
     order_mapping = dict(SEMANTIC_MAPPING)
     user_mapping = {"semantic_config_id": "cfg-user", "column_mappings": {"order_id": "用户编号"}}
     asyncio.run(
-        ontology_service.upsert_object_async(
+        ontology_service.upsert_object_type_async(
             "Order", _object_payload(properties=[dict(VALID_PROPERTY)], mappings=[order_mapping])
         )
     )
     asyncio.run(
-        ontology_service.upsert_object_async(
+        ontology_service.upsert_object_type_async(
             "User", _object_payload(properties=[dict(VALID_PROPERTY)], mappings=[user_mapping])
         )
     )
-    asyncio.run(ontology_service.set_object_status_async("Order", "certified", {}))
-    asyncio.run(ontology_service.set_object_status_async("User", "certified", {}))
+    asyncio.run(ontology_service.set_object_type_status_async("Order", "certified", {}))
+    asyncio.run(ontology_service.set_object_type_status_async("User", "certified", {}))
     asyncio.run(
         ontology_service.upsert_relation_async(
             "r1",
             {
-                "from_object_name": "Order",
-                "to_object_name": "User",
+                "from_object_type_name": "Order",
+                "to_object_type_name": "User",
                 "from_columns": ["order_id"],
                 "to_columns": ["order_id"],
             },
         )
     )
-    # certified 关系注入
+    # certified 关系类型注入
     bundle = asyncio.run(OntologyDao().load_injection_bundle_async(["cfg-1", "cfg-user"]))
-    assert [item["relation_name"] for item in bundle["relations"]] == ["r1"]
-    # 手动降级 draft → 不注入（对象仍 certified，排除只可能来自关系状态过滤）
+    assert [item["relation_type_name"] for item in bundle["relation_types"]] == ["r1"]
+    # 手动降级 draft → 不注入（对象类型仍 certified，排除只可能来自关系类型状态过滤）
     asyncio.run(ontology_service.set_relation_status_async("r1", "draft"))
     bundle = asyncio.run(OntologyDao().load_injection_bundle_async(["cfg-1", "cfg-user"]))
-    assert bundle["relations"] == []
+    assert bundle["relation_types"] == []
     # 手动升回 experimental → 恢复注入
     asyncio.run(ontology_service.set_relation_status_async("r1", "experimental"))
     bundle = asyncio.run(OntologyDao().load_injection_bundle_async(["cfg-1", "cfg-user"]))
-    assert len(bundle["relations"]) == 1
-    # Order 对象废弃 → 级联 deprecated，对象与关系双双退出目录
+    assert len(bundle["relation_types"]) == 1
+    # Order 对象类型废弃 → 级联 deprecated，对象类型与关系类型双双退出目录
     asyncio.run(
-        ontology_service.set_object_status_async(
-            "Order", "deprecated", {"deprecation_reason": "口径迁移", "successor_object_name": "User"}
+        ontology_service.set_object_type_status_async(
+            "Order", "deprecated", {"deprecation_reason": "口径迁移", "successor_object_type_name": "User"}
         )
     )
     bundle = asyncio.run(OntologyDao().load_injection_bundle_async(["cfg-1", "cfg-user"]))
     # Order 退出目录；User 仍 certified 合法保留
-    assert [item["object_name"] for item in bundle["objects"]] == ["User"]
-    assert bundle["relations"] == []
+    assert [item["object_type_name"] for item in bundle["object_types"]] == ["User"]
+    assert bundle["relation_types"] == []
 
 
-# ---------- 领域（组领域一次绑定，对象/关系继承） ----------
+# ---------- 领域（组领域一次绑定，对象类型/关系类型继承） ----------
 
 
 class _StubDataSourceDao:
@@ -850,11 +850,11 @@ def test_domain_delete_blocked_when_objects_attached(harness, deps_ok, monkeypat
     monkeypatch.setattr(ontology_service_module, "DataSourceDao", _StubDataSourceDao)
     domain = asyncio.run(ontology_service.upsert_domain_async("ecommerce_trade", _domain_payload()))
     asyncio.run(
-        ontology_service.upsert_object_async(
+        ontology_service.upsert_object_type_async(
             "Order", _object_payload(domain_id=int(domain["id"])), allow_overwrite=False
         )
     )
-    with pytest.raises(OntologyStateInvalidError, match="1 个对象"):
+    with pytest.raises(OntologyStateInvalidError, match="1 个对象类型"):
         asyncio.run(ontology_service.delete_domain_async("ecommerce_trade"))
 
 
@@ -862,15 +862,15 @@ def test_object_domain_id_validation(harness, deps_ok, monkeypatch):
     monkeypatch.setattr(ontology_service_module, "DataSourceDao", _StubDataSourceDao)
     # 领域不存在拒绝
     with pytest.raises(OntologyInvalidError, match="领域不存在"):
-        asyncio.run(ontology_service.upsert_object_async("Order", _object_payload(domain_id=999)))
+        asyncio.run(ontology_service.upsert_object_type_async("Order", _object_payload(domain_id=999)))
     # 合法领域挂接成功，详情回读 domain_id
     domain = asyncio.run(ontology_service.upsert_domain_async("ecommerce_trade", _domain_payload()))
-    asyncio.run(ontology_service.upsert_object_async("Order", _object_payload(domain_id=int(domain["id"]))))
-    detail = asyncio.run(ontology_service.get_object_async("Order"))
+    asyncio.run(ontology_service.upsert_object_type_async("Order", _object_payload(domain_id=int(domain["id"]))))
+    detail = asyncio.run(ontology_service.get_object_type_async("Order"))
     assert detail["domain_id"] == int(domain["id"])
     # 未分域（domain_id=None）合法
     asyncio.run(
-        ontology_service.upsert_object_async(
+        ontology_service.upsert_object_type_async(
             "Misc",
             _object_payload(
                 properties=[{**VALID_PROPERTY, "property_name": "misc_id"}],
@@ -880,65 +880,65 @@ def test_object_domain_id_validation(harness, deps_ok, monkeypatch):
 
 
 def test_object_domain_reassign(harness, deps_ok, monkeypatch):
-    """拖拽换域窄写路径：改归属不动对象名/属性，移出领域=domain_id 置空。"""
+    """拖拽换域窄写路径：改归属不动对象类型名/属性，移出领域=domain_id 置空。"""
     monkeypatch.setattr(ontology_service_module, "DataSourceDao", _StubDataSourceDao)
     domain_a = asyncio.run(ontology_service.upsert_domain_async("domain_a", _domain_payload()))
     domain_b = asyncio.run(ontology_service.upsert_domain_async("domain_b", _domain_payload(display_name="供应链")))
-    asyncio.run(ontology_service.upsert_object_async("Order", _object_payload(domain_id=int(domain_a["id"]))))
+    asyncio.run(ontology_service.upsert_object_type_async("Order", _object_payload(domain_id=int(domain_a["id"]))))
 
     # 换到 domain_b
-    updated = asyncio.run(ontology_service.set_object_domain_async("Order", int(domain_b["id"])))
+    updated = asyncio.run(ontology_service.set_object_type_domain_async("Order", int(domain_b["id"])))
     assert updated["domain_id"] == int(domain_b["id"])
-    detail = asyncio.run(ontology_service.get_object_async("Order"))
+    detail = asyncio.run(ontology_service.get_object_type_async("Order"))
     assert detail["domain_id"] == int(domain_b["id"])
     # 属性不受影响（窄写只动 domain_id）
     assert [p["property_name"] for p in detail["properties"]] == ["order_id"]
 
     # 移出领域（null）
-    updated = asyncio.run(ontology_service.set_object_domain_async("Order", None))
+    updated = asyncio.run(ontology_service.set_object_type_domain_async("Order", None))
     assert updated["domain_id"] is None
 
     # 目标领域不存在拒绝
     with pytest.raises(OntologyNotFoundError, match="目标领域不存在"):
-        asyncio.run(ontology_service.set_object_domain_async("Order", 999))
+        asyncio.run(ontology_service.set_object_type_domain_async("Order", 999))
 
-    # 对象不存在拒绝
-    with pytest.raises(OntologyNotFoundError, match="对象不存在"):
-        asyncio.run(ontology_service.set_object_domain_async("Ghost", None))
+    # 对象类型不存在拒绝
+    with pytest.raises(OntologyNotFoundError, match="对象类型不存在"):
+        asyncio.run(ontology_service.set_object_type_domain_async("Ghost", None))
 
 
 # ---------- 事务原子性 ----------
 
 
 def test_delete_object_midway_failure_rolls_back(harness, deps_ok, monkeypatch):
-    """对象删除多步写（关系/属性/映射/对象）中途失败必须整体回滚，不留半删状态。"""
-    asyncio.run(ontology_service.upsert_object_async("Order", _object_payload(mappings=[dict(SEMANTIC_MAPPING)])))
-    asyncio.run(ontology_service.upsert_object_async("User", _object_payload(properties=[dict(VALID_PROPERTY)])))
+    """对象类型删除多步写（关系类型/属性/映射/对象类型）中途失败必须整体回滚，不留半删状态。"""
+    asyncio.run(ontology_service.upsert_object_type_async("Order", _object_payload(mappings=[dict(SEMANTIC_MAPPING)])))
+    asyncio.run(ontology_service.upsert_object_type_async("User", _object_payload(properties=[dict(VALID_PROPERTY)])))
     asyncio.run(
         ontology_service.upsert_relation_async(
             "r1",
             {
-                "from_object_name": "Order",
-                "to_object_name": "User",
+                "from_object_type_name": "Order",
+                "to_object_type_name": "User",
                 "from_columns": ["order_id"],
                 "to_columns": ["order_id"],
             },
         )
     )
 
-    async def boom(object_id):
+    async def boom(object_type_id):
         raise RuntimeError("模拟映射删除失败")
 
-    monkeypatch.setattr(ontology_service._dao, "delete_object_mappings_async", boom)
+    monkeypatch.setattr(ontology_service._dao, "delete_object_type_mappings_async", boom)
     with pytest.raises(RuntimeError, match="模拟映射删除失败"):
-        asyncio.run(ontology_service.delete_object_async("Order"))
+        asyncio.run(ontology_service.delete_object_type_async("Order"))
 
-    detail = asyncio.run(ontology_service.get_object_async("Order"))
+    detail = asyncio.run(ontology_service.get_object_type_async("Order"))
     assert detail is not None
     assert detail["delete_flag"] == 0
     assert [item["property_name"] for item in detail["properties"]] == ["order_id"]
     assert [item["semantic_config_id"] for item in detail["mappings"]] == ["cfg-1"]
-    assert [item["relation_name"] for item in asyncio.run(ontology_service.list_relations_async())] == ["r1"]
+    assert [item["relation_type_name"] for item in asyncio.run(ontology_service.list_relations_async())] == ["r1"]
 
 
 # ---------- 软删复活与状态口径 ----------
@@ -947,7 +947,7 @@ def test_delete_object_midway_failure_rolls_back(harness, deps_ok, monkeypatch):
 def test_object_upsert_returns_full_detail(harness, deps_ok):
     """写接口返回真实详情（id/属性/映射），不再返回合成局部视图。"""
     saved = asyncio.run(
-        ontology_service.upsert_object_async("Order", _object_payload(mappings=[dict(SEMANTIC_MAPPING)]))
+        ontology_service.upsert_object_type_async("Order", _object_payload(mappings=[dict(SEMANTIC_MAPPING)]))
     )
     assert isinstance(saved["id"], int)
     assert saved["status"] == "draft"
@@ -956,98 +956,98 @@ def test_object_upsert_returns_full_detail(harness, deps_ok):
 
 
 def test_relation_upsert_returns_readback_without_json_keys(harness, deps_ok):
-    asyncio.run(ontology_service.upsert_object_async("Order", _object_payload()))
-    asyncio.run(ontology_service.upsert_object_async("User", _object_payload()))
+    asyncio.run(ontology_service.upsert_object_type_async("Order", _object_payload()))
+    asyncio.run(ontology_service.upsert_object_type_async("User", _object_payload()))
     saved = asyncio.run(
         ontology_service.upsert_relation_async(
             "r1",
             {
-                "from_object_name": "Order",
-                "to_object_name": "User",
+                "from_object_type_name": "Order",
+                "to_object_type_name": "User",
                 "from_columns": ["order_id"],
                 "to_columns": ["order_id"],
             },
         )
     )
-    assert saved["relation_name"] == "r1"
+    assert saved["relation_type_name"] == "r1"
     assert saved["from_columns"] == ["order_id"]
     assert saved["to_columns"] == ["order_id"]
-    assert saved["from_object_name"] == "Order"
-    assert saved["to_object_name"] == "User"
+    assert saved["from_object_type_name"] == "Order"
+    assert saved["to_object_type_name"] == "User"
     assert "from_columns_json" not in saved
     assert "to_columns_json" not in saved
 
 
 def test_object_revival_after_experimental_resets_to_draft(harness, deps_ok):
-    asyncio.run(ontology_service.upsert_object_async("Order", _object_payload()))
-    asyncio.run(ontology_service.set_object_status_async("Order", "experimental", {}))
-    asyncio.run(ontology_service.delete_object_async("Order"))
-    revived = asyncio.run(ontology_service.upsert_object_async("Order", _object_payload()))
+    asyncio.run(ontology_service.upsert_object_type_async("Order", _object_payload()))
+    asyncio.run(ontology_service.set_object_type_status_async("Order", "experimental", {}))
+    asyncio.run(ontology_service.delete_object_type_async("Order"))
+    revived = asyncio.run(ontology_service.upsert_object_type_async("Order", _object_payload()))
     assert revived["status"] == "draft"
-    assert asyncio.run(ontology_service.get_object_async("Order"))["status"] == "draft"
+    assert asyncio.run(ontology_service.get_object_type_async("Order"))["status"] == "draft"
 
 
 def test_object_revival_after_deprecation_resets_zombie_fields(harness, deps_ok):
-    asyncio.run(ontology_service.upsert_object_async("User", _object_payload()))
-    asyncio.run(ontology_service.upsert_object_async("Order", _object_payload()))
+    asyncio.run(ontology_service.upsert_object_type_async("User", _object_payload()))
+    asyncio.run(ontology_service.upsert_object_type_async("Order", _object_payload()))
     deprecated = asyncio.run(
-        ontology_service.set_object_status_async(
+        ontology_service.set_object_type_status_async(
             "Order",
             "deprecated",
-            {"deprecation_reason": "口径迁移", "successor_object_name": "User", "deprecated_until": "2027-01-01"},
+            {"deprecation_reason": "口径迁移", "successor_object_type_name": "User", "deprecated_until": "2027-01-01"},
         )
     )
     assert deprecated["deprecated_until"] == "2027-01-01 00:00:00"
-    asyncio.run(ontology_service.delete_object_async("Order"))
-    # 同名重建 = 新对象：废弃状态/原因/替代对象/期限全部重置，不能复辟成不可编辑僵尸
-    revived = asyncio.run(ontology_service.upsert_object_async("Order", _object_payload()))
+    asyncio.run(ontology_service.delete_object_type_async("Order"))
+    # 同名重建 = 新对象类型：废弃状态/原因/替代对象类型/期限全部重置，不能复辟成不可编辑僵尸
+    revived = asyncio.run(ontology_service.upsert_object_type_async("Order", _object_payload()))
     assert revived["status"] == "draft"
     assert revived["deprecation_reason"] == ""
-    assert revived["successor_object_name"] == ""
+    assert revived["successor_object_type_name"] == ""
     assert revived["deprecated_until"] == ""
     # 复活后可正常编辑（不是废弃终态）
     edited = asyncio.run(
-        ontology_service.upsert_object_async("Order", _object_payload(display_name="订单新"), allow_overwrite=True)
+        ontology_service.upsert_object_type_async("Order", _object_payload(display_name="订单新"), allow_overwrite=True)
     )
     assert edited["display_name"] == "订单新"
 
 
 def test_relation_revival_derives_status_from_endpoints(harness, deps_ok):
-    """关系软删后同名重建：按当前两端对象派生状态，不沿用旧状态/不要求覆盖。"""
+    """关系类型软删后同名重建：按当前两端对象类型派生状态，不沿用旧状态/不要求覆盖。"""
     order_mapping = dict(SEMANTIC_MAPPING)
     user_mapping = {"semantic_config_id": "cfg-user", "column_mappings": {"order_id": "用户编号"}}
     asyncio.run(
-        ontology_service.upsert_object_async(
+        ontology_service.upsert_object_type_async(
             "Order", _object_payload(properties=[dict(VALID_PROPERTY)], mappings=[order_mapping])
         )
     )
     asyncio.run(
-        ontology_service.upsert_object_async(
+        ontology_service.upsert_object_type_async(
             "User", _object_payload(properties=[dict(VALID_PROPERTY)], mappings=[user_mapping])
         )
     )
-    asyncio.run(ontology_service.set_object_status_async("Order", "certified", {}))
-    asyncio.run(ontology_service.set_object_status_async("User", "certified", {}))
+    asyncio.run(ontology_service.set_object_type_status_async("Order", "certified", {}))
+    asyncio.run(ontology_service.set_object_type_status_async("User", "certified", {}))
     asyncio.run(
         ontology_service.upsert_relation_async(
             "r1",
             {
-                "from_object_name": "Order",
-                "to_object_name": "User",
+                "from_object_type_name": "Order",
+                "to_object_type_name": "User",
                 "from_columns": ["order_id"],
                 "to_columns": ["order_id"],
             },
         )
     )
     asyncio.run(ontology_service.delete_relation_async("r1"))
-    # 一端降级后重建关系：状态必须是两侧较低者（不能保留旧 certified）
-    asyncio.run(ontology_service.set_object_status_async("Order", "experimental", {}))
+    # 一端降级后重建关系类型：状态必须是两侧较低者（不能保留旧 certified）
+    asyncio.run(ontology_service.set_object_type_status_async("Order", "experimental", {}))
     revived = asyncio.run(
         ontology_service.upsert_relation_async(
             "r1",
             {
-                "from_object_name": "Order",
-                "to_object_name": "User",
+                "from_object_type_name": "Order",
+                "to_object_type_name": "User",
                 "from_columns": ["order_id"],
                 "to_columns": ["order_id"],
             },
@@ -1057,45 +1057,45 @@ def test_relation_revival_derives_status_from_endpoints(harness, deps_ok):
 
 
 def test_relation_structural_edit_downgrades_status(harness, deps_ok):
-    """活跃关系改连到低状态对象：状态降级为 min(旧, 派生)，不能高于任一端。"""
+    """活跃关系类型改连到低状态对象类型：状态降级为 min(旧, 派生)，不能高于任一端。"""
     order_mapping = dict(SEMANTIC_MAPPING)
     user_mapping = {"semantic_config_id": "cfg-user", "column_mappings": {"order_id": "用户编号"}}
     other_mapping = {"semantic_config_id": "cfg-2", "column_mappings": {"order_id": "订单编号"}}
     asyncio.run(
-        ontology_service.upsert_object_async(
+        ontology_service.upsert_object_type_async(
             "Order", _object_payload(properties=[dict(VALID_PROPERTY)], mappings=[order_mapping])
         )
     )
     asyncio.run(
-        ontology_service.upsert_object_async(
+        ontology_service.upsert_object_type_async(
             "User", _object_payload(properties=[dict(VALID_PROPERTY)], mappings=[user_mapping])
         )
     )
     asyncio.run(
-        ontology_service.upsert_object_async(
+        ontology_service.upsert_object_type_async(
             "Other", _object_payload(properties=[dict(VALID_PROPERTY)], mappings=[other_mapping])
         )
     )
     for name in ("Order", "User"):
-        asyncio.run(ontology_service.set_object_status_async(name, "certified", {}))
+        asyncio.run(ontology_service.set_object_type_status_async(name, "certified", {}))
     asyncio.run(
         ontology_service.upsert_relation_async(
             "r1",
             {
-                "from_object_name": "Order",
-                "to_object_name": "User",
+                "from_object_type_name": "Order",
+                "to_object_type_name": "User",
                 "from_columns": ["order_id"],
                 "to_columns": ["order_id"],
             },
         )
     )
-    # Other 仍是 draft：改连到 Other（结构变更）→ 关系状态降级为 draft
+    # Other 仍是 draft：改连到 Other（结构变更）→ 关系类型状态降级为 draft
     saved = asyncio.run(
         ontology_service.upsert_relation_async(
             "r1",
             {
-                "from_object_name": "Order",
-                "to_object_name": "Other",
+                "from_object_type_name": "Order",
+                "to_object_type_name": "Other",
                 "from_columns": ["order_id"],
                 "to_columns": ["order_id"],
                 "confirm_destructive": True,
@@ -1116,11 +1116,11 @@ def test_domain_recreate_after_delete_without_overwrite(harness, deps_ok, monkey
 
 
 def test_relation_duplicate_without_overwrite_raises_already_exists(harness, deps_ok):
-    asyncio.run(ontology_service.upsert_object_async("Order", _object_payload()))
-    asyncio.run(ontology_service.upsert_object_async("User", _object_payload()))
+    asyncio.run(ontology_service.upsert_object_type_async("Order", _object_payload()))
+    asyncio.run(ontology_service.upsert_object_type_async("User", _object_payload()))
     payload = {
-        "from_object_name": "Order",
-        "to_object_name": "User",
+        "from_object_type_name": "Order",
+        "to_object_type_name": "User",
         "from_columns": ["order_id"],
         "to_columns": ["order_id"],
     }
@@ -1134,17 +1134,17 @@ def test_relation_duplicate_without_overwrite_raises_already_exists(harness, dep
 
 def test_certified_rejects_empty_column_mappings(harness, deps_ok):
     asyncio.run(
-        ontology_service.upsert_object_async(
+        ontology_service.upsert_object_type_async(
             "Order", _object_payload(mappings=[{"semantic_config_id": "cfg-1", "column_mappings": {}}])
         )
     )
     with pytest.raises(OntologyInvalidError, match="column_mappings"):
-        asyncio.run(ontology_service.set_object_status_async("Order", "certified", {}))
+        asyncio.run(ontology_service.set_object_type_status_async("Order", "certified", {}))
 
 
 def test_certified_rejects_identifier_not_mapped(harness, deps_ok):
     asyncio.run(
-        ontology_service.upsert_object_async(
+        ontology_service.upsert_object_type_async(
             "Order",
             _object_payload(
                 properties=[dict(VALID_PROPERTY), {"property_name": "amount", "value_type": "Decimal"}],
@@ -1153,22 +1153,22 @@ def test_certified_rejects_identifier_not_mapped(harness, deps_ok):
         )
     )
     with pytest.raises(OntologyInvalidError, match="标识属性"):
-        asyncio.run(ontology_service.set_object_status_async("Order", "certified", {}))
+        asyncio.run(ontology_service.set_object_type_status_async("Order", "certified", {}))
 
 
 def test_certified_accepts_full_identifier_mapping(harness, deps_ok):
-    asyncio.run(ontology_service.upsert_object_async("Order", _object_payload(mappings=[dict(SEMANTIC_MAPPING)])))
-    certified = asyncio.run(ontology_service.set_object_status_async("Order", "certified", {}))
+    asyncio.run(ontology_service.upsert_object_type_async("Order", _object_payload(mappings=[dict(SEMANTIC_MAPPING)])))
+    certified = asyncio.run(ontology_service.set_object_type_status_async("Order", "certified", {}))
     assert certified["status"] == "certified"
 
 
-# ---------- 对象编辑：关系关联列悬空门禁 ----------
+# ---------- 对象类型编辑：关系类型关联列悬空门禁 ----------
 
 
 def _relation_payload(from_name="Order", to_name="User", from_columns=None, to_columns=None):
     return {
-        "from_object_name": from_name,
-        "to_object_name": to_name,
+        "from_object_type_name": from_name,
+        "to_object_type_name": to_name,
         "from_columns": from_columns or ["order_id"],
         "to_columns": to_columns or ["order_id"],
     }
@@ -1176,28 +1176,28 @@ def _relation_payload(from_name="Order", to_name="User", from_columns=None, to_c
 
 def test_edit_blocked_when_from_columns_property_removed(harness, deps_ok):
     asyncio.run(
-        ontology_service.upsert_object_async(
+        ontology_service.upsert_object_type_async(
             "Order",
             _object_payload(properties=[dict(VALID_PROPERTY), {"property_name": "user_name", "value_type": "String"}]),
         )
     )
-    asyncio.run(ontology_service.upsert_object_async("User", _object_payload()))
+    asyncio.run(ontology_service.upsert_object_type_async("User", _object_payload()))
     asyncio.run(ontology_service.upsert_relation_async("r1", _relation_payload(from_columns=["user_name"])))
-    with pytest.raises(OntologyInvalidError, match="关系 r1"):
+    with pytest.raises(OntologyInvalidError, match="关系类型 r1"):
         asyncio.run(
-            ontology_service.upsert_object_async(
+            ontology_service.upsert_object_type_async(
                 "Order", _object_payload(properties=[dict(VALID_PROPERTY)]), allow_overwrite=True
             )
         )
 
 
 def test_edit_blocked_when_identifier_change_breaks_to_columns(harness, deps_ok):
-    asyncio.run(ontology_service.upsert_object_async("Order", _object_payload()))
-    asyncio.run(ontology_service.upsert_object_async("User", _object_payload()))
+    asyncio.run(ontology_service.upsert_object_type_async("Order", _object_payload()))
+    asyncio.run(ontology_service.upsert_object_type_async("User", _object_payload()))
     asyncio.run(ontology_service.upsert_relation_async("r1", _relation_payload()))
     with pytest.raises(OntologyInvalidError, match="不再是标识属性"):
         asyncio.run(
-            ontology_service.upsert_object_async(
+            ontology_service.upsert_object_type_async(
                 "User",
                 _object_payload(
                     properties=[
@@ -1213,7 +1213,7 @@ def test_edit_blocked_when_identifier_change_breaks_to_columns(harness, deps_ok)
 # ---------- 领域组锚点 ----------
 
 
-def test_object_mapping_group_must_match_domain_group(harness, deps_ok, monkeypatch):
+def test_object_type_mapping_group_must_match_domain_group(harness, deps_ok, monkeypatch):
     monkeypatch.setattr(ontology_service_module, "DataSourceDao", _StubDataSourceDao)
     monkeypatch.setattr(
         ontology_service_module,
@@ -1223,7 +1223,7 @@ def test_object_mapping_group_must_match_domain_group(harness, deps_ok, monkeypa
     domain = asyncio.run(ontology_service.upsert_domain_async("ecommerce_trade", _domain_payload()))
     with pytest.raises(OntologyInvalidError, match="数据源组"):
         asyncio.run(
-            ontology_service.upsert_object_async(
+            ontology_service.upsert_object_type_async(
                 "Order", _object_payload(domain_id=int(domain["id"]), mappings=[dict(SEMANTIC_MAPPING)])
             )
         )
@@ -1234,7 +1234,7 @@ def test_object_mapping_group_must_match_domain_group(harness, deps_ok, monkeypa
         _StubSemanticConfigDao(dimension_index=DIMENSION_INDEX, group_ids={"cfg-1": "grp-1"}),
     )
     saved = asyncio.run(
-        ontology_service.upsert_object_async(
+        ontology_service.upsert_object_type_async(
             "Order", _object_payload(domain_id=int(domain["id"]), mappings=[dict(SEMANTIC_MAPPING)])
         )
     )
@@ -1253,12 +1253,12 @@ def test_object_domain_reassign_rejects_cross_group_mapping(harness, deps_ok, mo
         ontology_service.upsert_domain_async("domain_b", _domain_payload(group_id="grp-2", display_name="供应链"))
     )
     asyncio.run(
-        ontology_service.upsert_object_async(
+        ontology_service.upsert_object_type_async(
             "Order", _object_payload(domain_id=int(domain_a["id"]), mappings=[dict(SEMANTIC_MAPPING)])
         )
     )
     with pytest.raises(OntologyInvalidError, match="数据源组"):
-        asyncio.run(ontology_service.set_object_domain_async("Order", int(domain_b["id"])))
+        asyncio.run(ontology_service.set_object_type_domain_async("Order", int(domain_b["id"])))
 
 
 def test_domain_group_change_blocked_by_cross_group_objects(harness, deps_ok, monkeypatch):
@@ -1270,7 +1270,7 @@ def test_domain_group_change_blocked_by_cross_group_objects(harness, deps_ok, mo
     )
     domain = asyncio.run(ontology_service.upsert_domain_async("ecommerce_trade", _domain_payload()))
     asyncio.run(
-        ontology_service.upsert_object_async(
+        ontology_service.upsert_object_type_async(
             "Order", _object_payload(domain_id=int(domain["id"]), mappings=[dict(SEMANTIC_MAPPING)])
         )
     )
@@ -1286,27 +1286,27 @@ def test_domain_group_change_blocked_by_cross_group_objects(harness, deps_ok, mo
 
 
 def test_deprecated_until_parse_and_invalid(harness, deps_ok):
-    asyncio.run(ontology_service.upsert_object_async("User", _object_payload()))
-    asyncio.run(ontology_service.upsert_object_async("Order", _object_payload()))
+    asyncio.run(ontology_service.upsert_object_type_async("User", _object_payload()))
+    asyncio.run(ontology_service.upsert_object_type_async("Order", _object_payload()))
     with pytest.raises(OntologyInvalidError, match="废弃期限"):
         asyncio.run(
-            ontology_service.set_object_status_async(
+            ontology_service.set_object_type_status_async(
                 "Order",
                 "deprecated",
                 {
                     "deprecation_reason": "口径迁移",
-                    "successor_object_name": "User",
+                    "successor_object_type_name": "User",
                     "deprecated_until": "2027/01/01",
                 },
             )
         )
-    # 非法值被拒绝后对象保持原状态
-    assert asyncio.run(ontology_service.get_object_async("Order"))["status"] == "draft"
+    # 非法值被拒绝后对象类型保持原状态
+    assert asyncio.run(ontology_service.get_object_type_async("Order"))["status"] == "draft"
     saved = asyncio.run(
-        ontology_service.set_object_status_async(
+        ontology_service.set_object_type_status_async(
             "Order",
             "deprecated",
-            {"deprecation_reason": "口径迁移", "successor_object_name": "User", "deprecated_until": "2027-01-01"},
+            {"deprecation_reason": "口径迁移", "successor_object_type_name": "User", "deprecated_until": "2027-01-01"},
         )
     )
     assert saved["deprecated_until"] == "2027-01-01 00:00:00"
@@ -1322,7 +1322,7 @@ def test_domain_name_length_limit(harness, deps_ok, monkeypatch):
 
 
 def test_multi_source_non_identifier_property_rejected(harness, deps_ok):  # noqa: F811
-    """多源对象：非标识属性只能出现在一个映射；标识属性可跨源。"""
+    """多源对象类型：非标识属性只能出现在一个映射；标识属性可跨源。"""
     payload = {
         "display_name": "多源订单",
         "properties": [
@@ -1335,24 +1335,24 @@ def test_multi_source_non_identifier_property_rejected(harness, deps_ok):  # noq
         ],
     }
     with pytest.raises(OntologyInvalidError, match="非标识属性只能单源映射"):
-        asyncio.run(ontology_service.upsert_object_async("MultiOrder", payload))
+        asyncio.run(ontology_service.upsert_object_type_async("MultiOrder", payload))
 
     # 标识属性跨源重复允许；非标识属性只留一个来源
     payload["mappings"] = [
         {"semantic_config_id": "cfg-1", "column_mappings": {"order_id": "订单编号", "amount": "订单编号"}},
         {"semantic_config_id": "cfg-2", "column_mappings": {"order_id": "订单编号"}},
     ]
-    detail = asyncio.run(ontology_service.upsert_object_async("MultiOrder", payload))
+    detail = asyncio.run(ontology_service.upsert_object_type_async("MultiOrder", payload))
     assert len(detail["mappings"]) == 2
 
 
 def test_one_to_one_from_columns_require_identifier(harness, deps_ok):  # noqa: F811
-    """one_to_one 起始侧关联列必须引用 from 对象标识属性（保证两侧唯一）。"""
+    """one_to_one 起始侧关联列必须引用 from 对象类型标识属性（保证两侧唯一）。"""
     asyncio.run(
-        ontology_service.upsert_object_async(
+        ontology_service.upsert_object_type_async(
             "FromObj",
             {
-                "display_name": "起始对象",
+                "display_name": "起始对象类型",
                 "properties": [
                     {"property_name": "id", "value_type": "String", "is_identifier": True},
                     {"property_name": "name", "value_type": "String"},
@@ -1361,8 +1361,8 @@ def test_one_to_one_from_columns_require_identifier(harness, deps_ok):  # noqa: 
             },
         )
     )
-    asyncio.run(ontology_service.upsert_object_async("ToObj", _object_payload(display_name="目标对象")))
-    base = {"from_object_name": "FromObj", "to_object_name": "ToObj", "multiplicity": "one_to_one"}
+    asyncio.run(ontology_service.upsert_object_type_async("ToObj", _object_payload(display_name="目标对象类型")))
+    base = {"from_object_type_name": "FromObj", "to_object_type_name": "ToObj", "multiplicity": "one_to_one"}
     with pytest.raises(OntologyInvalidError, match="标识属性"):
         asyncio.run(
             ontology_service.upsert_relation_async(

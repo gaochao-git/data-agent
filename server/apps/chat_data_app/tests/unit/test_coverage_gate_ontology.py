@@ -3,7 +3,7 @@
 本文件只针对覆盖率基线（/tmp/cov_base.gate）中本体相关文件缺失的行/分支补用例，
 断言一律落在真实行为上（返回值、异常、落库状态、错误码），不改生产代码。
 
-复用 `test_ontology_admin` 的 sqlite 事务作用域夹具（对象/属性/关系走真实 ORM），
+复用 `test_ontology_admin` 的 sqlite 事务作用域夹具（对象类型/属性/关系类型走真实 ORM），
 校验器/注入的纯函数直接断言输入输出，路由用桩 service 断言响应与错误码映射。
 """
 
@@ -26,12 +26,12 @@ from apps.chat_data_app.daos.semantic_config_dao import SemanticConfigDao
 from apps.chat_data_app.routers import ontology_admin as ontology_admin_router
 from apps.chat_data_app.schema import (
     OntologyDomainUpsertRequest,
-    OntologyObjectDomainRequest,
-    OntologyObjectStatusRequest,
-    OntologyObjectUpsertRequest,
+    OntologyObjectTypeDomainRequest,
+    OntologyObjectTypeStatusRequest,
+    OntologyObjectTypeUpsertRequest,
     OntologyPropertyItem,
-    OntologyRelationStatusRequest,
-    OntologyRelationUpsertRequest,
+    OntologyRelationTypeStatusRequest,
+    OntologyRelationTypeUpsertRequest,
 )
 from apps.chat_data_app.services.ontology import (
     OntologyAlreadyExistsError,
@@ -61,10 +61,10 @@ from utils.error_codes import ErrorCode
 from utils.models import (
     Base,
     ChatDataOntologyDomain,
-    ChatDataOntologyObject,
-    ChatDataOntologyObjectMapping,
+    ChatDataOntologyObjectType,
+    ChatDataOntologyObjectTypeMapping,
     ChatDataOntologyProperty,
-    ChatDataOntologyRelation,
+    ChatDataOntologyRelationType,
     SemanticConfig,
 )
 
@@ -81,16 +81,16 @@ deps_ok = _imported_deps_ok
 @pytest.mark.parametrize(
     ("invoke", "message"),
     [
-        (lambda: validator.validate_object_payload({"display_name": ""}), "对象展示名必填"),
-        (lambda: validator.validate_object_payload({"display_name": "x" * 129}), "对象展示名必填"),
-        (lambda: validator.validate_object_payload({"display_name": "x", "description": "d" * 1025}), "对象描述不超过"),
-        (lambda: validator.validate_object_payload({"display_name": "x", "domain_id": "1"}), "领域ID必须为整数"),
+        (lambda: validator.validate_object_type_payload({"display_name": ""}), "对象类型展示名必填"),
+        (lambda: validator.validate_object_type_payload({"display_name": "x" * 129}), "对象类型展示名必填"),
+        (lambda: validator.validate_object_type_payload({"display_name": "x", "description": "d" * 1025}), "对象类型描述不超过"),
+        (lambda: validator.validate_object_type_payload({"display_name": "x", "domain_id": "1"}), "领域ID必须为整数"),
         (lambda: validator.validate_domain_payload({"group_id": ""}), "领域必须绑定数据源组"),
         (lambda: validator.validate_domain_payload({"group_id": "g" * 129}), "领域必须绑定数据源组"),
         (lambda: validator.validate_domain_payload({"group_id": "g", "display_name": "x" * 129}), "领域展示名不超过"),
         (lambda: validator.validate_domain_payload({"group_id": "g", "description": "d" * 513}), "领域描述不超过"),
-        (lambda: validator.validate_property_items([]), "对象至少需要一个属性"),
-        (lambda: validator.validate_property_items("bad"), "对象至少需要一个属性"),
+        (lambda: validator.validate_property_items([]), "对象类型至少需要一个属性"),
+        (lambda: validator.validate_property_items("bad"), "对象类型至少需要一个属性"),
         (lambda: validator.validate_property_items([{"property_name": "p1"}]), "标识属性"),
         (
             lambda: validator.validate_property_items(
@@ -167,7 +167,7 @@ def test_validator_mappings_red_lines():
 
 
 def test_validator_relation_red_lines_and_normalization():
-    with pytest.raises(OntologyInvalidError, match="关系基数"):
+    with pytest.raises(OntologyInvalidError, match="关系类型基数"):
         validator.validate_relation_payload(
             {"multiplicity": "many_to_many", "from_columns": ["a"], "to_columns": ["b"]}
         )
@@ -175,7 +175,7 @@ def test_validator_relation_red_lines_and_normalization():
         validator.validate_relation_payload({"from_columns": [], "to_columns": ["b"]})
     with pytest.raises(OntologyInvalidError, match="等长且顺序一一对应"):
         validator.validate_relation_payload({"from_columns": ["a", "b"], "to_columns": ["c"]})
-    with pytest.raises(OntologyInvalidError, match="正向关系模式串不超过 512 字符"):
+    with pytest.raises(OntologyInvalidError, match="正向关系类型模式串不超过 512 字符"):
         validator.validate_relation_payload({"from_columns": ["a"], "to_columns": ["b"], "from_verbalize": "v" * 513})
 
     normalized = validator.validate_relation_payload(
@@ -213,43 +213,43 @@ class _RouterServiceStub:
     async def delete_domain_async(self, domain_name, **kwargs):
         self._record("delete_domain_async", (domain_name,), kwargs)
 
-    async def list_objects_async(self, keyword, status, domain_id):
-        self._record("list_objects_async", (keyword, status, domain_id), {})
-        return [{"object_name": "Order"}]
+    async def list_object_types_async(self, keyword, status, domain_id):
+        self._record("list_object_types_async", (keyword, status, domain_id), {})
+        return [{"object_type_name": "Order"}]
 
-    async def get_object_async(self, object_name):
-        self._record("get_object_async", (object_name,), {})
-        return None if object_name == "Ghost" else {"object_name": object_name}
+    async def get_object_type_async(self, object_type_name):
+        self._record("get_object_type_async", (object_type_name,), {})
+        return None if object_type_name == "Ghost" else {"object_type_name": object_type_name}
 
-    async def upsert_object_async(self, object_name, payload, **kwargs):
-        self._record("upsert_object_async", (object_name, payload), kwargs)
-        return {"object_name": object_name}
+    async def upsert_object_type_async(self, object_type_name, payload, **kwargs):
+        self._record("upsert_object_type_async", (object_type_name, payload), kwargs)
+        return {"object_type_name": object_type_name}
 
-    async def delete_object_async(self, object_name, **kwargs):
-        self._record("delete_object_async", (object_name,), kwargs)
+    async def delete_object_type_async(self, object_type_name, **kwargs):
+        self._record("delete_object_type_async", (object_type_name,), kwargs)
 
-    async def set_object_status_async(self, object_name, status, payload, **kwargs):
-        self._record("set_object_status_async", (object_name, status, payload), kwargs)
-        return {"object_name": object_name, "status": status}
+    async def set_object_type_status_async(self, object_type_name, status, payload, **kwargs):
+        self._record("set_object_type_status_async", (object_type_name, status, payload), kwargs)
+        return {"object_type_name": object_type_name, "status": status}
 
-    async def set_object_domain_async(self, object_name, domain_id, **kwargs):
-        self._record("set_object_domain_async", (object_name, domain_id), kwargs)
-        return {"object_name": object_name, "domain_id": domain_id}
+    async def set_object_type_domain_async(self, object_type_name, domain_id, **kwargs):
+        self._record("set_object_type_domain_async", (object_type_name, domain_id), kwargs)
+        return {"object_type_name": object_type_name, "domain_id": domain_id}
 
-    async def list_relations_async(self, keyword, from_object, to_object):
-        self._record("list_relations_async", (keyword, from_object, to_object), {})
-        return [{"relation_name": "r1"}]
+    async def list_relations_async(self, keyword, from_object_type, to_object_type):
+        self._record("list_relations_async", (keyword, from_object_type, to_object_type), {})
+        return [{"relation_type_name": "r1"}]
 
-    async def upsert_relation_async(self, relation_name, payload, **kwargs):
-        self._record("upsert_relation_async", (relation_name, payload), kwargs)
-        return {"relation_name": relation_name}
+    async def upsert_relation_async(self, relation_type_name, payload, **kwargs):
+        self._record("upsert_relation_async", (relation_type_name, payload), kwargs)
+        return {"relation_type_name": relation_type_name}
 
-    async def delete_relation_async(self, relation_name, **kwargs):
-        self._record("delete_relation_async", (relation_name,), kwargs)
+    async def delete_relation_async(self, relation_type_name, **kwargs):
+        self._record("delete_relation_async", (relation_type_name,), kwargs)
 
-    async def set_relation_status_async(self, relation_name, status, **kwargs):
-        self._record("set_relation_status_async", (relation_name, status), kwargs)
-        return {"relation_name": relation_name, "status": status}
+    async def set_relation_status_async(self, relation_type_name, status, **kwargs):
+        self._record("set_relation_status_async", (relation_type_name, status), kwargs)
+        return {"relation_type_name": relation_type_name, "status": status}
 
 
 @pytest.fixture()
@@ -265,16 +265,16 @@ def router_env(monkeypatch):
 def _router_payloads() -> dict[str, object]:
     return {
         "domain": OntologyDomainUpsertRequest(group_id="grp-1", display_name="电商交易"),
-        "object": OntologyObjectUpsertRequest(
+        "object_type": OntologyObjectTypeUpsertRequest(
             display_name="订单",
             properties=[OntologyPropertyItem(property_name="order_id", is_identifier=True)],
         ),
-        "object_status": OntologyObjectStatusRequest(status="deprecated", deprecation_reason="下线"),
-        "object_domain": OntologyObjectDomainRequest(domain_id=3),
-        "relation": OntologyRelationUpsertRequest(
-            from_object_name="Order", to_object_name="User", from_columns=["order_id"], to_columns=["user_id"]
+        "object_status": OntologyObjectTypeStatusRequest(status="deprecated", deprecation_reason="下线"),
+        "object_domain": OntologyObjectTypeDomainRequest(domain_id=3),
+        "relation": OntologyRelationTypeUpsertRequest(
+            from_object_type_name="Order", to_object_type_name="User", from_columns=["order_id"], to_columns=["user_id"]
         ),
-        "relation_status": OntologyRelationStatusRequest(status="experimental"),
+        "relation_status": OntologyRelationTypeStatusRequest(status="experimental"),
     }
 
 
@@ -284,18 +284,18 @@ def _router_calls(payloads: dict[str, object]) -> list[tuple[str, object, tuple]
         ("list_domains", ontology_admin_router.list_ontology_domains, (request,)),
         ("upsert_domain", ontology_admin_router.upsert_ontology_domain, ("ecommerce", payloads["domain"], request)),
         ("delete_domain", ontology_admin_router.delete_ontology_domain, ("ecommerce", request)),
-        ("list_objects", ontology_admin_router.list_ontology_objects, (request, "订单", "draft", 3)),
-        ("get_object", ontology_admin_router.get_ontology_object, ("Order", request)),
-        ("upsert_object", ontology_admin_router.upsert_ontology_object, ("Order", payloads["object"], request)),
-        ("delete_object", ontology_admin_router.delete_ontology_object, ("Order", request)),
+        ("list_object_types", ontology_admin_router.list_ontology_object_types, (request, "订单", "draft", 3)),
+        ("get_object", ontology_admin_router.get_ontology_object_type, ("Order", request)),
+        ("upsert_object", ontology_admin_router.upsert_ontology_object_type, ("Order", payloads["object_type"], request)),
+        ("delete_object", ontology_admin_router.delete_ontology_object_type, ("Order", request)),
         (
             "object_status",
-            ontology_admin_router.change_ontology_object_status,
+            ontology_admin_router.change_ontology_object_type_status,
             ("Order", payloads["object_status"], request),
         ),
         (
             "object_domain",
-            ontology_admin_router.change_ontology_object_domain,
+            ontology_admin_router.change_ontology_object_type_domain,
             ("Order", payloads["object_domain"], request),
         ),
         ("list_relations", ontology_admin_router.list_ontology_relations, (request, "r", "Order", "User")),
@@ -312,16 +312,16 @@ def _router_calls(payloads: dict[str, object]) -> list[tuple[str, object, tuple]
 def test_error_response_maps_each_ontology_exception():
     cases = [
         (
-            ontology_admin_router.OntologyNameInvalidError("对象API名非法"),
+            ontology_admin_router.OntologyNameInvalidError("对象类型API名非法"),
             ErrorCode.CHATDATA_ONTOLOGY_NAME_INVALID,
         ),
         (OntologyInvalidError("本体非法"), ErrorCode.CHATDATA_ONTOLOGY_INVALID),
         (
-            ontology_admin_router.OntologyAlreadyExistsError("对象已存在"),
+            ontology_admin_router.OntologyAlreadyExistsError("对象类型已存在"),
             ErrorCode.CHATDATA_ONTOLOGY_ALREADY_EXISTS,
         ),
         (OntologyStateInvalidError("状态非法"), ErrorCode.CHATDATA_ONTOLOGY_STATE_INVALID),
-        (OntologyNotFoundError("对象不存在"), ErrorCode.CHATDATA_ONTOLOGY_NOT_FOUND),
+        (OntologyNotFoundError("对象类型不存在"), ErrorCode.CHATDATA_ONTOLOGY_NOT_FOUND),
     ]
     for exc, expected_code in cases:
         body = json.loads(ontology_admin_router._error_response(exc, "兜底", ErrorCode.SUCCESS).body)
@@ -341,8 +341,8 @@ def test_all_admin_routes_return_business_response(router_env):
         assert body["status"] == "success", name
         assert body["code"] == int(ErrorCode.SUCCESS), name
 
-    # 操作人四件套由路由透传给 service（以对象 upsert 为样本）
-    upsert_call = next(call for call in stub.calls if call[0] == "upsert_object_async")
+    # 操作人四件套由路由透传给 service（以对象类型 upsert 为样本）
+    upsert_call = next(call for call in stub.calls if call[0] == "upsert_object_type_async")
     assert upsert_call[2] == {"operator": "7", "operator_name": "张三", "allow_overwrite": False}
     domain_call = next(call for call in stub.calls if call[0] == "upsert_domain_async")
     assert domain_call[2]["operator"] == "7"
@@ -350,7 +350,7 @@ def test_all_admin_routes_return_business_response(router_env):
 
 
 def test_get_object_route_reports_not_found_for_missing_object(router_env):
-    response = asyncio.run(ontology_admin_router.get_ontology_object("Ghost", object()))
+    response = asyncio.run(ontology_admin_router.get_ontology_object_type("Ghost", object()))
     body = json.loads(response.body)
     assert body["status"] == "error"
     assert body["code"] == int(ErrorCode.CHATDATA_ONTOLOGY_NOT_FOUND)
@@ -533,7 +533,7 @@ def test_injection_materialize_returns_zero_when_bundle_has_no_objects(monkeypat
     monkeypatch.setenv("CHAT_DATA_ONTOLOGY_INJECTION_ENABLED", "1")
 
     async def empty_bundle(config_ids):
-        return {"objects": [], "properties": [], "relations": [], "mappings": []}
+        return {"object_types": [], "properties": [], "relation_types": [], "mappings": []}
 
     monkeypatch.setattr(ontology_injection.OntologyDao, "load_injection_bundle_async", staticmethod(empty_bundle))
     runtime = SimpleNamespace(write_internal_text_files=_fail_writer, delete_internal_text_files=_noop_delete)
@@ -562,7 +562,7 @@ def test_injection_legacy_cleanup_handles_missing_denied_and_unexpected(monkeypa
 
 
 async def _fail_writer(entries):
-    raise AssertionError("无对象时不应写盘")
+    raise AssertionError("无对象类型时不应写盘")
 
 
 async def _noop_delete(path):
@@ -582,7 +582,7 @@ def test_ontology_dao_empty_input_guards(harness):
 
     async def run():
         assert await dao.get_domain_row_async("  ") is None
-        assert await dao.get_object_row_async("") is None
+        assert await dao.get_object_type_row_async("") is None
         assert await dao.get_relation_row_async("") is None
         assert await dao.count_objects_by_domain_ids_async([]) == {}
         assert await dao.list_active_domain_names_by_group_async("") == []
@@ -590,19 +590,19 @@ def test_ontology_dao_empty_input_guards(harness):
         assert await dao.find_bindings_for_configs_async(["cfg-1"]) == []
         assert await dao.find_bindings_for_group_async("") == []
         assert await dao.find_bindings_for_group_async("grp-1") == []
-        assert await dao.count_mappings_by_object_ids_async([]) == {}
-        assert await dao.count_mappings_by_object_ids_async([123]) == {}
-        empty_bundle = {"objects": [], "properties": [], "relations": [], "mappings": []}
+        assert await dao.count_mappings_by_object_type_ids_async([]) == {}
+        assert await dao.count_mappings_by_object_type_ids_async([123]) == {}
+        empty_bundle = {"object_types": [], "properties": [], "relation_types": [], "mappings": []}
         assert await dao.load_injection_bundle_async([]) == empty_bundle
         assert await dao.load_injection_bundle_async(["missing"]) == empty_bundle
-        await dao.soft_delete_object_async("")
+        await dao.soft_delete_object_type_async("")
         await dao.soft_delete_relation_async("")
         assert await dao.soft_delete_domain_async("ghost") is False
 
     asyncio.run(run())
 
 
-def test_ontology_dao_list_objects_keyword_status_domain_filters(harness):
+def test_ontology_dao_list_object_types_keyword_status_domain_filters(harness):
     dao = OntologyDao()
     session_factory = harness["session_factory"]
 
@@ -610,15 +610,19 @@ def test_ontology_dao_list_objects_keyword_status_domain_filters(harness):
         async with session_factory() as session:
             session.add_all(
                 [
-                    ChatDataOntologyObject(
-                        object_name="Order",
+                    ChatDataOntologyObjectType(
+                        object_type_name="Order",
                         display_name="订单",
-                        description="销售订单",
-                        status="certified",
+                        description_text="销售订单",
+                        lifecycle_status="certified",
                         domain_id=3,
                     ),
-                    ChatDataOntologyObject(
-                        object_name="User", display_name="用户", description="下单用户", status="draft", domain_id=4
+                    ChatDataOntologyObjectType(
+                        object_type_name="User",
+                        display_name="用户",
+                        description_text="下单用户",
+                        lifecycle_status="draft",
+                        domain_id=4,
                     ),
                 ]
             )
@@ -627,32 +631,32 @@ def test_ontology_dao_list_objects_keyword_status_domain_filters(harness):
     asyncio.run(seed())
 
     async def run():
-        all_objects = await dao.list_objects_async()
-        assert [item["object_name"] for item in all_objects] == ["Order", "User"]
+        all_objects = await dao.list_object_types_async()
+        assert [item["object_type_name"] for item in all_objects] == ["Order", "User"]
         # keyword/status/domain_id 三过滤条件同时命中
-        hit = await dao.list_objects_async(keyword="销售", status="certified", domain_id=3)
-        assert [item["object_name"] for item in hit] == ["Order"]
-        assert await dao.list_objects_async(keyword="不存在的对象") == []
+        hit = await dao.list_object_types_async(keyword="销售", status="certified", domain_id=3)
+        assert [item["object_type_name"] for item in hit] == ["Order"]
+        assert await dao.list_object_types_async(keyword="不存在的对象类型") == []
 
     asyncio.run(run())
 
 
 def test_ontology_dao_upsert_object_paths(harness):
-    """对象窄写 upsert：插入 / 活跃未授权返回 None / 软删行复活。"""
+    """对象类型窄写 upsert：插入 / 活跃未授权返回 None / 软删行复活。"""
     dao = OntologyDao()
 
     async def run():
-        inserted = await dao.upsert_object_async(
+        inserted = await dao.upsert_object_type_async(
             "Order", {"display_name": "订单", "status": "experimental"}, allow_overwrite=False
         )
-        assert inserted == {"object_name": "Order", "display_name": "订单", "status": "experimental"}
-        assert await dao.upsert_object_async("Order", {"display_name": "x"}, allow_overwrite=False) is None
+        assert inserted == {"object_type_name": "Order", "display_name": "订单", "status": "experimental"}
+        assert await dao.upsert_object_type_async("Order", {"display_name": "x"}, allow_overwrite=False) is None
 
-        await dao.soft_delete_object_async("Order")
-        assert await dao.get_object_row_async("Order") is None
-        revived = await dao.upsert_object_async("Order", {"display_name": "复活"}, allow_overwrite=False)
+        await dao.soft_delete_object_type_async("Order")
+        assert await dao.get_object_type_row_async("Order") is None
+        revived = await dao.upsert_object_type_async("Order", {"display_name": "复活"}, allow_overwrite=False)
         assert revived["display_name"] == "复活"
-        row = await dao.get_object_row_async("Order")
+        row = await dao.get_object_type_row_async("Order")
         assert row["delete_flag"] == 0
         assert row["status"] == "experimental"
 
@@ -685,8 +689,8 @@ def test_ontology_dao_upsert_domain_paths(harness):
 def test_ontology_dao_upsert_relation_paths(harness):
     dao = OntologyDao()
     payload = {
-        "from_object_id": 1,
-        "to_object_id": 2,
+        "from_object_type_id": 1,
+        "to_object_type_id": 2,
         "from_columns_json": '["order_id"]',
         "to_columns_json": '["user_id"]',
         "multiplicity": "many_to_one",
@@ -696,7 +700,7 @@ def test_ontology_dao_upsert_relation_paths(harness):
 
     async def run():
         inserted = await dao.upsert_relation_async("r1", payload, allow_overwrite=False)
-        assert inserted["relation_name"] == "r1"
+        assert inserted["relation_type_name"] == "r1"
         assert inserted["from_columns"] == ["order_id"]
         assert await dao.upsert_relation_async("r1", payload, allow_overwrite=False) is None
         # 软删行复活
@@ -717,18 +721,18 @@ def test_ontology_dao_list_relations_filters(harness):
         async with session_factory() as session:
             session.add_all(
                 [
-                    ChatDataOntologyRelation(
-                        relation_name="order_user",
-                        from_object_id=1,
-                        to_object_id=2,
+                    ChatDataOntologyRelationType(
+                        relation_type_name="order_user",
+                        from_object_type_id=1,
+                        to_object_type_id=2,
                         from_columns_json='["order_id"]',
                         to_columns_json='["user_id"]',
-                        description="订单用户",
+                        description_text="订单用户",
                     ),
-                    ChatDataOntologyRelation(
-                        relation_name="user_dept",
-                        from_object_id=2,
-                        to_object_id=3,
+                    ChatDataOntologyRelationType(
+                        relation_type_name="user_dept",
+                        from_object_type_id=2,
+                        to_object_type_id=3,
                         from_columns_json='["user_id"]',
                         to_columns_json='["dept_id"]',
                     ),
@@ -739,10 +743,10 @@ def test_ontology_dao_list_relations_filters(harness):
     asyncio.run(seed())
 
     async def run():
-        assert [rel["relation_name"] for rel in await dao.list_relations_async()] == ["order_user", "user_dept"]
+        assert [rel["relation_type_name"] for rel in await dao.list_relations_async()] == ["order_user", "user_dept"]
         # keyword + from/to 过滤同时生效
-        hit = await dao.list_relations_async(keyword="订单用户", from_object_id=1, to_object_id=2)
-        assert [rel["relation_name"] for rel in hit] == ["order_user"]
+        hit = await dao.list_relations_async(keyword="订单用户", from_object_type_id=1, to_object_type_id=2)
+        assert [rel["relation_type_name"] for rel in hit] == ["order_user"]
 
     asyncio.run(run())
 
@@ -755,33 +759,35 @@ def test_ontology_dao_bindings_bundle_and_domain_names(harness):
 
     async def seed():
         async with session_factory() as session:
-            active = ChatDataOntologyObject(
-                object_name="Order", display_name="订单", status="certified", domain_id=None
+            active = ChatDataOntologyObjectType(
+                object_type_name="Order", display_name="订单", lifecycle_status="certified", domain_id=None
             )
-            draft = ChatDataOntologyObject(object_name="Draft", display_name="草稿", status="draft", domain_id=None)
+            draft = ChatDataOntologyObjectType(
+                object_type_name="Draft", display_name="草稿", lifecycle_status="draft", domain_id=None
+            )
             session.add_all([active, draft])
             await session.flush()
             ids["active"], ids["draft"] = int(active.id), int(draft.id)
             session.add_all(
                 [
-                    ChatDataOntologyObjectMapping(
-                        object_id=active.id,
+                    ChatDataOntologyObjectTypeMapping(
+                        object_type_id=active.id,
                         semantic_config_id="cfg-1",
                         column_mappings_json='{"order_id": "订单编号"}',
                     ),
-                    ChatDataOntologyObjectMapping(
-                        object_id=draft.id,
+                    ChatDataOntologyObjectTypeMapping(
+                        object_type_id=draft.id,
                         semantic_config_id="cfg-2",
                         column_mappings_json='{"draft_id": "草稿编号"}',
                     ),
-                    ChatDataOntologyProperty(object_id=active.id, property_name="order_id", is_identifier=1),
-                    ChatDataOntologyRelation(
-                        relation_name="order_self",
-                        from_object_id=active.id,
-                        to_object_id=active.id,
+                    ChatDataOntologyProperty(object_type_id=active.id, property_name="order_id", is_identifier=1),
+                    ChatDataOntologyRelationType(
+                        relation_type_name="order_self",
+                        from_object_type_id=active.id,
+                        to_object_type_id=active.id,
                         from_columns_json='["order_id"]',
                         to_columns_json='["order_id"]',
-                        status="certified",
+                        lifecycle_status="certified",
                     ),
                     SemanticConfig(
                         semantic_config_id="cfg-1",
@@ -806,31 +812,31 @@ def test_ontology_dao_bindings_bundle_and_domain_names(harness):
         assert await dao.list_active_domain_names_by_group_async("grp-1") == ["ecommerce"]
         assert await dao.list_active_domain_names_by_group_async("grp-other") == []
 
-        # 按模型查活跃绑定（join 出对象名）
+        # 按模型查活跃绑定（join 出对象类型名）
         bindings = await dao.find_bindings_for_configs_async(["cfg-1", "cfg-2"])
         assert {item["semantic_config_id"] for item in bindings} == {"cfg-1", "cfg-2"}
-        assert all(item["object_name"] for item in bindings)
+        assert all(item["object_type_name"] for item in bindings)
         # 按组查活跃绑定（join 语义模型表）
         group_bindings = await dao.find_bindings_for_group_async("grp-1")
         assert [item["semantic_config_id"] for item in group_bindings] == ["cfg-1"]
 
         # 映射计数
-        assert await dao.count_mappings_by_object_ids_async([ids["active"], ids["draft"]]) == {
+        assert await dao.count_mappings_by_object_type_ids_async([ids["active"], ids["draft"]]) == {
             ids["active"]: 1,
             ids["draft"]: 1,
         }
 
-        # 注入装载：只有 certified/experimental 对象及其属性/关系/映射进入
+        # 注入装载：只有 certified/experimental 对象类型及其属性/关系类型/映射进入
         bundle = await dao.load_injection_bundle_async(["cfg-1", "cfg-2"])
-        assert [item["object_name"] for item in bundle["objects"]] == ["Order"]
+        assert [item["object_type_name"] for item in bundle["object_types"]] == ["Order"]
         assert [item["property_name"] for item in bundle["properties"]] == ["order_id"]
-        assert [item["relation_name"] for item in bundle["relations"]] == ["order_self"]
+        assert [item["relation_type_name"] for item in bundle["relation_types"]] == ["order_self"]
         assert [item["semantic_config_id"] for item in bundle["mappings"]] == ["cfg-1", "cfg-2"]
-        # 候选对象全部不是活跃可注入状态：装载结果为空
+        # 候选对象类型全部不是活跃可注入状态：装载结果为空
         assert await dao.load_injection_bundle_async(["cfg-2"]) == {
-            "objects": [],
+            "object_types": [],
             "properties": [],
-            "relations": [],
+            "relation_types": [],
             "mappings": [],
         }
 
@@ -850,15 +856,15 @@ def test_ontology_dao_property_replace_and_full_upsert_delete_flags(harness):
         assert [item["property_name"] for item in kept] == ["p1", "p2"]
 
         # allow_property_delete=False：完整 upsert 不软删缺失属性
-        saved = await dao.upsert_object_full_async(
+        saved = await dao.upsert_object_type_full_async(
             "Order",
             {"display_name": "订单", "status": "certified"},
             [{"property_name": "order_id", "is_identifier": True}],
             [],
             allow_property_delete=False,
         )
-        assert saved["object_name"] == "Order"
-        detail = await dao.get_object_row_async("Order")
+        assert saved["object_type_name"] == "Order"
+        detail = await dao.get_object_type_row_async("Order")
         properties = await dao.list_properties_async(int(detail["id"]))
         assert [item["property_name"] for item in properties] == ["order_id"]
 
@@ -870,8 +876,8 @@ def test_ontology_dao_property_replace_and_full_upsert_delete_flags(harness):
 
 def _relation_payload(**overrides):
     payload = {
-        "from_object_name": "Order",
-        "to_object_name": "User",
+        "from_object_type_name": "Order",
+        "to_object_type_name": "User",
         "from_columns": ["order_id"],
         "to_columns": ["user_id"],
     }
@@ -880,46 +886,46 @@ def _relation_payload(**overrides):
 
 
 async def _create_order_and_user() -> None:
-    await ontology_service.upsert_object_async("Order", _object_payload())
-    await ontology_service.upsert_object_async(
+    await ontology_service.upsert_object_type_async("Order", _object_payload())
+    await ontology_service.upsert_object_type_async(
         "User", _object_payload(properties=[{**VALID_PROPERTY, "property_name": "user_id"}])
     )
 
 
 def test_service_not_found_and_object_status_guards(harness, deps_ok):
     async def run():
-        with pytest.raises(OntologyNotFoundError, match="对象不存在"):
-            await ontology_service.delete_object_async("Ghost")
-        with pytest.raises(OntologyNotFoundError, match="对象不存在"):
-            await ontology_service.set_object_status_async("Ghost", "experimental", {})
-        with pytest.raises(OntologyNotFoundError, match="关系不存在"):
+        with pytest.raises(OntologyNotFoundError, match="对象类型不存在"):
+            await ontology_service.delete_object_type_async("Ghost")
+        with pytest.raises(OntologyNotFoundError, match="对象类型不存在"):
+            await ontology_service.set_object_type_status_async("Ghost", "experimental", {})
+        with pytest.raises(OntologyNotFoundError, match="关系类型不存在"):
             await ontology_service.delete_relation_async("ghost_rel")
-        with pytest.raises(OntologyNotFoundError, match="关系不存在"):
+        with pytest.raises(OntologyNotFoundError, match="关系类型不存在"):
             await ontology_service.set_relation_status_async("ghost_rel", "experimental")
-        with pytest.raises(OntologyNotFoundError, match="关系连接对象不存在"):
-            await ontology_service.upsert_relation_async("r1", _relation_payload(from_object_name="Ghost"))
+        with pytest.raises(OntologyNotFoundError, match="关系类型连接对象类型不存在"):
+            await ontology_service.upsert_relation_async("r1", _relation_payload(from_object_type_name="Ghost"))
 
-        await ontology_service.upsert_object_async("Order", _object_payload())
+        await ontology_service.upsert_object_type_async("Order", _object_payload())
         with pytest.raises(OntologyStateInvalidError, match="目标状态必须是"):
-            await ontology_service.set_object_status_async("Order", "archived", {})
+            await ontology_service.set_object_type_status_async("Order", "archived", {})
         # 目标状态与当前一致：幂等返回当前行
-        same = await ontology_service.set_object_status_async("Order", "draft", {})
+        same = await ontology_service.set_object_type_status_async("Order", "draft", {})
         assert same["status"] == "draft"
-        with pytest.raises(OntologyStateInvalidError, match="废弃对象必须填写废弃原因"):
-            await ontology_service.set_object_status_async("Order", "deprecated", {})
+        with pytest.raises(OntologyStateInvalidError, match="废弃对象类型必须填写废弃原因"):
+            await ontology_service.set_object_type_status_async("Order", "deprecated", {})
 
     asyncio.run(run())
 
 
-def test_service_list_objects_attaches_mapping_counts(harness, deps_ok):
+def test_service_list_object_types_attaches_mapping_counts(harness, deps_ok):
     async def run():
-        await ontology_service.upsert_object_async("Order", _object_payload(mappings=[dict(SEMANTIC_MAPPING)]))
-        await ontology_service.upsert_object_async(
+        await ontology_service.upsert_object_type_async("Order", _object_payload(mappings=[dict(SEMANTIC_MAPPING)]))
+        await ontology_service.upsert_object_type_async(
             "User", _object_payload(properties=[{**VALID_PROPERTY, "property_name": "user_id"}])
         )
-        objects = {item["object_name"]: item for item in await ontology_service.list_objects_async()}
-        assert objects["Order"]["mappings_count"] == 1
-        assert objects["User"]["mappings_count"] == 0
+        object_types = {item["object_type_name"]: item for item in await ontology_service.list_object_types_async()}
+        assert object_types["Order"]["mappings_count"] == 1
+        assert object_types["User"]["mappings_count"] == 0
 
     asyncio.run(run())
 
@@ -928,11 +934,11 @@ def test_service_list_relations_filters_by_endpoint_names(harness, deps_ok):
     async def run():
         await _create_order_and_user()
         await ontology_service.upsert_relation_async("r1", _relation_payload())
-        assert [item["relation_name"] for item in await ontology_service.list_relations_async()] == ["r1"]
+        assert [item["relation_type_name"] for item in await ontology_service.list_relations_async()] == ["r1"]
         assert [
-            item["relation_name"] for item in await ontology_service.list_relations_async(to_object_name="User")
+            item["relation_type_name"] for item in await ontology_service.list_relations_async(to_object_type_name="User")
         ] == ["r1"]
-        assert await ontology_service.list_relations_async(from_object_name="User") == []
+        assert await ontology_service.list_relations_async(from_object_type_name="User") == []
 
     asyncio.run(run())
 
@@ -941,12 +947,12 @@ def test_service_identifier_change_requires_destructive_confirm(harness, deps_ok
     new_properties = [{**VALID_PROPERTY, "property_name": "order_no"}]
 
     async def run():
-        await ontology_service.upsert_object_async("Order", _object_payload())
+        await ontology_service.upsert_object_type_async("Order", _object_payload())
         with pytest.raises(OntologyStateInvalidError, match="confirm_destructive"):
-            await ontology_service.upsert_object_async(
+            await ontology_service.upsert_object_type_async(
                 "Order", _object_payload(properties=new_properties), allow_overwrite=True
             )
-        saved = await ontology_service.upsert_object_async(
+        saved = await ontology_service.upsert_object_type_async(
             "Order",
             _object_payload(properties=new_properties, confirm_destructive=True),
             allow_overwrite=True,
@@ -958,9 +964,9 @@ def test_service_identifier_change_requires_destructive_confirm(harness, deps_ok
 
 def test_service_certified_object_edit_keeps_mapping(harness, deps_ok):
     async def run():
-        await ontology_service.upsert_object_async("Order", _object_payload(mappings=[dict(SEMANTIC_MAPPING)]))
-        await ontology_service.set_object_status_async("Order", "certified", {})
-        updated = await ontology_service.upsert_object_async(
+        await ontology_service.upsert_object_type_async("Order", _object_payload(mappings=[dict(SEMANTIC_MAPPING)]))
+        await ontology_service.set_object_type_status_async("Order", "certified", {})
+        updated = await ontology_service.upsert_object_type_async(
             "Order",
             _object_payload(display_name="订单2", mappings=[dict(SEMANTIC_MAPPING)]),
             allow_overwrite=True,
@@ -973,12 +979,12 @@ def test_service_certified_object_edit_keeps_mapping(harness, deps_ok):
 
 
 def test_service_object_edit_keeps_relation_columns_valid(harness, deps_ok):
-    """主键组合扩展但关系列仍是标识属性：不触发悬空拒绝（正向放行分支）。"""
+    """主键组合扩展但关系类型列仍是标识属性：不触发悬空拒绝（正向放行分支）。"""
 
     async def run():
         await _create_order_and_user()
         await ontology_service.upsert_relation_async("r1", _relation_payload())
-        updated = await ontology_service.upsert_object_async(
+        updated = await ontology_service.upsert_object_type_async(
             "User",
             _object_payload(
                 properties=[
@@ -995,12 +1001,12 @@ def test_service_object_edit_keeps_relation_columns_valid(harness, deps_ok):
 
 
 def test_service_object_edit_validates_from_side_relation_columns(harness, deps_ok):
-    """编辑「from 端」对象：关联列未被移除且主键未变，放行（from 侧问题为空分支）。"""
+    """编辑「from 端」对象类型：关联列未被移除且主键未变，放行（from 侧问题为空分支）。"""
 
     async def run():
         await _create_order_and_user()
         await ontology_service.upsert_relation_async("r1", _relation_payload())
-        updated = await ontology_service.upsert_object_async(
+        updated = await ontology_service.upsert_object_type_async(
             "Order",
             _object_payload(
                 properties=[
@@ -1018,25 +1024,25 @@ def test_service_object_edit_validates_from_side_relation_columns(harness, deps_
 def test_service_deprecation_successor_validation(harness, deps_ok):
     async def run():
         await _create_order_and_user()
-        with pytest.raises(OntologyStateInvalidError, match="替代对象不能是对象自身"):
-            await ontology_service.set_object_status_async(
-                "Order", "deprecated", {"deprecation_reason": "下线", "successor_object_name": "Order"}
+        with pytest.raises(OntologyStateInvalidError, match="替代对象类型不能是对象类型自身"):
+            await ontology_service.set_object_type_status_async(
+                "Order", "deprecated", {"deprecation_reason": "下线", "successor_object_type_name": "Order"}
             )
-        with pytest.raises(OntologyNotFoundError, match="替代对象不存在"):
-            await ontology_service.set_object_status_async(
-                "Order", "deprecated", {"deprecation_reason": "下线", "successor_object_name": "Ghost"}
+        with pytest.raises(OntologyNotFoundError, match="替代对象类型不存在"):
+            await ontology_service.set_object_type_status_async(
+                "Order", "deprecated", {"deprecation_reason": "下线", "successor_object_type_name": "Ghost"}
             )
-        deprecated = await ontology_service.set_object_status_async(
+        deprecated = await ontology_service.set_object_type_status_async(
             "Order",
             "deprecated",
             {
                 "deprecation_reason": "下线",
-                "successor_object_name": "User",
+                "successor_object_type_name": "User",
                 "deprecated_until": "2026-12-31",
             },
         )
         assert deprecated["status"] == "deprecated"
-        assert deprecated["successor_object_name"] == "User"
+        assert deprecated["successor_object_type_name"] == "User"
         assert deprecated["deprecated_until"] == "2026-12-31 00:00:00"
 
     asyncio.run(run())
@@ -1044,71 +1050,71 @@ def test_service_deprecation_successor_validation(harness, deps_ok):
 
 def test_service_set_object_domain_short_circuits_unchanged(harness, deps_ok):
     async def run():
-        await ontology_service.upsert_object_async("Order", _object_payload())
-        same = await ontology_service.set_object_domain_async("Order", None)
-        assert same["object_name"] == "Order"
+        await ontology_service.upsert_object_type_async("Order", _object_payload())
+        same = await ontology_service.set_object_type_domain_async("Order", None)
+        assert same["object_type_name"] == "Order"
         assert same["domain_id"] is None
 
     asyncio.run(run())
 
 
 def test_service_certify_requires_existing_detail(harness, deps_ok, monkeypatch):
-    asyncio.run(ontology_service.upsert_object_async("Order", _object_payload()))
+    asyncio.run(ontology_service.upsert_object_type_async("Order", _object_payload()))
 
-    async def missing_detail(object_name):
+    async def missing_detail(object_type_name):
         return None
 
-    monkeypatch.setattr(ontology_service, "get_object_async", missing_detail)
-    with pytest.raises(OntologyNotFoundError, match="对象不存在"):
-        asyncio.run(ontology_service.set_object_status_async("Order", "certified", {}))
+    monkeypatch.setattr(ontology_service, "get_object_type_async", missing_detail)
+    with pytest.raises(OntologyNotFoundError, match="对象类型不存在"):
+        asyncio.run(ontology_service.set_object_type_status_async("Order", "certified", {}))
 
 
 def test_service_certify_requires_identifier_in_detail(harness, deps_ok, monkeypatch):
-    asyncio.run(ontology_service.upsert_object_async("Order", _object_payload()))
+    asyncio.run(ontology_service.upsert_object_type_async("Order", _object_payload()))
 
-    async def detail_without_identifier(object_name):
+    async def detail_without_identifier(object_type_name):
         return {
-            "object_name": object_name,
+            "object_type_name": object_type_name,
             "properties": [{"property_name": "order_id", "is_identifier": False}],
             "mappings": [{"semantic_config_id": "cfg-1", "column_mappings": {"order_id": "订单编号"}}],
         }
 
-    monkeypatch.setattr(ontology_service, "get_object_async", detail_without_identifier)
+    monkeypatch.setattr(ontology_service, "get_object_type_async", detail_without_identifier)
     with pytest.raises(OntologyInvalidError, match="标识属性"):
-        asyncio.run(ontology_service.set_object_status_async("Order", "certified", {}))
+        asyncio.run(ontology_service.set_object_type_status_async("Order", "certified", {}))
 
 
-def test_service_cascade_skips_when_object_row_missing(harness, deps_ok, monkeypatch):
-    """级联时对象行读不到：直接跳过，状态更新本身已提交。"""
-    asyncio.run(ontology_service.upsert_object_async("Order", _object_payload()))
-    original = ontology_service._dao.get_object_row_async
+def test_service_cascade_skips_when_object_type_row_missing(harness, deps_ok, monkeypatch):
+    """级联时对象类型行读不到：直接跳过，状态更新本身已提交。"""
+    asyncio.run(ontology_service.upsert_object_type_async("Order", _object_payload()))
+    original = ontology_service._dao.get_object_type_row_async
     reads = {"count": 0}
 
-    async def flaky(object_name, include_deleted=False):
-        if object_name == "Order":
+    async def flaky(object_type_name, include_deleted=False):
+        if object_type_name == "Order":
             reads["count"] += 1
             if reads["count"] >= 2:
                 return None
-        return await original(object_name, include_deleted=include_deleted)
+        return await original(object_type_name, include_deleted=include_deleted)
 
-    monkeypatch.setattr(ontology_service._dao, "get_object_row_async", flaky)
-    updated = asyncio.run(ontology_service.set_object_status_async("Order", "experimental", {}))
+    monkeypatch.setattr(ontology_service._dao, "get_object_type_row_async", flaky)
+    updated = asyncio.run(ontology_service.set_object_type_status_async("Order", "experimental", {}))
     # 回读也拿不到时退回变更前快照（真实行为：refreshed or existing）
     assert updated["status"] == "draft"
 
 
 def test_service_cascade_skips_relations_with_missing_endpoints(harness, deps_ok, monkeypatch):
-    """级联时端点对象状态查不到：跳过该关系（不误降级）。"""
+    """级联时端点对象类型状态查不到：跳过该关系类型（不误降级）。"""
 
     async def run():
         await _create_order_and_user()
         await ontology_service.upsert_relation_async("r1", _relation_payload())
 
-        async def empty_objects(object_ids):
+        async def empty_objects(object_type_ids):
             return {}
 
         monkeypatch.setattr(ontology_service._dao, "get_objects_by_ids_async", empty_objects)
-        updated = await ontology_service.set_object_status_async("Order", "experimental", {})
+        updated = await ontology_service.set_object_type_status_async("Order", "experimental", {})
         assert updated["status"] == "experimental"
         relation = await ontology_service._dao.get_relation_row_async("r1")
         assert relation["status"] == "draft"
@@ -1131,21 +1137,24 @@ def test_service_relation_edit_without_structural_change_skips_confirm(harness, 
 def test_service_relation_rejects_deprecated_endpoint(harness, deps_ok):
     async def run():
         await _create_order_and_user()
-        await ontology_service.set_object_status_async("Order", "deprecated", {"deprecation_reason": "下线"})
-        with pytest.raises(OntologyStateInvalidError, match="废弃对象禁止新建或变更关系"):
+        await ontology_service.set_object_type_status_async("Order", "deprecated", {"deprecation_reason": "下线"})
+        with pytest.raises(OntologyStateInvalidError, match="废弃对象类型禁止新建或变更关系类型"):
             await ontology_service.upsert_relation_async("r1", _relation_payload())
 
     asyncio.run(run())
 
 
 def test_service_relation_status_guards_for_inconsistent_endpoints(harness, deps_ok):
-    """历史脏数据（对象状态/软删绕过级联）下关系状态手动迁移的拒绝分支。"""
+    """历史脏数据（对象类型状态/软删绕过级联）下关系类型状态手动迁移的拒绝分支。"""
     session_factory = harness["session_factory"]
 
-    async def set_object_row(object_name: str, **values) -> None:
+    async def set_object_type_row(object_type_name: str, **values) -> None:
+        # 测试入参沿用对外键名（status），DB 列按红线命名（lifecycle_status）
+        row_values = {"lifecycle_status": values.pop("status")} if "status" in values else {}
+        row_values.update(values)
         async with session_factory() as session:
             await session.execute(
-                update(ChatDataOntologyObject).where(ChatDataOntologyObject.object_name == object_name).values(**values)
+                update(ChatDataOntologyObjectType).where(ChatDataOntologyObjectType.object_type_name == object_type_name).values(**row_values)
             )
             await session.commit()
 
@@ -1153,20 +1162,20 @@ def test_service_relation_status_guards_for_inconsistent_endpoints(harness, deps
         await _create_order_and_user()
         await ontology_service.upsert_relation_async("r1", _relation_payload())
 
-        await set_object_row("Order", status="deprecated")
-        with pytest.raises(OntologyStateInvalidError, match="连接对象已废弃"):
+        await set_object_type_row("Order", status="deprecated")
+        with pytest.raises(OntologyStateInvalidError, match="连接对象类型已废弃"):
             await ontology_service.set_relation_status_async("r1", "experimental")
 
-        await set_object_row("Order", status="draft")
-        await set_object_row("User", delete_flag=1)
-        with pytest.raises(OntologyStateInvalidError, match="关系连接的对象不存在或已被删除"):
+        await set_object_type_row("Order", status="draft")
+        await set_object_type_row("User", delete_flag=1)
+        with pytest.raises(OntologyStateInvalidError, match="关系类型连接的对象类型不存在或已被删除"):
             await ontology_service.set_relation_status_async("r1", "experimental")
 
     asyncio.run(run())
 
 
 def test_service_domain_group_change_with_matching_mappings(harness, deps_ok, monkeypatch):
-    """领域改组时对象映射模型都属于新组：放行（无 offender 分支）。"""
+    """领域改组时对象类型映射模型都属于新组：放行（无 offender 分支）。"""
     monkeypatch.setattr(ontology_service_module, "DataSourceDao", _StubDataSourceDao)
     monkeypatch.setattr(
         ontology_service_module,
@@ -1176,7 +1185,7 @@ def test_service_domain_group_change_with_matching_mappings(harness, deps_ok, mo
 
     async def run():
         domain = await ontology_service.upsert_domain_async("domain_a", {"group_id": "grp-1", "display_name": "交易域"})
-        await ontology_service.upsert_object_async(
+        await ontology_service.upsert_object_type_async(
             "Order", _object_payload(domain_id=int(domain["id"]), mappings=[dict(SEMANTIC_MAPPING)])
         )
         monkeypatch.setattr(
@@ -1213,14 +1222,14 @@ def test_service_mapping_tolerates_missing_dimension_index(harness, monkeypatch)
     monkeypatch.setattr(ontology_service_module, "semantic_config_dao", _MissingDimensionsStub())
 
     saved = asyncio.run(
-        ontology_service.upsert_object_async("Order", _object_payload(mappings=[dict(SEMANTIC_MAPPING)]))
+        ontology_service.upsert_object_type_async("Order", _object_payload(mappings=[dict(SEMANTIC_MAPPING)]))
     )
     assert [item["semantic_config_id"] for item in saved["mappings"]] == ["cfg-1"]
 
 
 def test_service_enum_ref_resolves_and_is_persisted(harness, deps_ok):
     saved = asyncio.run(
-        ontology_service.upsert_object_async(
+        ontology_service.upsert_object_type_async(
             "Order", _object_payload(properties=[{**VALID_PROPERTY, "value_type": "enum", "enum_ref": "order_status"}])
         )
     )
@@ -1232,13 +1241,13 @@ def test_service_enum_ref_resolves_and_is_persisted(harness, deps_ok):
 
 
 class _MissingObjectSaveDao:
-    async def get_object_row_async(self, object_name, include_deleted=False):
+    async def get_object_type_row_async(self, object_type_name, include_deleted=False):
         return None
 
-    async def find_mapping_owners_async(self, mappings, exclude_object_id=None):
+    async def find_mapping_owners_async(self, mappings, exclude_object_type_id=None):
         return {}
 
-    async def upsert_object_full_async(self, *args, **kwargs):
+    async def upsert_object_type_full_async(self, *args, **kwargs):
         return None
 
 
@@ -1262,18 +1271,18 @@ class _RelationSaveDaoStub:
     def __init__(self, save_result):
         self._save_result = save_result
 
-    async def get_object_row_async(self, object_name, include_deleted=False):
-        if object_name == "Order":
-            return {"id": 1, "object_name": "Order", "status": "draft", "delete_flag": 0}
-        if object_name == "User":
-            return {"id": 2, "object_name": "User", "status": "draft", "delete_flag": 0}
+    async def get_object_type_row_async(self, object_type_name, include_deleted=False):
+        if object_type_name == "Order":
+            return {"id": 1, "object_type_name": "Order", "status": "draft", "delete_flag": 0}
+        if object_type_name == "User":
+            return {"id": 2, "object_type_name": "User", "status": "draft", "delete_flag": 0}
         return None
 
-    async def list_properties_async(self, object_id):
-        property_name = "order_id" if int(object_id) == 1 else "user_id"
+    async def list_properties_async(self, object_type_id):
+        property_name = "order_id" if int(object_type_id) == 1 else "user_id"
         return [{"property_name": property_name, "is_identifier": True}]
 
-    async def get_relation_row_async(self, relation_name, include_deleted=False):
+    async def get_relation_row_async(self, relation_type_name, include_deleted=False):
         return None
 
     async def upsert_relation_async(self, *args, **kwargs):
@@ -1282,19 +1291,19 @@ class _RelationSaveDaoStub:
 
 def test_service_object_save_missing_returns_already_exists(harness, deps_ok):
     service = OntologyService(dao=_MissingObjectSaveDao())
-    with pytest.raises(OntologyAlreadyExistsError, match="对象已存在"):
-        asyncio.run(service.upsert_object_async("Order", _object_payload()))
+    with pytest.raises(OntologyAlreadyExistsError, match="对象类型已存在"):
+        asyncio.run(service.upsert_object_type_async("Order", _object_payload()))
 
 
 def test_service_object_save_readback_missing_returns_saved_view(harness, deps_ok, monkeypatch):
     service = OntologyService()
 
-    async def missing_detail(object_name):
+    async def missing_detail(object_type_name):
         return None
 
-    monkeypatch.setattr(service, "get_object_async", missing_detail)
-    saved = asyncio.run(service.upsert_object_async("Order", _object_payload()))
-    assert saved["object_name"] == "Order"
+    monkeypatch.setattr(service, "get_object_type_async", missing_detail)
+    saved = asyncio.run(service.upsert_object_type_async("Order", _object_payload()))
+    assert saved["object_type_name"] == "Order"
     assert saved["mappings"] == []
 
 
@@ -1314,11 +1323,11 @@ def test_service_domain_detail_missing_returns_state_invalid(harness, deps_ok, m
 
 def test_service_relation_save_missing_returns_already_exists(harness, deps_ok):
     service = OntologyService(dao=_RelationSaveDaoStub(None))
-    with pytest.raises(OntologyAlreadyExistsError, match="关系已存在"):
+    with pytest.raises(OntologyAlreadyExistsError, match="关系类型已存在"):
         asyncio.run(service.upsert_relation_async("r1", _relation_payload()))
 
 
 def test_service_relation_readback_missing_returns_state_invalid(harness, deps_ok):
     service = OntologyService(dao=_RelationSaveDaoStub({}))
-    with pytest.raises(OntologyStateInvalidError, match="关系保存后读取失败"):
+    with pytest.raises(OntologyStateInvalidError, match="关系类型保存后读取失败"):
         asyncio.run(service.upsert_relation_async("r1", _relation_payload()))

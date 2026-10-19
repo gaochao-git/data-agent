@@ -11,11 +11,11 @@
 - ``list_execution_targets``：实时获取当前用户可用执行对象清单（只读发现通道，
   为后续语义查询插件化预留的工具内数据源切口）；方言与智能问数说明随本返回
   透出，系统提示词不再静态注入。
-- ``list_objects``：列出可定位本体对象（轻量清单：对象名/显示名/描述 + 对象→绑定
-  模型一跳，不含属性与关系详情）——本体导航的发现步，详情走 locate_object；
-- ``locate_object``：按本体对象批量定位语义模型（纯导航，不执行查询）——返回
-  绑定模型（含快照文件名）、属性→维度对照与对象关系（含失修标注），供模型直接进入
-  execute_query（定位纯函数见 services/ontology/object_locator.py，开关
+- ``list_object_types``：列出可定位本体对象类型（轻量清单：对象类型名/显示名/描述 + 对象类型→绑定
+  模型一跳，不含属性与关系类型详情）——本体导航的发现步，详情走 locate_object_type；
+- ``locate_object_type``：按本体对象类型批量定位语义模型（纯导航，不执行查询）——返回
+  绑定模型（含快照文件名）、属性→维度对照与对象类型间关系类型（含失修标注），供模型直接进入
+  execute_query（定位纯函数见 services/ontology/object_type_locator.py，开关
   ``CHAT_DATA_ONTOLOGY_LOCATE_ENABLED`` 默认关闭）。
 
 入参契约在 ``schema.DataAnalyzingInput``：``action`` + ``action_payload``（结构随
@@ -48,12 +48,12 @@ from apps.chat_data_app.services.datasource.target_context import (
     get_execution_target_org_code,
     source_type_to_dialect,
 )
-from apps.chat_data_app.services.ontology.object_locator import (
+from apps.chat_data_app.services.ontology.object_type_locator import (
     build_locator_usage_hint,
     build_object_list_report,
     build_object_list_usage_hint,
-    build_object_locator_report,
-    object_locator_enabled,
+    build_object_type_locator_report,
+    object_type_locator_enabled,
 )
 from apps.chat_data_app.services.runtime_config import SEMANTIC_MODEL_DISCOVERY_HINT
 from apps.chat_data_app.services.semantic.run.chat_data_ossie_importer import (
@@ -682,11 +682,11 @@ async def _run_list_execution_targets(
 
 
 # ---------------------------------------------------------------------------
-# locate_object：按本体对象批量定位语义模型（纯导航，不执行查询）
+# locate_object_type：按本体对象类型批量定位语义模型（纯导航，不执行查询）
 # ---------------------------------------------------------------------------
 
 
-async def _run_locate_object(
+async def _run_locate_object_type(
     *,
     payload: Any,
     state: dict | None,
@@ -694,13 +694,13 @@ async def _run_locate_object(
     bound_user_id: str,
     bound_operator_name: str | None,
 ) -> str:
-    """本体对象定位：批量返回对象绑定的语义模型/属性→维度对照/关系。
+    """本体对象类型定位：批量返回对象类型绑定的语义模型/属性→维度对照/关系类型。
 
     可定位范围结构性收敛：注入 bundle 按「本轮启用语义模型」加载（与本体目录
     物化同源），对象不在范围内即列入 not_found 并给出候选，不泄露全量本体。
     定位不执行查询——查询仍由模型依据报告走 execute_query。
     """
-    if not object_locator_enabled():
+    if not object_type_locator_enabled():
         raise ValueError("对象定位未启用：需设置环境变量 CHAT_DATA_ONTOLOGY_LOCATE_ENABLED=1")
     state = state or {}
     datasource_id = _get_datasource_id_from_state(state) or bound_datasource_id
@@ -717,9 +717,9 @@ async def _run_locate_object(
     enabled_ids = [str(config.get("id")) for config in enabled_configs]
     bundle = await OntologyDao().load_injection_bundle_async(enabled_ids)
 
-    report = build_object_locator_report(
+    report = build_object_type_locator_report(
         bundle,
-        object_names=payload.objects,
+        object_type_names=payload.object_types,
         config_names={
             config_id: str(config.get("name") or config.get("semantic_config_name") or "")
             for config_id, config in zip(enabled_ids, enabled_configs, strict=True)
@@ -749,20 +749,20 @@ async def _run_locate_object(
     )
 
 
-async def _run_list_objects(
+async def _run_list_object_types(
     *,
     state: dict | None,
     bound_datasource_id: str,
     bound_user_id: str,
 ) -> str:
-    """本体对象清单（``list_objects`` action）：轻量列出可定位对象与各自绑定模型。
+    """本体对象类型清单（``list_object_types`` action）：轻量列出可定位对象类型与各自绑定模型。
 
-    与 locate_object 同源同开关：bundle 按「本轮启用语义模型」加载，不泄露
-    全量本体；清单只含对象名/显示名/描述 + 对象→绑定模型一跳，属性对照/
-    关系/失修状态等详情走 locate_object。
+    与 locate_object_type 同源同开关：bundle 按「本轮启用语义模型」加载，不泄露
+    全量本体；清单只含对象类型名/显示名/描述 + 对象类型→绑定模型一跳，属性对照/
+    关系类型/失修状态等详情走 locate_object_type。
     """
-    if not object_locator_enabled():
-        raise ValueError("本体对象清单未启用：需设置环境变量 CHAT_DATA_ONTOLOGY_LOCATE_ENABLED=1")
+    if not object_type_locator_enabled():
+        raise ValueError("本体对象类型清单未启用：需设置环境变量 CHAT_DATA_ONTOLOGY_LOCATE_ENABLED=1")
     state = state or {}
     datasource_id = _get_datasource_id_from_state(state) or bound_datasource_id
     if not datasource_id:
@@ -853,14 +853,14 @@ async def _run_data_analyzing_impl(
             bound_user_id=bound_user_id,
             bound_operator_name=bound_operator_name,
         )
-    if action == "list_objects":
-        return await _run_list_objects(
+    if action == "list_object_types":
+        return await _run_list_object_types(
             state=state,
             bound_datasource_id=bound_datasource_id,
             bound_user_id=bound_user_id,
         )
-    if action == "locate_object":
-        return await _run_locate_object(
+    if action == "locate_object_type":
+        return await _run_locate_object_type(
             payload=payload,
             state=state,
             bound_datasource_id=bound_datasource_id,
@@ -896,7 +896,7 @@ def create_data_analyzing_tool(
         intent: str = "",
     ) -> str:
         """
-        数据分析合并工具：按 action 执行 DSL 校验、查询执行、语义模型 YAML 自检或本体对象定位。常规查数流程（检索语义模型、确认字段口径、生成 DSL、校验、执行）以 `data-analyzing` 技能为准，本工具不重复定义。
+        数据分析合并工具：按 action 执行 DSL 校验、查询执行、语义模型 YAML 自检或本体对象类型定位。常规查数流程（检索语义模型、确认字段口径、生成 DSL、校验、执行）以 `data-analyzing` 技能为准，本工具不重复定义。
 
         Args:
             action: 操作类型，枚举：
@@ -905,16 +905,16 @@ def create_data_analyzing_tool(
         - execute_query: 执行查询（DSL 或 SQL 二选一），结果落盘到 outputs/query_result/
         - check_yaml: 语义模型 YAML 质量自检
         - list_execution_targets: 实时获取当前用户可用的执行对象清单（execute_query 前用于确认 member_datasource_ids 取值范围）
-        - list_objects: 列出可定位本体对象——轻量清单（对象API名/显示名/描述 + 各自绑定模型及快照文件名），不含属性与关系详情；范围限定为本轮启用语义模型绑定的对象
-        - locate_object: 按本体对象批量定位语义模型——返回绑定模型（含快照文件名）、属性→维度对照、对象关系与失修标注；纯导航不执行查询，可定位对象先用 list_objects 获取
+        - list_object_types: 列出可定位本体对象类型——轻量清单（对象类型API名/显示名/描述 + 各自绑定模型及快照文件名），不含属性与关系类型详情；范围限定为本轮启用语义模型绑定的对象类型
+        - locate_object_type: 按本体对象类型批量定位语义模型——返回绑定模型（含快照文件名）、属性→维度对照、对象类型间关系类型与失修标注；纯导航不执行查询，可定位对象类型先用 list_object_types 获取
             action_payload: 操作参数，结构随 action 变化：
         - validate_dsl: {"dsl": {...}, "semantic_config_id": "..."}
         - validate_dashboard: {"dsl": <含 dashboard_name 和 cards 的完整 dashboard_spec>, "semantic_config_id": "卡片缺省值，可选"}
         - execute_query: {"dsl": {...} 或 "sql": "...", "semantic_config_id": "...", "member_datasource_ids": ["<ID>"]}（member_datasource_ids 必须是 ID 字符串数组，单个机构也传数组，如 ["ORG_CODE1"]）
         - check_yaml: {"file_path": "/mnt/user-data/workspace/model.yaml"}（工作区 YAML 文件路径，后端直读，不要把 YAML 全文复制进参数）
         - list_execution_targets: {}（无参数，范围由服务端会话上下文决定）
-        - list_objects: {}（无参数，范围=本轮启用语义模型绑定的对象）
-        - locate_object: {"objects": [<对象API名>...]（单次最多10个）, "semantic_config_id": 可选只看该模型绑定}
+        - list_object_types: {}（无参数，范围=本轮启用语义模型绑定的对象）
+        - locate_object_type: {"object_types": [<对象API名>...]（单次最多10个）, "semantic_config_id": 可选只看该模型绑定}
             intent: 一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示。
         """
         return await _run_data_analyzing_impl(

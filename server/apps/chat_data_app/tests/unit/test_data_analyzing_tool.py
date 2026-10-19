@@ -1509,42 +1509,42 @@ def test_validate_member_scope_error_includes_available_list():
 
 
 # ---------------------------------------------------------------------------
-# locate_object（本体对象定位，纯导航不执行查询）
+# locate_object_type（本体对象类型定位，纯导航不执行查询）
 # ---------------------------------------------------------------------------
 
 _ONTOLOGY_BUNDLE = {
-    "objects": [
-        {"id": 1, "object_name": "order", "display_name": "订单", "status": "certified"},
-        {"id": 2, "object_name": "user", "display_name": "用户", "status": "experimental"},
+    "object_types": [
+        {"id": 1, "object_type_name": "order", "display_name": "订单", "status": "certified"},
+        {"id": 2, "object_type_name": "user", "display_name": "用户", "status": "experimental"},
     ],
     "properties": [
         {
-            "object_id": 1,
+            "object_type_id": 1,
             "property_name": "order_id",
             "display_name": "订单编号",
             "value_type": "String",
             "is_identifier": True,
         },
         {
-            "object_id": 1,
+            "object_type_id": 1,
             "property_name": "city",
             "display_name": "城市",
             "value_type": "String",
             "is_identifier": False,
         },
         {
-            "object_id": 2,
+            "object_type_id": 2,
             "property_name": "user_id",
             "display_name": "用户编号",
             "value_type": "String",
             "is_identifier": True,
         },
     ],
-    "relations": [
+    "relation_types": [
         {
-            "relation_name": "order_belongs_to_user",
-            "from_object_id": 1,
-            "to_object_id": 2,
+            "relation_type_name": "order_belongs_to_user",
+            "from_object_type_id": 1,
+            "to_object_type_id": 2,
             "multiplicity": "many_to_one",
             "from_verbalize": "订单归属用户",
             "to_verbalize": "用户拥有订单",
@@ -1552,12 +1552,12 @@ _ONTOLOGY_BUNDLE = {
     ],
     "mappings": [
         {
-            "object_id": 1,
+            "object_type_id": 1,
             "semantic_config_id": "sc_order",
             "column_mappings": {"order_id": "订单编号", "city": "城市"},
         },
         {
-            "object_id": 2,
+            "object_type_id": 2,
             "semantic_config_id": "sc_user",
             "column_mappings": {"user_id": "用户编号"},
         },
@@ -1588,15 +1588,15 @@ class _FakeOntologyDao:
         return _ONTOLOGY_BUNDLE
 
 
-def _invoke_locate_object(monkeypatch, *, action_payload=None, state=None):
+def _invoke_locate_object_type(monkeypatch, *, action_payload=None, state=None):
     fake_dao = _FakeOntologyDao()
     monkeypatch.setattr(data_analyzing, "get_semantic_config_service", lambda: _FakeOntologyConfigService())
     monkeypatch.setattr(data_analyzing, "OntologyDao", lambda: fake_dao)
     raw = asyncio.run(
         data_analyzing.create_data_analyzing_tool().ainvoke(
             {
-                "action": "locate_object",
-                "action_payload": action_payload or {"objects": ["order"]},
+                "action": "locate_object_type",
+                "action_payload": action_payload or {"object_types": ["order"]},
                 "state": state if state is not None else _semantic_query_state(user_id="u1", conversation_id="c1"),
             }
         )
@@ -1604,40 +1604,40 @@ def _invoke_locate_object(monkeypatch, *, action_payload=None, state=None):
     return json.loads(raw.replace(RESULT_PREFIX, "", 1)), fake_dao
 
 
-def test_input_locate_object_payload_model_registered():
-    assert DATA_ANALYZING_ACTION_PAYLOAD_MODELS["locate_object"].model_validate({"objects": ["order"]})
-    assert DATA_ANALYZING_ACTION_PAYLOAD_MODELS["locate_object"].model_validate(
-        {"objects": ["order", "user"], "semantic_config_id": "sc_order"}
+def test_input_locate_object_type_payload_model_registered():
+    assert DATA_ANALYZING_ACTION_PAYLOAD_MODELS["locate_object_type"].model_validate({"object_types": ["order"]})
+    assert DATA_ANALYZING_ACTION_PAYLOAD_MODELS["locate_object_type"].model_validate(
+        {"object_types": ["order", "user"], "semantic_config_id": "sc_order"}
     )
-    with pytest.raises(ValueError, match="locate_object"):
-        validate_data_analyzing_payload("locate_object", {})
+    with pytest.raises(ValueError, match="locate_object_type"):
+        validate_data_analyzing_payload("locate_object_type", {})
 
 
-def test_locate_object_disabled_by_default(monkeypatch):
+def test_locate_object_type_disabled_by_default(monkeypatch):
     monkeypatch.delenv("CHAT_DATA_ONTOLOGY_LOCATE_ENABLED", raising=False)
     with pytest.raises(ValueError, match="CHAT_DATA_ONTOLOGY_LOCATE_ENABLED"):
         asyncio.run(
             data_analyzing.create_data_analyzing_tool().ainvoke(
-                {"action": "locate_object", "action_payload": {"objects": ["order"]}, "state": _semantic_query_state()}
+                {"action": "locate_object_type", "action_payload": {"object_types": ["order"]}, "state": _semantic_query_state()}
             )
         )
 
 
-def test_locate_object_happy_path_multiple_objects(monkeypatch):
+def test_locate_object_type_happy_path_multiple_objects(monkeypatch):
     monkeypatch.setenv("CHAT_DATA_ONTOLOGY_LOCATE_ENABLED", "1")
-    payload, fake_dao = _invoke_locate_object(
+    payload, fake_dao = _invoke_locate_object_type(
         monkeypatch,
-        action_payload={"objects": ["order", "user", "ghost"]},
+        action_payload={"object_types": ["order", "user", "ghost"]},
     )
     # 启用模型集 = 服务端从可见配置推导（disabled 被剔除）
     assert fake_dao.captured_ids == ["sc_order"]
     assert payload["success"] is True
     # 批量命中保序；未命中进 not_found 并列可定位候选
-    assert [item["object"] for item in payload["objects"]] == ["order", "user"]
+    assert [item["object_type"] for item in payload["object_types"]] == ["order", "user"]
     assert payload["not_found"] == [
-        {"object": "ghost", "reason": "对象不存在或未绑定本轮启用语义模型", "available": "order、user"}
+        {"object_type": "ghost", "reason": "对象类型不存在或未绑定本轮启用语义模型", "available": "order、user"}
     ]
-    order_entry = payload["objects"][0]
+    order_entry = payload["object_types"][0]
     assert order_entry["display_name"] == "订单"
     assert {
         "name": "order_id",
@@ -1656,21 +1656,21 @@ def test_locate_object_happy_path_multiple_objects(monkeypatch):
             "stale_dimensions": [],
         }
     ]
-    assert order_entry["relations"][0]["related_object"] == "user"
+    assert order_entry["relation_types"][0]["related_object"] == "user"
     # 使用说明引导进入 execute_query
     assert "execute_query" in payload["usage"]
 
 
-def test_locate_object_config_filter(monkeypatch):
+def test_locate_object_type_config_filter(monkeypatch):
     monkeypatch.setenv("CHAT_DATA_ONTOLOGY_LOCATE_ENABLED", "1")
-    payload, _fake_dao = _invoke_locate_object(
+    payload, _fake_dao = _invoke_locate_object_type(
         monkeypatch,
-        action_payload={"objects": ["order"], "semantic_config_id": "sc_order"},
+        action_payload={"object_types": ["order"], "semantic_config_id": "sc_order"},
     )
-    assert payload["objects"][0]["bindings"][0]["semantic_config_id"] == "sc_order"
+    assert payload["object_types"][0]["bindings"][0]["semantic_config_id"] == "sc_order"
 
 
-def test_locate_object_requires_enabled_models(monkeypatch):
+def test_locate_object_type_requires_enabled_models(monkeypatch):
     monkeypatch.setenv("CHAT_DATA_ONTOLOGY_LOCATE_ENABLED", "1")
 
     class _EmptyService:
@@ -1681,23 +1681,23 @@ def test_locate_object_requires_enabled_models(monkeypatch):
     with pytest.raises(ValueError, match="没有启用语义模型"):
         asyncio.run(
             data_analyzing.create_data_analyzing_tool().ainvoke(
-                {"action": "locate_object", "action_payload": {"objects": ["order"]}, "state": _semantic_query_state()}
+                {"action": "locate_object_type", "action_payload": {"object_types": ["order"]}, "state": _semantic_query_state()}
             )
         )
 
 
-def test_locate_object_requires_datasource(monkeypatch):
+def test_locate_object_type_requires_datasource(monkeypatch):
     monkeypatch.setenv("CHAT_DATA_ONTOLOGY_LOCATE_ENABLED", "1")
     monkeypatch.setattr(data_analyzing, "get_semantic_config_service", lambda: _FakeOntologyConfigService())
     with pytest.raises(ValueError, match="当前会话未绑定数据源"):
         asyncio.run(
             data_analyzing.create_data_analyzing_tool().ainvoke(
-                {"action": "locate_object", "action_payload": {"objects": ["order"]}, "state": {}}
+                {"action": "locate_object_type", "action_payload": {"object_types": ["order"]}, "state": {}}
             )
         )
 
 
-def test_locate_object_over_batch_limit_rejected(monkeypatch):
+def test_locate_object_type_over_batch_limit_rejected(monkeypatch):
     monkeypatch.setenv("CHAT_DATA_ONTOLOGY_LOCATE_ENABLED", "1")
     monkeypatch.setattr(data_analyzing, "get_semantic_config_service", lambda: _FakeOntologyConfigService())
     monkeypatch.setattr(data_analyzing, "OntologyDao", lambda: _FakeOntologyDao())
@@ -1705,8 +1705,8 @@ def test_locate_object_over_batch_limit_rejected(monkeypatch):
         asyncio.run(
             data_analyzing.create_data_analyzing_tool().ainvoke(
                 {
-                    "action": "locate_object",
-                    "action_payload": {"objects": [f"obj{i}" for i in range(11)]},
+                    "action": "locate_object_type",
+                    "action_payload": {"object_types": [f"obj{i}" for i in range(11)]},
                     "state": _semantic_query_state(),
                 }
             )
@@ -1714,18 +1714,18 @@ def test_locate_object_over_batch_limit_rejected(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# list_objects（本体对象清单，轻量发现通道）
+# list_object_types（本体对象类型清单，轻量发现通道）
 # ---------------------------------------------------------------------------
 
 
-def _invoke_list_objects(monkeypatch, *, state=None):
+def _invoke_list_object_types(monkeypatch, *, state=None):
     fake_dao = _FakeOntologyDao()
     monkeypatch.setattr(data_analyzing, "get_semantic_config_service", lambda: _FakeOntologyConfigService())
     monkeypatch.setattr(data_analyzing, "OntologyDao", lambda: fake_dao)
     raw = asyncio.run(
         data_analyzing.create_data_analyzing_tool().ainvoke(
             {
-                "action": "list_objects",
+                "action": "list_object_types",
                 "action_payload": {},
                 "state": state if state is not None else _semantic_query_state(user_id="u1", conversation_id="c1"),
             }
@@ -1734,32 +1734,32 @@ def _invoke_list_objects(monkeypatch, *, state=None):
     return json.loads(raw.replace(RESULT_PREFIX, "", 1)), fake_dao
 
 
-def test_input_list_objects_payload_model_registered():
-    assert DATA_ANALYZING_ACTION_PAYLOAD_MODELS["list_objects"].model_validate({})
+def test_input_list_object_types_payload_model_registered():
+    assert DATA_ANALYZING_ACTION_PAYLOAD_MODELS["list_object_types"].model_validate({})
     # 无业务参数：范围由服务端结构性收敛，与 list_execution_targets 同口径
-    assert validate_data_analyzing_payload("list_objects", {}) is not None
+    assert validate_data_analyzing_payload("list_object_types", {}) is not None
 
 
-def test_list_objects_disabled_by_default(monkeypatch):
+def test_list_object_types_disabled_by_default(monkeypatch):
     monkeypatch.delenv("CHAT_DATA_ONTOLOGY_LOCATE_ENABLED", raising=False)
     with pytest.raises(ValueError, match="CHAT_DATA_ONTOLOGY_LOCATE_ENABLED"):
         asyncio.run(
             data_analyzing.create_data_analyzing_tool().ainvoke(
-                {"action": "list_objects", "action_payload": {}, "state": _semantic_query_state()}
+                {"action": "list_object_types", "action_payload": {}, "state": _semantic_query_state()}
             )
         )
 
 
-def test_list_objects_lightweight_listing(monkeypatch):
+def test_list_object_types_lightweight_listing(monkeypatch):
     monkeypatch.setenv("CHAT_DATA_ONTOLOGY_LOCATE_ENABLED", "1")
-    payload, fake_dao = _invoke_list_objects(monkeypatch)
+    payload, fake_dao = _invoke_list_object_types(monkeypatch)
     # 范围收敛：只按启用模型取 bundle（disabled 被剔除）
     assert fake_dao.captured_ids == ["sc_order"]
     assert payload["success"] is True
     assert payload["count"] == 2
     # 轻量清单：按对象名升序，只含 名字/显示名/描述 + 绑定模型一跳，无属性/映射/关系详情
-    assert [item["object"] for item in payload["objects"]] == ["order", "user"]
-    order_entry = payload["objects"][0]
+    assert [item["object_type"] for item in payload["object_types"]] == ["order", "user"]
+    order_entry = payload["object_types"][0]
     assert order_entry["display_name"] == "订单"
     assert order_entry["models"] == [
         {
@@ -1770,13 +1770,13 @@ def test_list_objects_lightweight_listing(monkeypatch):
     ]
     assert "properties" not in order_entry
     assert "bindings" not in order_entry
-    assert "relations" not in order_entry
-    # 使用说明引导：详情升级 locate_object，查询走 execute_query
-    assert "locate_object" in payload["usage"]
+    assert "relation_types" not in order_entry
+    # 使用说明引导：详情升级 locate_object_type，查询走 execute_query
+    assert "locate_object_type" in payload["usage"]
     assert "execute_query" in payload["usage"]
 
 
-def test_list_objects_requires_enabled_models(monkeypatch):
+def test_list_object_types_requires_enabled_models(monkeypatch):
     monkeypatch.setenv("CHAT_DATA_ONTOLOGY_LOCATE_ENABLED", "1")
 
     class _EmptyService:
@@ -1787,6 +1787,6 @@ def test_list_objects_requires_enabled_models(monkeypatch):
     with pytest.raises(ValueError, match="没有启用语义模型"):
         asyncio.run(
             data_analyzing.create_data_analyzing_tool().ainvoke(
-                {"action": "list_objects", "action_payload": {}, "state": _semantic_query_state()}
+                {"action": "list_object_types", "action_payload": {}, "state": _semantic_query_state()}
             )
         )

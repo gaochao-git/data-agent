@@ -19,8 +19,8 @@ from apps.chat_data_app.services.semantic.run.binding_guard import (
 
 _BINDING = {
     "semantic_config_id": "sc_a",
-    "object_id": 1,
-    "object_name": "订单",
+    "object_type_id": 1,
+    "object_type_name": "订单",
     "column_mappings": {"order_id": "订单ID", "status": "订单状态"},
 }
 

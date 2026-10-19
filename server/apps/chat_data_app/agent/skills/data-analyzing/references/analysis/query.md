@@ -39,20 +39,20 @@
 
 ### 2. 读本体语义层（存在才导航，缺失不影响后续）
 
-本体层按对象持续逐步建设，**任何会话都可能没有本体清单**：指标语义层必然存在，本体层是可选增强，缺失时完全按原有指标语义层路线继续，不得报错、重试或向用户提及缺失。
+本体层按对象类型持续逐步建设，**任何会话都可能没有本体清单**：指标语义层必然存在，本体层是可选增强，缺失时完全按原有指标语义层路线继续，不得报错、重试或向用户提及缺失。
 
-1. 先用 `file_read` 读取 `/mnt/user-data/workspace/semantic/_ontology_catalog.yaml`。文件不存在：当前会话未物化本体层（此时 semantic/ 下会有 `_semantic_catalog.yaml` 语义清单文件），直接进入「3. 检索指标语义层」，不要重试或猜测路径。两份清单二选一：本体清单存在时不发语义清单文件，**`_semantic_catalog.yaml` 缺失属正常**；本体清单的 `models` 段是全部启用模型索引（含未建本体对象、不在 `objects` 中的模型），用它的 `file` 定位取数模型即可。
-2. 清单存在时，识别与用户问题相关的业务对象。**优先调 `data_analyzing_tool` 的 `list_objects`（无参数）**：返回轻量对象清单（对象API名/显示名/描述 + 各自绑定模型及快照文件名），一次调用同时完成「列对象」与「对象→模型」两跳；工具报错（未启用开关）时回落清单检索。锁定模型后再按需升级 `locate_object`（见下）。直接读清单时：
-   - 清单可能带 `truncated: true`：此时 `objects` 只包含按对象名排序的前一部分，不能据此判定「没有相关对象」；先用 `file_grep` 在 `/mnt/user-data/workspace/semantic/` 下按对象名/业务关键词检索，找不到再走「3. 检索指标语义层」。
-   - 命中对象：按该对象 `mappings` 的 `file` 字段（取数模型快照文件名，semantic/ 下）定位模型并 `file_read`（`semantic_config_id` 为辅助键；`column_mappings` 是「属性 → 模型维度名」的概念映射，物理列以模型 YAML 为准）；涉及多个对象时，用 `relations` 的 `from`/`to` 对象与 `from_columns`/`to_columns` 推导 join 路径，锁定候选后直接进入「4. 精读完整语义层」。
-   - 命中对象、但拿不准「对象在哪个模型/属性对应哪个维度」或需要对象关系、失修状态时，调用 `data_analyzing_tool` 的 `locate_object`（`objects` 传对象 API 名列表，可多个）：返回绑定模型（含快照文件名）、属性→维度对照与对象关系，据此直接进入「4. 精读完整语义层」或 `execute_query`，不要靠 grep 模型文件猜定位；工具报错（范围/开关）或清单不可用时，才回落本文件既有检索路径。
-   - 清单中没有任何相关对象：同样进入「3. 检索指标语义层」——这只说明本体尚未覆盖该对象，不代表系统能力缺失。
-3. 本体层只负责「识别业务对象 + 选模型 + 定关联路径」；指标口径、维度枚举、时间格式等细节仍以对象映射指向的语义模型 YAML 为准，不能只凭清单描述直接写查询。
-4. 跨对象的关联查询超出「一次调用一个 `semantic_config_id`」的约束，走 SQL 模式：join 条件优先参考本体 `relations` 的 `from_columns`/`to_columns`；**关系列是尽力翻译的物理列**：带 `unresolved: true` 时表示有列回退为原始属性/维度名，必须回读涉及模型的 YAML 确认表名与物理列后再写 join；一个对象绑定多个模型时，用 `from_columns_by_model`/`to_columns_by_model`（`{semantic_config_id: [物理列]}`）取对应模型的列。两个模型的口径都不明确时仍先澄清。
+1. 先用 `file_read` 读取 `/mnt/user-data/workspace/semantic/_ontology_catalog.yaml`。文件不存在：当前会话未物化本体层（此时 semantic/ 下会有 `_semantic_catalog.yaml` 语义清单文件），直接进入「3. 检索指标语义层」，不要重试或猜测路径。两份清单二选一：本体清单存在时不发语义清单文件，**`_semantic_catalog.yaml` 缺失属正常**；本体清单的 `models` 段是全部启用模型索引（含未建本体对象类型、不在 `object_types` 中的模型），用它的 `file` 定位取数模型即可。
+2. 清单存在时，识别与用户问题相关的业务对象类型。**优先调 `data_analyzing_tool` 的 `list_object_types`（无参数）**：返回轻量对象类型清单（对象类型API名/显示名/描述 + 各自绑定模型及快照文件名），一次调用同时完成「列对象类型」与「对象类型→模型」两跳；工具报错（未启用开关）时回落清单检索。锁定模型后再按需升级 `locate_object_type`（见下）。直接读清单时：
+   - 清单可能带 `truncated: true`：此时 `object_types` 只包含按对象类型名排序的前一部分，不能据此判定「没有相关对象类型」；先用 `file_grep` 在 `/mnt/user-data/workspace/semantic/` 下按对象类型名/业务关键词检索，找不到再走「3. 检索指标语义层」。
+   - 命中对象类型：按该对象类型 `mappings` 的 `file` 字段（取数模型快照文件名，semantic/ 下）定位模型并 `file_read`（`semantic_config_id` 为辅助键；`column_mappings` 是「属性 → 模型维度名」的概念映射，物理列以模型 YAML 为准）；涉及多个对象类型时，用 `relation_types` 的 `from`/`to` 对象类型与 `from_columns`/`to_columns` 推导 join 路径，锁定候选后直接进入「4. 精读完整语义层」。
+   - 命中对象类型、但拿不准「对象类型在哪个模型/属性对应哪个维度」或需要对象类型间关系类型、失修状态时，调用 `data_analyzing_tool` 的 `locate_object_type`（`object_types` 传对象类型 API 名列表，可多个）：返回绑定模型（含快照文件名）、属性→维度对照与对象类型间关系类型，据此直接进入「4. 精读完整语义层」或 `execute_query`，不要靠 grep 模型文件猜定位；工具报错（范围/开关）或清单不可用时，才回落本文件既有检索路径。
+   - 清单中没有任何相关对象类型：同样进入「3. 检索指标语义层」——这只说明本体尚未覆盖该对象类型，不代表系统能力缺失。
+3. 本体层只负责「识别业务对象类型 + 选模型 + 定关联路径」；指标口径、维度枚举、时间格式等细节仍以对象类型映射指向的语义模型 YAML 为准，不能只凭清单描述直接写查询。
+4. 跨对象类型的关联查询超出「一次调用一个 `semantic_config_id`」的约束，走 SQL 模式：join 条件优先参考本体 `relation_types` 的 `from_columns`/`to_columns`；**关系列是尽力翻译的物理列**：带 `unresolved: true` 时表示有列回退为原始属性/维度名，必须回读涉及模型的 YAML 确认表名与物理列后再写 join；一个对象类型绑定多个模型时，用 `from_columns_by_model`/`to_columns_by_model`（`{semantic_config_id: [物理列]}`）取对应模型的列。两个模型的口径都不明确时仍先澄清。
 
 ### 3. 检索指标语义层（清单优先，grep 过滤）
 
-1. 当前用户可见（当前数据源组）的全部启用语义模型 Ossie YAML 已预物化到会话工作区 `/mnt/user-data/workspace/semantic/`，文件名为 `{模型名}__{id后缀}.yaml`；同目录的 `_semantic_catalog.yaml` 是系统生成的语义清单文件（每个启用模型一条 file/description/business_notes，file 即快照文件名）。**本体清单接管时 `_semantic_catalog.yaml` 不存在属正常**：此时用 `_ontology_catalog.yaml` 的 `models` 段取全部启用模型的 file/description/business_notes（`objects` 只是已建本体对象的子集，可能覆盖不全）。
+1. 当前用户可见（当前数据源组）的全部启用语义模型 Ossie YAML 已预物化到会话工作区 `/mnt/user-data/workspace/semantic/`，文件名为 `{模型名}__{id后缀}.yaml`；同目录的 `_semantic_catalog.yaml` 是系统生成的语义清单文件（每个启用模型一条 file/description/business_notes，file 即快照文件名）。**本体清单接管时 `_semantic_catalog.yaml` 不存在属正常**：此时用 `_ontology_catalog.yaml` 的 `models` 段取全部启用模型的 file/description/business_notes（`object_types` 只是已建本体对象类型的子集，可能覆盖不全）。
 2. **第一步读清单**（本文档所称「清单」专指上文两个索引 YAML 文件本身，读取动作一律是 `file_read` 读取文件路径，**不是列目录文件名**）：`file_read` 整读 `_semantic_catalog.yaml`（本体清单接管时读其 `models` 段），得到全部启用模型的 file/description/business_notes 清单，按描述与用户问题的匹配度缩小候选模型。仅凭文件名判断模型相关性属于猜测——文件名不含 description/business_notes；也不要跳过清单直接 grep 全目录——先看全景清单才知道系统里有什么、避免关键词盲区。
 3. 清单描述不足以确认字段与口径时，用 `file_grep(path="/mnt/user-data/workspace/semantic/", pattern="<指标名|维度名|业务关键词>")` 过滤关心内容：候选明确时用 `glob` 限定候选模型文件，候选不明时再扫全目录；英文关键词加 `ignore_case=true` 一次覆盖大小写变体；宽泛关键词命中过多（返回 `has_more=true`）时，先用 `output_mode="files_with_matches"` 看哪些文件命中、必要时再用 `output_mode="count"` 看热点分布，最后收敛 `pattern`/`glob` 后取默认 content 看具体行。
 4. 同一关键词无命中时，先换词再判无：至少覆盖三类换法——业务同义词（如“入金/来账/收款”）、中英文对照、词组拆分；三类换法全部落空才判定为「确认无命中」。
@@ -61,8 +61,8 @@
 
 ### 4. 精读完整语义层
 
-1. 只有「清单描述筛出的候选」「`file_grep` 命中的候选」或「本体层 `mappings`/`locate_object` 指向的模型」才用 `file_read` 分页精读 YAML 全文，比较各自的指标、维度、关系与口径后确定本轮使用的模型。不能根据模型名称、文件名或字段相似性猜测。
-2. 本体命中的跨对象关联：把涉及的全部模型 YAML 都读全，确认各自的原始表名、原始列名与已维护关系，join 路径以本体 `relations` 为先、以模型 YAML 的 `relationships` 为校验。
+1. 只有「清单描述筛出的候选」「`file_grep` 命中的候选」或「本体层 `mappings`/`locate_object_type` 指向的模型」才用 `file_read` 分页精读 YAML 全文，比较各自的指标、维度、关系与口径后确定本轮使用的模型。不能根据模型名称、文件名或字段相似性猜测。
+2. 本体命中的跨对象关联：把涉及的全部模型 YAML 都读全，确认各自的原始表名、原始列名与已维护关系，join 路径以本体 `relation_types` 为先、以模型 YAML 的 `relationships` 为校验。
 3. 精读后确认当前配置不存在所需指标、维度或模型时，停止查询并说明当前缺少的能力；候选不唯一或读取后业务口径仍不清楚时，停止查询并只向用户提出一个最关键的业务澄清问题。
 
 ### 5. 通过查询门禁

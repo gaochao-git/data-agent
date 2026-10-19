@@ -51,20 +51,20 @@ def test_consistency_check_contract(client, auth_headers, monkeypatch):
             {"id": "cfg-user", "name": "私有模型", "dimensions": [], "scope_type": "user"},
         ]
     }
-    bundle = {"objects": [{"id": 1, "object_name": "customer"}], "properties": [], "relations": [], "mappings": []}
+    bundle = {"object_types": [{"id": 1, "object_type_name": "customer"}], "properties": [], "relation_types": [], "mappings": []}
     findings = [
         {
             "code": "ONT_MAPPING_DIM_MISSING",
             "severity": "error",
             "category": "ontology",
-            "message": "对象「customer」到模型 cfg-1 的映射存在 1 个失效维度引用",
+            "message": "对象类型「customer」到模型 cfg-1 的映射存在 1 个失效维度引用",
             "targets": ["customer", "cfg-1"],
         },
         {
             "code": "ONT_PROP_UNMAPPED",
             "severity": "info",
             "category": "ontology",
-            "message": "对象「customer」有 1 个属性未映射到模型维度",
+            "message": "对象类型「customer」有 1 个属性未映射到模型维度",
             "targets": ["customer"],
         },
     ]
@@ -79,7 +79,7 @@ def test_consistency_check_contract(client, auth_headers, monkeypatch):
     # 公共配置收集：私有配置被过滤；空 group_id 的领域被跳过
     assert data["group_count"] == 1
     assert data["config_count"] == 1
-    assert data["object_count"] == 1
+    assert data["object_type_count"] == 1
     assert stub_dao.captured_ids == ["cfg-1"]
     assert data["findings"] == findings
     assert data["summary"] == {"error": 1, "warning": 0, "info": 1}
@@ -91,7 +91,7 @@ def test_consistency_check_healthy(client, auth_headers, monkeypatch):
         monkeypatch,
         domains=[{"domain_name": "sales", "group_id": "group-1"}],
         configs={"group-1": [{"id": "cfg-1", "name": "模型一", "dimensions": []}]},
-        bundle={"objects": [], "properties": [], "relations": [], "mappings": []},
+        bundle={"object_types": [], "properties": [], "relation_types": [], "mappings": []},
         findings=[],
     )
     response = client.get(_URL, headers=auth_headers)
@@ -106,7 +106,7 @@ def test_consistency_check_no_domains(client, auth_headers, monkeypatch):
         monkeypatch,
         domains=[],
         configs={"group-1": [{"id": "cfg-1", "name": "模型一", "dimensions": []}]},
-        bundle={"objects": [], "properties": [], "relations": [], "mappings": []},
+        bundle={"object_types": [], "properties": [], "relation_types": [], "mappings": []},
     )
     response = client.get(_URL, headers=auth_headers)
     payload = response.json()

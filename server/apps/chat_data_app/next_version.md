@@ -197,23 +197,22 @@ ALTER TABLE chat_data_skill DROP COLUMN skill_scope;
 ALTER TABLE chat_data_skill DROP COLUMN skill_root_dir;
 ALTER TABLE chat_data_skill_version DROP COLUMN skill_version_dir;
 
--- 本体对象表删除「复数展示名 / 上下文可见性」两列（实验期裁剪，Palantir 对齐字段确认无用；仅 dev 已建表需执行）
-ALTER TABLE chat_data_ontology_object DROP COLUMN plural_display_name;
-ALTER TABLE chat_data_ontology_object DROP COLUMN visibility;
+-- 本体对象类型表删除「复数展示名 / 上下文可见性」两列（实验期裁剪，Palantir 对齐字段确认无用；仅 dev 已建表需执行）
+ALTER TABLE chat_data_ontology_object_type DROP COLUMN plural_display_name;
+ALTER TABLE chat_data_ontology_object_type DROP COLUMN visibility;
 
--- 本体重建四张表：对象/属性/关系/对象映射（属性一等实体；口径不落本体，唯一权威在语义层；
+-- 本体重建四张表：对象类型/属性/关系类型/对象类型映射（属性一等实体；口径不落本体，唯一权威在语义层；
 -- 绑定独立成映射表对齐 ossie 概念层/映射层分离，主键=标识属性组合、标题键=标题属性，均由属性表表达）
-CREATE TABLE `chat_data_ontology_object` (
+CREATE TABLE `chat_data_ontology_object_type` (
   `id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键ID',
-  `object_name` varchar(128) NOT NULL COMMENT '对象API名，仅字母数字下划线，certified 后冻结',
+  `object_type_name` varchar(128) NOT NULL COMMENT '对象类型API名，仅字母数字下划线，certified 后冻结',
   `display_name` varchar(128) NOT NULL DEFAULT '' COMMENT '展示名',
-  `description` varchar(1024) NOT NULL DEFAULT '' COMMENT '对象描述',
-  `business_notes` text COMMENT '业务说明（建模背景、口径边界等，不入 agent 上下文）',
-  `status` varchar(16) NOT NULL DEFAULT 'draft' COMMENT '生命周期: draft-草稿, experimental-实验, certified-认证, deprecated-废弃(不可逆)',
-  `domain` varchar(128) NOT NULL DEFAULT '' COMMENT '业务域扁平标签（语义归属，与数据源组采集范围解耦）',
+  `description_text` varchar(1024) NOT NULL DEFAULT '' COMMENT '对象类型描述',
+  `lifecycle_status` varchar(16) NOT NULL DEFAULT 'draft' COMMENT '生命周期: draft-草稿, experimental-实验, certified-认证, deprecated-废弃(不可逆)',
+  `domain_id` bigint DEFAULT NULL COMMENT '所属领域ID（chat_data_ontology_domain.id，逻辑关联无外键），NULL=未分域',
   `deprecation_reason` varchar(512) NOT NULL DEFAULT '' COMMENT '废弃原因，status=deprecated 时有效',
   `deprecated_until` datetime DEFAULT NULL COMMENT '废弃删除期限，status=deprecated 时有效',
-  `successor_object_name` varchar(128) NOT NULL DEFAULT '' COMMENT '替代对象API名，status=deprecated 时有效',
+  `successor_object_type_name` varchar(128) NOT NULL DEFAULT '' COMMENT '替代对象类型API名，status=deprecated 时有效',
   `delete_flag` tinyint NOT NULL DEFAULT '0' COMMENT '删除标识: 0-未删除, 1-已删除',
   `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
@@ -222,22 +221,22 @@ CREATE TABLE `chat_data_ontology_object` (
   `update_by` varchar(100) NOT NULL DEFAULT '' COMMENT '修改人ID',
   `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '修改人名称',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uniq_object_name` (`object_name`),
-  KEY `idx_object_status` (`status`,`delete_flag`),
-  KEY `idx_object_domain` (`domain`,`delete_flag`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='本体对象表';
+  UNIQUE KEY `uniq_object_type_name` (`object_type_name`),
+  KEY `idx_object_type_status` (`lifecycle_status`,`delete_flag`),
+  KEY `idx_object_type_domain_id` (`domain_id`,`delete_flag`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='本体对象类型表';
 
 CREATE TABLE `chat_data_ontology_property` (
   `id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键ID',
-  `object_id` bigint NOT NULL COMMENT '所属本体对象ID（chat_data_ontology_object.id，逻辑关联无外键）',
-  `property_name` varchar(128) NOT NULL COMMENT '属性API名，仅字母数字下划线，对象内唯一，certified 后禁删',
+  `object_type_id` bigint NOT NULL COMMENT '所属本体对象类型ID（chat_data_ontology_object_type.id，逻辑关联无外键）',
+  `property_name` varchar(128) NOT NULL COMMENT '属性API名，仅字母数字下划线，对象类型内唯一，certified 后禁删',
   `display_name` varchar(128) NOT NULL DEFAULT '' COMMENT '展示名',
-  `description` varchar(1024) NOT NULL DEFAULT '' COMMENT '属性描述',
+  `description_text` varchar(1024) NOT NULL DEFAULT '' COMMENT '属性描述',
   `value_type` varchar(32) NOT NULL DEFAULT 'String' COMMENT '值类型: String/Integer/Decimal/Boolean/Date/DateTime 或 enum(引用全局枚举)',
   `enum_ref` varchar(260) NOT NULL DEFAULT '' COMMENT '全局枚举引用，value_type=enum 时非空: "enum_name" 或 "business_domain:enum_name"',
   `render_hints_json` text COMMENT '渲染提示JSON文本: {"searchable":true,"sortable":true,"low_cardinality":false}',
-  `is_identifier` tinyint NOT NULL DEFAULT '0' COMMENT '标识属性: 1-参与对象主键组合（业务主键，禁自增行号）',
-  `is_title` tinyint NOT NULL DEFAULT '0' COMMENT '标题属性: 1-对象标题键（每对象至多一个）',
+  `is_identifier` tinyint NOT NULL DEFAULT '0' COMMENT '标识属性: 1-参与对象类型主键组合（业务主键，禁自增行号）',
+  `is_title` tinyint NOT NULL DEFAULT '0' COMMENT '标题属性: 1-对象类型标题键（每对象类型至多一个）',
   `delete_flag` tinyint NOT NULL DEFAULT '0' COMMENT '删除标识: 0-未删除, 1-已删除',
   `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
@@ -246,24 +245,23 @@ CREATE TABLE `chat_data_ontology_property` (
   `update_by` varchar(100) NOT NULL DEFAULT '' COMMENT '修改人ID',
   `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '修改人名称',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uniq_object_property` (`object_id`,`property_name`)
+  UNIQUE KEY `uniq_object_type_property` (`object_type_id`,`property_name`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='本体属性表';
 
-CREATE TABLE `chat_data_ontology_relation` (
+CREATE TABLE `chat_data_ontology_relation_type` (
   `id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键ID',
-  `relation_name` varchar(128) NOT NULL COMMENT '关系API名，仅字母数字下划线，全局唯一',
-  `from_object_id` bigint NOT NULL COMMENT '起始对象ID（chat_data_ontology_object.id）',
-  `to_object_id` bigint NOT NULL COMMENT '目标对象ID（chat_data_ontology_object.id）',
+  `relation_type_name` varchar(128) NOT NULL COMMENT '关系类型API名，仅字母数字下划线，全局唯一',
+  `from_object_type_id` bigint NOT NULL COMMENT '起始对象类型ID（chat_data_ontology_object_type.id）',
+  `to_object_type_id` bigint NOT NULL COMMENT '目标对象类型ID（chat_data_ontology_object_type.id）',
   `from_columns_json` text COMMENT '起始侧关联列JSON文本: ["属性名"], 与目标侧等长顺序一一对应',
   `to_columns_json` text COMMENT '目标侧关联列JSON文本: ["属性名"], 必须引用对方标识属性',
-  `multiplicity` varchar(16) NOT NULL DEFAULT 'many_to_one' COMMENT '基数: many_to_one, one_to_one（多对多走 junction 对象表达）',
+  `multiplicity_type` varchar(16) NOT NULL DEFAULT 'many_to_one' COMMENT '基数: many_to_one, one_to_one（多对多走 junction 对象类型表达）',
   `from_display_name` varchar(128) NOT NULL DEFAULT '' COMMENT '正向方向展示名',
   `to_display_name` varchar(128) NOT NULL DEFAULT '' COMMENT '反向方向展示名',
   `from_verbalize` varchar(512) NOT NULL DEFAULT '' COMMENT '正向自然语言模式串，如 "{from} 归属于 {to}"',
   `to_verbalize` varchar(512) NOT NULL DEFAULT '' COMMENT '反向自然语言模式串',
-  `description` varchar(1024) NOT NULL DEFAULT '' COMMENT '关系描述',
-  `business_notes` text COMMENT '业务说明',
-  `status` varchar(16) NOT NULL DEFAULT 'draft' COMMENT '生命周期随对象级联: 对象降级自动同步，升级需手动确认',
+  `description_text` varchar(1024) NOT NULL DEFAULT '' COMMENT '关系类型描述',
+  `lifecycle_status` varchar(16) NOT NULL DEFAULT 'draft' COMMENT '生命周期随对象类型级联: 对象类型降级自动同步，升级需手动确认',
   `delete_flag` tinyint NOT NULL DEFAULT '0' COMMENT '删除标识: 0-未删除, 1-已删除',
   `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
@@ -272,19 +270,19 @@ CREATE TABLE `chat_data_ontology_relation` (
   `update_by` varchar(100) NOT NULL DEFAULT '' COMMENT '修改人ID',
   `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '修改人名称',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uniq_relation_name` (`relation_name`),
-  KEY `idx_relation_from` (`from_object_id`,`delete_flag`),
-  KEY `idx_relation_to` (`to_object_id`,`delete_flag`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='本体关系表';
+  UNIQUE KEY `uniq_relation_type_name` (`relation_type_name`),
+  KEY `idx_relation_from` (`from_object_type_id`,`delete_flag`),
+  KEY `idx_relation_to` (`to_object_type_id`,`delete_flag`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='本体关系类型表';
 
--- 对象映射表：语义模型映射独立成表（对齐 ossie 本体文档/映射文档分离）。
--- 映射随对象 payload 提交、随对象 upsert 同事务全量重写（软删+重插，无独立生命周期）；
+-- 对象类型映射表：语义模型映射独立成表（对齐 ossie 本体文档/映射文档分离）。
+-- 映射随对象类型 payload 提交、随对象类型 upsert 同事务全量重写（软删+重插，无独立生命周期）；
 -- delete_flag 语义特殊：0=活跃，软删时置为行 id——软删行不占唯一索引槽位，同源可重绑；
--- 「一源一对象」由 uniq_mapping_semantic_source(含 delete_flag) 对活跃行直接约束
+-- 「一源一对象类型」由 uniq_mapping_semantic_source(含 delete_flag) 对活跃行直接约束
 -- （DB 兜底，service 先查给友好报错）
 CREATE TABLE `chat_data_ontology_mapping` (
   `id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键ID',
-  `object_id` bigint NOT NULL COMMENT '所属本体对象ID（chat_data_ontology_object.id，逻辑关联无外键）',
+  `object_type_id` bigint NOT NULL COMMENT '所属本体对象类型ID（chat_data_ontology_object_type.id，逻辑关联无外键）',
   `semantic_config_id` varchar(128) NOT NULL COMMENT '语义模型配置ID（口径唯一权威在语义层，不触碰物理表）',
   `column_mappings_json` text COMMENT '字段映射JSON文本: {属性API名: 模型维度名}',
   `delete_flag` bigint NOT NULL DEFAULT '0' COMMENT '删除标识: 0-活跃, 软删时置为行id（腾出唯一索引槽位）',
@@ -295,10 +293,54 @@ CREATE TABLE `chat_data_ontology_mapping` (
   `update_by` varchar(100) NOT NULL DEFAULT '' COMMENT '修改人ID',
   `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '修改人名称',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uniq_mapping_object_source` (`object_id`,`semantic_config_id`,`delete_flag`),
+  UNIQUE KEY `uniq_mapping_object_type_source` (`object_type_id`,`semantic_config_id`,`delete_flag`),
   UNIQUE KEY `uniq_mapping_semantic_source` (`semantic_config_id`,`delete_flag`),
-  KEY `idx_mapping_object` (`object_id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='本体对象映射表';
+  KEY `idx_mapping_object_type` (`object_type_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='本体对象类型映射表';
+
+-- 本体五表对齐两条命名规范（2026-10-19）：
+--   ① 术语：表名 object/relation → object_type/relation_type，列名 object_name/object_id/
+--      relation_name/from_object_id/to_object_id 同步加 _type；
+--   ② 红线「除 id 外必须 ≥2 个单词下划线」：description → description_text、
+--      status → lifecycle_status、multiplicity → multiplicity_type。
+-- 已建表的存量环境（dev）按序执行以下迁移；新环境直接按上方 CREATE TABLE 建表，无需执行。
+-- 注意：MySQL 8 RENAME COLUMN/RENAME TABLE 自动同步索引定义但不改索引名，索引名需单独 RENAME INDEX。
+
+```sql
+-- ① 表名对齐术语
+RENAME TABLE `chat_data_ontology_object`   TO `chat_data_ontology_object_type`;
+RENAME TABLE `chat_data_ontology_relation` TO `chat_data_ontology_relation_type`;
+
+-- ② 列名：红线（单词列加后缀）
+ALTER TABLE `chat_data_ontology_domain`       RENAME COLUMN `description`  TO `description_text`;
+ALTER TABLE `chat_data_ontology_object_type`  RENAME COLUMN `description`  TO `description_text`;
+ALTER TABLE `chat_data_ontology_object_type`  RENAME COLUMN `status`       TO `lifecycle_status`;
+ALTER TABLE `chat_data_ontology_property`     RENAME COLUMN `description`  TO `description_text`;
+ALTER TABLE `chat_data_ontology_relation_type` RENAME COLUMN `multiplicity` TO `multiplicity_type`;
+ALTER TABLE `chat_data_ontology_relation_type` RENAME COLUMN `description`  TO `description_text`;
+ALTER TABLE `chat_data_ontology_relation_type` RENAME COLUMN `status`       TO `lifecycle_status`;
+
+-- ③ 列名：术语（对象类型/关系类型标识符）
+ALTER TABLE `chat_data_ontology_object_type`   RENAME COLUMN `object_name`     TO `object_type_name`;
+ALTER TABLE `chat_data_ontology_property`      RENAME COLUMN `object_id`       TO `object_type_id`;
+ALTER TABLE `chat_data_ontology_relation_type` RENAME COLUMN `relation_name`   TO `relation_type_name`;
+ALTER TABLE `chat_data_ontology_relation_type` RENAME COLUMN `from_object_id`  TO `from_object_type_id`;
+ALTER TABLE `chat_data_ontology_relation_type` RENAME COLUMN `to_object_id`    TO `to_object_type_id`;
+ALTER TABLE `chat_data_ontology_mapping`       RENAME COLUMN `object_id`       TO `object_type_id`;
+
+-- ④ 索引名对齐新列名
+ALTER TABLE `chat_data_ontology_object_type`   RENAME INDEX `uniq_object_name`           TO `uniq_object_type_name`;
+ALTER TABLE `chat_data_ontology_object_type`   RENAME INDEX `idx_object_status`          TO `idx_object_type_status`;
+ALTER TABLE `chat_data_ontology_property`      RENAME INDEX `uniq_object_property`       TO `uniq_object_type_property`;
+ALTER TABLE `chat_data_ontology_relation_type` RENAME INDEX `uniq_relation_name`         TO `uniq_relation_type_name`;
+ALTER TABLE `chat_data_ontology_mapping`       RENAME INDEX `uniq_mapping_object_source` TO `uniq_mapping_object_type_source`;
+ALTER TABLE `chat_data_ontology_mapping`       RENAME INDEX `idx_mapping_object`         TO `idx_mapping_object_type`;
+
+-- ⑤ 补遗：更早版本建的库还带旧列/旧索引名（fxcjg_ai 3307 实测，2026-10-19 已执行），上方四步未覆盖；
+--    仅当库中存在旧名时执行，已对齐的环境会因列/索引不存在报错，跳过即可
+ALTER TABLE `chat_data_ontology_object_type`   RENAME COLUMN `successor_object_name` TO `successor_object_type_name`;
+ALTER TABLE `chat_data_ontology_object_type`   RENAME INDEX `idx_object_domain_id`   TO `idx_object_type_domain_id`;
+```
 
 -- 模型注册表：智能问数模型清单页面化管理（替代 CHAT_DATA_MODELS_FILE JSON 文件）
 -- 除身份/连接/状态列外，全部模型参数收在 params_json（JSON 文本），扩参不改表结构
@@ -348,8 +390,8 @@ CREATE TABLE `chat_data_ontology_domain` (
   `domain_name` varchar(64) NOT NULL COMMENT '领域API名，仅字母数字下划线，全局唯一',
   `group_id` varchar(128) NOT NULL COMMENT '绑定的数据源组ID（一次绑定，映射与关系的组锚点）',
   `display_name` varchar(128) NOT NULL DEFAULT '' COMMENT '展示名，缺省用领域名',
-  `description` varchar(512) NOT NULL DEFAULT '' COMMENT '领域描述',
-  `delete_flag` tinyint NOT NULL DEFAULT '0' COMMENT '删除标识: 0-未删除, 1-已删除（挂有活跃对象时禁删）',
+  `description_text` varchar(512) NOT NULL DEFAULT '' COMMENT '领域描述',
+  `delete_flag` tinyint NOT NULL DEFAULT '0' COMMENT '删除标识: 0-未删除, 1-已删除（挂有活跃对象类型时禁删）',
   `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   `create_by` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人ID',
@@ -377,7 +419,7 @@ ALTER TABLE `chat_data_ontology_relation` DROP COLUMN `business_notes`;
 
 ```sql
 -- 1) 按存量 domain 文本建领域（group_id 按环境实际数据源组填写）
-INSERT INTO chat_data_ontology_domain (domain_name, group_id, display_name, description)
+INSERT INTO chat_data_ontology_domain (domain_name, group_id, display_name, description_text)
 SELECT 'ecommerce_trade', '<数据源组ID>', '电商交易', '电商交易业务域'
 WHERE NOT EXISTS (SELECT 1 FROM chat_data_ontology_domain WHERE domain_name = 'ecommerce_trade');
 

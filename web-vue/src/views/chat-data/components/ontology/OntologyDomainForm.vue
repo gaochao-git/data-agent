@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
  * 本体领域创建/编辑弹窗：领域=业务域实体，一对一绑定数据源组。
- * 对象挂领域后继承其组（组决策从对象/关系层上移到领域层，一次绑定即可）。
+ * 对象类型挂领域后继承其组（组决策从对象类型/关系类型层上移到领域层，一次绑定即可）。
  * 领域 API 名创建后不可改；编辑活跃领域提交 allow_overwrite=true。
  */
 import { computed, ref, watch } from 'vue'
@@ -150,7 +150,7 @@ const saveDomain = async () => {
         </div>
       </div>
       <div>
-        <div class="mb-1 text-xs text-slate-500">绑定数据源组（一次绑定，对象挂领域后继承其组）</div>
+        <div class="mb-1 text-xs text-slate-500">绑定数据源组（一次绑定，对象类型挂领域后继承其组）</div>
         <el-select
           v-model="formGroupId"
           size="small"

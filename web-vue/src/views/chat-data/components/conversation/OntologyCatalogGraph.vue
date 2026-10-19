@@ -2,7 +2,7 @@
 /**
  * 本体目录图谱预览（workspace/semantic/_ontology_catalog.yaml 专用，兼容旧 ontology/ 路径残留）。
  * 三要素全上图：节点=业务对象（颜色=治理状态）+ 属性（环绕对象的小节点，标识=蓝、标题=琥珀）；
- * 边=本体 relations 一比一（箭头 one端→many端、label=名词角色名，对标 Palantir Vertex）。
+ * 边=本体 relation_types 一比一（箭头 one端→many端、label=名词角色名，对标 Palantir Vertex）。
  * 力导向布局（对齐官方 Vertex 默认 Auto）：节点可拖拽重排、连线跟随、roam 缩放画布。
  * 属性支持折叠（右上角开关，默认折叠）：对象/属性多时防止图谱杂乱，悬停对象 tooltip 仍可见属性清单。
  * 数据全部来自文件文本前端解析，解析失败降级为提示文案不白屏；节点/边点击无行为。
@@ -72,7 +72,7 @@ onBeforeUnmount(() => {
       v-if="parseFailed"
       class="flex h-full min-h-[280px] items-center justify-center px-6 text-center text-xs text-slate-400"
     >
-      无法解析为本体目录（缺少 objects 定义），请切换源码视图查看
+      无法解析为本体目录（缺少 object_types 定义），请切换源码视图查看
     </div>
   </div>
 </template>

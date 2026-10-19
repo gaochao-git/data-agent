@@ -1810,8 +1810,8 @@
         "title": "OntologyMappingItem",
         "type": "object"
       },
-      "OntologyObjectDomainRequest": {
-        "description": "本体对象领域归属变更请求（拖拽换域等窄写路径；null=移出领域）",
+      "OntologyObjectTypeDomainRequest": {
+        "description": "本体对象类型领域归属变更请求（拖拽换域等窄写路径；null=移出领域）",
         "properties": {
           "domain_id": {
             "anyOf": [
@@ -1826,11 +1826,11 @@
             "title": "Domain Id"
           }
         },
-        "title": "OntologyObjectDomainRequest",
+        "title": "OntologyObjectTypeDomainRequest",
         "type": "object"
       },
-      "OntologyObjectStatusRequest": {
-        "description": "本体对象状态迁移请求",
+      "OntologyObjectTypeStatusRequest": {
+        "description": "本体对象类型状态迁移请求",
         "properties": {
           "deprecated_until": {
             "default": "",
@@ -1857,26 +1857,26 @@
             "title": "Status",
             "type": "string"
           },
-          "successor_object_name": {
+          "successor_object_type_name": {
             "default": "",
-            "description": "替代对象API名，可选但必须存在",
+            "description": "替代对象类型API名，可选但必须存在",
             "maxLength": 128,
-            "title": "Successor Object Name",
+            "title": "Successor Object Type Name",
             "type": "string"
           }
         },
         "required": [
           "status"
         ],
-        "title": "OntologyObjectStatusRequest",
+        "title": "OntologyObjectTypeStatusRequest",
         "type": "object"
       },
-      "OntologyObjectUpsertRequest": {
-        "description": "本体对象创建/编辑请求（object_name 由路径参数携带；状态走独立接口）",
+      "OntologyObjectTypeUpsertRequest": {
+        "description": "本体对象类型创建/编辑请求（object_type_name 由路径参数携带；状态走独立接口）",
         "properties": {
           "allow_overwrite": {
             "default": false,
-            "description": "编辑既有活跃对象时为 True",
+            "description": "编辑既有活跃对象类型时为 True",
             "title": "Allow Overwrite",
             "type": "boolean"
           },
@@ -1888,7 +1888,7 @@
           },
           "description": {
             "default": "",
-            "description": "对象描述",
+            "description": "对象类型描述",
             "maxLength": 1024,
             "title": "Description",
             "type": "string"
@@ -1913,7 +1913,7 @@
             "title": "Domain Id"
           },
           "mappings": {
-            "description": "语义模型映射列表（独立存映射表，随对象提交全量重写）",
+            "description": "语义模型映射列表（独立存映射表，随对象类型提交全量重写）",
             "items": {
               "$ref": "#/components/schemas/OntologyMappingItem"
             },
@@ -1934,11 +1934,11 @@
           "display_name",
           "properties"
         ],
-        "title": "OntologyObjectUpsertRequest",
+        "title": "OntologyObjectTypeUpsertRequest",
         "type": "object"
       },
       "OntologyPropertyItem": {
-        "description": "本体属性项（属性一等实体，随对象表单整体提交）",
+        "description": "本体属性项（属性一等实体，随对象类型表单整体提交）",
         "properties": {
           "description": {
             "default": "",
@@ -1963,18 +1963,18 @@
           },
           "is_identifier": {
             "default": false,
-            "description": "标识属性：参与对象主键组合（业务主键，禁自增行号）",
+            "description": "标识属性：参与对象类型主键组合（业务主键，禁自增行号）",
             "title": "Is Identifier",
             "type": "boolean"
           },
           "is_title": {
             "default": false,
-            "description": "标题属性：对象标题键（每对象至多一个）",
+            "description": "标题属性：对象类型标题键（每对象类型至多一个）",
             "title": "Is Title",
             "type": "boolean"
           },
           "property_name": {
-            "description": "属性API名，对象内唯一",
+            "description": "属性API名，对象类型内唯一",
             "maxLength": 128,
             "minLength": 1,
             "title": "Property Name",
@@ -2010,11 +2010,11 @@
         "title": "OntologyPropertyItem",
         "type": "object"
       },
-      "OntologyRelationStatusRequest": {
-        "description": "本体关系状态迁移请求（deprecated 仅随对象级联，不接受手动迁移）",
+      "OntologyRelationTypeStatusRequest": {
+        "description": "本体关系类型状态迁移请求（deprecated 仅随对象类型级联，不接受手动迁移）",
         "properties": {
           "status": {
-            "description": "目标状态（上限=两侧对象状态的较低者，关系不得高于任一端）",
+            "description": "目标状态（上限=两侧对象类型状态的较低者，关系类型不得高于任一端）",
             "enum": [
               "draft",
               "experimental",
@@ -2027,27 +2027,27 @@
         "required": [
           "status"
         ],
-        "title": "OntologyRelationStatusRequest",
+        "title": "OntologyRelationTypeStatusRequest",
         "type": "object"
       },
-      "OntologyRelationUpsertRequest": {
-        "description": "本体关系创建/编辑请求（relation_name 由路径参数携带）",
+      "OntologyRelationTypeUpsertRequest": {
+        "description": "本体关系类型创建/编辑请求（relation_type_name 由路径参数携带）",
         "properties": {
           "allow_overwrite": {
             "default": false,
-            "description": "编辑既有关系时为 True",
+            "description": "编辑既有关系类型时为 True",
             "title": "Allow Overwrite",
             "type": "boolean"
           },
           "confirm_destructive": {
             "default": false,
-            "description": "破坏性变更（连接对象/关联列/基数变更）显式确认",
+            "description": "破坏性变更（连接对象类型/关联列/基数变更）显式确认",
             "title": "Confirm Destructive",
             "type": "boolean"
           },
           "description": {
             "default": "",
-            "description": "关系描述",
+            "description": "关系类型描述",
             "maxLength": 1024,
             "title": "Description",
             "type": "string"
@@ -2068,11 +2068,11 @@
             "title": "From Display Name",
             "type": "string"
           },
-          "from_object_name": {
-            "description": "起始对象API名",
+          "from_object_type_name": {
+            "description": "起始对象类型API名",
             "maxLength": 128,
             "minLength": 1,
-            "title": "From Object Name",
+            "title": "From Object Type Name",
             "type": "string"
           },
           "from_verbalize": {
@@ -2084,7 +2084,7 @@
           },
           "multiplicity": {
             "default": "many_to_one",
-            "description": "基数（多对多走 junction 对象表达）",
+            "description": "基数（多对多走 junction 对象类型表达）",
             "enum": [
               "many_to_one",
               "one_to_one"
@@ -2108,11 +2108,11 @@
             "title": "To Display Name",
             "type": "string"
           },
-          "to_object_name": {
-            "description": "目标对象API名",
+          "to_object_type_name": {
+            "description": "目标对象类型API名",
             "maxLength": 128,
             "minLength": 1,
-            "title": "To Object Name",
+            "title": "To Object Type Name",
             "type": "string"
           },
           "to_verbalize": {
@@ -2124,12 +2124,12 @@
           }
         },
         "required": [
-          "from_object_name",
-          "to_object_name",
+          "from_object_type_name",
+          "to_object_type_name",
           "from_columns",
           "to_columns"
         ],
-        "title": "OntologyRelationUpsertRequest",
+        "title": "OntologyRelationTypeUpsertRequest",
         "type": "object"
       },
       "PanelBatchExecuteRequest": {
@@ -6942,7 +6942,7 @@
     },
     "/api/chatdata/admin/meta/ontology/consistency-check": {
       "get": {
-        "description": "本体↔语义模型一致性健康巡检（管理端手动触发）。\n\n比较域 = 全部领域挂载的数据源组下的公共语义配置 × AI 可见本体面\n（bundle 与注入同源：活跃、certified/experimental、双端在集合内）。\n只巡检不评分、不阻断任何操作——产出失修清单（映射维度失效/关系列失效/\n类型冲突/属性未映射），供管理员修正映射或恢复维度。",
+        "description": "本体↔语义模型一致性健康巡检（管理端手动触发）。\n\n比较域 = 全部领域挂载的数据源组下的公共语义配置 × AI 可见本体面\n（bundle 与注入同源：活跃、certified/experimental、双端在集合内）。\n只巡检不评分、不阻断任何操作——产出失修清单（映射维度失效/关系类型列失效/\n类型冲突/属性未映射），供管理员修正映射或恢复维度。",
         "operationId": "check_ontology_model_consistency_api_chatdata_admin_meta_ontology_consistency_check_get",
         "responses": {
           "200": {
@@ -6996,7 +6996,7 @@
     },
     "/api/chatdata/admin/meta/ontology/domains/{domain_name}": {
       "delete": {
-        "description": "删除本体领域（软删；挂有活跃对象时拒绝）。",
+        "description": "删除本体领域（软删；挂有活跃对象类型时拒绝）。",
         "operationId": "delete_ontology_domain_api_chatdata_admin_meta_ontology_domains__domain_name__delete",
         "parameters": [
           {
@@ -7098,10 +7098,10 @@
         ]
       }
     },
-    "/api/chatdata/admin/meta/ontology/objects": {
+    "/api/chatdata/admin/meta/ontology/object-types": {
       "get": {
-        "description": "本体对象列表（keyword 按名称/展示名/描述模糊过滤；status/domain_id 精确过滤）。",
-        "operationId": "list_ontology_objects_api_chatdata_admin_meta_ontology_objects_get",
+        "description": "本体对象类型列表（keyword 按名称/展示名/描述模糊过滤；status/domain_id 精确过滤）。",
+        "operationId": "list_ontology_object_types_api_chatdata_admin_meta_ontology_object_types_get",
         "parameters": [
           {
             "in": "query",
@@ -7179,23 +7179,23 @@
             "ServiceToken": []
           }
         ],
-        "summary": "List Ontology Objects",
+        "summary": "List Ontology Object Types",
         "tags": [
           "ChatData 本体管理（Admin）"
         ]
       }
     },
-    "/api/chatdata/admin/meta/ontology/objects/{object_name}": {
+    "/api/chatdata/admin/meta/ontology/object-types/{object_type_name}": {
       "delete": {
-        "description": "删除本体对象（软删；certified 拒绝，级联软删属性与关系）。",
-        "operationId": "delete_ontology_object_api_chatdata_admin_meta_ontology_objects__object_name__delete",
+        "description": "删除本体对象类型（软删；certified 拒绝，级联软删属性与关系类型）。",
+        "operationId": "delete_ontology_object_type_api_chatdata_admin_meta_ontology_object_types__object_type_name__delete",
         "parameters": [
           {
             "in": "path",
-            "name": "object_name",
+            "name": "object_type_name",
             "required": true,
             "schema": {
-              "title": "Object Name",
+              "title": "Object Type Name",
               "type": "string"
             }
           }
@@ -7227,21 +7227,21 @@
             "ServiceToken": []
           }
         ],
-        "summary": "Delete Ontology Object",
+        "summary": "Delete Ontology Object Type",
         "tags": [
           "ChatData 本体管理（Admin）"
         ]
       },
       "get": {
-        "description": "本体对象详情（含属性集与绑定）。",
-        "operationId": "get_ontology_object_api_chatdata_admin_meta_ontology_objects__object_name__get",
+        "description": "本体对象类型详情（含属性集与绑定）。",
+        "operationId": "get_ontology_object_type_api_chatdata_admin_meta_ontology_object_types__object_type_name__get",
         "parameters": [
           {
             "in": "path",
-            "name": "object_name",
+            "name": "object_type_name",
             "required": true,
             "schema": {
-              "title": "Object Name",
+              "title": "Object Type Name",
               "type": "string"
             }
           }
@@ -7273,21 +7273,21 @@
             "ServiceToken": []
           }
         ],
-        "summary": "Get Ontology Object",
+        "summary": "Get Ontology Object Type",
         "tags": [
           "ChatData 本体管理（Admin）"
         ]
       },
       "put": {
-        "description": "创建/整体编辑本体对象（元数据 + 属性集 + 绑定一次性提交）。",
-        "operationId": "upsert_ontology_object_api_chatdata_admin_meta_ontology_objects__object_name__put",
+        "description": "创建/整体编辑本体对象类型（元数据 + 属性集 + 绑定一次性提交）。",
+        "operationId": "upsert_ontology_object_type_api_chatdata_admin_meta_ontology_object_types__object_type_name__put",
         "parameters": [
           {
             "in": "path",
-            "name": "object_name",
+            "name": "object_type_name",
             "required": true,
             "schema": {
-              "title": "Object Name",
+              "title": "Object Type Name",
               "type": "string"
             }
           }
@@ -7296,7 +7296,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/OntologyObjectUpsertRequest"
+                "$ref": "#/components/schemas/OntologyObjectTypeUpsertRequest"
               }
             }
           },
@@ -7329,23 +7329,23 @@
             "ServiceToken": []
           }
         ],
-        "summary": "Upsert Ontology Object",
+        "summary": "Upsert Ontology Object Type",
         "tags": [
           "ChatData 本体管理（Admin）"
         ]
       }
     },
-    "/api/chatdata/admin/meta/ontology/objects/{object_name}/domain": {
+    "/api/chatdata/admin/meta/ontology/object-types/{object_type_name}/domain": {
       "post": {
-        "description": "对象领域归属变更（拖拽换域窄写路径；domain_id=null 表示移出领域）。",
-        "operationId": "change_ontology_object_domain_api_chatdata_admin_meta_ontology_objects__object_name__domain_post",
+        "description": "对象类型领域归属变更（拖拽换域窄写路径；domain_id=null 表示移出领域）。",
+        "operationId": "change_ontology_object_type_domain_api_chatdata_admin_meta_ontology_object_types__object_type_name__domain_post",
         "parameters": [
           {
             "in": "path",
-            "name": "object_name",
+            "name": "object_type_name",
             "required": true,
             "schema": {
-              "title": "Object Name",
+              "title": "Object Type Name",
               "type": "string"
             }
           }
@@ -7354,7 +7354,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/OntologyObjectDomainRequest"
+                "$ref": "#/components/schemas/OntologyObjectTypeDomainRequest"
               }
             }
           },
@@ -7387,23 +7387,23 @@
             "ServiceToken": []
           }
         ],
-        "summary": "Change Ontology Object Domain",
+        "summary": "Change Ontology Object Type Domain",
         "tags": [
           "ChatData 本体管理（Admin）"
         ]
       }
     },
-    "/api/chatdata/admin/meta/ontology/objects/{object_name}/status": {
+    "/api/chatdata/admin/meta/ontology/object-types/{object_type_name}/status": {
       "post": {
-        "description": "本体对象状态迁移（升级/降级/废弃；关系状态按对象级联，降级自动、升级手动）。",
-        "operationId": "change_ontology_object_status_api_chatdata_admin_meta_ontology_objects__object_name__status_post",
+        "description": "本体对象类型状态迁移（升级/降级/废弃；关系类型状态按对象类型级联，降级自动、升级手动）。",
+        "operationId": "change_ontology_object_type_status_api_chatdata_admin_meta_ontology_object_types__object_type_name__status_post",
         "parameters": [
           {
             "in": "path",
-            "name": "object_name",
+            "name": "object_type_name",
             "required": true,
             "schema": {
-              "title": "Object Name",
+              "title": "Object Type Name",
               "type": "string"
             }
           }
@@ -7412,7 +7412,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/OntologyObjectStatusRequest"
+                "$ref": "#/components/schemas/OntologyObjectTypeStatusRequest"
               }
             }
           },
@@ -7445,16 +7445,16 @@
             "ServiceToken": []
           }
         ],
-        "summary": "Change Ontology Object Status",
+        "summary": "Change Ontology Object Type Status",
         "tags": [
           "ChatData 本体管理（Admin）"
         ]
       }
     },
-    "/api/chatdata/admin/meta/ontology/relations": {
+    "/api/chatdata/admin/meta/ontology/relation-types": {
       "get": {
-        "description": "本体关系列表（keyword 模糊过滤；from_object/to_object 按 API 名过滤）。",
-        "operationId": "list_ontology_relations_api_chatdata_admin_meta_ontology_relations_get",
+        "description": "本体关系类型列表（keyword 模糊过滤；from_object_type/to_object_type 按 API 名过滤）。",
+        "operationId": "list_ontology_relations_api_chatdata_admin_meta_ontology_relation_types_get",
         "parameters": [
           {
             "in": "query",
@@ -7474,7 +7474,7 @@
           },
           {
             "in": "query",
-            "name": "from_object",
+            "name": "from_object_type",
             "required": false,
             "schema": {
               "anyOf": [
@@ -7485,12 +7485,12 @@
                   "type": "null"
                 }
               ],
-              "title": "From Object"
+              "title": "From Object Type"
             }
           },
           {
             "in": "query",
-            "name": "to_object",
+            "name": "to_object_type",
             "required": false,
             "schema": {
               "anyOf": [
@@ -7501,7 +7501,7 @@
                   "type": "null"
                 }
               ],
-              "title": "To Object"
+              "title": "To Object Type"
             }
           }
         ],
@@ -7538,17 +7538,17 @@
         ]
       }
     },
-    "/api/chatdata/admin/meta/ontology/relations/{relation_name}": {
+    "/api/chatdata/admin/meta/ontology/relation-types/{relation_type_name}": {
       "delete": {
-        "description": "删除本体关系（软删）。",
-        "operationId": "delete_ontology_relation_api_chatdata_admin_meta_ontology_relations__relation_name__delete",
+        "description": "删除本体关系类型（软删）。",
+        "operationId": "delete_ontology_relation_api_chatdata_admin_meta_ontology_relation_types__relation_type_name__delete",
         "parameters": [
           {
             "in": "path",
-            "name": "relation_name",
+            "name": "relation_type_name",
             "required": true,
             "schema": {
-              "title": "Relation Name",
+              "title": "Relation Type Name",
               "type": "string"
             }
           }
@@ -7586,15 +7586,15 @@
         ]
       },
       "put": {
-        "description": "创建/编辑本体关系（连接对象、关联列、基数变更需破坏性确认）。",
-        "operationId": "upsert_ontology_relation_api_chatdata_admin_meta_ontology_relations__relation_name__put",
+        "description": "创建/编辑本体关系类型（连接对象类型、关联列、基数变更需破坏性确认）。",
+        "operationId": "upsert_ontology_relation_api_chatdata_admin_meta_ontology_relation_types__relation_type_name__put",
         "parameters": [
           {
             "in": "path",
-            "name": "relation_name",
+            "name": "relation_type_name",
             "required": true,
             "schema": {
-              "title": "Relation Name",
+              "title": "Relation Type Name",
               "type": "string"
             }
           }
@@ -7603,7 +7603,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/OntologyRelationUpsertRequest"
+                "$ref": "#/components/schemas/OntologyRelationTypeUpsertRequest"
               }
             }
           },
@@ -7642,17 +7642,17 @@
         ]
       }
     },
-    "/api/chatdata/admin/meta/ontology/relations/{relation_name}/status": {
+    "/api/chatdata/admin/meta/ontology/relation-types/{relation_type_name}/status": {
       "post": {
-        "description": "本体关系状态手动迁移（升级/降级；上限=两侧对象状态的较低者，deprecated 仅随对象级联）。",
-        "operationId": "change_ontology_relation_status_api_chatdata_admin_meta_ontology_relations__relation_name__status_post",
+        "description": "本体关系类型状态手动迁移（升级/降级；上限=两侧对象类型状态的较低者，deprecated 仅随对象类型级联）。",
+        "operationId": "change_ontology_relation_status_api_chatdata_admin_meta_ontology_relation_types__relation_type_name__status_post",
         "parameters": [
           {
             "in": "path",
-            "name": "relation_name",
+            "name": "relation_type_name",
             "required": true,
             "schema": {
-              "title": "Relation Name",
+              "title": "Relation Type Name",
               "type": "string"
             }
           }
@@ -7661,7 +7661,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/OntologyRelationStatusRequest"
+                "$ref": "#/components/schemas/OntologyRelationTypeStatusRequest"
               }
             }
           },

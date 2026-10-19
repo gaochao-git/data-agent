@@ -1103,9 +1103,9 @@ class ChatDataPlugin(Base):
 class ChatDataOntologyDomain(Base):
     """本体领域表：业务域实体，一对一绑定数据源组（一次绑定）。
 
-    领域是对象的业务切片（树面板分组）+ 取数后端锚点（组随领域继承）：对象挂
-    领域即确定其映射可选的模型范围（领域组内），关系两端对象同领域即合法。
-    组信息不在关系/映射层重复决策。领域名全局唯一；删除为软删，挂有对象时禁删。
+    领域是对象类型的业务切片（树面板分组）+ 取数后端锚点（组随领域继承）：对象类型挂
+    领域即确定其映射可选的模型范围（领域组内），关系类型两端对象类型同领域即合法。
+    组信息不在关系类型/映射层重复决策。领域名全局唯一；删除为软删，挂有对象类型时禁删。
     """
 
     __tablename__ = "chat_data_ontology_domain"
@@ -1114,7 +1114,7 @@ class ChatDataOntologyDomain(Base):
     domain_name: Mapped[str] = mapped_column(String(64), nullable=False)
     group_id: Mapped[str] = mapped_column(String(128), nullable=False)
     display_name: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
-    description: Mapped[str] = mapped_column(String(512), nullable=False, default="", server_default="")
+    description_text: Mapped[str] = mapped_column(String(512), nullable=False, default="", server_default="")
     delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
     update_time: Mapped[datetime] = mapped_column(
@@ -1175,26 +1175,26 @@ class ChatDataModelRegistry(Base):
     )
 
 
-class ChatDataOntologyObject(Base):
-    """本体对象表：对象/属性/关系三等实体之一（属性一等实体见 Property 表）。
+class ChatDataOntologyObjectType(Base):
+    """本体对象类型表：对象类型/属性/关系类型三等实体之一（属性一等实体见 Property 表）。
 
     语义模型绑定独立成映射表 chat_data_ontology_mapping（对齐 ossie
-    概念层/映射层分离，「一源一对象」由映射表唯一索引约束），本表只存概念层
+    概念层/映射层分离，「一源一对象类型」由映射表唯一索引约束），本表只存概念层
     元数据。主键=标识属性（is_identifier）组合，标题键=is_title 属性，均由属性
     表表达，本表不冗余存储。domain_id 指向领域实体（组随领域继承），NULL=未分域。
     """
 
-    __tablename__ = "chat_data_ontology_object"
+    __tablename__ = "chat_data_ontology_object_type"
 
     id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
-    object_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    object_type_name: Mapped[str] = mapped_column(String(128), nullable=False)
     display_name: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
-    description: Mapped[str] = mapped_column(String(1024), nullable=False, default="", server_default="")
-    status: Mapped[str] = mapped_column(String(16), nullable=False, default="draft", server_default="draft")
+    description_text: Mapped[str] = mapped_column(String(1024), nullable=False, default="", server_default="")
+    lifecycle_status: Mapped[str] = mapped_column(String(16), nullable=False, default="draft", server_default="draft")
     domain_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, default=None)
     deprecation_reason: Mapped[str] = mapped_column(String(512), nullable=False, default="", server_default="")
     deprecated_until: Mapped[datetime | None] = mapped_column(DateTime)
-    successor_object_name: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
+    successor_object_type_name: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
     delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
     update_time: Mapped[datetime] = mapped_column(
@@ -1206,9 +1206,9 @@ class ChatDataOntologyObject(Base):
     update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
 
     __table_args__ = (
-        UniqueConstraint("object_name", name="uniq_object_name"),
-        Index("idx_object_status", "status", "delete_flag"),
-        Index("idx_object_domain_id", "domain_id", "delete_flag"),
+        UniqueConstraint("object_type_name", name="uniq_object_type_name"),
+        Index("idx_object_type_status", "lifecycle_status", "delete_flag"),
+        Index("idx_object_type_domain_id", "domain_id", "delete_flag"),
     )
 
 
@@ -1224,10 +1224,10 @@ class ChatDataOntologyProperty(Base):
     __tablename__ = "chat_data_ontology_property"
 
     id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
-    object_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    object_type_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     property_name: Mapped[str] = mapped_column(String(128), nullable=False)
     display_name: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
-    description: Mapped[str] = mapped_column(String(1024), nullable=False, default="", server_default="")
+    description_text: Mapped[str] = mapped_column(String(1024), nullable=False, default="", server_default="")
     value_type: Mapped[str] = mapped_column(String(32), nullable=False, default="String", server_default="String")
     enum_ref: Mapped[str] = mapped_column(String(260), nullable=False, default="", server_default="")
     render_hints_json: Mapped[str | None] = mapped_column(Text)
@@ -1243,34 +1243,34 @@ class ChatDataOntologyProperty(Base):
     update_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
 
-    __table_args__ = (UniqueConstraint("object_id", "property_name", name="uniq_object_property"),)
+    __table_args__ = (UniqueConstraint("object_type_id", "property_name", name="uniq_object_type_property"),)
 
 
-class ChatDataOntologyRelation(Base):
-    """本体关系表：对齐 Palantir Link Type。
+class ChatDataOntologyRelationType(Base):
+    """本体关系类型表：对齐 Palantir Link Type。
 
-    基数仅 many_to_one/one_to_one（多对多走 junction 对象 + 两条 many_to_one
+    基数仅 many_to_one/one_to_one（多对多走 junction 对象类型 + 两条 many_to_one
     表达）。from_columns/to_columns 为等长数组 JSON 文本，顺序一一对应，目标侧
-    列必须引用对方标识属性。status 随对象级联：对象降级自动同步，升级手动确认。
+    列必须引用对方标识属性。lifecycle_status 随对象类型级联：对象类型降级自动同步，升级手动确认。
     """
 
-    __tablename__ = "chat_data_ontology_relation"
+    __tablename__ = "chat_data_ontology_relation_type"
 
     id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
-    relation_name: Mapped[str] = mapped_column(String(128), nullable=False)
-    from_object_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    to_object_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    relation_type_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    from_object_type_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    to_object_type_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     from_columns_json: Mapped[str | None] = mapped_column(Text)
     to_columns_json: Mapped[str | None] = mapped_column(Text)
-    multiplicity: Mapped[str] = mapped_column(
+    multiplicity_type: Mapped[str] = mapped_column(
         String(16), nullable=False, default="many_to_one", server_default="many_to_one"
     )
     from_display_name: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
     to_display_name: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
     from_verbalize: Mapped[str] = mapped_column(String(512), nullable=False, default="", server_default="")
     to_verbalize: Mapped[str] = mapped_column(String(512), nullable=False, default="", server_default="")
-    description: Mapped[str] = mapped_column(String(1024), nullable=False, default="", server_default="")
-    status: Mapped[str] = mapped_column(String(16), nullable=False, default="draft", server_default="draft")
+    description_text: Mapped[str] = mapped_column(String(1024), nullable=False, default="", server_default="")
+    lifecycle_status: Mapped[str] = mapped_column(String(16), nullable=False, default="draft", server_default="draft")
     delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
     update_time: Mapped[datetime] = mapped_column(
@@ -1282,27 +1282,27 @@ class ChatDataOntologyRelation(Base):
     update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
 
     __table_args__ = (
-        UniqueConstraint("relation_name", name="uniq_relation_name"),
-        Index("idx_relation_from", "from_object_id", "delete_flag"),
-        Index("idx_relation_to", "to_object_id", "delete_flag"),
+        UniqueConstraint("relation_type_name", name="uniq_relation_type_name"),
+        Index("idx_relation_from", "from_object_type_id", "delete_flag"),
+        Index("idx_relation_to", "to_object_type_id", "delete_flag"),
     )
 
 
-class ChatDataOntologyObjectMapping(Base):
-    """本体对象映射表：语义模型映射独立成表（对齐 ossie 映射文档）。
+class ChatDataOntologyObjectTypeMapping(Base):
+    """本体对象类型映射表：语义模型映射独立成表（对齐 ossie 映射文档）。
 
-    随对象 payload 提交、随对象 upsert 同事务全量重写（软删+重插，无独立生命
+    随对象类型 payload 提交、随对象类型 upsert 同事务全量重写（软删+重插，无独立生命
     周期与状态机）。delete_flag 语义特殊：0=活跃，软删时置为行 id——使软删行
-    不再占据唯一索引槽位，同源可重绑到其他对象。uniq_mapping_semantic_source
-    含 delete_flag，仍直接约束「一源一对象」：活跃行中一个语义模型映射全局只能
-    归属一个对象；column_mappings 口径 = {本体属性API名: 模型维度名}——本体层
+    不再占据唯一索引槽位，同源可重绑到其他对象类型。uniq_mapping_semantic_source
+    含 delete_flag，仍直接约束「一源一对象类型」：活跃行中一个语义模型映射全局只能
+    归属一个对象类型；column_mappings 口径 = {本体属性API名: 模型维度名}——本体层
     只引用模型维度（Ossie 映射文档同构），物理列解析是语义模型内部的事。
     """
 
     __tablename__ = "chat_data_ontology_mapping"
 
     id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
-    object_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    object_type_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     semantic_config_id: Mapped[str] = mapped_column(String(128), nullable=False)
     column_mappings_json: Mapped[str | None] = mapped_column(Text)
     delete_flag: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
@@ -1316,7 +1316,7 @@ class ChatDataOntologyObjectMapping(Base):
     update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
 
     __table_args__ = (
-        UniqueConstraint("object_id", "semantic_config_id", "delete_flag", name="uniq_mapping_object_source"),
+        UniqueConstraint("object_type_id", "semantic_config_id", "delete_flag", name="uniq_mapping_object_type_source"),
         UniqueConstraint("semantic_config_id", "delete_flag", name="uniq_mapping_semantic_source"),
-        Index("idx_mapping_object", "object_id"),
+        Index("idx_mapping_object_type", "object_type_id"),
     )

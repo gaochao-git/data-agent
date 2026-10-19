@@ -1,14 +1,14 @@
 <script setup lang="ts">
 /**
- * 本体对象创建/编辑弹窗：元数据 + 属性集 + 映射一次性整体提交（对齐后端 upsert 语义）。
+ * 本体对象类型创建/编辑弹窗：元数据 + 属性集 + 映射一次性整体提交（对齐后端 upsert 语义）。
  * 门禁交互：certified 冻结主键/标题键并禁删属性；映射/主键/标题键变更属破坏性，
  * 提交前弹显式确认（confirm_destructive=true）；deprecated 对象禁止编辑。
  */
 import { computed, ref, watch } from 'vue'
 import type { PropType } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { getAdminOntologyObject, upsertAdminOntologyObject } from '../../api'
-import type { OntologyDomainItem, OntologyMappingItem, OntologyObjectItem, OntologyPropertyItem } from '../../types'
+import { getAdminOntologyObjectType, upsertAdminOntologyObjectType } from '../../api'
+import type { OntologyDomainItem, OntologyMappingItem, OntologyObjectTypeItem, OntologyPropertyItem } from '../../types'
 import OntologyMappingEditor from './OntologyMappingEditor.vue'
 import OntologyPropertyEditor from './OntologyPropertyEditor.vue'
 import {
@@ -22,8 +22,8 @@ import {
 
 const props = defineProps({
   // 编辑的对象名；空串表示新建
-  objectName: { type: String, default: '' },
-  // 领域清单（父组件加载；对象挂领域=继承领域绑定的数据源组）
+  objectTypeName: { type: String, default: '' },
+  // 领域清单（父组件加载；对象类型挂领域=继承领域绑定的数据源组）
   domains: { type: Array as PropType<OntologyDomainItem[]>, default: () => [] },
   // 新建时的预选领域（树右键「新增对象」从领域节点发起）
   defaultDomainId: { type: Number as PropType<number | null>, default: null }
@@ -35,10 +35,10 @@ const visible = defineModel<boolean>('visible', { default: false })
 
 const loading = ref(false)
 const saving = ref(false)
-const editing = computed(() => !!props.objectName)
+const editing = computed(() => !!props.objectTypeName)
 
 // 既有对象元信息（编辑态回显状态门禁用）
-const loadedDetail = ref<OntologyObjectItem | null>(null)
+const loadedDetail = ref<OntologyObjectTypeItem | null>(null)
 
 const formName = ref('')
 const formDisplayName = ref('')
@@ -98,18 +98,18 @@ const resetForm = () => {
 
 const openLoad = async () => {
   resetForm()
-  if (!props.objectName) return
+  if (!props.objectTypeName) return
   loading.value = true
   try {
-    const res = await getAdminOntologyObject(props.objectName)
+    const res = await getAdminOntologyObjectType(props.objectTypeName)
     if (res.status !== 'success' || !res.data) {
-      ElMessage.error(res.msg || '获取对象详情失败')
+      ElMessage.error(res.msg || '获取对象类型详情失败')
       visible.value = false
       return
     }
     const detail = res.data
     loadedDetail.value = detail
-    formName.value = detail.object_name
+    formName.value = detail.object_type_name
     formDisplayName.value = detail.display_name
     formDescription.value = detail.description
     formDomainId.value = detail.domain_id ?? null
@@ -117,7 +117,7 @@ const openLoad = async () => {
     mappingRows.value = (detail.mappings || []).map(item => ({ ...item, column_mappings: { ...(item.column_mappings || {}) } }))
   } catch (err) {
     // 拦截器已弹出具体错误原因，不再重复提示
-    console.error('获取本体对象详情失败:', err)
+    console.error('获取本体对象类型详情失败:', err)
     visible.value = false
   } finally {
     loading.value = false
@@ -141,7 +141,7 @@ const destructiveActions = computed(() => {
   if (JSON.stringify(oldIds) !== JSON.stringify(newIds) || JSON.stringify(oldTitles) !== JSON.stringify(newTitles)) {
     actions.push('主键组合或标题键变更')
   }
-  // 详情行由服务端附带 object_id/binding_type 等附加键，必须与表单行按同一口径规范化后再比较，
+  // 详情行由服务端附带 object_type_id/binding_type 等附加键，必须与表单行按同一口径规范化后再比较，
   // 否则对象只要有映射就会误判为「映射变更」，每次编辑都弹破坏性确认。
   if (haveMappingsChanged(detail.mappings, mappingRows.value)) {
     actions.push('映射变更')
@@ -161,11 +161,11 @@ const onPropertyRemoved = (propertyName: string) => {
 // ---------- 提交 ----------
 
 const validateForm = (): string => {
-  if (!formName.value.trim()) return '请填写对象名'
-  if (!ONTOLOGY_NAME_PATTERN.test(formName.value.trim())) return '对象名仅允许字母、数字、下划线，长度 1-128'
+  if (!formName.value.trim()) return '请填写对象类型名'
+  if (!ONTOLOGY_NAME_PATTERN.test(formName.value.trim())) return '对象类型名仅允许字母、数字、下划线，长度 1-128'
   if (!formDisplayName.value.trim()) return '请填写展示名'
   const rows = propertyRows.value
-  if (rows.length === 0) return '对象至少需要一个属性'
+  if (rows.length === 0) return '对象类型至少需要一个属性'
   const seen = new Set<string>()
   let identifierCount = 0
   let titleCount = 0
@@ -180,8 +180,8 @@ const validateForm = (): string => {
     if (row.is_identifier) identifierCount += 1
     if (row.is_title) titleCount += 1
   }
-  if (identifierCount < 1) return '对象至少需要一个标识属性（主键），禁止用自增行号当主键'
-  if (titleCount > 1) return '对象至多一个标题属性'
+  if (identifierCount < 1) return '对象类型至少需要一个标识属性（主键），禁止用自增行号当主键'
+  if (titleCount > 1) return '对象类型至多一个标题属性'
   const staleMappingKeys = staleMappingPropertyNames(
     mappingRows.value,
     rows.map(row => row.property_name)
@@ -224,7 +224,7 @@ const saveObject = async () => {
   }
   saving.value = true
   try {
-    const res = await upsertAdminOntologyObject(formName.value.trim(), {
+    const res = await upsertAdminOntologyObjectType(formName.value.trim(), {
       display_name: formDisplayName.value.trim(),
       description: formDescription.value.trim(),
       domain_id: formDomainId.value,
@@ -258,8 +258,8 @@ const saveObject = async () => {
       ElMessage.error(res.msg || '保存失败')
     }
   } catch (err) {
-    // 拦截器已弹出具体错误原因（如一源一对象冲突、枚举不存在），不再重复提示
-    console.error('保存本体对象失败:', err)
+    // 拦截器已弹出具体错误原因（如一源一对象类型冲突、枚举不存在），不再重复提示
+    console.error('保存本体对象类型失败:', err)
   } finally {
     saving.value = false
   }
@@ -270,7 +270,7 @@ const saveObject = async () => {
   <el-dialog v-model="visible" width="min(1080px, 96vw)" :append-to-body="true" :close-on-click-modal="false">
     <template #header>
       <span class="text-base font-medium text-slate-800">
-        {{ editing ? `编辑本体对象：${objectName}` : '新建本体对象' }}
+        {{ editing ? `编辑对象类型：${objectTypeName}` : '新建对象类型' }}
       </span>
       <span
         v-if="loadedDetail?.status === 'certified'"
@@ -284,7 +284,7 @@ const saveObject = async () => {
       <!-- 基本信息 -->
       <div class="grid grid-cols-2 gap-3">
         <div>
-          <div class="mb-1 text-xs text-slate-500">对象名（创建后不可改）</div>
+          <div class="mb-1 text-xs text-slate-500">对象类型名（创建后不可改）</div>
           <el-input v-model="formName" size="small" :disabled="editing" placeholder="仅字母、数字、下划线，如 sales_order" class="font-mono" />
         </div>
         <div>
@@ -307,7 +307,7 @@ const saveObject = async () => {
         </div>
         <div>
           <div class="mb-1 text-xs text-slate-500">描述</div>
-          <el-input v-model="formDescription" size="small" maxlength="1024" placeholder="对象业务含义（进入 agent 上下文）" />
+          <el-input v-model="formDescription" size="small" maxlength="1024" placeholder="对象类型业务含义（进入 agent 上下文）" />
         </div>
       </div>
 
@@ -334,7 +334,7 @@ const saveObject = async () => {
           <div class="flex flex-col">
             <span class="text-xs font-medium text-slate-600">语义模型映射</span>
             <span class="text-[11px] text-slate-400">
-              层级 = 数据源组 → 语义模型 → 维度映射（不触碰物理表）：口径权威在语义层；每个语义模型映射只能归属一个对象；认证前至少需要一个映射
+              层级 = 数据源组 → 语义模型 → 维度映射（不触碰物理表）：口径权威在语义层；每个语义模型映射只能归属一个对象类型；认证前至少需要一个映射
             </span>
           </div>
           <el-button size="small" link type="primary" @click="addMappingRow">

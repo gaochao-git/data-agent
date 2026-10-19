@@ -1,7 +1,7 @@
-"""本体校验器：对象/属性/关系的字段与结构红线校验（确定性规则）。
+"""本体校验器：对象类型/属性/关系类型的字段与结构红线校验（确定性规则）。
 
 校验器只做封闭词表、格式、结构一致性检查（对齐 Palantir Ontology Manager 的
-error 分级，全部 error 阻断）；涉及数据库存在性的校验（对象存在、全局枚举
+error 分级，全部 error 阻断）；涉及数据库存在性的校验（对象类型存在、全局枚举
 存在、绑定唯一归属）在 service 层组合完成。校验失败统一抛
 OntologyInvalidError / OntologyNameInvalidError。
 """
@@ -35,9 +35,9 @@ API_NAME_MAX_LENGTH = 128
 
 
 def validate_api_name(name: str, label: str, *, max_length: int = API_NAME_MAX_LENGTH) -> str:
-    """API 名（对象/属性/关系/领域共用）格式校验，返回规范化名称。
+    """API 名（对象类型/属性/关系类型/领域共用）格式校验，返回规范化名称。
 
-    max_length 默认 128（对象/属性/关系落库列长度一致）；领域名落库列仅 64，
+    max_length 默认 128（对象类型/属性/关系类型落库列长度一致）；领域名落库列仅 64，
     调用方必须显式传入，避免通过校验后写库触发 StatementError。
     """
     text = str(name or "").strip()
@@ -54,14 +54,14 @@ def _normalized_text(value: Any) -> str:
     return str(value or "").strip()
 
 
-def validate_object_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    """校验并规范化对象元数据字段（不含 status，状态走独立接口）。"""
+def validate_object_type_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """校验并规范化对象类型元数据字段（不含 status，状态走独立接口）。"""
     display_name = _normalized_text(payload.get("display_name"))
     if not display_name or len(display_name) > 128:
-        raise _invalid("对象展示名必填且不超过 128 字符")
+        raise _invalid("对象类型展示名必填且不超过 128 字符")
     description = _normalized_text(payload.get("description"))
     if len(description) > 1024:
-        raise _invalid("对象描述不超过 1024 字符")
+        raise _invalid("对象类型描述不超过 1024 字符")
     domain_id = payload.get("domain_id")
     if domain_id is not None and not isinstance(domain_id, int):
         raise _invalid("领域ID必须为整数或空")
@@ -93,7 +93,7 @@ def validate_domain_payload(payload: dict[str, Any]) -> dict[str, Any]:
 def validate_property_items(raw_items: Any) -> list[dict[str, Any]]:
     """校验并规范化属性列表（结构红线：唯一、类型封闭词表、主键/标题规则）。"""
     if not isinstance(raw_items, list) or not raw_items:
-        raise _invalid("对象至少需要一个属性")
+        raise _invalid("对象类型至少需要一个属性")
     seen: set[str] = set()
     title_count = 0
     identifier_count = 0
@@ -105,9 +105,9 @@ def validate_property_items(raw_items: Any) -> list[dict[str, Any]]:
         title_count += 1 if item["is_title"] else 0
         items.append(item)
     if identifier_count < 1:
-        raise _invalid("对象至少需要一个标识属性（is_identifier）作为主键组成，禁止用自增行号当主键")
+        raise _invalid("对象类型至少需要一个标识属性（is_identifier）作为主键组成，禁止用自增行号当主键")
     if title_count > 1:
-        raise _invalid("对象至多一个标题属性（is_title）")
+        raise _invalid("对象类型至多一个标题属性（is_title）")
     return items
 
 
@@ -157,46 +157,46 @@ def _validate_render_hints(property_name: str, raw_hints: Any) -> dict[str, bool
     return hints
 
 
-def validate_mappings(raw_mappings: Any, property_names: set[str], object_name_for_error: str) -> list[dict[str, Any]]:
+def validate_mappings(raw_mappings: Any, property_names: set[str], object_type_name_for_error: str) -> list[dict[str, Any]]:
     """校验并规范化语义模型映射列表，返回标准化条目。
 
     本体统一基于语义模型（Palantir 物化物理表，我们物化语义模型），不触碰物理表。
     映射层级 = 组 → 模型 → 维度映射（Ossie 映射文档只引用语义模型，物理表解析是
     模型文档内部的事）。存在性校验（semantic_config 是否真实存在）、维度存在性、
-    同表锚点与「一源一对象」唯一归属检查由 service 层完成；本函数只做结构红线。
+    同表锚点与「一源一对象类型」唯一归属检查由 service 层完成；本函数只做结构红线。
     """
     if raw_mappings is None:
         return []
     if not isinstance(raw_mappings, list):
-        raise _invalid(f"对象 {object_name_for_error} 的映射必须是数组")
+        raise _invalid(f"对象类型 {object_type_name_for_error} 的映射必须是数组")
     identities: set[str] = set()
-    return [_validate_mapping_item(raw, identities, property_names, object_name_for_error) for raw in raw_mappings]
+    return [_validate_mapping_item(raw, identities, property_names, object_type_name_for_error) for raw in raw_mappings]
 
 
 def _validate_mapping_item(
     raw: Any,
     identities: set[str],
     property_names: set[str],
-    object_name_for_error: str,
+    object_type_name_for_error: str,
 ) -> dict[str, Any]:
     """校验单条映射：semantic_config_id 必填、字段映射引用已定义属性且维度名非空。"""
     if not isinstance(raw, dict):
-        raise _invalid(f"对象 {object_name_for_error} 的映射条目格式非法")
+        raise _invalid(f"对象类型 {object_type_name_for_error} 的映射条目格式非法")
     subject = _normalized_text(raw.get("semantic_config_id"))
     if not subject:
         raise _invalid("映射必须提供 semantic_config_id")
     if subject in identities:
-        raise _invalid(f"对象 {object_name_for_error} 存在重复映射: {subject}")
+        raise _invalid(f"对象类型 {object_type_name_for_error} 存在重复映射: {subject}")
     identities.add(subject)
     return {
         "binding_type": BINDING_TYPE_SEMANTIC,
         "semantic_config_id": subject,
-        "column_mappings": _validate_column_mappings(raw.get("column_mappings"), property_names, object_name_for_error),
+        "column_mappings": _validate_column_mappings(raw.get("column_mappings"), property_names, object_type_name_for_error),
     }
 
 
 def _validate_column_mappings(
-    raw_mappings: Any, property_names: set[str], object_name_for_error: str
+    raw_mappings: Any, property_names: set[str], object_type_name_for_error: str
 ) -> dict[str, str]:
     """字段映射红线：必须是对象且引用的属性已定义、维度名非空。"""
     if not isinstance(raw_mappings, dict):
@@ -206,7 +206,7 @@ def _validate_column_mappings(
         prop_name = _normalized_text(prop)
         dimension_name = _normalized_text(dimension)
         if prop_name not in property_names:
-            raise _invalid(f"映射 column_mappings 引用了未定义属性: {prop_name}（对象 {object_name_for_error}）")
+            raise _invalid(f"映射 column_mappings 引用了未定义属性: {prop_name}（对象类型 {object_type_name_for_error}）")
         if not dimension_name:
             raise _invalid(f"属性 {prop_name} 的映射维度名不能为空")
         normalized[prop_name] = dimension_name
@@ -214,10 +214,10 @@ def _validate_column_mappings(
 
 
 def validate_relation_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    """校验并规范化关系字段（结构红线：基数封闭词表、方向列等长非空）。"""
+    """校验并规范化关系类型字段（结构红线：基数封闭词表、方向列等长非空）。"""
     multiplicity = _normalized_text(payload.get("multiplicity")) or "many_to_one"
     if multiplicity not in RELATION_MULTIPLICITIES:
-        raise _invalid(f"关系基数必须是 {'/'.join(RELATION_MULTIPLICITIES)} 之一（多对多用 junction 对象表达）")
+        raise _invalid(f"关系类型基数必须是 {'/'.join(RELATION_MULTIPLICITIES)} 之一（多对多用 junction 对象类型表达）")
     from_columns = _validate_column_list(payload.get("from_columns"), "起始侧")
     to_columns = _validate_column_list(payload.get("to_columns"), "目标侧")
     if len(from_columns) != len(to_columns):
@@ -226,9 +226,9 @@ def validate_relation_payload(payload: dict[str, Any]) -> dict[str, Any]:
     for key, label, limit in (
         ("from_display_name", "正向展示名", 128),
         ("to_display_name", "反向展示名", 128),
-        ("from_verbalize", "正向关系模式串", 512),
-        ("to_verbalize", "反向关系模式串", 512),
-        ("description", "关系描述", 1024),
+        ("from_verbalize", "正向关系类型模式串", 512),
+        ("to_verbalize", "反向关系类型模式串", 512),
+        ("description", "关系类型描述", 1024),
     ):
         value = _normalized_text(payload.get(key))
         if len(value) > limit:

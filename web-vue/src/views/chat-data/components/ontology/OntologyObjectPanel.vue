@@ -1,33 +1,33 @@
 <script setup lang="ts">
 /**
- * 后台管理 · 本体对象列表面板（左树右详情）。
- * 左侧「本体 → 业务领域 → 对象/关系 → 属性/映射」完全树形导航（对象子节点懒加载），
+ * 后台管理 · 本体对象类型面板（左树右详情）。
+ * 左侧「本体 → 业务领域 → 对象类型/关系类型 → 属性/映射」完全树形导航（对象类型子节点懒加载），
  * 右侧按选中节点类型渲染只读详情卡；全部写操作（新建/编辑/状态/删除）收敛到右键菜单。
  * 归属口径：属性/映射是对象自有物，挂对象下；关系是对象之间的边（双规范对齐 Palantir link type / Ossie
  * top-level relationships），挂领域下（两端同域一条、跨域两端各一条带「跨域」标记），不放对象里。
- * 领域=业务域实体，一对一绑定数据源组（对象挂领域继承其组）；领域子节点为常驻「对象/关系」分组锚点。
+ * 领域=业务域实体，一对一绑定数据源组（对象类型挂领域继承其组）；领域子节点为常驻「对象类型/关系类型」分组锚点。
  */
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { TreeInstance } from 'element-plus'
 import AdminPanelToolbar from '../AdminPanelToolbar.vue'
 import {
-  changeAdminOntologyObjectDomain,
+  changeAdminOntologyObjectTypeDomain,
   deleteAdminOntologyDomain,
-  deleteAdminOntologyObject,
+  deleteAdminOntologyObjectType,
   getAdminOntologyDomains,
-  getAdminOntologyObject,
-  getAdminOntologyObjects,
-  getAdminOntologyRelations,
+  getAdminOntologyObjectType,
+  getAdminOntologyObjectTypes,
+  getAdminOntologyRelationTypes,
   getAdminDatasources
 } from '../../api'
 import type {
   OntologyDomainItem,
   OntologyMappingItem,
-  OntologyObjectItem,
-  OntologyObjectStatus,
+  OntologyObjectTypeItem,
+  OntologyObjectTypeStatus,
   OntologyPropertyItem,
-  OntologyRelationItem
+  OntologyRelationTypeItem
 } from '../../types'
 import OntologyConsistencyDialog from './OntologyConsistencyDialog.vue'
 import OntologyDomainForm from './OntologyDomainForm.vue'
@@ -99,48 +99,48 @@ const mappingLabel = (mapping: OntologyMappingItem): string =>
   optionOf(mapping.semantic_config_id)?.label || mappingIdentityText(mapping)
 
 const loading = ref(false)
-const items = ref<OntologyObjectItem[]>([])
+const items = ref<OntologyObjectTypeItem[]>([])
 const keyword = ref('')
-const filterStatus = ref<OntologyObjectStatus | undefined>(undefined)
+const filterStatus = ref<OntologyObjectTypeStatus | undefined>(undefined)
 const filterDomainId = ref<number | undefined>(undefined)
 const hasLoaded = ref(false)
 
 // 关系分组数据源（不受工具栏筛选影响）：全量对象用于「对象→领域」映射，全量关系用于领域关系组
-const allObjects = ref<OntologyObjectItem[]>([])
-const relations = ref<OntologyRelationItem[]>([])
+const allObjects = ref<OntologyObjectTypeItem[]>([])
+const relation_types = ref<OntologyRelationTypeItem[]>([])
 
 const loadRelationSources = async () => {
   try {
     const [objectRes, relationRes] = await Promise.all([
-      getAdminOntologyObjects({}),
-      getAdminOntologyRelations({})
+      getAdminOntologyObjectTypes({}),
+      getAdminOntologyRelationTypes({})
     ])
-    if (objectRes.status === 'success') allObjects.value = objectRes.data?.objects || []
-    if (relationRes.status === 'success') relations.value = relationRes.data?.relations || []
+    if (objectRes.status === 'success') allObjects.value = objectRes.data?.object_types || []
+    if (relationRes.status === 'success') relation_types.value = relationRes.data?.relation_types || []
   } catch (err) {
     console.error('获取本体关系分组数据失败:', err)
   }
 }
 
 // 对象 API 名 → 领域主键（null=未归领域）；关系按两端对象的领域归组
-const objectDomainMap = computed(() => {
+const objectTypeDomainMap = computed(() => {
   const map = new Map<string, number | null>()
-  for (const item of allObjects.value) map.set(item.object_name, item.domain_id)
+  for (const item of allObjects.value) map.set(item.object_type_name, item.domain_id)
   return map
 })
 
 // 对象 API 名 → 展示名（关系的树行/详情卡直接显示两端对象，避免角色短语造成歧义）
 const objectDisplayMap = computed(() => {
   const map = new Map<string, string>()
-  for (const item of allObjects.value) map.set(item.object_name, item.display_name || item.object_name)
+  for (const item of allObjects.value) map.set(item.object_type_name, item.display_name || item.object_type_name)
   return map
 })
-const objectDisplayOf = (objectName: string | undefined) =>
-  (objectName && objectDisplayMap.value.get(objectName)) || objectName || '-'
+const objectTypeDisplayOf = (objectTypeName: string | undefined) =>
+  (objectTypeName && objectDisplayMap.value.get(objectTypeName)) || objectTypeName || '-'
 
 // 域筛选项已由领域清单接口提供（domains ref），不再从对象行提取
 
-// ---------- 树节点类型：本体 → 领域 → 对象/关系 → 属性/映射 ----------
+// ---------- 树节点类型：本体 → 领域 → 对象类型/关系类型 → 属性/映射 ----------
 
 const UNGROUPED_DOMAIN = '未归领域'
 // 常驻本体：展示层锚点（右键新增业务领域），非数据实体，DB 无层级字段
@@ -164,15 +164,15 @@ interface DomainNode {
   group_id: string
   is_ungrouped: boolean
   /** 领域下对象数（领域行直接展示，不必展开「对象」分组） */
-  object_count: number
+  object_type_count: number
   children: TreeRow[]
 }
 interface ObjectNodeData {
   row_key: string
-  kind: 'object'
-  object_name: string
+  kind: 'object_type'
+  object_type_name: string
   display_name: string
-  status: OntologyObjectStatus
+  status: OntologyObjectTypeStatus
   domain_id: number | null
   domain_label: string
   description: string
@@ -190,7 +190,7 @@ interface PropertyNode {
 interface RelationNode {
   row_key: string
   kind: 'relation'
-  relation: OntologyRelationItem
+  relation: OntologyRelationTypeItem
   /** 两端对象分属不同领域（跨域关系在两端领域各显示一次，带「跨域」标记） */
   is_cross_domain: boolean
   is_leaf: true
@@ -201,15 +201,15 @@ interface GroupNode {
   kind: 'group'
   group: 'property' | 'mapping'
   label: string
-  object_name: string
+  object_type_name: string
   children: TreeRow[]
   is_leaf: false
 }
-/** 领域子节点分组（对象/关系）：常驻右键锚点——对象组管新建对象，关系组管新建关系 */
+/** 领域子节点分组（对象类型/关系类型）：常驻右键锚点——对象类型组管新建对象类型，关系类型组管新建关系类型 */
 interface DomainGroupNode {
   row_key: string
   kind: 'domain-group'
-  group: 'objects' | 'relations'
+  group: 'object_types' | 'relation_types'
   label: string
   domain_id: number | null
   children: TreeRow[]
@@ -232,10 +232,10 @@ type TreeRow = RootNode | DomainNode | DomainGroupNode | ObjectNodeData | GroupN
 // 数据版本号：编入对象节点 key，列表刷新/保存后懒加载缓存整体失效，防止展示脏数据
 const dataVersion = ref(0)
 
-const toObjectNode = (item: OntologyObjectItem): ObjectNodeData => ({
-  row_key: `object:${item.object_name}:v${dataVersion.value}`,
-  kind: 'object',
-  object_name: item.object_name,
+const toObjectNode = (item: OntologyObjectTypeItem): ObjectNodeData => ({
+  row_key: `object:${item.object_type_name}:v${dataVersion.value}`,
+  kind: 'object_type',
+  object_type_name: item.object_type_name,
   display_name: item.display_name,
   status: item.status,
   domain_id: item.domain_id,
@@ -248,11 +248,11 @@ const toObjectNode = (item: OntologyObjectItem): ObjectNodeData => ({
 })
 
 // 关系按两端对象的领域归组：同域一条；跨域在两端领域各显示一条（同一关系、不同出现位置）
-const relationNodesByDomain = computed(() => {
+const relationTypeNodesByDomain = computed(() => {
   const map = new Map<number | null, RelationNode[]>()
-  for (const rel of relations.value) {
-    const fromDomain = objectDomainMap.value.get(rel.from_object_name || '')
-    const toDomain = objectDomainMap.value.get(rel.to_object_name || '')
+  for (const rel of relation_types.value) {
+    const fromDomain = objectTypeDomainMap.value.get(rel.from_object_type_name || '')
+    const toDomain = objectTypeDomainMap.value.get(rel.to_object_type_name || '')
     if (fromDomain === undefined && toDomain === undefined) continue
     const isCrossDomain = fromDomain !== undefined && toDomain !== undefined && fromDomain !== toDomain
     const buckets = new Set<number | null>()
@@ -261,7 +261,7 @@ const relationNodesByDomain = computed(() => {
     for (const bucket of buckets) {
       if (!map.has(bucket)) map.set(bucket, [])
       map.get(bucket)!.push({
-        row_key: `rel:${domainBucketKey(bucket)}:${rel.relation_name}`,
+        row_key: `rel:${domainBucketKey(bucket)}:${rel.relation_type_name}`,
         kind: 'relation',
         relation: rel,
         is_cross_domain: isCrossDomain,
@@ -272,34 +272,34 @@ const relationNodesByDomain = computed(() => {
   return map
 })
 
-// 领域子节点=常驻「对象/关系」两个分组锚点（空组保留占位，右键入口始终可用）
-const buildDomainChildren = (domainId: number | null, domainObjects: OntologyObjectItem[]): TreeRow[] => {
+// 领域子节点=常驻「对象类型/关系类型」两个分组锚点（空组保留占位，右键入口始终可用）
+const buildDomainChildren = (domainId: number | null, domainObjects: OntologyObjectTypeItem[]): TreeRow[] => {
   const bucket = domainBucketKey(domainId)
-  const objectNodes: TreeRow[] = domainObjects.map(toObjectNode)
-  if (objectNodes.length === 0) {
-    objectNodes.push({ row_key: `domain-group:${bucket}:objects:empty`, kind: 'empty', label: '暂无对象', is_leaf: true })
+  const objectTypeNodes: TreeRow[] = domainObjects.map(toObjectNode)
+  if (objectTypeNodes.length === 0) {
+    objectTypeNodes.push({ row_key: `domain-group:${bucket}:object_types:empty`, kind: 'empty', label: '暂无对象类型', is_leaf: true })
   }
-  const relationNodes: TreeRow[] = relationNodesByDomain.value.get(domainId) || []
-  if (relationNodes.length === 0) {
-    relationNodes.push({ row_key: `domain-group:${bucket}:relations:empty`, kind: 'empty', label: '暂无关系', is_leaf: true })
+  const relationTypeNodes: TreeRow[] = relationTypeNodesByDomain.value.get(domainId) || []
+  if (relationTypeNodes.length === 0) {
+    relationTypeNodes.push({ row_key: `domain-group:${bucket}:relation_types:empty`, kind: 'empty', label: '暂无关系类型', is_leaf: true })
   }
   return [
     {
-      row_key: `domain-group:${bucket}:objects`,
+      row_key: `domain-group:${bucket}:object_types`,
       kind: 'domain-group',
-      group: 'objects',
-      label: '对象',
+      group: 'object_types',
+      label: '对象类型',
       domain_id: domainId,
-      children: objectNodes,
+      children: objectTypeNodes,
       is_leaf: false
     },
     {
-      row_key: `domain-group:${bucket}:relations`,
+      row_key: `domain-group:${bucket}:relation_types`,
       kind: 'domain-group',
-      group: 'relations',
-      label: '关系',
+      group: 'relation_types',
+      label: '关系类型',
       domain_id: domainId,
-      children: relationNodes,
+      children: relationTypeNodes,
       is_leaf: false
     }
   ]
@@ -307,8 +307,8 @@ const buildDomainChildren = (domainId: number | null, domainObjects: OntologyObj
 
 const treeData = computed<RootNode[]>(() => {
   // 对象按 domain_id 分组挂到领域；未挂领域的进「未归领域」常驻兜底节点
-  const grouped = new Map<number, OntologyObjectItem[]>()
-  const ungrouped: OntologyObjectItem[] = []
+  const grouped = new Map<number, OntologyObjectTypeItem[]>()
+  const ungrouped: OntologyObjectTypeItem[] = []
   for (const item of items.value) {
     if (item.domain_id == null) ungrouped.push(item)
     else {
@@ -325,7 +325,7 @@ const treeData = computed<RootNode[]>(() => {
     description: domain.description || '',
     group_id: domain.group_id,
     is_ungrouped: false,
-    object_count: (grouped.get(domain.id) || []).length,
+    object_type_count: (grouped.get(domain.id) || []).length,
     children: buildDomainChildren(domain.id, grouped.get(domain.id) || [])
   }))
   domainNodes.push({
@@ -337,7 +337,7 @@ const treeData = computed<RootNode[]>(() => {
     description: '未挂业务领域的对象：不继承任何数据源组，建议补齐领域归属。',
     group_id: '',
     is_ungrouped: true,
-    object_count: ungrouped.length,
+    object_type_count: ungrouped.length,
     children: buildDomainChildren(null, ungrouped)
   })
   // 常驻本体单顶层：业务领域全部挂本体下（展示层锚点，非数据实体）
@@ -345,7 +345,7 @@ const treeData = computed<RootNode[]>(() => {
 })
 
 // 本体/领域/对象分组默认展开（key 稳定；对象节点 key 带版本号，保存/刷新后重新折叠）
-// 默认只展开本体与领域层；对象/关系分组默认收起（保持树紧凑），展开与否随用户操作
+// 默认只展开本体与领域层；对象类型/关系类型分组默认收起（保持树紧凑），展开与否随用户操作
 const defaultExpandedKeys = computed(() => [
   ROOT_ROW_KEY,
   ...treeData.value[0]?.children.map(row => row.row_key) || []
@@ -354,9 +354,9 @@ const defaultExpandedKeys = computed(() => [
 // ---------- 对象子节点懒加载 + 详情缓存（树子行与右侧详情共用一次取数） ----------
 
 interface ObjectDetailEntry {
-  detail: OntologyObjectItem
-  fromRelations: OntologyRelationItem[]
-  toRelations: OntologyRelationItem[]
+  detail: OntologyObjectTypeItem
+  fromRelations: OntologyRelationTypeItem[]
+  toRelations: OntologyRelationTypeItem[]
 }
 
 const treeRef = ref<TreeInstance>()
@@ -381,7 +381,7 @@ const buildChildRows = (objectNode: ObjectNodeData, entry: ObjectDetailEntry): T
   const rows: TreeRow[] = []
   const pushGroup = (group: GroupNode['group'], label: string, children: TreeRow[]) => {
     if (children.length > 0) {
-      rows.push({ row_key: `${objectNode.row_key}:group:${group}`, kind: 'group', group, label, object_name: objectNode.object_name, children, is_leaf: false })
+      rows.push({ row_key: `${objectNode.row_key}:group:${group}`, kind: 'group', group, label, object_type_name: objectNode.object_type_name, children, is_leaf: false })
     }
   }
   pushGroup('property', '属性', propertyChildren)
@@ -397,9 +397,9 @@ const fetchObjectEntry = async (objectNode: ObjectNodeData) => {
   objectLoadState.value = { ...objectLoadState.value, [key]: 'loading' }
   try {
     const [detailRes, fromRes, toRes] = await Promise.all([
-      getAdminOntologyObject(objectNode.object_name),
-      getAdminOntologyRelations({ from_object: objectNode.object_name }),
-      getAdminOntologyRelations({ to_object: objectNode.object_name })
+      getAdminOntologyObjectType(objectNode.object_type_name),
+      getAdminOntologyRelationTypes({ from_object_type: objectNode.object_type_name }),
+      getAdminOntologyRelationTypes({ to_object_type: objectNode.object_type_name })
     ])
     if (detailRes.status !== 'success' || !detailRes.data || fromRes.status !== 'success' || toRes.status !== 'success') {
       const msg = detailRes.msg || fromRes.msg || toRes.msg || '获取对象详情失败'
@@ -409,15 +409,15 @@ const fetchObjectEntry = async (objectNode: ObjectNodeData) => {
     }
     const entry: ObjectDetailEntry = {
       detail: detailRes.data,
-      fromRelations: fromRes.data?.relations || [],
-      toRelations: toRes.data?.relations || []
+      fromRelations: fromRes.data?.relation_types || [],
+      toRelations: toRes.data?.relation_types || []
     }
     detailStore.value = { ...detailStore.value, [key]: entry }
     objectLoadState.value = { ...objectLoadState.value, [key]: 'ready' }
     treeRef.value?.updateKeyChildren?.(key, buildChildRows(objectNode, entry))
   } catch (err) {
     // 拦截器已弹出具体错误原因，不再重复提示
-    console.error('加载本体对象详情失败:', err)
+    console.error('加载本体对象类型详情失败:', err)
     objectLoadState.value = { ...objectLoadState.value, [key]: 'error' }
   }
 }
@@ -429,7 +429,7 @@ const ensureObjectData = (objectNode: ObjectNodeData) => {
 }
 
 const retrySelectedObject = () => {
-  if (selectedNode.value?.kind === 'object') void fetchObjectEntry(selectedNode.value)
+  if (selectedNode.value?.kind === 'object_type') void fetchObjectEntry(selectedNode.value)
 }
 
 // ---------- 节点选中与树事件 ----------
@@ -445,17 +445,17 @@ const onNodeClick = (data: TreeRow) => {
   if (data.kind === 'root' || data.kind === 'group' || data.kind === 'domain-group' || data.kind === 'empty') return
   selectedNode.value = data
   currentNodeKey.value = data.row_key
-  if (data.kind === 'object') ensureObjectData(data)
+  if (data.kind === 'object_type') ensureObjectData(data)
 }
 
 const onNodeExpand = (data: TreeRow) => {
-  if (data.kind === 'object') ensureObjectData(data)
+  if (data.kind === 'object_type') ensureObjectData(data)
 }
 
 // ---------- 右侧详情派生 ----------
 
 const selectedObject = computed(() => {
-  if (selectedNode.value?.kind !== 'object') return null
+  if (selectedNode.value?.kind !== 'object_type') return null
   const node = selectedNode.value
   return {
     node,
@@ -466,7 +466,7 @@ const selectedObject = computed(() => {
 
 const selectedObjectStatusMeta = computed(() => {
   const node = selectedNode.value
-  if (!node || node.kind !== 'object') return null
+  if (!node || node.kind !== 'object_type') return null
   return ONTOLOGY_STATUS_META[node.status as keyof typeof ONTOLOGY_STATUS_META] || null
 })
 
@@ -484,25 +484,25 @@ const mappingMappingText = (mapping: OntologyMappingItem) => {
 const loadObjects = async () => {
   loading.value = true
   try {
-    const res = await getAdminOntologyObjects({
+    const res = await getAdminOntologyObjectTypes({
       keyword: keyword.value.trim() || undefined,
       status: filterStatus.value || undefined,
       domain_id: filterDomainId.value
     })
     if (res.status === 'success') {
-      items.value = res.data?.objects || []
+      items.value = res.data?.object_types || []
       hasLoaded.value = true
       dataVersion.value += 1
       detailStore.value = {}
       objectLoadState.value = {}
-      // 节点 key 内含版本号，详情缓存已整体失效：按 object_name 找回选中节点并重拉详情
+      // 节点 key 内含版本号，详情缓存已整体失效：按 object_type_name 找回选中节点并重拉详情
       restoreObjectSelection()
     } else {
-      ElMessage.error(res.msg || '获取本体对象列表失败')
+      ElMessage.error(res.msg || '获取本体对象类型列表失败')
     }
   } catch (err) {
     // 拦截器已弹出具体错误原因，不再重复提示
-    console.error('获取本体对象列表失败:', err)
+    console.error('获取本体对象类型列表失败:', err)
   } finally {
     loading.value = false
   }
@@ -528,13 +528,13 @@ const onFilterChange = () => {
 
 const formVisible = ref(false)
 const formObjectName = ref('')
-// 新建对象时的预选领域（树右键「新建对象」从领域节点发起）
+// 新建对象类型时的预选领域（树右键「新建对象类型」从领域节点发起）
 const formDefaultDomainId = ref<number | null>(null)
 
 const statusDialogVisible = ref(false)
 // 一致性健康巡检弹窗开关（工具栏按钮触发）
 const consistencyDialogVisible = ref(false)
-const statusTarget = ref<OntologyObjectItem | null>(null)
+const statusTarget = ref<OntologyObjectTypeItem | null>(null)
 
 const openCreate = (domainId: number | null = null) => {
   formObjectName.value = ''
@@ -542,25 +542,25 @@ const openCreate = (domainId: number | null = null) => {
   formVisible.value = true
 }
 
-const openEdit = (objectName: string) => {
+const openEdit = (objectTypeName: string) => {
   // 右键菜单已置灰，这里兜底防止其他入口（键盘/程序调用）打开 deprecated 对象的编辑表单
   const item =
-    items.value.find(candidate => candidate.object_name === objectName) ||
-    allObjects.value.find(candidate => candidate.object_name === objectName)
+    items.value.find(candidate => candidate.object_type_name === objectTypeName) ||
+    allObjects.value.find(candidate => candidate.object_type_name === objectTypeName)
   if (item?.status === 'deprecated') {
-    ElMessage.warning('已废弃对象为终态不可编辑；如需继续演进，请基于替代对象重建')
+    ElMessage.warning('已废弃对象类型为终态不可编辑；如需继续演进，请基于替代对象类型重建')
     return
   }
-  formObjectName.value = objectName
+  formObjectName.value = objectTypeName
   formVisible.value = true
 }
 
-const openStatus = (objectName: string) => {
-  const key = Object.keys(detailStore.value).find(candidate => candidate.startsWith(`object:${objectName}:`))
+const openStatus = (objectTypeName: string) => {
+  const key = Object.keys(detailStore.value).find(candidate => candidate.startsWith(`object:${objectTypeName}:`))
   statusTarget.value =
     (key && detailStore.value[key]?.detail) ||
-    items.value.find(item => item.object_name === objectName) ||
-    allObjects.value.find(item => item.object_name === objectName) ||
+    items.value.find(item => item.object_type_name === objectTypeName) ||
+    allObjects.value.find(item => item.object_type_name === objectTypeName) ||
     null
   statusDialogVisible.value = true
 }
@@ -571,7 +571,7 @@ const onSaved = async () => {
   emit('changed')
 }
 
-const removeObject = async (objectName: string, status: OntologyObjectStatus, displayName: string) => {
+const removeObject = async (objectTypeName: string, status: OntologyObjectTypeStatus, displayName: string) => {
   // 后端禁止删除 certified 对象；前端先拦一道，给出明确处置路径而不是让请求失败
   if (status === 'certified') {
     ElMessage.warning('已认证（certified）对象禁止删除：请先降级为试验/草稿，或标记为废弃')
@@ -579,15 +579,15 @@ const removeObject = async (objectName: string, status: OntologyObjectStatus, di
   }
   try {
     await ElMessageBox.confirm(
-      `确定删除本体对象「${displayName || objectName}」？删除后对象、其全部属性与参与的关系将一并移除（软删）。`,
-      '删除本体对象',
+      `确定删除对象类型「${displayName || objectTypeName}」？删除后该类型、其全部属性与参与的关系类型将一并移除（软删）。`,
+      '删除对象类型',
       { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
     )
   } catch {
     return
   }
   try {
-    const res = await deleteAdminOntologyObject(objectName)
+    const res = await deleteAdminOntologyObjectType(objectTypeName)
     if (res.status === 'success') {
       ElMessage.success('删除成功')
       selectedNode.value = null
@@ -598,7 +598,7 @@ const removeObject = async (objectName: string, status: OntologyObjectStatus, di
     }
   } catch (err) {
     // 拦截器已弹出具体错误原因（如 certified 禁删），不再重复提示
-    console.error('删除本体对象失败:', err)
+    console.error('删除本体对象类型失败:', err)
   }
 }
 
@@ -655,23 +655,23 @@ const removeDomain = async (domainName: string, displayName: string) => {
 // ---------- 拖拽换域（仅对象节点拖入领域节点内部；API 名不可改，归属迁移靠拖拽） ----------
 
 // 只允许对象节点发起拖拽（领域/本体/分组等锚点不可拖）
-const allowDrag = (draggingNode: { data: TreeRow }) => draggingNode.data.kind === 'object'
+const allowDrag = (draggingNode: { data: TreeRow }) => draggingNode.data.kind === 'object_type'
 
 // 只允许放到领域节点或其「对象」分组内部（inner）；禁止排序（prev/next）与拖到其他节点
 const allowDrop = (draggingNode: { data: TreeRow }, dropNode: { data: TreeRow }, type: string) => {
-  if (draggingNode.data.kind !== 'object' || type !== 'inner') return false
+  if (draggingNode.data.kind !== 'object_type' || type !== 'inner') return false
   const target = dropNode.data
   if (target.kind === 'domain') return true
-  return target.kind === 'domain-group' && target.group === 'objects'
+  return target.kind === 'domain-group' && target.group === 'object_types'
 }
 
 const onNodeDrop = async (draggingNode: { data: TreeRow }, dropNode: { data: TreeRow }, dropType: string) => {
-  if (draggingNode.data.kind !== 'object' || dropType !== 'inner') return
+  if (draggingNode.data.kind !== 'object_type' || dropType !== 'inner') return
   const target = dropNode.data
   let targetDomainId: number | null
   if (target.kind === 'domain') {
     targetDomainId = target.is_ungrouped ? null : target.domain_id
-  } else if (target.kind === 'domain-group' && target.group === 'objects') {
+  } else if (target.kind === 'domain-group' && target.group === 'object_types') {
     targetDomainId = target.domain_id
   } else {
     return
@@ -680,11 +680,11 @@ const onNodeDrop = async (draggingNode: { data: TreeRow }, dropNode: { data: Tre
   if (objectNode.domain_id === targetDomainId) return
   const targetLabel = target.kind === 'domain' ? target.domain_label : domainLabelOf(targetDomainId)
   try {
-    const res = await changeAdminOntologyObjectDomain(objectNode.object_name, targetDomainId)
+    const res = await changeAdminOntologyObjectTypeDomain(objectNode.object_type_name, targetDomainId)
     if (res.status === 'success') {
       ElMessage.success(
         targetDomainId == null
-          ? `已移出领域：${objectNode.display_name || objectNode.object_name}`
+          ? `已移出领域：${objectNode.display_name || objectNode.object_type_name}`
           : `已移动到「${targetLabel}」`
       )
     } else {
@@ -730,37 +730,37 @@ const openCtxMenu = (event: MouseEvent, node: TreeRow | null) => {
     // 本体：只新增业务领域（对象必须挂在具体领域下，本体不直接建对象）
     menuItems.push({ key: 'create-domain', label: '新增业务领域', icon: 'fa-plus', handler: () => openDomainCreate() })
   } else if (node && node.kind === 'domain' && !node.is_ungrouped) {
-    // 领域节点：治理动作（编辑/删除）；新建对象/关系由领域下的分组锚点承担（容器管新增，不重复挂）
+    // 领域节点：治理动作（编辑/删除）；新建对象类型/关系类型由领域下的分组锚点承担（容器管新增，不重复挂）
     menuItems.push(
       { key: 'edit-domain', label: '编辑领域', icon: 'fa-pen', handler: () => openDomainEdit(node.domain_name) },
       { key: 'delete-domain', label: '删除领域', icon: 'fa-trash', danger: true, handler: () => removeDomain(node.domain_name, node.domain_label) }
     )
-  } else if (node && node.kind === 'object') {
+  } else if (node && node.kind === 'object_type') {
     // 对象节点：编辑 / 状态 / 删除。deprecated 为终态不可再编辑（后端口径），菜单置灰
     const deprecated = node.status === 'deprecated'
     menuItems.push(
       {
         key: 'edit-object',
-        label: deprecated ? '编辑对象（已废弃不可编辑）' : '编辑对象',
+        label: deprecated ? '编辑对象类型（已废弃不可编辑）' : '编辑对象类型',
         icon: 'fa-pen',
         disabled: deprecated,
-        handler: () => openEdit(node.object_name)
+        handler: () => openEdit(node.object_type_name)
       },
-      { key: 'status-object', label: '状态迁移', icon: 'fa-arrow-right-arrow-left', handler: () => openStatus(node.object_name) },
-      { key: 'delete-object', label: '删除对象', icon: 'fa-trash', danger: true, handler: () => removeObject(node.object_name, node.status, node.display_name) }
+      { key: 'status-object', label: '状态迁移', icon: 'fa-arrow-right-arrow-left', handler: () => openStatus(node.object_type_name) },
+      { key: 'delete-object', label: '删除对象类型', icon: 'fa-trash', danger: true, handler: () => removeObject(node.object_type_name, node.status, node.display_name) }
     )
-  } else if (node && node.kind === 'domain-group' && node.group === 'objects') {
-    // 领域的「对象」分组：新建对象（预选本领域；未归领域分组预选 null）
-    menuItems.push({ key: 'create-object', label: '新建对象', icon: 'fa-cube', handler: () => openCreate(node.domain_id) })
-  } else if (node && node.kind === 'domain-group' && node.group === 'relations') {
-    // 领域的「关系」分组：新建关系（两端手选，关系是对象之间的，不再预选单一对象）
-    menuItems.push({ key: 'create-relation', label: '新建关系', icon: 'fa-plus', handler: () => relationFormRef.value?.openCreate() })
+  } else if (node && node.kind === 'domain-group' && node.group === 'object_types') {
+    // 领域的「对象类型」分组：新建对象类型（预选本领域；未归领域分组预选 null）
+    menuItems.push({ key: 'create-object', label: '新建对象类型', icon: 'fa-cube', handler: () => openCreate(node.domain_id) })
+  } else if (node && node.kind === 'domain-group' && node.group === 'relation_types') {
+    // 领域的「关系类型」分组：新建关系类型（两端手选，关系类型是对象类型之间的，不再预选单一对象类型）
+    menuItems.push({ key: 'create-relation', label: '新建关系类型', icon: 'fa-plus', handler: () => relationFormRef.value?.openCreate() })
   } else if (node && node.kind === 'relation') {
     // 关系条目节点：编辑 / 状态 / 删除
     menuItems.push(
-      { key: 'edit-relation', label: '编辑关系', icon: 'fa-pen', handler: () => relationFormRef.value?.openEdit(node.relation) },
+      { key: 'edit-relation', label: '编辑关系类型', icon: 'fa-pen', handler: () => relationFormRef.value?.openEdit(node.relation) },
       { key: 'status-relation', label: '状态迁移', icon: 'fa-arrow-right-arrow-left', handler: () => relationFormRef.value?.openStatus(node.relation) },
-      { key: 'delete-relation', label: '删除关系', icon: 'fa-trash', danger: true, handler: () => relationFormRef.value?.remove(node.relation) }
+      { key: 'delete-relation', label: '删除关系类型', icon: 'fa-trash', danger: true, handler: () => relationFormRef.value?.remove(node.relation) }
     )
   } else if (!node) {
     // 树空白处（容器级右键 node=null）：等同于本体层级。
@@ -777,13 +777,13 @@ const openCtxMenu = (event: MouseEvent, node: TreeRow | null) => {
 
 const relationFormRef = ref<InstanceType<typeof OntologyRelationForm> | null>(null)
 
-const findObjectNode = (objectName: string): ObjectNodeData | null => {
+const findObjectNode = (objectTypeName: string): ObjectNodeData | null => {
   for (const root of treeData.value) {
     for (const domain of root.children) {
       for (const group of domain.children) {
-        if (group.kind !== 'domain-group' || group.group !== 'objects') continue
+        if (group.kind !== 'domain-group' || group.group !== 'object_types') continue
         const found = group.children.find(
-          (item): item is ObjectNodeData => item.kind === 'object' && item.object_name === objectName
+          (item): item is ObjectNodeData => item.kind === 'object_type' && item.object_type_name === objectTypeName
         )
         if (found) return found
       }
@@ -792,12 +792,12 @@ const findObjectNode = (objectName: string): ObjectNodeData | null => {
   return null
 }
 
-// 列表刷新会整体重建树节点与详情缓存（key 带版本号）：按 object_name 重新定位选中对象，
+// 列表刷新会整体重建树节点与详情缓存（key 带版本号）：按 object_type_name 重新定位选中对象，
 // 否则右侧详情卡查旧 key 拿不到缓存会整块空白；对象被筛选条件排除时清空选中。
 const restoreObjectSelection = () => {
   const current = selectedNode.value
-  if (!current || current.kind !== 'object') return
-  const node = findObjectNode(current.object_name)
+  if (!current || current.kind !== 'object_type') return
+  const node = findObjectNode(current.object_type_name)
   if (!node) {
     selectedNode.value = null
     currentNodeKey.value = ''
@@ -810,9 +810,9 @@ const restoreObjectSelection = () => {
 
 // 关系保存/状态/删除后：重拉关系源（领域关系组就地更新，key 不变不塌缩展开状态）；
 // 受影响对象的详情卡「参与关系」同步原地刷新（未展开的对象在展开时自然取新数据）
-const onRelationSaved = (objectNames: string[]) => {
+const onRelationSaved = (objectTypeNames: string[]) => {
   void loadRelationSources()
-  for (const name of objectNames) {
+  for (const name of objectTypeNames) {
     if (!name) continue
     const objectNode = findObjectNode(name)
     if (objectNode && objectLoadState.value[objectNode.row_key] === 'ready') void fetchObjectEntry(objectNode)
@@ -908,23 +908,23 @@ const onRelationSaved = (objectNames: string[]) => {
                 <span v-if="!data.is_ungrouped && data.group_id" class="text-[11px] text-slate-400">
                   {{ groupNameOf(data.group_id) }}
                 </span>
-                <span class="text-[11px] text-slate-400">{{ data.object_count }} 个对象</span>
+                <span class="text-[11px] text-slate-400">{{ data.object_type_count }} 个对象类型</span>
               </span>
-              <!-- 领域分组节点（对象/关系，常驻锚点） -->
+              <!-- 领域分组节点（对象类型/关系类型，常驻锚点） -->
               <span v-else-if="data.kind === 'domain-group'" class="flex items-center gap-1.5 py-0.5">
                 <i
                   :class="[
                     'fa-solid text-[10px]',
-                    data.group === 'objects' ? 'fa-cube text-blue-400' : 'fa-circle-nodes text-violet-400'
+                    data.group === 'object_types' ? 'fa-cube text-blue-400' : 'fa-circle-nodes text-violet-400'
                   ]"
                 ></i>
                 <span class="text-xs text-slate-600">{{ data.label }}</span>
                 <span class="text-[11px] text-slate-400">{{ data.children[0]?.kind === 'empty' ? 0 : data.children.length }}</span>
               </span>
               <!-- 对象节点 -->
-              <span v-else-if="data.kind === 'object'" class="flex items-center gap-1.5 py-0.5">
+              <span v-else-if="data.kind === 'object_type'" class="flex items-center gap-1.5 py-0.5">
                 <i class="fa-solid fa-cube text-[11px] text-blue-500"></i>
-                <span class="font-mono text-xs text-slate-800">{{ data.object_name }}</span>
+                <span class="font-mono text-xs text-slate-800">{{ data.object_type_name }}</span>
                 <span v-if="data.display_name" class="text-[11px] text-slate-500">{{ data.display_name }}</span>
                 <el-tag
                   size="small"
@@ -956,10 +956,10 @@ const onRelationSaved = (objectNames: string[]) => {
               <!-- 关系节点（挂领域下，直接显示两端对象；角色短语/详情在右侧卡片） -->
               <span v-else-if="data.kind === 'relation'" class="flex items-center gap-1.5 py-0.5">
                 <i class="fa-solid fa-circle-nodes text-[10px] text-violet-500"></i>
-                <span class="truncate text-xs text-slate-700" :title="data.relation.relation_name">
-                  {{ objectDisplayOf(data.relation.from_object_name) }}
+                <span class="truncate text-xs text-slate-700" :title="data.relation.relation_type_name">
+                  {{ objectTypeDisplayOf(data.relation.from_object_type_name) }}
                   <i class="fa-solid fa-arrow-right-long mx-0.5 text-[9px] text-slate-300"></i>
-                  {{ objectDisplayOf(data.relation.to_object_name) }}
+                  {{ objectTypeDisplayOf(data.relation.to_object_type_name) }}
                 </span>
                 <el-tag v-if="data.is_cross_domain" size="small" type="warning" effect="plain">跨域</el-tag>
               </span>
@@ -981,23 +981,23 @@ const onRelationSaved = (objectNames: string[]) => {
         <div v-if="!selectedNode" class="flex h-full items-center justify-center">
           <div class="text-center text-xs text-slate-400">
             <i class="fa-solid fa-sitemap mb-2 block text-2xl text-slate-300"></i>
-            在左侧选择对象、属性、关系或映射查看详情
-            <div class="mt-1 text-[11px] text-slate-300">左侧树支持右键：本体新增业务领域，领域的对象/关系分组可新建</div>
+            在左侧选择对象类型、属性、关系类型或映射查看详情
+            <div class="mt-1 text-[11px] text-slate-300">左侧树支持右键：本体新增业务领域，领域的对象类型/关系类型分组可新建</div>
           </div>
         </div>
 
         <!-- 对象详情卡 -->
-        <template v-else-if="selectedNode.kind === 'object' && selectedObject">
+        <template v-else-if="selectedNode.kind === 'object_type' && selectedObject">
           <div v-if="selectedObject.state === 'loading'" class="py-8 text-center text-xs text-slate-400">
-            <i class="fa-solid fa-spinner fa-spin mr-1.5"></i>加载对象详情中…
+            <i class="fa-solid fa-spinner fa-spin mr-1.5"></i>加载对象类型详情中…
           </div>
           <div v-else-if="selectedObject.state === 'error'" class="py-8 text-center">
-            <div class="mb-2 text-xs text-slate-500">对象详情加载失败</div>
+            <div class="mb-2 text-xs text-slate-500">对象类型详情加载失败</div>
             <el-button size="small" type="primary" @click="retrySelectedObject">重试</el-button>
           </div>
           <template v-else-if="selectedObject.entry">
             <div class="mb-3 flex items-center gap-2">
-              <span class="font-mono text-sm font-medium text-slate-800">{{ selectedNode.object_name }}</span>
+              <span class="font-mono text-sm font-medium text-slate-800">{{ selectedNode.object_type_name }}</span>
               <span v-if="selectedNode.display_name" class="text-xs text-slate-500">{{ selectedNode.display_name }}</span>
               <el-tooltip v-if="selectedObjectStatusMeta" :content="selectedObjectStatusMeta.hint" placement="top">
                 <el-tag size="small" :type="selectedObjectStatusMeta.tagType" effect="plain">{{ selectedObjectStatusMeta.label }}</el-tag>
@@ -1059,18 +1059,18 @@ const onRelationSaved = (objectNames: string[]) => {
             >
               <div
                 v-for="rel in [...selectedObject.entry.fromRelations.map(relation => ({ relation, direction: 'from' })), ...selectedObject.entry.toRelations.map(relation => ({ relation, direction: 'to' }))]"
-                :key="`${rel.direction}:${rel.relation.relation_name}`"
+                :key="`${rel.direction}:${rel.relation.relation_type_name}`"
                 class="rounded border border-slate-100 bg-slate-50/60 px-2 py-1.5"
               >
                 <div class="flex items-center gap-2">
                   <el-tag size="small" :type="rel.direction === 'from' ? 'primary' : 'info'" effect="plain">
                     {{ rel.direction === 'from' ? '发起' : '参与' }}
                   </el-tag>
-                  <span class="font-mono text-xs text-slate-700">{{ rel.relation.relation_name }}</span>
+                  <span class="font-mono text-xs text-slate-700">{{ rel.relation.relation_type_name }}</span>
                   <span class="text-xs text-slate-500">
                     {{ rel.direction === 'from'
-                      ? `→ ${rel.relation.to_display_name || rel.relation.to_object_name || '-'}`
-                      : `← ${rel.relation.from_display_name || rel.relation.from_object_name || '-'}` }}
+                      ? `→ ${rel.relation.to_display_name || rel.relation.to_object_type_name || '-'}`
+                      : `← ${rel.relation.from_display_name || rel.relation.from_object_type_name || '-'}` }}
                   </span>
                   <span class="text-[11px] text-slate-400">{{ ONTOLOGY_MULTIPLICITY_META[rel.relation.multiplicity] || rel.relation.multiplicity }}</span>
                 </div>
@@ -1124,12 +1124,12 @@ const onRelationSaved = (objectNames: string[]) => {
                 {{ selectedNode.is_ungrouped ? '未归领域对象不继承任何组' : groupNameOf(selectedNode.group_id) }}
               </span>
             </div>
-            <div class="col-span-2">对象数：<span class="text-slate-700">{{ selectedNode.object_count }} 个</span></div>
+            <div class="col-span-2">对象类型数：<span class="text-slate-700">{{ selectedNode.object_type_count }} 个</span></div>
             <div class="col-span-2">
               描述：<span class="text-slate-700">{{ selectedNode.description || '-' }}</span>
             </div>
             <div class="col-span-2 text-[11px] text-slate-400">
-              对象挂领域后继承其数据源组；右键领域节点可编辑/删除领域，新建对象与关系在领域下「对象」「关系」分组节点右键发起。
+              对象类型挂领域后继承其数据源组；右键领域节点可编辑/删除领域，新建对象类型与关系类型在领域下「对象类型」「关系类型」分组节点右键发起。
             </div>
           </div>
         </div>
@@ -1157,7 +1157,7 @@ const onRelationSaved = (objectNames: string[]) => {
         <div v-else-if="selectedNode.kind === 'relation'" class="max-w-xl">
           <div class="mb-3 flex items-center gap-2">
             <i class="fa-solid fa-circle-nodes text-[11px] text-violet-500"></i>
-            <span class="font-mono text-sm font-medium text-slate-800">{{ selectedNode.relation.relation_name }}</span>
+            <span class="font-mono text-sm font-medium text-slate-800">{{ selectedNode.relation.relation_type_name }}</span>
             <el-tag
               size="small"
               :type="ONTOLOGY_STATUS_META[selectedNode.relation.status as keyof typeof ONTOLOGY_STATUS_META]?.tagType || 'info'"
@@ -1167,8 +1167,8 @@ const onRelationSaved = (objectNames: string[]) => {
             </el-tag>
           </div>
           <div class="grid grid-cols-2 gap-x-6 gap-y-1 text-xs text-slate-500">
-            <div>发起方：<span class="text-slate-700">{{ objectDisplayOf(selectedNode.relation.from_object_name) }}</span></div>
-            <div>目标方：<span class="text-slate-700">{{ objectDisplayOf(selectedNode.relation.to_object_name) }}</span></div>
+            <div>发起方：<span class="text-slate-700">{{ objectTypeDisplayOf(selectedNode.relation.from_object_type_name) }}</span></div>
+            <div>目标方：<span class="text-slate-700">{{ objectTypeDisplayOf(selectedNode.relation.to_object_type_name) }}</span></div>
             <div>基数：<span class="text-slate-700">{{ ONTOLOGY_MULTIPLICITY_META[selectedNode.relation.multiplicity] || selectedNode.relation.multiplicity }}</span></div>
             <div>状态：<span class="text-slate-700">{{ selectedNode.relation.status }}</span></div>
             <div class="col-span-2">发起列：<span class="font-mono text-slate-700">{{ selectedNode.relation.from_columns.join('、') || '-' }}</span></div>
@@ -1217,14 +1217,14 @@ const onRelationSaved = (objectNames: string[]) => {
       @saved="onSaved"
     />
 
-    <!-- 状态迁移弹窗：替代对象候选与关系上限都应以全量对象为准，不能被工具栏筛选截断 -->
-    <OntologyStatusDialog v-model:visible="statusDialogVisible" :object="statusTarget" :objects="allObjects" @saved="onSaved" />
+    <!-- 状态迁移弹窗：替代对象类型候选与关系类型上限都应以全量对象类型为准，不能被工具栏筛选截断 -->
+    <OntologyStatusDialog v-model:visible="statusDialogVisible" :object="statusTarget" :object_types="allObjects" @saved="onSaved" />
 
     <!-- 一致性健康巡检弹窗：本体↔语义模型失修清单（手动触发，只读不阻断） -->
     <OntologyConsistencyDialog v-model:visible="consistencyDialogVisible" />
 
     <!-- 关系新建/编辑/状态/删除（右键发起；端点候选/状态上限用全量对象） -->
-    <OntologyRelationForm ref="relationFormRef" :objects="allObjects" @saved="onRelationSaved" />
+    <OntologyRelationForm ref="relationFormRef" :object_types="allObjects" @saved="onRelationSaved" />
 
     <!-- 树右键菜单（fixed 浮层，宿主页嵌入时必须 Teleport 防 transform 包含块错位） -->
     <Teleport to="body">

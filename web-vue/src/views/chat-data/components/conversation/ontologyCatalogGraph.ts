@@ -2,7 +2,7 @@
  * 本体目录图谱的数据转换纯函数（配合 OntologyCatalogGraph.vue 使用）。
  * 输入 = 物化产物 _ontology_catalog.yaml 的文本，输出 = echarts graph option。
  * 三要素全上图：对象节点 + 属性节点（环绕各自对象的小节点）+
- * 关系边（本体 relations 一比一，箭头=one端→many端、label=名词角色名 to_display_name，
+ * 关系边（本体 relation_types 一比一，箭头=one端→many端、label=名词角色名 to_display_name，
  * 领属读法——对标 Palantir Vertex 默认与官方 Link Type 命名规则，用户拍板）。
  * 布局对齐官方 Vertex 默认体验：力导向（Auto），节点可拖拽重排、画布 roam 缩放；
  * 环形坐标仅作为力的初值传入（收敛快、不乱飞）。
@@ -19,8 +19,8 @@ export interface CatalogProperty {
   title: boolean
 }
 
-export interface CatalogObject {
-  object: string
+export interface CatalogObjectType {
+  object_type: string
   display_name: string
   status: string
   description: string
@@ -29,7 +29,7 @@ export interface CatalogObject {
   mappings: string[]
 }
 
-export interface CatalogRelation {
+export interface CatalogRelationType {
   name: string
   from: string
   to: string
@@ -41,8 +41,8 @@ export interface CatalogRelation {
 }
 
 export interface OntologyCatalog {
-  objects: CatalogObject[]
-  relations: CatalogRelation[]
+  object_types: CatalogObjectType[]
+  relation_types: CatalogRelationType[]
 }
 
 // 对象节点颜色 = 治理状态（绿=certified 权威、蓝=experimental 试用、灰=draft 草稿、红=deprecated 已废弃）
@@ -63,11 +63,11 @@ const STATUS_LABELS: Record<string, string> = {
   deprecated: '已废弃',
 }
 
-export function objectStatusLabel(status: string): string {
+export function objectTypeStatusLabel(status: string): string {
   return STATUS_LABELS[status] || '未知'
 }
 
-export function objectStatusColor(status: string): string {
+export function objectTypeStatusColor(status: string): string {
   return OBJECT_STATUS_COLORS[status] || FALLBACK_STATUS_COLOR
 }
 
@@ -114,7 +114,7 @@ const escapeHtml = (value: unknown): string =>
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
 
-/** 解析本体目录文本。objects 必须非空且每项有 object 名；relations 允许缺省（孤立对象）。 */
+/** 解析本体目录文本。object_types 必须非空且每项有 object 名；relation_types 允许缺省（孤立对象）。 */
 export function parseOntologyCatalog(content: string): OntologyCatalog | null {
   let doc: unknown
   try {
@@ -123,16 +123,16 @@ export function parseOntologyCatalog(content: string): OntologyCatalog | null {
     return null
   }
   if (!doc || typeof doc !== 'object') return null
-  const rawObjects = (doc as { objects?: unknown }).objects
+  const rawObjects = (doc as { object_types?: unknown }).object_types
   if (!Array.isArray(rawObjects) || rawObjects.length === 0) return null
-  const objects: CatalogObject[] = []
+  const object_types: CatalogObjectType[] = []
   for (const raw of rawObjects) {
     if (!raw || typeof raw !== 'object') return null
     const item = raw as Record<string, unknown>
-    const objectName = typeof item.object === 'string' ? item.object.trim() : ''
-    if (!objectName) return null
-    objects.push({
-      object: objectName,
+    const objectTypeName = typeof item.object_type === 'string' ? item.object_type.trim() : ''
+    if (!objectTypeName) return null
+    object_types.push({
+      object_type: objectTypeName,
       display_name: typeof item.display_name === 'string' ? item.display_name : '',
       status: typeof item.status === 'string' ? item.status : '',
       description: typeof item.description === 'string' ? item.description : '',
@@ -144,11 +144,11 @@ export function parseOntologyCatalog(content: string): OntologyCatalog | null {
         : [],
     })
   }
-  const rawRelations = (doc as { relations?: unknown }).relations
-  const relations: CatalogRelation[] = Array.isArray(rawRelations)
-    ? (rawRelations.filter(item => !!item && typeof item === 'object') as CatalogRelation[])
+  const rawRelations = (doc as { relation_types?: unknown }).relation_types
+  const relation_types: CatalogRelationType[] = Array.isArray(rawRelations)
+    ? (rawRelations.filter(item => !!item && typeof item === 'object') as CatalogRelationType[])
     : []
-  return { objects, relations }
+  return { object_types, relation_types }
 }
 
 // ---------- 固定布局 ----------
@@ -164,9 +164,9 @@ interface LayoutNode {
   itemStyle: { color: string; borderColor?: string; borderWidth?: number }
   label: { show: boolean; position: 'bottom' | 'right' | 'left' | 'top'; formatter: string; fontSize: number; color: string }
   nodeKind: 'object' | 'property'
-  catalogObject?: CatalogObject
+  catalogObjectType?: CatalogObjectType
   catalogProperty?: CatalogProperty
-  ownerObject?: string
+  ownerObjectType?: string
 }
 
 const propertyLabelPosition = (angleCos: number, angleSin: number): 'bottom' | 'right' | 'left' | 'top' => {
@@ -179,33 +179,33 @@ const layoutCatalog = (catalog: OntologyCatalog, showProperties: boolean): { nod
   const nodes: LayoutNode[] = []
   const relationLinks: Array<Record<string, unknown>> = []
   const propertyLinks: Array<Record<string, unknown>> = []
-  const displayByObject = new Map(catalog.objects.map(item => [item.object, item.display_name || item.object]))
+  const displayByObjectType = new Map(catalog.object_types.map(item => [item.object_type, item.display_name || item.object_type]))
 
   // 对象节点环形初值；属性节点初值环绕各自对象（力导向会在此基础上松弛）
-  const objectCount = catalog.objects.length
-  const objectRadius = Math.max(260, objectCount * 70)
+  const objectTypeCount = catalog.object_types.length
+  const objectRadius = Math.max(260, objectTypeCount * 70)
   const propertyRadius = 104
-  catalog.objects.forEach((item, index) => {
-    const angle = (2 * Math.PI * index) / objectCount - Math.PI / 2
+  catalog.object_types.forEach((item, index) => {
+    const angle = (2 * Math.PI * index) / objectTypeCount - Math.PI / 2
     const x = Math.round(objectRadius * Math.cos(angle))
     const y = Math.round(objectRadius * Math.sin(angle))
     nodes.push({
-      id: item.object,
-      name: item.object,
+      id: item.object_type,
+      name: item.object_type,
       x,
       y,
       draggable: true,
       symbolSize: Math.min(56, 40 + item.properties.length),
-      itemStyle: { color: objectStatusColor(item.status) },
+      itemStyle: { color: objectTypeStatusColor(item.status) },
       label: {
         show: true,
         position: 'bottom',
-        formatter: item.display_name || item.object,
+        formatter: item.display_name || item.object_type,
         fontSize: 13,
         color: '#1e293b',
       },
       nodeKind: 'object',
-      catalogObject: item,
+      catalogObjectType: item,
     })
     const properties = showProperties ? item.properties : []
     properties.forEach((property, propertyIndex) => {
@@ -214,8 +214,8 @@ const layoutCatalog = (catalog: OntologyCatalog, showProperties: boolean): { nod
       const angleSin = Math.sin(propertyAngle)
       const style = propertyNodeStyle(property)
       nodes.push({
-        id: `${item.object}.${property.name}`,
-        name: `${item.object}.${property.name}`,
+        id: `${item.object_type}.${property.name}`,
+        name: `${item.object_type}.${property.name}`,
         x: x + Math.round(propertyRadius * angleCos),
         y: y + Math.round(propertyRadius * angleSin),
         draggable: true,
@@ -230,19 +230,19 @@ const layoutCatalog = (catalog: OntologyCatalog, showProperties: boolean): { nod
         },
         nodeKind: 'property',
         catalogProperty: property,
-        ownerObject: item.object,
+        ownerObjectType: item.object_type,
       })
       propertyLinks.push({
-        source: item.object,
-        target: `${item.object}.${property.name}`,
+        source: item.object_type,
+        target: `${item.object_type}.${property.name}`,
         lineStyle: { color: '#e2e8f0', width: 1, type: 'dashed' },
       })
     })
   })
 
-  for (const relation of catalog.relations) {
-    const fromDisplay = displayByObject.get(relation.from) || relation.from
-    const toDisplay = displayByObject.get(relation.to) || relation.to
+  for (const relation of catalog.relation_types) {
+    const fromDisplay = displayByObjectType.get(relation.from) || relation.from
+    const toDisplay = displayByObjectType.get(relation.to) || relation.to
     // Palantir 约定（用户拍板对标）：箭头 one→many（Vertex 默认展示约定），label=名词
     // 角色名 to_display_name——官方命名规则「side 表示通往该侧的链路」，one→many 方向
     // 的 label 命名到达的 many 侧（领属读法：用户 的 名下订单 = 订单）。
@@ -271,7 +271,7 @@ export interface GraphOptions {
 }
 
 export function buildGraphOption(catalog: OntologyCatalog, options: GraphOptions = {}): EChartsOption {
-  const objectByName = new Map(catalog.objects.map(item => [item.object, item]))
+  const objectTypeByName = new Map(catalog.object_types.map(item => [item.object_type, item]))
   const { nodes, relationLinks, propertyLinks } = layoutCatalog(catalog, options.showProperties === true)
   // 属性折叠时不参与布局，属性挂接边一并隐藏
   const links = options.showProperties === true ? [...relationLinks, ...propertyLinks] : relationLinks
@@ -281,7 +281,7 @@ export function buildGraphOption(catalog: OntologyCatalog, options: GraphOptions
       show: true,
       confine: true,
       trigger: 'item',
-      formatter: params => formatGraphTooltip(params, objectByName),
+      formatter: params => formatGraphTooltip(params, objectTypeByName),
     },
     series: [
       {
@@ -302,12 +302,12 @@ export function buildGraphOption(catalog: OntologyCatalog, options: GraphOptions
   }
 }
 
-const formatGraphTooltip = (params: unknown, objectByName: Map<string, CatalogObject>): string => {
+const formatGraphTooltip = (params: unknown, objectTypeByName: Map<string, CatalogObjectType>): string => {
   const data = (params as { data?: Record<string, unknown> }).data
   if (!data) return ''
   // 关系边
   if ('relation' in data) {
-    const link = data as unknown as { relation: CatalogRelation; fromDisplay: string; toDisplay: string }
+    const link = data as unknown as { relation: CatalogRelationType; fromDisplay: string; toDisplay: string }
     const relation = link.relation
     const lines = [
       `<b>${escapeHtml(relation.name)}</b>`,
@@ -322,33 +322,33 @@ const formatGraphTooltip = (params: unknown, objectByName: Map<string, CatalogOb
   }
   // 属性节点
   if ('catalogProperty' in data) {
-    const node = data as unknown as { catalogProperty: CatalogProperty; ownerObject?: string }
+    const node = data as unknown as { catalogProperty: CatalogProperty; ownerObjectType?: string }
     const property = node.catalogProperty
-    const owner = node.ownerObject ? objectByName.get(node.ownerObject) : undefined
+    const owner = node.ownerObjectType ? objectTypeByName.get(node.ownerObjectType) : undefined
     const tags = [property.identifier ? '标识' : '', property.title ? '标题' : ''].filter(Boolean).join('，')
     const lines = [
       `<b>${escapeHtml(property.display_name || property.name)}</b>`,
       `类型：${escapeHtml(property.type)}`,
       tags ? `角色：${escapeHtml(tags)}` : '',
     ]
-    if (owner) lines.push(`所属对象：${escapeHtml(owner.display_name || owner.object)}`)
+    if (owner) lines.push(`所属对象：${escapeHtml(owner.display_name || owner.object_type)}`)
     return lines.filter(Boolean).join('<br/>')
   }
   // 对象节点 tooltip 分层：①名称+API名 ②状态徽章（色块） ③描述/关联模型（带标签前缀） ④属性分区
-  const catalogObject = objectByName.get(String(data.name ?? ''))
-  if (!catalogObject) return ''
-  const statusColor = objectStatusColor(catalogObject.status)
-  const titleText = escapeHtml(catalogObject.display_name || catalogObject.object)
+  const catalogObjectType = objectTypeByName.get(String(data.name ?? ''))
+  if (!catalogObjectType) return ''
+  const statusColor = objectTypeStatusColor(catalogObjectType.status)
+  const titleText = escapeHtml(catalogObjectType.display_name || catalogObjectType.object_type)
   const lines = [
-    `<b style="font-size:13px;">${titleText}</b>&nbsp;<span style="color:#94a3b8;font-size:11px;">${escapeHtml(catalogObject.object)}</span>`,
-    `<span style="color:#64748b;">对象状态：</span><span style="display:inline-block;background:${statusColor};color:#fff;border-radius:8px;padding:0 7px;font-size:11px;line-height:16px;">${escapeHtml(objectStatusLabel(catalogObject.status))}</span>`,
+    `<b style="font-size:13px;">${titleText}</b>&nbsp;<span style="color:#94a3b8;font-size:11px;">${escapeHtml(catalogObjectType.object_type)}</span>`,
+    `<span style="color:#64748b;">对象状态：</span><span style="display:inline-block;background:${statusColor};color:#fff;border-radius:8px;padding:0 7px;font-size:11px;line-height:16px;">${escapeHtml(objectTypeStatusLabel(catalogObjectType.status))}</span>`,
   ]
-  if (catalogObject.description) lines.push(`<span style="color:#64748b;">描述：${escapeHtml(catalogObject.description)}</span>`)
-  if (catalogObject.mappings.length) lines.push(`<span style="color:#64748b;">关联模型：${escapeHtml(catalogObject.mappings.join('、'))}</span>`)
+  if (catalogObjectType.description) lines.push(`<span style="color:#64748b;">描述：${escapeHtml(catalogObjectType.description)}</span>`)
+  if (catalogObjectType.mappings.length) lines.push(`<span style="color:#64748b;">关联模型：${escapeHtml(catalogObjectType.mappings.join('、'))}</span>`)
   lines.push(
-    `<span style="color:#94a3b8;border-bottom:1px solid #e2e8f0;display:inline-block;width:100%;">属性（${catalogObject.properties.length}）</span>`
+    `<span style="color:#94a3b8;border-bottom:1px solid #e2e8f0;display:inline-block;width:100%;">属性（${catalogObjectType.properties.length}）</span>`
   )
-  for (const property of catalogObject.properties) {
+  for (const property of catalogObjectType.properties) {
     const tags = [property.identifier ? '标识' : '', property.title ? '标题' : ''].filter(Boolean).join('，')
     const tagSuffix = tags ? `（${tags}）` : ''
     lines.push(`${escapeHtml(property.display_name || property.name)}：${escapeHtml(property.type)}${tagSuffix}`)

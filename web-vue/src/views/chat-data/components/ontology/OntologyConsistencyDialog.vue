@@ -64,7 +64,7 @@ const findingTargets = (finding: OntologyConsistencyFinding) => finding.targets.
           >
             {{ report.healthy ? '导航地图健康' : '存在失修条目' }}
           </span>
-          <span>检查范围：{{ report.group_count }} 个数据源组 / {{ report.config_count }} 个公共模型 / {{ report.object_count }} 个对象</span>
+          <span>检查范围：{{ report.group_count }} 个数据源组 / {{ report.config_count }} 个公共模型 / {{ report.object_type_count }} 个对象类型</span>
           <span v-if="report.summary.error">错误 {{ report.summary.error }}</span>
           <span v-if="report.summary.warning">警告 {{ report.summary.warning }}</span>
           <span v-if="report.summary.info">提示 {{ report.summary.info }}</span>
@@ -75,7 +75,7 @@ const findingTargets = (finding: OntologyConsistencyFinding) => finding.targets.
           v-if="report.healthy"
           class="rounded-lg border border-green-100 bg-green-50 p-3 text-xs leading-5 text-green-700"
         >
-          本体对象、映射与关系均与当前公共语义模型一致，AI 导航地图可信。
+          对象类型、映射与关系类型均与当前公共语义模型一致，AI 导航地图可信。
         </div>
 
         <!-- findings 列表 -->
@@ -97,7 +97,7 @@ const findingTargets = (finding: OntologyConsistencyFinding) => finding.targets.
         </div>
 
         <p class="mt-3 text-[11px] leading-4 text-slate-400">
-          修复方式：失效维度映射/类型冲突 → 在对象编辑页修正属性映射；关系列失效 → 修正关系定义或恢复维度。
+          修复方式：失效维度映射/类型冲突 → 在对象类型编辑页修正属性映射；关系列失效 → 修正关系类型定义或恢复维度。
           检查只读不阻断，修复后可重新检查确认。
         </p>
       </template>

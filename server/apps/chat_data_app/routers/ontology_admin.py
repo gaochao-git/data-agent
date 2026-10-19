@@ -1,4 +1,4 @@
-"""ChatData 本体管理路由（Admin）：对象/属性/关系三等实体的治理接口。
+"""ChatData 本体管理路由（Admin）：对象类型/属性/关系类型三等实体的治理接口。
 
 入口由 routes.py 的 service token 统一保护；管理权限由可信代理的前端入口控制
 （与元数据管理模式一致）。写操作记录操作人四件套。破坏性变更与状态门禁在
@@ -17,11 +17,11 @@ from utils.response import business_response
 from ..daos.ontology_dao import OntologyDao
 from ..schema import (
     OntologyDomainUpsertRequest,
-    OntologyObjectDomainRequest,
-    OntologyObjectStatusRequest,
-    OntologyObjectUpsertRequest,
-    OntologyRelationStatusRequest,
-    OntologyRelationUpsertRequest,
+    OntologyObjectTypeDomainRequest,
+    OntologyObjectTypeStatusRequest,
+    OntologyObjectTypeUpsertRequest,
+    OntologyRelationTypeStatusRequest,
+    OntologyRelationTypeUpsertRequest,
 )
 from ..services.ontology import (
     OntologyAlreadyExistsError,
@@ -96,7 +96,7 @@ async def upsert_ontology_domain(
 
 @router.delete("/admin/meta/ontology/domains/{domain_name}")
 async def delete_ontology_domain(domain_name: str, request: Request) -> JSONResponse:
-    """删除本体领域（软删；挂有活跃对象时拒绝）。"""
+    """删除本体领域（软删；挂有活跃对象类型时拒绝）。"""
     try:
         current_user = _get_current_user(request)
         await ontology_service.delete_domain_async(
@@ -111,47 +111,47 @@ async def delete_ontology_domain(domain_name: str, request: Request) -> JSONResp
         return _error_response(e, "删除本体领域失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
 
 
-@router.get("/admin/meta/ontology/objects")
-async def list_ontology_objects(
+@router.get("/admin/meta/ontology/object-types")
+async def list_ontology_object_types(
     request: Request, keyword: str | None = None, status: str | None = None, domain_id: int | None = None
 ) -> JSONResponse:
-    """本体对象列表（keyword 按名称/展示名/描述模糊过滤；status/domain_id 精确过滤）。"""
+    """本体对象类型列表（keyword 按名称/展示名/描述模糊过滤；status/domain_id 精确过滤）。"""
     try:
         _get_current_user(request)
-        data = await ontology_service.list_objects_async(keyword or "", status or "", domain_id)
-        return business_response(data={"objects": data}, msg="获取成功")
+        data = await ontology_service.list_object_types_async(keyword or "", status or "", domain_id)
+        return business_response(data={"object_types": data}, msg="获取成功")
     except HTTPException:
         raise
     except Exception as e:
-        return _error_response(e, "获取本体对象列表失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
+        return _error_response(e, "获取本体对象类型列表失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
 
 
-@router.get("/admin/meta/ontology/objects/{object_name}")
-async def get_ontology_object(object_name: str, request: Request) -> JSONResponse:
-    """本体对象详情（含属性集与绑定）。"""
+@router.get("/admin/meta/ontology/object-types/{object_type_name}")
+async def get_ontology_object_type(object_type_name: str, request: Request) -> JSONResponse:
+    """本体对象类型详情（含属性集与绑定）。"""
     try:
         _get_current_user(request)
-        data = await ontology_service.get_object_async(object_name)
+        data = await ontology_service.get_object_type_async(object_type_name)
         if data is None:
             return business_response(
-                msg=f"本体对象不存在: {object_name}", code=ErrorCode.CHATDATA_ONTOLOGY_NOT_FOUND, status="error"
+                msg=f"本体对象类型不存在: {object_type_name}", code=ErrorCode.CHATDATA_ONTOLOGY_NOT_FOUND, status="error"
             )
         return business_response(data=data, msg="获取成功")
     except HTTPException:
         raise
     except Exception as e:
-        return _error_response(e, "获取本体对象详情失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
+        return _error_response(e, "获取本体对象类型详情失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
 
 
-@router.put("/admin/meta/ontology/objects/{object_name}")
-async def upsert_ontology_object(
-    object_name: str, payload: OntologyObjectUpsertRequest, request: Request
+@router.put("/admin/meta/ontology/object-types/{object_type_name}")
+async def upsert_ontology_object_type(
+    object_type_name: str, payload: OntologyObjectTypeUpsertRequest, request: Request
 ) -> JSONResponse:
-    """创建/整体编辑本体对象（元数据 + 属性集 + 绑定一次性提交）。"""
+    """创建/整体编辑本体对象类型（元数据 + 属性集 + 绑定一次性提交）。"""
     try:
         current_user = _get_current_user(request)
-        data = await ontology_service.upsert_object_async(
-            object_name,
+        data = await ontology_service.upsert_object_type_async(
+            object_type_name,
             payload.model_dump(),
             operator=str(current_user.user_id),
             operator_name=str(current_user.username or ""),
@@ -161,35 +161,35 @@ async def upsert_ontology_object(
     except HTTPException:
         raise
     except Exception as e:
-        return _error_response(e, "保存本体对象失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
+        return _error_response(e, "保存本体对象类型失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
 
 
-@router.delete("/admin/meta/ontology/objects/{object_name}")
-async def delete_ontology_object(object_name: str, request: Request) -> JSONResponse:
-    """删除本体对象（软删；certified 拒绝，级联软删属性与关系）。"""
+@router.delete("/admin/meta/ontology/object-types/{object_type_name}")
+async def delete_ontology_object_type(object_type_name: str, request: Request) -> JSONResponse:
+    """删除本体对象类型（软删；certified 拒绝，级联软删属性与关系类型）。"""
     try:
         current_user = _get_current_user(request)
-        await ontology_service.delete_object_async(
-            object_name,
+        await ontology_service.delete_object_type_async(
+            object_type_name,
             operator=str(current_user.user_id),
             operator_name=str(current_user.username or ""),
         )
-        return business_response(data={"object_name": object_name}, msg="删除成功")
+        return business_response(data={"object_type_name": object_type_name}, msg="删除成功")
     except HTTPException:
         raise
     except Exception as e:
-        return _error_response(e, "删除本体对象失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
+        return _error_response(e, "删除本体对象类型失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
 
 
-@router.post("/admin/meta/ontology/objects/{object_name}/status")
-async def change_ontology_object_status(
-    object_name: str, payload: OntologyObjectStatusRequest, request: Request
+@router.post("/admin/meta/ontology/object-types/{object_type_name}/status")
+async def change_ontology_object_type_status(
+    object_type_name: str, payload: OntologyObjectTypeStatusRequest, request: Request
 ) -> JSONResponse:
-    """本体对象状态迁移（升级/降级/废弃；关系状态按对象级联，降级自动、升级手动）。"""
+    """本体对象类型状态迁移（升级/降级/废弃；关系类型状态按对象类型级联，降级自动、升级手动）。"""
     try:
         current_user = _get_current_user(request)
-        data = await ontology_service.set_object_status_async(
-            object_name,
+        data = await ontology_service.set_object_type_status_async(
+            object_type_name,
             payload.status,
             payload.model_dump(),
             operator=str(current_user.user_id),
@@ -199,18 +199,18 @@ async def change_ontology_object_status(
     except HTTPException:
         raise
     except Exception as e:
-        return _error_response(e, "本体对象状态变更失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
+        return _error_response(e, "本体对象类型状态变更失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
 
 
-@router.post("/admin/meta/ontology/objects/{object_name}/domain")
-async def change_ontology_object_domain(
-    object_name: str, payload: OntologyObjectDomainRequest, request: Request
+@router.post("/admin/meta/ontology/object-types/{object_type_name}/domain")
+async def change_ontology_object_type_domain(
+    object_type_name: str, payload: OntologyObjectTypeDomainRequest, request: Request
 ) -> JSONResponse:
-    """对象领域归属变更（拖拽换域窄写路径；domain_id=null 表示移出领域）。"""
+    """对象类型领域归属变更（拖拽换域窄写路径；domain_id=null 表示移出领域）。"""
     try:
         current_user = _get_current_user(request)
-        data = await ontology_service.set_object_domain_async(
-            object_name,
+        data = await ontology_service.set_object_type_domain_async(
+            object_type_name,
             payload.domain_id,
             operator=str(current_user.user_id),
             operator_name=str(current_user.username or ""),
@@ -219,33 +219,33 @@ async def change_ontology_object_domain(
     except HTTPException:
         raise
     except Exception as e:
-        return _error_response(e, "对象领域归属变更失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
+        return _error_response(e, "对象类型领域归属变更失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
 
 
-@router.get("/admin/meta/ontology/relations")
+@router.get("/admin/meta/ontology/relation-types")
 async def list_ontology_relations(
-    request: Request, keyword: str | None = None, from_object: str | None = None, to_object: str | None = None
+    request: Request, keyword: str | None = None, from_object_type: str | None = None, to_object_type: str | None = None
 ) -> JSONResponse:
-    """本体关系列表（keyword 模糊过滤；from_object/to_object 按 API 名过滤）。"""
+    """本体关系类型列表（keyword 模糊过滤；from_object_type/to_object_type 按 API 名过滤）。"""
     try:
         _get_current_user(request)
-        data = await ontology_service.list_relations_async(keyword or "", from_object or "", to_object or "")
-        return business_response(data={"relations": data}, msg="获取成功")
+        data = await ontology_service.list_relations_async(keyword or "", from_object_type or "", to_object_type or "")
+        return business_response(data={"relation_types": data}, msg="获取成功")
     except HTTPException:
         raise
     except Exception as e:
-        return _error_response(e, "获取本体关系列表失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
+        return _error_response(e, "获取本体关系类型列表失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
 
 
-@router.put("/admin/meta/ontology/relations/{relation_name}")
+@router.put("/admin/meta/ontology/relation-types/{relation_type_name}")
 async def upsert_ontology_relation(
-    relation_name: str, payload: OntologyRelationUpsertRequest, request: Request
+    relation_type_name: str, payload: OntologyRelationTypeUpsertRequest, request: Request
 ) -> JSONResponse:
-    """创建/编辑本体关系（连接对象、关联列、基数变更需破坏性确认）。"""
+    """创建/编辑本体关系类型（连接对象类型、关联列、基数变更需破坏性确认）。"""
     try:
         current_user = _get_current_user(request)
         data = await ontology_service.upsert_relation_async(
-            relation_name,
+            relation_type_name,
             payload.model_dump(),
             operator=str(current_user.user_id),
             operator_name=str(current_user.username or ""),
@@ -255,35 +255,35 @@ async def upsert_ontology_relation(
     except HTTPException:
         raise
     except Exception as e:
-        return _error_response(e, "保存本体关系失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
+        return _error_response(e, "保存本体关系类型失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
 
 
-@router.delete("/admin/meta/ontology/relations/{relation_name}")
-async def delete_ontology_relation(relation_name: str, request: Request) -> JSONResponse:
-    """删除本体关系（软删）。"""
+@router.delete("/admin/meta/ontology/relation-types/{relation_type_name}")
+async def delete_ontology_relation(relation_type_name: str, request: Request) -> JSONResponse:
+    """删除本体关系类型（软删）。"""
     try:
         current_user = _get_current_user(request)
         await ontology_service.delete_relation_async(
-            relation_name,
+            relation_type_name,
             operator=str(current_user.user_id),
             operator_name=str(current_user.username or ""),
         )
-        return business_response(data={"relation_name": relation_name}, msg="删除成功")
+        return business_response(data={"relation_type_name": relation_type_name}, msg="删除成功")
     except HTTPException:
         raise
     except Exception as e:
-        return _error_response(e, "删除本体关系失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
+        return _error_response(e, "删除本体关系类型失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
 
 
-@router.post("/admin/meta/ontology/relations/{relation_name}/status")
+@router.post("/admin/meta/ontology/relation-types/{relation_type_name}/status")
 async def change_ontology_relation_status(
-    relation_name: str, payload: OntologyRelationStatusRequest, request: Request
+    relation_type_name: str, payload: OntologyRelationTypeStatusRequest, request: Request
 ) -> JSONResponse:
-    """本体关系状态手动迁移（升级/降级；上限=两侧对象状态的较低者，deprecated 仅随对象级联）。"""
+    """本体关系类型状态手动迁移（升级/降级；上限=两侧对象类型状态的较低者，deprecated 仅随对象类型级联）。"""
     try:
         current_user = _get_current_user(request)
         data = await ontology_service.set_relation_status_async(
-            relation_name,
+            relation_type_name,
             payload.status,
             operator=str(current_user.user_id),
             operator_name=str(current_user.username or ""),
@@ -292,7 +292,7 @@ async def change_ontology_relation_status(
     except HTTPException:
         raise
     except Exception as e:
-        return _error_response(e, "本体关系状态变更失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
+        return _error_response(e, "本体关系类型状态变更失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
 
 
 @router.get("/admin/meta/ontology/consistency-check")
@@ -301,7 +301,7 @@ async def check_ontology_model_consistency(request: Request) -> JSONResponse:
 
     比较域 = 全部领域挂载的数据源组下的公共语义配置 × AI 可见本体面
     （bundle 与注入同源：活跃、certified/experimental、双端在集合内）。
-    只巡检不评分、不阻断任何操作——产出失修清单（映射维度失效/关系列失效/
+    只巡检不评分、不阻断任何操作——产出失修清单（映射维度失效/关系类型列失效/
     类型冲突/属性未映射），供管理员修正映射或恢复维度。
     """
     try:
@@ -335,7 +335,7 @@ async def check_ontology_model_consistency(request: Request) -> JSONResponse:
             data={
                 "group_count": len(group_ids),
                 "config_count": len(configs),
-                "object_count": len(bundle.get("objects") or []),
+                "object_type_count": len(bundle.get("object_types") or []),
                 "findings": findings,
                 "summary": summary,
                 "healthy": summary["error"] == 0 and summary["warning"] == 0,

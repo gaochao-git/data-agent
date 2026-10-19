@@ -4,7 +4,7 @@ from __future__ import annotations
 
 
 class OntologyNameInvalidError(ValueError):
-    """API 名格式非法（对象/属性/关系）→ 40066。"""
+    """API 名格式非法（对象类型/属性/关系类型）→ 40066。"""
 
 
 class OntologyInvalidError(ValueError):
@@ -20,4 +20,4 @@ class OntologyStateInvalidError(RuntimeError):
 
 
 class OntologyNotFoundError(LookupError):
-    """对象/关系不存在 → 40487。"""
+    """对象类型/关系类型不存在 → 40487。"""

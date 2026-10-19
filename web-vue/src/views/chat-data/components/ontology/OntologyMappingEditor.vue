@@ -35,7 +35,7 @@ const configOf = (configId: string): SemanticConfigItem | undefined => optionOf(
 
 // ---------- 模型级联选择（第一级=数据源组，第二级=语义模型） ----------
 
-// 领域锁定：仅展示限定组（对象挂领域后映射只能落在领域绑定的组内）
+// 领域锁定：仅展示限定组（对象类型挂领域后映射只能落在领域绑定的组内）
 const cascaderOptions = computed(() =>
   groupedOptions()
     .filter(group => props.groupIds.length === 0 || props.groupIds.includes(group.groupId))

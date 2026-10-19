@@ -29,17 +29,17 @@ class _FakeRuntime:
 
 def _bundle() -> dict[str, Any]:
     return {
-        "objects": [
+        "object_types": [
             {
                 "id": 1,
-                "object_name": "order",
+                "object_type_name": "order",
                 "display_name": "订单",
                 "status": "certified",
                 "description": "销售订单",
             },
             {
                 "id": 2,
-                "object_name": "user",
+                "object_type_name": "user",
                 "display_name": "用户",
                 "status": "experimental",
                 "description": "下单用户",
@@ -47,7 +47,7 @@ def _bundle() -> dict[str, Any]:
         ],
         "properties": [
             {
-                "object_id": 1,
+                "object_type_id": 1,
                 "property_name": "order_id",
                 "display_name": "订单ID",
                 "value_type": "String",
@@ -55,7 +55,7 @@ def _bundle() -> dict[str, Any]:
                 "is_title": False,
             },
             {
-                "object_id": 1,
+                "object_type_id": 1,
                 "property_name": "amount",
                 "display_name": "金额",
                 "value_type": "Decimal",
@@ -63,7 +63,7 @@ def _bundle() -> dict[str, Any]:
                 "is_title": False,
             },
             {
-                "object_id": 2,
+                "object_type_id": 2,
                 "property_name": "user_id",
                 "display_name": "用户ID",
                 "value_type": "String",
@@ -71,11 +71,11 @@ def _bundle() -> dict[str, Any]:
                 "is_title": True,
             },
         ],
-        "relations": [
+        "relation_types": [
             {
-                "relation_name": "order_belongs_to_user",
-                "from_object_id": 1,
-                "to_object_id": 2,
+                "relation_type_name": "order_belongs_to_user",
+                "from_object_type_id": 1,
+                "to_object_type_id": 2,
                 "from_columns": ["user_id"],
                 "to_columns": ["user_id"],
                 "multiplicity": "many_to_one",
@@ -87,12 +87,12 @@ def _bundle() -> dict[str, Any]:
         ],
         "mappings": [
             {
-                "object_id": 1,
+                "object_type_id": 1,
                 "semantic_config_id": "sc_order",
                 "column_mappings": {"order_id": "订单编号", "amount": "订单金额", "user_id": "下单用户"},
             },
             {
-                "object_id": 2,
+                "object_type_id": 2,
                 "semantic_config_id": "sc_user",
                 "column_mappings": {"user_id": "用户编号"},
             },
@@ -149,8 +149,8 @@ def test_render_catalog_shapes_objects_and_relations():
     )
     # 未传 configs 时不渲染 models 段（生产链路必传 runtime configs）
     assert doc["models"] == []
-    assert [obj["object"] for obj in doc["objects"]] == ["order", "user"]
-    order = doc["objects"][0]
+    assert [obj["object_type"] for obj in doc["object_types"]] == ["order", "user"]
+    order = doc["object_types"][0]
     assert order["display_name"] == "订单"
     assert {prop["name"] for prop in order["properties"]} == {"order_id", "amount"}
     assert order["mappings"][0]["semantic_config_name"] == "订单模型"
@@ -159,21 +159,21 @@ def test_render_catalog_shapes_objects_and_relations():
     # 映射右值是模型维度名（概念层不重复定义物理列）
     assert order["mappings"][0]["column_mappings"]["amount"] == "订单金额"
     assert "table_alias" not in order["mappings"][0]
-    rel = doc["relations"][0]
+    rel = doc["relation_types"][0]
     assert rel["from"] == "order" and rel["to"] == "user"
-    # 关系列两级翻译：属性 user_id → 维度（下单用户/用户编号）→ 物理列
+    # 关系类型列两级翻译：属性 user_id → 维度（下单用户/用户编号）→ 物理列
     assert rel["from_columns"] == ["USER_ID"]
     assert rel["to_columns"] == ["UID"]
     assert rel["from_columns_by_model"] == {"sc_order": ["USER_ID"]}
     assert rel["to_columns_by_model"] == {"sc_user": ["UID"]}
     # 单映射全部解析成功时不出现 unresolved 噪声
     assert "unresolved" not in rel
-    # 关系条目补齐 description/status 字段
+    # 关系类型条目补齐 description/status 字段
     assert "description" in rel and "status" in rel
 
 
 def test_render_catalog_models_section_lists_all_enabled_models():
-    """models 段是全部启用模型索引：停用/重复剔除，未建本体对象的模型也在其中。"""
+    """models 段是全部启用模型索引：停用/重复剔除，未建本体对象类型的模型也在其中。"""
     configs = [
         {
             "id": "sc_order",
@@ -183,7 +183,7 @@ def test_render_catalog_models_section_lists_all_enabled_models():
             "business_notes": "口径说明",
         },
         {"id": "sc_user", "name": "用户模型", "enabled": True, "semantic_config_desc": "用户分析"},
-        {"id": "sc_orphan", "name": "未建对象模型", "enabled": True, "description": "没有本体对象"},
+        {"id": "sc_orphan", "name": "未建对象类型模型", "enabled": True, "description": "没有本体对象类型"},
         {"id": "sc_off", "name": "停用模型", "enabled": False},
         {"id": "sc_order", "name": "重复模型", "enabled": True},
     ]
@@ -202,15 +202,15 @@ def test_render_catalog_models_section_lists_all_enabled_models():
         "description": "订单分析",
         "business_notes": "口径说明",
     }
-    # 未建对象的启用模型也保留 file/description 索引，二选一不丢信息
+    # 未建对象类型的启用模型也保留 file/description 索引，二选一不丢信息
     orphan = models[1]
-    assert orphan["name"] == "未建对象模型" and orphan["file"] == ""
-    assert orphan["description"] == "没有本体对象"
+    assert orphan["name"] == "未建对象类型模型" and orphan["file"] == ""
+    assert orphan["description"] == "没有本体对象类型"
     # 停用模型不出现
     assert "sc_off" not in {model["semantic_config_id"] for model in models}
-    # comment 说明 models/objects 的关系
+    # comment 说明 models/object-types 的关系类型
     assert "models 是全部启用模型索引" in doc["comment"]
-    assert "模型可能不在 objects 中" in doc["comment"]
+    assert "模型可能不在 object_types 中" in doc["comment"]
 
 
 def test_translate_keeps_unknown_dimension_name():
@@ -237,9 +237,9 @@ def test_multi_mapping_translation_is_deterministic_and_never_mixes_models():
     """多模型绑定时用「同一条映射」的 config_id 翻译，且行序不影响输出。"""
     mappings = [
         # 第一条 column_mappings 为空：旧实现会跳过它取列，却仍用 mappings[0] 的 config_id 查维度
-        {"object_id": 1, "semantic_config_id": "sc_a", "column_mappings": {}},
-        {"object_id": 1, "semantic_config_id": "sc_b", "column_mappings": {"user_id": "用户编号"}},
-        {"object_id": 2, "semantic_config_id": "sc_user", "column_mappings": {"user_id": "用户编号"}},
+        {"object_type_id": 1, "semantic_config_id": "sc_a", "column_mappings": {}},
+        {"object_type_id": 1, "semantic_config_id": "sc_b", "column_mappings": {"user_id": "用户编号"}},
+        {"object_type_id": 2, "semantic_config_id": "sc_user", "column_mappings": {"user_id": "用户编号"}},
     ]
     dimension_columns = {
         "sc_a": {"用户编号": "USER_FROM_A"},
@@ -248,14 +248,14 @@ def test_multi_mapping_translation_is_deterministic_and_never_mixes_models():
     }
     for ordered in (mappings, list(reversed(mappings))):
         doc = _render(_multi_mapping_bundle(ordered), dimension_columns=dimension_columns)
-        rel = doc["relations"][0]
+        rel = doc["relation_types"][0]
         # 旧实现会输出 sc_a 的 USER_FROM_A（串模型）；正确结果必须来自 sc_b
         assert rel["from_columns"] == ["UID"]
         assert rel["from_columns_by_model"] == {"sc_b": ["UID"]}
         assert rel["to_columns"] == ["UID"]
         assert rel["to_columns_by_model"] == {"sc_user": ["UID"]}
-        # 空 column_mappings 的映射行不渲染（对象上只剩 sc_b）
-        assert [mapping["semantic_config_id"] for mapping in doc["objects"][0]["mappings"]] == ["sc_b"]
+        # 空 column_mappings 的映射行不渲染（对象类型上只剩 sc_b）
+        assert [mapping["semantic_config_id"] for mapping in doc["object_types"][0]["mappings"]] == ["sc_b"]
 
 
 def test_relation_marks_unresolved_when_column_falls_back():
@@ -263,15 +263,15 @@ def test_relation_marks_unresolved_when_column_falls_back():
     bundle = _bundle()
     bundle["mappings"] = [
         # from 侧 sc_order 没有 user_id 映射 → 回退原始属性名
-        {"object_id": 1, "semantic_config_id": "sc_order", "column_mappings": {"amount": "订单金额"}},
+        {"object_type_id": 1, "semantic_config_id": "sc_order", "column_mappings": {"amount": "订单金额"}},
         # to 侧映射到「用户编号」，但该维度是 expression 无物理列 → 回退维度名
-        {"object_id": 2, "semantic_config_id": "sc_user", "column_mappings": {"user_id": "用户编号"}},
+        {"object_type_id": 2, "semantic_config_id": "sc_user", "column_mappings": {"user_id": "用户编号"}},
     ]
     doc = _render(
         bundle,
         dimension_columns={"sc_order": {"订单金额": "AMOUNT"}, "sc_user": {}},
     )
-    rel = doc["relations"][0]
+    rel = doc["relation_types"][0]
     assert rel["from_columns"] == ["user_id"]
     assert rel["to_columns"] == ["用户编号"]
     assert rel["from_columns_by_model"] == {"sc_order": ["user_id"]}
@@ -279,74 +279,74 @@ def test_relation_marks_unresolved_when_column_falls_back():
     assert rel["unresolved"] is True
 
 
-def test_object_mappings_filter_empty_and_object_survives():
-    """空 column_mappings 的映射行从对象条目剔除，对象本身保留。"""
+def test_object_type_mappings_filter_empty_and_object_survives():
+    """空 column_mappings 的映射行从对象类型条目剔除，对象类型本身保留。"""
     bundle = _bundle()
     bundle["mappings"] = [
-        {"object_id": 1, "semantic_config_id": "sc_empty", "column_mappings": {}},
-        {"object_id": 1, "semantic_config_id": "sc_order", "column_mappings": {"order_id": "订单编号"}},
-        {"object_id": 2, "semantic_config_id": "sc_user", "column_mappings": {}},
+        {"object_type_id": 1, "semantic_config_id": "sc_empty", "column_mappings": {}},
+        {"object_type_id": 1, "semantic_config_id": "sc_order", "column_mappings": {"order_id": "订单编号"}},
+        {"object_type_id": 2, "semantic_config_id": "sc_user", "column_mappings": {}},
     ]
     doc = _render(bundle)
-    assert [obj["object"] for obj in doc["objects"]] == ["order", "user"]
-    assert [mapping["semantic_config_id"] for mapping in doc["objects"][0]["mappings"]] == ["sc_order"]
-    # user 只有空映射：对象保留，mappings 为空列表而不是 {}
-    assert doc["objects"][1]["mappings"] == []
+    assert [obj["object_type"] for obj in doc["object_types"]] == ["order", "user"]
+    assert [mapping["semantic_config_id"] for mapping in doc["object_types"][0]["mappings"]] == ["sc_order"]
+    # user 只有空映射：对象类型保留，mappings 为空列表而不是 {}
+    assert doc["object_types"][1]["mappings"] == []
 
 
 def test_relations_sorted_by_name_and_carry_description_status():
     bundle = _bundle()
-    bundle["relations"] = [
+    bundle["relation_types"] = [
         dict(
-            bundle["relations"][0],
-            relation_name="order_belongs_to_user",
+            bundle["relation_types"][0],
+            relation_type_name="order_belongs_to_user",
             description="订单归属用户",
             status="certified",
         ),
         dict(
-            bundle["relations"][0],
-            relation_name="aaa_user_has_orders",
+            bundle["relation_types"][0],
+            relation_type_name="aaa_user_has_orders",
             description="用户拥有订单",
             status="experimental",
         ),
     ]
     doc = _render(bundle, dimension_columns=_DIMENSION_COLUMNS)
-    assert [rel["name"] for rel in doc["relations"]] == ["aaa_user_has_orders", "order_belongs_to_user"]
-    assert doc["relations"][0]["description"] == "用户拥有订单"
-    assert doc["relations"][0]["status"] == "experimental"
-    assert doc["relations"][1]["description"] == "订单归属用户"
-    assert doc["relations"][1]["status"] == "certified"
+    assert [rel["name"] for rel in doc["relation_types"]] == ["aaa_user_has_orders", "order_belongs_to_user"]
+    assert doc["relation_types"][0]["description"] == "用户拥有订单"
+    assert doc["relation_types"][0]["status"] == "experimental"
+    assert doc["relation_types"][1]["description"] == "订单归属用户"
+    assert doc["relation_types"][1]["status"] == "certified"
 
 
 def test_properties_carry_enum_ref_and_description():
     bundle = _bundle()
     bundle["properties"][0].update({"value_type": "enum", "enum_ref": "order_status", "description": "订单状态"})
     doc = _render(bundle)
-    props = {prop["name"]: prop for prop in doc["objects"][0]["properties"]}
+    props = {prop["name"]: prop for prop in doc["object_types"][0]["properties"]}
     assert props["order_id"]["enum_ref"] == "order_status"
     assert props["order_id"]["description"] == "订单状态"
     # 非 enum 属性不带 enum_ref 噪声
     assert "enum_ref" not in props["amount"]
 
 
-def _large_bundle(object_count: int = 20, property_count: int = 40) -> dict[str, Any]:
-    objects = []
+def _large_bundle(object_type_count: int = 20, property_count: int = 40) -> dict[str, Any]:
+    object_types = []
     properties = []
-    for index in range(object_count):
-        object_id = index + 1
-        objects.append(
+    for index in range(object_type_count):
+        object_type_id = index + 1
+        object_types.append(
             {
-                "id": object_id,
-                "object_name": f"obj_{index:02d}",
-                "display_name": f"对象{index:02d}",
+                "id": object_type_id,
+                "object_type_name": f"obj_{index:02d}",
+                "display_name": f"对象类型{index:02d}",
                 "status": "certified",
-                "description": f"第 {index} 个对象",
+                "description": f"第 {index} 个对象类型",
             }
         )
         for prop_index in range(property_count):
             properties.append(
                 {
-                    "object_id": object_id,
+                    "object_type_id": object_type_id,
                     "property_name": f"prop_{prop_index:02d}",
                     "display_name": f"属性{prop_index:02d}",
                     "value_type": "String",
@@ -354,29 +354,29 @@ def _large_bundle(object_count: int = 20, property_count: int = 40) -> dict[str,
                     "is_title": False,
                 }
             )
-    relations = [
+    relation_types = [
         {
-            "relation_name": "rel_keep",
-            "from_object_id": 1,
-            "to_object_id": 2,
+            "relation_type_name": "rel_keep",
+            "from_object_type_id": 1,
+            "to_object_type_id": 2,
             "from_columns": ["prop_00"],
             "to_columns": ["prop_00"],
             "multiplicity": "many_to_one",
         },
         {
-            "relation_name": "rel_dropped",
-            "from_object_id": 1,
-            "to_object_id": object_count,
+            "relation_type_name": "rel_dropped",
+            "from_object_type_id": 1,
+            "to_object_type_id": object_type_count,
             "from_columns": ["prop_00"],
             "to_columns": ["prop_00"],
             "multiplicity": "many_to_one",
         },
     ]
-    return {"objects": objects, "properties": properties, "relations": relations, "mappings": []}
+    return {"object_types": object_types, "properties": properties, "relation_types": relation_types, "mappings": []}
 
 
 def test_catalog_truncates_objects_by_character_budget():
-    """超预算时按对象名顺序截断，只保留截断后对象间的关系，models 照常输出。"""
+    """超预算时按对象类型名顺序截断，只保留截断后对象类型间的关系类型，models 照常输出。"""
     bundle = _large_bundle()
     doc = _render(
         bundle,
@@ -385,12 +385,12 @@ def test_catalog_truncates_objects_by_character_budget():
     )
     assert doc["truncated"] is True
     assert doc["omitted_objects"] > 0
-    assert len(doc["objects"]) + doc["omitted_objects"] == len(bundle["objects"])
-    assert len(doc["objects"]) < len(bundle["objects"])
-    kept_names = [obj["object"] for obj in doc["objects"]]
+    assert len(doc["object_types"]) + doc["omitted_objects"] == len(bundle["object_types"])
+    assert len(doc["object_types"]) < len(bundle["object_types"])
+    kept_names = [obj["object_type"] for obj in doc["object_types"]]
     assert kept_names == sorted(kept_names)
-    # 截断后只保留两端都在目录里的关系（rel_dropped 的 to 对象已被截掉）
-    assert [rel["name"] for rel in doc["relations"]] == ["rel_keep"]
+    # 截断后只保留两端都在目录里的关系类型（rel_dropped 的 to 对象类型已被截掉）
+    assert [rel["name"] for rel in doc["relation_types"]] == ["rel_keep"]
     # models 段很小，不受截断影响
     assert [model["semantic_config_id"] for model in doc["models"]] == ["sc_order"]
 
@@ -421,9 +421,9 @@ def test_materialize_writes_catalog_and_counts_objects(enabled, monkeypatch):
     # 本体目录与语义资产同放 workspace/semantic/（不再单开 ontology/ 目录）
     assert "/workspace/semantic/_ontology_catalog.yaml" in path
     doc = yaml.safe_load(runtime.written[path])
-    assert len(doc["objects"]) == 2
-    assert doc["objects"][0]["mappings"][0]["file"] == "订单模型__1234.yaml"
-    # 顶层 models 覆盖全部启用模型（含对象覆盖不到的模型）
+    assert len(doc["object_types"]) == 2
+    assert doc["object_types"][0]["mappings"][0]["file"] == "订单模型__1234.yaml"
+    # 顶层 models 覆盖全部启用模型（含对象类型覆盖不到的模型）
     assert [model["semantic_config_id"] for model in doc["models"]] == ["sc_order", "sc_user"]
     # 旧版独立 ontology/ 目录残留被顺手清理
     assert runtime.deleted == [ontology_injection.ONTOLOGY_LEGACY_CATALOG_PATH]
@@ -511,7 +511,7 @@ def test_prematerialize_invokes_ontology_injection(monkeypatch, enabled):
 
 
 def test_prematerialize_semantic_catalog_when_no_objects(monkeypatch, enabled):
-    """无本体对象时语义资产目录照常物化（二选一回落）。"""
+    """无本体对象类型时语义资产目录照常物化（二选一回落）。"""
     runtime = _FakeRuntime()
     materialize_kwargs: list[dict[str, Any]] = []
 

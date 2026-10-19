@@ -462,9 +462,9 @@ class OntologyDomainUpsertRequest(BaseModel):
 
 
 class OntologyPropertyItem(BaseModel):
-    """本体属性项（属性一等实体，随对象表单整体提交）"""
+    """本体属性项（属性一等实体，随对象类型表单整体提交）"""
 
-    property_name: str = Field(..., min_length=1, max_length=128, description="属性API名，对象内唯一")
+    property_name: str = Field(..., min_length=1, max_length=128, description="属性API名，对象类型内唯一")
     display_name: str = Field(default="", max_length=128, description="展示名")
     description: str = Field(default="", max_length=1024, description="属性描述")
     value_type: Literal["String", "Integer", "Decimal", "Boolean", "Date", "DateTime", "enum"] = Field(
@@ -478,8 +478,8 @@ class OntologyPropertyItem(BaseModel):
     render_hints: dict[str, bool] = Field(
         default_factory=dict, description="渲染提示: searchable/sortable/low_cardinality"
     )
-    is_identifier: bool = Field(default=False, description="标识属性：参与对象主键组合（业务主键，禁自增行号）")
-    is_title: bool = Field(default=False, description="标题属性：对象标题键（每对象至多一个）")
+    is_identifier: bool = Field(default=False, description="标识属性：参与对象类型主键组合（业务主键，禁自增行号）")
+    is_title: bool = Field(default=False, description="标题属性：对象类型标题键（每对象类型至多一个）")
 
 
 class OntologyMappingItem(BaseModel):
@@ -489,50 +489,50 @@ class OntologyMappingItem(BaseModel):
     column_mappings: dict[str, str] = Field(default_factory=dict, description="字段映射: {属性API名: 模型维度名}")
 
 
-class OntologyObjectUpsertRequest(BaseModel):
-    """本体对象创建/编辑请求（object_name 由路径参数携带；状态走独立接口）"""
+class OntologyObjectTypeUpsertRequest(BaseModel):
+    """本体对象类型创建/编辑请求（object_type_name 由路径参数携带；状态走独立接口）"""
 
     display_name: str = Field(..., min_length=1, max_length=128, description="展示名")
-    description: str = Field(default="", max_length=1024, description="对象描述")
+    description: str = Field(default="", max_length=1024, description="对象类型描述")
     domain_id: int | None = Field(default=None, description="领域ID（组随领域继承），缺省=未分域")
     properties: list[OntologyPropertyItem] = Field(..., min_length=1, description="属性集（整体提交）")
     mappings: list[OntologyMappingItem] = Field(
-        default_factory=list, description="语义模型映射列表（独立存映射表，随对象提交全量重写）"
+        default_factory=list, description="语义模型映射列表（独立存映射表，随对象类型提交全量重写）"
     )
-    allow_overwrite: bool = Field(default=False, description="编辑既有活跃对象时为 True")
+    allow_overwrite: bool = Field(default=False, description="编辑既有活跃对象类型时为 True")
     confirm_destructive: bool = Field(default=False, description="破坏性变更（映射/主键/标题键变更）显式确认")
 
 
-class OntologyObjectStatusRequest(BaseModel):
-    """本体对象状态迁移请求"""
+class OntologyObjectTypeStatusRequest(BaseModel):
+    """本体对象类型状态迁移请求"""
 
     status: Literal["draft", "experimental", "certified", "deprecated"] = Field(..., description="目标状态")
     deprecation_reason: str = Field(default="", max_length=512, description="废弃原因，status=deprecated 时必填")
     deprecated_until: str = Field(default="", max_length=19, description="废弃删除期限（YYYY-MM-DD HH:MM:SS），可选")
-    successor_object_name: str = Field(default="", max_length=128, description="替代对象API名，可选但必须存在")
+    successor_object_type_name: str = Field(default="", max_length=128, description="替代对象类型API名，可选但必须存在")
 
 
-class OntologyObjectDomainRequest(BaseModel):
-    """本体对象领域归属变更请求（拖拽换域等窄写路径；null=移出领域）"""
+class OntologyObjectTypeDomainRequest(BaseModel):
+    """本体对象类型领域归属变更请求（拖拽换域等窄写路径；null=移出领域）"""
 
     domain_id: int | None = Field(default=None, description="目标领域主键；null=移出领域")
 
 
-class OntologyRelationStatusRequest(BaseModel):
-    """本体关系状态迁移请求（deprecated 仅随对象级联，不接受手动迁移）"""
+class OntologyRelationTypeStatusRequest(BaseModel):
+    """本体关系类型状态迁移请求（deprecated 仅随对象类型级联，不接受手动迁移）"""
 
     status: Literal["draft", "experimental", "certified"] = Field(
-        ..., description="目标状态（上限=两侧对象状态的较低者，关系不得高于任一端）"
+        ..., description="目标状态（上限=两侧对象类型状态的较低者，关系类型不得高于任一端）"
     )
 
 
-class OntologyRelationUpsertRequest(BaseModel):
-    """本体关系创建/编辑请求（relation_name 由路径参数携带）"""
+class OntologyRelationTypeUpsertRequest(BaseModel):
+    """本体关系类型创建/编辑请求（relation_type_name 由路径参数携带）"""
 
-    from_object_name: str = Field(..., min_length=1, max_length=128, description="起始对象API名")
-    to_object_name: str = Field(..., min_length=1, max_length=128, description="目标对象API名")
+    from_object_type_name: str = Field(..., min_length=1, max_length=128, description="起始对象类型API名")
+    to_object_type_name: str = Field(..., min_length=1, max_length=128, description="目标对象类型API名")
     multiplicity: Literal["many_to_one", "one_to_one"] = Field(
-        default="many_to_one", description="基数（多对多走 junction 对象表达）"
+        default="many_to_one", description="基数（多对多走 junction 对象类型表达）"
     )
     from_columns: list[str] = Field(..., min_length=1, description="起始侧关联列（属性API名）")
     to_columns: list[str] = Field(..., min_length=1, description="目标侧关联列（必须引用对方标识属性）")
@@ -540,9 +540,9 @@ class OntologyRelationUpsertRequest(BaseModel):
     to_display_name: str = Field(default="", max_length=128, description="反向方向展示名")
     from_verbalize: str = Field(default="", max_length=512, description='正向自然语言模式串，如 "{from} 归属于 {to}"')
     to_verbalize: str = Field(default="", max_length=512, description="反向自然语言模式串")
-    description: str = Field(default="", max_length=1024, description="关系描述")
-    allow_overwrite: bool = Field(default=False, description="编辑既有关系时为 True")
-    confirm_destructive: bool = Field(default=False, description="破坏性变更（连接对象/关联列/基数变更）显式确认")
+    description: str = Field(default="", max_length=1024, description="关系类型描述")
+    allow_overwrite: bool = Field(default=False, description="编辑既有关系类型时为 True")
+    confirm_destructive: bool = Field(default=False, description="破坏性变更（连接对象类型/关联列/基数变更）显式确认")
 
 
 class DatasourceTableIndexesUpdateRequest(BaseModel):
@@ -1112,30 +1112,30 @@ class _ListExecutionTargetsActionPayload(BaseModel):
     """
 
 
-class _ListOntologyObjectsActionPayload(BaseModel):
-    """``list_objects`` 的入参结构：列出可定位本体对象（轻量清单，只读发现通道）。
+class _ListOntologyObjectTypesActionPayload(BaseModel):
+    """``list_object_types`` 的入参结构：列出可定位本体对象类型（轻量清单，只读发现通道）。
 
-    无业务参数：范围由服务端结构性收敛（⊆本轮启用语义模型绑定的对象），
+    无业务参数：范围由服务端结构性收敛（⊆本轮启用语义模型绑定的对象类型），
     模型不可指定、也不可扩大——与 list_execution_targets 同一防越权口径。
     """
 
 
-class _LocateObjectActionPayload(BaseModel):
-    """``locate_object`` 的入参结构：按本体对象批量定位语义模型（纯导航，不执行查询）。
+class _LocateObjectTypeActionPayload(BaseModel):
+    """``locate_object_type`` 的入参结构：按本体对象类型批量定位语义模型（纯导航，不执行查询）。
 
-    可定位对象结构性收敛（⊆本轮启用模型绑定的对象）；返回绑定模型（含快照
-    文件名）、属性→维度对照与对象关系，供 AI 直接进入 execute_query，省掉
+    可定位对象类型结构性收敛（⊆本轮启用模型绑定的对象类型）；返回绑定模型（含快照
+    文件名）、属性→维度对照与对象类型间关系类型，供 AI 直接进入 execute_query，省掉
     grep/精读模型 YAML 的定位轮次。
     """
 
-    objects: list[str] = Field(
+    object_types: list[str] = Field(
         ...,
         min_length=1,
-        description='本体对象 API 名列表（如 ["Customer", "Order"]），单次最多 10 个；必须是绑定本轮启用语义模型的对象',
+        description='本体对象类型 API 名列表（如 ["Customer", "Order"]），单次最多 10 个；必须是绑定本轮启用语义模型的对象类型',
     )
     semantic_config_id: str | None = Field(
         default=None,
-        description="可选；只看对象在该语义模型上的绑定（多绑定对象据此过滤）",
+        description="可选；只看对象类型在该语义模型上的绑定（多绑定对象类型据此过滤）",
     )
 
 
@@ -1147,8 +1147,8 @@ DATA_ANALYZING_ACTION_PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
     "execute_query": SemanticQueryInput,
     "check_yaml": _CheckYamlActionPayload,
     "list_execution_targets": _ListExecutionTargetsActionPayload,
-    "list_objects": _ListOntologyObjectsActionPayload,
-    "locate_object": _LocateObjectActionPayload,
+    "list_object_types": _ListOntologyObjectTypesActionPayload,
+    "locate_object_type": _LocateObjectTypeActionPayload,
 }
 
 
@@ -1158,8 +1158,8 @@ class DataAnalyzingInput(BaseModel):
     七个 action：``validate_dsl`` / ``validate_dashboard`` 校验（不执行）、
     ``execute_query`` 执行查询（DSL 或 SQL 二选一）、``check_yaml`` 语义模型 YAML 自检、
     ``list_execution_targets`` 实时获取可用执行对象（只读发现通道）、
-    ``list_objects`` 列出可定位本体对象（轻量清单，只读发现通道）、
-    ``locate_object`` 按本体对象批量定位语义模型（纯导航，不执行查询）。
+    ``list_object_types`` 列出可定位本体对象类型（轻量清单，只读发现通道）、
+    ``locate_object_type`` 按本体对象类型批量定位语义模型（纯导航，不执行查询）。
     action_payload 不平铺成顶层字段（后续扩展 action 只加 payload 模型即可），
     payload 的跨字段校验在工具实现入口经 ``validate_data_analyzing_payload`` 完成——
     不能放进 model_validator：langgraph 的 ToolInvocationError 会过滤 loc 为空的
@@ -1173,8 +1173,8 @@ class DataAnalyzingInput(BaseModel):
         "execute_query",
         "check_yaml",
         "list_execution_targets",
-        "list_objects",
-        "locate_object",
+        "list_object_types",
+        "locate_object_type",
     ] = Field(
         ...,
         description=(
@@ -1182,8 +1182,8 @@ class DataAnalyzingInput(BaseModel):
             "validate_dashboard 批量校验完整 dashboard_spec 的所有卡片；"
             "execute_query 执行查询（DSL 或 SQL 二选一）；check_yaml 语义模型 YAML 交付前自检；"
             "list_execution_targets 实时获取当前用户可用执行对象清单；"
-            "list_objects 列出可定位本体对象（轻量清单：对象名/显示名/描述 + 各自绑定模型，不执行查询）；"
-            "locate_object 按本体对象批量定位语义模型（返回绑定模型/属性→维度对照/关系，不执行查询）"
+            "list_object_types 列出可定位本体对象类型（轻量清单：对象类型名/显示名/描述 + 各自绑定模型，不执行查询）；"
+            "locate_object_type 按本体对象类型批量定位语义模型（返回绑定模型/属性→维度对照/对象类型间关系类型，不执行查询）"
         ),
     )
     action_payload: dict[str, Any] = Field(
@@ -1197,8 +1197,8 @@ class DataAnalyzingInput(BaseModel):
             '"member_datasource_ids": ["<ID>"]}（member_datasource_ids 必须是 ID 字符串数组，单个机构也传数组）；'
             'check_yaml 传 {"file_path": "/mnt/user-data/workspace/model.yaml"}；'
             "list_execution_targets 传 {}；"
-            'list_objects 传 {}；'
-            'locate_object 传 {"objects": [<对象API名>...], "semantic_config_id": "可选，只看该模型的绑定"}'
+            'list_object_types 传 {}；'
+            'locate_object_type 传 {"object_types": [<对象类型API名>...], "semantic_config_id": "可选，只看该模型的绑定"}'
         ),
     )
     intent: str = Field(
