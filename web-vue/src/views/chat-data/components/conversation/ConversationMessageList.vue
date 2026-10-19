@@ -10,6 +10,7 @@ import AssistantMessageFooter from '../AssistantMessageFooter.vue'
 import QueryResultPanel from '../QueryResultPanel.vue'
 import ToolCallList from '../ToolCallList.vue'
 import ThinkingSegmentBody from './ThinkingSegmentBody.vue'
+import WaitingTip from './WaitingTip.vue'
 
 interface Props {
   messages: Message[]
@@ -483,6 +484,8 @@ const handleCopyAssistantMessage = async (message: Message) => {
             <span class="h-1.5 w-1.5 rounded-full bg-[#1677FF] animate-pulse [animation-delay:240ms]"></span>
             <span v-if="liveGenerationSpeed" class="whitespace-nowrap text-[11px] text-slate-400">~{{ liveGenerationSpeed }} tok/s</span>
             <span v-if="liveElapsedMs" class="whitespace-nowrap text-[11px] text-slate-400">用时 {{ formatTotalDurationLabel(liveElapsedMs) }}</span>
+            <!-- 等待期知识轮播：内联在用时之后，不额外占一行 -->
+            <WaitingTip :active="!!message.isStreaming" />
           </div>
         </template>
       </div>
