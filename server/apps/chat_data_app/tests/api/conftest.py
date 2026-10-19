@@ -546,6 +546,8 @@ def _default_models_registry(monkeypatch, tmp_path):
     if str(os.getenv("CHAT_DATA_MODELS_FILE") or "").strip():
         yield
         return
+    from apps.chat_data_app.services import llm_config
+
     path = tmp_path / "default_models.json"
     path.write_text(
         _json.dumps(
@@ -575,6 +577,14 @@ def _default_models_registry(monkeypatch, tmp_path):
         encoding="utf-8",
     )
     monkeypatch.setenv("CHAT_DATA_MODELS_FILE", str(path))
+    # 服务路径冷缓存拒绝回落文件：模拟启动预热成功后的缓存落位（lifespan 预热在
+    # API 测试环境会因无 DB 失败，需夹具兜底；来源锚定保证显式注册表用例不受污染）
+    monkeypatch.setattr(llm_config, "_registry_cache", llm_config.load_chat_data_model_configs())
+    import time as _time
+
+    monkeypatch.setattr(llm_config, "_registry_cache_loaded_at", _time.monotonic())
+    monkeypatch.setattr(llm_config, "_registry_cache_origin", str(path))
+    monkeypatch.setattr(llm_config, "_registry_refresh_task", None)
     yield
 
 

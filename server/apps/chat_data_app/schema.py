@@ -234,6 +234,48 @@ class ChatDataSettingUpsertRequest(BaseModel):
     setting_value: str = Field(..., min_length=1, max_length=2048, description="变量值（字符串存储，按注册类型解析）")
 
 
+class ChatDataModelUpsertRequest(BaseModel):
+    """后台模型注册表保存请求（api_key 必填，只接受 SM4 密文）。
+
+    响应回传 api_key_cipher（编辑时前端自动回填，无需重贴）；落库原样存密文。
+    模型参数集中在 params 对象（temperature/context_window/max_output_tokens/
+    vlm/thinking），服务端按白名单校验后打包为 params_json 落库，扩参不改表。
+    """
+
+    model_id: str = Field("", max_length=128, description="模型请求名（发给上游 API 的 model 参数；同供应商内唯一）")
+    provider: str = Field("", max_length=128, description="提供商（如 DeepSeek/阿里云/本地 vLLM，与请求名组成业务唯一键）")
+    display_name: str = Field("", max_length=128, description="显示名（空则用 model_id）")
+    base_url: str = Field("", max_length=500, description="API Base URL（连接信息只以模型行为准）")
+    api_key: str = Field("", max_length=512, description="API Key SM4 密文（必填，base64:base64；明文会被拒绝）")
+    params: dict = Field(
+        default_factory=dict,
+        description=(
+            "模型参数 {temperature,context_window,max_output_tokens,vlm,thinking{mode,dialect,"
+            "efforts:[\"low\"]|[{'level':'low','value':'minimal'}],default_effort}}；"
+            "efforts 支持旧字符串数组与新对象数组（value 缺省=档位同名，参数值可为 string/bool/number）；"
+            "关形态参数值由后端按方言固定兜底（reasoning_effort→none、openrouter→enabled:false），"
+            "默认开启由默认档位推导（默认档位为普通档=默认开；off/none 或未勾=默认关），"
+            "请求中的废弃字段 off_value/default_on 会被静默忽略；"
+            "max_output_tokens 必填，缺省取 context_window 的 1/4"
+        ),
+    )
+    enabled: bool | None = Field(None, description="是否启用（不传保持原值；新建缺省启用由服务端落 1）")
+    remark: str = Field("", max_length=500, description="备注")
+
+
+class ChatDataModelDiscoverRequest(BaseModel):
+    """后台模型探测请求：用表单连接信息拉取上游 OpenAI 兼容 /models 清单。"""
+
+    base_url: str = Field(..., max_length=500, description="API Base URL")
+    api_key: str = Field(..., max_length=512, description="API Key SM4 密文（base64:base64）")
+
+
+class ChatDataModelEnabledRequest(BaseModel):
+    """后台模型启停请求（enabled 必须为严格布尔，防止字符串 "false" 被当真值）。"""
+
+    enabled: bool = Field(..., description="是否启用（true=启用 false=停用）")
+
+
 # ============ 表管理相关模型 ============
 
 

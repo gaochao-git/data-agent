@@ -8,7 +8,6 @@ import { ElMessage } from 'element-plus'
 import type { ChatDataContextCompressionEvent, ChatDataTokenUsage, DashboardSpecPayload, DataSource, ExecutionTargetOption, LangGraphMessage, Message, MessageAttachment, PendingUserQuestion, SemanticYamlFile, SkillInfo, SubagentContextUsage, SubagentTrailItem, ThinkingSegment, ToolCallInfo, ToolLifecycleEventData, UserQuestionAnswer } from '../../types'
 import { useSqlGenerator, type RunDoneStatus } from '../../composables/useSqlGenerator'
 import { useConversationHistory } from '../../composables/useConversationHistory'
-import { useDeepThinking } from '../../composables/useDeepThinking'
 import { useModelOptions } from '../../composables/useModelOptions'
 import { useSaveToPanel } from '../../composables/useSaveToPanel'
 import { useSkillCommandMenu } from '../../composables/useSkillCommandMenu'
@@ -108,7 +107,15 @@ const selectedModel = computed({
   get: () => props.selectedModelId || '',
   set: (value: string) => emit('update:selectedModelId', value),
 })
-const { enableDeepThinking, thinkingEffort } = useDeepThinking()
+// 思考开关/档位为组件内临时状态（null=未触碰：请求不传字段，由后端按注册表
+// default_on/default_effort 落点）。不持久化、不跨模型/跨会话携带——切换即重置，
+// 默认永远以模型管理面板表里的配置为准。
+const enableDeepThinking = ref<boolean | null>(null)
+const thinkingEffort = ref<string | null>(null)
+watch(selectedModel, () => {
+  enableDeepThinking.value = null
+  thinkingEffort.value = null
+})
 
 const messages = ref<Message[]>([])
 const input = ref('')
@@ -712,6 +719,11 @@ const importedWorkspaceSkillIds = ref<Record<string, string>>({})
 const activeAssistantMessageId = ref<string | null>(null)
 const localConversationId = ref<string | null>(props.conversationId || null)
 const conversationIdRef = toRef(props, 'conversationId')
+// 切换会话同样重置思考意图：显式选择不跨会话记忆（默认永远以注册表配置为准）
+watch(() => props.conversationId || localConversationId.value, () => {
+  enableDeepThinking.value = null
+  thinkingEffort.value = null
+})
 const creatingDashboardToolCallId = ref<string | null>(null)
 const createdDashboardByToolId = ref<Record<string, Dashboard>>({})
 

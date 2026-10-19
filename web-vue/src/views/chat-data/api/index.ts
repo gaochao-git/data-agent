@@ -31,6 +31,7 @@ import type {
   AgentScheduleRunItem,
   PluginInfo,
   ChatDataSettingItem,
+  ChatDataModelRegistryItem,
   MetaGlobalEnum,
   MetaGlobalEnumRef,
   MetaGlobalEnumValueItem,
@@ -1877,6 +1878,110 @@ export function resetAllAdminSettings(): Promise<ApiResponse<{ reset_count: numb
   return request({
     url: `${CHATDATA_API_PREFIX}/admin/settings`,
     method: 'delete'
+  })
+}
+
+// ============ 模型管理 API（Admin：模型注册表） ============
+
+/** 后台：模型注册表列表（api_key_cipher 密文回填，供编辑框带回） */
+export function getAdminModels(): Promise<ApiResponse<{ models: ChatDataModelRegistryItem[] }>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/models`,
+    method: 'get'
+  })
+}
+
+/**
+ * params.thinking 形状（档位可配置）：
+ * efforts 为 [{level, value?}]（value 缺省=发档位名本身；参数值 string/bool/number），
+ * 旧 string[] 仍被后端接受；关形态参数值由后端按方言固定兜底（none / enabled:false）。
+ */
+export type ChatDataModelSaveParams = ChatDataModelRegistryItem['params']
+
+/** 后台：新建模型（注册键服务端自动生成；业务唯一性=提供商+请求名） */
+export function createAdminModel(data: {
+  model_id: string
+  provider?: string
+  display_name?: string
+  base_url?: string
+  api_key?: string
+  params?: ChatDataModelSaveParams
+  enabled?: boolean
+  remark?: string
+}): Promise<ApiResponse<ChatDataModelRegistryItem>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/models`,
+    method: 'post',
+    data
+  })
+}
+
+/** 后台：更新模型（行按注册键定位；api_key 必填密文，编辑时回填已存密文原样带回即可） */
+export function updateAdminModel(modelKey: string, data: {
+  model_id?: string
+  provider?: string
+  display_name?: string
+  base_url?: string
+  api_key?: string
+  params?: ChatDataModelSaveParams
+  enabled?: boolean
+  remark?: string
+}): Promise<ApiResponse<ChatDataModelRegistryItem>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/models/${encodeURIComponent(modelKey)}`,
+    method: 'put',
+    data
+  })
+}
+
+/** 后台：启停模型（停用默认模型不阻断，加载层有首行兜底） */
+export function setAdminModelEnabled(modelKey: string, enabled: boolean): Promise<ApiResponse<{ model_key: string; enabled: boolean }>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/models/${encodeURIComponent(modelKey)}/enabled`,
+    method: 'patch',
+    data: { enabled }
+  })
+}
+
+/** 后台：设唯一默认模型（同时启用该行） */
+export function setAdminModelDefault(modelKey: string): Promise<ApiResponse<{ model_key: string; is_default: boolean }>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/models/${encodeURIComponent(modelKey)}/default`,
+    method: 'patch'
+  })
+}
+
+/** 后台：删除模型（软删；重加同注册键模型自动复活原行） */
+export function deleteAdminModel(modelKey: string): Promise<ApiResponse<{ model_key: string }>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/models/${encodeURIComponent(modelKey)}`,
+    method: 'delete'
+  })
+}
+
+/** 后台：连接测试（用表单当前值发最小请求验证连通性，不要求已保存） */
+export function testAdminModelConnection(data: {
+  model_id: string
+  base_url?: string
+  api_key?: string
+  params?: ChatDataModelRegistryItem['params']
+}): Promise<ApiResponse<{ success: boolean; latency_ms: number; sample?: string; error?: string }>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/models/test-connection`,
+    method: 'post',
+    data
+  })
+}
+
+/** 后台：探测上游 OpenAI 兼容接口的可用模型清单（GET {base_url}/models） */
+export function discoverAdminModels(data: {
+  base_url: string
+  api_key: string
+}): Promise<ApiResponse<{ models: string[] }>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/models/discover`,
+    method: 'post',
+    data
   })
 }
 

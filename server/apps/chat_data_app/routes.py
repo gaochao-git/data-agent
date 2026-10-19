@@ -15,6 +15,7 @@ from .routers.datasource_admin import router as datasource_admin_router
 from .routers.datasource_public import router as datasource_public_router
 from .routers.evaluation import router as evaluation_router
 from .routers.meta_admin import router as meta_admin_router
+from .routers.model_admin import router as model_admin_router
 from .routers.ontology_admin import router as ontology_admin_router
 from .routers.plugins import router as plugins_router
 from .routers.query_execution import router as query_execution_router
@@ -60,4 +61,5 @@ router.include_router(agent_schedule_admin_router)
 router.include_router(plugins_router)
 router.include_router(setting_admin_router)
 router.include_router(meta_admin_router)
+router.include_router(model_admin_router)
 router.include_router(ontology_admin_router)

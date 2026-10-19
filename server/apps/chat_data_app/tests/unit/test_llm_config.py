@@ -1,6 +1,8 @@
 import json
 import os
 import sys
+import time
+from typing import Any
 
 import pytest
 
@@ -10,7 +12,7 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 
 from apps.chat_data_app.services import llm_config
-from apps.chat_data_app.services.llm_config import ThinkingCapability
+from apps.chat_data_app.services.llm_config import EffortLevel, ThinkingCapability
 from apps.chat_data_app.services.runtime_config import get_chat_data_runtime_config
 
 # ---------------------------------------------------------------------------
@@ -18,11 +20,18 @@ from apps.chat_data_app.services.runtime_config import get_chat_data_runtime_con
 # ---------------------------------------------------------------------------
 
 
+def E(*levels: str) -> tuple:
+    """构造 EffortLevel 元组（value 缺省=档位同名）。"""
+    return tuple(EffortLevel(level=l) for l in levels)
+
+
 def _set_registry(monkeypatch, tmp_path, models: list[dict]) -> str:
     path = tmp_path / "models.json"
     path.write_text(json.dumps(models, ensure_ascii=False), encoding="utf-8")
     monkeypatch.setenv("CHAT_DATA_MODELS_FILE", str(path))
     monkeypatch.delenv("CHAT_DATA_MODEL", raising=False)
+    # 连接信息 fail-fast 要求模型行带 key：统一桩掉解密，避免真实 SM4 依赖
+    monkeypatch.setattr(llm_config, "decrypt_password", lambda value: "test-plain-key")
     return str(path)
 
 
@@ -32,6 +41,8 @@ def _ox_alpha(**overrides) -> dict:
         "temperature": 0.2,
         "context_window": 256000,
         "vlm": True,
+        "base_url": "http://127.0.0.1:9/v1",
+        "api_key_cipher": "dGVzdC1pdi12YWx1ZQ==:dGVzdC1jaXBoZXJ0ZXN0",
         "thinking": {
             "mode": "forced",
             "dialect": "openrouter",
@@ -49,6 +60,8 @@ def _glm_free() -> dict:
         "temperature": 0.2,
         "context_window": 256000,
         "vlm": False,
+        "base_url": "http://127.0.0.1:9/v1",
+        "api_key_cipher": "dGVzdC1pdi12YWx1ZQ==:dGVzdC1jaXBoZXJ0ZXN0",
         "thinking": {
             "mode": "optional",
             "dialect": "openrouter",
@@ -135,14 +148,59 @@ def test_duplicate_model_id_rejected(monkeypatch, tmp_path):
             "default_effort",
         ),
         (_ox_alpha(thinking={"mode": "none", "dialect": "openrouter"}), "mode=none"),
-        (_ox_alpha(thinking={"mode": "forced", "dialect": "openrouter", "default_on": True}), "default_on"),
-        (_ox_alpha(thinking={"mode": "optional", "dialect": "openrouter"}), "default_on"),
     ],
 )
 def test_registry_validation_fail_fast(monkeypatch, tmp_path, entry, match):
     _set_registry(monkeypatch, tmp_path, [entry])
     with pytest.raises(ValueError, match=match):
         llm_config.load_chat_data_model_configs()
+
+
+def test_registry_derives_default_on_from_default_effort(monkeypatch, tmp_path):
+    """default_on 不再可配置：由默认档位推导（普通档=默认开；off/none/未勾=默认关）；显式 default_on 被忽略。"""
+    _set_registry(
+        monkeypatch,
+        tmp_path,
+        [
+            _ox_alpha(
+                thinking={
+                    "mode": "optional",
+                    "dialect": "reasoning_effort",
+                    "efforts": ["off", "low"],
+                    "default_on": False,  # 废弃字段：显式配置被忽略
+                    "default_effort": "low",
+                }
+            ),
+            _ox_alpha(
+                id="stealth/ox-beta",
+                thinking={
+                    "mode": "optional",
+                    "dialect": "reasoning_effort",
+                    "efforts": ["off", "low"],
+                    "default_effort": "off",
+                },
+            ),
+            _ox_alpha(
+                id="stealth/ox-gamma",
+                thinking={"mode": "optional", "dialect": "reasoning_effort"},
+            ),
+        ],
+    )
+    caps = [config["thinking"] for config in llm_config.get_chat_data_model_configs()]
+    assert caps[0].default_on is True  # 默认档位=普通档 low
+    assert caps[1].default_on is False  # 默认档位=关哨兵 off
+    assert caps[2].default_on is False  # 未勾默认档位
+
+
+def test_registry_tolerates_empty_efforts_for_chat_template(monkeypatch, tmp_path):
+    """空 efforts 数组等同缺省（管理端表单会发空数组），不得触发方言冲突。"""
+    _set_registry(
+        monkeypatch,
+        tmp_path,
+        [_ox_alpha(thinking={"mode": "optional", "dialect": "chat_template", "default_on": True, "efforts": []})],
+    )
+    config = llm_config.get_chat_data_model_configs()[0]
+    assert config["thinking"].efforts == ()
 
 
 def test_registry_parses_thinking_capability(monkeypatch, tmp_path):
@@ -173,14 +231,14 @@ def test_registry_parses_thinking_capability(monkeypatch, tmp_path):
     assert configs[0]["thinking"] == ThinkingCapability(
         mode="forced",
         dialect="openrouter",
-        efforts=("low", "medium", "high"),
+        efforts=E("low", "medium", "high"),
         default_effort="high",
     )
     assert configs[1]["thinking"] == ThinkingCapability(
         mode="optional",
         dialect="reasoning_effort",
-        efforts=("low", "high"),
-        default_on=False,
+        efforts=E("low", "high"),
+        default_on=True,  # 由默认档位 high 推导（显式 default_on=False 已废弃被忽略）
         default_effort="high",
     )
     assert configs[2]["thinking"] == ThinkingCapability(mode="none")
@@ -192,6 +250,16 @@ def test_unknown_model_id_raises_instead_of_fallback(monkeypatch, tmp_path):
     _set_registry(monkeypatch, tmp_path, [_ox_alpha()])
     with pytest.raises(ValueError, match="不在"):
         llm_config.get_chat_data_model_config("nope-model")
+
+
+def test_normalize_model_id_downgrades_stale_model(monkeypatch, tmp_path):
+    """历史会话携带已删/停用 model_id 时降级默认模型；有效 id 与 None 原样透传。"""
+    from apps.chat_data_app.agent import data_agent
+
+    _set_registry(monkeypatch, tmp_path, [_ox_alpha()])
+    assert data_agent._normalize_model_id("stealth/ox-alpha") == "stealth/ox-alpha"
+    assert data_agent._normalize_model_id("nope-model") == "stealth/ox-alpha"
+    assert data_agent._normalize_model_id(None) is None
 
 
 # ---------------------------------------------------------------------------
@@ -246,7 +314,7 @@ def test_resolve_thinking_matrix(capability, user_enabled, expected):
                 mode="optional",
                 dialect="openrouter",
                 default_on=True,
-                efforts=("low", "medium", "high"),
+                efforts=E("low", "medium", "high"),
                 default_effort="high",
             ),
             True,
@@ -256,7 +324,7 @@ def test_resolve_thinking_matrix(capability, user_enabled, expected):
         # forced 也接受用户档位
         (
             ThinkingCapability(
-                mode="forced", dialect="openrouter", efforts=("low", "medium", "high"), default_effort="high"
+                mode="forced", dialect="openrouter", efforts=E("low", "medium", "high"), default_effort="high"
             ),
             None,
             "medium",
@@ -265,7 +333,7 @@ def test_resolve_thinking_matrix(capability, user_enabled, expected):
         # 非法档位回退 default_effort
         (
             ThinkingCapability(
-                mode="optional", dialect="openrouter", default_on=True, efforts=("low", "high"), default_effort="high"
+                mode="optional", dialect="openrouter", default_on=True, efforts=E("low", "high"), default_effort="high"
             ),
             True,
             "ultra",
@@ -307,7 +375,7 @@ def test_extra_body_chat_template_dialect():
 
 def test_extra_body_reasoning_effort_dialect():
     cap = ThinkingCapability(
-        mode="optional", dialect="reasoning_effort", efforts=("low", "high"), default_on=False, default_effort="high"
+        mode="optional", dialect="reasoning_effort", efforts=E("low", "high"), default_on=False, default_effort="high"
     )
     assert _extra_body(cap, True) == {"reasoning_effort": "high"}
     assert _extra_body(cap, False) == {"reasoning_effort": "none"}
@@ -329,8 +397,8 @@ def test_extra_body_forced_without_efforts_emits_nothing():
 def test_extra_body_optional_reasoning_effort_without_efforts_emits_nothing():
     """reasoning_effort 方言未声明档位时：开启也不发思考键。
 
-    配置文件是唯一事实源：需要思考的模型必须在注册表声明
-    efforts/default_effort（见 conf/models.deepseek.json），代码不做兼容兜底。
+    配置是唯一事实源：需要思考的模型必须在注册表（模型管理面板维护）
+    声明 efforts/default_effort，代码不做兼容兜底。
     历史教训：deepseek-v4-flash 曾缺档位声明，定时任务与手动聊天的
     「开启思考」被静默吞掉。
     """
@@ -344,7 +412,7 @@ def test_extra_body_optional_reasoning_effort_without_efforts_emits_nothing():
     declared = ThinkingCapability(
         mode="optional",
         dialect="reasoning_effort",
-        efforts=("low", "medium", "high"),
+        efforts=E("low", "medium", "high"),
         default_effort="low",
         default_on=False,
     )
@@ -374,7 +442,6 @@ def test_get_chat_data_llm_dispatches_by_registry(monkeypatch, tmp_path):
     captured = {}
     _set_registry(monkeypatch, tmp_path, [_ox_alpha(), _glm_free()])
     monkeypatch.setattr(llm_config, "get_llm", _fake_get_llm(captured))
-    monkeypatch.delenv("CHAT_DATA_API_KEY", raising=False)
 
     # 默认取首项 ox-alpha（forced），关思考请求被忽略，仍发 effort
     llm_config.get_chat_data_llm(enable_thinking=False)
@@ -392,16 +459,13 @@ def test_get_chat_data_llm_dispatches_by_registry(monkeypatch, tmp_path):
     assert captured["temperature"] == 0
 
 
-def test_chat_data_api_key_is_decrypted_from_existing_env_name(monkeypatch, tmp_path):
-    captured = {}
-    _set_registry(monkeypatch, tmp_path, [_ox_alpha()])
-    monkeypatch.setenv("CHAT_DATA_API_KEY", "encrypted-api-key")
+def test_chat_data_connection_info_resolves_from_model_row_only(monkeypatch):
+    """连接信息只以模型行为准：行内密文解密使用，行内为空返回 None（无环境变量回退）。"""
     monkeypatch.setattr(llm_config, "decrypt_password", lambda value: f"plain:{value}")
-    monkeypatch.setattr(llm_config, "get_llm", _fake_get_llm(captured))
-
-    llm_config.get_chat_data_llm()
-
-    assert captured["api_key"] == "plain:encrypted-api-key"
+    assert llm_config._resolve_chat_data_api_key({"api_key_cipher": "cipher-x"}) == "plain:cipher-x"
+    assert llm_config._resolve_chat_data_api_key({"api_key_cipher": ""}) is None
+    assert llm_config._resolve_chat_data_base_url({"base_url": "http://127.0.0.1:8100/v1"}) == "http://127.0.0.1:8100/v1"
+    assert llm_config._resolve_chat_data_base_url({"base_url": ""}) is None
 
 
 def test_get_chat_data_temperature_reads_registry(monkeypatch, tmp_path):
@@ -427,7 +491,6 @@ def test_get_chat_data_llm_uses_per_model_max_tokens(monkeypatch, tmp_path):
     captured = {}
     _set_registry(monkeypatch, tmp_path, [_ox_alpha(max_output_tokens=8192), _glm_free()])
     monkeypatch.setattr(llm_config, "get_llm", _fake_get_llm(captured))
-    monkeypatch.delenv("CHAT_DATA_API_KEY", raising=False)
     monkeypatch.setenv("CHAT_DATA_OUTPUT_MAX_TOKENS", "4096")
 
     llm_config.get_chat_data_llm()
@@ -478,10 +541,16 @@ def test_context_compression_summary_output_max_tokens_rejects_invalid_values(mo
 
 
 def test_chat_data_runtime_config_reads_runtime_options(monkeypatch, tmp_path):
-    _set_registry(monkeypatch, tmp_path, [_ox_alpha()])
+    registry_path = _set_registry(monkeypatch, tmp_path, [_ox_alpha()])
     monkeypatch.setattr("apps.chat_data_app.services.runtime_config.CHAT_DATA_DEFAULT_WORKSPACE_BACKEND", "sandbox")
     monkeypatch.setattr("apps.chat_data_app.services.runtime_config.CHAT_DATA_DEFAULT_BASH_ENABLED", True)
     monkeypatch.setattr("apps.chat_data_app.services.runtime_config.CHAT_DATA_CAPABILITY_USER_OVERRIDABLE", True)
+
+    # 服务路径冷缓存会拒绝回落文件（DB 唯一真值）：先模拟启动预热成功后的缓存落位
+    monkeypatch.setattr(llm_config, "_registry_cache", llm_config.load_chat_data_model_configs())
+    monkeypatch.setattr(llm_config, "_registry_cache_loaded_at", time.monotonic())
+    monkeypatch.setattr(llm_config, "_registry_cache_origin", registry_path)
+    monkeypatch.setattr(llm_config, "_registry_refresh_task", None)
 
     import asyncio
 
@@ -546,3 +615,247 @@ def test_data_agent_uses_configured_model_without_fallback(monkeypatch, tmp_path
     assert "ToolCallNameNormalizerMiddleware" in middleware_names
     assert "ToolErrorMiddleware" in middleware_names
     assert captured["state_schema"] is ChatDataAgentState
+
+
+# ---------------------------------------------------------------------------
+# 思考档位可配置化：新对象数组 / 废弃 off_value 兼容 / 往返一致
+# ---------------------------------------------------------------------------
+
+
+def test_registry_parses_new_effort_objects_with_wire_values(monkeypatch, tmp_path):
+    """新形状 [{level, value}]：value 缺省=档位同名。"""
+    _set_registry(
+        monkeypatch,
+        tmp_path,
+        [
+            _ox_alpha(
+                thinking={
+                    "mode": "optional",
+                    "dialect": "reasoning_effort",
+                    "default_on": False,
+                    "efforts": [{"level": "low", "value": "minimal"}, {"level": "high"}],
+                    "default_effort": "low",
+                }
+            )
+        ],
+    )
+    cap = llm_config.get_chat_data_model_configs()[0]["thinking"]
+    assert cap.efforts == (llm_config.EffortLevel(level="low", value="minimal"), llm_config.EffortLevel(level="high"))
+
+
+@pytest.mark.parametrize(
+    "efforts,match",
+    [
+        ([{"level": ""}], "档位名不能为空"),
+        ([{"level": "bad name!"}], "档位名"),
+        ([{"level": "l" * 40}], "档位名"),
+        ([{"level": "low"}, {"level": "low"}], "档位名重复"),
+        ([{"level": f"l{i}"} for i in range(11)], "超过上限"),
+        ([{"level": "low", "value": {"nested": 1}}], "参数值应为字符串"),
+        ([{"level": "low", "value": ["x"]}], "参数值应为字符串"),
+        ([{"level": "low", "value": "x" * 65}], "字符串参数值超长"),
+        ([{"level": "low", "value": float("nan")}], "NaN"),
+        ([{"level": "low", "extra": 1}], "未知字段"),
+        ([{"value": "minimal"}], "档位 level 应为字符串"),
+        ([42], "档位应为字符串或"),
+    ],
+)
+def test_registry_rejects_illegal_effort_shapes(monkeypatch, tmp_path, efforts, match):
+    first_level = efforts[0].get("level") if isinstance(efforts[0], dict) else efforts[0]
+    entry = _ox_alpha(
+        thinking={
+            "mode": "optional",
+            "dialect": "reasoning_effort",
+            "default_on": False,
+            "efforts": efforts,
+            "default_effort": first_level if isinstance(first_level, str) else "low",
+        }
+    )
+    _set_registry(monkeypatch, tmp_path, [entry])
+    with pytest.raises(ValueError, match=match):
+        llm_config.load_chat_data_model_configs()
+
+
+def test_registry_tolerates_legacy_off_value(monkeypatch, tmp_path):
+    """off_value 已废弃：存量配置携带时容忍并静默丢弃（关形态走方言默认兜底），不报未知字段。"""
+    base = {"mode": "optional", "dialect": "reasoning_effort", "default_on": False, "off_value": "low"}
+    _set_registry(monkeypatch, tmp_path, [_ox_alpha(thinking=base)])
+    llm_config.reset_registry_cache()
+    cap = llm_config.get_chat_data_model_configs()[0]["thinking"]
+    assert not hasattr(cap, "off_value")
+    # 落库形状不再回写 off_value
+    assert "off_value" not in llm_config._thinking_cap_to_json(cap)
+
+
+def test_extra_body_custom_wire_values_and_off_fallback_matrix():
+    """序列化矩阵：自定义 value / 关形态按方言固定兜底。"""
+    # reasoning_effort：low 发 minimal
+    cap = ThinkingCapability(
+        mode="optional",
+        dialect="reasoning_effort",
+        efforts=(llm_config.EffortLevel(level="low", value="minimal"), llm_config.EffortLevel(level="high")),
+        default_on=False,
+        default_effort="low",
+    )
+    assert llm_config._get_chat_data_extra_body(cap, True, "low") == {"reasoning_effort": "minimal"}
+    assert llm_config._get_chat_data_extra_body(cap, True, "high") == {"reasoning_effort": "high"}
+    assert llm_config._get_chat_data_extra_body(cap, False) == {"reasoning_effort": "none"}
+
+    cap_default = ThinkingCapability(
+        mode="optional",
+        dialect="reasoning_effort",
+        efforts=(llm_config.EffortLevel(level="low", value=2),),
+        default_on=False,
+        default_effort="low",
+    )
+    assert llm_config._get_chat_data_extra_body(cap_default, True, "low") == {"reasoning_effort": 2}
+    assert llm_config._get_chat_data_extra_body(cap_default, False) == {"reasoning_effort": "none"}
+
+    cap_or = ThinkingCapability(
+        mode="optional",
+        dialect="openrouter",
+        efforts=(llm_config.EffortLevel(level="xhigh"),),
+        default_on=False,
+        default_effort="xhigh",
+    )
+    assert llm_config._get_chat_data_extra_body(cap_or, True) == {"reasoning": {"effort": "xhigh"}}
+    assert llm_config._get_chat_data_extra_body(cap_or, False) == {"reasoning": {"enabled": False}}
+
+
+def test_extra_body_off_sentinel_levels_serialize_as_off():
+    """关哨兵档位（off/none）选中时按「关」形态序列化，不把字面量当 on wire 值发出。
+
+    背景：DeepSeek 新 API 只接受 none/minimal/.../max，reasoning_effort: "off" 直接 422。
+    """
+    # reasoning_effort：哨兵档 → 关形态（固定兜底 "none"）
+    cap = ThinkingCapability(
+        mode="optional",
+        dialect="reasoning_effort",
+        efforts=E("off", "low", "none"),
+        default_on=False,
+        default_effort="low",
+    )
+    assert llm_config._get_chat_data_extra_body(cap, True, "off") == {"reasoning_effort": "none"}
+    assert llm_config._get_chat_data_extra_body(cap, True, "none") == {"reasoning_effort": "none"}
+    assert llm_config._get_chat_data_extra_body(cap, True, "low") == {"reasoning_effort": "low"}
+
+    # chat_template：哨兵档 → 布尔关
+    cap_ct = ThinkingCapability(
+        mode="optional",
+        dialect="chat_template",
+        efforts=E("off", "high"),
+        default_on=False,
+        default_effort="high",
+    )
+    assert llm_config._get_chat_data_extra_body(cap_ct, True, "off") == {
+        "enable_thinking": False,
+        "chat_template_kwargs": {"enable_thinking": False},
+    }
+
+    # openrouter：哨兵档 → {"enabled": false}
+    cap_or = ThinkingCapability(
+        mode="optional",
+        dialect="openrouter",
+        efforts=E("none", "low"),
+        default_on=False,
+        default_effort="low",
+    )
+    assert llm_config._get_chat_data_extra_body(cap_or, True, "none") == {"reasoning": {"enabled": False}}
+
+
+def test_effort_suggestions_cover_deepseek_variants():
+    """档位候选覆盖 DeepSeek 新 API 档位族（含关哨兵 off）。"""
+    assert set(llm_config.EFFORT_SUGGESTIONS) >= {"off", "minimal", "low", "medium", "high", "xhigh", "ultra", "max"}
+
+
+def _deepseek_like_registry(off_value: Any = "none", default_level: str = "xhigh") -> list[dict]:
+    """截图配置原样：off 行声明 value，其余档位空 value（=同名），默认勾在指定档位。"""
+    efforts: list[dict[str, Any]] = [{"level": "off", "value": off_value}]
+    efforts += [{"level": name} for name in ("medium", "high", "xhigh", "ultra", "max")]
+    return [
+        _ox_alpha(
+            thinking={
+                "mode": "optional",
+                "dialect": "reasoning_effort",
+                "efforts": efforts,
+                "default_effort": default_level,
+            }
+        )
+    ]
+
+
+def test_effort_mapping_matrix_from_ui_saved_config(monkeypatch, tmp_path):
+    """端到端映射矩阵（按管理页保存产物形状）：档位名 → API 参数值正例。"""
+    _set_registry(monkeypatch, tmp_path, _deepseek_like_registry())
+    cap = llm_config.get_chat_data_model_configs()[0]["thinking"]
+    # 默认档勾在 xhigh（普通档）→ 推导默认开
+    assert cap.default_on is True and cap.default_effort == "xhigh"
+
+    # 正例 1：普通档位空 value → 发档位名本身
+    for level in ("medium", "high", "xhigh", "ultra", "max"):
+        assert llm_config._get_chat_data_extra_body(cap, True, level) == {"reasoning_effort": level}
+    # 正例 2：off 行虽声明 value="none"，但命中哨兵 → 关形态发固定兜底 "none"（结果一致）
+    assert llm_config._get_chat_data_extra_body(cap, True, "off") == {"reasoning_effort": "none"}
+    # 正例 3：新对话无用户选择 → 默认档 xhigh（on 形态）
+    assert llm_config._get_chat_data_extra_body(cap, None) == {"reasoning_effort": "xhigh"}
+    # 正例 4：用户显式关思考 → 关形态固定 "none"（DeepSeek 新 API 认的关值）
+    assert llm_config._get_chat_data_extra_body(cap, False) == {"reasoning_effort": "none"}
+
+
+def test_effort_mapping_negative_cases(monkeypatch, tmp_path):
+    """端到端映射反例：哨兵值优先、未声明档位回退、默认勾在哨兵档推导为关。"""
+    # 反例 1：off 行 value 填了上游不认识的误导值 → 选中 off 仍发固定兜底 "none"（声明值被忽略）
+    _set_registry(monkeypatch, tmp_path, _deepseek_like_registry(off_value="banana"))
+    llm_config.reset_registry_cache()
+    cap = llm_config.get_chat_data_model_configs()[0]["thinking"]
+    assert llm_config._get_chat_data_extra_body(cap, True, "off") == {"reasoning_effort": "none"}
+
+    # 反例 2：用户传未声明档位 "low" → 不透传，回退默认档 xhigh
+    assert llm_config._get_chat_data_extra_body(cap, True, "low") == {"reasoning_effort": "xhigh"}
+
+    # 反例 3：默认勾在 off（哨兵档）→ 推导默认关；无用户选择时发关形态
+    _set_registry(monkeypatch, tmp_path, _deepseek_like_registry(default_level="off"))
+    llm_config.reset_registry_cache()
+    cap_off_default = llm_config.get_chat_data_model_configs()[0]["thinking"]
+    assert cap_off_default.default_on is False
+    assert llm_config._get_chat_data_extra_body(cap_off_default, None) == {"reasoning_effort": "none"}
+
+    # 反例 4：/config 只下发档位名（含哨兵 off），value 不外泄（前端去重/标签按名字处理）
+    options = llm_config.get_chat_data_model_options()["models"][0]["thinking"]
+    assert options["efforts"] == ["off", "medium", "high", "xhigh", "ultra", "max"]
+
+
+def test_thinking_roundtrip_preserves_new_shape():
+    """_thinking_cap_to_json ↔ _parse_thinking 往返一致（含 value）。"""
+    cap = ThinkingCapability(
+        mode="optional",
+        dialect="reasoning_effort",
+        efforts=(llm_config.EffortLevel(level="low", value="minimal"), llm_config.EffortLevel(level="high")),
+        default_on=True,
+        default_effort="high",
+    )
+    packed = llm_config._thinking_cap_to_json(cap)
+    assert packed["efforts"] == [{"level": "low", "value": "minimal"}, {"level": "high"}]
+    reparsed = llm_config._parse_thinking(packed, path="t", model_id="m")
+    assert reparsed == cap
+
+
+def test_model_options_expose_effort_names_only(monkeypatch, tmp_path):
+    """/config 只下发档位名，不下发 wire 值（前端不与协议耦合）。"""
+    _set_registry(
+        monkeypatch,
+        tmp_path,
+        [
+            _ox_alpha(
+                thinking={
+                    "mode": "optional",
+                    "dialect": "reasoning_effort",
+                    "default_on": False,
+                    "efforts": [{"level": "low", "value": "minimal"}, {"level": "xhigh"}],
+                    "default_effort": "low",
+                }
+            )
+        ],
+    )
+    thinking = llm_config.get_chat_data_model_options()["models"][0]["thinking"]
+    assert thinking["efforts"] == ["low", "xhigh"]

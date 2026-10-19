@@ -640,6 +640,111 @@
         "title": "Body_upload_skill_version_file_api_chatdata_skills__skill_id__versions__version_no__files_upload_post",
         "type": "object"
       },
+      "ChatDataModelDiscoverRequest": {
+        "description": "后台模型探测请求：用表单连接信息拉取上游 OpenAI 兼容 /models 清单。",
+        "properties": {
+          "api_key": {
+            "description": "API Key SM4 密文（base64:base64）",
+            "maxLength": 512,
+            "title": "Api Key",
+            "type": "string"
+          },
+          "base_url": {
+            "description": "API Base URL",
+            "maxLength": 500,
+            "title": "Base Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "base_url",
+          "api_key"
+        ],
+        "title": "ChatDataModelDiscoverRequest",
+        "type": "object"
+      },
+      "ChatDataModelEnabledRequest": {
+        "description": "后台模型启停请求（enabled 必须为严格布尔，防止字符串 \"false\" 被当真值）。",
+        "properties": {
+          "enabled": {
+            "description": "是否启用（true=启用 false=停用）",
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "ChatDataModelEnabledRequest",
+        "type": "object"
+      },
+      "ChatDataModelUpsertRequest": {
+        "description": "后台模型注册表保存请求（api_key 必填，只接受 SM4 密文）。\n\n响应回传 api_key_cipher（编辑时前端自动回填，无需重贴）；落库原样存密文。\n模型参数集中在 params 对象（temperature/context_window/max_output_tokens/\nvlm/thinking），服务端按白名单校验后打包为 params_json 落库，扩参不改表。",
+        "properties": {
+          "api_key": {
+            "default": "",
+            "description": "API Key SM4 密文（必填，base64:base64；明文会被拒绝）",
+            "maxLength": 512,
+            "title": "Api Key",
+            "type": "string"
+          },
+          "base_url": {
+            "default": "",
+            "description": "API Base URL（连接信息只以模型行为准）",
+            "maxLength": 500,
+            "title": "Base Url",
+            "type": "string"
+          },
+          "display_name": {
+            "default": "",
+            "description": "显示名（空则用 model_id）",
+            "maxLength": 128,
+            "title": "Display Name",
+            "type": "string"
+          },
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "是否启用（不传保持原值；新建缺省启用由服务端落 1）",
+            "title": "Enabled"
+          },
+          "model_id": {
+            "default": "",
+            "description": "模型请求名（发给上游 API 的 model 参数；同供应商内唯一）",
+            "maxLength": 128,
+            "title": "Model Id",
+            "type": "string"
+          },
+          "params": {
+            "additionalProperties": true,
+            "description": "模型参数 {temperature,context_window,max_output_tokens,vlm,thinking{mode,dialect,efforts:[\"low\"]|[{'level':'low','value':'minimal'}],default_effort}}；efforts 支持旧字符串数组与新对象数组（value 缺省=档位同名，参数值可为 string/bool/number）；关形态参数值由后端按方言固定兜底（reasoning_effort→none、openrouter→enabled:false），默认开启由默认档位推导（默认档位为普通档=默认开；off/none 或未勾=默认关），请求中的废弃字段 off_value/default_on 会被静默忽略；max_output_tokens 必填，缺省取 context_window 的 1/4",
+            "title": "Params",
+            "type": "object"
+          },
+          "provider": {
+            "default": "",
+            "description": "提供商（如 DeepSeek/阿里云/本地 vLLM，与请求名组成业务唯一键）",
+            "maxLength": 128,
+            "title": "Provider",
+            "type": "string"
+          },
+          "remark": {
+            "default": "",
+            "description": "备注",
+            "maxLength": 500,
+            "title": "Remark",
+            "type": "string"
+          }
+        },
+        "title": "ChatDataModelUpsertRequest",
+        "type": "object"
+      },
       "ChatDataSettingUpsertRequest": {
         "description": "后台配置变量覆盖请求（key 限注册表白名单；已软删的 key 自动复用原行恢复）",
         "properties": {
@@ -7493,6 +7598,382 @@
         "summary": "Change Ontology Relation Status",
         "tags": [
           "ChatData 本体管理（Admin）"
+        ]
+      }
+    },
+    "/api/chatdata/admin/models": {
+      "get": {
+        "description": "模型注册表列表（含密文回填字段，编辑框直接带回）。",
+        "operationId": "list_chat_data_models_api_chatdata_admin_models_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "List Chat Data Models",
+        "tags": [
+          "ChatData 模型注册表（Admin）"
+        ]
+      },
+      "post": {
+        "description": "新建模型（注册键服务端自动生成；业务唯一性=供应商+请求名）；成功后缓存即时刷新。",
+        "operationId": "create_chat_data_model_api_chatdata_admin_models_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatDataModelUpsertRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Create Chat Data Model",
+        "tags": [
+          "ChatData 模型注册表（Admin）"
+        ]
+      }
+    },
+    "/api/chatdata/admin/models/discover": {
+      "post": {
+        "description": "探测上游 OpenAI 兼容接口的可用模型清单（GET {base_url}/models）。",
+        "operationId": "discover_chat_data_models_api_chatdata_admin_models_discover_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatDataModelDiscoverRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Discover Chat Data Models",
+        "tags": [
+          "ChatData 模型注册表（Admin）"
+        ]
+      }
+    },
+    "/api/chatdata/admin/models/test-connection": {
+      "post": {
+        "description": "用表单当前值发一次最小请求验证连通性（不要求模型已保存）。",
+        "operationId": "test_chat_data_model_connection_api_chatdata_admin_models_test_connection_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatDataModelUpsertRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Test Chat Data Model Connection",
+        "tags": [
+          "ChatData 模型注册表（Admin）"
+        ]
+      }
+    },
+    "/api/chatdata/admin/models/{model_key}": {
+      "delete": {
+        "description": "删除模型（软删；重加同注册键模型自动复活原行）。",
+        "operationId": "delete_chat_data_model_api_chatdata_admin_models__model_key__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "model_key",
+            "required": true,
+            "schema": {
+              "title": "Model Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Delete Chat Data Model",
+        "tags": [
+          "ChatData 模型注册表（Admin）"
+        ]
+      },
+      "put": {
+        "description": "更新模型（按注册键定位身份）；成功后缓存即时刷新。",
+        "operationId": "upsert_chat_data_model_api_chatdata_admin_models__model_key__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "model_key",
+            "required": true,
+            "schema": {
+              "title": "Model Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatDataModelUpsertRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Upsert Chat Data Model",
+        "tags": [
+          "ChatData 模型注册表（Admin）"
+        ]
+      }
+    },
+    "/api/chatdata/admin/models/{model_key}/default": {
+      "patch": {
+        "description": "设唯一默认模型（同时启用该行）。",
+        "operationId": "set_default_chat_data_model_api_chatdata_admin_models__model_key__default_patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "model_key",
+            "required": true,
+            "schema": {
+              "title": "Model Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Set Default Chat Data Model",
+        "tags": [
+          "ChatData 模型注册表（Admin）"
+        ]
+      }
+    },
+    "/api/chatdata/admin/models/{model_key}/enabled": {
+      "patch": {
+        "description": "启停模型（enabled 为严格布尔，字符串 \"false\" 会被 Pydantic 拒绝）。",
+        "operationId": "toggle_chat_data_model_api_chatdata_admin_models__model_key__enabled_patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "model_key",
+            "required": true,
+            "schema": {
+              "title": "Model Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatDataModelEnabledRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Toggle Chat Data Model",
+        "tags": [
+          "ChatData 模型注册表（Admin）"
         ]
       }
     },

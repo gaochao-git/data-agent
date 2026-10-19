@@ -2,7 +2,7 @@
 /**
  * 智能问数后台管理弹窗。
  * 只负责管理入口、左侧分组导航和通用弹窗框架，具体能力由子面板承载。
- * 导航按性质分三组（数据资产/自动化/系统）：新功能先归组再挂载面板，
+ * 导航按性质分三组（数据资产/智能体/系统）：新功能先归组再挂载面板，
  * 不要回退成平铺 tab 条；枚举/本体/血缘与数据源同属数据资产组。
  */
 import { computed, nextTick, ref } from 'vue'
@@ -14,6 +14,7 @@ import OntologyAdminPanel from './ontology/OntologyAdminPanel.vue'
 import SemanticModelAdminPanel from './SemanticModelAdminPanel.vue'
 import GlobalSqlHistory from './GlobalSqlHistory.vue'
 import AgentScheduleAdminPanel from './AgentScheduleAdminPanel.vue'
+import ModelAdminPanel from './ModelAdminPanel.vue'
 import PluginAdminPanel from './PluginAdminPanel.vue'
 import SettingAdminPanel from './SettingAdminPanel.vue'
 import { getAdminDatasources } from '../api'
@@ -28,6 +29,7 @@ type AdminNavKey =
   | 'schedule'
   | 'plugins'
   | 'setting'
+  | 'models'
   | 'sqlHistory'
 
 interface AdminNavItem {
@@ -51,8 +53,9 @@ const NAV_GROUPS: Array<{ label: string; items: AdminNavItem[] }> = [
     ]
   },
   {
-    label: '自动化',
+    label: '智能体',
     items: [
+      { key: 'models', label: '大模型管理', icon: 'fa-microchip' },
       { key: 'schedule', label: '定时任务', icon: 'fa-stopwatch' },
       { key: 'plugins', label: '插件管理', icon: 'fa-plug' }
     ]
@@ -61,7 +64,7 @@ const NAV_GROUPS: Array<{ label: string; items: AdminNavItem[] }> = [
     label: '系统',
     items: [
       { key: 'setting', label: '运行配置', icon: 'fa-sliders' },
-      { key: 'sqlHistory', label: '全局历史 SQL', icon: 'fa-clock-rotate-left' }
+      { key: 'sqlHistory', label: '历史 SQL', icon: 'fa-clock-rotate-left' }
     ]
   }
 ]
@@ -80,6 +83,7 @@ const enumPanelRef = ref<InstanceType<typeof GlobalEnumAdminPanel> | null>(null)
 const ontologyPanelRef = ref<InstanceType<typeof OntologyAdminPanel> | null>(null)
 const sqlHistoryRef = ref<InstanceType<typeof GlobalSqlHistory> | null>(null)
 const schedulePanelRef = ref<InstanceType<typeof AgentScheduleAdminPanel> | null>(null)
+const modelPanelRef = ref<InstanceType<typeof ModelAdminPanel> | null>(null)
 const pluginPanelRef = ref<InstanceType<typeof PluginAdminPanel> | null>(null)
 const settingPanelRef = ref<InstanceType<typeof SettingAdminPanel> | null>(null)
 const adminDatasourceOptions = ref<DataSource[]>([])
@@ -129,6 +133,8 @@ const switchNav = async (item: AdminNavItem) => {
     schedulePanelRef.value?.ensureLoaded()
   } else if (item.key === 'plugins') {
     pluginPanelRef.value?.ensureLoaded()
+  } else if (item.key === 'models') {
+    modelPanelRef.value?.ensureLoaded()
   } else if (item.key === 'setting') {
     settingPanelRef.value?.ensureLoaded()
   } else if (item.key === 'sqlHistory') {
@@ -207,6 +213,7 @@ const switchNav = async (item: AdminNavItem) => {
         />
         <AgentScheduleAdminPanel v-show="activeNav === 'schedule'" ref="schedulePanelRef" class="h-full" />
         <PluginAdminPanel v-show="activeNav === 'plugins'" ref="pluginPanelRef" class="h-full" />
+        <ModelAdminPanel v-show="activeNav === 'models'" ref="modelPanelRef" class="h-full" />
         <SettingAdminPanel v-show="activeNav === 'setting'" ref="settingPanelRef" class="h-full" />
       </div>
     </div>

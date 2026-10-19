@@ -150,17 +150,35 @@ export interface SkillVersionInfo {
   update_time?: string
 }
 
-/** 模型思考能力声明（来自服务端 models.json 注册表，经 /config 下发）。 */
+/** 模型思考能力声明（来自服务端模型注册表，经 /config 或管理端 params 下发）。 */
 export interface ChatDataModelThinking {
   mode: 'none' | 'optional' | 'forced'
+  /** 协议方言（管理端可配；/config 下发的运行期形状不含） */
+  dialect?: string
   efforts: string[]
   default_on: boolean
   default_effort: string | null
 }
 
+/** 管理端档位项：value 缺省 = 发档位名本身；参数值支持 string/bool/number。 */
+export interface ChatDataEffortLevel {
+  level: string
+  value?: string | number | boolean
+}
+
+/** 管理端 thinking 形状：efforts 兼容旧 string[]（编辑存量数据时出现）与新对象数组。 */
+export interface ChatDataModelThinkingAdmin {
+  mode: 'none' | 'optional' | 'forced'
+  dialect?: string
+  efforts?: Array<string | ChatDataEffortLevel>
+  default_effort?: string | null
+}
+
 export interface ChatDataModelOption {
   id: string
   label: string
+  /** 提供商（下拉展示为 provider/label，区分同名模型） */
+  provider?: string
   value: string
   is_default?: boolean
   thinking?: ChatDataModelThinking
@@ -998,8 +1016,35 @@ export interface ChatDataSettingItem {
   update_by_name: string
 }
 
-// ============ 元数据管理（全局枚举） ============
+// ============ 模型管理（Admin：模型注册表） ============
 
+// 模型注册表行（api_key_cipher 密文回填供编辑框带回；模型参数集中在 params 对象，
+// thinking 为部分形状——管理端按需下发，与 /config 的全量 ChatDataModelThinking 区分）
+export interface ChatDataModelRegistryItem {
+  id: number
+  model_key: string
+  model_id: string
+  provider: string
+  display_name: string
+  base_url: string
+  has_api_key: boolean
+  api_key_cipher: string
+  params: {
+    temperature?: number
+    context_window?: number
+    max_output_tokens?: number | null
+    vlm?: boolean
+    thinking?: ChatDataModelThinkingAdmin
+  }
+  is_default: boolean
+  enabled_flag: number
+  enabled: boolean
+  remark_text: string
+  update_time?: string
+  update_by_name?: string
+}
+
+// ============ 元数据管理（全局枚举） ============
 // 全局枚举值项（value 入库真实值，label 用户可读含义）
 export interface MetaGlobalEnumValueItem {
   value: string

@@ -2,9 +2,12 @@
 
 模型注册表（CHAT_DATA_MODELS_FILE）采用 fail-fast 校验后，未显式配置的
 测试需要一个默认注册表兜底；显式自建注册表的用例不受影响。
+服务路径（事件循环内）冷缓存会拒绝回落文件（DB 唯一真值），因此默认
+注册表夹具同时把缓存预热落位，模拟生产环境启动预热成功后的状态。
 """
 
 import json
+import time
 
 import pytest
 
@@ -83,14 +86,21 @@ for _extra_id in (
 
 @pytest.fixture(autouse=True)
 def _default_models_registry(monkeypatch, tmp_path_factory):
-    """未配置模型注册表时提供默认清单；显式配置（含旧变量负例）的用例跳过。"""
+    """未配置模型注册表时提供默认清单并预热缓存；显式配置（含旧变量负例）的用例跳过。"""
     monkeypatch.delenv("CHAT_DATA_MODEL", raising=False)
     if str(__import__("os").getenv("CHAT_DATA_MODELS_FILE") or "").strip():
         yield
         return
+    from apps.chat_data_app.services import llm_config
+
     path = tmp_path_factory.mktemp("registry") / "default_models.json"
     path.write_text(json.dumps(_DEFAULT_MODELS, ensure_ascii=False), encoding="utf-8")
     monkeypatch.setenv("CHAT_DATA_MODELS_FILE", str(path))
+    # 模拟启动预热成功：缓存落位并锚定来源（monkeypatch 自动还原，避免跨测试污染）
+    monkeypatch.setattr(llm_config, "_registry_cache", llm_config.load_chat_data_model_configs())
+    monkeypatch.setattr(llm_config, "_registry_cache_loaded_at", time.monotonic())
+    monkeypatch.setattr(llm_config, "_registry_cache_origin", str(path))
+    monkeypatch.setattr(llm_config, "_registry_refresh_task", None)
     yield
 
 
