@@ -87,7 +87,8 @@ async def _get_semantic_configs_for_user(
     semantic_service: Any, datasource_id: str, user_id: str, username: str = ""
 ) -> list[dict[str, Any]]:
     """读取查询链路可见指标集：公共指标集 + 当前用户个人指标集。"""
-    configs = await semantic_service.get_configs_async(datasource_id, user_id)
+    # HTTP 列表不带表结构：前端表结构走独立 /schema 接口，避免同一份 ds_tables 按模型数展开 N 份
+    configs = await semantic_service.get_configs_async(datasource_id, user_id, include_tables=False)
     return [_with_semantic_config_permissions(config, user_id, username) for config in (configs or [])]
 
 
@@ -95,7 +96,8 @@ async def _get_my_semantic_configs(
     semantic_service: Any, datasource_id: str, user_id: str, username: str = ""
 ) -> list[dict[str, Any]]:
     """读取普通维护页可维护的个人指标集。"""
-    configs = await semantic_service.get_configs_async(datasource_id, user_id)
+    # 同 _get_semantic_configs_for_user：HTTP 列表不注入数据源表结构
+    configs = await semantic_service.get_configs_async(datasource_id, user_id, include_tables=False)
     return [
         _with_semantic_config_permissions(config, user_id, username)
         for config in (configs or [])
@@ -107,7 +109,8 @@ async def _get_admin_semantic_configs(
     semantic_service: Any, datasource_id: str, user_id: str, username: str = ""
 ) -> list[dict[str, Any]]:
     """读取后台维护页可维护的公共指标集。"""
-    configs = await semantic_service.get_configs_async(datasource_id)
+    # 同 _get_semantic_configs_for_user：HTTP 列表不注入数据源表结构
+    configs = await semantic_service.get_configs_async(datasource_id, include_tables=False)
     return [
         _with_semantic_config_permissions(config, user_id, username, admin_manage=True)
         for config in (configs or [])

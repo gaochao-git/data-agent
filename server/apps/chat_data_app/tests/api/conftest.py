@@ -309,7 +309,7 @@ class FakeSemanticConfigService:
     def _all_configs(self, datasource_id: str):
         return (self.datasource_manager.datasources.get(datasource_id) or {}).get("semantic_configs") or []
 
-    async def get_configs_async(self, datasource_id: str, user_id: str = ""):
+    async def get_configs_async(self, datasource_id: str, user_id: str = "", include_tables: bool = True):
         configs = self._all_configs(datasource_id)
         normalized_user_id = str(user_id or "").strip()
         if not normalized_user_id:

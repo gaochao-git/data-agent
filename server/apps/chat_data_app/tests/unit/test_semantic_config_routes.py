@@ -686,7 +686,7 @@ class _FakeSemanticManager:
     async def get_datasource_async(self, datasource_id):
         return self.datasource if datasource_id == "ds_a" else None
 
-    async def get_configs_async(self, datasource_id, user_id=""):
+    async def get_configs_async(self, datasource_id, user_id="", include_tables=True):
         if datasource_id != "ds_a":
             return []
         configs = [dict(self.public_config), dict(self.config)]
@@ -1041,9 +1041,11 @@ def test_history_learning_route_validates_sources_and_missing_objects(monkeypatc
 
 def test_semantic_helper_edge_cases():
     class FakeManager:
-        async def get_configs_async(self, datasource_id, user_id=""):
+        async def get_configs_async(self, datasource_id, user_id="", include_tables=True):
             assert datasource_id == "ds_a"
             assert user_id == "user_a"
+            # HTTP 列表链路必须传 include_tables=False（表结构由独立 /schema 接口供给）
+            assert include_tables is False
             return [
                 {"id": "cfg_a", "scope_type": "public", "create_by": "admin"},
                 {"id": "cfg_b", "scope_type": "private", "create_by": "user_a"},
@@ -1080,9 +1082,10 @@ def test_list_semantic_configs_passes_current_user_to_manager(monkeypatch):
             assert datasource_id == "ds_a"
             return True
 
-        async def get_configs_async(self, datasource_id, user_id=""):
+        async def get_configs_async(self, datasource_id, user_id="", include_tables=True):
             captured["datasource_id"] = datasource_id
             captured["user_id"] = user_id
+            captured["include_tables"] = include_tables
             return [
                 {"id": "public", "scope_type": "public"},
                 {"id": "mine", "scope_type": "private", "create_by": "user_a"},
@@ -1097,7 +1100,7 @@ def test_list_semantic_configs_passes_current_user_to_manager(monkeypatch):
 
     payload = _response_payload(asyncio.run(semantic_config.list_semantic_configs("ds_a", object())))
 
-    assert captured == {"datasource_id": "ds_a", "user_id": "user_a"}
+    assert captured == {"datasource_id": "ds_a", "user_id": "user_a", "include_tables": False}
     assert [item["id"] for item in payload["data"]["configs"]] == ["public", "mine"]
     assert [item["can_manage"] for item in payload["data"]["configs"]] == [False, True]
 
