@@ -224,7 +224,7 @@
 
 <header>
   <h1>智能问数分层</h1>
-  <div class="meta">2026-10-11 架构讨论定稿 · 2026-10-17 更新（纳入本体层 / 目录二选一 / 绑定守护，校准质量规则数） · data-agent / chat-data 语义建模体系</div>
+  <div class="meta">2026-10-11 架构讨论定稿 · 2026-10-17 更新（纳入本体层 / 目录二选一 / 绑定守护，校准质量规则数） · 2026-10-20 更新（补行业参考五层对照） · data-agent / chat-data 语义建模体系</div>
   <div class="slogan">数仓建模把<b>数据</b>做对（可信的表），语义建模把<b>含义</b>做对（可信的答案），两条链在<b>智能体消费</b>处汇合。</div>
 </header>
 
@@ -414,6 +414,19 @@
   <span>↓ = 问题路由（消费命中，不是血缘）</span>
 </div>
 <div class="footnote">平台落点：语义血缘的料已在 relationships / 物化产物里（模型→表→列→字典条目的完整映射），缺的是显式化——批次 3 治理视图把它做成可查询资产（字典条目反查引用模型、变更影响面分析）；加工血缘在上游数仓平台，不归我们生产。</div>
+
+<h2><span class="no">5</span>行业参考分层对照（数据源 → 管道 → 语义 → 运营 → 应用）</h2>
+<div class="tbl-wrap">
+  <table>
+    <tr><th style="width:16%">参考层</th><th style="width:34%">本文档对应</th><th>差异说明</th></tr>
+    <tr><td>数据源层</td><td class="muted">§3 L1 数据源</td><td class="muted">一致</td></tr>
+    <tr><td>管道层</td><td class="muted">§1 数仓层（ODS→DWD→DWS→ADS 加工血缘）</td><td class="muted">同位不同权：参考架构自建数据治理与连接器；本体系借力客户数仓，加工血缘不归我们生产（§4 落点已声明）</td></tr>
+    <tr><td>语义层</td><td class="muted">§1 语义层（本体·概念层 / 语义模型 / 质量闸门 / 业务上下文）＋ §3 L3</td><td class="muted">同位且更细。语义模型按数仓层级分级（ODS 探索级 / DWD~ADS 认证级）是参考架构没有的维度——它是「管道层产物」映射进「语义层」的桥</td></tr>
+    <tr><td>运营层</td><td class="muted">缺位（刻意裁剪）</td><td class="muted">参考架构的运营层 = 业务动作（Action）+ 规则引擎；本体系只读问数，最接近的是质量闸门 / sql_guard / 悬空绑定守护，但那是「治理规则」不是「业务动作规则」，性质不同。若未来开放写回，运营层应位于语义层之上、应用层之下独立成层，不并入语义层</td></tr>
+    <tr><td>应用层</td><td class="muted">§1 UI 交互层 ＋ §3 L4 智能体使用</td><td class="muted">一致；另设消费层（用户问题）作为入口</td></tr>
+  </table>
+</div>
+<div class="footnote">参考架构来源：蚂蚁数科本体架构图（<b>docs/palantir-ontology/antgroup-dtontology/</b>，图中「本体层」= 语义定义 + 业务动作 + 规则引擎，即参考五层把本体层拆为<b>语义层＋运营层</b>）；与 Palantir Ontology（对象/链接 = 语义半边，Action/Rules = 运营半边）同构。本体系相对参考架构的独有表达：§1 的两条正交轴（数仓加工横向流动数据本体 × 语义栈纵向流动语义定义）与语义模型的数仓层级分级。</div>
 
 </body>
 </html>
