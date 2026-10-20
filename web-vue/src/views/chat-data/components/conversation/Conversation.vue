@@ -1421,7 +1421,7 @@ watch(modelOptions, (models) => {
   if (defaultModel && !models.some(item => item.id === selectedModel.value)) {
     selectedModel.value = defaultModel
   }
-})
+}, { immediate: true })
 
 onMounted(() => {
   loadModelOptions()

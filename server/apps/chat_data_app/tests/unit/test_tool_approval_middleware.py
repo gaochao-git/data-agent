@@ -761,3 +761,85 @@ def test_args_summary_keeps_nested_json():
     assert summary["text"] == "x"
     assert summary["nested"] == '{"a": 1}'
     assert summary["list"] == "[1, 2]"
+
+
+# ============ legacy 文案兼容 + 同 run 连续审批 ============
+
+
+def test_legacy_always_label_still_grants_after_wording_rename():
+    """升级前已下发的 pending 卡片仍带旧文案「本次会话始终允许」，不能静默 deny。"""
+    from apps.chat_data_app.agent.middleware.tool_approval import (
+        _LEGACY_ALWAYS_ALLOW_LABEL,
+        _resolve_batch_answers,
+        _resolve_decision,
+    )
+
+    legacy_answer = _answer([_LEGACY_ALWAYS_ALLOW_LABEL])
+    assert is_always_allowed(legacy_answer) is True
+    assert is_approval_allowed(legacy_answer) is False
+    assert _resolve_decision(legacy_answer) == "always"
+    decisions, grants = _resolve_batch_answers(
+        {"answers": [{"id": "c1", "selected": [_LEGACY_ALWAYS_ALLOW_LABEL]}]},
+        [{"call_id": "c1", "grant_key": "tool:file_delete"}],
+    )
+    assert decisions == {"c1": "allow"}
+    assert grants == ["tool:file_delete"]
+
+
+@pytest.mark.asyncio
+async def test_second_approval_within_same_run_end_to_end():
+    """同一 run 内 resume 后模型再次发起审批：第二次弹卡、决策替换均正常。"""
+    from langchain.agents import create_agent
+    from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
+    from langchain_core.messages import HumanMessage
+    from langchain_core.tools import tool as lc_tool
+    from langgraph.checkpoint.memory import MemorySaver
+
+    from apps.chat_data_app.agent.agent_state import ChatDataAgentState
+
+    executed: list[str] = []
+
+    @lc_tool
+    def file_delete(path: str) -> str:
+        """删除文件（测试用）。"""
+        executed.append(path)
+        return f"deleted {path}"
+
+    class _ToolCallingFakeModel(FakeMessagesListChatModel):
+        def bind_tools(self, _tools, **_kwargs):
+            return self
+
+    def _tool_call(call_id: str, path: str) -> AIMessage:
+        return AIMessage(
+            content="",
+            tool_calls=[{"id": call_id, "type": "tool_call", "name": "file_delete", "args": {"path": path}}],
+        )
+
+    model = _ToolCallingFakeModel(
+        responses=[
+            _tool_call("c1", "/a"),
+            _tool_call("c2", "/b"),
+            AIMessage(content="两轮审批完成"),
+        ]
+    )
+    graph = create_agent(
+        model=model,
+        tools=[file_delete],
+        system_prompt="test",
+        middleware=[create_tool_approval_middleware([file_delete])],
+        state_schema=ChatDataAgentState,
+        checkpointer=MemorySaver(),
+    )
+    config = {"configurable": {"thread_id": "approval-same-run"}}
+
+    # 第一次审批
+    result = await graph.ainvoke({"messages": [HumanMessage("删除 /a 和 /b")]}, config)
+    assert result.get("__interrupt__")
+    assert executed == []
+    # 允许第一次后，模型在同一个 run 内再次请求审批
+    result = await graph.ainvoke(Command(resume=_answer([APPROVAL_ALLOW_LABEL])), config)
+    assert result.get("__interrupt__")
+    assert executed == ["/a"]
+    # 第二次放行，run 继续完成
+    await graph.ainvoke(Command(resume=_answer([APPROVAL_ALLOW_LABEL])), config)
+    assert executed == ["/a", "/b"]

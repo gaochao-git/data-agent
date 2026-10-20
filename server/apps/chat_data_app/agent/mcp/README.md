@@ -97,9 +97,9 @@ transport 支持 `stdio`（`command`/`args`/`env`）、`streamable_http` 与 `ss
 声明的 `mcp_servers`，未通过直接拒绝安装。
 
 **MCP 工具审批**：`ask` 模式下 MCP 动态工具默认走审批中间件（第三方工具不默认放行），
-`mcp_tool_search` 只读检索除外；审批卡通过工具 metadata（`origin=mcp`、
-`mcp_server_id`、`mcp_tool_name`、`display_name`）展示「MCP server · 工具」而不是
-`mcp_<server>_<tool>` 原始名。审批卡提供三态：允许（本次）/ **本对话内始终允许** /
+`mcp_tool_search` 只读检索除外；审批卡通过插件 `tool_labels` / metadata 的
+`display_name`（缺省回退原始工具名）展示用户可读名称，而不是 `mcp_<server>_<tool>`
+原始限定名。审批卡提供三态：允许（本次）/ **本对话内始终允许** /
 拒绝（并行工具调用合并为一张卡、逐条选择允许/本对话内始终允许/拒绝）；选择「本对话内始终允许」后许可
 按**工具**粒度写入会话 checkpoint（`tool:<qualified_name>`，MCP 与内置一致），
 本会话后续同一工具调用不再询问，会话结束/新建会话自然失效。`auto` 模式直接执行（定时任务/评测强制 auto）。

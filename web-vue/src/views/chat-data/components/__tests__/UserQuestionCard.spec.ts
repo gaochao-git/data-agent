@@ -124,6 +124,7 @@ describe('UserQuestionCard batch approval', () => {
     expect(wrapper.text()).toContain('删除文件 test_1.txt')
     expect(wrapper.text()).toContain('删除第一个测试文件')
     expect(wrapper.text()).toContain('file_path: workspace/test_1.txt')
+    expect(wrapper.text()).toContain('该工具在本对话内不再询问')
 
     const approvalButtons = wrapper.findAll('button').filter(button => button.text().trim() === '允许')
     const alwaysButtons = wrapper.findAll('button').filter(button => button.text().trim() === '本对话内始终允许')

@@ -216,6 +216,9 @@ const skipCurrent = () => {
             </div>
           </div>
         </div>
+        <div v-if="batchAlwaysLabel" class="mt-2 text-[11px] leading-5 text-slate-500">
+          「{{ batchAlwaysLabel }}」= 该工具在本对话内不再询问（不是只免本轮这批操作）。
+        </div>
         <div class="mt-5 flex items-center justify-end gap-2">
           <button type="button" class="h-8 px-3 text-sm text-slate-500 hover:text-slate-700" :disabled="submitting" @click="emit('cancel')">取消</button>
           <button
