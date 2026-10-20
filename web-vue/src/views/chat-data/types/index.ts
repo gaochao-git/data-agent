@@ -391,6 +391,8 @@ export interface Message {
   dashboardSpec?: DashboardSpecPayload
   /** 用户消息 @ 引用的会话工作区文件清单（相对路径，本地发送与历史回放共用）。 */
   fileSelections?: string[]
+  /** 用户消息划选引用的助手回复片段（id 供前端 key，本地发送与历史回放共用）。 */
+  quotedSnippets?: Array<{ id: string; text: string }>
   skills?: Array<Pick<SkillInfo, 'name' | 'title' | 'description'>>
   // 用户消息附带的文件信息（上传文件或超长输入转文件）
   attachments?: MessageAttachment[]

@@ -287,6 +287,7 @@ class AgentRunRuntime:
                     request=None,
                     model_id=context.get("model_id"),
                     file_selections=context.get("file_selections"),
+                    quoted_snippets=context.get("quoted_snippets"),
                     enable_thinking=context.get("enable_thinking"),
                     thinking_effort=context.get("thinking_effort"),
                     skill_names=context.get("skill_names") or [],

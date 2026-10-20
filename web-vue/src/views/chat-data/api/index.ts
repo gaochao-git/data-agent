@@ -1552,7 +1552,7 @@ export function steerConversation(
   conversationId: string,
   query: string,
   queueType?: 'next-step' | 'next-turn',
-  meta?: { file_selections?: string[]; file_ids?: string[] },
+  meta?: { file_selections?: string[]; quoted_snippets?: Array<{ text: string }>; file_ids?: string[] },
 ): Promise<ApiResponse<{ message_id: string }>> {
   return request({
     url: `/agents/api/chatdata/conversations/${conversationId}/steer`,
@@ -1562,6 +1562,7 @@ export function steerConversation(
       ...(queueType ? { queue_type: queueType } : {}),
       // 随行引用/附件快照：服务端存引用，续跑执行时统一校验解析
       ...(meta?.file_selections?.length ? { file_selections: meta.file_selections } : {}),
+      ...(meta?.quoted_snippets?.length ? { quoted_snippets: meta.quoted_snippets } : {}),
       ...(meta?.file_ids?.length ? { file_ids: meta.file_ids } : {}),
     },
   })
@@ -1627,6 +1628,8 @@ export function listSteerMessages(
     content: string
     queue_type: 'next-step' | 'next-turn'
     status: 'pending' | 'claimed' | 'consumed' | 'cancelled'
+    /** 服务端随行元数据（file_selections/quoted_snippets/file_ids）；旧数据或纯文本消息为 null。 */
+    meta?: { file_selections?: string[]; quoted_snippets?: Array<{ text: string }>; file_ids?: string[] } | null
     create_time: string
   }>
 }>> {

@@ -1104,8 +1104,8 @@ class AgentInboxService:
         }
         meta = _load_inbox_meta(row.record_meta)
         # 随行引用/附件还原进 additional_kwargs；校验解析（白名单、引用短句、
-        # 附件占位与视觉装载）由 agent_stream 采纳点统一完成——本层只透传。
-        for key in ("file_selections", "file_ids"):
+        # 片段归一、附件占位与视觉装载）由 agent_stream 采纳点统一完成——本层只透传。
+        for key in ("file_selections", "quoted_snippets", "file_ids"):
             if meta.get(key):
                 additional_kwargs[key] = meta[key]
         return HumanMessage(

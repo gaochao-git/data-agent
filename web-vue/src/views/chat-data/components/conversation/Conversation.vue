@@ -12,6 +12,7 @@ import { useModelOptions } from '../../composables/useModelOptions'
 import { useSaveToPanel } from '../../composables/useSaveToPanel'
 import { useSkillCommandMenu } from '../../composables/useSkillCommandMenu'
 import { useWorkspaceFileMention, type WorkspaceFilePick } from '../../composables/useWorkspaceFileMention'
+import { useQuotedSnippets } from '../../composables/useQuotedSnippets'
 import { answerUserQuestion, cancelConversationRun, cancelSteerMessage, cancelUserQuestion, createDashboardFromSpec, getConversationWorkspaceFileContent, getConversationWorkspaceFiles, getConversationWorkspaceRawFile, getPendingUserQuestion, importConversationWorkspaceSkill, listSteerMessages, steerConversation, streamRunEvents, updateSteerMessage, uploadFile } from '../../api'
 import type { Dashboard } from '../../api/dashboard'
 import type { ChatDataRuntimeOptions } from '../../api'
@@ -679,6 +680,8 @@ const handleOversizedInputAuto = async (text: string) => {
 type AnalysisSubmitOptions = {
   /** @ 引用文件快照（相对路径列表）；未传时按当前 chip 状态构建。 */
   fileSelections?: string[] | null
+  /** 划选引用片段快照（[{text}]）；未传时按当前 chip 状态构建，随请求透传服务端。 */
+  quotedSnippets?: Array<{ text: string }> | null
   assistantMessageId?: string
   appendUserMessage?: boolean
   fileIds?: string[]
@@ -877,6 +880,24 @@ const handleMentionFileClear = (relativePath: string) => {
 /** 发送链路用的引用快照：只含输入框 @ 引用 chip 的相对路径。 */
 const buildMentionFileSelections = (): string[] => {
   return mentionedFiles.value.map(file => file.relativePath)
+}
+
+// ---- 划选引用：助手气泡划选 → 浮层「添加到对话」→ chip；发送时随请求透传服务端 ----
+const {
+  quotedSnippets,
+  addQuotedSnippet,
+  removeQuotedSnippet,
+  clearQuotedSnippets,
+} = useQuotedSnippets()
+
+/** 浮层「添加到对话」回调：片段进 chip 列表并聚焦输入框；超限/重复时提示。 */
+const handleAddQuoteSnippet = (text: string) => {
+  if (!addQuotedSnippet(text)) {
+    const isDuplicate = quotedSnippets.value.some(item => item.text === text.trim())
+    ElMessage.warning(isDuplicate ? '该片段已在引用列表中' : '引用片段已达上限（5 条），请先发送或移除')
+    return
+  }
+  focusInput()
 }
 
 const findToolCallById = (id: string | null) => {
@@ -1469,6 +1490,7 @@ watch(
       activeAssistantMessageId.value = null
       resetTokenUsagePanel()
       resetHistory()
+      clearQuotedSnippets()
       // 清空会话后视口回到顶部即底部，重置跟随状态，避免「回到最新」按钮残留；
       // 自动翻页的越界观测值一并复位，避免带着上一个会话的位置误判「已越过顶部」
       isNearBottom.value = true
@@ -1939,6 +1961,10 @@ const submitAnalysisQuery = async (
   const mentionFileSelections = options.fileSelections !== undefined
     ? (options.fileSelections || [])
     : buildMentionFileSelections()
+  // 划选引用快照：随消息透传服务端（存引用、模型可见标记块由后端统一追加）
+  const quotedSnippetsSnapshot = options.quotedSnippets !== undefined
+    ? (options.quotedSnippets || [])
+    : quotedSnippets.value.map(item => ({ text: item.text }))
   const userMessage: Message = {
     id: options.userMessageId || `user-${Date.now()}`,
     role: 'user',
@@ -1950,6 +1976,13 @@ const submitAnalysisQuery = async (
   // 本轮 @ 引用了工作区文件时，随用户消息留痕供气泡 chip 展示
   if (mentionFileSelections.length > 0) {
     userMessage.fileSelections = mentionFileSelections
+  }
+  // 本轮划选引用了助手回复片段时，随用户消息留痕供气泡 chip 展示（历史回放同构）
+  if (quotedSnippetsSnapshot.length > 0) {
+    userMessage.quotedSnippets = quotedSnippetsSnapshot.map((item, index) => ({
+      id: `quote-${index}`,
+      text: item.text,
+    }))
   }
   if (options.appendUserMessage !== false) {
     messages.value.push(userMessage)
@@ -1975,6 +2008,7 @@ const submitAnalysisQuery = async (
     input.value = ''
     clearSelectedSkills()
     clearMentionFiles()
+    clearQuotedSnippets()
   }
   isGenerating.value = true
   startLiveElapsedTicker(options.elapsedSeedMs)
@@ -2069,6 +2103,7 @@ const submitAnalysisQuery = async (
           liveGenerationSpeed.value = tokensPerSecond
         },
         fileSelections: mentionFileSelections,
+        quotedSnippets: quotedSnippetsSnapshot,
         enableThinking: enableDeepThinking.value,
         thinkingEffort: thinkingEffort.value,
         runtimeOptions: selectedRuntimeOptions.value,
@@ -2251,6 +2286,7 @@ const handleSubmit = async (options: { queuedMessageId?: string } = {}) => {
         // 队列消息的随行快照：入队时捕获；恢复自服务端且无 meta 的项显式传空，
         // 绝不兜底取当前输入框状态（执行时点的 chip/附件属于之后的新消息）
         fileSelections: queuedMessage.fileSelections ?? [],
+        quotedSnippets: queuedMessage.quotedSnippets ?? [],
         fileIds: queuedMessage.fileIds ?? [],
       })
     } finally {
@@ -2267,6 +2303,8 @@ const handleSubmit = async (options: { queuedMessageId?: string } = {}) => {
     // 入队瞬间捕获随行快照：执行时间点与入队时间点之间输入框状态可能已变化，
     // 引用/附件必须随消息走（服务端存引用，续跑执行时统一校验解析）。
     const mentionFileSelectionsSnapshot = buildMentionFileSelections()
+    // 划选引用走结构化通道：随队列消息透传（服务端存引用，采纳时统一解析）
+    const queuedQuotedSnippets = quotedSnippets.value.map(item => ({ text: item.text }))
     const queuedFileIds = pendingFiles.value
       .filter(f => f.status === 'uploaded' && f.file_id && !f.file_id.startsWith('temp-'))
       .map(f => f.file_id!)
@@ -2280,6 +2318,7 @@ const handleSubmit = async (options: { queuedMessageId?: string } = {}) => {
       status: 'submitting',
       timestamp: new Date(),
       fileSelections: mentionFileSelectionsSnapshot,
+      quotedSnippets: queuedQuotedSnippets.length > 0 ? queuedQuotedSnippets : undefined,
       fileIds: queuedFileIds.length > 0 ? queuedFileIds : undefined,
     })
     input.value = ''
@@ -2287,6 +2326,7 @@ const handleSubmit = async (options: { queuedMessageId?: string } = {}) => {
     try {
       const response = await steerConversation(conversationId, bakedQuery, 'next-turn', {
         file_selections: mentionFileSelectionsSnapshot,
+        quoted_snippets: queuedQuotedSnippets.length > 0 ? queuedQuotedSnippets : undefined,
         file_ids: queuedFileIds,
       })
       const queuedMessage = pendingSteerMessages.value.find(item => item.clientId === temporaryId)
@@ -2300,6 +2340,12 @@ const handleSubmit = async (options: { queuedMessageId?: string } = {}) => {
       // 随行内容已入队：只释放已随消息入队的那批引用/附件/技能（快照精确释放）；
       // API 往返期间新加的保留给下一条消息（失败分支全部保留供重试）
       mentionFileSelectionsSnapshot.forEach(path => removeMentionFile(path))
+      if (queuedQuotedSnippets.length > 0) {
+        const queuedTexts = new Set(queuedQuotedSnippets.map(snippet => snippet.text))
+        quotedSnippets.value
+          .filter(snippet => queuedTexts.has(snippet.text))
+          .forEach(snippet => removeQuotedSnippet(snippet.id))
+      }
       if (queuedFileIds.length > 0) {
         const queuedFileIdSet = new Set(queuedFileIds)
         pendingFiles.value = pendingFiles.value.filter(f => !queuedFileIdSet.has(f.file_id))
@@ -2318,6 +2364,7 @@ const handleSubmit = async (options: { queuedMessageId?: string } = {}) => {
         }
         void submitAnalysisQuery(bakedQuery, {
           fileSelections: mentionFileSelectionsSnapshot,
+          quotedSnippets: queuedQuotedSnippets,
           fileIds: queuedFileIds.length > 0 ? queuedFileIds : undefined,
         })
         return
@@ -2332,7 +2379,7 @@ const handleSubmit = async (options: { queuedMessageId?: string } = {}) => {
   const hasUploadedFiles = pendingFiles.value.some(
     f => f.status === 'uploaded' && f.file_id && !f.file_id.startsWith('temp-'),
   )
-  if (!input.value.trim() && !hasUploadedFiles) return
+  if (!input.value.trim() && !hasUploadedFiles && quotedSnippets.value.length === 0) return
   if (!selectedDatasource.value) {
     ElMessage.warning('请先选择数据源')
     return
@@ -2350,6 +2397,8 @@ const handleSubmit = async (options: { queuedMessageId?: string } = {}) => {
   const skillNames = selectedSkills.value.map(skill => skill.name)
   // @ 引用文件快照（发送瞬间捕获，发送后 chip 会被清空）；留痕在 submit 内按快照决策
   const mentionFileSelectionsSnapshot = buildMentionFileSelections()
+  // 划选引用快照：发送瞬间捕获，随请求透传服务端（模型可见标记块由后端统一追加），发送后 chip 清空
+  const quotedSnippetsSnapshot = quotedSnippets.value.map(item => ({ text: item.text }))
   const messageSkills: Message['skills'] = selectedSkills.value.map(skill => ({
     name: skill.name,
     title: skill.title,
@@ -2389,6 +2438,10 @@ const handleSubmit = async (options: { queuedMessageId?: string } = {}) => {
   if (!effectiveQueryText.trim() && completedFileIds.length > 0) {
     effectiveQueryText = '请查看附件内容并进行分析'
   }
+  // 只有划选引用没有文本时，同样给出占位问题
+  if (!effectiveQueryText.trim() && quotedSnippetsSnapshot.length > 0) {
+    effectiveQueryText = '请结合引用的内容继续分析'
+  }
 
   const requestText = buildSkillRequestText(effectiveQueryText, skillNames)
   // 附件已捕获进 completedFileIds/attachments，发送瞬间即清空输入框附件卡片，
@@ -2399,6 +2452,7 @@ const handleSubmit = async (options: { queuedMessageId?: string } = {}) => {
     messageSkills,
     restoreInputText: queryText,
     fileSelections: mentionFileSelectionsSnapshot,
+    quotedSnippets: quotedSnippetsSnapshot.length > 0 ? quotedSnippetsSnapshot : [],
     fileIds: completedFileIds.length > 0 ? completedFileIds : undefined,
     preserveQueuedMessages: pendingSteerMessages.value.length > 0,
     attachments: attachments.length > 0 ? attachments : undefined,
@@ -2539,6 +2593,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
           :live-elapsed-ms="liveElapsedMs"
           @select-tool="selectToolCall"
           @open-attachment="handleOpenAttachment"
+          @add-to-conversation="handleAddQuoteSnippet"
         >
           <template #assistant-extra="{ message: msg }">
             <PresentedFileArtifacts
@@ -2819,11 +2874,12 @@ const handleKeyDown = (event: KeyboardEvent) => {
             :placeholder="hasLocalConversationStarted || messages.length > 0 ? '继续输入任务，输入 / 可选择技能，@ 可引用工作区文件' : '请输入任务，输入 / 可选择技能，@ 可引用工作区文件'"
             :selected-skills="selectedSkills"
             :selected-mention-files="mentionedFiles"
+            :quoted-snippets="quotedSnippets"
             :runtime-options="selectedRuntimeOptions"
             :user-overridable="userOverridable"
             :model-options="modelOptions"
             :is-generating="runBusy"
-            :can-submit="runBusy ? Boolean(input.trim() && !isSteering) : Boolean((input.trim() || hasCompletedPendingFiles) && selectedDatasource)"
+            :can-submit="runBusy ? Boolean(input.trim() && !isSteering) : Boolean((input.trim() || hasCompletedPendingFiles || quotedSnippets.length > 0) && selectedDatasource)"
             :input-focused="inputFocused"
             :show-skill-button="!runBusy"
             :submit-title="!selectedDatasource ? '请先选择数据源' : '发送 (Enter)'"
@@ -2831,6 +2887,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
             @stop="handleStop"
             @clear-skill="clearSelectedSkill"
             @clear-mention-file="handleMentionFileClear"
+            @remove-quote-snippet="removeQuotedSnippet"
             @upload-file="handleUploadFile"
             @paste-files="handlePasteFiles"
             @open-skill-manager="isSkillManagerOpen = true"

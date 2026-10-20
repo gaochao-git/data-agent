@@ -40,6 +40,15 @@ from apps.chat_data_app.services.runtime_config import (
     SUBAGENT_THINKING_PREVIEW_MAX_CHARS,
 )
 from apps.chat_data_app.services.setting_service import get_runtime_setting
+from apps.chat_data_app.sse_protocol import (
+    SSE_EVENT_SUBAGENT_CONTEXT_USAGE,
+    SSE_EVENT_SUBAGENT_MESSAGE,
+    SSE_EVENT_SUBAGENT_MESSAGE_DELTA,
+    SSE_EVENT_SUBAGENT_THINKING_DELTA,
+    SSE_EVENT_TOOL_COMPLETED,
+    SSE_EVENT_TOOL_FAILED,
+    SSE_EVENT_TOOL_STARTED,
+)
 from utils.logger import get_logger
 from utils.tool_call_args import coerce_tool_call_args
 
@@ -686,7 +695,7 @@ def _iter_chunk_stream_events(
             if allowed:
                 events.append(
                     {
-                        "event_type": "subagent_message_delta",
+                        "event_type": SSE_EVENT_SUBAGENT_MESSAGE_DELTA,
                         "message_id": message_id,
                         "delta": allowed,
                         "truncated": was_capped,
@@ -700,7 +709,7 @@ def _iter_chunk_stream_events(
         if allowed:
             events.append(
                 {
-                    "event_type": "subagent_thinking_delta",
+                    "event_type": SSE_EVENT_SUBAGENT_THINKING_DELTA,
                     "message_id": message_id,
                     "delta": allowed,
                     "truncated": was_capped,
@@ -788,7 +797,7 @@ def _subagent_message_event(
     truncated = len(text) > SUBAGENT_MESSAGE_PREVIEW_MAX_CHARS
     if already_streamed:
         return {
-            "event_type": "subagent_message",
+            "event_type": SSE_EVENT_SUBAGENT_MESSAGE,
             "message_id": message_id,
             "content": "",
             "streamed": True,
@@ -796,7 +805,7 @@ def _subagent_message_event(
             "parent_tool_call_id": parent_tool_call_id,
         }
     return {
-        "event_type": "subagent_message",
+        "event_type": SSE_EVENT_SUBAGENT_MESSAGE,
         "message_id": message_id,
         "content": _truncate_text(text, SUBAGENT_MESSAGE_PREVIEW_MAX_CHARS, "内容"),
         "streamed": False,
@@ -813,7 +822,7 @@ def _subagent_tool_started_events(message: AIMessage, parent_tool_call_id: str |
             continue
         events.append(
             {
-                "event_type": "tool_started",
+                "event_type": SSE_EVENT_TOOL_STARTED,
                 "tool_call_id": tool_call.get("id"),
                 "tool_name": tool_call.get("name"),
                 "args": coerce_tool_call_args(tool_call.get("args")) or {},
@@ -828,7 +837,7 @@ def _subagent_tool_result_event(message: ToolMessage, parent_tool_call_id: str |
     raw = _plain_text(getattr(message, "content", ""))
     status = str(getattr(message, "status", "") or "")
     return {
-        "event_type": "tool_failed" if status == "error" else "tool_completed",
+        "event_type": SSE_EVENT_TOOL_FAILED if status == "error" else SSE_EVENT_TOOL_COMPLETED,
         "tool_call_id": getattr(message, "tool_call_id", None),
         "tool_name": getattr(message, "name", None),
         "content": _truncate_text(raw, SUBAGENT_RESULT_PREVIEW_MAX_CHARS),
@@ -1056,7 +1065,7 @@ async def _run_subagent_with_events(
             _emit_subagent_tool_event(
                 writer,
                 {
-                    "event_type": "subagent_context_usage",
+                    "event_type": SSE_EVENT_SUBAGENT_CONTEXT_USAGE,
                     "parent_tool_call_id": parent_tool_call_id,
                     **usage,
                 },

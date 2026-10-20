@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
-import { ElMessage, ElTooltip } from 'element-plus'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { ElMessage, ElPopover, ElTooltip } from 'element-plus'
 import type { ExecutionTargetOption, Message, MessageAttachment, MessageSegment, ToolCallInfo } from '../../types'
 import { useMermaidRenderer } from '../../composables/useMermaidRenderer'
 import { extractGeneratedSqlFromToolCall } from '../../utils/semanticTool'
 import { fileIconNameByExtension } from '../../utils/fileTypeIcon'
+import { copyTextToClipboard } from '../../utils/clipboard'
 import { formatDateTimeValue, formatGenerationSpeed, formatTotalDurationLabel, generationStatsRows, renderMarkdown } from '../../utils'
 import AssistantMessageFooter from '../AssistantMessageFooter.vue'
 import QueryResultPanel from '../QueryResultPanel.vue'
@@ -49,7 +50,126 @@ const props = withDefaults(defineProps<Props>(), {
 const emit = defineEmits<{
   selectTool: [toolCall: ToolCallInfo]
   openAttachment: [attachment: MessageAttachment]
+  addToConversation: [text: string]
 }>()
+
+// ---- 划选引用浮层（复制 / 添加到对话）----
+// 助手气泡内划选文字后浮出操作条：复制只复制选中片段，「添加到对话」把片段
+// 抛给输入框引用 chip（父组件消费，发送时随请求透传服务端结构化通道）。
+// 仅对非流式的助手气泡生效；用户气泡、思考体外、工具卡片不触发。
+interface QuoteToolbarState {
+  text: string
+  x: number
+  y: number
+  /** 浮层锚在选区上方（translate(-50%,-100%)）还是下方（translate(-50%,0)）。 */
+  placement: 'top' | 'bottom'
+}
+
+const quoteToolbar = ref<QuoteToolbarState | null>(null)
+const quoteToolbarRef = ref<HTMLElement | null>(null)
+
+const QUOTE_TOOLBAR_MARGIN = 12
+const QUOTE_TOOLBAR_HALF_WIDTH = 96
+
+const hideQuoteToolbar = () => {
+  quoteToolbar.value = null
+}
+
+const isNodeWithin = (node: Node | null, container: EventTarget | null): boolean => {
+  if (!node || !(container instanceof Node)) return false
+  return container.contains(node)
+}
+
+const handleBubbleMouseUp = (event: MouseEvent, message: Message) => {
+  if (event.button !== 0) return
+  if (message.isStreaming) {
+    hideQuoteToolbar()
+    return
+  }
+  const selection = window.getSelection()
+  if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
+    hideQuoteToolbar()
+    return
+  }
+  // 选区两端都必须落在当前助手气泡内，避免把气泡外的文字一起带进引用
+  if (
+    !isNodeWithin(selection.anchorNode, event.currentTarget)
+    || !isNodeWithin(selection.focusNode, event.currentTarget)
+  ) {
+    hideQuoteToolbar()
+    return
+  }
+  const text = selection.toString().trim()
+  if (!text) {
+    hideQuoteToolbar()
+    return
+  }
+  const rect = selection.getRangeAt(0).getBoundingClientRect()
+  if (!rect.width && !rect.height) {
+    hideQuoteToolbar()
+    return
+  }
+  const x = Math.min(
+    Math.max(rect.left + rect.width / 2, QUOTE_TOOLBAR_MARGIN + QUOTE_TOOLBAR_HALF_WIDTH),
+    window.innerWidth - QUOTE_TOOLBAR_MARGIN - QUOTE_TOOLBAR_HALF_WIDTH,
+  )
+  // 上方放不下（贴近视口顶）时浮层改锚到选区下方
+  const placement: QuoteToolbarState['placement'] = rect.top > 56 ? 'top' : 'bottom'
+  quoteToolbar.value = { text, x, y: placement === 'top' ? rect.top - 6 : rect.bottom + 6, placement }
+}
+
+const quoteToolbarStyle = computed(() => {
+  const toolbar = quoteToolbar.value
+  if (!toolbar) return {}
+  return {
+    left: `${toolbar.x}px`,
+    top: `${toolbar.y}px`,
+    transform: toolbar.placement === 'top' ? 'translate(-50%, -100%)' : 'translate(-50%, 0)',
+  }
+})
+
+const handleCopyQuoteSelection = async () => {
+  const text = quoteToolbar.value?.text
+  if (!text) return
+  await copyTextToClipboard(text)
+  hideQuoteToolbar()
+}
+
+const handleQuoteSelectionToConversation = () => {
+  const text = quoteToolbar.value?.text
+  if (!text) return
+  emit('addToConversation', text)
+  window.getSelection()?.removeAllRanges()
+  hideQuoteToolbar()
+}
+
+// 选中范围塌缩 / 滚动 / 视口变化时收起浮层，避免位置漂移或残留
+const handleDocumentSelectionChange = () => {
+  const selection = window.getSelection()
+  if (!selection || selection.isCollapsed) hideQuoteToolbar()
+}
+
+const handleViewportChange = () => hideQuoteToolbar()
+
+const handleDocumentMouseDown = (event: MouseEvent) => {
+  const target = event.target
+  if (target instanceof Node && quoteToolbarRef.value?.contains(target)) return
+  hideQuoteToolbar()
+}
+
+onMounted(() => {
+  document.addEventListener('selectionchange', handleDocumentSelectionChange)
+  document.addEventListener('mousedown', handleDocumentMouseDown)
+  document.addEventListener('scroll', handleViewportChange, true)
+  window.addEventListener('resize', handleViewportChange)
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('selectionchange', handleDocumentSelectionChange)
+  document.removeEventListener('mousedown', handleDocumentMouseDown)
+  document.removeEventListener('scroll', handleViewportChange, true)
+  window.removeEventListener('resize', handleViewportChange)
+})
 
 // 用户手动展开的思考分段（跨流式过程保持；未点开的分段一律默认收起）
 const expandedThinkingSegmentKeys = ref<Set<string>>(new Set())
@@ -145,6 +265,14 @@ const getUserMentionedFiles = (message: Message): Array<{ path: string; name: st
     .map(path => ({ path, name: path.split('/').pop() || path }))
 }
 
+// 用户消息上展示的划选引用片段（本地发送与历史回放统一走 quotedSnippets）
+const getUserQuotedSnippets = (message: Message): Array<{ id: string; text: string }> => {
+  if (message.role !== 'user') return []
+  return (message.quotedSnippets || [])
+    .map(item => ({ id: String(item?.id || ''), text: String(item?.text || '').trim() }))
+    .filter(item => item.text)
+}
+
 const formatCompressionTokens = (value?: number): string => new Intl.NumberFormat('zh-CN').format(Math.max(0, Number(value) || 0))
 
 const hasVisibleAssistantContent = (content: string): boolean => {
@@ -226,13 +354,7 @@ const handleMentionFileClick = (file: { path: string; name: string }) => {
 const handleCopyAssistantMessage = async (message: Message) => {
   const text = getCopyableAssistantContent(message)
   if (!text) return
-  try {
-    await navigator.clipboard.writeText(text)
-    ElMessage.success('已复制')
-  } catch (error) {
-    console.error('复制回复失败:', error)
-    ElMessage.error('复制失败，请稍后重试')
-  }
+  await copyTextToClipboard(text)
 }
 
 </script>
@@ -248,6 +370,27 @@ const handleCopyAssistantMessage = async (message: Message) => {
     >
       <div :class="message.role === 'user' ? 'flex max-w-[80%] flex-col items-end gap-1.5' : 'w-full min-w-0'">
         <template v-if="message.role === 'user'">
+          <div
+            v-if="getUserQuotedSnippets(message).length"
+            class="flex w-full flex-row-reverse flex-wrap items-start gap-1.5"
+            title="本轮引用的助手回复片段"
+          >
+            <el-popover
+              v-for="snippet in getUserQuotedSnippets(message)"
+              :key="snippet.id || snippet.text"
+              placement="top-end"
+              :width="380"
+              trigger="hover"
+            >
+              <template #reference>
+                <span class="flex max-w-[280px] items-center gap-1.5 rounded-full border border-slate-200/70 bg-white/80 px-2.5 py-1 text-xs text-slate-500">
+                  <i class="fa-solid fa-quote-left text-[11px] shrink-0 text-slate-400"></i>
+                  <span class="truncate">{{ snippet.text }}</span>
+                </span>
+              </template>
+              <div class="max-h-[240px] overflow-y-auto whitespace-pre-wrap text-xs leading-relaxed text-slate-700">{{ snippet.text }}</div>
+            </el-popover>
+          </div>
           <div
             v-if="getUserMentionedFiles(message).length"
             class="flex w-full flex-row-reverse flex-wrap gap-1.5"
@@ -337,7 +480,10 @@ const handleCopyAssistantMessage = async (message: Message) => {
         </template>
 
         <template v-else>
-          <div class="min-w-0 rounded-2xl rounded-bl-md border border-black/[0.06] bg-white p-4 shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
+          <div
+            class="min-w-0 rounded-2xl rounded-bl-md border border-black/[0.06] bg-white p-4 shadow-[0_2px_8px_rgba(0,0,0,0.04)]"
+            @mouseup="handleBubbleMouseUp($event, message)"
+          >
             <div v-if="message.segments?.length" class="flex min-w-0 flex-col gap-3">
               <template v-for="(segment, index) in message.segments" :key="`${segment.type}-${index}`">
                 <div
@@ -489,6 +635,34 @@ const handleCopyAssistantMessage = async (message: Message) => {
           </div>
         </template>
       </div>
+    </div>
+
+    <!-- 划选引用浮层：fixed 锚定选区，跨组件层级走 z-index 变量 -->
+    <div
+      v-if="quoteToolbar"
+      ref="quoteToolbarRef"
+      class="fixed z-[var(--z-floating-tip)] flex items-center gap-0.5 rounded-lg border border-slate-200 bg-white p-1 shadow-lg"
+      :style="quoteToolbarStyle"
+      @mousedown.prevent
+    >
+      <button
+        type="button"
+        class="flex h-7 items-center gap-1.5 whitespace-nowrap rounded-md border-none bg-transparent px-2.5 text-xs text-gray-600 transition-colors duration-150 hover:bg-gray-100 hover:text-gray-800"
+        @click="handleCopyQuoteSelection"
+      >
+        <i class="fa-regular fa-copy text-[11px]"></i>
+        <span>复制</span>
+      </button>
+      <div class="h-4 w-px bg-slate-200"></div>
+      <button
+        type="button"
+        class="flex h-7 items-center gap-1.5 whitespace-nowrap rounded-md border-none bg-transparent px-2.5 text-xs text-gray-600 transition-colors duration-150 hover:bg-blue-50 hover:text-blue-600"
+        title="把选中内容作为引用加入输入框"
+        @click="handleQuoteSelectionToConversation"
+      >
+        <i class="fa-solid fa-quote-left text-[11px]"></i>
+        <span>添加到对话</span>
+      </button>
     </div>
   </div>
 </template>

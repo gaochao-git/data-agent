@@ -21,6 +21,7 @@ class CompletionRunOptions:
     member_datasource_ids: list
     file_selections: list[str]
     skill_names: list[str]
+    quoted_snippets: list[dict[str, str]]
 
 
 def normalize_enable_thinking(value: Any) -> bool | None:
@@ -67,6 +68,32 @@ def parse_file_selections(value: Any) -> list[str]:
     return selections
 
 
+def parse_quoted_snippets(value: Any) -> list[dict[str, str]]:
+    """解析划选引用片段（[{"text": ...}]，兼容纯字符串条目）。
+
+    strip 后去空、按序去重；单条与总条数设上限——引用为人工逐条添加，
+    正常远低于上限，超出直接截断，防异常超大 payload 进 state/checkpoint。
+    """
+    if not isinstance(value, list):
+        return []
+    snippets: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for item in value:
+        text = str(item.get("text") or "") if isinstance(item, dict) else str(item or "")
+        text = text.strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        snippets.append({"text": text[:_QUOTED_SNIPPET_MAX_CHARS]})
+        if len(snippets) >= _QUOTED_SNIPPET_MAX_ITEMS:
+            break
+    return snippets
+
+
+_QUOTED_SNIPPET_MAX_CHARS = 2000
+_QUOTED_SNIPPET_MAX_ITEMS = 5
+
+
 def parse_completion_run_options(options: dict[str, Any] | None) -> CompletionRunOptions:
     options_data = options or {}
     raw_skill_names = options_data.get("skill_names") or []
@@ -85,4 +112,5 @@ def parse_completion_run_options(options: dict[str, Any] | None) -> CompletionRu
         member_datasource_ids=options_data.get("member_datasource_ids") or [],
         file_selections=parse_file_selections(options_data.get("file_selections")),
         skill_names=skill_names,
+        quoted_snippets=parse_quoted_snippets(options_data.get("quoted_snippets")),
     )

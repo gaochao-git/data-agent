@@ -1,30 +1,16 @@
-"""工具参数流式进度与 SSE 事件格式化的纯函数集合。
+"""工具参数流式进度事件的纯函数集合。
 
-从 agent_stream.py 拆出（该文件顶在 2000 行红线）：SSE 事件格式化（``_format_sse``）
-与工具参数流式进度事件（行数统计 / intent 预渲染）。实时生成速率由 agent_stream 的
+从 agent_stream.py 拆出（该文件顶在 2000 行红线）：工具参数流式进度事件
+（行数统计 / intent 预渲染）。SSE 序列化与帧名已收敛到协议层 ``sse_protocol``，
+本模块只保留 ``_format_sse`` 别名以维持既有调用点。实时生成速率由 agent_stream 的
 generation_speed 滑窗采样负责（原 stream_stats 参数字符上报已随前端本地估算下线）。
 """
 
-import json
 from typing import Any
 
 from .agent_run_support import _get_timestamp
-
-
-def _format_sse(event: str, data: dict | str) -> str:
-    """
-    格式化 SSE 事件
-
-    Args:
-        event: 事件类型 (message, tool, error, done)
-        data: 事件数据（字典会被 JSON 序列化，字符串直接使用）
-
-    Returns:
-        符合 SSE 规范的字符串: "event: {event}\\ndata: {data}\\n\\n"
-    """
-    data_str = json.dumps(data, ensure_ascii=False) if isinstance(data, dict) else data
-    return f"event: {event}\ndata: {data_str}\n\n"
-
+from .sse_protocol import SSE_EVENT_TOOL_PROGRESS
+from .sse_protocol import format_sse as _format_sse
 
 # 需要实时显示生成行数的工具：added_field 计 "+N"（写入行数），
 # removed_field 计 "-M"（被替换移除行数，file_edit 整段替换口径）。
@@ -91,7 +77,7 @@ def _format_tool_progress_event(
     行数与 intent 字段按需携带：非行数统计工具的事件只带 intent，避免前端把 0 当成有效行数。
     """
     data: dict[str, Any] = {
-        "type": "tool_progress",
+        "type": SSE_EVENT_TOOL_PROGRESS,
         "tool_call_id": tool_call_id,
         "tool_name": tool_name,
         "timestamp": _get_timestamp(),
@@ -102,7 +88,7 @@ def _format_tool_progress_event(
         data["removed_lines"] = removed_lines
     if intent:
         data["intent"] = intent
-    return _format_sse("tool_progress", data)
+    return _format_sse(SSE_EVENT_TOOL_PROGRESS, data)
 
 
 def _extract_streaming_progress_inputs(
