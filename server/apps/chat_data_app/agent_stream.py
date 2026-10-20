@@ -47,7 +47,7 @@ from .agent.run.agent_inbox_service import AgentRunLeaseLostError, agent_inbox_s
 from .agent.run.agent_run_event_service import agent_run_event_service
 from .agent.run.agent_run_runtime import agent_run_runtime
 from .agent.run.chat_data_stream_request import ChatDataStreamRequest
-from .agent.run.completion_options import parse_completion_run_options, parse_file_selections
+from .agent.run.completion_options import parse_completion_run_options, parse_file_selections, parse_quoted_snippets
 from .agent.run.conversation_event_service import conversation_event_service
 from .agent.run.conversation_runtime import (
     TurnLifecycleHooks,
@@ -213,11 +213,28 @@ def _file_selection_mention_suffix(file_selections: list[str]) -> str:
     return f"\n\n[引用文件：{references}]"
 
 
+def _quote_snippets_suffix(quoted_snippets: list[dict[str, str]] | None) -> str:
+    """划选引用的模型可见后缀：片段原文按标记块逐一包住，追加在正文之后。
+
+    前端划选助手回复片段后随消息传 quoted_snippets（[{"text": ...}]），
+    语义等同 IM 引用回复——模型能看到被引用的原文与「继续问答」意图。
+    开始/结束标记成对出现，前端气泡展示时按同一标记剥离（引用原文以
+    additional_kwargs 的结构化字段渲染 chip，不在正文重复平铺）。
+    """
+    blocks = [str(item.get("text") or "").strip() for item in (quoted_snippets or [])]
+    blocks = [block for block in blocks if block]
+    if not blocks:
+        return ""
+    lines = "\n\n".join(f"[引用助手回复片段开始]\n{block}\n[引用助手回复片段结束]" for block in blocks)
+    return f"\n\n{lines}"
+
+
 def _build_user_message(
     content: str | list[str | dict[str, Any]],
     file_selections: list[str] | None = None,
     *,
     message_id: str | None = None,
+    quoted_snippets: list[dict[str, str]] | None = None,
     **extra_kwargs: Any,
 ) -> HumanMessage:
     """构造带服务端时间戳和前端选择留痕的用户消息。
@@ -225,10 +242,13 @@ def _build_user_message(
     content 为纯字符串（正文 + 附件占位行）；图片附件经 additional_kwargs
     的 ``vision_attachments`` 路径标记由 middleware 在请求层装载。
     用户 @ 引用工作区文件时在正文末尾追加引用短句（多选逐一列出），模型从对话即可看到本轮引用。
+    划选引用（quoted_snippets）在正文之后追加原文标记块，并留痕 additional_kwargs
+    供事件表持久化（历史回放据此渲染引用 chip）。
     """
     mention_suffix = _file_selection_mention_suffix(file_selections or [])
-    if mention_suffix and isinstance(content, str):
-        content = f"{content}{mention_suffix}"
+    quote_suffix = _quote_snippets_suffix(quoted_snippets)
+    if isinstance(content, str):
+        content = f"{content}{mention_suffix}{quote_suffix}"
     reasoning_turn_id = message_id or str(uuid4())
     additional_kwargs: dict[str, Any] = {
         "timestamp": _get_timestamp(),
@@ -236,6 +256,8 @@ def _build_user_message(
     }
     if file_selections:
         additional_kwargs["file_selections"] = list(file_selections)
+    if quoted_snippets:
+        additional_kwargs["quoted_snippets"] = [dict(item) for item in quoted_snippets]
     additional_kwargs.update({key: value for key, value in extra_kwargs.items() if value})
     return HumanMessage(id=reasoning_turn_id, content=content, additional_kwargs=additional_kwargs)
 
@@ -1026,6 +1048,7 @@ async def _generate_chat_data_stream(
     request = req.request
     model_id = req.model_id
     file_selections = req.file_selections
+    quoted_snippets = req.quoted_snippets
     enable_thinking = req.enable_thinking
     thinking_effort = req.thinking_effort
     skill_names = req.skill_names
@@ -1081,6 +1104,7 @@ async def _generate_chat_data_stream(
                 request=request,
                 model_id=model_id,
                 file_selections=file_selections,
+                quoted_snippets=quoted_snippets,
                 enable_thinking=enable_thinking,
                 thinking_effort=thinking_effort,
                 skill_names=normalized_skill_names,
@@ -1229,7 +1253,8 @@ async def _resolve_inbox_message_references(
     kwargs = getattr(message, "additional_kwargs", None) or {}
     selections = kwargs.get("file_selections") or []
     file_ids = kwargs.get("file_ids") or []
-    if not selections and not file_ids:
+    quoted_snippets = parse_quoted_snippets(kwargs.get("quoted_snippets"))
+    if not selections and not file_ids and not quoted_snippets:
         return message
     valid_selections = _validate_workspace_file_selections(selections, workspace_root) if selections else []
     file_attachments = (
@@ -1244,6 +1269,9 @@ async def _resolve_inbox_message_references(
     new_kwargs = dict(kwargs)
     if selections:
         new_kwargs["file_selections"] = valid_selections
+    if quoted_snippets:
+        # 片段为纯文本，无外部资源可校验；重解析去重截断后留痕，供事件表持久化
+        new_kwargs["quoted_snippets"] = quoted_snippets
     _, max_image_size = await get_image_size_limit()
     vision_attachments = select_vision_attachments(file_attachments, max_image_size=max_image_size)
     if vision_attachments:
@@ -1251,6 +1279,7 @@ async def _resolve_inbox_message_references(
     new_content = (
         f"{message.content}"
         f"{_file_selection_mention_suffix(valid_selections)}"
+        f"{_quote_snippets_suffix(quoted_snippets)}"
         f"{build_file_attachment_text(file_attachments)}"
     )
     return message.model_copy(update={"content": new_content, "additional_kwargs": new_kwargs})
@@ -1361,6 +1390,7 @@ class TurnUserInput:
     file_selections: list[str]
     vision_attachments: list[str]
     skill_names: list[str]
+    quoted_snippets: list[dict[str, str]]
     adopted_messages: list[HumanMessage] | None = None
 
 
@@ -1407,6 +1437,7 @@ async def _resolve_agent_turn_inputs(
     file_selections = user_input.file_selections
     vision_attachments = user_input.vision_attachments
     skill_names = user_input.skill_names
+    quoted_snippets = user_input.quoted_snippets
     adopted_messages = user_input.adopted_messages
     resume_answer = resume.resume_answer
     turn_id = resume.turn_id
@@ -1433,6 +1464,7 @@ async def _resolve_agent_turn_inputs(
             file_selections,
             message_id=turn_id,
             vision_attachments=vision_attachments,
+            quoted_snippets=quoted_snippets,
             **message_kwargs,
         )
     initial_state = _resolve_agent_initial_state(
@@ -1497,6 +1529,7 @@ async def _run_chat_data_agent_stream(
     request = req.request
     model_id = req.model_id
     file_selections = req.file_selections
+    quoted_snippets = parse_quoted_snippets(req.quoted_snippets)
     enable_thinking = req.enable_thinking
     thinking_effort = req.thinking_effort
     skill_names = req.skill_names
@@ -1617,6 +1650,7 @@ async def _run_chat_data_agent_stream(
                         file_selections=valid_file_selections,
                         vision_attachments=vision_attachments,
                         skill_names=skill_names or [],
+                        quoted_snippets=quoted_snippets,
                         adopted_messages=adopted_messages,
                     ),
                     resume=TurnResumeContext(
@@ -1808,6 +1842,7 @@ async def sql_completion_handler(
         "semantic_config_id": run_options.semantic_config_id,
         "model_id": run_options.model_id,
         "file_selections": run_options.file_selections,
+        "quoted_snippets": run_options.quoted_snippets,
         "enable_thinking": run_options.enable_thinking,
         "thinking_effort": run_options.thinking_effort,
         "skill_names": run_options.skill_names,

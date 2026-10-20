@@ -17,7 +17,7 @@ os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 
 from apps.chat_data_app import agent_stream as agent_stream_module
 from apps.chat_data_app.agent.context.context_budget import ContextInputLimitExceededError
-from apps.chat_data_app.agent.run.completion_options import normalize_enable_thinking, parse_file_selections
+from apps.chat_data_app.agent.run.completion_options import normalize_enable_thinking
 from apps.chat_data_app.agent.tools import data_analyzing as agent_sql_tools
 from apps.chat_data_app.agent_run_support import (
     _prepare_conversation_workspace_sync,
@@ -28,7 +28,6 @@ from apps.chat_data_app.agent_stream import (
     _append_reasoning_segment,
     _coerce_tool_args,
     _extract_reasoning_content,
-    _file_selection_mention_suffix,
     _finish_running_tool,
     _format_reasoning_for_display,
     _format_sse,
@@ -258,35 +257,6 @@ def test_normalize_enable_thinking_branches():
     assert normalize_enable_thinking(object()) is None
 
 
-def test_parse_file_selections_branches():
-    # 非法入参一律空列表
-    assert parse_file_selections(None) == []
-    assert parse_file_selections(123) == []
-    assert parse_file_selections(["", "   "]) == []
-    # 单字符串与列表都兼容；strip 后按序去重
-    assert parse_file_selections(" uploads/a.pdf ") == ["uploads/a.pdf"]
-    assert parse_file_selections(
-        [
-            "uploads/a.pdf",
-            " outputs/b.md ",
-            "uploads/a.pdf",
-            "",
-        ]
-    ) == ["uploads/a.pdf", "outputs/b.md"]
-    # 首尾斜杠归一（前端容错）
-    assert parse_file_selections("/workspace/semantic/a__1.yaml/") == ["workspace/semantic/a__1.yaml"]
-
-
-def test_file_selection_mention_suffix_lists_files():
-    assert _file_selection_mention_suffix(
-        [
-            "uploads/a.pdf",
-            "workspace/semantic/b__1.yaml",
-        ]
-    ) == ("\n\n[引用文件：/mnt/user-data/uploads/a.pdf、/mnt/user-data/workspace/semantic/b__1.yaml]")
-    assert _file_selection_mention_suffix([]) == ""
-
-
 def test_validate_workspace_file_selections_filters_invalid(tmp_path):
     root = tmp_path / "user-data"
     (root / "uploads").mkdir(parents=True)
@@ -397,6 +367,24 @@ async def test_resolve_inbox_message_references_resolves_refs(tmp_path, monkeypa
     )
     assert resolved.additional_kwargs["vision_attachments"] == ["/mnt/user-data/uploads/shot.png"]
     assert "[attachment] /mnt/user-data/uploads/shot.png" in resolved.content
+
+    # 划选引用：纯文本片段无外部资源可校验，重解析归一后留痕 + 标记块进正文
+    quote_only = HumanMessage(
+        id="m3",
+        content="这个结论怎么得出的",
+        additional_kwargs={
+            "timestamp": "t",
+            "quoted_snippets": [{"text": " 户表与订单表通过用户ID关联（一对多） "}, {"other": 1}],
+        },
+    )
+    resolved = await agent_stream._resolve_inbox_message_references(
+        quote_only,
+        workspace_root=root_str,
+        user_id="u1",
+        thread_id="conv-1",
+    )
+    assert "[引用助手回复片段开始]\n户表与订单表通过用户ID关联（一对多）\n[引用助手回复片段结束]" in resolved.content
+    assert resolved.additional_kwargs["quoted_snippets"] == [{"text": "户表与订单表通过用户ID关联（一对多）"}]
 
 
 def test_materialize_conversation_semantic_models_failure_is_non_blocking(monkeypatch):
@@ -606,7 +594,9 @@ def test_model_failure_user_message_maps_friendly_text():
 def test_model_failure_user_message_passthrough_provider_message():
     """非枚举 APIStatusError（402 余额不足等）：透出服务商 message（提取+护栏），取不到回退兜底。"""
     # 402：dict body 取 error.message，剥离 request_id 噪音，带固定中文前缀
-    balance_body = {"error": {"message": "Insufficient Balance (request_id: 245dcc9c)", "code": "invalid_request_error"}}
+    balance_body = {
+        "error": {"message": "Insufficient Balance (request_id: 245dcc9c)", "code": "invalid_request_error"}
+    }
     err = _make_openai_status_error(openai.APIStatusError, 402, body=balance_body)
     assert _model_failure_user_message(err) == "模型服务返回错误：Insufficient Balance"
     # body 为字符串（SDK 解析失败场景）取原文
@@ -1011,6 +1001,57 @@ def test_generate_chat_data_stream_passes_valid_file_selections(monkeypatch, tmp
     assert human_message.additional_kwargs["file_selections"] == ["uploads/a.pdf"]
     assert human_message.content.endswith("[引用文件：/mnt/user-data/uploads/a.pdf]")
     assert "skill_names" not in human_message.additional_kwargs
+
+
+def test_generate_chat_data_stream_passes_quoted_snippets_to_inner(monkeypatch, tmp_path):
+    """划选引用：quoted_snippets 必须经生成器 re-wrap 透传到内层。
+
+    回归防线：_generate_chat_data_stream 拆包重建 ChatDataStreamRequest 时若漏带
+    quoted_snippets，内层 parse 永远拿到 None——模型看不到标记块、
+    additional_kwargs 不留痕（历史回放 chip 消失）。本用例从公开生成器入口
+    驱动到消息断言，专防这类 wiring 断点。
+    """
+    import asyncio
+
+    workspace_root = tmp_path / "user-data"
+    (workspace_root / "uploads").mkdir(parents=True)
+    (workspace_root / "outputs" / "query_result").mkdir(parents=True)
+    (workspace_root / "outputs" / "query_result" / "r.json").write_text("{}", encoding="utf-8")
+
+    async def fake_prepare_workspace(*_args, **_kwargs):
+        return {"root": str(workspace_root)}
+
+    fake_graph = _FakeGraph(
+        events=[(_FakeMessageChunk(content="已结合引用片段回答"), {"langgraph_node": "model"})],
+        state=SimpleNamespace(tasks=[], values={}),
+    )
+
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
+    monkeypatch.setattr("apps.chat_data_app.agent_run_support.prepare_conversation_workspace", fake_prepare_workspace)
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
+
+    events = asyncio.run(
+        _collect_async_iter(
+            _generate_chat_data_stream(
+                ChatDataStreamRequest(
+                    user_id="u_test",
+                    thread_id="conv_quoted_snippets",
+                    user_query="这个结论怎么得出的",
+                    datasource_id="ds_a",
+                    quoted_snippets=[{"text": "户表与订单表通过用户ID关联（一对多）"}],
+                )
+            )
+        )
+    )
+
+    joined = "".join(events)
+    assert "已结合引用片段回答" in joined
+    human_message = fake_graph.initial_state["messages"][0]
+    # 模型可见标记块进入正文；additional_kwargs 留痕供事件表持久化（历史回放渲染 chip）
+    assert (
+        "[引用助手回复片段开始]\n户表与订单表通过用户ID关联（一对多）\n[引用助手回复片段结束]" in human_message.content
+    )
+    assert human_message.additional_kwargs["quoted_snippets"] == [{"text": "户表与订单表通过用户ID关联（一对多）"}]
 
 
 def test_generate_chat_data_stream_keeps_explicit_query_skill(monkeypatch):

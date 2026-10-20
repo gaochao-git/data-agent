@@ -123,6 +123,8 @@ export function useSqlGenerator() {
       /** 后端滑窗口径推送的当前生成速率（generation_speed 事件）；窗口静默不推送，前端保持上次值 */
       onGenerationSpeed?: (tokensPerSecond: number) => void
       fileSelections?: string[]
+      /** 划选引用片段（[{text}]）：模型可见标记块由服务端统一追加，前端只透传。 */
+      quotedSnippets?: Array<{ text: string }>
       enableThinking?: boolean | null
       thinkingEffort?: string | null
       runtimeOptions?: { workspace_backend: 'local' | 'sandbox'; bash_enabled: boolean } | null
@@ -156,6 +158,7 @@ export function useSqlGenerator() {
       onTokenUsage,
       onGenerationSpeed,
       fileSelections,
+      quotedSnippets,
       enableThinking,
       thinkingEffort,
       runtimeOptions,
@@ -213,6 +216,11 @@ export function useSqlGenerator() {
       // @ 引用工作区文件（相对路径列表）：白名单校验与 Human 消息短句由服务端完成
       if (fileSelections?.length) {
         options.file_selections = fileSelections
+      }
+
+      // 划选引用片段：存引用、服务端晚解析（标记块 + additional_kwargs 留痕）
+      if (quotedSnippets?.length) {
+        options.quoted_snippets = quotedSnippets
       }
 
       if (memberDatasourceIds && memberDatasourceIds.length > 0) {

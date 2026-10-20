@@ -410,6 +410,7 @@ class AgentScheduleRuntime:
             "semantic_config_id": run_options.semantic_config_id,
             "model_id": run_options.model_id,
             "file_selections": run_options.file_selections,
+            "quoted_snippets": run_options.quoted_snippets,
             "enable_thinking": run_options.enable_thinking,
             "thinking_effort": run_options.thinking_effort,
             "skill_names": run_options.skill_names,

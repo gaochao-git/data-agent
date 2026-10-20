@@ -40,6 +40,9 @@ class ChatDataStreamRequest:
     request: Request | None = None
     model_id: str | None = None
     file_selections: Any | None = None
+    # 划选引用片段（[{"text": ...}]）：前端划选助手回复后随消息透传，语义同 IM
+    # 引用回复；进入 _build_user_message 时经 parse_quoted_snippets 归一校验
+    quoted_snippets: Any | None = None
     enable_thinking: bool | None = None
     thinking_effort: str | None = None
     skill_names: list[str] | None = None

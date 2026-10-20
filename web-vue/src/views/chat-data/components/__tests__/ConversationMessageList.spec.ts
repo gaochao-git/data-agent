@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { shallowMount } from '@vue/test-utils'
 import ConversationMessageList from '../conversation/ConversationMessageList.vue'
 import type { Message } from '../../types'
@@ -160,5 +160,77 @@ describe('ConversationMessageList', () => {
     // 只有历史消息（assistant-old）显示 footer；当前 run 的消息（assistant-new）被抑制
     expect(wrapper.text().match(/复制/g)).toHaveLength(1)
     expect(wrapper.text().match(/本回答由 AI 生成/g)).toHaveLength(1)
+  })
+
+  describe('划选引用浮层', () => {
+    const fakeSelectionRect = { left: 40, top: 120, width: 60, height: 18 }
+
+    const stubSelection = (overrides: Record<string, unknown> = {}) => {
+      const anchorNode = document.createTextNode('选中')
+      const selection = {
+        isCollapsed: false,
+        rangeCount: 1,
+        anchorNode,
+        focusNode: anchorNode,
+        toString: () => '选中的片段',
+        getRangeAt: () => ({ getBoundingClientRect: () => ({ ...fakeSelectionRect }) }),
+        removeAllRanges: vi.fn(),
+        ...overrides,
+      }
+      vi.stubGlobal('getSelection', () => selection)
+      return { selection, anchorNode }
+    }
+
+    afterEach(() => {
+      vi.unstubAllGlobals()
+    })
+
+    const mountWithAssistant = () => mountList([{
+      id: 'assistant-quote',
+      role: 'assistant',
+      content: '一段可以划选的回答内容',
+      isStreaming: false,
+    }])
+
+    const mouseUpOnBubble = async (wrapper: ReturnType<typeof mountList>, anchorNode: Node) => {
+      const bubble = wrapper.find('.rounded-2xl.rounded-bl-md')
+      // 选区两端必须真实落在气泡 DOM 内：把桩节点挂进气泡再触发 mouseup
+      bubble.element.appendChild(anchorNode)
+      await bubble.trigger('mouseup', { button: 0 })
+    }
+
+    it('划选后浮出操作条，「添加到对话」上抛片段文本并清空选区', async () => {
+      const wrapper = mountWithAssistant()
+      expect(wrapper.text()).not.toContain('添加到对话')
+
+      const { anchorNode, selection } = stubSelection()
+      await mouseUpOnBubble(wrapper, anchorNode)
+
+      expect(wrapper.text()).toContain('复制')
+      expect(wrapper.text()).toContain('添加到对话')
+      const quoteButton = wrapper.findAll('button').find(button => button.text().includes('添加到对话'))!
+      await quoteButton.trigger('click')
+
+      expect(wrapper.emitted('addToConversation')).toEqual([['选中的片段']])
+      expect(selection.removeAllRanges).toHaveBeenCalledTimes(1)
+      // 上抛后浮层收起
+      expect(wrapper.text()).not.toContain('添加到对话')
+    })
+
+    it('流式中的助手气泡不触发划选浮层', async () => {
+      const wrapper = mountList([{
+        id: 'assistant-streaming',
+        role: 'assistant',
+        content: '生成中的回答',
+        isStreaming: true,
+      }])
+
+      const { anchorNode } = stubSelection()
+      const bubble = wrapper.find('.rounded-2xl.rounded-bl-md')
+      bubble.element.appendChild(anchorNode)
+      await bubble.trigger('mouseup', { button: 0 })
+
+      expect(wrapper.text()).not.toContain('添加到对话')
+    })
   })
 })

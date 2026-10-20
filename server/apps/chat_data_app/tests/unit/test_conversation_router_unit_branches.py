@@ -796,6 +796,35 @@ def test_normalize_steer_meta_keeps_unvalidated_paths():
     assert meta == {"file_selections": ["../../etc/passwd", "uploads/a.pdf"]}
 
 
+def test_normalize_steer_meta_stores_quoted_snippets():
+    """划选引用走同一 meta 通道：strip/去重/上限截断后入 meta；无效条目过滤；三类全空不落 meta。"""
+    meta = conversation_router._normalize_steer_meta(
+        conversation_router.SteerRequest(
+            query="x",
+            quoted_snippets=[{"text": " 片段A "}, {"text": "片段B"}, {"text": "片段A"}, {"text": ""}],
+        )
+    )
+    assert meta == {"quoted_snippets": [{"text": "片段A"}, {"text": "片段B"}]}
+
+    # 只有空白片段：视为无引用，不占 meta 列
+    assert (
+        conversation_router._normalize_steer_meta(
+            conversation_router.SteerRequest(query="x", quoted_snippets=[{"text": "   "}])
+        )
+        is None
+    )
+
+    # 上限双闸：parse_quoted_snippets 自带上限 5（先于 meta 数量护栏生效），保留先入队的
+    meta = conversation_router._normalize_steer_meta(
+        conversation_router.SteerRequest(
+            query="x",
+            quoted_snippets=[{"text": f"片段{i}"} for i in range(conversation_router._STEER_META_MAX_ITEMS + 5)],
+        )
+    )
+    assert len(meta["quoted_snippets"]) == 5
+    assert meta["quoted_snippets"][0] == {"text": "片段0"}
+
+
 def test_normalize_steer_meta_caps_item_count():
     """数量护栏：meta 列 TEXT 64KB，单类引用超上限直接截断（防异常超大 payload）。"""
     cap = conversation_router._STEER_META_MAX_ITEMS

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { ElPopover } from 'element-plus'
 
 import ChatInputBox from '../ChatInputBox.vue'
 import ModelPicker from '../ModelPicker.vue'
@@ -30,6 +31,8 @@ interface Props {
   selectedSkills?: Array<{ name: string; title?: string }>
   /** 输入框 @ 引用的工作区文件列表（多选，chip 展示、单项可移除）。 */
   selectedMentionFiles?: Array<{ relativePath: string; name: string }>
+  /** 划选助手消息「添加到对话」的引用片段（chip 展示 + hover 预览原文、单项可移除）。 */
+  quotedSnippets?: QuotedSnippetChip[]
   selectedModel: string
   modelOptions: ModelOption[]
   /** 三态：true/false 用户显式选择；null 未触碰（展示回退模型 default_on）。 */
@@ -47,9 +50,16 @@ interface Props {
   userOverridable?: boolean
 }
 
+/** 划选引用片段 chip（props 内联结构，供 chip 与预览卡渲染）。 */
+interface QuotedSnippetChip {
+  id: string
+  text: string
+}
+
 const props = withDefaults(defineProps<Props>(), {
   selectedSkills: () => [],
   selectedMentionFiles: () => [],
+  quotedSnippets: () => [],
   inputFocused: false,
   showSkillButton: true,
   submitTitle: '发送 (Enter)',
@@ -66,6 +76,7 @@ const emit = defineEmits<{
   stop: []
   clearSkill: [name: string]
   clearMentionFile: [relativePath: string]
+  removeQuoteSnippet: [id: string]
   openSkillManager: []
   uploadFile: []
   pasteFiles: [files: File[]]
@@ -177,7 +188,7 @@ onBeforeUnmount(() => {
   >
     <template #prepend>
       <div
-        v-if="props.selectedSkills.length || props.selectedMentionFiles.length"
+        v-if="props.selectedSkills.length || props.selectedMentionFiles.length || props.quotedSnippets.length"
         class="mb-2 flex flex-wrap items-center gap-1.5"
       >
         <div
@@ -189,6 +200,24 @@ onBeforeUnmount(() => {
           <i class="fa-solid fa-at text-[10px]"></i>
           <span class="max-w-[140px] truncate">@{{ file.name }}</span>
           <button type="button" class="text-blue-400 hover:text-blue-700" @click="emit('clearMentionFile', file.relativePath)">
+            <i class="fa-solid fa-xmark text-[10px]"></i>
+          </button>
+        </div>
+        <div
+          v-for="snippet in props.quotedSnippets"
+          :key="snippet.id"
+          class="flex w-fit items-center gap-1.5 rounded-full bg-slate-100 px-2 py-1 text-xs text-slate-600"
+        >
+          <el-popover placement="top" :width="380" trigger="hover">
+            <template #reference>
+              <span class="flex min-w-0 cursor-default items-center gap-1.5" title="引用的助手回复片段">
+                <i class="fa-solid fa-quote-left text-[10px] text-slate-400"></i>
+                <span class="max-w-[140px] truncate">{{ snippet.text }}</span>
+              </span>
+            </template>
+            <div class="max-h-[220px] overflow-y-auto whitespace-pre-wrap text-xs leading-relaxed text-slate-700">{{ snippet.text }}</div>
+          </el-popover>
+          <button type="button" class="text-slate-400 hover:text-slate-700" title="移除引用" @click="emit('removeQuoteSnippet', snippet.id)">
             <i class="fa-solid fa-xmark text-[10px]"></i>
           </button>
         </div>

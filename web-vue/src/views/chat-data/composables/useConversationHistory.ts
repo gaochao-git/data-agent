@@ -125,6 +125,7 @@ interface HistoryMessagePayload {
   timestamp?: unknown
   reasoning_content?: unknown
   file_selections?: unknown
+  quoted_snippets?: unknown
   tool_calls?: unknown
   tool_call_id?: unknown
   tool_name?: unknown
@@ -328,7 +329,8 @@ export const buildHistoryMessagesFromEvents = (historyEvents: unknown): Message[
     if (eventType === 'user_message') {
       activeAssistant = null
       const fileSelections = normalizeFileSelections(messagePayload.file_selections)
-      const userContent = stripMentionSuffix(normalizeUserMessageContent(messagePayload.content))
+      const quotedSnippets = normalizeQuotedSnippets(messagePayload.quoted_snippets)
+      const userContent = stripHistoryUserContent(normalizeUserMessageContent(messagePayload.content))
       displayMessages.push({
         id: String(messagePayload.id || `user-history-${index}`),
         role: 'user',
@@ -336,6 +338,7 @@ export const buildHistoryMessagesFromEvents = (historyEvents: unknown): Message[
         turnId: turnId || undefined,
         timestamp: parseHistoryTimestamp(messagePayload.timestamp) || undefined,
         fileSelections: fileSelections.length > 0 ? fileSelections : undefined,
+        quotedSnippets: quotedSnippets.length > 0 ? quotedSnippets : undefined,
       })
       continue
     }
@@ -482,12 +485,14 @@ export const buildHistoryMessages = (
       startReasoningTurn(reasoningTurnId || undefined)
       activeAssistant = null
       const fileSelections = normalizeFileSelections(rawMessage.file_selections)
+      const quotedSnippets = normalizeQuotedSnippets(rawMessage.quoted_snippets)
       displayMessages.push({
         id: String(rawMessage.id || `user-history-${displayMessages.length}`),
         role: 'user',
-        content: stripMentionSuffix(String(rawMessage.content || '').trim()),
+        content: stripHistoryUserContent(String(rawMessage.content || '').trim()),
         timestamp: parseHistoryTimestamp(rawMessage.timestamp) || undefined,
         fileSelections: fileSelections.length > 0 ? fileSelections : undefined,
+        quotedSnippets: quotedSnippets.length > 0 ? quotedSnippets : undefined,
       })
       continue
     }
@@ -552,14 +557,44 @@ const normalizeFileSelections = (value: unknown): string[] => {
   return selections
 }
 
+// 划选引用留痕：[{text}]，无效条目丢弃、按序去重、带上限；id 由前端按序补齐供 key
+const normalizeQuotedSnippets = (value: unknown): Array<{ id: string; text: string }> => {
+  if (!Array.isArray(value)) return []
+  const snippets: Array<{ id: string; text: string }> = []
+  for (const item of value) {
+    const text = String((item as { text?: unknown })?.text ?? item ?? '').trim()
+    if (!text || snippets.some(entry => entry.text === text)) continue
+    snippets.push({ id: `quote-${snippets.length}`, text })
+  }
+  return snippets.slice(0, 5)
+}
+
 // 历史用户消息正文里的服务端注入短句不重复展示，引用改由 chip 呈现：
-// 现行为 [引用文件：...]；历史存量还有 [本轮指定语义模型：...]（通道已废弃，仅剥文本）
+// 现行为 [引用文件：...]；历史存量还有 [本轮指定语义模型：...]（通道已废弃，仅剥文本）。
+// m 多行锚定：排队消息的正文顺序是 mention + quote 块 + attachment 占位行，
+// 剥掉 quote 块后 mention 短句后面仍跟 [attachment] 行，纯字符串 $ 锚定会失配漏剥
 const MENTION_SUFFIX_RES = [
-  /\s*\[引用文件：[^\]]*\]\s*$/,
-  /\s*\[本轮指定语义模型：[^\]]*\]\s*$/,
+  /\s*\[引用文件：[^\]]*\]\s*$/gm,
+  /\s*\[本轮指定语义模型：[^\]]*\]\s*$/gm,
 ]
 const stripMentionSuffix = (content: string): string =>
   MENTION_SUFFIX_RES.reduce((text, regex) => text.replace(regex, ''), content).trimEnd()
+
+// 划选引用的模型可见标记块（后端追加）不在气泡重复平铺，引用原文由 chip 呈现；
+// 块内为多行原文，用成对标记非贪婪剥离，残余孤立标记一并清理
+const QUOTE_BLOCK_RES = [
+  /\s*\[引用助手回复片段开始\][\s\S]*?\[引用助手回复片段结束\]/g,
+  /^\s*\[引用助手回复片段(?:开始|结束)\]\s*$/gm,
+]
+const stripQuoteBlocks = (content: string): string =>
+  QUOTE_BLOCK_RES.reduce((text, regex) => text.replace(regex, '\n'), content)
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+
+// 历史用户消息展示正文：先剥划选引用标记块（位于 mention 短句之后，必须先剥，
+// 否则 mention 后缀的行尾锚定失配），再剥引用短句
+export const stripHistoryUserContent = (content: string): string =>
+  stripMentionSuffix(stripQuoteBlocks(content))
 
 interface UseConversationHistoryOptions {
   conversationId: Ref<string | null | undefined>

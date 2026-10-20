@@ -3439,7 +3439,7 @@
         "type": "object"
       },
       "SteerRequest": {
-        "description": "运行中追加消息（正文 + 随行元数据）。\n\nfile_selections / file_ids 以引用形式存入 inbox 行 meta，续跑构建\nHumanMessage 时还原进 additional_kwargs，由 agent_stream 采纳点统一\n校验解析（白名单 + 引用短句 + 附件占位/视觉装载）——排队消息与\n普通发送路径共享同一条「存引用、晚解析」语义。",
+        "description": "运行中追加消息（正文 + 随行元数据）。\n\nfile_selections / file_ids / quoted_snippets 以引用形式存入 inbox 行 meta，续跑构建\nHumanMessage 时还原进 additional_kwargs，由 agent_stream 采纳点统一\n校验解析（白名单 + 引用短句 + 划选标记块 + 附件占位/视觉装载）——排队消息与\n普通发送路径共享同一条「存引用、晚解析」语义。",
         "properties": {
           "file_ids": {
             "anyOf": [
@@ -3489,6 +3489,23 @@
               }
             ],
             "title": "Queue Type"
+          },
+          "quoted_snippets": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quoted Snippets"
           }
         },
         "required": [

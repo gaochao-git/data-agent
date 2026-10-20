@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildHistoryMessages, buildHistoryMessagesFromEvents } from '../useConversationHistory'
+import { buildHistoryMessages, buildHistoryMessagesFromEvents, stripHistoryUserContent } from '../useConversationHistory'
 
 describe('buildHistoryMessages', () => {
   it('preserves thinking, tool calls, and final text in their original order', () => {
@@ -253,5 +253,42 @@ describe('subagent trail replay', () => {
 
     const assistant = messages.find(message => message.role === 'assistant')!
     expect(assistant.toolCalls?.[0]?.subagentTrail).toBeUndefined()
+  })
+})
+
+describe('stripHistoryUserContent', () => {
+  it('strips quote blocks and mention suffix in regular-send order (body + mention + quote)', () => {
+    const content = '查一下\n\n[引用文件：/mnt/user-data/uploads/a.pdf]\n\n[引用助手回复片段开始]\n上一轮结论原文\n[引用助手回复片段结束]'
+
+    expect(stripHistoryUserContent(content)).toBe('查一下')
+  })
+
+  it('strips inbox-order content: body + mention + quote block + attachment placeholder', () => {
+    // 排队消息采纳后的完整形态：mention 短句后面跟着 [attachment] 行，
+    // 行尾锚定必须是多行的，否则 [引用文件：…] 会漏进气泡
+    const content = [
+      '查一下',
+      '',
+      '[引用文件：/mnt/user-data/uploads/a.pdf]',
+      '',
+      '[引用助手回复片段开始]',
+      '上一轮结论原文',
+      '[引用助手回复片段结束]',
+      '',
+      '[attachment] /mnt/user-data/uploads/a.pdf',
+    ].join('\n')
+
+    // mention 正则的 \s* 会吞掉短句后的空行（可接受，占位行由组件侧剥离/合成附件卡片）
+    expect(stripHistoryUserContent(content)).toBe('查一下\n[attachment] /mnt/user-data/uploads/a.pdf')
+  })
+
+  it('removes stray orphan quote markers and collapses extra blank lines', () => {
+    const content = '正文\n\n[引用助手回复片段开始]\n引用原文\n[引用助手回复片段结束]\n\n\n\n结尾'
+
+    expect(stripHistoryUserContent(content)).toBe('正文\n\n结尾')
+  })
+
+  it('strips legacy semantic-model mention suffix', () => {
+    expect(stripHistoryUserContent('查数据\n\n[本轮指定语义模型：订单模型]')).toBe('查数据')
   })
 })
