@@ -221,7 +221,7 @@ def _build_tool_approval_middleware(run_controls: "AgentRunControls | None", too
     """
     if run_controls is None or run_controls.approval_mode != "ask" or run_controls.disable_user_interaction:
         return None
-    return create_tool_approval_middleware(tools)
+    return create_tool_approval_middleware(tools, run_id=run_controls.run_id if run_controls is not None else None)
 
 
 def assemble_tools(

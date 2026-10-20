@@ -39,17 +39,27 @@ const batchAllDecided = computed(() =>
 const batchDecidedCount = computed(
   () => approvalItems.value.filter(item => (selected[item.call_id] || []).length > 0).length
 )
-// 批量问题每项最多三态：[允许, 本对话内始终允许, 拒绝]；文案从后端载荷读取，避免硬编码漂移。
-// 兼容旧后端载荷（仅两态 [允许, 拒绝]）：不渲染"始终允许"，拒绝取最后一个选项，
-// 避免出现两个"拒绝"按钮。
+// 批量问题每项最多四态：[允许, 本轮内始终允许, 本会话内始终允许, 拒绝]；文案从
+// 后端载荷读取，避免硬编码漂移。兼容旧载荷：三态（无本轮）与两态（仅允许/拒绝）。
 const batchOptions = computed(() => currentQuestion.value?.options || [])
 const batchAllowLabel = computed(() => batchOptions.value[0]?.label || '允许')
-const batchAlwaysLabel = computed(() =>
-  batchOptions.value.length > 2 ? batchOptions.value[1]?.label || '本对话内始终允许' : ''
+const batchRunAlwaysLabel = computed(() =>
+  batchOptions.value.length >= 4 ? batchOptions.value[1]?.label || '本轮内始终允许' : ''
 )
+// 展示口径统一为"本会话内始终允许"；但提交值保留载荷原始 label，
+// 以兼容升级前已下发、仍带旧文案的 pending 卡片（后端解析兼容旧 label）。
+const LEGACY_ALWAYS_LABELS = new Set(['本次会话始终允许', '本对话内始终允许', '本窗口内始终允许'])
+const displayApprovalLabel = (label: string) =>
+  LEGACY_ALWAYS_LABELS.has(label) ? '本会话内始终允许' : label
+const batchAlwaysRawLabel = computed(() => {
+  const options = batchOptions.value
+  if (options.length >= 4) return options[2]?.label || '本会话内始终允许'
+  return options.length === 3 ? options[1]?.label || '本会话内始终允许' : ''
+})
+const batchAlwaysLabel = computed(() => displayApprovalLabel(batchAlwaysRawLabel.value))
 const batchDenyLabel = computed(() => {
   const options = batchOptions.value
-  const deny = options.length > 2 ? options[2] : options[1]
+  const deny = options.length >= 4 ? options[3] : options.length === 3 ? options[2] : options[1]
   return deny?.label || '拒绝'
 })
 // 单工具审批也带 approval_items：在单选卡上方展示参数，避免"盲批"
@@ -80,16 +90,33 @@ const questionHeading = computed(() => {
 })
 const batchHint = computed(() => {
   const count = approvalItems.value.length
+  if (batchRunAlwaysLabel.value) {
+    return `共 ${count} 个操作，可逐项选择允许、本轮内始终允许、本会话内始终允许或拒绝`
+  }
   return batchAlwaysLabel.value
-    ? `共 ${count} 个操作，可逐项选择允许、本对话内始终允许或拒绝`
+    ? `共 ${count} 个操作，可逐项选择允许、本会话内始终允许或拒绝`
     : `共 ${count} 个操作，请逐项选择允许或拒绝`
 })
-// 「本对话内始终允许」的作用域必须写在悬浮说明里：批量卡不渲染 option 的 description，
+// 「本会话内始终允许」的作用域必须写在悬浮说明里：批量卡不渲染 option 的 description，
 // 只靠按钮文案，用户会误以为只对当前这批操作生效。
-const alwaysAllowHint = (item: ApprovalItem) => `本对话内不再询问「${approvalDisplayName(item)}」，后续同类操作直接执行`
+const alwaysAllowHint = (item: ApprovalItem) =>
+  `本会话内不再询问「${approvalDisplayName(item)}」，后续同类操作直接执行；同名操作自动选中`
 const batchSelectAll = (label: string) => {
   approvalItems.value.forEach(item => { selected[item.call_id] = [label] })
 }
+// 本轮/本窗口许可是「工具级」：选中后同名工具的其余行自动跟随；
+// 「允许/拒绝」是「本次操作级」，只改当前行。
+const toggleBatchToolLevel = (item: ApprovalItem, label: string) => {
+  approvalItems.value
+    .filter(candidate => candidate.tool_name === item.tool_name)
+    .forEach(candidate => { selected[candidate.call_id] = [label] })
+}
+// 同名工具一旦选择本轮/本会话许可，"允许"被工具级许可覆盖，只允许把个别行改成"拒绝"
+const toolLevelActive = (toolName: string) => approvalItems.value.some(candidate => {
+  if (candidate.tool_name !== toolName) return false
+  const value = (selected[candidate.call_id] || [])[0] || ''
+  return value === batchRunAlwaysLabel.value || value === batchAlwaysRawLabel.value
+})
 const approvalIcon = (toolName: string) => {
   if (toolName.includes('dir_delete')) return 'fa-folder-minus text-red-500'
   if (toolName.includes('delete')) return 'fa-trash-can text-red-500'
@@ -176,8 +203,8 @@ const skipCurrent = () => {
                 <div class="flex items-center gap-2 text-sm font-medium text-slate-800">
                   <i class="fa-solid text-xs" :class="approvalIcon(item.tool_name)"></i>
                   <span class="truncate">{{ approvalDisplayName(item) }}</span>
+                  <span v-if="item.intent" class="truncate text-xs font-normal text-slate-500">{{ item.intent }}</span>
                 </div>
-                <div v-if="item.intent" class="mt-1 text-xs text-slate-600">{{ item.intent }}</div>
                 <div v-if="item.args_summary" class="mt-1 flex flex-wrap gap-1">
                   <span
                     v-for="(value, key) in item.args_summary"
@@ -186,27 +213,39 @@ const skipCurrent = () => {
                   >{{ key }}: {{ visibleArgValue(value) }}</span>
                 </div>
               </div>
-              <div class="flex shrink-0 items-center gap-1">
+              <div class="flex max-w-[60%] flex-wrap items-center justify-end gap-1">
                 <button
                   type="button"
-                  class="h-7 rounded px-2 text-xs"
-                  :class="(selected[item.call_id] || []).includes(batchAllowLabel) ? 'bg-emerald-600 text-white' : 'border border-slate-200 text-slate-600 hover:border-emerald-400'"
-                  :disabled="submitting"
-                  title="仅执行本次操作"
+                  class="h-7 rounded px-1.5 text-[11px]"
+                  :class="[
+                    (selected[item.call_id] || []).includes(batchAllowLabel) ? 'bg-emerald-600 text-white' : 'border border-slate-200 text-slate-600 hover:border-emerald-400',
+                    toolLevelActive(item.tool_name) ? 'cursor-not-allowed opacity-40' : ''
+                  ]"
+                  :disabled="submitting || toolLevelActive(item.tool_name)"
+                  :title="toolLevelActive(item.tool_name) ? '该工具已选择本轮/本会话始终允许，「允许」已被工具级许可覆盖；如需排除某条请用「拒绝」' : '允许该工具以当前参数执行这一次（仅本次调用，不产生后续授权）'"
                   @click="toggleOption(item.call_id, batchAllowLabel, false)"
                 >{{ batchAllowLabel }}</button>
                 <button
+                  v-if="batchRunAlwaysLabel"
+                  type="button"
+                  class="h-7 rounded px-1.5 text-[11px]"
+                  :class="(selected[item.call_id] || []).includes(batchRunAlwaysLabel) ? 'bg-indigo-600 text-white' : 'border border-slate-200 text-slate-600 hover:border-indigo-400'"
+                  :disabled="submitting"
+                  title="本次回答内不再询问该工具；同名操作自动选中"
+                  @click="toggleBatchToolLevel(item, batchRunAlwaysLabel)"
+                >{{ batchRunAlwaysLabel }}</button>
+                <button
                   v-if="batchAlwaysLabel"
                   type="button"
-                  class="h-7 rounded px-2 text-xs"
-                  :class="(selected[item.call_id] || []).includes(batchAlwaysLabel) ? 'bg-blue-600 text-white' : 'border border-slate-200 text-slate-600 hover:border-blue-400'"
+                  class="h-7 rounded px-1.5 text-[11px]"
+                  :class="(selected[item.call_id] || []).includes(batchAlwaysRawLabel) ? 'bg-blue-600 text-white' : 'border border-slate-200 text-slate-600 hover:border-blue-400'"
                   :disabled="submitting"
                   :title="alwaysAllowHint(item)"
-                  @click="toggleOption(item.call_id, batchAlwaysLabel, false)"
+                  @click="toggleBatchToolLevel(item, batchAlwaysRawLabel)"
                 >{{ batchAlwaysLabel }}</button>
                 <button
                   type="button"
-                  class="h-7 rounded px-2 text-xs"
+                  class="h-7 rounded px-1.5 text-[11px]"
                   :class="(selected[item.call_id] || []).includes(batchDenyLabel) ? 'bg-red-500 text-white' : 'border border-slate-200 text-slate-600 hover:border-red-400'"
                   :disabled="submitting"
                   title="不执行；智能体会收到拒绝原因并调整方案"
@@ -216,8 +255,12 @@ const skipCurrent = () => {
             </div>
           </div>
         </div>
-        <div v-if="batchAlwaysLabel" class="mt-2 text-[11px] leading-5 text-slate-500">
-          「{{ batchAlwaysLabel }}」= 该工具在本对话内不再询问（不是只免本轮这批操作）。
+        <div v-if="batchAlwaysLabel || batchRunAlwaysLabel" class="mt-2 text-[11px] leading-5 text-slate-500">
+          <template v-if="batchRunAlwaysLabel">「{{ batchRunAlwaysLabel }}」= 本次回答内该工具不再询问。</template>
+          <template v-if="batchAlwaysLabel">「{{ batchAlwaysLabel }}」= 整个会话内该工具不再询问。</template>
+        </div>
+        <div v-if="batchAlwaysLabel || batchRunAlwaysLabel" class="mt-1 text-[11px] leading-5 text-slate-400">
+          工具级选项会自动选中同名工具的其他操作；之后「允许」由工具级许可覆盖，只想排除某一条时单独点该行的「拒绝」，只影响本次操作。
         </div>
         <div class="mt-5 flex items-center justify-end gap-2">
           <button type="button" class="h-8 px-3 text-sm text-slate-500 hover:text-slate-700" :disabled="submitting" @click="emit('cancel')">取消</button>
@@ -236,11 +279,13 @@ const skipCurrent = () => {
       <template v-else>
         <div class="min-h-[220px]">
           <div v-if="currentQuestion.header" class="mb-2 text-xs font-medium text-slate-500">{{ currentQuestion.header }}</div>
-          <div class="text-base font-semibold text-slate-900">{{ questionHeading }}</div>
+          <div class="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+            <span class="text-base font-semibold text-slate-900">{{ questionHeading }}</span>
+            <span v-if="singleApprovalItem?.intent" class="text-xs font-normal text-slate-500">{{ singleApprovalItem.intent }}</span>
+          </div>
           <!-- 单工具审批：展示参数摘要（路径/命令等），不把原始 JSON 丢给用户 -->
           <div v-if="singleApprovalItem" class="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
-            <div v-if="singleApprovalItem.intent" class="text-xs text-slate-600">{{ singleApprovalItem.intent }}</div>
-            <div v-if="singleApprovalItem.args_summary" class="mt-1 flex flex-wrap gap-1">
+            <div v-if="singleApprovalItem.args_summary" class="flex flex-wrap gap-1">
               <span
                 v-for="(value, key) in singleApprovalItem.args_summary"
                 :key="key"
@@ -266,7 +311,7 @@ const skipCurrent = () => {
                 ]"
               ></i>
               <span class="min-w-0">
-                <span class="block text-sm text-slate-700">{{ option.label }}</span>
+                <span class="block text-sm text-slate-700">{{ displayApprovalLabel(option.label) }}</span>
                 <span v-if="option.description" class="mt-0.5 block text-xs text-slate-500">{{ option.description }}</span>
               </span>
             </button>

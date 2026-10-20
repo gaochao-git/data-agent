@@ -16,6 +16,7 @@ from apps.chat_data_app.agent.middleware.tool_approval import (
     APPROVAL_ALLOW_LABEL,
     APPROVAL_ALWAYS_ALLOW_LABEL,
     APPROVAL_DENY_LABEL,
+    APPROVAL_RUN_ALWAYS_ALLOW_LABEL,
     _append_grant,
     _tool_args_preview,
     build_approval_payload,
@@ -61,6 +62,7 @@ def test_build_approval_payload_is_question_shaped():
     assert question["multi_select"] is False
     assert [option["label"] for option in question["options"]] == [
         APPROVAL_ALLOW_LABEL,
+        APPROVAL_RUN_ALWAYS_ALLOW_LABEL,
         APPROVAL_ALWAYS_ALLOW_LABEL,
         APPROVAL_DENY_LABEL,
     ]
@@ -225,14 +227,19 @@ async def test_mcp_tool_without_metadata_falls_back_to_qualified_name(monkeypatc
 def test_payload_offers_always_allow_option():
     payload = build_approval_payload("file_delete", {"args": {"path": "/a"}})
     labels = [option["label"] for option in payload["questions"][0]["options"]]
-    assert labels == [APPROVAL_ALLOW_LABEL, APPROVAL_ALWAYS_ALLOW_LABEL, APPROVAL_DENY_LABEL]
-    assert "本对话内「file_delete」" in payload["questions"][0]["options"][1]["description"]
+    assert labels == [
+        APPROVAL_ALLOW_LABEL,
+        APPROVAL_RUN_ALWAYS_ALLOW_LABEL,
+        APPROVAL_ALWAYS_ALLOW_LABEL,
+        APPROVAL_DENY_LABEL,
+    ]
+    assert "本会话内「file_delete」" in payload["questions"][0]["options"][2]["description"]
 
 
 def test_mcp_payload_always_allow_scope_is_tool():
     tool = SimpleNamespace(metadata={"origin": "mcp", "mcp_server_id": "fault-db", "mcp_tool_name": "db_mysql_info"})
     payload = build_approval_payload("mcp_fault-db_db_mysql_info", {"args": {}}, tool)
-    assert "本对话内「db_mysql_info」" in payload["questions"][0]["options"][1]["description"]
+    assert "本会话内「db_mysql_info」" in payload["questions"][0]["options"][2]["description"]
 
 
 def test_is_always_allowed_parsing():
@@ -392,7 +399,7 @@ async def test_approval_interrupt_resume_and_session_grant_end_to_end():
     # 第二轮：再次中断
     result = await graph.ainvoke({"messages": [HumanMessage("删除 /b")]}, config)
     assert result.get("__interrupt__")
-    # 本对话内始终允许 → 执行并写入 grant
+    # 本会话内始终允许 → 执行并写入 grant
     await graph.ainvoke(Command(resume=_answer([APPROVAL_ALWAYS_ALLOW_LABEL])), config)
     assert executed == ["/a", "/b"]
 
@@ -449,6 +456,7 @@ async def test_after_model_batches_parallel_approvals(monkeypatch):
     assert [question["id"] for question in questions] == ["c1", "c2"]
     assert [option["label"] for option in questions[0]["options"]] == [
         APPROVAL_ALLOW_LABEL,
+        APPROVAL_RUN_ALWAYS_ALLOW_LABEL,
         APPROVAL_ALWAYS_ALLOW_LABEL,
         APPROVAL_DENY_LABEL,
     ]
@@ -692,19 +700,25 @@ def test_resolve_batch_answers_malformed_answers_fail_closed():
     from apps.chat_data_app.agent.middleware.tool_approval import _resolve_batch_answers
 
     calls = [{"call_id": "c1", "grant_key": "tool:a"}, {"call_id": "c2", "grant_key": "tool:b"}]
-    assert _resolve_batch_answers({"answers": "bad"}, calls) == ({"c1": "deny", "c2": "deny"}, [])
+    assert _resolve_batch_answers({"answers": "bad"}, calls) == ({"c1": "deny", "c2": "deny"}, [], [])
     assert _resolve_batch_answers({"answers": [None, {"id": "c1", "selected": []}]}, calls) == (
         {"c1": "deny", "c2": "deny"},
+        [],
         [],
     )
     assert _resolve_batch_answers({"answers": [{"id": "c1", "selected": [APPROVAL_ALLOW_LABEL]}]}, calls) == (
         {"c1": "allow", "c2": "deny"},
         [],
+        [],
     )
     assert _resolve_batch_answers({"answers": [{"id": "c1", "selected": [APPROVAL_ALWAYS_ALLOW_LABEL]}]}, calls) == (
         {"c1": "allow", "c2": "deny"},
         ["tool:a"],
+        [],
     )
+    assert _resolve_batch_answers(
+        {"answers": [{"id": "c1", "selected": [APPROVAL_RUN_ALWAYS_ALLOW_LABEL]}]}, calls
+    ) == ({"c1": "allow", "c2": "deny"}, [], ["tool:a"])
 
 
 @pytest.mark.asyncio
@@ -769,21 +783,23 @@ def test_args_summary_keeps_nested_json():
 def test_legacy_always_label_still_grants_after_wording_rename():
     """升级前已下发的 pending 卡片仍带旧文案「本次会话始终允许」，不能静默 deny。"""
     from apps.chat_data_app.agent.middleware.tool_approval import (
-        _LEGACY_ALWAYS_ALLOW_LABEL,
+        _LEGACY_ALWAYS_ALLOW_LABELS,
         _resolve_batch_answers,
         _resolve_decision,
     )
 
-    legacy_answer = _answer([_LEGACY_ALWAYS_ALLOW_LABEL])
-    assert is_always_allowed(legacy_answer) is True
-    assert is_approval_allowed(legacy_answer) is False
-    assert _resolve_decision(legacy_answer) == "always"
-    decisions, grants = _resolve_batch_answers(
-        {"answers": [{"id": "c1", "selected": [_LEGACY_ALWAYS_ALLOW_LABEL]}]},
-        [{"call_id": "c1", "grant_key": "tool:file_delete"}],
-    )
-    assert decisions == {"c1": "allow"}
-    assert grants == ["tool:file_delete"]
+    for legacy_label in _LEGACY_ALWAYS_ALLOW_LABELS:
+        legacy_answer = _answer([legacy_label])
+        assert is_always_allowed(legacy_answer) is True
+        assert is_approval_allowed(legacy_answer) is False
+        assert _resolve_decision(legacy_answer) == "always"
+        decisions, conversation_grants, run_grants = _resolve_batch_answers(
+            {"answers": [{"id": "c1", "selected": [legacy_label]}]},
+            [{"call_id": "c1", "grant_key": "tool:file_delete"}],
+        )
+        assert decisions == {"c1": "allow"}
+        assert conversation_grants == ["tool:file_delete"]
+        assert run_grants == []
 
 
 @pytest.mark.asyncio
@@ -843,3 +859,126 @@ async def test_second_approval_within_same_run_end_to_end():
     # 第二次放行，run 继续完成
     await graph.ainvoke(Command(resume=_answer([APPROVAL_ALLOW_LABEL])), config)
     assert executed == ["/a", "/b"]
+
+
+# ============ 本轮内始终允许（run 作用域） ============
+
+
+@pytest.mark.asyncio
+async def test_after_model_single_run_always_writes_run_grant_only(monkeypatch):
+    monkeypatch.setattr(tool_approval, "interrupt", lambda _payload: _answer([APPROVAL_RUN_ALWAYS_ALLOW_LABEL]))
+    middleware = create_tool_approval_middleware(run_id="run-1")
+    state = {"messages": [_ai_message([{"id": "c1", "type": "tool_call", "name": "file_delete", "args": {}}])]}
+
+    update = await middleware.aafter_model(state, None)
+
+    assert update["approval_decisions"] == {"c1": "allow"}
+    assert "approval_grants" not in update
+    assert update["approval_run_grants"] == {"run-1": ["tool:file_delete"]}
+
+    # 同一 run 内下一次调用不再询问；换 run 后重新询问
+    carried = {**state, "approval_run_grants": update["approval_run_grants"]}
+    assert middleware._pending_calls(carried) == []
+    next_run = create_tool_approval_middleware(run_id="run-2")
+    assert len(next_run._pending_calls(carried)) == 1
+
+
+@pytest.mark.asyncio
+async def test_wrap_tool_call_consumes_run_grant(monkeypatch):
+    def failing_interrupt(_payload):
+        raise AssertionError("本轮已授权，不应再次审批")
+
+    monkeypatch.setattr(tool_approval, "interrupt", failing_interrupt)
+    middleware = create_tool_approval_middleware(run_id="run-1")
+    request = SimpleNamespace(
+        tool_call={"id": "c1", "name": "file_delete", "args": {"path": "/a"}},
+        state={"approval_run_grants": {"run-1": ["tool:file_delete"]}},
+        tool=None,
+    )
+    assert (await middleware.awrap_tool_call(request, _ok_handler)).content == "done"
+
+    # 换 run 后本轮许可失效：走审批兜底（这里用拒绝答案验证）
+    monkeypatch.setattr(tool_approval, "interrupt", lambda _payload: _answer([APPROVAL_DENY_LABEL]))
+    other_run = create_tool_approval_middleware(run_id="run-2")
+    denied = await other_run.awrap_tool_call(request, _ok_handler)
+    assert denied.status == "error"
+
+
+@pytest.mark.asyncio
+async def test_after_model_batch_run_always_grants_only_that_call(monkeypatch):
+    monkeypatch.setattr(
+        tool_approval,
+        "interrupt",
+        lambda _payload: _batch_answer({"c1": APPROVAL_RUN_ALWAYS_ALLOW_LABEL, "c2": APPROVAL_DENY_LABEL}),
+    )
+    middleware = create_tool_approval_middleware(run_id="run-1")
+    state = {
+        "messages": [
+            _ai_message(
+                [
+                    {"id": "c1", "type": "tool_call", "name": "file_delete", "args": {}},
+                    {"id": "c2", "type": "tool_call", "name": "dir_delete", "args": {}},
+                ]
+            )
+        ]
+    }
+
+    update = await middleware.aafter_model(state, None)
+
+    assert update["approval_decisions"] == {"c1": "allow", "c2": "deny"}
+    assert "approval_grants" not in update
+    assert update["approval_run_grants"] == {"run-1": ["tool:file_delete"]}
+
+
+@pytest.mark.asyncio
+async def test_run_grant_survives_following_model_responses(monkeypatch):
+    """本轮许可必须在同一 run 的后续模型响应中保留，不能被"无待审批清理"误清。"""
+    monkeypatch.setattr(tool_approval, "interrupt", lambda _payload: _answer([APPROVAL_RUN_ALWAYS_ALLOW_LABEL]))
+    middleware = create_tool_approval_middleware(run_id="run-1")
+    first_state = {"messages": [_ai_message([{"id": "c1", "type": "tool_call", "name": "file_delete", "args": {}}])]}
+    update = await middleware.aafter_model(first_state, None)
+
+    follow_state = {
+        **first_state,
+        **update,
+        "messages": [_ai_message([{"id": "c2", "type": "tool_call", "name": "file_delete", "args": {}}])],
+    }
+    follow_update = await middleware.aafter_model(follow_state, None)
+
+    assert follow_update["approval_decisions"] == {}
+    assert follow_update["approval_run_grants"] == {"run-1": ["tool:file_delete"]}
+    assert middleware._pending_calls({**follow_state, **follow_update}) == []
+
+
+def test_resolve_batch_answers_mixed_same_tool_combinations():
+    """同工具多行组合：单次拒绝优先执行；窗口许可强于本轮且去重。"""
+    from apps.chat_data_app.agent.middleware.tool_approval import _resolve_batch_answers
+
+    calls = [{"call_id": "c1", "grant_key": "tool:file_delete"}, {"call_id": "c2", "grant_key": "tool:file_delete"}]
+    assert _resolve_batch_answers(
+        {
+            "answers": [
+                {"id": "c1", "selected": [APPROVAL_ALWAYS_ALLOW_LABEL]},
+                {"id": "c2", "selected": [APPROVAL_DENY_LABEL]},
+            ]
+        },
+        calls,
+    ) == ({"c1": "allow", "c2": "deny"}, ["tool:file_delete"], [])
+    assert _resolve_batch_answers(
+        {
+            "answers": [
+                {"id": "c1", "selected": [APPROVAL_RUN_ALWAYS_ALLOW_LABEL]},
+                {"id": "c2", "selected": [APPROVAL_ALLOW_LABEL]},
+            ]
+        },
+        calls,
+    ) == ({"c1": "allow", "c2": "allow"}, [], ["tool:file_delete"])
+    assert _resolve_batch_answers(
+        {
+            "answers": [
+                {"id": "c1", "selected": [APPROVAL_RUN_ALWAYS_ALLOW_LABEL]},
+                {"id": "c2", "selected": [APPROVAL_ALWAYS_ALLOW_LABEL]},
+            ]
+        },
+        calls,
+    ) == ({"c1": "allow", "c2": "allow"}, ["tool:file_delete"], [])

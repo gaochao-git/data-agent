@@ -40,6 +40,21 @@ def merge_approval_grants(existing: list[str] | None, new: list[str] | None) -> 
     return merged
 
 
+def replace_approval_run_grants(
+    existing: dict[str, list[str]] | None,
+    new: dict[str, list[str]] | None,
+) -> dict[str, list[str]]:
+    """按 run 替换"本轮内始终允许"许可。
+
+    ``after_model`` 每轮只写当前 run 的许可集合，旧 run 的键随之被淘汰，
+    既保证同一 run 内跨工具轮生效，又不会让 checkpoint 随对话无限增长。
+    """
+    _ = existing
+    return {
+        str(run_id): [str(item) for item in keys if str(item).strip()] for run_id, keys in (new or {}).items() if keys
+    }
+
+
 def replace_approval_decisions(
     existing: dict[str, str] | None,
     new: dict[str, str] | None,
@@ -144,4 +159,6 @@ class ChatDataAgentState(AgentState, total=False):
     approval_grants: Annotated[list[str], merge_approval_grants]
     # 本轮审批决策：after_model 批量中断后写入，wrap_tool_call 执行前消费。
     approval_decisions: Annotated[dict[str, str], replace_approval_decisions]
+    # 本轮内始终允许：run_id → [tool:<name>]，仅当前 run 生效，换 run 自动淘汰。
+    approval_run_grants: Annotated[dict[str, list[str]], replace_approval_run_grants]
     workspace: ConversationWorkspaceContext

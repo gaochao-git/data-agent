@@ -108,11 +108,15 @@ describe('UserQuestionCard batch approval', () => {
     questions: [
       {
         id: 'c1', question: '删除文件',
-        options: [{ label: '允许' }, { label: '本对话内始终允许' }, { label: '拒绝' }], multi_select: false,
+        options: [
+          { label: '允许' }, { label: '本轮内始终允许' }, { label: '本会话内始终允许' }, { label: '拒绝' },
+        ], multi_select: false,
       },
       {
         id: 'c2', question: '删除目录',
-        options: [{ label: '允许' }, { label: '本对话内始终允许' }, { label: '拒绝' }], multi_select: false,
+        options: [
+          { label: '允许' }, { label: '本轮内始终允许' }, { label: '本会话内始终允许' }, { label: '拒绝' },
+        ], multi_select: false,
       },
     ],
   }
@@ -124,12 +128,14 @@ describe('UserQuestionCard batch approval', () => {
     expect(wrapper.text()).toContain('删除文件 test_1.txt')
     expect(wrapper.text()).toContain('删除第一个测试文件')
     expect(wrapper.text()).toContain('file_path: workspace/test_1.txt')
-    expect(wrapper.text()).toContain('该工具在本对话内不再询问')
+    expect(wrapper.text()).toContain('整个会话内该工具不再询问')
 
     const approvalButtons = wrapper.findAll('button').filter(button => button.text().trim() === '允许')
-    const alwaysButtons = wrapper.findAll('button').filter(button => button.text().trim() === '本对话内始终允许')
+    const runAlwaysButtons = wrapper.findAll('button').filter(button => button.text().trim() === '本轮内始终允许')
+    const alwaysButtons = wrapper.findAll('button').filter(button => button.text().trim() === '本会话内始终允许')
     const rejectButtons = wrapper.findAll('button').filter(button => button.text().trim() === '拒绝')
     expect(approvalButtons).toHaveLength(2)
+    expect(runAlwaysButtons).toHaveLength(2)
     expect(alwaysButtons).toHaveLength(2)
     expect(rejectButtons).toHaveLength(2)
 
@@ -148,7 +154,7 @@ describe('UserQuestionCard batch approval', () => {
 
   it('supports per-item always-allow in a batch', async () => {
     const wrapper = mount(UserQuestionCard, { props: { question: batchQuestion } })
-    const alwaysButtons = wrapper.findAll('button').filter(button => button.text().trim() === '本对话内始终允许')
+    const alwaysButtons = wrapper.findAll('button').filter(button => button.text().trim() === '本会话内始终允许')
     const rejectButtons = wrapper.findAll('button').filter(button => button.text().trim() === '拒绝')
     await alwaysButtons[0]!.trigger('click')
     await rejectButtons[1]!.trigger('click')
@@ -157,7 +163,23 @@ describe('UserQuestionCard batch approval', () => {
     await submit.trigger('click')
 
     expect(wrapper.emitted('submit')?.[0]).toEqual([[
-      { id: 'c1', selected: ['本对话内始终允许'], custom: '', skipped: false },
+      { id: 'c1', selected: ['本会话内始终允许'], custom: '', skipped: false },
+      { id: 'c2', selected: ['拒绝'], custom: '', skipped: false },
+    ]])
+  })
+
+  it('supports per-item run-scoped always-allow', async () => {
+    const wrapper = mount(UserQuestionCard, { props: { question: batchQuestion } })
+    const runAlwaysButtons = wrapper.findAll('button').filter(button => button.text().trim() === '本轮内始终允许')
+    const rejectButtons = wrapper.findAll('button').filter(button => button.text().trim() === '拒绝')
+    await runAlwaysButtons[0]!.trigger('click')
+    await rejectButtons[1]!.trigger('click')
+
+    const submit = wrapper.findAll('button').find(button => button.text().trim().startsWith('提交'))!
+    await submit.trigger('click')
+
+    expect(wrapper.emitted('submit')?.[0]).toEqual([[
+      { id: 'c1', selected: ['本轮内始终允许'], custom: '', skipped: false },
       { id: 'c2', selected: ['拒绝'], custom: '', skipped: false },
     ]])
   })
@@ -193,8 +215,8 @@ describe('UserQuestionCard batch approval', () => {
     expect(wrapper.text()).toContain('file_path: workspace/a.txt')
     expect(wrapper.text()).not.toContain('/mnt/user-data')
 
-    const always = wrapper.findAll('button').find(button => button.text().trim() === '本对话内始终允许')!
-    expect(always.attributes('title')).toContain('本对话内不再询问「删除文件」')
+    const always = wrapper.findAll('button').find(button => button.text().trim() === '本会话内始终允许')!
+    expect(always.attributes('title')).toContain('本会话内不再询问「删除文件」')
   })
 })
 
@@ -216,7 +238,7 @@ describe('UserQuestionCard single approval args', () => {
           questions: [{
             id: 'approval',
             question: '是否允许执行「file_delete」？',
-            options: [{ label: '允许' }, { label: '本对话内始终允许' }, { label: '拒绝' }],
+            options: [{ label: '允许' }, { label: '本会话内始终允许' }, { label: '拒绝' }],
             multi_select: false,
           }],
         },
@@ -256,6 +278,97 @@ describe('UserQuestionCard batch approval legacy payload', () => {
 
     expect(wrapper.findAll('button').filter(button => button.text().trim() === '允许')).toHaveLength(2)
     expect(wrapper.findAll('button').filter(button => button.text().trim() === '拒绝')).toHaveLength(2)
-    expect(wrapper.findAll('button').filter(button => button.text().trim() === '本对话内始终允许')).toHaveLength(0)
+    expect(wrapper.findAll('button').filter(button => button.text().trim() === '本会话内始终允许')).toHaveLength(0)
+  })
+})
+
+
+describe('UserQuestionCard tool-level approval propagation', () => {
+  const options = [
+    { label: '允许' }, { label: '本轮内始终允许' }, { label: '本会话内始终允许' }, { label: '拒绝' },
+  ]
+  const question = {
+    question_id: 'approval-tool-scope',
+    kind: 'approval',
+    approval_items: [
+      { call_id: 'a1', tool_name: 'file_delete', label: 'file_delete' },
+      { call_id: 'a2', tool_name: 'file_delete', label: 'file_delete' },
+      { call_id: 'b1', tool_name: 'dir_delete', label: 'dir_delete' },
+    ],
+    questions: [
+      { id: 'a1', question: 'file_delete', options, multi_select: false },
+      { id: 'a2', question: 'file_delete', options, multi_select: false },
+      { id: 'b1', question: 'dir_delete', options, multi_select: false },
+    ],
+  }
+
+  it('selects all same-tool rows when a tool-level option is chosen', async () => {
+    const wrapper = mount(UserQuestionCard, { props: { question } })
+    const runAlwaysButtons = wrapper.findAll('button').filter(button => button.text().trim() === '本轮内始终允许')
+    const allowButtons = wrapper.findAll('button').filter(button => button.text().trim() === '允许')
+
+    // 第 1、2 行是 file_delete，第 3 行是 dir_delete
+    await runAlwaysButtons[0]!.trigger('click')
+    await allowButtons[2]!.trigger('click')
+
+    const submit = wrapper.findAll('button').find(button => button.text().trim().startsWith('提交'))!
+    expect(submit.attributes('disabled')).toBeUndefined()
+    await submit.trigger('click')
+
+    expect(wrapper.emitted('submit')?.[0]).toEqual([[
+      { id: 'a1', selected: ['本轮内始终允许'], custom: '', skipped: false },
+      { id: 'a2', selected: ['本轮内始终允许'], custom: '', skipped: false },
+      { id: 'b1', selected: ['允许'], custom: '', skipped: false },
+    ]])
+  })
+})
+
+
+describe('UserQuestionCard tool-level override combinations', () => {
+  it('keeps an individual deny after tool-level propagation', async () => {
+    const options = [
+      { label: '允许' }, { label: '本轮内始终允许' }, { label: '本会话内始终允许' }, { label: '拒绝' },
+    ]
+    const wrapper = mount(UserQuestionCard, {
+      props: {
+        question: {
+          question_id: 'approval-combination',
+          kind: 'approval',
+          approval_items: [
+            { call_id: 'a1', tool_name: 'file_delete', label: 'file_delete' },
+            { call_id: 'a2', tool_name: 'file_delete', label: 'file_delete' },
+            { call_id: 'b1', tool_name: 'dir_delete', label: 'dir_delete' },
+          ],
+          questions: [
+            { id: 'a1', question: 'file_delete', options, multi_select: false },
+            { id: 'a2', question: 'file_delete', options, multi_select: false },
+            { id: 'b1', question: 'dir_delete', options, multi_select: false },
+          ],
+        },
+      },
+    })
+
+    const windowButtons = wrapper.findAll('button').filter(button => button.text().trim() === '本会话内始终允许')
+    const denyButtons = wrapper.findAll('button').filter(button => button.text().trim() === '拒绝')
+    const allowButtons = wrapper.findAll('button').filter(button => button.text().trim() === '允许')
+
+    // 行 1 选本窗口 → 同工具的行 1、2 自动选中；此时该工具的「允许」被工具级许可覆盖
+    await windowButtons[0]!.trigger('click')
+    expect(allowButtons[0]!.attributes('disabled')).toBeDefined()
+    expect(allowButtons[1]!.attributes('disabled')).toBeDefined()
+    expect(allowButtons[2]!.attributes('disabled')).toBeUndefined()
+    // 行 2 单独改拒绝：只影响这一条操作
+    await denyButtons[1]!.trigger('click')
+    // 另一个工具单独允许
+    await allowButtons[2]!.trigger('click')
+
+    const submit = wrapper.findAll('button').find(button => button.text().trim().startsWith('提交'))!
+    await submit.trigger('click')
+
+    expect(wrapper.emitted('submit')?.[0]).toEqual([[
+      { id: 'a1', selected: ['本会话内始终允许'], custom: '', skipped: false },
+      { id: 'a2', selected: ['拒绝'], custom: '', skipped: false },
+      { id: 'b1', selected: ['允许'], custom: '', skipped: false },
+    ]])
   })
 })
