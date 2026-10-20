@@ -68,6 +68,7 @@ class ConversationEventService:
         user_id: str,
         operator_name: str,
         message: HumanMessage,
+        insert_only: bool = False,
     ) -> None:
         turn_id = _message_id(message) or ""
         if not turn_id:
@@ -86,6 +87,7 @@ class ConversationEventService:
                 )
             ],
             touch_thread=True,
+            insert_only=insert_only,
         )
 
     async def persist_turn(
@@ -318,6 +320,7 @@ class ConversationEventService:
         operator_name: str,
         events: list[dict[str, Any]],
         touch_thread: bool = False,
+        insert_only: bool = False,
     ) -> None:
         for attempt in range(1, EVENT_APPEND_MAX_ATTEMPTS + 1):
             try:
@@ -328,6 +331,7 @@ class ConversationEventService:
                     events=events,
                     now=datetime.now(),
                     touch_thread=touch_thread,
+                    insert_only=insert_only,
                 )
                 return
             except Exception as exc:

@@ -100,7 +100,7 @@ class ToolApprovalMiddleware(AgentMiddleware):
                 **_run_grant_update(state, self._run_id, _run_grant_keys(state, self._run_id)),
             }
         existing_run_grants = _run_grant_keys(state, self._run_id)
-        existing_conversation_grants = _string_set(state, "approval_grants")
+        existing_conversation_grants = _string_list(state, "approval_grants")
         if len(calls) == 1:
             decision = _resolve_decision(answer)
             call = calls[0]
@@ -214,6 +214,16 @@ def _run_grant_update(state: Any, run_id: str, keys: list[str]) -> dict[str, Any
 def _latest_ai_message(state: Any) -> AIMessage | None:
     messages = state.get("messages") if isinstance(state, dict) else None
     return next((message for message in reversed(messages or []) if isinstance(message, AIMessage)), None)
+
+
+def _string_list(state: Any, field: str) -> list[str]:
+    """按 state 中实际顺序取字符串列表（许可展示顺序/合并保序）。"""
+    raw = state.get(field) if isinstance(state, dict) else None
+    if isinstance(raw, list):
+        return [str(item) for item in raw if str(item or "").strip()]
+    if isinstance(raw, dict):
+        return [str(key) for key in raw]
+    return []
 
 
 def _string_set(state: Any, field: str) -> set[str]:
@@ -535,7 +545,7 @@ def is_approval_allowed(answer: Any) -> bool:
 
 def _append_grant(result: ToolMessage | Command[Any], grant_key: str, state: Any) -> ToolMessage | Command[Any]:
     """在保留工具结果的同时，把"本会话内始终允许"写回会话 state。"""
-    grants = _merge_keys(_string_set(state, "approval_grants"), [grant_key])
+    grants = _merge_keys(_string_list(state, "approval_grants"), [grant_key])
     if isinstance(result, Command):
         update = dict(result.update or {})
         update["approval_grants"] = grants

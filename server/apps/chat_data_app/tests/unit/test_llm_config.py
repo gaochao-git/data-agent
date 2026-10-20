@@ -157,7 +157,7 @@ def test_registry_validation_fail_fast(monkeypatch, tmp_path, entry, match):
 
 
 def test_registry_derives_default_on_from_default_effort(monkeypatch, tmp_path):
-    """default_on 不再可配置：由默认档位推导（普通档=默认开；off/none/未勾=默认关）；显式 default_on 被忽略。"""
+    """有档位时 default_on 由默认档位推导；显式 default_on 仅对无档位 chat_template 生效。"""
     _set_registry(
         monkeypatch,
         tmp_path,
@@ -882,3 +882,31 @@ def test_model_options_expose_effort_names_only(monkeypatch, tmp_path):
     )
     thinking = llm_config.get_chat_data_model_options()["models"][0]["thinking"]
     assert thinking["efforts"] == ["low", "xhigh"]
+
+
+def test_chat_template_optional_default_on_switch_roundtrip(monkeypatch, tmp_path):
+    """chat_template 无档位：允许显式 default_on 表达默认开启，并可序列化回读。"""
+    _set_registry(
+        monkeypatch,
+        tmp_path,
+        [
+            _ox_alpha(
+                thinking={"mode": "optional", "dialect": "chat_template", "default_on": True},
+            )
+        ],
+    )
+    cap = llm_config.get_chat_data_model_configs()[0]["thinking"]
+    assert cap.default_on is True
+    packed = llm_config._thinking_cap_to_json(cap)
+    assert packed == {"mode": "optional", "dialect": "chat_template", "default_on": True}
+    assert llm_config._parse_thinking(packed, path="t", model_id="m") == cap
+
+
+def test_chat_template_default_on_must_be_bool(monkeypatch, tmp_path):
+    _set_registry(
+        monkeypatch,
+        tmp_path,
+        [_ox_alpha(thinking={"mode": "optional", "dialect": "chat_template", "default_on": "yes"})],
+    )
+    with pytest.raises(ValueError, match="default_on 应为布尔"):
+        llm_config.load_chat_data_model_configs()

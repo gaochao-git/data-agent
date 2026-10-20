@@ -770,6 +770,61 @@ async def _flush_agent_model_snapshots(callbacks: _AgentRunStreamCallbacks) -> N
     await callbacks.model_snapshot_writer.flush()
 
 
+def should_persist_early_user_message(
+    query: str, queued_message_id: str | None, preserve_queued_messages: bool
+) -> bool:
+    """普通新消息才提前落库；队列执行/保留队列路径由 admission 负责。"""
+    return bool(query and not queued_message_id and not preserve_queued_messages)
+
+
+async def persist_early_user_message_if_needed(
+    conversation_id: str,
+    user_id: str,
+    operator_name: str,
+    run_id: str,
+    query: str,
+    queued_message_id: str | None,
+    preserve_queued_messages: bool,
+) -> None:
+    """普通新消息才提前落库；队列执行/保留队列路径由 admission 负责。"""
+    if should_persist_early_user_message(query, queued_message_id, preserve_queued_messages):
+        await persist_early_user_message(conversation_id, user_id, operator_name, run_id, query)
+
+
+async def persist_early_user_message(
+    conversation_id: str,
+    user_id: str,
+    operator_name: str,
+    run_id: str,
+    query: str,
+) -> None:
+    """Run 启动前先落一条用户消息；运行期持久化会按同一 event_key 幂等覆盖。
+
+    覆盖 prepare/模型启动阶段被取消或进程退出、还没来得及创建持久化任务的场景。
+    """
+    content = query if len(query) <= 4000 else f"{query[:4000]}\n\n[消息过长，完整内容以运行期为准]"
+    message = HumanMessage(
+        id=run_id,
+        content=content,
+        additional_kwargs={"timestamp": _get_timestamp(), "reasoning_turn_id": run_id},
+    )
+    try:
+        await conversation_event_service.persist_user_message(
+            conversation_id=conversation_id,
+            user_id=user_id,
+            operator_name=operator_name,
+            message=message,
+            insert_only=True,
+        )
+    except Exception:
+        logger.warning(
+            "ChatData 用户消息提前落库失败（运行期仍会重试）: conversation_id=%s run_id=%s",
+            conversation_id,
+            run_id,
+            exc_info=True,
+        )
+
+
 async def _persist_agent_user_message(callbacks: _AgentRunStreamCallbacks) -> None:
     if callbacks.user_message is None:
         return
@@ -908,11 +963,7 @@ async def reset_conversation_approval_grants(conversation_id: str) -> None:
     config: Any = {"configurable": {"thread_id": conversation_id}}
     async with get_checkpointer() as checkpointer:
         graph = get_data_agent_graph(checkpointer=checkpointer)
-        try:
-            state = await graph.aget_state(config)
-        except Exception:
-            logger.warning("读取会话审批许可失败，跳过重置: conversation_id=%s", conversation_id, exc_info=True)
-            return
+        state = await graph.aget_state(config)
         if state is None or not getattr(state, "values", None):
             return
         await graph.aupdate_state(config, {"approval_grants": [], "approval_run_grants": {}})

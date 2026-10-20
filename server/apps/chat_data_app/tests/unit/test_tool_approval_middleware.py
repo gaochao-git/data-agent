@@ -335,6 +335,30 @@ def test_is_approval_allowed_skips_non_dict_item():
     assert is_approval_allowed({"answers": ["bad"]}) is False
 
 
+def test_append_grant_preserves_existing_order():
+    result = _append_grant(
+        ToolMessage(content="done", name="file_delete", tool_call_id="c1"),
+        "tool:file_delete",
+        {"approval_grants": ["tool:file_move", "tool:dir_delete"]},
+    )
+    assert isinstance(result, Command)
+    assert result.update["approval_grants"] == ["tool:file_move", "tool:dir_delete", "tool:file_delete"]
+
+
+@pytest.mark.asyncio
+async def test_after_model_single_always_preserves_existing_grants(monkeypatch):
+    monkeypatch.setattr(tool_approval, "interrupt", lambda _payload: _answer([APPROVAL_ALWAYS_ALLOW_LABEL]))
+    middleware = create_tool_approval_middleware()
+    state = {
+        "messages": [_ai_message([{"id": "c1", "type": "tool_call", "name": "file_delete", "args": {}}])],
+        "approval_grants": ["tool:file_move", "tool:dir_delete"],
+    }
+
+    update = await middleware.aafter_model(state, None)
+
+    assert update["approval_grants"] == ["tool:file_move", "tool:dir_delete", "tool:file_delete"]
+
+
 def test_append_grant_passthrough_for_unknown_result():
     assert _append_grant("raw-result", "tool:file_delete", {}) == "raw-result"
 
@@ -982,3 +1006,12 @@ def test_resolve_batch_answers_mixed_same_tool_combinations():
         },
         calls,
     ) == ({"c1": "allow", "c2": "allow"}, ["tool:file_delete"], [])
+
+
+def test_string_list_supports_dict_state_field():
+    from apps.chat_data_app.agent.middleware.tool_approval import _string_list
+
+    assert _string_list({"approval_grants": {"tool:a": True, "tool:b": False}}, "approval_grants") == [
+        "tool:a",
+        "tool:b",
+    ]

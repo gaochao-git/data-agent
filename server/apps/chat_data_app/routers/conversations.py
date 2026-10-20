@@ -1008,6 +1008,13 @@ async def revoke_approval_grants(
                 status="error",
                 http_status_code=http_status.HTTP_404_NOT_FOUND,
             )
+        if not payload.tools:
+            return business_response(
+                msg="请选择要撤销的工具",
+                code=ErrorCode.CHATDATA_BAD_REQUEST,
+                status="error",
+                http_status_code=http_status.HTTP_400_BAD_REQUEST,
+            )
         pending = await agent_inbox_service.get_pending_question(conversation_id, user_id)
         if pending:
             return business_response(
@@ -1086,7 +1093,7 @@ async def reset_approval_grants(conversation_id: str, req: Request) -> JSONRespo
         logger.error("重置会话审批许可失败: conversation_id=%s", conversation_id, exc_info=True)
         return business_response(
             msg="重置审批许可失败，请稍后重试",
-            code=ErrorCode.CHATDATA_OPERATION_NOT_ALLOWED,
+            code=ErrorCode.CHATDATA_GENERIC_OPERATION_FAILED,
             status="error",
             http_status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
         )

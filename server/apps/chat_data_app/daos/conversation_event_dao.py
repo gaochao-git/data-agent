@@ -109,6 +109,7 @@ class ConversationEventDao:
         events: Iterable[dict[str, Any]],
         now: datetime,
         touch_thread: bool = False,
+        insert_only: bool = False,
     ) -> list[ChatDataConversationEvent]:
         """原子追加未持久化事件，并为同一会话分配严格递增序号。"""
         candidates = self._dedupe_event_candidates(events)
@@ -124,6 +125,7 @@ class ConversationEventDao:
                 events=candidates,
                 now=now,
                 touch_thread=touch_thread,
+                insert_only=insert_only,
             )
 
     async def append_events_in_session(
@@ -136,6 +138,7 @@ class ConversationEventDao:
         events: Iterable[dict[str, Any]],
         now: datetime,
         touch_thread: bool = False,
+        insert_only: bool = False,
     ) -> list[ChatDataConversationEvent]:
         """在调用方事务内追加事件，供历史与 Run 水位原子提交。"""
         candidates = self._dedupe_event_candidates(events)
@@ -175,6 +178,19 @@ class ConversationEventDao:
         )
         existing_by_key = {row.event_key: row for row in existing_rows}
         pending = [event for event in candidates if str(event["event_key"]).strip() not in existing_by_key]
+        if insert_only:
+            # 提前落库只补缺失行，不能覆盖运行期写好的完整内容（跨 worker 倒序安全）。
+            if not pending:
+                await session.flush()
+                return existing_rows
+            return await self._insert_pending_event_rows(
+                session,
+                conversation_id=conversation_id,
+                user_id=user_id,
+                operator_name=operator_name,
+                pending=pending,
+                now=now,
+            )
         self._update_existing_event_rows(
             existing_by_key,
             candidates,

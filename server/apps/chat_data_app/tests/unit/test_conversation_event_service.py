@@ -1273,3 +1273,65 @@ async def test_window_cutoff_closure_stops_on_monotone_and_empty_results():
     session = _StubScalarSession(range(41, 25, -1))
     assert await dao._expand_cutoff_to_turn_closure(session, conditions=[], cutoff=42) == 26
     assert session.calls == ConversationEventDao._TURN_CLOSURE_MAX_ROUNDS
+
+
+@pytest.mark.asyncio
+async def test_persist_user_message_insert_only_does_not_overwrite_existing(conversation_event_service):
+    """提前落库只能补缺失行：运行期已写入的完整内容不能被截断版覆盖。"""
+    service, create_thread, get_session = conversation_event_service
+    await create_thread("conv-insert-only", "user-1")
+
+    full = HumanMessage(content="完整用户消息（带附件占位）", id="turn-full", additional_kwargs={"timestamp": "t1"})
+    await service.persist_user_message(
+        conversation_id="conv-insert-only", user_id="user-1", operator_name="用户一", message=full
+    )
+
+    truncated = HumanMessage(content="截断版", id="turn-full", additional_kwargs={"timestamp": "t2"})
+    await service.persist_user_message(
+        conversation_id="conv-insert-only",
+        user_id="user-1",
+        operator_name="用户一",
+        message=truncated,
+        insert_only=True,
+    )
+
+    async with get_session() as session:
+        rows = list(
+            (
+                await session.execute(
+                    select(ChatDataConversationEvent).where(
+                        ChatDataConversationEvent.conversation_id == "conv-insert-only",
+                        ChatDataConversationEvent.event_type == "user_message",
+                    )
+                )
+            ).scalars()
+        )
+    assert len(rows) == 1
+    assert "完整用户消息" in rows[0].payload
+    assert "截断版" not in rows[0].payload
+
+    # insert_only 在没有既有行时仍要正常插入
+    fresh = HumanMessage(content="新消息", id="turn-new", additional_kwargs={"timestamp": "t3"})
+    await service.persist_user_message(
+        conversation_id="conv-insert-only",
+        user_id="user-1",
+        operator_name="用户一",
+        message=fresh,
+        insert_only=True,
+    )
+    async with get_session() as session:
+        count = len(
+            list(
+                (
+                    await session.execute(
+                        select(ChatDataConversationEvent).where(
+                            ChatDataConversationEvent.conversation_id == "conv-insert-only",
+                            ChatDataConversationEvent.event_type == "user_message",
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        )
+    assert count == 2

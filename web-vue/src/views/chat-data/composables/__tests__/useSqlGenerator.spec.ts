@@ -49,7 +49,7 @@ describe('useSqlGenerator', () => {
     await runStream(['event: message\ndata: {"content":"2"}\n\n'], { onResult, onError })
 
     expect(onResult).not.toHaveBeenCalled()
-    expect(onError).toHaveBeenCalledWith('流式连接意外中断，请重新进入会话继续接收')
+    expect(onError).toHaveBeenCalledWith('流式连接意外中断，请重新进入会话继续接收', { isBusinessResponseError: false })
   })
 
   it('does not treat legacy [DONE] as success', async () => {
@@ -88,7 +88,7 @@ describe('useSqlGenerator', () => {
 
     // 终态通知先于错误回调：停止流程靠 onRunCompleted 解锁。
     expect(onRunCompleted).toHaveBeenCalledWith({ status: 'failed', nextRunId: null })
-    expect(onError).toHaveBeenCalledWith('智能问数执行失败')
+    expect(onError).toHaveBeenCalledWith('智能问数执行失败', { isBusinessResponseError: false })
     expect(onResult).not.toHaveBeenCalled()
   })
 
@@ -122,7 +122,7 @@ describe('useSqlGenerator', () => {
     const onError = vi.fn()
     await runStream(['event: error\ndata: {"error":"数据源连接超时"}\n\n'], { onResult, onError })
 
-    expect(onError).toHaveBeenCalledWith('数据源连接超时')
+    expect(onError).toHaveBeenCalledWith('数据源连接超时', { isBusinessResponseError: false })
     expect(onResult).not.toHaveBeenCalled()
   })
 })
@@ -151,5 +151,24 @@ describe('useSqlGenerator tool event dedup', () => {
     expect(onToolLifecycle).toHaveBeenCalledTimes(2)
     expect(onRunningTool).toHaveBeenCalledTimes(1)
     expect(onRunningTool).toHaveBeenCalledWith(expect.objectContaining({ tool_call_id: 'inner-1' }))
+  })
+})
+
+
+describe('useSqlGenerator HTTP errors', () => {
+  it('marks business HTTP errors so callers can distinguish network aborts', async () => {
+    const { generateSqlStream } = useSqlGenerator()
+    const onError = vi.fn()
+    await generateSqlStream('1+1', true, null, conversationId, {
+      mode: 'query',
+      agentId: 'chat_data',
+      onError,
+      responseFactory: async () => new Response(JSON.stringify({ msg: '业务校验失败' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    })
+
+    expect(onError).toHaveBeenCalledWith('业务校验失败', { isBusinessResponseError: true })
   })
 })

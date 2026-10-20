@@ -56,16 +56,19 @@ async def test_reset_clears_grants(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_reset_noops_without_checkpoint(monkeypatch):
+async def test_reset_raises_on_read_failure(monkeypatch):
+    """读取异常必须上抛（路由 500），不能伪装成"无许可/已重置"。"""
+
     class FakeGraph:
         async def aget_state(self, _config):
-            raise RuntimeError("no checkpoint")
+            raise RuntimeError("storage broken")
 
         async def aupdate_state(self, _config, _values):
-            raise AssertionError("不应更新不存在的 checkpoint")
+            raise AssertionError("读取失败时不应更新")
 
     _patch_graph(monkeypatch, FakeGraph())
-    await agent_run_support.reset_conversation_approval_grants("conv-1")
+    with pytest.raises(RuntimeError):
+        await agent_run_support.reset_conversation_approval_grants("conv-1")
 
 
 @pytest.mark.asyncio

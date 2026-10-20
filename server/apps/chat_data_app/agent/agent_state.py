@@ -28,7 +28,11 @@ def merge_context_compression_events(
 
 
 def replace_approval_grants(existing: list[str] | None, new: list[str] | None) -> list[str]:
-    """整体替换许可（撤销/重置需要真正清掉，不能走 merge）。"""
+    """整体替换许可（撤销/重置需要真正清掉，不能走 merge）。
+
+    注意：replace 语义下并行同超步写只有最后一个生效；所有写入点必须先读
+    checkpoint 既有许可、合并后再整表写回，不允许只写新增项。
+    """
     return merge_approval_grants([], new)
 
 

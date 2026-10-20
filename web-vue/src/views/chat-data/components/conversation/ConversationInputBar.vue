@@ -267,7 +267,11 @@ onBeforeUnmount(() => {
               'flex cursor-pointer items-center gap-1 px-2.5 py-1.5',
               approvalMode === opt.value ? 'text-blue-600 bg-blue-50' : 'text-gray-600 hover:bg-gray-50'
             ]"
+            role="button"
+            tabindex="0"
             @click="selectApprovalMode(opt.value)"
+            @keydown.enter.prevent="selectApprovalMode(opt.value)"
+            @keydown.space.prevent="selectApprovalMode(opt.value)"
           >
             <i class="fa-solid text-[10px] text-gray-400" :class="opt.icon"></i>
             <span class="whitespace-nowrap text-[11px] font-medium">{{ opt.label }}</span>

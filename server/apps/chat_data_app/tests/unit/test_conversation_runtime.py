@@ -268,3 +268,61 @@ async def test_stream_agent_turn_runs_after_finish_before_history():
 async def _before_stream(calls: list[str]) -> bool:
     calls.append("before")
     return True
+
+
+@pytest.mark.asyncio
+async def test_stream_agent_turn_waits_for_user_persistence_on_cancel():
+    """前端断开/取消时，已显示的用户消息必须先落库，下一轮才能看到上下文。"""
+    persisted = asyncio.Event()
+
+    class Adapter(_FakeStreamAdapter):
+        async def stream_events(self):
+            yield "event: message\n\n"
+            await asyncio.Event().wait()
+
+    async def persist_user():
+        await asyncio.sleep(0.01)
+        persisted.set()
+
+    stream = stream_agent_turn(
+        stream_adapter=Adapter([]),
+        format_sse=lambda event, _data: f"event: {event}\n\n",
+        persistence=TurnPersistenceHooks(
+            persist_user_message=persist_user,
+            persist_turn_history=_noop_async,
+            persist_partial_history=_noop_async,
+        ),
+    )
+    task = asyncio.create_task(_collect(stream))
+    await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert persisted.is_set()
+
+
+@pytest.mark.asyncio
+async def test_await_user_persistence_safely_has_timeout(monkeypatch):
+    """取消路径等待落库必须有上限，DB 卡住不能拖死停止收口。"""
+    from apps.chat_data_app.agent.run import conversation_runtime
+
+    monkeypatch.setattr(conversation_runtime, "USER_PERSISTENCE_CANCEL_WAIT_SECONDS", 0.01)
+
+    async def slow():
+        await asyncio.sleep(5)
+
+    task = asyncio.create_task(slow())
+    started = asyncio.get_running_loop().time()
+    await conversation_runtime._await_user_persistence_safely(task)
+    elapsed = asyncio.get_running_loop().time() - started
+    assert elapsed < 1, f"取消等待未受超时约束，实际耗时 {elapsed:.2f}s"
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+@pytest.mark.asyncio
+async def test_await_user_persistence_safely_none_task_is_noop():
+    from apps.chat_data_app.agent.run import conversation_runtime
+
+    await conversation_runtime._await_user_persistence_safely(None)

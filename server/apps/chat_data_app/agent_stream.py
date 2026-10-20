@@ -82,6 +82,9 @@ from .agent_run_support import (
     _resolve_workspace_created_date,
     _write_agent_model_snapshot,
 )
+from .agent_run_support import (
+    persist_early_user_message_if_needed as _persist_early_user_message_if_needed,
+)
 
 # 思考流/工具事件/工具参数运行态格式化助手（源模块：agent_stream_events，agent_stream 行数红线拆出）。
 # re-export 保持既有模块属性引用（含测试的 agent_stream._xxx 直接调用）不变。
@@ -1900,6 +1903,10 @@ async def sql_completion_handler(
         selected_message_id=queued_message_id,
         stream_started_wall_ms=stream_started_wall_ms,
     )
+    await _persist_early_user_message_if_needed(
+        conversation_id, user_id, username or user_id, run_id, query, queued_message_id, preserve_queued_messages
+    )
+
     logger.info(
         "ChatData 阶段耗时: conversation_id=%s phase=completion.start_run elapsed_ms=%d total_ms=%d",
         conversation_id,

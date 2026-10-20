@@ -172,6 +172,7 @@ export interface ChatDataModelThinkingAdmin {
   dialect?: string
   efforts?: Array<string | ChatDataEffortLevel>
   default_effort?: string | null
+  default_on?: boolean
 }
 
 export interface ChatDataModelOption {

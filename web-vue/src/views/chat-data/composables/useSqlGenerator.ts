@@ -111,7 +111,7 @@ export function useSqlGenerator() {
       onMessage?: (message: LangGraphMessage) => void
       onResult?: (result: NL2SQLResult) => void
       onStatus?: (status: string, message: string) => void
-      onError?: (error: string) => void
+      onError?: (error: string, meta?: { isBusinessResponseError?: boolean }) => void
       onRunningTool?: (toolInfo: { tool_name: string; tool_call_id: string; args?: Record<string, unknown> }) => void
       modelId?: string | null
       memberDatasourceIds?: string[]
@@ -184,6 +184,7 @@ export function useSqlGenerator() {
 
     loading.value = true
     error.value = null
+    let businessResponseError = false
     const currentController = new AbortController()
     abortController = currentController
 
@@ -250,7 +251,10 @@ export function useSqlGenerator() {
         } catch {
           // 忽略解析错误
         }
-        throw new Error(errorMsg)
+        businessResponseError = true
+        const businessError = new Error(errorMsg) as Error & { isBusinessResponseError?: boolean }
+        businessError.isBusinessResponseError = true
+        throw businessError
       }
 
       const responseRunId = response.headers.get('X-ChatData-Run-Id')
@@ -499,7 +503,7 @@ export function useSqlGenerator() {
       }
       const errorMsg = err instanceof Error ? err.message : '请求失败'
       error.value = errorMsg
-      onError?.(errorMsg)
+      onError?.(errorMsg, { isBusinessResponseError: businessResponseError })
     } finally {
       loading.value = false
       // 只清理自己的 controller，避免覆盖新请求创建的 controller

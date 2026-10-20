@@ -156,3 +156,24 @@ def test_revoke_failure_returns_500(client, auth_headers, monkeypatch):
         headers=auth_headers,
     )
     assert response.status_code == 500
+
+
+def test_reset_read_failure_returns_500(client, auth_headers, monkeypatch):
+    _patch_conversation(monkeypatch)
+
+    async def fail(_conversation_id):
+        raise RuntimeError("storage broken")
+
+    monkeypatch.setattr(conversation_router, "reset_conversation_approval_grants", fail)
+    response = client.post("/api/chatdata/conversations/conv-1/approval-grants/reset", headers=auth_headers)
+    assert response.status_code == 500
+
+
+def test_revoke_empty_tools_rejected(client, auth_headers, monkeypatch):
+    _patch_conversation(monkeypatch)
+    response = client.post(
+        "/api/chatdata/conversations/conv-1/approval-grants/revoke",
+        json={"tools": []},
+        headers=auth_headers,
+    )
+    assert response.status_code == 400

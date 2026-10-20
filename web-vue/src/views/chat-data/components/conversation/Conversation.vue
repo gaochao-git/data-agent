@@ -2063,7 +2063,7 @@ const submitAnalysisQuery = async (
         onMessage: (msg) => handleLangGraphMessage(msg),
         onResult: () => {},
         onStatus: () => {},
-        onError: (error) => {
+        onError: (error, meta) => {
           if (options.interruptedQuestion) {
             pendingUserQuestion.value = options.interruptedQuestion
             const active = activeAssistantMessageId.value
@@ -2071,6 +2071,16 @@ const submitAnalysisQuery = async (
               : null
             if (active?.role === 'assistant') active.isStreaming = false
             ElMessage.error(error || '提交回答失败')
+            return
+          }
+          // 只有明确的业务错误响应（HTTP 非 2xx）才说明服务端没有建 Run；
+          // 网络中断/abort 时 Run 可能已在跑，保留气泡，避免刷新后孤儿消息 + 重发双份。
+          if (!startedRunId && meta?.isBusinessResponseError && options.appendUserMessage !== false) {
+            messages.value = messages.value.filter(item => item.id !== userMessage.id && item.id !== assistantMessage.id)
+            activeAssistantMessageId.value = null
+            if (options.restoreInputText) input.value = options.restoreInputText
+            if (options.messageSkills?.length) selectedSkills.value = options.messageSkills
+            ElMessage.error('消息未发送成功，已恢复到输入框，请重试')
             return
           }
           finalizeUnfinishedToolCalls('error', error)
