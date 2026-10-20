@@ -15,6 +15,7 @@ import pytest  # noqa: E402
 from apps.chat_data_app.agent.data_agent import (  # noqa: E402
     CHAT_DATA_AGENT_SPEC,
     AgentAssemblySpec,
+    AgentRunControls,
     DatasourceContext,
     IdentityContext,
     assemble_tools,
@@ -34,13 +35,14 @@ def _runtime(tmp_path):
     )
 
 
-def _tool_names(tmp_path, *, options=None, spec=None):
+def _tool_names(tmp_path, *, options=None, spec=None, run_controls=None):
     tools = assemble_tools(
         options or AgentRuntimeOptions(workspace_backend="local"),
         _runtime(tmp_path),
         identity_context=IdentityContext(user_id="u1", operator_name="测试用户"),
         datasource_context=DatasourceContext(datasource_id="ds_a"),
         spec=spec,
+        run_controls=run_controls,
     )
     return [tool.name for tool in tools]
 
@@ -48,6 +50,15 @@ def _tool_names(tmp_path, *, options=None, spec=None):
 def test_chat_data_spec_is_valid_and_assembles_full_registry(tmp_path):
     validate_agent_assembly_spec(CHAT_DATA_AGENT_SPEC)
     assert _tool_names(tmp_path, spec=CHAT_DATA_AGENT_SPEC) == _tool_names(tmp_path)
+
+
+def test_unattended_run_excludes_user_interaction_tools(tmp_path):
+    """无人值守（定时轮）装配剔除 ask_user_question，其余工具与正常装配一致。"""
+    attended = _tool_names(tmp_path)
+    unattended = _tool_names(tmp_path, run_controls=AgentRunControls(disable_user_interaction=True))
+    assert "ask_user_question" in attended
+    assert "ask_user_question" not in unattended
+    assert [name for name in attended if name != "ask_user_question"] == unattended
 
 
 def test_spec_includes_filters_builtin_tools(tmp_path):

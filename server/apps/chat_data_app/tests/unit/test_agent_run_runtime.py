@@ -886,3 +886,27 @@ async def test_cancel_pending_run_publishes_terminal_after_mysql_close():
         "terminal_recorded",
         "owner_released",
     ]
+
+
+def test_build_stream_factory_passes_unattended_flag():
+    """runtime_context 的无人值守标记透传到流请求：定时轮装配据此剔除
+    ask_user_question；chat 轮无标记时保持 False。"""
+    captured: dict = {}
+
+    def fake_stream_generator(request):
+        captured["request"] = request
+        yield ""
+
+    runtime = AgentRunRuntime(inbox_service=object(), event_service=object(), event_bus=object())
+    runtime.set_stream_generator(fake_stream_generator)
+    prepared = _prepared()
+    prepared["runtime_context"] = {"query": "汇总", "disable_user_interaction": True}
+    factory = runtime._build_stream_factory(prepared)
+    iterator = factory()
+    next(iter(iterator), None)
+    assert captured["request"].disable_user_interaction is True
+
+    prepared["runtime_context"] = {"query": "汇总"}
+    factory = runtime._build_stream_factory(prepared)
+    next(iter(factory()), None)
+    assert captured["request"].disable_user_interaction is False

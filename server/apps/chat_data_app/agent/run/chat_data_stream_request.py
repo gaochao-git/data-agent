@@ -48,6 +48,9 @@ class ChatDataStreamRequest:
     skill_names: list[str] | None = None
     options: dict[str, Any] | None = None
     file_ids: list[str] | None = None
+    # 无人值守运行（定时轮派发）：True 时工具装配剔除 ask_user_question
+    # （用户不在场无法应答，提问只会悬挂在 waiting_user）；chat 链路恒为 False。
+    disable_user_interaction: bool = False
     run_id: str | None = None
     adopted_messages: list[HumanMessage] | None = None
     resume_answer: dict[str, Any] | None = None

@@ -57,11 +57,17 @@ class ToolBuildContext:
 
 @dataclass(frozen=True)
 class ToolSpec:
-    """单个可装配条目：提供哪些工具名、如何构建、一句话职责（供审计与迁移）。"""
+    """单个可装配条目：提供哪些工具名、如何构建、一句话职责（供审计与迁移）。
+
+    ``requires_user_interaction``：工具需要用户实时应答（当前仅 ask_user_question）。
+    无人值守运行（定时轮）装配时跳过此类条目——用户不在场，提问必然悬挂在
+    waiting_user 等待应答，从装配层剔除即从根上关闭提问入口。
+    """
 
     provides: tuple[str, ...]
     build: Callable[[ToolBuildContext], Sequence[Any]]
     note: str = ""
+    requires_user_interaction: bool = False
 
 
 TOOL_SPECS: tuple[ToolSpec, ...] = (
@@ -124,6 +130,8 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
         provides=("ask_user_question",),
         build=lambda _ctx: [ask_user_question_tool],
         note="向用户提问（仅主智能体）",
+        # 需要用户实时应答：无人值守轮（定时任务）装配时剔除
+        requires_user_interaction=True,
     ),
     ToolSpec(
         provides=("officecli_run",),

@@ -109,3 +109,11 @@ def test_registry_names_are_unique_and_non_empty():
     names = [name for spec in TOOL_SPECS for name in spec.provides]
     assert all(spec.provides for spec in TOOL_SPECS)
     assert len(names) == len(set(names)), "同一工具名被多个条目重复声明"
+
+
+def test_user_interaction_tools_are_marked():
+    """ask_user_question 必须登记 requires_user_interaction：无人值守装配
+    （定时轮）据此剔除，标记丢失 = 定时轮提问悬挂回归。"""
+    assert any("ask_user_question" in spec.provides and spec.requires_user_interaction for spec in TOOL_SPECS), (
+        "ask_user_question 丢失 requires_user_interaction 标记"
+    )

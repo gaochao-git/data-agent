@@ -424,6 +424,9 @@ def build_completion_options(args: AccuracyRunConfig, datasource_id: str, semant
         "datasource_id": datasource_id,
         "semantic_config_id": semantic_config_id,
         "mode": args.query_mode,
+        # 评测批量跑无人值守：装配剔除 ask_user_question，模型提问只会
+        # 悬挂在 waiting_user 拖死批量任务
+        "disable_user_interaction": True,
     }
     if args.model_id:
         options["model_id"] = args.model_id

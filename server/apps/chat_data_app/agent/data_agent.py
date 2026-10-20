@@ -70,6 +70,10 @@ class AgentRunControls:
     工具租约围栏（tool_execution_fence）与 steering 注入总是成组出现：
     五个字段全部非空才启用，缺任何一个都视为本次运行不支持中断续跑，
     静默降级为无围栏、无 steering 的普通运行。
+
+    ``disable_user_interaction`` 独立于上述围栏组：无人值守运行（定时轮）
+    置 True，工具装配时跳过 ``requires_user_interaction`` 的注册条目
+    （ask_user_question），防止提问后无人应答导致轮次悬挂。
     """
 
     run_id: str | None = None
@@ -77,6 +81,7 @@ class AgentRunControls:
     inbox_service: Any = None
     admit_inbox_messages: Any = None
     steering_tracker: Any = None
+    disable_user_interaction: bool = False
 
     def is_complete(self) -> bool:
         return bool(
@@ -209,10 +214,14 @@ def assemble_tools(
     datasource_context: DatasourceContext | None = None,
     model_invocation: ModelInvocationConfig | None = None,
     spec: AgentAssemblySpec | None = None,
+    run_controls: "AgentRunControls | None" = None,
 ) -> list:
     """按 ``tools/registry.py`` 注册表装配工具集，只有 Bash 受运行选项控制。
 
     传入 ``spec`` 时在注册表装配结果上再按规格做工具名级筛选（内置工具）。
+    ``run_controls.disable_user_interaction``（无人值守，定时轮派发）时跳过
+    ``requires_user_interaction`` 的注册条目（ask_user_question）：模型看不到
+    也执行不了，提问入口从装配层关闭。
     """
     context = ToolBuildContext(
         runtime_options=runtime_options,
@@ -221,7 +230,13 @@ def assemble_tools(
         datasource=datasource_context or DatasourceContext(),
         model_invocation=model_invocation or ModelInvocationConfig(),
     )
-    tools = [tool for tool_spec in TOOL_SPECS for tool in tool_spec.build(context)]
+    skip_user_interaction = bool(run_controls and run_controls.disable_user_interaction)
+    tools = [
+        tool
+        for tool_spec in TOOL_SPECS
+        if not (skip_user_interaction and tool_spec.requires_user_interaction)
+        for tool in tool_spec.build(context)
+    ]
     if spec is not None:
         validate_agent_assembly_spec(spec)
         tools = _filter_tools_by_spec(tools, spec)
@@ -514,6 +529,7 @@ def create_agent_from_spec(
         datasource_context=datasource,
         model_invocation=invocation,
         spec=spec,
+        run_controls=run_controls,
     )
     mcp_tools = _load_spec_mcp_tools(spec)
     tool_tokens = count_tools_tokens([*builtin_tools, *mcp_tools]) if mcp_tools else 0

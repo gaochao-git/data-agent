@@ -1138,6 +1138,8 @@ async def _generate_chat_data_stream(
                 turn_id=turn_id,
                 owner_token=owner_token,
                 stream_event_id_provider=stream_event_id_provider,
+                # 无人值守标记必须随转发重建透传，否则在内层被默认值覆盖
+                disable_user_interaction=req.disable_user_interaction,
             ),
             log_phase=log_phase,
         ):
@@ -1563,6 +1565,8 @@ async def _run_chat_data_agent_stream(
     owner_token = req.owner_token
     stream_event_id_provider = req.stream_event_id_provider
     stream_started_wall_ms = req.stream_started_wall_ms
+    # 无人值守运行（定时轮派发）：工具装配剔除 ask_user_question
+    disable_user_interaction = req.disable_user_interaction
     selected_files = parse_file_selections(file_selections)
     try:
         # 无依赖的准备项一次并行：语义上下文（含数据源校验）/ 子智能体热默认 /
@@ -1745,6 +1749,7 @@ async def _run_chat_data_agent_stream(
                     inbox_service=agent_inbox_service,
                     admit_inbox_messages=partial(_admit_agent_inbox_messages, callbacks),
                     steering_tracker=steering_tracker,
+                    disable_user_interaction=disable_user_interaction,
                 ),
                 persist_model_snapshot=partial(_persist_agent_model_snapshot, callbacks),
             )
@@ -1869,6 +1874,9 @@ async def sql_completion_handler(
         "operator_name": username or user_id,
         "options": options or {},
         "file_ids": file_ids or [],
+        # 无人值守标记（评测/批量等内部调用方经 options 传入）：装配剔除
+        # ask_user_question；chat 入口恒 False
+        "disable_user_interaction": run_options.disable_user_interaction,
     }
     run_id, adopted_messages = await agent_inbox_service.start_run(
         conversation_id,

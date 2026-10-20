@@ -417,6 +417,9 @@ class AgentScheduleRuntime:
             "operator_name": job["create_by_name"] or "",
             "options": options,
             "file_ids": [],
+            # 无人值守标记：工具装配剔除 ask_user_question（用户不在场，
+            # 提问后无人应答会让轮次悬挂在 waiting_user 等待）
+            "disable_user_interaction": True,
         }
 
     async def _mark_dispatched(self, trigger_id: int, run_id: str, conversation_id: str | None = None) -> None:

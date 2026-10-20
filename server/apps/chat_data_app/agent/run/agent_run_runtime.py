@@ -293,6 +293,9 @@ class AgentRunRuntime:
                     skill_names=context.get("skill_names") or [],
                     options=context.get("options") or {},
                     file_ids=context.get("file_ids"),
+                    # 定时轮派发时 runtime_context 带无人值守标记：装配剔除
+                    # ask_user_question（见 agent_schedule_runtime._build_runtime_context）
+                    disable_user_interaction=bool(context.get("disable_user_interaction")),
                     run_id=prepared["run_id"],
                     owner_token=prepared["owner_token"],
                     stream_event_id_provider=prepared.get("stream_event_id_provider"),

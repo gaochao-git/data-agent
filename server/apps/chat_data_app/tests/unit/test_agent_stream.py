@@ -454,6 +454,48 @@ def test_agent_sql_normalize_member_datasource_ids_dedupes_and_strips():
     assert agent_sql_tools.normalize_member_datasource_ids([" m1 ", "", None, "m1", "m2"]) == ["m1", "m2"]
 
 
+def test_run_chat_data_agent_stream_forwards_unattended_flag(monkeypatch):
+    """无人值守标记必须穿透两层转发到达 AgentRunControls：
+    外层 _generate_chat_data_stream 重建 req 时不能丢字段（否则内层默认
+    False 覆盖），内层拆包后传入 run_controls 供装配剔除 ask_user_question。"""
+    import asyncio
+
+    captured_agent_kwargs = {}
+    fake_graph = _FakeGraph(
+        events=[(_FakeMessageChunk(content="ok"), {"langgraph_node": "model"})],
+        state=SimpleNamespace(tasks=[], values={}),
+    )
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
+
+    def create_agent(_runtime_options, **kwargs):
+        captured_agent_kwargs.update(kwargs)
+        return fake_graph
+
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", create_agent)
+    _override_semantic_context(monkeypatch)
+
+    def _run_once(**request_kwargs):
+        captured_agent_kwargs.clear()
+        asyncio.run(
+            _collect_async_iter(
+                _generate_chat_data_stream(
+                    ChatDataStreamRequest(
+                        user_id="u_test",
+                        thread_id="conv_unattended_flag",
+                        user_query="查询订单数",
+                        datasource_id="ds_a",
+                        **request_kwargs,
+                    )
+                )
+            )
+        )
+        return captured_agent_kwargs["run_controls"].disable_user_interaction
+
+    assert _run_once(disable_user_interaction=True) is True
+    # chat 链路不传：恒 False
+    assert _run_once() is False
+
+
 def test_generate_chat_data_stream_enters_agent_when_semantic_config_not_selected(monkeypatch):
     import asyncio
 

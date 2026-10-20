@@ -831,6 +831,8 @@ def test_build_runtime_context_reuses_completion_options_parsing():
     # 单字符串形态的 skill_names 也要归一化成列表
     assert context["skill_names"] == ["officecli"]
     assert context["operator_name"] == "用户一"
+    # 定时轮无人值守：装配链路据此剔除 ask_user_question
+    assert context["disable_user_interaction"] is True
 
 
 @pytest.mark.asyncio

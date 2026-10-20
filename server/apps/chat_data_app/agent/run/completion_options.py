@@ -22,6 +22,11 @@ class CompletionRunOptions:
     file_selections: list[str]
     skill_names: list[str]
     quoted_snippets: list[dict[str, str]]
+    # 无人值守运行（评测/批量等内部调用方经 options 显式置 True）：工具装配
+    # 剔除 ask_user_question（用户不在场，提问只会悬挂在 waiting_user）。
+    # chat 入口不传恒为 False；定时轮派发链路不走本解析（直接在
+    # runtime_context 打标），两条入口的标记来源互不干扰。
+    disable_user_interaction: bool = False
 
 
 def normalize_enable_thinking(value: Any) -> bool | None:
@@ -113,4 +118,5 @@ def parse_completion_run_options(options: dict[str, Any] | None) -> CompletionRu
         file_selections=parse_file_selections(options_data.get("file_selections")),
         skill_names=skill_names,
         quoted_snippets=parse_quoted_snippets(options_data.get("quoted_snippets")),
+        disable_user_interaction=bool(options_data.get("disable_user_interaction")),
     )
