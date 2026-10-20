@@ -2,6 +2,7 @@ import asyncio
 import json
 from contextlib import asynccontextmanager
 from datetime import datetime
+from types import SimpleNamespace
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
@@ -1335,3 +1336,375 @@ async def test_persist_user_message_insert_only_does_not_overwrite_existing(conv
             )
         )
     assert count == 2
+
+
+# ============ 纯函数与异常分支覆盖（防回归 + 覆盖率余量） ============
+
+
+def test_compare_stream_ids_malformed_falls_back():
+    """非法 stream_id 走字符串兜底键，不抛异常。"""
+    from apps.chat_data_app.agent.run import conversation_event_service as ces
+
+    assert ces._compare_stream_ids("1-2", "abc") == 1
+    assert ces._compare_stream_ids("abc", "1-2") == -1
+    assert ces._compare_stream_ids("abc", "abc") == 0
+    assert ces._compare_stream_ids("5-x", "5-y") == -1  # ValueError 分支：按原串比较
+
+
+@pytest.mark.asyncio
+async def test_persist_user_message_skips_missing_id(conversation_event_service):
+    service, create_thread, _get_session = conversation_event_service
+    await create_thread("conv-no-id", "user-1")
+    await service.persist_user_message(
+        conversation_id="conv-no-id",
+        user_id="user-1",
+        operator_name="用户一",
+        message=HumanMessage(content="无 ID 消息"),
+    )
+    async with _get_session() as session:
+        count = len(
+            list(
+                (
+                    await session.execute(
+                        select(ChatDataConversationEvent).where(
+                            ChatDataConversationEvent.conversation_id == "conv-no-id"
+                        )
+                    )
+                ).scalars()
+            )
+        )
+    assert count == 0
+
+
+@pytest.mark.asyncio
+async def test_persist_turn_skips_empty_messages(conversation_event_service):
+    service, _create_thread, _get_session = conversation_event_service
+    # 空 messages → events 为空，直接返回，不触库
+    await service.persist_turn(
+        conversation_id="conv-empty-turn",
+        user_id="user-1",
+        operator_name="用户一",
+        turn_id="turn-1",
+        messages=[],
+        reasoning_segments=[],
+    )
+
+
+@pytest.mark.asyncio
+async def test_append_events_raises_on_non_connection_error(conversation_event_service):
+    service, _create_thread, _get_session = conversation_event_service
+
+    async def boom(**_kwargs):
+        raise RuntimeError("logic broken")
+
+    service._dao.append_events = boom
+    with pytest.raises(RuntimeError):
+        await service._append_events(
+            conversation_id="conv-x",
+            user_id="user-1",
+            operator_name="用户一",
+            events=[{"event_key": "user:t1", "turn_id": "t1", "event_type": "user_message", "payload": "{}"}],
+        )
+
+
+@pytest.mark.asyncio
+async def test_append_events_retries_on_connection_error(monkeypatch, conversation_event_service):
+    from apps.chat_data_app.agent.run import conversation_event_service as ces
+
+    monkeypatch.setattr(ces, "EVENT_APPEND_RETRY_DELAY_SECONDS", 0)
+    service, _create_thread, _get_session = conversation_event_service
+    calls = []
+
+    async def flaky(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise OperationalError("stmt", {}, Exception(2013, "lost connection"))
+        return None
+
+    service._dao.append_events = flaky
+    await service._append_events(
+        conversation_id="conv-x",
+        user_id="user-1",
+        operator_name="用户一",
+        events=[{"event_key": "user:t1", "turn_id": "t1", "event_type": "user_message", "payload": "{}"}],
+    )
+    assert len(calls) == 2
+
+
+def _run(run_id: str, checkpoint: dict | None) -> object:
+    import json as _json
+
+    content: dict = {}
+    if checkpoint is not None:
+        content["history_checkpoint"] = checkpoint
+    return SimpleNamespace(run_id=run_id, record_content=_json.dumps(content, ensure_ascii=False))
+
+
+@pytest.mark.asyncio
+async def test_update_history_checkpoint_lease_lost_on_owner_change(conversation_event_service):
+    service, _create_thread, _get_session = conversation_event_service
+    run = _run("run-old", {"run_id": "run-other", "stream_id": "1-0"})
+    with pytest.raises(AgentRunLeaseLostError):
+        await service._update_history_checkpoint(
+            run_id="run-old",
+            turn_id="t1",
+            history_sequence_no=3,
+            stream_id="2-0",
+            run=run,
+        )
+
+
+@pytest.mark.asyncio
+async def test_update_history_checkpoint_keeps_newer_stream_id(conversation_event_service):
+    service, _create_thread, _get_session = conversation_event_service
+    run = _run("run-1", {"run_id": "run-1", "stream_id": "9-0"})
+    checkpoint = await service._update_history_checkpoint(
+        run_id="run-1",
+        turn_id="t1",
+        history_sequence_no=3,
+        stream_id="5-0",  # 比 previous 小：水位不回退
+        run=run,
+    )
+    assert checkpoint is not None and checkpoint["stream_id"] == "9-0"
+
+
+@pytest.mark.asyncio
+async def test_get_first_user_message_db_error_returns_none(conversation_event_service):
+    service, _create_thread, _get_session = conversation_event_service
+
+    async def boom(**_kwargs):
+        raise RuntimeError("db down")
+
+    service._dao.get_first_user_message_payload = boom
+    assert await service.get_first_user_message(conversation_id="conv-x", user_id="user-1") is None
+
+
+def test_turn_message_range_stops_at_next_human():
+    from apps.chat_data_app.agent.run.conversation_event_service import _turn_message_range
+
+    messages = [
+        HumanMessage(content="q1", id="t1"),
+        AIMessage(content="a1"),
+        ToolMessage(content="r", tool_call_id="c1"),
+        HumanMessage(content="q2", id="t2"),
+    ]
+    assert _turn_message_range(messages, "t1") == (0, 3)
+    assert _turn_message_range(messages, "t2") == (3, 4)
+    assert _turn_message_range(messages, "missing") is None
+
+
+def test_partition_compression_events_unanchored():
+    from apps.chat_data_app.agent.run.conversation_event_service import _partition_compression_events
+
+    anchored = {"id": "e1", "anchor_message_id": "m1"}
+    unanchored = {"id": "e2", "anchor_message_id": ""}
+    by_anchor, unanchored_events = _partition_compression_events([anchored, unanchored])
+    assert by_anchor == {"m1": [anchored]}
+    assert unanchored_events == [unanchored]
+
+
+def test_build_turn_events_flushes_unanchored_and_leftover_anchors():
+    from apps.chat_data_app.agent.run.conversation_event_service import _build_turn_events
+
+    turn_id = "t1"
+    ai = AIMessage(content="a", id="ai-1")
+    events = _build_turn_events(
+        turn_id=turn_id,
+        messages=[HumanMessage(content="q", id=turn_id), ai],
+        reasoning_segments=[],
+        context_compression_events=[
+            {"id": "e-unanchored", "turn_id": turn_id},  # 未锚定：随提问后立刻落
+            {"id": "e-ai", "turn_id": turn_id, "anchor_message_id": "ai-1"},  # 锚定到 AI
+            {"id": "e-orphan", "turn_id": turn_id, "anchor_message_id": "ghost"},  # 锚点缺失：轮末冲刷
+        ],
+    )
+    keys = [event["event_key"] for event in events]
+    assert "context_compression:e-unanchored" in keys
+    assert "context_compression:e-ai" in keys
+    assert "context_compression:e-orphan" in keys
+
+
+def test_build_turn_events_skips_human_message_without_id():
+    from apps.chat_data_app.agent.run.conversation_event_service import _build_turn_events
+
+    turn_id = "t1"
+    events = _build_turn_events(
+        turn_id=turn_id,
+        messages=[HumanMessage(content="q", id=turn_id), HumanMessage(content="无 ID")],
+        reasoning_segments=[],
+    )
+    user_keys = [event["event_key"] for event in events if event["event_type"] == "user_message"]
+    assert user_keys == [f"user:{turn_id}"]
+
+
+def test_normalize_reasoning_segments_filters_invalid():
+    from apps.chat_data_app.agent.run.conversation_event_service import _normalize_reasoning_segments
+
+    normalized = _normalize_reasoning_segments(
+        [
+            "not-a-dict",  # 非 dict
+            {"content": "其它轮次", "reasoning_turn_id": "t-other"},  # turn 不匹配
+            {"content": "   "},  # 空内容
+            {"content": "有效", "tool_call_count": None},  # 缺 id：自动生成
+        ],
+        "t1",
+    )
+    assert len(normalized) == 1
+    assert normalized[0]["id"] == "reasoning-t1-3"
+    assert normalized[0]["tool_call_count"] == 0
+
+
+def test_normalize_context_compression_events_filters_invalid():
+    from apps.chat_data_app.agent.run.conversation_event_service import _normalize_context_compression_events
+
+    valid = {"id": "e1", "turn_id": "t1", "estimated_tokens_before": "12"}
+    normalized = _normalize_context_compression_events(
+        [
+            "not-a-dict",
+            {"turn_id": "t1"},  # 无 id
+            valid,
+            {"id": "e1", "turn_id": "t1"},  # 重复 id
+            {"id": "e2", "turn_id": "t-other"},  # 其它轮次
+        ],
+        "t1",
+    )
+    assert normalized == [
+        {
+            "id": "e1",
+            "turn_id": "t1",
+            "anchor_message_id": "",
+            "timestamp": "",
+            "estimated_tokens_before": 12,
+            "estimated_tokens_after": 0,
+            "estimated_cleared_tokens": 0,
+            "compressed_messages": 0,
+        }
+    ]
+
+
+def test_non_negative_int():
+    from apps.chat_data_app.agent.run.conversation_event_service import _non_negative_int
+
+    assert _non_negative_int("3") == 3
+    assert _non_negative_int(None) == 0
+    assert _non_negative_int(-5) == 0
+    assert _non_negative_int("abc") == 0
+    assert _non_negative_int(object()) == 0
+
+
+def test_execution_timing_skips_invalid_values():
+    from apps.chat_data_app.agent.run.conversation_event_service import _execution_timing
+
+    message = SimpleNamespace(
+        additional_kwargs={
+            "started_at_ms": True,  # bool 显式跳过
+            "ended_at_ms": None,
+        }
+    )
+    assert _execution_timing(message) == {}
+    message = SimpleNamespace(additional_kwargs={"started_at_ms": "bad", "ended_at_ms": -1, "extra": 1})
+    assert _execution_timing(message) == {}
+    message = SimpleNamespace(additional_kwargs={"started_at_ms": 100, "ended_at_ms": "200"})
+    assert _execution_timing(message) == {"started_at_ms": 100, "ended_at_ms": 200}
+
+
+def test_sanitize_user_message_content_mixed_blocks():
+    from apps.chat_data_app.agent.run.conversation_event_service import _sanitize_user_message_content
+
+    assert _sanitize_user_message_content("纯文本") == "纯文本"
+    mixed = [
+        123,  # 非 dict 块
+        {"type": "image_url", "image_url": {"url": "data:..."}},
+        {"type": "text", "text": "你好"},
+    ]
+    assert _sanitize_user_message_content(mixed) == "你好\n[图片内容已省略，共 1 张]"
+    assert _sanitize_user_message_content([{"type": "image_url"}]) == "[图片内容已省略，共 1 张]"
+    assert _sanitize_user_message_content([{"type": "other"}]) == "[非文本内容已省略]"
+
+
+def test_serialize_ai_message_full_payload():
+    from apps.chat_data_app.agent.run.conversation_event_service import _serialize_ai_message
+
+    # langchain 会校验 tool_calls 元素形状，这里直接用 SimpleNamespace 构造非法混合列表
+    message = SimpleNamespace(
+        content="回答",
+        id="ai-1",
+        additional_kwargs={
+            "timestamp": "t1",
+            "generation_stats": {"first_token_ms": 120},
+            "reasoning_content": "思考中",
+        },
+        tool_calls=[{"id": "c1", "name": "file_delete", "args": {"path": "a.txt"}}, "bad-item"],
+        response_metadata=None,
+    )
+    payload = _serialize_ai_message(message)
+    assert payload["generation_stats"] == {"first_token_ms": 120}
+    assert payload["reasoning_content"] == "思考中"
+    assert [call["name"] for call in payload["tool_calls"]] == ["file_delete"]
+
+
+def test_extract_reasoning_content_sources():
+    from apps.chat_data_app.agent.run.conversation_event_service import _extract_reasoning_content
+
+    assert _extract_reasoning_content(SimpleNamespace(additional_kwargs=None, response_metadata=None)) == ""
+    assert (
+        _extract_reasoning_content(
+            SimpleNamespace(additional_kwargs={}, response_metadata={"reasoning_text": "元数据思考"})
+        )
+        == "元数据思考"
+    )
+    assert _extract_reasoning_content(SimpleNamespace(additional_kwargs={"reasoning": ""}, response_metadata={})) == ""
+
+
+def test_extract_text_content_blocks_and_attachment_lines():
+    from apps.chat_data_app.agent.run.conversation_event_service import _extract_text_content
+
+    assert _extract_text_content(123) == ""
+    assert _extract_text_content("  ") == ""
+    blocks = [
+        {"type": "text", "text": "第一行"},
+        {"type": "image_url"},
+        {"type": "text", "text": "[attachment] 占位"},
+        {"type": "text", "text": "第二行"},
+    ]
+    assert _extract_text_content(blocks) == "第一行\n第二行"
+    assert _extract_text_content([{"type": "text", "text": "[attachment] x"}]) == ""
+
+
+def test_build_turn_events_human_message_without_id_direct():
+    """无 ID 的 HumanMessage 直接进入构造器时跳过（不落事件）。"""
+    from apps.chat_data_app.agent.run.conversation_event_service import (
+        _build_turn_events_human_message,
+    )
+
+    events: list[dict] = []
+    _build_turn_events_human_message(HumanMessage(content="无 ID"), events, {}, [], "t1")
+    assert events == []
+
+
+def test_build_turn_events_includes_tool_message():
+    from apps.chat_data_app.agent.run.conversation_event_service import _build_turn_events
+
+    turn_id = "t1"
+    events = _build_turn_events(
+        turn_id=turn_id,
+        messages=[
+            HumanMessage(content="q", id=turn_id),
+            AIMessage(content="a", id="ai-1", tool_calls=[]),
+            ToolMessage(content="结果", tool_call_id="c1", name="file_delete", id="tool-1"),
+        ],
+        reasoning_segments=[],
+    )
+    keys = [event["event_key"] for event in events]
+    assert "tool:tool-1" in keys or any(event["event_type"] == "tool_result" for event in events)
+
+
+def test_extract_text_content_skips_empty_text_blocks():
+    from apps.chat_data_app.agent.run.conversation_event_service import _extract_text_content
+
+    blocks = [
+        {"type": "text", "text": "   "},
+        {"type": "image_url"},
+        {"type": "text", "text": "正文"},
+    ]
+    assert _extract_text_content(blocks) == "正文"

@@ -9,6 +9,7 @@ os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 
+from apps.chat_data_app.agent.run import conversation_runtime
 from apps.chat_data_app.agent.run.conversation_runtime import (
     TurnLifecycleHooks,
     TurnPersistenceHooks,
@@ -326,3 +327,29 @@ async def test_await_user_persistence_safely_none_task_is_noop():
     from apps.chat_data_app.agent.run import conversation_runtime
 
     await conversation_runtime._await_user_persistence_safely(None)
+
+
+# ============ 收口辅助函数分支覆盖 ============
+
+
+@pytest.mark.asyncio
+async def test_abort_user_persistence_cancels_pending_and_handles_none():
+    """未完成任务被取消收敛；None 任务直接跳过。"""
+
+    async def slow():
+        await asyncio.sleep(5)
+
+    task = asyncio.create_task(slow())
+    await conversation_runtime._abort_user_persistence(task)  # type: ignore[arg-type]
+    assert task.cancelled()
+    await conversation_runtime._abort_user_persistence(None)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_stream_turn_wait_user_persistence_none_is_noop():
+    await conversation_runtime._stream_turn_wait_user_persistence(None)
+
+
+@pytest.mark.asyncio
+async def test_maybe_invoke_interrupt_hook_none_is_noop():
+    await conversation_runtime._maybe_invoke_interrupt_hook(None, {"q": 1})

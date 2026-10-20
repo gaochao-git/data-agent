@@ -438,8 +438,11 @@ const formatThinking = (row: ChatDataModelRegistryItem) => {
   if (!thinking || thinking.mode === 'none') return '不支持'
   const dialect = thinking.dialect || '-'
   if (thinking.mode === 'forced') return `强制 / ${dialect}`
-  // 默认开启由默认档位推导：默认档位为普通档=默认开；off/none 或未勾=默认关
-  const defaultOn = !!thinking.default_effort && !['off', 'none'].includes(thinking.default_effort)
+  // 有档位由默认档位推导；无档位（chat_template）看显式 default_on
+  const hasEfforts = (thinking.efforts || []).length > 0
+  const defaultOn = hasEfforts
+    ? !!thinking.default_effort && !['off', 'none'].includes(thinking.default_effort)
+    : thinking.default_on === true
   return `可选 / ${dialect}${defaultOn ? '（默认开）' : '（默认关）'}`
 }
 

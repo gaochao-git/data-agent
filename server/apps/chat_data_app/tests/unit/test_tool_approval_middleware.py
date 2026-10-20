@@ -1015,3 +1015,78 @@ def test_string_list_supports_dict_state_field():
         "tool:a",
         "tool:b",
     ]
+
+
+# ============ 辅助函数与兜底审批分支覆盖 ============
+
+
+def test_merge_keys_skips_empty_and_duplicates():
+    assert tool_approval._merge_keys(["", "  ", "a", "a"], [None, "b", ""]) == ["a", "b"]
+
+
+def test_dedupe_skips_empty_and_duplicates():
+    # _dedupe 不做 strip：空串跳过、重复跳过、非空保留
+    assert tool_approval._dedupe(["a", "a", "", "b", " "]) == ["a", "b", " "]
+
+
+def test_string_list_dict_state_falls_back_to_keys():
+    assert tool_approval._string_list({"approval_grants": {"tool:a": 1, "tool:b": 2}}, "approval_grants") == [
+        "tool:a",
+        "tool:b",
+    ]
+    assert tool_approval._string_list("not-a-dict", "approval_grants") == []
+
+
+def test_args_summary_serialization_fallback():
+    class Unserializable:
+        def __str__(self):
+            return "<obj>"
+
+    # 非 dict/list 的未知对象直接跳过；dict/list 序列化失败回退 str()
+    summary = tool_approval._args_summary({"id": "c1", "args": {"ok": "v", "obj": Unserializable()}})
+    assert summary["ok"] == "v"
+    assert "obj" not in summary
+    summary = tool_approval._args_summary({"id": "c1", "args": {"raw": {"inner": Unserializable()}}})
+    assert "Unserializable" in summary["raw"]
+
+
+def test_append_run_grant_passthrough_without_run_id():
+    result = ToolMessage(content="done", name="file_delete", tool_call_id="c1")
+    assert tool_approval._append_run_grant(result, "", "tool:file_delete", {}) is result
+
+
+def test_append_run_grant_merges_into_command_and_message():
+    state = {"approval_run_grants": {"run-1": ["tool:file_move"]}}
+    command = Command(update={"messages": [ToolMessage(content="done", name="file_delete", tool_call_id="c1")]})
+    merged = tool_approval._append_run_grant(command, "run-1", "tool:file_delete", state)
+    assert isinstance(merged, Command)
+    assert merged.update["approval_run_grants"] == {"run-1": ["tool:file_move", "tool:file_delete"]}
+    assert len(merged.update["messages"]) == 1
+
+    message = ToolMessage(content="done", name="file_delete", tool_call_id="c1")
+    wrapped = tool_approval._append_run_grant(message, "run-1", "tool:file_delete", state)
+    assert isinstance(wrapped, Command)
+    assert wrapped.update["approval_run_grants"] == {"run-1": ["tool:file_move", "tool:file_delete"]}
+    assert wrapped.update["messages"] == [message]
+
+
+@pytest.mark.asyncio
+async def test_run_with_single_approval_run_always(monkeypatch):
+    """兜底单次询问选「本轮内始终允许」：结果包装成 Command 并写回本轮许可。"""
+    monkeypatch.setattr(tool_approval, "interrupt", lambda _payload: _answer([APPROVAL_RUN_ALWAYS_ALLOW_LABEL]))
+    request = SimpleNamespace(tool=None, state={"approval_run_grants": {}})
+    state_holder = {"approval_run_grants": {"run-9": ["tool:file_move"]}}
+
+    async def handler(_req):
+        return ToolMessage(content="done", name="file_delete", tool_call_id="call-1")
+
+    request.state = state_holder
+    result = await tool_approval._run_with_single_approval(
+        request, "file_delete", {"id": "call-1", "name": "file_delete", "args": {}}, handler, "run-9"
+    )
+    assert isinstance(result, Command)
+    assert result.update["approval_run_grants"] == {"run-9": ["tool:file_move", "tool:file_delete"]}
+
+
+def test_append_run_grant_passthrough_for_unknown_result():
+    assert tool_approval._append_run_grant("raw-result", "run-1", "tool:file_delete", {}) == "raw-result"
