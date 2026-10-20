@@ -22,11 +22,13 @@ class CompletionRunOptions:
     file_selections: list[str]
     skill_names: list[str]
     quoted_snippets: list[dict[str, str]]
+    # 审批模式：请求显式值（ask/auto，空=用系统默认）；无人值守标记由调用方强制 auto
+    approval_mode: str
     # 无人值守运行（评测/批量等内部调用方经 options 显式置 True）：工具装配
     # 剔除 ask_user_question（用户不在场，提问只会悬挂在 waiting_user）。
-    # chat 入口不传恒为 False；定时轮派发链路不走本解析（直接在
-    # runtime_context 打标），两条入口的标记来源互不干扰。
-    disable_user_interaction: bool = False
+    # chat 入口不传恒为 False；定时轮派发链路不走本解析（直接在 runtime_context
+    # 打标），两条入口的标记来源互不干扰。
+    disable_user_interaction: bool
 
 
 def normalize_enable_thinking(value: Any) -> bool | None:
@@ -99,6 +101,22 @@ _QUOTED_SNIPPET_MAX_CHARS = 2000
 _QUOTED_SNIPPET_MAX_ITEMS = 5
 
 
+APPROVAL_MODES = ("ask", "auto")
+
+
+def parse_approval_mode(value: Any) -> str:
+    """请求级审批模式：ask/auto；非法或缺失返回空串（由调用方回落系统默认）。"""
+    raw = str(value or "").strip().lower()
+    return raw if raw in APPROVAL_MODES else ""
+
+
+def parse_unattended_flag(value: Any) -> bool:
+    """无人值守标记：仅供服务端内部（评测/批量）使用，不接受前端伪造。"""
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in ("1", "true", "yes")
+
+
 def parse_completion_run_options(options: dict[str, Any] | None) -> CompletionRunOptions:
     options_data = options or {}
     raw_skill_names = options_data.get("skill_names") or []
@@ -118,5 +136,6 @@ def parse_completion_run_options(options: dict[str, Any] | None) -> CompletionRu
         file_selections=parse_file_selections(options_data.get("file_selections")),
         skill_names=skill_names,
         quoted_snippets=parse_quoted_snippets(options_data.get("quoted_snippets")),
-        disable_user_interaction=bool(options_data.get("disable_user_interaction")),
+        approval_mode=parse_approval_mode(options_data.get("approval_mode")),
+        disable_user_interaction=parse_unattended_flag(options_data.get("disable_user_interaction")),
     )

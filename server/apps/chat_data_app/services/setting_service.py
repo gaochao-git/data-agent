@@ -133,6 +133,14 @@ SETTING_REGISTRY: dict[str, SettingSpec] = {
         effect=EFFECT_IMMEDIATE,
         description="会话工作区目录打包下载压缩包大小上限（MB），限 zip 产物而非源文件总大小",
     ),
+    "CHAT_DATA_DEFAULT_APPROVAL_MODE": SettingSpec(
+        key="CHAT_DATA_DEFAULT_APPROVAL_MODE",
+        value_type="string",
+        default="ask",
+        category="agent",
+        effect=EFFECT_IMMEDIATE,
+        description="工具审批模式默认值：ask=按需审批（破坏性工具执行前确认）、auto=自动审批（直接执行）；用户可在会话内选择",
+    ),
     "CHAT_DATA_QUERY_CACHE_ENABLED": SettingSpec(
         key="CHAT_DATA_QUERY_CACHE_ENABLED",
         value_type="bool",

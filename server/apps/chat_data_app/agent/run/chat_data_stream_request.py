@@ -48,9 +48,11 @@ class ChatDataStreamRequest:
     skill_names: list[str] | None = None
     options: dict[str, Any] | None = None
     file_ids: list[str] | None = None
-    # 无人值守运行（定时轮派发）：True 时工具装配剔除 ask_user_question
-    # （用户不在场无法应答，提问只会悬挂在 waiting_user）；chat 链路恒为 False。
+    # 无人值守运行（定时轮派发/评测）：True 时工具装配剔除 ask_user_question
+    # （用户不在场无法应答，提问只会悬挂在 waiting_user），且审批强制自动模式。
     disable_user_interaction: bool = False
+    # 审批模式：ask=注册表标记的工具执行前中断询问；auto=直接执行（默认，兼容旧行为）
+    approval_mode: str = "auto"
     run_id: str | None = None
     adopted_messages: list[HumanMessage] | None = None
     resume_answer: dict[str, Any] | None = None

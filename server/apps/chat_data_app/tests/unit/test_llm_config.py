@@ -546,9 +546,7 @@ def test_context_compression_summary_output_max_tokens_rejects_invalid_values(mo
 
 def test_chat_data_runtime_config_reads_runtime_options(monkeypatch, tmp_path):
     registry_path = _set_registry(monkeypatch, tmp_path, [_ox_alpha()])
-    monkeypatch.setattr("apps.chat_data_app.services.runtime_config.CHAT_DATA_DEFAULT_WORKSPACE_BACKEND", "sandbox")
-    monkeypatch.setattr("apps.chat_data_app.services.runtime_config.CHAT_DATA_DEFAULT_BASH_ENABLED", True)
-    monkeypatch.setattr("apps.chat_data_app.services.runtime_config.CHAT_DATA_CAPABILITY_USER_OVERRIDABLE", True)
+    monkeypatch.setenv("CHAT_DATA_DEFAULT_APPROVAL_MODE", "auto")
 
     # 服务路径冷缓存会拒绝回落文件（DB 唯一真值）：先模拟启动预热成功后的缓存落位
     monkeypatch.setattr(llm_config, "_registry_cache", llm_config.load_chat_data_model_configs())
@@ -562,14 +560,10 @@ def test_chat_data_runtime_config_reads_runtime_options(monkeypatch, tmp_path):
 
     assert result["models"][0]["id"] == "stealth/ox-alpha"
     assert "default_model" not in result
-    assert result["runtime_options"] == {
-        "workspace_backend": "sandbox",
-        "bash_enabled": True,
-        "explore_subagent_enabled": False,
-        "plan_subagent_enabled": False,
-        "general_purpose_subagent_enabled": False,
-    }
-    assert result["user_overridable"] is True
+    # 前端唯一常驻权限项：默认审批模式（配置表 > env）；隔离后端/Bash 不再下发前端
+    assert result["approval_mode"] in ("ask", "auto")
+    assert "runtime_options" not in result
+    assert "user_overridable" not in result
     assert result["context_window"] == 256000
 
 
@@ -591,7 +585,7 @@ def test_runtime_config_empty_registry_returns_empty_models_without_error(monkey
     result = asyncio.run(get_chat_data_runtime_config())
 
     assert result["models"] == []
-    assert result["runtime_options"]["workspace_backend"]
+    assert result["approval_mode"] in ("ask", "auto")
     # 空清单：context_window 回退缺省值而非 StopIteration/ValueError
     from apps.chat_data_app.services.runtime_config import DEFAULT_CONTEXT_WINDOW
 

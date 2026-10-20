@@ -136,6 +136,7 @@ def on_tool_error(exc: Exception, request: Any) -> str:
 # 校验实际组装结果与该表逐一致——插错位置会在 CI 直接失败，而不是靠 review 发现。
 MIDDLEWARE_CANONICAL_ORDER: tuple[str, ...] = (
     "ToolExecutionFenceMiddleware",  # 租约围栏必须最外层：所有权丢失不能被内层转成普通工具失败
+    "ToolApprovalMiddleware",  # 按需审批：在围栏之内、任何工具副作用之前中断询问（ask 模式才装配）
     "ImageInjectionMiddleware",  # 图片注入在压缩/预算外层：注入的图片要被正确计费与统计
     "MCPToolDiscoveryMiddleware",  # MCP 按需发现是唯一会过滤 request.tools 的中间件，必须外于压缩/用量统计，使其看到过滤后的真实工具集
     "ToolTimingMiddleware",  # 紧贴围栏内侧：计时覆盖卸载与错误转换在内的完整工具链路
@@ -162,13 +163,13 @@ def build_standard_agent_middleware(
     tool_result_middleware: Any | None = None,
     tool_call_history_repair_middleware: Any | None = None,
     tool_execution_fence_middleware: Any | None = None,
+    tool_approval_middleware: Any | None = None,
     image_injection_middleware: Any | None = None,
     steering_middleware: Any | None = None,
     subagent_middleware: Any | None = None,
     after_model_history_middleware: Any | None = None,
     mcp_tool_discovery_middleware: Any | None = None,
-    include_response_timestamp: bool = False,
-    include_tool_call_normalizer: bool = False,
+    include_flags: frozenset[str] | None = None,
 ) -> list[Any]:
     """组装 create_agent 的公共 middleware 列表。
 
@@ -183,8 +184,10 @@ def build_standard_agent_middleware(
     """
     # 计时与 ToolErrorMiddleware 是无条件必备项，由本组装点直接创建，
     # 不走调用方注入；其余 middleware 均由调用方按需注入（None = 不启用）。
+    flags = include_flags or frozenset()
     slots: dict[str, Any] = {
         "ToolExecutionFenceMiddleware": tool_execution_fence_middleware,
+        "ToolApprovalMiddleware": tool_approval_middleware,
         "ImageInjectionMiddleware": image_injection_middleware,
         "MCPToolDiscoveryMiddleware": mcp_tool_discovery_middleware,
         "ToolTimingMiddleware": create_tool_timing_middleware(),
@@ -196,9 +199,11 @@ def build_standard_agent_middleware(
         "AfterModelHistoryMiddleware": after_model_history_middleware,
         "ContextCompressionMiddleware": context_compression_middleware,
         "ContextUsageMiddleware": context_usage_middleware,
-        "ResponseTimestampMiddleware": (create_response_timestamp_middleware() if include_response_timestamp else None),
+        "ResponseTimestampMiddleware": (
+            create_response_timestamp_middleware() if "response_timestamp" in flags else None
+        ),
         "ToolCallNameNormalizerMiddleware": (
-            create_tool_call_name_normalizer_middleware(tools) if include_tool_call_normalizer else None
+            create_tool_call_name_normalizer_middleware(tools) if "tool_call_normalizer" in flags else None
         ),
         "ToolResultMiddleware": tool_result_middleware,
         "ToolErrorMiddleware": ToolErrorMiddleware(on_tool_error),

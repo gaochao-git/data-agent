@@ -37,6 +37,7 @@ from .middleware.image_injection import create_image_injection_middleware
 from .middleware.mcp_tool_discovery import MCPToolDiscoveryMiddleware
 from .middleware.steering import create_steering_middleware
 from .middleware.subagents import SubagentMiddleware, SubagentSpec
+from .middleware.tool_approval import create_tool_approval_middleware
 from .middleware.tool_call_history_repair import create_tool_call_history_repair_middleware
 from .middleware.tool_execution_fence import create_tool_execution_fence_middleware
 from .middleware.tool_result import create_tool_result_middleware
@@ -48,6 +49,7 @@ from .prompts.chat_data import (
 )
 from .runtime_options import AgentRuntimeOptions, get_chat_data_default_runtime_options
 from .tools.registry import (
+    APPROVAL_REQUIRED_TOOL_NAMES,
     DATA_EXPLORE_EXTRA_EXCLUDED_TOOL_NAMES,
     GENERAL_PURPOSE_EXTRA_EXCLUDED_TOOL_NAMES,
     PLAN_EXTRA_EXCLUDED_TOOL_NAMES,
@@ -74,6 +76,10 @@ class AgentRunControls:
     ``disable_user_interaction`` 独立于上述围栏组：无人值守运行（定时轮）
     置 True，工具装配时跳过 ``requires_user_interaction`` 的注册条目
     （ask_user_question），防止提问后无人应答导致轮次悬挂。
+
+    ``approval_mode``：``ask`` 时装配 ToolApprovalMiddleware，注册表标记
+    （``ToolSpec.approval_required``）的工具执行前中断询问用户；``auto`` 直接执行。
+    无人值守运行由调用方强制 ``auto``。
     """
 
     run_id: str | None = None
@@ -82,6 +88,7 @@ class AgentRunControls:
     admit_inbox_messages: Any = None
     steering_tracker: Any = None
     disable_user_interaction: bool = False
+    approval_mode: str = "auto"
 
     def is_complete(self) -> bool:
         return bool(
@@ -206,6 +213,13 @@ def _filter_tools_by_spec(tools: list, spec: AgentAssemblySpec) -> list:
     ]
 
 
+def _build_tool_approval_middleware(run_controls: "AgentRunControls | None") -> Any:
+    """ask 模式且非无人值守才装配审批中间件；auto/无人值守返回 None（零开销）。"""
+    if run_controls is None or run_controls.approval_mode != "ask" or run_controls.disable_user_interaction:
+        return None
+    return create_tool_approval_middleware()
+
+
 def assemble_tools(
     runtime_options: AgentRuntimeOptions,
     workspace_runtime: ConversationWorkspaceRuntime,
@@ -281,6 +295,17 @@ def _filter_subagent_tools(tools: list, excluded: frozenset) -> list:
     return [tool for tool in tools if str(getattr(tool, "name", "") or "") not in excluded]
 
 
+def _subagent_approval_exclusions(run_controls: "AgentRunControls | None") -> frozenset[str]:
+    """按需审批模式下子智能体不挂审批工具：子图不支持人工中断，委派删除/移动会绕过审批。
+
+    与 ``ask_user_question`` 同款处理——子智能体哲学是「不注册人工交互」，审批类
+    工具从能力面剔除；auto 模式行为不变（子智能体照常可用）。
+    """
+    if run_controls is None or run_controls.approval_mode != "ask" or run_controls.disable_user_interaction:
+        return frozenset()
+    return APPROVAL_REQUIRED_TOOL_NAMES
+
+
 def build_subagent_middleware(
     runtime_options: AgentRuntimeOptions,
     tools: list,
@@ -302,6 +327,7 @@ def build_subagent_middleware(
     ``memory_block`` 与主智能体同一份会话记忆条目（一致继承）：子图 system
     prompt 由此注入只读记忆段；未传或为空则不注入。
     """
+    base_excluded = SUBAGENT_BASE_EXCLUDED_TOOL_NAMES | _subagent_approval_exclusions(run_controls)
     specs: list[SubagentSpec] = []
     if runtime_options.explore_subagent_enabled:
         specs.append(
@@ -311,7 +337,7 @@ def build_subagent_middleware(
                 system_prompt=DATA_EXPLORE_SUBAGENT_PROMPT,
                 tools=_filter_subagent_tools(
                     tools,
-                    SUBAGENT_BASE_EXCLUDED_TOOL_NAMES | DATA_EXPLORE_EXTRA_EXCLUDED_TOOL_NAMES,
+                    base_excluded | DATA_EXPLORE_EXTRA_EXCLUDED_TOOL_NAMES,
                 ),
                 model=model,
                 model_id=model_id,
@@ -327,7 +353,7 @@ def build_subagent_middleware(
                 system_prompt=PLAN_SUBAGENT_PROMPT,
                 tools=_filter_subagent_tools(
                     tools,
-                    SUBAGENT_BASE_EXCLUDED_TOOL_NAMES | PLAN_EXTRA_EXCLUDED_TOOL_NAMES,
+                    base_excluded | PLAN_EXTRA_EXCLUDED_TOOL_NAMES,
                 ),
                 model=model,
                 model_id=model_id,
@@ -343,7 +369,7 @@ def build_subagent_middleware(
                 system_prompt=GENERAL_PURPOSE_SUBAGENT_PROMPT,
                 tools=_filter_subagent_tools(
                     tools,
-                    SUBAGENT_BASE_EXCLUDED_TOOL_NAMES | GENERAL_PURPOSE_EXTRA_EXCLUDED_TOOL_NAMES,
+                    base_excluded | GENERAL_PURPOSE_EXTRA_EXCLUDED_TOOL_NAMES,
                 ),
                 model=model,
                 model_id=model_id,
@@ -615,6 +641,8 @@ def create_agent_from_spec(
             tracker=run_controls.steering_tracker,
             state_schema=ChatDataAgentState,
         )
+    # 按需审批只对交互式 chat 生效；auto 模式不装配（零开销），无人值守强制 auto
+    tool_approval_middleware = _build_tool_approval_middleware(run_controls)
     after_model_history_middleware = None
     if persist_model_snapshot is not None:
         after_model_history_middleware = create_after_model_history_middleware(
@@ -624,6 +652,7 @@ def create_agent_from_spec(
     middleware = build_standard_agent_middleware(
         tools,
         tool_execution_fence_middleware=tool_execution_fence_middleware,
+        tool_approval_middleware=tool_approval_middleware,
         image_injection_middleware=image_injection_middleware,
         mcp_tool_discovery_middleware=(
             MCPToolDiscoveryMiddleware(
@@ -640,8 +669,7 @@ def create_agent_from_spec(
         context_usage_middleware=context_usage_middleware,
         tool_result_middleware=tool_result_middleware,
         after_model_history_middleware=after_model_history_middleware,
-        include_response_timestamp=True,
-        include_tool_call_normalizer=True,
+        include_flags=frozenset({"response_timestamp", "tool_call_normalizer"}),
     )
     agent = create_agent(
         model=model,

@@ -14,7 +14,7 @@
 """
 
 from dataclasses import dataclass, replace
-from typing import Literal, cast
+from typing import Literal
 
 WorkspaceBackend = Literal["local", "sandbox"]
 
@@ -56,15 +56,15 @@ def get_chat_data_default_runtime_options() -> AgentRuntimeOptions:
 def resolve_agent_runtime_options(
     *,
     user_id: str | None = None,
-    override: dict | None = None,
     explore_subagent_enabled: bool | None = None,
     plan_subagent_enabled: bool | None = None,
     general_purpose_subagent_enabled: bool | None = None,
 ) -> AgentRuntimeOptions:
     """解析最终运行选项。
 
-    仅在 ``CHAT_DATA_CAPABILITY_USER_OVERRIDABLE=true`` 时接受请求覆盖。生产环境
-    关闭该变量后，前端传入的任何值都不会改变服务端默认配置。
+    **部署能力只由服务端配置决定**：``workspace_backend`` / ``bash_enabled`` /
+    子智能体开关都来自 env 或配置表热值，不接受前端请求动态传参（前端仅保留
+    「权限选择」，审批模式单独走权限链路）。
 
     三个子智能体开关的默认值（``CHAT_DATA_DEFAULT_*_SUBAGENT_ENABLED``）支持
     运行时热值：async 调用方经 ``get_runtime_setting`` 解析后经参数传入，未传
@@ -78,22 +78,18 @@ def resolve_agent_runtime_options(
         base = replace(base, plan_subagent_enabled=plan_subagent_enabled)
     if general_purpose_subagent_enabled is not None:
         base = replace(base, general_purpose_subagent_enabled=general_purpose_subagent_enabled)
-    if override and _is_runtime_option_user_overridable():
-        backend = str(override.get("workspace_backend", base.workspace_backend) or base.workspace_backend)
-        if backend not in ("local", "sandbox"):
-            backend = base.workspace_backend
-        return AgentRuntimeOptions(
-            workspace_backend=cast(WorkspaceBackend, backend),
-            bash_enabled=_coerce_bool(override.get("bash_enabled"), base.bash_enabled),
-            explore_subagent_enabled=_coerce_bool(
-                override.get("explore_subagent_enabled"), base.explore_subagent_enabled
-            ),
-            plan_subagent_enabled=_coerce_bool(override.get("plan_subagent_enabled"), base.plan_subagent_enabled),
-            general_purpose_subagent_enabled=_coerce_bool(
-                override.get("general_purpose_subagent_enabled"), base.general_purpose_subagent_enabled
-            ),
-        )
-    return base
+    return replace(
+        base,
+        explore_subagent_enabled=explore_subagent_enabled
+        if explore_subagent_enabled is not None
+        else base.explore_subagent_enabled,
+        plan_subagent_enabled=plan_subagent_enabled
+        if plan_subagent_enabled is not None
+        else base.plan_subagent_enabled,
+        general_purpose_subagent_enabled=general_purpose_subagent_enabled
+        if general_purpose_subagent_enabled is not None
+        else base.general_purpose_subagent_enabled,
+    )
 
 
 async def get_subagent_hot_defaults() -> dict:
@@ -111,23 +107,3 @@ async def get_subagent_hot_defaults() -> dict:
             await get_runtime_setting("CHAT_DATA_DEFAULT_GENERAL_PURPOSE_SUBAGENT_ENABLED")
         ),
     }
-
-
-def _coerce_bool(value: object, default: bool) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in {"1", "true", "yes", "y", "on"}:
-            return True
-        if normalized in {"0", "false", "no", "n", "off"}:
-            return False
-    if isinstance(value, (int, float)):
-        return bool(value)
-    return default
-
-
-def _is_runtime_option_user_overridable() -> bool:
-    from ..services.runtime_config import is_chat_data_runtime_option_user_overridable
-
-    return is_chat_data_runtime_option_user_overridable()

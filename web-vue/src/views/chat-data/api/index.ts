@@ -102,16 +102,10 @@ type DatasourceGroupMetadataSyncPayload = { template_table_names: string[] }
 
 // ============ 技能 API ============
 
-export interface ChatDataRuntimeOptions {
-  workspace_backend: 'local' | 'sandbox'
-  bash_enabled: boolean
-}
-
 export interface ChatDataRuntimeConfig {
   models: ChatDataModelOption[]
-  runtime_options?: ChatDataRuntimeOptions
-  /** 是否允许用户在前端手动覆盖系统默认运行选项。 */
-  user_overridable?: boolean
+  /** 工具审批模式默认值（配置表 > env）：ask=按需审批、auto=自动审批。 */
+  approval_mode?: 'ask' | 'auto'
   default_row_limit?: number
   query_cache_enabled?: boolean
 }

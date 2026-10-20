@@ -260,3 +260,46 @@ def test_chat_data_agent_spec_applies_env_mode(monkeypatch):
     finally:
         monkeypatch.delenv(data_agent.MCP_TOOL_SEARCH_ENV, raising=False)
         importlib.reload(data_agent)
+
+
+def test_approval_middleware_only_for_interactive_ask_mode():
+    """ask 模式装配审批中间件；auto/无人值守不装配（零开销、不悬挂）。"""
+    from apps.chat_data_app.agent.data_agent import _build_tool_approval_middleware
+
+    assert _build_tool_approval_middleware(None) is None
+    assert _build_tool_approval_middleware(AgentRunControls(approval_mode="ask")) is not None
+    assert _build_tool_approval_middleware(AgentRunControls(approval_mode="auto")) is None
+    assert _build_tool_approval_middleware(AgentRunControls(approval_mode="ask", disable_user_interaction=True)) is None
+
+
+def test_ask_mode_subagents_exclude_approval_tools(monkeypatch):
+    """按需审批下子智能体不得持有审批工具：否则委派给 general-purpose 可绕过审批。"""
+    from types import SimpleNamespace
+
+    from apps.chat_data_app.agent import data_agent as data_agent_module
+
+    captured: dict = {}
+
+    class _Recorder:
+        def __init__(self, specs, **_kwargs):
+            captured["specs"] = specs
+
+    monkeypatch.setattr(data_agent_module, "SubagentMiddleware", _Recorder)
+
+    tools = [SimpleNamespace(name=name) for name in ("file_read", "file_write", "file_delete", "file_move", "bash_run")]
+    options = AgentRuntimeOptions(general_purpose_subagent_enabled=True)
+
+    data_agent_module.build_subagent_middleware(
+        options, tools, model=object(), run_controls=AgentRunControls(approval_mode="ask")
+    )
+    ask_names = {tool.name for spec in captured["specs"] for tool in spec.tools}
+    assert "file_delete" not in ask_names
+    assert "file_move" not in ask_names
+    assert "file_read" in ask_names
+
+    data_agent_module.build_subagent_middleware(
+        options, tools, model=object(), run_controls=AgentRunControls(approval_mode="auto")
+    )
+    auto_names = {tool.name for spec in captured["specs"] for tool in spec.tools}
+    assert "file_delete" in auto_names
+    assert "file_move" in auto_names

@@ -19,11 +19,6 @@ interface ModelOption {
   thinking?: ModelThinkingOption
 }
 
-export interface ChatDataRuntimeOptions {
-  workspace_backend: 'local' | 'sandbox'
-  bash_enabled: boolean
-}
-
 interface Props {
   input: string
   placeholder: string
@@ -44,10 +39,8 @@ interface Props {
   inputFocused?: boolean
   showSkillButton?: boolean
   submitTitle?: string
-  /** 系统默认运行选项（来自 /config 的 runtime_options）。 */
-  runtimeOptions?: ChatDataRuntimeOptions
-  /** 是否允许用户手动选择运行选项。关闭时面板只读。 */
-  userOverridable?: boolean
+  /** 工具审批模式（/config 下发默认值；前端唯一常驻的权限选择项）。 */
+  approvalMode?: 'ask' | 'auto'
 }
 
 /** 划选引用片段 chip（props 内联结构，供 chip 与预览卡渲染）。 */
@@ -63,7 +56,7 @@ const props = withDefaults(defineProps<Props>(), {
   inputFocused: false,
   showSkillButton: true,
   submitTitle: '发送 (Enter)',
-  userOverridable: false,
+  approvalMode: 'ask',
 })
 const inputBoxRef = ref<InstanceType<typeof ChatInputBox> | null>(null)
 const sandboxMenuRef = ref<HTMLElement | null>(null)
@@ -87,56 +80,28 @@ const emit = defineEmits<{
   'update:selectedModel': [value: string]
   'update:enableDeepThinking': [value: boolean]
   'update:thinkingEffort': [value: string]
-  'update:runtime-options': [value: ChatDataRuntimeOptions]
+  'update:approvalMode': [value: 'ask' | 'auto']
 }>()
 
-// ---- 能力面板：参考「模型选择 + 深度思考」的聚合下拉 ----
-// 一个 pill 下拉内完成两件事：上面选隔离模式（本地/沙箱），下面放运行模式开关 Bash（参考深度思考）。
-const sandboxModeOptions: { value: 'local' | 'sandbox'; label: string; desc: string; icon: string }[] = [
-  { value: 'local', label: '本地', desc: '在本地目录进行操作', icon: 'fa-folder' },
-  { value: 'sandbox', label: '沙箱', desc: '在隔离沙箱中操作', icon: 'fa-box' },
+// ---- 权限选择：审批模式常驻 pill（隔离后端 / Bash 属部署能力，由服务端配置决定，前端不再展示或传参） ----
+const approvalMode = ref<'ask' | 'auto'>(props.approvalMode === 'auto' ? 'auto' : 'ask')
+const approvalModeOptions: { value: 'ask' | 'auto'; label: string; desc: string; icon: string }[] = [
+  { value: 'ask', label: '按需审批', desc: '删除/移动等操作执行前确认', icon: 'fa-shield-halved' },
+  { value: 'auto', label: '自动审批', desc: '工具直接执行，不打断', icon: 'fa-bolt' },
 ]
-
-/** 初始隔离模式：本地则按默认，否则一律沙箱。 */
-const workspaceBackend = ref<'local' | 'sandbox'>(
-  props.runtimeOptions?.workspace_backend === 'sandbox' ? 'sandbox' : 'local'
-)
-/** Bash 是唯一影响工具注册的开关，与工作区后端独立。 */
-const bashEnabled = ref<boolean>(
-  !!props.runtimeOptions?.bash_enabled
+const approvalModeLabel = computed(
+  () => approvalModeOptions.find(option => option.value === approvalMode.value)?.label || '按需审批'
 )
 
-const sandboxModeMeta = computed(
-  () => sandboxModeOptions.find(o => o.value === workspaceBackend.value) ?? sandboxModeOptions[0]!
-)
-// pill 触发文字：模式 +（Bash 开启时附加 ·Bash 标识）
-const sandboxTriggerLabel = computed(() =>
-  bashEnabled.value ? `${sandboxModeMeta.value.label}·Bash` : sandboxModeMeta.value.label
-)
-const sandboxTriggerIcon = computed(() => sandboxModeMeta.value.icon)
-
-const emitRuntimeOptions = () => {
-  emit('update:runtime-options', {
-    workspace_backend: workspaceBackend.value,
-    bash_enabled: bashEnabled.value,
-  })
+const selectApprovalMode = (mode: 'ask' | 'auto') => {
+  approvalMode.value = mode
+  sandboxMenuOpen.value = false
+  emit('update:approvalMode', mode)
 }
 
-const selectSandboxMode = (mode: 'local' | 'sandbox') => {
-  workspaceBackend.value = mode
-  emitRuntimeOptions()
-}
-
-const toggleBash = () => {
-  bashEnabled.value = !bashEnabled.value
-  emitRuntimeOptions()
-}
-
-watch(() => props.runtimeOptions, (value) => {
-  if (!value) return
-  workspaceBackend.value = value.workspace_backend === 'sandbox' ? 'sandbox' : 'local'
-  bashEnabled.value = !!value.bash_enabled
-}, { deep: true })
+watch(() => props.approvalMode, (value) => {
+  approvalMode.value = value === 'auto' ? 'auto' : 'ask'
+})
 
 const handleDocumentClick = (event: MouseEvent) => {
   const target = event.target
@@ -268,69 +233,49 @@ onBeforeUnmount(() => {
           </button>
         </div>
       </div>
-      <!-- 能力面板：隔离模式 pill 下拉（上面选隔离模式，下面运行模式开关 Bash，参考模型选择+深度思考） -->
-      <template v-if="userOverridable">
-        <div ref="sandboxMenuRef" class="relative">
-          <div class="flex items-center gap-1.5 whitespace-nowrap rounded-full px-2 py-1 hover:bg-black/[0.05]">
-            <button
-              type="button"
-              class="flex items-center gap-1 border-none bg-transparent p-0 text-xs cursor-pointer"
-              title="切换隔离模式 / 运行模式"
-              @click="sandboxMenuOpen = !sandboxMenuOpen"
-            >
-              <i class="fa-solid text-[10px]" :class="[sandboxTriggerIcon, workspaceBackend === 'local' ? 'text-green-500' : 'text-purple-500']"></i>
-              <span :class="['truncate', workspaceBackend === 'local' ? 'text-green-600' : 'text-purple-600']">{{ sandboxTriggerLabel }}</span>
-              <i class="fa-solid fa-chevron-down text-[8px] text-gray-400"></i>
-            </button>
-          </div>
-          <!-- 下拉菜单：上面选隔离模式，下面运行模式开关 -->
-          <div
-            v-if="sandboxMenuOpen"
-            class="absolute left-0 bottom-8 z-50 w-[230px] overflow-hidden rounded-lg border border-gray-200 bg-white py-1 text-xs text-gray-600 shadow-lg"
+      <!-- 权限选择：常驻 pill（审批模式是前端唯一可调权限项） -->
+      <div ref="sandboxMenuRef" class="relative">
+        <div class="flex items-center gap-1.5 whitespace-nowrap rounded-full px-2 py-1 hover:bg-black/[0.05]">
+          <button
+            type="button"
+            class="flex items-center gap-1 border-none bg-transparent p-0 text-xs cursor-pointer"
+            title="选择工具审批模式"
+            @click="sandboxMenuOpen = !sandboxMenuOpen"
           >
-            <!-- 隔离模式列表 -->
-            <button
-              v-for="opt in sandboxModeOptions"
-              :key="opt.value"
-              type="button"
-              :class="[
-                'flex w-full items-center justify-between gap-2 border-none bg-transparent px-3 py-2 text-left cursor-pointer',
-                workspaceBackend === opt.value ? 'text-blue-600 bg-blue-50' : 'text-gray-600 hover:bg-gray-50'
-              ]"
-              @click="selectSandboxMode(opt.value)"
-            >
-              <div class="flex min-w-0 items-center gap-2">
-                <i class="fa-solid text-[11px] text-gray-400" :class="opt.icon"></i>
-                <div class="min-w-0">
-                  <div class="font-medium">{{ opt.label }}</div>
-                  <div class="text-[11px] text-gray-400">{{ opt.desc }}</div>
-                </div>
-              </div>
-              <i v-if="workspaceBackend === opt.value" class="fa-solid fa-check text-[10px] flex-shrink-0"></i>
-            </button>
-            <!-- 分隔线 + Bash 开关（参考深度思考） -->
-            <div class="my-1 border-t border-gray-100"></div>
-            <button
-              type="button"
-              :class="[
-                'flex w-full items-center justify-between gap-3 border-none bg-transparent px-3 py-2 text-left text-xs cursor-pointer',
-                'hover:bg-gray-50'
-              ]"
-              role="switch"
-              :aria-checked="bashEnabled"
-              :title="bashEnabled ? '关闭 Bash 执行' : '开启 Bash 执行'"
-              @click="toggleBash"
-            >
-              <span class="flex min-w-0 items-center gap-2">
-                <i class="fa-solid fa-terminal text-[11px]" :class="bashEnabled ? 'text-orange-500' : 'text-gray-400'"></i>
-                <span class="truncate">Bash</span>
-              </span>
-              <span :class="['cap-switch', bashEnabled && 'cap-switch-on']"><span class="cap-switch-thumb"></span></span>
-            </button>
-          </div>
+            <i
+              class="fa-solid text-[10px]"
+              :class="approvalMode === 'ask' ? 'fa-shield-halved text-blue-500' : 'fa-bolt text-amber-500'"
+            ></i>
+            <span :class="['truncate', approvalMode === 'ask' ? 'text-blue-600' : 'text-amber-600']">{{ approvalModeLabel }}</span>
+            <i class="fa-solid fa-chevron-down text-[8px] text-gray-400"></i>
+          </button>
         </div>
-      </template>
-      <!-- userOverridable=false 时完全隐藏隔离模式选择器 -->
+        <div
+          v-if="sandboxMenuOpen"
+          class="absolute left-0 bottom-8 z-50 w-[240px] overflow-hidden rounded-lg border border-gray-200 bg-white py-1 text-xs text-gray-600 shadow-lg"
+        >
+          <div class="px-3 pb-0.5 pt-1 text-[11px] text-gray-400">工具审批模式</div>
+          <button
+            v-for="opt in approvalModeOptions"
+            :key="opt.value"
+            type="button"
+            :class="[
+              'flex w-full items-center justify-between gap-2 border-none bg-transparent px-3 py-2 text-left cursor-pointer',
+              approvalMode === opt.value ? 'text-blue-600 bg-blue-50' : 'text-gray-600 hover:bg-gray-50'
+            ]"
+            @click="selectApprovalMode(opt.value)"
+          >
+            <div class="flex min-w-0 items-center gap-2">
+              <i class="fa-solid text-[11px] text-gray-400" :class="opt.icon"></i>
+              <div class="min-w-0">
+                <div class="font-medium">{{ opt.label }}</div>
+                <div class="text-[11px] text-gray-400">{{ opt.desc }}</div>
+              </div>
+            </div>
+            <i v-if="approvalMode === opt.value" class="fa-solid fa-check text-[10px] flex-shrink-0"></i>
+          </button>
+        </div>
+      </div>
 
       <slot name="toolbar-extra" />
     </template>

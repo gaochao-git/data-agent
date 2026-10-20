@@ -296,6 +296,8 @@ class AgentRunRuntime:
                     # 定时轮派发时 runtime_context 带无人值守标记：装配剔除
                     # ask_user_question（见 agent_schedule_runtime._build_runtime_context）
                     disable_user_interaction=bool(context.get("disable_user_interaction")),
+                    # 审批模式随 runtime_context 透传（定时轮/评测为 auto，chat 轮为用户选择/默认）
+                    approval_mode=str(context.get("approval_mode") or "auto"),
                     run_id=prepared["run_id"],
                     owner_token=prepared["owner_token"],
                     stream_event_id_provider=prepared.get("stream_event_id_provider"),

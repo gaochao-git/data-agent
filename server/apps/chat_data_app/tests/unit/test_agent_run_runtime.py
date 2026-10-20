@@ -910,3 +910,23 @@ def test_build_stream_factory_passes_unattended_flag():
     factory = runtime._build_stream_factory(prepared)
     next(iter(factory()), None)
     assert captured["request"].disable_user_interaction is False
+
+
+def test_build_stream_factory_passes_approval_mode():
+    """runtime_context 的审批模式透传到流请求；缺失时回落 auto（兼容旧 Run 行）。"""
+    captured: dict = {}
+
+    def fake_stream_generator(request):
+        captured["request"] = request
+        yield ""
+
+    runtime = AgentRunRuntime(inbox_service=object(), event_service=object(), event_bus=object())
+    runtime.set_stream_generator(fake_stream_generator)
+    prepared = _prepared()
+    prepared["runtime_context"] = {"query": "汇总", "approval_mode": "ask"}
+    next(iter(runtime._build_stream_factory(prepared)()), None)
+    assert captured["request"].approval_mode == "ask"
+
+    prepared["runtime_context"] = {"query": "汇总"}
+    next(iter(runtime._build_stream_factory(prepared)()), None)
+    assert captured["request"].approval_mode == "auto"

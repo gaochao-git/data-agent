@@ -113,7 +113,8 @@ ChatData 文件型数据统一位于 `CHAT_DATA_HOME`（**必填**，应用唯�
 | 灵活（`true`） | 本地（`local`） | agent 可执行任意代码，子进程以宿主权限运行、无容器隔离；Bash 校验被绕过即宿主直接暴露。**仅在可信 / 纯本地开发场景使用**，勿用于多租户或暴露环境 |
 
 - **文件工具（`file_read` / `file_edit` / `file_write` / `file_move` / `file_copy` / `file_delete` / `file_glob` / `file_grep` / `dir_create` / `dir_list` / `dir_delete` / `present_artifacts`）始终可用且始终严格路径管控**。工具只调用 `ConversationWorkspaceRuntime`；运行时将读写、目录遍历和产物解析委托给 `WorkspaceBackend`。会话开始前构建可见技能快照，模型通过 `file_read` 只读访问 `/mnt/skills/<name>/SKILL.md` 及其在技能入口中声明的资源。`local` 直接访问受控会话目录，`sandbox` 经 OpenSandbox Files API 访问一次性沙箱副本，不允许工具层按 backend 分支或直接读宿主路径。只有 Bash 工具会在受控模式（`bash_enabled=false`）下不注册。
-- `CHAT_DATA_CAPABILITY_USER_OVERRIDABLE=false` 时前端不展示运行模式切换 UI，完全依赖系统默认配置。
+- **隔离模式 / Bash 属于部署能力**：只由 `CHAT_DATA_DEFAULT_WORKSPACE_BACKEND` / `CHAT_DATA_DEFAULT_BASH_ENABLED`（env 或部署配置）决定，**不再接受前端动态传参**（旧 `runtime_options` 请求字段已被忽略并移除，`CHAT_DATA_CAPABILITY_USER_OVERRIDABLE` 一并下线）。
+- **工具审批（前端唯一常驻的权限选择）**：注册表 `ToolSpec.approval_required` 标记需人工确认的工具（当前 `file_delete` / `dir_delete` / `file_move`）；默认模式取配置表 `CHAT_DATA_DEFAULT_APPROVAL_MODE`（`ask`=按需审批，`auto`=自动审批，env 兜底），用户可在会话内切换；无人值守运行（定时任务/评测）强制 `auto`，不会出现无人应答的悬挂。中间件实现见 `agent/middleware/tool_approval.py`。
 
 ```text
 index.vue

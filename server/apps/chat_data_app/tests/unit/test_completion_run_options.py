@@ -14,7 +14,10 @@ os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 
-from apps.chat_data_app.agent.run.completion_options import parse_completion_run_options  # noqa: E402
+from apps.chat_data_app.agent.run.completion_options import (  # noqa: E402
+    parse_approval_mode,
+    parse_completion_run_options,
+)
 from apps.chat_data_app.evaluate.accuracy.runner import AccuracyRunConfig, build_completion_options  # noqa: E402
 
 
@@ -35,3 +38,22 @@ def test_accuracy_runner_builds_unattended_options():
     assert options["disable_user_interaction"] is True
     # 解析回读闭环：options → CompletionRunOptions → runtime_context 消费口径
     assert parse_completion_run_options(options).disable_user_interaction is True
+
+
+def test_parse_approval_mode_whitelist():
+    assert parse_approval_mode("ask") == "ask"
+    assert parse_approval_mode(" AUTO ") == "auto"
+    assert parse_approval_mode("full") == ""  # 未开放的模式回落系统默认
+    assert parse_approval_mode(None) == ""
+
+
+def test_parse_completion_options_carries_approval_mode():
+    options = parse_completion_run_options({"approval_mode": "ask"})
+    assert options.approval_mode == "ask"
+    assert parse_completion_run_options({}).approval_mode == ""
+
+
+def test_accuracy_runner_forces_auto_approval():
+    options = build_completion_options(AccuracyRunConfig(), datasource_id="ds_a", semantic_config_id="sc_1")
+    assert options["approval_mode"] == "auto"
+    assert parse_completion_run_options(options).approval_mode == "auto"

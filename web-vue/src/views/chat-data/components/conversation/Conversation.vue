@@ -15,7 +15,6 @@ import { useWorkspaceFileMention, type WorkspaceFilePick } from '../../composabl
 import { useQuotedSnippets } from '../../composables/useQuotedSnippets'
 import { answerUserQuestion, cancelConversationRun, cancelSteerMessage, cancelUserQuestion, createDashboardFromSpec, getConversationWorkspaceFileContent, getConversationWorkspaceFiles, getConversationWorkspaceRawFile, getPendingUserQuestion, importConversationWorkspaceSkill, listSteerMessages, steerConversation, streamRunEvents, updateSteerMessage, uploadFile } from '../../api'
 import type { Dashboard } from '../../api/dashboard'
-import type { ChatDataRuntimeOptions } from '../../api'
 import QuickQueries, { type FallbackQuery } from '../QuickQueries.vue'
 import ChartSpecRenderer from '../ChartSpecRenderer.vue'
 import SkillManager from './SkillManager.vue'
@@ -95,9 +94,8 @@ const emit = defineEmits<{
 
 const { generateSqlStream, stopGeneration } = useSqlGenerator()
 
-const userOverridable = ref(false)
-const defaultRuntimeOptions = ref<ChatDataRuntimeOptions>({ workspace_backend: 'local', bash_enabled: false })
-const selectedRuntimeOptions = ref({ ...defaultRuntimeOptions.value })
+// 权限选择：唯一前端可调项（审批模式）；隔离后端/Bash 属部署配置，不再下发前端
+const approvalMode = ref<'ask' | 'auto'>('ask')
 // 模型列表与运行时配置：与其他入口共用同一份加载逻辑
 const {
   modelOptions,
@@ -1414,13 +1412,7 @@ const startSkillCreation = async () => {
 
 watch(chatDataConfig, (data) => {
   if (!data) return
-  const cfg = data.runtime_options
-  defaultRuntimeOptions.value = {
-    workspace_backend: cfg?.workspace_backend === 'sandbox' ? 'sandbox' : 'local',
-    bash_enabled: !!cfg?.bash_enabled,
-  }
-  userOverridable.value = !!data.user_overridable
-  selectedRuntimeOptions.value = { ...defaultRuntimeOptions.value }
+  approvalMode.value = data.approval_mode === 'auto' ? 'auto' : 'ask'
 })
 
 // 当前选中模型不在注册表中时回填默认模型（如配置变更后）
@@ -1440,8 +1432,8 @@ const selectCommandSkill = (skill: SkillInfo) => {
   inputBarRef.value?.focus()
 }
 
-const onRuntimeOptionsChange = (options: { workspace_backend: 'local' | 'sandbox'; bash_enabled: boolean }) => {
-  selectedRuntimeOptions.value = options
+const onApprovalModeChange = (mode: 'ask' | 'auto') => {
+  approvalMode.value = mode
 }
 
 const clearSelectedSkill = (name: string) => {
@@ -2104,9 +2096,9 @@ const submitAnalysisQuery = async (
         },
         fileSelections: mentionFileSelections,
         quotedSnippets: quotedSnippetsSnapshot,
+        approvalMode: approvalMode.value,
         enableThinking: enableDeepThinking.value,
         thinkingEffort: thinkingEffort.value,
-        runtimeOptions: selectedRuntimeOptions.value,
         onContextCompression: (event) => appendContextCompressionEvent(event),
         fileIds: options.fileIds,
         queuedMessageId: options.queuedMessageId,
@@ -2875,8 +2867,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
             :selected-skills="selectedSkills"
             :selected-mention-files="mentionedFiles"
             :quoted-snippets="quotedSnippets"
-            :runtime-options="selectedRuntimeOptions"
-            :user-overridable="userOverridable"
+            :approval-mode="approvalMode"
             :model-options="modelOptions"
             :is-generating="runBusy"
             :can-submit="runBusy ? Boolean(input.trim() && !isSteering) : Boolean((input.trim() || hasCompletedPendingFiles || quotedSnippets.length > 0) && selectedDatasource)"
@@ -2891,7 +2882,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
             @upload-file="handleUploadFile"
             @paste-files="handlePasteFiles"
             @open-skill-manager="isSkillManagerOpen = true"
-            @update:runtime-options="onRuntimeOptionsChange"
+            @update:approval-mode="onApprovalModeChange"
             @keydown="handleKeyDown"
             @focus="inputFocused = true"
             @blur="inputFocused = false"

@@ -115,7 +115,10 @@ from .services.memory.conversation_memory_service import (
     after_agent_turn_with_memory,
     render_session_memory_block,
 )
-from .services.runtime_config import LLM_FIRST_TOKEN_TIMEOUT_SECONDS
+from .services.runtime_config import (
+    LLM_FIRST_TOKEN_TIMEOUT_SECONDS,
+    get_default_approval_mode,
+)
 from .services.setting_service import get_runtime_setting
 from .sse_protocol import (
     SSE_EVENT_CONTEXT_COMPRESSION,
@@ -1140,6 +1143,7 @@ async def _generate_chat_data_stream(
                 stream_event_id_provider=stream_event_id_provider,
                 # 无人值守标记必须随转发重建透传，否则在内层被默认值覆盖
                 disable_user_interaction=req.disable_user_interaction,
+                approval_mode=req.approval_mode,
             ),
             log_phase=log_phase,
         ):
@@ -1555,7 +1559,6 @@ async def _run_chat_data_agent_stream(
     enable_thinking = req.enable_thinking
     thinking_effort = req.thinking_effort
     skill_names = req.skill_names
-    options = req.options
     file_ids = req.file_ids
     run_id = req.run_id
     adopted_messages = req.adopted_messages
@@ -1567,6 +1570,8 @@ async def _run_chat_data_agent_stream(
     stream_started_wall_ms = req.stream_started_wall_ms
     # 无人值守运行（定时轮派发）：工具装配剔除 ask_user_question
     disable_user_interaction = req.disable_user_interaction
+    # 审批模式：ask=注册表标记的工具执行前中断询问；auto=直接执行
+    approval_mode = req.approval_mode
     selected_files = parse_file_selections(file_selections)
     try:
         # 无依赖的准备项一次并行：语义上下文（含数据源校验）/ 子智能体热默认 /
@@ -1587,9 +1592,9 @@ async def _run_chat_data_agent_stream(
             _resolve_file_attachments(file_ids, user_id=user_id, thread_id=thread_id),
         )
         datasource_id = semantic_context.datasource_id
+        # 部署能力（隔离后端/Bash）只由服务端配置决定：不再接受请求级 runtime_options 覆盖
         runtime_options = resolve_agent_runtime_options(
             user_id=user_id,
-            override=(options or {}).get("runtime_options"),
             **hot_defaults,
         )
         log_phase("prepare_inputs")
@@ -1750,6 +1755,7 @@ async def _run_chat_data_agent_stream(
                     admit_inbox_messages=partial(_admit_agent_inbox_messages, callbacks),
                     steering_tracker=steering_tracker,
                     disable_user_interaction=disable_user_interaction,
+                    approval_mode=approval_mode,
                 ),
                 persist_model_snapshot=partial(_persist_agent_model_snapshot, callbacks),
             )
@@ -1858,6 +1864,12 @@ async def sql_completion_handler(
 
     # 保持懒创建会话；数据源组在生成流开始时写入业务会话表并校验。
     await conversation.get_or_create_conversation(AGENT_ID, conversation_id, user_id)
+    # 有效审批模式：无人值守一律 auto（不可能弹窗）；否则用户显式选择优先，
+    # 未传时回落配置表默认（管理页「运行配置」可改，env 兜底）。
+    if run_options.disable_user_interaction:
+        effective_approval_mode = "auto"
+    else:
+        effective_approval_mode = run_options.approval_mode or await get_default_approval_mode()
     runtime_context = {
         # 明确执行队列消息时，模型输入来自 adopted_messages，不能再把
         # completion 的展示文本作为第二条当前用户消息注入。
@@ -1877,6 +1889,7 @@ async def sql_completion_handler(
         # 无人值守标记（评测/批量等内部调用方经 options 传入）：装配剔除
         # ask_user_question；chat 入口恒 False
         "disable_user_interaction": run_options.disable_user_interaction,
+        "approval_mode": effective_approval_mode,
     }
     run_id, adopted_messages = await agent_inbox_service.start_run(
         conversation_id,

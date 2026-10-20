@@ -1,7 +1,7 @@
 /**
  * 模型列表加载：/config 下发的模型注册表（含思考能力声明）。
  * 主对话、SQL 助手、定时任务共用，避免各入口重复拉取与解析；
- * 需要运行时配置（runtime_options / user_overridable）的入口消费 config。
+ * 需要默认审批模式（approval_mode）的入口消费 config。
  */
 import { computed, ref } from 'vue'
 
@@ -9,7 +9,7 @@ import { getChatDataConfig } from '../api'
 import type { ChatDataRuntimeConfig } from '../api'
 import type { ChatDataModelOption } from '../types'
 
-// 状态提升到模块级：config 下发的是会话期静态数据（models.json 注册表 + 运行时选项），
+// 状态提升到模块级：config 下发的是会话期静态数据（模型注册表 + 默认审批模式），
 // 且消费方（主对话）会因新建任务 conversationKey++ 强制重挂载，实例级缓存会被清空、
 // 每次点「新建任务」都重复请求 /config。共享后重挂载直接复用缓存，inflight 去重也随之跨实例生效。
 const modelOptions = ref<ChatDataModelOption[]>([])

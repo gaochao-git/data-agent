@@ -117,3 +117,14 @@ def test_user_interaction_tools_are_marked():
     assert any("ask_user_question" in spec.provides and spec.requires_user_interaction for spec in TOOL_SPECS), (
         "ask_user_question 丢失 requires_user_interaction 标记"
     )
+
+
+def test_approval_required_tools_are_declared_and_valid():
+    """审批工具名必须是注册表实际提供的工具（防拼写错误导致审批形同虚设）。"""
+    from apps.chat_data_app.agent.tools.registry import APPROVAL_REQUIRED_TOOL_NAMES, provided_tool_names
+
+    assert sorted(APPROVAL_REQUIRED_TOOL_NAMES) == ["dir_delete", "file_delete", "file_move"]
+    assert APPROVAL_REQUIRED_TOOL_NAMES.issubset(provided_tool_names())
+    # 读写/检索不打断
+    assert "file_read" not in APPROVAL_REQUIRED_TOOL_NAMES
+    assert "file_write" not in APPROVAL_REQUIRED_TOOL_NAMES

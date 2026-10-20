@@ -17,6 +17,7 @@ from apps.chat_data_app.agent.agent_runtime import (
 # build_standard_agent_middleware 的可选注入槽位 -> 对应中间件注册名
 _OPTIONAL_SLOTS = {
     "tool_execution_fence_middleware": "ToolExecutionFenceMiddleware",
+    "tool_approval_middleware": "ToolApprovalMiddleware",
     "image_injection_middleware": "ImageInjectionMiddleware",
     "mcp_tool_discovery_middleware": "MCPToolDiscoveryMiddleware",
     "tool_call_history_repair_middleware": "ToolCallHistoryRepairMiddleware",
@@ -36,10 +37,10 @@ _MANDATORY_NAMES = [
     "ToolErrorMiddleware",
 ]
 
-# include_* 开关 -> 对应中间件注册名
+# include_flags 取值 -> 对应中间件注册名
 _FLAG_SLOTS = {
-    "include_response_timestamp": "ResponseTimestampMiddleware",
-    "include_tool_call_normalizer": "ToolCallNameNormalizerMiddleware",
+    "response_timestamp": "ResponseTimestampMiddleware",
+    "tool_call_normalizer": "ToolCallNameNormalizerMiddleware",
 }
 
 
@@ -70,10 +71,12 @@ def test_assembled_order_matches_canonical_order_for_all_combinations():
                 name = _OPTIONAL_SLOTS[slot]
                 kwargs[slot] = SimpleNamespace(name=name)
                 enabled[slot] = name
+        enabled_flags: set[str] = set()
         for flag, on in zip(flag_names, bits[len(slot_names) :], strict=True):
-            kwargs[flag] = on
             if on:
+                enabled_flags.add(flag)
                 enabled[flag] = _FLAG_SLOTS[flag]
+        kwargs["include_flags"] = frozenset(enabled_flags)
 
         middleware = build_standard_agent_middleware([], **kwargs)
         actual = [getattr(item, "name", "") for item in middleware]
