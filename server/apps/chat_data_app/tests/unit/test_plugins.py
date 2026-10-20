@@ -108,7 +108,7 @@ def test_parse_manifest_allows_mcp_only_and_ignores_unknown_fields():
         {
             **VALID_MANIFEST,
             "skills": [],
-            "mcp_servers": [{"id": "fs-ro", "transport": "stdio", "command": "npx"}],
+            "mcp_servers": [{"id": "fs-ro", "transport": "streamable_http", "url": "https://mcp.example.com/mcp"}],
             "future_field": {"anything": True},
         }
     )
@@ -239,7 +239,7 @@ def _install_default_plugin():
         _build_zip(
             {
                 **VALID_MANIFEST,
-                "mcp_servers": [{"id": "fs-ro", "transport": "stdio", "command": "npx"}],
+                "mcp_servers": [{"id": "fs-ro", "transport": "streamable_http", "url": "https://mcp.example.com/mcp"}],
             }
         )
     )
@@ -548,3 +548,32 @@ async def test_service_list_paginates_sorted_by_name(monkeypatch):
     assert page1["total"] == 3
     assert [item["name"] for item in page1["plugins"]] == ["a-plugin", "b-plugin"]
     assert [item["name"] for item in page2["plugins"]] == ["c-plugin"]
+
+
+def test_install_plugin_rejects_mcp_server_failing_admission():
+    """插件声明的 MCP server 未通过准入（远程非 https）→ 拒绝安装，不落盘。"""
+    manifest = {
+        **VALID_MANIFEST,
+        "mcp_servers": [{"id": "remote", "transport": "streamable_http", "url": "http://remote.example.com/mcp"}],
+    }
+    with pytest.raises(PluginInstallError, match="未通过准入"):
+        install_plugin_from_zip_bytes(_build_zip(manifest))
+    assert not (plugin_loader.plugins_root() / "ops-readonly").exists()
+
+
+def test_mcp_server_admission_view_reports_ok_and_errors():
+    """管理页 MCP server 准入视图：通过/未通过 + 原因列表。"""
+    ok = plugin_service._mcp_server_admission_view(
+        {"id": "fault-db", "transport": "streamable_http", "url": "https://mcp.example.com/mcp"}
+    )
+    assert ok == {"ok": True, "errors": [], "warnings": []}
+
+    bad = plugin_service._mcp_server_admission_view(
+        {"id": "fault-db", "transport": "streamable_http", "url": "http://remote.example.com/mcp"}
+    )
+    assert bad["ok"] is False
+    assert any("https_required" in error for error in bad["errors"])
+
+    invalid = plugin_service._mcp_server_admission_view({"id": "x", "transport": "websocket"})
+    assert invalid["ok"] is False
+    assert invalid["errors"]

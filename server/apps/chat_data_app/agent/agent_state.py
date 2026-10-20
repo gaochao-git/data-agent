@@ -27,6 +27,19 @@ def merge_context_compression_events(
     return merged
 
 
+def merge_approval_grants(existing: list[str] | None, new: list[str] | None) -> list[str]:
+    """合并会话级审批许可（``tool:<name>`` / ``mcp_server:<id>``），去重保序。"""
+    merged: list[str] = []
+    seen: set[str] = set()
+    for grant in [*(existing or []), *(new or [])]:
+        normalized = str(grant or "").strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        merged.append(normalized)
+    return merged
+
+
 def merge_discovered_tool_names(
     existing: list[str] | None,
     new: list[str] | None,
@@ -114,4 +127,6 @@ class ChatDataAgentState(AgentState, total=False):
     context_summary: str | None
     context_compression_events: Annotated[list[dict[str, Any]], merge_context_compression_events]
     discovered_tool_names: Annotated[list[str], merge_discovered_tool_names]
+    # 会话级"始终允许"：仅存于当前会话 checkpoint，随会话结束自然失效。
+    approval_grants: Annotated[list[str], merge_approval_grants]
     workspace: ConversationWorkspaceContext

@@ -29,7 +29,7 @@ ChatData 的业务 Agent 运行域：装配、工具、中间件、提示词、�
 ## 扩展边界
 
 - **内置工具**：`tools/registry.py` 单一事实源，随发版；
-- **MCP 工具**：环境变量 `CHAT_DATA_MCP_SERVERS` 或插件声明，agent 装配时动态枚举
+- **MCP 工具**：当前由插件 `plugin.json` 声明（独立挂载/管理页面后续提供），agent 装配时动态枚举
   （工具名 `mcp_<server>_<tool>`），只挂主智能体，不进子智能体；工具数量大时
   按 `AgentAssemblySpec.mcp_tool_search` 两级加载（目录 + 按需检索），见 `mcp/README.md`；
 - **插件技能**：插件 `skills/` 声明经 `skill_service.list_runtime_skill_sources_async`

@@ -36,6 +36,7 @@ from pydantic import BaseModel, Field, create_model
 from utils.logger import get_logger
 
 from ...services.runtime_config import read_positive_int_env
+from .admission import MCPAdmissionError, validate_mcp_server_tools
 from .config import MCPServerConfig, load_mcp_server_configs
 
 logger = get_logger(__name__)
@@ -267,6 +268,14 @@ class MCPToolManager:
             )
             for tool in list(getattr(result, "tools", None) or [])
         ]
+        report = validate_mcp_server_tools(
+            config.server_id,
+            [{"name": info.name, "description": info.description, "input_schema": info.input_schema} for info in tools],
+        )
+        for issue in report.warnings:
+            logger.warning("MCP server 准入告警: id=%s %s: %s", config.server_id, issue.code, issue.message)
+        if not report.ok:
+            raise MCPAdmissionError(f"MCP server {config.server_id} 未通过准入: {report.summary()}")
         return tools, ttl_ms if isinstance(ttl_ms, int) and ttl_ms > 0 else None
 
     def list_tools(self, *, force_refresh: bool = False) -> list[MCPToolInfo]:
@@ -390,8 +399,14 @@ def build_langchain_tools(
                 description=info.description or info.qualified_name,
                 args_schema=_schema_to_args_model(info.qualified_name, info.input_schema),
                 coroutine=_acall,
-                # 展示名随工具对象透传（用户可见，不参与调用）；无 label 时不下发
-                metadata={"display_name": info.label} if info.label else None,
+                # 展示名与来源随工具对象透传：审批卡据此展示 "MCP server / 工具"，
+                # 而不是把 mcp_<server>_<tool> 原始名直接抛给用户。
+                metadata={
+                    "origin": "mcp",
+                    "mcp_server_id": info.server_id,
+                    "mcp_tool_name": info.name,
+                    **({"display_name": info.label} if info.label else {}),
+                },
             )
         )
     return wrapped

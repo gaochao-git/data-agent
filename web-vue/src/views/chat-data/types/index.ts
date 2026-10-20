@@ -979,12 +979,20 @@ export interface AgentSchedulePayload {
   options?: Record<string, unknown>
 }
 
-// 插件 manifest 中声明的 MCP server（管理端展示只需 id/transport）
+// 插件 manifest 中声明的 MCP server（管理端展示 id/transport + 准入状态）
+export interface PluginMcpServerAdmission {
+  ok: boolean
+  errors: string[]
+  warnings: string[]
+}
+
 export interface PluginMcpServerInfo {
   id: string
   transport: string
   url?: string
   command?: string
+  /** 服务端准入检查结论（未通过时管理页标红并展示原因） */
+  admission?: PluginMcpServerAdmission
 }
 
 // 插件 manifest 信息

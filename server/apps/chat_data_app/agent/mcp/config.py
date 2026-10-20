@@ -1,25 +1,32 @@
 """MCP server 配置解析与校验。
 
-配置来源（合并顺序，后者不覆盖前者同 id 项）：
-1. 环境变量 ``CHAT_DATA_MCP_SERVERS``（JSON 数组，部署级配置）；
-2. 已启用插件 ``plugin.json`` 的 ``mcp_servers`` 声明（见 ``agent/plugins/``）。
+配置来源：**仅已启用插件** ``plugin.json`` 的 ``mcp_servers`` 声明
+（见 ``agent/plugins/``）。环境变量独立挂载 MCP server 暂不启用（
+独立挂载/管理页面后续提供），届时在此恢复多来源合并即可。
 
-单条配置解析失败只记录告警并跳过该条，不让单个错误配置阻断整个装配
-（MCP 是增量能力，坏了不该影响内置工具链路）。
+单条配置解析失败/未通过准入只记录告警并跳过该条，不让单个错误配置阻断
+整个装配（MCP 是增量能力，坏了不该影响内置工具链路）。
 """
 
 from __future__ import annotations
 
-import json
 import os
 import re
 from dataclasses import dataclass, field
 
 from utils.logger import get_logger
 
+from .admission import validate_mcp_server_config
+
 logger = get_logger(__name__)
 
-MCP_SERVERS_ENV = "CHAT_DATA_MCP_SERVERS"
+# 兼容提示：环境变量单独挂载已于 2026-10 下线（改为仅插件声明）。旧部署若仍配置该变量，
+# 明确告警而不是静默忽略，避免"配了却没生效"的排障成本。
+if str(os.getenv("CHAT_DATA_MCP_SERVERS") or "").strip():
+    logger.warning(
+        "CHAT_DATA_MCP_SERVERS 已不再支持：MCP server 当前仅由插件 plugin.json 声明"
+        "（独立挂载与管理页面后续提供），该环境变量会在 2026-10 后忽略"
+    )
 
 VALID_MCP_TRANSPORTS = frozenset({"stdio", "streamable_http", "sse"})
 
@@ -119,34 +126,32 @@ def parse_mcp_server_config(raw: object, *, source: str) -> MCPServerConfig:
     )
 
 
-def _env_mcp_server_configs() -> list[MCPServerConfig]:
-    """从环境变量读取部署级 MCP server 配置。"""
-    raw = str(os.getenv(MCP_SERVERS_ENV) or "").strip()
-    if not raw:
-        return []
-    try:
-        data = json.loads(raw)
-    except ValueError as err:
-        logger.warning("环境变量 %s 不是合法 JSON，忽略全部 MCP 环境配置: %s", MCP_SERVERS_ENV, err)
-        return []
-    if not isinstance(data, list):
-        logger.warning("环境变量 %s 必须是 JSON 数组，忽略全部 MCP 环境配置", MCP_SERVERS_ENV)
-        return []
-    configs: list[MCPServerConfig] = []
-    for index, item in enumerate(data):
-        try:
-            config = parse_mcp_server_config(item, source=f"{MCP_SERVERS_ENV}[{index}]")
-        except MCPServerConfigError as err:
-            logger.warning("忽略非法 MCP server 配置: %s", err)
-            continue
-        configs.append(config)
-    return configs
+def _admit_config(config: MCPServerConfig, source: str) -> bool:
+    """配置级准入：硬错误跳过该 server，告警保留并记日志（不阻断其它 server）。"""
+    report = validate_mcp_server_config(config)
+    for issue in report.warnings:
+        logger.warning(
+            "MCP server 准入告警: id=%s source=%s %s: %s", config.server_id, source, issue.code, issue.message
+        )
+    if not report.ok:
+        logger.warning(
+            "MCP server 未通过准入，已跳过: id=%s source=%s 原因=%s",
+            config.server_id,
+            source,
+            report.summary(),
+        )
+        return False
+    return True
 
 
 def load_mcp_server_configs() -> list[MCPServerConfig]:
-    """合并环境配置与已启用插件声明的 MCP server 配置。"""
-    configs = [config for config in _env_mcp_server_configs() if config.enabled]
-    seen_ids = {config.server_id for config in configs}
+    """读取已启用插件声明的 MCP server 配置，并逐条做准入检查。
+
+    暂不支持环境变量单独挂载 MCP server：当前唯一来源是插件 ``plugin.json``
+    （随插件安装/启停生效），独立挂载与管理页面后续提供。
+    """
+    configs: list[MCPServerConfig] = []
+    seen_ids: set[str] = set()
     # 延迟导入避免 plugins -> manifest 之外的重依赖链在冷启动被拉起。
     try:
         from ..plugins.loader import enabled_plugin_mcp_servers
@@ -163,8 +168,10 @@ def load_mcp_server_configs() -> list[MCPServerConfig]:
             continue
         if not config.enabled:
             continue
+        if not _admit_config(config, f"plugin mcp_servers[{index}]"):
+            continue
         if config.server_id in seen_ids:
-            logger.warning("插件 MCP server id 与环境配置重复，忽略: %s", config.server_id)
+            logger.warning("插件 MCP server id 重复，忽略: %s", config.server_id)
             continue
         seen_ids.add(config.server_id)
         configs.append(config)
@@ -172,7 +179,6 @@ def load_mcp_server_configs() -> list[MCPServerConfig]:
 
 
 __all__ = [
-    "MCP_SERVERS_ENV",
     "MCPServerConfig",
     "MCPServerConfigError",
     "VALID_MCP_TRANSPORTS",

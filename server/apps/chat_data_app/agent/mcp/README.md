@@ -11,7 +11,7 @@
 
 | 文件 | 职责 |
 | --- | --- |
-| `config.py` | server 配置解析与校验：`CHAT_DATA_MCP_SERVERS`（JSON 数组）+ 已启用插件的 `mcp_servers` 声明合并；单条非法只告警跳过 |
+| `config.py` | server 配置解析与校验：当前来源为**已启用插件的 `mcp_servers` 声明**（独立挂载后续提供）；单条非法/未通过准入只告警跳过 |
 | `manager.py` | 会话管理（stdio / streamable_http / sse 三种传输，2.x 门面按需建连用完即关）、工具枚举 TTL 缓存（采纳服务端 ``ttlMs`` 提示）、调用（内建 MRTR ``input_required`` 处理）、健康检查（``tools/list`` 探针——``ping`` 已随 2026-07-28 移除）、LangChain `StructuredTool` 包装 |
 | `catalog.py` | 工具检索目录（手写 BM25，零新增依赖）+ `mcp_tool_search` 按需检索工具；两级加载的第二级，见下文 |
 
@@ -55,11 +55,13 @@ token 估算；MCP 工具描述超过 500 字符时告警（提示插件作者�
 ## 配置
 
 ```bash
-# server/.env
-CHAT_DATA_MCP_SERVERS=[{"id":"fs","transport":"stdio","command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","/tmp/ro"]}]
+# server/.env（MCP 连接相关的全局参数）
 CHAT_DATA_MCP_TOOL_TIMEOUT_SECONDS=60       # 单次 initialize/list/call 超时
 CHAT_DATA_MCP_TOOLS_CACHE_TTL_SECONDS=300   # 工具枚举缓存 TTL
 ```
+
+**配置来源：当前仅插件 `plugin.json` 的 `mcp_servers` 声明**（随插件安装/启停生效）。
+独立的 MCP server 挂载与管理页面后续提供，届时再恢复部署级/DB 配置来源。
 
 transport 支持 `stdio`（`command`/`args`/`env`）、`streamable_http` 与 `sse`（`url`/`headers`）。
 `sse` 已随 2026-07-28 进入 Deprecated 生命周期（2025-03-26 首次废弃），仅保留旧 server 兼容，配置时告警；新部署使用 `streamable_http`。
@@ -67,8 +69,8 @@ transport 支持 `stdio`（`command`/`args`/`env`）、`streamable_http` 与 `ss
 
 ## 与插件的关系
 
-`agent/plugins/` 的 `plugin.json` 可声明 `mcp_servers`（与环境配置同 schema），
-由 `config.load_mcp_server_configs()` 合并；环境配置 id 优先，插件同 id 声明被忽略。
+`agent/plugins/` 的 `plugin.json` 可声明 `mcp_servers`（字段 schema 见上），
+由 `config.load_mcp_server_configs()` 读取并逐条准入；重复 id 后到者忽略。
 
 ## 安全边界与信任级别
 
@@ -79,6 +81,29 @@ transport 支持 `stdio`（`command`/`args`/`env`）、`streamable_http` 与 `ss
 - `streamable_http` / `sse` 的 `url` 允许任意 `http(s)` 地址 —— 构成**内网访问面（SSRF）**。
   上线前确认部署网络的边界策略，必要时在网关出口限制可达网段。
 
+**准入检查（`admission.py`，不满足即"不支持"）**：
+
+| 检查 | 默认策略 |
+|---|---|
+| `stdio` 传输 | 默认拒绝（`CHAT_DATA_MCP_ALLOW_STDIO=false`）；放开后仍校验 command/控制字符 |
+| 远程 URL | 必须 https（loopback 例外，`CHAT_DATA_MCP_REQUIRE_HTTPS=true`）；禁止 URL 内嵌凭据 |
+| host 白名单 | `CHAT_DATA_MCP_ALLOWED_HOSTS`（逗号分隔，支持 `*.example.com`），留空不限制 |
+| headers | 含控制字符拒绝（防头注入） |
+| 工具面 | `tools/list` 空 → 拒绝；工具数/schema 字节数超限 → 拒绝；重名/非法 schema → 拒绝 |
+| 工具描述 | 超长/含控制字符 → 告警（按截断/原样展示，不阻断挂载） |
+
+配置级准入在 `load_mcp_server_configs()` 逐条执行（env 与插件声明同口径），硬错误
+只跳过该 server 并记录原因；工具级准入在 `tools/list` 之后执行。插件安装时同口径校验
+声明的 `mcp_servers`，未通过直接拒绝安装。
+
+**MCP 工具审批**：`ask` 模式下 MCP 动态工具默认走审批中间件（第三方工具不默认放行），
+`mcp_tool_search` 只读检索除外；审批卡通过工具 metadata（`origin=mcp`、
+`mcp_server_id`、`mcp_tool_name`、`display_name`）展示「MCP server · 工具」而不是
+`mcp_<server>_<tool>` 原始名。审批卡提供三态：允许（本次）/ **本次会话始终允许** /
+拒绝；选择"始终允许"后许可写入会话 checkpoint（MCP 按 server 粒度
+`mcp_server:<id>`、内置工具按工具名 `tool:<name>`），本会话后续同类调用不再询问，
+会话结束/新建会话自然失效。`auto` 模式直接执行（定时任务/评测强制 auto）。
+
 服务端无用户角色模型，`/admin/plugins` 与其他 admin 接口同口径：靠 service token +
 可信代理入口控制；service token 不得下发到普通用户侧。
 
@@ -87,6 +112,6 @@ transport 支持 `stdio`（`command`/`args`/`env`）、`streamable_http` 与 `ss
 - 不做常驻连接池：每次枚举/调用按需建立会话、用完即关；枚举结果有 TTL 缓存兜开销
   （2026-07-28 远程传输已无状态化，该取舍与新协议方向一致；stdio 仍是有状态模型）。
 - MCP 工具不进子智能体；如需只读约束，在 MCP server 侧自行收紧。
-- 嵌套 JSON Schema 不做结构校验（顶层类型映射，嵌套按 Any 透传）——2026-07-28 已将
-  inputSchema 放宽到完整 JSON Schema 2020-12（含 $ref），递归校验留待后续版本。
+- 准入只校验顶层 schema（properties/required/类型合法性），嵌套结构与 `$ref` 仍按 Any 透传——
+  2026-07-28 已将 inputSchema 放宽到完整 JSON Schema 2020-12，递归校验留待后续版本。
 - MCP 工具不携带内置工具的 `intent` 参数（那是内置工具的用户展示约定）。

@@ -104,3 +104,8 @@ def test_common_iter_files_skips_ignored_root_name(tmp_path):
     nested.write_text("a", encoding="utf-8")
 
     assert common.iter_files(Path(ignored_root)) == []
+
+
+def test_merge_approval_grants_dedupes_and_preserves_order():
+    grants = agent_state.merge_approval_grants(["tool:file_delete"], ["tool:file_delete", "mcp_server:srv", " ", ""])
+    assert grants == ["tool:file_delete", "mcp_server:srv"]

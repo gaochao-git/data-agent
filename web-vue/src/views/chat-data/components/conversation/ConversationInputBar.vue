@@ -37,7 +37,6 @@ interface Props {
   isGenerating: boolean
   canSubmit: boolean
   inputFocused?: boolean
-  showSkillButton?: boolean
   submitTitle?: string
   /** 工具审批模式（/config 下发默认值；前端唯一常驻的权限选择项）。 */
   approvalMode?: 'ask' | 'auto'
@@ -54,7 +53,6 @@ const props = withDefaults(defineProps<Props>(), {
   selectedMentionFiles: () => [],
   quotedSnippets: () => [],
   inputFocused: false,
-  showSkillButton: true,
   submitTitle: '发送 (Enter)',
   approvalMode: 'ask',
 })
@@ -201,7 +199,8 @@ onBeforeUnmount(() => {
     </template>
 
     <template #toolbar>
-      <div v-if="showSkillButton" ref="plusMenuRef" class="relative">
+      <!-- 执行中也保留：上传附件与粘贴截图同链路，粘贴在执行态一直可用 -->
+      <div ref="plusMenuRef" class="relative">
         <button
           type="button"
           class="flex h-6 items-center gap-1.5 whitespace-nowrap rounded-full px-2 text-xs text-gray-500 hover:bg-gray-100 hover:text-gray-700"

@@ -2872,7 +2872,6 @@ const handleKeyDown = (event: KeyboardEvent) => {
             :is-generating="runBusy"
             :can-submit="runBusy ? Boolean(input.trim() && !isSteering) : Boolean((input.trim() || hasCompletedPendingFiles || quotedSnippets.length > 0) && selectedDatasource)"
             :input-focused="inputFocused"
-            :show-skill-button="!runBusy"
             :submit-title="!selectedDatasource ? '请先选择数据源' : '发送 (Enter)'"
             @submit="handleSubmit"
             @stop="handleStop"

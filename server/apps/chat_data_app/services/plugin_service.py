@@ -34,6 +34,15 @@ def _manifest_json(manifest: PluginManifest) -> str:
     return json.dumps(manifest.to_dict(), ensure_ascii=False, sort_keys=True)
 
 
+def _mcp_server_admission_view(entry: dict[str, Any]) -> dict[str, Any]:
+    """单个 MCP server 声明的准入视图（管理页展示"未通过及原因"）。
+
+    复用 ``agent.plugins.installer`` 的同一套解析/校验实现——services 不新增对
+    agent 子模块的依赖边（架构守卫：services→agent 边数上限）。
+    """
+    return installer.inspect_mcp_server_admission(entry)
+
+
 def _reset_runtime_caches() -> None:
     """插件变更后重置 MCP 工具枚举缓存（进程级单例，带 TTL）。"""
     try:
@@ -56,6 +65,10 @@ async def list_plugins(*, limit: int = 50, offset: int = 0) -> dict[str, Any]:
     """
     await refresh_plugin_state()
     items = [item.to_dict() for item in load_plugins_metadata().values()]
+    for item in items:
+        item["mcp_servers"] = [
+            {**server, "admission": _mcp_server_admission_view(server)} for server in item.get("mcp_servers") or []
+        ]
     audit_by_name: dict[str, ChatDataPlugin] = {}
     try:
         audit_by_name = {row.plugin_name: row for row in await PluginDao().list_active()}

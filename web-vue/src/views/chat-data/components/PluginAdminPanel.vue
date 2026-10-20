@@ -7,7 +7,7 @@ import { ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { UploadFile, UploadInstance } from 'element-plus'
 import { getAdminPlugins, installPlugin, setAdminPluginEnabled, uninstallPlugin } from '../api'
-import type { PluginInfo } from '../types'
+import type { PluginInfo, PluginMcpServerInfo } from '../types'
 import AdminPanelToolbar from './AdminPanelToolbar.vue'
 
 // 与后端 installer 的 zip 上限一致（50MB）
@@ -18,6 +18,19 @@ const plugins = ref<PluginInfo[]>([])
 const hasLoaded = ref(false)
 const uploadRef = ref<UploadInstance | null>(null)
 const installing = ref(false)
+
+// MCP server 准入状态展示：未通过标红并给出原因，通过但有告警也提示
+const mcpServerTagType = (server: PluginMcpServerInfo) =>
+  server.admission && !server.admission.ok ? 'danger' : 'info'
+const mcpServerLabel = (server: PluginMcpServerInfo) =>
+  `${server.id}(${server.transport})${server.admission && !server.admission.ok ? ' · 未通过准入' : ''}`
+const mcpServerTitle = (server: PluginMcpServerInfo) => {
+  const base = `${server.id} · ${server.transport}${server.url ? ` · ${server.url}` : ''}`
+  const admission = server.admission
+  if (!admission) return base
+  if (!admission.ok) return `${base}\n未通过准入：${admission.errors.join('；')}`
+  return admission.warnings.length ? `${base}\n准入通过（告警：${admission.warnings.join('；')}）` : base
+}
 
 // 服务端分页（口径与定时任务一致）
 const total = ref(0)
@@ -198,8 +211,9 @@ defineExpose({ ensureLoaded })
                 :key="server.id"
                 size="small"
                 effect="plain"
-                :title="`${server.id} · ${server.transport}${server.url ? ` · ${server.url}` : ''}`"
-              >{{ server.id }}({{ server.transport }})</el-tag>
+                :type="mcpServerTagType(server)"
+                :title="mcpServerTitle(server)"
+              >{{ mcpServerLabel(server) }}</el-tag>
             </div>
             <span v-else class="text-xs text-slate-400">-</span>
           </template>

@@ -29,6 +29,12 @@ describe('ConversationInputBar actions', () => {
     expect(wrapper.find('button[type="submit"]').exists()).toBe(true)
   })
 
+  it('keeps the "+" toolbar entry visible while generating', () => {
+    const wrapper = mountInput(true)
+
+    expect(wrapper.find('[title="更多操作"]').exists()).toBe(true)
+  })
+
   it('forwards paste-files from the inner textarea', async () => {
     const wrapper = mountInput(false)
     const file = new File(['img'], 'image.png', { type: 'image/png' })

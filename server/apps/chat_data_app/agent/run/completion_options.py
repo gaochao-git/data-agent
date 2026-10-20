@@ -111,7 +111,12 @@ def parse_approval_mode(value: Any) -> str:
 
 
 def parse_unattended_flag(value: Any) -> bool:
-    """无人值守标记：仅供服务端内部（评测/批量）使用，不接受前端伪造。"""
+    """无人值守标记：服务端内部调用方（评测/批量）使用；chat 正常链路不传。
+
+    注意：HTTP ``options`` 由客户端提交，本标记不构成安全边界——它只影响
+    自身工具面（剔除 ask_user_question）与审批模式（强制 auto），而审批模式
+    本身也可由用户在会话内切换，风险等价、无提权。
+    """
     if isinstance(value, bool):
         return value
     return str(value or "").strip().lower() in ("1", "true", "yes")
