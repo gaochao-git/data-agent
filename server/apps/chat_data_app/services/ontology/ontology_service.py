@@ -16,8 +16,8 @@ from typing import Any
 from utils.logger import get_logger
 
 from ...daos.dao_session import transaction_scope
-from ...daos.ontology_dao import OntologyDao
 from ...daos.meta_global_enum_dao import _split_enum_ref
+from ...daos.ontology_dao import OntologyDao
 from ...daos.semantic_config_dao import SemanticConfigDao
 from ..meta.global_enum_service import MetaGlobalEnumNotFoundError, global_enum_service
 from . import ontology_validator as validator

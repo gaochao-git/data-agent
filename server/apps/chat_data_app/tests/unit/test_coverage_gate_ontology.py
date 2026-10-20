@@ -25,13 +25,13 @@ from apps.chat_data_app.daos.ontology_dao import OntologyDao, _parse_json
 from apps.chat_data_app.daos.semantic_config_dao import SemanticConfigDao
 from apps.chat_data_app.routers import ontology_admin as ontology_admin_router
 from apps.chat_data_app.schema import (
-    OntologyUpsertRequest,
     OntologyObjectTypeOntologyRequest,
     OntologyObjectTypeStatusRequest,
     OntologyObjectTypeUpsertRequest,
     OntologyPropertyItem,
     OntologyRelationTypeStatusRequest,
     OntologyRelationTypeUpsertRequest,
+    OntologyUpsertRequest,
 )
 from apps.chat_data_app.services.ontology import (
     OntologyAlreadyExistsError,
@@ -88,7 +88,10 @@ deps_ok = _imported_deps_ok
         ),
         (lambda: validator.validate_object_type_payload({"display_name": "x", "ontology_id": "1"}), "本体ID必须为整数"),
         (lambda: validator.validate_ontology_payload({"display_name": "x" * 129}), "本体展示名不超过"),
-        (lambda: validator.validate_ontology_payload({"display_name": "x", "description": "d" * 513}), "本体描述不超过"),
+        (
+            lambda: validator.validate_ontology_payload({"display_name": "x", "description": "d" * 513}),
+            "本体描述不超过",
+        ),
         (lambda: validator.validate_property_items([]), "对象类型至少需要一个属性"),
         (lambda: validator.validate_property_items("bad"), "对象类型至少需要一个属性"),
         (lambda: validator.validate_property_items([{"property_name": "p1"}]), "标识属性"),

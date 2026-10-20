@@ -540,9 +540,7 @@ def _not_found_entry(name: str, available: list[str]) -> dict[str, Any]:
     """中心对象类型不可定位的 not_found 条目（与 locate 同口径：给可定位候选）。"""
     return {
         "object_type": name,
-        "reason": "对象类型不存在或未绑定本轮启用语义模型"
-        if available
-        else "当前启用语义模型没有绑定任何本体对象类型",
+        "reason": "对象类型不存在或未绑定本轮启用语义模型" if available else "当前启用语义模型没有绑定任何本体对象类型",
         "available": _candidate_summary(available),
     }
 
@@ -664,7 +662,9 @@ def _search_around_neighbor(
         dimension_names=dimension_names,
     )
     neighbor["relations"] = [
-        str(item.get("relation") or "") for item in neighbor.pop("relation_types", []) if str(item.get("relation") or "")
+        str(item.get("relation") or "")
+        for item in neighbor.pop("relation_types", [])
+        if str(item.get("relation") or "")
     ]
     return neighbor
 

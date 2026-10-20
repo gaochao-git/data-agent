@@ -296,16 +296,20 @@ async def change_ontology_relation_status(
         return _error_response(e, "本体关系类型状态变更失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
 
 
-async def _collect_consistency_scope() -> tuple[list[dict], dict[str, str], set[str]]:
+async def _collect_consistency_scope() -> tuple[list[dict], dict[str, str], set[str], list[str]]:
     """一致性检查比较域收集：全部数据源组的公共语义配置去重合并。
 
-    返回 (configs, {config_id: group_id}, config_ids)——本体不绑数据源组
+    返回 (configs, {config_id: group_id}, config_ids, group_ids)——本体不绑数据源组
     （2026-10-20 解耦），比较域取全部组的公共配置；CON_CROSS_MODEL_* 查重
-    仍以配置自身所属组为比较域（跨组不互比）。
+    仍以配置自身所属组为比较域（跨组不互比）。group_ids 供巡检报告展示组数。
     """
     service = get_semantic_config_service()
     group_ids = sorted(
-        {str((group or {}).get("group_id") or "").strip() for group in await DataSourceDao().get_all_datasources_async(include_tables=False)} - {""}
+        {
+            str((group or {}).get("group_id") or "").strip()
+            for group in await DataSourceDao().get_all_datasources_async(include_tables=False)
+        }
+        - {""}
     )
     configs: list[dict] = []
     config_group_ids: dict[str, str] = {}

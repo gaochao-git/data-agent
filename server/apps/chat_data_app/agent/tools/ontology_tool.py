@@ -106,7 +106,7 @@ class _SearchAroundPayload(BaseModel):
 
     object_type: str = Field(
         ...,
-        description="中心对象类型 API 名（如 \"Order\"，单个）；通常是 locate_object_type 命中的对象",
+        description='中心对象类型 API 名（如 "Order"，单个）；通常是 locate_object_type 命中的对象',
     )
     relation: str | None = Field(
         default=None,

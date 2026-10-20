@@ -815,7 +815,9 @@ def test_ontology_crud_lifecycle(harness, deps_ok):
         asyncio.run(ontology_service.upsert_ontology_async("ecommerce_trade", _ontology_payload()))
     # 编辑（allow_overwrite）改展示名
     saved = asyncio.run(
-        ontology_service.upsert_ontology_async("ecommerce_trade", _ontology_payload(display_name="跨境电商"), allow_overwrite=True)
+        ontology_service.upsert_ontology_async(
+            "ecommerce_trade", _ontology_payload(display_name="跨境电商"), allow_overwrite=True
+        )
     )
     assert saved["display_name"] == "跨境电商"
     # 列表
@@ -863,7 +865,9 @@ def test_object_ontology_id_validation(harness, deps_ok):
 def test_object_ontology_reassign(harness, deps_ok):
     """拖拽换本体窄写路径：改归属不动对象类型名/属性，移出本体=ontology_id 置空。"""
     ontology_a = asyncio.run(ontology_service.upsert_ontology_async("ontology_a", _ontology_payload()))
-    ontology_b = asyncio.run(ontology_service.upsert_ontology_async("ontology_b", _ontology_payload(display_name="供应链")))
+    ontology_b = asyncio.run(
+        ontology_service.upsert_ontology_async("ontology_b", _ontology_payload(display_name="供应链"))
+    )
     asyncio.run(ontology_service.upsert_object_type_async("Order", _object_payload(ontology_id=int(ontology_a["id"]))))
 
     # 换到 ontology_b
@@ -1089,7 +1093,9 @@ def test_relation_structural_edit_downgrades_status(harness, deps_ok):
 def test_ontology_recreate_after_delete_without_overwrite(harness, deps_ok):
     asyncio.run(ontology_service.upsert_ontology_async("ecommerce_trade", _ontology_payload()))
     asyncio.run(ontology_service.delete_ontology_async("ecommerce_trade"))
-    revived = asyncio.run(ontology_service.upsert_ontology_async("ecommerce_trade", _ontology_payload(display_name="复活的交易")))
+    revived = asyncio.run(
+        ontology_service.upsert_ontology_async("ecommerce_trade", _ontology_payload(display_name="复活的交易"))
+    )
     assert revived["display_name"] == "复活的交易"
     assert revived["delete_flag"] == 0
 

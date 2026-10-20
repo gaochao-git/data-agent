@@ -144,7 +144,9 @@ def _invoke_list_object_types(monkeypatch, *, state=None):
 
 
 def test_payload_models_registered():
-    assert ontology_tool.ONTOLOGY_ACTION_PAYLOAD_MODELS["locate_object_type"].model_validate({"object_types": ["order"]})
+    assert ontology_tool.ONTOLOGY_ACTION_PAYLOAD_MODELS["locate_object_type"].model_validate(
+        {"object_types": ["order"]}
+    )
     assert ontology_tool.ONTOLOGY_ACTION_PAYLOAD_MODELS["locate_object_type"].model_validate(
         {"object_types": ["order", "user"], "semantic_config_id": "sc_order"}
     )
@@ -341,9 +343,7 @@ class _SearchAroundConfigService:
 
 def _invoke_search_around(monkeypatch, *, action_payload, bundle=None, service=None):
     fake_dao = _FakeOntologyDao(bundle)
-    monkeypatch.setattr(
-        ontology_tool, "get_semantic_config_service", lambda: service or _SearchAroundConfigService()
-    )
+    monkeypatch.setattr(ontology_tool, "get_semantic_config_service", lambda: service or _SearchAroundConfigService())
     monkeypatch.setattr(ontology_tool, "OntologyDao", lambda: fake_dao)
     raw = asyncio.run(
         ontology_tool.create_ontology_tool().ainvoke(
@@ -373,9 +373,13 @@ def test_search_around_disabled_by_default(monkeypatch):
 
 def test_search_around_payload_models_registered():
     assert ontology_tool.validate_ontology_payload("search_around", {"object_type": "order"}) is not None
-    assert ontology_tool.validate_ontology_payload(
-        "search_around", {"object_type": "order", "relation": "order_belongs_to_user", "semantic_config_id": "sc_order"}
-    ) is not None
+    assert (
+        ontology_tool.validate_ontology_payload(
+            "search_around",
+            {"object_type": "order", "relation": "order_belongs_to_user", "semantic_config_id": "sc_order"},
+        )
+        is not None
+    )
     with pytest.raises(ValueError, match="object_type"):
         ontology_tool.validate_ontology_payload("search_around", {})
 

@@ -174,7 +174,9 @@ class OntologyDao:
             rows = (await session.execute(stmt)).scalars().all()
         return [self._ontology_row_to_dict(row) for row in rows]
 
-    async def get_ontology_row_async(self, ontology_name: str, *, include_deleted: bool = False) -> dict[str, Any] | None:
+    async def get_ontology_row_async(
+        self, ontology_name: str, *, include_deleted: bool = False
+    ) -> dict[str, Any] | None:
         """按 ontology_name 读取本体行；include_deleted=True 时含软删行（复活判断用）。"""
         name = _text(ontology_name)
         if not name:
@@ -218,11 +220,7 @@ class OntologyDao:
         name = _text(ontology_name)
         async with session_scope() as session:
             row = (
-                (
-                    await session.execute(
-                        select(ChatDataOntology).where(ChatDataOntology.ontology_name == name)
-                    )
-                )
+                (await session.execute(select(ChatDataOntology).where(ChatDataOntology.ontology_name == name)))
                 .scalars()
                 .first()
             )
