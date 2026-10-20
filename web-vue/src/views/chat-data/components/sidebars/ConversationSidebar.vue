@@ -32,7 +32,7 @@ import FieldTypeIcon from '../icons/FieldTypeIcon.vue'
 const getRunStatusLabel = (status: ConversationItem['run_status']): string => {
   if (status === 'pending') return '排队中'
   if (status === 'active') return '运行中'
-  if (status === 'waiting_user') return '等待回答'
+  if (status === 'waiting_user') return '待确认'
   if (status === 'cancelling') return '停止中'
   return ''
 }
@@ -769,7 +769,10 @@ onUnmounted(() => {
                         :class="['flex shrink-0 items-center gap-1 text-[11px]', getRunStatusClass(conv.run_status)]"
                         :title="getRunStatusLabel(conv.run_status)"
                       >
-                        <i :class="conv.run_status === 'active' || conv.run_status === 'pending' ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-circle'" class="text-[9px]"></i>
+                        <!-- waiting_user 是唯一需要用户动手、且不会自己消失的状态，直接给文字； -->
+                        <!-- 运行/排队/停止中都是瞬时态，保留图标避免每行都挂一行字挤占标题 -->
+                        <template v-if="conv.run_status === 'waiting_user'">{{ getRunStatusLabel(conv.run_status) }}</template>
+                        <i v-else :class="conv.run_status === 'active' || conv.run_status === 'pending' ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-circle'" class="text-[9px]"></i>
                       </span>
                       <span class="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-sm leading-relaxed">{{ conv.title }}</span>
                       <!-- 右侧固定角色区：时间在静止态始终显示，行内操作与宽度无关、永远保留—— -->

@@ -625,9 +625,22 @@ export interface UserQuestionItem {
   multi_select: boolean
 }
 
+// 批量审批：一轮内每个待确认操作的展示信息（与 questions 一一对应）
+export interface ApprovalItem {
+  call_id: string
+  tool_name: string
+  label?: string
+  /** 模型对本次操作的自述（如"删除第一个测试文件"），辅助用户判断 */
+  intent?: string
+  args_summary?: Record<string, string>
+}
+
 export interface PendingUserQuestion {
   question_id: string
   turn_id?: string
+  /** approval = 工具审批（批量时逐条选择允许/拒绝） */
+  kind?: string
+  approval_items?: ApprovalItem[]
   questions: UserQuestionItem[]
 }
 

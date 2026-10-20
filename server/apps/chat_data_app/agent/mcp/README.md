@@ -99,10 +99,10 @@ transport 支持 `stdio`（`command`/`args`/`env`）、`streamable_http` 与 `ss
 **MCP 工具审批**：`ask` 模式下 MCP 动态工具默认走审批中间件（第三方工具不默认放行），
 `mcp_tool_search` 只读检索除外；审批卡通过工具 metadata（`origin=mcp`、
 `mcp_server_id`、`mcp_tool_name`、`display_name`）展示「MCP server · 工具」而不是
-`mcp_<server>_<tool>` 原始名。审批卡提供三态：允许（本次）/ **本次会话始终允许** /
-拒绝；选择"始终允许"后许可写入会话 checkpoint（MCP 按 server 粒度
-`mcp_server:<id>`、内置工具按工具名 `tool:<name>`），本会话后续同类调用不再询问，
-会话结束/新建会话自然失效。`auto` 模式直接执行（定时任务/评测强制 auto）。
+`mcp_<server>_<tool>` 原始名。审批卡提供三态：允许（本次）/ **本对话内始终允许** /
+拒绝（并行工具调用合并为一张卡、逐条选择允许/本对话内始终允许/拒绝）；选择「本对话内始终允许」后许可
+按**工具**粒度写入会话 checkpoint（`tool:<qualified_name>`，MCP 与内置一致），
+本会话后续同一工具调用不再询问，会话结束/新建会话自然失效。`auto` 模式直接执行（定时任务/评测强制 auto）。
 
 服务端无用户角色模型，`/admin/plugins` 与其他 admin 接口同口径：靠 service token +
 可信代理入口控制；service token 不得下发到普通用户侧。

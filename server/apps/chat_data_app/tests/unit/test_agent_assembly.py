@@ -296,6 +296,9 @@ def test_ask_mode_subagents_exclude_approval_tools(monkeypatch):
     assert "file_delete" not in ask_names
     assert "file_move" not in ask_names
     assert "file_read" in ask_names
+    # 剔除之外还要声明能力缺口，否则模型会先派一次工具拿到「工具不存在」白跑一轮
+    gp_ask = next(spec for spec in captured["specs"] if spec.name == "general-purpose")
+    assert "删除与移动的能力边界" in gp_ask.system_prompt
 
     data_agent_module.build_subagent_middleware(
         options, tools, model=object(), run_controls=AgentRunControls(approval_mode="auto")
@@ -303,3 +306,30 @@ def test_ask_mode_subagents_exclude_approval_tools(monkeypatch):
     auto_names = {tool.name for spec in captured["specs"] for tool in spec.tools}
     assert "file_delete" in auto_names
     assert "file_move" in auto_names
+    # auto 模式子智能体确实能删，提示必须缺席（否则模型自我设限、白退回主智能体）
+    gp_auto = next(spec for spec in captured["specs"] if spec.name == "general-purpose")
+    assert "删除与移动的能力边界" not in gp_auto.system_prompt
+
+    # 定时轮：approval_mode=ask 但无人值守 ⇒ 不剔除也不加提示（与主图都不弹审批一致）
+    data_agent_module.build_subagent_middleware(
+        options,
+        tools,
+        model=object(),
+        run_controls=AgentRunControls(approval_mode="ask", disable_user_interaction=True),
+    )
+    unattended_names = {tool.name for spec in captured["specs"] for tool in spec.tools}
+    assert "file_delete" in unattended_names
+    gp_unattended = next(spec for spec in captured["specs"] if spec.name == "general-purpose")
+    assert "删除与移动的能力边界" not in gp_unattended.system_prompt
+
+
+def test_unattended_excludes_every_user_interaction_tool(tmp_path):
+    """无人值守必须不挂载任何 requires_user_interaction 工具（注册表全量校验）。"""
+    from apps.chat_data_app.agent.tools.registry import TOOL_SPECS
+
+    interactive = {name for spec in TOOL_SPECS if spec.requires_user_interaction for name in spec.provides}
+    attended = set(_tool_names(tmp_path))
+    unattended = set(_tool_names(tmp_path, run_controls=AgentRunControls(disable_user_interaction=True)))
+    assert interactive
+    assert interactive <= attended
+    assert interactive.isdisjoint(unattended)

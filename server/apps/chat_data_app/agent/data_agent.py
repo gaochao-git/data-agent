@@ -43,6 +43,7 @@ from .middleware.tool_execution_fence import create_tool_execution_fence_middlew
 from .middleware.tool_result import create_tool_result_middleware
 from .prompts.chat_data import (
     DATA_EXPLORE_SUBAGENT_PROMPT,
+    GENERAL_PURPOSE_NO_DELETE_HINT,
     GENERAL_PURPOSE_SUBAGENT_PROMPT,
     PLAN_SUBAGENT_PROMPT,
     build_unified_system_prompt,
@@ -213,11 +214,14 @@ def _filter_tools_by_spec(tools: list, spec: AgentAssemblySpec) -> list:
     ]
 
 
-def _build_tool_approval_middleware(run_controls: "AgentRunControls | None") -> Any:
-    """ask 模式且非无人值守才装配审批中间件；auto/无人值守返回 None（零开销）。"""
+def _build_tool_approval_middleware(run_controls: "AgentRunControls | None", tools: list | None = None) -> Any:
+    """ask 模式且非无人值守才装配审批中间件；auto/无人值守返回 None（零开销）。
+
+    ``tools`` 用于把 MCP display_name 映射进批量审批载荷（审批卡展示友好名）。
+    """
     if run_controls is None or run_controls.approval_mode != "ask" or run_controls.disable_user_interaction:
         return None
-    return create_tool_approval_middleware()
+    return create_tool_approval_middleware(tools)
 
 
 def assemble_tools(
@@ -306,6 +310,18 @@ def _subagent_approval_exclusions(run_controls: "AgentRunControls | None") -> fr
     return APPROVAL_REQUIRED_TOOL_NAMES
 
 
+def _general_purpose_system_prompt(approval_tools_excluded: bool) -> str:
+    """general-purpose 的系统提示：审批工具被剔除时补一段能力边界说明。
+
+    剔除只解决了「能不能执行」，没有解决「模型知不知道自己不能执行」：不声明时
+    模型会先派一次工具拿到「工具不存在」，白跑一轮 token 才退回主智能体。这段
+    与 ``_subagent_approval_exclusions`` 共用同一判据，auto/无人值守不受影响。
+    """
+    if not approval_tools_excluded:
+        return GENERAL_PURPOSE_SUBAGENT_PROMPT
+    return f"{GENERAL_PURPOSE_SUBAGENT_PROMPT}{GENERAL_PURPOSE_NO_DELETE_HINT}"
+
+
 def build_subagent_middleware(
     runtime_options: AgentRuntimeOptions,
     tools: list,
@@ -327,7 +343,8 @@ def build_subagent_middleware(
     ``memory_block`` 与主智能体同一份会话记忆条目（一致继承）：子图 system
     prompt 由此注入只读记忆段；未传或为空则不注入。
     """
-    base_excluded = SUBAGENT_BASE_EXCLUDED_TOOL_NAMES | _subagent_approval_exclusions(run_controls)
+    approval_excluded = _subagent_approval_exclusions(run_controls)
+    base_excluded = SUBAGENT_BASE_EXCLUDED_TOOL_NAMES | approval_excluded
     specs: list[SubagentSpec] = []
     if runtime_options.explore_subagent_enabled:
         specs.append(
@@ -366,7 +383,7 @@ def build_subagent_middleware(
             SubagentSpec(
                 name=GENERAL_PURPOSE_SUBAGENT_NAME,
                 description=GENERAL_PURPOSE_SUBAGENT_DESCRIPTION,
-                system_prompt=GENERAL_PURPOSE_SUBAGENT_PROMPT,
+                system_prompt=_general_purpose_system_prompt(bool(approval_excluded)),
                 tools=_filter_subagent_tools(
                     tools,
                     base_excluded | GENERAL_PURPOSE_EXTRA_EXCLUDED_TOOL_NAMES,
@@ -642,7 +659,7 @@ def create_agent_from_spec(
             state_schema=ChatDataAgentState,
         )
     # 按需审批只对交互式 chat 生效；auto 模式不装配（零开销），无人值守强制 auto
-    tool_approval_middleware = _build_tool_approval_middleware(run_controls)
+    tool_approval_middleware = _build_tool_approval_middleware(run_controls, tools)
     after_model_history_middleware = None
     if persist_model_snapshot is not None:
         after_model_history_middleware = create_after_model_history_middleware(

@@ -145,7 +145,9 @@ MIDDLEWARE_CANONICAL_ORDER: tuple[str, ...] = (
     "SteeringMiddleware",  # 在压缩之前注入插话，避免被摘要吞掉
     "SubagentMiddleware",  # 派发决策先于任务规划：task 工具注册 + 子智能体使用说明追加进系统提示
     "TodoListMiddleware",  # 复杂分析的任务分解规划（langchain 官方）：todos 存 state 随 checkpoint 持久，压缩不丢
-    "AfterModelHistoryMiddleware",  # 当前唯一的 after_model；再加第二个时注意 after_model 按列表逆序执行
+    "AfterModelHistoryMiddleware",  # after_model 按列表逆序执行：本行先于 ToolApprovalMiddleware（列表更靠前）跑
+    # ToolApprovalMiddleware 也是 after_model（批量审批中断）：逆序执行意味着历史快照先落、
+    # 审批后跑；调整顺序表前必须重新确认这两者的相对次序。
     "ContextCompressionMiddleware",
     "ContextUsageMiddleware",
     "ResponseTimestampMiddleware",
@@ -179,7 +181,8 @@ def build_standard_agent_middleware(
 
     注意各类 hook 的执行语义与列表位置的关系（LangChain create_agent）：
     wrap_tool_call / wrap_model_call 先进为最外层；before_model 按列表顺序执行；
-    after_model 按列表**逆序**执行——将来若加入第二个 after_model middleware，
+    after_model 按列表**逆序**执行——当前已有两个（ToolApprovalMiddleware 在列表更前、
+    AfterModelHistoryMiddleware 在后，故历史快照先跑、审批后跑），再加第三个时
     列表顺序与执行顺序相反，不能按直觉排列。
     """
     # 计时与 ToolErrorMiddleware 是无条件必备项，由本组装点直接创建，

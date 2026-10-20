@@ -469,8 +469,29 @@ const currentConversationTitle = ref<string>('新会话')
 const currentConversationDatasourceId = ref<string | null>(null)
 const conversationPageSize = 20
 const conversationKey = ref(0)
-// 模型选择不持久化：始终以注册表默认模型（is_default）为起点，用户会话内可切
-const selectedConversationModelId = ref('')
+// 模型选择跟随当前浏览器标签页（对话窗口）：刷新/路由切换后保持；新建任务/换组新建
+// 任务显式清空，回到注册表最新默认模型。用 sessionStorage 而非 localStorage，
+// 避免新开标签页或下次打开系统时继承上一次的临时选择。
+const SELECTED_MODEL_SESSION_KEY = 'chatdata.current_window_model_id'
+const readWindowSelectedModel = (): string => {
+  try {
+    return sessionStorage.getItem(SELECTED_MODEL_SESSION_KEY) || ''
+  } catch {
+    return ''
+  }
+}
+const rememberWindowSelectedModel = (value: string) => {
+  try {
+    if (value) sessionStorage.setItem(SELECTED_MODEL_SESSION_KEY, value)
+    else sessionStorage.removeItem(SELECTED_MODEL_SESSION_KEY)
+  } catch {
+    // storage 被宿主禁用时只丢失记忆，不影响功能
+  }
+}
+const selectedConversationModelId = ref(readWindowSelectedModel())
+watch(selectedConversationModelId, (value) => {
+  rememberWindowSelectedModel(value || '')
+})
 
 // SqlEditor 组件引用
 const sqlEditorRef = ref<InstanceType<typeof SqlEditor> | null>(null)

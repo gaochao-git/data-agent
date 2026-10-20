@@ -40,6 +40,19 @@ def merge_approval_grants(existing: list[str] | None, new: list[str] | None) -> 
     return merged
 
 
+def replace_approval_decisions(
+    existing: dict[str, str] | None,
+    new: dict[str, str] | None,
+) -> dict[str, str]:
+    """按轮替换审批决策（tool_call_id → allow/deny）。
+
+    每次模型响应后 ``after_model`` 都会重写本字段：本轮无待审批调用时写空字典，
+    避免长会话把历史 tool_call_id 累积进 checkpoint。
+    """
+    _ = existing
+    return {str(key): str(value) for key, value in (new or {}).items() if str(key or "").strip()}
+
+
 def merge_discovered_tool_names(
     existing: list[str] | None,
     new: list[str] | None,
@@ -129,4 +142,6 @@ class ChatDataAgentState(AgentState, total=False):
     discovered_tool_names: Annotated[list[str], merge_discovered_tool_names]
     # 会话级"始终允许"：仅存于当前会话 checkpoint，随会话结束自然失效。
     approval_grants: Annotated[list[str], merge_approval_grants]
+    # 本轮审批决策：after_model 批量中断后写入，wrap_tool_call 执行前消费。
+    approval_decisions: Annotated[dict[str, str], replace_approval_decisions]
     workspace: ConversationWorkspaceContext

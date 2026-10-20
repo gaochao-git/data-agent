@@ -162,6 +162,22 @@ describe('ConversationSidebar conversation row role zone', () => {
     }
   })
 
+  it('spells out the waiting_user status while transient states stay icons', () => {
+    const wrapper = mountSidebar([
+      { id: 'conv-waiting', title: '待确认会话', create_time: '2026-08-14 10:00:00', run_status: 'waiting_user' },
+      { id: 'conv-active', title: '运行中会话', create_time: '2026-08-14 10:00:00', run_status: 'active' },
+    ])
+
+    // waiting_user 不会自己消失，圆点看不懂 → 直接给文字
+    const waiting = wrapper.find('[title="待确认"]')
+    expect(waiting.text()).toBe('待确认')
+    expect(waiting.classes()).toContain('text-amber-500')
+
+    const running = wrapper.find('[title="运行中"]')
+    expect(running.text()).toBe('')
+    expect(running.find('i.fa-spinner').exists()).toBe(true)
+  })
+
   it('stacks time and buttons in one fixed-width zone so the hover swap causes no layout shift', () => {
     const wrapper = mountSidebar([{ id: 'conv-role', title: '角色区会话', create_time: '2026-08-14 10:00:00' }])
 

@@ -5,7 +5,7 @@ import sys
 from types import SimpleNamespace
 
 import pytest
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.errors import GraphInterrupt
 from langgraph.types import Command
 
@@ -40,6 +40,15 @@ async def _ok_handler(_request):
 
 def _answer(selected: list[str]) -> dict:
     return {"answers": [{"id": "approval", "selected": selected, "custom": "", "skipped": False}]}
+
+
+def _batch_answer(selected_by_id: dict[str, str]) -> dict:
+    return {
+        "answers": [
+            {"id": call_id, "selected": [label], "custom": "", "skipped": False}
+            for call_id, label in selected_by_id.items()
+        ]
+    }
 
 
 def test_build_approval_payload_is_question_shaped():
@@ -217,13 +226,13 @@ def test_payload_offers_always_allow_option():
     payload = build_approval_payload("file_delete", {"args": {"path": "/a"}})
     labels = [option["label"] for option in payload["questions"][0]["options"]]
     assert labels == [APPROVAL_ALLOW_LABEL, APPROVAL_ALWAYS_ALLOW_LABEL, APPROVAL_DENY_LABEL]
-    assert "本会话内「file_delete」" in payload["questions"][0]["options"][1]["description"]
+    assert "本对话内「file_delete」" in payload["questions"][0]["options"][1]["description"]
 
 
-def test_mcp_payload_always_allow_scope_is_server():
+def test_mcp_payload_always_allow_scope_is_tool():
     tool = SimpleNamespace(metadata={"origin": "mcp", "mcp_server_id": "fault-db", "mcp_tool_name": "db_mysql_info"})
     payload = build_approval_payload("mcp_fault-db_db_mysql_info", {"args": {}}, tool)
-    assert "MCP server「fault-db」" in payload["questions"][0]["options"][1]["description"]
+    assert "本对话内「db_mysql_info」" in payload["questions"][0]["options"][1]["description"]
 
 
 def test_is_always_allowed_parsing():
@@ -272,7 +281,7 @@ async def test_always_allow_returns_grant_command_and_reexecutes_tool(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_mcp_always_allow_grants_server_scope(monkeypatch):
+async def test_mcp_always_allow_grants_single_tool_scope(monkeypatch):
     monkeypatch.setattr(tool_approval, "interrupt", lambda _payload: _answer([APPROVAL_ALWAYS_ALLOW_LABEL]))
     middleware = create_tool_approval_middleware()
     request = SimpleNamespace(
@@ -282,7 +291,7 @@ async def test_mcp_always_allow_grants_server_scope(monkeypatch):
     )
     result = await middleware.awrap_tool_call(request, _ok_handler)
     assert isinstance(result, Command)
-    assert result.update["approval_grants"] == ["mcp_server:fault-db"]
+    assert result.update["approval_grants"] == ["tool:mcp_fault-db_db_info"]
 
 
 @pytest.mark.asyncio
@@ -383,7 +392,7 @@ async def test_approval_interrupt_resume_and_session_grant_end_to_end():
     # 第二轮：再次中断
     result = await graph.ainvoke({"messages": [HumanMessage("删除 /b")]}, config)
     assert result.get("__interrupt__")
-    # 本次会话始终允许 → 执行并写入 grant
+    # 本对话内始终允许 → 执行并写入 grant
     await graph.ainvoke(Command(resume=_answer([APPROVAL_ALWAYS_ALLOW_LABEL])), config)
     assert executed == ["/a", "/b"]
 
@@ -391,3 +400,364 @@ async def test_approval_interrupt_resume_and_session_grant_end_to_end():
     result = await graph.ainvoke({"messages": [HumanMessage("删除 /c")]}, config)
     assert not result.get("__interrupt__")
     assert executed == ["/a", "/b", "/c"]
+
+
+# ============ 并行工具调用：after_model 批量审批 ============
+
+
+def _ai_message(tool_calls: list[dict]) -> AIMessage:
+    return AIMessage(content="", tool_calls=tool_calls)
+
+
+@pytest.mark.asyncio
+async def test_after_model_batches_parallel_approvals(monkeypatch):
+    payloads: list[dict] = []
+
+    def fake_interrupt(payload: dict) -> dict:
+        payloads.append(payload)
+        return _batch_answer({"c1": APPROVAL_ALLOW_LABEL, "c2": APPROVAL_DENY_LABEL})
+
+    monkeypatch.setattr(tool_approval, "interrupt", fake_interrupt)
+    middleware = create_tool_approval_middleware()
+    state = {
+        "messages": [
+            _ai_message(
+                [
+                    {
+                        "id": "c1",
+                        "type": "tool_call",
+                        "name": "file_delete",
+                        "args": {"path": "/a", "intent": "删除 a"},
+                    },
+                    {"id": "c2", "type": "tool_call", "name": "mcp_fault-db_db_info", "args": {}},
+                ]
+            )
+        ]
+    }
+
+    update = await middleware.aafter_model(state, None)
+
+    # 逐条决策：允许第一条、拒绝第二条
+    assert update["approval_decisions"] == {"c1": "allow", "c2": "deny"}
+    assert "approval_grants" not in update
+    items = payloads[0]["approval_items"]
+    assert [item["tool_name"] for item in items] == ["file_delete", "mcp_fault-db_db_info"]
+    assert items[0]["args_summary"] == {"path": "/a"}
+    assert items[0]["intent"] == "删除 a"
+    assert [item["call_id"] for item in items] == ["c1", "c2"]
+    questions = payloads[0]["questions"]
+    assert [question["id"] for question in questions] == ["c1", "c2"]
+    assert [option["label"] for option in questions[0]["options"]] == [
+        APPROVAL_ALLOW_LABEL,
+        APPROVAL_ALWAYS_ALLOW_LABEL,
+        APPROVAL_DENY_LABEL,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_after_model_single_tool_always_allow_grants(monkeypatch):
+    monkeypatch.setattr(tool_approval, "interrupt", lambda _payload: _answer([APPROVAL_ALWAYS_ALLOW_LABEL]))
+    middleware = create_tool_approval_middleware()
+    state = {"messages": [_ai_message([{"id": "c1", "type": "tool_call", "name": "file_delete", "args": {}}])]}
+
+    update = await middleware.aafter_model(state, None)
+
+    assert update["approval_decisions"] == {"c1": "allow"}
+    assert update["approval_grants"] == ["tool:file_delete"]
+
+
+@pytest.mark.asyncio
+async def test_after_model_deny_all(monkeypatch):
+    monkeypatch.setattr(tool_approval, "interrupt", lambda _payload: _answer([APPROVAL_DENY_LABEL]))
+    middleware = create_tool_approval_middleware()
+    state = {"messages": [_ai_message([{"id": "c1", "type": "tool_call", "name": "file_delete", "args": {}}])]}
+
+    update = await middleware.aafter_model(state, None)
+
+    assert update == {"approval_decisions": {"c1": "deny"}}
+
+
+@pytest.mark.asyncio
+async def test_after_model_skips_granted_and_decided_calls(monkeypatch):
+    def failing_interrupt(_payload):
+        raise AssertionError("已授权/已决策的调用不应再次询问")
+
+    monkeypatch.setattr(tool_approval, "interrupt", failing_interrupt)
+    middleware = create_tool_approval_middleware()
+    state = {
+        "messages": [_ai_message([{"id": "c1", "type": "tool_call", "name": "file_delete", "args": {}}])],
+        "approval_grants": ["tool:file_delete"],
+    }
+    assert await middleware.aafter_model(state, None) == {"approval_decisions": {}}
+
+    decided_state = {
+        "messages": [_ai_message([{"id": "c2", "type": "tool_call", "name": "file_move", "args": {}}])],
+        "approval_decisions": {"c2": "deny"},
+    }
+    assert await middleware.aafter_model(decided_state, None) == {"approval_decisions": {}}
+
+
+@pytest.mark.asyncio
+async def test_after_model_uses_mcp_display_label(monkeypatch):
+    payloads: list[dict] = []
+
+    def fake_interrupt(payload: dict) -> dict:
+        payloads.append(payload)
+        return _answer([APPROVAL_ALLOW_LABEL])
+
+    monkeypatch.setattr(tool_approval, "interrupt", fake_interrupt)
+    tool = SimpleNamespace(
+        name="mcp_fault-db_db_info",
+        metadata={
+            "origin": "mcp",
+            "mcp_server_id": "fault-db",
+            "mcp_tool_name": "db_info",
+            "display_name": "MySQL 诊断",
+        },
+    )
+    middleware = create_tool_approval_middleware([tool])
+    state = {"messages": [_ai_message([{"id": "c1", "type": "tool_call", "name": "mcp_fault-db_db_info", "args": {}}])]}
+
+    update = await middleware.aafter_model(state, None)
+
+    assert update == {"approval_decisions": {"c1": "allow"}}
+    assert "MySQL 诊断" in payloads[0]["questions"][0]["question"]
+
+
+@pytest.mark.asyncio
+async def test_wrap_tool_call_consumes_decisions(monkeypatch):
+    def failing_interrupt(_payload):
+        raise AssertionError("已有决策时不应再次审批")
+
+    monkeypatch.setattr(tool_approval, "interrupt", failing_interrupt)
+    middleware = create_tool_approval_middleware()
+    allow_request = SimpleNamespace(
+        tool_call={"id": "c1", "name": "file_delete", "args": {"path": "/a"}},
+        state={"approval_decisions": {"c1": "allow"}},
+        tool=None,
+    )
+    result = await middleware.awrap_tool_call(allow_request, _ok_handler)
+    assert result.content == "done"
+
+    deny_request = SimpleNamespace(
+        tool_call={"id": "c1", "name": "file_delete", "args": {"path": "/a"}},
+        state={"approval_decisions": {"c1": "deny"}},
+        tool=None,
+    )
+    result = await middleware.awrap_tool_call(deny_request, _ok_handler)
+    assert result.status == "error"
+
+
+@pytest.mark.asyncio
+async def test_parallel_tool_calls_single_approval_end_to_end():
+    """模型一次返回两个审批工具调用：只中断一次，允许全部后两个都执行。"""
+    from langchain.agents import create_agent
+    from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
+    from langchain_core.messages import HumanMessage
+    from langchain_core.tools import tool as lc_tool
+    from langgraph.checkpoint.memory import MemorySaver
+
+    from apps.chat_data_app.agent.agent_state import ChatDataAgentState
+
+    executed: list[str] = []
+
+    @lc_tool
+    def file_delete(path: str) -> str:
+        """删除文件（测试用）。"""
+        executed.append(f"delete:{path}")
+        return f"deleted {path}"
+
+    @lc_tool
+    def dir_delete(path: str) -> str:
+        """删除目录（测试用）。"""
+        executed.append(f"rmdir:{path}")
+        return f"removed {path}"
+
+    class _ToolCallingFakeModel(FakeMessagesListChatModel):
+        def bind_tools(self, _tools, **_kwargs):
+            return self
+
+    model = _ToolCallingFakeModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {"id": "d1", "type": "tool_call", "name": "file_delete", "args": {"path": "/a"}},
+                    {"id": "d2", "type": "tool_call", "name": "dir_delete", "args": {"path": "/b"}},
+                ],
+            ),
+            AIMessage(content="全部删除完成"),
+        ]
+    )
+    graph = create_agent(
+        model=model,
+        tools=[file_delete, dir_delete],
+        system_prompt="test",
+        middleware=[create_tool_approval_middleware([file_delete, dir_delete])],
+        state_schema=ChatDataAgentState,
+        checkpointer=MemorySaver(),
+    )
+    config = {"configurable": {"thread_id": "approval-parallel"}}
+
+    result = await graph.ainvoke({"messages": [HumanMessage("删除 /a 和 /b")]}, config)
+    assert result.get("__interrupt__")
+    assert executed == []
+    await graph.ainvoke(Command(resume=_batch_answer({"d1": APPROVAL_ALLOW_LABEL, "d2": APPROVAL_ALLOW_LABEL})), config)
+    assert sorted(executed) == ["delete:/a", "rmdir:/b"]
+
+
+@pytest.mark.asyncio
+async def test_after_model_clears_previous_decisions(monkeypatch):
+    """每轮模型响应重置 decisions：无待审批调用时写空，防止 checkpoint 累积。"""
+    monkeypatch.setattr(tool_approval, "interrupt", lambda _payload: _answer([APPROVAL_ALLOW_LABEL]))
+    middleware = create_tool_approval_middleware()
+    state = {
+        "messages": [AIMessage(content="无需工具")],
+        "approval_decisions": {"old-call": "allow"},
+    }
+    assert await middleware.aafter_model(state, None) == {"approval_decisions": {}}
+
+
+def test_replace_approval_decisions_drops_history():
+    from apps.chat_data_app.agent.agent_state import replace_approval_decisions
+
+    assert replace_approval_decisions({"old": "allow"}, {"new": "deny"}) == {"new": "deny"}
+    assert replace_approval_decisions({"old": "allow"}, {}) == {}
+
+
+# ============ 边界分支 ============
+
+
+@pytest.mark.asyncio
+async def test_after_model_interrupt_channel_error_denies_all(monkeypatch):
+    def raising_interrupt(_payload):
+        raise RuntimeError("channel down")
+
+    monkeypatch.setattr(tool_approval, "interrupt", raising_interrupt)
+    middleware = create_tool_approval_middleware()
+    state = {
+        "messages": [
+            _ai_message(
+                [
+                    {"id": "c1", "type": "tool_call", "name": "file_delete", "args": {}},
+                    {"id": "c2", "type": "tool_call", "name": "dir_delete", "args": {}},
+                ]
+            )
+        ]
+    }
+
+    update = await middleware.aafter_model(state, None)
+
+    assert update == {"approval_decisions": {"c1": "deny", "c2": "deny"}}
+
+
+@pytest.mark.asyncio
+async def test_after_model_ignores_non_approval_calls_and_empty_state(monkeypatch):
+    def failing_interrupt(_payload):
+        raise AssertionError("非审批工具不应触发审批")
+
+    monkeypatch.setattr(tool_approval, "interrupt", failing_interrupt)
+    middleware = create_tool_approval_middleware()
+
+    assert await middleware.aafter_model({"messages": []}, None) == {"approval_decisions": {}}
+    state = {"messages": [_ai_message([{"id": "c1", "type": "tool_call", "name": "file_read", "args": {}}])]}
+    assert await middleware.aafter_model(state, None) == {"approval_decisions": {}}
+
+
+def test_args_summary_keeps_scalars_and_caps_entries():
+    from apps.chat_data_app.agent.middleware.tool_approval import _args_summary
+
+    assert _args_summary({"args": "not-a-dict"}) == {}
+    assert _args_summary({"args": None}) == {}
+    summary = _args_summary(
+        {
+            "args": {
+                "a": 1,
+                "b": object(),
+                "c": 2,
+                "d": 3,
+                "e": 4,
+                "f": 5,
+                "g": 6,
+                "h": 7,
+            }
+        }
+    )
+    assert "b" not in summary
+    assert len(summary) == 6
+    assert summary["a"] == "1"
+
+
+def test_resolve_batch_answers_malformed_answers_fail_closed():
+    from apps.chat_data_app.agent.middleware.tool_approval import _resolve_batch_answers
+
+    calls = [{"call_id": "c1", "grant_key": "tool:a"}, {"call_id": "c2", "grant_key": "tool:b"}]
+    assert _resolve_batch_answers({"answers": "bad"}, calls) == ({"c1": "deny", "c2": "deny"}, [])
+    assert _resolve_batch_answers({"answers": [None, {"id": "c1", "selected": []}]}, calls) == (
+        {"c1": "deny", "c2": "deny"},
+        [],
+    )
+    assert _resolve_batch_answers({"answers": [{"id": "c1", "selected": [APPROVAL_ALLOW_LABEL]}]}, calls) == (
+        {"c1": "allow", "c2": "deny"},
+        [],
+    )
+    assert _resolve_batch_answers({"answers": [{"id": "c1", "selected": [APPROVAL_ALWAYS_ALLOW_LABEL]}]}, calls) == (
+        {"c1": "allow", "c2": "deny"},
+        ["tool:a"],
+    )
+
+
+@pytest.mark.asyncio
+async def test_after_model_batch_supports_per_item_always_allow(monkeypatch):
+    monkeypatch.setattr(
+        tool_approval,
+        "interrupt",
+        lambda _payload: _batch_answer({"c1": APPROVAL_ALWAYS_ALLOW_LABEL, "c2": APPROVAL_DENY_LABEL}),
+    )
+    middleware = create_tool_approval_middleware()
+    state = {
+        "messages": [
+            _ai_message(
+                [
+                    {"id": "c1", "type": "tool_call", "name": "file_delete", "args": {}},
+                    {"id": "c2", "type": "tool_call", "name": "dir_delete", "args": {}},
+                ]
+            )
+        ]
+    }
+
+    update = await middleware.aafter_model(state, None)
+
+    assert update["approval_decisions"] == {"c1": "allow", "c2": "deny"}
+    assert update["approval_grants"] == ["tool:file_delete"]
+
+
+def test_create_middleware_skips_tools_without_name():
+    tool = SimpleNamespace(name="", metadata=None)
+    named = SimpleNamespace(name="mcp_s_t", metadata={"display_name": "展示名"})
+    middleware = create_tool_approval_middleware([tool, named])
+    assert middleware._tool_labels == {"mcp_s_t": "展示名"}
+
+
+def test_single_approval_payload_includes_item_with_call_id():
+    payload = build_approval_payload(
+        "file_delete", {"id": "call-9", "args": {"file_path": "/mnt/user-data/workspace/a.txt", "intent": "删除 a"}}
+    )
+    assert payload["approval_items"] == [
+        {
+            "call_id": "call-9",
+            "tool_name": "file_delete",
+            "label": "file_delete",
+            "intent": "删除 a",
+            "args_summary": {"file_path": "/mnt/user-data/workspace/a.txt"},
+        }
+    ]
+
+
+def test_args_summary_keeps_nested_json():
+    from apps.chat_data_app.agent.middleware.tool_approval import _args_summary
+
+    summary = _args_summary({"args": {"nested": {"a": 1}, "list": [1, 2], "text": "x"}})
+    assert summary["text"] == "x"
+    assert summary["nested"] == '{"a": 1}'
+    assert summary["list"] == "[1, 2]"

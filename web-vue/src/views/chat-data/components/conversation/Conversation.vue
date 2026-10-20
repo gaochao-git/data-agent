@@ -225,7 +225,7 @@ const applyRunDoneState = (
     hasActiveRun.value = true
     activeRunStatus.value = 'waiting_user'
     // 兜底 done（如 Redis 劣化时 question 事件未被读到）也可能走这里：
-    // 事件缺失时卡片未填充，主动拉一次待答问题，避免用户面对「等待回答」
+    // 事件缺失时卡片未填充，主动拉一次待答问题，避免用户面对「待确认」
     // 状态却没有可回答的卡片
     if (!pendingUserQuestion.value) void restorePendingUserQuestion()
     emit('runStatusChanged', conversationId, 'waiting_user')
