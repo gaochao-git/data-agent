@@ -1101,19 +1101,17 @@ class ChatDataPlugin(Base):
 
 
 class ChatDataOntology(Base):
-    """本体表：本体实体，一对一绑定数据源组（一次绑定）。
+    """本体表：本体实体（纯语义容器，不绑定数据源组）。
 
-    本体是对象类型的容器与取数后端锚点（组随本体继承）：对象类型挂本体即确定其
-    映射可选的模型范围（本体内），关系类型两端对象类型同本体即合法。组信息不在
-    关系类型/映射层重复决策。本体名全局唯一；删除为软删，挂有对象类型时禁删。
-    对位 Palantir 一个 ontology（2026-10-20 由「领域」更名，物理表同步更名）。
+    本体是对象类型的导航/治理容器，对位 Palantir ontology——不绑定任何存储后端；
+    对象类型的取数后端=各自映射指向的语义模型（可跨数据源组）。本体名全局唯一；
+    删除为软删，挂有对象类型时禁删。2026-10-20 由「领域」更名并解耦组绑定。
     """
 
     __tablename__ = "chat_data_ontology"
 
     id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
     ontology_name: Mapped[str] = mapped_column(String(64), nullable=False)
-    group_id: Mapped[str] = mapped_column(String(128), nullable=False)
     display_name: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
     description_text: Mapped[str] = mapped_column(String(512), nullable=False, default="", server_default="")
     delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
@@ -1126,10 +1124,7 @@ class ChatDataOntology(Base):
     update_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
 
-    __table_args__ = (
-        UniqueConstraint("ontology_name", name="uniq_ontology_name"),
-        Index("idx_ontology_group", "group_id", "delete_flag"),
-    )
+    __table_args__ = (UniqueConstraint("ontology_name", name="uniq_ontology_name"),)
 
 
 class ChatDataModelRegistry(Base):
@@ -1182,7 +1177,7 @@ class ChatDataOntologyObjectType(Base):
     语义模型绑定独立成映射表 chat_data_ontology_mapping（对齐 ossie
     概念层/映射层分离，「一源一对象类型」由映射表唯一索引约束），本表只存概念层
     元数据。主键=标识属性（is_identifier）组合，标题键=is_title 属性，均由属性
-    表表达，本表不冗余存储。ontology_id 指向本体实体（组随本体继承），NULL=未挂本体。
+    表表达，本表不冗余存储。ontology_id 指向本体实体（纯导航归属），NULL=未挂本体。
     """
 
     __tablename__ = "chat_data_ontology_object_type"

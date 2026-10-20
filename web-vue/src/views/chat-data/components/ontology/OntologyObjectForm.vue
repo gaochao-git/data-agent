@@ -23,7 +23,7 @@ import {
 const props = defineProps({
   // 编辑的对象名；空串表示新建
   objectTypeName: { type: String, default: '' },
-  // 本体清单（父组件加载；对象类型挂本体=继承本体绑定的数据源组）
+  // 本体清单（父组件加载；对象类型挂本体=纯导航归属，不约束映射组）
   ontologies: { type: Array as PropType<OntologyItem[]>, default: () => [] },
   // 新建时的预选本体（树右键「新增对象」从本体节点发起）
   defaultOntologyId: { type: Number as PropType<number | null>, default: null }
@@ -73,13 +73,9 @@ const removeMappingRow = (index: number) => {
   mappingRows.value.splice(index, 1)
 }
 
-// 本体下拉标签：展示名（API 名）；映射候选组 = 本体绑定的组（未挂本体不限制）
+// 本体下拉标签：展示名（API 名）；本体不绑组，映射候选不限组
 const ontologyLabel = (ontology: OntologyItem) =>
   ontology.display_name ? `${ontology.display_name} (${ontology.ontology_name})` : ontology.ontology_name
-const ontologyGroupIds = computed(() => {
-  const ontology = props.ontologies.find(item => item.id === formOntologyId.value)
-  return ontology ? [ontology.group_id] : []
-})
 
 // certified 冻结名单：既有属性禁删禁改名禁改主键/标题标记
 const frozenNames = computed(() =>
@@ -292,7 +288,7 @@ const saveObject = async () => {
           <el-input v-model="formDisplayName" size="small" maxlength="128" placeholder="用户可见名称，如 订单" />
         </div>
         <div>
-          <div class="mb-1 text-xs text-slate-500">所属本体（挂本体后继承其绑定的数据源组）</div>
+          <div class="mb-1 text-xs text-slate-500">所属本体（纯导航归属，不影响取数）</div>
           <el-select
             v-model="formOntologyId"
             size="small"
@@ -344,7 +340,6 @@ const saveObject = async () => {
         <OntologyMappingEditor
           :rows="mappingRows"
           :properties="propertyRows"
-          :group-ids="ontologyGroupIds"
           @remove-row="removeMappingRow"
         />
       </div>

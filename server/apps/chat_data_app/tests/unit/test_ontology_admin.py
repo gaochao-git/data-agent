@@ -797,40 +797,27 @@ def test_injection_bundle_excludes_non_active_relations(harness, deps_ok):
     assert bundle["relation_types"] == []
 
 
-# ---------- 本体（组本体一次绑定，对象类型/关系类型继承） ----------
-
-
-class _StubDataSourceDao:
-    """数据源组 DAO 桩：组存在性放行/收紧。"""
-
-    def __init__(self, existing_ids: set[str] | None = None):
-        self._existing_ids = existing_ids
-
-    async def has_datasource_async(self, datasource_id: str) -> bool:
-        if self._existing_ids is None:
-            return True
-        return datasource_id in self._existing_ids
+# ---------- 本体（纯语义容器，不绑数据源组） ----------
 
 
 def _ontology_payload(**overrides):
-    payload = {"group_id": "grp-1", "display_name": "电商交易", "description": "交易域"}
+    payload = {"display_name": "电商交易", "description": "交易域"}
     payload.update(overrides)
     return payload
 
 
-def test_ontology_crud_lifecycle(harness, deps_ok, monkeypatch):
-    monkeypatch.setattr(ontology_service_module, "DataSourceDao", _StubDataSourceDao)
+def test_ontology_crud_lifecycle(harness, deps_ok):
     # 创建
     saved = asyncio.run(ontology_service.upsert_ontology_async("ecommerce_trade", _ontology_payload()))
-    assert saved["group_id"] == "grp-1"
+    assert saved["display_name"] == "电商交易"
     # 重复创建未带 allow_overwrite 拒绝（同一 API 名已被占用，走 40068）
     with pytest.raises(OntologyAlreadyExistsError, match="本体已存在"):
         asyncio.run(ontology_service.upsert_ontology_async("ecommerce_trade", _ontology_payload()))
-    # 编辑（allow_overwrite）改组
+    # 编辑（allow_overwrite）改展示名
     saved = asyncio.run(
-        ontology_service.upsert_ontology_async("ecommerce_trade", _ontology_payload(group_id="grp-2"), allow_overwrite=True)
+        ontology_service.upsert_ontology_async("ecommerce_trade", _ontology_payload(display_name="跨境电商"), allow_overwrite=True)
     )
-    assert saved["group_id"] == "grp-2"
+    assert saved["display_name"] == "跨境电商"
     # 列表
     ontologies = asyncio.run(ontology_service.list_ontologies_async())
     assert [item["ontology_name"] for item in ontologies] == ["ecommerce_trade"]
@@ -842,14 +829,7 @@ def test_ontology_crud_lifecycle(harness, deps_ok, monkeypatch):
         asyncio.run(ontology_service.delete_ontology_async("ecommerce_trade"))
 
 
-def test_ontology_rejects_unknown_group(harness, deps_ok, monkeypatch):
-    monkeypatch.setattr(ontology_service_module, "DataSourceDao", lambda: _StubDataSourceDao(existing_ids={"grp-real"}))
-    with pytest.raises(OntologyInvalidError, match="数据源组不存在"):
-        asyncio.run(ontology_service.upsert_ontology_async("ecommerce_trade", _ontology_payload(group_id="grp-ghost")))
-
-
-def test_ontology_delete_blocked_when_objects_attached(harness, deps_ok, monkeypatch):
-    monkeypatch.setattr(ontology_service_module, "DataSourceDao", _StubDataSourceDao)
+def test_ontology_delete_blocked_when_objects_attached(harness, deps_ok):
     ontology = asyncio.run(ontology_service.upsert_ontology_async("ecommerce_trade", _ontology_payload()))
     asyncio.run(
         ontology_service.upsert_object_type_async(
@@ -860,8 +840,7 @@ def test_ontology_delete_blocked_when_objects_attached(harness, deps_ok, monkeyp
         asyncio.run(ontology_service.delete_ontology_async("ecommerce_trade"))
 
 
-def test_object_ontology_id_validation(harness, deps_ok, monkeypatch):
-    monkeypatch.setattr(ontology_service_module, "DataSourceDao", _StubDataSourceDao)
+def test_object_ontology_id_validation(harness, deps_ok):
     # 本体不存在拒绝
     with pytest.raises(OntologyInvalidError, match="本体不存在"):
         asyncio.run(ontology_service.upsert_object_type_async("Order", _object_payload(ontology_id=999)))
@@ -881,9 +860,8 @@ def test_object_ontology_id_validation(harness, deps_ok, monkeypatch):
     )
 
 
-def test_object_ontology_reassign(harness, deps_ok, monkeypatch):
-    """拖拽换域窄写路径：改归属不动对象类型名/属性，移出本体=ontology_id 置空。"""
-    monkeypatch.setattr(ontology_service_module, "DataSourceDao", _StubDataSourceDao)
+def test_object_ontology_reassign(harness, deps_ok):
+    """拖拽换本体窄写路径：改归属不动对象类型名/属性，移出本体=ontology_id 置空。"""
     ontology_a = asyncio.run(ontology_service.upsert_ontology_async("ontology_a", _ontology_payload()))
     ontology_b = asyncio.run(ontology_service.upsert_ontology_async("ontology_b", _ontology_payload(display_name="供应链")))
     asyncio.run(ontology_service.upsert_object_type_async("Order", _object_payload(ontology_id=int(ontology_a["id"]))))
@@ -1108,12 +1086,11 @@ def test_relation_structural_edit_downgrades_status(harness, deps_ok):
     assert saved["status"] == "draft"
 
 
-def test_ontology_recreate_after_delete_without_overwrite(harness, deps_ok, monkeypatch):
-    monkeypatch.setattr(ontology_service_module, "DataSourceDao", _StubDataSourceDao)
+def test_ontology_recreate_after_delete_without_overwrite(harness, deps_ok):
     asyncio.run(ontology_service.upsert_ontology_async("ecommerce_trade", _ontology_payload()))
     asyncio.run(ontology_service.delete_ontology_async("ecommerce_trade"))
-    revived = asyncio.run(ontology_service.upsert_ontology_async("ecommerce_trade", _ontology_payload(group_id="grp-2")))
-    assert revived["group_id"] == "grp-2"
+    revived = asyncio.run(ontology_service.upsert_ontology_async("ecommerce_trade", _ontology_payload(display_name="复活的交易")))
+    assert revived["display_name"] == "复活的交易"
     assert revived["delete_flag"] == 0
 
 
@@ -1212,78 +1189,6 @@ def test_edit_blocked_when_identifier_change_breaks_to_columns(harness, deps_ok)
         )
 
 
-# ---------- 本体组锚点 ----------
-
-
-def test_object_type_mapping_group_must_match_ontology_group(harness, deps_ok, monkeypatch):
-    monkeypatch.setattr(ontology_service_module, "DataSourceDao", _StubDataSourceDao)
-    monkeypatch.setattr(
-        ontology_service_module,
-        "semantic_config_dao",
-        _StubSemanticConfigDao(dimension_index=DIMENSION_INDEX, group_ids={"cfg-1": "grp-2"}),
-    )
-    ontology = asyncio.run(ontology_service.upsert_ontology_async("ecommerce_trade", _ontology_payload()))
-    with pytest.raises(OntologyInvalidError, match="数据源组"):
-        asyncio.run(
-            ontology_service.upsert_object_type_async(
-                "Order", _object_payload(ontology_id=int(ontology["id"]), mappings=[dict(SEMANTIC_MAPPING)])
-            )
-        )
-    # 组锚点一致时放行
-    monkeypatch.setattr(
-        ontology_service_module,
-        "semantic_config_dao",
-        _StubSemanticConfigDao(dimension_index=DIMENSION_INDEX, group_ids={"cfg-1": "grp-1"}),
-    )
-    saved = asyncio.run(
-        ontology_service.upsert_object_type_async(
-            "Order", _object_payload(ontology_id=int(ontology["id"]), mappings=[dict(SEMANTIC_MAPPING)])
-        )
-    )
-    assert saved["ontology_id"] == int(ontology["id"])
-
-
-def test_object_ontology_reassign_rejects_cross_group_mapping(harness, deps_ok, monkeypatch):
-    monkeypatch.setattr(ontology_service_module, "DataSourceDao", _StubDataSourceDao)
-    monkeypatch.setattr(
-        ontology_service_module,
-        "semantic_config_dao",
-        _StubSemanticConfigDao(dimension_index=DIMENSION_INDEX, group_ids={"cfg-1": "grp-1"}),
-    )
-    ontology_a = asyncio.run(ontology_service.upsert_ontology_async("ontology_a", _ontology_payload()))
-    ontology_b = asyncio.run(
-        ontology_service.upsert_ontology_async("ontology_b", _ontology_payload(group_id="grp-2", display_name="供应链"))
-    )
-    asyncio.run(
-        ontology_service.upsert_object_type_async(
-            "Order", _object_payload(ontology_id=int(ontology_a["id"]), mappings=[dict(SEMANTIC_MAPPING)])
-        )
-    )
-    with pytest.raises(OntologyInvalidError, match="数据源组"):
-        asyncio.run(ontology_service.set_object_type_ontology_async("Order", int(ontology_b["id"])))
-
-
-def test_ontology_group_change_blocked_by_cross_group_objects(harness, deps_ok, monkeypatch):
-    monkeypatch.setattr(ontology_service_module, "DataSourceDao", _StubDataSourceDao)
-    monkeypatch.setattr(
-        ontology_service_module,
-        "semantic_config_dao",
-        _StubSemanticConfigDao(dimension_index=DIMENSION_INDEX, group_ids={"cfg-1": "grp-1"}),
-    )
-    ontology = asyncio.run(ontology_service.upsert_ontology_async("ecommerce_trade", _ontology_payload()))
-    asyncio.run(
-        ontology_service.upsert_object_type_async(
-            "Order", _object_payload(ontology_id=int(ontology["id"]), mappings=[dict(SEMANTIC_MAPPING)])
-        )
-    )
-    with pytest.raises(OntologyStateInvalidError, match="Order"):
-        asyncio.run(
-            ontology_service.upsert_ontology_async(
-                "ecommerce_trade", _ontology_payload(group_id="grp-2"), allow_overwrite=True
-            )
-        )
-
-
 # ---------- 其他 P2 ----------
 
 
@@ -1314,8 +1219,7 @@ def test_deprecated_until_parse_and_invalid(harness, deps_ok):
     assert saved["deprecated_until"] == "2027-01-01 00:00:00"
 
 
-def test_ontology_name_length_limit(harness, deps_ok, monkeypatch):
-    monkeypatch.setattr(ontology_service_module, "DataSourceDao", _StubDataSourceDao)
+def test_ontology_name_length_limit(harness, deps_ok):
     with pytest.raises(OntologyNameInvalidError, match="长度 1-64"):
         asyncio.run(ontology_service.upsert_ontology_async("d" * 65, _ontology_payload()))
 

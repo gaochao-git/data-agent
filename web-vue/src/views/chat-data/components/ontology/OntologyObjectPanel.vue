@@ -5,7 +5,7 @@
  * 右侧按选中节点类型渲染只读详情卡；全部写操作（新建/编辑/状态/删除）收敛到右键菜单。
  * 归属口径：属性/映射是对象自有物，挂对象下；关系是对象之间的边（双规范对齐 Palantir link type / Ossie
  * top-level relationships），挂本体下（两端同本体一条、跨本体两端各一条带「跨本体」标记），不放对象里。
- * 本体=原「领域」，一对一绑定数据源组（对象类型挂本体继承其组），图语义为封闭对象图（对位 Palantir 一个 ontology）；
+ * 本体=纯语义容器，不绑数据源组（对象类型取数后端由各自映射决定，可跨组，对齐 Palantir「本体不绑存储」）；
  * 本体子节点为常驻「对象类型/关系类型」分组锚点。
  */
 import { computed, onMounted, onUnmounted, ref } from 'vue'
@@ -19,8 +19,7 @@ import {
   getAdminOntologies,
   getAdminOntologyObjectType,
   getAdminOntologyObjectTypes,
-  getAdminOntologyRelationTypes,
-  getAdminDatasources
+  getAdminOntologyRelationTypes
 } from '../../api'
 import type {
   OntologyItem,
@@ -43,10 +42,9 @@ const emit = defineEmits<{ changed: [] }>()
 // 语义模型选项（映射行回显「模型名（组名）」）
 const { load: loadSemanticOptions, optionOf } = useSemanticConfigOptions()
 
-// ---------- 本体（原「领域」，对象类型容器）与数据源组名 ----------
+// ---------- 本体（对象类型容器，纯语义容器不绑数据源组） ----------
 
 const ontologies = ref<OntologyItem[]>([])
-const groupNames = ref<Record<string, string>>({})
 const ontologyOf = (ontologyId: number | null): OntologyItem | undefined =>
   ontologies.value.find(item => item.id === ontologyId)
 const ontologyLabelOf = (ontologyId: number | null): string => {
@@ -54,7 +52,6 @@ const ontologyLabelOf = (ontologyId: number | null): string => {
   if (!ontology) return ''
   return ontology.display_name || ontology.ontology_name
 }
-const groupNameOf = (groupId: string): string => groupNames.value[groupId] || groupId
 
 const loadOntologies = async () => {
   try {
@@ -69,25 +66,11 @@ const loadOntologies = async () => {
   }
 }
 
-const loadGroupNames = async () => {
-  try {
-    const res = await getAdminDatasources()
-    if (res.status === 'success') {
-      const map: Record<string, string> = {}
-      for (const ds of res.data?.datasources || []) map[ds.id] = ds.group_name
-      groupNames.value = map
-    }
-  } catch (err) {
-    console.error('获取数据源组清单失败:', err)
-  }
-}
-
 onMounted(() => {
   // 宿主用 v-show 承载本面板且切换页签时只调 AdminPanel.ensureLoaded；自加载保证任何进入路径都有数据
   void ensureLoaded()
   void loadSemanticOptions()
   void loadOntologies()
-  void loadGroupNames()
   void loadRelationSources()
   document.addEventListener('click', closeCtxMenu)
 })
@@ -162,7 +145,6 @@ interface OntologyNode {
   ontology_name: string
   ontology_label: string
   description: string
-  group_id: string
   is_ungrouped: boolean
   /** 本体下对象数（本体行直接展示，不必展开「对象」分组） */
   object_type_count: number
@@ -324,7 +306,6 @@ const treeData = computed<RootNode[]>(() => {
     ontology_name: ontology.ontology_name,
     ontology_label: ontology.display_name || ontology.ontology_name,
     description: ontology.description || '',
-    group_id: ontology.group_id,
     is_ungrouped: false,
     object_type_count: (grouped.get(ontology.id) || []).length,
     children: buildOntologyChildren(ontology.id, grouped.get(ontology.id) || [])
@@ -335,8 +316,7 @@ const treeData = computed<RootNode[]>(() => {
     ontology_id: null,
     ontology_name: '',
     ontology_label: UNGROUPED_ONTOLOGY,
-    description: '未挂本体的对象：不继承任何数据源组，建议补齐本体归属。',
-    group_id: '',
+    description: '未挂本体的对象：建议补齐本体归属（纯导航归属，不影响取数）。',
     is_ungrouped: true,
     object_type_count: ungrouped.length,
     children: buildOntologyChildren(null, ungrouped)
@@ -906,9 +886,6 @@ const onRelationSaved = (objectTypeNames: string[]) => {
               <span v-else-if="data.kind === 'ontology'" class="flex items-center gap-1.5 py-0.5">
                 <i :class="['fa-solid text-[11px]', data.is_ungrouped ? 'fa-box-open text-slate-300' : 'fa-layer-group text-amber-500']"></i>
                 <span class="text-xs font-medium text-slate-700">{{ data.ontology_label }}</span>
-                <span v-if="!data.is_ungrouped && data.group_id" class="text-[11px] text-slate-400">
-                  {{ groupNameOf(data.group_id) }}
-                </span>
                 <span class="text-[11px] text-slate-400">{{ data.object_type_count }} 个对象类型</span>
               </span>
               <!-- 本体分组节点（对象类型/关系类型，常驻锚点） -->
@@ -1119,18 +1096,12 @@ const onRelationSaved = (objectTypeNames: string[]) => {
             <div>
               本体 API 名：<span class="font-mono text-slate-700">{{ selectedNode.is_ungrouped ? '-' : selectedNode.ontology_name }}</span>
             </div>
-            <div>
-              绑定数据源组：
-              <span class="text-slate-700">
-                {{ selectedNode.is_ungrouped ? '未归本体对象不继承任何组' : groupNameOf(selectedNode.group_id) }}
-              </span>
-            </div>
-            <div class="col-span-2">对象类型数：<span class="text-slate-700">{{ selectedNode.object_type_count }} 个</span></div>
+            <div>对象类型数：<span class="text-slate-700">{{ selectedNode.object_type_count }} 个</span></div>
             <div class="col-span-2">
               描述：<span class="text-slate-700">{{ selectedNode.description || '-' }}</span>
             </div>
             <div class="col-span-2 text-[11px] text-slate-400">
-              对象类型挂本体后继承其数据源组；右键本体节点可编辑/删除本体，新建对象类型与关系类型在本体下「对象类型」「关系类型」分组节点右键发起。
+              本体不绑定数据源组，对象类型的取数后端由各自映射决定（可跨组）；右键本体节点可编辑/删除本体，新建对象类型与关系类型在本体下「对象类型」「关系类型」分组节点右键发起。
             </div>
           </div>
         </div>

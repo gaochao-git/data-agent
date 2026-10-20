@@ -154,7 +154,6 @@ class OntologyDao:
         return {
             "id": int(row.id),
             "ontology_name": _text(row.ontology_name),
-            "group_id": _text(row.group_id),
             "display_name": _text(row.display_name),
             "description": _text(row.description_text),
             "delete_flag": int(row.delete_flag or 0),
@@ -293,55 +292,6 @@ class OntologyDao:
             if ontology_id is not None:
                 counts[int(ontology_id)] = int(count)
         return counts
-
-    async def list_ontology_object_type_mapping_configs_async(self, ontology_id: int) -> list[dict[str, Any]]:
-        """列出本体内活跃对象类型及其映射的语义模型 ID（本体改组锚点校验用）。
-
-        返回 [{object_type_name, semantic_config_id}]；无映射的对象类型不出现在结果中。
-        """
-        async with session_scope() as session:
-            stmt = (
-                select(
-                    ChatDataOntologyObjectType.object_type_name, ChatDataOntologyObjectTypeMapping.semantic_config_id
-                )
-                .join(
-                    ChatDataOntologyObjectTypeMapping,
-                    ChatDataOntologyObjectTypeMapping.object_type_id == ChatDataOntologyObjectType.id,
-                )
-                .where(
-                    ChatDataOntologyObjectType.ontology_id == int(ontology_id),
-                    ChatDataOntologyObjectType.delete_flag == 0,
-                    ChatDataOntologyObjectTypeMapping.delete_flag == 0,
-                )
-                .order_by(ChatDataOntologyObjectType.object_type_name.asc())
-            )
-            rows = (await session.execute(stmt)).all()
-        return [
-            {"object_type_name": _text(object_type_name), "semantic_config_id": _text(config_id)}
-            for object_type_name, config_id in rows
-        ]
-
-    async def list_active_ontology_names_by_group_async(self, group_id: str) -> list[str]:
-        """列出绑定指定数据源组的活跃本体名（数据源组删除守护用）。"""
-        gid = _text(group_id)
-        if not gid:
-            return []
-        async with session_scope() as session:
-            rows = (
-                (
-                    await session.execute(
-                        select(ChatDataOntology.ontology_name)
-                        .where(
-                            ChatDataOntology.group_id == gid,
-                            ChatDataOntology.delete_flag == 0,
-                        )
-                        .order_by(ChatDataOntology.ontology_name.asc())
-                    )
-                )
-                .scalars()
-                .all()
-            )
-        return [_text(name) for name in rows]
 
     # ---------- 对象类型 ----------
 

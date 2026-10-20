@@ -16,9 +16,8 @@ from typing import Any
 from utils.logger import get_logger
 
 from ...daos.dao_session import transaction_scope
-from ...daos.datasource_dao import DataSourceDao
-from ...daos.meta_global_enum_dao import _split_enum_ref
 from ...daos.ontology_dao import OntologyDao
+from ...daos.meta_global_enum_dao import _split_enum_ref
 from ...daos.semantic_config_dao import SemanticConfigDao
 from ..meta.global_enum_service import MetaGlobalEnumNotFoundError, global_enum_service
 from . import ontology_validator as validator
@@ -101,21 +100,17 @@ class OntologyService:
         operator_name: str = "",
         allow_overwrite: bool = False,
     ) -> dict[str, Any]:
-        """创建或编辑本体（一对一绑定数据源组）。
+        """创建或编辑本体（纯语义容器，不绑数据源组）。
 
-        软删行同名重建走复活（不要求 allow_overwrite）；改组需保证本体内对象类型的
-        映射语义模型仍属于新组，否则拒绝（避免本体组与映射模型组漂移）。
+        软删行同名重建走复活（不要求 allow_overwrite）。对象类型的取数后端由其
+        映射指向的语义模型决定（可跨组），本体层不做组锚点校验。
         """
         name = validator.validate_api_name(ontology_name, "本体API名", max_length=validator.ONTOLOGY_NAME_MAX_LENGTH)
         normalized = validator.validate_ontology_payload(payload)
-        new_group_id = _text(normalized.get("group_id"))
         existing = await self._dao.get_ontology_row_async(name, include_deleted=True)
         existing_active = existing is not None and int(existing.get("delete_flag") or 0) == 0
         if existing_active and not allow_overwrite:
             raise OntologyAlreadyExistsError(f"本体已存在: {name}，请更换本体名或编辑现有本体")
-        await self._validate_group_exists(new_group_id)
-        if existing is not None and _text(existing.get("group_id")) != new_group_id:
-            await self._validate_ontology_group_change(existing, new_group_id)
         saved = await self._dao.upsert_ontology_async(
             name,
             normalized,
@@ -144,33 +139,6 @@ class OntologyService:
                 f"本体下仍有 {counts[int(existing['id'])]} 个对象类型，请先移出或删除对象类型后再删除本体"
             )
         await self._dao.soft_delete_ontology_async(ontology_name, update_by=operator, update_by_name=operator_name)
-
-    async def _validate_group_exists(self, group_id: str) -> None:
-        """本体绑定的数据源组必须存在。"""
-        if not group_id:
-            raise OntologyInvalidError("本体必须绑定数据源组")
-        if not await DataSourceDao().has_datasource_async(group_id):
-            raise OntologyInvalidError(f"数据源组不存在: {group_id}")
-
-    async def _validate_ontology_group_change(self, existing: dict[str, Any], new_group_id: str) -> None:
-        """本体改组门禁：本体内活跃对象类型的映射语义模型必须都属于新数据源组。"""
-        rows = await self._dao.list_ontology_object_type_mapping_configs_async(int(existing["id"]))
-        config_ids = {_text(row.get("semantic_config_id")) for row in rows} - {""}
-        if not config_ids:
-            return
-        group_ids = await semantic_config_dao.get_config_group_ids_async(sorted(config_ids))
-        offenders = sorted(
-            {
-                _text(row.get("object_type_name"))
-                for row in rows
-                if group_ids.get(_text(row.get("semantic_config_id"))) != new_group_id
-            }
-        )
-        if offenders:
-            raise OntologyStateInvalidError(
-                f"本体改组失败：对象类型 {', '.join(offenders)} 的映射语义模型不属于新数据源组 {new_group_id}，"
-                "请先调整对象类型映射或将这些对象类型移出本体"
-            )
 
     # ---------- 对象类型查询 ----------
 
@@ -214,7 +182,8 @@ class OntologyService:
         """
         name = validator.validate_api_name(object_type_name, "对象类型API名")
         meta_payload = validator.validate_object_type_payload(payload)
-        ontology_row = await self._resolve_object_type_ontology(meta_payload.get("ontology_id"))
+        # 本体存在性校验（本体不绑组，挂靠只做归属导航，无组锚点校验）
+        await self._resolve_object_type_ontology(meta_payload.get("ontology_id"))
         properties = validator.validate_property_items(payload.get("properties"))
         property_names = {item["property_name"] for item in properties}
         mappings = validator.validate_mappings(payload.get("mappings"), property_names, name)
@@ -234,7 +203,6 @@ class OntologyService:
         await self._validate_enum_refs(properties)
         await self._validate_mapping_targets(mappings)
         await self._validate_mapping_dimensions(mappings)
-        await self._validate_mapping_group_anchor(mappings, ontology_row)
         await self._check_mapping_ownership(mappings, exclude_object_type_id)
         saved = await self._dao.upsert_object_type_full_async(
             name,
@@ -463,13 +431,12 @@ class OntologyService:
         """对象类型本体归属变更（拖拽换本体窄写路径；ontology_id=None 表示移出本体）。
 
         归属变更不动对象类型名/属性/映射，无破坏性；deprecated 对象类型也允许挪归属。
-        换入本体时既有映射的语义模型必须属于目标本体的数据源组（组锚点一致）。
+        本体不绑数据源组，归属迁移不涉及映射组校验（映射可跨组）。
         """
         existing = await self._dao.get_object_type_row_async(object_type_name)
         if existing is None:
             raise OntologyNotFoundError(f"对象类型不存在: {object_type_name}")
         normalized_ontology_id: int | None = None
-        ontology: dict[str, Any] | None = None
         if ontology_id is not None:
             ontology = await self._dao.get_ontology_row_by_id_async(int(ontology_id))
             if ontology is None:
@@ -477,9 +444,6 @@ class OntologyService:
             normalized_ontology_id = int(ontology["id"])
         if existing.get("ontology_id") == normalized_ontology_id:
             return existing
-        if ontology is not None:
-            mappings = await self._dao.list_object_type_mappings_async(int(existing["id"]))
-            await self._validate_mapping_group_anchor(mappings, ontology)
         await self._dao.upsert_object_type_async(
             object_type_name,
             {"ontology_id": normalized_ontology_id},
@@ -840,24 +804,6 @@ class OntologyService:
         missing = sorted(config_ids - existing_ids)
         if missing:
             raise OntologyInvalidError(f"映射的语义模型不存在: {', '.join(missing)}")
-
-    async def _validate_mapping_group_anchor(
-        self, mappings: list[dict[str, Any]], ontology_row: dict[str, Any] | None
-    ) -> None:
-        """组锚点一致：对象类型挂本体时，其映射的语义模型必须都属于本体绑定的数据源组。"""
-        if ontology_row is None:
-            return
-        config_ids = {_text(mapping.get("semantic_config_id")) for mapping in mappings} - {""}
-        if not config_ids:
-            return
-        ontology_group_id = _text(ontology_row.get("group_id"))
-        group_ids = await semantic_config_dao.get_config_group_ids_async(sorted(config_ids))
-        mismatched = sorted(config_id for config_id in config_ids if group_ids.get(config_id) != ontology_group_id)
-        if mismatched:
-            raise OntologyInvalidError(
-                f"映射的语义模型必须属于对象类型所属本体的数据源组 {ontology_group_id}，"
-                f"以下模型不在该组: {', '.join(mismatched)}"
-            )
 
     async def _validate_mapping_dimensions(self, mappings: list[dict[str, Any]]) -> None:
         """映射右值必须是所选语义模型里真实存在的维度，且全部维度同表（实体锚点唯一）。

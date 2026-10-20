@@ -1,13 +1,12 @@
 <script setup lang="ts">
 /**
- * 本体创建/编辑弹窗：本体=对象类型容器（对位 Palantir ontology），一对一绑定数据源组。
- * 对象类型挂本体后继承其组（组决策从对象类型/关系类型层上移到本体层，一次绑定即可）。
+ * 本体创建/编辑弹窗：本体=对象类型容器（对位 Palantir ontology），纯语义容器
+ * 不绑数据源组（对象类型的取数后端由各自映射指向的语义模型决定，可跨组）。
  * 本体 API 名创建后不可改；编辑活跃本体提交 allow_overwrite=true。
  */
 import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { getAdminDatasources, getAdminOntologies, upsertAdminOntology } from '../../api'
-import type { DataSource } from '../../types'
+import { getAdminOntologies, upsertAdminOntology } from '../../api'
 import { ONTOLOGY_NAME_PATTERN } from './ontologyMeta'
 
 const props = defineProps({
@@ -25,40 +24,16 @@ const editing = computed(() => !!props.ontologyName)
 
 const formName = ref('')
 const formDisplayName = ref('')
-const formGroupId = ref('')
 const formDescription = ref('')
-
-// 数据源组下拉（本体一对一绑定的组）
-const groups = ref<DataSource[]>([])
-const groupsLoading = ref(false)
-
-const loadGroups = async () => {
-  groupsLoading.value = true
-  try {
-    const res = await getAdminDatasources()
-    if (res.status === 'success') {
-      groups.value = res.data?.datasources || []
-    } else {
-      ElMessage.error(res.msg || '获取数据源组失败')
-    }
-  } catch (err) {
-    // 拦截器已弹出具体错误原因，不再重复提示
-    console.error('获取数据源组失败:', err)
-  } finally {
-    groupsLoading.value = false
-  }
-}
 
 const resetForm = () => {
   formName.value = ''
   formDisplayName.value = ''
-  formGroupId.value = ''
   formDescription.value = ''
 }
 
 const openLoad = async () => {
   resetForm()
-  void loadGroups()
   if (!props.ontologyName) return
   loading.value = true
   try {
@@ -77,7 +52,6 @@ const openLoad = async () => {
     }
     formName.value = detail.ontology_name
     formDisplayName.value = detail.display_name
-    formGroupId.value = detail.group_id
     formDescription.value = detail.description
   } catch (err) {
     // 拦截器已弹出具体错误原因，不再重复提示
@@ -102,14 +76,9 @@ const saveOntology = async () => {
     ElMessage.warning('本体 API 名仅允许字母、数字、下划线，长度 1-128')
     return
   }
-  if (!formGroupId.value) {
-    ElMessage.warning('请选择绑定的数据源组')
-    return
-  }
   saving.value = true
   try {
     const res = await upsertAdminOntology(name, {
-      group_id: formGroupId.value,
       display_name: formDisplayName.value.trim(),
       description: formDescription.value.trim(),
       allow_overwrite: editing.value
@@ -122,7 +91,7 @@ const saveOntology = async () => {
       ElMessage.error(res.msg || '保存失败')
     }
   } catch (err) {
-    // 拦截器已弹出具体错误原因（如组不存在、重名），不再重复提示
+    // 拦截器已弹出具体错误原因（如重名），不再重复提示
     console.error('保存本体失败:', err)
   } finally {
     saving.value = false
@@ -149,18 +118,8 @@ const saveOntology = async () => {
           <el-input v-model="formDisplayName" size="small" maxlength="128" placeholder="用户可见名称，如 电子商务" />
         </div>
       </div>
-      <div>
-        <div class="mb-1 text-xs text-slate-500">绑定数据源组（一次绑定，对象类型挂本体后继承其组）</div>
-        <el-select
-          v-model="formGroupId"
-          size="small"
-          :loading="groupsLoading"
-          filterable
-          placeholder="选择数据源组"
-          class="!w-full"
-        >
-          <el-option v-for="ds in groups" :key="ds.id" :label="`${ds.group_name} (${ds.id})`" :value="ds.id" />
-        </el-select>
+      <div class="rounded bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-500">
+        本体不绑定数据源组：对象类型的取数后端由其映射指向的语义模型决定，同一本体下的对象可来自不同数据源组。
       </div>
       <div>
         <div class="mb-1 text-xs text-slate-500">描述</div>

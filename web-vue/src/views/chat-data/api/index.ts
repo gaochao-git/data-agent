@@ -2088,7 +2088,7 @@ export function checkAdminOntologyConsistency(): Promise<ApiResponse<OntologyCon
   })
 }
 
-/** 后台：本体列表（本体=对象类型容器，一对一绑定数据源组） */
+/** 后台：本体列表（本体=对象类型容器，纯语义容器不绑数据源组） */
 export function getAdminOntologies(): Promise<ApiResponse<{ ontologies: OntologyItem[] }>> {
   return request({
     url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/ontologies`,
@@ -2096,11 +2096,10 @@ export function getAdminOntologies(): Promise<ApiResponse<{ ontologies: Ontology
   })
 }
 
-/** 后台：创建/编辑本体（绑定数据源组；编辑活跃本体需 allow_overwrite=true） */
+/** 后台：创建/编辑本体（不绑数据源组；编辑活跃本体需 allow_overwrite=true） */
 export function upsertAdminOntology(
   ontologyName: string,
   data: {
-    group_id: string
     display_name?: string
     description?: string
     allow_overwrite?: boolean

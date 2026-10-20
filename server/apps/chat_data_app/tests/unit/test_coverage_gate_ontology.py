@@ -48,7 +48,6 @@ from apps.chat_data_app.tests.unit.test_ontology_admin import (
     SEMANTIC_MAPPING,
     VALID_PROPERTY,
     _object_payload,
-    _StubDataSourceDao,
     _StubSemanticConfigDao,
 )
 from apps.chat_data_app.tests.unit.test_ontology_admin import (
@@ -88,10 +87,8 @@ deps_ok = _imported_deps_ok
             "对象类型描述不超过",
         ),
         (lambda: validator.validate_object_type_payload({"display_name": "x", "ontology_id": "1"}), "本体ID必须为整数"),
-        (lambda: validator.validate_ontology_payload({"group_id": ""}), "本体必须绑定数据源组"),
-        (lambda: validator.validate_ontology_payload({"group_id": "g" * 129}), "本体必须绑定数据源组"),
-        (lambda: validator.validate_ontology_payload({"group_id": "g", "display_name": "x" * 129}), "本体展示名不超过"),
-        (lambda: validator.validate_ontology_payload({"group_id": "g", "description": "d" * 513}), "本体描述不超过"),
+        (lambda: validator.validate_ontology_payload({"display_name": "x" * 129}), "本体展示名不超过"),
+        (lambda: validator.validate_ontology_payload({"display_name": "x", "description": "d" * 513}), "本体描述不超过"),
         (lambda: validator.validate_property_items([]), "对象类型至少需要一个属性"),
         (lambda: validator.validate_property_items("bad"), "对象类型至少需要一个属性"),
         (lambda: validator.validate_property_items([{"property_name": "p1"}]), "标识属性"),
@@ -267,7 +264,7 @@ def router_env(monkeypatch):
 
 def _router_payloads() -> dict[str, object]:
     return {
-        "ontology": OntologyUpsertRequest(group_id="grp-1", display_name="电商交易"),
+        "ontology": OntologyUpsertRequest(display_name="电商交易"),
         "object_type": OntologyObjectTypeUpsertRequest(
             display_name="订单",
             properties=[OntologyPropertyItem(property_name="order_id", is_identifier=True)],
@@ -592,7 +589,6 @@ def test_ontology_dao_empty_input_guards(harness):
         assert await dao.get_object_type_row_async("") is None
         assert await dao.get_relation_row_async("") is None
         assert await dao.count_objects_by_ontology_ids_async([]) == {}
-        assert await dao.list_active_ontology_names_by_group_async("") == []
         assert await dao.find_bindings_for_configs_async([]) == []
         assert await dao.find_bindings_for_configs_async(["cfg-1"]) == []
         assert await dao.find_bindings_for_group_async("") == []
@@ -675,20 +671,20 @@ def test_ontology_dao_upsert_ontology_paths(harness):
 
     async def run():
         created = await dao.upsert_ontology_async(
-            "ontology_a", {"group_id": "grp-1", "display_name": "交易域", "description": ""}, allow_overwrite=False
+            "ontology_a", {"display_name": "交易域", "description": ""}, allow_overwrite=False
         )
-        assert created == {"ontology_name": "ontology_a", "group_id": "grp-1", "display_name": "交易域", "description": ""}
+        assert created == {"ontology_name": "ontology_a", "display_name": "交易域", "description": ""}
         # 活跃行未授权覆盖：返回 None 且不改库
-        assert await dao.upsert_ontology_async("ontology_a", {"group_id": "grp-2"}, allow_overwrite=False) is None
-        assert (await dao.get_ontology_row_async("ontology_a"))["group_id"] == "grp-1"
-        # 允许覆盖后改组
-        await dao.upsert_ontology_async("ontology_a", {"group_id": "grp-2"}, allow_overwrite=True)
-        assert (await dao.get_ontology_row_async("ontology_a"))["group_id"] == "grp-2"
+        assert await dao.upsert_ontology_async("ontology_a", {"display_name": "改"}, allow_overwrite=False) is None
+        assert (await dao.get_ontology_row_async("ontology_a"))["display_name"] == "交易域"
+        # 允许覆盖后改展示名
+        await dao.upsert_ontology_async("ontology_a", {"display_name": "跨境电商"}, allow_overwrite=True)
+        assert (await dao.get_ontology_row_async("ontology_a"))["display_name"] == "跨境电商"
         # 软删行同名重建走复活（不要求 allow_overwrite）
         assert await dao.soft_delete_ontology_async("ontology_a") is True
         assert await dao.get_ontology_row_async("ontology_a") is None
-        await dao.upsert_ontology_async("ontology_a", {"group_id": "grp-3"}, allow_overwrite=False)
-        assert (await dao.get_ontology_row_async("ontology_a"))["group_id"] == "grp-3"
+        await dao.upsert_ontology_async("ontology_a", {"display_name": "复活的交易"}, allow_overwrite=False)
+        assert (await dao.get_ontology_row_async("ontology_a"))["display_name"] == "复活的交易"
 
     asyncio.run(run())
 
@@ -807,7 +803,7 @@ def test_ontology_dao_bindings_bundle_and_ontology_names(harness):
                         dimensions_json="[]",
                         relationships_json="[]",
                     ),
-                    ChatDataOntology(ontology_name="ecommerce", group_id="grp-1", display_name="交易域"),
+                    ChatDataOntology(ontology_name="ecommerce", display_name="交易域"),
                 ]
             )
             await session.commit()
@@ -815,10 +811,6 @@ def test_ontology_dao_bindings_bundle_and_ontology_names(harness):
     asyncio.run(seed())
 
     async def run():
-        # 数据源组 → 活跃本体名
-        assert await dao.list_active_ontology_names_by_group_async("grp-1") == ["ecommerce"]
-        assert await dao.list_active_ontology_names_by_group_async("grp-other") == []
-
         # 按模型查活跃绑定（join 出对象类型名）
         bindings = await dao.find_bindings_for_configs_async(["cfg-1", "cfg-2"])
         assert {item["semantic_config_id"] for item in bindings} == {"cfg-1", "cfg-2"}
@@ -1184,29 +1176,24 @@ def test_service_relation_status_guards_for_inconsistent_endpoints(harness, deps
     asyncio.run(run())
 
 
-def test_service_ontology_group_change_with_matching_mappings(harness, deps_ok, monkeypatch):
-    """本体改组时对象类型映射模型都属于新组：放行（无 offender 分支）。"""
-    monkeypatch.setattr(ontology_service_module, "DataSourceDao", _StubDataSourceDao)
+def test_service_ontology_accepts_cross_group_mapping(harness, deps_ok, monkeypatch):
+    """本体不绑数据源组：映射模型属于任意组均可挂本体（2026-10-20 解耦组锚点）。"""
     monkeypatch.setattr(
         ontology_service_module,
         "semantic_config_dao",
-        _StubSemanticConfigDao(dimension_index=DIMENSION_INDEX, group_ids={"cfg-1": "grp-1"}),
+        _StubSemanticConfigDao(dimension_index=DIMENSION_INDEX, group_ids={"cfg-1": "grp-whatever"}),
     )
 
     async def run():
-        ontology = await ontology_service.upsert_ontology_async("ontology_a", {"group_id": "grp-1", "display_name": "交易域"})
-        await ontology_service.upsert_object_type_async(
+        ontology = await ontology_service.upsert_ontology_async("ontology_a", {"display_name": "交易域"})
+        saved = await ontology_service.upsert_object_type_async(
             "Order", _object_payload(ontology_id=int(ontology["id"]), mappings=[dict(SEMANTIC_MAPPING)])
         )
-        monkeypatch.setattr(
-            ontology_service_module,
-            "semantic_config_dao",
-            _StubSemanticConfigDao(dimension_index=DIMENSION_INDEX, group_ids={"cfg-1": "grp-2"}),
-        )
-        moved = await ontology_service.upsert_ontology_async(
-            "ontology_a", {"group_id": "grp-2", "display_name": "交易域"}, allow_overwrite=True
-        )
-        assert moved["group_id"] == "grp-2"
+        assert saved["ontology_id"] == int(ontology["id"])
+        # 拖拽换本体同样不校验映射组
+        ontology_b = await ontology_service.upsert_ontology_async("ontology_b", {"display_name": "供应链"})
+        moved = await ontology_service.set_object_type_ontology_async("Order", int(ontology_b["id"]))
+        assert moved["ontology_id"] == int(ontology_b["id"])
 
     asyncio.run(run())
 
@@ -1317,18 +1304,16 @@ def test_service_object_save_readback_missing_returns_saved_view(harness, deps_o
     assert saved["mappings"] == []
 
 
-def test_service_ontology_save_missing_returns_already_exists(harness, deps_ok, monkeypatch):
-    monkeypatch.setattr(ontology_service_module, "DataSourceDao", _StubDataSourceDao)
+def test_service_ontology_save_missing_returns_already_exists(harness, deps_ok):
     service = OntologyService(dao=_MissingDomainSaveDao())
     with pytest.raises(OntologyAlreadyExistsError, match="本体已存在"):
-        asyncio.run(service.upsert_ontology_async("ontology_a", {"group_id": "grp-1", "display_name": "交易域"}))
+        asyncio.run(service.upsert_ontology_async("ontology_a", {"display_name": "交易域"}))
 
 
-def test_service_ontology_detail_missing_returns_state_invalid(harness, deps_ok, monkeypatch):
-    monkeypatch.setattr(ontology_service_module, "DataSourceDao", _StubDataSourceDao)
+def test_service_ontology_detail_missing_returns_state_invalid(harness, deps_ok):
     service = OntologyService(dao=_DomainSavedButDetailMissingDao())
     with pytest.raises(OntologyStateInvalidError, match="本体保存后读取失败"):
-        asyncio.run(service.upsert_ontology_async("ontology_a", {"group_id": "grp-1", "display_name": "交易域"}))
+        asyncio.run(service.upsert_ontology_async("ontology_a", {"display_name": "交易域"}))
 
 
 def test_service_relation_save_missing_returns_already_exists(harness, deps_ok):

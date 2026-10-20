@@ -73,10 +73,10 @@ def validate_object_type_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def validate_ontology_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    """校验并规范化本体元数据（ontology_name 由路径参数携带，不在此列）。"""
-    group_id = _normalized_text(payload.get("group_id"))
-    if not group_id or len(group_id) > 128:
-        raise _invalid("本体必须绑定数据源组")
+    """校验并规范化本体元数据（ontology_name 由路径参数携带，不在此列）。
+
+    本体是纯语义容器不绑数据源组（2026-10-20 解耦，对齐 Palantir「本体不绑存储」）。
+    """
     display_name = _normalized_text(payload.get("display_name"))
     if len(display_name) > 128:
         raise _invalid("本体展示名不超过 128 字符")
@@ -84,7 +84,6 @@ def validate_ontology_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if len(description) > 512:
         raise _invalid("本体描述不超过 512 字符")
     return {
-        "group_id": group_id,
         "display_name": display_name,
         "description": description,
     }

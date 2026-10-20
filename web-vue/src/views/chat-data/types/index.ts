@@ -1099,12 +1099,11 @@ export interface OntologyMappingItem {
   column_mappings: Record<string, string>
 }
 
-// 本体（对位 Palantir ontology，一对一绑定数据源组；对象类型挂本体后继承其组）
+// 本体（对位 Palantir ontology，纯语义容器不绑数据源组；对象类型取数后端由各自映射决定）
 // 2026-10-20 由「领域」更名（OntologyDomainItem → OntologyItem，字段 domain_* → ontology_*）
 export interface OntologyItem {
   id: number
   ontology_name: string
-  group_id: string
   display_name: string
   description: string
   create_time?: string
@@ -1119,7 +1118,7 @@ export interface OntologyObjectTypeItem {
   display_name: string
   description: string
   status: OntologyObjectTypeStatus
-  // 所属本体（本体实体绑定数据源组，对象继承其组）
+  // 所属本体（纯导航归属，不约束映射的组）
   ontology_id: number | null
   deprecation_reason: string
   deprecated_until: string

@@ -7,8 +7,12 @@ from apps.chat_data_app.routers import ontology_admin as ontology_admin_routes
 _URL = "/api/chatdata/admin/meta/ontology/consistency-check"
 
 
-def _install_stubs(monkeypatch, *, ontologies, configs, bundle, findings=None):
-    monkeypatch.setattr(ontology_admin_routes.ontology_service, "list_ontologies_async", _async_return(ontologies))
+def _install_stubs(monkeypatch, *, groups, configs, bundle, findings=None):
+    class _StubDataSourceDao:
+        async def get_all_datasources_async(self, include_tables=True):
+            return groups
+
+    monkeypatch.setattr(ontology_admin_routes, "DataSourceDao", _StubDataSourceDao)
 
     class _StubService:
         async def get_configs_async(self, datasource_id, user_id=""):
@@ -41,9 +45,9 @@ def _async_return(value):
 
 
 def test_consistency_check_contract(client, auth_headers, monkeypatch):
-    ontologies = [
-        {"ontology_name": "sales", "group_id": "group-1"},
-        {"ontology_name": "empty", "group_id": ""},
+    groups = [
+        {"group_id": "group-1"},
+        {"group_id": "group-2"},
     ]
     configs = {
         "group-1": [
@@ -73,7 +77,7 @@ def test_consistency_check_contract(client, auth_headers, monkeypatch):
             "targets": ["customer"],
         },
     ]
-    stub_dao = _install_stubs(monkeypatch, ontologies=ontologies, configs=configs, bundle=bundle, findings=findings)
+    stub_dao = _install_stubs(monkeypatch, groups=groups, configs=configs, bundle=bundle, findings=findings)
 
     response = client.get(_URL, headers=auth_headers)
 
@@ -81,8 +85,8 @@ def test_consistency_check_contract(client, auth_headers, monkeypatch):
     payload = response.json()
     assert payload["status"] == "success"
     data = payload["data"]
-    # 公共配置收集：私有配置被过滤；空 group_id 的本体被跳过
-    assert data["group_count"] == 1
+    # 公共配置收集：私有配置被过滤；无配置的组被跳过
+    assert data["group_count"] == 2
     assert data["config_count"] == 1
     assert data["object_type_count"] == 1
     assert stub_dao.captured_ids == ["cfg-1"]
@@ -94,7 +98,7 @@ def test_consistency_check_contract(client, auth_headers, monkeypatch):
 def test_consistency_check_healthy(client, auth_headers, monkeypatch):
     _install_stubs(
         monkeypatch,
-        ontologies=[{"ontology_name": "sales", "group_id": "group-1"}],
+        groups=[{"group_id": "group-1"}],
         configs={"group-1": [{"id": "cfg-1", "name": "模型一", "dimensions": []}]},
         bundle={"object_types": [], "properties": [], "relation_types": [], "mappings": []},
         findings=[],
@@ -105,11 +109,11 @@ def test_consistency_check_healthy(client, auth_headers, monkeypatch):
     assert payload["data"]["summary"] == {"error": 0, "warning": 0, "info": 0}
 
 
-def test_consistency_check_no_ontologies(client, auth_headers, monkeypatch):
-    """无本体挂载时不触发任何模型加载，返回健康空报告。"""
+def test_consistency_check_no_groups(client, auth_headers, monkeypatch):
+    """无数据源组时不触发任何模型加载，返回健康空报告。"""
     stub_dao = _install_stubs(
         monkeypatch,
-        ontologies=[],
+        groups=[],
         configs={"group-1": [{"id": "cfg-1", "name": "模型一", "dimensions": []}]},
         bundle={"object_types": [], "properties": [], "relation_types": [], "mappings": []},
     )

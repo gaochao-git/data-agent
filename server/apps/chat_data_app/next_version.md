@@ -565,3 +565,17 @@ ALTER TABLE `chat_data_ontology_object_type`
 ```
 
 API 变化：领域 CRUD 路由 `/admin/meta/ontology/domains` → `/admin/meta/ontology/ontologies`（GET/PUT/DELETE，路径参数 `{domain_name}` → `{ontology_name}`）；对象类型归属窄写 `POST .../object-types/{name}/domain` → `.../ontology`；请求模型 `OntologyDomainUpsertRequest` → `OntologyUpsertRequest`、`OntologyObjectTypeDomainRequest` → `OntologyObjectTypeOntologyRequest`；对象列表过滤参数 `domain_id` → `ontology_id`；响应键 `domains` → `ontologies`、行键 `domain_name`/`domain_id` → `ontology_name`/`ontology_id`；目录 YAML 对象行键 `domain` → `ontology`。前端 api client、类型（`OntologyDomainItem` → `OntologyItem`）、组件（`OntologyDomainForm.vue` → `OntologyForm.vue`）同步更名。
+
+### 本体与数据源组解耦：group_id 退役（2026-10-20 下半年）
+
+本体改为纯语义容器（对齐 Palantir「本体不绑存储」）：对象类型的取数后端=各自映射指向的语义模型（可跨数据源组）。删除本体表的 group_id 绑定与全部组锚点校验（挂本体/换本体/改组的映射组校验、数据源组删除的「组被本体引用」阻断）；一致性检查比较域改为全部数据源组的公共语义配置。
+
+存量环境迁移 DDL（dev 与生产均需执行；注意本节 DDL 依赖上一节「领域更名本体」已先行执行）：
+
+```sql
+ALTER TABLE `chat_data_ontology`
+  DROP INDEX `idx_ontology_group`,
+  DROP COLUMN `group_id`;
+```
+
+API 变化：`OntologyUpsertRequest` 不再要求 `group_id`（body 仅 display_name/description/allow_overwrite）；本体列表/详情响应行无 `group_id`；一致性检查 `group_count` 语义变为「扫描的数据源组数（全部组）」。前端本体表单去掉组选择、树节点去掉组名角标、对象表单映射候选放开全部组。

@@ -453,9 +453,8 @@ class TableIndexItem(BaseModel):
 
 
 class OntologyUpsertRequest(BaseModel):
-    """本体创建/编辑请求（本体名由路径参数携带；一对一绑定数据源组）"""
+    """本体创建/编辑请求（本体名由路径参数携带；纯语义容器不绑数据源组）"""
 
-    group_id: str = Field(..., min_length=1, max_length=128, description="绑定的数据源组ID（一次绑定）")
     display_name: str = Field(default="", max_length=128, description="展示名，缺省用本体名")
     description: str = Field(default="", max_length=512, description="本体描述")
     allow_overwrite: bool = Field(default=False, description="编辑既有活跃本体时为 True")
@@ -494,7 +493,7 @@ class OntologyObjectTypeUpsertRequest(BaseModel):
 
     display_name: str = Field(..., min_length=1, max_length=128, description="展示名")
     description: str = Field(default="", max_length=1024, description="对象类型描述")
-    ontology_id: int | None = Field(default=None, description="本体ID（组随本体继承），缺省=未挂本体")
+    ontology_id: int | None = Field(default=None, description="本体ID（纯导航归属），缺省=未挂本体")
     properties: list[OntologyPropertyItem] = Field(..., min_length=1, description="属性集（整体提交）")
     mappings: list[OntologyMappingItem] = Field(
         default_factory=list, description="语义模型映射列表（独立存映射表，随对象类型提交全量重写）"

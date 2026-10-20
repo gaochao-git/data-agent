@@ -17,9 +17,7 @@ const props = defineProps({
   // 映射行（父组件持有；子组件只改行内字段，增删行通过事件交给父组件）
   rows: { type: Array as PropType<OntologyMappingItem[]>, required: true },
   // 对象属性集：字段映射的键候选
-  properties: { type: Array as PropType<OntologyPropertyItem[]>, default: () => [] },
-  // 可选：限定候选数据源组（本体绑定的组）；不传则展示全部组
-  groupIds: { type: Array as PropType<string[]>, default: () => [] }
+  properties: { type: Array as PropType<OntologyPropertyItem[]>, default: () => [] }
 })
 
 const emit = defineEmits<{ removeRow: [index: number] }>()
@@ -35,10 +33,9 @@ const configOf = (configId: string): SemanticConfigItem | undefined => optionOf(
 
 // ---------- 模型级联选择（第一级=数据源组，第二级=语义模型） ----------
 
-// 本体锁定：仅展示限定组（对象类型挂本体后映射只能落在本体绑定的组内）
+// 本体不绑数据源组：候选模型展示全部组（对象类型的取数后端由映射自由决定）
 const cascaderOptions = computed(() =>
   groupedOptions()
-    .filter(group => props.groupIds.length === 0 || props.groupIds.includes(group.groupId))
     .map(group => ({
       value: group.groupId,
       label: group.groupName,

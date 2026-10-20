@@ -14,6 +14,7 @@ from utils.error_codes import ErrorCode
 from utils.logger import get_logger
 from utils.response import business_response
 
+from ..daos.datasource_dao import DataSourceDao
 from ..daos.ontology_dao import OntologyDao
 from ..schema import (
     OntologyObjectTypeOntologyRequest,
@@ -295,20 +296,17 @@ async def change_ontology_relation_status(
         return _error_response(e, "本体关系类型状态变更失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
 
 
-def _ontology_group_ids(ontologies: list[dict] | None) -> list[str]:
-    """本体列表 → 挂载的数据源组 ID（去空去重，升序）。"""
-    return sorted({str((item or {}).get("group_id") or "").strip() for item in ontologies or []} - {""})
+async def _collect_consistency_scope() -> tuple[list[dict], dict[str, str], set[str]]:
+    """一致性检查比较域收集：全部数据源组的公共语义配置去重合并。
 
-
-async def _collect_consistency_scope(
-    group_ids: list[str],
-) -> tuple[list[dict], dict[str, str], set[str]]:
-    """一致性检查比较域收集：各组公共语义配置去重合并。
-
-    返回 (configs, {config_id: group_id}, config_ids)——比较域 = 全部本体挂载的
-    数据源组下的公共语义配置。
+    返回 (configs, {config_id: group_id}, config_ids)——本体不绑数据源组
+    （2026-10-20 解耦），比较域取全部组的公共配置；CON_CROSS_MODEL_* 查重
+    仍以配置自身所属组为比较域（跨组不互比）。
     """
     service = get_semantic_config_service()
+    group_ids = sorted(
+        {str((group or {}).get("group_id") or "").strip() for group in await DataSourceDao().get_all_datasources_async(include_tables=False)} - {""}
+    )
     configs: list[dict] = []
     config_group_ids: dict[str, str] = {}
     seen_config_ids: set[str] = set()
@@ -319,7 +317,7 @@ async def _collect_consistency_scope(
                 seen_config_ids.add(config_id)
                 configs.append(config)
                 config_group_ids[config_id] = group_id
-    return configs, config_group_ids, seen_config_ids
+    return configs, config_group_ids, seen_config_ids, group_ids
 
 
 def _severity_summary(findings: list[dict]) -> dict[str, int]:
@@ -336,15 +334,14 @@ def _severity_summary(findings: list[dict]) -> dict[str, int]:
 async def check_ontology_model_consistency(request: Request) -> JSONResponse:
     """本体↔语义模型一致性健康巡检（管理端手动触发）。
 
-    比较域 = 全部本体挂载的数据源组下的公共语义配置 × AI 可见本体面
+    比较域 = 全部数据源组的公共语义配置 × AI 可见本体面
     （bundle 与注入同源：活跃、certified/experimental、双端在集合内）。
     只巡检不评分、不阻断任何操作——产出失修清单（映射维度失效/关系类型列失效/
     类型冲突/属性未映射），供管理员修正映射或恢复维度。
     """
     try:
         _get_current_user(request)
-        group_ids = _ontology_group_ids(await ontology_service.list_ontologies_async())
-        configs, config_group_ids, seen_config_ids = await _collect_consistency_scope(group_ids)
+        configs, config_group_ids, seen_config_ids, group_ids = await _collect_consistency_scope()
         bundle = await OntologyDao().load_injection_bundle_async(sorted(seen_config_ids)) if seen_config_ids else {}
         findings = _run_consistency_check(bundle, configs, config_group_ids=config_group_ids)
         summary = _severity_summary(findings)
