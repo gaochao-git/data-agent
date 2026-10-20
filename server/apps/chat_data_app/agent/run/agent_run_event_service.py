@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import re
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 
 from apps.chat_data_app.daos.agent_inbox_dao import AgentInboxDao, agent_inbox_dao
+from apps.chat_data_app.sse_protocol import SSE_EVENT_DONE, format_sse
 from utils.database import get_session
 from utils.logger import get_logger
 
@@ -59,7 +59,7 @@ def format_terminal_done(status: str, next_run_id: str | None = None) -> str:
     next_run_id = str(next_run_id or "").strip()
     if data["status"] == "finished" and next_run_id:
         data["next_run_id"] = next_run_id
-    return f"event: done\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+    return format_sse(SSE_EVENT_DONE, data)
 
 
 class AgentRunEventService:

@@ -52,6 +52,9 @@ fi
 step "complexity"     bash -c "cd server && '$PY' apps/chat_data_app/tests/scan_cognitive_complexity.py --baseline ../scripts/checks/baselines/cognitive_complexity.txt"
 step "params"         bash -c "'$PY' scripts/checks/params.py"
 step "file-lines"     bash -c "'$PY' scripts/checks/file_lines.py"
+# SSE 帧名门禁：帧名只允许来自 sse_protocol 的 SSE_EVENT_* 常量、序列化器只允许一个，
+# 并与前端 SSEEventType 比对（后端能发而前端不认识=静默丢事件，硬失败；前端多声明=死分支，告警）
+step "sse-vocabulary" bash -c "'$PY' scripts/checks/sse_vocabulary.py"
 # lint：规则集与豁免见仓库根 ruff.toml（bug 级三类 + I/W 排序与空白符 + E7 三码），存量为零即通过
 step "ruff"          bash -c "'$PY' scripts/checks/ruff.py"
 # 格式检查：与 lint 同源 ruff.toml（line-length 120）。2026-09-29 全库 format 一次到位后纳入，

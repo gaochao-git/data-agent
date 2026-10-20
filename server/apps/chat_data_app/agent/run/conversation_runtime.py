@@ -7,6 +7,8 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from dataclasses import dataclass
 from typing import Any
 
+from ...sse_protocol import SSE_EVENT_MESSAGE_END, SSE_EVENT_QUESTION_REQUESTED
+
 AsyncHook = Callable[[], Awaitable[None]]
 AsyncInterruptHook = Callable[[dict[str, Any]], Awaitable[None]]
 SseFormatter = Callable[[str, dict[str, Any] | str], str]
@@ -141,7 +143,7 @@ async def stream_agent_turn(
         if outcome == "interrupt":
             await _maybe_invoke_interrupt_hook(lifecycle.on_interrupt, interrupt_payload)
             resources_finalized = await _stream_turn_finalize_now(finalize_resources, True)
-            yield format_sse("question_requested", interrupt_payload)
+            yield format_sse(SSE_EVENT_QUESTION_REQUESTED, interrupt_payload)
             # done 由 Runtime 统一收口后发布（结构化 status），生成器只产出事实。
             return
         if outcome == "disconnected":
@@ -151,7 +153,7 @@ async def stream_agent_turn(
         resources_finalized = await _stream_turn_finalize_now(finalize_resources, True)
         if lifecycle.after_turn is not None:
             await lifecycle.after_turn()
-        yield format_sse("message_end", end_payload)
+        yield format_sse(SSE_EVENT_MESSAGE_END, end_payload)
         # done 由 Runtime 统一收口后发布（结构化 status），生成器只产出事实。
     except asyncio.CancelledError:
         await _abort_user_persistence(user_persistence_task)

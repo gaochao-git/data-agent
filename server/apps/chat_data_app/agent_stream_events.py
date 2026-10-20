@@ -18,6 +18,13 @@ from utils.tool_call_args import coerce_tool_call_args
 
 from .agent.mcp.manager import get_mcp_tool_display_name
 from .agent_run_support import _get_timestamp
+from .sse_protocol import (
+    SSE_EVENT_THINKING,
+    SSE_EVENT_TOOL,
+    SSE_EVENT_TOOL_COMPLETED,
+    SSE_EVENT_TOOL_FAILED,
+    SSE_EVENT_TOOL_STARTED,
+)
 from .tool_stream_progress import (
     _STREAMING_LINE_COUNT_TOOLS,
     _extract_streaming_progress_inputs,
@@ -112,7 +119,7 @@ def _format_thinking_event(message_chunk: Any, msg_data: dict[str, Any] | None =
     if not reasoning_content:
         return None
     return _format_sse(
-        "thinking",
+        SSE_EVENT_THINKING,
         {
             "content": reasoning_content,
             "timestamp": _get_timestamp(),
@@ -173,7 +180,7 @@ def _format_tool_event(
         timestamp: 时间戳（格式：YYYY-MM-DD HH:MM:SS）
     """
     data: dict[str, Any] = {
-        "type": "tool",
+        "type": SSE_EVENT_TOOL,
         "tool_name": tool_name,
         "tool_call_id": tool_call_id,
         "status": status,
@@ -186,7 +193,7 @@ def _format_tool_event(
         data["content"] = result
     if message is not None:
         data["message"] = message
-    return _format_sse("tool", data)
+    return _format_sse(SSE_EVENT_TOOL, data)
 
 
 def _format_tool_lifecycle_event(
@@ -443,7 +450,7 @@ class _ToolStreamState:
     def build_completion_event(self, tool_payload: dict[str, Any]) -> str:
         """将工具结果映射为完成或失败的统一生命周期事件。"""
         status = str(tool_payload.get("status") or "completed")
-        event_type = "tool_failed" if status == "error" else "tool_completed"
+        event_type = SSE_EVENT_TOOL_FAILED if status == "error" else SSE_EVENT_TOOL_COMPLETED
         data = dict(tool_payload)
         # 前端 onToolLifecycle 只读 args 字段，补齐一份与 accumulated_args 同源，直播侧才能展示参数。
         data["args"] = tool_payload.get("accumulated_args") or {}
@@ -465,7 +472,7 @@ class _ToolStreamState:
             "started_at_ms": int(time.time() * 1000),
         }
         return [
-            _format_tool_lifecycle_event("tool_started", payload),
+            _format_tool_lifecycle_event(SSE_EVENT_TOOL_STARTED, payload),
             _format_tool_event(
                 tool_name=tool_name,
                 tool_call_id=tool_call_id,

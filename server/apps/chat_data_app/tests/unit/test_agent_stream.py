@@ -1,14 +1,10 @@
 import json
 import os
 import sys
-from contextlib import asynccontextmanager
-from dataclasses import replace
 from types import SimpleNamespace
 
 import httpx
 import openai
-import pytest
-from langchain_core.messages import AIMessageChunk, HumanMessageChunk, ToolMessageChunk
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
@@ -24,7 +20,6 @@ from apps.chat_data_app.agent_run_support import (
     prepare_conversation_workspace,
 )
 from apps.chat_data_app.agent_stream import (
-    AgentRunStreamFailedError,
     _append_reasoning_segment,
     _coerce_tool_args,
     _extract_reasoning_content,
@@ -42,91 +37,17 @@ from apps.chat_data_app.agent_stream import (
     _validate_workspace_file_selections,
     sql_completion_handler,
 )
-from apps.chat_data_app.services.semantic.run.semantic_conversation_context import SemanticConversationContext
+from apps.chat_data_app.tests.unit.agent_stream_stubs import (
+    _collect_async_iter,
+    _collect_async_iter_until_failure,
+    _fake_checkpointer,
+    _FakeGraph,
+    _FakeMessageChunk,
+    _override_semantic_context,
+    # noqa 下行：autouse fixture，导入即对本模块生效
+    _stub_semantic_conversation_context,  # noqa: F401
+)
 from utils.builtin_skills import DATA_ANALYZING_SKILL
-
-
-def _semantic_context_from_request(**kwargs) -> SemanticConversationContext:
-    datasource_id = str(kwargs.get("datasource_id") or "").strip() or None
-    semantic_config_id = str(kwargs.get("semantic_config_id") or "").strip() or None
-    selected_ids = list(
-        dict.fromkeys(
-            str(member_id).strip() for member_id in kwargs.get("member_datasource_ids") or [] if str(member_id).strip()
-        )
-    )
-    semantic_config = (
-        {"id": semantic_config_id, "name": semantic_config_id, "metrics": [], "dimensions": []}
-        if semantic_config_id
-        else None
-    )
-    targets = [
-        {"member_datasource_id": member_id, "member_name": member_id, "org_code": member_id}
-        for member_id in selected_ids
-    ]
-    query = str(kwargs.get("user_query") or "")
-    matched_ids = selected_ids if "所有机构" in query or "全部机构" in query else []
-    return SemanticConversationContext(
-        datasource_id=datasource_id,
-        datasource_meta={"query_context": ""} if datasource_id else None,
-        semantic_config_id=semantic_config_id,
-        semantic_config=semantic_config,
-        execution_targets=targets,
-        available_member_datasource_ids=selected_ids,
-        matched_member_datasource_ids=matched_ids,
-        selected_member_datasource_ids=selected_ids,
-    )
-
-
-def _override_semantic_context(monkeypatch, **overrides):
-    async def prepare_context(**kwargs):
-        context = _semantic_context_from_request(**kwargs)
-        values = {key: value(context, kwargs) if callable(value) else value for key, value in overrides.items()}
-        return replace(context, **values)
-
-    monkeypatch.setattr(
-        "apps.chat_data_app.agent_run_support.prepare_semantic_conversation_context",
-        prepare_context,
-    )
-
-
-@pytest.fixture(autouse=True)
-def _stub_semantic_conversation_context(monkeypatch):
-    async def noop_event_write(**_kwargs):
-        return None
-
-    async def prepare_context(**kwargs):
-        return _semantic_context_from_request(**kwargs)
-
-    monkeypatch.setattr(
-        "apps.chat_data_app.agent_run_support.prepare_semantic_conversation_context",
-        prepare_context,
-    )
-
-    async def resolve_datasource_binding(_conversation_id, _user_id, requested_datasource_id):
-        return requested_datasource_id
-
-    monkeypatch.setattr(
-        "apps.chat_data_app.agent_stream.conversation.resolve_datasource_binding",
-        resolve_datasource_binding,
-    )
-    monkeypatch.setattr(
-        "apps.chat_data_app.agent_stream.conversation_event_service.persist_user_message",
-        noop_event_write,
-    )
-    monkeypatch.setattr(
-        "apps.chat_data_app.agent_stream.conversation_event_service.persist_turn",
-        noop_event_write,
-    )
-
-    # 预物化不是这些用例的关注点：默认桩为“本轮无模型需物化”，
-    # 需要验证物化行为的用例自行覆盖。
-    async def noop_prematerialize(**_kwargs):
-        return {"total": 0, "failed_ids": []}
-
-    monkeypatch.setattr(
-        "apps.chat_data_app.agent_run_support.prematerialize_enabled_semantic_models",
-        noop_prematerialize,
-    )
 
 
 def _tool_event_contents(events: list[str]) -> list[str]:
@@ -277,114 +198,6 @@ def test_validate_workspace_file_selections_filters_invalid(tmp_path):
         ],
         root_str,
     ) == ["uploads/a.pdf"]
-
-
-@pytest.mark.asyncio
-async def test_resolve_inbox_message_references_resolves_refs(tmp_path, monkeypatch):
-    """排队消息采纳点：引用校验后追加引用短句、附件解析为占位行与 vision 标记。"""
-
-    from langchain_core.messages import HumanMessage
-
-    from apps.chat_data_app import agent_stream
-
-    root = tmp_path / "user-data"
-    (root / "uploads").mkdir(parents=True)
-    (root / "uploads" / "a.pdf").write_text("data", encoding="utf-8")
-    root_str = str(root)
-
-    # 无随行元数据的消息原样返回（快速路径，不触任何 IO）
-    plain = HumanMessage(id="m0", content="纯文本", additional_kwargs={"timestamp": "t"})
-    resolved = await agent_stream._resolve_inbox_message_references(
-        plain,
-        workspace_root=root_str,
-        user_id="u1",
-        thread_id="conv-1",
-    )
-    assert resolved is plain
-
-    # 引用 + 附件：短句/占位行进正文，kwargs 留痕与普通发送同构
-    async def fake_resolve_file_attachments(file_ids, *, user_id, thread_id):
-        assert file_ids == ["file-1"]
-        assert user_id == "u1" and thread_id == "conv-1"
-        return [
-            {
-                "file_id": "file-1",
-                "original_filename": "b.md",
-                "file_type": "md",
-                "file_size": 3,
-                "virtual_path": "/mnt/user-data/uploads/b.md",
-            }
-        ]
-
-    monkeypatch.setattr(agent_stream, "_resolve_file_attachments", fake_resolve_file_attachments)
-    message = HumanMessage(
-        id="m1",
-        content="排队消息",
-        additional_kwargs={
-            "timestamp": "t",
-            "file_selections": ["uploads/a.pdf", "uploads/missing.pdf", "../../etc/passwd"],
-            "file_ids": ["file-1"],
-        },
-    )
-    resolved = await agent_stream._resolve_inbox_message_references(
-        message,
-        workspace_root=root_str,
-        user_id="u1",
-        thread_id="conv-1",
-    )
-    # 正文 = 原文 + 引用短句（只含校验通过的）+ 附件占位行，与普通发送同构
-    assert resolved.content == (
-        "排队消息\n\n[引用文件：/mnt/user-data/uploads/a.pdf]\n[attachment] /mnt/user-data/uploads/b.md"
-    )
-    assert resolved.additional_kwargs["file_selections"] == ["uploads/a.pdf"]
-    # md 非图片：不打 vision 标记
-    assert "vision_attachments" not in resolved.additional_kwargs
-    assert resolved.id == "m1"
-
-    # 图片附件：vision 标记进 kwargs，供 ImageInjectionMiddleware 装载
-    async def fake_image_attachments(file_ids, *, user_id, thread_id):
-        return [
-            {
-                "file_id": "file-img",
-                "original_filename": "shot.png",
-                "file_type": "png",
-                "file_size": 10,
-                "virtual_path": "/mnt/user-data/uploads/shot.png",
-            }
-        ]
-
-    monkeypatch.setattr(agent_stream, "_resolve_file_attachments", fake_image_attachments)
-    image_message = HumanMessage(
-        id="m2",
-        content="看图",
-        additional_kwargs={"file_ids": ["file-img"]},
-    )
-    resolved = await agent_stream._resolve_inbox_message_references(
-        image_message,
-        workspace_root=root_str,
-        user_id="u1",
-        thread_id="conv-1",
-    )
-    assert resolved.additional_kwargs["vision_attachments"] == ["/mnt/user-data/uploads/shot.png"]
-    assert "[attachment] /mnt/user-data/uploads/shot.png" in resolved.content
-
-    # 划选引用：纯文本片段无外部资源可校验，重解析归一后留痕 + 标记块进正文
-    quote_only = HumanMessage(
-        id="m3",
-        content="这个结论怎么得出的",
-        additional_kwargs={
-            "timestamp": "t",
-            "quoted_snippets": [{"text": " 户表与订单表通过用户ID关联（一对多） "}, {"other": 1}],
-        },
-    )
-    resolved = await agent_stream._resolve_inbox_message_references(
-        quote_only,
-        workspace_root=root_str,
-        user_id="u1",
-        thread_id="conv-1",
-    )
-    assert "[引用助手回复片段开始]\n户表与订单表通过用户ID关联（一对多）\n[引用助手回复片段结束]" in resolved.content
-    assert resolved.additional_kwargs["quoted_snippets"] == [{"text": "户表与订单表通过用户ID关联（一对多）"}]
 
 
 def test_materialize_conversation_semantic_models_failure_is_non_blocking(monkeypatch):
@@ -639,70 +452,6 @@ def test_prepare_conversation_workspace_sync_and_async(monkeypatch):
 
 def test_agent_sql_normalize_member_datasource_ids_dedupes_and_strips():
     assert agent_sql_tools.normalize_member_datasource_ids([" m1 ", "", None, "m1", "m2"]) == ["m1", "m2"]
-
-
-def _FakeMessageChunk(
-    *,
-    content="",
-    type_="ai",
-    tool_calls=None,
-    tool_call_chunks=None,
-    tool_call_id="",
-    name="",
-):
-    """测试工厂：返回真实 LangChain 消息 Chunk，不伪造 type 字段。"""
-    if type_ == "human":
-        return HumanMessageChunk(content=content)
-    if type_ == "tool":
-        return ToolMessageChunk(content=content, tool_call_id=tool_call_id, name=name or None)
-    normalized_tool_calls = [{**tool_call, "args": tool_call.get("args") or {}} for tool_call in tool_calls or []]
-    return AIMessageChunk(
-        content=content,
-        tool_calls=normalized_tool_calls,
-        tool_call_chunks=tool_call_chunks or [],
-    )
-
-
-class _FakeGraph:
-    def __init__(self, events=None, state=None, raise_on_stream=False):
-        self.events = events or []
-        self.state = state or SimpleNamespace(tasks=[], values={})
-        self.raise_on_stream = raise_on_stream
-        self.initial_state = None
-
-    async def aget_state(self, config):
-        return self.state
-
-    async def astream(self, initial_state, config=None, stream_mode=None):
-        self.initial_state = initial_state
-        if self.raise_on_stream:
-            raise RuntimeError("graph failed")
-        for event in self.events:
-            yield event
-
-
-@asynccontextmanager
-async def _fake_checkpointer():
-    yield object()
-
-
-async def _collect_async_iter(async_iterable):
-    return [item async for item in async_iterable]
-
-
-async def _collect_async_iter_until_failure(async_iterable):
-    """收集事件并捕获 AgentRunStreamFailedError，返回 (events, failure)。
-
-    failure 非 None 表示生成器按契约把失败异常抛给了调用方（Runtime）。
-    """
-    events = []
-    failure = None
-    try:
-        async for item in async_iterable:
-            events.append(item)
-    except AgentRunStreamFailedError as exc:
-        failure = exc
-    return events, failure
 
 
 def test_generate_chat_data_stream_enters_agent_when_semantic_config_not_selected(monkeypatch):
@@ -1001,57 +750,6 @@ def test_generate_chat_data_stream_passes_valid_file_selections(monkeypatch, tmp
     assert human_message.additional_kwargs["file_selections"] == ["uploads/a.pdf"]
     assert human_message.content.endswith("[引用文件：/mnt/user-data/uploads/a.pdf]")
     assert "skill_names" not in human_message.additional_kwargs
-
-
-def test_generate_chat_data_stream_passes_quoted_snippets_to_inner(monkeypatch, tmp_path):
-    """划选引用：quoted_snippets 必须经生成器 re-wrap 透传到内层。
-
-    回归防线：_generate_chat_data_stream 拆包重建 ChatDataStreamRequest 时若漏带
-    quoted_snippets，内层 parse 永远拿到 None——模型看不到标记块、
-    additional_kwargs 不留痕（历史回放 chip 消失）。本用例从公开生成器入口
-    驱动到消息断言，专防这类 wiring 断点。
-    """
-    import asyncio
-
-    workspace_root = tmp_path / "user-data"
-    (workspace_root / "uploads").mkdir(parents=True)
-    (workspace_root / "outputs" / "query_result").mkdir(parents=True)
-    (workspace_root / "outputs" / "query_result" / "r.json").write_text("{}", encoding="utf-8")
-
-    async def fake_prepare_workspace(*_args, **_kwargs):
-        return {"root": str(workspace_root)}
-
-    fake_graph = _FakeGraph(
-        events=[(_FakeMessageChunk(content="已结合引用片段回答"), {"langgraph_node": "model"})],
-        state=SimpleNamespace(tasks=[], values={}),
-    )
-
-    monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
-    monkeypatch.setattr("apps.chat_data_app.agent_run_support.prepare_conversation_workspace", fake_prepare_workspace)
-    monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: fake_graph)
-
-    events = asyncio.run(
-        _collect_async_iter(
-            _generate_chat_data_stream(
-                ChatDataStreamRequest(
-                    user_id="u_test",
-                    thread_id="conv_quoted_snippets",
-                    user_query="这个结论怎么得出的",
-                    datasource_id="ds_a",
-                    quoted_snippets=[{"text": "户表与订单表通过用户ID关联（一对多）"}],
-                )
-            )
-        )
-    )
-
-    joined = "".join(events)
-    assert "已结合引用片段回答" in joined
-    human_message = fake_graph.initial_state["messages"][0]
-    # 模型可见标记块进入正文；additional_kwargs 留痕供事件表持久化（历史回放渲染 chip）
-    assert (
-        "[引用助手回复片段开始]\n户表与订单表通过用户ID关联（一对多）\n[引用助手回复片段结束]" in human_message.content
-    )
-    assert human_message.additional_kwargs["quoted_snippets"] == [{"text": "户表与订单表通过用户ID关联（一对多）"}]
 
 
 def test_generate_chat_data_stream_keeps_explicit_query_skill(monkeypatch):

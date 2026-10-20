@@ -117,6 +117,23 @@ from .services.memory.conversation_memory_service import (
 )
 from .services.runtime_config import LLM_FIRST_TOKEN_TIMEOUT_SECONDS
 from .services.setting_service import get_runtime_setting
+from .sse_protocol import (
+    SSE_EVENT_CONTEXT_COMPRESSION,
+    SSE_EVENT_ERROR,
+    SSE_EVENT_GENERATION_SPEED,
+    SSE_EVENT_INBOX_ADMITTED,
+    SSE_EVENT_MESSAGE,
+    SSE_EVENT_SUBAGENT_CONTEXT_USAGE,
+    SSE_EVENT_SUBAGENT_MESSAGE,
+    SSE_EVENT_SUBAGENT_MESSAGE_DELTA,
+    SSE_EVENT_SUBAGENT_THINKING_DELTA,
+    SSE_EVENT_TOKEN_USAGE,
+    SSE_EVENT_TOOL,
+    SSE_EVENT_TOOL_COMPLETED,
+    SSE_EVENT_TOOL_FAILED,
+    SSE_EVENT_TOOL_PROGRESS,
+    SSE_EVENT_TOOL_STARTED,
+)
 
 # 工具参数流式进度与 SSE 格式化（源模块：tool_stream_progress，agent_stream 行数红线拆出）。
 # re-export 保持既有模块属性引用（含测试）不变。
@@ -473,14 +490,16 @@ def _validate_workspace_file_selections(file_selections: list[str], workspace_ro
     return valid
 
 
+# 子智能体 custom channel 的入站接受集：这里的值来自子智能体进程内构造的
+# event_type（属不信任输入），未知类型记 WARNING 后丢弃，不参与帧名派生。
 _SUBAGENT_TOOL_EVENT_TYPES = {
-    "tool_started",
-    "tool_completed",
-    "tool_failed",
-    "subagent_message",
-    "subagent_message_delta",
-    "subagent_thinking_delta",
-    "subagent_context_usage",
+    SSE_EVENT_TOOL_STARTED,
+    SSE_EVENT_TOOL_COMPLETED,
+    SSE_EVENT_TOOL_FAILED,
+    SSE_EVENT_SUBAGENT_MESSAGE,
+    SSE_EVENT_SUBAGENT_MESSAGE_DELTA,
+    SSE_EVENT_SUBAGENT_THINKING_DELTA,
+    SSE_EVENT_SUBAGENT_CONTEXT_USAGE,
 }
 
 
@@ -807,7 +826,7 @@ class _AgentSseStreamAdapter:
             if usage_model:
                 self.latest_model_name = usage_model
             self.latest_token_usage = sanitize_context_usage_for_response(raw_usage)
-            return [_format_sse("token_usage", self.latest_token_usage)]
+            return [_format_sse(SSE_EVENT_TOKEN_USAGE, self.latest_token_usage)]
         return []
 
     def _handle_context_compression_payload(self, payload: dict[str, Any]) -> list[str]:
@@ -819,13 +838,13 @@ class _AgentSseStreamAdapter:
                 self.archived_turn_messages,
                 archived_messages,
             )
-        return [_format_sse("context_compression", payload["event"])]
+        return [_format_sse(SSE_EVENT_CONTEXT_COMPRESSION, payload["event"])]
 
     def _handle_inbox_admitted_payload(self, payload: dict[str, Any]) -> list[str]:
         if not isinstance(payload.get("message_ids"), list):
             return []
         message_ids = [str(message_id) for message_id in payload["message_ids"] if str(message_id)]
-        return [_format_sse("inbox_admitted", {"message_ids": message_ids})] if message_ids else []
+        return [_format_sse(SSE_EVENT_INBOX_ADMITTED, {"message_ids": message_ids})] if message_ids else []
 
     def _handle_tool_progress_payload(self, payload: dict[str, Any]) -> list[str]:
         tool_call_id = str(payload.get("tool_call_id") or "").strip()
@@ -836,7 +855,7 @@ class _AgentSseStreamAdapter:
             return []
         return [
             _format_tool_lifecycle_event(
-                "tool_progress",
+                SSE_EVENT_TOOL_PROGRESS,
                 {
                     "tool_call_id": tool_call_id,
                     "tool_name": tool_name,
@@ -857,12 +876,13 @@ class _AgentSseStreamAdapter:
             return []
         # streamed 完整事件不带 content（前端已拼出全文），只补截断标记
         if (
-            event_type == "subagent_message"
+            event_type == SSE_EVENT_SUBAGENT_MESSAGE
             and not event.get("streamed")
             and not str(event.get("content") or "").strip()
         ):
             return []
-        if event_type in {"subagent_message_delta", "subagent_thinking_delta"} and not str(event.get("delta") or ""):
+        delta_types = {SSE_EVENT_SUBAGENT_MESSAGE_DELTA, SSE_EVENT_SUBAGENT_THINKING_DELTA}
+        if event_type in delta_types and not str(event.get("delta") or ""):
             return []
         data = {key: value for key, value in event.items() if key != "event_type"}
         return [_format_tool_lifecycle_event(event_type, data)]
@@ -947,11 +967,11 @@ class _AgentSseStreamAdapter:
         if flags.is_tool_message:
             tool_payload = self.tool_stream_state.build_tool_message_payload(message_chunk)
             yield self.tool_stream_state.build_completion_event(tool_payload)
-            yield _format_sse("tool", tool_payload)
+            yield _format_sse(SSE_EVENT_TOOL, tool_payload)
             return
         msg_data = message_chunk.model_dump()
         msg_data["timestamp"] = _get_timestamp()
-        yield _format_sse("message", msg_data)
+        yield _format_sse(SSE_EVENT_MESSAGE, msg_data)
 
     def _sample_chunk_generation_speed(self, message_chunk: Any, flags: _MessageChunkFlags) -> None:
         """按 chunk 载荷形态采样实时速率：只统计用户可见文本（thinking/正文）。
@@ -989,7 +1009,7 @@ class _AgentSseStreamAdapter:
         span_ms = max(now_ms - earliest_ms, _SPEED_MIN_SPAN_MS)
         self._last_speed_emit_ms = now_ms
         return _format_sse(
-            "generation_speed",
+            SSE_EVENT_GENERATION_SPEED,
             {"tokens_per_second": round(window_tokens / (span_ms / 1000), 1), "window_ms": _SPEED_WINDOW_MS},
         )
 
@@ -1132,7 +1152,7 @@ async def _generate_chat_data_stream(
         # 进入内层守卫段之前（准备阶段）的失败：内层来不及产出 error 事实，
         # 这里补发一条；终态收口与 done 发布同样交给 Runtime。
         logger.error("智能问数执行准备失败: conversation_id=%s", thread_id, exc_info=True)
-        yield _format_sse("error", {"error": _model_failure_user_message(exc)})
+        yield _format_sse(SSE_EVENT_ERROR, {"error": _model_failure_user_message(exc)})
         raise
     finally:
         if heartbeat_task:
@@ -1504,7 +1524,7 @@ async def _admit_adopted_messages(
         steering_tracker.record(adopted_ids)
         stream_adapter.queue_event(
             _format_sse(
-                "inbox_admitted",
+                SSE_EVENT_INBOX_ADMITTED,
                 {
                     "message_ids": adopted_ids,
                 },
@@ -1579,7 +1599,7 @@ async def _run_chat_data_agent_stream(
         )
         log_phase("workspace_runtime")
     except _AgentRunPreparationError as exc:
-        yield _format_sse("error", {"error": exc.message})
+        yield _format_sse(SSE_EVENT_ERROR, {"error": exc.message})
         raise AgentRunStreamFailedError from None
     # 引用文件校验必须在 workspace 就绪之后：@ 菜单可引用的文件以工作区实际内容为准。
     valid_file_selections = _validate_workspace_file_selections(selected_files, workspace_paths["root"])
@@ -1779,11 +1799,11 @@ async def _run_chat_data_agent_stream(
 
     except ContextInputLimitExceededError as exc:
         logger.info("智能问数上下文超出输入容量: conversation_id=%s", thread_id)
-        yield _format_sse("error", {"error": str(exc)})
+        yield _format_sse(SSE_EVENT_ERROR, {"error": str(exc)})
         raise AgentRunStreamFailedError from None
     except Exception as exc:
         logger.error("智能问数执行失败: conversation_id=%s", thread_id, exc_info=True)
-        yield _format_sse("error", {"error": _model_failure_user_message(exc)})
+        yield _format_sse(SSE_EVENT_ERROR, {"error": _model_failure_user_message(exc)})
         raise AgentRunStreamFailedError from None
 
 
