@@ -543,3 +543,25 @@ Run 实时事件使用 Redis Streams：
 - **测试**：`tests/unit/test_object_locator.py`（定位纯函数）+ `test_data_analyzing_tool.py` locate_object 分发用例（原 query_object 用例删除）。
 - **门禁修复（当日 review）**：初版 `build_object_locator_report`（68 分）与 `_object_relations`（18 分）超复杂度阈值（>15）且新函数不许登记 baseline，verify 复杂度门禁会红——已纯搬移拆为「去重校验 / bundle 索引（NamedTuple）/ 绑定 / 属性 / 关系条目」小函数，全库扫描 0 超标，行为无漂移（61 例相关测试全过）；顺带修正模块 docstring「不读环境变量」与实际含 `object_locator_enabled` 的矛盾表述。
 - **遗留演进位**：本体 relations 与模型 relationships 的一致性校验（防定位报告指向 join 不出的路径）；二期关系可执行化（一跳导航服务端执行）优先于聚合。
+
+### 领域更名本体：概念对齐 Palantir ontology（2026-10-20 落地）
+
+「领域/业务领域」整体更名为「本体」（原领域一对一绑定数据源组、图语义即封闭对象图，对位 Palantir 一个 ontology；UI 树改为 本体模块根 → 本体 → 对象类型/关系类型）。代码/接口/文案全链路改名，物理表同步更名。无数据迁移（纯改名）。
+
+存量环境迁移 DDL（dev 与生产均需执行；MySQL 8 RENAME 语法）：
+
+```sql
+-- 本体表更名 + 列/索引更名
+RENAME TABLE `chat_data_ontology_domain` TO `chat_data_ontology`;
+ALTER TABLE `chat_data_ontology`
+  CHANGE COLUMN `domain_name` `ontology_name` varchar(64) NOT NULL COMMENT '本体API名，仅字母数字下划线，全局唯一',
+  RENAME INDEX `uniq_domain_name` TO `uniq_ontology_name`,
+  RENAME INDEX `idx_domain_group` TO `idx_ontology_group`;
+
+-- 对象类型表：领域引用列更名
+ALTER TABLE `chat_data_ontology_object_type`
+  CHANGE COLUMN `domain_id` `ontology_id` bigint DEFAULT NULL COMMENT '本体ID（chat_data_ontology.id，组随本体继承），NULL=未挂本体',
+  RENAME INDEX `idx_object_type_domain_id` TO `idx_object_type_ontology_id`;
+```
+
+API 变化：领域 CRUD 路由 `/admin/meta/ontology/domains` → `/admin/meta/ontology/ontologies`（GET/PUT/DELETE，路径参数 `{domain_name}` → `{ontology_name}`）；对象类型归属窄写 `POST .../object-types/{name}/domain` → `.../ontology`；请求模型 `OntologyDomainUpsertRequest` → `OntologyUpsertRequest`、`OntologyObjectTypeDomainRequest` → `OntologyObjectTypeOntologyRequest`；对象列表过滤参数 `domain_id` → `ontology_id`；响应键 `domains` → `ontologies`、行键 `domain_name`/`domain_id` → `ontology_name`/`ontology_id`；目录 YAML 对象行键 `domain` → `ontology`。前端 api client、类型（`OntologyDomainItem` → `OntologyItem`）、组件（`OntologyDomainForm.vue` → `OntologyForm.vue`）同步更名。

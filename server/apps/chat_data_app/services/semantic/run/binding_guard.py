@@ -127,17 +127,17 @@ async def ensure_config_dimensions_unreferenced_async(
 
 
 async def ensure_group_unbound_async(group_id: str, action: str = "删除数据源组") -> None:
-    """校验数据源组内模型均未被本体映射占用，且组未被本体领域引用，否则抛 40070。
+    """校验数据源组内模型均未被本体映射占用，且组未被本体引用，否则抛 40070。
 
-    本体领域一对一绑定数据源组（领域是对象取数后端锚点）：组被领域引用时删除
-    会让领域与对象映射悬空，因此与映射绑定同口径硬阻断。
+    本体一对一绑定数据源组（本体是对象取数后端锚点）：组被本体引用时删除
+    会让本体与对象映射悬空，因此与映射绑定同口径硬阻断。
     """
     dao = OntologyDao()
     bindings = await dao.find_bindings_for_group_async(group_id)
     raise_if_bound(bindings, action)
-    domains = await dao.list_active_domain_names_by_group_async(group_id)
-    if domains:
+    ontologies = await dao.list_active_ontology_names_by_group_async(group_id)
+    if ontologies:
         raise SemanticOntologyBoundError(
-            f"无法{action}：数据源组仍被本体领域引用（{', '.join(domains)}），"
-            "删除会导致本体领域与对象映射悬空。请先删除或迁移相关本体领域后再执行删除。"
+            f"无法{action}：数据源组仍被本体引用（{', '.join(ontologies)}），"
+            "删除会导致本体与对象映射悬空。请先删除或迁移相关本体后再执行删除。"
         )

@@ -25,7 +25,7 @@ ALLOWED_VALUE_TYPES = (*BUILTIN_VALUE_TYPES, VALUE_TYPE_ENUM)
 NON_IDENTIFIER_VALUE_TYPES = ("Decimal",)
 
 OBJECT_STATUSES = ("draft", "experimental", "certified", "deprecated")
-DOMAIN_NAME_MAX_LENGTH = 64  # 落库列 chat_data_ontology_domain.domain_name = varchar(64)
+ONTOLOGY_NAME_MAX_LENGTH = 64  # 落库列 chat_data_ontology.ontology_name = varchar(64)
 RELATION_MULTIPLICITIES = ("many_to_one", "one_to_one")
 RENDER_HINT_KEYS = ("searchable", "sortable", "low_cardinality")
 
@@ -35,9 +35,9 @@ API_NAME_MAX_LENGTH = 128
 
 
 def validate_api_name(name: str, label: str, *, max_length: int = API_NAME_MAX_LENGTH) -> str:
-    """API 名（对象类型/属性/关系类型/领域共用）格式校验，返回规范化名称。
+    """API 名（对象类型/属性/关系类型/本体共用）格式校验，返回规范化名称。
 
-    max_length 默认 128（对象类型/属性/关系类型落库列长度一致）；领域名落库列仅 64，
+    max_length 默认 128（对象类型/属性/关系类型落库列长度一致）；本体名落库列仅 64，
     调用方必须显式传入，避免通过校验后写库触发 StatementError。
     """
     text = str(name or "").strip()
@@ -62,27 +62,27 @@ def validate_object_type_payload(payload: dict[str, Any]) -> dict[str, Any]:
     description = _normalized_text(payload.get("description"))
     if len(description) > 1024:
         raise _invalid("对象类型描述不超过 1024 字符")
-    domain_id = payload.get("domain_id")
-    if domain_id is not None and not isinstance(domain_id, int):
-        raise _invalid("领域ID必须为整数或空")
+    ontology_id = payload.get("ontology_id")
+    if ontology_id is not None and not isinstance(ontology_id, int):
+        raise _invalid("本体ID必须为整数或空")
     return {
         "display_name": display_name,
         "description": description,
-        "domain_id": domain_id,
+        "ontology_id": ontology_id,
     }
 
 
-def validate_domain_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    """校验并规范化领域元数据（domain_name 由路径参数携带，不在此列）。"""
+def validate_ontology_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """校验并规范化本体元数据（ontology_name 由路径参数携带，不在此列）。"""
     group_id = _normalized_text(payload.get("group_id"))
     if not group_id or len(group_id) > 128:
-        raise _invalid("领域必须绑定数据源组")
+        raise _invalid("本体必须绑定数据源组")
     display_name = _normalized_text(payload.get("display_name"))
     if len(display_name) > 128:
-        raise _invalid("领域展示名不超过 128 字符")
+        raise _invalid("本体展示名不超过 128 字符")
     description = _normalized_text(payload.get("description"))
     if len(description) > 512:
-        raise _invalid("领域描述不超过 512 字符")
+        raise _invalid("本体描述不超过 512 字符")
     return {
         "group_id": group_id,
         "display_name": display_name,

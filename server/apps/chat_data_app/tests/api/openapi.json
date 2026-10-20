@@ -1748,43 +1748,6 @@
         "title": "MetaGlobalEnumUpsertRequest",
         "type": "object"
       },
-      "OntologyDomainUpsertRequest": {
-        "description": "本体领域创建/编辑请求（领域名由路径参数携带；一对一绑定数据源组）",
-        "properties": {
-          "allow_overwrite": {
-            "default": false,
-            "description": "编辑既有活跃领域时为 True",
-            "title": "Allow Overwrite",
-            "type": "boolean"
-          },
-          "description": {
-            "default": "",
-            "description": "领域描述",
-            "maxLength": 512,
-            "title": "Description",
-            "type": "string"
-          },
-          "display_name": {
-            "default": "",
-            "description": "展示名，缺省用领域名",
-            "maxLength": 128,
-            "title": "Display Name",
-            "type": "string"
-          },
-          "group_id": {
-            "description": "绑定的数据源组ID（一次绑定）",
-            "maxLength": 128,
-            "minLength": 1,
-            "title": "Group Id",
-            "type": "string"
-          }
-        },
-        "required": [
-          "group_id"
-        ],
-        "title": "OntologyDomainUpsertRequest",
-        "type": "object"
-      },
       "OntologyMappingItem": {
         "description": "本体映射项（语义模型映射：口径权威在语义层，层级=组→模型→维度映射，不触碰物理表）",
         "properties": {
@@ -1810,10 +1773,10 @@
         "title": "OntologyMappingItem",
         "type": "object"
       },
-      "OntologyObjectTypeDomainRequest": {
-        "description": "本体对象类型领域归属变更请求（拖拽换域等窄写路径；null=移出领域）",
+      "OntologyObjectTypeOntologyRequest": {
+        "description": "本体对象类型归属变更请求（拖拽换本体等窄写路径；null=移出本体）",
         "properties": {
-          "domain_id": {
+          "ontology_id": {
             "anyOf": [
               {
                 "type": "integer"
@@ -1822,11 +1785,11 @@
                 "type": "null"
               }
             ],
-            "description": "目标领域主键；null=移出领域",
-            "title": "Domain Id"
+            "description": "目标本体主键；null=移出本体",
+            "title": "Ontology Id"
           }
         },
-        "title": "OntologyObjectTypeDomainRequest",
+        "title": "OntologyObjectTypeOntologyRequest",
         "type": "object"
       },
       "OntologyObjectTypeStatusRequest": {
@@ -1900,7 +1863,15 @@
             "title": "Display Name",
             "type": "string"
           },
-          "domain_id": {
+          "mappings": {
+            "description": "语义模型映射列表（独立存映射表，随对象类型提交全量重写）",
+            "items": {
+              "$ref": "#/components/schemas/OntologyMappingItem"
+            },
+            "title": "Mappings",
+            "type": "array"
+          },
+          "ontology_id": {
             "anyOf": [
               {
                 "type": "integer"
@@ -1909,16 +1880,8 @@
                 "type": "null"
               }
             ],
-            "description": "领域ID（组随领域继承），缺省=未分域",
-            "title": "Domain Id"
-          },
-          "mappings": {
-            "description": "语义模型映射列表（独立存映射表，随对象类型提交全量重写）",
-            "items": {
-              "$ref": "#/components/schemas/OntologyMappingItem"
-            },
-            "title": "Mappings",
-            "type": "array"
+            "description": "本体ID（组随本体继承），缺省=未挂本体",
+            "title": "Ontology Id"
           },
           "properties": {
             "description": "属性集（整体提交）",
@@ -2130,6 +2093,43 @@
           "to_columns"
         ],
         "title": "OntologyRelationTypeUpsertRequest",
+        "type": "object"
+      },
+      "OntologyUpsertRequest": {
+        "description": "本体创建/编辑请求（本体名由路径参数携带；一对一绑定数据源组）",
+        "properties": {
+          "allow_overwrite": {
+            "default": false,
+            "description": "编辑既有活跃本体时为 True",
+            "title": "Allow Overwrite",
+            "type": "boolean"
+          },
+          "description": {
+            "default": "",
+            "description": "本体描述",
+            "maxLength": 512,
+            "title": "Description",
+            "type": "string"
+          },
+          "display_name": {
+            "default": "",
+            "description": "展示名，缺省用本体名",
+            "maxLength": 128,
+            "title": "Display Name",
+            "type": "string"
+          },
+          "group_id": {
+            "description": "绑定的数据源组ID（一次绑定）",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Group Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "group_id"
+        ],
+        "title": "OntologyUpsertRequest",
         "type": "object"
       },
       "PanelBatchExecuteRequest": {
@@ -6942,7 +6942,7 @@
     },
     "/api/chatdata/admin/meta/ontology/consistency-check": {
       "get": {
-        "description": "本体↔语义模型一致性健康巡检（管理端手动触发）。\n\n比较域 = 全部领域挂载的数据源组下的公共语义配置 × AI 可见本体面\n（bundle 与注入同源：活跃、certified/experimental、双端在集合内）。\n只巡检不评分、不阻断任何操作——产出失修清单（映射维度失效/关系类型列失效/\n类型冲突/属性未映射），供管理员修正映射或恢复维度。",
+        "description": "本体↔语义模型一致性健康巡检（管理端手动触发）。\n\n比较域 = 全部本体挂载的数据源组下的公共语义配置 × AI 可见本体面\n（bundle 与注入同源：活跃、certified/experimental、双端在集合内）。\n只巡检不评分、不阻断任何操作——产出失修清单（映射维度失效/关系类型列失效/\n类型冲突/属性未映射），供管理员修正映射或恢复维度。",
         "operationId": "check_ontology_model_consistency_api_chatdata_admin_meta_ontology_consistency_check_get",
         "responses": {
           "200": {
@@ -6967,140 +6967,9 @@
         ]
       }
     },
-    "/api/chatdata/admin/meta/ontology/domains": {
-      "get": {
-        "description": "本体领域列表（领域=业务域实体，一对一绑定数据源组）。",
-        "operationId": "list_ontology_domains_api_chatdata_admin_meta_ontology_domains_get",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "security": [
-          {
-            "ServiceToken": []
-          }
-        ],
-        "summary": "List Ontology Domains",
-        "tags": [
-          "ChatData 本体管理（Admin）"
-        ]
-      }
-    },
-    "/api/chatdata/admin/meta/ontology/domains/{domain_name}": {
-      "delete": {
-        "description": "删除本体领域（软删；挂有活跃对象类型时拒绝）。",
-        "operationId": "delete_ontology_domain_api_chatdata_admin_meta_ontology_domains__domain_name__delete",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "domain_name",
-            "required": true,
-            "schema": {
-              "title": "Domain Name",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "ServiceToken": []
-          }
-        ],
-        "summary": "Delete Ontology Domain",
-        "tags": [
-          "ChatData 本体管理（Admin）"
-        ]
-      },
-      "put": {
-        "description": "创建/编辑本体领域（绑定数据源组；编辑活跃领域需 allow_overwrite）。",
-        "operationId": "upsert_ontology_domain_api_chatdata_admin_meta_ontology_domains__domain_name__put",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "domain_name",
-            "required": true,
-            "schema": {
-              "title": "Domain Name",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/OntologyDomainUpsertRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "ServiceToken": []
-          }
-        ],
-        "summary": "Upsert Ontology Domain",
-        "tags": [
-          "ChatData 本体管理（Admin）"
-        ]
-      }
-    },
     "/api/chatdata/admin/meta/ontology/object-types": {
       "get": {
-        "description": "本体对象类型列表（keyword 按名称/展示名/描述模糊过滤；status/domain_id 精确过滤）。",
+        "description": "本体对象类型列表（keyword 按名称/展示名/描述模糊过滤；status/ontology_id 精确过滤）。",
         "operationId": "list_ontology_object_types_api_chatdata_admin_meta_ontology_object_types_get",
         "parameters": [
           {
@@ -7137,7 +7006,7 @@
           },
           {
             "in": "query",
-            "name": "domain_id",
+            "name": "ontology_id",
             "required": false,
             "schema": {
               "anyOf": [
@@ -7148,7 +7017,7 @@
                   "type": "null"
                 }
               ],
-              "title": "Domain Id"
+              "title": "Ontology Id"
             }
           }
         ],
@@ -7335,10 +7204,10 @@
         ]
       }
     },
-    "/api/chatdata/admin/meta/ontology/object-types/{object_type_name}/domain": {
+    "/api/chatdata/admin/meta/ontology/object-types/{object_type_name}/ontology": {
       "post": {
-        "description": "对象类型领域归属变更（拖拽换域窄写路径；domain_id=null 表示移出领域）。",
-        "operationId": "change_ontology_object_type_domain_api_chatdata_admin_meta_ontology_object_types__object_type_name__domain_post",
+        "description": "对象类型本体归属变更（拖拽换本体窄写路径；ontology_id=null 表示移出本体）。",
+        "operationId": "change_ontology_object_type_ontology_api_chatdata_admin_meta_ontology_object_types__object_type_name__ontology_post",
         "parameters": [
           {
             "in": "path",
@@ -7354,7 +7223,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/OntologyObjectTypeDomainRequest"
+                "$ref": "#/components/schemas/OntologyObjectTypeOntologyRequest"
               }
             }
           },
@@ -7387,7 +7256,7 @@
             "ServiceToken": []
           }
         ],
-        "summary": "Change Ontology Object Type Domain",
+        "summary": "Change Ontology Object Type Ontology",
         "tags": [
           "ChatData 本体管理（Admin）"
         ]
@@ -7446,6 +7315,137 @@
           }
         ],
         "summary": "Change Ontology Object Type Status",
+        "tags": [
+          "ChatData 本体管理（Admin）"
+        ]
+      }
+    },
+    "/api/chatdata/admin/meta/ontology/ontologies": {
+      "get": {
+        "description": "本体列表（本体=对象类型容器，一对一绑定数据源组）。",
+        "operationId": "list_ontologies_api_chatdata_admin_meta_ontology_ontologies_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "List Ontologies",
+        "tags": [
+          "ChatData 本体管理（Admin）"
+        ]
+      }
+    },
+    "/api/chatdata/admin/meta/ontology/ontologies/{ontology_name}": {
+      "delete": {
+        "description": "删除本体（软删；挂有活跃对象类型时拒绝）。",
+        "operationId": "delete_ontology_api_chatdata_admin_meta_ontology_ontologies__ontology_name__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ontology_name",
+            "required": true,
+            "schema": {
+              "title": "Ontology Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Delete Ontology",
+        "tags": [
+          "ChatData 本体管理（Admin）"
+        ]
+      },
+      "put": {
+        "description": "创建/编辑本体（绑定数据源组；编辑活跃本体需 allow_overwrite）。",
+        "operationId": "upsert_ontology_api_chatdata_admin_meta_ontology_ontologies__ontology_name__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ontology_name",
+            "required": true,
+            "schema": {
+              "title": "Ontology Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OntologyUpsertRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Upsert Ontology",
         "tags": [
           "ChatData 本体管理（Admin）"
         ]

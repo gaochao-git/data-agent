@@ -1100,18 +1100,19 @@ class ChatDataPlugin(Base):
     )
 
 
-class ChatDataOntologyDomain(Base):
-    """本体领域表：业务域实体，一对一绑定数据源组（一次绑定）。
+class ChatDataOntology(Base):
+    """本体表：本体实体，一对一绑定数据源组（一次绑定）。
 
-    领域是对象类型的业务切片（树面板分组）+ 取数后端锚点（组随领域继承）：对象类型挂
-    领域即确定其映射可选的模型范围（领域组内），关系类型两端对象类型同领域即合法。
-    组信息不在关系类型/映射层重复决策。领域名全局唯一；删除为软删，挂有对象类型时禁删。
+    本体是对象类型的容器与取数后端锚点（组随本体继承）：对象类型挂本体即确定其
+    映射可选的模型范围（本体内），关系类型两端对象类型同本体即合法。组信息不在
+    关系类型/映射层重复决策。本体名全局唯一；删除为软删，挂有对象类型时禁删。
+    对位 Palantir 一个 ontology（2026-10-20 由「领域」更名，物理表同步更名）。
     """
 
-    __tablename__ = "chat_data_ontology_domain"
+    __tablename__ = "chat_data_ontology"
 
     id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
-    domain_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    ontology_name: Mapped[str] = mapped_column(String(64), nullable=False)
     group_id: Mapped[str] = mapped_column(String(128), nullable=False)
     display_name: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
     description_text: Mapped[str] = mapped_column(String(512), nullable=False, default="", server_default="")
@@ -1126,8 +1127,8 @@ class ChatDataOntologyDomain(Base):
     update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
 
     __table_args__ = (
-        UniqueConstraint("domain_name", name="uniq_domain_name"),
-        Index("idx_domain_group", "group_id", "delete_flag"),
+        UniqueConstraint("ontology_name", name="uniq_ontology_name"),
+        Index("idx_ontology_group", "group_id", "delete_flag"),
     )
 
 
@@ -1181,7 +1182,7 @@ class ChatDataOntologyObjectType(Base):
     语义模型绑定独立成映射表 chat_data_ontology_mapping（对齐 ossie
     概念层/映射层分离，「一源一对象类型」由映射表唯一索引约束），本表只存概念层
     元数据。主键=标识属性（is_identifier）组合，标题键=is_title 属性，均由属性
-    表表达，本表不冗余存储。domain_id 指向领域实体（组随领域继承），NULL=未分域。
+    表表达，本表不冗余存储。ontology_id 指向本体实体（组随本体继承），NULL=未挂本体。
     """
 
     __tablename__ = "chat_data_ontology_object_type"
@@ -1191,7 +1192,7 @@ class ChatDataOntologyObjectType(Base):
     display_name: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
     description_text: Mapped[str] = mapped_column(String(1024), nullable=False, default="", server_default="")
     lifecycle_status: Mapped[str] = mapped_column(String(16), nullable=False, default="draft", server_default="draft")
-    domain_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, default=None)
+    ontology_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, default=None)
     deprecation_reason: Mapped[str] = mapped_column(String(512), nullable=False, default="", server_default="")
     deprecated_until: Mapped[datetime | None] = mapped_column(DateTime)
     successor_object_type_name: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
@@ -1208,7 +1209,7 @@ class ChatDataOntologyObjectType(Base):
     __table_args__ = (
         UniqueConstraint("object_type_name", name="uniq_object_type_name"),
         Index("idx_object_type_status", "lifecycle_status", "delete_flag"),
-        Index("idx_object_type_domain_id", "domain_id", "delete_flag"),
+        Index("idx_object_type_ontology_id", "ontology_id", "delete_flag"),
     )
 
 

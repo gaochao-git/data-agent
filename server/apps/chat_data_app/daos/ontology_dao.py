@@ -17,7 +17,7 @@ from sqlalchemy import func, or_, select, update
 
 from utils.logger import get_logger
 from utils.models import (
-    ChatDataOntologyDomain,
+    ChatDataOntology,
     ChatDataOntologyObjectType,
     ChatDataOntologyObjectTypeMapping,
     ChatDataOntologyProperty,
@@ -77,7 +77,7 @@ def _object_type_row_to_dict(row: ChatDataOntologyObjectType, *, include_audit: 
         "display_name": _text(row.display_name),
         "description": _text(row.description_text),
         "status": _text(row.lifecycle_status),
-        "domain_id": int(row.domain_id) if row.domain_id else None,
+        "ontology_id": int(row.ontology_id) if row.ontology_id else None,
         "deprecation_reason": _text(row.deprecation_reason),
         "deprecated_until": _format_datetime(row.deprecated_until),
         "successor_object_type_name": _text(row.successor_object_type_name),
@@ -146,14 +146,14 @@ def _mapping_row_to_dict(row: ChatDataOntologyObjectTypeMapping) -> dict[str, An
 
 
 class OntologyDao:
-    """本体领域/对象类型/属性/关系类型/映射访问对象。"""
+    """本体/对象类型/属性/关系类型/映射访问对象。"""
 
-    # ---------- 领域 ----------
+    # ---------- 本体 ----------
 
-    def _domain_row_to_dict(self, row: ChatDataOntologyDomain) -> dict[str, Any]:
+    def _ontology_row_to_dict(self, row: ChatDataOntology) -> dict[str, Any]:
         return {
             "id": int(row.id),
-            "domain_name": _text(row.domain_name),
+            "ontology_name": _text(row.ontology_name),
             "group_id": _text(row.group_id),
             "display_name": _text(row.display_name),
             "description": _text(row.description_text),
@@ -164,49 +164,49 @@ class OntologyDao:
             "update_by_name": _text(row.update_by_name),
         }
 
-    async def list_domains_async(self) -> list[dict[str, Any]]:
-        """列出领域（delete_flag=0），按领域名字典序。"""
+    async def list_ontologies_async(self) -> list[dict[str, Any]]:
+        """列出本体（delete_flag=0），按本体名字典序。"""
         async with session_scope() as session:
             stmt = (
-                select(ChatDataOntologyDomain)
-                .where(ChatDataOntologyDomain.delete_flag == 0)
-                .order_by(ChatDataOntologyDomain.domain_name.asc())
+                select(ChatDataOntology)
+                .where(ChatDataOntology.delete_flag == 0)
+                .order_by(ChatDataOntology.ontology_name.asc())
             )
             rows = (await session.execute(stmt)).scalars().all()
-        return [self._domain_row_to_dict(row) for row in rows]
+        return [self._ontology_row_to_dict(row) for row in rows]
 
-    async def get_domain_row_async(self, domain_name: str, *, include_deleted: bool = False) -> dict[str, Any] | None:
-        """按 domain_name 读取领域行；include_deleted=True 时含软删行（复活判断用）。"""
-        name = _text(domain_name)
+    async def get_ontology_row_async(self, ontology_name: str, *, include_deleted: bool = False) -> dict[str, Any] | None:
+        """按 ontology_name 读取本体行；include_deleted=True 时含软删行（复活判断用）。"""
+        name = _text(ontology_name)
         if not name:
             return None
         async with session_scope() as session:
-            stmt = select(ChatDataOntologyDomain).where(ChatDataOntologyDomain.domain_name == name)
+            stmt = select(ChatDataOntology).where(ChatDataOntology.ontology_name == name)
             if not include_deleted:
-                stmt = stmt.where(ChatDataOntologyDomain.delete_flag == 0)
+                stmt = stmt.where(ChatDataOntology.delete_flag == 0)
             row = (await session.execute(stmt)).scalars().first()
-        return self._domain_row_to_dict(row) if row is not None else None
+        return self._ontology_row_to_dict(row) if row is not None else None
 
-    async def get_domain_row_by_id_async(self, domain_id: int) -> dict[str, Any] | None:
-        """按 id 读取活跃领域行。"""
+    async def get_ontology_row_by_id_async(self, ontology_id: int) -> dict[str, Any] | None:
+        """按 id 读取活跃本体行。"""
         async with session_scope() as session:
             row = (
                 (
                     await session.execute(
-                        select(ChatDataOntologyDomain).where(
-                            ChatDataOntologyDomain.id == int(domain_id),
-                            ChatDataOntologyDomain.delete_flag == 0,
+                        select(ChatDataOntology).where(
+                            ChatDataOntology.id == int(ontology_id),
+                            ChatDataOntology.delete_flag == 0,
                         )
                     )
                 )
                 .scalars()
                 .first()
             )
-        return self._domain_row_to_dict(row) if row is not None else None
+        return self._ontology_row_to_dict(row) if row is not None else None
 
-    async def upsert_domain_async(
+    async def upsert_ontology_async(
         self,
-        domain_name: str,
+        ontology_name: str,
         payload: dict[str, Any],
         *,
         allow_overwrite: bool,
@@ -215,21 +215,21 @@ class OntologyDao:
         update_by: str = "",
         update_by_name: str = "",
     ) -> dict[str, Any] | None:
-        """按 domain_name upsert 领域：无行插入 / 软删行复活 / 活跃行需 allow_overwrite。"""
-        name = _text(domain_name)
+        """按 ontology_name upsert 本体：无行插入 / 软删行复活 / 活跃行需 allow_overwrite。"""
+        name = _text(ontology_name)
         async with session_scope() as session:
             row = (
                 (
                     await session.execute(
-                        select(ChatDataOntologyDomain).where(ChatDataOntologyDomain.domain_name == name)
+                        select(ChatDataOntology).where(ChatDataOntology.ontology_name == name)
                     )
                 )
                 .scalars()
                 .first()
             )
             if row is None:
-                row = ChatDataOntologyDomain(
-                    domain_name=name,
+                row = ChatDataOntology(
+                    ontology_name=name,
                     delete_flag=0,
                     create_by=create_by or "",
                     create_by_name=create_by_name or "",
@@ -247,20 +247,20 @@ class OntologyDao:
                     setattr(row, field, value)
                 row.update_by = update_by or ""
                 row.update_by_name = update_by_name or ""
-        return {"domain_name": name, **payload}
+        return {"ontology_name": name, **payload}
 
-    async def soft_delete_domain_async(
-        self, domain_name: str, *, update_by: str = "", update_by_name: str = ""
+    async def soft_delete_ontology_async(
+        self, ontology_name: str, *, update_by: str = "", update_by_name: str = ""
     ) -> bool:
-        """软删领域；领域不存在或已删返回 False。挂有对象类型时由 service 层先拦。"""
-        name = _text(domain_name)
+        """软删本体；本体不存在或已删返回 False。挂有对象类型时由 service 层先拦。"""
+        name = _text(ontology_name)
         async with session_scope() as session:
             row = (
                 (
                     await session.execute(
-                        select(ChatDataOntologyDomain).where(
-                            ChatDataOntologyDomain.domain_name == name,
-                            ChatDataOntologyDomain.delete_flag == 0,
+                        select(ChatDataOntology).where(
+                            ChatDataOntology.ontology_name == name,
+                            ChatDataOntology.delete_flag == 0,
                         )
                     )
                 )
@@ -274,28 +274,28 @@ class OntologyDao:
             row.update_by_name = update_by_name or ""
         return True
 
-    async def count_objects_by_domain_ids_async(self, domain_ids: list[int]) -> dict[int, int]:
-        """统计各领域挂靠的活跃对象类型数（领域删除门禁用）。"""
+    async def count_objects_by_ontology_ids_async(self, ontology_ids: list[int]) -> dict[int, int]:
+        """统计各本体挂靠的活跃对象类型数（本体删除门禁用）。"""
         counts: dict[int, int] = {}
-        if not domain_ids:
+        if not ontology_ids:
             return counts
         async with session_scope() as session:
             stmt = (
-                select(ChatDataOntologyObjectType.domain_id, func.count(ChatDataOntologyObjectType.id))
+                select(ChatDataOntologyObjectType.ontology_id, func.count(ChatDataOntologyObjectType.id))
                 .where(
                     ChatDataOntologyObjectType.delete_flag == 0,
-                    ChatDataOntologyObjectType.domain_id.in_(domain_ids),
+                    ChatDataOntologyObjectType.ontology_id.in_(ontology_ids),
                 )
-                .group_by(ChatDataOntologyObjectType.domain_id)
+                .group_by(ChatDataOntologyObjectType.ontology_id)
             )
             rows = (await session.execute(stmt)).all()
-        for domain_id, count in rows:
-            if domain_id is not None:
-                counts[int(domain_id)] = int(count)
+        for ontology_id, count in rows:
+            if ontology_id is not None:
+                counts[int(ontology_id)] = int(count)
         return counts
 
-    async def list_domain_object_type_mapping_configs_async(self, domain_id: int) -> list[dict[str, Any]]:
-        """列出领域内活跃对象类型及其映射的语义模型 ID（领域改组锚点校验用）。
+    async def list_ontology_object_type_mapping_configs_async(self, ontology_id: int) -> list[dict[str, Any]]:
+        """列出本体内活跃对象类型及其映射的语义模型 ID（本体改组锚点校验用）。
 
         返回 [{object_type_name, semantic_config_id}]；无映射的对象类型不出现在结果中。
         """
@@ -309,7 +309,7 @@ class OntologyDao:
                     ChatDataOntologyObjectTypeMapping.object_type_id == ChatDataOntologyObjectType.id,
                 )
                 .where(
-                    ChatDataOntologyObjectType.domain_id == int(domain_id),
+                    ChatDataOntologyObjectType.ontology_id == int(ontology_id),
                     ChatDataOntologyObjectType.delete_flag == 0,
                     ChatDataOntologyObjectTypeMapping.delete_flag == 0,
                 )
@@ -321,8 +321,8 @@ class OntologyDao:
             for object_type_name, config_id in rows
         ]
 
-    async def list_active_domain_names_by_group_async(self, group_id: str) -> list[str]:
-        """列出绑定指定数据源组的活跃本体领域名（数据源组删除守护用）。"""
+    async def list_active_ontology_names_by_group_async(self, group_id: str) -> list[str]:
+        """列出绑定指定数据源组的活跃本体名（数据源组删除守护用）。"""
         gid = _text(group_id)
         if not gid:
             return []
@@ -330,12 +330,12 @@ class OntologyDao:
             rows = (
                 (
                     await session.execute(
-                        select(ChatDataOntologyDomain.domain_name)
+                        select(ChatDataOntology.ontology_name)
                         .where(
-                            ChatDataOntologyDomain.group_id == gid,
-                            ChatDataOntologyDomain.delete_flag == 0,
+                            ChatDataOntology.group_id == gid,
+                            ChatDataOntology.delete_flag == 0,
                         )
-                        .order_by(ChatDataOntologyDomain.domain_name.asc())
+                        .order_by(ChatDataOntology.ontology_name.asc())
                     )
                 )
                 .scalars()
@@ -346,7 +346,7 @@ class OntologyDao:
     # ---------- 对象类型 ----------
 
     async def list_object_types_async(
-        self, keyword: str = "", status: str = "", domain_id: int | None = None
+        self, keyword: str = "", status: str = "", ontology_id: int | None = None
     ) -> list[dict[str, Any]]:
         """列出对象类型（delete_flag=0），keyword 按名称/展示名/描述模糊过滤。"""
         async with session_scope() as session:
@@ -361,8 +361,8 @@ class OntologyDao:
                 )
             if _text(status):
                 stmt = stmt.where(ChatDataOntologyObjectType.lifecycle_status == _text(status))
-            if domain_id is not None:
-                stmt = stmt.where(ChatDataOntologyObjectType.domain_id == int(domain_id))
+            if ontology_id is not None:
+                stmt = stmt.where(ChatDataOntologyObjectType.ontology_id == int(ontology_id))
             stmt = stmt.order_by(ChatDataOntologyObjectType.object_type_name.asc())
             rows = (await session.execute(stmt)).scalars().all()
         return [_object_type_row_to_dict(row) for row in rows]

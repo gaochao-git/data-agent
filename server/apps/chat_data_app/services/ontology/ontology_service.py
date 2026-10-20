@@ -80,43 +80,43 @@ def _derived_relation_status(from_status: str, to_status: str) -> str:
 
 
 class OntologyService:
-    """本体领域/对象类型/属性/关系类型业务规则与治理门禁。"""
+    """本体/对象类型/属性/关系类型业务规则与治理门禁。"""
 
     def __init__(self, dao: OntologyDao | None = None) -> None:
         # 允许注入 DAO（测试用），默认单例 DAO
         self._dao = dao or OntologyDao()
 
-    # ---------- 领域 ----------
+    # ---------- 本体 ----------
 
-    async def list_domains_async(self) -> list[dict[str, Any]]:
-        return await self._dao.list_domains_async()
+    async def list_ontologies_async(self) -> list[dict[str, Any]]:
+        return await self._dao.list_ontologies_async()
 
     @_transactional
-    async def upsert_domain_async(
+    async def upsert_ontology_async(
         self,
-        domain_name: str,
+        ontology_name: str,
         payload: dict[str, Any],
         *,
         operator: str = "",
         operator_name: str = "",
         allow_overwrite: bool = False,
     ) -> dict[str, Any]:
-        """创建或编辑领域（一对一绑定数据源组）。
+        """创建或编辑本体（一对一绑定数据源组）。
 
-        软删行同名重建走复活（不要求 allow_overwrite）；改组需保证领域内对象类型的
-        映射语义模型仍属于新组，否则拒绝（避免领域组与映射模型组漂移）。
+        软删行同名重建走复活（不要求 allow_overwrite）；改组需保证本体内对象类型的
+        映射语义模型仍属于新组，否则拒绝（避免本体组与映射模型组漂移）。
         """
-        name = validator.validate_api_name(domain_name, "领域API名", max_length=validator.DOMAIN_NAME_MAX_LENGTH)
-        normalized = validator.validate_domain_payload(payload)
+        name = validator.validate_api_name(ontology_name, "本体API名", max_length=validator.ONTOLOGY_NAME_MAX_LENGTH)
+        normalized = validator.validate_ontology_payload(payload)
         new_group_id = _text(normalized.get("group_id"))
-        existing = await self._dao.get_domain_row_async(name, include_deleted=True)
+        existing = await self._dao.get_ontology_row_async(name, include_deleted=True)
         existing_active = existing is not None and int(existing.get("delete_flag") or 0) == 0
         if existing_active and not allow_overwrite:
-            raise OntologyAlreadyExistsError(f"领域已存在: {name}，请更换领域名或编辑现有领域")
+            raise OntologyAlreadyExistsError(f"本体已存在: {name}，请更换本体名或编辑现有本体")
         await self._validate_group_exists(new_group_id)
         if existing is not None and _text(existing.get("group_id")) != new_group_id:
-            await self._validate_domain_group_change(existing, new_group_id)
-        saved = await self._dao.upsert_domain_async(
+            await self._validate_ontology_group_change(existing, new_group_id)
+        saved = await self._dao.upsert_ontology_async(
             name,
             normalized,
             allow_overwrite=allow_overwrite,
@@ -125,36 +125,36 @@ class OntologyService:
             update_by=operator,
             update_by_name=operator_name,
         )
-        if saved is None:  # 理论不可达（并发建同名领域由唯一键兜底）
-            raise OntologyAlreadyExistsError(f"领域已存在: {name}")
-        detail = await self._dao.get_domain_row_async(name)
+        if saved is None:  # 理论不可达（并发建同名本体由唯一键兜底）
+            raise OntologyAlreadyExistsError(f"本体已存在: {name}")
+        detail = await self._dao.get_ontology_row_async(name)
         if detail is None:  # 理论不可达（upsert 刚成功）
-            raise OntologyStateInvalidError(f"领域保存后读取失败: {name}")
+            raise OntologyStateInvalidError(f"本体保存后读取失败: {name}")
         return detail
 
     @_transactional
-    async def delete_domain_async(self, domain_name: str, *, operator: str = "", operator_name: str = "") -> None:
-        """删除领域（软删）：不存在报 404，挂有活跃对象类型时拒绝。"""
-        existing = await self._dao.get_domain_row_async(domain_name)
+    async def delete_ontology_async(self, ontology_name: str, *, operator: str = "", operator_name: str = "") -> None:
+        """删除本体（软删）：不存在报 404，挂有活跃对象类型时拒绝。"""
+        existing = await self._dao.get_ontology_row_async(ontology_name)
         if existing is None:
-            raise OntologyNotFoundError(f"领域不存在: {domain_name}")
-        counts = await self._dao.count_objects_by_domain_ids_async([int(existing["id"])])
+            raise OntologyNotFoundError(f"本体不存在: {ontology_name}")
+        counts = await self._dao.count_objects_by_ontology_ids_async([int(existing["id"])])
         if counts.get(int(existing["id"]), 0) > 0:
             raise OntologyStateInvalidError(
-                f"领域下仍有 {counts[int(existing['id'])]} 个对象类型，请先移出或删除对象类型后再删除领域"
+                f"本体下仍有 {counts[int(existing['id'])]} 个对象类型，请先移出或删除对象类型后再删除本体"
             )
-        await self._dao.soft_delete_domain_async(domain_name, update_by=operator, update_by_name=operator_name)
+        await self._dao.soft_delete_ontology_async(ontology_name, update_by=operator, update_by_name=operator_name)
 
     async def _validate_group_exists(self, group_id: str) -> None:
-        """领域绑定的数据源组必须存在。"""
+        """本体绑定的数据源组必须存在。"""
         if not group_id:
-            raise OntologyInvalidError("领域必须绑定数据源组")
+            raise OntologyInvalidError("本体必须绑定数据源组")
         if not await DataSourceDao().has_datasource_async(group_id):
             raise OntologyInvalidError(f"数据源组不存在: {group_id}")
 
-    async def _validate_domain_group_change(self, existing: dict[str, Any], new_group_id: str) -> None:
-        """领域改组门禁：领域内活跃对象类型的映射语义模型必须都属于新数据源组。"""
-        rows = await self._dao.list_domain_object_type_mapping_configs_async(int(existing["id"]))
+    async def _validate_ontology_group_change(self, existing: dict[str, Any], new_group_id: str) -> None:
+        """本体改组门禁：本体内活跃对象类型的映射语义模型必须都属于新数据源组。"""
+        rows = await self._dao.list_ontology_object_type_mapping_configs_async(int(existing["id"]))
         config_ids = {_text(row.get("semantic_config_id")) for row in rows} - {""}
         if not config_ids:
             return
@@ -168,16 +168,16 @@ class OntologyService:
         )
         if offenders:
             raise OntologyStateInvalidError(
-                f"领域改组失败：对象类型 {', '.join(offenders)} 的映射语义模型不属于新数据源组 {new_group_id}，"
-                "请先调整对象类型映射或将这些对象类型移出领域"
+                f"本体改组失败：对象类型 {', '.join(offenders)} 的映射语义模型不属于新数据源组 {new_group_id}，"
+                "请先调整对象类型映射或将这些对象类型移出本体"
             )
 
     # ---------- 对象类型查询 ----------
 
     async def list_object_types_async(
-        self, keyword: str = "", status: str = "", domain_id: int | None = None
+        self, keyword: str = "", status: str = "", ontology_id: int | None = None
     ) -> list[dict[str, Any]]:
-        object_types = await self._dao.list_object_types_async(keyword, status, domain_id)
+        object_types = await self._dao.list_object_types_async(keyword, status, ontology_id)
         counts = await self._dao.count_mappings_by_object_type_ids_async([int(item["id"]) for item in object_types])
         for item in object_types:
             item["mappings_count"] = counts.get(int(item["id"]), 0)
@@ -214,7 +214,7 @@ class OntologyService:
         """
         name = validator.validate_api_name(object_type_name, "对象类型API名")
         meta_payload = validator.validate_object_type_payload(payload)
-        domain_row = await self._resolve_object_type_domain(meta_payload.get("domain_id"))
+        ontology_row = await self._resolve_object_type_ontology(meta_payload.get("ontology_id"))
         properties = validator.validate_property_items(payload.get("properties"))
         property_names = {item["property_name"] for item in properties}
         mappings = validator.validate_mappings(payload.get("mappings"), property_names, name)
@@ -234,7 +234,7 @@ class OntologyService:
         await self._validate_enum_refs(properties)
         await self._validate_mapping_targets(mappings)
         await self._validate_mapping_dimensions(mappings)
-        await self._validate_mapping_group_anchor(mappings, domain_row)
+        await self._validate_mapping_group_anchor(mappings, ontology_row)
         await self._check_mapping_ownership(mappings, exclude_object_type_id)
         saved = await self._dao.upsert_object_type_full_async(
             name,
@@ -255,14 +255,14 @@ class OntologyService:
             return saved
         return detail
 
-    async def _resolve_object_type_domain(self, domain_id: Any) -> dict[str, Any] | None:
-        """解析对象类型挂靠的领域行（域不存在直接拒绝）。"""
-        if domain_id is None:
+    async def _resolve_object_type_ontology(self, ontology_id: Any) -> dict[str, Any] | None:
+        """解析对象类型挂靠的本体行（本体不存在直接拒绝）。"""
+        if ontology_id is None:
             return None
-        domain_row = await self._dao.get_domain_row_by_id_async(int(domain_id))
-        if domain_row is None:
-            raise OntologyInvalidError(f"领域不存在: domain_id={domain_id}")
-        return domain_row
+        ontology_row = await self._dao.get_ontology_row_by_id_async(int(ontology_id))
+        if ontology_row is None:
+            raise OntologyInvalidError(f"本体不存在: ontology_id={ontology_id}")
+        return ontology_row
 
     async def _prepare_object_type_edit(
         self,
@@ -452,37 +452,37 @@ class OntologyService:
         return refreshed or existing
 
     @_transactional
-    async def set_object_type_domain_async(
+    async def set_object_type_ontology_async(
         self,
         object_type_name: str,
-        domain_id: int | None,
+        ontology_id: int | None,
         *,
         operator: str = "",
         operator_name: str = "",
     ) -> dict[str, Any]:
-        """对象类型领域归属变更（拖拽换域窄写路径；domain_id=None 表示移出领域）。
+        """对象类型本体归属变更（拖拽换本体窄写路径；ontology_id=None 表示移出本体）。
 
         归属变更不动对象类型名/属性/映射，无破坏性；deprecated 对象类型也允许挪归属。
-        换入领域时既有映射的语义模型必须属于目标领域的数据源组（组锚点一致）。
+        换入本体时既有映射的语义模型必须属于目标本体的数据源组（组锚点一致）。
         """
         existing = await self._dao.get_object_type_row_async(object_type_name)
         if existing is None:
             raise OntologyNotFoundError(f"对象类型不存在: {object_type_name}")
-        normalized_domain_id: int | None = None
-        domain: dict[str, Any] | None = None
-        if domain_id is not None:
-            domain = await self._dao.get_domain_row_by_id_async(int(domain_id))
-            if domain is None:
-                raise OntologyNotFoundError(f"目标领域不存在: domain_id={domain_id}")
-            normalized_domain_id = int(domain["id"])
-        if existing.get("domain_id") == normalized_domain_id:
+        normalized_ontology_id: int | None = None
+        ontology: dict[str, Any] | None = None
+        if ontology_id is not None:
+            ontology = await self._dao.get_ontology_row_by_id_async(int(ontology_id))
+            if ontology is None:
+                raise OntologyNotFoundError(f"目标本体不存在: ontology_id={ontology_id}")
+            normalized_ontology_id = int(ontology["id"])
+        if existing.get("ontology_id") == normalized_ontology_id:
             return existing
-        if domain is not None:
+        if ontology is not None:
             mappings = await self._dao.list_object_type_mappings_async(int(existing["id"]))
-            await self._validate_mapping_group_anchor(mappings, domain)
+            await self._validate_mapping_group_anchor(mappings, ontology)
         await self._dao.upsert_object_type_async(
             object_type_name,
-            {"domain_id": normalized_domain_id},
+            {"ontology_id": normalized_ontology_id},
             allow_overwrite=True,
             update_by=operator,
             update_by_name=operator_name,
@@ -842,20 +842,20 @@ class OntologyService:
             raise OntologyInvalidError(f"映射的语义模型不存在: {', '.join(missing)}")
 
     async def _validate_mapping_group_anchor(
-        self, mappings: list[dict[str, Any]], domain_row: dict[str, Any] | None
+        self, mappings: list[dict[str, Any]], ontology_row: dict[str, Any] | None
     ) -> None:
-        """组锚点一致：对象类型挂领域时，其映射的语义模型必须都属于领域绑定的数据源组。"""
-        if domain_row is None:
+        """组锚点一致：对象类型挂本体时，其映射的语义模型必须都属于本体绑定的数据源组。"""
+        if ontology_row is None:
             return
         config_ids = {_text(mapping.get("semantic_config_id")) for mapping in mappings} - {""}
         if not config_ids:
             return
-        domain_group_id = _text(domain_row.get("group_id"))
+        ontology_group_id = _text(ontology_row.get("group_id"))
         group_ids = await semantic_config_dao.get_config_group_ids_async(sorted(config_ids))
-        mismatched = sorted(config_id for config_id in config_ids if group_ids.get(config_id) != domain_group_id)
+        mismatched = sorted(config_id for config_id in config_ids if group_ids.get(config_id) != ontology_group_id)
         if mismatched:
             raise OntologyInvalidError(
-                f"映射的语义模型必须属于对象类型所属领域的数据源组 {domain_group_id}，"
+                f"映射的语义模型必须属于对象类型所属本体的数据源组 {ontology_group_id}，"
                 f"以下模型不在该组: {', '.join(mismatched)}"
             )
 

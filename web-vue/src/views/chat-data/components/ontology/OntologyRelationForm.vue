@@ -103,14 +103,14 @@ watch(formMultiplicity, value => {
 // 活跃对象才可作为关系端点（后端同样拒绝 deprecated 端点）
 const activeObjectOptions = computed(() => props.object_types.filter(item => item.status !== 'deprecated'))
 
-// 跨领域提示：两端对象挂在不同领域（或一侧未挂领域）时提醒确认
-const crossDomainHint = computed(() => {
+// 跨本体提示：两端对象挂在不同本体（或一侧未挂本体）时提醒确认
+const crossOntologyHint = computed(() => {
   if (!formFromObject.value || !formToObject.value) return ''
   const fromObj = props.object_types.find(item => item.object_type_name === formFromObject.value)
   const toObj = props.object_types.find(item => item.object_type_name === formToObject.value)
   if (!fromObj || !toObj) return ''
-  if (fromObj.domain_id != null && fromObj.domain_id === toObj.domain_id) return ''
-  return '两端对象类型属于不同业务领域（或未挂领域）：这会是跨领域导航路径，请确认是有意为之。'
+  if (fromObj.ontology_id != null && fromObj.ontology_id === toObj.ontology_id) return ''
+  return '两端对象类型属于不同本体（或未挂本体）：这会是跨本体导航路径，请确认是有意为之。'
 })
 
 const resetForm = () => {
@@ -416,10 +416,10 @@ defineExpose({ openCreate, openEdit, openStatus, remove })
       </div>
 
       <div
-        v-if="crossDomainHint"
+        v-if="crossOntologyHint"
         class="rounded-lg border border-amber-100 bg-amber-50 p-2.5 text-[11px] leading-5 text-amber-600"
       >
-        <i class="fa-solid fa-triangle-exclamation mr-1"></i>{{ crossDomainHint }}
+        <i class="fa-solid fa-triangle-exclamation mr-1"></i>{{ crossOntologyHint }}
       </div>
 
       <div class="grid grid-cols-2 gap-3">

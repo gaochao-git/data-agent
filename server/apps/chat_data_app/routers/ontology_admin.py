@@ -16,12 +16,12 @@ from utils.response import business_response
 
 from ..daos.ontology_dao import OntologyDao
 from ..schema import (
-    OntologyDomainUpsertRequest,
-    OntologyObjectTypeDomainRequest,
+    OntologyObjectTypeOntologyRequest,
     OntologyObjectTypeStatusRequest,
     OntologyObjectTypeUpsertRequest,
     OntologyRelationTypeStatusRequest,
     OntologyRelationTypeUpsertRequest,
+    OntologyUpsertRequest,
 )
 from ..services.ontology import (
     OntologyAlreadyExistsError,
@@ -60,28 +60,26 @@ def _error_response(e: Exception, fallback_msg: str, fallback_code: ErrorCode) -
     return business_response(msg=fallback_msg, code=fallback_code, status="error")
 
 
-@router.get("/admin/meta/ontology/domains")
-async def list_ontology_domains(request: Request) -> JSONResponse:
-    """本体领域列表（领域=业务域实体，一对一绑定数据源组）。"""
+@router.get("/admin/meta/ontology/ontologies")
+async def list_ontologies(request: Request) -> JSONResponse:
+    """本体列表（本体=对象类型容器，一对一绑定数据源组）。"""
     try:
         _get_current_user(request)
-        data = await ontology_service.list_domains_async()
-        return business_response(data={"domains": data}, msg="获取成功")
+        data = await ontology_service.list_ontologies_async()
+        return business_response(data={"ontologies": data}, msg="获取成功")
     except HTTPException:
         raise
     except Exception as e:
-        return _error_response(e, "获取本体领域列表失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
+        return _error_response(e, "获取本体列表失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
 
 
-@router.put("/admin/meta/ontology/domains/{domain_name}")
-async def upsert_ontology_domain(
-    domain_name: str, payload: OntologyDomainUpsertRequest, request: Request
-) -> JSONResponse:
-    """创建/编辑本体领域（绑定数据源组；编辑活跃领域需 allow_overwrite）。"""
+@router.put("/admin/meta/ontology/ontologies/{ontology_name}")
+async def upsert_ontology(ontology_name: str, payload: OntologyUpsertRequest, request: Request) -> JSONResponse:
+    """创建/编辑本体（绑定数据源组；编辑活跃本体需 allow_overwrite）。"""
     try:
         current_user = _get_current_user(request)
-        data = await ontology_service.upsert_domain_async(
-            domain_name,
+        data = await ontology_service.upsert_ontology_async(
+            ontology_name,
             payload.model_dump(),
             operator=str(current_user.user_id),
             operator_name=str(current_user.username or ""),
@@ -91,34 +89,34 @@ async def upsert_ontology_domain(
     except HTTPException:
         raise
     except Exception as e:
-        return _error_response(e, "保存本体领域失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
+        return _error_response(e, "保存本体失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
 
 
-@router.delete("/admin/meta/ontology/domains/{domain_name}")
-async def delete_ontology_domain(domain_name: str, request: Request) -> JSONResponse:
-    """删除本体领域（软删；挂有活跃对象类型时拒绝）。"""
+@router.delete("/admin/meta/ontology/ontologies/{ontology_name}")
+async def delete_ontology(ontology_name: str, request: Request) -> JSONResponse:
+    """删除本体（软删；挂有活跃对象类型时拒绝）。"""
     try:
         current_user = _get_current_user(request)
-        await ontology_service.delete_domain_async(
-            domain_name,
+        await ontology_service.delete_ontology_async(
+            ontology_name,
             operator=str(current_user.user_id),
             operator_name=str(current_user.username or ""),
         )
-        return business_response(data={"domain_name": domain_name}, msg="删除成功")
+        return business_response(data={"ontology_name": ontology_name}, msg="删除成功")
     except HTTPException:
         raise
     except Exception as e:
-        return _error_response(e, "删除本体领域失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
+        return _error_response(e, "删除本体失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
 
 
 @router.get("/admin/meta/ontology/object-types")
 async def list_ontology_object_types(
-    request: Request, keyword: str | None = None, status: str | None = None, domain_id: int | None = None
+    request: Request, keyword: str | None = None, status: str | None = None, ontology_id: int | None = None
 ) -> JSONResponse:
-    """本体对象类型列表（keyword 按名称/展示名/描述模糊过滤；status/domain_id 精确过滤）。"""
+    """本体对象类型列表（keyword 按名称/展示名/描述模糊过滤；status/ontology_id 精确过滤）。"""
     try:
         _get_current_user(request)
-        data = await ontology_service.list_object_types_async(keyword or "", status or "", domain_id)
+        data = await ontology_service.list_object_types_async(keyword or "", status or "", ontology_id)
         return business_response(data={"object_types": data}, msg="获取成功")
     except HTTPException:
         raise
@@ -204,24 +202,24 @@ async def change_ontology_object_type_status(
         return _error_response(e, "本体对象类型状态变更失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
 
 
-@router.post("/admin/meta/ontology/object-types/{object_type_name}/domain")
-async def change_ontology_object_type_domain(
-    object_type_name: str, payload: OntologyObjectTypeDomainRequest, request: Request
+@router.post("/admin/meta/ontology/object-types/{object_type_name}/ontology")
+async def change_ontology_object_type_ontology(
+    object_type_name: str, payload: OntologyObjectTypeOntologyRequest, request: Request
 ) -> JSONResponse:
-    """对象类型领域归属变更（拖拽换域窄写路径；domain_id=null 表示移出领域）。"""
+    """对象类型本体归属变更（拖拽换本体窄写路径；ontology_id=null 表示移出本体）。"""
     try:
         current_user = _get_current_user(request)
-        data = await ontology_service.set_object_type_domain_async(
+        data = await ontology_service.set_object_type_ontology_async(
             object_type_name,
-            payload.domain_id,
+            payload.ontology_id,
             operator=str(current_user.user_id),
             operator_name=str(current_user.username or ""),
         )
-        return business_response(data=data, msg="领域归属已更新")
+        return business_response(data=data, msg="本体归属已更新")
     except HTTPException:
         raise
     except Exception as e:
-        return _error_response(e, "对象类型领域归属变更失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
+        return _error_response(e, "对象类型本体归属变更失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
 
 
 @router.get("/admin/meta/ontology/relation-types")
@@ -297,9 +295,9 @@ async def change_ontology_relation_status(
         return _error_response(e, "本体关系类型状态变更失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
 
 
-def _domain_group_ids(domains: list[dict] | None) -> list[str]:
-    """领域列表 → 挂载的数据源组 ID（去空去重，升序）。"""
-    return sorted({str((domain or {}).get("group_id") or "").strip() for domain in domains or []} - {""})
+def _ontology_group_ids(ontologies: list[dict] | None) -> list[str]:
+    """本体列表 → 挂载的数据源组 ID（去空去重，升序）。"""
+    return sorted({str((item or {}).get("group_id") or "").strip() for item in ontologies or []} - {""})
 
 
 async def _collect_consistency_scope(
@@ -307,7 +305,7 @@ async def _collect_consistency_scope(
 ) -> tuple[list[dict], dict[str, str], set[str]]:
     """一致性检查比较域收集：各组公共语义配置去重合并。
 
-    返回 (configs, {config_id: group_id}, config_ids)——比较域 = 全部领域挂载的
+    返回 (configs, {config_id: group_id}, config_ids)——比较域 = 全部本体挂载的
     数据源组下的公共语义配置。
     """
     service = get_semantic_config_service()
@@ -338,14 +336,14 @@ def _severity_summary(findings: list[dict]) -> dict[str, int]:
 async def check_ontology_model_consistency(request: Request) -> JSONResponse:
     """本体↔语义模型一致性健康巡检（管理端手动触发）。
 
-    比较域 = 全部领域挂载的数据源组下的公共语义配置 × AI 可见本体面
+    比较域 = 全部本体挂载的数据源组下的公共语义配置 × AI 可见本体面
     （bundle 与注入同源：活跃、certified/experimental、双端在集合内）。
     只巡检不评分、不阻断任何操作——产出失修清单（映射维度失效/关系类型列失效/
     类型冲突/属性未映射），供管理员修正映射或恢复维度。
     """
     try:
         _get_current_user(request)
-        group_ids = _domain_group_ids(await ontology_service.list_domains_async())
+        group_ids = _ontology_group_ids(await ontology_service.list_ontologies_async())
         configs, config_group_ids, seen_config_ids = await _collect_consistency_scope(group_ids)
         bundle = await OntologyDao().load_injection_bundle_async(sorted(seen_config_ids)) if seen_config_ids else {}
         findings = _run_consistency_check(bundle, configs, config_group_ids=config_group_ids)

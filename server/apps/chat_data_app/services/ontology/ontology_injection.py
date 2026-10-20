@@ -287,17 +287,17 @@ def _render_object_entry(
     properties_by_object_type: dict[int, list[dict[str, Any]]],
     mappings_by_object: dict[int, list[dict[str, Any]]],
     config_names: dict[str, str],
-    domain_names: dict[int, str] | None = None,
+    ontology_names: dict[int, str] | None = None,
     model_files: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """单个对象类型 → 目录条目（属性摘要 + 语义模型映射列表；domain=领域名，未分域为空）。
+    """单个对象类型 → 目录条目（属性摘要 + 语义模型映射列表；ontology=本体名，未挂为空）。
 
     mappings.file = 该模型在工作区 semantic/ 下的快照文件名：本体目录与语义资产目录
     二选一物化后，模型凭它直接 file_read 取数模型，不再依赖 _semantic_catalog.yaml。
     空 column_mappings 的映射行对模型没有信息量（渲染成空字典只会造成歧义），
     因此从对象类型条目中剔除；对象类型本身即使没有映射也保留。
     """
-    domain_names = domain_names or {}
+    ontology_names = ontology_names or {}
     model_files = model_files or {}
     object_type_id = int(obj.get("id") or 0)
     properties = [
@@ -316,7 +316,7 @@ def _render_object_entry(
         "object_type": obj.get("object_type_name"),
         "display_name": obj.get("display_name"),
         "status": obj.get("status"),
-        "domain": domain_names.get(int(obj.get("domain_id") or 0), ""),
+        "ontology": ontology_names.get(int(obj.get("ontology_id") or 0), ""),
         "description": obj.get("description"),
         "properties": properties,
         "mappings": mappings,
@@ -401,7 +401,7 @@ def _render_catalog(
     bundle: dict[str, Any],
     config_names: dict[str, str],
     dimension_columns: dict[str, dict[str, str]] | None = None,
-    domain_names: dict[int, str] | None = None,
+    ontology_names: dict[int, str] | None = None,
     model_files: dict[str, str] | None = None,
     configs: list[dict[str, Any]] | None = None,
 ) -> str:
@@ -411,7 +411,7 @@ def _render_catalog(
     object_types = sorted(bundle.get("object_types") or [], key=lambda obj: str(obj.get("object_type_name") or ""))
     rendered_objects = [
         _render_object_entry(
-            obj, properties_by_object_type, mappings_by_object, config_names, domain_names, model_files
+            obj, properties_by_object_type, mappings_by_object, config_names, ontology_names, model_files
         )
         for obj in object_types
     ]
@@ -460,17 +460,18 @@ async def materialize_ontology_catalog_async(
         if not object_types:
             return 0
         try:
-            domain_rows = await OntologyDao().list_domains_async()
-        except Exception:  # noqa: BLE001 - 领域名是展示增强，取不到按未分域渲染
-            domain_rows = []
-        domain_names = {
-            int(row.get("id") or 0): str(row.get("display_name") or row.get("domain_name") or "") for row in domain_rows
+            ontology_rows = await OntologyDao().list_ontologies_async()
+        except Exception:  # noqa: BLE001 - 本体名是展示增强，取不到按未挂本体渲染
+            ontology_rows = []
+        ontology_names = {
+            int(row.get("id") or 0): str(row.get("display_name") or row.get("ontology_name") or "")
+            for row in ontology_rows
         }
         content = _render_catalog(
             bundle,
             _config_display_names(configs),
             _config_dimension_columns(configs),
-            domain_names,
+            ontology_names,
             model_files,
             configs,
         )

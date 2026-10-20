@@ -8,7 +8,7 @@ import { computed, ref, watch } from 'vue'
 import type { PropType } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getAdminOntologyObjectType, upsertAdminOntologyObjectType } from '../../api'
-import type { OntologyDomainItem, OntologyMappingItem, OntologyObjectTypeItem, OntologyPropertyItem } from '../../types'
+import type { OntologyItem, OntologyMappingItem, OntologyObjectTypeItem, OntologyPropertyItem } from '../../types'
 import OntologyMappingEditor from './OntologyMappingEditor.vue'
 import OntologyPropertyEditor from './OntologyPropertyEditor.vue'
 import {
@@ -23,10 +23,10 @@ import {
 const props = defineProps({
   // 编辑的对象名；空串表示新建
   objectTypeName: { type: String, default: '' },
-  // 领域清单（父组件加载；对象类型挂领域=继承领域绑定的数据源组）
-  domains: { type: Array as PropType<OntologyDomainItem[]>, default: () => [] },
-  // 新建时的预选领域（树右键「新增对象」从领域节点发起）
-  defaultDomainId: { type: Number as PropType<number | null>, default: null }
+  // 本体清单（父组件加载；对象类型挂本体=继承本体绑定的数据源组）
+  ontologies: { type: Array as PropType<OntologyItem[]>, default: () => [] },
+  // 新建时的预选本体（树右键「新增对象」从本体节点发起）
+  defaultOntologyId: { type: Number as PropType<number | null>, default: null }
 })
 
 const emit = defineEmits<{ saved: [] }>()
@@ -43,7 +43,7 @@ const loadedDetail = ref<OntologyObjectTypeItem | null>(null)
 const formName = ref('')
 const formDisplayName = ref('')
 const formDescription = ref('')
-const formDomainId = ref<number | null>(null)
+const formOntologyId = ref<number | null>(null)
 const propertyRows = ref<OntologyPropertyItem[]>([])
 const mappingRows = ref<OntologyMappingItem[]>([])
 
@@ -73,12 +73,12 @@ const removeMappingRow = (index: number) => {
   mappingRows.value.splice(index, 1)
 }
 
-// 领域下拉标签：展示名（API 名）；映射候选组 = 领域绑定的组（未挂领域不限制）
-const domainLabel = (domain: OntologyDomainItem) =>
-  domain.display_name ? `${domain.display_name} (${domain.domain_name})` : domain.domain_name
-const domainGroupIds = computed(() => {
-  const domain = props.domains.find(item => item.id === formDomainId.value)
-  return domain ? [domain.group_id] : []
+// 本体下拉标签：展示名（API 名）；映射候选组 = 本体绑定的组（未挂本体不限制）
+const ontologyLabel = (ontology: OntologyItem) =>
+  ontology.display_name ? `${ontology.display_name} (${ontology.ontology_name})` : ontology.ontology_name
+const ontologyGroupIds = computed(() => {
+  const ontology = props.ontologies.find(item => item.id === formOntologyId.value)
+  return ontology ? [ontology.group_id] : []
 })
 
 // certified 冻结名单：既有属性禁删禁改名禁改主键/标题标记
@@ -90,7 +90,7 @@ const resetForm = () => {
   formName.value = ''
   formDisplayName.value = ''
   formDescription.value = ''
-  formDomainId.value = props.defaultDomainId
+  formOntologyId.value = props.defaultOntologyId
   propertyRows.value = [{ property_name: '', display_name: '', description: '', value_type: 'String', enum_ref: '', render_hints: {}, is_identifier: true, is_title: true }]
   mappingRows.value = []
   loadedDetail.value = null
@@ -112,7 +112,7 @@ const openLoad = async () => {
     formName.value = detail.object_type_name
     formDisplayName.value = detail.display_name
     formDescription.value = detail.description
-    formDomainId.value = detail.domain_id ?? null
+    formOntologyId.value = detail.ontology_id ?? null
     propertyRows.value = (detail.properties || []).map(item => ({ ...item, render_hints: { ...(item.render_hints || {}) } }))
     mappingRows.value = (detail.mappings || []).map(item => ({ ...item, column_mappings: { ...(item.column_mappings || {}) } }))
   } catch (err) {
@@ -227,7 +227,7 @@ const saveObject = async () => {
     const res = await upsertAdminOntologyObjectType(formName.value.trim(), {
       display_name: formDisplayName.value.trim(),
       description: formDescription.value.trim(),
-      domain_id: formDomainId.value,
+      ontology_id: formOntologyId.value,
       properties: propertyRows.value.map(row => ({
         property_name: row.property_name.trim(),
         display_name: row.display_name.trim(),
@@ -292,17 +292,17 @@ const saveObject = async () => {
           <el-input v-model="formDisplayName" size="small" maxlength="128" placeholder="用户可见名称，如 订单" />
         </div>
         <div>
-          <div class="mb-1 text-xs text-slate-500">业务领域（挂领域后继承其绑定的数据源组）</div>
+          <div class="mb-1 text-xs text-slate-500">所属本体（挂本体后继承其绑定的数据源组）</div>
           <el-select
-            v-model="formDomainId"
+            v-model="formOntologyId"
             size="small"
             filterable
             clearable
             :empty-values="[null, undefined]"
-            placeholder="选择业务领域"
+            placeholder="选择本体"
             class="!w-full"
           >
-            <el-option v-for="domain in domains" :key="domain.id" :label="domainLabel(domain)" :value="domain.id" />
+            <el-option v-for="ontology in ontologies" :key="ontology.id" :label="ontologyLabel(ontology)" :value="ontology.id" />
           </el-select>
         </div>
         <div>
@@ -344,7 +344,7 @@ const saveObject = async () => {
         <OntologyMappingEditor
           :rows="mappingRows"
           :properties="propertyRows"
-          :group-ids="domainGroupIds"
+          :group-ids="ontologyGroupIds"
           @remove-row="removeMappingRow"
         />
       </div>

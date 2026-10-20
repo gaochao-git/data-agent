@@ -452,13 +452,13 @@ class TableIndexItem(BaseModel):
     columns: list[str] = Field(default_factory=list, max_length=5, description="索引列名列表")
 
 
-class OntologyDomainUpsertRequest(BaseModel):
-    """本体领域创建/编辑请求（领域名由路径参数携带；一对一绑定数据源组）"""
+class OntologyUpsertRequest(BaseModel):
+    """本体创建/编辑请求（本体名由路径参数携带；一对一绑定数据源组）"""
 
     group_id: str = Field(..., min_length=1, max_length=128, description="绑定的数据源组ID（一次绑定）")
-    display_name: str = Field(default="", max_length=128, description="展示名，缺省用领域名")
-    description: str = Field(default="", max_length=512, description="领域描述")
-    allow_overwrite: bool = Field(default=False, description="编辑既有活跃领域时为 True")
+    display_name: str = Field(default="", max_length=128, description="展示名，缺省用本体名")
+    description: str = Field(default="", max_length=512, description="本体描述")
+    allow_overwrite: bool = Field(default=False, description="编辑既有活跃本体时为 True")
 
 
 class OntologyPropertyItem(BaseModel):
@@ -494,7 +494,7 @@ class OntologyObjectTypeUpsertRequest(BaseModel):
 
     display_name: str = Field(..., min_length=1, max_length=128, description="展示名")
     description: str = Field(default="", max_length=1024, description="对象类型描述")
-    domain_id: int | None = Field(default=None, description="领域ID（组随领域继承），缺省=未分域")
+    ontology_id: int | None = Field(default=None, description="本体ID（组随本体继承），缺省=未挂本体")
     properties: list[OntologyPropertyItem] = Field(..., min_length=1, description="属性集（整体提交）")
     mappings: list[OntologyMappingItem] = Field(
         default_factory=list, description="语义模型映射列表（独立存映射表，随对象类型提交全量重写）"
@@ -512,10 +512,10 @@ class OntologyObjectTypeStatusRequest(BaseModel):
     successor_object_type_name: str = Field(default="", max_length=128, description="替代对象类型API名，可选但必须存在")
 
 
-class OntologyObjectTypeDomainRequest(BaseModel):
-    """本体对象类型领域归属变更请求（拖拽换域等窄写路径；null=移出领域）"""
+class OntologyObjectTypeOntologyRequest(BaseModel):
+    """本体对象类型归属变更请求（拖拽换本体等窄写路径；null=移出本体）"""
 
-    domain_id: int | None = Field(default=None, description="目标领域主键；null=移出领域")
+    ontology_id: int | None = Field(default=None, description="目标本体主键；null=移出本体")
 
 
 class OntologyRelationTypeStatusRequest(BaseModel):

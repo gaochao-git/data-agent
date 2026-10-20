@@ -35,7 +35,7 @@ import type {
   MetaGlobalEnum,
   MetaGlobalEnumRef,
   MetaGlobalEnumValueItem,
-  OntologyDomainItem,
+  OntologyItem,
   OntologyMappingItem,
   OntologyObjectTypeItem,
   OntologyObjectTypeStatus,
@@ -2088,44 +2088,44 @@ export function checkAdminOntologyConsistency(): Promise<ApiResponse<OntologyCon
   })
 }
 
-/** 后台：本体领域列表（领域=业务域实体，一对一绑定数据源组） */
-export function getAdminOntologyDomains(): Promise<ApiResponse<{ domains: OntologyDomainItem[] }>> {
+/** 后台：本体列表（本体=对象类型容器，一对一绑定数据源组） */
+export function getAdminOntologies(): Promise<ApiResponse<{ ontologies: OntologyItem[] }>> {
   return request({
-    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/domains`,
+    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/ontologies`,
     method: 'get'
   })
 }
 
-/** 后台：创建/编辑本体领域（绑定数据源组；编辑活跃领域需 allow_overwrite=true） */
-export function upsertAdminOntologyDomain(
-  domainName: string,
+/** 后台：创建/编辑本体（绑定数据源组；编辑活跃本体需 allow_overwrite=true） */
+export function upsertAdminOntology(
+  ontologyName: string,
   data: {
     group_id: string
     display_name?: string
     description?: string
     allow_overwrite?: boolean
   }
-): Promise<ApiResponse<OntologyDomainItem>> {
+): Promise<ApiResponse<OntologyItem>> {
   return request({
-    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/domains/${encodeURIComponent(domainName)}`,
+    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/ontologies/${encodeURIComponent(ontologyName)}`,
     method: 'put',
     data
   })
 }
 
-/** 后台：删除本体领域（软删；挂有活跃对象时拒绝） */
-export function deleteAdminOntologyDomain(domainName: string): Promise<ApiResponse<{ domain_name: string }>> {
+/** 后台：删除本体（软删；挂有活跃对象时拒绝） */
+export function deleteAdminOntology(ontologyName: string): Promise<ApiResponse<{ ontology_name: string }>> {
   return request({
-    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/domains/${encodeURIComponent(domainName)}`,
+    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/ontologies/${encodeURIComponent(ontologyName)}`,
     method: 'delete'
   })
 }
 
-/** 后台：本体对象类型列表（keyword 按名称/展示名/描述模糊过滤；status/domain_id 精确过滤） */
+/** 后台：本体对象类型列表（keyword 按名称/展示名/描述模糊过滤；status/ontology_id 精确过滤） */
 export function getAdminOntologyObjectTypes(params?: {
   keyword?: string
   status?: string
-  domain_id?: number
+  ontology_id?: number
 }): Promise<ApiResponse<{ object_types: OntologyObjectTypeItem[] }>> {
   return request({
     url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/object-types`,
@@ -2149,7 +2149,7 @@ export function upsertAdminOntologyObjectType(
   data: {
     display_name: string
     description?: string
-    domain_id?: number | null
+    ontology_id?: number | null
     properties: OntologyPropertyItem[]
     mappings?: OntologyMappingItem[]
     allow_overwrite?: boolean
@@ -2188,15 +2188,15 @@ export function changeAdminOntologyObjectTypeStatus(
   })
 }
 
-/** 后台：对象领域归属变更（拖拽换域窄写路径；domainId=null 表示移出领域） */
-export function changeAdminOntologyObjectTypeDomain(
+/** 后台：对象本体归属变更（拖拽换本体窄写路径；ontologyId=null 表示移出本体） */
+export function changeAdminOntologyObjectTypeOntology(
   objectTypeName: string,
-  domainId: number | null
+  ontologyId: number | null
 ): Promise<ApiResponse<OntologyObjectTypeItem>> {
   return request({
-    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/object-types/${encodeURIComponent(objectTypeName)}/domain`,
+    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/object-types/${encodeURIComponent(objectTypeName)}/ontology`,
     method: 'post',
-    data: { domain_id: domainId }
+    data: { ontology_id: ontologyId }
   })
 }
 

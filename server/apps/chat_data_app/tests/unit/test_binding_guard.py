@@ -66,12 +66,12 @@ def test_raise_if_dimensions_referenced_is_precise():
 
 
 class _FakeOntologyDao:
-    def __init__(self, bindings, domains=None):
+    def __init__(self, bindings, ontologies=None):
         self._bindings = bindings
-        self._domains = domains or []
+        self._ontologies = ontologies or []
         self.config_calls = []
         self.group_calls = []
-        self.domain_calls = []
+        self.ontology_calls = []
 
     async def find_bindings_for_configs_async(self, config_ids):
         self.config_calls.append(list(config_ids))
@@ -81,9 +81,9 @@ class _FakeOntologyDao:
         self.group_calls.append(group_id)
         return list(self._bindings)
 
-    async def list_active_domain_names_by_group_async(self, group_id):
-        self.domain_calls.append(group_id)
-        return list(self._domains)
+    async def list_active_ontology_names_by_group_async(self, group_id):
+        self.ontology_calls.append(group_id)
+        return list(self._ontologies)
 
 
 def test_ensure_configs_unbound_async_raises_and_passes(monkeypatch):
@@ -115,21 +115,21 @@ def test_ensure_group_unbound_async_raises(monkeypatch):
     with pytest.raises(SemanticOntologyBoundError):
         asyncio.run(binding_guard.ensure_group_unbound_async("group_a", action="删除数据源组"))
     assert fake.group_calls == ["group_a"]
-    # 有映射绑定时不继续查领域（先命中的阻断优先）
-    assert fake.domain_calls == []
+    # 有映射绑定时不继续查本体（先命中的阻断优先）
+    assert fake.ontology_calls == []
 
 
 def test_ensure_group_unbound_async_blocks_ontology_domain(monkeypatch):
-    """数据源组被本体领域引用时同样阻断（领域绑定组，删组会让领域悬空）。"""
-    fake = _FakeOntologyDao([], domains=["交易域", "供应链域"])
+    """数据源组被本体引用时同样阻断（本体绑定组，删组会让本体悬空）。"""
+    fake = _FakeOntologyDao([], ontologies=["交易域", "供应链域"])
     monkeypatch.setattr(binding_guard, "OntologyDao", lambda: fake)
-    with pytest.raises(SemanticOntologyBoundError, match="本体领域") as exc:
+    with pytest.raises(SemanticOntologyBoundError, match="本体引用") as exc:
         asyncio.run(binding_guard.ensure_group_unbound_async("group_a", action="删除数据源组"))
     assert "交易域" in str(exc.value)
     assert "供应链域" in str(exc.value)
-    assert fake.domain_calls == ["group_a"]
+    assert fake.ontology_calls == ["group_a"]
 
-    # 无映射绑定且无领域引用 → 放行
-    fake = _FakeOntologyDao([], domains=[])
+    # 无映射绑定且无本体引用 → 放行
+    fake = _FakeOntologyDao([], ontologies=[])
     monkeypatch.setattr(binding_guard, "OntologyDao", lambda: fake)
     asyncio.run(binding_guard.ensure_group_unbound_async("group_a"))
