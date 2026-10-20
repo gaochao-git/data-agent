@@ -79,13 +79,14 @@ const emit = defineEmits<{
   'update:enableDeepThinking': [value: boolean]
   'update:thinkingEffort': [value: string]
   'update:approvalMode': [value: 'ask' | 'auto']
+  manageApprovalGrants: []
 }>()
 
 // ---- 权限选择：审批模式常驻 pill（隔离后端 / Bash 属部署能力，由服务端配置决定，前端不再展示或传参） ----
 const approvalMode = ref<'ask' | 'auto'>(props.approvalMode === 'auto' ? 'auto' : 'ask')
-const approvalModeOptions: { value: 'ask' | 'auto'; label: string; desc: string; icon: string }[] = [
-  { value: 'ask', label: '按需审批', desc: '删除/移动等操作执行前确认', icon: 'fa-shield-halved' },
-  { value: 'auto', label: '自动审批', desc: '工具直接执行，不打断', icon: 'fa-bolt' },
+const approvalModeOptions: { value: 'ask' | 'auto'; label: string; icon: string }[] = [
+  { value: 'ask', label: '工具按需审批', icon: 'fa-shield-halved' },
+  { value: 'auto', label: '工具自动审批', icon: 'fa-bolt' },
 ]
 const approvalModeLabel = computed(
   () => approvalModeOptions.find(option => option.value === approvalMode.value)?.label || '按需审批'
@@ -95,6 +96,11 @@ const selectApprovalMode = (mode: 'ask' | 'auto') => {
   approvalMode.value = mode
   sandboxMenuOpen.value = false
   emit('update:approvalMode', mode)
+}
+
+const manageApprovalGrants = () => {
+  sandboxMenuOpen.value = false
+  emit('manageApprovalGrants')
 }
 
 watch(() => props.approvalMode, (value) => {
@@ -251,28 +257,34 @@ onBeforeUnmount(() => {
         </div>
         <div
           v-if="sandboxMenuOpen"
-          class="absolute left-0 bottom-8 z-50 w-[240px] overflow-hidden rounded-lg border border-gray-200 bg-white py-1 text-xs text-gray-600 shadow-lg"
+          class="absolute left-0 bottom-8 z-50 w-[200px] space-y-0.5 overflow-hidden rounded-lg border border-gray-200 bg-white py-1 text-xs text-gray-600 shadow-lg"
         >
-          <div class="px-3 pb-0.5 pt-1 text-[11px] text-gray-400">工具审批模式</div>
-          <button
+          <div class="px-2.5 pb-0.5 pt-1 text-[10px] text-gray-400">工具审批模式</div>
+          <div
             v-for="opt in approvalModeOptions"
             :key="opt.value"
-            type="button"
             :class="[
-              'flex w-full items-center justify-between gap-2 border-none bg-transparent px-3 py-2 text-left cursor-pointer',
+              'flex cursor-pointer items-center gap-1 px-2.5 py-1.5',
               approvalMode === opt.value ? 'text-blue-600 bg-blue-50' : 'text-gray-600 hover:bg-gray-50'
             ]"
             @click="selectApprovalMode(opt.value)"
           >
-            <div class="flex min-w-0 items-center gap-2">
-              <i class="fa-solid text-[11px] text-gray-400" :class="opt.icon"></i>
-              <div class="min-w-0">
-                <div class="font-medium">{{ opt.label }}</div>
-                <div class="text-[11px] text-gray-400">{{ opt.desc }}</div>
-              </div>
-            </div>
-            <i v-if="approvalMode === opt.value" class="fa-solid fa-check text-[10px] flex-shrink-0"></i>
-          </button>
+            <i class="fa-solid text-[10px] text-gray-400" :class="opt.icon"></i>
+            <span class="whitespace-nowrap text-[11px] font-medium">{{ opt.label }}</span>
+            <span class="ml-auto flex items-center gap-1">
+              <i v-if="approvalMode === opt.value" class="fa-solid fa-check text-[10px]"></i>
+              <button
+                v-if="opt.value === 'ask'"
+                type="button"
+                class="flex shrink-0 items-center gap-0.5 rounded px-1 py-0.5 text-[10px] text-blue-600 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-40"
+                :disabled="isGenerating"
+                title="管理本会话已授权的工具，可逐项恢复审批"
+                @click.stop="manageApprovalGrants"
+              >
+                <i class="fa-solid fa-sliders text-[10px]"></i>许可
+              </button>
+            </span>
+          </div>
         </div>
       </div>
 

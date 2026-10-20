@@ -1636,6 +1636,38 @@ export function getPendingUserQuestion(
   })
 }
 
+/** 读取当前会话已授予的工具审批许可（tool:<name> 列表）。 */
+export function getConversationApprovalGrants(
+  conversationId: string,
+): Promise<ApiResponse<{ grants: string[] }>> {
+  return request({
+    url: `/agents/api/chatdata/conversations/${conversationId}/approval-grants`,
+    method: 'get',
+  })
+}
+
+/** 按工具撤销当前会话的审批许可。 */
+export function revokeConversationApprovalGrants(
+  conversationId: string,
+  tools: string[],
+): Promise<ApiResponse<{ grants: string[] }>> {
+  return request({
+    url: `/agents/api/chatdata/conversations/${conversationId}/approval-grants/revoke`,
+    method: 'post',
+    data: { tools },
+  })
+}
+
+/** 重置当前会话已授予的工具审批许可（本会话内始终允许/本轮许可）。 */
+export function resetConversationApprovalGrants(
+  conversationId: string,
+): Promise<ApiResponse<null>> {
+  return request({
+    url: `/agents/api/chatdata/conversations/${conversationId}/approval-grants/reset`,
+    method: 'post',
+  })
+}
+
 /** 订阅后台 Run 的持久化 SSE 事件，支持按序号断线续传。 */
 export function streamRunEvents(
   conversationId: string,

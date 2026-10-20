@@ -21,6 +21,7 @@ import SkillManager from './SkillManager.vue'
 import ConversationMessageList from './ConversationMessageList.vue'
 import ConversationWorkspacePanel from './ConversationWorkspacePanel.vue'
 import ConversationInputBar from './ConversationInputBar.vue'
+import ApprovalGrantsDialog from './ApprovalGrantsDialog.vue'
 import ConversationTokenUsage from './ConversationTokenUsage.vue'
 import ConversationTurnNavigator from './ConversationTurnNavigator.vue'
 import SkillCommandMenu from './SkillCommandMenu.vue'
@@ -96,6 +97,8 @@ const { generateSqlStream, stopGeneration } = useSqlGenerator()
 
 // 权限选择：唯一前端可调项（审批模式）；隔离后端/Bash 属部署配置，不再下发前端
 const approvalMode = ref<'ask' | 'auto'>('ask')
+// 已授权的工具许可（本会话内/本轮），支持逐项撤销
+const approvalGrantsDialogVisible = ref(false)
 // 模型列表与运行时配置：与其他入口共用同一份加载逻辑
 const {
   modelOptions,
@@ -1434,6 +1437,15 @@ const selectCommandSkill = (skill: SkillInfo) => {
 
 const onApprovalModeChange = (mode: 'ask' | 'auto') => {
   approvalMode.value = mode
+}
+
+const openApprovalGrantsDialog = () => {
+  const targetConversationId = localConversationId.value || props.conversationId
+  if (!targetConversationId) {
+    ElMessage.info('新建会话还没有审批许可')
+    return
+  }
+  approvalGrantsDialogVisible.value = true
 }
 
 const clearSelectedSkill = (name: string) => {
@@ -2882,6 +2894,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
             @paste-files="handlePasteFiles"
             @open-skill-manager="isSkillManagerOpen = true"
             @update:approval-mode="onApprovalModeChange"
+            @manage-approval-grants="openApprovalGrantsDialog"
             @keydown="handleKeyDown"
             @focus="inputFocused = true"
             @blur="inputFocused = false"
@@ -2954,6 +2967,11 @@ const handleKeyDown = (event: KeyboardEvent) => {
       :member-datasource-id="saveMemberDatasourceId"
       :member-datasource-ids="saveMemberDatasourceIds"
       :execution-targets="props.executionTargets"
+    />
+
+    <ApprovalGrantsDialog
+      v-model:visible="approvalGrantsDialogVisible"
+      :conversation-id="localConversationId || conversationId"
     />
   </div>
 </template>

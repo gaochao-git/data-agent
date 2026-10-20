@@ -1470,3 +1470,15 @@ def test_load_inbox_meta_tolerates_bad_data():
     assert _load_inbox_meta("not-json") == {}
     assert _load_inbox_meta('["list"]') == {}
     assert _load_inbox_meta('{"file_ids": ["f1"]}') == {"file_ids": ["f1"]}
+
+
+@pytest.mark.asyncio
+async def test_has_active_run_reflects_run_lifecycle(inbox_service):
+    service, create_thread, _get_session, owners = inbox_service
+    await create_thread()
+
+    assert await service.has_active_run("conv-1", "user-1") is False
+    run_id, _ = await service.start_run("conv-1", "user-1", "用户一")
+    assert await service.has_active_run("conv-1", "user-1") is True
+    await service.complete_run(run_id, "user-1", "用户一", owners[run_id])
+    assert await service.has_active_run("conv-1", "user-1") is False

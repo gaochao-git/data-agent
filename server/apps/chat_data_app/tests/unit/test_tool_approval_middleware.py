@@ -336,7 +336,7 @@ def test_is_approval_allowed_skips_non_dict_item():
 
 
 def test_append_grant_passthrough_for_unknown_result():
-    assert _append_grant("raw-result", "tool:file_delete") == "raw-result"
+    assert _append_grant("raw-result", "tool:file_delete", {}) == "raw-result"
 
 
 @pytest.mark.asyncio

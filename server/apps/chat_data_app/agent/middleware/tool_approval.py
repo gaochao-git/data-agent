@@ -21,7 +21,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable, Sequence
 from typing import Any
 from uuid import uuid4
 
@@ -100,6 +100,7 @@ class ToolApprovalMiddleware(AgentMiddleware):
                 **_run_grant_update(state, self._run_id, _run_grant_keys(state, self._run_id)),
             }
         existing_run_grants = _run_grant_keys(state, self._run_id)
+        existing_conversation_grants = _string_set(state, "approval_grants")
         if len(calls) == 1:
             decision = _resolve_decision(answer)
             call = calls[0]
@@ -107,7 +108,7 @@ class ToolApprovalMiddleware(AgentMiddleware):
                 "approval_decisions": {call["call_id"]: ("allow" if decision != "deny" else "deny")}
             }
             if decision == "always":
-                update["approval_grants"] = [call["grant_key"]]
+                update["approval_grants"] = _merge_keys(existing_conversation_grants, [call["grant_key"]])
                 existing_run_grants = _merge_keys(existing_run_grants, [])
             elif decision == "run_always":
                 existing_run_grants = _merge_keys(existing_run_grants, [call["grant_key"]])
@@ -116,7 +117,7 @@ class ToolApprovalMiddleware(AgentMiddleware):
         decisions, conversation_grants, run_grants = _resolve_batch_answers(answer, calls)
         batch_update: dict[str, Any] = {"approval_decisions": decisions}
         if conversation_grants:
-            batch_update["approval_grants"] = conversation_grants
+            batch_update["approval_grants"] = _merge_keys(existing_conversation_grants, conversation_grants)
         batch_update.update(_run_grant_update(state, self._run_id, _merge_keys(existing_run_grants, run_grants)))
         return batch_update
 
@@ -181,10 +182,10 @@ class ToolApprovalMiddleware(AgentMiddleware):
         return await _run_with_single_approval(request, tool_name, tool_call, handler, self._run_id)
 
 
-def _merge_keys(existing: list[str], new: list[str]) -> list[str]:
+def _merge_keys(existing: Iterable[str] | None, new: Sequence[str] | None) -> list[str]:
     merged: list[str] = []
     seen: set[str] = set()
-    for item in [*existing, *new]:
+    for item in [*(existing or []), *(new or [])]:
         key = str(item or "").strip()
         if key and key not in seen:
             seen.add(key)
@@ -532,14 +533,15 @@ def is_approval_allowed(answer: Any) -> bool:
     return _selected_label(answer) == APPROVAL_ALLOW_LABEL
 
 
-def _append_grant(result: ToolMessage | Command[Any], grant_key: str) -> ToolMessage | Command[Any]:
+def _append_grant(result: ToolMessage | Command[Any], grant_key: str, state: Any) -> ToolMessage | Command[Any]:
     """在保留工具结果的同时，把"本会话内始终允许"写回会话 state。"""
+    grants = _merge_keys(_string_set(state, "approval_grants"), [grant_key])
     if isinstance(result, Command):
         update = dict(result.update or {})
-        update["approval_grants"] = [grant_key]
+        update["approval_grants"] = grants
         return Command(update=update, goto=result.goto, resume=result.resume)
     if isinstance(result, ToolMessage):
-        return Command(update={"messages": [result], "approval_grants": [grant_key]})
+        return Command(update={"messages": [result], "approval_grants": grants})
     return result
 
 
@@ -595,7 +597,7 @@ async def _run_with_single_approval(
         logger.warning("工具审批通道异常，按拒绝处理: tool=%s", tool_name, exc_info=True)
         return _deny_message(request, "审批通道不可用")
     if is_always_allowed(answer):
-        return _append_grant(await handler(request), grant_key)
+        return _append_grant(await handler(request), grant_key, getattr(request, "state", None))
     if is_run_always_allowed(answer):
         return _append_run_grant(await handler(request), run_id, grant_key, getattr(request, "state", None))
     if is_approval_allowed(answer):

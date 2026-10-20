@@ -27,6 +27,11 @@ def merge_context_compression_events(
     return merged
 
 
+def replace_approval_grants(existing: list[str] | None, new: list[str] | None) -> list[str]:
+    """整体替换许可（撤销/重置需要真正清掉，不能走 merge）。"""
+    return merge_approval_grants([], new)
+
+
 def merge_approval_grants(existing: list[str] | None, new: list[str] | None) -> list[str]:
     """合并会话级审批许可（``tool:<name>`` / ``mcp_server:<id>``），去重保序。"""
     merged: list[str] = []
@@ -156,7 +161,7 @@ class ChatDataAgentState(AgentState, total=False):
     context_compression_events: Annotated[list[dict[str, Any]], merge_context_compression_events]
     discovered_tool_names: Annotated[list[str], merge_discovered_tool_names]
     # 会话级"始终允许"：仅存于当前会话 checkpoint，随会话结束自然失效。
-    approval_grants: Annotated[list[str], merge_approval_grants]
+    approval_grants: Annotated[list[str], replace_approval_grants]
     # 本轮审批决策：after_model 批量中断后写入，wrap_tool_call 执行前消费。
     approval_decisions: Annotated[dict[str, str], replace_approval_decisions]
     # 本轮内始终允许：run_id → [tool:<name>]，仅当前 run 生效，换 run 自动淘汰。
