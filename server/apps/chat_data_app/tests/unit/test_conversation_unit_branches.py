@@ -90,8 +90,9 @@ def test_conversation_formatting_helpers():
         )["is_favorited"]
         is False
     )
-    assert conversation_module._clean_title("《销售额分析!!!》", fallback="fallback") == "销售额分析"
-    assert conversation_module._clean_title("!!", fallback="fallback-title") == "fallback-title"
+    assert conversation_module._clean_title("《销售额分析!!!》") == "销售额分析"
+    assert conversation_module._clean_title("!!") == ""
+    assert conversation_module._clean_title("Here's a thinking process:") == ""
 
 
 @pytest.mark.asyncio
@@ -462,3 +463,78 @@ async def test_conversation_title_failure_alarm_carries_model_id(conversation_db
         "conversation_id": "conv_title_alarm",
         "model_id": "qwen3.6-35b-a3b",
     }
+
+
+def test_title_llm_disables_thinking_and_skips_reasoning_blocks(monkeypatch):
+    calls = {}
+    monkeypatch.setattr(
+        conversation_module,
+        "get_chat_data_llm",
+        lambda **kwargs: calls.update(kwargs) or object(),
+    )
+    conversation_module._get_title_llm()
+    assert calls["enable_thinking"] is False
+    assert calls["max_tokens"] == 200
+
+    response = AIMessage(
+        content=[
+            {"type": "thinking", "thinking": "Here's a thinking process:"},
+            {"type": "text", "text": "订单经营趋势分析"},
+        ]
+    )
+    assert conversation_module._title_response_text(response) == "订单经营趋势分析"
+
+
+def test_title_response_strips_inline_think_tags():
+    """网关未配 reasoning parser 时思考以内联 <think> 混在 content 字符串里，须剥除。"""
+    inline = "<think>用户想查攻击记录，先查表。</think>IP攻击来源分析"
+    response = AIMessage(content=inline)
+    assert conversation_module._title_response_text(response) == "IP攻击来源分析"
+    # 无闭合标签 = 思考被截断，标签起的后续内容全部丢弃
+    truncated = AIMessage(content="标题前的正文<think>被截断的思考")
+    assert conversation_module._title_response_text(truncated) == "标题前的正文"
+
+
+@pytest.mark.asyncio
+async def test_conversation_generate_title_unusable_output_keeps_placeholder(conversation_db, monkeypatch):
+    """LLM 调用成功但产物不可用（思考泄漏/过短）：不写降级标题，保持占位符待重试。"""
+    await seed_conversation("conv_title_retry")
+    await conversation_module.conversation_event_service.persist_user_message(
+        conversation_id="conv_title_retry",
+        user_id="u1",
+        operator_name="用户一",
+        message=HumanMessage(content="62.234.152.217这个IP最近有攻击吗", id="title-turn"),
+    )
+
+    class ShortResult:
+        content = "!!"
+
+    contents = {"value": type("R", (), {"content": "Here's a thinking process: user asks about IP"})()}
+
+    class Chain:
+        async def ainvoke(self, _payload):
+            return contents["value"]
+
+    class Prompt:
+        def __or__(self, _llm):
+            return Chain()
+
+    monkeypatch.setattr(conversation_module, "_get_title_llm", lambda: object())
+    monkeypatch.setattr(conversation_module.ChatPromptTemplate, "from_messages", lambda _messages: Prompt())
+
+    # 推理泄漏 → 返回空串且不落库，占位符保持（下一轮 Run 终态可重试）
+    assert await conversation_module.generate_title("conv_title_retry", "u1") == ""
+    thread = await conversation_module.conversation_dao.get_thread("conv_title_retry", "u1")
+    assert thread.thread_title == "未命名会话"
+
+    # 过短产物同样不落库
+    contents["value"] = ShortResult()
+    assert await conversation_module.generate_title("conv_title_retry", "u1") == ""
+    thread = await conversation_module.conversation_dao.get_thread("conv_title_retry", "u1")
+    assert thread.thread_title == "未命名会话"
+
+    # 重试成功后正常写入
+    contents["value"] = type("R", (), {"content": "IP攻击来源分析咨询"})()
+    assert await conversation_module.generate_title("conv_title_retry", "u1") == "IP攻击来源分析咨询"
+    thread = await conversation_module.conversation_dao.get_thread("conv_title_retry", "u1")
+    assert thread.thread_title == "IP攻击来源分析咨询"

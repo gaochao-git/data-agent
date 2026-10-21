@@ -410,3 +410,35 @@ def test_get_data_agent_graph_forwards_runtime_options_and_checkpointer(monkeypa
     assert graph == "graph"
     assert captured["runtime_options"] is None
     assert captured["kwargs"]["checkpointer"] == "checkpoint"
+
+
+def test_create_data_agent_registers_mcp_search_and_proxy(monkeypatch, tmp_path):
+    captured = {}
+    runtime, options = _runtime(tmp_path)
+    fake_tool = SimpleNamespace(name="mcp_demo_tool", description="demo")
+
+    monkeypatch.setattr(data_agent, "assemble_tools", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(data_agent, "_load_spec_mcp_tools", lambda _spec: [fake_tool])
+    monkeypatch.setattr(data_agent, "count_tools_tokens", lambda _tools: 100)
+    monkeypatch.setattr(data_agent, "_resolve_mcp_tool_search_service", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(data_agent, "create_streaming_chat_model", lambda **_kwargs: object())
+
+    def fake_create_agent(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(name="agent")
+
+    monkeypatch.setattr(data_agent, "create_agent", fake_create_agent)
+    agent = data_agent.create_data_agent(
+        options,
+        workspace_runtime=runtime,
+        identity_context=IdentityContext(),
+        datasource_context=DatasourceContext(datasource_id="ds_a"),
+        model_invocation=ModelInvocationConfig(system_prompt="system", model_id="primary-model"),
+    )
+
+    tool_names = [tool.name for tool in captured["tools"]]
+    assert "mcp_tool_search" in tool_names
+    assert "mcp_tool_call" in tool_names
+    assert "mcp_demo_tool" in tool_names
+    assert "MCP" in captured["system_prompt"]
+    assert agent.name == "agent"

@@ -147,10 +147,8 @@ class AgentAssemblySpec:
       MCPToolInfo 层按 server_id 精确过滤，白名单外的 server 不枚举不挂载。
     - ``mcp_tool_search``：MCP 工具两级加载策略——``off`` 全量挂载不检索；
       ``auto`` 工具 schema token 超过模型窗口 ``mcp_tool_search_threshold``
-      比例才启用检索模式；``forced`` 无条件启用。检索模式下工具执行仍注册
-      全量（ToolNode），仅模型可见工具列表按"始终挂载 + 已发现"过滤。
-    - ``always_mounted_tools``：检索模式下始终对模型可见的 MCP 限定工具名
-      （``mcp_<server>_<tool>``），用于核心高频工具免检索直出。
+      比例才启用检索模式；``forced`` 无条件启用。检索模式下 MCP 目标工具
+      全部隐藏，统一先 ``mcp_tool_search``、再通过 ``mcp_tool_call`` 代理执行。
     - ``build_system_prompt``：``(runtime_options, workspace_root, memory_block="") -> prompt``，
       每次装配都会调用，prompt 必须由规格自身决定。
     """
@@ -164,7 +162,6 @@ class AgentAssemblySpec:
     mcp_server_ids: frozenset[str] | None = None
     mcp_tool_search: str = "auto"
     mcp_tool_search_threshold: float = 0.10
-    always_mounted_tools: frozenset[str] = frozenset()
 
 
 VALID_MCP_TOOL_SEARCH_MODES = frozenset({"off", "auto", "forced"})
@@ -434,6 +431,48 @@ CHAT_DATA_AGENT_SPEC = AgentAssemblySpec(
 )
 
 
+def _system_prompt_with_mcp_tools(
+    system_prompt: str,
+    *,
+    search_active: bool,
+    mcp_tools: list,
+) -> str:
+    """检索模式下把 MCP 能力摘要追加到系统提示；独立函数控制装配函数复杂度。"""
+    if not search_active:
+        return system_prompt
+    reminder = _mcp_tool_reminder(mcp_tools)
+    return f"{system_prompt.rstrip()}\n\n{reminder}" if reminder else system_prompt
+
+
+def _mcp_tool_reminder(mcp_tools: list) -> str:
+    """检索模式下按 server 汇总 MCP 能力；不列目标工具名，强制先搜索 schema。"""
+    groups: dict[str, list[str]] = {}
+    for tool in mcp_tools:
+        name = str(getattr(tool, "name", "") or "")
+        metadata = getattr(tool, "metadata", None)
+        metadata = metadata if isinstance(metadata, dict) else {}
+        server_id = str(metadata.get("mcp_server_id") or "MCP").strip() or "MCP"
+        label = str(metadata.get("display_name") or metadata.get("mcp_tool_name") or name).strip()
+        groups.setdefault(server_id, []).append(label)
+    if not groups:
+        return ""
+    lines: list[str] = []
+    for server_id, labels in sorted(groups.items()):
+        examples = "、".join(sorted(set(labels))[:3])
+        lines.append(f"- {server_id}：{len(labels)} 个工具，如 {examples}")
+    listed = "\n".join(lines[:10])
+    if len(groups) > 10:
+        listed += f"\n- …其余 {len(groups) - 10} 个 MCP server"
+    return (
+        "<system-reminder>\n"
+        "当前启用 MCP 插件能力（schema 未加载）：\n"
+        f"{listed}\n"
+        "需要具体工具时，必须先用 mcp_tool_search 搜索（select:工具名 可精确加载），"
+        "拿到 input_schema 后通过 mcp_tool_call({name,input}) 调用；不要直接调用目标工具名。\n"
+        "</system-reminder>"
+    )
+
+
 def _load_spec_mcp_tools(spec: AgentAssemblySpec) -> list:
     """装配规格允许时枚举 MCP/插件动态工具；任何失败都降级为空集，不阻断装配。"""
     if not spec.enable_mcp_tools:
@@ -579,9 +618,15 @@ def create_agent_from_spec(
     search_service = _resolve_mcp_tool_search_service(spec, tool_tokens, model_id) if mcp_tools else None
     tools = builtin_tools + mcp_tools
     if search_service is not None:
-        from .mcp.catalog import create_mcp_tool_search_tool
+        from .mcp.catalog import create_mcp_tool_call_tool, create_mcp_tool_search_tool
 
-        tools = [*tools, create_mcp_tool_search_tool(search_service)]
+        mcp_tools_by_name = {str(tool.name): tool for tool in mcp_tools}
+        searched_mcp_names: set[str] = set()
+        tools = [
+            *tools,
+            create_mcp_tool_search_tool(search_service, searched_mcp_names),
+            create_mcp_tool_call_tool(mcp_tools_by_name, searched_mcp_names),
+        ]
     logger.info(
         "[data_agent] 工具装配完成: agent=%s builtin=%d mcp=%d search_tool=%s total=%d tool_tokens=%d",
         spec.agent_id,
@@ -595,6 +640,11 @@ def create_agent_from_spec(
         options,
         workspace_root=runtime.workspace_root,
         memory_block=invocation.memory_block,
+    )
+    effective_system_prompt = _system_prompt_with_mcp_tools(
+        effective_system_prompt,
+        search_active=search_service is not None,
+        mcp_tools=mcp_tools,
     )
     context_request_budget.configure(effective_system_prompt, tools, model_id=model_id)
     context_request_budget.validate_static_input()
@@ -674,7 +724,7 @@ def create_agent_from_spec(
         mcp_tool_discovery_middleware=(
             MCPToolDiscoveryMiddleware(
                 search_active=search_service is not None,
-                always_mounted_tools=spec.always_mounted_tools,
+                searched_names=searched_mcp_names,
             )
             if search_service is not None
             else None

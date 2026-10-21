@@ -1090,3 +1090,44 @@ async def test_run_with_single_approval_run_always(monkeypatch):
 
 def test_append_run_grant_passthrough_for_unknown_result():
     assert tool_approval._append_run_grant("raw-result", "run-1", "tool:file_delete", {}) == "raw-result"
+
+
+def test_mcp_tool_call_approval_targets_wrapped_tool_not_proxy():
+    middleware = create_tool_approval_middleware(
+        tools=[
+            SimpleNamespace(name="mcp_fault_ssh_exec", metadata={"origin": "mcp", "display_name": "远程执行"}),
+        ]
+    )
+    tool_call = {
+        "id": "call-proxy",
+        "name": "mcp_tool_call",
+        "args": {"name": "mcp_fault_ssh_exec", "input": {"cmd": "rm -rf /tmp/x"}},
+    }
+    call = middleware._pending_call(
+        tool_call,
+        0,
+        conversation_granted={"tool:mcp_tool_call"},
+        run_granted=set(),
+        decided=set(),
+    )
+    assert call is not None
+    assert call["tool_name"] == "mcp_fault_ssh_exec"
+    assert call["grant_key"] == "tool:mcp_fault_ssh_exec"
+    assert call["tool_call"]["args"] == {"cmd": "rm -rf /tmp/x"}
+
+
+def test_mcp_tool_call_target_grant_skips_proxy_approval():
+    middleware = create_tool_approval_middleware()
+    tool_call = {
+        "id": "call-proxy",
+        "name": "mcp_tool_call",
+        "args": {"name": "mcp_fault_ssh_exec", "input": {}},
+    }
+    call = middleware._pending_call(
+        tool_call,
+        0,
+        conversation_granted={"tool:mcp_fault_ssh_exec"},
+        run_granted=set(),
+        decided=set(),
+    )
+    assert call is None

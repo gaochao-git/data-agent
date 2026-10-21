@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from langchain_core.tools import StructuredTool
-from pydantic import Field, create_model
+from pydantic import BaseModel, Field, create_model
 
 from utils.logger import get_logger
 
@@ -35,6 +35,7 @@ from .manager import MCPToolInfo, MCPToolManager
 logger = get_logger(__name__)
 
 MCP_TOOL_SEARCH_TOOL_NAME = "mcp_tool_search"
+MCP_TOOL_CALL_TOOL_NAME = "mcp_tool_call"
 MCP_TOOL_DESCRIPTION_WARN_CHARS = 500
 
 # BM25 (Okapi) 参数：业界常规取值。
@@ -80,15 +81,17 @@ class ToolCatalogEntry:
     name: str
     description: str
     param_docs: str
+    input_schema: dict[str, Any]
     label: str = ""  # 用户可见友好名（tool_labels 配置），参与检索域并随摘要下发
 
-    def summary(self) -> dict[str, str]:
+    def summary(self) -> dict[str, Any]:
         """检索结果里给模型看的单条摘要。"""
-        summary = {
+        summary: dict[str, Any] = {
             "name": self.qualified_name,
             "server_id": self.server_id,
             "description": self.description[:_RESULT_DESCRIPTION_MAX_CHARS],
         }
+        summary["input_schema"] = self.input_schema
         if self.label:
             summary["display_name"] = self.label
         return summary
@@ -181,6 +184,7 @@ class MCPCatalog:
                 name=info.name,
                 description=info.description or info.qualified_name,
                 param_docs=_param_docs(info.input_schema),
+                input_schema=info.input_schema,
                 label=info.label,
             )
             entries.append(entry)
@@ -204,7 +208,17 @@ class MCPCatalog:
         """按 BM25 得分返回 top-N 条目；query 为空或无命中返回空列表。"""
         if self._index is None or not str(query or "").strip():
             return []
-        scores = self._index.search(query)
+        stripped = str(query).strip()
+        if stripped in self._entries_by_name:
+            return [self._entries_by_name[stripped]] if stripped not in excluded_names else []
+        if stripped.lower().startswith("select:"):
+            names = [name.strip() for name in stripped.split(":", 1)[1].split(",") if name.strip()]
+            return [
+                self._entries_by_name[name]
+                for name in names
+                if name in self._entries_by_name and name not in excluded_names
+            ]
+        scores = self._index.search(stripped)
         ranked = sorted(
             (
                 (score, entry)
@@ -244,6 +258,13 @@ class MCPToolSearchService:
         self._catalog.sync(tools_info)
         return self._catalog
 
+    @staticmethod
+    def _normalize_server_id(server_id: str | None) -> str | None:
+        normalized = str(server_id or "").strip()
+        if normalized.startswith("mcp_"):
+            normalized = normalized[4:]
+        return normalized or None
+
     async def search_text(
         self,
         query: str,
@@ -255,15 +276,21 @@ class MCPToolSearchService:
         """执行检索并返回模型可读的 JSON 结果（同时是发现中间件的解析契约）。"""
         catalog = await self.ensure_catalog()
         candidates = catalog.search(query, limit=limit, excluded_names=excluded_names)
-        if server_id:
-            candidates = [entry for entry in candidates if entry.server_id == server_id]
+        normalized_server_id = self._normalize_server_id(server_id)
+        if normalized_server_id:
+            candidates = [
+                entry for entry in candidates if entry.server_id in {normalized_server_id, str(server_id or "").strip()}
+            ]
         if candidates:
             return json.dumps(
                 {
                     "count": len(candidates),
                     "query": query,
                     "results": [entry.summary() for entry in candidates],
-                    "guidance": "按 results[].name 直接调用对应工具；都不合适时换关键词再次检索。",
+                    "guidance": (
+                        "按 results[].input_schema 构造 input，调用 mcp_tool_call({name,input})；"
+                        "不要直接调用目标工具名。"
+                    ),
                 },
                 ensure_ascii=False,
             )
@@ -272,13 +299,19 @@ class MCPToolSearchService:
                 "count": 0,
                 "query": query,
                 "servers": catalog.describe_servers(),
-                "guidance": "没有命中工具：更换更具体的关键词（功能名/操作对象）再次检索，或直接向用户说明当前没有可用工具。",
+                "guidance": (
+                    "没有命中工具：server_id 使用服务器清单中的值（不带 mcp_ 前缀），"
+                    "query 可直接传完整工具名或 select:工具名；仍无结果再换功能词检索。"
+                ),
             },
             ensure_ascii=False,
         )
 
 
-def create_mcp_tool_search_tool(service: MCPToolSearchService) -> StructuredTool:
+def create_mcp_tool_search_tool(
+    service: MCPToolSearchService,
+    searched_names: set[str] | None = None,
+) -> StructuredTool:
     """构建 ``mcp_tool_search`` 内置工具（仅检索模式装配）。"""
 
     async def _search(
@@ -287,17 +320,32 @@ def create_mcp_tool_search_tool(service: MCPToolSearchService) -> StructuredTool
         limit: int = _SEARCH_RESULT_LIMIT_DEFAULT,
         intent: str = "",
     ) -> str:
-        return await service.search_text(query, server_id=server_id, limit=limit)
+        result = await service.search_text(query, server_id=server_id, limit=limit)
+        if searched_names is not None:
+            try:
+                payload = json.loads(result)
+                searched_names.update(
+                    str(item["name"])
+                    for item in payload.get("results") or []
+                    if isinstance(item, dict) and item.get("name")
+                )
+            except (ValueError, TypeError):
+                pass
+        return result
 
     args_model = create_model(
         f"{MCP_TOOL_SEARCH_TOOL_NAME}_args",
         query=(
             str,
-            Field(description="检索关键词：用功能名/操作对象描述想做的事，如 'nginx 日志'、'数据库慢查询'。"),
+            Field(
+                description=(
+                    "检索关键词：功能名/操作对象；已知完整工具名可直接传，或使用 select:工具名,工具名 精确加载。"
+                )
+            ),
         ),
         server_id=(
             str | None,
-            Field(default=None, description="可选。只在该 MCP server 内检索（server_id 见服务器清单）。"),
+            Field(default=None, description="可选。server_id 见服务器清单，不带 mcp_ 前缀，如 fault-ssh。"),
         ),
         limit=(
             int,
@@ -313,11 +361,56 @@ def create_mcp_tool_search_tool(service: MCPToolSearchService) -> StructuredTool
     return StructuredTool(
         name=MCP_TOOL_SEARCH_TOOL_NAME,
         description=(
-            "按需检索 MCP 插件工具目录。当前会话可用工具较多、未全部挂载时，"
-            "先用本工具按关键词检索（返回工具名与说明），再按 name 直接调用命中的工具。"
+            "按需检索 MCP 插件工具目录，返回命中工具名、说明与 input_schema。"
+            "再用 mcp_tool_call({name,input}) 执行目标工具；"
+            "已知工具名时可用 select:工具名,工具名 精确加载。"
         ),
         args_schema=args_model,
         coroutine=_search,
+    )
+
+
+def create_mcp_tool_call_tool(
+    tools_by_name: dict[str, Any],
+    searched_names: set[str] | None = None,
+) -> StructuredTool:
+    """构建通用代理：搜索返回 schema 后，用 mcp_tool_call(name, input) 执行目标工具。"""
+
+    class MCPToolCallArgs(BaseModel):
+        name: str = Field(description="mcp_tool_search 返回的目标工具完整名称")
+        input: dict[str, Any] = Field(default_factory=dict, description="目标工具参数对象")
+
+    async def _call(name: str, input: dict[str, Any]) -> str:
+        target = tools_by_name.get(str(name or "").strip())
+        if target is None:
+            return json.dumps(
+                {"success": False, "error": f"未找到 MCP 工具: {name}；请先 mcp_tool_search 搜索"},
+                ensure_ascii=False,
+            )
+        if str(name) in {MCP_TOOL_SEARCH_TOOL_NAME, MCP_TOOL_CALL_TOOL_NAME}:
+            return json.dumps({"success": False, "error": "控制工具不能通过代理调用"}, ensure_ascii=False)
+        if searched_names is not None and str(name) not in searched_names:
+            return json.dumps(
+                {"success": False, "error": f"目标工具 {name} 尚未搜索；请先 mcp_tool_search 加载 schema"},
+                ensure_ascii=False,
+            )
+        try:
+            result = await target.ainvoke(input or {})
+        except Exception as exc:  # noqa: BLE001 - 代理边界统一转成模型可读错误
+            logger.warning("MCP 代理调用失败: tool=%s error=%s", name, exc)
+            return json.dumps({"success": False, "error": f"MCP 工具执行失败: {exc}"}, ensure_ascii=False)
+        if isinstance(result, str):
+            return result
+        return json.dumps(result, ensure_ascii=False, default=str)
+
+    return StructuredTool(
+        name=MCP_TOOL_CALL_TOOL_NAME,
+        description=(
+            "执行 mcp_tool_search 返回的 MCP 工具。先用 mcp_tool_search 获取工具名和 input_schema，"
+            "再传入 name 与 input 对象；不要直接调用目标工具名。"
+        ),
+        args_schema=MCPToolCallArgs,
+        coroutine=_call,
     )
 
 

@@ -26,7 +26,7 @@ from langgraph.types import Command
 from utils.logger import get_logger
 
 from ..agent_state import merge_discovered_tool_names
-from ..mcp.catalog import MCP_TOOL_SEARCH_TOOL_NAME
+from ..mcp.catalog import MCP_TOOL_CALL_TOOL_NAME, MCP_TOOL_SEARCH_TOOL_NAME
 
 logger = get_logger(__name__)
 
@@ -35,9 +35,12 @@ def _tool_name(tool: Any) -> str:
     return str(getattr(tool, "name", "") or "")
 
 
+def _is_mcp_tool_name(name: str) -> bool:
+    return name.startswith("mcp_") and name not in {MCP_TOOL_SEARCH_TOOL_NAME, MCP_TOOL_CALL_TOOL_NAME}
+
+
 def _is_mcp_tool(tool: Any) -> bool:
-    name = _tool_name(tool)
-    return name.startswith("mcp_") and name != MCP_TOOL_SEARCH_TOOL_NAME
+    return _is_mcp_tool_name(_tool_name(tool))
 
 
 def _discovered_from_state(state: Any) -> list[str]:
@@ -74,9 +77,18 @@ def _discovered_from_history(messages: Any) -> list[str]:
 class MCPToolDiscoveryMiddleware(AgentMiddleware):
     """检索模式下按"始终挂载 + 已发现"过滤每轮模型请求的 MCP 工具。"""
 
-    def __init__(self, *, search_active: bool, always_mounted_tools: frozenset[str] | set[str] = frozenset()) -> None:
+    def __init__(self, *, search_active: bool, searched_names: set[str] | None = None) -> None:
         self.search_active = bool(search_active)
-        self.always_mounted_tools = frozenset(always_mounted_tools)
+        self._searched_names = searched_names
+
+    def before_agent(self, state: Any, runtime: Any) -> dict[str, Any] | None:
+        """每次 run 重新要求先搜索，避免上一轮搜索放行本轮的代理调用。"""
+        if self._searched_names is not None:
+            self._searched_names.clear()
+        return None
+
+    async def abefore_agent(self, state: Any, runtime: Any) -> dict[str, Any] | None:
+        return self.before_agent(state, runtime)
 
     # ---- model request 过滤 ----
 
@@ -97,25 +109,42 @@ class MCPToolDiscoveryMiddleware(AgentMiddleware):
         mcp_tools = [tool for tool in tools if _is_mcp_tool(tool)]
         if not mcp_tools:
             return request
-        keep = set(self.always_mounted_tools) | set(_discovered_from_state(getattr(request, "state", None)))
-        keep |= set(_discovered_from_history(getattr(request, "messages", None)))
-        exposed = [tool for tool in mcp_tools if _tool_name(tool) in keep]
-        if len(exposed) == len(mcp_tools):
-            return request
+        # 代理模式：所有目标 MCP 工具 schema 都不进入 tools。
         kept_builtin = [tool for tool in tools if not _is_mcp_tool(tool)]
         logger.info(
-            "[mcp_tool_discovery] 请求工具过滤: total=%d mcp=%d exposed=%d",
+            "[mcp_tool_discovery] 请求工具过滤: total=%d mcp=%d exposed=0",
             len(tools),
             len(mcp_tools),
-            len(exposed),
         )
-        return request.override(tools=[*kept_builtin, *exposed])
+        return request.override(tools=kept_builtin)
 
     # ---- 检索结果捕获 ----
+
+    def _reject_direct_target(self, request: Any) -> ToolMessage | None:
+        if not self.search_active:
+            return None
+        tool_call = getattr(request, "tool_call", None)
+        if not isinstance(tool_call, dict):
+            return None
+        tool_name = str(tool_call.get("name") or "")
+        if not _is_mcp_tool_name(tool_name):
+            return None
+        return ToolMessage(
+            content=json.dumps(
+                {"success": False, "error": f"{tool_name} 必须通过 mcp_tool_call 代理调用"},
+                ensure_ascii=False,
+            ),
+            name=tool_name,
+            tool_call_id=str(tool_call.get("id") or ""),
+            status="error",
+        )
 
     def wrap_tool_call(
         self, request: ToolCallRequest, handler: Callable[[ToolCallRequest], ToolMessage | Command[Any]]
     ) -> ToolMessage | Command[Any]:
+        rejected = self._reject_direct_target(request)
+        if rejected is not None:
+            return rejected
         if not self._is_search_request(request):
             return handler(request)
         return self._capture_discovery(handler(request))
@@ -125,6 +154,9 @@ class MCPToolDiscoveryMiddleware(AgentMiddleware):
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]],
     ) -> ToolMessage | Command[Any]:
+        rejected = self._reject_direct_target(request)
+        if rejected is not None:
+            return rejected
         if not self._is_search_request(request):
             return await handler(request)
         return self._capture_discovery(await handler(request))

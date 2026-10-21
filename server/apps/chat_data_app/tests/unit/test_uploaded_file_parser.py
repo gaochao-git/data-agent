@@ -140,4 +140,15 @@ def test_csv_rows_are_truncated_with_note(monkeypatch, tmp_path):
     content = uploaded_file_parser._convert_local_upload(source)
     assert "A0" in content and "A1" in content
     assert "A4" not in content
-    assert "CSV 已截断" in content and "原始共 5 行" in content
+    assert "CSV 已截断" in content and "原始共 5 数据行" in content
+
+
+def test_utf16_and_latin1_csv_are_readable(tmp_path):
+    utf16 = tmp_path / "utf16.csv"
+    utf16.write_bytes("姓名,金额\n张三,10\n".encode("utf-16"))
+    assert "张三" in uploaded_file_parser._convert_local_upload(utf16)
+
+    latin1 = tmp_path / "latin1.csv"
+    latin1.write_bytes("name,city\nAndré,Zürich\n".encode("latin-1"))
+    content = uploaded_file_parser._convert_local_upload(latin1)
+    assert "André" in content and "Zürich" in content

@@ -40,6 +40,7 @@ logger = get_logger(__name__)
 # 保持轻量依赖，不把 mcp SDK 拉进审批中间件模块。
 _MCP_TOOL_PREFIX = "mcp_"
 _MCP_TOOL_SEARCH_TOOL_NAME = "mcp_tool_search"
+_MCP_TOOL_CALL_TOOL_NAME = "mcp_tool_call"
 
 # 审批选项文案：与前端询问卡片渲染一致；答案解析按 label 匹配（严格白名单）
 APPROVAL_ALLOW_LABEL = "允许"
@@ -144,15 +145,21 @@ class ToolApprovalMiddleware(AgentMiddleware):
         decided: set[str],
     ) -> dict[str, Any] | None:
         tool_name = str(tool_call.get("name") or "")
-        if not requires_approval(tool_name):
+        target_name, effective_call = _approval_target(tool_name, tool_call)
+        if not requires_approval(target_name):
             return None
         call_id = str(tool_call.get("id") or f"{tool_name}:{index}")
         if call_id in decided:
             return None
-        grant_key = _grant_key(tool_name)
+        grant_key = _grant_key(target_name)
         if grant_key in conversation_granted or grant_key in run_granted:
             return None
-        return {"call_id": call_id, "tool_name": tool_name, "tool_call": tool_call, "grant_key": grant_key}
+        return {
+            "call_id": call_id,
+            "tool_name": target_name,
+            "tool_call": effective_call,
+            "grant_key": grant_key,
+        }
 
     # ---- wrap_tool_call：执行前消费决策；无决策时兜底单次询问 ----
 
@@ -163,11 +170,12 @@ class ToolApprovalMiddleware(AgentMiddleware):
     ) -> ToolMessage | Command[Any]:
         tool_call = request.tool_call if isinstance(request.tool_call, dict) else {}
         tool_name = str(tool_call.get("name") or "")
-        if not requires_approval(tool_name):
+        target_name, effective_call = _approval_target(tool_name, tool_call)
+        if not requires_approval(target_name):
             return await handler(request)
         call_id = str(tool_call.get("id") or "")
         state = getattr(request, "state", None)
-        grant_key = _grant_key(tool_name)
+        grant_key = _grant_key(target_name)
         decision = ""
         if isinstance(state, dict):
             decision = str((state.get("approval_decisions") or {}).get(call_id) or "")
@@ -179,7 +187,7 @@ class ToolApprovalMiddleware(AgentMiddleware):
             return await handler(request)
         if decision == "deny":
             return _deny_message(request, "用户拒绝了本次操作")
-        return await _run_with_single_approval(request, tool_name, tool_call, handler, self._run_id)
+        return await _run_with_single_approval(request, target_name, effective_call, handler, self._run_id)
 
 
 def _merge_keys(existing: Iterable[str] | None, new: Sequence[str] | None) -> list[str]:
@@ -271,6 +279,25 @@ def _mcp_display_info(tool: Any) -> dict[str, str]:
     if display_name:
         info["display_name"] = display_name
     return {key: value for key, value in info.items() if value}
+
+
+def _approval_target(tool_name: str, tool_call: Any) -> tuple[str, Any]:
+    """代理调用把审批对象落到目标 MCP 工具，避免 grant 坍缩到 mcp_tool_call。"""
+    if tool_name != _MCP_TOOL_CALL_TOOL_NAME or not isinstance(tool_call, dict):
+        return tool_name, tool_call
+    args = tool_call.get("args")
+    if not isinstance(args, dict):
+        return tool_name, tool_call
+    target = str(args.get("name") or "").strip()
+    if not target.startswith(_MCP_TOOL_PREFIX) or target in {
+        _MCP_TOOL_SEARCH_TOOL_NAME,
+        _MCP_TOOL_CALL_TOOL_NAME,
+    }:
+        return tool_name, tool_call
+    effective = dict(tool_call)
+    target_input = args.get("input")
+    effective["args"] = target_input if isinstance(target_input, dict) else {}
+    return target, effective
 
 
 def _grant_key(tool_name: str) -> str:

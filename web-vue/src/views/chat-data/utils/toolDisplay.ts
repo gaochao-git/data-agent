@@ -22,13 +22,20 @@ const TOOL_DISPLAY_NAMES: Record<string, string> = {
   ask_user_question: '询问用户',
   write_todos: '更新任务计划',
   task: '派发子智能体',
+  mcp_tool_search: '搜索 MCP 工具',
+  mcp_tool_call: '调用 MCP 工具',
 }
 
-export function getToolDisplayName(toolName?: string | null): string {
+export function getToolDisplayName(toolName?: string | null, args: ToolArgs = {}): string {
   const name = String(toolName || '').trim()
   if (!name) return '工具调用'
-  // MCP 限定名不做前端硬编码映射：展示名由后端按插件 tool_labels 下发，
-  // 缺失时直接展示限定名（含 server 归属信息），而不是笼统的「工具调用」
+  if (name === 'mcp_tool_call') {
+    const target = typeof args.name === 'string' ? args.name.trim() : ''
+    return target ? `调用 MCP 工具：${target.replace(/^mcp_/, '')}` : '调用 MCP 工具'
+  }
+  // 控制工具用固定中文名；普通 MCP 限定名由后端 tool_labels 下发，
+  // 缺失时直接展示限定名（含 server 归属信息），而不是笼统的「工具调用」。
+  if (name in TOOL_DISPLAY_NAMES) return TOOL_DISPLAY_NAMES[name] ?? name
   if (name.startsWith('mcp_')) return name
   return TOOL_DISPLAY_NAMES[name] || '工具调用'
 }
