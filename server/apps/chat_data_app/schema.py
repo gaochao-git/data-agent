@@ -256,8 +256,8 @@ class ChatDataModelUpsertRequest(BaseModel):
             "efforts:[\"low\"]|[{'level':'low','value':'minimal'}],default_effort}}；"
             "efforts 支持旧字符串数组与新对象数组（value 缺省=档位同名，参数值可为 string/bool/number）；"
             "关形态参数值由后端按方言固定兜底（reasoning_effort→none、openrouter→enabled:false），"
-            "默认开启由默认档位推导（默认档位为普通档=默认开；off/none 或未勾=默认关），"
-            "请求中的废弃字段 off_value/default_on 会被静默忽略；"
+            "默认开启有档位时由默认档位推导（普通档=默认开；off/none 或未勾=默认关），"
+            "无档位 optional（chat_template）可用 default_on 显式开关；off_value 已废弃忽略；"
             "max_output_tokens 必填，缺省取 context_window 的 1/4"
         ),
     )

@@ -81,7 +81,8 @@ const form = reactive({
   thinking_dialect: 'reasoning_effort',
   // 档位行编辑器：value 为 UI 字符串（空=与档位同名）；保存时按规则解析为 string/bool/number
   thinking_efforts: [] as Array<{ level: string; value: string }>,
-  thinking_default_effort: ''
+  thinking_default_effort: '',
+  thinking_default_on: false
 })
 
 // chat_template 为纯布尔协议不支持档位；default_effort 必须在档位列表内
@@ -150,6 +151,7 @@ const resetForm = () => {
   form.thinking_dialect = 'reasoning_effort'
   form.thinking_efforts = []
   form.thinking_default_effort = ''
+  form.thinking_default_on = false
   testResult.value = null
   modelIdOptions.value = []
 }
@@ -222,6 +224,7 @@ const fillForm = (row: ChatDataModelRegistryItem) => {
       : { level: item.level, value: item.value == null ? '' : String(item.value) }
   )
   form.thinking_default_effort = thinking?.default_effort || ''
+  form.thinking_default_on = thinking?.default_on === true
 }
 
 const openEdit = (row: ChatDataModelRegistryItem) => {
@@ -254,7 +257,10 @@ const buildRequestParams = () => {
       mode: form.thinking_mode,
       dialect: form.thinking_dialect
     }
-    // 默认开启由后端按默认档位推导；无档位方言（chat_template）不发 efforts
+    // 无档位方言（chat_template）用显式开关表达默认开启；有档位时由默认档位推导
+    if (form.thinking_mode === 'optional' && !effortsAvailable.value) {
+      thinking.default_on = form.thinking_default_on
+    }
     if (effortsAvailable.value) {
       if (form.thinking_efforts.length > 0) {
         // 新形状 [{level, value?}]：value 空 = 与档位同名（省略键）
@@ -432,8 +438,11 @@ const formatThinking = (row: ChatDataModelRegistryItem) => {
   if (!thinking || thinking.mode === 'none') return '不支持'
   const dialect = thinking.dialect || '-'
   if (thinking.mode === 'forced') return `强制 / ${dialect}`
-  // 默认开启由默认档位推导：默认档位为普通档=默认开；off/none 或未勾=默认关
-  const defaultOn = !!thinking.default_effort && !['off', 'none'].includes(thinking.default_effort)
+  // 有档位由默认档位推导；无档位（chat_template）看显式 default_on
+  const hasEfforts = (thinking.efforts || []).length > 0
+  const defaultOn = hasEfforts
+    ? !!thinking.default_effort && !['off', 'none'].includes(thinking.default_effort)
+    : thinking.default_on === true
   return `可选 / ${dialect}${defaultOn ? '（默认开）' : '（默认关）'}`
 }
 
@@ -731,7 +740,14 @@ defineExpose({ ensureLoaded })
             </div>
           </div>
           <div class="flex flex-wrap items-end gap-4">
-            <div class="text-xs text-slate-400">默认开启与否由「默认档位」勾选推导：普通档=默认开；off/none 或不勾=默认关</div>
+            <template v-if="form.thinking_mode === 'optional' && !effortsAvailable">
+              <div class="flex items-center gap-2">
+                <span class="text-xs text-slate-500">默认开启思考</span>
+                <el-switch v-model="form.thinking_default_on" />
+              </div>
+              <div class="text-xs text-slate-400">该方言无档位，默认开关直接决定对话初始状态；用户仍可在对话内手动切换。</div>
+            </template>
+            <div v-else class="text-xs text-slate-400">默认开启与否由「默认档位」勾选推导：普通档=默认开；off/none 或不勾=默认关</div>
           </div>
         </div>
         <div class="grid grid-cols-2 items-center gap-3">

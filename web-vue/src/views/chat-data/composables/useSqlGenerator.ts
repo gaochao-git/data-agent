@@ -111,7 +111,7 @@ export function useSqlGenerator() {
       onMessage?: (message: LangGraphMessage) => void
       onResult?: (result: NL2SQLResult) => void
       onStatus?: (status: string, message: string) => void
-      onError?: (error: string) => void
+      onError?: (error: string, meta?: { isBusinessResponseError?: boolean }) => void
       onRunningTool?: (toolInfo: { tool_name: string; tool_call_id: string; args?: Record<string, unknown> }) => void
       modelId?: string | null
       memberDatasourceIds?: string[]
@@ -125,6 +125,8 @@ export function useSqlGenerator() {
       fileSelections?: string[]
       /** 划选引用片段（[{text}]）：模型可见标记块由服务端统一追加，前端只透传。 */
       quotedSnippets?: Array<{ text: string }>
+      /** 审批模式（ask/auto）：服务端据此决定注册表标记的工具是否执行前确认。 */
+      approvalMode?: 'ask' | 'auto'
       enableThinking?: boolean | null
       thinkingEffort?: string | null
       runtimeOptions?: { workspace_backend: 'local' | 'sandbox'; bash_enabled: boolean } | null
@@ -159,9 +161,9 @@ export function useSqlGenerator() {
       onGenerationSpeed,
       fileSelections,
       quotedSnippets,
+      approvalMode,
       enableThinking,
       thinkingEffort,
-      runtimeOptions,
       onContextCompression,
       fileIds,
       queuedMessageId,
@@ -182,6 +184,7 @@ export function useSqlGenerator() {
 
     loading.value = true
     error.value = null
+    let businessResponseError = false
     const currentController = new AbortController()
     abortController = currentController
 
@@ -200,14 +203,6 @@ export function useSqlGenerator() {
         options.thinking_effort = thinkingEffort
       }
 
-      // 仅当服务端允许用户覆盖时，runtime_options 才会改变实际运行配置。
-      if (runtimeOptions && typeof runtimeOptions === 'object') {
-        options.runtime_options = {
-          workspace_backend: runtimeOptions.workspace_backend,
-          bash_enabled: runtimeOptions.bash_enabled,
-        }
-      }
-
       // 模型选择
       if (modelId) {
         options.model_id = modelId
@@ -221,6 +216,11 @@ export function useSqlGenerator() {
       // 划选引用片段：存引用、服务端晚解析（标记块 + additional_kwargs 留痕）
       if (quotedSnippets?.length) {
         options.quoted_snippets = quotedSnippets
+      }
+
+      // 审批模式：ask=破坏性工具执行前确认；auto=直接执行（服务端还会做覆盖权限校验）
+      if (approvalMode) {
+        options.approval_mode = approvalMode
       }
 
       if (memberDatasourceIds && memberDatasourceIds.length > 0) {
@@ -251,7 +251,10 @@ export function useSqlGenerator() {
         } catch {
           // 忽略解析错误
         }
-        throw new Error(errorMsg)
+        businessResponseError = true
+        const businessError = new Error(errorMsg) as Error & { isBusinessResponseError?: boolean }
+        businessError.isBusinessResponseError = true
+        throw businessError
       }
 
       const responseRunId = response.headers.get('X-ChatData-Run-Id')
@@ -500,7 +503,7 @@ export function useSqlGenerator() {
       }
       const errorMsg = err instanceof Error ? err.message : '请求失败'
       error.value = errorMsg
-      onError?.(errorMsg)
+      onError?.(errorMsg, { isBusinessResponseError: businessResponseError })
     } finally {
       loading.value = false
       // 只清理自己的 controller，避免覆盖新请求创建的 controller

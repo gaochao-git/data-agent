@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any
 
 from ...sse_protocol import SSE_EVENT_MESSAGE_END, SSE_EVENT_QUESTION_REQUESTED
+
+USER_PERSISTENCE_CANCEL_WAIT_SECONDS = 3.0
 
 AsyncHook = Callable[[], Awaitable[None]]
 AsyncInterruptHook = Callable[[dict[str, Any]], Awaitable[None]]
@@ -97,8 +100,11 @@ async def _maybe_invoke_disconnect_hook(on_disconnect: AsyncHook | None) -> None
 
 
 async def _await_user_persistence_safely(user_persistence_task: asyncio.Task | None) -> None:
-    if user_persistence_task is not None:
-        await asyncio.gather(user_persistence_task, return_exceptions=True)
+    """异常/取消路径等待用户消息落库，但设置上限，避免 DB 故障拖住收口。"""
+    if user_persistence_task is None:
+        return
+    with suppress(Exception):
+        await asyncio.wait_for(user_persistence_task, timeout=USER_PERSISTENCE_CANCEL_WAIT_SECONDS)
 
 
 async def stream_agent_turn(
@@ -156,7 +162,9 @@ async def stream_agent_turn(
         yield format_sse(SSE_EVENT_MESSAGE_END, end_payload)
         # done 由 Runtime 统一收口后发布（结构化 status），生成器只产出事实。
     except asyncio.CancelledError:
-        await _abort_user_persistence(user_persistence_task)
+        # 前端断开/任务取消时也要把已展示的用户消息落库，否则下一轮"继续"
+        # 在服务端看不到上一条需求；这里等待而不是取消持久化任务。
+        await _await_user_persistence_safely(user_persistence_task)
         cleanup_success = resource_options.cleanup_success_on_cancel
         resources_finalized = await _stream_turn_finalize_now(finalize_resources, cleanup_success)
         raise

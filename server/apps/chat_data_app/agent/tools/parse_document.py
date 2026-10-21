@@ -24,6 +24,7 @@ from apps.chat_data_app.agent.workspace.uploaded_file_parser import (
     parse_uploaded_file_to_markdown,
 )
 from utils.logger import get_logger
+from utils.upload_storage_crypto import original_upload_path
 
 from .common import tool_result_payload
 
@@ -63,8 +64,9 @@ def create_parse_document_tool(workspace_runtime: ConversationWorkspaceRuntime) 
         except ValueError as exc:
             return tool_result_payload("parse_document", {"success": False, "error": f"source_path 无效: {exc}"})
 
+        ownership_target = original_upload_path(src_physical) or src_physical
         uploads_physical_root = (Path(root) / "uploads").resolve()
-        if uploads_physical_root not in src_physical.parents and src_physical != uploads_physical_root:
+        if uploads_physical_root not in ownership_target.parents and ownership_target != uploads_physical_root:
             return tool_result_payload(
                 "parse_document",
                 {"success": False, "error": "source_path 必须是本会话 /mnt/user-data/uploads/ 下的文件"},

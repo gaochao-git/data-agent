@@ -222,13 +222,32 @@ def _parse_thinking_default_effort(raw: dict, efforts: tuple[EffortLevel, ...], 
     return default_effort_raw
 
 
+def _resolve_thinking_default_on(
+    mode: str,
+    efforts: tuple[EffortLevel, ...],
+    default_effort: str | None,
+    raw: dict[str, Any],
+    prefix: str,
+) -> bool:
+    """默认开启：有档位由默认档位推导；无档位 optional（chat_template）允许显式开关。"""
+    default_on = mode == THINKING_MODE_OPTIONAL and bool(default_effort) and default_effort not in OFF_EFFORT_SENTINELS
+    if mode != THINKING_MODE_OPTIONAL or efforts:
+        return default_on
+    explicit = raw.get("default_on")
+    if explicit is None:
+        return default_on
+    if not isinstance(explicit, bool):
+        raise ValueError(f"{prefix}: default_on 应为布尔，当前值: {explicit!r}")
+    return explicit
+
+
 def _parse_thinking(raw: Any, *, path: str, model_id: str) -> ThinkingCapability:
     """解析单个模型的 thinking 字段，任何不合法直接抛 ValueError。"""
     prefix = f"{path} 中模型 {model_id} 的 thinking 配置无效"
     if not isinstance(raw, dict):
         raise ValueError(f"{prefix}: 应为对象")
-    # off_value/default_on 均为已废弃字段：存量配置里可能出现，容忍并静默丢弃——
-    # 关形态走方言默认兜底；默认开启与否由默认档位推导（default_effort 为普通档=默认开）
+    # off_value 为已废弃字段，容忍并静默丢弃；default_on 仅在 optional 且无档位方言
+    # （chat_template）时作为显式默认开关，有档位时仍由 default_effort 推导
     unknown_keys = set(raw) - {"mode", "dialect", "efforts", "default_on", "default_effort", "off_value"}
     if unknown_keys:
         raise ValueError(f"{prefix}: 未知字段 {sorted(unknown_keys)}")
@@ -247,10 +266,7 @@ def _parse_thinking(raw: Any, *, path: str, model_id: str) -> ThinkingCapability
         raise ValueError(f"{prefix}: dialect 必须是 {_THINKING_DIALECTS} 之一，当前值: {raw.get('dialect')!r}")
     efforts = _parse_thinking_efforts(raw, dialect, prefix)
     default_effort_raw = _parse_thinking_default_effort(raw, efforts, prefix)
-    # 默认开启由默认档位推导（仅 optional 有「默认开」概念）：勾了普通档=默认开；勾了关哨兵（off/none）或未勾=默认关
-    default_on = (
-        mode == THINKING_MODE_OPTIONAL and bool(default_effort_raw) and default_effort_raw not in OFF_EFFORT_SENTINELS
-    )
+    default_on = _resolve_thinking_default_on(mode, efforts, default_effort_raw, raw, prefix)
     return ThinkingCapability(
         mode=mode,
         dialect=dialect,
@@ -263,7 +279,8 @@ def _parse_thinking(raw: Any, *, path: str, model_id: str) -> ThinkingCapability
 def _thinking_cap_to_json(cap: ThinkingCapability) -> dict[str, Any]:
     """ThinkingCapability -> 可落 params_json 的紧凑 dict（回读必须能再过 _parse_thinking）。
 
-    形状按校验规则裁剪：none 只带 mode；default_on 不落键（读侧由 default_effort 推导）；
+    形状按校验规则裁剪：none 只带 mode；有档位时 default_on 不落键（读侧由 default_effort
+    推导），无档位 optional（chat_template）默认开时显式落 default_on；
     efforts/default_effort 成对出现且仅在有值时序列化；档位落新形状
     ``[{"level": ..., "value": ...}]``（value 缺省不落键，读侧=档位同名）。
     """
@@ -277,6 +294,9 @@ def _thinking_cap_to_json(cap: ThinkingCapability) -> dict[str, Any]:
         ]
         if cap.default_effort:
             out["default_effort"] = cap.default_effort
+    elif cap.mode == THINKING_MODE_OPTIONAL and cap.default_on:
+        # 无档位方言（chat_template）没有默认档位可推导，显式落 default_on
+        out["default_on"] = True
     return out
 
 

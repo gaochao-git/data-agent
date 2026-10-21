@@ -251,7 +251,9 @@ def list_workspace_files(
                 continue
             try:
                 relative_path = item.relative_to(root).as_posix()
-                resolved_item = resolve_workspace_path(str(root), f"/mnt/user-data/{relative_path}")
+                resolved_item = resolve_workspace_path(
+                    str(root), f"/mnt/user-data/{relative_path}", materialize_uploads=False
+                )
                 if is_system_result_workspace_path(str(root), resolved_item):
                     continue
                 stat = item.stat()
@@ -542,9 +544,10 @@ def read_workspace_raw_file(
     if size > max_bytes:
         raise ValueError(f"文件过大，暂不支持预览超过 {max_bytes} 字节的文件")
     mime, _ = mimetypes.guess_type(str(target))
+    visible_path = to_visible_path(root, target)
     return {
-        "path": to_visible_path(root, target),
-        "relative_path": target.relative_to(Path(root).resolve()).as_posix(),
+        "path": visible_path,
+        "relative_path": visible_path.removeprefix("/mnt/user-data/"),
         "data": target.read_bytes(),
         "size": size,
         "mime": mime or "application/octet-stream",

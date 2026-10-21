@@ -75,3 +75,10 @@ fail-closed 处理（快照清空、当轮全部按禁用，不兜底旧值）�
 - 不做进程内 Python 工具热插拔；工具扩展统一走 MCP（见 `agent/mcp/`）。
 - 不做插件市场与版本管理；升级 = 卸载后重装新版本 zip。
 - 插件不做运行时热更新到进行中的会话：安装/启停只对新会话与下一次装配生效。
+
+## MCP server 准入状态（管理列表）
+
+`GET /api/chatdata/admin/plugins` 返回的每个 `mcp_servers[]` 条目附带
+`admission: {ok, errors[], warnings[]}`（由 `services/plugin_service._mcp_server_admission_view`
+按 `mcp/admission.py` 同口径计算），管理页据此对未通过准入的 server 标红并展示原因；
+安装时未通过准入的插件会被直接拒绝（不落盘）。

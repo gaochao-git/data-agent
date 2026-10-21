@@ -361,6 +361,39 @@ async def test_continuation_turn_id_tracks_last_admitted_user_message(inbox_serv
 
 
 @pytest.mark.asyncio
+async def test_continuation_runtime_context_inherits_unattended_flag(inbox_service):
+    """continuation 的 runtime_context 复制自上一轮 record_content：
+    无人值守标记必须原样继承（query 清空、其余键保留），否则排队消息
+    接续执行的第二轮会重新长出 ask_user_question，定时轮提问悬挂回归。"""
+    service, create_thread, get_session, owners = inbox_service
+    await create_thread()
+    run_id, _ = await service.start_run(
+        "conv-1",
+        "user-1",
+        "用户一",
+        runtime_context={"query": "汇总昨日数据", "disable_user_interaction": True},
+    )
+    await service.enqueue_message("conv-1", "user-1", "用户一", "继续补充", queue_type="next-step")
+
+    completion = await service.complete_run(run_id, "user-1", "用户一", owners[run_id])
+    assert completion.next_run_id
+
+    async with get_session() as session:
+        next_run = (
+            await session.execute(
+                select(ChatDataAgentInbox).where(
+                    ChatDataAgentInbox.run_id == completion.next_run_id,
+                    ChatDataAgentInbox.record_type == "run",
+                )
+            )
+        ).scalar_one()
+    content = service._load_run_content(next_run.record_content)
+    # 接续轮只执行排队消息：原 query 清空，无人值守标记原样保留
+    assert content["runtime_context"]["query"] == ""
+    assert content["runtime_context"]["disable_user_interaction"] is True
+
+
+@pytest.mark.asyncio
 async def test_agent_inbox_reclaims_expired_message_lease(inbox_service):
     service, create_thread, get_session, owners = inbox_service
     await create_thread()
@@ -1437,3 +1470,15 @@ def test_load_inbox_meta_tolerates_bad_data():
     assert _load_inbox_meta("not-json") == {}
     assert _load_inbox_meta('["list"]') == {}
     assert _load_inbox_meta('{"file_ids": ["f1"]}') == {"file_ids": ["f1"]}
+
+
+@pytest.mark.asyncio
+async def test_has_active_run_reflects_run_lifecycle(inbox_service):
+    service, create_thread, _get_session, owners = inbox_service
+    await create_thread()
+
+    assert await service.has_active_run("conv-1", "user-1") is False
+    run_id, _ = await service.start_run("conv-1", "user-1", "用户一")
+    assert await service.has_active_run("conv-1", "user-1") is True
+    await service.complete_run(run_id, "user-1", "用户一", owners[run_id])
+    assert await service.has_active_run("conv-1", "user-1") is False

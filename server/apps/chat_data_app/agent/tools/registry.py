@@ -60,11 +60,23 @@ class ToolBuildContext:
 
 @dataclass(frozen=True)
 class ToolSpec:
-    """单个可装配条目：提供哪些工具名、如何构建、一句话职责（供审计与迁移）。"""
+    """单个可装配条目：提供哪些工具名、如何构建、一句话职责（供审计与迁移）。
+
+    ``requires_user_interaction``：工具需要用户实时应答（当前仅 ask_user_question）。
+    无人值守运行（定时轮）装配时跳过此类条目——用户不在场，提问必然悬挂在
+    waiting_user 等待应答，从装配层剔除即从根上关闭提问入口。
+
+    ``approval_required``：需要人工审批才能执行的工具名（⊆ provides，按工具粒度
+    声明——同一条目可提供多个工具，如文件工具组只有删除/移动需要审批）。它是
+    **默认策略**：审批模式下装配 ``ToolApprovalMiddleware`` 在执行前中断询问；
+    自动模式直接执行；无人值守不可能弹窗，因此由装配/运行侧强制自动模式。
+    """
 
     provides: tuple[str, ...]
     build: Callable[[ToolBuildContext], Sequence[Any]]
     note: str = ""
+    requires_user_interaction: bool = False
+    approval_required: tuple[str, ...] = ()
 
 
 TOOL_SPECS: tuple[ToolSpec, ...] = (
@@ -85,6 +97,8 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
         ),
         build=lambda ctx: create_filesystem_tools(ctx.workspace_runtime),
         note="会话工作区文件读写、检索与目录操作",
+        # 破坏性/移动类操作默认按需审批；读写与检索不打断
+        approval_required=("file_delete", "dir_delete", "file_move"),
     ),
     ToolSpec(
         provides=("parse_document",),
@@ -139,6 +153,8 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
         provides=("ask_user_question",),
         build=lambda _ctx: [ask_user_question_tool],
         note="向用户提问（仅主智能体）",
+        # 需要用户实时应答：无人值守轮（定时任务）装配时剔除
+        requires_user_interaction=True,
     ),
     ToolSpec(
         provides=("officecli_run",),
@@ -156,6 +172,10 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
 def provided_tool_names() -> frozenset[str]:
     """注册表声明的全部工具名（含受开关控制、当前未挂载的工具）。"""
     return frozenset(name for spec in TOOL_SPECS for name in spec.provides)
+
+
+# 需人工审批的工具名派生集合（审批中间件按名匹配）；空 = 当前无工具需要审批。
+APPROVAL_REQUIRED_TOOL_NAMES: frozenset[str] = frozenset(name for spec in TOOL_SPECS for name in spec.approval_required)
 
 
 # 子智能体不继承的基础工具：ask_user_question 需要人工应答（子智能体不注册人工中断），
@@ -210,6 +230,7 @@ __all__ = [
     "ToolBuildContext",
     "ToolSpec",
     "TOOL_SPECS",
+    "APPROVAL_REQUIRED_TOOL_NAMES",
     "provided_tool_names",
     "SUBAGENT_BASE_EXCLUDED_TOOL_NAMES",
     "DATA_EXPLORE_EXTRA_EXCLUDED_TOOL_NAMES",

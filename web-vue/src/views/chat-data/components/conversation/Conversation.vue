@@ -15,13 +15,13 @@ import { useWorkspaceFileMention, type WorkspaceFilePick } from '../../composabl
 import { useQuotedSnippets } from '../../composables/useQuotedSnippets'
 import { answerUserQuestion, cancelConversationRun, cancelSteerMessage, cancelUserQuestion, createDashboardFromSpec, getConversationWorkspaceFileContent, getConversationWorkspaceFiles, getConversationWorkspaceRawFile, getPendingUserQuestion, importConversationWorkspaceSkill, listSteerMessages, steerConversation, streamRunEvents, updateSteerMessage, uploadFile } from '../../api'
 import type { Dashboard } from '../../api/dashboard'
-import type { ChatDataRuntimeOptions } from '../../api'
 import QuickQueries, { type FallbackQuery } from '../QuickQueries.vue'
 import ChartSpecRenderer from '../ChartSpecRenderer.vue'
 import SkillManager from './SkillManager.vue'
 import ConversationMessageList from './ConversationMessageList.vue'
 import ConversationWorkspacePanel from './ConversationWorkspacePanel.vue'
 import ConversationInputBar from './ConversationInputBar.vue'
+import ApprovalGrantsDialog from './ApprovalGrantsDialog.vue'
 import ConversationTokenUsage from './ConversationTokenUsage.vue'
 import ConversationTurnNavigator from './ConversationTurnNavigator.vue'
 import SkillCommandMenu from './SkillCommandMenu.vue'
@@ -95,9 +95,10 @@ const emit = defineEmits<{
 
 const { generateSqlStream, stopGeneration } = useSqlGenerator()
 
-const userOverridable = ref(false)
-const defaultRuntimeOptions = ref<ChatDataRuntimeOptions>({ workspace_backend: 'local', bash_enabled: false })
-const selectedRuntimeOptions = ref({ ...defaultRuntimeOptions.value })
+// 权限选择：唯一前端可调项（审批模式）；隔离后端/Bash 属部署配置，不再下发前端
+const approvalMode = ref<'ask' | 'auto'>('ask')
+// 已授权的工具许可（本会话内/本轮），支持逐项撤销
+const approvalGrantsDialogVisible = ref(false)
 // 模型列表与运行时配置：与其他入口共用同一份加载逻辑
 const {
   modelOptions,
@@ -227,7 +228,7 @@ const applyRunDoneState = (
     hasActiveRun.value = true
     activeRunStatus.value = 'waiting_user'
     // 兜底 done（如 Redis 劣化时 question 事件未被读到）也可能走这里：
-    // 事件缺失时卡片未填充，主动拉一次待答问题，避免用户面对「等待回答」
+    // 事件缺失时卡片未填充，主动拉一次待答问题，避免用户面对「待确认」
     // 状态却没有可回答的卡片
     if (!pendingUserQuestion.value) void restorePendingUserQuestion()
     emit('runStatusChanged', conversationId, 'waiting_user')
@@ -1414,13 +1415,7 @@ const startSkillCreation = async () => {
 
 watch(chatDataConfig, (data) => {
   if (!data) return
-  const cfg = data.runtime_options
-  defaultRuntimeOptions.value = {
-    workspace_backend: cfg?.workspace_backend === 'sandbox' ? 'sandbox' : 'local',
-    bash_enabled: !!cfg?.bash_enabled,
-  }
-  userOverridable.value = !!data.user_overridable
-  selectedRuntimeOptions.value = { ...defaultRuntimeOptions.value }
+  approvalMode.value = data.approval_mode === 'auto' ? 'auto' : 'ask'
 })
 
 // 当前选中模型不在注册表中时回填默认模型（如配置变更后）
@@ -1429,7 +1424,7 @@ watch(modelOptions, (models) => {
   if (defaultModel && !models.some(item => item.id === selectedModel.value)) {
     selectedModel.value = defaultModel
   }
-})
+}, { immediate: true })
 
 onMounted(() => {
   loadModelOptions()
@@ -1440,8 +1435,17 @@ const selectCommandSkill = (skill: SkillInfo) => {
   inputBarRef.value?.focus()
 }
 
-const onRuntimeOptionsChange = (options: { workspace_backend: 'local' | 'sandbox'; bash_enabled: boolean }) => {
-  selectedRuntimeOptions.value = options
+const onApprovalModeChange = (mode: 'ask' | 'auto') => {
+  approvalMode.value = mode
+}
+
+const openApprovalGrantsDialog = () => {
+  const targetConversationId = localConversationId.value || props.conversationId
+  if (!targetConversationId) {
+    ElMessage.info('新建会话还没有审批许可')
+    return
+  }
+  approvalGrantsDialogVisible.value = true
 }
 
 const clearSelectedSkill = (name: string) => {
@@ -2059,7 +2063,7 @@ const submitAnalysisQuery = async (
         onMessage: (msg) => handleLangGraphMessage(msg),
         onResult: () => {},
         onStatus: () => {},
-        onError: (error) => {
+        onError: (error, meta) => {
           if (options.interruptedQuestion) {
             pendingUserQuestion.value = options.interruptedQuestion
             const active = activeAssistantMessageId.value
@@ -2067,6 +2071,16 @@ const submitAnalysisQuery = async (
               : null
             if (active?.role === 'assistant') active.isStreaming = false
             ElMessage.error(error || '提交回答失败')
+            return
+          }
+          // 只有明确的业务错误响应（HTTP 非 2xx）才说明服务端没有建 Run；
+          // 网络中断/abort 时 Run 可能已在跑，保留气泡，避免刷新后孤儿消息 + 重发双份。
+          if (!startedRunId && meta?.isBusinessResponseError && options.appendUserMessage !== false) {
+            messages.value = messages.value.filter(item => item.id !== userMessage.id && item.id !== assistantMessage.id)
+            activeAssistantMessageId.value = null
+            if (options.restoreInputText) input.value = options.restoreInputText
+            if (options.messageSkills?.length) selectedSkills.value = options.messageSkills
+            ElMessage.error('消息未发送成功，已恢复到输入框，请重试')
             return
           }
           finalizeUnfinishedToolCalls('error', error)
@@ -2104,9 +2118,9 @@ const submitAnalysisQuery = async (
         },
         fileSelections: mentionFileSelections,
         quotedSnippets: quotedSnippetsSnapshot,
+        approvalMode: approvalMode.value,
         enableThinking: enableDeepThinking.value,
         thinkingEffort: thinkingEffort.value,
-        runtimeOptions: selectedRuntimeOptions.value,
         onContextCompression: (event) => appendContextCompressionEvent(event),
         fileIds: options.fileIds,
         queuedMessageId: options.queuedMessageId,
@@ -2875,13 +2889,11 @@ const handleKeyDown = (event: KeyboardEvent) => {
             :selected-skills="selectedSkills"
             :selected-mention-files="mentionedFiles"
             :quoted-snippets="quotedSnippets"
-            :runtime-options="selectedRuntimeOptions"
-            :user-overridable="userOverridable"
+            :approval-mode="approvalMode"
             :model-options="modelOptions"
             :is-generating="runBusy"
             :can-submit="runBusy ? Boolean(input.trim() && !isSteering) : Boolean((input.trim() || hasCompletedPendingFiles || quotedSnippets.length > 0) && selectedDatasource)"
             :input-focused="inputFocused"
-            :show-skill-button="!runBusy"
             :submit-title="!selectedDatasource ? '请先选择数据源' : '发送 (Enter)'"
             @submit="handleSubmit"
             @stop="handleStop"
@@ -2891,7 +2903,8 @@ const handleKeyDown = (event: KeyboardEvent) => {
             @upload-file="handleUploadFile"
             @paste-files="handlePasteFiles"
             @open-skill-manager="isSkillManagerOpen = true"
-            @update:runtime-options="onRuntimeOptionsChange"
+            @update:approval-mode="onApprovalModeChange"
+            @manage-approval-grants="openApprovalGrantsDialog"
             @keydown="handleKeyDown"
             @focus="inputFocused = true"
             @blur="inputFocused = false"
@@ -2964,6 +2977,11 @@ const handleKeyDown = (event: KeyboardEvent) => {
       :member-datasource-id="saveMemberDatasourceId"
       :member-datasource-ids="saveMemberDatasourceIds"
       :execution-targets="props.executionTargets"
+    />
+
+    <ApprovalGrantsDialog
+      v-model:visible="approvalGrantsDialogVisible"
+      :conversation-id="localConversationId || conversationId"
     />
   </div>
 </template>

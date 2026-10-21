@@ -588,6 +588,20 @@
         "title": "ApiResponse",
         "type": "object"
       },
+      "ApprovalGrantRevokeRequest": {
+        "properties": {
+          "tools": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 50,
+            "title": "Tools",
+            "type": "array"
+          }
+        },
+        "title": "ApprovalGrantRevokeRequest",
+        "type": "object"
+      },
       "Body_install_plugin_api_chatdata_admin_plugins_install_post": {
         "properties": {
           "file": {
@@ -752,7 +766,7 @@
           },
           "params": {
             "additionalProperties": true,
-            "description": "模型参数 {temperature,context_window,max_output_tokens,vlm,thinking{mode,dialect,efforts:[\"low\"]|[{'level':'low','value':'minimal'}],default_effort}}；efforts 支持旧字符串数组与新对象数组（value 缺省=档位同名，参数值可为 string/bool/number）；关形态参数值由后端按方言固定兜底（reasoning_effort→none、openrouter→enabled:false），默认开启由默认档位推导（默认档位为普通档=默认开；off/none 或未勾=默认关），请求中的废弃字段 off_value/default_on 会被静默忽略；max_output_tokens 必填，缺省取 context_window 的 1/4",
+            "description": "模型参数 {temperature,context_window,max_output_tokens,vlm,thinking{mode,dialect,efforts:[\"low\"]|[{'level':'low','value':'minimal'}],default_effort}}；efforts 支持旧字符串数组与新对象数组（value 缺省=档位同名，参数值可为 string/bool/number）；关形态参数值由后端按方言固定兜底（reasoning_effort→none、openrouter→enabled:false），默认开启有档位时由默认档位推导（普通档=默认开；off/none 或未勾=默认关），无档位 optional（chat_template）可用 default_on 显式开关；off_value 已废弃忽略；max_output_tokens 必填，缺省取 context_window 的 1/4",
             "title": "Params",
             "type": "object"
           },
@@ -822,7 +836,7 @@
           },
           "params": {
             "additionalProperties": true,
-            "description": "模型参数 {temperature,context_window,max_output_tokens,vlm,thinking{mode,dialect,efforts:[\"low\"]|[{'level':'low','value':'minimal'}],default_effort}}；efforts 支持旧字符串数组与新对象数组（value 缺省=档位同名，参数值可为 string/bool/number）；关形态参数值由后端按方言固定兜底（reasoning_effort→none、openrouter→enabled:false），默认开启由默认档位推导（默认档位为普通档=默认开；off/none 或未勾=默认关），请求中的废弃字段 off_value/default_on 会被静默忽略；max_output_tokens 必填，缺省取 context_window 的 1/4",
+            "description": "模型参数 {temperature,context_window,max_output_tokens,vlm,thinking{mode,dialect,efforts:[\"low\"]|[{'level':'low','value':'minimal'}],default_effort}}；efforts 支持旧字符串数组与新对象数组（value 缺省=档位同名，参数值可为 string/bool/number）；关形态参数值由后端按方言固定兜底（reasoning_effort→none、openrouter→enabled:false），默认开启有档位时由默认档位推导（普通档=默认开；off/none 或未勾=默认关），无档位 optional（chat_template）可用 default_on 显式开关；off_value 已废弃忽略；max_output_tokens 必填，缺省取 context_window 的 1/4",
             "title": "Params",
             "type": "object"
           },
@@ -9594,6 +9608,160 @@
           }
         ],
         "summary": "Get Conversation Detail",
+        "tags": [
+          "ChatData 会话"
+        ]
+      }
+    },
+    "/api/chatdata/conversations/{conversation_id}/approval-grants": {
+      "get": {
+        "description": "读取本会话已授予的工具审批许可。",
+        "operationId": "get_approval_grants_api_chatdata_conversations__conversation_id__approval_grants_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Get Approval Grants",
+        "tags": [
+          "ChatData 会话"
+        ]
+      }
+    },
+    "/api/chatdata/conversations/{conversation_id}/approval-grants/reset": {
+      "post": {
+        "description": "重置本会话已授予的工具审批许可（恢复为每次询问）。",
+        "operationId": "reset_approval_grants_api_chatdata_conversations__conversation_id__approval_grants_reset_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Reset Approval Grants",
+        "tags": [
+          "ChatData 会话"
+        ]
+      }
+    },
+    "/api/chatdata/conversations/{conversation_id}/approval-grants/revoke": {
+      "post": {
+        "description": "按工具名撤销本会话审批许可（恢复为每次询问）。",
+        "operationId": "revoke_approval_grants_api_chatdata_conversations__conversation_id__approval_grants_revoke_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApprovalGrantRevokeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Revoke Approval Grants",
         "tags": [
           "ChatData 会话"
         ]

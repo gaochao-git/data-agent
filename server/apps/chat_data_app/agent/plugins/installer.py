@@ -5,7 +5,8 @@
 - 路径安全：成员名禁止绝对路径与 ``..``，逐条 resolve 后必须落在插件目录内（防 zip-slip）；
 - 禁止加密成员；解压按块限流读取并累计真实字节二次校验（头声明 file_size 可伪造）；
 - 禁止符号链接成员（防把管理域外内容带进插件目录）；
-- manifest 必须存在且合法，``manifest.name`` 即插件目录名，目录名不一致拒绝安装。
+- manifest 必须存在且合法，``manifest.name`` 即插件目录名，目录名不一致拒绝安装；
+- 插件声明的 ``mcp_servers`` 必须通过 ``mcp/admission.py`` 准入检查，否则拒绝安装。
 
 卸载直接删除插件目录。启停不落磁盘标记：由 ``services/plugin_service`` 经
 ``daos/plugin_dao`` 写 DB 表 ``chat_data_plugin``（唯一真值，见 ``loader`` 模块 docstring）。
@@ -17,9 +18,12 @@ import io
 import shutil
 import zipfile
 from pathlib import Path
+from typing import Any
 
 from utils.logger import get_logger
 
+from ..mcp.admission import validate_mcp_server_config
+from ..mcp.config import MCPServerConfigError, parse_mcp_server_config
 from .loader import clear_metadata_cache, plugin_dir
 from .manifest import (
     PLUGIN_MANIFEST_FILENAME,
@@ -124,6 +128,42 @@ def _safe_extract(archive: zipfile.ZipFile, members: list[zipfile.ZipInfo], targ
         total_actual = _copy_member_limited(archive, member, destination, total_actual)
 
 
+def inspect_mcp_server_admission(entry: dict[str, Any]) -> dict[str, Any]:
+    """管理页视图：单条 MCP server 声明的准入结论（不抛异常，供列表展示）。"""
+    try:
+        server_config = parse_mcp_server_config(entry, source="plugin manifest")
+    except MCPServerConfigError as err:
+        return {"ok": False, "errors": [str(err)], "warnings": []}
+    report = validate_mcp_server_config(server_config)
+    return {
+        "ok": report.ok,
+        "errors": [f"{issue.code}: {issue.message}" for issue in report.errors],
+        "warnings": [f"{issue.code}: {issue.message}" for issue in report.warnings],
+    }
+
+
+def _validate_manifest_mcp_servers(manifest: PluginManifest) -> None:
+    """校验 manifest 声明的 MCP server 准入；不通过直接拒绝安装（不落盘）。"""
+    for index, entry in enumerate(manifest.mcp_servers):
+        try:
+            server_config = parse_mcp_server_config(entry, source=f"plugin {manifest.name} mcp_servers[{index}]")
+        except MCPServerConfigError as err:
+            raise PluginInstallError(str(err)) from err
+        if not server_config.enabled:
+            continue
+        report = validate_mcp_server_config(server_config)
+        for issue in report.warnings:
+            logger.warning(
+                "插件 MCP server 准入告警: plugin=%s id=%s %s: %s",
+                manifest.name,
+                server_config.server_id,
+                issue.code,
+                issue.message,
+            )
+        if not report.ok:
+            raise PluginInstallError(f"插件 MCP server 未通过准入: {server_config.server_id}: {report.summary()}")
+
+
 def install_plugin_from_zip_bytes(data: bytes) -> PluginManifest:
     """从 zip 字节流安装插件，成功返回解析后的 manifest。
 
@@ -157,6 +197,9 @@ def install_plugin_from_zip_bytes(data: bytes) -> PluginManifest:
             manifest = parse_plugin_manifest(manifest_data)
         except PluginManifestError as err:
             raise PluginInstallError(str(err)) from err
+        # MCP server 准入：配置非法/未通过准入的插件直接拒绝安装（不落盘），
+        # 避免"装上了但 MCP 不可用"的半可用状态。
+        _validate_manifest_mcp_servers(manifest)
         # 声明的技能必须真实存在且带 SKILL.md。
         for skill_name in manifest.skills:
             skill_member = f"{zip_root}skills/{skill_name}/SKILL.md"

@@ -375,6 +375,12 @@ class AgentInboxService:
             run.update_by = user_id
             run.update_by_name = operator_name
 
+    async def has_active_run(self, conversation_id: str, user_id: str) -> bool:
+        """当前会话是否还有进行中的 Run（含排队/运行/取消中/等待回答）。"""
+        async with get_session() as session:
+            run = await self._dao.get_active_run(session, conversation_id, user_id)
+        return run is not None
+
     async def get_pending_question(self, conversation_id: str, user_id: str) -> dict[str, Any] | None:
         async with get_session() as session:
             now = await self._dao.now(session)

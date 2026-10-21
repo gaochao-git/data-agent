@@ -15,6 +15,7 @@ import pytest  # noqa: E402
 from apps.chat_data_app.agent.data_agent import (  # noqa: E402
     CHAT_DATA_AGENT_SPEC,
     AgentAssemblySpec,
+    AgentRunControls,
     DatasourceContext,
     IdentityContext,
     assemble_tools,
@@ -34,13 +35,14 @@ def _runtime(tmp_path):
     )
 
 
-def _tool_names(tmp_path, *, options=None, spec=None):
+def _tool_names(tmp_path, *, options=None, spec=None, run_controls=None):
     tools = assemble_tools(
         options or AgentRuntimeOptions(workspace_backend="local"),
         _runtime(tmp_path),
         identity_context=IdentityContext(user_id="u1", operator_name="测试用户"),
         datasource_context=DatasourceContext(datasource_id="ds_a"),
         spec=spec,
+        run_controls=run_controls,
     )
     return [tool.name for tool in tools]
 
@@ -48,6 +50,15 @@ def _tool_names(tmp_path, *, options=None, spec=None):
 def test_chat_data_spec_is_valid_and_assembles_full_registry(tmp_path):
     validate_agent_assembly_spec(CHAT_DATA_AGENT_SPEC)
     assert _tool_names(tmp_path, spec=CHAT_DATA_AGENT_SPEC) == _tool_names(tmp_path)
+
+
+def test_unattended_run_excludes_user_interaction_tools(tmp_path):
+    """无人值守（定时轮）装配剔除 ask_user_question，其余工具与正常装配一致。"""
+    attended = _tool_names(tmp_path)
+    unattended = _tool_names(tmp_path, run_controls=AgentRunControls(disable_user_interaction=True))
+    assert "ask_user_question" in attended
+    assert "ask_user_question" not in unattended
+    assert [name for name in attended if name != "ask_user_question"] == unattended
 
 
 def test_spec_includes_filters_builtin_tools(tmp_path):
@@ -249,3 +260,76 @@ def test_chat_data_agent_spec_applies_env_mode(monkeypatch):
     finally:
         monkeypatch.delenv(data_agent.MCP_TOOL_SEARCH_ENV, raising=False)
         importlib.reload(data_agent)
+
+
+def test_approval_middleware_only_for_interactive_ask_mode():
+    """ask 模式装配审批中间件；auto/无人值守不装配（零开销、不悬挂）。"""
+    from apps.chat_data_app.agent.data_agent import _build_tool_approval_middleware
+
+    assert _build_tool_approval_middleware(None) is None
+    assert _build_tool_approval_middleware(AgentRunControls(approval_mode="ask")) is not None
+    assert _build_tool_approval_middleware(AgentRunControls(approval_mode="auto")) is None
+    assert _build_tool_approval_middleware(AgentRunControls(approval_mode="ask", disable_user_interaction=True)) is None
+
+
+def test_ask_mode_subagents_exclude_approval_tools(monkeypatch):
+    """按需审批下子智能体不得持有审批工具：否则委派给 general-purpose 可绕过审批。"""
+    from types import SimpleNamespace
+
+    from apps.chat_data_app.agent import data_agent as data_agent_module
+
+    captured: dict = {}
+
+    class _Recorder:
+        def __init__(self, specs, **_kwargs):
+            captured["specs"] = specs
+
+    monkeypatch.setattr(data_agent_module, "SubagentMiddleware", _Recorder)
+
+    tools = [SimpleNamespace(name=name) for name in ("file_read", "file_write", "file_delete", "file_move", "bash_run")]
+    options = AgentRuntimeOptions(general_purpose_subagent_enabled=True)
+
+    data_agent_module.build_subagent_middleware(
+        options, tools, model=object(), run_controls=AgentRunControls(approval_mode="ask")
+    )
+    ask_names = {tool.name for spec in captured["specs"] for tool in spec.tools}
+    assert "file_delete" not in ask_names
+    assert "file_move" not in ask_names
+    assert "file_read" in ask_names
+    # 剔除之外还要声明能力缺口，否则模型会先派一次工具拿到「工具不存在」白跑一轮
+    gp_ask = next(spec for spec in captured["specs"] if spec.name == "general-purpose")
+    assert "删除与移动的能力边界" in gp_ask.system_prompt
+
+    data_agent_module.build_subagent_middleware(
+        options, tools, model=object(), run_controls=AgentRunControls(approval_mode="auto")
+    )
+    auto_names = {tool.name for spec in captured["specs"] for tool in spec.tools}
+    assert "file_delete" in auto_names
+    assert "file_move" in auto_names
+    # auto 模式子智能体确实能删，提示必须缺席（否则模型自我设限、白退回主智能体）
+    gp_auto = next(spec for spec in captured["specs"] if spec.name == "general-purpose")
+    assert "删除与移动的能力边界" not in gp_auto.system_prompt
+
+    # 定时轮：approval_mode=ask 但无人值守 ⇒ 不剔除也不加提示（与主图都不弹审批一致）
+    data_agent_module.build_subagent_middleware(
+        options,
+        tools,
+        model=object(),
+        run_controls=AgentRunControls(approval_mode="ask", disable_user_interaction=True),
+    )
+    unattended_names = {tool.name for spec in captured["specs"] for tool in spec.tools}
+    assert "file_delete" in unattended_names
+    gp_unattended = next(spec for spec in captured["specs"] if spec.name == "general-purpose")
+    assert "删除与移动的能力边界" not in gp_unattended.system_prompt
+
+
+def test_unattended_excludes_every_user_interaction_tool(tmp_path):
+    """无人值守必须不挂载任何 requires_user_interaction 工具（注册表全量校验）。"""
+    from apps.chat_data_app.agent.tools.registry import TOOL_SPECS
+
+    interactive = {name for spec in TOOL_SPECS if spec.requires_user_interaction for name in spec.provides}
+    attended = set(_tool_names(tmp_path))
+    unattended = set(_tool_names(tmp_path, run_controls=AgentRunControls(disable_user_interaction=True)))
+    assert interactive
+    assert interactive <= attended
+    assert interactive.isdisjoint(unattended)

@@ -136,6 +136,7 @@ def on_tool_error(exc: Exception, request: Any) -> str:
 # 校验实际组装结果与该表逐一致——插错位置会在 CI 直接失败，而不是靠 review 发现。
 MIDDLEWARE_CANONICAL_ORDER: tuple[str, ...] = (
     "ToolExecutionFenceMiddleware",  # 租约围栏必须最外层：所有权丢失不能被内层转成普通工具失败
+    "ToolApprovalMiddleware",  # 按需审批：在围栏之内、任何工具副作用之前中断询问（ask 模式才装配）
     "ImageInjectionMiddleware",  # 图片注入在压缩/预算外层：注入的图片要被正确计费与统计
     "MCPToolDiscoveryMiddleware",  # MCP 按需发现是唯一会过滤 request.tools 的中间件，必须外于压缩/用量统计，使其看到过滤后的真实工具集
     "ToolTimingMiddleware",  # 紧贴围栏内侧：计时覆盖卸载与错误转换在内的完整工具链路
@@ -144,7 +145,9 @@ MIDDLEWARE_CANONICAL_ORDER: tuple[str, ...] = (
     "SteeringMiddleware",  # 在压缩之前注入插话，避免被摘要吞掉
     "SubagentMiddleware",  # 派发决策先于任务规划：task 工具注册 + 子智能体使用说明追加进系统提示
     "TodoListMiddleware",  # 复杂分析的任务分解规划（langchain 官方）：todos 存 state 随 checkpoint 持久，压缩不丢
-    "AfterModelHistoryMiddleware",  # 当前唯一的 after_model；再加第二个时注意 after_model 按列表逆序执行
+    "AfterModelHistoryMiddleware",  # after_model 按列表逆序执行：本行先于 ToolApprovalMiddleware（列表更靠前）跑
+    # ToolApprovalMiddleware 也是 after_model（批量审批中断）：逆序执行意味着历史快照先落、
+    # 审批后跑；调整顺序表前必须重新确认这两者的相对次序。
     "ContextCompressionMiddleware",
     "ContextUsageMiddleware",
     "ResponseTimestampMiddleware",
@@ -162,13 +165,13 @@ def build_standard_agent_middleware(
     tool_result_middleware: Any | None = None,
     tool_call_history_repair_middleware: Any | None = None,
     tool_execution_fence_middleware: Any | None = None,
+    tool_approval_middleware: Any | None = None,
     image_injection_middleware: Any | None = None,
     steering_middleware: Any | None = None,
     subagent_middleware: Any | None = None,
     after_model_history_middleware: Any | None = None,
     mcp_tool_discovery_middleware: Any | None = None,
-    include_response_timestamp: bool = False,
-    include_tool_call_normalizer: bool = False,
+    include_flags: frozenset[str] | None = None,
 ) -> list[Any]:
     """组装 create_agent 的公共 middleware 列表。
 
@@ -178,13 +181,16 @@ def build_standard_agent_middleware(
 
     注意各类 hook 的执行语义与列表位置的关系（LangChain create_agent）：
     wrap_tool_call / wrap_model_call 先进为最外层；before_model 按列表顺序执行；
-    after_model 按列表**逆序**执行——将来若加入第二个 after_model middleware，
+    after_model 按列表**逆序**执行——当前已有两个（ToolApprovalMiddleware 在列表更前、
+    AfterModelHistoryMiddleware 在后，故历史快照先跑、审批后跑），再加第三个时
     列表顺序与执行顺序相反，不能按直觉排列。
     """
     # 计时与 ToolErrorMiddleware 是无条件必备项，由本组装点直接创建，
     # 不走调用方注入；其余 middleware 均由调用方按需注入（None = 不启用）。
+    flags = include_flags or frozenset()
     slots: dict[str, Any] = {
         "ToolExecutionFenceMiddleware": tool_execution_fence_middleware,
+        "ToolApprovalMiddleware": tool_approval_middleware,
         "ImageInjectionMiddleware": image_injection_middleware,
         "MCPToolDiscoveryMiddleware": mcp_tool_discovery_middleware,
         "ToolTimingMiddleware": create_tool_timing_middleware(),
@@ -196,9 +202,11 @@ def build_standard_agent_middleware(
         "AfterModelHistoryMiddleware": after_model_history_middleware,
         "ContextCompressionMiddleware": context_compression_middleware,
         "ContextUsageMiddleware": context_usage_middleware,
-        "ResponseTimestampMiddleware": (create_response_timestamp_middleware() if include_response_timestamp else None),
+        "ResponseTimestampMiddleware": (
+            create_response_timestamp_middleware() if "response_timestamp" in flags else None
+        ),
         "ToolCallNameNormalizerMiddleware": (
-            create_tool_call_name_normalizer_middleware(tools) if include_tool_call_normalizer else None
+            create_tool_call_name_normalizer_middleware(tools) if "tool_call_normalizer" in flags else None
         ),
         "ToolResultMiddleware": tool_result_middleware,
         "ToolErrorMiddleware": ToolErrorMiddleware(on_tool_error),

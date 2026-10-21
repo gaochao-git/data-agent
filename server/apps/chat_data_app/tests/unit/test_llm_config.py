@@ -157,7 +157,7 @@ def test_registry_validation_fail_fast(monkeypatch, tmp_path, entry, match):
 
 
 def test_registry_derives_default_on_from_default_effort(monkeypatch, tmp_path):
-    """default_on 不再可配置：由默认档位推导（普通档=默认开；off/none/未勾=默认关）；显式 default_on 被忽略。"""
+    """有档位时 default_on 由默认档位推导；显式 default_on 仅对无档位 chat_template 生效。"""
     _set_registry(
         monkeypatch,
         tmp_path,
@@ -546,9 +546,7 @@ def test_context_compression_summary_output_max_tokens_rejects_invalid_values(mo
 
 def test_chat_data_runtime_config_reads_runtime_options(monkeypatch, tmp_path):
     registry_path = _set_registry(monkeypatch, tmp_path, [_ox_alpha()])
-    monkeypatch.setattr("apps.chat_data_app.services.runtime_config.CHAT_DATA_DEFAULT_WORKSPACE_BACKEND", "sandbox")
-    monkeypatch.setattr("apps.chat_data_app.services.runtime_config.CHAT_DATA_DEFAULT_BASH_ENABLED", True)
-    monkeypatch.setattr("apps.chat_data_app.services.runtime_config.CHAT_DATA_CAPABILITY_USER_OVERRIDABLE", True)
+    monkeypatch.setenv("CHAT_DATA_DEFAULT_APPROVAL_MODE", "auto")
 
     # 服务路径冷缓存会拒绝回落文件（DB 唯一真值）：先模拟启动预热成功后的缓存落位
     monkeypatch.setattr(llm_config, "_registry_cache", llm_config.load_chat_data_model_configs())
@@ -562,14 +560,10 @@ def test_chat_data_runtime_config_reads_runtime_options(monkeypatch, tmp_path):
 
     assert result["models"][0]["id"] == "stealth/ox-alpha"
     assert "default_model" not in result
-    assert result["runtime_options"] == {
-        "workspace_backend": "sandbox",
-        "bash_enabled": True,
-        "explore_subagent_enabled": False,
-        "plan_subagent_enabled": False,
-        "general_purpose_subagent_enabled": False,
-    }
-    assert result["user_overridable"] is True
+    # 前端唯一常驻权限项：默认审批模式（配置表 > env）；隔离后端/Bash 不再下发前端
+    assert result["approval_mode"] in ("ask", "auto")
+    assert "runtime_options" not in result
+    assert "user_overridable" not in result
     assert result["context_window"] == 256000
 
 
@@ -591,7 +585,7 @@ def test_runtime_config_empty_registry_returns_empty_models_without_error(monkey
     result = asyncio.run(get_chat_data_runtime_config())
 
     assert result["models"] == []
-    assert result["runtime_options"]["workspace_backend"]
+    assert result["approval_mode"] in ("ask", "auto")
     # 空清单：context_window 回退缺省值而非 StopIteration/ValueError
     from apps.chat_data_app.services.runtime_config import DEFAULT_CONTEXT_WINDOW
 
@@ -888,3 +882,31 @@ def test_model_options_expose_effort_names_only(monkeypatch, tmp_path):
     )
     thinking = llm_config.get_chat_data_model_options()["models"][0]["thinking"]
     assert thinking["efforts"] == ["low", "xhigh"]
+
+
+def test_chat_template_optional_default_on_switch_roundtrip(monkeypatch, tmp_path):
+    """chat_template 无档位：允许显式 default_on 表达默认开启，并可序列化回读。"""
+    _set_registry(
+        monkeypatch,
+        tmp_path,
+        [
+            _ox_alpha(
+                thinking={"mode": "optional", "dialect": "chat_template", "default_on": True},
+            )
+        ],
+    )
+    cap = llm_config.get_chat_data_model_configs()[0]["thinking"]
+    assert cap.default_on is True
+    packed = llm_config._thinking_cap_to_json(cap)
+    assert packed == {"mode": "optional", "dialect": "chat_template", "default_on": True}
+    assert llm_config._parse_thinking(packed, path="t", model_id="m") == cap
+
+
+def test_chat_template_default_on_must_be_bool(monkeypatch, tmp_path):
+    _set_registry(
+        monkeypatch,
+        tmp_path,
+        [_ox_alpha(thinking={"mode": "optional", "dialect": "chat_template", "default_on": "yes"})],
+    )
+    with pytest.raises(ValueError, match="default_on 应为布尔"):
+        llm_config.load_chat_data_model_configs()

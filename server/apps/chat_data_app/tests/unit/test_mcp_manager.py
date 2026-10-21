@@ -5,7 +5,6 @@ MCP server 响应，不需要真实进程/网络；真实传输（stdio/http/sse
 配置解析校验，协议行为由 SDK 自身与真机回环探针覆盖。
 """
 
-import json
 import os
 import sys
 from contextlib import asynccontextmanager
@@ -16,7 +15,6 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 
 from apps.chat_data_app.agent.mcp.config import (  # noqa: E402
-    MCP_SERVERS_ENV,
     MCPServerConfig,
     MCPServerConfigError,
     load_mcp_server_configs,
@@ -196,43 +194,21 @@ def test_parse_mcp_server_config_rejects_invalid(raw):
         parse_mcp_server_config(raw, source="env")
 
 
-def test_env_config_invalid_json_is_ignored(monkeypatch):
-    from apps.chat_data_app.agent.mcp import config as mcp_config
+def test_load_mcp_server_configs_plugin_only_skips_disabled_and_rejected(monkeypatch):
+    """MCP server 唯一来源为插件声明：禁用/未通过准入的条目被跳过。"""
+    from apps.chat_data_app.agent.plugins import loader as plugin_loader
 
-    monkeypatch.setenv(MCP_SERVERS_ENV, "{not json")
-    assert mcp_config._env_mcp_server_configs() == []
-    monkeypatch.setenv(MCP_SERVERS_ENV, '{"id": "single-object"}')
-    assert mcp_config._env_mcp_server_configs() == []
+    entries = [
+        {"id": "off", "transport": "streamable_http", "url": "https://off.example.com/mcp", "enabled": False},
+        {"id": "on", "transport": "streamable_http", "url": "https://on.example.com/mcp"},
+        # stdio 默认被准入拒绝（未设置 CHAT_DATA_MCP_ALLOW_STDIO）
+        {"id": "stdio", "transport": "stdio", "command": "npx"},
+    ]
+    monkeypatch.setattr(plugin_loader, "enabled_plugin_mcp_servers", lambda: entries)
 
-
-def test_env_config_invalid_entry_skipped_valid_kept(monkeypatch):
-    from apps.chat_data_app.agent.mcp import config as mcp_config
-
-    monkeypatch.setenv(
-        MCP_SERVERS_ENV,
-        json.dumps(
-            [
-                {"id": "good", "transport": "stdio", "command": "x"},
-                {"id": "BAD ID", "transport": "stdio", "command": "x"},
-            ]
-        ),
-    )
-    configs = mcp_config._env_mcp_server_configs()
-    assert [c.server_id for c in configs] == ["good"]
-
-
-def test_env_config_disabled_entry_excluded(monkeypatch):
-    monkeypatch.setenv(
-        MCP_SERVERS_ENV,
-        json.dumps(
-            [
-                {"id": "off", "transport": "stdio", "command": "x", "enabled": False},
-                {"id": "on", "transport": "stdio", "command": "x"},
-            ]
-        ),
-    )
     configs = load_mcp_server_configs()
-    assert [c.server_id for c in configs] == ["on"]
+
+    assert [config.server_id for config in configs] == ["on"]
 
 
 # ============ 工具名 ============
@@ -381,7 +357,12 @@ async def test_list_tools_async_adopts_server_ttl_hint():
 
     @asynccontextmanager
     async def factory(config: MCPServerConfig):
-        yield _fake_client(lambda: _list_result([], ttl_ms=30_000))
+        yield _fake_client(
+            lambda: _list_result(
+                [_tool_obj("echo", "回显", {"type": "object", "properties": {}})],
+                ttl_ms=30_000,
+            )
+        )
 
     manager = MCPToolManager(
         tool_timeout_seconds=10,
@@ -464,8 +445,18 @@ async def test_build_langchain_tools_metadata_display_name():
 
     wrapped = build_langchain_tools(tools_info, call_tool_async=_call)
     by_name = {tool.name: tool for tool in wrapped}
-    assert by_name["mcp_srv_echo"].metadata == {"display_name": "回显输入"}
-    assert not by_name["mcp_srv_raw"].metadata
+    assert by_name["mcp_srv_echo"].metadata == {
+        "origin": "mcp",
+        "mcp_server_id": "srv",
+        "mcp_tool_name": "echo",
+        "display_name": "回显输入",
+    }
+    # 无 label 时仍带来源信息（审批卡展示用），只是没有 display_name
+    assert by_name["mcp_srv_raw"].metadata == {
+        "origin": "mcp",
+        "mcp_server_id": "srv",
+        "mcp_tool_name": "raw",
+    }
 
 
 def test_get_mcp_tool_display_name_reads_singleton_cache():
@@ -494,18 +485,19 @@ def test_get_mcp_tool_display_name_reads_singleton_cache():
 
 def test_load_mcp_tools_empty_without_config(monkeypatch):
     from apps.chat_data_app.agent.mcp import manager as mcp_manager
+    from apps.chat_data_app.agent.plugins import loader as plugin_loader
 
-    monkeypatch.setenv(MCP_SERVERS_ENV, "")
+    monkeypatch.setattr(plugin_loader, "enabled_plugin_mcp_servers", lambda: [])
     assert mcp_manager.load_mcp_tools() == []
 
 
 # ============ 插件 MCP 配置合并 ============
 
 
-def test_load_mcp_server_configs_merges_plugin_entries(monkeypatch):
-    """插件声明的 MCP server 与环境配置合并：禁用/重复 id/非法条目各有归宿。
+def test_load_mcp_server_configs_uses_plugin_entries_only(monkeypatch):
+    """插件声明的 MCP server 是当前唯一来源：禁用/重复 id/非法条目各有归宿。
 
-    - 与环境重复的插件 id：env 优先，插件条目告警后忽略；
+    - 重复 id：后到者告警后忽略；
     - 插件条目 enabled=false：跳过；
     - sse 传输：废弃告警但仍生效（兼容旧 server）；
     - 非法条目：忽略不阻断。
@@ -524,13 +516,10 @@ def test_load_mcp_server_configs_merges_plugin_entries(monkeypatch):
         "logger",
         SimpleNamespace(warning=lambda msg, *args: records.append(msg % args if args else str(msg))),
     )
-    monkeypatch.setenv(
-        MCP_SERVERS_ENV,
-        json.dumps([{"id": "docs", "transport": "streamable_http", "url": "https://docs.example.com/mcp"}]),
-    )
     plugin_entries = [
+        {"id": "docs", "transport": "streamable_http", "url": "https://docs.example.com/mcp"},
         {"id": "docs", "transport": "streamable_http", "url": "https://dup.example.com/mcp"},
-        {"id": "off", "transport": "stdio", "command": "uvx", "args": ["mcp-off"], "enabled": False},
+        {"id": "off", "transport": "streamable_http", "url": "https://off.example.com/mcp", "enabled": False},
         {"id": "search", "transport": "sse", "url": "https://search.example.com/sse"},
         {"id": "bad id", "transport": "carrier-pigeon", "url": "https://x.example.com"},
     ]
@@ -543,4 +532,4 @@ def test_load_mcp_server_configs_merges_plugin_entries(monkeypatch):
     assert by_id["docs"].url == "https://docs.example.com/mcp"
     assert by_id["search"].transport == "sse"
     assert any("sse 传输已废弃" in message for message in records)
-    assert any("与环境配置重复" in message for message in records)
+    assert any("插件 MCP server id 重复" in message for message in records)

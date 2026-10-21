@@ -770,6 +770,61 @@ async def _flush_agent_model_snapshots(callbacks: _AgentRunStreamCallbacks) -> N
     await callbacks.model_snapshot_writer.flush()
 
 
+def should_persist_early_user_message(
+    query: str, queued_message_id: str | None, preserve_queued_messages: bool
+) -> bool:
+    """普通新消息才提前落库；队列执行/保留队列路径由 admission 负责。"""
+    return bool(query and not queued_message_id and not preserve_queued_messages)
+
+
+async def persist_early_user_message_if_needed(
+    conversation_id: str,
+    user_id: str,
+    operator_name: str,
+    run_id: str,
+    query: str,
+    queued_message_id: str | None,
+    preserve_queued_messages: bool,
+) -> None:
+    """普通新消息才提前落库；队列执行/保留队列路径由 admission 负责。"""
+    if should_persist_early_user_message(query, queued_message_id, preserve_queued_messages):
+        await persist_early_user_message(conversation_id, user_id, operator_name, run_id, query)
+
+
+async def persist_early_user_message(
+    conversation_id: str,
+    user_id: str,
+    operator_name: str,
+    run_id: str,
+    query: str,
+) -> None:
+    """Run 启动前先落一条用户消息；运行期持久化会按同一 event_key 幂等覆盖。
+
+    覆盖 prepare/模型启动阶段被取消或进程退出、还没来得及创建持久化任务的场景。
+    """
+    content = query if len(query) <= 4000 else f"{query[:4000]}\n\n[消息过长，完整内容以运行期为准]"
+    message = HumanMessage(
+        id=run_id,
+        content=content,
+        additional_kwargs={"timestamp": _get_timestamp(), "reasoning_turn_id": run_id},
+    )
+    try:
+        await conversation_event_service.persist_user_message(
+            conversation_id=conversation_id,
+            user_id=user_id,
+            operator_name=operator_name,
+            message=message,
+            insert_only=True,
+        )
+    except Exception:
+        logger.warning(
+            "ChatData 用户消息提前落库失败（运行期仍会重试）: conversation_id=%s run_id=%s",
+            conversation_id,
+            run_id,
+            exc_info=True,
+        )
+
+
 async def _persist_agent_user_message(callbacks: _AgentRunStreamCallbacks) -> None:
     if callbacks.user_message is None:
         return
@@ -834,3 +889,81 @@ async def _mark_agent_resume_checkpointed(callbacks: _AgentRunStreamCallbacks) -
         and not callbacks.stream_adapter.pending_interrupt()
     ):
         await agent_inbox_service.mark_question_resume_started(callbacks.run_id, callbacks.owner_token)
+
+
+async def _read_approval_state(conversation_id: str) -> dict[str, Any] | None:
+    """直接读 checkpoint channel_values（不构建 agent graph，打开许可弹窗不必等装配）。"""
+    from utils.checkpoint import get_checkpointer
+
+    config: Any = {"configurable": {"thread_id": conversation_id}}
+    async with get_checkpointer() as checkpointer:
+        checkpoint_tuple = await checkpointer.aget_tuple(config)
+    if checkpoint_tuple is None:
+        return None
+    checkpoint = getattr(checkpoint_tuple, "checkpoint", None) or {}
+    values = checkpoint.get("channel_values") if isinstance(checkpoint, dict) else None
+    return dict(values) if isinstance(values, dict) and values else None
+
+
+async def _write_approval_state(conversation_id: str, update: dict[str, Any]) -> None:
+    from utils.checkpoint import get_checkpointer
+
+    from .agent.data_agent import get_data_agent_graph
+
+    config: Any = {"configurable": {"thread_id": conversation_id}}
+    async with get_checkpointer() as checkpointer:
+        graph = get_data_agent_graph(checkpointer=checkpointer)
+        await graph.aupdate_state(config, update)
+
+
+async def read_conversation_approval_grants(conversation_id: str) -> list[str]:
+    """读取本会话已授予的工具许可（``tool:<name>`` 列表）。"""
+    values = await _read_approval_state(conversation_id)
+    if not values:
+        return []
+    grants = values.get("approval_grants")
+    return [str(item) for item in grants] if isinstance(grants, list) else []
+
+
+async def revoke_conversation_approval_grants(conversation_id: str, tool_names: list[str]) -> list[str]:
+    """按工具名撤销本会话许可（同时清理本轮许可），返回剩余许可。"""
+    values = await _read_approval_state(conversation_id)
+    if not values:
+        return []
+    names = {str(name).strip() for name in tool_names if str(name).strip()}
+    targets = {f"tool:{name}" for name in names} | names
+    grants = [str(item) for item in values.get("approval_grants") or []]
+    removed = [item for item in grants if item in targets]
+    if not targets or not removed:
+        return grants
+    remaining = [item for item in grants if item not in targets]
+    run_grants = values.get("approval_run_grants") or {}
+    filtered_runs = {
+        str(run_id): [str(item) for item in keys if str(item) not in targets]
+        for run_id, keys in run_grants.items()
+        if isinstance(keys, list)
+    }
+    await _write_approval_state(
+        conversation_id,
+        {"approval_grants": remaining, "approval_run_grants": {k: v for k, v in filtered_runs.items() if v}},
+    )
+    return remaining
+
+
+async def reset_conversation_approval_grants(conversation_id: str) -> None:
+    """清除当前会话 checkpoint 里的工具审批许可（本会话内始终允许/本轮许可）。
+
+    仅允许在会话空闲时调用；运行中/等待回答时更新 checkpoint 会破坏 pending interrupt，
+    由调用方前置校验。
+    """
+    from utils.checkpoint import get_checkpointer
+
+    from .agent.data_agent import get_data_agent_graph
+
+    config: Any = {"configurable": {"thread_id": conversation_id}}
+    async with get_checkpointer() as checkpointer:
+        graph = get_data_agent_graph(checkpointer=checkpointer)
+        state = await graph.aget_state(config)
+        if state is None or not getattr(state, "values", None):
+            return
+        await graph.aupdate_state(config, {"approval_grants": [], "approval_run_grants": {}})
