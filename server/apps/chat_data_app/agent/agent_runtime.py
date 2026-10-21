@@ -18,12 +18,14 @@ from langchain_core.messages import AIMessage
 from utils.logger import get_logger
 
 from ..services.llm_config import get_chat_data_llm
+from .middleware.skill_prerequisite import SkillPrerequisiteMiddleware
 from .middleware.tool_call_normalizer import (
     create_tool_call_name_normalizer_middleware,
     normalize_response_tool_call_names,  # noqa: F401  向后兼容 re-export，原定义已下沉至 middleware
 )
 from .middleware.tool_call_rate_alert import create_tool_call_rate_alert_middleware
 from .middleware.tool_timing import create_tool_timing_middleware
+from .tools.registry import TOOL_REQUIRED_SKILLS
 
 logger = get_logger(__name__)
 
@@ -137,6 +139,7 @@ def on_tool_error(exc: Exception, request: Any) -> str:
 MIDDLEWARE_CANONICAL_ORDER: tuple[str, ...] = (
     "ToolExecutionFenceMiddleware",  # 租约围栏必须最外层：所有权丢失不能被内层转成普通工具失败
     "MCPToolDiscoveryMiddleware",  # 先拦幻觉直调 MCP 目标工具，再进入审批；避免用户先批一次才被拒
+    "SkillPrerequisiteMiddleware",  # 工具声明 required_skills 时，先拦未加载技能，再进入审批
     "ToolApprovalMiddleware",  # 按需审批：在围栏之内、任何工具副作用之前中断询问（ask 模式才装配）
     "ImageInjectionMiddleware",  # 图片注入在压缩/预算外层：注入的图片要被正确计费与统计
     "ToolTimingMiddleware",  # 紧贴围栏内侧：计时覆盖卸载与错误转换在内的完整工具链路
@@ -193,6 +196,7 @@ def build_standard_agent_middleware(
         "ToolApprovalMiddleware": tool_approval_middleware,
         "ImageInjectionMiddleware": image_injection_middleware,
         "MCPToolDiscoveryMiddleware": mcp_tool_discovery_middleware,
+        "SkillPrerequisiteMiddleware": SkillPrerequisiteMiddleware(TOOL_REQUIRED_SKILLS),
         "ToolTimingMiddleware": create_tool_timing_middleware(),
         "ToolCallRateAlertMiddleware": create_tool_call_rate_alert_middleware(),
         "ToolCallHistoryRepairMiddleware": tool_call_history_repair_middleware,

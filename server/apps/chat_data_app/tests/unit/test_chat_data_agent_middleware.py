@@ -1132,23 +1132,25 @@ def test_tool_error_middleware_and_chat_data_agent_create_agent(monkeypatch):
         "read_image",
         "present_artifacts",
         "get_current_time",
+        "load_skill",
         "data_analyzing_tool",
         "calculator_tool",
         "ask_user_question",
         "officecli_run",
     ]
-    assert len(captured["middleware"]) == 11
-    assert captured["middleware"][0].name == "ImageInjectionMiddleware"
-    assert captured["middleware"][1].name == "ToolTimingMiddleware"
-    assert captured["middleware"][2].name == "ToolCallRateAlertMiddleware"
-    assert captured["middleware"][3].name == "ToolCallHistoryRepairMiddleware"
-    assert captured["middleware"][4].name == "TodoListMiddleware"
-    assert captured["middleware"][5].name == "ContextCompressionMiddleware"
-    assert captured["middleware"][6].name == "ContextUsageMiddleware"
-    assert captured["middleware"][7].name == "ResponseTimestampMiddleware"
-    assert captured["middleware"][8].name == "ToolCallNameNormalizerMiddleware"
-    assert captured["middleware"][9].name == "ToolResultMiddleware"
-    assert captured["middleware"][10].name == "ToolErrorMiddleware"
+    assert len(captured["middleware"]) == 12
+    assert captured["middleware"][0].name == "SkillPrerequisiteMiddleware"
+    assert captured["middleware"][1].name == "ImageInjectionMiddleware"
+    assert captured["middleware"][2].name == "ToolTimingMiddleware"
+    assert captured["middleware"][3].name == "ToolCallRateAlertMiddleware"
+    assert captured["middleware"][4].name == "ToolCallHistoryRepairMiddleware"
+    assert captured["middleware"][5].name == "TodoListMiddleware"
+    assert captured["middleware"][6].name == "ContextCompressionMiddleware"
+    assert captured["middleware"][7].name == "ContextUsageMiddleware"
+    assert captured["middleware"][8].name == "ResponseTimestampMiddleware"
+    assert captured["middleware"][9].name == "ToolCallNameNormalizerMiddleware"
+    assert captured["middleware"][10].name == "ToolResultMiddleware"
+    assert captured["middleware"][11].name == "ToolErrorMiddleware"
     assert (
         data_agent.create_data_agent(
             AgentRuntimeOptions(), model_invocation=data_agent.ModelInvocationConfig(model_id="m1")

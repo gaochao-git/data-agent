@@ -147,13 +147,12 @@ def test_system_skills_describe_current_filesystem_tools():
     assert "present_artifacts" in creator
 
 
-def test_system_skills_use_file_read_as_the_only_skill_entrypoint():
+def test_system_skills_use_load_skill_as_the_skill_entrypoint():
     for name in CURRENT_SKILLS:
         text = _skill_text(name)
         assert "skill_load" not in text
 
-    for name in CURRENT_SKILLS:
-        assert "file_read" in _skill_text(name)
+    assert "load_skill" in _skill_text(OFFICE_SKILL)
 
 
 # ---------------------------------------------------------------------------

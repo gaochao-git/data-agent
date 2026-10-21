@@ -27,6 +27,7 @@ describe('toolDisplay', () => {
       ask_user_question: '询问用户',
       write_todos: '更新任务计划',
       task: '派发子智能体',
+    load_skill: '加载技能',
     }
 
     for (const [toolName, displayName] of Object.entries(expectedNames)) {

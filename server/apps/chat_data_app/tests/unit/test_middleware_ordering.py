@@ -31,6 +31,7 @@ _OPTIONAL_SLOTS = {
 
 # 无条件必备项（组装点内部创建）
 _MANDATORY_NAMES = [
+    "SkillPrerequisiteMiddleware",
     "ToolTimingMiddleware",
     "ToolCallRateAlertMiddleware",
     "TodoListMiddleware",

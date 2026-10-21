@@ -48,6 +48,7 @@ EXPECTED_WITHOUT_BASH = [
     "read_image",
     "present_artifacts",
     "get_current_time",
+    "load_skill",
     "data_analyzing_tool",
     "calculator_tool",
     "ask_user_question",

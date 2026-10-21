@@ -459,6 +459,13 @@ const selectedConsoleFileExt = computed(() => {
   return p.split('.').pop()?.toLowerCase() || ''
 })
 const selectedConsoleIsPdf = computed(() => selectedConsoleFileExt.value === 'pdf')
+// PDF 只做工作区预览：用 Chrome PDF Viewer 参数隐藏下载/打印/侧栏等原生工具条。
+// 注意：部分 Chromium 版本会忽略部分参数，前端另外隐藏了本面板的操作按钮。
+const selectedConsolePdfUrl = computed(() => {
+  const url = selectedConsoleBinaryBlob.value?.url || ''
+  return url ? `${url}#toolbar=0&navpanes=0&scrollbar=0&statusbar=0&messages=0&view=FitH` : ''
+})
+const isPdfFilePath = (path: string | null | undefined) => String(path || '').toLowerCase().endsWith('.pdf')
 const selectedConsoleIsOfficeFile = computed(() => OFFICE_HTML_PREVIEW_EXTENSIONS.has(selectedConsoleFileExt.value))
 const selectedConsoleIsImage = computed(() => IMAGE_PREVIEW_EXTENSIONS.has(selectedConsoleFileExt.value))
 const selectedConsoleIsMarkdown = computed(() => selectedConsoleFileExt.value === 'md')
@@ -1083,7 +1090,7 @@ defineExpose({
                     <!-- SQL 查询结果（outputs/query_result、outputs/.tool-offload）不提供下载，
                          防数据泄漏；后端两侧已拦截，这里只是前端侧的纵深防御。 -->
                     <button
-                      v-if="isWorkspaceFileDownloadable(item.node.file.relativePath)"
+                      v-if="isWorkspaceFileDownloadable(item.node.file.relativePath) && !isPdfFilePath(item.node.file.relativePath)"
                       type="button"
                       class="flex h-6 w-6 items-center justify-center rounded-md border-none bg-transparent text-[11px] text-slate-400 transition-colors hover:bg-blue-100 hover:text-blue-600"
                       title="下载文件"
@@ -1221,7 +1228,7 @@ defineExpose({
             <!-- 复制内容/路径：内容口径=预览所见（表格模式=所见表格 TSV，文本类=全文，超大文件受预览截断）。
                  路径=/mnt/user-data 沙箱可见路径（与 @ 引用、智能体视角一致）。 -->
             <button
-              v-if="selectedConsoleFile"
+              v-if="selectedConsoleFile && !selectedConsoleIsPdf"
               type="button"
               class="flex h-6 w-6 items-center justify-center rounded border border-slate-200 bg-white text-[11px] text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700"
               title="复制文件内容（表格模式复制 TSV）"
@@ -1231,7 +1238,7 @@ defineExpose({
               <i class="fa-regular fa-copy"></i>
             </button>
             <button
-              v-if="selectedConsoleFile"
+              v-if="selectedConsoleFile && !selectedConsoleIsPdf"
               type="button"
               class="flex h-6 w-6 items-center justify-center rounded border border-slate-200 bg-white text-[11px] text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700"
               title="复制文件路径"
@@ -1243,7 +1250,7 @@ defineExpose({
             <!-- 下载已下沉到文件树每行右端（和文件名同处一行，不必先选中再来这里找）。
                  这里改为刷新：tool_result / run 结束本就会自动刷新，此按钮是手动兜底。 -->
             <button
-              v-if="selectedConsoleFile"
+              v-if="selectedConsoleFile && !selectedConsoleIsPdf"
               type="button"
               class="flex h-6 w-6 items-center justify-center rounded border border-slate-200 bg-white text-[11px] text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700 disabled:opacity-50"
               :title="isWorkspaceRefreshBusy ? '正在刷新' : '刷新文件列表与预览内容'"
@@ -1254,7 +1261,7 @@ defineExpose({
               <i class="fa-solid fa-rotate-right" :class="isWorkspaceRefreshBusy ? 'fa-spin' : ''"></i>
             </button>
             <button
-              v-if="selectedConsoleFile"
+              v-if="selectedConsoleFile && !selectedConsoleIsPdf"
               type="button"
               class="flex h-6 w-6 items-center justify-center rounded border border-slate-200 bg-white text-[11px] text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700"
               title="放大预览"
@@ -1335,8 +1342,8 @@ defineExpose({
             :class="workspaceFilePreviewHeightClass"
           />
           <iframe
-            v-else-if="selectedConsoleIsPdf && selectedConsoleBinaryBlob?.url"
-            :src="selectedConsoleBinaryBlob.url"
+            v-else-if="selectedConsoleIsPdf && selectedConsolePdfUrl"
+            :src="selectedConsolePdfUrl"
             :class="isWorkspaceFilePreviewFullscreen ? 'm-0 h-[calc(100vh-48px)] min-w-0 w-full rounded-md border border-slate-100 bg-white' : 'm-0 h-[46vh] min-w-0 w-full rounded-md border border-slate-100 bg-white'"
           ></iframe>
           <div

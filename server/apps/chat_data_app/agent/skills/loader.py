@@ -168,7 +168,7 @@ def load_metadata() -> dict[str, SkillMetadata]:
 
 def format_skills_prompt(skills: list[dict[str, Any]]) -> str:
     """格式化技能元数据为 system prompt XML。"""
-    lines = ["<available_skills>"]
+    lines = ["<available_skills>", "  <loader>load_skill</loader>"]
     for meta in skills:
         lines.append("  <skill>")
         lines.append(f"    <name>{xml_escape(str(meta.get('name') or ''))}</name>")
@@ -177,6 +177,7 @@ def format_skills_prompt(skills: list[dict[str, Any]]) -> str:
         lines.append(f"    <description>{xml_escape(str(meta['description'] or ''))}</description>")
         lines.append("  </skill>")
     lines.append("</available_skills>")
+    lines.append("技能正文必须用 load_skill(name) 加载；未加载前不要按技能内容执行。")
     summary = "\n".join(lines)
     logger.debug(f"[skills] summary 长度: {len(summary)} 字符")
     return summary

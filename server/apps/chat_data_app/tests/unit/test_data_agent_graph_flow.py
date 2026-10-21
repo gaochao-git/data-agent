@@ -83,6 +83,7 @@ def test_assemble_tools_registers_all_tools_except_optional_bash(tmp_path):
         "read_image",
         "present_artifacts",
         "get_current_time",
+        "load_skill",
         "data_analyzing_tool",
         "calculator_tool",
         "ask_user_question",
@@ -123,18 +124,19 @@ def test_create_data_agent_uses_standard_middleware_without_model_fallback(monke
     )
 
     assert agent.name == "agent"
-    assert len(captured["middleware"]) == 11
-    assert captured["middleware"][0].name == "ImageInjectionMiddleware"
-    assert captured["middleware"][1].name == "ToolTimingMiddleware"
-    assert captured["middleware"][2].name == "ToolCallRateAlertMiddleware"
-    assert captured["middleware"][3].name == "ToolCallHistoryRepairMiddleware"
-    assert captured["middleware"][4].name == "TodoListMiddleware"
-    assert captured["middleware"][5].name == "ContextCompressionMiddleware"
-    assert captured["middleware"][6] == {"context_model": "primary-model"}
-    assert captured["middleware"][7].name == "ResponseTimestampMiddleware"
-    assert captured["middleware"][8].name == "ToolCallNameNormalizerMiddleware"
-    assert captured["middleware"][9].name == "ToolResultMiddleware"
-    assert captured["middleware"][10].name == "ToolErrorMiddleware"
+    assert len(captured["middleware"]) == 12
+    assert captured["middleware"][0].name == "SkillPrerequisiteMiddleware"
+    assert captured["middleware"][1].name == "ImageInjectionMiddleware"
+    assert captured["middleware"][2].name == "ToolTimingMiddleware"
+    assert captured["middleware"][3].name == "ToolCallRateAlertMiddleware"
+    assert captured["middleware"][4].name == "ToolCallHistoryRepairMiddleware"
+    assert captured["middleware"][5].name == "TodoListMiddleware"
+    assert captured["middleware"][6].name == "ContextCompressionMiddleware"
+    assert captured["middleware"][7] == {"context_model": "primary-model"}
+    assert captured["middleware"][8].name == "ResponseTimestampMiddleware"
+    assert captured["middleware"][9].name == "ToolCallNameNormalizerMiddleware"
+    assert captured["middleware"][10].name == "ToolResultMiddleware"
+    assert captured["middleware"][11].name == "ToolErrorMiddleware"
     assert context_kwargs["tools"] == []
     assert context_kwargs["state_schema"] is ChatDataAgentState
 
@@ -164,6 +166,7 @@ def test_create_data_agent_registers_after_model_history_middleware(monkeypatch,
     )
 
     assert [middleware.name for middleware in captured["middleware"]] == [
+        "SkillPrerequisiteMiddleware",
         "ImageInjectionMiddleware",
         "ToolTimingMiddleware",
         "ToolCallRateAlertMiddleware",

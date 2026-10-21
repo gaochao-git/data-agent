@@ -61,7 +61,9 @@ from ..context.context_budget import (
     estimate_text_tokens,
     get_model_context_budget,
 )
+from ..tools.registry import TOOL_REQUIRED_SKILLS
 from .context_compression import create_context_compression_middleware
+from .skill_prerequisite import SkillPrerequisiteMiddleware
 from .tool_call_normalizer import create_tool_call_name_normalizer_middleware
 from .tool_execution_fence import create_tool_execution_fence_middleware
 from .tool_result import create_tool_result_middleware
@@ -418,10 +420,10 @@ def _request_subagent_context_summary(request: Any) -> str | None:
 
 
 # 子图技能目录段的引导语与 XML 拼装：目录与主智能体同一份 <available_skills>，
-# 正文消费方式一致（file_read SKILL.md）。仅当目录非空时注入。
+# 正文消费方式一致（load_skill 加载 SKILL.md）。仅当目录非空时注入。
 _SUBAGENT_SKILLS_SECTION_TEMPLATE = """## 可用技能
-以下技能清单与主智能体共享同一会话快照；任务与技能相关时，先 `file_read` 对应
-SKILL.md 并严格按其执行：
+以下技能清单与主智能体共享同一会话快照；任务与技能相关时，先 `load_skill(name=技能名)`
+加载正文并严格按其执行：
 {skills_xml}"""
 
 # 子图会话记忆只读段：条目与主图同源（同一渲染入口，已转义）。子智能体没有
@@ -525,6 +527,7 @@ def _compile_subagent(spec: SubagentSpec, run_controls: Any = None) -> Any:
             tools,
             system_prompt=effective_system_prompt,
         ),
+        SkillPrerequisiteMiddleware(TOOL_REQUIRED_SKILLS),
         create_tool_call_name_normalizer_middleware(tools),
         create_tool_result_middleware(),
         ToolErrorMiddleware(on_tool_error),
