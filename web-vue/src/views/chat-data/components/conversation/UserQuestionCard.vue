@@ -81,6 +81,15 @@ const SANDBOX_PATH_PREFIX = /\/mnt\/user-data\//g
 const visibleArgValue = (value: string) => (
   value.includes('/mnt/user-data/') ? value.replace(SANDBOX_PATH_PREFIX, '') : value
 )
+const argsEntries = (item: ApprovalItem) => Object.entries(item.args_summary || {})
+const argsLine = (item: ApprovalItem) => argsEntries(item)
+  .map(([key, value]) => `${key}: ${visibleArgValue(value)}`)
+  .join(' · ')
+const argsJson = (item: ApprovalItem) => JSON.stringify(
+  Object.fromEntries(argsEntries(item).map(([key, value]) => [key, visibleArgValue(value)])),
+  null,
+  2,
+)
 // 审批标题由前端按显示名生成：后端只保证 tool_name 稳定，中文名的事实源在前端 toolDisplay
 const questionHeading = computed(() => {
   const item = singleApprovalItem.value
@@ -199,21 +208,19 @@ const skipCurrent = () => {
             :class="(selected[item.call_id] || []).length ? 'border-blue-300 bg-blue-50/30' : 'border-slate-200'"
           >
             <div class="flex items-start justify-between gap-3">
-              <div class="min-w-0">
+              <div class="min-w-0 flex-1">
                 <div class="flex items-center gap-2 text-sm font-medium text-slate-800">
                   <i class="fa-solid text-xs" :class="approvalIcon(item.tool_name)"></i>
                   <span class="truncate">{{ approvalDisplayName(item) }}</span>
                   <span v-if="item.intent" class="truncate text-xs font-normal text-slate-500">{{ item.intent }}</span>
                 </div>
-                <div v-if="item.args_summary" class="mt-1 flex flex-wrap gap-1">
-                  <span
-                    v-for="(value, key) in item.args_summary"
-                    :key="key"
-                    class="max-w-full truncate rounded border border-slate-200 bg-white px-1.5 py-0.5 font-mono text-[11px] text-slate-500"
-                  >{{ key }}: {{ visibleArgValue(value) }}</span>
+                <div v-if="argsEntries(item).length" class="mt-1 min-w-0">
+                  <div class="approval-args-line truncate whitespace-nowrap font-mono text-[11px] text-slate-500" :title="argsJson(item)">
+                    {{ argsLine(item) }}
+                  </div>
                 </div>
               </div>
-              <div class="flex max-w-[60%] flex-wrap items-center justify-end gap-1">
+              <div class="ml-auto flex shrink-0 flex-nowrap items-center justify-end gap-1">
                 <button
                   type="button"
                   class="h-7 rounded px-1.5 text-[11px]"
@@ -285,12 +292,10 @@ const skipCurrent = () => {
           </div>
           <!-- 单工具审批：展示参数摘要（路径/命令等），不把原始 JSON 丢给用户 -->
           <div v-if="singleApprovalItem" class="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
-            <div v-if="singleApprovalItem.args_summary" class="flex flex-wrap gap-1">
-              <span
-                v-for="(value, key) in singleApprovalItem.args_summary"
-                :key="key"
-                class="max-w-full truncate rounded border border-slate-200 bg-white px-1.5 py-0.5 font-mono text-[11px] text-slate-500"
-              >{{ key }}: {{ visibleArgValue(value) }}</span>
+            <div v-if="argsEntries(singleApprovalItem).length" class="min-w-0">
+              <div class="approval-args-line truncate whitespace-nowrap font-mono text-[11px] text-slate-500" :title="argsJson(singleApprovalItem)">
+                {{ argsLine(singleApprovalItem) }}
+              </div>
             </div>
           </div>
           <div v-if="currentQuestion.options.length" class="mt-5 max-h-[240px] space-y-2 overflow-y-auto pr-1">

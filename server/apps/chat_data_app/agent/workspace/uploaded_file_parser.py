@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import csv
 import tempfile
 from pathlib import Path
 
@@ -32,12 +33,18 @@ SUPPORTED_DOCUMENT_EXTENSIONS = frozenset(
         ".txt",
         ".md",
         ".sql",
+        ".csv",
+        ".json",
+        ".xml",
         ".pdf",
         ".docx",
         ".xlsx",
         ".pptx",
     }
 )
+
+_TEXT_PARSED_EXTENSIONS = frozenset({".txt", ".md", ".sql", ".csv", ".json", ".xml"})
+CSV_PARSE_MAX_ROWS = 20_000
 
 
 class EmptyExtractionError(ValueError):
@@ -61,7 +68,12 @@ def _convert_local_upload(source_path: Path) -> str:
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         try:
-            convert_path = _resolve_markitdown_source(source_path, suffix, Path(tmp_dir))
+            normalized = _normalize_text_source(source_path, suffix, Path(tmp_dir))
+            csv_note = ""
+            if suffix == ".csv":
+                convert_path, csv_note = _prepare_csv_source(normalized, Path(tmp_dir))
+            else:
+                convert_path = _resolve_markitdown_source(normalized, suffix, Path(tmp_dir))
             result = MarkItDown(enable_plugins=False).convert_local(convert_path)
         except Exception as exc:
             logger.error("MarkItDown 解析失败: path=%s error=%s", source_path, exc, exc_info=True)
@@ -70,7 +82,51 @@ def _convert_local_upload(source_path: Path) -> str:
     content = str(result.text_content or "").strip()
     if not content:
         raise EmptyExtractionError("文件未提取到可分析内容")
-    return content
+    return content + csv_note
+
+
+def _normalize_text_source(source_path: Path, suffix: str, tmp_dir: Path) -> Path:
+    """文本类文件优先按 UTF-8 解码，失败再按 GB18030 解码，统一转 UTF-8 临时副本。
+
+    markitdown 的 CSV 编码猜测对短 GBK/ANSI 文件不稳定，会静默输出乱码；这里先做
+    严格解码，避免把乱码交给模型。
+    """
+    if suffix not in _TEXT_PARSED_EXTENSIONS:
+        return source_path
+    data = source_path.read_bytes()
+    try:
+        text = data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        try:
+            text = data.decode("gb18030")
+        except UnicodeDecodeError:
+            return source_path
+    normalized = tmp_dir / f"normalized{suffix}"
+    normalized.write_text(text, encoding="utf-8")
+    return normalized
+
+
+def _prepare_csv_source(source_path: Path, tmp_dir: Path) -> tuple[Path, str]:
+    """按行数截断 CSV，避免超大表全量转 Markdown 消耗大量内存/上下文。"""
+    limited = tmp_dir / "limited.csv"
+    total_rows = 0
+    with source_path.open("r", encoding="utf-8", newline="") as source:
+        reader = csv.reader(source)
+        try:
+            header = next(reader)
+        except StopIteration:
+            return source_path, ""
+        with limited.open("w", encoding="utf-8", newline="") as target:
+            writer = csv.writer(target)
+            writer.writerow(header)
+            for row in reader:
+                total_rows += 1
+                if total_rows <= CSV_PARSE_MAX_ROWS:
+                    writer.writerow(row)
+    if total_rows <= CSV_PARSE_MAX_ROWS:
+        return limited, ""
+    note = f"\n\n> CSV 已截断：仅解析前 {CSV_PARSE_MAX_ROWS} 行，原始共 {total_rows} 行。"
+    return limited, note
 
 
 def _resolve_markitdown_source(source_path: Path, suffix: str, tmp_dir: Path) -> Path:

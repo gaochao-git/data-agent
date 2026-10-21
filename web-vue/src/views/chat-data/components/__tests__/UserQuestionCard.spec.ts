@@ -128,6 +128,7 @@ describe('UserQuestionCard batch approval', () => {
     expect(wrapper.text()).toContain('删除文件 test_1.txt')
     expect(wrapper.text()).toContain('删除第一个测试文件')
     expect(wrapper.text()).toContain('file_path: workspace/test_1.txt')
+    expect(wrapper.find('.approval-args-line').attributes('title')).toContain('"file_path": "workspace/test_1.txt"')
     expect(wrapper.text()).toContain('整个会话内该工具不再询问')
 
     const approvalButtons = wrapper.findAll('button').filter(button => button.text().trim() === '允许')
@@ -248,6 +249,7 @@ describe('UserQuestionCard single approval args', () => {
     // 审批卡与工具卡同口径：剥掉沙箱前缀，工具名走中文显示名
     expect(wrapper.text()).toContain('删除测试文件')
     expect(wrapper.text()).toContain('file_path: workspace/test.txt')
+    expect(wrapper.find('.approval-args-line').attributes('title')).toContain('"file_path": "workspace/test.txt"')
     expect(wrapper.text()).not.toContain('/mnt/user-data')
     expect(wrapper.text()).toContain('是否允许执行「删除文件」？')
     // 审批不接受自由文本：输入框与「跳过」会让人误以为能放行/只是跳过，实际都落成拒绝

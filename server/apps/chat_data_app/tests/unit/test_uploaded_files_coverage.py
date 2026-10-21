@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from apps.chat_data_app.agent.workspace import uploaded_file_parser as ufp
 from apps.chat_data_app.daos.uploaded_file_dao import UploadedFileDao
 from apps.chat_data_app.routers import uploaded_files as uploaded_files_routes
 from apps.chat_data_app.services.agent_run import uploaded_file_service as ufs
@@ -479,3 +480,11 @@ def test_upload_file_encrypted_roundtrip(uploads_root, monkeypatch):
     assert b"hello" not in stored
     dao.rows[result["file_id"]] = make_row(storage_dir=result["storage_dir"], original_filename="secret.txt")
     assert asyncio.run(service.get_file_content(result["file_id"], user_id="u1", thread_id="t1")) == b"hello world"
+
+
+def test_csv_json_xml_are_upload_allowed():
+    assert {"csv", "json", "xml"} <= ufs.ALLOWED_FILE_EXTENSIONS
+    assert {"csv", "json", "xml"} <= {item.lstrip(".") for item in ufp.SUPPORTED_DOCUMENT_EXTENSIONS}
+    assert {item.lstrip(".") for item in ufp.SUPPORTED_DOCUMENT_EXTENSIONS} == ufs.ALLOWED_FILE_EXTENSIONS - set(
+        ufp.IMAGE_EXTENSIONS
+    )

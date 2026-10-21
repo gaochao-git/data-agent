@@ -21,6 +21,7 @@ export interface FileTypeIcon {
 
 const FILE_TYPE_ICONS: Record<string, FileTypeIcon> = {
   json: { icon: 'fa-solid fa-file-code', color: 'text-sky-600' },
+  xml: { icon: 'fa-solid fa-file-code', color: 'text-orange-500' },
   yaml: { icon: 'fa-solid fa-file-code', color: 'text-emerald-600' },
   yml: { icon: 'fa-solid fa-file-code', color: 'text-emerald-600' },
   md: { icon: 'fa-brands fa-markdown', color: 'text-slate-600' },

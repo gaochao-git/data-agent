@@ -110,3 +110,34 @@ def test_docx_preprocess_failure_falls_back_to_original(tmp_path):
     broken.write_bytes(b"not-a-real-docx")
 
     assert uploaded_file_parser._resolve_markitdown_source(broken, ".docx", tmp_path) == broken
+
+
+def test_csv_json_xml_are_parsed_as_markdown(tmp_path):
+    samples = {
+        "data.csv": ("name,amount\nA,10\nB,20\n", "| name | amount |"),
+        "data.json": ('{"name":"A","items":[1,2]}', '"name":"A"'),
+        "data.xml": ('<root><item id="1">A</item></root>', "<root>"),
+    }
+    for filename, (body, expected) in samples.items():
+        source = tmp_path / filename
+        source.write_text(body, encoding="utf-8")
+        content = uploaded_file_parser._convert_local_upload(source)
+        assert expected in content
+
+
+def test_gbk_csv_is_decoded_before_markitdown(tmp_path):
+    source = tmp_path / "gbk.csv"
+    source.write_bytes("姓名,金额\n张三,10\n".encode("gbk"))
+    content = uploaded_file_parser._convert_local_upload(source)
+    assert "张三" in content
+    assert "姓名" in content
+
+
+def test_csv_rows_are_truncated_with_note(monkeypatch, tmp_path):
+    source = tmp_path / "large.csv"
+    source.write_text("name,amount\n" + "\n".join(f"A{i},{i}" for i in range(5)) + "\n", encoding="utf-8")
+    monkeypatch.setattr(uploaded_file_parser, "CSV_PARSE_MAX_ROWS", 2)
+    content = uploaded_file_parser._convert_local_upload(source)
+    assert "A0" in content and "A1" in content
+    assert "A4" not in content
+    assert "CSV 已截断" in content and "原始共 5 行" in content

@@ -293,9 +293,10 @@ def read_workspace_text_file(
     if size > max_bytes:
         raise ValueError(f"文件过大，暂不支持预览超过 {_format_size_limit(max_bytes)} 的文件")
     content = target.read_text(encoding="utf-8", errors="replace")
+    visible_path = to_visible_path(root, target)
     return {
-        "path": to_visible_path(root, target),
-        "relative_path": target.relative_to(Path(root).resolve()).as_posix(),
+        "path": visible_path,
+        "relative_path": visible_path.removeprefix("/mnt/user-data/"),
         "content": content,
         "size": size,
     }
