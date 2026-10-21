@@ -136,9 +136,9 @@ def on_tool_error(exc: Exception, request: Any) -> str:
 # 校验实际组装结果与该表逐一致——插错位置会在 CI 直接失败，而不是靠 review 发现。
 MIDDLEWARE_CANONICAL_ORDER: tuple[str, ...] = (
     "ToolExecutionFenceMiddleware",  # 租约围栏必须最外层：所有权丢失不能被内层转成普通工具失败
+    "MCPToolDiscoveryMiddleware",  # 先拦幻觉直调 MCP 目标工具，再进入审批；避免用户先批一次才被拒
     "ToolApprovalMiddleware",  # 按需审批：在围栏之内、任何工具副作用之前中断询问（ask 模式才装配）
     "ImageInjectionMiddleware",  # 图片注入在压缩/预算外层：注入的图片要被正确计费与统计
-    "MCPToolDiscoveryMiddleware",  # MCP 按需发现是唯一会过滤 request.tools 的中间件，必须外于压缩/用量统计，使其看到过滤后的真实工具集
     "ToolTimingMiddleware",  # 紧贴围栏内侧：计时覆盖卸载与错误转换在内的完整工具链路
     "ToolCallRateAlertMiddleware",  # 与计时同层：只统计通过围栏的真实调用，被拒绝的调用不计入频次
     "ToolCallHistoryRepairMiddleware",  # 历史修复先于 steering / 压缩消费消息

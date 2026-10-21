@@ -17,7 +17,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 
 from langchain_core.messages import ToolMessage  # noqa: E402
-from langchain_core.tools import StructuredTool  # noqa: E402
+from langchain_core.tools import StructuredTool, ToolException  # noqa: E402
 from langgraph.types import Command  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
@@ -469,11 +469,12 @@ async def test_mcp_tool_call_proxy_invokes_target_and_rejects_unknown():
     result = await proxy.coroutine(
         name=target.name,
         input={"query": "/home"},
+        state={"discovered_tool_names": [target.name]},
     )
     assert "disk=" in result
 
-    missing = await proxy.coroutine(name="mcp_missing_tool", input={})
-    assert '"success": false' in missing
+    with pytest.raises(ToolException, match="未找到"):
+        await proxy.coroutine(name="mcp_missing_tool", input={})
 
 
 @pytest.mark.asyncio
@@ -493,11 +494,12 @@ async def test_mcp_tool_call_proxy_handles_errors_control_and_non_string():
             MCP_TOOL_CALL_TOOL_NAME: _DictResult(),
         }
     )
-    failure = await proxy.coroutine(name="mcp_call_raises", input={})
-    assert '"success": false' in failure
-    control = await proxy.coroutine(name=MCP_TOOL_CALL_TOOL_NAME, input={})
-    assert "控制工具" in control
-    non_string = await proxy.coroutine(name="mcp_call_dict", input={})
+    state = {"discovered_tool_names": ["mcp_call_raises", "mcp_call_dict"]}
+    with pytest.raises(ToolException, match="执行失败"):
+        await proxy.coroutine(name="mcp_call_raises", input={}, state=state)
+    with pytest.raises(ToolException, match="控制工具"):
+        await proxy.coroutine(name=MCP_TOOL_CALL_TOOL_NAME, input={}, state=state)
+    non_string = await proxy.coroutine(name="mcp_call_dict", input={}, state=state)
     assert '"ok": 1' in non_string
 
 
@@ -512,16 +514,8 @@ async def test_proxy_requires_target_to_be_searched_first():
         args_schema=_Args,
         coroutine=_target,
     )
-    searched: set[str] = set()
-    proxy = create_mcp_tool_call_tool({target.name: target}, searched)
-    denied = await proxy.coroutine(name=target.name, input={"query": "/"})
-    assert "尚未搜索" in denied
-    searched.add(target.name)
-    assert "ok=/" in await proxy.coroutine(name=target.name, input={"query": "/"})
-
-    search = create_mcp_tool_search_tool(
-        MCPToolSearchService(FakeManager([SSH_OVERVIEW()])),
-        searched,
-    )
-    await search.coroutine(query="select:mcp_ssh_system_overview")
-    assert "mcp_ssh_system_overview" in searched
+    proxy = create_mcp_tool_call_tool({target.name: target})
+    with pytest.raises(ToolException, match="尚未搜索"):
+        await proxy.coroutine(name=target.name, input={"query": "/"}, state={})
+    state = {"discovered_tool_names": [target.name]}
+    assert "ok=/" in await proxy.coroutine(name=target.name, input={"query": "/"}, state=state)

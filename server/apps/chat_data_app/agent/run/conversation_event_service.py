@@ -10,6 +10,7 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 
+from apps.chat_data_app.agent.mcp.catalog import MCP_TOOL_CALL_TOOL_NAME
 from apps.chat_data_app.agent.mcp.manager import get_mcp_tool_display_name
 from apps.chat_data_app.agent.run.agent_inbox_service import (
     AgentRunLeaseLostError,
@@ -772,6 +773,16 @@ def _sanitize_user_message_content(content: Any) -> Any:
     return text or "[非文本内容已省略]"
 
 
+def _tool_call_display_name(name: str, tool_call: dict[str, Any]) -> str:
+    """MCP 代理调用优先用目标工具的 tool_labels 展示名。"""
+    display_name = get_mcp_tool_display_name(name)
+    if name != MCP_TOOL_CALL_TOOL_NAME:
+        return display_name
+    args = tool_call.get("args")
+    target = str((args or {}).get("name") or "").strip() if isinstance(args, dict) else ""
+    return get_mcp_tool_display_name(target) or display_name
+
+
 def _serialize_ai_message(message: AIMessage) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "id": _message_id(message),
@@ -790,13 +801,14 @@ def _serialize_ai_message(message: AIMessage) -> dict[str, Any]:
         if not isinstance(tool_call, dict):
             continue
         name = str(tool_call.get("name") or "")
+        display_name = _tool_call_display_name(name, tool_call)
         tool_calls.append(
             {
                 "id": tool_call.get("id"),
                 "name": name,
                 "args": tool_call.get("args") or {},
                 # MCP 工具的用户可见展示名；内置工具为空串，前端映射表兜底
-                "display_name": get_mcp_tool_display_name(name),
+                "display_name": display_name,
             }
         )
     if tool_calls:

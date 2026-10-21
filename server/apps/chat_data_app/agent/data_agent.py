@@ -79,7 +79,9 @@ class AgentRunControls:
     （ask_user_question），防止提问后无人应答导致轮次悬挂。
 
     ``approval_mode``：``ask`` 时装配 ToolApprovalMiddleware，注册表标记
-    （``ToolSpec.approval_required``）的工具执行前中断询问用户；``auto`` 直接执行。
+    （``ToolSpec.approval_required``）的工具执行前中断询问用户；``auto`` 直接
+    执行，但 ``tool_approvals=force_ask`` 的 MCP 工具例外——auto 下仍装配
+    中间件强制审批（无人值守则在装配层剔除该工具，fail-closed）。
     无人值守运行由调用方强制 ``auto``。
     """
 
@@ -211,14 +213,27 @@ def _filter_tools_by_spec(tools: list, spec: AgentAssemblySpec) -> list:
     ]
 
 
-def _build_tool_approval_middleware(run_controls: "AgentRunControls | None", tools: list | None = None) -> Any:
-    """ask 模式且非无人值守才装配审批中间件；auto/无人值守返回 None（零开销）。
+def _is_forced_approval_tool(tool: Any) -> bool:
+    """工具是否为 ``tool_approvals=force_ask`` 的 MCP 工具（metadata 由 mcp/manager 透出）。"""
+    metadata = getattr(tool, "metadata", None)
+    return isinstance(metadata, dict) and str(metadata.get("approval") or "") == "force_ask"
 
-    ``tools`` 用于把 MCP display_name 映射进批量审批载荷（审批卡展示友好名）。
+
+def _build_tool_approval_middleware(run_controls: "AgentRunControls | None", tools: list | None = None) -> Any:
+    """装配审批中间件；无人值守恒不装配（force_ask 工具由装配层过滤，不悬挂）。
+
+    ask 档：注册表标记 + MCP 全员审批（``tool_approvals=allow`` 豁免）；
+    auto 档：仅当装配工具存在 ``tool_approvals=force_ask`` 时按 auto 模式装配
+    （只审 forced 集），否则返回 None 保持零开销。``tools`` 同时用于提取 MCP
+    display_name（审批卡展示友好名）与审批档位。
     """
-    if run_controls is None or run_controls.approval_mode != "ask" or run_controls.disable_user_interaction:
+    if run_controls is None or run_controls.disable_user_interaction:
         return None
-    return create_tool_approval_middleware(tools, run_id=run_controls.run_id if run_controls is not None else None)
+    if run_controls.approval_mode == "ask":
+        return create_tool_approval_middleware(tools, run_id=run_controls.run_id)
+    if any(_is_forced_approval_tool(tool) for tool in tools or []):
+        return create_tool_approval_middleware(tools, run_id=run_controls.run_id, mode="auto")
+    return None
 
 
 def assemble_tools(
@@ -493,6 +508,8 @@ def _resolve_mcp_tool_search_service(
     spec: AgentAssemblySpec,
     tool_tokens: int,
     model_id: str | None,
+    *,
+    excluded_names: frozenset[str] = frozenset(),
 ) -> "MCPToolSearchService | None":
     """两级加载判定：off 关闭；forced 启用；auto 按工具 token 占模型窗口比例判断。
 
@@ -513,7 +530,7 @@ def _resolve_mcp_tool_search_service(
         tool_tokens,
         threshold_tokens,
     )
-    return MCPToolSearchService(get_mcp_tool_manager())
+    return MCPToolSearchService(get_mcp_tool_manager(), excluded_names=excluded_names)
 
 
 def _build_memory_compression_hook(
@@ -562,6 +579,36 @@ def _normalize_model_id(model_id: str | None) -> str | None:
         return fallback
 
 
+def _resolve_workspace_runtime(
+    runtime: ConversationWorkspaceRuntime | None,
+    options: AgentRuntimeOptions,
+    user_id: str | None,
+) -> ConversationWorkspaceRuntime:
+    """未显式传入时构造历史回放工作区；独立函数控制装配函数复杂度。"""
+    if runtime is not None:
+        return runtime
+    workspace_paths = ensure_conversation_workspace("_history_reader", user_id or "system")
+    return ConversationWorkspaceRuntime(
+        workspace_root=workspace_paths["root"],
+        user_id=user_id or "system",
+        backend=options.workspace_backend,
+    )
+
+
+def _with_mcp_control_tools(tools: list, mcp_tools: list, search_service: Any) -> list:
+    """检索模式追加 search + proxy；独立函数控制装配函数复杂度。"""
+    if search_service is None:
+        return tools
+    from .mcp.catalog import create_mcp_tool_call_tool, create_mcp_tool_search_tool
+
+    mcp_tools_by_name = {str(tool.name): tool for tool in mcp_tools}
+    return [
+        *tools,
+        create_mcp_tool_search_tool(search_service),
+        create_mcp_tool_call_tool(mcp_tools_by_name),
+    ]
+
+
 def create_agent_from_spec(
     spec: AgentAssemblySpec,
     runtime_options: AgentRuntimeOptions | None = None,
@@ -595,14 +642,7 @@ def create_agent_from_spec(
     model_id = _normalize_model_id(invocation.model_id)
     enable_thinking = invocation.enable_thinking
     thinking_effort = invocation.thinking_effort
-    runtime = workspace_runtime
-    if runtime is None:
-        workspace_paths = ensure_conversation_workspace("_history_reader", user_id or "system")
-        runtime = ConversationWorkspaceRuntime(
-            workspace_root=workspace_paths["root"],
-            user_id=user_id or "system",
-            backend=options.workspace_backend,
-        )
+    runtime = _resolve_workspace_runtime(workspace_runtime, options, user_id)
     context_request_budget = ContextRequestBudget(model_id)
     builtin_tools = assemble_tools(
         options,
@@ -614,19 +654,19 @@ def create_agent_from_spec(
         run_controls=run_controls,
     )
     mcp_tools = _load_spec_mcp_tools(spec)
+    excluded_mcp_names: frozenset[str] = frozenset()
+    if run_controls is not None and run_controls.disable_user_interaction:
+        # 无人值守不装配审批中间件：force_ask 工具无人应答会悬挂，按 ask_user_question
+        # 的先例在装配层剔除（模型不可见且不可检索）——fail-closed，而不是无人审批放行。
+        excluded_mcp_names = frozenset(str(tool.name) for tool in mcp_tools if _is_forced_approval_tool(tool))
+        mcp_tools = [tool for tool in mcp_tools if str(tool.name) not in excluded_mcp_names]
     tool_tokens = count_tools_tokens([*builtin_tools, *mcp_tools]) if mcp_tools else 0
-    search_service = _resolve_mcp_tool_search_service(spec, tool_tokens, model_id) if mcp_tools else None
-    tools = builtin_tools + mcp_tools
-    if search_service is not None:
-        from .mcp.catalog import create_mcp_tool_call_tool, create_mcp_tool_search_tool
-
-        mcp_tools_by_name = {str(tool.name): tool for tool in mcp_tools}
-        searched_mcp_names: set[str] = set()
-        tools = [
-            *tools,
-            create_mcp_tool_search_tool(search_service, searched_mcp_names),
-            create_mcp_tool_call_tool(mcp_tools_by_name, searched_mcp_names),
-        ]
+    search_service = (
+        _resolve_mcp_tool_search_service(spec, tool_tokens, model_id, excluded_names=excluded_mcp_names)
+        if mcp_tools
+        else None
+    )
+    tools = _with_mcp_control_tools([*builtin_tools, *mcp_tools], mcp_tools, search_service)
     logger.info(
         "[data_agent] 工具装配完成: agent=%s builtin=%d mcp=%d search_tool=%s total=%d tool_tokens=%d",
         spec.agent_id,
@@ -724,7 +764,6 @@ def create_agent_from_spec(
         mcp_tool_discovery_middleware=(
             MCPToolDiscoveryMiddleware(
                 search_active=search_service is not None,
-                searched_names=searched_mcp_names,
             )
             if search_service is not None
             else None

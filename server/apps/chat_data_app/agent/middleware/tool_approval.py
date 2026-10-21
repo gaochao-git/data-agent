@@ -1,11 +1,16 @@
 """按需审批中间件：注册表标记 / MCP 动态工具在执行前中断询问用户。
 
-设计要点（对应需求「按需审批 / 自动审批」两档）：
+设计要点（对应需求「按需审批 / 自动审批」两档 + 每工具 tool_approvals 四档）：
 
-- 仅在 ``AgentRunControls.approval_mode == "ask"`` 时装配；``auto`` 直接执行；
+- ``ask`` 运行档装配中间件（注册表标记 + MCP 全员审批）；``auto`` 仅当装配
+  工具存在 ``tool_approvals=force_ask`` 时按 auto 模式装配（只审 forced 集）；
 - 需要审批的工具：内置注册表 ``ToolSpec.approval_required``（当前：文件删除/移动）
   + MCP 动态工具（不在注册表、第三方默认严格，按 ``mcp_`` 前缀统一 ask；
   ``mcp_tool_search`` 只读检索除外）；
+- 每工具审批档位（``plugin.json`` 的 ``mcp_servers[].tool_approvals``，按工具
+  metadata ``approval`` 透传到本中间件）：``allow`` 在 ask 档免审批；
+  ``force_ask`` 覆盖运行档位强制审批（auto 档也中断）；``deny`` 在枚举层
+  剔除（不挂载不检索，不进本中间件）；缺省 ``ask`` 与现状一致；
 - **一轮模型响应内的审批工具调用批量收集、单次中断**（``after_model`` 钩子）：
   并行工具调用不会产生多个 interrupt，也就不会只展示第一个、卡住其余；
 - 复用既有 LangGraph interrupt + pending-question/answer 通道：审批载荷是
@@ -13,9 +18,9 @@
   question，逐条允许/本会话内始终允许/拒绝），前端无需新增审批组件即可复用询问卡片；
 - "本会话内始终允许"按**工具**粒度写入会话 checkpoint（``approval_grants``），
   后续同类调用直接放行；会话结束/新建会话自然失效；
-- 无人值守运行（定时任务/评测）由调用方强制 ``auto``，本中间件不装配——不会
-  出现无人应答的悬挂；若未来被错误装配，审批通道不可用/取消时一律**拒绝**
-  （fail-closed），而不是放行。
+- 无人值守运行（定时任务/评测）由调用方强制 ``auto`` 且不装配本中间件——
+  force_ask 工具在装配层被过滤（不悬挂）；若未来被错误装配，审批通道不可用/
+  取消时一律**拒绝**（fail-closed），而不是放行。
 """
 
 from __future__ import annotations
@@ -59,12 +64,32 @@ _ARGS_PREVIEW_MAX_CHARS = 500
 class ToolApprovalMiddleware(AgentMiddleware):
     """按需审批：``after_model`` 批量中断 + ``wrap_tool_call`` 按决策放行/拒绝。"""
 
-    def __init__(self, tool_labels: dict[str, str] | None = None, run_id: str | None = None) -> None:
+    def __init__(
+        self,
+        tool_labels: dict[str, str] | None = None,
+        run_id: str | None = None,
+        *,
+        allowed_tools: frozenset[str] | set[str] = frozenset(),
+        forced_tools: frozenset[str] | set[str] = frozenset(),
+        mode: str = "ask",
+    ) -> None:
         super().__init__()
         # 工具名 → 用户可见名（MCP 的 display_name；内置工具用原始名）
         self._tool_labels = dict(tool_labels or {})
         # 当前 run：用于"本轮内始终允许"的作用域隔离（换 run 自动失效）
         self._run_id = str(run_id or "")
+        # tool_approvals=allow 的工具：ask 运行档下免审批直接执行
+        self._allowed_tools = frozenset(allowed_tools)
+        # tool_approvals=force_ask 的工具：auto 运行档下仍强制审批（覆盖运行开关）
+        self._forced_tools = frozenset(forced_tools)
+        # "ask"：注册表标记 + MCP 全员审批（allow 集豁免）；"auto"：仅 forced 集审批
+        self._mode = mode if mode in ("ask", "auto") else "ask"
+
+    def _needs_approval(self, tool_name: str) -> bool:
+        """实例谓词：结合装配档位与每工具 tool_approvals 判定是否中断审批。"""
+        if self._mode == "auto":
+            return tool_name in self._forced_tools
+        return requires_approval(tool_name) and tool_name not in self._allowed_tools
 
     # ---- after_model：批量收集本轮到待审批调用，仅中断一次 ----
 
@@ -145,8 +170,10 @@ class ToolApprovalMiddleware(AgentMiddleware):
         decided: set[str],
     ) -> dict[str, Any] | None:
         tool_name = str(tool_call.get("name") or "")
+        if tool_name == _MCP_TOOL_CALL_TOOL_NAME and not _has_proxy_target(tool_call):
+            return None
         target_name, effective_call = _approval_target(tool_name, tool_call)
-        if not requires_approval(target_name):
+        if not self._needs_approval(target_name):
             return None
         call_id = str(tool_call.get("id") or f"{tool_name}:{index}")
         if call_id in decided:
@@ -170,8 +197,10 @@ class ToolApprovalMiddleware(AgentMiddleware):
     ) -> ToolMessage | Command[Any]:
         tool_call = request.tool_call if isinstance(request.tool_call, dict) else {}
         tool_name = str(tool_call.get("name") or "")
+        if tool_name == _MCP_TOOL_CALL_TOOL_NAME and not _has_proxy_target(tool_call):
+            return await handler(request)
         target_name, effective_call = _approval_target(tool_name, tool_call)
-        if not requires_approval(target_name):
+        if not self._needs_approval(target_name):
             return await handler(request)
         call_id = str(tool_call.get("id") or "")
         state = getattr(request, "state", None)
@@ -279,6 +308,17 @@ def _mcp_display_info(tool: Any) -> dict[str, str]:
     if display_name:
         info["display_name"] = display_name
     return {key: value for key, value in info.items() if value}
+
+
+def _has_proxy_target(tool_call: Any) -> bool:
+    if not isinstance(tool_call, dict):
+        return False
+    args = tool_call.get("args")
+    target = str((args or {}).get("name") or "").strip() if isinstance(args, dict) else ""
+    return target.startswith(_MCP_TOOL_PREFIX) and target not in {
+        _MCP_TOOL_SEARCH_TOOL_NAME,
+        _MCP_TOOL_CALL_TOOL_NAME,
+    }
 
 
 def _approval_target(tool_name: str, tool_call: Any) -> tuple[str, Any]:
@@ -645,13 +685,37 @@ async def _run_with_single_approval(
 def create_tool_approval_middleware(
     tools: list[Any] | None = None,
     run_id: str | None = None,
+    *,
+    mode: str = "ask",
 ) -> AgentMiddleware:
-    """装配 ask 模式的审批中间件（批量中断 + 决策执行；run_id 用于本轮许可作用域）。"""
+    """装配审批中间件（批量中断 + 决策执行；run_id 用于本轮许可作用域）。
+
+    ``mode="ask"``：注册表标记 + 全部 MCP 工具需审批（``tool_approvals=allow`` 豁免）；
+    ``mode="auto"``：仅 ``tool_approvals=force_ask`` 的 MCP 工具强制审批，其余直行。
+    审批档位从装配工具的 metadata（``mcp/manager.build_langchain_tools`` 透出）提取。
+    """
     labels: dict[str, str] = {}
+    allowed: set[str] = set()
+    forced: set[str] = set()
     for tool in tools or []:
         name = str(getattr(tool, "name", "") or "")
+        if not name:
+            continue
         metadata = getattr(tool, "metadata", None)
-        display = str(metadata.get("display_name") or "").strip() if isinstance(metadata, dict) else ""
-        if name:
-            labels[name] = display or name
-    return ToolApprovalMiddleware(labels, run_id=run_id)
+        if not isinstance(metadata, dict):
+            labels[name] = name
+            continue
+        display = str(metadata.get("display_name") or "").strip()
+        labels[name] = display or name
+        approval = str(metadata.get("approval") or "").strip()
+        if approval == "allow":
+            allowed.add(name)
+        elif approval == "force_ask":
+            forced.add(name)
+    return ToolApprovalMiddleware(
+        labels,
+        run_id=run_id,
+        allowed_tools=allowed,
+        forced_tools=forced,
+        mode=mode,
+    )

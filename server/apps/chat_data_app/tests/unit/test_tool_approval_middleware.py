@@ -1131,3 +1131,33 @@ def test_mcp_tool_call_target_grant_skips_proxy_approval():
         decided=set(),
     )
     assert call is None
+
+
+def test_mcp_tool_call_invalid_target_skips_approval():
+    middleware = create_tool_approval_middleware()
+    for args in ({}, {"name": "bash_run"}, {"name": "mcp_tool_call"}):
+        call = middleware._pending_call(
+            {"id": "call-proxy", "name": "mcp_tool_call", "args": args},
+            0,
+            conversation_granted=set(),
+            run_granted=set(),
+            decided=set(),
+        )
+        assert call is None
+
+
+def test_tool_approval_policy_matrix():
+    tools = [
+        SimpleNamespace(name="mcp_allow", metadata={"approval": "allow"}),
+        SimpleNamespace(name="mcp_force", metadata={"approval": "force_ask"}),
+        SimpleNamespace(name="mcp_ask", metadata={}),
+    ]
+    ask = create_tool_approval_middleware(tools, mode="ask")
+    assert ask._needs_approval("mcp_allow") is False
+    assert ask._needs_approval("mcp_force") is True
+    assert ask._needs_approval("mcp_ask") is True
+
+    auto = create_tool_approval_middleware(tools, mode="auto")
+    assert auto._needs_approval("mcp_allow") is False
+    assert auto._needs_approval("mcp_force") is True
+    assert auto._needs_approval("mcp_ask") is False

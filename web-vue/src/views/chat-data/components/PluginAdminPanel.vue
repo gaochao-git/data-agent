@@ -24,8 +24,23 @@ const mcpServerTagType = (server: PluginMcpServerInfo) =>
   server.admission && !server.admission.ok ? 'danger' : 'info'
 const mcpServerLabel = (server: PluginMcpServerInfo) =>
   `${server.id}(${server.transport})${server.admission && !server.admission.ok ? ' · 未通过准入' : ''}`
+// 每工具审批配置摘要：强制/免审/禁用分档计数，未配置的工具缺省"执行前审批"
+const mcpApprovalSummary = (server: PluginMcpServerInfo) => {
+  const entries = Object.entries(server.tool_approvals || {})
+  if (!entries.length) return '\n审批配置：全部默认执行前审批'
+  const counts = { force_ask: 0, allow: 0, deny: 0 } as Record<string, number>
+  entries.forEach(([, value]) => {
+    if (value in counts) counts[value] = (counts[value] ?? 0) + 1
+  })
+  const parts = [
+    counts.force_ask ? `${counts.force_ask} 强制审批` : '',
+    counts.allow ? `${counts.allow} 免审批` : '',
+    counts.deny ? `${counts.deny} 禁用` : ''
+  ].filter(Boolean)
+  return parts.length ? `\n审批配置：${parts.join(' / ')}，其余默认执行前审批` : '\n审批配置：全部默认执行前审批'
+}
 const mcpServerTitle = (server: PluginMcpServerInfo) => {
-  const base = `${server.id} · ${server.transport}${server.url ? ` · ${server.url}` : ''}`
+  const base = `${server.id} · ${server.transport}${server.url ? ` · ${server.url}` : ''}${mcpApprovalSummary(server)}`
   const admission = server.admission
   if (!admission) return base
   if (!admission.ok) return `${base}\n未通过准入：${admission.errors.join('；')}`

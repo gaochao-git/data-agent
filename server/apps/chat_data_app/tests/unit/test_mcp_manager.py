@@ -533,3 +533,58 @@ def test_load_mcp_server_configs_uses_plugin_entries_only(monkeypatch):
     assert by_id["search"].transport == "sse"
     assert any("sse 传输已废弃" in message for message in records)
     assert any("插件 MCP server id 重复" in message for message in records)
+
+
+def test_parse_mcp_server_config_tool_approvals_ok():
+    config = parse_mcp_server_config(
+        {
+            "id": "srv",
+            "transport": "stdio",
+            "command": "x",
+            "tool_approvals": {"echo": "allow", "greet": "force_ask"},
+        },
+        source="env",
+    )
+    assert config.tool_approvals == {"echo": "allow", "greet": "force_ask"}
+
+
+def test_parse_mcp_server_config_rejects_invalid_tool_approvals():
+    for approvals in ({"echo": "bad"}, {" ": "ask"}, "not-a-dict"):
+        with pytest.raises(MCPServerConfigError):
+            parse_mcp_server_config(
+                {"id": "ok", "transport": "stdio", "command": "x", "tool_approvals": approvals},
+                source="env",
+            )
+
+
+@pytest.mark.asyncio
+async def test_list_tools_async_filters_deny_and_keeps_approval():
+    def config_loader():
+        return [
+            MCPServerConfig(
+                server_id="srv",
+                transport="stdio",
+                command="x",
+                tool_approvals={"echo": "deny", "greet": "force_ask"},
+            ),
+        ]
+
+    manager, _opens = _make_manager(config_loader=config_loader)
+    tools = await manager.list_tools_async()
+    assert [tool.name for tool in tools] == ["greet"]
+    assert tools[0].approval == "force_ask"
+
+
+def test_dedupe_qualified_names_preserves_approval():
+    from apps.chat_data_app.agent.mcp.manager import _dedupe_qualified_names
+
+    infos = [
+        MCPToolInfo(
+            server_id="s", name="t", qualified_name="mcp_s_t", description="", input_schema={}, approval="allow"
+        ),
+        MCPToolInfo(
+            server_id="s", name="t", qualified_name="mcp_s_t", description="", input_schema={}, approval="force_ask"
+        ),
+    ]
+    out = _dedupe_qualified_names(infos)
+    assert [t.approval for t in out] == ["allow", "force_ask"]

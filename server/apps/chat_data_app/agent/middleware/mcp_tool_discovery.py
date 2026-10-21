@@ -77,18 +77,8 @@ def _discovered_from_history(messages: Any) -> list[str]:
 class MCPToolDiscoveryMiddleware(AgentMiddleware):
     """检索模式下按"始终挂载 + 已发现"过滤每轮模型请求的 MCP 工具。"""
 
-    def __init__(self, *, search_active: bool, searched_names: set[str] | None = None) -> None:
+    def __init__(self, *, search_active: bool) -> None:
         self.search_active = bool(search_active)
-        self._searched_names = searched_names
-
-    def before_agent(self, state: Any, runtime: Any) -> dict[str, Any] | None:
-        """每次 run 重新要求先搜索，避免上一轮搜索放行本轮的代理调用。"""
-        if self._searched_names is not None:
-            self._searched_names.clear()
-        return None
-
-    async def abefore_agent(self, state: Any, runtime: Any) -> dict[str, Any] | None:
-        return self.before_agent(state, runtime)
 
     # ---- model request 过滤 ----
 

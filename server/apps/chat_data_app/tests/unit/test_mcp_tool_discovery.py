@@ -184,19 +184,3 @@ def test_search_result_parser_handles_command_without_message_and_plain_result()
     middleware = MCPToolDiscoveryMiddleware(search_active=True)
     request = _FakeRequest(tool_call={"name": MCP_TOOL_SEARCH_TOOL_NAME})
     assert middleware.wrap_tool_call(request, lambda _req: "plain") == "plain"
-
-
-def test_before_agent_clears_searched_gate():
-    searched = {"mcp_a"}
-    middleware = MCPToolDiscoveryMiddleware(search_active=True, searched_names=searched)
-    middleware.before_agent({}, None)
-    assert searched == set()
-
-
-def test_direct_mcp_target_call_is_rejected_in_proxy_mode():
-    middleware = MCPToolDiscoveryMiddleware(search_active=True)
-    request = _FakeRequest(tool_call={"id": "c1", "name": "mcp_fault_ssh_exec"})
-    result = middleware.wrap_tool_call(request, lambda _req: "handler")
-    assert isinstance(result, ToolMessage)
-    assert result.status == "error"
-    assert "mcp_tool_call" in str(result.content)

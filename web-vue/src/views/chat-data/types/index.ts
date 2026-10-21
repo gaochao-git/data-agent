@@ -1005,6 +1005,8 @@ export interface PluginMcpServerInfo {
   transport: string
   url?: string
   command?: string
+  /** 原始工具名 → 审批档位；缺省 ask，deny 的工具不会挂载/被检索 */
+  tool_approvals?: Record<string, 'ask' | 'allow' | 'force_ask' | 'deny'>
   /** 服务端准入检查结论（未通过时管理页标红并展示原因） */
   admission?: PluginMcpServerAdmission
 }
