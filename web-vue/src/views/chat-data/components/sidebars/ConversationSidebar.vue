@@ -37,8 +37,11 @@ const getRunStatusLabel = (status: ConversationItem['run_status']): string => {
   return ''
 }
 
+// waiting_user 是唯一需要用户动手、且不会自己消失的状态，值得占掉右侧时间位给文字徽标；
+// 排队/运行/停止中都是瞬时态，只在标题左侧挂图标，避免每行都多一行字挤占标题
+const isPersistentRunStatus = (status: ConversationItem['run_status']): boolean => status === 'waiting_user'
+
 const getRunStatusClass = (status: ConversationItem['run_status']): string => {
-  if (status === 'waiting_user') return 'text-amber-500'
   if (status === 'cancelling') return 'text-slate-400'
   return 'text-blue-500'
 }
@@ -765,25 +768,33 @@ onUnmounted(() => {
                     <!-- 标题展示态 -->
                     <template v-else>
                       <span
-                        v-if="getRunStatusLabel(conv.run_status)"
+                        v-if="getRunStatusLabel(conv.run_status) && !isPersistentRunStatus(conv.run_status)"
                         :class="['flex shrink-0 items-center gap-1 text-[11px]', getRunStatusClass(conv.run_status)]"
                         :title="getRunStatusLabel(conv.run_status)"
                       >
-                        <!-- waiting_user 是唯一需要用户动手、且不会自己消失的状态，直接给文字； -->
-                        <!-- 运行/排队/停止中都是瞬时态，保留图标避免每行都挂一行字挤占标题 -->
-                        <template v-if="conv.run_status === 'waiting_user'">{{ getRunStatusLabel(conv.run_status) }}</template>
-                        <i v-else :class="conv.run_status === 'active' || conv.run_status === 'pending' ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-circle'" class="text-[9px]"></i>
+                        <i :class="conv.run_status === 'active' || conv.run_status === 'pending' ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-circle'" class="text-[9px]"></i>
                       </span>
                       <span class="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-sm leading-relaxed">{{ conv.title }}</span>
-                      <!-- 右侧固定角色区：时间在静止态始终显示，行内操作与宽度无关、永远保留—— -->
+                      <!-- 右侧固定角色区：静止态显示时间（或待确认徽标），行内操作与宽度无关、永远保留—— -->
                       <!-- 任意宽度：相对时间（“1分钟前”，约 40px，80px 角色区装得下）；≥380px：完整时间（19 字符）。 -->
+                      <!-- waiting_user 用「待确认」徽标顶掉时间位：这个状态不看时间、只看要不要动手， -->
+                      <!-- 且和瞬时态图标不同，必须一眼读到，所以放右侧而不是标题前面占标题宽度。 -->
                       <!-- 三枚操作（置顶 / 复制会话 ID / 改名）同属一个按钮束：hover 时整体淡入， -->
                       <!-- 任何宽度都可用，不按宽度档位隐藏，也不做单个按钮的档位隐藏。 -->
                       <!-- **宽度不变量**：角色区宽度恒定 ≥ 按钮束宽度（80px = 3×24 + 2×4）， -->
-                      <!-- 时间与按钮共用同一角色区、hover 互换，绝不溢出压标题。 -->
+                      <!-- 时间/徽标与按钮共用同一角色区、hover 互换，绝不溢出压标题。 -->
                       <!-- 置顶状态不常驻展示（分组视图靠「置顶」分组、平铺视图靠排序置前感知），hover 时钉按状态着色提示。 -->
                       <div data-testid="conversation-role-zone" class="conversation-role-zone relative h-6 w-[80px] shrink-0 overflow-hidden @min-[380px]:w-[132px]">
                         <span
+                          v-if="isPersistentRunStatus(conv.run_status)"
+                          data-testid="conversation-run-status"
+                          class="absolute inset-y-0 right-0 flex items-center transition-opacity duration-150 group-hover:opacity-0"
+                          :title="getRunStatusLabel(conv.run_status)"
+                        >
+                          <span class="max-w-full truncate rounded-full bg-amber-50 px-1.5 text-[10px] leading-5 text-amber-600">{{ getRunStatusLabel(conv.run_status) }}</span>
+                        </span>
+                        <span
+                          v-else
                           data-testid="conversation-time"
                           class="conversation-time-text absolute inset-y-0 right-0 flex max-w-full items-center truncate text-[10px] text-gray-400 transition-opacity duration-150 group-hover:opacity-0"
                           :title="conv.updated_at || conv.create_time"
