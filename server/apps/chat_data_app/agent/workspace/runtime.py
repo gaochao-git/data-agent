@@ -33,6 +33,7 @@ from utils.logger import get_logger
 from utils.skill_paths import SKILLS_VIRTUAL_ROOT, resolve_skill_snapshot_path, runtime_skill_visible_root
 from utils.storage_paths import CHAT_DATA_HOME, conversation_thread_dir
 from utils.tool_result_store import QUERY_RESULT_DIR_NAME, TOOL_OFFLOAD_DIR_NAME
+from utils.upload_storage_crypto import materialize_plaintext, original_upload_path
 
 from .artifact_registry import parse_output_artifact
 from .officecli_adapter import OFFICECLI_NO_AUTO_RESIDENT_ENV
@@ -463,6 +464,7 @@ def resolve_workspace_path(
     writable: bool = False,
     allow_managed_semantic_model_write: bool = False,
     allow_uploads_write: bool = False,
+    materialize_uploads: bool = True,
 ) -> Path:
     """解析模型可见路径并按解析后的真实路径实施目录边界。
 
@@ -507,6 +509,9 @@ def resolve_workspace_path(
             raise ValueError("不允许通过文件编辑工具修改系统结果目录")
         if is_managed_semantic_model_workspace_path(str(root), target) and not allow_managed_semantic_model_write:
             raise ValueError("/mnt/user-data/workspace/semantic/ 是本轮语义模型只读快照，不能修改")
+    elif logical_path.kind == "uploads" and materialize_uploads:
+        # 上传文件可能以应用层密文落盘；只有真正读取时才解密，列表/删除不触发。
+        target = materialize_plaintext(target)
 
     return target
 
@@ -533,6 +538,9 @@ def to_visible_path(workspace_root: str, path: Path) -> str:
     """把物理路径转为模型/前端可见路径（统一规范前缀 /mnt/user-data/）。"""
     root = Path(workspace_root).resolve()
     target = path.resolve()
+    original = original_upload_path(target)
+    if original is not None:
+        target = original
     try:
         relative = target.relative_to(root).as_posix()
     except ValueError:

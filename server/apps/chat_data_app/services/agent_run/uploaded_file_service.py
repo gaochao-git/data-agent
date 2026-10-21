@@ -12,6 +12,7 @@ from typing import Any
 from fastapi import UploadFile
 
 from utils.logger import get_logger
+from utils.upload_storage_crypto import MAGIC, encryption_enabled, new_stream_encryptor, read_plaintext_bytes
 
 from ...daos.uploaded_file_dao import UploadedFileDao
 from ..setting_service import get_upload_size_limit
@@ -99,12 +100,20 @@ class UploadedFileService:
         file_size = 0
         max_upload_size_mb, max_upload_size = await get_upload_size_limit()
         try:
+            encryptor = None
             with temporary_path.open("xb") as output:
+                if encryption_enabled():
+                    nonce, encryptor = new_stream_encryptor()
+                    output.write(MAGIC)
+                    output.write(nonce)
                 while chunk := await file.read(UPLOAD_CHUNK_SIZE):
                     file_size += len(chunk)
                     if file_size > max_upload_size:
                         raise ValueError(f"文件大小不能超过{max_upload_size_mb}MB")
-                    output.write(chunk)
+                    output.write(encryptor.update(chunk) if encryptor is not None else chunk)
+                if encryptor is not None:
+                    output.write(encryptor.finalize())
+                    output.write(encryptor.tag)
                 output.flush()
                 os.fsync(output.fileno())
             os.replace(temporary_path, full_path)
@@ -169,7 +178,7 @@ class UploadedFileService:
         created_date = await get_conversation_created_date(target_thread_id, user_id=user_id)
         uploads_root = resolve_uploads_root(user_id, target_thread_id, created_date=created_date)
         file_path = uploads_root / info["storage_dir"]
-        return await asyncio.to_thread(file_path.read_bytes) if file_path.exists() else None
+        return await asyncio.to_thread(read_plaintext_bytes, file_path) if file_path.exists() else None
 
     async def list_files_by_thread(self, thread_id: str, user_id: str = "system") -> list:
         rows = await self.dao.list_files_by_thread(thread_id, user_id=user_id)

@@ -11,6 +11,7 @@ import pytest
 from apps.chat_data_app.daos.uploaded_file_dao import UploadedFileDao
 from apps.chat_data_app.routers import uploaded_files as uploaded_files_routes
 from apps.chat_data_app.services.agent_run import uploaded_file_service as ufs
+from utils import upload_storage_crypto as crypto
 from utils.error_codes import ErrorCode
 
 
@@ -460,3 +461,21 @@ def test_router_list_info_delete_download(monkeypatch):
     monkeypatch.setattr(uploaded_files_routes, "get_file_info", missing_info)
     payload = response_payload(asyncio.run(uploaded_files_routes.get_file_content_api("f1", None)))
     assert payload["code"] == ErrorCode.CHATDATA_NOT_FOUND
+
+
+def test_upload_file_encrypted_roundtrip(uploads_root, monkeypatch):
+    import base64
+
+    from utils.crypto import encrypt_password
+
+    monkeypatch.setenv("ENCRYPT_KEY", "00" * 16)
+    monkeypatch.setenv("CHAT_DATA_UPLOAD_ENCRYPTION_KEY", encrypt_password(base64.b64encode(b"k" * 32).decode()))
+    crypto.clear_materialized_cache()
+    dao = FakeDao(belongs=True)
+    service = ufs.UploadedFileService(dao=dao)
+    result = asyncio.run(service.upload_file(FakeUpload("secret.txt", [b"hello", b" world"]), "t1", user_id="u1"))
+    stored = (uploads_root / result["storage_dir"]).read_bytes()
+    assert stored.startswith(crypto.MAGIC)
+    assert b"hello" not in stored
+    dao.rows[result["file_id"]] = make_row(storage_dir=result["storage_dir"], original_filename="secret.txt")
+    assert asyncio.run(service.get_file_content(result["file_id"], user_id="u1", thread_id="t1")) == b"hello world"

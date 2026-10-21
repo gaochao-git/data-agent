@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from utils.logger import get_logger
 from utils.tool_result_store import QUERY_RESULT_DIR_NAME, TOOL_OFFLOAD_DIR_NAME
+from utils.upload_storage_crypto import read_plaintext_bytes
 
 from .workspace_sandbox_api import (
     SandboxExecutionSession,
@@ -173,7 +174,7 @@ async def _upload_application_tree(
     files = _iter_application_files(application_root)
     total_bytes = 0
     for relative, path in files:
-        data = await asyncio.to_thread(path.read_bytes)
+        data = await asyncio.to_thread(read_plaintext_bytes, path)
         sandbox_path = f"{sandbox_root}/{relative}"
         current_mode = (
             _SANDBOX_READONLY_FILE_MODE
@@ -306,7 +307,7 @@ async def _sync_sandbox_uploads(session: SandboxExecutionSession) -> None:
         await _write_sandbox_file(
             sandbox=session.sandbox,
             path=f"{sandbox_uploads_dir()}/{relative.removeprefix('uploads/')}",
-            data=await asyncio.to_thread(path.read_bytes),
+            data=await asyncio.to_thread(read_plaintext_bytes, path),
             mode=_SANDBOX_READONLY_FILE_MODE,
         )
 
