@@ -284,40 +284,42 @@ const skipCurrent = () => {
       </template>
       <!-- 单问题（含单工具审批）：保持原单选卡与分页交互 -->
       <template v-else>
-        <div class="min-h-[220px]">
+        <div>
           <div v-if="currentQuestion.header" class="mb-2 text-xs font-medium text-slate-500">{{ currentQuestion.header }}</div>
+          <!-- 单工具审批：工具名与参数摘要同一行，悬浮显示完整参数 JSON；减少单工具卡高度 -->
           <div class="flex flex-wrap items-baseline gap-x-2 gap-y-1">
             <span class="text-base font-semibold text-slate-900">{{ questionHeading }}</span>
+            <span
+              v-if="singleApprovalItem && argsEntries(singleApprovalItem).length"
+              class="approval-args-line min-w-0 truncate font-mono text-[11px] text-slate-400"
+              :title="argsJson(singleApprovalItem)"
+            >{{ argsLine(singleApprovalItem) }}</span>
             <span v-if="singleApprovalItem?.intent" class="text-xs font-normal text-slate-500">{{ singleApprovalItem.intent }}</span>
           </div>
-          <!-- 单工具审批：展示参数摘要（路径/命令等），不把原始 JSON 丢给用户 -->
-          <div v-if="singleApprovalItem" class="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
-            <div v-if="argsEntries(singleApprovalItem).length" class="min-w-0">
-              <div class="approval-args-line truncate whitespace-nowrap font-mono text-[11px] text-slate-500" :title="argsJson(singleApprovalItem)">
-                {{ argsLine(singleApprovalItem) }}
-              </div>
-            </div>
-          </div>
-          <div v-if="currentQuestion.options.length" class="mt-5 max-h-[240px] space-y-2 overflow-y-auto pr-1">
+          <div v-if="currentQuestion.options.length" class="mt-3 max-h-[240px] space-y-1.5 overflow-y-auto pr-1">
             <button
               v-for="option in currentQuestion.options"
               :key="option.label"
               type="button"
-              class="flex w-full items-start gap-2 rounded-md border px-3 py-2 text-left transition-colors"
+              class="flex w-full items-center gap-2 rounded-md border px-3 py-1.5 text-left transition-colors"
               :class="currentSelected.includes(option.label) ? 'border-blue-500 bg-blue-50' : 'border-slate-200 hover:border-blue-300'"
               :disabled="submitting"
               @click="toggleOption(currentQuestion.id, option.label, currentQuestion.multi_select)"
             >
               <i
-                class="mt-0.5 text-sm"
+                class="text-sm"
                 :class="[
                   currentQuestion.multi_select ? 'fa-regular fa-square-check' : 'fa-regular fa-circle-dot',
                   currentSelected.includes(option.label) ? 'text-blue-600' : 'text-slate-300',
                 ]"
               ></i>
-              <span class="min-w-0">
-                <span class="block text-sm text-slate-700">{{ displayApprovalLabel(option.label) }}</span>
-                <span v-if="option.description" class="mt-0.5 block text-xs text-slate-500">{{ option.description }}</span>
+              <span class="flex min-w-0 flex-1 items-baseline gap-2">
+                <span class="shrink-0 text-sm text-slate-700">{{ displayApprovalLabel(option.label) }}</span>
+                <span
+                  v-if="option.description"
+                  class="min-w-0 truncate text-xs text-slate-400"
+                  :title="option.description"
+                >{{ option.description }}</span>
               </span>
             </button>
           </div>

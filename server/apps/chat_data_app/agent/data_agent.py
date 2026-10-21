@@ -460,30 +460,21 @@ def _system_prompt_with_mcp_tools(
 
 
 def _mcp_tool_reminder(mcp_tools: list) -> str:
-    """检索模式下按 server 汇总 MCP 能力；不列目标工具名，强制先搜索 schema。"""
-    groups: dict[str, list[str]] = {}
-    for tool in mcp_tools:
-        name = str(getattr(tool, "name", "") or "")
-        metadata = getattr(tool, "metadata", None)
-        metadata = metadata if isinstance(metadata, dict) else {}
-        server_id = str(metadata.get("mcp_server_id") or "MCP").strip() or "MCP"
-        label = str(metadata.get("display_name") or metadata.get("mcp_tool_name") or name).strip()
-        groups.setdefault(server_id, []).append(label)
-    if not groups:
+    """检索模式下把 MCP 工具 canonical 名注入 system prompt；不列 schema。"""
+    names = sorted({str(getattr(tool, "name", "") or "") for tool in mcp_tools})
+    names = [name for name in names if name]
+    if not names:
         return ""
-    lines: list[str] = []
-    for server_id, labels in sorted(groups.items()):
-        examples = "、".join(sorted(set(labels))[:3])
-        lines.append(f"- {server_id}：{len(labels)} 个工具，如 {examples}")
-    listed = "\n".join(lines[:10])
-    if len(groups) > 10:
-        listed += f"\n- …其余 {len(groups) - 10} 个 MCP server"
+    listed = "\n".join(f"- {name}" for name in names[:50])
+    if len(names) > 50:
+        listed += f"\n- …其余 {len(names) - 50} 个"
     return (
         "<system-reminder>\n"
-        "当前启用 MCP 插件能力（schema 未加载）：\n"
+        "以下 MCP 工具可用（当前未加载 schema）：\n"
         f"{listed}\n"
-        "需要具体工具时，必须先用 mcp_tool_search 搜索（select:工具名 可精确加载），"
-        "拿到 input_schema 后通过 mcp_tool_call({name,input}) 调用；不要直接调用目标工具名。\n"
+        "先调用 mcp_tool_search，query 传完整工具名（多个用 | 分隔）获取 input_schema；"
+        "不知道工具名时再用 search 参数（多个关键词也用 | 分隔）做关键词模糊检索。"
+        "拿到 input_schema 后再通过 mcp_tool_call({name,input}) 调用；不要直接调用目标工具名。\n"
         "</system-reminder>"
     )
 

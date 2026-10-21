@@ -266,30 +266,57 @@ class MCPToolSearchService:
         self._catalog.sync(tools_info)
         return self._catalog
 
-    @staticmethod
-    def _normalize_server_id(server_id: str | None) -> str | None:
-        normalized = str(server_id or "").strip()
-        if normalized.startswith("mcp_"):
-            normalized = normalized[4:]
-        return normalized or None
+    async def lookup_text(
+        self,
+        names: list[str],
+        *,
+        excluded_names: frozenset[str] | set[str] = frozenset(),
+    ) -> str:
+        """按完整工具名直接取 schema；query 默认走这里，不做模糊匹配。"""
+        catalog = await self.ensure_catalog()
+        blocked = self._excluded_names | frozenset(excluded_names)
+        found: list[ToolCatalogEntry] = []
+        missing: list[str] = []
+        for raw_name in names:
+            name = raw_name.strip()
+            if not name:
+                continue
+            entry = catalog.entry(name)
+            if entry is None or entry.qualified_name in blocked:
+                missing.append(name)
+            elif entry not in found:
+                found.append(entry)
+        if not found:
+            return json.dumps(
+                {
+                    "count": 0,
+                    "missing": missing,
+                    "guidance": "未找到完整工具名；可改用 search 参数做关键词模糊检索。",
+                },
+                ensure_ascii=False,
+            )
+        payload: dict[str, Any] = {
+            "count": len(found),
+            "results": [entry.summary() for entry in found],
+            "guidance": (
+                "按 results[].input_schema 构造 input，调用 mcp_tool_call({name,input})；不要直接调用目标工具名。"
+            ),
+        }
+        if missing:
+            payload["missing"] = missing
+        return json.dumps(payload, ensure_ascii=False)
 
     async def search_text(
         self,
         query: str,
         *,
-        server_id: str | None = None,
         limit: int = _SEARCH_RESULT_LIMIT_DEFAULT,
         excluded_names: frozenset[str] | set[str] = frozenset(),
     ) -> str:
-        """执行检索并返回模型可读的 JSON 结果（同时是发现中间件的解析契约）。"""
+        """关键词模糊检索，返回模型可读 JSON；query 为空返回空结果。"""
         catalog = await self.ensure_catalog()
         blocked = self._excluded_names | frozenset(excluded_names)
         candidates = catalog.search(query, limit=limit, excluded_names=blocked)
-        normalized_server_id = self._normalize_server_id(server_id)
-        if normalized_server_id:
-            candidates = [
-                entry for entry in candidates if entry.server_id in {normalized_server_id, str(server_id or "").strip()}
-            ]
         if candidates:
             return json.dumps(
                 {
@@ -308,44 +335,52 @@ class MCPToolSearchService:
                 "count": 0,
                 "query": query,
                 "servers": catalog.describe_servers(),
-                "guidance": (
-                    "没有命中工具：server_id 使用服务器清单中的值（不带 mcp_ 前缀），"
-                    "query 可直接传完整工具名或 select:工具名；仍无结果再换功能词检索。"
-                ),
+                "guidance": "没有命中工具：换关键词再用 search 检索，或直接传完整工具名到 query。",
             },
             ensure_ascii=False,
         )
 
 
 def create_mcp_tool_search_tool(service: MCPToolSearchService) -> StructuredTool:
-    """构建 ``mcp_tool_search`` 内置工具（仅检索模式装配）。"""
+    """构建 ``mcp_tool_search``：query 按完整工具名取 schema，search 做关键词模糊检索。"""
 
     async def _search(
-        query: str,
-        server_id: str | None = None,
+        query: str = "",
+        search: str = "",
         limit: int = _SEARCH_RESULT_LIMIT_DEFAULT,
         intent: str = "",
     ) -> str:
-        return await service.search_text(query, server_id=server_id, limit=limit)
+        if query.strip():
+            raw = query.strip()
+            if raw.lower().startswith("select:"):
+                raw = raw.split(":", 1)[1]
+            return await service.lookup_text([name.strip() for name in raw.split("|") if name.strip()])
+        if search.strip():
+            keywords = " ".join(term.strip() for term in search.split("|") if term.strip())
+            return await service.search_text(keywords, limit=limit)
+        return await service.lookup_text([])
 
     args_model = create_model(
         f"{MCP_TOOL_SEARCH_TOOL_NAME}_args",
         query=(
             str,
             Field(
-                description=(
-                    "检索关键词：功能名/操作对象；已知完整工具名可直接传，或使用 select:工具名,工具名 精确加载。"
-                )
+                default="",
+                description="完整工具名，直接返回对应 input_schema；多个工具名用 | 分隔。",
             ),
         ),
-        server_id=(
-            str | None,
-            Field(default=None, description="可选。server_id 见服务器清单，不带 mcp_ 前缀，如 fault-ssh。"),
+        search=(
+            str,
+            Field(
+                default="",
+                description="关键词模糊检索（仅在不知道完整工具名时使用）；多个关键词用 | 分隔，与 query 二选一。",
+            ),
         ),
         limit=(
             int,
             Field(
-                default=_SEARCH_RESULT_LIMIT_DEFAULT, description=f"最多返回条数，默认 {_SEARCH_RESULT_LIMIT_DEFAULT}。"
+                default=_SEARCH_RESULT_LIMIT_DEFAULT,
+                description=f"search 模糊检索最多返回条数，默认 {_SEARCH_RESULT_LIMIT_DEFAULT}。",
             ),
         ),
         intent=(
@@ -356,9 +391,9 @@ def create_mcp_tool_search_tool(service: MCPToolSearchService) -> StructuredTool
     return StructuredTool(
         name=MCP_TOOL_SEARCH_TOOL_NAME,
         description=(
-            "按需检索 MCP 插件工具目录，返回命中工具名、说明与 input_schema。"
-            "再用 mcp_tool_call({name,input}) 执行目标工具；"
-            "已知工具名时可用 select:工具名,工具名 精确加载。"
+            "query 传完整工具名（多个用 | 分隔）→ 返回对应 input_schema；"
+            "不知道工具名时用 search 传关键词模糊检索。"
+            "拿到 schema 后再通过 mcp_tool_call({name,input}) 执行。"
         ),
         args_schema=args_model,
         coroutine=_search,
@@ -374,11 +409,13 @@ def create_mcp_tool_call_tool(tools_by_name: dict[str, Any]) -> Any:
     class MCPToolCallArgs(BaseModel):
         name: str = Field(description="mcp_tool_search 返回的目标工具完整名称")
         input: dict[str, Any] = Field(default_factory=dict, description="目标工具参数对象")
+        intent: str = Field(default="", description="一句中文说明本次调用目的，仅供审批展示")
 
     @create_tool(MCP_TOOL_CALL_TOOL_NAME, args_schema=MCPToolCallArgs)
     async def _call(
         name: str,
         input: dict[str, Any],
+        intent: str = "",
         state: Annotated[dict | None, InjectedState] = None,
     ) -> str:
         """执行 mcp_tool_search 返回的 MCP 工具。先用搜索获取工具名和 input_schema，再传入 name 与 input。"""

@@ -23,7 +23,6 @@ from pydantic import BaseModel  # noqa: E402
 
 from apps.chat_data_app.agent.agent_state import merge_discovered_tool_names  # noqa: E402
 from apps.chat_data_app.agent.mcp.catalog import (  # noqa: E402
-    MCP_TOOL_CALL_TOOL_NAME,
     MCP_TOOL_SEARCH_TOOL_NAME,
     MCPCatalog,
     MCPToolSearchService,
@@ -207,22 +206,27 @@ async def test_service_search_text_no_hit_lists_servers():
 
 
 @pytest.mark.asyncio
-async def test_service_search_text_server_id_filter():
+async def test_service_lookup_text_returns_exact_schema():
     service = MCPToolSearchService(FakeManager([SSH_OVERVIEW(), LOG_GREP()]))
-    payload = json.loads(await service.search_text("状态 检索", server_id="fault"))
-    assert all(item["server_id"] == "fault" for item in payload["results"])
+    payload = json.loads(await service.lookup_text(["mcp_ssh_system_overview", "mcp_missing_tool"]))
+    assert payload["count"] == 1
+    assert payload["results"][0]["name"] == "mcp_ssh_system_overview"
+    assert payload["results"][0]["input_schema"]["properties"]["ip"]["type"] == "string"
+    assert payload["missing"] == ["mcp_missing_tool"]
 
 
 @pytest.mark.asyncio
 async def test_mcp_tool_search_tool_invocation():
-    service = MCPToolSearchService(FakeManager([SSH_OVERVIEW()]))
+    service = MCPToolSearchService(FakeManager([SSH_OVERVIEW(), LOG_GREP()]))
     tool = create_mcp_tool_search_tool(service)
     assert tool.name == MCP_TOOL_SEARCH_TOOL_NAME
     schema = tool.args_schema.model_json_schema()
-    assert set(schema["properties"]) == {"query", "server_id", "limit", "intent"}
-    result = await tool.coroutine(query="CPU 状态", intent="检索系统状态工具")
+    assert set(schema["properties"]) == {"query", "search", "limit", "intent"}
+    result = await tool.coroutine(query="mcp_ssh_system_overview|mcp_fault_log_grep", intent="加载两个工具 schema")
     payload = json.loads(result)
-    assert payload["count"] == 1
+    assert payload["count"] == 2
+    fuzzy = json.loads(await tool.coroutine(search="CPU|状态", intent="检索系统状态工具"))
+    assert fuzzy["count"] == 1
 
 
 def test_warn_long_mcp_descriptions_logs_warning(monkeypatch):
@@ -426,11 +430,8 @@ def test_mcp_tool_reminder_lists_names_without_always_mounted():
             _Tool("mcp_fault-ssh_system_overview", "系统概览"),
         ]
     )
-    assert "fault-ssh" in reminder
-    assert "2 个工具" in reminder
-    assert "磁盘用量" in reminder
-    assert "mcp_fault-ssh_system_disk_usage" not in reminder
-    assert "mcp_fault-ssh_system_overview" not in reminder
+    assert "mcp_fault-ssh_system_disk_usage" in reminder
+    assert "mcp_fault-ssh_system_overview" in reminder
     assert "<system-reminder>" in reminder
 
 
@@ -442,69 +443,7 @@ def test_catalog_search_accepts_exact_qualified_name():
 
 
 @pytest.mark.asyncio
-async def test_service_search_normalizes_mcp_prefixed_server_id():
-    service = MCPToolSearchService(FakeManager([_info("fault-ssh", "system_disk_usage", "查看主机磁盘容量使用率")]))
-    payload = json.loads(
-        await service.search_text(
-            "mcp_fault-ssh_system_snapshot",
-            server_id="mcp_fault-ssh",
-        )
-    )
-    assert payload["count"] == 1
-    assert payload["results"][0]["name"] == "mcp_fault-ssh_system_disk_usage"
-
-
-@pytest.mark.asyncio
-async def test_mcp_tool_call_proxy_invokes_target_and_rejects_unknown():
-    async def _target(query: str) -> str:
-        return f"disk={query}"
-
-    target = StructuredTool(
-        name="mcp_fault-ssh_system_disk_usage",
-        description="磁盘用量",
-        args_schema=_Args,
-        coroutine=_target,
-    )
-    proxy = create_mcp_tool_call_tool({target.name: target})
-    result = await proxy.coroutine(
-        name=target.name,
-        input={"query": "/home"},
-        state={"discovered_tool_names": [target.name]},
-    )
-    assert "disk=" in result
-
-    with pytest.raises(ToolException, match="未找到"):
-        await proxy.coroutine(name="mcp_missing_tool", input={})
-
-
-@pytest.mark.asyncio
-async def test_mcp_tool_call_proxy_handles_errors_control_and_non_string():
-    class _Raises:
-        async def ainvoke(self, _input):
-            raise RuntimeError("boom")
-
-    class _DictResult:
-        async def ainvoke(self, _input):
-            return {"ok": 1}
-
-    proxy = create_mcp_tool_call_tool(
-        {
-            "mcp_call_raises": _Raises(),
-            "mcp_call_dict": _DictResult(),
-            MCP_TOOL_CALL_TOOL_NAME: _DictResult(),
-        }
-    )
-    state = {"discovered_tool_names": ["mcp_call_raises", "mcp_call_dict"]}
-    with pytest.raises(ToolException, match="执行失败"):
-        await proxy.coroutine(name="mcp_call_raises", input={}, state=state)
-    with pytest.raises(ToolException, match="控制工具"):
-        await proxy.coroutine(name=MCP_TOOL_CALL_TOOL_NAME, input={}, state=state)
-    non_string = await proxy.coroutine(name="mcp_call_dict", input={}, state=state)
-    assert '"ok": 1' in non_string
-
-
-@pytest.mark.asyncio
-async def test_proxy_requires_target_to_be_searched_first():
+async def test_mcp_tool_call_proxy_requires_searched_state_and_propagates_errors():
     async def _target(query: str) -> str:
         return f"ok={query}"
 
@@ -515,7 +454,20 @@ async def test_proxy_requires_target_to_be_searched_first():
         coroutine=_target,
     )
     proxy = create_mcp_tool_call_tool({target.name: target})
+
     with pytest.raises(ToolException, match="尚未搜索"):
         await proxy.coroutine(name=target.name, input={"query": "/"}, state={})
-    state = {"discovered_tool_names": [target.name]}
-    assert "ok=/" in await proxy.coroutine(name=target.name, input={"query": "/"}, state=state)
+
+    result = await proxy.coroutine(
+        name=target.name,
+        input={"query": "/"},
+        state={"discovered_tool_names": [target.name]},
+    )
+    assert result == "ok=/"
+
+
+@pytest.mark.asyncio
+async def test_mcp_tool_call_proxy_rejects_unknown_and_control_targets():
+    proxy = create_mcp_tool_call_tool({})
+    with pytest.raises(ToolException, match="未找到"):
+        await proxy.coroutine(name="mcp_missing_tool", input={})

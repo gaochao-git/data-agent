@@ -440,5 +440,5 @@ def test_create_data_agent_registers_mcp_search_and_proxy(monkeypatch, tmp_path)
     assert "mcp_tool_search" in tool_names
     assert "mcp_tool_call" in tool_names
     assert "mcp_demo_tool" in tool_names
-    assert "MCP" in captured["system_prompt"]
+    assert "mcp_demo_tool" in captured["system_prompt"]
     assert agent.name == "agent"

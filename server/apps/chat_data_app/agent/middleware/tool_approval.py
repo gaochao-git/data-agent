@@ -335,8 +335,11 @@ def _approval_target(tool_name: str, tool_call: Any) -> tuple[str, Any]:
     }:
         return tool_name, tool_call
     effective = dict(tool_call)
-    target_input = args.get("input")
-    effective["args"] = target_input if isinstance(target_input, dict) else {}
+    target_input = dict(args["input"]) if isinstance(args.get("input"), dict) else {}
+    intent = str(args.get("intent") or "").strip()
+    if intent:
+        target_input["intent"] = intent
+    effective["args"] = target_input
     return target, effective
 
 
