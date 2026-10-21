@@ -68,7 +68,7 @@ class MCPToolInfo:
     description: str
     input_schema: dict[str, Any]
     label: str = ""  # 用户可见友好名（plugin.json tool_labels 配置，缺省回退原始工具名）
-    approval: str = "ask"  # 审批档位（plugin.json tool_approvals：ask/allow/force_ask/deny）
+    approval: str = "ask"  # 审批档位（plugin.json tool_approvals：ask/allow）
 
 
 @asynccontextmanager
@@ -280,12 +280,10 @@ class MCPToolManager:
             logger.warning("MCP server 准入告警: id=%s %s: %s", config.server_id, issue.code, issue.message)
         if not report.ok:
             raise MCPAdmissionError(f"MCP server {config.server_id} 未通过准入: {report.summary()}")
-        # tool_approvals=deny 的工具在枚举层剔除：不挂载、不进检索目录，对模型完全不可见。
-        # 放在准入校验之后：准入描述 server 本身的健康度，deny 是我方策略，两者不混。
         kept = [info for info in tools if info.approval != "deny"]
         if len(kept) != len(tools):
-            logger.info(
-                "[mcp_tools] 剔除 deny 工具: id=%s tools=%s",
+            logger.warning(
+                "[mcp_tools] 旧配置 deny 工具不挂载: id=%s tools=%s",
                 config.server_id,
                 [info.name for info in tools if info.approval == "deny"],
             )
@@ -414,7 +412,7 @@ def build_langchain_tools(
                 coroutine=_acall,
                 # 展示名与来源随工具对象透传：审批卡据此展示 "MCP server / 工具"，
                 # 而不是把 mcp_<server>_<tool> 原始名直接抛给用户；approval 供
-                # 审批中间件区分 allow/force_ask 档位。
+                # 审批中间件区分 ask/allow 档位。
                 metadata={
                     "origin": "mcp",
                     "mcp_server_id": info.server_id,

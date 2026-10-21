@@ -144,34 +144,6 @@ CHAT_DATA_DEFAULT_GENERAL_PURPOSE_SUBAGENT_ENABLED = read_bool_env(
 # 检索用法的单一维护点是「数据分析」技能（SKILL.md → references/analysis/query.md），错误提示统一
 # 指向该技能，不随工具开关切换文案，也不在此重复检索步骤。
 SEMANTIC_MODEL_DISCOVERY_HINT = f"按 {DATA_ANALYZING_SKILL} 技能检索并确认语义模型"
-# 审批模式（部署默认，可被配置表 CHAT_DATA_DEFAULT_APPROVAL_MODE 覆盖）：
-# ask=按需审批（注册表标记的工具执行前中断询问）；auto=自动审批（直接执行）。
-# 注：workspace_backend / bash_enabled 是**部署能力**，只由 env/部署配置决定，不再接受前端动态传参。
-DEFAULT_APPROVAL_MODE = "ask"
-_APPROVAL_MODES = ("ask", "auto")
-
-
-def normalize_approval_mode(value: object, *, fallback: str = DEFAULT_APPROVAL_MODE) -> str:
-    """归一化审批模式；非法值回落 fallback（默认 ask）。"""
-    raw = str(value or "").strip().lower()
-    return raw if raw in _APPROVAL_MODES else fallback
-
-
-_raw_approval_mode = normalize_approval_mode(os.getenv("CHAT_DATA_DEFAULT_APPROVAL_MODE"), fallback="ask")
-CHAT_DATA_DEFAULT_APPROVAL_MODE = cast('Literal["ask", "auto"]', _raw_approval_mode)
-
-
-async def get_default_approval_mode() -> str:
-    """读取系统默认审批模式：配置表 > env > 代码默认（运行时可改，无需重启）。"""
-    from .setting_service import get_runtime_setting
-
-    try:
-        value = await get_runtime_setting("CHAT_DATA_DEFAULT_APPROVAL_MODE", CHAT_DATA_DEFAULT_APPROVAL_MODE)
-    except Exception:  # noqa: BLE001 配置表不可用（启动早期/单测无库）回落 env，不阻断 /config
-        logger.warning("读取审批模式配置失败，回落 env 默认", exc_info=True)
-        return CHAT_DATA_DEFAULT_APPROVAL_MODE
-    return normalize_approval_mode(value, fallback=CHAT_DATA_DEFAULT_APPROVAL_MODE)
-
 
 if CHAT_DATA_DEFAULT_BASH_ENABLED and CHAT_DATA_DEFAULT_WORKSPACE_BACKEND == "local":
     logger.warning(
@@ -282,7 +254,6 @@ async def get_chat_data_runtime_config() -> dict:
     return {
         "models": model_options["models"],
         # 权限选择（前端唯一常驻项）：默认值来自配置表（管理页「运行配置」可改）
-        "approval_mode": await get_default_approval_mode(),
         "default_row_limit": await get_runtime_setting("CHATDATA_ROW_LIMIT"),
         "query_cache_enabled": await get_runtime_setting("CHAT_DATA_QUERY_CACHE_ENABLED"),
         "context_window": get_context_window(default_model),

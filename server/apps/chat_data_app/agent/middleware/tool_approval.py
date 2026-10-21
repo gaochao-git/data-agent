@@ -1,32 +1,29 @@
-"""按需审批中间件：注册表标记 / MCP 动态工具在执行前中断询问用户。
+"""工具审批中间件：注册表标记 / MCP 动态工具在执行前中断询问用户。
 
-设计要点（对应需求「按需审批 / 自动审批」两档 + 每工具 tool_approvals 四档）：
+设计要点（B 端固定策略：每工具 ``ask/allow``，无全局审批模式）：
 
-- ``ask`` 运行档装配中间件（注册表标记 + MCP 全员审批）；``auto`` 仅当装配
-  工具存在 ``tool_approvals=force_ask`` 时按 auto 模式装配（只审 forced 集）；
+- B 端固定策略：审批中间件在交互会话始终装配；无人值守不装配且 ask 工具
+  在装配层 fail-closed 剔除；
 - 需要审批的工具：内置注册表 ``ToolSpec.approval_required``（当前：文件删除/移动）
   + MCP 动态工具（不在注册表、第三方默认严格，按 ``mcp_`` 前缀统一 ask；
   ``mcp_tool_search`` 只读检索除外）；
 - 每工具审批档位（``plugin.json`` 的 ``mcp_servers[].tool_approvals``，按工具
-  metadata ``approval`` 透传到本中间件）：``allow`` 在 ask 档免审批；
-  ``force_ask`` 覆盖运行档位强制审批（auto 档也中断）；``deny`` 在枚举层
-  剔除（不挂载不检索，不进本中间件）；缺省 ``ask`` 与现状一致；
+  metadata ``approval`` 透传到本中间件）：``allow`` 免审批；缺省 ``ask``。
+  不使用 ``deny/force_ask/auto``；不需要的工具在装配层不挂载；
 - **一轮模型响应内的审批工具调用批量收集、单次中断**（``after_model`` 钩子）：
   并行工具调用不会产生多个 interrupt，也就不会只展示第一个、卡住其余；
 - 复用既有 LangGraph interrupt + pending-question/answer 通道：审批载荷是
-  question 形状（单工具：允许 / 本会话内始终允许 / 拒绝；多工具：每个操作一个
-  question，逐条允许/本会话内始终允许/拒绝），前端无需新增审批组件即可复用询问卡片；
-- "本会话内始终允许"按**工具**粒度写入会话 checkpoint（``approval_grants``），
-  后续同类调用直接放行；会话结束/新建会话自然失效；
-- 无人值守运行（定时任务/评测）由调用方强制 ``auto`` 且不装配本中间件——
-  force_ask 工具在装配层被过滤（不悬挂）；若未来被错误装配，审批通道不可用/
-  取消时一律**拒绝**（fail-closed），而不是放行。
+  question 形状，单工具/多工具都只提供「允许 / 拒绝」；
+- 用户只能对当前调用选择允许/拒绝；不写入本轮/本会话持久授权；
+- 无人值守运行（定时任务/评测）不装配本中间件，ask 工具在装配层
+  fail-closed 剔除（不悬挂）；审批通道不可用/取消时一律**拒绝**，而不是放行。
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import Awaitable, Callable, Iterable, Sequence
+import time
+from collections.abc import Awaitable, Callable
 from typing import Any
 from uuid import uuid4
 
@@ -62,7 +59,7 @@ _ARGS_PREVIEW_MAX_CHARS = 500
 
 
 class ToolApprovalMiddleware(AgentMiddleware):
-    """按需审批：``after_model`` 批量中断 + ``wrap_tool_call`` 按决策放行/拒绝。"""
+    """工具审批：``after_model`` 批量中断 + ``wrap_tool_call`` 按决策放行/拒绝。"""
 
     def __init__(
         self,
@@ -70,37 +67,32 @@ class ToolApprovalMiddleware(AgentMiddleware):
         run_id: str | None = None,
         *,
         allowed_tools: frozenset[str] | set[str] = frozenset(),
-        forced_tools: frozenset[str] | set[str] = frozenset(),
-        mode: str = "ask",
     ) -> None:
         super().__init__()
         # 工具名 → 用户可见名（MCP 的 display_name；内置工具用原始名）
         self._tool_labels = dict(tool_labels or {})
-        # 当前 run：用于"本轮内始终允许"的作用域隔离（换 run 自动失效）
+        # 当前 run 标识（保留给调用方，审批决策不跨 run 复用）
         self._run_id = str(run_id or "")
-        # tool_approvals=allow 的工具：ask 运行档下免审批直接执行
+        # 每工具 allow 策略：仅该工具免审批；未知 MCP/注册表标记一律 ask。
         self._allowed_tools = frozenset(allowed_tools)
-        # tool_approvals=force_ask 的工具：auto 运行档下仍强制审批（覆盖运行开关）
-        self._forced_tools = frozenset(forced_tools)
-        # "ask"：注册表标记 + MCP 全员审批（allow 集豁免）；"auto"：仅 forced 集审批
-        self._mode = mode if mode in ("ask", "auto") else "ask"
 
     def _needs_approval(self, tool_name: str) -> bool:
-        """实例谓词：结合装配档位与每工具 tool_approvals 判定是否中断审批。"""
-        if self._mode == "auto":
-            return tool_name in self._forced_tools
-        return requires_approval(tool_name) and tool_name not in self._allowed_tools
+        """固定工具策略：allow/未挂载 MCP 工具直行；其余需审批工具一律中断。"""
+        if tool_name in self._allowed_tools:
+            return False
+        # 直连幻觉 MCP 名（不在本次装配工具表里）不弹审批：先让框架返回工具不存在，
+        # 避免用户白批一次；代理到不存在目标同理。
+        if tool_name.startswith(_MCP_TOOL_PREFIX) and tool_name not in self._tool_labels:
+            return False
+        return requires_approval(tool_name)
 
     # ---- after_model：批量收集本轮到待审批调用，仅中断一次 ----
 
     async def aafter_model(self, state: Any, runtime: Any) -> dict[str, Any] | None:
         calls = self._pending_calls(state)
         if not calls:
-            # 本轮无待审批调用：清空上一轮决策；保留当前 run 的本轮许可（换 run 才淘汰）
-            return {
-                "approval_decisions": {},
-                **_run_grant_update(state, self._run_id, _run_grant_keys(state, self._run_id)),
-            }
+            # 本轮无待审批调用：清空上一轮决策。
+            return {"approval_decisions": {}}
         payload = build_batch_approval_payload(
             [
                 {
@@ -121,54 +113,30 @@ class ToolApprovalMiddleware(AgentMiddleware):
             logger.warning(
                 "工具审批通道异常，按拒绝处理: tools=%s", [call["tool_name"] for call in calls], exc_info=True
             )
-            return {
-                "approval_decisions": {call["call_id"]: "deny" for call in calls},
-                **_run_grant_update(state, self._run_id, _run_grant_keys(state, self._run_id)),
-            }
-        existing_run_grants = _run_grant_keys(state, self._run_id)
-        existing_conversation_grants = _string_list(state, "approval_grants")
+            return {"approval_decisions": {call["call_id"]: "deny" for call in calls}}
         if len(calls) == 1:
             decision = _resolve_decision(answer)
             call = calls[0]
             update: dict[str, Any] = {
                 "approval_decisions": {call["call_id"]: ("allow" if decision != "deny" else "deny")}
             }
-            if decision == "always":
-                update["approval_grants"] = _merge_keys(existing_conversation_grants, [call["grant_key"]])
-                existing_run_grants = _merge_keys(existing_run_grants, [])
-            elif decision == "run_always":
-                existing_run_grants = _merge_keys(existing_run_grants, [call["grant_key"]])
-            update.update(_run_grant_update(state, self._run_id, existing_run_grants))
+            # B 端策略：只记录本次允许/拒绝，不产生任何持久授权。
             return update
-        decisions, conversation_grants, run_grants = _resolve_batch_answers(answer, calls)
-        batch_update: dict[str, Any] = {"approval_decisions": decisions}
-        if conversation_grants:
-            batch_update["approval_grants"] = _merge_keys(existing_conversation_grants, conversation_grants)
-        batch_update.update(_run_grant_update(state, self._run_id, _merge_keys(existing_run_grants, run_grants)))
-        return batch_update
+        return {"approval_decisions": _resolve_batch_answers(answer, calls)}
 
     def _pending_calls(self, state: Any) -> list[dict[str, Any]]:
         latest_ai = _latest_ai_message(state)
         if latest_ai is None:
             return []
-        conversation_granted = _string_set(state, "approval_grants")
-        run_granted = set(_run_grant_keys(state, self._run_id))
         decided = _string_set(state, "approval_decisions")
         calls: list[dict[str, Any]] = []
         for index, tool_call in enumerate(latest_ai.tool_calls or []):
-            call = self._pending_call(tool_call, index, conversation_granted, run_granted, decided)
+            call = self._pending_call(tool_call, index, decided)
             if call is not None:
                 calls.append(call)
         return calls
 
-    def _pending_call(
-        self,
-        tool_call: Any,
-        index: int,
-        conversation_granted: set[str],
-        run_granted: set[str],
-        decided: set[str],
-    ) -> dict[str, Any] | None:
+    def _pending_call(self, tool_call: Any, index: int, decided: set[str]) -> dict[str, Any] | None:
         tool_name = str(tool_call.get("name") or "")
         if tool_name == _MCP_TOOL_CALL_TOOL_NAME and not _has_proxy_target(tool_call):
             return None
@@ -178,14 +146,10 @@ class ToolApprovalMiddleware(AgentMiddleware):
         call_id = str(tool_call.get("id") or f"{tool_name}:{index}")
         if call_id in decided:
             return None
-        grant_key = _grant_key(target_name)
-        if grant_key in conversation_granted or grant_key in run_granted:
-            return None
         return {
             "call_id": call_id,
             "tool_name": target_name,
             "tool_call": effective_call,
-            "grant_key": grant_key,
         }
 
     # ---- wrap_tool_call：执行前消费决策；无决策时兜底单次询问 ----
@@ -204,63 +168,19 @@ class ToolApprovalMiddleware(AgentMiddleware):
             return await handler(request)
         call_id = str(tool_call.get("id") or "")
         state = getattr(request, "state", None)
-        grant_key = _grant_key(target_name)
         decision = ""
         if isinstance(state, dict):
             decision = str((state.get("approval_decisions") or {}).get(call_id) or "")
-            if not decision and (
-                _has_session_grant(state, grant_key) or grant_key in set(_run_grant_keys(state, self._run_id))
-            ):
-                return await handler(request)
         if decision == "allow":
             return await handler(request)
         if decision == "deny":
             return _deny_message(request, "用户拒绝了本次操作")
-        return await _run_with_single_approval(request, target_name, effective_call, handler, self._run_id)
-
-
-def _merge_keys(existing: Iterable[str] | None, new: Sequence[str] | None) -> list[str]:
-    merged: list[str] = []
-    seen: set[str] = set()
-    for item in [*(existing or []), *(new or [])]:
-        key = str(item or "").strip()
-        if key and key not in seen:
-            seen.add(key)
-            merged.append(key)
-    return merged
-
-
-def _run_grant_keys(state: Any, run_id: str) -> list[str]:
-    if not run_id or not isinstance(state, dict):
-        return []
-    grants = state.get("approval_run_grants")
-    if not isinstance(grants, dict):
-        return []
-    raw = grants.get(run_id)
-    return [str(item) for item in raw] if isinstance(raw, list) else []
-
-
-def _run_grant_update(state: Any, run_id: str, keys: list[str]) -> dict[str, Any]:
-    """写当前 run 的本轮许可；无 run_id（如单测）时不下发该字段。"""
-    if not run_id:
-        return {}
-    merged = _merge_keys([], keys)
-    return {"approval_run_grants": {run_id: merged}} if merged else {"approval_run_grants": {}}
+        return await _run_with_single_approval(request, target_name, effective_call, handler)
 
 
 def _latest_ai_message(state: Any) -> AIMessage | None:
     messages = state.get("messages") if isinstance(state, dict) else None
     return next((message for message in reversed(messages or []) if isinstance(message, AIMessage)), None)
-
-
-def _string_list(state: Any, field: str) -> list[str]:
-    """按 state 中实际顺序取字符串列表（许可展示顺序/合并保序）。"""
-    raw = state.get(field) if isinstance(state, dict) else None
-    if isinstance(raw, list):
-        return [str(item) for item in raw if str(item or "").strip()]
-    if isinstance(raw, dict):
-        return [str(key) for key in raw]
-    return []
 
 
 def _string_set(state: Any, field: str) -> set[str]:
@@ -286,7 +206,7 @@ def requires_approval(tool_name: str) -> bool:
     """工具是否需要人工审批：内置注册表标记 + MCP 动态工具（第三方默认严格）。
 
     MCP 工具不在内置注册表里（运行时枚举），默认按 ask 处理；``mcp_tool_search``
-    是只读检索工具，不打断。语义与 AUTO 模式一致：只在 ask 模式装配本中间件。
+    是只读检索工具，不打断。交互会话始终装配本中间件。
     """
     if tool_name in APPROVAL_REQUIRED_TOOL_NAMES:
         return True
@@ -343,18 +263,9 @@ def _approval_target(tool_name: str, tool_call: Any) -> tuple[str, Any]:
     return target, effective
 
 
-def _grant_key(tool_name: str) -> str:
-    """会话级许可的键：按**工具**粒度（MCP 也是单个工具），避免"同意只读工具=放行同 server 删除工具"。"""
-    return f"tool:{tool_name}"
-
-
 def _tool_label(tool_name: str, tool: Any = None) -> str:
     info = _mcp_display_info(tool)
     return info.get("display_name") or info.get("mcp_tool_name") or tool_name
-
-
-def _always_allow_description(tool_name: str, tool: Any = None) -> str:
-    return f"本会话内「{_tool_label(tool_name, tool)}」不再询问"
 
 
 def build_approval_payload(tool_name: str, tool_call: Any, tool: Any = None) -> dict[str, Any]:
@@ -365,18 +276,13 @@ def build_approval_payload(tool_name: str, tool_call: Any, tool: Any = None) -> 
     question = f"是否允许执行 MCP 工具「{label}」？" if mcp_info else f"是否允许执行「{tool_name}」？"
     payload = _approval_payload(
         question,
-        [
-            APPROVAL_ALLOW_LABEL,
-            APPROVAL_RUN_ALWAYS_ALLOW_LABEL,
-            APPROVAL_ALWAYS_ALLOW_LABEL,
-            APPROVAL_DENY_LABEL,
-        ],
+        [APPROVAL_ALLOW_LABEL, APPROVAL_DENY_LABEL],
         preview,
         tool_name,
         mcp_info,
-        always_desc=_always_allow_description(tool_name, tool),
     )
     payload["approval_items"] = [_approval_item({"tool_name": tool_name, "label": label, "tool_call": tool_call})]
+    payload["asked_at_ms"] = int(time.time() * 1000)
     return payload
 
 
@@ -418,8 +324,7 @@ def _approval_item(call: dict[str, Any]) -> dict[str, Any]:
 def build_batch_approval_payload(calls: list[dict[str, Any]]) -> dict[str, Any]:
     """一轮内多个审批工具的合并载荷：一次中断解决并行工具调用。
 
-    单工具时保持原「允许/始终允许/拒绝」文案；多工具时每个操作一个 question
-    （逐条允许/本会话内始终允许/拒绝）。载荷附带结构化 ``approval_items``（工具名/展示名/参数摘要），
+    B 端审批只允许单次允许/拒绝；多工具时每个操作一个 question（逐条允许/拒绝）。载荷附带结构化 ``approval_items``（工具名/展示名/参数摘要），
     前端据此渲染操作清单，而不是把原始 JSON 拼进问题文本。
     """
     if len(calls) == 1:
@@ -429,18 +334,13 @@ def build_batch_approval_payload(calls: list[dict[str, Any]]) -> dict[str, Any]:
         question = f"是否允许执行「{label}」？"
         payload = _approval_payload(
             question,
-            [
-                APPROVAL_ALLOW_LABEL,
-                APPROVAL_RUN_ALWAYS_ALLOW_LABEL,
-                APPROVAL_ALWAYS_ALLOW_LABEL,
-                APPROVAL_DENY_LABEL,
-            ],
+            [APPROVAL_ALLOW_LABEL, APPROVAL_DENY_LABEL],
             preview,
             str(call.get("tool_name") or ""),
             {},
-            always_desc=f"本会话内「{label}」不再询问",
         )
         payload["approval_items"] = [_approval_item({**call, "label": label})]
+        payload["asked_at_ms"] = int(time.time() * 1000)
         return payload
     questions = [
         {
@@ -449,8 +349,6 @@ def build_batch_approval_payload(calls: list[dict[str, Any]]) -> dict[str, Any]:
             "question": str(call.get("label") or call.get("tool_name") or ""),
             "options": [
                 {"label": APPROVAL_ALLOW_LABEL, "description": "允许执行该操作"},
-                {"label": APPROVAL_RUN_ALWAYS_ALLOW_LABEL, "description": "本轮内不再询问该工具"},
-                {"label": APPROVAL_ALWAYS_ALLOW_LABEL, "description": "本会话内不再询问该工具"},
                 {"label": APPROVAL_DENY_LABEL, "description": "拒绝该操作"},
             ],
             "multi_select": False,
@@ -463,6 +361,7 @@ def build_batch_approval_payload(calls: list[dict[str, Any]]) -> dict[str, Any]:
         "tool_name": "",
         "questions": questions,
         "approval_items": [_approval_item(call) for call in calls],
+        "asked_at_ms": int(time.time() * 1000),
     }
     return payload
 
@@ -473,12 +372,9 @@ def _approval_payload(
     preview: str,
     tool_name: str,
     mcp_info: dict[str, str],
-    always_desc: str = "本会话内这些工具不再询问",
 ) -> dict[str, Any]:
     descriptions = {
         APPROVAL_ALLOW_LABEL: "执行本次操作",
-        APPROVAL_RUN_ALWAYS_ALLOW_LABEL: "本轮（当前这条消息的执行）内不再询问该工具",
-        APPROVAL_ALWAYS_ALLOW_LABEL: always_desc,
         APPROVAL_DENY_LABEL: "不执行；模型会收到拒绝原因并调整方案",
     }
     return {
@@ -541,88 +437,27 @@ def _is_run_always_label(label: str | None) -> bool:
     return label == APPROVAL_RUN_ALWAYS_ALLOW_LABEL
 
 
-def _resolve_call_answer(label: str | None) -> tuple[str, str | None]:
-    """单条选择 → (allow/deny, 许可类型 conversation/run/None)；未知/缺失拒绝。"""
-    if _is_always_label(label):
-        return "allow", "conversation"
-    if _is_run_always_label(label):
-        return "allow", "run"
-    if label == APPROVAL_ALLOW_LABEL:
-        return "allow", None
-    return "deny", None
-
-
-def _resolve_batch_answers(answer: Any, calls: list[dict[str, Any]]) -> tuple[dict[str, str], list[str], list[str]]:
-    """批量审批：按 question id（= tool_call_id）逐条解析，缺失/未知一律拒绝。
-
-    返回 (decisions, 本对话许可列表, 本轮许可列表)；"本轮内始终允许"只写本轮，
-    "本会话内始终允许"写整个对话。
-    """
+def _resolve_batch_answers(answer: Any, calls: list[dict[str, Any]]) -> dict[str, str]:
+    """逐项解析批量审批；历史授权 label 只按本次 allow 处理，不产生 grant。"""
     labels = _selected_labels(answer)
     decisions: dict[str, str] = {}
-    conversation_grants: list[str] = []
-    run_grants: list[str] = []
     for call in calls:
         call_id = str(call["call_id"])
-        decision, grant_type = _resolve_call_answer(labels.get(call_id))
-        decisions[call_id] = decision
-        if grant_type == "conversation":
-            conversation_grants.append(str(call["grant_key"]))
-        elif grant_type == "run":
-            run_grants.append(str(call["grant_key"]))
-    # 同名工具多行分别选择工具级选项时：去重，且"本窗口"强于"本轮"
-    conversation_grants = _dedupe(conversation_grants)
-    run_grants = _dedupe([key for key in run_grants if key not in set(conversation_grants)])
-    return decisions, conversation_grants, run_grants
-
-
-def _dedupe(items: list[str]) -> list[str]:
-    seen: set[str] = set()
-    result: list[str] = []
-    for item in items:
-        if item and item not in seen:
-            seen.add(item)
-            result.append(item)
-    return result
+        label = labels.get(call_id, "")
+        allowed = label == APPROVAL_ALLOW_LABEL or _is_always_label(label) or _is_run_always_label(label)
+        decisions[call_id] = "allow" if allowed else "deny"
+    return decisions
 
 
 def _resolve_decision(answer: Any) -> str:
-    """把用户选择归一化为 allow / always / deny（未知/取消一律 deny）。"""
+    """把用户选择归一化为 allow / deny（未知/取消一律 deny）。"""
     label = _selected_label(answer)
-    if _is_run_always_label(label):
-        return "run_always"
-    if _is_always_label(label):
-        return "always"
+    # 兼容旧 pending 文案：历史「始终允许」只按本次 allow 处理，不再产生授权。
+    if _is_run_always_label(label) or _is_always_label(label):
+        return "allow"
     if label == APPROVAL_ALLOW_LABEL:
         return "allow"
     return "deny"
-
-
-def is_always_allowed(answer: Any) -> bool:
-    """解析 resume 答案：显式选择「本会话内始终允许」时返回 True（含允许本次执行）。"""
-    return _is_always_label(_selected_label(answer))
-
-
-def is_run_always_allowed(answer: Any) -> bool:
-    """解析 resume 答案：显式选择「本轮内始终允许」时返回 True。"""
-    return _is_run_always_label(_selected_label(answer))
-
-
-def is_approval_allowed(answer: Any) -> bool:
-    """解析 resume 回来的答案：只有显式选择「允许」才放行，其余一律拒绝。"""
-    return _selected_label(answer) == APPROVAL_ALLOW_LABEL
-
-
-def _append_grant(result: ToolMessage | Command[Any], grant_key: str, state: Any) -> ToolMessage | Command[Any]:
-    """在保留工具结果的同时，把"本会话内始终允许"写回会话 state。"""
-    grants = _merge_keys(_string_list(state, "approval_grants"), [grant_key])
-    if isinstance(result, Command):
-        update = dict(result.update or {})
-        update["approval_grants"] = grants
-        return Command(update=update, goto=result.goto, resume=result.resume)
-    if isinstance(result, ToolMessage):
-        return Command(update={"messages": [result], "approval_grants": grants})
-    return result
 
 
 def _deny_message(request: ToolCallRequest, reason: str) -> ToolMessage:
@@ -636,39 +471,14 @@ def _deny_message(request: ToolCallRequest, reason: str) -> ToolMessage:
     )
 
 
-def _has_session_grant(state: Any, grant_key: str) -> bool:
-    """当前会话是否已授予该工具的"始终允许"。"""
-    grants = state.get("approval_grants") if isinstance(state, dict) else None
-    return isinstance(grants, list) and grant_key in {str(grant) for grant in grants}
-
-
-def _append_run_grant(
-    result: ToolMessage | Command[Any], run_id: str, grant_key: str, state: Any
-) -> ToolMessage | Command[Any]:
-    """把"本轮内始终允许"写回当前 run 的许可集合（保留已有本轮许可）。"""
-    if not run_id:
-        return result
-    keys = _merge_keys(_run_grant_keys(state, run_id), [grant_key])
-    update = {"approval_run_grants": {run_id: keys}}
-    if isinstance(result, Command):
-        merged = dict(result.update or {})
-        merged.update(update)
-        return Command(update=merged, goto=result.goto, resume=result.resume)
-    if isinstance(result, ToolMessage):
-        return Command(update={"messages": [result], **update})
-    return result
-
-
 async def _run_with_single_approval(
     request: ToolCallRequest,
     tool_name: str,
     tool_call: Any,
     handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]],
-    run_id: str,
 ) -> ToolMessage | Command[Any]:
     """兜底：未经过 after_model 的审批工具（异常路径）单次询问。"""
     tool = getattr(request, "tool", None)
-    grant_key = _grant_key(tool_name)
     try:
         answer = interrupt(build_approval_payload(tool_name, tool_call, tool))
     except GraphInterrupt:
@@ -676,11 +486,7 @@ async def _run_with_single_approval(
     except Exception:
         logger.warning("工具审批通道异常，按拒绝处理: tool=%s", tool_name, exc_info=True)
         return _deny_message(request, "审批通道不可用")
-    if is_always_allowed(answer):
-        return _append_grant(await handler(request), grant_key, getattr(request, "state", None))
-    if is_run_always_allowed(answer):
-        return _append_run_grant(await handler(request), run_id, grant_key, getattr(request, "state", None))
-    if is_approval_allowed(answer):
+    if _resolve_decision(answer) != "deny":
         return await handler(request)
     return _deny_message(request, "用户拒绝了本次操作")
 
@@ -688,37 +494,18 @@ async def _run_with_single_approval(
 def create_tool_approval_middleware(
     tools: list[Any] | None = None,
     run_id: str | None = None,
-    *,
-    mode: str = "ask",
 ) -> AgentMiddleware:
-    """装配审批中间件（批量中断 + 决策执行；run_id 用于本轮许可作用域）。
-
-    ``mode="ask"``：注册表标记 + 全部 MCP 工具需审批（``tool_approvals=allow`` 豁免）；
-    ``mode="auto"``：仅 ``tool_approvals=force_ask`` 的 MCP 工具强制审批，其余直行。
-    审批档位从装配工具的 metadata（``mcp/manager.build_langchain_tools`` 透出）提取。
-    """
+    """装配审批中间件；工具策略来自 metadata 的 ``approval=ask|allow``。"""
     labels: dict[str, str] = {}
-    allowed: set[str] = set()
-    forced: set[str] = set()
+    allowed_tools: set[str] = set()
     for tool in tools or []:
         name = str(getattr(tool, "name", "") or "")
         if not name:
             continue
         metadata = getattr(tool, "metadata", None)
-        if not isinstance(metadata, dict):
-            labels[name] = name
-            continue
-        display = str(metadata.get("display_name") or "").strip()
+        display = str(metadata.get("display_name") or "").strip() if isinstance(metadata, dict) else ""
         labels[name] = display or name
-        approval = str(metadata.get("approval") or "").strip()
+        approval = str(metadata.get("approval") or "").strip() if isinstance(metadata, dict) else ""
         if approval == "allow":
-            allowed.add(name)
-        elif approval == "force_ask":
-            forced.add(name)
-    return ToolApprovalMiddleware(
-        labels,
-        run_id=run_id,
-        allowed_tools=allowed,
-        forced_tools=forced,
-        mode=mode,
-    )
+            allowed_tools.add(name)
+    return ToolApprovalMiddleware(labels, run_id=run_id, allowed_tools=allowed_tools)

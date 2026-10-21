@@ -140,7 +140,7 @@ MIDDLEWARE_CANONICAL_ORDER: tuple[str, ...] = (
     "ToolExecutionFenceMiddleware",  # 租约围栏必须最外层：所有权丢失不能被内层转成普通工具失败
     "MCPToolDiscoveryMiddleware",  # 先拦幻觉直调 MCP 目标工具，再进入审批；避免用户先批一次才被拒
     "SkillPrerequisiteMiddleware",  # 工具声明 required_skills 时，先拦未加载技能，再进入审批
-    "ToolApprovalMiddleware",  # 按需审批：在围栏之内、任何工具副作用之前中断询问（ask 模式才装配）
+    "ToolApprovalMiddleware",  # 工具审批：在围栏之内、任何工具副作用之前中断询问（交互会话装配）
     "ImageInjectionMiddleware",  # 图片注入在压缩/预算外层：注入的图片要被正确计费与统计
     "ToolTimingMiddleware",  # 紧贴围栏内侧：计时覆盖卸载与错误转换在内的完整工具链路
     "ToolCallRateAlertMiddleware",  # 与计时同层：只统计通过围栏的真实调用，被拒绝的调用不计入频次

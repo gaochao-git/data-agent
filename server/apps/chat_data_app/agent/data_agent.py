@@ -74,15 +74,9 @@ class AgentRunControls:
     五个字段全部非空才启用，缺任何一个都视为本次运行不支持中断续跑，
     静默降级为无围栏、无 steering 的普通运行。
 
-    ``disable_user_interaction`` 独立于上述围栏组：无人值守运行（定时轮）
-    置 True，工具装配时跳过 ``requires_user_interaction`` 的注册条目
-    （ask_user_question），防止提问后无人应答导致轮次悬挂。
-
-    ``approval_mode``：``ask`` 时装配 ToolApprovalMiddleware，注册表标记
-    （``ToolSpec.approval_required``）的工具执行前中断询问用户；``auto`` 直接
-    执行，但 ``tool_approvals=force_ask`` 的 MCP 工具例外——auto 下仍装配
-    中间件强制审批（无人值守则在装配层剔除该工具，fail-closed）。
-    无人值守运行由调用方强制 ``auto``。
+    ``disable_user_interaction``：无人值守时不装配审批中间件；内置审批工具
+    （``ToolSpec.approval_required``）与 MCP ``tool_approvals=ask`` 工具在装配层
+    fail-closed 剔除，不向模型暴露。
     """
 
     run_id: str | None = None
@@ -91,7 +85,6 @@ class AgentRunControls:
     admit_inbox_messages: Any = None
     steering_tracker: Any = None
     disable_user_interaction: bool = False
-    approval_mode: str = "auto"
 
     def is_complete(self) -> bool:
         return bool(
@@ -213,27 +206,32 @@ def _filter_tools_by_spec(tools: list, spec: AgentAssemblySpec) -> list:
     ]
 
 
-def _is_forced_approval_tool(tool: Any) -> bool:
-    """工具是否为 ``tool_approvals=force_ask`` 的 MCP 工具（metadata 由 mcp/manager 透出）。"""
+def _requires_approval_tool(tool: Any) -> bool:
+    """工具是否为 ``tool_approvals=ask`` 的 MCP 工具（metadata 由 mcp/manager 透出）。"""
     metadata = getattr(tool, "metadata", None)
-    return isinstance(metadata, dict) and str(metadata.get("approval") or "") == "force_ask"
+    return isinstance(metadata, dict) and str(metadata.get("approval") or "ask") == "ask"
+
+
+def _filter_tools_for_unattended(builtin_tools: list, mcp_tools: list) -> tuple[list, list, frozenset[str]]:
+    """无人值守 fail-closed：剔除内置审批工具与 MCP ask 工具，返回过滤结果与排除集。"""
+    excluded_mcp_names = frozenset(str(tool.name) for tool in mcp_tools if _requires_approval_tool(tool))
+    kept_mcp = [tool for tool in mcp_tools if str(tool.name) not in excluded_mcp_names]
+    kept_builtin = [
+        tool for tool in builtin_tools if str(getattr(tool, "name", "") or "") not in APPROVAL_REQUIRED_TOOL_NAMES
+    ]
+    return kept_builtin, kept_mcp, excluded_mcp_names
 
 
 def _build_tool_approval_middleware(run_controls: "AgentRunControls | None", tools: list | None = None) -> Any:
-    """装配审批中间件；无人值守恒不装配（force_ask 工具由装配层过滤，不悬挂）。
+    """装配审批中间件；无人值守恒不装配（ask 工具由装配层 fail-closed 剔除）。
 
-    ask 档：注册表标记 + MCP 全员审批（``tool_approvals=allow`` 豁免）；
-    auto 档：仅当装配工具存在 ``tool_approvals=force_ask`` 时按 auto 模式装配
-    （只审 forced 集），否则返回 None 保持零开销。``tools`` 同时用于提取 MCP
-    display_name（审批卡展示友好名）与审批档位。
+    注册表标记 + MCP 默认 ask；``tool_approvals=allow`` 的工具免审批。
+    ``tools`` 用于提取 MCP display_name（审批卡展示友好名）与 allow 档位。
     """
     if run_controls is None or run_controls.disable_user_interaction:
         return None
-    if run_controls.approval_mode == "ask":
-        return create_tool_approval_middleware(tools, run_id=run_controls.run_id)
-    if any(_is_forced_approval_tool(tool) for tool in tools or []):
-        return create_tool_approval_middleware(tools, run_id=run_controls.run_id, mode="auto")
-    return None
+    # 审批策略按工具固定；交互会话始终挂载。
+    return create_tool_approval_middleware(tools, run_id=run_controls.run_id)
 
 
 def assemble_tools(
@@ -311,14 +309,12 @@ def _filter_subagent_tools(tools: list, excluded: frozenset) -> list:
     return [tool for tool in tools if str(getattr(tool, "name", "") or "") not in excluded]
 
 
-def _subagent_approval_exclusions(run_controls: "AgentRunControls | None") -> frozenset[str]:
-    """按需审批模式下子智能体不挂审批工具：子图不支持人工中断，委派删除/移动会绕过审批。
+def _subagent_approval_exclusions() -> frozenset[str]:
+    """子智能体不挂审批工具：子图不支持人工中断，委派删除/移动会绕过审批。
 
-    与 ``ask_user_question`` 同款处理——子智能体哲学是「不注册人工交互」，审批类
-    工具从能力面剔除；auto 模式行为不变（子智能体照常可用）。
+    与 ``ask_user_question`` 同款处理——子智能体哲学是「不注册人工交互」，
+    审批类工具始终从能力面剔除（交互与无人值守一致，fail-closed）。
     """
-    if run_controls is None or run_controls.approval_mode != "ask" or run_controls.disable_user_interaction:
-        return frozenset()
     return APPROVAL_REQUIRED_TOOL_NAMES
 
 
@@ -327,7 +323,7 @@ def _general_purpose_system_prompt(approval_tools_excluded: bool) -> str:
 
     剔除只解决了「能不能执行」，没有解决「模型知不知道自己不能执行」：不声明时
     模型会先派一次工具拿到「工具不存在」，白跑一轮 token 才退回主智能体。这段
-    与 ``_subagent_approval_exclusions`` 共用同一判据，auto/无人值守不受影响。
+    与 ``_subagent_approval_exclusions`` 共用同一判据。
     """
     if not approval_tools_excluded:
         return GENERAL_PURPOSE_SUBAGENT_PROMPT
@@ -355,7 +351,7 @@ def build_subagent_middleware(
     ``memory_block`` 与主智能体同一份会话记忆条目（一致继承）：子图 system
     prompt 由此注入只读记忆段；未传或为空则不注入。
     """
-    approval_excluded = _subagent_approval_exclusions(run_controls)
+    approval_excluded = _subagent_approval_exclusions()
     base_excluded = SUBAGENT_BASE_EXCLUDED_TOOL_NAMES | approval_excluded
     specs: list[SubagentSpec] = []
     if runtime_options.explore_subagent_enabled:
@@ -647,10 +643,9 @@ def create_agent_from_spec(
     mcp_tools = _load_spec_mcp_tools(spec)
     excluded_mcp_names: frozenset[str] = frozenset()
     if run_controls is not None and run_controls.disable_user_interaction:
-        # 无人值守不装配审批中间件：force_ask 工具无人应答会悬挂，按 ask_user_question
-        # 的先例在装配层剔除（模型不可见且不可检索）——fail-closed，而不是无人审批放行。
-        excluded_mcp_names = frozenset(str(tool.name) for tool in mcp_tools if _is_forced_approval_tool(tool))
-        mcp_tools = [tool for tool in mcp_tools if str(tool.name) not in excluded_mcp_names]
+        # 无人值守不装配审批中间件：ask 工具无人应答会悬挂，在装配层剔除（模型不可见且不可检索），
+        # fail-closed；allow 工具无需审批，可以继续使用。
+        builtin_tools, mcp_tools, excluded_mcp_names = _filter_tools_for_unattended(builtin_tools, mcp_tools)
     tool_tokens = count_tools_tokens([*builtin_tools, *mcp_tools]) if mcp_tools else 0
     search_service = (
         _resolve_mcp_tool_search_service(spec, tool_tokens, model_id, excluded_names=excluded_mcp_names)
@@ -677,6 +672,12 @@ def create_agent_from_spec(
         search_active=search_service is not None,
         mcp_tools=mcp_tools,
     )
+    if run_controls is not None and run_controls.disable_user_interaction:
+        effective_system_prompt += (
+            "\n\n## 无人值守能力边界\n"
+            "- 本次运行无人实时应答，需要人工审批的工具（文件删除、移动、目录删除等）不会挂载。\n"
+            "- 不要尝试调用这些工具；如任务必须删除/移动文件，请明确说明能力受限并给出替代方案。"
+        )
     context_request_budget.configure(effective_system_prompt, tools, model_id=model_id)
     context_request_budget.validate_static_input()
     model = create_streaming_chat_model(
@@ -739,7 +740,7 @@ def create_agent_from_spec(
             tracker=run_controls.steering_tracker,
             state_schema=ChatDataAgentState,
         )
-    # 按需审批只对交互式 chat 生效；auto 模式不装配（零开销），无人值守强制 auto
+    # 交互会话始终装配工具审批；无人值守不装配（ask 工具已 fail-closed 剔除）
     tool_approval_middleware = _build_tool_approval_middleware(run_controls, tools)
     after_model_history_middleware = None
     if persist_model_snapshot is not None:

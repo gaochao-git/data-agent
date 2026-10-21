@@ -445,3 +445,30 @@ def test_create_data_agent_registers_mcp_search_and_proxy(monkeypatch, tmp_path)
     assert "mcp_demo_tool" in tool_names
     assert "mcp_demo_tool" in captured["system_prompt"]
     assert agent.name == "agent"
+
+
+def test_create_data_agent_unattended_filters_builtin_approval_tools(monkeypatch, tmp_path):
+    from apps.chat_data_app.agent.data_agent import AgentRunControls
+
+    captured: dict = {}
+    runtime, options = _runtime(tmp_path)
+    tools = [SimpleNamespace(name="file_read"), SimpleNamespace(name="file_delete"), SimpleNamespace(name="file_move")]
+
+    monkeypatch.setattr(data_agent, "assemble_tools", lambda *_args, **_kwargs: list(tools))
+    monkeypatch.setattr(data_agent, "create_streaming_chat_model", lambda **_kwargs: SimpleNamespace())
+    monkeypatch.setattr(data_agent, "create_agent", lambda **kwargs: captured.update(kwargs) or SimpleNamespace())
+
+    data_agent.create_data_agent(
+        options,
+        workspace_runtime=runtime,
+        identity_context=IdentityContext(),
+        datasource_context=DatasourceContext(datasource_id="ds_a"),
+        model_invocation=ModelInvocationConfig(system_prompt="system", model_id="primary-model"),
+        run_controls=AgentRunControls(disable_user_interaction=True),
+    )
+
+    names = [getattr(tool, "name", "") for tool in captured["tools"]]
+    assert "file_read" in names
+    assert "file_delete" not in names
+    assert "file_move" not in names
+    assert "无人值守能力边界" in captured["system_prompt"]

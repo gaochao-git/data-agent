@@ -641,6 +641,8 @@ export interface PendingUserQuestion {
   turn_id?: string
   /** approval = 工具审批（批量时逐条选择允许/拒绝） */
   kind?: string
+  /** 审批载荷生成时间（epoch 毫秒），用于展示弹窗触发时间 */
+  asked_at_ms?: number
   approval_items?: ApprovalItem[]
   questions: UserQuestionItem[]
 }
@@ -1006,7 +1008,7 @@ export interface PluginMcpServerInfo {
   url?: string
   command?: string
   /** 原始工具名 → 审批档位；缺省 ask，deny 的工具不会挂载/被检索 */
-  tool_approvals?: Record<string, 'ask' | 'allow' | 'force_ask' | 'deny'>
+  tool_approvals?: Record<string, 'ask' | 'allow'>
   /** 服务端准入检查结论（未通过时管理页标红并展示原因） */
   admission?: PluginMcpServerAdmission
 }

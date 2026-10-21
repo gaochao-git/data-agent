@@ -33,9 +33,6 @@ from ..agent.run.completion_options import parse_file_selections, parse_quoted_s
 from ..agent.workspace.runtime_skill_snapshot import build_runtime_skill_snapshot_async
 from ..agent_run_support import (
     materialize_conversation_semantic_models,
-    read_conversation_approval_grants,
-    reset_conversation_approval_grants,
-    revoke_conversation_approval_grants,
 )
 from ..services import conversation_service as conversation
 
@@ -152,10 +149,6 @@ class QuestionAnswerItem(BaseModel):
 
 class QuestionAnswerRequest(BaseModel):
     answers: list[QuestionAnswerItem]
-
-
-class ApprovalGrantRevokeRequest(BaseModel):
-    tools: list[str] = Field(default_factory=list, max_length=50)
 
 
 # ============ Agent 配置注册 ============
@@ -962,138 +955,6 @@ async def answer_question(
         return business_response(
             msg="提交回答失败，请稍后重试",
             code=ErrorCode.CHATDATA_QUESTION_ANSWER_FAILED,
-            status="error",
-            http_status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
-
-
-@router.get("/{conversation_id}/approval-grants")
-async def get_approval_grants(conversation_id: str, req: Request) -> JSONResponse:
-    """读取本会话已授予的工具审批许可。"""
-    try:
-        user_id, _username = _get_current_user_identity(req)
-        existing_agent_id = await _get_existing_agent_for_completion(conversation_id, AGENT_ID, user_id)
-        if existing_agent_id != AGENT_ID:
-            return business_response(
-                msg="对话不存在",
-                code=ErrorCode.CHATDATA_NOT_FOUND,
-                status="error",
-                http_status_code=http_status.HTTP_404_NOT_FOUND,
-            )
-        return business_response(data={"grants": await read_conversation_approval_grants(conversation_id)}, msg="ok")
-    except AuthenticationError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
-    except Exception:
-        logger.error("读取会话审批许可失败: conversation_id=%s", conversation_id, exc_info=True)
-        return business_response(
-            msg="读取审批许可失败，请稍后重试",
-            code=ErrorCode.CHATDATA_GENERIC_OPERATION_FAILED,
-            status="error",
-            http_status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
-
-
-@router.post("/{conversation_id}/approval-grants/revoke")
-async def revoke_approval_grants(
-    conversation_id: str, payload: ApprovalGrantRevokeRequest, req: Request
-) -> JSONResponse:
-    """按工具名撤销本会话审批许可（恢复为每次询问）。"""
-    try:
-        user_id, _username = _get_current_user_identity(req)
-        existing_agent_id = await _get_existing_agent_for_completion(conversation_id, AGENT_ID, user_id)
-        if existing_agent_id != AGENT_ID:
-            return business_response(
-                msg="对话不存在",
-                code=ErrorCode.CHATDATA_NOT_FOUND,
-                status="error",
-                http_status_code=http_status.HTTP_404_NOT_FOUND,
-            )
-        if not payload.tools:
-            return business_response(
-                msg="请选择要撤销的工具",
-                code=ErrorCode.CHATDATA_BAD_REQUEST,
-                status="error",
-                http_status_code=http_status.HTTP_400_BAD_REQUEST,
-            )
-        pending = await agent_inbox_service.get_pending_question(conversation_id, user_id)
-        if pending:
-            return business_response(
-                msg="当前有待确认的审批/提问，请先处理后再操作",
-                code=ErrorCode.CHATDATA_QUESTION_NOT_WAITING,
-                status="error",
-                http_status_code=http_status.HTTP_409_CONFLICT,
-            )
-        if await agent_inbox_service.has_active_run(conversation_id, user_id):
-            return business_response(
-                msg="当前会话正在运行，请等本轮结束后再操作",
-                code=ErrorCode.CHATDATA_OPERATION_NOT_ALLOWED,
-                status="error",
-                http_status_code=http_status.HTTP_409_CONFLICT,
-            )
-        remaining = await revoke_conversation_approval_grants(conversation_id, list(payload.tools))
-        return business_response(data={"grants": remaining}, msg="已撤销所选工具的审批许可")
-    except AuthenticationError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
-    except AgentRunNotActiveError:
-        return business_response(
-            msg="对话不存在",
-            code=ErrorCode.CHATDATA_NOT_FOUND,
-            status="error",
-            http_status_code=http_status.HTTP_404_NOT_FOUND,
-        )
-    except Exception:
-        logger.error("撤销会话审批许可失败: conversation_id=%s", conversation_id, exc_info=True)
-        return business_response(
-            msg="撤销审批许可失败，请稍后重试",
-            code=ErrorCode.CHATDATA_GENERIC_OPERATION_FAILED,
-            status="error",
-            http_status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
-
-
-@router.post("/{conversation_id}/approval-grants/reset")
-async def reset_approval_grants(conversation_id: str, req: Request) -> JSONResponse:
-    """重置本会话已授予的工具审批许可（恢复为每次询问）。"""
-    try:
-        user_id, _username = _get_current_user_identity(req)
-        existing_agent_id = await _get_existing_agent_for_completion(conversation_id, AGENT_ID, user_id)
-        if existing_agent_id != AGENT_ID:
-            return business_response(
-                msg="对话不存在",
-                code=ErrorCode.CHATDATA_NOT_FOUND,
-                status="error",
-                http_status_code=http_status.HTTP_404_NOT_FOUND,
-            )
-        if await agent_inbox_service.get_pending_question(conversation_id, user_id):
-            return business_response(
-                msg="当前有待确认的审批/提问，请先处理后再重置",
-                code=ErrorCode.CHATDATA_QUESTION_NOT_WAITING,
-                status="error",
-                http_status_code=http_status.HTTP_409_CONFLICT,
-            )
-        if await agent_inbox_service.has_active_run(conversation_id, user_id):
-            return business_response(
-                msg="当前会话正在运行，请等本轮结束后再重置",
-                code=ErrorCode.CHATDATA_OPERATION_NOT_ALLOWED,
-                status="error",
-                http_status_code=http_status.HTTP_409_CONFLICT,
-            )
-        await reset_conversation_approval_grants(conversation_id)
-        return business_response(data=None, msg="已重置本会话的审批许可")
-    except AuthenticationError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
-    except AgentRunNotActiveError:
-        return business_response(
-            msg="对话不存在",
-            code=ErrorCode.CHATDATA_NOT_FOUND,
-            status="error",
-            http_status_code=http_status.HTTP_404_NOT_FOUND,
-        )
-    except Exception:
-        logger.error("重置会话审批许可失败: conversation_id=%s", conversation_id, exc_info=True)
-        return business_response(
-            msg="重置审批许可失败，请稍后重试",
-            code=ErrorCode.CHATDATA_GENERIC_OPERATION_FAILED,
             status="error",
             http_status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
         )

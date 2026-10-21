@@ -262,18 +262,17 @@ def test_chat_data_agent_spec_applies_env_mode(monkeypatch):
         importlib.reload(data_agent)
 
 
-def test_approval_middleware_only_for_interactive_ask_mode():
-    """ask 模式装配审批中间件；auto/无人值守不装配（零开销、不悬挂）。"""
+def test_approval_middleware_mounted_for_interactive_runs_only():
+    """交互会话始终挂载审批中间件；无人值守不挂载（ask 工具已 fail-closed 剔除）。"""
     from apps.chat_data_app.agent.data_agent import _build_tool_approval_middleware
 
     assert _build_tool_approval_middleware(None) is None
-    assert _build_tool_approval_middleware(AgentRunControls(approval_mode="ask")) is not None
-    assert _build_tool_approval_middleware(AgentRunControls(approval_mode="auto")) is None
-    assert _build_tool_approval_middleware(AgentRunControls(approval_mode="ask", disable_user_interaction=True)) is None
+    assert _build_tool_approval_middleware(AgentRunControls()) is not None
+    assert _build_tool_approval_middleware(AgentRunControls(disable_user_interaction=True)) is None
 
 
-def test_ask_mode_subagents_exclude_approval_tools(monkeypatch):
-    """按需审批下子智能体不得持有审批工具：否则委派给 general-purpose 可绕过审批。"""
+def test_subagents_always_exclude_approval_tools(monkeypatch):
+    """子图没有人工中断能力，ask 工具必须从子智能体能力面剔除（含无人值守）。"""
     from types import SimpleNamespace
 
     from apps.chat_data_app.agent import data_agent as data_agent_module
@@ -288,39 +287,14 @@ def test_ask_mode_subagents_exclude_approval_tools(monkeypatch):
 
     tools = [SimpleNamespace(name=name) for name in ("file_read", "file_write", "file_delete", "file_move", "bash_run")]
     options = AgentRuntimeOptions(general_purpose_subagent_enabled=True)
+    data_agent_module.build_subagent_middleware(options, tools, model=object())
 
-    data_agent_module.build_subagent_middleware(
-        options, tools, model=object(), run_controls=AgentRunControls(approval_mode="ask")
-    )
-    ask_names = {tool.name for spec in captured["specs"] for tool in spec.tools}
-    assert "file_delete" not in ask_names
-    assert "file_move" not in ask_names
-    assert "file_read" in ask_names
-    # 剔除之外还要声明能力缺口，否则模型会先派一次工具拿到「工具不存在」白跑一轮
-    gp_ask = next(spec for spec in captured["specs"] if spec.name == "general-purpose")
-    assert "删除与移动的能力边界" in gp_ask.system_prompt
-
-    data_agent_module.build_subagent_middleware(
-        options, tools, model=object(), run_controls=AgentRunControls(approval_mode="auto")
-    )
-    auto_names = {tool.name for spec in captured["specs"] for tool in spec.tools}
-    assert "file_delete" in auto_names
-    assert "file_move" in auto_names
-    # auto 模式子智能体确实能删，提示必须缺席（否则模型自我设限、白退回主智能体）
-    gp_auto = next(spec for spec in captured["specs"] if spec.name == "general-purpose")
-    assert "删除与移动的能力边界" not in gp_auto.system_prompt
-
-    # 定时轮：approval_mode=ask 但无人值守 ⇒ 不剔除也不加提示（与主图都不弹审批一致）
-    data_agent_module.build_subagent_middleware(
-        options,
-        tools,
-        model=object(),
-        run_controls=AgentRunControls(approval_mode="ask", disable_user_interaction=True),
-    )
-    unattended_names = {tool.name for spec in captured["specs"] for tool in spec.tools}
-    assert "file_delete" in unattended_names
-    gp_unattended = next(spec for spec in captured["specs"] if spec.name == "general-purpose")
-    assert "删除与移动的能力边界" not in gp_unattended.system_prompt
+    names = {tool.name for spec in captured["specs"] for tool in spec.tools}
+    assert "file_delete" not in names
+    assert "file_move" not in names
+    assert "file_read" in names
+    gp = next(spec for spec in captured["specs"] if spec.name == "general-purpose")
+    assert "删除与移动的能力边界" in gp.system_prompt
 
 
 def test_unattended_excludes_every_user_interaction_tool(tmp_path):
@@ -333,3 +307,20 @@ def test_unattended_excludes_every_user_interaction_tool(tmp_path):
     assert interactive
     assert interactive <= attended
     assert interactive.isdisjoint(unattended)
+
+
+def test_unattended_filter_excludes_ask_tools_and_builtin_approval():
+    from types import SimpleNamespace
+
+    from apps.chat_data_app.agent.data_agent import _filter_tools_for_unattended
+
+    builtin = [SimpleNamespace(name="file_read"), SimpleNamespace(name="file_delete")]
+    mcp = [
+        SimpleNamespace(name="mcp_ask_tool", metadata={"approval": "ask"}),
+        SimpleNamespace(name="mcp_allow_tool", metadata={"approval": "allow"}),
+        SimpleNamespace(name="mcp_default_tool", metadata={}),
+    ]
+    kept_builtin, kept_mcp, excluded = _filter_tools_for_unattended(builtin, mcp)
+    assert [tool.name for tool in kept_builtin] == ["file_read"]
+    assert [tool.name for tool in kept_mcp] == ["mcp_allow_tool"]
+    assert excluded == frozenset({"mcp_ask_tool", "mcp_default_tool"})

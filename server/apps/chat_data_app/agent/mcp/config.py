@@ -47,7 +47,7 @@ class MCPServerConfig:
     headers: dict[str, str] = field(default_factory=dict)
     # 原始工具名 → 用户可见中文友好名（前端展示用，不参与调用与命名空间）。
     tool_labels: dict[str, str] = field(default_factory=dict)
-    # 原始工具名 → 每工具审批档位（ask/allow/force_ask/deny，缺省 ask）；
+    # 原始工具名 → 每工具审批档位（ask/allow，缺省 ask）；
     # deny 在工具枚举层剔除（不挂载、不进检索目录），其余档位由审批中间件消费。
     tool_approvals: dict[str, str] = field(default_factory=dict)
     enabled: bool = True
@@ -97,20 +97,27 @@ def _clean_tool_labels(raw_tool_labels: dict, source: str) -> dict[str, str]:
     return tool_labels
 
 
-# 每工具审批档位：ask=执行前审批（缺省）；allow=ask 运行档下免审批；
-# force_ask=覆盖运行档位强制审批（无人值守不挂载）；deny=装配期剔除（不可见不可检索）。
-VALID_TOOL_APPROVALS = frozenset({"ask", "allow", "force_ask", "deny"})
+# 每工具审批档位（B 端固定策略）：ask=执行前必须人工确认（缺省）；allow=无需人工确认。
+# 不允许用户会话级切换；不引入 deny/force_ask/auto 等额外档位。
+VALID_TOOL_APPROVALS = frozenset({"ask", "allow"})
+# 旧版本值迁移：auto 等价 allow；force_ask 等价 ask；deny 仅保留“该工具不挂载”语义。
+_LEGACY_TOOL_APPROVALS = {"auto": "allow", "allow": "allow", "ask": "ask", "force_ask": "ask"}
 
 
 def _clean_tool_approvals(raw_tool_approvals: dict, source: str) -> dict[str, str]:
     """校验 tool_approvals 的档位取值；键值空白或档位非法直接报错。"""
-    tool_approvals = {str(k).strip(): str(v).strip() for k, v in raw_tool_approvals.items()}
-    if any(not key for key in tool_approvals):
+    raw = {str(k).strip(): str(v).strip().lower() for k, v in raw_tool_approvals.items()}
+    if any(not key for key in raw):
         raise MCPServerConfigError(f"{source}: tool_approvals 键不能为空白字符串")
-    invalid = sorted(value for value in tool_approvals.values() if value not in VALID_TOOL_APPROVALS)
+    tool_approvals = {key: _LEGACY_TOOL_APPROVALS.get(value, value) for key, value in raw.items()}
+    denied = sorted(key for key, value in tool_approvals.items() if value == "deny")
+    if denied:
+        logger.warning("%s: tool_approvals 旧档位 deny 仅按“该工具不挂载”处理，不再删除整台 server: %s", source, denied)
+    allowed_values = VALID_TOOL_APPROVALS | {"deny"}
+    invalid = sorted(value for value in tool_approvals.values() if value not in allowed_values)
     if invalid:
         raise MCPServerConfigError(
-            f"{source}: tool_approvals 值必须是 {sorted(VALID_TOOL_APPROVALS)} 之一，非法值: {invalid}"
+            f"{source}: tool_approvals 值必须是 {sorted(VALID_TOOL_APPROVALS)} 之一（兼容 auto/force_ask，deny 仅跳过该工具），非法值: {invalid}"
         )
     return tool_approvals
 

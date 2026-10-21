@@ -834,7 +834,6 @@ def test_build_runtime_context_reuses_completion_options_parsing():
     # 定时轮无人值守：装配链路据此剔除 ask_user_question
     assert context["disable_user_interaction"] is True
     # 无人值守不可能弹审批：审批类工具按自动模式执行
-    assert context["approval_mode"] == "auto"
 
 
 @pytest.mark.asyncio

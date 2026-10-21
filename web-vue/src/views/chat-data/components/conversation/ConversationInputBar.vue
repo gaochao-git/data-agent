@@ -38,8 +38,6 @@ interface Props {
   canSubmit: boolean
   inputFocused?: boolean
   submitTitle?: string
-  /** 工具审批模式（/config 下发默认值；前端唯一常驻的权限选择项）。 */
-  approvalMode?: 'ask' | 'auto'
 }
 
 /** 划选引用片段 chip（props 内联结构，供 chip 与预览卡渲染）。 */
@@ -54,11 +52,8 @@ const props = withDefaults(defineProps<Props>(), {
   quotedSnippets: () => [],
   inputFocused: false,
   submitTitle: '发送 (Enter)',
-  approvalMode: 'ask',
 })
 const inputBoxRef = ref<InstanceType<typeof ChatInputBox> | null>(null)
-const sandboxMenuRef = ref<HTMLElement | null>(null)
-const sandboxMenuOpen = ref(false)
 const plusMenuRef = ref<HTMLElement | null>(null)
 const plusMenuOpen = ref(false)
 
@@ -78,41 +73,12 @@ const emit = defineEmits<{
   'update:selectedModel': [value: string]
   'update:enableDeepThinking': [value: boolean]
   'update:thinkingEffort': [value: string]
-  'update:approvalMode': [value: 'ask' | 'auto']
-  manageApprovalGrants: []
 }>()
-
-// ---- 权限选择：审批模式常驻 pill（隔离后端 / Bash 属部署能力，由服务端配置决定，前端不再展示或传参） ----
-const approvalMode = ref<'ask' | 'auto'>(props.approvalMode === 'auto' ? 'auto' : 'ask')
-const approvalModeOptions: { value: 'ask' | 'auto'; label: string; icon: string }[] = [
-  { value: 'ask', label: '工具按需审批', icon: 'fa-shield-halved' },
-  { value: 'auto', label: '工具自动审批', icon: 'fa-bolt' },
-]
-const approvalModeLabel = computed(
-  () => approvalModeOptions.find(option => option.value === approvalMode.value)?.label || '按需审批'
-)
-
-const selectApprovalMode = (mode: 'ask' | 'auto') => {
-  approvalMode.value = mode
-  sandboxMenuOpen.value = false
-  emit('update:approvalMode', mode)
-}
-
-const manageApprovalGrants = () => {
-  sandboxMenuOpen.value = false
-  emit('manageApprovalGrants')
-}
-
-watch(() => props.approvalMode, (value) => {
-  approvalMode.value = value === 'auto' ? 'auto' : 'ask'
-})
 
 const handleDocumentClick = (event: MouseEvent) => {
   const target = event.target
   if (!(target instanceof Node)) return
-  if (sandboxMenuRef.value?.contains(target)) return
   if (plusMenuRef.value?.contains(target)) return
-  sandboxMenuOpen.value = false
   plusMenuOpen.value = false
 }
 
@@ -238,58 +204,10 @@ onBeforeUnmount(() => {
           </button>
         </div>
       </div>
-      <!-- 权限选择：常驻 pill（审批模式是前端唯一可调权限项） -->
-      <div ref="sandboxMenuRef" class="relative">
-        <div class="flex items-center gap-1.5 whitespace-nowrap rounded-full px-2 py-1 hover:bg-black/[0.05]">
-          <button
-            type="button"
-            class="flex items-center gap-1 border-none bg-transparent p-0 text-xs cursor-pointer"
-            title="选择工具审批模式"
-            @click="sandboxMenuOpen = !sandboxMenuOpen"
-          >
-            <i
-              class="fa-solid text-[10px]"
-              :class="approvalMode === 'ask' ? 'fa-shield-halved text-blue-500' : 'fa-bolt text-amber-500'"
-            ></i>
-            <span :class="['truncate', approvalMode === 'ask' ? 'text-blue-600' : 'text-amber-600']">{{ approvalModeLabel }}</span>
-            <i class="fa-solid fa-chevron-down text-[8px] text-gray-400"></i>
-          </button>
-        </div>
-        <div
-          v-if="sandboxMenuOpen"
-          class="absolute left-0 bottom-8 z-50 w-[200px] space-y-0.5 overflow-hidden rounded-lg border border-gray-200 bg-white py-1 text-xs text-gray-600 shadow-lg"
-        >
-          <div class="px-2.5 pb-0.5 pt-1 text-[10px] text-gray-400">工具审批模式</div>
-          <div
-            v-for="opt in approvalModeOptions"
-            :key="opt.value"
-            :class="[
-              'flex cursor-pointer items-center gap-1 px-2.5 py-1.5',
-              approvalMode === opt.value ? 'text-blue-600 bg-blue-50' : 'text-gray-600 hover:bg-gray-50'
-            ]"
-            role="button"
-            tabindex="0"
-            @click="selectApprovalMode(opt.value)"
-            @keydown.enter.prevent="selectApprovalMode(opt.value)"
-            @keydown.space.prevent="selectApprovalMode(opt.value)"
-          >
-            <i class="fa-solid text-[10px] text-gray-400" :class="opt.icon"></i>
-            <span class="whitespace-nowrap text-[11px] font-medium">{{ opt.label }}</span>
-            <span class="ml-auto flex items-center gap-1">
-              <i v-if="approvalMode === opt.value" class="fa-solid fa-check text-[10px]"></i>
-              <button
-                v-if="opt.value === 'ask'"
-                type="button"
-                class="flex shrink-0 items-center gap-0.5 rounded px-1 py-0.5 text-[10px] text-blue-600 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-40"
-                :disabled="isGenerating"
-                title="管理本会话已授权的工具，可逐项恢复审批"
-                @click.stop="manageApprovalGrants"
-              >
-                <i class="fa-solid fa-sliders text-[10px]"></i>许可
-              </button>
-            </span>
-          </div>
-        </div>
+      <!-- 审批策略由管理员固定配置，不提供用户会话级切换入口 -->
+      <div class="flex items-center gap-1.5 whitespace-nowrap rounded-full px-2 py-1 text-xs text-slate-500">
+        <i class="fa-solid fa-shield-halved text-[10px] text-blue-500"></i>
+        <span>工具审批由管理员配置</span>
       </div>
 
       <slot name="toolbar-extra" />

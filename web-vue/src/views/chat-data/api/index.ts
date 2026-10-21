@@ -104,8 +104,6 @@ type DatasourceGroupMetadataSyncPayload = { template_table_names: string[] }
 
 export interface ChatDataRuntimeConfig {
   models: ChatDataModelOption[]
-  /** 工具审批模式默认值（配置表 > env）：ask=按需审批、auto=自动审批。 */
-  approval_mode?: 'ask' | 'auto'
   default_row_limit?: number
   query_cache_enabled?: boolean
 }
@@ -1633,38 +1631,6 @@ export function getPendingUserQuestion(
   return request({
     url: `/agents/api/chatdata/conversations/${conversationId}/pending-question`,
     method: 'get',
-  })
-}
-
-/** 读取当前会话已授予的工具审批许可（tool:<name> 列表）。 */
-export function getConversationApprovalGrants(
-  conversationId: string,
-): Promise<ApiResponse<{ grants: string[] }>> {
-  return request({
-    url: `/agents/api/chatdata/conversations/${conversationId}/approval-grants`,
-    method: 'get',
-  })
-}
-
-/** 按工具撤销当前会话的审批许可。 */
-export function revokeConversationApprovalGrants(
-  conversationId: string,
-  tools: string[],
-): Promise<ApiResponse<{ grants: string[] }>> {
-  return request({
-    url: `/agents/api/chatdata/conversations/${conversationId}/approval-grants/revoke`,
-    method: 'post',
-    data: { tools },
-  })
-}
-
-/** 重置当前会话已授予的工具审批许可（本会话内始终允许/本轮许可）。 */
-export function resetConversationApprovalGrants(
-  conversationId: string,
-): Promise<ApiResponse<null>> {
-  return request({
-    url: `/agents/api/chatdata/conversations/${conversationId}/approval-grants/reset`,
-    method: 'post',
   })
 }
 
