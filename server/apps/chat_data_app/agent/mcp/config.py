@@ -47,6 +47,9 @@ class MCPServerConfig:
     headers: dict[str, str] = field(default_factory=dict)
     # 原始工具名 → 用户可见中文友好名（前端展示用，不参与调用与命名空间）。
     tool_labels: dict[str, str] = field(default_factory=dict)
+    # 原始工具名 → 每工具审批档位（ask/allow，缺省 ask）；
+    # deny 在工具枚举层剔除（不挂载、不进检索目录），其余档位由审批中间件消费。
+    tool_approvals: dict[str, str] = field(default_factory=dict)
     enabled: bool = True
 
 
@@ -94,6 +97,31 @@ def _clean_tool_labels(raw_tool_labels: dict, source: str) -> dict[str, str]:
     return tool_labels
 
 
+# 每工具审批档位（B 端固定策略）：ask=执行前必须人工确认（缺省）；allow=无需人工确认。
+# 不允许用户会话级切换；不引入 deny/force_ask/auto 等额外档位。
+VALID_TOOL_APPROVALS = frozenset({"ask", "allow"})
+# 旧版本值迁移：auto 等价 allow；force_ask 等价 ask；deny 仅保留“该工具不挂载”语义。
+_LEGACY_TOOL_APPROVALS = {"auto": "allow", "allow": "allow", "ask": "ask", "force_ask": "ask"}
+
+
+def _clean_tool_approvals(raw_tool_approvals: dict, source: str) -> dict[str, str]:
+    """校验 tool_approvals 的档位取值；键值空白或档位非法直接报错。"""
+    raw = {str(k).strip(): str(v).strip().lower() for k, v in raw_tool_approvals.items()}
+    if any(not key for key in raw):
+        raise MCPServerConfigError(f"{source}: tool_approvals 键不能为空白字符串")
+    tool_approvals = {key: _LEGACY_TOOL_APPROVALS.get(value, value) for key, value in raw.items()}
+    denied = sorted(key for key, value in tool_approvals.items() if value == "deny")
+    if denied:
+        logger.warning("%s: tool_approvals 旧档位 deny 仅按“该工具不挂载”处理，不再删除整台 server: %s", source, denied)
+    allowed_values = VALID_TOOL_APPROVALS | {"deny"}
+    invalid = sorted(value for value in tool_approvals.values() if value not in allowed_values)
+    if invalid:
+        raise MCPServerConfigError(
+            f"{source}: tool_approvals 值必须是 {sorted(VALID_TOOL_APPROVALS)} 之一（兼容 auto/force_ask，deny 仅跳过该工具），非法值: {invalid}"
+        )
+    return tool_approvals
+
+
 def parse_mcp_server_config(raw: object, *, source: str) -> MCPServerConfig:
     """解析并校验单条 MCP server 配置，非法抛 ``MCPServerConfigError``。"""
     if not isinstance(raw, dict):
@@ -106,6 +134,7 @@ def parse_mcp_server_config(raw: object, *, source: str) -> MCPServerConfig:
     raw_env = _string_mapping_field(raw, "env", source)
     raw_headers = _string_mapping_field(raw, "headers", source)
     tool_labels = _clean_tool_labels(_string_mapping_field(raw, "tool_labels", source), source)
+    tool_approvals = _clean_tool_approvals(_string_mapping_field(raw, "tool_approvals", source), source)
     enabled = raw.get("enabled", True)
     if not isinstance(enabled, bool):
         raise MCPServerConfigError(f"{source}: enabled 必须是布尔值")
@@ -122,6 +151,7 @@ def parse_mcp_server_config(raw: object, *, source: str) -> MCPServerConfig:
         url=url,
         headers=dict(raw_headers),
         tool_labels=tool_labels,
+        tool_approvals=tool_approvals,
         enabled=bool(enabled),
     )
 
@@ -182,6 +212,7 @@ __all__ = [
     "MCPServerConfig",
     "MCPServerConfigError",
     "VALID_MCP_TRANSPORTS",
+    "VALID_TOOL_APPROVALS",
     "load_mcp_server_configs",
     "parse_mcp_server_config",
 ]

@@ -162,16 +162,20 @@ describe('ConversationSidebar conversation row role zone', () => {
     }
   })
 
-  it('spells out the waiting_user status while transient states stay icons', () => {
+  it('gives the waiting_user status a right-side badge while transient states stay icons', () => {
     const wrapper = mountSidebar([
       { id: 'conv-waiting', title: '待确认会话', create_time: '2026-08-14 10:00:00', run_status: 'waiting_user' },
       { id: 'conv-active', title: '运行中会话', create_time: '2026-08-14 10:00:00', run_status: 'active' },
     ])
 
-    // waiting_user 不会自己消失，圆点看不懂 → 直接给文字
-    const waiting = wrapper.find('[title="待确认"]')
-    expect(waiting.text()).toBe('待确认')
-    expect(waiting.classes()).toContain('text-amber-500')
+    // waiting_user 不会自己消失，圆点看不懂 → 文字徽标；且占右侧时间位，不占标题宽度
+    const badge = wrapper.find('[data-testid="conversation-run-status"]')
+    expect(badge.text()).toBe('待确认')
+    expect(badge.attributes('title')).toBe('待确认')
+    expect(badge.classes()).toContain('absolute')
+    expect(badge.classes()).toContain('group-hover:opacity-0')
+    // 徽标顶掉时间位：这一行不再渲染时间，其余行照常
+    expect(wrapper.findAll('[data-testid="conversation-time"]')).toHaveLength(1)
 
     const running = wrapper.find('[title="运行中"]')
     expect(running.text()).toBe('')

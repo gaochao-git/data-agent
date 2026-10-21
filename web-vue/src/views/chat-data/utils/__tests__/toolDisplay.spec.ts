@@ -28,6 +28,7 @@ describe('toolDisplay', () => {
       ask_user_question: '询问用户',
       write_todos: '更新任务计划',
       task: '派发子智能体',
+    load_skill: '加载技能',
     }
 
     for (const [toolName, displayName] of Object.entries(expectedNames)) {
@@ -45,6 +46,9 @@ describe('toolDisplay', () => {
   it('passes MCP qualified names through without local mapping', () => {
     // 展示名由后端 tool_labels 下发（display_name），前端不维护 MCP 映射表
     expect(getToolDisplayName('mcp_fault-ssh_system_overview')).toBe('mcp_fault-ssh_system_overview')
+    expect(getToolDisplayName('mcp_tool_call')).toBe('调用 MCP 工具')
+    expect(getToolDisplayName('mcp_tool_call', { name: 'mcp_fault-ssh_system_disk_usage' })).toContain('fault-ssh_system_disk_usage')
+    expect(getToolDisplayName('mcp_tool_search')).toBe('搜索 MCP 工具')
   })
 
   it('extracts the primary argument shown after compact tool names', () => {

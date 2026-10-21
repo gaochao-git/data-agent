@@ -36,6 +36,7 @@ from .ontology_tool import create_ontology_tool
 from .parse_document import create_parse_document_tool
 from .present_artifacts import create_present_artifacts_tool
 from .read_image import create_read_image_tool
+from .skill import create_skill_tool
 
 if TYPE_CHECKING:
     from ..data_agent import DatasourceContext, IdentityContext, ModelInvocationConfig
@@ -77,6 +78,8 @@ class ToolSpec:
     note: str = ""
     requires_user_interaction: bool = False
     approval_required: tuple[str, ...] = ()
+    # 调用该工具前必须先 load_skill 的技能名；空表示无技能前置
+    required_skills: tuple[str, ...] = ()
 
 
 TOOL_SPECS: tuple[ToolSpec, ...] = (
@@ -121,6 +124,11 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
         note="当前时间",
     ),
     ToolSpec(
+        provides=("load_skill",),
+        build=lambda ctx: [create_skill_tool(ctx.workspace_runtime)],
+        note="加载会话技能正文（SKILL.md）到上下文；技能相关工具的前置入口",
+    ),
+    ToolSpec(
         provides=("data_analyzing_tool",),
         build=lambda ctx: [
             create_data_analyzing_tool(
@@ -160,6 +168,7 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
         provides=("officecli_run",),
         build=lambda ctx: [create_officecli_run_tool(ctx.workspace_runtime)],
         note="OfficeCLI 编辑/查询 Office 文件",
+        required_skills=("officecli",),
     ),
     ToolSpec(
         provides=("bash_run",),
@@ -176,6 +185,11 @@ def provided_tool_names() -> frozenset[str]:
 
 # 需人工审批的工具名派生集合（审批中间件按名匹配）；空 = 当前无工具需要审批。
 APPROVAL_REQUIRED_TOOL_NAMES: frozenset[str] = frozenset(name for spec in TOOL_SPECS for name in spec.approval_required)
+
+# 工具 → 必需技能（调用前必须已加载）。只给明确依赖技能流程的工具声明，不全局强制。
+TOOL_REQUIRED_SKILLS: dict[str, tuple[str, ...]] = {
+    name: spec.required_skills for spec in TOOL_SPECS if spec.required_skills for name in spec.provides
+}
 
 
 # 子智能体不继承的基础工具：ask_user_question 需要人工应答（子智能体不注册人工中断），
@@ -231,6 +245,7 @@ __all__ = [
     "ToolSpec",
     "TOOL_SPECS",
     "APPROVAL_REQUIRED_TOOL_NAMES",
+    "TOOL_REQUIRED_SKILLS",
     "provided_tool_names",
     "SUBAGENT_BASE_EXCLUDED_TOOL_NAMES",
     "DATA_EXPLORE_EXTRA_EXCLUDED_TOOL_NAMES",

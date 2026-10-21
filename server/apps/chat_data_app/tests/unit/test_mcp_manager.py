@@ -533,3 +533,100 @@ def test_load_mcp_server_configs_uses_plugin_entries_only(monkeypatch):
     assert by_id["search"].transport == "sse"
     assert any("sse 传输已废弃" in message for message in records)
     assert any("插件 MCP server id 重复" in message for message in records)
+
+
+def test_parse_mcp_server_config_tool_approvals_ok():
+    config = parse_mcp_server_config(
+        {
+            "id": "srv",
+            "transport": "stdio",
+            "command": "x",
+            "tool_approvals": {"echo": "allow", "greet": "ask"},
+        },
+        source="env",
+    )
+    assert config.tool_approvals == {"echo": "allow", "greet": "ask"}
+
+
+def test_parse_mcp_server_config_rejects_invalid_tool_approvals():
+    for approvals in ({"echo": "bad"}, {" ": "ask"}, "not-a-dict"):
+        with pytest.raises(MCPServerConfigError):
+            parse_mcp_server_config(
+                {"id": "ok", "transport": "stdio", "command": "x", "tool_approvals": approvals},
+                source="env",
+            )
+
+
+@pytest.mark.asyncio
+async def test_list_tools_async_keeps_ask_allow_approval_policy():
+    def config_loader():
+        return [
+            MCPServerConfig(
+                server_id="srv",
+                transport="stdio",
+                command="x",
+                tool_approvals={"echo": "allow", "greet": "ask"},
+            ),
+        ]
+
+    manager, _opens = _make_manager(config_loader=config_loader)
+    tools = await manager.list_tools_async()
+    by_name = {tool.name: tool for tool in tools}
+    assert by_name["echo"].approval == "allow"
+    assert by_name["greet"].approval == "ask"
+
+
+def test_dedupe_qualified_names_preserves_approval():
+    from apps.chat_data_app.agent.mcp.manager import _dedupe_qualified_names
+
+    infos = [
+        MCPToolInfo(
+            server_id="s", name="t", qualified_name="mcp_s_t", description="", input_schema={}, approval="allow"
+        ),
+        MCPToolInfo(server_id="s", name="t", qualified_name="mcp_s_t", description="", input_schema={}, approval="ask"),
+    ]
+    out = _dedupe_qualified_names(infos)
+    assert [t.approval for t in out] == ["allow", "ask"]
+
+
+def test_parse_mcp_server_config_normalizes_legacy_approval_values():
+    config = parse_mcp_server_config(
+        {
+            "id": "srv",
+            "transport": "stdio",
+            "command": "x",
+            "tool_approvals": {"old_auto": "auto", "old_force": "force_ask"},
+        },
+        source="env",
+    )
+    assert config.tool_approvals == {"old_auto": "allow", "old_force": "ask"}
+
+
+def test_parse_mcp_server_config_keeps_legacy_deny_for_tool_level_filter():
+    config = parse_mcp_server_config(
+        {
+            "id": "srv",
+            "transport": "stdio",
+            "command": "x",
+            "tool_approvals": {"old_deny": "deny"},
+        },
+        source="env",
+    )
+    assert config.tool_approvals == {"old_deny": "deny"}
+
+
+@pytest.mark.asyncio
+async def test_list_tools_async_skips_only_legacy_deny_tools():
+    def config_loader():
+        return [
+            MCPServerConfig(
+                server_id="srv",
+                transport="stdio",
+                command="x",
+                tool_approvals={"echo": "deny", "greet": "ask"},
+            ),
+        ]
+
+    manager, _opens = _make_manager(config_loader=config_loader)
+    tools = await manager.list_tools_async()
+    assert [tool.name for tool in tools] == ["greet"]

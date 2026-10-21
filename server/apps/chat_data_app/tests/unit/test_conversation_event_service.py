@@ -1708,3 +1708,28 @@ def test_extract_text_content_skips_empty_text_blocks():
         {"type": "text", "text": "正文"},
     ]
     assert _extract_text_content(blocks) == "正文"
+
+
+def test_serialize_ai_message_resolves_proxy_target_label(monkeypatch):
+    from apps.chat_data_app.agent.run import conversation_event_service as event_service
+
+    monkeypatch.setattr(
+        event_service,
+        "get_mcp_tool_display_name",
+        lambda name: "磁盘用量排查" if name == "mcp_fault_ssh_disk" else "",
+    )
+    message = SimpleNamespace(
+        content="",
+        id="ai-proxy",
+        additional_kwargs={},
+        tool_calls=[
+            {
+                "id": "c1",
+                "name": "mcp_tool_call",
+                "args": {"name": "mcp_fault_ssh_disk", "input": {}},
+            }
+        ],
+        response_metadata=None,
+    )
+    payload = event_service._serialize_ai_message(message)
+    assert payload["tool_calls"][0]["display_name"] == "磁盘用量排查"

@@ -40,8 +40,8 @@ DATASOURCE_GROUP_PREFIX = "datasource:"
 
 
 def _get_title_llm() -> BaseChatModel:
-    """获取标题生成用的LLM"""
-    return get_chat_data_llm(streaming=False, max_tokens=30)
+    """获取标题生成用的 LLM；源头关闭思考（forced 模型关不掉则由后处理剥离）。"""
+    return get_chat_data_llm(streaming=False, max_tokens=200, enable_thinking=False)
 
 
 def _llm_model_id(llm: Any) -> str:
@@ -72,17 +72,63 @@ async def _format_threads(rows: list[UserThread], user_id: str | None) -> list[d
     return [_format_thread(thread, statuses.get(thread.thread_id)) for thread in rows]
 
 
-def _clean_title(title: str, fallback: str = "") -> str:
-    """清理标题文本"""
+_THINK_TAG_RE = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
+
+# 推理模型有时会把 "Here's a thinking process" 等推理叙述当正文返回；这不是标题。
+_REASONING_LEAK_MARKERS = ("heresathinking", "thinkingprocess", "reasoningprocess")
+
+
+def _strip_inline_think(text: str) -> str:
+    """剥内联 <think>...</think>（网关未配 reasoning parser 时思考混在 content 字符串里）。
+
+    无闭合标签视为思考截断，丢弃标签起的全部后续内容。
+    """
+    text = _THINK_TAG_RE.sub("", text)
+    lowered = text.lower()
+    if "<think>" in lowered:
+        text = text[: lowered.index("<think>")]
+    return text.strip()
+
+
+def _title_response_text(response: Any) -> str:
+    """从 AIMessage 响应中提取标题正文：跳过 thinking/reasoning 内容块，剥内联 <think> 标签。"""
+    content = getattr(response, "content", response)
+    if isinstance(content, str):
+        return _strip_inline_think(content)
+    if not isinstance(content, list):
+        return ""
+    parts: list[str] = []
+    for block in content:
+        if isinstance(block, str):
+            parts.append(block)
+            continue
+        if not isinstance(block, dict):
+            continue
+        block_type = str(block.get("type") or "").lower()
+        if "thinking" in block_type or "reasoning" in block_type:
+            continue
+        text = block.get("text") or block.get("content")
+        if isinstance(text, str):
+            parts.append(text)
+    return _strip_inline_think("\n".join(parts))
+
+
+def _clean_title(title: str) -> str:
+    """清洗标题文本；不可用产出（思考泄漏/过短）返回空串，由调用方决定占位与重试。"""
     title = title.strip()
     # 这里的意图是「去掉其中任意字符」，strip 的字符集语义正合用（非去除整串），故豁免 B005
     title = title.strip('"').strip("'").strip('《》""').strip()  # noqa: B005
     # 移除表情符号和特殊字符
     title = re.sub(r"[^\u4e00-\u9fa5a-zA-Z0-9]", "", title)
-    title = title[:15]  # 限制最大长度
 
-    if not title or len(title) < 5:
-        title = fallback[:15].strip() if fallback else "新对话"
+    # 泄漏标记对全文检测（截断后 "Heresathinkingp" 之外的英文推理前缀同样要拦）
+    lowered = title.lower()
+    if any(marker in lowered for marker in _REASONING_LEAK_MARKERS):
+        return ""
+
+    title = title[:15]  # 限制最大长度
+    if len(title) < 5:
+        return ""
 
     return title
 
@@ -438,7 +484,7 @@ async def _generate_and_update_title(
     first_message: str,
     user_id: str | None,
 ) -> str:
-    """根据首条用户消息生成并更新会话标题。"""
+    """根据首条用户消息生成并更新会话标题；产物不可用返回空串（不落库，保持占位符待重试）。"""
     query = first_message.strip()[:500]
     llm = None
     try:
@@ -448,7 +494,13 @@ async def _generate_and_update_title(
         chain = prompt | llm
         result = await chain.ainvoke({"query": query})
         # content 可能是分块列表（多模态/工具混合输出），标题场景只取纯文本形态
-        title = _clean_title(result.content if isinstance(result.content, str) else "", query)
+        title = _clean_title(_title_response_text(result))
+        if not title:
+            # LLM 调用成功但产物不可用（思考挤占/泄漏等）：与连接失败同策略——
+            # 不写降级标题（原始 query 会被原样占用标题位且永不重试），保持
+            # 占位符，下一轮 Run 终态时前端会再次触发命名；区别是不发连接告警。
+            logger.warning(f"LLM标题产物不可用，保持占位符待重试: {conversation_id}")
+            return ""
     except Exception as e:
         emit_llm_connection_alarm_if_needed(
             e,

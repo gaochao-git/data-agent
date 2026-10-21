@@ -68,6 +68,7 @@ class MCPToolInfo:
     description: str
     input_schema: dict[str, Any]
     label: str = ""  # 用户可见友好名（plugin.json tool_labels 配置，缺省回退原始工具名）
+    approval: str = "ask"  # 审批档位（plugin.json tool_approvals：ask/allow）
 
 
 @asynccontextmanager
@@ -128,6 +129,7 @@ def _dedupe_qualified_names(tools: list[MCPToolInfo]) -> list[MCPToolInfo]:
                 description=info.description,
                 input_schema=info.input_schema,
                 label=info.label,
+                approval=info.approval,
             )
         out.append(info)
     return out
@@ -265,6 +267,8 @@ class MCPToolManager:
                 or {"type": "object", "properties": {}},
                 # 展示名按原始工具名查插件 tool_labels，未配置时回退原始工具名
                 label=str(config.tool_labels.get(tool.name) or "").strip() or str(tool.name or "").strip(),
+                # 审批档位按原始工具名查插件 tool_approvals，未配置时缺省 ask
+                approval=config.tool_approvals.get(tool.name, "ask"),
             )
             for tool in list(getattr(result, "tools", None) or [])
         ]
@@ -276,7 +280,14 @@ class MCPToolManager:
             logger.warning("MCP server 准入告警: id=%s %s: %s", config.server_id, issue.code, issue.message)
         if not report.ok:
             raise MCPAdmissionError(f"MCP server {config.server_id} 未通过准入: {report.summary()}")
-        return tools, ttl_ms if isinstance(ttl_ms, int) and ttl_ms > 0 else None
+        kept = [info for info in tools if info.approval != "deny"]
+        if len(kept) != len(tools):
+            logger.warning(
+                "[mcp_tools] 旧配置 deny 工具不挂载: id=%s tools=%s",
+                config.server_id,
+                [info.name for info in tools if info.approval == "deny"],
+            )
+        return kept, ttl_ms if isinstance(ttl_ms, int) and ttl_ms > 0 else None
 
     def list_tools(self, *, force_refresh: bool = False) -> list[MCPToolInfo]:
         """同步入口：供 agent 装配（同步函数）读取 MCP 工具清单。"""
@@ -400,12 +411,14 @@ def build_langchain_tools(
                 args_schema=_schema_to_args_model(info.qualified_name, info.input_schema),
                 coroutine=_acall,
                 # 展示名与来源随工具对象透传：审批卡据此展示 "MCP server / 工具"，
-                # 而不是把 mcp_<server>_<tool> 原始名直接抛给用户。
+                # 而不是把 mcp_<server>_<tool> 原始名直接抛给用户；approval 供
+                # 审批中间件区分 ask/allow 档位。
                 metadata={
                     "origin": "mcp",
                     "mcp_server_id": info.server_id,
                     "mcp_tool_name": info.name,
                     **({"display_name": info.label} if info.label else {}),
+                    **({"approval": info.approval} if info.approval != "ask" else {}),
                 },
             )
         )

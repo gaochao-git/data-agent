@@ -74,13 +74,9 @@ class AgentRunControls:
     五个字段全部非空才启用，缺任何一个都视为本次运行不支持中断续跑，
     静默降级为无围栏、无 steering 的普通运行。
 
-    ``disable_user_interaction`` 独立于上述围栏组：无人值守运行（定时轮）
-    置 True，工具装配时跳过 ``requires_user_interaction`` 的注册条目
-    （ask_user_question），防止提问后无人应答导致轮次悬挂。
-
-    ``approval_mode``：``ask`` 时装配 ToolApprovalMiddleware，注册表标记
-    （``ToolSpec.approval_required``）的工具执行前中断询问用户；``auto`` 直接执行。
-    无人值守运行由调用方强制 ``auto``。
+    ``disable_user_interaction``：无人值守时不装配审批中间件；内置审批工具
+    （``ToolSpec.approval_required``）与 MCP ``tool_approvals=ask`` 工具在装配层
+    fail-closed 剔除，不向模型暴露。
     """
 
     run_id: str | None = None
@@ -89,7 +85,6 @@ class AgentRunControls:
     admit_inbox_messages: Any = None
     steering_tracker: Any = None
     disable_user_interaction: bool = False
-    approval_mode: str = "auto"
 
     def is_complete(self) -> bool:
         return bool(
@@ -147,10 +142,8 @@ class AgentAssemblySpec:
       MCPToolInfo 层按 server_id 精确过滤，白名单外的 server 不枚举不挂载。
     - ``mcp_tool_search``：MCP 工具两级加载策略——``off`` 全量挂载不检索；
       ``auto`` 工具 schema token 超过模型窗口 ``mcp_tool_search_threshold``
-      比例才启用检索模式；``forced`` 无条件启用。检索模式下工具执行仍注册
-      全量（ToolNode），仅模型可见工具列表按"始终挂载 + 已发现"过滤。
-    - ``always_mounted_tools``：检索模式下始终对模型可见的 MCP 限定工具名
-      （``mcp_<server>_<tool>``），用于核心高频工具免检索直出。
+      比例才启用检索模式；``forced`` 无条件启用。检索模式下 MCP 目标工具
+      全部隐藏，统一先 ``mcp_tool_search``、再通过 ``mcp_tool_call`` 代理执行。
     - ``build_system_prompt``：``(runtime_options, workspace_root, memory_block="") -> prompt``，
       每次装配都会调用，prompt 必须由规格自身决定。
     """
@@ -164,7 +157,6 @@ class AgentAssemblySpec:
     mcp_server_ids: frozenset[str] | None = None
     mcp_tool_search: str = "auto"
     mcp_tool_search_threshold: float = 0.10
-    always_mounted_tools: frozenset[str] = frozenset()
 
 
 VALID_MCP_TOOL_SEARCH_MODES = frozenset({"off", "auto", "forced"})
@@ -214,14 +206,32 @@ def _filter_tools_by_spec(tools: list, spec: AgentAssemblySpec) -> list:
     ]
 
 
-def _build_tool_approval_middleware(run_controls: "AgentRunControls | None", tools: list | None = None) -> Any:
-    """ask 模式且非无人值守才装配审批中间件；auto/无人值守返回 None（零开销）。
+def _requires_approval_tool(tool: Any) -> bool:
+    """工具是否为 ``tool_approvals=ask`` 的 MCP 工具（metadata 由 mcp/manager 透出）。"""
+    metadata = getattr(tool, "metadata", None)
+    return isinstance(metadata, dict) and str(metadata.get("approval") or "ask") == "ask"
 
-    ``tools`` 用于把 MCP display_name 映射进批量审批载荷（审批卡展示友好名）。
+
+def _filter_tools_for_unattended(builtin_tools: list, mcp_tools: list) -> tuple[list, list, frozenset[str]]:
+    """无人值守 fail-closed：剔除内置审批工具与 MCP ask 工具，返回过滤结果与排除集。"""
+    excluded_mcp_names = frozenset(str(tool.name) for tool in mcp_tools if _requires_approval_tool(tool))
+    kept_mcp = [tool for tool in mcp_tools if str(tool.name) not in excluded_mcp_names]
+    kept_builtin = [
+        tool for tool in builtin_tools if str(getattr(tool, "name", "") or "") not in APPROVAL_REQUIRED_TOOL_NAMES
+    ]
+    return kept_builtin, kept_mcp, excluded_mcp_names
+
+
+def _build_tool_approval_middleware(run_controls: "AgentRunControls | None", tools: list | None = None) -> Any:
+    """装配审批中间件；无人值守恒不装配（ask 工具由装配层 fail-closed 剔除）。
+
+    注册表标记 + MCP 默认 ask；``tool_approvals=allow`` 的工具免审批。
+    ``tools`` 用于提取 MCP display_name（审批卡展示友好名）与 allow 档位。
     """
-    if run_controls is None or run_controls.approval_mode != "ask" or run_controls.disable_user_interaction:
+    if run_controls is None or run_controls.disable_user_interaction:
         return None
-    return create_tool_approval_middleware(tools, run_id=run_controls.run_id if run_controls is not None else None)
+    # 审批策略按工具固定；交互会话始终挂载。
+    return create_tool_approval_middleware(tools, run_id=run_controls.run_id)
 
 
 def assemble_tools(
@@ -299,14 +309,12 @@ def _filter_subagent_tools(tools: list, excluded: frozenset) -> list:
     return [tool for tool in tools if str(getattr(tool, "name", "") or "") not in excluded]
 
 
-def _subagent_approval_exclusions(run_controls: "AgentRunControls | None") -> frozenset[str]:
-    """按需审批模式下子智能体不挂审批工具：子图不支持人工中断，委派删除/移动会绕过审批。
+def _subagent_approval_exclusions() -> frozenset[str]:
+    """子智能体不挂审批工具：子图不支持人工中断，委派删除/移动会绕过审批。
 
-    与 ``ask_user_question`` 同款处理——子智能体哲学是「不注册人工交互」，审批类
-    工具从能力面剔除；auto 模式行为不变（子智能体照常可用）。
+    与 ``ask_user_question`` 同款处理——子智能体哲学是「不注册人工交互」，
+    审批类工具始终从能力面剔除（交互与无人值守一致，fail-closed）。
     """
-    if run_controls is None or run_controls.approval_mode != "ask" or run_controls.disable_user_interaction:
-        return frozenset()
     return APPROVAL_REQUIRED_TOOL_NAMES
 
 
@@ -315,7 +323,7 @@ def _general_purpose_system_prompt(approval_tools_excluded: bool) -> str:
 
     剔除只解决了「能不能执行」，没有解决「模型知不知道自己不能执行」：不声明时
     模型会先派一次工具拿到「工具不存在」，白跑一轮 token 才退回主智能体。这段
-    与 ``_subagent_approval_exclusions`` 共用同一判据，auto/无人值守不受影响。
+    与 ``_subagent_approval_exclusions`` 共用同一判据。
     """
     if not approval_tools_excluded:
         return GENERAL_PURPOSE_SUBAGENT_PROMPT
@@ -343,7 +351,7 @@ def build_subagent_middleware(
     ``memory_block`` 与主智能体同一份会话记忆条目（一致继承）：子图 system
     prompt 由此注入只读记忆段；未传或为空则不注入。
     """
-    approval_excluded = _subagent_approval_exclusions(run_controls)
+    approval_excluded = _subagent_approval_exclusions()
     base_excluded = SUBAGENT_BASE_EXCLUDED_TOOL_NAMES | approval_excluded
     specs: list[SubagentSpec] = []
     if runtime_options.explore_subagent_enabled:
@@ -434,6 +442,39 @@ CHAT_DATA_AGENT_SPEC = AgentAssemblySpec(
 )
 
 
+def _system_prompt_with_mcp_tools(
+    system_prompt: str,
+    *,
+    search_active: bool,
+    mcp_tools: list,
+) -> str:
+    """检索模式下把 MCP 能力摘要追加到系统提示；独立函数控制装配函数复杂度。"""
+    if not search_active:
+        return system_prompt
+    reminder = _mcp_tool_reminder(mcp_tools)
+    return f"{system_prompt.rstrip()}\n\n{reminder}" if reminder else system_prompt
+
+
+def _mcp_tool_reminder(mcp_tools: list) -> str:
+    """检索模式下把 MCP 工具 canonical 名注入 system prompt；不列 schema。"""
+    names = sorted({str(getattr(tool, "name", "") or "") for tool in mcp_tools})
+    names = [name for name in names if name]
+    if not names:
+        return ""
+    listed = "\n".join(f"- {name}" for name in names[:50])
+    if len(names) > 50:
+        listed += f"\n- …其余 {len(names) - 50} 个"
+    return (
+        "<system-reminder>\n"
+        "以下 MCP 工具可用（当前未加载 schema）：\n"
+        f"{listed}\n"
+        "先调用 mcp_tool_search，query 传完整工具名（多个用 | 分隔）获取 input_schema；"
+        "不知道工具名时再用 search 参数（多个关键词也用 | 分隔）做关键词模糊检索。"
+        "拿到 input_schema 后再通过 mcp_tool_call({name,input}) 调用；不要直接调用目标工具名。\n"
+        "</system-reminder>"
+    )
+
+
 def _load_spec_mcp_tools(spec: AgentAssemblySpec) -> list:
     """装配规格允许时枚举 MCP/插件动态工具；任何失败都降级为空集，不阻断装配。"""
     if not spec.enable_mcp_tools:
@@ -454,6 +495,8 @@ def _resolve_mcp_tool_search_service(
     spec: AgentAssemblySpec,
     tool_tokens: int,
     model_id: str | None,
+    *,
+    excluded_names: frozenset[str] = frozenset(),
 ) -> "MCPToolSearchService | None":
     """两级加载判定：off 关闭；forced 启用；auto 按工具 token 占模型窗口比例判断。
 
@@ -474,7 +517,7 @@ def _resolve_mcp_tool_search_service(
         tool_tokens,
         threshold_tokens,
     )
-    return MCPToolSearchService(get_mcp_tool_manager())
+    return MCPToolSearchService(get_mcp_tool_manager(), excluded_names=excluded_names)
 
 
 def _build_memory_compression_hook(
@@ -523,6 +566,36 @@ def _normalize_model_id(model_id: str | None) -> str | None:
         return fallback
 
 
+def _resolve_workspace_runtime(
+    runtime: ConversationWorkspaceRuntime | None,
+    options: AgentRuntimeOptions,
+    user_id: str | None,
+) -> ConversationWorkspaceRuntime:
+    """未显式传入时构造历史回放工作区；独立函数控制装配函数复杂度。"""
+    if runtime is not None:
+        return runtime
+    workspace_paths = ensure_conversation_workspace("_history_reader", user_id or "system")
+    return ConversationWorkspaceRuntime(
+        workspace_root=workspace_paths["root"],
+        user_id=user_id or "system",
+        backend=options.workspace_backend,
+    )
+
+
+def _with_mcp_control_tools(tools: list, mcp_tools: list, search_service: Any) -> list:
+    """检索模式追加 search + proxy；独立函数控制装配函数复杂度。"""
+    if search_service is None:
+        return tools
+    from .mcp.catalog import create_mcp_tool_call_tool, create_mcp_tool_search_tool
+
+    mcp_tools_by_name = {str(tool.name): tool for tool in mcp_tools}
+    return [
+        *tools,
+        create_mcp_tool_search_tool(search_service),
+        create_mcp_tool_call_tool(mcp_tools_by_name),
+    ]
+
+
 def create_agent_from_spec(
     spec: AgentAssemblySpec,
     runtime_options: AgentRuntimeOptions | None = None,
@@ -556,14 +629,7 @@ def create_agent_from_spec(
     model_id = _normalize_model_id(invocation.model_id)
     enable_thinking = invocation.enable_thinking
     thinking_effort = invocation.thinking_effort
-    runtime = workspace_runtime
-    if runtime is None:
-        workspace_paths = ensure_conversation_workspace("_history_reader", user_id or "system")
-        runtime = ConversationWorkspaceRuntime(
-            workspace_root=workspace_paths["root"],
-            user_id=user_id or "system",
-            backend=options.workspace_backend,
-        )
+    runtime = _resolve_workspace_runtime(workspace_runtime, options, user_id)
     context_request_budget = ContextRequestBudget(model_id)
     builtin_tools = assemble_tools(
         options,
@@ -575,13 +641,18 @@ def create_agent_from_spec(
         run_controls=run_controls,
     )
     mcp_tools = _load_spec_mcp_tools(spec)
+    excluded_mcp_names: frozenset[str] = frozenset()
+    if run_controls is not None and run_controls.disable_user_interaction:
+        # 无人值守不装配审批中间件：ask 工具无人应答会悬挂，在装配层剔除（模型不可见且不可检索），
+        # fail-closed；allow 工具无需审批，可以继续使用。
+        builtin_tools, mcp_tools, excluded_mcp_names = _filter_tools_for_unattended(builtin_tools, mcp_tools)
     tool_tokens = count_tools_tokens([*builtin_tools, *mcp_tools]) if mcp_tools else 0
-    search_service = _resolve_mcp_tool_search_service(spec, tool_tokens, model_id) if mcp_tools else None
-    tools = builtin_tools + mcp_tools
-    if search_service is not None:
-        from .mcp.catalog import create_mcp_tool_search_tool
-
-        tools = [*tools, create_mcp_tool_search_tool(search_service)]
+    search_service = (
+        _resolve_mcp_tool_search_service(spec, tool_tokens, model_id, excluded_names=excluded_mcp_names)
+        if mcp_tools
+        else None
+    )
+    tools = _with_mcp_control_tools([*builtin_tools, *mcp_tools], mcp_tools, search_service)
     logger.info(
         "[data_agent] 工具装配完成: agent=%s builtin=%d mcp=%d search_tool=%s total=%d tool_tokens=%d",
         spec.agent_id,
@@ -596,6 +667,17 @@ def create_agent_from_spec(
         workspace_root=runtime.workspace_root,
         memory_block=invocation.memory_block,
     )
+    effective_system_prompt = _system_prompt_with_mcp_tools(
+        effective_system_prompt,
+        search_active=search_service is not None,
+        mcp_tools=mcp_tools,
+    )
+    if run_controls is not None and run_controls.disable_user_interaction:
+        effective_system_prompt += (
+            "\n\n## 无人值守能力边界\n"
+            "- 本次运行无人实时应答，需要人工审批的工具（文件删除、移动、目录删除等）不会挂载。\n"
+            "- 不要尝试调用这些工具；如任务必须删除/移动文件，请明确说明能力受限并给出替代方案。"
+        )
     context_request_budget.configure(effective_system_prompt, tools, model_id=model_id)
     context_request_budget.validate_static_input()
     model = create_streaming_chat_model(
@@ -658,7 +740,7 @@ def create_agent_from_spec(
             tracker=run_controls.steering_tracker,
             state_schema=ChatDataAgentState,
         )
-    # 按需审批只对交互式 chat 生效；auto 模式不装配（零开销），无人值守强制 auto
+    # 交互会话始终装配工具审批；无人值守不装配（ask 工具已 fail-closed 剔除）
     tool_approval_middleware = _build_tool_approval_middleware(run_controls, tools)
     after_model_history_middleware = None
     if persist_model_snapshot is not None:
@@ -674,7 +756,6 @@ def create_agent_from_spec(
         mcp_tool_discovery_middleware=(
             MCPToolDiscoveryMiddleware(
                 search_active=search_service is not None,
-                always_mounted_tools=spec.always_mounted_tools,
             )
             if search_service is not None
             else None

@@ -901,7 +901,7 @@ async def test_compiled_subagent_mounts_tool_result_middleware(monkeypatch, tmp_
             return self
 
     @lc_tool
-    def data_analyzing_tool(query: str) -> str:
+    def query_tool(query: str) -> str:
         """查询数据（测试用：返回内部协议结果）。"""
         return tool_results.build_internal_query_result(
             {
@@ -921,7 +921,7 @@ async def test_compiled_subagent_mounts_tool_result_middleware(monkeypatch, tmp_
                     {
                         "id": "inner-q1",
                         "type": "tool_call",
-                        "name": "data_analyzing_tool",
+                        "name": "query_tool",
                         "args": {"query": "总量"},
                     }
                 ],
@@ -930,7 +930,7 @@ async def test_compiled_subagent_mounts_tool_result_middleware(monkeypatch, tmp_
         ]
     )
 
-    spec = _spec(tools=[data_analyzing_tool], model=model)
+    spec = _spec(tools=[query_tool], model=model)
     tool = build_task_tool([spec])
 
     result = await tool.coroutine(

@@ -180,18 +180,15 @@ describe('ConversationInputBar thinking effort selector', () => {
 })
 
 
-describe('ConversationInputBar approval grants management', () => {
-  it('emits manageApprovalGrants from the permission menu', async () => {
+describe('ConversationInputBar approval policy', () => {
+  it('does not expose a user-selectable approval mode or grant manager', () => {
     const wrapper = mount(ConversationInputBar, {
       props: {
         input: '', placeholder: '请输入', selectedModel: 'model-a', modelOptions: [], enableDeepThinking: null,
-        thinkingEffort: null, isGenerating: false, canSubmit: true, approvalMode: 'ask',
+        thinkingEffort: null, isGenerating: false, canSubmit: true,
       },
     })
-    await wrapper.find('button[title="选择工具审批模式"]').trigger('click')
-    const manageButton = wrapper.findAll('button').find(button => button.text().includes('许可'))
-    expect(manageButton).toBeTruthy()
-    await manageButton!.trigger('click')
-    expect(wrapper.emitted('manageApprovalGrants')).toHaveLength(1)
+    expect(wrapper.text()).toContain('工具审批由管理员配置')
+    expect(wrapper.find('button[title="选择工具审批模式"]').exists()).toBe(false)
   })
 })

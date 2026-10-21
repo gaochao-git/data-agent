@@ -86,8 +86,8 @@ def test_discovered_from_history_collects_search_tool_messages():
 # ---- _filter_request：search_active / 无 MCP 工具 / 全部已发现 / 过滤 ----
 
 
-def _middleware(search_active=True, always_mounted=()):
-    return MCPToolDiscoveryMiddleware(search_active=search_active, always_mounted_tools=always_mounted)
+def _middleware(search_active=True):
+    return MCPToolDiscoveryMiddleware(search_active=search_active)
 
 
 def test_filter_request_passthrough_when_search_inactive():
@@ -102,31 +102,32 @@ def test_filter_request_passthrough_without_mcp_tools():
     assert result is request
 
 
-def test_filter_request_passthrough_when_all_mcp_discovered():
+def test_filter_request_does_not_expose_previous_discovery():
     request = _FakeRequest(
         tools=[_tool("mcp_known"), _tool("file_read")],
-        state={"discovered_tool_names": ["mcp_known"]},
+        state={"mcp_run_discovered_tool_names": ["mcp_known"]},
     )
     result = _middleware()._filter_request(request)
-    assert result is request
+    assert result.overridden is not None
+    assert [tool.name for tool in result.overridden["tools"]] == ["file_read"]
 
 
 def test_filter_request_hides_undiscovered_mcp_tools():
     request = _FakeRequest(
         tools=[_tool("mcp_known"), _tool("mcp_hidden"), _tool("file_read")],
-        state={"discovered_tool_names": ["mcp_known"]},
+        state={"mcp_run_discovered_tool_names": ["mcp_known"]},
     )
     result = _middleware()._filter_request(request)
     assert result.overridden is not None
     names = [tool.name for tool in result.overridden["tools"]]
-    assert names == ["file_read", "mcp_known"]
+    assert names == ["file_read"]
 
 
 def test_filter_request_keeps_always_mounted_without_state():
     request = _FakeRequest(tools=[_tool("mcp_always"), _tool("mcp_hidden"), _tool("file_read")])
-    result = _middleware(always_mounted=("mcp_always",))._filter_request(request)
+    result = _middleware()._filter_request(request)
     names = [tool.name for tool in result.overridden["tools"]]
-    assert names == ["file_read", "mcp_always"]
+    assert names == ["file_read"]
 
 
 # ---- wrap_tool_call / awrap_tool_call：检索捕获与非检索直通 ----
@@ -172,3 +173,14 @@ def test_capture_discovery_ignores_empty_names():
     message = _search_tool_message(_search_content([]))
     result = _middleware()._capture_discovery(message)
     assert result is message
+
+
+def test_search_result_parser_handles_command_without_message_and_plain_result():
+    from apps.chat_data_app.agent.middleware.mcp_tool_discovery import _names_from_tool_result
+
+    assert _names_from_tool_result(Command(update={"messages": []})) == []
+    assert _names_from_tool_result("plain") == []
+
+    middleware = MCPToolDiscoveryMiddleware(search_active=True)
+    request = _FakeRequest(tool_call={"name": MCP_TOOL_SEARCH_TOOL_NAME})
+    assert middleware.wrap_tool_call(request, lambda _req: "plain") == "plain"

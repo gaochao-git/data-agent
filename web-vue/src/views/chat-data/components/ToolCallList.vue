@@ -140,7 +140,7 @@ const buildTrailView = (item: SubagentTrailItem, isParentRunning: boolean): Trai
       result: item.result,
       status: item.status || 'running',
     },
-    displayName: getToolDisplayName(item.tool_name || ''),
+    displayName: getToolDisplayName(item.tool_name || '', item.args),
     compactDescription: getToolCompactDescription(item.tool_name || '', item.args),
     technicalDescription: getToolTechnicalDescription(item.tool_name || '', item.args),
     isRunning: item.status === 'running',
@@ -214,7 +214,7 @@ const runningToolName = (tc: ToolCallInfo): string => {
   for (let index = trail.length - 1; index >= 0; index -= 1) {
     const item = trail[index]
     if (item?.kind === 'tool' && item.status === 'running') {
-      return getToolDisplayName(item.tool_name || '')
+      return getToolDisplayName(item.tool_name || '', item.args)
     }
   }
   return ''

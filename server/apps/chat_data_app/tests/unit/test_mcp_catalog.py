@@ -17,6 +17,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 
 from langchain_core.messages import ToolMessage  # noqa: E402
+from langchain_core.tools import StructuredTool, ToolException  # noqa: E402
 from langgraph.types import Command  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
@@ -26,6 +27,7 @@ from apps.chat_data_app.agent.mcp.catalog import (  # noqa: E402
     MCPCatalog,
     MCPToolSearchService,
     ToolCatalogEntry,
+    create_mcp_tool_call_tool,
     create_mcp_tool_search_tool,
     warn_long_mcp_descriptions,  # noqa: F401  # 测试按模块属性引用 warn_long_mcp_descriptions，属有意重导出
 )
@@ -204,22 +206,27 @@ async def test_service_search_text_no_hit_lists_servers():
 
 
 @pytest.mark.asyncio
-async def test_service_search_text_server_id_filter():
+async def test_service_lookup_text_returns_exact_schema():
     service = MCPToolSearchService(FakeManager([SSH_OVERVIEW(), LOG_GREP()]))
-    payload = json.loads(await service.search_text("状态 检索", server_id="fault"))
-    assert all(item["server_id"] == "fault" for item in payload["results"])
+    payload = json.loads(await service.lookup_text(["mcp_ssh_system_overview", "mcp_missing_tool"]))
+    assert payload["count"] == 1
+    assert payload["results"][0]["name"] == "mcp_ssh_system_overview"
+    assert payload["results"][0]["input_schema"]["properties"]["ip"]["type"] == "string"
+    assert payload["missing"] == ["mcp_missing_tool"]
 
 
 @pytest.mark.asyncio
 async def test_mcp_tool_search_tool_invocation():
-    service = MCPToolSearchService(FakeManager([SSH_OVERVIEW()]))
+    service = MCPToolSearchService(FakeManager([SSH_OVERVIEW(), LOG_GREP()]))
     tool = create_mcp_tool_search_tool(service)
     assert tool.name == MCP_TOOL_SEARCH_TOOL_NAME
     schema = tool.args_schema.model_json_schema()
-    assert set(schema["properties"]) == {"query", "server_id", "limit", "intent"}
-    result = await tool.coroutine(query="CPU 状态", intent="检索系统状态工具")
+    assert set(schema["properties"]) == {"query", "search", "limit", "intent"}
+    result = await tool.coroutine(query="mcp_ssh_system_overview|mcp_fault_log_grep", intent="加载两个工具 schema")
     payload = json.loads(result)
-    assert payload["count"] == 1
+    assert payload["count"] == 2
+    fuzzy = json.loads(await tool.coroutine(search="CPU|状态", intent="检索系统状态工具"))
+    assert fuzzy["count"] == 1
 
 
 def test_warn_long_mcp_descriptions_logs_warning(monkeypatch):
@@ -281,21 +288,18 @@ def _request_tools():
 
 @pytest.mark.asyncio
 async def test_middleware_filters_tools_by_discovered_and_always_mounted():
-    middleware = MCPToolDiscoveryMiddleware(
-        search_active=True,
-        always_mounted_tools=frozenset({"mcp_fault_log_grep"}),
-    )
-    state = {"discovered_tool_names": ["mcp_ssh_system_overview"]}
+    middleware = MCPToolDiscoveryMiddleware(search_active=True)
+    state = {"mcp_run_discovered_tool_names": ["mcp_ssh_system_overview"]}
     request = FakeRequest(_request_tools(), state=state)
     result = await middleware.awrap_model_call(request, lambda req: _async_identity(req))
     assert request.overrides is not None
     exposed = [tool.name for tool in request.overrides["tools"]]
-    assert exposed == ["file_read", "mcp_ssh_system_overview", "mcp_fault_log_grep"]
+    assert exposed == ["file_read"]
     assert result is request
 
 
 @pytest.mark.asyncio
-async def test_middleware_falls_back_to_history_discovery_when_state_empty():
+async def test_middleware_does_not_use_previous_run_history():
     middleware = MCPToolDiscoveryMiddleware(search_active=True)
     history_message = ToolMessage(
         content=json.dumps(
@@ -310,8 +314,7 @@ async def test_middleware_falls_back_to_history_discovery_when_state_empty():
     request = FakeRequest(_request_tools(), state={}, messages=[history_message])
     await middleware.awrap_model_call(request, lambda req: _async_identity(req))
     exposed = [tool.name for tool in request.overrides["tools"]]
-    assert "mcp_db_slow_query" in exposed
-    assert "mcp_ssh_system_overview" not in exposed
+    assert exposed == ["file_read"]
 
 
 @pytest.mark.asyncio
@@ -329,13 +332,11 @@ async def test_middleware_inactive_or_without_mcp_passes_through():
 
 @pytest.mark.asyncio
 async def test_middleware_no_override_when_all_tools_exposed():
-    middleware = MCPToolDiscoveryMiddleware(
-        search_active=True,
-        always_mounted_tools=frozenset({"mcp_ssh_system_overview", "mcp_fault_log_grep", "mcp_db_slow_query"}),
-    )
+    middleware = MCPToolDiscoveryMiddleware(search_active=True)
     request = FakeRequest(_request_tools())
     await middleware.awrap_model_call(request, _async_identity)
-    assert request.overrides is None
+    assert request.overrides is not None
+    assert [tool.name for tool in request.overrides["tools"]] == ["file_read"]
 
 
 @pytest.mark.asyncio
@@ -392,12 +393,12 @@ async def test_middleware_passes_through_non_search_and_unparsable_results():
 
 def test_middleware_sync_model_call_filters():
     middleware = MCPToolDiscoveryMiddleware(search_active=True)
-    state = {"discovered_tool_names": ["mcp_db_slow_query"]}
+    state = {"mcp_run_discovered_tool_names": ["mcp_db_slow_query"]}
     request = FakeRequest(_request_tools(), state=state)
     middleware.wrap_model_call(request, lambda req: req)
     assert request.overrides is not None
     exposed = [tool.name for tool in request.overrides["tools"]]
-    assert exposed == ["file_read", "mcp_db_slow_query"]
+    assert exposed == ["file_read"]
 
 
 def test_merge_discovered_tool_names_dedupes_and_preserves_order():
@@ -406,3 +407,67 @@ def test_merge_discovered_tool_names_dedupes_and_preserves_order():
 
 async def _async_identity(value):
     return value
+
+
+def test_catalog_select_query_loads_exact_names_in_order():
+    catalog = MCPCatalog()
+    catalog.sync([SSH_OVERVIEW(), LOG_GREP(), DB_SLOW()])
+    hits = [entry.qualified_name for entry in catalog.search("select:mcp_db_slow_query,mcp_ssh_system_overview")]
+    assert hits == ["mcp_db_slow_query", "mcp_ssh_system_overview"]
+
+
+def test_mcp_tool_reminder_lists_names_without_always_mounted():
+    from apps.chat_data_app.agent.data_agent import _mcp_tool_reminder
+
+    class _Tool:
+        def __init__(self, name, label):
+            self.name = name
+            self.metadata = {"mcp_server_id": "fault-ssh", "display_name": label}
+
+    reminder = _mcp_tool_reminder(
+        [
+            _Tool("mcp_fault-ssh_system_disk_usage", "磁盘用量"),
+            _Tool("mcp_fault-ssh_system_overview", "系统概览"),
+        ]
+    )
+    assert "mcp_fault-ssh_system_disk_usage" in reminder
+    assert "mcp_fault-ssh_system_overview" in reminder
+    assert "<system-reminder>" in reminder
+
+
+def test_catalog_search_accepts_exact_qualified_name():
+    catalog = MCPCatalog()
+    catalog.sync([SSH_OVERVIEW(), LOG_GREP()])
+    hits = catalog.search("mcp_ssh_system_overview")
+    assert [entry.qualified_name for entry in hits] == ["mcp_ssh_system_overview"]
+
+
+@pytest.mark.asyncio
+async def test_mcp_tool_call_proxy_requires_searched_state_and_propagates_errors():
+    async def _target(query: str) -> str:
+        return f"ok={query}"
+
+    target = StructuredTool(
+        name="mcp_fault-ssh_system_disk_usage",
+        description="磁盘用量",
+        args_schema=_Args,
+        coroutine=_target,
+    )
+    proxy = create_mcp_tool_call_tool({target.name: target})
+
+    with pytest.raises(ToolException, match="尚未搜索"):
+        await proxy.coroutine(name=target.name, input={"query": "/"}, state={})
+
+    result = await proxy.coroutine(
+        name=target.name,
+        input={"query": "/"},
+        state={"discovered_tool_names": [target.name]},
+    )
+    assert result == "ok=/"
+
+
+@pytest.mark.asyncio
+async def test_mcp_tool_call_proxy_rejects_unknown_and_control_targets():
+    proxy = create_mcp_tool_call_tool({})
+    with pytest.raises(ToolException, match="未找到"):
+        await proxy.coroutine(name="mcp_missing_tool", input={})

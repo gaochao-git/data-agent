@@ -83,6 +83,7 @@ def test_assemble_tools_registers_all_tools_except_optional_bash(tmp_path):
         "read_image",
         "present_artifacts",
         "get_current_time",
+        "load_skill",
         "data_analyzing_tool",
         "calculator_tool",
         "ask_user_question",
@@ -123,18 +124,19 @@ def test_create_data_agent_uses_standard_middleware_without_model_fallback(monke
     )
 
     assert agent.name == "agent"
-    assert len(captured["middleware"]) == 11
-    assert captured["middleware"][0].name == "ImageInjectionMiddleware"
-    assert captured["middleware"][1].name == "ToolTimingMiddleware"
-    assert captured["middleware"][2].name == "ToolCallRateAlertMiddleware"
-    assert captured["middleware"][3].name == "ToolCallHistoryRepairMiddleware"
-    assert captured["middleware"][4].name == "TodoListMiddleware"
-    assert captured["middleware"][5].name == "ContextCompressionMiddleware"
-    assert captured["middleware"][6] == {"context_model": "primary-model"}
-    assert captured["middleware"][7].name == "ResponseTimestampMiddleware"
-    assert captured["middleware"][8].name == "ToolCallNameNormalizerMiddleware"
-    assert captured["middleware"][9].name == "ToolResultMiddleware"
-    assert captured["middleware"][10].name == "ToolErrorMiddleware"
+    assert len(captured["middleware"]) == 12
+    assert captured["middleware"][0].name == "SkillPrerequisiteMiddleware"
+    assert captured["middleware"][1].name == "ImageInjectionMiddleware"
+    assert captured["middleware"][2].name == "ToolTimingMiddleware"
+    assert captured["middleware"][3].name == "ToolCallRateAlertMiddleware"
+    assert captured["middleware"][4].name == "ToolCallHistoryRepairMiddleware"
+    assert captured["middleware"][5].name == "TodoListMiddleware"
+    assert captured["middleware"][6].name == "ContextCompressionMiddleware"
+    assert captured["middleware"][7] == {"context_model": "primary-model"}
+    assert captured["middleware"][8].name == "ResponseTimestampMiddleware"
+    assert captured["middleware"][9].name == "ToolCallNameNormalizerMiddleware"
+    assert captured["middleware"][10].name == "ToolResultMiddleware"
+    assert captured["middleware"][11].name == "ToolErrorMiddleware"
     assert context_kwargs["tools"] == []
     assert context_kwargs["state_schema"] is ChatDataAgentState
 
@@ -164,6 +166,7 @@ def test_create_data_agent_registers_after_model_history_middleware(monkeypatch,
     )
 
     assert [middleware.name for middleware in captured["middleware"]] == [
+        "SkillPrerequisiteMiddleware",
         "ImageInjectionMiddleware",
         "ToolTimingMiddleware",
         "ToolCallRateAlertMiddleware",
@@ -410,3 +413,62 @@ def test_get_data_agent_graph_forwards_runtime_options_and_checkpointer(monkeypa
     assert graph == "graph"
     assert captured["runtime_options"] is None
     assert captured["kwargs"]["checkpointer"] == "checkpoint"
+
+
+def test_create_data_agent_registers_mcp_search_and_proxy(monkeypatch, tmp_path):
+    captured = {}
+    runtime, options = _runtime(tmp_path)
+    fake_tool = SimpleNamespace(name="mcp_demo_tool", description="demo")
+
+    monkeypatch.setattr(data_agent, "assemble_tools", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(data_agent, "_load_spec_mcp_tools", lambda _spec: [fake_tool])
+    monkeypatch.setattr(data_agent, "count_tools_tokens", lambda _tools: 100)
+    monkeypatch.setattr(data_agent, "_resolve_mcp_tool_search_service", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(data_agent, "create_streaming_chat_model", lambda **_kwargs: object())
+
+    def fake_create_agent(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(name="agent")
+
+    monkeypatch.setattr(data_agent, "create_agent", fake_create_agent)
+    agent = data_agent.create_data_agent(
+        options,
+        workspace_runtime=runtime,
+        identity_context=IdentityContext(),
+        datasource_context=DatasourceContext(datasource_id="ds_a"),
+        model_invocation=ModelInvocationConfig(system_prompt="system", model_id="primary-model"),
+    )
+
+    tool_names = [tool.name for tool in captured["tools"]]
+    assert "mcp_tool_search" in tool_names
+    assert "mcp_tool_call" in tool_names
+    assert "mcp_demo_tool" in tool_names
+    assert "mcp_demo_tool" in captured["system_prompt"]
+    assert agent.name == "agent"
+
+
+def test_create_data_agent_unattended_filters_builtin_approval_tools(monkeypatch, tmp_path):
+    from apps.chat_data_app.agent.data_agent import AgentRunControls
+
+    captured: dict = {}
+    runtime, options = _runtime(tmp_path)
+    tools = [SimpleNamespace(name="file_read"), SimpleNamespace(name="file_delete"), SimpleNamespace(name="file_move")]
+
+    monkeypatch.setattr(data_agent, "assemble_tools", lambda *_args, **_kwargs: list(tools))
+    monkeypatch.setattr(data_agent, "create_streaming_chat_model", lambda **_kwargs: SimpleNamespace())
+    monkeypatch.setattr(data_agent, "create_agent", lambda **kwargs: captured.update(kwargs) or SimpleNamespace())
+
+    data_agent.create_data_agent(
+        options,
+        workspace_runtime=runtime,
+        identity_context=IdentityContext(),
+        datasource_context=DatasourceContext(datasource_id="ds_a"),
+        model_invocation=ModelInvocationConfig(system_prompt="system", model_id="primary-model"),
+        run_controls=AgentRunControls(disable_user_interaction=True),
+    )
+
+    names = [getattr(tool, "name", "") for tool in captured["tools"]]
+    assert "file_read" in names
+    assert "file_delete" not in names
+    assert "file_move" not in names
+    assert "无人值守能力边界" in captured["system_prompt"]

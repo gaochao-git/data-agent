@@ -27,43 +27,6 @@ def merge_context_compression_events(
     return merged
 
 
-def replace_approval_grants(existing: list[str] | None, new: list[str] | None) -> list[str]:
-    """整体替换许可（撤销/重置需要真正清掉，不能走 merge）。
-
-    注意：replace 语义下并行同超步写只有最后一个生效；所有写入点必须先读
-    checkpoint 既有许可、合并后再整表写回，不允许只写新增项。
-    """
-    return merge_approval_grants([], new)
-
-
-def merge_approval_grants(existing: list[str] | None, new: list[str] | None) -> list[str]:
-    """合并会话级审批许可（``tool:<name>`` / ``mcp_server:<id>``），去重保序。"""
-    merged: list[str] = []
-    seen: set[str] = set()
-    for grant in [*(existing or []), *(new or [])]:
-        normalized = str(grant or "").strip()
-        if not normalized or normalized in seen:
-            continue
-        seen.add(normalized)
-        merged.append(normalized)
-    return merged
-
-
-def replace_approval_run_grants(
-    existing: dict[str, list[str]] | None,
-    new: dict[str, list[str]] | None,
-) -> dict[str, list[str]]:
-    """按 run 替换"本轮内始终允许"许可。
-
-    ``after_model`` 每轮只写当前 run 的许可集合，旧 run 的键随之被淘汰，
-    既保证同一 run 内跨工具轮生效，又不会让 checkpoint 随对话无限增长。
-    """
-    _ = existing
-    return {
-        str(run_id): [str(item) for item in keys if str(item).strip()] for run_id, keys in (new or {}).items() if keys
-    }
-
-
 def replace_approval_decisions(
     existing: dict[str, str] | None,
     new: dict[str, str] | None,
@@ -164,10 +127,6 @@ class ChatDataAgentState(AgentState, total=False):
     context_summary: str | None
     context_compression_events: Annotated[list[dict[str, Any]], merge_context_compression_events]
     discovered_tool_names: Annotated[list[str], merge_discovered_tool_names]
-    # 会话级"始终允许"：仅存于当前会话 checkpoint，随会话结束自然失效。
-    approval_grants: Annotated[list[str], replace_approval_grants]
     # 本轮审批决策：after_model 批量中断后写入，wrap_tool_call 执行前消费。
     approval_decisions: Annotated[dict[str, str], replace_approval_decisions]
-    # 本轮内始终允许：run_id → [tool:<name>]，仅当前 run 生效，换 run 自动淘汰。
-    approval_run_grants: Annotated[dict[str, list[str]], replace_approval_run_grants]
     workspace: ConversationWorkspaceContext

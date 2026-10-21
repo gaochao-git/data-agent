@@ -1,9 +1,6 @@
 """ChatData 单一 Agent 的系统提示词。"""
 
-from utils.builtin_skills import (
-    DATA_ANALYZING_SKILL,
-    builtin_skill_file,
-)
+from utils.builtin_skills import DATA_ANALYZING_SKILL
 
 from ..runtime_options import AgentRuntimeOptions
 from .security_prompt import SECURITY_PROMPT
@@ -50,7 +47,7 @@ EMPTY_AVAILABLE_SKILLS_XML = "<available_skills>\n</available_skills>"
 
 SKILLS_USAGE_BLOCK = """## 技能使用
 - 用户意图命中当前可用技能时，读取对应技能；用户本轮显式引用技能，或前端传入本轮指定技能时，必须读取对应技能；
-- 用户消息形如“使用「xxx」技能回答：...”时，表示前端已经确认本轮指定技能，必须直接调用 `file_read` 读取该技能在 `<available_skills>` 中声明的 `skill_file`，禁止再向用户确认。"""
+- 用户消息形如“使用「xxx」技能回答：...”时，表示前端已经确认本轮指定技能，必须直接调用 `load_skill(name="xxx")` 加载该技能，禁止再向用户确认。"""
 
 OUTPUT_AND_FINAL_ANSWER_BLOCK = """## 输出与最终回答
 - 全程使用简体中文回复（包括思考过程和调用工具前后的过程说明短句）；用户使用其他语言提问时，跟随用户语言。
@@ -78,7 +75,7 @@ ENVIRONMENT_BLOCK = """## 环境
 │   │   ├── query_result/  查询结果卸载文件（系统写入，按工具返回的 result_path 读取）
 │   │   └── .tool-offload/ 其它工具大结果卸载文件（系统写入，按工具返回的 result_path 读取）
 │   └── uploads/     上传区（只读，不可写）
-└── skills/          当前可用技能（只读，含 SKILL.md、references、assets），入口路径以 <available_skills> 声明的 skill_file 为准
+└── skills/          当前可用技能（只读，含 SKILL.md、references、assets），入口一律用 load_skill(name) 加载
 
 目录规则：
 - 文件删除、移动和复制只能操作 `workspace` 或 `outputs`，不得修改 `uploads`。
@@ -122,8 +119,8 @@ DATA_EXPLORE_SUBAGENT_PROMPT = f"""# 角色
 
 ## 工作方式
 - 严格围绕任务书目标收集，任务书没要求的扩展动作不要做。
-- 任务书指定了相关技能（含用户自定义技能）时，先 `file_read` 其 `SKILL.md` 并严格按其执行；任务书未提及的技能不要虚构路径。
-- 涉及语义模型或数据查询时，第一步先用 `file_read` 读取 `{builtin_skill_file(DATA_ANALYZING_SKILL)}` 并严格按其执行。
+- 任务书指定了相关技能（含用户自定义技能）时，先 `load_skill(name=技能名)` 加载并严格按其执行；任务书未提及的技能不要虚构名称。
+- 涉及语义模型或数据查询时，第一步先 `load_skill(name="{DATA_ANALYZING_SKILL}")` 并严格按其执行。
 - 遍历多模型/多表/多指标做批量盘点时，逐项收集，按任务书要求的结构整理。
 
 ## 进度与收尾
@@ -162,8 +159,8 @@ PLAN_SUBAGENT_PROMPT = f"""# 角色
 2. 分解步骤：每步写清——做什么、输入（/mnt/user-data/... 路径）、期望产出
    （路径与形态）、验收标准。已有文件能引用的不要安排重复收集；需要新数据的
    步骤明确查询口径（模型/指标/维度/过滤）。
-3. 报告/文档类任务：先 file_read 任务书指定技能（未指定时用 /mnt/skills/officecli）
-   的 SKILL.md，按其 references/report-workflow.md 的需求整理、样式解析、结构规划
+3. 报告/文档类任务：先 load_skill 任务书指定技能（未指定时用 officecli），
+   按其 references/report-workflow.md 的需求整理、样式解析、结构规划
    三步，额外产出需求说明、样式清单与大纲文件，大纲每个模块标注数据来源文件路径。
 4. 计划落盘：计划写入 /mnt/user-data/workspace/<业务名>-计划.md，报告类连同上述三个文件；
    文件名从任务含义出发清晰可读，不要带随机后缀。
@@ -193,11 +190,11 @@ GENERAL_PURPOSE_SUBAGENT_PROMPT = f"""# 角色
   workspace/outputs，由主智能体收到回传后向用户呈现。
 - 严格围绕任务书执行：任务书没要求的扩展动作不要做；需要用户决策的事项不要自行
   拍板，在回传中列为待确认项。
-- 任务书指定了相关技能（含用户自定义技能）时，先 `file_read` 其 `SKILL.md` 并严格
-  按其执行；任务书未提及的技能不要虚构路径。
+- 任务书指定了相关技能（含用户自定义技能）时，先 `load_skill(name=技能名)` 加载并严格
+  按其执行；任务书未提及的技能不要虚构名称。
 
 ## 工作方式
-- 涉及语义查询时，第一步先用 `file_read` 读取 `{builtin_skill_file(DATA_ANALYZING_SKILL)}` 并严格按其执行；查询口径只取任务书需要的范围，不要扩大。
+- 涉及语义查询时，第一步先 `load_skill(name="{DATA_ANALYZING_SKILL}")` 并严格按其执行；查询口径只取任务书需要的范围，不要扩大。
 - 查询结果先在本地聚合出小结果集再落盘/入交付物；大块原始明细留在子上下文消化，
   只把聚合结果与关键数字写进产物。
 - 产物文件名从任务含义出发清晰可读，不要带随机后缀；任务书指定了输出路径的按指定路径写。
@@ -219,7 +216,7 @@ GENERAL_PURPOSE_SUBAGENT_PROMPT = f"""# 角色
 {ENVIRONMENT_BLOCK}
 """
 
-# ask 模式（按需审批）下子智能体不挂删除/移动工具（审批入口只在主智能体侧生效）：
+# 子智能体不挂删除/移动工具（审批入口只在主智能体侧生效）：
 # 就地声明能力缺口，避免模型反复试探或改用覆盖写/脚本等间接方式达成删除效果。
 # 只在剔除生效时拼接（见 data_agent._general_purpose_system_prompt）。
 GENERAL_PURPOSE_NO_DELETE_HINT = """
