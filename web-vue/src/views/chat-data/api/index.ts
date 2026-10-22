@@ -1827,6 +1827,15 @@ export function downloadPluginTemplate(): Promise<Blob> {
   }) as unknown as Promise<Blob>
 }
 
+/** 后台：下载 MCP Server hello-world 模板 zip（Python + streamable_http）。 */
+export function downloadMcpServerTemplate(): Promise<Blob> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/plugins/mcp-template`,
+    method: 'get',
+    responseType: 'blob'
+  }) as unknown as Promise<Blob>
+}
+
 /** 后台：上传插件 zip 安装（同名插件需先卸载；变更对新会话生效） */
 export function installPlugin(file: File): Promise<ApiResponse<{ plugin: PluginInfo; effective: string }>> {
   const formData = new FormData()

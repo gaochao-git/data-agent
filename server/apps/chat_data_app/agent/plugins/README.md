@@ -56,6 +56,7 @@ fail-closed 处理（快照清空、当轮全部按禁用，不兜底旧值）�
 接口（`routers/plugins.py`，service token 保护）：
 
 - `GET  /api/chatdata/admin/plugins/template`：下载插件模板 zip（plugin.json + 示例技能 + README）；
+- `GET  /api/chatdata/admin/plugins/mcp-template`：下载 MCP Server hello-world 模板 zip（Python + streamable_http）；
 - `GET  /api/chatdata/admin/plugins/{plugin_id}/mcp-servers/{server_id}/tools`：临时连接 MCP server 探测工具清单（不执行工具、不落库）；
 - `GET  /api/chatdata/admin/plugins`：列出已安装插件（含审计字段，分页 limit∈[1,200]）；
 - `POST /api/chatdata/admin/plugins/install`：上传 zip 安装（≤50MB，manifest 校验、

@@ -6,7 +6,7 @@
 import { computed, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { UploadFile, UploadInstance } from 'element-plus'
-import { downloadPluginTemplate, getAdminPlugins, installPlugin, probeAdminPluginMcpServerTools, setAdminPluginEnabled, uninstallPlugin } from '../api'
+import { downloadMcpServerTemplate, downloadPluginTemplate, getAdminPlugins, installPlugin, probeAdminPluginMcpServerTools, setAdminPluginEnabled, uninstallPlugin } from '../api'
 import type { PluginInfo, PluginMcpServerInfo, PluginMcpToolInfo } from '../types'
 import AdminPanelToolbar from './AdminPanelToolbar.vue'
 
@@ -19,6 +19,7 @@ const hasLoaded = ref(false)
 const uploadRef = ref<UploadInstance | null>(null)
 const installing = ref(false)
 const downloadingTemplate = ref(false)
+const downloadingMcpTemplate = ref(false)
 const probeVisible = ref(false)
 const probeLoading = ref(false)
 const probeError = ref('')
@@ -111,6 +112,24 @@ const handleDownloadTemplate = async () => {
     ElMessage.error('下载插件模板失败，请稍后重试')
   } finally {
     downloadingTemplate.value = false
+  }
+}
+
+const handleDownloadMcpTemplate = async () => {
+  downloadingMcpTemplate.value = true
+  try {
+    const blob = await downloadMcpServerTemplate()
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = 'chatdata-mcp-server-template.zip'
+    link.click()
+    URL.revokeObjectURL(url)
+  } catch (err) {
+    console.error('下载 MCP Server 模板失败:', err)
+    ElMessage.error('下载 MCP Server 模板失败，请稍后重试')
+  } finally {
+    downloadingMcpTemplate.value = false
   }
 }
 
@@ -221,7 +240,11 @@ defineExpose({ ensureLoaded })
       <template #actions>
         <el-button size="small" :loading="downloadingTemplate" @click="handleDownloadTemplate">
           <i class="fa-solid fa-download" style="margin-right: 4px; font-size: 10px;"></i>
-          下载模板
+          下载插件模板
+        </el-button>
+        <el-button size="small" :loading="downloadingMcpTemplate" @click="handleDownloadMcpTemplate">
+          <i class="fa-solid fa-server" style="margin-right: 4px; font-size: 10px;"></i>
+          下载 MCP 模板
         </el-button>
         <el-upload
           ref="uploadRef"

@@ -15,6 +15,7 @@ from utils.error_codes import ErrorCode
 from utils.logger import get_logger
 from utils.response import business_response
 
+from ..agent.mcp.template import build_mcp_server_template_zip
 from ..agent.plugins.installer import PluginInstallError, PluginNotFoundError
 from ..agent.plugins.manifest import PluginManifestError
 from ..agent.plugins.template import build_plugin_template_zip
@@ -86,6 +87,26 @@ async def download_plugin_template(request: Request) -> Response:
         content=content,
         media_type="application/zip",
         headers={"Content-Disposition": 'attachment; filename="chatdata-plugin-template.zip"'},
+    )
+
+
+@router.get("/admin/plugins/mcp-template", responses=BINARY_RESPONSES)
+async def download_mcp_server_template(request: Request) -> Response:
+    """下载 MCP Server hello-world 模板（Python + streamable_http）。"""
+    _ = request
+    try:
+        content = build_mcp_server_template_zip()
+    except Exception as e:
+        logger.error("生成 MCP Server 模板失败: %s", e, exc_info=True)
+        return business_response(
+            msg="生成 MCP Server 模板失败，请稍后重试",
+            code=ErrorCode.CHATDATA_GENERIC_OPERATION_FAILED,
+            status="error",
+        )
+    return Response(
+        content=content,
+        media_type="application/zip",
+        headers={"Content-Disposition": 'attachment; filename="chatdata-mcp-server-template.zip"'},
     )
 
 

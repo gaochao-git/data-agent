@@ -7247,6 +7247,37 @@
         ]
       }
     },
+    "/api/chatdata/admin/plugins/mcp-template": {
+      "get": {
+        "description": "下载 MCP Server hello-world 模板（Python + streamable_http）。",
+        "operationId": "download_mcp_server_template_api_chatdata_admin_plugins_mcp_template_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              },
+              "application/octet-stream": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Binary file response"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Download Mcp Server Template",
+        "tags": [
+          "ChatData 插件管理（Admin）"
+        ]
+      }
+    },
     "/api/chatdata/admin/plugins/template": {
       "get": {
         "description": "下载插件 zip 模板（含 plugin.json、示例技能与 README）。",

@@ -282,3 +282,32 @@ def test_probe_plugin_mcp_tools(client, auth_headers, plugin_root: Path, monkeyp
     assert [tool["name"] for tool in data["tools"]] == ["read_data", "write_data"]
     assert data["tools"][0]["approval"] == "allow"
     assert data["tools"][1]["approval"] == "ask"
+
+
+def test_mcp_server_template_download_contains_hello_server(client, auth_headers):
+    response = client.get("/api/chatdata/admin/plugins/mcp-template", headers=auth_headers)
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/zip"
+
+    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+        names = set(archive.namelist())
+    assert "hello-mcp-server/server.py" in names
+    assert "hello-mcp-server/requirements.txt" in names
+    assert "hello-mcp-server/README.md" in names
+    assert "hello-mcp-server/mcp_auth.py" in names
+
+    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+        server_source = archive.read("hello-mcp-server/server.py").decode()
+        auth_source = archive.read("hello-mcp-server/mcp_auth.py").decode()
+        requirements = archive.read("hello-mcp-server/requirements.txt").decode()
+    assert "MCPServer" in server_source
+    assert 'transport="streamable-http"' in server_source
+    assert 'streamable_http_path="/mcp"' in server_source
+    assert "build_bearer_auth" in server_source
+    assert "TokenVerifier" in auth_source
+    assert "AuthSettings" in auth_source
+    assert "MCP_AUTH_TOKEN" in server_source
+    assert "def hello" in server_source
+    assert "def add" in server_source
+    assert "mcp>=2.2.0" in requirements
+    assert "uvicorn" not in requirements

@@ -1,0 +1,92 @@
+# Hello MCP Server 模板
+
+最小可运行的 MCP Server 示例，基于官方 `mcp>=2.2.0` 的 `MCPServer`，
+使用 **MCP 2026-07-28 + streamable_http**，包含两个工具示例：
+
+- `hello(name)`：返回一句问候；
+- `add(a, b)`：返回两个整数之和。
+
+`mcp_auth.py` 单独承载 Bearer Token 鉴权，`server.py` 只负责组装与启动。
+
+> 运行环境：**Python 3.10+**（官方 `mcp 2.x` 的硬性要求；本仓库使用 Python 3.12）。
+
+## 环境
+
+- Python **>= 3.10**（`mcp==2.2.x` 的官方要求）
+- 安装依赖：
+
+```bash
+python -m pip install -r requirements.txt
+```
+
+## 启动
+
+必须先设置访问 token：
+
+```bash
+MCP_AUTH_TOKEN=change-me python server.py
+```
+
+默认地址：
+
+```text
+http://127.0.0.1:8099/mcp
+```
+
+可配置：
+
+```bash
+MCP_HOST=0.0.0.0
+MCP_PORT=8099
+MCP_AUTH_TOKEN=change-me          # 必填
+MCP_RESOURCE_URL=http://127.0.0.1:8099   # 可选，鉴权资源标识
+```
+
+## 接入插件
+
+在插件的 `plugin.json` 中声明：
+
+```json
+{
+  "mcp_servers": [
+    {
+      "id": "hello-http",
+      "transport": "streamable_http",
+      "url": "https://your-host/mcp",
+      "headers": {
+        "Authorization": "Bearer <YOUR_TOKEN>"
+      },
+      "enabled": true
+    }
+  ]
+}
+```
+
+本地联调可使用 `http://127.0.0.1:8099/mcp`；生产要求 HTTPS（本地回环例外）。
+
+## 新版协议说明
+
+- 只使用 `streamable_http`；
+- 客户端由 MCP SDK 处理 2026-07-28 的 `_meta`、`Mcp-Method`、`Mcp-Name` 等协议细节；
+- 不要改成 stdio / sse。
+
+## Bearer Token
+
+鉴权实现位于 `mcp_auth.py`，使用 MCP SDK 原生鉴权（`TokenVerifier` + `AuthSettings`），
+不需要额外起 uvicorn，也不需要手写 ASGI 中间件：
+
+```bash
+MCP_AUTH_TOKEN=change-me python server.py
+```
+
+客户端在插件 `mcp_servers[].headers` 中带同一个 token：
+
+```json
+{
+  "Authorization": "Bearer change-me"
+}
+```
+
+- 未带 token 或 token 不匹配时返回 `401 Unauthorized`；
+- 生产请使用随机长 token，并通过 HTTPS 传输；
+- 模板用静态 token 演示，生产可替换为 OAuth/JWT 校验。
