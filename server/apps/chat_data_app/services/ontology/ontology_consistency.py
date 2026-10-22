@@ -9,7 +9,8 @@
 - Palantir 在保存/索引时硬校验并具名报错（FoundryColumnNameNotFound、
   IncompatibleFoundryFieldSchemaForPropertyType、SchemaMismatch、连 Precision/Scale
   都要求与背书列一致）；官方哲学「宁可硬报错，不静默产出错误数据」。
-- 关系类型侧官方硬约束「两端 join 属性类型必须一致」、to_columns 必须是标识属性。
+- 关系类型侧官方硬约束「两端 join 属性类型必须一致」、to_columns 必须是标识属性；另外补关系类型 join 路径可执行性：
+同模型无路径 error、同组跨模型 info（单模型 SQL 无法直接 join）。
 - 我们的批式物化形态下对应解法是事后巡检（消费方=管理端健康检查 +
   locate_object_type 失修标注），不是把保存校验做重。
 
@@ -32,6 +33,8 @@ RULES: dict[str, tuple[str, str]] = {
     "ONT_REL_TO_NOT_IDENTIFIER": ("warning", "关系类型 to 侧列引用了非标识属性"),
     "ONT_REL_ENDPOINT_TYPE": ("warning", "关系类型两端 join 属性类型语义类别不一致"),
     "ONT_REL_CROSS_SOURCE": ("warning", "关系类型两端对象类型映射的语义模型分属不同数据源组"),
+    "ONT_REL_MODEL_PATH_MISSING": ("error", "关系类型在同一语义模型内没有可执行 join 路径"),
+    "ONT_REL_CROSS_MODEL": ("info", "关系类型两端绑定不同语义模型，单模型 SQL 无法直接 join"),
     "ONT_TYPE_MISMATCH": ("warning", "属性 value_type 与维度 logical_type 不兼容"),
 }
 
@@ -494,6 +497,193 @@ def _check_relation_cross_source(
     return findings
 
 
+def _config_table_index(config: dict[str, Any]) -> dict[str, dict[str, str]]:
+    """单模型维度索引：维度名 → {table, column}（别名优先，与 join 图一致）。"""
+    index: dict[str, dict[str, str]] = {}
+    for dimension in config.get("dimensions") or []:
+        dimension = dimension or {}
+        name = _text(dimension.get("name"))
+        table = _text(dimension.get("table_alias") or dimension.get("table"))
+        if not name or not table:
+            continue
+        index[name] = {"table": table, "column": _text(dimension.get("column"))}
+    return index
+
+
+def _config_join_graph(config: dict[str, Any]) -> dict[str, set[str]]:
+    """单模型关系图：表别名 → 相邻表别名集合；关系/joins 两种存储都兼容。"""
+    graph: dict[str, set[str]] = {}
+    relationships = config.get("relationships") or config.get("joins") or []
+    for relationship in relationships:
+        relationship = relationship or {}
+        left = _text(relationship.get("left_alias") or relationship.get("left_table"))
+        right = _text(relationship.get("right_alias") or relationship.get("right_table"))
+        if not left or not right:
+            continue
+        graph.setdefault(left, set()).add(right)
+        graph.setdefault(right, set()).add(left)
+    return graph
+
+
+def _has_join_path(graph: dict[str, set[str]], start: str, target: str) -> bool:
+    """表别名之间是否存在 join 路径；同表视为直连。"""
+    if not start or not target:
+        return False
+    if start == target:
+        return True
+    pending = [start]
+    visited = {start}
+    while pending:
+        current = pending.pop()
+        for neighbor in graph.get(current, set()):
+            if neighbor == target:
+                return True
+            if neighbor not in visited:
+                visited.add(neighbor)
+                pending.append(neighbor)
+    return False
+
+
+def _mapping_dimension(
+    mapping: dict[str, Any],
+    property_name: str,
+    table_index: dict[str, dict[str, str]],
+) -> dict[str, str] | None:
+    """映射左值属性 → 模型维度表/列；属性或维度缺失返回 None（由既有规则负责报错）。"""
+    column_mappings = mapping.get("column_mappings")
+    if not isinstance(column_mappings, dict) or not property_name:
+        return None
+    dimension_name = _text(column_mappings.get(property_name))
+    return table_index.get(dimension_name)
+
+
+def _relation_endpoint_property(relation: dict[str, Any], side: str) -> str:
+    """取关系类型单侧第一个非空属性名；多列关系只校验首列的表路径。"""
+    for column in relation.get(f"{side}_columns") or []:
+        value = _text(column)
+        if value:
+            return value
+    return ""
+
+
+def _mapping_endpoint(
+    mapping: dict[str, Any],
+    property_name: str,
+    table_indexes: dict[str, dict[str, dict[str, str]]],
+) -> tuple[str, dict[str, str]] | None:
+    """映射 → (语义模型 id, 维度表列)；属性/维度/表缺失返回 None。"""
+    config_id = _text(mapping.get("semantic_config_id"))
+    dimension = _mapping_dimension(mapping, property_name, table_indexes.get(config_id, {}))
+    if not config_id or not dimension:
+        return None
+    return config_id, dimension
+
+
+def _relation_pair_issue(
+    from_endpoint: tuple[str, dict[str, str]],
+    to_endpoint: tuple[str, dict[str, str]],
+    from_prop: str,
+    to_prop: str,
+    graph_by_config: dict[str, dict[str, set[str]]],
+    config_group_ids: dict[str, str] | None,
+) -> tuple[str, str] | None:
+    """单对映射的分类：同模型无路径 / 同组跨模型 / 健康或不可比。"""
+    from_config, from_dim = from_endpoint
+    to_config, to_dim = to_endpoint
+    if from_config == to_config:
+        if _has_join_path(graph_by_config.get(from_config, {}), from_dim["table"], to_dim["table"]):
+            return None
+        return (
+            "missing",
+            f"{from_config}（{from_prop}→{from_dim['table']}，{to_prop}→{to_dim['table']}）",
+        )
+    if config_group_ids and config_group_ids.get(from_config) == config_group_ids.get(to_config):
+        return "cross_model", f"{from_config} → {to_config}"
+    return None
+
+
+def _relation_model_paths(
+    relation: dict[str, Any],
+    mappings_by_object_type: dict[int, list[dict[str, Any]]],
+    table_indexes: dict[str, dict[str, dict[str, str]]],
+    graph_by_config: dict[str, dict[str, set[str]]],
+    config_group_ids: dict[str, str] | None,
+) -> tuple[list[str], list[str]]:
+    """关系类型逐映射对检查，返回 (同模型失效路径, 同组跨模型目标描述)。
+
+    同模型：两端映射都必须指向同一模型中的表，但图里没有 join 路径 → 硬失效。
+    跨模型：同一数据源组内不同模型无法由单模型 SQL 直接 join → info；
+    跨组已由 ONT_REL_CROSS_SOURCE 报 warning，这里不重复。
+    """
+    from_id = int(relation.get("from_object_type_id") or 0)
+    to_id = int(relation.get("to_object_type_id") or 0)
+    from_prop = _relation_endpoint_property(relation, "from")
+    to_prop = _relation_endpoint_property(relation, "to")
+    missing: list[str] = []
+    cross_model: list[str] = []
+    for from_mapping in mappings_by_object_type.get(from_id, []):
+        from_endpoint = _mapping_endpoint(from_mapping, from_prop, table_indexes)
+        if not from_endpoint:
+            continue
+        for to_mapping in mappings_by_object_type.get(to_id, []):
+            to_endpoint = _mapping_endpoint(to_mapping, to_prop, table_indexes)
+            if not to_endpoint:
+                continue
+            issue = _relation_pair_issue(
+                from_endpoint, to_endpoint, from_prop, to_prop, graph_by_config, config_group_ids
+            )
+            if issue and issue[0] == "missing":
+                missing.append(issue[1])
+            elif issue:
+                cross_model.append(issue[1])
+    return missing, cross_model
+
+
+def _check_relation_model_paths(
+    bundle: dict[str, Any],
+    configs: list[dict[str, Any]],
+    config_group_ids: dict[str, str] | None,
+) -> list[dict[str, Any]]:
+    """ONT_REL_MODEL_PATH_MISSING / ONT_REL_CROSS_MODEL：关系类型 join 可执行性巡检。
+
+    跨对象类型的关系通常绑定不同语义模型；同组时单模型 SQL 无法直接 join，
+    只能提示（info），不阻断。只有两端恰好落在同一模型且图内无路径时才硬报错，
+    避免把正常的跨模型本体关系误判为错误。
+    """
+    config_by_id = {_text(config.get("id")): config for config in configs or [] if _text(config.get("id"))}
+    table_indexes = {config_id: _config_table_index(config) for config_id, config in config_by_id.items()}
+    graph_by_config = {config_id: _config_join_graph(config) for config_id, config in config_by_id.items()}
+    mappings_by_object_type = _group_by_object_type_id(bundle.get("mappings"))
+    findings: list[dict[str, Any]] = []
+    for relation in bundle.get("relation_types") or []:
+        relation = relation or {}
+        relation_type_name = _text(relation.get("relation_type_name"))
+        if not relation_type_name:
+            continue
+        missing, cross_model = _relation_model_paths(
+            relation, mappings_by_object_type, table_indexes, graph_by_config, config_group_ids
+        )
+        if missing:
+            findings.append(
+                _make_finding(
+                    "ONT_REL_MODEL_PATH_MISSING",
+                    f"本体关系类型「{relation_type_name}」在同一语义模型内缺少 join 路径：{_join_items(missing)}"
+                    "（模型 relationships 未连通两端表，AI 按该关系类型拼 SQL 会失败）",
+                    [relation_type_name],
+                )
+            )
+        elif cross_model:
+            findings.append(
+                _make_finding(
+                    "ONT_REL_CROSS_MODEL",
+                    f"本体关系类型「{relation_type_name}」两端绑定不同语义模型（{_join_items(cross_model)}），"
+                    "单模型 SQL 无法直接 join；AI 导航需分别查询两端模型，跨模型关联待对象层能力补齐",
+                    [relation_type_name],
+                )
+            )
+    return findings
+
+
 def check_ontology_model_consistency(
     bundle: dict[str, Any],
     configs: list[dict[str, Any]],
@@ -524,6 +714,7 @@ def check_ontology_model_consistency(
         *_check_mapping_dimensions(bundle, dimension_types, object_type_names),
         *_check_relations(bundle, object_type_names),
         *_check_relation_cross_source(bundle, config_group_ids),
+        *_check_relation_model_paths(bundle, configs, config_group_ids),
         *_check_type_mismatches(bundle, dimension_types, properties_by_object_type, object_type_names),
         *_check_unmapped_properties(bundle, object_type_names),
     ]

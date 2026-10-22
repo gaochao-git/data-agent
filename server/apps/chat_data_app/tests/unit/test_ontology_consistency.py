@@ -68,16 +68,16 @@ def _configs() -> list[dict]:
             "id": "cfg-cust",
             "name": "客户模型",
             "dimensions": [
-                {"name": "客户ID", "column": "customer_id", "logical_type": "text"},
-                {"name": "客户名称", "column": "customer_name", "logical_type": "text"},
+                {"name": "客户ID", "column": "customer_id", "table": "customers", "logical_type": "text"},
+                {"name": "客户名称", "column": "customer_name", "table": "customers", "logical_type": "text"},
             ],
         },
         {
             "id": "cfg-order",
             "name": "订单模型",
             "dimensions": [
-                {"name": "订单编号", "column": "order_id", "logical_type": "text"},
-                {"name": "订单金额", "column": "amount", "logical_type": "number"},
+                {"name": "订单编号", "column": "order_id", "table": "orders", "logical_type": "text"},
+                {"name": "订单金额", "column": "amount", "table": "orders", "logical_type": "number"},
             ],
         },
     ]
@@ -359,3 +359,56 @@ def test_rules_registry_severities():
     assert RULES["ONT_REL_CROSS_SOURCE"][0] == "warning"
     assert RULES["ONT_TYPE_MISMATCH"][0] == "warning"
     assert RULES["ONT_PROP_UNMAPPED"][0] == "info"
+
+
+# ---------- ONT_REL_MODEL_PATH_MISSING / ONT_REL_CROSS_MODEL ----------
+
+
+def test_relation_same_model_without_join_path_fires_error():
+    bundle = _bundle()
+    bundle["mappings"] = [
+        {"object_type_id": 1, "semantic_config_id": "cfg-shared", "column_mappings": {"customer_id": "客户ID"}},
+        {"object_type_id": 2, "semantic_config_id": "cfg-shared", "column_mappings": {"order_no": "订单编号"}},
+    ]
+    configs = [
+        {
+            "id": "cfg-shared",
+            "dimensions": [
+                {"name": "客户ID", "column": "customer_id", "table": "customers", "logical_type": "text"},
+                {"name": "订单编号", "column": "order_id", "table": "orders", "logical_type": "text"},
+            ],
+            "relationships": [],
+        }
+    ]
+    findings = check_ontology_model_consistency(bundle, configs)
+    finding = next(item for item in findings if item["code"] == "ONT_REL_MODEL_PATH_MISSING")
+    assert finding["severity"] == "error"
+    assert "customer_has_orders" in finding["message"]
+
+
+def test_relation_same_model_with_join_path_is_healthy():
+    bundle = _bundle()
+    bundle["mappings"] = [
+        {"object_type_id": 1, "semantic_config_id": "cfg-shared", "column_mappings": {"customer_id": "客户ID"}},
+        {"object_type_id": 2, "semantic_config_id": "cfg-shared", "column_mappings": {"order_no": "订单编号"}},
+    ]
+    configs = [
+        {
+            "id": "cfg-shared",
+            "dimensions": [
+                {"name": "客户ID", "column": "customer_id", "table": "customers", "logical_type": "text"},
+                {"name": "订单编号", "column": "order_id", "table": "orders", "logical_type": "text"},
+            ],
+            "relationships": [{"left_table": "customers", "right_table": "orders"}],
+        }
+    ]
+    assert "ONT_REL_MODEL_PATH_MISSING" not in _codes(check_ontology_model_consistency(bundle, configs))
+
+
+def test_relation_cross_model_same_group_is_info():
+    findings = check_ontology_model_consistency(
+        _bundle(), _configs(), config_group_ids={"cfg-cust": "g1", "cfg-order": "g1"}
+    )
+    finding = next(item for item in findings if item["code"] == "ONT_REL_CROSS_MODEL")
+    assert finding["severity"] == "info"
+    assert "customer_has_orders" in finding["message"]

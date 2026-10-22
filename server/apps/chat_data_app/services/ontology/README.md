@@ -34,6 +34,7 @@ Palantir 本体物化物理表，我们的物化层是语义模型，本体根�
 - 同名活跃对象类型/关系类型/本体再次创建且未带 `allow_overwrite` → 40068；状态违规 → 40069。
 - `deprecated_until` 服务层解析为 datetime（接受 `YYYY-MM-DD HH:MM:SS` / `YYYY-MM-DD`），非法值 40067；本体 API 名限 64 字符（落库列宽）。
 - 关系类型 `from_columns` 必须引用 from 对象类型已定义属性；`to_columns` 必须引用 to 对象类型标识属性；`one_to_one` 两侧都要求引用标识属性（from 侧以标识属性保证唯一性），多对多走 junction 对象类型。
+- 一致性巡检新增关系类型 join 可执行性：同模型两端存在映射但模型 `relationships` 图内无路径 → `ONT_REL_MODEL_PATH_MISSING` error；两端绑定不同模型且同属一个数据源组 → `ONT_REL_CROSS_MODEL` info（单模型 SQL 无法直接 join，待对象层能力补齐；跨组仍由 `ONT_REL_CROSS_SOURCE` warning 覆盖）。
 
 ## 消费链路（已实现）
 
