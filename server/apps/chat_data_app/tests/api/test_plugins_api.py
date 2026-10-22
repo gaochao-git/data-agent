@@ -265,8 +265,8 @@ def test_probe_plugin_mcp_tools(client, auth_headers, plugin_root: Path, monkeyp
             "server_id": "demo-http",
             "count": 2,
             "tools": [
-                {"name": "read_data", "description": "读取数据", "approval": "allow"},
-                {"name": "write_data", "description": "写入数据", "approval": "ask"},
+                {"name": "read_data", "description": "读取数据", "parameters": [], "approval": "allow"},
+                {"name": "write_data", "description": "写入数据", "parameters": [], "approval": "ask"},
             ],
         }
 

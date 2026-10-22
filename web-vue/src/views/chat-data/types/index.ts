@@ -1012,10 +1012,19 @@ export interface PluginMcpServerInfo {
   admission?: PluginMcpServerAdmission
 }
 
+// MCP 探测返回的单工具参数
+export interface PluginMcpToolParameter {
+  name: string
+  type: string
+  description: string
+  required: boolean
+}
+
 // MCP 探测返回的单工具摘要
 export interface PluginMcpToolInfo {
   name: string
   description: string
+  parameters?: PluginMcpToolParameter[]
   approval: 'ask' | 'allow'
 }
 

@@ -3,7 +3,7 @@
  * 后台管理 · 插件面板。
  * 已安装插件列表 + zip 安装 + 启停 + 卸载；安装/启停对新会话生效（接口语义见 plugins/README.md）。
  */
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { UploadFile, UploadInstance } from 'element-plus'
 import { downloadPluginTemplate, getAdminPlugins, installPlugin, probeAdminPluginMcpServerTools, setAdminPluginEnabled, uninstallPlugin } from '../api'
@@ -25,6 +25,10 @@ const probeError = ref('')
 const probePluginName = ref('')
 const probeServerId = ref('')
 const probeTools = ref<PluginMcpToolInfo[]>([])
+const selectedProbeTool = ref<PluginMcpToolInfo | null>(null)
+const selectedProbeToolParametersJson = computed(() =>
+  JSON.stringify(selectedProbeTool.value?.parameters || [], null, 2)
+)
 
 // MCP server 准入状态展示：未通过标红并给出原因，通过但有告警也提示
 const mcpServerTagType = (server: PluginMcpServerInfo) =>
@@ -189,6 +193,7 @@ const probeMcpTools = async (plugin: PluginInfo, server: PluginMcpServerInfo) =>
   probePluginName.value = plugin.name
   probeServerId.value = server.id
   probeTools.value = []
+  selectedProbeTool.value = null
   try {
     const res = await probeAdminPluginMcpServerTools(plugin.name, server.id)
     if (res.status === 'success') {
@@ -202,6 +207,10 @@ const probeMcpTools = async (plugin: PluginInfo, server: PluginMcpServerInfo) =>
   } finally {
     probeLoading.value = false
   }
+}
+
+const openProbeTool = (tool: PluginMcpToolInfo) => {
+  selectedProbeTool.value = tool
 }
 
 defineExpose({ ensureLoaded })
@@ -313,23 +322,81 @@ defineExpose({ ensureLoaded })
           </template>
         </el-table-column>
       </el-table>
-    <el-dialog v-model="probeVisible" title="MCP server 工具探测" width="720px" destroy-on-close>
-      <div class="mb-2 text-xs text-slate-500">
-        {{ probePluginName }} / {{ probeServerId }}
+    <el-dialog v-model="probeVisible" title="MCP server 工具探测" width="900px" destroy-on-close>
+      <div class="mb-2 flex items-center justify-between gap-3">
+        <span class="text-xs text-slate-500">
+          {{ probePluginName }} / {{ probeServerId }}
+          <template v-if="selectedProbeTool">
+            / <span class="font-mono font-medium text-slate-800">{{ selectedProbeTool.name }}</span>
+            <el-tag
+              size="small"
+              class="ml-1 align-middle"
+              :type="selectedProbeTool.approval === 'ask' ? 'warning' : 'success'"
+              effect="plain"
+            >
+              {{ selectedProbeTool.approval === 'ask' ? 'ask' : 'allow' }}
+            </el-tag>
+          </template>
+        </span>
+        <el-button
+          v-if="selectedProbeTool"
+          link
+          type="primary"
+          size="small"
+          @click="selectedProbeTool = null"
+        >
+          <i class="fa-solid fa-arrow-left text-[11px] mr-1"></i>返回工具列表
+        </el-button>
       </div>
       <div v-if="probeLoading" class="py-8 text-center text-sm text-slate-500">
         <i class="fa-solid fa-spinner fa-spin mr-2"></i>正在连接并探测工具…
       </div>
       <el-alert v-else-if="probeError" :title="probeError" type="error" :closable="false" show-icon />
+      <template v-else-if="selectedProbeTool">
+        <p class="mb-3 text-xs leading-5 text-slate-600">{{ selectedProbeTool.description || '无描述' }}</p>
+        <div class="overflow-hidden rounded border border-slate-200 bg-slate-50">
+          <div class="flex items-center justify-between border-b border-slate-200 px-3 py-1.5">
+            <span class="text-[11px] font-medium text-slate-500">参数 JSON</span>
+            <span class="text-[11px] text-slate-400">{{ (selectedProbeTool.parameters || []).length }} 个参数</span>
+          </div>
+          <pre class="max-h-[360px] overflow-auto p-3 text-xs leading-5 text-slate-700"><code>{{ selectedProbeToolParametersJson }}</code></pre>
+        </div>
+      </template>
       <el-empty v-else-if="!probeTools.length" description="该 server 没有返回工具" />
-      <el-table v-else :data="probeTools" size="small" border max-height="480">
-        <el-table-column prop="name" label="工具名" width="220" show-overflow-tooltip />
-        <el-table-column prop="description" label="描述" show-overflow-tooltip />
-        <el-table-column label="审批" width="90" align="center">
+      <el-table
+        v-else
+        :data="probeTools"
+        size="small"
+        border
+        max-height="420"
+      >
+        <el-table-column label="工具名" width="190">
+          <template #default="{ row: tool }">
+            <span class="font-mono text-xs text-slate-700">{{ tool.name }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="description" label="描述" min-width="320" show-overflow-tooltip>
+          <template #default="{ row: tool }">
+            <span class="text-xs text-slate-600">{{ tool.description || '-' }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="审批" width="70" align="center">
           <template #default="{ row: tool }">
             <el-tag size="small" :type="tool.approval === 'ask' ? 'warning' : 'success'" effect="plain">
               {{ tool.approval === 'ask' ? 'ask' : 'allow' }}
             </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="参数" width="70" align="center">
+          <template #default="{ row: tool }">
+            <span class="text-xs text-slate-500">{{ tool.parameters?.length || 0 }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="90" align="center">
+          <template #default="{ row: tool }">
+            <el-button link type="primary" size="small" @click.stop="openProbeTool(tool)">
+              查看参数
+            </el-button>
           </template>
         </el-table-column>
       </el-table>

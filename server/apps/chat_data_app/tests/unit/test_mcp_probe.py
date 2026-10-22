@@ -14,7 +14,18 @@ def test_probe_mcp_server_tools_returns_summary(monkeypatch):
     class FakeClient:
         async def list_tools(self):
             return SimpleNamespace(
-                tools=[SimpleNamespace(name="echo", description="回显"), SimpleNamespace(name="add", description=None)]
+                tools=[
+                    SimpleNamespace(
+                        name="echo",
+                        description="回显\n\nArgs:\n    text: 输入文本",
+                        input_schema={
+                            "type": "object",
+                            "properties": {"text": {"type": "string", "description": "输入文本"}},
+                            "required": ["text"],
+                        },
+                    ),
+                    SimpleNamespace(name="add", description=None, input_schema={}),
+                ]
             )
 
     @asynccontextmanager
@@ -23,10 +34,9 @@ def test_probe_mcp_server_tools_returns_summary(monkeypatch):
 
     monkeypatch.setattr(probe, "open_mcp_session", fake_session)
     result = asyncio.run(probe.probe_mcp_server_tools(SimpleNamespace()))
-    assert result == [
-        {"name": "echo", "description": "回显"},
-        {"name": "add", "description": ""},
-    ]
+    assert result[0]["description"] == "回显"
+    assert result[0]["parameters"] == [{"name": "text", "type": "string", "description": "输入文本", "required": True}]
+    assert result[1] == {"name": "add", "description": "", "parameters": []}
 
 
 def test_installer_probe_tools_adds_approval(monkeypatch):
