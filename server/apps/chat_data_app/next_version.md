@@ -579,3 +579,71 @@ ALTER TABLE `chat_data_ontology`
 ```
 
 API 变化：`OntologyUpsertRequest` 不再要求 `group_id`（body 仅 display_name/description/allow_overwrite）；本体列表/详情响应行无 `group_id`；一致性检查 `group_count` 语义变为「扫描的数据源组数（全部组）」。前端本体表单去掉组选择、树节点去掉组名角标、对象表单映射候选放开全部组。
+
+### 本体 Action Type 定义表（2026-10-22）
+
+Action Type 先落定义层（参数 + 编辑契约），暂不执行写回；对象写路径落地后接
+`chat_data_ontology_action_execution` 审计与执行器。新环境直接建表；存量环境执行同一 DDL。
+
+```sql
+CREATE TABLE `chat_data_ontology_action_type` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `action_type_name` varchar(128) NOT NULL COMMENT '动作类型API名，仅字母数字下划线，全局唯一',
+  `display_name` varchar(128) NOT NULL DEFAULT '' COMMENT '展示名',
+  `description_text` varchar(1024) NOT NULL DEFAULT '' COMMENT '描述',
+  `object_type_id` bigint NOT NULL COMMENT '目标对象类型ID（chat_data_ontology_object_type.id）',
+  `parameter_schema_json` text COMMENT '参数定义JSON文本: [{name,type,required,description}]',
+  `edit_schema_json` text COMMENT '编辑定义JSON文本: [{operation,property,value}]',
+  `lifecycle_status` varchar(16) NOT NULL DEFAULT 'draft' COMMENT '生命周期: draft/experimental/certified',
+  `delete_flag` tinyint NOT NULL DEFAULT '0' COMMENT '删除标识: 0-未删除, 1-已删除',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `create_by` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人ID',
+  `create_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人名称',
+  `update_by` varchar(100) NOT NULL DEFAULT '' COMMENT '修改人ID',
+  `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '修改人名称',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_action_type_name` (`action_type_name`),
+  KEY `idx_action_type_object` (`object_type_id`,`delete_flag`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='本体 Action Type 定义表';
+```
+
+### 本体 Action 执行：对象写覆盖层 + 执行审计（2026-10-22）
+
+第一版执行不直接改写源库/语义模型：Action 执行追加对象属性覆盖值，对象读取时按最新覆盖值合并；
+`CHAT_DATA_ONTOLOGY_ACTION_EXECUTE_ENABLED=true` 时生效。DDL：
+
+```sql
+CREATE TABLE `chat_data_ontology_object_edit` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `object_type_id` bigint NOT NULL COMMENT '对象类型ID',
+  `object_key` varchar(512) NOT NULL COMMENT '对象主键值（Action 执行时的 object_key）',
+  `property_name` varchar(128) NOT NULL COMMENT '被覆盖属性API名',
+  `property_value_json` text COMMENT '覆盖值JSON文本（保留类型）',
+  `action_execution_id` bigint NOT NULL DEFAULT '0' COMMENT '关联 Action 执行ID',
+  `action_type_name` varchar(128) NOT NULL DEFAULT '' COMMENT '动作类型API名',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `create_by` varchar(100) NOT NULL DEFAULT '' COMMENT '操作人ID',
+  `create_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '操作人名称',
+  PRIMARY KEY (`id`),
+  KEY `idx_object_edit_lookup` (`object_type_id`,`object_key`,`property_name`),
+  KEY `idx_object_edit_execution` (`action_execution_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='本体对象属性写覆盖层';
+
+CREATE TABLE `chat_data_ontology_action_execution` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `action_type_name` varchar(128) NOT NULL COMMENT '动作类型API名',
+  `object_type_id` bigint NOT NULL COMMENT '目标对象类型ID',
+  `object_key` varchar(512) NOT NULL COMMENT '对象主键值',
+  `parameters_json` text COMMENT '执行参数JSON文本',
+  `edits_json` text COMMENT '解析后的编辑JSON文本',
+  `execution_status` varchar(16) NOT NULL DEFAULT 'succeeded' COMMENT '执行状态',
+  `error_message` varchar(1000) NOT NULL DEFAULT '' COMMENT '错误信息',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `create_by` varchar(100) NOT NULL DEFAULT '' COMMENT '操作人ID',
+  `create_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '操作人名称',
+  PRIMARY KEY (`id`),
+  KEY `idx_action_execution_type` (`action_type_name`,`create_time`),
+  KEY `idx_action_execution_object` (`object_type_id`,`object_key`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='本体 Action 执行审计表';
+```

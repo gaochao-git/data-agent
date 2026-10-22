@@ -36,6 +36,33 @@ Palantir 本体物化物理表，我们的物化层是语义模型，本体根�
 - 关系类型 `from_columns` 必须引用 from 对象类型已定义属性；`to_columns` 必须引用 to 对象类型标识属性；`one_to_one` 两侧都要求引用标识属性（from 侧以标识属性保证唯一性），多对多走 junction 对象类型。
 - 一致性巡检新增关系类型 join 可执行性：同模型两端存在映射但模型 `relationships` 图内无路径 → `ONT_REL_MODEL_PATH_MISSING` error；两端绑定不同模型且同属一个数据源组 → `ONT_REL_CROSS_MODEL` info（单模型 SQL 无法直接 join，待对象层能力补齐；跨组仍由 `ONT_REL_CROSS_SOURCE` warning 覆盖）。
 
+## Action Type 定义层（2026-10-22）
+
+对齐 Palantir Action Type 的「参数 + 编辑契约」，当前已支持定义、参数试运行与最小执行：
+
+- `chat_data_ontology_action_type`：动作名、目标对象类型、参数定义 JSON、编辑定义 JSON、生命周期；
+- 参数：`{name, type, required, description}`，类型限内建值类型；
+- 编辑：当前仅 `set_property`，值可引用参数或静态值；标识属性禁改；目标属性必须存在；
+- 接口：`GET/PUT/DELETE /admin/meta/ontology/action-types...`、`POST .../test-run`；
+- 试运行只校验参数并解析编辑，`executed=false`；
+- `POST .../action-types/{name}/execute`：experimental/certified Action 执行，写对象属性覆盖层
+  `chat_data_ontology_object_edit` + 执行审计 `chat_data_ontology_action_execution`；
+- 对象读取在 `CHAT_DATA_ONTOLOGY_ACTION_EXECUTE_ENABLED=true` 时合并最新覆盖值；
+- **不直接改源库/语义模型数据**；回滚、撤销、副作用/Webhook、Action UI 尚未实现。
+
+DDL 见 `next_version.md`「本体 Action Type 定义表」。
+
+## 对象实例只读投影（MVP，2026-10-22）
+
+在对象存储之前先提供“数据库查询 → 代码组装对象”的只读投影，验证对象契约：
+
+- 接口：`GET /admin/meta/ontology/object-types/{object_type_name}/objects/read?object_key=...`（可选 `semantic_config_id`）；
+- 数据来源：对象类型映射的语义模型维度 → 物理表/列；
+- 约束：单对象类型、单映射配置、单标识属性，属性必须同表；对象一跳 links（外键型，单关系最多 20 条）；
+- Link 对齐 Palantir：关系类型双向，当前对象既可作 from 也可作 to；只支持 foreign key → primary key 型，many-to-many/join table/backing object 暂不支持；
+- 安全：表/列只来自映射配置，值参数化转义，必须复用数据源组成员授权；不执行任意 SQL；
+- 不落对象存储、不做写入；后续复合主键、多列关联、对象存储/图数据库只替换 `object_projection.py` 的实现。
+
 ## 消费链路（已实现）
 
 认证/实验态对象类型随语义模型预物化写入 `workspace/semantic/_ontology_catalog.yaml`（只读）：

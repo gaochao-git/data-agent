@@ -458,3 +458,60 @@ def test_search_around_untranslated_column_marked(monkeypatch):
     # 未映射属性保留原文并标 unresolved：join 前必须回读模型 YAML
     assert hop["join"]["from_columns_by_model"] == {"sc_order": ["ORDER_ID", "ghost_attr"]}
     assert hop["join"]["unresolved"] is True
+
+
+# ---------- get_object（对象实例读取） ----------
+
+
+def test_get_object_payload_registered():
+    assert ontology_tool.ONTOLOGY_ACTION_PAYLOAD_MODELS["get_object"].model_validate(
+        {"object_type": "sales_order", "object_key": "ORD2024000001"}
+    )
+    with pytest.raises(ValueError, match="get_object"):
+        ontology_tool.validate_ontology_payload("get_object", {"object_type": "sales_order"})
+
+
+def test_get_object_disabled_by_default(monkeypatch):
+    monkeypatch.delenv("CHAT_DATA_ONTOLOGY_OBJECT_READ_ENABLED", raising=False)
+    with pytest.raises(ValueError, match="CHAT_DATA_ONTOLOGY_OBJECT_READ_ENABLED"):
+        asyncio.run(
+            ontology_tool.create_ontology_tool().ainvoke(
+                {
+                    "action": "get_object",
+                    "action_payload": {"object_type": "sales_order", "object_key": "ORD2024000001"},
+                    "state": _onto_state(),
+                }
+            )
+        )
+
+
+def test_get_object_happy_path(monkeypatch):
+    monkeypatch.setenv("CHAT_DATA_ONTOLOGY_OBJECT_READ_ENABLED", "1")
+
+    async def fake_get_object_type(_name):
+        return {"id": 1, "object_type_name": "sales_order", "status": "certified"}
+
+    async def fake_read_object(object_type, object_key, **_kwargs):
+        return {
+            "object_type": object_type,
+            "object_key": f"{object_type}:{object_key}",
+            "properties": {"order_no": object_key, "pay_status": "paid"},
+            "links": {"order_belongs_to_customer": [{"related_object_type": "customer"}]},
+        }
+
+    monkeypatch.setattr(ontology_tool.ontology_service, "get_object_type_async", fake_get_object_type)
+    monkeypatch.setattr(ontology_tool, "read_object_projection", fake_read_object)
+    raw = asyncio.run(
+        ontology_tool.create_ontology_tool().ainvoke(
+            {
+                "action": "get_object",
+                "action_payload": {"object_type": "sales_order", "object_key": "ORD2024000001"},
+                "state": _onto_state(user_id="u1"),
+            }
+        )
+    )
+    payload = json.loads(raw.replace(RESULT_PREFIX, "", 1))
+    assert payload["success"] is True
+    assert payload["object_key"] == "sales_order:ORD2024000001"
+    assert payload["links"]["order_belongs_to_customer"][0]["related_object_type"] == "customer"
+    assert "execute_query" in payload["usage"]

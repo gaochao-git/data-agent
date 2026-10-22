@@ -1748,6 +1748,225 @@
         "title": "MetaGlobalEnumUpsertRequest",
         "type": "object"
       },
+      "OntologyActionTypeEditItem": {
+        "description": "Action Type 编辑项（当前只支持 set_property）",
+        "properties": {
+          "operation": {
+            "const": "set_property",
+            "default": "set_property",
+            "description": "编辑操作",
+            "title": "Operation",
+            "type": "string"
+          },
+          "property": {
+            "description": "目标对象属性API名",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Property",
+            "type": "string"
+          },
+          "value": {
+            "$ref": "#/components/schemas/OntologyActionTypeEditValue",
+            "description": "新值来源"
+          }
+        },
+        "required": [
+          "property",
+          "value"
+        ],
+        "title": "OntologyActionTypeEditItem",
+        "type": "object"
+      },
+      "OntologyActionTypeEditValue": {
+        "description": "Action Type 编辑值来源：参数引用或静态值",
+        "properties": {
+          "kind": {
+            "description": "值来源",
+            "enum": [
+              "parameter",
+              "static"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "parameter": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "kind=parameter 时的参数名",
+            "title": "Parameter"
+          },
+          "value": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "description": "kind=static 时的静态值",
+            "title": "Value"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "OntologyActionTypeEditValue",
+        "type": "object"
+      },
+      "OntologyActionTypeExecuteRequest": {
+        "description": "Action Type 执行请求（写对象属性覆盖层 + 执行审计；不直接改源库）",
+        "properties": {
+          "object_key": {
+            "description": "对象主键值",
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Object Key",
+            "type": "string"
+          },
+          "parameters": {
+            "additionalProperties": true,
+            "description": "Action 参数值",
+            "title": "Parameters",
+            "type": "object"
+          }
+        },
+        "required": [
+          "object_key"
+        ],
+        "title": "OntologyActionTypeExecuteRequest",
+        "type": "object"
+      },
+      "OntologyActionTypeParameterItem": {
+        "description": "Action Type 参数定义（当前支持内建值类型）",
+        "properties": {
+          "description": {
+            "default": "",
+            "description": "参数说明",
+            "maxLength": 512,
+            "title": "Description",
+            "type": "string"
+          },
+          "name": {
+            "description": "参数API名",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "required": {
+            "default": true,
+            "description": "是否必填",
+            "title": "Required",
+            "type": "boolean"
+          },
+          "type": {
+            "description": "参数值类型",
+            "enum": [
+              "String",
+              "Integer",
+              "Decimal",
+              "Boolean",
+              "Date",
+              "DateTime"
+            ],
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "type"
+        ],
+        "title": "OntologyActionTypeParameterItem",
+        "type": "object"
+      },
+      "OntologyActionTypeTestRunRequest": {
+        "description": "Action Type 试运行请求（只校验参数与编辑解析，不写对象）",
+        "properties": {
+          "parameters": {
+            "additionalProperties": true,
+            "description": "参数值",
+            "title": "Parameters",
+            "type": "object"
+          }
+        },
+        "title": "OntologyActionTypeTestRunRequest",
+        "type": "object"
+      },
+      "OntologyActionTypeUpsertRequest": {
+        "description": "Action Type 创建/编辑请求（action_type_name 由路径参数携带）",
+        "properties": {
+          "allow_overwrite": {
+            "default": false,
+            "description": "编辑既有活跃 Action Type 时为 True",
+            "title": "Allow Overwrite",
+            "type": "boolean"
+          },
+          "description": {
+            "default": "",
+            "description": "描述",
+            "maxLength": 1024,
+            "title": "Description",
+            "type": "string"
+          },
+          "display_name": {
+            "default": "",
+            "description": "展示名",
+            "maxLength": 128,
+            "title": "Display Name",
+            "type": "string"
+          },
+          "edits": {
+            "description": "编辑定义",
+            "items": {
+              "$ref": "#/components/schemas/OntologyActionTypeEditItem"
+            },
+            "minItems": 1,
+            "title": "Edits",
+            "type": "array"
+          },
+          "object_type_name": {
+            "description": "目标对象类型API名",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Object Type Name",
+            "type": "string"
+          },
+          "parameters": {
+            "description": "参数定义",
+            "items": {
+              "$ref": "#/components/schemas/OntologyActionTypeParameterItem"
+            },
+            "minItems": 1,
+            "title": "Parameters",
+            "type": "array"
+          },
+          "status": {
+            "default": "draft",
+            "description": "生命周期状态",
+            "enum": [
+              "draft",
+              "experimental",
+              "certified"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "object_type_name",
+          "parameters",
+          "edits"
+        ],
+        "title": "OntologyActionTypeUpsertRequest",
+        "type": "object"
+      },
       "OntologyMappingItem": {
         "description": "本体映射项（语义模型映射：口径权威在语义层，层级=组→模型→维度映射，不触碰物理表）",
         "properties": {
@@ -6947,6 +7166,327 @@
         ]
       }
     },
+    "/api/chatdata/admin/meta/ontology/action-types": {
+      "get": {
+        "description": "列出 Action Type 定义（可选按目标对象类型过滤）。",
+        "operationId": "list_ontology_action_types_api_chatdata_admin_meta_ontology_action_types_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "object_type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Object Type"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "List Ontology Action Types",
+        "tags": [
+          "ChatData 本体管理（Admin）"
+        ]
+      }
+    },
+    "/api/chatdata/admin/meta/ontology/action-types/{action_type_name}": {
+      "delete": {
+        "description": "软删 Action Type 定义。",
+        "operationId": "delete_ontology_action_type_api_chatdata_admin_meta_ontology_action_types__action_type_name__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "action_type_name",
+            "required": true,
+            "schema": {
+              "title": "Action Type Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Delete Ontology Action Type",
+        "tags": [
+          "ChatData 本体管理（Admin）"
+        ]
+      },
+      "get": {
+        "description": "Action Type 定义详情。",
+        "operationId": "get_ontology_action_type_api_chatdata_admin_meta_ontology_action_types__action_type_name__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "action_type_name",
+            "required": true,
+            "schema": {
+              "title": "Action Type Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Get Ontology Action Type",
+        "tags": [
+          "ChatData 本体管理（Admin）"
+        ]
+      },
+      "put": {
+        "description": "创建/编辑 Action Type 定义（仅定义，不执行写回）。",
+        "operationId": "upsert_ontology_action_type_api_chatdata_admin_meta_ontology_action_types__action_type_name__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "action_type_name",
+            "required": true,
+            "schema": {
+              "title": "Action Type Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OntologyActionTypeUpsertRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Upsert Ontology Action Type",
+        "tags": [
+          "ChatData 本体管理（Admin）"
+        ]
+      }
+    },
+    "/api/chatdata/admin/meta/ontology/action-types/{action_type_name}/execute": {
+      "post": {
+        "description": "执行 Action：校验参数/属性类型，写对象属性覆盖层 + 执行审计。",
+        "operationId": "execute_ontology_action_type_api_chatdata_admin_meta_ontology_action_types__action_type_name__execute_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "action_type_name",
+            "required": true,
+            "schema": {
+              "title": "Action Type Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OntologyActionTypeExecuteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Execute Ontology Action Type",
+        "tags": [
+          "ChatData 本体管理（Admin）"
+        ]
+      }
+    },
+    "/api/chatdata/admin/meta/ontology/action-types/{action_type_name}/test-run": {
+      "post": {
+        "description": "试运行 Action Type：只校验参数并解析编辑，不写对象。",
+        "operationId": "test_run_ontology_action_type_api_chatdata_admin_meta_ontology_action_types__action_type_name__test_run_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "action_type_name",
+            "required": true,
+            "schema": {
+              "title": "Action Type Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OntologyActionTypeTestRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Test Run Ontology Action Type",
+        "tags": [
+          "ChatData 本体管理（Admin）"
+        ]
+      }
+    },
     "/api/chatdata/admin/meta/ontology/consistency-check": {
       "get": {
         "description": "本体↔语义模型一致性健康巡检（管理端手动触发）。\n\n比较域 = 全部数据源组的公共语义配置 × AI 可见本体面\n（bundle 与注入同源：活跃、certified/experimental、双端在集合内）。\n只巡检不评分、不阻断任何操作——产出失修清单（映射维度失效/关系类型列失效/\n类型冲突/属性未映射），供管理员修正映射或恢复维度。",
@@ -7206,6 +7746,79 @@
           }
         ],
         "summary": "Upsert Ontology Object Type",
+        "tags": [
+          "ChatData 本体管理（Admin）"
+        ]
+      }
+    },
+    "/api/chatdata/admin/meta/ontology/object-types/{object_type_name}/objects/read": {
+      "get": {
+        "description": "按对象主键读取一个对象实例（数据库只读投影，不落对象存储）。",
+        "operationId": "read_ontology_object_api_chatdata_admin_meta_ontology_object_types__object_type_name__objects_read_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "object_type_name",
+            "required": true,
+            "schema": {
+              "title": "Object Type Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "object_key",
+            "required": true,
+            "schema": {
+              "title": "Object Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "semantic_config_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Semantic Config Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Read Ontology Object",
         "tags": [
           "ChatData 本体管理（Admin）"
         ]

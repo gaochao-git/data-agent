@@ -23,6 +23,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from apps.chat_data_app.services.ontology.object_projection import ontology_object_read_enabled
 from apps.chat_data_app.services.ontology.object_type_locator import object_type_locator_enabled
 
 from .ask_user_question import ask_user_question_tool
@@ -147,10 +148,10 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
         # 工具实现内仍保留开关 raise 作为纵深防御（防运行中翻转/直调）。
         build=lambda ctx: (
             [create_ontology_tool(ctx.datasource.datasource_id, user_id=ctx.identity.user_id or "system")]
-            if object_type_locator_enabled()
+            if object_type_locator_enabled() or ontology_object_read_enabled()
             else []
         ),
-        note="本体对象类型导航：列对象类型/按对象类型定位语义模型（纯导航不执行查询；受 CHAT_DATA_ONTOLOGY_LOCATE_ENABLED 门控）",
+        note="本体导航与对象读取：列对象类型/定位语义模型/关系探索/按主键读对象（读取受 CHAT_DATA_ONTOLOGY_OBJECT_READ_ENABLED 门控）",
     ),
     ToolSpec(
         provides=("calculator_tool",),

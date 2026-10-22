@@ -35,8 +35,12 @@ import type {
   MetaGlobalEnum,
   MetaGlobalEnumRef,
   MetaGlobalEnumValueItem,
+  OntologyActionTypeItem,
+  OntologyActionTypePayload,
+  OntologyActionTypeTestRunResult,
   OntologyItem,
   OntologyMappingItem,
+  OntologyObjectInstance,
   OntologyObjectTypeItem,
   OntologyObjectTypeStatus,
   OntologyPropertyItem,
@@ -2126,6 +2130,81 @@ export function getAdminOntologyObjectTypes(params?: {
     url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/object-types`,
     method: 'get',
     params
+  })
+}
+
+/** 后台：Action Type 定义列表 */
+export function getAdminOntologyActionTypes(objectType?: string): Promise<ApiResponse<{ action_types: OntologyActionTypeItem[] }>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/action-types`,
+    method: 'get',
+    params: objectType ? { object_type: objectType } : undefined
+  })
+}
+
+/** 后台：Action Type 定义详情 */
+export function getAdminOntologyActionType(name: string): Promise<ApiResponse<OntologyActionTypeItem>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/action-types/${encodeURIComponent(name)}`,
+    method: 'get'
+  })
+}
+
+/** 后台：创建/编辑 Action Type 定义 */
+export function upsertAdminOntologyActionType(
+  name: string,
+  data: OntologyActionTypePayload
+): Promise<ApiResponse<OntologyActionTypeItem>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/action-types/${encodeURIComponent(name)}`,
+    method: 'put',
+    data
+  })
+}
+
+/** 后台：删除 Action Type 定义（软删） */
+export function deleteAdminOntologyActionType(name: string): Promise<ApiResponse<{ action_type_name: string }>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/action-types/${encodeURIComponent(name)}`,
+    method: 'delete'
+  })
+}
+
+/** 后台：试运行 Action Type（只校验参数，不写对象） */
+export function testRunAdminOntologyActionType(
+  name: string,
+  parameters: Record<string, unknown>
+): Promise<ApiResponse<OntologyActionTypeTestRunResult>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/action-types/${encodeURIComponent(name)}/test-run`,
+    method: 'post',
+    data: { parameters }
+  })
+}
+
+/** 后台：执行 Action Type（写对象覆盖层 + 审计） */
+export function executeAdminOntologyActionType(
+  name: string,
+  objectKey: string,
+  parameters: Record<string, unknown>
+): Promise<ApiResponse<{ execution: Record<string, unknown>; object_type_name: string; object_key: string }>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/action-types/${encodeURIComponent(name)}/execute`,
+    method: 'post',
+    data: { object_key: objectKey, parameters }
+  })
+}
+
+/** 后台：按对象主键读取对象实例（数据库只读投影） */
+export function readAdminOntologyObject(
+  objectTypeName: string,
+  objectKey: string,
+  semanticConfigId?: string
+): Promise<ApiResponse<OntologyObjectInstance>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/object-types/${encodeURIComponent(objectTypeName)}/objects/read`,
+    method: 'get',
+    params: { object_key: objectKey, ...(semanticConfigId ? { semantic_config_id: semanticConfigId } : {}) }
   })
 }
 

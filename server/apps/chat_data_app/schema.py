@@ -1319,3 +1319,53 @@ class LayoutUpdateRequest(BaseModel):
     """批量更新布局请求"""
 
     layouts: list[dict] = Field(..., description="布局列表 [{'panel_id': 'xxx', 'x': 0, 'y': 0, 'w': 6, 'h': 4}, ...]")
+
+
+class OntologyActionTypeParameterItem(BaseModel):
+    """Action Type 参数定义（当前支持内建值类型）"""
+
+    name: str = Field(..., min_length=1, max_length=128, description="参数API名")
+    type: Literal["String", "Integer", "Decimal", "Boolean", "Date", "DateTime"] = Field(..., description="参数值类型")
+    required: bool = Field(default=True, description="是否必填")
+    description: str = Field(default="", max_length=512, description="参数说明")
+
+
+class OntologyActionTypeEditValue(BaseModel):
+    """Action Type 编辑值来源：参数引用或静态值"""
+
+    kind: Literal["parameter", "static"] = Field(..., description="值来源")
+    parameter: str | None = Field(default=None, max_length=128, description="kind=parameter 时的参数名")
+    value: Any | None = Field(default=None, description="kind=static 时的静态值")
+
+
+class OntologyActionTypeEditItem(BaseModel):
+    """Action Type 编辑项（当前只支持 set_property）"""
+
+    operation: Literal["set_property"] = Field(default="set_property", description="编辑操作")
+    property: str = Field(..., min_length=1, max_length=128, description="目标对象属性API名")
+    value: OntologyActionTypeEditValue = Field(..., description="新值来源")
+
+
+class OntologyActionTypeUpsertRequest(BaseModel):
+    """Action Type 创建/编辑请求（action_type_name 由路径参数携带）"""
+
+    object_type_name: str = Field(..., min_length=1, max_length=128, description="目标对象类型API名")
+    display_name: str = Field(default="", max_length=128, description="展示名")
+    description: str = Field(default="", max_length=1024, description="描述")
+    parameters: list[OntologyActionTypeParameterItem] = Field(..., min_length=1, description="参数定义")
+    edits: list[OntologyActionTypeEditItem] = Field(..., min_length=1, description="编辑定义")
+    status: Literal["draft", "experimental", "certified"] = Field(default="draft", description="生命周期状态")
+    allow_overwrite: bool = Field(default=False, description="编辑既有活跃 Action Type 时为 True")
+
+
+class OntologyActionTypeTestRunRequest(BaseModel):
+    """Action Type 试运行请求（只校验参数与编辑解析，不写对象）"""
+
+    parameters: dict[str, Any] = Field(default_factory=dict, description="参数值")
+
+
+class OntologyActionTypeExecuteRequest(BaseModel):
+    """Action Type 执行请求（写对象属性覆盖层 + 执行审计；不直接改源库）"""
+
+    object_key: str = Field(..., min_length=1, max_length=512, description="对象主键值")
+    parameters: dict[str, Any] = Field(default_factory=dict, description="Action 参数值")

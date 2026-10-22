@@ -132,3 +132,105 @@ def test_consistency_check_requires_auth(client, missing_header):
 @pytest.fixture
 def missing_header():
     return {"headers": {}}
+
+
+def test_read_ontology_object_contract(client, auth_headers, monkeypatch):
+    async def fake_read(object_type_name, object_key, **kwargs):
+        return {
+            "object_type": object_type_name,
+            "object_key": f"{object_type_name}:{object_key}",
+            "properties": {"order_id": object_key, "amount": 100},
+            "links": {},
+        }
+
+    monkeypatch.setattr(ontology_admin_routes, "read_object_projection", fake_read)
+    response = client.get(
+        "/api/chatdata/admin/meta/ontology/object-types/Order/objects/read",
+        params={"object_key": "A001"},
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "success"
+    assert payload["data"]["object_key"] == "Order:A001"
+    assert payload["data"]["properties"]["amount"] == 100
+
+
+_ACTION_BASE = "/api/chatdata/admin/meta/ontology/action-types"
+
+
+def _action_payload():
+    return {
+        "object_type_name": "sales_order",
+        "display_name": "更新订单状态",
+        "parameters": [{"name": "status", "type": "String", "required": True}],
+        "edits": [
+            {
+                "operation": "set_property",
+                "property": "pay_status",
+                "value": {"kind": "parameter", "parameter": "status"},
+            }
+        ],
+        "status": "draft",
+    }
+
+
+def test_action_type_crud_and_test_run_contract(client, auth_headers, monkeypatch):
+    class FakeService:
+        def __init__(self):
+            self.saved = None
+
+        async def upsert_action_type_async(self, name, payload, **kwargs):
+            self.saved = {"action_type_name": name, "object_type_name": payload["object_type_name"], **payload}
+            return self.saved
+
+        async def list_action_types_async(self, object_type_name=""):
+            return [self.saved] if self.saved else []
+
+        async def get_action_type_async(self, name):
+            return self.saved if self.saved and self.saved["action_type_name"] == name else None
+
+        async def delete_action_type_async(self, name, **kwargs):
+            return None
+
+        async def test_run_action_type_async(self, name, parameters):
+            return {"action_type_name": name, "parameters": parameters, "edits": [], "executed": False}
+
+        async def execute_action_type_async(self, name, *, object_key, parameters, **kwargs):
+            return {
+                "execution": {"id": 99, "action_type_name": name, "object_key": object_key},
+                "object_type_name": "sales_order",
+                "object_key": object_key,
+                "edits": [],
+            }
+
+    fake = FakeService()
+    monkeypatch.setattr(ontology_admin_routes, "_action_type_service", fake)
+
+    saved = client.put(f"{_ACTION_BASE}/update_order_status", json=_action_payload(), headers=auth_headers)
+    assert saved.status_code == 200
+    assert saved.json()["data"]["action_type_name"] == "update_order_status"
+
+    listed = client.get(_ACTION_BASE, headers=auth_headers)
+    assert listed.json()["data"]["action_types"][0]["object_type_name"] == "sales_order"
+
+    detail = client.get(f"{_ACTION_BASE}/update_order_status", headers=auth_headers)
+    assert detail.json()["data"]["display_name"] == "更新订单状态"
+
+    test_run = client.post(
+        f"{_ACTION_BASE}/update_order_status/test-run",
+        json={"parameters": {"status": "paid"}},
+        headers=auth_headers,
+    )
+    assert test_run.json()["data"]["executed"] is False
+
+    executed = client.post(
+        f"{_ACTION_BASE}/update_order_status/execute",
+        json={"object_key": "ORD2024000001", "parameters": {"status": "paid"}},
+        headers=auth_headers,
+    )
+    assert executed.json()["data"]["execution"]["id"] == 99
+    assert executed.json()["data"]["object_key"] == "ORD2024000001"
+
+    deleted = client.delete(f"{_ACTION_BASE}/update_order_status", headers=auth_headers)
+    assert deleted.json()["status"] == "success"

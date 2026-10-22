@@ -1013,6 +1013,67 @@ export interface PluginMcpServerInfo {
   admission?: PluginMcpServerAdmission
 }
 
+// 本体 Action Type 定义
+export interface OntologyActionTypeParameter {
+  name: string
+  type: 'String' | 'Integer' | 'Decimal' | 'Boolean' | 'Date' | 'DateTime'
+  required: boolean
+  description: string
+}
+
+export interface OntologyActionTypeEditValue {
+  kind: 'parameter' | 'static'
+  parameter?: string
+  value?: unknown
+}
+
+export interface OntologyActionTypeEdit {
+  operation: 'set_property'
+  property: string
+  value: OntologyActionTypeEditValue
+}
+
+export interface OntologyActionTypeItem {
+  id: number
+  action_type_name: string
+  display_name: string
+  description: string
+  object_type_id: number
+  object_type_name: string
+  parameters: OntologyActionTypeParameter[]
+  edits: OntologyActionTypeEdit[]
+  status: 'draft' | 'experimental' | 'certified'
+  create_time?: string
+  update_time?: string
+  create_by_name?: string
+}
+
+export interface OntologyActionTypePayload {
+  object_type_name: string
+  display_name: string
+  description: string
+  parameters: OntologyActionTypeParameter[]
+  edits: OntologyActionTypeEdit[]
+  status: 'draft' | 'experimental' | 'certified'
+  allow_overwrite?: boolean
+}
+
+export interface OntologyActionTypeTestRunResult {
+  action_type_name: string
+  object_type_name: string
+  parameters: Record<string, unknown>
+  edits: Array<OntologyActionTypeEdit & { resolved_value?: unknown }>
+  executed: boolean
+}
+
+// 本体对象实例只读投影
+export interface OntologyObjectInstance {
+  object_type: string
+  object_key: string
+  properties: Record<string, unknown>
+  links: Record<string, unknown[]>
+}
+
 // 插件 manifest 信息
 export interface PluginManifestInfo {
   name: string

@@ -8,7 +8,7 @@
  * 本体=纯语义容器，不绑数据源组（对象类型取数后端由各自映射决定，可跨组，对齐 Palantir「本体不绑存储」）；
  * 本体子节点为常驻「对象类型/关系类型」分组锚点。
  */
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { TreeInstance } from 'element-plus'
 import AdminPanelToolbar from '../AdminPanelToolbar.vue'
@@ -18,17 +18,22 @@ import {
   deleteAdminOntologyObjectType,
   getAdminOntologies,
   getAdminOntologyObjectType,
+  getAdminOntologyActionTypes,
   getAdminOntologyObjectTypes,
-  getAdminOntologyRelationTypes
+  getAdminOntologyRelationTypes,
+  readAdminOntologyObject
 } from '../../api'
 import type {
   OntologyItem,
   OntologyMappingItem,
+  OntologyObjectInstance,
   OntologyObjectTypeItem,
   OntologyObjectTypeStatus,
   OntologyPropertyItem,
-  OntologyRelationTypeItem
+  OntologyRelationTypeItem,
+  OntologyActionTypeItem
 } from '../../types'
+import ActionTypeAdminPanel from './ActionTypeAdminPanel.vue'
 import OntologyConsistencyDialog from './OntologyConsistencyDialog.vue'
 import OntologyForm from './OntologyForm.vue'
 import OntologyObjectForm from './OntologyObjectForm.vue'
@@ -92,15 +97,18 @@ const hasLoaded = ref(false)
 // 关系分组数据源（不受工具栏筛选影响）：全量对象用于「对象→本体」映射，全量关系用于本体关系组
 const allObjects = ref<OntologyObjectTypeItem[]>([])
 const relation_types = ref<OntologyRelationTypeItem[]>([])
+const action_types = ref<OntologyActionTypeItem[]>([])
 
 const loadRelationSources = async () => {
   try {
-    const [objectRes, relationRes] = await Promise.all([
+    const [objectRes, relationRes, actionRes] = await Promise.all([
       getAdminOntologyObjectTypes({}),
-      getAdminOntologyRelationTypes({})
+      getAdminOntologyRelationTypes({}),
+      getAdminOntologyActionTypes()
     ])
     if (objectRes.status === 'success') allObjects.value = objectRes.data?.object_types || []
     if (relationRes.status === 'success') relation_types.value = relationRes.data?.relation_types || []
+    if (actionRes.status === 'success') action_types.value = actionRes.data?.action_types || []
   } catch (err) {
     console.error('获取本体关系分组数据失败:', err)
   }
@@ -129,13 +137,18 @@ const objectTypeDisplayOf = (objectTypeName: string | undefined) =>
 const UNGROUPED_ONTOLOGY = '未归本体'
 // 常驻根节点：展示层锚点（右键新增本体），非数据实体，DB 无层级字段
 const ROOT_ROW_KEY = 'ontology-root'
+const PLACEHOLDER_GROUP_META = [
+  { key: 'shared_properties', label: '共享属性', icon: 'fa-share-nodes' },
+  { key: 'interfaces', label: '接口', icon: 'fa-code-branch' },
+  { key: 'functions', label: '函数', icon: 'fa-calculator' }
+] as const
 const ontologyBucketKey = (ontologyId: number | null) => (ontologyId == null ? '__ungrouped__' : String(ontologyId))
 
 interface RootNode {
   row_key: string
   kind: 'root'
   label: string
-  children: OntologyNode[]
+  children: TreeRow[]
 }
 interface OntologyNode {
   row_key: string
@@ -178,6 +191,12 @@ interface RelationNode {
   is_cross_ontology: boolean
   is_leaf: true
 }
+interface ActionTypeNode {
+  row_key: string
+  kind: 'action_type'
+  action_type: OntologyActionTypeItem
+  is_leaf: true
+}
 /** 对象子树分组节点（属性/映射）：UI 导航原语，非本体层级 */
 interface GroupNode {
   row_key: string
@@ -192,11 +211,13 @@ interface GroupNode {
 interface OntologyGroupNode {
   row_key: string
   kind: 'ontology-group'
-  group: 'object_types' | 'relation_types'
+  group: 'object_types' | 'relation_types' | 'action_types' | 'shared_properties' | 'interfaces' | 'functions'
   label: string
   ontology_id: number | null
   children: TreeRow[]
   is_leaf: false
+  /** 对齐 Palantir 的预留资源位：规划中，不伪造数据入口 */
+  placeholder?: boolean
 }
 interface MappingNode {
   row_key: string
@@ -210,7 +231,7 @@ interface EmptyNode {
   label: string
   is_leaf: true
 }
-type TreeRow = RootNode | OntologyNode | OntologyGroupNode | ObjectNodeData | GroupNode | PropertyNode | RelationNode | MappingNode | EmptyNode
+type TreeRow = RootNode | OntologyNode | OntologyGroupNode | ObjectNodeData | GroupNode | PropertyNode | RelationNode | ActionTypeNode | MappingNode | EmptyNode
 
 // 数据版本号：编入对象节点 key，列表刷新/保存后懒加载缓存整体失效，防止展示脏数据
 const dataVersion = ref(0)
@@ -255,7 +276,24 @@ const relationTypeNodesByOntology = computed(() => {
   return map
 })
 
-// 本体子节点=常驻「对象类型/关系类型」两个分组锚点（空组保留占位，右键入口始终可用）
+// 动作类型按目标对象类型所属本体归组（一个动作只改一个对象类型，不跨本体重复）
+const actionTypeNodesByOntology = computed(() => {
+  const map = new Map<number | null, ActionTypeNode[]>()
+  for (const action of action_types.value) {
+    const targetOntology = objectTypeOntologyMap.value.get(action.object_type_name || '')
+    if (targetOntology === undefined) continue
+    if (!map.has(targetOntology)) map.set(targetOntology, [])
+    map.get(targetOntology)!.push({
+      row_key: `action:${ontologyBucketKey(targetOntology)}:${action.action_type_name}`,
+      kind: 'action_type',
+      action_type: action,
+      is_leaf: true
+    })
+  }
+  return map
+})
+
+// 本体子节点=常驻「对象类型/关系类型/动作类型」三个分组锚点（空组保留占位，右键入口始终可用）
 const buildOntologyChildren = (ontologyId: number | null, ontologyObjects: OntologyObjectTypeItem[]): TreeRow[] => {
   const bucket = ontologyBucketKey(ontologyId)
   const objectTypeNodes: TreeRow[] = ontologyObjects.map(toObjectNode)
@@ -265,6 +303,10 @@ const buildOntologyChildren = (ontologyId: number | null, ontologyObjects: Ontol
   const relationTypeNodes: TreeRow[] = relationTypeNodesByOntology.value.get(ontologyId) || []
   if (relationTypeNodes.length === 0) {
     relationTypeNodes.push({ row_key: `ontology-group:${bucket}:relation_types:empty`, kind: 'empty', label: '暂无关系类型', is_leaf: true })
+  }
+  const actionTypeNodes: TreeRow[] = actionTypeNodesByOntology.value.get(ontologyId) || []
+  if (actionTypeNodes.length === 0) {
+    actionTypeNodes.push({ row_key: `ontology-group:${bucket}:action_types:empty`, kind: 'empty', label: '暂无动作类型', is_leaf: true })
   }
   return [
     {
@@ -284,7 +326,26 @@ const buildOntologyChildren = (ontologyId: number | null, ontologyObjects: Ontol
       ontology_id: ontologyId,
       children: relationTypeNodes,
       is_leaf: false
-    }
+    },
+    {
+      row_key: `ontology-group:${bucket}:action_types`,
+      kind: 'ontology-group',
+      group: 'action_types',
+      label: '动作类型',
+      ontology_id: ontologyId,
+      children: actionTypeNodes,
+      is_leaf: false
+    },
+    ...PLACEHOLDER_GROUP_META.map(meta => ({
+      row_key: `ontology-group:${bucket}:${meta.key}`,
+      kind: 'ontology-group' as const,
+      group: meta.key,
+      label: meta.label,
+      ontology_id: ontologyId,
+      children: [],
+      is_leaf: false as const,
+      placeholder: true
+    }))
   ]
 }
 
@@ -413,6 +474,37 @@ const retrySelectedObject = () => {
   if (selectedNode.value?.kind === 'object_type') void fetchObjectEntry(selectedNode.value)
 }
 
+const openObjectPreview = () => {
+  if (selectedNode.value?.kind !== 'object_type') return
+  objectPreviewType.value = selectedNode.value.object_type_name
+  objectPreviewKey.value = ''
+  objectPreviewData.value = null
+  objectPreviewError.value = ''
+  objectPreviewVisible.value = true
+}
+
+const loadObjectPreview = async () => {
+  if (!objectPreviewType.value || !objectPreviewKey.value.trim()) {
+    objectPreviewError.value = '请输入对象主键值'
+    return
+  }
+  objectPreviewLoading.value = true
+  objectPreviewError.value = ''
+  try {
+    const res = await readAdminOntologyObject(objectPreviewType.value, objectPreviewKey.value.trim())
+    if (res.status === 'success') {
+      objectPreviewData.value = res.data
+    } else {
+      objectPreviewError.value = res.msg || '读取对象失败'
+    }
+  } catch (err) {
+    console.error('读取本体对象失败:', err)
+    objectPreviewError.value = '读取对象失败，请检查映射、数据源权限或稍后重试'
+  } finally {
+    objectPreviewLoading.value = false
+  }
+}
+
 // ---------- 节点选中与树事件 ----------
 
 const treeProps = { label: 'row_key', isLeaf: 'is_leaf' }
@@ -421,9 +513,14 @@ const currentNodeKey = ref('')
 const selectedNode = ref<TreeRow | null>(null)
 
 const onNodeClick = (data: TreeRow) => {
+  // 动作类型是写操作资源：点击直接打开管理弹窗，不占右侧对象详情位
+  if (data.kind === 'action_type') {
+    void openActionTypeManager('edit', data.action_type)
+    return
+  }
   // 根/对象子树分组/本体分组/空态占位是导航容器或提示节点，点击不改变右侧详情；
   // 本体节点有独立详情卡（否则点击后右侧空白）。
-  if (data.kind === 'root' || data.kind === 'group' || data.kind === 'ontology' || data.kind === 'empty') return
+  if (data.kind === 'root' || data.kind === 'group' || data.kind === 'ontology' || data.kind === 'ontology-group' || data.kind === 'empty') return
   selectedNode.value = data
   currentNodeKey.value = data.row_key
   if (data.kind === 'object_type') ensureObjectData(data)
@@ -515,6 +612,12 @@ const formDefaultOntologyId = ref<number | null>(null)
 const statusDialogVisible = ref(false)
 // 一致性健康巡检弹窗开关（工具栏按钮触发）
 const consistencyDialogVisible = ref(false)
+const objectPreviewVisible = ref(false)
+const objectPreviewKey = ref('')
+const objectPreviewLoading = ref(false)
+const objectPreviewError = ref('')
+const objectPreviewData = ref<OntologyObjectInstance | null>(null)
+const objectPreviewType = ref('')
 const statusTarget = ref<OntologyObjectTypeItem | null>(null)
 
 const openCreate = (ontologyId: number | null = null) => {
@@ -736,6 +839,17 @@ const openCtxMenu = (event: MouseEvent, node: TreeRow | null) => {
   } else if (node && node.kind === 'ontology-group' && node.group === 'relation_types') {
     // 本体的「关系类型」分组：新建关系类型（两端手选，关系类型是对象类型之间的，不再预选单一对象类型）
     menuItems.push({ key: 'create-relation', label: '新建关系类型', icon: 'fa-plus', handler: () => relationFormRef.value?.openCreate() })
+  } else if (node && node.kind === 'ontology-group' && node.group === 'action_types') {
+    // 本体的「动作类型」分组：新建动作类型（目标对象在弹窗内选择）
+    menuItems.push({ key: 'create-action-type', label: '新建动作类型', icon: 'fa-bolt', handler: () => void openActionTypeManager('create') })
+  } else if (node && node.kind === 'action_type') {
+    // 动作类型节点：编辑 / 试运行 / 执行 / 删除（复用 ActionTypeAdminPanel 单入口）
+    menuItems.push(
+      { key: 'edit-action-type', label: '编辑动作类型', icon: 'fa-pen', handler: () => void openActionTypeManager('edit', node.action_type) },
+      { key: 'test-action-type', label: '试运行', icon: 'fa-vial', handler: () => void openActionTypeManager('test', node.action_type) },
+      { key: 'execute-action-type', label: '执行', icon: 'fa-play', handler: () => void openActionTypeManager('execute', node.action_type) },
+      { key: 'delete-action-type', label: '删除动作类型', icon: 'fa-trash', danger: true, handler: () => void openActionTypeManager('remove', node.action_type) }
+    )
   } else if (node && node.kind === 'relation') {
     // 关系条目节点：编辑 / 状态 / 删除
     menuItems.push(
@@ -758,9 +872,29 @@ const openCtxMenu = (event: MouseEvent, node: TreeRow | null) => {
 
 const relationFormRef = ref<InstanceType<typeof OntologyRelationForm> | null>(null)
 
+// ---------- 动作类型管理（树右键/点击 → 复用 ActionTypeAdminPanel 弹窗） ----------
+
+const actionTypeManagerVisible = ref(false)
+const actionTypePanelRef = ref<InstanceType<typeof ActionTypeAdminPanel> | null>(null)
+
+type ActionTypeManagerMode = 'create' | 'edit' | 'test' | 'execute' | 'remove'
+
+const openActionTypeManager = async (mode: ActionTypeManagerMode, item: OntologyActionTypeItem | null = null) => {
+  actionTypeManagerVisible.value = true
+  await nextTick()
+  await actionTypePanelRef.value?.ensureLoaded()
+  if (mode === 'create') actionTypePanelRef.value?.openCreate()
+  else if (!item) return
+  else if (mode === 'edit') void actionTypePanelRef.value?.openEdit(item)
+  else if (mode === 'test') actionTypePanelRef.value?.openTest(item)
+  else if (mode === 'execute') actionTypePanelRef.value?.openExecute(item)
+  else actionTypePanelRef.value?.remove(item)
+}
+
 const findObjectNode = (objectTypeName: string): ObjectNodeData | null => {
   for (const root of treeData.value) {
     for (const ontology of root.children) {
+      if (ontology.kind !== 'ontology') continue
       for (const group of ontology.children) {
         if (group.kind !== 'ontology-group' || group.group !== 'object_types') continue
         const found = group.children.find(
@@ -850,6 +984,9 @@ const onRelationSaved = (objectTypeNames: string[]) => {
       <el-button size="small" @click="consistencyDialogVisible = true">
         <i class="fa-solid fa-stethoscope" style="margin-right: 4px; font-size: 10px;"></i>一致性检查
       </el-button>
+      <el-button size="small" :disabled="selectedNode?.kind !== 'object_type'" @click="openObjectPreview">
+        <i class="fa-solid fa-eye" style="margin-right: 4px; font-size: 10px;"></i>读取对象
+      </el-button>
     </AdminPanelToolbar>
 
     <!-- 左树右详情 -->
@@ -880,7 +1017,7 @@ const onRelationSaved = (objectTypeNames: string[]) => {
               <span v-if="data.kind === 'root'" class="flex items-center gap-1.5 py-0.5">
                 <i class="fa-solid fa-sitemap text-[11px] text-slate-500"></i>
                 <span class="text-xs font-semibold text-slate-800">{{ data.label }}</span>
-                <span class="text-[11px] text-slate-400">{{ data.children.length }} 个本体</span>
+                <span class="text-[11px] text-slate-400">{{ data.children.filter((item: TreeRow) => item.kind === 'ontology').length }} 个本体</span>
               </span>
               <!-- 本体节点 -->
               <span v-else-if="data.kind === 'ontology'" class="flex items-center gap-1.5 py-0.5">
@@ -889,15 +1026,29 @@ const onRelationSaved = (objectTypeNames: string[]) => {
                 <span class="text-[11px] text-slate-400">{{ data.object_type_count }} 个对象类型</span>
               </span>
               <!-- 本体分组节点（对象类型/关系类型，常驻锚点） -->
-              <span v-else-if="data.kind === 'ontology-group'" class="flex items-center gap-1.5 py-0.5">
+              <span
+                v-else-if="data.kind === 'ontology-group'"
+                class="flex items-center gap-1.5 py-0.5"
+                :class="data.placeholder ? 'cursor-not-allowed opacity-50' : ''"
+              >
                 <i
                   :class="[
                     'fa-solid text-[10px]',
-                    data.group === 'object_types' ? 'fa-cube text-blue-400' : 'fa-circle-nodes text-violet-400'
+                    data.group === 'object_types'
+                      ? 'fa-cube text-blue-400'
+                      : data.group === 'relation_types'
+                        ? 'fa-circle-nodes text-violet-400'
+                        : data.group === 'action_types'
+                          ? 'fa-bolt text-amber-500'
+                          : data.group === 'shared_properties'
+                            ? 'fa-share-nodes text-slate-400'
+                            : data.group === 'interfaces'
+                              ? 'fa-code-branch text-slate-400'
+                              : 'fa-calculator text-slate-400'
                   ]"
                 ></i>
-                <span class="text-xs text-slate-600">{{ data.label }}</span>
-                <span class="text-[11px] text-slate-400">{{ data.children[0]?.kind === 'empty' ? 0 : data.children.length }}</span>
+                <span class="text-xs" :class="data.placeholder ? 'text-slate-400' : 'text-slate-600'">{{ data.label }}</span>
+                <span v-if="!data.placeholder" class="text-[11px] text-slate-400">{{ data.children[0]?.kind === 'empty' ? 0 : data.children.length }}</span>
               </span>
               <!-- 对象节点 -->
               <span v-else-if="data.kind === 'object_type'" class="flex items-center gap-1.5 py-0.5">
@@ -911,6 +1062,12 @@ const onRelationSaved = (objectTypeNames: string[]) => {
                 >
                   {{ ONTOLOGY_STATUS_META[data.status as keyof typeof ONTOLOGY_STATUS_META]?.label || data.status }}
                 </el-tag>
+              </span>
+              <!-- 动作类型节点 -->
+              <span v-else-if="data.kind === 'action_type'" class="flex items-center gap-1.5 py-0.5">
+                <i class="fa-solid fa-bolt text-[10px] text-amber-500"></i>
+                <span class="truncate font-mono text-xs text-slate-800" :title="data.action_type.action_type_name">{{ data.action_type.action_type_name }}</span>
+                <el-tag size="small" type="warning" effect="plain">{{ data.action_type.status }}</el-tag>
               </span>
               <!-- 分组节点（属性/映射，带计数） -->
               <span v-else-if="data.kind === 'group'" class="flex items-center gap-1.5 py-0.5">
@@ -959,8 +1116,8 @@ const onRelationSaved = (objectTypeNames: string[]) => {
         <div v-if="!selectedNode" class="flex h-full items-center justify-center">
           <div class="text-center text-xs text-slate-400">
             <i class="fa-solid fa-sitemap mb-2 block text-2xl text-slate-300"></i>
-            在左侧选择对象类型、属性、关系类型或映射查看详情
-            <div class="mt-1 text-[11px] text-slate-300">左侧树支持右键：本体新增本体，本体的对象类型/关系类型分组可新建</div>
+            在左侧选择对象类型、属性、关系类型、动作类型或映射查看详情
+            <div class="mt-1 text-[11px] text-slate-300">左侧树支持右键：本体新增本体，本体的对象类型/关系类型/动作类型分组可新建</div>
           </div>
         </div>
 
@@ -1191,6 +1348,33 @@ const onRelationSaved = (objectTypeNames: string[]) => {
 
     <!-- 状态迁移弹窗：替代对象类型候选与关系类型上限都应以全量对象类型为准，不能被工具栏筛选截断 -->
     <OntologyStatusDialog v-model:visible="statusDialogVisible" :object="statusTarget" :object_types="allObjects" @saved="onSaved" />
+
+    <!-- 对象实例只读预览：数据库投影，不落对象存储 -->
+    <el-dialog v-model="objectPreviewVisible" title="对象实例预览" width="720px" destroy-on-close>
+      <div class="mb-2 text-xs text-slate-500">对象类型：{{ objectPreviewType }}</div>
+      <div class="mb-3 flex items-center gap-2">
+        <el-input
+          v-model="objectPreviewKey"
+          size="small"
+          placeholder="请输入对象主键值，如 ORD2024000001"
+          @keyup.enter="loadObjectPreview"
+        />
+        <el-button size="small" type="primary" :loading="objectPreviewLoading" @click="loadObjectPreview">读取</el-button>
+      </div>
+      <el-alert v-if="objectPreviewError" :title="objectPreviewError" type="error" :closable="false" show-icon />
+      <div v-else-if="objectPreviewData" class="rounded border border-slate-200 bg-slate-50 p-3">
+        <pre class="max-h-[420px] overflow-auto text-xs leading-5 text-slate-700">{{ JSON.stringify(objectPreviewData, null, 2) }}</pre>
+      </div>
+      <el-empty v-else description="输入主键后读取对象" :image-size="60" />
+      <template #footer>
+        <el-button @click="objectPreviewVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 动作类型管理：从树分组/节点打开，复用 ActionTypeAdminPanel 定义/试运行/执行 -->
+    <el-dialog v-model="actionTypeManagerVisible" title="动作类型" width="min(1100px, 94vw)" destroy-on-close>
+      <ActionTypeAdminPanel ref="actionTypePanelRef" class="h-[68vh]" @changed="loadRelationSources" />
+    </el-dialog>
 
     <!-- 一致性健康巡检弹窗：本体↔语义模型失修清单（手动触发，只读不阻断） -->
     <OntologyConsistencyDialog v-model:visible="consistencyDialogVisible" />

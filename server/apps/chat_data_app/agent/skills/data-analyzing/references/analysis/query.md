@@ -46,6 +46,7 @@
    - 清单可能带 `truncated: true`：此时 `object_types` 只包含按对象类型名排序的前一部分，不能据此判定「没有相关对象类型」；先用 `file_grep` 在 `/mnt/user-data/workspace/semantic/` 下按对象类型名/业务关键词检索，找不到再走「3. 检索指标语义层」。
    - 命中对象类型：按该对象类型 `mappings` 的 `file` 字段（取数模型快照文件名，semantic/ 下）定位模型并 `file_read`（`semantic_config_id` 为辅助键；`column_mappings` 是「属性 → 模型维度名」的概念映射，物理列以模型 YAML 为准）；涉及多个对象类型时，用 `relation_types` 的 `from`/`to` 对象类型与 `from_columns`/`to_columns` 推导 join 路径，锁定候选后直接进入「4. 精读完整语义层」。
    - 命中对象类型、但拿不准「对象类型在哪个模型/属性对应哪个维度」或需要对象类型间关系类型、失修状态时，调用 `ontology_tool` 的 `locate_object_type`（`object_types` 传对象类型 API 名列表，可多个）：返回绑定模型（含快照文件名）、属性→维度对照与对象类型间关系类型，据此直接进入「4. 精读完整语义层」或 `execute_query`，不要靠 grep 模型文件猜定位；工具报错（范围）或未注册（未启用开关）时，才回落本文件既有检索路径。
+   - **已知具体对象主键时**调用 `ontology_tool` 的 `get_object`（`object_type` + `object_key`）：返回对象属性与一跳 `links`（`relation`/`direction`/`related_object_type`/`related_object_key`）；`links` 是对端对象引用，需要对端属性时用对端 key 再次 `get_object`。需要聚合/统计时仍走 `execute_query`，不要把对象读取当成查询入口。
    - 需要跨对象类型关联（如「下单用户的地区分布」）时，调用 `ontology_tool` 的 `search_around`（`object_type` 传中心对象 API 名，可选 `relation` 只展开其中一条关系）：每条关系一次给出物理连接列（`join.from_columns`/`to_columns`，多模型绑定以 `from_columns_by_model`/`to_columns_by_model` 为准）与对端对象完整定位条目（`neighbor`：属性/绑定/映射，其 `relations` 只列名字提示下一跳）；继续向更远对象展开时以对端 `object_type` 为中心再次调用。join 列带 `unresolved: true` 时必须回读模型 YAML。
    - 清单中没有任何相关对象类型：同样进入「3. 检索指标语义层」——这只说明本体尚未覆盖该对象类型，不代表系统能力缺失。
 3. 本体层只负责「识别业务对象类型 + 选模型 + 定关联路径」；指标口径、维度枚举、时间格式等细节仍以对象类型映射指向的语义模型 YAML 为准，不能只凭清单描述直接写查询。

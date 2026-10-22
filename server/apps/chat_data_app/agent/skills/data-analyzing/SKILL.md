@@ -45,6 +45,7 @@ assets/dashboard/examples/   看板示例（需求宽泛时按需取一个）
 - 指标、维度、业务口径不明确时必须澄清，不能凭常识编造，也不能用 SQL 绕过。
 - 当前用户的可用执行对象清单不进系统提示词：涉及查询时先调 `data_analyzing_tool` 的 `list_execution_targets` 实时获取，`member_datasource_ids` 只能从返回清单中选（细则见 `references/analysis/query.md`「1. 获取执行对象清单」）。
 - 一次 `data_analyzing_tool` 调用只使用一个 `semantic_config_id`，不混合多个模型的字段、分组或 JOIN。
+- **已知具体对象主键时优先读对象**：调 `ontology_tool` 的 `get_object`（`object_type` + `object_key`）读取对象属性与一跳 `links`；`links` 只是对端对象引用，需要属性时再用对端 key 读取。对象读取只解决「这个对象是什么、和谁有关」，聚合/统计仍走 `data_analyzing_tool` 的 `execute_query`，不要用对象结果自己拼 SQL。
 
 ## 能力路由细则
 
