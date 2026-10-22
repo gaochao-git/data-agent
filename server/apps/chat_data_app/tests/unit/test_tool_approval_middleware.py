@@ -20,15 +20,16 @@ from apps.chat_data_app.agent.middleware.tool_approval import (
     _tool_args_preview,
     build_approval_payload,
     create_tool_approval_middleware,
-    requires_approval,
 )
 
 
 @pytest.fixture(autouse=True)
 def _synthetic_system_approval_policy(monkeypatch):
     """审批中间件单测使用合成策略：真实系统工具已统一 allow，MCP 仍默认 ask。"""
+    from apps.chat_data_app.agent.tools import registry as registry_module
+
     for tool_name in ("file_delete", "dir_delete", "file_move"):
-        monkeypatch.setitem(tool_approval.SYSTEM_TOOL_APPROVALS, tool_name, "ask")
+        monkeypatch.setitem(registry_module.SYSTEM_TOOL_APPROVALS, tool_name, "ask")
 
 
 def _request(tool_name: str = "file_delete") -> SimpleNamespace:
@@ -80,13 +81,24 @@ def test_approval_payload_contains_asked_at_ms():
     assert before <= asked_at <= int(time.time() * 1000)
 
 
-def test_requires_approval_covers_builtin_and_mcp():
-    """内置注册表标记 + MCP 动态工具默认 ask；只读检索工具不打断。"""
-    assert requires_approval("file_delete") is True
-    assert requires_approval("mcp_fault-db_db_mysql_info") is True
-    assert requires_approval("mcp_tool_search") is False
-    assert requires_approval("file_read") is False
-    assert requires_approval("present_artifacts") is False
+def test_resolve_approval_policies_covers_system_mcp_and_control_tools():
+    """统一入口：系统工具、MCP 默认 ask、控制工具 allow 全在一张映射里。"""
+    from types import SimpleNamespace
+
+    from apps.chat_data_app.agent.approval_policy import resolve_approval_policies
+
+    policies = resolve_approval_policies(
+        [
+            SimpleNamespace(name="mcp_fault-db_db_mysql_info", metadata={"origin": "mcp"}),
+            SimpleNamespace(name="mcp_fault-db_db_readonly", metadata={"origin": "mcp", "approval": "allow"}),
+        ]
+    )
+    assert policies["file_delete"] == "ask"
+    assert policies["file_read"] == "allow"
+    assert policies["mcp_fault-db_db_mysql_info"] == "ask"
+    assert policies["mcp_fault-db_db_readonly"] == "allow"
+    assert policies["mcp_tool_search"] == "allow"
+    assert policies["mcp_tool_call"] == "allow"
 
 
 @pytest.mark.asyncio

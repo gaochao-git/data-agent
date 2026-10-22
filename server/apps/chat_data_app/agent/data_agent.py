@@ -30,6 +30,7 @@ from .agent_runtime import (
     create_streaming_chat_model,
 )
 from .agent_state import ChatDataAgentState
+from .approval_policy import ask_tool_names, resolve_approval_policies
 from .middleware.after_model_history import create_after_model_history_middleware
 from .middleware.context_compression import create_context_compression_middleware
 from .middleware.context_usage import create_request_context_usage_middleware
@@ -56,7 +57,6 @@ from .tools.registry import (
     SUBAGENT_BASE_EXCLUDED_TOOL_NAMES,
     TOOL_SPECS,
     ToolBuildContext,
-    system_approval_required_tools,
 )
 from .workspace.runtime import ConversationWorkspaceRuntime, ensure_conversation_workspace
 
@@ -206,31 +206,33 @@ def _filter_tools_by_spec(tools: list, spec: AgentAssemblySpec) -> list:
     ]
 
 
-def _requires_approval_tool(tool: Any) -> bool:
-    """工具是否为 ``tool_approvals=ask`` 的 MCP 工具（metadata 由 mcp/manager 透出）。"""
-    metadata = getattr(tool, "metadata", None)
-    return isinstance(metadata, dict) and str(metadata.get("approval") or "ask") == "ask"
-
-
-def _filter_tools_for_unattended(builtin_tools: list, mcp_tools: list) -> tuple[list, list, frozenset[str]]:
-    """无人值守 fail-closed：剔除内置审批工具与 MCP ask 工具，返回过滤结果与排除集。"""
-    excluded_mcp_names = frozenset(str(tool.name) for tool in mcp_tools if _requires_approval_tool(tool))
+def _filter_tools_for_unattended(
+    builtin_tools: list,
+    mcp_tools: list,
+    approval_policies: dict[str, str] | None = None,
+) -> tuple[list, list, frozenset[str]]:
+    """无人值守 fail-closed：按统一审批策略剔除 ask 工具。"""
+    policies = approval_policies or resolve_approval_policies([*builtin_tools, *mcp_tools])
+    ask_names = ask_tool_names(policies)
+    excluded_mcp_names = frozenset(str(tool.name) for tool in mcp_tools if str(tool.name) in ask_names)
     kept_mcp = [tool for tool in mcp_tools if str(tool.name) not in excluded_mcp_names]
-    ask_builtin_names = system_approval_required_tools()
-    kept_builtin = [tool for tool in builtin_tools if str(getattr(tool, "name", "") or "") not in ask_builtin_names]
+    kept_builtin = [tool for tool in builtin_tools if str(getattr(tool, "name", "") or "") not in ask_names]
     return kept_builtin, kept_mcp, excluded_mcp_names
 
 
-def _build_tool_approval_middleware(run_controls: "AgentRunControls | None", tools: list | None = None) -> Any:
-    """装配审批中间件；无人值守恒不装配（ask 工具由装配层 fail-closed 剔除）。
-
-    注册表标记 + MCP 默认 ask；``tool_approvals=allow`` 的工具免审批。
-    ``tools`` 用于提取 MCP display_name（审批卡展示友好名）与 allow 档位。
-    """
+def _build_tool_approval_middleware(
+    run_controls: "AgentRunControls | None",
+    tools: list | None = None,
+    approval_policies: dict[str, str] | None = None,
+) -> Any:
+    """审批中间件：无人值守不装配；策略由统一解析入口传入。"""
     if run_controls is None or run_controls.disable_user_interaction:
         return None
-    # 审批策略按工具固定；交互会话始终挂载。
-    return create_tool_approval_middleware(tools, run_id=run_controls.run_id)
+    return create_tool_approval_middleware(
+        tools,
+        run_id=run_controls.run_id,
+        approval_policies=approval_policies,
+    )
 
 
 def assemble_tools(
@@ -308,12 +310,9 @@ def _filter_subagent_tools(tools: list, excluded: frozenset) -> list:
     return [tool for tool in tools if str(getattr(tool, "name", "") or "") not in excluded]
 
 
-def _subagent_approval_exclusions() -> frozenset[str]:
-    """子智能体不挂未来新增的审批工具：子图不支持人工中断，避免委派绕过审批。
-
-    当前系统工具统一 allow，集合为空；若注册表重新声明审批工具，自动剔除。
-    """
-    return system_approval_required_tools()
+def _subagent_approval_exclusions(approval_policies: dict[str, str] | None = None) -> frozenset[str]:
+    """子智能体不挂 ask 工具：子图不支持人工中断，避免委派绕过审批。"""
+    return ask_tool_names(approval_policies or resolve_approval_policies([]))
 
 
 def _general_purpose_system_prompt(approval_tools_excluded: bool) -> str:
@@ -337,6 +336,7 @@ def build_subagent_middleware(
     run_controls: "AgentRunControls | None" = None,
     available_skills_xml: str | None = None,
     memory_block: str | None = None,
+    approval_policies: dict[str, str] | None = None,
 ) -> SubagentMiddleware | None:
     """按运行选项构建子智能体中间件；没有任何子智能体启用时返回 None。
 
@@ -349,7 +349,7 @@ def build_subagent_middleware(
     ``memory_block`` 与主智能体同一份会话记忆条目（一致继承）：子图 system
     prompt 由此注入只读记忆段；未传或为空则不注入。
     """
-    approval_excluded = _subagent_approval_exclusions()
+    approval_excluded = _subagent_approval_exclusions(approval_policies)
     base_excluded = SUBAGENT_BASE_EXCLUDED_TOOL_NAMES | approval_excluded
     specs: list[SubagentSpec] = []
     if runtime_options.explore_subagent_enabled:
@@ -639,11 +639,14 @@ def create_agent_from_spec(
         run_controls=run_controls,
     )
     mcp_tools = _load_spec_mcp_tools(spec)
+    approval_policies = resolve_approval_policies([*builtin_tools, *mcp_tools])
     excluded_mcp_names: frozenset[str] = frozenset()
     if run_controls is not None and run_controls.disable_user_interaction:
         # 无人值守不装配审批中间件：ask 工具无人应答会悬挂，在装配层剔除（模型不可见且不可检索），
         # fail-closed；allow 工具无需审批，可以继续使用。
-        builtin_tools, mcp_tools, excluded_mcp_names = _filter_tools_for_unattended(builtin_tools, mcp_tools)
+        builtin_tools, mcp_tools, excluded_mcp_names = _filter_tools_for_unattended(
+            builtin_tools, mcp_tools, approval_policies
+        )
     tool_tokens = count_tools_tokens([*builtin_tools, *mcp_tools]) if mcp_tools else 0
     search_service = (
         _resolve_mcp_tool_search_service(spec, tool_tokens, model_id, excluded_names=excluded_mcp_names)
@@ -693,6 +696,7 @@ def create_agent_from_spec(
         run_controls=run_controls,
         available_skills_xml=invocation.available_skills_xml,
         memory_block=invocation.memory_block,
+        approval_policies=approval_policies,
     )
     context_usage_middleware = create_request_context_usage_middleware(
         model_id,
@@ -739,7 +743,7 @@ def create_agent_from_spec(
             state_schema=ChatDataAgentState,
         )
     # 交互会话始终装配工具审批；无人值守不装配（ask 工具已 fail-closed 剔除）
-    tool_approval_middleware = _build_tool_approval_middleware(run_controls, tools)
+    tool_approval_middleware = _build_tool_approval_middleware(run_controls, tools, approval_policies)
     after_model_history_middleware = None
     if persist_model_snapshot is not None:
         after_model_history_middleware = create_after_model_history_middleware(
