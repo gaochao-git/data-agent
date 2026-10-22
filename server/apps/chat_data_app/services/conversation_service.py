@@ -40,8 +40,12 @@ DATASOURCE_GROUP_PREFIX = "datasource:"
 
 
 def _get_title_llm() -> BaseChatModel:
-    """获取标题生成用的 LLM；源头关闭思考（forced 模型关不掉则由后处理剥离）。"""
-    return get_chat_data_llm(streaming=False, max_tokens=200, enable_thinking=False)
+    """获取标题生成用的 LLM；源头关闭思考（forced 模型关不掉则由后处理剥离）。
+
+    max_tokens 不能压得太低：forced thinking 模型会先消耗思考 token，
+    预算过小时正文为空，表现为「LLM标题产物不可用」。
+    """
+    return get_chat_data_llm(streaming=False, max_tokens=2048, enable_thinking=False)
 
 
 def _llm_model_id(llm: Any) -> str:
