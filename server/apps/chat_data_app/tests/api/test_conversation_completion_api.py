@@ -353,9 +353,7 @@ class ToolCallingLLM:
         if self.calls == 1:
             return AIMessage(
                 content="",
-                tool_calls=[
-                    {"id": "call_skill", "name": "load_skill", "args": {"name": "data-analyzing"}}
-                ],
+                tool_calls=[{"id": "call_skill", "name": "load_skill", "args": {"name": "data-analyzing"}}],
             )
         if self.calls == 2:
             return AIMessage(

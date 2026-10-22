@@ -53,7 +53,7 @@ from utils.logger import get_logger
 from utils.tool_call_args import coerce_tool_call_args
 
 from ..agent_runtime import on_tool_error
-from ..agent_state import merge_context_compression_events
+from ..agent_state import merge_context_compression_events, merge_loaded_skill_names
 from ..context.context_budget import (
     build_runtime_context_summary_message,
     count_messages_tokens,
@@ -147,6 +147,7 @@ class ChatDataSubAgentState(AgentState, total=False):
     context_summary: str | None
     context_compression: dict[str, Any] | None
     context_compression_events: Annotated[list[dict[str, Any]], merge_context_compression_events]
+    loaded_skills: Annotated[list[str], merge_loaded_skill_names]
 
 
 class TaskToolArgs(BaseModel):

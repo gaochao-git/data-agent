@@ -20,6 +20,10 @@ from utils.storage_paths import CHAT_DATA_HOME
 # 技能虚拟根（Agent 视角），所有类别共用同一前缀。
 SKILLS_VIRTUAL_ROOT = "/mnt/skills"
 
+# SKILL.md 入口文件大小上限（字节）：直接进入模型 messages，是技能正文体积预算；
+# load_skill 已整体豁免工具结果卸载，不再依赖内容标记做门禁。
+SKILL_MD_MAX_BYTES = 32 * 1024
+
 # 物理技能根在 CHAT_DATA_HOME 下的子目录名（即 ``CHAT_DATA_HOME/skills``）。
 _SKILL_PHYSICAL_ROOT_NAME = "skills"
 

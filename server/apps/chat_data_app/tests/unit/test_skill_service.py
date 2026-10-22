@@ -2547,3 +2547,13 @@ def test_list_runtime_skill_sources_async_skips_conflicting_plugin_skill_name(mo
         plugin_loader.clear_metadata_cache()
     names = [name for name, _ in sources]
     assert names.count("demo-sys") == 1
+
+
+def test_write_skill_md_rejects_oversized_entry(tmp_path):
+    from utils.skill_paths import SKILL_MD_MAX_BYTES
+
+    with pytest.raises(ValueError, match="不能超过 32KB"):
+        skill_service_module._write_skill_md(
+            tmp_path / "skill",
+            {"skill_name": "demo", "skill_title": "Demo", "content": "x" * (SKILL_MD_MAX_BYTES + 1)},
+        )

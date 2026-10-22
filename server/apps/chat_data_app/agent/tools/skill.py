@@ -9,7 +9,7 @@ from typing import Any
 from langchain_core.tools import tool
 
 from apps.chat_data_app.agent.workspace.runtime import ConversationWorkspaceRuntime
-from utils.skill_paths import resolve_skill_snapshot_path
+from utils.skill_paths import SKILL_MD_MAX_BYTES, resolve_skill_snapshot_path
 
 SKILL_TOOL_NAME = "load_skill"
 _SKILL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -54,6 +54,11 @@ def create_skill_tool(workspace_runtime: ConversationWorkspaceRuntime) -> Any:
             f"/mnt/skills/{skill_name}/SKILL.md",
         )
         try:
+            if path.stat().st_size > SKILL_MD_MAX_BYTES:
+                raise ValueError(
+                    f"技能 {skill_name} 的 SKILL.md 超过 {SKILL_MD_MAX_BYTES // 1024}KB，"
+                    "请精简正文并把详细资料拆到 references/"
+                )
             text = await asyncio.to_thread(path.read_text, encoding="utf-8")
         except OSError as exc:
             available = "、".join(workspace_runtime.available_skill_names or [])

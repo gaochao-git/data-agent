@@ -23,10 +23,13 @@ from ..tool_results import (
     merge_tool_result_recovery_artifact,
     parse_internal_tool_result,
 )
+from ..tools.skill import SKILL_TOOL_NAME
 
 logger = get_logger(__name__)
 
 _READ_PAGINATED_TOOLS = frozenset({"file_read"})
+# load_skill 的正文就是模型要读的指令，且技能门禁不依赖内容解析；不能被外置成 result_path。
+_SKILL_CONTENT_TOOL = SKILL_TOOL_NAME
 
 
 def create_tool_result_middleware() -> AgentMiddleware:
@@ -50,6 +53,8 @@ async def _finalize_tool_message(
     request: Any,
 ) -> ToolMessage:
     tool_name = str(message.name or "").strip()
+    if tool_name == _SKILL_CONTENT_TOOL:
+        return message
     internal = parse_internal_tool_result(message.content)
     if internal is not None:
         content, recovery = await _finalize_query_result(internal, request)

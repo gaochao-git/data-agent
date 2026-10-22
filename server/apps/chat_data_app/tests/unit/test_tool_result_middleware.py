@@ -17,6 +17,7 @@ from apps.chat_data_app.agent import tool_results
 from apps.chat_data_app.agent.middleware import tool_result
 from apps.chat_data_app.agent.workspace import runtime as workspace_runtime_module
 from apps.chat_data_app.services.agent_run import conversation_workspace
+from apps.chat_data_app.services.runtime_config import TOOL_RESULT_OFFLOAD_SIZE
 
 
 def _request(
@@ -227,3 +228,11 @@ def test_incomplete_result_marker_survives_tiny_configured_threshold(monkeypatch
     content = tool_result._build_truncated_tool_result_message("semantic_query_tool", 1000)
 
     assert content == "[tool_result_truncated]\ncontent_complete=false"
+
+
+@pytest.mark.asyncio
+async def test_load_skill_content_is_not_offloaded():
+    content = "x" * (TOOL_RESULT_OFFLOAD_SIZE + 100)
+    message = ToolMessage(content=content, name="load_skill", tool_call_id="c1")
+    finalized = await tool_result._finalize_tool_message(message, SimpleNamespace())
+    assert finalized.content == content
