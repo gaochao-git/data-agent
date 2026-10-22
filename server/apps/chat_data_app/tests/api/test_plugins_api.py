@@ -181,3 +181,43 @@ def test_plugin_changes_invalidate_mcp_tool_cache(client, auth_headers, plugin_r
     )
     assert missing.json()["code"] == ErrorCode.CHATDATA_PLUGIN_NOT_FOUND
     assert reset_calls == []
+
+
+def test_plugin_template_download_returns_installable_zip(client, auth_headers):
+    from apps.chat_data_app.agent.plugins.manifest import parse_plugin_manifest
+
+    response = client.get("/api/chatdata/admin/plugins/template", headers=auth_headers)
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/zip")
+    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+        names = set(archive.namelist())
+        assert "example-plugin/plugin.json" in names
+        assert "example-plugin/skills/example-skill/SKILL.md" in names
+        assert "example-plugin/skills/example-skill/references/README.md" in names
+        assert "example-plugin/skills/example-skill/assets/README.md" in names
+        manifest = parse_plugin_manifest(json.loads(archive.read("example-plugin/plugin.json")))
+    assert manifest.name == "example-plugin"
+    assert manifest.skills == ("example-skill",)
+    assert len(manifest.mcp_servers) == 1
+    assert manifest.mcp_servers[0]["transport"] == "streamable_http"
+    assert manifest.mcp_servers[0]["enabled"] is False
+
+
+def test_plugin_install_rejects_nonstandard_skill_directory(client, auth_headers, plugin_root):
+    manifest = {
+        "name": "bad-layout",
+        "version": "1.0.0",
+        "skills": ["bad-skill"],
+    }
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("plugin.json", json.dumps(manifest))
+        archive.writestr("skills/bad-skill/SKILL.md", "---\nname: bad-skill\n---\n")
+        archive.writestr("skills/bad-skill/scripts/run.py", "print('bad')")
+    response = client.post(
+        "/api/chatdata/admin/plugins/install",
+        files={"file": ("bad.zip", buffer.getvalue(), "application/zip")},
+        headers=auth_headers,
+    )
+    assert response.json()["status"] == "error"
+    assert "非标准路径" in response.json()["msg"]

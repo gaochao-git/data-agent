@@ -25,7 +25,7 @@ PLUGIN_DISPLAY_NAME_MAX_LENGTH = 64
 PLUGIN_DESCRIPTION_MAX_LENGTH = 500
 
 # 与 agent/mcp/config.py 的 VALID_MCP_TRANSPORTS 保持同一口径。
-VALID_PLUGIN_MCP_TRANSPORTS = frozenset({"stdio", "streamable_http", "sse"})
+VALID_PLUGIN_MCP_TRANSPORTS = frozenset({"streamable_http"})
 
 
 class PluginManifestError(ValueError):
@@ -64,15 +64,9 @@ def _validate_mcp_server_entry(entry: object, source: str) -> None:
         raise PluginManifestError(f"{source}: mcp_servers 项的 id 非法: {server_id!r}")
     transport = str(entry.get("transport") or "").strip()
     if transport not in VALID_PLUGIN_MCP_TRANSPORTS:
-        raise PluginManifestError(
-            f"{source}: mcp_servers 项的 transport 必须是 {sorted(VALID_PLUGIN_MCP_TRANSPORTS)} 之一"
-        )
-    if transport == "stdio" and not str(entry.get("command") or "").strip():
-        raise PluginManifestError(f"{source}: mcp_servers 项 {server_id} 为 stdio 传输时必须提供 command")
-    if transport in ("streamable_http", "sse") and not str(entry.get("url") or "").strip().startswith(
-        ("http://", "https://")
-    ):
-        raise PluginManifestError(f"{source}: mcp_servers 项 {server_id} 为 {transport} 传输时必须提供 http(s) url")
+        raise PluginManifestError(f"{source}: mcp_servers 项的 transport 只支持 {sorted(VALID_PLUGIN_MCP_TRANSPORTS)}")
+    if not str(entry.get("url") or "").strip().startswith(("http://", "https://")):
+        raise PluginManifestError(f"{source}: mcp_servers 项 {server_id} 必须提供 http(s) url")
 
 
 def _parse_name(data: dict, source: str) -> str:

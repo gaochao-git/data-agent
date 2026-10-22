@@ -12,7 +12,7 @@
 | 文件 | 职责 |
 | --- | --- |
 | `config.py` | server 配置解析与校验：当前来源为**已启用插件的 `mcp_servers` 声明**（独立挂载后续提供）；单条非法/未通过准入只告警跳过 |
-| `manager.py` | 会话管理（stdio / streamable_http / sse 三种传输，2.x 门面按需建连用完即关）、工具枚举 TTL 缓存（采纳服务端 ``ttlMs`` 提示）、调用（内建 MRTR ``input_required`` 处理）、健康检查（``tools/list`` 探针——``ping`` 已随 2026-07-28 移除）、LangChain `StructuredTool` 包装 |
+| `manager.py` | 会话管理（仅 streamable_http，2.x 门面按需建连用完即关）、工具枚举 TTL 缓存（采纳服务端 ``ttlMs`` 提示）、调用（内建 MRTR ``input_required`` 处理）、健康检查（``tools/list`` 探针——``ping`` 已随 2026-07-28 移除）、LangChain `StructuredTool` 包装 |
 | `catalog.py` | 工具检索目录（手写 BM25，零新增依赖）+ `mcp_tool_search` 按需检索工具；两级加载的第二级，见下文 |
 
 ## 两级加载（目录 + 按需检索）
@@ -63,8 +63,7 @@ CHAT_DATA_MCP_TOOLS_CACHE_TTL_SECONDS=300   # 工具枚举缓存 TTL
 **配置来源：当前仅插件 `plugin.json` 的 `mcp_servers` 声明**（随插件安装/启停生效）。
 独立的 MCP server 挂载与管理页面后续提供，届时再恢复部署级/DB 配置来源。
 
-transport 支持 `stdio`（`command`/`args`/`env`）、`streamable_http` 与 `sse`（`url`/`headers`）。
-`sse` 已随 2026-07-28 进入 Deprecated 生命周期（2025-03-26 首次废弃），仅保留旧 server 兼容，配置时告警；新部署使用 `streamable_http`。
+transport 只支持 `streamable_http`（`url`/`headers`）。`stdio`/`sse` 不再接受：前者等同宿主任意进程执行，后者已废弃。
 `enabled: false` 的配置项不参与装配。
 
 ## 与插件的关系
@@ -76,16 +75,14 @@ transport 支持 `stdio`（`command`/`args`/`env`）、`streamable_http` 与 `ss
 
 **装配本模块的配置等于向宿主进程授予两类能力，插件安装入口必须受控（仅管理员，网关侧校验）：**
 
-- `stdio` 传输的 `command`/`args` 会由宿主直接启动子进程 —— 等价于**宿主代码执行权**。
   声明方（环境变量或插件 manifest）只能来自可信管理员；绝不能把插件安装能力开放给普通用户。
-- `streamable_http` / `sse` 的 `url` 允许任意 `http(s)` 地址 —— 构成**内网访问面（SSRF）**。
+- `streamable_http` 的 `url` 仍构成**内网访问面（SSRF）**，需 https + host 白名单约束。
   上线前确认部署网络的边界策略，必要时在网关出口限制可达网段。
 
 **准入检查（`admission.py`，不满足即"不支持"）**：
 
 | 检查 | 默认策略 |
 |---|---|
-| `stdio` 传输 | 默认拒绝（`CHAT_DATA_MCP_ALLOW_STDIO=false`）；放开后仍校验 command/控制字符 |
 | 远程 URL | 必须 https（loopback 例外，`CHAT_DATA_MCP_REQUIRE_HTTPS=true`）；禁止 URL 内嵌凭据 |
 | host 白名单 | `CHAT_DATA_MCP_ALLOWED_HOSTS`（逗号分隔，支持 `*.example.com`），留空不限制 |
 | headers | 含控制字符拒绝（防头注入） |
@@ -104,7 +101,7 @@ transport 支持 `stdio`（`command`/`args`/`env`）、`streamable_http` 与 `ss
 ## 明确不做（v2）
 
 - 不做常驻连接池：每次枚举/调用按需建立会话、用完即关；枚举结果有 TTL 缓存兜开销
-  （2026-07-28 远程传输已无状态化，该取舍与新协议方向一致；stdio 仍是有状态模型）。
+  （2026-07-28 远程传输已无状态化，该取舍与新协议方向一致）。
 - MCP 工具不进子智能体；如需只读约束，在 MCP server 侧自行收紧。
 - 准入只校验顶层 schema（properties/required/类型合法性），嵌套结构与 `$ref` 仍按 Any 透传——
   2026-07-28 已将 inputSchema 放宽到完整 JSON Schema 2020-12，递归校验留待后续版本。

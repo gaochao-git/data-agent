@@ -8,7 +8,9 @@
 ```
 CHAT_DATA_HOME/plugins/<name>/
   plugin.json                 # manifest（必须）
-  skills/<skill>/SKILL.md     # manifest.skills 声明的技能目录
+  skills/<skill>/SKILL.md     # manifest.skills 声明的技能入口
+  skills/<skill>/references/  # 可选：技能详细资料
+  skills/<skill>/assets/      # 可选：模板/素材
 ```
 
 磁盘只存内容；启停不是磁盘标记，而以 DB 表 `chat_data_plugin` 为唯一真值
@@ -24,7 +26,7 @@ CHAT_DATA_HOME/plugins/<name>/
   "description": "提供故障分析技能与只读 MCP 工具",
   "skills": ["fault-analysis"],
   "mcp_servers": [
-    {"id": "fs-ro", "transport": "stdio", "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp/ro"]}
+    {"id": "demo-http", "transport": "streamable_http", "url": "https://mcp.example.com/mcp"}
   ]
 }
 ```
@@ -48,10 +50,11 @@ fail-closed 处理（快照清空、当轮全部按禁用，不兜底旧值）�
 ## 管理入口
 
 前端：后台管理 → 插件（`web-vue/src/views/chat-data/components/PluginAdminPanel.vue`，
-由 `ChatDataAdminManager.vue` 挂载），支持列表分页、zip 安装、启停开关、卸载二次确认。
+由 `ChatDataAdminManager.vue` 挂载），支持列表分页、插件模板下载、zip 安装、启停开关、卸载二次确认。
 
 接口（`routers/plugins.py`，service token 保护）：
 
+- `GET  /api/chatdata/admin/plugins/template`：下载插件模板 zip（plugin.json + 示例技能 + README）；
 - `GET  /api/chatdata/admin/plugins`：列出已安装插件（含审计字段，分页 limit∈[1,200]）；
 - `POST /api/chatdata/admin/plugins/install`：上传 zip 安装（≤50MB，manifest 校验、
   zip-slip/符号链接/解压总量防护，同名拒绝）；

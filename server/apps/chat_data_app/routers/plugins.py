@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Request, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
 from utils.error_codes import ErrorCode
@@ -17,8 +17,9 @@ from utils.response import business_response
 
 from ..agent.plugins.installer import PluginInstallError, PluginNotFoundError
 from ..agent.plugins.manifest import PluginManifestError
+from ..agent.plugins.template import build_plugin_template_zip
 from ..services import plugin_service
-from . import JSON_API_RESPONSES
+from . import BINARY_RESPONSES, JSON_API_RESPONSES
 from .dependencies import _get_current_user
 
 logger = get_logger(__name__)
@@ -66,6 +67,26 @@ async def list_plugins(request: Request, limit: int = 50, offset: int = 0) -> JS
         return business_response(
             msg="获取插件列表失败，请稍后重试", code=ErrorCode.CHATDATA_PLUGIN_LIST_FAILED, status="error"
         )
+
+
+@router.get("/admin/plugins/template", responses=BINARY_RESPONSES)
+async def download_plugin_template(request: Request) -> Response:
+    """下载插件 zip 模板（含 plugin.json、示例技能与 README）。"""
+    _ = request
+    try:
+        content = build_plugin_template_zip()
+    except Exception as e:
+        logger.error("生成插件模板失败: %s", e, exc_info=True)
+        return business_response(
+            msg="生成插件模板失败，请稍后重试",
+            code=ErrorCode.CHATDATA_GENERIC_OPERATION_FAILED,
+            status="error",
+        )
+    return Response(
+        content=content,
+        media_type="application/zip",
+        headers={"Content-Disposition": 'attachment; filename="chatdata-plugin-template.zip"'},
+    )
 
 
 @router.post("/admin/plugins/install")

@@ -8,8 +8,8 @@
    非法/超大 schema、工具数超限等硬错误拒绝该 server；描述过长等只告警。
 
 设计口径：
-- **默认严格**：stdio（任意进程执行）默认拒绝，需 ``CHAT_DATA_MCP_ALLOW_STDIO=true``
-  显式放开；远程默认必须 https（loopback 例外，兼容本地诊断 server）。
+- **只允许 streamable_http**：stdio / sse 不做运行时兼容；远程默认必须 https
+  （loopback 例外，兼容本地诊断 server）。
 - 可选 host 白名单：``CHAT_DATA_MCP_ALLOWED_HOSTS`` 逗号分隔，支持 ``*.example.com``。
 - 硬错误 = 不支持（跳过并说明原因），不靠审批兜底；审批是运行时动作级策略，
   不能掩盖"这个 server 本身不该接"。
@@ -25,7 +25,6 @@ from urllib.parse import urlsplit
 
 from ...services.runtime_config import read_bool_env, read_positive_int_env
 
-MCP_ALLOW_STDIO_ENV = "CHAT_DATA_MCP_ALLOW_STDIO"
 MCP_REQUIRE_HTTPS_ENV = "CHAT_DATA_MCP_REQUIRE_HTTPS"
 MCP_ALLOWED_HOSTS_ENV = "CHAT_DATA_MCP_ALLOWED_HOSTS"
 MCP_MAX_TOOLS_ENV = "CHAT_DATA_MCP_MAX_TOOLS_PER_SERVER"
@@ -103,30 +102,10 @@ def _has_control_chars(value: str) -> bool:
     return any(ord(ch) < 0x20 or ch == "\x7f" for ch in value)
 
 
-def _validate_stdio_config(report: AdmissionReport, config: Any, server_id: str) -> None:
-    if not read_bool_env(MCP_ALLOW_STDIO_ENV, False):
-        report.add(
-            "error",
-            "stdio_not_allowed",
-            f"stdio 传输默认禁用（等同任意进程执行），需显式设置 {MCP_ALLOW_STDIO_ENV}=true 才允许: {server_id}",
-        )
-    command = str(getattr(config, "command", "") or "")
-    if not command:
-        report.add("error", "stdio_command_missing", f"stdio 必须提供 command: {server_id}")
-    if _has_control_chars(command):
-        report.add("error", "stdio_command_invalid", f"stdio command 含控制字符: {server_id}")
-
-
 def _validate_remote_config(report: AdmissionReport, config: Any, transport: str, server_id: str) -> None:
     url = str(getattr(config, "url", "") or "")
     parsed = urlsplit(url)
     host = parsed.hostname or ""
-    if transport == "sse":
-        report.add(
-            "warning",
-            "sse_deprecated",
-            f"sse 传输已废弃（MCP 2026-07-28），建议迁移 streamable_http: {server_id}",
-        )
     if parsed.username or parsed.password:
         report.add("error", "url_credentials_forbidden", f"URL 不允许内嵌凭据: {server_id}")
     if not host:
@@ -155,10 +134,14 @@ def validate_mcp_server_config(config: Any) -> AdmissionReport:
     report = AdmissionReport()
     server_id = str(getattr(config, "server_id", "") or "")
     transport = str(getattr(config, "transport", "") or "")
-    if transport == "stdio":
-        _validate_stdio_config(report, config, server_id)
-    elif transport in ("streamable_http", "sse"):
-        _validate_remote_config(report, config, transport, server_id)
+    if transport != "streamable_http":
+        report.add(
+            "error",
+            "transport_not_supported",
+            f"只支持 streamable_http，当前: {transport or '(空)'}: {server_id}",
+        )
+        return report
+    _validate_remote_config(report, config, transport, server_id)
     _validate_headers(report, config)
     return report
 

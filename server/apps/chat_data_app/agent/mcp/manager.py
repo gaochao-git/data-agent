@@ -28,8 +28,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from langchain_core.tools import StructuredTool
-from mcp import Client, StdioServerParameters
-from mcp.client.sse import sse_client
+from mcp import Client
 from mcp.client.streamable_http import streamable_http_client
 from pydantic import BaseModel, Field, create_model
 
@@ -80,28 +79,17 @@ async def open_mcp_session(config: MCPServerConfig, *, timeout_seconds: int = 60
     http/sse 的自定义 headers 经传输层注入（streamable_http 用 httpx2 客户端
     携带默认 headers；sse 传输原生支持 headers 参数）。
     """
-    if config.transport == "stdio":
-        server: Any = StdioServerParameters(
-            command=config.command,
-            args=list(config.args),
-            env=config.env or None,
-        )
-    elif config.transport == "streamable_http":
-        if config.headers:
-            # 2.x 的 streamable_http_client 不再接受 headers 参数，
-            # 以携带默认 headers 的 httpx2 客户端注入（生命周期随连接关闭）。
-            import httpx2
+    if config.transport != "streamable_http":
+        raise ValueError(f"只支持 streamable_http，当前: {config.transport}")
+    if config.headers:
+        # 2.x 的 streamable_http_client 不再接受 headers 参数，
+        # 以携带默认 headers 的 httpx2 客户端注入（生命周期随连接关闭）。
+        import httpx2
 
-            http_client = httpx2.AsyncClient(headers=dict(config.headers))
-            server = streamable_http_client(config.url, http_client=http_client)
-        else:
-            server = config.url
-    elif config.transport == "sse":
-        # 2026-07-28 起 HTTP+SSE 传输进入 Deprecated（2025-03-26 首次废弃），
-        # 仅保留与旧 server 的兼容；新部署应使用 streamable_http。
-        server = sse_client(config.url, headers=config.headers or None)
+        http_client = httpx2.AsyncClient(headers=dict(config.headers))
+        server: Any = streamable_http_client(config.url, http_client=http_client)
     else:
-        raise ValueError(f"不支持的 MCP transport: {config.transport}")
+        server = config.url
 
     async with Client(server, mode="auto", read_timeout_seconds=float(timeout_seconds)) as client:
         yield client

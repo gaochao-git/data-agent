@@ -1817,6 +1817,15 @@ export function getAdminSettings(params?: { keyword?: string }): Promise<ApiResp
   })
 }
 
+/** 后台：下载插件模板 zip（plugin.json + 示例技能 + README）。 */
+export function downloadPluginTemplate(): Promise<Blob> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/plugins/template`,
+    method: 'get',
+    responseType: 'blob'
+  }) as unknown as Promise<Blob>
+}
+
 /** 后台：上传插件 zip 安装（同名插件需先卸载；变更对新会话生效） */
 export function installPlugin(file: File): Promise<ApiResponse<{ plugin: PluginInfo; effective: string }>> {
   const formData = new FormData()

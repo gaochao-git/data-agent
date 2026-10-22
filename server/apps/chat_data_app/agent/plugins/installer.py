@@ -21,9 +21,11 @@ from pathlib import Path
 from typing import Any
 
 from utils.logger import get_logger
+from utils.skill_paths import SKILL_MD_MAX_BYTES
 
 from ..mcp.admission import validate_mcp_server_config
 from ..mcp.config import MCPServerConfigError, parse_mcp_server_config
+from ..skills.loader import parse_metadata_text
 from .loader import clear_metadata_cache, plugin_dir
 from .manifest import (
     PLUGIN_MANIFEST_FILENAME,
@@ -164,6 +166,49 @@ def _validate_manifest_mcp_servers(manifest: PluginManifest) -> None:
             raise PluginInstallError(f"插件 MCP server 未通过准入: {server_config.server_id}: {report.summary()}")
 
 
+_PLUGIN_SKILL_ALLOWED_PREFIXES = ("references/", "assets/")
+
+
+def _validate_skill_paths(skill_name: str, relative_paths: list[str]) -> None:
+    """技能目录只允许 SKILL.md、references/、assets/。"""
+    if "SKILL.md" not in relative_paths:
+        raise PluginInstallError(f"manifest 声明的技能缺少 SKILL.md: {skill_name}")
+    for relative in relative_paths:
+        if relative == "SKILL.md" or relative.startswith(_PLUGIN_SKILL_ALLOWED_PREFIXES):
+            continue
+        raise PluginInstallError(
+            f"插件技能 {skill_name} 包含非标准路径: {relative}；只允许 SKILL.md、references/、assets/"
+        )
+
+
+def _validate_skill_metadata(archive: zipfile.ZipFile, skill_md: zipfile.ZipInfo, skill_name: str) -> None:
+    """SKILL.md 必须有合法 frontmatter，且 name 与目录名一致。"""
+    if skill_md.file_size > SKILL_MD_MAX_BYTES:
+        raise PluginInstallError(f"插件技能 {skill_name} 的 SKILL.md 超过 {SKILL_MD_MAX_BYTES // 1024}KB")
+    try:
+        text = archive.read(skill_md).decode("utf-8")
+    except (OSError, UnicodeDecodeError) as err:
+        raise PluginInstallError(f"插件技能 {skill_name} 的 SKILL.md 不可读: {err}") from err
+    metadata = parse_metadata_text(text)
+    if not metadata or str(metadata.get("name") or "") != skill_name:
+        raise PluginInstallError(f"插件技能 {skill_name} 的 SKILL.md frontmatter.name 必须与目录名一致")
+
+
+def _validate_plugin_skill_layout(
+    archive: zipfile.ZipFile,
+    members: list[zipfile.ZipInfo],
+    zip_root: str,
+    manifest: PluginManifest,
+) -> None:
+    """插件技能只允许标准目录：SKILL.md + references/ + assets/。"""
+    member_by_name = {member.filename.replace("\\", "/"): member for member in members}
+    for skill_name in manifest.skills:
+        prefix = f"{zip_root}skills/{skill_name}/"
+        relative_paths = [name[len(prefix) :] for name in member_by_name if name.startswith(prefix)]
+        _validate_skill_paths(skill_name, relative_paths)
+        _validate_skill_metadata(archive, member_by_name[f"{prefix}SKILL.md"], skill_name)
+
+
 def install_plugin_from_zip_bytes(data: bytes) -> PluginManifest:
     """从 zip 字节流安装插件，成功返回解析后的 manifest。
 
@@ -200,11 +245,8 @@ def install_plugin_from_zip_bytes(data: bytes) -> PluginManifest:
         # MCP server 准入：配置非法/未通过准入的插件直接拒绝安装（不落盘），
         # 避免"装上了但 MCP 不可用"的半可用状态。
         _validate_manifest_mcp_servers(manifest)
-        # 声明的技能必须真实存在且带 SKILL.md。
-        for skill_name in manifest.skills:
-            skill_member = f"{zip_root}skills/{skill_name}/SKILL.md"
-            if skill_member not in {member.filename.replace("\\", "/") for member in members}:
-                raise PluginInstallError(f"manifest 声明的技能缺少 SKILL.md: {skill_name}")
+        # 声明的技能必须符合标准目录布局：SKILL.md + references/ + assets/。
+        _validate_plugin_skill_layout(archive, members, zip_root, manifest)
         target = plugin_dir(manifest.name)
         if target.exists():
             raise PluginInstallError(f"插件已存在，请先卸载再安装: {manifest.name}")

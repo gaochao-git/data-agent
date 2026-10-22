@@ -7247,6 +7247,37 @@
         ]
       }
     },
+    "/api/chatdata/admin/plugins/template": {
+      "get": {
+        "description": "下载插件 zip 模板（含 plugin.json、示例技能与 README）。",
+        "operationId": "download_plugin_template_api_chatdata_admin_plugins_template_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              },
+              "application/octet-stream": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Binary file response"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Download Plugin Template",
+        "tags": [
+          "ChatData 插件管理（Admin）"
+        ]
+      }
+    },
     "/api/chatdata/admin/plugins/{plugin_id}": {
       "delete": {
         "description": "卸载插件：删除磁盘目录并软删 DB 记录。",

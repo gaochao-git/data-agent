@@ -6,7 +6,7 @@
 import { ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { UploadFile, UploadInstance } from 'element-plus'
-import { getAdminPlugins, installPlugin, setAdminPluginEnabled, uninstallPlugin } from '../api'
+import { downloadPluginTemplate, getAdminPlugins, installPlugin, setAdminPluginEnabled, uninstallPlugin } from '../api'
 import type { PluginInfo, PluginMcpServerInfo } from '../types'
 import AdminPanelToolbar from './AdminPanelToolbar.vue'
 
@@ -18,6 +18,7 @@ const plugins = ref<PluginInfo[]>([])
 const hasLoaded = ref(false)
 const uploadRef = ref<UploadInstance | null>(null)
 const installing = ref(false)
+const downloadingTemplate = ref(false)
 
 // MCP server 准入状态展示：未通过标红并给出原因，通过但有告警也提示
 const mcpServerTagType = (server: PluginMcpServerInfo) =>
@@ -85,6 +86,24 @@ const handleSizeChange = async () => {
 
 const ensureLoaded = async () => {
   if (!hasLoaded.value) await loadPlugins()
+}
+
+const handleDownloadTemplate = async () => {
+  downloadingTemplate.value = true
+  try {
+    const blob = await downloadPluginTemplate()
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = 'chatdata-plugin-template.zip'
+    link.click()
+    URL.revokeObjectURL(url)
+  } catch (err) {
+    console.error('下载插件模板失败:', err)
+    ElMessage.error('下载插件模板失败，请稍后重试')
+  } finally {
+    downloadingTemplate.value = false
+  }
 }
 
 const handleUploadChange = async (uploadFile: UploadFile) => {
@@ -165,6 +184,10 @@ defineExpose({ ensureLoaded })
     <!-- 工具栏 -->
     <AdminPanelToolbar>
       <template #actions>
+        <el-button size="small" :loading="downloadingTemplate" @click="handleDownloadTemplate">
+          <i class="fa-solid fa-download" style="margin-right: 4px; font-size: 10px;"></i>
+          下载模板
+        </el-button>
         <el-upload
           ref="uploadRef"
           action="#"

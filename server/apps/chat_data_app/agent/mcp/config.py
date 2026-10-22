@@ -28,7 +28,7 @@ if str(os.getenv("CHAT_DATA_MCP_SERVERS") or "").strip():
         "（独立挂载与管理页面后续提供），该环境变量会在 2026-10 后忽略"
     )
 
-VALID_MCP_TRANSPORTS = frozenset({"stdio", "streamable_http", "sse"})
+VALID_MCP_TRANSPORTS = frozenset({"streamable_http"})
 
 # server id 只用于日志、缓存键与工具名前缀，约束成安全的标识符片段。
 _SERVER_ID_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,31}$")
@@ -39,7 +39,8 @@ class MCPServerConfig:
     """单个 MCP server 的连接配置。"""
 
     server_id: str
-    transport: str  # stdio | streamable_http | sse
+    transport: str  # streamable_http
+    # 以下 command/args/env 仅保留给历史内部调用/测试构造；配置解析不再接受 stdio。
     command: str = ""
     args: tuple[str, ...] = ()
     env: dict[str, str] = field(default_factory=dict)
@@ -57,20 +58,15 @@ class MCPServerConfigError(ValueError):
     """MCP server 配置非法。"""
 
 
-def _parse_transport_fields(raw: dict, source: str) -> tuple[str, str, str]:
-    """校验 transport 与对应端点（stdio 需 command，远程需 http url），返回 (transport, command, url)。"""
+def _parse_transport_fields(raw: dict, source: str) -> tuple[str, str]:
+    """校验 transport：只允许 streamable_http，且必须提供 http(s) url。"""
     transport = str(raw.get("transport") or "").strip()
     if transport not in VALID_MCP_TRANSPORTS:
-        raise MCPServerConfigError(
-            f"{source}: transport 必须是 {sorted(VALID_MCP_TRANSPORTS)} 之一，当前: {transport!r}"
-        )
-    command = str(raw.get("command") or "").strip()
+        raise MCPServerConfigError(f"{source}: transport 只支持 {sorted(VALID_MCP_TRANSPORTS)}，当前: {transport!r}")
     url = str(raw.get("url") or "").strip()
-    if transport == "stdio" and not command:
-        raise MCPServerConfigError(f"{source}: stdio 传输必须提供 command")
-    if transport in ("streamable_http", "sse") and not url.startswith(("http://", "https://")):
-        raise MCPServerConfigError(f"{source}: {transport} 传输必须提供 http(s) url")
-    return transport, command, url
+    if not url.startswith(("http://", "https://")):
+        raise MCPServerConfigError(f"{source}: streamable_http 传输必须提供 http(s) url")
+    return transport, url
 
 
 def _string_list_field(raw: dict, key: str, source: str) -> list[str]:
@@ -129,25 +125,16 @@ def parse_mcp_server_config(raw: object, *, source: str) -> MCPServerConfig:
     server_id = str(raw.get("id") or raw.get("server_id") or "").strip()
     if not _SERVER_ID_PATTERN.fullmatch(server_id):
         raise MCPServerConfigError(f"{source}: id 非法（需匹配 {_SERVER_ID_PATTERN.pattern}）: {server_id!r}")
-    transport, command, url = _parse_transport_fields(raw, source)
-    raw_args = _string_list_field(raw, "args", source)
-    raw_env = _string_mapping_field(raw, "env", source)
+    transport, url = _parse_transport_fields(raw, source)
     raw_headers = _string_mapping_field(raw, "headers", source)
     tool_labels = _clean_tool_labels(_string_mapping_field(raw, "tool_labels", source), source)
     tool_approvals = _clean_tool_approvals(_string_mapping_field(raw, "tool_approvals", source), source)
     enabled = raw.get("enabled", True)
     if not isinstance(enabled, bool):
         raise MCPServerConfigError(f"{source}: enabled 必须是布尔值")
-    if transport == "sse":
-        # HTTP+SSE 传输在 2025-03-26 废弃、2026-07-28 起进入 Deprecated 生命周期；
-        # 仅保留与旧 server 的兼容，新部署应使用 streamable_http。
-        logger.warning("%s: sse 传输已废弃（MCP 2026-07-28），建议迁移 streamable_http: %s", source, server_id)
     return MCPServerConfig(
         server_id=server_id,
         transport=transport,
-        command=command,
-        args=tuple(raw_args),
-        env=dict(raw_env),
         url=url,
         headers=dict(raw_headers),
         tool_labels=tool_labels,

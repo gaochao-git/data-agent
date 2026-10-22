@@ -122,15 +122,14 @@ def _make_manager(*, config_loader=None, cache_ttl=60):
 # ============ 配置解析 ============
 
 
-def test_parse_mcp_server_config_stdio_ok():
+def test_parse_mcp_server_config_streamable_http_ok():
     config = parse_mcp_server_config(
-        {"id": "fs", "transport": "stdio", "command": "npx", "args": ["-y", "srv"], "env": {"A": "1"}},
+        {"id": "fs", "transport": "streamable_http", "url": "https://mcp.example.com/mcp"},
         source="env",
     )
     assert config.server_id == "fs"
-    assert config.transport == "stdio"
-    assert config.args == ("-y", "srv")
-    assert config.env == {"A": "1"}
+    assert config.transport == "streamable_http"
+    assert config.url == "https://mcp.example.com/mcp"
     assert config.enabled is True
 
 
@@ -147,8 +146,8 @@ def test_parse_mcp_server_config_tool_labels_ok():
     config = parse_mcp_server_config(
         {
             "id": "srv",
-            "transport": "stdio",
-            "command": "x",
+            "transport": "streamable_http",
+            "url": "https://mcp.example.com/mcp",
             "tool_labels": {" echo ": " 回显 ", "greet": "问候"},
         },
         source="env",
@@ -499,7 +498,7 @@ def test_load_mcp_server_configs_uses_plugin_entries_only(monkeypatch):
 
     - 重复 id：后到者告警后忽略；
     - 插件条目 enabled=false：跳过；
-    - sse 传输：废弃告警但仍生效（兼容旧 server）；
+    - 非 streamable_http 传输：拒绝；
     - 非法条目：忽略不阻断。
 
     告警走项目自定义日志器（handler 绑定全局流，caplog/capsys/capfd 均收不到），
@@ -527,20 +526,18 @@ def test_load_mcp_server_configs_uses_plugin_entries_only(monkeypatch):
 
     configs = load_mcp_server_configs()
 
-    assert [config.server_id for config in configs] == ["docs", "search"]
-    by_id = {config.server_id: config for config in configs}
-    assert by_id["docs"].url == "https://docs.example.com/mcp"
-    assert by_id["search"].transport == "sse"
-    assert any("sse 传输已废弃" in message for message in records)
+    assert [config.server_id for config in configs] == ["docs"]
+    assert configs[0].url == "https://docs.example.com/mcp"
     assert any("插件 MCP server id 重复" in message for message in records)
+    assert any("transport 只支持" in message for message in records)
 
 
 def test_parse_mcp_server_config_tool_approvals_ok():
     config = parse_mcp_server_config(
         {
             "id": "srv",
-            "transport": "stdio",
-            "command": "x",
+            "transport": "streamable_http",
+            "url": "https://mcp.example.com/mcp",
             "tool_approvals": {"echo": "allow", "greet": "ask"},
         },
         source="env",
@@ -552,7 +549,12 @@ def test_parse_mcp_server_config_rejects_invalid_tool_approvals():
     for approvals in ({"echo": "bad"}, {" ": "ask"}, "not-a-dict"):
         with pytest.raises(MCPServerConfigError):
             parse_mcp_server_config(
-                {"id": "ok", "transport": "stdio", "command": "x", "tool_approvals": approvals},
+                {
+                    "id": "ok",
+                    "transport": "streamable_http",
+                    "url": "https://mcp.example.com/mcp",
+                    "tool_approvals": approvals,
+                },
                 source="env",
             )
 
@@ -593,8 +595,8 @@ def test_parse_mcp_server_config_normalizes_legacy_approval_values():
     config = parse_mcp_server_config(
         {
             "id": "srv",
-            "transport": "stdio",
-            "command": "x",
+            "transport": "streamable_http",
+            "url": "https://mcp.example.com/mcp",
             "tool_approvals": {"old_auto": "auto", "old_force": "force_ask"},
         },
         source="env",
@@ -606,8 +608,8 @@ def test_parse_mcp_server_config_keeps_legacy_deny_for_tool_level_filter():
     config = parse_mcp_server_config(
         {
             "id": "srv",
-            "transport": "stdio",
-            "command": "x",
+            "transport": "streamable_http",
+            "url": "https://mcp.example.com/mcp",
             "tool_approvals": {"old_deny": "deny"},
         },
         source="env",
