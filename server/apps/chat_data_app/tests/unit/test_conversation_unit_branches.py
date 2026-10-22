@@ -474,7 +474,7 @@ def test_title_llm_disables_thinking_and_skips_reasoning_blocks(monkeypatch):
     )
     conversation_module._get_title_llm()
     assert calls["enable_thinking"] is False
-    assert calls["max_tokens"] == 200
+    assert calls["max_tokens"] == 2048
 
     response = AIMessage(
         content=[
