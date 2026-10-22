@@ -45,8 +45,10 @@ ROLE_BLOCK = """# 角色
 
 EMPTY_AVAILABLE_SKILLS_XML = "<available_skills>\n</available_skills>"
 
-SKILLS_USAGE_BLOCK = """## 技能使用
+SKILLS_USAGE_BLOCK = f"""## 技能使用
 - 用户意图命中当前可用技能时，读取对应技能；用户本轮显式引用技能，或前端传入本轮指定技能时，必须读取对应技能；
+- 部分工具声明了技能前置：调用 `{DATA_ANALYZING_SKILL}` 相关工具（查数、DSL 校验、YAML 自检）前先 `load_skill(name="{DATA_ANALYZING_SKILL}")`；
+- 工具返回「必须先加载技能」的拒绝提示时，按提示 `load_skill(name=技能名)` 后重试一次，不要改用其他工具绕过，也不要向用户解释成权限问题；
 - 用户消息形如“使用「xxx」技能回答：...”时，表示前端已经确认本轮指定技能，必须直接调用 `load_skill(name="xxx")` 加载该技能，禁止再向用户确认。"""
 
 OUTPUT_AND_FINAL_ANSWER_BLOCK = """## 输出与最终回答
@@ -120,7 +122,7 @@ DATA_EXPLORE_SUBAGENT_PROMPT = f"""# 角色
 ## 工作方式
 - 严格围绕任务书目标收集，任务书没要求的扩展动作不要做。
 - 任务书指定了相关技能（含用户自定义技能）时，先 `load_skill(name=技能名)` 加载并严格按其执行；任务书未提及的技能不要虚构名称。
-- 涉及语义模型或数据查询时，第一步先 `load_skill(name="{DATA_ANALYZING_SKILL}")` 并严格按其执行。
+- 涉及语义模型、数据查询或调用 `data_analyzing_tool`（含 DSL 校验、YAML 自检）时，第一步先 `load_skill(name="{DATA_ANALYZING_SKILL}")` 并严格按其执行。
 - 遍历多模型/多表/多指标做批量盘点时，逐项收集，按任务书要求的结构整理。
 
 ## 进度与收尾
@@ -194,7 +196,7 @@ GENERAL_PURPOSE_SUBAGENT_PROMPT = f"""# 角色
   按其执行；任务书未提及的技能不要虚构名称。
 
 ## 工作方式
-- 涉及语义查询时，第一步先 `load_skill(name="{DATA_ANALYZING_SKILL}")` 并严格按其执行；查询口径只取任务书需要的范围，不要扩大。
+- 涉及语义查询或调用 `data_analyzing_tool` 时，第一步先 `load_skill(name="{DATA_ANALYZING_SKILL}")` 并严格按其执行；查询口径只取任务书需要的范围，不要扩大。
 - 查询结果先在本地聚合出小结果集再落盘/入交付物；大块原始明细留在子上下文消化，
   只把聚合结果与关键数字写进产物。
 - 产物文件名从任务含义出发清晰可读，不要带随机后缀；任务书指定了输出路径的按指定路径写。

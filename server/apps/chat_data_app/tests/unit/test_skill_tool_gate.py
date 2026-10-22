@@ -72,6 +72,48 @@ async def test_skill_prerequisite_blocks_unloaded_tool():
 
 
 @pytest.mark.asyncio
+async def test_data_analyzing_tool_requires_its_own_skill_only():
+    """真实注册表口径：data_analyzing_tool 只认 data-analyzing。
+
+    加载别的技能不应放行——否则任一技能加载后全部工具都开了口子。
+    """
+    from apps.chat_data_app.agent.tools.registry import TOOL_REQUIRED_SKILLS
+
+    middleware = SkillPrerequisiteMiddleware(TOOL_REQUIRED_SKILLS)
+    officecli_loaded = ToolMessage(
+        content='<skill_content name="officecli">body</skill_content>',
+        name=SKILL_TOOL_NAME,
+        tool_call_id="c1",
+    )
+    blocked_request = SimpleNamespace(
+        tool_call={"id": "c2", "name": "data_analyzing_tool"},
+        state={"messages": [officecli_loaded]},
+    )
+
+    async def _must_not_run(_request):
+        raise AssertionError("技能不匹配时不应执行工具")
+
+    blocked = await middleware.awrap_tool_call(blocked_request, _must_not_run)
+    assert blocked.status == "error"
+    assert "data-analyzing" in str(blocked.content)
+
+    data_skill_loaded = ToolMessage(
+        content='<skill_content name="data-analyzing">body</skill_content>',
+        name=SKILL_TOOL_NAME,
+        tool_call_id="c3",
+    )
+    allowed_request = SimpleNamespace(
+        tool_call={"id": "c4", "name": "data_analyzing_tool"},
+        state={"messages": [officecli_loaded, data_skill_loaded]},
+    )
+
+    async def _ok(_request):
+        return ToolMessage(content="ok", tool_call_id="c4", name="data_analyzing_tool")
+
+    assert (await middleware.awrap_tool_call(allowed_request, _ok)).content == "ok"
+
+
+@pytest.mark.asyncio
 async def test_skill_prerequisite_allows_loaded_tool_and_ignores_other_tools():
     middleware = SkillPrerequisiteMiddleware({"officecli_run": ("officecli",)})
     loaded = ToolMessage(

@@ -129,3 +129,22 @@ def test_approval_required_tools_are_declared_and_valid():
     # 读写/检索不打断
     assert "file_read" not in APPROVAL_REQUIRED_TOOL_NAMES
     assert "file_write" not in APPROVAL_REQUIRED_TOOL_NAMES
+
+
+def test_required_skills_target_builtin_skills_only():
+    """技能前置的技能名必须是已登记的内置技能。
+
+    写错名字的后果是静默且致命的：``load_skill`` 永远返回失败 →
+    该工具被门禁永久拒绝，而错误信息只说「请先加载技能」，没有人能看出是名字写错了。
+    """
+    from apps.chat_data_app.agent.tools.registry import TOOL_REQUIRED_SKILLS
+    from utils.builtin_skills import DATA_ANALYZING_SKILL, OFFICE_SKILL, SKILL_CREATOR_SKILL
+
+    assert TOOL_REQUIRED_SKILLS == {
+        "officecli_run": (OFFICE_SKILL,),
+        "data_analyzing_tool": (DATA_ANALYZING_SKILL,),
+    }
+    known = {DATA_ANALYZING_SKILL, OFFICE_SKILL, SKILL_CREATOR_SKILL}
+    for tool_name, skills in TOOL_REQUIRED_SKILLS.items():
+        unknown = set(skills) - known
+        assert not unknown, f"{tool_name} 声明了未登记的技能名: {sorted(unknown)}"

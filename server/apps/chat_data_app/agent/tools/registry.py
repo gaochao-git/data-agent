@@ -23,6 +23,8 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from utils.builtin_skills import DATA_ANALYZING_SKILL, OFFICE_SKILL
+
 from .ask_user_question import ask_user_question_tool
 from .bash_run import create_bash_run_tool
 from .calculator import calculator_tool
@@ -136,6 +138,8 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
             )
         ],
         note="数据分析合并工具：DSL/dashboard_spec 校验、语义查询执行、语义模型 YAML 自检（按 action 分派）",
+        # 查数口径与失败处理全在技能正文里，未加载就调工具会按「凭记忆编口径」处理
+        required_skills=(DATA_ANALYZING_SKILL,),
     ),
     ToolSpec(
         provides=("calculator_tool",),
@@ -153,7 +157,7 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
         provides=("officecli_run",),
         build=lambda ctx: [create_officecli_run_tool(ctx.workspace_runtime)],
         note="OfficeCLI 编辑/查询 Office 文件",
-        required_skills=("officecli",),
+        required_skills=(OFFICE_SKILL,),
     ),
     ToolSpec(
         provides=("bash_run",),
