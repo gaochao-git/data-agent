@@ -1,0 +1,26 @@
+{
+  "name": "example-plugin",
+  "version": "1.0.0",
+  "display_name": "示例插件",
+  "description": "ChatData 插件模板：一个技能 + 一个可选的 streamable_http MCP server 示例。安装前请修改 name 与内容。",
+  "skills": ["example-skill"],
+  "mcp_servers": [
+    {
+      "id": "demo-http",
+      "transport": "streamable_http",
+      "url": "https://mcp.example.com/mcp",
+      "enabled": false,
+      "headers": {
+        "Authorization": "Bearer <token>"
+      },
+      "tool_approvals": {
+        "read_data": "allow",
+        "write_data": "ask"
+      },
+      "tool_labels": {
+        "read_data": "读取数据",
+        "write_data": "写入数据"
+      }
+    }
+  ]
+}

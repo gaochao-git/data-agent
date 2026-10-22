@@ -5,8 +5,7 @@
   ``server/discover`` 直接采用新式按请求模型，旧协议 server 回退 initialize
   握手——对现有 1.x server 与 2026-07-28 server 同时兼容。
 - 每次枚举/调用按需建连、用完即关，不做常驻连接池；只读场景开销可控。
-  （新规范远程传输本就趋于无状态，该取舍与新协议方向一致；stdio 仍是
-  有状态模型，若日后高频调用再评估会话池。）
+  （只支持 streamable_http，传输趋于无状态，该取舍与新协议方向一致。）
 - 工具枚举结果按 TTL 缓存（``CHAT_DATA_MCP_TOOLS_CACHE_TTL_SECONDS``），
   装配 agent 时同步读取缓存，未命中才真正连接。
 - 单个 server 枚举/调用失败只降级自身，不影响其他 server 与内置工具。
@@ -28,8 +27,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from langchain_core.tools import StructuredTool
-from mcp import Client, StdioServerParameters
-from mcp.client.sse import sse_client
+from mcp import Client
 from mcp.client.streamable_http import streamable_http_client
 from pydantic import BaseModel, Field, create_model
 
@@ -77,31 +75,19 @@ async def open_mcp_session(config: MCPServerConfig, *, timeout_seconds: int = 60
 
     ``mode=auto``：新协议 server 走 ``server/discover``（按请求、无握手），
     旧协议 server 回退 initialize 握手——对两代 server 同时兼容。
-    http/sse 的自定义 headers 经传输层注入（streamable_http 用 httpx2 客户端
-    携带默认 headers；sse 传输原生支持 headers 参数）。
+    streamable_http 的自定义 headers 经 httpx2 客户端注入。
     """
-    if config.transport == "stdio":
-        server: Any = StdioServerParameters(
-            command=config.command,
-            args=list(config.args),
-            env=config.env or None,
-        )
-    elif config.transport == "streamable_http":
-        if config.headers:
-            # 2.x 的 streamable_http_client 不再接受 headers 参数，
-            # 以携带默认 headers 的 httpx2 客户端注入（生命周期随连接关闭）。
-            import httpx2
+    if config.transport != "streamable_http":
+        raise ValueError(f"只支持 streamable_http，当前: {config.transport}")
+    if config.headers:
+        # 2.x 的 streamable_http_client 不再接受 headers 参数，
+        # 以携带默认 headers 的 httpx2 客户端注入（生命周期随连接关闭）。
+        import httpx2
 
-            http_client = httpx2.AsyncClient(headers=dict(config.headers))
-            server = streamable_http_client(config.url, http_client=http_client)
-        else:
-            server = config.url
-    elif config.transport == "sse":
-        # 2026-07-28 起 HTTP+SSE 传输进入 Deprecated（2025-03-26 首次废弃），
-        # 仅保留与旧 server 的兼容；新部署应使用 streamable_http。
-        server = sse_client(config.url, headers=config.headers or None)
+        http_client = httpx2.AsyncClient(headers=dict(config.headers))
+        server: Any = streamable_http_client(config.url, http_client=http_client)
     else:
-        raise ValueError(f"不支持的 MCP transport: {config.transport}")
+        server = config.url
 
     async with Client(server, mode="auto", read_timeout_seconds=float(timeout_seconds)) as client:
         yield client

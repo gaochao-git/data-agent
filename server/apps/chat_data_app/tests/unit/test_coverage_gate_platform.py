@@ -213,7 +213,6 @@ def fake_mcp_transports(monkeypatch):
             return False
 
     monkeypatch.setattr(mcp_manager, "Client", _FakeClient)
-    monkeypatch.setattr(mcp_manager, "StdioServerParameters", lambda **kwargs: {"stdio": kwargs})
 
     class _FakeHttpClient:
         def __init__(self, *, headers=None):
@@ -226,23 +225,7 @@ def fake_mcp_transports(monkeypatch):
         "streamable_http_client",
         lambda url, http_client=None: {"streamable_http": url, "http_client": http_client},
     )
-    monkeypatch.setattr(mcp_manager, "sse_client", lambda url, headers=None: {"sse": url, "headers": headers})
     return captured
-
-
-def test_open_mcp_session_builds_stdio_transport(fake_mcp_transports):
-    captured = fake_mcp_transports
-    config = MCPServerConfig(server_id="srv", transport="stdio", command="npx", args=("-y", "srv"), env={"A": "1"})
-
-    async def _use():
-        async with mcp_manager.open_mcp_session(config, timeout_seconds=7) as client:
-            return client
-
-    client = asyncio.run(_use())
-    assert client is not None
-    assert captured["client"]["server"] == {"stdio": {"command": "npx", "args": ["-y", "srv"], "env": {"A": "1"}}}
-    assert captured["client"]["mode"] == "auto"
-    assert captured["client"]["timeout"] == 7.0
 
 
 def test_open_mcp_session_builds_streamable_http_with_headers(fake_mcp_transports):
@@ -264,19 +247,16 @@ def test_open_mcp_session_builds_streamable_http_with_headers(fake_mcp_transport
     assert captured["http_headers"] == {"k": "v"}
 
 
-def test_open_mcp_session_builds_streamable_http_without_headers_and_sse(fake_mcp_transports):
+def test_open_mcp_session_builds_streamable_http_without_headers(fake_mcp_transports):
     captured = fake_mcp_transports
-    http_config = MCPServerConfig(server_id="srv", transport="streamable_http", url="https://a.example/mcp")
-    sse_config = MCPServerConfig(server_id="srv", transport="sse", url="https://b.example/sse", headers={"h": "1"})
+    config = MCPServerConfig(server_id="srv", transport="streamable_http", url="https://a.example/mcp")
 
-    async def _use(config):
+    async def _use():
         async with mcp_manager.open_mcp_session(config) as client:
             return client
 
-    asyncio.run(_use(http_config))
+    asyncio.run(_use())
     assert captured["client"]["server"] == "https://a.example/mcp"
-    asyncio.run(_use(sse_config))
-    assert captured["client"]["server"] == {"sse": "https://b.example/sse", "headers": {"h": "1"}}
 
 
 def test_open_mcp_session_rejects_unknown_transport(fake_mcp_transports):
@@ -286,7 +266,7 @@ def test_open_mcp_session_rejects_unknown_transport(fake_mcp_transports):
         async with mcp_manager.open_mcp_session(config):
             pass
 
-    with pytest.raises(ValueError, match="不支持的 MCP transport"):
+    with pytest.raises(ValueError, match="只支持 streamable_http"):
         asyncio.run(_use())
 
 
@@ -347,7 +327,9 @@ def test_check_health_async_returns_false_when_session_fails(monkeypatch):
         yield  # pragma: no cover - 只为构成异步生成器
 
     manager = mcp_manager.MCPToolManager(
-        config_loader=lambda: [MCPServerConfig(server_id="srv", transport="stdio", command="x")],
+        config_loader=lambda: [
+            MCPServerConfig(server_id="srv", transport="streamable_http", url="https://a.example/mcp")
+        ],
         session_factory=_failing_factory,
     )
     assert asyncio.run(manager.check_health_async("missing")) is False
@@ -374,7 +356,7 @@ def test_run_coro_sync_uses_thread_when_loop_running():
 
 
 def test_load_mcp_tools_filters_by_server_ids(monkeypatch):
-    config = MCPServerConfig(server_id="srv-a", transport="stdio", command="x")
+    config = MCPServerConfig(server_id="srv-a", transport="streamable_http", url="https://a.example/mcp")
     infos = [
         mcp_manager.MCPToolInfo(
             server_id="srv-a",

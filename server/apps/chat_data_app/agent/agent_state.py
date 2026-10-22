@@ -45,6 +45,25 @@ def merge_discovered_tool_names(
     new: list[str] | None,
 ) -> list[str]:
     """追加按需发现的 MCP 工具名，保持首次发现顺序并去重。"""
+    return merge_string_names(existing, new)
+
+
+def merge_loaded_skill_names(
+    existing: list[str] | None,
+    new: list[str] | None,
+) -> list[str]:
+    """追加已加载技能名，保持首次加载顺序并去重。
+
+    技能门禁的唯一状态来源：由 ``load_skill`` 成功路径写入，不从模型可见文本反推。
+    """
+    return merge_string_names(existing, new)
+
+
+def merge_string_names(
+    existing: list[str] | None,
+    new: list[str] | None,
+) -> list[str]:
+    """字符串名列表的通用合并：去空白、去重、保持首次出现顺序。"""
     merged: list[str] = []
     seen: set[str] = set()
     for name in [*(existing or []), *(new or [])]:
@@ -127,6 +146,8 @@ class ChatDataAgentState(AgentState, total=False):
     context_summary: str | None
     context_compression_events: Annotated[list[dict[str, Any]], merge_context_compression_events]
     discovered_tool_names: Annotated[list[str], merge_discovered_tool_names]
+    # 已加载技能：load_skill 成功路径写入；压缩/跨机器不丢，门禁只认该字段。
+    loaded_skills: Annotated[list[str], merge_loaded_skill_names]
     # 本轮审批决策：after_model 批量中断后写入，wrap_tool_call 执行前消费。
     approval_decisions: Annotated[dict[str, str], replace_approval_decisions]
     workspace: ConversationWorkspaceContext

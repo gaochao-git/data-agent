@@ -1,0 +1,3 @@
+# Python >= 3.10 required by official mcp 2.x (tested with Python 3.12)
+# Bearer auth is provided by MCP SDK itself (TokenVerifier + AuthSettings).
+mcp>=2.2.0,<3

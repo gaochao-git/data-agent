@@ -8994,6 +8994,68 @@
         ]
       }
     },
+    "/api/chatdata/admin/plugins/mcp-template": {
+      "get": {
+        "description": "下载 MCP Server hello-world 模板（Python + streamable_http）。",
+        "operationId": "download_mcp_server_template_api_chatdata_admin_plugins_mcp_template_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              },
+              "application/octet-stream": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Binary file response"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Download Mcp Server Template",
+        "tags": [
+          "ChatData 插件管理（Admin）"
+        ]
+      }
+    },
+    "/api/chatdata/admin/plugins/template": {
+      "get": {
+        "description": "下载插件 zip 模板（含 plugin.json、示例技能与 README）。",
+        "operationId": "download_plugin_template_api_chatdata_admin_plugins_template_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              },
+              "application/octet-stream": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Binary file response"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Download Plugin Template",
+        "tags": [
+          "ChatData 插件管理（Admin）"
+        ]
+      }
+    },
     "/api/chatdata/admin/plugins/{plugin_id}": {
       "delete": {
         "description": "卸载插件：删除磁盘目录并软删 DB 记录。",
@@ -9095,6 +9157,63 @@
           }
         ],
         "summary": "Update Plugin Enabled",
+        "tags": [
+          "ChatData 插件管理（Admin）"
+        ]
+      }
+    },
+    "/api/chatdata/admin/plugins/{plugin_id}/mcp-servers/{server_id}/tools": {
+      "get": {
+        "description": "临时连接 MCP server 并返回 tools/list；不执行工具、不落库。",
+        "operationId": "probe_plugin_mcp_server_tools_api_chatdata_admin_plugins__plugin_id__mcp_servers__server_id__tools_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plugin_id",
+            "required": true,
+            "schema": {
+              "title": "Plugin Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "server_id",
+            "required": true,
+            "schema": {
+              "title": "Server Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "探测插件声明的 MCP server 工具（admin）",
         "tags": [
           "ChatData 插件管理（Admin）"
         ]

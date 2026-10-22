@@ -355,7 +355,14 @@ class ToolCallingLLM:
 
     async def ainvoke(self, _messages):
         self.calls += 1
+        # data_analyzing_tool 声明了 required_skills，必须先 load_skill 才能通过前置门禁，
+        # 所以这里按真实模型的行为分两轮：先加载技能，再发起校验调用。
         if self.calls == 1:
+            return AIMessage(
+                content="",
+                tool_calls=[{"id": "call_skill", "name": "load_skill", "args": {"name": "data-analyzing"}}],
+            )
+        if self.calls == 2:
             return AIMessage(
                 content="",
                 tool_calls=[
@@ -472,4 +479,4 @@ def test_completion_api_runs_real_validate_dsl_action_with_structured_having(cli
     assert "LEFT JOIN order_items" in text
     assert "HAVING SUM(orders.out_amount) > (SUM(order_items.amount) * 10)" in text
     assert "已生成 SQL。" in text
-    assert fake_llm.calls == 2
+    assert fake_llm.calls == 3  # load_skill → data_analyzing_tool → 收尾

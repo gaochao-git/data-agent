@@ -93,6 +93,10 @@ def test_parse_manifest_ok():
         {"mcp_servers": [{"id": "x", "transport": "websocket", "command": "c"}]},
         {"mcp_servers": [{"id": "x", "transport": "stdio"}]},
         {"mcp_servers": [{"id": "x", "transport": "sse", "url": "ftp://x"}]},
+        {"mcp_servers": "not-a-list"},
+        {"mcp_servers": [None]},
+        {"mcp_servers": [{"id": "bad id", "transport": "streamable_http", "url": "https://x.example/mcp"}]},
+        {"mcp_servers": [{"id": "x", "transport": "streamable_http"}]},
         {"display_name": "x" * 100},
         {"description": "x" * 600},
     ],
@@ -114,6 +118,29 @@ def test_parse_manifest_allows_mcp_only_and_ignores_unknown_fields():
     )
     assert parsed.skills == ()
     assert parsed.mcp_servers[0]["id"] == "fs-ro"
+
+
+def test_load_plugin_manifest_missing_file(tmp_path):
+    from apps.chat_data_app.agent.plugins.manifest import load_plugin_manifest
+
+    with pytest.raises(PluginManifestError):
+        load_plugin_manifest(tmp_path)
+
+
+def test_load_plugin_manifest_invalid_json(tmp_path):
+    from apps.chat_data_app.agent.plugins.manifest import load_plugin_manifest
+
+    (tmp_path / "plugin.json").write_text("not json", encoding="utf-8")
+    with pytest.raises(PluginManifestError):
+        load_plugin_manifest(tmp_path)
+
+
+def test_reset_runtime_caches_swallows_manager_reset_error(monkeypatch):
+    def _boom():
+        raise RuntimeError("reset failed")
+
+    monkeypatch.setattr(plugin_service, "reset_mcp_tool_manager", _boom)
+    plugin_service._reset_runtime_caches()
 
 
 # ============ zip 安装 ============

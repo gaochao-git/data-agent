@@ -69,6 +69,19 @@ def _plugin_zip(name="ops-readonly", skill="fault-analysis"):
     return buffer.getvalue()
 
 
+def test_install_plugin_rejects_oversized_upload(client, auth_headers, monkeypatch):
+    from apps.chat_data_app.routers import plugins as plugins_router
+
+    monkeypatch.setattr(plugins_router, "_PLUGIN_UPLOAD_MAX_BYTES", 1)
+    response = client.post(
+        "/api/chatdata/admin/plugins/install",
+        files={"file": ("big.zip", b"xx", "application/zip")},
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "error"
+
+
 def test_plugin_routes_full_lifecycle(client, auth_headers, plugin_root: Path):
     zip_bytes = _plugin_zip()
 
@@ -181,3 +194,133 @@ def test_plugin_changes_invalidate_mcp_tool_cache(client, auth_headers, plugin_r
     )
     assert missing.json()["code"] == ErrorCode.CHATDATA_PLUGIN_NOT_FOUND
     assert reset_calls == []
+
+
+def test_plugin_template_download_returns_installable_zip(client, auth_headers):
+    from apps.chat_data_app.agent.plugins.manifest import parse_plugin_manifest
+
+    response = client.get("/api/chatdata/admin/plugins/template", headers=auth_headers)
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/zip")
+    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+        names = set(archive.namelist())
+        assert "example-plugin/plugin.json" in names
+        assert "example-plugin/skills/example-skill/SKILL.md" in names
+        assert "example-plugin/skills/example-skill/references/README.md" in names
+        assert "example-plugin/skills/example-skill/assets/README.md" in names
+        manifest = parse_plugin_manifest(json.loads(archive.read("example-plugin/plugin.json")))
+    assert manifest.name == "example-plugin"
+    assert manifest.skills == ("example-skill",)
+    assert len(manifest.mcp_servers) == 1
+    assert manifest.mcp_servers[0]["transport"] == "streamable_http"
+    assert manifest.mcp_servers[0]["enabled"] is False
+
+
+def test_plugin_install_rejects_nonstandard_skill_directory(client, auth_headers, plugin_root):
+    manifest = {
+        "name": "bad-layout",
+        "version": "1.0.0",
+        "skills": ["bad-skill"],
+    }
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("plugin.json", json.dumps(manifest))
+        archive.writestr("skills/bad-skill/SKILL.md", "---\nname: bad-skill\n---\n")
+        archive.writestr("skills/bad-skill/scripts/run.py", "print('bad')")
+    response = client.post(
+        "/api/chatdata/admin/plugins/install",
+        files={"file": ("bad.zip", buffer.getvalue(), "application/zip")},
+        headers=auth_headers,
+    )
+    assert response.json()["status"] == "error"
+    assert "非标准路径" in response.json()["msg"]
+
+
+def test_plugin_template_installs_with_standard_skill_layout(client, auth_headers, plugin_root: Path):
+    """完整走一遍：下载模板 → 安装 → 校验标准技能目录 → 卸载。"""
+    template = client.get("/api/chatdata/admin/plugins/template", headers=auth_headers)
+    assert template.status_code == 200
+
+    installed = client.post(
+        "/api/chatdata/admin/plugins/install",
+        files={"file": ("template.zip", template.content, "application/zip")},
+        headers=auth_headers,
+    )
+    assert installed.json()["status"] == "success"
+    assert installed.json()["data"]["plugin"]["name"] == "example-plugin"
+
+    root = plugin_root / "example-plugin"
+    skill_root = root / "skills" / "example-skill"
+    assert (skill_root / "SKILL.md").is_file()
+    assert (skill_root / "references" / "README.md").is_file()
+    assert (skill_root / "assets" / "README.md").is_file()
+    assert not (skill_root / "scripts").exists()
+
+    listed = client.get("/api/chatdata/admin/plugins", headers=auth_headers)
+    names = [item["name"] for item in listed.json()["data"]["plugins"]]
+    assert "example-plugin" in names
+
+    removed = client.delete("/api/chatdata/admin/plugins/example-plugin", headers=auth_headers)
+    assert removed.json()["status"] == "success"
+
+
+def test_probe_plugin_mcp_tools(client, auth_headers, plugin_root: Path, monkeypatch):
+    template = client.get("/api/chatdata/admin/plugins/template", headers=auth_headers)
+    installed = client.post(
+        "/api/chatdata/admin/plugins/install",
+        files={"file": ("template.zip", template.content, "application/zip")},
+        headers=auth_headers,
+    )
+    assert installed.json()["status"] == "success"
+
+    async def fake_probe(_plugin_name, _server_id):
+        return {
+            "server_id": "demo-http",
+            "count": 2,
+            "tools": [
+                {"name": "read_data", "description": "读取数据", "parameters": [], "approval": "allow"},
+                {"name": "write_data", "description": "写入数据", "parameters": [], "approval": "ask"},
+            ],
+        }
+
+    monkeypatch.setattr(plugin_service.installer, "probe_mcp_server_tools", fake_probe)
+    response = client.get(
+        "/api/chatdata/admin/plugins/example-plugin/mcp-servers/demo-http/tools",
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["server_id"] == "demo-http"
+    assert data["count"] == 2
+    assert [tool["name"] for tool in data["tools"]] == ["read_data", "write_data"]
+    assert data["tools"][0]["approval"] == "allow"
+    assert data["tools"][1]["approval"] == "ask"
+
+
+def test_mcp_server_template_download_contains_hello_server(client, auth_headers):
+    response = client.get("/api/chatdata/admin/plugins/mcp-template", headers=auth_headers)
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/zip"
+
+    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+        names = set(archive.namelist())
+    assert "hello-mcp-server/server.py" in names
+    assert "hello-mcp-server/requirements.txt" in names
+    assert "hello-mcp-server/README.md" in names
+    assert "hello-mcp-server/mcp_auth.py" in names
+
+    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+        server_source = archive.read("hello-mcp-server/server.py").decode()
+        auth_source = archive.read("hello-mcp-server/mcp_auth.py").decode()
+        requirements = archive.read("hello-mcp-server/requirements.txt").decode()
+    assert "MCPServer" in server_source
+    assert 'transport="streamable-http"' in server_source
+    assert 'streamable_http_path="/mcp"' in server_source
+    assert "build_bearer_auth" in server_source
+    assert "TokenVerifier" in auth_source
+    assert "AuthSettings" in auth_source
+    assert "MCP_AUTH_TOKEN" in server_source
+    assert "def hello" in server_source
+    assert "def add" in server_source
+    assert "mcp>=2.2.0" in requirements
+    assert "uvicorn" not in requirements

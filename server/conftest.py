@@ -1,3 +1,4 @@
+import fcntl
 import os
 import shutil
 from pathlib import Path
@@ -23,8 +24,12 @@ def _prepare_default_system_skills() -> None:
         return
     source_root = Path(__file__).resolve().parent / "apps/chat_data_app/agent/skills"
     target_root = default_home / "skills/system"
-    shutil.rmtree(target_root, ignore_errors=True)
-    shutil.copytree(source_root, target_root)
+    target_root.parent.mkdir(parents=True, exist_ok=True)
+    # pytest-xdist 各 worker 的 conftest 会同时执行；不加锁会在 rmtree/copytree 间互相踩踏。
+    with (default_home / ".system-skills.lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        shutil.rmtree(target_root, ignore_errors=True)
+        shutil.copytree(source_root, target_root)
 
 
 _prepare_default_system_skills()

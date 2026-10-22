@@ -1006,7 +1006,6 @@ export interface PluginMcpServerInfo {
   id: string
   transport: string
   url?: string
-  command?: string
   /** 原始工具名 → 审批档位；缺省 ask，deny 的工具不会挂载/被检索 */
   tool_approvals?: Record<string, 'ask' | 'allow'>
   /** 服务端准入检查结论（未通过时管理页标红并展示原因） */
@@ -1072,6 +1071,22 @@ export interface OntologyObjectInstance {
   object_key: string
   properties: Record<string, unknown>
   links: Record<string, unknown[]>
+}
+
+// MCP 探测返回的单工具参数
+export interface PluginMcpToolParameter {
+  name: string
+  type: string
+  description: string
+  required: boolean
+}
+
+// MCP 探测返回的单工具摘要
+export interface PluginMcpToolInfo {
+  name: string
+  description: string
+  parameters?: PluginMcpToolParameter[]
+  approval: 'ask' | 'allow'
 }
 
 // 插件 manifest 信息

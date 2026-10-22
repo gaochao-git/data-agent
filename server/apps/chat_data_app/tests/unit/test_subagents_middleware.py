@@ -393,7 +393,7 @@ def test_passthrough_keys_cover_subagent_state_schema_fields():
     from apps.chat_data_app.agent.middleware.subagents import ChatDataSubAgentState
 
     framework_keys = {"messages", "jump_to", "structured_response"}
-    subgraph_owned_keys = {"context_summary", "context_compression", "context_compression_events"}
+    subgraph_owned_keys = {"context_summary", "context_compression", "context_compression_events", "loaded_skills"}
     schema_keys = {
         key
         for key in ChatDataSubAgentState.__annotations__

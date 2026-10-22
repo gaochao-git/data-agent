@@ -10,7 +10,6 @@ from typing import Any
 import pytest
 
 from apps.chat_data_app.agent.mcp.admission import (
-    MCP_ALLOW_STDIO_ENV,
     MCP_ALLOWED_HOSTS_ENV,
     MCP_MAX_TOOLS_ENV,
     MCP_REQUIRE_HTTPS_ENV,
@@ -38,27 +37,11 @@ def _tool(name: str, schema: dict | None = None, description: str = "") -> dict:
 # ============ 配置级 ============
 
 
-def test_stdio_rejected_by_default(monkeypatch):
-    monkeypatch.delenv(MCP_ALLOW_STDIO_ENV, raising=False)
-    report = validate_mcp_server_config(_config(transport="stdio", command="npx"))
-    assert report.error_codes() == ["stdio_not_allowed"]
-
-
-def test_stdio_allowed_when_explicitly_enabled(monkeypatch):
-    monkeypatch.setenv(MCP_ALLOW_STDIO_ENV, "true")
-    assert validate_mcp_server_config(_config(transport="stdio", command="npx")).ok
-
-
-def test_stdio_requires_command(monkeypatch):
-    monkeypatch.setenv(MCP_ALLOW_STDIO_ENV, "true")
-    report = validate_mcp_server_config(_config(transport="stdio", command=""))
-    assert "stdio_command_missing" in report.error_codes()
-
-
-def test_stdio_command_control_chars_rejected(monkeypatch):
-    monkeypatch.setenv(MCP_ALLOW_STDIO_ENV, "true")
-    report = validate_mcp_server_config(_config(transport="stdio", command="npx\n--evil"))
-    assert "stdio_command_invalid" in report.error_codes()
+def test_only_streamable_http_transport_allowed():
+    assert validate_mcp_server_config(_config()).ok
+    for transport in ("stdio", "sse", "unknown"):
+        report = validate_mcp_server_config(_config(transport=transport, url="https://mcp.example.com/sse"))
+        assert "transport_not_supported" in report.error_codes()
 
 
 def test_remote_http_rejected_when_https_required(monkeypatch):
@@ -94,12 +77,6 @@ def test_url_control_chars_rejected():
     assert "url_invalid" in report.error_codes()
 
 
-def test_sse_transport_warns():
-    report = validate_mcp_server_config(_config(transport="sse", url="https://mcp.example.com/sse"))
-    assert report.ok
-    assert [issue.code for issue in report.warnings] == ["sse_deprecated"]
-
-
 def test_host_allowlist_allows_and_denies(monkeypatch):
     monkeypatch.setenv(MCP_ALLOWED_HOSTS_ENV, "mcp.example.com,*.trusted.io")
     assert validate_mcp_server_config(_config(url="https://mcp.example.com/mcp")).ok
@@ -120,11 +97,6 @@ def test_headers_valid_pass():
 def test_header_key_control_chars_rejected():
     report = validate_mcp_server_config(_config(headers={"X\nTest": "ok"}))
     assert "header_invalid" in report.error_codes()
-
-
-def test_unknown_transport_skips_transport_checks():
-    # 解析层已拦截未知 transport；准入函数对未知值不做传输断言（防御性放行）
-    assert validate_mcp_server_config(_config(transport="unknown")).ok
 
 
 # ============ 工具级 ============

@@ -8,17 +8,19 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Request, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
 from utils.error_codes import ErrorCode
 from utils.logger import get_logger
 from utils.response import business_response
 
+from ..agent.mcp.template import build_mcp_server_template_zip
 from ..agent.plugins.installer import PluginInstallError, PluginNotFoundError
 from ..agent.plugins.manifest import PluginManifestError
+from ..agent.plugins.template import build_plugin_template_zip
 from ..services import plugin_service
-from . import JSON_API_RESPONSES
+from . import BINARY_RESPONSES, JSON_API_RESPONSES
 from .dependencies import _get_current_user
 
 logger = get_logger(__name__)
@@ -65,6 +67,67 @@ async def list_plugins(request: Request, limit: int = 50, offset: int = 0) -> JS
         logger.error("获取插件列表失败: %s", e, exc_info=True)
         return business_response(
             msg="获取插件列表失败，请稍后重试", code=ErrorCode.CHATDATA_PLUGIN_LIST_FAILED, status="error"
+        )
+
+
+@router.get("/admin/plugins/template", responses=BINARY_RESPONSES)
+async def download_plugin_template(request: Request) -> Response:
+    """下载插件 zip 模板（含 plugin.json、示例技能与 README）。"""
+    _ = request
+    try:
+        content = build_plugin_template_zip()
+    except Exception as e:
+        logger.error("生成插件模板失败: %s", e, exc_info=True)
+        return business_response(
+            msg="生成插件模板失败，请稍后重试",
+            code=ErrorCode.CHATDATA_GENERIC_OPERATION_FAILED,
+            status="error",
+        )
+    return Response(
+        content=content,
+        media_type="application/zip",
+        headers={"Content-Disposition": 'attachment; filename="chatdata-plugin-template.zip"'},
+    )
+
+
+@router.get("/admin/plugins/mcp-template", responses=BINARY_RESPONSES)
+async def download_mcp_server_template(request: Request) -> Response:
+    """下载 MCP Server hello-world 模板（Python + streamable_http）。"""
+    _ = request
+    try:
+        content = build_mcp_server_template_zip()
+    except Exception as e:
+        logger.error("生成 MCP Server 模板失败: %s", e, exc_info=True)
+        return business_response(
+            msg="生成 MCP Server 模板失败，请稍后重试",
+            code=ErrorCode.CHATDATA_GENERIC_OPERATION_FAILED,
+            status="error",
+        )
+    return Response(
+        content=content,
+        media_type="application/zip",
+        headers={"Content-Disposition": 'attachment; filename="chatdata-mcp-server-template.zip"'},
+    )
+
+
+@router.get(
+    "/admin/plugins/{plugin_id}/mcp-servers/{server_id}/tools",
+    summary="探测插件声明的 MCP server 工具（admin）",
+)
+async def probe_plugin_mcp_server_tools(plugin_id: str, server_id: str, request: Request) -> JSONResponse:
+    """临时连接 MCP server 并返回 tools/list；不执行工具、不落库。"""
+    _ = request
+    try:
+        data = await plugin_service.probe_mcp_server_tools(plugin_id, server_id)
+        return business_response(data=data, msg="探测成功")
+    except ValueError as e:
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_PLUGIN_INSTALL_FAILED, status="error")
+    except Exception as e:
+        logger.error("探测 MCP 工具失败: plugin=%s server=%s error=%s", plugin_id, server_id, e, exc_info=True)
+        return business_response(
+            msg="连接 MCP server 失败，请检查地址、认证和网络后重试",
+            code=ErrorCode.CHATDATA_PLUGIN_INSTALL_FAILED,
+            status="error",
         )
 
 

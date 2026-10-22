@@ -83,6 +83,11 @@ async def list_plugins(*, limit: int = 50, offset: int = 0) -> dict[str, Any]:
     return {"plugins": ordered[offset : offset + limit], "total": len(ordered)}
 
 
+async def probe_mcp_server_tools(plugin_name: str, server_id: str) -> dict[str, Any]:
+    """探测插件声明的单个 MCP server（实现下沉到 agent/plugins/installer，避免 services→agent 新依赖边）。"""
+    return await installer.probe_mcp_server_tools(plugin_name, server_id)
+
+
 async def install_plugin(
     zip_bytes: bytes,
     *,

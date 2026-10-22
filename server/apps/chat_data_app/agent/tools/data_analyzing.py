@@ -746,7 +746,7 @@ def create_data_analyzing_tool(
         intent: str = "",
     ) -> str:
         """
-        数据分析合并工具：按 action 执行 DSL 校验、查询执行或语义模型 YAML 自检。常规查数流程（检索语义模型、确认字段口径、生成 DSL、校验、执行）以 `data-analyzing` 技能为准，本工具不重复定义。
+        数据分析合并工具：按 action 执行 DSL 校验、查询执行或语义模型 YAML 自检。调用前必须先 `load_skill("data-analyzing")` 加载技能（未加载会被前置门禁拒绝）；常规查数流程（检索语义模型、确认字段口径、生成 DSL、校验、执行）以 `data-analyzing` 技能为准，本工具不重复定义。
 
         Args:
             action: 操作类型，枚举：

@@ -4,7 +4,7 @@
 
 - B 端固定策略：审批中间件在交互会话始终装配；无人值守不装配且 ask 工具
   在装配层 fail-closed 剔除；
-- 需要审批的工具：内置注册表 ``ToolSpec.approval_required``（当前：文件删除/移动）
+- 需要审批的工具：系统工具 ``SYSTEM_TOOL_APPROVALS`` 映射（缺省 allow）
   + MCP 动态工具（不在注册表、第三方默认严格，按 ``mcp_`` 前缀统一 ask；
   ``mcp_tool_search`` 只读检索除外）；
 - 每工具审批档位（``plugin.json`` 的 ``mcp_servers[].tool_approvals``，按工具
@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 from uuid import uuid4
 
@@ -34,7 +34,7 @@ from langgraph.types import Command, interrupt
 
 from utils.logger import get_logger
 
-from ..tools.registry import APPROVAL_REQUIRED_TOOL_NAMES
+from ..approval_policy import resolve_approval_policies
 
 logger = get_logger(__name__)
 
@@ -66,25 +66,23 @@ class ToolApprovalMiddleware(AgentMiddleware):
         tool_labels: dict[str, str] | None = None,
         run_id: str | None = None,
         *,
-        allowed_tools: frozenset[str] | set[str] = frozenset(),
+        approval_policies: Mapping[str, str] | None = None,
     ) -> None:
         super().__init__()
         # 工具名 → 用户可见名（MCP 的 display_name；内置工具用原始名）
         self._tool_labels = dict(tool_labels or {})
         # 当前 run 标识（保留给调用方，审批决策不跨 run 复用）
         self._run_id = str(run_id or "")
-        # 每工具 allow 策略：仅该工具免审批；未知 MCP/注册表标记一律 ask。
-        self._allowed_tools = frozenset(allowed_tools)
+        # 统一审批策略映射：中间件不再区分系统工具/MCP 工具。
+        self._approval_policies = dict(approval_policies or {})
 
     def _needs_approval(self, tool_name: str) -> bool:
-        """固定工具策略：allow/未挂载 MCP 工具直行；其余需审批工具一律中断。"""
-        if tool_name in self._allowed_tools:
-            return False
+        """只查统一策略映射；allow 直行，未知/ask 中断。"""
         # 直连幻觉 MCP 名（不在本次装配工具表里）不弹审批：先让框架返回工具不存在，
         # 避免用户白批一次；代理到不存在目标同理。
         if tool_name.startswith(_MCP_TOOL_PREFIX) and tool_name not in self._tool_labels:
             return False
-        return requires_approval(tool_name)
+        return self._approval_policies.get(tool_name, "ask") == "ask"
 
     # ---- after_model：批量收集本轮到待审批调用，仅中断一次 ----
 
@@ -200,19 +198,6 @@ def _tool_args_preview(tool_call: Any) -> str:
     except (TypeError, ValueError):
         raw = str(args)
     return raw[:_ARGS_PREVIEW_MAX_CHARS]
-
-
-def requires_approval(tool_name: str) -> bool:
-    """工具是否需要人工审批：内置注册表标记 + MCP 动态工具（第三方默认严格）。
-
-    MCP 工具不在内置注册表里（运行时枚举），默认按 ask 处理；``mcp_tool_search``
-    是只读检索工具，不打断。交互会话始终装配本中间件。
-    """
-    if tool_name in APPROVAL_REQUIRED_TOOL_NAMES:
-        return True
-    if tool_name == _MCP_TOOL_SEARCH_TOOL_NAME:
-        return False
-    return tool_name.startswith(_MCP_TOOL_PREFIX)
 
 
 def _mcp_display_info(tool: Any) -> dict[str, str]:
@@ -494,10 +479,11 @@ async def _run_with_single_approval(
 def create_tool_approval_middleware(
     tools: list[Any] | None = None,
     run_id: str | None = None,
+    *,
+    approval_policies: Mapping[str, str] | None = None,
 ) -> AgentMiddleware:
-    """装配审批中间件；工具策略来自 metadata 的 ``approval=ask|allow``。"""
+    """装配审批中间件；策略由 ``approval_policy.resolve_approval_policies`` 统一解析。"""
     labels: dict[str, str] = {}
-    allowed_tools: set[str] = set()
     for tool in tools or []:
         name = str(getattr(tool, "name", "") or "")
         if not name:
@@ -505,7 +491,5 @@ def create_tool_approval_middleware(
         metadata = getattr(tool, "metadata", None)
         display = str(metadata.get("display_name") or "").strip() if isinstance(metadata, dict) else ""
         labels[name] = display or name
-        approval = str(metadata.get("approval") or "").strip() if isinstance(metadata, dict) else ""
-        if approval == "allow":
-            allowed_tools.add(name)
-    return ToolApprovalMiddleware(labels, run_id=run_id, allowed_tools=allowed_tools)
+    policies = dict(approval_policies) if approval_policies is not None else resolve_approval_policies(tools or [])
+    return ToolApprovalMiddleware(labels, run_id=run_id, approval_policies=policies)

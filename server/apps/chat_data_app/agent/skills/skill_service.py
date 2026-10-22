@@ -24,7 +24,12 @@ from apps.chat_data_app.services.agent_run.uploaded_file_service import (
 )
 from apps.chat_data_app.services.setting_service import get_runtime_setting, get_upload_size_limit
 from utils.logger import get_logger
-from utils.skill_paths import SYSTEM_SKILL_CATEGORY, USER_SKILL_CATEGORY, physical_skill_category_root
+from utils.skill_paths import (
+    SKILL_MD_MAX_BYTES,
+    SYSTEM_SKILL_CATEGORY,
+    USER_SKILL_CATEGORY,
+    physical_skill_category_root,
+)
 
 from ..plugins.loader import enabled_plugin_skill_sources, refresh_plugin_state
 from . import SkillMetadata, activate_skill, clear_metadata_cache, load_metadata, parse_metadata
@@ -405,12 +410,24 @@ def _validate_skill_payload(payload: dict[str, Any]) -> None:
         raise ValueError("技能标题不能为空")
 
 
+def _assert_skill_md_size(text: str) -> None:
+    """SKILL.md 入口大小上限；超限要求拆分到 references。"""
+    size = len(str(text).encode("utf-8"))
+    if size > SKILL_MD_MAX_BYTES:
+        raise ValueError(
+            f"SKILL.md 不能超过 {SKILL_MD_MAX_BYTES // 1024}KB（当前 {size / 1024:.1f}KB）；"
+            "请精简正文，把详细资料拆到 references/ 目录"
+        )
+
+
 def _write_skill_md(version_dir: Path, payload: dict[str, Any]) -> Path:
     """写入技能版本目录的 SKILL.md 并校验元数据。"""
     version_dir.mkdir(parents=True, exist_ok=True)
     _ensure_skill_dirs(version_dir)
     skill_md_path = version_dir / "SKILL.md"
-    skill_md_path.write_text(_build_skill_md(payload), encoding="utf-8")
+    content = _build_skill_md(payload)
+    _assert_skill_md_size(content)
+    skill_md_path.write_text(content, encoding="utf-8")
     parsed = parse_metadata(skill_md_path)
     if not parsed:
         raise ValueError("SKILL.md 元数据无效")
@@ -699,6 +716,7 @@ class SkillService:
         if not parsed:
             raise ValueError("SKILL.md 元数据无效")
         content = await asyncio.to_thread(skill_md_path.read_text, encoding="utf-8", errors="replace")
+        _assert_skill_md_size(content)
         skill = await self.create_user_skill_async(
             {
                 "skill_name": parsed.get("name") or resolved_source.name,
@@ -763,6 +781,7 @@ class SkillService:
             raise ValueError("技能版本目录无效")
         parsed = cast("dict[str, Any]", await asyncio.to_thread(parse_metadata, skill_md_path) or {})
         raw_content = await asyncio.to_thread(skill_md_path.read_text, encoding="utf-8", errors="replace")
+        _assert_skill_md_size(raw_content)
         return parsed, _strip_frontmatter(raw_content)
 
     async def _finalize_copied_skill_async(

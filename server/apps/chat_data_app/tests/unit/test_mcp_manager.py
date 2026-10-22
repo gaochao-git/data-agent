@@ -114,7 +114,8 @@ def _make_manager(*, config_loader=None, cache_ttl=60):
         tool_timeout_seconds=10,
         cache_ttl_seconds=cache_ttl,
         session_factory=factory,
-        config_loader=config_loader or (lambda: [MCPServerConfig(server_id="srv", transport="stdio", command="x")]),
+        config_loader=config_loader
+        or (lambda: [MCPServerConfig(server_id="srv", transport="streamable_http", url="https://mcp.example.com/mcp")]),
     )
     return manager, opens
 
@@ -122,15 +123,14 @@ def _make_manager(*, config_loader=None, cache_ttl=60):
 # ============ 配置解析 ============
 
 
-def test_parse_mcp_server_config_stdio_ok():
+def test_parse_mcp_server_config_streamable_http_ok():
     config = parse_mcp_server_config(
-        {"id": "fs", "transport": "stdio", "command": "npx", "args": ["-y", "srv"], "env": {"A": "1"}},
+        {"id": "fs", "transport": "streamable_http", "url": "https://mcp.example.com/mcp"},
         source="env",
     )
     assert config.server_id == "fs"
-    assert config.transport == "stdio"
-    assert config.args == ("-y", "srv")
-    assert config.env == {"A": "1"}
+    assert config.transport == "streamable_http"
+    assert config.url == "https://mcp.example.com/mcp"
     assert config.enabled is True
 
 
@@ -147,8 +147,8 @@ def test_parse_mcp_server_config_tool_labels_ok():
     config = parse_mcp_server_config(
         {
             "id": "srv",
-            "transport": "stdio",
-            "command": "x",
+            "transport": "streamable_http",
+            "url": "https://mcp.example.com/mcp",
             "tool_labels": {" echo ": " 回显 ", "greet": "问候"},
         },
         source="env",
@@ -211,6 +211,62 @@ def test_load_mcp_server_configs_plugin_only_skips_disabled_and_rejected(monkeyp
     assert [config.server_id for config in configs] == ["on"]
 
 
+def test_parse_mcp_server_config_requires_http_url():
+    with pytest.raises(MCPServerConfigError):
+        parse_mcp_server_config({"id": "ok", "transport": "streamable_http"}, source="env")
+
+
+def test_parse_mcp_server_config_rejects_blank_tool_labels_with_valid_transport():
+    with pytest.raises(MCPServerConfigError):
+        parse_mcp_server_config(
+            {
+                "id": "ok",
+                "transport": "streamable_http",
+                "url": "https://x.example/mcp",
+                "tool_labels": {" ": "回显"},
+            },
+            source="env",
+        )
+
+
+def test_parse_mcp_server_config_rejects_non_bool_enabled():
+    with pytest.raises(MCPServerConfigError):
+        parse_mcp_server_config(
+            {"id": "ok", "transport": "streamable_http", "url": "https://x.example/mcp", "enabled": "yes"},
+            source="env",
+        )
+
+
+def test_admit_config_logs_warnings_and_rejects_errors(monkeypatch):
+    from types import SimpleNamespace
+
+    from apps.chat_data_app.agent.mcp import config as mcp_config
+
+    config = MCPServerConfig(server_id="srv", transport="streamable_http", url="https://x.example/mcp")
+    report = SimpleNamespace(
+        warnings=[SimpleNamespace(code="warn", message="demo")],
+        ok=False,
+        summary=lambda: "bad",
+    )
+    monkeypatch.setattr(mcp_config, "validate_mcp_server_config", lambda _config: report)
+    assert mcp_config._admit_config(config, "test") is False
+
+
+def test_load_mcp_server_configs_skips_admission_rejected(monkeypatch):
+    from apps.chat_data_app.agent.plugins import loader as plugin_loader
+
+    entries = [
+        {
+            "id": "bad-header",
+            "transport": "streamable_http",
+            "url": "https://x.example/mcp",
+            "headers": {"X-Test": "bad\nvalue"},
+        }
+    ]
+    monkeypatch.setattr(plugin_loader, "enabled_plugin_mcp_servers", lambda: entries)
+    assert load_mcp_server_configs() == []
+
+
 # ============ 工具名 ============
 
 
@@ -254,8 +310,8 @@ async def test_list_tools_async_enumerates_and_caches():
 async def test_list_tools_async_fail_soft_on_bad_server():
     def config_loader():
         return [
-            MCPServerConfig(server_id="srv", transport="stdio", command="x"),
-            MCPServerConfig(server_id="bad", transport="stdio", command="x"),
+            MCPServerConfig(server_id="srv", transport="streamable_http", url="https://mcp.example.com/mcp"),
+            MCPServerConfig(server_id="bad", transport="streamable_http", url="https://bad.example.com/mcp"),
         ]
 
     manager, _opens = _make_manager(config_loader=config_loader)
@@ -266,7 +322,7 @@ async def test_list_tools_async_fail_soft_on_bad_server():
 @pytest.mark.asyncio
 async def test_list_tools_async_dedupes_colliding_qualified_names():
     def config_loader():
-        return [MCPServerConfig(server_id="s" * 80, transport="stdio", command="x")]
+        return [MCPServerConfig(server_id="s" * 80, transport="streamable_http", url="https://long.example.com/mcp")]
 
     manager, _opens = _make_manager(config_loader=config_loader)
     tools = await manager.list_tools_async()
@@ -282,8 +338,8 @@ async def test_list_tools_async_labels_from_config_and_fallback():
         return [
             MCPServerConfig(
                 server_id="srv",
-                transport="stdio",
-                command="x",
+                transport="streamable_http",
+                url="https://mcp.example.com/mcp",
                 tool_labels={"echo": "回显输入"},
             ),
         ]
@@ -345,7 +401,9 @@ async def test_call_tool_async_marks_input_required_result():
     manager = MCPToolManager(
         tool_timeout_seconds=10,
         session_factory=factory,
-        config_loader=lambda: [MCPServerConfig(server_id="srv", transport="stdio", command="x")],
+        config_loader=lambda: [
+            MCPServerConfig(server_id="srv", transport="streamable_http", url="https://mcp.example.com/mcp")
+        ],
     )
     result = await manager.call_tool_async("srv", "ask", {})
     assert result.startswith("[mcp tool input_required]")
@@ -368,7 +426,9 @@ async def test_list_tools_async_adopts_server_ttl_hint():
         tool_timeout_seconds=10,
         cache_ttl_seconds=300,
         session_factory=factory,
-        config_loader=lambda: [MCPServerConfig(server_id="srv", transport="stdio", command="x")],
+        config_loader=lambda: [
+            MCPServerConfig(server_id="srv", transport="streamable_http", url="https://mcp.example.com/mcp")
+        ],
     )
     await manager.list_tools_async()
     # 基础 TTL 不被永久改写；生效 TTL 取服务端提示换算的更短者
@@ -499,7 +559,7 @@ def test_load_mcp_server_configs_uses_plugin_entries_only(monkeypatch):
 
     - 重复 id：后到者告警后忽略；
     - 插件条目 enabled=false：跳过；
-    - sse 传输：废弃告警但仍生效（兼容旧 server）；
+    - 非 streamable_http 传输：拒绝；
     - 非法条目：忽略不阻断。
 
     告警走项目自定义日志器（handler 绑定全局流，caplog/capsys/capfd 均收不到），
@@ -527,20 +587,18 @@ def test_load_mcp_server_configs_uses_plugin_entries_only(monkeypatch):
 
     configs = load_mcp_server_configs()
 
-    assert [config.server_id for config in configs] == ["docs", "search"]
-    by_id = {config.server_id: config for config in configs}
-    assert by_id["docs"].url == "https://docs.example.com/mcp"
-    assert by_id["search"].transport == "sse"
-    assert any("sse 传输已废弃" in message for message in records)
+    assert [config.server_id for config in configs] == ["docs"]
+    assert configs[0].url == "https://docs.example.com/mcp"
     assert any("插件 MCP server id 重复" in message for message in records)
+    assert any("transport 只支持" in message for message in records)
 
 
 def test_parse_mcp_server_config_tool_approvals_ok():
     config = parse_mcp_server_config(
         {
             "id": "srv",
-            "transport": "stdio",
-            "command": "x",
+            "transport": "streamable_http",
+            "url": "https://mcp.example.com/mcp",
             "tool_approvals": {"echo": "allow", "greet": "ask"},
         },
         source="env",
@@ -552,7 +610,12 @@ def test_parse_mcp_server_config_rejects_invalid_tool_approvals():
     for approvals in ({"echo": "bad"}, {" ": "ask"}, "not-a-dict"):
         with pytest.raises(MCPServerConfigError):
             parse_mcp_server_config(
-                {"id": "ok", "transport": "stdio", "command": "x", "tool_approvals": approvals},
+                {
+                    "id": "ok",
+                    "transport": "streamable_http",
+                    "url": "https://mcp.example.com/mcp",
+                    "tool_approvals": approvals,
+                },
                 source="env",
             )
 
@@ -563,8 +626,8 @@ async def test_list_tools_async_keeps_ask_allow_approval_policy():
         return [
             MCPServerConfig(
                 server_id="srv",
-                transport="stdio",
-                command="x",
+                transport="streamable_http",
+                url="https://mcp.example.com/mcp",
                 tool_approvals={"echo": "allow", "greet": "ask"},
             ),
         ]
@@ -593,8 +656,8 @@ def test_parse_mcp_server_config_normalizes_legacy_approval_values():
     config = parse_mcp_server_config(
         {
             "id": "srv",
-            "transport": "stdio",
-            "command": "x",
+            "transport": "streamable_http",
+            "url": "https://mcp.example.com/mcp",
             "tool_approvals": {"old_auto": "auto", "old_force": "force_ask"},
         },
         source="env",
@@ -606,8 +669,8 @@ def test_parse_mcp_server_config_keeps_legacy_deny_for_tool_level_filter():
     config = parse_mcp_server_config(
         {
             "id": "srv",
-            "transport": "stdio",
-            "command": "x",
+            "transport": "streamable_http",
+            "url": "https://mcp.example.com/mcp",
             "tool_approvals": {"old_deny": "deny"},
         },
         source="env",
@@ -621,8 +684,8 @@ async def test_list_tools_async_skips_only_legacy_deny_tools():
         return [
             MCPServerConfig(
                 server_id="srv",
-                transport="stdio",
-                command="x",
+                transport="streamable_http",
+                url="https://mcp.example.com/mcp",
                 tool_approvals={"echo": "deny", "greet": "ask"},
             ),
         ]
