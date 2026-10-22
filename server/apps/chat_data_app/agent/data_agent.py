@@ -50,13 +50,13 @@ from .prompts.chat_data import (
 )
 from .runtime_options import AgentRuntimeOptions, get_chat_data_default_runtime_options
 from .tools.registry import (
-    APPROVAL_REQUIRED_TOOL_NAMES,
     DATA_EXPLORE_EXTRA_EXCLUDED_TOOL_NAMES,
     GENERAL_PURPOSE_EXTRA_EXCLUDED_TOOL_NAMES,
     PLAN_EXTRA_EXCLUDED_TOOL_NAMES,
     SUBAGENT_BASE_EXCLUDED_TOOL_NAMES,
     TOOL_SPECS,
     ToolBuildContext,
+    system_approval_required_tools,
 )
 from .workspace.runtime import ConversationWorkspaceRuntime, ensure_conversation_workspace
 
@@ -74,8 +74,8 @@ class AgentRunControls:
     五个字段全部非空才启用，缺任何一个都视为本次运行不支持中断续跑，
     静默降级为无围栏、无 steering 的普通运行。
 
-    ``disable_user_interaction``：无人值守时不装配审批中间件；内置审批工具
-    （``ToolSpec.approval_required``）与 MCP ``tool_approvals=ask`` 工具在装配层
+    ``disable_user_interaction``：无人值守时不装配审批中间件；系统工具
+    ``SYSTEM_TOOL_APPROVALS=ask`` 与 MCP ``tool_approvals=ask`` 工具在装配层
     fail-closed 剔除，不向模型暴露。
     """
 
@@ -216,9 +216,8 @@ def _filter_tools_for_unattended(builtin_tools: list, mcp_tools: list) -> tuple[
     """无人值守 fail-closed：剔除内置审批工具与 MCP ask 工具，返回过滤结果与排除集。"""
     excluded_mcp_names = frozenset(str(tool.name) for tool in mcp_tools if _requires_approval_tool(tool))
     kept_mcp = [tool for tool in mcp_tools if str(tool.name) not in excluded_mcp_names]
-    kept_builtin = [
-        tool for tool in builtin_tools if str(getattr(tool, "name", "") or "") not in APPROVAL_REQUIRED_TOOL_NAMES
-    ]
+    ask_builtin_names = system_approval_required_tools()
+    kept_builtin = [tool for tool in builtin_tools if str(getattr(tool, "name", "") or "") not in ask_builtin_names]
     return kept_builtin, kept_mcp, excluded_mcp_names
 
 
@@ -310,12 +309,11 @@ def _filter_subagent_tools(tools: list, excluded: frozenset) -> list:
 
 
 def _subagent_approval_exclusions() -> frozenset[str]:
-    """子智能体不挂审批工具：子图不支持人工中断，委派删除/移动会绕过审批。
+    """子智能体不挂未来新增的审批工具：子图不支持人工中断，避免委派绕过审批。
 
-    与 ``ask_user_question`` 同款处理——子智能体哲学是「不注册人工交互」，
-    审批类工具始终从能力面剔除（交互与无人值守一致，fail-closed）。
+    当前系统工具统一 allow，集合为空；若注册表重新声明审批工具，自动剔除。
     """
-    return APPROVAL_REQUIRED_TOOL_NAMES
+    return system_approval_required_tools()
 
 
 def _general_purpose_system_prompt(approval_tools_excluded: bool) -> str:
@@ -675,8 +673,8 @@ def create_agent_from_spec(
     if run_controls is not None and run_controls.disable_user_interaction:
         effective_system_prompt += (
             "\n\n## 无人值守能力边界\n"
-            "- 本次运行无人实时应答，需要人工审批的工具（文件删除、移动、目录删除等）不会挂载。\n"
-            "- 不要尝试调用这些工具；如任务必须删除/移动文件，请明确说明能力受限并给出替代方案。"
+            "- 本次运行无人实时应答，需要人工审批的工具（例如 MCP 插件中 ask 档位的工具）不会挂载。\n"
+            "- 不要尝试调用这些工具；如任务必须使用，请明确说明能力受限并给出替代方案。"
         )
     context_request_budget.configure(effective_system_prompt, tools, model_id=model_id)
     context_request_budget.validate_static_input()

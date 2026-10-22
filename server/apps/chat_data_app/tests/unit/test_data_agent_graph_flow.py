@@ -447,7 +447,7 @@ def test_create_data_agent_registers_mcp_search_and_proxy(monkeypatch, tmp_path)
     assert agent.name == "agent"
 
 
-def test_create_data_agent_unattended_filters_builtin_approval_tools(monkeypatch, tmp_path):
+def test_create_data_agent_unattended_keeps_allow_system_tools(monkeypatch, tmp_path):
     from apps.chat_data_app.agent.data_agent import AgentRunControls
 
     captured: dict = {}
@@ -469,6 +469,5 @@ def test_create_data_agent_unattended_filters_builtin_approval_tools(monkeypatch
 
     names = [getattr(tool, "name", "") for tool in captured["tools"]]
     assert "file_read" in names
-    assert "file_delete" not in names
-    assert "file_move" not in names
-    assert "无人值守能力边界" in captured["system_prompt"]
+    assert "file_delete" in names
+    assert "file_move" in names

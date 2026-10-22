@@ -218,7 +218,7 @@ GENERAL_PURPOSE_SUBAGENT_PROMPT = f"""# 角色
 {ENVIRONMENT_BLOCK}
 """
 
-# 子智能体不挂删除/移动工具（审批入口只在主智能体侧生效）：
+# 子智能体不挂审批工具时（系统工具当前为 allow，默认不触发）：
 # 就地声明能力缺口，避免模型反复试探或改用覆盖写/脚本等间接方式达成删除效果。
 # 只在剔除生效时拼接（见 data_agent._general_purpose_system_prompt）。
 GENERAL_PURPOSE_NO_DELETE_HINT = """

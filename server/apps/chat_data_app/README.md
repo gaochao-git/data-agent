@@ -114,7 +114,7 @@ ChatData 文件型数据统一位于 `CHAT_DATA_HOME`（**必填**，应用唯�
 
 - **文件工具（`file_read` / `file_edit` / `file_write` / `file_move` / `file_copy` / `file_delete` / `file_glob` / `file_grep` / `dir_create` / `dir_list` / `dir_delete` / `present_artifacts`）始终可用且始终严格路径管控**。工具只调用 `ConversationWorkspaceRuntime`；运行时将读写、目录遍历和产物解析委托给 `WorkspaceBackend`。会话开始前构建可见技能快照，模型通过 `file_read` 只读访问 `/mnt/skills/<name>/SKILL.md` 及其在技能入口中声明的资源。`local` 直接访问受控会话目录，`sandbox` 经 OpenSandbox Files API 访问一次性沙箱副本，不允许工具层按 backend 分支或直接读宿主路径。只有 Bash 工具会在受控模式（`bash_enabled=false`）下不注册。
 - **隔离模式 / Bash 属于部署能力**：只由 `CHAT_DATA_DEFAULT_WORKSPACE_BACKEND` / `CHAT_DATA_DEFAULT_BASH_ENABLED`（env 或部署配置）决定，**不再接受前端动态传参**（旧 `runtime_options` 请求字段已被忽略并移除，`CHAT_DATA_CAPABILITY_USER_OVERRIDABLE` 一并下线）。
-- **工具审批（B 端固定策略）**：注册表 `ToolSpec.approval_required` 标记需人工确认的工具（当前 `file_delete` / `dir_delete` / `file_move`），MCP 动态工具默认也需审批（插件 `tool_approvals=allow` 豁免，`mcp_tool_search` 只读检索除外）；每个工具档位固定为 `ask/allow`，用户不可切换。审批卡只提供「允许 / 拒绝」，并行工具调用合并为一张卡逐条选择，不产生本轮/本会话持久授权。无人值守运行（定时任务/评测）不装配审批中间件，ask 工具在装配层 fail-closed 剔除；子智能体同样物理剔除审批工具，并声明删除/移动能力缺口。中间件实现见 `agent/middleware/tool_approval.py`。
+- **工具审批（B 端固定策略）**：系统工具通过 `SYSTEM_TOOL_APPROVALS` 映射配置，当前统一 allow，MCP 动态工具默认需审批（插件 `tool_approvals=allow` 豁免，`mcp_tool_search` 只读检索除外）；每个工具档位固定为 `ask/allow`，用户不可切换。审批卡只提供「允许 / 拒绝」，并行工具调用合并为一张卡逐条选择，不产生本轮/本会话持久授权。无人值守运行（定时任务/评测）不装配审批中间件，ask 工具在装配层 fail-closed 剔除；子智能体不继承 MCP 动态工具。中间件实现见 `agent/middleware/tool_approval.py`。
 
 ```text
 index.vue

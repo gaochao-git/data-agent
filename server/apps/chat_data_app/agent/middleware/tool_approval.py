@@ -4,7 +4,7 @@
 
 - B 端固定策略：审批中间件在交互会话始终装配；无人值守不装配且 ask 工具
   在装配层 fail-closed 剔除；
-- 需要审批的工具：内置注册表 ``ToolSpec.approval_required``（当前：文件删除/移动）
+- 需要审批的工具：系统工具 ``SYSTEM_TOOL_APPROVALS`` 映射（缺省 allow）
   + MCP 动态工具（不在注册表、第三方默认严格，按 ``mcp_`` 前缀统一 ask；
   ``mcp_tool_search`` 只读检索除外）；
 - 每工具审批档位（``plugin.json`` 的 ``mcp_servers[].tool_approvals``，按工具
@@ -34,7 +34,7 @@ from langgraph.types import Command, interrupt
 
 from utils.logger import get_logger
 
-from ..tools.registry import APPROVAL_REQUIRED_TOOL_NAMES
+from ..tools.registry import SYSTEM_TOOL_APPROVALS, provided_tool_names, system_tool_approval
 
 logger = get_logger(__name__)
 
@@ -208,8 +208,8 @@ def requires_approval(tool_name: str) -> bool:
     MCP 工具不在内置注册表里（运行时枚举），默认按 ask 处理；``mcp_tool_search``
     是只读检索工具，不打断。交互会话始终装配本中间件。
     """
-    if tool_name in APPROVAL_REQUIRED_TOOL_NAMES:
-        return True
+    if tool_name in SYSTEM_TOOL_APPROVALS or tool_name in provided_tool_names():
+        return system_tool_approval(tool_name) == "ask"
     if tool_name == _MCP_TOOL_SEARCH_TOOL_NAME:
         return False
     return tool_name.startswith(_MCP_TOOL_PREFIX)

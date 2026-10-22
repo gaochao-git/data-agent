@@ -24,6 +24,13 @@ from apps.chat_data_app.agent.middleware.tool_approval import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _synthetic_system_approval_policy(monkeypatch):
+    """审批中间件单测使用合成策略：真实系统工具已统一 allow，MCP 仍默认 ask。"""
+    for tool_name in ("file_delete", "dir_delete", "file_move"):
+        monkeypatch.setitem(tool_approval.SYSTEM_TOOL_APPROVALS, tool_name, "ask")
+
+
 def _request(tool_name: str = "file_delete") -> SimpleNamespace:
     return SimpleNamespace(
         tool_call={"id": "call-1", "name": tool_name, "args": {"path": "/mnt/user-data/workspace/a.txt"}},

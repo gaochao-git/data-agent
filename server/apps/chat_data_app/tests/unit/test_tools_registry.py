@@ -120,15 +120,16 @@ def test_user_interaction_tools_are_marked():
     )
 
 
-def test_approval_required_tools_are_declared_and_valid():
-    """审批工具名必须是注册表实际提供的工具（防拼写错误导致审批形同虚设）。"""
-    from apps.chat_data_app.agent.tools.registry import APPROVAL_REQUIRED_TOOL_NAMES, provided_tool_names
+def test_system_tools_use_same_ask_allow_map_as_mcp():
+    """系统工具与 MCP 同一套 tool -> ask/allow 口径，当前全部为 allow。"""
+    from apps.chat_data_app.agent.tools.registry import (
+        SYSTEM_TOOL_APPROVALS,
+        provided_tool_names,
+    )
 
-    assert sorted(APPROVAL_REQUIRED_TOOL_NAMES) == ["dir_delete", "file_delete", "file_move"]
-    assert APPROVAL_REQUIRED_TOOL_NAMES.issubset(provided_tool_names())
-    # 读写/检索不打断
-    assert "file_read" not in APPROVAL_REQUIRED_TOOL_NAMES
-    assert "file_write" not in APPROVAL_REQUIRED_TOOL_NAMES
+    assert set(SYSTEM_TOOL_APPROVALS) == provided_tool_names()
+    assert set(SYSTEM_TOOL_APPROVALS.values()) == {"allow"}
+    assert frozenset() == frozenset(name for name, approval in SYSTEM_TOOL_APPROVALS.items() if approval == "ask")
 
 
 def test_required_skills_target_builtin_skills_only():
@@ -148,3 +149,17 @@ def test_required_skills_target_builtin_skills_only():
     for tool_name, skills in TOOL_REQUIRED_SKILLS.items():
         unknown = set(skills) - known
         assert not unknown, f"{tool_name} 声明了未登记的技能名: {sorted(unknown)}"
+
+
+def test_system_tool_approval_is_configurable_and_fail_closed(monkeypatch):
+    from apps.chat_data_app.agent.tools.registry import (
+        SYSTEM_TOOL_APPROVALS,
+        system_approval_required_tools,
+        system_tool_approval,
+    )
+
+    assert system_tool_approval("file_delete") == "allow"
+    assert system_tool_approval("not-registered-tool") == "ask"
+    monkeypatch.setitem(SYSTEM_TOOL_APPROVALS, "file_delete", "ask")
+    assert system_tool_approval("file_delete") == "ask"
+    assert "file_delete" in system_approval_required_tools()

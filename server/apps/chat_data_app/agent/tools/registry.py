@@ -66,17 +66,15 @@ class ToolSpec:
     无人值守运行（定时轮）装配时跳过此类条目——用户不在场，提问必然悬挂在
     waiting_user 等待应答，从装配层剔除即从根上关闭提问入口。
 
-    ``approval_required``：需要人工审批才能执行的工具名（⊆ provides，按工具粒度
-    声明——同一条目可提供多个工具，如文件工具组只有删除/移动需要审批）。它是
-    **默认策略**：审批模式下装配 ``ToolApprovalMiddleware`` 在执行前中断询问；
-    自动模式直接执行；无人值守不可能弹窗，因此由装配/运行侧强制自动模式。
+    系统工具审批策略由下方 ``SYSTEM_TOOL_APPROVALS`` 映射统一配置（与 MCP
+    插件相同的 tool -> ask/allow 口径）；第三方 MCP 工具由插件
+    ``tool_approvals`` 独立控制。
     """
 
     provides: tuple[str, ...]
     build: Callable[[ToolBuildContext], Sequence[Any]]
     note: str = ""
     requires_user_interaction: bool = False
-    approval_required: tuple[str, ...] = ()
     # 调用该工具前必须先 load_skill 的技能名；空表示无技能前置
     required_skills: tuple[str, ...] = ()
 
@@ -99,8 +97,6 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
         ),
         build=lambda ctx: create_filesystem_tools(ctx.workspace_runtime),
         note="会话工作区文件读写、检索与目录操作",
-        # 破坏性/移动类操作默认按需审批；读写与检索不打断
-        approval_required=("file_delete", "dir_delete", "file_move"),
     ),
     ToolSpec(
         provides=("parse_document",),
@@ -167,13 +163,52 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
 )
 
 
+# 系统工具审批策略：与 MCP 插件相同的 tool -> ask/allow 映射。
+# 当前显式配置为 allow；需要审批时把对应工具改成 "ask"。
+# 新增系统工具若忘记配置，system_tool_approval 默认 ask（fail-closed）。
+SYSTEM_TOOL_APPROVALS: dict[str, str] = {
+    "file_read": "allow",
+    "file_edit": "allow",
+    "file_write": "allow",
+    "file_move": "allow",
+    "file_copy": "allow",
+    "file_delete": "allow",
+    "file_glob": "allow",
+    "file_grep": "allow",
+    "file_diff": "allow",
+    "dir_create": "allow",
+    "dir_list": "allow",
+    "dir_delete": "allow",
+    "parse_document": "allow",
+    "read_image": "allow",
+    "present_artifacts": "allow",
+    "get_current_time": "allow",
+    "load_skill": "allow",
+    "data_analyzing_tool": "allow",
+    "calculator_tool": "allow",
+    "ask_user_question": "allow",
+    "officecli_run": "allow",
+    "bash_run": "allow",
+}
+
+# 未显式配置的系统工具默认 ask；MCP 动态工具仍由插件 tool_approvals 默认 ask。
+SYSTEM_TOOL_APPROVAL_DEFAULT = "ask"
+
+
+def system_tool_approval(tool_name: str) -> str:
+    """返回系统工具审批档位；未配置时 fail-closed 为 ask。"""
+    return SYSTEM_TOOL_APPROVALS.get(str(tool_name or "").strip(), SYSTEM_TOOL_APPROVAL_DEFAULT)
+
+
 def provided_tool_names() -> frozenset[str]:
     """注册表声明的全部工具名（含受开关控制、当前未挂载的工具）。"""
     return frozenset(name for spec in TOOL_SPECS for name in spec.provides)
 
 
-# 需人工审批的工具名派生集合（审批中间件按名匹配）；空 = 当前无工具需要审批。
-APPROVAL_REQUIRED_TOOL_NAMES: frozenset[str] = frozenset(name for spec in TOOL_SPECS for name in spec.approval_required)
+def system_approval_required_tools() -> frozenset[str]:
+    """返回当前需要 ask 的系统工具名（含未显式配置的新工具）。"""
+    return frozenset(name for name in provided_tool_names() if system_tool_approval(name) == "ask")
+
 
 # 工具 → 必需技能（调用前必须已加载）。只给明确依赖技能流程的工具声明，不全局强制。
 TOOL_REQUIRED_SKILLS: dict[str, tuple[str, ...]] = {
@@ -231,7 +266,10 @@ __all__ = [
     "ToolBuildContext",
     "ToolSpec",
     "TOOL_SPECS",
-    "APPROVAL_REQUIRED_TOOL_NAMES",
+    "SYSTEM_TOOL_APPROVALS",
+    "SYSTEM_TOOL_APPROVAL_DEFAULT",
+    "system_tool_approval",
+    "system_approval_required_tools",
     "TOOL_REQUIRED_SKILLS",
     "provided_tool_names",
     "SUBAGENT_BASE_EXCLUDED_TOOL_NAMES",
