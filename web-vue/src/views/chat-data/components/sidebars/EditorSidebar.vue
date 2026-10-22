@@ -16,7 +16,9 @@ const tooltipState = reactive({
   y: 0,
   sections: [] as FieldTooltipSection[]
 })
-let tooltipHideTimer: ReturnType<typeof window.setTimeout> | null = null
+// window.setTimeout 在浏览器里返回 number；不写成 ReturnType<typeof window.setTimeout>，
+// 否则单测程序（tsconfig.vitest 无 DOM lib）会把它解析成 NodeJS.Timeout 与实参类型冲突
+let tooltipHideTimer: number | null = null
 
 const clearTooltipHideTimer = () => {
   if (!tooltipHideTimer) return
@@ -84,21 +86,25 @@ interface DataSource {
 interface Props {
   datasource: DataSource | null
   loading?: boolean
+  refreshing?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
-  loading: false
+  loading: false,
+  refreshing: false
 })
 
 const emit = defineEmits<{
   insertTable: [tableName: string]
   insertColumn: [tableName: string, columnName: string]
+  refresh: []
 }>()
 
 // 搜索和展开
 const searchText = ref('')
 const expandedTables = ref<Set<string>>(new Set())
-const collapsedGroups = ref<Set<string>>(new Set())
+// 分组默认折叠：只记录用户主动展开的分组，切换数据源时清空
+const expandedGroups = ref<Set<string>>(new Set())
 const tableLabelMode = ref<'name' | 'description'>('name')
 const { getColumnDict, loadTableColumnDicts, resetColumnDictCache } = useColumnDictCache()
 
@@ -208,26 +214,68 @@ const toggleTable = (tableName: string, physicalTableName = tableName) => {
   expandedTables.value = newSet
 }
 
-const isGroupExpanded = (groupName: string) => !collapsedGroups.value.has(groupName)
+// 搜索时自动展开分组，否则命中结果会被折叠挡住；清空搜索后回到用户手动展开的状态
+const isGroupExpanded = (groupName: string) => !!searchText.value.trim() || expandedGroups.value.has(groupName)
 
 const toggleGroup = (groupName: string) => {
-  const nextCollapsedGroups = new Set(collapsedGroups.value)
-  if (nextCollapsedGroups.has(groupName)) {
-    nextCollapsedGroups.delete(groupName)
+  const nextExpandedGroups = new Set(expandedGroups.value)
+  if (nextExpandedGroups.has(groupName)) {
+    nextExpandedGroups.delete(groupName)
   } else {
-    nextCollapsedGroups.add(groupName)
+    nextExpandedGroups.add(groupName)
   }
-  collapsedGroups.value = nextCollapsedGroups
+  expandedGroups.value = nextExpandedGroups
+}
+
+// 一键展开/折叠：全部展开态下按钮语义为「全部折叠」，否则为「全部展开」。
+// 只对当前可见（过滤后）分组生效，避免把已被搜索过滤掉的分组也塞进展开集合。
+const allGroupsExpanded = computed(
+  () => groupedTables.value.length > 0 && groupedTables.value.every(group => expandedGroups.value.has(group.name))
+)
+
+const toggleAllGroups = () => {
+  expandedGroups.value = allGroupsExpanded.value
+    ? new Set<string>()
+    : new Set(groupedTables.value.map(group => group.name))
 }
 
 watch(
   () => props.datasource?.id,
   () => {
     expandedTables.value = new Set()
-    collapsedGroups.value = new Set()
+    expandedGroups.value = new Set()
     resetColumnDictCache()
   }
 )
+
+// 刷新期间表结构未定，先清空字段字典缓存；刷新完成后为仍展开的表重新拉取，
+// 否则已展开表的悬浮提示会一直用刷新前的旧字典（展开态不会重新触发加载）。
+const expandedPhysicalTableNames = () => {
+  const tableNames = new Set((props.datasource?.ds_tables || []).map(table => table.table_name))
+  return Array.from(expandedTables.value)
+    .map(key => (key.includes(':') ? key.slice(key.indexOf(':') + 1) : key))
+    .filter(tableName => tableNames.has(tableName))
+}
+
+watch(
+  () => props.refreshing,
+  (refreshing, wasRefreshing) => {
+    if (refreshing) {
+      resetColumnDictCache()
+      return
+    }
+    if (!wasRefreshing) return
+    const datasourceId = props.datasource?.id || ''
+    if (!datasourceId) return
+    expandedPhysicalTableNames().forEach(tableName => {
+      void loadTableColumnDicts(datasourceId, tableName)
+    })
+  }
+)
+
+const handleRefreshClick = () => {
+  emit('refresh')
+}
 
 const handleInsertTableClick = (tableName: string) => {
   emit('insertTable', tableName)
@@ -250,23 +298,46 @@ const getFieldType = (col: ColumnInfo): 'string' | 'number' | 'date' => {
   <div class="flex flex-col h-full overflow-hidden bg-white">
     <!-- 搜索框 -->
     <div class="sidebar-baseline-target">
-      <div class="relative">
-        <i class="fa-solid fa-magnifying-glass absolute left-[10px] top-1/2 -translate-y-1/2 text-[12px] text-[#57585a]"></i>
-        <input
-          v-model="searchText"
-          type="text"
-          placeholder="支持中英文搜索表名/字段"
-          class="w-full h-[28px] pl-[28px] pr-[34px] bg-white border border-[#e3e5eb] rounded text-[12px] text-[#21252C] outline-none transition-all duration-150 focus:border-[#165DFF] placeholder:text-[#93949580]"
-        />
+      <div class="flex items-center">
+        <div class="relative min-w-0 flex-1">
+          <i class="fa-solid fa-magnifying-glass absolute left-[10px] top-1/2 -translate-y-1/2 text-[12px] text-[#57585a]"></i>
+          <input
+            v-model="searchText"
+            type="text"
+            placeholder="支持中英文搜索表名/字段"
+            class="w-full h-[28px] pl-[28px] pr-[34px] bg-white border border-[#e3e5eb] rounded text-[12px] text-[#21252C] outline-none transition-all duration-150 focus:border-[#165DFF] placeholder:text-[#93949580]"
+          />
+          <button
+            type="button"
+            class="absolute right-[5px] top-1/2 -translate-y-1/2 min-w-[30px] h-5.5 px-1 border border-[#e3e5eb] rounded bg-white text-[10px] leading-none text-[#57585a] hover:text-[#165DFF] hover:border-[#B3DBD2] transition-colors"
+            :title="tableLabelMode === 'name' ? '当前显示：英文表名/字段名，点击切换为中文备注' : '当前显示：中文备注，点击切换为英文表名/字段名'"
+            @click="tableLabelMode = tableLabelMode === 'name' ? 'description' : 'name'"
+          >
+            <span :class="tableLabelMode === 'description' ? 'text-[#165DFF] font-semibold' : 'text-[#57585a]'">中</span>
+            <span class="text-[#B8BDC7]">/</span>
+            <span :class="tableLabelMode === 'name' ? 'text-[#165DFF] font-semibold' : 'text-[#57585a]'">英</span>
+          </button>
+        </div>
+        <button
+          v-if="hasTableGroups"
+          type="button"
+          class="ml-1 h-[28px] w-[28px] shrink-0 rounded border border-[#DDE1E8] bg-white text-[#5B5C60] transition-colors hover:border-[#165DFF] hover:text-[#165DFF] disabled:cursor-not-allowed disabled:opacity-50"
+          :disabled="groupedTables.length === 0 || !!searchText.trim()"
+          :title="searchText.trim() ? '搜索时分组自动展开，清空搜索后可一键收起' : allGroupsExpanded ? '全部折叠分组' : '全部展开分组'"
+          data-testid="editor-groups-toggle-all"
+          @click="toggleAllGroups"
+        >
+          <i :class="['fa-solid text-[12px]', allGroupsExpanded ? 'fa-angles-up' : 'fa-angles-down']"></i>
+        </button>
         <button
           type="button"
-          class="absolute right-[5px] top-1/2 -translate-y-1/2 min-w-[30px] h-5.5 px-1 border border-[#e3e5eb] rounded bg-white text-[10px] leading-none text-[#57585a] hover:text-[#165DFF] hover:border-[#B3DBD2] transition-colors"
-          :title="tableLabelMode === 'name' ? '当前显示：英文表名/字段名，点击切换为中文备注' : '当前显示：中文备注，点击切换为英文表名/字段名'"
-          @click="tableLabelMode = tableLabelMode === 'name' ? 'description' : 'name'"
+          class="ml-1 h-[28px] w-[28px] shrink-0 rounded border border-[#DDE1E8] bg-white text-[#5B5C60] transition-colors hover:border-[#165DFF] hover:text-[#165DFF] disabled:cursor-not-allowed disabled:opacity-50"
+          :disabled="loading || refreshing || !datasource"
+          :title="refreshing ? '正在刷新表列表' : '刷新表列表'"
+          data-testid="editor-tables-refresh"
+          @click="handleRefreshClick"
         >
-          <span :class="tableLabelMode === 'description' ? 'text-[#165DFF] font-semibold' : 'text-[#57585a]'">中</span>
-          <span class="text-[#B8BDC7]">/</span>
-          <span :class="tableLabelMode === 'name' ? 'text-[#165DFF] font-semibold' : 'text-[#57585a]'">英</span>
+          <i :class="['fa-solid fa-rotate-right text-[12px]', loading || refreshing ? 'fa-spin' : '']"></i>
         </button>
       </div>
     </div>
@@ -340,6 +411,7 @@ const getFieldType = (col: ColumnInfo): 'string' | 'number' | 'date' => {
         <div v-for="group in groupedTables" :key="group.name" class="mb-2">
           <div
             class="flex h-[28px] cursor-pointer items-center gap-1.5 rounded px-4 text-[12px] font-semibold text-[#57585a] transition-colors hover:bg-[#f0f1f3]"
+            :data-testid="`editor-group-${group.name}`"
             @click="toggleGroup(group.name)"
           >
             <i :class="['fa-solid fa-chevron-right text-[10px] text-[#57585a] transition-transform duration-150', isGroupExpanded(group.name) && 'rotate-90']"></i>

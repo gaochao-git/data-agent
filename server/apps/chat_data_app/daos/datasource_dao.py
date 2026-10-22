@@ -572,7 +572,13 @@ class DataSourceDao:
             return None
         datasource = self._map_group_row(row)
         datasource["ds_tables"] = await self.get_datasource_tables_by_group_id_async(datasource["group_id"])
-        datasource["member_datasource_ids"] = await self.get_group_member_datasource_ids_async(datasource["group_id"])
+        # group 行上面已经取到，直接解析成员 ID，不再回查同一行
+        datasource["member_datasource_ids"] = _parse_member_sources_text(
+            row.get("member_sources_text"),
+            row.get("template_source"),
+            row.get("source_type"),
+            None,
+        )
         datasource["member_sources"] = self._build_member_sources(row)
         return datasource
 
@@ -596,7 +602,12 @@ class DataSourceDao:
             return None
         datasource = self._map_group_row(row)
         datasource["ds_tables"] = await self.get_datasource_tables_by_group_id_async(datasource["group_id"])
-        datasource["member_datasource_ids"] = await self.get_group_member_datasource_ids_async(datasource["group_id"])
+        datasource["member_datasource_ids"] = _parse_member_sources_text(
+            row.get("member_sources_text"),
+            row.get("template_source"),
+            row.get("source_type"),
+            None,
+        )
         datasource["member_sources"] = self._build_member_sources(row)
         return datasource
 
@@ -631,7 +642,12 @@ class DataSourceDao:
             return None
         datasource = self._map_group_row(row)
         datasource["ds_tables"] = await self.get_datasource_tables_by_group_id_async(datasource["group_id"])
-        datasource["member_datasource_ids"] = await self.get_group_member_datasource_ids_async(datasource["group_id"])
+        datasource["member_datasource_ids"] = _parse_member_sources_text(
+            row.get("member_sources_text"),
+            row.get("template_source"),
+            row.get("source_type"),
+            None,
+        )
         datasource["member_sources"] = self._build_member_sources(row)
         return datasource
 

@@ -768,10 +768,15 @@ class DataSourceManager:
 
     async def get_table_groups_async(self, datasource_id: str) -> list[dict[str, Any]]:
         """异步获取数据源内的表分组关系。"""
-        datasource = await self.datasource_dao.get_datasource_async(datasource_id)
+        # 只需要 group_id 定位关系行，用轻量 meta：重接口会把全量表结构也拉进来
+        datasource = await self.datasource_dao.get_datasource_meta_async(datasource_id)
         if not datasource:
             return []
-        relations = await self.datasource_dao.get_table_group_relations_async(str(datasource.get("group_id") or ""))
+        return await self.get_table_groups_by_group_id_async(str(datasource.get("group_id") or ""))
+
+    async def get_table_groups_by_group_id_async(self, group_id: str) -> list[dict[str, Any]]:
+        """按数据源组 ID 聚合表分组关系；调用方已持有 group_id 时避免重复查 meta。"""
+        relations = await self.datasource_dao.get_table_group_relations_async(group_id)
         groups: dict[str, list[str]] = {}
         for relation in relations:
             group_name = str(relation.get("table_group_name") or "").strip()

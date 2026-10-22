@@ -93,4 +93,29 @@ describe('useModelOptions', () => {
     await ctx.load()
     expect(ctx.defaultModelId.value).toBe('m1')
   })
+
+  it('用户自助建模型开关：配置未加载或缺字段时按关闭处理（fail-closed）', async () => {
+    const { useModelOptions } = await loadComposable()
+    const ctx = useModelOptions()
+
+    // 未加载 /config：开关必须是关闭，避免半截状态误放入口
+    expect(ctx.userSemanticModelEnabled.value).toBe(false)
+
+    getChatDataConfig.mockResolvedValue({ status: 'success', data: { models: [{ id: 'm1' }] } })
+    await ctx.load()
+    expect(ctx.userSemanticModelEnabled.value).toBe(false)
+  })
+
+  it('用户自助建模型开关：后台下发 true 时开放入口', async () => {
+    getChatDataConfig.mockResolvedValue({
+      status: 'success',
+      data: { models: [{ id: 'm1' }], user_semantic_model_enabled: true },
+    })
+    const { useModelOptions } = await loadComposable()
+    const ctx = useModelOptions()
+
+    await ctx.load()
+
+    expect(ctx.userSemanticModelEnabled.value).toBe(true)
+  })
 })

@@ -28,6 +28,8 @@ import type {
 } from '../api'
 import TableIndexDialog from './TableIndexDialog.vue'
 import ColumnDictEditDialog from './semantic/ColumnDictEditDialog.vue'
+import { sortTableGroupTables } from '../utils/tableGroupSort'
+import type { TableGroupSortMode } from '../utils/tableGroupSort'
 
 const emit = defineEmits<{
   (e: 'datasources-updated'): void
@@ -96,6 +98,11 @@ const tableGroupDs = ref<DataSource | null>(null)
 const tableGroupRows = ref<DatasourceTableGroupItem[]>([])
 const tableGroupNameInput = ref('')
 const tableGroupSearchKeyword = ref('')
+// 表列表排序方式：选中优先（默认，勾选的表排最前）/ 按表名
+const tableGroupSortMode = ref<TableGroupSortMode>('selected')
+const toggleTableGroupSortMode = () => {
+  tableGroupSortMode.value = tableGroupSortMode.value === 'selected' ? 'name' : 'selected'
+}
 const activeTableGroupName = ref('')
 const editingTableGroupName = ref('')
 const editingTableGroupInput = ref('')
@@ -174,21 +181,33 @@ const saveMappingModules = async () => {
 }
 
 const tableGroupTables = computed(() => tableGroupDs.value?.ds_tables || [])
-const filteredTableGroupTables = computed(() => {
-  const keyword = tableGroupSearchKeyword.value.trim().toLowerCase()
-  if (!keyword) return tableGroupTables.value
-  return tableGroupTables.value.filter(table =>
-    table.table_name.toLowerCase().includes(keyword) ||
-    table.description?.toLowerCase().includes(keyword) ||
-    table.business_desc?.toLowerCase().includes(keyword)
-  )
-})
 const activeTableGroup = computed(() =>
   tableGroupRows.value.find(item => item.table_group_name === activeTableGroupName.value) || null
 )
 const activeTableGroupTableNames = computed(() =>
   new Set(activeTableGroup.value?.table_names || [])
 )
+const filteredTableGroupTables = computed(() => {
+  const keyword = tableGroupSearchKeyword.value.trim().toLowerCase()
+  const matched = keyword
+    ? tableGroupTables.value.filter(table =>
+      table.table_name.toLowerCase().includes(keyword) ||
+      table.description?.toLowerCase().includes(keyword) ||
+      table.business_desc?.toLowerCase().includes(keyword)
+    )
+    : tableGroupTables.value
+  // 排序在过滤之后做：搜索只缩小范围，不改变「选中优先/表名」的相对顺序
+  return sortTableGroupTables(matched, activeTableGroupTableNames.value, tableGroupSortMode.value)
+})
+
+// 悬浮提示：表备注 + 业务说明。列表里说明被 max-w 截断，悬浮要能看到全貌（含更详细的业务说明）
+const getTableGroupTableTooltip = (table: TableInfo) => {
+  const description = String(table.description || '').trim()
+  const businessDesc = String(table.business_desc || '').trim()
+  const parts = [description]
+  if (businessDesc && businessDesc !== description) parts.push(businessDesc)
+  return parts.filter(Boolean).join('\n')
+}
 const getDatasourceTableSearchKeyword = (datasourceId: string) => datasourceTableSearchKeywords.value[datasourceId] || ''
 
 const setDatasourceTableSearchKeyword = (datasourceId: string, keyword: string) => {
@@ -228,6 +247,7 @@ const closeTableGroupModal = () => {
   tableGroupRows.value = []
   tableGroupNameInput.value = ''
   tableGroupSearchKeyword.value = ''
+  tableGroupSortMode.value = 'selected'
   activeTableGroupName.value = ''
   editingTableGroupName.value = ''
   editingTableGroupInput.value = ''
@@ -239,6 +259,7 @@ const openTableGroupModal = async (ds: DataSource) => {
   tableGroupRows.value = []
   tableGroupNameInput.value = ''
   tableGroupSearchKeyword.value = ''
+  tableGroupSortMode.value = 'selected'
   activeTableGroupName.value = ''
   editingTableGroupName.value = ''
   editingTableGroupInput.value = ''
@@ -1732,7 +1753,7 @@ defineExpose({
     />
 
     <!-- 表分组管理弹窗 -->
-    <el-dialog v-model="showTableGroupModal" width="760px" :close-on-click-modal="!savingTableGroups" :show-close="false">
+    <el-dialog v-model="showTableGroupModal" width="min(1040px, 94vw)" :close-on-click-modal="!savingTableGroups" :show-close="false">
       <template #header>
         <div class="flex items-center gap-2">
           <i class="fa-solid fa-layer-group text-blue-600"></i>
@@ -1745,7 +1766,7 @@ defineExpose({
           <i class="fa-solid fa-spinner fa-spin mb-2 text-2xl"></i>
           <span class="text-sm">正在加载表分组...</span>
         </div>
-        <div v-else class="grid min-h-0 flex-1 grid-cols-[240px_1fr] gap-4">
+        <div v-else class="grid min-h-0 flex-1 grid-cols-[260px_1fr] gap-4">
           <div class="flex min-h-0 min-w-0 flex-col rounded-xl border border-slate-200 bg-slate-50">
           <div class="border-b border-slate-200 p-3">
             <div class="flex gap-2">
@@ -1799,7 +1820,17 @@ defineExpose({
               <div class="truncate text-sm font-semibold text-slate-800">{{ activeTableGroupName || '请选择分组' }}</div>
               <div class="mt-0.5 text-xs text-slate-400">同一张表可以加入多个分组</div>
             </div>
-            <div class="relative w-56">
+            <button
+              type="button"
+              class="flex shrink-0 items-center gap-1 rounded border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-600 transition-colors hover:border-blue-400 hover:text-blue-600"
+              :title="tableGroupSortMode === 'selected' ? '当前：已勾选的表排在最前，点击切换为按表名排序' : '当前：按表名排序，点击切换为选中优先'"
+              data-testid="table-group-sort-toggle"
+              @click="toggleTableGroupSortMode"
+            >
+              <i :class="['fa-solid', tableGroupSortMode === 'selected' ? 'fa-list-check' : 'fa-arrow-down-a-z']"></i>
+              <span>{{ tableGroupSortMode === 'selected' ? '选中优先' : '表名排序' }}</span>
+            </button>
+            <div class="relative w-60">
               <i class="fa-solid fa-search absolute left-2 top-1/2 -translate-y-1/2 text-[10px] text-slate-400"></i>
               <input v-model="tableGroupSearchKeyword" type="text" placeholder="搜索表名/描述" class="w-full rounded border border-slate-200 bg-slate-50 py-1.5 pl-6 pr-2 text-xs focus:border-blue-500 focus:bg-white focus:outline-none" />
             </div>
@@ -1821,7 +1852,11 @@ defineExpose({
                 />
                 <i class="fa-solid fa-table text-xs text-blue-600"></i>
                 <span class="min-w-0 flex-1 truncate text-sm font-medium text-slate-800">{{ table.table_name }}</span>
-                <span v-if="table.description && table.description !== table.table_name" class="max-w-[180px] truncate text-xs text-slate-400">{{ table.description }}</span>
+                <span
+                  v-if="table.description && table.description !== table.table_name"
+                  class="max-w-[320px] shrink-0 truncate text-xs text-slate-400"
+                  :title="getTableGroupTableTooltip(table)"
+                >{{ table.description }}</span>
               </label>
             </template>
           </div>

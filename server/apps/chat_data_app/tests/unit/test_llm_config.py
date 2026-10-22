@@ -589,6 +589,28 @@ def test_runtime_config_empty_registry_returns_empty_models_without_error(monkey
     assert result["context_window"] == DEFAULT_CONTEXT_WINDOW
 
 
+def test_runtime_config_exposes_user_semantic_model_flag(monkeypatch):
+    """/config 下发「终端用户自助建模型」开关：后台打开后前端才显示创建入口。
+
+    开关值走 registered setting（表覆盖 > env > 默认），此处桩掉读取函数验证透传口径。
+    """
+    import asyncio
+
+    from apps.chat_data_app.services import runtime_config as runtime_config_module
+    from apps.chat_data_app.services import setting_service
+
+    async def fake_get_runtime_setting(key: str, default=None):
+        if key == "CHAT_DATA_USER_SEMANTIC_MODEL_ENABLED":
+            return True
+        return default
+
+    monkeypatch.setattr(setting_service, "get_runtime_setting", fake_get_runtime_setting)
+
+    result = asyncio.run(runtime_config_module.get_chat_data_runtime_config())
+
+    assert result["user_semantic_model_enabled"] is True
+
+
 def test_data_agent_uses_configured_model_without_fallback(monkeypatch, tmp_path):
     from apps.chat_data_app.agent import data_agent
     from apps.chat_data_app.agent.agent_state import ChatDataAgentState

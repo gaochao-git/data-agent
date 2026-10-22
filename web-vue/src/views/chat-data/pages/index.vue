@@ -45,6 +45,7 @@ import { buildExecutionTargets, isSameStringArray } from '../utils/executionTarg
 import type { ConversationSortBy, ConversationViewMode } from '../utils/conversationHistory'
 import { useConversationHistoryBrowser } from '../composables/useConversationHistoryBrowser'
 import { useModelOptions } from '../composables/useModelOptions'
+import { resolveVisibleModes } from './viewModes'
 
 // 模式图标组件映射（经典样式使用）
 const MODE_ICON_COMPONENTS: Record<string, typeof IconModeConversation> = {
@@ -165,9 +166,23 @@ const cacheDatasourceSchema = (newDatasources: DataSource[]) => {
   }
 }
 
+// 后台改了表分组/表业务说明/字段字典后，本地 schema 缓存必须失效并重拉，
+// 否则 SQL 查询侧栏仍按旧分组展示，必须手点刷新才能看到。
+const reloadDatasourceSchemaAfterAdminChange = async () => {
+  const currentDatasourceId = String(selectedDatasourceId.value || '').trim()
+  // 只保留当前数据源的旧缓存，避免重拉期间表列表闪空；其余数据源下次切换时按需重拉
+  const currentCachedTables = currentDatasourceId ? datasourceSchemaCache.value[currentDatasourceId] : undefined
+  datasourceSchemaCache.value = currentDatasourceId && currentCachedTables
+    ? { [currentDatasourceId]: currentCachedTables }
+    : {}
+  if (!currentDatasourceId) return
+  await loadDatasourceSchema(currentDatasourceId, true)
+}
+
 // 数据源管理回调：后台配置更新后重新加载前台授权数据源列表
 const handleAdminDatasourcesUpdated = () => {
   void loadDatasources()
+  void reloadDatasourceSchemaAfterAdminChange()
 }
 
 // 数据源管理回调：更新本地数据源列表
@@ -201,6 +216,10 @@ const resolveDefaultDatasourceId = (items: DataSource[]) => {
   return defaultDs?.id || items[0]?.id || ''
 }
 
+// 功能开关（终端用户语义模型入口）必须在 visibleModes 之前取到：
+// resolveInitialMode() 在 setup 期就会求值 visibleModes，晚声明会踩 TDZ。
+const { load: loadModelOptions, userSemanticModelEnabled: canCreateUserSemanticModel } = useModelOptions()
+
 // 模式列表
 const allModes = computed(() => ([
   { key: 'conversation' as ViewMode, label: modeLabels.value.conversation },
@@ -210,26 +229,10 @@ const allModes = computed(() => ([
   { key: 'metricConfig' as ViewMode, label: modeLabels.value.metricConfig },
 ]))
 
-// 过滤隐藏模式
-const visibleModes = computed(() => {
-  const hiddenRaw = props.options?.hideTabs || []
-  const keySet = new Set<ViewMode>()
-  const labelToKey = new Map<string, ViewMode>(
-    allModes.value.map((m) => [m.label, m.key])
-  )
-  for (const item of hiddenRaw) {
-    const value = String(item || '').trim()
-    if (!value) continue
-    if (value === 'conversation' || value === 'builder' || value === 'editor' || value === 'dashboard' || value === 'metricConfig') {
-      keySet.add(value)
-      continue
-    }
-    const mapped = labelToKey.get(value)
-    if (mapped) keySet.add(mapped)
-  }
-  const filtered = allModes.value.filter(mode => !keySet.has(mode.key))
-  return filtered.length > 0 ? filtered : [...allModes.value]
-})
+// 过滤隐藏模式：宿主 hideTabs + 语义模型入口开关（关闭时整页签隐藏）
+const visibleModes = computed(() =>
+  resolveVisibleModes(allModes.value, props.options?.hideTabs, canCreateUserSemanticModel.value)
+)
 
 const resolveInitialMode = (): ViewMode => {
   const preferred = props.options?.defaultMode || 'conversation'
@@ -528,10 +531,10 @@ const loadDatasources = async () => {
   }
 }
 
-const loadDatasourceSchema = async (datasourceId: string, force = false) => {
+const loadDatasourceSchema = async (datasourceId: string, force = false): Promise<boolean> => {
   const normalizedDatasourceId = String(datasourceId || '').trim()
-  if (!normalizedDatasourceId) return
-  if (!force && datasourceSchemaCache.value[normalizedDatasourceId]) return
+  if (!normalizedDatasourceId) return false
+  if (!force && datasourceSchemaCache.value[normalizedDatasourceId]) return true
   loadingDatasourceSchema.value = true
   try {
     const res = await getDatasourceSchema(normalizedDatasourceId)
@@ -540,11 +543,26 @@ const loadDatasourceSchema = async (datasourceId: string, force = false) => {
         ...datasourceSchemaCache.value,
         [normalizedDatasourceId]: normalizeTableInfoList(res.data?.tables),
       }
+      return true
     }
+    return false
   } catch (err) {
     console.error('加载数据源表结构失败:', err)
+    return false
   } finally {
     loadingDatasourceSchema.value = false
+  }
+}
+
+// 手动刷新 SQL 查询侧栏的表列表：强制绕过 schema 缓存重新拉取当前数据源的表结构
+const handleRefreshEditorTables = async () => {
+  const datasourceId = String(selectedDatasourceId.value || '').trim()
+  if (!datasourceId) return
+  const refreshed = await loadDatasourceSchema(datasourceId, true)
+  if (refreshed) {
+    ElMessage.success('表列表已更新')
+  } else {
+    ElMessage.error('刷新表列表失败，请稍后重试')
   }
 }
 
@@ -644,7 +662,6 @@ watch(visibleModes, () => {
 })
 
 // 新建会话（只清空状态；选数据源确认时创建会话，发送消息兜底创建）
-const { load: loadModelOptions } = useModelOptions()
 const handleNewConversation = () => {
   currentConversationId.value = null
   currentConversationTitle.value = '新会话'
@@ -865,6 +882,11 @@ const loadMetricSemanticConfigs = async () => {
     loadingMetricSemanticConfigs.value = false
   }
 }
+
+// B 端策略：语义模型由管理员统一维护，默认不向终端用户开放「自定义语义模型」入口。
+// 开关走后台变量 CHAT_DATA_USER_SEMANTIC_MODEL_ENABLED（「运行配置 → 功能开关」）：
+// 默认关闭；需要存量迁移或临时自助建模时打开即可，创建逻辑与后端接口一直保留。
+// 判定口径（严格 true / fail-closed）在 useModelOptions 内单点实现并可单测。
 
 const handleCreateMetricConfig = async () => {
   if (!selectedDatasourceId.value || creatingMetricConfig.value) return
@@ -1284,6 +1306,9 @@ const cleanupLegacyStorageKeys = () => {
 
 onMounted(async () => {
   cleanupLegacyStorageKeys()
+  // 功能开关随 /config 下发；页签可见性依赖它，故不等待会话视图挂载就主动拉一次
+  // （进入页面直接停在 SQL/看板时，Conversation 可能一直不挂载，开关值会永远缺失）。
+  void loadModelOptions()
   // 确保主系统用户信息已加载，后端统一从主系统认证中解析当前用户。
   let userId = String(currentUser.value.id || '').trim()
   let userName = String(currentUser.value.name || '').trim()
@@ -1420,6 +1445,7 @@ onMounted(async () => {
             :title="formatSemanticConfigOptionLabel(config, configIndex)"
           />
         </el-select>
+        <!-- 页签可见性已由功能开关统一控制（关闭时整页签隐藏），按钮恢复为常显，避免开关双重裁决 -->
         <button
           class="h-8 w-8 shrink-0 flex items-center justify-center rounded-lg border-none bg-blue-500 text-white text-[13px] transition-all hover:bg-blue-600 disabled:opacity-60 disabled:cursor-not-allowed"
           title="新建语义模型"
@@ -1438,6 +1464,7 @@ onMounted(async () => {
           :datasource-type="resolveDatasourceType(metricConfigDatasource)"
           :tables="metricConfigDatasource?.ds_tables || []"
           :selected-config-id="metricSelectedSemanticConfigId"
+          :allow-create="canCreateUserSemanticModel"
           hide-dataset-selector
           embedded
           @config-change="() => { loadMetricSemanticConfigs(); loadSemanticConfigs() }"
@@ -1599,8 +1626,10 @@ onMounted(async () => {
               <EditorSidebar
                 :datasource="currentDatasource"
                 :loading="loadingDatasources"
+                :refreshing="loadingDatasourceSchema"
                 @insert-table="handleInsertTable"
                 @insert-column="handleInsertColumn"
+                @refresh="handleRefreshEditorTables"
               />
             </div>
           </div>

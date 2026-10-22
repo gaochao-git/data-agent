@@ -102,6 +102,7 @@ class FakeDatasourceManager:
         self.datasources = {
             "ds_a": {
                 "id": "ds_a",
+                "group_id": "ds_a",
                 "group_name": "数据源A",
                 "description": "测试数据源",
                 "source_type": "mysql",
@@ -215,6 +216,12 @@ class FakeDatasourceManager:
     async def get_table_groups_async(self, datasource_id: str):
         datasource = self.datasources.get(datasource_id) or {}
         return list(datasource.get("table_groups") or [])
+
+    async def get_table_groups_by_group_id_async(self, group_id: str):
+        for datasource in self.datasources.values():
+            if datasource.get("group_id") == group_id:
+                return list(datasource.get("table_groups") or [])
+        return []
 
     async def replace_table_groups_async(self, datasource_id: str, groups, operator: str = "", operator_name: str = ""):
         datasource = self.datasources.get(datasource_id)

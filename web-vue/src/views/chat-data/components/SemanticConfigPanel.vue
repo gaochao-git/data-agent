@@ -118,10 +118,13 @@ interface Props {
   selectedConfigId?: string | null
   hideDatasetSelector?: boolean
   adminMode?: boolean
+  /** 终端用户是否可自助创建模型（后台功能开关下发；关闭时空态文案引导联系管理员） */
+  allowCreate?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
   adminMode: false,
+  allowCreate: false,
 })
 const emit = defineEmits<{
   close: []
@@ -156,6 +159,11 @@ let resizeStartX = 0
 let resizeStartWidth = 0
 const showEvaluateDrawer = ref(false)
 const showHistoryLearningDialog = ref(false)
+// 空态引导：管理员=自助建模型；用户侧按后台功能开关决定「引导建模型」还是「联系管理员」
+const emptyStateHint = computed(() => {
+  if (props.adminMode) return '手动创建模型，或根据物理表一键初始化基础模型'
+  return props.allowCreate ? '点击上方加号创建第一个语义模型' : '暂无语义模型，请联系管理员创建'
+})
 const filteredSourceTables = computed(() => {
   const keyword = tableSearchKeyword.value.trim().toLowerCase()
   if (!keyword) return props.tables
@@ -2100,7 +2108,7 @@ defineExpose({
       <div v-if="configs.length === 0" class="flex flex-col items-center justify-center p-12 border-2 border-dashed border-gray-200 rounded-xl text-center">
         <i class="fa-solid fa-cube text-4xl text-blue-500 opacity-30 mb-3"></i>
         <p class="text-sm text-gray-500 m-0 mb-1">暂无语义模型</p>
-        <span class="text-xs text-gray-400">{{ props.adminMode ? '手动创建模型，或根据物理表一键初始化基础模型' : '点击上方加号创建第一个语义模型' }}</span>
+        <span class="text-xs text-gray-400">{{ emptyStateHint }}</span>
         <button
           v-if="props.adminMode"
           class="mt-4 h-9 flex items-center gap-2 border border-blue-200 rounded-md bg-blue-50 px-4 text-[13px] text-blue-600 hover:bg-blue-100 disabled:opacity-60 disabled:cursor-not-allowed"

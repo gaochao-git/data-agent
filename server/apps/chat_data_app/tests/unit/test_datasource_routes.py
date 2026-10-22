@@ -282,6 +282,12 @@ class _FakeDatasourceManager:
     async def get_table_groups_async(self, datasource_id: str):
         return self.get_table_groups(datasource_id)
 
+    async def get_table_groups_by_group_id_async(self, group_id: str):
+        for datasource_id, datasource in self.datasources.items():
+            if datasource.get("group_id") == group_id:
+                return self.get_table_groups(datasource_id)
+        return []
+
     def replace_table_groups(self, datasource_id: str, groups: list[dict], operator: str = "", operator_name: str = ""):
         if datasource_id not in self.datasources:
             return False
