@@ -31,10 +31,8 @@ const selectedProbeToolParametersJson = computed(() =>
 )
 
 // MCP server 准入状态展示：未通过标红并给出原因，通过但有告警也提示
-const mcpServerTagType = (server: PluginMcpServerInfo) =>
-  server.admission && !server.admission.ok ? 'danger' : 'info'
 const mcpServerLabel = (server: PluginMcpServerInfo) =>
-  `${server.id}(${server.transport})${server.admission && !server.admission.ok ? ' · 未通过准入' : ''}`
+  server.admission && !server.admission.ok ? `${server.id} ⚠` : server.id
 // 每工具审批配置摘要：管理员固定 ask/allow 两档，用户不可切换
 const mcpApprovalSummary = (server: PluginMcpServerInfo) => {
   const entries = Object.entries(server.tool_approvals || {})
@@ -278,19 +276,19 @@ defineExpose({ ensureLoaded })
             <span v-else class="text-xs text-slate-400">-</span>
           </template>
         </el-table-column>
-        <el-table-column label="MCP server" min-width="160" show-overflow-tooltip>
+        <el-table-column label="MCP server" min-width="180" show-overflow-tooltip>
           <template #default="{ row }">
-            <div v-if="(row.mcp_servers || []).length" class="flex flex-wrap gap-1">
-              <el-tag
+            <div v-if="(row.mcp_servers || []).length" class="flex min-w-0 flex-wrap gap-1">
+              <el-button
                 v-for="server in row.mcp_servers"
                 :key="server.id"
                 size="small"
-                effect="plain"
-                :type="mcpServerTagType(server)"
+                plain
+                :type="server.admission && !server.admission.ok ? 'danger' : 'primary'"
                 :title="`${mcpServerTitle(server)}\n点击探测工具`"
-                class="cursor-pointer"
+                class="!h-6 !px-2 font-mono text-[11px]"
                 @click.stop="probeMcpTools(row, server)"
-              >{{ mcpServerLabel(server) }}</el-tag>
+              >{{ mcpServerLabel(server) }}</el-button>
             </div>
             <span v-else class="text-xs text-slate-400">-</span>
           </template>
