@@ -51,11 +51,12 @@ fail-closed 处理（快照清空、当轮全部按禁用，不兜底旧值）�
 ## 管理入口
 
 前端：后台管理 → 插件（`web-vue/src/views/chat-data/components/PluginAdminPanel.vue`，
-由 `ChatDataAdminManager.vue` 挂载），支持列表分页、插件模板下载、zip 安装、启停开关、卸载二次确认。
+由 `ChatDataAdminManager.vue` 挂载），支持列表分页、插件模板下载、MCP 工具探测、zip 安装、启停开关、卸载二次确认。
 
 接口（`routers/plugins.py`，service token 保护）：
 
 - `GET  /api/chatdata/admin/plugins/template`：下载插件模板 zip（plugin.json + 示例技能 + README）；
+- `GET  /api/chatdata/admin/plugins/{plugin_id}/mcp-servers/{server_id}/tools`：临时连接 MCP server 探测工具清单（不执行工具、不落库）；
 - `GET  /api/chatdata/admin/plugins`：列出已安装插件（含审计字段，分页 limit∈[1,200]）；
 - `POST /api/chatdata/admin/plugins/install`：上传 zip 安装（≤50MB，manifest 校验、
   zip-slip/符号链接/解压总量防护，同名拒绝）；

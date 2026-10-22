@@ -221,3 +221,64 @@ def test_plugin_install_rejects_nonstandard_skill_directory(client, auth_headers
     )
     assert response.json()["status"] == "error"
     assert "非标准路径" in response.json()["msg"]
+
+
+def test_plugin_template_installs_with_standard_skill_layout(client, auth_headers, plugin_root: Path):
+    """完整走一遍：下载模板 → 安装 → 校验标准技能目录 → 卸载。"""
+    template = client.get("/api/chatdata/admin/plugins/template", headers=auth_headers)
+    assert template.status_code == 200
+
+    installed = client.post(
+        "/api/chatdata/admin/plugins/install",
+        files={"file": ("template.zip", template.content, "application/zip")},
+        headers=auth_headers,
+    )
+    assert installed.json()["status"] == "success"
+    assert installed.json()["data"]["plugin"]["name"] == "example-plugin"
+
+    root = plugin_root / "example-plugin"
+    skill_root = root / "skills" / "example-skill"
+    assert (skill_root / "SKILL.md").is_file()
+    assert (skill_root / "references" / "README.md").is_file()
+    assert (skill_root / "assets" / "README.md").is_file()
+    assert not (skill_root / "scripts").exists()
+
+    listed = client.get("/api/chatdata/admin/plugins", headers=auth_headers)
+    names = [item["name"] for item in listed.json()["data"]["plugins"]]
+    assert "example-plugin" in names
+
+    removed = client.delete("/api/chatdata/admin/plugins/example-plugin", headers=auth_headers)
+    assert removed.json()["status"] == "success"
+
+
+def test_probe_plugin_mcp_tools(client, auth_headers, plugin_root: Path, monkeypatch):
+    template = client.get("/api/chatdata/admin/plugins/template", headers=auth_headers)
+    installed = client.post(
+        "/api/chatdata/admin/plugins/install",
+        files={"file": ("template.zip", template.content, "application/zip")},
+        headers=auth_headers,
+    )
+    assert installed.json()["status"] == "success"
+
+    async def fake_probe(_plugin_name, _server_id):
+        return {
+            "server_id": "demo-http",
+            "count": 2,
+            "tools": [
+                {"name": "read_data", "description": "读取数据", "approval": "allow"},
+                {"name": "write_data", "description": "写入数据", "approval": "ask"},
+            ],
+        }
+
+    monkeypatch.setattr(plugin_service.installer, "probe_mcp_server_tools", fake_probe)
+    response = client.get(
+        "/api/chatdata/admin/plugins/example-plugin/mcp-servers/demo-http/tools",
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["server_id"] == "demo-http"
+    assert data["count"] == 2
+    assert [tool["name"] for tool in data["tools"]] == ["read_data", "write_data"]
+    assert data["tools"][0]["approval"] == "allow"
+    assert data["tools"][1]["approval"] == "ask"

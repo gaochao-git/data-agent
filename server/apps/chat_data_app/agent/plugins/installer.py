@@ -25,8 +25,9 @@ from utils.skill_paths import SKILL_MD_MAX_BYTES
 
 from ..mcp.admission import validate_mcp_server_config
 from ..mcp.config import MCPServerConfigError, parse_mcp_server_config
+from ..mcp.probe import probe_mcp_server_tools as _probe_mcp_server_tools
 from ..skills.loader import parse_metadata_text
-from .loader import clear_metadata_cache, plugin_dir
+from .loader import clear_metadata_cache, load_plugins_metadata, plugin_dir
 from .manifest import (
     PLUGIN_MANIFEST_FILENAME,
     PluginManifest,
@@ -142,6 +143,27 @@ def inspect_mcp_server_admission(entry: dict[str, Any]) -> dict[str, Any]:
         "errors": [f"{issue.code}: {issue.message}" for issue in report.errors],
         "warnings": [f"{issue.code}: {issue.message}" for issue in report.warnings],
     }
+
+
+async def probe_mcp_server_tools(plugin_name: str, server_id: str) -> dict[str, Any]:
+    """临时探测插件声明的 MCP server，返回工具摘要；不执行工具、不落库。"""
+    metadata = load_plugins_metadata().get(plugin_name)
+    if metadata is None:
+        raise ValueError(f"插件不存在: {plugin_name}")
+    entry = next(
+        (server for server in metadata.manifest.mcp_servers if str(server.get("id") or "") == server_id),
+        None,
+    )
+    if entry is None:
+        raise ValueError(f"插件 {plugin_name} 未声明 MCP server: {server_id}")
+    try:
+        config = parse_mcp_server_config(entry, source=f"plugin {plugin_name} mcp_servers[{server_id}]")
+    except MCPServerConfigError as err:
+        raise ValueError(str(err)) from err
+    tools = await _probe_mcp_server_tools(config)
+    for tool in tools:
+        tool["approval"] = config.tool_approvals.get(tool["name"], "ask")
+    return {"server_id": server_id, "count": len(tools), "tools": tools}
 
 
 def _validate_manifest_mcp_servers(manifest: PluginManifest) -> None:
@@ -270,8 +292,6 @@ def install_plugin_from_zip_bytes(data: bytes) -> PluginManifest:
 
 def uninstall_plugin(name: str) -> PluginManifest:
     """卸载并删除插件目录；插件不存在抛 ``PluginNotFoundError``。"""
-    from .loader import load_plugins_metadata
-
     metadata = load_plugins_metadata().get(name)
     if metadata is None:
         raise PluginNotFoundError(f"插件不存在: {name}")

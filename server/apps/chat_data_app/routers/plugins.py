@@ -89,6 +89,27 @@ async def download_plugin_template(request: Request) -> Response:
     )
 
 
+@router.get(
+    "/admin/plugins/{plugin_id}/mcp-servers/{server_id}/tools",
+    summary="探测插件声明的 MCP server 工具（admin）",
+)
+async def probe_plugin_mcp_server_tools(plugin_id: str, server_id: str, request: Request) -> JSONResponse:
+    """临时连接 MCP server 并返回 tools/list；不执行工具、不落库。"""
+    _ = request
+    try:
+        data = await plugin_service.probe_mcp_server_tools(plugin_id, server_id)
+        return business_response(data=data, msg="探测成功")
+    except ValueError as e:
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_PLUGIN_INSTALL_FAILED, status="error")
+    except Exception as e:
+        logger.error("探测 MCP 工具失败: plugin=%s server=%s error=%s", plugin_id, server_id, e, exc_info=True)
+        return business_response(
+            msg="连接 MCP server 失败，请检查地址、认证和网络后重试",
+            code=ErrorCode.CHATDATA_PLUGIN_INSTALL_FAILED,
+            status="error",
+        )
+
+
 @router.post("/admin/plugins/install")
 async def install_plugin(file: UploadFile, request: Request) -> JSONResponse:
     """上传插件 zip 安装（manifest 校验 + 安全解压 + 写 DB；同名插件需先卸载）。"""

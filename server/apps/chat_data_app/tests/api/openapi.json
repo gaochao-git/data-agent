@@ -7384,6 +7384,63 @@
         ]
       }
     },
+    "/api/chatdata/admin/plugins/{plugin_id}/mcp-servers/{server_id}/tools": {
+      "get": {
+        "description": "临时连接 MCP server 并返回 tools/list；不执行工具、不落库。",
+        "operationId": "probe_plugin_mcp_server_tools_api_chatdata_admin_plugins__plugin_id__mcp_servers__server_id__tools_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plugin_id",
+            "required": true,
+            "schema": {
+              "title": "Plugin Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "server_id",
+            "required": true,
+            "schema": {
+              "title": "Server Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "探测插件声明的 MCP server 工具（admin）",
+        "tags": [
+          "ChatData 插件管理（Admin）"
+        ]
+      }
+    },
     "/api/chatdata/admin/query-history": {
       "get": {
         "description": "获取后台全局 SQL 查询历史。",

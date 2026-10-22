@@ -30,6 +30,7 @@ import type {
   AgentSchedulePayload,
   AgentScheduleRunItem,
   PluginInfo,
+  PluginMcpToolInfo,
   ChatDataSettingItem,
   ChatDataModelRegistryItem,
   MetaGlobalEnum,
@@ -1835,6 +1836,17 @@ export function installPlugin(file: File): Promise<ApiResponse<{ plugin: PluginI
     method: 'post',
     data: formData,
     headers: { 'Content-Type': 'multipart/form-data' }
+  })
+}
+
+/** 后台：探测插件声明的 MCP server 工具（临时连接，不执行工具）。 */
+export function probeAdminPluginMcpServerTools(
+  pluginId: string,
+  serverId: string
+): Promise<ApiResponse<{ server_id: string; count: number; tools: PluginMcpToolInfo[] }>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/plugins/${pluginId}/mcp-servers/${serverId}/tools`,
+    method: 'get'
   })
 }
 

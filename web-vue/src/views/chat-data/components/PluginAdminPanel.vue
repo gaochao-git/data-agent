@@ -6,8 +6,8 @@
 import { ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { UploadFile, UploadInstance } from 'element-plus'
-import { downloadPluginTemplate, getAdminPlugins, installPlugin, setAdminPluginEnabled, uninstallPlugin } from '../api'
-import type { PluginInfo, PluginMcpServerInfo } from '../types'
+import { downloadPluginTemplate, getAdminPlugins, installPlugin, probeAdminPluginMcpServerTools, setAdminPluginEnabled, uninstallPlugin } from '../api'
+import type { PluginInfo, PluginMcpServerInfo, PluginMcpToolInfo } from '../types'
 import AdminPanelToolbar from './AdminPanelToolbar.vue'
 
 // 与后端 installer 的 zip 上限一致（50MB）
@@ -19,6 +19,12 @@ const hasLoaded = ref(false)
 const uploadRef = ref<UploadInstance | null>(null)
 const installing = ref(false)
 const downloadingTemplate = ref(false)
+const probeVisible = ref(false)
+const probeLoading = ref(false)
+const probeError = ref('')
+const probePluginName = ref('')
+const probeServerId = ref('')
+const probeTools = ref<PluginMcpToolInfo[]>([])
 
 // MCP server 准入状态展示：未通过标红并给出原因，通过但有告警也提示
 const mcpServerTagType = (server: PluginMcpServerInfo) =>
@@ -176,6 +182,28 @@ const removePlugin = async (plugin: PluginInfo) => {
   }
 }
 
+const probeMcpTools = async (plugin: PluginInfo, server: PluginMcpServerInfo) => {
+  probeVisible.value = true
+  probeLoading.value = true
+  probeError.value = ''
+  probePluginName.value = plugin.name
+  probeServerId.value = server.id
+  probeTools.value = []
+  try {
+    const res = await probeAdminPluginMcpServerTools(plugin.name, server.id)
+    if (res.status === 'success') {
+      probeTools.value = res.data.tools || []
+    } else {
+      probeError.value = res.msg || '探测失败'
+    }
+  } catch (err) {
+    console.error('探测 MCP 工具失败:', err)
+    probeError.value = '连接 MCP server 失败，请检查地址、认证和网络'
+  } finally {
+    probeLoading.value = false
+  }
+}
+
 defineExpose({ ensureLoaded })
 </script>
 
@@ -250,7 +278,9 @@ defineExpose({ ensureLoaded })
                 size="small"
                 effect="plain"
                 :type="mcpServerTagType(server)"
-                :title="mcpServerTitle(server)"
+                :title="`${mcpServerTitle(server)}\n点击探测工具`"
+                class="cursor-pointer"
+                @click.stop="probeMcpTools(row, server)"
               >{{ mcpServerLabel(server) }}</el-tag>
             </div>
             <span v-else class="text-xs text-slate-400">-</span>
@@ -283,6 +313,31 @@ defineExpose({ ensureLoaded })
           </template>
         </el-table-column>
       </el-table>
+    <el-dialog v-model="probeVisible" title="MCP server 工具探测" width="720px" destroy-on-close>
+      <div class="mb-2 text-xs text-slate-500">
+        {{ probePluginName }} / {{ probeServerId }}
+      </div>
+      <div v-if="probeLoading" class="py-8 text-center text-sm text-slate-500">
+        <i class="fa-solid fa-spinner fa-spin mr-2"></i>正在连接并探测工具…
+      </div>
+      <el-alert v-else-if="probeError" :title="probeError" type="error" :closable="false" show-icon />
+      <el-empty v-else-if="!probeTools.length" description="该 server 没有返回工具" />
+      <el-table v-else :data="probeTools" size="small" border max-height="480">
+        <el-table-column prop="name" label="工具名" width="220" show-overflow-tooltip />
+        <el-table-column prop="description" label="描述" show-overflow-tooltip />
+        <el-table-column label="审批" width="90" align="center">
+          <template #default="{ row: tool }">
+            <el-tag size="small" :type="tool.approval === 'ask' ? 'warning' : 'success'" effect="plain">
+              {{ tool.approval === 'ask' ? 'ask' : 'allow' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+      </el-table>
+      <template #footer>
+        <el-button @click="probeVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
+
       <div class="flex shrink-0 justify-end pt-2">
         <el-pagination
           v-model:current-page="currentPage"
