@@ -3,8 +3,8 @@
 
 运行环境：Python 3.10+（官方 mcp 2.x 要求；本仓库使用 Python 3.12）。
 
-鉴权实现拆在 auth.py；本文件只负责组装 Server、注册工具、启动。
-    MCP_AUTH_TOKEN=change-me python server.py
+鉴权实现拆在 mcp_auth.py；本文件只负责组装 Server、注册工具、启动。
+nohup env MCP_AUTH_TOKEN=change-me MCP_HOST=0.0.0.0 MCP_PORT=8099 python server.py > mcp-server.log 2>&1 &
 """
 
 from __future__ import annotations

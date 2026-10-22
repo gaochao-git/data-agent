@@ -16,15 +16,22 @@
 - 安装依赖：
 
 ```bash
+cd hello-mcp-server
 python -m pip install -r requirements.txt
 ```
 
 ## 启动
 
-必须先设置访问 token：
+后台运行（推荐）：
 
 ```bash
-MCP_AUTH_TOKEN=change-me python server.py
+nohup env MCP_AUTH_TOKEN=change-me MCP_HOST=0.0.0.0 MCP_PORT=8099 python server.py > mcp-server.log 2>&1 &
+```
+
+前台调试：
+
+```bash
+MCP_AUTH_TOKEN=change-me MCP_HOST=0.0.0.0 MCP_PORT=8099 python server.py
 ```
 
 默认地址：
@@ -33,13 +40,24 @@ MCP_AUTH_TOKEN=change-me python server.py
 http://127.0.0.1:8099/mcp
 ```
 
-可配置：
+参数：
 
 ```bash
-MCP_HOST=0.0.0.0
-MCP_PORT=8099
 MCP_AUTH_TOKEN=change-me   # 必填
+MCP_HOST=0.0.0.0          # 监听所有网卡
+MCP_PORT=8099             # 端口
 ```
+
+查看日志、端口和停止：
+
+```bash
+tail -f mcp-server.log
+lsof -nP -iTCP:8099 -sTCP:LISTEN
+kill $(lsof -t -iTCP:8099 -sTCP:LISTEN)
+```
+
+> `nohup` 只保证终端关闭后进程继续运行，不会崩溃自动重启。
+> 生产建议用 systemd、supervisor 或容器平台托管。
 
 ## 接入插件
 
