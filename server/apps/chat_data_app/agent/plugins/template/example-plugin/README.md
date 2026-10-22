@@ -45,6 +45,7 @@ metadata:
   "id": "demo-http",
   "transport": "streamable_http",
   "url": "https://mcp.example.com/mcp",
+  "enabled": false,
   "headers": {
     "Authorization": "Bearer <token>"
   },
@@ -59,6 +60,7 @@ metadata:
 ```
 
 - `transport`：只支持 `streamable_http`；
+- `enabled`：`false` 表示该 server 只保留声明、不参与装配；模板默认 `false`，改成 `true` 才会连接；
 - `tool_approvals`：每工具 `ask` 或 `allow`，未配置默认 `ask`；
 - `tool_labels`：审批卡/工具卡展示名；
 - 安装时会做 MCP 准入检查，未通过会拒绝安装。

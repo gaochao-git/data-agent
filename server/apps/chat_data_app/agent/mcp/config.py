@@ -40,10 +40,6 @@ class MCPServerConfig:
 
     server_id: str
     transport: str  # streamable_http
-    # 以下 command/args/env 仅保留给历史内部调用/测试构造；配置解析不再接受 stdio。
-    command: str = ""
-    args: tuple[str, ...] = ()
-    env: dict[str, str] = field(default_factory=dict)
     url: str = ""
     headers: dict[str, str] = field(default_factory=dict)
     # 原始工具名 → 用户可见中文友好名（前端展示用，不参与调用与命名空间）。
@@ -67,14 +63,6 @@ def _parse_transport_fields(raw: dict, source: str) -> tuple[str, str]:
     if not url.startswith(("http://", "https://")):
         raise MCPServerConfigError(f"{source}: streamable_http 传输必须提供 http(s) url")
     return transport, url
-
-
-def _string_list_field(raw: dict, key: str, source: str) -> list[str]:
-    """校验 ``raw[key]`` 为字符串数组（缺省为空数组）。"""
-    value = raw.get(key) or []
-    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-        raise MCPServerConfigError(f"{source}: {key} 必须是字符串数组")
-    return value
 
 
 def _string_mapping_field(raw: dict, key: str, source: str) -> dict:

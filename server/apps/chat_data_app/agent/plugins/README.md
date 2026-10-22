@@ -32,6 +32,7 @@ CHAT_DATA_HOME/plugins/<name>/
 ```
 
 - `name`：`^[a-z][a-z0-9_-]{1,63}$`，同时是磁盘目录名与管理 API 资源 id；
+- `mcp_servers[].enabled`：`false` 时只保留声明、不参与装配（缺省 `true`）；
 - `skills` / `mcp_servers` 可任选其一或同时声明；
 - 未知字段忽略（前向兼容）。
 

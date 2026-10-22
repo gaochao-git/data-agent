@@ -114,7 +114,8 @@ def _make_manager(*, config_loader=None, cache_ttl=60):
         tool_timeout_seconds=10,
         cache_ttl_seconds=cache_ttl,
         session_factory=factory,
-        config_loader=config_loader or (lambda: [MCPServerConfig(server_id="srv", transport="stdio", command="x")]),
+        config_loader=config_loader
+        or (lambda: [MCPServerConfig(server_id="srv", transport="streamable_http", url="https://mcp.example.com/mcp")]),
     )
     return manager, opens
 
@@ -253,8 +254,8 @@ async def test_list_tools_async_enumerates_and_caches():
 async def test_list_tools_async_fail_soft_on_bad_server():
     def config_loader():
         return [
-            MCPServerConfig(server_id="srv", transport="stdio", command="x"),
-            MCPServerConfig(server_id="bad", transport="stdio", command="x"),
+            MCPServerConfig(server_id="srv", transport="streamable_http", url="https://mcp.example.com/mcp"),
+            MCPServerConfig(server_id="bad", transport="streamable_http", url="https://bad.example.com/mcp"),
         ]
 
     manager, _opens = _make_manager(config_loader=config_loader)
@@ -265,7 +266,7 @@ async def test_list_tools_async_fail_soft_on_bad_server():
 @pytest.mark.asyncio
 async def test_list_tools_async_dedupes_colliding_qualified_names():
     def config_loader():
-        return [MCPServerConfig(server_id="s" * 80, transport="stdio", command="x")]
+        return [MCPServerConfig(server_id="s" * 80, transport="streamable_http", url="https://long.example.com/mcp")]
 
     manager, _opens = _make_manager(config_loader=config_loader)
     tools = await manager.list_tools_async()
@@ -281,8 +282,8 @@ async def test_list_tools_async_labels_from_config_and_fallback():
         return [
             MCPServerConfig(
                 server_id="srv",
-                transport="stdio",
-                command="x",
+                transport="streamable_http",
+                url="https://mcp.example.com/mcp",
                 tool_labels={"echo": "回显输入"},
             ),
         ]
@@ -344,7 +345,9 @@ async def test_call_tool_async_marks_input_required_result():
     manager = MCPToolManager(
         tool_timeout_seconds=10,
         session_factory=factory,
-        config_loader=lambda: [MCPServerConfig(server_id="srv", transport="stdio", command="x")],
+        config_loader=lambda: [
+            MCPServerConfig(server_id="srv", transport="streamable_http", url="https://mcp.example.com/mcp")
+        ],
     )
     result = await manager.call_tool_async("srv", "ask", {})
     assert result.startswith("[mcp tool input_required]")
@@ -367,7 +370,9 @@ async def test_list_tools_async_adopts_server_ttl_hint():
         tool_timeout_seconds=10,
         cache_ttl_seconds=300,
         session_factory=factory,
-        config_loader=lambda: [MCPServerConfig(server_id="srv", transport="stdio", command="x")],
+        config_loader=lambda: [
+            MCPServerConfig(server_id="srv", transport="streamable_http", url="https://mcp.example.com/mcp")
+        ],
     )
     await manager.list_tools_async()
     # 基础 TTL 不被永久改写；生效 TTL 取服务端提示换算的更短者
@@ -565,8 +570,8 @@ async def test_list_tools_async_keeps_ask_allow_approval_policy():
         return [
             MCPServerConfig(
                 server_id="srv",
-                transport="stdio",
-                command="x",
+                transport="streamable_http",
+                url="https://mcp.example.com/mcp",
                 tool_approvals={"echo": "allow", "greet": "ask"},
             ),
         ]
@@ -623,8 +628,8 @@ async def test_list_tools_async_skips_only_legacy_deny_tools():
         return [
             MCPServerConfig(
                 server_id="srv",
-                transport="stdio",
-                command="x",
+                transport="streamable_http",
+                url="https://mcp.example.com/mcp",
                 tool_approvals={"echo": "deny", "greet": "ask"},
             ),
         ]
