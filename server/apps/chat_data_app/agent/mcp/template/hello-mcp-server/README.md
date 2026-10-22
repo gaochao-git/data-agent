@@ -38,8 +38,7 @@ http://127.0.0.1:8099/mcp
 ```bash
 MCP_HOST=0.0.0.0
 MCP_PORT=8099
-MCP_AUTH_TOKEN=change-me          # 必填
-MCP_RESOURCE_URL=http://127.0.0.1:8099   # 可选，鉴权资源标识
+MCP_AUTH_TOKEN=change-me   # 必填
 ```
 
 ## 接入插件
@@ -89,4 +88,4 @@ MCP_AUTH_TOKEN=change-me python server.py
 
 - 未带 token 或 token 不匹配时返回 `401 Unauthorized`；
 - 生产请使用随机长 token，并通过 HTTPS 传输；
-- 模板用静态 token 演示，生产可替换为 OAuth/JWT 校验。
+- 模板只演示静态 token。

@@ -1,6 +1,6 @@
 """Bearer Token 鉴权（MCP SDK 原生 TokenVerifier + AuthSettings）。
 
-单独成文件，便于替换为 OAuth/JWT；server.py 只负责组装与启动。
+单独成文件；server.py 只负责组装与启动。
 """
 
 from __future__ import annotations
@@ -12,11 +12,9 @@ from mcp.server.auth.provider import AccessToken, TokenVerifier
 from mcp.server.auth.settings import AuthSettings
 from pydantic import AnyHttpUrl
 
-DEFAULT_RESOURCE_URL = "http://127.0.0.1:8099"
-
 
 class StaticBearerTokenVerifier(TokenVerifier):
-    """最小静态 token 校验；生产可替换为 OAuth/JWT verifier。"""
+    """最小静态 token 校验。"""
 
     def __init__(self, expected_token: str) -> None:
         self._expected = expected_token
@@ -28,7 +26,6 @@ class StaticBearerTokenVerifier(TokenVerifier):
             token=token,
             client_id="hello-mcp-server",
             scopes=[],
-            resource=os.getenv("MCP_RESOURCE_URL", DEFAULT_RESOURCE_URL).rstrip("/"),
         )
 
 
@@ -36,10 +33,11 @@ def build_bearer_auth(token: str | None = None) -> tuple[AuthSettings, StaticBea
     """返回 MCP SDK 原生鉴权所需的 AuthSettings 与 TokenVerifier。"""
     expected = token if token is not None else os.getenv("MCP_AUTH_TOKEN", "")
     expected = expected.strip()
-    resource = os.getenv("MCP_RESOURCE_URL", DEFAULT_RESOURCE_URL).rstrip("/")
+    # AuthSettings 要求两个非空 URL；静态 token 不校验资源，
+    # 因此这里只是 MCP SDK 的占位值，不暴露给模板使用者配置。
     auth = AuthSettings(
-        issuer_url=AnyHttpUrl(resource),
-        resource_server_url=AnyHttpUrl(resource),
+        issuer_url=AnyHttpUrl("http://localhost"),
+        resource_server_url=AnyHttpUrl("http://localhost"),
         validate_token_resource=False,
     )
     return auth, StaticBearerTokenVerifier(expected)

@@ -100,7 +100,7 @@ Mcp-Method: server/discover | tools/list | tools/call
 - Java：官方 Java SDK `2.2.0-M1` 已有 modern server（server-only，modern client 尚未支持），生产接入需评估里程碑版本风险；
 - 其他语言/框架需确认已实现 2026-07-28 协议，不能只实现旧版 Streamable HTTP。
 
-生产要求 HTTPS；本地回环地址例外。MCP Server 侧必须自行实现鉴权（OAuth/Token）
+生产要求 HTTPS；本地回环地址例外。MCP Server 侧必须自行实现 Bearer Token 鉴权
 和网络访问限制。
 
 ## 4. 打包安装
