@@ -256,6 +256,8 @@ async def get_chat_data_runtime_config() -> dict:
         # 权限选择（前端唯一常驻项）：默认值来自配置表（管理页「运行配置」可改）
         "default_row_limit": await get_runtime_setting("CHATDATA_ROW_LIMIT"),
         "query_cache_enabled": await get_runtime_setting("CHAT_DATA_QUERY_CACHE_ENABLED"),
+        # 功能开关：终端用户自助创建语义模型的入口（默认关闭，管理页「运行配置」可临时打开）
+        "user_semantic_model_enabled": await get_runtime_setting("CHAT_DATA_USER_SEMANTIC_MODEL_ENABLED"),
         "context_window": get_context_window(default_model),
     }
 

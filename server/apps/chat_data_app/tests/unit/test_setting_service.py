@@ -311,3 +311,17 @@ async def test_list_settings_marks_invalid_table_value(harness):
     assert by_key[REGISTERED_KEY]["source"] == "table"
     assert by_key[REGISTERED_KEY]["value_invalid"] is True
     assert by_key[REGISTERED_KEY]["effective_value"] == 50
+
+
+def test_user_semantic_model_flag_registered_defaults_off():
+    """终端用户自助建模型的入口开关：注册在「功能开关」分类，代码默认关闭。
+
+    默认关闭是产品口径（语义模型由管理员统一维护）；运行期可临时打开用于存量迁移，
+    因此必须是可动态修改的注册 key，而不是编译期常量或 env 一次性开关。
+    """
+    spec = setting_service.SETTING_REGISTRY["CHAT_DATA_USER_SEMANTIC_MODEL_ENABLED"]
+
+    assert spec.value_type == "bool"
+    assert spec.default is False
+    assert spec.effect == setting_service.EFFECT_IMMEDIATE
+    assert spec.category in dict(setting_service.SETTING_CATEGORIES)

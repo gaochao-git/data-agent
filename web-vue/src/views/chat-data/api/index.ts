@@ -106,6 +106,7 @@ export interface ChatDataRuntimeConfig {
   models: ChatDataModelOption[]
   default_row_limit?: number
   query_cache_enabled?: boolean
+  user_semantic_model_enabled?: boolean
 }
 
 export interface AccuracyEvaluationRunParams {

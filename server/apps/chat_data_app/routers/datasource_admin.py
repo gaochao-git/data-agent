@@ -336,12 +336,13 @@ async def get_datasource_table_groups(datasource_id: str, request: Request) -> J
     try:
         _get_current_user(request)
         ds_manager = get_datasource_manager()
-        datasource = await ds_manager.get_datasource_async(datasource_id)
+        # 存在性检查用轻量 meta：重接口会把全量表结构拉进来，而这个请求只需要分组关系
+        datasource = await ds_manager.get_datasource_meta_async(datasource_id)
         if not datasource:
             return business_response(
                 msg=f"数据源不存在: {datasource_id}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error"
             )
-        groups = await ds_manager.get_table_groups_async(datasource_id)
+        groups = await ds_manager.get_table_groups_by_group_id_async(str(datasource.get("group_id") or ""))
         return business_response(data={"datasource_id": datasource_id, "groups": groups}, msg="获取成功")
     except HTTPException:
         raise

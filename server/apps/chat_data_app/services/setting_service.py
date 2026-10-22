@@ -51,6 +51,7 @@ SETTING_CATEGORIES: list[tuple[str, str]] = [
     ("agent", "智能体运行"),
     ("sync_meta", "同步与元数据"),
     ("alert", "监控告警"),
+    ("feature", "功能开关"),
 ]
 _CATEGORY_ORDER = {key: index for index, (key, _) in enumerate(SETTING_CATEGORIES)}
 _CATEGORY_LABELS = dict(SETTING_CATEGORIES)
@@ -344,6 +345,18 @@ SETTING_REGISTRY: dict[str, SettingSpec] = {
         maximum=3600,
         effect=EFFECT_IMMEDIATE,
         description="工具调用频率告警统计窗口（秒）",
+    ),
+    "CHAT_DATA_USER_SEMANTIC_MODEL_ENABLED": SettingSpec(
+        key="CHAT_DATA_USER_SEMANTIC_MODEL_ENABLED",
+        value_type="bool",
+        default=False,
+        category="feature",
+        effect=EFFECT_IMMEDIATE,
+        description=(
+            "终端用户「自定义语义模型」入口是否开放（默认关闭，语义模型由管理员统一维护）；"
+            "关闭时前台「语义模型配置」页签整页隐藏（管理员仍可从后台管理维护），"
+            "打开后恢复该页签与自助建模，前端刷新页面后生效"
+        ),
     ),
 }
 
