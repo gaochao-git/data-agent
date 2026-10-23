@@ -3,7 +3,8 @@
 > 按官方文档侧边栏归档：`ontology`/`object-link-types`/`action-types`/`functions`/`interfaces`/`ontologies` 为本体主文档，
 > `data-integration`/`pipeline-builder` 为数据接入与管道，`workshop`/`quiver`/`object-explorer`/`object-views`/`vertex` 为应用与消费，
 > `aip`/`aip-analyst`/`aip-evals`/`aip-assist`/`logic`/`chatbot-studio`/`palantir-mcp` 为 AIP/智能体，
-> `api/general`、`api/v2` 为 REST API 参考，`ontology-sdk`/`developer-console` 为 SDK，`ossie` 为 Apache Ossie 规范原文与示例，`blog` 为官方博客。
+> `api/general`、`api/v2` 为 REST API 参考，`ontology-sdk`/`developer-console` 为 SDK，`ossie` 为 Apache Ossie 规范原文与示例，`blog` 为官方博客，
+> `community` 为社区实战文章（非官方，版权属原作者，观点需甄别，见 `community/README.md`）。
 
 ## action-types（38 页）
 
@@ -214,6 +215,14 @@
 - [retrieval-context.md](./chatbot-studio/retrieval-context.md) — `/docs/foundry/chatbot-studio/retrieval-context`
 - [session-logging.md](./chatbot-studio/session-logging.md) — `/docs/foundry/chatbot-studio/session-logging`
 - [tools.md](./chatbot-studio/tools.md) — `/docs/foundry/chatbot-studio/tools`
+
+## community（4 篇，社区文章非官方）
+
+- [coomia-ontology-deep-dive.md](./community/coomia-ontology-deep-dive.md) — `https://coomia.com/blog/palantir-ontology-deep-dive`（全文副本）
+- [fourthage-practical-ontologies-part2.md](./community/fourthage-practical-ontologies-part2.md) — `https://fourthage.substack.com/p/practical-ontologies-and-how-to-build-d7e`（要点导读）
+- [fourthage-practical-ontologies-part3.md](./community/fourthage-practical-ontologies-part3.md) — `https://fourthage.substack.com/p/practical-ontologies-and-how-to-build-355`（要点导读）
+- [fourthage-practical-ontologies-part4.md](./community/fourthage-practical-ontologies-part4.md) — `https://fourthage.substack.com/p/practical-ontologies-and-how-to-build-82e`（要点导读）
+- [README.md](./community/README.md) — 社区归档规则与可信度注记
 
 ## data-integration（23 页）
 
