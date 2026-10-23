@@ -93,7 +93,6 @@ const loading = ref(false)
 const items = ref<OntologyObjectTypeItem[]>([])
 const keyword = ref('')
 const filterStatus = ref<OntologyObjectTypeStatus | undefined>(undefined)
-const filterOntologyId = ref<number | undefined>(undefined)
 const hasLoaded = ref(false)
 
 // 关系分组数据源（不受工具栏筛选影响）：全量对象用于「对象→本体」映射，全量关系用于本体关系组
@@ -590,6 +589,7 @@ const treeProps = { label: 'row_key', isLeaf: 'is_leaf' }
 const currentNodeKey = ref('')
 
 const selectedNode = ref<TreeRow | null>(null)
+const treeCollapsed = ref(false)
 const objectDetailView = ref<'overview' | 'instances'>('overview')
 
 const onNodeClick = (data: TreeRow) => {
@@ -770,7 +770,6 @@ const loadObjects = async () => {
     const res = await getAdminOntologyObjectTypes({
       keyword: keyword.value.trim() || undefined,
       status: filterStatus.value || undefined,
-      ontology_id: filterOntologyId.value
     })
     if (res.status === 'success') {
       items.value = res.data?.object_types || []
@@ -1161,57 +1160,59 @@ const onRelationSaved = (objectTypeNames: string[]) => {
 <template>
   <div class="flex h-full min-h-0 flex-col overflow-hidden">
     <!-- 工具栏 -->
-    <AdminPanelToolbar>
-      <el-select
-        v-model="filterStatus"
-        size="small"
-        placeholder="全部状态"
-        clearable
-        :empty-values="[null, undefined]"
-        class="!w-36"
-        @change="onFilterChange"
-      >
-        <el-option v-for="(meta, key) in ONTOLOGY_STATUS_META" :key="key" :label="meta.label" :value="key" />
-      </el-select>
-      <el-select
-        v-model="filterOntologyId"
-        size="small"
-        placeholder="全部本体"
-        clearable
-        filterable
-        :empty-values="[null, undefined]"
-        class="!w-44"
-        @change="onFilterChange"
-      >
-        <el-option
-          v-for="ontology in ontologies"
-          :key="ontology.id"
-          :label="ontology.display_name || ontology.ontology_name"
-          :value="ontology.id"
-        />
-      </el-select>
-      <el-input
-        v-model="keyword"
-        size="small"
-        placeholder="搜索对象名/展示名/描述"
-        clearable
-        class="!w-56"
-        @keyup.enter="searchObjects"
-        @clear="searchObjects"
-      />
-      <el-button size="small" @click="searchObjects">搜索</el-button>
-      <el-button size="small" :loading="loading" @click="loadObjects">
-        <i class="fa-solid fa-rotate-right" style="margin-right: 4px; font-size: 10px;"></i>刷新
-      </el-button>
-      <el-button size="small" @click="consistencyDialogVisible = true">
-        <i class="fa-solid fa-stethoscope" style="margin-right: 4px; font-size: 10px;"></i>一致性检查
-      </el-button>
+    <AdminPanelToolbar v-if="treeCollapsed">
+      <el-tooltip content="展开本体树" placement="top">
+        <el-button size="small" @click="treeCollapsed = false">
+          <i class="fa-solid fa-angles-right" style="margin-right: 4px; font-size: 10px;"></i>展开本体树
+        </el-button>
+      </el-tooltip>
     </AdminPanelToolbar>
 
     <!-- 左树右详情 -->
     <div class="flex min-h-0 flex-1 overflow-hidden">
       <!-- 左：完全树形导航（空白/节点右键菜单） -->
-      <div class="flex min-h-0 w-[340px] shrink-0 flex-col border-r border-slate-100 px-2 pb-2" @contextmenu="openCtxMenu($event, null)">
+      <div
+        v-show="!treeCollapsed"
+        class="relative flex min-h-0 w-[340px] shrink-0 flex-col border-r border-slate-100 px-2 pb-2"
+        @contextmenu="openCtxMenu($event, null)"
+      >
+        <el-tooltip content="收起本体树" placement="top">
+          <button
+            type="button"
+            class="absolute right-1 top-1 z-10 flex h-6 w-6 items-center justify-center border-0 bg-white/90 text-slate-400 hover:text-slate-700"
+            @click="treeCollapsed = true"
+          >
+            <i class="fa-solid fa-angles-left text-[10px]"></i>
+          </button>
+        </el-tooltip>
+        <div class="mb-1 flex items-center gap-1 pt-1 pr-7">
+          <el-select
+            v-model="filterStatus"
+            size="small"
+            placeholder="全部状态"
+            clearable
+            :empty-values="[null, undefined]"
+            class="!w-24 shrink-0"
+            @change="onFilterChange"
+          >
+            <el-option v-for="(meta, key) in ONTOLOGY_STATUS_META" :key="key" :label="meta.label" :value="key" />
+          </el-select>
+          <el-input
+            v-model="keyword"
+            size="small"
+            placeholder="搜索对象"
+            clearable
+            class="min-w-0 flex-1"
+            @keyup.enter="searchObjects"
+            @clear="searchObjects"
+          />
+          <el-button size="small" @click="searchObjects">搜索</el-button>
+          <el-tooltip content="刷新对象类型列表" placement="top">
+            <el-button size="small" :loading="loading" @click="loadObjects">
+              <i class="fa-solid fa-rotate-right" style="font-size: 10px;"></i>
+            </el-button>
+          </el-tooltip>
+        </div>
         <div class="min-h-0 flex-1 overflow-y-auto pt-1">
           <el-tree
             ref="treeRef"
@@ -1237,6 +1238,14 @@ const onRelationSaved = (objectTypeNames: string[]) => {
                 <i class="fa-solid fa-sitemap text-[11px] text-slate-500"></i>
                 <span class="text-xs font-semibold text-slate-800">{{ data.label }}</span>
                 <span class="text-[11px] text-slate-400">{{ data.children.filter((item: TreeRow) => item.kind === 'ontology').length }} 个本体</span>
+                <el-button
+                  link
+                  size="small"
+                  class="ml-2 !p-0 text-[11px]"
+                  @click.stop="consistencyDialogVisible = true"
+                >
+                  <i class="fa-solid fa-stethoscope mr-1 text-[10px]"></i>一致性检查
+                </el-button>
               </span>
               <!-- 本体节点 -->
               <span v-else-if="data.kind === 'ontology'" class="flex items-center gap-1.5 py-0.5">
@@ -1350,7 +1359,7 @@ const onRelationSaved = (objectTypeNames: string[]) => {
             <el-button size="small" type="primary" @click="retrySelectedObject">重试</el-button>
           </div>
           <template v-else-if="selectedObject.entry">
-            <div class="max-w-4xl">
+            <div :class="treeCollapsed ? 'max-w-none' : 'max-w-4xl'">
             <div class="rounded-lg border border-slate-200 bg-white p-4">
             <div class="mb-3 flex items-center gap-2">
               <span class="font-mono text-sm font-medium text-slate-800">{{ selectedNode.object_type_name }}</span>
