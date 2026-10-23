@@ -8,6 +8,7 @@ import pytest
 
 from apps.chat_data_app.services.ontology.object_projection import (
     ObjectProjectionError,
+    build_object_aggregate_query,
     build_object_list_query,
     build_object_query,
     build_object_search_query,
@@ -20,7 +21,7 @@ def _detail(**overrides):
         "object_type_name": "Order",
         "properties": [
             {"property_name": "order_id", "is_identifier": True},
-            {"property_name": "amount", "is_identifier": False},
+            {"property_name": "amount", "is_identifier": False, "value_type": "Decimal"},
         ],
         "mappings": [
             {"semantic_config_id": "cfg-order", "column_mappings": {"order_id": "订单编号", "amount": "金额"}}
@@ -203,6 +204,114 @@ def test_search_object_projection_handles_empty_count(monkeypatch):
     assert result["objects"] == []
 
 
+def test_build_object_aggregate_query_groups_and_aggregates_mapped_properties():
+    query = build_object_aggregate_query(
+        _detail(),
+        _config(),
+        group_by=["amount"],
+        metrics=[
+            {"operation": "count"},
+            {"operation": "sum", "property": "amount"},
+            {"operation": "count_distinct", "property": "order_id"},
+        ],
+        filters=[{"property": "amount", "operator": "gte", "value": "10"}],
+        limit=500,
+    )
+    assert "COUNT(*) AS `count`" in query["sql"]
+    assert "SUM(`amount`) AS `sum_amount`" in query["sql"]
+    assert "COUNT(DISTINCT `order_id`) AS `count_distinct_order_id`" in query["sql"]
+    assert "WHERE `amount` >= '10'" in query["sql"]
+    assert "GROUP BY `amount`" in query["sql"]
+    assert "LIMIT 200" in query["sql"]
+    assert query["metric_keys"] == ["count", "sum_amount", "count_distinct_order_id"]
+
+
+def test_build_object_aggregate_query_without_group_by_and_search_fallback():
+    detail = _detail()
+    detail["properties"].append({"property_name": "title", "is_identifier": False, "is_title": True})
+    query = build_object_aggregate_query(
+        detail,
+        _config(),
+        metrics=[{"operation": "count"}],
+        keyword="A",
+    )
+    assert "GROUP BY" not in query["sql"]
+    assert "ORDER BY" not in query["sql"]
+    assert "`order_id` LIKE '%A%'" in query["sql"]
+
+
+def test_build_object_aggregate_query_requires_mapping_columns_and_same_table():
+    detail = _detail()
+    detail["mappings"][0]["column_mappings"] = None
+    with pytest.raises(ObjectProjectionError, match="column_mappings"):
+        build_object_aggregate_query(detail, _config(), metrics=[{"operation": "count"}])
+    broken = _detail()
+    broken["properties"].append({"property_name": "other", "is_identifier": False})
+    broken["mappings"][0]["column_mappings"]["other"] = "other"
+    config = _config()
+    config["dimensions"].append({"name": "other", "table": "other_table", "column": "other"})
+    with pytest.raises(ObjectProjectionError, match="同一张表"):
+        build_object_aggregate_query(broken, config, metrics=[{"operation": "count"}])
+
+
+def test_build_object_aggregate_query_rejects_bad_metrics_and_group_by():
+    with pytest.raises(ObjectProjectionError, match="数值属性"):
+        build_object_aggregate_query(
+            _detail(),
+            _config(),
+            group_by=["amount"],
+            metrics=[{"operation": "sum", "property": "order_id"}],
+        )
+    with pytest.raises(ObjectProjectionError, match="分组属性未映射"):
+        build_object_aggregate_query(
+            _detail(),
+            _config(),
+            group_by=["missing"],
+            metrics=[{"operation": "count"}],
+        )
+    with pytest.raises(ObjectProjectionError, match="至少需要一个聚合指标"):
+        build_object_aggregate_query(_detail(), _config(), metrics=[])
+    with pytest.raises(ObjectProjectionError, match="不支持的聚合操作"):
+        build_object_aggregate_query(
+            _detail(),
+            _config(),
+            metrics=[{"operation": "median", "property": "amount"}],
+        )
+
+
+def test_aggregate_object_projection_assembles_groups(monkeypatch):
+    from apps.chat_data_app.services.ontology import object_projection
+
+    async def fake_get_object_type(_name):
+        return _detail()
+
+    async def fake_context(_mapping, **_kwargs):
+        return _config(), "g1", [{"member_datasource_id": "m1"}]
+
+    async def fake_query_rows(_targets, _sql, **_kwargs):
+        return [
+            {"amount": 10, "count": 2},
+            {"amount": 20, "count": 1},
+        ]
+
+    monkeypatch.setattr(object_projection.ontology_service, "get_object_type_async", fake_get_object_type)
+    monkeypatch.setattr(object_projection, "_mapping_context", fake_context)
+    monkeypatch.setattr(object_projection, "_query_rows", fake_query_rows)
+    result = asyncio.run(
+        object_projection.aggregate_object_projection(
+            "Order",
+            group_by=["amount"],
+            metrics=[{"operation": "count"}],
+        )
+    )
+    assert result["group_by"] == ["amount"]
+    assert result["metric_keys"] == ["count"]
+    assert result["groups"] == [
+        {"keys": {"amount": 10}, "metrics": {"count": 2}},
+        {"keys": {"amount": 20}, "metrics": {"count": 1}},
+    ]
+
+
 def test_build_object_search_query_requires_mapping_columns():
     detail = _detail()
     detail["mappings"][0]["column_mappings"] = None
@@ -230,6 +339,31 @@ def test_search_object_projection_returns_rows_and_total(monkeypatch):
     result = asyncio.run(object_projection.search_object_projection("Order", limit=2))
     assert result["total"] == 2
     assert [item["object_key"] for item in result["objects"]] == ["Order:A001", "Order:A002"]
+
+
+def test_build_related_key_query_rejects_missing_dimension():
+    with pytest.raises(ObjectProjectionError, match="缺少映射维度"):
+        build_related_key_query(
+            _detail(),
+            {"dimensions": [{"name": "订单编号", "table": "orders", "column": "order_id"}]},
+            filter_property="amount",
+            filter_value="1",
+        )
+
+
+def test_select_member_targets_validates_scope():
+    from apps.chat_data_app.services.ontology.object_projection import _select_member_targets
+
+    targets = [
+        {"member_datasource_id": "ORG_CODE1", "member_name": "财付通"},
+        {"member_datasource_id": "ORG_CODE2", "member_name": "支付宝"},
+    ]
+    assert _select_member_targets(targets, None) == targets
+    assert _select_member_targets(targets, ["ORG_CODE2"])[0]["member_name"] == "支付宝"
+    with pytest.raises(ObjectProjectionError, match="单个"):
+        _select_member_targets(targets, ["ORG_CODE1", "ORG_CODE2"])
+    with pytest.raises(ObjectProjectionError, match="无权访问"):
+        _select_member_targets(targets, ["ORG_CODE9"])
 
 
 def test_build_related_key_query_selects_related_identifier():

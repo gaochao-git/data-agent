@@ -239,6 +239,7 @@ const queryModeBadge = computed(() => {
   const mode = String(activeResult.value?.query_mode || '').trim().toLowerCase()
   if (mode === 'dsl' || mode === 'dsl2sql') return 'DSL'
   if (mode === 'sql' || mode === 'nl2sql') return 'SQL'
+  if (mode.startsWith('ontology_')) return 'Ontology'
   return ''
 })
 
@@ -246,6 +247,8 @@ const queryModeTitle = computed(() => {
   const mode = String(activeResult.value?.query_mode || '').trim().toLowerCase()
   if (mode === 'dsl' || mode === 'dsl2sql') return 'DSL 模式（语义层编译）'
   if (mode === 'sql' || mode === 'nl2sql') return 'SQL 模式'
+  if (mode === 'ontology_find_objects') return '本体对象查询'
+  if (mode === 'ontology_aggregate_objects') return '本体对象聚合'
   return ''
 })
 

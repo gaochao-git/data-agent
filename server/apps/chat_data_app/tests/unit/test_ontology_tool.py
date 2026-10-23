@@ -21,6 +21,11 @@ from apps.chat_data_app.services.semantic.run.semantic_materializer import model
 
 RESULT_PREFIX = "[ontology_tool]\n"
 
+
+def _internal_query_payload(raw: str) -> dict:
+    return json.loads(raw)["payload"]
+
+
 _ONTOLOGY_BUNDLE = {
     "object_types": [
         {"id": 1, "object_type_name": "order", "display_name": "订单", "status": "certified"},
@@ -460,6 +465,46 @@ def test_search_around_untranslated_column_marked(monkeypatch):
     assert hop["join"]["unresolved"] is True
 
 
+# ---------- list_execution_targets（机构范围发现） ----------
+
+
+def test_list_execution_targets_payload_registered():
+    assert ontology_tool.validate_ontology_payload("list_execution_targets", {}) is not None
+
+
+def test_list_execution_targets_requires_datasource(monkeypatch):
+    with pytest.raises(ValueError, match="未绑定数据源"):
+        asyncio.run(
+            ontology_tool.create_ontology_tool("", user_id="u1").ainvoke(
+                {
+                    "action": "list_execution_targets",
+                    "action_payload": {},
+                    "state": {"user_id": "u1", "execution_context": {}},
+                }
+            )
+        )
+
+
+def test_list_execution_targets_returns_authorized_members(monkeypatch):
+    class _FakeManager:
+        async def list_authorized_execution_targets_async(self, datasource_id, **kwargs):
+            assert datasource_id == "ds_a"
+            return [
+                {"member_datasource_id": "ORG_CODE1", "member_name": "财付通", "org_code": "ORG_CODE1"},
+                {"member_datasource_id": "ORG_CODE2", "member_name": "支付宝", "org_code": "ORG_CODE2"},
+            ]
+
+    monkeypatch.setattr(ontology_tool, "get_datasource_manager", lambda: _FakeManager())
+    raw = asyncio.run(
+        ontology_tool.create_ontology_tool("ds_a", user_id="u1").ainvoke(
+            {"action": "list_execution_targets", "action_payload": {}, "state": _onto_state(user_id="u1")}
+        )
+    )
+    payload = json.loads(raw.replace(RESULT_PREFIX, "", 1))
+    assert payload["count"] == 2
+    assert payload["execution_targets"][1]["member_datasource_id"] == "ORG_CODE2"
+
+
 # ---------- find_objects（对象实例查询） ----------
 
 
@@ -498,6 +543,7 @@ def test_find_objects_happy_path(monkeypatch):
 
     async def fake_search(object_type, **kwargs):
         assert kwargs["filters"][0]["property"] == "status"
+        assert kwargs["member_datasource_ids"] == ["ORG_CODE1"]
         return {
             "objects": [
                 {
@@ -512,6 +558,9 @@ def test_find_objects_happy_path(monkeypatch):
             "total": 1,
             "title_property": "tracking_no",
             "properties": ["tracking_no", "status"],
+            "sql": "SELECT tracking_no, status FROM shipments LIMIT 11",
+            "member_datasource_id": "ORG_CODE1",
+            "member_name": "财付通",
         }
 
     monkeypatch.setattr(ontology_tool.ontology_service, "get_object_type_async", fake_get_object_type)
@@ -522,16 +571,241 @@ def test_find_objects_happy_path(monkeypatch):
                 "action": "find_objects",
                 "action_payload": {
                     "object_type": "shipment",
+                    "member_datasource_ids": ["ORG_CODE1"],
                     "filters": [{"property": "status", "operator": "eq", "value": "delivered"}],
                 },
                 "state": _onto_state(user_id="u1"),
             }
         )
     )
-    payload = json.loads(raw.replace(RESULT_PREFIX, "", 1))
-    assert payload["success"] is True
-    assert payload["total"] == 1
-    assert payload["objects"][0]["object_key"] == "shipment:SHIP000001"
+    payload = _internal_query_payload(raw)
+    assert payload["status"] == "succeeded"
+    member = payload["results"][0]
+    assert member["data"][0]["object_key"] == "shipment:SHIP000001"
+    assert member["columns"] == ["object_key", "tracking_no", "status"]
+    assert member["member_datasource_id"] == "ORG_CODE1"
+    assert payload["preview"]["kind"] == "objects"
+
+
+def test_find_objects_projection_error_is_reported(monkeypatch):
+    monkeypatch.setenv("CHAT_DATA_ONTOLOGY_OBJECT_READ_ENABLED", "1")
+
+    async def fake_get_object_type(_name):
+        return {"id": 7, "object_type_name": "shipment", "status": "certified"}
+
+    async def fake_search(_object_type, **_kwargs):
+        raise ontology_tool.ObjectProjectionError("对象查询失败")
+
+    monkeypatch.setattr(ontology_tool.ontology_service, "get_object_type_async", fake_get_object_type)
+    monkeypatch.setattr(ontology_tool, "search_object_projection", fake_search)
+    with pytest.raises(ValueError, match="对象查询失败"):
+        asyncio.run(
+            ontology_tool.create_ontology_tool().ainvoke(
+                {
+                    "action": "find_objects",
+                    "action_payload": {"object_type": "shipment"},
+                    "state": _onto_state(user_id="u1"),
+                }
+            )
+        )
+
+
+def test_find_objects_runs_per_member_scope(monkeypatch):
+    monkeypatch.setenv("CHAT_DATA_ONTOLOGY_OBJECT_READ_ENABLED", "1")
+
+    async def fake_get_object_type(_name):
+        return {"id": 7, "object_type_name": "shipment", "status": "certified"}
+
+    seen: list[str] = []
+
+    async def fake_search(object_type, **kwargs):
+        member_id = (kwargs.get("member_datasource_ids") or [""])[0]
+        seen.append(member_id)
+        return {
+            "objects": [{"object_type": object_type, "object_key": f"shipment:{member_id}", "properties": {}}],
+            "total": 1,
+            "properties": [],
+            "title_property": "shipment_id",
+            "sql": "SELECT 1",
+            "member_datasource_id": member_id,
+            "member_name": member_id,
+        }
+
+    monkeypatch.setattr(ontology_tool.ontology_service, "get_object_type_async", fake_get_object_type)
+    monkeypatch.setattr(ontology_tool, "search_object_projection", fake_search)
+    state = _onto_state(user_id="u1")
+    state["execution_context"]["matched_member_datasource_ids"] = []
+    state["execution_context"]["available_member_datasource_ids"] = ["ORG_CODE1", "ORG_CODE2"]
+    raw = asyncio.run(
+        ontology_tool.create_ontology_tool().ainvoke(
+            {
+                "action": "find_objects",
+                "action_payload": {"object_type": "shipment", "member_datasource_ids": ["ORG_CODE1", "ORG_CODE2"]},
+                "state": state,
+            }
+        )
+    )
+    payload = _internal_query_payload(raw)
+    assert seen == ["ORG_CODE1", "ORG_CODE2"]
+    assert [item["member_datasource_id"] for item in payload["results"]] == ["ORG_CODE1", "ORG_CODE2"]
+
+
+def test_find_objects_uses_single_context_member_when_scope_omitted(monkeypatch):
+    monkeypatch.setenv("CHAT_DATA_ONTOLOGY_OBJECT_READ_ENABLED", "1")
+
+    async def fake_get_object_type(_name):
+        return {"id": 7, "object_type_name": "shipment", "status": "certified"}
+
+    seen: list[str] = []
+
+    async def fake_search(object_type, **kwargs):
+        seen.extend(kwargs.get("member_datasource_ids") or [])
+        return {
+            "objects": [{"object_type": object_type, "object_key": "shipment:1", "properties": {}}],
+            "total": 1,
+            "properties": [],
+            "sql": "SELECT 1",
+            "member_datasource_id": "ORG_CODE1",
+            "member_name": "财付通",
+        }
+
+    monkeypatch.setattr(ontology_tool.ontology_service, "get_object_type_async", fake_get_object_type)
+    monkeypatch.setattr(ontology_tool, "search_object_projection", fake_search)
+    state = _onto_state(user_id="u1")
+    state["execution_context"]["available_member_datasource_ids"] = ["ORG_CODE1"]
+    raw = asyncio.run(
+        ontology_tool.create_ontology_tool().ainvoke(
+            {
+                "action": "find_objects",
+                "action_payload": {"object_type": "shipment"},
+                "state": state,
+            }
+        )
+    )
+    assert _internal_query_payload(raw)["results"][0]["member_datasource_id"] == "ORG_CODE1"
+    assert seen == ["ORG_CODE1"]
+
+
+def test_find_objects_requires_scope_when_context_has_multiple_members(monkeypatch):
+    monkeypatch.setenv("CHAT_DATA_ONTOLOGY_OBJECT_READ_ENABLED", "1")
+
+    async def fake_get_object_type(_name):
+        return {"id": 7, "object_type_name": "shipment", "status": "certified"}
+
+    monkeypatch.setattr(ontology_tool.ontology_service, "get_object_type_async", fake_get_object_type)
+    state = _onto_state(user_id="u1")
+    state["execution_context"]["available_member_datasource_ids"] = ["ORG_CODE1", "ORG_CODE2"]
+    with pytest.raises(ValueError, match="多个可执行数据源"):
+        asyncio.run(
+            ontology_tool.create_ontology_tool().ainvoke(
+                {
+                    "action": "find_objects",
+                    "action_payload": {"object_type": "shipment"},
+                    "state": state,
+                }
+            )
+        )
+
+
+# ---------- aggregate_objects（对象聚合） ----------
+
+
+def test_aggregate_objects_payload_registered():
+    payload = ontology_tool.validate_ontology_payload(
+        "aggregate_objects",
+        {
+            "object_type": "shipment",
+            "group_by": ["carrier"],
+            "metrics": [{"operation": "count"}, {"operation": "sum", "property": "amount"}],
+        },
+    )
+    assert payload.group_by == ["carrier"]
+    assert payload.metrics[0].operation == "count"
+
+
+def test_aggregate_objects_disabled_by_default(monkeypatch):
+    monkeypatch.delenv("CHAT_DATA_ONTOLOGY_OBJECT_READ_ENABLED", raising=False)
+    with pytest.raises(ValueError, match="CHAT_DATA_ONTOLOGY_OBJECT_READ_ENABLED"):
+        asyncio.run(
+            ontology_tool.create_ontology_tool().ainvoke(
+                {
+                    "action": "aggregate_objects",
+                    "action_payload": {"object_type": "shipment", "metrics": [{"operation": "count"}]},
+                    "state": _onto_state(),
+                }
+            )
+        )
+
+
+def test_aggregate_objects_projection_error_is_reported(monkeypatch):
+    monkeypatch.setenv("CHAT_DATA_ONTOLOGY_OBJECT_READ_ENABLED", "1")
+
+    async def fake_get_object_type(_name):
+        return {"id": 7, "object_type_name": "shipment", "status": "certified"}
+
+    async def fake_aggregate(_object_type, **_kwargs):
+        raise ontology_tool.ObjectProjectionError("指标属性未映射")
+
+    monkeypatch.setattr(ontology_tool.ontology_service, "get_object_type_async", fake_get_object_type)
+    monkeypatch.setattr(ontology_tool, "aggregate_object_projection", fake_aggregate)
+    with pytest.raises(ValueError, match="指标属性未映射"):
+        asyncio.run(
+            ontology_tool.create_ontology_tool().ainvoke(
+                {
+                    "action": "aggregate_objects",
+                    "action_payload": {"object_type": "shipment", "metrics": [{"operation": "count"}]},
+                    "state": _onto_state(),
+                }
+            )
+        )
+
+
+def test_aggregate_objects_happy_path(monkeypatch):
+    monkeypatch.setenv("CHAT_DATA_ONTOLOGY_OBJECT_READ_ENABLED", "1")
+
+    async def fake_get_object_type(_name):
+        return {"id": 7, "object_type_name": "shipment", "status": "certified"}
+
+    async def fake_aggregate(object_type, **kwargs):
+        assert kwargs["group_by"] == ["carrier"]
+        assert kwargs["member_datasource_ids"] == ["ORG_CODE1"]
+        assert kwargs["metrics"] == [{"operation": "count", "property": None}]
+        return {
+            "object_type": object_type,
+            "group_by": ["carrier"],
+            "metric_keys": ["count"],
+            "groups": [
+                {"keys": {"carrier": "顺丰"}, "metrics": {"count": 75}},
+                {"keys": {"carrier": "京东"}, "metrics": {"count": 80}},
+            ],
+            "limit": 100,
+            "sql": "SELECT carrier, COUNT(*) AS count FROM shipments GROUP BY carrier",
+            "member_datasource_id": "ORG_CODE1",
+            "member_name": "财付通",
+        }
+
+    monkeypatch.setattr(ontology_tool.ontology_service, "get_object_type_async", fake_get_object_type)
+    monkeypatch.setattr(ontology_tool, "aggregate_object_projection", fake_aggregate)
+    raw = asyncio.run(
+        ontology_tool.create_ontology_tool().ainvoke(
+            {
+                "action": "aggregate_objects",
+                "action_payload": {
+                    "object_type": "shipment",
+                    "member_datasource_ids": ["ORG_CODE1"],
+                    "group_by": ["carrier"],
+                    "metrics": [{"operation": "count"}],
+                },
+                "state": _onto_state(user_id="u1"),
+            }
+        )
+    )
+    payload = _internal_query_payload(raw)
+    assert payload["status"] == "succeeded"
+    member = payload["results"][0]
+    assert member["data"][0] == {"carrier": "顺丰", "count": 75}
+    assert member["columns"] == ["carrier", "count"]
+    assert payload["preview"]["kind"] == "aggregate"
 
 
 # ---------- get_object（对象实例读取） ----------
@@ -554,6 +828,47 @@ def test_get_object_disabled_by_default(monkeypatch):
                     "action": "get_object",
                     "action_payload": {"object_type": "sales_order", "object_key": "ORD2024000001"},
                     "state": _onto_state(),
+                }
+            )
+        )
+
+
+def test_get_object_rejects_multiple_members(monkeypatch):
+    monkeypatch.setenv("CHAT_DATA_ONTOLOGY_OBJECT_READ_ENABLED", "1")
+    with pytest.raises(ValueError, match="只能指定一个"):
+        asyncio.run(
+            ontology_tool.create_ontology_tool().ainvoke(
+                {
+                    "action": "get_object",
+                    "action_payload": {
+                        "object_type": "sales_order",
+                        "object_key": "ORD1",
+                        "member_datasource_ids": ["ORG_CODE1", "ORG_CODE2"],
+                    },
+                    "state": _onto_state(user_id="u1"),
+                }
+            )
+        )
+
+
+def test_get_object_projection_error_is_reported(monkeypatch):
+    monkeypatch.setenv("CHAT_DATA_ONTOLOGY_OBJECT_READ_ENABLED", "1")
+
+    async def fake_get_object_type(_name):
+        return {"id": 1, "object_type_name": "sales_order", "status": "certified"}
+
+    async def fake_read_object(*_args, **_kwargs):
+        raise ontology_tool.ObjectProjectionError("对象不存在")
+
+    monkeypatch.setattr(ontology_tool.ontology_service, "get_object_type_async", fake_get_object_type)
+    monkeypatch.setattr(ontology_tool, "read_object_projection", fake_read_object)
+    with pytest.raises(ValueError, match="对象不存在"):
+        asyncio.run(
+            ontology_tool.create_ontology_tool().ainvoke(
+                {
+                    "action": "get_object",
+                    "action_payload": {"object_type": "sales_order", "object_key": "missing"},
+                    "state": _onto_state(user_id="u1"),
                 }
             )
         )

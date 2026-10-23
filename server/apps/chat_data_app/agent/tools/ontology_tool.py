@@ -27,6 +27,7 @@ model_validator：langgraph 会把 model_validator 抛出的校验错误过滤�
 
 from __future__ import annotations
 
+import asyncio
 from typing import Annotated, Any, Literal
 
 from langchain_core.tools import BaseTool, tool
@@ -34,9 +35,16 @@ from langgraph.prebuilt import InjectedState
 from pydantic import BaseModel, Field, ValidationError
 
 from apps.chat_data_app.daos.ontology_dao import OntologyDao
+from apps.chat_data_app.services.datasource.manager import get_datasource_manager
+from apps.chat_data_app.services.datasource.target_context import (
+    get_execution_target_member_id,
+    get_execution_target_name,
+    get_execution_target_org_code,
+)
 from apps.chat_data_app.services.ontology import ontology_service
 from apps.chat_data_app.services.ontology.object_projection import (
     ObjectProjectionError,
+    aggregate_object_projection,
     ontology_object_read_enabled,
     read_object_projection,
     search_object_projection,
@@ -58,8 +66,10 @@ from apps.chat_data_app.services.semantic.run.semantic_materializer import (
     enabled_candidate_ids,
     model_snapshot_file_name,
 )
+from apps.chat_data_app.services.sql_run.result import build_query_result_payload
 from utils.logger import get_logger
 
+from ..tool_results import build_internal_query_result
 from .common import tool_result_payload
 
 logger = get_logger(__name__)
@@ -135,6 +145,9 @@ class _GetObjectPayload(BaseModel):
 
     object_type: str = Field(..., min_length=1, description='本体对象类型 API 名，如 "sales_order"')
     object_key: str = Field(..., min_length=1, description='对象主键值，如 "ORD2024000001"')
+    member_datasource_ids: list[str] | None = Field(
+        default=None, max_length=20, description="执行对象/机构范围；多机构下用于定位对象"
+    )
     semantic_config_id: str | None = Field(
         default=None,
         description="可选；对象类型绑定多个语义模型时指定投影使用的模型",
@@ -163,12 +176,41 @@ class _FindObjectsPayload(BaseModel):
     """``find_objects`` 的入参结构：按对象类型查询实例（关键词 + 过滤 + 排序 + 分页）。"""
 
     object_type: str = Field(..., min_length=1, max_length=128, description='对象类型 API 名，如 "customer"')
+    member_datasource_ids: list[str] | None = Field(
+        default=None, max_length=20, description="执行对象/机构范围；当前对象查询 MVP 一次只支持一个机构"
+    )
     keyword: str = Field(default="", max_length=200, description="标题键/主键模糊搜索")
     filters: list[_FindObjectsFilter] = Field(default_factory=list, max_length=10, description="属性过滤")
     sort: list[_FindObjectsSort] = Field(default_factory=list, max_length=5, description="属性排序")
     limit: int = Field(default=10, ge=1, le=50, description="返回对象数上限")
     offset: int = Field(default=0, ge=0, description="偏移量")
     semantic_config_id: str | None = Field(default=None, description="多映射对象指定语义模型")
+
+
+class _AggregateObjectsMetric(BaseModel):
+    """对象聚合计指标；count 不需要 property，其余操作必须指定映射属性。"""
+
+    operation: Literal["count", "count_distinct", "sum", "avg", "min", "max"] = Field(..., description="聚合操作")
+    property: str | None = Field(default=None, max_length=128, description="聚合属性 API 名；count 可省略")
+
+
+class _AggregateObjectsPayload(BaseModel):
+    """``aggregate_objects`` 的入参结构：对象实例按属性分组聚合。"""
+
+    object_type: str = Field(..., min_length=1, max_length=128, description='对象类型 API 名，如 "shipment"')
+    member_datasource_ids: list[str] | None = Field(
+        default=None, max_length=20, description="执行对象/机构范围；当前对象查询 MVP 一次只支持一个机构"
+    )
+    group_by: list[str] = Field(default_factory=list, max_length=5, description="分组属性 API 名列表")
+    metrics: list[_AggregateObjectsMetric] = Field(..., min_length=1, max_length=5, description="聚合指标")
+    filters: list[_FindObjectsFilter] = Field(default_factory=list, max_length=10, description="属性过滤")
+    keyword: str = Field(default="", max_length=200, description="标题键/主键模糊搜索")
+    limit: int = Field(default=100, ge=1, le=200, description="返回分组数上限")
+    semantic_config_id: str | None = Field(default=None, description="多映射对象指定语义模型")
+
+
+class _ListExecutionTargetsPayload(BaseModel):
+    """``list_execution_targets`` 的入参结构：列出当前用户可执行的成员数据源。"""
 
 
 # action -> action_payload 校验模型。与 data_analyzing_tool 的同名机制一致：
@@ -179,13 +221,15 @@ ONTOLOGY_ACTION_PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
     "search_around": _SearchAroundPayload,
     "get_object": _GetObjectPayload,
     "find_objects": _FindObjectsPayload,
+    "aggregate_objects": _AggregateObjectsPayload,
+    "list_execution_targets": _ListExecutionTargetsPayload,
 }
 
 
 class OntologyToolInput(BaseModel):
     """本体导航工具入参：按 ``action`` 分派，``action_payload`` 结构随 action 变化。
 
-    五个 action：``list_object_types`` 列出可定位本体对象类型（轻量清单，只读发现通道）、
+    七个 action：``list_object_types`` 列出可定位本体对象类型（轻量清单，只读发现通道）、
     ``locate_object_type`` 按本体对象类型批量定位语义模型（纯导航，不执行查询）、
     ``search_around`` 以单个对象类型为中心沿关系走一跳（返回物理连接列与对端完整定位条目）、
     ``get_object`` 按对象类型 + 主键读取对象属性与一跳 links（只读）。
@@ -194,14 +238,23 @@ class OntologyToolInput(BaseModel):
     模型与用户都看不到原因；在工具函数体内抛错则走 ToolErrorMiddleware，详情完整可见。
     """
 
-    action: Literal["list_object_types", "locate_object_type", "search_around", "get_object", "find_objects"] = Field(
+    action: Literal[
+        "list_object_types",
+        "locate_object_type",
+        "search_around",
+        "get_object",
+        "find_objects",
+        "aggregate_objects",
+        "list_execution_targets",
+    ] = Field(
         ...,
         description=(
             "操作类型：list_object_types 列出可定位本体对象类型（轻量清单：对象类型名/显示名/描述 + 各自绑定模型，不执行查询）；"
             "locate_object_type 按本体对象类型批量定位语义模型（返回绑定模型/属性→维度对照/对象类型间关系类型，不执行查询）；"
             "search_around 以单个对象类型为中心沿关系走一跳（返回物理连接列与对端对象完整定位条目，不执行查询）；"
             "get_object 按对象类型 + 主键读取对象属性与一跳 links（只读，不回写）；"
-            "find_objects 按对象类型查询实例（关键词/属性过滤/排序/分页，只读）"
+            "find_objects 按对象类型查询实例（关键词/属性过滤/排序/分页，只读）；"
+            "aggregate_objects 按对象类型分组聚合（count/sum/avg/min/max，只读；不替代指标 SQL）"
         ),
     )
     action_payload: dict[str, Any] = Field(
@@ -211,8 +264,9 @@ class OntologyToolInput(BaseModel):
             "list_object_types 传 {}；"
             'locate_object_type 传 {"object_types": [<对象类型API名>...], "semantic_config_id": "可选，只看该模型的绑定"}；'
             'search_around 传 {"object_type": "<中心对象类型API名>", "relation": "可选，只展开该关系", "semantic_config_id": "可选"}；'
-            'get_object 传 {"object_type": "<对象类型API名>", "object_key": "<对象主键值>", "semantic_config_id": "可选"}；'
-            'find_objects 传 {"object_type": "<对象类型API名>", "keyword": "可选", "filters": [{"property": "<属性>", "operator": "eq", "value": "<值>"}], "sort": [{"property": "<属性>", "direction": "asc"}], "limit": 10, "offset": 0}'
+            'get_object 传 {"object_type": "<对象类型API名>", "object_key": "<对象主键值>", "member_datasource_ids": ["可选机构ID"], "semantic_config_id": "可选"}；'
+            'find_objects 传 {"object_type": "<对象类型API名>", "member_datasource_ids": ["可选机构ID"], "keyword": "可选", "filters": [{"property": "<属性>", "operator": "eq", "value": "<值>"}], "sort": [{"property": "<属性>", "direction": "asc"}], "limit": 10, "offset": 0}；'
+            'aggregate_objects 传 {"object_type": "<对象类型API名>", "member_datasource_ids": ["可选机构ID"], "group_by": ["<属性>"], "metrics": [{"operation": "count"}, {"operation": "sum", "property": "<数值属性>"}]}'
         ),
     )
     intent: str = Field(
@@ -420,6 +474,110 @@ async def _ensure_navigable_object_type(object_type_name: str) -> None:
         raise ValueError(f"对象类型未处于可导航状态（certified/experimental）: {object_type_name}")
 
 
+def _state_member_ids(state: dict | None) -> list[str]:
+    """从执行上下文取当前可选机构范围；显式 payload 未传时作为默认范围。"""
+    context = (state or {}).get("execution_context")
+    if not isinstance(context, dict):
+        return []
+    for key in ("matched_member_datasource_ids", "available_member_datasource_ids"):
+        raw = context.get(key)
+        if isinstance(raw, list):
+            members = [str(item).strip() for item in raw if str(item).strip()]
+            if members:
+                return members
+    return []
+
+
+def _query_member_ids(payload_member_ids: list[str] | None, state: dict | None) -> list[str | None]:
+    """请求机构优先；未请求且上下文有多个机构时必须显式选择，避免误扫分库。"""
+    requested = [str(item).strip() for item in payload_member_ids or [] if str(item).strip()]
+    if requested:
+        return list(requested)
+    members = _state_member_ids(state)
+    if len(members) == 1:
+        return [members[0]]
+    if len(members) > 1:
+        raise ValueError(
+            "当前会话有多个可执行数据源，请先调用 list_execution_targets，"
+            f"并显式传入 member_datasource_ids；可用: {', '.join(members)}"
+        )
+    return [None]
+
+
+def _object_member_result(
+    data: dict[str, Any],
+    *,
+    columns: list[str],
+    rows: list[dict[str, Any]],
+    total_count: int,
+) -> dict[str, Any]:
+    return {
+        "member_datasource_id": data.get("member_datasource_id") or "",
+        "member_name": data.get("member_name") or "",
+        "status": "succeeded",
+        "sql": data.get("sql") or "",
+        "columns": columns,
+        "data": rows,
+        "total_count": total_count,
+        "execution_time_ms": data.get("execution_time_ms"),
+        "error": None,
+    }
+
+
+def _build_object_query_result(
+    member_results: list[dict[str, Any]],
+    *,
+    query_mode: str,
+    preview: dict[str, Any],
+) -> str:
+    """把（可分机构的）对象查询结果接到统一 query_result 协议。"""
+    sql = next((str(item.get("sql") or "") for item in member_results if item.get("sql")), "")
+    payload = build_query_result_payload(sql=sql, member_results=member_results)
+    payload["query_mode"] = query_mode
+    payload["preview"] = preview
+    return build_internal_query_result(payload, query_mode=query_mode)
+
+
+async def _run_list_execution_targets(
+    *,
+    state: dict | None,
+    bound_datasource_id: str,
+    bound_user_id: str,
+    bound_operator_name: str | None,
+) -> str:
+    """列出当前用户在会话数据源组下可执行的成员数据源，供显式机构查询选范围。"""
+    state = state or {}
+    raw_context = state.get("execution_context")
+    context = raw_context if isinstance(raw_context, dict) else {}
+    datasource_id = str(context.get("datasource_id") or "").strip() or bound_datasource_id
+    if not datasource_id:
+        raise ValueError("当前会话未绑定数据源")
+    user_id = str(state.get("user_id") or "").strip() or bound_user_id
+    operator_name = str(state.get("operator_name") or "").strip() or bound_operator_name or ""
+    targets = await get_datasource_manager().list_authorized_execution_targets_async(
+        datasource_id,
+        user_id=user_id,
+        username=operator_name,
+    )
+    entries = [
+        {
+            "member_datasource_id": get_execution_target_member_id(target),
+            "member_name": get_execution_target_name(target, index),
+            "org_code": get_execution_target_org_code(target),
+        }
+        for index, target in enumerate(targets, start=1)
+    ]
+    return tool_result_payload(
+        ONTOLOGY_TOOL_NAME,
+        {
+            "success": True,
+            "count": len(entries),
+            "execution_targets": entries,
+            "usage": "用户指定机构时，把选中的 member_datasource_id 作为 member_datasource_ids 传给 find_objects/aggregate_objects/get_object。",
+        },
+    )
+
+
 async def _run_find_objects(
     *,
     payload: Any,
@@ -432,29 +590,102 @@ async def _run_find_objects(
     await _ensure_navigable_object_type(payload.object_type)
     state = state or {}
     user_id = str(state.get("user_id") or "").strip() or bound_user_id
-    try:
-        data = await search_object_projection(
-            payload.object_type,
-            keyword=payload.keyword,
-            filters=[item.model_dump() for item in payload.filters],
-            sorts=[item.model_dump() for item in payload.sort],
-            limit=payload.limit,
-            offset=payload.offset,
-            semantic_config_id=payload.semantic_config_id,
-            user_id=user_id,
+    member_ids = _query_member_ids(payload.member_datasource_ids, state)
+    semaphore = asyncio.Semaphore(8)
+
+    async def load_member(member_id: str | None) -> dict[str, Any]:
+        async with semaphore:
+            try:
+                return await search_object_projection(
+                    payload.object_type,
+                    keyword=payload.keyword,
+                    filters=[item.model_dump() for item in payload.filters],
+                    sorts=[item.model_dump() for item in payload.sort],
+                    limit=payload.limit,
+                    offset=payload.offset,
+                    semantic_config_id=payload.semantic_config_id,
+                    member_datasource_ids=[member_id] if member_id else None,
+                    user_id=user_id,
+                )
+            except ObjectProjectionError as err:
+                raise ValueError(str(err)) from err
+
+    member_results: list[dict[str, Any]] = []
+    preview_objects: list[dict[str, Any]] = []
+    for data in await asyncio.gather(*(load_member(member_id) for member_id in member_ids)):
+        objects = [item for item in data.get("objects") or [] if isinstance(item, dict)]
+        rows = [{"object_key": item.get("object_key"), **(item.get("properties") or {})} for item in objects]
+        columns = ["object_key", *[str(name) for name in data.get("properties") or []]]
+        member_results.append(
+            _object_member_result(
+                data,
+                columns=columns,
+                rows=rows,
+                total_count=int(data.get("total") or len(rows)),
+            )
         )
-    except ObjectProjectionError as err:
-        raise ValueError(str(err)) from err
-    return tool_result_payload(
-        ONTOLOGY_TOOL_NAME,
-        {
-            "success": True,
-            **data,
-            "usage": (
-                "find_objects 返回对象实例清单与 total；单个对象属性用 get_object，"
-                "对象 links 的对端再按 key 调 get_object；聚合统计仍走 execute_query。"
-            ),
-        },
+        preview_objects.extend(objects[:5])
+    return _build_object_query_result(
+        member_results,
+        query_mode="ontology_find_objects",
+        preview={"kind": "objects", "objects": preview_objects[:10]},
+    )
+
+
+async def _run_aggregate_objects(
+    *,
+    payload: Any,
+    state: dict | None,
+    bound_user_id: str,
+) -> str:
+    """对象聚合（``aggregate_objects`` action）：分组 + 白名单指标，只读。"""
+    if not ontology_object_read_enabled():
+        raise ValueError("对象实例读取未启用：需设置环境变量 CHAT_DATA_ONTOLOGY_OBJECT_READ_ENABLED=1")
+    await _ensure_navigable_object_type(payload.object_type)
+    state = state or {}
+    user_id = str(state.get("user_id") or "").strip() or bound_user_id
+    member_ids = _query_member_ids(payload.member_datasource_ids, state)
+    semaphore = asyncio.Semaphore(8)
+
+    async def load_member(member_id: str | None) -> dict[str, Any]:
+        async with semaphore:
+            try:
+                return await aggregate_object_projection(
+                    payload.object_type,
+                    group_by=payload.group_by,
+                    metrics=[item.model_dump() for item in payload.metrics],
+                    filters=[item.model_dump() for item in payload.filters],
+                    keyword=payload.keyword,
+                    limit=payload.limit,
+                    semantic_config_id=payload.semantic_config_id,
+                    member_datasource_ids=[member_id] if member_id else None,
+                    user_id=user_id,
+                )
+            except ObjectProjectionError as err:
+                raise ValueError(str(err)) from err
+
+    member_results: list[dict[str, Any]] = []
+    preview_groups: list[dict[str, Any]] = []
+    group_by: list[str] = []
+    metric_keys: list[str] = []
+    for data in await asyncio.gather(*(load_member(member_id) for member_id in member_ids)):
+        group_by = [str(name) for name in data.get("group_by") or []]
+        metric_keys = [str(name) for name in data.get("metric_keys") or []]
+        groups = [group for group in data.get("groups") or [] if isinstance(group, dict)]
+        rows = [{**(group.get("keys") or {}), **(group.get("metrics") or {})} for group in groups]
+        member_results.append(
+            _object_member_result(
+                data,
+                columns=[*group_by, *metric_keys],
+                rows=rows,
+                total_count=len(rows),
+            )
+        )
+        preview_groups.extend(groups[:10])
+    return _build_object_query_result(
+        member_results,
+        query_mode="ontology_aggregate_objects",
+        preview={"kind": "aggregate", "group_by": group_by, "metric_keys": metric_keys, "groups": preview_groups[:20]},
     )
 
 
@@ -468,6 +699,9 @@ async def _run_get_object(
     if not ontology_object_read_enabled():
         raise ValueError("对象实例读取未启用：需设置环境变量 CHAT_DATA_ONTOLOGY_OBJECT_READ_ENABLED=1")
     state = state or {}
+    member_ids = _query_member_ids(payload.member_datasource_ids, state)
+    if len(member_ids) != 1:
+        raise ValueError("get_object 必须且只能指定一个 member_datasource_id")
     user_id = str(state.get("user_id") or "").strip() or bound_user_id
     await _ensure_navigable_object_type(payload.object_type)
     try:
@@ -475,6 +709,7 @@ async def _run_get_object(
             payload.object_type,
             payload.object_key,
             semantic_config_id=payload.semantic_config_id,
+            member_datasource_ids=[member_ids[0]] if member_ids[0] else None,
             user_id=user_id,
         )
     except ObjectProjectionError as err:
@@ -529,6 +764,19 @@ async def _run_ontology_impl(
             state=state,
             bound_user_id=bound_user_id,
         )
+    if action == "aggregate_objects":
+        return await _run_aggregate_objects(
+            payload=payload,
+            state=state,
+            bound_user_id=bound_user_id,
+        )
+    if action == "list_execution_targets":
+        return await _run_list_execution_targets(
+            state=state,
+            bound_datasource_id=bound_datasource_id,
+            bound_user_id=bound_user_id,
+            bound_operator_name=None,
+        )
     # locate_object_type
     return await _run_locate_object_type(
         payload=payload,
@@ -564,12 +812,16 @@ def create_ontology_tool(
         - search_around: 以单个对象类型为中心沿关系走一跳——每条关系返回物理连接列（from/to_columns，多模型绑定用 from/to_columns_by_model）与对端对象完整定位条目（属性/绑定/映射，其 relations 只留名字提示下一跳）；跨对象类型关联优先用它拿 join 列，不要靠 grep 模型 YAML 猜
         - get_object: 按对象类型 + 主键读取对象属性与一跳 links（只读；links 是对端对象引用，聚合查询仍走 execute_query）
         - find_objects: 按对象类型查询实例——关键词、属性过滤、排序、分页，返回对象标题/主键/属性与 total；只读，适合先找到对象再 get_object
+        - aggregate_objects: 按对象类型分组聚合——group_by + count/count_distinct/sum/avg/min/max；适合对象数量/分布等只读聚合，复杂指标仍走 execute_query
+        - list_execution_targets: 列出当前用户可执行的成员数据源（member_datasource_id/名称/机构编码）；用户指定机构或数据源时先调用它，再把选中的 ID 传给对象查询
             action_payload: 操作参数，结构随 action 变化：
         - list_object_types: {}（无参数，范围=本轮启用语义模型绑定的对象）
         - locate_object_type: {"object_types": [<对象API名>...]（单次最多10个）, "semantic_config_id": 可选只看该模型绑定}
         - search_around: {"object_type": "<中心对象API名>", "relation": 可选只展开该关系名, "semantic_config_id": 可选}
-        - get_object: {"object_type": "<对象类型API名>", "object_key": "<对象主键值>", "semantic_config_id": 可选}
-        - find_objects: {"object_type": "<对象类型API名>", "keyword": 可选, "filters": [{"property": "<属性>", "operator": "eq", "value": "<值>"}], "sort": [{"property": "<属性>", "direction": "asc"}], "limit": 10, "offset": 0}
+        - get_object: {"object_type": "<对象类型API名>", "object_key": "<对象主键值>", "member_datasource_ids": ["可选机构ID"], "semantic_config_id": 可选}
+        - find_objects: {"object_type": "<对象类型API名>", "member_datasource_ids": ["可选机构ID"], "keyword": 可选, "filters": [{"property": "<属性>", "operator": "eq", "value": "<值>"}], "sort": [{"property": "<属性>", "direction": "asc"}], "limit": 10, "offset": 0}
+        - aggregate_objects: {"object_type": "<对象类型API名>", "member_datasource_ids": ["可选机构ID"], "group_by": ["<属性>"], "metrics": [{"operation": "count"}, {"operation": "sum", "property": "<数值属性>"}]}
+        - list_execution_targets: {}（无参数；返回当前用户可见执行对象）
             intent: 一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示。
         """
         return await _run_ontology_impl(

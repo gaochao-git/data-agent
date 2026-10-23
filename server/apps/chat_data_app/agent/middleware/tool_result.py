@@ -57,7 +57,7 @@ async def _finalize_tool_message(
         return message
     internal = parse_internal_tool_result(message.content)
     if internal is not None:
-        content, recovery = await _finalize_query_result(internal, request)
+        content, recovery = await _finalize_query_result(internal, request, tool_name)
         return _replace_tool_message(message, content=content, recovery=recovery)
     if tool_name in _READ_PAGINATED_TOOLS:
         recovery = _read_tool_recovery(tool_name, request, message.content)
@@ -74,6 +74,7 @@ async def _finalize_tool_message(
 async def _finalize_query_result(
     internal: dict[str, Any],
     request: Any,
+    source_tool: str,
 ) -> tuple[str, dict[str, Any] | None]:
     query_result = dict(internal["payload"])
     meta = dict(internal["meta"])
@@ -109,12 +110,19 @@ async def _finalize_query_result(
         ), None
 
     recovery = build_tool_result_recovery(
-        source_tool="data_analyzing_tool",
+        source_tool=source_tool,
         result_path=record.virtual_path,
         result_size_chars=result_size_chars,
         result_id=record.result_id,
     )
 
+    members = [item for item in query_result.get("results") or [] if isinstance(item, dict)]
+    member_ids = [str(item.get("member_datasource_id") or "").strip() for item in members]
+    member_names = [str(item.get("member_name") or "").strip() for item in members]
+    if any(member_ids):
+        public_meta["member_datasource_ids"] = [item for item in member_ids if item]
+    if any(member_names):
+        public_meta["member_names"] = [item for item in member_names if item]
     public_meta.update(
         {
             "result_id": record.result_id,

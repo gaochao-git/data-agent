@@ -83,6 +83,45 @@ async def test_query_result_is_saved_as_reference_only(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_query_result_keeps_object_preview_and_source_tool(monkeypatch, tmp_path):
+    request, _paths = _workspace_request(monkeypatch, tmp_path)
+    message = ToolMessage(
+        content=tool_results.build_internal_query_result(
+            {
+                "status": "succeeded",
+                "sql": "select 1",
+                "results": [
+                    {
+                        "status": "succeeded",
+                        "member_datasource_id": "ORG_CODE1",
+                        "member_name": "财付通",
+                        "data": [{"value": 1}],
+                    }
+                ],
+                "total_count": 1,
+                "preview": {"kind": "objects", "object_type": "shipment", "objects": []},
+            },
+            query_mode="ontology_find_objects",
+        ),
+        name="ontology_tool",
+        tool_call_id="call_ontology",
+    )
+
+    result = await tool_result._finalize_tool_message(message, request)
+    payload = json.loads(result.content)
+
+    assert payload["meta"]["query_mode"] == "ontology_find_objects"
+    assert payload["meta"]["member_datasource_ids"] == ["ORG_CODE1"]
+    assert payload["meta"]["member_names"] == ["财付通"]
+    assert "preview" not in payload["meta"]
+    assert result.artifact["chatdata_tool_result_recovery"]["source_tool"] == "ontology_tool"
+    saved = json.loads(
+        (Path(_paths["outputs"]) / "query_result" / f"{payload['meta']['result_id']}.json").read_text(encoding="utf-8")
+    )
+    assert saved["preview"]["kind"] == "objects"
+
+
+@pytest.mark.asyncio
 async def test_query_result_is_offloaded_to_hidden_outputs_store(monkeypatch, tmp_path):
     request, paths = _workspace_request(monkeypatch, tmp_path)
     monkeypatch.setattr(tool_result, "TOOL_RESULT_OFFLOAD_SIZE", 100)

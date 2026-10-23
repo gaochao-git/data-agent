@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import time
 from typing import Any
 
 from pymysql.converters import escape_string
@@ -30,6 +31,7 @@ from utils.logger import get_logger
 
 from ...daos.ontology_action_execution_dao import OntologyActionExecutionDao
 from ..datasource.manager import get_datasource_manager
+from ..datasource.target_context import get_execution_target_member_id, get_execution_target_name
 from ..semantic.run.semantic_config_service import get_semantic_config_service
 from ..sql_run.runtime import execute_sql_for_member
 from . import ontology_service
@@ -403,6 +405,145 @@ def build_object_search_query(
     }
 
 
+_AGGREGATE_OPERATIONS = {"count", "count_distinct", "sum", "avg", "min", "max"}
+_AGGREGATE_NUMERIC_OPERATIONS = {"sum", "avg"}
+_MAX_AGGREGATE_METRICS = 5
+_MAX_AGGREGATE_GROUP_BY = 5
+_MAX_AGGREGATE_LIMIT = 200
+
+
+def _aggregate_metric(
+    metric: dict[str, Any],
+    column_by_property: dict[str, str],
+    value_types: dict[str, str],
+) -> tuple[str, str]:
+    """校验单个聚合指标并返回 (SQL 表达式, 输出字段名)。"""
+    operation = _text(metric.get("operation")).lower()
+    if operation not in _AGGREGATE_OPERATIONS:
+        raise ObjectProjectionError(f"不支持的聚合操作: {operation or '?'}")
+    if operation == "count":
+        return "COUNT(*) AS `count`", "count"
+    property_name = _text(metric.get("property"))
+    if property_name not in column_by_property:
+        raise ObjectProjectionError(f"聚合属性未映射: {property_name or '?'}")
+    if operation in _AGGREGATE_NUMERIC_OPERATIONS and _text(value_types.get(property_name)) not in {
+        "Integer",
+        "Decimal",
+    }:
+        raise ObjectProjectionError(f"聚合操作 {operation} 仅支持数值属性: {property_name}")
+    column = _quote_identifier(column_by_property[property_name])
+    alias = f"{operation}_{property_name}"
+    if operation == "count_distinct":
+        return f"COUNT(DISTINCT {column}) AS `{alias}`", alias
+    return f"{operation.upper()}({column}) AS `{alias}`", alias
+
+
+def _aggregate_projection_context(
+    detail: dict[str, Any],
+    config: dict[str, Any],
+    semantic_config_id: str | None,
+) -> dict[str, Any]:
+    """聚合所需的映射上下文：表、属性列、类型、标识属性与搜索列。"""
+    mapping = _mapping_for_projection(detail, semantic_config_id)
+    dimensions = _dimension_index(config)
+    column_mappings = mapping.get("column_mappings")
+    if not isinstance(column_mappings, dict):
+        raise ObjectProjectionError("对象映射缺少 column_mappings")
+    properties = [prop for prop in detail.get("properties") or [] if isinstance(prop, dict)]
+    table, columns = _projection_columns(properties, column_mappings, dimensions)
+    identifier_property, identifier_dimension = _identifier_property(properties, column_mappings)
+    identifier_meta = dimensions.get(identifier_dimension)
+    if not identifier_meta or identifier_meta["table"] != table:
+        raise ObjectProjectionError("标识属性与普通属性不在同一张表，MVP 暂不支持")
+    search_property = _title_property_name(properties, identifier_property)
+    search_dimension = dimensions.get(_text(column_mappings.get(search_property)))
+    return {
+        "table": table,
+        "column_by_property": dict(columns),
+        "value_types": {_text(prop.get("property_name")): _text(prop.get("value_type")) for prop in properties},
+        "identifier_property": identifier_property,
+        "search_column": search_dimension["column"] if search_dimension else identifier_meta["column"],
+    }
+
+
+def _aggregate_group_properties(group_by: list[str] | None, column_by_property: dict[str, str]) -> list[str]:
+    names: list[str] = []
+    for raw_name in (group_by or [])[:_MAX_AGGREGATE_GROUP_BY]:
+        property_name = _text(raw_name)
+        if property_name not in column_by_property:
+            raise ObjectProjectionError(f"分组属性未映射: {property_name or '?'}")
+        names.append(property_name)
+    return names
+
+
+def _aggregate_select_parts(
+    group_properties: list[str],
+    metric_items: list[dict[str, Any]],
+    column_by_property: dict[str, str],
+    value_types: dict[str, str],
+) -> tuple[list[str], list[str]]:
+    if not metric_items:
+        raise ObjectProjectionError("至少需要一个聚合指标")
+    select_parts = [f"{_quote_identifier(column_by_property[name])} AS `{name}`" for name in group_properties]
+    metric_keys: list[str] = []
+    for item in metric_items:
+        expression, key = _aggregate_metric(item, column_by_property, value_types)
+        select_parts.append(expression)
+        metric_keys.append(key)
+    return select_parts, metric_keys
+
+
+def _aggregate_group_sql(group_properties: list[str], column_by_property: dict[str, str]) -> tuple[str, str]:
+    if not group_properties:
+        return "", ""
+    group_columns = ", ".join(_quote_identifier(column_by_property[name]) for name in group_properties)
+    return f" GROUP BY {group_columns}", f" ORDER BY {group_columns}"
+
+
+def build_object_aggregate_query(
+    detail: dict[str, Any],
+    config: dict[str, Any],
+    *,
+    group_by: list[str] | None = None,
+    metrics: list[dict[str, Any]] | None = None,
+    filters: list[dict[str, Any]] | None = None,
+    keyword: str = "",
+    limit: int = 100,
+    semantic_config_id: str | None = None,
+) -> dict[str, Any]:
+    """构造对象聚合查询：映射属性 group by + 白名单指标聚合，不拼接任意 SQL。"""
+    safe_limit = max(1, min(int(limit), _MAX_AGGREGATE_LIMIT))
+    context = _aggregate_projection_context(detail, config, semantic_config_id)
+    column_by_property = context["column_by_property"]
+    group_properties = _aggregate_group_properties(group_by, column_by_property)
+    metric_items = (metrics or [])[:_MAX_AGGREGATE_METRICS]
+    select_parts, metric_keys = _aggregate_select_parts(
+        group_properties, metric_items, column_by_property, context["value_types"]
+    )
+    where = _object_search_conditions(
+        column_by_property,
+        keyword=keyword,
+        search_column=context["search_column"],
+        identifier_column=context["identifier_property"],
+        filters=filters or [],
+    )
+    where_sql = f" WHERE {where}" if where else ""
+    group_sql, order_sql = _aggregate_group_sql(group_properties, column_by_property)
+    sql = (
+        f"SELECT {', '.join(select_parts)} FROM {_quote_identifier(context['table'])}"
+        f"{where_sql}{group_sql}{order_sql} LIMIT {safe_limit}"
+    )
+    return {
+        "sql": sql,
+        "table": context["table"],
+        "object_type": _text(detail.get("object_type_name")),
+        "identifier_property": context["identifier_property"],
+        "group_by": group_properties,
+        "metric_keys": metric_keys,
+        "limit": safe_limit,
+    }
+
+
 def build_related_key_query(
     detail: dict[str, Any],
     config: dict[str, Any],
@@ -482,6 +623,7 @@ async def _mapping_context(
     *,
     user_id: str,
     username: str,
+    member_datasource_ids: list[str] | None = None,
 ) -> tuple[dict[str, Any], str, list[dict[str, Any]]]:
     config_id = _text(mapping.get("semantic_config_id"))
     if not config_id:
@@ -498,7 +640,7 @@ async def _mapping_context(
     )
     if not targets:
         raise ObjectProjectionError("当前用户在该数据源组下没有可执行数据源")
-    return config, group_id, targets
+    return config, group_id, _select_member_targets(targets, member_datasource_ids)
 
 
 async def _query_rows(
@@ -522,6 +664,31 @@ async def _query_rows(
     if result.get("status") != "succeeded":
         raise ObjectProjectionError(f"对象查询失败: {result.get('error') or '未知错误'}")
     return [row for row in result.get("data") or [] if isinstance(row, dict)]
+
+
+def _member_scope(targets: list[dict[str, Any]]) -> dict[str, str]:
+    """对象投影当前执行的首个成员数据源（后续多机构查询再扩展）。"""
+    target = targets[0] if targets else {}
+    return {
+        "member_datasource_id": get_execution_target_member_id(target),
+        "member_name": get_execution_target_name(target, 0),
+    }
+
+
+def _select_member_targets(
+    targets: list[dict[str, Any]],
+    member_datasource_ids: list[str] | None,
+) -> list[dict[str, Any]]:
+    """按显式机构范围选择执行对象；MVP 先只允许单个机构，避免静默取第一个。"""
+    requested = [str(item).strip() for item in member_datasource_ids or [] if str(item).strip()]
+    if not requested:
+        return targets
+    if len(requested) > 1:
+        raise ObjectProjectionError("对象查询暂只支持单个 member_datasource_id，请一次选择一个机构")
+    selected = [target for target in targets if get_execution_target_member_id(target) == requested[0]]
+    if not selected:
+        raise ObjectProjectionError(f"当前用户无权访问执行对象: {requested[0]}")
+    return selected
 
 
 def _relation_side(relation: dict[str, Any], current_object_type_id: int) -> dict[str, str] | None:
@@ -663,6 +830,7 @@ async def read_object_projection(
     object_key: str,
     *,
     semantic_config_id: str | None = None,
+    member_datasource_ids: list[str] | None = None,
     user_id: str = "",
     username: str = "",
 ) -> dict[str, Any]:
@@ -671,7 +839,9 @@ async def read_object_projection(
     if detail is None:
         raise ObjectProjectionError(f"本体对象类型不存在: {object_type_name}")
     mapping = _mapping_for_projection(detail, semantic_config_id)
-    config, group_id, targets = await _mapping_context(mapping, user_id=user_id, username=username)
+    config, group_id, targets = await _mapping_context(
+        mapping, user_id=user_id, username=username, member_datasource_ids=member_datasource_ids
+    )
     query = build_object_query(
         detail,
         config,
@@ -704,6 +874,7 @@ def _assemble_list_item(query: dict[str, Any], row: dict[str, Any]) -> dict[str,
 async def search_object_projection(
     object_type_name: str,
     *,
+    member_datasource_ids: list[str] | None = None,
     keyword: str = "",
     filters: list[dict[str, Any]] | None = None,
     sorts: list[dict[str, Any]] | None = None,
@@ -718,7 +889,9 @@ async def search_object_projection(
     if detail is None:
         raise ObjectProjectionError(f"本体对象类型不存在: {object_type_name}")
     mapping = _mapping_for_projection(detail, semantic_config_id)
-    config, group_id, targets = await _mapping_context(mapping, user_id=user_id, username=username)
+    config, group_id, targets = await _mapping_context(
+        mapping, user_id=user_id, username=username, member_datasource_ids=member_datasource_ids
+    )
     query = build_object_search_query(
         detail,
         config,
@@ -729,6 +902,7 @@ async def search_object_projection(
         offset=offset,
         semantic_config_id=semantic_config_id,
     )
+    started_at = time.perf_counter()
     count_rows = await _query_rows(
         targets,
         query["count_sql"],
@@ -746,6 +920,7 @@ async def search_object_projection(
         username=username,
         limit=query["limit"] + 1,
     )
+    execution_time_ms = int((time.perf_counter() - started_at) * 1000)
     has_more = len(rows) > query["limit"]
     return {
         "objects": [_assemble_list_item(query, row) for row in rows[: query["limit"]]],
@@ -755,12 +930,76 @@ async def search_object_projection(
         "total": total,
         "title_property": query["title_property"],
         "properties": query["properties"],
+        "sql": query["sql"],
+        "execution_time_ms": execution_time_ms,
+        **_member_scope(targets),
+    }
+
+
+async def aggregate_object_projection(
+    object_type_name: str,
+    *,
+    member_datasource_ids: list[str] | None = None,
+    group_by: list[str] | None = None,
+    metrics: list[dict[str, Any]] | None = None,
+    filters: list[dict[str, Any]] | None = None,
+    keyword: str = "",
+    limit: int = 100,
+    semantic_config_id: str | None = None,
+    user_id: str = "",
+    username: str = "",
+) -> dict[str, Any]:
+    """对象聚合（只读投影）：按映射属性分组，返回白名单指标结果。"""
+    detail = await ontology_service.get_object_type_async(object_type_name)
+    if detail is None:
+        raise ObjectProjectionError(f"本体对象类型不存在: {object_type_name}")
+    mapping = _mapping_for_projection(detail, semantic_config_id)
+    config, group_id, targets = await _mapping_context(
+        mapping, user_id=user_id, username=username, member_datasource_ids=member_datasource_ids
+    )
+    query = build_object_aggregate_query(
+        detail,
+        config,
+        group_by=group_by or [],
+        metrics=metrics or [],
+        filters=filters or [],
+        keyword=keyword,
+        limit=limit,
+        semantic_config_id=semantic_config_id,
+    )
+    started_at = time.perf_counter()
+    rows = await _query_rows(
+        targets,
+        query["sql"],
+        group_id=group_id,
+        user_id=user_id,
+        username=username,
+        limit=query["limit"],
+    )
+    execution_time_ms = int((time.perf_counter() - started_at) * 1000)
+    groups = [
+        {
+            "keys": {name: row.get(name) for name in query["group_by"]},
+            "metrics": {name: row.get(name) for name in query["metric_keys"]},
+        }
+        for row in rows
+    ]
+    return {
+        "object_type": query["object_type"],
+        "group_by": query["group_by"],
+        "metric_keys": query["metric_keys"],
+        "groups": groups,
+        "limit": query["limit"],
+        "sql": query["sql"],
+        "execution_time_ms": execution_time_ms,
+        **_member_scope(targets),
     }
 
 
 async def list_object_projection(
     object_type_name: str,
     *,
+    member_datasource_ids: list[str] | None = None,
     keyword: str = "",
     limit: int = 20,
     offset: int = 0,
@@ -773,7 +1012,9 @@ async def list_object_projection(
     if detail is None:
         raise ObjectProjectionError(f"本体对象类型不存在: {object_type_name}")
     mapping = _mapping_for_projection(detail, semantic_config_id)
-    config, group_id, targets = await _mapping_context(mapping, user_id=user_id, username=username)
+    config, group_id, targets = await _mapping_context(
+        mapping, user_id=user_id, username=username, member_datasource_ids=member_datasource_ids
+    )
     query = build_object_list_query(
         detail,
         config,
@@ -807,9 +1048,11 @@ __all__ = [
     "ObjectProjectionError",
     "build_object_list_query",
     "build_object_query",
+    "build_object_aggregate_query",
     "build_object_search_query",
     "build_related_key_query",
     "ontology_action_execute_enabled",
+    "aggregate_object_projection",
     "list_object_projection",
     "search_object_projection",
     "ontology_object_read_enabled",

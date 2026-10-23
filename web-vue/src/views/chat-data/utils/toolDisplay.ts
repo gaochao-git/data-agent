@@ -1,6 +1,6 @@
 const TOOL_DISPLAY_NAMES: Record<string, string> = {
   data_analyzing_tool: '数据分析',
-  ontology_tool: '本体导航',
+  ontology_tool: '本体查询',
   calculator_tool: '精确计算',
   file_read: '读取文件',
   file_glob: '查找文件',
@@ -147,6 +147,10 @@ const ONTOLOGY_ACTION_NAMES: Record<string, string> = {
   list_object_types: '对象类型清单',
   locate_object_type: '对象定位',
   search_around: '关系探索',
+  get_object: '读取对象',
+  find_objects: '查询对象',
+  aggregate_objects: '聚合对象',
+  list_execution_targets: '可用执行对象',
 }
 
 /** 本体导航工具的动作中文名；非本体导航工具或未知动作返回空串。 */

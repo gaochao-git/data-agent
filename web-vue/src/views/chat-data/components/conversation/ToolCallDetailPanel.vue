@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue'
 import type { PropType } from 'vue'
 import type { ToolCallInfo } from '../../types'
 import { getToolCompactDescription, getToolDisplayName, getDataAnalyzingActionName, getOntologyActionName, formatToolDuration, formatToolTimingText, parseFileDiffResult, isFileDiffOffloaded } from '../../utils/toolDisplay'
+import { parseQueryResultEnvelope } from '../../utils/semanticTool'
 import FileDiffViewer from '../FileDiffViewer.vue'
 
 // 注意：Props 用运行时声明 + PropType（不用外部类型做 defineProps<T> 泛型），
@@ -65,6 +66,16 @@ const fileDiffOffloaded = computed(() =>
 )
 const diffViewerVisible = ref(false)
 
+const executionScopeText = computed(() => {
+  const envelope = parseQueryResultEnvelope(props.toolCall?.result)
+  const meta = envelope?.meta
+  if (!meta) return ''
+  const names = Array.isArray(meta.member_names) ? meta.member_names.map(String).filter(Boolean) : []
+  if (names.length) return names.join('、')
+  const ids = Array.isArray(meta.member_datasource_ids) ? meta.member_datasource_ids.map(String).filter(Boolean) : []
+  return ids.join('、')
+})
+
 const toolResult = computed(() => {
   const toolCall = props.toolCall
   if (!toolCall) return ''
@@ -109,6 +120,7 @@ const hasTiming = computed(() => Boolean(props.toolCall?.started_at_ms || props.
         </button>
         <div v-if="paramsExpanded" class="px-4 pb-4">
           <pre class="m-0 max-h-[40vh] overflow-auto whitespace-pre-wrap break-words rounded-lg bg-slate-50 p-3 text-xs leading-relaxed text-slate-700">{{ formatJson(toolCall.args) }}</pre>
+          <div v-if="executionScopeText" class="mt-2 text-xs text-slate-500">实际执行数据源：{{ executionScopeText }}</div>
         </div>
       </section>
 

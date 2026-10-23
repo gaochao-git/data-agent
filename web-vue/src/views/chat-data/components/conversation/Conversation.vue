@@ -928,10 +928,10 @@ const activeToolCall = computed(() => {
   return findToolCallById(id)
 })
 
-// 查询结果渲染工具：data_analyzing_tool 的 execute_query
 const isQueryResultRenderTool = (toolInfo?: ToolCallInfo | null): boolean => {
   if (!toolInfo) return false
-  return toolInfo.tool_name === 'data_analyzing_tool' && (toolInfo.args || {})?.action === 'execute_query'
+  const action = String((toolInfo.args || {})?.action || '')
+  return toolInfo.tool_name === 'ontology_tool' ? ['find_objects', 'aggregate_objects'].includes(action) : toolInfo.tool_name === 'data_analyzing_tool' && action === 'execute_query'
 }
 
 const buildSemanticQueryToolRenderInfo = (toolInfo: ToolCallInfo): ToolCallInfo => {
