@@ -97,6 +97,11 @@ const removePropertyRow = (index: number) => {
   propertyRows.value.splice(index, 1)
 }
 
+// 派生属性行：由编辑器校验与组装，父组件只负责持有数组（与普通属性行同管道提交）
+const addDerivedRow = (item: OntologyPropertyItem) => {
+  propertyRows.value.push(item)
+}
+
 // 本体下拉标签：展示名（API 名）；本体不绑组，映射候选不限组
 const ontologyLabel = (ontology: OntologyItem) =>
   ontology.display_name ? `${ontology.display_name} (${ontology.ontology_name})` : ontology.ontology_name
@@ -326,7 +331,9 @@ const saveObject = async () => {
         <OntologyPropertyEditor
           :rows="propertyRows"
           :frozen-names="frozenNames"
+          :object-type-name="editing ? objectTypeName : ''"
           @remove-row="removePropertyRow"
+          @add-derived="addDerivedRow"
         />
       </div>
 
