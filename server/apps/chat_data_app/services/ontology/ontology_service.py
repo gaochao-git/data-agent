@@ -448,7 +448,12 @@ class OntologyService:
         operator: str = "",
         operator_name: str = "",
     ) -> dict[str, Any]:
-        """对象类型状态迁移（升级/降级/废弃），关系类型状态按对象类型级联（降级自动，升级手动）。"""
+        """对象类型状态迁移（升级/降级/废弃），关系类型状态按对象类型级联（降级自动，升级手动）。
+
+        certified 降级到 experimental/draft 会解除冻结保护（主键/标题键/属性恢复可编辑），
+        按破坏性变更处理，需 ``confirm_destructive=true``；certified→deprecated 已有必填
+        废弃原因兜底，不在确认范围。
+        """
         target = _text(target_status)
         existing = await self._dao.get_object_type_row_async(object_type_name)
         if existing is None:
@@ -462,6 +467,8 @@ class OntologyService:
             return existing
         if target == "deprecated":
             return await self._deprecate_object_type(existing, payload, operator=operator, operator_name=operator_name)
+        if current == "certified" and target in ("draft", "experimental"):
+            self._require_destructive_confirm(payload, "certified 对象类型降级（解除主键/标题键/属性冻结保护）")
         if target == "certified":
             await self._require_certifiable(object_type_name)
         await self._dao.upsert_object_type_async(

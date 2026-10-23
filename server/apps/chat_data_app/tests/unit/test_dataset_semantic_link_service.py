@@ -350,3 +350,15 @@ def test_link_config_read_helpers(monkeypatch):
     monkeypatch.setattr(link_module, "get_semantic_config_service", lambda: BadStructure())
     with pytest.raises(DatasetSemanticLinkInvalidError, match="结构不完整"):
         asyncio.run(service._require_config_async("g1", "sc", user_id=""))
+
+
+def test_link_view_with_missing_dataset_and_empty_link(harness):
+    service = harness
+    assert asyncio.run(service.list_links_for_dataset_id_async(999)) == []
+    assert asyncio.run(service.load_config_for_link_async({})) is None
+    columns = [{"name": "user_id"}, {"name": "other"}]
+    dimensions = [
+        {"name": "user_id", "table": "users", "column": "user_id"},
+        {"name": "other", "table": "orders", "column": "other"},
+    ]
+    assert service._normalize_column_mappings(columns, dimensions, None, "users") == {"user_id": "user_id"}

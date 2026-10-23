@@ -536,6 +536,10 @@ class OntologyObjectTypeStatusRequest(BaseModel):
     deprecation_reason: str = Field(default="", max_length=512, description="废弃原因，status=deprecated 时必填")
     deprecated_until: str = Field(default="", max_length=19, description="废弃删除期限（YYYY-MM-DD HH:MM:SS），可选")
     successor_object_type_name: str = Field(default="", max_length=128, description="替代对象类型API名，可选但必须存在")
+    confirm_destructive: bool = Field(
+        default=False,
+        description="破坏性变更确认；certified 降级到 experimental/draft 时必传 true（将解除主键/标题键/属性冻结）",
+    )
 
 
 class OntologyObjectTypeOntologyRequest(BaseModel):

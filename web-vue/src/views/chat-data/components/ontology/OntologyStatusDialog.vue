@@ -1,8 +1,9 @@
 <script setup lang="ts">
 /**
  * 本体对象类型状态迁移弹窗：升级（draft→experimental→certified）/ 降级 / 废弃。
- * 废弃为终态不可逆：必填原因，可选替代对象类型与删除期限；认证前置条件
- * （≥1 标识属性 + ≥1 语义模型映射）由后端校验，这里做基础提示。
+ * 废弃为终态不可逆：必填原因，可选替代对象类型与删除期限；certified 降级解除
+ * 冻结保护，提交前二次确认并携带 confirm_destructive；认证前置条件（≥1 标识
+ * 属性 + Dataset 绑定覆盖标识属性）由后端校验，这里做基础提示。
  */
 import { computed, ref, watch } from 'vue'
 import type { PropType } from 'vue'
@@ -68,13 +69,27 @@ const confirmStatus = async () => {
       return
     }
   }
+  // certified 降级解除冻结保护（主键/标题键/属性恢复可编辑）：后端要求 confirm_destructive，先做独立确认
+  const isCertifiedDowngrade = currentStatus.value === 'certified' && target !== 'deprecated'
+  if (isCertifiedDowngrade) {
+    try {
+      await ElMessageBox.confirm(
+        `对象类型「${props.object?.display_name || props.object?.object_type_name}」将从 certified 降级，主键/标题键/属性冻结保护随之解除（关系类型状态会级联降级）。确定继续？`,
+        'certified 降级确认',
+        { type: 'warning', confirmButtonText: '确认降级', cancelButtonText: '取消' }
+      )
+    } catch {
+      return
+    }
+  }
   saving.value = true
   try {
     const res = await changeAdminOntologyObjectTypeStatus(props.object!.object_type_name, {
       status: target,
       deprecation_reason: isDeprecating.value ? deprecationReason.value.trim() : undefined,
       deprecated_until: isDeprecating.value && deprecatedUntil.value ? deprecatedUntil.value : undefined,
-      successor_object_type_name: isDeprecating.value && successorName.value ? successorName.value : undefined
+      successor_object_type_name: isDeprecating.value && successorName.value ? successorName.value : undefined,
+      confirm_destructive: isCertifiedDowngrade ? true : undefined
     })
     if (res.status === 'success') {
       ElMessage.success(`状态已更新为 ${ONTOLOGY_STATUS_META[target].label}`)
@@ -132,6 +147,12 @@ const confirmStatus = async () => {
           class="rounded-lg border border-blue-100 bg-blue-50 p-2.5 text-[11px] leading-5 text-blue-700"
         >
           认证前置：对象类型需至少一个标识属性（主键）且已绑定 Dataset 数据源；认证后主键/标题键冻结、禁止删除属性。
+        </div>
+        <div
+          v-if="currentStatus === 'certified' && targetStatus !== 'deprecated'"
+          class="rounded-lg border border-amber-100 bg-amber-50 p-2.5 text-[11px] leading-5 text-amber-700"
+        >
+          certified 降级将解除主键/标题键/属性冻结保护（关系类型状态会级联降级），提交时需二次确认。
         </div>
         <template v-if="isDeprecating">
           <div class="rounded-lg border border-red-100 bg-red-50 p-2.5 text-[11px] leading-5 text-red-600">

@@ -249,6 +249,20 @@ def test_status_deprecation_rules_and_finality(harness, deps_ok):
         asyncio.run(ontology_service.upsert_object_type_async("Order", _object_payload(), allow_overwrite=True))
 
 
+def test_certified_downgrade_requires_confirm(harness, deps_ok):
+    """certified 降级（experimental/draft）解除冻结保护，必须 confirm_destructive 显式确认。"""
+    asyncio.run(ontology_service.upsert_object_type_async("Order", _object_payload()))
+    asyncio.run(ontology_service.set_object_type_status_async("Order", "certified", {}))
+    with pytest.raises(OntologyStateInvalidError, match="confirm_destructive"):
+        asyncio.run(ontology_service.set_object_type_status_async("Order", "draft", {}))
+    with pytest.raises(OntologyStateInvalidError, match="confirm_destructive"):
+        asyncio.run(ontology_service.set_object_type_status_async("Order", "experimental", {}))
+    downgraded = asyncio.run(
+        ontology_service.set_object_type_status_async("Order", "draft", {"confirm_destructive": True})
+    )
+    assert downgraded["status"] == "draft"
+
+
 def test_relation_column_must_reference_target_identifier(harness, deps_ok):
     asyncio.run(
         ontology_service.upsert_object_type_async(
@@ -377,8 +391,8 @@ def test_object_downgrade_cascades_relations(harness, deps_ok):
     )
     relation_types = asyncio.run(ontology_service.list_relations_async())
     assert relation_types[0]["status"] == "certified"
-    # Order 降级 → 关系类型自动降级（升级手动）
-    asyncio.run(ontology_service.set_object_type_status_async("Order", "experimental", {}))
+    # Order 降级 → 关系类型自动降级（升级手动）；certified 降级需显式确认
+    asyncio.run(ontology_service.set_object_type_status_async("Order", "experimental", {"confirm_destructive": True}))
     relation_types = asyncio.run(ontology_service.list_relations_async())
     assert relation_types[0]["status"] == "experimental"
 
@@ -818,7 +832,7 @@ def test_relation_revival_derives_status_from_endpoints(harness, deps_ok):
     )
     asyncio.run(ontology_service.delete_relation_async("r1"))
     # 一端降级后重建关系类型：状态必须是两侧较低者（不能保留旧 certified）
-    asyncio.run(ontology_service.set_object_type_status_async("Order", "experimental", {}))
+    asyncio.run(ontology_service.set_object_type_status_async("Order", "experimental", {"confirm_destructive": True}))
     revived = asyncio.run(
         ontology_service.upsert_relation_async(
             "r1",

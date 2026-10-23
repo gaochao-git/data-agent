@@ -2462,6 +2462,12 @@
       "OntologyObjectTypeStatusRequest": {
         "description": "本体对象类型状态迁移请求",
         "properties": {
+          "confirm_destructive": {
+            "default": false,
+            "description": "破坏性变更确认；certified 降级到 experimental/draft 时必传 true（将解除主键/标题键/属性冻结）",
+            "title": "Confirm Destructive",
+            "type": "boolean"
+          },
           "deprecated_until": {
             "default": "",
             "description": "废弃删除期限（YYYY-MM-DD HH:MM:SS），可选",

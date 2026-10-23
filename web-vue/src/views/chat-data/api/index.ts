@@ -2401,6 +2401,7 @@ export function changeAdminOntologyObjectTypeStatus(
     deprecation_reason?: string
     deprecated_until?: string
     successor_object_type_name?: string
+    confirm_destructive?: boolean
   }
 ): Promise<ApiResponse<OntologyObjectTypeItem>> {
   return request({

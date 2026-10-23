@@ -720,3 +720,50 @@ def test_resolve_projection_config_errors_and_table_mismatch(monkeypatch):
     )
     with pytest.raises(ObjectMetricNotExecutableError, match="归属表"):
         asyncio.run(resolve_metric_projection_async("shipment", ["发货单数量"], datasource_group_id="ds_a"))
+
+
+def test_tool_metric_dispatch_and_error_conversion(monkeypatch):
+    assert ontology_tool._state_member_ids(
+        {
+            "execution_context": {
+                "matched_member_datasource_ids": [],
+                "available_member_datasource_ids": ["ORG_CODE3"],
+            }
+        }
+    ) == ["ORG_CODE3"]
+
+    async def detail(_name):
+        return {"object_type_name": _name, "status": "certified"}
+
+    async def boom(*_args, **_kwargs):
+        raise ObjectMetricError("bad metric")
+
+    monkeypatch.setattr(ontology_tool.ontology_service, "get_object_type_async", detail)
+    monkeypatch.setattr(ontology_tool, "ontology_object_read_enabled", lambda: True)
+    monkeypatch.setattr(ontology_tool, "resolve_metric_projection_async", boom)
+    payload = ontology_tool.validate_ontology_payload(
+        "aggregate_objects", {"object_type": "shipment", "metric_names": ["发货单数量"]}
+    )
+    with pytest.raises(ValueError, match="bad metric"):
+        asyncio.run(
+            ontology_tool._run_aggregate_objects(
+                payload=payload,
+                state={"execution_context": {"matched_member_datasource_ids": ["ORG_CODE1"]}},
+                bound_user_id="u",
+            )
+        )
+
+    async def entries(_names, **_kwargs):
+        return [{"object_type": "shipment", "metrics": []}]
+
+    monkeypatch.setattr(ontology_tool, "_object_metric_entries_async", entries)
+    result = asyncio.run(
+        ontology_tool._run_ontology_impl(
+            "list_object_metrics",
+            {"object_type": "shipment"},
+            {"execution_context": {"matched_member_datasource_ids": ["ORG_CODE1"]}},
+            "g",
+            "u",
+        )
+    )
+    assert "shipment" in str(result)

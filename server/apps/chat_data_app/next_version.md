@@ -962,3 +962,16 @@ CREATE TABLE `chat_data_pipeline_run` (
   KEY `idx_pipeline_run_status` (`run_status`, `create_time`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ChatData Pipeline运行记录';
 ```
+
+### 对象类型 certified 降级确认（2026-10-23）
+
+对齐 Palantir「active 资源受保护、降级走显式路径」：此前 certified 对象类型可一键降级到
+experimental/draft，主键/标题键/属性冻结保护形同虚设（降级后即可改主键、删属性）。现按
+既有破坏性变更口径收口：
+
+- `POST /admin/meta/ontology/object-types/{name}/status` 请求体新增 `confirm_destructive`
+  （默认 false）；certified→experimental/draft 必传 true，否则 40074；
+- certified→deprecated 不变（已有必填 `deprecation_reason` 兜底）；experimental→draft 等
+  不涉及冻结保护的迁移、以及幂等迁移（目标=当前）不受影响；
+- 前端 `OntologyStatusDialog` 对 certified 降级增加二次确认弹窗并自动携带
+  `confirm_destructive=true`。

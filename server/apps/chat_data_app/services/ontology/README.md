@@ -70,7 +70,7 @@
 ## 治理门禁与不变量
 
 - 写方法统一用 `transaction_scope` 编排事务（DAO 经 ContextVar 复用同一会话），删除/状态迁移等多步写整体回滚，不产生半成功数据。
-- 破坏性变更（source binding 变更、主键/标题键变更、关系类型连接对象类型/关联列/基数变更）需 `confirm_destructive=true`。
+- 破坏性变更（source binding 变更、主键/标题键变更、关系类型连接对象类型/关联列/基数变更、certified 对象类型降级到 experimental/draft）需 `confirm_destructive=true`；certified→deprecated 由必填废弃原因兜底，不在此列。
 - certified 冻结：主键组合、标题键、既有属性禁删；certified 对象类型禁止删除（只能 deprecated）。
 - 升级 certified 前置：至少一个标识属性；**source binding 必须非空且覆盖全部标识属性**。
 - 对象类型编辑守护：删除/改名属性、变更主键组合时，若会让既有关系类型的 `from_columns`/`to_columns` 悬空则直接拒绝。
