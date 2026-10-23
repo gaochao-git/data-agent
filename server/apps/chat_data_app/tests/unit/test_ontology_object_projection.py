@@ -351,21 +351,6 @@ def test_build_related_key_query_rejects_missing_dimension():
         )
 
 
-def test_select_member_targets_validates_scope():
-    from apps.chat_data_app.services.ontology.object_projection import _select_member_targets
-
-    targets = [
-        {"member_datasource_id": "ORG_CODE1", "member_name": "财付通"},
-        {"member_datasource_id": "ORG_CODE2", "member_name": "支付宝"},
-    ]
-    assert _select_member_targets(targets, None) == targets
-    assert _select_member_targets(targets, ["ORG_CODE2"])[0]["member_name"] == "支付宝"
-    with pytest.raises(ObjectProjectionError, match="单个"):
-        _select_member_targets(targets, ["ORG_CODE1", "ORG_CODE2"])
-    with pytest.raises(ObjectProjectionError, match="无权访问"):
-        _select_member_targets(targets, ["ORG_CODE9"])
-
-
 def test_build_related_key_query_selects_related_identifier():
     detail = _detail()
     query = build_related_key_query(

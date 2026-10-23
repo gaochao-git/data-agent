@@ -3,13 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-from types import SimpleNamespace
+import importlib
 
 import pytest
 
-import importlib
-
-from apps.chat_data_app.services.ontology import ontology_service
 from apps.chat_data_app.services.ontology.ontology_service import OntologyInvalidError, OntologyService
 
 service_module = importlib.import_module("apps.chat_data_app.services.ontology.ontology_service")
@@ -38,7 +35,9 @@ class _FakeDao:
         return {"object_type_id": object_type_id, **kwargs}
 
 
-def _patch(monkeypatch, dataset=_dataset()):
+def _patch(monkeypatch, dataset=None):
+    dataset = dataset if dataset is not None else _dataset()
+
     async def get_detail(_name):
         return _detail()
 
