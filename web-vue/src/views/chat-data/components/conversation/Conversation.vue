@@ -184,6 +184,12 @@ const applyRunDoneState = (
   stopSteerRestorePolling()
   isStoppingRun.value = false
 
+  if (status !== 'waiting_user') {
+    // Run 已收口（finished/failed/cancelled）时，旧审批卡一律失效，
+    // 避免用户面对一个再也提交不成功的历史问题卡。
+    pendingUserQuestion.value = null
+  }
+
   if (status === 'finished') {
     finalizeUnfinishedToolCalls('completed')
     finishStreamingMessages()
@@ -2038,12 +2044,20 @@ const submitAnalysisQuery = async (
         onStatus: () => {},
         onError: (error, meta) => {
           if (options.interruptedQuestion) {
-            pendingUserQuestion.value = options.interruptedQuestion
+            const questionGone = /待回答问题不存在|问题已回答|运行已恢复/.test(error || '')
+            if (questionGone) {
+              // 审批已经被消费（或 Run 已失败/结束），重放旧 question_id 不会再成功。
+              pendingUserQuestion.value = null
+            } else {
+              // 网络抖动等暂时性失败才恢复卡片，允许用户重试。
+              pendingUserQuestion.value = options.interruptedQuestion
+            }
             const active = activeAssistantMessageId.value
               ? messages.value.find(item => item.id === activeAssistantMessageId.value)
               : null
             if (active?.role === 'assistant') active.isStreaming = false
-            ElMessage.error(error || '提交回答失败')
+            if (questionGone) ElMessage.warning('该审批已处理或任务已结束')
+            else ElMessage.error(error || '提交回答失败')
             return
           }
           // 只有明确的业务错误响应（HTTP 非 2xx）才说明服务端没有建 Run；
@@ -2182,7 +2196,7 @@ const submitAnalysisQuery = async (
 
     // 结构化 done 已包含终态和下一轮 Run，不再查询队列。只有旧协议或
     // SSE 意外中断时没有足够信息，才用一次服务端快照恢复状态。
-    if (startedRunId && (completedRunStatus === null || completedRunStatus === 'legacy')) {
+    if (startedRunId && (completedRunStatus === null || completedRunStatus === 'legacy') && !isStoppingRun.value) {
       await restorePendingSteerQueue({ restartPolling: true, applyTerminal: true })
     }
     if (options.autoResumeQueuedRun !== false) {
@@ -2449,15 +2463,41 @@ const handleStop = async () => {
   if (isStoppingRun.value) return
   const conversationId = localConversationId.value || props.conversationId
   const runId = activeRunId.value
-  if (!conversationId || !runId) return
+  if (!conversationId) {
+    // 会话创建请求还没返回时也可能显示「停止」；此时没有 Run 可取消，
+    // 直接中断正在创建的本地请求，不能因为 conversationId 为空就无响应。
+    isStoppingRun.value = true
+    stopGeneration()
+    isGenerating.value = false
+    finishStreamingMessages()
+    finalizeUnfinishedToolCalls('error', '已停止')
+    isStoppingRun.value = false
+    return
+  }
   isStoppingRun.value = true
   // 乐观反馈：点击立即显示「停止中」。取消链路含多次远程存储操作，链路劣化时
   // HTTP 响应可能秒级，等待期间无反馈像「点了没反应」。done 先到的竞态由下方
   // activeRunId 守卫 + done 回调清空 activeRunId 双重防护，不会覆盖已收口状态。
   const previousRunStatus = activeRunStatus.value
-  if (hasActiveRun.value && activeRunId.value === runId) {
+  if (runId && hasActiveRun.value && activeRunId.value === runId) {
     activeRunStatus.value = 'cancelling'
     emit('runStatusChanged', conversationId, 'cancelling')
+  }
+  // 立刻断开本地 SSE：后端取消可能散落在另一个 worker，还要等心跳/工具边界，
+  // 若继续等 done 事件，用户会看到 token 继续滚动，误以为停止无效。
+  // 后端状态仍以 DELETE 响应 + 服务端快照为准，本地只是先冻结画面。
+  stopGeneration()
+  // 主动 abort 后 useSqlGenerator 的 finally 会再置一次；这里同步收掉，
+  // 避免「run header 未到 + abort 异常路径」时停止按钮一直停留。
+  isGenerating.value = false
+  finishStreamingMessages()
+  finalizeUnfinishedToolCalls('error', '已停止')
+  // 首包之前 run header 还没到：没有 runId 可取消，直接收回本地请求即可。
+  // 否则「点了停止但 activeRunId 为空 → 直接 return」会让按钮完全没反应。
+  if (!runId) {
+    applyRunDoneState(conversationId, 'cancelled', null, null)
+    isStoppingRun.value = false
+    return
   }
   try {
     const response = await cancelConversationRun(conversationId, runId)
@@ -2467,8 +2507,11 @@ const handleStop = async () => {
       isStoppingRun.value = false
       return
     }
-    // 接口响应只代表后端已接受取消。「停止中」已在点击时乐观置位；
-    // 气泡、工具和历史终态全部由结构化 done 的统一回调收口。
+    // 取消已受理：直接按 cancelled 收口本地 UI，不等异步 done（SSE 已断开）。
+    if (activeRunId.value === runId) {
+      applyRunDoneState(conversationId, 'cancelled', null, runId)
+    }
+    isStoppingRun.value = false
   } catch (error) {
     // 回滚乐观状态：仅当 done 尚未收口（activeRunId 未变）时恢复原状态，
     // 避免「实际已受理取消但响应丢失」时把 UI 改回运行中造成误导
@@ -2478,6 +2521,9 @@ const handleStop = async () => {
     }
     isStoppingRun.value = false
     ElMessage.error(error instanceof Error ? error.message : '停止运行失败')
+    // 本地 SSE 已被主动断开；若取消请求失败而 Run 仍在执行，重新接上，
+    // 避免页面停在「无流、无停止按钮」的半截状态。
+    void recoverInterruptedPageRun()
   }
 }
 
@@ -2830,7 +2876,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
             @submit="resumePendingQuestion($event)"
             @cancel="resumePendingQuestion(undefined, true)"
           />
-          <div v-if="pendingFiles.length" class="mb-1.5 flex max-h-[100px] flex-wrap gap-1.5 overflow-y-auto">
+          <div v-if="!pendingUserQuestion && pendingFiles.length" class="mb-1.5 flex max-h-[100px] flex-wrap gap-1.5 overflow-y-auto">
             <div
               v-for="f in pendingFiles"
               :key="f.file_id"
@@ -2852,6 +2898,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
             </div>
           </div>
           <ConversationInputBar
+            v-if="!pendingUserQuestion"
             ref="inputBarRef"
             v-model:input="input"
             v-model:selected-model="selectedModel"
@@ -2863,6 +2910,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
             :quoted-snippets="quotedSnippets"
             :model-options="modelOptions"
             :is-generating="runBusy"
+            :is-stopping="isStoppingRun"
             :can-submit="runBusy ? Boolean(input.trim() && !isSteering) : Boolean((input.trim() || hasCompletedPendingFiles || quotedSnippets.length > 0) && selectedDatasource)"
             :input-focused="inputFocused"
             :submit-title="!selectedDatasource ? '请先选择数据源' : '发送 (Enter)'"

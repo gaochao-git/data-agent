@@ -10,6 +10,8 @@ interface Props {
   input: string
   placeholder?: string
   isGenerating?: boolean
+  /** 已发出停止请求、等待服务端收口：按钮显示 spinner 并禁止重复提交/停止。 */
+  isStopping?: boolean
   canSubmit?: boolean
   submitTitle?: string
   /** 是否展示发送/停止按钮；表单场景（如定时任务）由外部按钮提交时传 false。 */
@@ -28,6 +30,7 @@ interface Props {
 const props = withDefaults(defineProps<Props>(), {
   placeholder: '',
   isGenerating: false,
+  isStopping: false,
   canSubmit: true,
   submitTitle: '发送 (Enter)',
   showSubmit: true,
@@ -73,7 +76,7 @@ const handleKeydown = (event: KeyboardEvent) => {
   // 消费者（技能命令菜单等）已处理时不再兜底提交
   if (event.defaultPrevented) return
   if (!props.submitOnEnter) return
-  if (event.key !== 'Enter' || event.shiftKey || event.isComposing || props.isGenerating) return
+  if (event.key !== 'Enter' || event.shiftKey || event.isComposing || props.isGenerating || props.isStopping) return
   event.preventDefault()
   emit('submit')
 }
@@ -137,14 +140,16 @@ watch(() => props.input, async () => {
         <div class="flex items-center gap-2">
           <slot name="actions" />
           <button
-            v-if="showSubmit && isGenerating"
+            v-if="showSubmit && (isGenerating || isStopping)"
             type="button"
-            class="relative w-8 h-8 flex items-center justify-center border-none rounded-full bg-[#1677FF] text-white shadow-[0_2px_8px_rgba(0,122,255,0.35)] cursor-pointer transition-all duration-200 animate-breathe hover:scale-105 active:scale-95"
-            title="停止生成"
+            class="relative w-8 h-8 flex items-center justify-center border-none rounded-full bg-[#1677FF] text-white shadow-[0_2px_8px_rgba(0,122,255,0.35)] transition-all duration-200"
+            :class="isStopping ? 'cursor-wait opacity-80' : 'cursor-pointer animate-breathe hover:scale-105 active:scale-95'"
+            :title="isStopping ? '正在停止' : '停止生成'"
+            :disabled="isStopping"
             @click="emit('stop')"
           >
-            <i class="fa-solid fa-stop relative z-10"></i>
-            <span class="absolute inset-0 rounded-full bg-[#1677FF] opacity-40 animate-ping"></span>
+            <i :class="isStopping ? 'fa-solid fa-spinner fa-spin relative z-10' : 'fa-solid fa-stop relative z-10'"></i>
+            <span v-if="!isStopping" class="absolute inset-0 rounded-full bg-[#1677FF] opacity-40 animate-ping"></span>
           </button>
           <button
             v-else-if="showSubmit"

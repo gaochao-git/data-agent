@@ -31,6 +31,21 @@ describe('ChatInputBox 按钮', () => {
     expect(wrapper.emitted('submit')).toHaveLength(1)
   })
 
+  it('停止中显示 spinner，禁止重复停止与 Enter 提交', async () => {
+    const wrapper = mountBox({ input: '', isGenerating: true, isStopping: true, canSubmit: false })
+
+    const stop = wrapper.find('[title="正在停止"]')
+    expect(stop.exists()).toBe(true)
+    expect(stop.attributes('disabled')).toBeDefined()
+    expect(stop.find('.fa-spinner').exists()).toBe(true)
+
+    await stop.trigger('click')
+    expect(wrapper.emitted('stop')).toBeUndefined()
+
+    await wrapper.find('textarea').trigger('keydown', { key: 'Enter' })
+    expect(wrapper.emitted('submit')).toBeUndefined()
+  })
+
   it('showSubmit=false 时不渲染发送/停止按钮', () => {
     const wrapper = mountBox({ input: '', isGenerating: true, canSubmit: false, showSubmit: false })
 

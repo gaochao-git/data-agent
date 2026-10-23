@@ -35,6 +35,7 @@ interface Props {
   /** 思考档位；null 未选择（展示回退模型 default_effort）。 */
   thinkingEffort: string | null
   isGenerating: boolean
+  isStopping?: boolean
   canSubmit: boolean
   inputFocused?: boolean
   submitTitle?: string
@@ -110,6 +111,7 @@ onBeforeUnmount(() => {
     :input="input"
     :placeholder="placeholder"
     :is-generating="isGenerating"
+    :is-stopping="isStopping"
     :can-submit="canSubmit"
     :submit-title="submitTitle"
     :input-focused="inputFocused"

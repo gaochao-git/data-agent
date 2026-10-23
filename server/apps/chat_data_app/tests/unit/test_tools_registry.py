@@ -132,7 +132,7 @@ def test_user_interaction_tools_are_marked():
 
 
 def test_system_tools_use_same_ask_allow_map_as_mcp():
-    """系统工具与 MCP 同一套 tool -> ask/allow 口径；当前全部 allow。"""
+    """系统工具与 MCP 同一套 tool -> ask/allow 口径；当前统一为 allow。"""
     from apps.chat_data_app.agent.tools.registry import (
         MIDDLEWARE_INJECTED_APPROVAL_TOOLS,
         SYSTEM_TOOL_APPROVALS,
@@ -142,6 +142,7 @@ def test_system_tools_use_same_ask_allow_map_as_mcp():
 
     assert set(SYSTEM_TOOL_APPROVALS) == provided_tool_names() | MIDDLEWARE_INJECTED_APPROVAL_TOOLS
     assert set(SYSTEM_TOOL_APPROVALS.values()) == {"allow"}
+    # write_todos / task 由中间件装配，不经过 TOOL_SPECS，但必须显式 allow 且进入铺底表
     assert {"write_todos", "task", "mcp_tool_search", "mcp_tool_call"} == MIDDLEWARE_INJECTED_APPROVAL_TOOLS
     assert not {name for name, approval in SYSTEM_TOOL_APPROVALS.items() if approval == "ask"}
     assert system_tool_approval("write_todos") == "allow"
