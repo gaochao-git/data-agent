@@ -350,7 +350,7 @@ const buildOntologyChildren = (ontologyId: number | null, ontologyObjects: Ontol
 }
 
 const treeData = computed<RootNode[]>(() => {
-  // 对象按 ontology_id 分组挂到本体；未挂本体的进「未归本体」常驻兜底节点
+  // 对象按 ontology_id 分组挂到本体；未挂本体的进「未归本体」兜底节点（无数据时不显示）
   const grouped = new Map<number, OntologyObjectTypeItem[]>()
   const ungrouped: OntologyObjectTypeItem[] = []
   for (const item of items.value) {
@@ -371,17 +371,19 @@ const treeData = computed<RootNode[]>(() => {
     object_type_count: (grouped.get(ontology.id) || []).length,
     children: buildOntologyChildren(ontology.id, grouped.get(ontology.id) || [])
   }))
-  ontologyNodes.push({
-    row_key: 'ontology:__ungrouped__',
-    kind: 'ontology',
-    ontology_id: null,
-    ontology_name: '',
-    ontology_label: UNGROUPED_ONTOLOGY,
-    description: '未挂本体的对象：建议补齐本体归属（纯导航归属，不影响取数）。',
-    is_ungrouped: true,
-    object_type_count: ungrouped.length,
-    children: buildOntologyChildren(null, ungrouped)
-  })
+  if (ungrouped.length > 0) {
+    ontologyNodes.push({
+      row_key: 'ontology:__ungrouped__',
+      kind: 'ontology',
+      ontology_id: null,
+      ontology_name: '',
+      ontology_label: UNGROUPED_ONTOLOGY,
+      description: '未挂本体的对象：建议补齐本体归属（纯导航归属，不影响取数）。',
+      is_ungrouped: true,
+      object_type_count: ungrouped.length,
+      children: buildOntologyChildren(null, ungrouped)
+    })
+  }
   // 常驻根节点单顶层：本体全部挂根节点下（展示层锚点，非数据实体）
   return [{ row_key: ROOT_ROW_KEY, kind: 'root', label: '本体', children: ontologyNodes }]
 })
@@ -399,6 +401,7 @@ interface ObjectDetailEntry {
   detail: OntologyObjectTypeItem
   fromRelations: OntologyRelationTypeItem[]
   toRelations: OntologyRelationTypeItem[]
+  actionTypes: OntologyActionTypeItem[]
 }
 
 const treeRef = ref<TreeInstance>()
@@ -438,13 +441,20 @@ const fetchObjectEntry = async (objectNode: ObjectNodeData) => {
   const key = objectNode.row_key
   objectLoadState.value = { ...objectLoadState.value, [key]: 'loading' }
   try {
-    const [detailRes, fromRes, toRes] = await Promise.all([
+    const [detailRes, fromRes, toRes, actionRes] = await Promise.all([
       getAdminOntologyObjectType(objectNode.object_type_name),
       getAdminOntologyRelationTypes({ from_object_type: objectNode.object_type_name }),
-      getAdminOntologyRelationTypes({ to_object_type: objectNode.object_type_name })
+      getAdminOntologyRelationTypes({ to_object_type: objectNode.object_type_name }),
+      getAdminOntologyActionTypes(objectNode.object_type_name)
     ])
-    if (detailRes.status !== 'success' || !detailRes.data || fromRes.status !== 'success' || toRes.status !== 'success') {
-      const msg = detailRes.msg || fromRes.msg || toRes.msg || '获取对象详情失败'
+    if (
+      detailRes.status !== 'success' ||
+      !detailRes.data ||
+      fromRes.status !== 'success' ||
+      toRes.status !== 'success' ||
+      actionRes.status !== 'success'
+    ) {
+      const msg = detailRes.msg || fromRes.msg || toRes.msg || actionRes.msg || '获取对象详情失败'
       ElMessage.error(msg)
       objectLoadState.value = { ...objectLoadState.value, [key]: 'error' }
       return
@@ -452,7 +462,8 @@ const fetchObjectEntry = async (objectNode: ObjectNodeData) => {
     const entry: ObjectDetailEntry = {
       detail: detailRes.data,
       fromRelations: fromRes.data?.relation_types || [],
-      toRelations: toRes.data?.relation_types || []
+      toRelations: toRes.data?.relation_types || [],
+      actionTypes: actionRes.data?.action_types || []
     }
     detailStore.value = { ...detailStore.value, [key]: entry }
     objectLoadState.value = { ...objectLoadState.value, [key]: 'ready' }
@@ -541,6 +552,110 @@ const selectedObject = computed(() => {
     state: objectLoadState.value[node.row_key]
   }
 })
+
+const relationViewMode = ref<'graph' | 'list'>('graph')
+
+interface RelationGraphNode {
+  key: string
+  label: string
+  sublabel: string
+  x: number
+  y: number
+  isCenter: boolean
+  relation?: OntologyRelationTypeItem
+}
+
+interface RelationGraphEdge {
+  key: string
+  x1: number
+  y1: number
+  x2: number
+  y2: number
+  labelX: number
+  labelY: number
+  label: string
+  relation: OntologyRelationTypeItem
+}
+
+const relationGraph = computed<{ nodes: RelationGraphNode[]; edges: RelationGraphEdge[] }>(() => {
+  const entry = selectedObject.value?.entry
+  if (!entry) return { nodes: [], edges: [] }
+
+  const centerX = 320
+  const centerY = 170
+  const radius = 128
+  const relations = [
+    ...entry.fromRelations.map(relation => ({ relation, direction: 'from' as const })),
+    ...entry.toRelations.map(relation => ({ relation, direction: 'to' as const }))
+  ]
+  const related = new Map<string, OntologyRelationTypeItem>()
+  for (const item of relations) {
+    const other = item.direction === 'from' ? item.relation.to_object_type_name : item.relation.from_object_type_name
+    if (other) related.set(other, item.relation)
+  }
+
+  const relatedNodes: RelationGraphNode[] = [...related.entries()].slice(0, 12).map(([name, relation], index, list) => {
+    const angle = -Math.PI / 2 + (index * Math.PI * 2) / Math.max(list.length, 1)
+    const display = objectTypeDisplayOf(name)
+    return {
+      key: `related:${name}`,
+      label: display.length > 10 ? `${display.slice(0, 9)}…` : display,
+      sublabel: name,
+      x: centerX + Math.cos(angle) * radius,
+      y: centerY + Math.sin(angle) * radius,
+      isCenter: false,
+      relation
+    }
+  })
+  const nodeByObjectType = new Map(relatedNodes.map(node => [node.sublabel, node]))
+  const edges: RelationGraphEdge[] = relations
+    .map((item, index) => {
+      const other = item.direction === 'from' ? item.relation.to_object_type_name : item.relation.from_object_type_name
+      const target = nodeByObjectType.get(other || '')
+      if (!target) return null
+      const x2 = target.x
+      const y2 = target.y
+      const dx = x2 - centerX
+      const dy = y2 - centerY
+      const distance = Math.hypot(dx, dy) || 1
+      // Link Type 是有向的：from 是 source，to 是 target。
+      // 当前对象是 source 时箭头指向关联对象；当前对象是 target 时箭头指向中心。
+      const centerIsSource = item.direction === 'from'
+      const startRatio = (centerIsSource ? 28 : distance - 28) / distance
+      const endRatio = (centerIsSource ? distance - 28 : 28) / distance
+      return {
+        key: `${item.direction}:${item.relation.relation_type_name}:${index}`,
+        x1: centerX + dx * startRatio,
+        y1: centerY + dy * startRatio,
+        x2: centerX + dx * endRatio,
+        y2: centerY + dy * endRatio,
+        labelX: centerX + dx * 0.52,
+        labelY: centerY + dy * 0.52,
+        label: item.relation.relation_type_name.length > 18 ? `${item.relation.relation_type_name.slice(0, 17)}…` : item.relation.relation_type_name,
+        relation: item.relation
+      }
+    })
+    .filter((edge): edge is RelationGraphEdge => edge !== null)
+
+  return {
+    nodes: [
+      {
+        key: 'center',
+        label: (entry.detail.display_name || entry.detail.object_type_name).slice(0, 12),
+        sublabel: entry.detail.object_type_name,
+        x: centerX,
+        y: centerY,
+        isCenter: true
+      },
+      ...relatedNodes
+    ],
+    edges
+  }
+})
+
+const openGraphRelation = (node: RelationGraphNode) => {
+  if (!node.isCenter && node.relation) relationFormRef.value?.openEdit(node.relation)
+}
 
 const selectedObjectStatusMeta = computed(() => {
   const node = selectedNode.value
@@ -1180,16 +1295,108 @@ const onRelationSaved = (objectTypeNames: string[]) => {
             </el-table>
             <div v-else class="py-1 text-xs text-slate-400">暂无属性</div>
 
+            <!-- 动作类型（Object type view · Action types） -->
+            <div class="mb-1 mt-4 flex items-center gap-2">
+              <i class="fa-solid fa-bolt text-[10px] text-amber-500"></i>
+              <span class="text-xs font-medium text-slate-600">动作类型</span>
+              <span class="text-xs text-slate-400">{{ (selectedObject.entry.actionTypes || []).length }} 个</span>
+            </div>
+            <div v-if="(selectedObject.entry.actionTypes || []).length > 0" class="flex flex-col gap-1.5">
+              <div
+                v-for="action in selectedObject.entry.actionTypes"
+                :key="action.action_type_name"
+                class="rounded border border-slate-100 bg-slate-50/60 px-2 py-1.5"
+              >
+                <div class="flex items-center gap-2">
+                  <span class="font-mono text-xs text-slate-700">{{ action.action_type_name }}</span>
+                  <el-tag size="small" :type="action.status === 'certified' ? 'success' : action.status === 'experimental' ? 'warning' : 'info'" effect="plain">
+                    {{ action.status }}
+                  </el-tag>
+                  <span class="text-[11px] text-slate-400">{{ (action.parameters || []).length }} 个参数 · {{ (action.edits || []).length }} 条编辑</span>
+                  <el-button link size="small" type="primary" class="ml-auto" @click="openActionTypeManager('edit', action)">管理</el-button>
+                </div>
+                <div v-if="action.display_name || action.description" class="mt-0.5 text-[11px] text-slate-500">
+                  {{ action.display_name || action.description }}
+                </div>
+              </div>
+            </div>
+            <div v-else class="py-1 text-xs text-slate-400">暂无动作类型</div>
+
             <!-- 参与关系 -->
             <div class="mb-1 mt-4 flex items-center gap-2">
               <i class="fa-solid fa-circle-nodes text-[10px] text-violet-500"></i>
-              <span class="text-xs font-medium text-slate-600">参与关系</span>
+              <span class="text-xs font-medium text-slate-600">关系类型图谱</span>
               <span class="text-xs text-slate-400">
                 {{ selectedObject.entry.fromRelations.length + selectedObject.entry.toRelations.length }} 条
               </span>
+              <el-radio-group v-model="relationViewMode" size="small" class="ml-auto">
+                <el-radio-button value="graph">图谱</el-radio-button>
+                <el-radio-button value="list">列表</el-radio-button>
+              </el-radio-group>
             </div>
             <div
-              v-if="selectedObject.entry.fromRelations.length + selectedObject.entry.toRelations.length > 0"
+              v-if="selectedObject.entry.fromRelations.length + selectedObject.entry.toRelations.length > 0 && relationViewMode === 'graph'"
+              class="overflow-hidden rounded border border-slate-100 bg-gradient-to-br from-slate-50 to-white"
+            >
+              <svg viewBox="0 0 640 340" class="h-[300px] w-full" role="img" aria-label="关系类型图谱">
+                <defs>
+                  <marker id="relation-arrow" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
+                    <path d="M0,0 L7,3.5 L0,7 Z" fill="#c4b5fd" />
+                  </marker>
+                </defs>
+                <g v-for="edge in relationGraph.edges" :key="edge.key">
+                  <title>{{ edge.relation.from_object_type_name }} → {{ edge.relation.to_object_type_name }} · {{ edge.relation.relation_type_name }}</title>
+                  <line
+                    :x1="edge.x1"
+                    :y1="edge.y1"
+                    :x2="edge.x2"
+                    :y2="edge.y2"
+                    stroke="#cbd5e1"
+                    stroke-width="1.5"
+                    marker-end="url(#relation-arrow)"
+                  />
+                  <text
+                    :x="edge.labelX"
+                    :y="edge.labelY - 4"
+                    text-anchor="middle"
+                    class="fill-slate-500"
+                    style="font-size: 9px"
+                  >
+                    {{ edge.label }}
+                  </text>
+                </g>
+                <g
+                  v-for="node in relationGraph.nodes"
+                  :key="node.key"
+                  :class="node.isCenter ? '' : 'cursor-pointer'"
+                  @click="openGraphRelation(node)"
+                >
+                  <title>{{ node.sublabel }}</title>
+                  <circle
+                    :cx="node.x"
+                    :cy="node.y"
+                    :r="node.isCenter ? 27 : 22"
+                    :fill="node.isCenter ? '#3b82f6' : '#f8fafc'"
+                    :stroke="node.isCenter ? '#2563eb' : '#c4b5fd'"
+                    stroke-width="1.5"
+                  />
+                  <text
+                    :x="node.x"
+                    :y="node.y + 4"
+                    text-anchor="middle"
+                    :class="node.isCenter ? 'fill-white' : 'fill-slate-700'"
+                    style="font-size: 10px; font-weight: 500"
+                  >
+                    {{ node.label }}
+                  </text>
+                </g>
+              </svg>
+              <div v-if="relationGraph.nodes.length - 1 > 12" class="border-t border-slate-100 px-3 py-1.5 text-[11px] text-slate-400">
+                图谱仅展示前 12 个关联对象类型，完整关系请切换列表查看。
+              </div>
+            </div>
+            <div
+              v-else-if="selectedObject.entry.fromRelations.length + selectedObject.entry.toRelations.length > 0"
               class="flex flex-col gap-1.5"
             >
               <div
@@ -1217,7 +1424,7 @@ const onRelationSaved = (objectTypeNames: string[]) => {
             <!-- 映射摘要 -->
             <div class="mb-1 mt-4 flex items-center gap-2">
               <i class="fa-solid fa-link text-[10px] text-teal-500"></i>
-              <span class="text-xs font-medium text-slate-600">映射摘要</span>
+              <span class="text-xs font-medium text-slate-600">数据映射</span>
               <span class="text-xs text-slate-400">{{ (selectedObject.entry.detail.mappings || []).length }} 条</span>
             </div>
             <div v-if="(selectedObject.entry.detail.mappings || []).length > 0" class="flex flex-col gap-1.5 pb-2">
