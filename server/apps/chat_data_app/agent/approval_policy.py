@@ -18,7 +18,11 @@ from typing import Any
 from utils.logger import get_logger
 
 from .mcp.catalog import MCP_TOOL_CALL_TOOL_NAME, MCP_TOOL_SEARCH_TOOL_NAME
-from .tools.registry import provided_tool_names, system_tool_approval
+from .tools.registry import (
+    MIDDLEWARE_INJECTED_APPROVAL_TOOLS,
+    provided_tool_names,
+    system_tool_approval,
+)
 
 logger = get_logger(__name__)
 
@@ -49,9 +53,11 @@ def _is_mcp_tool(tool_name: str, metadata: Mapping[str, Any]) -> bool:
 
 def resolve_approval_policies(tools: Iterable[Any]) -> dict[str, str]:
     """解析一次完整工具集的审批策略，返回 ``{tool_name: ask|allow}``。"""
-    # 先按全部系统工具名铺底，保证未挂载/未传入的工具也有确定的 allow/ask。
+    # 先按全部系统工具名铺底，保证未挂载/未传入的工具也有确定的 allow/ask；
+    # middleware 动态注入的工具（如 write_todos）不在注册表，单独铺底纳入。
     policies: dict[str, str] = {
-        name: normalize_tool_approval(system_tool_approval(name)) for name in provided_tool_names()
+        name: normalize_tool_approval(system_tool_approval(name))
+        for name in (*provided_tool_names(), *MIDDLEWARE_INJECTED_APPROVAL_TOOLS)
     }
     policies.update(_CONTROL_TOOL_APPROVALS)
     for tool in tools:
