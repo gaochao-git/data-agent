@@ -190,14 +190,14 @@ def test_search_object_projection_handles_empty_count(monkeypatch):
     async def fake_get_object_type(_name):
         return _detail()
 
-    async def fake_context(_mapping, **_kwargs):
-        return _config(), "g1", [{"member_datasource_id": "m1"}]
+    async def fake_context(_detail, **_kwargs):
+        return _detail, _config(), [{"member_datasource_id": "m1"}], "g1"
 
     async def fake_query_rows(_targets, sql, **_kwargs):
         return [] if "COUNT(*)" in sql else []
 
     monkeypatch.setattr(object_projection.ontology_service, "get_object_type_async", fake_get_object_type)
-    monkeypatch.setattr(object_projection, "_mapping_context", fake_context)
+    monkeypatch.setattr(object_projection, "_projection_context", fake_context)
     monkeypatch.setattr(object_projection, "_query_rows", fake_query_rows)
     result = asyncio.run(object_projection.search_object_projection("Order"))
     assert result["total"] == 0
@@ -285,8 +285,8 @@ def test_aggregate_object_projection_assembles_groups(monkeypatch):
     async def fake_get_object_type(_name):
         return _detail()
 
-    async def fake_context(_mapping, **_kwargs):
-        return _config(), "g1", [{"member_datasource_id": "m1"}]
+    async def fake_context(_detail, **_kwargs):
+        return _detail, _config(), [{"member_datasource_id": "m1"}], "g1"
 
     async def fake_query_rows(_targets, _sql, **_kwargs):
         return [
@@ -295,7 +295,7 @@ def test_aggregate_object_projection_assembles_groups(monkeypatch):
         ]
 
     monkeypatch.setattr(object_projection.ontology_service, "get_object_type_async", fake_get_object_type)
-    monkeypatch.setattr(object_projection, "_mapping_context", fake_context)
+    monkeypatch.setattr(object_projection, "_projection_context", fake_context)
     monkeypatch.setattr(object_projection, "_query_rows", fake_query_rows)
     result = asyncio.run(
         object_projection.aggregate_object_projection(
@@ -325,8 +325,8 @@ def test_search_object_projection_returns_rows_and_total(monkeypatch):
     async def fake_get_object_type(_name):
         return _detail()
 
-    async def fake_context(_mapping, **_kwargs):
-        return _config(), "g1", [{"member_datasource_id": "m1"}]
+    async def fake_context(_detail, **_kwargs):
+        return _detail, _config(), [{"member_datasource_id": "m1"}], "g1"
 
     async def fake_query_rows(_targets, sql, **_kwargs):
         if "COUNT(*)" in sql:
@@ -334,11 +334,11 @@ def test_search_object_projection_returns_rows_and_total(monkeypatch):
         return [{"order_id": "A001", "amount": 10}, {"order_id": "A002", "amount": 20}]
 
     monkeypatch.setattr(object_projection.ontology_service, "get_object_type_async", fake_get_object_type)
-    monkeypatch.setattr(object_projection, "_mapping_context", fake_context)
+    monkeypatch.setattr(object_projection, "_projection_context", fake_context)
     monkeypatch.setattr(object_projection, "_query_rows", fake_query_rows)
     result = asyncio.run(object_projection.search_object_projection("Order", limit=2))
     assert result["total"] == 2
-    assert [item["object_key"] for item in result["objects"]] == ["Order:A001", "Order:A002"]
+    assert [item["object_key"] for item in result["objects"]] == ["m1:Order:A001", "m1:Order:A002"]
 
 
 def test_build_related_key_query_rejects_missing_dimension():
@@ -421,55 +421,6 @@ def test_build_related_key_query_rejects_cross_table_filter():
         )
 
 
-def test_read_links_builds_foreign_key_link(monkeypatch):
-    from apps.chat_data_app.services.ontology import object_projection
-
-    current_detail = {"id": 1, "object_type_name": "Order"}
-    related_detail = {
-        "id": 2,
-        "object_type_name": "Customer",
-        "properties": [{"property_name": "customer_id", "is_identifier": True}],
-        "mappings": [{"semantic_config_id": "cfg-c", "column_mappings": {"customer_id": "客户ID"}}],
-    }
-    relation = {
-        "relation_type_name": "order_belongs_to_customer",
-        "from_object_type_id": 1,
-        "to_object_type_id": 2,
-        "from_object_type_name": "Order",
-        "to_object_type_name": "Customer",
-        "from_columns": ["customer_id"],
-        "to_columns": ["customer_id"],
-        "status": "certified",
-    }
-    config = {"dimensions": [{"name": "客户ID", "table": "customers", "column": "customer_id"}]}
-
-    async def fake_relations():
-        return [relation]
-
-    async def fake_get_object_type(name):
-        return related_detail if name == "Customer" else None
-
-    async def fake_context(mapping, **_kwargs):
-        return config, "g1", [{"member_datasource_id": "m1"}]
-
-    async def fake_query_rows(*_args, **_kwargs):
-        return [{"related_key": "C001"}]
-
-    monkeypatch.setattr(object_projection.ontology_service, "list_relations_async", fake_relations)
-    monkeypatch.setattr(object_projection.ontology_service, "get_object_type_async", fake_get_object_type)
-    monkeypatch.setattr(object_projection, "_mapping_context", fake_context)
-    monkeypatch.setattr(object_projection, "_query_rows", fake_query_rows)
-    links = asyncio.run(
-        object_projection._read_links(current_detail, {"customer_id": "C001"}, user_id="u", username="n")
-    )
-    assert links["order_belongs_to_customer"][0] == {
-        "relation": "order_belongs_to_customer",
-        "direction": "from",
-        "related_object_type": "Customer",
-        "related_object_key": "Customer:C001",
-    }
-
-
 def test_query_rows_raises_when_execution_fails(monkeypatch):
     from apps.chat_data_app.services.ontology import object_projection
 
@@ -496,8 +447,8 @@ def test_list_object_projection_returns_page_and_has_more(monkeypatch):
     async def fake_get_object_type(_name):
         return _detail()
 
-    async def fake_context(_mapping, **_kwargs):
-        return _config(), "g1", [{"member_datasource_id": "m1"}]
+    async def fake_context(_detail, **_kwargs):
+        return _detail, _config(), [{"member_datasource_id": "m1"}], "g1"
 
     async def fake_query_rows(*_args, **_kwargs):
         return [
@@ -507,11 +458,11 @@ def test_list_object_projection_returns_page_and_has_more(monkeypatch):
         ]
 
     monkeypatch.setattr(object_projection.ontology_service, "get_object_type_async", fake_get_object_type)
-    monkeypatch.setattr(object_projection, "_mapping_context", fake_context)
+    monkeypatch.setattr(object_projection, "_projection_context", fake_context)
     monkeypatch.setattr(object_projection, "_query_rows", fake_query_rows)
     result = asyncio.run(object_projection.list_object_projection("Order", limit=2, offset=0))
     assert result["has_more"] is True
-    assert [item["object_key"] for item in result["objects"]] == ["Order:A001", "Order:A002"]
+    assert [item["object_key"] for item in result["objects"]] == ["m1:Order:A001", "m1:Order:A002"]
     assert result["title_property"] == "order_id"
 
 
@@ -521,14 +472,14 @@ def test_list_object_projection_without_extra_row_has_no_more(monkeypatch):
     async def fake_get_object_type(_name):
         return _detail()
 
-    async def fake_context(_mapping, **_kwargs):
-        return _config(), "g1", [{"member_datasource_id": "m1"}]
+    async def fake_context(_detail, **_kwargs):
+        return _detail, _config(), [{"member_datasource_id": "m1"}], "g1"
 
     async def fake_query_rows(*_args, **_kwargs):
         return [{"order_id": "A001", "amount": 10}, {"order_id": "A002", "amount": 20}]
 
     monkeypatch.setattr(object_projection.ontology_service, "get_object_type_async", fake_get_object_type)
-    monkeypatch.setattr(object_projection, "_mapping_context", fake_context)
+    monkeypatch.setattr(object_projection, "_projection_context", fake_context)
     monkeypatch.setattr(object_projection, "_query_rows", fake_query_rows)
     result = asyncio.run(object_projection.list_object_projection("Order", limit=2))
     assert result["has_more"] is False

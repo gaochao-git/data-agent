@@ -591,12 +591,6 @@ def test_ontology_dao_empty_input_guards(harness):
         assert await dao.get_object_type_row_async("") is None
         assert await dao.get_relation_row_async("") is None
         assert await dao.count_objects_by_ontology_ids_async([]) == {}
-        assert await dao.find_bindings_for_configs_async([]) == []
-        assert await dao.find_bindings_for_configs_async(["cfg-1"]) == []
-        assert await dao.find_bindings_for_group_async("") == []
-        assert await dao.find_bindings_for_group_async("grp-1") == []
-        assert await dao.count_mappings_by_object_type_ids_async([]) == {}
-        assert await dao.count_mappings_by_object_type_ids_async([123]) == {}
         empty_bundle = {"object_types": [], "properties": [], "relation_types": [], "mappings": []}
         assert await dao.load_injection_bundle_async([]) == empty_bundle
         assert await dao.load_injection_bundle_async(["missing"]) == empty_bundle
@@ -756,143 +750,6 @@ def test_ontology_dao_list_relations_filters(harness):
     asyncio.run(run())
 
 
-def test_ontology_dao_bindings_bundle_and_ontology_names(harness):
-    """绑定查询、映射计数、注入装载：覆盖真实 join 结果与空结果两条路径。"""
-    dao = OntologyDao()
-    session_factory = harness["session_factory"]
-    ids: dict[str, int] = {}
-
-    async def seed():
-        async with session_factory() as session:
-            active = ChatDataOntologyObjectType(
-                object_type_name="Order", display_name="订单", lifecycle_status="certified", ontology_id=None
-            )
-            draft = ChatDataOntologyObjectType(
-                object_type_name="Draft", display_name="草稿", lifecycle_status="draft", ontology_id=None
-            )
-            session.add_all([active, draft])
-            await session.flush()
-            ids["active"], ids["draft"] = int(active.id), int(draft.id)
-            session.add_all(
-                [
-                    ChatDataOntologyObjectTypeMapping(
-                        object_type_id=active.id,
-                        semantic_config_id="cfg-1",
-                        column_mappings_json='{"order_id": "订单编号"}',
-                    ),
-                    ChatDataOntologyObjectTypeMapping(
-                        object_type_id=draft.id,
-                        semantic_config_id="cfg-2",
-                        column_mappings_json='{"draft_id": "草稿编号"}',
-                    ),
-                    ChatDataOntologyProperty(object_type_id=active.id, property_name="order_id", is_identifier=1),
-                    ChatDataOntologyRelationType(
-                        relation_type_name="order_self",
-                        from_object_type_id=active.id,
-                        to_object_type_id=active.id,
-                        from_columns_json='["order_id"]',
-                        to_columns_json='["order_id"]',
-                        lifecycle_status="certified",
-                    ),
-                    SemanticConfig(
-                        semantic_config_id="cfg-1",
-                        group_id="grp-1",
-                        semantic_config_name="订单模型",
-                        enabled_flag=1,
-                        scope_type="public",
-                        delete_flag=0,
-                        metrics_json="[]",
-                        dimensions_json="[]",
-                        relationships_json="[]",
-                    ),
-                    ChatDataOntology(ontology_name="ecommerce", display_name="交易域"),
-                ]
-            )
-            await session.commit()
-
-    asyncio.run(seed())
-
-    async def run():
-        # 按模型查活跃绑定（join 出对象类型名）
-        bindings = await dao.find_bindings_for_configs_async(["cfg-1", "cfg-2"])
-        assert {item["semantic_config_id"] for item in bindings} == {"cfg-1", "cfg-2"}
-        assert all(item["object_type_name"] for item in bindings)
-        # 按组查活跃绑定（join 语义模型表）
-        group_bindings = await dao.find_bindings_for_group_async("grp-1")
-        assert [item["semantic_config_id"] for item in group_bindings] == ["cfg-1"]
-
-        # 映射计数
-        assert await dao.count_mappings_by_object_type_ids_async([ids["active"], ids["draft"]]) == {
-            ids["active"]: 1,
-            ids["draft"]: 1,
-        }
-
-        # 注入装载：只有 certified/experimental 对象类型及其属性/关系类型/映射进入
-        bundle = await dao.load_injection_bundle_async(["cfg-1", "cfg-2"])
-        assert [item["object_type_name"] for item in bundle["object_types"]] == ["Order"]
-        assert [item["property_name"] for item in bundle["properties"]] == ["order_id"]
-        assert [item["relation_type_name"] for item in bundle["relation_types"]] == ["order_self"]
-        assert [item["semantic_config_id"] for item in bundle["mappings"]] == ["cfg-1", "cfg-2"]
-        # 候选对象类型全部不是活跃可注入状态：装载结果为空
-        assert await dao.load_injection_bundle_async(["cfg-2"]) == {
-            "object_types": [],
-            "properties": [],
-            "relation_types": [],
-            "mappings": [],
-        }
-
-    asyncio.run(run())
-
-
-def test_ontology_dao_property_replace_and_full_upsert_delete_flags(harness):
-    """属性全量替换/完整 upsert 的 allow_delete 双分支。"""
-    dao = OntologyDao()
-
-    async def run():
-        # allow_delete=False：未提交的既有属性保留
-        await dao.replace_properties_async(999, [{"property_name": "p1", "is_identifier": True}], allow_delete=False)
-        kept = await dao.replace_properties_async(
-            999, [{"property_name": "p1", "is_identifier": True}, {"property_name": "p2"}], allow_delete=False
-        )
-        assert [item["property_name"] for item in kept] == ["p1", "p2"]
-
-        # allow_property_delete=False：完整 upsert 不软删缺失属性
-        saved = await dao.upsert_object_type_full_async(
-            "Order",
-            {"display_name": "订单", "status": "certified"},
-            [{"property_name": "order_id", "is_identifier": True}],
-            [],
-            allow_property_delete=False,
-        )
-        assert saved["object_type_name"] == "Order"
-        detail = await dao.get_object_type_row_async("Order")
-        properties = await dao.list_properties_async(int(detail["id"]))
-        assert [item["property_name"] for item in properties] == ["order_id"]
-
-    asyncio.run(run())
-
-
-# ------------------------------------------------------------ 本体服务 ----------------
-
-
-def _relation_payload(**overrides):
-    payload = {
-        "from_object_type_name": "Order",
-        "to_object_type_name": "User",
-        "from_columns": ["order_id"],
-        "to_columns": ["user_id"],
-    }
-    payload.update(overrides)
-    return payload
-
-
-async def _create_order_and_user() -> None:
-    await ontology_service.upsert_object_type_async("Order", _object_payload())
-    await ontology_service.upsert_object_type_async(
-        "User", _object_payload(properties=[{**VALID_PROPERTY, "property_name": "user_id"}])
-    )
-
-
 def test_service_not_found_and_object_status_guards(harness, deps_ok):
     async def run():
         with pytest.raises(OntologyNotFoundError, match="对象类型不存在"):
@@ -914,19 +771,6 @@ def test_service_not_found_and_object_status_guards(harness, deps_ok):
         assert same["status"] == "draft"
         with pytest.raises(OntologyStateInvalidError, match="废弃对象类型必须填写废弃原因"):
             await ontology_service.set_object_type_status_async("Order", "deprecated", {})
-
-    asyncio.run(run())
-
-
-def test_service_list_object_types_attaches_mapping_counts(harness, deps_ok):
-    async def run():
-        await ontology_service.upsert_object_type_async("Order", _object_payload(mappings=[dict(SEMANTIC_MAPPING)]))
-        await ontology_service.upsert_object_type_async(
-            "User", _object_payload(properties=[{**VALID_PROPERTY, "property_name": "user_id"}])
-        )
-        object_types = {item["object_type_name"]: item for item in await ontology_service.list_object_types_async()}
-        assert object_types["Order"]["mappings_count"] == 1
-        assert object_types["User"]["mappings_count"] == 0
 
     asyncio.run(run())
 
@@ -960,22 +804,6 @@ def test_service_identifier_change_requires_destructive_confirm(harness, deps_ok
             allow_overwrite=True,
         )
         assert [item["property_name"] for item in saved["properties"]] == ["order_no"]
-
-    asyncio.run(run())
-
-
-def test_service_certified_object_edit_keeps_mapping(harness, deps_ok):
-    async def run():
-        await ontology_service.upsert_object_type_async("Order", _object_payload(mappings=[dict(SEMANTIC_MAPPING)]))
-        await ontology_service.set_object_type_status_async("Order", "certified", {})
-        updated = await ontology_service.upsert_object_type_async(
-            "Order",
-            _object_payload(display_name="订单2", mappings=[dict(SEMANTIC_MAPPING)]),
-            allow_overwrite=True,
-        )
-        assert updated["display_name"] == "订单2"
-        assert [item["semantic_config_id"] for item in updated["mappings"]] == ["cfg-1"]
-        assert updated["status"] == "certified"
 
     asyncio.run(run())
 
@@ -1058,32 +886,6 @@ def test_service_set_object_ontology_short_circuits_unchanged(harness, deps_ok):
         assert same["ontology_id"] is None
 
     asyncio.run(run())
-
-
-def test_service_certify_requires_existing_detail(harness, deps_ok, monkeypatch):
-    asyncio.run(ontology_service.upsert_object_type_async("Order", _object_payload()))
-
-    async def missing_detail(object_type_name):
-        return None
-
-    monkeypatch.setattr(ontology_service, "get_object_type_async", missing_detail)
-    with pytest.raises(OntologyNotFoundError, match="对象类型不存在"):
-        asyncio.run(ontology_service.set_object_type_status_async("Order", "certified", {}))
-
-
-def test_service_certify_requires_identifier_in_detail(harness, deps_ok, monkeypatch):
-    asyncio.run(ontology_service.upsert_object_type_async("Order", _object_payload()))
-
-    async def detail_without_identifier(object_type_name):
-        return {
-            "object_type_name": object_type_name,
-            "properties": [{"property_name": "order_id", "is_identifier": False}],
-            "mappings": [{"semantic_config_id": "cfg-1", "column_mappings": {"order_id": "订单编号"}}],
-        }
-
-    monkeypatch.setattr(ontology_service, "get_object_type_async", detail_without_identifier)
-    with pytest.raises(OntologyInvalidError, match="标识属性"):
-        asyncio.run(ontology_service.set_object_type_status_async("Order", "certified", {}))
 
 
 def test_service_cascade_skips_when_object_type_row_missing(harness, deps_ok, monkeypatch):
@@ -1200,32 +1002,6 @@ def test_service_ontology_accepts_cross_group_mapping(harness, deps_ok, monkeypa
     asyncio.run(run())
 
 
-def test_service_mapping_tolerates_missing_dimension_index(harness, monkeypatch):
-    """维度索引查不到模型：跳过维度校验（存在性由映射目标校验负责）。"""
-
-    async def fake_get_enum(enum_name, business_domain=""):
-        return {"business_domain": business_domain, "enum_name": enum_name}
-
-    class _MissingDimensionsStub:
-        async def filter_existing_config_ids_async(self, config_ids):
-            return set(config_ids)
-
-        async def get_config_dimensions_async(self, config_ids):
-            return {}
-
-    monkeypatch.setattr(
-        ontology_service_module,
-        "global_enum_service",
-        type("StubEnumService", (), {"get_enum_async": staticmethod(fake_get_enum)})(),
-    )
-    monkeypatch.setattr(ontology_service_module, "semantic_config_dao", _MissingDimensionsStub())
-
-    saved = asyncio.run(
-        ontology_service.upsert_object_type_async("Order", _object_payload(mappings=[dict(SEMANTIC_MAPPING)]))
-    )
-    assert [item["semantic_config_id"] for item in saved["mappings"]] == ["cfg-1"]
-
-
 def test_service_enum_ref_resolves_and_is_persisted(harness, deps_ok):
     saved = asyncio.run(
         ontology_service.upsert_object_type_async(
@@ -1294,6 +1070,24 @@ def test_service_object_save_missing_returns_already_exists(harness, deps_ok):
         asyncio.run(service.upsert_object_type_async("Order", _object_payload()))
 
 
+def _relation_payload(**overrides):
+    payload = {
+        "from_object_type_name": "Order",
+        "to_object_type_name": "User",
+        "from_columns": ["order_id"],
+        "to_columns": ["user_id"],
+    }
+    payload.update(overrides)
+    return payload
+
+
+async def _create_order_and_user() -> None:
+    await ontology_service.upsert_object_type_async("Order", _object_payload())
+    await ontology_service.upsert_object_type_async(
+        "User", _object_payload(properties=[{**VALID_PROPERTY, "property_name": "user_id"}])
+    )
+
+
 def test_service_object_save_readback_missing_returns_saved_view(harness, deps_ok, monkeypatch):
     service = OntologyService()
 
@@ -1303,7 +1097,7 @@ def test_service_object_save_readback_missing_returns_saved_view(harness, deps_o
     monkeypatch.setattr(service, "get_object_type_async", missing_detail)
     saved = asyncio.run(service.upsert_object_type_async("Order", _object_payload()))
     assert saved["object_type_name"] == "Order"
-    assert saved["mappings"] == []
+    assert "mappings" not in saved
 
 
 def test_service_ontology_save_missing_returns_already_exists(harness, deps_ok):

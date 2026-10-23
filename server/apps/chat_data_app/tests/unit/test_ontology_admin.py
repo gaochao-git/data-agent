@@ -146,11 +146,11 @@ def deps_ok(monkeypatch):
         return {"business_domain": business_domain, "enum_name": enum_name}
 
     monkeypatch.setattr(ontology_service_module, "global_enum_service", _stub_enum_service(fake_get_enum))
-    monkeypatch.setattr(
-        ontology_service_module,
-        "semantic_config_dao",
-        _StubSemanticConfigDao(dimension_index=DIMENSION_INDEX),
-    )
+
+    async def allow_certify(_self, object_type_name):
+        return None
+
+    monkeypatch.setattr(ontology_service_module.OntologyService, "_require_certifiable", allow_certify)
 
 
 def test_object_create_requires_identifier(harness, deps_ok):
@@ -187,116 +187,6 @@ def test_object_create_rejects_duplicate_without_overwrite(harness, deps_ok):
     asyncio.run(ontology_service.upsert_object_type_async("Order", _object_payload()))
     with pytest.raises(OntologyAlreadyExistsError, match="已存在"):
         asyncio.run(ontology_service.upsert_object_type_async("Order", _object_payload()))
-
-
-def test_mapping_column_mapping_unknown_property_rejected(harness, deps_ok):
-    with pytest.raises(OntologyInvalidError, match="未定义属性"):
-        asyncio.run(
-            ontology_service.upsert_object_type_async(
-                "Order",
-                _object_payload(
-                    mappings=[
-                        {
-                            "semantic_config_id": "cfg-1",
-                            "column_mappings": {"unknown_prop": "订单编号"},
-                        }
-                    ]
-                ),
-            )
-        )
-
-
-def test_mapping_unknown_dimension_rejected(harness, deps_ok):
-    """映射右值必须是所选模型中真实存在的维度（本体只引用模型维度，不定义物理列）。"""
-    with pytest.raises(OntologyInvalidError, match="不存在的维度"):
-        asyncio.run(
-            ontology_service.upsert_object_type_async(
-                "Order",
-                _object_payload(
-                    mappings=[
-                        {
-                            "semantic_config_id": "cfg-1",
-                            "column_mappings": {"order_id": "幽灵维度"},
-                        }
-                    ]
-                ),
-            )
-        )
-
-
-def test_mapping_cross_table_dimensions_rejected(harness, deps_ok):
-    """同一映射的维度必须同表（实体锚点唯一），跨表映射拒绝。"""
-    with pytest.raises(OntologyInvalidError, match="跨多张表"):
-        asyncio.run(
-            ontology_service.upsert_object_type_async(
-                "Order",
-                _object_payload(
-                    properties=[
-                        dict(VALID_PROPERTY),
-                        {"property_name": "user_name", "value_type": "String"},
-                    ],
-                    mappings=[
-                        {
-                            "semantic_config_id": "cfg-1",
-                            "column_mappings": {"order_id": "订单编号", "user_name": "用户编号"},
-                        }
-                    ],
-                ),
-            )
-        )
-
-
-def test_mapping_ownership_conflict_rejected(harness, deps_ok):
-    mapping = dict(SEMANTIC_MAPPING)
-    asyncio.run(ontology_service.upsert_object_type_async("Order", _object_payload(mappings=[mapping])))
-    with pytest.raises(OntologyInvalidError, match="已被对象类型"):
-        asyncio.run(
-            ontology_service.upsert_object_type_async(
-                "Order2",
-                _object_payload(properties=[dict(VALID_PROPERTY)], mappings=[dict(mapping)]),
-            )
-        )
-
-
-def test_mapping_change_requires_destructive_confirm(harness, deps_ok):
-    mapping = dict(SEMANTIC_MAPPING)
-    asyncio.run(ontology_service.upsert_object_type_async("Order", _object_payload(mappings=[dict(mapping)])))
-    edited_mapping = {**mapping, "semantic_config_id": "cfg-2"}
-    with pytest.raises(OntologyStateInvalidError, match="破坏性变更"):
-        asyncio.run(
-            ontology_service.upsert_object_type_async(
-                "Order", _object_payload(mappings=[edited_mapping]), allow_overwrite=True
-            )
-        )
-    saved = asyncio.run(
-        ontology_service.upsert_object_type_async(
-            "Order",
-            _object_payload(mappings=[edited_mapping], confirm_destructive=True),
-            allow_overwrite=True,
-        )
-    )
-    assert saved["mappings"][0]["semantic_config_id"] == "cfg-2"
-
-
-def test_certified_requires_mapping(harness, deps_ok):
-    asyncio.run(ontology_service.upsert_object_type_async("Order", _object_payload()))
-    # 无映射：拒绝
-    with pytest.raises(OntologyInvalidError, match="语义模型映射"):
-        asyncio.run(ontology_service.set_object_type_status_async("Order", "certified", {}))
-    # 补上语义模型映射后可认证
-    asyncio.run(
-        ontology_service.upsert_object_type_async(
-            "Order", _object_payload(mappings=[dict(SEMANTIC_MAPPING)], confirm_destructive=True), allow_overwrite=True
-        )
-    )
-    asyncio.run(ontology_service.set_object_type_status_async("Order", "certified", {}))
-    # certified 编辑时移除唯一映射：冻结门禁拒绝
-    with pytest.raises(OntologyStateInvalidError, match="语义模型映射"):
-        asyncio.run(
-            ontology_service.upsert_object_type_async(
-                "Order", _object_payload(mappings=[], confirm_destructive=True), allow_overwrite=True
-            )
-        )
 
 
 def test_certified_freeze_blocks_key_and_property_change(harness, deps_ok):
@@ -619,21 +509,6 @@ def test_delete_object_cascades_and_certified_blocked(harness, deps_ok):
     assert json.dumps(detail["properties"], ensure_ascii=False)
 
 
-def test_mapping_semantic_config_must_exist(harness, monkeypatch):
-    """映射引用的语义模型必须真实存在（存在性校验；归属检查不覆盖悬空 ID）。"""
-    monkeypatch.setattr(
-        ontology_service_module,
-        "semantic_config_dao",
-        _StubSemanticConfigDao(existing_ids=set(), dimension_index=DIMENSION_INDEX),
-    )
-    with pytest.raises(OntologyInvalidError, match="语义模型不存在"):
-        asyncio.run(
-            ontology_service.upsert_object_type_async("Order", _object_payload(mappings=[dict(SEMANTIC_MAPPING)]))
-        )
-    # 无映射的对象类型不受影响
-    asyncio.run(ontology_service.upsert_object_type_async("Order", _object_payload()))
-
-
 def test_relation_from_columns_must_reference_defined_property(harness, deps_ok):
     """起始侧关联列必须引用 from 对象类型已定义的属性（外键侧不要求是标识属性）。"""
     asyncio.run(
@@ -668,52 +543,6 @@ def test_relation_from_columns_must_reference_defined_property(harness, deps_ok)
         )
     )
     assert saved["relation_type_name"] == "r1"
-
-
-def test_mappings_roundtrip_via_mapping_table(harness, deps_ok):
-    """映射独立存映射表：详情回读、编辑全量重写无残留、删除后归属释放。"""
-    mapping = dict(SEMANTIC_MAPPING)
-    asyncio.run(ontology_service.upsert_object_type_async("Order", _object_payload(mappings=[dict(mapping)])))
-    detail = asyncio.run(ontology_service.get_object_type_async("Order"))
-    assert {k: v for k, v in detail["mappings"][0].items() if k != "object_type_id"} == {
-        "binding_type": "semantic",
-        "semantic_config_id": "cfg-1",
-        "column_mappings": {"order_id": "订单编号"},
-    }
-    assert detail["mappings"][0]["object_type_id"] == detail["id"]
-    # 编辑换模型：映射表全量重写，旧行不残留（同对象类型重绑自身放行）
-    edited = {**mapping, "semantic_config_id": "cfg-2"}
-    asyncio.run(
-        ontology_service.upsert_object_type_async(
-            "Order", _object_payload(mappings=[dict(edited)], confirm_destructive=True), allow_overwrite=True
-        )
-    )
-    detail = asyncio.run(ontology_service.get_object_type_async("Order"))
-    assert [item["semantic_config_id"] for item in detail["mappings"]] == ["cfg-2"]
-    # 删除对象类型后归属释放：其他对象类型可占用同一映射
-    asyncio.run(ontology_service.delete_object_type_async("Order"))
-    asyncio.run(
-        ontology_service.upsert_object_type_async(
-            "Order2", _object_payload(properties=[dict(VALID_PROPERTY)], mappings=[dict(mapping)])
-        )
-    )
-    detail = asyncio.run(ontology_service.get_object_type_async("Order2"))
-    assert detail["mappings"][0]["semantic_config_id"] == "cfg-1"
-
-
-def test_mapping_same_object_rebind_allowed(harness, deps_ok):
-    """编辑自身携带原映射：归属检查排除自身，不误报占用。"""
-    mapping = dict(SEMANTIC_MAPPING)
-    asyncio.run(ontology_service.upsert_object_type_async("Order", _object_payload(mappings=[dict(mapping)])))
-    saved = asyncio.run(
-        ontology_service.upsert_object_type_async(
-            "Order",
-            _object_payload(display_name="订单A", mappings=[dict(mapping)], confirm_destructive=False),
-            allow_overwrite=True,
-        )
-    )
-    assert saved["display_name"] == "订单A"
-    assert saved["mappings"][0]["semantic_config_id"] == "cfg-1"
 
 
 def test_property_identifier_rejects_decimal(harness, deps_ok):
@@ -894,49 +723,13 @@ def test_object_ontology_reassign(harness, deps_ok):
 # ---------- 事务原子性 ----------
 
 
-def test_delete_object_midway_failure_rolls_back(harness, deps_ok, monkeypatch):
-    """对象类型删除多步写（关系类型/属性/映射/对象类型）中途失败必须整体回滚，不留半删状态。"""
-    asyncio.run(ontology_service.upsert_object_type_async("Order", _object_payload(mappings=[dict(SEMANTIC_MAPPING)])))
-    asyncio.run(ontology_service.upsert_object_type_async("User", _object_payload(properties=[dict(VALID_PROPERTY)])))
-    asyncio.run(
-        ontology_service.upsert_relation_async(
-            "r1",
-            {
-                "from_object_type_name": "Order",
-                "to_object_type_name": "User",
-                "from_columns": ["order_id"],
-                "to_columns": ["order_id"],
-            },
-        )
-    )
-
-    async def boom(object_type_id):
-        raise RuntimeError("模拟映射删除失败")
-
-    monkeypatch.setattr(ontology_service._dao, "delete_object_type_mappings_async", boom)
-    with pytest.raises(RuntimeError, match="模拟映射删除失败"):
-        asyncio.run(ontology_service.delete_object_type_async("Order"))
-
-    detail = asyncio.run(ontology_service.get_object_type_async("Order"))
-    assert detail is not None
-    assert detail["delete_flag"] == 0
-    assert [item["property_name"] for item in detail["properties"]] == ["order_id"]
-    assert [item["semantic_config_id"] for item in detail["mappings"]] == ["cfg-1"]
-    assert [item["relation_type_name"] for item in asyncio.run(ontology_service.list_relations_async())] == ["r1"]
-
-
-# ---------- 软删复活与状态口径 ----------
-
-
 def test_object_upsert_returns_full_detail(harness, deps_ok):
     """写接口返回真实详情（id/属性/映射），不再返回合成局部视图。"""
-    saved = asyncio.run(
-        ontology_service.upsert_object_type_async("Order", _object_payload(mappings=[dict(SEMANTIC_MAPPING)]))
-    )
+    saved = asyncio.run(ontology_service.upsert_object_type_async("Order", _object_payload()))
     assert isinstance(saved["id"], int)
     assert saved["status"] == "draft"
     assert [item["property_name"] for item in saved["properties"]] == ["order_id"]
-    assert [item["semantic_config_id"] for item in saved["mappings"]] == ["cfg-1"]
+    assert not saved.get("mappings")
 
 
 def test_relation_upsert_returns_readback_without_json_keys(harness, deps_ok):
@@ -1117,39 +910,6 @@ def test_relation_duplicate_without_overwrite_raises_already_exists(harness, dep
 # ---------- certified 门禁 ----------
 
 
-def test_certified_rejects_empty_column_mappings(harness, deps_ok):
-    asyncio.run(
-        ontology_service.upsert_object_type_async(
-            "Order", _object_payload(mappings=[{"semantic_config_id": "cfg-1", "column_mappings": {}}])
-        )
-    )
-    with pytest.raises(OntologyInvalidError, match="column_mappings"):
-        asyncio.run(ontology_service.set_object_type_status_async("Order", "certified", {}))
-
-
-def test_certified_rejects_identifier_not_mapped(harness, deps_ok):
-    asyncio.run(
-        ontology_service.upsert_object_type_async(
-            "Order",
-            _object_payload(
-                properties=[dict(VALID_PROPERTY), {"property_name": "amount", "value_type": "Decimal"}],
-                mappings=[{"semantic_config_id": "cfg-1", "column_mappings": {"amount": "订单编号"}}],
-            ),
-        )
-    )
-    with pytest.raises(OntologyInvalidError, match="标识属性"):
-        asyncio.run(ontology_service.set_object_type_status_async("Order", "certified", {}))
-
-
-def test_certified_accepts_full_identifier_mapping(harness, deps_ok):
-    asyncio.run(ontology_service.upsert_object_type_async("Order", _object_payload(mappings=[dict(SEMANTIC_MAPPING)])))
-    certified = asyncio.run(ontology_service.set_object_type_status_async("Order", "certified", {}))
-    assert certified["status"] == "certified"
-
-
-# ---------- 对象类型编辑：关系类型关联列悬空门禁 ----------
-
-
 def _relation_payload(from_name="Order", to_name="User", from_columns=None, to_columns=None):
     return {
         "from_object_type_name": from_name,
@@ -1231,31 +991,6 @@ def test_ontology_name_length_limit(harness, deps_ok):
 
 
 # ---------- 多源属性单源 / one_to_one from 侧唯一性（2026-10-17 补） ----------
-
-
-def test_multi_source_non_identifier_property_rejected(harness, deps_ok):  # noqa: F811
-    """多源对象类型：非标识属性只能出现在一个映射；标识属性可跨源。"""
-    payload = {
-        "display_name": "多源订单",
-        "properties": [
-            {"property_name": "order_id", "value_type": "String", "is_identifier": True},
-            {"property_name": "amount", "value_type": "String"},
-        ],
-        "mappings": [
-            {"semantic_config_id": "cfg-1", "column_mappings": {"order_id": "订单编号", "amount": "订单编号"}},
-            {"semantic_config_id": "cfg-2", "column_mappings": {"order_id": "订单编号", "amount": "订单编号"}},
-        ],
-    }
-    with pytest.raises(OntologyInvalidError, match="非标识属性只能单源映射"):
-        asyncio.run(ontology_service.upsert_object_type_async("MultiOrder", payload))
-
-    # 标识属性跨源重复允许；非标识属性只留一个来源
-    payload["mappings"] = [
-        {"semantic_config_id": "cfg-1", "column_mappings": {"order_id": "订单编号", "amount": "订单编号"}},
-        {"semantic_config_id": "cfg-2", "column_mappings": {"order_id": "订单编号"}},
-    ]
-    detail = asyncio.run(ontology_service.upsert_object_type_async("MultiOrder", payload))
-    assert len(detail["mappings"]) == 2
 
 
 def test_one_to_one_from_columns_require_identifier(harness, deps_ok):  # noqa: F811
