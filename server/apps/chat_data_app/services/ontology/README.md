@@ -71,9 +71,8 @@
 - 自关联、多列关联关系 MVP 不支持；执行在 `read_object_projection` 查询时计算（同 member、
   最佳努力：单条失败置空告警），目录与定位器输出 `derived: true` + 推导定义；
 - **MVP 边界**：单对象读取（`objects/read` / `get_object`）逐属性计算；列表/搜索页按当前页
-  逐行计算派生值（每行一次对端查询，分页有界；后续可改为 SQL JOIN/批量聚合）；过滤/排序/
-  聚合/分组仍显式拒绝派生属性，官方 derived properties reference 支持这些操作，后续按
-  SQL 下推补齐；
+  逐行计算派生值（每行一次对端查询，分页有界；后续可改为 SQL JOIN/批量聚合）；过滤/排序
+  已按 LEFT JOIN 下推（aggregate 走对端 GROUP BY，select 直接 JOIN），聚合/分组仍显式拒绝；
 - 与语义层指标正交：派生属性是「对象身上的计算字段」，全局命名指标口径仍在语义层。
 
 ## 指标关联（对象类型 ↔ 语义层）

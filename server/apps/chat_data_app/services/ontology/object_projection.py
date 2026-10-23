@@ -324,6 +324,20 @@ def _filter_condition(column: str, operator: str, item: dict[str, Any], value: s
     return f"{column} {_FILTER_SQL_SYMBOLS[operator]} '{escape_string(value)}'"
 
 
+def _search_property_sql(
+    property_name: str,
+    column_by_property: dict[str, str],
+    derived_expressions: dict[str, str] | None,
+) -> str:
+    """属性 → 物理列或派生 JOIN 表达式；派生属性无物理列。"""
+    if property_name in column_by_property:
+        return _quote_identifier(column_by_property[property_name])
+    derived = (derived_expressions or {}).get(property_name)
+    if derived:
+        return derived
+    raise ObjectProjectionError(f"属性未映射: {property_name or '?'}")
+
+
 def _object_search_conditions(
     column_by_property: dict[str, str],
     *,
@@ -331,6 +345,7 @@ def _object_search_conditions(
     search_column: str,
     identifier_column: str,
     filters: list[dict[str, Any]],
+    derived_expressions: dict[str, str] | None = None,
 ) -> str:
     """通用对象过滤条件；只接受已映射属性，不拼接任意 SQL。"""
     conditions: list[str] = []
@@ -340,25 +355,25 @@ def _object_search_conditions(
     for item in filters[:_MAX_FILTERS]:
         property_name = _text(item.get("property"))
         operator = _text(item.get("operator")).lower()
-        if property_name not in column_by_property:
-            raise ObjectProjectionError(f"过滤属性未映射: {property_name or '?'}")
         if operator not in _FILTER_OPERATORS:
             raise ObjectProjectionError(f"不支持的过滤操作符: {operator or '?'}")
-        column = _quote_identifier(column_by_property[property_name])
+        column = _search_property_sql(property_name, column_by_property, derived_expressions)
         conditions.append(_filter_condition(column, operator, item, _text(item.get("value"))))
     return " AND ".join(conditions)
 
 
 def _object_search_order_by(
-    column_by_property: dict[str, str], sorts: list[dict[str, Any]], identifier_column: str
+    column_by_property: dict[str, str],
+    sorts: list[dict[str, Any]],
+    identifier_column: str,
+    derived_expressions: dict[str, str] | None = None,
 ) -> str:
     order_parts: list[str] = []
     for item in sorts[:_MAX_SORTS]:
         property_name = _text(item.get("property"))
-        if property_name not in column_by_property:
-            raise ObjectProjectionError(f"排序属性未映射: {property_name or '?'}")
+        column = _search_property_sql(property_name, column_by_property, derived_expressions)
         direction = "DESC" if _text(item.get("direction")).lower() == "desc" else "ASC"
-        order_parts.append(f"{_quote_identifier(column_by_property[property_name])} {direction}")
+        order_parts.append(f"{column} {direction}")
     if not order_parts:
         order_parts.append(f"{_quote_identifier(identifier_column)} ASC")
     return ", ".join(order_parts)
@@ -374,14 +389,10 @@ def build_object_search_query(
     limit: int = 20,
     offset: int = 0,
     semantic_config_id: str | None = None,
+    derived_joins: list[str] | None = None,
+    derived_expressions: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """构造通用对象查询：关键词 + 属性过滤 + 排序 + 分页，并附带 count SQL。"""
-    _reject_derived_property_operations(
-        detail,
-        [_text((item or {}).get("property")) for item in filters or []]
-        + [_text((item or {}).get("property")) for item in sorts or []],
-        "过滤/排序",
-    )
     safe_limit = max(1, min(int(limit), 100))
     safe_offset = max(0, int(offset))
     mapping = _mapping_for_projection(detail, semantic_config_id)
@@ -405,15 +416,17 @@ def build_object_search_query(
         search_column=search_column,
         identifier_column=identifier_meta["column"],
         filters=filters or [],
+        derived_expressions=derived_expressions,
     )
     where_sql = f" WHERE {where}" if where else ""
-    order_sql = _object_search_order_by(column_by_property, sorts or [], identifier_meta["column"])
+    order_sql = _object_search_order_by(column_by_property, sorts or [], identifier_meta["column"], derived_expressions)
     select_list = ", ".join(f"{_quote_identifier(column)} AS `{property_name}`" for property_name, column in columns)
+    from_sql = f"{_quote_identifier(table)}{''.join(derived_joins or [])}"
     sql = (
-        f"SELECT {select_list} FROM {_quote_identifier(table)}{where_sql} "
+        f"SELECT {select_list} FROM {from_sql}{where_sql} "
         f"ORDER BY {order_sql} LIMIT {safe_limit + 1} OFFSET {safe_offset}"
     )
-    count_sql = f"SELECT COUNT(*) AS `total` FROM {_quote_identifier(table)}{where_sql}"
+    count_sql = f"SELECT COUNT(*) AS `total` FROM {from_sql}{where_sql}"
     return {
         "sql": sql,
         "count_sql": count_sql,
@@ -1135,6 +1148,99 @@ async def _derived_query_context(
     }
 
 
+async def _derived_join_for_property(
+    prop: dict[str, Any],
+    *,
+    index: int,
+    join_key: str,
+    relation_cache: dict[str, dict[str, Any]],
+    current_id: int,
+    member_id: str,
+    user_id: str,
+    username: str,
+) -> tuple[str, str]:
+    """单条派生属性 → (LEFT JOIN SQL, 过滤/排序表达式)。"""
+    derivation = prop["derivation"]
+    relation_name = _text(derivation.get("relation_type_name"))
+    relation = relation_cache.get(relation_name)
+    if relation is None:
+        relation = await _load_derived_relation(derivation)
+        relation_cache[relation_name] = relation
+    side = _derived_relation_side(derivation, relation, current_id)
+    context = await _derived_query_context(derivation, side, member_id=member_id, user_id=user_id, username=username)
+    alias = f"d{index}"
+    target_table = _quote_identifier(context["table"])
+    filter_column = _quote_identifier(context["filter_column"])
+    if _text(derivation.get("kind")) == "aggregate":
+        operator = _text(derivation.get("operator"))
+        aggregate = (
+            "COUNT(*)"
+            if operator == "count"
+            else (f"{_DERIVED_AGGREGATE_SQL[operator]}({_quote_identifier(context['target_column'])})")
+        )
+        join = (
+            f" LEFT JOIN (SELECT {filter_column} AS `join_key`, {aggregate} AS `value` "
+            f"FROM {target_table} GROUP BY {filter_column}) AS `{alias}` "
+            f"ON `{alias}`.`join_key` = {join_key}"
+        )
+        return join, f"`{alias}`.`value`"
+    join = f" LEFT JOIN {target_table} AS `{alias}` ON `{alias}`.{filter_column} = {join_key}"
+    return join, f"`{alias}`.{_quote_identifier(context['target_column'])}"
+
+
+async def _resolve_derived_filter_sort_async(
+    detail: dict[str, Any],
+    config: dict[str, Any],
+    filters: list[dict[str, Any]],
+    sorts: list[dict[str, Any]],
+    *,
+    member_id: str,
+    user_id: str,
+    username: str,
+    semantic_config_id: str | None = None,
+) -> tuple[list[str], dict[str, str]]:
+    """把过滤/排序引用的派生属性编译成 LEFT JOIN + 表达式（官方 filter/sort 的 MVP 下推）。"""
+    property_names = {_text((item or {}).get("property")) for item in [*filters, *sorts] if isinstance(item, dict)}
+    derived = {
+        _text(prop.get("property_name")): prop
+        for prop in detail.get("properties") or []
+        if isinstance(prop, dict) and isinstance(prop.get("derivation"), dict) and prop["derivation"]
+    }
+    names = sorted(name for name in property_names if name in derived)
+    if not names:
+        return [], {}
+    mapping = _mapping_for_projection(detail, semantic_config_id)
+    column_mappings = mapping.get("column_mappings")
+    if not isinstance(column_mappings, dict):
+        raise ObjectProjectionError("对象映射缺少 column_mappings")
+    properties = [prop for prop in detail.get("properties") or [] if isinstance(prop, dict)]
+    dimensions = _dimension_index(config)
+    table, _columns = _projection_columns(properties, column_mappings, dimensions)
+    _identifier_property_name, identifier_dimension = _identifier_property(properties, column_mappings)
+    identifier_meta = dimensions.get(identifier_dimension)
+    if not identifier_meta or identifier_meta["table"] != table:
+        raise ObjectProjectionError("标识属性与普通属性不在同一张表，MVP 暂不支持")
+    join_key = f"{_quote_identifier(table)}.{_quote_identifier(identifier_meta['column'])}"
+    current_id = int(detail.get("id") or 0)
+    joins: list[str] = []
+    expressions: dict[str, str] = {}
+    relation_cache: dict[str, dict[str, Any]] = {}
+    for index, name in enumerate(names):
+        join, expression = await _derived_join_for_property(
+            derived[name],
+            index=index,
+            join_key=join_key,
+            relation_cache=relation_cache,
+            current_id=current_id,
+            member_id=member_id,
+            user_id=user_id,
+            username=username,
+        )
+        joins.append(join)
+        expressions[name] = expression
+    return joins, expressions
+
+
 def _derived_target_column(
     derivation: dict[str, Any],
     column_mappings: dict[str, Any],
@@ -1221,6 +1327,17 @@ async def search_object_projection(
         user_id=user_id,
         username=username,
     )
+    scope = _member_scope(targets)
+    derived_joins, derived_expressions = await _resolve_derived_filter_sort_async(
+        query_detail,
+        config,
+        filters or [],
+        sorts or [],
+        member_id=scope.get("member_datasource_id", ""),
+        user_id=user_id,
+        username=username,
+        semantic_config_id=semantic_config_id,
+    )
     query = build_object_search_query(
         query_detail,
         config,
@@ -1230,6 +1347,8 @@ async def search_object_projection(
         limit=limit,
         offset=offset,
         semantic_config_id=semantic_config_id,
+        derived_joins=derived_joins,
+        derived_expressions=derived_expressions,
     )
     started_at = time.perf_counter()
     count_rows = await _query_rows(
@@ -1252,7 +1371,6 @@ async def search_object_projection(
     execution_time_ms = int((time.perf_counter() - started_at) * 1000)
     has_more = len(rows) > query["limit"]
     page_rows = rows[: query["limit"]]
-    scope = _member_scope(targets)
     derived_values = await _derived_values_for_rows(detail, page_rows, scope, user_id=user_id, username=username)
     return {
         "objects": [

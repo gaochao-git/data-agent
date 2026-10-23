@@ -992,4 +992,5 @@ ALTER TABLE `chat_data_ontology_property`
 - 先执行 DDL 再发布后端，否则 ORM 读取 `derivation_json` 会因缺列失败；
 - 派生属性不允许写入 `column_mappings`（不落物理列）；已有普通属性改成派生属性前，需先从 Dataset source binding 移除映射；
 - 派生属性只读：不能通过 Action 修改、不能作为关系关联列、不能作为过滤/排序/聚合字段（P0 明确报错）；
-  列表/搜索页返回当前页派生值（逐行计算，分页有界），过滤/排序/聚合下推待后续版本。
+  列表/搜索页返回当前页派生值（逐行计算，分页有界）；过滤/排序已按 LEFT JOIN 下推，
+  聚合/分组下推待后续版本。

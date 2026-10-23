@@ -165,11 +165,11 @@ def test_build_object_search_query_supports_all_comparison_operators():
 
 
 def test_build_object_search_query_rejects_unmapped_filter_and_sort():
-    with pytest.raises(ObjectProjectionError, match="过滤属性未映射"):
+    with pytest.raises(ObjectProjectionError, match="属性未映射"):
         build_object_search_query(
             _detail(), _config(), filters=[{"property": "missing", "operator": "eq", "value": "1"}]
         )
-    with pytest.raises(ObjectProjectionError, match="排序属性未映射"):
+    with pytest.raises(ObjectProjectionError, match="属性未映射"):
         build_object_search_query(_detail(), _config(), sorts=[{"property": "missing", "direction": "asc"}])
 
 
@@ -606,19 +606,28 @@ def _derived_detail():
     return detail
 
 
-def test_search_query_rejects_derived_filter_and_sort():
-    with pytest.raises(ObjectProjectionError, match="派生属性不支持过滤/排序"):
-        build_object_search_query(
-            _derived_detail(),
-            _config(),
-            filters=[{"property": "order_count", "operator": "eq", "value": "1"}],
-        )
-    with pytest.raises(ObjectProjectionError, match="派生属性不支持过滤/排序"):
-        build_object_search_query(
-            _derived_detail(),
-            _config(),
-            sorts=[{"property": "order_count", "direction": "desc"}],
-        )
+def test_search_query_supports_derived_filter_and_sort():
+    joins = [
+        " LEFT JOIN (SELECT `customer_id` AS `join_key`, COUNT(*) AS `value` FROM `orders` GROUP BY `customer_id`) AS `d0` ON `d0`.`join_key` = `orders`.`order_id`"
+    ]
+    expressions = {"order_count": "`d0`.`value`"}
+    filtered = build_object_search_query(
+        _derived_detail(),
+        _config(),
+        filters=[{"property": "order_count", "operator": "gt", "value": "1"}],
+        derived_joins=joins,
+        derived_expressions=expressions,
+    )
+    assert joins[0] in filtered["sql"]
+    assert "`d0`.`value` > '1'" in filtered["sql"]
+    sorted_query = build_object_search_query(
+        _derived_detail(),
+        _config(),
+        sorts=[{"property": "order_count", "direction": "desc"}],
+        derived_joins=joins,
+        derived_expressions=expressions,
+    )
+    assert "ORDER BY `d0`.`value` DESC" in sorted_query["sql"]
 
 
 def test_aggregate_query_rejects_derived_group_by_and_filter():
@@ -749,3 +758,138 @@ def test_projection_mapping_and_guard_branches():
         )
     with pytest.raises(ObjectProjectionError, match="标识属性未映射"):
         object_projection._identifier_property([{"property_name": "a", "is_identifier": True}], {})
+
+
+def test_resolve_derived_filter_sort_builds_join(monkeypatch):
+    from apps.chat_data_app.services.ontology import object_projection
+
+    async def relation(_derivation):
+        return {"relation_type_name": "order_belongs_to_customer"}
+
+    def side(_derivation, _relation, _current_id):
+        return {"direction": "to", "related_object_type": "Order"}
+
+    async def context(_derivation, _side, **_kwargs):
+        return {"table": "orders", "filter_column": "customer_id", "target_column": "amount"}
+
+    monkeypatch.setattr(object_projection, "_load_derived_relation", relation)
+    monkeypatch.setattr(object_projection, "_derived_relation_side", side)
+    monkeypatch.setattr(object_projection, "_derived_query_context", context)
+    joins, expressions = asyncio.run(
+        object_projection._resolve_derived_filter_sort_async(
+            _derived_detail(),
+            _config(),
+            [{"property": "order_count", "operator": "gt", "value": "1"}],
+            [],
+            member_id="M1",
+            user_id="",
+            username="",
+        )
+    )
+    assert "LEFT JOIN" in joins[0]
+    assert "COUNT(*)" in joins[0]
+    assert expressions == {"order_count": "`d0`.`value`"}
+
+    monkeypatch.setattr(
+        object_projection,
+        "_derived_join_for_property",
+        lambda *_args, **_kwargs: _async_pair(" SELECT 1", "`d0`.`x`"),
+    )
+    joins, expressions = asyncio.run(
+        object_projection._resolve_derived_filter_sort_async(
+            _derived_detail(), _config(), [], [{"property": "order_count"}], member_id="M1", user_id="", username=""
+        )
+    )
+    assert joins == [" SELECT 1"]
+    assert expressions == {"order_count": "`d0`.`x`"}
+
+
+async def _async_pair(first, second):
+    return first, second
+
+
+def test_resolve_derived_filter_sort_edge_paths(monkeypatch):
+    from apps.chat_data_app.services.ontology import object_projection
+
+    assert asyncio.run(
+        object_projection._resolve_derived_filter_sort_async(
+            _detail(), _config(), [], [], member_id="M1", user_id="", username=""
+        )
+    ) == ([], {})
+
+    async def relation(_derivation):
+        return {"relation_type_name": "customer_has_orders"}
+
+    def side(_derivation, _relation, _current_id):
+        return {"direction": "from", "related_object_type": "Customer"}
+
+    async def context(_derivation, _side, **_kwargs):
+        return {"table": "customers", "filter_column": "order_id", "target_column": "name"}
+
+    monkeypatch.setattr(object_projection, "_load_derived_relation", relation)
+    monkeypatch.setattr(object_projection, "_derived_relation_side", side)
+    monkeypatch.setattr(object_projection, "_derived_query_context", context)
+    detail = _derived_detail()
+    detail["properties"][-1]["derivation"] = {
+        "kind": "select",
+        "relation_type_name": "customer_has_orders",
+        "target_property": "name",
+    }
+    joins, expressions = asyncio.run(
+        object_projection._resolve_derived_filter_sort_async(
+            detail,
+            _config(),
+            [{"property": "order_count", "operator": "eq", "value": "1"}],
+            [],
+            member_id="M1",
+            user_id="",
+            username="",
+        )
+    )
+    assert "LEFT JOIN `customers` AS `d0`" in joins[0]
+    assert expressions["order_count"] == "`d0`.`name`"
+
+
+def test_resolve_derived_filter_sort_requires_mapping():
+    from apps.chat_data_app.services.ontology import object_projection
+
+    detail = _derived_detail()
+    detail["mappings"] = []
+    with pytest.raises(ObjectProjectionError, match="未绑定语义模型"):
+        asyncio.run(
+            object_projection._resolve_derived_filter_sort_async(
+                detail,
+                _config(),
+                [{"property": "order_count", "operator": "eq", "value": "1"}],
+                [],
+                member_id="M1",
+                user_id="",
+                username="",
+            )
+        )
+
+
+def test_aggregate_and_related_query_guard_branches():
+    with pytest.raises(ObjectProjectionError, match="聚合属性未映射"):
+        build_object_aggregate_query(
+            _detail(),
+            _config(),
+            metrics=[{"name": "sum", "operation": "sum", "property": "missing"}],
+        )
+    with pytest.raises(ObjectProjectionError, match="关系属性或标识属性缺少映射维度"):
+        build_related_key_query(
+            _detail(),
+            {"dimensions": []},
+            filter_property="order_id",
+            filter_value="1",
+        )
+
+
+def test_mapping_for_projection_selects_explicit_config():
+    from apps.chat_data_app.services.ontology import object_projection
+
+    selected = {"semantic_config_id": "cfg-a", "column_mappings": {"a": "A"}}
+    assert (
+        object_projection._mapping_for_projection({"mappings": [selected, {"semantic_config_id": "cfg-b"}]}, "cfg-a")
+        == selected
+    )
