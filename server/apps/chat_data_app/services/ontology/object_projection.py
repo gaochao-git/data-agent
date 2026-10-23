@@ -290,8 +290,25 @@ def build_related_key_query(
         raise ObjectProjectionError("关系属性或标识属性缺少映射维度")
     if filter_dimension["table"] != identifier_dimension_meta["table"]:
         raise ObjectProjectionError("关系属性与标识属性不在同一张表，MVP 暂不支持")
+    select_list = f"{_quote_identifier(identifier_dimension_meta['column'])} AS `related_key`"
+    title_property = ""
+    for prop in properties:
+        if not bool(prop.get("is_title")):
+            continue
+        candidate_name = _text(prop.get("property_name"))
+        candidate_dimension_name = _text(column_mappings.get(candidate_name))
+        candidate_dimension = dimensions.get(candidate_dimension_name)
+        if (
+            not candidate_name
+            or not candidate_dimension
+            or candidate_dimension["table"] != identifier_dimension_meta["table"]
+        ):
+            continue
+        select_list += f", {_quote_identifier(candidate_dimension['column'])} AS `related_title`"
+        title_property = candidate_name
+        break
     sql = (
-        f"SELECT {_quote_identifier(identifier_dimension_meta['column'])} AS `related_key` "
+        f"SELECT {select_list} "
         f"FROM {_quote_identifier(identifier_dimension_meta['table'])} "
         f"WHERE {_quote_identifier(filter_dimension['column'])} = '{escape_string(filter_value)}' "
         f"LIMIT {_MAX_LINKS_PER_RELATION}"
@@ -301,6 +318,7 @@ def build_related_key_query(
         "related_object_type": _text(detail.get("object_type_name")),
         "identifier_property": identifier_property,
         "filter_property": filter_property,
+        "title_property": title_property,
     }
 
 
@@ -405,14 +423,16 @@ def _link_entries(
         if not key or key in seen:
             continue
         seen.add(key)
-        entries.append(
-            {
-                "relation": relation_name,
-                "direction": side["direction"],
-                "related_object_type": side["related_object_type"],
-                "related_object_key": f"{side['related_object_type']}:{key}",
-            }
-        )
+        entry = {
+            "relation": relation_name,
+            "direction": side["direction"],
+            "related_object_type": side["related_object_type"],
+            "related_object_key": f"{side['related_object_type']}:{key}",
+        }
+        related_title = _text(related_row.get("related_title"))
+        if related_title:
+            entry["related_title"] = related_title
+        entries.append(entry)
     return entries
 
 

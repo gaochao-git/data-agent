@@ -123,6 +123,32 @@ def test_build_related_key_query_selects_related_identifier():
     assert query["related_object_type"] == "Order"
 
 
+def test_build_related_key_query_includes_title_column():
+    detail = _detail()
+    detail["properties"][0]["is_title"] = True
+    query = build_related_key_query(
+        detail,
+        _config(),
+        filter_property="order_id",
+        filter_value="ORD1",
+    )
+    assert "AS `related_title`" in query["sql"]
+    assert query["title_property"] == "order_id"
+
+
+def test_build_related_key_query_skips_unmapped_title():
+    detail = _detail()
+    detail["properties"].append({"property_name": "title", "is_title": True})
+    query = build_related_key_query(
+        detail,
+        _config(),
+        filter_property="order_id",
+        filter_value="ORD1",
+    )
+    assert "related_title" not in query["sql"]
+    assert query["title_property"] == ""
+
+
 def test_read_links_builds_foreign_key_link(monkeypatch):
     from apps.chat_data_app.services.ontology import object_projection
 
@@ -170,6 +196,26 @@ def test_read_links_builds_foreign_key_link(monkeypatch):
         "related_object_type": "Customer",
         "related_object_key": "Customer:C001",
     }
+
+
+def test_query_rows_raises_when_execution_fails(monkeypatch):
+    from apps.chat_data_app.services.ontology import object_projection
+
+    async def fake_execute(*_args, **_kwargs):
+        return {"status": "failed", "error": "boom"}
+
+    monkeypatch.setattr(object_projection, "execute_sql_for_member", fake_execute)
+    with pytest.raises(ObjectProjectionError, match="boom"):
+        asyncio.run(
+            object_projection._query_rows(
+                [{"member_datasource_id": "m1"}],
+                "SELECT 1",
+                group_id="g1",
+                user_id="u",
+                username="n",
+                limit=1,
+            )
+        )
 
 
 def test_list_object_projection_returns_page_and_has_more(monkeypatch):

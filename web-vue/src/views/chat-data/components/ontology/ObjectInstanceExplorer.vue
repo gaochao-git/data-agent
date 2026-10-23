@@ -94,6 +94,279 @@ const searchAroundGroups = computed(() => {
 
 const searchAroundCount = computed(() => searchAroundGroups.value.reduce((total, group) => total + group.entries.length, 0))
 
+interface ExploreNode {
+  key: string
+  objectType: string
+  label: string
+  properties: Record<string, unknown>
+}
+
+interface ExploreEdge {
+  key: string
+  relationName: string
+  fromKey: string
+  toKey: string
+}
+
+const exploreNodes = ref<Record<string, ExploreNode>>({})
+const exploreEdges = ref<Record<string, ExploreEdge>>({})
+const exploreSelectedKey = ref('')
+const seedAfterLoad = ref(false)
+const graphFullscreen = ref(false)
+const exploreNodeOffsets = ref<Record<string, { x: number; y: number }>>({})
+const draggingExploreKey = ref('')
+const exploreLoadingKey = ref('')
+let exploreRequestId = 0
+let exploreStartX = 0
+let exploreStartY = 0
+let exploreStartOffsetX = 0
+let exploreStartOffsetY = 0
+
+const startExploreNodeDrag = (event: MouseEvent, node: { key: string; x: number; y: number }) => {
+  event.preventDefault()
+  event.stopPropagation()
+  const offset = exploreNodeOffsets.value[node.key] || { x: 0, y: 0 }
+  draggingExploreKey.value = node.key
+  exploreStartX = event.clientX
+  exploreStartY = event.clientY
+  exploreStartOffsetX = offset.x
+  exploreStartOffsetY = offset.y
+}
+
+const onExploreNodeDrag = (event: MouseEvent) => {
+  if (!draggingExploreKey.value) return
+  exploreNodeOffsets.value = {
+    ...exploreNodeOffsets.value,
+    [draggingExploreKey.value]: {
+      x: exploreStartOffsetX + event.clientX - exploreStartX,
+      y: exploreStartOffsetY + event.clientY - exploreStartY
+    }
+  }
+}
+
+const endExploreNodeDrag = () => {
+  draggingExploreKey.value = ''
+}
+
+const addExploreNode = (rawKey: string, objectType: string, label: string, properties: Record<string, unknown>) => {
+  if (!rawKey) return
+  exploreNodes.value = {
+    ...exploreNodes.value,
+    [rawKey]: { key: rawKey, objectType, label: label || rawKey, properties }
+  }
+}
+
+const addExploreEdge = (relationName: string, fromKey: string, toKey: string) => {
+  if (!fromKey || !toKey) return
+  const key = `${relationName}:${fromKey}:${toKey}`
+  exploreEdges.value = {
+    ...exploreEdges.value,
+    [key]: { key, relationName, fromKey, toKey }
+  }
+}
+
+const mergeCurrentLinksIntoExplore = () => {
+  const data = detail.value
+  if (!data) return
+  addExploreNode(data.object_key, data.object_type || props.objectType, detailTitle.value || data.object_key, data.properties || {})
+  for (const group of linkedGroups.value) {
+    for (const entry of group.entries) {
+      const relatedKey = String(entry.related_object_key || '')
+      if (!relatedKey) continue
+      const separator = relatedKey.indexOf(':')
+      const relatedType = separator > 0 ? relatedKey.slice(0, separator) : props.objectType
+      const relatedTitle = String(entry.related_title || '').trim()
+      addExploreNode(relatedKey, relatedType, relatedTitle || relatedKey.split(':').slice(1).join(':') || relatedKey, {})
+      addExploreEdge(group.relationName, data.object_key, relatedKey)
+    }
+  }
+}
+
+const seedExploreGraph = () => {
+  exploreNodes.value = {}
+  exploreEdges.value = {}
+  exploreNodeOffsets.value = {}
+  exploreSelectedKey.value = detail.value?.object_key || ''
+  mergeCurrentLinksIntoExplore()
+}
+
+const clearExploreGraph = () => {
+  exploreNodes.value = {}
+  exploreEdges.value = {}
+  exploreNodeOffsets.value = {}
+  exploreSelectedKey.value = ''
+}
+
+const afterDetailLoaded = () => {
+  if (detailMode.value !== 'graph' || !detail.value) return
+  addExploreNode(
+    detail.value.object_key,
+    detail.value.object_type || props.objectType,
+    detailTitle.value || detail.value.object_key,
+    detail.value.properties || {}
+  )
+  exploreSelectedKey.value = detail.value.object_key
+  if (seedAfterLoad.value) {
+    seedExploreGraph()
+    seedAfterLoad.value = false
+  }
+}
+
+const exploreGraph = computed(() => {
+  const nodes = Object.values(exploreNodes.value)
+  if (nodes.length === 0) return { nodes: [], edges: [], width: 760, height: 460 }
+  const width = Math.max(760, Math.min(1300, 520 + nodes.length * 58))
+  const height = Math.max(460, Math.min(820, 300 + nodes.length * 34))
+  const centerX = width / 2
+  const centerY = height / 2
+  const positions = new Map<string, { x: number; y: number }>()
+  nodes.forEach((node, index) => {
+    const angle = (index / Math.max(nodes.length, 1)) * Math.PI * 2
+    positions.set(node.key, {
+      x: centerX + Math.cos(angle) * Math.min(230, nodes.length * 22),
+      y: centerY + Math.sin(angle) * Math.min(150, nodes.length * 16)
+    })
+  })
+  const keys = nodes.map(node => node.key)
+  const pairs = Object.values(exploreEdges.value)
+    .map(edge => [edge.fromKey, edge.toKey] as [string, string])
+    .filter(([from, to]) => positions.has(from) && positions.has(to))
+  const k = Math.sqrt((width * height) / Math.max(nodes.length, 1)) * 0.72
+  const iterations = 120
+  for (let iteration = 0; iteration < iterations; iteration += 1) {
+    const displacement: Record<string, { x: number; y: number }> = {}
+    keys.forEach(key => {
+      displacement[key] = { x: 0, y: 0 }
+    })
+    for (let i = 0; i < keys.length; i += 1) {
+      for (let j = i + 1; j < keys.length; j += 1) {
+        const first = positions.get(keys[i]!)!
+        const second = positions.get(keys[j]!)!
+        let dx = first.x - second.x
+        let dy = first.y - second.y
+        let distance = Math.hypot(dx, dy)
+        if (distance < 1) {
+          dx = 1
+          dy = (i - j) * 0.1
+          distance = Math.hypot(dx, dy)
+        }
+        const force = (k * k) / distance
+        const unitX = dx / distance
+        const unitY = dy / distance
+        displacement[keys[i]!]!.x += unitX * force
+        displacement[keys[i]!]!.y += unitY * force
+        displacement[keys[j]!]!.x -= unitX * force
+        displacement[keys[j]!]!.y -= unitY * force
+      }
+    }
+    for (const [from, to] of pairs) {
+      const first = positions.get(from)!
+      const second = positions.get(to)!
+      let dx = first.x - second.x
+      let dy = first.y - second.y
+      let distance = Math.hypot(dx, dy)
+      if (distance < 1) {
+        dx = 1
+        distance = 1
+      }
+      const force = (distance * distance) / k
+      const unitX = dx / distance
+      const unitY = dy / distance
+      displacement[from]!.x -= unitX * force
+      displacement[from]!.y -= unitY * force
+      displacement[to]!.x += unitX * force
+      displacement[to]!.y += unitY * force
+    }
+    const temperature = Math.max(0.8, 18 * (1 - iteration / iterations))
+    keys.forEach(key => {
+      const point = positions.get(key)!
+      const move = displacement[key]!
+      const magnitude = Math.max(1, Math.hypot(move.x, move.y))
+      point.x += (move.x / magnitude) * temperature
+      point.y += (move.y / magnitude) * temperature
+      point.x += (centerX - point.x) * 0.01
+      point.y += (centerY - point.y) * 0.01
+      point.x = Math.max(100, Math.min(width - 100, point.x))
+      point.y = Math.max(45, Math.min(height - 45, point.y))
+    })
+    // 节点框碰撞消解：避免节点和标题互相压住。
+    for (let pass = 0; pass < 2; pass += 1) {
+      for (let i = 0; i < keys.length; i += 1) {
+        for (let j = i + 1; j < keys.length; j += 1) {
+          const first = positions.get(keys[i]!)!
+          const second = positions.get(keys[j]!)!
+          let dx = second.x - first.x
+          let dy = second.y - first.y
+          const overlapX = 196 - Math.abs(dx)
+          const overlapY = 52 - Math.abs(dy)
+          if (overlapX <= 0 || overlapY <= 0) continue
+          if (dx === 0) dx = i % 2 === 0 ? 1 : -1
+          if (dy === 0) dy = j % 2 === 0 ? 1 : -1
+          if (overlapX < overlapY) {
+            const shift = (overlapX / 2 + 1) * (dx > 0 ? 1 : -1)
+            first.x -= shift
+            second.x += shift
+          } else {
+            const shift = (overlapY / 2 + 1) * (dy > 0 ? 1 : -1)
+            first.y -= shift
+            second.y += shift
+          }
+          first.x = Math.max(100, Math.min(width - 100, first.x))
+          second.x = Math.max(100, Math.min(width - 100, second.x))
+          first.y = Math.max(45, Math.min(height - 45, first.y))
+          second.y = Math.max(45, Math.min(height - 45, second.y))
+        }
+      }
+    }
+  }
+  const graphNodes = nodes.map(node => {
+    const point = positions.get(node.key)!
+    const offset = exploreNodeOffsets.value[node.key] || { x: 0, y: 0 }
+    return { ...node, x: point.x + offset.x, y: point.y + offset.y }
+  })
+  const byKey = new Map(graphNodes.map(node => [node.key, node]))
+  const edges = Object.values(exploreEdges.value)
+    .map(edge => {
+      const from = byKey.get(edge.fromKey)
+      const to = byKey.get(edge.toKey)
+      if (!from || !to) return null
+      const dx = to.x - from.x
+      const dy = to.y - from.y
+      const distance = Math.hypot(dx, dy) || 1
+      const unitX = dx / distance
+      const unitY = dy / distance
+      const edgeDistance = Math.min(84 / Math.max(Math.abs(unitX), 1e-6), 16 / Math.max(Math.abs(unitY), 1e-6))
+      return {
+        ...edge,
+        x1: from.x + unitX * edgeDistance,
+        y1: from.y + unitY * edgeDistance,
+        x2: to.x - unitX * edgeDistance,
+        y2: to.y - unitY * edgeDistance
+      }
+    })
+    .filter((edge): edge is NonNullable<typeof edge> => edge !== null)
+  return { nodes: graphNodes, edges, width, height }
+})
+
+const openExploreNode = async (rawKey: string) => {
+  const requestId = ++exploreRequestId
+  exploreSelectedKey.value = rawKey
+  exploreLoadingKey.value = rawKey
+  try {
+    await loadDetail(rawKey, exploreNodes.value[rawKey]?.objectType || props.objectType)
+    // 快速连点多个节点时，只允许最后一次请求补图。
+    if (requestId !== exploreRequestId || detailMode.value !== 'graph') return
+    mergeCurrentLinksIntoExplore()
+  } finally {
+    if (requestId === exploreRequestId) exploreLoadingKey.value = ''
+  }
+}
+
+const onDetailModeChange = (mode: string | number | boolean | undefined) => {
+  detailMode.value = mode as 'table' | 'search' | 'graph'
+  if (detailMode.value === 'graph' && detail.value) seedExploreGraph()
+}
+
 interface InstanceGraphNode {
   key: string
   label: string
@@ -225,6 +498,7 @@ const loadDetail = async (rawKey: string, objectType = props.objectType, seed?: 
     detail.value = cached
     detailLoading.value = false
     linksLoading.value = false
+    afterDetailLoaded()
     return
   }
   if (seed) {
@@ -238,7 +512,7 @@ const loadDetail = async (rawKey: string, objectType = props.objectType, seed?: 
     detailLoading.value = false
     linksLoading.value = true
   } else {
-    detail.value = null
+    // 切换图节点时保留上一个对象，避免整块变成白屏；加载中给轻量提示。
     detailLoading.value = true
     linksLoading.value = false
   }
@@ -247,6 +521,7 @@ const loadDetail = async (rawKey: string, objectType = props.objectType, seed?: 
     if (res.status === 'success') {
       detail.value = res.data
       detailCache.set(rawKey, res.data)
+      afterDetailLoaded()
       if (type !== props.objectType) await loadMeta(type)
     } else {
       detailError.value = res.msg || '读取对象失败'
@@ -263,12 +538,17 @@ const loadDetail = async (rawKey: string, objectType = props.objectType, seed?: 
 const selectRow = (row: OntologyObjectListItem) => {
   history.value = []
   listSelectedKey.value = row.object_key
+  seedAfterLoad.value = detailMode.value === 'graph'
   void loadDetail(row.object_key, props.objectType, row)
 }
 
 const openLinked = (rawKey: unknown) => {
   const key = String(rawKey || '')
   if (!key || !detail.value) return
+  if (detailMode.value === 'graph') {
+    openExploreNode(key)
+    return
+  }
   history.value.push({ objectType: props.objectType, objectKey: detail.value.object_key, label: detailTitle.value || detail.value.object_key })
   void loadDetail(key)
 }
@@ -307,6 +587,9 @@ const initialize = () => {
   if (!props.objectType) return
   keyword.value = ''
   page.value = 1
+  exploreNodes.value = {}
+  exploreEdges.value = {}
+  exploreSelectedKey.value = ''
   resetToList()
   void loadMeta(props.objectType)
   void loadList()
@@ -360,18 +643,23 @@ onMounted(initialize)
           从左侧列表选择一个对象
         </div>
       </div>
-      <div v-else-if="detailLoading" class="flex h-full items-center justify-center text-xs text-slate-400">加载对象详情中…</div>
-      <el-alert v-else-if="detailError" :title="detailError" type="error" :closable="false" show-icon />
+      <div v-else-if="!detail && detailLoading" class="py-2">
+        <el-skeleton :rows="4" animated />
+      </div>
       <template v-else-if="detail">
+        <div v-if="detailLoading" class="mb-2 rounded bg-blue-50 px-2 py-1 text-[11px] text-blue-600">
+          <i class="fa-solid fa-spinner fa-spin mr-1"></i>加载所选对象详情中…
+        </div>
+        <el-alert v-if="detailError" :title="detailError" type="error" :closable="false" show-icon class="mb-2" />
         <div class="mb-3 flex items-center gap-2">
           <el-button v-if="history.length > 0" link size="small" @click="backToObject">返回</el-button>
           <el-button link size="small" @click="resetToList">返回列表</el-button>
           <span class="font-mono text-xs text-slate-700">{{ detail.object_key }}</span>
           <span v-if="detailTitle" class="text-xs text-slate-500">{{ detailTitle }}</span>
-          <el-radio-group v-model="detailMode" size="small" class="ml-auto">
+          <el-radio-group v-model="detailMode" size="small" class="ml-auto" @change="onDetailModeChange">
             <el-radio-button value="table">属性</el-radio-button>
             <el-radio-button value="search">关系探索</el-radio-button>
-            <el-radio-button value="graph">图形</el-radio-button>
+            <el-radio-button value="graph">图探索</el-radio-button>
           </el-radio-group>
         </div>
 
@@ -452,17 +740,100 @@ onMounted(initialize)
             </div>
           </div>
         </div>
-        <div v-else class="overflow-hidden rounded border border-slate-100 bg-gradient-to-br from-slate-50 to-white">
-          <svg viewBox="0 0 600 400" class="h-[340px] w-full" role="img" aria-label="对象实例关系图">
-            <g v-for="edge in instanceGraph.edges" :key="edge.key">
+        <div
+          v-else
+          class="rounded border border-slate-200 bg-white p-2"
+          :class="graphFullscreen ? 'fixed inset-0 z-[var(--z-fullscreen-layer)] flex flex-col bg-white p-4' : ''"
+          @mousemove="onExploreNodeDrag"
+          @mouseup="endExploreNodeDrag"
+          @mouseleave="endExploreNodeDrag"
+        >
+          <div class="mb-1 flex flex-wrap items-center gap-2">
+            <span class="text-xs font-medium text-slate-700">图探索</span>
+            <span class="text-[10px] text-slate-400">力导向布局</span>
+            <span class="text-[11px] text-slate-400">
+              已加入 {{ Object.keys(exploreNodes).length }} 个对象 · {{ Object.keys(exploreEdges).length }} 条关系
+            </span>
+            <span v-if="exploreSelectedKey" class="font-mono text-[11px] text-slate-500">{{ exploreSelectedKey }}</span>
+            <div class="ml-auto flex items-center gap-1">
+              <el-button size="small" @click="graphFullscreen = !graphFullscreen">
+                <i :class="['fa-solid mr-1 text-[10px]', graphFullscreen ? 'fa-compress' : 'fa-expand']"></i>
+                {{ graphFullscreen ? '退出全屏' : '全屏' }}
+              </el-button>
+              <el-button size="small" :disabled="!detail" @click="mergeCurrentLinksIntoExplore">展开关联</el-button>
+              <el-button size="small" :disabled="!detail" @click="seedExploreGraph">重置为当前对象</el-button>
+              <el-button size="small" :disabled="Object.keys(exploreNodes).length === 0" @click="clearExploreGraph">清空</el-button>
+            </div>
+          </div>
+          <div
+            v-if="Object.keys(exploreNodes).length === 0"
+            :class="graphFullscreen ? 'flex min-h-0 flex-1 items-center justify-center text-xs text-slate-400' : 'flex h-[340px] items-center justify-center text-xs text-slate-400'"
+          >
+            从左侧选择一个对象，或点击「重置为当前对象」开始
+          </div>
+          <svg
+            v-else
+            :viewBox="`0 0 ${exploreGraph.width} ${exploreGraph.height}`"
+            :class="graphFullscreen ? 'min-h-0 w-full flex-1' : 'h-[420px] w-full'"
+            role="img"
+            aria-label="对象实例探索图"
+          >
+            <g v-for="edge in exploreGraph.edges" :key="edge.key">
+              <title>{{ edge.relationName }}</title>
               <line :x1="edge.x1" :y1="edge.y1" :x2="edge.x2" :y2="edge.y2" stroke="#cbd5e1" stroke-width="1.2" />
             </g>
-            <g v-for="node in instanceGraph.nodes" :key="node.key" :class="node.isCenter ? '' : 'cursor-pointer'" @click="!node.isCenter && openLinked(node.rawKey)">
-              <title>{{ node.rawKey }}</title>
-              <rect :x="node.x - 84" :y="node.y - 16" width="168" height="32" rx="5" :fill="node.isCenter ? '#eff6ff' : '#ffffff'" :stroke="node.isCenter ? '#3b82f6' : '#dbeafe'" stroke-width="1.2" />
-              <text :x="node.x" :y="node.y + 4" text-anchor="middle" :class="node.isCenter ? 'fill-blue-700' : 'fill-slate-700'" style="font-size: 10px; font-weight: 500">{{ node.label }}</text>
+            <g
+              v-for="node in exploreGraph.nodes"
+              :key="node.key"
+              class="cursor-move"
+              @mousedown="startExploreNodeDrag($event, node)"
+              @click="openExploreNode(node.key)"
+            >
+              <title>{{ node.key }}</title>
+              <rect
+                :x="node.x - 84"
+                :y="node.y - 16"
+                width="168"
+                height="32"
+                rx="5"
+                :fill="node.key === exploreSelectedKey ? '#eff6ff' : '#ffffff'"
+                :stroke="node.key === exploreSelectedKey ? '#3b82f6' : '#dbeafe'"
+                :stroke-width="node.key === exploreSelectedKey ? 2 : 1.2"
+              />
+              <text
+                :x="node.x"
+                :y="node.y + 4"
+                text-anchor="middle"
+                :class="node.key === exploreSelectedKey ? 'fill-blue-700' : 'fill-slate-700'"
+                style="font-size: 10px; font-weight: 500"
+              >
+                {{ node.label.length > 18 ? `${node.label.slice(0, 17)}…` : node.label }}
+              </text>
+              <g v-if="exploreLoadingKey === node.key">
+                <circle
+                  :cx="node.x - 64"
+                  :cy="node.y"
+                  r="6"
+                  fill="none"
+                  stroke="#3b82f6"
+                  stroke-width="2"
+                  stroke-dasharray="24 12"
+                >
+                  <animateTransform
+                    attributeName="transform"
+                    type="rotate"
+                    :from="`0 ${node.x - 64} ${node.y}`"
+                    :to="`360 ${node.x - 64} ${node.y}`"
+                    dur="0.8s"
+                    repeatCount="indefinite"
+                  />
+                </circle>
+              </g>
             </g>
           </svg>
+          <div class="mt-1 text-[10px] text-slate-400">
+            点击节点切换选中；点击「展开关联」把当前节点的直接关联加入图，继续沿图探索。
+          </div>
         </div>
       </template>
     </section>
