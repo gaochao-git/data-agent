@@ -267,3 +267,7 @@ def test_bootstrap_from_datasource_rejects_empty_group_and_tables(dataset_servic
         asyncio.run(dataset_service.bootstrap_from_datasource_async("g1", operator="u1", operator_name="测试用户"))
     with pytest.raises(DatasetNotFoundError, match="数据源组"):
         asyncio.run(dataset_service.bootstrap_from_datasource_async("missing", operator="u1", operator_name="测试用户"))
+
+
+def test_get_dataset_by_id_missing_returns_none(dataset_service):
+    assert asyncio.run(dataset_service.get_dataset_async_by_id_async(999999)) is None

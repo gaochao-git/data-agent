@@ -213,6 +213,76 @@ class LogicalDatasetService:
                 )
             return await self._detail_async(session, row)
 
+    @staticmethod
+    def _find_group(datasources: list[dict[str, Any]], group_id: str) -> dict[str, Any]:
+        group = next((item for item in datasources if _text(item.get("group_id")) == group_id), None)
+        if group is None:
+            raise DatasetNotFoundError(f"数据源组不存在: {group_id}")
+        return group
+
+    @staticmethod
+    def _member_ids(group: dict[str, Any], group_id: str) -> list[str]:
+        member_ids = [_text(item) for item in group.get("member_datasource_ids") or [] if _text(item)]
+        if not member_ids:
+            raise DatasetInvalidError(f"数据源组没有成员数据源: {group_id}")
+        return member_ids
+
+    @staticmethod
+    def _select_group_tables(group: dict[str, Any], table_names: list[str] | None) -> list[dict[str, Any]]:
+        wanted = {_text(item) for item in table_names or [] if _text(item)}
+        tables = [item for item in group.get("ds_tables") or [] if isinstance(item, dict)]
+        if wanted:
+            tables = [item for item in tables if _text(item.get("table_name")) in wanted]
+        if not tables:
+            raise DatasetInvalidError("没有可注册的物理表")
+        return tables
+
+    @staticmethod
+    def _column_item(column: Any) -> dict[str, Any] | None:
+        if not isinstance(column, dict):
+            return None
+        name = _text(column.get("name"))
+        if not name:
+            return None
+        return {
+            "name": name,
+            "display_name": _text(column.get("description")) or name,
+            "data_type": _text(column.get("type")) or "string",
+            "physical_column": name,
+        }
+
+    @classmethod
+    def _table_dataset_payload(cls, table: dict[str, Any], group_id: str, member_ids: list[str]) -> dict[str, Any]:
+        table_name = _text(table.get("table_name"))
+        columns: list[dict[str, Any]] = []
+        primary_key: list[str] = []
+        for column in table.get("columns") or []:
+            item = cls._column_item(column)
+            if item is None:
+                continue
+            columns.append(item)
+            if isinstance(column, dict) and bool(column.get("primary_key")):
+                primary_key.append(item["name"])
+        for name in table.get("primary_keys") or []:
+            normalized = _text(name)
+            if normalized and normalized not in primary_key:
+                primary_key.append(normalized)
+        return {
+            "display_name": _text(table.get("business_desc")) or table_name,
+            "description": _text(table.get("description")) or table_name,
+            "primary_key": primary_key,
+            "columns": columns,
+            "bindings": [
+                {
+                    "datasource_group_id": group_id,
+                    "member_datasource_id": member_id,
+                    "physical_table": table_name,
+                }
+                for member_id in member_ids
+            ],
+            "status": "draft",
+        }
+
     async def bootstrap_from_datasource_async(
         self,
         datasource_group_id: str,
@@ -225,69 +295,17 @@ class LogicalDatasetService:
         group_id = _text(datasource_group_id)
         if not group_id:
             raise DatasetInvalidError("datasource_group_id 不能为空")
-        manager = get_datasource_manager()
-        datasources = await manager.get_all_datasources_async(include_tables=True)
-        group = next((item for item in datasources if _text(item.get("group_id")) == group_id), None)
-        if group is None:
-            raise DatasetNotFoundError(f"数据源组不存在: {group_id}")
-        member_ids = [_text(item) for item in group.get("member_datasource_ids") or [] if _text(item)]
-        if not member_ids:
-            raise DatasetInvalidError(f"数据源组没有成员数据源: {group_id}")
-        wanted = {_text(item) for item in table_names or [] if _text(item)}
-        tables = [item for item in group.get("ds_tables") or [] if isinstance(item, dict)]
-        if wanted:
-            tables = [item for item in tables if _text(item.get("table_name")) in wanted]
-        if not tables:
-            raise DatasetInvalidError("没有可注册的物理表")
+        datasources = await get_datasource_manager().get_all_datasources_async(include_tables=True)
+        group = self._find_group(datasources, group_id)
+        member_ids = self._member_ids(group, group_id)
         results = []
-        for table in tables:
+        for table in self._select_group_tables(group, table_names):
             table_name = _text(table.get("table_name"))
             if not table_name:
                 continue
-            columns = []
-            primary_key = []
-            for column in table.get("columns") or []:
-                if not isinstance(column, dict):
-                    continue
-                name = _text(column.get("name"))
-                if not name:
-                    continue
-                columns.append(
-                    {
-                        "name": name,
-                        "display_name": _text(column.get("description")) or name,
-                        "data_type": _text(column.get("type")) or "string",
-                        "physical_column": name,
-                    }
-                )
-                if bool(column.get("primary_key")):
-                    primary_key.append(name)
-            for name in table.get("primary_keys") or []:
-                normalized = _text(name)
-                if normalized and normalized not in primary_key:
-                    primary_key.append(normalized)
-            payload = {
-                "display_name": _text(table.get("business_desc")) or table_name,
-                "description": _text(table.get("description")) or table_name,
-                "primary_key": primary_key,
-                "columns": columns,
-                "bindings": [
-                    {
-                        "datasource_group_id": group_id,
-                        "member_datasource_id": member_id,
-                        "physical_table": table_name,
-                    }
-                    for member_id in member_ids
-                ],
-                "status": "draft",
-            }
+            payload = self._table_dataset_payload(table, group_id, member_ids)
             results.append(
-                await self.upsert_dataset_async(
-                    table_name,
-                    payload,
-                    operator=operator,
-                    operator_name=operator_name,
-                )
+                await self.upsert_dataset_async(table_name, payload, operator=operator, operator_name=operator_name)
             )
         return results
 

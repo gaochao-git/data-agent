@@ -59,9 +59,7 @@ from apps.chat_data_app.tests.unit.test_ontology_admin import (
 from utils.error_codes import ErrorCode
 from utils.models import (
     Base,
-    ChatDataOntology,
     ChatDataOntologyObjectType,
-    ChatDataOntologyProperty,
     ChatDataOntologyRelationType,
     SemanticConfig,
 )

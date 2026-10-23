@@ -1,6 +1,5 @@
-"""绑定守护（binding_guard）单测：纯函数逻辑 + ensure_* 接线（DAO 用 fake 替身）。"""
+"""绑定守护（binding_guard）残留纯函数单测。"""
 
-import asyncio
 import os
 import sys
 
@@ -8,7 +7,6 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 
-from apps.chat_data_app.services.semantic.run import binding_guard
 from apps.chat_data_app.services.semantic.run.binding_guard import (
     SemanticOntologyBoundError,
     filter_bindings_by_dimensions,

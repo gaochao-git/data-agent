@@ -32,7 +32,6 @@ from utils.logger import get_logger
 from ...daos.ontology_action_execution_dao import OntologyActionExecutionDao
 from ..datasource.manager import get_datasource_manager
 from ..datasource.target_context import get_execution_target_member_id, get_execution_target_name
-from ..semantic.run.semantic_config_service import get_semantic_config_service
 from ..sql_run.runtime import execute_sql_for_member
 from . import ontology_service
 
@@ -637,6 +636,41 @@ def _assemble_object(
     }
 
 
+def _select_dataset_binding(dataset: dict[str, Any], requested_ids: list[str] | None) -> dict[str, Any]:
+    bindings = [item for item in dataset.get("bindings") or [] if isinstance(item, dict)]
+    requested = [str(item).strip() for item in requested_ids or [] if str(item).strip()]
+    if requested:
+        bindings = [item for item in bindings if str(item.get("member_datasource_id") or "") in requested]
+    if len(bindings) > 1:
+        raise ObjectProjectionError("Dataset 有多个 member，请指定 member_datasource_ids")
+    if not bindings:
+        raise ObjectProjectionError("Dataset 没有可用的 member binding")
+    return bindings[0]
+
+
+def _dataset_dimensions(
+    dataset: dict[str, Any], binding: dict[str, Any], table: str
+) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    columns = [item for item in dataset.get("columns") or [] if isinstance(item, dict)]
+    column_by_name = {_text(item.get("name")): item for item in columns}
+    raw_mappings = binding.get("column_mappings")
+    column_mappings: dict[str, Any] = raw_mappings if isinstance(raw_mappings, dict) else {}
+    dimensions: list[dict[str, Any]] = []
+    mapping_columns: dict[str, str] = {}
+    for property_name, logical_name in column_mappings.items():
+        column = column_by_name.get(_text(logical_name))
+        if column is None:
+            continue
+        physical = _text(column.get("physical_column")) or _text(column.get("name"))
+        if not physical:
+            continue
+        dimensions.append({"name": logical_name, "table": table, "column": physical})
+        mapping_columns[str(property_name)] = str(logical_name)
+    if not dimensions:
+        raise ObjectProjectionError("Dataset source binding 没有有效列映射")
+    return dimensions, mapping_columns
+
+
 async def _dataset_mapping_context(
     detail: dict[str, Any],
     member_datasource_ids: list[str] | None,
@@ -653,21 +687,12 @@ async def _dataset_mapping_context(
     dataset = await logical_dataset_service.get_dataset_async_by_id_async(int(binding.get("dataset_id") or 0))
     if dataset is None:
         raise ObjectProjectionError(f"Dataset 不存在: {binding.get('dataset_id')}")
-    bindings = [item for item in dataset.get("bindings") or [] if isinstance(item, dict)]
-    requested = [str(item).strip() for item in member_datasource_ids or [] if str(item).strip()]
-    if requested:
-        bindings = [item for item in bindings if str(item.get("member_datasource_id") or "") in requested]
-    if len(bindings) > 1:
-        raise ObjectProjectionError("Dataset 有多个 member，请指定 member_datasource_ids")
-    if not bindings:
-        raise ObjectProjectionError("Dataset 没有可用的 member binding")
-    selected = bindings[0]
+    selected = _select_dataset_binding(dataset, member_datasource_ids)
     group_id = _text(selected.get("datasource_group_id"))
     member_id = _text(selected.get("member_datasource_id"))
     if not group_id or not member_id:
         raise ObjectProjectionError("Dataset binding 缺少 datasource_group_id/member_datasource_id")
-    manager = get_datasource_manager()
-    targets = await manager.list_authorized_execution_targets_async(
+    targets = await get_datasource_manager().list_authorized_execution_targets_async(
         group_id, user_id=user_id or None, username=username or None
     )
     selected_targets = [
@@ -676,54 +701,13 @@ async def _dataset_mapping_context(
     if not selected_targets:
         raise ObjectProjectionError(f"当前用户无权访问 Dataset member: {member_id}")
     table = _text(selected.get("physical_table"))
-    columns = [item for item in dataset.get("columns") or [] if isinstance(item, dict)]
-    column_by_name = {_text(item.get("name")): item for item in columns}
-    raw_mappings = binding.get("column_mappings")
-    column_mappings: dict[str, Any] = raw_mappings if isinstance(raw_mappings, dict) else {}
-    dimensions = []
-    mapping_columns: dict[str, str] = {}
-    for property_name, logical_name in column_mappings.items():
-        column = column_by_name.get(_text(logical_name))
-        if column is None:
-            continue
-        physical = _text(column.get("physical_column")) or _text(column.get("name"))
-        if not physical:
-            continue
-        dimensions.append({"name": logical_name, "table": table, "column": physical})
-        mapping_columns[str(property_name)] = str(logical_name)
-    if not dimensions:
-        raise ObjectProjectionError("Dataset source binding 没有有效列映射")
+    dimensions, mapping_columns = _dataset_dimensions(dataset, binding, table)
     config = {"dimensions": dimensions}
     query_detail = {
         **detail,
         "mappings": [{"semantic_config_id": "dataset", "column_mappings": mapping_columns}],
     }
     return config, query_detail, selected_targets, group_id
-
-
-async def _mapping_context(
-    mapping: dict[str, Any],
-    *,
-    user_id: str,
-    username: str,
-    member_datasource_ids: list[str] | None = None,
-) -> tuple[dict[str, Any], str, list[dict[str, Any]]]:
-    config_id = _text(mapping.get("semantic_config_id"))
-    if not config_id:
-        raise ObjectProjectionError("对象映射缺少 semantic_config_id")
-    group_ids = await get_semantic_config_service().dao.get_config_group_ids_async([config_id])
-    group_id = group_ids.get(config_id, "")
-    if not group_id:
-        raise ObjectProjectionError(f"语义模型不存在或已删除: {config_id}")
-    config = await get_semantic_config_service().get_config_async(group_id, config_id, user_id)
-    if not config:
-        raise ObjectProjectionError(f"语义模型不可用: {config_id}")
-    targets = await get_datasource_manager().list_authorized_execution_targets_async(
-        group_id, user_id=user_id or None, username=username or None
-    )
-    if not targets:
-        raise ObjectProjectionError("当前用户在该数据源组下没有可执行数据源")
-    return config, group_id, _select_member_targets(targets, member_datasource_ids)
 
 
 async def _projection_context(
@@ -775,22 +759,6 @@ def _member_scope(targets: list[dict[str, Any]]) -> dict[str, str]:
     }
 
 
-def _select_member_targets(
-    targets: list[dict[str, Any]],
-    member_datasource_ids: list[str] | None,
-) -> list[dict[str, Any]]:
-    """按显式机构范围选择执行对象；MVP 先只允许单个机构，避免静默取第一个。"""
-    requested = [str(item).strip() for item in member_datasource_ids or [] if str(item).strip()]
-    if not requested:
-        return targets
-    if len(requested) > 1:
-        raise ObjectProjectionError("对象查询暂只支持单个 member_datasource_id，请一次选择一个机构")
-    selected = [target for target in targets if get_execution_target_member_id(target) == requested[0]]
-    if not selected:
-        raise ObjectProjectionError(f"当前用户无权访问执行对象: {requested[0]}")
-    return selected
-
-
 def _relation_side(relation: dict[str, Any], current_object_type_id: int) -> dict[str, str] | None:
     """判定当前对象在关系类型中的一侧；自关联/多列关联 MVP 跳过。"""
     from_id = int(relation.get("from_object_type_id") or 0)
@@ -814,32 +782,6 @@ def _relation_side(relation: dict[str, Any], current_object_type_id: int) -> dic
         "related_filter_property": from_columns[0],
         "related_object_type": _text(relation.get("from_object_type_name")),
     }
-
-
-def _link_entries(
-    relation_name: str,
-    side: dict[str, str],
-    rows: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """对端主键行 → link 实例列表（去重、保持确定性）。"""
-    entries: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for related_row in rows:
-        key = _text(related_row.get("related_key"))
-        if not key or key in seen:
-            continue
-        seen.add(key)
-        entry = {
-            "relation": relation_name,
-            "direction": side["direction"],
-            "related_object_type": side["related_object_type"],
-            "related_object_key": f"{side['related_object_type']}:{key}",
-        }
-        related_title = _text(related_row.get("related_title"))
-        if related_title:
-            entry["related_title"] = related_title
-        entries.append(entry)
-    return entries
 
 
 async def _relation_link_entries(
