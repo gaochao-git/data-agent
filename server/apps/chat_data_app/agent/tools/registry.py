@@ -167,6 +167,14 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
 # 当前显式配置为 allow；需要审批时把对应工具改成 "ask"。
 # 新增系统工具若忘记配置，system_tool_approval 默认 ask（fail-closed）。
 SYSTEM_TOOL_APPROVALS: dict[str, str] = {
+    # 中间件动态注入工具：显式 allow，避免 fail-closed 误弹审批。
+    # 例外：write_todos（任务计划）按产品要求 ask——交互会话弹审批卡由用户
+    # 确认任务计划后再写入。无人值守不装配审批中间件，该档位自然不生效
+    # （任务规划直行，纯 state 无副作用）；子图不挂 TodoListMiddleware，无此工具。
+    "write_todos": "ask",
+    "task": "allow",
+    "mcp_tool_search": "allow",
+    "mcp_tool_call": "allow",
     "file_read": "allow",
     "file_edit": "allow",
     "file_write": "allow",
@@ -194,6 +202,13 @@ SYSTEM_TOOL_APPROVALS: dict[str, str] = {
 # 未显式配置的系统工具默认 ask；MCP 动态工具仍由插件 tool_approvals 默认 ask。
 SYSTEM_TOOL_APPROVAL_DEFAULT = "ask"
 
+# 由 middleware 在模型调用层动态注入、但需要纳入审批策略的工具。
+# 它们不在 TOOL_SPECS 注册表（provided_tool_names 不含），不能靠注册表铺底
+# 进入 resolve_approval_policies，必须显式登记；SYSTEM_TOOL_APPROVALS 中的
+# 对应档位是唯一权威配置。新增此类工具时：本集合 + SYSTEM_TOOL_APPROVALS
+# 两处同步登记（覆盖度守卫测试会校验两者的差集恰好等于本集合）。
+MIDDLEWARE_INJECTED_APPROVAL_TOOLS = frozenset({"write_todos", "task", "mcp_tool_search", "mcp_tool_call"})
+
 
 def system_tool_approval(tool_name: str) -> str:
     """返回系统工具审批档位；未配置时 fail-closed 为 ask。"""
@@ -206,8 +221,9 @@ def provided_tool_names() -> frozenset[str]:
 
 
 def system_approval_required_tools() -> frozenset[str]:
-    """返回当前需要 ask 的系统工具名（含未显式配置的新工具）。"""
-    return frozenset(name for name in provided_tool_names() if system_tool_approval(name) == "ask")
+    """返回当前需要 ask 的系统工具名（含中间件动态工具与未显式配置的新工具）。"""
+    names = (*provided_tool_names(), *MIDDLEWARE_INJECTED_APPROVAL_TOOLS)
+    return frozenset(name for name in names if system_tool_approval(name) == "ask")
 
 
 # 工具 → 必需技能（调用前必须已加载）。只给明确依赖技能流程的工具声明，不全局强制。

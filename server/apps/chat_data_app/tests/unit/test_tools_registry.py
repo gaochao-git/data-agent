@@ -21,6 +21,7 @@ from apps.chat_data_app.agent.runtime_options import AgentRuntimeOptions  # noqa
 from apps.chat_data_app.agent.tools.registry import (  # noqa: E402
     DATA_EXPLORE_EXTRA_EXCLUDED_TOOL_NAMES,
     GENERAL_PURPOSE_EXTRA_EXCLUDED_TOOL_NAMES,
+    MIDDLEWARE_INJECTED_APPROVAL_TOOLS,
     PLAN_EXTRA_EXCLUDED_TOOL_NAMES,
     SUBAGENT_BASE_EXCLUDED_TOOL_NAMES,
     TOOL_SPECS,
@@ -121,15 +122,21 @@ def test_user_interaction_tools_are_marked():
 
 
 def test_system_tools_use_same_ask_allow_map_as_mcp():
-    """系统工具与 MCP 同一套 tool -> ask/allow 口径，当前全部为 allow。"""
+    """系统工具与 MCP 同一套 tool -> ask/allow 口径；write_todos 为唯一 ask（任务计划人工确认）。"""
     from apps.chat_data_app.agent.tools.registry import (
+        MIDDLEWARE_INJECTED_APPROVAL_TOOLS,
         SYSTEM_TOOL_APPROVALS,
         provided_tool_names,
+        system_tool_approval,
     )
 
-    assert set(SYSTEM_TOOL_APPROVALS) == provided_tool_names()
-    assert set(SYSTEM_TOOL_APPROVALS.values()) == {"allow"}
-    assert frozenset() == frozenset(name for name, approval in SYSTEM_TOOL_APPROVALS.items() if approval == "ask")
+    assert set(SYSTEM_TOOL_APPROVALS) == provided_tool_names() | MIDDLEWARE_INJECTED_APPROVAL_TOOLS
+    assert set(SYSTEM_TOOL_APPROVALS.values()) == {"allow", "ask"}
+    # write_todos / task 由中间件装配，不经过 TOOL_SPECS，但必须显式配置且进入铺底表
+    assert {"write_todos", "task", "mcp_tool_search", "mcp_tool_call"} == MIDDLEWARE_INJECTED_APPROVAL_TOOLS
+    # 任务计划按产品要求人工确认：write_todos 是当前唯一的 ask 档中间件工具
+    assert {"write_todos"} == {name for name, approval in SYSTEM_TOOL_APPROVALS.items() if approval == "ask"}
+    assert system_tool_approval("write_todos") == "ask"
 
 
 def test_required_skills_target_builtin_skills_only():
