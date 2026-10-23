@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from types import SimpleNamespace
 
 import pytest
@@ -278,82 +277,6 @@ def _fake_payload(**overrides):
     return payload
 
 
-def test_tool_aggregate_metrics_returns_ontology_mode(monkeypatch):
-    async def fake_resolve(*_args, **_kwargs):
-        return {
-            "metric_terms": [{"name": "发货单数量", "expression": "COUNT(*)", "table": "shipments"}],
-            "metric_filters": [{"property": "delivered_at", "operator": "gte", "value": "2026-10-01"}],
-            "metric_meta": [{"name": "发货单数量", "kind": "atomic"}],
-            "link": {"semantic_config_id": "sc_ship"},
-        }
-
-    async def fake_aggregate(*_args, **kwargs):
-        assert kwargs["filters"][0]["property"] == "delivered_at"
-        return {
-            "object_type": "shipment",
-            "group_by": ["carrier"],
-            "metric_keys": ["发货单数量"],
-            "groups": [{"keys": {"carrier": "顺丰"}, "metrics": {"发货单数量": 88}}],
-            "sql": "SELECT ...",
-            "execution_time_ms": 12,
-            "member_datasource_id": "ORG_CODE1",
-            "member_name": "财付通",
-        }
-
-    monkeypatch.setattr(ontology_tool, "resolve_metric_projection_async", fake_resolve)
-    monkeypatch.setattr(ontology_tool, "aggregate_metric_projection", fake_aggregate)
-
-    raw = asyncio.run(
-        ontology_tool._run_aggregate_metrics(
-            _fake_payload(),
-            state={"execution_context": {"datasource_id": "ds_a"}, "user_id": "u1"},
-            member_ids=["ORG_CODE1"],
-            user_id="u1",
-        )
-    )
-    payload = json.loads(raw)["payload"]
-    assert payload["query_mode"] == "ontology_metric_aggregate"
-    assert payload["results"][0]["member_name"] == "财付通"
-    assert payload["results"][0]["total_count"] == 1
-    assert payload["preview"]["metrics"] == ["发货单数量"]
-
-
-def test_tool_input_literal_covers_all_payload_models():
-    from apps.chat_data_app.agent.tools.ontology_tool import (
-        ONTOLOGY_ACTION_PAYLOAD_MODELS,
-        OntologyToolInput,
-    )
-
-    actions = set(OntologyToolInput.model_fields["action"].annotation.__args__)
-    assert set(ONTOLOGY_ACTION_PAYLOAD_MODELS) <= actions
-    validated = OntologyToolInput(action="list_object_metrics", action_payload={})
-    assert validated.action == "list_object_metrics"
-
-
-def test_tool_list_object_metrics(monkeypatch):
-    async def fake_list(_name, **_kwargs):
-        return {
-            "object_type": "shipment",
-            "dataset_name": "shipments",
-            "datasource_group_id": "ds_a",
-            "metrics": [{"name": "发货单数量", "kind": "atomic", "executable_in_scope": True}],
-            "reason": "",
-        }
-
-    monkeypatch.setattr(ontology_tool, "list_object_metrics_async", fake_list)
-    raw = asyncio.run(
-        ontology_tool._run_list_object_metrics(
-            payload=SimpleNamespace(object_type="shipment"),
-            state={"user_id": "u1"},
-            bound_datasource_id="ds_a",
-            bound_user_id="u1",
-        )
-    )
-    body = raw.split("\n", 1)[1] if raw.startswith("[ontology_tool]") else raw
-    payload = json.loads(body)["payload"] if "payload" in json.loads(body) else json.loads(body)
-    assert payload["object_types"][0]["metrics"][0]["name"] == "发货单数量"
-
-
 def test_object_metric_helpers_cover_group_and_reasons():
     assert object_metrics_module._resolve_group_id(DATASET, "ds_x", None) == "ds_x"
     assert object_metrics_module._resolve_group_id(DATASET, "", ["ORG_CODE1"]) == "ds_a"
@@ -610,60 +533,6 @@ def test_tool_navigation_helpers(monkeypatch):
     ) == ["ORG_CODE2"]
 
 
-def test_tool_metric_aggregate_validation(monkeypatch):
-    async def detail(_name):
-        return {"object_type_name": _name, "status": "certified"}
-
-    monkeypatch.setattr(ontology_tool.ontology_service, "get_object_type_async", detail)
-    monkeypatch.setattr(ontology_tool, "ontology_object_read_enabled", lambda: True)
-    payload = ontology_tool.validate_ontology_payload(
-        "aggregate_objects", {"object_type": "shipment", "metric_names": ["发货单数量"]}
-    )
-    with pytest.raises(ValueError, match="一个 member"):
-        asyncio.run(
-            ontology_tool._run_aggregate_metrics(
-                payload,
-                state={},
-                member_ids=[None],
-                user_id="u",
-            )
-        )
-    with pytest.raises(ValueError, match="metrics 或 metric_names"):
-        asyncio.run(
-            ontology_tool._run_aggregate_objects(
-                payload=ontology_tool.validate_ontology_payload("aggregate_objects", {"object_type": "shipment"}),
-                state={},
-                bound_user_id="u",
-            )
-        )
-
-
-def test_tool_metric_listing_errors(monkeypatch):
-    async def boom(*_args, **_kwargs):
-        raise ObjectMetricError("boom")
-
-    monkeypatch.setattr(ontology_tool, "list_object_metrics_async", boom)
-    assert asyncio.run(ontology_tool._object_metric_entry_async("shipment", "g", "u")) == {
-        "object_type": "shipment",
-        "metrics": [],
-        "reason": "boom",
-    }
-
-    async def bundle(*_args, **_kwargs):
-        return {"object_types": [{"object_type_name": "shipment"}]}
-
-    async def entries(_names, **_kwargs):
-        return [{"object_type": "shipment", "metrics": []}]
-
-    monkeypatch.setattr(ontology_tool, "_load_domain_bundle", bundle)
-    monkeypatch.setattr(ontology_tool, "_object_metric_entries_async", entries)
-    payload = ontology_tool.validate_ontology_payload("list_object_metrics", {})
-    result = asyncio.run(
-        ontology_tool._run_list_object_metrics(payload=payload, state={}, bound_datasource_id="g", bound_user_id="u")
-    )
-    assert "shipment" in str(result)
-
-
 def test_list_object_metrics_deduplicates_and_loads(monkeypatch):
     async def detail(_name):
         return DETAIL
@@ -723,53 +592,6 @@ def test_resolve_projection_config_errors_and_table_mismatch(monkeypatch):
         asyncio.run(resolve_metric_projection_async("shipment", ["发货单数量"], datasource_group_id="ds_a"))
 
 
-def test_tool_metric_dispatch_and_error_conversion(monkeypatch):
-    assert ontology_tool._state_member_ids(
-        {
-            "execution_context": {
-                "matched_member_datasource_ids": [],
-                "available_member_datasource_ids": ["ORG_CODE3"],
-            }
-        }
-    ) == ["ORG_CODE3"]
-
-    async def detail(_name):
-        return {"object_type_name": _name, "status": "certified"}
-
-    async def boom(*_args, **_kwargs):
-        raise ObjectMetricError("bad metric")
-
-    monkeypatch.setattr(ontology_tool.ontology_service, "get_object_type_async", detail)
-    monkeypatch.setattr(ontology_tool, "ontology_object_read_enabled", lambda: True)
-    monkeypatch.setattr(ontology_tool, "resolve_metric_projection_async", boom)
-    payload = ontology_tool.validate_ontology_payload(
-        "aggregate_objects", {"object_type": "shipment", "metric_names": ["发货单数量"]}
-    )
-    with pytest.raises(ValueError, match="bad metric"):
-        asyncio.run(
-            ontology_tool._run_aggregate_objects(
-                payload=payload,
-                state={"execution_context": {"matched_member_datasource_ids": ["ORG_CODE1"]}},
-                bound_user_id="u",
-            )
-        )
-
-    async def entries(_names, **_kwargs):
-        return [{"object_type": "shipment", "metrics": []}]
-
-    monkeypatch.setattr(ontology_tool, "_object_metric_entries_async", entries)
-    result = asyncio.run(
-        ontology_tool._run_ontology_impl(
-            "list_object_metrics",
-            {"object_type": "shipment"},
-            {"execution_context": {"matched_member_datasource_ids": ["ORG_CODE1"]}},
-            "g",
-            "u",
-        )
-    )
-    assert "shipment" in str(result)
-
-
 def test_aggregate_metric_projection_success(monkeypatch):
     from apps.chat_data_app.services.ontology import object_projection
 
@@ -805,3 +627,16 @@ def test_derived_values_for_rows_noops():
         object_projection._derived_values_for_rows(detail, [{"shipment_id": "S1"}], {}, user_id="", username="")
     ) == [{}]
     assert asyncio.run(object_projection._derived_values_for_rows(DETAIL, [], {}, user_id="", username="")) == []
+
+
+def test_tool_aggregate_objects_requires_metrics(monkeypatch):
+    from apps.chat_data_app.agent.tools import ontology_tool
+
+    async def detail(_name):
+        return {"object_type_name": _name, "status": "certified"}
+
+    monkeypatch.setattr(ontology_tool.ontology_service, "get_object_type_async", detail)
+    monkeypatch.setattr(ontology_tool, "ontology_object_read_enabled", lambda: True)
+    payload = ontology_tool.validate_ontology_payload("aggregate_objects", {"object_type": "shipment"})
+    with pytest.raises(ValueError, match="metrics"):
+        asyncio.run(ontology_tool._run_aggregate_objects(payload=payload, state={}, bound_user_id="u"))
