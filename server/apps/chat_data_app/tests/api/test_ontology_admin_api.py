@@ -160,6 +160,16 @@ def test_consistency_check_no_groups(client, auth_headers, monkeypatch):
     assert stub_dao.captured_ids is None
 
 
+def test_severity_summary_ignores_unknown_levels():
+    from apps.chat_data_app.routers.ontology_admin import _severity_summary
+
+    assert _severity_summary([{"severity": "fatal"}, {"severity": "info"}]) == {
+        "error": 0,
+        "warning": 0,
+        "info": 1,
+    }
+
+
 def test_consistency_check_requires_auth(client, missing_header):
     response = client.get(_URL, **missing_header)
     assert response.status_code in (401, 403)

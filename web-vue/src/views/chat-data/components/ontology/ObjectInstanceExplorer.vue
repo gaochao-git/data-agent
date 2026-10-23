@@ -34,7 +34,8 @@ const detail = ref<OntologyObjectInstance | null>(null)
 const detailLoading = ref(false)
 const linksLoading = ref(false)
 const detailError = ref('')
-const detailMode = ref<'table' | 'graph'>('table')
+const detailMode = ref<'table' | 'search' | 'graph'>('table')
+const searchKeyword = ref('')
 const detailCache = new Map<string, OntologyObjectInstance>()
 const history = ref<Array<{ objectType: string; objectKey: string; label: string }>>([])
 
@@ -77,6 +78,21 @@ const linkedGroups = computed(() => {
     }
   })
 })
+
+const searchAroundGroups = computed(() => {
+  const needle = searchKeyword.value.trim().toLowerCase()
+  return linkedGroups.value
+    .map(group => ({
+      ...group,
+      entries: group.entries.filter(entry => {
+        if (!needle) return true
+        return String(entry.related_object_key || '').toLowerCase().includes(needle)
+      })
+    }))
+    .filter(group => group.entries.length > 0)
+})
+
+const searchAroundCount = computed(() => searchAroundGroups.value.reduce((total, group) => total + group.entries.length, 0))
 
 interface InstanceGraphNode {
   key: string
@@ -354,6 +370,7 @@ onMounted(initialize)
           <span v-if="detailTitle" class="text-xs text-slate-500">{{ detailTitle }}</span>
           <el-radio-group v-model="detailMode" size="small" class="ml-auto">
             <el-radio-button value="table">属性</el-radio-button>
+            <el-radio-button value="search">关系探索</el-radio-button>
             <el-radio-button value="graph">图形</el-radio-button>
           </el-radio-group>
         </div>
@@ -394,6 +411,47 @@ onMounted(initialize)
           </div>
         </template>
         </template>
+        <div v-else-if="detailMode === 'search'" class="rounded border border-slate-200 bg-white p-3">
+          <div class="mb-2 flex items-center gap-2">
+            <span class="text-xs font-medium text-slate-700">关系探索</span>
+            <span class="font-mono text-[11px] text-slate-500">{{ detail.object_key }}</span>
+            <span v-if="history.length > 0" class="text-[11px] text-slate-400">已下钻 {{ history.length }} 层</span>
+            <span v-if="linksLoading" class="ml-auto text-[11px] text-slate-400">加载关系…</span>
+            <span v-else class="ml-auto text-[11px] text-slate-400">{{ searchAroundCount }} 个关联对象</span>
+          </div>
+          <el-input
+            v-model="searchKeyword"
+            size="small"
+            clearable
+            placeholder="按关联对象主键过滤"
+            class="mb-2 !w-64"
+          />
+          <div v-if="linksLoading" class="py-3 text-xs text-slate-400">加载关系数据中…</div>
+          <div v-else-if="searchAroundGroups.length === 0" class="py-3 text-xs text-slate-400">
+            {{ searchKeyword ? '没有匹配的关联对象' : '当前对象没有关联对象' }}
+          </div>
+          <div v-else class="flex flex-col gap-2">
+            <div v-for="group in searchAroundGroups" :key="group.relationName" class="rounded border border-slate-100 bg-slate-50/60 px-2 py-1.5">
+              <div class="mb-1 flex items-center gap-2">
+                <span class="text-xs text-slate-700">{{ group.label }}</span>
+                <el-tag size="small" type="info" effect="plain">{{ group.entries.length }}</el-tag>
+                <span class="text-[10px] text-slate-400">{{ group.relationName }}</span>
+              </div>
+              <div class="flex flex-col gap-0.5">
+                <button
+                  v-for="(item, index) in group.entries"
+                  :key="index"
+                  type="button"
+                  class="flex w-full items-center border-0 bg-transparent p-0 text-left font-mono text-[11px] text-slate-500 hover:text-blue-600"
+                  @click="openLinked(item.related_object_key)"
+                >
+                  <i class="fa-solid fa-arrow-right mr-1 text-[9px] text-slate-300"></i>
+                  {{ item.related_object_key || '-' }}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
         <div v-else class="overflow-hidden rounded border border-slate-100 bg-gradient-to-br from-slate-50 to-white">
           <svg viewBox="0 0 600 400" class="h-[340px] w-full" role="img" aria-label="对象实例关系图">
             <g v-for="edge in instanceGraph.edges" :key="edge.key">
