@@ -850,6 +850,25 @@ class OntologyDao:
                 "column_mappings": _parse_json(row.column_mappings_json, dict),
             }
 
+    async def list_source_bindings_async(self, object_type_ids: list[int]) -> list[dict[str, Any]]:
+        """批量取对象类型活跃 Dataset 绑定，供一致性巡检按 Dataset 口径计算已映射属性。"""
+        ids = [int(object_type_id) for object_type_id in object_type_ids if int(object_type_id or 0) > 0]
+        if not ids:
+            return []
+        async with session_scope() as session:
+            stmt = select(ChatDataOntologySourceBinding).where(
+                ChatDataOntologySourceBinding.object_type_id.in_(ids),
+                ChatDataOntologySourceBinding.delete_flag == 0,
+            )
+            rows = (await session.execute(stmt)).scalars().all()
+        return [
+            {
+                "object_type_id": int(row.object_type_id),
+                "column_mappings": _parse_json(row.column_mappings_json, dict),
+            }
+            for row in rows
+        ]
+
     async def list_source_binding_conflicts_async(
         self,
         dataset_id: int,

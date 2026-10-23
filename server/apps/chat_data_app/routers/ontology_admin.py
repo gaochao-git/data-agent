@@ -654,6 +654,15 @@ def _filter_consistency_bundle(bundle: dict, ontology_id: int | None) -> dict:
     }
 
 
+async def _attach_dataset_mappings(bundle: dict) -> dict:
+    """一致性检查已按 Dataset source binding 取数：把列映射补进 bundle，替代已废弃的语义模型 mappings。"""
+    object_type_ids = [int((item or {}).get("id") or 0) for item in bundle.get("object_types") or []]
+    if not object_type_ids:
+        return {**bundle, "mappings": []}
+    bindings = await OntologyDao().list_source_bindings_async(object_type_ids)
+    return {**bundle, "mappings": bindings}
+
+
 def _severity_summary(findings: list[dict]) -> dict[str, int]:
     """findings 按 severity 计数（仅 error/warning/info 三档）。"""
     summary = {"error": 0, "warning": 0, "info": 0}
@@ -678,6 +687,7 @@ async def check_ontology_model_consistency(request: Request, ontology_id: int | 
         configs, config_group_ids, seen_config_ids, group_ids = await _collect_consistency_scope()
         bundle = await OntologyDao().load_injection_bundle_async(sorted(seen_config_ids)) if seen_config_ids else {}
         bundle = _filter_consistency_bundle(bundle, ontology_id)
+        bundle = await _attach_dataset_mappings(bundle)
         findings = _run_consistency_check(bundle, configs, config_group_ids=config_group_ids)
         summary = _severity_summary(findings)
         return business_response(

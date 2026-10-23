@@ -1707,6 +1707,9 @@ const onRelationSaved = (objectTypeNames: string[]) => {
               v-else
               :object-type="selectedNode.object_type_name"
               :object-label="selectedNode.display_name || selectedNode.object_type_name"
+              :initial-meta="selectedObject.entry.detail"
+              :initial-from-relations="selectedObject.entry.fromRelations"
+              :initial-to-relations="selectedObject.entry.toRelations"
             />
             </div>
           </template>

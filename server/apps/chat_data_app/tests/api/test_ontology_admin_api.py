@@ -7,7 +7,7 @@ from apps.chat_data_app.routers import ontology_admin as ontology_admin_routes
 _URL = "/api/chatdata/admin/meta/ontology/consistency-check"
 
 
-def _install_stubs(monkeypatch, *, groups, configs, bundle, findings=None):
+def _install_stubs(monkeypatch, *, groups, configs, bundle, findings=None, bindings=None):
     class _StubDataSourceDao:
         async def get_all_datasources_async(self, include_tables=True):
             return groups
@@ -23,10 +23,15 @@ def _install_stubs(monkeypatch, *, groups, configs, bundle, findings=None):
     class _StubDao:
         def __init__(self):
             self.captured_ids = None
+            self.captured_binding_ids = None
 
         async def load_injection_bundle_async(self, config_ids):
             self.captured_ids = sorted(config_ids)
             return bundle
+
+        async def list_source_bindings_async(self, object_type_ids):
+            self.captured_binding_ids = sorted(object_type_ids)
+            return list(bindings or [])
 
     stub_dao = _StubDao()
     monkeypatch.setattr(ontology_admin_routes, "OntologyDao", lambda: stub_dao)
@@ -108,12 +113,14 @@ def test_consistency_check_scopes_bundle_by_ontology(client, auth_headers, monke
         ],
         "mappings": [{"object_type_id": 1}, {"object_type_id": 2}],
     }
+    dataset_bindings = [{"object_type_id": 1, "column_mappings": {"customer_id": "customer_id"}}]
     _install_stubs(
         monkeypatch,
         groups=[{"group_id": "group-1"}],
         configs={"group-1": [{"id": "cfg-1", "name": "模型一", "dimensions": []}]},
         bundle=bundle,
         findings=[],
+        bindings=dataset_bindings,
     )
     captured: dict = {}
 
@@ -128,7 +135,8 @@ def test_consistency_check_scopes_bundle_by_ontology(client, auth_headers, monke
     assert [item["object_type_name"] for item in filtered["object_types"]] == ["customer"]
     assert [item["id"] for item in filtered["properties"]] == [1]
     assert filtered["relation_types"] == []
-    assert filtered["mappings"] == [{"object_type_id": 1}]
+    # 本体已按 Dataset 绑定取数：巡检 bundle 的 mappings 由 source binding 重新组装
+    assert filtered["mappings"] == dataset_bindings
 
 
 def test_consistency_check_healthy(client, auth_headers, monkeypatch):

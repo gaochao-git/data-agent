@@ -412,3 +412,36 @@ def test_relation_cross_model_same_group_is_info():
     finding = next(item for item in findings if item["code"] == "ONT_REL_CROSS_MODEL")
     assert finding["severity"] == "info"
     assert "customer_has_orders" in finding["message"]
+
+# ---------- Dataset source binding（2026-10-23 解耦后）：映射左值=本体属性、右值=Dataset 逻辑列 ----------
+
+
+def _dataset_bundle() -> dict:
+    bundle = _bundle()
+    bundle["mappings"] = [
+        {
+            "object_type_id": 1,
+            "column_mappings": {"customer_id": "customer_id", "customer_name": "customer_name"},
+        },
+        {
+            "object_type_id": 2,
+            "column_mappings": {"order_no": "order_id", "amount": "amount"},
+        },
+    ]
+    return bundle
+
+
+def test_dataset_binding_mappings_do_not_trigger_relation_column_invalid():
+    """回归：Dataset 绑定解耦后 mappings 不再带 semantic_config_id，关系列映射检查仍须按 Dataset 口径生效。"""
+    codes = _codes(check_ontology_model_consistency(_dataset_bundle(), _configs()))
+    assert "ONT_REL_COLUMN_INVALID" not in codes
+    assert "ONT_PROP_UNMAPPED" not in codes
+
+
+def test_dataset_binding_mappings_detect_unmapped_property():
+    bundle = _dataset_bundle()
+    bundle["mappings"][0]["column_mappings"].pop("customer_name")
+    findings = check_ontology_model_consistency(bundle, _configs())
+    unmapped = [item for item in findings if item["code"] == "ONT_PROP_UNMAPPED"]
+    assert len(unmapped) == 1
+    assert "customer_name" in unmapped[0]["message"]

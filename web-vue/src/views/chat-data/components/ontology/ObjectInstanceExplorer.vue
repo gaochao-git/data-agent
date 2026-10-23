@@ -4,6 +4,7 @@
  * 主从布局：左侧分页列表/搜索，右侧对象详情；关联对象在当前工作台下钻，不再弹窗跳转。
  */
 import { computed, onMounted, ref, watch } from 'vue'
+import { ElMessage } from 'element-plus'
 import {
   getAdminOntologyObjectType,
   getAdminOntologyRelationTypes,
@@ -11,6 +12,7 @@ import {
   searchAdminOntologyObjects
 } from '../../api'
 import type {
+  OntologyRelationTypeItem,
   OntologyObjectFilter,
   OntologyObjectInstance,
   OntologyObjectListItem,
@@ -20,7 +22,11 @@ import type {
 
 const props = defineProps({
   objectType: { type: String, default: '' },
-  objectLabel: { type: String, default: '' }
+  objectLabel: { type: String, default: '' },
+  // 父级（对象类型详情卡）已取过同一对象类型的元数据/关系类型，优先复用，避免重复请求。
+  initialMeta: { type: Object, default: null },
+  initialFromRelations: { type: Array, default: () => [] },
+  initialToRelations: { type: Array, default: () => [] }
 })
 
 const loading = ref(false)
@@ -266,6 +272,16 @@ const mergeCurrentLinksIntoExplore = () => {
       addExploreNode(relatedKey, relatedType, relatedTitle || relatedKey.split(':').slice(1).join(':') || relatedKey, {})
       addExploreEdge(group.relationName, data.object_key, relatedKey)
     }
+  }
+}
+
+const expandCurrentLinks = () => {
+  const nodeCount = Object.keys(exploreNodes.value).length
+  const edgeCount = Object.keys(exploreEdges.value).length
+  mergeCurrentLinksIntoExplore()
+  const added = Object.keys(exploreNodes.value).length - nodeCount + Object.keys(exploreEdges.value).length - edgeCount
+  if (added <= 0) {
+    ElMessage.info('当前节点已无更多可展开的关联')
   }
 }
 
@@ -527,6 +543,30 @@ const instanceGraph = computed<{ nodes: InstanceGraphNode[]; edges: InstanceGrap
 })
 
 /** 某个对象类型的关系显示名（关联下钻和返回都要用；按类型只补一次）。 */
+const seedInitialMetadata = () => {
+  const initialMeta = props.initialMeta as OntologyObjectTypeItem | null
+  if (!initialMeta || (initialMeta.object_type_name || '') !== props.objectType) return
+  meta.value = initialMeta
+  metaCache.set(props.objectType, initialMeta)
+}
+
+const seedInitialRelationLabels = () => {
+  if (!props.objectType) return
+  const fromRelations = (props.initialFromRelations || []) as OntologyRelationTypeItem[]
+  const toRelations = (props.initialToRelations || []) as OntologyRelationTypeItem[]
+  const labels: Record<string, string> = { ...relationLabels.value }
+  for (const relation of fromRelations) {
+    labels[relation.relation_type_name] = relation.from_display_name || relation.relation_type_name
+  }
+  for (const relation of toRelations) {
+    labels[relation.relation_type_name] =
+      relation.to_display_name || labels[relation.relation_type_name] || relation.relation_type_name
+  }
+  relationLabels.value = labels
+  // 父级已按 from/to 两个方向取全，初始对象类型不再重复请求；下钻类型仍按需拉取。
+  relationLabelsLoaded.add(props.objectType)
+}
+
 const loadRelationLabels = async (objectType: string) => {
   if (!objectType || relationLabelsLoaded.has(objectType)) return
   relationLabelsLoaded.add(objectType)
@@ -553,15 +593,16 @@ const loadRelationLabels = async (objectType: string) => {
   }
 }
 
-/** 左侧列表所属对象类型的元数据（机构绑定只认列表类型）。 */
+/** 左侧列表所属对象类型的元数据（机构绑定只认列表类型；父级已取过则直接复用）。 */
 const loadMeta = async (objectType: string) => {
   if (!objectType) return
-  const metaRes = await getAdminOntologyObjectType(objectType)
-  if (metaRes.status === 'success') {
-    meta.value = metaRes.data
-    metaCache.set(objectType, metaRes.data)
-    if (!detail.value || (detail.value.object_type || objectType) === objectType) detailMeta.value = metaRes.data
-    const members = metaRes.data.source_binding?.member_datasource_ids || []
+  const cachedMeta = metaCache.get(objectType)
+  const loaded = cachedMeta || (await getAdminOntologyObjectType(objectType)).data
+  if (loaded) {
+    meta.value = loaded
+    metaCache.set(objectType, loaded)
+    if (!detail.value || (detail.value.object_type || objectType) === objectType) detailMeta.value = loaded
+    const members = loaded.source_binding?.member_datasource_ids || []
     if (!selectedMember.value || !members.includes(selectedMember.value)) {
       selectedMember.value = members[0] || ''
     }
@@ -759,6 +800,8 @@ const initialize = async () => {
   exploreSelectedKey.value = ''
   exploreLoadingKey.value = ''
   resetToList()
+  seedInitialMetadata()
+  seedInitialRelationLabels()
   await loadMeta(props.objectType)
   await loadList()
 }
@@ -968,7 +1011,7 @@ onMounted(() => void initialize())
                 <i class="fa-solid fa-table-columns mr-1 text-[10px]"></i>
                 {{ showGraphProperties ? '隐藏属性' : '显示属性' }}
               </el-button>
-              <el-button size="small" :disabled="!detail" @click="mergeCurrentLinksIntoExplore">展开关联</el-button>
+              <el-button size="small" :disabled="!detail" @click="expandCurrentLinks">展开关联</el-button>
               <el-button size="small" :disabled="!detail" @click="seedExploreGraph">重置为当前对象</el-button>
               <el-button size="small" :disabled="Object.keys(exploreNodes).length === 0" @click="clearExploreGraph">清空</el-button>
             </div>

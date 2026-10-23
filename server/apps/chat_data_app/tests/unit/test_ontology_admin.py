@@ -640,6 +640,38 @@ def test_injection_bundle_excludes_non_active_relations(harness, deps_ok):
     assert bundle["relation_types"] == []
 
 
+def test_list_source_bindings_for_consistency(harness):
+    """一致性巡检批量取活跃 Dataset 绑定；空入参与软删行不返回。"""
+    from apps.chat_data_app.daos.ontology_dao import OntologyDao
+    from utils.models import ChatDataOntologySourceBinding
+
+    async def seed():
+        async with harness["session_factory"]() as session:
+            session.add(
+                ChatDataOntologySourceBinding(
+                    object_type_id=1,
+                    dataset_id=3,
+                    column_mappings_json=json.dumps({"order_id": "order_id"}, ensure_ascii=False),
+                    delete_flag=0,
+                )
+            )
+            session.add(
+                ChatDataOntologySourceBinding(
+                    object_type_id=2,
+                    dataset_id=4,
+                    column_mappings_json=json.dumps({"order_id": "order_id"}, ensure_ascii=False),
+                    delete_flag=1,
+                )
+            )
+            await session.commit()
+
+    asyncio.run(seed())
+    assert asyncio.run(OntologyDao().list_source_bindings_async([])) == []
+    assert asyncio.run(OntologyDao().list_source_bindings_async([0])) == []
+    bindings = asyncio.run(OntologyDao().list_source_bindings_async([1, 2, 3]))
+    assert bindings == [{"object_type_id": 1, "column_mappings": {"order_id": "order_id"}}]
+
+
 # ---------- 本体（纯语义容器，不绑数据源组） ----------
 
 
