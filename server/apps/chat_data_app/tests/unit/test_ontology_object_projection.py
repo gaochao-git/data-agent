@@ -770,7 +770,17 @@ def test_resolve_derived_filter_sort_builds_join(monkeypatch):
         return {"direction": "to", "related_object_type": "Order", "current_property": "order_id"}
 
     async def context(_derivation, _side, **_kwargs):
-        return {"table": "orders", "filter_column": "customer_id", "target_column": "amount"}
+        return {
+            "table": "orders",
+            "filter_column": "customer_id",
+            "target_column": "amount",
+            "column_mappings": {"order_id": "order_id", "amount": "amount", "customer_id": "customer_id"},
+            "dimensions": {
+                "order_id": {"table": "orders", "column": "order_id"},
+                "amount": {"table": "orders", "column": "amount"},
+                "customer_id": {"table": "orders", "column": "customer_id"},
+            },
+        }
 
     monkeypatch.setattr(object_projection, "_load_derived_relation", relation)
     monkeypatch.setattr(object_projection, "_derived_relation_side", side)
@@ -824,7 +834,16 @@ def test_resolve_derived_filter_sort_edge_paths(monkeypatch):
         return {"direction": "from", "related_object_type": "Customer", "current_property": "customer_id"}
 
     async def context(_derivation, _side, **_kwargs):
-        return {"table": "customers", "filter_column": "order_id", "target_column": "name"}
+        return {
+            "table": "customers",
+            "filter_column": "order_id",
+            "target_column": "name",
+            "column_mappings": {"name": "name", "order_id": "order_id"},
+            "dimensions": {
+                "name": {"table": "customers", "column": "name"},
+                "order_id": {"table": "customers", "column": "order_id"},
+            },
+        }
 
     monkeypatch.setattr(object_projection, "_load_derived_relation", relation)
     monkeypatch.setattr(object_projection, "_derived_relation_side", side)

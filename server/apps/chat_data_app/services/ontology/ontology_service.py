@@ -973,6 +973,7 @@ class OntologyService:
             relation = self._derivation_relation(relation_index, derivation, label)
             other_id = self._derivation_other_object_type(relation, derivation, current_id, label)
             target = await self._derivation_target_property(other_id, derivation, other_properties, label)
+            await self._validate_derivation_filters(other_id, derivation, other_properties, label)
             self._apply_derivation_value_type(item, derivation, target)
 
     @staticmethod
@@ -1010,6 +1011,35 @@ class OntologyService:
             raise OntologyInvalidError(f"{label} 暂不支持自关联关系")
         return other_id
 
+    async def _validate_derivation_filters(
+        self,
+        other_id: int,
+        derivation: dict[str, Any],
+        cache: dict[int, dict[str, dict[str, Any]]],
+        label: str,
+    ) -> None:
+        """过滤属性/时间窗属性必须存在于对端对象类型，且不能是派生属性。"""
+        if other_id not in cache:
+            cache[other_id] = {prop["property_name"]: prop for prop in await self._dao.list_properties_async(other_id)}
+        properties = cache[other_id]
+        for condition in derivation.get("filters") or []:
+            name = _text(condition.get("property"))
+            target = properties.get(name)
+            if target is None:
+                raise OntologyInvalidError(f"{label} 的过滤属性不存在于对端对象类型: {name}")
+            if target.get("derivation"):
+                raise OntologyInvalidError(f"{label} 的过滤属性不能是派生属性: {name}")
+        period = derivation.get("period")
+        if isinstance(period, dict):
+            name = _text(period.get("time_property"))
+            target = properties.get(name)
+            if target is None:
+                raise OntologyInvalidError(f"{label} 的时间窗属性不存在于对端对象类型: {name}")
+            if target.get("derivation"):
+                raise OntologyInvalidError(f"{label} 的时间窗属性不能是派生属性: {name}")
+            if _text(target.get("value_type")) not in {"Date", "DateTime"}:
+                raise OntologyInvalidError(f"{label} 的时间窗属性必须是 Date/DateTime: {name}")
+
     async def _derivation_target_property(
         self,
         other_id: int,
@@ -1040,7 +1070,7 @@ class OntologyService:
         item: dict[str, Any], derivation: dict[str, Any], target: dict[str, Any] | None
     ) -> None:
         operator = _text(derivation.get("operator"))
-        if operator == "count":
+        if operator in ("count", "count_distinct"):
             item["value_type"] = "Integer"
         elif operator in ("sum", "avg"):
             item["value_type"] = "Decimal"

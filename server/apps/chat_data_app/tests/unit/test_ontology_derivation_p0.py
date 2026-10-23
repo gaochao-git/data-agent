@@ -151,3 +151,168 @@ def test_derivation_column_present_in_table_ddl_and_migration():
     assert "derivation_json" in schema.MYSQL_CHAT_DATA_ONTOLOGY_PROPERTY_TABLE
     assert "derivation_json" in schema.MYSQL_CHAT_DATA_ONTOLOGY_PROPERTY_DERIVATION_MIGRATION
     assert schema.MYSQL_CHAT_DATA_ONTOLOGY_PROPERTY_TABLE in schema.MYSQL_TABLES
+
+
+def test_validator_count_distinct_filters_and_period():
+    derived = validator.validate_property_items(
+        _items(
+            _aggregate(
+                operator="count_distinct",
+                target_property="order_id",
+                filters=[{"property": "status", "operator": "eq", "value": "paid"}],
+                period={"days": 7, "time_property": "created_at"},
+            )
+        )
+    )[1]
+    assert derived["derivation"]["operator"] == "count_distinct"
+    assert derived["derivation"]["filters"][0]["value"] == "paid"
+    assert derived["derivation"]["period"] == {"days": 7, "time_property": "created_at"}
+
+    with pytest.raises(OntologyInvalidError, match="target_property"):
+        validator.validate_property_items(_items(_aggregate(operator="count_distinct", target_property="")))
+    with pytest.raises(OntologyInvalidError, match="仅支持 aggregate"):
+        validator.validate_property_items(
+            _items(
+                _aggregate(
+                    kind="select",
+                    operator="",
+                    target_property="name",
+                    filters=[{"property": "status"}],
+                )
+            )
+        )
+    with pytest.raises(OntologyInvalidError, match="过滤操作符"):
+        validator.validate_property_items(_items(_aggregate(filters=[{"property": "status", "operator": "like"}])))
+    with pytest.raises(OntologyInvalidError, match="in 过滤"):
+        validator.validate_property_items(_items(_aggregate(filters=[{"property": "status", "operator": "in"}])))
+    with pytest.raises(OntologyInvalidError, match="period.days"):
+        validator.validate_property_items(_items(_aggregate(period={"days": 0, "time_property": "created_at"})))
+    with pytest.raises(OntologyInvalidError, match="period"):
+        validator.validate_property_items(_items(_aggregate(period="bad")))
+
+
+def test_derived_sql_count_distinct_period_and_filters():
+    from apps.chat_data_app.services.ontology.object_projection import (
+        _build_derived_value_sql,
+        _derived_extra_where,
+    )
+
+    sql = _build_derived_value_sql("orders", "customer_id", "C1", operator="count_distinct", target_column="order_id")
+    assert "COUNT(DISTINCT `order_id`)" in sql
+
+    mappings = {"status": "status", "created_at": "created_at"}
+    dimensions = {
+        "status": {"table": "orders", "column": "status"},
+        "created_at": {"table": "orders", "column": "created_at"},
+    }
+    extra = _derived_extra_where(
+        {
+            "filters": [{"property": "status", "operator": "eq", "value": "paid"}],
+            "period": {"days": 7, "time_property": "created_at"},
+        },
+        mappings,
+        dimensions,
+        "orders",
+    )
+    assert "`status` = 'paid'" in extra
+    assert "`created_at` >=" in extra
+
+
+def test_validator_derivation_filter_and_period_edge_cases():
+    with pytest.raises(OntologyInvalidError, match="不超过 5"):
+        validator.validate_property_items(_items(_aggregate(filters=[{}] * 6)))
+    with pytest.raises(OntologyInvalidError, match="条目必须是对象"):
+        validator.validate_property_items(_items(_aggregate(filters=["bad"])))
+    with pytest.raises(OntologyInvalidError, match="仅支持 aggregate"):
+        validator.validate_property_items(
+            _items(
+                _aggregate(kind="select", operator="", target_property="name", period={"days": 1, "time_property": "x"})
+            )
+        )
+    with pytest.raises(OntologyInvalidError, match="必须是对象"):
+        validator.validate_property_items(_items(_aggregate(period="bad")))
+    with pytest.raises(OntologyInvalidError, match="period.days"):
+        validator.validate_property_items(_items(_aggregate(period={"days": "x", "time_property": "created_at"})))
+    with pytest.raises(Exception, match="时间窗属性"):
+        validator.validate_property_items(_items(_aggregate(period={"days": 7, "time_property": ""})))
+
+
+def test_derived_extra_where_guards():
+    from apps.chat_data_app.services.ontology.object_projection import ObjectProjectionError, _derived_extra_where
+
+    with pytest.raises(ObjectProjectionError, match="过滤操作符"):
+        _derived_extra_where(
+            {"filters": [{"property": "status", "operator": "like"}]},
+            {"status": "status"},
+            {"status": {"table": "orders", "column": "status"}},
+            "orders",
+        )
+    with pytest.raises(ObjectProjectionError, match="过滤属性与关联表"):
+        _derived_extra_where(
+            {"filters": [{"property": "status", "operator": "eq", "value": "x"}]},
+            {"status": "status"},
+            {"status": {"table": "other", "column": "status"}},
+            "orders",
+        )
+    assert _derived_extra_where({}, {}, {}, "orders") == ""
+
+
+def test_service_derivation_filter_and_period_validation():
+    import asyncio
+
+    from apps.chat_data_app.services.ontology.ontology_service import OntologyService
+
+    class FakeDao:
+        async def list_properties_async(self, _object_type_id):
+            return [
+                {"property_name": "status", "value_type": "String"},
+                {"property_name": "created_at", "value_type": "DateTime"},
+                {"property_name": "bad_time", "value_type": "String"},
+                {"property_name": "derived", "value_type": "Integer", "derivation": {"kind": "aggregate"}},
+            ]
+
+    service = OntologyService(dao=FakeDao())
+    cache: dict = {}
+    asyncio.run(
+        service._validate_derivation_filters(
+            1,
+            {
+                "filters": [{"property": "status", "operator": "eq", "value": "paid"}],
+                "period": {"days": 7, "time_property": "created_at"},
+            },
+            cache,
+            "派生属性 count",
+        )
+    )
+    with pytest.raises(OntologyInvalidError, match="过滤属性不存在"):
+        asyncio.run(
+            service._validate_derivation_filters(1, {"filters": [{"property": "missing"}]}, {}, "派生属性 count")
+        )
+    with pytest.raises(OntologyInvalidError, match="过滤属性不能是派生"):
+        asyncio.run(
+            service._validate_derivation_filters(1, {"filters": [{"property": "derived"}]}, {}, "派生属性 count")
+        )
+    with pytest.raises(OntologyInvalidError, match="时间窗属性不存在"):
+        asyncio.run(
+            service._validate_derivation_filters(
+                1, {"period": {"days": 7, "time_property": "missing"}}, {}, "派生属性 count"
+            )
+        )
+    with pytest.raises(OntologyInvalidError, match="Date/DateTime"):
+        asyncio.run(
+            service._validate_derivation_filters(
+                1, {"period": {"days": 7, "time_property": "bad_time"}}, {}, "派生属性 count"
+            )
+        )
+
+
+def test_derived_extra_where_period_table_mismatch():
+    from apps.chat_data_app.services.ontology.object_projection import ObjectProjectionError, _derived_extra_where
+
+    with pytest.raises(ObjectProjectionError, match="时间窗属性与关联表"):
+        _derived_extra_where(
+            {"period": {"days": 7, "time_property": "created_at"}},
+            {"created_at": "created_at"},
+            {"created_at": {"table": "other", "column": "created_at"}},
+            "orders",
+        )

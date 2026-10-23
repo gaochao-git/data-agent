@@ -460,24 +460,44 @@ class OntologyUpsertRequest(BaseModel):
     allow_overwrite: bool = Field(default=False, description="编辑既有活跃本体时为 True")
 
 
+class OntologyDerivationFilter(BaseModel):
+    """派生属性对端过滤条件（聚合前过滤链接对象）。"""
+
+    property: str = Field(..., min_length=1, max_length=128, description="对端对象属性 API 名")
+    operator: Literal["eq", "ne", "contains", "gt", "gte", "lt", "lte", "in"] = Field(
+        default="eq", description="比较操作符"
+    )
+    value: str = Field(default="", max_length=512, description="比较值；in 使用 values")
+    values: list[str] = Field(default_factory=list, max_length=100, description="in 候选值")
+
+
+class OntologyDerivationPeriod(BaseModel):
+    """派生属性时间窗：对端时间属性最近 N 天。"""
+
+    days: int = Field(..., ge=1, le=3650, description="最近天数")
+    time_property: str = Field(..., min_length=1, max_length=128, description="对端 Date/DateTime 属性 API 名")
+
+
 class OntologyPropertyDerivation(BaseModel):
     """派生属性推导定义（对齐 Palantir derived property：查询时计算、不落存储）。
 
-    - ``aggregate``：跨链接聚合，要求对象类型在关系类型的 to 侧（一对多的"一"侧），
-      如 Customer.orderCount = count(关系 Customer←Order)；
-    - ``select``：从链接对象选取单值，要求对象类型在关系类型的 from 侧（外键在本表），
-      如 Order.customerName。
-    值类型由服务端推导（count→Integer，sum/avg→Decimal，其余同目标属性），入参忽略。
+    - ``aggregate``：跨链接聚合，要求对象类型在关系类型的 to 侧，聚合 from 侧多行；
+    - ``select``：从链接对象选取单值，要求对象类型在关系类型的 from 侧；
+    - 值类型由服务端推导（count/count_distinct→Integer，sum/avg→Decimal，其余同目标属性）。
     """
 
     kind: Literal["aggregate", "select"] = Field(
         ..., description="推导类型：aggregate=跨链接聚合，select=从链接对象选取"
     )
     relation_type_name: str = Field(..., min_length=1, max_length=128, description="遍历的关系类型API名")
-    operator: Literal["count", "sum", "avg", "min", "max"] | None = Field(
+    operator: Literal["count", "count_distinct", "sum", "avg", "min", "max"] | None = Field(
         default=None, description="聚合算子（kind=aggregate 必填；count 无需 target_property）"
     )
     target_property: str = Field(default="", max_length=128, description="对端对象类型的目标属性API名（count 省略）")
+    filters: list[OntologyDerivationFilter] = Field(
+        default_factory=list, max_length=5, description="聚合前对端对象过滤条件（仅 aggregate）"
+    )
+    period: OntologyDerivationPeriod | None = Field(default=None, description="时间窗（仅 aggregate）")
 
 
 class OntologyPropertyItem(BaseModel):

@@ -31,7 +31,8 @@ RENDER_HINT_KEYS = ("searchable", "sortable", "low_cardinality")
 # 派生属性（对齐 Palantir derived property）：aggregate=跨链接聚合（本对象为关系 to 侧），
 # select=从链接对象选取（本对象为关系 from 侧）；表达式类 MVP 不做（Palantir 本体定义同样不支持）。
 DERIVATION_KINDS = ("aggregate", "select")
-DERIVATION_AGGREGATE_OPERATORS = ("count", "sum", "avg", "min", "max")
+DERIVATION_AGGREGATE_OPERATORS = ("count", "count_distinct", "sum", "avg", "min", "max")
+DERIVATION_FILTER_OPERATORS = ("eq", "ne", "contains", "gt", "gte", "lt", "lte", "in")
 
 BINDING_TYPE_SEMANTIC = "semantic"
 
@@ -154,7 +155,7 @@ def _validate_property_item(raw: Any, seen: set[str]) -> dict[str, Any]:
 def _normalized_derived_item(
     name: str,
     raw: dict[str, Any],
-    derivation: dict[str, str],
+    derivation: dict[str, Any],
     value_type: str,
     derivation_provided: bool,
 ) -> dict[str, Any]:
@@ -179,7 +180,7 @@ def _normalized_derived_item(
     }
 
 
-def _validate_derivation(property_name: str, raw: Any) -> dict[str, str] | None:
+def _validate_derivation(property_name: str, raw: Any) -> dict[str, Any] | None:
     """派生属性推导结构校验（纯结构红线；关系存在性/方向/目标类型由 service 查库校验）。"""
     if raw in (None, {}):
         return None
@@ -199,7 +200,16 @@ def _validate_derivation(property_name: str, raw: Any) -> dict[str, str] | None:
         _validate_aggregate_derivation(property_name, operator, target_property)
     else:
         _validate_select_derivation(property_name, operator, target_property)
-    return {"kind": kind, "relation_type_name": relation_name, "operator": operator, "target_property": target_property}
+    filters = _validate_derivation_filters(property_name, raw.get("filters"), kind)
+    period = _validate_derivation_period(property_name, raw.get("period"), kind)
+    return {
+        "kind": kind,
+        "relation_type_name": relation_name,
+        "operator": operator,
+        "target_property": target_property,
+        "filters": filters,
+        "period": period,
+    }
 
 
 def _validate_aggregate_derivation(property_name: str, operator: str, target_property: str) -> None:
@@ -209,6 +219,52 @@ def _validate_aggregate_derivation(property_name: str, operator: str, target_pro
         raise _invalid(f"count 聚合派生属性 {property_name} 不需要 target_property")
     if operator != "count" and not target_property:
         raise _invalid(f"{operator} 聚合派生属性 {property_name} 必须提供 target_property")
+
+
+def _validate_derivation_filters(property_name: str, raw: Any, kind: str) -> list[dict[str, Any]]:
+    if raw in (None, []):
+        return []
+    if kind != "aggregate":
+        raise _invalid(f"派生属性 {property_name} 的 filters 仅支持 aggregate")
+    if not isinstance(raw, list) or len(raw) > 5:
+        raise _invalid(f"派生属性 {property_name} 的 filters 必须是不超过 5 条的数组")
+    return [_normalize_derivation_filter(property_name, item) for item in raw]
+
+
+def _normalize_derivation_filter(property_name: str, item: Any) -> dict[str, Any]:
+    if not isinstance(item, dict):
+        raise _invalid(f"派生属性 {property_name} 的 filter 条目必须是对象")
+    filter_property = validate_api_name(str(item.get("property") or ""), "派生属性过滤属性API名")
+    operator = _normalized_text(item.get("operator")) or "eq"
+    if operator not in DERIVATION_FILTER_OPERATORS:
+        raise _invalid(f"派生属性 {property_name} 的过滤操作符不支持: {operator}")
+    values = [str(value) for value in item.get("values") or [] if str(value).strip()]
+    if operator == "in" and not values:
+        raise _invalid(f"派生属性 {property_name} 的 in 过滤必须提供 values")
+    return {
+        "property": filter_property,
+        "operator": operator,
+        "value": str(item.get("value") or ""),
+        "values": values,
+    }
+
+
+def _validate_derivation_period(property_name: str, raw: Any, kind: str) -> dict[str, Any] | None:
+    if raw in (None, {}):
+        return None
+    if kind != "aggregate":
+        raise _invalid(f"派生属性 {property_name} 的 period 仅支持 aggregate")
+    if not isinstance(raw, dict):
+        raise _invalid(f"派生属性 {property_name} 的 period 必须是对象")
+    raw_days = raw.get("days")
+    try:
+        days = int(raw_days)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        raise _invalid(f"派生属性 {property_name} 的 period.days 必须是整数") from None
+    if days < 1 or days > 3650:
+        raise _invalid(f"派生属性 {property_name} 的 period.days 必须在 1..3650")
+    time_property = validate_api_name(str(raw.get("time_property") or ""), "派生属性时间窗属性API名")
+    return {"days": days, "time_property": time_property}
 
 
 def _validate_select_derivation(property_name: str, operator: str, target_property: str) -> None:

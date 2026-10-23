@@ -23,6 +23,7 @@ import asyncio
 import os
 import re
 import time
+from datetime import date, timedelta
 from typing import Any
 
 from pymysql.converters import escape_string
@@ -1058,6 +1059,7 @@ async def read_object_projection(
 
 
 _DERIVED_AGGREGATE_SQL = {"sum": "SUM", "avg": "AVG", "min": "MIN", "max": "MAX"}
+_DERIVED_FILTER_OPERATORS = {"eq", "ne", "contains", "gt", "gte", "lt", "lte", "in"}
 
 
 def _build_derived_value_sql(
@@ -1067,6 +1069,7 @@ def _build_derived_value_sql(
     *,
     operator: str = "",
     target_column: str = "",
+    extra_where: str = "",
 ) -> str:
     """派生属性取值 SQL（纯函数，供单测复用）：聚合（多行→单值）或选取（单行单列）。
 
@@ -1074,15 +1077,49 @@ def _build_derived_value_sql(
     """
     if operator == "count":
         expression = "COUNT(*)"
+    elif operator == "count_distinct":
+        expression = f"COUNT(DISTINCT {_quote_identifier(target_column)})"
     elif operator:
         expression = f"{_DERIVED_AGGREGATE_SQL[operator]}({_quote_identifier(target_column)})"
     else:
         expression = _quote_identifier(target_column)
     limit = "" if operator else " LIMIT 1"
+    conditions = [f"{_quote_identifier(filter_column)} = '{escape_string(str(filter_value))}'"]
+    if extra_where:
+        conditions.append(extra_where)
     return (
         f"SELECT {expression} AS `derived_value` FROM {_quote_identifier(table)} "
-        f"WHERE {_quote_identifier(filter_column)} = '{escape_string(str(filter_value))}'{limit}"
+        f"WHERE {' AND '.join(conditions)}{limit}"
     )
+
+
+def _derived_extra_where(
+    derivation: dict[str, Any],
+    column_mappings: dict[str, Any],
+    dimensions: dict[str, dict[str, str]],
+    table: str,
+) -> str:
+    """派生聚合的对端过滤 + 时间窗（列白名单、值转义）。"""
+    conditions: list[str] = []
+    for item in derivation.get("filters") or []:
+        property_name = _text(item.get("property"))
+        operator = _text(item.get("operator")) or "eq"
+        if operator not in _DERIVED_FILTER_OPERATORS:
+            raise ObjectProjectionError(f"派生属性过滤操作符不支持: {operator}")
+        target_table, column = _derived_physical_column(property_name, column_mappings, dimensions)
+        if target_table != table:
+            raise ObjectProjectionError("派生属性过滤属性与关联表不一致，MVP 不支持")
+        conditions.append(_filter_condition(_quote_identifier(column), operator, item, _text(item.get("value"))))
+    period = derivation.get("period")
+    if isinstance(period, dict):
+        property_name = _text(period.get("time_property"))
+        target_table, column = _derived_physical_column(property_name, column_mappings, dimensions)
+        if target_table != table:
+            raise ObjectProjectionError("派生属性时间窗属性与关联表不一致，MVP 不支持")
+        days = max(1, min(int(period.get("days") or 1), 3650))
+        threshold = (date.today() - timedelta(days=days)).isoformat()
+        conditions.append(f"{_quote_identifier(column)} >= '{threshold}'")
+    return " AND ".join(conditions)
 
 
 def _derived_physical_column(
@@ -1158,6 +1195,7 @@ async def _compute_derived_value(
     relation = await _load_derived_relation(derivation)
     side = _derived_relation_side(derivation, relation, current_id)
     context = await _derived_query_context(derivation, side, member_id=member_id, user_id=user_id, username=username)
+    extra_where = _derived_extra_where(derivation, context["column_mappings"], context["dimensions"], context["table"])
     current_value = row.get(side["current_property"])
     if current_value is None or _text(current_value) == "":
         return None
@@ -1167,6 +1205,7 @@ async def _compute_derived_value(
         current_value,
         operator=_text(derivation.get("operator")),
         target_column=context["target_column"],
+        extra_where=extra_where,
     )
     rows = await _query_rows(
         context["targets"], sql, group_id=context["group_id"], user_id=user_id, username=username, limit=1
@@ -1224,6 +1263,8 @@ async def _derived_query_context(
         "table": table,
         "filter_column": filter_column,
         "target_column": _derived_target_column(derivation, column_mappings, dimensions, table),
+        "column_mappings": column_mappings,
+        "dimensions": dimensions,
     }
 
 
@@ -1260,14 +1301,19 @@ async def _derived_join_for_property(
     filter_column = _quote_identifier(context["filter_column"])
     if _text(derivation.get("kind")) == "aggregate":
         operator = _text(derivation.get("operator"))
-        aggregate = (
-            "COUNT(*)"
-            if operator == "count"
-            else (f"{_DERIVED_AGGREGATE_SQL[operator]}({_quote_identifier(context['target_column'])})")
+        if operator == "count":
+            aggregate = "COUNT(*)"
+        elif operator == "count_distinct":
+            aggregate = f"COUNT(DISTINCT {_quote_identifier(context['target_column'])})"
+        else:
+            aggregate = f"{_DERIVED_AGGREGATE_SQL[operator]}({_quote_identifier(context['target_column'])})"
+        extra_where = _derived_extra_where(
+            derivation, context["column_mappings"], context["dimensions"], context["table"]
         )
+        where_sql = f" WHERE {extra_where}" if extra_where else ""
         join = (
             f" LEFT JOIN (SELECT {filter_column} AS `join_key`, {aggregate} AS `value` "
-            f"FROM {target_table} GROUP BY {filter_column}) AS `{alias}` "
+            f"FROM {target_table}{where_sql} GROUP BY {filter_column}) AS `{alias}` "
             f"ON `{alias}`.`join_key` = {join_key}"
         )
         return join, f"`{alias}`.`value`"
