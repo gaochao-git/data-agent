@@ -69,8 +69,9 @@ DDL 见 `server/apps/chat_data_app/next_version.md`，新环境兜底见 `server
    `operation=pipeline_build`）；
 5. 运行终态写回 run（`succeeded`/`failed`，输出摘要含行数、列与最多 20 行 preview）。
 
-MVP 输出 Dataset 只有逻辑 schema/统计，没有物理落地表（bindings 为空），
-物理物化与增量刷新后续扩展；查询仍以 `chat_data_dataset_version` 为准。
+build 会把输出写入输入 member 对应的物理表（当前支持 Hive direct），并为输出
+Dataset 写入 member binding；对象类型可以直接绑定 Pipeline 输出 Dataset。
+物化失败时 run 置 failed，不产生输出版本。增量刷新、调度与并发 build 锁后续扩展。
 
 ## API
 
@@ -119,5 +120,6 @@ member_datasource_id + object_type + local_key
 
 - `physical_table` 仅支持 `table` 或 `schema.table` 两种合法标识符形式；需要
   catalog/schema 限定或函数封装时后续扩展。
-- Pipeline 输出暂未物化到物理表，输出 Dataset 的 `bindings` 为空。
+- Pipeline 输出现已物化到输入 member 的物理表（当前仅 Hive direct）；MySQL/HTTP
+  成员需要补执行适配器。
 - MVP 只支持手动 build，无调度/增量/失败重试。

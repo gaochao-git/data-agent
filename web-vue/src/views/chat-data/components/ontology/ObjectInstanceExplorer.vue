@@ -36,7 +36,12 @@ const filters = ref<OntologyObjectFilter[]>([])
 const sortProperty = ref('')
 const sortDirection = ref<'asc' | 'desc'>('asc')
 
+/** 左侧列表所属对象类型的元数据（筛选/排序/机构下拉只认它）。 */
 const meta = ref<OntologyObjectTypeItem | null>(null)
+/** 右侧详情当前对象类型的元数据：下钻到关联对象时必须用对端类型，不能覆盖 meta。 */
+const detailMeta = ref<OntologyObjectTypeItem | null>(null)
+const metaCache = new Map<string, OntologyObjectTypeItem>()
+const relationLabelsLoaded = new Set<string>()
 const selectedMember = ref('')
 const relationLabels = ref<Record<string, string>>({})
 const selectedKey = ref('')
@@ -48,6 +53,9 @@ const detailError = ref('')
 const detailMode = ref<'table' | 'graph'>('table')
 const detailCache = new Map<string, OntologyObjectInstance>()
 const history = ref<Array<{ objectType: string; objectKey: string; label: string }>>([])
+// 列表/详情的请求序号：慢查询乱序返回时只允许最后一次请求落盘，避免旧机构/旧对象数据残留。
+let listRequestId = 0
+let detailRequestId = 0
 
 const filterProperties = computed(() =>
   (meta.value?.properties || []).map(prop => ({
@@ -131,7 +139,9 @@ const clearFilters = () => {
 
 const propertyLabels = computed<Record<string, string>>(() => {
   const labels: Record<string, string> = {}
-  for (const prop of meta.value?.properties || []) labels[prop.property_name] = prop.display_name || prop.property_name
+  for (const prop of detailMeta.value?.properties || meta.value?.properties || []) {
+    labels[prop.property_name] = prop.display_name || prop.property_name
+  }
   return labels
 })
 
@@ -148,7 +158,8 @@ const detailPropertyRows = computed(() => {
 const detailTitle = computed(() => {
   const data = detail.value
   if (!data) return ''
-  const titleKey = meta.value?.properties?.find(item => item.is_title)?.property_name
+  const titleKey = detailMeta.value?.properties?.find(item => item.is_title)?.property_name ||
+    meta.value?.properties?.find(item => item.is_title)?.property_name
   if (!titleKey) return ''
   const value = data.properties?.[titleKey]
   return value == null ? '' : String(value)
@@ -515,41 +526,82 @@ const instanceGraph = computed<{ nodes: InstanceGraphNode[]; edges: InstanceGrap
   return { nodes: [center, ...relatedNodes], edges }
 })
 
+/** 某个对象类型的关系显示名（关联下钻和返回都要用；按类型只补一次）。 */
+const loadRelationLabels = async (objectType: string) => {
+  if (!objectType || relationLabelsLoaded.has(objectType)) return
+  relationLabelsLoaded.add(objectType)
+  try {
+    const [fromRes, toRes] = await Promise.all([
+      getAdminOntologyRelationTypes({ from_object_type: objectType }),
+      getAdminOntologyRelationTypes({ to_object_type: objectType })
+    ])
+    const labels: Record<string, string> = { ...relationLabels.value }
+    if (fromRes.status === 'success') {
+      for (const relation of fromRes.data.relation_types || []) {
+        labels[relation.relation_type_name] = relation.from_display_name || relation.relation_type_name
+      }
+    }
+    if (toRes.status === 'success') {
+      for (const relation of toRes.data.relation_types || []) {
+        labels[relation.relation_type_name] = relation.to_display_name || labels[relation.relation_type_name] || relation.relation_type_name
+      }
+    }
+    relationLabels.value = labels
+  } catch (err) {
+    relationLabelsLoaded.delete(objectType)
+    console.error('加载关系类型显示名失败:', err)
+  }
+}
+
+/** 左侧列表所属对象类型的元数据（机构绑定只认列表类型）。 */
 const loadMeta = async (objectType: string) => {
   if (!objectType) return
-  const [metaRes, fromRes, toRes] = await Promise.all([
-    getAdminOntologyObjectType(objectType),
-    getAdminOntologyRelationTypes({ from_object_type: objectType }),
-    getAdminOntologyRelationTypes({ to_object_type: objectType })
-  ])
+  const metaRes = await getAdminOntologyObjectType(objectType)
   if (metaRes.status === 'success') {
     meta.value = metaRes.data
+    metaCache.set(objectType, metaRes.data)
+    if (!detail.value || (detail.value.object_type || objectType) === objectType) detailMeta.value = metaRes.data
     const members = metaRes.data.source_binding?.member_datasource_ids || []
     if (!selectedMember.value || !members.includes(selectedMember.value)) {
       selectedMember.value = members[0] || ''
     }
   }
-  const labels: Record<string, string> = {}
-  if (fromRes.status === 'success') {
-    for (const relation of fromRes.data.relation_types || []) {
-      labels[relation.relation_type_name] = relation.from_display_name || relation.relation_type_name
-    }
+  await loadRelationLabels(objectType)
+}
+
+/** 详情对象类型元数据：关联下钻取对端类型，返回时用缓存恢复，避免污染左侧列表的筛选/排序口径。 */
+const ensureDetailMeta = async (objectType: string) => {
+  if (!objectType) return
+  if (objectType === props.objectType && meta.value?.object_type_name === objectType) {
+    detailMeta.value = meta.value
+    return
   }
-  if (toRes.status === 'success') {
-    for (const relation of toRes.data.relation_types || []) {
-      labels[relation.relation_type_name] = relation.to_display_name || labels[relation.relation_type_name] || relation.relation_type_name
-    }
+  const cached = metaCache.get(objectType)
+  if (cached) {
+    detailMeta.value = cached
+    return
   }
-  relationLabels.value = labels
+  try {
+    const res = await getAdminOntologyObjectType(objectType)
+    if (res.status === 'success') {
+      metaCache.set(objectType, res.data)
+      if (detail.value?.object_type === objectType) detailMeta.value = res.data
+    }
+  } catch (err) {
+    console.error('加载对象类型元数据失败:', err)
+  }
 }
 
 const loadList = async (resetPage = false) => {
   if (!props.objectType) return
   if (resetPage) page.value = 1
+  const requestId = ++listRequestId
   loading.value = true
   error.value = ''
   try {
     const res = await searchAdminOntologyObjects(props.objectType, buildSearchPayload())
+    // 切机构/翻页/搜索连续操作时，慢请求可能后到；只认最后一次请求的结果。
+    if (requestId !== listRequestId) return
     if (res.status === 'success') {
       objects.value = res.data.objects || []
       hasMore.value = Boolean(res.data.has_more)
@@ -559,11 +611,24 @@ const loadList = async (resetPage = false) => {
       error.value = res.msg || '加载对象列表失败'
     }
   } catch (err) {
+    if (requestId !== listRequestId) return
     console.error('加载对象列表失败:', err)
     error.value = '加载对象列表失败，请检查映射和数据源权限'
   } finally {
-    loading.value = false
+    if (requestId === listRequestId) loading.value = false
   }
+}
+
+/** 切换机构：列表按新机构重查，详情/历史/图探索必须清空，避免展示旧机构数据。 */
+const onMemberChange = () => {
+  detailRequestId += 1
+  resetToList()
+  detailMeta.value = meta.value
+  exploreNodes.value = {}
+  exploreEdges.value = {}
+  exploreSelectedKey.value = ''
+  exploreLoadingKey.value = ''
+  void loadList(true)
 }
 
 const loadDetail = async (rawKey: string, objectType = props.objectType, seed?: OntologyObjectListItem) => {
@@ -571,6 +636,7 @@ const loadDetail = async (rawKey: string, objectType = props.objectType, seed?: 
   const type = parsed.type
   const key = parsed.key
   const member = parsed.member || selectedMember.value
+  const requestId = ++detailRequestId
   selectedKey.value = rawKey
   detailError.value = ''
   const cached = detailCache.get(rawKey)
@@ -578,6 +644,8 @@ const loadDetail = async (rawKey: string, objectType = props.objectType, seed?: 
     detail.value = cached
     detailLoading.value = false
     linksLoading.value = false
+    await Promise.all([ensureDetailMeta(type), loadRelationLabels(type)])
+    if (requestId !== detailRequestId) return
     afterDetailLoaded()
     return
   }
@@ -598,20 +666,26 @@ const loadDetail = async (rawKey: string, objectType = props.objectType, seed?: 
   }
   try {
     const res = await readAdminOntologyObject(type, key, member ? [member] : [])
+    // 慢查询下用户可能已返回/切到别的对象：迟到的响应不能覆盖当前详情。
+    if (requestId !== detailRequestId) return
     if (res.status === 'success') {
       detail.value = res.data
       detailCache.set(rawKey, res.data)
+      await Promise.all([ensureDetailMeta(type), loadRelationLabels(type)])
+      if (requestId !== detailRequestId) return
       afterDetailLoaded()
-      if (type !== props.objectType) await loadMeta(type)
     } else {
       detailError.value = res.msg || '读取对象失败'
     }
   } catch (err) {
+    if (requestId !== detailRequestId) return
     console.error('读取对象失败:', err)
     detailError.value = '读取对象失败，请检查映射和数据源权限'
   } finally {
-    detailLoading.value = false
-    linksLoading.value = false
+    if (requestId === detailRequestId) {
+      detailLoading.value = false
+      linksLoading.value = false
+    }
   }
 }
 
@@ -629,15 +703,20 @@ const openLinked = (rawKey: unknown) => {
     openExploreNode(key)
     return
   }
-  history.value.push({ objectType: props.objectType, objectKey: detail.value.object_key, label: detailTitle.value || detail.value.object_key })
+  // 历史按“当前详情所属类型”记录，多级下钻后返回才能回到真实上一跳。
+  history.value.push({
+    objectType: detail.value.object_type || props.objectType,
+    objectKey: detail.value.object_key,
+    label: detailTitle.value || detail.value.object_key
+  })
   void loadDetail(key)
 }
 
 const backToObject = async () => {
   const previous = history.value.pop()
   if (!previous) return
+  // loadDetail 内部会自增请求序号：返回后迟到的关联对象响应不会再覆盖详情。
   await loadDetail(previous.objectKey, previous.objectType)
-  if (previous.objectType !== props.objectType) await loadMeta(previous.objectType)
 }
 
 const resetToList = () => {
@@ -665,14 +744,20 @@ const previewValueText = (value: unknown) => {
 
 const initialize = async () => {
   if (!props.objectType) return
+  // 切换对象类型时作废上一类型仍在途的列表/详情请求。
+  listRequestId += 1
+  detailRequestId += 1
   keyword.value = ''
   page.value = 1
   filters.value = []
   sortProperty.value = ''
   totalCount.value = 0
+  detailMeta.value = null
   exploreNodes.value = {}
   exploreEdges.value = {}
+  exploreNodeOffsets.value = {}
   exploreSelectedKey.value = ''
+  exploreLoadingKey.value = ''
   resetToList()
   await loadMeta(props.objectType)
   await loadList()
@@ -691,7 +776,7 @@ onMounted(() => void initialize())
             v-model="selectedMember"
             size="small"
             class="w-full"
-            @change="loadList(true)"
+            @change="onMemberChange"
           >
             <el-option v-for="member in memberOptions" :key="member" :label="member" :value="member" />
           </el-select>
@@ -710,7 +795,7 @@ onMounted(() => void initialize())
         <el-button size="small" type="primary" class="shrink-0" @click="loadList(true)">搜索</el-button>
       </div>
       <div class="mb-2 flex items-center gap-1">
-        <el-popover placement="bottom-start" :width="440" trigger="click">
+        <el-popover placement="bottom-start" :width="440" trigger="click" popper-class="object-instance-filter-popper">
           <template #reference>
             <el-button size="small">
               <i class="fa-solid fa-filter mr-1 text-[10px]"></i>筛选
@@ -719,7 +804,7 @@ onMounted(() => void initialize())
           </template>
           <div class="flex flex-col gap-1.5">
             <div v-for="(item, index) in filters" :key="index" class="flex items-center gap-1">
-              <el-select v-model="item.property" size="small" class="!w-28">
+              <el-select v-model="item.property" size="small" class="!w-28" :teleported="false">
                 <el-option
                   v-for="prop in filterProperties"
                   :key="prop.name"
@@ -727,7 +812,7 @@ onMounted(() => void initialize())
                   :value="prop.name"
                 />
               </el-select>
-              <el-select v-model="item.operator" size="small" class="!w-24">
+              <el-select v-model="item.operator" size="small" class="!w-24" :teleported="false">
                 <el-option
                   v-for="operator in OPERATOR_OPTIONS"
                   :key="operator.value"

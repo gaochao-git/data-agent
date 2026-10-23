@@ -122,6 +122,11 @@ def harness(monkeypatch):
 
     monkeypatch.setattr(dataset_service_module, "transaction_scope", test_transaction_scope)
     monkeypatch.setattr(pipeline_service_module, "transaction_scope", test_transaction_scope)
+
+    async def fake_materialize(*_args, **_kwargs):
+        return []
+
+    monkeypatch.setattr(pipeline_service_module, "materialize_output_async", fake_materialize)
     dataset_service = LogicalDatasetService(LogicalDatasetDao())
     pipeline_service = DatasetPipelineService(
         dao=DatasetPipelineDao(),
@@ -817,7 +822,7 @@ def test_pipeline_output_cannot_overwrite_datasource_dataset(harness, monkeypatc
     asyncio.run(
         harness.pipeline_service.upsert_pipeline_async("overwrite", payload, operator="u1", operator_name="测试")
     )
-    with pytest.raises(PipelineBuildError, match="不能覆盖 datasource Dataset"):
+    with pytest.raises(PipelineBuildError, match="不能覆盖数据源 Dataset"):
         asyncio.run(
             harness.pipeline_service.build_pipeline_async(
                 "overwrite", operator="u1", operator_name="测试", user_id="u1", username="测试"
@@ -1392,3 +1397,40 @@ def test_bootstrap_skips_invalid_columns_and_duplicate_primary_keys(harness, mon
     assert result[0]["dataset_name"] == "shipments"
     assert result[0]["primary_key"] == ["shipment_id"]
     assert [item["name"] for item in result[0]["columns"]] == ["shipment_id", "carrier"]
+
+
+def test_build_rejects_output_overwriting_datasource_dataset(harness, monkeypatch):
+    monkeypatch.setattr(pipeline_service_module, "load_dataset_rows_async", _fake_rows)
+    asyncio.run(
+        harness.dataset_service.upsert_dataset_async(
+            "shipments", _source_payload(), operator="u1", operator_name="测试"
+        )
+    )
+    asyncio.run(
+        harness.pipeline_service.upsert_pipeline_async(
+            "overwrite_source",
+            _pipeline_payload(
+                nodes=[
+                    {"node_id": "src", "node_type": "source", "config": {"dataset_name": "shipments"}},
+                    {
+                        "node_id": "clean",
+                        "node_type": "transform",
+                        "config": {"transform_type": "filter", "column": "status", "value": "shipped"},
+                    },
+                    {"node_id": "out", "node_type": "output", "config": {"dataset_name": "shipments"}},
+                ],
+                edges=[
+                    {"from_node_id": "src", "to_node_id": "clean"},
+                    {"from_node_id": "clean", "to_node_id": "out"},
+                ],
+            ),
+            operator="u1",
+            operator_name="测试",
+        )
+    )
+    with pytest.raises(PipelineBuildError, match="不能覆盖数据源"):
+        asyncio.run(
+            harness.pipeline_service.build_pipeline_async(
+                "overwrite_source", operator="u1", operator_name="测试", user_id="u1", username="测试"
+            )
+        )

@@ -38,9 +38,15 @@ from .dataset_service import (
     logical_dataset_service,
 )
 from .pipeline_errors import PipelineBuildError, PipelineInvalidError, PipelineNotFoundError
+from .pipeline_materializer import materialize_output_async
 from .pipeline_runner import DEFAULT_FETCH_LIMIT, load_dataset_rows_async
 
 logger = get_logger(__name__)
+
+
+def _text(value: Any) -> str:
+    return str(value or "").strip()
+
 
 NODE_TYPES = ("source", "transform", "output")
 PIPELINE_STATUSES = ("draft", "experimental", "certified")
@@ -535,17 +541,41 @@ class DatasetPipelineService:
         output_rows, output_columns = pipeline_transforms.apply_transforms(
             source_rows, input_columns, transform_configs
         )
+        output_name = str(output_node["config"].get("dataset_name") or "").strip()
+        await self._ensure_output_dataset_safe_async(output_name, input_dataset)
+        bindings = await materialize_output_async(
+            output_name,
+            output_columns,
+            output_rows,
+            input_dataset,
+            member_datasource_ids=source_node["config"].get("member_datasource_ids") or None,
+            user_id=user_id,
+            username=username,
+        )
         output_dataset = await self._commit_output_async(
             definition,
             input_dataset,
             output_node,
             output_rows,
             output_columns,
+            bindings=bindings,
             run_id=run_id,
             operator=operator,
             operator_name=operator_name,
         )
         return output_dataset, len(output_rows), output_columns, output_rows
+
+    async def _ensure_output_dataset_safe_async(self, output_name: str, input_dataset: dict[str, Any]) -> None:
+        """物化前拒绝覆盖数据源 Dataset；避免先 DROP 表再在提交阶段失败。"""
+        try:
+            existing = await self._dataset_service.get_dataset_async(output_name)
+        except DatasetNotFoundError:
+            return
+        if (
+            _text(existing.get("dataset_origin")) == "datasource"
+            or _text(input_dataset.get("dataset_name")) == output_name
+        ):
+            raise PipelineBuildError(f"Pipeline 输出不能覆盖数据源 Dataset: {output_name}")
 
     @staticmethod
     def _split_chain(
@@ -585,6 +615,7 @@ class DatasetPipelineService:
         output_rows: list[dict[str, Any]],
         output_columns: list[dict[str, Any]],
         *,
+        bindings: list[dict[str, Any]],
         run_id: str,
         operator: str,
         operator_name: str,
@@ -600,7 +631,7 @@ class DatasetPipelineService:
             "description": config.get("description") or f"Pipeline {definition['pipeline_name']} 输出",
             "primary_key": primary_key,
             "columns": output_columns,
-            "bindings": [],
+            "bindings": bindings,
             "status": config.get("status") or "experimental",
             "dataset_layer": layer,
             "dataset_origin": "pipeline",
