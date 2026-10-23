@@ -1275,11 +1275,25 @@ export interface MetaGlobalEnumRef {
 export type OntologyObjectTypeStatus = 'draft' | 'experimental' | 'certified' | 'deprecated'
 
 // 本体属性项（属性一等实体，随对象类型表单整体提交）
+export interface OntologyDerivationFilter {
+  property: string
+  operator: 'eq' | 'ne' | 'contains' | 'gt' | 'gte' | 'lt' | 'lte' | 'in'
+  value?: string
+  values?: string[]
+}
+
+export interface OntologyDerivationPeriod {
+  days: number
+  time_property: string
+}
+
 export interface OntologyPropertyDerivation {
   kind: 'aggregate' | 'select'
   relation_type_name: string
-  operator?: 'count' | 'sum' | 'avg' | 'min' | 'max' | ''
+  operator?: 'count' | 'count_distinct' | 'sum' | 'avg' | 'min' | 'max' | ''
   target_property?: string
+  filters?: OntologyDerivationFilter[]
+  period?: OntologyDerivationPeriod | null
 }
 
 export interface OntologyPropertyItem {

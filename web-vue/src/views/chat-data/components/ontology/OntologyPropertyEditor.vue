@@ -7,7 +7,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import type { PropType } from 'vue'
 import { getAdminMetaEnums, getAdminOntologyObjectType, getAdminOntologyRelationTypes } from '../../api'
-import type { OntologyPropertyItem, OntologyRelationTypeItem } from '../../types'
+import type { OntologyDerivationFilter, OntologyPropertyItem, OntologyRelationTypeItem } from '../../types'
 import { ONTOLOGY_RENDER_HINTS, ONTOLOGY_VALUE_TYPES } from './ontologyMeta'
 
 const props = defineProps({
@@ -101,7 +101,8 @@ const hintCount = (row: OntologyPropertyItem) => Object.keys(row.render_hints ||
 
 // ---------- 派生属性添加（对齐 Palantir derived property） ----------
 
-const DERIVATION_OPERATORS = ['count', 'sum', 'avg', 'min', 'max'] as const
+const DERIVATION_OPERATORS = ['count', 'count_distinct', 'sum', 'avg', 'min', 'max'] as const
+const DERIVATION_FILTER_OPERATORS = ['eq', 'ne', 'contains', 'gt', 'gte', 'lt', 'lte', 'in'] as const
 const BUILTIN_VALUE_TYPES = ['String', 'Integer', 'Decimal', 'Boolean', 'Date', 'DateTime']
 
 const showDerivedForm = ref(false)
@@ -113,7 +114,10 @@ const derivedForm = ref({
   kind: 'aggregate' as 'aggregate' | 'select',
   relation_type_name: '',
   operator: 'count',
-  target_property: ''
+  target_property: '',
+  filters: [] as Array<{ property: string; operator: string; value: string }>,
+  period_days: 0,
+  period_time_property: ''
 })
 // 关系候选（已按当前对象类型在 to/from 侧过滤，aggregate→to 侧、select→from 侧）
 const relationOptions = ref<Array<{ name: string; relatedType: string; multiplicity: string }>>([])
@@ -135,7 +139,10 @@ const openDerivedForm = async () => {
     kind: 'aggregate',
     relation_type_name: '',
     operator: 'count',
-    target_property: ''
+    target_property: '',
+    filters: [],
+    period_days: 0,
+    period_time_property: ''
   }
   derivedLoading.value = true
   try {
@@ -191,6 +198,14 @@ const onDerivedKindChange = () => {
   if (derivedForm.value.kind === 'aggregate') derivedForm.value.operator = 'count'
 }
 
+const addDerivedFilter = () => {
+  derivedForm.value.filters.push({ property: '', operator: 'eq', value: '' })
+}
+
+const removeDerivedFilter = (index: number) => {
+  derivedForm.value.filters.splice(index, 1)
+}
+
 const submitDerived = () => {
   const name = derivedForm.value.property_name.trim()
   if (!/^[A-Za-z0-9_]{1,128}$/.test(name)) {
@@ -214,19 +229,35 @@ const submitDerived = () => {
     return
   }
   derivedError.value = ''
+  const filters = derivedForm.value.filters
+    .filter(item => item.property.trim())
+    .map(item => ({
+      property: item.property.trim(),
+      operator: item.operator as OntologyDerivationFilter['operator'],
+      value: item.value
+    }))
+  const period =
+    derivedForm.value.period_days > 0 && derivedForm.value.period_time_property
+      ? { days: derivedForm.value.period_days, time_property: derivedForm.value.period_time_property }
+      : undefined
   const derivation: NonNullable<OntologyPropertyItem['derivation']> = {
     kind: derivedForm.value.kind,
     relation_type_name: derivedForm.value.relation_type_name,
     ...(derivedForm.value.kind === 'aggregate'
       ? { operator: derivedForm.value.operator as (typeof DERIVATION_OPERATORS)[number] }
       : {}),
-    ...(needsTarget.value ? { target_property: derivedForm.value.target_property } : {})
+    ...(needsTarget.value ? { target_property: derivedForm.value.target_property } : {}),
+    ...(derivedForm.value.kind === 'aggregate' && filters.length ? { filters } : {}),
+    ...(derivedForm.value.kind === 'aggregate' && period ? { period } : {})
   }
   emit('addDerived', {
     property_name: name,
     display_name: derivedForm.value.display_name.trim(),
     description: '',
-    value_type: derivedForm.value.kind === 'aggregate' && derivedForm.value.operator === 'count' ? 'Integer' : 'Decimal',
+    value_type:
+      derivedForm.value.kind === 'aggregate' && ['count', 'count_distinct'].includes(derivedForm.value.operator)
+        ? 'Integer'
+        : 'Decimal',
     enum_ref: '',
     render_hints: {},
     is_identifier: false,
@@ -420,6 +451,37 @@ watch(showDerivedForm, value => {
         </el-select>
         <el-button size="small" type="primary" @click="submitDerived">添加</el-button>
         <el-button size="small" @click="showDerivedForm = false">取消</el-button>
+      </div>
+      <div v-if="derivedForm.kind === 'aggregate'" class="mt-2 rounded border border-amber-100 bg-white/60 p-2">
+        <div class="mb-1 flex items-center gap-2 text-[11px] text-slate-500">
+          <span>对端过滤（可选）</span>
+          <el-button link size="small" class="!p-0 text-[11px]" @click="addDerivedFilter">+ 添加条件</el-button>
+        </div>
+        <div v-for="(filter, index) in derivedForm.filters" :key="index" class="mb-1 flex flex-wrap items-center gap-1.5">
+          <el-select v-model="filter.property" size="small" filterable placeholder="属性" class="!w-32">
+            <el-option v-for="item in targetOptions" :key="item.name" :label="item.name" :value="item.name" />
+          </el-select>
+          <el-select v-model="filter.operator" size="small" class="!w-24">
+            <el-option v-for="op in DERIVATION_FILTER_OPERATORS" :key="op" :label="op" :value="op" />
+          </el-select>
+          <el-input v-model="filter.value" size="small" placeholder="值" class="!w-32" />
+          <el-button link size="small" class="!p-0 text-[11px] text-red-500" @click="removeDerivedFilter(index)">
+            删除
+          </el-button>
+        </div>
+        <div class="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500">
+          <span>时间窗</span>
+          <el-input-number v-model="derivedForm.period_days" :min="0" :max="3650" size="small" controls-position="right" class="!w-24" />
+          <span>天</span>
+          <el-select v-model="derivedForm.period_time_property" size="small" clearable placeholder="时间属性" class="!w-36">
+            <el-option
+              v-for="item in targetOptions.filter(opt => ['Date', 'DateTime'].includes(opt.value_type))"
+              :key="item.name"
+              :label="item.name"
+              :value="item.name"
+            />
+          </el-select>
+        </div>
       </div>
       <div v-if="derivedError" class="mt-1.5 text-[11px] text-red-600">{{ derivedError }}</div>
     </div>
