@@ -101,4 +101,9 @@ server/logs/
 
 # mcp_servers 本地配置
 mcp_servers/.env
-/.tmp-chrome-profile/
+
+# temporary browser profiles
+/.tmp-chrome-profile*/
+
+# DeepSeek local working files
+/.deepseek/

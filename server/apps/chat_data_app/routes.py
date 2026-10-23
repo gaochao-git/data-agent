@@ -11,6 +11,7 @@ from .routers.config import router as config_router
 from .routers.conversation_workspace import router as conversation_workspace_router
 from .routers.conversations import router as conversations_router
 from .routers.dashboard import router as dashboard_router
+from .routers.dataset_admin import router as dataset_admin_router
 from .routers.datasource_admin import router as datasource_admin_router
 from .routers.datasource_public import router as datasource_public_router
 from .routers.evaluation import router as evaluation_router
@@ -63,3 +64,4 @@ router.include_router(setting_admin_router)
 router.include_router(meta_admin_router)
 router.include_router(model_admin_router)
 router.include_router(ontology_admin_router)
+router.include_router(dataset_admin_router)

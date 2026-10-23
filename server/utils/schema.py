@@ -570,6 +570,136 @@ CREATE TABLE `chat_data_eval_run_case` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ChatData评测单用例结果表';
 """
 
+
+MYSQL_CHAT_DATA_LOGICAL_DATASET_TABLE = """
+CREATE TABLE `chat_data_logical_dataset` (
+  `id` bigint(20) NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `dataset_name` varchar(128) NOT NULL COMMENT 'Dataset API名',
+  `display_name` varchar(128) NOT NULL DEFAULT '' COMMENT '展示名',
+  `description_text` varchar(1024) NOT NULL DEFAULT '' COMMENT '描述',
+  `primary_key_json` text NOT NULL COMMENT '主键列JSON',
+  `schema_json` text NOT NULL COMMENT '逻辑列JSON',
+  `current_version_id` bigint(20) DEFAULT NULL COMMENT '当前版本行ID',
+  `lifecycle_status` varchar(16) NOT NULL DEFAULT 'draft' COMMENT '生命周期状态',
+  `delete_flag` bigint(20) NOT NULL DEFAULT '0' COMMENT '删除标识:0=活跃,非0=已删除(值=行ID)',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `create_by` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人',
+  `create_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人名称',
+  `update_by` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人',
+  `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人名称',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_logical_dataset_name_del` (`dataset_name`, `delete_flag`),
+  KEY `idx_logical_dataset_status` (`lifecycle_status`, `delete_flag`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ChatData逻辑数据集';
+"""
+
+MYSQL_CHAT_DATA_DATASET_BRANCH_TABLE = """
+CREATE TABLE `chat_data_dataset_branch` (
+  `id` bigint(20) NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `dataset_id` bigint(20) NOT NULL COMMENT 'Dataset ID',
+  `branch_name` varchar(128) NOT NULL COMMENT '分支名',
+  `base_version_id` bigint(20) DEFAULT NULL COMMENT '基线版本行ID',
+  `is_default` tinyint NOT NULL DEFAULT '0' COMMENT '是否默认分支',
+  `lifecycle_status` varchar(16) NOT NULL DEFAULT 'active' COMMENT '状态',
+  `delete_flag` bigint(20) NOT NULL DEFAULT '0' COMMENT '删除标识',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `create_by` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人',
+  `create_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人名称',
+  `update_by` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人',
+  `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人名称',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_dataset_branch_del` (`dataset_id`, `branch_name`, `delete_flag`),
+  KEY `idx_dataset_branch_dataset` (`dataset_id`, `delete_flag`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ChatData数据集分支';
+"""
+
+MYSQL_CHAT_DATA_DATASET_TRANSACTION_TABLE = """
+CREATE TABLE `chat_data_dataset_transaction` (
+  `id` bigint(20) NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `transaction_id` varchar(64) NOT NULL COMMENT '事务ID',
+  `dataset_id` bigint(20) NOT NULL COMMENT 'Dataset ID',
+  `branch_id` bigint(20) NOT NULL COMMENT '分支ID',
+  `transaction_status` varchar(16) NOT NULL DEFAULT 'open' COMMENT '事务状态',
+  `run_id` varchar(128) NOT NULL DEFAULT '' COMMENT '产生方运行ID',
+  `error_message` varchar(1000) NOT NULL DEFAULT '' COMMENT '错误信息',
+  `started_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '开始时间',
+  `committed_at` datetime DEFAULT NULL COMMENT '提交时间',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `create_by` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人',
+  `create_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人名称',
+  `update_by` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人',
+  `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人名称',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_dataset_transaction_id` (`transaction_id`),
+  KEY `idx_dataset_transaction_dataset` (`dataset_id`, `branch_id`, `transaction_status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ChatData数据集事务';
+"""
+
+MYSQL_CHAT_DATA_DATASET_VERSION_TABLE = """
+CREATE TABLE `chat_data_dataset_version` (
+  `id` bigint(20) NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `version_id` varchar(64) NOT NULL COMMENT '版本ID',
+  `dataset_id` bigint(20) NOT NULL COMMENT 'Dataset ID',
+  `branch_id` bigint(20) NOT NULL COMMENT '分支ID',
+  `version_no` bigint(20) NOT NULL COMMENT '分支内版本号',
+  `transaction_id` varchar(64) NOT NULL DEFAULT '' COMMENT '来源事务ID',
+  `schema_json` text NOT NULL COMMENT '版本schema JSON',
+  `row_count` bigint(20) NOT NULL DEFAULT '0' COMMENT '行数',
+  `version_status` varchar(16) NOT NULL DEFAULT 'committed' COMMENT '版本状态',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `create_by` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人',
+  `create_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人名称',
+  `update_by` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人',
+  `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人名称',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_dataset_version_id` (`version_id`),
+  UNIQUE KEY `uniq_dataset_version_no` (`dataset_id`, `branch_id`, `version_no`),
+  KEY `idx_dataset_version_dataset` (`dataset_id`, `branch_id`, `version_status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ChatData数据集不可变版本';
+"""
+
+MYSQL_CHAT_DATA_DATASET_BINDING_TABLE = """
+CREATE TABLE `chat_data_dataset_binding` (
+  `id` bigint(20) NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `dataset_id` bigint(20) NOT NULL COMMENT 'Dataset ID',
+  `datasource_group_id` varchar(128) NOT NULL COMMENT '数据源组ID',
+  `member_datasource_id` varchar(128) NOT NULL COMMENT '成员数据源ID',
+  `physical_table` varchar(256) NOT NULL COMMENT '物理表名',
+  `binding_status` varchar(16) NOT NULL DEFAULT 'active' COMMENT '绑定状态',
+  `delete_flag` bigint(20) NOT NULL DEFAULT '0' COMMENT '删除标识',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `create_by` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人',
+  `create_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人名称',
+  `update_by` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人',
+  `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人名称',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_dataset_binding_member` (`dataset_id`, `member_datasource_id`, `delete_flag`),
+  KEY `idx_dataset_binding_dataset` (`dataset_id`, `delete_flag`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ChatData数据集成员绑定';
+"""
+
+MYSQL_CHAT_DATA_DATASET_LINEAGE_EDGE_TABLE = """
+CREATE TABLE `chat_data_dataset_lineage_edge` (
+  `id` bigint(20) NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `from_version_id` varchar(64) NOT NULL DEFAULT '' COMMENT '来源版本ID',
+  `to_version_id` varchar(64) NOT NULL DEFAULT '' COMMENT '目标版本ID',
+  `operation` varchar(64) NOT NULL DEFAULT '' COMMENT '操作类型',
+  `run_id` varchar(128) NOT NULL DEFAULT '' COMMENT '运行ID',
+  `edge_metadata_json` text NOT NULL COMMENT '边元数据JSON',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `create_by` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人',
+  `create_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人名称',
+  PRIMARY KEY (`id`),
+  KEY `idx_dataset_lineage_from` (`from_version_id`),
+  KEY `idx_dataset_lineage_to` (`to_version_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ChatData数据集版本血缘';
+"""
+
 MYSQL_TABLES = [
     MYSQL_USER_THREADS_TABLE,
     MYSQL_CHAT_DATA_CONVERSATION_EVENT_TABLE,
@@ -592,6 +722,7 @@ MYSQL_TABLES = [
     MYSQL_CHAT_DATA_EVAL_RUN_TABLE,
     MYSQL_CHAT_DATA_EVAL_RUN_CASE_TABLE,
     MYSQL_CHAT_DATA_PLUGIN_TABLE,
+    MYSQL_CHAT_DATA_LOGICAL_DATASET_TABLE,
 ]
 
 

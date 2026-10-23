@@ -1401,3 +1401,177 @@ class ChatDataOntologyObjectTypeMapping(Base):
         UniqueConstraint("semantic_config_id", "delete_flag", name="uniq_mapping_semantic_source"),
         Index("idx_mapping_object_type", "object_type_id"),
     )
+
+
+# ---------------------------------------------------------------------------
+# Logical Dataset：语义层与本体层共享的逻辑数据资产
+# ---------------------------------------------------------------------------
+
+
+class ChatDataLogicalDataset(Base):
+    """逻辑数据集：稳定身份 + schema + 主键 + 当前版本指针。
+
+    Dataset 是逻辑资产，不直接等于物理表；物理落点由 binding 表按 member 数据源描述。
+    语义模型和本体对象类型都只引用 dataset_id，不互相引用。
+    """
+
+    __tablename__ = "chat_data_logical_dataset"
+
+    id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
+    dataset_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
+    description_text: Mapped[str] = mapped_column(String(1024), nullable=False, default="", server_default="")
+    primary_key_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]", server_default="[]")
+    schema_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]", server_default="[]")
+    current_version_id: Mapped[int | None] = mapped_column(BigInteger)
+    lifecycle_status: Mapped[str] = mapped_column(String(16), nullable=False, default="draft", server_default="draft")
+    delete_flag: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
+    create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
+    update_time: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+    create_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+
+    __table_args__ = (
+        UniqueConstraint("dataset_name", "delete_flag", name="uniq_logical_dataset_name_del"),
+        Index("idx_logical_dataset_status", "lifecycle_status", "delete_flag"),
+    )
+
+
+class ChatDataDatasetBranch(Base):
+    """Dataset 分支：main / feature / scenario；所有版本归属于某个分支。"""
+
+    __tablename__ = "chat_data_dataset_branch"
+
+    id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
+    dataset_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    branch_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    base_version_id: Mapped[int | None] = mapped_column(BigInteger)
+    is_default: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
+    lifecycle_status: Mapped[str] = mapped_column(String(16), nullable=False, default="active", server_default="active")
+    delete_flag: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
+    create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
+    update_time: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+    create_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+
+    __table_args__ = (
+        UniqueConstraint("dataset_id", "branch_name", "delete_flag", name="uniq_dataset_branch_del"),
+        Index("idx_dataset_branch_dataset", "dataset_id", "delete_flag"),
+    )
+
+
+class ChatDataDatasetTransaction(Base):
+    """Dataset 事务：version 只能由 committed transaction 产生。"""
+
+    __tablename__ = "chat_data_dataset_transaction"
+
+    id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
+    transaction_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    dataset_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    branch_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    transaction_status: Mapped[str] = mapped_column(String(16), nullable=False, default="open", server_default="open")
+    run_id: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
+    error_message: Mapped[str] = mapped_column(String(1000), nullable=False, default="", server_default="")
+    started_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
+    committed_at: Mapped[datetime | None] = mapped_column(DateTime)
+    create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
+    update_time: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+    create_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+
+    __table_args__ = (
+        UniqueConstraint("transaction_id", name="uniq_dataset_transaction_id"),
+        Index("idx_dataset_transaction_dataset", "dataset_id", "branch_id", "transaction_status"),
+    )
+
+
+class ChatDataDatasetVersion(Base):
+    """Dataset 不可变版本：schema + 来源 transaction + 版本号。"""
+
+    __tablename__ = "chat_data_dataset_version"
+
+    id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
+    version_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    dataset_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    branch_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    version_no: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    transaction_id: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
+    schema_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]", server_default="[]")
+    row_count: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
+    version_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="committed", server_default="committed"
+    )
+    create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
+    update_time: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+    create_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+
+    __table_args__ = (
+        UniqueConstraint("version_id", name="uniq_dataset_version_id"),
+        UniqueConstraint("dataset_id", "branch_id", "version_no", name="uniq_dataset_version_no"),
+        Index("idx_dataset_version_dataset", "dataset_id", "branch_id", "version_status"),
+    )
+
+
+class ChatDataDatasetBinding(Base):
+    """Dataset 到成员数据源物理表的绑定；同一 dataset 可绑定多个 member。"""
+
+    __tablename__ = "chat_data_dataset_binding"
+
+    id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
+    dataset_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    datasource_group_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    member_datasource_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    physical_table: Mapped[str] = mapped_column(String(256), nullable=False)
+    binding_status: Mapped[str] = mapped_column(String(16), nullable=False, default="active", server_default="active")
+    delete_flag: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
+    create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
+    update_time: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+    create_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+
+    __table_args__ = (
+        UniqueConstraint("dataset_id", "member_datasource_id", "delete_flag", name="uniq_dataset_binding_member"),
+        Index("idx_dataset_binding_dataset", "dataset_id", "delete_flag"),
+    )
+
+
+class ChatDataDatasetLineageEdge(Base):
+    """Dataset 版本血缘边；operation/run_id 记录产生方。"""
+
+    __tablename__ = "chat_data_dataset_lineage_edge"
+
+    id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
+    from_version_id: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
+    to_version_id: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
+    operation: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
+    run_id: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
+    edge_metadata_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}", server_default="{}")
+    create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
+    create_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+
+    __table_args__ = (
+        Index("idx_dataset_lineage_from", "from_version_id"),
+        Index("idx_dataset_lineage_to", "to_version_id"),
+    )

@@ -1398,3 +1398,41 @@ class OntologyActionTypeExecuteRequest(BaseModel):
 
     object_key: str = Field(..., min_length=1, max_length=512, description="对象主键值")
     parameters: dict[str, Any] = Field(default_factory=dict, description="Action 参数值")
+
+
+# ============ Logical Dataset ============
+
+
+class DatasetBindingItem(BaseModel):
+    """Dataset 到成员数据源物理表的绑定。"""
+
+    datasource_group_id: str = Field(..., min_length=1, max_length=128, description="数据源组 ID")
+    member_datasource_id: str = Field(..., min_length=1, max_length=128, description="成员数据源 ID")
+    physical_table: str = Field(..., min_length=1, max_length=256, description="物理表名")
+
+
+class DatasetColumnItem(BaseModel):
+    """Dataset 逻辑列定义。"""
+
+    name: str = Field(..., min_length=1, max_length=128, description="逻辑列名")
+    display_name: str = Field(default="", max_length=128, description="展示名")
+    data_type: str = Field(default="string", max_length=64, description="逻辑类型")
+    physical_column: str = Field(default="", max_length=128, description="物理列名；缺省用 name")
+
+
+class DatasetUpsertRequest(BaseModel):
+    """Dataset 创建/更新请求；更新会生成新的不可变版本。"""
+
+    display_name: str = Field(default="", max_length=128, description="展示名")
+    description: str = Field(default="", max_length=1024, description="描述")
+    primary_key: list[str] = Field(default_factory=list, max_length=8, description="主键列名")
+    columns: list[DatasetColumnItem] = Field(default_factory=list, max_length=500, description="逻辑列")
+    bindings: list[DatasetBindingItem] = Field(default_factory=list, max_length=500, description="成员数据源绑定")
+    status: Literal["draft", "experimental", "certified"] = Field(default="draft", description="生命周期状态")
+
+
+class DatasetBranchCreateRequest(BaseModel):
+    """Dataset 分支创建请求。"""
+
+    branch_name: str = Field(..., min_length=1, max_length=128, description="分支名")
+    base_version_id: int | None = Field(default=None, description="基线版本数据库主键")

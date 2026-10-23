@@ -1147,6 +1147,165 @@
         "title": "DashboardUpdateRequest",
         "type": "object"
       },
+      "DatasetBindingItem": {
+        "description": "Dataset 到成员数据源物理表的绑定。",
+        "properties": {
+          "datasource_group_id": {
+            "description": "数据源组 ID",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Datasource Group Id",
+            "type": "string"
+          },
+          "member_datasource_id": {
+            "description": "成员数据源 ID",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Member Datasource Id",
+            "type": "string"
+          },
+          "physical_table": {
+            "description": "物理表名",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Physical Table",
+            "type": "string"
+          }
+        },
+        "required": [
+          "datasource_group_id",
+          "member_datasource_id",
+          "physical_table"
+        ],
+        "title": "DatasetBindingItem",
+        "type": "object"
+      },
+      "DatasetBranchCreateRequest": {
+        "description": "Dataset 分支创建请求。",
+        "properties": {
+          "base_version_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "基线版本数据库主键",
+            "title": "Base Version Id"
+          },
+          "branch_name": {
+            "description": "分支名",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Branch Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "branch_name"
+        ],
+        "title": "DatasetBranchCreateRequest",
+        "type": "object"
+      },
+      "DatasetColumnItem": {
+        "description": "Dataset 逻辑列定义。",
+        "properties": {
+          "data_type": {
+            "default": "string",
+            "description": "逻辑类型",
+            "maxLength": 64,
+            "title": "Data Type",
+            "type": "string"
+          },
+          "display_name": {
+            "default": "",
+            "description": "展示名",
+            "maxLength": 128,
+            "title": "Display Name",
+            "type": "string"
+          },
+          "name": {
+            "description": "逻辑列名",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "physical_column": {
+            "default": "",
+            "description": "物理列名；缺省用 name",
+            "maxLength": 128,
+            "title": "Physical Column",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "DatasetColumnItem",
+        "type": "object"
+      },
+      "DatasetUpsertRequest": {
+        "description": "Dataset 创建/更新请求；更新会生成新的不可变版本。",
+        "properties": {
+          "bindings": {
+            "description": "成员数据源绑定",
+            "items": {
+              "$ref": "#/components/schemas/DatasetBindingItem"
+            },
+            "maxItems": 500,
+            "title": "Bindings",
+            "type": "array"
+          },
+          "columns": {
+            "description": "逻辑列",
+            "items": {
+              "$ref": "#/components/schemas/DatasetColumnItem"
+            },
+            "maxItems": 500,
+            "title": "Columns",
+            "type": "array"
+          },
+          "description": {
+            "default": "",
+            "description": "描述",
+            "maxLength": 1024,
+            "title": "Description",
+            "type": "string"
+          },
+          "display_name": {
+            "default": "",
+            "description": "展示名",
+            "maxLength": 128,
+            "title": "Display Name",
+            "type": "string"
+          },
+          "primary_key": {
+            "description": "主键列名",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 8,
+            "title": "Primary Key",
+            "type": "array"
+          },
+          "status": {
+            "default": "draft",
+            "description": "生命周期状态",
+            "enum": [
+              "draft",
+              "experimental",
+              "certified"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "title": "DatasetUpsertRequest",
+        "type": "object"
+      },
       "DatasourceColumnDictEnumItem": {
         "description": "数据源字段字典枚举项",
         "properties": {
@@ -6906,6 +7065,236 @@
         "summary": "Get Admin Accuracy Evaluation Run Detail",
         "tags": [
           "ChatData 语义评估"
+        ]
+      }
+    },
+    "/api/chatdata/admin/meta/datasets": {
+      "get": {
+        "operationId": "list_datasets_api_chatdata_admin_meta_datasets_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "List Datasets",
+        "tags": [
+          "ChatData Logical Dataset（Admin）"
+        ]
+      }
+    },
+    "/api/chatdata/admin/meta/datasets/{dataset_name}": {
+      "delete": {
+        "operationId": "delete_dataset_api_chatdata_admin_meta_datasets__dataset_name__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dataset_name",
+            "required": true,
+            "schema": {
+              "title": "Dataset Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Delete Dataset",
+        "tags": [
+          "ChatData Logical Dataset（Admin）"
+        ]
+      },
+      "get": {
+        "operationId": "get_dataset_api_chatdata_admin_meta_datasets__dataset_name__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dataset_name",
+            "required": true,
+            "schema": {
+              "title": "Dataset Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Get Dataset",
+        "tags": [
+          "ChatData Logical Dataset（Admin）"
+        ]
+      },
+      "put": {
+        "operationId": "upsert_dataset_api_chatdata_admin_meta_datasets__dataset_name__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dataset_name",
+            "required": true,
+            "schema": {
+              "title": "Dataset Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DatasetUpsertRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Upsert Dataset",
+        "tags": [
+          "ChatData Logical Dataset（Admin）"
+        ]
+      }
+    },
+    "/api/chatdata/admin/meta/datasets/{dataset_name}/branches": {
+      "post": {
+        "operationId": "create_dataset_branch_api_chatdata_admin_meta_datasets__dataset_name__branches_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dataset_name",
+            "required": true,
+            "schema": {
+              "title": "Dataset Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DatasetBranchCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Create Dataset Branch",
+        "tags": [
+          "ChatData Logical Dataset（Admin）"
         ]
       }
     },
