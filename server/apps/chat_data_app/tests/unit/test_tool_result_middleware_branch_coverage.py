@@ -2,7 +2,7 @@
 
 缺口集中在三类：
 1. 纯工具函数（`_clip_text_to_chars` / `_tool_message_text` / `_read_tool_recovery` /
-   `_request_tool_args` / `_required_state_value` / int 兜底 / `_replace_tool_message`）。
+   `_request_tool_args` / `_required_state_field` / int 兜底 / `_replace_tool_message`）。
 2. middleware 入口的非 ToolMessage 与 error 状态短路。
 3. 查询失败态与超限卸载出口。
 """
@@ -108,10 +108,10 @@ def test_request_tool_args_ignores_unusable_tool_call():
     assert tool_result._request_tool_args(_request(tool_call={"args": "not-a-dict"})) == {}
 
 
-def test_required_state_value_rejects_blank_fields():
-    assert tool_result._required_state_value(_request(), "user_id") == "user_a"
+def test_required_state_field_rejects_blank_fields():
+    assert tool_result._required_state_field({"user_id": "user_a"}, "user_id") == "user_a"
     with pytest.raises(ValueError, match="缺少工具结果归属字段: user_id"):
-        tool_result._required_state_value(_request(user_id="   "), "user_id")
+        tool_result._required_state_field({"user_id": "   "}, "user_id")
 
 
 def test_replace_tool_message_without_updates_returns_same_instance():
@@ -127,7 +127,29 @@ def test_replace_tool_message_without_updates_returns_same_instance():
 @pytest.mark.asyncio
 async def test_write_private_tool_result_requires_workspace_root():
     with pytest.raises(ValueError, match="缺少会话工作区"):
-        await tool_result._write_private_tool_result(content="结果", suffix=".txt", request=_request())
+        await tool_result._write_private_tool_result(content="结果", suffix=".txt", state=_request().state)
+
+
+@pytest.mark.asyncio
+async def test_externalize_tool_text_reuses_offload_envelope(monkeypatch, tmp_path):
+    """非工具结果的超长文本复用同一条落盘/信封通路（子智能体报告走这里）。"""
+    request, _paths = _workspace_request(monkeypatch, tmp_path)
+    text = "报告内容" * 2000
+
+    envelope, recovery = await tool_result.externalize_tool_text(
+        text,
+        source_tool="task",
+        state=request.state,
+        suffix=".md",
+        preview_chars=100,
+    )
+
+    assert envelope.startswith("[tool_result_offloaded]")
+    assert "source_tool=task" in envelope
+    assert f"result_size_chars={len(text)}" in envelope
+    assert recovery["source_tool"] == "task"
+    assert recovery["result_path"].endswith(".md")
+    assert recovery["result_size_chars"] == len(text)
 
 
 # ---------------------------------------------------------------------------
