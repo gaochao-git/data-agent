@@ -9,6 +9,7 @@ import { computed, nextTick, ref } from 'vue'
 import { Close } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import DataSourceManager from './DataSourceManager.vue'
+import DatasetAdminPanel from './DatasetAdminPanel.vue'
 import GlobalEnumAdminPanel from './GlobalEnumAdminPanel.vue'
 import OntologyAdminPanel from './ontology/OntologyAdminPanel.vue'
 import SemanticModelAdminPanel from './SemanticModelAdminPanel.vue'
@@ -22,6 +23,7 @@ import type { DataSource } from '../types'
 
 type AdminNavKey =
   | 'datasource'
+  | 'dataset'
   | 'semantic'
   | 'enum'
   | 'ontology'
@@ -46,6 +48,7 @@ const NAV_GROUPS: Array<{ label: string; items: AdminNavItem[] }> = [
     label: '数据资产',
     items: [
       { key: 'datasource', label: '数据源管理', icon: 'fa-database' },
+      { key: 'dataset', label: '数据集', icon: 'fa-layer-group' },
       { key: 'semantic', label: '语义模型管理', icon: 'fa-sitemap' },
       { key: 'enum', label: '枚举值', icon: 'fa-list-check' },
       { key: 'ontology', label: '本体', icon: 'fa-cubes' },
@@ -198,6 +201,7 @@ const switchNav = async (item: AdminNavItem) => {
           class="h-full"
           @datasources-updated="handleDatasourcesUpdated"
         />
+        <DatasetAdminPanel v-show="activeNav === 'dataset'" class="h-full" />
         <SemanticModelAdminPanel
           v-show="activeNav === 'semantic'"
           class="h-full"

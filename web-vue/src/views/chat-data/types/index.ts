@@ -1276,6 +1276,7 @@ export interface OntologyObjectTypeItem {
   successor_object_type_name: string
   mappings?: OntologyMappingItem[]
   mappings_count?: number
+  source_binding?: OntologySourceBinding | null
   properties?: OntologyPropertyItem[]
   create_time?: string
   update_time?: string
@@ -1300,4 +1301,72 @@ export interface OntologyRelationTypeItem {
   create_time?: string
   update_time?: string
   update_by_name?: string
+}
+
+// ============ Logical Dataset ============
+
+export interface DatasetBindingItem {
+  id?: number
+  datasource_group_id: string
+  member_datasource_id: string
+  physical_table: string
+  status?: string
+}
+
+export interface DatasetColumnItem {
+  name: string
+  display_name?: string
+  data_type?: string
+  physical_column?: string
+}
+
+export interface DatasetVersionItem {
+  version_id: string
+  version_no: number
+  transaction_id: string
+  columns: DatasetColumnItem[]
+  row_count: number
+  status: string
+  create_time?: string
+}
+
+export interface DatasetBranchItem {
+  branch_name: string
+  base_version_id?: number | null
+  is_default: boolean
+  status: string
+}
+
+export interface LogicalDatasetItem {
+  id: number
+  dataset_name: string
+  display_name: string
+  description: string
+  primary_key: string[]
+  columns: DatasetColumnItem[]
+  current_version_id?: number | null
+  status: 'draft' | 'experimental' | 'certified'
+  binding_count?: number
+  bindings?: DatasetBindingItem[]
+  branches?: DatasetBranchItem[]
+  versions?: DatasetVersionItem[]
+  create_time?: string
+  update_time?: string
+}
+
+export interface LogicalDatasetUpsertPayload {
+  display_name?: string
+  description?: string
+  primary_key: string[]
+  columns: DatasetColumnItem[]
+  bindings: DatasetBindingItem[]
+  status?: 'draft' | 'experimental' | 'certified'
+}
+
+export interface OntologySourceBinding {
+  dataset_id: number
+  dataset_name?: string
+  binding_count?: number
+  member_datasource_ids?: string[]
+  column_mappings: Record<string, string>
 }

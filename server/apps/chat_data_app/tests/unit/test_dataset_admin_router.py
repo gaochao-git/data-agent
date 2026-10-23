@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from apps.chat_data_app.routers import dataset_admin
-from apps.chat_data_app.schema import DatasetBranchCreateRequest, DatasetUpsertRequest
+from apps.chat_data_app.schema import DatasetBootstrapRequest, DatasetBranchCreateRequest, DatasetUpsertRequest
 from apps.chat_data_app.services.dataset.dataset_service import (
     DatasetInvalidError,
     DatasetNotFoundError,
@@ -20,6 +20,7 @@ from apps.chat_data_app.services.dataset.dataset_service import (
 class _FakeService:
     def __init__(self):
         self.list_datasets_async = AsyncMock(return_value=[{"dataset_name": "shipments"}])
+        self.bootstrap_from_datasource_async = AsyncMock(return_value=[{"dataset_name": "shipments"}])
         self.get_dataset_async = AsyncMock(return_value={"dataset_name": "shipments"})
         self.upsert_dataset_async = AsyncMock(return_value={"dataset_name": "shipments"})
         self.delete_dataset_async = AsyncMock()
@@ -86,3 +87,39 @@ def test_dataset_admin_error_mapping(fake_service, error, code):
     payload = json.loads(result.body)
     assert payload["status"] == "error"
     assert payload["code"] == code
+
+
+def test_dataset_admin_get_and_mutation_error_branches(fake_service):
+    fake_service.get_dataset_async.side_effect = DatasetNotFoundError("missing")
+    assert json.loads(asyncio.run(dataset_admin.get_dataset("missing", _request())).body)["code"] == 40489
+    fake_service.upsert_dataset_async.side_effect = DatasetInvalidError("bad")
+    assert json.loads(asyncio.run(dataset_admin.upsert_dataset("x", _payload(), _request())).body)["code"] == 40076
+    fake_service.upsert_dataset_async.side_effect = RuntimeError("boom")
+    assert json.loads(asyncio.run(dataset_admin.upsert_dataset("x", _payload(), _request())).body)["code"] == 50103
+    fake_service.delete_dataset_async.side_effect = DatasetNotFoundError("missing")
+    assert json.loads(asyncio.run(dataset_admin.delete_dataset("missing", _request())).body)["code"] == 40489
+    fake_service.create_branch_async.side_effect = DatasetNotFoundError("missing")
+    assert (
+        json.loads(
+            asyncio.run(
+                dataset_admin.create_dataset_branch("missing", DatasetBranchCreateRequest(branch_name="a"), _request())
+            ).body
+        )["code"]
+        == 40489
+    )
+
+
+def test_dataset_admin_already_exists_mapping(fake_service):
+    from apps.chat_data_app.services.dataset.dataset_service import DatasetAlreadyExistsError
+
+    fake_service.list_datasets_async.side_effect = DatasetAlreadyExistsError("duplicate")
+    assert json.loads(asyncio.run(dataset_admin.list_datasets(_request())).body)["code"] == 40077
+
+
+def test_dataset_admin_bootstrap(fake_service):
+    result = asyncio.run(
+        dataset_admin.bootstrap_datasets(
+            DatasetBootstrapRequest(datasource_group_id="g1", table_names=["shipments"]), _request()
+        )
+    )
+    assert json.loads(result.body)["data"]["datasets"][0]["dataset_name"] == "shipments"

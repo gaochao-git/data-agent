@@ -9,7 +9,7 @@ from utils.error_codes import ErrorCode
 from utils.logger import get_logger
 from utils.response import business_response
 
-from ..schema import DatasetBranchCreateRequest, DatasetUpsertRequest
+from ..schema import DatasetBootstrapRequest, DatasetBranchCreateRequest, DatasetUpsertRequest
 from ..services.dataset.dataset_service import (
     DatasetAlreadyExistsError,
     DatasetInvalidError,
@@ -84,6 +84,21 @@ async def delete_dataset(dataset_name: str, request: Request) -> JSONResponse:
         return business_response(msg="删除成功")
     except Exception as error:
         return _error_response(error, "删除 Dataset 失败")
+
+
+@router.post("/admin/meta/datasets/bootstrap")
+async def bootstrap_datasets(body: DatasetBootstrapRequest, request: Request) -> JSONResponse:
+    user = _get_current_user(request)
+    try:
+        data = await logical_dataset_service.bootstrap_from_datasource_async(
+            body.datasource_group_id,
+            table_names=body.table_names,
+            operator=str(getattr(user, "user_id", "") or ""),
+            operator_name=str(getattr(user, "username", "") or ""),
+        )
+        return business_response(data={"datasets": data}, msg="注册完成")
+    except Exception as error:
+        return _error_response(error, "注册 Dataset 失败")
 
 
 @router.post("/admin/meta/datasets/{dataset_name}/branches")

@@ -21,6 +21,7 @@ import ChatDataAdminManager from '../ChatDataAdminManager.vue'
 // 子面板桩：暴露 ensureLoaded/openGroupModal 供容器懒加载调用，根节点带 data-panel 便于断言
 const panelMocks = vi.hoisted(() => ({
   datasource: {},
+  dataset: { ensureLoaded: vi.fn() },
   semantic: {},
   enum: { ensureLoaded: vi.fn() },
   ontology: { ensureLoaded: vi.fn() },
@@ -48,6 +49,7 @@ const mountManager = () =>
         'el-dialog': { template: '<div><slot name="header" /><slot /></div>' },
         'el-button': { template: '<button type="button" @click="$emit(\'click\')"><slot /></button>' },
         DataSourceManager: panelStub('DataSourceManager', 'datasource'),
+        DatasetAdminPanel: panelStub('DatasetAdminPanel', 'dataset'),
         SemanticModelAdminPanel: panelStub('SemanticModelAdminPanel', 'semantic'),
         GlobalEnumAdminPanel: panelStub('GlobalEnumAdminPanel', 'enum'),
         OntologyAdminPanel: panelStub('OntologyAdminPanel', 'ontology'),

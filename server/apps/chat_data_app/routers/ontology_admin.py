@@ -7,7 +7,7 @@ service 层执行，本路由只做 HTTP 入参、权限入口、统一响应与
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
 from utils.error_codes import ErrorCode
@@ -26,6 +26,7 @@ from ..schema import (
     OntologyObjectTypeUpsertRequest,
     OntologyRelationTypeStatusRequest,
     OntologyRelationTypeUpsertRequest,
+    OntologySourceBindingRequest,
     OntologyUpsertRequest,
 )
 from ..services.ontology import (
@@ -137,6 +138,26 @@ async def list_ontology_object_types(
         return _error_response(e, "获取本体对象类型列表失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
 
 
+@router.put("/admin/meta/ontology/object-types/{object_type_name}/source-binding")
+async def set_ontology_object_source_binding(
+    object_type_name: str, payload: OntologySourceBindingRequest, request: Request
+) -> JSONResponse:
+    """绑定对象类型到 Logical Dataset（本体取数不再依赖语义模型）。"""
+    try:
+        current_user = _get_current_user(request)
+        data = await ontology_service.set_source_binding_async(
+            object_type_name,
+            payload.model_dump(),
+            operator=str(current_user.user_id or ""),
+            operator_name=str(current_user.username or ""),
+        )
+        return business_response(data=data, msg="保存成功")
+    except HTTPException:
+        raise
+    except Exception as e:
+        return _error_response(e, "保存对象数据源绑定失败", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
+
+
 @router.get("/admin/meta/ontology/object-types/{object_type_name}")
 async def get_ontology_object_type(object_type_name: str, request: Request) -> JSONResponse:
     """本体对象类型详情（含属性集与绑定）。"""
@@ -164,6 +185,7 @@ async def list_ontology_objects(
     limit: int = 20,
     offset: int = 0,
     semantic_config_id: str | None = None,
+    member_datasource_ids: list[str] = Query(default=[]),
 ) -> JSONResponse:
     """对象实例分页列表（按标题键/主键搜索；只读投影）。"""
     try:
@@ -174,6 +196,7 @@ async def list_ontology_objects(
             limit=max(1, min(limit, 100)),
             offset=max(0, offset),
             semantic_config_id=semantic_config_id,
+            member_datasource_ids=member_datasource_ids,
             user_id=str(current_user.user_id or ""),
             username=str(current_user.username or ""),
         )
@@ -208,6 +231,7 @@ async def search_ontology_objects(
             limit=payload.limit,
             offset=payload.offset,
             semantic_config_id=payload.semantic_config_id,
+            member_datasource_ids=payload.member_datasource_ids,
             user_id=str(current_user.user_id or ""),
             username=str(current_user.username or ""),
         )
@@ -231,14 +255,18 @@ async def read_ontology_object(
     object_key: str,
     request: Request,
     semantic_config_id: str | None = None,
+    member_datasource_ids: list[str] = Query(default=[]),
+    member_datasource_id: str | None = Query(default=None),
 ) -> JSONResponse:
     """按对象主键读取一个对象实例（数据库只读投影，不落对象存储）。"""
     try:
         current_user = _get_current_user(request)
+        selected_members = member_datasource_ids or ([member_datasource_id] if member_datasource_id else [])
         data = await read_object_projection(
             object_type_name,
             object_key,
             semantic_config_id=semantic_config_id,
+            member_datasource_ids=selected_members,
             user_id=str(current_user.user_id or ""),
             username=str(current_user.username or ""),
         )

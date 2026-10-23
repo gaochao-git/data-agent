@@ -131,12 +131,6 @@ def test_list_get_branch_and_delete(dataset_service):
 
 
 def test_validation_errors(dataset_service):
-    with pytest.raises(DatasetInvalidError, match="primary_key"):
-        asyncio.run(
-            dataset_service.upsert_dataset_async(
-                "shipments", _payload(primary_key=[]), operator="u1", operator_name="测试用户"
-            )
-        )
     with pytest.raises(DatasetInvalidError, match="引用"):
         asyncio.run(
             dataset_service.upsert_dataset_async(
@@ -171,3 +165,105 @@ def test_validation_errors(dataset_service):
                 "shipments", _payload(columns="bad"), operator="u1", operator_name="测试用户"
             )
         )
+
+
+def test_service_empty_names_and_missing_dataset(dataset_service):
+    with pytest.raises(DatasetInvalidError, match="dataset_name"):
+        asyncio.run(dataset_service.get_dataset_async(""))
+    with pytest.raises(DatasetInvalidError, match="dataset_name"):
+        asyncio.run(dataset_service.upsert_dataset_async("", _payload(), operator="u1", operator_name="测试用户"))
+    with pytest.raises(DatasetInvalidError, match="dataset_name"):
+        asyncio.run(
+            dataset_service.create_branch_async(
+                "", branch_name="a", base_version_id=None, operator="u1", operator_name="测试用户"
+            )
+        )
+    with pytest.raises(DatasetNotFoundError):
+        asyncio.run(
+            dataset_service.create_branch_async(
+                "missing", branch_name="a", base_version_id=None, operator="u1", operator_name="测试用户"
+            )
+        )
+    with pytest.raises(DatasetNotFoundError):
+        asyncio.run(dataset_service.delete_dataset_async("missing"))
+
+
+def test_upsert_with_previous_version_records_lineage(dataset_service):
+    first = asyncio.run(
+        dataset_service.upsert_dataset_async("shipments", _payload(), operator="u1", operator_name="测试用户")
+    )
+    second = asyncio.run(
+        dataset_service.upsert_dataset_async(
+            "shipments",
+            _payload(previous_version_id=first["versions"][0]["version_id"]),
+            operator="u1",
+            operator_name="测试用户",
+        )
+    )
+    assert second["versions"][0]["version_no"] == 2
+
+
+def test_invalid_bindings_type(dataset_service):
+    with pytest.raises(DatasetInvalidError, match="bindings"):
+        asyncio.run(
+            dataset_service.upsert_dataset_async(
+                "shipments", _payload(bindings="bad"), operator="u1", operator_name="测试用户"
+            )
+        )
+
+
+def test_dataset_dao_helpers_cover_invalid_json():
+    from apps.chat_data_app.daos.logical_dataset_dao import _format_time, _json_text, _parse_json
+
+    assert _json_text(object(), {"fallback": True}) == '{"fallback": true}'
+    assert _parse_json("not-json", list) == []
+    assert _parse_json(["x"], list) == ["x"]
+    assert _format_time(None) == ""
+
+
+def test_bootstrap_from_datasource_registers_dataset_and_bindings(dataset_service, monkeypatch):
+    class _FakeManager:
+        async def get_all_datasources_async(self, include_tables=True):
+            return [
+                {
+                    "group_id": "g1",
+                    "member_datasource_ids": ["ORG_CODE1", "ORG_CODE2"],
+                    "ds_tables": [
+                        {
+                            "table_name": "shipments",
+                            "description": "发货单",
+                            "business_desc": "发货单",
+                            "primary_keys": ["shipment_id"],
+                            "columns": [
+                                {"name": "shipment_id", "type": "string", "primary_key": True},
+                                {"name": "carrier", "type": "string"},
+                            ],
+                        }
+                    ],
+                }
+            ]
+
+    monkeypatch.setattr(service_module, "get_datasource_manager", lambda: _FakeManager())
+    result = asyncio.run(
+        dataset_service.bootstrap_from_datasource_async(
+            "g1", table_names=["shipments"], operator="u1", operator_name="测试用户"
+        )
+    )
+    assert len(result) == 1
+    assert result[0]["dataset_name"] == "shipments"
+    assert result[0]["primary_key"] == ["shipment_id"]
+    assert [item["member_datasource_id"] for item in result[0]["bindings"]] == ["ORG_CODE1", "ORG_CODE2"]
+
+
+def test_bootstrap_from_datasource_rejects_empty_group_and_tables(dataset_service, monkeypatch):
+    class _EmptyManager:
+        async def get_all_datasources_async(self, include_tables=True):
+            return [{"group_id": "g1", "member_datasource_ids": [], "ds_tables": []}]
+
+    monkeypatch.setattr(service_module, "get_datasource_manager", lambda: _EmptyManager())
+    with pytest.raises(DatasetInvalidError, match="datasource_group_id"):
+        asyncio.run(dataset_service.bootstrap_from_datasource_async("", operator="u1", operator_name="测试用户"))
+    with pytest.raises(DatasetInvalidError, match="成员"):
+        asyncio.run(dataset_service.bootstrap_from_datasource_async("g1", operator="u1", operator_name="测试用户"))
+    with pytest.raises(DatasetNotFoundError, match="数据源组"):
+        asyncio.run(dataset_service.bootstrap_from_datasource_async("missing", operator="u1", operator_name="测试用户"))

@@ -602,20 +602,103 @@ def build_related_key_query(
     }
 
 
+def _qualified_object_key(member_id: str, object_type: str, local_key: str) -> str:
+    """对象身份：member + object_type + local_key；不同机构同本地键不是同一对象。"""
+    member = _text(member_id)
+    return f"{member}:{object_type}:{local_key}" if member else f"{object_type}:{local_key}"
+
+
+def _parse_object_key(object_key: str, object_type: str) -> tuple[str, str]:
+    """兼容查询结果回传的 [member:]object_type:local_key，返回(member, local_key)。"""
+    parts = str(object_key or "").split(":")
+    if len(parts) >= 3 and parts[1] == object_type:
+        return parts[0], ":".join(parts[2:])
+    if len(parts) >= 2 and parts[0] == object_type:
+        return "", ":".join(parts[1:])
+    return "", str(object_key or "")
+
+
 def _assemble_object(
     detail: dict[str, Any],
     query: dict[str, Any],
     row: dict[str, Any],
     links: dict[str, list[dict[str, Any]]],
+    member_scope: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     properties = {name: row.get(name) for name in query["properties"]}
     object_type = query["object_type"]
+    scope = member_scope or {}
     return {
         "object_type": object_type,
-        "object_key": f"{object_type}:{query['object_key']}",
+        "object_key": _qualified_object_key(scope.get("member_datasource_id", ""), object_type, query["object_key"]),
         "properties": properties,
         "links": links,
+        **scope,
     }
+
+
+async def _dataset_mapping_context(
+    detail: dict[str, Any],
+    member_datasource_ids: list[str] | None,
+    *,
+    user_id: str,
+    username: str,
+) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]], str]:
+    """Dataset source binding → 单一 member 的 physical table/column 查询上下文。"""
+    from apps.chat_data_app.services.dataset.dataset_service import logical_dataset_service
+
+    binding = detail.get("source_binding")
+    if not isinstance(binding, dict):
+        raise ObjectProjectionError("对象类型未配置 Dataset source binding")
+    dataset = await logical_dataset_service.get_dataset_async_by_id_async(int(binding.get("dataset_id") or 0))
+    if dataset is None:
+        raise ObjectProjectionError(f"Dataset 不存在: {binding.get('dataset_id')}")
+    bindings = [item for item in dataset.get("bindings") or [] if isinstance(item, dict)]
+    requested = [str(item).strip() for item in member_datasource_ids or [] if str(item).strip()]
+    if requested:
+        bindings = [item for item in bindings if str(item.get("member_datasource_id") or "") in requested]
+    if len(bindings) > 1:
+        raise ObjectProjectionError("Dataset 有多个 member，请指定 member_datasource_ids")
+    if not bindings:
+        raise ObjectProjectionError("Dataset 没有可用的 member binding")
+    selected = bindings[0]
+    group_id = _text(selected.get("datasource_group_id"))
+    member_id = _text(selected.get("member_datasource_id"))
+    if not group_id or not member_id:
+        raise ObjectProjectionError("Dataset binding 缺少 datasource_group_id/member_datasource_id")
+    manager = get_datasource_manager()
+    targets = await manager.list_authorized_execution_targets_async(
+        group_id, user_id=user_id or None, username=username or None
+    )
+    selected_targets = [
+        target for target in targets if str(target.get("member_datasource_id") or target.get("id") or "") == member_id
+    ]
+    if not selected_targets:
+        raise ObjectProjectionError(f"当前用户无权访问 Dataset member: {member_id}")
+    table = _text(selected.get("physical_table"))
+    columns = [item for item in dataset.get("columns") or [] if isinstance(item, dict)]
+    column_by_name = {_text(item.get("name")): item for item in columns}
+    raw_mappings = binding.get("column_mappings")
+    column_mappings: dict[str, Any] = raw_mappings if isinstance(raw_mappings, dict) else {}
+    dimensions = []
+    mapping_columns: dict[str, str] = {}
+    for property_name, logical_name in column_mappings.items():
+        column = column_by_name.get(_text(logical_name))
+        if column is None:
+            continue
+        physical = _text(column.get("physical_column")) or _text(column.get("name"))
+        if not physical:
+            continue
+        dimensions.append({"name": logical_name, "table": table, "column": physical})
+        mapping_columns[str(property_name)] = str(logical_name)
+    if not dimensions:
+        raise ObjectProjectionError("Dataset source binding 没有有效列映射")
+    config = {"dimensions": dimensions}
+    query_detail = {
+        **detail,
+        "mappings": [{"semantic_config_id": "dataset", "column_mappings": mapping_columns}],
+    }
+    return config, query_detail, selected_targets, group_id
 
 
 async def _mapping_context(
@@ -641,6 +724,23 @@ async def _mapping_context(
     if not targets:
         raise ObjectProjectionError("当前用户在该数据源组下没有可执行数据源")
     return config, group_id, _select_member_targets(targets, member_datasource_ids)
+
+
+async def _projection_context(
+    detail: dict[str, Any],
+    *,
+    semantic_config_id: str | None,
+    member_datasource_ids: list[str] | None,
+    user_id: str,
+    username: str,
+) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]], str]:
+    """返回 (查询详情, 配置, execution targets, group_id)；Dataset 优先，旧映射回退。"""
+    if not isinstance(detail.get("source_binding"), dict):
+        raise ObjectProjectionError("对象类型未配置 Dataset 数据源绑定")
+    config, query_detail, targets, group_id = await _dataset_mapping_context(
+        detail, member_datasource_ids, user_id=user_id, username=username
+    )
+    return query_detail, config, targets, group_id
 
 
 async def _query_rows(
@@ -747,10 +847,11 @@ async def _relation_link_entries(
     row: dict[str, Any],
     *,
     current_id: int,
+    member_id: str,
     user_id: str,
     username: str,
 ) -> list[dict[str, Any]] | None:
-    """单条关系类型的一跳 link；不适用/失败返回 None。"""
+    """单条关系类型的一跳 link；同 member 内查询，不跨机构。"""
     relation_name = _text(relation.get("relation_type_name"))
     status = _text(relation.get("status"))
     side = _relation_side(relation, current_id)
@@ -759,36 +860,47 @@ async def _relation_link_entries(
     current_value = row.get(side["current_property"])
     if current_value is None or _text(current_value) == "":
         return None
-    related_detail = await ontology_service.get_object_type_async(side["related_object_type"])
-    if related_detail is None:
-        return None
     try:
-        mapping = _mapping_for_property(related_detail, side["related_filter_property"])
-        config, group_id, targets = await _mapping_context(mapping, user_id=user_id, username=username)
-        query = build_related_key_query(
-            related_detail,
-            config,
-            filter_property=side["related_filter_property"],
-            filter_value=str(current_value),
-        )
-        rows = await _query_rows(
-            targets,
-            query["sql"],
-            group_id=group_id,
+        result = await search_object_projection(
+            side["related_object_type"],
+            member_datasource_ids=[member_id] if member_id else None,
+            filters=[
+                {
+                    "property": side["related_filter_property"],
+                    "operator": "eq",
+                    "value": str(current_value),
+                }
+            ],
+            limit=_MAX_LINKS_PER_RELATION,
             user_id=user_id,
             username=username,
-            limit=_MAX_LINKS_PER_RELATION,
         )
     except ObjectProjectionError as err:
         logger.warning("关系一跳查询跳过: relation=%s error=%s", relation_name, err)
         return None
-    return _link_entries(relation_name, side, rows)
+    entries: list[dict[str, Any]] = []
+    for obj in result.get("objects") or []:
+        key = _text(obj.get("object_key"))
+        if not key:
+            continue
+        entry = {
+            "relation": relation_name,
+            "direction": side["direction"],
+            "related_object_type": side["related_object_type"],
+            "related_object_key": key,
+        }
+        title = _text((obj.get("properties") or {}).get(result.get("title_property") or ""))
+        if title:
+            entry["related_title"] = title
+        entries.append(entry)
+    return entries
 
 
 async def _read_links(
     detail: dict[str, Any],
     row: dict[str, Any],
     *,
+    member_id: str,
     user_id: str,
     username: str,
 ) -> dict[str, list[dict[str, Any]]]:
@@ -799,7 +911,14 @@ async def _read_links(
     # 各关系一跳查询相互独立；并发执行避免每点一行都串行等 N 次数据源。
     results = await asyncio.gather(
         *[
-            _relation_link_entries(relation, row, current_id=current_id, user_id=user_id, username=username)
+            _relation_link_entries(
+                relation,
+                row,
+                current_id=current_id,
+                member_id=member_id,
+                user_id=user_id,
+                username=username,
+            )
             for relation in candidates
         ],
         return_exceptions=True,
@@ -838,14 +957,19 @@ async def read_object_projection(
     detail = await ontology_service.get_object_type_async(object_type_name)
     if detail is None:
         raise ObjectProjectionError(f"本体对象类型不存在: {object_type_name}")
-    mapping = _mapping_for_projection(detail, semantic_config_id)
-    config, group_id, targets = await _mapping_context(
-        mapping, user_id=user_id, username=username, member_datasource_ids=member_datasource_ids
+    key_member, local_key = _parse_object_key(object_key, object_type_name)
+    requested_members = member_datasource_ids or ([key_member] if key_member else None)
+    query_detail, config, targets, group_id = await _projection_context(
+        detail,
+        semantic_config_id=semantic_config_id,
+        member_datasource_ids=requested_members,
+        user_id=user_id,
+        username=username,
     )
     query = build_object_query(
-        detail,
+        query_detail,
         config,
-        object_key=object_key,
+        object_key=local_key,
         semantic_config_id=semantic_config_id,
     )
     rows = await _query_rows(
@@ -857,17 +981,23 @@ async def read_object_projection(
         limit=1,
     )
     if not rows:
-        raise ObjectProjectionError(f"对象不存在: {object_type_name}:{object_key}")
-    row = await _apply_object_edits(detail, object_key, rows[0])
-    links = await _read_links(detail, row, user_id=user_id, username=username)
-    return _assemble_object(detail, query, row, links)
+        raise ObjectProjectionError(f"对象不存在: {object_type_name}:{local_key}")
+    row = await _apply_object_edits(detail, local_key, rows[0])
+    scope = _member_scope(targets)
+    links = await _read_links(detail, row, member_id=scope["member_datasource_id"], user_id=user_id, username=username)
+    return _assemble_object(detail, query, row, links, scope)
 
 
-def _assemble_list_item(query: dict[str, Any], row: dict[str, Any]) -> dict[str, Any]:
+def _assemble_list_item(
+    query: dict[str, Any], row: dict[str, Any], member_scope: dict[str, str] | None = None
+) -> dict[str, Any]:
+    scope = member_scope or {}
+    local_key = _text(row.get(query["identifier_property"]))
     return {
         "object_type": query["object_type"],
-        "object_key": f"{query['object_type']}:{_text(row.get(query['identifier_property']))}",
+        "object_key": _qualified_object_key(scope.get("member_datasource_id", ""), query["object_type"], local_key),
         "properties": {name: row.get(name) for name in query["properties"]},
+        **scope,
     }
 
 
@@ -888,12 +1018,15 @@ async def search_object_projection(
     detail = await ontology_service.get_object_type_async(object_type_name)
     if detail is None:
         raise ObjectProjectionError(f"本体对象类型不存在: {object_type_name}")
-    mapping = _mapping_for_projection(detail, semantic_config_id)
-    config, group_id, targets = await _mapping_context(
-        mapping, user_id=user_id, username=username, member_datasource_ids=member_datasource_ids
+    query_detail, config, targets, group_id = await _projection_context(
+        detail,
+        semantic_config_id=semantic_config_id,
+        member_datasource_ids=member_datasource_ids,
+        user_id=user_id,
+        username=username,
     )
     query = build_object_search_query(
-        detail,
+        query_detail,
         config,
         keyword=keyword,
         filters=filters or [],
@@ -922,8 +1055,9 @@ async def search_object_projection(
     )
     execution_time_ms = int((time.perf_counter() - started_at) * 1000)
     has_more = len(rows) > query["limit"]
+    scope = _member_scope(targets)
     return {
-        "objects": [_assemble_list_item(query, row) for row in rows[: query["limit"]]],
+        "objects": [_assemble_list_item(query, row, scope) for row in rows[: query["limit"]]],
         "has_more": has_more,
         "limit": query["limit"],
         "offset": query["offset"],
@@ -953,12 +1087,15 @@ async def aggregate_object_projection(
     detail = await ontology_service.get_object_type_async(object_type_name)
     if detail is None:
         raise ObjectProjectionError(f"本体对象类型不存在: {object_type_name}")
-    mapping = _mapping_for_projection(detail, semantic_config_id)
-    config, group_id, targets = await _mapping_context(
-        mapping, user_id=user_id, username=username, member_datasource_ids=member_datasource_ids
+    query_detail, config, targets, group_id = await _projection_context(
+        detail,
+        semantic_config_id=semantic_config_id,
+        member_datasource_ids=member_datasource_ids,
+        user_id=user_id,
+        username=username,
     )
     query = build_object_aggregate_query(
-        detail,
+        query_detail,
         config,
         group_by=group_by or [],
         metrics=metrics or [],
@@ -1011,12 +1148,15 @@ async def list_object_projection(
     detail = await ontology_service.get_object_type_async(object_type_name)
     if detail is None:
         raise ObjectProjectionError(f"本体对象类型不存在: {object_type_name}")
-    mapping = _mapping_for_projection(detail, semantic_config_id)
-    config, group_id, targets = await _mapping_context(
-        mapping, user_id=user_id, username=username, member_datasource_ids=member_datasource_ids
+    query_detail, config, targets, group_id = await _projection_context(
+        detail,
+        semantic_config_id=semantic_config_id,
+        member_datasource_ids=member_datasource_ids,
+        user_id=user_id,
+        username=username,
     )
     query = build_object_list_query(
-        detail,
+        query_detail,
         config,
         keyword=keyword,
         limit=limit,
@@ -1033,7 +1173,7 @@ async def list_object_projection(
     )
     has_more = len(rows) > query["limit"]
     rows = rows[: query["limit"]]
-    objects = [_assemble_list_item(query, row) for row in rows]
+    objects = [_assemble_list_item(query, row, _member_scope(targets)) for row in rows]
     return {
         "objects": objects,
         "has_more": has_more,

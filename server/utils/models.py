@@ -1575,3 +1575,28 @@ class ChatDataDatasetLineageEdge(Base):
         Index("idx_dataset_lineage_from", "from_version_id"),
         Index("idx_dataset_lineage_to", "to_version_id"),
     )
+
+
+class ChatDataOntologySourceBinding(Base):
+    """对象类型的数据源绑定：指向 Logical Dataset，不引用语义模型。"""
+
+    __tablename__ = "chat_data_ontology_source_binding"
+
+    id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
+    object_type_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    dataset_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    column_mappings_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}", server_default="{}")
+    delete_flag: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
+    create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
+    update_time: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+    create_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+
+    __table_args__ = (
+        UniqueConstraint("object_type_id", "delete_flag", name="uniq_source_binding_object"),
+        Index("idx_source_binding_dataset", "dataset_id", "delete_flag"),
+    )

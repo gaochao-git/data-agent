@@ -43,6 +43,9 @@ import type {
   OntologyItem,
   OntologyMappingItem,
   OntologyObjectInstance,
+  LogicalDatasetItem,
+  LogicalDatasetUpsertPayload,
+  OntologySourceBinding,
   OntologyObjectListItem,
   OntologyObjectFilter,
   OntologyObjectListResult,
@@ -2193,6 +2196,7 @@ export function searchAdminOntologyObjects(
     sort?: OntologyObjectSort[]
     limit?: number
     offset?: number
+    member_datasource_ids?: string[]
     semantic_config_id?: string
   } = {}
 ): Promise<ApiResponse<OntologyObjectSearchResult>> {
@@ -2282,12 +2286,17 @@ export function executeAdminOntologyActionType(
 export function readAdminOntologyObject(
   objectTypeName: string,
   objectKey: string,
+  memberDatasourceIds: string[] = [],
   semanticConfigId?: string
 ): Promise<ApiResponse<OntologyObjectInstance>> {
   return request({
     url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/object-types/${encodeURIComponent(objectTypeName)}/objects/read`,
     method: 'get',
-    params: { object_key: objectKey, ...(semanticConfigId ? { semantic_config_id: semanticConfigId } : {}) }
+    params: {
+      object_key: objectKey,
+      ...(memberDatasourceIds[0] ? { member_datasource_id: memberDatasourceIds[0] } : {}),
+      ...(semanticConfigId ? { semantic_config_id: semanticConfigId } : {})
+    }
   })
 }
 
@@ -2411,6 +2420,52 @@ export function changeAdminOntologyRelationTypeStatus(
   return request({
     url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/relation-types/${encodeURIComponent(relationTypeName)}/status`,
     method: 'post',
+    data
+  })
+}
+
+// ============ Logical Dataset ============
+
+const ADMIN_DATASET_API_PREFIX = `${CHATDATA_API_PREFIX}/admin/meta/datasets`
+
+export function getAdminDatasets(): Promise<ApiResponse<{ datasets: LogicalDatasetItem[] }>> {
+  return request({ url: ADMIN_DATASET_API_PREFIX, method: 'get' })
+}
+
+export function getAdminDataset(datasetName: string): Promise<ApiResponse<LogicalDatasetItem>> {
+  return request({ url: `${ADMIN_DATASET_API_PREFIX}/${encodeURIComponent(datasetName)}`, method: 'get' })
+}
+
+export function upsertAdminDataset(
+  datasetName: string,
+  data: LogicalDatasetUpsertPayload
+): Promise<ApiResponse<LogicalDatasetItem>> {
+  return request({ url: `${ADMIN_DATASET_API_PREFIX}/${encodeURIComponent(datasetName)}`, method: 'put', data })
+}
+
+export function deleteAdminDataset(datasetName: string): Promise<ApiResponse<unknown>> {
+  return request({ url: `${ADMIN_DATASET_API_PREFIX}/${encodeURIComponent(datasetName)}`, method: 'delete' })
+}
+
+export function bootstrapAdminDatasets(
+  datasourceGroupId: string,
+  tableNames: string[] = []
+): Promise<ApiResponse<{ datasets: LogicalDatasetItem[] }>> {
+  return request({
+    url: `${ADMIN_DATASET_API_PREFIX}/bootstrap`,
+    method: 'post',
+    data: { datasource_group_id: datasourceGroupId, table_names: tableNames }
+  })
+}
+
+/** 后台：对象类型绑定 Logical Dataset（本体取数不再依赖语义模型） */
+export function setAdminOntologySourceBinding(
+  objectTypeName: string,
+  data: { dataset_id: number; column_mappings: Record<string, string> }
+): Promise<ApiResponse<{ dataset_id: number; column_mappings: Record<string, string> }>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/object-types/${encodeURIComponent(objectTypeName)}/source-binding`,
+    method: 'put',
     data
   })
 }

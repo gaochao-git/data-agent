@@ -510,6 +510,7 @@ class OntologyObjectSearchRequest(BaseModel):
     """通用对象实例查询：关键词 + 属性过滤 + 排序 + 分页。"""
 
     keyword: str = Field(default="", max_length=200, description="标题键/主键模糊搜索")
+    member_datasource_ids: list[str] = Field(default_factory=list, max_length=20, description="执行对象/机构范围")
     filters: list[OntologyObjectFilter] = Field(default_factory=list, max_length=10, description="属性过滤")
     sort: list[OntologyObjectSort] = Field(default_factory=list, max_length=5, description="排序")
     limit: int = Field(default=20, ge=1, le=100, description="每页数量")
@@ -1436,3 +1437,17 @@ class DatasetBranchCreateRequest(BaseModel):
 
     branch_name: str = Field(..., min_length=1, max_length=128, description="分支名")
     base_version_id: int | None = Field(default=None, description="基线版本数据库主键")
+
+
+class DatasetBootstrapRequest(BaseModel):
+    """从数据源组逻辑表批量注册 Dataset。"""
+
+    datasource_group_id: str = Field(..., min_length=1, max_length=128, description="数据源组 ID")
+    table_names: list[str] = Field(default_factory=list, max_length=500, description="只注册指定表；空=全部")
+
+
+class OntologySourceBindingRequest(BaseModel):
+    """对象类型数据源绑定请求；对象属性 → Dataset 逻辑列。"""
+
+    dataset_id: int = Field(..., gt=0, description="Logical Dataset ID")
+    column_mappings: dict[str, str] = Field(default_factory=dict, description="{对象属性API名: Dataset逻辑列名}")

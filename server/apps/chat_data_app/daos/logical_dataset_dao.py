@@ -46,12 +46,11 @@ def _format_time(value: datetime | None) -> str:
 class LogicalDatasetDao:
     """Dataset 聚合根 DAO；事务内方法接收调用方 session，避免嵌套提交。"""
 
-    async def get_by_name(
-        self, session: Any, name: str, *, include_deleted: bool = False
-    ) -> ChatDataLogicalDataset | None:
-        stmt = select(ChatDataLogicalDataset).where(ChatDataLogicalDataset.dataset_name == name)
-        if not include_deleted:
-            stmt = stmt.where(ChatDataLogicalDataset.delete_flag == 0)
+    async def get_by_name(self, session: Any, name: str) -> ChatDataLogicalDataset | None:
+        stmt = select(ChatDataLogicalDataset).where(
+            ChatDataLogicalDataset.dataset_name == name,
+            ChatDataLogicalDataset.delete_flag == 0,
+        )
         return (await session.execute(stmt)).scalars().first()
 
     async def get_by_id(self, session: Any, dataset_id: int) -> ChatDataLogicalDataset | None:
@@ -65,11 +64,7 @@ class LogicalDatasetDao:
         )
         return list((await session.execute(stmt)).scalars().all())
 
-    async def save_dataset(
-        self, session: Any, row: ChatDataLogicalDataset, values: dict[str, Any]
-    ) -> ChatDataLogicalDataset:
-        for key, value in values.items():
-            setattr(row, key, value)
+    async def save_dataset(self, session: Any, row: ChatDataLogicalDataset) -> ChatDataLogicalDataset:
         session.add(row)
         await session.flush()
         return row

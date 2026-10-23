@@ -13,6 +13,7 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
+from apps.chat_data_app.services.dataset.dataset_service import logical_dataset_service
 from utils.logger import get_logger
 
 from ...daos.dao_session import transaction_scope
@@ -157,8 +158,58 @@ class OntologyService:
         if data is None:
             return None
         data["properties"] = await self._dao.list_properties_async(int(data["id"]))
-        data["mappings"] = await self._dao.list_object_type_mappings_async(int(data["id"]))
+        data["mappings"] = []
+        binding_getter = getattr(self._dao, "get_source_binding_async", None)
+        binding = await binding_getter(int(data["id"])) if callable(binding_getter) else None
+        if binding:
+            dataset = await logical_dataset_service.get_dataset_async_by_id_async(int(binding["dataset_id"]))
+            if dataset:
+                binding["dataset_name"] = dataset.get("dataset_name") or ""
+                binding["binding_count"] = len(dataset.get("bindings") or [])
+                binding["member_datasource_ids"] = [
+                    str(item.get("member_datasource_id") or "")
+                    for item in dataset.get("bindings") or []
+                    if item.get("member_datasource_id")
+                ]
+        data["source_binding"] = binding
         return data
+
+    async def set_source_binding_async(
+        self,
+        object_type_name: str,
+        payload: dict[str, Any],
+        *,
+        operator: str = "",
+        operator_name: str = "",
+    ) -> dict[str, Any]:
+        """把对象类型绑定到 Logical Dataset；本体不再引用语义模型。"""
+        name = validator.validate_api_name(object_type_name, "对象类型API名")
+        detail = await self.get_object_type_async(name)
+        if detail is None:
+            raise OntologyNotFoundError(f"对象类型不存在: {name}")
+        dataset_id = int(payload.get("dataset_id") or 0)
+        if dataset_id <= 0:
+            raise OntologyInvalidError("dataset_id 不能为空")
+        dataset = await logical_dataset_service.get_dataset_async_by_id_async(dataset_id)
+        if dataset is None:
+            raise OntologyInvalidError(f"Dataset 不存在: {dataset_id}")
+        dataset_columns = {str(item.get("name") or "") for item in dataset.get("columns") or []}
+        property_names = {str(item.get("property_name") or "") for item in detail.get("properties") or []}
+        column_mappings = payload.get("column_mappings") or {}
+        if not isinstance(column_mappings, dict):
+            raise OntologyInvalidError("column_mappings 必须是对象")
+        for property_name, column_name in column_mappings.items():
+            if property_name not in property_names:
+                raise OntologyInvalidError(f"对象属性不存在: {property_name}")
+            if column_name not in dataset_columns:
+                raise OntologyInvalidError(f"Dataset 列不存在: {column_name}")
+        return await self._dao.upsert_source_binding_async(
+            int(detail["id"]),
+            dataset_id=dataset_id,
+            column_mappings={str(key): str(value) for key, value in column_mappings.items()},
+            operator=operator,
+            operator_name=operator_name,
+        )
 
     # ---------- 对象类型创建/编辑 ----------
 
@@ -185,8 +236,8 @@ class OntologyService:
         # 本体存在性校验（本体不绑组，挂靠只做归属导航，无组锚点校验）
         await self._resolve_object_type_ontology(meta_payload.get("ontology_id"))
         properties = validator.validate_property_items(payload.get("properties"))
-        property_names = {item["property_name"] for item in properties}
-        mappings = validator.validate_mappings(payload.get("mappings"), property_names, name)
+        # 语义模型映射已下线：对象取数只允许 Dataset source binding，旧 payload 的 mappings 一律忽略。
+        mappings: list[dict[str, Any]] = []
         existing = await self._dao.get_object_type_row_async(name, include_deleted=True)
         existing_active = existing is not None and int(existing.get("delete_flag") or 0) == 0
         if existing is not None and not existing_active:
@@ -265,21 +316,12 @@ class OntologyService:
             self._enforce_certified_freeze(
                 existing, old_properties, old_identifiers, new_identifiers, old_titles, new_titles, properties
             )
-            if not mappings:
-                raise OntologyStateInvalidError(
-                    "certified 对象类型必须保持至少一个语义模型映射，请先降级为 experimental 再变更"
-                )
         else:
             await self._enforce_relation_column_guard(
                 existing, old_properties, properties, old_identifiers, new_identifiers
             )
             if old_identifiers != new_identifiers or old_titles != new_titles:
                 self._require_destructive_confirm(payload, "主键组合或标题键变更")
-        old_mappings = await self._dao.list_object_type_mappings_async(int(existing["id"]))
-        if json.dumps(_normalize_mappings(old_mappings), ensure_ascii=False) != json.dumps(
-            _normalize_mappings(mappings), ensure_ascii=False
-        ):
-            self._require_destructive_confirm(payload, "映射变更")
 
     async def _enforce_relation_column_guard(
         self,
@@ -498,22 +540,13 @@ class OntologyService:
         identifier_names = {item["property_name"] for item in properties if item.get("is_identifier")}
         if not identifier_names:
             raise OntologyInvalidError("认证前对象类型必须至少定义一个标识属性（is_identifier）作为主键")
-        mappings = detail.get("mappings") or []
-        if not mappings:
-            raise OntologyInvalidError("认证前对象类型必须至少配置一个语义模型映射（semantic_config_id + 字段映射）")
-        for mapping in mappings:
-            config_id = _text(mapping.get("semantic_config_id"))
-            column_mappings = mapping.get("column_mappings") or {}
-            if not column_mappings:
-                raise OntologyInvalidError(
-                    f"认证前映射 {config_id} 必须填写 column_mappings（属性→模型维度），空映射无法在语义层定位实体"
-                )
-            missing = sorted(identifier_names - set(column_mappings))
-            if missing:
-                raise OntologyInvalidError(
-                    f"认证前映射 {config_id} 必须覆盖全部标识属性，缺少: {', '.join(missing)}"
-                    "（标识属性需映射到模型维度，否则认证对象类型无法唯一定位）"
-                )
+        source_binding = detail.get("source_binding")
+        if not isinstance(source_binding, dict):
+            raise OntologyInvalidError("认证前对象类型必须配置 Dataset 数据源绑定")
+        column_mappings = source_binding.get("column_mappings") or {}
+        missing = sorted(identifier_names - set(column_mappings))
+        if missing:
+            raise OntologyInvalidError(f"认证前 Dataset 绑定必须覆盖全部标识属性，缺少: {', '.join(missing)}")
 
     async def _cascade_relation_statuses(self, object_type_name: str, operator: str, operator_name: str) -> None:
         """对象类型状态变化后级联关系类型状态：仅自动降级，升级需手动确认。"""

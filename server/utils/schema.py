@@ -700,6 +700,26 @@ CREATE TABLE `chat_data_dataset_lineage_edge` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ChatData数据集版本血缘';
 """
 
+
+MYSQL_CHAT_DATA_ONTOLOGY_SOURCE_BINDING_TABLE = """
+CREATE TABLE `chat_data_ontology_source_binding` (
+  `id` bigint(20) NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `object_type_id` bigint(20) NOT NULL COMMENT '对象类型ID',
+  `dataset_id` bigint(20) NOT NULL COMMENT 'Logical Dataset ID',
+  `column_mappings_json` text NOT NULL COMMENT '对象属性到Dataset逻辑列映射JSON',
+  `delete_flag` bigint(20) NOT NULL DEFAULT '0' COMMENT '删除标识',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `create_by` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人',
+  `create_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人名称',
+  `update_by` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人',
+  `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人名称',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_source_binding_object` (`object_type_id`, `delete_flag`),
+  KEY `idx_source_binding_dataset` (`dataset_id`, `delete_flag`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ChatData对象类型数据源绑定';
+"""
+
 MYSQL_TABLES = [
     MYSQL_USER_THREADS_TABLE,
     MYSQL_CHAT_DATA_CONVERSATION_EVENT_TABLE,

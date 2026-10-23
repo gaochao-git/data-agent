@@ -419,12 +419,6 @@ const buildChildRows = (objectNode: ObjectNodeData, entry: ObjectDetailEntry): T
     property: prop,
     is_leaf: true
   }))
-  const mappingChildren: TreeRow[] = (entry.detail.mappings || []).map(mapping => ({
-    row_key: `${objectNode.row_key}:mapping:${mappingIdentityText(mapping)}`,
-    kind: 'mapping',
-    mapping,
-    is_leaf: true
-  }))
   const rows: TreeRow[] = []
   const pushGroup = (group: GroupNode['group'], label: string, children: TreeRow[]) => {
     if (children.length > 0) {
@@ -432,7 +426,6 @@ const buildChildRows = (objectNode: ObjectNodeData, entry: ObjectDetailEntry): T
     }
   }
   pushGroup('property', '属性', propertyChildren)
-  pushGroup('mapping', '映射', mappingChildren)
   if (rows.length === 0) {
     rows.push({ row_key: `${objectNode.row_key}:empty`, kind: 'empty', label: '暂无属性与映射', is_leaf: true })
   }
@@ -488,6 +481,19 @@ const retrySelectedObject = () => {
 }
 
 
+const splitPreviewObjectKey = (rawKey: string, fallbackType: string) => {
+  const parts = rawKey.split(':')
+  const first = parts[0] ?? ''
+  const second = parts[1] ?? ''
+  if (parts.length >= 3) return { member: first, type: second, key: parts.slice(2).join(':') }
+  if (parts.length >= 2 && first === fallbackType) {
+    return { member: '', type: fallbackType, key: parts.slice(1).join(':') }
+  }
+  return { member: '', type: fallbackType, key: rawKey }
+}
+
+const previewMemberIds = computed(() => selectedObject.value?.entry?.detail.source_binding?.member_datasource_ids || [])
+
 const loadObjectPreview = async () => {
   if (!objectPreviewType.value || !objectPreviewKey.value.trim()) {
     objectPreviewError.value = '请输入对象主键值'
@@ -496,7 +502,11 @@ const loadObjectPreview = async () => {
   objectPreviewLoading.value = true
   objectPreviewError.value = ''
   try {
-    const res = await readAdminOntologyObject(objectPreviewType.value, objectPreviewKey.value.trim())
+    const res = await readAdminOntologyObject(
+      objectPreviewType.value,
+      objectPreviewKey.value.trim(),
+      previewMemberIds.value.slice(0, 1)
+    )
     if (res.status === 'success') {
       objectPreviewData.value = res.data
     } else {
@@ -512,17 +522,18 @@ const loadObjectPreview = async () => {
 
 const openLinkedObjectPreview = async (rawKey: unknown) => {
   const keyText = String(rawKey || '').trim()
-  const separator = keyText.indexOf(':')
-  if (separator <= 0) return
-  const objectType = keyText.slice(0, separator)
-  const objectKey = keyText.slice(separator + 1)
+  const parsed = splitPreviewObjectKey(keyText, objectPreviewType.value)
+  if (!parsed.key) return
+  const objectType = parsed.type
+  const objectKey = parsed.key
+  const memberIds = parsed.member ? [parsed.member] : []
   linkedPreviewVisible.value = true
   linkedPreviewLoading.value = true
   linkedPreviewError.value = ''
   linkedPreviewData.value = null
   linkedPreviewKey.value = keyText
   try {
-    const res = await readAdminOntologyObject(objectType, objectKey)
+    const res = await readAdminOntologyObject(objectType, objectKey, memberIds)
     if (res.status === 'success') linkedPreviewData.value = res.data
     else linkedPreviewError.value = res.msg || '读取关联对象失败'
   } catch (err) {
@@ -1326,7 +1337,7 @@ const onRelationSaved = (objectTypeNames: string[]) => {
                 <span class="truncate font-mono text-xs text-slate-800" :title="data.action_type.action_type_name">{{ data.action_type.action_type_name }}</span>
                 <el-tag size="small" type="warning" effect="plain">{{ data.action_type.status }}</el-tag>
               </span>
-              <!-- 分组节点（属性/映射，带计数） -->
+              <!-- 属性分组节点（带计数） -->
               <span v-else-if="data.kind === 'group'" class="flex items-center gap-1.5 py-0.5">
                 <i
                   :class="[
@@ -1355,11 +1366,6 @@ const onRelationSaved = (objectTypeNames: string[]) => {
                 </span>
                 <el-tag v-if="data.is_cross_ontology" size="small" type="warning" effect="plain">跨域</el-tag>
               </span>
-              <!-- 映射节点 -->
-              <span v-else-if="data.kind === 'mapping'" class="flex items-center gap-1.5 py-0.5">
-                <i class="fa-solid fa-link text-[10px] text-teal-500"></i>
-                <span class="text-xs text-slate-700">{{ mappingLabel(data.mapping) }}</span>
-              </span>
               <!-- 占位节点 -->
               <span v-else class="text-xs text-slate-400">{{ data.label }}</span>
             </template>
@@ -1373,7 +1379,7 @@ const onRelationSaved = (objectTypeNames: string[]) => {
         <div v-if="!selectedNode" class="flex h-full items-center justify-center">
           <div class="text-center text-xs text-slate-400">
             <i class="fa-solid fa-sitemap mb-2 block text-2xl text-slate-300"></i>
-            在左侧选择对象类型、属性、关系类型、动作类型或映射查看详情
+            在左侧选择对象类型、属性、关系类型或动作类型查看详情
             <div class="mt-1 text-[11px] text-slate-300">左侧树支持右键：本体新增本体，本体的对象类型/关系类型/动作类型分组可新建</div>
           </div>
         </div>
@@ -1582,26 +1588,26 @@ const onRelationSaved = (objectTypeNames: string[]) => {
             </div>
             </template>
 
-            <!-- 映射摘要 -->
+            <!-- Dataset 数据源摘要 -->
             <div class="mb-1 mt-5 flex items-center gap-2 border-t border-slate-100 pt-4">
-              <i class="fa-solid fa-link text-[10px] text-teal-500"></i>
-              <span class="text-xs font-medium text-slate-600">数据映射</span>
-              <span class="text-xs text-slate-400">{{ (selectedObject.entry.detail.mappings || []).length }} 条</span>
+              <i class="fa-solid fa-database text-[10px] text-blue-500"></i>
+              <span class="text-xs font-medium text-slate-600">对象数据源</span>
             </div>
-            <div v-if="(selectedObject.entry.detail.mappings || []).length > 0" class="flex flex-col gap-1.5 pb-2">
-              <div
-                v-for="mapping in selectedObject.entry.detail.mappings"
-                :key="mappingIdentityText(mapping)"
-                class="rounded border border-slate-100 bg-slate-50/60 px-2 py-1.5"
-              >
-                <div class="flex items-center gap-2">
-                  <span class="text-xs text-slate-700">{{ mappingLabel(mapping) }}</span>
-                  <span class="text-[11px] text-slate-400">绑定语义模型</span>
-                </div>
-                <div class="mt-0.5 font-mono text-[11px] text-slate-500">{{ mappingMappingText(mapping) }}</div>
+            <div v-if="selectedObject.entry.detail.source_binding" class="flex flex-col gap-1 pb-2 text-xs">
+              <div class="flex items-center gap-2">
+                <span class="text-slate-400">Dataset：</span>
+                <span class="font-medium text-slate-700">
+                  {{ selectedObject.entry.detail.source_binding.dataset_name || selectedObject.entry.detail.source_binding.dataset_id }}
+                </span>
+                <span class="text-[11px] text-slate-400">
+                  {{ selectedObject.entry.detail.source_binding.binding_count || 0 }} 个机构
+                </span>
+              </div>
+              <div class="font-mono text-[11px] text-slate-500">
+                {{ Object.keys(selectedObject.entry.detail.source_binding.column_mappings || {}).length }} 个属性映射
               </div>
             </div>
-            <div v-else class="py-1 text-xs text-slate-400">未绑定语义模型</div>
+            <div v-else class="py-1 text-xs text-slate-400">未配置 Dataset 数据源</div>
             </div>
             <ObjectInstanceExplorer
               v-else
@@ -1633,7 +1639,7 @@ const onRelationSaved = (objectTypeNames: string[]) => {
               描述：<span class="text-slate-700">{{ selectedNode.description || '-' }}</span>
             </div>
             <div class="col-span-2 text-[11px] text-slate-400">
-              本体不绑定数据源组，对象类型的取数后端由各自映射决定（可跨组）；右键本体节点可编辑/删除本体，新建对象类型与关系类型在本体下「对象类型」「关系类型」分组节点右键发起。
+              本体不绑定数据源组，对象类型的取数后端由各自 Dataset 数据源绑定决定；右键本体节点可编辑/删除本体，新建对象类型与关系类型在本体下「对象类型」「关系类型」分组节点右键发起。
             </div>
           </div>
         </div>
@@ -1691,27 +1697,6 @@ const onRelationSaved = (objectTypeNames: string[]) => {
           </div>
         </div>
 
-        <!-- 映射详情卡 -->
-        <div v-else-if="selectedNode.kind === 'mapping'" class="max-w-xl">
-          <div class="mb-3 flex items-center gap-2">
-            <i class="fa-solid fa-link text-[11px] text-teal-500"></i>
-            <span class="text-sm font-medium text-slate-800">{{ mappingLabel(selectedNode.mapping) }}</span>
-            <span class="text-xs text-slate-400">绑定语义模型</span>
-          </div>
-          <div class="mb-1 text-xs font-medium text-slate-600">字段映射（属性 API 名 → 模型维度名）</div>
-          <div v-if="Object.keys(selectedNode.mapping.column_mappings || {}).length > 0" class="flex flex-col gap-1">
-            <div
-              v-for="(dim, propName) in selectedNode.mapping.column_mappings"
-              :key="propName"
-              class="flex items-center gap-2 font-mono text-xs text-slate-600"
-            >
-              <span>{{ propName }}</span>
-              <i class="fa-solid fa-arrow-right text-[10px] text-slate-300"></i>
-              <span>{{ dim }}</span>
-            </div>
-          </div>
-          <div v-else class="text-xs text-slate-400">暂无字段映射</div>
-        </div>
       </div>
     </div>
 
@@ -1721,7 +1706,7 @@ const onRelationSaved = (objectTypeNames: string[]) => {
     <!-- 新建/编辑弹窗 -->
     <OntologyObjectForm
       v-model:visible="formVisible"
-      :object-name="formObjectName"
+      :object-type-name="formObjectName"
       :ontologies="ontologies"
       :default-ontology-id="formDefaultOntologyId"
       @saved="onSaved"

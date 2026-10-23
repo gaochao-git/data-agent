@@ -22,6 +22,7 @@ from utils.models import (
     ChatDataOntologyObjectTypeMapping,
     ChatDataOntologyProperty,
     ChatDataOntologyRelationType,
+    ChatDataOntologySourceBinding,
     SemanticConfig,
 )
 
@@ -1059,3 +1060,55 @@ class OntologyDao:
             "is_identifier": 1 if item.get("is_identifier") else 0,
             "is_title": 1 if item.get("is_title") else 0,
         }
+
+    async def get_source_binding_async(self, object_type_id: int) -> dict[str, Any] | None:
+        async with session_scope() as session:
+            stmt = select(ChatDataOntologySourceBinding).where(
+                ChatDataOntologySourceBinding.object_type_id == object_type_id,
+                ChatDataOntologySourceBinding.delete_flag == 0,
+            )
+            row = (await session.execute(stmt)).scalars().first()
+            if row is None:
+                return None
+            return {
+                "dataset_id": int(row.dataset_id),
+                "column_mappings": _parse_json(row.column_mappings_json, dict),
+            }
+
+    async def upsert_source_binding_async(
+        self,
+        object_type_id: int,
+        *,
+        dataset_id: int,
+        column_mappings: dict[str, str],
+        operator: str,
+        operator_name: str,
+    ) -> dict[str, Any]:
+        async with session_scope() as session:
+            stmt = select(ChatDataOntologySourceBinding).where(
+                ChatDataOntologySourceBinding.object_type_id == object_type_id,
+                ChatDataOntologySourceBinding.delete_flag == 0,
+            )
+            row = (await session.execute(stmt)).scalars().first()
+            if row is None:
+                row = ChatDataOntologySourceBinding(
+                    object_type_id=object_type_id,
+                    dataset_id=dataset_id,
+                    column_mappings_json=json.dumps(column_mappings, ensure_ascii=False),
+                    delete_flag=0,
+                    create_by=operator,
+                    create_by_name=operator_name,
+                    update_by=operator,
+                    update_by_name=operator_name,
+                )
+            else:
+                row.dataset_id = dataset_id
+                row.column_mappings_json = json.dumps(column_mappings, ensure_ascii=False)
+                row.update_by = operator
+                row.update_by_name = operator_name
+            session.add(row)
+            await session.flush()
+            return {
+                "dataset_id": int(row.dataset_id),
+                "column_mappings": column_mappings,
+            }

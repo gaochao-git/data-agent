@@ -14,6 +14,7 @@ from apps.chat_data_app.daos.logical_dataset_dao import (
     dataset_row_to_dict,
     version_row_to_dict,
 )
+from apps.chat_data_app.services.datasource.manager import get_datasource_manager
 from utils.logger import get_logger
 from utils.models import ChatDataLogicalDataset
 
@@ -56,6 +57,13 @@ class LogicalDatasetService:
                 result.append(item)
             return result
 
+    async def get_dataset_async_by_id_async(self, dataset_id: int) -> dict[str, Any] | None:
+        async with transaction_scope() as session:
+            row = await self._dao.get_by_id(session, int(dataset_id))
+            if row is None or int(row.delete_flag or 0) != 0:
+                return None
+            return await self._detail_async(session, row)
+
     async def get_dataset_async(self, dataset_name: str) -> dict[str, Any]:
         name = _text(dataset_name)
         if not name:
@@ -75,9 +83,7 @@ class LogicalDatasetService:
             raise DatasetInvalidError("Dataset columns 必须是对象数组")
         column_names = {_text(item.get("name")) for item in columns}
         primary_key = [_text(item) for item in payload.get("primary_key") or [] if _text(item)]
-        if not primary_key:
-            raise DatasetInvalidError("Dataset primary_key 必须是非空字段名数组")
-        if not set(primary_key).issubset(column_names):
+        if primary_key and not set(primary_key).issubset(column_names):
             raise DatasetInvalidError("Dataset primary_key 必须引用 columns 中的列")
         bindings = payload.get("bindings") or []
         if not isinstance(bindings, list):
@@ -115,7 +121,7 @@ class LogicalDatasetService:
             update_by=operator,
             update_by_name=operator_name,
         )
-        await self._dao.save_dataset(session, row, {})
+        await self._dao.save_dataset(session, row)
         return row
 
     def _apply_metadata(
@@ -206,6 +212,84 @@ class LogicalDatasetService:
                     operator_name=operator_name,
                 )
             return await self._detail_async(session, row)
+
+    async def bootstrap_from_datasource_async(
+        self,
+        datasource_group_id: str,
+        *,
+        table_names: list[str] | None = None,
+        operator: str = "",
+        operator_name: str = "",
+    ) -> list[dict[str, Any]]:
+        """从数据源组逻辑表批量注册 Dataset：一套表结构 + 每个 member 一条 binding。"""
+        group_id = _text(datasource_group_id)
+        if not group_id:
+            raise DatasetInvalidError("datasource_group_id 不能为空")
+        manager = get_datasource_manager()
+        datasources = await manager.get_all_datasources_async(include_tables=True)
+        group = next((item for item in datasources if _text(item.get("group_id")) == group_id), None)
+        if group is None:
+            raise DatasetNotFoundError(f"数据源组不存在: {group_id}")
+        member_ids = [_text(item) for item in group.get("member_datasource_ids") or [] if _text(item)]
+        if not member_ids:
+            raise DatasetInvalidError(f"数据源组没有成员数据源: {group_id}")
+        wanted = {_text(item) for item in table_names or [] if _text(item)}
+        tables = [item for item in group.get("ds_tables") or [] if isinstance(item, dict)]
+        if wanted:
+            tables = [item for item in tables if _text(item.get("table_name")) in wanted]
+        if not tables:
+            raise DatasetInvalidError("没有可注册的物理表")
+        results = []
+        for table in tables:
+            table_name = _text(table.get("table_name"))
+            if not table_name:
+                continue
+            columns = []
+            primary_key = []
+            for column in table.get("columns") or []:
+                if not isinstance(column, dict):
+                    continue
+                name = _text(column.get("name"))
+                if not name:
+                    continue
+                columns.append(
+                    {
+                        "name": name,
+                        "display_name": _text(column.get("description")) or name,
+                        "data_type": _text(column.get("type")) or "string",
+                        "physical_column": name,
+                    }
+                )
+                if bool(column.get("primary_key")):
+                    primary_key.append(name)
+            for name in table.get("primary_keys") or []:
+                normalized = _text(name)
+                if normalized and normalized not in primary_key:
+                    primary_key.append(normalized)
+            payload = {
+                "display_name": _text(table.get("business_desc")) or table_name,
+                "description": _text(table.get("description")) or table_name,
+                "primary_key": primary_key,
+                "columns": columns,
+                "bindings": [
+                    {
+                        "datasource_group_id": group_id,
+                        "member_datasource_id": member_id,
+                        "physical_table": table_name,
+                    }
+                    for member_id in member_ids
+                ],
+                "status": "draft",
+            }
+            results.append(
+                await self.upsert_dataset_async(
+                    table_name,
+                    payload,
+                    operator=operator,
+                    operator_name=operator_name,
+                )
+            )
+        return results
 
     async def create_branch_async(
         self,

@@ -9,7 +9,7 @@ import type { PropType } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { changeAdminOntologyObjectTypeStatus } from '../../api'
 import type { OntologyObjectTypeItem, OntologyObjectTypeStatus } from '../../types'
-import { ONTOLOGY_STATUS_META, ontologyMappingCount } from './ontologyMeta'
+import { ONTOLOGY_STATUS_META } from './ontologyMeta'
 
 const props = defineProps({
   // 迁移目标对象（列表行即可）
@@ -40,8 +40,6 @@ const isDeprecating = computed(() => targetStatus.value === 'deprecated')
 
 const successorOptions = computed(() => props.object_types.filter(item => item.object_type_name !== props.object?.object_type_name))
 
-// 认证前置提示：列表行只有 mappings_count（详情行才带 mappings 明细），不能只看 mappings 数组
-const mappingCount = computed(() => ontologyMappingCount(props.object))
 
 watch(visible, value => {
   if (!value) return
@@ -133,15 +131,8 @@ const confirmStatus = async () => {
           v-if="targetStatus === 'certified'"
           class="rounded-lg border border-blue-100 bg-blue-50 p-2.5 text-[11px] leading-5 text-blue-700"
         >
-          认证前置：对象类型需至少一个标识属性（主键）且至少一个语义模型映射；认证后主键/标题键冻结、禁止删除属性。
+          认证前置：对象类型需至少一个标识属性（主键）且已绑定 Dataset 数据源；认证后主键/标题键冻结、禁止删除属性。
         </div>
-        <div
-          v-if="targetStatus === 'certified' && object && mappingCount === 0"
-          class="rounded-lg border border-amber-100 bg-amber-50 p-2.5 text-[11px] leading-5 text-amber-700"
-        >
-          当前对象类型暂无语义模型映射，认证会被拒绝；请先在编辑页添加映射。
-        </div>
-
         <template v-if="isDeprecating">
           <div class="rounded-lg border border-red-100 bg-red-50 p-2.5 text-[11px] leading-5 text-red-600">
             废弃为终态且不可逆，请谨慎操作。关系类型状态将随对象类型自动级联为废弃。

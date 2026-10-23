@@ -37,6 +37,7 @@ const sortProperty = ref('')
 const sortDirection = ref<'asc' | 'desc'>('asc')
 
 const meta = ref<OntologyObjectTypeItem | null>(null)
+const selectedMember = ref('')
 const relationLabels = ref<Record<string, string>>({})
 const selectedKey = ref('')
 const listSelectedKey = ref('')
@@ -66,6 +67,21 @@ const OPERATOR_OPTIONS = [
   { value: 'in', label: '属于' }
 ] as const
 
+const memberOptions = computed(() => meta.value?.source_binding?.member_datasource_ids || [])
+
+const parseObjectKey = (rawKey: string, fallbackType: string) => {
+  const parts = rawKey.split(':')
+  const first = parts[0] ?? ''
+  const second = parts[1] ?? ''
+  if (parts.length >= 3) {
+    return { member: first, type: second, key: parts.slice(2).join(':') }
+  }
+  if (parts.length >= 2 && first === fallbackType) {
+    return { member: '', type: fallbackType, key: parts.slice(1).join(':') }
+  }
+  return { member: '', type: fallbackType, key: rawKey }
+}
+
 const buildSearchPayload = () => ({
   keyword: keyword.value.trim() || undefined,
   filters: filters.value
@@ -87,7 +103,8 @@ const buildSearchPayload = () => ({
     ? ([{ property: sortProperty.value, direction: sortDirection.value }] as OntologyObjectSort[])
     : [],
   limit: pageSize,
-  offset: (page.value - 1) * pageSize
+  offset: (page.value - 1) * pageSize,
+  member_datasource_ids: selectedMember.value ? [selectedMember.value] : []
 })
 
 const addFilter = () => {
@@ -505,7 +522,13 @@ const loadMeta = async (objectType: string) => {
     getAdminOntologyRelationTypes({ from_object_type: objectType }),
     getAdminOntologyRelationTypes({ to_object_type: objectType })
   ])
-  if (metaRes.status === 'success') meta.value = metaRes.data
+  if (metaRes.status === 'success') {
+    meta.value = metaRes.data
+    const members = metaRes.data.source_binding?.member_datasource_ids || []
+    if (!selectedMember.value || !members.includes(selectedMember.value)) {
+      selectedMember.value = members[0] || ''
+    }
+  }
   const labels: Record<string, string> = {}
   if (fromRes.status === 'success') {
     for (const relation of fromRes.data.relation_types || []) {
@@ -544,9 +567,10 @@ const loadList = async (resetPage = false) => {
 }
 
 const loadDetail = async (rawKey: string, objectType = props.objectType, seed?: OntologyObjectListItem) => {
-  const separator = rawKey.indexOf(':')
-  const type = separator > 0 ? rawKey.slice(0, separator) : objectType
-  const key = separator > 0 ? rawKey.slice(separator + 1) : rawKey
+  const parsed = parseObjectKey(rawKey, objectType)
+  const type = parsed.type
+  const key = parsed.key
+  const member = parsed.member || selectedMember.value
   selectedKey.value = rawKey
   detailError.value = ''
   const cached = detailCache.get(rawKey)
@@ -573,7 +597,7 @@ const loadDetail = async (rawKey: string, objectType = props.objectType, seed?: 
     linksLoading.value = false
   }
   try {
-    const res = await readAdminOntologyObject(type, key)
+    const res = await readAdminOntologyObject(type, key, member ? [member] : [])
     if (res.status === 'success') {
       detail.value = res.data
       detailCache.set(rawKey, res.data)
@@ -639,7 +663,7 @@ const previewValueText = (value: unknown) => {
   return typeof value === 'object' ? JSON.stringify(value) : String(value)
 }
 
-const initialize = () => {
+const initialize = async () => {
   if (!props.objectType) return
   keyword.value = ''
   page.value = 1
@@ -650,27 +674,40 @@ const initialize = () => {
   exploreEdges.value = {}
   exploreSelectedKey.value = ''
   resetToList()
-  void loadMeta(props.objectType)
-  void loadList()
+  await loadMeta(props.objectType)
+  await loadList()
 }
 
-watch(() => props.objectType, initialize)
-onMounted(initialize)
+watch(() => props.objectType, () => void initialize())
+onMounted(() => void initialize())
 </script>
 
 <template>
   <div class="flex h-[640px] min-h-0 gap-4">
     <section class="flex w-[360px] shrink-0 flex-col border-r border-slate-100 pr-3">
       <div class="mb-2 flex items-center gap-2">
-        <el-input
-          v-model="keyword"
-          size="small"
-          clearable
-          placeholder="搜索标题键或主键"
-          @keyup.enter="loadList(true)"
-          @clear="loadList(true)"
-        />
-        <el-button size="small" type="primary" @click="loadList(true)">搜索</el-button>
+        <div v-if="memberOptions.length > 1" class="w-28 shrink-0">
+          <el-select
+            v-model="selectedMember"
+            size="small"
+            class="w-full"
+            @change="loadList(true)"
+          >
+            <el-option v-for="member in memberOptions" :key="member" :label="member" :value="member" />
+          </el-select>
+        </div>
+        <div class="min-w-0 flex-1">
+          <el-input
+            v-model="keyword"
+            size="small"
+            clearable
+            placeholder="搜索标题键或主键"
+            class="w-full"
+            @keyup.enter="loadList(true)"
+            @clear="loadList(true)"
+          />
+        </div>
+        <el-button size="small" type="primary" class="shrink-0" @click="loadList(true)">搜索</el-button>
       </div>
       <div class="mb-2 flex items-center gap-1">
         <el-popover placement="bottom-start" :width="440" trigger="click">
@@ -776,12 +813,12 @@ onMounted(initialize)
           <i class="fa-solid fa-spinner fa-spin mr-1"></i>加载所选对象详情中…
         </div>
         <el-alert v-if="detailError" :title="detailError" type="error" :closable="false" show-icon class="mb-2" />
-        <div class="mb-3 flex items-center gap-2">
-          <el-button v-if="history.length > 0" link size="small" @click="backToObject">返回</el-button>
-          <el-button link size="small" @click="resetToList">返回列表</el-button>
-          <span class="font-mono text-xs text-slate-700">{{ detail.object_key }}</span>
-          <span v-if="detailTitle" class="text-xs text-slate-500">{{ detailTitle }}</span>
-          <el-radio-group v-model="detailMode" size="small" class="ml-auto" @change="onDetailModeChange">
+        <div class="mb-3 flex flex-wrap items-center gap-2">
+          <el-button v-if="history.length > 0" link size="small" class="shrink-0" @click="backToObject">返回</el-button>
+          <el-button link size="small" class="shrink-0" @click="resetToList">返回列表</el-button>
+          <span class="min-w-0 truncate font-mono text-xs text-slate-700">{{ detail.object_key }}</span>
+          <span v-if="detailTitle" class="truncate text-xs text-slate-500">{{ detailTitle }}</span>
+          <el-radio-group v-model="detailMode" size="small" class="ml-auto shrink-0" @change="onDetailModeChange">
             <el-radio-button value="table">属性</el-radio-button>
             <el-radio-button value="graph">图探索</el-radio-button>
           </el-radio-group>

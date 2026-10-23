@@ -7,18 +7,15 @@
 import { computed, ref, watch } from 'vue'
 import type { PropType } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { getAdminOntologyObjectType, upsertAdminOntologyObjectType } from '../../api'
-import type { OntologyItem, OntologyMappingItem, OntologyObjectTypeItem, OntologyPropertyItem } from '../../types'
-import OntologyMappingEditor from './OntologyMappingEditor.vue'
-import OntologyPropertyEditor from './OntologyPropertyEditor.vue'
 import {
-  crossMappingPropertyConflicts,
-  haveMappingsChanged,
-  ONTOLOGY_NAME_PATTERN,
-  removeMappingPropertyKey,
-  renameMappingPropertyKey,
-  staleMappingPropertyNames
-} from './ontologyMeta'
+  getAdminDatasets,
+  getAdminOntologyObjectType,
+  setAdminOntologySourceBinding,
+  upsertAdminOntologyObjectType
+} from '../../api'
+import type { LogicalDatasetItem, OntologyItem, OntologyObjectTypeItem, OntologyPropertyItem } from '../../types'
+import OntologyPropertyEditor from './OntologyPropertyEditor.vue'
+import { ONTOLOGY_NAME_PATTERN } from './ontologyMeta'
 
 const props = defineProps({
   // 编辑的对象名；空串表示新建
@@ -45,7 +42,42 @@ const formDisplayName = ref('')
 const formDescription = ref('')
 const formOntologyId = ref<number | null>(null)
 const propertyRows = ref<OntologyPropertyItem[]>([])
-const mappingRows = ref<OntologyMappingItem[]>([])
+const datasetOptions = ref<LogicalDatasetItem[]>([])
+const sourceDatasetId = ref<number | null>(null)
+const sourceMappings = ref<Record<string, string>>({})
+
+const selectedDataset = computed(() => datasetOptions.value.find(item => item.id === sourceDatasetId.value) || null)
+const datasetColumnNames = computed(() => (selectedDataset.value?.columns || []).map(item => item.name))
+
+const datasetColumnLabel = (column: { name: string; display_name?: string }) => {
+  const label = (column.display_name || '').trim()
+  if (!label || label === column.name) return column.name
+  return `${column.name}（${label.length > 20 ? `${label.slice(0, 20)}…` : label}）`
+}
+
+const loadDatasetOptions = async () => {
+  try {
+    const res = await getAdminDatasets()
+    if (res.status === 'success') datasetOptions.value = res.data.datasets || []
+  } catch (err) {
+    console.error('加载 Dataset 失败:', err)
+  }
+}
+
+const syncSourceMappings = () => {
+  const dataset = selectedDataset.value
+  if (!dataset) return
+  const columns = new Set((dataset.columns || []).map(item => item.name))
+  const next: Record<string, string> = {}
+  for (const property of propertyRows.value) {
+    const name = property.property_name.trim()
+    if (!name) continue
+    const current = sourceMappings.value[name]
+    if (current && columns.has(current)) next[name] = current
+    else if (columns.has(name)) next[name] = name
+  }
+  sourceMappings.value = next
+}
 
 // 行增删由持有数组的父组件完成（子编辑器通过事件回传，避免直接改 props）
 const addPropertyRow = () => {
@@ -65,14 +97,6 @@ const removePropertyRow = (index: number) => {
   propertyRows.value.splice(index, 1)
 }
 
-const addMappingRow = () => {
-  mappingRows.value.push({ semantic_config_id: '', column_mappings: {} })
-}
-
-const removeMappingRow = (index: number) => {
-  mappingRows.value.splice(index, 1)
-}
-
 // 本体下拉标签：展示名（API 名）；本体不绑组，映射候选不限组
 const ontologyLabel = (ontology: OntologyItem) =>
   ontology.display_name ? `${ontology.display_name} (${ontology.ontology_name})` : ontology.ontology_name
@@ -88,12 +112,15 @@ const resetForm = () => {
   formDescription.value = ''
   formOntologyId.value = props.defaultOntologyId
   propertyRows.value = [{ property_name: '', display_name: '', description: '', value_type: 'String', enum_ref: '', render_hints: {}, is_identifier: true, is_title: true }]
-  mappingRows.value = []
+  datasetOptions.value = []
+  sourceDatasetId.value = null
+  sourceMappings.value = {}
   loadedDetail.value = null
 }
 
 const openLoad = async () => {
   resetForm()
+  await loadDatasetOptions()
   if (!props.objectTypeName) return
   loading.value = true
   try {
@@ -110,7 +137,10 @@ const openLoad = async () => {
     formDescription.value = detail.description
     formOntologyId.value = detail.ontology_id ?? null
     propertyRows.value = (detail.properties || []).map(item => ({ ...item, render_hints: { ...(item.render_hints || {}) } }))
-    mappingRows.value = (detail.mappings || []).map(item => ({ ...item, column_mappings: { ...(item.column_mappings || {}) } }))
+    if (detail.source_binding) {
+      sourceDatasetId.value = detail.source_binding.dataset_id
+      sourceMappings.value = { ...(detail.source_binding.column_mappings || {}) }
+    }
   } catch (err) {
     // 拦截器已弹出具体错误原因，不再重复提示
     console.error('获取本体对象类型详情失败:', err)
@@ -137,22 +167,8 @@ const destructiveActions = computed(() => {
   if (JSON.stringify(oldIds) !== JSON.stringify(newIds) || JSON.stringify(oldTitles) !== JSON.stringify(newTitles)) {
     actions.push('主键组合或标题键变更')
   }
-  // 详情行由服务端附带 object_type_id/binding_type 等附加键，必须与表单行按同一口径规范化后再比较，
-  // 否则对象只要有映射就会误判为「映射变更」，每次编辑都弹破坏性确认。
-  if (haveMappingsChanged(detail.mappings, mappingRows.value)) {
-    actions.push('映射变更')
-  }
   return actions
 })
-
-// 属性改名/删除时同步映射键（后端按当前属性名校验，键不同步会拒绝提交）
-const onPropertyRenamed = (oldName: string, newName: string) => {
-  renameMappingPropertyKey(mappingRows.value, oldName, newName)
-}
-
-const onPropertyRemoved = (propertyName: string) => {
-  removeMappingPropertyKey(mappingRows.value, propertyName)
-}
 
 // ---------- 提交 ----------
 
@@ -178,23 +194,7 @@ const validateForm = (): string => {
   }
   if (identifierCount < 1) return '对象类型至少需要一个标识属性（主键），禁止用自增行号当主键'
   if (titleCount > 1) return '对象类型至多一个标题属性'
-  const staleMappingKeys = staleMappingPropertyNames(
-    mappingRows.value,
-    rows.map(row => row.property_name)
-  )
-  if (staleMappingKeys.length > 0) {
-    return `映射引用了不存在的属性：${staleMappingKeys.join('、')}，请先在映射编辑器中修正`
-  }
-  const conflicts = crossMappingPropertyConflicts(
-    mappingRows.value,
-    rows.filter(row => row.is_identifier).map(row => row.property_name.trim())
-  )
-  if (conflicts.length > 0) {
-    const details = conflicts
-      .map(item => `${item.property_name}（${item.config_ids.join(' / ')}）`)
-      .join('；')
-    return `非标识属性只能单源映射：${details}；标识属性才可作为跨源主键，请为属性只保留一个来源模型`
-  }
+
   return ''
 }
 
@@ -235,18 +235,20 @@ const saveObject = async () => {
         is_identifier: row.is_identifier,
         is_title: row.is_title
       })),
-      mappings: mappingRows.value.map(row => ({
-        semantic_config_id: row.semantic_config_id.trim(),
-        column_mappings: Object.fromEntries(
-          Object.entries(row.column_mappings || {})
-            .map(([k, v]) => [k.trim(), (v || '').trim()])
-            .filter(([k]) => k)
-        )
-      })),
       allow_overwrite: editing.value,
       confirm_destructive: confirmDestructive
     })
     if (res.status === 'success') {
+      if (sourceDatasetId.value) {
+        const binding = await setAdminOntologySourceBinding(formName.value.trim(), {
+          dataset_id: sourceDatasetId.value,
+          column_mappings: sourceMappings.value
+        })
+        if (binding.status !== 'success') {
+          ElMessage.error(binding.msg || '对象已保存，但数据源绑定失败')
+          return
+        }
+      }
       ElMessage.success('保存成功')
       visible.value = false
       emit('saved')
@@ -318,30 +320,73 @@ const saveObject = async () => {
         <OntologyPropertyEditor
           :rows="propertyRows"
           :frozen-names="frozenNames"
-          @property-renamed="onPropertyRenamed"
-          @property-removed="onPropertyRemoved"
           @remove-row="removePropertyRow"
         />
       </div>
 
-      <!-- 语义模型映射 -->
-      <div>
-        <div class="mb-1.5 flex items-center justify-between">
+      <!-- 数据源绑定：本体层取数走 Logical Dataset，不再依赖语义模型 -->
+      <div class="rounded-lg border border-slate-100 bg-slate-50/40 p-3">
+        <div class="flex items-start justify-between gap-3">
           <div class="flex flex-col">
-            <span class="text-xs font-medium text-slate-600">语义模型映射</span>
+            <span class="text-xs font-medium text-slate-700">对象数据源</span>
             <span class="text-[11px] text-slate-400">
-              层级 = 数据源组 → 语义模型 → 维度映射（不触碰物理表）：口径权威在语义层；每个语义模型映射只能归属一个对象类型；认证前至少需要一个映射
+              Dataset 定义逻辑 schema，并按机构绑定物理表；对象属性映射到 Dataset 列
             </span>
           </div>
-          <el-button size="small" link type="primary" @click="addMappingRow">
-            <i class="fa-solid fa-plus text-[11px]"></i> 添加映射
-          </el-button>
+          <el-button size="small" link type="primary" @click="loadDatasetOptions">刷新数据集</el-button>
         </div>
-        <OntologyMappingEditor
-          :rows="mappingRows"
-          :properties="propertyRows"
-          @remove-row="removeMappingRow"
-        />
+
+        <div class="mt-3">
+          <div class="mb-1 text-xs text-slate-500">Logical Dataset</div>
+          <el-select v-model="sourceDatasetId" size="small" clearable filterable class="w-full" @change="syncSourceMappings">
+            <el-option
+              v-for="dataset in datasetOptions"
+              :key="dataset.id"
+              :label="`${dataset.dataset_name}（${dataset.display_name || dataset.dataset_name}）`"
+              :value="dataset.id"
+            />
+          </el-select>
+          <div v-if="selectedDataset" class="mt-1 flex items-center gap-2 text-[11px] text-slate-400">
+            <span>{{ selectedDataset.dataset_name }}</span>
+            <span>·</span>
+            <span>{{ selectedDataset.binding_count ?? (selectedDataset.bindings || []).length }} 个机构绑定</span>
+          </div>
+        </div>
+
+        <div v-if="selectedDataset" class="mt-3 overflow-hidden rounded-md border border-slate-100 bg-white">
+          <div class="grid grid-cols-[minmax(140px,220px)_1fr] items-center gap-3 border-b border-slate-100 bg-slate-50 px-3 py-1.5 text-[11px] font-medium text-slate-500">
+            <span>对象属性</span>
+            <span>Dataset 列</span>
+          </div>
+          <div
+            v-for="property in propertyRows.filter(item => item.property_name.trim())"
+            :key="property.property_name"
+            class="grid grid-cols-[minmax(140px,220px)_1fr] items-center gap-3 border-b border-slate-50 px-3 py-1.5 last:border-b-0"
+          >
+            <div class="min-w-0">
+              <div class="truncate font-mono text-xs text-slate-700">{{ property.property_name }}</div>
+              <div class="truncate text-[11px] text-slate-400">{{ property.display_name || '-' }}</div>
+            </div>
+            <el-select
+              v-model="sourceMappings[property.property_name]"
+              size="small"
+              clearable
+              filterable
+              placeholder="选择 Dataset 列"
+              class="min-w-0"
+            >
+              <el-option
+                v-for="column in selectedDataset.columns || []"
+                :key="column.name"
+                :label="datasetColumnLabel(column)"
+                :value="column.name"
+              />
+            </el-select>
+          </div>
+        </div>
+        <div v-else class="mt-3 rounded-md border border-dashed border-slate-200 px-3 py-4 text-center text-[11px] text-slate-400">
+          先选择一个 Dataset，再配置属性到列的映射
+        </div>
       </div>
     </div>
 
