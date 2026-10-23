@@ -492,3 +492,152 @@ def test_object_projection_skips_action_overrides_when_disabled(monkeypatch):
     assert asyncio.run(object_projection._apply_object_edits({"id": 2}, "ORD2024000001", {"pay_status": "unpaid"})) == {
         "pay_status": "unpaid"
     }
+
+
+def test_build_derived_value_sql_variants():
+    from apps.chat_data_app.services.ontology.object_projection import _build_derived_value_sql
+
+    assert _build_derived_value_sql("orders", "customer_id", "C1", operator="count") == (
+        "SELECT COUNT(*) AS `derived_value` FROM `orders` WHERE `customer_id` = 'C1'"
+    )
+    assert _build_derived_value_sql("orders", "customer_id", "C1", operator="sum", target_column="amount") == (
+        "SELECT SUM(`amount`) AS `derived_value` FROM `orders` WHERE `customer_id` = 'C1'"
+    )
+    assert _build_derived_value_sql("users", "user_id", "C1", target_column="name") == (
+        "SELECT `name` AS `derived_value` FROM `users` WHERE `user_id` = 'C1' LIMIT 1"
+    )
+    escaped = _build_derived_value_sql("orders", "customer_id", "C'1", operator="count")
+    assert escaped.endswith("WHERE `customer_id` = 'C\\'1'")
+
+
+def test_derived_property_values_compute_and_best_effort(monkeypatch):
+    """派生属性计算：正常算出聚合值；单条失败（关系缺失）置空不影响整体（对齐 links 最佳努力）。"""
+    from apps.chat_data_app.services.ontology import object_projection
+
+    relation = {
+        "relation_type_name": "r1",
+        "from_object_type_id": 1,
+        "to_object_type_id": 2,
+        "from_columns": ["customer_id"],
+        "to_columns": ["customer_id"],
+        "from_object_type_name": "Order",
+        "to_object_type_name": "Customer",
+        "status": "certified",
+    }
+    order_detail = {
+        "id": 1,
+        "object_type_name": "Order",
+        "properties": [
+            {"property_name": "order_id", "is_identifier": True},
+            {"property_name": "customer_id"},
+        ],
+    }
+    customer_detail = {
+        "id": 2,
+        "object_type_name": "Customer",
+        "properties": [
+            {"property_name": "customer_id", "is_identifier": True},
+            {
+                "property_name": "order_count",
+                "derivation": {"kind": "aggregate", "relation_type_name": "r1", "operator": "count"},
+            },
+            {
+                "property_name": "ghost_count",
+                "derivation": {"kind": "aggregate", "relation_type_name": "ghost", "operator": "count"},
+            },
+        ],
+    }
+
+    class _FakeService:
+        async def list_relations_async(self):
+            return [relation]
+
+        async def get_object_type_async(self, name):
+            return order_detail if name == "Order" else None
+
+    async def fake_mapping_context(detail, member_ids, *, user_id, username):
+        config = {
+            "dimensions": [
+                {"name": "订单编号", "table": "orders", "column": "order_id"},
+                {"name": "客户编号", "table": "orders", "column": "customer_id"},
+            ]
+        }
+        query_detail = {
+            "mappings": [
+                {
+                    "semantic_config_id": "dataset",
+                    "column_mappings": {"order_id": "订单编号", "customer_id": "客户编号"},
+                }
+            ]
+        }
+        return config, query_detail, [{"member_datasource_id": "M1"}], "g1"
+
+    executed = []
+
+    async def fake_query_rows(targets, sql, *, group_id, user_id, username, limit):
+        executed.append(sql)
+        return [{"derived_value": 7}]
+
+    monkeypatch.setattr(object_projection, "ontology_service", _FakeService())
+    monkeypatch.setattr(object_projection, "_dataset_mapping_context", fake_mapping_context)
+    monkeypatch.setattr(object_projection, "_query_rows", fake_query_rows)
+
+    values = asyncio.run(
+        object_projection._derived_property_values(
+            customer_detail, {"customer_id": "C1"}, member_id="M1", user_id="", username=""
+        )
+    )
+    assert values == {"order_count": 7, "ghost_count": None}
+    assert len(executed) == 1
+    assert "COUNT(*)" in executed[0]
+    assert "`customer_id` = 'C1'" in executed[0]
+
+
+def _derived_detail():
+    detail = _detail()
+    detail["properties"].append(
+        {
+            "property_name": "order_count",
+            "is_identifier": False,
+            "value_type": "Integer",
+            "derivation": {"kind": "aggregate", "relation_type_name": "order_belongs_to_customer", "operator": "count"},
+        }
+    )
+    return detail
+
+
+def test_search_query_rejects_derived_filter_and_sort():
+    with pytest.raises(ObjectProjectionError, match="派生属性不支持过滤/排序"):
+        build_object_search_query(
+            _derived_detail(),
+            _config(),
+            filters=[{"property": "order_count", "operator": "eq", "value": "1"}],
+        )
+    with pytest.raises(ObjectProjectionError, match="派生属性不支持过滤/排序"):
+        build_object_search_query(
+            _derived_detail(),
+            _config(),
+            sorts=[{"property": "order_count", "direction": "desc"}],
+        )
+
+
+def test_aggregate_query_rejects_derived_group_by_and_filter():
+    with pytest.raises(ObjectProjectionError, match="派生属性不支持聚合分组/过滤"):
+        build_object_aggregate_query(
+            _derived_detail(),
+            _config(),
+            group_by=["order_count"],
+            metrics=[{"name": "cnt", "operation": "count"}],
+        )
+    with pytest.raises(ObjectProjectionError, match="派生属性不支持聚合分组/过滤"):
+        build_object_aggregate_query(
+            _derived_detail(),
+            _config(),
+            metrics=[{"name": "cnt", "operation": "count"}],
+            filters=[{"property": "order_count", "operator": "eq", "value": "1"}],
+        )
+
+
+def test_related_key_query_rejects_derived_filter_property():
+    with pytest.raises(ObjectProjectionError, match="派生属性不支持关联查询"):
+        build_related_key_query(_derived_detail(), _config(), filter_property="order_count", filter_value="1")

@@ -835,6 +835,37 @@ CREATE TABLE `chat_data_dataset_semantic_link` (
 """
 
 
+MYSQL_CHAT_DATA_ONTOLOGY_PROPERTY_TABLE = """
+CREATE TABLE `chat_data_ontology_property` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `object_type_id` bigint NOT NULL COMMENT '所属本体对象类型ID（逻辑关联无外键）',
+  `property_name` varchar(128) NOT NULL COMMENT '属性API名，对象类型内唯一',
+  `display_name` varchar(128) NOT NULL DEFAULT '' COMMENT '展示名',
+  `description_text` varchar(1024) NOT NULL DEFAULT '' COMMENT '属性描述',
+  `value_type` varchar(32) NOT NULL DEFAULT 'String' COMMENT '值类型: String/Integer/Decimal/Boolean/Date/DateTime 或 enum',
+  `enum_ref` varchar(260) NOT NULL DEFAULT '' COMMENT '全局枚举引用，value_type=enum 时非空',
+  `render_hints_json` text COMMENT '渲染提示JSON文本',
+  `derivation_json` text COMMENT '派生属性推导定义JSON文本（NULL=普通存储属性）',
+  `is_identifier` tinyint NOT NULL DEFAULT '0' COMMENT '标识属性',
+  `is_title` tinyint NOT NULL DEFAULT '0' COMMENT '标题属性',
+  `delete_flag` tinyint NOT NULL DEFAULT '0' COMMENT '删除标识: 0-未删除, 1-已删除',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `create_by` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人ID',
+  `create_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人名称',
+  `update_by` varchar(100) NOT NULL DEFAULT '' COMMENT '修改人ID',
+  `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '修改人名称',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_object_type_property` (`object_type_id`,`property_name`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='本体属性表';
+"""
+
+# 存量库迁移：应用账号无 DDL 权限，由 DBA 执行（与 next_version.md 同步维护）。
+MYSQL_CHAT_DATA_ONTOLOGY_PROPERTY_DERIVATION_MIGRATION = """
+ALTER TABLE `chat_data_ontology_property`
+  ADD COLUMN `derivation_json` text NULL COMMENT '派生属性推导定义JSON文本（NULL=普通存储属性）' AFTER `render_hints_json`;
+"""
+
 MYSQL_TABLES = [
     MYSQL_USER_THREADS_TABLE,
     MYSQL_CHAT_DATA_CONVERSATION_EVENT_TABLE,
@@ -864,6 +895,7 @@ MYSQL_TABLES = [
     MYSQL_CHAT_DATA_DATASET_BINDING_TABLE,
     MYSQL_CHAT_DATA_DATASET_LINEAGE_EDGE_TABLE,
     MYSQL_CHAT_DATA_ONTOLOGY_SOURCE_BINDING_TABLE,
+    MYSQL_CHAT_DATA_ONTOLOGY_PROPERTY_TABLE,
     MYSQL_CHAT_DATA_DATASET_SEMANTIC_LINK_TABLE,
     MYSQL_CHAT_DATA_PIPELINE_DEFINITION_TABLE,
     MYSQL_CHAT_DATA_PIPELINE_NODE_TABLE,

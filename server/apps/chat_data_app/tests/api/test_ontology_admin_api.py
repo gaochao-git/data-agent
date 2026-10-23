@@ -358,3 +358,27 @@ def test_action_type_crud_and_test_run_contract(client, auth_headers, monkeypatc
 
     deleted = client.delete(f"{_ACTION_BASE}/update_order_status", headers=auth_headers)
     assert deleted.json()["status"] == "success"
+
+
+def test_upsert_object_type_omits_unset_derivation_in_service_payload(client, auth_headers, monkeypatch):
+    """HTTP 请求未传 derivation 时，service 收到的属性 payload 不能带 derivation: null（否则会清空定义）。"""
+    captured: dict = {}
+
+    async def fake_upsert(object_type_name, payload, **_kwargs):
+        captured["payload"] = payload
+        return {"object_type_name": object_type_name, "properties": payload["properties"]}
+
+    monkeypatch.setattr(ontology_admin_routes.ontology_service, "upsert_object_type_async", fake_upsert)
+    response = client.put(
+        "/api/chatdata/admin/meta/ontology/object-types/Order",
+        json={
+            "display_name": "订单",
+            "properties": [
+                {"property_name": "order_id", "display_name": "订单ID", "is_identifier": True, "is_title": True}
+            ],
+        },
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "success"
+    assert "derivation" not in captured["payload"]["properties"][0]

@@ -73,6 +73,11 @@ def _render_property_entry(prop: dict[str, Any]) -> dict[str, Any]:
         "identifier": bool(prop.get("is_identifier")),
         "title": bool(prop.get("is_title")),
     }
+    derivation = prop.get("derivation")
+    if isinstance(derivation, dict) and derivation:
+        # 派生属性：只读、查询时计算、无物理列映射（对齐 Palantir derived property）
+        entry["derived"] = True
+        entry["derivation"] = {key: value for key, value in derivation.items() if value}
     description = _text(prop.get("description"))
     if description:
         entry["description"] = description

@@ -118,17 +118,24 @@ def _source_binding_entry(binding: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def _object_properties(properties: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """属性清单（按属性名排序），空名属性丢弃。"""
-    return [
-        {
-            "name": _text(prop.get("property_name")),
+    """属性清单（按属性名排序），空名属性丢弃；派生属性带 derived 标记。"""
+    entries: list[dict[str, Any]] = []
+    for prop in sorted(properties, key=lambda item: _text(item.get("property_name"))):
+        name = _text(prop.get("property_name"))
+        if not name:
+            continue
+        entry = {
+            "name": name,
             "display_name": _text(prop.get("display_name")),
             "value_type": _text(prop.get("value_type")),
             "is_identifier": bool(prop.get("is_identifier")),
         }
-        for prop in sorted(properties, key=lambda item: _text(item.get("property_name")))
-        if _text(prop.get("property_name"))
-    ]
+        derivation = prop.get("derivation")
+        if isinstance(derivation, dict) and derivation:
+            entry["derived"] = True
+            entry["derivation"] = {key: value for key, value in derivation.items() if value}
+        entries.append(entry)
+    return entries
 
 
 def _relation_join(

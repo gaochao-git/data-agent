@@ -113,6 +113,8 @@ def _normalize_edit_item(
         raise OntologyInvalidError(f"Action Type 目标属性不存在: {property_name or '?'}")
     if bool(prop.get("is_identifier")):
         raise OntologyInvalidError(f"标识属性不能通过 Action 修改: {property_name}")
+    if isinstance(prop.get("derivation"), dict) and prop["derivation"]:
+        raise OntologyInvalidError(f"派生属性只读（查询时计算），不能通过 Action 修改: {property_name}")
     if property_name in edited_properties:
         raise OntologyInvalidError(f"Action Type 重复编辑属性: {property_name}")
     value = _normalize_edit_value(item.get("value"), property_name=property_name, parameter_names=parameter_names)
@@ -341,6 +343,8 @@ class OntologyActionTypeService:
             prop = properties.get(property_name)
             if prop is None:
                 raise OntologyInvalidError(f"Action 目标属性不存在: {property_name}")
+            if isinstance(prop.get("derivation"), dict) and prop["derivation"]:
+                raise OntologyInvalidError(f"派生属性只读（查询时计算），Action 不能写入: {property_name}")
             _validate_property_value(property_name, prop, edit.get("resolved_value"))
         # 先确认对象存在（读取同样会合并已有 overrides）；失败则不产生任何写入
         await read_object_projection(object_type_name, object_key, user_id=operator, username=operator_name)

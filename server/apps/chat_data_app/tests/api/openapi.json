@@ -2565,9 +2565,73 @@
         "title": "OntologyObjectTypeUpsertRequest",
         "type": "object"
       },
+      "OntologyPropertyDerivation": {
+        "description": "派生属性推导定义（对齐 Palantir derived property：查询时计算、不落存储）。\n\n- ``aggregate``：跨链接聚合，要求对象类型在关系类型的 to 侧（一对多的\"一\"侧），\n  如 Customer.orderCount = count(关系 Customer←Order)；\n- ``select``：从链接对象选取单值，要求对象类型在关系类型的 from 侧（外键在本表），\n  如 Order.customerName。\n值类型由服务端推导（count→Integer，sum/avg→Decimal，其余同目标属性），入参忽略。",
+        "properties": {
+          "kind": {
+            "description": "推导类型：aggregate=跨链接聚合，select=从链接对象选取",
+            "enum": [
+              "aggregate",
+              "select"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "operator": {
+            "anyOf": [
+              {
+                "enum": [
+                  "count",
+                  "sum",
+                  "avg",
+                  "min",
+                  "max"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "聚合算子（kind=aggregate 必填；count 无需 target_property）",
+            "title": "Operator"
+          },
+          "relation_type_name": {
+            "description": "遍历的关系类型API名",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Relation Type Name",
+            "type": "string"
+          },
+          "target_property": {
+            "default": "",
+            "description": "对端对象类型的目标属性API名（count 省略）",
+            "maxLength": 128,
+            "title": "Target Property",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "relation_type_name"
+        ],
+        "title": "OntologyPropertyDerivation",
+        "type": "object"
+      },
       "OntologyPropertyItem": {
         "description": "本体属性项（属性一等实体，随对象类型表单整体提交）",
         "properties": {
+          "derivation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OntologyPropertyDerivation"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "派生属性推导定义；非空时属性为只读派生属性（禁主键/标题/enum/渲染提示）"
+          },
           "description": {
             "default": "",
             "description": "属性描述",
@@ -2618,7 +2682,7 @@
           },
           "value_type": {
             "default": "String",
-            "description": "值类型：内建类型或 enum（引用全局枚举）",
+            "description": "值类型：内建类型或 enum（引用全局枚举）；派生属性由服务端推导，入参忽略",
             "enum": [
               "String",
               "Integer",

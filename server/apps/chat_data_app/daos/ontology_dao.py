@@ -102,6 +102,7 @@ def _property_row_to_dict(row: ChatDataOntologyProperty) -> dict[str, Any]:
         "value_type": _text(row.value_type),
         "enum_ref": _text(row.enum_ref),
         "render_hints": _parse_json(row.render_hints_json, dict),
+        "derivation": _parse_json(row.derivation_json, dict) or None,
         "is_identifier": bool(row.is_identifier),
         "is_title": bool(row.is_title),
     }
@@ -826,15 +827,44 @@ class OntologyDao:
 
     def _property_payload(self, item: dict[str, Any]) -> dict[str, Any]:
         """属性行内容字段（不含 object_type_id/property_name/审计字段；键=ORM 行字段名）。"""
+        derivation = item.get("derivation")
         return {
             "display_name": _text(item.get("display_name")),
             "description_text": _text(item.get("description")),
             "value_type": _text(item.get("value_type")) or "String",
             "enum_ref": _text(item.get("enum_ref")),
             "render_hints_json": json.dumps(_parse_json(item.get("render_hints_json"), dict), ensure_ascii=False),
+            "derivation_json": (
+                json.dumps(derivation, ensure_ascii=False) if isinstance(derivation, dict) and derivation else None
+            ),
             "is_identifier": 1 if item.get("is_identifier") else 0,
             "is_title": 1 if item.get("is_title") else 0,
         }
+
+    async def list_derivation_properties_async(self) -> list[dict[str, Any]]:
+        """列出全部活跃派生属性定义（依赖保护用：关系/目标属性被引用时拒绝删除或降级）。"""
+        async with session_scope() as session:
+            rows = (
+                (
+                    await session.execute(
+                        select(ChatDataOntologyProperty).where(
+                            ChatDataOntologyProperty.delete_flag == 0,
+                            ChatDataOntologyProperty.derivation_json.isnot(None),
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        return [
+            {
+                "object_type_id": int(row.object_type_id),
+                "property_name": _text(row.property_name),
+                "derivation": _parse_json(row.derivation_json, dict) or None,
+            }
+            for row in rows
+            if _text(row.property_name)
+        ]
 
     async def get_source_binding_async(self, object_type_id: int) -> dict[str, Any] | None:
         async with session_scope() as session:

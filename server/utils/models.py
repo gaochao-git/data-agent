@@ -1227,6 +1227,9 @@ class ChatDataOntologyProperty(Base):
     value_type: Mapped[str] = mapped_column(String(32), nullable=False, default="String", server_default="String")
     enum_ref: Mapped[str] = mapped_column(String(260), nullable=False, default="", server_default="")
     render_hints_json: Mapped[str | None] = mapped_column(Text)
+    # 派生属性推导定义（JSON 文本，NULL=普通存储属性）。对齐 Palantir derived property：
+    # 查询时计算、不落存储；结构 {kind: aggregate|select, relation_type_name, operator?, target_property?}。
+    derivation_json: Mapped[str | None] = mapped_column(Text)
     is_identifier: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
     is_title: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
     delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")

@@ -197,8 +197,15 @@ class OntologyService:
         if not isinstance(column_mappings, dict):
             raise OntologyInvalidError("column_mappings 必须是对象")
         dataset_columns = {str(item.get("name") or "") for item in dataset.get("columns") or []}
+        derived_names = {
+            str(item.get("property_name") or "")
+            for item in detail.get("properties") or []
+            if isinstance(item.get("derivation"), dict) and item.get("derivation")
+        }
         property_names = {str(item.get("property_name") or "") for item in detail.get("properties") or []}
         for property_name, column_name in column_mappings.items():
+            if property_name in derived_names:
+                raise OntologyInvalidError(f"派生属性不映射物理列（查询时计算）: {property_name}")
             if property_name not in property_names:
                 raise OntologyInvalidError(f"对象属性不存在: {property_name}")
             if column_name not in dataset_columns:
@@ -263,12 +270,16 @@ class OntologyService:
         existing_active = existing is not None and int(existing.get("delete_flag") or 0) == 0
         if existing is not None and not existing_active:
             meta_payload.update(_REVIVED_OBJECT_RESET)
+        if existing is not None and existing_active:
+            await self._restore_omitted_derivations(existing, properties)
         allow_property_delete = True
         if existing is not None and existing_active:
             if not allow_overwrite:
                 raise OntologyAlreadyExistsError(f"对象类型已存在: {name}，请更换对象类型名或编辑现有对象类型")
             allow_property_delete = await self._prepare_object_type_edit(existing, properties, payload)
         await self._validate_enum_refs(properties)
+        await self._validate_derivation_items(existing if existing_active else None, properties)
+        await self._ensure_derived_not_physically_mapped(existing, existing_active, properties)
         saved = await self._dao.upsert_object_type_full_async(
             name,
             meta_payload,
@@ -323,6 +334,7 @@ class OntologyService:
         new_identifiers = sorted(item["property_name"] for item in properties if item["is_identifier"])
         old_titles = sorted(item["property_name"] for item in old_properties if item["is_title"])
         new_titles = sorted(item["property_name"] for item in properties if item["is_title"])
+        await self._enforce_derivation_edit_guard(existing, old_properties, properties)
         if status == "certified":
             self._enforce_certified_freeze(
                 existing, old_properties, old_identifiers, new_identifiers, old_titles, new_titles, properties
@@ -353,6 +365,54 @@ class OntologyService:
         for relation in relation_types:
             self._require_relation_columns_valid(
                 relation, object_type_id, removed_names, identifier_changed, new_identifier_set
+            )
+
+    async def _enforce_derivation_edit_guard(
+        self,
+        existing: dict[str, Any],
+        old_properties: list[dict[str, Any]],
+        new_properties: list[dict[str, Any]],
+    ) -> None:
+        """属性变更门禁：不让既有派生属性悬空。
+
+        - 删除/改名目标属性：若仍被任一派生属性 target_property 引用，拒绝；
+        - 普通属性改为派生属性：若仍被关系类型关联列引用（无物理列），拒绝。
+        """
+        old_by_name = {_text(item.get("property_name")): item for item in old_properties}
+        new_by_name = {_text(item.get("property_name")): item for item in new_properties}
+        removed_names = set(old_by_name) - set(new_by_name)
+        if removed_names:
+            references = await self._dao.list_derivation_properties_async()
+            dangling = sorted(
+                {
+                    f"{_text(item.get('property_name'))} -> {_text((item.get('derivation') or {}).get('target_property'))}"
+                    for item in references
+                    if _text((item.get("derivation") or {}).get("target_property")) in removed_names
+                }
+            )
+            if dangling:
+                raise OntologyInvalidError(
+                    f"删除/改名属性会悬空派生属性引用，请先删除或调整派生属性: {'；'.join(dangling)}"
+                )
+        newly_derived = {
+            name
+            for name, item in new_by_name.items()
+            if item.get("derivation") and not (old_by_name.get(name) or {}).get("derivation")
+        }
+        if not newly_derived:
+            return
+        relations = await self._dao.list_relations_for_object_type_async(int(existing["id"]))
+        used = sorted(
+            {
+                column
+                for relation in relations
+                for column in (relation.get("from_columns") or []) + (relation.get("to_columns") or [])
+                if _text(column) in newly_derived
+            }
+        )
+        if used:
+            raise OntologyInvalidError(
+                f"属性改为派生后不能再被关系类型关联列引用（无物理列），请先调整关系类型: {', '.join(used)}"
             )
 
     def _require_relation_columns_valid(
@@ -430,6 +490,9 @@ class OntologyService:
             raise OntologyStateInvalidError("certified 对象类型禁止删除，请先降级或标记 deprecated")
         relation_types = await self._dao.list_relations_for_object_type_async(int(existing["id"]))
         for relation in relation_types:
+            await self._ensure_relation_not_referenced_by_derivation(
+                _text(relation.get("relation_type_name")), "随对象类型删除"
+            )
             await self._dao.soft_delete_relation_async(
                 _text(relation.get("relation_type_name")), operator, operator_name
             )
@@ -632,6 +695,7 @@ class OntologyService:
             if not allow_overwrite:
                 raise OntologyAlreadyExistsError(f"关系类型已存在: {name}，请更换关系类型名或编辑现有关系类型")
             if self._relation_structural_changed(existing, from_object_type, to_object_type, fields):
+                await self._ensure_relation_not_referenced_by_derivation(name, "变更结构（关联列/连接对象/基数）")
                 self._require_destructive_confirm(payload, "关系类型的连接对象类型、关联列或基数变更")
         row_payload: dict[str, Any] = {
             "from_object_type_id": int(from_object_type["id"]),
@@ -692,6 +756,7 @@ class OntologyService:
         existing = await self._dao.get_relation_row_async(relation_type_name)
         if existing is None:
             raise OntologyNotFoundError(f"关系类型不存在: {relation_type_name}")
+        await self._ensure_relation_not_referenced_by_derivation(relation_type_name, "删除")
         await self._dao.soft_delete_relation_async(relation_type_name, operator, operator_name)
 
     @_transactional
@@ -732,6 +797,8 @@ class OntologyService:
             raise OntologyStateInvalidError("连接对象类型已废弃，关系类型状态随对象类型级联，不可手动迁移")
         if not from_status or not to_status:
             raise OntologyStateInvalidError("关系类型连接的对象类型不存在或已被删除，无法迁移关系类型状态")
+        if target == "draft":
+            await self._ensure_relation_not_referenced_by_derivation(relation_type_name, "降级为 draft")
         bound = _derived_relation_status(from_status, to_status)
         if _status_rank(target) > _status_rank(bound):
             raise OntologyStateInvalidError(
@@ -758,9 +825,31 @@ class OntologyService:
             if _text(obj.get("status")) == "deprecated":
                 raise OntologyStateInvalidError(f"废弃对象类型禁止新建或变更关系类型: {obj.get('object_type_name')}")
 
+    async def _ensure_relation_not_referenced_by_derivation(self, relation_type_name: str, action: str) -> None:
+        """关系被派生属性引用时拒绝删除/降级/改结构，避免派生定义悬空。"""
+        references = [
+            item
+            for item in await self._dao.list_derivation_properties_async()
+            if _text((item.get("derivation") or {}).get("relation_type_name")) == _text(relation_type_name)
+        ]
+        if not references:
+            return
+        names = "、".join(
+            sorted({_text(item.get("property_name")) for item in references if item.get("property_name")})
+        )
+        raise OntologyStateInvalidError(
+            f"关系类型 {relation_type_name} 被派生属性引用（{names}），不能{action}；请先删除或调整派生属性"
+        )
+
     async def _validate_relation_columns(self, to_object_type: dict[str, Any], to_columns: list[str]) -> None:
         """目标侧关联列必须引用对方标识属性（FK→PK 红线）。"""
         properties = await self._dao.list_properties_async(int(to_object_type["id"]))
+        derived_names = {item["property_name"] for item in properties if item.get("derivation")}
+        derived_used = [column for column in to_columns if column in derived_names]
+        if derived_used:
+            raise OntologyInvalidError(
+                f"关系类型关联列不能引用派生属性（查询时计算、无物理列）: {', '.join(derived_used)}"
+            )
         identifier_names = {item["property_name"] for item in properties if item["is_identifier"]}
         invalid = [column for column in to_columns if column not in identifier_names]
         if invalid:
@@ -779,6 +868,12 @@ class OntologyService:
         """
         properties = await self._dao.list_properties_async(int(from_object_type["id"]))
         property_names = {item["property_name"] for item in properties}
+        derived_names = {item["property_name"] for item in properties if item.get("derivation")}
+        derived_used = [column for column in from_columns if column in derived_names]
+        if derived_used:
+            raise OntologyInvalidError(
+                f"关系类型关联列不能引用派生属性（查询时计算、无物理列）: {', '.join(derived_used)}"
+            )
         invalid = [column for column in from_columns if column not in property_names]
         if invalid:
             raise OntologyInvalidError(
@@ -807,6 +902,150 @@ class OntologyService:
                 found = None
             if found is None:
                 raise OntologyInvalidError(f"属性 {item['property_name']} 引用的全局枚举不存在: {enum_ref}")
+
+    async def _restore_omitted_derivations(self, existing: dict[str, Any], properties: list[dict[str, Any]]) -> None:
+        """未显式传 derivation 的既有派生属性保留原定义（显式 null 才清除）。
+
+        前端旧版本/第三方调用可能不带 derivation 字段；按属性名回填原定义，
+        避免「编辑对象类型保存一次就把派生属性静默降级成普通属性」的数据丢失。
+        """
+        old_properties = await self._dao.list_properties_async(int(existing["id"]))
+        old_derivations = {
+            _text(item.get("property_name")): item.get("derivation")
+            for item in old_properties
+            if isinstance(item.get("derivation"), dict) and item.get("derivation")
+        }
+        if not old_derivations:
+            return
+        for item in properties:
+            if item.get("derivation_provided"):
+                continue
+            inherited = old_derivations.get(_text(item.get("property_name")))
+            if inherited:
+                item["derivation"] = inherited
+                item["derivation_provided"] = True
+
+    async def _ensure_derived_not_physically_mapped(
+        self, existing: dict[str, Any] | None, existing_active: bool, properties: list[dict[str, Any]]
+    ) -> None:
+        """普通属性改成派生属性时，既有 Dataset 绑定映射必须已移除该属性（派生不落物理列）。"""
+        if existing is None or not existing_active:
+            return
+        derived_names = {
+            _text(item.get("property_name"))
+            for item in properties
+            if isinstance(item.get("derivation"), dict) and item.get("derivation")
+        }
+        if not derived_names:
+            return
+        binding = await self._dao.get_source_binding_async(int(existing["id"]))
+        if not binding:
+            return
+        mapped = {_text(key) for key in (binding.get("column_mappings") or {}) if _text(key)}
+        conflicts = sorted(derived_names & mapped)
+        if conflicts:
+            raise OntologyInvalidError(
+                f"派生属性不能保留物理列映射，请先从 Dataset 数据源绑定移除: {', '.join(conflicts)}"
+            )
+
+    async def _validate_derivation_items(
+        self, existing: dict[str, Any] | None, properties: list[dict[str, Any]]
+    ) -> None:
+        """派生属性语义校验（需查库）：关系存在/方向/目标属性类型，并回填推导的值类型。
+
+        方向规则（对齐 Palantir derived property 的链接遍历语义）：
+        - aggregate：本对象类型必须是关系的 to 侧（FK 指向本表，一对多的"一"侧），
+          聚合 from 侧多行，如 Customer.orderCount；
+        - select：本对象类型必须是关系的 from 侧（FK 在本表，链接单对象），
+          取 to 侧对象属性，如 Order.customerName。
+        """
+        derived_items = [item for item in properties if isinstance(item.get("derivation"), dict) and item["derivation"]]
+        if not derived_items:
+            return
+        if existing is None:
+            raise OntologyInvalidError("派生属性依赖关系类型，需在对象类型与关系类型创建后再编辑添加")
+        current_id = int(existing["id"])
+        relation_index = {_text(r.get("relation_type_name")): r for r in await self._dao.list_relations_async("")}
+        other_properties: dict[int, dict[str, dict[str, Any]]] = {}
+        for item in derived_items:
+            derivation = item["derivation"]
+            label = f"派生属性 {item['property_name']}"
+            relation = self._derivation_relation(relation_index, derivation, label)
+            other_id = self._derivation_other_object_type(relation, derivation, current_id, label)
+            target = await self._derivation_target_property(other_id, derivation, other_properties, label)
+            self._apply_derivation_value_type(item, derivation, target)
+
+    @staticmethod
+    def _derivation_relation(
+        relation_index: dict[str, dict[str, Any]], derivation: dict[str, Any], label: str
+    ) -> dict[str, Any]:
+        relation = relation_index.get(derivation["relation_type_name"])
+        if relation is None:
+            raise OntologyInvalidError(f"{label} 引用的关系类型不存在: {derivation['relation_type_name']}")
+        if _text(relation.get("status")) == "deprecated":
+            raise OntologyInvalidError(f"{label} 引用的关系类型已废弃: {derivation['relation_type_name']}")
+        if len(relation.get("from_columns") or []) != 1 or len(relation.get("to_columns") or []) != 1:
+            raise OntologyInvalidError(f"{label} 仅支持单列关联的关系类型（多列关联 MVP 不支持）")
+        return relation
+
+    @staticmethod
+    def _derivation_other_object_type(
+        relation: dict[str, Any], derivation: dict[str, Any], current_id: int, label: str
+    ) -> int:
+        from_id = int(relation["from_object_type_id"])
+        to_id = int(relation["to_object_type_id"])
+        if derivation["kind"] == "aggregate":
+            if to_id != current_id:
+                raise OntologyInvalidError(
+                    f"{label} 要求对象类型在关系 {derivation['relation_type_name']} 的 to 侧（被外键引用侧）"
+                )
+            other_id = from_id
+        else:
+            if from_id != current_id:
+                raise OntologyInvalidError(
+                    f"{label} 要求对象类型在关系 {derivation['relation_type_name']} 的 from 侧（外键在本表）"
+                )
+            other_id = to_id
+        if other_id == current_id:
+            raise OntologyInvalidError(f"{label} 暂不支持自关联关系")
+        return other_id
+
+    async def _derivation_target_property(
+        self,
+        other_id: int,
+        derivation: dict[str, Any],
+        cache: dict[int, dict[str, dict[str, Any]]],
+        label: str,
+    ) -> dict[str, Any] | None:
+        if other_id not in cache:
+            cache[other_id] = {prop["property_name"]: prop for prop in await self._dao.list_properties_async(other_id)}
+        target_property = _text(derivation.get("target_property"))
+        target = cache[other_id].get(target_property) if target_property else None
+        operator = _text(derivation.get("operator"))
+        needs_target = (operator and operator != "count") or derivation["kind"] == "select"
+        if not needs_target:
+            return target
+        if target is None:
+            raise OntologyInvalidError(f"{label} 的目标属性不存在于对端对象类型: {target_property}")
+        if target["value_type"] not in validator.BUILTIN_VALUE_TYPES:
+            raise OntologyInvalidError(f"{label} 的目标属性值类型 {target['value_type']} 不支持（仅内建类型可派生）")
+        if operator in ("sum", "avg") and target["value_type"] not in {"Integer", "Decimal"}:
+            raise OntologyInvalidError(
+                f"{label} 的 {operator} 目标属性必须是数值类型（Integer/Decimal），当前为 {target['value_type']}"
+            )
+        return target
+
+    @staticmethod
+    def _apply_derivation_value_type(
+        item: dict[str, Any], derivation: dict[str, Any], target: dict[str, Any] | None
+    ) -> None:
+        operator = _text(derivation.get("operator"))
+        if operator == "count":
+            item["value_type"] = "Integer"
+        elif operator in ("sum", "avg"):
+            item["value_type"] = "Decimal"
+        elif target is not None:
+            item["value_type"] = target["value_type"]
 
     async def _attach_object_type_names(self, relation_types: list[dict[str, Any]]) -> list[dict[str, Any]]:
         object_type_map = await self._dao.get_objects_by_ids_async(

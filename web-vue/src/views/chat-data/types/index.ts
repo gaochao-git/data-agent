@@ -1275,6 +1275,13 @@ export interface MetaGlobalEnumRef {
 export type OntologyObjectTypeStatus = 'draft' | 'experimental' | 'certified' | 'deprecated'
 
 // 本体属性项（属性一等实体，随对象类型表单整体提交）
+export interface OntologyPropertyDerivation {
+  kind: 'aggregate' | 'select'
+  relation_type_name: string
+  operator?: 'count' | 'sum' | 'avg' | 'min' | 'max' | ''
+  target_property?: string
+}
+
 export interface OntologyPropertyItem {
   property_name: string
   display_name: string
@@ -1286,6 +1293,8 @@ export interface OntologyPropertyItem {
   // 标识属性：参与对象类型主键组合（业务主键，禁自增行号）；标题属性：对象类型标题键（至多一个）
   is_identifier: boolean
   is_title: boolean
+  // 派生属性推导定义（只读、查询时计算、不映射物理列）；null/undefined 表示普通存储属性
+  derivation?: OntologyPropertyDerivation | null
 }
 
 // 本体（对位 Palantir ontology，纯语义容器不绑数据源组；对象类型取数后端由各自映射决定）

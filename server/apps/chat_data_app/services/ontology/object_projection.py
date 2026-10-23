@@ -64,6 +64,23 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _derived_property_names(detail: dict[str, Any]) -> set[str]:
+    """对象类型中派生属性名集合（查询时计算、无物理列，不能参与过滤/排序/聚合）。"""
+    return {
+        _text(prop.get("property_name"))
+        for prop in detail.get("properties") or []
+        if isinstance(prop, dict) and isinstance(prop.get("derivation"), dict) and prop["derivation"]
+    }
+
+
+def _reject_derived_property_operations(detail: dict[str, Any], property_names: list[Any], operation: str) -> None:
+    """派生属性尚无批量计算能力：过滤/排序/聚合等入口给出明确错误，避免落到「未映射属性」。"""
+    derived = _derived_property_names(detail)
+    hits = sorted({_text(name) for name in property_names if _text(name) in derived})
+    if hits:
+        raise ObjectProjectionError(f"派生属性不支持{operation}: {', '.join(hits)}")
+
+
 def _quote_identifier(value: str) -> str:
     """校验并引用表/列标识符；不允许任意 SQL 片段。"""
     parts = value.split(".")
@@ -359,6 +376,12 @@ def build_object_search_query(
     semantic_config_id: str | None = None,
 ) -> dict[str, Any]:
     """构造通用对象查询：关键词 + 属性过滤 + 排序 + 分页，并附带 count SQL。"""
+    _reject_derived_property_operations(
+        detail,
+        [_text((item or {}).get("property")) for item in filters or []]
+        + [_text((item or {}).get("property")) for item in sorts or []],
+        "过滤/排序",
+    )
     safe_limit = max(1, min(int(limit), 100))
     safe_offset = max(0, int(offset))
     mapping = _mapping_for_projection(detail, semantic_config_id)
@@ -511,6 +534,11 @@ def build_object_aggregate_query(
     semantic_config_id: str | None = None,
 ) -> dict[str, Any]:
     """构造对象聚合查询：映射属性 group by + 白名单指标聚合，不拼接任意 SQL。"""
+    _reject_derived_property_operations(
+        detail,
+        list(group_by or []) + [_text((item or {}).get("property")) for item in filters or []],
+        "聚合分组/过滤",
+    )
     safe_limit = max(1, min(int(limit), _MAX_AGGREGATE_LIMIT))
     context = _aggregate_projection_context(detail, config, semantic_config_id)
     column_by_property = context["column_by_property"]
@@ -555,6 +583,7 @@ def build_related_key_query(
     Palantir foreign-key link：一侧 foreign key 值匹配另一侧 primary key；
     本函数统一按“对端关系属性 → 对端标识属性”返回 link 目标。
     """
+    _reject_derived_property_operations(detail, [filter_property], "关联查询")
     mapping = _mapping_for_property(detail, filter_property)
     dimensions = _dimension_index(config)
     column_mappings = mapping.get("column_mappings")
@@ -623,8 +652,11 @@ def _assemble_object(
     row: dict[str, Any],
     links: dict[str, list[dict[str, Any]]],
     member_scope: dict[str, str] | None = None,
+    derived_values: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    # 派生属性值查询时合并进 properties（对齐 Palantir：derived 就是属性，不单独分组）
     properties = {name: row.get(name) for name in query["properties"]}
+    properties.update(derived_values or {})
     object_type = query["object_type"]
     scope = member_scope or {}
     return {
@@ -926,8 +958,196 @@ async def read_object_projection(
         raise ObjectProjectionError(f"对象不存在: {object_type_name}:{local_key}")
     row = await _apply_object_edits(detail, local_key, rows[0])
     scope = _member_scope(targets)
+    derived = await _derived_property_values(
+        detail, row, member_id=scope["member_datasource_id"], user_id=user_id, username=username
+    )
     links = await _read_links(detail, row, member_id=scope["member_datasource_id"], user_id=user_id, username=username)
-    return _assemble_object(detail, query, row, links, scope)
+    return _assemble_object(detail, query, row, links, scope, derived_values=derived)
+
+
+_DERIVED_AGGREGATE_SQL = {"sum": "SUM", "avg": "AVG", "min": "MIN", "max": "MAX"}
+
+
+def _build_derived_value_sql(
+    table: str,
+    filter_column: str,
+    filter_value: Any,
+    *,
+    operator: str = "",
+    target_column: str = "",
+) -> str:
+    """派生属性取值 SQL（纯函数，供单测复用）：聚合（多行→单值）或选取（单行单列）。
+
+    值经 escape_string 转义、标识符白名单引用，与对象投影其它查询同口径。
+    """
+    if operator == "count":
+        expression = "COUNT(*)"
+    elif operator:
+        expression = f"{_DERIVED_AGGREGATE_SQL[operator]}({_quote_identifier(target_column)})"
+    else:
+        expression = _quote_identifier(target_column)
+    limit = "" if operator else " LIMIT 1"
+    return (
+        f"SELECT {expression} AS `derived_value` FROM {_quote_identifier(table)} "
+        f"WHERE {_quote_identifier(filter_column)} = '{escape_string(str(filter_value))}'{limit}"
+    )
+
+
+def _derived_physical_column(
+    property_name: str,
+    column_mappings: dict[str, Any],
+    dimensions: dict[str, dict[str, str]],
+) -> tuple[str, str]:
+    """属性 → (物理表, 物理列)；未映射或解析失败抛 ObjectProjectionError。"""
+    dimension = dimensions.get(_text(column_mappings.get(property_name)))
+    if not dimension or not dimension.get("table") or not dimension.get("column"):
+        raise ObjectProjectionError(f"派生属性目标属性无法解析物理列: {property_name}")
+    return dimension["table"], dimension["column"]
+
+
+async def _derived_property_values(
+    detail: dict[str, Any],
+    row: dict[str, Any],
+    *,
+    member_id: str,
+    user_id: str,
+    username: str,
+) -> dict[str, Any]:
+    """派生属性值：查询时计算、不落存储（对齐 Palantir derived property）。
+
+    与一跳 links 同语义的最佳努力：单条失败置空并告警，不影响对象读取。
+    """
+    derived_props = [
+        prop
+        for prop in detail.get("properties") or []
+        if isinstance(prop, dict) and isinstance(prop.get("derivation"), dict) and prop["derivation"]
+    ]
+    if not derived_props:
+        return {}
+    current_id = int(detail.get("id") or 0)
+    results = await asyncio.gather(
+        *[
+            _compute_derived_value(
+                prop,
+                row,
+                current_id=current_id,
+                member_id=member_id,
+                user_id=user_id,
+                username=username,
+            )
+            for prop in derived_props
+        ],
+        return_exceptions=True,
+    )
+    values: dict[str, Any] = {}
+    for prop, result in zip(derived_props, results, strict=False):
+        if isinstance(result, BaseException):
+            logger.warning(
+                "派生属性计算失败，置空: %s.%s: %s",
+                detail.get("object_type_name"),
+                prop.get("property_name"),
+                result,
+            )
+        values[_text(prop.get("property_name"))] = None if isinstance(result, BaseException) else result
+    return values
+
+
+async def _compute_derived_value(
+    prop: dict[str, Any],
+    row: dict[str, Any],
+    *,
+    current_id: int,
+    member_id: str,
+    user_id: str,
+    username: str,
+) -> Any:
+    """单条派生属性计算：沿关系遍历到对端对象类型的物理表取值。"""
+    derivation = prop["derivation"]
+    relation = await _load_derived_relation(derivation)
+    side = _derived_relation_side(derivation, relation, current_id)
+    context = await _derived_query_context(derivation, side, member_id=member_id, user_id=user_id, username=username)
+    current_value = row.get(side["current_property"])
+    if current_value is None or _text(current_value) == "":
+        return None
+    sql = _build_derived_value_sql(
+        context["table"],
+        context["filter_column"],
+        current_value,
+        operator=_text(derivation.get("operator")),
+        target_column=context["target_column"],
+    )
+    rows = await _query_rows(
+        context["targets"], sql, group_id=context["group_id"], user_id=user_id, username=username, limit=1
+    )
+    return rows[0].get("derived_value") if rows else None
+
+
+async def _load_derived_relation(derivation: dict[str, Any]) -> dict[str, Any]:
+    relation_name = _text(derivation.get("relation_type_name"))
+    # list_relations 返回的行带两端对象类型名（原始 DAO 行只有 id）；与一跳 links 同口径
+    relations = await ontology_service.list_relations_async()
+    relation = next((item for item in relations if _text(item.get("relation_type_name")) == relation_name), None)
+    if relation is None:
+        raise ObjectProjectionError(f"派生属性引用的关系类型不存在: {relation_name}")
+    return relation
+
+
+def _derived_relation_side(derivation: dict[str, Any], relation: dict[str, Any], current_id: int) -> dict[str, str]:
+    side = _relation_side(relation, current_id)
+    if side is None:
+        raise ObjectProjectionError("派生属性仅支持单列关联的非自关联关系（MVP）")
+    kind = _text(derivation.get("kind"))
+    if kind == "aggregate" and side["direction"] != "to":
+        raise ObjectProjectionError("聚合派生属性要求当前对象类型在关系 to 侧")
+    if kind == "select" and side["direction"] != "from":
+        raise ObjectProjectionError("选取派生属性要求当前对象类型在关系 from 侧")
+    return side
+
+
+async def _derived_query_context(
+    derivation: dict[str, Any],
+    side: dict[str, str],
+    *,
+    member_id: str,
+    user_id: str,
+    username: str,
+) -> dict[str, Any]:
+    related_detail = await ontology_service.get_object_type_async(side["related_object_type"])
+    if related_detail is None:
+        raise ObjectProjectionError(f"派生属性对端对象类型不存在: {side['related_object_type']}")
+    config, query_detail, targets, group_id = await _dataset_mapping_context(
+        related_detail,
+        [member_id] if member_id else None,
+        user_id=user_id,
+        username=username,
+    )
+    dimensions = _dimension_index(config)
+    column_mappings = (query_detail.get("mappings") or [{}])[0].get("column_mappings") or {}
+    if not isinstance(column_mappings, dict):
+        raise ObjectProjectionError("对端对象类型映射缺少 column_mappings")
+    table, filter_column = _derived_physical_column(side["related_filter_property"], column_mappings, dimensions)
+    return {
+        "targets": targets,
+        "group_id": group_id,
+        "table": table,
+        "filter_column": filter_column,
+        "target_column": _derived_target_column(derivation, column_mappings, dimensions, table),
+    }
+
+
+def _derived_target_column(
+    derivation: dict[str, Any],
+    column_mappings: dict[str, Any],
+    dimensions: dict[str, dict[str, str]],
+    table: str,
+) -> str:
+    target_property = _text(derivation.get("target_property"))
+    if not target_property:
+        return ""
+    target_table, target_column = _derived_physical_column(target_property, column_mappings, dimensions)
+    if target_table != table:
+        raise ObjectProjectionError("派生属性目标属性与关联列不在同一张表，MVP 不支持")
+    return target_column
 
 
 def _assemble_list_item(
@@ -1158,6 +1378,11 @@ def build_object_metric_query(
     limit: int = 100,
 ) -> dict[str, Any]:
     """按语义指标表达式构造对象作用域聚合查询（只在对象投影表上执行）。"""
+    _reject_derived_property_operations(
+        detail,
+        list(group_by or []) + [_text((item or {}).get("property")) for item in filters or []],
+        "聚合分组/过滤",
+    )
     safe_limit = max(1, min(int(limit), _MAX_AGGREGATE_LIMIT))
     context = _aggregate_projection_context(detail, config, None)
     group_properties = _aggregate_group_properties(group_by, context["column_by_property"])

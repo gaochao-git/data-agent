@@ -28,6 +28,10 @@ OBJECT_STATUSES = ("draft", "experimental", "certified", "deprecated")
 ONTOLOGY_NAME_MAX_LENGTH = 64  # 落库列 chat_data_ontology.ontology_name = varchar(64)
 RELATION_MULTIPLICITIES = ("many_to_one", "one_to_one")
 RENDER_HINT_KEYS = ("searchable", "sortable", "low_cardinality")
+# 派生属性（对齐 Palantir derived property）：aggregate=跨链接聚合（本对象为关系 to 侧），
+# select=从链接对象选取（本对象为关系 from 侧）；表达式类 MVP 不做（Palantir 本体定义同样不支持）。
+DERIVATION_KINDS = ("aggregate", "select")
+DERIVATION_AGGREGATE_OPERATORS = ("count", "sum", "avg", "min", "max")
 
 BINDING_TYPE_SEMANTIC = "semantic"
 
@@ -117,7 +121,12 @@ def _validate_property_item(raw: Any, seen: set[str]) -> dict[str, Any]:
     name = validate_api_name(raw.get("property_name") or "", "属性API名")
     if name in seen:
         raise _invalid(f"属性API名重复: {name}")
+    derivation = _validate_derivation(name, raw.get("derivation"))
+    # 区分「未传 derivation」与「显式 null」：前者在编辑既有派生属性时保留原定义，后者才清除。
+    derivation_provided = "derivation" in raw
     value_type = _normalized_text(raw.get("value_type")) or "String"
+    if derivation:
+        return _normalized_derived_item(name, raw, derivation, value_type, derivation_provided)
     if value_type not in ALLOWED_VALUE_TYPES:
         raise _invalid(f"属性 {name} 的值类型必须是 {'/'.join(BUILTIN_VALUE_TYPES)} 或 enum")
     enum_ref = _normalized_text(raw.get("enum_ref"))
@@ -135,9 +144,78 @@ def _validate_property_item(raw: Any, seen: set[str]) -> dict[str, Any]:
         "value_type": value_type,
         "enum_ref": enum_ref,
         "render_hints": _validate_render_hints(name, raw.get("render_hints")),
+        "derivation": None,
+        "derivation_provided": derivation_provided,
         "is_identifier": is_identifier,
         "is_title": bool(raw.get("is_title")),
     }
+
+
+def _normalized_derived_item(
+    name: str,
+    raw: dict[str, Any],
+    derivation: dict[str, str],
+    value_type: str,
+    derivation_provided: bool,
+) -> dict[str, Any]:
+    """派生属性规范化：只读、查询时计算，值类型以服务端推导为准（入参忽略）。"""
+    if raw.get("is_identifier") or raw.get("is_title"):
+        raise _invalid(f"派生属性 {name} 不能作为标识或标题属性（只读、查询时计算）")
+    if raw.get("enum_ref"):
+        raise _invalid(f"派生属性 {name} 不能携带 enum_ref")
+    if raw.get("render_hints"):
+        raise _invalid(f"派生属性 {name} 不能携带 render_hints")
+    return {
+        "property_name": name,
+        "display_name": _normalized_text(raw.get("display_name")),
+        "description": _normalized_text(raw.get("description")),
+        "value_type": value_type,
+        "enum_ref": "",
+        "render_hints": {},
+        "derivation": derivation,
+        "derivation_provided": derivation_provided,
+        "is_identifier": False,
+        "is_title": False,
+    }
+
+
+def _validate_derivation(property_name: str, raw: Any) -> dict[str, str] | None:
+    """派生属性推导结构校验（纯结构红线；关系存在性/方向/目标类型由 service 查库校验）。"""
+    if raw in (None, {}):
+        return None
+    if not isinstance(raw, dict):
+        raise _invalid(f"属性 {property_name} 的 derivation 必须是对象")
+    kind = _normalized_text(raw.get("kind"))
+    if kind not in DERIVATION_KINDS:
+        raise _invalid(f"派生属性 {property_name} 的 kind 必须是 {'/'.join(DERIVATION_KINDS)}")
+    relation_name = validate_api_name(raw.get("relation_type_name") or "", "派生属性关系类型API名")
+    operator = _normalized_text(raw.get("operator"))
+    target_property = (
+        validate_api_name(str(raw.get("target_property") or ""), "派生属性目标属性API名")
+        if _normalized_text(raw.get("target_property"))
+        else ""
+    )
+    if kind == "aggregate":
+        _validate_aggregate_derivation(property_name, operator, target_property)
+    else:
+        _validate_select_derivation(property_name, operator, target_property)
+    return {"kind": kind, "relation_type_name": relation_name, "operator": operator, "target_property": target_property}
+
+
+def _validate_aggregate_derivation(property_name: str, operator: str, target_property: str) -> None:
+    if operator not in DERIVATION_AGGREGATE_OPERATORS:
+        raise _invalid(f"聚合派生属性 {property_name} 的 operator 必须是 {'/'.join(DERIVATION_AGGREGATE_OPERATORS)}")
+    if operator == "count" and target_property:
+        raise _invalid(f"count 聚合派生属性 {property_name} 不需要 target_property")
+    if operator != "count" and not target_property:
+        raise _invalid(f"{operator} 聚合派生属性 {property_name} 必须提供 target_property")
+
+
+def _validate_select_derivation(property_name: str, operator: str, target_property: str) -> None:
+    if operator:
+        raise _invalid(f"选取派生属性 {property_name} 不支持 operator")
+    if not target_property:
+        raise _invalid(f"选取派生属性 {property_name} 必须提供 target_property")
 
 
 def _validate_render_hints(property_name: str, raw_hints: Any) -> dict[str, bool]:

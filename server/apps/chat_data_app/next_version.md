@@ -235,6 +235,7 @@ CREATE TABLE `chat_data_ontology_property` (
   `value_type` varchar(32) NOT NULL DEFAULT 'String' COMMENT '值类型: String/Integer/Decimal/Boolean/Date/DateTime 或 enum(引用全局枚举)',
   `enum_ref` varchar(260) NOT NULL DEFAULT '' COMMENT '全局枚举引用，value_type=enum 时非空: "enum_name" 或 "business_domain:enum_name"',
   `render_hints_json` text COMMENT '渲染提示JSON文本: {"searchable":true,"sortable":true,"low_cardinality":false}',
+  `derivation_json` text COMMENT '派生属性推导定义JSON文本（NULL=普通存储属性）: {"kind":"aggregate|select","relation_type_name":"...","operator":"count|sum|avg|min|max","target_property":"..."}',
   `is_identifier` tinyint NOT NULL DEFAULT '0' COMMENT '标识属性: 1-参与对象类型主键组合（业务主键，禁自增行号）',
   `is_title` tinyint NOT NULL DEFAULT '0' COMMENT '标题属性: 1-对象类型标题键（每对象类型至多一个）',
   `delete_flag` tinyint NOT NULL DEFAULT '0' COMMENT '删除标识: 0-未删除, 1-已删除',
@@ -975,3 +976,19 @@ experimental/draft，主键/标题键/属性冻结保护形同虚设（降级后
   不涉及冻结保护的迁移、以及幂等迁移（目标=当前）不受影响；
 - 前端 `OntologyStatusDialog` 对 certified 降级增加二次确认弹窗并自动携带
   `confirm_destructive=true`。
+
+### 本体派生属性 derivation_json（2026-10-24）
+
+对齐 Palantir derived property：派生属性是查询时计算、只读、无物理列映射的属性（聚合/选取链接对象），
+定义存 `chat_data_ontology_property.derivation_json`。新建环境直接使用上方包含该列的建表 DDL；
+存量环境由 DBA 执行（应用账号无 DDL 权限）：
+
+```sql
+ALTER TABLE `chat_data_ontology_property`
+  ADD COLUMN `derivation_json` text NULL COMMENT '派生属性推导定义JSON文本（NULL=普通存储属性）: {"kind":"aggregate|select","relation_type_name":"...","operator":"count|sum|avg|min|max","target_property":"..."}' AFTER `render_hints_json`;
+```
+
+发布注意：
+- 先执行 DDL 再发布后端，否则 ORM 读取 `derivation_json` 会因缺列失败；
+- 派生属性不允许写入 `column_mappings`（不落物理列）；已有普通属性改成派生属性前，需先从 Dataset source binding 移除映射；
+- 派生属性只读：不能通过 Action 修改、不能作为关系关联列、不能作为过滤/排序/聚合字段（P0 明确报错）。

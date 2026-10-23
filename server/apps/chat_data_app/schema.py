@@ -460,6 +460,26 @@ class OntologyUpsertRequest(BaseModel):
     allow_overwrite: bool = Field(default=False, description="编辑既有活跃本体时为 True")
 
 
+class OntologyPropertyDerivation(BaseModel):
+    """派生属性推导定义（对齐 Palantir derived property：查询时计算、不落存储）。
+
+    - ``aggregate``：跨链接聚合，要求对象类型在关系类型的 to 侧（一对多的"一"侧），
+      如 Customer.orderCount = count(关系 Customer←Order)；
+    - ``select``：从链接对象选取单值，要求对象类型在关系类型的 from 侧（外键在本表），
+      如 Order.customerName。
+    值类型由服务端推导（count→Integer，sum/avg→Decimal，其余同目标属性），入参忽略。
+    """
+
+    kind: Literal["aggregate", "select"] = Field(
+        ..., description="推导类型：aggregate=跨链接聚合，select=从链接对象选取"
+    )
+    relation_type_name: str = Field(..., min_length=1, max_length=128, description="遍历的关系类型API名")
+    operator: Literal["count", "sum", "avg", "min", "max"] | None = Field(
+        default=None, description="聚合算子（kind=aggregate 必填；count 无需 target_property）"
+    )
+    target_property: str = Field(default="", max_length=128, description="对端对象类型的目标属性API名（count 省略）")
+
+
 class OntologyPropertyItem(BaseModel):
     """本体属性项（属性一等实体，随对象类型表单整体提交）"""
 
@@ -467,7 +487,7 @@ class OntologyPropertyItem(BaseModel):
     display_name: str = Field(default="", max_length=128, description="展示名")
     description: str = Field(default="", max_length=1024, description="属性描述")
     value_type: Literal["String", "Integer", "Decimal", "Boolean", "Date", "DateTime", "enum"] = Field(
-        default="String", description="值类型：内建类型或 enum（引用全局枚举）"
+        default="String", description="值类型：内建类型或 enum（引用全局枚举）；派生属性由服务端推导，入参忽略"
     )
     enum_ref: str = Field(
         default="",
@@ -479,6 +499,10 @@ class OntologyPropertyItem(BaseModel):
     )
     is_identifier: bool = Field(default=False, description="标识属性：参与对象类型主键组合（业务主键，禁自增行号）")
     is_title: bool = Field(default=False, description="标题属性：对象类型标题键（每对象类型至多一个）")
+    derivation: OntologyPropertyDerivation | None = Field(
+        default=None,
+        description="派生属性推导定义；非空时属性为只读派生属性（禁主键/标题/enum/渲染提示）",
+    )
 
 
 class OntologyMappingItem(BaseModel):

@@ -53,6 +53,25 @@
 | 系统提示词 | `ONTOLOGY_WORKFLOW_BLOCK` + 本体环境/技能/错误处理段 | 原语义提示词与 `data-analyzing` 技能链路 |
 | 回退 | **禁止**回退语义查询/DSL/SQL | 不出现本体目录与本体工具 |
 
+## 派生属性（对齐 Palantir derived property，2026-10-24）
+
+查询时计算、只读、无物理列映射的属性，定义存 `chat_data_ontology_property.derivation_json`
+（`{kind, relation_type_name, operator?, target_property?}`）。两种推导：
+
+- **aggregate**（跨链接聚合）：对象类型须为关系的 **to 侧**（被外键引用侧），聚合 from 侧
+  多行——如 `Customer.orderCount = count(r1)`、`Customer.totalAmount = sum(r1, amount)`；
+- **select**（从链接对象选取）：对象类型须为关系的 **from 侧**（外键在本表），取 to 侧
+  单对象属性——如 `Order.customerName`。
+
+约束与口径：
+
+- 值类型由服务端推导（count→Integer，sum/avg→Decimal，min/max/select 同目标属性），入参忽略；
+- 禁主键/标题/enum_ref/render_hints；不得出现在 source binding `column_mappings`；
+- 新建对象类型不能带派生属性（关系尚不可能存在），只能创建关系后编辑添加；
+- 自关联、多列关联关系 MVP 不支持；执行在 `read_object_projection` 查询时计算（同 member、
+  最佳努力：单条失败置空告警），目录与定位器输出 `derived: true` + 推导定义；
+- 与语义层指标正交：派生属性是「对象身上的计算字段」，全局命名指标口径仍在语义层。
+
 ## 指标关联（对象类型 ↔ 语义层）
 
 对象类型不承载指标口径；指标定义唯一权威在语义层。二者的关联走 Logical Dataset 的

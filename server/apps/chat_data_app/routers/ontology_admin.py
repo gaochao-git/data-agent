@@ -321,9 +321,10 @@ async def upsert_ontology_object_type(
     """创建/整体编辑本体对象类型（元数据 + 属性集 + 绑定一次性提交）。"""
     try:
         current_user = _get_current_user(request)
+        # exclude_unset：未显式传 derivation 的既有派生属性由 service 保留原定义（显式 null 才清除）
         data = await ontology_service.upsert_object_type_async(
             object_type_name,
-            payload.model_dump(),
+            payload.model_dump(exclude_unset=True),
             operator=str(current_user.user_id),
             operator_name=str(current_user.username or ""),
             allow_overwrite=payload.allow_overwrite,

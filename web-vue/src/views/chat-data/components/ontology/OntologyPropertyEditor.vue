@@ -24,6 +24,8 @@ const emit = defineEmits<{
 }>()
 
 const isFrozen = (name: string) => props.frozenNames.includes(name)
+// 派生属性只读、查询时计算、无物理列：名称/值类型/枚举/主键/标题/渲染提示均不可在表单改，仅展示名与描述可编辑。
+const isDerived = (row: OntologyPropertyItem) => !!(row.derivation && row.derivation.kind)
 
 // 冻结的标题键不可被其他行顶掉：认证后标题键随主键组合一起冻结
 const titleLocked = computed(() => props.rows.some(row => isFrozen(row.property_name) && row.is_title))
@@ -114,17 +116,21 @@ const hintCount = (row: OntologyPropertyItem) => Object.keys(row.render_hints ||
       <el-input
         v-model="row.property_name"
         size="small"
-        :disabled="isFrozen(row.property_name)"
+        :disabled="isFrozen(row.property_name) || isDerived(row)"
         placeholder="如 order_no"
         class="!w-36 shrink-0 font-mono"
         @focus="onNameFocus(row)"
         @change="onNameChange(row)"
       />
       <el-input v-model="row.display_name" size="small" placeholder="展示名" class="!w-28 shrink-0" />
+      <el-tooltip v-if="isDerived(row)" content="派生属性：只读、查询时计算、不映射物理列" placement="top">
+        <el-tag size="small" type="warning" effect="plain" class="shrink-0">派生</el-tag>
+      </el-tooltip>
       <el-select
         v-model="row.value_type"
         size="small"
         class="!w-28 shrink-0"
+        :disabled="isDerived(row)"
         :empty-values="[null, undefined]"
         @change="onValueTypeChange(row)"
       >
@@ -134,7 +140,7 @@ const hintCount = (row: OntologyPropertyItem) => Object.keys(row.render_hints ||
         v-model="row.enum_ref"
         size="small"
         class="!w-40 shrink-0"
-        :disabled="row.value_type !== 'enum'"
+        :disabled="row.value_type !== 'enum' || isDerived(row)"
         filterable
         allow-create
         default-first-option
@@ -146,21 +152,21 @@ const hintCount = (row: OntologyPropertyItem) => Object.keys(row.render_hints ||
       <div class="flex w-14 shrink-0 justify-center">
         <el-checkbox
           v-model="row.is_identifier"
-          :disabled="isFrozen(row.property_name) || row.value_type === 'Decimal'"
+          :disabled="isFrozen(row.property_name) || row.value_type === 'Decimal' || isDerived(row)"
           :title="row.value_type === 'Decimal' ? 'Decimal 为浮点/小数类型，禁止作为标识属性' : undefined"
         />
       </div>
       <div class="flex w-14 shrink-0 justify-center">
         <el-checkbox
           v-model="row.is_title"
-          :disabled="isFrozen(row.property_name) || (titleLocked && !row.is_title)"
+          :disabled="isFrozen(row.property_name) || (titleLocked && !row.is_title) || isDerived(row)"
           @change="(checked: boolean | string | number) => onTitleChange(row, checked)"
         />
       </div>
       <div class="flex w-16 shrink-0 justify-center">
         <el-popover placement="bottom" :width="180" trigger="click">
           <template #reference>
-            <el-button link size="small" type="primary">
+            <el-button link size="small" type="primary" :disabled="isDerived(row)">
               <i class="fa-solid fa-sliders text-[11px]"></i>
               <span v-if="hintCount(row)" class="ml-0.5 text-[11px]">{{ hintCount(row) }}</span>
             </el-button>

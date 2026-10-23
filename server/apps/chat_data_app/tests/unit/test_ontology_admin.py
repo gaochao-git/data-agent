@@ -672,6 +672,220 @@ def test_list_source_bindings_for_consistency(harness):
     assert bindings == [{"object_type_id": 1, "column_mappings": {"order_id": "order_id"}}]
 
 
+# ---------- 派生属性 P0：保留语义 / 只读 / 依赖保护 ----------
+
+
+def _customer_properties(*extra: dict) -> list[dict]:
+    return [
+        {
+            "property_name": "customer_id",
+            "display_name": "客户ID",
+            "value_type": "String",
+            "is_identifier": True,
+            "is_title": True,
+        },
+        {"property_name": "customer_name", "display_name": "客户名", "value_type": "String"},
+        *extra,
+    ]
+
+
+def _order_count_property() -> dict:
+    return {
+        "property_name": "order_count",
+        "display_name": "订单数",
+        "value_type": "String",
+        "derivation": {
+            "kind": "aggregate",
+            "relation_type_name": "order_belongs_to_customer",
+            "operator": "count",
+            "target_property": "",
+        },
+    }
+
+
+def _setup_order_customer() -> None:
+    asyncio.run(ontology_service.upsert_object_type_async("Order", _object_payload(properties=[dict(VALID_PROPERTY)])))
+    asyncio.run(
+        ontology_service.upsert_object_type_async("Customer", _object_payload(properties=_customer_properties()))
+    )
+    asyncio.run(
+        ontology_service.upsert_relation_async(
+            "order_belongs_to_customer",
+            {
+                "from_object_type_name": "Order",
+                "to_object_type_name": "Customer",
+                "from_columns": ["order_id"],
+                "to_columns": ["customer_id"],
+            },
+        )
+    )
+
+
+def test_derivation_omitted_keeps_definition_and_explicit_null_clears(harness, deps_ok):
+    """前端未传 derivation 时保留既有定义；显式 null 才清除（防编辑保存清空数据）。"""
+    _setup_order_customer()
+    props = _customer_properties(_order_count_property())
+    asyncio.run(
+        ontology_service.upsert_object_type_async("Customer", _object_payload(properties=props), allow_overwrite=True)
+    )
+    saved = asyncio.run(ontology_service.get_object_type_async("Customer"))
+    order_count = next(item for item in saved["properties"] if item["property_name"] == "order_count")
+    assert order_count["value_type"] == "Integer"
+    assert order_count["derivation"]["kind"] == "aggregate"
+
+    # 旧前端/第三方调用不传 derivation：不能再把定义写成 NULL
+    without_derivation = [
+        {
+            "property_name": item["property_name"],
+            "display_name": item["display_name"],
+            "value_type": item["value_type"],
+            "is_identifier": bool(item.get("is_identifier")),
+            "is_title": bool(item.get("is_title")),
+        }
+        for item in props
+    ]
+    asyncio.run(
+        ontology_service.upsert_object_type_async(
+            "Customer", _object_payload(properties=without_derivation), allow_overwrite=True
+        )
+    )
+    kept = asyncio.run(ontology_service.get_object_type_async("Customer"))
+    kept_prop = next(item for item in kept["properties"] if item["property_name"] == "order_count")
+    assert kept_prop["derivation"]["operator"] == "count"
+    assert kept_prop["value_type"] == "Integer"
+
+    # 显式 null 才视为清除派生定义
+    cleared = [dict(item) for item in without_derivation]
+    next(item for item in cleared if item["property_name"] == "order_count")["derivation"] = None
+    asyncio.run(
+        ontology_service.upsert_object_type_async("Customer", _object_payload(properties=cleared), allow_overwrite=True)
+    )
+    final = asyncio.run(ontology_service.get_object_type_async("Customer"))
+    final_prop = next(item for item in final["properties"] if item["property_name"] == "order_count")
+    assert final_prop["derivation"] is None
+
+
+def test_relation_columns_reject_derived_property(harness, deps_ok):
+    _setup_order_customer()
+    asyncio.run(
+        ontology_service.upsert_object_type_async(
+            "Customer",
+            _object_payload(properties=_customer_properties(_order_count_property())),
+            allow_overwrite=True,
+        )
+    )
+    with pytest.raises(OntologyInvalidError, match="派生属性"):
+        asyncio.run(
+            ontology_service.upsert_relation_async(
+                "customer_orders",
+                {
+                    "from_object_type_name": "Customer",
+                    "to_object_type_name": "Order",
+                    "from_columns": ["order_count"],
+                    "to_columns": ["order_id"],
+                },
+            )
+        )
+
+
+def test_delete_relation_referenced_by_derivation_is_rejected(harness, deps_ok):
+    _setup_order_customer()
+    asyncio.run(
+        ontology_service.upsert_object_type_async(
+            "Customer",
+            _object_payload(properties=_customer_properties(_order_count_property())),
+            allow_overwrite=True,
+        )
+    )
+    with pytest.raises(OntologyStateInvalidError, match="派生属性"):
+        asyncio.run(ontology_service.delete_relation_async("order_belongs_to_customer"))
+
+
+def test_removing_derivation_target_property_is_rejected(harness, deps_ok):
+    _setup_order_customer()
+    select_property = {
+        "property_name": "customer_name_copy",
+        "display_name": "客户名（选取）",
+        "value_type": "String",
+        "derivation": {
+            "kind": "select",
+            "relation_type_name": "order_belongs_to_customer",
+            "operator": "",
+            "target_property": "customer_name",
+        },
+    }
+    asyncio.run(
+        ontology_service.upsert_object_type_async(
+            "Order",
+            _object_payload(properties=[dict(VALID_PROPERTY), select_property]),
+            allow_overwrite=True,
+        )
+    )
+    with pytest.raises(OntologyInvalidError, match="悬空派生属性"):
+        asyncio.run(
+            ontology_service.upsert_object_type_async(
+                "Customer",
+                _object_payload(
+                    properties=[
+                        {
+                            "property_name": "customer_id",
+                            "display_name": "客户ID",
+                            "value_type": "String",
+                            "is_identifier": True,
+                            "is_title": True,
+                        }
+                    ]
+                ),
+                allow_overwrite=True,
+            )
+        )
+
+
+def test_relation_downgrade_to_draft_rejected_when_referenced(harness, deps_ok):
+    _setup_order_customer()
+    asyncio.run(
+        ontology_service.upsert_object_type_async(
+            "Customer",
+            _object_payload(properties=_customer_properties(_order_count_property())),
+            allow_overwrite=True,
+        )
+    )
+    asyncio.run(ontology_service.set_object_type_status_async("Order", "experimental", {}))
+    asyncio.run(ontology_service.set_object_type_status_async("Customer", "experimental", {}))
+    asyncio.run(ontology_service.set_relation_status_async("order_belongs_to_customer", "experimental"))
+    with pytest.raises(OntologyStateInvalidError, match="派生属性"):
+        asyncio.run(ontology_service.set_relation_status_async("order_belongs_to_customer", "draft"))
+
+
+def test_object_type_delete_rejected_when_relation_referenced(harness, deps_ok):
+    _setup_order_customer()
+    asyncio.run(
+        ontology_service.upsert_object_type_async(
+            "Customer",
+            _object_payload(properties=_customer_properties(_order_count_property())),
+            allow_overwrite=True,
+        )
+    )
+    with pytest.raises(OntologyStateInvalidError, match="随对象类型删除"):
+        asyncio.run(ontology_service.delete_object_type_async("Order"))
+
+
+def test_derived_property_cannot_keep_source_binding_mapping(monkeypatch):
+    class _BindingDao:
+        async def get_source_binding_async(self, _object_type_id):
+            return {"column_mappings": {"order_count": "order_count"}}
+
+    monkeypatch.setattr(ontology_service, "_dao", _BindingDao())
+    with pytest.raises(OntologyInvalidError, match="物理列映射"):
+        asyncio.run(
+            ontology_service._ensure_derived_not_physically_mapped(
+                {"id": 1},
+                True,
+                [{"property_name": "order_count", "derivation": {"kind": "aggregate"}}],
+            )
+        )
+
+
 # ---------- 本体（纯语义容器，不绑数据源组） ----------
 
 
@@ -1068,3 +1282,241 @@ def test_one_to_one_from_columns_require_identifier(harness, deps_ok):  # noqa: 
         )
     )
     assert saved["multiplicity"] == "one_to_one"
+
+
+# ---------- 派生属性（对齐 Palantir derived property，2026-10-24） ----------
+
+
+def _derived_relation_fixture():
+    """Order(from, 带 amount) --r1--> User(to)：聚合挂在 User，选取挂在 Order。"""
+    asyncio.run(
+        ontology_service.upsert_object_type_async(
+            "Order",
+            _object_payload(properties=[dict(VALID_PROPERTY), {"property_name": "amount", "value_type": "Decimal"}]),
+        )
+    )
+    asyncio.run(ontology_service.upsert_object_type_async("User", _object_payload(display_name="用户")))
+    asyncio.run(
+        ontology_service.upsert_relation_async(
+            "r1",
+            {
+                "from_object_type_name": "Order",
+                "to_object_type_name": "User",
+                "from_columns": ["order_id"],
+                "to_columns": ["order_id"],
+            },
+        )
+    )
+
+
+def test_derived_property_definition_and_type_inference(harness, deps_ok):
+    """派生属性：to 侧聚合 / from 侧选取；值类型由服务端推导并随详情回读。"""
+    _derived_relation_fixture()
+    user_props = [
+        dict(VALID_PROPERTY),
+        {
+            "property_name": "order_count",
+            "display_name": "订单数",
+            "derivation": {"kind": "aggregate", "relation_type_name": "r1", "operator": "count"},
+        },
+        {
+            "property_name": "total_amount",
+            "display_name": "订单总金额",
+            "derivation": {
+                "kind": "aggregate",
+                "relation_type_name": "r1",
+                "operator": "sum",
+                "target_property": "amount",
+            },
+        },
+    ]
+    saved_user = asyncio.run(
+        ontology_service.upsert_object_type_async(
+            "User", _object_payload(properties=user_props, display_name="用户"), allow_overwrite=True
+        )
+    )
+    user_by_name = {item["property_name"]: item for item in saved_user["properties"]}
+    assert user_by_name["order_count"]["value_type"] == "Integer"
+    assert user_by_name["order_count"]["derivation"]["operator"] == "count"
+    assert user_by_name["total_amount"]["value_type"] == "Decimal"
+
+    order_props = [
+        dict(VALID_PROPERTY),
+        {"property_name": "amount", "value_type": "Decimal"},
+        {
+            "property_name": "customer_key",
+            "display_name": "客户键",
+            "derivation": {"kind": "select", "relation_type_name": "r1", "target_property": "order_id"},
+        },
+    ]
+    saved_order = asyncio.run(
+        ontology_service.upsert_object_type_async(
+            "Order", _object_payload(properties=order_props), allow_overwrite=True
+        )
+    )
+    order_by_name = {item["property_name"]: item for item in saved_order["properties"]}
+    assert order_by_name["customer_key"]["value_type"] == "String"
+    assert order_by_name["customer_key"]["derivation"]["kind"] == "select"
+
+
+def test_derived_property_rejections(harness, deps_ok, monkeypatch):
+    """派生属性红线：新建即带派生、方向错、目标缺失/类型不符、关系缺失、主键/结构违规。"""
+    with pytest.raises(OntologyInvalidError, match="创建后再编辑添加"):
+        asyncio.run(
+            ontology_service.upsert_object_type_async(
+                "Fresh",
+                _object_payload(
+                    properties=[
+                        dict(VALID_PROPERTY),
+                        {
+                            "property_name": "order_count",
+                            "derivation": {"kind": "aggregate", "relation_type_name": "r1", "operator": "count"},
+                        },
+                    ]
+                ),
+            )
+        )
+    _derived_relation_fixture()
+
+    def _edit_order(properties):
+        asyncio.run(
+            ontology_service.upsert_object_type_async(
+                "Order", _object_payload(properties=properties), allow_overwrite=True
+            )
+        )
+
+    def _edit_user(properties):
+        asyncio.run(
+            ontology_service.upsert_object_type_async(
+                "User", _object_payload(properties=properties, display_name="用户"), allow_overwrite=True
+            )
+        )
+
+    # 方向错：aggregate 挂 from 侧 / select 挂 to 侧
+    with pytest.raises(OntologyInvalidError, match="to 侧"):
+        _edit_order(
+            [
+                dict(VALID_PROPERTY),
+                {"property_name": "amount", "value_type": "Decimal"},
+                {
+                    "property_name": "bad_agg",
+                    "derivation": {"kind": "aggregate", "relation_type_name": "r1", "operator": "count"},
+                },
+            ]
+        )
+    with pytest.raises(OntologyInvalidError, match="from 侧"):
+        _edit_user(
+            [
+                dict(VALID_PROPERTY),
+                {
+                    "property_name": "bad_select",
+                    "derivation": {"kind": "select", "relation_type_name": "r1", "target_property": "order_id"},
+                },
+            ]
+        )
+    # 目标属性不存在 / sum 目标非数值 / 关系类型不存在
+    with pytest.raises(OntologyInvalidError, match="目标属性不存在"):
+        _edit_user(
+            [
+                dict(VALID_PROPERTY),
+                {
+                    "property_name": "ghost_sum",
+                    "derivation": {
+                        "kind": "aggregate",
+                        "relation_type_name": "r1",
+                        "operator": "sum",
+                        "target_property": "ghost",
+                    },
+                },
+            ]
+        )
+    with pytest.raises(OntologyInvalidError, match="数值类型"):
+        _edit_user(
+            [
+                dict(VALID_PROPERTY),
+                {
+                    "property_name": "bad_sum",
+                    "derivation": {
+                        "kind": "aggregate",
+                        "relation_type_name": "r1",
+                        "operator": "sum",
+                        "target_property": "order_id",
+                    },
+                },
+            ]
+        )
+    with pytest.raises(OntologyInvalidError, match="关系类型不存在"):
+        _edit_user(
+            [
+                dict(VALID_PROPERTY),
+                {
+                    "property_name": "no_rel",
+                    "derivation": {"kind": "aggregate", "relation_type_name": "ghost_rel", "operator": "count"},
+                },
+            ]
+        )
+    # 结构红线（validator 层）：派生属性禁标识/标题、count 不带 target
+    with pytest.raises(OntologyInvalidError, match="标识或标题"):
+        _edit_user(
+            [
+                dict(VALID_PROPERTY),
+                {
+                    "property_name": "as_key",
+                    "is_identifier": True,
+                    "derivation": {"kind": "aggregate", "relation_type_name": "r1", "operator": "count"},
+                },
+            ]
+        )
+    with pytest.raises(OntologyInvalidError, match="不需要 target_property"):
+        _edit_user(
+            [
+                dict(VALID_PROPERTY),
+                {
+                    "property_name": "count_with_target",
+                    "derivation": {
+                        "kind": "aggregate",
+                        "relation_type_name": "r1",
+                        "operator": "count",
+                        "target_property": "amount",
+                    },
+                },
+            ]
+        )
+    # 派生属性不映射物理列：先把派生属性成功加到 User，再尝试映射
+    asyncio.run(
+        ontology_service.upsert_object_type_async(
+            "User",
+            _object_payload(
+                properties=[
+                    dict(VALID_PROPERTY),
+                    {
+                        "property_name": "order_count",
+                        "derivation": {"kind": "aggregate", "relation_type_name": "r1", "operator": "count"},
+                    },
+                ],
+                display_name="用户",
+            ),
+            allow_overwrite=True,
+        )
+    )
+
+    async def _get_dataset(_dataset_id):
+        return {
+            "id": 3,
+            "dataset_name": "orders",
+            "columns": [{"name": "order_id"}, {"name": "amount"}],
+            "bindings": [],
+        }
+
+    monkeypatch.setattr(
+        ontology_service_module,
+        "logical_dataset_service",
+        type("F", (), {"get_dataset_async_by_id_async": staticmethod(_get_dataset)}),
+    )
+    with pytest.raises(OntologyInvalidError, match="不映射物理列"):
+        asyncio.run(
+            ontology_service.set_source_binding_async(
+                "User",
+                {"dataset_id": 3, "column_mappings": {"order_id": "order_id", "order_count": "amount"}},
+            )
+        )

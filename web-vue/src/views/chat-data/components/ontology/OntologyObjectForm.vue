@@ -71,7 +71,7 @@ const syncSourceMappings = () => {
   const next: Record<string, string> = {}
   for (const property of propertyRows.value) {
     const name = property.property_name.trim()
-    if (!name) continue
+    if (!name || property.derivation) continue
     const current = sourceMappings.value[name]
     if (current && columns.has(current)) next[name] = current
     else if (columns.has(name)) next[name] = name
@@ -139,7 +139,10 @@ const openLoad = async () => {
     propertyRows.value = (detail.properties || []).map(item => ({ ...item, render_hints: { ...(item.render_hints || {}) } }))
     if (detail.source_binding) {
       sourceDatasetId.value = detail.source_binding.dataset_id
-      sourceMappings.value = { ...(detail.source_binding.column_mappings || {}) }
+      const derivedNames = new Set(propertyRows.value.filter(row => row.derivation).map(row => row.property_name))
+      sourceMappings.value = Object.fromEntries(
+        Object.entries(detail.source_binding.column_mappings || {}).filter(([name]) => !derivedNames.has(name))
+      )
     }
   } catch (err) {
     // 拦截器已弹出具体错误原因，不再重复提示
@@ -233,7 +236,10 @@ const saveObject = async () => {
         enum_ref: row.value_type === 'enum' ? row.enum_ref.trim() : '',
         render_hints: { ...row.render_hints },
         is_identifier: row.is_identifier,
-        is_title: row.is_title
+        is_title: row.is_title,
+        // 派生属性只读、查询时计算：编辑既有派生属性时必须原样回传，避免保存时清空 derivation_json；
+        // 普通属性不携带该键，后端按「未显式传」保留既有定义。
+        ...(row.derivation ? { derivation: row.derivation } : {})
       })),
       allow_overwrite: editing.value,
       confirm_destructive: confirmDestructive
@@ -359,7 +365,7 @@ const saveObject = async () => {
             <span>Dataset 列</span>
           </div>
           <div
-            v-for="property in propertyRows.filter(item => item.property_name.trim())"
+            v-for="property in propertyRows.filter(item => item.property_name.trim() && !item.derivation)"
             :key="property.property_name"
             class="grid grid-cols-[minmax(140px,220px)_1fr] items-center gap-3 border-b border-slate-50 px-3 py-1.5 last:border-b-0"
           >
@@ -386,6 +392,12 @@ const saveObject = async () => {
         </div>
         <div v-else class="mt-3 rounded-md border border-dashed border-slate-200 px-3 py-4 text-center text-[11px] text-slate-400">
           先选择一个 Dataset，再配置属性到列的映射
+        </div>
+        <div
+          v-if="propertyRows.some(item => item.derivation)"
+          class="mt-2 rounded-md border border-amber-100 bg-amber-50 px-3 py-2 text-[11px] text-amber-700"
+        >
+          派生属性只读、查询时计算，不参与 Dataset 列映射；如需映射请先从属性上移除派生定义。
         </div>
       </div>
     </div>
