@@ -1150,15 +1150,49 @@ def _derived_target_column(
     return target_column
 
 
+async def _derived_values_for_rows(
+    detail: dict[str, Any],
+    rows: list[dict[str, Any]],
+    scope: dict[str, str],
+    *,
+    user_id: str,
+    username: str,
+) -> list[dict[str, Any]]:
+    """列表页派生值：按当前页逐行计算（MVP，避免把派生值混进物理 SQL）。"""
+    has_derived = any(
+        isinstance(prop, dict) and isinstance(prop.get("derivation"), dict) and prop["derivation"]
+        for prop in detail.get("properties") or []
+    )
+    if not has_derived or not rows:
+        return [{} for _ in rows]
+    return await asyncio.gather(
+        *[
+            _derived_property_values(
+                detail,
+                row,
+                member_id=scope.get("member_datasource_id", ""),
+                user_id=user_id,
+                username=username,
+            )
+            for row in rows
+        ]
+    )
+
+
 def _assemble_list_item(
-    query: dict[str, Any], row: dict[str, Any], member_scope: dict[str, str] | None = None
+    query: dict[str, Any],
+    row: dict[str, Any],
+    member_scope: dict[str, str] | None = None,
+    derived_values: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     scope = member_scope or {}
     local_key = _text(row.get(query["identifier_property"]))
+    properties = {name: row.get(name) for name in query["properties"]}
+    properties.update(derived_values or {})
     return {
         "object_type": query["object_type"],
         "object_key": _qualified_object_key(scope.get("member_datasource_id", ""), query["object_type"], local_key),
-        "properties": {name: row.get(name) for name in query["properties"]},
+        "properties": properties,
         **scope,
     }
 
@@ -1217,15 +1251,19 @@ async def search_object_projection(
     )
     execution_time_ms = int((time.perf_counter() - started_at) * 1000)
     has_more = len(rows) > query["limit"]
+    page_rows = rows[: query["limit"]]
     scope = _member_scope(targets)
+    derived_values = await _derived_values_for_rows(detail, page_rows, scope, user_id=user_id, username=username)
     return {
-        "objects": [_assemble_list_item(query, row, scope) for row in rows[: query["limit"]]],
+        "objects": [
+            _assemble_list_item(query, row, scope, derived_values[index]) for index, row in enumerate(page_rows)
+        ],
         "has_more": has_more,
         "limit": query["limit"],
         "offset": query["offset"],
         "total": total,
         "title_property": query["title_property"],
-        "properties": query["properties"],
+        "properties": [*query["properties"], *sorted(_derived_property_names(detail))],
         "sql": query["sql"],
         "execution_time_ms": execution_time_ms,
         **_member_scope(targets),

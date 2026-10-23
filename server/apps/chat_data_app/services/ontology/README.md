@@ -70,8 +70,10 @@
 - 新建对象类型不能带派生属性（关系尚不可能存在），只能创建关系后编辑添加；
 - 自关联、多列关联关系 MVP 不支持；执行在 `read_object_projection` 查询时计算（同 member、
   最佳努力：单条失败置空告警），目录与定位器输出 `derived: true` + 推导定义；
-- **MVP 边界**：派生值只在单对象读取（`objects/read` / `get_object`）计算返回；列表/搜索/
-  聚合视图不含派生值（每行需一次对端查询，N 行 N 查不可接受），后续可考虑 SQL JOIN 批量化；
+- **MVP 边界**：单对象读取（`objects/read` / `get_object`）逐属性计算；列表/搜索页按当前页
+  逐行计算派生值（每行一次对端查询，分页有界；后续可改为 SQL JOIN/批量聚合）；过滤/排序/
+  聚合/分组仍显式拒绝派生属性，官方 derived properties reference 支持这些操作，后续按
+  SQL 下推补齐；
 - 与语义层指标正交：派生属性是「对象身上的计算字段」，全局命名指标口径仍在语义层。
 
 ## 指标关联（对象类型 ↔ 语义层）
@@ -155,3 +157,14 @@ DDL 见 `next_version.md`「本体 Action Type 定义表」。
   避免无权用户把该组本体目录物化进自己的工作区。
 - 已知限制（后续演进）：目录 40k 字符预算之外的对象类型依赖 `file_grep`；对象查询 MVP 一次
   只支持单 member；对象存储/图查询尚未落地。
+
+### 与 Palantir 官方 reference 的差异（2026-10-24）
+
+参考 [Derived properties](https://www.palantir.com/docs/foundry/ontology/derived-properties/) 与
+[Derived properties reference](https://www.palantir.com/docs/foundry/ontology/derived-properties-reference/)：
+
+- 已对齐：查询时计算、不落存储、只读；aggregate/select；主键/标题键/关系列/物理映射禁用；
+- 当前子集：单跳关系、非自关联、单列关联；聚合算子 count/sum/avg/min/max；仅内建值类型；
+- 未实现：官方 exact/approximate cardinality、collect list/set、approximate percentile；
+  官方支持在 filter/sort/aggregate/group by 中使用派生属性，MVP 因缺少批量 SQL 下推而显式拒绝；
+- 官方 ontology-defined 派生属性不支持表达式（runtime-defined 才支持），本实现同样只做链接型推导。

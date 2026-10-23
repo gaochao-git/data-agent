@@ -641,3 +641,111 @@ def test_aggregate_query_rejects_derived_group_by_and_filter():
 def test_related_key_query_rejects_derived_filter_property():
     with pytest.raises(ObjectProjectionError, match="派生属性不支持关联查询"):
         build_related_key_query(_derived_detail(), _config(), filter_property="order_count", filter_value="1")
+
+
+def test_search_projection_includes_derived_values_in_page(monkeypatch):
+    """列表页返回派生属性值（Return in results），但过滤/排序仍显式拒绝。"""
+    from apps.chat_data_app.services.ontology import object_projection
+
+    detail = _derived_detail()
+
+    async def fake_get_object_type(_name):
+        return detail
+
+    async def fake_context(*_args, **_kwargs):
+        return detail, _config(), [{"member_datasource_id": "M1"}], "g1"
+
+    calls = []
+
+    async def fake_query_rows(_targets, sql, **_kwargs):
+        calls.append(sql)
+        if "COUNT(*)" in sql and "total" in sql:
+            return [{"total": 1}]
+        return [{"order_id": "O1", "amount": 10}]
+
+    async def fake_derived(*_args, **_kwargs):
+        return {"order_count": 3}
+
+    monkeypatch.setattr(object_projection.ontology_service, "get_object_type_async", fake_get_object_type)
+    monkeypatch.setattr(object_projection, "_projection_context", fake_context)
+    monkeypatch.setattr(object_projection, "_query_rows", fake_query_rows)
+    monkeypatch.setattr(object_projection, "_derived_property_values", fake_derived)
+    monkeypatch.setattr(
+        object_projection, "_member_scope", lambda _targets: {"member_datasource_id": "M1", "member_name": "测试"}
+    )
+
+    result = asyncio.run(object_projection.search_object_projection("Order", limit=10))
+    assert result["objects"][0]["properties"]["order_count"] == 3
+    assert "order_count" in result["properties"]
+    assert len(calls) == 2
+
+
+def test_projection_column_and_identifier_guards():
+    from apps.chat_data_app.services.ontology import object_projection
+
+    with pytest.raises(ObjectProjectionError, match="没有可投影"):
+        object_projection._projection_columns([], {}, {})
+    with pytest.raises(ObjectProjectionError, match="跨表"):
+        object_projection._projection_columns(
+            [
+                {"property_name": "a"},
+                {"property_name": "b"},
+            ],
+            {"a": "A", "b": "B"},
+            {
+                "A": {"table": "t1", "column": "a"},
+                "B": {"table": "t2", "column": "b"},
+            },
+        )
+    with pytest.raises(ObjectProjectionError, match="标识属性"):
+        object_projection._identifier_property([{"property_name": "a"}], {"a": "A"})
+    with pytest.raises(ObjectProjectionError, match="标识属性"):
+        object_projection._identifier_property(
+            [{"property_name": "a", "is_identifier": True}, {"property_name": "b", "is_identifier": True}],
+            {"a": "A", "b": "B"},
+        )
+
+
+def test_projection_entrypoints_reject_missing_object_type(monkeypatch):
+    from apps.chat_data_app.services.ontology import object_projection
+
+    async def no_detail(_name):
+        return None
+
+    monkeypatch.setattr(object_projection.ontology_service, "get_object_type_async", no_detail)
+    with pytest.raises(ObjectProjectionError, match="不存在"):
+        asyncio.run(object_projection.search_object_projection("Ghost"))
+    with pytest.raises(ObjectProjectionError, match="不存在"):
+        asyncio.run(object_projection.aggregate_object_projection("Ghost"))
+    with pytest.raises(ObjectProjectionError, match="不存在"):
+        asyncio.run(object_projection.list_object_projection("Ghost"))
+
+
+def test_projection_mapping_and_guard_branches():
+    from apps.chat_data_app.services.ontology import object_projection
+
+    with pytest.raises(ObjectProjectionError, match="非法表/列"):
+        object_projection._quote_identifier("bad;col")
+    with pytest.raises(ObjectProjectionError, match="未绑定语义模型"):
+        object_projection._mapping_for_projection({}, None)
+    with pytest.raises(ObjectProjectionError, match="未绑定语义模型: cfg-x"):
+        object_projection._mapping_for_projection({"mappings": [{"semantic_config_id": "cfg-a"}]}, "cfg-x")
+    with pytest.raises(ObjectProjectionError, match="多个语义模型"):
+        object_projection._mapping_for_projection(
+            {"mappings": [{"semantic_config_id": "cfg-a"}, {"semantic_config_id": "cfg-b"}]}, None
+        )
+    with pytest.raises(ObjectProjectionError, match="关系属性未映射"):
+        object_projection._mapping_for_property({"mappings": []}, "missing")
+    assert object_projection._dimension_index({"dimensions": [None]}) == {}
+    with pytest.raises(ObjectProjectionError, match="映射维度不存在"):
+        object_projection._projection_columns([{"property_name": "a"}], {"a": "A"}, {})
+    with pytest.raises(ObjectProjectionError, match="object_key"):
+        object_projection.build_object_query(_detail(), _config(), object_key="")
+    with pytest.raises(ObjectProjectionError, match="column_mappings"):
+        object_projection.build_object_query(
+            {"object_type_name": "Order", "mappings": [{"semantic_config_id": "x"}], "properties": []},
+            _config(),
+            object_key="1",
+        )
+    with pytest.raises(ObjectProjectionError, match="标识属性未映射"):
+        object_projection._identifier_property([{"property_name": "a", "is_identifier": True}], {})

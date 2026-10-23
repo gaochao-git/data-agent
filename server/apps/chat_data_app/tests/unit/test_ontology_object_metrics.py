@@ -767,3 +767,40 @@ def test_tool_metric_dispatch_and_error_conversion(monkeypatch):
         )
     )
     assert "shipment" in str(result)
+
+
+def test_aggregate_metric_projection_success(monkeypatch):
+    from apps.chat_data_app.services.ontology import object_projection
+
+    async def detail(_name):
+        return DETAIL
+
+    async def mapping_context(*_args, **_kwargs):
+        return CONFIG, DETAIL, [{"member_datasource_id": "ORG_CODE1"}], "ds_a"
+
+    async def query_rows(*_args, **_kwargs):
+        return [{"carrier": "顺丰", "发货单数量": 2}]
+
+    monkeypatch.setattr(object_projection.ontology_service, "get_object_type_async", detail)
+    monkeypatch.setattr(object_projection, "_dataset_mapping_context", mapping_context)
+    monkeypatch.setattr(object_projection, "_query_rows", query_rows)
+    data = asyncio.run(
+        object_projection.aggregate_metric_projection(
+            "shipment",
+            metric_items=[{"name": "发货单数量", "expression": "COUNT(*)"}],
+            group_by=["carrier"],
+            member_datasource_ids=["ORG_CODE1"],
+        )
+    )
+    assert data["groups"][0]["keys"] == {"carrier": "顺丰"}
+    assert data["groups"][0]["metrics"]["发货单数量"] == 2
+
+
+def test_derived_values_for_rows_noops():
+    from apps.chat_data_app.services.ontology import object_projection
+
+    detail = {**DETAIL, "properties": [{"property_name": "shipment_id"}]}
+    assert asyncio.run(
+        object_projection._derived_values_for_rows(detail, [{"shipment_id": "S1"}], {}, user_id="", username="")
+    ) == [{}]
+    assert asyncio.run(object_projection._derived_values_for_rows(DETAIL, [], {}, user_id="", username="")) == []
