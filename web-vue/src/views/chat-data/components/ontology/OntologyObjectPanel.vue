@@ -168,7 +168,7 @@ interface ObjectNodeData {
   description: string
   update_time: string
   update_by_name: string
-  is_leaf: false
+  is_leaf: true
 }
 interface PropertyNode {
   row_key: string
@@ -235,7 +235,7 @@ const toObjectNode = (item: OntologyObjectTypeItem): ObjectNodeData => ({
   description: item.description,
   update_time: item.update_time || '',
   update_by_name: item.update_by_name || '',
-  is_leaf: false
+  is_leaf: true
 })
 
 // 关系按两端对象的本体归组：同域一条；跨域在两端本体各显示一条（同一关系、不同出现位置）
@@ -396,26 +396,7 @@ const treeRef = ref<TreeInstance>()
 const detailStore = ref<Record<string, ObjectDetailEntry>>({})
 const objectLoadState = ref<Record<string, 'loading' | 'error' | 'ready'>>({})
 
-const buildChildRows = (objectNode: ObjectNodeData, entry: ObjectDetailEntry): TreeRow[] => {
-  // 分组树：属性/映射各成组（带计数），空组不展示；关系不在此处（关系是对象之间的，挂本体下）
-  const propertyChildren: TreeRow[] = (entry.detail.properties || []).map(prop => ({
-    row_key: `${objectNode.row_key}:prop:${prop.property_name}`,
-    kind: 'property',
-    property: prop,
-    is_leaf: true
-  }))
-  const rows: TreeRow[] = []
-  const pushGroup = (group: GroupNode['group'], label: string, children: TreeRow[]) => {
-    if (children.length > 0) {
-      rows.push({ row_key: `${objectNode.row_key}:group:${group}`, kind: 'group', group, label, object_type_name: objectNode.object_type_name, children, is_leaf: false })
-    }
-  }
-  pushGroup('property', '属性', propertyChildren)
-  if (rows.length === 0) {
-    rows.push({ row_key: `${objectNode.row_key}:empty`, kind: 'empty', label: '暂无属性与映射', is_leaf: true })
-  }
-  return rows
-}
+
 
 const fetchObjectEntry = async (objectNode: ObjectNodeData) => {
   const key = objectNode.row_key
@@ -447,7 +428,6 @@ const fetchObjectEntry = async (objectNode: ObjectNodeData) => {
     }
     detailStore.value = { ...detailStore.value, [key]: entry }
     objectLoadState.value = { ...objectLoadState.value, [key]: 'ready' }
-    treeRef.value?.updateKeyChildren?.(key, buildChildRows(objectNode, entry))
   } catch (err) {
     // 拦截器已弹出具体错误原因，不再重复提示
     console.error('加载本体对象类型详情失败:', err)
@@ -625,7 +605,7 @@ const selectedObject = computed(() => {
   }
 })
 
-const relationViewMode = ref<'graph' | 'list'>('graph')
+const relationViewMode = ref<'graph' | 'list'>('list')
 
 interface RelationGraphNode {
   key: string

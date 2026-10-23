@@ -815,7 +815,6 @@ onMounted(() => void initialize())
         <el-alert v-if="detailError" :title="detailError" type="error" :closable="false" show-icon class="mb-2" />
         <div class="mb-3 flex flex-wrap items-center gap-2">
           <el-button v-if="history.length > 0" link size="small" class="shrink-0" @click="backToObject">返回</el-button>
-          <el-button link size="small" class="shrink-0" @click="resetToList">返回列表</el-button>
           <span class="min-w-0 truncate font-mono text-xs text-slate-700">{{ detail.object_key }}</span>
           <span v-if="detailTitle" class="truncate text-xs text-slate-500">{{ detailTitle }}</span>
           <el-radio-group v-model="detailMode" size="small" class="ml-auto shrink-0" @change="onDetailModeChange">
