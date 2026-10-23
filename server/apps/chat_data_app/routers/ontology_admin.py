@@ -20,6 +20,7 @@ from ..schema import (
     OntologyActionTypeExecuteRequest,
     OntologyActionTypeTestRunRequest,
     OntologyActionTypeUpsertRequest,
+    OntologyObjectSearchRequest,
     OntologyObjectTypeOntologyRequest,
     OntologyObjectTypeStatusRequest,
     OntologyObjectTypeUpsertRequest,
@@ -40,6 +41,7 @@ from ..services.ontology.object_projection import (
     ObjectProjectionError,
     list_object_projection,
     read_object_projection,
+    search_object_projection,
 )
 from ..services.ontology.ontology_consistency import check_ontology_model_consistency as _run_consistency_check
 from ..services.semantic.run.semantic_config_service import (
@@ -184,6 +186,40 @@ async def list_ontology_objects(
         logger.error("读取本体对象列表失败: %s", e, exc_info=True)
         return business_response(
             msg="读取对象列表失败，请检查映射、数据源权限或稍后重试",
+            code=ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED,
+            status="error",
+        )
+
+
+@router.post("/admin/meta/ontology/object-types/{object_type_name}/objects/search")
+async def search_ontology_objects(
+    object_type_name: str,
+    payload: OntologyObjectSearchRequest,
+    request: Request,
+) -> JSONResponse:
+    """通用对象实例查询：关键词、属性过滤、排序、分页和总数（只读投影）。"""
+    try:
+        current_user = _get_current_user(request)
+        data = await search_object_projection(
+            object_type_name,
+            keyword=payload.keyword,
+            filters=[item.model_dump() for item in payload.filters],
+            sorts=[item.model_dump() for item in payload.sort],
+            limit=payload.limit,
+            offset=payload.offset,
+            semantic_config_id=payload.semantic_config_id,
+            user_id=str(current_user.user_id or ""),
+            username=str(current_user.username or ""),
+        )
+        return business_response(data=data, msg="获取成功")
+    except HTTPException:
+        raise
+    except ObjectProjectionError as e:
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_ONTOLOGY_INVALID, status="error")
+    except Exception as e:
+        logger.error("查询本体对象列表失败: %s", e, exc_info=True)
+        return business_response(
+            msg="查询对象列表失败，请检查映射、数据源权限或稍后重试",
             code=ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED,
             status="error",
         )

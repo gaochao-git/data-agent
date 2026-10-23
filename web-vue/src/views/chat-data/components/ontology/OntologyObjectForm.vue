@@ -281,7 +281,7 @@ const saveObject = async () => {
       <div class="grid grid-cols-2 gap-3">
         <div>
           <div class="mb-1 text-xs text-slate-500">对象类型名（创建后不可改）</div>
-          <el-input v-model="formName" size="small" :disabled="editing" placeholder="仅字母、数字、下划线，如 sales_order" class="font-mono" />
+          <el-input v-model="formName" size="small" :disabled="editing" placeholder="仅字母、数字、下划线" class="font-mono" />
         </div>
         <div>
           <div class="mb-1 text-xs text-slate-500">展示名</div>

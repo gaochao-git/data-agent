@@ -1093,6 +1093,24 @@ export interface OntologyObjectListItem {
   properties: Record<string, unknown>
 }
 
+export type OntologyObjectFilterOperator = 'eq' | 'ne' | 'contains' | 'gt' | 'gte' | 'lt' | 'lte' | 'in'
+
+export interface OntologyObjectFilter {
+  property: string
+  operator: OntologyObjectFilterOperator
+  value?: string
+  values?: string[]
+}
+
+export interface OntologyObjectSort {
+  property: string
+  direction: 'asc' | 'desc'
+}
+
+export interface OntologyObjectSearchResult extends OntologyObjectListResult {
+  total: number
+}
+
 export interface OntologyObjectListResult {
   objects: OntologyObjectListItem[]
   has_more: boolean

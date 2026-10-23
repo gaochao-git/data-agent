@@ -7,10 +7,16 @@ import { computed, onMounted, ref, watch } from 'vue'
 import {
   getAdminOntologyObjectType,
   getAdminOntologyRelationTypes,
-  listAdminOntologyObjects,
-  readAdminOntologyObject
+  readAdminOntologyObject,
+  searchAdminOntologyObjects
 } from '../../api'
-import type { OntologyObjectInstance, OntologyObjectListItem, OntologyObjectTypeItem } from '../../types'
+import type {
+  OntologyObjectFilter,
+  OntologyObjectInstance,
+  OntologyObjectListItem,
+  OntologyObjectSort,
+  OntologyObjectTypeItem
+} from '../../types'
 
 const props = defineProps({
   objectType: { type: String, default: '' },
@@ -25,6 +31,10 @@ const pageSize = 20
 const objects = ref<OntologyObjectListItem[]>([])
 const hasMore = ref(false)
 const titleProperty = ref('')
+const totalCount = ref(0)
+const filters = ref<OntologyObjectFilter[]>([])
+const sortProperty = ref('')
+const sortDirection = ref<'asc' | 'desc'>('asc')
 
 const meta = ref<OntologyObjectTypeItem | null>(null)
 const relationLabels = ref<Record<string, string>>({})
@@ -38,6 +48,70 @@ const detailMode = ref<'table' | 'search' | 'graph'>('table')
 const searchKeyword = ref('')
 const detailCache = new Map<string, OntologyObjectInstance>()
 const history = ref<Array<{ objectType: string; objectKey: string; label: string }>>([])
+
+const filterProperties = computed(() =>
+  (meta.value?.properties || []).map(prop => ({
+    name: prop.property_name,
+    label: prop.display_name || prop.property_name
+  }))
+)
+
+const OPERATOR_OPTIONS = [
+  { value: 'eq', label: '等于' },
+  { value: 'ne', label: '不等于' },
+  { value: 'contains', label: '包含' },
+  { value: 'gt', label: '大于' },
+  { value: 'gte', label: '大于等于' },
+  { value: 'lt', label: '小于' },
+  { value: 'lte', label: '小于等于' },
+  { value: 'in', label: '属于' }
+] as const
+
+const buildSearchPayload = () => ({
+  keyword: keyword.value.trim() || undefined,
+  filters: filters.value
+    .filter(item => item.property)
+    .map(item => {
+      if (item.operator === 'in') {
+        return {
+          property: item.property,
+          operator: item.operator,
+          values: String(item.value || '')
+            .split(',')
+            .map(value => value.trim())
+            .filter(Boolean)
+        }
+      }
+      return { property: item.property, operator: item.operator, value: item.value || '' }
+    }),
+  sort: sortProperty.value
+    ? ([{ property: sortProperty.value, direction: sortDirection.value }] as OntologyObjectSort[])
+    : [],
+  limit: pageSize,
+  offset: (page.value - 1) * pageSize
+})
+
+const addFilter = () => {
+  filters.value.push({
+    property: filterProperties.value[0]?.name || '',
+    operator: 'eq',
+    value: ''
+  })
+}
+
+const removeFilter = (index: number) => {
+  filters.value.splice(index, 1)
+}
+
+const applyFilters = () => {
+  void loadList(true)
+}
+
+const clearFilters = () => {
+  filters.value = []
+  sortProperty.value = ''
+  void loadList(true)
+}
 
 const propertyLabels = computed<Record<string, string>>(() => {
   const labels: Record<string, string> = {}
@@ -467,14 +541,11 @@ const loadList = async (resetPage = false) => {
   loading.value = true
   error.value = ''
   try {
-    const res = await listAdminOntologyObjects(props.objectType, {
-      keyword: keyword.value.trim() || undefined,
-      limit: pageSize,
-      offset: (page.value - 1) * pageSize
-    })
+    const res = await searchAdminOntologyObjects(props.objectType, buildSearchPayload())
     if (res.status === 'success') {
       objects.value = res.data.objects || []
       hasMore.value = Boolean(res.data.has_more)
+      totalCount.value = Number(res.data.total || 0)
       titleProperty.value = res.data.title_property || ''
     } else {
       error.value = res.msg || '加载对象列表失败'
@@ -587,6 +658,9 @@ const initialize = () => {
   if (!props.objectType) return
   keyword.value = ''
   page.value = 1
+  filters.value = []
+  sortProperty.value = ''
+  totalCount.value = 0
   exploreNodes.value = {}
   exploreEdges.value = {}
   exploreSelectedKey.value = ''
@@ -613,6 +687,72 @@ onMounted(initialize)
         />
         <el-button size="small" type="primary" @click="loadList(true)">搜索</el-button>
       </div>
+      <div class="mb-2 flex items-center gap-1">
+        <el-popover placement="bottom-start" :width="440" trigger="click">
+          <template #reference>
+            <el-button size="small">
+              <i class="fa-solid fa-filter mr-1 text-[10px]"></i>筛选
+              <span v-if="filters.length > 0" class="ml-1 text-[10px] text-blue-600">{{ filters.length }}</span>
+            </el-button>
+          </template>
+          <div class="flex flex-col gap-1.5">
+            <div v-for="(item, index) in filters" :key="index" class="flex items-center gap-1">
+              <el-select v-model="item.property" size="small" class="!w-28">
+                <el-option
+                  v-for="prop in filterProperties"
+                  :key="prop.name"
+                  :label="prop.label"
+                  :value="prop.name"
+                />
+              </el-select>
+              <el-select v-model="item.operator" size="small" class="!w-24">
+                <el-option
+                  v-for="operator in OPERATOR_OPTIONS"
+                  :key="operator.value"
+                  :label="operator.label"
+                  :value="operator.value"
+                />
+              </el-select>
+              <el-input
+                v-model="item.value"
+                size="small"
+                class="min-w-0 flex-1"
+                :placeholder="item.operator === 'in' ? '多个值用逗号分隔' : '值'"
+              />
+              <el-button link size="small" class="!p-0 text-slate-400" @click="removeFilter(index)">
+                <i class="fa-solid fa-trash-can text-[10px]"></i>
+              </el-button>
+            </div>
+            <div v-if="filters.length === 0" class="text-xs text-slate-400">还没有筛选条件</div>
+            <div class="mt-1 flex items-center gap-1 border-t border-slate-100 pt-2">
+              <el-button link size="small" @click="addFilter">
+                <i class="fa-solid fa-plus mr-1 text-[10px]"></i>添加条件
+              </el-button>
+              <el-button link size="small" class="ml-auto" @click="clearFilters">清空</el-button>
+              <el-button size="small" type="primary" @click="applyFilters">应用</el-button>
+            </div>
+          </div>
+        </el-popover>
+        <el-select
+          v-model="sortProperty"
+          size="small"
+          clearable
+          placeholder="排序"
+          class="min-w-0 flex-1"
+        >
+          <el-option
+            v-for="prop in filterProperties"
+            :key="prop.name"
+            :label="prop.label"
+            :value="prop.name"
+          />
+        </el-select>
+        <el-select v-if="sortProperty" v-model="sortDirection" size="small" class="!w-20">
+          <el-option label="升序" value="asc" />
+          <el-option label="降序" value="desc" />
+        </el-select>
+        <el-button size="small" @click="applyFilters">应用</el-button>
+      </div>
       <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon class="mb-2" />
       <el-table
         v-loading="loading"
@@ -630,7 +770,7 @@ onMounted(initialize)
         <el-table-column prop="object_key" label="对象主键" min-width="170" show-overflow-tooltip />
       </el-table>
       <div class="mt-2 flex items-center justify-end gap-2">
-        <span class="text-[11px] text-slate-400">第 {{ page }} 页</span>
+        <span class="text-[11px] text-slate-400">共 {{ totalCount }} 个 · 第 {{ page }} 页</span>
         <el-button size="small" :disabled="page <= 1 || loading" @click="page -= 1; loadList()">上一页</el-button>
         <el-button size="small" :disabled="!hasMore || loading" @click="page += 1; loadList()">下一页</el-button>
       </div>

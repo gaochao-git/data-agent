@@ -442,7 +442,7 @@ defineExpose({ ensureLoaded, openCreate, openEdit, openTest, openExecute, remove
       <p class="mb-3 text-xs text-slate-500">{{ executeTarget?.action_type_name }}（写对象覆盖层 + 审计）</p>
       <div class="mb-2 flex items-center gap-2">
         <span class="w-32 text-xs text-slate-600">对象主键</span>
-        <el-input v-model="executeObjectKey" size="small" placeholder="如 ORD2024000001" />
+        <el-input v-model="executeObjectKey" size="small" placeholder="请输入对象主键" />
       </div>
       <div v-for="param in executeTarget?.parameters || []" :key="param.name" class="mb-2 flex items-center gap-2">
         <span class="w-32 text-xs text-slate-600">{{ param.name }}<span v-if="param.required" class="text-red-500">*</span></span>

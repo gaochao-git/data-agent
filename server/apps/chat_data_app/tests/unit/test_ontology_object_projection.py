@@ -10,6 +10,7 @@ from apps.chat_data_app.services.ontology.object_projection import (
     ObjectProjectionError,
     build_object_list_query,
     build_object_query,
+    build_object_search_query,
     build_related_key_query,
 )
 
@@ -109,6 +110,128 @@ def test_build_object_query_requires_semantic_model_choice_when_multiple():
         build_object_query(detail, _config(), object_key="A001")
 
 
+def test_build_object_search_query_applies_filters_sort_and_count():
+    query = build_object_search_query(
+        _detail(),
+        _config(),
+        keyword="A",
+        filters=[{"property": "amount", "operator": "gte", "value": "10"}],
+        sorts=[{"property": "amount", "direction": "desc"}],
+        limit=10,
+        offset=5,
+    )
+    assert "`amount` >= '10'" in query["sql"]
+    assert "ORDER BY `amount` DESC" in query["sql"]
+    assert "LIMIT 11 OFFSET 5" in query["sql"]
+    assert "COUNT(*) AS `total`" in query["count_sql"]
+    assert "`amount` >= '10'" in query["count_sql"]
+
+
+def test_build_object_search_query_supports_in_and_contains():
+    query = build_object_search_query(
+        _detail(),
+        _config(),
+        filters=[
+            {"property": "amount", "operator": "in", "values": ["10", "20"]},
+            {"property": "order_id", "operator": "contains", "value": "A0"},
+        ],
+    )
+    assert "`amount` IN ('10', '20')" in query["sql"]
+    assert "`order_id` LIKE '%A0%'" in query["sql"]
+
+
+def test_build_object_search_query_supports_all_comparison_operators():
+    for operator, symbol in {
+        "eq": "=",
+        "ne": "<>",
+        "gt": ">",
+        "gte": ">=",
+        "lt": "<",
+        "lte": "<=",
+    }.items():
+        query = build_object_search_query(
+            _detail(),
+            _config(),
+            filters=[{"property": "amount", "operator": operator, "value": "10"}],
+        )
+        assert f"`amount` {symbol} '10'" in query["sql"]
+    empty_in = build_object_search_query(
+        _detail(),
+        _config(),
+        filters=[{"property": "amount", "operator": "in", "values": []}],
+    )
+    assert "1 = 0" in empty_in["sql"]
+
+
+def test_build_object_search_query_rejects_unmapped_filter_and_sort():
+    with pytest.raises(ObjectProjectionError, match="过滤属性未映射"):
+        build_object_search_query(
+            _detail(), _config(), filters=[{"property": "missing", "operator": "eq", "value": "1"}]
+        )
+    with pytest.raises(ObjectProjectionError, match="排序属性未映射"):
+        build_object_search_query(_detail(), _config(), sorts=[{"property": "missing", "direction": "asc"}])
+
+
+def test_build_object_search_query_rejects_long_keyword_and_bad_operator():
+    with pytest.raises(ObjectProjectionError, match="200"):
+        build_object_search_query(_detail(), _config(), keyword="x" * 201)
+    with pytest.raises(ObjectProjectionError, match="不支持"):
+        build_object_search_query(
+            _detail(),
+            _config(),
+            filters=[{"property": "amount", "operator": "bogus", "value": "1"}],
+        )
+
+
+def test_search_object_projection_handles_empty_count(monkeypatch):
+    from apps.chat_data_app.services.ontology import object_projection
+
+    async def fake_get_object_type(_name):
+        return _detail()
+
+    async def fake_context(_mapping, **_kwargs):
+        return _config(), "g1", [{"member_datasource_id": "m1"}]
+
+    async def fake_query_rows(_targets, sql, **_kwargs):
+        return [] if "COUNT(*)" in sql else []
+
+    monkeypatch.setattr(object_projection.ontology_service, "get_object_type_async", fake_get_object_type)
+    monkeypatch.setattr(object_projection, "_mapping_context", fake_context)
+    monkeypatch.setattr(object_projection, "_query_rows", fake_query_rows)
+    result = asyncio.run(object_projection.search_object_projection("Order"))
+    assert result["total"] == 0
+    assert result["objects"] == []
+
+
+def test_build_object_search_query_requires_mapping_columns():
+    detail = _detail()
+    detail["mappings"][0]["column_mappings"] = None
+    with pytest.raises(ObjectProjectionError, match="column_mappings"):
+        build_object_search_query(detail, _config())
+
+
+def test_search_object_projection_returns_rows_and_total(monkeypatch):
+    from apps.chat_data_app.services.ontology import object_projection
+
+    async def fake_get_object_type(_name):
+        return _detail()
+
+    async def fake_context(_mapping, **_kwargs):
+        return _config(), "g1", [{"member_datasource_id": "m1"}]
+
+    async def fake_query_rows(_targets, sql, **_kwargs):
+        if "COUNT(*)" in sql:
+            return [{"total": 2}]
+        return [{"order_id": "A001", "amount": 10}, {"order_id": "A002", "amount": 20}]
+
+    monkeypatch.setattr(object_projection.ontology_service, "get_object_type_async", fake_get_object_type)
+    monkeypatch.setattr(object_projection, "_mapping_context", fake_context)
+    monkeypatch.setattr(object_projection, "_query_rows", fake_query_rows)
+    result = asyncio.run(object_projection.search_object_projection("Order", limit=2))
+    assert result["total"] == 2
+    assert [item["object_key"] for item in result["objects"]] == ["Order:A001", "Order:A002"]
+
+
 def test_build_related_key_query_selects_related_identifier():
     detail = _detail()
     query = build_related_key_query(
@@ -147,6 +270,21 @@ def test_build_related_key_query_skips_unmapped_title():
     )
     assert "related_title" not in query["sql"]
     assert query["title_property"] == ""
+
+
+def test_build_related_key_query_rejects_cross_table_filter():
+    detail = _detail()
+    detail["properties"].append({"property_name": "customer_id", "is_identifier": False})
+    detail["mappings"][0]["column_mappings"]["customer_id"] = "客户ID"
+    config = _config()
+    config["dimensions"].append({"name": "客户ID", "table": "other_table", "column": "customer_id"})
+    with pytest.raises(ObjectProjectionError, match="同一张表"):
+        build_related_key_query(
+            detail,
+            config,
+            filter_property="customer_id",
+            filter_value="C001",
+        )
 
 
 def test_read_links_builds_foreign_key_link(monkeypatch):

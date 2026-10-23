@@ -264,6 +264,145 @@ def build_object_list_query(
     }
 
 
+_FILTER_OPERATORS = {"eq", "ne", "contains", "gt", "gte", "lt", "lte", "in"}
+_MAX_FILTERS = 10
+_MAX_SORTS = 5
+
+
+_FILTER_SQL_SYMBOLS = {
+    "eq": "=",
+    "ne": "<>",
+    "gt": ">",
+    "gte": ">=",
+    "lt": "<",
+    "lte": "<=",
+}
+
+
+def _keyword_condition(search_column: str, identifier_column: str, keyword: str) -> str:
+    keyword_value = _text(keyword)
+    if not keyword_value:
+        return ""
+    if len(keyword_value) > 200:
+        raise ObjectProjectionError("搜索关键词不能超过 200 字符")
+    escaped = escape_string(keyword_value)
+    search_columns = {_quote_identifier(search_column), _quote_identifier(identifier_column)}
+    return "(" + " OR ".join(f"{column} LIKE '%{escaped}%'" for column in sorted(search_columns)) + ")"
+
+
+def _in_condition(column: str, item: dict[str, Any]) -> str:
+    values = [_text(entry) for entry in (item.get("values") or []) if _text(entry)]
+    if not values:
+        return "1 = 0"
+    escaped_values = ", ".join(f"'{escape_string(entry)}'" for entry in values[:100])
+    return f"{column} IN ({escaped_values})"
+
+
+def _filter_condition(column: str, operator: str, item: dict[str, Any], value: str) -> str:
+    if operator == "in":
+        return _in_condition(column, item)
+    if operator == "contains":
+        return f"{column} LIKE '%{escape_string(value)}%'"
+    return f"{column} {_FILTER_SQL_SYMBOLS[operator]} '{escape_string(value)}'"
+
+
+def _object_search_conditions(
+    column_by_property: dict[str, str],
+    *,
+    keyword: str,
+    search_column: str,
+    identifier_column: str,
+    filters: list[dict[str, Any]],
+) -> str:
+    """通用对象过滤条件；只接受已映射属性，不拼接任意 SQL。"""
+    conditions: list[str] = []
+    keyword_condition = _keyword_condition(search_column, identifier_column, keyword)
+    if keyword_condition:
+        conditions.append(keyword_condition)
+    for item in filters[:_MAX_FILTERS]:
+        property_name = _text(item.get("property"))
+        operator = _text(item.get("operator")).lower()
+        if property_name not in column_by_property:
+            raise ObjectProjectionError(f"过滤属性未映射: {property_name or '?'}")
+        if operator not in _FILTER_OPERATORS:
+            raise ObjectProjectionError(f"不支持的过滤操作符: {operator or '?'}")
+        column = _quote_identifier(column_by_property[property_name])
+        conditions.append(_filter_condition(column, operator, item, _text(item.get("value"))))
+    return " AND ".join(conditions)
+
+
+def _object_search_order_by(
+    column_by_property: dict[str, str], sorts: list[dict[str, Any]], identifier_column: str
+) -> str:
+    order_parts: list[str] = []
+    for item in sorts[:_MAX_SORTS]:
+        property_name = _text(item.get("property"))
+        if property_name not in column_by_property:
+            raise ObjectProjectionError(f"排序属性未映射: {property_name or '?'}")
+        direction = "DESC" if _text(item.get("direction")).lower() == "desc" else "ASC"
+        order_parts.append(f"{_quote_identifier(column_by_property[property_name])} {direction}")
+    if not order_parts:
+        order_parts.append(f"{_quote_identifier(identifier_column)} ASC")
+    return ", ".join(order_parts)
+
+
+def build_object_search_query(
+    detail: dict[str, Any],
+    config: dict[str, Any],
+    *,
+    keyword: str = "",
+    filters: list[dict[str, Any]] | None = None,
+    sorts: list[dict[str, Any]] | None = None,
+    limit: int = 20,
+    offset: int = 0,
+    semantic_config_id: str | None = None,
+) -> dict[str, Any]:
+    """构造通用对象查询：关键词 + 属性过滤 + 排序 + 分页，并附带 count SQL。"""
+    safe_limit = max(1, min(int(limit), 100))
+    safe_offset = max(0, int(offset))
+    mapping = _mapping_for_projection(detail, semantic_config_id)
+    dimensions = _dimension_index(config)
+    column_mappings = mapping.get("column_mappings")
+    if not isinstance(column_mappings, dict):
+        raise ObjectProjectionError("对象映射缺少 column_mappings")
+    properties = [prop for prop in detail.get("properties") or [] if isinstance(prop, dict)]
+    table, columns = _projection_columns(properties, column_mappings, dimensions)
+    identifier_property, identifier_dimension = _identifier_property(properties, column_mappings)
+    identifier_meta = dimensions.get(identifier_dimension)
+    if not identifier_meta or identifier_meta["table"] != table:
+        raise ObjectProjectionError("标识属性与普通属性不在同一张表，MVP 暂不支持")
+    column_by_property = dict(columns)
+    search_property = _title_property_name(properties, identifier_property)
+    search_dimension = dimensions.get(_text(column_mappings.get(search_property)))
+    search_column = search_dimension["column"] if search_dimension else identifier_meta["column"]
+    where = _object_search_conditions(
+        column_by_property,
+        keyword=keyword,
+        search_column=search_column,
+        identifier_column=identifier_meta["column"],
+        filters=filters or [],
+    )
+    where_sql = f" WHERE {where}" if where else ""
+    order_sql = _object_search_order_by(column_by_property, sorts or [], identifier_meta["column"])
+    select_list = ", ".join(f"{_quote_identifier(column)} AS `{property_name}`" for property_name, column in columns)
+    sql = (
+        f"SELECT {select_list} FROM {_quote_identifier(table)}{where_sql} "
+        f"ORDER BY {order_sql} LIMIT {safe_limit + 1} OFFSET {safe_offset}"
+    )
+    count_sql = f"SELECT COUNT(*) AS `total` FROM {_quote_identifier(table)}{where_sql}"
+    return {
+        "sql": sql,
+        "count_sql": count_sql,
+        "table": table,
+        "object_type": _text(detail.get("object_type_name")),
+        "identifier_property": identifier_property,
+        "title_property": search_property,
+        "properties": [name for name, _column in columns],
+        "limit": safe_limit,
+        "offset": safe_offset,
+    }
+
+
 def build_related_key_query(
     detail: dict[str, Any],
     config: dict[str, Any],
@@ -554,6 +693,71 @@ async def read_object_projection(
     return _assemble_object(detail, query, row, links)
 
 
+def _assemble_list_item(query: dict[str, Any], row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "object_type": query["object_type"],
+        "object_key": f"{query['object_type']}:{_text(row.get(query['identifier_property']))}",
+        "properties": {name: row.get(name) for name in query["properties"]},
+    }
+
+
+async def search_object_projection(
+    object_type_name: str,
+    *,
+    keyword: str = "",
+    filters: list[dict[str, Any]] | None = None,
+    sorts: list[dict[str, Any]] | None = None,
+    limit: int = 20,
+    offset: int = 0,
+    semantic_config_id: str | None = None,
+    user_id: str = "",
+    username: str = "",
+) -> dict[str, Any]:
+    """通用对象查询（只读投影）：关键词、属性过滤、排序、分页和总数。"""
+    detail = await ontology_service.get_object_type_async(object_type_name)
+    if detail is None:
+        raise ObjectProjectionError(f"本体对象类型不存在: {object_type_name}")
+    mapping = _mapping_for_projection(detail, semantic_config_id)
+    config, group_id, targets = await _mapping_context(mapping, user_id=user_id, username=username)
+    query = build_object_search_query(
+        detail,
+        config,
+        keyword=keyword,
+        filters=filters or [],
+        sorts=sorts or [],
+        limit=limit,
+        offset=offset,
+        semantic_config_id=semantic_config_id,
+    )
+    count_rows = await _query_rows(
+        targets,
+        query["count_sql"],
+        group_id=group_id,
+        user_id=user_id,
+        username=username,
+        limit=1,
+    )
+    total = int((count_rows[0].get("total") if count_rows else 0) or 0)
+    rows = await _query_rows(
+        targets,
+        query["sql"],
+        group_id=group_id,
+        user_id=user_id,
+        username=username,
+        limit=query["limit"] + 1,
+    )
+    has_more = len(rows) > query["limit"]
+    return {
+        "objects": [_assemble_list_item(query, row) for row in rows[: query["limit"]]],
+        "has_more": has_more,
+        "limit": query["limit"],
+        "offset": query["offset"],
+        "total": total,
+        "title_property": query["title_property"],
+        "properties": query["properties"],
+    }
+
+
 async def list_object_projection(
     object_type_name: str,
     *,
@@ -588,14 +792,7 @@ async def list_object_projection(
     )
     has_more = len(rows) > query["limit"]
     rows = rows[: query["limit"]]
-    objects = [
-        {
-            "object_type": query["object_type"],
-            "object_key": f"{query['object_type']}:{_text(row.get(query['identifier_property']))}",
-            "properties": {name: row.get(name) for name in query["properties"]},
-        }
-        for row in rows
-    ]
+    objects = [_assemble_list_item(query, row) for row in rows]
     return {
         "objects": objects,
         "has_more": has_more,
@@ -610,9 +807,11 @@ __all__ = [
     "ObjectProjectionError",
     "build_object_list_query",
     "build_object_query",
+    "build_object_search_query",
     "build_related_key_query",
     "ontology_action_execute_enabled",
     "list_object_projection",
+    "search_object_projection",
     "ontology_object_read_enabled",
     "read_object_projection",
 ]

@@ -148,7 +148,7 @@ const confirmStatus = async () => {
           </div>
           <div>
             <div class="mb-1 text-xs text-slate-500">废弃原因（必填）</div>
-            <el-input v-model="deprecationReason" size="small" maxlength="512" placeholder="如：已被新对象类型 sales_order_v2 替代" />
+            <el-input v-model="deprecationReason" size="small" maxlength="512" placeholder="如：已被新的对象类型替代" />
           </div>
           <div>
             <div class="mb-1 text-xs text-slate-500">替代对象类型（可选，需已存在）</div>

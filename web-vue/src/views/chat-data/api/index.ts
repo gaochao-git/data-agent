@@ -44,7 +44,10 @@ import type {
   OntologyMappingItem,
   OntologyObjectInstance,
   OntologyObjectListItem,
+  OntologyObjectFilter,
   OntologyObjectListResult,
+  OntologyObjectSearchResult,
+  OntologyObjectSort,
   OntologyObjectTypeItem,
   OntologyObjectTypeStatus,
   OntologyPropertyItem,
@@ -2178,6 +2181,25 @@ export function listAdminOntologyObjects(
     url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/object-types/${encodeURIComponent(objectType)}/objects`,
     method: 'get',
     params
+  })
+}
+
+/** 后台：通用对象实例查询（关键词 + 属性过滤 + 排序 + 分页） */
+export function searchAdminOntologyObjects(
+  objectType: string,
+  payload: {
+    keyword?: string
+    filters?: OntologyObjectFilter[]
+    sort?: OntologyObjectSort[]
+    limit?: number
+    offset?: number
+    semantic_config_id?: string
+  } = {}
+): Promise<ApiResponse<OntologyObjectSearchResult>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/object-types/${encodeURIComponent(objectType)}/objects/search`,
+    method: 'post',
+    data: payload
   })
 }
 

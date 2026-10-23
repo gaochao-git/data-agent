@@ -366,7 +366,7 @@ defineExpose({ openCreate, openEdit, openStatus, remove })
       <div class="grid grid-cols-2 gap-3">
         <div>
           <div class="mb-1 text-xs text-slate-500">关系类型 API 名（创建后不可改）</div>
-          <el-input v-model="formName" size="small" :disabled="!creating" placeholder="如 order_belong_to_customer" class="font-mono" />
+          <el-input v-model="formName" size="small" :disabled="!creating" placeholder="关系类型 API 名" class="font-mono" />
         </div>
         <div>
           <div class="mb-1 text-xs text-slate-500">基数（多对多请用 junction 对象类型表达）</div>

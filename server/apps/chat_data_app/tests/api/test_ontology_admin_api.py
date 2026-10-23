@@ -206,6 +206,38 @@ def test_list_ontology_objects_contract(client, auth_headers, monkeypatch):
     assert payload["data"]["objects"][0]["object_key"] == "Order:A001"
 
 
+def test_search_ontology_objects_contract(client, auth_headers, monkeypatch):
+    async def fake_search(object_type_name, **kwargs):
+        assert kwargs["filters"][0]["property"] == "amount"
+        return {
+            "objects": [{"object_type": object_type_name, "object_key": "Order:A001", "properties": {"amount": 10}}],
+            "has_more": False,
+            "limit": 20,
+            "offset": 0,
+            "total": 1,
+            "title_property": "order_id",
+            "properties": ["order_id", "amount"],
+        }
+
+    monkeypatch.setattr(ontology_admin_routes, "search_object_projection", fake_search)
+    response = client.post(
+        "/api/chatdata/admin/meta/ontology/object-types/Order/objects/search",
+        json={
+            "keyword": "A",
+            "filters": [{"property": "amount", "operator": "gte", "value": "10"}],
+            "sort": [{"property": "amount", "direction": "desc"}],
+            "limit": 20,
+            "offset": 0,
+        },
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "success"
+    assert payload["data"]["total"] == 1
+    assert payload["data"]["objects"][0]["object_key"] == "Order:A001"
+
+
 def test_read_ontology_object_contract(client, auth_headers, monkeypatch):
     async def fake_read(object_type_name, object_key, **kwargs):
         return {

@@ -488,6 +488,35 @@ class OntologyMappingItem(BaseModel):
     column_mappings: dict[str, str] = Field(default_factory=dict, description="字段映射: {属性API名: 模型维度名}")
 
 
+class OntologyObjectFilter(BaseModel):
+    """对象查询过滤条件；property 必须是对象类型已映射属性。"""
+
+    property: str = Field(..., min_length=1, max_length=128, description="属性 API 名")
+    operator: Literal["eq", "ne", "contains", "gt", "gte", "lt", "lte", "in"] = Field(
+        default="eq", description="比较操作符"
+    )
+    value: str = Field(default="", max_length=512, description="比较值；in 使用 values")
+    values: list[str] = Field(default_factory=list, description="in 操作符的候选值")
+
+
+class OntologyObjectSort(BaseModel):
+    """对象查询排序项。"""
+
+    property: str = Field(..., min_length=1, max_length=128, description="属性 API 名")
+    direction: Literal["asc", "desc"] = Field(default="asc", description="排序方向")
+
+
+class OntologyObjectSearchRequest(BaseModel):
+    """通用对象实例查询：关键词 + 属性过滤 + 排序 + 分页。"""
+
+    keyword: str = Field(default="", max_length=200, description="标题键/主键模糊搜索")
+    filters: list[OntologyObjectFilter] = Field(default_factory=list, max_length=10, description="属性过滤")
+    sort: list[OntologyObjectSort] = Field(default_factory=list, max_length=5, description="排序")
+    limit: int = Field(default=20, ge=1, le=100, description="每页数量")
+    offset: int = Field(default=0, ge=0, description="偏移量")
+    semantic_config_id: str | None = Field(default=None, description="多映射对象指定语义模型")
+
+
 class OntologyObjectTypeUpsertRequest(BaseModel):
     """本体对象类型创建/编辑请求（object_type_name 由路径参数携带；状态走独立接口）"""
 

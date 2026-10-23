@@ -1992,6 +1992,140 @@
         "title": "OntologyMappingItem",
         "type": "object"
       },
+      "OntologyObjectFilter": {
+        "description": "对象查询过滤条件；property 必须是对象类型已映射属性。",
+        "properties": {
+          "operator": {
+            "default": "eq",
+            "description": "比较操作符",
+            "enum": [
+              "eq",
+              "ne",
+              "contains",
+              "gt",
+              "gte",
+              "lt",
+              "lte",
+              "in"
+            ],
+            "title": "Operator",
+            "type": "string"
+          },
+          "property": {
+            "description": "属性 API 名",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Property",
+            "type": "string"
+          },
+          "value": {
+            "default": "",
+            "description": "比较值；in 使用 values",
+            "maxLength": 512,
+            "title": "Value",
+            "type": "string"
+          },
+          "values": {
+            "description": "in 操作符的候选值",
+            "items": {
+              "type": "string"
+            },
+            "title": "Values",
+            "type": "array"
+          }
+        },
+        "required": [
+          "property"
+        ],
+        "title": "OntologyObjectFilter",
+        "type": "object"
+      },
+      "OntologyObjectSearchRequest": {
+        "description": "通用对象实例查询：关键词 + 属性过滤 + 排序 + 分页。",
+        "properties": {
+          "filters": {
+            "description": "属性过滤",
+            "items": {
+              "$ref": "#/components/schemas/OntologyObjectFilter"
+            },
+            "maxItems": 10,
+            "title": "Filters",
+            "type": "array"
+          },
+          "keyword": {
+            "default": "",
+            "description": "标题键/主键模糊搜索",
+            "maxLength": 200,
+            "title": "Keyword",
+            "type": "string"
+          },
+          "limit": {
+            "default": 20,
+            "description": "每页数量",
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "default": 0,
+            "description": "偏移量",
+            "minimum": 0.0,
+            "title": "Offset",
+            "type": "integer"
+          },
+          "semantic_config_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "多映射对象指定语义模型",
+            "title": "Semantic Config Id"
+          },
+          "sort": {
+            "description": "排序",
+            "items": {
+              "$ref": "#/components/schemas/OntologyObjectSort"
+            },
+            "maxItems": 5,
+            "title": "Sort",
+            "type": "array"
+          }
+        },
+        "title": "OntologyObjectSearchRequest",
+        "type": "object"
+      },
+      "OntologyObjectSort": {
+        "description": "对象查询排序项。",
+        "properties": {
+          "direction": {
+            "default": "asc",
+            "description": "排序方向",
+            "enum": [
+              "asc",
+              "desc"
+            ],
+            "title": "Direction",
+            "type": "string"
+          },
+          "property": {
+            "description": "属性 API 名",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Property",
+            "type": "string"
+          }
+        },
+        "required": [
+          "property"
+        ],
+        "title": "OntologyObjectSort",
+        "type": "object"
+      },
       "OntologyObjectTypeOntologyRequest": {
         "description": "本体对象类型归属变更请求（拖拽换本体等窄写路径；null=移出本体）",
         "properties": {
@@ -8009,6 +8143,64 @@
           }
         ],
         "summary": "Read Ontology Object",
+        "tags": [
+          "ChatData 本体管理（Admin）"
+        ]
+      }
+    },
+    "/api/chatdata/admin/meta/ontology/object-types/{object_type_name}/objects/search": {
+      "post": {
+        "description": "通用对象实例查询：关键词、属性过滤、排序、分页和总数（只读投影）。",
+        "operationId": "search_ontology_objects_api_chatdata_admin_meta_ontology_object_types__object_type_name__objects_search_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "object_type_name",
+            "required": true,
+            "schema": {
+              "title": "Object Type Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OntologyObjectSearchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Search Ontology Objects",
         "tags": [
           "ChatData 本体管理（Admin）"
         ]
