@@ -225,9 +225,7 @@ class OntologyService:
         if dataset is None:
             raise OntologyInvalidError(f"Dataset 不存在: {dataset_id}")
         await self._ensure_dataset_not_reused_async(dataset, dataset_id, int(detail["id"]))
-        column_mappings = self._validate_source_binding_columns(
-            detail, dataset, payload.get("column_mappings") or {}
-        )
+        column_mappings = self._validate_source_binding_columns(detail, dataset, payload.get("column_mappings") or {})
         return await self._dao.upsert_source_binding_async(
             int(detail["id"]),
             dataset_id=dataset_id,

@@ -290,3 +290,63 @@ def test_link_service_empty_and_missing_paths(monkeypatch):
     monkeypatch.setattr(link_module.logical_dataset_service, "get_dataset_async", missing_dataset)
     with pytest.raises(DatasetSemanticLinkNotFoundError):
         asyncio.run(service._dataset_detail_async("missing"))
+
+
+def test_upsert_link_validation_and_read_paths(harness):
+    service = harness
+    payload = {
+        "datasource_group_id": "g1",
+        "table_name": "users",
+        "metric_scope": ["用户数"],
+        "column_mappings": {"user_id": "user_id"},
+        "lifecycle_status": "active",
+    }
+    with pytest.raises(DatasetSemanticLinkInvalidError, match="semantic_config_id"):
+        asyncio.run(service.upsert_link_async("users", "", payload))
+    with pytest.raises(DatasetSemanticLinkInvalidError, match="datasource_group_id"):
+        asyncio.run(service.upsert_link_async("users", "sc_users", {**payload, "datasource_group_id": ""}))
+    with pytest.raises(DatasetSemanticLinkInvalidError, match="lifecycle_status"):
+        asyncio.run(service.upsert_link_async("users", "sc_users", {**payload, "lifecycle_status": "bad"}))
+    with pytest.raises(DatasetSemanticLinkInvalidError, match="不存在语义模型"):
+        asyncio.run(service.upsert_link_async("users", "missing", payload))
+
+    saved = asyncio.run(service.upsert_link_async("users", "sc_users", payload))
+    links = asyncio.run(service.list_links_async("users"))
+    assert len(links) == 1
+    by_id = asyncio.run(service.list_links_for_dataset_id_async(1))
+    assert by_id[0]["semantic_config_name"] == "用户模型"
+    active = asyncio.run(service.get_active_link_async(1, "g1"))
+    assert active is not None
+    assert asyncio.run(service.get_active_link_async(999, "g1")) is None
+    assert asyncio.run(service.get_active_link_async(1, "g1", semantic_config_id="missing")) is None
+
+    with pytest.raises(DatasetSemanticLinkInvalidError, match="不属于指定数据源组"):
+        asyncio.run(service.delete_link_async("users", saved["semantic_config_id"], datasource_group_id="g2"))
+    asyncio.run(service.delete_link_async("users", saved["semantic_config_id"], datasource_group_id="g1"))
+    with pytest.raises(DatasetSemanticLinkNotFoundError):
+        asyncio.run(service.delete_link_async("users", "sc_users"))
+
+
+def test_link_config_read_helpers(monkeypatch):
+    service = DatasetSemanticLinkService()
+    assert asyncio.run(service._load_config_async("", "sc")) is None
+    assert asyncio.run(service._load_config_async("g1", "")) is None
+
+    async def boom(*_args, **_kwargs):
+        raise RuntimeError("boom")
+
+    class FakeService:
+        get_config_async = staticmethod(boom)
+
+    monkeypatch.setattr(link_module, "get_semantic_config_service", lambda: FakeService())
+    assert asyncio.run(service._load_config_async("g1", "sc")) is None
+    with pytest.raises(DatasetSemanticLinkInvalidError, match="不存在语义模型"):
+        asyncio.run(service._require_config_async("g1", "sc"))
+
+    class BadStructure:
+        async def get_config_async(self, *_args, **_kwargs):
+            return {"metrics": [], "dimensions": None}
+
+    monkeypatch.setattr(link_module, "get_semantic_config_service", lambda: BadStructure())
+    with pytest.raises(DatasetSemanticLinkInvalidError, match="结构不完整"):
+        asyncio.run(service._require_config_async("g1", "sc", user_id=""))

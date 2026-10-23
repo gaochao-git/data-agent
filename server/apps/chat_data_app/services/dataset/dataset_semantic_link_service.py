@@ -221,6 +221,8 @@ class DatasetSemanticLinkService:
         config_id = _text(semantic_config_id)
         if config_id:
             row_views = [view for view in row_views if _text(view.get("semantic_config_id")) == config_id]
+        if not row_views:
+            return None
         row_views.sort(key=lambda view: 0 if _text(view.get("lifecycle_status")) in _ACTIVE_EXECUTE_STATUSES else 1)
         dataset = await logical_dataset_service.get_dataset_async_by_id_async(int(dataset_id))
         return await self._link_view_async(dataset or {}, row_views[0])

@@ -876,10 +876,7 @@ class OntologyDao:
             if int(exclude_object_type_id or 0) > 0:
                 stmt = stmt.where(ChatDataOntologySourceBinding.object_type_id != int(exclude_object_type_id))
             rows = (await session.execute(stmt)).all()
-        return [
-            {"object_type_id": int(row[0]), "object_type_name": _text(row[1])}
-            for row in rows
-        ]
+        return [{"object_type_id": int(row[0]), "object_type_name": _text(row[1])} for row in rows]
 
     async def upsert_source_binding_async(
         self,

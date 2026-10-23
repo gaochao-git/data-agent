@@ -40,6 +40,7 @@ import OntologyConsistencyDialog from './OntologyConsistencyDialog.vue'
 import OntologyForm from './OntologyForm.vue'
 import OntologyObjectForm from './OntologyObjectForm.vue'
 import ObjectInstanceExplorer from './ObjectInstanceExplorer.vue'
+import DatasetSemanticLinkDialog from './DatasetSemanticLinkDialog.vue'
 import OntologySchemaGraph from './OntologySchemaGraph.vue'
 import OntologyRelationForm from './OntologyRelationForm.vue'
 import OntologyStatusDialog from './OntologyStatusDialog.vue'
@@ -489,6 +490,26 @@ const ensureObjectMetrics = (objectNode: ObjectNodeData) => {
   const state = objectMetricsLoadState.value[objectNode.object_type_name]
   if (state === 'ready' || state === 'loading') return
   void fetchObjectMetrics(objectNode)
+}
+
+// Dataset ↔ 语义模型关联管理（入口：语义指标区；关联按 Dataset 维度维护）
+const linkDialogVisible = ref(false)
+const linkDialogDatasetName = ref('')
+const linkDialogGroupId = ref('')
+const openLinkManager = () => {
+  const metricsEntry = selectedMetrics.value
+  if (!metricsEntry?.datasetName) {
+    ElMessage.warning('当前对象类型尚未配置 Dataset，无法管理语义模型关联')
+    return
+  }
+  linkDialogDatasetName.value = metricsEntry.datasetName
+  linkDialogGroupId.value = metricsEntry.datasourceGroupId || ''
+  linkDialogVisible.value = true
+}
+const onDatasetLinksChanged = () => {
+  objectMetricsStore.value = {}
+  objectMetricsLoadState.value = {}
+  if (selectedNode.value?.kind === 'object_type') void fetchObjectMetrics(selectedNode.value)
 }
 
 const retrySelectedObject = () => {
@@ -1642,6 +1663,15 @@ const onRelationSaved = (objectTypeNames: string[]) => {
               <i class="fa-solid fa-chart-simple text-[10px] text-emerald-500"></i>
               <span class="text-xs font-medium text-slate-600">语义指标</span>
               <span class="text-[11px] text-slate-400">口径定义在语义层，只读引用</span>
+              <el-button
+                link
+                size="small"
+                class="!ml-auto !p-0 text-[11px]"
+                :disabled="!selectedMetrics?.datasetName"
+                @click="openLinkManager"
+              >
+                管理关联
+              </el-button>
             </div>
             <div v-if="selectedMetricsState === 'loading'" class="py-1 text-xs text-slate-400">加载指标中…</div>
             <div v-else-if="selectedMetricsState === 'error'" class="py-1 text-xs text-slate-400">指标加载失败</div>
@@ -1898,6 +1928,12 @@ const onRelationSaved = (objectTypeNames: string[]) => {
 
     <!-- 关系新建/编辑/状态/删除（右键发起；端点候选/状态上限用全量对象） -->
     <OntologyRelationForm ref="relationFormRef" :object_types="allObjects" @saved="onRelationSaved" />
+    <DatasetSemanticLinkDialog
+      v-model="linkDialogVisible"
+      :dataset-name="linkDialogDatasetName"
+      :datasource-group-id="linkDialogGroupId"
+      @changed="onDatasetLinksChanged"
+    />
 
     <!-- 树右键菜单（fixed 浮层，宿主页嵌入时必须 Teleport 防 transform 包含块错位） -->
     <Teleport to="body">

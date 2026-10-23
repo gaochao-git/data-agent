@@ -1105,6 +1105,31 @@ export interface OntologyObjectMetricItem {
   unavailable_reason: string
 }
 
+/** Dataset ↔ 语义模型关联（只存引用与列对照，指标口径在语义层）。 */
+export interface DatasetSemanticLinkItem {
+  id: number
+  dataset_id: number
+  dataset_name: string
+  semantic_config_id: string
+  semantic_config_name: string
+  datasource_group_id: string
+  table_name: string
+  column_mappings: Record<string, string>
+  metric_scope: string[]
+  metric_count?: number
+  lifecycle_status: 'draft' | 'active'
+  create_by_name?: string
+  update_time?: string
+}
+
+export interface DatasetSemanticLinkUpsertPayload {
+  datasource_group_id: string
+  table_name: string
+  column_mappings?: Record<string, string>
+  metric_scope?: string[]
+  lifecycle_status?: 'draft' | 'active'
+}
+
 export interface OntologyObjectMetricsResult {
   object_type: string
   dataset_name: string

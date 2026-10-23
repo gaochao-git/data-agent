@@ -363,11 +363,9 @@ def test_object_metric_helpers_cover_group_and_reasons():
         object_metrics_module._metric_unavailable_reason(metric, None, LINK, DATASET, "ds_a")
         == "语义模型不存在或不可访问"
     )
-    assert (
-        object_metrics_module._metric_unavailable_reason(
-            metric, CONFIG, {**LINK, "lifecycle_status": "draft"}, DATASET, "ds_a"
-        ).startswith("关联未启用")
-    )
+    assert object_metrics_module._metric_unavailable_reason(
+        metric, CONFIG, {**LINK, "lifecycle_status": "draft"}, DATASET, "ds_a"
+    ).startswith("关联未启用")
     assert object_metrics_module._metric_unavailable_reason(
         {**metric, "table": "orders"}, CONFIG, LINK, DATASET, "ds_a"
     ).startswith("指标归属表")
@@ -490,3 +488,235 @@ def test_load_object_metrics_map_degrades(monkeypatch):
 
 async def _async_value(value):
     return value
+
+
+def test_load_object_dataset_and_metric_entries(monkeypatch):
+    async def no_detail(_name):
+        return None
+
+    monkeypatch.setattr(object_metrics_module.ontology_service, "get_object_type_async", no_detail)
+    with pytest.raises(ObjectMetricError, match="不存在"):
+        asyncio.run(object_metrics_module._load_object_dataset_async("ghost"))
+
+    async def no_binding(_name):
+        return {"id": 1, "source_binding": None}
+
+    monkeypatch.setattr(object_metrics_module.ontology_service, "get_object_type_async", no_binding)
+    detail, binding, dataset = asyncio.run(object_metrics_module._load_object_dataset_async("shipment"))
+    assert detail["id"] == 1 and binding is None and dataset is None
+
+    entries = object_metrics_module._metric_entries_for_link(
+        {**LINK, "metric_scope": ["发货单数量"]},
+        {"metrics": ["bad", {"name": ""}, CONFIG["metrics"][0], {**CONFIG["metrics"][1], "name": "另一个"}]},
+        DATASET,
+        "ds_a",
+    )
+    assert [item["name"] for item in entries] == ["发货单数量"]
+
+
+def test_list_object_metrics_without_dataset(monkeypatch):
+    async def no_binding(_name):
+        return {"id": 1, "source_binding": None}
+
+    monkeypatch.setattr(object_metrics_module.ontology_service, "get_object_type_async", no_binding)
+    result = asyncio.run(list_object_metrics_async("shipment"))
+    assert result["metrics"] == []
+    assert result["reason"] == "对象类型未绑定 Dataset"
+
+
+def test_metric_term_resolution_errors(monkeypatch):
+    def bad(*_args, **_kwargs):
+        raise ValueError("bad derived")
+
+    monkeypatch.setattr(object_metrics_module, "resolve_derived_metric", bad)
+    with pytest.raises(ObjectMetricNotExecutableError, match="bad derived"):
+        object_metrics_module._resolve_derived_term(CONFIG["metrics"][2], {}, {}, "近7日签收量")
+
+    monkeypatch.setattr(object_metrics_module, "resolve_composite_metric", lambda *_args: None)
+    with pytest.raises(ObjectMetricNotExecutableError, match="复合指标解析失败"):
+        object_metrics_module._resolve_composite_term(CONFIG["metrics"][3], {}, "客单价")
+
+    def bad_composite(*_args, **_kwargs):
+        raise ValueError("bad composite")
+
+    monkeypatch.setattr(object_metrics_module, "resolve_composite_metric", bad_composite)
+    with pytest.raises(ObjectMetricNotExecutableError, match="bad composite"):
+        object_metrics_module._resolve_composite_term(CONFIG["metrics"][3], {}, "客单价")
+
+
+def test_translation_rejects_unmapped_property():
+    with pytest.raises(ObjectMetricNotExecutableError, match="未映射到对象属性"):
+        translate_metric_filters(
+            [{"dimension": "承运商", "operator": "=", "value": "顺丰"}],
+            link={"column_mappings": {"carrier": "承运商"}},
+            binding={"column_mappings": {}},
+        )
+
+
+def test_metric_projection_helpers_and_errors(monkeypatch):
+    from apps.chat_data_app.services.ontology.object_projection import (
+        _metric_alias,
+        _safe_metric_expression,
+        aggregate_metric_projection,
+    )
+
+    with pytest.raises(ObjectProjectionError, match="表达式为空"):
+        _safe_metric_expression("")
+    with pytest.raises(ObjectProjectionError, match="非法 SQL"):
+        _safe_metric_expression("COUNT(*); DROP TABLE x")
+    assert _metric_alias("发货单数量", 0) == "发货单数量"
+    assert _metric_alias("`bad`", 0) == "metric_1"
+    assert _metric_alias("x" * 65, 1) == "metric_2"
+    with pytest.raises(ObjectProjectionError, match="至少需要一个指标"):
+        build_object_metric_query(DETAIL, {"dimensions": CONFIG["dimensions"]}, metric_items=[])
+
+    async def no_detail(_name):
+        return None
+
+    monkeypatch.setattr(object_metrics_module.ontology_service, "get_object_type_async", no_detail)
+    with pytest.raises(ObjectProjectionError, match="不存在"):
+        asyncio.run(aggregate_metric_projection("shipment", metric_items=[]))
+
+    async def no_binding(_name):
+        return {**DETAIL, "source_binding": None}
+
+    monkeypatch.setattr(object_metrics_module.ontology_service, "get_object_type_async", no_binding)
+    with pytest.raises(ObjectProjectionError, match="未配置 Dataset"):
+        asyncio.run(aggregate_metric_projection("shipment", metric_items=[]))
+
+
+def test_tool_navigation_helpers(monkeypatch):
+    async def no_detail(_name):
+        return None
+
+    async def draft(_name):
+        return {"object_type_name": _name, "status": "draft"}
+
+    monkeypatch.setattr(ontology_tool.ontology_service, "get_object_type_async", no_detail)
+    with pytest.raises(ValueError, match="不存在"):
+        asyncio.run(ontology_tool._ensure_navigable_object_type("shipment"))
+    monkeypatch.setattr(ontology_tool.ontology_service, "get_object_type_async", draft)
+    with pytest.raises(ValueError, match="可导航状态"):
+        asyncio.run(ontology_tool._ensure_navigable_object_type("shipment"))
+
+    assert ontology_tool._state_member_ids(None) == []
+    assert ontology_tool._state_member_ids({"execution_context": None}) == []
+    assert ontology_tool._state_member_ids(
+        {"execution_context": {"matched_member_datasource_ids": ["", "ORG_CODE1"]}}
+    ) == ["ORG_CODE1"]
+    assert ontology_tool._state_member_ids(
+        {"execution_context": {"available_member_datasource_ids": ["ORG_CODE2"]}}
+    ) == ["ORG_CODE2"]
+
+
+def test_tool_metric_aggregate_validation(monkeypatch):
+    async def detail(_name):
+        return {"object_type_name": _name, "status": "certified"}
+
+    monkeypatch.setattr(ontology_tool.ontology_service, "get_object_type_async", detail)
+    monkeypatch.setattr(ontology_tool, "ontology_object_read_enabled", lambda: True)
+    payload = ontology_tool.validate_ontology_payload(
+        "aggregate_objects", {"object_type": "shipment", "metric_names": ["发货单数量"]}
+    )
+    with pytest.raises(ValueError, match="一个 member"):
+        asyncio.run(
+            ontology_tool._run_aggregate_metrics(
+                payload,
+                state={},
+                member_ids=[None],
+                user_id="u",
+            )
+        )
+    with pytest.raises(ValueError, match="metrics 或 metric_names"):
+        asyncio.run(
+            ontology_tool._run_aggregate_objects(
+                payload=ontology_tool.validate_ontology_payload("aggregate_objects", {"object_type": "shipment"}),
+                state={},
+                bound_user_id="u",
+            )
+        )
+
+
+def test_tool_metric_listing_errors(monkeypatch):
+    async def boom(*_args, **_kwargs):
+        raise ObjectMetricError("boom")
+
+    monkeypatch.setattr(ontology_tool, "list_object_metrics_async", boom)
+    assert asyncio.run(ontology_tool._object_metric_entry_async("shipment", "g", "u")) == {
+        "object_type": "shipment",
+        "metrics": [],
+        "reason": "boom",
+    }
+
+    async def bundle(*_args, **_kwargs):
+        return {"object_types": [{"object_type_name": "shipment"}]}
+
+    async def entries(_names, **_kwargs):
+        return [{"object_type": "shipment", "metrics": []}]
+
+    monkeypatch.setattr(ontology_tool, "_load_domain_bundle", bundle)
+    monkeypatch.setattr(ontology_tool, "_object_metric_entries_async", entries)
+    payload = ontology_tool.validate_ontology_payload("list_object_metrics", {})
+    result = asyncio.run(
+        ontology_tool._run_list_object_metrics(payload=payload, state={}, bound_datasource_id="g", bound_user_id="u")
+    )
+    assert "shipment" in str(result)
+
+
+def test_list_object_metrics_deduplicates_and_loads(monkeypatch):
+    async def detail(_name):
+        return DETAIL
+
+    async def links(*_args, **_kwargs):
+        return [LINK, LINK]
+
+    async def config(*_args, **_kwargs):
+        return CONFIG
+
+    monkeypatch.setattr(object_metrics_module.ontology_service, "get_object_type_async", detail)
+    monkeypatch.setattr(object_metrics_module.dataset_semantic_link_service, "list_links_for_dataset_id_async", links)
+    monkeypatch.setattr(object_metrics_module.dataset_semantic_link_service, "load_config_for_link_async", config)
+    monkeypatch.setattr(
+        object_metrics_module.logical_dataset_service,
+        "get_dataset_async_by_id_async",
+        lambda _id: _async_value(DATASET),
+    )
+    result = asyncio.run(list_object_metrics_async("shipment", datasource_group_id="ds_a"))
+    assert len(result["metrics"]) == len({item["name"] for item in result["metrics"]})
+    mapping = asyncio.run(object_metrics_module.load_object_metrics_map_async(["shipment"], datasource_group_id="ds_a"))
+    assert mapping["shipment"]
+
+
+def test_resolve_projection_config_errors_and_table_mismatch(monkeypatch):
+    async def detail(_name):
+        return DETAIL
+
+    async def dataset(_id):
+        return DATASET
+
+    async def link(*_args, **_kwargs):
+        return LINK
+
+    monkeypatch.setattr(object_metrics_module.ontology_service, "get_object_type_async", detail)
+    monkeypatch.setattr(
+        object_metrics_module.logical_dataset_service, "get_dataset_async_by_id_async", lambda _id: dataset(1)
+    )
+    monkeypatch.setattr(object_metrics_module.dataset_semantic_link_service, "get_active_link_async", link)
+
+    async def invalid_config(*_args, **_kwargs):
+        raise object_metrics_module.DatasetSemanticLinkInvalidError("bad")
+
+    monkeypatch.setattr(
+        object_metrics_module.dataset_semantic_link_service, "load_config_for_link_async", invalid_config
+    )
+    with pytest.raises(ObjectMetricNotExecutableError, match="语义模型不存在"):
+        asyncio.run(resolve_metric_projection_async("shipment", ["发货单数量"], datasource_group_id="ds_a"))
+
+    bad_config = {**CONFIG, "metrics": [{**CONFIG["metrics"][0], "table": "orders"}]}
+    monkeypatch.setattr(
+        object_metrics_module.dataset_semantic_link_service,
+        "load_config_for_link_async",
+        lambda *_args, **_kwargs: _async_value(bad_config),
+    )
+    with pytest.raises(ObjectMetricNotExecutableError, match="归属表"):
+        asyncio.run(resolve_metric_projection_async("shipment", ["发货单数量"], datasource_group_id="ds_a"))

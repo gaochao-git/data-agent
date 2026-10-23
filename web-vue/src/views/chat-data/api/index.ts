@@ -52,6 +52,8 @@ import type {
   OntologySourceBinding,
   OntologyObjectListItem,
   OntologyObjectMetricsResult,
+  DatasetSemanticLinkItem,
+  DatasetSemanticLinkUpsertPayload,
   OntologyObjectFilter,
   OntologyObjectListResult,
   OntologyObjectSearchResult,
@@ -2302,6 +2304,44 @@ export function readAdminOntologyObject(
       ...(memberDatasourceIds[0] ? { member_datasource_id: memberDatasourceIds[0] } : {}),
       ...(semanticConfigId ? { semantic_config_id: semanticConfigId } : {})
     }
+  })
+}
+
+/** 后台：Dataset ↔ 语义模型关联列表（只存引用与列对照） */
+export function listAdminDatasetSemanticLinks(
+  datasetName: string,
+  params: { datasource_group_id?: string } = {}
+): Promise<ApiResponse<{ links: DatasetSemanticLinkItem[] }>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/meta/datasets/${encodeURIComponent(datasetName)}/semantic-links`,
+    method: 'get',
+    params
+  })
+}
+
+/** 后台：创建/更新 Dataset ↔ 语义模型关联 */
+export function upsertAdminDatasetSemanticLink(
+  datasetName: string,
+  semanticConfigId: string,
+  data: DatasetSemanticLinkUpsertPayload
+): Promise<ApiResponse<DatasetSemanticLinkItem>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/meta/datasets/${encodeURIComponent(datasetName)}/semantic-links/${encodeURIComponent(semanticConfigId)}`,
+    method: 'put',
+    data
+  })
+}
+
+/** 后台：删除 Dataset ↔ 语义模型关联（软删） */
+export function deleteAdminDatasetSemanticLink(
+  datasetName: string,
+  semanticConfigId: string,
+  params: { datasource_group_id?: string } = {}
+): Promise<ApiResponse<{ semantic_config_id: string }>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/meta/datasets/${encodeURIComponent(datasetName)}/semantic-links/${encodeURIComponent(semanticConfigId)}`,
+    method: 'delete',
+    params
   })
 }
 
