@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import socket
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
 from redis.asyncio import Redis
@@ -15,6 +16,9 @@ from redis.exceptions import ReadOnlyError, ResponseError, TimeoutError
 from redis.retry import Retry
 
 from utils.crypto import decrypt_env_value
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 RUN_STREAM_PREFIX = "chatdata:run:"
 RUN_STREAM_SUFFIX = ":events"
@@ -163,6 +167,23 @@ def _parse_sentinel_addrs(raw: str) -> list[tuple[str, int]]:
     return addrs
 
 
+_STALE_TRANSPORT_MARKERS = (
+    "unable to perform operation on",
+    "handler is closed",
+    "TCPTransport closed",
+)
+
+
+def _is_stale_transport_error(exc: BaseException) -> bool:
+    """识别网络切换后连接池里残留的半开/已关闭连接。"""
+    if isinstance(exc, RedisConnectionError):
+        return True
+    if isinstance(exc, RuntimeError):
+        message = str(exc)
+        return any(marker in message for marker in _STALE_TRANSPORT_MARKERS)
+    return False
+
+
 class RedisEventBus:
     """Publish and consume Run events using Redis Streams.
 
@@ -190,6 +211,7 @@ class RedisEventBus:
         self._sentinel: Sentinel | None = None
         self._redis: Redis | None = None
         self._read_redis: Redis | None = None
+        self._client_lock = asyncio.Lock()
 
     def _build_sentinel(self) -> Sentinel:
         if self._sentinel is None:
@@ -243,9 +265,61 @@ class RedisEventBus:
             )
         return self._read_redis
 
+    def _lock(self) -> asyncio.Lock:
+        """兼容测试用 __new__ 构造的实例，同时保证生产实例只有一个锁。"""
+        lock = getattr(self, "_client_lock", None)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._client_lock = lock
+        return lock
+
+    async def _reset_ops_client(self, failed_client: Redis) -> None:
+        async with self._lock():
+            if self._redis is not failed_client:
+                return
+            try:
+                await failed_client.aclose()
+            except Exception as exc:  # noqa: BLE001 - 重建前关闭失败不阻断新连接
+                logger.warning("关闭失效 Redis 操作档连接失败: %s", exc)
+            self._redis = None
+
+    async def _reset_read_client(self, failed_client: Redis) -> None:
+        async with self._lock():
+            if self._read_redis is not failed_client:
+                return
+            try:
+                await failed_client.aclose()
+            except Exception as exc:  # noqa: BLE001 - 重建前关闭失败不阻断新连接
+                logger.warning("关闭失效 Redis 读档连接失败: %s", exc)
+            self._read_redis = None
+
+    async def _run_ops(self, operation: Callable[[Any], Awaitable[Any]]) -> Any:
+        """执行操作档命令；遇到网络切换遗留的死连接时重建一次并重试。"""
+        client = self.redis
+        try:
+            return await operation(client)
+        except BaseException as exc:
+            if not _is_stale_transport_error(exc):
+                raise
+            logger.warning("Redis 操作档连接已失效，重建后重试一次: %s", exc)
+            await self._reset_ops_client(client)
+            return await operation(self.redis)
+
+    async def _run_read(self, operation: Callable[[Any], Awaitable[Any]]) -> Any:
+        """执行读档命令；同样只对死连接重建一次，不吞业务异常。"""
+        client = self.read_redis
+        try:
+            return await operation(client)
+        except BaseException as exc:
+            if not _is_stale_transport_error(exc):
+                raise
+            logger.warning("Redis 读档连接已失效，重建后重试一次: %s", exc)
+            await self._reset_read_client(client)
+            return await operation(self.read_redis)
+
     async def start(self) -> None:
         # redis-py 桩对 sync/async 双客户端返回联合类型，asyncio 客户端实际返回 Awaitable
-        await self.redis.ping()  # type: ignore[misc]
+        await self._run_ops(lambda client: client.ping())
 
     async def close(self) -> None:
         if self._redis is not None:
@@ -267,22 +341,24 @@ class RedisEventBus:
         owner_token: str,
     ) -> str:
         try:
-            result = await self.redis.eval(
-                _PUBLISH_SCRIPT,
-                4,
-                self.run_stream_key(run_id),
-                f"{self.run_stream_key(run_id)}:sequence",
-                self.event_dedupe_key(run_id, event_id),
-                self.run_owner_key(run_id),
-                run_id,
-                conversation_id,
-                user_id,
-                event_id,
-                event_type,
-                payload,
-                str(STREAM_TTL_SECONDS),
-                owner_token,
-            )  # type: ignore[misc]
+            result = await self._run_ops(
+                lambda client: client.eval(
+                    _PUBLISH_SCRIPT,
+                    4,
+                    self.run_stream_key(run_id),
+                    f"{self.run_stream_key(run_id)}:sequence",
+                    self.event_dedupe_key(run_id, event_id),
+                    self.run_owner_key(run_id),
+                    run_id,
+                    conversation_id,
+                    user_id,
+                    event_id,
+                    event_type,
+                    payload,
+                    str(STREAM_TTL_SECONDS),
+                    owner_token,
+                )
+            )
         except ResponseError as exc:
             if "RUN_OWNER_MISMATCH" in str(exc):
                 raise RedisRunOwnerMismatchError(run_id) from exc
@@ -290,42 +366,50 @@ class RedisEventBus:
         return str(result[0])
 
     async def claim_run_owner(self, run_id: str, owner_token: str) -> None:
-        claimed = await self.redis.eval(
-            _CLAIM_OWNER_SCRIPT,
-            1,
-            self.run_owner_key(run_id),
-            owner_token,
-            str(STREAM_TTL_SECONDS),
-        )  # type: ignore[misc]
+        claimed = await self._run_ops(
+            lambda client: client.eval(
+                _CLAIM_OWNER_SCRIPT,
+                1,
+                self.run_owner_key(run_id),
+                owner_token,
+                str(STREAM_TTL_SECONDS),
+            )
+        )
         if int(claimed or 0) != 1:
             raise RedisRunOwnerMismatchError(run_id)
 
     async def release_run_owner(self, run_id: str, owner_token: str) -> None:
-        await self.redis.eval(_RELEASE_OWNER_SCRIPT, 1, self.run_owner_key(run_id), owner_token)  # type: ignore[misc]
+        await self._run_ops(
+            lambda client: client.eval(_RELEASE_OWNER_SCRIPT, 1, self.run_owner_key(run_id), owner_token)
+        )
 
     async def renew_run_owner(self, run_id: str, owner_token: str) -> None:
-        renewed = await self.redis.eval(
-            _RENEW_OWNER_SCRIPT,
-            1,
-            self.run_owner_key(run_id),
-            owner_token,
-            str(STREAM_TTL_SECONDS),
-        )  # type: ignore[misc]
+        renewed = await self._run_ops(
+            lambda client: client.eval(
+                _RENEW_OWNER_SCRIPT,
+                1,
+                self.run_owner_key(run_id),
+                owner_token,
+                str(STREAM_TTL_SECONDS),
+            )
+        )
         if int(renewed or 0) != 1:
             raise RedisRunOwnerMismatchError(run_id)
 
     async def read_run(
         self, run_id: str, cursor: str, *, block_ms: int = int(REDIS_READ_BLOCK_SECONDS * 1000), count: int = 100
     ) -> list[dict[str, str]]:
-        result = await self.read_redis.xread(
-            {self.run_stream_key(run_id): cursor},
-            count=count,
-            block=block_ms,
+        result = await self._run_read(
+            lambda client: client.xread(
+                {self.run_stream_key(run_id): cursor},
+                count=count,
+                block=block_ms,
+            )
         )
         return [self._decode_event(stream_id, fields) for _key, rows in result for stream_id, fields in rows]
 
     async def run_stream_exists(self, run_id: str) -> bool:
-        return bool(await self.redis.exists(self.run_stream_key(run_id)))
+        return bool(await self._run_ops(lambda client: client.exists(self.run_stream_key(run_id))))
 
     async def latest_run_event_id(self, run_id: str) -> str | None:
         """Return the current tail cursor without consuming the stream."""
@@ -333,7 +417,7 @@ class RedisEventBus:
         return event["stream_id"] if event else None
 
     async def latest_run_event(self, run_id: str) -> dict[str, str] | None:
-        rows = await self.redis.xrevrange(self.run_stream_key(run_id), count=1)
+        rows = await self._run_ops(lambda client: client.xrevrange(self.run_stream_key(run_id), count=1))
         if not rows:
             return None
         stream_id, fields = rows[0]
