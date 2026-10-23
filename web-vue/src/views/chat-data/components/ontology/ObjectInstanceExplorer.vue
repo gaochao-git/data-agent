@@ -34,6 +34,7 @@ const detail = ref<OntologyObjectInstance | null>(null)
 const detailLoading = ref(false)
 const linksLoading = ref(false)
 const detailError = ref('')
+const detailMode = ref<'table' | 'graph'>('table')
 const detailCache = new Map<string, OntologyObjectInstance>()
 const history = ref<Array<{ objectType: string; objectKey: string; label: string }>>([])
 
@@ -75,6 +76,78 @@ const linkedGroups = computed(() => {
       entries
     }
   })
+})
+
+interface InstanceGraphNode {
+  key: string
+  label: string
+  x: number
+  y: number
+  isCenter: boolean
+  rawKey: string
+}
+
+interface InstanceGraphEdge {
+  key: string
+  x1: number
+  y1: number
+  x2: number
+  y2: number
+}
+
+const instanceGraph = computed<{ nodes: InstanceGraphNode[]; edges: InstanceGraphEdge[] }>(() => {
+  const data = detail.value
+  if (!data) return { nodes: [], edges: [] }
+  const centerX = 300
+  const centerY = 190
+  const radiusX = 210
+  const radiusY = 95
+  const related = new Map<string, { rawKey: string; label: string }>()
+  for (const group of linkedGroups.value) {
+    for (const entry of group.entries) {
+      const rawKey = String(entry.related_object_key || '')
+      if (rawKey && !related.has(rawKey)) {
+        related.set(rawKey, { rawKey, label: rawKey.split(':').slice(1).join(':') || rawKey })
+      }
+    }
+  }
+  const relatedNodes: InstanceGraphNode[] = [...related.values()].slice(0, 12).map((item, index, list) => {
+    const angle = -Math.PI / 2 + (index * Math.PI * 2) / Math.max(list.length, 1)
+    return {
+      key: `related:${item.rawKey}`,
+      label: item.label.length > 16 ? `${item.label.slice(0, 15)}…` : item.label,
+      x: centerX + Math.cos(angle) * radiusX,
+      y: centerY + Math.sin(angle) * radiusY,
+      isCenter: false,
+      rawKey: item.rawKey
+    }
+  })
+  const center: InstanceGraphNode = {
+    key: 'center',
+    label: (detailTitle.value || data.object_key).slice(0, 18),
+    x: centerX,
+    y: centerY,
+    isCenter: true,
+    rawKey: data.object_key
+  }
+  const edges: InstanceGraphEdge[] = relatedNodes.map(node => {
+    const dx = node.x - centerX
+    const dy = node.y - centerY
+    const distance = Math.hypot(dx, dy) || 1
+    const unitX = dx / distance
+    const unitY = dy / distance
+    const halfWidth = 84
+    const halfHeight = 16
+    const edgeDistance = Math.min(halfWidth / Math.max(Math.abs(unitX), 1e-6), halfHeight / Math.max(Math.abs(unitY), 1e-6))
+    return {
+      key: `${center.key}:${node.key}`,
+      x1: centerX + unitX * edgeDistance,
+      y1: centerY + unitY * edgeDistance,
+      x2: node.x - unitX * edgeDistance,
+      y2: node.y - unitY * edgeDistance
+    }
+  })
+  return { nodes: [center, ...relatedNodes], edges }
 })
 
 const loadMeta = async (objectType: string) => {
@@ -279,8 +352,13 @@ onMounted(initialize)
           <el-button link size="small" @click="resetToList">返回列表</el-button>
           <span class="font-mono text-xs text-slate-700">{{ detail.object_key }}</span>
           <span v-if="detailTitle" class="text-xs text-slate-500">{{ detailTitle }}</span>
+          <el-radio-group v-model="detailMode" size="small" class="ml-auto">
+            <el-radio-button value="table">属性</el-radio-button>
+            <el-radio-button value="graph">图形</el-radio-button>
+          </el-radio-group>
         </div>
 
+        <template v-if="detailMode === 'table'">
         <div class="mb-1 text-xs font-medium text-slate-600">属性</div>
         <el-table :data="detailPropertyRows" size="small" border empty-text="暂无属性">
           <el-table-column label="属性" min-width="150">
@@ -315,6 +393,19 @@ onMounted(initialize)
             </div>
           </div>
         </template>
+        </template>
+        <div v-else class="overflow-hidden rounded border border-slate-100 bg-gradient-to-br from-slate-50 to-white">
+          <svg viewBox="0 0 600 400" class="h-[340px] w-full" role="img" aria-label="对象实例关系图">
+            <g v-for="edge in instanceGraph.edges" :key="edge.key">
+              <line :x1="edge.x1" :y1="edge.y1" :x2="edge.x2" :y2="edge.y2" stroke="#cbd5e1" stroke-width="1.2" />
+            </g>
+            <g v-for="node in instanceGraph.nodes" :key="node.key" :class="node.isCenter ? '' : 'cursor-pointer'" @click="!node.isCenter && openLinked(node.rawKey)">
+              <title>{{ node.rawKey }}</title>
+              <rect :x="node.x - 84" :y="node.y - 16" width="168" height="32" rx="5" :fill="node.isCenter ? '#eff6ff' : '#ffffff'" :stroke="node.isCenter ? '#3b82f6' : '#dbeafe'" stroke-width="1.2" />
+              <text :x="node.x" :y="node.y + 4" text-anchor="middle" :class="node.isCenter ? 'fill-blue-700' : 'fill-slate-700'" style="font-size: 10px; font-weight: 500">{{ node.label }}</text>
+            </g>
+          </svg>
+        </div>
       </template>
     </section>
   </div>

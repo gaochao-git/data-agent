@@ -10,6 +10,11 @@ import type { OntologyConsistencyFinding, OntologyConsistencyReport } from '../.
 
 const visible = defineModel<boolean>('visible', { default: false })
 
+const props = defineProps({
+  ontologyId: { type: Number, default: undefined },
+  ontologyLabel: { type: String, default: '' }
+})
+
 const loading = ref(false)
 const report = ref<OntologyConsistencyReport | null>(null)
 const loadError = ref('')
@@ -24,7 +29,7 @@ const loadReport = async () => {
   loading.value = true
   loadError.value = ''
   try {
-    const res = await checkAdminOntologyConsistency()
+    const res = await checkAdminOntologyConsistency(props.ontologyId)
     if (res.status === 'success') {
       report.value = res.data
     } else {
@@ -38,7 +43,7 @@ const loadReport = async () => {
   }
 }
 
-watch(visible, value => {
+watch([visible, () => props.ontologyId], ([value]) => {
   if (value) void loadReport()
 })
 
@@ -48,7 +53,9 @@ const findingTargets = (finding: OntologyConsistencyFinding) => finding.targets.
 <template>
   <el-dialog v-model="visible" width="min(760px, 94vw)" :append-to-body="true">
     <template #header>
-      <span class="text-base font-medium text-slate-800">本体一致性检查</span>
+      <span class="text-base font-medium text-slate-800">
+        本体一致性检查<span v-if="ontologyLabel" class="ml-2 text-xs font-normal text-slate-400">{{ ontologyLabel }}</span>
+      </span>
     </template>
 
     <div v-loading="loading" class="min-h-40">

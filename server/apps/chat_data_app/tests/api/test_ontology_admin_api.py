@@ -95,6 +95,42 @@ def test_consistency_check_contract(client, auth_headers, monkeypatch):
     assert data["healthy"] is False
 
 
+def test_consistency_check_scopes_bundle_by_ontology(client, auth_headers, monkeypatch):
+    bundle = {
+        "object_types": [
+            {"id": 1, "object_type_name": "customer", "ontology_id": 2},
+            {"id": 2, "object_type_name": "order", "ontology_id": 3},
+        ],
+        "properties": [{"id": 1, "object_type_id": 1}, {"id": 2, "object_type_id": 2}],
+        "relation_types": [
+            {"id": 1, "from_object_type_id": 1, "to_object_type_id": 2},
+            {"id": 2, "from_object_type_id": 2, "to_object_type_id": 2},
+        ],
+        "mappings": [{"object_type_id": 1}, {"object_type_id": 2}],
+    }
+    _install_stubs(
+        monkeypatch,
+        groups=[{"group_id": "group-1"}],
+        configs={"group-1": [{"id": "cfg-1", "name": "模型一", "dimensions": []}]},
+        bundle=bundle,
+        findings=[],
+    )
+    captured: dict = {}
+
+    def fake_check(filtered_bundle, configs, *, config_group_ids=None):
+        captured["bundle"] = filtered_bundle
+        return []
+
+    monkeypatch.setattr(ontology_admin_routes, "_run_consistency_check", fake_check)
+    response = client.get(_URL, params={"ontology_id": 2}, headers=auth_headers)
+    assert response.status_code == 200
+    filtered = captured["bundle"]
+    assert [item["object_type_name"] for item in filtered["object_types"]] == ["customer"]
+    assert [item["id"] for item in filtered["properties"]] == [1]
+    assert filtered["relation_types"] == []
+    assert filtered["mappings"] == [{"object_type_id": 1}]
+
+
 def test_consistency_check_healthy(client, auth_headers, monkeypatch):
     _install_stubs(
         monkeypatch,

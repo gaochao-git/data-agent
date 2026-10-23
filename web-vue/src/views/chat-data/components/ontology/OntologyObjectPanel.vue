@@ -39,6 +39,7 @@ import OntologyConsistencyDialog from './OntologyConsistencyDialog.vue'
 import OntologyForm from './OntologyForm.vue'
 import OntologyObjectForm from './OntologyObjectForm.vue'
 import ObjectInstanceExplorer from './ObjectInstanceExplorer.vue'
+import OntologySchemaGraph from './OntologySchemaGraph.vue'
 import OntologyRelationForm from './OntologyRelationForm.vue'
 import OntologyStatusDialog from './OntologyStatusDialog.vue'
 import { mappingIdentityText, ONTOLOGY_MULTIPLICITY_META, ONTOLOGY_RENDER_HINTS, ONTOLOGY_STATUS_META } from './ontologyMeta'
@@ -590,6 +591,11 @@ const currentNodeKey = ref('')
 
 const selectedNode = ref<TreeRow | null>(null)
 const treeCollapsed = ref(false)
+const schemaGraphVisible = ref(false)
+const schemaGraphOntologyId = ref<number | undefined>(undefined)
+const schemaGraphOntologyLabel = ref('')
+const consistencyOntologyId = ref<number | undefined>(undefined)
+const consistencyOntologyLabel = ref('')
 const objectDetailView = ref<'overview' | 'instances'>('overview')
 
 const onNodeClick = (data: TreeRow) => {
@@ -1112,6 +1118,28 @@ const onActionTypeViewEdit = (item: OntologyActionTypeItem) => {
   void openActionTypeManager('edit', item)
 }
 
+const openOntologyConsistency = (node: TreeRow) => {
+  if (node.kind !== 'ontology' || node.ontology_id == null) return
+  consistencyOntologyId.value = node.ontology_id
+  consistencyOntologyLabel.value = node.ontology_label
+  consistencyDialogVisible.value = true
+}
+
+const openOntologyGraph = (node: TreeRow) => {
+  if (node.kind !== 'ontology' || node.ontology_id == null) return
+  schemaGraphOntologyId.value = node.ontology_id
+  schemaGraphOntologyLabel.value = node.ontology_label
+  schemaGraphVisible.value = true
+}
+
+const selectObjectFromGraph = (objectTypeName: string) => {
+  const node = findObjectNode(objectTypeName)
+  if (!node) return
+  treeCollapsed.value = false
+  onNodeClick(node)
+  currentNodeKey.value = node.row_key
+}
+
 const findObjectNode = (objectTypeName: string): ObjectNodeData | null => {
   for (const root of treeData.value) {
     for (const ontology of root.children) {
@@ -1238,20 +1266,21 @@ const onRelationSaved = (objectTypeNames: string[]) => {
                 <i class="fa-solid fa-sitemap text-[11px] text-slate-500"></i>
                 <span class="text-xs font-semibold text-slate-800">{{ data.label }}</span>
                 <span class="text-[11px] text-slate-400">{{ data.children.filter((item: TreeRow) => item.kind === 'ontology').length }} 个本体</span>
-                <el-button
-                  link
-                  size="small"
-                  class="ml-2 !p-0 text-[11px]"
-                  @click.stop="consistencyDialogVisible = true"
-                >
-                  <i class="fa-solid fa-stethoscope mr-1 text-[10px]"></i>一致性检查
-                </el-button>
               </span>
               <!-- 本体节点 -->
               <span v-else-if="data.kind === 'ontology'" class="flex items-center gap-1.5 py-0.5">
                 <i :class="['fa-solid text-[11px]', data.is_ungrouped ? 'fa-box-open text-slate-300' : 'fa-layer-group text-amber-500']"></i>
-                <span class="text-xs font-medium text-slate-700">{{ data.ontology_label }}</span>
-                <span class="text-[11px] text-slate-400">{{ data.object_type_count }} 个对象类型</span>
+                <span class="truncate text-xs font-medium text-slate-700">{{ data.ontology_label }}</span>
+                <template v-if="!data.is_ungrouped">
+                  <el-tooltip content="一致性检查" placement="top">
+                    <el-button link size="small" class="ml-1 !p-0 text-[10px]" @click.stop="openOntologyConsistency(data)">
+                      <i class="fa-solid fa-stethoscope mr-0.5 text-[9px]"></i>检查
+                    </el-button>
+                  </el-tooltip>
+                  <el-button link size="small" class="!p-0 text-[10px]" @click.stop="openOntologyGraph(data)">
+                    <i class="fa-solid fa-diagram-project mr-0.5 text-[9px]"></i>图谱
+                  </el-button>
+                </template>
               </span>
               <!-- 本体分组节点（对象类型/关系类型，常驻锚点） -->
               <span
@@ -1791,6 +1820,14 @@ const onRelationSaved = (objectTypeNames: string[]) => {
       </template>
     </el-dialog>
 
+    <!-- 本体对象类型关系图：节点=对象类型，边=关系类型 -->
+    <OntologySchemaGraph
+      v-model:visible="schemaGraphVisible"
+      :ontology-id="schemaGraphOntologyId"
+      :ontology-label="schemaGraphOntologyLabel"
+      @select="selectObjectFromGraph"
+    />
+
     <!-- 单 Action Type 视图：Overview / Logic / Observability -->
     <ActionTypeView
       v-model:visible="actionTypeViewVisible"
@@ -1804,7 +1841,11 @@ const onRelationSaved = (objectTypeNames: string[]) => {
     </el-dialog>
 
     <!-- 一致性健康巡检弹窗：本体↔语义模型失修清单（手动触发，只读不阻断） -->
-    <OntologyConsistencyDialog v-model:visible="consistencyDialogVisible" />
+    <OntologyConsistencyDialog
+      v-model:visible="consistencyDialogVisible"
+      :ontology-id="consistencyOntologyId"
+      :ontology-label="consistencyOntologyLabel"
+    />
 
     <!-- 关系新建/编辑/状态/删除（右键发起；端点候选/状态上限用全量对象） -->
     <OntologyRelationForm ref="relationFormRef" :object_types="allObjects" @saved="onRelationSaved" />

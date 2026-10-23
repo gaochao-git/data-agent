@@ -2114,10 +2114,13 @@ export interface OntologyConsistencyReport {
 }
 
 /** 后台：本体↔语义模型一致性健康巡检（手动触发，只巡检不阻断） */
-export function checkAdminOntologyConsistency(): Promise<ApiResponse<OntologyConsistencyReport>> {
+export function checkAdminOntologyConsistency(
+  ontologyId?: number
+): Promise<ApiResponse<OntologyConsistencyReport>> {
   return request({
     url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/consistency-check`,
-    method: 'get'
+    method: 'get',
+    params: ontologyId != null ? { ontology_id: ontologyId } : undefined
   })
 }
 

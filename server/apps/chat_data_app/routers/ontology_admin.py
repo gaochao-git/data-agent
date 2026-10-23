@@ -537,6 +537,29 @@ async def _collect_consistency_scope() -> tuple[list[dict], dict[str, str], set[
     return configs, config_group_ids, seen_config_ids, group_ids
 
 
+def _filter_consistency_bundle(bundle: dict, ontology_id: int | None) -> dict:
+    """把一致性巡检 bundle 收敛到单个本体；未指定本体时保持全局巡检。"""
+    if ontology_id is None:
+        return bundle
+    object_types = [item for item in bundle.get("object_types") or [] if item.get("ontology_id") == ontology_id]
+    object_type_ids = {int(item.get("id") or 0) for item in object_types}
+    return {
+        "object_types": object_types,
+        "properties": [
+            item for item in bundle.get("properties") or [] if int(item.get("object_type_id") or 0) in object_type_ids
+        ],
+        "relation_types": [
+            item
+            for item in bundle.get("relation_types") or []
+            if int(item.get("from_object_type_id") or 0) in object_type_ids
+            and int(item.get("to_object_type_id") or 0) in object_type_ids
+        ],
+        "mappings": [
+            item for item in bundle.get("mappings") or [] if int(item.get("object_type_id") or 0) in object_type_ids
+        ],
+    }
+
+
 def _severity_summary(findings: list[dict]) -> dict[str, int]:
     """findings 按 severity 计数（仅 error/warning/info 三档）。"""
     summary = {"error": 0, "warning": 0, "info": 0}
@@ -548,7 +571,7 @@ def _severity_summary(findings: list[dict]) -> dict[str, int]:
 
 
 @router.get("/admin/meta/ontology/consistency-check")
-async def check_ontology_model_consistency(request: Request) -> JSONResponse:
+async def check_ontology_model_consistency(request: Request, ontology_id: int | None = None) -> JSONResponse:
     """本体↔语义模型一致性健康巡检（管理端手动触发）。
 
     比较域 = 全部数据源组的公共语义配置 × AI 可见本体面
@@ -560,6 +583,7 @@ async def check_ontology_model_consistency(request: Request) -> JSONResponse:
         _get_current_user(request)
         configs, config_group_ids, seen_config_ids, group_ids = await _collect_consistency_scope()
         bundle = await OntologyDao().load_injection_bundle_async(sorted(seen_config_ids)) if seen_config_ids else {}
+        bundle = _filter_consistency_bundle(bundle, ontology_id)
         findings = _run_consistency_check(bundle, configs, config_group_ids=config_group_ids)
         summary = _severity_summary(findings)
         return business_response(
