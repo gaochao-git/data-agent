@@ -1,21 +1,27 @@
-"""Logical Dataset 管理路由：Dataset 身份、版本、分支和 member 绑定。"""
+"""Logical Dataset 管理路由：Dataset 身份、版本、分支、member 绑定与 Pipeline。"""
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 
 from utils.error_codes import ErrorCode
 from utils.logger import get_logger
 from utils.response import business_response
 
-from ..schema import DatasetBootstrapRequest, DatasetBranchCreateRequest, DatasetUpsertRequest
+from ..schema import (
+    DatasetBootstrapRequest,
+    DatasetBranchCreateRequest,
+    DatasetPipelineUpsertRequest,
+    DatasetUpsertRequest,
+)
 from ..services.dataset.dataset_service import (
     DatasetAlreadyExistsError,
     DatasetInvalidError,
     DatasetNotFoundError,
     logical_dataset_service,
 )
+from ..services.dataset.pipeline_service import dataset_pipeline_service
 from . import JSON_API_RESPONSES
 from .dependencies import _get_current_user
 
@@ -44,10 +50,18 @@ def _dataset_payload(body: DatasetUpsertRequest) -> dict:
 
 
 @router.get("/admin/meta/datasets")
-async def list_datasets(request: Request) -> JSONResponse:
+async def list_datasets(
+    request: Request,
+    dataset_layer: str | None = Query(default=None, description="按 Pipeline 分层筛选"),
+    dataset_origin: str | None = Query(default=None, description="按 Dataset 来源筛选"),
+) -> JSONResponse:
     _get_current_user(request)
     try:
-        return business_response(data={"datasets": await logical_dataset_service.list_datasets_async()}, msg="获取成功")
+        data = await logical_dataset_service.list_datasets_async(
+            dataset_layer=dataset_layer,
+            dataset_origin=dataset_origin,
+        )
+        return business_response(data={"datasets": data}, msg="获取成功")
     except Exception as error:
         return _error_response(error, "获取 Dataset 失败")
 
@@ -115,3 +129,90 @@ async def create_dataset_branch(dataset_name: str, body: DatasetBranchCreateRequ
         return business_response(data=data, msg="创建成功")
     except Exception as error:
         return _error_response(error, "创建 Dataset 分支失败")
+
+
+# ============ Dataset Pipeline ============
+
+
+@router.get("/admin/meta/pipelines")
+async def list_pipelines(request: Request) -> JSONResponse:
+    _get_current_user(request)
+    try:
+        return business_response(
+            data={"pipelines": await dataset_pipeline_service.list_pipelines_async()}, msg="获取成功"
+        )
+    except Exception as error:
+        return _error_response(error, "获取 Pipeline 失败")
+
+
+@router.get("/admin/meta/pipelines/{pipeline_name}")
+async def get_pipeline(pipeline_name: str, request: Request) -> JSONResponse:
+    _get_current_user(request)
+    try:
+        return business_response(data=await dataset_pipeline_service.get_pipeline_async(pipeline_name), msg="获取成功")
+    except Exception as error:
+        return _error_response(error, "获取 Pipeline 失败")
+
+
+@router.put("/admin/meta/pipelines/{pipeline_name}")
+async def upsert_pipeline(pipeline_name: str, body: DatasetPipelineUpsertRequest, request: Request) -> JSONResponse:
+    user = _get_current_user(request)
+    try:
+        data = await dataset_pipeline_service.upsert_pipeline_async(
+            pipeline_name,
+            body.model_dump(),
+            operator=str(getattr(user, "user_id", "") or ""),
+            operator_name=str(getattr(user, "username", "") or ""),
+        )
+        return business_response(data=data, msg="保存成功")
+    except Exception as error:
+        return _error_response(error, "保存 Pipeline 失败")
+
+
+@router.delete("/admin/meta/pipelines/{pipeline_name}")
+async def delete_pipeline(pipeline_name: str, request: Request) -> JSONResponse:
+    _get_current_user(request)
+    try:
+        await dataset_pipeline_service.delete_pipeline_async(pipeline_name)
+        return business_response(msg="删除成功")
+    except Exception as error:
+        return _error_response(error, "删除 Pipeline 失败")
+
+
+@router.post("/admin/meta/pipelines/{pipeline_name}/build")
+async def build_pipeline(pipeline_name: str, request: Request) -> JSONResponse:
+    user = _get_current_user(request)
+    try:
+        data = await dataset_pipeline_service.build_pipeline_async(
+            pipeline_name,
+            operator=str(getattr(user, "user_id", "") or ""),
+            operator_name=str(getattr(user, "username", "") or ""),
+            user_id=str(getattr(user, "user_id", "") or ""),
+            username=str(getattr(user, "username", "") or ""),
+        )
+        return business_response(data=data, msg="构建完成")
+    except Exception as error:
+        return _error_response(error, "构建 Pipeline 失败")
+
+
+@router.get("/admin/meta/pipelines/{pipeline_name}/runs")
+async def list_pipeline_runs(
+    pipeline_name: str,
+    request: Request,
+    limit: int = Query(default=20, ge=1, le=100, description="返回条数"),
+) -> JSONResponse:
+    _get_current_user(request)
+    try:
+        data = await dataset_pipeline_service.list_runs_async(pipeline_name, limit=limit)
+        return business_response(data={"runs": data}, msg="获取成功")
+    except Exception as error:
+        return _error_response(error, "获取 Pipeline 运行记录失败")
+
+
+@router.get("/admin/meta/pipeline-runs/{run_id}")
+async def get_pipeline_run(run_id: str, request: Request) -> JSONResponse:
+    _get_current_user(request)
+    try:
+        return business_response(data=await dataset_pipeline_service.get_run_async(run_id), msg="获取成功")
+    except Exception as error:
+        return _error_response(error, "获取 Pipeline 运行详情失败")

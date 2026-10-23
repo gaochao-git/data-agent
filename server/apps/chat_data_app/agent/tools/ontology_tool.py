@@ -1,28 +1,28 @@
-"""ontology_tool：本体对象类型导航工具（独立于数据分析合并工具）。
+"""ontology_tool：本体对象 / 关系 / Action 查询与导航工具（独立于语义查询工具）。
 
-2026-10-19 自 ``data_analyzing_tool`` 拆出：两个纯导航 action 不再混在问数主链路
-工具里，便于本体灰度的「注册/下线/演进」成为单点操作（注册层按
-``CHAT_DATA_ONTOLOGY_LOCATE_ENABLED`` 门控，见 ``registry.TOOL_SPECS``）。
+2026-10-23 起语义层与本体层在同一业务域内二选一（``services/ontology/query_mode.py``
+是唯一选择入口）：本体模式下本工具是唯一的数据查询入口，**不依赖语义模型、
+不回退语义查询**；对象取数统一走 Logical Dataset source binding 与
+``services/ontology/object_projection.py``。
 
-- ``list_object_types``：列出可定位本体对象类型（轻量清单：对象类型名/显示名/描述 +
-  对象类型→绑定模型一跳，不含属性与关系类型详情）——本体导航的发现步，详情走
-  locate_object_type；
-- ``locate_object_type``：按本体对象类型批量定位语义模型（纯导航，不执行查询）——返回
-  绑定模型（含快照文件名）、属性→维度对照与对象类型间关系类型（含失修标注），供模型
-  直接进入 data_analyzing_tool 的 execute_query（定位纯函数见
-  services/ontology/object_type_locator.py，开关 ``CHAT_DATA_ONTOLOGY_LOCATE_ENABLED``
-  默认关闭）；
-- ``get_object``：按对象类型 + 主键读取对象属性与一跳外键型 links（只读；受
-  ``CHAT_DATA_ONTOLOGY_OBJECT_READ_ENABLED`` 门控）；
+- ``list_object_types``：列出当前业务域可导航对象类型（轻量清单：对象类型名/展示名/
+  描述 + Dataset 数据源绑定摘要）——本体导航的发现步，详情走 locate_object_type；
+- ``locate_object_type``：按对象类型批量返回属性、Dataset 数据源绑定（属性→逻辑列→
+  物理列）与关系类型跳转（纯导航，不执行查询）；
 - ``search_around``：以单个对象类型为中心沿关系走一跳——每条关系返回物理连接列
-  （目录同源翻译，多模型绑定以 by_model 为准，未解析标 unresolved）与对端对象完整
-  定位条目（其关系只留名字提示下一跳），跨对象类型关联不再靠模型 grep YAML 猜 join。
+  （Dataset 列映射单源翻译）与对端对象完整导航条目；
+- ``get_object`` / ``find_objects`` / ``aggregate_objects``：对象实例读取、明细查询与
+  分组聚合（只读，走 Dataset source binding；受 ``CHAT_DATA_ONTOLOGY_OBJECT_READ_ENABLED``
+  门控）；
+- ``list_action_types``：列出当前业务域可执行 Action 定义（只读）；
+- ``execute_action``：执行 Action（写对象属性覆盖层 + 审计，不直接改源库；受
+  ``CHAT_DATA_ONTOLOGY_ACTION_EXECUTE_ENABLED`` 门控）；
+- ``list_execution_targets``：列出当前用户可执行的成员数据源（member 维度查询范围）。
 
-入参契约与 ``data_analyzing_tool`` 同构：``action`` + ``action_payload``（结构随
-action 变化）+ ``intent``；payload 校验在工具实现入口经 ``validate_ontology_payload``
-完成（共用 ``ONTOLOGY_ACTION_PAYLOAD_MODELS`` 映射表）——校验不能放进 args
-model_validator：langgraph 会把 model_validator 抛出的校验错误过滤成空白消息，模型
-与用户都看不到原因；在函数体内抛错则详情完整可见。
+入参契约：``action`` + ``action_payload``（结构随 action 变化）+ ``intent``；payload
+校验在工具实现入口经 ``validate_ontology_payload`` 完成（共用
+``ONTOLOGY_ACTION_PAYLOAD_MODELS`` 映射表）——校验不能放进 args model_validator：
+langgraph 会把 model_validator 抛出的校验错误过滤成空白消息，模型与用户都看不到原因。
 """
 
 from __future__ import annotations
@@ -34,7 +34,6 @@ from langchain_core.tools import BaseTool, tool
 from langgraph.prebuilt import InjectedState
 from pydantic import BaseModel, Field, ValidationError
 
-from apps.chat_data_app.daos.ontology_dao import OntologyDao
 from apps.chat_data_app.services.datasource.manager import get_datasource_manager
 from apps.chat_data_app.services.datasource.target_context import (
     get_execution_target_member_id,
@@ -42,9 +41,11 @@ from apps.chat_data_app.services.datasource.target_context import (
     get_execution_target_org_code,
 )
 from apps.chat_data_app.services.ontology import ontology_service
+from apps.chat_data_app.services.ontology.action_type_service import OntologyActionTypeService
 from apps.chat_data_app.services.ontology.object_projection import (
     ObjectProjectionError,
     aggregate_object_projection,
+    ontology_action_execute_enabled,
     ontology_object_read_enabled,
     read_object_projection,
     search_object_projection,
@@ -58,14 +59,7 @@ from apps.chat_data_app.services.ontology.object_type_locator import (
     build_search_around_usage_hint,
     object_type_locator_enabled,
 )
-from apps.chat_data_app.services.ontology.ontology_injection import config_dimension_columns
-from apps.chat_data_app.services.semantic.run.semantic_config_service import (
-    get_semantic_config_service,
-)
-from apps.chat_data_app.services.semantic.run.semantic_materializer import (
-    enabled_candidate_ids,
-    model_snapshot_file_name,
-)
+from apps.chat_data_app.services.ontology.query_mode import load_domain_ontology_bundle_async
 from apps.chat_data_app.services.sql_run.result import build_query_result_payload
 from utils.logger import get_logger
 
@@ -119,8 +113,8 @@ class _LocateObjectTypePayload(BaseModel):
 class _SearchAroundPayload(BaseModel):
     """``search_around`` 的入参结构：以单个对象类型为中心沿关系走一跳。
 
-    中心对象结构性收敛（⊆本轮启用语义模型绑定的对象类型）；``relation`` 可选
-    精准展开其中一条关系（控量），``semantic_config_id`` 可选过滤两端绑定。
+    中心对象范围收敛为当前业务域本体对象类型；``relation`` 可选精准展开其中一条
+    关系（控量）。
     """
 
     object_type: str = Field(
@@ -130,10 +124,6 @@ class _SearchAroundPayload(BaseModel):
     relation: str | None = Field(
         default=None,
         description="可选；只展开指定关系名的那条关系（关系名来自 locate 返回的 relation_types 或上一次 search_around 的 neighbor.relations）",
-    )
-    semantic_config_id: str | None = Field(
-        default=None,
-        description="可选；只看绑定该语义模型的映射与连接列（多绑定对象类型据此过滤）",
     )
 
 
@@ -147,10 +137,6 @@ class _GetObjectPayload(BaseModel):
     object_key: str = Field(..., min_length=1, description='对象主键值，如 "ORD2024000001"')
     member_datasource_ids: list[str] | None = Field(
         default=None, max_length=20, description="执行对象/机构范围；多机构下用于定位对象"
-    )
-    semantic_config_id: str | None = Field(
-        default=None,
-        description="可选；对象类型绑定多个语义模型时指定投影使用的模型",
     )
 
 
@@ -184,7 +170,6 @@ class _FindObjectsPayload(BaseModel):
     sort: list[_FindObjectsSort] = Field(default_factory=list, max_length=5, description="属性排序")
     limit: int = Field(default=10, ge=1, le=50, description="返回对象数上限")
     offset: int = Field(default=0, ge=0, description="偏移量")
-    semantic_config_id: str | None = Field(default=None, description="多映射对象指定语义模型")
 
 
 class _AggregateObjectsMetric(BaseModel):
@@ -206,11 +191,26 @@ class _AggregateObjectsPayload(BaseModel):
     filters: list[_FindObjectsFilter] = Field(default_factory=list, max_length=10, description="属性过滤")
     keyword: str = Field(default="", max_length=200, description="标题键/主键模糊搜索")
     limit: int = Field(default=100, ge=1, le=200, description="返回分组数上限")
-    semantic_config_id: str | None = Field(default=None, description="多映射对象指定语义模型")
 
 
 class _ListExecutionTargetsPayload(BaseModel):
     """``list_execution_targets`` 的入参结构：列出当前用户可执行的成员数据源。"""
+
+
+class _ListActionTypesPayload(BaseModel):
+    """``list_action_types`` 的入参结构：列出当前业务域可执行的 Action 定义（只读）。"""
+
+
+class _ExecuteActionPayload(BaseModel):
+    """``execute_action`` 的入参结构：执行 Action（写对象属性覆盖层 + 审计）。"""
+
+    action_type: str = Field(
+        ..., min_length=1, max_length=128, description="Action Type API 名（来自 list_action_types）"
+    )
+    object_key: str = Field(..., min_length=1, max_length=512, description="目标对象主键值")
+    parameters: dict[str, Any] = Field(
+        default_factory=dict, description="Action 参数；按 list_action_types 的参数定义传"
+    )
 
 
 # action -> action_payload 校验模型。与 data_analyzing_tool 的同名机制一致：
@@ -223,6 +223,8 @@ ONTOLOGY_ACTION_PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
     "find_objects": _FindObjectsPayload,
     "aggregate_objects": _AggregateObjectsPayload,
     "list_execution_targets": _ListExecutionTargetsPayload,
+    "list_action_types": _ListActionTypesPayload,
+    "execute_action": _ExecuteActionPayload,
 }
 
 
@@ -246,15 +248,20 @@ class OntologyToolInput(BaseModel):
         "find_objects",
         "aggregate_objects",
         "list_execution_targets",
+        "list_action_types",
+        "execute_action",
     ] = Field(
         ...,
         description=(
-            "操作类型：list_object_types 列出可定位本体对象类型（轻量清单：对象类型名/显示名/描述 + 各自绑定模型，不执行查询）；"
-            "locate_object_type 按本体对象类型批量定位语义模型（返回绑定模型/属性→维度对照/对象类型间关系类型，不执行查询）；"
-            "search_around 以单个对象类型为中心沿关系走一跳（返回物理连接列与对端对象完整定位条目，不执行查询）；"
+            "操作类型：list_object_types 列出当前业务域可导航对象类型（轻量清单：对象类型名/展示名/描述 + 数据源绑定摘要，不执行查询）；"
+            "locate_object_type 按对象类型批量返回属性、数据源绑定（属性→逻辑列→物理列）与关系类型跳转（不执行查询）；"
+            "search_around 以单个对象类型为中心沿关系走一跳（返回物理连接列与对端对象完整导航条目，不执行查询）；"
             "get_object 按对象类型 + 主键读取对象属性与一跳 links（只读，不回写）；"
             "find_objects 按对象类型查询实例（关键词/属性过滤/排序/分页，只读）；"
-            "aggregate_objects 按对象类型分组聚合（count/sum/avg/min/max，只读；不替代指标 SQL）"
+            "aggregate_objects 按对象类型分组聚合（count/sum/avg/min/max，只读）；"
+            "list_execution_targets 列出当前用户可执行的成员数据源；"
+            "list_action_types 列出当前业务域可执行的 Action 定义（只读）；"
+            "execute_action 执行 Action（写对象属性覆盖层 + 审计，需部署开启 Action 执行开关）"
         ),
     )
     action_payload: dict[str, Any] = Field(
@@ -262,11 +269,14 @@ class OntologyToolInput(BaseModel):
         description=(
             "操作参数，结构随 action 变化："
             "list_object_types 传 {}；"
-            'locate_object_type 传 {"object_types": [<对象类型API名>...], "semantic_config_id": "可选，只看该模型的绑定"}；'
-            'search_around 传 {"object_type": "<中心对象类型API名>", "relation": "可选，只展开该关系", "semantic_config_id": "可选"}；'
-            'get_object 传 {"object_type": "<对象类型API名>", "object_key": "<对象主键值>", "member_datasource_ids": ["可选机构ID"], "semantic_config_id": "可选"}；'
+            'locate_object_type 传 {"object_types": [<对象类型API名>...]}；'
+            'search_around 传 {"object_type": "<中心对象类型API名>", "relation": "可选，只展开该关系"}；'
+            'get_object 传 {"object_type": "<对象类型API名>", "object_key": "<对象主键值>", "member_datasource_ids": ["可选机构ID"]}；'
             'find_objects 传 {"object_type": "<对象类型API名>", "member_datasource_ids": ["可选机构ID"], "keyword": "可选", "filters": [{"property": "<属性>", "operator": "eq", "value": "<值>"}], "sort": [{"property": "<属性>", "direction": "asc"}], "limit": 10, "offset": 0}；'
-            'aggregate_objects 传 {"object_type": "<对象类型API名>", "member_datasource_ids": ["可选机构ID"], "group_by": ["<属性>"], "metrics": [{"operation": "count"}, {"operation": "sum", "property": "<数值属性>"}]}'
+            'aggregate_objects 传 {"object_type": "<对象类型API名>", "member_datasource_ids": ["可选机构ID"], "group_by": ["<属性>"], "metrics": [{"operation": "count"}, {"operation": "sum", "property": "<数值属性>"}]}；'
+            "list_execution_targets 传 {}；"
+            "list_action_types 传 {}；"
+            'execute_action 传 {"action_type": "<Action Type API名>", "object_key": "<对象主键值>", "parameters": {"<参数名>": "<值>"}}'
         ),
     )
     intent: str = Field(
@@ -296,34 +306,18 @@ def validate_ontology_payload(action: str, action_payload: dict[str, Any]) -> An
         raise ValueError(f"action={action} 的 action_payload 校验失败：{detail}") from None
 
 
-def _locator_enabled_view(configs: list[dict]) -> tuple[list[dict], list[str]]:
-    """按启用候选集过滤语义配置，返回 (启用配置列表, 对应 id 列表)，顺序一致。"""
-    enabled_id_set = set(enabled_candidate_ids(configs))
-    enabled_configs = [config for config in configs if str((config or {}).get("id") or "") in enabled_id_set]
-    enabled_ids = [str(config.get("id")) for config in enabled_configs]
-    return enabled_configs, enabled_ids
+def _resolve_bound_datasource_id(state: dict | None, bound_datasource_id: str) -> str:
+    """会话执行上下文的数据源组优先，回落到工具装配时绑定的数据源组。"""
+    datasource_id = _get_datasource_id_from_state(state) or str(bound_datasource_id or "").strip()
+    if not datasource_id:
+        raise ValueError("当前会话未绑定数据源")
+    return datasource_id
 
 
-def _locator_model_index(
-    enabled_ids: list[str],
-    enabled_configs: list[dict],
-) -> tuple[dict[str, str], dict[str, str], dict[str, set[str]]]:
-    """启用模型的三张索引：id→显示名、id→模型快照文件名、id→维度名集合。
-
-    维度名集合同时是失修比对基准：映射右值（模型维度名）不在集合内即标 stale。
-    """
-    config_names: dict[str, str] = {}
-    model_files: dict[str, str] = {}
-    dimension_names: dict[str, set[str]] = {}
-    for config_id, config in zip(enabled_ids, enabled_configs, strict=True):
-        config_names[config_id] = str(config.get("name") or config.get("semantic_config_name") or "")
-        model_files[config_id] = model_snapshot_file_name(config)
-        dimension_names[config_id] = {
-            str((dim or {}).get("name") or "").strip()
-            for dim in (config.get("dimensions") or [])
-            if str((dim or {}).get("name") or "").strip()
-        }
-    return config_names, model_files, dimension_names
+async def _load_domain_bundle(state: dict | None, bound_datasource_id: str) -> dict[str, Any]:
+    """当前业务域（数据源组）本体 bundle；导航动作与目录物化同源收敛。"""
+    datasource_id = _resolve_bound_datasource_id(state, bound_datasource_id)
+    return await load_domain_ontology_bundle_async(datasource_id)
 
 
 async def _run_locate_object_type(
@@ -331,45 +325,15 @@ async def _run_locate_object_type(
     payload: Any,
     state: dict | None,
     bound_datasource_id: str,
-    bound_user_id: str,
 ) -> str:
-    """本体对象类型定位：批量返回对象类型绑定的语义模型/属性→维度对照/关系类型。
-
-    可定位范围结构性收敛：注入 bundle 按「本轮启用语义模型」加载（与本体目录
-    物化同源），对象不在范围内即列入 not_found 并给出候选，不泄露全量本体。
-    定位不执行查询——查询仍由模型依据报告走 execute_query。
-    """
+    """按对象类型批量返回属性 / Dataset 数据源绑定 / 关系类型跳转（纯导航，不执行查询）。"""
     if not object_type_locator_enabled():
         raise ValueError("对象定位未启用：需设置环境变量 CHAT_DATA_ONTOLOGY_LOCATE_ENABLED=1")
-    state = state or {}
-    datasource_id = _get_datasource_id_from_state(state) or bound_datasource_id
-    if not datasource_id:
-        raise ValueError("当前会话未绑定数据源")
-    user_id = str(state.get("user_id") or "").strip() or bound_user_id
-
-    service = get_semantic_config_service()
-    configs = await service.get_configs_async(datasource_id, str(user_id or ""))
-    enabled_configs, enabled_ids = _locator_enabled_view(configs)
-    if not enabled_configs:
-        raise ValueError("当前数据源组没有启用语义模型，无法定位对象")
-    bundle = await OntologyDao().load_injection_bundle_async(enabled_ids)
-    config_names, model_files, dimension_names = _locator_model_index(enabled_ids, enabled_configs)
-
-    report = build_object_type_locator_report(
-        bundle,
-        object_type_names=payload.object_types,
-        config_names=config_names,
-        model_files=model_files,
-        semantic_config_id=payload.semantic_config_id,
-        dimension_names=dimension_names,
-    )
+    bundle = await _load_domain_bundle(state, bound_datasource_id)
+    report = build_object_type_locator_report(bundle, object_type_names=payload.object_types)
     return tool_result_payload(
         ONTOLOGY_TOOL_NAME,
-        {
-            "success": True,
-            **report,
-            "usage": build_locator_usage_hint(),
-        },
+        {**report, "usage": build_locator_usage_hint()},
     )
 
 
@@ -377,42 +341,15 @@ async def _run_list_object_types(
     *,
     state: dict | None,
     bound_datasource_id: str,
-    bound_user_id: str,
 ) -> str:
-    """本体对象类型清单（``list_object_types`` action）：轻量列出可定位对象类型与各自绑定模型。
-
-    与 locate_object_type 同源同开关：bundle 按「本轮启用语义模型」加载，不泄露
-    全量本体；清单只含对象类型名/显示名/描述 + 对象类型→绑定模型一跳，属性对照/
-    关系类型/失修状态等详情走 locate_object_type。
-    """
+    """当前业务域对象类型轻量清单（对象类型名/展示名/描述 + 数据源绑定摘要）。"""
     if not object_type_locator_enabled():
         raise ValueError("本体对象类型清单未启用：需设置环境变量 CHAT_DATA_ONTOLOGY_LOCATE_ENABLED=1")
-    state = state or {}
-    datasource_id = _get_datasource_id_from_state(state) or bound_datasource_id
-    if not datasource_id:
-        raise ValueError("当前会话未绑定数据源")
-    user_id = str(state.get("user_id") or "").strip() or bound_user_id
-
-    service = get_semantic_config_service()
-    configs = await service.get_configs_async(datasource_id, str(user_id or ""))
-    enabled_configs, enabled_ids = _locator_enabled_view(configs)
-    if not enabled_configs:
-        raise ValueError("当前数据源组没有启用语义模型，无对象可列")
-    bundle = await OntologyDao().load_injection_bundle_async(enabled_ids)
-    config_names, model_files, _ = _locator_model_index(enabled_ids, enabled_configs)
-
-    report = build_object_list_report(
-        bundle,
-        config_names=config_names,
-        model_files=model_files,
-    )
+    bundle = await _load_domain_bundle(state, bound_datasource_id)
+    report = build_object_list_report(bundle)
     return tool_result_payload(
         ONTOLOGY_TOOL_NAME,
-        {
-            "success": True,
-            **report,
-            "usage": build_object_list_usage_hint(),
-        },
+        {**report, "usage": build_object_list_usage_hint()},
     )
 
 
@@ -421,48 +358,15 @@ async def _run_search_around(
     payload: Any,
     state: dict | None,
     bound_datasource_id: str,
-    bound_user_id: str,
 ) -> str:
-    """本体 search-around（``search_around`` action）：以单个对象类型为中心沿关系走一跳。
-
-    与 locate 同源同开关：bundle 按「本轮启用语义模型」加载；``dimension_columns``
-    从同一批启用模型 configs 构建（目录渲染同源的「维度名 → 物理列」索引），join
-    翻译口径与 _ontology_catalog.yaml 单源。定位不执行查询——join 列供模型直接写
-    关联 SQL。
-    """
+    """沿关系走一跳：返回 Dataset 列映射翻译后的物理连接列与对端导航条目。"""
     if not object_type_locator_enabled():
         raise ValueError("本体关系探索未启用：需设置环境变量 CHAT_DATA_ONTOLOGY_LOCATE_ENABLED=1")
-    state = state or {}
-    datasource_id = _get_datasource_id_from_state(state) or bound_datasource_id
-    if not datasource_id:
-        raise ValueError("当前会话未绑定数据源")
-    user_id = str(state.get("user_id") or "").strip() or bound_user_id
-
-    service = get_semantic_config_service()
-    configs = await service.get_configs_async(datasource_id, str(user_id or ""))
-    enabled_configs, enabled_ids = _locator_enabled_view(configs)
-    if not enabled_configs:
-        raise ValueError("当前数据源组没有启用语义模型，无法探索关系")
-    bundle = await OntologyDao().load_injection_bundle_async(enabled_ids)
-    config_names, model_files, dimension_names = _locator_model_index(enabled_ids, enabled_configs)
-
-    report = build_search_around_report(
-        bundle,
-        object_type=payload.object_type,
-        relation=payload.relation,
-        semantic_config_id=payload.semantic_config_id,
-        config_names=config_names,
-        model_files=model_files,
-        dimension_names=dimension_names,
-        dimension_columns=config_dimension_columns(enabled_configs),
-    )
+    bundle = await _load_domain_bundle(state, bound_datasource_id)
+    report = build_search_around_report(bundle, object_type=payload.object_type, relation=payload.relation)
     return tool_result_payload(
         ONTOLOGY_TOOL_NAME,
-        {
-            "success": True,
-            **report,
-            "usage": build_search_around_usage_hint(),
-        },
+        {**report, "usage": build_search_around_usage_hint()},
     )
 
 
@@ -578,6 +482,76 @@ async def _run_list_execution_targets(
     )
 
 
+async def _run_list_action_types(
+    *,
+    state: dict | None,
+    bound_datasource_id: str,
+) -> str:
+    """列出当前业务域可执行的 Action 定义（只读；不含执行审计）。"""
+    bundle = await _load_domain_bundle(state, bound_datasource_id)
+    object_type_ids = {int(obj.get("id") or 0) for obj in bundle.get("object_types") or [] if isinstance(obj, dict)}
+    items = [
+        item
+        for item in await OntologyActionTypeService().list_action_types_async()
+        if isinstance(item, dict)
+        and int(item.get("object_type_id") or 0) in object_type_ids
+        and str(item.get("status") or "").strip() in {"certified", "experimental"}
+    ]
+    entries = [
+        {
+            "action_type": item.get("action_type_name") or item.get("name"),
+            "display_name": item.get("display_name"),
+            "object_type": item.get("object_type_name"),
+            "status": item.get("status"),
+            "description": item.get("description"),
+            "parameters": [param for param in item.get("parameters") or [] if isinstance(param, dict)],
+        }
+        for item in items
+    ]
+    return tool_result_payload(
+        ONTOLOGY_TOOL_NAME,
+        {
+            "count": len(entries),
+            "action_types": entries,
+            "usage": (
+                "只有 experimental/certified Action 可执行；执行用 execute_action，参数按上面的 parameters 定义传。"
+                "Action 只写对象属性覆盖层并记录审计，不直接改源库。"
+            ),
+        },
+    )
+
+
+async def _run_execute_action(
+    *,
+    payload: Any,
+    state: dict | None,
+    bound_user_id: str,
+) -> str:
+    """执行 Action：校验参数/属性值后写对象属性覆盖层 + 执行审计（需部署开关）。"""
+    if not ontology_action_execute_enabled():
+        raise ValueError("Action 执行未启用：需设置环境变量 CHAT_DATA_ONTOLOGY_ACTION_EXECUTE_ENABLED=1")
+    state = state or {}
+    user_id = str(state.get("user_id") or "").strip() or bound_user_id
+    operator_name = str(state.get("operator_name") or "").strip()
+    result = await OntologyActionTypeService().execute_action_type_async(
+        payload.action_type,
+        object_key=payload.object_key,
+        parameters=dict(payload.parameters or {}),
+        operator=user_id,
+        operator_name=operator_name or user_id,
+    )
+    return tool_result_payload(
+        ONTOLOGY_TOOL_NAME,
+        {
+            "execution": result.get("execution"),
+            "object_type": result.get("object_type_name"),
+            "object_key": result.get("object_key"),
+            "edits": result.get("edits"),
+            "usage": "Action 已写入对象属性覆盖层并记录审计；需要确认时用 get_object 重新读取对象属性。",
+        },
+    )
+
+
 async def _run_find_objects(
     *,
     payload: Any,
@@ -603,7 +577,6 @@ async def _run_find_objects(
                     sorts=[item.model_dump() for item in payload.sort],
                     limit=payload.limit,
                     offset=payload.offset,
-                    semantic_config_id=payload.semantic_config_id,
                     member_datasource_ids=[member_id] if member_id else None,
                     user_id=user_id,
                 )
@@ -657,7 +630,6 @@ async def _run_aggregate_objects(
                     filters=[item.model_dump() for item in payload.filters],
                     keyword=payload.keyword,
                     limit=payload.limit,
-                    semantic_config_id=payload.semantic_config_id,
                     member_datasource_ids=[member_id] if member_id else None,
                     user_id=user_id,
                 )
@@ -708,7 +680,6 @@ async def _run_get_object(
         data = await read_object_projection(
             payload.object_type,
             payload.object_key,
-            semantic_config_id=payload.semantic_config_id,
             member_datasource_ids=[member_ids[0]] if member_ids[0] else None,
             user_id=user_id,
         )
@@ -721,7 +692,7 @@ async def _run_get_object(
             **data,
             "usage": (
                 "get_object 返回对象属性与一跳 links（links 只是对端对象引用，需要属性时再用对端 key 调 get_object）；"
-                "聚合/统计仍走 data_analyzing_tool 的 execute_query，不要用对象读取结果自己拼 SQL。"
+                "聚合/统计走 aggregate_objects，明细过滤走 find_objects，不要改用语义模型查询或自己拼 SQL。"
             ),
         },
     )
@@ -743,14 +714,12 @@ async def _run_ontology_impl(
         return await _run_list_object_types(
             state=state,
             bound_datasource_id=bound_datasource_id,
-            bound_user_id=bound_user_id,
         )
     if action == "search_around":
         return await _run_search_around(
             payload=payload,
             state=state,
             bound_datasource_id=bound_datasource_id,
-            bound_user_id=bound_user_id,
         )
     if action == "get_object":
         return await _run_get_object(
@@ -777,12 +746,22 @@ async def _run_ontology_impl(
             bound_user_id=bound_user_id,
             bound_operator_name=None,
         )
+    if action == "list_action_types":
+        return await _run_list_action_types(
+            state=state,
+            bound_datasource_id=bound_datasource_id,
+        )
+    if action == "execute_action":
+        return await _run_execute_action(
+            payload=payload,
+            state=state,
+            bound_user_id=bound_user_id,
+        )
     # locate_object_type
     return await _run_locate_object_type(
         payload=payload,
         state=state,
         bound_datasource_id=bound_datasource_id,
-        bound_user_id=bound_user_id,
     )
 
 
@@ -803,25 +782,34 @@ def create_ontology_tool(
         intent: str = "",
     ) -> str:
         """
-        本体对象类型导航工具：按对象类型定位语义模型、沿关系探索关联对象（纯导航，不执行查询）。适合「订单相关的数据在哪个模型里」「订单和用户怎么关联」「下单用户的地区分布」这类业务对象导航与跨对象关联问题；常规查数流程以 `data-analyzing` 技能为准。
+        本体对象 / 关系 / Action 查询工具（当前业务域已启用本体层时的唯一数据查询入口；不依赖语义模型，不回退语义查询）。
+
+        使用顺序：先读 /mnt/user-data/workspace/semantic/_ontology_catalog.yaml 了解对象类型与数据源绑定；
+        需要定位时用 list_object_types / locate_object_type；跨对象关联用 search_around 的物理连接列；
+        查明细用 find_objects、聚合用 aggregate_objects、按主键读单对象用 get_object；
+        需要动作时用 list_action_types 查可用 Action，再 execute_action 执行。
 
         Args:
             action: 操作类型，枚举：
-        - list_object_types: 列出可定位本体对象类型——轻量清单（对象类型API名/显示名/描述 + 各自绑定模型及快照文件名），不含属性与关系类型详情；范围限定为本轮启用语义模型绑定的对象类型
-        - locate_object_type: 按本体对象类型批量定位语义模型——返回绑定模型（含快照文件名）、属性→维度对照、对象类型间关系类型与失修标注；纯导航不执行查询，可定位对象类型先用 list_object_types 获取
-        - search_around: 以单个对象类型为中心沿关系走一跳——每条关系返回物理连接列（from/to_columns，多模型绑定用 from/to_columns_by_model）与对端对象完整定位条目（属性/绑定/映射，其 relations 只留名字提示下一跳）；跨对象类型关联优先用它拿 join 列，不要靠 grep 模型 YAML 猜
-        - get_object: 按对象类型 + 主键读取对象属性与一跳 links（只读；links 是对端对象引用，聚合查询仍走 execute_query）
-        - find_objects: 按对象类型查询实例——关键词、属性过滤、排序、分页，返回对象标题/主键/属性与 total；只读，适合先找到对象再 get_object
-        - aggregate_objects: 按对象类型分组聚合——group_by + count/count_distinct/sum/avg/min/max；适合对象数量/分布等只读聚合，复杂指标仍走 execute_query
-        - list_execution_targets: 列出当前用户可执行的成员数据源（member_datasource_id/名称/机构编码）；用户指定机构或数据源时先调用它，再把选中的 ID 传给对象查询
+        - list_object_types: 列出当前业务域可导航对象类型（轻量清单：对象类型API名/展示名/描述 + Dataset/物理表/member 摘要），范围限定当前数据源组
+        - locate_object_type: 按对象类型批量返回属性、数据源绑定（column_mappings 属性→逻辑列、columns 逻辑列→物理列）与关系类型跳转；纯导航不执行查询
+        - search_around: 以单个对象类型为中心沿关系走一跳——每条关系返回物理连接列（join）与对端对象完整导航条目（neighbor）；跨对象关联优先用它拿 join 列
+        - get_object: 按对象类型 + 主键读取对象属性与一跳 links（只读；需指定单一 member_datasource_id）
+        - find_objects: 按对象类型查询实例——关键词、属性过滤、排序、分页，返回对象主键/属性与 total；只读
+        - aggregate_objects: 按对象类型分组聚合——group_by + count/count_distinct/sum/avg/min/max；只读
+        - list_execution_targets: 列出当前用户可执行的成员数据源（member_datasource_id/名称/机构编码）；多机构时先调用它，再把选中的 ID 传给对象查询
+        - list_action_types: 列出当前业务域可执行 Action 定义（只读）
+        - execute_action: 执行 Action（写对象属性覆盖层 + 审计；受部署开关门控）
             action_payload: 操作参数，结构随 action 变化：
-        - list_object_types: {}（无参数，范围=本轮启用语义模型绑定的对象）
-        - locate_object_type: {"object_types": [<对象API名>...]（单次最多10个）, "semantic_config_id": 可选只看该模型绑定}
-        - search_around: {"object_type": "<中心对象API名>", "relation": 可选只展开该关系名, "semantic_config_id": 可选}
-        - get_object: {"object_type": "<对象类型API名>", "object_key": "<对象主键值>", "member_datasource_ids": ["可选机构ID"], "semantic_config_id": 可选}
+        - list_object_types: {}（无参数，范围=当前业务域）
+        - locate_object_type: {"object_types": [<对象API名>...]（单次最多10个）}
+        - search_around: {"object_type": "<中心对象API名>", "relation": 可选只展开该关系名}
+        - get_object: {"object_type": "<对象类型API名>", "object_key": "<对象主键值>", "member_datasource_ids": ["机构ID"]}
         - find_objects: {"object_type": "<对象类型API名>", "member_datasource_ids": ["可选机构ID"], "keyword": 可选, "filters": [{"property": "<属性>", "operator": "eq", "value": "<值>"}], "sort": [{"property": "<属性>", "direction": "asc"}], "limit": 10, "offset": 0}
         - aggregate_objects: {"object_type": "<对象类型API名>", "member_datasource_ids": ["可选机构ID"], "group_by": ["<属性>"], "metrics": [{"operation": "count"}, {"operation": "sum", "property": "<数值属性>"}]}
         - list_execution_targets: {}（无参数；返回当前用户可见执行对象）
+        - list_action_types: {}（无参数；返回当前业务域可执行 Action 定义）
+        - execute_action: {"action_type": "<Action Type API名>", "object_key": "<对象主键值>", "parameters": {"<参数名>": "<值>"}}
             intent: 一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示。
         """
         return await _run_ontology_impl(

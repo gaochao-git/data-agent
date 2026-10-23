@@ -1328,6 +1328,94 @@ export interface DatasetBranchItem {
   status: string
 }
 
+/** Dataset Pipeline 分层：source → cleaned → enriched */
+export type DatasetLayer = 'source' | 'cleaned' | 'enriched'
+/** Dataset 来源：数据源注册 / Pipeline build 产出 */
+export type DatasetOrigin = 'datasource' | 'pipeline'
+export type DatasetPipelineNodeType = 'source' | 'transform' | 'output'
+export type DatasetPipelineLayer = 'cleaned' | 'enriched'
+
+export interface DatasetPipelineNode {
+  pipeline_version?: number
+  node_id: string
+  node_type: DatasetPipelineNodeType
+  node_name: string
+  config: Record<string, unknown>
+  ordinal?: number
+}
+
+export interface DatasetPipelineEdge {
+  pipeline_version?: number
+  edge_id: string
+  from_node_id: string
+  to_node_id: string
+}
+
+export interface DatasetPipelineRunOutputSummary {
+  pipeline_name?: string
+  dataset_name?: string
+  dataset_layer?: DatasetLayer
+  row_count?: number
+  columns?: string[]
+  preview?: Record<string, unknown>[]
+}
+
+export interface DatasetPipelineRun {
+  run_id: string
+  pipeline_id?: string
+  pipeline_name?: string
+  pipeline_version: number
+  run_status: 'running' | 'succeeded' | 'failed' | string
+  trigger_type: string
+  output_dataset_id?: number | null
+  output_summary?: DatasetPipelineRunOutputSummary
+  error_message?: string
+  started_at?: string
+  finished_at?: string
+  create_time?: string
+  output_dataset?: LogicalDatasetItem | null
+}
+
+export interface DatasetPipelineItem {
+  id: number
+  pipeline_id: string
+  pipeline_name: string
+  display_name: string
+  description: string
+  target_layer: DatasetPipelineLayer
+  status: 'draft' | 'experimental' | 'certified'
+  current_version_no: number
+  output_dataset_name?: string
+  last_run?: DatasetPipelineRun | null
+  nodes?: DatasetPipelineNode[]
+  edges?: DatasetPipelineEdge[]
+  runs?: DatasetPipelineRun[]
+  create_time?: string
+  update_time?: string
+}
+
+export interface DatasetPipelineNodePayload {
+  node_id: string
+  node_type: DatasetPipelineNodeType
+  node_name?: string
+  config: Record<string, unknown>
+}
+
+export interface DatasetPipelineEdgePayload {
+  edge_id?: string
+  from_node_id: string
+  to_node_id: string
+}
+
+export interface DatasetPipelineUpsertPayload {
+  display_name?: string
+  description?: string
+  target_layer: DatasetPipelineLayer
+  status?: 'draft' | 'experimental' | 'certified'
+  nodes: DatasetPipelineNodePayload[]
+  edges: DatasetPipelineEdgePayload[]
+}
+
 export interface LogicalDatasetItem {
   id: number
   dataset_name: string
@@ -1337,6 +1425,8 @@ export interface LogicalDatasetItem {
   columns: DatasetColumnItem[]
   current_version_id?: number | null
   status: 'draft' | 'experimental' | 'certified'
+  dataset_layer?: DatasetLayer
+  dataset_origin?: DatasetOrigin
   binding_count?: number
   bindings?: DatasetBindingItem[]
   branches?: DatasetBranchItem[]
@@ -1352,6 +1442,8 @@ export interface LogicalDatasetUpsertPayload {
   columns: DatasetColumnItem[]
   bindings: DatasetBindingItem[]
   status?: 'draft' | 'experimental' | 'certified'
+  dataset_layer?: DatasetLayer
+  dataset_origin?: DatasetOrigin
 }
 
 export interface OntologySourceBinding {

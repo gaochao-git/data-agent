@@ -502,46 +502,29 @@ def test_semantic_config_dao_ontology_lookup_branches(semantic_config_db, monkey
 # ---------------------------------------------------------------- 注入 ----------------
 
 
-def test_injection_dimension_column_index_skips_incomplete_entries():
-    assert ontology_injection._dimension_column_map(
-        [
-            {"name": "订单编号", "column": "ORDER_ID"},
-            None,
-            {"name": "", "column": "IGNORED"},
-            {"name": "金额", "column": ""},
-        ]
-    ) == {"订单编号": "ORDER_ID"}
-    assert ontology_injection._config_dimension_columns(
-        [
-            {"name": "无ID模型", "dimensions": [{"name": "d", "column": "c"}]},
-            {"semantic_config_id": "cfg-1", "dimensions": [{"name": "订单编号", "column": "ORDER_ID"}]},
-        ]
-    ) == {"cfg-1": {"订单编号": "ORDER_ID"}}
-
-
-def test_injection_config_display_names_skips_entries_without_id():
-    assert ontology_injection._config_display_names(
-        [{"name": "无ID模型"}, {"id": "cfg-1", "name": "订单模型"}, {"semantic_config_id": "cfg-2"}]
-    ) == {"cfg-1": "订单模型", "cfg-2": ""}
-
-
-def test_injection_mapping_and_translation_guards():
-    # column_mappings 非字典按空映射处理
-    assert ontology_injection._mapping_column_map({"column_mappings": ["bad"]}) == {}
-    # 空 semantic_config_id 的映射不进入按模型翻译结果
-    mappings = [{"semantic_config_id": "", "column_mappings": {"order_id": "订单编号"}}]
-    assert ontology_injection._translate_columns_by_model(["order_id"], mappings, None) == {}
+def test_injection_binding_translation_guards():
+    binding = {
+        "column_mappings": {"order_id": "order_key", "amount": "amount_value", "bad": ""},
+        "columns": {"order_key": "ORDER_ID", "amount_value": ""},
+    }
+    # 属性 → 逻辑列 → 物理列；缺映射/缺物理列保留上一级并标未解析
+    columns, unresolved = ontology_injection.translate_binding_columns(["order_id", "amount", "bad", "ghost"], binding)
+    assert columns == ["ORDER_ID", "amount_value", "bad", "ghost"]
+    assert unresolved is True
+    # 空/非字典映射按未解析处理
+    assert ontology_injection.translate_binding_columns(["order_id"], {}) == (["order_id"], True)
+    assert ontology_injection.translate_binding_columns(["", "order_id"], None) == (["order_id"], True)
 
 
 def test_injection_materialize_returns_zero_when_bundle_has_no_objects(monkeypatch):
     monkeypatch.setenv("CHAT_DATA_ONTOLOGY_INJECTION_ENABLED", "1")
 
-    async def empty_bundle(config_ids):
-        return {"object_types": [], "properties": [], "relation_types": [], "mappings": []}
+    async def empty_loader(datasource_group_id):
+        return {"datasource_group_id": datasource_group_id, "object_types": [], "properties": [], "relation_types": []}
 
-    monkeypatch.setattr(ontology_injection.OntologyDao, "load_injection_bundle_async", staticmethod(empty_bundle))
+    monkeypatch.setattr(ontology_injection, "load_domain_ontology_bundle_async", empty_loader)
     runtime = SimpleNamespace(write_internal_text_files=_fail_writer, delete_internal_text_files=_noop_delete)
-    assert asyncio.run(ontology_injection.materialize_ontology_catalog_async(runtime, ["cfg-x"])) == 0
+    assert asyncio.run(ontology_injection.materialize_ontology_catalog_async(runtime, datasource_group_id="ds_a")) == 0
 
 
 def test_injection_legacy_cleanup_handles_missing_denied_and_unexpected(monkeypatch):

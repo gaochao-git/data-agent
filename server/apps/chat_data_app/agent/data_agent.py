@@ -47,6 +47,7 @@ from .prompts.chat_data import (
     GENERAL_PURPOSE_NO_DELETE_HINT,
     GENERAL_PURPOSE_SUBAGENT_PROMPT,
     PLAN_SUBAGENT_PROMPT,
+    build_subagent_system_prompt,
     build_unified_system_prompt,
 )
 from .runtime_options import AgentRuntimeOptions, get_chat_data_default_runtime_options
@@ -357,7 +358,7 @@ def build_subagent_middleware(
             SubagentSpec(
                 name=DATA_EXPLORE_SUBAGENT_NAME,
                 description=DATA_EXPLORE_SUBAGENT_DESCRIPTION,
-                system_prompt=DATA_EXPLORE_SUBAGENT_PROMPT,
+                system_prompt=build_subagent_system_prompt(DATA_EXPLORE_SUBAGENT_PROMPT),
                 tools=_filter_subagent_tools(
                     tools,
                     base_excluded | DATA_EXPLORE_EXTRA_EXCLUDED_TOOL_NAMES,
@@ -373,7 +374,7 @@ def build_subagent_middleware(
             SubagentSpec(
                 name=PLAN_SUBAGENT_NAME,
                 description=PLAN_SUBAGENT_DESCRIPTION,
-                system_prompt=PLAN_SUBAGENT_PROMPT,
+                system_prompt=build_subagent_system_prompt(PLAN_SUBAGENT_PROMPT),
                 tools=_filter_subagent_tools(
                     tools,
                     base_excluded | PLAN_EXTRA_EXCLUDED_TOOL_NAMES,
@@ -389,7 +390,7 @@ def build_subagent_middleware(
             SubagentSpec(
                 name=GENERAL_PURPOSE_SUBAGENT_NAME,
                 description=GENERAL_PURPOSE_SUBAGENT_DESCRIPTION,
-                system_prompt=_general_purpose_system_prompt(bool(approval_excluded)),
+                system_prompt=build_subagent_system_prompt(_general_purpose_system_prompt(bool(approval_excluded))),
                 tools=_filter_subagent_tools(
                     tools,
                     base_excluded | GENERAL_PURPOSE_EXTRA_EXCLUDED_TOOL_NAMES,

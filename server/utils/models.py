@@ -1391,6 +1391,12 @@ class ChatDataLogicalDataset(Base):
     schema_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]", server_default="[]")
     current_version_id: Mapped[int | None] = mapped_column(BigInteger)
     lifecycle_status: Mapped[str] = mapped_column(String(16), nullable=False, default="draft", server_default="draft")
+    # Palantir Pipeline stage：source（数据源直注册）/ cleaned / enriched（Pipeline 产出）
+    dataset_layer: Mapped[str] = mapped_column(String(16), nullable=False, default="source", server_default="source")
+    # datasource（从数据源注册）/ pipeline（Pipeline build 产出）
+    dataset_origin: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="datasource", server_default="datasource"
+    )
     delete_flag: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
     update_time: Mapped[datetime] = mapped_column(
@@ -1404,6 +1410,7 @@ class ChatDataLogicalDataset(Base):
     __table_args__ = (
         UniqueConstraint("dataset_name", "delete_flag", name="uniq_logical_dataset_name_del"),
         Index("idx_logical_dataset_status", "lifecycle_status", "delete_flag"),
+        Index("idx_logical_dataset_layer", "dataset_layer", "dataset_origin", "delete_flag"),
     )
 
 
@@ -1540,6 +1547,112 @@ class ChatDataDatasetLineageEdge(Base):
     __table_args__ = (
         Index("idx_dataset_lineage_from", "from_version_id"),
         Index("idx_dataset_lineage_to", "to_version_id"),
+    )
+
+
+class ChatDataPipelineDefinition(Base):
+    """Pipeline 定义头：稳定 pipeline_id + 当前定义版本指针（节点/边按版本只追加）。"""
+
+    __tablename__ = "chat_data_pipeline_definition"
+
+    id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
+    pipeline_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    pipeline_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
+    description_text: Mapped[str] = mapped_column(String(1024), nullable=False, default="", server_default="")
+    target_layer: Mapped[str] = mapped_column(String(16), nullable=False, default="cleaned", server_default="cleaned")
+    lifecycle_status: Mapped[str] = mapped_column(String(16), nullable=False, default="draft", server_default="draft")
+    current_version_no: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
+    delete_flag: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
+    create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
+    update_time: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+    create_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+
+    __table_args__ = (
+        UniqueConstraint("pipeline_id", name="uniq_pipeline_id"),
+        UniqueConstraint("pipeline_name", "delete_flag", name="uniq_pipeline_name_del"),
+        Index("idx_pipeline_definition_status", "lifecycle_status", "delete_flag"),
+    )
+
+
+class ChatDataPipelineNode(Base):
+    """Pipeline 节点：按 (pipeline_id, pipeline_version) 只追加，不覆盖历史版本。"""
+
+    __tablename__ = "chat_data_pipeline_node"
+
+    id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
+    pipeline_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    pipeline_version: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    node_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    node_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    node_name: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
+    config_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}", server_default="{}")
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
+    create_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+
+    __table_args__ = (
+        UniqueConstraint("pipeline_id", "pipeline_version", "node_id", name="uniq_pipeline_node_version"),
+        Index("idx_pipeline_node_pipeline", "pipeline_id", "pipeline_version"),
+    )
+
+
+class ChatDataPipelineEdge(Base):
+    """Pipeline 边：按 (pipeline_id, pipeline_version) 只追加。"""
+
+    __tablename__ = "chat_data_pipeline_edge"
+
+    id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
+    pipeline_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    pipeline_version: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    edge_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    from_node_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    to_node_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
+    create_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+
+    __table_args__ = (
+        UniqueConstraint("pipeline_id", "pipeline_version", "edge_id", name="uniq_pipeline_edge_version"),
+        Index("idx_pipeline_edge_pipeline", "pipeline_id", "pipeline_version"),
+    )
+
+
+class ChatDataPipelineRun(Base):
+    """Pipeline 手动 build 运行记录：run_id 稳定标识，关联输出 Dataset。"""
+
+    __tablename__ = "chat_data_pipeline_run"
+
+    id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
+    run_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    pipeline_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    pipeline_version: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    run_status: Mapped[str] = mapped_column(String(16), nullable=False, default="running", server_default="running")
+    trigger_type: Mapped[str] = mapped_column(String(16), nullable=False, default="manual", server_default="manual")
+    output_dataset_id: Mapped[int | None] = mapped_column(BigInteger)
+    output_summary_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}", server_default="{}")
+    error_message: Mapped[str] = mapped_column(String(1000), nullable=False, default="", server_default="")
+    started_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime)
+    create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
+    update_time: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+    create_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+
+    __table_args__ = (
+        UniqueConstraint("run_id", name="uniq_pipeline_run_id"),
+        Index("idx_pipeline_run_pipeline", "pipeline_id", "pipeline_version"),
+        Index("idx_pipeline_run_status", "run_status", "create_time"),
     )
 
 

@@ -260,7 +260,7 @@ def test_prematerialize_empty_enabled_models_clears_stale_catalogs(monkeypatch):
         )
     )
 
-    assert result == {"total": 0, "failed_ids": []}
+    assert result == {"total": 0, "failed_ids": [], "query_mode": "semantic"}
     assert runtime.entries == []
     assert runtime.files == set()
     assert set(runtime.deleted) == stale_paths
@@ -301,14 +301,14 @@ def test_prematerialize_skips_without_datasource_or_runtime():
             datasource_id=None,
             user_id="user_1",
         )
-    ) == {"total": 0, "failed_ids": []}
+    ) == {"total": 0, "failed_ids": [], "query_mode": "semantic"}
     assert asyncio.run(
         semantic_materializer.prematerialize_enabled_semantic_models(
             workspace_runtime=None,
             datasource_id="ds_1",
             user_id="user_1",
         )
-    ) == {"total": 0, "failed_ids": []}
+    ) == {"total": 0, "failed_ids": [], "query_mode": "semantic"}
 
 
 def test_materializer_reports_failed_ids_instead_of_silently_skipping(monkeypatch):
@@ -382,7 +382,7 @@ def test_prematerialize_writes_all_enabled_models(monkeypatch):
         )
     )
 
-    assert result == {"total": 2, "failed_ids": []}
+    assert result == {"total": 2, "failed_ids": [], "query_mode": "semantic"}
     assert [path for path, _ in runtime.entries] == [
         "/mnt/user-data/workspace/semantic/订单模型__a.yaml",
         "/mnt/user-data/workspace/semantic/订单模型__b.yaml",
@@ -416,7 +416,7 @@ def test_prematerialize_loads_once_instead_of_per_model(monkeypatch):
         )
     )
 
-    assert result == {"total": 20, "failed_ids": []}
+    assert result == {"total": 20, "failed_ids": [], "query_mode": "semantic"}
     assert manager.bundle_calls == 1
     assert manager.single_loads == 0, "禁止按模型 ID 逐个回源加载（N+1）"
     assert manager.column_dict_calls == 1
@@ -794,7 +794,7 @@ def test_prematerialize_writes_semantic_catalog(monkeypatch):
     runtime = _FakeRuntime()
     result = _prematerialize(runtime, configs, monkeypatch)
 
-    assert result == {"total": 1, "failed_ids": []}
+    assert result == {"total": 1, "failed_ids": [], "query_mode": "semantic"}
     catalog_entry = _catalog_content(runtime)
     assert catalog_entry is not None
     payload = yaml.safe_load(catalog_entry)

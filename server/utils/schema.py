@@ -581,6 +581,8 @@ CREATE TABLE `chat_data_logical_dataset` (
   `schema_json` text NOT NULL COMMENT '逻辑列JSON',
   `current_version_id` bigint(20) DEFAULT NULL COMMENT '当前版本行ID',
   `lifecycle_status` varchar(16) NOT NULL DEFAULT 'draft' COMMENT '生命周期状态',
+  `dataset_layer` varchar(16) NOT NULL DEFAULT 'source' COMMENT 'Pipeline分层:source/cleaned/enriched',
+  `dataset_origin` varchar(16) NOT NULL DEFAULT 'datasource' COMMENT '来源:datasource/pipeline',
   `delete_flag` bigint(20) NOT NULL DEFAULT '0' COMMENT '删除标识:0=活跃,非0=已删除(值=行ID)',
   `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
@@ -590,7 +592,8 @@ CREATE TABLE `chat_data_logical_dataset` (
   `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人名称',
   PRIMARY KEY (`id`),
   UNIQUE KEY `uniq_logical_dataset_name_del` (`dataset_name`, `delete_flag`),
-  KEY `idx_logical_dataset_status` (`lifecycle_status`, `delete_flag`)
+  KEY `idx_logical_dataset_status` (`lifecycle_status`, `delete_flag`),
+  KEY `idx_logical_dataset_layer` (`dataset_layer`, `dataset_origin`, `delete_flag`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ChatData逻辑数据集';
 """
 
@@ -701,6 +704,93 @@ CREATE TABLE `chat_data_dataset_lineage_edge` (
 """
 
 
+MYSQL_CHAT_DATA_PIPELINE_DEFINITION_TABLE = """
+CREATE TABLE `chat_data_pipeline_definition` (
+  `id` bigint(20) NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `pipeline_id` varchar(64) NOT NULL COMMENT '稳定Pipeline ID',
+  `pipeline_name` varchar(128) NOT NULL COMMENT 'Pipeline API名',
+  `display_name` varchar(128) NOT NULL DEFAULT '' COMMENT '展示名',
+  `description_text` varchar(1024) NOT NULL DEFAULT '' COMMENT '描述',
+  `target_layer` varchar(16) NOT NULL DEFAULT 'cleaned' COMMENT '目标层:cleaned/enriched',
+  `lifecycle_status` varchar(16) NOT NULL DEFAULT 'draft' COMMENT '生命周期状态',
+  `current_version_no` bigint(20) NOT NULL DEFAULT '0' COMMENT '当前定义版本号',
+  `delete_flag` bigint(20) NOT NULL DEFAULT '0' COMMENT '删除标识',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `create_by` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人',
+  `create_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人名称',
+  `update_by` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人',
+  `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人名称',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_pipeline_id` (`pipeline_id`),
+  UNIQUE KEY `uniq_pipeline_name_del` (`pipeline_name`, `delete_flag`),
+  KEY `idx_pipeline_definition_status` (`lifecycle_status`, `delete_flag`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ChatData Pipeline定义';
+"""
+
+MYSQL_CHAT_DATA_PIPELINE_NODE_TABLE = """
+CREATE TABLE `chat_data_pipeline_node` (
+  `id` bigint(20) NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `pipeline_id` varchar(64) NOT NULL COMMENT '稳定Pipeline ID',
+  `pipeline_version` bigint(20) NOT NULL COMMENT '定义版本号',
+  `node_id` varchar(64) NOT NULL COMMENT '节点稳定ID',
+  `node_type` varchar(16) NOT NULL COMMENT '节点类型:source/transform/output',
+  `node_name` varchar(128) NOT NULL DEFAULT '' COMMENT '节点展示名',
+  `config_json` text NOT NULL COMMENT '节点配置JSON',
+  `ordinal` int(11) NOT NULL DEFAULT '0' COMMENT '节点顺序',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `create_by` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人',
+  `create_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人名称',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_pipeline_node_version` (`pipeline_id`, `pipeline_version`, `node_id`),
+  KEY `idx_pipeline_node_pipeline` (`pipeline_id`, `pipeline_version`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ChatData Pipeline节点';
+"""
+
+MYSQL_CHAT_DATA_PIPELINE_EDGE_TABLE = """
+CREATE TABLE `chat_data_pipeline_edge` (
+  `id` bigint(20) NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `pipeline_id` varchar(64) NOT NULL COMMENT '稳定Pipeline ID',
+  `pipeline_version` bigint(20) NOT NULL COMMENT '定义版本号',
+  `edge_id` varchar(64) NOT NULL COMMENT '边稳定ID',
+  `from_node_id` varchar(64) NOT NULL COMMENT '上游节点ID',
+  `to_node_id` varchar(64) NOT NULL COMMENT '下游节点ID',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `create_by` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人',
+  `create_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人名称',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_pipeline_edge_version` (`pipeline_id`, `pipeline_version`, `edge_id`),
+  KEY `idx_pipeline_edge_pipeline` (`pipeline_id`, `pipeline_version`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ChatData Pipeline边';
+"""
+
+MYSQL_CHAT_DATA_PIPELINE_RUN_TABLE = """
+CREATE TABLE `chat_data_pipeline_run` (
+  `id` bigint(20) NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `run_id` varchar(64) NOT NULL COMMENT '运行ID',
+  `pipeline_id` varchar(64) NOT NULL COMMENT '稳定Pipeline ID',
+  `pipeline_version` bigint(20) NOT NULL COMMENT '运行使用的定义版本号',
+  `run_status` varchar(16) NOT NULL DEFAULT 'running' COMMENT '运行状态:running/succeeded/failed',
+  `trigger_type` varchar(16) NOT NULL DEFAULT 'manual' COMMENT '触发方式',
+  `output_dataset_id` bigint(20) DEFAULT NULL COMMENT '输出Dataset ID',
+  `output_summary_json` text NOT NULL COMMENT '输出摘要JSON',
+  `error_message` varchar(1000) NOT NULL DEFAULT '' COMMENT '错误信息',
+  `started_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '开始时间',
+  `finished_at` datetime DEFAULT NULL COMMENT '结束时间',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `create_by` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人',
+  `create_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人名称',
+  `update_by` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人',
+  `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人名称',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_pipeline_run_id` (`run_id`),
+  KEY `idx_pipeline_run_pipeline` (`pipeline_id`, `pipeline_version`),
+  KEY `idx_pipeline_run_status` (`run_status`, `create_time`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ChatData Pipeline运行记录';
+"""
+
+
 MYSQL_CHAT_DATA_ONTOLOGY_SOURCE_BINDING_TABLE = """
 CREATE TABLE `chat_data_ontology_source_binding` (
   `id` bigint(20) NOT NULL AUTO_INCREMENT COMMENT '主键ID',
@@ -743,6 +833,16 @@ MYSQL_TABLES = [
     MYSQL_CHAT_DATA_EVAL_RUN_CASE_TABLE,
     MYSQL_CHAT_DATA_PLUGIN_TABLE,
     MYSQL_CHAT_DATA_LOGICAL_DATASET_TABLE,
+    MYSQL_CHAT_DATA_DATASET_BRANCH_TABLE,
+    MYSQL_CHAT_DATA_DATASET_TRANSACTION_TABLE,
+    MYSQL_CHAT_DATA_DATASET_VERSION_TABLE,
+    MYSQL_CHAT_DATA_DATASET_BINDING_TABLE,
+    MYSQL_CHAT_DATA_DATASET_LINEAGE_EDGE_TABLE,
+    MYSQL_CHAT_DATA_ONTOLOGY_SOURCE_BINDING_TABLE,
+    MYSQL_CHAT_DATA_PIPELINE_DEFINITION_TABLE,
+    MYSQL_CHAT_DATA_PIPELINE_NODE_TABLE,
+    MYSQL_CHAT_DATA_PIPELINE_EDGE_TABLE,
+    MYSQL_CHAT_DATA_PIPELINE_RUN_TABLE,
 ]
 
 

@@ -44,6 +44,11 @@ import type {
   OntologyObjectInstance,
   LogicalDatasetItem,
   LogicalDatasetUpsertPayload,
+  DatasetLayer,
+  DatasetOrigin,
+  DatasetPipelineItem,
+  DatasetPipelineRun,
+  DatasetPipelineUpsertPayload,
   OntologySourceBinding,
   OntologyObjectListItem,
   OntologyObjectFilter,
@@ -2426,8 +2431,15 @@ export function changeAdminOntologyRelationTypeStatus(
 
 const ADMIN_DATASET_API_PREFIX = `${CHATDATA_API_PREFIX}/admin/meta/datasets`
 
-export function getAdminDatasets(): Promise<ApiResponse<{ datasets: LogicalDatasetItem[] }>> {
-  return request({ url: ADMIN_DATASET_API_PREFIX, method: 'get' })
+export interface AdminDatasetFilter {
+  dataset_layer?: DatasetLayer
+  dataset_origin?: DatasetOrigin
+}
+
+export function getAdminDatasets(
+  params: AdminDatasetFilter = {}
+): Promise<ApiResponse<{ datasets: LogicalDatasetItem[] }>> {
+  return request({ url: ADMIN_DATASET_API_PREFIX, method: 'get', params })
 }
 
 export function getAdminDataset(datasetName: string): Promise<ApiResponse<LogicalDatasetItem>> {
@@ -2453,6 +2465,54 @@ export function bootstrapAdminDatasets(
     url: `${ADMIN_DATASET_API_PREFIX}/bootstrap`,
     method: 'post',
     data: { datasource_group_id: datasourceGroupId, table_names: tableNames }
+  })
+}
+
+// ============ Dataset Pipeline ============
+
+const ADMIN_PIPELINE_API_PREFIX = `${CHATDATA_API_PREFIX}/admin/meta/pipelines`
+
+export function getAdminPipelines(): Promise<ApiResponse<{ pipelines: DatasetPipelineItem[] }>> {
+  return request({ url: ADMIN_PIPELINE_API_PREFIX, method: 'get' })
+}
+
+export function getAdminPipeline(pipelineName: string): Promise<ApiResponse<DatasetPipelineItem>> {
+  return request({ url: `${ADMIN_PIPELINE_API_PREFIX}/${encodeURIComponent(pipelineName)}`, method: 'get' })
+}
+
+export function upsertAdminPipeline(
+  pipelineName: string,
+  data: DatasetPipelineUpsertPayload
+): Promise<ApiResponse<DatasetPipelineItem>> {
+  return request({ url: `${ADMIN_PIPELINE_API_PREFIX}/${encodeURIComponent(pipelineName)}`, method: 'put', data })
+}
+
+export function deleteAdminPipeline(pipelineName: string): Promise<ApiResponse<unknown>> {
+  return request({ url: `${ADMIN_PIPELINE_API_PREFIX}/${encodeURIComponent(pipelineName)}`, method: 'delete' })
+}
+
+export function buildAdminPipeline(pipelineName: string): Promise<ApiResponse<DatasetPipelineRun>> {
+  return request({
+    url: `${ADMIN_PIPELINE_API_PREFIX}/${encodeURIComponent(pipelineName)}/build`,
+    method: 'post'
+  })
+}
+
+export function getAdminPipelineRuns(
+  pipelineName: string,
+  limit = 20
+): Promise<ApiResponse<{ runs: DatasetPipelineRun[] }>> {
+  return request({
+    url: `${ADMIN_PIPELINE_API_PREFIX}/${encodeURIComponent(pipelineName)}/runs`,
+    method: 'get',
+    params: { limit }
+  })
+}
+
+export function getAdminPipelineRun(runId: string): Promise<ApiResponse<DatasetPipelineRun>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/meta/pipeline-runs/${encodeURIComponent(runId)}`,
+    method: 'get'
   })
 }
 

@@ -15,10 +15,12 @@ import yaml
 
 from utils.logger import get_logger
 
-from ...ontology.ontology_injection import (
-    ONTOLOGY_CATALOG_FILE_NAME,
-    ONTOLOGY_SNAPSHOT_DIR,
-    materialize_ontology_catalog_async,
+from ...ontology.ontology_injection import materialize_ontology_catalog_async
+from ...ontology.query_mode import (
+    QueryMode,
+    QueryModeDecision,
+    publish_query_mode,
+    resolve_query_mode_async,
 )
 from .chat_data_ossie_converter import ChatDataToOssieConverter
 from .semantic_config_service import SemanticConfigService, get_semantic_config_service
@@ -211,55 +213,104 @@ async def prematerialize_enabled_semantic_models(
     user_id: str | None,
     source_type: str = "",
 ) -> dict[str, Any]:
-    """Run 启动前把当前数据源组全部启用模型物化到 workspace/semantic/。
+    """Run 启动前按业务域模式物化「语义模型目录」或「本体目录」（二选一）。
 
-    让模型无需先触发 semantic_search 即可用 file_read 读语义资产目录
-    （semantic_catalog.yaml）、用 file_grep/file_read 检索语义模型；
-    YAML 内容有 sha256 缓存，只有首次或配置变更才真正写盘。
-    返回 {"total": 物化文件数, "failed_ids": 物化失败并跳过的模型 ID}；
-    未绑定数据源组或无启用模型时 total 为 0。整体异常由调用方 fail-fast，
-    部分失败（failed_ids）由调用方决定是否提示用户与注入上下文。
+    模式由 ``services/ontology/query_mode.py`` 单点判定（业务域 = 数据源组）：
+
+    - 判定为有本体：清空 semantic/ 下的语义模型快照，只写 ``_ontology_catalog.yaml``，
+      返回 ``total`` = 注入对象类型数；语义模型目录不再进入上下文；
+    - 判定为无本体：保持既有语义链路（语义资产目录 + 模型 YAML），并清理可能残留
+      的本体目录，避免上一轮模式切换读到陈旧目录。
+
+    判定结果发布到 ContextVar，供工具注册与系统提示词在同一 run 内读取。
+    返回 ``{"total", "failed_ids", "query_mode"}``；未绑定数据源组时 total 为 0。
+    整体异常由调用方 fail-fast，部分失败（failed_ids）由调用方决定是否提示用户。
     """
     normalized_datasource_id = str(datasource_id or "").strip()
-    if not normalized_datasource_id or workspace_runtime is None:
-        return {"total": 0, "failed_ids": []}
-    service = get_semantic_config_service()
     started = time.perf_counter()
-    # 一次拿到「全量配置 + 字段字典」并透传给物化：否则物化会按 ID 逐个重载，
-    # 每个模型都重新拉一遍数据源全量表结构，模型数上百时退化为 N+1 查库。
-    runtime_configs, column_dicts = await service.get_runtime_bundle_async(normalized_datasource_id, str(user_id or ""))
-    loaded_ms = (time.perf_counter() - started) * 1000
-    enabled_ids = enabled_candidate_ids(runtime_configs)
-    # 本体目录先物化（同放 semantic/ 目录）：成功即与语义资产目录二选一，
-    # mappings.file 直接给出模型快照文件名，覆盖语义目录的索引职责。
-    # 尽力而为：开关关闭/无对象/异常都静默跳过，不影响语义物化结果。
-    model_files = {_config_id(config): _safe_file_name(config) for config in runtime_configs if _config_id(config)}
-    ontology_objects = await materialize_ontology_catalog_async(
-        workspace_runtime, enabled_ids, configs=runtime_configs, model_files=model_files
-    )
-    if ontology_objects:
-        logger.info(
-            "本体目录随预物化写入（语义资产目录跳过）: object_types=%s datasource_id=%s",
-            ontology_objects,
-            normalized_datasource_id,
+    if not normalized_datasource_id or workspace_runtime is None:
+        publish_query_mode(QueryModeDecision(QueryMode.SEMANTIC, None, 0, "no_datasource_group"))
+        return {"total": 0, "failed_ids": [], "query_mode": QueryMode.SEMANTIC.value}
+    decision = await resolve_query_mode_async(normalized_datasource_id)
+    publish_query_mode(decision)
+    if decision.is_ontology:
+        return await _prematerialize_ontology_mode(
+            workspace_runtime=workspace_runtime,
+            datasource_group_id=normalized_datasource_id,
+            started=started,
         )
-    materialized = await materialize_runtime_semantic_models(
+    return await _prematerialize_semantic_mode(
         workspace_runtime=workspace_runtime,
         datasource_id=normalized_datasource_id,
+        user_id=user_id,
+        source_type=source_type,
+        started=started,
+    )
+
+
+async def _prematerialize_ontology_mode(
+    *,
+    workspace_runtime: Any,
+    datasource_group_id: str,
+    started: float,
+) -> dict[str, Any]:
+    """本体模式：语义目录清空，只物化本体目录。"""
+    await materialize_runtime_semantic_models(
+        workspace_runtime=workspace_runtime,
+        datasource_id=datasource_group_id,
+        user_id="",
+        semantic_config_ids=[],
+        prune_stale=True,
+    )
+    ontology_objects = await materialize_ontology_catalog_async(
+        workspace_runtime,
+        datasource_group_id=datasource_group_id,
+    )
+    logger.info(
+        "本体模式预物化完成（语义模型目录不注入）: datasource_group_id=%s object_types=%s 总计=%.0fms",
+        datasource_group_id,
+        ontology_objects,
+        (time.perf_counter() - started) * 1000,
+    )
+    return {
+        "total": ontology_objects,
+        "failed_ids": [],
+        "query_mode": QueryMode.ONTOLOGY.value,
+        "ontology_object_types": ontology_objects,
+    }
+
+
+async def _prematerialize_semantic_mode(
+    *,
+    workspace_runtime: Any,
+    datasource_id: str,
+    user_id: str | None,
+    source_type: str,
+    started: float,
+) -> dict[str, Any]:
+    """语义模式：既有语义资产目录 + 模型快照链路（不写本体目录）。"""
+    service = get_semantic_config_service()
+    # 一次拿到「全量配置 + 字段字典」并透传给物化：否则物化会按 ID 逐个重载，
+    # 每个模型都重新拉一遍数据源全量表结构，模型数上百时退化为 N+1 查库。
+    runtime_configs, column_dicts = await service.get_runtime_bundle_async(datasource_id, str(user_id or ""))
+    loaded_ms = (time.perf_counter() - started) * 1000
+    enabled_ids = enabled_candidate_ids(runtime_configs)
+    materialized = await materialize_runtime_semantic_models(
+        workspace_runtime=workspace_runtime,
+        datasource_id=datasource_id,
         user_id=str(user_id or ""),
         source_type=str(source_type or ""),
         semantic_config_ids=enabled_ids,
         configs=runtime_configs,
         column_dicts=column_dicts,
         prune_stale=True,
-        include_semantic_catalog=not ontology_objects,
-        keep_extra_paths=(
-            {str(PurePosixPath(ONTOLOGY_SNAPSHOT_DIR) / ONTOLOGY_CATALOG_FILE_NAME)} if ontology_objects else None
-        ),
+        # prune 同步清理上一轮可能残留的 _ontology_catalog.yaml：语义模式不注入本体目录。
+        include_semantic_catalog=True,
+        keep_extra_paths=None,
     )
     logger.info(
         "语义模型预物化耗时: datasource_id=%s configs=%s 加载=%.0fms 总计=%.0fms",
-        normalized_datasource_id,
+        datasource_id,
         len(runtime_configs),
         loaded_ms,
         (time.perf_counter() - started) * 1000,
@@ -267,6 +318,7 @@ async def prematerialize_enabled_semantic_models(
     return {
         "total": len(materialized.get("directory") or []),
         "failed_ids": list(materialized.get("failed_ids") or []),
+        "query_mode": QueryMode.SEMANTIC.value,
     }
 
 

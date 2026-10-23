@@ -38,7 +38,10 @@ ChatData 的业务 Agent 运行域：装配、工具、中间件、提示词、�
 ## 依赖方向约定
 
 - `agent/` 内部允许依赖 `services/` 的**公共服务**（`llm_config`、`runtime_config`）与**领域服务**
-  （`semantic.*`、`sql_run`）；这是 agent 消费服务层的正常方向。
+  （`semantic.*`、`ontology.*`、`sql_run`）；这是 agent 消费服务层的正常方向。
+- 查询能力二选一（语义 / 本体）的唯一判定入口是 `services/ontology/query_mode.py`：
+  工具注册（`tools/registry.py`）与系统提示词（`prompts/chat_data.py`）只读取判定结果，
+  不要各自探测 `_semantic_catalog.yaml` / `_ontology_catalog.yaml` 或另写选择逻辑。
 - 禁止 agent 工具/中间件反向依赖 `services.agent_run.conversation_workspace` 等编排层——
   工作区核心统一从 `agent/workspace/runtime.py` 导入（`test_agent_boundary.py` 有边数护栏）。
 - `services/` 对 `agent/` 的依赖边数只许通过搬迁减少（护栏测试锁定上限）。

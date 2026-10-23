@@ -29,6 +29,7 @@ from apps.chat_data_app.agent.tools.registry import (  # noqa: E402
 from apps.chat_data_app.services.agent_run.conversation_workspace import (  # noqa: E402
     ConversationWorkspaceRuntime,
 )
+from apps.chat_data_app.services.ontology import query_mode  # noqa: E402
 
 # 与 TOOL_SPECS 声明一一对应（bash_run 受运行选项控制，单独断言）
 EXPECTED_WITHOUT_BASH = [
@@ -87,15 +88,38 @@ def test_bash_run_gated_by_runtime_options(tmp_path):
     assert names[:-1] == EXPECTED_WITHOUT_BASH
 
 
-def test_ontology_tool_gated_by_locate_env(tmp_path, monkeypatch):
-    """本体导航工具在注册层按 CHAT_DATA_ONTOLOGY_LOCATE_ENABLED 门控（默认关闭不装配）。"""
-    monkeypatch.delenv("CHAT_DATA_ONTOLOGY_LOCATE_ENABLED", raising=False)
-    assert "ontology_tool" not in _tool_names(tmp_path)
-
+def test_semantic_and_ontology_tools_are_mutually_exclusive(tmp_path, monkeypatch):
+    """语义/本体二选一：语义模式只有 data_analyzing_tool，本体模式只有 ontology_tool。"""
     monkeypatch.setenv("CHAT_DATA_ONTOLOGY_LOCATE_ENABLED", "1")
+    # 语义模式：即使本体功能开关打开，本体工具也不装配
     names = _tool_names(tmp_path)
-    # 启用时紧随 data_analyzing_tool 之后装配（拆分来源，导航与问数相邻）
-    assert names.index("ontology_tool") == names.index("data_analyzing_tool") + 1
+    assert "data_analyzing_tool" in names
+    assert "ontology_tool" not in names
+
+    query_mode.publish_query_mode(
+        query_mode.QueryModeDecision(query_mode.QueryMode.ONTOLOGY, "ds_a", 2, "domain_object_type_active")
+    )
+    try:
+        ontology_names = _tool_names(tmp_path)
+    finally:
+        query_mode.reset_query_mode()
+    assert "ontology_tool" in ontology_names
+    assert "data_analyzing_tool" not in ontology_names
+
+
+def test_ontology_tool_requires_feature_switch_in_ontology_mode(tmp_path, monkeypatch):
+    """本体模式下仍受功能开关门控：定位/对象读取都关闭时不装配。"""
+    monkeypatch.delenv("CHAT_DATA_ONTOLOGY_LOCATE_ENABLED", raising=False)
+    monkeypatch.delenv("CHAT_DATA_ONTOLOGY_OBJECT_READ_ENABLED", raising=False)
+    query_mode.publish_query_mode(
+        query_mode.QueryModeDecision(query_mode.QueryMode.ONTOLOGY, "ds_a", 2, "domain_object_type_active")
+    )
+    try:
+        names = _tool_names(tmp_path)
+    finally:
+        query_mode.reset_query_mode()
+    assert "ontology_tool" not in names
+    assert "data_analyzing_tool" not in names
 
 
 def test_exclusion_sets_reference_registered_tools_only():

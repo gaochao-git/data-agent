@@ -1,4 +1,8 @@
-"""本体对象类型定位器单测：报告组装、范围收敛与关系类型条目（纯函数，不触库）。"""
+"""本体对象类型导航器单测：报告组装、域内收敛与关系物理列翻译（纯函数，不触库）。
+
+2026-10-23 对象取数迁移 Logical Dataset source binding：导航报告只依赖
+Dataset 数据源绑定（属性→逻辑列→物理列），不再读取语义模型/维度。
+"""
 
 from __future__ import annotations
 
@@ -9,11 +13,55 @@ import pytest
 from apps.chat_data_app.services.ontology import object_type_locator
 
 
+def _binding(
+    dataset_id: int,
+    dataset_name: str,
+    table: str,
+    column_mappings: dict[str, str],
+    columns: dict[str, str],
+) -> dict[str, Any]:
+    return {
+        "dataset_id": dataset_id,
+        "dataset_name": dataset_name,
+        "dataset_display_name": f"{dataset_name}-展示",
+        "physical_table": table,
+        "members": [{"member_datasource_id": f"m{dataset_id}", "physical_table": table}],
+        "column_mappings": column_mappings,
+        "columns": columns,
+    }
+
+
 def _bundle() -> dict[str, Any]:
     return {
+        "datasource_group_id": "ds_a",
         "object_types": [
-            {"id": 1, "object_type_name": "order", "display_name": "订单", "status": "certified"},
-            {"id": 2, "object_type_name": "user", "display_name": "用户", "status": "experimental"},
+            {
+                "id": 1,
+                "object_type_name": "order",
+                "display_name": "订单",
+                "status": "certified",
+                "description": "销售订单",
+                "source_binding": _binding(
+                    11,
+                    "order_dataset",
+                    "DWD_ORDER",
+                    {"order_id": "order_key", "amount": "amount_value", "user_id": "buyer_id"},
+                    {"order_key": "ORDER_ID", "amount_value": "AMOUNT", "buyer_id": "USER_ID"},
+                ),
+            },
+            {
+                "id": 2,
+                "object_type_name": "user",
+                "display_name": "用户",
+                "status": "experimental",
+                "source_binding": _binding(
+                    12,
+                    "user_dataset",
+                    "DWD_USER",
+                    {"user_id": "uid"},
+                    {"uid": "UID"},
+                ),
+            },
         ],
         "properties": [
             {
@@ -32,8 +80,8 @@ def _bundle() -> dict[str, Any]:
             },
             {
                 "object_type_id": 1,
-                "property_name": "city",
-                "display_name": "城市",
+                "property_name": "user_id",
+                "display_name": "下单用户",
                 "value_type": "String",
                 "is_identifier": False,
             },
@@ -53,31 +101,15 @@ def _bundle() -> dict[str, Any]:
                 "multiplicity": "many_to_one",
                 "from_verbalize": "订单归属用户",
                 "to_verbalize": "用户拥有订单",
+                "from_columns": ["user_id"],
+                "to_columns": ["user_id"],
             }
-        ],
-        "mappings": [
-            {
-                "object_type_id": 1,
-                "semantic_config_id": "sc_order",
-                "column_mappings": {"order_id": "订单编号", "city": "城市"},
-            },
-            {
-                "object_type_id": 2,
-                "semantic_config_id": "sc_user",
-                "column_mappings": {"user_id": "用户编号"},
-            },
         ],
     }
 
 
-def _report(object_type_names: list[str], **kwargs: Any) -> dict[str, Any]:
-    return object_type_locator.build_object_type_locator_report(
-        _bundle(),
-        object_type_names=object_type_names,
-        config_names={"sc_order": "订单模型", "sc_user": "用户模型"},
-        model_files={"sc_order": "订单模型__1234.yaml", "sc_user": "用户模型__5678.yaml"},
-        **kwargs,
-    )
+def _report(object_type_names: list[str]) -> dict[str, Any]:
+    return object_type_locator.build_object_type_locator_report(_bundle(), object_type_names=object_type_names)
 
 
 def test_locate_enabled_default_off(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -94,228 +126,168 @@ def test_report_single_object_full_shape() -> None:
     assert entry["object_type"] == "order"
     assert entry["display_name"] == "订单"
     assert entry["status"] == "certified"
-    # 属性按名排序，携带 value_type / is_identifier
-    assert entry["properties"] == [
-        {"name": "amount", "display_name": "订单金额", "value_type": "Decimal", "is_identifier": False},
-        {"name": "city", "display_name": "城市", "value_type": "String", "is_identifier": False},
-        {"name": "order_id", "display_name": "订单编号", "value_type": "String", "is_identifier": True},
-    ]
-    # 绑定：模型名 + 快照文件名 + 属性→维度对照（按键排序）；无比对基准时不标失修
-    assert entry["bindings"] == [
-        {
-            "semantic_config_id": "sc_order",
-            "model_name": "订单模型",
-            "model_file": "订单模型__1234.yaml",
-            "column_mappings": {"city": "城市", "order_id": "订单编号"},
-            "healthy": True,
-            "stale_dimensions": [],
-        }
-    ]
-    # 关系：本对象为 from 端，取 from_verbalize；无比对基准时不标失修
-    assert entry["relation_types"] == [
-        {
-            "relation": "order_belongs_to_user",
-            "related_object": "user",
-            "direction": "from",
-            "multiplicity": "many_to_one",
-            "verbalize": "订单归属用户",
-        }
-    ]
-
-
-def test_report_marks_stale_dimensions_when_basis_provided() -> None:
-    """提供维度名基准后，映射右值不在基准内的条目标 stale（healthy=false）。"""
-    report = _report(
-        ["order"],
-        dimension_names={"sc_order": {"订单编号"}, "sc_user": {"用户编号"}},
-    )
-    binding = report["object_types"][0]["bindings"][0]
-    assert binding["healthy"] is False
-    assert binding["stale_dimensions"] == [{"property": "city", "dimension": "城市"}]
-    # 健康条目不标注
-    assert binding["column_mappings"] == {"city": "城市", "order_id": "订单编号"}
-
-
-def test_report_marks_stale_relation_for_unmapped_attribute() -> None:
-    """本侧关系列属性存在但未映射（未出现在任何绑定左值）→ relation 标 stale。"""
-    bundle = _bundle()
-    bundle["relation_types"][0]["from_columns"] = ["order_id"]
-    del bundle["mappings"][0]["column_mappings"]["order_id"]
-    report = object_type_locator.build_object_type_locator_report(
-        bundle,
-        object_type_names=["order"],
-        dimension_names={"sc_order": {"订单编号", "城市"}},
-    )
-    relation = report["object_types"][0]["relation_types"][0]
-    assert relation["stale"] is True
-    assert "order_id" in relation["stale_reason"]
-
-
-def test_report_marks_stale_relation_for_missing_attribute() -> None:
-    """本侧关系列属性已不存在于对象属性清单 → relation 标 stale。"""
-    bundle = _bundle()
-    bundle["relation_types"][0]["from_columns"] = ["ghost_column"]
-    report = object_type_locator.build_object_type_locator_report(
-        bundle,
-        object_type_names=["order"],
-        dimension_names={"sc_order": {"订单编号", "城市"}},
-    )
-    relation = report["object_types"][0]["relation_types"][0]
-    assert relation["stale"] is True
-    assert "ghost_column" in relation["stale_reason"]
-
-
-def test_report_healthy_relation_not_marked_stale() -> None:
-    """关系列存在且已映射 → 不标 stale。"""
-    bundle = _bundle()
-    bundle["relation_types"][0]["from_columns"] = ["order_id"]
-    report = object_type_locator.build_object_type_locator_report(
-        bundle,
-        object_type_names=["order"],
-        dimension_names={"sc_order": {"订单编号", "城市"}},
-    )
-    relation = report["object_types"][0]["relation_types"][0]
-    assert "stale" not in relation
+    properties = {prop["name"]: prop for prop in entry["properties"]}
+    assert properties["order_id"]["is_identifier"] is True
+    assert properties["amount"]["value_type"] == "Decimal"
+    binding = entry["source_binding"]
+    assert binding["dataset"] == "order_dataset"
+    assert binding["dataset_display_name"] == "order_dataset-展示"
+    assert binding["physical_table"] == "DWD_ORDER"
+    assert binding["members"] == ["m11"]
+    assert binding["column_mappings"]["user_id"] == "buyer_id"
+    assert binding["columns"]["buyer_id"] == "USER_ID"
+    relation = entry["relation_types"][0]
+    assert relation == {
+        "relation": "order_belongs_to_user",
+        "related_object": "user",
+        "direction": "from",
+        "multiplicity": "many_to_one",
+        "verbalize": "订单归属用户",
+    }
 
 
 def test_report_relation_to_direction_verbalize() -> None:
+    """对端视角：user 侧的同一关系方向为 to，口语化取 to_verbalize。"""
     entry = _report(["user"])["object_types"][0]
-    assert entry["relation_types"][0]["direction"] == "to"
-    assert entry["relation_types"][0]["related_object"] == "order"
-    assert entry["relation_types"][0]["verbalize"] == "用户拥有订单"
+    relation = entry["relation_types"][0]
+    assert relation["related_object"] == "order"
+    assert relation["direction"] == "to"
+    assert relation["verbalize"] == "用户拥有订单"
 
 
 def test_report_multiple_objects_preserve_order_and_dedup() -> None:
-    report = _report(["user", "order", "user"])
+    report = _report(["user", "order", "user", " "])
     assert [item["object_type"] for item in report["object_types"]] == ["user", "order"]
     assert report["not_found"] == []
 
 
-def test_report_multi_binding_and_config_filter() -> None:
-    bundle = _bundle()
-    bundle["mappings"].append(
-        {"object_type_id": 1, "semantic_config_id": "sc_order_2", "column_mappings": {"order_id": "订单编号2"}}
-    )
-    report = object_type_locator.build_object_type_locator_report(
-        bundle,
-        object_type_names=["order"],
-        config_names={"sc_order": "订单模型", "sc_order_2": "订单模型二"},
-        model_files={"sc_order": "订单模型__1234.yaml", "sc_order_2": "订单模型二__5678.yaml"},
-    )
-    # 多绑定全部返回（导航视角），按 config_id 升序
-    assert [item["semantic_config_id"] for item in report["object_types"][0]["bindings"]] == ["sc_order", "sc_order_2"]
-    # config 过滤后只留指定绑定
-    filtered = object_type_locator.build_object_type_locator_report(
-        bundle,
-        object_type_names=["order"],
-        semantic_config_id="sc_order_2",
-    )
-    assert [item["semantic_config_id"] for item in filtered["object_types"][0]["bindings"]] == ["sc_order_2"]
-
-
 def test_report_not_found_lists_available() -> None:
-    report = _report(["ghost", "customer"])
+    report = _report(["ghost"])
     assert report["object_types"] == []
-    assert [item["object_type"] for item in report["not_found"]] == ["ghost", "customer"]
-    assert "order、user" in report["not_found"][0]["available"]
+    assert report["not_found"] == [
+        {"object_type": "ghost", "reason": "对象类型不在当前业务域本体范围", "available": "order、user"}
+    ]
 
 
-def test_report_empty_mappings_binding_dropped() -> None:
-    bundle = _bundle()
-    bundle["mappings"][0]["column_mappings"] = {}
-    report = object_type_locator.build_object_type_locator_report(bundle, object_type_names=["order"])
-    assert report["object_types"][0]["bindings"] == []
-    # 属性与关系不受映射影响
-    assert report["object_types"][0]["properties"]
+def test_report_empty_bundle_not_found_reason() -> None:
+    report = object_type_locator.build_object_type_locator_report(
+        {"object_types": [], "properties": [], "relation_types": []}, object_type_names=["order"]
+    )
+    assert report["not_found"][0]["reason"] == "当前业务域没有可用本体对象类型"
+    assert report["not_found"][0]["available"] == ""
 
 
-def test_report_object_without_mappings_still_listed() -> None:
-    bundle = _bundle()
-    bundle["mappings"] = [m for m in bundle["mappings"] if m["object_type_id"] != 2]
-    report = object_type_locator.build_object_type_locator_report(bundle, object_type_names=["user"])
-    entry = report["object_types"][0]
-    assert entry["object_type"] == "user"
-    assert entry["bindings"] == []
-
-
-def test_report_empty_objects_rejected() -> None:
+def test_report_rejects_empty_names() -> None:
     with pytest.raises(ValueError, match="object_types 不能为空"):
-        object_type_locator.build_object_type_locator_report(_bundle(), object_type_names=[])
-    with pytest.raises(ValueError, match="object_types 不能为空"):
-        object_type_locator.build_object_type_locator_report(_bundle(), object_type_names=["", "  "])
+        object_type_locator.build_object_type_locator_report(_bundle(), object_type_names=["  "])
 
 
 def test_report_over_batch_limit_rejected() -> None:
     with pytest.raises(ValueError, match="单次最多定位 10 个对象"):
         object_type_locator.build_object_type_locator_report(
-            _bundle(), object_type_names=[f"obj{i}" for i in range(11)]
+            _bundle(), object_type_names=[f"obj{index}" for index in range(11)]
         )
 
 
-def test_usage_hint_mentions_execute_query() -> None:
-    hint = object_type_locator.build_locator_usage_hint()
-    assert "execute_query" in hint
-    assert "semantic/<model_file>" in hint
+def test_report_rejects_non_dict_bundle() -> None:
+    with pytest.raises(ValueError, match="bundle 必须是对象"):
+        object_type_locator.build_object_type_locator_report([], object_type_names=["order"])  # type: ignore[arg-type]
 
 
-# ---------------------------------------------------------------------------
-# build_object_list_report（list_object_types 轻量清单）
-# ---------------------------------------------------------------------------
-
-
-def test_object_list_lightweight_sorted_with_model_binding() -> None:
-    """清单按对象名升序；只含 名字/显示名/描述 + 绑定模型一跳，无详情。"""
-    report = object_type_locator.build_object_list_report(
-        _bundle(),
-        config_names={"sc_order": "订单模型", "sc_user": "用户模型"},
-        model_files={"sc_order": "订单模型__1234.yaml", "sc_user": "用户模型__5678.yaml"},
-    )
+def test_object_list_reports_binding_summary_sorted() -> None:
+    report = object_type_locator.build_object_list_report(_bundle())
     assert report["count"] == 2
     assert [item["object_type"] for item in report["object_types"]] == ["order", "user"]
-    order_entry = report["object_types"][0]
-    assert order_entry["display_name"] == "订单"
-    assert order_entry["description"] == ""
-    assert order_entry["models"] == [
-        {"semantic_config_id": "sc_order", "model_name": "订单模型", "model_file": "订单模型__1234.yaml"}
-    ]
-    assert "properties" not in order_entry
-    assert "bindings" not in order_entry
-    assert "relation_types" not in order_entry
-    # user 绑定 sc_user，模型名/文件名取传入索引
-    assert report["object_types"][1]["models"] == [
-        {"semantic_config_id": "sc_user", "model_name": "用户模型", "model_file": "用户模型__5678.yaml"}
-    ]
-
-
-def test_object_list_multi_binding_sorted_by_config_id() -> None:
-    """对象多模型绑定时按 semantic_config_id 升序；缺索引的模型名留空。"""
-    bundle = _bundle()
-    bundle["mappings"].append(
-        {"object_type_id": 1, "semantic_config_id": "sc_order_2", "column_mappings": {"order_id": "订单编号2"}}
-    )
-    report = object_type_locator.build_object_list_report(bundle)
-    order_models = report["object_types"][0]["models"]
-    assert [item["semantic_config_id"] for item in order_models] == ["sc_order", "sc_order_2"]
-    assert order_models[1]["model_name"] == ""
-    assert order_models[1]["model_file"] == ""
+    order = report["object_types"][0]
+    assert order["dataset"] == "order_dataset"
+    assert order["physical_table"] == "DWD_ORDER"
+    assert order["member_datasource_ids"] == ["m11"]
+    assert order["property_count"] == 3
+    assert "properties" not in order
+    assert "source_binding" not in order
+    assert "relation_types" not in order
 
 
 def test_object_list_skips_blank_object_type_names() -> None:
-    """bundle 里对象名空白的条目跳过，不进清单。"""
     bundle = _bundle()
-    bundle["object_types"].append({"id": 3, "object_type_name": "  ", "display_name": "空白"})
-    report = object_type_locator.build_object_list_report(_bundle())
-    assert report["count"] == 2
+    bundle["object_types"] = [*bundle["object_types"], {"id": 3, "object_type_name": "  "}]
+    report = object_type_locator.build_object_list_report(bundle)
+    assert [item["object_type"] for item in report["object_types"]] == ["order", "user"]
 
 
 def test_object_list_empty_bundle() -> None:
-    """空 bundle（无启用模型绑定对象）→ 空清单不报错。"""
-    report = object_type_locator.build_object_list_report({})
+    report = object_type_locator.build_object_list_report({"object_types": []})
     assert report == {"count": 0, "object_types": []}
 
 
-def test_object_list_usage_hint_guides_next_steps() -> None:
-    """清单 usage 指引：单对象直查，详情升级 locate_object_type。"""
-    hint = object_type_locator.build_object_list_usage_hint()
-    assert "execute_query" in hint
-    assert "locate_object_type" in hint
+def test_object_without_source_binding_is_listed_with_empty_binding() -> None:
+    bundle = _bundle()
+    bundle["object_types"] = [{"id": 9, "object_type_name": "loose", "status": "certified"}]
+    bundle["properties"] = []
+    bundle["relation_types"] = []
+    entry = object_type_locator.build_object_type_locator_report(bundle, object_type_names=["loose"])["object_types"][0]
+    assert entry["source_binding"]["dataset"] == ""
+    assert entry["source_binding"]["column_mappings"] == {}
+
+
+# ---------------------------------------------------------------------------
+# search_around（一跳展开）
+# ---------------------------------------------------------------------------
+
+
+def test_search_around_translates_join_columns_via_dataset_bindings() -> None:
+    report = object_type_locator.build_search_around_report(_bundle(), object_type="order")
+    assert report["center"] == {"object_type": "order", "display_name": "订单"}
+    assert report["not_found"] == []
+    (hop,) = report["hops"]
+    assert hop["relation"] == "order_belongs_to_user"
+    assert hop["direction"] == "from"
+    assert hop["join"] == {"from_columns": ["USER_ID"], "to_columns": ["UID"]}
+    neighbor = hop["neighbor"]
+    assert neighbor["object_type"] == "user"
+    assert neighbor["source_binding"]["dataset"] == "user_dataset"
+    assert neighbor["relations"] == ["order_belongs_to_user"]
+    assert "relation_types" not in neighbor
+
+
+def test_search_around_marks_unresolved_columns() -> None:
+    bundle = _bundle()
+    bundle["relation_types"][0]["from_columns"] = ["user_id", "ghost_attr"]
+    (hop,) = object_type_locator.build_search_around_report(bundle, object_type="order")["hops"]
+    assert hop["join"]["from_columns"] == ["USER_ID", "ghost_attr"]
+    assert hop["join"]["unresolved"] is True
+
+
+def test_search_around_relation_filter() -> None:
+    report = object_type_locator.build_search_around_report(
+        _bundle(), object_type="order", relation="order_belongs_to_user"
+    )
+    assert len(report["hops"]) == 1
+    report = object_type_locator.build_search_around_report(_bundle(), object_type="order", relation="nope")
+    assert report["hops"] == []
+
+
+def test_search_around_center_not_found() -> None:
+    report = object_type_locator.build_search_around_report(_bundle(), object_type="ghost")
+    assert report["center"] is None
+    assert report["hops"] == []
+    assert report["not_found"][0]["object_type"] == "ghost"
+
+
+def test_search_around_rejects_blank_object_type() -> None:
+    with pytest.raises(ValueError, match="object_type 不能为空"):
+        object_type_locator.build_search_around_report(_bundle(), object_type=" ")
+
+
+def test_usage_hints_guide_ontology_query_only() -> None:
+    locator_hint = object_type_locator.build_locator_usage_hint()
+    list_hint = object_type_locator.build_object_list_usage_hint()
+    around_hint = object_type_locator.build_search_around_usage_hint()
+    for hint in (locator_hint, list_hint, around_hint):
+        assert "execute_query" not in hint
+    # 明确禁止回退语义查询（不再是「本体缺失则走语义链路」的旧口径）
+    assert "回退语义查询" in locator_hint
+    assert "不要回退语义模型查询" in around_hint
+    assert "find_objects" in locator_hint
+    assert "locate_object_type" in list_hint
+    assert "search_around" in around_hint

@@ -15,6 +15,10 @@ from utils.models import (
     ChatDataDatasetTransaction,
     ChatDataDatasetVersion,
     ChatDataLogicalDataset,
+    ChatDataPipelineDefinition,
+    ChatDataPipelineEdge,
+    ChatDataPipelineNode,
+    ChatDataPipelineRun,
 )
 
 
@@ -56,12 +60,19 @@ class LogicalDatasetDao:
     async def get_by_id(self, session: Any, dataset_id: int) -> ChatDataLogicalDataset | None:
         return await session.get(ChatDataLogicalDataset, dataset_id)
 
-    async def list_all(self, session: Any) -> list[ChatDataLogicalDataset]:
-        stmt = (
-            select(ChatDataLogicalDataset)
-            .where(ChatDataLogicalDataset.delete_flag == 0)
-            .order_by(ChatDataLogicalDataset.update_time.desc(), ChatDataLogicalDataset.id.desc())
-        )
+    async def list_all(
+        self,
+        session: Any,
+        *,
+        dataset_layer: str | None = None,
+        dataset_origin: str | None = None,
+    ) -> list[ChatDataLogicalDataset]:
+        stmt = select(ChatDataLogicalDataset).where(ChatDataLogicalDataset.delete_flag == 0)
+        if dataset_layer:
+            stmt = stmt.where(ChatDataLogicalDataset.dataset_layer == dataset_layer)
+        if dataset_origin:
+            stmt = stmt.where(ChatDataLogicalDataset.dataset_origin == dataset_origin)
+        stmt = stmt.order_by(ChatDataLogicalDataset.update_time.desc(), ChatDataLogicalDataset.id.desc())
         return list((await session.execute(stmt)).scalars().all())
 
     async def save_dataset(self, session: Any, row: ChatDataLogicalDataset) -> ChatDataLogicalDataset:
@@ -131,12 +142,14 @@ class LogicalDatasetDao:
         branch_id: int,
         operator: str,
         operator_name: str,
+        run_id: str = "",
     ) -> ChatDataDatasetTransaction:
         row = ChatDataDatasetTransaction(
             transaction_id=transaction_id,
             dataset_id=dataset_id,
             branch_id=branch_id,
             transaction_status="open",
+            run_id=run_id,
             create_by=operator,
             create_by_name=operator_name,
             update_by=operator,
@@ -172,6 +185,7 @@ class LogicalDatasetDao:
         schema_json: str,
         operator: str,
         operator_name: str,
+        row_count: int = 0,
     ) -> ChatDataDatasetVersion:
         row = ChatDataDatasetVersion(
             version_id=version_id,
@@ -180,6 +194,7 @@ class LogicalDatasetDao:
             version_no=version_no,
             transaction_id=transaction_id,
             schema_json=schema_json,
+            row_count=row_count,
             version_status="committed",
             create_by=operator,
             create_by_name=operator_name,
@@ -295,6 +310,8 @@ def dataset_row_to_dict(row: ChatDataLogicalDataset) -> dict[str, Any]:
         "columns": _parse_json(row.schema_json, list),
         "current_version_id": int(row.current_version_id) if row.current_version_id else None,
         "status": _text(row.lifecycle_status),
+        "dataset_layer": _text(row.dataset_layer) or "source",
+        "dataset_origin": _text(row.dataset_origin) or "datasource",
         "delete_flag": int(row.delete_flag or 0),
         "create_time": _format_time(row.create_time),
         "update_time": _format_time(row.update_time),
@@ -336,10 +353,223 @@ def branch_row_to_dict(row: ChatDataDatasetBranch) -> dict[str, Any]:
     }
 
 
+class DatasetPipelineDao:
+    """Dataset Pipeline 定义/节点/边/运行的持久化；节点与边按版本只追加。"""
+
+    async def get_definition_by_name(self, session: Any, name: str) -> ChatDataPipelineDefinition | None:
+        stmt = select(ChatDataPipelineDefinition).where(
+            ChatDataPipelineDefinition.pipeline_name == name,
+            ChatDataPipelineDefinition.delete_flag == 0,
+        )
+        return (await session.execute(stmt)).scalars().first()
+
+    async def get_definition_by_pipeline_id(self, session: Any, pipeline_id: str) -> ChatDataPipelineDefinition | None:
+        stmt = select(ChatDataPipelineDefinition).where(
+            ChatDataPipelineDefinition.pipeline_id == pipeline_id,
+            ChatDataPipelineDefinition.delete_flag == 0,
+        )
+        return (await session.execute(stmt)).scalars().first()
+
+    async def list_definitions(self, session: Any) -> list[ChatDataPipelineDefinition]:
+        stmt = (
+            select(ChatDataPipelineDefinition)
+            .where(ChatDataPipelineDefinition.delete_flag == 0)
+            .order_by(ChatDataPipelineDefinition.update_time.desc(), ChatDataPipelineDefinition.id.desc())
+        )
+        return list((await session.execute(stmt)).scalars().all())
+
+    async def save_definition(self, session: Any, row: ChatDataPipelineDefinition) -> ChatDataPipelineDefinition:
+        session.add(row)
+        await session.flush()
+        return row
+
+    async def list_nodes(self, session: Any, pipeline_id: str, version_no: int) -> list[ChatDataPipelineNode]:
+        stmt = (
+            select(ChatDataPipelineNode)
+            .where(
+                ChatDataPipelineNode.pipeline_id == pipeline_id,
+                ChatDataPipelineNode.pipeline_version == version_no,
+            )
+            .order_by(ChatDataPipelineNode.ordinal, ChatDataPipelineNode.id)
+        )
+        return list((await session.execute(stmt)).scalars().all())
+
+    async def list_edges(self, session: Any, pipeline_id: str, version_no: int) -> list[ChatDataPipelineEdge]:
+        stmt = select(ChatDataPipelineEdge).where(
+            ChatDataPipelineEdge.pipeline_id == pipeline_id,
+            ChatDataPipelineEdge.pipeline_version == version_no,
+        )
+        return list((await session.execute(stmt)).scalars().all())
+
+    async def append_version(
+        self,
+        session: Any,
+        *,
+        pipeline_id: str,
+        version_no: int,
+        nodes: list[dict[str, Any]],
+        edges: list[dict[str, Any]],
+        operator: str,
+        operator_name: str,
+    ) -> None:
+        for ordinal, node in enumerate(nodes):
+            session.add(
+                ChatDataPipelineNode(
+                    pipeline_id=pipeline_id,
+                    pipeline_version=version_no,
+                    node_id=_text(node.get("node_id")),
+                    node_type=_text(node.get("node_type")),
+                    node_name=_text(node.get("node_name")),
+                    config_json=_json_text(node.get("config"), {}),
+                    ordinal=ordinal,
+                    create_by=operator,
+                    create_by_name=operator_name,
+                )
+            )
+        for edge in edges:
+            session.add(
+                ChatDataPipelineEdge(
+                    pipeline_id=pipeline_id,
+                    pipeline_version=version_no,
+                    edge_id=_text(edge.get("edge_id")),
+                    from_node_id=_text(edge.get("from_node_id")),
+                    to_node_id=_text(edge.get("to_node_id")),
+                    create_by=operator,
+                    create_by_name=operator_name,
+                )
+            )
+        await session.flush()
+
+    async def create_run(
+        self,
+        session: Any,
+        *,
+        run_id: str,
+        pipeline_id: str,
+        pipeline_version: int,
+        trigger_type: str,
+        operator: str,
+        operator_name: str,
+    ) -> ChatDataPipelineRun:
+        row = ChatDataPipelineRun(
+            run_id=run_id,
+            pipeline_id=pipeline_id,
+            pipeline_version=pipeline_version,
+            run_status="running",
+            trigger_type=trigger_type,
+            create_by=operator,
+            create_by_name=operator_name,
+            update_by=operator,
+            update_by_name=operator_name,
+        )
+        session.add(row)
+        await session.flush()
+        return row
+
+    async def finish_run(
+        self,
+        session: Any,
+        row: ChatDataPipelineRun,
+        *,
+        status: str,
+        output_dataset_id: int | None = None,
+        output_summary: dict[str, Any] | None = None,
+        error_message: str = "",
+    ) -> None:
+        row.run_status = status
+        row.output_dataset_id = output_dataset_id
+        row.output_summary_json = _json_text(output_summary or {}, {})
+        row.error_message = error_message[:1000]
+        row.finished_at = datetime.now()
+        session.add(row)
+        await session.flush()
+
+    async def get_run_by_id(self, session: Any, run_id: str) -> ChatDataPipelineRun | None:
+        stmt = select(ChatDataPipelineRun).where(ChatDataPipelineRun.run_id == run_id)
+        return (await session.execute(stmt)).scalars().first()
+
+    async def list_runs(self, session: Any, pipeline_id: str, limit: int = 20) -> list[ChatDataPipelineRun]:
+        stmt = (
+            select(ChatDataPipelineRun)
+            .where(ChatDataPipelineRun.pipeline_id == pipeline_id)
+            .order_by(ChatDataPipelineRun.id.desc())
+            .limit(limit)
+        )
+        return list((await session.execute(stmt)).scalars().all())
+
+    async def soft_delete_definition(self, session: Any, row: ChatDataPipelineDefinition) -> None:
+        row.delete_flag = row.id
+        session.add(row)
+        await session.flush()
+
+
+def pipeline_row_to_dict(row: ChatDataPipelineDefinition) -> dict[str, Any]:
+    return {
+        "id": int(row.id),
+        "pipeline_id": _text(row.pipeline_id),
+        "pipeline_name": _text(row.pipeline_name),
+        "display_name": _text(row.display_name),
+        "description": _text(row.description_text),
+        "target_layer": _text(row.target_layer) or "cleaned",
+        "status": _text(row.lifecycle_status),
+        "current_version_no": int(row.current_version_no or 0),
+        "delete_flag": int(row.delete_flag or 0),
+        "create_time": _format_time(row.create_time),
+        "update_time": _format_time(row.update_time),
+        "create_by": _text(row.create_by),
+        "create_by_name": _text(row.create_by_name),
+        "update_by": _text(row.update_by),
+        "update_by_name": _text(row.update_by_name),
+    }
+
+
+def pipeline_node_row_to_dict(row: ChatDataPipelineNode) -> dict[str, Any]:
+    return {
+        "pipeline_version": int(row.pipeline_version),
+        "node_id": _text(row.node_id),
+        "node_type": _text(row.node_type),
+        "node_name": _text(row.node_name),
+        "config": _parse_json(row.config_json, dict),
+        "ordinal": int(row.ordinal or 0),
+    }
+
+
+def pipeline_edge_row_to_dict(row: ChatDataPipelineEdge) -> dict[str, Any]:
+    return {
+        "pipeline_version": int(row.pipeline_version),
+        "edge_id": _text(row.edge_id),
+        "from_node_id": _text(row.from_node_id),
+        "to_node_id": _text(row.to_node_id),
+    }
+
+
+def pipeline_run_row_to_dict(row: ChatDataPipelineRun) -> dict[str, Any]:
+    return {
+        "run_id": _text(row.run_id),
+        "pipeline_id": _text(row.pipeline_id),
+        "pipeline_version": int(row.pipeline_version or 0),
+        "run_status": _text(row.run_status),
+        "trigger_type": _text(row.trigger_type),
+        "output_dataset_id": int(row.output_dataset_id) if row.output_dataset_id else None,
+        "output_summary": _parse_json(row.output_summary_json, dict),
+        "error_message": _text(row.error_message),
+        "started_at": _format_time(row.started_at),
+        "finished_at": _format_time(row.finished_at),
+        "create_time": _format_time(row.create_time),
+        "create_by": _text(row.create_by),
+        "create_by_name": _text(row.create_by_name),
+    }
+
+
 __all__ = [
+    "DatasetPipelineDao",
     "LogicalDatasetDao",
     "binding_row_to_dict",
     "branch_row_to_dict",
     "dataset_row_to_dict",
+    "pipeline_edge_row_to_dict",
+    "pipeline_node_row_to_dict",
+    "pipeline_row_to_dict",
+    "pipeline_run_row_to_dict",
     "version_row_to_dict",
 ]

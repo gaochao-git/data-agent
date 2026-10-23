@@ -20,6 +20,9 @@ from utils.models import ChatDataLogicalDataset
 
 logger = get_logger(__name__)
 
+DATASET_LAYERS = ("source", "cleaned", "enriched")
+DATASET_ORIGINS = ("datasource", "pipeline")
+
 
 class DatasetError(ValueError):
     """Dataset 业务错误基类。"""
@@ -47,9 +50,15 @@ class LogicalDatasetService:
     def __init__(self, dao: LogicalDatasetDao | None = None) -> None:
         self._dao = dao or LogicalDatasetDao()
 
-    async def list_datasets_async(self) -> list[dict[str, Any]]:
+    async def list_datasets_async(
+        self,
+        *,
+        dataset_layer: str | None = None,
+        dataset_origin: str | None = None,
+    ) -> list[dict[str, Any]]:
+        layer, origin = self._normalize_layer_origin(dataset_layer, dataset_origin)
         async with transaction_scope() as session:
-            rows = await self._dao.list_all(session)
+            rows = await self._dao.list_all(session, dataset_layer=layer or None, dataset_origin=origin or None)
             result = []
             for row in rows:
                 item = dataset_row_to_dict(row)
@@ -75,9 +84,17 @@ class LogicalDatasetService:
             return await self._detail_async(session, row)
 
     @staticmethod
-    def _normalize_payload(
-        payload: dict[str, Any],
-    ) -> tuple[list[dict[str, Any]], list[str], str, str, list[dict[str, Any]]]:
+    def _normalize_layer_origin(layer_value: Any, origin_value: Any) -> tuple[str, str]:
+        layer = _text(layer_value)
+        origin = _text(origin_value)
+        if layer and layer not in DATASET_LAYERS:
+            raise DatasetInvalidError(f"dataset_layer 不合法: {layer}")
+        if origin and origin not in DATASET_ORIGINS:
+            raise DatasetInvalidError(f"dataset_origin 不合法: {origin}")
+        return layer, origin
+
+    @classmethod
+    def _normalize_payload(cls, payload: dict[str, Any]) -> dict[str, Any]:
         columns = payload.get("columns") or []
         if not isinstance(columns, list) or not all(isinstance(item, dict) for item in columns):
             raise DatasetInvalidError("Dataset columns 必须是对象数组")
@@ -91,13 +108,18 @@ class LogicalDatasetService:
         member_ids = [_text(item.get("member_datasource_id")) for item in bindings if isinstance(item, dict)]
         if len(member_ids) != len(set(member_ids)):
             raise DatasetInvalidError("Dataset bindings 中 member_datasource_id 不能重复")
-        return (
-            columns,
-            primary_key,
-            json.dumps(columns, ensure_ascii=False),
-            json.dumps(primary_key, ensure_ascii=False),
-            [item for item in bindings if isinstance(item, dict)],
+        dataset_layer, dataset_origin = cls._normalize_layer_origin(
+            payload.get("dataset_layer"), payload.get("dataset_origin")
         )
+        return {
+            "columns": columns,
+            "primary_key": primary_key,
+            "schema_json": json.dumps(columns, ensure_ascii=False),
+            "primary_key_json": json.dumps(primary_key, ensure_ascii=False),
+            "bindings": [item for item in bindings if isinstance(item, dict)],
+            "dataset_layer": dataset_layer,
+            "dataset_origin": dataset_origin,
+        }
 
     async def _create_dataset_row(
         self,
@@ -105,6 +127,7 @@ class LogicalDatasetService:
         *,
         name: str,
         payload: dict[str, Any],
+        normalized: dict[str, Any],
         operator: str,
         operator_name: str,
     ) -> ChatDataLogicalDataset:
@@ -115,6 +138,8 @@ class LogicalDatasetService:
             primary_key_json="[]",
             schema_json="[]",
             lifecycle_status=_text(payload.get("status")) or "draft",
+            dataset_layer=normalized["dataset_layer"] or "source",
+            dataset_origin=normalized["dataset_origin"] or "datasource",
             delete_flag=0,
             create_by=operator,
             create_by_name=operator_name,
@@ -129,16 +154,84 @@ class LogicalDatasetService:
         row: ChatDataLogicalDataset,
         payload: dict[str, Any],
         *,
-        schema_json: str,
-        primary_key_json: str,
+        normalized: dict[str, Any],
         version_id: int,
     ) -> None:
         row.display_name = _text(payload.get("display_name")) or row.display_name or row.dataset_name
         row.description_text = _text(payload.get("description"))
-        row.primary_key_json = primary_key_json
-        row.schema_json = schema_json
+        row.primary_key_json = normalized["primary_key_json"]
+        row.schema_json = normalized["schema_json"]
         row.lifecycle_status = _text(payload.get("status")) or row.lifecycle_status or "draft"
+        if normalized["dataset_layer"]:
+            row.dataset_layer = normalized["dataset_layer"]
+        if normalized["dataset_origin"]:
+            row.dataset_origin = normalized["dataset_origin"]
         row.current_version_id = version_id
+
+    async def _commit_version_async(
+        self,
+        session: Any,
+        *,
+        row: ChatDataLogicalDataset,
+        created: bool,
+        payload: dict[str, Any],
+        normalized: dict[str, Any],
+        operator: str,
+        operator_name: str,
+        run_id: str = "",
+        row_count: int = 0,
+        previous_version_ids: list[str] | None = None,
+        operation: str = "upsert",
+    ) -> dict[str, Any]:
+        """写 transaction + 不可变 version + lineage，并更新 Dataset 当前版本指针。"""
+        branch = await self._dao.ensure_main_branch(session, int(row.id), operator, operator_name)
+        transaction_id = uuid4().hex
+        transaction = await self._dao.create_transaction(
+            session,
+            transaction_id=transaction_id,
+            dataset_id=int(row.id),
+            branch_id=int(branch.id),
+            operator=operator,
+            operator_name=operator_name,
+            run_id=run_id,
+        )
+        await self._dao.replace_bindings(
+            session,
+            dataset_id=int(row.id),
+            bindings=normalized["bindings"],
+            operator=operator,
+            operator_name=operator_name,
+        )
+        version_no = await self._dao.next_version_no(session, int(row.id), int(branch.id))
+        version_id = uuid4().hex
+        version = await self._dao.create_version(
+            session,
+            version_id=version_id,
+            dataset_id=int(row.id),
+            branch_id=int(branch.id),
+            version_no=version_no,
+            transaction_id=transaction_id,
+            schema_json=normalized["schema_json"],
+            operator=operator,
+            operator_name=operator_name,
+            row_count=row_count,
+        )
+        await self._dao.commit_transaction(session, transaction)
+        self._apply_metadata(row, payload, normalized=normalized, version_id=int(version.id))
+        session.add(row)
+        await session.flush()
+        for from_version_id in previous_version_ids or []:
+            await self._dao.add_lineage(
+                session,
+                from_version_id=from_version_id,
+                to_version_id=version_id,
+                operation=operation,
+                run_id=run_id,
+                metadata={"created": created},
+                operator=operator,
+                operator_name=operator_name,
+            )
+        return await self._detail_async(session, row)
 
     async def upsert_dataset_async(
         self,
@@ -151,67 +244,78 @@ class LogicalDatasetService:
         name = _text(dataset_name)
         if not name:
             raise DatasetInvalidError("dataset_name 不能为空")
-        columns, primary_key, schema_json, primary_key_json, bindings = self._normalize_payload(payload)
+        normalized = self._normalize_payload(payload)
         async with transaction_scope() as session:
             row = await self._dao.get_by_name(session, name)
             created = row is None
             if row is None:
                 row = await self._create_dataset_row(
-                    session, name=name, payload=payload, operator=operator, operator_name=operator_name
-                )
-            branch = await self._dao.ensure_main_branch(session, int(row.id), operator, operator_name)
-            transaction_id = uuid4().hex
-            transaction = await self._dao.create_transaction(
-                session,
-                transaction_id=transaction_id,
-                dataset_id=int(row.id),
-                branch_id=int(branch.id),
-                operator=operator,
-                operator_name=operator_name,
-            )
-            await self._dao.replace_bindings(
-                session,
-                dataset_id=int(row.id),
-                bindings=bindings,
-                operator=operator,
-                operator_name=operator_name,
-            )
-            version_no = await self._dao.next_version_no(session, int(row.id), int(branch.id))
-            version_id = uuid4().hex
-            previous_version_id = _text(payload.get("previous_version_id"))
-            version = await self._dao.create_version(
-                session,
-                version_id=version_id,
-                dataset_id=int(row.id),
-                branch_id=int(branch.id),
-                version_no=version_no,
-                transaction_id=transaction_id,
-                schema_json=schema_json,
-                operator=operator,
-                operator_name=operator_name,
-            )
-            await self._dao.commit_transaction(session, transaction)
-            self._apply_metadata(
-                row,
-                payload,
-                schema_json=schema_json,
-                primary_key_json=primary_key_json,
-                version_id=int(version.id),
-            )
-            session.add(row)
-            await session.flush()
-            if previous_version_id:
-                await self._dao.add_lineage(
                     session,
-                    from_version_id=previous_version_id,
-                    to_version_id=version_id,
-                    operation="upsert",
-                    run_id="",
-                    metadata={"created": created},
+                    name=name,
+                    payload=payload,
+                    normalized=normalized,
                     operator=operator,
                     operator_name=operator_name,
                 )
-            return await self._detail_async(session, row)
+            previous_version_id = "" if created else _text(payload.get("previous_version_id"))
+            return await self._commit_version_async(
+                session,
+                row=row,
+                created=created,
+                payload=payload,
+                normalized=normalized,
+                operator=operator,
+                operator_name=operator_name,
+                previous_version_ids=[previous_version_id] if previous_version_id else None,
+            )
+
+    async def commit_pipeline_output_async(
+        self,
+        dataset_name: str,
+        payload: dict[str, Any],
+        *,
+        run_id: str,
+        input_version_ids: list[str],
+        operation: str,
+        row_count: int,
+        operator: str,
+        operator_name: str,
+    ) -> dict[str, Any]:
+        """Pipeline 输出 Dataset 提交：复用 Dataset transaction/version/lineage 权威链路。"""
+        name = _text(dataset_name)
+        if not name:
+            raise DatasetInvalidError("Pipeline 输出 dataset_name 不能为空")
+        normalized = self._normalize_payload(payload)
+        if not normalized["dataset_layer"]:
+            raise DatasetInvalidError("Pipeline 输出 Dataset 必须指定 dataset_layer")
+        normalized["dataset_origin"] = "pipeline"
+        async with transaction_scope() as session:
+            row = await self._dao.get_by_name(session, name)
+            created = row is None
+            if row is None:
+                row = await self._create_dataset_row(
+                    session,
+                    name=name,
+                    payload=payload,
+                    normalized=normalized,
+                    operator=operator,
+                    operator_name=operator_name,
+                )
+            elif _text(row.dataset_origin) == "datasource":
+                raise DatasetInvalidError(f"Pipeline 输出不能覆盖 datasource Dataset: {name}")
+            return await self._commit_version_async(
+                session,
+                row=row,
+                created=created,
+                payload=payload,
+                normalized=normalized,
+                operator=operator,
+                operator_name=operator_name,
+                run_id=run_id,
+                row_count=row_count,
+                previous_version_ids=[item for item in input_version_ids if item],
+                operation=operation,
+            )
 
     @staticmethod
     def _find_group(datasources: list[dict[str, Any]], group_id: str) -> dict[str, Any]:
@@ -356,6 +460,8 @@ class LogicalDatasetService:
 logical_dataset_service = LogicalDatasetService()
 
 __all__ = [
+    "DATASET_LAYERS",
+    "DATASET_ORIGINS",
     "DatasetAlreadyExistsError",
     "DatasetError",
     "DatasetInvalidError",

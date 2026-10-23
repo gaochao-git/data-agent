@@ -1427,6 +1427,8 @@ class DatasetUpsertRequest(BaseModel):
     columns: list[DatasetColumnItem] = Field(default_factory=list, max_length=500, description="逻辑列")
     bindings: list[DatasetBindingItem] = Field(default_factory=list, max_length=500, description="成员数据源绑定")
     status: Literal["draft", "experimental", "certified"] = Field(default="draft", description="生命周期状态")
+    dataset_layer: Literal["source", "cleaned", "enriched"] | None = Field(default=None, description="Pipeline 分层")
+    dataset_origin: Literal["datasource", "pipeline"] | None = Field(default=None, description="Dataset 来源")
 
 
 class DatasetBranchCreateRequest(BaseModel):
@@ -1441,6 +1443,34 @@ class DatasetBootstrapRequest(BaseModel):
 
     datasource_group_id: str = Field(..., min_length=1, max_length=128, description="数据源组 ID")
     table_names: list[str] = Field(default_factory=list, max_length=500, description="只注册指定表；空=全部")
+
+
+class PipelineNodeItem(BaseModel):
+    """Pipeline 节点：source / transform / output。"""
+
+    node_id: str = Field(default="", max_length=64, description="节点稳定 ID；缺省服务端生成")
+    node_type: Literal["source", "transform", "output"] = Field(..., description="节点类型")
+    node_name: str = Field(default="", max_length=128, description="节点展示名")
+    config: dict[str, Any] = Field(default_factory=dict, description="节点配置")
+
+
+class PipelineEdgeItem(BaseModel):
+    """Pipeline 边：节点间的有向连接。"""
+
+    edge_id: str = Field(default="", max_length=64, description="边稳定 ID；缺省服务端生成")
+    from_node_id: str = Field(..., min_length=1, max_length=64, description="上游节点 ID")
+    to_node_id: str = Field(..., min_length=1, max_length=64, description="下游节点 ID")
+
+
+class DatasetPipelineUpsertRequest(BaseModel):
+    """Pipeline 创建/更新请求；每次更新追加一个不可变定义版本。"""
+
+    display_name: str = Field(default="", max_length=128, description="展示名")
+    description: str = Field(default="", max_length=1024, description="描述")
+    target_layer: Literal["cleaned", "enriched"] = Field(default="cleaned", description="输出版本层")
+    status: Literal["draft", "experimental", "certified"] = Field(default="draft", description="生命周期状态")
+    nodes: list[PipelineNodeItem] = Field(default_factory=list, max_length=50, description="Pipeline 节点")
+    edges: list[PipelineEdgeItem] = Field(default_factory=list, max_length=50, description="Pipeline 边")
 
 
 class OntologySourceBindingRequest(BaseModel):

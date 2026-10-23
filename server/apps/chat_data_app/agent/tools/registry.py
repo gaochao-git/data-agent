@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any
 
 from apps.chat_data_app.services.ontology.object_projection import ontology_object_read_enabled
 from apps.chat_data_app.services.ontology.object_type_locator import object_type_locator_enabled
+from apps.chat_data_app.services.ontology.query_mode import ontology_query_mode_active
 from utils.builtin_skills import DATA_ANALYZING_SKILL, OFFICE_SKILL
 
 from .ask_user_question import ask_user_question_tool
@@ -128,29 +129,34 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
     ),
     ToolSpec(
         provides=("data_analyzing_tool",),
-        build=lambda ctx: [
-            create_data_analyzing_tool(
-                ctx.datasource.datasource_id,
-                user_id=ctx.identity.user_id or "system",
-                operator_name=ctx.identity.operator_name,
-                workspace_runtime=ctx.workspace_runtime,
-            )
-        ],
-        note="数据分析合并工具：DSL/dashboard_spec 校验、语义查询执行、语义模型 YAML 自检（按 action 分派）",
+        # 语义/本体二选一（规则入口 services/ontology/query_mode.py）：本体模式下
+        # 语义查询工具整体不装配，模型上下文里不会出现 DSL/语义模型入口。
+        build=lambda ctx: (
+            []
+            if ontology_query_mode_active()
+            else [
+                create_data_analyzing_tool(
+                    ctx.datasource.datasource_id,
+                    user_id=ctx.identity.user_id or "system",
+                    operator_name=ctx.identity.operator_name,
+                    workspace_runtime=ctx.workspace_runtime,
+                )
+            ]
+        ),
+        note="数据分析合并工具：DSL/dashboard_spec 校验、语义查询执行、语义模型 YAML 自检（按 action 分派；语义模式专用）",
         # 查数口径与失败处理全在技能正文里，未加载就调工具会按「凭记忆编口径」处理
         required_skills=(DATA_ANALYZING_SKILL,),
     ),
     ToolSpec(
         provides=("ontology_tool",),
-        # 本体灰度开关在注册层收口（可见性≠权限，对齐业内 tool-gating 惯例）：
-        # 未启用时工具不装配，模型看不到导航工具，自然回落语义清单检索；
-        # 工具实现内仍保留开关 raise 作为纵深防御（防运行中翻转/直调）。
+        # 本体工具仅在「判定为有本体」的业务域装配：语义模式下即使功能开关打开也
+        # 不挂载（目录与工具必须二选一）。工具实现内保留开关 raise 作为纵深防御。
         build=lambda ctx: (
             [create_ontology_tool(ctx.datasource.datasource_id, user_id=ctx.identity.user_id or "system")]
-            if object_type_locator_enabled() or ontology_object_read_enabled()
+            if ontology_query_mode_active() and (object_type_locator_enabled() or ontology_object_read_enabled())
             else []
         ),
-        note="本体导航与对象读取：列对象类型/定位语义模型/关系探索/按主键读对象（读取受 CHAT_DATA_ONTOLOGY_OBJECT_READ_ENABLED 门控）",
+        note="本体对象/关系/Action 查询与导航：列对象类型/定位数据源绑定/关系探索/对象查询/Action（本体模式专用）",
     ),
     ToolSpec(
         provides=("calculator_tool",),

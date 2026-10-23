@@ -1,14 +1,15 @@
-"""本体对象类型定位器（``locate_object_type`` action 的纯翻译层）。
+"""本体对象类型导航器（``ontology_tool`` 的纯翻译层）。
 
-把「对象类型名列表」翻译成语义模型定位报告：对象类型 → 绑定的语义模型（含快照文件名）、
-属性 → 维度对照、对象类型间关系类型 → 可导航的关联清单。定位是导航能力，不执行查询——
-查询仍由 AI 依据报告走 ``execute_query``，语义模型层是唯一编译执行权威。
+2026-10-23 起对象取数统一走 Logical Dataset source binding（语义模型映射表下线），
+导航报告随之只依赖 Dataset 数据源绑定，**不再读取语义模型/维度**：
 
-定位的存在动机：省掉 AI 为找一个模型而 grep/精读模型 YAML 的猜测轮次。
-可定位范围结构性收敛：传入 bundle 只含本轮启用语义模型绑定的对象类型（与本体目录
-物化同源取数），对象类型不在 bundle 即列入 not_found 并给出可定位候选，不泄露全量
-本体。报告组装是纯函数：bundle/模型名/文件名映射均由调用方传入，不触库；
-开关判断（``object_type_locator_enabled``）读环境变量，供工具层与提示词层共用。
+- 对象类型 → Dataset / 物理表 / member 数据源 / 属性→逻辑列→物理列映射；
+- 关系类型 → 两端对象类型的物理连接列（属性经 Dataset 列映射翻译）；
+- Action Type 定义清单 → 动作参数与目标对象类型。
+
+报告组装是纯函数：bundle 由调用方从 ``query_mode.load_domain_ontology_bundle_async``
+取得（已按当前数据源组收敛），不触库；开关判断（``object_type_locator_enabled``）
+读环境变量，供工具层与提示词层共用。
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ from __future__ import annotations
 import os
 from typing import Any, NamedTuple
 
-from apps.chat_data_app.services.ontology.ontology_injection import render_relation_join
+from .query_mode import translate_binding_columns
 
 _MAX_LOCATE_OBJECTS = 10
 _MAX_ERROR_CANDIDATES = 20
@@ -26,8 +27,12 @@ _TRUTHY = {"1", "true", "yes", "on"}
 
 
 def object_type_locator_enabled() -> bool:
-    """本体对象类型定位开关（env 控制，默认关闭）。"""
+    """本体对象类型导航开关（env 控制，默认关闭）。"""
     return str(os.getenv("CHAT_DATA_ONTOLOGY_LOCATE_ENABLED") or "").strip().lower() in _TRUTHY
+
+
+def _text(value: Any) -> str:
+    return str(value or "").strip()
 
 
 def _candidate_summary(names: list[str]) -> str:
@@ -37,21 +42,12 @@ def _candidate_summary(names: list[str]) -> str:
     return shown
 
 
-def _clean_mapping(raw: Any) -> dict[str, str]:
-    """映射行的「属性 API 名 → 模型维度名」字典（空/非法一律按空映射处理）。"""
-    if not isinstance(raw, dict):
-        return {}
-    return {
-        str(key).strip(): str(value).strip() for key, value in raw.items() if str(key).strip() and str(value).strip()
-    }
-
-
 def _dedupe_object_type_names(object_type_names: list[str]) -> list[str]:
     """入参对象类型名去空去重保序；全空或超单次上限直接报错。"""
     requested: list[str] = []
     seen: set[str] = set()
     for item in object_type_names:
-        name = str(item or "").strip()
+        name = _text(item)
         if name and name not in seen:
             seen.add(name)
             requested.append(name)
@@ -63,27 +59,20 @@ def _dedupe_object_type_names(object_type_names: list[str]) -> list[str]:
 
 
 class _BundleIndexes(NamedTuple):
-    """bundle 一次遍历得到的定位索引。"""
+    """bundle 一次遍历得到的导航索引。"""
 
     objects_by_name: dict[str, dict[str, Any]]
     properties_by_object_type: dict[int, list[dict[str, Any]]]
     relations_by_object: dict[int, list[dict[str, Any]]]
-    mappings_by_object: dict[int, list[dict[str, Any]]]
     object_type_names_by_id: dict[int, str]
-
-
-def _objects_by_name(bundle: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    return {
-        str((obj or {}).get("object_type_name") or "").strip(): (obj or {})
-        for obj in bundle.get("object_types") or []
-        if str((obj or {}).get("object_type_name") or "").strip()
-    }
+    bindings_by_object: dict[int, dict[str, Any]]
 
 
 def _group_by_object_type_id(items: Any) -> dict[int, list[dict[str, Any]]]:
     grouped: dict[int, list[dict[str, Any]]] = {}
     for item in items or []:
-        grouped.setdefault(int((item or {}).get("object_type_id") or 0), []).append(item or {})
+        if isinstance(item, dict):
+            grouped.setdefault(int(item.get("object_type_id") or 0), []).append(item)
     return grouped
 
 
@@ -91,279 +80,112 @@ def _relations_by_object(bundle: dict[str, Any]) -> dict[int, list[dict[str, Any
     """关系类型按两端对象类型各挂一份（对象类型视角取对端 + 口语化描述）。"""
     grouped: dict[int, list[dict[str, Any]]] = {}
     for relation in bundle.get("relation_types") or []:
-        grouped.setdefault(int((relation or {}).get("from_object_type_id") or 0), []).append(relation or {})
-        grouped.setdefault(int((relation or {}).get("to_object_type_id") or 0), []).append(relation or {})
+        if not isinstance(relation, dict):
+            continue
+        grouped.setdefault(int(relation.get("from_object_type_id") or 0), []).append(relation)
+        grouped.setdefault(int(relation.get("to_object_type_id") or 0), []).append(relation)
     return grouped
 
 
-def _object_type_names_by_id(bundle: dict[str, Any]) -> dict[int, str]:
-    return {
-        int((obj or {}).get("id") or 0): str((obj or {}).get("object_type_name") or "")
-        for obj in bundle.get("object_types") or []
-    }
-
-
 def _bundle_indexes(bundle: dict[str, Any]) -> _BundleIndexes:
+    objects = [obj for obj in bundle.get("object_types") or [] if isinstance(obj, dict)]
     return _BundleIndexes(
-        objects_by_name=_objects_by_name(bundle),
+        objects_by_name={
+            _text(obj.get("object_type_name")): obj for obj in objects if _text(obj.get("object_type_name"))
+        },
         properties_by_object_type=_group_by_object_type_id(bundle.get("properties")),
         relations_by_object=_relations_by_object(bundle),
-        mappings_by_object=_group_by_object_type_id(bundle.get("mappings")),
-        object_type_names_by_id=_object_type_names_by_id(bundle),
+        object_type_names_by_id={int(obj.get("id") or 0): _text(obj.get("object_type_name")) for obj in objects},
+        bindings_by_object={int(obj.get("id") or 0): obj.get("source_binding") or {} for obj in objects},
     )
 
 
-def _object_binding(
-    mapping: dict[str, Any],
-    config_names: dict[str, str] | None,
-    model_files: dict[str, str] | None,
-    dimension_names: dict[str, set[str]] | None,
-) -> dict[str, Any] | None:
-    """单条映射 → 绑定条目；缺 config_id 或映射为空时丢弃。
-
-    失修标注（一致性巡检的消费场景 A）：column_mappings 右值维度不在绑定模型
-    当前维度清单中（维度被改名/删除）时逐条标 stale——模型可随时漂移，绑定
-    守护只拦删除/改名单点动作，报告必须在消费点让 AI 可见失修，否则地图
-    静默撒谎。
-    """
-    column_mappings = _clean_mapping(mapping.get("column_mappings"))
-    config_id = str(mapping.get("semantic_config_id") or "").strip()
-    if not config_id or not column_mappings:
-        return None
-    dims = (dimension_names or {}).get(config_id)
-    stale_dimensions = [
-        {"property": prop, "dimension": dim}
-        for prop, dim in sorted(column_mappings.items())
-        if dims is not None and dim not in dims
-    ]
+def _source_binding_entry(binding: dict[str, Any] | None) -> dict[str, Any]:
+    """对象类型的数据源绑定条目（导航可读化：Dataset/物理表/member/列映射）。"""
+    binding = binding or {}
     return {
-        "semantic_config_id": config_id,
-        "model_name": str((config_names or {}).get(config_id) or ""),
-        "model_file": str((model_files or {}).get(config_id) or ""),
-        "column_mappings": dict(sorted(column_mappings.items())),
-        "healthy": not stale_dimensions,
-        "stale_dimensions": stale_dimensions,
+        "dataset": _text(binding.get("dataset_name")),
+        "dataset_display_name": _text(binding.get("dataset_display_name")),
+        "physical_table": _text(binding.get("physical_table")),
+        "members": [
+            _text(item.get("member_datasource_id"))
+            for item in binding.get("members") or []
+            if isinstance(item, dict) and _text(item.get("member_datasource_id"))
+        ],
+        "column_mappings": binding.get("column_mappings") or {},
+        "columns": binding.get("columns") or {},
     }
-
-
-def _object_bindings(
-    mappings: list[dict[str, Any]],
-    *,
-    config_filter: str,
-    config_names: dict[str, str] | None,
-    model_files: dict[str, str] | None,
-    dimension_names: dict[str, set[str]] | None,
-) -> list[dict[str, Any]]:
-    """对象类型的全部有效绑定（可选按模型过滤），按 config_id 升序。"""
-    bindings = [
-        binding
-        for binding in (_object_binding(mapping, config_names, model_files, dimension_names) for mapping in mappings)
-        if binding
-    ]
-    if config_filter:
-        bindings = [item for item in bindings if item["semantic_config_id"] == config_filter]
-    bindings.sort(key=lambda item: item["semantic_config_id"])
-    return bindings
 
 
 def _object_properties(properties: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """属性清单（按属性名排序），空名属性丢弃。"""
     return [
         {
-            "name": str(prop.get("property_name") or ""),
-            "display_name": str(prop.get("display_name") or ""),
-            "value_type": str(prop.get("value_type") or ""),
+            "name": _text(prop.get("property_name")),
+            "display_name": _text(prop.get("display_name")),
+            "value_type": _text(prop.get("value_type")),
             "is_identifier": bool(prop.get("is_identifier")),
         }
-        for prop in sorted(
-            properties,
-            key=lambda item: str(item.get("property_name") or ""),
-        )
-        if str(prop.get("property_name") or "")
+        for prop in sorted(properties, key=lambda item: _text(item.get("property_name")))
+        if _text(prop.get("property_name"))
     ]
 
 
-def _locate_entry(
-    obj: dict[str, Any],
-    *,
-    obj_id: int,
-    mappings: list[dict[str, Any]],
-    properties: list[dict[str, Any]],
-    relation_types: list[dict[str, Any]],
-    config_filter: str,
-    config_names: dict[str, str] | None,
-    model_files: dict[str, str] | None,
-    object_type_names_by_id: dict[int, str],
-    dimension_names: dict[str, set[str]] | None,
+def _relation_join(
+    relation: dict[str, Any],
+    indexes: _BundleIndexes,
 ) -> dict[str, Any]:
-    """单个命中对象类型的定位条目。"""
-    bindings = _object_bindings(
-        mappings,
-        config_filter=config_filter,
-        config_names=config_names,
-        model_files=model_files,
-        dimension_names=dimension_names,
+    """关系类型的物理连接列（Dataset 列映射单源翻译；未解析标 unresolved）。"""
+    from_id = int(relation.get("from_object_type_id") or 0)
+    to_id = int(relation.get("to_object_type_id") or 0)
+    from_columns, from_unresolved = translate_binding_columns(
+        relation.get("from_columns"), indexes.bindings_by_object.get(from_id)
     )
-    property_names = {str(prop.get("property_name") or "").strip() for prop in properties}
-    property_names.discard("")
-    mapped_attrs: set[str] = set()
-    for binding in bindings:
-        mapped_attrs.update(binding["column_mappings"])
-    return {
-        "object_type": str(obj.get("object_type_name") or ""),
-        "display_name": str(obj.get("display_name") or ""),
-        "status": str(obj.get("status") or ""),
-        "properties": _object_properties(properties),
-        "bindings": bindings,
-        "relation_types": _object_relations(
-            relation_types,
-            obj_id,
-            object_type_names_by_id,
-            property_names=property_names,
-            mapped_attrs=mapped_attrs,
-        ),
-    }
-
-
-def build_object_type_locator_report(
-    bundle: dict[str, Any],
-    *,
-    object_type_names: list[str],
-    config_names: dict[str, str] | None = None,
-    model_files: dict[str, str] | None = None,
-    semantic_config_id: str | None = None,
-    dimension_names: dict[str, set[str]] | None = None,
-) -> dict[str, Any]:
-    """按对象类型名批量生成语义模型定位报告（纯函数，不触库）。
-
-    - ``object_type_names``：1..``_MAX_LOCATE_OBJECTS`` 个对象类型 API 名，去重保序；
-    - ``config_names`` / ``model_files``：semantic_config_id → 模型显示名 / 快照
-      文件名（纯展示索引，缺省留空，不影响定位结论）；
-    - ``semantic_config_id``：可选，只保留该模型的绑定（多绑定对象类型据此过滤）；
-    - ``dimension_names``：semantic_config_id → 当前维度名集合（调用方从启用
-      模型 runtime configs 构建）。提供时对映射右值做失修比对并标注
-      ``stale_dimensions``；缺省不标（无比对基准时保持静默，不误报）。
-
-    返回 ``{"object_types": [命中对象类型的定位条目], "not_found": [未命中及候选]}``。
-    """
-    if not isinstance(bundle, dict):
-        raise ValueError("本体 bundle 必须是对象")
-    requested = _dedupe_object_type_names(object_type_names)
-    indexes = _bundle_indexes(bundle)
-
-    config_filter = str(semantic_config_id or "").strip()
-    located: list[dict[str, Any]] = []
-    not_found: list[dict[str, Any]] = []
-    available = sorted(indexes.objects_by_name)
-    for name in requested:
-        obj = indexes.objects_by_name.get(name)
-        if not obj:
-            not_found.append(
-                {
-                    "object_type": name,
-                    "reason": "对象类型不存在或未绑定本轮启用语义模型"
-                    if available
-                    else "当前启用语义模型没有绑定任何本体对象类型",
-                    "available": _candidate_summary(available),
-                }
-            )
-            continue
-        obj_id = int(obj.get("id") or 0)
-        located.append(
-            _locate_entry(
-                obj,
-                obj_id=obj_id,
-                mappings=indexes.mappings_by_object.get(obj_id, []),
-                properties=indexes.properties_by_object_type.get(obj_id, []),
-                relation_types=indexes.relations_by_object.get(obj_id, []),
-                config_filter=config_filter,
-                config_names=config_names,
-                model_files=model_files,
-                object_type_names_by_id=indexes.object_type_names_by_id,
-                dimension_names=dimension_names,
-            )
-        )
-    return {"object_types": located, "not_found": not_found}
-
-
-def _stale_reason(
-    own_columns: list[Any],
-    property_names: set[str],
-    mapped_attrs: set[str] | None,
-) -> str | None:
-    """本侧关系类型列的失修原因；全部列健康时返回 None。
-
-    属性不存在（模型/目录漂移）或未映射到任何启用模型维度（翻译断链）均视为失修。
-    """
-    broken: list[str] = []
-    for column in own_columns or []:
-        attr = str(column).strip()
-        if not attr:
-            continue
-        if attr not in property_names or (mapped_attrs is not None and attr not in mapped_attrs):
-            broken.append(attr)
-    return f"本侧关系类型列未映射或不存在：{('、'.join(broken))}" if broken else None
+    to_columns, to_unresolved = translate_binding_columns(
+        relation.get("to_columns"), indexes.bindings_by_object.get(to_id)
+    )
+    join: dict[str, Any] = {"from_columns": from_columns, "to_columns": to_columns}
+    if from_unresolved or to_unresolved:
+        join["unresolved"] = True
+    return join
 
 
 def _relation_entry(
     relation: dict[str, Any],
     obj_id: int,
-    object_type_names_by_id: dict[int, str],
-    *,
-    property_names: set[str] | None = None,
-    mapped_attrs: set[str] | None = None,
+    indexes: _BundleIndexes,
 ) -> dict[str, Any] | None:
-    """单条关系类型 → 对端对象类型视角条目；对端对象类型不可知时丢弃。
-
-    失修标注：本对象类型侧（from 或 to）的关系类型列引用的属性不存在（模型/目录
-    漂移）或未映射到任何启用模型维度（翻译断链）时，标 ``stale`` + 原因——
-    该关系类型的 join 路径当前不可用，AI 不应按此 hint 拼 SQL。对端侧由对端对象类型
-    自己的定位条目负责（同一条关系类型挂在两端对象类型下）。
-    """
+    """单条关系类型 → 对端对象类型视角条目；对端对象类型不可知时丢弃。"""
     from_id = int(relation.get("from_object_type_id") or 0)
     to_id = int(relation.get("to_object_type_id") or 0)
     if from_id == obj_id:
-        other_id, direction, verbalize_key, columns_key = to_id, "from", "from_verbalize", "from_columns"
+        other_id, direction, verbalize_key = to_id, "from", "from_verbalize"
     else:
-        other_id, direction, verbalize_key, columns_key = from_id, "to", "to_verbalize", "to_columns"
-    other = object_type_names_by_id.get(other_id, "")
+        other_id, direction, verbalize_key = from_id, "to", "to_verbalize"
+    other = indexes.object_type_names_by_id.get(other_id, "")
     if not other:
         return None
     entry: dict[str, Any] = {
-        "relation": str(relation.get("relation_type_name") or ""),
+        "relation": _text(relation.get("relation_type_name")),
         "related_object": other,
         "direction": direction,
-        "multiplicity": str(relation.get("multiplicity") or ""),
+        "multiplicity": _text(relation.get("multiplicity")),
     }
-    verbalize = str(relation.get(verbalize_key) or "")
+    verbalize = _text(relation.get(verbalize_key))
     if verbalize:
         entry["verbalize"] = verbalize
-    if property_names is not None:
-        stale = _stale_reason(relation.get(columns_key) or [], property_names, mapped_attrs)
-        if stale:
-            entry["stale"] = True
-            entry["stale_reason"] = stale
     return entry
 
 
 def _object_relations(
     relation_types: list[dict[str, Any]],
     obj_id: int,
-    object_type_names_by_id: dict[int, str],
-    *,
-    property_names: set[str] | None = None,
-    mapped_attrs: set[str] | None = None,
+    indexes: _BundleIndexes,
 ) -> list[dict[str, Any]]:
     """对象类型的关系类型条目（对端对象类型视角），超出单对象类型上限即截断。"""
     entries: list[dict[str, Any]] = []
     for relation in relation_types:
-        entry = _relation_entry(
-            relation,
-            obj_id,
-            object_type_names_by_id,
-            property_names=property_names,
-            mapped_attrs=mapped_attrs,
-        )
+        entry = _relation_entry(relation, obj_id, indexes)
         if not entry:
             continue
         entries.append(entry)
@@ -372,91 +194,85 @@ def _object_relations(
     return entries
 
 
-def build_locator_usage_hint() -> str:
-    """定位报告的使用说明（引导 AI 从导航进入既有查询路径）。"""
-    return (
-        "查询执行走 data_analyzing_tool 的 execute_query（DSL 传上方绑定的 semantic_config_id；"
-        "维度名取对应 binding 的 column_mappings 值）；binding 的 healthy=false 或 stale_dimensions "
-        "非空、relation 带 stale=true 时表示该条目已失修（维度可能被改名/删除），不要使用失修条目，"
-        "改用 file_read workspace 的 semantic/<model_file> 精读模型 YAML 核实当前口径。"
-        "需要模型完整口径（指标/周期/relation-typeships）时同样 file_read 精读。跨对象类型关联在 SQL 模式下用模型 relationships 完成。"
-    )
+def _locate_entry(obj: dict[str, Any], indexes: _BundleIndexes) -> dict[str, Any]:
+    """单个命中对象类型的定位条目（属性 + 数据源绑定 + 关系类型跳转）。"""
+    obj_id = int(obj.get("id") or 0)
+    return {
+        "object_type": _text(obj.get("object_type_name")),
+        "display_name": _text(obj.get("display_name")),
+        "status": _text(obj.get("status")),
+        "properties": _object_properties(indexes.properties_by_object_type.get(obj_id, [])),
+        "source_binding": _source_binding_entry(indexes.bindings_by_object.get(obj_id)),
+        "relation_types": _object_relations(indexes.relations_by_object.get(obj_id, []), obj_id, indexes),
+    }
 
 
-def _mappings_index(bundle: dict[str, Any]) -> dict[int, list[dict[str, Any]]]:
-    """bundle.mappings 按对象类型分组（对象类型 → 映射列表）。"""
-    index: dict[int, list[dict[str, Any]]] = {}
-    for mapping in bundle.get("mappings") or []:
-        mapping = mapping or {}
-        index.setdefault(int(mapping.get("object_type_id") or 0), []).append(mapping)
-    return index
+def _not_found_entry(name: str, available: list[str]) -> dict[str, Any]:
+    """未命中对象类型条目（与 locate 同口径：给可定位候选）。"""
+    return {
+        "object_type": name,
+        "reason": "对象类型不在当前业务域本体范围" if available else "当前业务域没有可用本体对象类型",
+        "available": _candidate_summary(available),
+    }
 
 
-def _object_binding_models(
-    mappings: list[dict[str, Any]],
-    config_names: dict[str, str],
-    model_files: dict[str, str],
-) -> list[dict[str, str]]:
-    """对象类型的绑定模型条目（id/名/快照文件名），按模型 id 升序。"""
-    models = [
-        {
-            "semantic_config_id": config_id,
-            "model_name": str(config_names.get(config_id) or ""),
-            "model_file": str(model_files.get(config_id) or ""),
-        }
-        for mapping in mappings
-        if (config_id := str(mapping.get("semantic_config_id") or "").strip())
-    ]
-    models.sort(key=lambda item: item["semantic_config_id"])
-    return models
-
-
-def build_object_list_report(
+def build_object_type_locator_report(
     bundle: dict[str, Any],
     *,
-    config_names: dict[str, str] | None = None,
-    model_files: dict[str, str] | None = None,
+    object_type_names: list[str],
 ) -> dict[str, Any]:
-    """列出可定位本体对象类型（``list_object_types`` action 的轻量清单，纯函数，不触库）。
+    """按对象类型名批量生成本体导航报告（纯函数，不触库）。
 
-    与 ``build_object_type_locator_report`` 的分层：清单只含「对象类型名/显示名/描述 +
-    对象类型→绑定模型」一跳（模型 id/名/快照文件名），**不含**属性、映射对照与
-    关系类型——详情一律走 locate_object_type。bundle 与 locate 同源（本轮启用语义模型
-    绑定的对象类型，不泄露全量本体），条目按对象类型名升序。
+    - ``object_type_names``：1..``_MAX_LOCATE_OBJECTS`` 个对象类型 API 名，去重保序；
+    - ``bundle``：``query_mode.load_domain_ontology_bundle_async`` 产物（已按数据源组收敛）。
+
+    返回 ``{"object_types": [命中对象类型的定位条目], "not_found": [未命中及候选]}``。
     """
     if not isinstance(bundle, dict):
         raise ValueError("本体 bundle 必须是对象")
-    config_names = config_names or {}
-    model_files = model_files or {}
-    mappings_by_object = _mappings_index(bundle)
+    requested = _dedupe_object_type_names(object_type_names)
+    indexes = _bundle_indexes(bundle)
+    available = sorted(indexes.objects_by_name)
+    located: list[dict[str, Any]] = []
+    not_found: list[dict[str, Any]] = []
+    for name in requested:
+        obj = indexes.objects_by_name.get(name)
+        if not obj:
+            not_found.append(_not_found_entry(name, available))
+            continue
+        located.append(_locate_entry(obj, indexes))
+    return {"object_types": located, "not_found": not_found}
+
+
+def build_object_list_report(bundle: dict[str, Any]) -> dict[str, Any]:
+    """列出当前业务域可导航对象类型（``list_object_types`` 的轻量清单，纯函数）。
+
+    清单只含对象类型名/展示名/描述 + Dataset 数据源绑定一跳（Dataset/物理表/
+    member 数量/属性数量），不含属性与关系类型详情——详情走 locate_object_type。
+    条目按对象类型名升序。
+    """
+    if not isinstance(bundle, dict):
+        raise ValueError("本体 bundle 必须是对象")
+    indexes = _bundle_indexes(bundle)
     entries: list[dict[str, Any]] = []
-    for obj in sorted(
-        bundle.get("object_types") or [], key=lambda item: str((item or {}).get("object_type_name") or "")
-    ):
+    for obj in sorted(bundle.get("object_types") or [], key=lambda item: _text((item or {}).get("object_type_name"))):
         obj = obj or {}
-        obj_name = str(obj.get("object_type_name") or "").strip()
+        obj_name = _text(obj.get("object_type_name"))
         if not obj_name:
             continue
+        binding = _source_binding_entry(indexes.bindings_by_object.get(int(obj.get("id") or 0)))
         entries.append(
             {
                 "object_type": obj_name,
-                "display_name": str(obj.get("display_name") or ""),
-                "description": str(obj.get("description") or ""),
-                "models": _object_binding_models(
-                    mappings_by_object.get(int(obj.get("id") or 0), []), config_names, model_files
-                ),
+                "display_name": _text(obj.get("display_name")),
+                "description": _text(obj.get("description")),
+                "dataset": binding["dataset"],
+                "physical_table": binding["physical_table"],
+                "member_datasource_ids": binding["members"],
+                "property_count": len(indexes.properties_by_object_type.get(int(obj.get("id") or 0), [])),
             }
         )
     return {"count": len(entries), "object_types": entries}
-
-
-def build_object_list_usage_hint() -> str:
-    """对象类型清单的使用说明（轻量列表 → 详情导航 → 查询）。"""
-    return (
-        "清单只含对象类型名与绑定模型。单对象类型取数：直接 execute_query（DSL 传 models 里的 semantic_config_id，"
-        "维度名先 file_read workspace 的 semantic/<model_file> 确认口径）；需要属性→维度对照、对象类型间关系类型"
-        "或失修状态时，调 locate_object_type（object_types 传对象类型 API 名）获取定位报告。"
-    )
 
 
 def build_search_around_report(
@@ -464,135 +280,48 @@ def build_search_around_report(
     *,
     object_type: str,
     relation: str | None = None,
-    semantic_config_id: str | None = None,
-    config_names: dict[str, str] | None = None,
-    model_files: dict[str, str] | None = None,
-    dimension_names: dict[str, set[str]] | None = None,
-    dimension_columns: dict[str, dict[str, str]] | None = None,
 ) -> dict[str, Any]:
-    """search-around：以单个对象类型为中心沿关系「走一跳」的展开报告（纯函数，不触库）。
+    """search-around：以单个对象类型为中心沿关系「走一跳」的展开报告（纯函数）。
 
-    与 ``build_object_type_locator_report`` 的分层：locate 只给关系名文本（对端对象
-    类型名 + 失修标注），join 用什么物理列、对端对象里有什么，模型要再 grep YAML /
-    再调 locate——跨对象类型（2 跳）问题的定位成本逐跳放大。本报告对每条关系一次给出：
-
-    - ``join``：目录同源翻译的物理连接列（``from_columns_by_model``/``to_columns_by_model``，
-      多模型绑定时以 by_model 为准；任一列未解析标 ``unresolved: true``，须回读模型 YAML）；
-    - ``neighbor``：对端对象类型的完整定位条目（属性/绑定/映射/失修），其 ``relations``
-      只保留关系名列表提示下一跳，不递归展开——继续展开请以邻接对象为中心再次调用。
-
-    ``relation`` 可选过滤（只展开指定关系名，精准控量）；``dimension_columns`` 为
-    {semantic_config_id: {维度名: 物理列}}（调用方从启用模型 runtime configs 构建）。
+    每条 hop 给出：物理连接列（``join``，Dataset 列映射单源翻译）+ 对端对象类型的
+    导航条目（``neighbor``，其 ``relations`` 只保留关系名提示下一跳）。
+    ``relation`` 可选过滤（只展开指定关系名，精准控量）。
     返回 ``{"center", "hops", "not_found"}``：中心不可定位时 hops 为空并给候选。
     """
     if not isinstance(bundle, dict):
         raise ValueError("本体 bundle 必须是对象")
-    name = str(object_type or "").strip()
+    name = _text(object_type)
     if not name:
         raise ValueError("object_type 不能为空：请传入中心对象类型 API 名")
     indexes = _bundle_indexes(bundle)
-
     obj = indexes.objects_by_name.get(name)
     if not obj:
-        return {
-            "center": None,
-            "hops": [],
-            "not_found": [_not_found_entry(name, sorted(indexes.objects_by_name))],
-        }
-
+        return {"center": None, "hops": [], "not_found": [_not_found_entry(name, sorted(indexes.objects_by_name))]}
     obj_id = int(obj.get("id") or 0)
-    property_names, mapped_attrs = _center_context(
-        indexes,
-        obj_id,
-        semantic_config_id=str(semantic_config_id or "").strip(),
-        config_names=config_names,
-        model_files=model_files,
-        dimension_names=dimension_names,
-    )
+    relation_filter = _text(relation)
     hops: list[dict[str, Any]] = []
     for rel in indexes.relations_by_object.get(obj_id, []):
-        hop = _search_around_hop(
-            rel,
-            obj_id,
-            indexes,
-            relation_filter=str(relation or "").strip(),
-            property_names=property_names,
-            mapped_attrs=mapped_attrs,
-            semantic_config_id=str(semantic_config_id or "").strip(),
-            config_names=config_names,
-            model_files=model_files,
-            dimension_names=dimension_names,
-            dimension_columns=dimension_columns,
-        )
+        hop = _search_around_hop(rel, obj_id, indexes, relation_filter)
         if not hop:
             continue
         hops.append(hop)
         if len(hops) >= _MAX_RELATIONS_PER_OBJECT:
             break
     return {
-        "center": {"object_type": name, "display_name": str(obj.get("display_name") or "")},
+        "center": {"object_type": name, "display_name": _text(obj.get("display_name"))},
         "hops": hops,
         "not_found": [],
     }
 
 
-def _not_found_entry(name: str, available: list[str]) -> dict[str, Any]:
-    """中心对象类型不可定位的 not_found 条目（与 locate 同口径：给可定位候选）。"""
-    return {
-        "object_type": name,
-        "reason": "对象类型不存在或未绑定本轮启用语义模型" if available else "当前启用语义模型没有绑定任何本体对象类型",
-        "available": _candidate_summary(available),
-    }
-
-
-def _center_context(
-    indexes: _BundleIndexes,
-    obj_id: int,
-    *,
-    semantic_config_id: str,
-    config_names: dict[str, str] | None,
-    model_files: dict[str, str] | None,
-    dimension_names: dict[str, set[str]] | None,
-) -> tuple[set[str], set[str]]:
-    """中心对象的（属性名集合, 已映射属性集合）：失修比对的比对基准。"""
-    properties = indexes.properties_by_object_type.get(obj_id, [])
-    property_names = {str(prop.get("property_name") or "").strip() for prop in properties}
-    property_names.discard("")
-    bindings = _object_bindings(
-        indexes.mappings_by_object.get(obj_id, []),
-        config_filter=semantic_config_id,
-        config_names=config_names,
-        model_files=model_files,
-        dimension_names=dimension_names,
-    )
-    mapped_attrs: set[str] = set()
-    for binding in bindings:
-        mapped_attrs.update(binding["column_mappings"])
-    return property_names, mapped_attrs
-
-
 def _search_around_hop(
-    rel: dict[str, Any],
+    relation: dict[str, Any],
     obj_id: int,
     indexes: _BundleIndexes,
-    *,
     relation_filter: str,
-    property_names: set[str],
-    mapped_attrs: set[str],
-    semantic_config_id: str,
-    config_names: dict[str, str] | None,
-    model_files: dict[str, str] | None,
-    dimension_names: dict[str, set[str]] | None,
-    dimension_columns: dict[str, dict[str, str]] | None,
 ) -> dict[str, Any] | None:
-    """单条关系的 hop 组装；对端不可知或未命中 relation 过滤时返回 None。"""
-    entry = _relation_entry(
-        rel,
-        obj_id,
-        indexes.object_type_names_by_id,
-        property_names=property_names,
-        mapped_attrs=mapped_attrs,
-    )
+    """单条关系的 hop 组装；未命中 relation 过滤或对端不可知时返回 None。"""
+    entry = _relation_entry(relation, obj_id, indexes)
     if not entry or (relation_filter and entry["relation"] != relation_filter):
         return None
     hop: dict[str, Any] = {
@@ -602,80 +331,54 @@ def _search_around_hop(
     }
     if entry.get("verbalize"):
         hop["verbalize"] = entry["verbalize"]
-    if entry.get("stale"):
-        hop["stale"] = True
-        hop["stale_reason"] = entry["stale_reason"]
-    hop["join"] = _search_around_join(rel, indexes, dimension_columns)
-    hop["neighbor"] = _search_around_neighbor(
-        indexes,
-        entry["related_object"],
-        config_filter=semantic_config_id,
-        config_names=config_names,
-        model_files=model_files,
-        dimension_names=dimension_names,
-    )
+    hop["join"] = _relation_join(relation, indexes)
+    neighbor = indexes.objects_by_name.get(entry["related_object"])
+    hop["neighbor"] = _neighbor_entry(neighbor, indexes) if neighbor else None
     return hop
 
 
-def _search_around_join(
-    rel: dict[str, Any],
-    indexes: _BundleIndexes,
-    dimension_columns: dict[str, dict[str, str]] | None,
-) -> dict[str, Any]:
-    """hop 的 join 块：目录同源翻译的物理连接列；只保留连接列相关键（关系名/方向/
-    口语化已在 hop 顶层，不重复透出）。"""
-    hop_full = render_relation_join(rel, indexes.object_type_names_by_id, indexes.mappings_by_object, dimension_columns)
-    join = {
-        key: hop_full[key]
-        for key in ("from_columns", "to_columns", "from_columns_by_model", "to_columns_by_model")
-        if hop_full.get(key) is not None
-    }
-    if hop_full.get("unresolved"):
-        join["unresolved"] = True
-    return join
-
-
-def _search_around_neighbor(
-    indexes: _BundleIndexes,
-    neighbor_name: str,
-    *,
-    config_filter: str,
-    config_names: dict[str, str] | None,
-    model_files: dict[str, str] | None,
-    dimension_names: dict[str, set[str]] | None,
-) -> dict[str, Any] | None:
-    """对端对象类型的完整定位条目；``relation_types`` 收敛为关系名列表（下一跳提示）。"""
-    neighbor_obj = indexes.objects_by_name.get(neighbor_name)
-    if not neighbor_obj:
-        return None
-    neighbor_id = int(neighbor_obj.get("id") or 0)
-    neighbor = _locate_entry(
-        neighbor_obj,
-        obj_id=neighbor_id,
-        mappings=indexes.mappings_by_object.get(neighbor_id, []),
-        properties=indexes.properties_by_object_type.get(neighbor_id, []),
-        relation_types=indexes.relations_by_object.get(neighbor_id, []),
-        config_filter=config_filter,
-        config_names=config_names,
-        model_files=model_files,
-        object_type_names_by_id=indexes.object_type_names_by_id,
-        dimension_names=dimension_names,
-    )
-    neighbor["relations"] = [
-        str(item.get("relation") or "")
-        for item in neighbor.pop("relation_types", [])
-        if str(item.get("relation") or "")
-    ]
+def _neighbor_entry(obj: dict[str, Any], indexes: _BundleIndexes) -> dict[str, Any]:
+    """对端对象类型的导航条目；``relations`` 收敛为关系名列表（下一跳提示）。"""
+    neighbor = _locate_entry(obj, indexes)
+    neighbor["relations"] = [_text(item.get("relation")) for item in neighbor.pop("relation_types", [])]
     return neighbor
+
+
+def build_locator_usage_hint() -> str:
+    """定位报告的使用说明（导航 → 对象查询，不走语义层）。"""
+    return (
+        "source_binding 给出对象类型取数的 Dataset/物理表/member 与属性映射：column_mappings 是"
+        "属性→逻辑列，columns 是逻辑列→物理列；查询用 ontology_tool 的 find_objects/aggregate_objects"
+        "（member_datasource_ids 取 source_binding.members），跨对象关联用 search_around 的 join 物理列。"
+        "对象查询不走语义模型 DSL/SQL，也不要回退语义查询。"
+    )
+
+
+def build_object_list_usage_hint() -> str:
+    """对象类型清单的使用说明（轻量列表 → 详情导航 → 对象查询）。"""
+    return (
+        "清单只含对象类型与数据源绑定摘要。查询对象直接调 find_objects/aggregate_objects"
+        "（member_datasource_ids 用清单的 member_datasource_ids）；需要属性、列映射或关系类型详情时"
+        "调 locate_object_type，跨对象关联调 search_around。"
+    )
 
 
 def build_search_around_usage_hint() -> str:
     """search-around 报告的使用说明（一跳展开 → 直接 join → 继续展开再调用）。"""
     return (
-        "每条 hop 的 join 给出物理连接列：单模型绑定用 from_columns/to_columns；多模型绑定以 "
-        "from_columns_by_model/to_columns_by_model 为准（键为 semantic_config_id）。unresolved=true 时该列未经验证，"
-        "join 前必须 file_read 对应模型 YAML 确认；hop 带 stale=true 或 neighbor 绑定 healthy=false 时不要使用该条目。"
-        "neighbor 是对端对象的完整定位条目（属性/绑定/映射），可先于 locate 使用；继续向更远对象展开时，以 neighbor 的 "
-        "object_type 为中心再次调用 search_around（relations 列出其对端关系名，可用 relation 参数精准展开其中一条）。"
-        "查询执行仍走 data_analyzing_tool 的 execute_query，SQL 模式按 join 列写关联。"
+        "每条 hop 的 join 给出物理连接列（from_columns/to_columns，Dataset 列映射翻译；unresolved=true 时"
+        "回读对象类型 source_binding 确认）；neighbor 是对端对象的完整导航条目，继续展开时以它的 "
+        "object_type 为中心再次调用 search_around。对象查询用 find_objects/aggregate_objects，"
+        "不要回退语义模型查询。"
     )
+
+
+__all__ = [
+    "build_locator_usage_hint",
+    "build_object_list_report",
+    "build_object_list_usage_hint",
+    "build_object_type_locator_report",
+    "build_search_around_report",
+    "build_search_around_usage_hint",
+    "object_type_locator_enabled",
+]

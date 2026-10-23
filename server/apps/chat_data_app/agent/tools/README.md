@@ -13,10 +13,17 @@
 | `bash_run` | `bash_run.py` | 受限命令执行；**由 `runtime_options.bash_enabled` 控制注册（默认关）** |
 | `officecli_run` | `officecli_run.py` | OfficeCLI 文档解析/编辑（argv 直 execve，非通用执行器） |
 | `present_artifacts` | `present_artifacts.py` | 展示 outputs 最终产物 |
-| `data_analyzing_tool` | `data_analyzing.py` | 语义分析统一工具（`action` + `action_payload` 分派：`validate_dsl`/`validate_dashboard` DSL 与 dashboard_spec 校验（不执行）、`execute_query` 语义模型查询（DSL/只读 SQL 二选一执行）、`check_yaml` Ossie YAML 交付前自检（schema/结构/物理/质量，与导入接口同口径，只读）、`list_execution_targets` 实时获取当前用户可用执行对象清单（只读）） |
-| `ontology_tool` | `ontology_tool.py` | 本体对象类型导航（`list_object_types` 轻量清单 / `locate_object_type` 按对象类型定位语义模型 / `search_around` 沿关系一跳展开（物理连接列 + 对端完整定位条目），纯导航不执行查询）；**由 `CHAT_DATA_ONTOLOGY_LOCATE_ENABLED` 控制注册（默认关）**，2026-10-19 自 `data_analyzing_tool` 拆出 |
+| `data_analyzing_tool` | `data_analyzing.py` | 语义分析统一工具（`action` + `action_payload` 分派：`validate_dsl`/`validate_dashboard` DSL 与 dashboard_spec 校验（不执行）、`execute_query` 语义模型查询（DSL/只读 SQL 二选一执行）、`check_yaml` Ossie YAML 交付前自检（schema/结构/物理/质量，与导入接口同口径，只读）、`list_execution_targets` 实时获取当前用户可用执行对象清单（只读））；**语义模式专用** |
+| `ontology_tool` | `ontology_tool.py` | 本体对象/关系/Action 查询工具（`list_object_types`/`locate_object_type`/`search_around` 导航，`find_objects`/`aggregate_objects`/`get_object` 对象查询，`list_execution_targets` 机构范围，`list_action_types`/`execute_action` 动作）；走 Logical Dataset source binding + `object_projection`，不依赖语义模型；**本体模式专用**，导航/对象读取/Action 分别受 `CHAT_DATA_ONTOLOGY_LOCATE_ENABLED` / `CHAT_DATA_ONTOLOGY_OBJECT_READ_ENABLED` / `CHAT_DATA_ONTOLOGY_ACTION_EXECUTE_ENABLED` 门控 |
 | `ask_user_question` | `ask_user_question.py` | 向用户追问 |
 | `calculator`/`current_time` | 同名模块 | 基础工具 |
+
+## 语义 / 本体二选一
+
+同一业务域内 `data_analyzing_tool`（语义查询）与 `ontology_tool`（本体查询）**互斥装配**：
+选择逻辑唯一入口是 `services/ontology/query_mode.py`（业务域 = 当前数据源组），
+`registry.py` 只读取判定结果，不自行探测目录。本体模式下语义工具不进入模型上下文，
+语义模式下本体工具不挂载（即使功能开关打开）。
 
 ## 约定
 

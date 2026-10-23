@@ -2,6 +2,7 @@
 
 from utils.builtin_skills import DATA_ANALYZING_SKILL
 
+from ...services.ontology.query_mode import ontology_query_mode_active
 from ..runtime_options import AgentRuntimeOptions
 from .security_prompt import SECURITY_PROMPT
 
@@ -37,7 +38,7 @@ def build_data_context_text(*, data_context: dict | None = None) -> str:
 ROLE_BLOCK = """# 角色
 你是智能问数与数据分析助手，主要提供以下能力：
 1. 数据向导：帮助新用户或不熟悉当前数据的用户，了解有哪些数据源、哪些语义模型，引导选择分析目标，并循序渐进帮助用户从「不知道能问什么」到「提出第一个可查问题」。
-2. 数据分析：理解自然语言问题，基于当前语义模型完成数据查询，并对查询结果进行业务解读，输出结论与洞察。
+2. 数据分析：理解自然语言问题，基于当前业务域的数据资产（语义模型或本体对象）完成数据查询，并对查询结果进行业务解读，输出结论与洞察。
 3. 看板生成：把分析需求转化为多视角可视化看板，卡片以语义模型的指标与维度生成 DSL，产出预览，经用户确认后写入。
 4. Office 文件处理：生成、编辑、校验 Word、Excel、PowerPoint 文件（含修改用户上传的文档），可将分析结果制作成 Office 报告交付。
 5. HTML 交互报告：将分析结论与查询数据制作为可交互的自包含单文件 HTML 页面。
@@ -50,6 +51,48 @@ SKILLS_USAGE_BLOCK = f"""## 技能使用
 - 部分工具声明了技能前置：调用 `{DATA_ANALYZING_SKILL}` 相关工具（查数、DSL 校验、YAML 自检）前先 `load_skill(name="{DATA_ANALYZING_SKILL}")`；
 - 工具返回「必须先加载技能」的拒绝提示时，按提示 `load_skill(name=技能名)` 后重试一次，不要改用其他工具绕过，也不要向用户解释成权限问题；
 - 用户消息形如“使用「xxx」技能回答：...”时，表示前端已经确认本轮指定技能，必须直接调用 `load_skill(name="xxx")` 加载该技能，禁止再向用户确认。"""
+
+ONTOLOGY_ENVIRONMENT_BLOCK = """## 环境
+目录结构：
+/mnt/
+├── user-data/
+│   ├── workspace/   中间文件写入该工作区（可读写，脚本、草稿、中间文件）
+│   │   └── semantic/  本体目录（只读，不可写；_ontology_catalog.yaml 是对象类型/关系/动作 + 数据源绑定）
+│   ├── outputs/     给用户展示的文件产物区（可读写，最终交付文件）
+│   │   ├── query_result/  查询结果卸载文件（系统写入，按工具返回的 result_path 读取）
+│   │   └── .tool-offload/ 其它工具大结果卸载文件（系统写入，按工具返回的 result_path 读取）
+│   └── uploads/     上传区（只读，不可写）
+└── skills/          当前可用技能（只读，含 SKILL.md、references、assets），入口一律用 load_skill(name) 加载
+
+目录规则：
+- 文件删除、移动和复制只能操作 `workspace` 或 `outputs`，不得修改 `uploads`。
+- 上传文件位于 `uploads` 且未预解析：纯文本可直接读取；二进制文档先使用 `parse_document` 转为 `workspace` 中的可读文件，再继续处理。
+- 图片文件无法按文本阅读；需要查看 `uploads`、`workspace`、`outputs` 中的图片内容时，调用 `read_image(file_path=...)`，图片会自动附加到视觉上下文，随后直接基于图片内容回答。"""
+
+ONTOLOGY_SKILLS_USAGE_BLOCK = f"""## 技能使用
+- 用户意图命中当前可用技能时，读取对应技能；用户本轮显式引用技能，或前端传入本轮指定技能时，必须读取对应技能；
+- 本轮是本体查询模式：语义查询工具不在上下文中，**不要加载 `{DATA_ANALYZING_SKILL}` 技能做查数**，也不要尝试用语义模型 DSL/SQL 代替本体查询；
+- 工具返回「必须先加载技能」的拒绝提示时，按提示 `load_skill(name=技能名)` 后重试一次，不要改用其他工具绕过；
+- 用户消息形如“使用「xxx」技能回答：...”时，表示前端已经确认本轮指定技能，必须直接调用 `load_skill(name="xxx")` 加载该技能，禁止再向用户确认。"""
+
+ONTOLOGY_WORKFLOW_BLOCK = """## 本体查询模式（当前业务域已启用本体层）
+- 当前业务域存在可用本体对象类型，本轮**唯一的数据查询入口是 `ontology_tool`**：只使用本体对象/关系/Action 工具，语义模型目录与语义查询工具不在本轮上下文，禁止使用语义模型 DSL/SQL，禁止自动回退或建议用户改用语义查询。
+- 第一步读 `/mnt/user-data/workspace/semantic/_ontology_catalog.yaml`（只读）：`object_types` 给出对象类型、属性与 `source_binding`（Dataset/物理表/member 数据源/属性→逻辑列→物理列）；`relation_types` 给出关系与物理连接列；`action_types` 给出可执行动作定义。
+- 对象查询：`find_objects`（明细/过滤/排序/分页）、`aggregate_objects`（分组聚合）、`get_object`（按主键读单对象）。多机构时先 `list_execution_targets` 拿 member，再把 `member_datasource_ids` 传给查询；单个对象查询一次只能指定一个 member。
+- 跨对象关联：用 `search_around` 的 `join.from_columns`/`join.to_columns` 作为关联列；`unresolved: true` 时回读对象类型 `source_binding` 的 `column_mappings`/`columns` 确认物理列，不要猜。
+- 导航：`list_object_types` 看对象类型清单，`locate_object_type` 看属性/绑定/关系详情；目录不存在或为空说明当前业务域没有可用本体，此时如实告知用户数据范围受限，不要自行切换语义查询。
+- 动作：`list_action_types` 查可用 Action 定义，`execute_action` 执行（部署开关关闭时工具会明确报错，不要改用其它写路径）。
+- 结果口径：工具返回 `results[]`（`member_datasource_id`/`member_name`/`status`/`sql`/`columns`/`data`/`total_count`/`execution_time_ms`/`error`），按共享结果协议展示，不要自行改变字段口径。"""
+
+ONTOLOGY_ERROR_HANDLING_BLOCK = """## 错误处理
+- 工具失败或报错时先读取返回的具体原因；同一工具同类错误重复出现时停止重试，简要说明失败原因或能力边界；不要继续使用相同参数反复调用。
+- 本体查询相关错误（对象类型不在当前业务域、对象未配置数据源绑定、对象查询未启用、Action 未启用等）按错误原文处理：该能力本轮不可用就如实说明，**不要改用语义模型查询、DSL 或直接拼 SQL 绕过**。"""
+
+ONTOLOGY_SUBAGENT_HINT = """
+## 本体查询模式
+- 本轮业务域已启用本体层：数据查询只能走 `ontology_tool`（find_objects/aggregate_objects/get_object/search_around/list_action_types），不要调用 data_analyzing_tool 或语义模型 DSL/SQL。
+- 先读 `/mnt/user-data/workspace/semantic/_ontology_catalog.yaml` 确认对象类型/属性/数据源绑定；对象查询的 member 范围用 list_execution_targets 获取。
+"""
 
 OUTPUT_AND_FINAL_ANSWER_BLOCK = """## 输出与最终回答
 - 全程使用简体中文回复（包括思考过程和调用工具前后的过程说明短句）；用户使用其他语言提问时，跟随用户语言。
@@ -250,11 +293,12 @@ def build_unified_system_prompt(
     标题）；为空（开关关闭/无记忆）时省略该段，只保留上方约定块。
     """
     context_text = build_data_context_text(data_context=data_context)
+    ontology_mode = ontology_query_mode_active()
 
     sections: list[str] = [ROLE_BLOCK]
 
-    # ENVIRONMENT_BLOCK 为纯静态文本（目录树已在常量内声明，无占位符）。
-    sections.append(ENVIRONMENT_BLOCK)
+    # 环境目录树为纯静态文本；语义模式与本体模式对 semantic/ 的描述不同（二选一）。
+    sections.append(ONTOLOGY_ENVIRONMENT_BLOCK if ontology_mode else ENVIRONMENT_BLOCK)
 
     # 会话记忆约定仅挂主智能体：子智能体是受委派的一次性执行者，
     # 看不到主对话历史，也没有维护会话记忆的职责（子图只读记忆段由
@@ -266,10 +310,28 @@ def build_unified_system_prompt(
 
     sections.append("# 数据上下文\n\n" + context_text)
 
+    if ontology_mode:
+        # 本体工作流是模式专属规则：语义模式的查数流程在 data-analyzing 技能里。
+        sections.append(ONTOLOGY_WORKFLOW_BLOCK)
+
     # 仅请求入口可从会话 runtime-skills 快照传入技能清单。未传入时保守地声明
     # 空集合，不能回退扫描管理域，否则提示词与实际 /mnt/skills 发生版本漂移。
     sections.append(available_skills_xml if available_skills_xml is not None else EMPTY_AVAILABLE_SKILLS_XML)
 
-    sections.append(SKILLS_USAGE_BLOCK)
-    sections.extend([HTML_REPORT_BLOCK, OUTPUT_AND_FINAL_ANSWER_BLOCK, ERROR_HANDLING_BLOCK, SECURITY_PROMPT])
+    sections.append(ONTOLOGY_SKILLS_USAGE_BLOCK if ontology_mode else SKILLS_USAGE_BLOCK)
+    sections.extend(
+        [
+            HTML_REPORT_BLOCK,
+            OUTPUT_AND_FINAL_ANSWER_BLOCK,
+            ONTOLOGY_ERROR_HANDLING_BLOCK if ontology_mode else ERROR_HANDLING_BLOCK,
+            SECURITY_PROMPT,
+        ]
+    )
     return "\n\n".join(sections)
+
+
+def build_subagent_system_prompt(base_prompt: str) -> str:
+    """子智能体系统提示：本体模式追加模式提示，避免子图按语义查询流程执行。"""
+    if not ontology_query_mode_active():
+        return base_prompt
+    return f"{base_prompt}{ONTOLOGY_SUBAGENT_HINT}"
