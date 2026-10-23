@@ -134,6 +134,32 @@ def missing_header():
     return {"headers": {}}
 
 
+def test_list_ontology_objects_contract(client, auth_headers, monkeypatch):
+    async def fake_list(object_type_name, *, keyword="", limit=20, offset=0, **kwargs):
+        assert keyword == "A00"
+        return {
+            "objects": [
+                {"object_type": object_type_name, "object_key": "Order:A001", "properties": {"order_id": "A001"}}
+            ],
+            "has_more": False,
+            "limit": limit,
+            "offset": offset,
+            "title_property": "order_id",
+            "properties": ["order_id"],
+        }
+
+    monkeypatch.setattr(ontology_admin_routes, "list_object_projection", fake_list)
+    response = client.get(
+        "/api/chatdata/admin/meta/ontology/object-types/Order/objects",
+        params={"keyword": "A00", "limit": 20, "offset": 0},
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "success"
+    assert payload["data"]["objects"][0]["object_key"] == "Order:A001"
+
+
 def test_read_ontology_object_contract(client, auth_headers, monkeypatch):
     async def fake_read(object_type_name, object_key, **kwargs):
         return {
@@ -240,6 +266,9 @@ def test_action_type_crud_and_test_run_contract(client, auth_headers, monkeypatc
     )
     assert executed.json()["data"]["execution"]["id"] == 99
     assert executed.json()["data"]["object_key"] == "ORD2024000001"
+
+    missing = client.get(f"{_ACTION_BASE}/missing_action", headers=auth_headers)
+    assert missing.json()["status"] == "error"
 
     deleted = client.delete(f"{_ACTION_BASE}/update_order_status", headers=auth_headers)
     assert deleted.json()["status"] == "success"

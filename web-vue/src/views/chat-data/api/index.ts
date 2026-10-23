@@ -43,6 +43,8 @@ import type {
   OntologyItem,
   OntologyMappingItem,
   OntologyObjectInstance,
+  OntologyObjectListItem,
+  OntologyObjectListResult,
   OntologyObjectTypeItem,
   OntologyObjectTypeStatus,
   OntologyPropertyItem,
@@ -2159,6 +2161,18 @@ export function getAdminOntologyObjectTypes(params?: {
 }): Promise<ApiResponse<{ object_types: OntologyObjectTypeItem[] }>> {
   return request({
     url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/object-types`,
+    method: 'get',
+    params
+  })
+}
+
+/** 后台：对象实例分页列表（标题键/主键搜索） */
+export function listAdminOntologyObjects(
+  objectType: string,
+  params: { keyword?: string; limit?: number; offset?: number } = {}
+): Promise<ApiResponse<OntologyObjectListResult>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/object-types/${encodeURIComponent(objectType)}/objects`,
     method: 'get',
     params
   })

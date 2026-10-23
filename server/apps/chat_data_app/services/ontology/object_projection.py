@@ -19,6 +19,7 @@ MVP 约束：
 
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 from typing import Any
@@ -199,6 +200,67 @@ def build_object_query(
         "object_key": key,
         "identifier_property": identifier_property,
         "properties": [name for name, _column in columns],
+    }
+
+
+def _title_property_name(properties: list[dict[str, Any]], identifier_property: str) -> str:
+    """列表搜索优先用标题键；未配置时退回主键。"""
+    for prop in properties:
+        if bool(prop.get("is_title")):
+            return _text(prop.get("property_name")) or identifier_property
+    return identifier_property
+
+
+def build_object_list_query(
+    detail: dict[str, Any],
+    config: dict[str, Any],
+    *,
+    keyword: str = "",
+    limit: int = 20,
+    offset: int = 0,
+    semantic_config_id: str | None = None,
+) -> dict[str, Any]:
+    """构造对象列表查询（MVP：单映射/单表，标题键 + 主键关键词搜索，limit+1 判 has_more）。"""
+    safe_limit = max(1, min(int(limit), 100))
+    safe_offset = max(0, int(offset))
+    mapping = _mapping_for_projection(detail, semantic_config_id)
+    dimensions = _dimension_index(config)
+    column_mappings = mapping.get("column_mappings")
+    if not isinstance(column_mappings, dict):
+        raise ObjectProjectionError("对象映射缺少 column_mappings")
+    properties = [prop for prop in detail.get("properties") or [] if isinstance(prop, dict)]
+    table, columns = _projection_columns(properties, column_mappings, dimensions)
+    identifier_property, identifier_dimension = _identifier_property(properties, column_mappings)
+    identifier_meta = dimensions.get(identifier_dimension)
+    if not identifier_meta or identifier_meta["table"] != table:
+        raise ObjectProjectionError("标识属性与普通属性不在同一张表，MVP 暂不支持")
+
+    search_property = _title_property_name(properties, identifier_property)
+    search_dimension = dimensions.get(_text(column_mappings.get(search_property)))
+    search_column = search_dimension["column"] if search_dimension else identifier_meta["column"]
+    select_list = ", ".join(f"{_quote_identifier(column)} AS `{property_name}`" for property_name, column in columns)
+    where = ""
+    value = _text(keyword)
+    if value:
+        if len(value) > 200:
+            raise ObjectProjectionError("搜索关键词不能超过 200 字符")
+        escaped = escape_string(value)
+        search_columns = {_quote_identifier(search_column), _quote_identifier(identifier_meta["column"])}
+        where = " WHERE " + " OR ".join(f"{column} LIKE '%{escaped}%'" for column in sorted(search_columns))
+    sql = (
+        f"SELECT {select_list} FROM {_quote_identifier(table)}{where} "
+        f"ORDER BY {_quote_identifier(identifier_meta['column'])} "
+        f"LIMIT {safe_limit + 1} OFFSET {safe_offset}"
+    )
+    return {
+        "sql": sql,
+        "table": table,
+        "object_type": _text(detail.get("object_type_name")),
+        "identifier_property": identifier_property,
+        "title_property": search_property,
+        "properties": [name for name, _column in columns],
+        "limit": safe_limit,
+        "offset": safe_offset,
     }
 
 
@@ -407,11 +469,22 @@ async def _read_links(
     """查询一跳 links：只读、最佳努力，单条关系失败只跳过并记录。"""
     current_id = int(detail.get("id") or 0)
     relations = await ontology_service.list_relations_async()
+    candidates = relations[:_MAX_RELATIONS]
+    # 各关系一跳查询相互独立；并发执行避免每点一行都串行等 N 次数据源。
+    results = await asyncio.gather(
+        *[
+            _relation_link_entries(relation, row, current_id=current_id, user_id=user_id, username=username)
+            for relation in candidates
+        ],
+        return_exceptions=True,
+    )
     links: dict[str, list[dict[str, Any]]] = {}
-    for relation in relations[:_MAX_RELATIONS]:
-        entries = await _relation_link_entries(relation, row, current_id=current_id, user_id=user_id, username=username)
-        if entries:
-            links[_text(relation.get("relation_type_name"))] = entries
+    for relation, result in zip(candidates, results, strict=False):
+        if isinstance(result, BaseException):
+            logger.warning("读取对象关系失败，已跳过: %s: %s", relation.get("relation_type_name"), result)
+            continue
+        if result:
+            links[_text(relation.get("relation_type_name"))] = result
     return links
 
 
@@ -461,11 +534,65 @@ async def read_object_projection(
     return _assemble_object(detail, query, row, links)
 
 
+async def list_object_projection(
+    object_type_name: str,
+    *,
+    keyword: str = "",
+    limit: int = 20,
+    offset: int = 0,
+    semantic_config_id: str | None = None,
+    user_id: str = "",
+    username: str = "",
+) -> dict[str, Any]:
+    """对象实例列表（只读投影；MVP 不批量加载 links/overrides）。"""
+    detail = await ontology_service.get_object_type_async(object_type_name)
+    if detail is None:
+        raise ObjectProjectionError(f"本体对象类型不存在: {object_type_name}")
+    mapping = _mapping_for_projection(detail, semantic_config_id)
+    config, group_id, targets = await _mapping_context(mapping, user_id=user_id, username=username)
+    query = build_object_list_query(
+        detail,
+        config,
+        keyword=keyword,
+        limit=limit,
+        offset=offset,
+        semantic_config_id=semantic_config_id,
+    )
+    rows = await _query_rows(
+        targets,
+        query["sql"],
+        group_id=group_id,
+        user_id=user_id,
+        username=username,
+        limit=query["limit"] + 1,
+    )
+    has_more = len(rows) > query["limit"]
+    rows = rows[: query["limit"]]
+    objects = [
+        {
+            "object_type": query["object_type"],
+            "object_key": f"{query['object_type']}:{_text(row.get(query['identifier_property']))}",
+            "properties": {name: row.get(name) for name in query["properties"]},
+        }
+        for row in rows
+    ]
+    return {
+        "objects": objects,
+        "has_more": has_more,
+        "limit": query["limit"],
+        "offset": query["offset"],
+        "title_property": query["title_property"],
+        "properties": query["properties"],
+    }
+
+
 __all__ = [
     "ObjectProjectionError",
+    "build_object_list_query",
     "build_object_query",
     "build_related_key_query",
     "ontology_action_execute_enabled",
+    "list_object_projection",
     "ontology_object_read_enabled",
     "read_object_projection",
 ]

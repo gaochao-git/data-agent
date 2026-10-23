@@ -1087,6 +1087,21 @@ export interface OntologyObjectInstance {
   links: Record<string, unknown[]>
 }
 
+export interface OntologyObjectListItem {
+  object_type: string
+  object_key: string
+  properties: Record<string, unknown>
+}
+
+export interface OntologyObjectListResult {
+  objects: OntologyObjectListItem[]
+  has_more: boolean
+  limit: number
+  offset: number
+  title_property: string
+  properties: string[]
+}
+
 // MCP 探测返回的单工具参数
 export interface PluginMcpToolParameter {
   name: string

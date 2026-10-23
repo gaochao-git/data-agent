@@ -7819,6 +7819,100 @@
         ]
       }
     },
+    "/api/chatdata/admin/meta/ontology/object-types/{object_type_name}/objects": {
+      "get": {
+        "description": "对象实例分页列表（按标题键/主键搜索；只读投影）。",
+        "operationId": "list_ontology_objects_api_chatdata_admin_meta_ontology_object_types__object_type_name__objects_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "object_type_name",
+            "required": true,
+            "schema": {
+              "title": "Object Type Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "keyword",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Keyword",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "semantic_config_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Semantic Config Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "List Ontology Objects",
+        "tags": [
+          "ChatData 本体管理（Admin）"
+        ]
+      }
+    },
     "/api/chatdata/admin/meta/ontology/object-types/{object_type_name}/objects/read": {
       "get": {
         "description": "按对象主键读取一个对象实例（数据库只读投影，不落对象存储）。",

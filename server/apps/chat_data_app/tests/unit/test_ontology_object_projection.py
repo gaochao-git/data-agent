@@ -8,6 +8,7 @@ import pytest
 
 from apps.chat_data_app.services.ontology.object_projection import (
     ObjectProjectionError,
+    build_object_list_query,
     build_object_query,
     build_related_key_query,
 )
@@ -47,6 +48,42 @@ def test_build_object_query_uses_mapping_and_escapes_key():
     assert "FROM `orders`" in query["sql"]
     assert "WHERE `order_id` = 'A\\'1'" in query["sql"]
     assert "LIMIT 1" in query["sql"]
+
+
+def test_build_object_list_query_paginates_and_searches_title_or_key():
+    detail = _detail()
+    detail["properties"][0]["is_title"] = True
+    query = build_object_list_query(
+        detail,
+        _config(),
+        keyword="ORD'1",
+        limit=200,
+        offset=20,
+    )
+    assert query["limit"] == 100
+    assert query["offset"] == 20
+    assert query["title_property"] == "order_id"
+    assert "LIKE '%ORD" in query["sql"]
+    assert "ORDER BY `order_id`" in query["sql"]
+    assert "LIMIT 101 OFFSET 20" in query["sql"]
+
+
+def test_build_object_list_query_clamps_and_falls_back_to_identifier():
+    query = build_object_list_query(_detail(), _config(), limit=0, offset=-5)
+    assert query["limit"] == 1
+    assert query["offset"] == 0
+    assert query["title_property"] == "order_id"
+    assert "WHERE" not in query["sql"]
+    with pytest.raises(ObjectProjectionError, match="200"):
+        build_object_list_query(_detail(), _config(), keyword="x" * 201)
+
+
+def test_build_object_list_query_falls_back_to_identifier_search_column():
+    detail = _detail()
+    detail["properties"].append({"property_name": "title", "is_title": True})
+    query = build_object_list_query(detail, _config(), keyword="A")
+    assert query["title_property"] == "title"
+    assert "`order_id` LIKE" in query["sql"]
 
 
 def test_build_object_query_rejects_composite_identifier():
@@ -133,6 +170,50 @@ def test_read_links_builds_foreign_key_link(monkeypatch):
         "related_object_type": "Customer",
         "related_object_key": "Customer:C001",
     }
+
+
+def test_list_object_projection_returns_page_and_has_more(monkeypatch):
+    from apps.chat_data_app.services.ontology import object_projection
+
+    async def fake_get_object_type(_name):
+        return _detail()
+
+    async def fake_context(_mapping, **_kwargs):
+        return _config(), "g1", [{"member_datasource_id": "m1"}]
+
+    async def fake_query_rows(*_args, **_kwargs):
+        return [
+            {"order_id": "A001", "amount": 10},
+            {"order_id": "A002", "amount": 20},
+            {"order_id": "A003", "amount": 30},
+        ]
+
+    monkeypatch.setattr(object_projection.ontology_service, "get_object_type_async", fake_get_object_type)
+    monkeypatch.setattr(object_projection, "_mapping_context", fake_context)
+    monkeypatch.setattr(object_projection, "_query_rows", fake_query_rows)
+    result = asyncio.run(object_projection.list_object_projection("Order", limit=2, offset=0))
+    assert result["has_more"] is True
+    assert [item["object_key"] for item in result["objects"]] == ["Order:A001", "Order:A002"]
+    assert result["title_property"] == "order_id"
+
+
+def test_list_object_projection_without_extra_row_has_no_more(monkeypatch):
+    from apps.chat_data_app.services.ontology import object_projection
+
+    async def fake_get_object_type(_name):
+        return _detail()
+
+    async def fake_context(_mapping, **_kwargs):
+        return _config(), "g1", [{"member_datasource_id": "m1"}]
+
+    async def fake_query_rows(*_args, **_kwargs):
+        return [{"order_id": "A001", "amount": 10}, {"order_id": "A002", "amount": 20}]
+
+    monkeypatch.setattr(object_projection.ontology_service, "get_object_type_async", fake_get_object_type)
+    monkeypatch.setattr(object_projection, "_mapping_context", fake_context)
+    monkeypatch.setattr(object_projection, "_query_rows", fake_query_rows)
+    result = asyncio.run(object_projection.list_object_projection("Order", limit=2))
+    assert result["has_more"] is False
 
 
 def test_object_projection_applies_action_overrides_when_enabled(monkeypatch):

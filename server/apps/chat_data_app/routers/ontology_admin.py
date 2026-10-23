@@ -36,7 +36,11 @@ from ..services.ontology import (
     ontology_service,
 )
 from ..services.ontology.action_type_service import OntologyActionTypeService
-from ..services.ontology.object_projection import ObjectProjectionError, read_object_projection
+from ..services.ontology.object_projection import (
+    ObjectProjectionError,
+    list_object_projection,
+    read_object_projection,
+)
 from ..services.ontology.ontology_consistency import check_ontology_model_consistency as _run_consistency_check
 from ..services.semantic.run.semantic_config_service import (
     get_semantic_config_service,
@@ -148,6 +152,41 @@ async def get_ontology_object_type(object_type_name: str, request: Request) -> J
         raise
     except Exception as e:
         return _error_response(e, "获取本体对象类型详情失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
+
+
+@router.get("/admin/meta/ontology/object-types/{object_type_name}/objects")
+async def list_ontology_objects(
+    object_type_name: str,
+    request: Request,
+    keyword: str = "",
+    limit: int = 20,
+    offset: int = 0,
+    semantic_config_id: str | None = None,
+) -> JSONResponse:
+    """对象实例分页列表（按标题键/主键搜索；只读投影）。"""
+    try:
+        current_user = _get_current_user(request)
+        data = await list_object_projection(
+            object_type_name,
+            keyword=keyword,
+            limit=max(1, min(limit, 100)),
+            offset=max(0, offset),
+            semantic_config_id=semantic_config_id,
+            user_id=str(current_user.user_id or ""),
+            username=str(current_user.username or ""),
+        )
+        return business_response(data=data, msg="获取成功")
+    except HTTPException:
+        raise
+    except ObjectProjectionError as e:
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_ONTOLOGY_INVALID, status="error")
+    except Exception as e:
+        logger.error("读取本体对象列表失败: %s", e, exc_info=True)
+        return business_response(
+            msg="读取对象列表失败，请检查映射、数据源权限或稍后重试",
+            code=ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED,
+            status="error",
+        )
 
 
 @router.get("/admin/meta/ontology/object-types/{object_type_name}/objects/read")

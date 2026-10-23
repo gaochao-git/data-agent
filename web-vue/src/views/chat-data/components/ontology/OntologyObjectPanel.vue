@@ -38,6 +38,7 @@ import ActionTypeView from './ActionTypeView.vue'
 import OntologyConsistencyDialog from './OntologyConsistencyDialog.vue'
 import OntologyForm from './OntologyForm.vue'
 import OntologyObjectForm from './OntologyObjectForm.vue'
+import ObjectInstanceExplorer from './ObjectInstanceExplorer.vue'
 import OntologyRelationForm from './OntologyRelationForm.vue'
 import OntologyStatusDialog from './OntologyStatusDialog.vue'
 import { mappingIdentityText, ONTOLOGY_MULTIPLICITY_META, ONTOLOGY_RENDER_HINTS, ONTOLOGY_STATUS_META } from './ontologyMeta'
@@ -486,14 +487,6 @@ const retrySelectedObject = () => {
   if (selectedNode.value?.kind === 'object_type') void fetchObjectEntry(selectedNode.value)
 }
 
-const openObjectPreview = () => {
-  if (selectedNode.value?.kind !== 'object_type') return
-  objectPreviewType.value = selectedNode.value.object_type_name
-  objectPreviewKey.value = ''
-  objectPreviewData.value = null
-  objectPreviewError.value = ''
-  objectPreviewVisible.value = true
-}
 
 const loadObjectPreview = async () => {
   if (!objectPreviewType.value || !objectPreviewKey.value.trim()) {
@@ -517,12 +510,87 @@ const loadObjectPreview = async () => {
   }
 }
 
+const openLinkedObjectPreview = async (rawKey: unknown) => {
+  const keyText = String(rawKey || '').trim()
+  const separator = keyText.indexOf(':')
+  if (separator <= 0) return
+  const objectType = keyText.slice(0, separator)
+  const objectKey = keyText.slice(separator + 1)
+  linkedPreviewVisible.value = true
+  linkedPreviewLoading.value = true
+  linkedPreviewError.value = ''
+  linkedPreviewData.value = null
+  linkedPreviewKey.value = keyText
+  try {
+    const res = await readAdminOntologyObject(objectType, objectKey)
+    if (res.status === 'success') linkedPreviewData.value = res.data
+    else linkedPreviewError.value = res.msg || '读取关联对象失败'
+  } catch (err) {
+    console.error('读取关联对象失败:', err)
+    linkedPreviewError.value = '读取关联对象失败，请稍后重试'
+  } finally {
+    linkedPreviewLoading.value = false
+  }
+}
+
+const linkedPreviewPropertyRows = computed(() => {
+  const data = linkedPreviewData.value
+  if (!data) return []
+  return Object.entries(data.properties || {}).map(([name, value]) => ({ name, value }))
+})
+
+const previewPropertyRows = computed(() => {
+  const data = objectPreviewData.value
+  if (!data) return []
+  const metadata = selectedObject.value?.entry?.detail.properties || []
+  return Object.entries(data.properties || {}).map(([name, value]) => ({
+    name,
+    label: metadata.find(item => item.property_name === name)?.display_name || '',
+    value
+  }))
+})
+
+const previewTitle = computed(() => {
+  const data = objectPreviewData.value
+  if (!data) return ''
+  const titleProperty = selectedObject.value?.entry?.detail.properties?.find(item => item.is_title)?.property_name
+  if (!titleProperty) return ''
+  const value = data.properties?.[titleProperty]
+  return value == null ? '' : String(value)
+})
+
+const objectPreviewLinkGroups = computed(() => {
+  const data = objectPreviewData.value
+  if (!data) return []
+  const entry = selectedObject.value?.entry
+  const relations = [
+    ...(entry?.fromRelations || []).map(relation => ({ relation, direction: 'from' as const })),
+    ...(entry?.toRelations || []).map(relation => ({ relation, direction: 'to' as const }))
+  ]
+  return Object.entries(data.links || {}).map(([relationName, rawEntries]) => {
+    const matched = relations.find(item => item.relation.relation_type_name === relationName)
+    const label = matched
+      ? (matched.direction === 'from' ? matched.relation.from_display_name : matched.relation.to_display_name) || relationName
+      : relationName
+    const entries = Array.isArray(rawEntries)
+      ? rawEntries.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
+      : []
+    return { relationName, label, entries }
+  })
+})
+
+const previewValueText = (value: unknown) => {
+  if (value == null) return '-'
+  return typeof value === 'object' ? JSON.stringify(value) : String(value)
+}
+
 // ---------- 节点选中与树事件 ----------
 
 const treeProps = { label: 'row_key', isLeaf: 'is_leaf' }
 const currentNodeKey = ref('')
 
 const selectedNode = ref<TreeRow | null>(null)
+const objectDetailView = ref<'overview' | 'instances'>('overview')
 
 const onNodeClick = (data: TreeRow) => {
   // 动作类型是写操作资源：点击直接打开管理弹窗，不占右侧对象详情位
@@ -535,6 +603,7 @@ const onNodeClick = (data: TreeRow) => {
   if (data.kind === 'root' || data.kind === 'group' || data.kind === 'ontology' || data.kind === 'ontology-group' || data.kind === 'empty') return
   selectedNode.value = data
   currentNodeKey.value = data.row_key
+  objectDetailView.value = 'overview'
   if (data.kind === 'object_type') ensureObjectData(data)
 }
 
@@ -584,7 +653,10 @@ const relationGraph = computed<{ nodes: RelationGraphNode[]; edges: RelationGrap
 
   const centerX = 320
   const centerY = 170
-  const radius = 128
+  const radiusX = 230
+  const radiusY = 110
+  const nodeHalfWidth = 88
+  const nodeHalfHeight = 18
   const relations = [
     ...entry.fromRelations.map(relation => ({ relation, direction: 'from' as const })),
     ...entry.toRelations.map(relation => ({ relation, direction: 'to' as const }))
@@ -600,10 +672,10 @@ const relationGraph = computed<{ nodes: RelationGraphNode[]; edges: RelationGrap
     const display = objectTypeDisplayOf(name)
     return {
       key: `related:${name}`,
-      label: display.length > 10 ? `${display.slice(0, 9)}…` : display,
+      label: display.length > 20 ? `${display.slice(0, 19)}…` : display,
       sublabel: name,
-      x: centerX + Math.cos(angle) * radius,
-      y: centerY + Math.sin(angle) * radius,
+      x: centerX + Math.cos(angle) * radiusX,
+      y: centerY + Math.sin(angle) * radiusY,
       isCenter: false,
       relation
     }
@@ -620,14 +692,19 @@ const relationGraph = computed<{ nodes: RelationGraphNode[]; edges: RelationGrap
       const dy = y2 - centerY
       const distance = Math.hypot(dx, dy) || 1
       // Palantir 的 link type 是双向的，对象图不画箭头；方向保留在关系详情与列表。
-      const startRatio = 28 / distance
-      const endRatio = (distance - 28) / distance
+      // 节点是矩形，按射线与矩形边界的交点收边，避免线穿进框内。
+      const unitX = dx / distance
+      const unitY = dy / distance
+      const edgeDistance = Math.min(
+        nodeHalfWidth / Math.max(Math.abs(unitX), 1e-6),
+        nodeHalfHeight / Math.max(Math.abs(unitY), 1e-6)
+      )
       return {
         key: `${item.direction}:${item.relation.relation_type_name}:${index}`,
-        x1: centerX + dx * startRatio,
-        y1: centerY + dy * startRatio,
-        x2: centerX + dx * endRatio,
-        y2: centerY + dy * endRatio,
+        x1: centerX + unitX * edgeDistance,
+        y1: centerY + unitY * edgeDistance,
+        x2: x2 - unitX * edgeDistance,
+        y2: y2 - unitY * edgeDistance,
         labelX: centerX + dx * 0.52,
         labelY: centerY + dy * 0.52,
         label: '',
@@ -746,6 +823,11 @@ const objectPreviewLoading = ref(false)
 const objectPreviewError = ref('')
 const objectPreviewData = ref<OntologyObjectInstance | null>(null)
 const objectPreviewType = ref('')
+const linkedPreviewVisible = ref(false)
+const linkedPreviewLoading = ref(false)
+const linkedPreviewError = ref('')
+const linkedPreviewData = ref<OntologyObjectInstance | null>(null)
+const linkedPreviewKey = ref('')
 const statusTarget = ref<OntologyObjectTypeItem | null>(null)
 
 const openCreate = (ontologyId: number | null = null) => {
@@ -1276,9 +1358,6 @@ const onRelationSaved = (objectTypeNames: string[]) => {
               <el-tooltip v-if="selectedObjectStatusMeta" :content="selectedObjectStatusMeta.hint" placement="top">
                 <el-tag size="small" :type="selectedObjectStatusMeta.tagType" effect="plain">{{ selectedObjectStatusMeta.label }}</el-tag>
               </el-tooltip>
-              <el-button size="small" class="ml-auto" @click="openObjectPreview">
-                <i class="fa-solid fa-eye" style="margin-right: 4px; font-size: 10px;"></i>读取对象
-              </el-button>
             </div>
             <div class="mb-3 grid grid-cols-2 gap-x-6 gap-y-1 text-xs text-slate-500">
               <div>本体：<span class="text-slate-700">{{ selectedNode.ontology_label || '-' }}</span></div>
@@ -1288,7 +1367,26 @@ const onRelationSaved = (objectTypeNames: string[]) => {
               <div class="col-span-2">描述：<span class="text-slate-700">{{ selectedNode.description || '-' }}</span></div>
             </div>
             </div>
+            <div class="mb-3 flex items-center gap-1 border-b border-slate-100">
+              <button
+                type="button"
+                class="border-0 bg-transparent px-3 py-2 text-xs"
+                :class="objectDetailView === 'overview' ? 'border-b-2 border-blue-500 font-medium text-blue-600' : 'text-slate-500'"
+                @click="objectDetailView = 'overview'"
+              >
+                Overview
+              </button>
+              <button
+                type="button"
+                class="border-0 bg-transparent px-3 py-2 text-xs"
+                :class="objectDetailView === 'instances' ? 'border-b-2 border-blue-500 font-medium text-blue-600' : 'text-slate-500'"
+                @click="objectDetailView = 'instances'"
+              >
+                对象实例
+              </button>
+            </div>
 
+            <div v-if="objectDetailView === 'overview'">
             <!-- 属性清单 -->
             <div class="mb-1 mt-5 flex items-center gap-2 border-t border-slate-100 pt-4">
               <i class="fa-solid fa-tag text-[10px] text-sky-500"></i>
@@ -1388,20 +1486,22 @@ const onRelationSaved = (objectTypeNames: string[]) => {
                   @click="openGraphRelation(node)"
                 >
                   <title>{{ node.sublabel }}</title>
-                  <circle
-                    :cx="node.x"
-                    :cy="node.y"
-                    :r="node.isCenter ? 27 : 22"
-                    :fill="node.isCenter ? '#3b82f6' : '#f8fafc'"
-                    :stroke="node.isCenter ? '#2563eb' : '#c4b5fd'"
-                    stroke-width="1.5"
+                  <rect
+                    :x="node.x - 88"
+                    :y="node.y - 18"
+                    width="176"
+                    height="36"
+                    rx="5"
+                    :fill="node.isCenter ? '#eff6ff' : '#ffffff'"
+                    :stroke="node.isCenter ? '#3b82f6' : '#dbeafe'"
+                    stroke-width="1.2"
                   />
                   <text
                     :x="node.x"
                     :y="node.y + 4"
                     text-anchor="middle"
-                    :class="node.isCenter ? 'fill-white' : 'fill-slate-700'"
-                    style="font-size: 10px; font-weight: 500"
+                    :class="node.isCenter ? 'fill-blue-700' : 'fill-slate-700'"
+                    style="font-size: 11px; font-weight: 500"
                   >
                     {{ node.label }}
                   </text>
@@ -1464,6 +1564,12 @@ const onRelationSaved = (objectTypeNames: string[]) => {
               </div>
             </div>
             <div v-else class="py-1 text-xs text-slate-400">未绑定语义模型</div>
+            </div>
+            <ObjectInstanceExplorer
+              v-else
+              :object-type="selectedNode.object_type_name"
+              :object-label="selectedNode.display_name || selectedNode.object_type_name"
+            />
             </div>
           </template>
         </template>
@@ -1587,22 +1693,90 @@ const onRelationSaved = (objectTypeNames: string[]) => {
     <OntologyStatusDialog v-model:visible="statusDialogVisible" :object="statusTarget" :object_types="allObjects" @saved="onSaved" />
 
     <!-- 对象实例只读预览：数据库投影，不落对象存储 -->
-    <el-dialog v-model="objectPreviewVisible" title="对象实例预览" width="720px" destroy-on-close>
+    <el-dialog
+      v-model="objectPreviewVisible"
+      title="对象实例预览"
+      width="min(1040px, 96vw)"
+      destroy-on-close
+      @closed="linkedPreviewVisible = false"
+    >
       <div class="mb-2 text-xs text-slate-500">对象类型：{{ objectPreviewType }}</div>
-      <div class="mb-3 flex items-center gap-2">
-        <el-input
-          v-model="objectPreviewKey"
-          size="small"
-          placeholder="请输入对象主键值，如 ORD2024000001"
-          @keyup.enter="loadObjectPreview"
-        />
-        <el-button size="small" type="primary" :loading="objectPreviewLoading" @click="loadObjectPreview">读取</el-button>
-      </div>
       <el-alert v-if="objectPreviewError" :title="objectPreviewError" type="error" :closable="false" show-icon />
-      <div v-else-if="objectPreviewData" class="rounded border border-slate-200 bg-slate-50 p-3">
-        <pre class="max-h-[420px] overflow-auto text-xs leading-5 text-slate-700">{{ JSON.stringify(objectPreviewData, null, 2) }}</pre>
+      <div v-else-if="objectPreviewData" class="flex max-h-[560px] gap-4">
+        <div class="min-w-0 flex-1 overflow-y-auto pr-1">
+        <div class="mb-3 rounded-lg border border-slate-200 bg-white px-3 py-2">
+          <div class="flex items-center gap-2">
+            <span class="font-mono text-xs text-slate-700">{{ objectPreviewData.object_key }}</span>
+            <span v-if="previewTitle" class="text-xs text-slate-500">{{ previewTitle }}</span>
+          </div>
+          <div class="mt-1 text-[11px] text-slate-400">对象类型：{{ objectPreviewData.object_type }}</div>
+        </div>
+
+        <div class="mb-1 text-xs font-medium text-slate-600">属性</div>
+        <el-table :data="previewPropertyRows" size="small" border empty-text="暂无属性">
+          <el-table-column label="属性" min-width="170">
+            <template #default="{ row }">
+              <span class="font-mono text-xs text-slate-700">{{ row.name }}</span>
+              <span v-if="row.label" class="ml-1.5 text-xs text-slate-400">{{ row.label }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="值" min-width="280">
+            <template #default="{ row }">{{ previewValueText(row.value) }}</template>
+          </el-table-column>
+        </el-table>
+
+        <template v-if="objectPreviewLinkGroups.length > 0">
+          <div class="mb-1 mt-3 text-xs font-medium text-slate-600">关联对象</div>
+          <div v-for="group in objectPreviewLinkGroups" :key="group.relationName" class="mb-2 rounded border border-slate-200 bg-white px-3 py-2">
+            <div class="flex items-center gap-2">
+              <span class="text-xs text-slate-700">{{ group.label }}</span>
+              <el-tag size="small" type="info" effect="plain">{{ group.entries.length }}</el-tag>
+              <span class="font-mono text-[10px] text-slate-300">{{ group.relationName }}</span>
+            </div>
+            <div class="mt-1 flex flex-col gap-0.5">
+              <button
+                v-for="(item, index) in group.entries"
+                :key="index"
+                type="button"
+                class="w-full border-0 bg-transparent p-0 text-left font-mono text-[11px] text-slate-500 hover:text-blue-600"
+                @click="openLinkedObjectPreview(item.related_object_key)"
+              >
+                {{ item.related_object_key || '-' }}
+              </button>
+            </div>
+          </div>
+        </template>
+
+        <el-collapse class="mt-3">
+          <el-collapse-item title="原始 JSON" name="raw">
+            <pre class="max-h-[260px] overflow-auto rounded bg-slate-50 p-3 text-xs leading-5 text-slate-600">{{ JSON.stringify(objectPreviewData, null, 2) }}</pre>
+          </el-collapse-item>
+        </el-collapse>
+        </div>
+
+        <aside v-if="linkedPreviewVisible" class="w-[300px] shrink-0 overflow-y-auto border-l border-slate-100 pl-3">
+          <div class="mb-2 flex items-center gap-2">
+            <span class="text-xs font-medium text-slate-600">关联对象</span>
+            <span class="truncate font-mono text-[10px] text-slate-400">{{ linkedPreviewKey }}</span>
+            <el-button link size="small" class="ml-auto" @click="linkedPreviewVisible = false">关闭</el-button>
+          </div>
+          <div v-if="linkedPreviewLoading" class="py-6 text-center text-xs text-slate-400">加载中…</div>
+          <el-alert v-else-if="linkedPreviewError" :title="linkedPreviewError" type="error" :closable="false" show-icon />
+          <template v-else-if="linkedPreviewData">
+            <div class="mb-2 rounded bg-slate-50 px-2 py-1.5">
+              <div class="font-mono text-xs text-slate-700">{{ linkedPreviewData.object_key }}</div>
+              <div class="text-[11px] text-slate-400">{{ linkedPreviewData.object_type }}</div>
+            </div>
+            <div class="flex flex-col gap-1">
+              <div v-for="row in linkedPreviewPropertyRows" :key="row.name" class="rounded border border-slate-100 px-2 py-1">
+                <div class="font-mono text-[11px] text-slate-500">{{ row.name }}</div>
+                <div class="mt-0.5 break-words text-xs text-slate-700">{{ previewValueText(row.value) }}</div>
+              </div>
+            </div>
+          </template>
+        </aside>
       </div>
-      <el-empty v-else description="输入主键后读取对象" :image-size="60" />
+      <el-empty v-else description="请从对象实例列表选择对象" :image-size="60" />
       <template #footer>
         <el-button @click="objectPreviewVisible = false">关闭</el-button>
       </template>
