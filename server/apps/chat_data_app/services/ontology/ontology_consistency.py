@@ -693,7 +693,10 @@ def check_ontology_model_consistency(
     """本体↔语义模型一致性巡检入口（纯函数）。
 
     - ``bundle``：``OntologyDao.load_injection_bundle_async`` 形状
-      （object_types/properties/relation-types/mappings，AI 可见面）；
+      （object_types/properties/relation-types/mappings，AI 可见面）；本体已按
+      Dataset source binding 取数，巡检入口会把 binding 的列映射补进 mappings
+      （无 semantic_config_id），此时只做 Dataset 口径的映射/关系检查；带
+      semantic_config_id 的旧语义模型映射继续兼容；
     - ``configs``：参与比较的语义模型 runtime configs（含 dimensions）；
     - ``config_group_ids``：可选 {semantic_config_id: 数据源组}，供
       ONT_REL_CROSS_SOURCE 判定关系类型 join 可执行性；缺省时该规则整体跳过。

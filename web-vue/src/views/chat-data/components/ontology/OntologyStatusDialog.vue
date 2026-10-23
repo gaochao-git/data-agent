@@ -29,7 +29,7 @@ const deprecationReason = ref('')
 const deprecatedUntil = ref('')
 const successorName = ref('')
 
-const currentStatus = computed(() => props.object?.status || 'draft')
+const currentStatus = computed<OntologyObjectTypeStatus>(() => (props.object?.status as OntologyObjectTypeStatus) || 'draft')
 
 // 候选目标状态：deprecated 终态不可迁移；当前状态除外
 const targetOptions = computed<OntologyObjectTypeStatus[]>(() => {

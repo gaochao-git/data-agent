@@ -413,6 +413,7 @@ def test_relation_cross_model_same_group_is_info():
     assert finding["severity"] == "info"
     assert "customer_has_orders" in finding["message"]
 
+
 # ---------- Dataset source binding（2026-10-23 解耦后）：映射左值=本体属性、右值=Dataset 逻辑列 ----------
 
 

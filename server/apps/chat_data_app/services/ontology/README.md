@@ -79,6 +79,7 @@
 - `deprecated_until` 服务层解析为 datetime（接受 `YYYY-MM-DD HH:MM:SS` / `YYYY-MM-DD`），非法值 40072；本体 API 名限 64 字符（落库列宽）。
 - 关系类型 `from_columns` 必须引用 from 对象类型已定义属性；`to_columns` 必须引用 to 对象类型标识属性；`one_to_one` 两侧都要求引用标识属性（from 侧以标识属性保证唯一性），多对多走 junction 对象类型。
 - 一致性巡检覆盖关系类型 join 可执行性（`ONT_REL_MODEL_PATH_MISSING` / `ONT_REL_CROSS_MODEL` / `ONT_REL_CROSS_SOURCE`），详见 `ontology_consistency.py`。
+- 一致性巡检的映射口径已跟随 Dataset 解耦：巡检 bundle 的 `mappings` 由 `chat_data_ontology_source_binding` 组装（左值=本体属性、右值=Dataset 逻辑列），关系列/属性未映射检查按 Dataset 绑定判定；带 `semantic_config_id` 的旧语义模型映射仍兼容，仅旧数据才会触发模型路径类规则。
 
 ## Action Type 定义层（2026-10-22）
 
