@@ -619,11 +619,9 @@ const relationGraph = computed<{ nodes: RelationGraphNode[]; edges: RelationGrap
       const dx = x2 - centerX
       const dy = y2 - centerY
       const distance = Math.hypot(dx, dy) || 1
-      // Link Type 是有向的：from 是 source，to 是 target。
-      // 当前对象是 source 时箭头指向关联对象；当前对象是 target 时箭头指向中心。
-      const centerIsSource = item.direction === 'from'
-      const startRatio = (centerIsSource ? 28 : distance - 28) / distance
-      const endRatio = (centerIsSource ? distance - 28 : 28) / distance
+      // Palantir 的 link type 是双向的，对象图不画箭头；方向保留在关系详情与列表。
+      const startRatio = 28 / distance
+      const endRatio = (distance - 28) / distance
       return {
         key: `${item.direction}:${item.relation.relation_type_name}:${index}`,
         x1: centerX + dx * startRatio,
@@ -632,7 +630,7 @@ const relationGraph = computed<{ nodes: RelationGraphNode[]; edges: RelationGrap
         y2: centerY + dy * endRatio,
         labelX: centerX + dx * 0.52,
         labelY: centerY + dy * 0.52,
-        label: ((item.direction === 'from' ? item.relation.from_display_name : item.relation.to_display_name) || item.relation.relation_type_name).slice(0, 18),
+        label: '',
         relation: item.relation
       }
     })
@@ -1372,11 +1370,6 @@ const onRelationSaved = (objectTypeNames: string[]) => {
               class="overflow-hidden rounded border border-slate-100 bg-gradient-to-br from-slate-50 to-white"
             >
               <svg viewBox="0 0 640 340" class="h-[300px] w-full" role="img" aria-label="关系类型">
-                <defs>
-                  <marker id="relation-arrow" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
-                    <path d="M0,0 L7,3.5 L0,7 Z" fill="#c4b5fd" />
-                  </marker>
-                </defs>
                 <g v-for="edge in relationGraph.edges" :key="edge.key">
                   <title>{{ edge.relation.from_object_type_name }} → {{ edge.relation.to_object_type_name }} · {{ edge.relation.relation_type_name }}</title>
                   <line
@@ -1385,18 +1378,8 @@ const onRelationSaved = (objectTypeNames: string[]) => {
                     :x2="edge.x2"
                     :y2="edge.y2"
                     stroke="#cbd5e1"
-                    stroke-width="1.5"
-                    marker-end="url(#relation-arrow)"
+                    stroke-width="1.2"
                   />
-                  <text
-                    :x="edge.labelX"
-                    :y="edge.labelY - 4"
-                    text-anchor="middle"
-                    class="fill-slate-500"
-                    style="font-size: 9px"
-                  >
-                    {{ edge.label }}
-                  </text>
                 </g>
                 <g
                   v-for="node in relationGraph.nodes"
