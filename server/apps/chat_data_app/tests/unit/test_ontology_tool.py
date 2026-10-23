@@ -460,6 +460,80 @@ def test_search_around_untranslated_column_marked(monkeypatch):
     assert hop["join"]["unresolved"] is True
 
 
+# ---------- find_objects（对象实例查询） ----------
+
+
+def test_find_objects_payload_registered():
+    payload = ontology_tool.validate_ontology_payload(
+        "find_objects",
+        {
+            "object_type": "shipment",
+            "filters": [{"property": "status", "operator": "eq", "value": "delivered"}],
+            "sort": [{"property": "shipped_at", "direction": "desc"}],
+        },
+    )
+    assert payload.object_type == "shipment"
+    assert payload.filters[0].operator == "eq"
+
+
+def test_find_objects_disabled_by_default(monkeypatch):
+    monkeypatch.delenv("CHAT_DATA_ONTOLOGY_OBJECT_READ_ENABLED", raising=False)
+    with pytest.raises(ValueError, match="CHAT_DATA_ONTOLOGY_OBJECT_READ_ENABLED"):
+        asyncio.run(
+            ontology_tool.create_ontology_tool().ainvoke(
+                {
+                    "action": "find_objects",
+                    "action_payload": {"object_type": "shipment"},
+                    "state": _onto_state(),
+                }
+            )
+        )
+
+
+def test_find_objects_happy_path(monkeypatch):
+    monkeypatch.setenv("CHAT_DATA_ONTOLOGY_OBJECT_READ_ENABLED", "1")
+
+    async def fake_get_object_type(_name):
+        return {"id": 7, "object_type_name": "shipment", "status": "certified"}
+
+    async def fake_search(object_type, **kwargs):
+        assert kwargs["filters"][0]["property"] == "status"
+        return {
+            "objects": [
+                {
+                    "object_type": object_type,
+                    "object_key": "shipment:SHIP000001",
+                    "properties": {"tracking_no": "TRK0000000001", "status": "delivered"},
+                }
+            ],
+            "has_more": False,
+            "limit": 10,
+            "offset": 0,
+            "total": 1,
+            "title_property": "tracking_no",
+            "properties": ["tracking_no", "status"],
+        }
+
+    monkeypatch.setattr(ontology_tool.ontology_service, "get_object_type_async", fake_get_object_type)
+    monkeypatch.setattr(ontology_tool, "search_object_projection", fake_search)
+    raw = asyncio.run(
+        ontology_tool.create_ontology_tool().ainvoke(
+            {
+                "action": "find_objects",
+                "action_payload": {
+                    "object_type": "shipment",
+                    "filters": [{"property": "status", "operator": "eq", "value": "delivered"}],
+                },
+                "state": _onto_state(user_id="u1"),
+            }
+        )
+    )
+    payload = json.loads(raw.replace(RESULT_PREFIX, "", 1))
+    assert payload["success"] is True
+    assert payload["total"] == 1
+    assert payload["objects"][0]["object_key"] == "shipment:SHIP000001"
+
+
 # ---------- get_object（对象实例读取） ----------
 
 

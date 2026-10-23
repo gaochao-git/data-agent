@@ -39,6 +39,7 @@ from apps.chat_data_app.services.ontology.object_projection import (
     ObjectProjectionError,
     ontology_object_read_enabled,
     read_object_projection,
+    search_object_projection,
 )
 from apps.chat_data_app.services.ontology.object_type_locator import (
     build_locator_usage_hint,
@@ -140,6 +141,36 @@ class _GetObjectPayload(BaseModel):
     )
 
 
+class _FindObjectsFilter(BaseModel):
+    """对象查询属性过滤条件；属性必须属于目标对象类型。"""
+
+    property: str = Field(..., min_length=1, max_length=128, description="属性 API 名")
+    operator: Literal["eq", "ne", "contains", "gt", "gte", "lt", "lte", "in"] = Field(
+        default="eq", description="比较操作符"
+    )
+    value: str = Field(default="", max_length=512, description="比较值；in 使用 values")
+    values: list[str] = Field(default_factory=list, description="in 操作符的候选值")
+
+
+class _FindObjectsSort(BaseModel):
+    """对象查询排序项。"""
+
+    property: str = Field(..., min_length=1, max_length=128, description="属性 API 名")
+    direction: Literal["asc", "desc"] = Field(default="asc", description="排序方向")
+
+
+class _FindObjectsPayload(BaseModel):
+    """``find_objects`` 的入参结构：按对象类型查询实例（关键词 + 过滤 + 排序 + 分页）。"""
+
+    object_type: str = Field(..., min_length=1, max_length=128, description='对象类型 API 名，如 "customer"')
+    keyword: str = Field(default="", max_length=200, description="标题键/主键模糊搜索")
+    filters: list[_FindObjectsFilter] = Field(default_factory=list, max_length=10, description="属性过滤")
+    sort: list[_FindObjectsSort] = Field(default_factory=list, max_length=5, description="属性排序")
+    limit: int = Field(default=10, ge=1, le=50, description="返回对象数上限")
+    offset: int = Field(default=0, ge=0, description="偏移量")
+    semantic_config_id: str | None = Field(default=None, description="多映射对象指定语义模型")
+
+
 # action -> action_payload 校验模型。与 data_analyzing_tool 的同名机制一致：
 # 入参校验与 handler 内的解析共用一张表，保证两处口径一致。
 ONTOLOGY_ACTION_PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
@@ -147,13 +178,14 @@ ONTOLOGY_ACTION_PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
     "locate_object_type": _LocateObjectTypePayload,
     "search_around": _SearchAroundPayload,
     "get_object": _GetObjectPayload,
+    "find_objects": _FindObjectsPayload,
 }
 
 
 class OntologyToolInput(BaseModel):
     """本体导航工具入参：按 ``action`` 分派，``action_payload`` 结构随 action 变化。
 
-    四个 action：``list_object_types`` 列出可定位本体对象类型（轻量清单，只读发现通道）、
+    五个 action：``list_object_types`` 列出可定位本体对象类型（轻量清单，只读发现通道）、
     ``locate_object_type`` 按本体对象类型批量定位语义模型（纯导航，不执行查询）、
     ``search_around`` 以单个对象类型为中心沿关系走一跳（返回物理连接列与对端完整定位条目）、
     ``get_object`` 按对象类型 + 主键读取对象属性与一跳 links（只读）。
@@ -162,13 +194,14 @@ class OntologyToolInput(BaseModel):
     模型与用户都看不到原因；在工具函数体内抛错则走 ToolErrorMiddleware，详情完整可见。
     """
 
-    action: Literal["list_object_types", "locate_object_type", "search_around", "get_object"] = Field(
+    action: Literal["list_object_types", "locate_object_type", "search_around", "get_object", "find_objects"] = Field(
         ...,
         description=(
             "操作类型：list_object_types 列出可定位本体对象类型（轻量清单：对象类型名/显示名/描述 + 各自绑定模型，不执行查询）；"
             "locate_object_type 按本体对象类型批量定位语义模型（返回绑定模型/属性→维度对照/对象类型间关系类型，不执行查询）；"
             "search_around 以单个对象类型为中心沿关系走一跳（返回物理连接列与对端对象完整定位条目，不执行查询）；"
-            "get_object 按对象类型 + 主键读取对象属性与一跳 links（只读，不回写）"
+            "get_object 按对象类型 + 主键读取对象属性与一跳 links（只读，不回写）；"
+            "find_objects 按对象类型查询实例（关键词/属性过滤/排序/分页，只读）"
         ),
     )
     action_payload: dict[str, Any] = Field(
@@ -178,7 +211,8 @@ class OntologyToolInput(BaseModel):
             "list_object_types 传 {}；"
             'locate_object_type 传 {"object_types": [<对象类型API名>...], "semantic_config_id": "可选，只看该模型的绑定"}；'
             'search_around 传 {"object_type": "<中心对象类型API名>", "relation": "可选，只展开该关系", "semantic_config_id": "可选"}；'
-            'get_object 传 {"object_type": "<对象类型API名>", "object_key": "<对象主键值>", "semantic_config_id": "可选"}'
+            'get_object 传 {"object_type": "<对象类型API名>", "object_key": "<对象主键值>", "semantic_config_id": "可选"}；'
+            'find_objects 传 {"object_type": "<对象类型API名>", "keyword": "可选", "filters": [{"property": "<属性>", "operator": "eq", "value": "<值>"}], "sort": [{"property": "<属性>", "direction": "asc"}], "limit": 10, "offset": 0}'
         ),
     )
     intent: str = Field(
@@ -378,6 +412,52 @@ async def _run_search_around(
     )
 
 
+async def _ensure_navigable_object_type(object_type_name: str) -> None:
+    detail = await ontology_service.get_object_type_async(object_type_name)
+    if detail is None:
+        raise ValueError(f"本体对象类型不存在: {object_type_name}")
+    if str(detail.get("status") or "") not in {"certified", "experimental"}:
+        raise ValueError(f"对象类型未处于可导航状态（certified/experimental）: {object_type_name}")
+
+
+async def _run_find_objects(
+    *,
+    payload: Any,
+    state: dict | None,
+    bound_user_id: str,
+) -> str:
+    """按对象类型查询实例（``find_objects`` action）：关键词、过滤、排序、分页，只读。"""
+    if not ontology_object_read_enabled():
+        raise ValueError("对象实例读取未启用：需设置环境变量 CHAT_DATA_ONTOLOGY_OBJECT_READ_ENABLED=1")
+    await _ensure_navigable_object_type(payload.object_type)
+    state = state or {}
+    user_id = str(state.get("user_id") or "").strip() or bound_user_id
+    try:
+        data = await search_object_projection(
+            payload.object_type,
+            keyword=payload.keyword,
+            filters=[item.model_dump() for item in payload.filters],
+            sorts=[item.model_dump() for item in payload.sort],
+            limit=payload.limit,
+            offset=payload.offset,
+            semantic_config_id=payload.semantic_config_id,
+            user_id=user_id,
+        )
+    except ObjectProjectionError as err:
+        raise ValueError(str(err)) from err
+    return tool_result_payload(
+        ONTOLOGY_TOOL_NAME,
+        {
+            "success": True,
+            **data,
+            "usage": (
+                "find_objects 返回对象实例清单与 total；单个对象属性用 get_object，"
+                "对象 links 的对端再按 key 调 get_object；聚合统计仍走 execute_query。"
+            ),
+        },
+    )
+
+
 async def _run_get_object(
     *,
     payload: Any,
@@ -389,11 +469,7 @@ async def _run_get_object(
         raise ValueError("对象实例读取未启用：需设置环境变量 CHAT_DATA_ONTOLOGY_OBJECT_READ_ENABLED=1")
     state = state or {}
     user_id = str(state.get("user_id") or "").strip() or bound_user_id
-    detail = await ontology_service.get_object_type_async(payload.object_type)
-    if detail is None:
-        raise ValueError(f"本体对象类型不存在: {payload.object_type}")
-    if str(detail.get("status") or "") not in {"certified", "experimental"}:
-        raise ValueError(f"对象类型未处于可导航状态（certified/experimental）: {payload.object_type}")
+    await _ensure_navigable_object_type(payload.object_type)
     try:
         data = await read_object_projection(
             payload.object_type,
@@ -447,6 +523,12 @@ async def _run_ontology_impl(
             state=state,
             bound_user_id=bound_user_id,
         )
+    if action == "find_objects":
+        return await _run_find_objects(
+            payload=payload,
+            state=state,
+            bound_user_id=bound_user_id,
+        )
     # locate_object_type
     return await _run_locate_object_type(
         payload=payload,
@@ -481,11 +563,13 @@ def create_ontology_tool(
         - locate_object_type: 按本体对象类型批量定位语义模型——返回绑定模型（含快照文件名）、属性→维度对照、对象类型间关系类型与失修标注；纯导航不执行查询，可定位对象类型先用 list_object_types 获取
         - search_around: 以单个对象类型为中心沿关系走一跳——每条关系返回物理连接列（from/to_columns，多模型绑定用 from/to_columns_by_model）与对端对象完整定位条目（属性/绑定/映射，其 relations 只留名字提示下一跳）；跨对象类型关联优先用它拿 join 列，不要靠 grep 模型 YAML 猜
         - get_object: 按对象类型 + 主键读取对象属性与一跳 links（只读；links 是对端对象引用，聚合查询仍走 execute_query）
+        - find_objects: 按对象类型查询实例——关键词、属性过滤、排序、分页，返回对象标题/主键/属性与 total；只读，适合先找到对象再 get_object
             action_payload: 操作参数，结构随 action 变化：
         - list_object_types: {}（无参数，范围=本轮启用语义模型绑定的对象）
         - locate_object_type: {"object_types": [<对象API名>...]（单次最多10个）, "semantic_config_id": 可选只看该模型绑定}
         - search_around: {"object_type": "<中心对象API名>", "relation": 可选只展开该关系名, "semantic_config_id": 可选}
         - get_object: {"object_type": "<对象类型API名>", "object_key": "<对象主键值>", "semantic_config_id": 可选}
+        - find_objects: {"object_type": "<对象类型API名>", "keyword": 可选, "filters": [{"property": "<属性>", "operator": "eq", "value": "<值>"}], "sort": [{"property": "<属性>", "direction": "asc"}], "limit": 10, "offset": 0}
             intent: 一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示。
         """
         return await _run_ontology_impl(

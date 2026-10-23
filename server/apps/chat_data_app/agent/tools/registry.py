@@ -182,11 +182,8 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
 # 当前显式配置为 allow；需要审批时把对应工具改成 "ask"。
 # 新增系统工具若忘记配置，system_tool_approval 默认 ask（fail-closed）。
 SYSTEM_TOOL_APPROVALS: dict[str, str] = {
-    # 中间件动态注入工具：显式 allow，避免 fail-closed 误弹审批。
-    # 例外：write_todos（任务计划）按产品要求 ask——交互会话弹审批卡由用户
-    # 确认任务计划后再写入。无人值守不装配审批中间件，该档位自然不生效
-    # （任务规划直行，纯 state 无副作用）；子图不挂 TodoListMiddleware，无此工具。
-    "write_todos": "ask",
+    # 中间件动态注入工具：统一 allow。write_todos 仅改会话 state，无外部副作用。
+    "write_todos": "allow",
     "task": "allow",
     "mcp_tool_search": "allow",
     "mcp_tool_call": "allow",
