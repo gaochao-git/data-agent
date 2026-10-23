@@ -340,3 +340,11 @@ def test_dataset_service_helpers_cover_short_branches(monkeypatch):
     )
     assert payload["columns"] == []
     assert payload["primary_key"] == ["id"]
+
+
+def test_pipeline_transform_validation_branches():
+    from apps.chat_data_app.services.dataset import pipeline_transforms
+
+    with pytest.raises(pipeline_transforms.TransformError, match="必须是对象"):
+        pipeline_transforms.normalize_transform_config("bad")
+    assert pipeline_transforms._numeric_values([True, None, "3", "bad"]) == [3.0]
