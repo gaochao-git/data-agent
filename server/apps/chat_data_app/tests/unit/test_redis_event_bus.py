@@ -3,6 +3,7 @@ import sys
 from unittest.mock import patch
 
 import pytest
+from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import ResponseError
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
@@ -10,6 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "..
 from apps.chat_data_app.agent.run.redis_event_bus import (
     RedisEventBus,
     RedisRunOwnerMismatchError,
+    _is_stale_transport_error,
     _socket_keepalive_options,
 )
 from utils.crypto import encrypt_password
@@ -39,6 +41,152 @@ class _FakeRedis:
                 ],
             ),
         ]
+
+
+def test_stale_transport_classification_only_matches_closed_transport():
+    assert _is_stale_transport_error(RuntimeError("unable to perform operation on <TCPTransport closed=True>")) is True
+    assert _is_stale_transport_error(RuntimeError("handler is closed")) is True
+    assert _is_stale_transport_error(RuntimeError("real logic error")) is False
+
+
+@pytest.mark.asyncio
+async def test_claim_owner_rebuilds_closed_transport_and_retries(monkeypatch):
+    class StaleRedis:
+        def __init__(self):
+            self.closed = False
+            self.calls = 0
+
+        async def eval(self, *_args, **_kwargs):
+            self.calls += 1
+            raise RuntimeError("unable to perform operation on <TCPTransport closed=True>")
+
+        async def aclose(self):
+            self.closed = True
+            current["client"] = GoodRedis()
+
+    class GoodRedis:
+        async def eval(self, *_args, **_kwargs):
+            return 1
+
+    current = {"client": StaleRedis()}
+    bus = RedisEventBus()
+    bus._redis = current["client"]
+    monkeypatch.setattr(
+        "apps.chat_data_app.agent.run.redis_event_bus.RedisEventBus.redis",
+        property(lambda _self: current["client"]),
+    )
+
+    await bus.claim_run_owner("run-1", "1:token")
+
+    assert current["client"].__class__ is GoodRedis
+    assert bus._redis is None
+
+
+@pytest.mark.asyncio
+async def test_operation_runtime_error_is_not_retried(monkeypatch):
+    class BrokenRedis:
+        async def eval(self, *_args, **_kwargs):
+            raise RuntimeError("real logic error")
+
+    bus = RedisEventBus()
+    bus._redis = BrokenRedis()
+    monkeypatch.setattr(
+        "apps.chat_data_app.agent.run.redis_event_bus.RedisEventBus.redis",
+        property(lambda _self: _self._redis),
+    )
+    with pytest.raises(RuntimeError, match="real logic error"):
+        await bus.claim_run_owner("run-1", "1:token")
+
+
+def test_stale_transport_classification_accepts_redis_connection_error():
+    assert _is_stale_transport_error(RedisConnectionError("connection reset")) is True
+    assert _is_stale_transport_error(ValueError("other")) is False
+
+
+@pytest.mark.asyncio
+async def test_reset_ops_client_ignores_other_and_survives_close_error(monkeypatch):
+    class CloseErrorRedis:
+        async def aclose(self):
+            raise RuntimeError("close failed")
+
+    bus = RedisEventBus()
+    bus._redis = CloseErrorRedis()
+    other = object()
+    await bus._reset_ops_client(other)  # 不是当前客户端：直接返回
+    assert bus._redis is not None
+
+    await bus._reset_ops_client(bus._redis)  # 关闭异常只记录，仍置空
+    assert bus._redis is None
+
+
+@pytest.mark.asyncio
+async def test_read_run_rebuilds_closed_transport_and_retries(monkeypatch):
+    class StaleReadRedis:
+        def __init__(self):
+            self.closed = False
+
+        async def xread(self, *_args, **_kwargs):
+            raise RuntimeError("unable to perform operation on <TCPTransport closed=True>")
+
+        async def aclose(self):
+            self.closed = True
+            current["client"] = GoodReadRedis()
+
+    class GoodReadRedis:
+        async def xread(self, *_args, **_kwargs):
+            return []
+
+    current = {"client": StaleReadRedis()}
+    bus = RedisEventBus()
+    bus._read_redis = current["client"]
+    monkeypatch.setattr(
+        "apps.chat_data_app.agent.run.redis_event_bus.RedisEventBus.read_redis",
+        property(lambda _self: current["client"]),
+    )
+
+    assert await bus.read_run("run-1", "0-0") == []
+    assert current["client"].__class__ is GoodReadRedis
+    assert bus._read_redis is None
+
+
+@pytest.mark.asyncio
+async def test_read_run_does_not_retry_non_transport_error(monkeypatch):
+    class BrokenReadRedis:
+        async def xread(self, *_args, **_kwargs):
+            raise ValueError("bad read")
+
+    bus = RedisEventBus()
+    bus._read_redis = BrokenReadRedis()
+    monkeypatch.setattr(
+        "apps.chat_data_app.agent.run.redis_event_bus.RedisEventBus.read_redis",
+        property(lambda _self: _self._read_redis),
+    )
+    with pytest.raises(ValueError, match="bad read"):
+        await bus.read_run("run-1", "0-0")
+
+
+@pytest.mark.asyncio
+async def test_ops_cover_release_exists_and_latest_id():
+    class OpsRedis:
+        async def eval(self, *_args, **_kwargs):
+            return 1
+
+        async def exists(self, *_args, **_kwargs):
+            return True
+
+        async def xrevrange(self, *_args, **_kwargs):
+            return [("1740000000000-0", {"event_type": "done", "sequence_no": "9"})]
+
+    bus = RedisEventBus()
+    bus._redis = OpsRedis()
+    await bus.release_run_owner("run-1", "1:token")
+    assert await bus.run_stream_exists("run-1") is True
+    assert await bus.latest_run_event_id("run-1") == "1740000000000-0"
+
+
+def test_lazy_client_lock_for_new_instances():
+    bus = RedisEventBus.__new__(RedisEventBus)
+    assert bus._lock() is bus._lock()
 
 
 @pytest.mark.asyncio
