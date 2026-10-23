@@ -512,6 +512,34 @@ class OntologyMappingItem(BaseModel):
     column_mappings: dict[str, str] = Field(default_factory=dict, description="字段映射: {属性API名: 模型维度名}")
 
 
+class OntologyWhere(BaseModel):
+    """对象查询过滤树（对齐 Palantir search/aggregate 共用 where 形状）。
+
+    组节点：and / or / not（children 递归，最多 3 层、50 节点）；
+    叶子节点：eq/ne/contains/gt/gte/lt/lte/in/is_null/is_not_null。
+    """
+
+    operator: Literal[
+        "and",
+        "or",
+        "not",
+        "eq",
+        "ne",
+        "contains",
+        "gt",
+        "gte",
+        "lt",
+        "lte",
+        "in",
+        "is_null",
+        "is_not_null",
+    ] = Field(..., description="组操作符或叶子比较操作符")
+    property: str = Field(default="", max_length=128, description="叶子属性 API 名")
+    value: str = Field(default="", max_length=512, description="叶子比较值")
+    values: list[str] = Field(default_factory=list, max_length=100, description="in 候选值")
+    children: list["OntologyWhere"] = Field(default_factory=list, max_length=50, description="组子条件")
+
+
 class OntologyObjectFilter(BaseModel):
     """对象查询过滤条件；property 必须是对象类型已映射属性。"""
 
@@ -535,7 +563,10 @@ class OntologyObjectSearchRequest(BaseModel):
 
     keyword: str = Field(default="", max_length=200, description="标题键/主键模糊搜索")
     member_datasource_ids: list[str] = Field(default_factory=list, max_length=20, description="执行对象/机构范围")
-    filters: list[OntologyObjectFilter] = Field(default_factory=list, max_length=10, description="属性过滤")
+    filters: list[OntologyObjectFilter] = Field(
+        default_factory=list, max_length=10, description="属性过滤（旧扁平格式）"
+    )
+    where: OntologyWhere | None = Field(default=None, description="过滤树（and/or/not + 比较/isNull），与 filters 叠加")
     sort: list[OntologyObjectSort] = Field(default_factory=list, max_length=5, description="排序")
     limit: int = Field(default=20, ge=1, le=100, description="每页数量")
     offset: int = Field(default=0, ge=0, description="偏移量")

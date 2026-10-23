@@ -157,6 +157,18 @@ class _FindObjectsFilter(BaseModel):
     values: list[str] = Field(default_factory=list, description="in 操作符的候选值")
 
 
+class _OntologyWhere(BaseModel):
+    """对象查询过滤树：and/or/not 组 + 比较/isNull 叶子（与 API where 同形）。"""
+
+    operator: Literal[
+        "and", "or", "not", "eq", "ne", "contains", "gt", "gte", "lt", "lte", "in", "is_null", "is_not_null"
+    ] = Field(..., description="组操作符或叶子比较操作符")
+    property: str = Field(default="", max_length=128, description="叶子属性 API 名")
+    value: str = Field(default="", max_length=512, description="叶子比较值")
+    values: list[str] = Field(default_factory=list, max_length=100, description="in 候选值")
+    children: list[_OntologyWhere] = Field(default_factory=list, max_length=50, description="组子条件")
+
+
 class _FindObjectsSort(BaseModel):
     """对象查询排序项。"""
 
@@ -172,7 +184,10 @@ class _FindObjectsPayload(BaseModel):
         default=None, max_length=20, description="执行对象/机构范围；当前对象查询 MVP 一次只支持一个机构"
     )
     keyword: str = Field(default="", max_length=200, description="标题键/主键模糊搜索")
-    filters: list[_FindObjectsFilter] = Field(default_factory=list, max_length=10, description="属性过滤")
+    filters: list[_FindObjectsFilter] = Field(default_factory=list, max_length=10, description="属性过滤（旧扁平格式）")
+    where: _OntologyWhere | None = Field(
+        default=None, description="过滤树（and/or/not + 比较/isNull），与 filters 叠加"
+    )
     sort: list[_FindObjectsSort] = Field(default_factory=list, max_length=5, description="属性排序")
     limit: int = Field(default=10, ge=1, le=50, description="返回对象数上限")
     offset: int = Field(default=0, ge=0, description="偏移量")
@@ -201,7 +216,10 @@ class _AggregateObjectsPayload(BaseModel):
         max_length=5,
         description="语义层命名指标（原子/派生/复合），需对象类型绑定的 Dataset 已关联语义模型；与 metrics 二选一",
     )
-    filters: list[_FindObjectsFilter] = Field(default_factory=list, max_length=10, description="属性过滤")
+    filters: list[_FindObjectsFilter] = Field(default_factory=list, max_length=10, description="属性过滤（旧扁平格式）")
+    where: _OntologyWhere | None = Field(
+        default=None, description="过滤树（and/or/not + 比较/isNull），与 filters 叠加"
+    )
     keyword: str = Field(default="", max_length=200, description="标题键/主键模糊搜索")
     limit: int = Field(default=100, ge=1, le=200, description="返回分组数上限")
 
@@ -601,6 +619,7 @@ async def _run_find_objects(
                     payload.object_type,
                     keyword=payload.keyword,
                     filters=[item.model_dump() for item in payload.filters],
+                    where=payload.where.model_dump() if payload.where else None,
                     sorts=[item.model_dump() for item in payload.sort],
                     limit=payload.limit,
                     offset=payload.offset,
@@ -657,6 +676,7 @@ async def _run_aggregate_metrics(
             metric_items=resolved["metric_terms"],
             group_by=payload.group_by,
             filters=[*payload.filters, *resolved["metric_filters"]],
+            where=payload.where.model_dump() if payload.where else None,
             keyword=payload.keyword,
             member_datasource_ids=requested_members,
             user_id=user_id,
@@ -791,6 +811,7 @@ async def _run_property_aggregate_objects(
                     group_by=payload.group_by,
                     metrics=[item.model_dump() for item in payload.metrics],
                     filters=[item.model_dump() for item in payload.filters],
+                    where=payload.where.model_dump() if payload.where else None,
                     keyword=payload.keyword,
                     limit=payload.limit,
                     member_datasource_ids=[member_id] if member_id else None,

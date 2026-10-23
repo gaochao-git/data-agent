@@ -994,3 +994,9 @@ ALTER TABLE `chat_data_ontology_property`
 - 派生属性只读：不能通过 Action 修改、不能作为关系关联列、不能作为过滤/排序/聚合字段（P0 明确报错）；
   列表/搜索页返回当前页派生值（逐行计算，分页有界）；过滤/排序已按 LEFT JOIN 下推，
   聚合/分组下推待后续版本。
+
+### 对象查询 where 过滤树（2026-10-24）
+
+新增官方风格 where 树（and/or/not + 比较/isNull，<=3 层、<=50 节点），
+`POST /admin/meta/ontology/object-types/{name}/objects/search` 与 `ontology_tool.find_objects/aggregate_objects`
+均支持 `where`；旧 `filters` 保留兼容并与之 AND 叠加。派生属性在 where 中通过 LEFT JOIN 下推。

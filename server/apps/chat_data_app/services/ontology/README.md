@@ -167,3 +167,16 @@ DDL 见 `next_version.md`「本体 Action Type 定义表」。
 - 未实现：官方 exact/approximate cardinality、collect list/set、approximate percentile；
   官方支持在 filter/sort/aggregate/group by 中使用派生属性，MVP 因缺少批量 SQL 下推而显式拒绝；
 - 官方 ontology-defined 派生属性不支持表达式（runtime-defined 才支持），本实现同样只做链接型推导。
+
+## 对象查询 where 过滤树（2026-10-24）
+
+对象查询与聚合共用官方风格过滤树 `where`（与旧 `filters` 叠加，向后兼容）：
+
+```text
+组：and / or / not（<=3 层、<=50 节点）
+叶子：eq/ne/contains/gt/gte/lt/lte/in/is_null/is_not_null
+```
+
+- API：`OntologyObjectSearchRequest.where`；工具：`find_objects` / `aggregate_objects.where`；
+- 编译：`object_projection._where_condition`，派生属性会编译成 LEFT JOIN 表达式；
+- 注入防护：属性/列白名单、值 `escape_string`，不做任意 SQL 拼接。

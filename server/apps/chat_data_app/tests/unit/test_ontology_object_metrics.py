@@ -269,6 +269,7 @@ def _fake_payload(**overrides):
         object_type="shipment",
         group_by=["carrier"],
         filters=[],
+        where=None,
         keyword="",
         metric_names=["发货单数量"],
     )

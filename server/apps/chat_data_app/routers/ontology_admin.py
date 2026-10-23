@@ -257,6 +257,7 @@ async def search_ontology_objects(
             object_type_name,
             keyword=payload.keyword,
             filters=[item.model_dump() for item in payload.filters],
+            where=payload.where.model_dump() if payload.where else None,
             sorts=[item.model_dump() for item in payload.sort],
             limit=payload.limit,
             offset=payload.offset,

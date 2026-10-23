@@ -767,7 +767,7 @@ def test_resolve_derived_filter_sort_builds_join(monkeypatch):
         return {"relation_type_name": "order_belongs_to_customer"}
 
     def side(_derivation, _relation, _current_id):
-        return {"direction": "to", "related_object_type": "Order"}
+        return {"direction": "to", "related_object_type": "Order", "current_property": "order_id"}
 
     async def context(_derivation, _side, **_kwargs):
         return {"table": "orders", "filter_column": "customer_id", "target_column": "amount"}
@@ -821,7 +821,7 @@ def test_resolve_derived_filter_sort_edge_paths(monkeypatch):
         return {"relation_type_name": "customer_has_orders"}
 
     def side(_derivation, _relation, _current_id):
-        return {"direction": "from", "related_object_type": "Customer"}
+        return {"direction": "from", "related_object_type": "Customer", "current_property": "customer_id"}
 
     async def context(_derivation, _side, **_kwargs):
         return {"table": "customers", "filter_column": "order_id", "target_column": "name"}
@@ -830,6 +830,10 @@ def test_resolve_derived_filter_sort_edge_paths(monkeypatch):
     monkeypatch.setattr(object_projection, "_derived_relation_side", side)
     monkeypatch.setattr(object_projection, "_derived_query_context", context)
     detail = _derived_detail()
+    detail["properties"].insert(0, {"property_name": "customer_id"})
+    detail["mappings"][0]["column_mappings"]["customer_id"] = "customer_id"
+    config = _config()
+    config["dimensions"].append({"name": "customer_id", "table": "orders", "column": "customer_id"})
     detail["properties"][-1]["derivation"] = {
         "kind": "select",
         "relation_type_name": "customer_has_orders",
@@ -838,7 +842,7 @@ def test_resolve_derived_filter_sort_edge_paths(monkeypatch):
     joins, expressions = asyncio.run(
         object_projection._resolve_derived_filter_sort_async(
             detail,
-            _config(),
+            config,
             [{"property": "order_count", "operator": "eq", "value": "1"}],
             [],
             member_id="M1",
@@ -847,6 +851,7 @@ def test_resolve_derived_filter_sort_edge_paths(monkeypatch):
         )
     )
     assert "LEFT JOIN `customers` AS `d0`" in joins[0]
+    assert "`d0`.`order_id` = `orders`.`customer_id`" in joins[0]
     assert expressions["order_count"] == "`d0`.`name`"
 
 
@@ -893,3 +898,73 @@ def test_mapping_for_projection_selects_explicit_config():
         object_projection._mapping_for_projection({"mappings": [selected, {"semantic_config_id": "cfg-b"}]}, "cfg-a")
         == selected
     )
+
+
+def test_where_tree_compiles_and_or_not_and_leaves():
+    from apps.chat_data_app.services.ontology import object_projection
+
+    columns = {"amount": "amount", "order_id": "order_id"}
+    where = {
+        "operator": "and",
+        "children": [
+            {"operator": "eq", "property": "amount", "value": "10"},
+            {"operator": "not", "children": [{"operator": "is_null", "property": "order_id"}]},
+        ],
+    }
+    sql = object_projection._where_condition(where, columns, None)
+    assert "`amount` = '10'" in sql
+    assert "NOT (`order_id` IS NULL)" in sql
+    assert (
+        object_projection._where_condition({"operator": "in", "property": "amount", "values": []}, columns, None)
+        == "1 = 0"
+    )
+    assert object_projection._where_condition(None, columns, None) == ""
+
+
+def test_where_tree_limits_and_errors():
+    from apps.chat_data_app.services.ontology import object_projection
+
+    with pytest.raises(ObjectProjectionError, match="not 必须"):
+        object_projection._where_condition({"operator": "not", "children": []}, {}, None)
+    with pytest.raises(ObjectProjectionError, match="至少需要"):
+        object_projection._where_condition({"operator": "and", "children": []}, {}, None)
+    with pytest.raises(ObjectProjectionError, match="不支持"):
+        object_projection._where_condition({"operator": "nope"}, {}, None)
+    deep = {"operator": "eq", "property": "amount", "value": "1"}
+    for _ in range(4):
+        deep = {"operator": "not", "children": [deep]}
+    with pytest.raises(ObjectProjectionError, match="嵌套"):
+        object_projection._where_condition(deep, {"amount": "amount"}, None)
+    many = {"operator": "and", "children": [{"operator": "eq", "property": "amount", "value": "1"}] * 51}
+    with pytest.raises(ObjectProjectionError, match="节点"):
+        object_projection._where_condition(many, {"amount": "amount"}, None)
+
+
+def test_search_query_uses_where_and_derived_expression():
+    query = build_object_search_query(
+        _derived_detail(),
+        _config(),
+        where={"operator": "eq", "property": "order_count", "value": "1"},
+        derived_joins=[" LEFT JOIN `orders` AS `d0` ON `d0`.`customer_id` = `orders`.`order_id`"],
+        derived_expressions={"order_count": "`d0`.`value`"},
+    )
+    assert "`d0`.`value` = '1'" in query["sql"]
+    assert "`d0`.`value` = '1'" in query["count_sql"]
+
+
+def test_where_property_names_and_derived_target_guards():
+    from apps.chat_data_app.services.ontology import object_projection
+
+    assert object_projection._where_property_names(None) == set()
+    assert object_projection._where_property_names(
+        {"operator": "and", "children": [{"operator": "eq", "property": "a"}, {"operator": "or"}]}
+    ) == {"a"}
+    assert object_projection._where_property_names({"operator": "eq", "property": ""}) == set()
+    assert object_projection._derived_target_column({"target_property": "", "operator": "count"}, {}, {}, "t") == ""
+    with pytest.raises(ObjectProjectionError, match="不在同一张表"):
+        object_projection._derived_target_column(
+            {"target_property": "name"},
+            {"name": "Name"},
+            {"Name": {"table": "other", "column": "name"}},
+            "t",
+        )

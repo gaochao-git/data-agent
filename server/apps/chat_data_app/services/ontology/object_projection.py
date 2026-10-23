@@ -338,6 +338,77 @@ def _search_property_sql(
     raise ObjectProjectionError(f"属性未映射: {property_name or '?'}")
 
 
+_WHERE_GROUP_OPERATORS = {"and", "or", "not"}
+_WHERE_LEAF_OPERATORS = {"eq", "ne", "contains", "gt", "gte", "lt", "lte", "in", "is_null", "is_not_null"}
+_MAX_WHERE_DEPTH = 3
+_MAX_WHERE_NODES = 50
+
+
+def _where_condition(
+    where: dict[str, Any] | None,
+    column_by_property: dict[str, str],
+    derived_expressions: dict[str, str] | None,
+    *,
+    depth: int = 0,
+    counter: list[int] | None = None,
+) -> str:
+    """编译官方风格 where 树（and/or/not + 比较/包含/isNull），最多 3 层。"""
+    if where is None:
+        return ""
+    counter = counter if counter is not None else [0]
+    counter[0] += 1
+    if counter[0] > _MAX_WHERE_NODES:
+        raise ObjectProjectionError(f"where 条件节点不能超过 {_MAX_WHERE_NODES} 个")
+    if depth > _MAX_WHERE_DEPTH:
+        raise ObjectProjectionError(f"where 条件嵌套不能超过 {_MAX_WHERE_DEPTH} 层")
+    operator = _text(where.get("operator")).lower()
+    if operator in _WHERE_GROUP_OPERATORS:
+        return _where_group_condition(
+            operator, where, column_by_property, derived_expressions, depth=depth, counter=counter
+        )
+    return _where_leaf_condition(operator, where, column_by_property, derived_expressions)
+
+
+def _where_group_condition(
+    operator: str,
+    where: dict[str, Any],
+    column_by_property: dict[str, str],
+    derived_expressions: dict[str, str] | None,
+    *,
+    depth: int,
+    counter: list[int],
+) -> str:
+    children = [child for child in where.get("children") or [] if isinstance(child, dict)]
+    if operator == "not" and len(children) != 1:
+        raise ObjectProjectionError("where.not 必须且只能有一个子条件")
+    if operator != "not" and not children:
+        raise ObjectProjectionError(f"where.{operator} 至少需要一个子条件")
+    parts = [
+        _where_condition(child, column_by_property, derived_expressions, depth=depth + 1, counter=counter)
+        for child in children
+    ]
+    parts = [part for part in parts if part]
+    if not parts:
+        return ""
+    if operator == "not":
+        return f"NOT ({parts[0]})"
+    return "(" + f" {operator.upper()} ".join(f"({part})" for part in parts) + ")"
+
+
+def _where_leaf_condition(
+    operator: str,
+    where: dict[str, Any],
+    column_by_property: dict[str, str],
+    derived_expressions: dict[str, str] | None,
+) -> str:
+    if operator not in _WHERE_LEAF_OPERATORS:
+        raise ObjectProjectionError(f"不支持的 where 操作符: {operator or '?'}")
+    column = _search_property_sql(_text(where.get("property")), column_by_property, derived_expressions)
+    if operator in {"is_null", "is_not_null"}:
+        return f"{column} IS {'NOT ' if operator == 'is_not_null' else ''}NULL"
+    return _filter_condition(column, operator, where, _text(where.get("value")))
+
+
 def _object_search_conditions(
     column_by_property: dict[str, str],
     *,
@@ -346,12 +417,16 @@ def _object_search_conditions(
     identifier_column: str,
     filters: list[dict[str, Any]],
     derived_expressions: dict[str, str] | None = None,
+    where: dict[str, Any] | None = None,
 ) -> str:
     """通用对象过滤条件；只接受已映射属性，不拼接任意 SQL。"""
     conditions: list[str] = []
     keyword_condition = _keyword_condition(search_column, identifier_column, keyword)
     if keyword_condition:
         conditions.append(keyword_condition)
+    where_condition = _where_condition(where, column_by_property, derived_expressions)
+    if where_condition:
+        conditions.append(where_condition)
     for item in filters[:_MAX_FILTERS]:
         property_name = _text(item.get("property"))
         operator = _text(item.get("operator")).lower()
@@ -389,6 +464,7 @@ def build_object_search_query(
     limit: int = 20,
     offset: int = 0,
     semantic_config_id: str | None = None,
+    where: dict[str, Any] | None = None,
     derived_joins: list[str] | None = None,
     derived_expressions: dict[str, str] | None = None,
 ) -> dict[str, Any]:
@@ -410,15 +486,16 @@ def build_object_search_query(
     search_property = _title_property_name(properties, identifier_property)
     search_dimension = dimensions.get(_text(column_mappings.get(search_property)))
     search_column = search_dimension["column"] if search_dimension else identifier_meta["column"]
-    where = _object_search_conditions(
+    where_sql_text = _object_search_conditions(
         column_by_property,
         keyword=keyword,
         search_column=search_column,
         identifier_column=identifier_meta["column"],
         filters=filters or [],
         derived_expressions=derived_expressions,
+        where=where,
     )
-    where_sql = f" WHERE {where}" if where else ""
+    where_sql = f" WHERE {where_sql_text}" if where_sql_text else ""
     order_sql = _object_search_order_by(column_by_property, sorts or [], identifier_meta["column"], derived_expressions)
     select_list = ", ".join(f"{_quote_identifier(column)} AS `{property_name}`" for property_name, column in columns)
     from_sql = f"{_quote_identifier(table)}{''.join(derived_joins or [])}"
@@ -545,6 +622,7 @@ def build_object_aggregate_query(
     keyword: str = "",
     limit: int = 100,
     semantic_config_id: str | None = None,
+    where: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """构造对象聚合查询：映射属性 group by + 白名单指标聚合，不拼接任意 SQL。"""
     _reject_derived_property_operations(
@@ -560,14 +638,15 @@ def build_object_aggregate_query(
     select_parts, metric_keys = _aggregate_select_parts(
         group_properties, metric_items, column_by_property, context["value_types"]
     )
-    where = _object_search_conditions(
+    where_sql_text = _object_search_conditions(
         column_by_property,
         keyword=keyword,
         search_column=context["search_column"],
         identifier_column=context["identifier_property"],
         filters=filters or [],
+        where=where,
     )
-    where_sql = f" WHERE {where}" if where else ""
+    where_sql = f" WHERE {where_sql_text}" if where_sql_text else ""
     group_sql, order_sql = _aggregate_group_sql(group_properties, column_by_property)
     sql = (
         f"SELECT {', '.join(select_parts)} FROM {_quote_identifier(context['table'])}"
@@ -1152,7 +1231,9 @@ async def _derived_join_for_property(
     prop: dict[str, Any],
     *,
     index: int,
-    join_key: str,
+    main_table: str,
+    main_column_mappings: dict[str, Any],
+    main_dimensions: dict[str, dict[str, str]],
     relation_cache: dict[str, dict[str, Any]],
     current_id: int,
     member_id: str,
@@ -1167,6 +1248,12 @@ async def _derived_join_for_property(
         relation = await _load_derived_relation(derivation)
         relation_cache[relation_name] = relation
     side = _derived_relation_side(derivation, relation, current_id)
+    current_table, current_column = _derived_physical_column(
+        side["current_property"], main_column_mappings, main_dimensions
+    )
+    if current_table != main_table:
+        raise ObjectProjectionError("派生属性关联列与对象主表不一致，MVP 不支持")
+    join_key = f"{_quote_identifier(main_table)}.{_quote_identifier(current_column)}"
     context = await _derived_query_context(derivation, side, member_id=member_id, user_id=user_id, username=username)
     alias = f"d{index}"
     target_table = _quote_identifier(context["table"])
@@ -1188,6 +1275,19 @@ async def _derived_join_for_property(
     return join, f"`{alias}`.{_quote_identifier(context['target_column'])}"
 
 
+def _where_property_names(where: dict[str, Any] | None) -> set[str]:
+    """收集 where 树引用的属性名。"""
+    if not isinstance(where, dict):
+        return set()
+    if _text(where.get("operator")).lower() in _WHERE_GROUP_OPERATORS:
+        names: set[str] = set()
+        for child in where.get("children") or []:
+            names.update(_where_property_names(child))
+        return names
+    name = _text(where.get("property"))
+    return {name} if name else set()
+
+
 async def _resolve_derived_filter_sort_async(
     detail: dict[str, Any],
     config: dict[str, Any],
@@ -1198,9 +1298,11 @@ async def _resolve_derived_filter_sort_async(
     user_id: str,
     username: str,
     semantic_config_id: str | None = None,
+    where: dict[str, Any] | None = None,
 ) -> tuple[list[str], dict[str, str]]:
-    """把过滤/排序引用的派生属性编译成 LEFT JOIN + 表达式（官方 filter/sort 的 MVP 下推）。"""
+    """把过滤/排序/where 引用的派生属性编译成 LEFT JOIN + 表达式（官方 filter/sort 的 MVP 下推）。"""
     property_names = {_text((item or {}).get("property")) for item in [*filters, *sorts] if isinstance(item, dict)}
+    property_names |= _where_property_names(where)
     derived = {
         _text(prop.get("property_name")): prop
         for prop in detail.get("properties") or []
@@ -1216,11 +1318,6 @@ async def _resolve_derived_filter_sort_async(
     properties = [prop for prop in detail.get("properties") or [] if isinstance(prop, dict)]
     dimensions = _dimension_index(config)
     table, _columns = _projection_columns(properties, column_mappings, dimensions)
-    _identifier_property_name, identifier_dimension = _identifier_property(properties, column_mappings)
-    identifier_meta = dimensions.get(identifier_dimension)
-    if not identifier_meta or identifier_meta["table"] != table:
-        raise ObjectProjectionError("标识属性与普通属性不在同一张表，MVP 暂不支持")
-    join_key = f"{_quote_identifier(table)}.{_quote_identifier(identifier_meta['column'])}"
     current_id = int(detail.get("id") or 0)
     joins: list[str] = []
     expressions: dict[str, str] = {}
@@ -1229,7 +1326,9 @@ async def _resolve_derived_filter_sort_async(
         join, expression = await _derived_join_for_property(
             derived[name],
             index=index,
-            join_key=join_key,
+            main_table=table,
+            main_column_mappings=column_mappings,
+            main_dimensions=dimensions,
             relation_cache=relation_cache,
             current_id=current_id,
             member_id=member_id,
@@ -1313,10 +1412,11 @@ async def search_object_projection(
     limit: int = 20,
     offset: int = 0,
     semantic_config_id: str | None = None,
+    where: dict[str, Any] | None = None,
     user_id: str = "",
     username: str = "",
 ) -> dict[str, Any]:
-    """通用对象查询（只读投影）：关键词、属性过滤、排序、分页和总数。"""
+    """通用对象查询（只读投影）：关键词、where 过滤、排序、分页和总数。"""
     detail = await ontology_service.get_object_type_async(object_type_name)
     if detail is None:
         raise ObjectProjectionError(f"本体对象类型不存在: {object_type_name}")
@@ -1337,6 +1437,7 @@ async def search_object_projection(
         user_id=user_id,
         username=username,
         semantic_config_id=semantic_config_id,
+        where=where,
     )
     query = build_object_search_query(
         query_detail,
@@ -1347,6 +1448,7 @@ async def search_object_projection(
         limit=limit,
         offset=offset,
         semantic_config_id=semantic_config_id,
+        where=where,
         derived_joins=derived_joins,
         derived_expressions=derived_expressions,
     )
@@ -1398,6 +1500,7 @@ async def aggregate_object_projection(
     keyword: str = "",
     limit: int = 100,
     semantic_config_id: str | None = None,
+    where: dict[str, Any] | None = None,
     user_id: str = "",
     username: str = "",
 ) -> dict[str, Any]:
@@ -1421,6 +1524,7 @@ async def aggregate_object_projection(
         keyword=keyword,
         limit=limit,
         semantic_config_id=semantic_config_id,
+        where=where,
     )
     started_at = time.perf_counter()
     rows = await _query_rows(
@@ -1532,6 +1636,7 @@ def build_object_metric_query(
     filters: list[dict[str, Any]] | None = None,
     keyword: str = "",
     limit: int = 100,
+    where: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """按语义指标表达式构造对象作用域聚合查询（只在对象投影表上执行）。"""
     _reject_derived_property_operations(
@@ -1554,14 +1659,15 @@ def build_object_metric_query(
         alias = _metric_alias(item.get("name"), index)
         select_parts.append(f"({expression}) AS `{alias}`")
         metric_keys.append(alias)
-    where = _object_search_conditions(
+    where_sql_text = _object_search_conditions(
         context["column_by_property"],
         keyword=keyword,
         search_column=context["search_column"],
         identifier_column=context["identifier_property"],
         filters=filters or [],
+        where=where,
     )
-    where_sql = f" WHERE {where}" if where else ""
+    where_sql = f" WHERE {where_sql_text}" if where_sql_text else ""
     group_sql, order_sql = _aggregate_group_sql(group_properties, context["column_by_property"])
     sql = (
         f"SELECT {', '.join(select_parts)} FROM {_quote_identifier(context['table'])}"
@@ -1586,6 +1692,7 @@ async def aggregate_metric_projection(
     filters: list[dict[str, Any]] | None = None,
     keyword: str = "",
     member_datasource_ids: list[str] | None = None,
+    where: dict[str, Any] | None = None,
     user_id: str = "",
     username: str = "",
 ) -> dict[str, Any]:
@@ -1606,6 +1713,7 @@ async def aggregate_metric_projection(
         filters=filters,
         keyword=keyword,
         limit=_MAX_AGGREGATE_LIMIT,
+        where=where,
     )
     started_at = time.perf_counter()
     rows = await _query_rows(

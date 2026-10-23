@@ -2349,7 +2349,7 @@
         "description": "通用对象实例查询：关键词 + 属性过滤 + 排序 + 分页。",
         "properties": {
           "filters": {
-            "description": "属性过滤",
+            "description": "属性过滤（旧扁平格式）",
             "items": {
               "$ref": "#/components/schemas/OntologyObjectFilter"
             },
@@ -2408,6 +2408,17 @@
             "maxItems": 5,
             "title": "Sort",
             "type": "array"
+          },
+          "where": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OntologyWhere"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "过滤树（and/or/not + 比较/isNull），与 filters 叠加"
           }
         },
         "title": "OntologyObjectSearchRequest",
@@ -2873,6 +2884,68 @@
           }
         },
         "title": "OntologyUpsertRequest",
+        "type": "object"
+      },
+      "OntologyWhere": {
+        "description": "对象查询过滤树（对齐 Palantir search/aggregate 共用 where 形状）。\n\n组节点：and / or / not（children 递归，最多 3 层、50 节点）；\n叶子节点：eq/ne/contains/gt/gte/lt/lte/in/is_null/is_not_null。",
+        "properties": {
+          "children": {
+            "description": "组子条件",
+            "items": {
+              "$ref": "#/components/schemas/OntologyWhere"
+            },
+            "maxItems": 50,
+            "title": "Children",
+            "type": "array"
+          },
+          "operator": {
+            "description": "组操作符或叶子比较操作符",
+            "enum": [
+              "and",
+              "or",
+              "not",
+              "eq",
+              "ne",
+              "contains",
+              "gt",
+              "gte",
+              "lt",
+              "lte",
+              "in",
+              "is_null",
+              "is_not_null"
+            ],
+            "title": "Operator",
+            "type": "string"
+          },
+          "property": {
+            "default": "",
+            "description": "叶子属性 API 名",
+            "maxLength": 128,
+            "title": "Property",
+            "type": "string"
+          },
+          "value": {
+            "default": "",
+            "description": "叶子比较值",
+            "maxLength": 512,
+            "title": "Value",
+            "type": "string"
+          },
+          "values": {
+            "description": "in 候选值",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 100,
+            "title": "Values",
+            "type": "array"
+          }
+        },
+        "required": [
+          "operator"
+        ],
+        "title": "OntologyWhere",
         "type": "object"
       },
       "PanelBatchExecuteRequest": {
