@@ -905,72 +905,96 @@ onMounted(initialize)
               <el-button size="small" :disabled="Object.keys(exploreNodes).length === 0" @click="clearExploreGraph">清空</el-button>
             </div>
           </div>
-          <div
-            v-if="Object.keys(exploreNodes).length === 0"
-            :class="graphFullscreen ? 'flex min-h-0 flex-1 items-center justify-center text-xs text-slate-400' : 'flex h-[340px] items-center justify-center text-xs text-slate-400'"
-          >
-            从左侧选择一个对象，或点击「重置为当前对象」开始
-          </div>
-          <svg
-            v-else
-            :viewBox="`0 0 ${exploreGraph.width} ${exploreGraph.height}`"
-            :class="graphFullscreen ? 'min-h-0 w-full flex-1' : 'h-[420px] w-full'"
-            role="img"
-            aria-label="对象实例探索图"
-          >
-            <g v-for="edge in exploreGraph.edges" :key="edge.key">
-              <title>{{ edge.relationName }}</title>
-              <line :x1="edge.x1" :y1="edge.y1" :x2="edge.x2" :y2="edge.y2" stroke="#cbd5e1" stroke-width="1.2" />
-            </g>
-            <g
-              v-for="node in exploreGraph.nodes"
-              :key="node.key"
-              class="cursor-move"
-              @mousedown="startExploreNodeDrag($event, node)"
-              @click="openExploreNode(node.key)"
-            >
-              <title>{{ node.key }}</title>
-              <rect
-                :x="node.x - 84"
-                :y="node.y - 16"
-                width="168"
-                height="32"
-                rx="5"
-                :fill="node.key === exploreSelectedKey ? '#eff6ff' : '#ffffff'"
-                :stroke="node.key === exploreSelectedKey ? '#3b82f6' : '#dbeafe'"
-                :stroke-width="node.key === exploreSelectedKey ? 2 : 1.2"
-              />
-              <text
-                :x="node.x"
-                :y="node.y + 4"
-                text-anchor="middle"
-                :class="node.key === exploreSelectedKey ? 'fill-blue-700' : 'fill-slate-700'"
-                style="font-size: 10px; font-weight: 500"
+          <div class="flex min-h-0 gap-2" :class="graphFullscreen ? 'flex-1' : ''">
+            <div class="min-w-0 flex-1">
+              <div
+                v-if="Object.keys(exploreNodes).length === 0"
+                :class="graphFullscreen ? 'flex h-full min-h-[340px] items-center justify-center text-xs text-slate-400' : 'flex h-[420px] items-center justify-center text-xs text-slate-400'"
               >
-                {{ node.label.length > 18 ? `${node.label.slice(0, 17)}…` : node.label }}
-              </text>
-              <g v-if="exploreLoadingKey === node.key">
-                <circle
-                  :cx="node.x - 64"
-                  :cy="node.y"
-                  r="6"
-                  fill="none"
-                  stroke="#3b82f6"
-                  stroke-width="2"
-                  stroke-dasharray="24 12"
+                从左侧选择一个对象，或点击「重置为当前对象」开始
+              </div>
+              <svg
+                v-else
+                :viewBox="`0 0 ${exploreGraph.width} ${exploreGraph.height}`"
+                :class="graphFullscreen ? 'h-full w-full' : 'h-[420px] w-full'"
+                role="img"
+                aria-label="对象实例探索图"
+              >
+                <g v-for="edge in exploreGraph.edges" :key="edge.key">
+                  <title>{{ edge.relationName }}</title>
+                  <line :x1="edge.x1" :y1="edge.y1" :x2="edge.x2" :y2="edge.y2" stroke="#cbd5e1" stroke-width="1.2" />
+                </g>
+                <g
+                  v-for="node in exploreGraph.nodes"
+                  :key="node.key"
+                  class="cursor-move"
+                  @mousedown="startExploreNodeDrag($event, node)"
+                  @click="openExploreNode(node.key)"
                 >
-                  <animateTransform
-                    attributeName="transform"
-                    type="rotate"
-                    :from="`0 ${node.x - 64} ${node.y}`"
-                    :to="`360 ${node.x - 64} ${node.y}`"
-                    dur="0.8s"
-                    repeatCount="indefinite"
+                  <title>{{ node.key }}</title>
+                  <rect
+                    :x="node.x - 84"
+                    :y="node.y - 16"
+                    width="168"
+                    height="32"
+                    rx="5"
+                    :fill="node.key === exploreSelectedKey ? '#eff6ff' : '#ffffff'"
+                    :stroke="node.key === exploreSelectedKey ? '#3b82f6' : '#dbeafe'"
+                    :stroke-width="node.key === exploreSelectedKey ? 2 : 1.2"
                   />
-                </circle>
-              </g>
-            </g>
-          </svg>
+                  <text
+                    :x="node.x"
+                    :y="node.y + 4"
+                    text-anchor="middle"
+                    :class="node.key === exploreSelectedKey ? 'fill-blue-700' : 'fill-slate-700'"
+                    style="font-size: 10px; font-weight: 500"
+                  >
+                    {{ node.label.length > 18 ? `${node.label.slice(0, 17)}…` : node.label }}
+                  </text>
+                  <g v-if="exploreLoadingKey === node.key">
+                    <circle
+                      :cx="node.x - 64"
+                      :cy="node.y"
+                      r="6"
+                      fill="none"
+                      stroke="#3b82f6"
+                      stroke-width="2"
+                      stroke-dasharray="24 12"
+                    >
+                      <animateTransform
+                        attributeName="transform"
+                        type="rotate"
+                        :from="`0 ${node.x - 64} ${node.y}`"
+                        :to="`360 ${node.x - 64} ${node.y}`"
+                        dur="0.8s"
+                        repeatCount="indefinite"
+                      />
+                    </circle>
+                  </g>
+                </g>
+              </svg>
+            </div>
+            <aside
+              v-if="detail"
+              class="w-[250px] shrink-0 overflow-y-auto rounded border border-slate-100 bg-slate-50/50 p-2"
+              :class="graphFullscreen ? 'h-full' : 'max-h-[420px]'"
+            >
+              <div class="mb-1 flex items-center gap-1">
+                <span class="text-[11px] font-medium text-slate-700">选中对象</span>
+                <span class="ml-auto font-mono text-[10px] text-slate-400">{{ detail.object_key }}</span>
+              </div>
+              <div v-if="detailTitle" class="mb-2 text-xs font-medium text-slate-700">{{ detailTitle }}</div>
+              <div class="mb-1 text-[10px] text-slate-400">属性</div>
+              <div v-for="row in detailPropertyRows" :key="row.name" class="border-b border-slate-100 py-1">
+                <div class="flex items-center gap-1">
+                  <span class="font-mono text-[10px] text-slate-600">{{ row.name }}</span>
+                  <span v-if="row.label" class="text-[10px] text-slate-400">{{ row.label }}</span>
+                </div>
+                <div class="break-all text-[11px] text-slate-700">{{ previewValueText(row.value) }}</div>
+              </div>
+              <div v-if="detailPropertyRows.length === 0" class="text-[11px] text-slate-400">暂无属性</div>
+            </aside>
+          </div>
           <div class="mt-1 text-[10px] text-slate-400">
             点击节点切换选中；点击「展开关联」把当前节点的直接关联加入图，继续沿图探索。
           </div>
