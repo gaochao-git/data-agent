@@ -110,9 +110,8 @@ def _render_source_binding(binding: dict[str, Any] | None) -> dict[str, Any]:
 def _render_object_entry(
     obj: dict[str, Any],
     properties: list[dict[str, Any]],
-    metrics: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """单个对象类型 → 目录条目（属性摘要 + Dataset 数据源绑定 + 只读指标引用）。"""
+    """单个对象类型 → 目录条目（属性摘要 + Dataset 数据源绑定）。"""
     entry: dict[str, Any] = {
         "object_type": obj.get("object_type_name"),
         "display_name": obj.get("display_name"),
@@ -124,19 +123,6 @@ def _render_object_entry(
         ],
         "source_binding": _render_source_binding(obj.get("source_binding")),
     }
-    if metrics:
-        # 只暴露引用与可执行性，不复制指标表达式（口径权威在语义层）。
-        entry["metrics"] = [
-            {
-                "name": item.get("name"),
-                "kind": item.get("kind"),
-                "description": item.get("description"),
-                "semantic_config_id": item.get("semantic_config_id"),
-                "executable_in_scope": bool(item.get("executable_in_scope")),
-                "unavailable_reason": item.get("unavailable_reason"),
-            }
-            for item in metrics
-        ]
     return entry
 
 
@@ -236,15 +222,9 @@ def _properties_by_object_type(bundle: dict[str, Any]) -> dict[int, list[dict[st
 def _render_object_entries(
     object_types: list[dict[str, Any]],
     properties_by_object_type: dict[int, list[dict[str, Any]]],
-    metrics_by_object_type: dict[str, list[dict[str, Any]]] | None = None,
 ) -> list[dict[str, Any]]:
-    metrics_map = metrics_by_object_type or {}
     return [
-        _render_object_entry(
-            obj,
-            properties_by_object_type.get(int(obj.get("id") or 0), []),
-            metrics_map.get(_text(obj.get("object_type_name"))),
-        )
+        _render_object_entry(obj, properties_by_object_type.get(int(obj.get("id") or 0), []))
         for obj in object_types
         if isinstance(obj, dict)
     ]
@@ -286,16 +266,11 @@ def _render_action_entries(
 def _render_catalog(
     bundle: dict[str, Any],
     action_types: list[dict[str, Any]] | None = None,
-    metrics_by_object_type: dict[str, list[dict[str, Any]]] | None = None,
 ) -> str:
-    """渲染本体目录 YAML（对象类型 + 数据源绑定 + 关系类型 + Action 定义 + 只读指标引用）。"""
+    """渲染本体目录 YAML（对象类型 + 数据源绑定 + 关系类型 + Action 定义）。"""
     object_types = [obj for obj in bundle.get("object_types") or [] if isinstance(obj, dict)]
     object_types.sort(key=lambda obj: _text(obj.get("object_type_name")))
-    rendered_objects = _render_object_entries(
-        object_types,
-        _properties_by_object_type(bundle),
-        metrics_by_object_type,
-    )
+    rendered_objects = _render_object_entries(object_types, _properties_by_object_type(bundle))
     kept_objects, omitted_objects = _select_objects_within_budget(rendered_objects, _OBJECT_BUDGET_CHARS)
     kept_rows = object_types[: len(kept_objects)]
     kept_ids = {int(obj.get("id") or 0) for obj in kept_rows}
@@ -312,24 +287,6 @@ def _render_catalog(
         payload["truncated"] = True
         payload["omitted_objects"] = omitted_objects
     return yaml.safe_dump(payload, allow_unicode=True, sort_keys=False, width=120)
-
-
-async def _load_object_metrics_map_async(
-    object_type_names: list[str],
-    *,
-    datasource_group_id: str,
-) -> dict[str, list[dict[str, Any]]]:
-    """目录增强：加载对象类型可执行指标清单；失败降级为空，不阻塞目录主体。"""
-    from .object_metrics import load_object_metrics_map_async
-
-    try:
-        return await load_object_metrics_map_async(
-            [name for name in object_type_names if _text(name)],
-            datasource_group_id=datasource_group_id,
-        )
-    except Exception as exc:  # noqa: BLE001 - 指标索引属展示增强
-        logger.warning("加载对象类型指标索引失败（不影响本体目录）: %s", exc)
-        return {}
 
 
 async def _load_action_types_async(object_type_ids: set[int]) -> list[dict[str, Any]]:
@@ -375,15 +332,7 @@ async def materialize_ontology_catalog_async(
             return 0
         object_type_ids = {int(obj.get("id") or 0) for obj in object_types if isinstance(obj, dict)}
         resolved_actions = action_types if action_types is not None else await _load_action_types_async(object_type_ids)
-        metrics_by_object_type = await _load_object_metrics_map_async(
-            [_text(obj.get("object_type_name")) for obj in object_types if isinstance(obj, dict)],
-            datasource_group_id=group_id,
-        )
-        content = _render_catalog(
-            resolved_bundle,
-            resolved_actions,
-            metrics_by_object_type=metrics_by_object_type,
-        )
+        content = _render_catalog(resolved_bundle, resolved_actions)
         catalog_path = str(PurePosixPath(ONTOLOGY_SNAPSHOT_DIR) / ONTOLOGY_CATALOG_FILE_NAME)
         await workspace_runtime.write_internal_text_files([(catalog_path, content)])
         logger.info(
