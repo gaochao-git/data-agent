@@ -425,6 +425,28 @@ async def test_run_ontology_action_type(
         return _error_response(e, "Action Type 试运行失败，请检查参数", ErrorCode.CHATDATA_ONTOLOGY_INVALID)
 
 
+@router.get("/admin/meta/ontology/action-types/{action_type_name}/executions")
+async def list_ontology_action_type_executions(
+    action_type_name: str,
+    request: Request,
+    object_key: str = "",
+    limit: int = 50,
+) -> JSONResponse:
+    """Action Type 执行审计（Observability；按时间倒序）。"""
+    try:
+        _get_current_user(request)
+        data = await _action_type_service.list_executions_async(
+            action_type_name,
+            object_key=object_key,
+            limit=limit,
+        )
+        return business_response(data={"executions": data}, msg="获取成功")
+    except HTTPException:
+        raise
+    except Exception as e:
+        return _error_response(e, "获取 Action 执行记录失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
+
+
 @router.post("/admin/meta/ontology/action-types/{action_type_name}/execute")
 async def execute_ontology_action_type(
     action_type_name: str,

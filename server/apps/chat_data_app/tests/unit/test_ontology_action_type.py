@@ -158,6 +158,10 @@ class _FakeExecutionDao:
     async def append_edit_async(self, **kwargs):
         self.edits.append(kwargs)
 
+    async def list_executions_async(self, *, action_type_name="", object_key="", limit=50):
+        self.list_args = {"action_type_name": action_type_name, "object_key": object_key, "limit": limit}
+        return [{"id": 1, "action_type_name": action_type_name, "object_key": object_key or "ORD2024000001"}]
+
 
 def test_execute_action_writes_overlay_and_execution(monkeypatch):
     from contextlib import asynccontextmanager
@@ -188,6 +192,25 @@ def test_execute_action_writes_overlay_and_execution(monkeypatch):
     assert result["execution"]["id"] == 99
     assert fake_execution.edits[0]["property_name"] == "pay_status"
     assert fake_execution.edits[0]["value"] == "paid"
+
+
+def test_list_executions_returns_audit_rows():
+    fake_execution = _FakeExecutionDao()
+    service = OntologyActionTypeService(_FakeDao(), fake_execution)
+    asyncio.run(service.upsert_action_type_async("update_order_status", _payload()))
+    rows = asyncio.run(service.list_executions_async("update_order_status", object_key="ORD2024000001", limit=20))
+    assert rows[0]["id"] == 1
+    assert fake_execution.list_args == {
+        "action_type_name": "update_order_status",
+        "object_key": "ORD2024000001",
+        "limit": 20,
+    }
+
+
+def test_list_executions_rejects_missing_action_type():
+    service = OntologyActionTypeService(_FakeDao(), _FakeExecutionDao())
+    with pytest.raises(OntologyNotFoundError, match="Action Type 不存在"):
+        asyncio.run(service.list_executions_async("missing"))
 
 
 def test_execute_action_rejects_draft_status(monkeypatch):

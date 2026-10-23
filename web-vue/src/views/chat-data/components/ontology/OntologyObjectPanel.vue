@@ -34,6 +34,7 @@ import type {
   OntologyActionTypeItem
 } from '../../types'
 import ActionTypeAdminPanel from './ActionTypeAdminPanel.vue'
+import ActionTypeView from './ActionTypeView.vue'
 import OntologyConsistencyDialog from './OntologyConsistencyDialog.vue'
 import OntologyForm from './OntologyForm.vue'
 import OntologyObjectForm from './OntologyObjectForm.vue'
@@ -526,7 +527,7 @@ const selectedNode = ref<TreeRow | null>(null)
 const onNodeClick = (data: TreeRow) => {
   // 动作类型是写操作资源：点击直接打开管理弹窗，不占右侧对象详情位
   if (data.kind === 'action_type') {
-    void openActionTypeManager('edit', data.action_type)
+    openActionTypeView(data.action_type)
     return
   }
   // 根/对象子树分组/本体分组/空态占位是导航容器或提示节点，点击不改变右侧详情；
@@ -631,7 +632,7 @@ const relationGraph = computed<{ nodes: RelationGraphNode[]; edges: RelationGrap
         y2: centerY + dy * endRatio,
         labelX: centerX + dx * 0.52,
         labelY: centerY + dy * 0.52,
-        label: item.relation.relation_type_name.length > 18 ? `${item.relation.relation_type_name.slice(0, 17)}…` : item.relation.relation_type_name,
+        label: ((item.direction === 'from' ? item.relation.from_display_name : item.relation.to_display_name) || item.relation.relation_type_name).slice(0, 18),
         relation: item.relation
       }
     })
@@ -665,6 +666,20 @@ const selectedObjectStatusMeta = computed(() => {
 
 const renderHintLabels = (hints: Record<string, boolean>) =>
   ONTOLOGY_RENDER_HINTS.filter(hint => hints[hint.key]).map(hint => hint.label)
+
+const relationVerbalize = (relation: OntologyRelationTypeItem, direction: 'from' | 'to') => {
+  const fromName = objectTypeDisplayOf(relation.from_object_type_name)
+  const toName = objectTypeDisplayOf(relation.to_object_type_name)
+  const pattern = direction === 'from' ? relation.from_verbalize : relation.to_verbalize
+  // 专业模型没有配置自然语言模式串时，仍给出成对方向表达，避免只显示单条 description。
+  if (!pattern) return direction === 'from' ? `${fromName} → ${toName}` : `${toName} → ${fromName}`
+  // 模式串支持 {from}/{to} 以及 {对象类型 API 名}；后者是本体表单默认写法。
+  return pattern
+    .split('{from}').join(fromName)
+    .split('{to}').join(toName)
+    .split(`{${relation.from_object_type_name || ''}}`).join(fromName)
+    .split(`{${relation.to_object_type_name || ''}}`).join(toName)
+}
 
 const mappingMappingText = (mapping: OntologyMappingItem) => {
   const entries = Object.entries(mapping.column_mappings || {})
@@ -990,6 +1005,8 @@ const relationFormRef = ref<InstanceType<typeof OntologyRelationForm> | null>(nu
 // ---------- 动作类型管理（树右键/点击 → 复用 ActionTypeAdminPanel 弹窗） ----------
 
 const actionTypeManagerVisible = ref(false)
+const actionTypeViewVisible = ref(false)
+const actionTypeViewTarget = ref<OntologyActionTypeItem | null>(null)
 const actionTypePanelRef = ref<InstanceType<typeof ActionTypeAdminPanel> | null>(null)
 
 type ActionTypeManagerMode = 'create' | 'edit' | 'test' | 'execute' | 'remove'
@@ -1004,6 +1021,16 @@ const openActionTypeManager = async (mode: ActionTypeManagerMode, item: Ontology
   else if (mode === 'test') actionTypePanelRef.value?.openTest(item)
   else if (mode === 'execute') actionTypePanelRef.value?.openExecute(item)
   else actionTypePanelRef.value?.remove(item)
+}
+
+const openActionTypeView = (item: OntologyActionTypeItem) => {
+  actionTypeViewTarget.value = item
+  actionTypeViewVisible.value = true
+}
+
+const onActionTypeViewEdit = (item: OntologyActionTypeItem) => {
+  actionTypeViewVisible.value = false
+  void openActionTypeManager('edit', item)
 }
 
 const findObjectNode = (objectTypeName: string): ObjectNodeData | null => {
@@ -1098,9 +1125,6 @@ const onRelationSaved = (objectTypeNames: string[]) => {
       </el-button>
       <el-button size="small" @click="consistencyDialogVisible = true">
         <i class="fa-solid fa-stethoscope" style="margin-right: 4px; font-size: 10px;"></i>一致性检查
-      </el-button>
-      <el-button size="small" :disabled="selectedNode?.kind !== 'object_type'" @click="openObjectPreview">
-        <i class="fa-solid fa-eye" style="margin-right: 4px; font-size: 10px;"></i>读取对象
       </el-button>
     </AdminPanelToolbar>
 
@@ -1200,7 +1224,7 @@ const onRelationSaved = (objectTypeNames: string[]) => {
                 <i class="fa-solid fa-tag text-[10px] text-sky-500"></i>
                 <span class="font-mono text-xs text-slate-700">{{ data.property.property_name }}</span>
                 <span class="text-[11px] text-slate-400">{{ data.property.value_type }}</span>
-                <el-tag v-if="data.property.is_identifier" size="small" type="warning" effect="plain">标识</el-tag>
+                <el-tag v-if="data.property.is_identifier" size="small" type="warning" effect="plain">主键</el-tag>
                 <el-tag v-if="data.property.is_title" size="small" type="success" effect="plain">标题</el-tag>
               </span>
               <!-- 关系节点（挂本体下，直接显示两端对象；角色短语/详情在右侧卡片） -->
@@ -1246,23 +1270,29 @@ const onRelationSaved = (objectTypeNames: string[]) => {
             <el-button size="small" type="primary" @click="retrySelectedObject">重试</el-button>
           </div>
           <template v-else-if="selectedObject.entry">
+            <div class="max-w-4xl">
+            <div class="rounded-lg border border-slate-200 bg-white p-4">
             <div class="mb-3 flex items-center gap-2">
               <span class="font-mono text-sm font-medium text-slate-800">{{ selectedNode.object_type_name }}</span>
               <span v-if="selectedNode.display_name" class="text-xs text-slate-500">{{ selectedNode.display_name }}</span>
               <el-tooltip v-if="selectedObjectStatusMeta" :content="selectedObjectStatusMeta.hint" placement="top">
                 <el-tag size="small" :type="selectedObjectStatusMeta.tagType" effect="plain">{{ selectedObjectStatusMeta.label }}</el-tag>
               </el-tooltip>
+              <el-button size="small" class="ml-auto" @click="openObjectPreview">
+                <i class="fa-solid fa-eye" style="margin-right: 4px; font-size: 10px;"></i>读取对象
+              </el-button>
             </div>
             <div class="mb-3 grid grid-cols-2 gap-x-6 gap-y-1 text-xs text-slate-500">
               <div>本体：<span class="text-slate-700">{{ selectedNode.ontology_label || '-' }}</span></div>
               <div>更新时间：<span class="text-slate-700">{{ selectedNode.update_time || '-' }}</span></div>
               <div>修改人员：<span class="text-slate-700">{{ selectedNode.update_by_name || '-' }}</span></div>
-              <div>映射数：<span class="text-slate-700">{{ selectedNode.mappings_count }}</span></div>
+              <div>对象类型 ID：<span class="text-slate-700">{{ selectedObject.entry.detail.id ?? '-' }}</span></div>
               <div class="col-span-2">描述：<span class="text-slate-700">{{ selectedNode.description || '-' }}</span></div>
+            </div>
             </div>
 
             <!-- 属性清单 -->
-            <div class="mb-1 mt-4 flex items-center gap-2">
+            <div class="mb-1 mt-5 flex items-center gap-2 border-t border-slate-100 pt-4">
               <i class="fa-solid fa-tag text-[10px] text-sky-500"></i>
               <span class="text-xs font-medium text-slate-600">属性清单</span>
               <span class="text-xs text-slate-400">{{ (selectedObject.entry.detail.properties || []).length }} 个</span>
@@ -1278,7 +1308,7 @@ const onRelationSaved = (objectTypeNames: string[]) => {
                 <template #default="{ row: prop }">
                   <span class="font-mono text-xs text-slate-800">{{ prop.property_name }}</span>
                   <span v-if="prop.display_name" class="ml-1.5 text-xs text-slate-500">{{ prop.display_name }}</span>
-                  <el-tag v-if="prop.is_identifier" size="small" type="warning" effect="plain" class="ml-1">标识</el-tag>
+                  <el-tag v-if="prop.is_identifier" size="small" type="warning" effect="plain" class="ml-1">主键</el-tag>
                   <el-tag v-if="prop.is_title" size="small" type="success" effect="plain" class="ml-1">标题</el-tag>
                 </template>
               </el-table-column>
@@ -1296,7 +1326,7 @@ const onRelationSaved = (objectTypeNames: string[]) => {
             <div v-else class="py-1 text-xs text-slate-400">暂无属性</div>
 
             <!-- 动作类型（Object type view · Action types） -->
-            <div class="mb-1 mt-4 flex items-center gap-2">
+            <div class="mb-1 mt-5 flex items-center gap-2 border-t border-slate-100 pt-4">
               <i class="fa-solid fa-bolt text-[10px] text-amber-500"></i>
               <span class="text-xs font-medium text-slate-600">动作类型</span>
               <span class="text-xs text-slate-400">{{ (selectedObject.entry.actionTypes || []).length }} 个</span>
@@ -1313,24 +1343,27 @@ const onRelationSaved = (objectTypeNames: string[]) => {
                     {{ action.status }}
                   </el-tag>
                   <span class="text-[11px] text-slate-400">{{ (action.parameters || []).length }} 个参数 · {{ (action.edits || []).length }} 条编辑</span>
-                  <el-button link size="small" type="primary" class="ml-auto" @click="openActionTypeManager('edit', action)">管理</el-button>
+                  <el-button link size="small" type="primary" class="ml-auto" @click="openActionTypeView(action)">查看</el-button>
                 </div>
                 <div v-if="action.display_name || action.description" class="mt-0.5 text-[11px] text-slate-500">
                   {{ action.display_name || action.description }}
                 </div>
               </div>
             </div>
-            <div v-else class="py-1 text-xs text-slate-400">暂无动作类型</div>
+            <div v-else class="rounded border border-dashed border-slate-200 bg-slate-50/50 px-3 py-3 text-xs text-slate-400">
+              暂无动作类型；可在左侧「动作类型」分组右键新建。
+            </div>
 
             <!-- 参与关系 -->
-            <div class="mb-1 mt-4 flex items-center gap-2">
+            <template v-if="selectedObject.entry.fromRelations.length + selectedObject.entry.toRelations.length > 0">
+            <div class="mb-1 mt-5 flex items-center gap-2 border-t border-slate-100 pt-4">
               <i class="fa-solid fa-circle-nodes text-[10px] text-violet-500"></i>
-              <span class="text-xs font-medium text-slate-600">关系类型图谱</span>
+              <span class="text-xs font-medium text-slate-600">关系类型</span>
               <span class="text-xs text-slate-400">
                 {{ selectedObject.entry.fromRelations.length + selectedObject.entry.toRelations.length }} 条
               </span>
               <el-radio-group v-model="relationViewMode" size="small" class="ml-auto">
-                <el-radio-button value="graph">图谱</el-radio-button>
+                <el-radio-button value="graph">图形</el-radio-button>
                 <el-radio-button value="list">列表</el-radio-button>
               </el-radio-group>
             </div>
@@ -1338,7 +1371,7 @@ const onRelationSaved = (objectTypeNames: string[]) => {
               v-if="selectedObject.entry.fromRelations.length + selectedObject.entry.toRelations.length > 0 && relationViewMode === 'graph'"
               class="overflow-hidden rounded border border-slate-100 bg-gradient-to-br from-slate-50 to-white"
             >
-              <svg viewBox="0 0 640 340" class="h-[300px] w-full" role="img" aria-label="关系类型图谱">
+              <svg viewBox="0 0 640 340" class="h-[300px] w-full" role="img" aria-label="关系类型">
                 <defs>
                   <marker id="relation-arrow" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
                     <path d="M0,0 L7,3.5 L0,7 Z" fill="#c4b5fd" />
@@ -1392,7 +1425,7 @@ const onRelationSaved = (objectTypeNames: string[]) => {
                 </g>
               </svg>
               <div v-if="relationGraph.nodes.length - 1 > 12" class="border-t border-slate-100 px-3 py-1.5 text-[11px] text-slate-400">
-                图谱仅展示前 12 个关联对象类型，完整关系请切换列表查看。
+                图形仅展示前 12 个关联对象类型，完整关系请切换列表查看。
               </div>
             </div>
             <div
@@ -1405,24 +1438,31 @@ const onRelationSaved = (objectTypeNames: string[]) => {
                 class="rounded border border-slate-100 bg-slate-50/60 px-2 py-1.5"
               >
                 <div class="flex items-center gap-2">
-                  <el-tag size="small" :type="rel.direction === 'from' ? 'primary' : 'info'" effect="plain">
-                    {{ rel.direction === 'from' ? '发起' : '参与' }}
-                  </el-tag>
                   <span class="font-mono text-xs text-slate-700">{{ rel.relation.relation_type_name }}</span>
                   <span class="text-xs text-slate-500">
                     {{ rel.direction === 'from'
-                      ? `→ ${rel.relation.to_display_name || rel.relation.to_object_type_name || '-'}`
-                      : `← ${rel.relation.from_display_name || rel.relation.from_object_type_name || '-'}` }}
+                      ? `→ ${rel.relation.from_display_name || rel.relation.to_object_type_name || '-'}`
+                      : `← ${rel.relation.to_display_name || rel.relation.from_object_type_name || '-'}` }}
                   </span>
                   <span class="text-[11px] text-slate-400">{{ ONTOLOGY_MULTIPLICITY_META[rel.relation.multiplicity] || rel.relation.multiplicity }}</span>
                 </div>
-                <div v-if="rel.relation.description" class="mt-0.5 text-[11px] text-slate-500">{{ rel.relation.description }}</div>
+                <div class="mt-1 flex flex-col gap-0.5 text-[11px] text-slate-500">
+                  <div v-if="relationVerbalize(rel.relation, 'from')">
+                    <span class="text-slate-400">正向：</span>{{ relationVerbalize(rel.relation, 'from') }}
+                  </div>
+                  <div v-if="relationVerbalize(rel.relation, 'to')">
+                    <span class="text-slate-400">反向：</span>{{ relationVerbalize(rel.relation, 'to') }}
+                  </div>
+                  <div v-if="!relationVerbalize(rel.relation, 'from') && !relationVerbalize(rel.relation, 'to') && rel.relation.description">
+                    {{ rel.relation.description }}
+                  </div>
+                </div>
               </div>
             </div>
-            <div v-else class="py-1 text-xs text-slate-400">未参与任何关系</div>
+            </template>
 
             <!-- 映射摘要 -->
-            <div class="mb-1 mt-4 flex items-center gap-2">
+            <div class="mb-1 mt-5 flex items-center gap-2 border-t border-slate-100 pt-4">
               <i class="fa-solid fa-link text-[10px] text-teal-500"></i>
               <span class="text-xs font-medium text-slate-600">数据映射</span>
               <span class="text-xs text-slate-400">{{ (selectedObject.entry.detail.mappings || []).length }} 条</span>
@@ -1441,6 +1481,7 @@ const onRelationSaved = (objectTypeNames: string[]) => {
               </div>
             </div>
             <div v-else class="py-1 text-xs text-slate-400">未绑定语义模型</div>
+            </div>
           </template>
         </template>
 
@@ -1476,7 +1517,7 @@ const onRelationSaved = (objectTypeNames: string[]) => {
             <i class="fa-solid fa-tag text-[11px] text-sky-500"></i>
             <span class="font-mono text-sm font-medium text-slate-800">{{ selectedNode.property.property_name }}</span>
             <span v-if="selectedNode.property.display_name" class="text-xs text-slate-500">{{ selectedNode.property.display_name }}</span>
-            <el-tag v-if="selectedNode.property.is_identifier" size="small" type="warning" effect="plain">标识属性</el-tag>
+            <el-tag v-if="selectedNode.property.is_identifier" size="small" type="warning" effect="plain">主键属性</el-tag>
             <el-tag v-if="selectedNode.property.is_title" size="small" type="success" effect="plain">标题属性</el-tag>
           </div>
           <div class="grid grid-cols-2 gap-x-6 gap-y-1 text-xs text-slate-500">
@@ -1510,8 +1551,14 @@ const onRelationSaved = (objectTypeNames: string[]) => {
             <div class="col-span-2">发起列：<span class="font-mono text-slate-700">{{ selectedNode.relation.from_columns.join('、') || '-' }}</span></div>
             <div class="col-span-2">目标列：<span class="font-mono text-slate-700">{{ selectedNode.relation.to_columns.join('、') || '-' }}</span></div>
             <div class="col-span-2">
-              导航名：<span class="text-slate-700">正向「{{ selectedNode.relation.to_display_name || '-' }}」；反向「{{ selectedNode.relation.from_display_name || '-' }}」</span>
-              <span class="text-[11px] text-slate-300">（图谱边 label 取正向）</span>
+              导航名：<span class="text-slate-700">正向「{{ selectedNode.relation.from_display_name || '-' }}」；反向「{{ selectedNode.relation.to_display_name || '-' }}」</span>
+              <span class="text-[11px] text-slate-300">（镜像 Palantir 的 link type 两侧 display name）</span>
+            </div>
+            <div v-if="relationVerbalize(selectedNode.relation, 'from')" class="col-span-2">
+              正向表达：<span class="text-slate-700">{{ relationVerbalize(selectedNode.relation, 'from') }}</span>
+            </div>
+            <div v-if="relationVerbalize(selectedNode.relation, 'to')" class="col-span-2">
+              反向表达：<span class="text-slate-700">{{ relationVerbalize(selectedNode.relation, 'to') }}</span>
             </div>
             <div class="col-span-2">描述：<span class="text-slate-700">{{ selectedNode.relation.description || '-' }}</span></div>
           </div>
@@ -1577,6 +1624,13 @@ const onRelationSaved = (objectTypeNames: string[]) => {
         <el-button @click="objectPreviewVisible = false">关闭</el-button>
       </template>
     </el-dialog>
+
+    <!-- 单 Action Type 视图：Overview / Logic / Observability -->
+    <ActionTypeView
+      v-model:visible="actionTypeViewVisible"
+      :action-type="actionTypeViewTarget"
+      @edit="onActionTypeViewEdit"
+    />
 
     <!-- 动作类型管理：从树分组/节点打开，复用 ActionTypeAdminPanel 定义/试运行/执行 -->
     <el-dialog v-model="actionTypeManagerVisible" title="动作类型" width="min(1100px, 94vw)" destroy-on-close>

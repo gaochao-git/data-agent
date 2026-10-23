@@ -372,6 +372,23 @@ class OntologyActionTypeService:
             "edits": edits,
         }
 
+    async def list_executions_async(
+        self,
+        name: str,
+        *,
+        object_key: str = "",
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """读取 Action Type 执行审计（不含定义修改；按 id 倒序）。"""
+        item = await self.get_action_type_async(name)
+        if item is None:
+            raise OntologyNotFoundError(f"Action Type 不存在: {name}")
+        return await self._execution_dao.list_executions_async(
+            action_type_name=name,
+            object_key=object_key,
+            limit=limit,
+        )
+
     async def test_run_action_type_async(self, name: str, parameters: dict[str, Any]) -> dict[str, Any]:
         item = await self.get_action_type_async(name)
         if item is None:

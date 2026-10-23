@@ -7429,6 +7429,74 @@
         ]
       }
     },
+    "/api/chatdata/admin/meta/ontology/action-types/{action_type_name}/executions": {
+      "get": {
+        "description": "Action Type 执行审计（Observability；按时间倒序）。",
+        "operationId": "list_ontology_action_type_executions_api_chatdata_admin_meta_ontology_action_types__action_type_name__executions_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "action_type_name",
+            "required": true,
+            "schema": {
+              "title": "Action Type Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "object_key",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Object Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "List Ontology Action Type Executions",
+        "tags": [
+          "ChatData 本体管理（Admin）"
+        ]
+      }
+    },
     "/api/chatdata/admin/meta/ontology/action-types/{action_type_name}/test-run": {
       "post": {
         "description": "试运行 Action Type：只校验参数并解析编辑，不写对象。",

@@ -36,6 +36,7 @@ import type {
   MetaGlobalEnum,
   MetaGlobalEnumRef,
   MetaGlobalEnumValueItem,
+  OntologyActionExecutionItem,
   OntologyActionTypeItem,
   OntologyActionTypePayload,
   OntologyActionTypeTestRunResult,
@@ -2209,6 +2210,19 @@ export function testRunAdminOntologyActionType(
     url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/action-types/${encodeURIComponent(name)}/test-run`,
     method: 'post',
     data: { parameters }
+  })
+}
+
+/** 后台：Action Type 执行审计（Observability） */
+export function getAdminOntologyActionTypeExecutions(
+  name: string,
+  objectKey = '',
+  limit = 50
+): Promise<ApiResponse<{ executions: OntologyActionExecutionItem[] }>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/action-types/${encodeURIComponent(name)}/executions`,
+    method: 'get',
+    params: { object_key: objectKey || undefined, limit }
   })
 }
 

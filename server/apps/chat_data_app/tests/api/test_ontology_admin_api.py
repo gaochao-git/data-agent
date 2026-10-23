@@ -196,6 +196,9 @@ def test_action_type_crud_and_test_run_contract(client, auth_headers, monkeypatc
         async def test_run_action_type_async(self, name, parameters):
             return {"action_type_name": name, "parameters": parameters, "edits": [], "executed": False}
 
+        async def list_executions_async(self, name, *, object_key="", limit=50):
+            return [{"id": 7, "action_type_name": name, "object_key": object_key or "ORD2024000001"}]
+
         async def execute_action_type_async(self, name, *, object_key, parameters, **kwargs):
             return {
                 "execution": {"id": 99, "action_type_name": name, "object_key": object_key},
@@ -216,6 +219,12 @@ def test_action_type_crud_and_test_run_contract(client, auth_headers, monkeypatc
 
     detail = client.get(f"{_ACTION_BASE}/update_order_status", headers=auth_headers)
     assert detail.json()["data"]["display_name"] == "更新订单状态"
+
+    execution_list = client.get(
+        f"{_ACTION_BASE}/update_order_status/executions",
+        headers=auth_headers,
+    )
+    assert execution_list.json()["data"]["executions"][0]["id"] == 7
 
     test_run = client.post(
         f"{_ACTION_BASE}/update_order_status/test-run",

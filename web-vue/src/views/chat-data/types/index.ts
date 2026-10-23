@@ -1057,6 +1057,20 @@ export interface OntologyActionTypePayload {
   allow_overwrite?: boolean
 }
 
+export interface OntologyActionExecutionItem {
+  id: number
+  action_type_name: string
+  object_type_id: number
+  object_key: string
+  parameters: Record<string, unknown>
+  edits: Array<Record<string, unknown>>
+  status: 'succeeded' | 'failed' | string
+  error_message: string
+  create_time: string
+  create_by: string
+  create_by_name: string
+}
+
 export interface OntologyActionTypeTestRunResult {
   action_type_name: string
   object_type_name: string
