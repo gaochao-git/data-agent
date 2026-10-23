@@ -187,6 +187,7 @@ const exploreEdges = ref<Record<string, ExploreEdge>>({})
 const exploreSelectedKey = ref('')
 const seedAfterLoad = ref(false)
 const graphFullscreen = ref(false)
+const showGraphProperties = ref(false)
 const exploreNodeOffsets = ref<Record<string, { x: number; y: number }>>({})
 const draggingExploreKey = ref('')
 const exploreLoadingKey = ref('')
@@ -896,6 +897,10 @@ onMounted(initialize)
             </span>
             <span v-if="exploreSelectedKey" class="font-mono text-[11px] text-slate-500">{{ exploreSelectedKey }}</span>
             <div class="ml-auto flex items-center gap-1">
+              <el-button size="small" @click="showGraphProperties = !showGraphProperties">
+                <i class="fa-solid fa-table-columns mr-1 text-[10px]"></i>
+                {{ showGraphProperties ? '隐藏属性' : '显示属性' }}
+              </el-button>
               <el-button size="small" @click="graphFullscreen = !graphFullscreen">
                 <i :class="['fa-solid mr-1 text-[10px]', graphFullscreen ? 'fa-compress' : 'fa-expand']"></i>
                 {{ graphFullscreen ? '退出全屏' : '全屏' }}
@@ -975,7 +980,7 @@ onMounted(initialize)
               </svg>
             </div>
             <aside
-              v-if="detail"
+              v-if="detail && showGraphProperties"
               class="w-[250px] shrink-0 overflow-y-auto rounded border border-slate-100 bg-slate-50/50 p-2"
               :class="graphFullscreen ? 'h-full' : 'max-h-[420px]'"
             >
