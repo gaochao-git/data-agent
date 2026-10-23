@@ -13,13 +13,11 @@ from ..schema import (
     DatasetBootstrapRequest,
     DatasetBranchCreateRequest,
     DatasetPipelineUpsertRequest,
-    DatasetSemanticLinkUpsertRequest,
     DatasetUpsertRequest,
 )
 from ..services.dataset.dataset_semantic_link_service import (
     DatasetSemanticLinkInvalidError,
     DatasetSemanticLinkNotFoundError,
-    dataset_semantic_link_service,
 )
 from ..services.dataset.dataset_service import (
     DatasetAlreadyExistsError,
@@ -226,65 +224,3 @@ async def get_pipeline_run(run_id: str, request: Request) -> JSONResponse:
         return business_response(data=await dataset_pipeline_service.get_run_async(run_id), msg="获取成功")
     except Exception as error:
         return _error_response(error, "获取 Pipeline 运行详情失败")
-
-
-@router.get("/admin/meta/datasets/{dataset_name}/semantic-links")
-async def list_dataset_semantic_links(
-    dataset_name: str,
-    request: Request,
-    datasource_group_id: str | None = Query(default=None, description="按数据源组筛选"),
-) -> JSONResponse:
-    """Dataset ↔ 语义模型关联列表（只存引用与列对照，指标口径在语义层）。"""
-    _get_current_user(request)
-    try:
-        data = await dataset_semantic_link_service.list_links_async(
-            dataset_name,
-            datasource_group_id=datasource_group_id,
-        )
-        return business_response(data={"links": data}, msg="获取成功")
-    except Exception as error:
-        return _error_response(error, "获取 Dataset 语义模型关联失败")
-
-
-@router.put("/admin/meta/datasets/{dataset_name}/semantic-links/{semantic_config_id}")
-async def upsert_dataset_semantic_link(
-    dataset_name: str,
-    semantic_config_id: str,
-    body: DatasetSemanticLinkUpsertRequest,
-    request: Request,
-) -> JSONResponse:
-    """创建/更新 Dataset ↔ 语义模型关联；保存前校验 Dataset 列、语义维度、指标与物理表。"""
-    user = _get_current_user(request)
-    try:
-        data = await dataset_semantic_link_service.upsert_link_async(
-            dataset_name,
-            semantic_config_id,
-            body.model_dump(),
-            operator=str(getattr(user, "user_id", "") or ""),
-            operator_name=str(getattr(user, "username", "") or ""),
-        )
-        return business_response(data=data, msg="保存成功")
-    except Exception as error:
-        return _error_response(error, "保存 Dataset 语义模型关联失败")
-
-
-@router.delete("/admin/meta/datasets/{dataset_name}/semantic-links/{semantic_config_id}")
-async def delete_dataset_semantic_link(
-    dataset_name: str,
-    semantic_config_id: str,
-    request: Request,
-    datasource_group_id: str | None = Query(default=None, description="按数据源组限定"),
-) -> JSONResponse:
-    """删除 Dataset ↔ 语义模型关联（软删）。"""
-    user = _get_current_user(request)
-    try:
-        await dataset_semantic_link_service.delete_link_async(
-            dataset_name,
-            semantic_config_id,
-            datasource_group_id=datasource_group_id,
-            operator=str(getattr(user, "user_id", "") or ""),
-            operator_name=str(getattr(user, "username", "") or ""),
-        )
-        return business_response(data={"semantic_config_id": semantic_config_id}, msg="删除成功")
-    except Exception as error:
-        return _error_response(error, "删除 Dataset 语义模型关联失败")

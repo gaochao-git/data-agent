@@ -40,7 +40,6 @@ from ..services.ontology import (
 from ..services.ontology.action_type_service import OntologyActionTypeService
 from ..services.ontology.object_metrics import (
     ObjectMetricError,
-    list_object_metrics_async,
 )
 from ..services.ontology.object_projection import (
     ObjectProjectionError,
@@ -183,28 +182,6 @@ async def get_ontology_object_type(object_type_name: str, request: Request) -> J
         raise
     except Exception as e:
         return _error_response(e, "获取本体对象类型详情失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
-
-
-@router.get("/admin/meta/ontology/object-types/{object_type_name}/metrics")
-async def list_ontology_object_metrics(
-    object_type_name: str,
-    request: Request,
-    datasource_group_id: str | None = Query(default=None, description="按数据源组筛选"),
-    member_datasource_ids: list[str] | None = Query(default=None, description="按 member 数据源筛选"),
-) -> JSONResponse:
-    """对象类型可执行的语义指标清单（只读引用；口径定义仍在语义层）。"""
-    try:
-        _get_current_user(request)
-        data = await list_object_metrics_async(
-            object_type_name,
-            datasource_group_id=datasource_group_id or "",
-            member_datasource_ids=member_datasource_ids,
-        )
-        return business_response(data=data, msg="获取成功")
-    except HTTPException:
-        raise
-    except Exception as e:
-        return _error_response(e, "获取对象类型指标清单失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
 
 
 @router.get("/admin/meta/ontology/object-types/{object_type_name}/objects")

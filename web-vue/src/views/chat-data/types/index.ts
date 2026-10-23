@@ -1093,51 +1093,6 @@ export interface OntologyObjectListItem {
   properties: Record<string, unknown>
 }
 
-/** 对象类型可执行的语义指标（只读引用；口径定义在语义层）。 */
-export interface OntologyObjectMetricItem {
-  name: string
-  kind: 'atomic' | 'derived' | 'composite'
-  description: string
-  semantic_config_id: string
-  semantic_config_name: string
-  table: string
-  executable_in_scope: boolean
-  unavailable_reason: string
-}
-
-/** Dataset ↔ 语义模型关联（只存引用与列对照，指标口径在语义层）。 */
-export interface DatasetSemanticLinkItem {
-  id: number
-  dataset_id: number
-  dataset_name: string
-  semantic_config_id: string
-  semantic_config_name: string
-  datasource_group_id: string
-  table_name: string
-  column_mappings: Record<string, string>
-  metric_scope: string[]
-  metric_count?: number
-  lifecycle_status: 'draft' | 'active'
-  create_by_name?: string
-  update_time?: string
-}
-
-export interface DatasetSemanticLinkUpsertPayload {
-  datasource_group_id: string
-  table_name: string
-  column_mappings?: Record<string, string>
-  metric_scope?: string[]
-  lifecycle_status?: 'draft' | 'active'
-}
-
-export interface OntologyObjectMetricsResult {
-  object_type: string
-  dataset_name: string
-  datasource_group_id: string
-  reason: string
-  metrics: OntologyObjectMetricItem[]
-}
-
 export type OntologyObjectFilterOperator = 'eq' | 'ne' | 'contains' | 'gt' | 'gte' | 'lt' | 'lte' | 'in'
 
 export interface OntologyObjectFilter {
