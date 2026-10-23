@@ -792,3 +792,12 @@ CREATE TABLE `chat_data_ontology_source_binding` (
   KEY `idx_source_binding_dataset` (`dataset_id`, `delete_flag`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ChatData对象类型数据源绑定';
 ```
+
+### 对象类型语义映射表下线（2026-10-23）
+
+对象类型取数已统一迁移到 Logical Dataset source binding，`chat_data_ontology_mapping`
+不再读写。存量环境执行：
+
+```sql
+DROP TABLE IF EXISTS `chat_data_ontology_mapping`;
+```

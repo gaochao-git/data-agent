@@ -525,9 +525,6 @@ class OntologyObjectTypeUpsertRequest(BaseModel):
     description: str = Field(default="", max_length=1024, description="对象类型描述")
     ontology_id: int | None = Field(default=None, description="本体ID（纯导航归属），缺省=未挂本体")
     properties: list[OntologyPropertyItem] = Field(..., min_length=1, description="属性集（整体提交）")
-    mappings: list[OntologyMappingItem] = Field(
-        default_factory=list, description="语义模型映射列表（独立存映射表，随对象类型提交全量重写）"
-    )
     allow_overwrite: bool = Field(default=False, description="编辑既有活跃对象类型时为 True")
     confirm_destructive: bool = Field(default=False, description="破坏性变更（映射/主键/标题键变更）显式确认")
 

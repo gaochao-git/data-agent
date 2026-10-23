@@ -25,7 +25,6 @@ import {
 } from '../../api'
 import type {
   OntologyItem,
-  OntologyMappingItem,
   OntologyObjectInstance,
   OntologyObjectTypeItem,
   OntologyObjectTypeStatus,
@@ -42,13 +41,10 @@ import ObjectInstanceExplorer from './ObjectInstanceExplorer.vue'
 import OntologySchemaGraph from './OntologySchemaGraph.vue'
 import OntologyRelationForm from './OntologyRelationForm.vue'
 import OntologyStatusDialog from './OntologyStatusDialog.vue'
-import { mappingIdentityText, ONTOLOGY_MULTIPLICITY_META, ONTOLOGY_RENDER_HINTS, ONTOLOGY_STATUS_META } from './ontologyMeta'
-import { useSemanticConfigOptions } from './useSemanticConfigOptions'
+import { ONTOLOGY_MULTIPLICITY_META, ONTOLOGY_RENDER_HINTS, ONTOLOGY_STATUS_META } from './ontologyMeta'
 
 const emit = defineEmits<{ changed: [] }>()
 
-// 语义模型选项（映射行回显「模型名（组名）」）
-const { load: loadSemanticOptions, optionOf } = useSemanticConfigOptions()
 
 // ---------- 本体（对象类型容器，纯语义容器不绑数据源组） ----------
 
@@ -77,7 +73,6 @@ const loadOntologies = async () => {
 onMounted(() => {
   // 宿主用 v-show 承载本面板且切换页签时只调 AdminPanel.ensureLoaded；自加载保证任何进入路径都有数据
   void ensureLoaded()
-  void loadSemanticOptions()
   void loadOntologies()
   void loadRelationSources()
   document.addEventListener('click', closeCtxMenu)
@@ -86,9 +81,6 @@ onMounted(() => {
 onUnmounted(() => {
   document.removeEventListener('click', closeCtxMenu)
 })
-
-const mappingLabel = (mapping: OntologyMappingItem): string =>
-  optionOf(mapping.semantic_config_id)?.label || mappingIdentityText(mapping)
 
 const loading = ref(false)
 const items = ref<OntologyObjectTypeItem[]>([])
@@ -174,7 +166,6 @@ interface ObjectNodeData {
   ontology_id: number | null
   ontology_label: string
   description: string
-  mappings_count: number
   update_time: string
   update_by_name: string
   is_leaf: false
@@ -203,7 +194,7 @@ interface ActionTypeNode {
 interface GroupNode {
   row_key: string
   kind: 'group'
-  group: 'property' | 'mapping'
+  group: 'property'
   label: string
   object_type_name: string
   children: TreeRow[]
@@ -221,19 +212,14 @@ interface OntologyGroupNode {
   /** 对齐 Palantir 的预留资源位：规划中，不伪造数据入口 */
   placeholder?: boolean
 }
-interface MappingNode {
-  row_key: string
-  kind: 'mapping'
-  mapping: OntologyMappingItem
-  is_leaf: true
-}
+
 interface EmptyNode {
   row_key: string
   kind: 'empty'
   label: string
   is_leaf: true
 }
-type TreeRow = RootNode | OntologyNode | OntologyGroupNode | ObjectNodeData | GroupNode | PropertyNode | RelationNode | ActionTypeNode | MappingNode | EmptyNode
+type TreeRow = RootNode | OntologyNode | OntologyGroupNode | ObjectNodeData | GroupNode | PropertyNode | RelationNode | ActionTypeNode | EmptyNode
 
 // 数据版本号：编入对象节点 key，列表刷新/保存后懒加载缓存整体失效，防止展示脏数据
 const dataVersion = ref(0)
@@ -247,7 +233,6 @@ const toObjectNode = (item: OntologyObjectTypeItem): ObjectNodeData => ({
   ontology_id: item.ontology_id,
   ontology_label: ontologyLabelOf(item.ontology_id),
   description: item.description,
-  mappings_count: item.mappings_count ?? (item.mappings || []).length,
   update_time: item.update_time || '',
   update_by_name: item.update_by_name || '',
   is_leaf: false
@@ -773,11 +758,6 @@ const relationVerbalize = (relation: OntologyRelationTypeItem, direction: 'from'
     .split(`{${relation.to_object_type_name || ''}}`).join(toName)
 }
 
-const mappingMappingText = (mapping: OntologyMappingItem) => {
-  const entries = Object.entries(mapping.column_mappings || {})
-  if (entries.length === 0) return '暂无字段映射'
-  return entries.map(([prop, dim]) => `${prop} → ${dim}`).join('，')
-}
 
 // ---------- 列表加载与过滤 ----------
 

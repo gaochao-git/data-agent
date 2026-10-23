@@ -1243,13 +1243,6 @@ export interface OntologyPropertyItem {
   is_title: boolean
 }
 
-// 本体映射项（语义模型映射：层级=组→模型→维度映射，口径权威在语义层，不触碰物理表）
-export interface OntologyMappingItem {
-  semantic_config_id: string
-  // 字段映射: {属性API名: 模型维度名}
-  column_mappings: Record<string, string>
-}
-
 // 本体（对位 Palantir ontology，纯语义容器不绑数据源组；对象类型取数后端由各自映射决定）
 // 2026-10-20 由「领域」更名（OntologyDomainItem → OntologyItem，字段 domain_* → ontology_*）
 export interface OntologyItem {
@@ -1274,8 +1267,6 @@ export interface OntologyObjectTypeItem {
   deprecation_reason: string
   deprecated_until: string
   successor_object_type_name: string
-  mappings?: OntologyMappingItem[]
-  mappings_count?: number
   source_binding?: OntologySourceBinding | null
   properties?: OntologyPropertyItem[]
   create_time?: string

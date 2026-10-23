@@ -41,7 +41,6 @@ import type {
   OntologyActionTypePayload,
   OntologyActionTypeTestRunResult,
   OntologyItem,
-  OntologyMappingItem,
   OntologyObjectInstance,
   LogicalDatasetItem,
   LogicalDatasetUpsertPayload,
@@ -2317,7 +2316,6 @@ export function upsertAdminOntologyObjectType(
     description?: string
     ontology_id?: number | null
     properties: OntologyPropertyItem[]
-    mappings?: OntologyMappingItem[]
     allow_overwrite?: boolean
     confirm_destructive?: boolean
   }

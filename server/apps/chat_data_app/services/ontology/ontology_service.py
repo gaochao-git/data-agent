@@ -146,11 +146,7 @@ class OntologyService:
     async def list_object_types_async(
         self, keyword: str = "", status: str = "", ontology_id: int | None = None
     ) -> list[dict[str, Any]]:
-        object_types = await self._dao.list_object_types_async(keyword, status, ontology_id)
-        counts = await self._dao.count_mappings_by_object_type_ids_async([int(item["id"]) for item in object_types])
-        for item in object_types:
-            item["mappings_count"] = counts.get(int(item["id"]), 0)
-        return object_types
+        return await self._dao.list_object_types_async(keyword, status, ontology_id)
 
     async def get_object_type_async(self, object_type_name: str) -> dict[str, Any] | None:
         """对象类型详情（含属性集与语义模型映射；软删行视为不存在）。"""
@@ -158,7 +154,6 @@ class OntologyService:
         if data is None:
             return None
         data["properties"] = await self._dao.list_properties_async(int(data["id"]))
-        data["mappings"] = []
         binding_getter = getattr(self._dao, "get_source_binding_async", None)
         binding = await binding_getter(int(data["id"])) if callable(binding_getter) else None
         if binding:
@@ -236,30 +231,20 @@ class OntologyService:
         # 本体存在性校验（本体不绑组，挂靠只做归属导航，无组锚点校验）
         await self._resolve_object_type_ontology(meta_payload.get("ontology_id"))
         properties = validator.validate_property_items(payload.get("properties"))
-        # 语义模型映射已下线：对象取数只允许 Dataset source binding，旧 payload 的 mappings 一律忽略。
-        mappings: list[dict[str, Any]] = []
         existing = await self._dao.get_object_type_row_async(name, include_deleted=True)
         existing_active = existing is not None and int(existing.get("delete_flag") or 0) == 0
         if existing is not None and not existing_active:
             meta_payload.update(_REVIVED_OBJECT_RESET)
-        self._validate_single_source_properties(properties, mappings)
-        exclude_object_type_id: int | None = None
         allow_property_delete = True
         if existing is not None and existing_active:
             if not allow_overwrite:
                 raise OntologyAlreadyExistsError(f"对象类型已存在: {name}，请更换对象类型名或编辑现有对象类型")
-            exclude_object_type_id, allow_property_delete = await self._prepare_object_type_edit(
-                existing, properties, mappings, payload
-            )
+            allow_property_delete = await self._prepare_object_type_edit(existing, properties, payload)
         await self._validate_enum_refs(properties)
-        await self._validate_mapping_targets(mappings)
-        await self._validate_mapping_dimensions(mappings)
-        await self._check_mapping_ownership(mappings, exclude_object_type_id)
         saved = await self._dao.upsert_object_type_full_async(
             name,
             meta_payload,
             properties,
-            mappings,
             allow_property_delete=allow_property_delete,
             create_by=operator,
             create_by_name=operator_name,
@@ -287,22 +272,20 @@ class OntologyService:
         self,
         existing: dict[str, Any],
         properties: list[dict[str, Any]],
-        mappings: list[dict[str, Any]],
         payload: dict[str, Any],
-    ) -> tuple[int, bool]:
+    ) -> bool:
         """活跃对象类型编辑前置：废弃终态拒绝、编辑门禁，返回(排除对象类型ID, 是否允许删属性)。"""
         if _text(existing.get("status")) == "deprecated":
             raise OntologyStateInvalidError(
                 f"对象类型已废弃且不可逆，禁止编辑: {_text(existing.get('object_type_name'))}（如需继续请基于替代对象类型重建）"
             )
-        await self._enforce_edit_guards(existing, properties, mappings, payload)
-        return int(existing["id"]), _text(existing.get("status")) != "certified"
+        await self._enforce_edit_guards(existing, properties, payload)
+        return _text(existing.get("status")) != "certified"
 
     async def _enforce_edit_guards(
         self,
         existing: dict[str, Any],
         properties: list[dict[str, Any]],
-        mappings: list[dict[str, Any]],
         payload: dict[str, Any],
     ) -> None:
         """编辑既有对象类型时的冻结与破坏性变更门禁。"""
@@ -423,7 +406,6 @@ class OntologyService:
                 _text(relation.get("relation_type_name")), operator, operator_name
             )
         await self._dao.replace_properties_async(int(existing["id"]), [], allow_delete=True)
-        await self._dao.delete_object_type_mappings_async(int(existing["id"]))
         await self._dao.soft_delete_object_type_async(object_type_name, operator, operator_name)
 
     # ---------- 对象类型状态机 ----------
@@ -791,85 +773,6 @@ class OntologyService:
             if found is None:
                 raise OntologyInvalidError(f"属性 {item['property_name']} 引用的全局枚举不存在: {enum_ref}")
 
-    @staticmethod
-    def _validate_single_source_properties(properties: list[dict[str, Any]], mappings: list[dict[str, Any]]) -> None:
-        """多源对象类型属性单源规则（对齐 Palantir MDO 属性单源铁律）。
-
-        一个对象类型可绑定多个语义模型（column-wise 多源）；除标识属性（主键必须在每个
-        数据源存在，用于跨源对齐）外，同一属性只能出现在一个映射里，否则「该属性由
-        哪个源背书」不可判定，目录与 join 口径都会出现歧义。
-        """
-        identifiers = {item["property_name"] for item in properties if item.get("is_identifier")}
-        sources: dict[str, set[str]] = {}
-        for mapping in mappings:
-            config_id = _text(mapping.get("semantic_config_id"))
-            for property_name in mapping.get("column_mappings") or {}:
-                sources.setdefault(_text(property_name), set()).add(config_id)
-        conflicts = sorted(
-            (property_name, sorted(config_ids))
-            for property_name, config_ids in sources.items()
-            if property_name not in identifiers and len(config_ids) > 1
-        )
-        if conflicts:
-            details = "；".join(
-                f"{property_name} 同时映射到 {', '.join(config_ids)}" for property_name, config_ids in conflicts
-            )
-            raise OntologyInvalidError(
-                f"多源对象类型中非标识属性只能单源映射（标识属性可作为跨源主键）：{details}；请为属性选择唯一来源模型"
-            )
-
-    async def _check_mapping_ownership(
-        self, mappings: list[dict[str, Any]], exclude_object_type_id: int | None
-    ) -> None:
-        """「一源一对象类型」：每个映射键全局只能归属一个对象类型（唯一索引兜底，预检给友好报错）。"""
-        owners = await self._dao.find_mapping_owners_async(mappings, exclude_object_type_id=exclude_object_type_id)
-        for config_id, owner_name in sorted(owners.items()):
-            raise OntologyInvalidError(
-                f"映射 {config_id} 已被对象类型 {owner_name} 占用（一个语义模型映射只能归属一个对象类型），请先解除原对象类型映射"
-            )
-
-    async def _validate_mapping_targets(self, mappings: list[dict[str, Any]]) -> None:
-        """映射的语义模型必须真实存在（存在性校验；与「一源一对象类型」归属检查互补）。"""
-        config_ids = {_text(mapping.get("semantic_config_id")) for mapping in mappings} - {""}
-        if not config_ids:
-            return
-        existing_ids = await semantic_config_dao.filter_existing_config_ids_async(sorted(config_ids))
-        missing = sorted(config_ids - existing_ids)
-        if missing:
-            raise OntologyInvalidError(f"映射的语义模型不存在: {', '.join(missing)}")
-
-    async def _validate_mapping_dimensions(self, mappings: list[dict[str, Any]]) -> None:
-        """映射右值必须是所选语义模型里真实存在的维度，且全部维度同表（实体锚点唯一）。
-
-        层级红线：本体层只引用模型维度名，不重复定义物理列；实体锚点（行结构
-        落在哪张表）由映射维度的所属表派生，跨表映射意味着对象类型没有确定行结构。
-        """
-        config_ids = {_text(mapping.get("semantic_config_id")) for mapping in mappings} - {""}
-        if not config_ids:
-            return
-        dimension_index = await semantic_config_dao.get_config_dimensions_async(sorted(config_ids))
-        for mapping in mappings:
-            config_id = _text(mapping.get("semantic_config_id"))
-            column_mappings = mapping.get("column_mappings") or {}
-            if not column_mappings:
-                continue
-            dimensions = dimension_index.get(config_id)
-            if dimensions is None:
-                continue  # 模型不存在由 _validate_mapping_targets 报错，此处不重复
-            anchor_tables: set[str] = set()
-            for prop, dimension_name in column_mappings.items():
-                table = _text(dimensions.get(_text(dimension_name)))
-                if not table:
-                    raise OntologyInvalidError(
-                        f"映射 {config_id} 的属性 {prop} 引用了模型中不存在的维度: {dimension_name}"
-                    )
-                anchor_tables.add(table)
-            if len(anchor_tables) > 1:
-                raise OntologyInvalidError(
-                    f"映射 {config_id} 的维度跨多张表（{', '.join(sorted(anchor_tables))}）："
-                    "同一映射的维度必须同表，实体锚点才能唯一确定；跨表口径请拆分映射或建 join 模型"
-                )
-
     async def _attach_object_type_names(self, relation_types: list[dict[str, Any]]) -> list[dict[str, Any]]:
         object_type_map = await self._dao.get_objects_by_ids_async(
             [int(r["from_object_type_id"]) for r in relation_types]
@@ -881,22 +784,6 @@ class OntologyService:
             relation["from_object_type_name"] = _text(from_obj.get("object_type_name"))
             relation["to_object_type_name"] = _text(to_obj.get("object_type_name"))
         return relation_types
-
-
-def _normalize_mappings(mappings: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """映射排序后规范化（仅保留结构键），用于编辑前后 diff 判断。"""
-    normalized = []
-    for mapping in mappings:
-        normalized.append(
-            {
-                "binding_type": _text(mapping.get("binding_type")),
-                "semantic_config_id": _text(mapping.get("semantic_config_id")),
-                "column_mappings": {
-                    _text(key): _text(value) for key, value in (mapping.get("column_mappings") or {}).items()
-                },
-            }
-        )
-    return sorted(normalized, key=lambda item: json.dumps(item, ensure_ascii=False, sort_keys=True))
 
 
 def _parse_deprecated_until(value: Any) -> datetime | None:

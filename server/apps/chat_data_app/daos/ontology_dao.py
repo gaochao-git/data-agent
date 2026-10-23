@@ -1,11 +1,9 @@
-"""本体 DAO：对象类型/属性/关系类型/对象类型映射四张表的读写。
+"""本体 DAO：对象类型/属性/关系类型/数据源绑定的读写。
 
 对象类型/属性/关系类型为三等实体（对齐 Palantir Object/Property/Link Type）。删除均为
 软删：对象类型与关系类型同名重建走复活复用原行（翻回 delete_flag=0 并更新内容），属性
-按 (object_type_id, property_name) 复活。语义模型映射独立存映射表
-chat_data_ontology_mapping（对齐 ossie 概念层/映射层分离），随对象类型
-upsert 同事务软删（delete_flag=行 id）+重插全量重写；「一源一对象类型」由映射表唯一索引约束，
-service 层先查占用对象类型给友好报错，数据库唯一键兜底。
+按 (object_type_id, property_name) 复活。对象取数已迁移到 Logical Dataset，
+本体不再持有 semantic_config 映射。
 """
 
 from __future__ import annotations
@@ -19,18 +17,14 @@ from utils.logger import get_logger
 from utils.models import (
     ChatDataOntology,
     ChatDataOntologyObjectType,
-    ChatDataOntologyObjectTypeMapping,
     ChatDataOntologyProperty,
     ChatDataOntologyRelationType,
     ChatDataOntologySourceBinding,
-    SemanticConfig,
 )
 
 from .dao_session import session_scope
 
 logger = get_logger(__name__)
-
-_BINDING_TYPE_SEMANTIC = "semantic"
 
 
 def _format_datetime(value: Any) -> str:
@@ -136,18 +130,8 @@ def _relation_row_to_dict(row: ChatDataOntologyRelationType) -> dict[str, Any]:
     }
 
 
-def _mapping_row_to_dict(row: ChatDataOntologyObjectTypeMapping) -> dict[str, Any]:
-    """映射行 → 映射视图（binding_type 固定 semantic，对外 API 形状与旧 mappings 一致）。"""
-    return {
-        "object_type_id": int(row.object_type_id),
-        "binding_type": _BINDING_TYPE_SEMANTIC,
-        "semantic_config_id": _text(row.semantic_config_id),
-        "column_mappings": _parse_json(row.column_mappings_json, dict),
-    }
-
-
 class OntologyDao:
-    """本体/对象类型/属性/关系类型/映射访问对象。"""
+    """本体/对象类型/属性/关系类型/数据源绑定访问对象。"""
 
     # ---------- 本体 ----------
 
@@ -346,7 +330,7 @@ class OntologyDao:
         - 无行（含从未创建）→ 插入新行；
         - 软删行 → 复活复用原行，不算覆盖；
         - 活跃行 → 仅 allow_overwrite=True 时更新内容，否则返回 None。
-        完整编辑（对象类型+属性+映射原子提交）走 upsert_object_type_full_async。
+        完整编辑（对象类型+属性原子提交）走 upsert_object_type_full_async。
         """
         name = _text(object_type_name)
         async with session_scope() as session:
@@ -387,7 +371,6 @@ class OntologyDao:
         object_type_name: str,
         row_payload: dict[str, Any],
         properties: list[dict[str, Any]],
-        mappings: list[dict[str, Any]],
         *,
         allow_property_delete: bool,
         create_by: str = "",
@@ -395,14 +378,11 @@ class OntologyDao:
         update_by: str = "",
         update_by_name: str = "",
     ) -> dict[str, Any] | None:
-        """完整编辑对象类型：对象类型行 + 属性集 + 映射表单事务原子提交。
+        """完整编辑对象类型：对象类型行 + 属性集同事务原子提交。
 
         - 无行 → 插入；软删行 → 复活；活跃行 → 覆盖（service 层已完成
           allow_overwrite 门禁，此处恒覆盖）；
-        - 属性按 property_name 对齐 upsert（allow_property_delete 控制缺失属性软删）；
-        - 映射软删+重插全量重写（软删行 delete_flag 置为行 id，腾出唯一索引槽位；
-          唯一索引含 delete_flag，活跃行仍兜底一源一对象类型）；
-        - 返回完整视图；理论冲突（并发占用同一映射）由唯一键 IntegrityError 兜底。
+        - 属性按 property_name 对齐 upsert（allow_property_delete 控制缺失属性软删）。
         """
         name = _text(object_type_name)
         incoming = {str(item.get("property_name") or "").strip(): item for item in properties}
@@ -418,10 +398,7 @@ class OntologyDao:
             )
             if allow_property_delete:
                 self._soft_delete_missing_properties(rows_by_name, incoming, update_by, update_by_name)
-            await self._replace_mapping_rows(
-                session, object_type_id, mappings, create_by, create_by_name, update_by, update_by_name
-            )
-        return {"object_type_name": name, **row_payload, "mappings": mappings}
+        return {"object_type_name": name, **row_payload}
 
     async def _load_or_create_object_type_row(
         self,
@@ -475,38 +452,6 @@ class OntologyDao:
         )
         return {_text(item.property_name): item for item in rows}
 
-    async def _replace_mapping_rows(
-        self,
-        session: Any,
-        object_type_id: int,
-        mappings: list[dict[str, Any]],
-        create_by: str,
-        create_by_name: str,
-        update_by: str,
-        update_by_name: str,
-    ) -> None:
-        """映射表全量重写：活跃行软删（delete_flag=行 id）后重插本次映射。"""
-        await session.execute(
-            update(ChatDataOntologyObjectTypeMapping)
-            .where(
-                ChatDataOntologyObjectTypeMapping.object_type_id == object_type_id,
-                ChatDataOntologyObjectTypeMapping.delete_flag == 0,
-            )
-            .values(delete_flag=ChatDataOntologyObjectTypeMapping.id)
-        )
-        for mapping in mappings:
-            session.add(
-                ChatDataOntologyObjectTypeMapping(
-                    object_type_id=object_type_id,
-                    semantic_config_id=_text(mapping.get("semantic_config_id")),
-                    column_mappings_json=json.dumps(mapping.get("column_mappings") or {}, ensure_ascii=False),
-                    create_by=create_by or "",
-                    create_by_name=create_by_name or "",
-                    update_by=update_by or "",
-                    update_by_name=update_by_name or "",
-                )
-            )
-
     async def soft_delete_object_type_async(
         self, object_type_name: str, update_by: str = "", update_by_name: str = ""
     ) -> None:
@@ -555,186 +500,16 @@ class OntologyDao:
             )
         return {_text(row) for row in rows}
 
-    async def find_mapping_owners_async(
-        self,
-        mappings: list[dict[str, Any]],
-        exclude_object_type_id: int | None = None,
-    ) -> dict[str, str]:
-        """查映射键已被其他活跃对象类型占用的映射（「一源一对象类型」友好预检，唯一索引兜底）。
+    async def load_injection_bundle_async(self, semantic_config_ids: list[str] | None = None) -> dict[str, Any]:
+        """装载 AI 可见本体目录：对象类型已不再绑定语义模型，注入按全量活跃对象类型加载。
 
-        返回 {semantic_config_id: object_type_name}；exclude_object_type_id 用于编辑自身时排除。
+        semantic_config_ids 仅为兼容旧调用保留，不再参与筛选；对象取数由 Dataset source binding 决定。
         """
-        config_ids = {_text(mapping.get("semantic_config_id")) for mapping in mappings} - {""}
-        if not config_ids:
-            return {}
-        stmt = (
-            select(ChatDataOntologyObjectTypeMapping, ChatDataOntologyObjectType.object_type_name)
-            .join(
-                ChatDataOntologyObjectType,
-                ChatDataOntologyObjectType.id == ChatDataOntologyObjectTypeMapping.object_type_id,
-            )
-            .where(
-                ChatDataOntologyObjectTypeMapping.semantic_config_id.in_(config_ids),
-                ChatDataOntologyObjectType.delete_flag == 0,
-                ChatDataOntologyObjectTypeMapping.delete_flag == 0,
-            )
-        )
-        if exclude_object_type_id is not None:
-            stmt = stmt.where(ChatDataOntologyObjectTypeMapping.object_type_id != int(exclude_object_type_id))
         async with session_scope() as session:
-            rows = (await session.execute(stmt)).all()
-        return {_text(row.semantic_config_id): _text(object_type_name) for row, object_type_name in rows}
-
-    @staticmethod
-    def _binding_row_to_dict(row: ChatDataOntologyObjectTypeMapping, object_type_name: Any) -> dict[str, Any]:
-        return {
-            "semantic_config_id": _text(row.semantic_config_id),
-            "object_type_id": int(row.object_type_id),
-            "object_type_name": _text(object_type_name),
-            "column_mappings": _parse_json(row.column_mappings_json, dict),
-        }
-
-    async def find_bindings_for_configs_async(self, config_ids: list[str]) -> list[dict[str, Any]]:
-        """按语义模型 ID 集查活跃绑定（悬空绑定守护用）。
-
-        返回 [{semantic_config_id, object_type_id, object_type_name, column_mappings}]；
-        只统计对象类型仍活跃（delete_flag=0）的映射——对象类型已删的墓碑映射不阻止模型删除。
-        """
-        ids = sorted({_text(item) for item in config_ids} - {""})
-        if not ids:
-            return []
-        stmt = (
-            select(ChatDataOntologyObjectTypeMapping, ChatDataOntologyObjectType.object_type_name)
-            .join(
-                ChatDataOntologyObjectType,
-                ChatDataOntologyObjectType.id == ChatDataOntologyObjectTypeMapping.object_type_id,
-            )
-            .where(
-                ChatDataOntologyObjectTypeMapping.semantic_config_id.in_(ids),
-                ChatDataOntologyObjectType.delete_flag == 0,
-                ChatDataOntologyObjectTypeMapping.delete_flag == 0,
-            )
-            .order_by(ChatDataOntologyObjectTypeMapping.semantic_config_id.asc())
-        )
-        async with session_scope() as session:
-            rows = (await session.execute(stmt)).all()
-        return [self._binding_row_to_dict(row, object_type_name) for row, object_type_name in rows]
-
-    async def find_bindings_for_group_async(self, group_id: str) -> list[dict[str, Any]]:
-        """按数据源组查活跃绑定（数据源组删除守护用，一次 join 带出组内全部绑定）。
-
-        语义模型侧限定该组活跃模型；对象类型/映射侧限定活跃。返回结构同 find_bindings_for_configs_async。
-        """
-        gid = _text(group_id)
-        if not gid:
-            return []
-        stmt = (
-            select(ChatDataOntologyObjectTypeMapping, ChatDataOntologyObjectType.object_type_name)
-            .join(
-                SemanticConfig,
-                SemanticConfig.semantic_config_id == ChatDataOntologyObjectTypeMapping.semantic_config_id,
-            )
-            .join(
-                ChatDataOntologyObjectType,
-                ChatDataOntologyObjectType.id == ChatDataOntologyObjectTypeMapping.object_type_id,
-            )
-            .where(
-                SemanticConfig.group_id == gid,
-                SemanticConfig.delete_flag == 0,
-                ChatDataOntologyObjectType.delete_flag == 0,
-                ChatDataOntologyObjectTypeMapping.delete_flag == 0,
-            )
-            .order_by(ChatDataOntologyObjectTypeMapping.semantic_config_id.asc())
-        )
-        async with session_scope() as session:
-            rows = (await session.execute(stmt)).all()
-        return [self._binding_row_to_dict(row, object_type_name) for row, object_type_name in rows]
-
-    async def list_object_type_mappings_async(self, object_type_id: int) -> list[dict[str, Any]]:
-        """列出对象类型的全部活跃映射（映射视图，按语义配置ID排序）。"""
-        oid = int(object_type_id)
-        async with session_scope() as session:
-            rows = (
-                (
-                    await session.execute(
-                        select(ChatDataOntologyObjectTypeMapping)
-                        .where(
-                            ChatDataOntologyObjectTypeMapping.object_type_id == oid,
-                            ChatDataOntologyObjectTypeMapping.delete_flag == 0,
-                        )
-                        .order_by(ChatDataOntologyObjectTypeMapping.semantic_config_id.asc())
-                    )
-                )
-                .scalars()
-                .all()
-            )
-        return [_mapping_row_to_dict(row) for row in rows]
-
-    async def count_mappings_by_object_type_ids_async(self, object_type_ids: list[int]) -> dict[int, int]:
-        """按对象类型批量统计活跃映射数（列表页绑定计数）。"""
-        ids = {int(oid) for oid in object_type_ids if oid}
-        if not ids:
-            return {}
-        async with session_scope() as session:
-            rows = (
-                await session.execute(
-                    select(ChatDataOntologyObjectTypeMapping.object_type_id, func.count())
-                    .where(
-                        ChatDataOntologyObjectTypeMapping.object_type_id.in_(ids),
-                        ChatDataOntologyObjectTypeMapping.delete_flag == 0,
-                    )
-                    .group_by(ChatDataOntologyObjectTypeMapping.object_type_id)
-                )
-            ).all()
-        return {int(object_type_id): int(count) for object_type_id, count in rows}
-
-    async def delete_object_type_mappings_async(self, object_type_id: int) -> None:
-        """软删对象类型全部映射（对象类型删除时级联；映射无独立生命周期，软删行置 delete_flag=id）。"""
-        async with session_scope() as session:
-            await session.execute(
-                update(ChatDataOntologyObjectTypeMapping)
-                .where(
-                    ChatDataOntologyObjectTypeMapping.object_type_id == int(object_type_id),
-                    ChatDataOntologyObjectTypeMapping.delete_flag == 0,
-                )
-                .values(delete_flag=ChatDataOntologyObjectTypeMapping.id)
-            )
-
-    async def load_injection_bundle_async(self, semantic_config_ids: list[str]) -> dict[str, Any]:
-        """按启用语义模型集合一次性装载本体注入数据（消费侧专用，单事务四次查询）。
-
-        返回 {"object_types", "properties", "relation_types", "mappings"}：
-        - 对象类型：绑定到给定语义模型、活跃、状态 certified/experimental；
-        - 属性：上述对象类型的全部活跃属性；
-        - 关系类型：两端对象类型都在上述集合内、状态 certified/experimental 的关系类型
-          （单端在场无法导航不注入；draft/deprecated 不进 AI 目录，对齐对象类型侧口径）；
-        - 映射：绑定给定语义模型的活跃映射行（渲染侧按通过过滤的对象类型归属裁剪）。
-        """
-        empty: dict[str, Any] = {"object_types": [], "properties": [], "relation_types": [], "mappings": []}
-        ids = sorted({_text(item) for item in semantic_config_ids} - {""})
-        if not ids:
-            return empty
-        async with session_scope() as session:
-            mapping_rows = (
-                (
-                    await session.execute(
-                        select(ChatDataOntologyObjectTypeMapping).where(
-                            ChatDataOntologyObjectTypeMapping.semantic_config_id.in_(ids),
-                            ChatDataOntologyObjectTypeMapping.delete_flag == 0,
-                        )
-                    )
-                )
-                .scalars()
-                .all()
-            )
-            candidate_ids = sorted({int(row.object_type_id) for row in mapping_rows})
-            if not candidate_ids:
-                return empty
             object_type_rows = (
                 (
                     await session.execute(
                         select(ChatDataOntologyObjectType).where(
-                            ChatDataOntologyObjectType.id.in_(candidate_ids),
                             ChatDataOntologyObjectType.delete_flag == 0,
                             ChatDataOntologyObjectType.lifecycle_status.in_(("certified", "experimental")),
                         )
@@ -745,7 +520,7 @@ class OntologyDao:
             )
             kept_ids = {int(row.id) for row in object_type_rows}
             if not kept_ids:
-                return empty
+                return {"object_types": [], "properties": [], "relation_types": [], "mappings": []}
             property_rows = (
                 (
                     await session.execute(
@@ -776,7 +551,7 @@ class OntologyDao:
             "object_types": [_object_type_row_to_dict(row, include_audit=False) for row in object_type_rows],
             "properties": [_property_row_to_dict(row) for row in property_rows],
             "relation_types": [_relation_row_to_dict(row) for row in relation_rows],
-            "mappings": [_mapping_row_to_dict(row) for row in mapping_rows],
+            "mappings": [],
         }
 
     # ---------- 属性 ----------

@@ -61,7 +61,6 @@ from utils.models import (
     Base,
     ChatDataOntology,
     ChatDataOntologyObjectType,
-    ChatDataOntologyObjectTypeMapping,
     ChatDataOntologyProperty,
     ChatDataOntologyRelationType,
     SemanticConfig,

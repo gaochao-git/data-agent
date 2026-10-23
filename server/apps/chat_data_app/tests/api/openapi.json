@@ -1180,6 +1180,32 @@
         "title": "DatasetBindingItem",
         "type": "object"
       },
+      "DatasetBootstrapRequest": {
+        "description": "从数据源组逻辑表批量注册 Dataset。",
+        "properties": {
+          "datasource_group_id": {
+            "description": "数据源组 ID",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Datasource Group Id",
+            "type": "string"
+          },
+          "table_names": {
+            "description": "只注册指定表；空=全部",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 500,
+            "title": "Table Names",
+            "type": "array"
+          }
+        },
+        "required": [
+          "datasource_group_id"
+        ],
+        "title": "DatasetBootstrapRequest",
+        "type": "object"
+      },
       "DatasetBranchCreateRequest": {
         "description": "Dataset 分支创建请求。",
         "properties": {
@@ -2126,31 +2152,6 @@
         "title": "OntologyActionTypeUpsertRequest",
         "type": "object"
       },
-      "OntologyMappingItem": {
-        "description": "本体映射项（语义模型映射：口径权威在语义层，层级=组→模型→维度映射，不触碰物理表）",
-        "properties": {
-          "column_mappings": {
-            "additionalProperties": {
-              "type": "string"
-            },
-            "description": "字段映射: {属性API名: 模型维度名}",
-            "title": "Column Mappings",
-            "type": "object"
-          },
-          "semantic_config_id": {
-            "description": "语义模型配置ID",
-            "maxLength": 128,
-            "minLength": 1,
-            "title": "Semantic Config Id",
-            "type": "string"
-          }
-        },
-        "required": [
-          "semantic_config_id"
-        ],
-        "title": "OntologyMappingItem",
-        "type": "object"
-      },
       "OntologyObjectFilter": {
         "description": "对象查询过滤条件；property 必须是对象类型已映射属性。",
         "properties": {
@@ -2225,6 +2226,15 @@
             "minimum": 1.0,
             "title": "Limit",
             "type": "integer"
+          },
+          "member_datasource_ids": {
+            "description": "执行对象/机构范围",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Member Datasource Ids",
+            "type": "array"
           },
           "offset": {
             "default": 0,
@@ -2374,14 +2384,6 @@
             "minLength": 1,
             "title": "Display Name",
             "type": "string"
-          },
-          "mappings": {
-            "description": "语义模型映射列表（独立存映射表，随对象类型提交全量重写）",
-            "items": {
-              "$ref": "#/components/schemas/OntologyMappingItem"
-            },
-            "title": "Mappings",
-            "type": "array"
           },
           "ontology_id": {
             "anyOf": [
@@ -2605,6 +2607,30 @@
           "to_columns"
         ],
         "title": "OntologyRelationTypeUpsertRequest",
+        "type": "object"
+      },
+      "OntologySourceBindingRequest": {
+        "description": "对象类型数据源绑定请求；对象属性 → Dataset 逻辑列。",
+        "properties": {
+          "column_mappings": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "{对象属性API名: Dataset逻辑列名}",
+            "title": "Column Mappings",
+            "type": "object"
+          },
+          "dataset_id": {
+            "description": "Logical Dataset ID",
+            "exclusiveMinimum": 0.0,
+            "title": "Dataset Id",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "dataset_id"
+        ],
+        "title": "OntologySourceBindingRequest",
         "type": "object"
       },
       "OntologyUpsertRequest": {
@@ -7094,6 +7120,52 @@
         ]
       }
     },
+    "/api/chatdata/admin/meta/datasets/bootstrap": {
+      "post": {
+        "operationId": "bootstrap_datasets_api_chatdata_admin_meta_datasets_bootstrap_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DatasetBootstrapRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Bootstrap Datasets",
+        "tags": [
+          "ChatData Logical Dataset（Admin）"
+        ]
+      }
+    },
     "/api/chatdata/admin/meta/datasets/{dataset_name}": {
       "delete": {
         "operationId": "delete_dataset_api_chatdata_admin_meta_datasets__dataset_name__delete",
@@ -8429,6 +8501,19 @@
               ],
               "title": "Semantic Config Id"
             }
+          },
+          {
+            "in": "query",
+            "name": "member_datasource_ids",
+            "required": false,
+            "schema": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Member Datasource Ids",
+              "type": "array"
+            }
           }
         ],
         "responses": {
@@ -8501,6 +8586,35 @@
                 }
               ],
               "title": "Semantic Config Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "member_datasource_ids",
+            "required": false,
+            "schema": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Member Datasource Ids",
+              "type": "array"
+            }
+          },
+          {
+            "in": "query",
+            "name": "member_datasource_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Member Datasource Id"
             }
           }
         ],
@@ -8648,6 +8762,64 @@
           }
         ],
         "summary": "Change Ontology Object Type Ontology",
+        "tags": [
+          "ChatData 本体管理（Admin）"
+        ]
+      }
+    },
+    "/api/chatdata/admin/meta/ontology/object-types/{object_type_name}/source-binding": {
+      "put": {
+        "description": "绑定对象类型到 Logical Dataset（本体取数不再依赖语义模型）。",
+        "operationId": "set_ontology_object_source_binding_api_chatdata_admin_meta_ontology_object_types__object_type_name__source_binding_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "object_type_name",
+            "required": true,
+            "schema": {
+              "title": "Object Type Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OntologySourceBindingRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Set Ontology Object Source Binding",
         "tags": [
           "ChatData 本体管理（Admin）"
         ]

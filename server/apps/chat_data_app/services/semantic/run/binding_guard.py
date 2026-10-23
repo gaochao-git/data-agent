@@ -21,8 +21,6 @@ from typing import Any
 
 from utils.logger import get_logger
 
-from ....daos.ontology_dao import OntologyDao
-
 logger = get_logger(__name__)
 
 
@@ -111,26 +109,17 @@ def raise_if_dimensions_referenced(
 
 
 async def ensure_configs_unbound_async(config_ids: list[str], action: str = "删除") -> None:
-    """校验语义模型集合均未被本体映射占用，否则抛 40070。"""
-    bindings = await OntologyDao().find_bindings_for_configs_async(config_ids)
-    raise_if_bound(bindings, action)
+    """对象类型已迁移到 Logical Dataset；语义模型不再被本体映射占用，保留空实现兼容调用方。"""
+    return None
 
 
 async def ensure_config_dimensions_unreferenced_async(
     config_id: str, removed_names: set[str], action: str = "更新"
 ) -> None:
-    """校验被删维度未被该模型的本体绑定引用，否则抛 40070（无被删维度时不查库）。"""
-    if not removed_names:
-        return
-    bindings = await OntologyDao().find_bindings_for_configs_async([config_id])
-    raise_if_dimensions_referenced(bindings, removed_names, config_id, action)
+    """语义模型维度不再被本体映射引用，保留空实现兼容调用方。"""
+    return None
 
 
 async def ensure_group_unbound_async(group_id: str, action: str = "删除数据源组") -> None:
-    """校验数据源组内模型均未被本体映射占用，否则抛 40070。
-
-    本体不绑数据源组（2026-10-20 解耦）：组删除只需关心组内模型是否仍被
-    对象类型映射占用——占用即删除会让映射悬空，硬阻断。
-    """
-    bindings = await OntologyDao().find_bindings_for_group_async(group_id)
-    raise_if_bound(bindings, action)
+    """数据源组删除不再需要检查本体映射占用，保留空实现兼容调用方。"""
+    return None

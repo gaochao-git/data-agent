@@ -1369,40 +1369,6 @@ class ChatDataOntologyActionExecution(Base):
     )
 
 
-class ChatDataOntologyObjectTypeMapping(Base):
-    """本体对象类型映射表：语义模型映射独立成表（对齐 ossie 映射文档）。
-
-    随对象类型 payload 提交、随对象类型 upsert 同事务全量重写（软删+重插，无独立生命
-    周期与状态机）。delete_flag 语义特殊：0=活跃，软删时置为行 id——使软删行
-    不再占据唯一索引槽位，同源可重绑到其他对象类型。uniq_mapping_semantic_source
-    含 delete_flag，仍直接约束「一源一对象类型」：活跃行中一个语义模型映射全局只能
-    归属一个对象类型；column_mappings 口径 = {本体属性API名: 模型维度名}——本体层
-    只引用模型维度（Ossie 映射文档同构），物理列解析是语义模型内部的事。
-    """
-
-    __tablename__ = "chat_data_ontology_mapping"
-
-    id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
-    object_type_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    semantic_config_id: Mapped[str] = mapped_column(String(128), nullable=False)
-    column_mappings_json: Mapped[str | None] = mapped_column(Text)
-    delete_flag: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
-    create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
-    update_time: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
-    )
-    create_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
-    create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
-    update_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
-    update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
-
-    __table_args__ = (
-        UniqueConstraint("object_type_id", "semantic_config_id", "delete_flag", name="uniq_mapping_object_type_source"),
-        UniqueConstraint("semantic_config_id", "delete_flag", name="uniq_mapping_semantic_source"),
-        Index("idx_mapping_object_type", "object_type_id"),
-    )
-
-
 # ---------------------------------------------------------------------------
 # Logical Dataset：语义层与本体层共享的逻辑数据资产
 # ---------------------------------------------------------------------------
