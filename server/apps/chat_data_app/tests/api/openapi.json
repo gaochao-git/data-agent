@@ -1333,6 +1333,58 @@
         "title": "DatasetPipelineUpsertRequest",
         "type": "object"
       },
+      "DatasetSemanticLinkUpsertRequest": {
+        "description": "Dataset ↔ 语义模型关联（只存引用与列对照，指标口径仍在语义层）。\n\n对应 Ossie mapping document 的简化形态：semantic_model_ref ≈ semantic_config_id，\nDataset 逻辑列 ↔ 语义维度名对照承担 concept/field 映射。",
+        "properties": {
+          "column_mappings": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "{Dataset逻辑列名: 语义维度名}；空=按同名列自动对照",
+            "title": "Column Mappings",
+            "type": "object"
+          },
+          "datasource_group_id": {
+            "description": "业务域=数据源组 ID",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Datasource Group Id",
+            "type": "string"
+          },
+          "lifecycle_status": {
+            "default": "draft",
+            "description": "状态",
+            "enum": [
+              "draft",
+              "active"
+            ],
+            "title": "Lifecycle Status",
+            "type": "string"
+          },
+          "metric_scope": {
+            "description": "允许在对象作用域执行的指标名；空=全部",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 500,
+            "title": "Metric Scope",
+            "type": "array"
+          },
+          "table_name": {
+            "description": "语义模型内对应表名（须等于该组 Dataset 物理表）",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Table Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "datasource_group_id",
+          "table_name"
+        ],
+        "title": "DatasetSemanticLinkUpsertRequest",
+        "type": "object"
+      },
       "DatasetUpsertRequest": {
         "description": "Dataset 创建/更新请求；更新会生成新的不可变版本。",
         "properties": {
@@ -7583,6 +7635,212 @@
         ]
       }
     },
+    "/api/chatdata/admin/meta/datasets/{dataset_name}/semantic-links": {
+      "get": {
+        "description": "Dataset ↔ 语义模型关联列表（只存引用与列对照，指标口径在语义层）。",
+        "operationId": "list_dataset_semantic_links_api_chatdata_admin_meta_datasets__dataset_name__semantic_links_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dataset_name",
+            "required": true,
+            "schema": {
+              "title": "Dataset Name",
+              "type": "string"
+            }
+          },
+          {
+            "description": "按数据源组筛选",
+            "in": "query",
+            "name": "datasource_group_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "按数据源组筛选",
+              "title": "Datasource Group Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "List Dataset Semantic Links",
+        "tags": [
+          "ChatData Logical Dataset（Admin）"
+        ]
+      }
+    },
+    "/api/chatdata/admin/meta/datasets/{dataset_name}/semantic-links/{semantic_config_id}": {
+      "delete": {
+        "description": "删除 Dataset ↔ 语义模型关联（软删）。",
+        "operationId": "delete_dataset_semantic_link_api_chatdata_admin_meta_datasets__dataset_name__semantic_links__semantic_config_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dataset_name",
+            "required": true,
+            "schema": {
+              "title": "Dataset Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "semantic_config_id",
+            "required": true,
+            "schema": {
+              "title": "Semantic Config Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "按数据源组限定",
+            "in": "query",
+            "name": "datasource_group_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "按数据源组限定",
+              "title": "Datasource Group Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Delete Dataset Semantic Link",
+        "tags": [
+          "ChatData Logical Dataset（Admin）"
+        ]
+      },
+      "put": {
+        "description": "创建/更新 Dataset ↔ 语义模型关联；保存前校验 Dataset 列、语义维度、指标与物理表。",
+        "operationId": "upsert_dataset_semantic_link_api_chatdata_admin_meta_datasets__dataset_name__semantic_links__semantic_config_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "dataset_name",
+            "required": true,
+            "schema": {
+              "title": "Dataset Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "semantic_config_id",
+            "required": true,
+            "schema": {
+              "title": "Semantic Config Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DatasetSemanticLinkUpsertRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Upsert Dataset Semantic Link",
+        "tags": [
+          "ChatData Logical Dataset（Admin）"
+        ]
+      }
+    },
     "/api/chatdata/admin/meta/enums": {
       "get": {
         "description": "全局枚举列表（keyword 按名称/说明模糊过滤；business_domain 按域过滤，不传返回全部域）。",
@@ -8650,6 +8908,93 @@
           }
         ],
         "summary": "Upsert Ontology Object Type",
+        "tags": [
+          "ChatData 本体管理（Admin）"
+        ]
+      }
+    },
+    "/api/chatdata/admin/meta/ontology/object-types/{object_type_name}/metrics": {
+      "get": {
+        "description": "对象类型可执行的语义指标清单（只读引用；口径定义仍在语义层）。",
+        "operationId": "list_ontology_object_metrics_api_chatdata_admin_meta_ontology_object_types__object_type_name__metrics_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "object_type_name",
+            "required": true,
+            "schema": {
+              "title": "Object Type Name",
+              "type": "string"
+            }
+          },
+          {
+            "description": "按数据源组筛选",
+            "in": "query",
+            "name": "datasource_group_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "按数据源组筛选",
+              "title": "Datasource Group Id"
+            }
+          },
+          {
+            "description": "按 member 数据源筛选",
+            "in": "query",
+            "name": "member_datasource_ids",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "按 member 数据源筛选",
+              "title": "Member Datasource Ids"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "List Ontology Object Metrics",
         "tags": [
           "ChatData 本体管理（Admin）"
         ]

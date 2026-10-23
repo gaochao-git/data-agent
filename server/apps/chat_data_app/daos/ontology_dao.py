@@ -850,6 +850,37 @@ class OntologyDao:
                 "column_mappings": _parse_json(row.column_mappings_json, dict),
             }
 
+    async def list_source_binding_conflicts_async(
+        self,
+        dataset_id: int,
+        *,
+        exclude_object_type_id: int = 0,
+    ) -> list[dict[str, Any]]:
+        """同一 Dataset 已被哪些活跃对象类型绑定（一源一对象类型校验用）。"""
+        async with session_scope() as session:
+            stmt = (
+                select(
+                    ChatDataOntologySourceBinding.object_type_id,
+                    ChatDataOntologyObjectType.object_type_name,
+                )
+                .join(
+                    ChatDataOntologyObjectType,
+                    ChatDataOntologyObjectType.id == ChatDataOntologySourceBinding.object_type_id,
+                )
+                .where(
+                    ChatDataOntologySourceBinding.dataset_id == int(dataset_id),
+                    ChatDataOntologySourceBinding.delete_flag == 0,
+                    ChatDataOntologyObjectType.delete_flag == 0,
+                )
+            )
+            if int(exclude_object_type_id or 0) > 0:
+                stmt = stmt.where(ChatDataOntologySourceBinding.object_type_id != int(exclude_object_type_id))
+            rows = (await session.execute(stmt)).all()
+        return [
+            {"object_type_id": int(row[0]), "object_type_name": _text(row[1])}
+            for row in rows
+        ]
+
     async def upsert_source_binding_async(
         self,
         object_type_id: int,

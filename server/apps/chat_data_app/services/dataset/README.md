@@ -36,9 +36,26 @@ chat_data_pipeline_node
 chat_data_pipeline_edge
 chat_data_pipeline_run
 chat_data_ontology_source_binding
+chat_data_dataset_semantic_link
 ```
 
 DDL 见 `server/apps/chat_data_app/next_version.md`，新环境兜底见 `server/utils/schema.py`。
+
+## Dataset ↔ 语义模型关联（指标层）
+
+`chat_data_dataset_semantic_link` 是语义层与本体层之间的**显式关联文档**（对齐 Ossie mapping
+document 的简化形态）：
+
+- 只存引用与列对照：`semantic_config_id` + `table_name` + `column_mappings`（Dataset 逻辑列 →
+  语义维度名）；**不存指标表达式**，指标口径唯一权威仍在 `semantic_config`；
+- 可选 `metric_scope`（指标白名单，空 = 全部）与 `lifecycle_status`（draft/active；
+  执行命名指标要求 active）；
+- 与对象类型 `source_binding`（对象属性 → Dataset 逻辑列）组合后，派生得到「对象属性 →
+  语义维度」，因此一个 Dataset 下的多个对象类型共享同一份关联；
+- 运行时 MVP：指标与对象 Dataset 必须同表；跨表/跨数据集指标先标记不可执行；
+- 管理接口在 `dataset_admin.py`，对象类型指标清单位于 `ontology_admin.py`
+  `GET .../object-types/{name}/metrics`；Agent 侧用 `ontology_tool` 的
+  `list_object_metrics` 查询、`aggregate_objects.metric_names` 执行。
 
 ## Pipeline 模型
 

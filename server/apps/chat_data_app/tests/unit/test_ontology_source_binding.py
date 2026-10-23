@@ -31,11 +31,17 @@ def _dataset():
 
 
 class _FakeDao:
+    def __init__(self, conflicts=None):
+        self.conflicts = list(conflicts or [])
+
     async def upsert_source_binding_async(self, object_type_id, **kwargs):
         return {"object_type_id": object_type_id, **kwargs}
 
+    async def list_source_binding_conflicts_async(self, dataset_id, *, exclude_object_type_id=0):
+        return list(self.conflicts)
 
-def _patch(monkeypatch, dataset=None):
+
+def _patch(monkeypatch, dataset=None, conflicts=None):
     dataset = dataset if dataset is not None else _dataset()
 
     async def get_detail(_name):
@@ -48,7 +54,7 @@ def _patch(monkeypatch, dataset=None):
     monkeypatch.setattr(service_module, "logical_dataset_service", fake_dataset_service)
     service = OntologyService()
     monkeypatch.setattr(service, "get_object_type_async", get_detail)
-    monkeypatch.setattr(service, "_dao", _FakeDao())
+    monkeypatch.setattr(service, "_dao", _FakeDao(conflicts))
     return service
 
 
@@ -64,6 +70,19 @@ def test_set_source_binding_success(monkeypatch):
     )
     assert result["dataset_id"] == 3
     assert result["column_mappings"] == {"order_id": "order_id"}
+
+
+def test_set_source_binding_rejects_dataset_reused_by_other_object_type(monkeypatch):
+    service = _patch(monkeypatch, conflicts=[{"object_type_id": 9, "object_type_name": "Customer"}])
+    with pytest.raises(OntologyInvalidError, match="Customer"):
+        asyncio.run(
+            service.set_source_binding_async(
+                "Order",
+                {"dataset_id": 3, "column_mappings": {"order_id": "order_id"}},
+                operator="u",
+                operator_name="n",
+            )
+        )
 
 
 @pytest.mark.parametrize(

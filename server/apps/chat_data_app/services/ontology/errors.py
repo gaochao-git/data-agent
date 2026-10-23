@@ -4,20 +4,20 @@ from __future__ import annotations
 
 
 class OntologyNameInvalidError(ValueError):
-    """API 名格式非法（对象类型/属性/关系类型）→ 40066。"""
+    """API 名格式非法（对象类型/属性/关系类型）→ 40071。"""
 
 
 class OntologyInvalidError(ValueError):
-    """内容非法（校验器 error 阻断）→ 40067。"""
+    """内容非法（校验器 error 阻断）→ 40072。"""
 
 
 class OntologyAlreadyExistsError(RuntimeError):
-    """同 API 名活跃记录已存在且本次不允许覆盖 → 40068。"""
+    """同 API 名活跃记录已存在且本次不允许覆盖 → 40073。"""
 
 
 class OntologyStateInvalidError(RuntimeError):
-    """状态机非法迁移、certified 冻结、破坏性变更未确认 → 40069。"""
+    """状态机非法迁移、certified 冻结、破坏性变更未确认 → 40074。"""
 
 
 class OntologyNotFoundError(LookupError):
-    """对象类型/关系类型不存在 → 40487。"""
+    """对象类型/关系类型不存在 → 40488。"""

@@ -1093,6 +1093,26 @@ export interface OntologyObjectListItem {
   properties: Record<string, unknown>
 }
 
+/** 对象类型可执行的语义指标（只读引用；口径定义在语义层）。 */
+export interface OntologyObjectMetricItem {
+  name: string
+  kind: 'atomic' | 'derived' | 'composite'
+  description: string
+  semantic_config_id: string
+  semantic_config_name: string
+  table: string
+  executable_in_scope: boolean
+  unavailable_reason: string
+}
+
+export interface OntologyObjectMetricsResult {
+  object_type: string
+  dataset_name: string
+  datasource_group_id: string
+  reason: string
+  metrics: OntologyObjectMetricItem[]
+}
+
 export type OntologyObjectFilterOperator = 'eq' | 'ne' | 'contains' | 'gt' | 'gte' | 'lt' | 'lte' | 'in'
 
 export interface OntologyObjectFilter {

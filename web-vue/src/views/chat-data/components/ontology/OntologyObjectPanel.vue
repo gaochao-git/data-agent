@@ -17,6 +17,7 @@ import {
   deleteAdminOntology,
   deleteAdminOntologyObjectType,
   getAdminOntologies,
+  getAdminOntologyObjectMetrics,
   getAdminOntologyObjectType,
   getAdminOntologyActionTypes,
   getAdminOntologyObjectTypes,
@@ -26,6 +27,7 @@ import {
 import type {
   OntologyItem,
   OntologyObjectInstance,
+  OntologyObjectMetricItem,
   OntologyObjectTypeItem,
   OntologyObjectTypeStatus,
   OntologyPropertyItem,
@@ -395,6 +397,22 @@ const treeRef = ref<TreeInstance>()
 // key = 对象节点 row_key（含版本号）
 const detailStore = ref<Record<string, ObjectDetailEntry>>({})
 const objectLoadState = ref<Record<string, 'loading' | 'error' | 'ready'>>({})
+// 对象类型可执行的语义指标（只读引用，口径定义在语义层）
+interface ObjectMetricsEntry {
+  metrics: OntologyObjectMetricItem[]
+  reason: string
+  datasetName: string
+  datasourceGroupId: string
+}
+const objectMetricsStore = ref<Record<string, ObjectMetricsEntry>>({})
+const objectMetricsLoadState = ref<Record<string, 'loading' | 'error' | 'ready'>>({})
+const OBJECT_METRIC_KIND_META: Record<string, { label: string; tagType: 'info' | 'success' | 'warning' }> = {
+  atomic: { label: '原子指标', tagType: 'info' },
+  derived: { label: '派生指标', tagType: 'success' },
+  composite: { label: '复合指标', tagType: 'warning' }
+}
+const objectMetricKindMeta = (kind: string) =>
+  OBJECT_METRIC_KIND_META[kind] || { label: kind || '指标', tagType: 'info' as const }
 
 
 
@@ -439,6 +457,38 @@ const ensureObjectData = (objectNode: ObjectNodeData) => {
   const state = objectLoadState.value[objectNode.row_key]
   if (state === 'ready' || state === 'loading') return
   void fetchObjectEntry(objectNode)
+}
+
+const fetchObjectMetrics = async (objectNode: ObjectNodeData) => {
+  const key = objectNode.object_type_name
+  objectMetricsLoadState.value = { ...objectMetricsLoadState.value, [key]: 'loading' }
+  try {
+    const res = await getAdminOntologyObjectMetrics(objectNode.object_type_name)
+    if (res.status !== 'success') {
+      objectMetricsLoadState.value = { ...objectMetricsLoadState.value, [key]: 'error' }
+      return
+    }
+    objectMetricsStore.value = {
+      ...objectMetricsStore.value,
+      [key]: {
+        metrics: res.data?.metrics || [],
+        reason: res.data?.reason || '',
+        datasetName: res.data?.dataset_name || '',
+        datasourceGroupId: res.data?.datasource_group_id || ''
+      }
+    }
+    objectMetricsLoadState.value = { ...objectMetricsLoadState.value, [key]: 'ready' }
+  } catch (err) {
+    // 指标索引属展示增强，失败不阻塞对象详情
+    console.error('加载对象类型语义指标失败:', err)
+    objectMetricsLoadState.value = { ...objectMetricsLoadState.value, [key]: 'error' }
+  }
+}
+
+const ensureObjectMetrics = (objectNode: ObjectNodeData) => {
+  const state = objectMetricsLoadState.value[objectNode.object_type_name]
+  if (state === 'ready' || state === 'loading') return
+  void fetchObjectMetrics(objectNode)
 }
 
 const retrySelectedObject = () => {
@@ -586,7 +636,10 @@ const onNodeClick = (data: TreeRow) => {
   selectedNode.value = data
   currentNodeKey.value = data.row_key
   objectDetailView.value = 'overview'
-  if (data.kind === 'object_type') ensureObjectData(data)
+  if (data.kind === 'object_type') {
+    ensureObjectData(data)
+    ensureObjectMetrics(data)
+  }
 }
 
 const onNodeExpand = (data: TreeRow) => {
@@ -604,6 +657,17 @@ const selectedObject = computed(() => {
     state: objectLoadState.value[node.row_key]
   }
 })
+
+const selectedMetrics = computed(() =>
+  selectedNode.value?.kind === 'object_type'
+    ? objectMetricsStore.value[selectedNode.value.object_type_name]
+    : undefined
+)
+const selectedMetricsState = computed(() =>
+  selectedNode.value?.kind === 'object_type'
+    ? objectMetricsLoadState.value[selectedNode.value.object_type_name]
+    : undefined
+)
 
 const relationViewMode = ref<'graph' | 'list'>('list')
 
@@ -838,6 +902,10 @@ const openStatus = (objectTypeName: string) => {
 const onSaved = async () => {
   await loadObjects()
   void loadRelationSources()
+  // 绑定/列映射变更会影响可用指标，清空缓存并刷新当前对象类型
+  objectMetricsStore.value = {}
+  objectMetricsLoadState.value = {}
+  if (selectedNode.value?.kind === 'object_type') void fetchObjectMetrics(selectedNode.value)
   emit('changed')
 }
 
@@ -1568,6 +1636,42 @@ const onRelationSaved = (objectTypeNames: string[]) => {
               </div>
             </div>
             <div v-else class="py-1 text-xs text-slate-400">未配置 Dataset 数据源</div>
+
+            <!-- 语义指标（只读引用：口径唯一权威在语义层） -->
+            <div class="mb-1 mt-5 flex items-center gap-2 border-t border-slate-100 pt-4">
+              <i class="fa-solid fa-chart-simple text-[10px] text-emerald-500"></i>
+              <span class="text-xs font-medium text-slate-600">语义指标</span>
+              <span class="text-[11px] text-slate-400">口径定义在语义层，只读引用</span>
+            </div>
+            <div v-if="selectedMetricsState === 'loading'" class="py-1 text-xs text-slate-400">加载指标中…</div>
+            <div v-else-if="selectedMetricsState === 'error'" class="py-1 text-xs text-slate-400">指标加载失败</div>
+            <div
+              v-else-if="selectedMetrics && selectedMetrics.metrics.length > 0"
+              class="flex flex-col gap-1 pb-2"
+            >
+              <div
+                v-for="metric in selectedMetrics.metrics"
+                :key="`${metric.semantic_config_id}:${metric.name}`"
+                class="flex flex-wrap items-center gap-1.5 text-xs"
+              >
+                <span class="font-medium text-slate-700">{{ metric.name }}</span>
+                <el-tag size="small" :type="objectMetricKindMeta(metric.kind).tagType" effect="plain">
+                  {{ objectMetricKindMeta(metric.kind).label }}
+                </el-tag>
+                <el-tag size="small" :type="metric.executable_in_scope ? 'success' : 'info'" effect="plain">
+                  {{ metric.executable_in_scope ? '可执行' : '不可执行' }}
+                </el-tag>
+                <span v-if="metric.description" class="text-[11px] text-slate-400">{{ metric.description }}</span>
+                <el-tooltip
+                  v-if="!metric.executable_in_scope && metric.unavailable_reason"
+                  :content="metric.unavailable_reason"
+                  placement="top"
+                >
+                  <span class="text-[11px] text-amber-500">原因</span>
+                </el-tooltip>
+              </div>
+            </div>
+            <div v-else class="py-1 text-xs text-slate-400">{{ selectedMetrics?.reason || '未关联语义指标' }}</div>
             </div>
             <ObjectInstanceExplorer
               v-else

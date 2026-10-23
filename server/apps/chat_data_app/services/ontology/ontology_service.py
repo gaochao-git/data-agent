@@ -169,6 +169,42 @@ class OntologyService:
         data["source_binding"] = binding
         return data
 
+    async def _ensure_dataset_not_reused_async(
+        self,
+        dataset: dict[str, Any],
+        dataset_id: int,
+        object_type_id: int,
+    ) -> None:
+        """一源一对象类型校验（对齐 Palantir：一个 datasource 只能支撑一个对象类型）。"""
+        conflicts = await self._dao.list_source_binding_conflicts_async(
+            dataset_id, exclude_object_type_id=object_type_id
+        )
+        if not conflicts:
+            return
+        owners = "、".join(item["object_type_name"] for item in conflicts if item.get("object_type_name"))
+        raise OntologyInvalidError(
+            f"Dataset {dataset.get('dataset_name') or dataset_id} 已被对象类型 {owners} 绑定；"
+            "一张 Dataset 只能支撑一个对象类型（对齐 Palantir 一源一对象类型）"
+        )
+
+    @staticmethod
+    def _validate_source_binding_columns(
+        detail: dict[str, Any],
+        dataset: dict[str, Any],
+        column_mappings: Any,
+    ) -> dict[str, str]:
+        """校验对象属性 → Dataset 逻辑列映射，返回归一化映射。"""
+        if not isinstance(column_mappings, dict):
+            raise OntologyInvalidError("column_mappings 必须是对象")
+        dataset_columns = {str(item.get("name") or "") for item in dataset.get("columns") or []}
+        property_names = {str(item.get("property_name") or "") for item in detail.get("properties") or []}
+        for property_name, column_name in column_mappings.items():
+            if property_name not in property_names:
+                raise OntologyInvalidError(f"对象属性不存在: {property_name}")
+            if column_name not in dataset_columns:
+                raise OntologyInvalidError(f"Dataset 列不存在: {column_name}")
+        return {str(key): str(value) for key, value in column_mappings.items()}
+
     async def set_source_binding_async(
         self,
         object_type_name: str,
@@ -188,16 +224,10 @@ class OntologyService:
         dataset = await logical_dataset_service.get_dataset_async_by_id_async(dataset_id)
         if dataset is None:
             raise OntologyInvalidError(f"Dataset 不存在: {dataset_id}")
-        dataset_columns = {str(item.get("name") or "") for item in dataset.get("columns") or []}
-        property_names = {str(item.get("property_name") or "") for item in detail.get("properties") or []}
-        column_mappings = payload.get("column_mappings") or {}
-        if not isinstance(column_mappings, dict):
-            raise OntologyInvalidError("column_mappings 必须是对象")
-        for property_name, column_name in column_mappings.items():
-            if property_name not in property_names:
-                raise OntologyInvalidError(f"对象属性不存在: {property_name}")
-            if column_name not in dataset_columns:
-                raise OntologyInvalidError(f"Dataset 列不存在: {column_name}")
+        await self._ensure_dataset_not_reused_async(dataset, dataset_id, int(detail["id"]))
+        column_mappings = self._validate_source_binding_columns(
+            detail, dataset, payload.get("column_mappings") or {}
+        )
         return await self._dao.upsert_source_binding_async(
             int(detail["id"]),
             dataset_id=dataset_id,

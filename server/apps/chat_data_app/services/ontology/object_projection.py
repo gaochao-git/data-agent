@@ -1126,11 +1126,143 @@ async def list_object_projection(
     }
 
 
+_MAX_OBJECT_METRICS = 5
+_FORBIDDEN_METRIC_EXPRESSION_TOKENS = (";", "--", "/*", "*/")
+
+
+def _safe_metric_expression(expression: Any) -> str:
+    """校验语义层指标表达式（作者配置，非用户输入）；拒绝多语句/注释拼接。"""
+    text = _text(expression)
+    if not text:
+        raise ObjectProjectionError("指标聚合表达式为空")
+    if any(token in text for token in _FORBIDDEN_METRIC_EXPRESSION_TOKENS):
+        raise ObjectProjectionError("指标聚合表达式包含非法 SQL 片段")
+    return text
+
+
+def _metric_alias(name: Any, index: int) -> str:
+    alias = _text(name)
+    if not alias or "`" in alias or len(alias) > 64:
+        alias = f"metric_{index + 1}"
+    return alias
+
+
+def build_object_metric_query(
+    detail: dict[str, Any],
+    config: dict[str, Any],
+    *,
+    group_by: list[str] | None = None,
+    metric_items: list[dict[str, Any]] | None = None,
+    filters: list[dict[str, Any]] | None = None,
+    keyword: str = "",
+    limit: int = 100,
+) -> dict[str, Any]:
+    """按语义指标表达式构造对象作用域聚合查询（只在对象投影表上执行）。"""
+    safe_limit = max(1, min(int(limit), _MAX_AGGREGATE_LIMIT))
+    context = _aggregate_projection_context(detail, config, None)
+    group_properties = _aggregate_group_properties(group_by, context["column_by_property"])
+    items = [item for item in (metric_items or [])[:_MAX_OBJECT_METRICS] if isinstance(item, dict)]
+    if not items:
+        raise ObjectProjectionError("至少需要一个指标")
+    select_parts = [
+        f"{_quote_identifier(context['column_by_property'][name])} AS `{name}`" for name in group_properties
+    ]
+    metric_keys: list[str] = []
+    for index, item in enumerate(items):
+        expression = _safe_metric_expression(item.get("expression"))
+        alias = _metric_alias(item.get("name"), index)
+        select_parts.append(f"({expression}) AS `{alias}`")
+        metric_keys.append(alias)
+    where = _object_search_conditions(
+        context["column_by_property"],
+        keyword=keyword,
+        search_column=context["search_column"],
+        identifier_column=context["identifier_property"],
+        filters=filters or [],
+    )
+    where_sql = f" WHERE {where}" if where else ""
+    group_sql, order_sql = _aggregate_group_sql(group_properties, context["column_by_property"])
+    sql = (
+        f"SELECT {', '.join(select_parts)} FROM {_quote_identifier(context['table'])}"
+        f"{where_sql}{group_sql}{order_sql} LIMIT {safe_limit}"
+    )
+    return {
+        "sql": sql,
+        "table": context["table"],
+        "object_type": _text(detail.get("object_type_name")),
+        "identifier_property": context["identifier_property"],
+        "group_by": group_properties,
+        "metric_keys": metric_keys,
+        "limit": safe_limit,
+    }
+
+
+async def aggregate_metric_projection(
+    object_type_name: str,
+    *,
+    metric_items: list[dict[str, Any]],
+    group_by: list[str] | None = None,
+    filters: list[dict[str, Any]] | None = None,
+    keyword: str = "",
+    member_datasource_ids: list[str] | None = None,
+    user_id: str = "",
+    username: str = "",
+) -> dict[str, Any]:
+    """在对象作用域上执行语义指标聚合（只读）；指标表达式由语义层解析后传入。"""
+    detail = await ontology_service.get_object_type_async(object_type_name)
+    if detail is None:
+        raise ObjectProjectionError(f"本体对象类型不存在: {object_type_name}")
+    if not isinstance(detail.get("source_binding"), dict):
+        raise ObjectProjectionError("对象类型未配置 Dataset 数据源绑定")
+    config, query_detail, targets, group_id = await _dataset_mapping_context(
+        detail, member_datasource_ids, user_id=user_id, username=username
+    )
+    query = build_object_metric_query(
+        query_detail,
+        config,
+        group_by=group_by,
+        metric_items=metric_items,
+        filters=filters,
+        keyword=keyword,
+        limit=_MAX_AGGREGATE_LIMIT,
+    )
+    started_at = time.perf_counter()
+    rows = await _query_rows(
+        targets,
+        query["sql"],
+        group_id=group_id,
+        user_id=user_id,
+        username=username,
+        limit=query["limit"],
+    )
+    execution_time_ms = int((time.perf_counter() - started_at) * 1000)
+    groups = [
+        {
+            "keys": {name: row.get(name) for name in query["group_by"]},
+            "metrics": {name: row.get(name) for name in query["metric_keys"]},
+        }
+        for row in rows
+    ]
+    return {
+        "object_type": query["object_type"],
+        "table": query["table"],
+        "group_by": query["group_by"],
+        "metric_keys": query["metric_keys"],
+        "groups": groups,
+        "limit": query["limit"],
+        "sql": query["sql"],
+        "execution_time_ms": execution_time_ms,
+        **_member_scope(targets),
+    }
+
+
 __all__ = [
     "ObjectProjectionError",
     "build_object_list_query",
     "build_object_query",
     "build_object_aggregate_query",
+    "build_object_metric_query",
+    "aggregate_metric_projection",
     "build_object_search_query",
     "build_related_key_query",
     "ontology_action_execute_enabled",

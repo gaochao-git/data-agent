@@ -802,6 +802,56 @@ CREATE TABLE `chat_data_ontology_source_binding` (
 DROP TABLE IF EXISTS `chat_data_ontology_mapping`;
 ```
 
+### Dataset ↔ 语义模型关联（指标层与本体层显式关联，2026-10-23）
+
+背景：对象类型只绑定 Logical Dataset，指标口径仍只在语义层；为让「对象类型可执行哪些指标」
+成为可查询、可校验的事实（对齐 Ossie mapping document 的简化形态），新增 Dataset 级关联表：
+
+- 关联只存**引用与列对照**，不存指标表达式（口径唯一权威仍在 `semantic_config`）；
+- `column_mappings_json`：Dataset 逻辑列 → 语义维度名；与对象类型 source binding 的
+  「属性 → Dataset 逻辑列」组合，派生得到「对象属性 → 指标维度」；
+- `metric_scope_json`：可选指标白名单（空 = 该模型全部指标）；
+- 运行时 MVP 约束：指标与对象 Dataset 必须同表，跨表/跨数据集指标先标记不可执行；
+- Catalog：`_ontology_catalog.yaml` 的 `object_types[].metrics` 输出只读指标索引
+  （名称/kind/描述/是否可在对象作用域执行），Agent 可用 `list_object_metrics` 查询、
+  用 `aggregate_objects.metric_names` 执行命名指标。
+
+```sql
+CREATE TABLE `chat_data_dataset_semantic_link` (
+  `id` bigint(20) NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `dataset_id` bigint(20) NOT NULL COMMENT 'Logical Dataset ID',
+  `semantic_config_id` varchar(128) NOT NULL COMMENT '语义模型ID（与 datasource_group_id 同域）',
+  `datasource_group_id` varchar(128) NOT NULL COMMENT '业务域=数据源组ID',
+  `table_name` varchar(256) NOT NULL COMMENT '语义模型内对应表名（须等于该组 Dataset 物理表）',
+  `column_mappings_json` text NOT NULL COMMENT 'Dataset逻辑列→语义维度名映射JSON',
+  `metric_scope_json` text NOT NULL COMMENT '允许在对象作用域执行的指标名白名单JSON，空=全部',
+  `lifecycle_status` varchar(16) NOT NULL DEFAULT 'draft' COMMENT '状态:draft/active',
+  `delete_flag` bigint(20) NOT NULL DEFAULT '0' COMMENT '删除标识:0=活跃,非0=已删除(值=行ID)',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `create_by` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人',
+  `create_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人名称',
+  `update_by` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人',
+  `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人名称',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_dataset_semantic_link` (`dataset_id`,`semantic_config_id`,`delete_flag`),
+  KEY `idx_dataset_semantic_link_dataset` (`dataset_id`,`delete_flag`),
+  KEY `idx_dataset_semantic_link_group` (`datasource_group_id`,`delete_flag`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Dataset与语义模型关联（指标口径权威在语义层）';
+```
+
+管理接口：
+
+```text
+GET    /admin/meta/datasets/{dataset_name}/semantic-links?datasource_group_id=
+PUT    /admin/meta/datasets/{dataset_name}/semantic-links/{semantic_config_id}
+DELETE /admin/meta/datasets/{dataset_name}/semantic-links/{semantic_config_id}
+GET    /admin/meta/ontology/object-types/{object_type_name}/metrics
+```
+
+新环境 `server/utils/schema.py` 的 `MYSQL_TABLES` 已包含该表；存量环境需由有 DDL 权限的
+账号执行上面的建表 SQL（应用账号 `fxcjg_rw` 无 CREATE 权限）。
+
 ### Logical Dataset 分层字段（2026-10-23）
 
 按 Palantir Pipeline stages 给 Dataset 增加分层与来源标识：

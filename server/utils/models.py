@@ -1679,3 +1679,38 @@ class ChatDataOntologySourceBinding(Base):
         UniqueConstraint("object_type_id", "delete_flag", name="uniq_source_binding_object"),
         Index("idx_source_binding_dataset", "dataset_id", "delete_flag"),
     )
+
+
+class ChatDataDatasetSemanticLink(Base):
+    """Dataset ↔ 语义模型关联（Ossie mapping 的简化形态）。
+
+    只存引用与列对照，不存指标定义：指标口径的唯一权威仍在语义层。
+    - column_mappings_json: Dataset 逻辑列 → 语义维度名/字段名
+    - metric_scope_json: 可选，允许在本体作用域执行的指标名白名单（空 = 该模型全部指标）
+    """
+
+    __tablename__ = "chat_data_dataset_semantic_link"
+
+    id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
+    dataset_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    semantic_config_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    datasource_group_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    table_name: Mapped[str] = mapped_column(String(256), nullable=False)
+    column_mappings_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}", server_default="{}")
+    metric_scope_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]", server_default="[]")
+    lifecycle_status: Mapped[str] = mapped_column(String(16), nullable=False, default="draft", server_default="draft")
+    delete_flag: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
+    create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
+    update_time: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+    create_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+
+    __table_args__ = (
+        UniqueConstraint("dataset_id", "semantic_config_id", "delete_flag", name="uniq_dataset_semantic_link"),
+        Index("idx_dataset_semantic_link_dataset", "dataset_id", "delete_flag"),
+        Index("idx_dataset_semantic_link_group", "datasource_group_id", "delete_flag"),
+    )

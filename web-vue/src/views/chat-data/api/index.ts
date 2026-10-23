@@ -51,6 +51,7 @@ import type {
   DatasetPipelineUpsertPayload,
   OntologySourceBinding,
   OntologyObjectListItem,
+  OntologyObjectMetricsResult,
   OntologyObjectFilter,
   OntologyObjectListResult,
   OntologyObjectSearchResult,
@@ -2301,6 +2302,18 @@ export function readAdminOntologyObject(
       ...(memberDatasourceIds[0] ? { member_datasource_id: memberDatasourceIds[0] } : {}),
       ...(semanticConfigId ? { semantic_config_id: semanticConfigId } : {})
     }
+  })
+}
+
+/** 后台：对象类型可执行的语义指标（只读引用；口径定义在语义层） */
+export function getAdminOntologyObjectMetrics(
+  objectTypeName: string,
+  params: { datasource_group_id?: string; member_datasource_ids?: string[] } = {}
+): Promise<ApiResponse<OntologyObjectMetricsResult>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/object-types/${encodeURIComponent(objectTypeName)}/metrics`,
+    method: 'get',
+    params
   })
 }
 

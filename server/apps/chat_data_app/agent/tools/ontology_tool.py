@@ -42,8 +42,14 @@ from apps.chat_data_app.services.datasource.target_context import (
 )
 from apps.chat_data_app.services.ontology import ontology_service
 from apps.chat_data_app.services.ontology.action_type_service import OntologyActionTypeService
+from apps.chat_data_app.services.ontology.object_metrics import (
+    ObjectMetricError,
+    list_object_metrics_async,
+    resolve_metric_projection_async,
+)
 from apps.chat_data_app.services.ontology.object_projection import (
     ObjectProjectionError,
+    aggregate_metric_projection,
     aggregate_object_projection,
     ontology_action_execute_enabled,
     ontology_object_read_enabled,
@@ -187,7 +193,14 @@ class _AggregateObjectsPayload(BaseModel):
         default=None, max_length=20, description="执行对象/机构范围；当前对象查询 MVP 一次只支持一个机构"
     )
     group_by: list[str] = Field(default_factory=list, max_length=5, description="分组属性 API 名列表")
-    metrics: list[_AggregateObjectsMetric] = Field(..., min_length=1, max_length=5, description="聚合指标")
+    metrics: list[_AggregateObjectsMetric] = Field(
+        default_factory=list, max_length=5, description="属性白名单聚合指标（与 metric_names 二选一）"
+    )
+    metric_names: list[str] = Field(
+        default_factory=list,
+        max_length=5,
+        description="语义层命名指标（原子/派生/复合），需对象类型绑定的 Dataset 已关联语义模型；与 metrics 二选一",
+    )
     filters: list[_FindObjectsFilter] = Field(default_factory=list, max_length=10, description="属性过滤")
     keyword: str = Field(default="", max_length=200, description="标题键/主键模糊搜索")
     limit: int = Field(default=100, ge=1, le=200, description="返回分组数上限")
@@ -213,6 +226,16 @@ class _ExecuteActionPayload(BaseModel):
     )
 
 
+class _ListObjectMetricsPayload(BaseModel):
+    """``list_object_metrics`` 的入参结构：列出对象类型可执行的语义指标（只读引用）。"""
+
+    object_type: str | None = Field(
+        default=None,
+        max_length=128,
+        description="可选；对象类型 API 名。为空时返回当前业务域全部对象类型的指标清单",
+    )
+
+
 # action -> action_payload 校验模型。与 data_analyzing_tool 的同名机制一致：
 # 入参校验与 handler 内的解析共用一张表，保证两处口径一致。
 ONTOLOGY_ACTION_PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
@@ -222,6 +245,7 @@ ONTOLOGY_ACTION_PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
     "get_object": _GetObjectPayload,
     "find_objects": _FindObjectsPayload,
     "aggregate_objects": _AggregateObjectsPayload,
+    "list_object_metrics": _ListObjectMetricsPayload,
     "list_execution_targets": _ListExecutionTargetsPayload,
     "list_action_types": _ListActionTypesPayload,
     "execute_action": _ExecuteActionPayload,
@@ -231,10 +255,10 @@ ONTOLOGY_ACTION_PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
 class OntologyToolInput(BaseModel):
     """本体导航工具入参：按 ``action`` 分派，``action_payload`` 结构随 action 变化。
 
-    七个 action：``list_object_types`` 列出可定位本体对象类型（轻量清单，只读发现通道）、
-    ``locate_object_type`` 按本体对象类型批量定位语义模型（纯导航，不执行查询）、
-    ``search_around`` 以单个对象类型为中心沿关系走一跳（返回物理连接列与对端完整定位条目）、
-    ``get_object`` 按对象类型 + 主键读取对象属性与一跳 links（只读）。
+    共 10 个 action：``list_object_types`` / ``locate_object_type`` / ``search_around`` 负责导航，
+    ``get_object`` / ``find_objects`` 负责对象读取，``aggregate_objects`` 负责聚合（属性白名单或
+    ``metric_names`` 引用语义层指标），``list_object_metrics`` 列出对象类型可执行的语义指标，
+    ``list_execution_targets`` 列出执行对象，``list_action_types`` / ``execute_action`` 负责 Action。
     action_payload 的校验在工具实现入口经 ``validate_ontology_payload`` 完成——不能放进
     model_validator：langgraph 的 ToolInvocationError 会过滤 loc 为空的校验错误，
     模型与用户都看不到原因；在工具函数体内抛错则走 ToolErrorMiddleware，详情完整可见。
@@ -247,6 +271,7 @@ class OntologyToolInput(BaseModel):
         "get_object",
         "find_objects",
         "aggregate_objects",
+        "list_object_metrics",
         "list_execution_targets",
         "list_action_types",
         "execute_action",
@@ -258,7 +283,8 @@ class OntologyToolInput(BaseModel):
             "search_around 以单个对象类型为中心沿关系走一跳（返回物理连接列与对端对象完整导航条目，不执行查询）；"
             "get_object 按对象类型 + 主键读取对象属性与一跳 links（只读，不回写）；"
             "find_objects 按对象类型查询实例（关键词/属性过滤/排序/分页，只读）；"
-            "aggregate_objects 按对象类型分组聚合（count/sum/avg/min/max，只读）；"
+            "aggregate_objects 按对象类型分组聚合（count/sum/avg/min/max，或用 metric_names 引用语义层命名指标；只读）；"
+            "list_object_metrics 列出对象类型可执行的语义指标（只读引用，不含口径表达式）；"
             "list_execution_targets 列出当前用户可执行的成员数据源；"
             "list_action_types 列出当前业务域可执行的 Action 定义（只读）；"
             "execute_action 执行 Action（写对象属性覆盖层 + 审计，需部署开启 Action 执行开关）"
@@ -273,7 +299,8 @@ class OntologyToolInput(BaseModel):
             'search_around 传 {"object_type": "<中心对象类型API名>", "relation": "可选，只展开该关系"}；'
             'get_object 传 {"object_type": "<对象类型API名>", "object_key": "<对象主键值>", "member_datasource_ids": ["可选机构ID"]}；'
             'find_objects 传 {"object_type": "<对象类型API名>", "member_datasource_ids": ["可选机构ID"], "keyword": "可选", "filters": [{"property": "<属性>", "operator": "eq", "value": "<值>"}], "sort": [{"property": "<属性>", "direction": "asc"}], "limit": 10, "offset": 0}；'
-            'aggregate_objects 传 {"object_type": "<对象类型API名>", "member_datasource_ids": ["可选机构ID"], "group_by": ["<属性>"], "metrics": [{"operation": "count"}, {"operation": "sum", "property": "<数值属性>"}]}；'
+            'aggregate_objects 传 {"object_type": "<对象类型API名>", "member_datasource_ids": ["可选机构ID"], "group_by": ["<属性>"], "metrics": [{"operation": "count"}, {"operation": "sum", "property": "<数值属性>"}]}，或 {"object_type": "...", "metric_names": ["<语义指标名>"], "group_by": ["<属性>"]}；'
+            'list_object_metrics 传 {"object_type": "<可选对象类型API名>"}（为空返回当前业务域全部对象类型）；'
             "list_execution_targets 传 {}；"
             "list_action_types 传 {}；"
             'execute_action 传 {"action_type": "<Action Type API名>", "object_key": "<对象主键值>", "parameters": {"<参数名>": "<值>"}}'
@@ -605,19 +632,155 @@ async def _run_find_objects(
     )
 
 
+async def _run_aggregate_metrics(
+    payload: Any,
+    *,
+    state: dict | None,
+    member_ids: list[str | None],
+    user_id: str,
+) -> str:
+    """按命名指标（原子/派生/复合）在对象作用域聚合；口径由语义层唯一实现。"""
+    group_id = _get_datasource_id_from_state(state) or ""
+    requested_members = [str(item) for item in member_ids if str(item or "").strip()]
+    if len(requested_members) != 1:
+        raise ValueError("aggregate_objects 按指标聚合时一次只支持一个 member_datasource_id")
+    try:
+        resolved = await resolve_metric_projection_async(
+            payload.object_type,
+            [str(name).strip() for name in payload.metric_names if str(name).strip()],
+            datasource_group_id=group_id,
+            member_datasource_ids=requested_members,
+            user_id=user_id,
+        )
+        data = await aggregate_metric_projection(
+            payload.object_type,
+            metric_items=resolved["metric_terms"],
+            group_by=payload.group_by,
+            filters=[*payload.filters, *resolved["metric_filters"]],
+            keyword=payload.keyword,
+            member_datasource_ids=requested_members,
+            user_id=user_id,
+        )
+    except (ObjectMetricError, ObjectProjectionError) as err:
+        raise ValueError(str(err)) from err
+    group_by = [str(name) for name in data.get("group_by") or []]
+    metric_keys = [str(name) for name in data.get("metric_keys") or []]
+    groups = [group for group in data.get("groups") or [] if isinstance(group, dict)]
+    rows = [{**(group.get("keys") or {}), **(group.get("metrics") or {})} for group in groups]
+    member_result = _object_member_result(
+        data,
+        columns=[*group_by, *metric_keys],
+        rows=rows,
+        total_count=len(rows),
+    )
+    metric_names = [str(item.get("name") or "") for item in resolved.get("metric_meta") or []]
+    return _build_object_query_result(
+        [member_result],
+        query_mode="ontology_metric_aggregate",
+        preview={
+            "kind": "aggregate",
+            "group_by": group_by,
+            "metric_keys": metric_keys,
+            "metrics": metric_names,
+            "semantic_config_id": resolved["link"].get("semantic_config_id") or "",
+            "groups": data.get("groups") or [],
+        },
+    )
+
+
+async def _object_metric_entry_async(name: str, group_id: str, user_id: str) -> dict[str, Any]:
+    """单个对象类型的指标清单条目；失败降级为 reason。"""
+    try:
+        data = await list_object_metrics_async(name, datasource_group_id=group_id, user_id=user_id)
+    except ObjectMetricError as err:
+        return {"object_type": name, "metrics": [], "reason": str(err)}
+    return {
+        "object_type": name,
+        "dataset_name": data.get("dataset_name") or "",
+        "datasource_group_id": data.get("datasource_group_id") or "",
+        "metrics": data.get("metrics") or [],
+        "reason": data.get("reason") or "",
+    }
+
+
+async def _object_metric_entries_async(
+    object_type_names: list[str],
+    *,
+    group_id: str,
+    user_id: str,
+) -> list[dict[str, Any]]:
+    return [await _object_metric_entry_async(name, group_id, user_id) for name in object_type_names]
+
+
+async def _run_list_object_metrics(
+    *,
+    payload: Any,
+    state: dict | None,
+    bound_datasource_id: str,
+    bound_user_id: str,
+) -> str:
+    """列出对象类型可执行的语义指标（只读引用；不含口径表达式）。"""
+    state = state or {}
+    group_id = _get_datasource_id_from_state(state) or bound_datasource_id
+    user_id = str(state.get("user_id") or "").strip() or bound_user_id
+    object_type = str(getattr(payload, "object_type", "") or "").strip()
+    names: list[str] = [object_type] if object_type else []
+    if not names:
+        bundle = await _load_domain_bundle(state, bound_datasource_id)
+        names = [
+            str(obj.get("object_type_name") or "")
+            for obj in bundle.get("object_types") or []
+            if isinstance(obj, dict) and str(obj.get("object_type_name") or "").strip()
+        ]
+    entries = await _object_metric_entries_async(names, group_id=group_id, user_id=user_id)
+    return tool_result_payload(
+        ONTOLOGY_TOOL_NAME,
+        {
+            "object_types": entries,
+            "usage": (
+                "命名指标的口径由语义层定义，执行只用 aggregate_objects 的 metric_names；"
+                "不要把命名指标改写为属性 ad-hoc 聚合近似，也不要回退语义查询。"
+            ),
+        },
+    )
+
+
 async def _run_aggregate_objects(
     *,
     payload: Any,
     state: dict | None,
     bound_user_id: str,
 ) -> str:
-    """对象聚合（``aggregate_objects`` action）：分组 + 白名单指标，只读。"""
+    """对象聚合入口：metric_names 走语义指标，否则走属性白名单聚合。"""
     if not ontology_object_read_enabled():
         raise ValueError("对象实例读取未启用：需设置环境变量 CHAT_DATA_ONTOLOGY_OBJECT_READ_ENABLED=1")
     await _ensure_navigable_object_type(payload.object_type)
     state = state or {}
     user_id = str(state.get("user_id") or "").strip() or bound_user_id
     member_ids = _query_member_ids(payload.member_datasource_ids, state)
+    if payload.metric_names:
+        return await _run_aggregate_metrics(
+            payload,
+            state=state,
+            member_ids=member_ids,
+            user_id=user_id,
+        )
+    if not payload.metrics:
+        raise ValueError("aggregate_objects 需要 metrics 或 metric_names（命名指标）之一")
+    return await _run_property_aggregate_objects(
+        payload=payload,
+        member_ids=member_ids,
+        user_id=user_id,
+    )
+
+
+async def _run_property_aggregate_objects(
+    *,
+    payload: Any,
+    member_ids: list[str | None],
+    user_id: str,
+) -> str:
+    """属性白名单聚合（count/count_distinct/sum/avg/min/max + group_by）。"""
     semaphore = asyncio.Semaphore(8)
 
     async def load_member(member_id: str | None) -> dict[str, Any]:
@@ -739,6 +902,13 @@ async def _run_ontology_impl(
             state=state,
             bound_user_id=bound_user_id,
         )
+    if action == "list_object_metrics":
+        return await _run_list_object_metrics(
+            payload=payload,
+            state=state,
+            bound_datasource_id=bound_datasource_id,
+            bound_user_id=bound_user_id,
+        )
     if action == "list_execution_targets":
         return await _run_list_execution_targets(
             state=state,
@@ -796,7 +966,8 @@ def create_ontology_tool(
         - search_around: 以单个对象类型为中心沿关系走一跳——每条关系返回物理连接列（join）与对端对象完整导航条目（neighbor）；跨对象关联优先用它拿 join 列
         - get_object: 按对象类型 + 主键读取对象属性与一跳 links（只读；需指定单一 member_datasource_id）
         - find_objects: 按对象类型查询实例——关键词、属性过滤、排序、分页，返回对象主键/属性与 total；只读
-        - aggregate_objects: 按对象类型分组聚合——group_by + count/count_distinct/sum/avg/min/max；只读
+        - aggregate_objects: 按对象类型分组聚合——group_by + 属性白名单聚合（count/count_distinct/sum/avg/min/max），或用 metric_names 引用语义层命名指标（原子/派生/复合）；只读
+        - list_object_metrics: 列出对象类型可执行的语义指标（只读引用；名称/类型/描述/是否可在对象作用域执行）
         - list_execution_targets: 列出当前用户可执行的成员数据源（member_datasource_id/名称/机构编码）；多机构时先调用它，再把选中的 ID 传给对象查询
         - list_action_types: 列出当前业务域可执行 Action 定义（只读）
         - execute_action: 执行 Action（写对象属性覆盖层 + 审计；受部署开关门控）
@@ -806,7 +977,8 @@ def create_ontology_tool(
         - search_around: {"object_type": "<中心对象API名>", "relation": 可选只展开该关系名}
         - get_object: {"object_type": "<对象类型API名>", "object_key": "<对象主键值>", "member_datasource_ids": ["机构ID"]}
         - find_objects: {"object_type": "<对象类型API名>", "member_datasource_ids": ["可选机构ID"], "keyword": 可选, "filters": [{"property": "<属性>", "operator": "eq", "value": "<值>"}], "sort": [{"property": "<属性>", "direction": "asc"}], "limit": 10, "offset": 0}
-        - aggregate_objects: {"object_type": "<对象类型API名>", "member_datasource_ids": ["可选机构ID"], "group_by": ["<属性>"], "metrics": [{"operation": "count"}, {"operation": "sum", "property": "<数值属性>"}]}
+        - aggregate_objects: {"object_type": "<对象类型API名>", "member_datasource_ids": ["可选机构ID"], "group_by": ["<属性>"], "metrics": [{"operation": "count"}, {"operation": "sum", "property": "<数值属性>"}]}；或 {"object_type": "...", "metric_names": ["<语义指标名>"], "group_by": ["<属性>"], "member_datasource_ids": ["机构ID"]}（命名指标口径由语义层定义，禁止用属性聚合近似）
+        - list_object_metrics: {"object_type": "<可选对象类型API名>"}（为空返回当前业务域全部对象类型的指标清单）
         - list_execution_targets: {}（无参数；返回当前用户可见执行对象）
         - list_action_types: {}（无参数；返回当前业务域可执行 Action 定义）
         - execute_action: {"action_type": "<Action Type API名>", "object_key": "<对象主键值>", "parameters": {"<参数名>": "<值>"}}

@@ -38,6 +38,10 @@ from ..services.ontology import (
     ontology_service,
 )
 from ..services.ontology.action_type_service import OntologyActionTypeService
+from ..services.ontology.object_metrics import (
+    ObjectMetricError,
+    list_object_metrics_async,
+)
 from ..services.ontology.object_projection import (
     ObjectProjectionError,
     list_object_projection,
@@ -70,6 +74,10 @@ def _error_response(e: Exception, fallback_msg: str, fallback_code: ErrorCode) -
         return business_response(msg=str(e), code=ErrorCode.CHATDATA_ONTOLOGY_STATE_INVALID, status="error")
     if isinstance(e, OntologyNotFoundError):
         return business_response(msg=str(e), code=ErrorCode.CHATDATA_ONTOLOGY_NOT_FOUND, status="error")
+    if isinstance(e, ObjectMetricError):
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_ONTOLOGY_METRIC_NOT_EXECUTABLE, status="error")
+    if isinstance(e, ObjectProjectionError):
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_ONTOLOGY_INVALID, status="error")
     logger.error("%s: %s", fallback_msg, e, exc_info=True)
     return business_response(msg=fallback_msg, code=fallback_code, status="error")
 
@@ -175,6 +183,28 @@ async def get_ontology_object_type(object_type_name: str, request: Request) -> J
         raise
     except Exception as e:
         return _error_response(e, "获取本体对象类型详情失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
+
+
+@router.get("/admin/meta/ontology/object-types/{object_type_name}/metrics")
+async def list_ontology_object_metrics(
+    object_type_name: str,
+    request: Request,
+    datasource_group_id: str | None = Query(default=None, description="按数据源组筛选"),
+    member_datasource_ids: list[str] | None = Query(default=None, description="按 member 数据源筛选"),
+) -> JSONResponse:
+    """对象类型可执行的语义指标清单（只读引用；口径定义仍在语义层）。"""
+    try:
+        _get_current_user(request)
+        data = await list_object_metrics_async(
+            object_type_name,
+            datasource_group_id=datasource_group_id or "",
+            member_datasource_ids=member_datasource_ids,
+        )
+        return business_response(data=data, msg="获取成功")
+    except HTTPException:
+        raise
+    except Exception as e:
+        return _error_response(e, "获取对象类型指标清单失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
 
 
 @router.get("/admin/meta/ontology/object-types/{object_type_name}/objects")

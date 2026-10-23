@@ -23,6 +23,9 @@
 - 对象身份 = `member_datasource_id:object_type:local_key`（不同 member 同主键不是同一对象）；
 - certified 前置：至少一个标识属性，且 source binding 的 `column_mappings` 必须覆盖全部
   标识属性（保证认证对象类型可唯一定位实体）；列名必须存在于 Dataset schema。
+- **一源一对象类型**：同一 Dataset 只能被一个活跃对象类型绑定（对齐 Palantir
+  「A single datasource can only be used to back one object type」）；`set_source_binding`
+  先查占用给友好报错，避免同一张表被解释成两种对象、对象身份语义发散。
 - 本体层只引用 Dataset 逻辑列，不重复定义物理列；语义层与本体层共用 Dataset，但二者之间
   不互相依赖。
 
@@ -50,6 +53,20 @@
 | 系统提示词 | `ONTOLOGY_WORKFLOW_BLOCK` + 本体环境/技能/错误处理段 | 原语义提示词与 `data-analyzing` 技能链路 |
 | 回退 | **禁止**回退语义查询/DSL/SQL | 不出现本体目录与本体工具 |
 
+## 指标关联（对象类型 ↔ 语义层）
+
+对象类型不承载指标口径；指标定义唯一权威在语义层。二者的关联走 Logical Dataset 的
+`chat_data_dataset_semantic_link`（引用 + 列对照，见 `services/dataset/README.md`）：
+
+- 解析链路：对象类型 source_binding（属性→Dataset 逻辑列）→ Dataset 关联（逻辑列→语义维度）
+  → `SemanticConfig.metrics`；服务实现 `services/ontology/object_metrics.py`；
+- 目录：`_ontology_catalog.yaml` 的 `object_types[].metrics` 输出只读指标索引
+  （名称/kind/描述/executable_in_scope/unavailable_reason），不复制表达式；
+- 工具：`ontology_tool` 新增 `list_object_metrics`（只读）与
+  `aggregate_objects.metric_names`（按命名指标聚合，query_mode=`ontology_metric_aggregate`）；
+- 约束：指标与对象 Dataset 必须同表（MVP）；关联未 active、指标表不一致、维度未映射时
+  `executable_in_scope=false`，执行时明确报错，**不降级为属性 ad-hoc 聚合**。
+
 ## 治理门禁与不变量
 
 - 写方法统一用 `transaction_scope` 编排事务（DAO 经 ContextVar 复用同一会话），删除/状态迁移等多步写整体回滚，不产生半成功数据。
@@ -58,8 +75,8 @@
 - 升级 certified 前置：至少一个标识属性；**source binding 必须非空且覆盖全部标识属性**。
 - 对象类型编辑守护：删除/改名属性、变更主键组合时，若会让既有关系类型的 `from_columns`/`to_columns` 悬空则直接拒绝。
 - 关系类型状态：新建与软删复活一律按两侧对象类型状态取较低者；活跃编辑只降不升（`min(旧状态, 派生状态)`）。手动迁移端点 `POST .../relation-types/{name}/status` 的上限 = 两侧对象类型较低者，deprecated 仅随对象类型级联不可手动迁移。
-- 同名活跃对象类型/关系类型/本体再次创建且未带 `allow_overwrite` → 40068；状态违规 → 40069。
-- `deprecated_until` 服务层解析为 datetime（接受 `YYYY-MM-DD HH:MM:SS` / `YYYY-MM-DD`），非法值 40067；本体 API 名限 64 字符（落库列宽）。
+- 同名活跃对象类型/关系类型/本体再次创建且未带 `allow_overwrite` → 40073；状态违规 → 40074。
+- `deprecated_until` 服务层解析为 datetime（接受 `YYYY-MM-DD HH:MM:SS` / `YYYY-MM-DD`），非法值 40072；本体 API 名限 64 字符（落库列宽）。
 - 关系类型 `from_columns` 必须引用 from 对象类型已定义属性；`to_columns` 必须引用 to 对象类型标识属性；`one_to_one` 两侧都要求引用标识属性（from 侧以标识属性保证唯一性），多对多走 junction 对象类型。
 - 一致性巡检覆盖关系类型 join 可执行性（`ONT_REL_MODEL_PATH_MISSING` / `ONT_REL_CROSS_MODEL` / `ONT_REL_CROSS_SOURCE`），详见 `ontology_consistency.py`。
 
