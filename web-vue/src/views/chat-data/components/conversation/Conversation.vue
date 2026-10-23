@@ -184,6 +184,12 @@ const applyRunDoneState = (
   stopSteerRestorePolling()
   isStoppingRun.value = false
 
+  if (status !== 'waiting_user') {
+    // Run 已收口（finished/failed/cancelled）时，旧审批卡一律失效，
+    // 避免用户面对一个再也提交不成功的历史问题卡。
+    pendingUserQuestion.value = null
+  }
+
   if (status === 'finished') {
     finalizeUnfinishedToolCalls('completed')
     finishStreamingMessages()
@@ -2038,12 +2044,20 @@ const submitAnalysisQuery = async (
         onStatus: () => {},
         onError: (error, meta) => {
           if (options.interruptedQuestion) {
-            pendingUserQuestion.value = options.interruptedQuestion
+            const questionGone = /待回答问题不存在|问题已回答|运行已恢复/.test(error || '')
+            if (questionGone) {
+              // 审批已经被消费（或 Run 已失败/结束），重放旧 question_id 不会再成功。
+              pendingUserQuestion.value = null
+            } else {
+              // 网络抖动等暂时性失败才恢复卡片，允许用户重试。
+              pendingUserQuestion.value = options.interruptedQuestion
+            }
             const active = activeAssistantMessageId.value
               ? messages.value.find(item => item.id === activeAssistantMessageId.value)
               : null
             if (active?.role === 'assistant') active.isStreaming = false
-            ElMessage.error(error || '提交回答失败')
+            if (questionGone) ElMessage.warning('该审批已处理或任务已结束')
+            else ElMessage.error(error || '提交回答失败')
             return
           }
           // 只有明确的业务错误响应（HTTP 非 2xx）才说明服务端没有建 Run；
@@ -2830,7 +2844,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
             @submit="resumePendingQuestion($event)"
             @cancel="resumePendingQuestion(undefined, true)"
           />
-          <div v-if="pendingFiles.length" class="mb-1.5 flex max-h-[100px] flex-wrap gap-1.5 overflow-y-auto">
+          <div v-if="!pendingUserQuestion && pendingFiles.length" class="mb-1.5 flex max-h-[100px] flex-wrap gap-1.5 overflow-y-auto">
             <div
               v-for="f in pendingFiles"
               :key="f.file_id"
@@ -2852,6 +2866,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
             </div>
           </div>
           <ConversationInputBar
+            v-if="!pendingUserQuestion"
             ref="inputBarRef"
             v-model:input="input"
             v-model:selected-model="selectedModel"
