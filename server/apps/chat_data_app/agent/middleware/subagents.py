@@ -66,7 +66,7 @@ from .context_compression import create_context_compression_middleware
 from .skill_prerequisite import SkillPrerequisiteMiddleware
 from .tool_call_normalizer import create_tool_call_name_normalizer_middleware
 from .tool_execution_fence import create_tool_execution_fence_middleware
-from .tool_result import create_tool_result_middleware
+from .tool_result import create_tool_result_middleware, externalize_tool_text
 
 logger = get_logger(__name__)
 
@@ -92,6 +92,13 @@ SUBAGENT_STATE_PASSTHROUGH_KEYS = frozenset(
 自己的压缩账本，与主图互不影响。"""
 
 TASK_TOOL_NAME = "task"
+
+# 子智能体报告进入父上下文前的封顶：报告是结论而非过程，单次派发不应把父
+# 上下文推过压缩线。阈值按父 state 的硬上限占比算（32k 与 128k 窗口的合理
+# 字节数不同，不写死字符数），超过后复用工具结果同一条落盘/信封通路。
+SUBAGENT_REPORT_MAX_TOKEN_RATIO = 0.08
+SUBAGENT_REPORT_MIN_TOKEN_LIMIT = 1000
+SUBAGENT_REPORT_PREVIEW_CHARS = 2000
 
 _TASK_TOOL_DESCRIPTION_TEMPLATE = """派发一个隔离上下文的子智能体处理复杂多步任务，只把最终结论带回主对话：
 派发的价值是保护主对话上下文——大量文件/数据读取与中间转储留在子图内消化，
@@ -1205,6 +1212,50 @@ def _build_trail_snapshot(messages: list) -> list[dict[str, Any]]:
     return trail
 
 
+async def _offload_subagent_report(report: str, runtime: ToolRuntime) -> str:
+    """子智能体报告超过父上下文预算时落盘，返回统一 offload 信封。"""
+    limit = _subagent_report_token_limit(runtime)
+    if limit is None:
+        return report
+    report_tokens = estimate_text_tokens(report)
+    if report_tokens <= limit:
+        return report
+    state = getattr(runtime, "state", None)
+    envelope, recovery = await externalize_tool_text(
+        report,
+        source_tool=TASK_TOOL_NAME,
+        state=dict(state) if isinstance(state, dict) else {},
+        suffix=".md",
+        preview_chars=SUBAGENT_REPORT_PREVIEW_CHARS,
+    )
+    if recovery is None:
+        # 报告是昂贵且不可复现的结论：落盘失败时保留原文，不能静默换成无内容的截断信封。
+        logger.warning(
+            "[tools] 子智能体报告落盘失败，保留原文: limit_tokens=%s report_tokens=%s",
+            limit,
+            report_tokens,
+        )
+        return report
+    logger.info(
+        "[tools] 子智能体报告超过父上下文预算，已落盘外置: limit_tokens=%s report_tokens=%s",
+        limit,
+        report_tokens,
+    )
+    return envelope
+
+
+def _subagent_report_token_limit(runtime: ToolRuntime) -> int | None:
+    """报告封顶阈值 = 父上下文硬上限的固定占比，避免父上下文被单次报告推过压缩线。"""
+    state = getattr(runtime, "state", None)
+    usage = state.get("token_usage") if isinstance(state, dict) else None
+    if not isinstance(usage, dict):
+        return None
+    hard_limit = int(usage.get("hard_input_limit_tokens") or 0)
+    if hard_limit <= 0:
+        return None
+    return max(int(hard_limit * SUBAGENT_REPORT_MAX_TOKEN_RATIO), SUBAGENT_REPORT_MIN_TOKEN_LIMIT)
+
+
 async def _build_task_tool_impl(
     specs: list[SubagentSpec],
     compiled: dict[str, Any],
@@ -1269,6 +1320,8 @@ async def _build_task_tool_impl(
             f"（约 {context_usage.get('used_tokens', 0)} / {context_usage.get('threshold_tokens', 0)} tokens）"
             "并已提前收尾，以下结论可能不完整。\n\n" + report
         )
+    if tool_status == "success":
+        report = await _offload_subagent_report(report, runtime)
     # 过程快照盖在 ToolMessage 上随消息持久化：直播过程走 SSE，历史回放
     # 走 conversation_event 的 tool_result payload（见
     # conversation_event_service._serialize_tool_message）。

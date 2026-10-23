@@ -105,14 +105,25 @@ def create_context_usage_middleware(
         record["ended_at_ms"] = ended_at_ms
         _merge_response_usage(record, response)
         _stamp_response_timing(response, started_at_ms=started_at_ms, ended_at_ms=ended_at_ms)
+        estimated_input_tokens = int(record.get("input_tokens") or 0)
+        actual_input_tokens = record.get("actual_input_tokens")
+        deviation_pct: float | None = None
+        if actual_input_tokens is not None and estimated_input_tokens > 0:
+            deviation_pct = round(
+                (float(actual_input_tokens) - estimated_input_tokens) * 100 / estimated_input_tokens,
+                1,
+            )
         logger.info(
-            "[agent] 模型调用完成: index=%s model=%s started_at_ms=%s ended_at_ms=%s duration_ms=%s input_tokens=%s output_tokens=%s",
+            "[agent] 模型调用完成: index=%s model=%s started_at_ms=%s ended_at_ms=%s duration_ms=%s "
+            "estimated_input_tokens=%s actual_input_tokens=%s estimation_deviation_pct=%s output_tokens=%s",
             record["index"],
             effective_model_id,
             started_at_ms,
             ended_at_ms,
             ended_at_ms - started_at_ms,
-            record.get("actual_input_tokens", record.get("input_tokens")),
+            estimated_input_tokens,
+            "-" if actual_input_tokens is None else actual_input_tokens,
+            "-" if deviation_pct is None else deviation_pct,
             record.get("output_tokens"),
         )
         usage = get_context_usage()

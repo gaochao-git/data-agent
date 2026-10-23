@@ -1397,6 +1397,95 @@ async def test_task_tool_prepends_budget_notice_when_forced_to_wrap_up(monkeypat
     assert message.status != "error"
 
 
+@pytest.mark.asyncio
+async def test_task_tool_offloads_report_over_parent_budget(monkeypatch):
+    """报告超过父上下文预算占比时落盘外置，正文换成统一信封。"""
+    calls: list[dict] = []
+
+    async def fake_externalize(content, *, source_tool, state, suffix, preview_chars):
+        calls.append(
+            {
+                "content": content,
+                "source_tool": source_tool,
+                "state": state,
+                "suffix": suffix,
+                "preview_chars": preview_chars,
+            }
+        )
+        return "[tool_result_offloaded]\nsource_tool=task", {"source_tool": "task"}
+
+    monkeypatch.setattr(subagents_module, "externalize_tool_text", fake_externalize)
+
+    class FakeRunnable:
+        async def astream(self, _state, _config, *, stream_mode):
+            yield "updates", {"model": {"messages": [AIMessage(content="结论" * 3000, id="m1")]}}
+
+    monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
+    tool = build_task_tool([_spec()])
+    runtime = _fake_runtime(
+        state={
+            "token_usage": {"hard_input_limit_tokens": 1000},
+            "workspace": {"workspace_root": "/tmp/ws"},
+        }
+    )
+
+    result = await tool.coroutine(description="盘点", subagent_type="data-explore", runtime=runtime)
+
+    message = result.update["messages"][0]
+    assert message.content.startswith("[tool_result_offloaded]")
+    assert message.status == "success"
+    assert calls[0]["source_tool"] == "task"
+    assert calls[0]["suffix"] == ".md"
+    assert calls[0]["preview_chars"] == subagents_module.SUBAGENT_REPORT_PREVIEW_CHARS
+    assert calls[0]["state"]["token_usage"]["hard_input_limit_tokens"] == 1000
+
+
+@pytest.mark.asyncio
+async def test_task_tool_keeps_report_within_parent_budget(monkeypatch):
+    """报告未超父上下文预算时不外置，正文保持结论原文。"""
+
+    async def fake_externalize(*_args, **_kwargs):
+        raise AssertionError("未超预算时不应触发外置")
+
+    monkeypatch.setattr(subagents_module, "externalize_tool_text", fake_externalize)
+
+    class FakeRunnable:
+        async def astream(self, _state, _config, *, stream_mode):
+            yield "updates", {"model": {"messages": [AIMessage(content="简短结论", id="m1")]}}
+
+    monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
+    tool = build_task_tool([_spec()])
+    runtime = _fake_runtime(state={"token_usage": {"hard_input_limit_tokens": 1_000_000}})
+
+    result = await tool.coroutine(description="盘点", subagent_type="data-explore", runtime=runtime)
+
+    message = result.update["messages"][0]
+    assert message.content == "简短结论"
+    assert message.status == "success"
+
+
+@pytest.mark.asyncio
+async def test_task_tool_keeps_report_without_parent_usage(monkeypatch):
+    """父 state 没有用量时无法按预算封顶，保持原文（不猜窗口大小）。"""
+
+    async def fake_externalize(*_args, **_kwargs):
+        raise AssertionError("缺少父用量时不应触发外置")
+
+    monkeypatch.setattr(subagents_module, "externalize_tool_text", fake_externalize)
+
+    class FakeRunnable:
+        async def astream(self, _state, _config, *, stream_mode):
+            yield "updates", {"model": {"messages": [AIMessage(content="结论" * 3000, id="m1")]}}
+
+    monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
+    tool = build_task_tool([_spec()])
+
+    result = await tool.coroutine(description="盘点", subagent_type="data-explore", runtime=_fake_runtime())
+
+    message = result.update["messages"][0]
+    assert message.content == "结论" * 3000
+
+
 # ---------------------------------------------------------------------------
 # 子图压缩（ContextCompressionMiddleware 复用）：collect 记账重建 + 摘要注入
 # ---------------------------------------------------------------------------
@@ -1523,3 +1612,32 @@ def test_budget_alert_counts_summary_tokens_for_threshold(monkeypatch):
     assert "上下文预算提示" in req.messages[-1].content
     assert req.messages[-1].additional_kwargs.get("budget_alert") is True
     assert req.tools == ["file_read"]
+
+
+@pytest.mark.asyncio
+async def test_task_tool_keeps_report_when_offload_fails(monkeypatch):
+    """落盘失败不能丢掉子智能体结论，也不得误报已外置。"""
+
+    async def failed_externalize(*_args, **_kwargs):
+        return "[tool_result_truncated]", None
+
+    monkeypatch.setattr(subagents_module, "externalize_tool_text", failed_externalize)
+
+    class FakeRunnable:
+        async def astream(self, _state, _config, *, stream_mode):
+            yield "updates", {"model": {"messages": [AIMessage(content="关键结论" * 3000, id="m1")]}}
+
+    monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
+    tool = build_task_tool([_spec()])
+    runtime = _fake_runtime(
+        state={
+            "token_usage": {"hard_input_limit_tokens": 1000},
+            "workspace": {"workspace_root": "/tmp/ws"},
+        }
+    )
+
+    result = await tool.coroutine(description="盘点", subagent_type="data-explore", runtime=runtime)
+
+    message = result.update["messages"][0]
+    assert message.content == "关键结论" * 3000
+    assert message.status == "success"

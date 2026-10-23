@@ -87,7 +87,20 @@ async def compress_messages_for_state(
         static_input_tokens=static_tokens,
     )
     report["legacy_summary_migrated"] = bool(legacy_summary)
-    if not cfg.enabled or before_tokens < threshold_tokens:
+    target_tokens = max(int(compression_target_tokens), 1)
+    triggered = cfg.enabled and before_tokens >= threshold_tokens
+    log_decision = logger.info if triggered else logger.debug
+    log_decision(
+        "[agent] 上下文压缩决策: triggered=%s before_tokens=%s threshold_tokens=%s target_tokens=%s "
+        "message_count=%s static_input_tokens=%s",
+        triggered,
+        before_tokens,
+        threshold_tokens,
+        target_tokens,
+        len(original_messages),
+        static_tokens,
+    )
+    if not triggered:
         return _enforce_hard_input_limit(
             original_messages,
             effective_previous_summary,
@@ -97,7 +110,6 @@ async def compress_messages_for_state(
             hard_input_limit_tokens=hard_input_limit_tokens,
         )
 
-    target_tokens = max(int(compression_target_tokens), 1)
     working_messages, referenced_count = _reference_tool_results_to_target(
         original_messages,
         static_input_tokens=static_tokens,

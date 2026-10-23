@@ -67,7 +67,7 @@ async def _finalize_tool_message(
         return message
     if len(text) <= TOOL_RESULT_OFFLOAD_SIZE:
         return message
-    externalized, recovery = await _externalize_generic_text(text, tool_name, request)
+    externalized, recovery = await _externalize_generic_text(text, tool_name, _request_state(request))
     return _replace_tool_message(message, content=externalized, recovery=recovery)
 
 
@@ -98,7 +98,7 @@ async def _finalize_query_result(
             content=serialized_result,
             suffix=".json",
             directory_name=QUERY_RESULT_DIR_NAME,
-            request=request,
+            state=_request_state(request),
         )
     except Exception as exc:
         logger.error("保存查询工具结果恢复副本失败: %s", exc, exc_info=True)
@@ -149,13 +149,16 @@ async def _finalize_query_result(
 async def _externalize_generic_text(
     content: str,
     tool_name: str,
-    request: Any,
+    state: dict[str, Any],
+    *,
+    suffix: str = ".txt",
+    preview_chars: int = 512,
 ) -> tuple[str, dict[str, Any] | None]:
     try:
         record = await _write_private_tool_result(
             content=content,
-            suffix=".txt",
-            request=request,
+            suffix=suffix,
+            state=state,
         )
     except Exception as exc:
         logger.error("卸载工具结果失败: tool=%s error=%s", tool_name, exc, exc_info=True)
@@ -170,8 +173,30 @@ async def _externalize_generic_text(
         tool_name=tool_name,
         result_path=record.virtual_path,
         result_size_chars=len(content),
-        preview=_clip_text_to_chars(content, 512),
+        preview=_clip_text_to_chars(content, preview_chars),
     ), recovery
+
+
+async def externalize_tool_text(
+    content: str,
+    *,
+    source_tool: str,
+    state: dict[str, Any],
+    suffix: str = ".txt",
+    preview_chars: int = 512,
+) -> tuple[str, dict[str, Any] | None]:
+    """把超限文本落盘并返回统一 offload 信封。
+
+    供非工具结果的超长内容（如子智能体报告）复用同一条写盘与信封通路；
+    写盘失败时返回截断事实消息，不向上抛异常。
+    """
+    return await _externalize_generic_text(
+        content,
+        source_tool,
+        state,
+        suffix=suffix,
+        preview_chars=preview_chars,
+    )
 
 
 def _build_offloaded_tool_result_message(
@@ -219,7 +244,7 @@ async def _write_private_tool_result(
     content: str,
     suffix: str,
     directory_name: str = TOOL_OFFLOAD_DIR_NAME,
-    request: Any,
+    state: dict[str, Any],
 ) -> ToolResultRecord:
     """Persist one hidden result through the active conversation backend.
 
@@ -227,9 +252,9 @@ async def _write_private_tool_result(
     the same filesystem view. Agent requests without a workspace are invalid;
     allowing a direct local-store fallback would reintroduce a second write path.
     """
-    conversation_id = _required_state_value(request, "conversation_id")
-    user_id = _required_state_value(request, "user_id")
-    workspace = _request_workspace(request)
+    conversation_id = _required_state_field(state, "conversation_id")
+    user_id = _required_state_field(state, "user_id")
+    workspace = _state_workspace(state)
     workspace_root = str(workspace.get("workspace_root") or "").strip()
     if not workspace_root:
         raise ValueError("当前请求缺少会话工作区，无法保存工具结果")
@@ -241,7 +266,7 @@ async def _write_private_tool_result(
         user_id=user_id,
         directory_name=directory_name,
     )
-    runtime = workspace_runtime_from_state(_request_state(request))
+    runtime = workspace_runtime_from_state(state)
     await runtime.write_tool_result(file_path=record.virtual_path, content=content)
     return record
 
@@ -266,13 +291,13 @@ def _request_state(request: Any) -> dict[str, Any]:
     return state if isinstance(state, dict) else {}
 
 
-def _request_workspace(request: Any) -> dict[str, Any]:
-    workspace = _request_state(request).get("workspace")
+def _state_workspace(state: dict[str, Any]) -> dict[str, Any]:
+    workspace = state.get("workspace")
     return workspace if isinstance(workspace, dict) else {}
 
 
-def _required_state_value(request: Any, field: str) -> str:
-    value = str(_request_state(request).get(field) or "").strip()
+def _required_state_field(state: dict[str, Any], field: str) -> str:
+    value = str(state.get(field) or "").strip()
     if not value:
         raise ValueError(f"缺少工具结果归属字段: {field}")
     return value

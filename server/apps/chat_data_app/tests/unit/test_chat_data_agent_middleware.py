@@ -184,9 +184,9 @@ async def test_context_compression_compresses_completed_old_rounds_and_logs_toke
     assert summary == "订单历史摘要"
     assert compressed[0].content.startswith("当前问题")
     assert compressed[-1].content == "当前问题"
-    assert len(logs) == 1
-    assert "上下文压缩已执行" in logs[0][0]
-    assert "before_tokens=%s after_tokens=%s" in logs[0][0]
+    executed_logs = [entry for entry in logs if "上下文压缩已执行" in entry[0]]
+    assert len(executed_logs) == 1
+    assert "before_tokens=%s after_tokens=%s" in executed_logs[0][0]
 
 
 @pytest.mark.asyncio
@@ -248,7 +248,7 @@ async def test_context_compression_replaces_history_even_when_summary_does_not_r
     assert summary == "历史问题 历史回答"
     assert report["triggered"] is True
     assert report["estimated_cleared_tokens"] == 0
-    assert "上下文压缩已执行" in logs[0][0]
+    assert "上下文压缩已执行" in next(entry[0] for entry in logs if "上下文压缩已执行" in entry[0])
 
 
 @pytest.mark.asyncio
