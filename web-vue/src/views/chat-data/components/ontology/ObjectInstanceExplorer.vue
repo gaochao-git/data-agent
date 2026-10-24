@@ -16,6 +16,7 @@ import type {
   OntologyRelationTypeItem,
   OntologyObjectFilter,
   OntologyObjectInstance,
+  OntologyPropertyItem,
   OntologyObjectListItem,
   OntologyObjectSort,
   OntologyObjectTypeItem
@@ -152,14 +153,36 @@ const propertyLabels = computed<Record<string, string>>(() => {
   return labels
 })
 
+const derivationSummary = (property: OntologyPropertyItem | undefined) => {
+  const derivation = property?.derivation
+  if (!derivation) return ''
+  const target = derivation.target_property ? `(${derivation.target_property})` : ''
+  const operator = derivation.operator || derivation.kind
+  const period = derivation.period
+    ? ` · 近${derivation.period.days}天(${derivation.period.time_property})`
+    : ''
+  return `${derivation.relation_type_name} · ${operator}${target}${period}`
+}
+
+const propertyMetaByName = computed<Record<string, OntologyPropertyItem>>(() => {
+  const source = detailMeta.value?.properties || meta.value?.properties || []
+  return Object.fromEntries(source.map(property => [property.property_name, property]))
+})
+
 const detailPropertyRows = computed(() => {
   const data = detail.value
   if (!data) return []
-  return Object.entries(data.properties || {}).map(([name, value]) => ({
-    name,
-    label: propertyLabels.value[name] || '',
-    value
-  }))
+  return Object.entries(data.properties || {}).map(([name, value]) => {
+    const property = propertyMetaByName.value[name]
+    return {
+      name,
+      label: propertyLabels.value[name] || '',
+      value,
+      valueType: property?.value_type || '',
+      derivation: property?.derivation || null,
+      derivationText: derivationSummary(property)
+    }
+  })
 })
 
 const detailTitle = computed(() => {
@@ -1000,6 +1023,16 @@ onMounted(() => void initialize())
             <template #default="{ row }">
               <span class="font-mono text-xs text-slate-700">{{ row.name }}</span>
               <span v-if="row.label" class="ml-1.5 text-xs text-slate-400">{{ row.label }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="类型 / 口径" min-width="190">
+            <template #default="{ row }">
+              <el-tooltip :content="row.derivationText || row.valueType || '未标注'" placement="top">
+                <span class="inline-flex max-w-full items-center gap-1 overflow-hidden">
+                  <el-tag v-if="row.derivation" size="small" type="warning" effect="plain">派生</el-tag>
+                  <span class="truncate text-[11px] text-slate-500">{{ row.derivationText || row.valueType || '-' }}</span>
+                </span>
+              </el-tooltip>
             </template>
           </el-table-column>
           <el-table-column label="值" min-width="220">
