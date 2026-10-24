@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 import threading
 from typing import Any, Literal
 
@@ -25,6 +26,16 @@ _EDGE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _MAX_DEPTH = 3
 _MAX_LIMIT = 200
 _DEFAULT_EDGE = "belongs_to"
+
+
+def ensure_nebula_dependency_path() -> None:
+    """本地可按 CHAT_DATA_NEBULA_DEPS 指定 nebula3 客户端目录；生产由 requirements 安装。"""
+    extra = (os.getenv("CHAT_DATA_NEBULA_DEPS") or "").strip()
+    if not extra:
+        return
+    for part in extra.split(os.pathsep):
+        if part and part not in sys.path:
+            sys.path.insert(0, part)
 
 
 def graph_query_enabled() -> bool:
@@ -199,6 +210,7 @@ class GraphQueryService:
         if self._executor is not None:
             return self._executor(ngql)
         try:
+            ensure_nebula_dependency_path()
             from nebula3.Config import Config
             from nebula3.gclient.net import ConnectionPool
         except ImportError as exc:  # pragma: no cover - 依赖缺失

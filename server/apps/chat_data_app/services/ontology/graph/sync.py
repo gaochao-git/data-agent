@@ -257,6 +257,9 @@ class NebulaGraphWriter:
         if self._session is not None:
             return self._session
         try:
+            from .service import ensure_nebula_dependency_path
+
+            ensure_nebula_dependency_path()
             from nebula3.Config import Config
             from nebula3.gclient.net import ConnectionPool
         except ImportError as exc:  # pragma: no cover - 依赖缺失
