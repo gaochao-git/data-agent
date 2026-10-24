@@ -214,6 +214,8 @@ const exploreLoadingKey = ref('')
 const graphFallbackNotice = ref('')
 const graphAsOf = ref('')
 const graphDegradedReason = ref('')
+const graphLoading = ref(false)
+let graphLoadingCount = 0
 /** 图节点类型显示名（客户/订单/发货单...），避免图上只看到英文对象名。 */
 const objectTypeDisplayNames = ref<Record<string, string>>({})
 const objectTypeLabelPending = new Set<string>()
@@ -342,6 +344,8 @@ const loadTraverseIntoExplore = async (objectKey: string, depth = 2): Promise<bo
   if (!objectKey) return false
   const member = selectedMember.value || parseObjectKey(objectKey, props.objectType).member
   if (!member) return false
+  graphLoadingCount += 1
+  graphLoading.value = true
   try {
     const res = await traverseAdminOntologyGraph({
       object_key: objectKey,
@@ -365,6 +369,9 @@ const loadTraverseIntoExplore = async (objectKey: string, depth = 2): Promise<bo
     graphAsOf.value = ''
     graphDegradedReason.value = ''
     return false
+  } finally {
+    graphLoadingCount = Math.max(0, graphLoadingCount - 1)
+    graphLoading.value = graphLoadingCount > 0
   }
 }
 
@@ -384,6 +391,8 @@ const seedExploreGraph = () => {
   graphFallbackNotice.value = ''
   graphAsOf.value = ''
   graphDegradedReason.value = ''
+  graphLoadingCount = 0
+  graphLoading.value = false
   exploreNodes.value = {}
   exploreEdges.value = {}
   exploreNodeOffsets.value = {}
@@ -1047,6 +1056,10 @@ onMounted(() => void initialize())
           <div class="mb-1 flex flex-wrap items-center gap-2">
             <span class="text-xs font-medium text-slate-700">图探索</span>
             <span class="text-[10px] text-slate-400">力导向布局</span>
+            <span v-if="graphLoading" class="flex items-center gap-1 text-[10px] text-blue-500">
+              <i class="fa-solid fa-spinner fa-spin"></i>
+              正在加载关系图…
+            </span>
             <span class="text-[11px] text-slate-400">
               已加入 {{ Object.keys(exploreNodes).length }} 个对象 · {{ Object.keys(exploreEdges).length }} 条关系
             </span>
@@ -1078,7 +1091,7 @@ onMounted(() => void initialize())
                 v-if="Object.keys(exploreNodes).length === 0"
                 :class="graphFullscreen ? 'flex h-full min-h-[340px] items-center justify-center text-xs text-slate-400' : 'flex h-[420px] items-center justify-center text-xs text-slate-400'"
               >
-                从左侧选择一个对象，或点击「重置为当前对象」开始
+                {{ detail ? '当前对象暂无关联关系，或图同步尚未覆盖' : '从左侧选择一个对象，或点击「重置为当前对象」开始' }}
               </div>
               <svg
                 v-else
