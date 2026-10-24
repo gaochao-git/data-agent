@@ -1296,11 +1296,19 @@ onMounted(() => void initialize())
               :class="graphFullscreen ? 'h-full' : 'h-[460px]'"
               :style="{ width: `${graphDetailWidth}px` }"
             >
-              <div class="mb-1 flex items-center gap-1">
-                <span class="text-[11px] font-medium text-slate-700">选中对象</span>
+              <div class="mb-2 flex min-w-0 items-center gap-1.5">
+                <span class="shrink-0 text-[11px] font-medium text-slate-700">选中对象</span>
+                <el-tag
+                  size="small"
+                  type="primary"
+                  effect="light"
+                  class="min-w-0 max-w-[45%]"
+                  :title="detailTitle || detail.object_key"
+                >
+                  <span class="block truncate">{{ detailTitle || detail.object_key }}</span>
+                </el-tag>
                 <span class="ml-auto min-w-0 truncate font-mono text-[10px] text-slate-400" :title="detail.object_key">{{ detail.object_key }}</span>
               </div>
-              <div v-if="detailTitle" class="mb-2 min-w-0 truncate text-xs font-medium text-slate-700" :title="detailTitle">{{ detailTitle }}</div>
               <div class="min-h-0 flex-1">
                 <el-table
                   :data="detailPropertyRows"
