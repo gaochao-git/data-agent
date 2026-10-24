@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import Annotated, Any, Self
 from uuid import uuid4
 
@@ -50,6 +51,7 @@ def ask_user_question_tool(
     payload = {
         "question_id": uuid4().hex,
         "questions": [question.model_dump() for question in questions],
+        "asked_at_ms": int(time.time() * 1000),
     }
     answer = interrupt(payload)
     return {"status": "answered", **answer}
