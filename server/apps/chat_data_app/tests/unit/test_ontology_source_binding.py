@@ -228,3 +228,32 @@ def test_set_source_binding_accepts_compatible_property_type(monkeypatch):
         )
     )
     assert result["column_mappings"] == {"amount": "amount"}
+
+
+def test_certification_revalidates_existing_binding_types(monkeypatch):
+    service = _patch(monkeypatch)
+
+    async def get_detail(_name):
+        return {
+            "id": 7,
+            "write_mode": "read_only",
+            "properties": [{"property_name": "order_id", "value_type": "Integer", "is_identifier": True}],
+            "source_binding": {
+                "dataset_id": 3,
+                "column_mappings": {"order_id": "order_id"},
+            },
+        }
+
+    async def get_dataset(_dataset_id):
+        return {
+            "id": 3,
+            "dataset_name": "orders",
+            "columns": [{"name": "order_id", "data_type": "string"}],
+            "bindings": [{"member_datasource_id": "ORG1"}],
+        }
+
+    fake_dataset_service = type("FakeDatasetService", (), {"get_dataset_async_by_id_async": staticmethod(get_dataset)})
+    monkeypatch.setattr(service_module, "logical_dataset_service", fake_dataset_service)
+    monkeypatch.setattr(service, "get_object_type_async", get_detail)
+    with pytest.raises(OntologyInvalidError, match="类型 Integer.*不兼容"):
+        asyncio.run(service._require_certifiable("Order"))

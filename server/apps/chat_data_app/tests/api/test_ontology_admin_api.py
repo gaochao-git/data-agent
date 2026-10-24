@@ -410,6 +410,32 @@ def test_graph_sync_contract(client, auth_headers, monkeypatch):
     assert payload["data"]["nodes"] == 2
 
 
+def test_graph_sync_partial_failure_not_success(client, auth_headers, monkeypatch):
+    class _Result:
+        def as_dict(self):
+            return {
+                "member_id": "ORG1",
+                "nodes": 2,
+                "edges": 1,
+                "errors": ["order_item_belongs_to_order: 关联列类型不兼容"],
+            }
+
+    async def fake_sync(**_kwargs):
+        return _Result()
+
+    monkeypatch.setenv("CHAT_DATA_NEBULA_ENABLED", "1")
+    monkeypatch.setattr(ontology_admin_routes, "sync_member_graph_batch", fake_sync)
+    response = client.post(
+        "/api/chatdata/admin/meta/ontology/graph/sync",
+        json={"member_datasource_id": "ORG1", "datasource_group_id": "ds_a"},
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "error"
+    assert "部分失败" in payload["msg"]
+
+
 def test_graph_traverse_contract(client, auth_headers, monkeypatch):
     class _Result:
         def as_dict(self):

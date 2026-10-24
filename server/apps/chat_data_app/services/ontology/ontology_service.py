@@ -753,6 +753,12 @@ class OntologyService:
         missing = sorted(identifier_names - set(column_mappings))
         if missing:
             raise OntologyInvalidError(f"认证前 Dataset 绑定必须覆盖全部标识属性，缺少: {', '.join(missing)}")
+        dataset_id = int(source_binding.get("dataset_id") or 0)
+        if dataset_id:
+            dataset = await logical_dataset_service.get_dataset_async_by_id_async(dataset_id)
+            if dataset is None:
+                raise OntologyInvalidError(f"认证前 Dataset 不存在: {dataset_id}")
+            self._validate_source_binding_columns(detail, dataset, column_mappings)
 
     async def _cascade_relation_statuses(self, object_type_name: str, operator: str, operator_name: str) -> None:
         """对象类型状态变化后级联关系类型状态：仅自动降级，升级需手动确认。"""

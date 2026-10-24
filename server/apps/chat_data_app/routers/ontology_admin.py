@@ -594,7 +594,17 @@ async def sync_ontology_graph(payload: OntologyGraphSyncRequest, request: Reques
             user_id=str(current_user.user_id),
             username=str(current_user.username or ""),
         )
-        return business_response(data=result.as_dict(), msg="图同步完成")
+        data = result.as_dict()
+        errors = data.get("errors") or []
+        if errors:
+            detail = "；".join(str(item) for item in errors[:3])
+            return business_response(
+                data=data,
+                msg=f"图同步部分失败: {detail}",
+                code=ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED,
+                status="error",
+            )
+        return business_response(data=data, msg="图同步完成")
     except HTTPException:
         raise
     except Exception as e:
