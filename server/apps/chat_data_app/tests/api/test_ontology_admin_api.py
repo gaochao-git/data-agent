@@ -395,13 +395,12 @@ def test_graph_sync_contract(client, auth_headers, monkeypatch):
         return _Result()
 
     monkeypatch.setenv("CHAT_DATA_NEBULA_ENABLED", "1")
-    monkeypatch.setattr(ontology_admin_routes, "sync_member_graph", fake_sync)
+    monkeypatch.setattr(ontology_admin_routes, "sync_member_graph_batch", fake_sync)
     response = client.post(
         "/api/chatdata/admin/meta/ontology/graph/sync",
         json={
             "member_datasource_id": "ORG1",
             "datasource_group_id": "ds_a",
-            "limit_per_type": 10,
         },
         headers=auth_headers,
     )

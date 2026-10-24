@@ -2381,14 +2381,6 @@
             "title": "Datasource Group Id",
             "type": "string"
           },
-          "limit_per_type": {
-            "default": 100,
-            "description": "每个对象类型最多同步对象数（MVP）",
-            "maximum": 100.0,
-            "minimum": 1.0,
-            "title": "Limit Per Type",
-            "type": "integer"
-          },
           "member_datasource_id": {
             "description": "成员数据源ID",
             "maxLength": 128,

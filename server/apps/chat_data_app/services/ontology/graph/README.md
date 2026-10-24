@@ -60,20 +60,27 @@ INSERT EDGE belongs_to(member_id, relation_type) ...
 ```json
 {
   "member_datasource_id": "ORG_CODE1",
-  "datasource_group_id": "ds_20260116115851_95505",
-  "limit_per_type": 100
+  "datasource_group_id": "ds_20260116115851_95505"
 }
 ```
 
-MVP 限制：
+批量同步：
 
 ```text
-每个对象类型最多 100 个对象
-逐对象读 links
-用于小规模验证，不是全量生产同步
+对象类型：一条 SELECT 分页拉取对象身份/标题
+关系：一条 SELECT 分页拉取 FK 边
+写入：按 200 条分块写 Nebula
 ```
 
-生产同步仍应改为批量 SQL 抽取边，见设计文档阶段 1。
+实测 `ORG_CODE1`：
+
+```text
+21,107 节点
+29,792 边
+0 错误
+```
+
+当前是全量重建式同步；增量/tombstone 仍待补。
 
 ## 前端接入
 

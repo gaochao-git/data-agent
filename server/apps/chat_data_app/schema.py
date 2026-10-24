@@ -1491,7 +1491,6 @@ class OntologyGraphSyncRequest(BaseModel):
 
     member_datasource_id: str = Field(..., min_length=1, max_length=128, description="成员数据源ID")
     datasource_group_id: str = Field(..., min_length=1, max_length=128, description="数据源组ID")
-    limit_per_type: int = Field(default=100, ge=1, le=100, description="每个对象类型最多同步对象数（MVP）")
 
 
 class OntologyActionTypeUpsertRequest(BaseModel):

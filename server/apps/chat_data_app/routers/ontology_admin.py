@@ -47,7 +47,7 @@ from ..services.ontology.graph import (
     GraphQueryError,
     get_graph_query_service,
     graph_query_enabled,
-    sync_member_graph,
+    sync_member_graph_batch,
 )
 from ..services.ontology.object_projection import (
     ObjectProjectionError,
@@ -588,10 +588,9 @@ async def sync_ontology_graph(payload: OntologyGraphSyncRequest, request: Reques
                 "图查询未启用",
                 ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED,
             )
-        result = await sync_member_graph(
+        result = await sync_member_graph_batch(
             member_id=payload.member_datasource_id,
             datasource_group_id=payload.datasource_group_id,
-            limit_per_type=payload.limit_per_type,
             user_id=str(current_user.user_id),
             username=str(current_user.username or ""),
         )

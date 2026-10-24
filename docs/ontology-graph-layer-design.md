@@ -372,12 +372,12 @@ find_graph_paths
 POST /admin/meta/ontology/graph/sync
 ```
 
-实测（项目对象投影，limit_per_type=1）：
+实测（项目对象投影，批量全量）：
 
 ```text
 6 个对象类型
-22 个节点
-18 条边
+21,107 个节点
+29,792 条边
 0 个错误
 ```
 
@@ -396,6 +396,14 @@ limit <= 200
 ```
 
 图查询返回的只有对象身份/标题/关系；属性仍回源 `get_object`。
+
+同步实现：
+
+```text
+对象类型一条 SELECT 分页
+关系一条 SELECT 分页
+Nebula 按 200 条分块写
+```
 
 ## 12. 当前结论
 

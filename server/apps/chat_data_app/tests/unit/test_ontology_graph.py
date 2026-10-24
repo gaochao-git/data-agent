@@ -238,3 +238,69 @@ def test_sync_statements_safe_quote(monkeypatch):
     assert 'M:order:1\\"' in vertex
     assert "INSERT VERTEX Object(object_type, member_id, title)" in vertex
     assert 'M:order:1"->' in edge_sql.replace('\\"', '"')
+
+
+@pytest.mark.asyncio
+async def test_batch_graph_sync_builds_nodes_edges(monkeypatch):
+    from apps.chat_data_app.services.ontology.graph import sync
+
+    async def fake_bundle(_group):
+        return {
+            "datasource_group_id": "ds_a",
+            "object_types": [
+                {
+                    "id": 1,
+                    "object_type_name": "order",
+                    "source_binding": {
+                        "members": [{"member_datasource_id": "M", "physical_table": "orders"}],
+                        "column_mappings": {"order_id": "order_key", "customer_id": "customer_key"},
+                        "columns": {"order_key": "ORDER_ID", "customer_key": "CUSTOMER_ID"},
+                    },
+                },
+                {
+                    "id": 2,
+                    "object_type_name": "customer",
+                    "source_binding": {
+                        "members": [{"member_datasource_id": "M", "physical_table": "customers"}],
+                        "column_mappings": {"customer_id": "customer_key"},
+                        "columns": {"customer_key": "CUSTOMER_ID"},
+                    },
+                },
+            ],
+            "properties": [
+                {"object_type_id": 1, "property_name": "order_id", "is_identifier": True, "is_title": True},
+                {"object_type_id": 1, "property_name": "customer_id"},
+                {"object_type_id": 2, "property_name": "customer_id", "is_identifier": True, "is_title": True},
+            ],
+            "relation_types": [
+                {
+                    "relation_type_name": "order_belongs_to_customer",
+                    "from_object_type_id": 1,
+                    "to_object_type_id": 2,
+                    "from_columns": ["customer_id"],
+                    "to_columns": ["customer_id"],
+                }
+            ],
+        }
+
+    async def fake_targets(*_args, **_kwargs):
+        return [{"member_datasource_id": "M"}]
+
+    async def fake_query(_targets, sql, **_kwargs):
+        if "object_key" in sql and "orders" in sql:
+            return [{"object_key": "O1", "title": "SO-1"}]
+        if "object_key" in sql and "customers" in sql:
+            return [{"object_key": "C1", "title": "客户"}]
+        if "from_key" in sql:
+            return [{"from_key": "O1", "to_key": "C1"}]
+        return []
+
+    monkeypatch.setattr(sync, "load_domain_ontology_bundle_async", fake_bundle)
+    monkeypatch.setattr(sync, "_member_targets", fake_targets)
+    monkeypatch.setattr(sync, "_query_rows", fake_query)
+    nodes, edges, result = await sync.collect_member_graph_batch(member_id="M", datasource_group_id="ds_a")
+    assert result.nodes == 2
+    assert result.edges == 1
+    assert {node.object_key for node in nodes} == {"M:order:O1", "M:customer:C1"}
+    assert edges[0].from_object_key == "M:order:O1"
+    assert edges[0].to_object_key == "M:customer:C1"

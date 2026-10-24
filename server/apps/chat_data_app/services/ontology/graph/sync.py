@@ -14,7 +14,8 @@ from typing import Any
 
 from utils.logger import get_logger
 
-from ..object_projection import read_object_projection, search_object_projection
+from ...datasource.manager import get_datasource_manager
+from ..object_projection import _query_rows, read_object_projection, search_object_projection
 from ..query_mode import load_domain_ontology_bundle_async
 from .contracts import GraphEdge, GraphNode, GraphQueryError
 from .service import _quote, _text
@@ -23,6 +24,8 @@ logger = get_logger(__name__)
 
 _EDGE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _MAX_OBJECTS_PER_TYPE = 100
+_SYNC_PAGE_SIZE = 5_000
+_WRITE_CHUNK_SIZE = 200
 
 
 @dataclass
@@ -245,11 +248,12 @@ class NebulaGraphWriter:
 
     def __init__(self, executor: Any | None = None) -> None:
         self._executor = executor
+        self._pool: Any | None = None
+        self._session: Any | None = None
 
-    def _execute(self, ngql: str) -> None:
-        if self._executor is not None:
-            self._executor(ngql)
-            return
+    def _ensure_session(self) -> Any:
+        if self._session is not None:
+            return self._session
         try:
             from nebula3.Config import Config
             from nebula3.gclient.net import ConnectionPool
@@ -262,7 +266,7 @@ class NebulaGraphWriter:
                 hosts.append((host, int(port or "9669")))
         pool = ConnectionPool()
         config = Config()
-        config.timeout = int(os.getenv("CHAT_DATA_NEBULA_TIMEOUT_SECONDS") or "10")
+        config.timeout = int(os.getenv("CHAT_DATA_NEBULA_TIMEOUT_SECONDS") or "120")
         if not pool.init(hosts, config):
             raise GraphSyncError("Nebula 连接失败")
         space = _text(os.getenv("CHAT_DATA_NEBULA_SPACE")) or "chatdata_graph"
@@ -270,22 +274,300 @@ class NebulaGraphWriter:
             _text(os.getenv("CHAT_DATA_NEBULA_USER")) or "root",
             _text(os.getenv("CHAT_DATA_NEBULA_PASSWORD")) or "nebula",
         )
-        try:
-            use = session.execute(f"USE {space}")
-            if not use.is_succeeded():
-                raise GraphSyncError(f"Nebula space 不可用: {use.error_msg()}")
-            result = session.execute(ngql)
-            if not result.is_succeeded():
-                raise GraphSyncError(f"Nebula 写入失败: {result.error_msg()}")
-        finally:
+        use = session.execute(f"USE {space}")
+        if not use.is_succeeded():
             session.release()
             pool.close()
+            raise GraphSyncError(f"Nebula space 不可用: {use.error_msg()}")
+        self._pool = pool
+        self._session = session
+        return session
+
+    def _execute(self, ngql: str) -> None:
+        if self._executor is not None:
+            self._executor(ngql)
+            return
+        session = self._ensure_session()
+        result = session.execute(ngql)
+        if not result.is_succeeded():
+            raise GraphSyncError(f"Nebula 写入失败: {result.error_msg()}")
+
+    def close(self) -> None:
+        if self._session is not None:
+            self._session.release()
+            self._session = None
+        if self._pool is not None:
+            self._pool.close()
+            self._pool = None
 
     def write(self, nodes: list[GraphNode], edges: list[GraphEdge]) -> None:
-        if nodes:
-            self._execute(_vertex_statement(nodes))
-        if edges:
-            self._execute(_edge_statement(edges, _edge_type()))
+        # 分块写，避免单条 INSERT 超过 Nebula 请求体/内存上限；一个 session 写完整批。
+        try:
+            for start in range(0, len(nodes), _WRITE_CHUNK_SIZE):
+                self._execute(_vertex_statement(nodes[start : start + _WRITE_CHUNK_SIZE]))
+            for start in range(0, len(edges), _WRITE_CHUNK_SIZE):
+                self._execute(_edge_statement(edges[start : start + _WRITE_CHUNK_SIZE], _edge_type()))
+        finally:
+            self.close()
+
+
+async def _member_targets(member: str, group_id: str, user_id: str, username: str) -> list[dict[str, Any]]:
+    targets = await get_datasource_manager().list_authorized_execution_targets_async(
+        group_id, user_id=user_id or None, username=username or None
+    )
+    selected = [target for target in targets if _text(target.get("member_datasource_id") or target.get("id")) == member]
+    if not selected:
+        raise GraphSyncError(f"当前用户无权访问 member: {member}")
+    return selected
+
+
+def _binding_column(binding: dict[str, Any], property_name: str) -> str:
+    logical = _text((binding.get("column_mappings") or {}).get(property_name))
+    return _text((binding.get("columns") or {}).get(logical))
+
+
+def _member_table(binding: dict[str, Any], member: str) -> str:
+    for item in binding.get("members") or []:
+        if _text(item.get("member_datasource_id")) == member:
+            return _text(item.get("physical_table"))
+    return _text(binding.get("physical_table"))
+
+
+def _object_batch_sql(
+    object_type: dict[str, Any], properties: list[dict[str, Any]], member: str, *, offset: int = 0
+) -> str:
+    from ..object_query_builder import _quote_identifier
+
+    binding = object_type.get("source_binding") or {}
+    table = _member_table(binding, member)
+    identifier = next((prop for prop in properties if bool(prop.get("is_identifier"))), None)
+    title = next((prop for prop in properties if bool(prop.get("is_title"))), identifier)
+    if not table or identifier is None or title is None:
+        raise GraphSyncError(f"对象类型缺少批量同步所需标识/标题/表: {object_type.get('object_type_name')}")
+    id_col = _binding_column(binding, _text(identifier.get("property_name")))
+    title_col = _binding_column(binding, _text(title.get("property_name")))
+    if not id_col:
+        raise GraphSyncError(f"对象类型标识列未映射: {object_type.get('object_type_name')}")
+    title_expr = _quote_identifier(title_col) if title_col and title_col != id_col else _quote_identifier(id_col)
+    return (
+        f"SELECT CAST({_quote_identifier(id_col)} AS STRING) AS `object_key`, "
+        f"CAST({title_expr} AS STRING) AS `title` FROM {_quote_identifier(table)} "
+        f"ORDER BY {_quote_identifier(id_col)} LIMIT {int(offset)}, {_SYNC_PAGE_SIZE}"
+    )
+
+
+def _relation_batch_sql(relation: dict[str, Any], object_type: dict[str, Any], member: str, *, offset: int = 0) -> str:
+    from ..object_query_builder import _quote_identifier
+
+    binding = object_type.get("source_binding") or {}
+    table = _member_table(binding, member)
+    from_columns = [_text(column) for column in relation.get("from_columns") or [] if _text(column)]
+    if not table or len(from_columns) != 1:
+        raise GraphSyncError(f"关系缺少单列 from_columns: {relation.get('relation_type_name')}")
+    identifier = next((prop for prop in object_type.get("_properties") or [] if bool(prop.get("is_identifier"))), None)
+    if identifier is None:
+        raise GraphSyncError(f"关系起点对象类型缺少标识属性: {object_type.get('object_type_name')}")
+    id_col = _binding_column(binding, _text(identifier.get("property_name")))
+    fk_col = _binding_column(binding, from_columns[0])
+    if not id_col or not fk_col:
+        raise GraphSyncError(f"关系列未映射: {relation.get('relation_type_name')}")
+    return (
+        f"SELECT CAST({_quote_identifier(id_col)} AS STRING) AS `from_key`, "
+        f"CAST({_quote_identifier(fk_col)} AS STRING) AS `to_key` FROM {_quote_identifier(table)} "
+        f"WHERE {_quote_identifier(fk_col)} IS NOT NULL ORDER BY {_quote_identifier(id_col)} "
+        f"LIMIT {int(offset)}, {_SYNC_PAGE_SIZE}"
+    )
+
+
+async def _fetch_pages(
+    builder: Any,
+    *,
+    targets: list[dict[str, Any]],
+    group_id: str,
+    user_id: str,
+    username: str,
+) -> list[dict[str, Any]]:
+    collected: list[dict[str, Any]] = []
+    offset = 0
+    while True:
+        rows = await _query_rows(
+            targets,
+            builder(offset),
+            group_id=group_id,
+            user_id=user_id,
+            username=username,
+            limit=_SYNC_PAGE_SIZE,
+        )
+        collected.extend(rows)
+        if len(rows) < _SYNC_PAGE_SIZE:
+            return collected
+        offset += _SYNC_PAGE_SIZE
+
+
+def _nodes_from_object_rows(member: str, type_name: str, rows: list[dict[str, Any]]) -> dict[str, GraphNode]:
+    nodes: dict[str, GraphNode] = {}
+    for row in rows:
+        key = _text(row.get("object_key"))
+        if key:
+            nodes[f"{member}:{type_name}:{key}"] = GraphNode(
+                object_key=f"{member}:{type_name}:{key}",
+                object_type=type_name,
+                title=_text(row.get("title")) or key,
+                member_id=member,
+            )
+    return nodes
+
+
+async def _sync_batch_objects(
+    bundle: dict[str, Any],
+    *,
+    member: str,
+    targets: list[dict[str, Any]],
+    group_id: str,
+    user_id: str,
+    username: str,
+) -> tuple[dict[str, GraphNode], dict[int, dict[str, Any]], GraphSyncResult]:
+    properties_by_type: dict[int, list[dict[str, Any]]] = {}
+    for prop in bundle.get("properties") or []:
+        properties_by_type.setdefault(int(prop.get("object_type_id") or 0), []).append(prop)
+    nodes: dict[str, GraphNode] = {}
+    object_by_id: dict[int, dict[str, Any]] = {}
+    result = GraphSyncResult(member_id=member)
+    for object_type in bundle.get("object_types") or []:
+        object_type_id = int(object_type.get("id") or 0)
+        binding = object_type.get("source_binding") or {}
+        members = {_text(item.get("member_datasource_id")) for item in binding.get("members") or []}
+        if member not in members:
+            continue
+        properties = properties_by_type.get(object_type_id, [])
+        enriched = {**object_type, "_properties": properties}
+        object_by_id[object_type_id] = enriched
+        result.object_types += 1
+        try:
+            object_rows = await _fetch_pages(
+                lambda offset, obj=enriched, props=properties: _object_batch_sql(obj, props, member, offset=offset),
+                targets=targets,
+                group_id=group_id,
+                user_id=user_id,
+                username=username,
+            )
+        except Exception as exc:  # noqa: BLE001
+            result.errors.append(f"{object_type.get('object_type_name')}: {exc}")
+            continue
+        nodes.update(_nodes_from_object_rows(member, _text(object_type.get("object_type_name")), object_rows))
+    result.nodes = len(nodes)
+    return nodes, object_by_id, result
+
+
+def _relation_edges_from_rows(
+    *,
+    member: str,
+    relation_name: str,
+    from_type_name: str,
+    to_type_name: str,
+    nodes: dict[str, GraphNode],
+    rows: list[dict[str, Any]],
+) -> tuple[dict[tuple[str, str, str], GraphEdge], int]:
+    edges: dict[tuple[str, str, str], GraphEdge] = {}
+    skipped = 0
+    for row in rows:
+        from_key = _text(row.get("from_key"))
+        to_key = _text(row.get("to_key"))
+        if not from_key or not to_key:
+            continue
+        from_object_key = f"{member}:{from_type_name}:{from_key}"
+        to_object_key = to_key if ":" in to_key else f"{member}:{to_type_name}:{to_key}"
+        if from_object_key not in nodes or to_object_key not in nodes:
+            skipped += 1
+            continue
+        edges[(from_object_key, to_object_key, relation_name)] = GraphEdge(
+            from_object_key=from_object_key,
+            to_object_key=to_object_key,
+            relation_type=relation_name,
+            member_id=member,
+        )
+    return edges, skipped
+
+
+async def _sync_batch_relations(
+    bundle: dict[str, Any],
+    *,
+    member: str,
+    nodes: dict[str, GraphNode],
+    object_by_id: dict[int, dict[str, Any]],
+    targets: list[dict[str, Any]],
+    group_id: str,
+    user_id: str,
+    username: str,
+) -> tuple[dict[tuple[str, str, str], GraphEdge], GraphSyncResult]:
+    edges: dict[tuple[str, str, str], GraphEdge] = {}
+    result = GraphSyncResult(member_id=member)
+    for relation in bundle.get("relation_types") or []:
+        relation_name = _text(relation.get("relation_type_name"))
+        from_type = object_by_id.get(int(relation.get("from_object_type_id") or 0))
+        if from_type is None:
+            result.skipped_links += 1
+            continue
+        try:
+            relation_rows = await _fetch_pages(
+                lambda offset, rel=relation, obj=from_type: _relation_batch_sql(rel, obj, member, offset=offset),
+                targets=targets,
+                group_id=group_id,
+                user_id=user_id,
+                username=username,
+            )
+        except Exception as exc:  # noqa: BLE001
+            result.errors.append(f"{relation_name}: {exc}")
+            continue
+        from_type_name = _text(from_type.get("object_type_name"))
+        to_type_name = _text(
+            (object_by_id.get(int(relation.get("to_object_type_id") or 0)) or {}).get("object_type_name")
+        )
+        relation_edges, skipped = _relation_edges_from_rows(
+            member=member,
+            relation_name=relation_name,
+            from_type_name=from_type_name,
+            to_type_name=to_type_name,
+            nodes=nodes,
+            rows=relation_rows,
+        )
+        edges.update(relation_edges)
+        result.skipped_links += skipped
+    result.edges = len(edges)
+    return edges, result
+
+
+async def collect_member_graph_batch(
+    *,
+    member_id: str,
+    datasource_group_id: str,
+    user_id: str = "",
+    username: str = "",
+) -> tuple[list[GraphNode], list[GraphEdge], GraphSyncResult]:
+    """批量版：每个对象类型/关系分页 SELECT，不逐对象读 links。"""
+    member = _text(member_id)
+    group_id = _text(datasource_group_id)
+    if not member or not group_id:
+        raise GraphSyncError("同步必须指定 member_id 和 datasource_group_id")
+    bundle = await load_domain_ontology_bundle_async(group_id)
+    targets = await _member_targets(member, group_id, user_id, username)
+    nodes, object_by_id, object_result = await _sync_batch_objects(
+        bundle, member=member, targets=targets, group_id=group_id, user_id=user_id, username=username
+    )
+    edges, relation_result = await _sync_batch_relations(
+        bundle,
+        member=member,
+        nodes=nodes,
+        object_by_id=object_by_id,
+        targets=targets,
+        group_id=group_id,
+        user_id=user_id,
+        username=username,
+    )
+    object_result.edges = len(edges)
+    object_result.skipped_links = relation_result.skipped_links
+    object_result.errors.extend(relation_result.errors)
+    return list(nodes.values()), list(edges.values()), object_result
 
 
 async def sync_member_graph(
@@ -297,11 +579,29 @@ async def sync_member_graph(
     username: str = "",
     writer: Any | None = None,
 ) -> GraphSyncResult:
-    """从对象投影抽取并写入 Nebula；返回计数。"""
+    """逐对象 links 的抽样同步（保留给小规模/兼容入口）。"""
     nodes, edges, result = await collect_member_graph(
         member_id=member_id,
         datasource_group_id=datasource_group_id,
         limit_per_type=limit_per_type,
+        user_id=user_id,
+        username=username,
+    )
+    (writer or NebulaGraphWriter()).write(nodes, edges)
+    return result
+
+
+async def sync_member_graph_batch(
+    *,
+    member_id: str,
+    datasource_group_id: str,
+    user_id: str = "",
+    username: str = "",
+    writer: Any | None = None,
+) -> GraphSyncResult:
+    nodes, edges, result = await collect_member_graph_batch(
+        member_id=member_id,
+        datasource_group_id=datasource_group_id,
         user_id=user_id,
         username=username,
     )
