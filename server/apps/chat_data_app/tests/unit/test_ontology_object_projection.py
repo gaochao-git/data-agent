@@ -509,6 +509,10 @@ def test_build_derived_value_sql_variants():
     assert _build_derived_value_sql("orders", "customer_id", "C1", operator="sum", target_column="amount") == (
         "SELECT SUM(`amount`) AS `derived_value` FROM `orders` WHERE `customer_id` = 'C1'"
     )
+    numeric_sql = _build_derived_value_sql(
+        "orders", "customer_id", "C1", operator="max", target_column="amount", numeric=True
+    )
+    assert "MAX(CAST(`amount` AS DECIMAL(38,6)))" in numeric_sql
     assert _build_derived_value_sql("users", "user_id", "C1", target_column="name") == (
         "SELECT `name` AS `derived_value` FROM `users` WHERE `user_id` = 'C1' LIMIT 1"
     )

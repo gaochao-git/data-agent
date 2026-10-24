@@ -1005,3 +1005,19 @@ CREATE TABLE `chat_data_ontology_action_object` (
   目标对象类型显式改为 `action_writable` 后方可继续使用；
 - `read_object_projection` 对 `action_created` 对象类型走动作对象表读取（无源投影），
   列表/搜索视图对动作对象暂走 DAO 关键词查询（MVP）。
+
+### 派生数值聚合口径修复（2026-10-24）
+
+`max_amount` 等派生属性在底层 `amount` 为字符串时，Hive `MAX`/`MIN` 会按字典序取值（例如 `"2.00" > "1502.46"`）。现在派生聚合的 `sum/avg/min/max` 在值类型为 `Integer/Decimal` 时先 `CAST(... AS DECIMAL(38,6))`，新属性会自动按目标属性数值类型推导。
+
+存量环境仍需修正历史属性类型（按对象类型/属性实际 ID 调整）：
+
+```sql
+UPDATE `chat_data_ontology_property`
+SET `value_type` = 'Decimal'
+WHERE `property_name` = 'max_amount'
+  AND `value_type` = 'String'
+  AND JSON_EXTRACT(`derivation_json`, '$.operator') = 'max';
+```
+
+执行后重新保存或重新读取对象类型即可按新口径计算。

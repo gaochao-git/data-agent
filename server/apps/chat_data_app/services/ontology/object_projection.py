@@ -539,6 +539,14 @@ _DERIVED_AGGREGATE_SQL = {"sum": "SUM", "avg": "AVG", "min": "MIN", "max": "MAX"
 _DERIVED_FILTER_OPERATORS = {"eq", "ne", "contains", "gt", "gte", "lt", "lte", "in"}
 
 
+def _derived_aggregate_expression(operator: str, target_column: str, *, numeric: bool) -> str:
+    """聚合表达式：数值目标先 CAST，避免 Hive 对字符串列按字典序 MAX/MIN。"""
+    column = _quote_identifier(target_column)
+    if numeric and operator in {"sum", "avg", "min", "max"}:
+        column = f"CAST({column} AS DECIMAL(38,6))"
+    return f"{_DERIVED_AGGREGATE_SQL[operator]}({column})"
+
+
 def _build_derived_value_sql(
     table: str,
     filter_column: str,
@@ -547,6 +555,7 @@ def _build_derived_value_sql(
     operator: str = "",
     target_column: str = "",
     extra_where: str = "",
+    numeric: bool = False,
 ) -> str:
     """派生属性取值 SQL（纯函数，供单测复用）：聚合（多行→单值）或选取（单行单列）。
 
@@ -557,7 +566,7 @@ def _build_derived_value_sql(
     elif operator == "count_distinct":
         expression = f"COUNT(DISTINCT {_quote_identifier(target_column)})"
     elif operator:
-        expression = f"{_DERIVED_AGGREGATE_SQL[operator]}({_quote_identifier(target_column)})"
+        expression = _derived_aggregate_expression(operator, target_column, numeric=numeric)
     else:
         expression = _quote_identifier(target_column)
     limit = "" if operator else " LIMIT 1"
@@ -688,6 +697,7 @@ async def _compute_derived_value(
         operator=_text(derivation.get("operator")),
         target_column=context["target_column"],
         extra_where=extra_where,
+        numeric=_text(prop.get("value_type")) in {"Integer", "Decimal"},
     )
     rows = await _query_rows(
         context["targets"], sql, group_id=context["group_id"], user_id=user_id, username=username, limit=1
@@ -807,7 +817,11 @@ async def _derived_join_for_property(
         elif operator == "count_distinct":
             aggregate = f"COUNT(DISTINCT {_quote_identifier(context['target_column'])})"
         else:
-            aggregate = f"{_DERIVED_AGGREGATE_SQL[operator]}({_quote_identifier(context['target_column'])})"
+            aggregate = _derived_aggregate_expression(
+                operator,
+                context["target_column"],
+                numeric=_text(prop.get("value_type")) in {"Integer", "Decimal"},
+            )
         extra_where = _derived_extra_where(
             derivation, context["column_mappings"], context["dimensions"], context["table"]
         )
