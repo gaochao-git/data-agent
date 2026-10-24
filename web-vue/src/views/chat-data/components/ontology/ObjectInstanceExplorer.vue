@@ -249,7 +249,6 @@ let exploreStartOffsetX = 0
 let exploreStartOffsetY = 0
 let exploreDragMoved = false
 
-const hoveredGraphNodeKey = ref('')
 const startExploreNodeDrag = (event: MouseEvent, node: { key: string; x: number; y: number }) => {
   event.preventDefault()
   event.stopPropagation()
@@ -290,6 +289,13 @@ const onExploreNodeClick = (rawKey: string) => {
   seedAfterLoad.value = false
   exploreSelectedKey.value = rawKey
 }
+
+const orderedGraphNodes = computed(() => {
+  const nodes = exploreGraph.value.nodes
+  const selected = exploreSelectedKey.value
+  if (!selected) return nodes
+  return [...nodes.filter(node => node.key !== selected), ...nodes.filter(node => node.key === selected)]
+})
 
 const addExploreNode = (rawKey: string, objectType: string, label: string, properties: Record<string, unknown>) => {
   if (!rawKey) return
@@ -1171,11 +1177,9 @@ onMounted(() => void initialize())
                   <line :x1="edge.x1" :y1="edge.y1" :x2="edge.x2" :y2="edge.y2" stroke="#cbd5e1" stroke-width="1.2" />
                 </g>
                 <g
-                  v-for="node in exploreGraph.nodes"
+                  v-for="node in orderedGraphNodes"
                   :key="node.key"
                   class="cursor-move"
-                  @mouseenter="hoveredGraphNodeKey = node.key"
-                  @mouseleave="hoveredGraphNodeKey = ''"
                   @mousedown="startExploreNodeDrag($event, node)"
                   @click="onExploreNodeClick(node.key)"
                 >
@@ -1209,7 +1213,7 @@ onMounted(() => void initialize())
                     {{ node.label.length > 18 ? `${node.label.slice(0, 17)}…` : node.label }}
                   </text>
                   <foreignObject
-                    v-if="node.key === exploreSelectedKey || node.key === hoveredGraphNodeKey"
+                    v-if="node.key === exploreSelectedKey"
                     :x="node.x - 100"
                     :y="node.y + 24"
                     width="200"
@@ -1279,7 +1283,7 @@ onMounted(() => void initialize())
             </aside>
           </div>
           <div class="mt-1 text-[10px] text-slate-400">
-            点击节点只选中；请点节点下方「查看详情」或「展开一跳」，点击节点不会自动加载或扩图。
+            先点击节点选中；选中后节点下方出现「查看详情」和「展开一跳」，不会自动加载或扩图。
           </div>
         </div>
       </template>
