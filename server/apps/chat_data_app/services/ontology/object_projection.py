@@ -311,23 +311,38 @@ def _keyword_condition(search_column: str, identifier_column: str, keyword: str)
     return "(" + " OR ".join(f"{column} LIKE '%{escaped}%'" for column in sorted(search_columns)) + ")"
 
 
-def _in_condition(column: str, item: dict[str, Any]) -> str:
+def _in_condition(column: str, item: dict[str, Any], value_type: str = "") -> str:
     values = [_text(entry) for entry in (item.get("values") or []) if _text(entry)]
     if not values:
         # 兼容旧前端/API：in 只传 value 时按中英文逗号、分号、空白拆分
         values = [part.strip() for part in re.split(r"[,，;；\s]+", _text(item.get("value"))) if part.strip()]
     if not values:
         return "1 = 0"
-    escaped_values = ", ".join(f"'{escape_string(entry)}'" for entry in values[:100])
-    return f"{column} IN ({escaped_values})"
+    if _text(value_type) in {"Integer", "Decimal"}:
+        literals = [_numeric_literal(entry, value_type) for entry in values[:100]]
+    else:
+        literals = [f"'{escape_string(entry)}'" for entry in values[:100]]
+    return f"{column} IN ({', '.join(literals)})"
 
 
-def _filter_condition(column: str, operator: str, item: dict[str, Any], value: str) -> str:
+def _numeric_literal(value: str, value_type: str) -> str:
+    normalized = _text(value)
+    if not re.fullmatch(r"-?\d+(?:\.\d+)?", normalized):
+        raise ObjectProjectionError(f"数值属性过滤值非法: {normalized}")
+    return normalized
+
+
+def _filter_condition(column: str, operator: str, item: dict[str, Any], value: str, value_type: str = "") -> str:
     if operator == "in":
-        return _in_condition(column, item)
+        return _in_condition(column, item, value_type)
     if operator == "contains":
         return f"{column} LIKE '%{escape_string(value)}%'"
-    return f"{column} {_FILTER_SQL_SYMBOLS[operator]} '{escape_string(value)}'"
+    literal = (
+        _numeric_literal(value, value_type)
+        if _text(value_type) in {"Integer", "Decimal"}
+        else f"'{escape_string(value)}'"
+    )
+    return f"{column} {_FILTER_SQL_SYMBOLS[operator]} {literal}"
 
 
 def _search_property_sql(
@@ -360,6 +375,7 @@ def _where_condition(
     depth: int = 0,
     counter: list[int] | None = None,
     main_table: str = "",
+    value_types: dict[str, str] | None = None,
 ) -> str:
     """编译官方风格 where 树（and/or/not + 比较/包含/isNull），最多 3 层。"""
     if where is None:
@@ -380,8 +396,11 @@ def _where_condition(
             depth=depth,
             counter=counter,
             main_table=main_table,
+            value_types=value_types,
         )
-    return _where_leaf_condition(operator, where, column_by_property, derived_expressions, main_table=main_table)
+    return _where_leaf_condition(
+        operator, where, column_by_property, derived_expressions, main_table=main_table, value_types=value_types
+    )
 
 
 def _where_group_condition(
@@ -393,6 +412,7 @@ def _where_group_condition(
     depth: int,
     counter: list[int],
     main_table: str = "",
+    value_types: dict[str, str] | None = None,
 ) -> str:
     children = [child for child in where.get("children") or [] if isinstance(child, dict)]
     if operator == "not" and len(children) != 1:
@@ -400,7 +420,15 @@ def _where_group_condition(
     if operator != "not" and not children:
         raise ObjectProjectionError(f"where.{operator} 至少需要一个子条件")
     parts = [
-        _where_condition(child, column_by_property, derived_expressions, depth=depth + 1, counter=counter)
+        _where_condition(
+            child,
+            column_by_property,
+            derived_expressions,
+            depth=depth + 1,
+            counter=counter,
+            main_table=main_table,
+            value_types=value_types,
+        )
         for child in children
     ]
     parts = [part for part in parts if part]
@@ -417,13 +445,20 @@ def _where_leaf_condition(
     column_by_property: dict[str, str],
     derived_expressions: dict[str, str] | None,
     main_table: str = "",
+    value_types: dict[str, str] | None = None,
 ) -> str:
     if operator not in _WHERE_LEAF_OPERATORS:
         raise ObjectProjectionError(f"不支持的 where 操作符: {operator or '?'}")
     column = _search_property_sql(_text(where.get("property")), column_by_property, derived_expressions, main_table)
     if operator in {"is_null", "is_not_null"}:
         return f"{column} IS {'NOT ' if operator == 'is_not_null' else ''}NULL"
-    return _filter_condition(column, operator, where, _text(where.get("value")))
+    return _filter_condition(
+        column,
+        operator,
+        where,
+        _text(where.get("value")),
+        _text((value_types or {}).get(_text(where.get("property")))),
+    )
 
 
 def _object_search_conditions(
@@ -436,13 +471,16 @@ def _object_search_conditions(
     derived_expressions: dict[str, str] | None = None,
     where: dict[str, Any] | None = None,
     main_table: str = "",
+    value_types: dict[str, str] | None = None,
 ) -> str:
     """通用对象过滤条件；只接受已映射属性，不拼接任意 SQL。"""
     conditions: list[str] = []
     keyword_condition = _keyword_condition(search_column, identifier_column, keyword)
     if keyword_condition:
         conditions.append(keyword_condition)
-    where_condition = _where_condition(where, column_by_property, derived_expressions, main_table=main_table)
+    where_condition = _where_condition(
+        where, column_by_property, derived_expressions, main_table=main_table, value_types=value_types
+    )
     if where_condition:
         conditions.append(where_condition)
     for item in filters[:_MAX_FILTERS]:
@@ -451,7 +489,15 @@ def _object_search_conditions(
         if operator not in _FILTER_OPERATORS:
             raise ObjectProjectionError(f"不支持的过滤操作符: {operator or '?'}")
         column = _search_property_sql(property_name, column_by_property, derived_expressions, main_table)
-        conditions.append(_filter_condition(column, operator, item, _text(item.get("value"))))
+        conditions.append(
+            _filter_condition(
+                column,
+                operator,
+                item,
+                _text(item.get("value")),
+                _text((value_types or {}).get(property_name)),
+            )
+        )
     return " AND ".join(conditions)
 
 
@@ -504,6 +550,7 @@ def build_object_search_query(
     if not identifier_meta or identifier_meta["table"] != table:
         raise ObjectProjectionError("标识属性与普通属性不在同一张表，MVP 暂不支持")
     column_by_property = dict(columns)
+    value_types = {_text(prop.get("property_name")): _text(prop.get("value_type")) for prop in properties}
     search_property = _title_property_name(properties, identifier_property)
     search_dimension = dimensions.get(_text(column_mappings.get(search_property)))
     search_column = search_dimension["column"] if search_dimension else identifier_meta["column"]
@@ -516,6 +563,7 @@ def build_object_search_query(
         derived_expressions=derived_expressions,
         where=where,
         main_table=table,
+        value_types=value_types,
     )
     where_sql = f" WHERE {where_sql_text}" if where_sql_text else ""
     order_sql = _object_search_order_by(
@@ -685,6 +733,7 @@ def build_object_aggregate_query(
         identifier_column=context["identifier_property"],
         filters=filters or [],
         where=where,
+        value_types=context["value_types"],
     )
     where_sql = f" WHERE {where_sql_text}" if where_sql_text else ""
     group_sql, order_sql = _aggregate_group_sql(group_properties, column_by_property)
@@ -1382,7 +1431,11 @@ async def _derived_join_for_property(
             f"FROM {target_table}{where_sql} GROUP BY {filter_column}) AS `{alias}` "
             f"ON `{alias}`.`join_key` = {join_key}"
         )
-        return join, f"`{alias}`.`value`"
+        expression = f"`{alias}`.`value`"
+        if operator in {"count", "count_distinct", "sum"}:
+            # 无对端行时 COUNT/SUM 语义为 0，而不是 NULL；同时避免 Hive DESC 把 NULL 排在最前。
+            expression = f"COALESCE({expression}, 0)"
+        return join, expression
     join = f" LEFT JOIN {target_table} AS `{alias}` ON `{alias}`.{filter_column} = {join_key}"
     return join, f"`{alias}`.{_quote_identifier(context['target_column'])}"
 

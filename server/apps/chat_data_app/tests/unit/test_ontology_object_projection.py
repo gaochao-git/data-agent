@@ -121,11 +121,11 @@ def test_build_object_search_query_applies_filters_sort_and_count():
         limit=10,
         offset=5,
     )
-    assert "`amount` >= '10'" in query["sql"]
+    assert "`amount` >= 10" in query["sql"]
     assert "ORDER BY `orders`.`amount` DESC" in query["sql"]
     assert "LIMIT 11 OFFSET 5" in query["sql"]
     assert "COUNT(*) AS `total`" in query["count_sql"]
-    assert "`amount` >= '10'" in query["count_sql"]
+    assert "`amount` >= 10" in query["count_sql"]
 
 
 def test_build_object_search_query_supports_in_and_contains():
@@ -137,7 +137,7 @@ def test_build_object_search_query_supports_in_and_contains():
             {"property": "order_id", "operator": "contains", "value": "A0"},
         ],
     )
-    assert "`amount` IN ('10', '20')" in query["sql"]
+    assert "`amount` IN (10, 20)" in query["sql"]
     assert "`order_id` LIKE '%A0%'" in query["sql"]
 
 
@@ -155,7 +155,7 @@ def test_build_object_search_query_supports_all_comparison_operators():
             _config(),
             filters=[{"property": "amount", "operator": operator, "value": "10"}],
         )
-        assert f"`amount` {symbol} '10'" in query["sql"]
+        assert f"`amount` {symbol} 10" in query["sql"]
     empty_in = build_object_search_query(
         _detail(),
         _config(),
@@ -167,7 +167,7 @@ def test_build_object_search_query_supports_all_comparison_operators():
         _config(),
         filters=[{"property": "amount", "operator": "in", "value": "10, 20"}],
     )
-    assert "`amount` IN ('10', '20')" in compat_in["sql"]
+    assert "`amount` IN (10, 20)" in compat_in["sql"]
 
 
 def test_build_object_search_query_rejects_unmapped_filter_and_sort():
@@ -226,7 +226,7 @@ def test_build_object_aggregate_query_groups_and_aggregates_mapped_properties():
     assert "COUNT(*) AS `count`" in query["sql"]
     assert "SUM(`amount`) AS `sum_amount`" in query["sql"]
     assert "COUNT(DISTINCT `order_id`) AS `count_distinct_order_id`" in query["sql"]
-    assert "WHERE `amount` >= '10'" in query["sql"]
+    assert "WHERE `amount` >= 10" in query["sql"]
     assert "GROUP BY `amount`" in query["sql"]
     assert "LIMIT 200" in query["sql"]
     assert query["metric_keys"] == ["count", "sum_amount", "count_distinct_order_id"]
@@ -625,7 +625,7 @@ def test_search_query_supports_derived_filter_and_sort():
         derived_expressions=expressions,
     )
     assert joins[0] in filtered["sql"]
-    assert "`d0`.`value` > '1'" in filtered["sql"]
+    assert "`d0`.`value` > 1" in filtered["sql"]
     sorted_query = build_object_search_query(
         _derived_detail(),
         _config(),
@@ -808,7 +808,7 @@ def test_resolve_derived_filter_sort_builds_join(monkeypatch):
     )
     assert "LEFT JOIN" in joins[0]
     assert "COUNT(*)" in joins[0]
-    assert expressions == {"order_count": "`d0`.`value`"}
+    assert expressions == {"order_count": "COALESCE(`d0`.`value`, 0)"}
 
     monkeypatch.setattr(
         object_projection,
@@ -940,8 +940,8 @@ def test_where_tree_compiles_and_or_not_and_leaves():
             {"operator": "not", "children": [{"operator": "is_null", "property": "order_id"}]},
         ],
     }
-    sql = object_projection._where_condition(where, columns, None)
-    assert "`amount` = '10'" in sql
+    sql = object_projection._where_condition(where, columns, None, value_types={"amount": "Integer"})
+    assert "`amount` = 10" in sql
     assert "NOT (`order_id` IS NULL)" in sql
     assert (
         object_projection._where_condition({"operator": "in", "property": "amount", "values": []}, columns, None)
@@ -977,8 +977,8 @@ def test_search_query_uses_where_and_derived_expression():
         derived_joins=[" LEFT JOIN `orders` AS `d0` ON `d0`.`customer_id` = `orders`.`order_id`"],
         derived_expressions={"order_count": "`d0`.`value`"},
     )
-    assert "`d0`.`value` = '1'" in query["sql"]
-    assert "`d0`.`value` = '1'" in query["count_sql"]
+    assert "`d0`.`value` = 1" in query["sql"]
+    assert "`d0`.`value` = 1" in query["count_sql"]
 
 
 def test_where_property_names_and_derived_target_guards():
