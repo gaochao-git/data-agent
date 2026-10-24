@@ -94,6 +94,11 @@ def ontology_action_execute_enabled() -> bool:
 _MAX_RELATIONS = 20
 
 
+def _append_link_warning(warnings: list[str] | None, message: str) -> None:
+    if warnings is not None:
+        warnings.append(message)
+
+
 def _text(value: Any) -> str:
     return str(value or "").strip()
 
@@ -149,19 +154,23 @@ def _assemble_object(
     links: dict[str, list[dict[str, Any]]],
     member_scope: dict[str, str] | None = None,
     derived_values: dict[str, Any] | None = None,
+    warnings: list[str] | None = None,
 ) -> dict[str, Any]:
     # 派生属性值查询时合并进 properties（对齐 Palantir：derived 就是属性，不单独分组）
     properties = {name: row.get(name) for name in query["properties"]}
     properties.update(derived_values or {})
     object_type = query["object_type"]
     scope = member_scope or {}
-    return {
+    payload = {
         "object_type": object_type,
         "object_key": _qualified_object_key(scope.get("member_datasource_id", ""), object_type, query["object_key"]),
         "properties": properties,
         "links": links,
         **scope,
     }
+    if warnings:
+        payload["warnings"] = list(warnings)
+    return payload
 
 
 def _select_dataset_binding(dataset: dict[str, Any], requested_ids: list[str] | None) -> dict[str, Any]:
@@ -326,6 +335,7 @@ async def _relation_link_entries(
     member_id: str,
     user_id: str,
     username: str,
+    warnings: list[str] | None = None,
 ) -> list[dict[str, Any]] | None:
     """单条关系类型的一跳 link；同 member 内查询，不跨机构。"""
     relation_name = _text(relation.get("relation_type_name"))
@@ -353,6 +363,7 @@ async def _relation_link_entries(
         )
     except ObjectProjectionError as err:
         logger.warning("关系一跳查询跳过: relation=%s error=%s", relation_name, err)
+        _append_link_warning(warnings, f"{relation_name} 关系读取失败，已跳过")
         return None
     entries: list[dict[str, Any]] = []
     for obj in result.get("objects") or []:
@@ -379,6 +390,7 @@ async def _read_links(
     member_id: str,
     user_id: str,
     username: str,
+    warnings: list[str] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     """查询一跳 links：只读、最佳努力，单条关系失败只跳过并记录。"""
     current_id = int(detail.get("id") or 0)
@@ -394,6 +406,7 @@ async def _read_links(
                 member_id=member_id,
                 user_id=user_id,
                 username=username,
+                warnings=warnings,
             )
             for relation in candidates
         ],
@@ -403,6 +416,7 @@ async def _read_links(
     for relation, result in zip(candidates, results, strict=False):
         if isinstance(result, BaseException):
             logger.warning("读取对象关系失败，已跳过: %s: %s", relation.get("relation_type_name"), result)
+            _append_link_warning(warnings, f"{relation.get('relation_type_name')} 关系读取失败，已跳过")
             continue
         if result:
             links[_text(relation.get("relation_type_name"))] = result
@@ -468,8 +482,16 @@ async def read_object_projection(
     derived = await _derived_property_values(
         detail, row, member_id=scope["member_datasource_id"], user_id=user_id, username=username
     )
-    links = await _read_links(detail, row, member_id=scope["member_datasource_id"], user_id=user_id, username=username)
-    return _assemble_object(detail, query, row, links, scope, derived_values=derived)
+    link_warnings: list[str] = []
+    links = await _read_links(
+        detail,
+        row,
+        member_id=scope["member_datasource_id"],
+        user_id=user_id,
+        username=username,
+        warnings=link_warnings,
+    )
+    return _assemble_object(detail, query, row, links, scope, derived_values=derived, warnings=link_warnings)
 
 
 async def _read_action_object(detail: dict[str, Any], object_key: str) -> dict[str, Any]:

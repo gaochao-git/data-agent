@@ -1006,6 +1006,14 @@ onMounted(() => void initialize())
           <i class="fa-solid fa-spinner fa-spin mr-1"></i>加载所选对象详情中…
         </div>
         <el-alert v-if="detailError" :title="detailError" type="error" :closable="false" show-icon class="mb-2" />
+        <el-alert
+          v-if="detail.warnings?.length"
+          :title="detail.warnings.join('；')"
+          type="warning"
+          :closable="false"
+          show-icon
+          class="mb-2"
+        />
         <div class="mb-3 flex flex-wrap items-center gap-2">
           <el-button v-if="history.length > 0" link size="small" class="shrink-0" @click="backToObject">返回</el-button>
           <span class="min-w-0 truncate font-mono text-xs text-slate-700">{{ detail.object_key }}</span>

@@ -1085,6 +1085,7 @@ export interface OntologyObjectInstance {
   object_key: string
   properties: Record<string, unknown>
   links: Record<string, unknown[]>
+  warnings?: string[]
 }
 
 export interface OntologyGraphNode {

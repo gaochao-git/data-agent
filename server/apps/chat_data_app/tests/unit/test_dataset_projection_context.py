@@ -292,14 +292,22 @@ def test_relation_link_entries_skips_and_handles_errors(monkeypatch):
         raise object_projection.ObjectProjectionError("boom")
 
     monkeypatch.setattr(object_projection, "search_object_projection", fail)
+    warnings: list[str] = []
     assert (
         asyncio.run(
             object_projection._relation_link_entries(
-                base, {"customer_id": "C1"}, current_id=1, member_id="m1", user_id="", username=""
+                base,
+                {"customer_id": "C1"},
+                current_id=1,
+                member_id="m1",
+                user_id="",
+                username="",
+                warnings=warnings,
             )
         )
         is None
     )
+    assert warnings == ["rel 关系读取失败，已跳过"]
 
     async def result(*_args, **_kwargs):
         return {
