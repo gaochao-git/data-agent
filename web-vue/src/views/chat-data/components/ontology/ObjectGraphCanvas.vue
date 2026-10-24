@@ -1,7 +1,8 @@
 <script setup lang="ts">
 /**
  * 本体对象图渲染：ECharts graph 负责布局、缩放、平移、节点拖拽。
- * 点击节点只选中；查看详情/展开一跳由节点旁浮层按钮触发。
+ * ECharts 的 graph 节点是 canvas 图元，不承载 HTML 子元素；
+ * 点击节点只选中，查看详情/展开一跳由父页面固定操作栏处理。
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as echarts from 'echarts'
@@ -26,22 +27,15 @@ const props = defineProps({
   selectedKey: { type: String, default: '' }
 })
 
-const emit = defineEmits<{
-  select: [key: string]
-  'view-detail': [key: string]
-  expand: [key: string]
-}>()
+const emit = defineEmits<{ select: [key: string] }>()
 
 const containerRef = ref<HTMLDivElement | null>(null)
-const actionPosition = ref({ left: 0, top: 0 })
-let actionLockedUntilRoam = false
+const selectedNode = computed(() => props.nodes.find(node => node.key === props.selectedKey) || null)
 let chart: echarts.ECharts | null = null
 let resizeObserver: ResizeObserver | null = null
 let resizeFrame: number | null = null
 let lastSize = { width: 0, height: 0 }
 let renderFrame: number | null = null
-
-const selectedNode = computed(() => props.nodes.find(node => node.key === props.selectedKey) || null)
 
 const buildOption = (): any => {
   const selectedIndex = props.nodes.findIndex(node => node.key === props.selectedKey)
@@ -50,9 +44,7 @@ const buildOption = (): any => {
     tooltip: {
       trigger: 'item',
       formatter: (params: any) => {
-        if (params.dataType === 'edge') {
-          return String(params.data?.relationName || params.name || '')
-        }
+        if (params.dataType === 'edge') return String(params.data?.relationName || params.name || '')
         return String(params.data?.fullLabel || params.name || '')
       }
     },
@@ -78,7 +70,7 @@ const buildOption = (): any => {
           fontSize: 10,
           formatter: (params: any) => {
             const data = params.data || {}
-            const type = String(data.typeLabel || '')
+            const type = String(data.nodeType || '')
             const label = String(data.nodeLabel || params.name || '')
             return type ? `${type} · ${label}` : label
           }
@@ -105,7 +97,6 @@ const buildOption = (): any => {
           id: node.key,
           name: node.label,
           value: node.label,
-          typeLabel: node.typeLabel || node.objectType,
           nodeLabel: node.label,
           nodeType: node.typeLabel || node.objectType,
           fullLabel: `${node.typeLabel || node.objectType} · ${node.label}`,
@@ -125,37 +116,9 @@ const buildOption = (): any => {
   }
 }
 
-const clampActionPosition = (left: number, top: number) => {
-  const width = containerRef.value?.clientWidth || 800
-  const height = containerRef.value?.clientHeight || 420
-  return {
-    left: Math.max(8, Math.min(width - 200, left)),
-    top: Math.max(8, Math.min(height - 48, top))
-  }
-}
-
-const updateActionPosition = () => {
-  if (!chart || !props.selectedKey || actionLockedUntilRoam) return
-  try {
-    const series = (chart as any).getModel()?.getSeriesByIndex(0)
-    const data = series?.getData?.()
-    if (!data) return
-    const index = props.nodes.findIndex(node => node.key === props.selectedKey)
-    if (index < 0) return
-    const layout = data.getItemLayout(index)
-    if (!layout) return
-    const pixel = chart.convertToPixel({ seriesIndex: 0 }, layout) as unknown as number[]
-    if (!Array.isArray(pixel) || pixel.length < 2 || !Number.isFinite(Number(pixel[0]))) return
-    actionPosition.value = clampActionPosition(Number(pixel[0]) - 74, Number(pixel[1]) + 25)
-  } catch (err) {
-    console.warn('计算图节点操作浮层位置失败:', err)
-  }
-}
-
 const renderChart = (notMerge = false) => {
   if (!chart) return
   chart.setOption(buildOption(), notMerge)
-  void nextTick(updateActionPosition)
 }
 
 const scheduleRender = () => {
@@ -163,7 +126,6 @@ const scheduleRender = () => {
   renderFrame = window.requestAnimationFrame(() => {
     renderFrame = null
     renderChart()
-    void nextTick(updateActionPosition)
   })
 }
 
@@ -176,7 +138,6 @@ const fitChart = () => {
     lastSize = { width, height }
     chart.resize({ width, height })
   }
-  void nextTick(updateActionPosition)
 }
 
 const scheduleFitChart = () => {
@@ -200,16 +161,7 @@ onMounted(() => {
   chart.on('click', (params: any) => {
     if (params.dataType !== 'node') return
     const key = String(params.data?.id || props.nodes[params.dataIndex]?.key || '')
-    if (!key) return
-    const event = params.event
-    if (event && Number.isFinite(Number(event.offsetX)) && Number.isFinite(Number(event.offsetY))) {
-      actionPosition.value = clampActionPosition(Number(event.offsetX) - 74, Number(event.offsetY) + 25)
-    }
-    emit('select', key)
-  })
-  chart.on('graphroam', () => {
-    actionLockedUntilRoam = false
-    void nextTick(updateActionPosition)
+    if (key) emit('select', key)
   })
   resizeObserver = new ResizeObserver(scheduleFitChart)
   resizeObserver.observe(containerRef.value)
@@ -225,10 +177,7 @@ watch(
 
 watch(
   () => props.selectedKey,
-  () => {
-    scheduleRender()
-    void nextTick(updateActionPosition)
-  }
+  scheduleRender
 )
 
 onBeforeUnmount(() => {
@@ -242,26 +191,5 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div ref="containerRef" class="relative h-full min-h-[420px] w-full overflow-hidden rounded bg-white">
-    <div
-      v-if="selectedNode"
-      class="absolute z-10 flex -translate-y-1/2 items-center gap-1 rounded bg-white/95 p-1 shadow-sm ring-1 ring-slate-200"
-      :style="{ left: `${actionPosition.left}px`, top: `${actionPosition.top}px` }"
-    >
-      <button
-        type="button"
-        class="rounded border border-slate-200 bg-white px-2 py-0.5 text-[10px] text-slate-600 hover:border-blue-300 hover:text-blue-600"
-        @click.stop="emit('view-detail', selectedKey)"
-      >
-        查看详情
-      </button>
-      <button
-        type="button"
-        class="rounded border border-slate-200 bg-white px-2 py-0.5 text-[10px] text-slate-600 hover:border-blue-300 hover:text-blue-600"
-        @click.stop="emit('expand', selectedKey)"
-      >
-        展开一跳
-      </button>
-    </div>
-  </div>
+  <div ref="containerRef" class="relative h-full min-h-[420px] w-full overflow-hidden rounded bg-white" />
 </template>
