@@ -77,10 +77,10 @@ describe('ChatDataAdminManager 分组导航', () => {
     apiMocks.getAdminDatasources.mockResolvedValue({ status: 'success', data: { datasources: [] } })
   })
 
-  it('左侧渲染三组导航，枚举/本体/血缘与数据源同组，大模型管理归智能体组', () => {
+  it('左侧按数据资产/语义层/业务本体/智能体/系统分组', () => {
     const wrapper = mountManager()
     const text = wrapper.text()
-    for (const label of ['数据资产', '数据源管理', '模型管理', '枚举值', '本体', '数据血缘', '智能体', '定时任务', '插件管理', '系统', '大模型管理', '运行配置', '历史 SQL']) {
+    for (const label of ['数据资产', '数据源管理', '模型管理', '语义层', '枚举值', '业务本体', '本体', '数据血缘', '智能体', '定时任务', '插件管理', '系统', '大模型管理', '运行配置', '历史 SQL']) {
       expect(text).toContain(label)
     }
     expect(text).not.toContain('元数据')

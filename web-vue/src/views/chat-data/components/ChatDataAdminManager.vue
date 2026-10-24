@@ -2,8 +2,8 @@
 /**
  * 智能问数后台管理弹窗。
  * 只负责管理入口、左侧分组导航和通用弹窗框架，具体能力由子面板承载。
- * 导航按性质分三组（数据资产/智能体/系统）：新功能先归组再挂载面板，
- * 不要回退成平铺 tab 条；枚举/本体/血缘与数据源同属数据资产组。
+ * 导航按性质分组（数据资产/语义层/本体/智能体/系统）：新功能先归组再挂载面板，
+ * 不要回退成平铺 tab 条；本体是业务对象操作层，不归入数据资产。
  */
 import { computed, nextTick, ref } from 'vue'
 import { Close } from '@element-plus/icons-vue'
@@ -49,11 +49,19 @@ const NAV_GROUPS: Array<{ label: string; items: AdminNavItem[] }> = [
     items: [
       { key: 'datasource', label: '数据源管理', icon: 'fa-database' },
       { key: 'dataset', label: '数据集', icon: 'fa-layer-group' },
-      { key: 'semantic', label: '语义模型管理', icon: 'fa-sitemap' },
-      { key: 'enum', label: '枚举值', icon: 'fa-list-check' },
-      { key: 'ontology', label: '本体', icon: 'fa-cubes' },
       { key: 'lineage', label: '数据血缘', icon: 'fa-diagram-project', disabled: true, hint: '数据血缘管理规划中' }
     ]
+  },
+  {
+    label: '语义层',
+    items: [
+      { key: 'semantic', label: '语义模型管理', icon: 'fa-sitemap' },
+      { key: 'enum', label: '枚举值', icon: 'fa-list-check' }
+    ]
+  },
+  {
+    label: '业务本体',
+    items: [{ key: 'ontology', label: '本体', icon: 'fa-cubes' }]
   },
   {
     label: '智能体',
