@@ -1175,9 +1175,18 @@ async def _read_action_object(detail: dict[str, Any], object_key: str) -> dict[s
 
 
 async def _search_action_objects(
-    detail: dict[str, Any], *, keyword: str = "", limit: int = 20, offset: int = 0
+    detail: dict[str, Any],
+    *,
+    keyword: str = "",
+    filters: list[dict[str, Any]] | None = None,
+    sorts: list[dict[str, Any]] | None = None,
+    where: dict[str, Any] | None = None,
+    limit: int = 20,
+    offset: int = 0,
 ) -> dict[str, Any]:
     """动作对象列表：业务库动作对象表关键词查询（MVP 不做属性过滤/排序下推）。"""
+    if filters or sorts or where:
+        raise ObjectProjectionError("动作对象列表暂不支持属性过滤/排序/where，仅支持 keyword 与分页")
     objects, total = await OntologyActionObjectDao().list_objects_async(
         int(detail.get("id") or 0), keyword=keyword, limit=limit, offset=offset
     )
@@ -1617,7 +1626,15 @@ async def search_object_projection(
     if detail is None:
         raise ObjectProjectionError(f"本体对象类型不存在: {object_type_name}")
     if (_text(detail.get("write_mode")) or "read_only") == "action_created":
-        return await _search_action_objects(detail, keyword=keyword, limit=limit, offset=offset)
+        return await _search_action_objects(
+            detail,
+            keyword=keyword,
+            filters=filters,
+            sorts=sorts,
+            where=where,
+            limit=limit,
+            offset=offset,
+        )
     query_detail, config, targets, group_id = await _projection_context(
         detail,
         semantic_config_id=semantic_config_id,

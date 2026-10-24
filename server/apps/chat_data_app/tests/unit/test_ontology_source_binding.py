@@ -141,3 +141,30 @@ def test_get_object_type_enriches_binding(monkeypatch):
     assert detail["source_binding"]["dataset_name"] == "orders"
     assert detail["source_binding"]["binding_count"] == 2
     assert detail["source_binding"]["member_datasource_ids"] == ["ORG1", "ORG2"]
+
+
+def test_set_source_binding_rejects_action_created_object(monkeypatch):
+    service = _patch(monkeypatch)
+
+    async def action_created_detail(_name):
+        return {**_detail(), "write_mode": "action_created"}
+
+    monkeypatch.setattr(service, "get_object_type_async", action_created_detail)
+    with pytest.raises(OntologyInvalidError, match="动作对象"):
+        asyncio.run(service.set_source_binding_async("Order", {"dataset_id": 3}))
+
+
+def test_action_created_object_is_certifiable_without_dataset(monkeypatch):
+    service = _patch(monkeypatch)
+
+    async def action_created_detail(_name):
+        return {
+            **_detail(),
+            "object_type_name": "Order",
+            "write_mode": "action_created",
+            "properties": [{"property_name": "order_id", "is_identifier": True}],
+            "source_binding": None,
+        }
+
+    monkeypatch.setattr(service, "get_object_type_async", action_created_detail)
+    asyncio.run(service._require_certifiable("Order"))

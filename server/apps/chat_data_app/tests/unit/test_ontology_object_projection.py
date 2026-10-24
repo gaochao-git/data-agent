@@ -1033,3 +1033,20 @@ def test_aggregate_query_supports_derived_metric_expression():
     )
     assert "SUM(`d0`.`amount`) AS `sum_order_amount`" in query["sql"]
     assert "LEFT JOIN `orders` AS `d0`" in query["sql"]
+
+
+def test_action_object_search_rejects_filters_before_dao(monkeypatch):
+    from apps.chat_data_app.services.ontology import object_projection
+
+    class _Dao:
+        def __init__(self):
+            raise AssertionError("filters 应在 DAO 前被拒绝")
+
+    monkeypatch.setattr(object_projection, "OntologyActionObjectDao", _Dao)
+    with pytest.raises(ObjectProjectionError, match="动作对象列表暂不支持"):
+        asyncio.run(
+            object_projection._search_action_objects(
+                {"id": 1, "object_type_name": "Case", "write_mode": "action_created"},
+                filters=[{"property": "status", "operator": "eq", "value": "open"}],
+            )
+        )

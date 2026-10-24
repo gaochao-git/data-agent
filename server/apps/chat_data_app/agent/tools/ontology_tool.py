@@ -840,7 +840,7 @@ def create_ontology_tool(
         - aggregate_objects: 按对象类型分组聚合——group_by + 属性白名单聚合（count/count_distinct/sum/avg/min/max）；只读
         - list_execution_targets: 列出当前用户可执行的成员数据源（member_datasource_id/名称/机构编码）；多机构时先调用它，再把选中的 ID 传给对象查询
         - list_action_types: 列出当前业务域可执行 Action 定义（只读）
-        - execute_action: 执行 Action（写对象属性覆盖层 + 审计；受部署开关门控）
+        - execute_action: 执行 Action（set_property 写覆盖层 / create_object 写动作对象表 + 审计；受部署开关门控）
             action_payload: 操作参数，结构随 action 变化：
         - list_object_types: {}（无参数，范围=当前业务域）
         - locate_object_type: {"object_types": [<对象API名>...]（单次最多10个）}

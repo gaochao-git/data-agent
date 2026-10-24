@@ -256,6 +256,8 @@ class OntologyService:
         detail = await self.get_object_type_async(name)
         if detail is None:
             raise OntologyNotFoundError(f"对象类型不存在: {name}")
+        if (_text(detail.get("write_mode")) or "read_only") == "action_created":
+            raise OntologyInvalidError("动作对象（action_created）不允许绑定 Dataset，对象行存动作对象表")
         dataset_id = int(payload.get("dataset_id") or 0)
         if dataset_id <= 0:
             raise OntologyInvalidError("dataset_id 不能为空")
@@ -654,6 +656,11 @@ class OntologyService:
         identifier_names = {item["property_name"] for item in properties if item.get("is_identifier")}
         if not identifier_names:
             raise OntologyInvalidError("认证前对象类型必须至少定义一个标识属性（is_identifier）作为主键")
+        write_mode = _text(detail.get("write_mode")) or "read_only"
+        if write_mode == "action_created":
+            if isinstance(detail.get("source_binding"), dict):
+                raise OntologyInvalidError("动作对象必须无源，不能同时绑定 Dataset")
+            return
         source_binding = detail.get("source_binding")
         if not isinstance(source_binding, dict):
             raise OntologyInvalidError("认证前对象类型必须配置 Dataset 数据源绑定")
