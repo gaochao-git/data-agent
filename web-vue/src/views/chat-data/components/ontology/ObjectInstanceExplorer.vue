@@ -1238,6 +1238,8 @@ onMounted(() => void initialize())
               </el-button>
               <el-button v-if="showGraphProperties" size="small" @click="resetGraphDetailWidth">重置分栏</el-button>
               <el-button size="small" :disabled="Object.keys(exploreNodes).length === 0" @click="resetExploreLayout">重置布局</el-button>
+              <el-button v-if="exploreSelectedKey" size="small" @click="viewNodeDetail(exploreSelectedKey)">查看详情</el-button>
+              <el-button v-if="exploreSelectedKey" size="small" @click="expandNodeOneHop(exploreSelectedKey)">展开一跳</el-button>
               <el-button size="small" :disabled="!detail" @click="seedExploreGraph">重置为当前对象</el-button>
               <el-button size="small" :disabled="Object.keys(exploreNodes).length === 0" @click="clearExploreGraph">清空</el-button>
             </div>
