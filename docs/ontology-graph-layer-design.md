@@ -355,6 +355,7 @@ Nebula 集群/备份
 ```text
 services/ontology/graph/contracts.py
 services/ontology/graph/service.py
+services/ontology/graph/sync.py
 services/ontology/graph/README.md
 ```
 
@@ -363,6 +364,21 @@ services/ontology/graph/README.md
 ```text
 traverse_objects
 find_graph_paths
+```
+
+已接入手动同步：
+
+```text
+POST /admin/meta/ontology/graph/sync
+```
+
+实测（项目对象投影，limit_per_type=1）：
+
+```text
+6 个对象类型
+22 个节点
+18 条边
+0 个错误
 ```
 
 默认关闭：

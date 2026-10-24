@@ -382,3 +382,30 @@ def test_upsert_object_type_omits_unset_derivation_in_service_payload(client, au
     assert response.status_code == 200
     assert response.json()["status"] == "success"
     assert "derivation" not in captured["payload"]["properties"][0]
+
+
+def test_graph_sync_contract(client, auth_headers, monkeypatch):
+    class _Result:
+        def as_dict(self):
+            return {"member_id": "ORG1", "nodes": 2, "edges": 1}
+
+    async def fake_sync(**kwargs):
+        assert kwargs["member_id"] == "ORG1"
+        assert kwargs["datasource_group_id"] == "ds_a"
+        return _Result()
+
+    monkeypatch.setenv("CHAT_DATA_NEBULA_ENABLED", "1")
+    monkeypatch.setattr(ontology_admin_routes, "sync_member_graph", fake_sync)
+    response = client.post(
+        "/api/chatdata/admin/meta/ontology/graph/sync",
+        json={
+            "member_datasource_id": "ORG1",
+            "datasource_group_id": "ds_a",
+            "limit_per_type": 10,
+        },
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "success"
+    assert payload["data"]["nodes"] == 2

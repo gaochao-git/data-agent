@@ -143,3 +143,98 @@ def test_graph_disabled_by_default(monkeypatch):
     assert service.graph_query_enabled() is False
     monkeypatch.setenv("CHAT_DATA_NEBULA_ENABLED", "true")
     assert service.graph_query_enabled() is True
+
+
+@pytest.mark.asyncio
+async def test_collect_member_graph_from_projection(monkeypatch):
+    from apps.chat_data_app.services.ontology.graph import sync
+
+    async def fake_bundle(_group):
+        return {
+            "object_types": [
+                {
+                    "object_type_name": "order",
+                    "source_binding": {"members": [{"member_datasource_id": "M"}]},
+                }
+            ]
+        }
+
+    async def fake_search(name, **kwargs):
+        assert name == "order"
+        assert kwargs["member_datasource_ids"] == ["M"]
+        return {
+            "title_property": "order_no",
+            "objects": [
+                {
+                    "object_key": "M:order:1",
+                    "properties": {"order_no": "SO-1"},
+                }
+            ],
+        }
+
+    async def fake_read(name, key, **kwargs):
+        return {
+            "links": {
+                "belongs_to": [
+                    {
+                        "related_object_type": "customer",
+                        "related_object_key": "M:customer:1",
+                        "related_title": "客户",
+                        "direction": "from",
+                    },
+                    {
+                        "related_object_type": "shipment",
+                        "related_object_key": "M:shipment:1",
+                        "related_title": "运单",
+                        "direction": "to",
+                    },
+                ]
+            }
+        }
+
+    monkeypatch.setattr(sync, "load_domain_ontology_bundle_async", fake_bundle)
+    monkeypatch.setattr(sync, "search_object_projection", fake_search)
+    monkeypatch.setattr(sync, "read_object_projection", fake_read)
+    nodes, edges, result = await sync.collect_member_graph(member_id="M", datasource_group_id="ds_a")
+    assert result.nodes == 3
+    assert result.edges == 2
+    assert {node.object_key for node in nodes} == {"M:order:1", "M:customer:1", "M:shipment:1"}
+    edge_set = {(edge.from_object_key, edge.to_object_key) for edge in edges}
+    assert ("M:order:1", "M:customer:1") in edge_set
+    assert ("M:shipment:1", "M:order:1") in edge_set
+
+
+@pytest.mark.asyncio
+async def test_sync_member_graph_writes_nodes_and_edges(monkeypatch):
+    from apps.chat_data_app.services.ontology.graph import sync
+
+    async def fake_collect(**_kwargs):
+        node = contracts.GraphNode("M:order:1", "order", "SO-1", "M")
+        edge = contracts.GraphEdge("M:order:1", "M:customer:1", "belongs_to", "M")
+        return [node], [edge], sync.GraphSyncResult(member_id="M", object_types=1, nodes=1, edges=1)
+
+    class _Writer:
+        def __init__(self):
+            self.calls = []
+
+        def write(self, nodes, edges):
+            self.calls.append((len(nodes), len(edges)))
+
+    monkeypatch.setattr(sync, "collect_member_graph", fake_collect)
+    writer = _Writer()
+    result = await sync.sync_member_graph(member_id="M", datasource_group_id="ds_a", writer=writer)
+    assert result.nodes == 1
+    assert writer.calls == [(1, 1)]
+
+
+def test_sync_statements_safe_quote(monkeypatch):
+    from apps.chat_data_app.services.ontology.graph import sync
+
+    monkeypatch.setenv("CHAT_DATA_NEBULA_EDGE_TYPES", "belongs_to")
+    node = contracts.GraphNode('M:order:1"', "order", 'SO"1', "M")
+    edge = contracts.GraphEdge("M:order:1", "M:customer:1", "belongs_to", "M")
+    vertex = sync._vertex_statement([node])
+    edge_sql = sync._edge_statement([edge], "belongs_to")
+    assert 'M:order:1\\"' in vertex
+    assert "INSERT VERTEX Object(object_type, member_id, title)" in vertex
+    assert 'M:order:1"->' in edge_sql.replace('\\"', '"')

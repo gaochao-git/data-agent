@@ -22,6 +22,7 @@ from ..schema import (
     OntologyActionTypeExecuteRequest,
     OntologyActionTypeTestRunRequest,
     OntologyActionTypeUpsertRequest,
+    OntologyGraphSyncRequest,
     OntologyObjectSearchRequest,
     OntologyObjectTypeOntologyRequest,
     OntologyObjectTypeStatusRequest,
@@ -40,6 +41,7 @@ from ..services.ontology import (
     ontology_service,
 )
 from ..services.ontology.action_type_service import OntologyActionTypeService
+from ..services.ontology.graph import graph_query_enabled, sync_member_graph
 from ..services.ontology.object_projection import (
     ObjectProjectionError,
     list_object_projection,
@@ -531,6 +533,31 @@ def _severity_summary(findings: list[dict]) -> dict[str, int]:
         if severity in summary:
             summary[severity] += 1
     return summary
+
+
+@router.post("/admin/meta/ontology/graph/sync")
+async def sync_ontology_graph(payload: OntologyGraphSyncRequest, request: Request) -> JSONResponse:
+    """手动同步一个 member 的对象节点/关系边到 Nebula（MVP，非在线查询路径）。"""
+    try:
+        current_user = _get_current_user(request)
+        if not graph_query_enabled():
+            return _error_response(
+                ValueError("图查询未启用：需设置 CHAT_DATA_NEBULA_ENABLED=1"),
+                "图查询未启用",
+                ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED,
+            )
+        result = await sync_member_graph(
+            member_id=payload.member_datasource_id,
+            datasource_group_id=payload.datasource_group_id,
+            limit_per_type=payload.limit_per_type,
+            user_id=str(current_user.user_id),
+            username=str(current_user.username or ""),
+        )
+        return business_response(data=result.as_dict(), msg="图同步完成")
+    except HTTPException:
+        raise
+    except Exception as e:
+        return _error_response(e, "图同步失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
 
 
 @router.get("/admin/meta/ontology/consistency-check")

@@ -1476,6 +1476,14 @@ OntologyActionTypeEditItem = OntologyActionTypeSetPropertyEdit | OntologyActionT
 """编辑项联合类型：set_property（属性覆盖）或 create_object（创建动作对象），不可混合。"""
 
 
+class OntologyGraphSyncRequest(BaseModel):
+    """本体图同步请求：按 member 从对象投影抽取节点/边写入 Nebula。"""
+
+    member_datasource_id: str = Field(..., min_length=1, max_length=128, description="成员数据源ID")
+    datasource_group_id: str = Field(..., min_length=1, max_length=128, description="数据源组ID")
+    limit_per_type: int = Field(default=100, ge=1, le=100, description="每个对象类型最多同步对象数（MVP）")
+
+
 class OntologyActionTypeUpsertRequest(BaseModel):
     """Action Type 创建/编辑请求（action_type_name 由路径参数携带）"""
 

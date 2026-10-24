@@ -124,7 +124,7 @@ def _edge_from(value: Any) -> GraphEdge | None:
         return GraphEdge(
             from_object_key=str(value.start_vertex_id().as_string()),
             to_object_key=str(value.end_vertex_id().as_string()),
-            relation_type=str(value.edge_name()),
+            relation_type=_text(props.get("relation_type")) or str(value.edge_name()),
             member_id=_text(props.get("member_id")),
         )
     except Exception:  # noqa: BLE001 - 脏边跳过

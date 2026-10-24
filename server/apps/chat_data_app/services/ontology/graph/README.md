@@ -22,6 +22,7 @@ Action 写回
 
 - `contracts.py`：稳定的节点/边/结果契约；
 - `service.py`：nGQL 构造、member 范围强制、路径解析；
+- `sync.py`：对象投影 → 节点/边 → Nebula，手动/任务同步入口；
 - `__init__.py`：对外导出。
 
 ## 配置
@@ -37,6 +38,28 @@ CHAT_DATA_NEBULA_TIMEOUT_SECONDS=10
 ```
 
 默认关闭；未部署 Nebula 的实例不会受影响。
+
+## 同步接口
+
+`POST /admin/meta/ontology/graph/sync`
+
+```json
+{
+  "member_datasource_id": "ORG_CODE1",
+  "datasource_group_id": "ds_20260116115851_95505",
+  "limit_per_type": 100
+}
+```
+
+MVP 限制：
+
+```text
+每个对象类型最多 100 个对象
+逐对象读 links
+用于小规模验证，不是全量生产同步
+```
+
+生产同步仍应改为批量 SQL 抽取边，见设计文档阶段 1。
 
 ## Agent 接入
 
@@ -78,4 +101,20 @@ REVERSELY / BIDIRECT
 Python nebula3 driver
 ```
 
-生产前仍需补：同步任务、增量/tombstone、Nebula 集群、监控、稳定版本镜像。
+已补手动同步：
+
+```text
+POST /admin/meta/ontology/graph/sync
+services/ontology/graph/sync.py
+```
+
+实测从项目对象投影同步（limit_per_type=1）：
+
+```text
+6 对象类型
+22 节点
+18 边
+0 错误
+```
+
+生产前仍需补：定时/增量同步、tombstone、批量边抽取、Nebula 集群、监控、稳定版本镜像。

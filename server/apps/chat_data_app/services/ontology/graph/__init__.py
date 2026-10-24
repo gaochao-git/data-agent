@@ -12,6 +12,7 @@ from .service import (
     graph_query_enabled,
     reset_graph_query_service,
 )
+from .sync import GraphSyncResult, NebulaGraphWriter, collect_member_graph, sync_member_graph
 
 __all__ = [
     "GraphEdge",
@@ -19,8 +20,12 @@ __all__ = [
     "GraphQueryError",
     "GraphQueryResult",
     "GraphQueryService",
+    "GraphSyncResult",
     "GraphUnavailableError",
+    "NebulaGraphWriter",
+    "collect_member_graph",
     "get_graph_query_service",
     "graph_query_enabled",
     "reset_graph_query_service",
+    "sync_member_graph",
 ]

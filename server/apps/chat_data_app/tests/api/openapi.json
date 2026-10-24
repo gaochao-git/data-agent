@@ -2026,18 +2026,37 @@
         "title": "MetaGlobalEnumUpsertRequest",
         "type": "object"
       },
-      "OntologyActionTypeEditItem": {
-        "description": "Action Type 编辑项（当前只支持 set_property）",
+      "OntologyActionTypeCreateObjectEdit": {
+        "description": "create_object 编辑项：创建动作对象（要求 write_mode=action_created，单独一条）",
         "properties": {
           "operation": {
-            "const": "set_property",
-            "default": "set_property",
+            "const": "create_object",
             "description": "编辑操作",
             "title": "Operation",
             "type": "string"
           },
+          "properties": {
+            "description": "动作对象属性值集",
+            "items": {
+              "$ref": "#/components/schemas/OntologyActionTypeCreateObjectPropertyItem"
+            },
+            "minItems": 1,
+            "title": "Properties",
+            "type": "array"
+          }
+        },
+        "required": [
+          "operation",
+          "properties"
+        ],
+        "title": "OntologyActionTypeCreateObjectEdit",
+        "type": "object"
+      },
+      "OntologyActionTypeCreateObjectPropertyItem": {
+        "description": "create_object 属性值项：标识属性必填（服务端校验）",
+        "properties": {
           "property": {
-            "description": "目标对象属性API名",
+            "description": "动作对象属性API名",
             "maxLength": 128,
             "minLength": 1,
             "title": "Property",
@@ -2045,14 +2064,14 @@
           },
           "value": {
             "$ref": "#/components/schemas/OntologyActionTypeEditValue",
-            "description": "新值来源"
+            "description": "值来源"
           }
         },
         "required": [
           "property",
           "value"
         ],
-        "title": "OntologyActionTypeEditItem",
+        "title": "OntologyActionTypeCreateObjectPropertyItem",
         "type": "object"
       },
       "OntologyActionTypeEditValue": {
@@ -2098,12 +2117,12 @@
         "type": "object"
       },
       "OntologyActionTypeExecuteRequest": {
-        "description": "Action Type 执行请求（写对象属性覆盖层 + 执行审计；不直接改源库）",
+        "description": "Action Type 执行请求（写对象属性覆盖层/动作对象表 + 执行审计；不直接改源库）",
         "properties": {
           "object_key": {
-            "description": "对象主键值",
+            "default": "",
+            "description": "对象主键值（set_property 必填；create_object 留空，标识值来自参数）",
             "maxLength": 512,
-            "minLength": 1,
             "title": "Object Key",
             "type": "string"
           },
@@ -2114,9 +2133,6 @@
             "type": "object"
           }
         },
-        "required": [
-          "object_key"
-        ],
         "title": "OntologyActionTypeExecuteRequest",
         "type": "object"
       },
@@ -2164,6 +2180,35 @@
         "title": "OntologyActionTypeParameterItem",
         "type": "object"
       },
+      "OntologyActionTypeSetPropertyEdit": {
+        "description": "set_property 编辑项：改目标对象属性（要求 write_mode=action_writable）",
+        "properties": {
+          "operation": {
+            "const": "set_property",
+            "default": "set_property",
+            "description": "编辑操作",
+            "title": "Operation",
+            "type": "string"
+          },
+          "property": {
+            "description": "目标对象属性API名",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Property",
+            "type": "string"
+          },
+          "value": {
+            "$ref": "#/components/schemas/OntologyActionTypeEditValue",
+            "description": "新值来源"
+          }
+        },
+        "required": [
+          "property",
+          "value"
+        ],
+        "title": "OntologyActionTypeSetPropertyEdit",
+        "type": "object"
+      },
       "OntologyActionTypeTestRunRequest": {
         "description": "Action Type 试运行请求（只校验参数与编辑解析，不写对象）",
         "properties": {
@@ -2203,7 +2248,14 @@
           "edits": {
             "description": "编辑定义",
             "items": {
-              "$ref": "#/components/schemas/OntologyActionTypeEditItem"
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/OntologyActionTypeSetPropertyEdit"
+                },
+                {
+                  "$ref": "#/components/schemas/OntologyActionTypeCreateObjectEdit"
+                }
+              ]
             },
             "minItems": 1,
             "title": "Edits",
@@ -2317,6 +2369,39 @@
           "time_property"
         ],
         "title": "OntologyDerivationPeriod",
+        "type": "object"
+      },
+      "OntologyGraphSyncRequest": {
+        "description": "本体图同步请求：按 member 从对象投影抽取节点/边写入 Nebula。",
+        "properties": {
+          "datasource_group_id": {
+            "description": "数据源组ID",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Datasource Group Id",
+            "type": "string"
+          },
+          "limit_per_type": {
+            "default": 100,
+            "description": "每个对象类型最多同步对象数（MVP）",
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Limit Per Type",
+            "type": "integer"
+          },
+          "member_datasource_id": {
+            "description": "成员数据源ID",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Member Datasource Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "member_datasource_id",
+          "datasource_group_id"
+        ],
+        "title": "OntologyGraphSyncRequest",
         "type": "object"
       },
       "OntologyObjectFilter": {
@@ -2589,6 +2674,17 @@
             "minItems": 1,
             "title": "Properties",
             "type": "array"
+          },
+          "write_mode": {
+            "default": "read_only",
+            "description": "写性（对齐 Palantir Edits toggle，默认只读）：read_only=只读；action_writable=允许 Action 覆盖层编辑；action_created=动作对象（无源，仅由 Action 创建）",
+            "enum": [
+              "read_only",
+              "action_writable",
+              "action_created"
+            ],
+            "title": "Write Mode",
+            "type": "string"
           }
         },
         "required": [
@@ -8214,7 +8310,6 @@
     },
     "/api/chatdata/admin/meta/ontology/action-types": {
       "get": {
-        "description": "列出 Action Type 定义（可选按目标对象类型过滤）。",
         "operationId": "list_ontology_action_types_api_chatdata_admin_meta_ontology_action_types_get",
         "parameters": [
           {
@@ -8269,7 +8364,6 @@
     },
     "/api/chatdata/admin/meta/ontology/action-types/{action_type_name}": {
       "delete": {
-        "description": "软删 Action Type 定义。",
         "operationId": "delete_ontology_action_type_api_chatdata_admin_meta_ontology_action_types__action_type_name__delete",
         "parameters": [
           {
@@ -8315,7 +8409,6 @@
         ]
       },
       "get": {
-        "description": "Action Type 定义详情。",
         "operationId": "get_ontology_action_type_api_chatdata_admin_meta_ontology_action_types__action_type_name__get",
         "parameters": [
           {
@@ -8361,7 +8454,6 @@
         ]
       },
       "put": {
-        "description": "创建/编辑 Action Type 定义（仅定义，不执行写回）。",
         "operationId": "upsert_ontology_action_type_api_chatdata_admin_meta_ontology_action_types__action_type_name__put",
         "parameters": [
           {
@@ -8419,7 +8511,6 @@
     },
     "/api/chatdata/admin/meta/ontology/action-types/{action_type_name}/execute": {
       "post": {
-        "description": "执行 Action：校验参数/属性类型，写对象属性覆盖层 + 执行审计。",
         "operationId": "execute_ontology_action_type_api_chatdata_admin_meta_ontology_action_types__action_type_name__execute_post",
         "parameters": [
           {
@@ -8477,7 +8568,6 @@
     },
     "/api/chatdata/admin/meta/ontology/action-types/{action_type_name}/executions": {
       "get": {
-        "description": "Action Type 执行审计（Observability；按时间倒序）。",
         "operationId": "list_ontology_action_type_executions_api_chatdata_admin_meta_ontology_action_types__action_type_name__executions_get",
         "parameters": [
           {
@@ -8545,7 +8635,6 @@
     },
     "/api/chatdata/admin/meta/ontology/action-types/{action_type_name}/test-run": {
       "post": {
-        "description": "试运行 Action Type：只校验参数并解析编辑，不写对象。",
         "operationId": "test_run_ontology_action_type_api_chatdata_admin_meta_ontology_action_types__action_type_name__test_run_post",
         "parameters": [
           {
@@ -8656,9 +8745,55 @@
         ]
       }
     },
+    "/api/chatdata/admin/meta/ontology/graph/sync": {
+      "post": {
+        "description": "手动同步一个 member 的对象节点/关系边到 Nebula（MVP，非在线查询路径）。",
+        "operationId": "sync_ontology_graph_api_chatdata_admin_meta_ontology_graph_sync_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OntologyGraphSyncRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Sync Ontology Graph",
+        "tags": [
+          "ChatData 本体管理（Admin）"
+        ]
+      }
+    },
     "/api/chatdata/admin/meta/ontology/object-types": {
       "get": {
-        "description": "本体对象类型列表（keyword 按名称/展示名/描述模糊过滤；status/ontology_id 精确过滤）。",
         "operationId": "list_ontology_object_types_api_chatdata_admin_meta_ontology_object_types_get",
         "parameters": [
           {
@@ -8745,7 +8880,6 @@
     },
     "/api/chatdata/admin/meta/ontology/object-types/{object_type_name}": {
       "delete": {
-        "description": "删除本体对象类型（软删；certified 拒绝，级联软删属性与关系类型）。",
         "operationId": "delete_ontology_object_type_api_chatdata_admin_meta_ontology_object_types__object_type_name__delete",
         "parameters": [
           {
@@ -8791,7 +8925,6 @@
         ]
       },
       "get": {
-        "description": "本体对象类型详情（含属性集与绑定）。",
         "operationId": "get_ontology_object_type_api_chatdata_admin_meta_ontology_object_types__object_type_name__get",
         "parameters": [
           {
@@ -8837,7 +8970,6 @@
         ]
       },
       "put": {
-        "description": "创建/整体编辑本体对象类型（元数据 + 属性集 + 绑定一次性提交）。",
         "operationId": "upsert_ontology_object_type_api_chatdata_admin_meta_ontology_object_types__object_type_name__put",
         "parameters": [
           {
@@ -9162,7 +9294,6 @@
     },
     "/api/chatdata/admin/meta/ontology/object-types/{object_type_name}/ontology": {
       "post": {
-        "description": "对象类型本体归属变更（拖拽换本体窄写路径；ontology_id=null 表示移出本体）。",
         "operationId": "change_ontology_object_type_ontology_api_chatdata_admin_meta_ontology_object_types__object_type_name__ontology_post",
         "parameters": [
           {
@@ -9220,7 +9351,6 @@
     },
     "/api/chatdata/admin/meta/ontology/object-types/{object_type_name}/source-binding": {
       "put": {
-        "description": "绑定对象类型到 Logical Dataset（本体取数不再依赖语义模型）。",
         "operationId": "set_ontology_object_source_binding_api_chatdata_admin_meta_ontology_object_types__object_type_name__source_binding_put",
         "parameters": [
           {
@@ -9278,7 +9408,6 @@
     },
     "/api/chatdata/admin/meta/ontology/object-types/{object_type_name}/status": {
       "post": {
-        "description": "本体对象类型状态迁移（升级/降级/废弃；关系类型状态按对象类型级联，降级自动、升级手动）。",
         "operationId": "change_ontology_object_type_status_api_chatdata_admin_meta_ontology_object_types__object_type_name__status_post",
         "parameters": [
           {
@@ -9336,7 +9465,6 @@
     },
     "/api/chatdata/admin/meta/ontology/ontologies": {
       "get": {
-        "description": "本体列表（本体=对象类型容器，一对一绑定数据源组）。",
         "operationId": "list_ontologies_api_chatdata_admin_meta_ontology_ontologies_get",
         "responses": {
           "200": {
@@ -9363,7 +9491,6 @@
     },
     "/api/chatdata/admin/meta/ontology/ontologies/{ontology_name}": {
       "delete": {
-        "description": "删除本体（软删；挂有活跃对象类型时拒绝）。",
         "operationId": "delete_ontology_api_chatdata_admin_meta_ontology_ontologies__ontology_name__delete",
         "parameters": [
           {
@@ -9409,7 +9536,6 @@
         ]
       },
       "put": {
-        "description": "创建/编辑本体（绑定数据源组；编辑活跃本体需 allow_overwrite）。",
         "operationId": "upsert_ontology_api_chatdata_admin_meta_ontology_ontologies__ontology_name__put",
         "parameters": [
           {
@@ -9467,7 +9593,6 @@
     },
     "/api/chatdata/admin/meta/ontology/relation-types": {
       "get": {
-        "description": "本体关系类型列表（keyword 模糊过滤；from_object_type/to_object_type 按 API 名过滤）。",
         "operationId": "list_ontology_relations_api_chatdata_admin_meta_ontology_relation_types_get",
         "parameters": [
           {
@@ -9554,7 +9679,6 @@
     },
     "/api/chatdata/admin/meta/ontology/relation-types/{relation_type_name}": {
       "delete": {
-        "description": "删除本体关系类型（软删）。",
         "operationId": "delete_ontology_relation_api_chatdata_admin_meta_ontology_relation_types__relation_type_name__delete",
         "parameters": [
           {
@@ -9600,7 +9724,6 @@
         ]
       },
       "put": {
-        "description": "创建/编辑本体关系类型（连接对象类型、关联列、基数变更需破坏性确认）。",
         "operationId": "upsert_ontology_relation_api_chatdata_admin_meta_ontology_relation_types__relation_type_name__put",
         "parameters": [
           {
@@ -9658,7 +9781,6 @@
     },
     "/api/chatdata/admin/meta/ontology/relation-types/{relation_type_name}/status": {
       "post": {
-        "description": "本体关系类型状态手动迁移（升级/降级；上限=两侧对象类型状态的较低者，deprecated 仅随对象类型级联）。",
         "operationId": "change_ontology_relation_status_api_chatdata_admin_meta_ontology_relation_types__relation_type_name__status_post",
         "parameters": [
           {
