@@ -349,6 +349,14 @@ const onGraphCanvasSelect = (key: string) => {
   exploreSelectedKey.value = key
 }
 
+const onGraphCanvasViewDetail = (key: string) => {
+  void viewNodeDetail(key)
+}
+
+const onGraphCanvasExpand = (key: string) => {
+  void expandNodeOneHop(key)
+}
+
 const resetExploreLayout = () => {
   graphCanvasRef.value?.resetLayout()
 }
@@ -1252,6 +1260,8 @@ onMounted(() => void initialize())
                 :selected-key="exploreSelectedKey"
                 class="h-[460px]"
                 @select="onGraphCanvasSelect"
+                @view-detail="onGraphCanvasViewDetail"
+                @expand="onGraphCanvasExpand"
               />
             </div>
             <div
