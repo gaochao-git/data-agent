@@ -54,4 +54,7 @@ def ask_user_question_tool(
         "asked_at_ms": int(time.time() * 1000),
     }
     answer = interrupt(payload)
-    return {"status": "answered", **answer}
+    if isinstance(answer, dict) and answer.get("cancelled") is True:
+        # 用户取消提问是独立终态，不能伪装成 answered + 空 answers，避免模型拿空答案继续执行。
+        return {"status": "cancelled", "cancelled": True, "answers": []}
+    return {"status": "answered", **(answer if isinstance(answer, dict) else {})}
