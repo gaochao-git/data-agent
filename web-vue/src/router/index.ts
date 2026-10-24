@@ -16,6 +16,12 @@ const router = createRouter({
           meta: { title: '智能问数' }
         },
         {
+          path: 'chatdata/ontology-graph-test',
+          name: 'OntologyGraphTest',
+          component: () => import('@/views/chat-data/pages/OntologyGraphTest.vue'),
+          meta: { title: '本体图引擎验证' }
+        },
+        {
           path: 'test-dialog',
           name: 'TestDialog',
           component: () => import('@/views/TestChatDataDialog.vue'),
