@@ -162,6 +162,12 @@ def test_build_object_search_query_supports_all_comparison_operators():
         filters=[{"property": "amount", "operator": "in", "values": []}],
     )
     assert "1 = 0" in empty_in["sql"]
+    compat_in = build_object_search_query(
+        _detail(),
+        _config(),
+        filters=[{"property": "amount", "operator": "in", "value": "10, 20"}],
+    )
+    assert "`amount` IN ('10', '20')" in compat_in["sql"]
 
 
 def test_build_object_search_query_rejects_unmapped_filter_and_sort():

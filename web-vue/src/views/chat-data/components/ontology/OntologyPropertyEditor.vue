@@ -151,7 +151,7 @@ const openDerivedForm = async (row?: OntologyPropertyItem, index = -1) => {
     filters: (row?.derivation?.filters || []).map(item => ({
       property: item.property,
       operator: item.operator,
-      value: item.value || ''
+      value: item.values?.length ? item.values.join(',') : item.value || ''
     })),
     period_days: row?.derivation?.period?.days || 0,
     period_time_property: row?.derivation?.period?.time_property || ''
@@ -250,7 +250,10 @@ const submitDerived = () => {
     .map(item => ({
       property: item.property.trim(),
       operator: item.operator as OntologyDerivationFilter['operator'],
-      value: item.value
+      value: item.operator === 'in' ? '' : item.value,
+      ...(item.operator === 'in'
+        ? { values: item.value.split(/[,，;；\s]+/).map(part => part.trim()).filter(Boolean) }
+        : {})
     }))
   const period =
     derivedForm.value.period_days > 0 && derivedForm.value.period_time_property
@@ -294,7 +297,9 @@ const derivationSummary = (row: OntologyPropertyItem) => {
   if (!derivation) return ''
   const operator = derivation.operator || (derivation.kind === 'select' ? 'select' : '')
   const target = derivation.target_property ? ` · ${derivation.target_property}` : ''
-  const filters = (derivation.filters || []).map(item => `${item.property} ${item.operator} ${item.value || ''}`).join('，')
+  const filters = (derivation.filters || [])
+    .map(item => `${item.property} ${item.operator} ${(item.values?.length ? item.values.join(',') : item.value) || ''}`)
+    .join('，')
   const period = derivation.period ? ` · 近${derivation.period.days}天(${derivation.period.time_property})` : ''
   return `${derivation.relation_type_name} · ${operator}${target}${period}${filters ? ` · ${filters}` : ''}`
 }
@@ -517,7 +522,12 @@ watch(showDerivedForm, value => {
           <el-select v-model="filter.operator" size="small" class="!w-24">
             <el-option v-for="op in DERIVATION_FILTER_OPERATORS" :key="op" :label="op" :value="op" />
           </el-select>
-          <el-input v-model="filter.value" size="small" placeholder="值" class="!w-32" />
+          <el-input
+            v-model="filter.value"
+            size="small"
+            :placeholder="filter.operator === 'in' ? '值，逗号分隔' : '值'"
+            class="!w-32"
+          />
           <el-button link size="small" class="!p-0 text-[11px] text-red-500" @click="removeDerivedFilter(index)">
             删除
           </el-button>

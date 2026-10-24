@@ -314,6 +314,9 @@ def _keyword_condition(search_column: str, identifier_column: str, keyword: str)
 def _in_condition(column: str, item: dict[str, Any]) -> str:
     values = [_text(entry) for entry in (item.get("values") or []) if _text(entry)]
     if not values:
+        # 兼容旧前端/API：in 只传 value 时按中英文逗号、分号、空白拆分
+        values = [part.strip() for part in re.split(r"[,，;；\s]+", _text(item.get("value"))) if part.strip()]
+    if not values:
         return "1 = 0"
     escaped_values = ", ".join(f"'{escape_string(entry)}'" for entry in values[:100])
     return f"{column} IN ({escaped_values})"
@@ -1193,6 +1196,7 @@ async def _derived_property_values(
     if not derived_props:
         return {}
     current_id = int(detail.get("id") or 0)
+    cache: dict[Any, Any] = {}
     results = await asyncio.gather(
         *[
             _compute_derived_value(
@@ -1202,6 +1206,7 @@ async def _derived_property_values(
                 member_id=member_id,
                 user_id=user_id,
                 username=username,
+                cache=cache,
             )
             for prop in derived_props
         ],
@@ -1228,12 +1233,15 @@ async def _compute_derived_value(
     member_id: str,
     user_id: str,
     username: str,
+    cache: dict[Any, Any] | None = None,
 ) -> Any:
     """单条派生属性计算：沿关系遍历到对端对象类型的物理表取值。"""
     derivation = prop["derivation"]
-    relation = await _load_derived_relation(derivation)
+    relation = await _load_derived_relation(derivation, cache)
     side = _derived_relation_side(derivation, relation, current_id)
-    context = await _derived_query_context(derivation, side, member_id=member_id, user_id=user_id, username=username)
+    context = await _derived_query_context(
+        derivation, side, member_id=member_id, user_id=user_id, username=username, cache=cache
+    )
     extra_where = _derived_extra_where(derivation, context["column_mappings"], context["dimensions"], context["table"])
     current_value = row.get(side["current_property"])
     if current_value is None or _text(current_value) == "":
@@ -1252,10 +1260,14 @@ async def _compute_derived_value(
     return rows[0].get("derived_value") if rows else None
 
 
-async def _load_derived_relation(derivation: dict[str, Any]) -> dict[str, Any]:
+async def _load_derived_relation(derivation: dict[str, Any], cache: dict[Any, Any] | None = None) -> dict[str, Any]:
     relation_name = _text(derivation.get("relation_type_name"))
     # list_relations 返回的行带两端对象类型名（原始 DAO 行只有 id）；与一跳 links 同口径
-    relations = await ontology_service.list_relations_async()
+    relations = (cache or {}).get("relations") if cache is not None else None
+    if relations is None:
+        relations = await ontology_service.list_relations_async()
+        if cache is not None:
+            cache["relations"] = relations
     relation = next((item for item in relations if _text(item.get("relation_type_name")) == relation_name), None)
     if relation is None:
         raise ObjectProjectionError(f"派生属性引用的关系类型不存在: {relation_name}")
@@ -1281,29 +1293,44 @@ async def _derived_query_context(
     member_id: str,
     user_id: str,
     username: str,
+    cache: dict[Any, Any] | None = None,
 ) -> dict[str, Any]:
-    related_detail = await ontology_service.get_object_type_async(side["related_object_type"])
-    if related_detail is None:
-        raise ObjectProjectionError(f"派生属性对端对象类型不存在: {side['related_object_type']}")
-    config, query_detail, targets, group_id = await _dataset_mapping_context(
-        related_detail,
-        [member_id] if member_id else None,
-        user_id=user_id,
-        username=username,
+    base_key = (
+        "derived_context",
+        side["related_object_type"],
+        side["current_property"],
+        side["related_filter_property"],
+        member_id,
     )
-    dimensions = _dimension_index(config)
-    column_mappings = (query_detail.get("mappings") or [{}])[0].get("column_mappings") or {}
-    if not isinstance(column_mappings, dict):
-        raise ObjectProjectionError("对端对象类型映射缺少 column_mappings")
-    table, filter_column = _derived_physical_column(side["related_filter_property"], column_mappings, dimensions)
+    base = cache.get(base_key) if cache is not None else None
+    if base is None:
+        related_detail = await ontology_service.get_object_type_async(side["related_object_type"])
+        if related_detail is None:
+            raise ObjectProjectionError(f"派生属性对端对象类型不存在: {side['related_object_type']}")
+        config, query_detail, targets, group_id = await _dataset_mapping_context(
+            related_detail,
+            [member_id] if member_id else None,
+            user_id=user_id,
+            username=username,
+        )
+        dimensions = _dimension_index(config)
+        column_mappings = (query_detail.get("mappings") or [{}])[0].get("column_mappings") or {}
+        if not isinstance(column_mappings, dict):
+            raise ObjectProjectionError("对端对象类型映射缺少 column_mappings")
+        table, filter_column = _derived_physical_column(side["related_filter_property"], column_mappings, dimensions)
+        base = {
+            "targets": targets,
+            "group_id": group_id,
+            "table": table,
+            "filter_column": filter_column,
+            "column_mappings": column_mappings,
+            "dimensions": dimensions,
+        }
+        if cache is not None:
+            cache[base_key] = base
     return {
-        "targets": targets,
-        "group_id": group_id,
-        "table": table,
-        "filter_column": filter_column,
-        "target_column": _derived_target_column(derivation, column_mappings, dimensions, table),
-        "column_mappings": column_mappings,
-        "dimensions": dimensions,
+        **base,
+        "target_column": _derived_target_column(derivation, base["column_mappings"], base["dimensions"], base["table"]),
     }
 
 
