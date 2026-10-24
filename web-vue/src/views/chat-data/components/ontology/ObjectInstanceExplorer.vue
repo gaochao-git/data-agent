@@ -247,12 +247,14 @@ let exploreStartX = 0
 let exploreStartY = 0
 let exploreStartOffsetX = 0
 let exploreStartOffsetY = 0
+let exploreDragMoved = false
 
 const hoveredGraphNodeKey = ref('')
 const startExploreNodeDrag = (event: MouseEvent, node: { key: string; x: number; y: number }) => {
   event.preventDefault()
   event.stopPropagation()
   const offset = exploreNodeOffsets.value[node.key] || { x: 0, y: 0 }
+  exploreDragMoved = false
   draggingExploreKey.value = node.key
   exploreStartX = event.clientX
   exploreStartY = event.clientY
@@ -262,6 +264,9 @@ const startExploreNodeDrag = (event: MouseEvent, node: { key: string; x: number;
 
 const onExploreNodeDrag = (event: MouseEvent) => {
   if (!draggingExploreKey.value) return
+  if (Math.abs(event.clientX - exploreStartX) > 3 || Math.abs(event.clientY - exploreStartY) > 3) {
+    exploreDragMoved = true
+  }
   exploreNodeOffsets.value = {
     ...exploreNodeOffsets.value,
     [draggingExploreKey.value]: {
@@ -273,6 +278,15 @@ const onExploreNodeDrag = (event: MouseEvent) => {
 
 const endExploreNodeDrag = () => {
   draggingExploreKey.value = ''
+}
+
+const onExploreNodeClick = (rawKey: string) => {
+  // 拖动结束后浏览器仍可能补发 click；拖动过的节点只移动，不切换详情/扩图。
+  if (exploreDragMoved) {
+    exploreDragMoved = false
+    return
+  }
+  void openExploreNode(rawKey)
 }
 
 const addExploreNode = (rawKey: string, objectType: string, label: string, properties: Record<string, unknown>) => {
@@ -1161,7 +1175,7 @@ onMounted(() => void initialize())
                   @mouseenter="hoveredGraphNodeKey = node.key"
                   @mouseleave="hoveredGraphNodeKey = ''"
                   @mousedown="startExploreNodeDrag($event, node)"
-                  @click="openExploreNode(node.key)"
+                  @click="onExploreNodeClick(node.key)"
                 >
                   <title>{{ node.key }}</title>
                   <rect
