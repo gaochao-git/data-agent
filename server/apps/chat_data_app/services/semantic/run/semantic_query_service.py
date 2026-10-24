@@ -165,20 +165,23 @@ async def execute_semantic_query_sql(
     conversation_id: str | None = None,
     operator_name: str | None = None,
 ) -> dict[str, Any]:
-    """Execute semantic query SQL through the unified query runtime."""
+    """Execute semantic query SQL through the query layer orchestrator."""
     # 延迟导入避免 query_runtime 的 BI 编译入口与本服务形成模块循环。
-    from ...sql_run import runtime as query_runtime
+    from ...query import QueryOrchestrator, QuerySource, QuerySpec
 
-    return await query_runtime.execute_agent_sql(
+    spec = QuerySpec(
+        source=QuerySource.SEMANTIC,
+        datasource_group_id=datasource_id or "",
+        member_datasource_ids=tuple(normalize_member_datasource_ids(member_datasource_ids)),
         sql=sql,
-        datasource_id=datasource_id,
-        member_datasource_ids=member_datasource_ids,
-        user_id=user_id,
+        user_id=user_id or "",
+        username=operator_name or "",
         semantic_config_id=semantic_config_id,
-        query_text=query_text,
+        query_mode="semantic",
+        query_text=query_text or "",
         conversation_id=conversation_id,
-        operator_name=operator_name,
     )
+    return (await QueryOrchestrator().execute_agent_async(spec)).to_legacy_payload()
 
 
 def build_member_query_result(

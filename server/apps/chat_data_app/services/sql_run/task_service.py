@@ -14,6 +14,7 @@ from utils.models import ChatDataQueryExecution
 
 from ...schema import QueryTaskCreateRequest
 from ..dashboard import runtime as dashboard_runtime
+from ..query import QueryOrchestrator, QuerySource, QuerySpec
 from . import runtime as query_runtime
 from .history_service import QUERY_TASK_FINAL_STATUSES, QueryHistoryService
 from .result import (
@@ -85,20 +86,21 @@ class QueryTaskService:
         datasource_id: str | None = None,
         max_rows: int | None = None,
     ) -> dict[str, Any]:
-        """执行单个成员数据源 SQL。"""
-        return await query_runtime.execute_sql_for_member(
-            execution_target=execution_target,
+        """执行单个成员数据源 SQL（经查询层编排门面）。"""
+        spec = QuerySpec(
+            source=QuerySource.SQL,
+            datasource_group_id=datasource_id or "",
             sql=sql,
             limit=limit,
             timeout=timeout,
-            user_id=user_id,
-            username=username,
+            max_rows=max_rows,
             query_task_id=query_task_id,
             execution_id=execution_id,
             skip_query_cache=skip_query_cache,
-            datasource_id=datasource_id,
-            max_rows=max_rows,
+            user_id=user_id or "",
+            username=username or "",
         )
+        return await QueryOrchestrator().execute_member_raw_async(spec, execution_target)
 
     async def update_query_execution(
         self,
@@ -1235,7 +1237,7 @@ class QueryTaskService:
 
     async def run_sql_query_task(self, task_id: str, task: dict[str, Any]) -> None:
         """后台执行 SQL 查询任务。"""
-        await query_runtime.run_sql_query_task(task_id, task)
+        await QueryOrchestrator().execute_task_async(task_id, task)
 
     async def run_sql_batch_query_task(self, task_id: str, task: dict[str, Any]) -> None:
         """后台执行顺序 SQL 批次任务。"""
