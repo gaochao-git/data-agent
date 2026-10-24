@@ -35,6 +35,7 @@ const emit = defineEmits<{
 const containerRef = ref<HTMLDivElement | null>(null)
 const graphRef = ref<any>(null)
 const actionPosition = ref({ left: 0, top: 0 })
+let resizeObserver: ResizeObserver | null = null
 
 const selectedNode = computed(() => props.nodes.find(node => node.key === props.selectedKey) || null)
 
@@ -70,6 +71,23 @@ const updateActionPosition = () => {
     actionPosition.value = { left: Math.max(8, viewport[0] - 74), top: viewport[1] + 8 }
   } catch (err) {
     console.warn('计算图节点操作浮层位置失败:', err)
+  }
+}
+
+const fitToContainer = async () => {
+  const graph = graphRef.value
+  const container = containerRef.value
+  if (!graph || !container) return
+  const width = container.clientWidth
+  const height = container.clientHeight
+  if (width <= 0 || height <= 0) return
+  try {
+    graph.resize(width, height)
+    await graph.fitView()
+    await nextTick()
+    updateActionPosition()
+  } catch (err) {
+    console.warn('适配 G6 图容器失败:', err)
   }
 }
 
@@ -171,8 +189,13 @@ onMounted(async () => {
   graph.on('afterrender', updateActionPosition)
   graph.on('viewportchange', updateActionPosition)
   graphRef.value = graph
+  resizeObserver = new ResizeObserver(() => {
+    void fitToContainer()
+  })
+  resizeObserver.observe(containerRef.value)
   try {
     await graph.render()
+    await fitToContainer()
     syncSelectedState()
   } catch (err) {
     console.error('初始化 G6 图失败:', err)
@@ -196,6 +219,8 @@ watch(
 )
 
 onBeforeUnmount(() => {
+  resizeObserver?.disconnect()
+  resizeObserver = null
   graphRef.value?.destroy()
   graphRef.value = null
 })
