@@ -1,6 +1,6 @@
 """Pipeline 输入读取适配层：从 Dataset member binding 读取源数据。
 
-执行外部数据源走 ``sql_run.runtime.execute_sql_for_member``（成员 SQL 执行唯一权威入口）。
+执行外部数据源走查询编排层 ``QueryOrchestrator.execute_member_raw_async``（统一落到 sql_run runtime 成员 SQL 入口）。
 该导入放在函数内延迟执行：dataset 服务在模块导入期不应拉起查询运行时/语义服务依赖，
 同时单测可以直接替换 :func:`load_dataset_rows_async`。
 """
