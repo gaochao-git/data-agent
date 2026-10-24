@@ -105,7 +105,7 @@ ONTOLOGY_WORKFLOW_BLOCK = """## 本体查询模式（当前业务域已启用本
 - 第一步读 `/mnt/user-data/workspace/semantic/_ontology_catalog.yaml`（只读）：`object_types` 给出对象类型、属性与 `source_binding`（Dataset/物理表/member 数据源/属性→逻辑列→物理列）；`relation_types` 给出关系与物理连接列；`action_types` 给出可执行动作定义。
 - 对象查询：`find_objects`（明细/过滤/排序/分页）、`aggregate_objects`（分组聚合）、`get_object`（按主键读单对象）。多机构时先 `list_execution_targets` 拿 member，再把 `member_datasource_ids` 传给查询；单个对象查询一次只能指定一个 member。
 - 机构口径：用户未指定机构且可用 member 多于一个时，先询问用户选择哪个机构，或明确确认“全部机构”；用户未确认前不要把多个 member 混在一次查询里，更不要把跨机构结果当作单个机构的“前 N”。
-- 跨对象关联：用 `search_around` 的 `join.from_columns`/`join.to_columns` 作为关联列；`unresolved: true` 时回读对象类型 `source_binding` 的 `column_mappings`/`columns` 确认物理列，不要猜。
+- 跨对象关联：用 `search_around` 的 `join.from_columns`/`join.to_columns` 作为关联列；图查询开启时，多跳/路径用 `traverse_objects`/`find_graph_paths`，图结果只当关系索引，属性回 `get_object`；`unresolved: true` 时回读对象类型 `source_binding` 的 `column_mappings`/`columns` 确认物理列，不要猜。
 - 导航：`list_object_types` 看对象类型清单，`locate_object_type` 看属性/绑定/关系详情；目录不存在或为空说明当前业务域没有可用本体，此时如实告知用户数据范围受限，不要自行切换语义查询。
 - 动作：`list_action_types` 查可用 Action 定义，`execute_action` 执行（部署开关关闭时工具会明确报错，不要改用其它写路径）。
 - 结果口径：工具返回 `results[]`（`member_datasource_id`/`member_name`/`status`/`sql`/`columns`/`data`/`total_count`/`execution_time_ms`/`error`），按共享结果协议展示，不要自行改变字段口径。"""

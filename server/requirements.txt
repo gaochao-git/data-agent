@@ -87,3 +87,5 @@ wheels/apache_ossie-0.2.0.dev0-py3-none-any.whl
 wheels/numpy-1.26.4-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
 wheels/onnxruntime-1.23.2-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
 jsonschema==4.26.0
+
+nebula3-python==3.8.3

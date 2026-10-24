@@ -112,6 +112,13 @@
 
 DDL 见 `next_version.md`「本体 Action Type 定义表」。
 
+## 图查询层（NebulaGraph，2026-10-24 PoC）
+
+- `graph/`：只读关系图投影，`traverse_objects` / `find_graph_paths` 支持 1~3 跳、方向与有界路径；
+- 图库只存对象身份/标题/关系边，属性与指标回 SQL/语义层；
+- `CHAT_DATA_NEBULA_ENABLED` 默认关闭；未部署 Nebula 的实例不受影响；
+- 图查询强制 `member_datasource_id`，禁止全局图查询；详见 `graph/README.md` 与 `docs/ontology-graph-layer-design.md`。
+
 ## 代码边界（2026-10-24 治理）
 
 - `object_query_builder.py`：对象投影的纯 SQL 构造层（映射/过滤/排序/分页/聚合/关联键查询），不触库、不组装对象；

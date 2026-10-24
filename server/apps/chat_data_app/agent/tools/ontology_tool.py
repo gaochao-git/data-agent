@@ -42,6 +42,11 @@ from apps.chat_data_app.services.datasource.target_context import (
 )
 from apps.chat_data_app.services.ontology import ontology_service
 from apps.chat_data_app.services.ontology.action_type_service import OntologyActionTypeService
+from apps.chat_data_app.services.ontology.graph import (
+    GraphQueryError,
+    get_graph_query_service,
+    graph_query_enabled,
+)
 from apps.chat_data_app.services.ontology.object_projection import (
     ObjectProjectionError,
     aggregate_object_projection,
@@ -237,6 +242,32 @@ class _ExecuteActionPayload(BaseModel):
     )
 
 
+class _TraverseObjectsPayload(BaseModel):
+    """``traverse_objects`` 的入参结构：对象起点 + 有界多跳/路径。"""
+
+    object_key: str = Field(
+        ..., min_length=1, max_length=512, description="起点对象完整身份 member:object_type:local_key"
+    )
+    depth: int = Field(default=1, ge=1, le=3, description="最大跳数，1~3")
+    direction: Literal["out", "in", "both"] = Field(default="both", description="关系方向：out/in/both")
+    limit: int = Field(default=50, ge=1, le=200, description="返回路径上限")
+    member_datasource_ids: list[str] | None = Field(
+        default=None, max_length=20, description="机构范围；图查询必须且只能指定一个 member"
+    )
+
+
+class _FindGraphPathsPayload(BaseModel):
+    """``find_graph_paths`` 的入参结构：两个对象之间的有界路径。"""
+
+    from_object_key: str = Field(..., min_length=1, max_length=512, description="起点对象完整身份")
+    to_object_key: str = Field(..., min_length=1, max_length=512, description="终点对象完整身份")
+    max_depth: int = Field(default=3, ge=1, le=3, description="最大路径长度，1~3")
+    limit: int = Field(default=10, ge=1, le=200, description="返回路径上限")
+    member_datasource_ids: list[str] | None = Field(
+        default=None, max_length=20, description="机构范围；图查询必须且只能指定一个 member"
+    )
+
+
 # action -> action_payload 校验模型。与 data_analyzing_tool 的同名机制一致：
 # 入参校验与 handler 内的解析共用一张表，保证两处口径一致。
 ONTOLOGY_ACTION_PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
@@ -249,13 +280,15 @@ ONTOLOGY_ACTION_PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
     "list_execution_targets": _ListExecutionTargetsPayload,
     "list_action_types": _ListActionTypesPayload,
     "execute_action": _ExecuteActionPayload,
+    "traverse_objects": _TraverseObjectsPayload,
+    "find_graph_paths": _FindGraphPathsPayload,
 }
 
 
 class OntologyToolInput(BaseModel):
     """本体导航工具入参：按 ``action`` 分派，``action_payload`` 结构随 action 变化。
 
-    共 9 个 action：``list_object_types`` / ``locate_object_type`` / ``search_around`` 负责导航，
+    共 11 个 action：``list_object_types`` / ``locate_object_type`` / ``search_around`` 负责导航，
     ``get_object`` / ``find_objects`` 负责对象读取，``aggregate_objects`` 负责属性白名单聚合，
     ``list_execution_targets`` 列出执行对象，``list_action_types`` / ``execute_action`` 负责 Action。
     action_payload 的校验在工具实现入口经 ``validate_ontology_payload`` 完成——不能放进
@@ -273,6 +306,8 @@ class OntologyToolInput(BaseModel):
         "list_execution_targets",
         "list_action_types",
         "execute_action",
+        "traverse_objects",
+        "find_graph_paths",
     ] = Field(
         ...,
         description=(
@@ -284,7 +319,9 @@ class OntologyToolInput(BaseModel):
             "aggregate_objects 按对象类型分组聚合（count/count_distinct/sum/avg/min/max；只读）；"
             "list_execution_targets 列出当前用户可执行的成员数据源；"
             "list_action_types 列出当前业务域可执行的 Action 定义（只读）；"
-            "execute_action 执行 Action（写对象属性覆盖层 + 审计，需部署开启 Action 执行开关）"
+            "execute_action 执行 Action（写对象属性覆盖层 + 审计，需部署开启 Action 执行开关）；"
+            "traverse_objects 从对象出发做 1~3 跳关系遍历（Nebula 图查询，需开启图查询开关）；"
+            "find_graph_paths 查询两个对象之间的有界路径（Nebula 图查询）"
         ),
     )
     action_payload: dict[str, Any] = Field(
@@ -299,7 +336,9 @@ class OntologyToolInput(BaseModel):
             'aggregate_objects 传 {"object_type": "<对象类型API名>", "member_datasource_ids": ["可选机构ID"], "group_by": ["<属性>"], "metrics": [{"operation": "count"}, {"operation": "sum", "property": "<数值属性>"}]}；'
             "list_execution_targets 传 {}；"
             "list_action_types 传 {}；"
-            'execute_action 传 {"action_type": "<Action Type API名>", "object_key": "<对象主键值>", "parameters": {"<参数名>": "<值>"}}'
+            'execute_action 传 {"action_type": "<Action Type API名>", "object_key": "<对象主键值>", "parameters": {"<参数名>": "<值>"}}；'
+            'traverse_objects 传 {"object_key": "<完整对象身份>", "depth": 1, "direction": "both", "limit": 50, "member_datasource_ids": ["机构ID"]}；'
+            'find_graph_paths 传 {"from_object_key": "<起点>", "to_object_key": "<终点>", "max_depth": 3, "limit": 10, "member_datasource_ids": ["机构ID"]}'
         ),
     )
     intent: str = Field(
@@ -739,6 +778,72 @@ async def _run_get_object(
     )
 
 
+async def _run_traverse_objects(
+    *,
+    payload: Any,
+    state: dict | None,
+) -> str:
+    """从对象出发做有界多跳；只返回对象身份/标题/关系，属性回源。"""
+    if not graph_query_enabled():
+        raise ValueError("图查询未启用：需设置 CHAT_DATA_NEBULA_ENABLED=1")
+    member_ids = _query_member_ids(payload.member_datasource_ids, state)
+    members = [member for member in member_ids if member]
+    if len(members) != 1:
+        raise ValueError("图查询必须且只能指定一个 member_datasource_id")
+    try:
+        result = await asyncio.to_thread(
+            get_graph_query_service().traverse_objects,
+            payload.object_key,
+            depth=payload.depth,
+            direction=payload.direction,
+            limit=payload.limit,
+            member_ids=members,
+        )
+    except GraphQueryError as err:
+        raise ValueError(str(err)) from err
+    return tool_result_payload(
+        ONTOLOGY_TOOL_NAME,
+        {
+            "success": True,
+            **result.as_dict(),
+            "usage": "图查询只返回对象身份/关系；需要属性时用 get_object 回源，不要用图结果代替对象属性。",
+        },
+    )
+
+
+async def _run_find_graph_paths(
+    *,
+    payload: Any,
+    state: dict | None,
+) -> str:
+    """两个对象之间的有界路径；用于多跳关联/路径解释。"""
+    if not graph_query_enabled():
+        raise ValueError("图查询未启用：需设置 CHAT_DATA_NEBULA_ENABLED=1")
+    member_ids = _query_member_ids(payload.member_datasource_ids, state)
+    members = [member for member in member_ids if member]
+    if len(members) != 1:
+        raise ValueError("图查询必须且只能指定一个 member_datasource_id")
+    try:
+        result = await asyncio.to_thread(
+            get_graph_query_service().find_paths,
+            payload.from_object_key,
+            payload.to_object_key,
+            max_depth=payload.max_depth,
+            limit=payload.limit,
+            member_ids=members,
+        )
+    except GraphQueryError as err:
+        raise ValueError(str(err)) from err
+    return tool_result_payload(
+        ONTOLOGY_TOOL_NAME,
+        {
+            "success": True,
+            **result.as_dict(),
+            "usage": "路径只说明关系链；属性与业务口径仍需回源对象/语义层。",
+        },
+    )
+
+
 async def _run_ontology_impl(
     action: str,
     action_payload: dict,
@@ -798,6 +903,10 @@ async def _run_ontology_impl(
             state=state,
             bound_user_id=bound_user_id,
         )
+    if action == "traverse_objects":
+        return await _run_traverse_objects(payload=payload, state=state)
+    if action == "find_graph_paths":
+        return await _run_find_graph_paths(payload=payload, state=state)
     # locate_object_type
     return await _run_locate_object_type(
         payload=payload,
@@ -841,6 +950,8 @@ def create_ontology_tool(
         - list_execution_targets: 列出当前用户可执行的成员数据源（member_datasource_id/名称/机构编码）；多机构时先调用它，再把选中的 ID 传给对象查询
         - list_action_types: 列出当前业务域可执行 Action 定义（只读）
         - execute_action: 执行 Action（set_property 写覆盖层 / create_object 写动作对象表 + 审计；受部署开关门控）
+        - traverse_objects: 从对象出发做 1~3 跳关系遍历（Nebula 图查询；需开启图查询开关）
+        - find_graph_paths: 查询两个对象之间的有界路径（Nebula 图查询；需开启图查询开关）
             action_payload: 操作参数，结构随 action 变化：
         - list_object_types: {}（无参数，范围=当前业务域）
         - locate_object_type: {"object_types": [<对象API名>...]（单次最多10个）}
@@ -851,6 +962,8 @@ def create_ontology_tool(
         - list_execution_targets: {}（无参数；返回当前用户可见执行对象）
         - list_action_types: {}（无参数；返回当前业务域可执行 Action 定义）
         - execute_action: {"action_type": "<Action Type API名>", "object_key": "<对象主键值>", "parameters": {"<参数名>": "<值>"}}
+        - traverse_objects: {"object_key": "<完整对象身份>", "depth": 1, "direction": "both", "limit": 50, "member_datasource_ids": ["机构ID"]}
+        - find_graph_paths: {"from_object_key": "<起点>", "to_object_key": "<终点>", "max_depth": 3, "limit": 10, "member_datasource_ids": ["机构ID"]}
             intent: 一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示。
         """
         return await _run_ontology_impl(

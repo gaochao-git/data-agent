@@ -45,13 +45,41 @@ related_key
 related_title
 ```
 
+## 多跳图查询（可选）
+
+当部署开启 `CHAT_DATA_NEBULA_ENABLED=1` 且图同步已完成时：
+
+```text
+traverse_objects   从对象出发 1~3 跳
+find_graph_paths   两个对象之间的有界路径
+```
+
+用途：
+
+```text
+多跳关联
+关系链解释
+路径查询
+```
+
+注意：
+
+```text
+图查询只返回对象身份/标题/关系
+对象属性仍需 get_object 回源
+必须指定且只能指定一个 member_datasource_id
+depth <= 3，limit <= 200
+```
+
+图查询不可用时回退一跳 `search_around`，不要假装图查询成功。
+
 ## 边界
 
 ```text
-只支持 FK → PK 单列关联
+SQL 投影只支持 FK → PK 单列关联
 不支持自关联 / 多列关联
-不支持多跳
-不支持图数据库遍历
+图查询支持有界多跳（1~3）
+不支持任意深度 / 图算法 / 全图扫描
 ```
 
 ## 失败处理
