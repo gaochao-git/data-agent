@@ -338,6 +338,21 @@ def test_error_response_maps_each_ontology_exception():
     assert body == {"status": "error", "msg": "操作失败，请重试", "code": int(ErrorCode.SUCCESS)}
 
 
+def test_ontology_route_maps_uncaught_exception_and_preserves_http_exception():
+    async def boom():
+        raise RuntimeError("boom")
+
+    body = json.loads(asyncio.run(ontology_admin_router._ontology_route("保底文案", ErrorCode.SUCCESS)(boom)()).body)
+    assert body == {"status": "error", "msg": "保底文案", "code": int(ErrorCode.SUCCESS)}
+
+    async def unauthorized():
+        raise HTTPException(status_code=401, detail="unauthorized")
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(ontology_admin_router._ontology_route("保底文案")(unauthorized)())
+    assert exc.value.status_code == 401
+
+
 def test_all_admin_routes_return_business_response(router_env):
     stub = router_env
     for name, route, args in _router_calls(_router_payloads()):
