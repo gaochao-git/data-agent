@@ -34,6 +34,7 @@ const emit = defineEmits<{
 
 const containerRef = ref<HTMLDivElement | null>(null)
 const actionPosition = ref({ left: 0, top: 0 })
+let actionLockedUntilRoam = false
 let chart: echarts.ECharts | null = null
 let resizeObserver: ResizeObserver | null = null
 let resizeFrame: number | null = null
@@ -62,7 +63,7 @@ const buildOption = (): any => {
         roam: true,
         draggable: true,
         selectedMode: 'single',
-        symbol: 'roundRect',
+        symbol: 'rect',
         symbolSize: [176, 44],
         force: {
           repulsion: 1200,
@@ -85,8 +86,7 @@ const buildOption = (): any => {
         itemStyle: {
           color: '#ffffff',
           borderColor: '#dbeafe',
-          borderWidth: 1.2,
-          borderRadius: 5
+          borderWidth: 1.2
         },
         lineStyle: {
           color: '#cbd5e1',
@@ -135,7 +135,7 @@ const clampActionPosition = (left: number, top: number) => {
 }
 
 const updateActionPosition = () => {
-  if (!chart || !props.selectedKey) return
+  if (!chart || !props.selectedKey || actionLockedUntilRoam) return
   try {
     const series = (chart as any).getModel()?.getSeriesByIndex(0)
     const data = series?.getData?.()
@@ -208,6 +208,7 @@ onMounted(() => {
     emit('select', key)
   })
   chart.on('graphroam', () => {
+    actionLockedUntilRoam = false
     void nextTick(updateActionPosition)
   })
   resizeObserver = new ResizeObserver(scheduleFitChart)
