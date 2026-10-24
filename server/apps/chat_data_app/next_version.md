@@ -1021,3 +1021,20 @@ WHERE `property_name` = 'max_amount'
 ```
 
 执行后重新保存或重新读取对象类型即可按新口径计算。
+
+### order_item 关联列类型修复（2026-10-24）
+
+`order_item.order_id` / `item_id` 被登记为 `Integer`，但实际源列和数据集 schema 是字符串（`ORG1-ORD...` / `ORG1-ITM...`），导致本体按订单号过滤明细时报「数值属性过滤值非法」，只能回退语义模型。
+
+修正对象属性类型：
+
+```sql
+UPDATE `chat_data_ontology_property` p
+JOIN `chat_data_ontology_object_type` t ON t.`id` = p.`object_type_id`
+SET p.`value_type` = 'String'
+WHERE t.`object_type_name` = 'order_item'
+  AND p.`property_name` IN ('item_id', 'order_id')
+  AND p.`value_type` = 'Integer';
+```
+
+修正后需重启后端或清理对象类型缓存，再验证订单 → 明细关系与图同步。

@@ -70,6 +70,7 @@ INSERT EDGE belongs_to(member_id, relation_type) ...
 对象类型：一条 SELECT 分页拉取对象身份/标题
 关系：一条 SELECT 分页拉取 FK 边
 写入：按 200 条分块写 Nebula
+清理：写完后按 member 扫描 Nebula，删除源数据已不存在的残留节点
 ```
 
 实测 `ORG_CODE1`：

@@ -304,3 +304,36 @@ async def test_batch_graph_sync_builds_nodes_edges(monkeypatch):
     assert {node.object_key for node in nodes} == {"M:order:O1", "M:customer:C1"}
     assert edges[0].from_object_key == "M:order:O1"
     assert edges[0].to_object_key == "M:customer:C1"
+
+
+@pytest.mark.asyncio
+async def test_batch_sync_prunes_stale_graph_nodes(monkeypatch):
+    from apps.chat_data_app.services.ontology.graph import sync
+
+    async def fake_collect(**_kwargs):
+        node = contracts.GraphNode("M:order:1", "order", "SO-1", "M")
+        return [node], [], sync.GraphSyncResult(member_id="M", object_types=1, nodes=1)
+
+    class _Writer:
+        def __init__(self):
+            self.written = []
+            self.pruned = None
+
+        def write(self, nodes, edges):
+            self.written.append((len(nodes), len(edges)))
+
+        def prune(self, member_id, keep_keys):
+            self.pruned = (member_id, keep_keys)
+            return 3
+
+    monkeypatch.setattr(sync, "collect_member_graph_batch", fake_collect)
+    writer = _Writer()
+    result = await sync.sync_member_graph_batch(
+        member_id="M",
+        datasource_group_id="ds_a",
+        writer=writer,
+    )
+    assert writer.written == [(1, 0)]
+    assert writer.pruned == ("M", {"M:order:1"})
+    assert result.pruned_nodes == 3
+    assert result.as_dict()["pruned_nodes"] == 3

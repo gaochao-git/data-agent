@@ -35,6 +35,7 @@ class GraphSyncResult:
     nodes: int = 0
     edges: int = 0
     skipped_links: int = 0
+    pruned_nodes: int = 0
     errors: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
@@ -44,6 +45,7 @@ class GraphSyncResult:
             "nodes": self.nodes,
             "edges": self.edges,
             "skipped_links": self.skipped_links,
+            "pruned_nodes": self.pruned_nodes,
             "errors": list(self.errors),
         }
 
@@ -299,6 +301,33 @@ class NebulaGraphWriter:
         if self._pool is not None:
             self._pool.close()
             self._pool = None
+
+    def _member_node_keys(self, member_id: str) -> set[str]:
+        """读取当前 member 在 Nebula 的所有节点 ID；用于全量同步后的残留清理。"""
+        session = self._ensure_session()
+        result = session.execute(
+            f"MATCH (n:Object) WHERE n.Object.member_id == {_quote(member_id)} RETURN id(n) AS `key`"
+        )
+        if not result.is_succeeded():
+            raise GraphSyncError(f"Nebula 读取现有节点失败: {result.error_msg()}")
+        keys: set[str] = set()
+        for index in range(result.row_size()):
+            values = result.row_values(index)
+            if values:
+                keys.add(_text(values[0]))
+        return keys
+
+    def prune(self, member_id: str, keep_keys: set[str]) -> int:
+        """删除源数据已不存在、但 Nebula 仍残留的 member 节点及其边。"""
+        stale = sorted(self._member_node_keys(member_id) - keep_keys)
+        session = self._ensure_session()
+        deleted = 0
+        for object_key in stale:
+            result = session.execute(f"DELETE VERTEX {_quote(object_key)} WITH EDGE")
+            if not result.is_succeeded():
+                raise GraphSyncError(f"Nebula 删除残留节点失败: {object_key}: {result.error_msg()}")
+            deleted += 1
+        return deleted
 
     def write(self, nodes: list[GraphNode], edges: list[GraphEdge]) -> None:
         # 分块写，避免单条 INSERT 超过 Nebula 请求体/内存上限；一个 session 写完整批。
@@ -605,5 +634,12 @@ async def sync_member_graph_batch(
         user_id=user_id,
         username=username,
     )
-    (writer or NebulaGraphWriter()).write(nodes, edges)
+    graph_writer = writer or NebulaGraphWriter()
+    graph_writer.write(nodes, edges)
+    prune = getattr(graph_writer, "prune", None)
+    if callable(prune):
+        try:
+            result.pruned_nodes = prune(member_id, {node.object_key for node in nodes})
+        except Exception as exc:  # noqa: BLE001
+            result.errors.append(f"图残留清理失败: {exc}")
     return result
