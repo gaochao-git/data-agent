@@ -10,10 +10,12 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 
 from utils.logger import get_logger
 
+from ....daos.graph_sync_dao import GraphSyncDao
 from ...datasource.manager import get_datasource_manager
 from ..object_projection import _query_rows, read_object_projection, search_object_projection
 from ..query_mode import load_domain_ontology_bundle_async
@@ -37,6 +39,8 @@ class GraphSyncResult:
     skipped_links: int = 0
     pruned_nodes: int = 0
     errors: list[str] = field(default_factory=list)
+    as_of: str = ""
+    run_status: str = "succeeded"
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -47,6 +51,8 @@ class GraphSyncResult:
             "skipped_links": self.skipped_links,
             "pruned_nodes": self.pruned_nodes,
             "errors": list(self.errors),
+            "as_of": self.as_of,
+            "run_status": self.run_status,
         }
 
 
@@ -631,18 +637,67 @@ async def sync_member_graph_batch(
     username: str = "",
     writer: Any | None = None,
 ) -> GraphSyncResult:
-    nodes, edges, result = await collect_member_graph_batch(
-        member_id=member_id,
-        datasource_group_id=datasource_group_id,
-        user_id=user_id,
-        username=username,
-    )
-    graph_writer = writer or NebulaGraphWriter()
-    graph_writer.write(nodes, edges)
-    prune = getattr(graph_writer, "prune", None)
-    if callable(prune):
-        try:
-            result.pruned_nodes = prune(member_id, {node.object_key for node in nodes})
-        except Exception as exc:  # noqa: BLE001
-            result.errors.append(f"图残留清理失败: {exc}")
-    return result
+    started_at = datetime.now(UTC).replace(tzinfo=None)
+    dao = GraphSyncDao()
+    try:
+        nodes, edges, result = await collect_member_graph_batch(
+            member_id=member_id,
+            datasource_group_id=datasource_group_id,
+            user_id=user_id,
+            username=username,
+        )
+        graph_writer = writer or NebulaGraphWriter()
+        graph_writer.write(nodes, edges)
+        prune = getattr(graph_writer, "prune", None)
+        if callable(prune):
+            try:
+                result.pruned_nodes = prune(member_id, {node.object_key for node in nodes})
+            except Exception as exc:  # noqa: BLE001
+                result.errors.append(f"图残留清理失败: {exc}")
+        finished_at = datetime.now(UTC).replace(tzinfo=None)
+        result.run_status = "partial" if result.errors else "succeeded"
+        saved = await dao.save_run_async(
+            member_datasource_id=member_id,
+            datasource_group_id=datasource_group_id,
+            status=result.run_status,
+            object_types=result.object_types,
+            nodes=result.nodes,
+            edges=result.edges,
+            skipped_links=result.skipped_links,
+            pruned_nodes=result.pruned_nodes,
+            errors=result.errors,
+            started_at=started_at,
+            finished_at=finished_at,
+            operator=user_id,
+            operator_name=username,
+        )
+        result.as_of = str(saved.get("as_of") or "")
+        return result
+    except Exception as exc:
+        finished_at = datetime.now(UTC).replace(tzinfo=None)
+        await dao.save_run_async(
+            member_datasource_id=member_id,
+            datasource_group_id=datasource_group_id,
+            status="failed",
+            object_types=0,
+            nodes=0,
+            edges=0,
+            skipped_links=0,
+            pruned_nodes=0,
+            errors=[str(exc)],
+            started_at=started_at,
+            finished_at=finished_at,
+            operator=user_id,
+            operator_name=username,
+        )
+        raise
+
+
+async def latest_graph_as_of_async(member_id: str, datasource_group_id: str = "") -> str:
+    """返回 member 最近一次成功同步的 as_of；未迁移/未同步时返回空串。"""
+    try:
+        latest = await GraphSyncDao().latest_succeeded_async(member_id, datasource_group_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("读取图同步快照时间失败，按未知处理: %s", exc)
+        return ""
+    return str((latest or {}).get("as_of") or "")

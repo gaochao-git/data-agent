@@ -326,6 +326,11 @@ async def test_batch_sync_prunes_stale_graph_nodes(monkeypatch):
             self.pruned = (member_id, keep_keys)
             return 3
 
+    class _SyncDao:
+        async def save_run_async(self, **_kwargs):
+            return {"as_of": "2026-10-24T00:00:00Z"}
+
+    monkeypatch.setattr(sync, "GraphSyncDao", lambda: _SyncDao())
     monkeypatch.setattr(sync, "collect_member_graph_batch", fake_collect)
     writer = _Writer()
     result = await sync.sync_member_graph_batch(
@@ -337,3 +342,4 @@ async def test_batch_sync_prunes_stale_graph_nodes(monkeypatch):
     assert writer.pruned == ("M", {"M:order:1"})
     assert result.pruned_nodes == 3
     assert result.as_dict()["pruned_nodes"] == 3
+    assert result.as_of == "2026-10-24T00:00:00Z"

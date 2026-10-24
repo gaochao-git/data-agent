@@ -17,6 +17,7 @@ from .sync import (
     NebulaGraphWriter,
     collect_member_graph,
     collect_member_graph_batch,
+    latest_graph_as_of_async,
     sync_member_graph,
     sync_member_graph_batch,
 )
@@ -32,6 +33,7 @@ __all__ = [
     "NebulaGraphWriter",
     "collect_member_graph",
     "collect_member_graph_batch",
+    "latest_graph_as_of_async",
     "get_graph_query_service",
     "graph_query_enabled",
     "reset_graph_query_service",

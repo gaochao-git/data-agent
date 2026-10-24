@@ -1038,3 +1038,31 @@ WHERE t.`object_type_name` = 'order_item'
 ```
 
 修正后需重启后端或清理对象类型缓存，再验证订单 → 明细关系与图同步。
+
+### 图同步运行记录（2026-10-24）
+
+用于 `graph_as_of`、同步状态和失败排查。生产需执行：
+
+```sql
+CREATE TABLE IF NOT EXISTS `chat_data_graph_sync_run` (
+  `id` bigint(20) NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `member_datasource_id` varchar(64) NOT NULL COMMENT '成员数据源ID',
+  `datasource_group_id` varchar(128) NOT NULL DEFAULT '' COMMENT '数据源组ID',
+  `run_status` varchar(16) NOT NULL DEFAULT 'running' COMMENT 'running/succeeded/partial/failed',
+  `object_types` int NOT NULL DEFAULT 0 COMMENT '同步对象类型数',
+  `node_count` int NOT NULL DEFAULT 0 COMMENT '写入节点数',
+  `edge_count` int NOT NULL DEFAULT 0 COMMENT '写入边数',
+  `skipped_links` int NOT NULL DEFAULT 0 COMMENT '跳过的关系数',
+  `pruned_nodes` int NOT NULL DEFAULT 0 COMMENT '清理的残留节点数',
+  `errors_json` text NOT NULL COMMENT '错误列表JSON',
+  `as_of` datetime DEFAULT NULL COMMENT '图快照时间（仅成功）',
+  `started_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '开始时间',
+  `finished_at` datetime DEFAULT NULL COMMENT '结束时间',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `create_by` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人',
+  `create_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人名称',
+  PRIMARY KEY (`id`),
+  KEY `idx_graph_sync_member` (`member_datasource_id`, `id`),
+  KEY `idx_graph_sync_group` (`datasource_group_id`, `id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Nebula图同步运行记录';
+```

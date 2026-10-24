@@ -46,6 +46,7 @@ from apps.chat_data_app.services.ontology.graph import (
     GraphQueryError,
     get_graph_query_service,
     graph_query_enabled,
+    latest_graph_as_of_async,
 )
 from apps.chat_data_app.services.ontology.object_projection import (
     ObjectProjectionError,
@@ -801,6 +802,7 @@ async def _run_traverse_objects(
         )
     except GraphQueryError as err:
         raise ValueError(str(err)) from err
+    result.graph_as_of = await latest_graph_as_of_async(members[0])
     return tool_result_payload(
         ONTOLOGY_TOOL_NAME,
         {
@@ -834,6 +836,7 @@ async def _run_find_graph_paths(
         )
     except GraphQueryError as err:
         raise ValueError(str(err)) from err
+    result.graph_as_of = await latest_graph_as_of_async(members[0])
     return tool_result_payload(
         ONTOLOGY_TOOL_NAME,
         {

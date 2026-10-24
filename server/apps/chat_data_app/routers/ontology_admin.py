@@ -47,6 +47,7 @@ from ..services.ontology.graph import (
     GraphQueryError,
     get_graph_query_service,
     graph_query_enabled,
+    latest_graph_as_of_async,
     sync_member_graph_batch,
 )
 from ..services.ontology.object_projection import (
@@ -568,6 +569,7 @@ async def traverse_ontology_graph(payload: OntologyGraphTraverseRequest, request
             limit=payload.limit,
             member_ids=members,
         )
+        result.graph_as_of = await latest_graph_as_of_async(members[0])
         return business_response(data=result.as_dict(), msg="查询成功")
     except HTTPException:
         raise

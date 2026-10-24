@@ -212,6 +212,7 @@ const draggingExploreKey = ref('')
 const exploreLoadingKey = ref('')
 /** 图查询失败时的可见降级提示；不要再只写 console 让用户以为图是完整的。 */
 const graphFallbackNotice = ref('')
+const graphAsOf = ref('')
 /** 图节点类型显示名（客户/订单/发货单...），避免图上只看到英文对象名。 */
 const objectTypeDisplayNames = ref<Record<string, string>>({})
 const objectTypeLabelPending = new Set<string>()
@@ -320,7 +321,9 @@ const ensureObjectTypeDisplayNames = async (types: string[]) => {
 const mergeGraphResult = (data: {
   nodes?: Array<{ object_key: string; object_type: string; title: string }>
   edges?: Array<{ from_object_key: string; to_object_key: string; relation_type: string }>
+  graph_as_of?: string
 }) => {
+  graphAsOf.value = data.graph_as_of || ''
   for (const node of data.nodes || []) {
     if (!node.object_key) continue
     addExploreNode(node.object_key, node.object_type || '', node.title || node.object_key, {})
@@ -346,6 +349,7 @@ const loadTraverseIntoExplore = async (objectKey: string, depth = 2): Promise<bo
     })
     if (res.status !== 'success' || !res.data) {
       graphFallbackNotice.value = '图查询暂不可用，已回退为当前对象的一跳关系；结果可能不完整。'
+      graphAsOf.value = ''
       return false
     }
     graphFallbackNotice.value = ''
@@ -354,6 +358,7 @@ const loadTraverseIntoExplore = async (objectKey: string, depth = 2): Promise<bo
   } catch (err) {
     console.warn('Nebula 图查询不可用，回退一跳 links:', err)
     graphFallbackNotice.value = '图查询暂不可用，已回退为当前对象的一跳关系；结果可能不完整。'
+    graphAsOf.value = ''
     return false
   }
 }
@@ -372,6 +377,7 @@ const expandCurrentLinks = async () => {
 
 const seedExploreGraph = () => {
   graphFallbackNotice.value = ''
+  graphAsOf.value = ''
   exploreNodes.value = {}
   exploreEdges.value = {}
   exploreNodeOffsets.value = {}
@@ -382,6 +388,7 @@ const seedExploreGraph = () => {
 
 const clearExploreGraph = () => {
   graphFallbackNotice.value = ''
+  graphAsOf.value = ''
   exploreNodes.value = {}
   exploreEdges.value = {}
   exploreNodeOffsets.value = {}
@@ -1027,6 +1034,13 @@ onMounted(() => void initialize())
             <span class="text-[10px] text-slate-400">力导向布局</span>
             <span class="text-[11px] text-slate-400">
               已加入 {{ Object.keys(exploreNodes).length }} 个对象 · {{ Object.keys(exploreEdges).length }} 条关系
+            </span>
+            <span
+              v-if="graphAsOf"
+              class="text-[10px] text-slate-400"
+              :title="`图数据截至 ${graphAsOf}`"
+            >
+              图数据截至 {{ graphAsOf.replace('T', ' ').replace('Z', ' UTC') }}
             </span>
             <span v-if="exploreSelectedKey" class="font-mono text-[11px] text-slate-500">{{ exploreSelectedKey }}</span>
             <div class="ml-auto flex items-center gap-1">

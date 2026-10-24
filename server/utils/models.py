@@ -1410,6 +1410,34 @@ class ChatDataOntologyActionExecution(Base):
     )
 
 
+class ChatDataGraphSyncRun(Base):
+    """Nebula 图同步运行记录：用于 graph_as_of、失败排查和同步状态展示。"""
+
+    __tablename__ = "chat_data_graph_sync_run"
+
+    id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
+    member_datasource_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    datasource_group_id: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
+    run_status: Mapped[str] = mapped_column(String(16), nullable=False, default="running", server_default="running")
+    object_types: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    node_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    edge_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    skipped_links: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    pruned_nodes: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    errors_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]", server_default="[]")
+    as_of: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
+    create_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+
+    __table_args__ = (
+        Index("idx_graph_sync_member", "member_datasource_id", "id"),
+        Index("idx_graph_sync_group", "datasource_group_id", "id"),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Logical Dataset：语义层与本体层共享的逻辑数据资产
 # ---------------------------------------------------------------------------
