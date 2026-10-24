@@ -21,6 +21,7 @@ from apps.chat_data_app import router as chat_data_router  # noqa: E402
 from apps.chat_data_app.agent.context.context_budget import validate_context_budget_startup_config  # noqa: E402
 from apps.chat_data_app.agent.run.agent_run_runtime import agent_run_runtime  # noqa: E402
 from apps.chat_data_app.agent.run.agent_schedule_runtime import agent_schedule_runtime  # noqa: E402
+from apps.chat_data_app.services.ontology.schema_check import require_ontology_schema_async  # noqa: E402
 from middleware.api_logging import APIAccessLogMiddleware
 from utils.checkpoint import setup_checkpointer  # noqa: E402
 from utils.logger import get_logger
@@ -43,6 +44,7 @@ async def lifespan(app: FastAPI):
     # 模型注册表启动预热必须最先执行：DB 是唯一真值，后续 context budget 校验
     # 等启动逻辑都要读注册表；预热失败时服务路径明确报错而非回落配置文件
     await refresh_registry_cache()
+    await require_ontology_schema_async()
     validate_context_budget_startup_config()
     await setup_checkpointer()
     await agent_run_runtime.start()
