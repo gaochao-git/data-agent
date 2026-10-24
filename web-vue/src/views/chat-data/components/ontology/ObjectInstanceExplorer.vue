@@ -210,6 +210,8 @@ const showGraphProperties = ref(false)
 const exploreNodeOffsets = ref<Record<string, { x: number; y: number }>>({})
 const draggingExploreKey = ref('')
 const exploreLoadingKey = ref('')
+/** 图查询失败时的可见降级提示；不要再只写 console 让用户以为图是完整的。 */
+const graphFallbackNotice = ref('')
 let exploreRequestId = 0
 let exploreStartX = 0
 let exploreStartY = 0
@@ -303,11 +305,16 @@ const loadTraverseIntoExplore = async (objectKey: string, depth = 2): Promise<bo
       limit: 30,
       member_datasource_ids: [member]
     })
-    if (res.status !== 'success' || !res.data) return false
+    if (res.status !== 'success' || !res.data) {
+      graphFallbackNotice.value = '图查询暂不可用，已回退为当前对象的一跳关系；结果可能不完整。'
+      return false
+    }
+    graphFallbackNotice.value = ''
     mergeGraphResult(res.data)
     return true
   } catch (err) {
     console.warn('Nebula 图查询不可用，回退一跳 links:', err)
+    graphFallbackNotice.value = '图查询暂不可用，已回退为当前对象的一跳关系；结果可能不完整。'
     return false
   }
 }
@@ -325,6 +332,7 @@ const expandCurrentLinks = async () => {
 }
 
 const seedExploreGraph = () => {
+  graphFallbackNotice.value = ''
   exploreNodes.value = {}
   exploreEdges.value = {}
   exploreNodeOffsets.value = {}
@@ -334,6 +342,7 @@ const seedExploreGraph = () => {
 }
 
 const clearExploreGraph = () => {
+  graphFallbackNotice.value = ''
   exploreNodes.value = {}
   exploreEdges.value = {}
   exploreNodeOffsets.value = {}
@@ -964,6 +973,14 @@ onMounted(() => void initialize())
           @mouseup="endExploreNodeDrag"
           @mouseleave="endExploreNodeDrag"
         >
+          <el-alert
+            v-if="graphFallbackNotice"
+            :title="graphFallbackNotice"
+            type="warning"
+            :closable="false"
+            show-icon
+            class="mb-2"
+          />
           <div class="mb-1 flex flex-wrap items-center gap-2">
             <span class="text-xs font-medium text-slate-700">图探索</span>
             <span class="text-[10px] text-slate-400">力导向布局</span>

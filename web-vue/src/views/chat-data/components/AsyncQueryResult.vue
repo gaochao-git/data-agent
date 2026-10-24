@@ -516,6 +516,7 @@ const getDimensionKey = (dim: string | { name: string }): string => {
           </span>
           <span v-if="activeSucceeded && activeResult?.total_count !== undefined" class="shrink-0 whitespace-nowrap text-xs text-slate-500 px-1.5 py-0.5 bg-black/[0.04] rounded">
             共 {{ activeResult.total_count }} 条
+            <template v-if="tableData.length < Number(activeResult.total_count)"> · 当前展示 {{ tableData.length }} 条</template>
           </span>
           <span v-if="activeSucceeded && activeResult?.cache_hit" class="shrink-0 whitespace-nowrap text-xs text-[#165DFF] px-1.5 py-0.5 bg-[#E8F3FF] rounded">
             缓存结果
