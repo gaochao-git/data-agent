@@ -281,12 +281,14 @@ const endExploreNodeDrag = () => {
 }
 
 const onExploreNodeClick = (rawKey: string) => {
-  // 拖动结束后浏览器仍可能补发 click；拖动过的节点只移动，不切换详情/扩图。
+  // 拖动结束后浏览器仍可能补发 click；拖动过的节点只移动，不切换选中/加载。
   if (exploreDragMoved) {
     exploreDragMoved = false
     return
   }
-  void openExploreNode(rawKey)
+  // 点击只选中节点，不发起详情/关系加载；必须点节点下方按钮才会加载。
+  seedAfterLoad.value = false
+  exploreSelectedKey.value = rawKey
 }
 
 const addExploreNode = (rawKey: string, objectType: string, label: string, properties: Record<string, unknown>) => {
@@ -1277,7 +1279,7 @@ onMounted(() => void initialize())
             </aside>
           </div>
           <div class="mt-1 text-[10px] text-slate-400">
-            点击节点只选中并加载详情；在节点下方选择「查看详情」或「展开一跳」，不会自动扩图。
+            点击节点只选中；请点节点下方「查看详情」或「展开一跳」，点击节点不会自动加载或扩图。
           </div>
         </div>
       </template>
