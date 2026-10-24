@@ -328,6 +328,15 @@ const onExploreNodeClick = (rawKey: string) => {
   exploreSelectedKey.value = rawKey
 }
 
+const loadingRectPath = (node: { x: number; y: number }) => {
+  const x = node.x - 84
+  const y = node.y - 20
+  const w = 168
+  const h = 40
+  const r = 5
+  return `M ${x + r} ${y} H ${x + w - r} A ${r} ${r} 0 0 1 ${x + w} ${y + r} V ${y + h - r} A ${r} ${r} 0 0 1 ${x + w - r} ${y + h} H ${x + r} A ${r} ${r} 0 0 1 ${x} ${y + h - r} V ${y + r} A ${r} ${r} 0 0 1 ${x + r} ${y} Z`
+}
+
 const orderedGraphNodes = computed(() => {
   const nodes = exploreGraph.value.nodes
   const selected = exploreSelectedKey.value
@@ -1217,8 +1226,6 @@ onBeforeUnmount(() => stopGraphDetailResize())
                 <i :class="['fa-solid mr-1 text-[10px]', graphFullscreen ? 'fa-compress' : 'fa-expand']"></i>
                 {{ graphFullscreen ? '退出全屏' : '全屏' }}
               </el-button>
-              <el-button v-if="exploreSelectedKey" size="small" @click="viewNodeDetail(exploreSelectedKey)">查看详情</el-button>
-              <el-button v-if="exploreSelectedKey" size="small" @click="expandNodeOneHop(exploreSelectedKey)">展开一跳</el-button>
               <el-button size="small" :disabled="!detail" @click="seedExploreGraph">重置为当前对象</el-button>
               <el-button size="small" :disabled="Object.keys(exploreNodes).length === 0" @click="clearExploreGraph">清空</el-button>
             </div>
@@ -1238,12 +1245,19 @@ onBeforeUnmount(() => stopGraphDetailResize())
                 role="img"
                 aria-label="对象实例探索图"
               >
+                <defs>
+                  <linearGradient id="graph-comet-tail" x1="0" y1="0" x2="1" y2="0">
+                    <stop offset="0%" stop-color="#f59e0b" stop-opacity="0" />
+                    <stop offset="100%" stop-color="#f59e0b" stop-opacity="0.85" />
+                  </linearGradient>
+                </defs>
+
                 <g v-for="edge in exploreGraph.edges" :key="edge.key">
                   <title>{{ edge.relationName }}</title>
                   <line :x1="edge.x1" :y1="edge.y1" :x2="edge.x2" :y2="edge.y2" stroke="#cbd5e1" stroke-width="1.2" />
                 </g>
                 <g
-                  v-for="node in orderedGraphNodes"
+                  v-for="(node, index) in orderedGraphNodes"
                   :key="node.key"
                   class="cursor-move"
                   @mousedown="startExploreNodeDrag($event, node)"
@@ -1307,24 +1321,17 @@ onBeforeUnmount(() => stopGraphDetailResize())
                     </div>
                   </foreignObject>
                   <g v-if="exploreLoadingKey === node.key">
-                    <circle
-                      :cx="node.x - 64"
-                      :cy="node.y"
-                      r="6"
-                      fill="none"
-                      stroke="#3b82f6"
-                      stroke-width="2"
-                      stroke-dasharray="24 12"
-                    >
-                      <animateTransform
-                        attributeName="transform"
-                        type="rotate"
-                        :from="`0 ${node.x - 64} ${node.y}`"
-                        :to="`360 ${node.x - 64} ${node.y}`"
-                        dur="0.8s"
-                        repeatCount="indefinite"
+                    <path :id="`graph-loading-path-${index}`" :d="loadingRectPath(node)" fill="none" stroke="none" />
+                    <g>
+                      <path
+                        d="M -30 0 Q -16 -5 -4 -3.5 L -4 3.5 Q -16 5 -30 0 Z"
+                        fill="url(#graph-comet-tail)"
                       />
-                    </circle>
+                      <circle cx="0" cy="0" r="4.2" fill="#f59e0b" stroke="#ffffff" stroke-width="1.2" />
+                      <animateMotion dur="1.8s" repeatCount="indefinite" rotate="auto">
+                        <mpath :href="`#graph-loading-path-${index}`" />
+                      </animateMotion>
+                    </g>
                   </g>
                 </g>
               </svg>
