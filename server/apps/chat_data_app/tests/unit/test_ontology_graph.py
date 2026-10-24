@@ -343,3 +343,39 @@ async def test_batch_sync_prunes_stale_graph_nodes(monkeypatch):
     assert result.pruned_nodes == 3
     assert result.as_dict()["pruned_nodes"] == 3
     assert result.as_of == "2026-10-24T00:00:00Z"
+
+
+def test_traverse_marks_result_truncated_at_limit(monkeypatch):
+    monkeypatch.setenv("CHAT_DATA_NEBULA_EDGE_TYPES", "belongs_to")
+    paths = [
+        _Path([_Node("M:order:1", "order", "M", "SO-1")], []),
+        _Path([_Node("M:order:2", "order", "M", "SO-2")], []),
+    ]
+
+    def executor(_ngql: str):
+        return [[_Value(path)] for path in paths]
+
+    result = service.GraphQueryService(executor=executor).traverse_objects(
+        "M:order:1", depth=1, direction="both", limit=2, member_ids=["M"]
+    )
+    assert "limit=2" in result.degraded_reason
+
+
+@pytest.mark.asyncio
+async def test_graph_sync_capacity_guard(monkeypatch):
+    from apps.chat_data_app.services.ontology.graph import sync
+
+    async def fake_query(*_args, **_kwargs):
+        return [{"object_key": "1", "title": "a"}, {"object_key": "2", "title": "b"}]
+
+    monkeypatch.setattr(sync, "_query_rows", fake_query)
+    with pytest.raises(sync.GraphSyncCapacityError, match="同步行数超过上限 1"):
+        await sync._fetch_pages(
+            lambda _offset: "SELECT 1",
+            targets=[],
+            group_id="ds_a",
+            user_id="u",
+            username="n",
+            max_rows=1,
+            label="测试对象",
+        )

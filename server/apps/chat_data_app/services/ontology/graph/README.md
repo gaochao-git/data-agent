@@ -83,6 +83,15 @@ INSERT EDGE belongs_to(member_id, relation_type) ...
 
 当前是全量重建式同步；增量/tombstone 仍待补。
 
+容量保护：
+
+```text
+CHAT_DATA_NEBULA_SYNC_MAX_NODES_PER_TYPE=200000
+CHAT_DATA_NEBULA_SYNC_MAX_EDGES_PER_RELATION=500000
+```
+
+超过上限直接拒绝同步，不写入不完整图；大对象类型应改成按分区增量。
+
 ## 前端接入
 
 `ObjectInstanceExplorer` 的「图探索」：

@@ -13,6 +13,8 @@ from .service import (
     reset_graph_query_service,
 )
 from .sync import (
+    GraphSyncCapacityError,
+    GraphSyncError,
     GraphSyncResult,
     NebulaGraphWriter,
     collect_member_graph,
@@ -28,6 +30,8 @@ __all__ = [
     "GraphQueryError",
     "GraphQueryResult",
     "GraphQueryService",
+    "GraphSyncCapacityError",
+    "GraphSyncError",
     "GraphSyncResult",
     "GraphUnavailableError",
     "NebulaGraphWriter",

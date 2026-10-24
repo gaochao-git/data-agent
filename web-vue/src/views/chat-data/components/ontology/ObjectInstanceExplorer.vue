@@ -213,6 +213,7 @@ const exploreLoadingKey = ref('')
 /** 图查询失败时的可见降级提示；不要再只写 console 让用户以为图是完整的。 */
 const graphFallbackNotice = ref('')
 const graphAsOf = ref('')
+const graphDegradedReason = ref('')
 /** 图节点类型显示名（客户/订单/发货单...），避免图上只看到英文对象名。 */
 const objectTypeDisplayNames = ref<Record<string, string>>({})
 const objectTypeLabelPending = new Set<string>()
@@ -322,8 +323,10 @@ const mergeGraphResult = (data: {
   nodes?: Array<{ object_key: string; object_type: string; title: string }>
   edges?: Array<{ from_object_key: string; to_object_key: string; relation_type: string }>
   graph_as_of?: string
+  degraded_reason?: string
 }) => {
   graphAsOf.value = data.graph_as_of || ''
+  graphDegradedReason.value = data.degraded_reason || ''
   for (const node of data.nodes || []) {
     if (!node.object_key) continue
     addExploreNode(node.object_key, node.object_type || '', node.title || node.object_key, {})
@@ -350,6 +353,7 @@ const loadTraverseIntoExplore = async (objectKey: string, depth = 2): Promise<bo
     if (res.status !== 'success' || !res.data) {
       graphFallbackNotice.value = '图查询暂不可用，已回退为当前对象的一跳关系；结果可能不完整。'
       graphAsOf.value = ''
+      graphDegradedReason.value = ''
       return false
     }
     graphFallbackNotice.value = ''
@@ -359,6 +363,7 @@ const loadTraverseIntoExplore = async (objectKey: string, depth = 2): Promise<bo
     console.warn('Nebula 图查询不可用，回退一跳 links:', err)
     graphFallbackNotice.value = '图查询暂不可用，已回退为当前对象的一跳关系；结果可能不完整。'
     graphAsOf.value = ''
+    graphDegradedReason.value = ''
     return false
   }
 }
@@ -378,6 +383,7 @@ const expandCurrentLinks = async () => {
 const seedExploreGraph = () => {
   graphFallbackNotice.value = ''
   graphAsOf.value = ''
+  graphDegradedReason.value = ''
   exploreNodes.value = {}
   exploreEdges.value = {}
   exploreNodeOffsets.value = {}
@@ -389,6 +395,7 @@ const seedExploreGraph = () => {
 const clearExploreGraph = () => {
   graphFallbackNotice.value = ''
   graphAsOf.value = ''
+  graphDegradedReason.value = ''
   exploreNodes.value = {}
   exploreEdges.value = {}
   exploreNodeOffsets.value = {}
@@ -1024,6 +1031,14 @@ onMounted(() => void initialize())
           <el-alert
             v-if="graphFallbackNotice"
             :title="graphFallbackNotice"
+            type="warning"
+            :closable="false"
+            show-icon
+            class="mb-2"
+          />
+          <el-alert
+            v-if="graphDegradedReason"
+            :title="graphDegradedReason"
             type="warning"
             :closable="false"
             show-icon

@@ -260,7 +260,10 @@ class GraphQueryService:
             limit=limit,
             target_object_key=target_object_key,
         )
-        return parse_path_rows(self._execute(query))
+        result = parse_path_rows(self._execute(query))
+        if len(result.paths) >= limit:
+            result.degraded_reason = f"结果达到 limit={limit}，可能未展示全部关系；请缩小范围或从具体节点继续展开"
+        return result
 
     def find_paths(
         self,

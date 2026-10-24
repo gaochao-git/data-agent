@@ -60,6 +60,18 @@ class GraphSyncError(GraphQueryError):
     """图同步失败。"""
 
 
+class GraphSyncCapacityError(GraphSyncError):
+    """图同步超过安全容量，拒绝把不完整图写入 Nebula。"""
+
+
+def _capacity_limit(env_name: str, default: int) -> int:
+    try:
+        value = int(os.getenv(env_name) or default)
+    except (TypeError, ValueError):
+        return default
+    return max(1, value)
+
+
 def _edge_type() -> str:
     raw = _text(os.getenv("CHAT_DATA_NEBULA_EDGE_TYPES")) or "belongs_to"
     edge = raw.split(",")[0].strip()
@@ -424,6 +436,8 @@ async def _fetch_pages(
     group_id: str,
     user_id: str,
     username: str,
+    max_rows: int,
+    label: str,
 ) -> list[dict[str, Any]]:
     collected: list[dict[str, Any]] = []
     offset = 0
@@ -437,6 +451,8 @@ async def _fetch_pages(
             limit=_SYNC_PAGE_SIZE,
         )
         collected.extend(rows)
+        if len(collected) > max_rows:
+            raise GraphSyncCapacityError(f"{label} 同步行数超过上限 {max_rows}，请缩小范围或按分区增量同步")
         if len(rows) < _SYNC_PAGE_SIZE:
             return collected
         offset += _SYNC_PAGE_SIZE
@@ -488,7 +504,11 @@ async def _sync_batch_objects(
                 group_id=group_id,
                 user_id=user_id,
                 username=username,
+                max_rows=_capacity_limit("CHAT_DATA_NEBULA_SYNC_MAX_NODES_PER_TYPE", 200_000),
+                label=f"对象类型 {object_type.get('object_type_name')}",
             )
+        except GraphSyncCapacityError:
+            raise
         except Exception as exc:  # noqa: BLE001
             result.errors.append(f"{object_type.get('object_type_name')}: {exc}")
             continue
@@ -553,7 +573,11 @@ async def _sync_batch_relations(
                 group_id=group_id,
                 user_id=user_id,
                 username=username,
+                max_rows=_capacity_limit("CHAT_DATA_NEBULA_SYNC_MAX_EDGES_PER_RELATION", 500_000),
+                label=f"关系 {relation_name}",
             )
+        except GraphSyncCapacityError:
+            raise
         except Exception as exc:  # noqa: BLE001
             result.errors.append(f"{relation_name}: {exc}")
             continue

@@ -45,6 +45,7 @@ from ..services.ontology import (
 from ..services.ontology.action_type_service import OntologyActionTypeService
 from ..services.ontology.graph import (
     GraphQueryError,
+    GraphSyncError,
     get_graph_query_service,
     graph_query_enabled,
     latest_graph_as_of_async,
@@ -609,6 +610,12 @@ async def sync_ontology_graph(payload: OntologyGraphSyncRequest, request: Reques
         return business_response(data=data, msg="图同步完成")
     except HTTPException:
         raise
+    except GraphSyncError as e:
+        return business_response(
+            msg=str(e),
+            code=ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED,
+            status="error",
+        )
     except Exception as e:
         return _error_response(e, "图同步失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
 
