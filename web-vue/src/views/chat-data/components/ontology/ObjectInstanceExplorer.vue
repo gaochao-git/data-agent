@@ -185,6 +185,12 @@ const detailPropertyRows = computed(() => {
   })
 })
 
+const selectedGraphTitle = computed(() => {
+  const key = exploreSelectedKey.value
+  if (!key) return ''
+  return exploreNodes.value[key]?.label || ''
+})
+
 const detailTitle = computed(() => {
   const data = detail.value
   if (!data) return ''
@@ -1320,9 +1326,9 @@ onMounted(() => void initialize())
                   type="primary"
                   effect="light"
                   class="min-w-0 max-w-[45%]"
-                  :title="detailTitle || detail.object_key"
+                  :title="detailTitle || selectedGraphTitle || detail.object_key"
                 >
-                  <span class="block truncate">{{ detailTitle || detail.object_key }}</span>
+                  <span class="block truncate">{{ detailTitle || selectedGraphTitle || detail.object_key }}</span>
                 </el-tag>
                 <span class="ml-auto min-w-0 truncate font-mono text-[10px] text-slate-400" :title="detail.object_key">{{ detail.object_key }}</span>
                 <button
