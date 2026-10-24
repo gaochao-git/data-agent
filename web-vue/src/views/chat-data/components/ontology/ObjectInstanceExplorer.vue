@@ -3,7 +3,7 @@
  * 对象类型 · 对象实例工作台。
  * 主从布局：左侧分页列表/搜索，右侧对象详情；关联对象在当前工作台下钻，不再弹窗跳转。
  */
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
   getAdminOntologyObjectType,
@@ -239,6 +239,9 @@ const graphAsOf = ref('')
 const graphDegradedReason = ref('')
 const graphLoading = ref(false)
 let graphLoadingCount = 0
+const graphDetailWidth = ref(320)
+let graphDetailStartX = 0
+let graphDetailStartWidth = 0
 /** 图节点类型显示名（客户/订单/发货单...），避免图上只看到英文对象名。 */
 const objectTypeDisplayNames = ref<Record<string, string>>({})
 const objectTypeLabelPending = new Set<string>()
@@ -278,6 +281,26 @@ const onExploreNodeDrag = (event: MouseEvent) => {
 const endExploreNodeDrag = () => {
   draggingExploreKey.value = ''
 }
+
+const startGraphDetailResize = (event: MouseEvent) => {
+  event.preventDefault()
+  graphDetailStartX = event.clientX
+  graphDetailStartWidth = graphDetailWidth.value
+  window.addEventListener('mousemove', onGraphDetailResize)
+  window.addEventListener('mouseup', stopGraphDetailResize)
+}
+
+const onGraphDetailResize = (event: MouseEvent) => {
+  const next = graphDetailStartWidth + graphDetailStartX - event.clientX
+  graphDetailWidth.value = Math.max(240, Math.min(680, next))
+}
+
+const stopGraphDetailResize = () => {
+  window.removeEventListener('mousemove', onGraphDetailResize)
+  window.removeEventListener('mouseup', stopGraphDetailResize)
+}
+
+onBeforeUnmount(stopGraphDetailResize)
 
 const onExploreNodeClick = (rawKey: string) => {
   // 拖动结束后浏览器仍可能补发 click；拖动过的节点只移动，不切换选中/加载。
@@ -1261,25 +1284,44 @@ onMounted(() => void initialize())
                 </g>
               </svg>
             </div>
+            <div
+              v-if="detail && showGraphProperties"
+              class="group w-1.5 shrink-0 cursor-col-resize self-stretch rounded bg-slate-100 transition-colors hover:bg-blue-200"
+              title="左右拖动调整图与详情区域宽度"
+              @mousedown="startGraphDetailResize"
+            />
             <aside
               v-if="detail && showGraphProperties"
-              class="w-[250px] shrink-0 overflow-y-auto rounded border border-slate-100 bg-slate-50/50 p-2"
-              :class="graphFullscreen ? 'h-full' : 'max-h-[420px]'"
+              class="flex shrink-0 flex-col overflow-hidden rounded border border-slate-100 bg-slate-50/50 p-2"
+              :class="graphFullscreen ? 'h-full' : 'h-[460px]'"
+              :style="{ width: `${graphDetailWidth}px` }"
             >
               <div class="mb-1 flex items-center gap-1">
                 <span class="text-[11px] font-medium text-slate-700">选中对象</span>
-                <span class="ml-auto font-mono text-[10px] text-slate-400">{{ detail.object_key }}</span>
+                <span class="ml-auto min-w-0 truncate font-mono text-[10px] text-slate-400" :title="detail.object_key">{{ detail.object_key }}</span>
               </div>
-              <div v-if="detailTitle" class="mb-2 text-xs font-medium text-slate-700">{{ detailTitle }}</div>
-              <div class="mb-1 text-[10px] text-slate-400">属性</div>
-              <div v-for="row in detailPropertyRows" :key="row.name" class="border-b border-slate-100 py-1">
-                <div class="flex items-center gap-1">
-                  <span class="font-mono text-[10px] text-slate-600">{{ row.name }}</span>
-                  <span v-if="row.label" class="text-[10px] text-slate-400">{{ row.label }}</span>
-                </div>
-                <div class="break-all text-[11px] text-slate-700">{{ previewValueText(row.value) }}</div>
+              <div v-if="detailTitle" class="mb-2 min-w-0 truncate text-xs font-medium text-slate-700" :title="detailTitle">{{ detailTitle }}</div>
+              <div class="min-h-0 flex-1">
+                <el-table
+                  :data="detailPropertyRows"
+                  size="small"
+                  border
+                  height="100%"
+                  empty-text="暂无属性"
+                >
+                  <el-table-column label="属性" min-width="110" show-overflow-tooltip>
+                    <template #default="{ row }">
+                      <span class="font-mono text-[10px] text-slate-600">{{ row.name }}</span>
+                      <span v-if="row.label" class="ml-1 text-[10px] text-slate-400">{{ row.label }}</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="值" min-width="130">
+                    <template #default="{ row }">
+                      <span class="break-all text-[11px] text-slate-700">{{ previewValueText(row.value) }}</span>
+                    </template>
+                  </el-table-column>
+                </el-table>
               </div>
-              <div v-if="detailPropertyRows.length === 0" class="text-[11px] text-slate-400">暂无属性</div>
             </aside>
           </div>
           <div class="mt-1 text-[10px] text-slate-400">
