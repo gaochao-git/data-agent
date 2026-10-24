@@ -264,6 +264,19 @@ const graphAsOf = ref('')
 const graphDegradedReason = ref('')
 const graphLoading = ref(false)
 let graphLoadingCount = 0
+const GRAPH_NODE_LIMIT = 80
+const graphExpansionNotice = ref('')
+const graphNewKeys = ref<string[]>([])
+let graphNewKeysTimer: number | null = null
+
+const markGraphNewKeys = (keys: string[]) => {
+  graphNewKeys.value = keys
+  if (graphNewKeysTimer !== null) window.clearTimeout(graphNewKeysTimer)
+  graphNewKeysTimer = window.setTimeout(() => {
+    graphNewKeys.value = []
+    graphNewKeysTimer = null
+  }, 5000)
+}
 /** 图节点类型显示名（客户/订单/发货单...），避免图上只看到英文对象名。 */
 const objectTypeDisplayNames = ref<Record<string, string>>({})
 const objectTypeLabelPending = new Set<string>()
@@ -400,13 +413,25 @@ const mergeGraphResult = (data: {
 }) => {
   graphAsOf.value = data.graph_as_of || ''
   graphDegradedReason.value = data.degraded_reason || ''
+  const addedKeys: string[] = []
+  let truncated = false
   for (const node of data.nodes || []) {
     if (!node.object_key) continue
+    if (!exploreNodes.value[node.object_key] && Object.keys(exploreNodes.value).length >= GRAPH_NODE_LIMIT) {
+      truncated = true
+      continue
+    }
+    if (!exploreNodes.value[node.object_key]) addedKeys.push(node.object_key)
     addExploreNode(node.object_key, node.object_type || '', node.title || node.object_key, {})
   }
   for (const edge of data.edges || []) {
+    if (!exploreNodes.value[edge.from_object_key] || !exploreNodes.value[edge.to_object_key]) continue
     addExploreEdge(edge.relation_type || 'related', edge.from_object_key, edge.to_object_key)
   }
+  graphExpansionNotice.value = truncated
+    ? `本次展开达到 ${GRAPH_NODE_LIMIT} 个对象上限，已截断；请减少展开深度或缩小范围。`
+    : ''
+  markGraphNewKeys(addedKeys)
   void ensureObjectTypeDisplayNames((data.nodes || []).map(node => node.object_type))
 }
 
@@ -462,6 +487,8 @@ const seedExploreGraph = () => {
   graphFallbackNotice.value = ''
   graphAsOf.value = ''
   graphDegradedReason.value = ''
+  graphExpansionNotice.value = ''
+  graphNewKeys.value = []
   graphLoadingCount = 0
   graphLoading.value = false
   exploreNodes.value = {}
@@ -469,13 +496,16 @@ const seedExploreGraph = () => {
   exploreNodeOffsets.value = {}
   exploreSelectedKey.value = detail.value?.object_key || ''
   mergeCurrentLinksIntoExplore()
-  void loadTraverseIntoExplore(exploreSelectedKey.value, 2)
+  // 默认只展开 1 跳，避免一进图就铺满。
+  void loadTraverseIntoExplore(exploreSelectedKey.value, 1)
 }
 
 const clearExploreGraph = () => {
   graphFallbackNotice.value = ''
   graphAsOf.value = ''
   graphDegradedReason.value = ''
+  graphExpansionNotice.value = ''
+  graphNewKeys.value = []
   exploreNodes.value = {}
   exploreEdges.value = {}
   exploreNodeOffsets.value = {}
@@ -1156,6 +1186,14 @@ onBeforeUnmount(() => stopGraphDetailResize())
             show-icon
             class="mb-2"
           />
+          <el-alert
+            v-if="graphExpansionNotice"
+            :title="graphExpansionNotice"
+            type="warning"
+            :closable="false"
+            show-icon
+            class="mb-2"
+          />
           <div class="mb-1 flex flex-wrap items-center gap-2">
             <span class="text-xs font-medium text-slate-700">图探索</span>
             <span class="text-[10px] text-slate-400">力导向布局</span>
@@ -1219,11 +1257,11 @@ onBeforeUnmount(() => stopGraphDetailResize())
                     height="40"
                     rx="5"
                     :fill="node.key === exploreSelectedKey ? '#eff6ff' : '#ffffff'"
-                    :stroke="node.key === exploreSelectedKey ? '#3b82f6' : '#dbeafe'"
-                    :stroke-width="node.key === exploreSelectedKey ? 2 : 1.2"
+                    :stroke="node.key === exploreSelectedKey ? '#3b82f6' : graphNewKeys.includes(node.key) ? '#f59e0b' : '#dbeafe'"
+                    :stroke-width="node.key === exploreSelectedKey ? 2 : graphNewKeys.includes(node.key) ? 1.8 : 1.2"
                   />
                   <text
-                    :x="node.x"
+                    :x="node.key === exploreSelectedKey ? node.x - 16 : node.x"
                     :y="node.y - 5"
                     text-anchor="middle"
                     class="fill-slate-400"
@@ -1232,7 +1270,7 @@ onBeforeUnmount(() => stopGraphDetailResize())
                     {{ objectTypeDisplayName(node.objectType) }}
                   </text>
                   <text
-                    :x="node.x"
+                    :x="node.key === exploreSelectedKey ? node.x - 16 : node.x"
                     :y="node.y + 9"
                     text-anchor="middle"
                     :class="node.key === exploreSelectedKey ? 'fill-blue-700' : 'fill-slate-700'"
@@ -1242,27 +1280,29 @@ onBeforeUnmount(() => stopGraphDetailResize())
                   </text>
                   <foreignObject
                     v-if="node.key === exploreSelectedKey"
-                    :x="node.x - 100"
-                    :y="node.y + 24"
-                    width="200"
-                    height="28"
+                    :x="node.x + 38"
+                    :y="node.y - 18"
+                    width="44"
+                    height="20"
                   >
-                    <div xmlns="http://www.w3.org/1999/xhtml" class="flex items-center justify-center gap-1">
+                    <div xmlns="http://www.w3.org/1999/xhtml" class="flex h-full items-center justify-center gap-0.5">
                       <button
                         type="button"
-                        class="rounded border border-slate-200 bg-white px-2 py-0.5 text-[10px] text-slate-600 hover:border-blue-300 hover:text-blue-600"
+                        title="查看详情"
+                        class="flex h-4 w-4 items-center justify-center rounded border border-slate-200 bg-white text-slate-500 hover:border-blue-300 hover:text-blue-600"
                         @mousedown.stop.prevent
                         @click.stop="viewNodeDetail(node.key)"
                       >
-                        查看详情
+                        <i class="fa-solid fa-eye text-[8px]"></i>
                       </button>
                       <button
                         type="button"
-                        class="rounded border border-slate-200 bg-white px-2 py-0.5 text-[10px] text-slate-600 hover:border-blue-300 hover:text-blue-600"
+                        title="展开一跳"
+                        class="flex h-4 w-4 items-center justify-center rounded border border-slate-200 bg-white text-slate-500 hover:border-blue-300 hover:text-blue-600"
                         @mousedown.stop.prevent
                         @click.stop="expandNodeOneHop(node.key)"
                       >
-                        展开一跳
+                        <i class="fa-solid fa-arrow-up-right-from-square text-[8px]"></i>
                       </button>
                     </div>
                   </foreignObject>
