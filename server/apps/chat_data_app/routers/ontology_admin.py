@@ -38,9 +38,6 @@ from ..services.ontology import (
     ontology_service,
 )
 from ..services.ontology.action_type_service import OntologyActionTypeService
-from ..services.ontology.object_metrics import (
-    ObjectMetricError,
-)
 from ..services.ontology.object_projection import (
     ObjectProjectionError,
     list_object_projection,
@@ -73,8 +70,6 @@ def _error_response(e: Exception, fallback_msg: str, fallback_code: ErrorCode) -
         return business_response(msg=str(e), code=ErrorCode.CHATDATA_ONTOLOGY_STATE_INVALID, status="error")
     if isinstance(e, OntologyNotFoundError):
         return business_response(msg=str(e), code=ErrorCode.CHATDATA_ONTOLOGY_NOT_FOUND, status="error")
-    if isinstance(e, ObjectMetricError):
-        return business_response(msg=str(e), code=ErrorCode.CHATDATA_ONTOLOGY_METRIC_NOT_EXECUTABLE, status="error")
     if isinstance(e, ObjectProjectionError):
         return business_response(msg=str(e), code=ErrorCode.CHATDATA_ONTOLOGY_INVALID, status="error")
     logger.error("%s: %s", fallback_msg, e, exc_info=True)

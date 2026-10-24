@@ -316,3 +316,22 @@ def test_derived_extra_where_period_table_mismatch():
             {"created_at": {"table": "other", "column": "created_at"}},
             "orders",
         )
+
+
+def test_preserve_ontology_id_on_edit():
+    from apps.chat_data_app.services.ontology.ontology_service import _preserve_ontology_id
+
+    assert _preserve_ontology_id({"display_name": "x"}, {"ontology_id": 2}, True)["ontology_id"] == 2
+    assert _preserve_ontology_id({"display_name": "x"}, {"ontology_id": 2}, False).get("ontology_id") is None
+    assert _preserve_ontology_id({"ontology_id": None}, {"ontology_id": 2}, True)["ontology_id"] is None
+
+
+def test_validator_extra_derivation_and_mapping_guards():
+    with pytest.raises(OntologyInvalidError, match="derivation 必须是对象"):
+        validator.validate_property_items(_items(_property("x", derivation="bad")))
+    with pytest.raises(OntologyInvalidError, match="必须提供 target_property"):
+        validator.validate_property_items(
+            _items(_property("x", derivation={"kind": "select", "relation_type_name": "r"}))
+        )
+    with pytest.raises(OntologyInvalidError, match="不支持字段"):
+        validator.validate_property_items(_items(_property("x", render_hints={"bad": True})))

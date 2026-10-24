@@ -203,7 +203,7 @@ class _AggregateObjectsPayload(BaseModel):
     )
     group_by: list[str] = Field(default_factory=list, max_length=5, description="分组属性 API 名列表")
     metrics: list[_AggregateObjectsMetric] = Field(
-        default_factory=list, max_length=5, description="属性白名单聚合指标（与 metric_names 二选一）"
+        default_factory=list, max_length=5, description="属性白名单聚合指标（count/count_distinct/sum/avg/min/max）"
     )
     filters: list[_FindObjectsFilter] = Field(default_factory=list, max_length=10, description="属性过滤（旧扁平格式）")
     where: _OntologyWhere | None = Field(
@@ -251,9 +251,8 @@ ONTOLOGY_ACTION_PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
 class OntologyToolInput(BaseModel):
     """本体导航工具入参：按 ``action`` 分派，``action_payload`` 结构随 action 变化。
 
-    共 10 个 action：``list_object_types`` / ``locate_object_type`` / ``search_around`` 负责导航，
-    ``get_object`` / ``find_objects`` 负责对象读取，``aggregate_objects`` 负责聚合（属性白名单或
-    ``metric_names`` 引用语义层指标），``list_object_metrics`` 列出对象类型可执行的语义指标，
+    共 9 个 action：``list_object_types`` / ``locate_object_type`` / ``search_around`` 负责导航，
+    ``get_object`` / ``find_objects`` 负责对象读取，``aggregate_objects`` 负责属性白名单聚合，
     ``list_execution_targets`` 列出执行对象，``list_action_types`` / ``execute_action`` 负责 Action。
     action_payload 的校验在工具实现入口经 ``validate_ontology_payload`` 完成——不能放进
     model_validator：langgraph 的 ToolInvocationError 会过滤 loc 为空的校验错误，
@@ -278,7 +277,7 @@ class OntologyToolInput(BaseModel):
             "search_around 以单个对象类型为中心沿关系走一跳（返回物理连接列与对端对象完整导航条目，不执行查询）；"
             "get_object 按对象类型 + 主键读取对象属性与一跳 links（只读，不回写）；"
             "find_objects 按对象类型查询实例（关键词/属性过滤/排序/分页，只读）；"
-            "aggregate_objects 按对象类型分组聚合（count/sum/avg/min/max，或用 metric_names 引用语义层命名指标；只读）；"
+            "aggregate_objects 按对象类型分组聚合（count/count_distinct/sum/avg/min/max；只读）；"
             "list_execution_targets 列出当前用户可执行的成员数据源；"
             "list_action_types 列出当前业务域可执行的 Action 定义（只读）；"
             "execute_action 执行 Action（写对象属性覆盖层 + 审计，需部署开启 Action 执行开关）"
@@ -293,7 +292,7 @@ class OntologyToolInput(BaseModel):
             'search_around 传 {"object_type": "<中心对象类型API名>", "relation": "可选，只展开该关系"}；'
             'get_object 传 {"object_type": "<对象类型API名>", "object_key": "<对象主键值>", "member_datasource_ids": ["可选机构ID"]}；'
             'find_objects 传 {"object_type": "<对象类型API名>", "member_datasource_ids": ["可选机构ID"], "keyword": "可选", "filters": [{"property": "<属性>", "operator": "eq", "value": "<值>"}], "sort": [{"property": "<属性>", "direction": "asc"}], "limit": 10, "offset": 0}；'
-            'aggregate_objects 传 {"object_type": "<对象类型API名>", "member_datasource_ids": ["可选机构ID"], "group_by": ["<属性>"], "metrics": [{"operation": "count"}, {"operation": "sum", "property": "<数值属性>"}]}，或 {"object_type": "...", "metric_names": ["<语义指标名>"], "group_by": ["<属性>"]}；'
+            'aggregate_objects 传 {"object_type": "<对象类型API名>", "member_datasource_ids": ["可选机构ID"], "group_by": ["<属性>"], "metrics": [{"operation": "count"}, {"operation": "sum", "property": "<数值属性>"}]}；'
             "list_execution_targets 传 {}；"
             "list_action_types 传 {}；"
             'execute_action 传 {"action_type": "<Action Type API名>", "object_key": "<对象主键值>", "parameters": {"<参数名>": "<值>"}}'
@@ -632,7 +631,7 @@ async def _run_aggregate_objects(
     state: dict | None,
     bound_user_id: str,
 ) -> str:
-    """对象聚合入口：metric_names 走语义指标，否则走属性白名单聚合。"""
+    """对象聚合入口：按属性白名单聚合。"""
     if not ontology_object_read_enabled():
         raise ValueError("对象实例读取未启用：需设置环境变量 CHAT_DATA_ONTOLOGY_OBJECT_READ_ENABLED=1")
     await _ensure_navigable_object_type(payload.object_type)
@@ -834,7 +833,7 @@ def create_ontology_tool(
         - search_around: 以单个对象类型为中心沿关系走一跳——每条关系返回物理连接列（join）与对端对象完整导航条目（neighbor）；跨对象关联优先用它拿 join 列
         - get_object: 按对象类型 + 主键读取对象属性与一跳 links（只读；需指定单一 member_datasource_id）
         - find_objects: 按对象类型查询实例——关键词、属性过滤、排序、分页，返回对象主键/属性与 total；只读
-        - aggregate_objects: 按对象类型分组聚合——group_by + 属性白名单聚合（count/count_distinct/sum/avg/min/max），或用 metric_names 引用语义层命名指标（原子/派生/复合）；只读
+        - aggregate_objects: 按对象类型分组聚合——group_by + 属性白名单聚合（count/count_distinct/sum/avg/min/max）；只读
         - list_execution_targets: 列出当前用户可执行的成员数据源（member_datasource_id/名称/机构编码）；多机构时先调用它，再把选中的 ID 传给对象查询
         - list_action_types: 列出当前业务域可执行 Action 定义（只读）
         - execute_action: 执行 Action（写对象属性覆盖层 + 审计；受部署开关门控）
@@ -844,7 +843,7 @@ def create_ontology_tool(
         - search_around: {"object_type": "<中心对象API名>", "relation": 可选只展开该关系名}
         - get_object: {"object_type": "<对象类型API名>", "object_key": "<对象主键值>", "member_datasource_ids": ["机构ID"]}
         - find_objects: {"object_type": "<对象类型API名>", "member_datasource_ids": ["可选机构ID"], "keyword": 可选, "filters": [{"property": "<属性>", "operator": "eq", "value": "<值>"}], "sort": [{"property": "<属性>", "direction": "asc"}], "limit": 10, "offset": 0}
-        - aggregate_objects: {"object_type": "<对象类型API名>", "member_datasource_ids": ["可选机构ID"], "group_by": ["<属性>"], "metrics": [{"operation": "count"}, {"operation": "sum", "property": "<数值属性>"}]}；或 {"object_type": "...", "metric_names": ["<语义指标名>"], "group_by": ["<属性>"], "member_datasource_ids": ["机构ID"]}（命名指标口径由语义层定义，禁止用属性聚合近似）
+        - aggregate_objects: {"object_type": "<对象类型API名>", "member_datasource_ids": ["可选机构ID"], "group_by": ["<属性>"], "metrics": [{"operation": "count"}, {"operation": "sum", "property": "<数值属性>"}]}
         - list_execution_targets: {}（无参数；返回当前用户可见执行对象）
         - list_action_types: {}（无参数；返回当前业务域可执行 Action 定义）
         - execute_action: {"action_type": "<Action Type API名>", "object_key": "<对象主键值>", "parameters": {"<参数名>": "<值>"}}

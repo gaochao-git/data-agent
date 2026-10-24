@@ -810,30 +810,6 @@ CREATE TABLE `chat_data_ontology_source_binding` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ChatData对象类型数据源绑定';
 """
 
-MYSQL_CHAT_DATA_DATASET_SEMANTIC_LINK_TABLE = """
-CREATE TABLE `chat_data_dataset_semantic_link` (
-  `id` bigint(20) NOT NULL AUTO_INCREMENT COMMENT '主键ID',
-  `dataset_id` bigint(20) NOT NULL COMMENT 'Logical Dataset ID',
-  `semantic_config_id` varchar(128) NOT NULL COMMENT '语义模型ID（与 datasource_group_id 同域）',
-  `datasource_group_id` varchar(128) NOT NULL COMMENT '业务域=数据源组ID',
-  `table_name` varchar(256) NOT NULL COMMENT '语义模型内对应表名（须等于该组 Dataset 物理表）',
-  `column_mappings_json` text NOT NULL COMMENT 'Dataset逻辑列→语义维度名映射JSON',
-  `metric_scope_json` text NOT NULL COMMENT '允许在对象作用域执行的指标名白名单JSON，空=全部',
-  `lifecycle_status` varchar(16) NOT NULL DEFAULT 'draft' COMMENT '状态:draft/active',
-  `delete_flag` bigint(20) NOT NULL DEFAULT '0' COMMENT '删除标识:0=活跃,非0=已删除(值=行ID)',
-  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  `create_by` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人',
-  `create_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人名称',
-  `update_by` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人',
-  `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人名称',
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `uniq_dataset_semantic_link` (`dataset_id`,`semantic_config_id`,`delete_flag`),
-  KEY `idx_dataset_semantic_link_dataset` (`dataset_id`,`delete_flag`),
-  KEY `idx_dataset_semantic_link_group` (`datasource_group_id`,`delete_flag`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Dataset与语义模型关联（指标口径权威在语义层）';
-"""
-
 
 MYSQL_CHAT_DATA_ONTOLOGY_PROPERTY_TABLE = """
 CREATE TABLE `chat_data_ontology_property` (
@@ -896,7 +872,6 @@ MYSQL_TABLES = [
     MYSQL_CHAT_DATA_DATASET_LINEAGE_EDGE_TABLE,
     MYSQL_CHAT_DATA_ONTOLOGY_SOURCE_BINDING_TABLE,
     MYSQL_CHAT_DATA_ONTOLOGY_PROPERTY_TABLE,
-    MYSQL_CHAT_DATA_DATASET_SEMANTIC_LINK_TABLE,
     MYSQL_CHAT_DATA_PIPELINE_DEFINITION_TABLE,
     MYSQL_CHAT_DATA_PIPELINE_NODE_TABLE,
     MYSQL_CHAT_DATA_PIPELINE_EDGE_TABLE,

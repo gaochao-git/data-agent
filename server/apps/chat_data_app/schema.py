@@ -1510,26 +1510,6 @@ class DatasetUpsertRequest(BaseModel):
     dataset_origin: Literal["datasource", "pipeline"] | None = Field(default=None, description="Dataset 来源")
 
 
-class DatasetSemanticLinkUpsertRequest(BaseModel):
-    """Dataset ↔ 语义模型关联（只存引用与列对照，指标口径仍在语义层）。
-
-    对应 Ossie mapping document 的简化形态：semantic_model_ref ≈ semantic_config_id，
-    Dataset 逻辑列 ↔ 语义维度名对照承担 concept/field 映射。
-    """
-
-    datasource_group_id: str = Field(..., min_length=1, max_length=128, description="业务域=数据源组 ID")
-    table_name: str = Field(
-        ..., min_length=1, max_length=256, description="语义模型内对应表名（须等于该组 Dataset 物理表）"
-    )
-    column_mappings: dict[str, str] = Field(
-        default_factory=dict, description="{Dataset逻辑列名: 语义维度名}；空=按同名列自动对照"
-    )
-    metric_scope: list[str] = Field(
-        default_factory=list, max_length=500, description="允许在对象作用域执行的指标名；空=全部"
-    )
-    lifecycle_status: Literal["draft", "active"] = Field(default="draft", description="状态")
-
-
 class DatasetSemanticLinkItem(BaseModel):
     """Dataset ↔ 语义模型关联视图。"""
 

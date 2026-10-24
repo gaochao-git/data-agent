@@ -24,12 +24,16 @@ const emit = defineEmits<{
   propertyRenamed: [oldName: string, newName: string]
   propertyRemoved: [propertyName: string]
   removeRow: [index: number]
-  addDerived: [item: OntologyPropertyItem]
+  addDerived: [item: OntologyPropertyItem],
+  updateDerived: [payload: { index: number; item: OntologyPropertyItem }]
 }>()
 
 const isFrozen = (name: string) => props.frozenNames.includes(name)
 // 派生属性只读、查询时计算、无物理列：名称/值类型/枚举/主键/标题/渲染提示均不可在表单改，仅展示名与描述可编辑。
 const isDerived = (row: OntologyPropertyItem) => !!(row.derivation && row.derivation.kind)
+
+const normalRows = computed(() => props.rows.map((row, index) => ({ row, index })).filter(item => !isDerived(item.row)))
+const derivedRows = computed(() => props.rows.map((row, index) => ({ row, index })).filter(item => isDerived(item.row)))
 
 // 冻结的标题键不可被其他行顶掉：认证后标题键随主键组合一起冻结
 const titleLocked = computed(() => props.rows.some(row => isFrozen(row.property_name) && row.is_title))
@@ -106,11 +110,13 @@ const DERIVATION_FILTER_OPERATORS = ['eq', 'ne', 'contains', 'gt', 'gte', 'lt', 
 const BUILTIN_VALUE_TYPES = ['String', 'Integer', 'Decimal', 'Boolean', 'Date', 'DateTime']
 
 const showDerivedForm = ref(false)
+const editingDerivedIndex = ref(-1)
 const derivedLoading = ref(false)
 const derivedError = ref('')
 const derivedForm = ref({
   property_name: '',
   display_name: '',
+  description: '',
   kind: 'aggregate' as 'aggregate' | 'select',
   relation_type_name: '',
   operator: 'count',
@@ -129,20 +135,26 @@ const needsTarget = computed(
   () => derivedForm.value.kind === 'select' || (derivedForm.value.kind === 'aggregate' && derivedForm.value.operator !== 'count')
 )
 
-const openDerivedForm = async () => {
+const openDerivedForm = async (row?: OntologyPropertyItem, index = -1) => {
   if (!canUseDerived.value) return
+  editingDerivedIndex.value = index
   showDerivedForm.value = true
   derivedError.value = ''
   derivedForm.value = {
-    property_name: '',
-    display_name: '',
-    kind: 'aggregate',
-    relation_type_name: '',
-    operator: 'count',
-    target_property: '',
-    filters: [],
-    period_days: 0,
-    period_time_property: ''
+    property_name: row?.property_name || '',
+    display_name: row?.display_name || '',
+    description: row?.description || '',
+    kind: row?.derivation?.kind || 'aggregate',
+    relation_type_name: row?.derivation?.relation_type_name || '',
+    operator: row?.derivation?.operator || 'count',
+    target_property: row?.derivation?.target_property || '',
+    filters: (row?.derivation?.filters || []).map(item => ({
+      property: item.property,
+      operator: item.operator,
+      value: item.value || ''
+    })),
+    period_days: row?.derivation?.period?.days || 0,
+    period_time_property: row?.derivation?.period?.time_property || ''
   }
   derivedLoading.value = true
   try {
@@ -165,6 +177,10 @@ const openDerivedForm = async () => {
             : item.from_object_type_name || '',
         multiplicity: item.multiplicity
       }))
+    if (row?.derivation?.relation_type_name) {
+      await onDerivedRelationChange()
+      derivedForm.value.target_property = row.derivation.target_property || ''
+    }
   } catch (err) {
     console.error('获取关系类型清单失败:', err)
     derivedError.value = '获取关系类型清单失败'
@@ -250,10 +266,10 @@ const submitDerived = () => {
     ...(derivedForm.value.kind === 'aggregate' && filters.length ? { filters } : {}),
     ...(derivedForm.value.kind === 'aggregate' && period ? { period } : {})
   }
-  emit('addDerived', {
+  const item: OntologyPropertyItem = {
     property_name: name,
     display_name: derivedForm.value.display_name.trim(),
-    description: '',
+    description: derivedForm.value.description.trim(),
     value_type:
       derivedForm.value.kind === 'aggregate' && ['count', 'count_distinct'].includes(derivedForm.value.operator)
         ? 'Integer'
@@ -263,9 +279,27 @@ const submitDerived = () => {
     is_identifier: false,
     is_title: false,
     derivation
-  })
+  }
+  if (editingDerivedIndex.value >= 0) {
+    emit('updateDerived', { index: editingDerivedIndex.value, item })
+  } else {
+    emit('addDerived', item)
+  }
+  editingDerivedIndex.value = -1
   showDerivedForm.value = false
 }
+
+const derivationSummary = (row: OntologyPropertyItem) => {
+  const derivation = row.derivation
+  if (!derivation) return ''
+  const operator = derivation.operator || (derivation.kind === 'select' ? 'select' : '')
+  const target = derivation.target_property ? ` · ${derivation.target_property}` : ''
+  const filters = (derivation.filters || []).map(item => `${item.property} ${item.operator} ${item.value || ''}`).join('，')
+  const period = derivation.period ? ` · 近${derivation.period.days}天(${derivation.period.time_property})` : ''
+  return `${derivation.relation_type_name} · ${operator}${target}${period}${filters ? ` · ${filters}` : ''}`
+}
+
+defineExpose({ openDerivedForm })
 
 watch(showDerivedForm, value => {
   if (!value) derivedError.value = ''
@@ -288,7 +322,7 @@ watch(showDerivedForm, value => {
       <span class="w-8 shrink-0"></span>
     </div>
     <!-- 属性行 -->
-    <div v-for="(row, index) in rows" :key="index" class="flex items-center gap-2">
+    <div v-for="{ row, index } in normalRows" :key="index" class="flex items-center gap-2">
       <el-input
         v-model="row.property_name"
         size="small"
@@ -372,30 +406,50 @@ watch(showDerivedForm, value => {
         </el-button>
       </div>
     </div>
-    <div v-if="rows.length === 0" class="rounded border border-dashed border-slate-200 py-4 text-center text-xs text-slate-400">
-      暂无属性，请至少添加一个属性（含标识属性作为主键）
+    <div
+      v-if="normalRows.length === 0"
+      class="rounded border border-dashed border-slate-200 py-4 text-center text-xs text-slate-400"
+    >
+      暂无普通属性，请至少添加一个标识属性作为主键
+    </div>
+    <div v-if="derivedRows.length" class="mt-3 border-t border-slate-200 pt-3">
+      <div class="mb-1.5 flex items-center justify-between">
+        <span class="text-[11px] font-medium text-slate-600">
+          派生属性
+          <span class="ml-1 font-normal text-slate-400">（对象属性的只读计算字段，不是独立资源）</span>
+        </span>
+        <el-button link size="small" type="primary" class="!p-0 text-[11px]" @click="openDerivedForm()">
+          <i class="fa-solid fa-wand-magic-sparkles text-[10px]"></i> 添加派生属性
+        </el-button>
+      </div>
+      <div
+        v-for="{ row, index } in derivedRows"
+        :key="`derived-${index}`"
+        class="flex flex-wrap items-center gap-2 border-t border-slate-100 py-1.5 pl-2 first:border-t-0"
+      >
+        <span class="w-40 shrink-0 truncate font-mono text-[11px] text-slate-700">{{ row.property_name }}</span>
+        <span class="w-28 shrink-0 truncate text-[11px] text-slate-600">{{ row.display_name || '-' }}</span>
+        <el-tag size="small" type="warning" effect="plain">派生</el-tag>
+        <span class="text-[11px] text-slate-500">{{ row.value_type }}</span>
+        <span class="w-32 shrink-0 truncate text-[11px] text-slate-500">{{ row.description || '-' }}</span>
+        <span class="min-w-0 flex-1 truncate text-[11px] text-slate-400">{{ derivationSummary(row) }}</span>
+        <el-button link size="small" type="primary" @click="openDerivedForm(row, index)">编辑</el-button>
+        <el-button link size="small" type="danger" @click="removeRow(index)">
+          <i class="fa-solid fa-trash text-[11px]"></i>
+        </el-button>
+      </div>
     </div>
 
-    <!-- 派生属性添加：查询时计算、只读、不映射物理列（对齐 Palantir derived property） -->
-    <div class="flex items-center justify-between">
-      <el-tooltip
-        :content="canUseDerived ? '' : '保存对象类型后（编辑态）才能添加派生属性：需要先存在关系类型'"
-        placement="top"
-        :disabled="canUseDerived"
-      >
-        <el-button size="small" type="primary" link :disabled="!canUseDerived || derivedLoading" @click="openDerivedForm">
-          <i class="fa-solid fa-wand-magic-sparkles text-[11px]"></i> 添加派生属性
-        </el-button>
-      </el-tooltip>
-      <span v-if="derivedLoading" class="text-[11px] text-slate-400">加载关系候选中…</span>
-    </div>
-    <div v-if="showDerivedForm" class="rounded-md border border-amber-100 bg-amber-50/60 p-2.5">
-      <div class="mb-2 flex items-center gap-2 text-[11px] text-amber-700">
-        <i class="fa-solid fa-circle-info"></i>
-        <span>
-          aggregate：本对象类型须在关系 to 侧（聚合对端多行，如订单数）；select：须在 from 侧（取对端单对象属性）。
-          值类型由服务端推导（count→Integer，sum/avg→Decimal，其余同目标属性）。
-        </span>
+    <el-dialog
+      v-model="showDerivedForm"
+      :title="editingDerivedIndex >= 0 ? '编辑派生属性' : '添加派生属性'"
+      width="760px"
+      append-to-body
+      destroy-on-close
+    >
+      <div class="mb-2 rounded-md border border-slate-200 bg-slate-50 p-2 text-[11px] leading-5 text-slate-500">
+        aggregate：本对象类型须在关系 to 侧（聚合对端多行，如订单数）；select：须在 from 侧（取对端单对象属性）。
+        值类型由服务端推导（count/count_distinct→Integer，sum/avg→Decimal，其余同目标属性）。
       </div>
       <div class="flex flex-wrap items-center gap-2">
         <el-input
@@ -405,6 +459,7 @@ watch(showDerivedForm, value => {
           class="!w-40 shrink-0 font-mono"
         />
         <el-input v-model="derivedForm.display_name" size="small" placeholder="展示名" class="!w-28 shrink-0" />
+        <el-input v-model="derivedForm.description" size="small" placeholder="解释（可选）" class="!w-44 shrink-0" />
         <el-select v-model="derivedForm.kind" size="small" class="!w-32 shrink-0" @change="onDerivedKindChange">
           <el-option label="aggregate 聚合" value="aggregate" />
           <el-option label="select 选取" value="select" />
@@ -449,8 +504,6 @@ watch(showDerivedForm, value => {
             :value="item.name"
           />
         </el-select>
-        <el-button size="small" type="primary" @click="submitDerived">添加</el-button>
-        <el-button size="small" @click="showDerivedForm = false">取消</el-button>
       </div>
       <div v-if="derivedForm.kind === 'aggregate'" class="mt-2 rounded border border-amber-100 bg-white/60 p-2">
         <div class="mb-1 flex items-center gap-2 text-[11px] text-slate-500">
@@ -484,6 +537,12 @@ watch(showDerivedForm, value => {
         </div>
       </div>
       <div v-if="derivedError" class="mt-1.5 text-[11px] text-red-600">{{ derivedError }}</div>
-    </div>
+      <template #footer>
+        <el-button size="small" @click="showDerivedForm = false">取消</el-button>
+        <el-button size="small" type="primary" @click="submitDerived">
+          {{ editingDerivedIndex >= 0 ? '保存修改' : '添加' }}
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>

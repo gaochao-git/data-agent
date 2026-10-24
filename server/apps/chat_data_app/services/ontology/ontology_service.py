@@ -79,6 +79,15 @@ def _derived_relation_status(from_status: str, to_status: str) -> str:
     return {0: "draft", 1: "experimental", 2: "certified"}[order]
 
 
+def _preserve_ontology_id(
+    payload: dict[str, Any], existing: dict[str, Any] | None, existing_active: bool
+) -> dict[str, Any]:
+    """整体编辑未显式传 ontology_id 时保留原归属，避免旧客户端保存静默移出本体。"""
+    if existing_active and "ontology_id" not in payload:
+        return {**payload, "ontology_id": (existing or {}).get("ontology_id")}
+    return payload
+
+
 class OntologyService:
     """本体/对象类型/属性/关系类型业务规则与治理门禁。"""
 
@@ -262,12 +271,13 @@ class OntologyService:
         - 「一源一对象类型」：service 先查占用给友好报错，映射表唯一索引 DB 兜底。
         """
         name = validator.validate_api_name(object_type_name, "对象类型API名")
+        existing = await self._dao.get_object_type_row_async(name, include_deleted=True)
+        existing_active = existing is not None and int(existing.get("delete_flag") or 0) == 0
+        payload = _preserve_ontology_id(payload, existing, existing_active)
         meta_payload = validator.validate_object_type_payload(payload)
         # 本体存在性校验（本体不绑组，挂靠只做归属导航，无组锚点校验）
         await self._resolve_object_type_ontology(meta_payload.get("ontology_id"))
         properties = validator.validate_property_items(payload.get("properties"))
-        existing = await self._dao.get_object_type_row_async(name, include_deleted=True)
-        existing_active = existing is not None and int(existing.get("delete_flag") or 0) == 0
         if existing is not None and not existing_active:
             meta_payload.update(_REVIVED_OBJECT_RESET)
         if existing is not None and existing_active:

@@ -42,6 +42,7 @@ const formDisplayName = ref('')
 const formDescription = ref('')
 const formOntologyId = ref<number | null>(null)
 const propertyRows = ref<OntologyPropertyItem[]>([])
+const propertyEditorRef = ref<InstanceType<typeof OntologyPropertyEditor> | null>(null)
 const datasetOptions = ref<LogicalDatasetItem[]>([])
 const sourceDatasetId = ref<number | null>(null)
 const sourceMappings = ref<Record<string, string>>({})
@@ -100,6 +101,9 @@ const removePropertyRow = (index: number) => {
 // 派生属性行：由编辑器校验与组装，父组件只负责持有数组（与普通属性行同管道提交）
 const addDerivedRow = (item: OntologyPropertyItem) => {
   propertyRows.value.push(item)
+}
+const updateDerivedRow = (payload: { index: number; item: OntologyPropertyItem }) => {
+  propertyRows.value.splice(payload.index, 1, payload.item)
 }
 
 // 本体下拉标签：展示名（API 名）；本体不绑组，映射候选不限组
@@ -320,20 +324,27 @@ const saveObject = async () => {
         </div>
       </div>
 
-      <!-- 属性集 -->
-      <div>
-        <div class="mb-1.5 flex items-center justify-between">
-          <span class="text-xs font-medium text-slate-600">属性集（至少一个标识属性作主键；至多一个标题属性）</span>
-          <el-button size="small" type="primary" link @click="addPropertyRow">
+      <!-- 对象属性（普通属性 + 派生属性；与 Object Set 无关） -->
+      <div class="rounded-lg border border-slate-200 bg-white p-3">
+        <div class="mb-2 flex items-center justify-between gap-3 border-b border-slate-100 pb-2">
+          <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+            <span class="text-xs font-semibold text-slate-700">对象属性</span>
+            <span class="text-[11px] text-slate-400">
+              至少一个标识属性作主键；至多一个标题属性。派生属性只读、查询时计算，不映射物理列。
+            </span>
+          </div>
+          <el-button size="small" type="primary" link class="shrink-0" @click="addPropertyRow">
             <i class="fa-solid fa-plus text-[11px]"></i> 添加属性
           </el-button>
         </div>
         <OntologyPropertyEditor
+          ref="propertyEditorRef"
           :rows="propertyRows"
           :frozen-names="frozenNames"
           :object-type-name="editing ? objectTypeName : ''"
           @remove-row="removePropertyRow"
           @add-derived="addDerivedRow"
+          @update-derived="updateDerivedRow"
         />
       </div>
 

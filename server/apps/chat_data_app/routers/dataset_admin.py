@@ -15,10 +15,6 @@ from ..schema import (
     DatasetPipelineUpsertRequest,
     DatasetUpsertRequest,
 )
-from ..services.dataset.dataset_semantic_link_service import (
-    DatasetSemanticLinkInvalidError,
-    DatasetSemanticLinkNotFoundError,
-)
 from ..services.dataset.dataset_service import (
     DatasetAlreadyExistsError,
     DatasetInvalidError,
@@ -41,10 +37,6 @@ def _error_response(error: Exception, fallback: str) -> JSONResponse:
         return business_response(msg=str(error), code=ErrorCode.CHATDATA_DATASET_ALREADY_EXISTS, status="error")
     if isinstance(error, DatasetNotFoundError):
         return business_response(msg=str(error), code=ErrorCode.CHATDATA_DATASET_NOT_FOUND, status="error")
-    if isinstance(error, DatasetSemanticLinkInvalidError):
-        return business_response(msg=str(error), code=ErrorCode.CHATDATA_METRIC_LINK_INVALID, status="error")
-    if isinstance(error, DatasetSemanticLinkNotFoundError):
-        return business_response(msg=str(error), code=ErrorCode.CHATDATA_METRIC_LINK_NOT_FOUND, status="error")
     logger.error("%s: %s", fallback, error, exc_info=True)
     return business_response(msg=fallback, code=ErrorCode.CHATDATA_DATASET_OPERATION_FAILED, status="error")
 

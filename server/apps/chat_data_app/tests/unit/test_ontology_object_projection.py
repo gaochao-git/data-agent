@@ -987,3 +987,16 @@ def test_where_property_names_and_derived_target_guards():
             {"Name": {"table": "other", "column": "name"}},
             "t",
         )
+
+
+def test_projection_index_and_mapping_filter_branches():
+    from apps.chat_data_app.services.ontology import object_projection
+
+    assert object_projection._dimension_index({"dimensions": [{}, {"name": ""}]}) == {}
+    detail = {
+        "mappings": [
+            {"semantic_config_id": "a", "column_mappings": {"x": "X"}},
+            {"semantic_config_id": "b", "column_mappings": {"x": "X"}},
+        ]
+    }
+    assert object_projection._mapping_for_property(detail, "x", semantic_config_id="b")["semantic_config_id"] == "b"
