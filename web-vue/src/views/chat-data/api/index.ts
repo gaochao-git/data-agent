@@ -55,6 +55,7 @@ import type {
   OntologyObjectListResult,
   OntologyObjectSearchResult,
   OntologyObjectSort,
+  OntologyGraphResult,
   OntologyObjectTypeItem,
   OntologyObjectTypeStatus,
   OntologyPropertyItem,
@@ -2301,6 +2302,21 @@ export function readAdminOntologyObject(
       ...(memberDatasourceIds[0] ? { member_datasource_id: memberDatasourceIds[0] } : {}),
       ...(semanticConfigId ? { semantic_config_id: semanticConfigId } : {})
     }
+  })
+}
+
+/** 后台：图探索（Nebula 只读多跳；图不可用时前端回退一跳 links） */
+export function traverseAdminOntologyGraph(payload: {
+  object_key: string
+  depth?: number
+  direction?: 'out' | 'in' | 'both'
+  limit?: number
+  member_datasource_ids?: string[]
+}): Promise<ApiResponse<OntologyGraphResult>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/graph/traverse`,
+    method: 'post',
+    data: payload
   })
 }
 

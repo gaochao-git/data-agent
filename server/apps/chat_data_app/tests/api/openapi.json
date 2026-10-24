@@ -2404,6 +2404,59 @@
         "title": "OntologyGraphSyncRequest",
         "type": "object"
       },
+      "OntologyGraphTraverseRequest": {
+        "description": "前端图探索：按对象起点做有界多跳。",
+        "properties": {
+          "depth": {
+            "default": 2,
+            "description": "最大跳数",
+            "maximum": 3.0,
+            "minimum": 1.0,
+            "title": "Depth",
+            "type": "integer"
+          },
+          "direction": {
+            "default": "both",
+            "description": "关系方向",
+            "enum": [
+              "out",
+              "in",
+              "both"
+            ],
+            "title": "Direction",
+            "type": "string"
+          },
+          "limit": {
+            "default": 100,
+            "description": "返回路径上限",
+            "maximum": 200.0,
+            "minimum": 1.0,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "member_datasource_ids": {
+            "description": "机构范围",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Member Datasource Ids",
+            "type": "array"
+          },
+          "object_key": {
+            "description": "起点对象完整身份",
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Object Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "object_key"
+        ],
+        "title": "OntologyGraphTraverseRequest",
+        "type": "object"
+      },
       "OntologyObjectFilter": {
         "description": "对象查询过滤条件；property 必须是对象类型已映射属性。",
         "properties": {
@@ -8787,6 +8840,53 @@
           }
         ],
         "summary": "Sync Ontology Graph",
+        "tags": [
+          "ChatData 本体管理（Admin）"
+        ]
+      }
+    },
+    "/api/chatdata/admin/meta/ontology/graph/traverse": {
+      "post": {
+        "description": "前端图探索：Nebula 只读多跳；图不可用时由前端回退一跳详情。",
+        "operationId": "traverse_ontology_graph_api_chatdata_admin_meta_ontology_graph_traverse_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OntologyGraphTraverseRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Traverse Ontology Graph",
         "tags": [
           "ChatData 本体管理（Admin）"
         ]

@@ -9,7 +9,8 @@ import {
   getAdminOntologyObjectType,
   getAdminOntologyRelationTypes,
   readAdminOntologyObject,
-  searchAdminOntologyObjects
+  searchAdminOntologyObjects,
+  traverseAdminOntologyGraph
 } from '../../api'
 import type {
   OntologyRelationTypeItem,
@@ -275,10 +276,48 @@ const mergeCurrentLinksIntoExplore = () => {
   }
 }
 
-const expandCurrentLinks = () => {
+/** Nebula 图结果合并到本地图探索；图不可用时保留一跳 links 兜底。 */
+const mergeGraphResult = (data: {
+  nodes?: Array<{ object_key: string; object_type: string; title: string }>
+  edges?: Array<{ from_object_key: string; to_object_key: string; relation_type: string }>
+}) => {
+  for (const node of data.nodes || []) {
+    if (!node.object_key) continue
+    addExploreNode(node.object_key, node.object_type || '', node.title || node.object_key, {})
+  }
+  for (const edge of data.edges || []) {
+    addExploreEdge(edge.relation_type || 'related', edge.from_object_key, edge.to_object_key)
+  }
+}
+
+/** 调 Nebula 多跳；返回 false 表示图不可用/无数据，由调用方回退一跳。 */
+const loadTraverseIntoExplore = async (objectKey: string, depth = 2): Promise<boolean> => {
+  if (!objectKey) return false
+  const member = selectedMember.value || parseObjectKey(objectKey, props.objectType).member
+  if (!member) return false
+  try {
+    const res = await traverseAdminOntologyGraph({
+      object_key: objectKey,
+      depth,
+      direction: 'both',
+      limit: 30,
+      member_datasource_ids: [member]
+    })
+    if (res.status !== 'success' || !res.data) return false
+    mergeGraphResult(res.data)
+    return true
+  } catch (err) {
+    console.warn('Nebula 图查询不可用，回退一跳 links:', err)
+    return false
+  }
+}
+
+const expandCurrentLinks = async () => {
+  const currentKey = exploreSelectedKey.value || detail.value?.object_key || ''
   const nodeCount = Object.keys(exploreNodes.value).length
   const edgeCount = Object.keys(exploreEdges.value).length
-  mergeCurrentLinksIntoExplore()
+  const graphLoaded = await loadTraverseIntoExplore(currentKey, 2)
+  if (!graphLoaded) mergeCurrentLinksIntoExplore()
   const added = Object.keys(exploreNodes.value).length - nodeCount + Object.keys(exploreEdges.value).length - edgeCount
   if (added <= 0) {
     ElMessage.info('当前节点已无更多可展开的关联')
@@ -291,6 +330,7 @@ const seedExploreGraph = () => {
   exploreNodeOffsets.value = {}
   exploreSelectedKey.value = detail.value?.object_key || ''
   mergeCurrentLinksIntoExplore()
+  void loadTraverseIntoExplore(exploreSelectedKey.value, 2)
 }
 
 const clearExploreGraph = () => {
@@ -460,6 +500,7 @@ const openExploreNode = async (rawKey: string) => {
     // 快速连点多个节点时，只允许最后一次请求补图。
     if (requestId !== exploreRequestId || detailMode.value !== 'graph') return
     mergeCurrentLinksIntoExplore()
+    void loadTraverseIntoExplore(rawKey, 2)
   } finally {
     if (requestId === exploreRequestId) exploreLoadingKey.value = ''
   }

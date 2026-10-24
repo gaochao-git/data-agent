@@ -1476,6 +1476,16 @@ OntologyActionTypeEditItem = OntologyActionTypeSetPropertyEdit | OntologyActionT
 """编辑项联合类型：set_property（属性覆盖）或 create_object（创建动作对象），不可混合。"""
 
 
+class OntologyGraphTraverseRequest(BaseModel):
+    """前端图探索：按对象起点做有界多跳。"""
+
+    object_key: str = Field(..., min_length=1, max_length=512, description="起点对象完整身份")
+    depth: int = Field(default=2, ge=1, le=3, description="最大跳数")
+    direction: Literal["out", "in", "both"] = Field(default="both", description="关系方向")
+    limit: int = Field(default=100, ge=1, le=200, description="返回路径上限")
+    member_datasource_ids: list[str] = Field(default_factory=list, max_length=20, description="机构范围")
+
+
 class OntologyGraphSyncRequest(BaseModel):
     """本体图同步请求：按 member 从对象投影抽取节点/边写入 Nebula。"""
 

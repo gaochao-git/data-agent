@@ -1087,6 +1087,28 @@ export interface OntologyObjectInstance {
   links: Record<string, unknown[]>
 }
 
+export interface OntologyGraphNode {
+  object_key: string
+  object_type: string
+  title: string
+  member_id: string
+}
+
+export interface OntologyGraphEdge {
+  from_object_key: string
+  to_object_key: string
+  relation_type: string
+  member_id: string
+}
+
+export interface OntologyGraphResult {
+  nodes: OntologyGraphNode[]
+  edges: OntologyGraphEdge[]
+  paths: string[][]
+  graph_as_of: string
+  degraded_reason: string
+}
+
 export interface OntologyObjectListItem {
   object_type: string
   object_key: string

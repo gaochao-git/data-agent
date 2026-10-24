@@ -7,6 +7,7 @@ service 层执行，本路由只做 HTTP 入参、权限入口、统一响应与
 
 from __future__ import annotations
 
+import asyncio
 import functools
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -23,6 +24,7 @@ from ..schema import (
     OntologyActionTypeTestRunRequest,
     OntologyActionTypeUpsertRequest,
     OntologyGraphSyncRequest,
+    OntologyGraphTraverseRequest,
     OntologyObjectSearchRequest,
     OntologyObjectTypeOntologyRequest,
     OntologyObjectTypeStatusRequest,
@@ -41,7 +43,12 @@ from ..services.ontology import (
     ontology_service,
 )
 from ..services.ontology.action_type_service import OntologyActionTypeService
-from ..services.ontology.graph import graph_query_enabled, sync_member_graph
+from ..services.ontology.graph import (
+    GraphQueryError,
+    get_graph_query_service,
+    graph_query_enabled,
+    sync_member_graph,
+)
 from ..services.ontology.object_projection import (
     ObjectProjectionError,
     list_object_projection,
@@ -533,6 +540,41 @@ def _severity_summary(findings: list[dict]) -> dict[str, int]:
         if severity in summary:
             summary[severity] += 1
     return summary
+
+
+@router.post("/admin/meta/ontology/graph/traverse")
+async def traverse_ontology_graph(payload: OntologyGraphTraverseRequest, request: Request) -> JSONResponse:
+    """前端图探索：Nebula 只读多跳；图不可用时由前端回退一跳详情。"""
+    try:
+        _get_current_user(request)
+        if not graph_query_enabled():
+            return _error_response(
+                ValueError("图查询未启用：需设置 CHAT_DATA_NEBULA_ENABLED=1"),
+                "图查询未启用",
+                ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED,
+            )
+        members = [str(member).strip() for member in payload.member_datasource_ids if str(member).strip()]
+        if len(members) != 1:
+            return _error_response(
+                ValueError("图查询必须且只能指定一个 member_datasource_id"),
+                "图查询参数不合法",
+                ErrorCode.CHATDATA_ONTOLOGY_INVALID,
+            )
+        result = await asyncio.to_thread(
+            get_graph_query_service().traverse_objects,
+            payload.object_key,
+            depth=payload.depth,
+            direction=payload.direction,
+            limit=payload.limit,
+            member_ids=members,
+        )
+        return business_response(data=result.as_dict(), msg="查询成功")
+    except HTTPException:
+        raise
+    except GraphQueryError as e:
+        return _error_response(e, "图查询失败", ErrorCode.CHATDATA_ONTOLOGY_INVALID)
+    except Exception as e:
+        return _error_response(e, "图查询失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
 
 
 @router.post("/admin/meta/ontology/graph/sync")

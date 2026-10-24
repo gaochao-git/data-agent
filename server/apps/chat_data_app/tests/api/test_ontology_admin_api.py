@@ -409,3 +409,41 @@ def test_graph_sync_contract(client, auth_headers, monkeypatch):
     payload = response.json()
     assert payload["status"] == "success"
     assert payload["data"]["nodes"] == 2
+
+
+def test_graph_traverse_contract(client, auth_headers, monkeypatch):
+    class _Result:
+        def as_dict(self):
+            return {
+                "nodes": [{"object_key": "M:order:1", "object_type": "order", "title": "SO-1", "member_id": "M"}],
+                "edges": [],
+                "paths": [["M:order:1"]],
+                "graph_as_of": "",
+                "degraded_reason": "",
+            }
+
+    class _Service:
+        def traverse_objects(self, object_key, **kwargs):
+            assert object_key == "M:order:1"
+            assert kwargs["depth"] == 2
+            assert kwargs["direction"] == "both"
+            assert kwargs["member_ids"] == ["M"]
+            return _Result()
+
+    monkeypatch.setenv("CHAT_DATA_NEBULA_ENABLED", "1")
+    monkeypatch.setattr(ontology_admin_routes, "get_graph_query_service", lambda: _Service())
+    response = client.post(
+        "/api/chatdata/admin/meta/ontology/graph/traverse",
+        json={
+            "object_key": "M:order:1",
+            "depth": 2,
+            "direction": "both",
+            "limit": 50,
+            "member_datasource_ids": ["M"],
+        },
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "success"
+    assert payload["data"]["nodes"][0]["object_key"] == "M:order:1"
