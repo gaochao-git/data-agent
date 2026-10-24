@@ -409,10 +409,10 @@ def test_build_related_key_query_rejects_cross_table_filter():
 def test_query_rows_raises_when_execution_fails(monkeypatch):
     from apps.chat_data_app.services.ontology import object_projection
 
-    async def fake_execute(*_args, **_kwargs):
+    async def fake_execute(_self, _spec, _target):
         return {"status": "failed", "error": "boom"}
 
-    monkeypatch.setattr(object_projection, "execute_sql_for_member", fake_execute)
+    monkeypatch.setattr(object_projection.QueryOrchestrator, "execute_member_raw_async", fake_execute)
     with pytest.raises(ObjectProjectionError, match="boom"):
         asyncio.run(
             object_projection._query_rows(

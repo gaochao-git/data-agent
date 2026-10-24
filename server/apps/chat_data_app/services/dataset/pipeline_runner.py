@@ -81,17 +81,19 @@ async def _execute_member_sql(
     username: str,
 ) -> dict[str, Any]:
     # 延迟导入：避免 dataset 服务导入期拉起查询运行时（依赖 sql_run/semantic）
-    from apps.chat_data_app.services.sql_run.runtime import execute_sql_for_member
+    from apps.chat_data_app.services.query import QueryOrchestrator, QuerySource, QuerySpec
 
-    return await execute_sql_for_member(
-        target,
-        sql,
+    spec = QuerySpec(
+        source=QuerySource.PIPELINE,
+        datasource_group_id=group_id,
+        sql=sql,
         limit=limit,
         timeout=_EXECUTE_TIMEOUT_SECONDS,
-        user_id=user_id or None,
-        username=username or None,
-        datasource_id=group_id,
+        user_id=user_id or "",
+        username=username or "",
+        query_mode="pipeline",
     )
+    return await QueryOrchestrator().execute_member_raw_async(spec, target)
 
 
 def _physical_to_logical(row: dict[str, Any], columns: list[dict[str, Any]]) -> dict[str, Any]:

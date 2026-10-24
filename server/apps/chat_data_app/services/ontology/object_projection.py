@@ -33,7 +33,7 @@ from utils.logger import get_logger
 from ...daos.ontology_action_execution_dao import OntologyActionExecutionDao
 from ..datasource.manager import get_datasource_manager
 from ..datasource.target_context import get_execution_target_member_id, get_execution_target_name
-from ..sql_run.runtime import execute_sql_for_member
+from ..query import QueryOrchestrator, QuerySource, QuerySpec
 from . import ontology_service
 
 logger = get_logger(__name__)
@@ -895,15 +895,17 @@ async def _query_rows(
     username: str,
     limit: int,
 ) -> list[dict[str, Any]]:
-    result = await execute_sql_for_member(
-        targets[0],
-        sql,
+    spec = QuerySpec(
+        source=QuerySource.ONTOLOGY,
+        datasource_group_id=group_id,
+        sql=sql,
         limit=limit,
         timeout=_OBJECT_QUERY_TIMEOUT_SECONDS,
-        user_id=user_id or None,
-        username=username or None,
-        datasource_id=group_id,
+        user_id=user_id or "",
+        username=username or "",
+        query_mode="ontology",
     )
+    result = await QueryOrchestrator().execute_member_raw_async(spec, targets[0])
     if result.get("status") != "succeeded":
         raise ObjectProjectionError(f"对象查询失败: {result.get('error') or '未知错误'}")
     return [row for row in result.get("data") or [] if isinstance(row, dict)]
