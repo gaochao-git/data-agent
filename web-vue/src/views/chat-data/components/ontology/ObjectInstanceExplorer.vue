@@ -212,6 +212,9 @@ const draggingExploreKey = ref('')
 const exploreLoadingKey = ref('')
 /** 图查询失败时的可见降级提示；不要再只写 console 让用户以为图是完整的。 */
 const graphFallbackNotice = ref('')
+/** 图节点类型显示名（客户/订单/发货单...），避免图上只看到英文对象名。 */
+const objectTypeDisplayNames = ref<Record<string, string>>({})
+const objectTypeLabelPending = new Set<string>()
 let exploreRequestId = 0
 let exploreStartX = 0
 let exploreStartY = 0
@@ -264,21 +267,56 @@ const addExploreEdge = (relationName: string, fromKey: string, toKey: string) =>
 const mergeCurrentLinksIntoExplore = () => {
   const data = detail.value
   if (!data) return
+  const linkedTypes: string[] = []
   addExploreNode(data.object_key, data.object_type || props.objectType, detailTitle.value || data.object_key, data.properties || {})
   for (const group of linkedGroups.value) {
     for (const entry of group.entries) {
       const relatedKey = String(entry.related_object_key || '')
       if (!relatedKey) continue
-      const separator = relatedKey.indexOf(':')
-      const relatedType = separator > 0 ? relatedKey.slice(0, separator) : props.objectType
+      const keyParts = relatedKey.split(':')
+      const relatedType = String(entry.related_object_type || '').trim() ||
+        (keyParts.length >= 3 && keyParts[1] ? keyParts[1] : props.objectType)
       const relatedTitle = String(entry.related_title || '').trim()
+      linkedTypes.push(relatedType)
       addExploreNode(relatedKey, relatedType, relatedTitle || relatedKey.split(':').slice(1).join(':') || relatedKey, {})
       addExploreEdge(group.relationName, data.object_key, relatedKey)
     }
   }
+  void ensureObjectTypeDisplayNames([data.object_type || props.objectType, ...linkedTypes])
 }
 
 /** Nebula 图结果合并到本地图探索；图不可用时保留一跳 links 兜底。 */
+const objectTypeDisplayName = (objectType: string) => {
+  const key = String(objectType || '')
+  return objectTypeDisplayNames.value[key] || key
+}
+
+const ensureObjectTypeDisplayNames = async (types: string[]) => {
+  const pending = [...new Set(types.map(type => String(type || '')).filter(Boolean))]
+    .filter(type => !objectTypeDisplayNames.value[type] && !objectTypeLabelPending.has(type))
+  if (!pending.length) return
+  pending.forEach(type => objectTypeLabelPending.add(type))
+  await Promise.all(
+    pending.map(async type => {
+      try {
+        const cached = metaCache.get(type)
+        const detail = cached || (await getAdminOntologyObjectType(type)).data
+        if (detail) {
+          metaCache.set(type, detail)
+          objectTypeDisplayNames.value = {
+            ...objectTypeDisplayNames.value,
+            [type]: detail.display_name || type
+          }
+        }
+      } catch (err) {
+        console.warn('加载图节点类型显示名失败:', type, err)
+      } finally {
+        objectTypeLabelPending.delete(type)
+      }
+    })
+  )
+}
+
 const mergeGraphResult = (data: {
   nodes?: Array<{ object_key: string; object_type: string; title: string }>
   edges?: Array<{ from_object_key: string; to_object_key: string; relation_type: string }>
@@ -290,6 +328,7 @@ const mergeGraphResult = (data: {
   for (const edge of data.edges || []) {
     addExploreEdge(edge.relation_type || 'related', edge.from_object_key, edge.to_object_key)
   }
+  void ensureObjectTypeDisplayNames((data.nodes || []).map(node => node.object_type))
 }
 
 /** 调 Nebula 多跳；返回 false 表示图不可用/无数据，由调用方回退一跳。 */
@@ -487,7 +526,7 @@ const exploreGraph = computed(() => {
       const distance = Math.hypot(dx, dy) || 1
       const unitX = dx / distance
       const unitY = dy / distance
-      const edgeDistance = Math.min(84 / Math.max(Math.abs(unitX), 1e-6), 16 / Math.max(Math.abs(unitY), 1e-6))
+      const edgeDistance = Math.min(84 / Math.max(Math.abs(unitX), 1e-6), 20 / Math.max(Math.abs(unitY), 1e-6))
       return {
         ...edge,
         x1: from.x + unitX * edgeDistance,
@@ -579,6 +618,7 @@ const loadMeta = async (objectType: string) => {
   if (loaded) {
     meta.value = loaded
     metaCache.set(objectType, loaded)
+    objectTypeDisplayNames.value = { ...objectTypeDisplayNames.value, [objectType]: loaded.display_name || objectType }
     if (!detail.value || (detail.value.object_type || objectType) === objectType) detailMeta.value = loaded
     const members = loaded.source_binding?.member_datasource_ids || []
     if (!selectedMember.value || !members.includes(selectedMember.value)) {
@@ -604,6 +644,7 @@ const ensureDetailMeta = async (objectType: string) => {
     const res = await getAdminOntologyObjectType(objectType)
     if (res.status === 'success') {
       metaCache.set(objectType, res.data)
+      objectTypeDisplayNames.value = { ...objectTypeDisplayNames.value, [objectType]: res.data.display_name || objectType }
       if (detail.value?.object_type === objectType) detailMeta.value = res.data
     }
   } catch (err) {
@@ -1031,9 +1072,9 @@ onMounted(() => void initialize())
                   <title>{{ node.key }}</title>
                   <rect
                     :x="node.x - 84"
-                    :y="node.y - 16"
+                    :y="node.y - 20"
                     width="168"
-                    height="32"
+                    height="40"
                     rx="5"
                     :fill="node.key === exploreSelectedKey ? '#eff6ff' : '#ffffff'"
                     :stroke="node.key === exploreSelectedKey ? '#3b82f6' : '#dbeafe'"
@@ -1041,7 +1082,16 @@ onMounted(() => void initialize())
                   />
                   <text
                     :x="node.x"
-                    :y="node.y + 4"
+                    :y="node.y - 5"
+                    text-anchor="middle"
+                    class="fill-slate-400"
+                    style="font-size: 8px; font-weight: 500"
+                  >
+                    {{ objectTypeDisplayName(node.objectType) }}
+                  </text>
+                  <text
+                    :x="node.x"
+                    :y="node.y + 9"
                     text-anchor="middle"
                     :class="node.key === exploreSelectedKey ? 'fill-blue-700' : 'fill-slate-700'"
                     style="font-size: 10px; font-weight: 500"
