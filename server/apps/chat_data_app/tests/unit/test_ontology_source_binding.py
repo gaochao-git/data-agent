@@ -168,3 +168,63 @@ def test_action_created_object_is_certifiable_without_dataset(monkeypatch):
 
     monkeypatch.setattr(service, "get_object_type_async", action_created_detail)
     asyncio.run(service._require_certifiable("Order"))
+
+
+def test_set_source_binding_rejects_property_type_mismatch(monkeypatch):
+    service = _patch(monkeypatch)
+
+    async def get_detail(_name):
+        return {
+            "id": 7,
+            "properties": [{"property_name": "order_id", "value_type": "Integer"}],
+            "source_binding": None,
+        }
+
+    async def get_dataset(_dataset_id):
+        return {
+            "id": 3,
+            "dataset_name": "orders",
+            "columns": [{"name": "order_id", "data_type": "string"}],
+            "bindings": [{"member_datasource_id": "ORG1"}],
+        }
+
+    fake_dataset_service = type("FakeDatasetService", (), {"get_dataset_async_by_id_async": staticmethod(get_dataset)})
+    monkeypatch.setattr(service_module, "logical_dataset_service", fake_dataset_service)
+    monkeypatch.setattr(service, "get_object_type_async", get_detail)
+    with pytest.raises(OntologyInvalidError, match="类型 Integer.*不兼容"):
+        asyncio.run(
+            service.set_source_binding_async(
+                "Order",
+                {"dataset_id": 3, "column_mappings": {"order_id": "order_id"}},
+            )
+        )
+
+
+def test_set_source_binding_accepts_compatible_property_type(monkeypatch):
+    service = _patch(monkeypatch)
+
+    async def get_detail(_name):
+        return {
+            "id": 7,
+            "properties": [{"property_name": "amount", "value_type": "Decimal"}],
+            "source_binding": None,
+        }
+
+    async def get_dataset(_dataset_id):
+        return {
+            "id": 3,
+            "dataset_name": "orders",
+            "columns": [{"name": "amount", "data_type": "decimal(10,2)"}],
+            "bindings": [{"member_datasource_id": "ORG1"}],
+        }
+
+    fake_dataset_service = type("FakeDatasetService", (), {"get_dataset_async_by_id_async": staticmethod(get_dataset)})
+    monkeypatch.setattr(service_module, "logical_dataset_service", fake_dataset_service)
+    monkeypatch.setattr(service, "get_object_type_async", get_detail)
+    result = asyncio.run(
+        service.set_source_binding_async(
+            "Order",
+            {"dataset_id": 3, "column_mappings": {"amount": "amount"}},
+        )
+    )
+    assert result["column_mappings"] == {"amount": "amount"}

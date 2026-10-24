@@ -97,6 +97,81 @@ def _preserve_write_mode(
     return payload
 
 
+_DATASET_VALUE_TYPE_MAP: dict[str, str] = {
+    "string": "String",
+    "varchar": "String",
+    "char": "String",
+    "text": "String",
+    "int": "Integer",
+    "integer": "Integer",
+    "bigint": "Integer",
+    "smallint": "Integer",
+    "tinyint": "Integer",
+    "long": "Integer",
+    "decimal": "Decimal",
+    "numeric": "Decimal",
+    "double": "Decimal",
+    "float": "Decimal",
+    "real": "Decimal",
+    "boolean": "Boolean",
+    "bool": "Boolean",
+    "date": "Date",
+    "datetime": "DateTime",
+    "timestamp": "DateTime",
+}
+
+
+def _dataset_value_type(data_type: Any) -> str:
+    """Dataset 物理类型 → 本体值类型；不认识的类型返回空串，避免误判。"""
+    normalized = str(data_type or "").strip().lower().split("(", 1)[0].strip()
+    return _DATASET_VALUE_TYPE_MAP.get(normalized, "")
+
+
+def _ensure_property_type_compatible(
+    property_name: str,
+    column_name: str,
+    dataset_type: str,
+    property_type: str,
+) -> None:
+    """属性值类型与 Dataset 物理列类型必须兼容；未知类型跳过，避免误判。"""
+    expected = _dataset_value_type(dataset_type)
+    if not expected or not property_type:
+        return
+    if property_type != "enum" and property_type != expected:
+        raise OntologyInvalidError(
+            f"属性 {property_name} 类型 {property_type} 与 Dataset 列 {column_name} 类型 {dataset_type} 不兼容"
+        )
+    if property_type == "enum" and expected != "String":
+        raise OntologyInvalidError(
+            f"枚举属性 {property_name} 只能映射 String 列，当前 Dataset 列 {column_name} 为 {dataset_type}"
+        )
+
+
+def _validate_binding_item(
+    property_name: str,
+    column_name: str,
+    *,
+    derived_names: set[str],
+    property_names: set[str],
+    dataset_columns: set[str],
+    dataset_column_types: dict[str, str],
+    property_value_types: dict[str, str],
+) -> None:
+    """单条属性→列绑定校验，集中错误分支，保持入口函数低复杂度。"""
+    if property_name in derived_names:
+        raise OntologyInvalidError(f"派生属性不映射物理列（查询时计算）: {property_name}")
+    if property_name not in property_names:
+        raise OntologyInvalidError(f"对象属性不存在: {property_name}")
+    if column_name not in dataset_columns:
+        raise OntologyInvalidError(f"Dataset 列不存在: {column_name}")
+    _ensure_property_type_compatible(
+        property_name,
+        column_name,
+        dataset_column_types.get(column_name, ""),
+        property_value_types.get(property_name, ""),
+    )
+
+
 class OntologyService:
     """本体/对象类型/属性/关系类型业务规则与治理门禁。"""
 
@@ -223,13 +298,23 @@ class OntologyService:
             if isinstance(item.get("derivation"), dict) and item.get("derivation")
         }
         property_names = {str(item.get("property_name") or "") for item in detail.get("properties") or []}
+        dataset_column_types = {
+            str(item.get("name") or ""): str(item.get("data_type") or "") for item in dataset.get("columns") or []
+        }
+        property_value_types = {
+            str(item.get("property_name") or ""): str(item.get("value_type") or "")
+            for item in detail.get("properties") or []
+        }
         for property_name, column_name in column_mappings.items():
-            if property_name in derived_names:
-                raise OntologyInvalidError(f"派生属性不映射物理列（查询时计算）: {property_name}")
-            if property_name not in property_names:
-                raise OntologyInvalidError(f"对象属性不存在: {property_name}")
-            if column_name not in dataset_columns:
-                raise OntologyInvalidError(f"Dataset 列不存在: {column_name}")
+            _validate_binding_item(
+                str(property_name),
+                str(column_name),
+                derived_names=derived_names,
+                property_names=property_names,
+                dataset_columns=dataset_columns,
+                dataset_column_types=dataset_column_types,
+                property_value_types=property_value_types,
+            )
         return {str(key): str(value) for key, value in column_mappings.items()}
 
     async def _validate_write_mode_binding(self, existing: dict[str, Any] | None, meta_payload: dict[str, Any]) -> None:
