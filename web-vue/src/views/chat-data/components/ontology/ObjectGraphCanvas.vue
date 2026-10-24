@@ -1,10 +1,10 @@
 <script setup lang="ts">
 /**
- * 本体对象图渲染：AntV G6 负责布局、缩放、平移、节点拖拽。
- * 选中节点只在图上高亮；查看详情/展开一跳由节点旁浮层按钮触发，父组件处理业务。
+ * 本体对象图渲染：ECharts graph 负责布局、缩放、平移、节点拖拽。
+ * 点击节点只选中；查看详情/展开一跳由节点旁浮层按钮触发。
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { Graph } from '@antv/g6'
+import * as echarts from 'echarts'
 
 interface GraphCanvasNode {
   key: string
@@ -33,213 +33,200 @@ const emit = defineEmits<{
 }>()
 
 const containerRef = ref<HTMLDivElement | null>(null)
-const graphRef = ref<any>(null)
 const actionPosition = ref({ left: 0, top: 0 })
+let chart: echarts.ECharts | null = null
 let resizeObserver: ResizeObserver | null = null
 let resizeFrame: number | null = null
-let lastContainerSize = { width: 0, height: 0 }
+let lastSize = { width: 0, height: 0 }
+let renderFrame: number | null = null
 
 const selectedNode = computed(() => props.nodes.find(node => node.key === props.selectedKey) || null)
 
-const toNodeData = (node: GraphCanvasNode) => ({
-  id: node.key,
-  data: {
-    label: node.label,
-    typeLabel: node.typeLabel || node.objectType
+const buildOption = (): any => {
+  const selectedIndex = props.nodes.findIndex(node => node.key === props.selectedKey)
+  return {
+    animation: true,
+    tooltip: {
+      trigger: 'item',
+      formatter: (params: any) => {
+        if (params.dataType === 'edge') {
+          return String(params.data?.relationName || params.name || '')
+        }
+        return String(params.data?.fullLabel || params.name || '')
+      }
+    },
+    series: [
+      {
+        type: 'graph',
+        layout: 'force',
+        roam: true,
+        draggable: true,
+        selectedMode: 'single',
+        symbol: 'roundRect',
+        symbolSize: [176, 44],
+        force: {
+          repulsion: 1200,
+          edgeLength: 120,
+          gravity: 0.06,
+          layoutAnimation: true,
+          friction: 0.2
+        },
+        label: {
+          show: true,
+          color: '#475569',
+          fontSize: 10,
+          formatter: (params: any) => {
+            const data = params.data || {}
+            const type = String(data.typeLabel || '')
+            const label = String(data.nodeLabel || params.name || '')
+            return type ? `${type} · ${label}` : label
+          }
+        },
+        itemStyle: {
+          color: '#ffffff',
+          borderColor: '#dbeafe',
+          borderWidth: 1.2,
+          borderRadius: 5
+        },
+        lineStyle: {
+          color: '#cbd5e1',
+          width: 1.2,
+          curveness: 0.04
+        },
+        emphasis: {
+          focus: 'adjacency',
+          itemStyle: { borderColor: '#3b82f6', borderWidth: 2 },
+          lineStyle: { width: 2, color: '#93c5fd' }
+        },
+        select: {
+          itemStyle: { color: '#eff6ff', borderColor: '#3b82f6', borderWidth: 2 }
+        },
+        data: props.nodes.map((node, index) => ({
+          id: node.key,
+          name: node.label,
+          value: node.label,
+          typeLabel: node.typeLabel || node.objectType,
+          nodeLabel: node.label,
+          nodeType: node.typeLabel || node.objectType,
+          fullLabel: `${node.typeLabel || node.objectType} · ${node.label}`,
+          itemStyle:
+            index === selectedIndex
+              ? { color: '#eff6ff', borderColor: '#3b82f6', borderWidth: 2 }
+              : undefined
+        })),
+        links: props.edges.map(edge => ({
+          source: edge.fromKey,
+          target: edge.toKey,
+          value: edge.relationName,
+          relationName: edge.relationName
+        }))
+      }
+    ]
   }
-})
-
-const toEdgeData = (edge: GraphCanvasEdge) => ({
-  id: edge.key,
-  source: edge.fromKey,
-  target: edge.toKey,
-  data: { relationName: edge.relationName }
-})
-
-const graphData = () => ({
-  nodes: props.nodes.map(toNodeData),
-  edges: props.edges.map(toEdgeData)
-})
+}
 
 const updateActionPosition = () => {
-  const graph = graphRef.value
-  const key = props.selectedKey
-  if (!graph || !key) return
+  if (!chart || !props.selectedKey) return
   try {
-    const bounds = graph.getElementRenderBounds(key)
-    if (!bounds) return
-    const point = bounds.max || bounds.center
-    const viewport = graph.getViewportByCanvas({ x: point[0], y: point[1] })
-    actionPosition.value = { left: Math.max(8, viewport[0] - 74), top: viewport[1] + 8 }
+    const series = (chart as any).getModel()?.getSeriesByIndex(0)
+    const data = series?.getData?.()
+    if (!data) return
+    const index = props.nodes.findIndex(node => node.key === props.selectedKey)
+    if (index < 0) return
+    const layout = data.getItemLayout(index)
+    if (!layout) return
+    const pixel = chart.convertToPixel({ seriesIndex: 0 }, layout) as unknown as number[]
+    if (!Array.isArray(pixel) || pixel.length < 2) return
+    actionPosition.value = {
+      left: Math.max(8, Number(pixel[0]) - 74),
+      top: Number(pixel[1]) + 25
+    }
   } catch (err) {
     console.warn('计算图节点操作浮层位置失败:', err)
   }
 }
 
-const fitToContainer = async () => {
-  const graph = graphRef.value
-  const container = containerRef.value
-  if (!graph || !container) return
-  const width = container.clientWidth
-  const height = container.clientHeight
-  if (width <= 0 || height <= 0) return
-  // ResizeObserver 可能在 resize 过程中再次触发；尺寸未变化时不再 resize，避免循环。
-  if (width === lastContainerSize.width && height === lastContainerSize.height) return
-  lastContainerSize = { width, height }
-  try {
-    graph.resize(width, height)
-    await graph.fitView()
-    await nextTick()
-    updateActionPosition()
-  } catch (err) {
-    console.warn('适配 G6 图容器失败:', err)
-  }
+const renderChart = (notMerge = false) => {
+  if (!chart) return
+  chart.setOption(buildOption(), notMerge)
+  void nextTick(updateActionPosition)
 }
 
-const scheduleFitToContainer = () => {
+const scheduleRender = () => {
+  if (renderFrame !== null) return
+  renderFrame = window.requestAnimationFrame(() => {
+    renderFrame = null
+    renderChart()
+    void nextTick(updateActionPosition)
+  })
+}
+
+const fitChart = () => {
+  if (!chart || !containerRef.value) return
+  const width = containerRef.value.clientWidth
+  const height = containerRef.value.clientHeight
+  if (width <= 0 || height <= 0) return
+  if (width !== lastSize.width || height !== lastSize.height) {
+    lastSize = { width, height }
+    chart.resize({ width, height })
+  }
+  void nextTick(updateActionPosition)
+}
+
+const scheduleFitChart = () => {
   if (resizeFrame !== null) return
   resizeFrame = window.requestAnimationFrame(() => {
     resizeFrame = null
-    void fitToContainer()
+    fitChart()
   })
 }
 
-const renderGraph = async () => {
-  const graph = graphRef.value
-  if (!graph) return
-  try {
-    await graph.setData(graphData())
-    await graph.render()
-    await graph.fitView()
-    await nextTick()
-    updateActionPosition()
-  } catch (err) {
-    console.error('刷新 G6 图失败:', err)
-  }
+const resetLayout = () => {
+  renderChart(true)
+  fitChart()
 }
 
-const resetLayout = async () => {
-  const graph = graphRef.value
-  if (!graph) return
-  try {
-    await graph.layout()
-    await graph.fitView()
-    await nextTick()
-    updateActionPosition()
-  } catch (err) {
-    console.warn('重置 G6 布局失败:', err)
-  }
-}
+defineExpose({ resetLayout })
 
-const syncSelectedState = () => {
-  const graph = graphRef.value
-  if (!graph) return
-  try {
-    for (const node of props.nodes) {
-      if (node.key === props.selectedKey) graph.setElementState(node.key, ['selected'])
-      else graph.setElementState(node.key, [])
-    }
-    void nextTick(updateActionPosition)
-  } catch (err) {
-    console.warn('同步图节点选中态失败:', err)
-  }
-}
-
-onMounted(async () => {
+onMounted(() => {
   if (!containerRef.value) return
-  const graph = new Graph({
-    container: containerRef.value,
-    autoFit: 'view',
-    data: graphData(),
-    node: {
-      type: 'rect',
-      style: {
-        size: [176, 44],
-        radius: 5,
-        fill: '#ffffff',
-        stroke: '#dbeafe',
-        lineWidth: 1.2,
-        labelText: (datum: any) => {
-          const data = datum?.data || {}
-          return `${data.typeLabel || ''} · ${data.label || ''}`
-        },
-        labelFill: '#475569',
-        labelFontSize: 10,
-        labelPlacement: 'center',
-        cursor: 'pointer'
-      },
-      state: {
-        selected: {
-          fill: '#eff6ff',
-          stroke: '#3b82f6',
-          lineWidth: 2
-        }
-      }
-    },
-    edge: {
-      type: 'line',
-      style: {
-        stroke: '#cbd5e1',
-        lineWidth: 1.2,
-        endArrow: false
-      }
-    },
-    layout: {
-      type: 'force',
-      preventOverlap: true,
-      nodeSize: [176, 44],
-      linkDistance: 110,
-      nodeStrength: -280,
-      edgeStrength: 0.2,
-      iterations: 300
-    },
-    behaviors: ['drag-canvas', 'zoom-canvas', 'drag-element']
+  chart = echarts.init(containerRef.value, undefined, { renderer: 'canvas' })
+  chart.on('click', (params: any) => {
+    if (params.dataType === 'node' && params.data?.id) {
+      emit('select', String(params.data.id))
+    }
   })
-  graph.on('node:click', (event: any) => {
-    const key = String(event?.target?.id || '')
-    if (key) emit('select', key)
+  chart.on('graphroam', () => {
+    void nextTick(updateActionPosition)
   })
-  graph.on('afterrender', updateActionPosition)
-  graph.on('viewportchange', updateActionPosition)
-  graphRef.value = graph
-  resizeObserver = new ResizeObserver(() => {
-    scheduleFitToContainer()
-  })
+  resizeObserver = new ResizeObserver(scheduleFitChart)
   resizeObserver.observe(containerRef.value)
-  try {
-    await graph.render()
-    await fitToContainer()
-    syncSelectedState()
-  } catch (err) {
-    console.error('初始化 G6 图失败:', err)
-  }
+  renderChart(true)
+  fitChart()
 })
 
 watch(
   () => [props.nodes, props.edges],
-  () => {
-    void renderGraph()
-  },
+  scheduleRender,
   { deep: true }
 )
 
 watch(
   () => props.selectedKey,
   () => {
-    syncSelectedState()
+    scheduleRender()
     void nextTick(updateActionPosition)
   }
 )
 
 onBeforeUnmount(() => {
   if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame)
+  if (renderFrame !== null) window.cancelAnimationFrame(renderFrame)
   resizeObserver?.disconnect()
   resizeObserver = null
-  graphRef.value?.destroy()
-  graphRef.value = null
+  chart?.dispose()
+  chart = null
 })
-
-defineExpose({ resetLayout })
 </script>
 
 <template>
