@@ -599,6 +599,10 @@ class OntologyObjectTypeUpsertRequest(BaseModel):
     display_name: str = Field(..., min_length=1, max_length=128, description="展示名")
     description: str = Field(default="", max_length=1024, description="对象类型描述")
     ontology_id: int | None = Field(default=None, description="本体ID（纯导航归属），缺省=未挂本体")
+    write_mode: Literal["read_only", "action_writable", "action_created"] = Field(
+        default="read_only",
+        description="写性（对齐 Palantir Edits toggle，默认只读）：read_only=只读；action_writable=允许 Action 覆盖层编辑；action_created=动作对象（无源，仅由 Action 创建）",
+    )
     properties: list[OntologyPropertyItem] = Field(..., min_length=1, description="属性集（整体提交）")
     allow_overwrite: bool = Field(default=False, description="编辑既有活跃对象类型时为 True")
     confirm_destructive: bool = Field(default=False, description="破坏性变更（映射/主键/标题键变更）显式确认")

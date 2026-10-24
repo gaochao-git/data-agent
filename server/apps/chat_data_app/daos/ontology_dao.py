@@ -72,6 +72,7 @@ def _object_type_row_to_dict(row: ChatDataOntologyObjectType, *, include_audit: 
         "display_name": _text(row.display_name),
         "description": _text(row.description_text),
         "status": _text(row.lifecycle_status),
+        "write_mode": _text(row.write_mode) or "read_only",
         "ontology_id": int(row.ontology_id) if row.ontology_id else None,
         "deprecation_reason": _text(row.deprecation_reason),
         "deprecated_until": _format_datetime(row.deprecated_until),

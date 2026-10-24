@@ -72,10 +72,14 @@ def validate_object_type_payload(payload: dict[str, Any]) -> dict[str, Any]:
     ontology_id = payload.get("ontology_id")
     if ontology_id is not None and not isinstance(ontology_id, int):
         raise _invalid("本体ID必须为整数或空")
+    write_mode = _normalized_text(payload.get("write_mode")) or "read_only"
+    if write_mode not in OBJECT_WRITE_MODES:
+        raise _invalid(f"对象类型写性仅支持 {'/'.join(OBJECT_WRITE_MODES)}，当前为 {write_mode}")
     return {
         "display_name": display_name,
         "description": description,
         "ontology_id": ontology_id,
+        "write_mode": write_mode,
     }
 
 

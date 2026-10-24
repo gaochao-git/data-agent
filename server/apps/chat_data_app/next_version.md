@@ -961,3 +961,47 @@ ALTER TABLE `chat_data_ontology_property`
 新增官方风格 where 树（and/or/not + 比较/isNull，<=3 层、<=50 节点），
 `POST /admin/meta/ontology/object-types/{name}/objects/search` 与 `ontology_tool.find_objects/aggregate_objects`
 均支持 `where`；旧 `filters` 保留兼容并与之 AND 叠加。派生属性在 where 中通过 LEFT JOIN 下推。
+
+### 对象类型写性门禁与动作对象（2026-10-24）
+
+对齐 Palantir Edits toggle 的 opt-in 模型与「无 backing datasource 对象类型」：
+- 对象类型新增 `write_mode`（默认 `read_only`）：`read_only`=只读（原始业务数据永不写）；
+  `action_writable`=允许 Action 经覆盖层编辑属性（监管数据接入场景）；
+  `action_created`=动作对象（无源，行存业务库动作对象表，仅由 Action 创建填充）。
+- Action 编辑操作扩展 `create_object`（与 `set_property` 互斥、不可混合）：
+  create_object 仅支持 action_created 对象；set_property 仅支持 action_writable 对象；
+  read_only 对象类型不可配置任何编辑。执行经覆盖层/动作对象表 + 执行审计，不改源库。
+- 存量环境执行（应用账号无 DDL 权限，DBA 执行；先 DDL 后发布）：
+
+```sql
+ALTER TABLE `chat_data_ontology_object_type`
+  ADD COLUMN `write_mode` varchar(16) NOT NULL DEFAULT 'read_only' COMMENT '写性: read_only/action_writable/action_created' AFTER `lifecycle_status`;
+
+CREATE TABLE `chat_data_ontology_action_object` (
+  `id` bigint(20) NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `object_type_id` bigint(20) NOT NULL COMMENT '对象类型ID(chat_data_ontology_object_type)',
+  `object_key` varchar(512) NOT NULL COMMENT '对象标识值（标识属性值）',
+  `title_value` varchar(512) NOT NULL DEFAULT '' COMMENT '标题属性值',
+  `properties_json` text NOT NULL COMMENT '属性集JSON文本',
+  `action_execution_id` bigint(20) NOT NULL DEFAULT '0' COMMENT '创建执行ID',
+  `action_type_name` varchar(128) NOT NULL DEFAULT '' COMMENT '创建Action名',
+  `delete_flag` tinyint(4) NOT NULL DEFAULT '0' COMMENT '删除标记',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `create_by` varchar(255) NOT NULL DEFAULT '' COMMENT '创建人',
+  `create_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人名称',
+  `update_by` varchar(255) NOT NULL DEFAULT '' COMMENT '更新人',
+  `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人名称',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_action_object_key` (`object_type_id`,`object_key`,`delete_flag`),
+  KEY `idx_action_object_type` (`object_type_id`,`delete_flag`),
+  KEY `idx_action_object_execution` (`action_execution_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='本体动作对象存储（action_created 类型）';
+```
+
+发布注意：
+- 存量对象类型默认全部 `read_only`：既有 `set_property` 类 Action Type 定义在校验层会被
+  新门禁拦截（定义重新保存时）且执行被拒——测试用 Action（如 update_order_status）需将
+  目标对象类型显式改为 `action_writable` 后方可继续使用；
+- `read_object_projection` 对 `action_created` 对象类型走动作对象表读取（无源投影），
+  列表/搜索视图对动作对象暂走 DAO 关键词查询（MVP）。

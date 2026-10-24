@@ -1,11 +1,13 @@
-"""本体 Action Type 定义服务（定义层，不含对象写回）。
+"""本体 Action Type 定义服务。
 
 对齐 Palantir Action Type 的「参数 + 编辑契约」两段结构：
 - parameters：参数名/类型/必填/说明；
-- edits：目标对象属性的 set_property 编辑，值可引用参数或静态值。
+- edits：两种互斥操作——set_property（属性覆盖编辑，要求目标对象类型
+  write_mode=action_writable，编辑只落覆盖层不改源库）与 create_object
+  （创建动作对象，要求 write_mode=action_created，行存业务库动作对象表）。
 
-当前只做定义 CRUD 与参数试运行校验，不写对象；执行/审计/副作用等对象写路径落地后
-再新增 action_execution。校验保持确定性、封闭词表，不静默丢弃非法定义。
+写性门禁对齐 Palantir Edits toggle 的 opt-in 模型：read_only 对象类型不可配置
+任何编辑（原始业务数据只读）。执行经覆盖层/动作对象表 + 执行审计，不改源库。
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ from typing import Any
 
 from apps.chat_data_app.daos.dao_session import transaction_scope
 from apps.chat_data_app.daos.ontology_action_execution_dao import OntologyActionExecutionDao
+from apps.chat_data_app.daos.ontology_action_object_dao import OntologyActionObjectDao
 from apps.chat_data_app.daos.ontology_action_type_dao import OntologyActionTypeDao
 from apps.chat_data_app.daos.ontology_dao import OntologyDao
 from apps.chat_data_app.services.ontology import ontology_service
@@ -105,8 +108,6 @@ def _normalize_edit_item(
     edited_properties: set[str],
 ) -> dict[str, Any]:
     """校验单个 set_property 编辑，并登记已编辑属性防重复。"""
-    if _text(item.get("operation")) != "set_property":
-        raise OntologyInvalidError("当前 Action Type 只支持 set_property 编辑")
     property_name = _text(item.get("property"))
     prop = properties.get(property_name)
     if prop is None:
@@ -122,26 +123,76 @@ def _normalize_edit_item(
     return {"operation": "set_property", "property": property_name, "value": value}
 
 
+def _normalize_create_object_edit(
+    item: dict[str, Any],
+    *,
+    properties: dict[str, dict[str, Any]],
+    parameter_names: set[str],
+) -> dict[str, Any]:
+    """校验 create_object 编辑：属性值集（标识属性必填，值可引用参数/静态）。"""
+    raw_props = item.get("properties")
+    if not isinstance(raw_props, list) or not raw_props:
+        raise OntologyInvalidError("create_object 编辑必须提供非空 properties 属性值集")
+    if len(raw_props) > _MAX_EDITS:
+        raise OntologyInvalidError(f"create_object 属性值不能超过 {_MAX_EDITS} 个")
+    values: dict[str, dict[str, Any]] = {}
+    for entry in raw_props:
+        entry = entry or {}
+        property_name = _text(entry.get("property"))
+        prop = properties.get(property_name)
+        if prop is None:
+            raise OntologyInvalidError(f"create_object 属性不存在: {property_name or '?'}")
+        if isinstance(prop.get("derivation"), dict) and prop["derivation"]:
+            raise OntologyInvalidError(f"派生属性只读，不能出现在 create_object 值集: {property_name}")
+        if property_name in values:
+            raise OntologyInvalidError(f"create_object 属性重复: {property_name}")
+        values[property_name] = _normalize_edit_value(
+            entry.get("value"), property_name=property_name, parameter_names=parameter_names
+        )
+    missing = [name for name, prop in properties.items() if bool(prop.get("is_identifier")) and name not in values]
+    if missing:
+        raise OntologyInvalidError(f"create_object 必须提供标识属性值: {'、'.join(missing)}")
+    return {
+        "operation": "create_object",
+        "properties": [{"property": name, "value": value} for name, value in values.items()],
+    }
+
+
 def _normalize_edits(
     raw: Any,
     *,
     properties: dict[str, dict[str, Any]],
     parameter_names: set[str],
+    write_mode: str,
 ) -> list[dict[str, Any]]:
     if not isinstance(raw, list) or not raw:
         raise OntologyInvalidError("Action Type 至少需要一个编辑操作")
     if len(raw) > _MAX_EDITS:
         raise OntologyInvalidError(f"Action Type 编辑不能超过 {_MAX_EDITS} 个")
-    edited_properties: set[str] = set()
-    return [
-        _normalize_edit_item(
-            item or {},
-            properties=properties,
-            parameter_names=parameter_names,
-            edited_properties=edited_properties,
-        )
-        for item in raw
-    ]
+    operations = {_text((item or {}).get("operation")) for item in raw}
+    if operations == {"create_object"}:
+        if len(raw) != 1:
+            raise OntologyInvalidError("create_object 编辑只能单独一条")
+        if write_mode != "action_created":
+            raise OntologyInvalidError("create_object 仅支持写性为 action_created 的动作对象类型")
+        return [_normalize_create_object_edit(raw[0] or {}, properties=properties, parameter_names=parameter_names)]
+    if operations == {"set_property"}:
+        if write_mode != "action_writable":
+            raise OntologyInvalidError(
+                "set_property 仅支持写性为 action_writable 的对象类型"
+                "（原始业务数据只读，写能力需显式开启，对齐 Palantir Edits opt-in）"
+            )
+        edited_properties: set[str] = set()
+        return [
+            _normalize_edit_item(
+                item or {},
+                properties=properties,
+                parameter_names=parameter_names,
+                edited_properties=edited_properties,
+            )
+            for item in raw
+        ]
+    raise OntologyInvalidError("Action Type 编辑 operation 仅支持 set_property/create_object，且不能混合")
 
 
 async def _target_object_type(object_type_name: str) -> dict[str, Any]:
@@ -202,15 +253,57 @@ def _validate_test_parameters(item: dict[str, Any], parameters: dict[str, Any]) 
     return normalized
 
 
+def _resolve_value_source(value: Any, normalized: dict[str, Any]) -> Any:
+    """单个值来源解析：参数引用取参数值，静态值原样返回。"""
+    value = value or {}
+    parameter_name = _text(value.get("parameter"))
+    return normalized.get(parameter_name) if value.get("kind") == "parameter" else value.get("value")
+
+
 def _resolve_test_edits(item: dict[str, Any], normalized: dict[str, Any]) -> list[dict[str, Any]]:
-    """试运行编辑解析：参数引用取参数值，静态值原样返回；不写对象。"""
+    """试运行编辑解析：参数引用取参数值，静态值原样返回；不写对象。
+
+    create_object 编辑解析进 properties[].resolved_value（供试运行预览与执行复用）。
+    """
     edits: list[dict[str, Any]] = []
     for edit in item.get("edits") or []:
-        value = edit.get("value") or {}
-        parameter_name = _text(value.get("parameter"))
-        resolved = normalized.get(parameter_name) if value.get("kind") == "parameter" else value.get("value")
-        edits.append({**edit, "resolved_value": resolved})
+        if _text(edit.get("operation")) == "create_object":
+            resolved_props = [
+                {**entry, "resolved_value": _resolve_value_source(entry.get("value"), normalized)}
+                for entry in edit.get("properties") or []
+            ]
+            edits.append({**edit, "properties": resolved_props})
+            continue
+        edits.append({**edit, "resolved_value": _resolve_value_source(edit.get("value"), normalized)})
     return edits
+
+
+def _validate_resolved_edits(edits: list[dict[str, Any]], properties: dict[str, dict[str, Any]]) -> None:
+    """set_property 执行前校验：属性存在、非派生、值类型匹配。"""
+    for edit in edits:
+        property_name = _text(edit.get("property"))
+        prop = properties.get(property_name)
+        if prop is None:
+            raise OntologyInvalidError(f"Action 目标属性不存在: {property_name}")
+        if isinstance(prop.get("derivation"), dict) and prop["derivation"]:
+            raise OntologyInvalidError(f"派生属性只读（查询时计算），Action 不能写入: {property_name}")
+        _validate_property_value(property_name, prop, edit.get("resolved_value"))
+
+
+def _resolve_create_values(edit: dict[str, Any], properties: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """create_object 属性值集解析 + 类型校验；返回 {属性名: 值}。"""
+    resolved: dict[str, Any] = {}
+    for entry in edit.get("properties") or []:
+        property_name = _text(entry.get("property"))
+        prop = properties.get(property_name)
+        if prop is None:
+            raise OntologyInvalidError(f"create_object 属性不存在: {property_name or '?'}")
+        value = entry.get("resolved_value")
+        _validate_property_value(property_name, prop, value)
+        if value in (None, ""):
+            raise OntologyInvalidError(f"create_object 属性值缺失: {property_name}")
+        resolved[property_name] = value
+    return resolved
 
 
 def _validate_property_value(property_name: str, prop: dict[str, Any], value: Any) -> None:
@@ -239,9 +332,11 @@ class OntologyActionTypeService:
         self,
         dao: OntologyActionTypeDao | None = None,
         execution_dao: OntologyActionExecutionDao | None = None,
+        action_object_dao: OntologyActionObjectDao | None = None,
     ) -> None:
         self._dao = dao or OntologyActionTypeDao()
         self._execution_dao = execution_dao or OntologyActionExecutionDao()
+        self._action_object_dao = action_object_dao or OntologyActionObjectDao()
 
     async def list_action_types_async(self, object_type_name: str = "") -> list[dict[str, Any]]:
         object_type_id = None
@@ -275,6 +370,7 @@ class OntologyActionTypeService:
             payload.get("edits"),
             properties=_object_type_properties(detail),
             parameter_names=parameter_names,
+            write_mode=_text(detail.get("write_mode")) or "read_only",
         )
         status = _text(payload.get("status")) or "draft"
         if status not in _ACTION_STATUSES:
@@ -338,14 +434,21 @@ class OntologyActionTypeService:
         properties = _object_type_properties(detail)
         normalized = _validate_test_parameters(item, parameters)
         edits = _resolve_test_edits(item, normalized)
-        for edit in edits:
-            property_name = _text(edit.get("property"))
-            prop = properties.get(property_name)
-            if prop is None:
-                raise OntologyInvalidError(f"Action 目标属性不存在: {property_name}")
-            if isinstance(prop.get("derivation"), dict) and prop["derivation"]:
-                raise OntologyInvalidError(f"派生属性只读（查询时计算），Action 不能写入: {property_name}")
-            _validate_property_value(property_name, prop, edit.get("resolved_value"))
+        write_mode = _text(detail.get("write_mode")) or "read_only"
+        if edits and _text(edits[0].get("operation")) == "create_object":
+            return await self._execute_create_object(
+                name,
+                detail=detail,
+                properties=properties,
+                parameters=normalized,
+                edits=edits,
+                write_mode=write_mode,
+                operator=operator,
+                operator_name=operator_name,
+            )
+        if write_mode != "action_writable":
+            raise OntologyInvalidError("目标对象类型写性为 read_only，禁止属性编辑（原始业务数据只读）")
+        _validate_resolved_edits(edits, properties)
         # 先确认对象存在（读取同样会合并已有 overrides）；失败则不产生任何写入。
         # 覆盖层统一用完整对象身份 member:object_type:local_key，避免 Action 传入裸 key 后读不到。
         target_object = await read_object_projection(
@@ -362,21 +465,93 @@ class OntologyActionTypeService:
                 operator=operator,
                 operator_name=operator_name,
             )
-            for edit in edits:
-                await self._execution_dao.append_edit_async(
-                    object_type_id=int(detail["id"]),
-                    object_key=overlay_object_key,
-                    property_name=_text(edit.get("property")),
-                    value=edit.get("resolved_value"),
-                    action_execution_id=int(execution["id"]),
-                    action_type_name=name,
-                    operator=operator,
-                    operator_name=operator_name,
-                )
+            await self._append_overlay_edits(
+                name,
+                detail=detail,
+                edits=edits,
+                overlay_object_key=overlay_object_key,
+                execution_id=int(execution["id"]),
+                operator=operator,
+                operator_name=operator_name,
+            )
         return {
             "execution": execution,
             "object_type_name": object_type_name,
             "object_key": overlay_object_key,
+            "edits": edits,
+        }
+
+    async def _append_overlay_edits(
+        self,
+        name: str,
+        *,
+        detail: dict[str, Any],
+        edits: list[dict[str, Any]],
+        overlay_object_key: str,
+        execution_id: int,
+        operator: str = "",
+        operator_name: str = "",
+    ) -> None:
+        """set_property 编辑逐条落覆盖层（须在 transaction_scope 内调用）。"""
+        for edit in edits:
+            await self._execution_dao.append_edit_async(
+                object_type_id=int(detail["id"]),
+                object_key=overlay_object_key,
+                property_name=_text(edit.get("property")),
+                value=edit.get("resolved_value"),
+                action_execution_id=execution_id,
+                action_type_name=name,
+                operator=operator,
+                operator_name=operator_name,
+            )
+
+    async def _execute_create_object(
+        self,
+        name: str,
+        *,
+        detail: dict[str, Any],
+        properties: dict[str, dict[str, Any]],
+        parameters: dict[str, Any],
+        edits: list[dict[str, Any]],
+        write_mode: str,
+        operator: str = "",
+        operator_name: str = "",
+    ) -> dict[str, Any]:
+        """create_object 执行：解析属性值 → 校验类型/唯一性 → 写动作对象表 + 审计。"""
+        if write_mode != "action_created":
+            raise OntologyInvalidError("create_object 仅支持写性为 action_created 的动作对象类型")
+        resolved_values = _resolve_create_values(edits[0], properties)
+        identifier_names = [n for n, p in properties.items() if bool(p.get("is_identifier"))]
+        object_key = "::".join(_text(resolved_values.get(n)) for n in sorted(identifier_names)) or "unknown"
+        title_names = [n for n, p in properties.items() if bool(p.get("is_title"))]
+        title_value = _text(resolved_values.get(title_names[0])) if title_names else ""
+        async with transaction_scope():
+            execution = await self._execution_dao.create_execution_async(
+                action_type_name=name,
+                object_type_id=int(detail["id"]),
+                object_key=object_key,
+                parameters=parameters,
+                edits=edits,
+                operator=operator,
+                operator_name=operator_name,
+            )
+            created = await self._action_object_dao.create_object_async(
+                object_type_id=int(detail["id"]),
+                object_key=object_key,
+                properties=resolved_values,
+                title_value=title_value,
+                action_execution_id=int(execution["id"]),
+                action_type_name=name,
+                operator=operator,
+                operator_name=operator_name,
+            )
+            if created is None:
+                raise OntologyAlreadyExistsError(f"动作对象已存在: {detail.get('object_type_name')}:{object_key}")
+        return {
+            "execution": execution,
+            "object_type_name": _text(detail.get("object_type_name")),
+            "object_key": object_key,
+            "object": created,
             "edits": edits,
         }
 

@@ -46,8 +46,9 @@ def _object_type():
         "id": 2,
         "object_type_name": "sales_order",
         "status": "certified",
+        "write_mode": "action_writable",
         "properties": [
-            {"property_name": "order_no", "is_identifier": True},
+            {"property_name": "order_no", "is_identifier": True, "value_type": "String"},
             {"property_name": "pay_status", "is_identifier": False, "value_type": "String"},
         ],
     }
@@ -249,7 +250,7 @@ def test_upsert_validates_parameters_and_edit_operation():
         asyncio.run(service.upsert_action_type_async("update_order_status", payload))
     payload = _payload()
     payload["edits"][0]["operation"] = "delete_object"
-    with pytest.raises(OntologyInvalidError, match="只支持 set_property"):
+    with pytest.raises(OntologyInvalidError, match="仅支持 set_property/create_object"):
         asyncio.run(service.upsert_action_type_async("update_order_status", payload))
 
 
@@ -313,3 +314,170 @@ def test_upsert_rejects_deprecated_target(monkeypatch):
     monkeypatch.setattr(service_module.ontology_service, "get_object_type_async", deprecated_object)
     with pytest.raises(OntologyInvalidError, match="deprecated"):
         asyncio.run(_service().upsert_action_type_async("update_order_status", _payload()))
+
+
+# ---------- 写性门禁与 create_object（对齐 Palantir Edits opt-in） ----------
+
+
+class _GateActionObjectDao:
+    def __init__(self, existing_keys: set[str] | None = None):
+        self.existing_keys = existing_keys or set()
+        self.created: list[dict] = []
+
+    async def create_object_async(self, **kwargs):
+        key = kwargs["object_key"]
+        if key in self.existing_keys:
+            return None
+        self.existing_keys.add(key)
+        row = {"id": len(self.created) + 1, **kwargs}
+        self.created.append(row)
+        return row
+
+    async def get_object_async(self, object_type_id, object_key):
+        for row in self.created:
+            if row["object_key"] == object_key:
+                return row
+        return None
+
+
+class _GateExecutionDao:
+    def __init__(self):
+        self.executions: list[dict] = []
+
+    async def create_execution_async(self, **kwargs):
+        row = {"id": len(self.executions) + 1, **kwargs}
+        self.executions.append(row)
+        return row
+
+    async def append_edit_async(self, **_kwargs):
+        return None
+
+    async def list_executions_async(self, **_kwargs):
+        return []
+
+
+def _execution_dao_of(service: OntologyActionTypeService):
+    return service._execution_dao
+
+
+def test_write_mode_gate_rejects_set_property_on_read_only(monkeypatch):
+    async def read_only_object(_name):
+        return {**_object_type(), "write_mode": "read_only"}
+
+    monkeypatch.setattr(service_module.ontology_service, "get_object_type_async", read_only_object)
+    with pytest.raises(OntologyInvalidError, match="set_property 仅支持写性为 action_writable"):
+        asyncio.run(_service().upsert_action_type_async("update_order_status", _payload()))
+
+
+def test_write_mode_gate_rejects_create_object_on_writable_type(monkeypatch):
+    async def writable_object(_name):
+        return _object_type()
+
+    monkeypatch.setattr(service_module.ontology_service, "get_object_type_async", writable_object)
+    payload = _payload()
+    payload["edits"] = [
+        {
+            "operation": "create_object",
+            "properties": [{"property": "order_no", "value": {"kind": "static", "value": "A1"}}],
+        }
+    ]
+    with pytest.raises(OntologyInvalidError, match="create_object 仅支持写性为 action_created"):
+        asyncio.run(_service().upsert_action_type_async("create_order", payload))
+
+
+def test_create_object_upsert_requires_identifier_value(monkeypatch):
+    async def action_object_type(_name):
+        return {
+            **_object_type(),
+            "object_type_name": "supervision_order",
+            "write_mode": "action_created",
+        }
+
+    monkeypatch.setattr(service_module.ontology_service, "get_object_type_async", action_object_type)
+    payload = _payload()
+    payload["object_type_name"] = "supervision_order"
+    payload["edits"] = [
+        {
+            "operation": "create_object",
+            "properties": [{"property": "pay_status", "value": {"kind": "static", "value": "x"}}],
+        }
+    ]
+    with pytest.raises(OntologyInvalidError, match="必须提供标识属性值"):
+        asyncio.run(_service().upsert_action_type_async("create_supervision", payload))
+
+
+def test_execute_create_object_writes_action_object(monkeypatch):
+    async def action_object_type(_name):
+        return {
+            **_object_type(),
+            "object_type_name": "supervision_order",
+            "write_mode": "action_created",
+        }
+
+    monkeypatch.setattr(service_module.ontology_service, "get_object_type_async", action_object_type)
+    monkeypatch.setattr(service_module, "ontology_action_execute_enabled", lambda: True)
+
+    class _NullTransaction:
+        def __init__(self):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(service_module, "transaction_scope", _NullTransaction)
+    action_dao = _GateActionObjectDao()
+    execution_dao = _GateExecutionDao()
+    service = OntologyActionTypeService(dao=_service()._dao, execution_dao=execution_dao, action_object_dao=action_dao)
+    payload = _payload()
+    payload["object_type_name"] = "supervision_order"
+    payload["edits"] = [
+        {
+            "operation": "create_object",
+            "properties": [
+                {"property": "order_no", "value": {"kind": "parameter", "parameter": "status"}},
+                {"property": "pay_status", "value": {"kind": "static", "value": "pending"}},
+            ],
+        }
+    ]
+    asyncio.run(service.upsert_action_type_async("create_supervision", payload))
+    service._dao.items["create_supervision"]["status"] = "certified"
+    result = asyncio.run(
+        service.execute_action_type_async("create_supervision", object_key="", parameters={"status": "SO-001"})
+    )
+    assert result["object_key"] == "SO-001"
+    assert action_dao.created[0]["properties"] == {"order_no": "SO-001", "pay_status": "pending"}
+    assert execution_dao.executions[0]["object_key"] == "SO-001"
+    # 重复创建同一标识值被拒
+    with pytest.raises(OntologyAlreadyExistsError, match="动作对象已存在"):
+        asyncio.run(
+            service.execute_action_type_async("create_supervision", object_key="", parameters={"status": "SO-001"})
+        )
+
+
+def test_execute_set_property_rejects_read_only_object(monkeypatch):
+    async def read_only_object(_name):
+        return {**_object_type(), "write_mode": "read_only"}
+
+    monkeypatch.setattr(service_module.ontology_service, "get_object_type_async", read_only_object)
+    monkeypatch.setattr(service_module, "ontology_action_execute_enabled", lambda: True)
+    service = _service()
+    service._dao.items["legacy_action"] = {
+        "id": 1,
+        "action_type_name": "legacy_action",
+        "status": "certified",
+        "object_type_id": 2,
+        "object_type_name": "sales_order",
+        "parameters": [{"name": "status", "type": "String", "required": True}],
+        "edits": [
+            {
+                "operation": "set_property",
+                "property": "pay_status",
+                "value": {"kind": "parameter", "parameter": "status"},
+            }
+        ],
+    }
+    with pytest.raises(OntologyInvalidError, match="read_only"):
+        asyncio.run(service.execute_action_type_async("legacy_action", object_key="A1", parameters={"status": "paid"}))

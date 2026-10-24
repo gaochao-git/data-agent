@@ -31,6 +31,7 @@ from pymysql.converters import escape_string
 from utils.logger import get_logger
 
 from ...daos.ontology_action_execution_dao import OntologyActionExecutionDao
+from ...daos.ontology_action_object_dao import OntologyActionObjectDao
 from ..datasource.manager import get_datasource_manager
 from ..datasource.target_context import get_execution_target_member_id, get_execution_target_name
 from ..query import QueryOrchestrator, QuerySource, QuerySpec
@@ -1112,6 +1113,8 @@ async def read_object_projection(
     detail = await ontology_service.get_object_type_async(object_type_name)
     if detail is None:
         raise ObjectProjectionError(f"本体对象类型不存在: {object_type_name}")
+    if (_text(detail.get("write_mode")) or "read_only") == "action_created":
+        return await _read_action_object(detail, object_key)
     key_member, local_key = _parse_object_key(object_key, object_type_name)
     requested_members = member_datasource_ids or ([key_member] if key_member else None)
     query_detail, config, targets, group_id = await _projection_context(
@@ -1147,6 +1150,35 @@ async def read_object_projection(
     )
     links = await _read_links(detail, row, member_id=scope["member_datasource_id"], user_id=user_id, username=username)
     return _assemble_object(detail, query, row, links, scope, derived_values=derived)
+
+
+async def _read_action_object(detail: dict[str, Any], object_key: str) -> dict[str, Any]:
+    """动作对象读取：行存业务库动作对象表（无源投影），属性集原样展开。"""
+    key_member, local_key = _parse_object_key(object_key, _text(detail.get("object_type_name")))
+    stored = await OntologyActionObjectDao().get_object_async(int(detail.get("id") or 0), local_key)
+    if stored is None:
+        raise ObjectProjectionError(f"对象不存在: {detail.get('object_type_name')}:{local_key}")
+    properties = stored.get("properties") or {}
+    return {
+        "object_type": _text(detail.get("object_type_name")),
+        "object_key": _qualified_object_key(key_member, _text(detail.get("object_type_name")), local_key),
+        "properties": properties,
+        "links": [],
+        "title_property": _title_property_name(
+            [prop for prop in detail.get("properties") or [] if isinstance(prop, dict)],
+            _identifier_property_name_of(detail),
+        ),
+        "write_mode": "action_created",
+        "created_by": _text(stored.get("create_by")),
+        "create_time": _text(stored.get("create_time")),
+    }
+
+
+def _identifier_property_name_of(detail: dict[str, Any]) -> str:
+    for prop in detail.get("properties") or []:
+        if isinstance(prop, dict) and bool(prop.get("is_identifier")):
+            return _text(prop.get("property_name"))
+    return ""
 
 
 _DERIVED_AGGREGATE_SQL = {"sum": "SUM", "avg": "AVG", "min": "MIN", "max": "MAX"}
