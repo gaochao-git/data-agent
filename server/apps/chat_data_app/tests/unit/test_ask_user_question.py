@@ -63,6 +63,7 @@ def test_tool_interrupts_with_payload_and_merges_answer(monkeypatch):
     assert result["answers"] == ["A"]
     assert captured["questions"][0]["id"] == "q1"
     assert captured["question_id"]
+    assert isinstance(captured["asked_at_ms"], int)
     # options 为空时允许用户自由输入：不强制要求选项
     assert captured["questions"][0]["multi_select"] is False
 
