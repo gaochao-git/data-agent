@@ -3,7 +3,7 @@
  * 对象类型 · 对象实例工作台。
  * 主从布局：左侧分页列表/搜索，右侧对象详情；关联对象在当前工作台下钻，不再弹窗跳转。
  */
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import ObjectGraphCanvas from './ObjectGraphCanvas.vue'
 import {
@@ -343,6 +343,12 @@ const graphCanvasNodes = computed(() =>
 )
 
 const graphCanvasEdges = computed(() => Object.values(exploreEdges.value))
+
+const toggleGraphFullscreen = async () => {
+  graphFullscreen.value = !graphFullscreen.value
+  await nextTick()
+  await graphCanvasRef.value?.resizeGraph()
+}
 
 const onGraphCanvasSelect = (key: string) => {
   seedAfterLoad.value = false
@@ -1224,7 +1230,7 @@ onMounted(() => void initialize())
             </span>
             <span v-if="exploreSelectedKey" class="font-mono text-[11px] text-slate-500">{{ exploreSelectedKey }}</span>
             <div class="ml-auto flex items-center gap-1">
-              <el-button size="small" @click="graphFullscreen = !graphFullscreen">
+              <el-button size="small" @click="toggleGraphFullscreen">
                 <i :class="['fa-solid mr-1 text-[10px]', graphFullscreen ? 'fa-compress' : 'fa-expand']"></i>
                 {{ graphFullscreen ? '退出全屏' : '全屏' }}
               </el-button>
@@ -1237,7 +1243,7 @@ onMounted(() => void initialize())
             </div>
           </div>
           <div class="flex min-h-0 gap-2" :class="graphFullscreen ? 'flex-1' : ''">
-            <div class="min-w-0 flex-1">
+            <div class="flex min-h-0 min-w-0 flex-1 flex-col">
               <div
                 v-if="Object.keys(exploreNodes).length === 0"
                 :class="graphFullscreen ? 'flex h-full min-h-[340px] items-center justify-center text-xs text-slate-400' : 'flex h-[420px] items-center justify-center text-xs text-slate-400'"
@@ -1250,7 +1256,7 @@ onMounted(() => void initialize())
                 :nodes="graphCanvasNodes"
                 :edges="graphCanvasEdges"
                 :selected-key="exploreSelectedKey"
-                class="h-[460px]"
+                :class="graphFullscreen ? 'h-full' : 'h-[460px]'"
                 @select="onGraphCanvasSelect"
               />
             </div>
