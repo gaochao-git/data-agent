@@ -1187,6 +1187,10 @@ class ChatDataOntologyObjectType(Base):
     display_name: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
     description_text: Mapped[str] = mapped_column(String(1024), nullable=False, default="", server_default="")
     lifecycle_status: Mapped[str] = mapped_column(String(16), nullable=False, default="draft", server_default="draft")
+    # 写性门禁（对齐 Palantir Edits toggle 的 opt-in 模型）：read_only=默认只读；
+    # action_writable=允许 Action 经覆盖层编辑属性（监管数据接入场景）；
+    # action_created=动作对象（无源，行存于 chat_data_ontology_action_object，仅由 Action 创建）。
+    write_mode: Mapped[str] = mapped_column(String(16), nullable=False, default="read_only", server_default="read_only")
     ontology_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, default=None)
     deprecation_reason: Mapped[str] = mapped_column(String(512), nullable=False, default="", server_default="")
     deprecated_until: Mapped[datetime | None] = mapped_column(DateTime)
@@ -1344,6 +1348,40 @@ class ChatDataOntologyObjectEdit(Base):
     __table_args__ = (
         Index("idx_object_edit_lookup", "object_type_id", "object_key", "property_name"),
         Index("idx_object_edit_execution", "action_execution_id"),
+    )
+
+
+class ChatDataOntologyActionObject(Base):
+    """动作对象存储：write_mode=action_created 对象类型的对象行（无外部数据源）。
+
+    对齐 Palantir「无 backing datasource 对象类型」：对象完全由 Action 创建填充，
+    不映射物理表、不经覆盖层；属性集存 properties_json（服务端解析校验，不用 MySQL
+    JSON 类型）。对象身份 = (object_type_id, object_key)，object_key 为标识属性值。
+    """
+
+    __tablename__ = "chat_data_ontology_action_object"
+
+    id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
+    object_type_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    object_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    title_value: Mapped[str] = mapped_column(String(512), nullable=False, default="", server_default="")
+    properties_json: Mapped[str] = mapped_column(Text, nullable=False)
+    action_execution_id: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
+    action_type_name: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
+    delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
+    create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
+    update_time: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+    create_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+
+    __table_args__ = (
+        UniqueConstraint("object_type_id", "object_key", "delete_flag", name="uniq_action_object_key"),
+        Index("idx_action_object_type", "object_type_id", "delete_flag"),
+        Index("idx_action_object_execution", "action_execution_id"),
     )
 
 

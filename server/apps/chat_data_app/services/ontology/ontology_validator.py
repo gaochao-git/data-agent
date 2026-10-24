@@ -25,6 +25,8 @@ ALLOWED_VALUE_TYPES = (*BUILTIN_VALUE_TYPES, VALUE_TYPE_ENUM)
 NON_IDENTIFIER_VALUE_TYPES = ("Decimal",)
 
 OBJECT_STATUSES = ("draft", "experimental", "certified", "deprecated")
+# 写性三档（对齐 Palantir Edits toggle opt-in 模型）：默认只读，可写须显式声明
+OBJECT_WRITE_MODES = ("read_only", "action_writable", "action_created")
 ONTOLOGY_NAME_MAX_LENGTH = 64  # 落库列 chat_data_ontology.ontology_name = varchar(64)
 RELATION_MULTIPLICITIES = ("many_to_one", "one_to_one")
 RENDER_HINT_KEYS = ("searchable", "sortable", "low_cardinality")
