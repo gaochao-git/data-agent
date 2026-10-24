@@ -39,6 +39,20 @@ CHAT_DATA_NEBULA_TIMEOUT_SECONDS=10
 
 默认关闭；未部署 Nebula 的实例不会受影响。
 
+## DDL
+
+已有 space 需要先给通用边加关系类型属性（新 space 可在建边时直接带上）：
+
+```ngql
+ALTER EDGE belongs_to ADD (relation_type string DEFAULT "");
+```
+
+同步写入：
+
+```text
+INSERT EDGE belongs_to(member_id, relation_type) ...
+```
+
 ## 同步接口
 
 `POST /admin/meta/ontology/graph/sync`
