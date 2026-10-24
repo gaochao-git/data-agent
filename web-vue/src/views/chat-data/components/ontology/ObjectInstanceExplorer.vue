@@ -5,6 +5,7 @@
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
+import ObjectGraphCanvas from './ObjectGraphCanvas.vue'
 import {
   getAdminOntologyObjectType,
   getAdminOntologyRelationTypes,
@@ -247,6 +248,7 @@ const graphLoading = ref(false)
 let graphLoadingCount = 0
 const graphDetailWidth = ref(320)
 const exploreSvg = ref<SVGSVGElement | null>(null)
+const graphCanvasRef = ref<InstanceType<typeof ObjectGraphCanvas> | null>(null)
 let graphDetailStartX = 0
 let graphDetailStartWidth = 0
 /** 图节点类型显示名（客户/订单/发货单...），避免图上只看到英文对象名。 */
@@ -333,8 +335,30 @@ const closeGraphDetail = () => {
   showGraphProperties.value = false
 }
 
+const graphCanvasNodes = computed(() =>
+  Object.values(exploreNodes.value).map(node => ({
+    ...node,
+    typeLabel: objectTypeDisplayName(node.objectType)
+  }))
+)
+
+const graphCanvasEdges = computed(() => Object.values(exploreEdges.value))
+
+const onGraphCanvasSelect = (key: string) => {
+  seedAfterLoad.value = false
+  exploreSelectedKey.value = key
+}
+
+const onGraphCanvasViewDetail = (key: string) => {
+  void viewNodeDetail(key)
+}
+
+const onGraphCanvasExpand = (key: string) => {
+  void expandNodeOneHop(key)
+}
+
 const resetExploreLayout = () => {
-  exploreNodeOffsets.value = {}
+  graphCanvasRef.value?.resetLayout()
 }
 
 onBeforeUnmount(stopGraphDetailResize)
@@ -1172,9 +1196,6 @@ onMounted(() => void initialize())
           v-else
           class="rounded border border-slate-200 bg-white p-2"
           :class="graphFullscreen ? 'fixed inset-0 z-[var(--z-fullscreen-layer)] flex flex-col bg-white p-4' : ''"
-          @mousemove="onExploreNodeDrag"
-          @mouseup="endExploreNodeDrag"
-          @mouseleave="endExploreNodeDrag"
         >
           <el-alert
             v-if="graphFallbackNotice"
@@ -1229,102 +1250,17 @@ onMounted(() => void initialize())
               >
                 {{ detail ? '当前对象暂无关联关系，或图同步尚未覆盖' : '从左侧选择一个对象，或点击「重置为当前对象」开始' }}
               </div>
-              <svg
+              <ObjectGraphCanvas
                 v-else
-                ref="exploreSvg"
-                :viewBox="`0 0 ${exploreGraph.width} ${exploreGraph.height}`"
-                :class="graphFullscreen ? 'h-full w-full' : 'h-[420px] w-full'"
-                role="img"
-                aria-label="对象实例探索图"
-              >
-                <g v-for="edge in exploreGraph.edges" :key="edge.key">
-                  <title>{{ edge.relationName }}</title>
-                  <line :x1="edge.x1" :y1="edge.y1" :x2="edge.x2" :y2="edge.y2" stroke="#cbd5e1" stroke-width="1.2" />
-                </g>
-                <g
-                  v-for="node in orderedGraphNodes"
-                  :key="node.key"
-                  class="cursor-move"
-                  @mousedown="startExploreNodeDrag($event, node)"
-                  @click="onExploreNodeClick(node.key)"
-                >
-                  <title>{{ node.key }}</title>
-                  <rect
-                    :x="node.x - 84"
-                    :y="node.y - 20"
-                    width="168"
-                    height="40"
-                    rx="5"
-                    :fill="node.key === exploreSelectedKey ? '#eff6ff' : '#ffffff'"
-                    :stroke="node.key === exploreSelectedKey ? '#3b82f6' : '#dbeafe'"
-                    :stroke-width="node.key === exploreSelectedKey ? 2 : 1.2"
-                  />
-                  <text
-                    :x="node.x"
-                    :y="node.y - 5"
-                    text-anchor="middle"
-                    class="fill-slate-400"
-                    style="font-size: 8px; font-weight: 500"
-                  >
-                    {{ objectTypeDisplayName(node.objectType) }}
-                  </text>
-                  <text
-                    :x="node.x"
-                    :y="node.y + 9"
-                    text-anchor="middle"
-                    :class="node.key === exploreSelectedKey ? 'fill-blue-700' : 'fill-slate-700'"
-                    style="font-size: 10px; font-weight: 500"
-                  >
-                    {{ node.label.length > 18 ? `${node.label.slice(0, 17)}…` : node.label }}
-                  </text>
-                  <foreignObject
-                    v-if="node.key === exploreSelectedKey"
-                    :x="node.x - 100"
-                    :y="node.y + 24"
-                    width="200"
-                    height="28"
-                  >
-                    <div xmlns="http://www.w3.org/1999/xhtml" class="flex items-center justify-center gap-1">
-                      <button
-                        type="button"
-                        class="rounded border border-slate-200 bg-white px-2 py-0.5 text-[10px] text-slate-600 hover:border-blue-300 hover:text-blue-600"
-                        @mousedown.stop.prevent
-                        @click.stop="viewNodeDetail(node.key)"
-                      >
-                        查看详情
-                      </button>
-                      <button
-                        type="button"
-                        class="rounded border border-slate-200 bg-white px-2 py-0.5 text-[10px] text-slate-600 hover:border-blue-300 hover:text-blue-600"
-                        @mousedown.stop.prevent
-                        @click.stop="expandNodeOneHop(node.key)"
-                      >
-                        展开一跳
-                      </button>
-                    </div>
-                  </foreignObject>
-                  <g v-if="exploreLoadingKey === node.key">
-                    <circle
-                      :cx="node.x - 64"
-                      :cy="node.y"
-                      r="6"
-                      fill="none"
-                      stroke="#3b82f6"
-                      stroke-width="2"
-                      stroke-dasharray="24 12"
-                    >
-                      <animateTransform
-                        attributeName="transform"
-                        type="rotate"
-                        :from="`0 ${node.x - 64} ${node.y}`"
-                        :to="`360 ${node.x - 64} ${node.y}`"
-                        dur="0.8s"
-                        repeatCount="indefinite"
-                      />
-                    </circle>
-                  </g>
-                </g>
-              </svg>
+                ref="graphCanvasRef"
+                :nodes="graphCanvasNodes"
+                :edges="graphCanvasEdges"
+                :selected-key="exploreSelectedKey"
+                class="h-[460px]"
+                @select="onGraphCanvasSelect"
+                @view-detail="onGraphCanvasViewDetail"
+                @expand="onGraphCanvasExpand"
+              />
             </div>
             <div
               v-if="detail && showGraphProperties"
