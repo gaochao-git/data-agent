@@ -277,7 +277,7 @@ def build_object_list_query(
         "object_type": _text(detail.get("object_type_name")),
         "identifier_property": identifier_property,
         "title_property": search_property,
-        "properties": [name for name, _column in columns] + list((derived_select or {}).keys()),
+        "properties": [name for name, _column in columns],
         "limit": safe_limit,
         "offset": safe_offset,
     }

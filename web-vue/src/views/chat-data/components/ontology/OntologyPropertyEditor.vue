@@ -198,7 +198,7 @@ const onDerivedRelationChange = async () => {
     const res = await getAdminOntologyObjectType(relation.relatedType)
     if (res.status === 'success' && res.data) {
       targetOptions.value = (res.data.properties || [])
-        .filter(item => BUILTIN_VALUE_TYPES.includes(item.value_type))
+        .filter(item => BUILTIN_VALUE_TYPES.includes(item.value_type) && !item.derivation)
         .map(item => ({ name: item.property_name, value_type: item.value_type }))
     }
   } catch (err) {

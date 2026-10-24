@@ -438,6 +438,8 @@ class OntologyDao:
             setattr(row, field, value)
         row.update_by = update_by or ""
         row.update_by_name = update_by_name or ""
+        # 只改属性集时对象行字段未变，ORM 不会自动 bump update_time；显式 touch 保证详情时间刷新。
+        row.update_time = func.now()
         return row
 
     async def _load_property_rows(self, session: Any, object_type_id: int) -> dict[str, ChatDataOntologyProperty]:
