@@ -181,3 +181,12 @@ status: delivered 4615 / shipped 117
 - **更新时间**：对象类型只改属性集时显式 touch `update_time`，详情时间会刷新。
 - **机构口径提示词**：多 member 未指定时先询问选择或确认全部机构。
 - **UI**：对象属性统一卡片、派生属性子区域、配置弹窗、解释字段、标题行说明。
+
+## 10. P1 修复（2026-10-24 晚）
+
+- **金额类型**：`sales_order.amount` 改为 `Decimal`，可执行 `sum/avg`。
+- **城市口径**：新增 `shipment.order_amount = select sales_order.amount`（通过 `shipment_belongs_to_order`），
+  支持 `shipment group_by receiver_city sum(order_amount)` 回答“按城市统计订单金额”（按发货单粒度，存在一单多次发货时重复计入，后续可改为订单级聚合）。
+- **列表派生性能**：列表派生值改为一次 SQL `LEFT JOIN` 批量计算；count 查询不再携带仅用于 select 的派生 JOIN；
+  sales_order 4 个派生属性服务层约 5.1s（原 38-42s）。
+- **派生聚合指标**：`aggregate_objects` 支持派生属性作为聚合指标（如 `sum(order_amount)`）。
