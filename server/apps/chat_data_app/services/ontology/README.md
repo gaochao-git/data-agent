@@ -118,6 +118,7 @@ DDL 见 `next_version.md`「本体 Action Type 定义表」。
 - `object_projection.py`：投影服务层，负责数据源上下文、执行、关系/派生值组装与对外 API；
 - `object_errors.py`：投影错误类型，供构造层与服务层共用；
 - `query_mode.QueryModeDecision.degraded_reason`：探测异常时保留真实原因（`is_degraded`），禁止只返回 `probe_failed` 后静默降级。
+- `object_projection` 的 `semantic_config_id` 仅为旧客户端兼容参数，Dataset source binding 是唯一取数路径；旧 `filters` 保留兼容，新代码优先 `where` 树。
 
 ## 对象实例只读投影（MVP，2026-10-22）
 

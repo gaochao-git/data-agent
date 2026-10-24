@@ -246,7 +246,11 @@ async def _projection_context(
     user_id: str,
     username: str,
 ) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]], str]:
-    """返回 (查询详情, 配置, execution targets, group_id)；Dataset 优先，旧映射回退。"""
+    """返回 (查询详情, 配置, execution targets, group_id)。
+
+    当前唯一取数路径是 Dataset source binding；``semantic_config_id`` 仅保留为
+    旧客户端兼容参数，不再回退到语义模型映射。
+    """
     if not isinstance(detail.get("source_binding"), dict):
         raise ObjectProjectionError("对象类型未配置 Dataset 数据源绑定")
     config, query_detail, targets, group_id = await _dataset_mapping_context(
