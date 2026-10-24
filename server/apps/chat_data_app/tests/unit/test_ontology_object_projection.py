@@ -122,7 +122,7 @@ def test_build_object_search_query_applies_filters_sort_and_count():
         offset=5,
     )
     assert "`amount` >= '10'" in query["sql"]
-    assert "ORDER BY `amount` DESC" in query["sql"]
+    assert "ORDER BY `orders`.`amount` DESC" in query["sql"]
     assert "LIMIT 11 OFFSET 5" in query["sql"]
     assert "COUNT(*) AS `total`" in query["count_sql"]
     assert "`amount` >= '10'" in query["count_sql"]

@@ -41,6 +41,8 @@ logger = get_logger(__name__)
 _IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
 _MAX_KEY_LENGTH = 512
 _MAX_LINKS_PER_RELATION = 20
+# 对象查询包含派生属性 JOIN；Hive 上 4 个派生子查询可能超过 10s，给独立超时窗口。
+_OBJECT_QUERY_TIMEOUT_SECONDS = 30
 _TRUTHY = {"1", "true", "yes", "on"}
 
 
@@ -329,10 +331,12 @@ def _search_property_sql(
     property_name: str,
     column_by_property: dict[str, str],
     derived_expressions: dict[str, str] | None,
+    main_table: str = "",
 ) -> str:
     """属性 → 物理列或派生 JOIN 表达式；派生属性无物理列。"""
     if property_name in column_by_property:
-        return _quote_identifier(column_by_property[property_name])
+        column = _quote_identifier(column_by_property[property_name])
+        return f"{_quote_identifier(main_table)}.{column}" if main_table else column
     derived = (derived_expressions or {}).get(property_name)
     if derived:
         return derived
@@ -352,6 +356,7 @@ def _where_condition(
     *,
     depth: int = 0,
     counter: list[int] | None = None,
+    main_table: str = "",
 ) -> str:
     """编译官方风格 where 树（and/or/not + 比较/包含/isNull），最多 3 层。"""
     if where is None:
@@ -365,9 +370,15 @@ def _where_condition(
     operator = _text(where.get("operator")).lower()
     if operator in _WHERE_GROUP_OPERATORS:
         return _where_group_condition(
-            operator, where, column_by_property, derived_expressions, depth=depth, counter=counter
+            operator,
+            where,
+            column_by_property,
+            derived_expressions,
+            depth=depth,
+            counter=counter,
+            main_table=main_table,
         )
-    return _where_leaf_condition(operator, where, column_by_property, derived_expressions)
+    return _where_leaf_condition(operator, where, column_by_property, derived_expressions, main_table=main_table)
 
 
 def _where_group_condition(
@@ -378,6 +389,7 @@ def _where_group_condition(
     *,
     depth: int,
     counter: list[int],
+    main_table: str = "",
 ) -> str:
     children = [child for child in where.get("children") or [] if isinstance(child, dict)]
     if operator == "not" and len(children) != 1:
@@ -401,10 +413,11 @@ def _where_leaf_condition(
     where: dict[str, Any],
     column_by_property: dict[str, str],
     derived_expressions: dict[str, str] | None,
+    main_table: str = "",
 ) -> str:
     if operator not in _WHERE_LEAF_OPERATORS:
         raise ObjectProjectionError(f"不支持的 where 操作符: {operator or '?'}")
-    column = _search_property_sql(_text(where.get("property")), column_by_property, derived_expressions)
+    column = _search_property_sql(_text(where.get("property")), column_by_property, derived_expressions, main_table)
     if operator in {"is_null", "is_not_null"}:
         return f"{column} IS {'NOT ' if operator == 'is_not_null' else ''}NULL"
     return _filter_condition(column, operator, where, _text(where.get("value")))
@@ -419,13 +432,14 @@ def _object_search_conditions(
     filters: list[dict[str, Any]],
     derived_expressions: dict[str, str] | None = None,
     where: dict[str, Any] | None = None,
+    main_table: str = "",
 ) -> str:
     """通用对象过滤条件；只接受已映射属性，不拼接任意 SQL。"""
     conditions: list[str] = []
     keyword_condition = _keyword_condition(search_column, identifier_column, keyword)
     if keyword_condition:
         conditions.append(keyword_condition)
-    where_condition = _where_condition(where, column_by_property, derived_expressions)
+    where_condition = _where_condition(where, column_by_property, derived_expressions, main_table=main_table)
     if where_condition:
         conditions.append(where_condition)
     for item in filters[:_MAX_FILTERS]:
@@ -433,7 +447,7 @@ def _object_search_conditions(
         operator = _text(item.get("operator")).lower()
         if operator not in _FILTER_OPERATORS:
             raise ObjectProjectionError(f"不支持的过滤操作符: {operator or '?'}")
-        column = _search_property_sql(property_name, column_by_property, derived_expressions)
+        column = _search_property_sql(property_name, column_by_property, derived_expressions, main_table)
         conditions.append(_filter_condition(column, operator, item, _text(item.get("value"))))
     return " AND ".join(conditions)
 
@@ -443,11 +457,12 @@ def _object_search_order_by(
     sorts: list[dict[str, Any]],
     identifier_column: str,
     derived_expressions: dict[str, str] | None = None,
+    main_table: str = "",
 ) -> str:
     order_parts: list[str] = []
     for item in sorts[:_MAX_SORTS]:
         property_name = _text(item.get("property"))
-        column = _search_property_sql(property_name, column_by_property, derived_expressions)
+        column = _search_property_sql(property_name, column_by_property, derived_expressions, main_table)
         direction = "DESC" if _text(item.get("direction")).lower() == "desc" else "ASC"
         order_parts.append(f"{column} {direction}")
     if not order_parts:
@@ -497,10 +512,16 @@ def build_object_search_query(
         filters=filters or [],
         derived_expressions=derived_expressions,
         where=where,
+        main_table=table,
     )
     where_sql = f" WHERE {where_sql_text}" if where_sql_text else ""
-    order_sql = _object_search_order_by(column_by_property, sorts or [], identifier_meta["column"], derived_expressions)
-    select_parts = [f"{_quote_identifier(column)} AS `{property_name}`" for property_name, column in columns]
+    order_sql = _object_search_order_by(
+        column_by_property, sorts or [], identifier_meta["column"], derived_expressions, main_table=table
+    )
+    select_parts = [
+        f"{_quote_identifier(table)}.{_quote_identifier(column)} AS `{property_name}`"
+        for property_name, column in columns
+    ]
     select_parts.extend(f"{expression} AS `{name}`" for name, expression in (derived_select or {}).items())
     select_list = ", ".join(select_parts)
     from_sql = f"{_quote_identifier(table)}{''.join(derived_joins or [])}"
@@ -878,7 +899,7 @@ async def _query_rows(
         targets[0],
         sql,
         limit=limit,
-        timeout=10,
+        timeout=_OBJECT_QUERY_TIMEOUT_SECONDS,
         user_id=user_id or None,
         username=username or None,
         datasource_id=group_id,
