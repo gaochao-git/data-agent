@@ -1062,8 +1062,11 @@ async def read_object_projection(
     )
     if not rows:
         raise ObjectProjectionError(f"对象不存在: {object_type_name}:{local_key}")
-    row = await _apply_object_edits(detail, local_key, rows[0])
     scope = _member_scope(targets)
+    qualified_key = _qualified_object_key(
+        key_member or _text(scope.get("member_datasource_id")), object_type_name, local_key
+    )
+    row = await _apply_object_edits(detail, qualified_key, rows[0])
     derived = await _derived_property_values(
         detail, row, member_id=scope["member_datasource_id"], user_id=user_id, username=username
     )

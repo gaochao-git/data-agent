@@ -346,13 +346,17 @@ class OntologyActionTypeService:
             if isinstance(prop.get("derivation"), dict) and prop["derivation"]:
                 raise OntologyInvalidError(f"派生属性只读（查询时计算），Action 不能写入: {property_name}")
             _validate_property_value(property_name, prop, edit.get("resolved_value"))
-        # 先确认对象存在（读取同样会合并已有 overrides）；失败则不产生任何写入
-        await read_object_projection(object_type_name, object_key, user_id=operator, username=operator_name)
+        # 先确认对象存在（读取同样会合并已有 overrides）；失败则不产生任何写入。
+        # 覆盖层统一用完整对象身份 member:object_type:local_key，避免 Action 传入裸 key 后读不到。
+        target_object = await read_object_projection(
+            object_type_name, object_key, user_id=operator, username=operator_name
+        )
+        overlay_object_key = _text(target_object.get("object_key")) or object_key
         async with transaction_scope():
             execution = await self._execution_dao.create_execution_async(
                 action_type_name=name,
                 object_type_id=int(detail["id"]),
-                object_key=object_key,
+                object_key=overlay_object_key,
                 parameters=normalized,
                 edits=edits,
                 operator=operator,
@@ -361,7 +365,7 @@ class OntologyActionTypeService:
             for edit in edits:
                 await self._execution_dao.append_edit_async(
                     object_type_id=int(detail["id"]),
-                    object_key=object_key,
+                    object_key=overlay_object_key,
                     property_name=_text(edit.get("property")),
                     value=edit.get("resolved_value"),
                     action_execution_id=int(execution["id"]),
@@ -372,7 +376,7 @@ class OntologyActionTypeService:
         return {
             "execution": execution,
             "object_type_name": object_type_name,
-            "object_key": object_key,
+            "object_key": overlay_object_key,
             "edits": edits,
         }
 

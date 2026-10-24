@@ -1510,36 +1510,6 @@ class DatasetUpsertRequest(BaseModel):
     dataset_origin: Literal["datasource", "pipeline"] | None = Field(default=None, description="Dataset 来源")
 
 
-class DatasetSemanticLinkItem(BaseModel):
-    """Dataset ↔ 语义模型关联视图。"""
-
-    id: int
-    dataset_id: int
-    dataset_name: str = ""
-    semantic_config_id: str
-    semantic_config_name: str = ""
-    datasource_group_id: str
-    table_name: str
-    column_mappings: dict[str, str] = Field(default_factory=dict)
-    metric_scope: list[str] = Field(default_factory=list)
-    lifecycle_status: str = "draft"
-    create_by_name: str = ""
-    update_time: str = ""
-
-
-class OntologyObjectMetricItem(BaseModel):
-    """对象类型可执行指标（只读引用语义层，不含口径表达式）。"""
-
-    name: str
-    kind: Literal["atomic", "derived", "composite"]
-    description: str = ""
-    semantic_config_id: str
-    semantic_config_name: str = ""
-    table: str = ""
-    executable_in_scope: bool = False
-    unavailable_reason: str = ""
-
-
 class DatasetBranchCreateRequest(BaseModel):
     """Dataset 分支创建请求。"""
 
