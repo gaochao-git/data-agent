@@ -335,3 +335,17 @@ def test_validator_extra_derivation_and_mapping_guards():
         )
     with pytest.raises(OntologyInvalidError, match="不支持字段"):
         validator.validate_property_items(_items(_property("x", render_hints={"bad": True})))
+
+
+def test_validator_mapping_rejects_unknown_property():
+    with pytest.raises(OntologyInvalidError, match="未定义属性"):
+        validator.validate_mappings(
+            [
+                {
+                    "semantic_config_id": "m",
+                    "column_mappings": {"ghost": "d"},
+                }
+            ],
+            {"x"},
+            "obj",
+        )

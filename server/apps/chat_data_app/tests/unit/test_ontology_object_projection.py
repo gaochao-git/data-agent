@@ -1000,3 +1000,13 @@ def test_projection_index_and_mapping_filter_branches():
         ]
     }
     assert object_projection._mapping_for_property(detail, "x", semantic_config_id="b")["semantic_config_id"] == "b"
+
+
+def test_list_and_related_queries_require_column_mappings():
+    from apps.chat_data_app.services.ontology import object_projection
+
+    with pytest.raises(ObjectProjectionError, match="column_mappings"):
+        object_projection.build_object_list_query(
+            {"object_type_name": "Order", "properties": [], "mappings": [{"semantic_config_id": "m"}]},
+            _config(),
+        )
