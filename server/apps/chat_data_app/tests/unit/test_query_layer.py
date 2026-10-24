@@ -99,3 +99,18 @@ def test_execute_task_delegates_to_runtime(monkeypatch):
     monkeypatch.setattr(runtime, "run_sql_query_task", fake_run)
     asyncio.run(QueryOrchestrator().execute_task_async("t1", {"task_id": "t1"}))
     assert calls == [("t1", {"task_id": "t1"})]
+
+
+def test_legacy_payload_keeps_lineage_and_warnings():
+    from apps.chat_data_app.services.query import QueryResult
+
+    result = QueryResult(
+        source="ontology",
+        sql="SELECT 1",
+        members=[{"member_datasource_id": "m1", "status": "succeeded", "total_count": 1}],
+        lineage={"object_type": "shipment"},
+        warnings=["w1"],
+    )
+    payload = result.to_legacy_payload()
+    assert payload["lineage"] == {"object_type": "shipment"}
+    assert payload["warnings"] == ["w1"]
