@@ -469,6 +469,7 @@ def build_object_search_query(
     derived_joins: list[str] | None = None,
     derived_expressions: dict[str, str] | None = None,
     derived_select: dict[str, str] | None = None,
+    count_joins: list[str] | None = None,
 ) -> dict[str, Any]:
     """构造通用对象查询：关键词 + 属性过滤 + 排序 + 分页，并附带 count SQL。"""
     safe_limit = max(1, min(int(limit), 100))
@@ -507,7 +508,8 @@ def build_object_search_query(
         f"SELECT {select_list} FROM {from_sql}{where_sql} "
         f"ORDER BY {order_sql} LIMIT {safe_limit + 1} OFFSET {safe_offset}"
     )
-    count_sql = f"SELECT COUNT(*) AS `total` FROM {from_sql}{where_sql}"
+    count_from_sql = f"{_quote_identifier(table)}{''.join(count_joins or [])}"
+    count_sql = f"SELECT COUNT(*) AS `total` FROM {count_from_sql}{where_sql}"
     return {
         "sql": sql,
         "count_sql": count_sql,
@@ -532,6 +534,7 @@ def _aggregate_metric(
     metric: dict[str, Any],
     column_by_property: dict[str, str],
     value_types: dict[str, str],
+    derived_expressions: dict[str, str] | None = None,
 ) -> tuple[str, str]:
     """校验单个聚合指标并返回 (SQL 表达式, 输出字段名)。"""
     operation = _text(metric.get("operation")).lower()
@@ -540,14 +543,16 @@ def _aggregate_metric(
     if operation == "count":
         return "COUNT(*) AS `count`", "count"
     property_name = _text(metric.get("property"))
-    if property_name not in column_by_property:
+    derived_expression = (derived_expressions or {}).get(property_name)
+    if property_name not in column_by_property and not derived_expression:
         raise ObjectProjectionError(f"聚合属性未映射: {property_name or '?'}")
-    if operation in _AGGREGATE_NUMERIC_OPERATIONS and _text(value_types.get(property_name)) not in {
-        "Integer",
-        "Decimal",
-    }:
+    if (
+        not derived_expression
+        and operation in _AGGREGATE_NUMERIC_OPERATIONS
+        and _text(value_types.get(property_name)) not in {"Integer", "Decimal"}
+    ):
         raise ObjectProjectionError(f"聚合操作 {operation} 仅支持数值属性: {property_name}")
-    column = _quote_identifier(column_by_property[property_name])
+    column = derived_expression or _quote_identifier(column_by_property[property_name])
     alias = f"{operation}_{property_name}"
     if operation == "count_distinct":
         return f"COUNT(DISTINCT {column}) AS `{alias}`", alias
@@ -597,13 +602,14 @@ def _aggregate_select_parts(
     metric_items: list[dict[str, Any]],
     column_by_property: dict[str, str],
     value_types: dict[str, str],
+    derived_expressions: dict[str, str] | None = None,
 ) -> tuple[list[str], list[str]]:
     if not metric_items:
         raise ObjectProjectionError("至少需要一个聚合指标")
     select_parts = [f"{_quote_identifier(column_by_property[name])} AS `{name}`" for name in group_properties]
     metric_keys: list[str] = []
     for item in metric_items:
-        expression, key = _aggregate_metric(item, column_by_property, value_types)
+        expression, key = _aggregate_metric(item, column_by_property, value_types, derived_expressions)
         select_parts.append(expression)
         metric_keys.append(key)
     return select_parts, metric_keys
@@ -627,6 +633,8 @@ def build_object_aggregate_query(
     limit: int = 100,
     semantic_config_id: str | None = None,
     where: dict[str, Any] | None = None,
+    derived_joins: list[str] | None = None,
+    derived_expressions: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """构造对象聚合查询：映射属性 group by + 白名单指标聚合，不拼接任意 SQL。"""
     _reject_derived_property_operations(
@@ -640,7 +648,11 @@ def build_object_aggregate_query(
     group_properties = _aggregate_group_properties(group_by, column_by_property)
     metric_items = (metrics or [])[:_MAX_AGGREGATE_METRICS]
     select_parts, metric_keys = _aggregate_select_parts(
-        group_properties, metric_items, column_by_property, context["value_types"]
+        group_properties,
+        metric_items,
+        column_by_property,
+        context["value_types"],
+        derived_expressions,
     )
     where_sql_text = _object_search_conditions(
         column_by_property,
@@ -652,10 +664,8 @@ def build_object_aggregate_query(
     )
     where_sql = f" WHERE {where_sql_text}" if where_sql_text else ""
     group_sql, order_sql = _aggregate_group_sql(group_properties, column_by_property)
-    sql = (
-        f"SELECT {', '.join(select_parts)} FROM {_quote_identifier(context['table'])}"
-        f"{where_sql}{group_sql}{order_sql} LIMIT {safe_limit}"
-    )
+    from_sql = f"{_quote_identifier(context['table'])}{''.join(derived_joins or [])}"
+    sql = f"SELECT {', '.join(select_parts)} FROM {from_sql}{where_sql}{group_sql}{order_sql} LIMIT {safe_limit}"
     return {
         "sql": sql,
         "table": context["table"],
@@ -1464,6 +1474,10 @@ async def search_object_projection(
         include_all_derived=True,
     )
     derived_select = dict(derived_expressions)
+    derived_names = _derived_property_names(detail)
+    count_needs_derived = any(
+        _text((item or {}).get("property")) in derived_names for item in [*(filters or []), *(sorts or [])]
+    ) or bool(_where_property_names(where) & derived_names)
     query = build_object_search_query(
         query_detail,
         config,
@@ -1477,6 +1491,7 @@ async def search_object_projection(
         derived_joins=derived_joins,
         derived_expressions=derived_expressions,
         derived_select=derived_select,
+        count_joins=derived_joins if count_needs_derived else [],
     )
     started_at = time.perf_counter()
     count_rows = await _query_rows(
@@ -1538,6 +1553,19 @@ async def aggregate_object_projection(
         user_id=user_id,
         username=username,
     )
+    scope = _member_scope(targets)
+    derived_joins, derived_expressions = await _resolve_derived_filter_sort_async(
+        query_detail,
+        config,
+        filters or [],
+        [],
+        member_id=scope.get("member_datasource_id", ""),
+        user_id=user_id,
+        username=username,
+        semantic_config_id=semantic_config_id,
+        where=where,
+        include_all_derived=True,
+    )
     query = build_object_aggregate_query(
         query_detail,
         config,
@@ -1548,6 +1576,8 @@ async def aggregate_object_projection(
         limit=limit,
         semantic_config_id=semantic_config_id,
         where=where,
+        derived_joins=derived_joins,
+        derived_expressions=derived_expressions,
     )
     started_at = time.perf_counter()
     rows = await _query_rows(

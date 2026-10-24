@@ -689,6 +689,7 @@ def test_search_projection_includes_derived_values_in_page(monkeypatch):
     assert result["objects"][0]["properties"]["order_count"] == 3
     assert "order_count" in result["properties"]
     assert len(calls) == 2
+    assert "LEFT JOIN" not in calls[0]
     assert "`d0`.`value` AS `order_count`" in calls[1]
 
 
@@ -1013,3 +1014,16 @@ def test_list_and_related_queries_require_column_mappings():
             {"object_type_name": "Order", "properties": [], "mappings": [{"semantic_config_id": "m"}]},
             _config(),
         )
+
+
+def test_aggregate_query_supports_derived_metric_expression():
+    query = build_object_aggregate_query(
+        _detail(),
+        _config(),
+        group_by=["order_id"],
+        metrics=[{"name": "sum_order_amount", "operation": "sum", "property": "order_amount"}],
+        derived_joins=[" LEFT JOIN `orders` AS `d0` ON `d0`.`order_id` = `orders`.`order_id`"],
+        derived_expressions={"order_amount": "`d0`.`amount`"},
+    )
+    assert "SUM(`d0`.`amount`) AS `sum_order_amount`" in query["sql"]
+    assert "LEFT JOIN `orders` AS `d0`" in query["sql"]
