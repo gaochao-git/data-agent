@@ -42,6 +42,7 @@ const loadedDetail = ref<OntologyObjectTypeItem | null>(null)
 const formName = ref('')
 const formDisplayName = ref('')
 const formDescription = ref('')
+const formWriteMode = ref<'read_only' | 'action_writable' | 'action_created'>('read_only')
 const formOntologyId = ref<number | null>(null)
 const propertyRows = ref<OntologyPropertyItem[]>([])
 const propertyEditorRef = ref<InstanceType<typeof OntologyPropertyEditor> | null>(null)
@@ -138,6 +139,7 @@ const resetForm = () => {
   formName.value = ''
   formDisplayName.value = ''
   formDescription.value = ''
+  formWriteMode.value = 'read_only'
   formOntologyId.value = props.defaultOntologyId
   propertyRows.value = [{ property_name: '', display_name: '', description: '', value_type: 'String', enum_ref: '', render_hints: {}, is_identifier: true, is_title: true }]
   datasetOptions.value = []
@@ -163,6 +165,7 @@ const openLoad = async () => {
     formName.value = detail.object_type_name
     formDisplayName.value = detail.display_name
     formDescription.value = detail.description
+    formWriteMode.value = detail.write_mode || 'read_only'
     formOntologyId.value = detail.ontology_id ?? null
     propertyRows.value = (detail.properties || []).map(item => ({ ...item, render_hints: { ...(item.render_hints || {}) } }))
     if (detail.source_binding) {
@@ -254,6 +257,7 @@ const saveObject = async () => {
     const res = await upsertAdminOntologyObjectType(formName.value.trim(), {
       display_name: formDisplayName.value.trim(),
       description: formDescription.value.trim(),
+      write_mode: formWriteMode.value,
       ontology_id: formOntologyId.value,
       properties: propertyRows.value.map(row => ({
         property_name: row.property_name.trim(),
@@ -340,6 +344,11 @@ const saveObject = async () => {
         <div>
           <div class="mb-1 text-xs text-slate-500">描述</div>
           <el-input v-model="formDescription" size="small" maxlength="1024" placeholder="对象类型业务含义（进入 agent 上下文）" />
+          <el-select v-model="formWriteMode" size="small" class="!w-44 shrink-0" :disabled="editing && loadedDetail?.status === 'certified'">
+            <el-option label="只读（默认）" value="read_only" />
+            <el-option label="可 Action 编辑（覆盖层）" value="action_writable" />
+            <el-option label="动作对象（无源，仅 Action 创建）" value="action_created" />
+          </el-select>
         </div>
       </div>
 

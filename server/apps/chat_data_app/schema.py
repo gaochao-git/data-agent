@@ -1448,12 +1448,32 @@ class OntologyActionTypeEditValue(BaseModel):
     value: Any | None = Field(default=None, description="kind=static 时的静态值")
 
 
-class OntologyActionTypeEditItem(BaseModel):
-    """Action Type 编辑项（当前只支持 set_property）"""
+class OntologyActionTypeSetPropertyEdit(BaseModel):
+    """set_property 编辑项：改目标对象属性（要求 write_mode=action_writable）"""
 
     operation: Literal["set_property"] = Field(default="set_property", description="编辑操作")
     property: str = Field(..., min_length=1, max_length=128, description="目标对象属性API名")
     value: OntologyActionTypeEditValue = Field(..., description="新值来源")
+
+
+class OntologyActionTypeCreateObjectPropertyItem(BaseModel):
+    """create_object 属性值项：标识属性必填（服务端校验）"""
+
+    property: str = Field(..., min_length=1, max_length=128, description="动作对象属性API名")
+    value: OntologyActionTypeEditValue = Field(..., description="值来源")
+
+
+class OntologyActionTypeCreateObjectEdit(BaseModel):
+    """create_object 编辑项：创建动作对象（要求 write_mode=action_created，单独一条）"""
+
+    operation: Literal["create_object"] = Field(..., description="编辑操作")
+    properties: list[OntologyActionTypeCreateObjectPropertyItem] = Field(
+        ..., min_length=1, description="动作对象属性值集"
+    )
+
+
+OntologyActionTypeEditItem = OntologyActionTypeSetPropertyEdit | OntologyActionTypeCreateObjectEdit
+"""编辑项联合类型：set_property（属性覆盖）或 create_object（创建动作对象），不可混合。"""
 
 
 class OntologyActionTypeUpsertRequest(BaseModel):
@@ -1475,9 +1495,13 @@ class OntologyActionTypeTestRunRequest(BaseModel):
 
 
 class OntologyActionTypeExecuteRequest(BaseModel):
-    """Action Type 执行请求（写对象属性覆盖层 + 执行审计；不直接改源库）"""
+    """Action Type 执行请求（写对象属性覆盖层/动作对象表 + 执行审计；不直接改源库）"""
 
-    object_key: str = Field(..., min_length=1, max_length=512, description="对象主键值")
+    object_key: str = Field(
+        default="",
+        max_length=512,
+        description="对象主键值（set_property 必填；create_object 留空，标识值来自参数）",
+    )
     parameters: dict[str, Any] = Field(default_factory=dict, description="Action 参数值")
 
 

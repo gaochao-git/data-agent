@@ -1285,6 +1285,8 @@ export interface OntologyObjectTypeItem {
   display_name: string
   description: string
   status: OntologyObjectTypeStatus
+  // 写性（对齐 Palantir Edits opt-in）：read_only=只读；action_writable=允许 Action 覆盖层编辑；action_created=动作对象（无源）
+  write_mode?: 'read_only' | 'action_writable' | 'action_created'
   // 所属本体（纯导航归属，不约束映射的组）
   ontology_id: number | null
   deprecation_reason: string
