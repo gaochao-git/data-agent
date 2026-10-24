@@ -300,6 +300,14 @@ const stopGraphDetailResize = () => {
   window.removeEventListener('mouseup', stopGraphDetailResize)
 }
 
+const resetGraphDetailWidth = () => {
+  graphDetailWidth.value = 320
+}
+
+const closeGraphDetail = () => {
+  showGraphProperties.value = false
+}
+
 onBeforeUnmount(stopGraphDetailResize)
 
 const onExploreNodeClick = (rawKey: string) => {
@@ -1176,6 +1184,7 @@ onMounted(() => void initialize())
                 <i :class="['fa-solid mr-1 text-[10px]', graphFullscreen ? 'fa-compress' : 'fa-expand']"></i>
                 {{ graphFullscreen ? '退出全屏' : '全屏' }}
               </el-button>
+              <el-button v-if="showGraphProperties" size="small" @click="resetGraphDetailWidth">重置分栏</el-button>
               <el-button size="small" :disabled="!detail" @click="seedExploreGraph">重置为当前对象</el-button>
               <el-button size="small" :disabled="Object.keys(exploreNodes).length === 0" @click="clearExploreGraph">清空</el-button>
             </div>
@@ -1286,15 +1295,23 @@ onMounted(() => void initialize())
             </div>
             <div
               v-if="detail && showGraphProperties"
-              class="group w-1.5 shrink-0 cursor-col-resize self-stretch rounded bg-slate-100 transition-colors hover:bg-blue-200"
-              title="左右拖动调整图与详情区域宽度"
+              class="group relative -mx-0.5 w-3 shrink-0 cursor-col-resize self-stretch select-none"
+              title="左右拖动调整图与详情区域宽度；双击恢复默认"
               @mousedown="startGraphDetailResize"
-            />
+              @dblclick="resetGraphDetailWidth"
+            >
+              <div class="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-slate-200 transition-colors group-hover:bg-blue-400" />
+              <div class="absolute left-1/2 top-1/2 flex h-10 w-1.5 -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center gap-0.5 rounded-full bg-slate-300 shadow-sm transition-colors group-hover:bg-blue-500">
+                <span class="h-0.5 w-0.5 rounded-full bg-white" />
+                <span class="h-0.5 w-0.5 rounded-full bg-white" />
+                <span class="h-0.5 w-0.5 rounded-full bg-white" />
+              </div>
+            </div>
             <aside
               v-if="detail && showGraphProperties"
               class="flex shrink-0 flex-col overflow-hidden rounded border border-slate-100 bg-slate-50/50 p-2"
               :class="graphFullscreen ? 'h-full' : 'h-[460px]'"
-              :style="{ width: `${graphDetailWidth}px` }"
+              :style="{ width: `${graphDetailWidth}px`, maxWidth: '62%' }"
             >
               <div class="mb-2 flex min-w-0 items-center gap-1.5">
                 <span class="shrink-0 text-[11px] font-medium text-slate-700">选中对象</span>
@@ -1308,6 +1325,14 @@ onMounted(() => void initialize())
                   <span class="block truncate">{{ detailTitle || detail.object_key }}</span>
                 </el-tag>
                 <span class="ml-auto min-w-0 truncate font-mono text-[10px] text-slate-400" :title="detail.object_key">{{ detail.object_key }}</span>
+                <button
+                  type="button"
+                  class="shrink-0 rounded px-1 text-[10px] text-slate-400 hover:bg-white hover:text-slate-600"
+                  title="收起详情"
+                  @click="closeGraphDetail"
+                >
+                  ×
+                </button>
               </div>
               <div class="min-h-0 flex-1">
                 <el-table
