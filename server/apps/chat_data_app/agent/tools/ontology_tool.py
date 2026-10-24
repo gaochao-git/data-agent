@@ -227,7 +227,11 @@ class _ExecuteActionPayload(BaseModel):
     action_type: str = Field(
         ..., min_length=1, max_length=128, description="Action Type API 名（来自 list_action_types）"
     )
-    object_key: str = Field(..., min_length=1, max_length=512, description="目标对象主键值")
+    object_key: str = Field(
+        default="",
+        max_length=512,
+        description="目标对象主键值；create_object 类 Action 留空（标识值来自 parameters）",
+    )
     parameters: dict[str, Any] = Field(
         default_factory=dict, description="Action 参数；按 list_action_types 的参数定义传"
     )

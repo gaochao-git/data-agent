@@ -344,11 +344,18 @@ const saveObject = async () => {
         <div>
           <div class="mb-1 text-xs text-slate-500">描述</div>
           <el-input v-model="formDescription" size="small" maxlength="1024" placeholder="对象类型业务含义（进入 agent 上下文）" />
-          <el-select v-model="formWriteMode" size="small" class="!w-44 shrink-0" :disabled="editing && loadedDetail?.status === 'certified'">
+        </div>
+        <div>
+          <div class="mb-1 text-xs text-slate-500">
+            写性
+            <span v-if="editing && loadedDetail?.write_mode && loadedDetail.write_mode !== formWriteMode" class="ml-1 text-amber-600">（变更：{{ loadedDetail.write_mode }} → {{ formWriteMode }}）</span>
+          </div>
+          <el-select v-model="formWriteMode" size="small" class="!w-full">
             <el-option label="只读（默认）" value="read_only" />
-            <el-option label="可 Action 编辑（覆盖层）" value="action_writable" />
+            <el-option label="可 Action 编辑（覆盖层，不改源库）" value="action_writable" />
             <el-option label="动作对象（无源，仅 Action 创建）" value="action_created" />
           </el-select>
+          <div v-if="formWriteMode === 'action_created'" class="mt-1 text-[11px] text-amber-600">动作对象不绑定 Dataset，行存业务库动作表，仅由 Action 创建</div>
         </div>
       </div>
 

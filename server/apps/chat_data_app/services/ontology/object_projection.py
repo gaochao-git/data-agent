@@ -1174,6 +1174,31 @@ async def _read_action_object(detail: dict[str, Any], object_key: str) -> dict[s
     }
 
 
+async def _search_action_objects(
+    detail: dict[str, Any], *, keyword: str = "", limit: int = 20, offset: int = 0
+) -> dict[str, Any]:
+    """动作对象列表：业务库动作对象表关键词查询（MVP 不做属性过滤/排序下推）。"""
+    objects, total = await OntologyActionObjectDao().list_objects_async(
+        int(detail.get("id") or 0), keyword=keyword, limit=limit, offset=offset
+    )
+    return {
+        "objects": [
+            {
+                "object_type": _text(detail.get("object_type_name")),
+                "object_key": _text(item.get("object_key")),
+                "properties": item.get("properties") or {},
+            }
+            for item in objects
+        ],
+        "has_more": offset + len(objects) < total,
+        "limit": max(1, min(int(limit), 100)),
+        "offset": int(offset),
+        "total": total,
+        "title_property": "",
+        "write_mode": "action_created",
+    }
+
+
 def _identifier_property_name_of(detail: dict[str, Any]) -> str:
     for prop in detail.get("properties") or []:
         if isinstance(prop, dict) and bool(prop.get("is_identifier")):
@@ -1591,6 +1616,8 @@ async def search_object_projection(
     detail = await ontology_service.get_object_type_async(object_type_name)
     if detail is None:
         raise ObjectProjectionError(f"本体对象类型不存在: {object_type_name}")
+    if (_text(detail.get("write_mode")) or "read_only") == "action_created":
+        return await _search_action_objects(detail, keyword=keyword, limit=limit, offset=offset)
     query_detail, config, targets, group_id = await _projection_context(
         detail,
         semantic_config_id=semantic_config_id,

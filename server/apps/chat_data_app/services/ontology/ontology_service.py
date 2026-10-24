@@ -88,6 +88,15 @@ def _preserve_ontology_id(
     return payload
 
 
+def _preserve_write_mode(
+    payload: dict[str, Any], existing: dict[str, Any] | None, existing_active: bool
+) -> dict[str, Any]:
+    """整体编辑未显式传 write_mode 时保留原写性，避免旧客户端保存静默重置为只读。"""
+    if existing_active and "write_mode" not in payload:
+        return {**payload, "write_mode": (existing or {}).get("write_mode") or "read_only"}
+    return payload
+
+
 class OntologyService:
     """本体/对象类型/属性/关系类型业务规则与治理门禁。"""
 
@@ -223,6 +232,17 @@ class OntologyService:
                 raise OntologyInvalidError(f"Dataset 列不存在: {column_name}")
         return {str(key): str(value) for key, value in column_mappings.items()}
 
+    async def _validate_write_mode_binding(self, existing: dict[str, Any] | None, meta_payload: dict[str, Any]) -> None:
+        """动作对象形态与 Dataset 绑定互斥：绑定了物理表的对象不能改为 action_created。"""
+        write_mode = _text(meta_payload.get("write_mode")) or "read_only"
+        if write_mode != "action_created" or existing is None:
+            return
+        binding = await self._dao.get_source_binding_async(int(existing.get("id") or 0))
+        if binding:
+            raise OntologyInvalidError(
+                "已绑定 Dataset 的对象类型不能改为动作对象（action_created 要求无源，请先移除 Dataset 绑定）"
+            )
+
     async def set_source_binding_async(
         self,
         object_type_name: str,
@@ -276,6 +296,7 @@ class OntologyService:
         existing = await self._dao.get_object_type_row_async(name, include_deleted=True)
         existing_active = existing is not None and int(existing.get("delete_flag") or 0) == 0
         payload = _preserve_ontology_id(payload, existing, existing_active)
+        payload = _preserve_write_mode(payload, existing, existing_active)
         meta_payload = validator.validate_object_type_payload(payload)
         # 本体存在性校验（本体不绑组，挂靠只做归属导航，无组锚点校验）
         await self._resolve_object_type_ontology(meta_payload.get("ontology_id"))
@@ -289,6 +310,7 @@ class OntologyService:
             if not allow_overwrite:
                 raise OntologyAlreadyExistsError(f"对象类型已存在: {name}，请更换对象类型名或编辑现有对象类型")
             allow_property_delete = await self._prepare_object_type_edit(existing, properties, payload)
+        await self._validate_write_mode_binding(existing if existing_active else None, meta_payload)
         await self._validate_enum_refs(properties)
         await self._validate_derivation_items(existing if existing_active else None, properties)
         await self._ensure_derived_not_physically_mapped(existing, existing_active, properties)
