@@ -75,6 +75,17 @@ MVP 限制：
 
 生产同步仍应改为批量 SQL 抽取边，见设计文档阶段 1。
 
+## 前端接入
+
+`ObjectInstanceExplorer` 的「图探索」：
+
+```text
+选中对象 -> POST /admin/meta/ontology/graph/traverse
+depth=2, direction=both, limit=30
+```
+
+图不可用/空结果时回退 `read_object_projection` 的一跳 links，页面不白屏。
+
 ## Agent 接入
 
 `ontology_tool` 增加：
