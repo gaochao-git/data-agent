@@ -9,7 +9,7 @@ importers:
   .:
     dependencies:
       '@antv/g6':
-        specifier: ^5.1.1
+        specifier: ^5.0.0
         version: 5.1.1
       '@codemirror/lang-sql':
         specifier: ^6.10.0

@@ -3,8 +3,9 @@
  * 对象类型 · 对象实例工作台。
  * 主从布局：左侧分页列表/搜索，右侧对象详情；关联对象在当前工作台下钻，不再弹窗跳转。
  */
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
+import ObjectGraphCanvas from './ObjectGraphCanvas.vue'
 import {
   getAdminOntologyObjectType,
   getAdminOntologyRelationTypes,
@@ -185,6 +186,12 @@ const detailPropertyRows = computed(() => {
   })
 })
 
+const selectedGraphTitle = computed(() => {
+  const key = exploreSelectedKey.value
+  if (!key) return ''
+  return exploreNodes.value[key]?.label || ''
+})
+
 const detailTitle = computed(() => {
   const data = detail.value
   if (!data) return ''
@@ -239,6 +246,11 @@ const graphAsOf = ref('')
 const graphDegradedReason = ref('')
 const graphLoading = ref(false)
 let graphLoadingCount = 0
+const graphDetailWidth = ref(320)
+const exploreSvg = ref<SVGSVGElement | null>(null)
+const graphCanvasRef = ref<InstanceType<typeof ObjectGraphCanvas> | null>(null)
+let graphDetailStartX = 0
+let graphDetailStartWidth = 0
 /** 图节点类型显示名（客户/订单/发货单...），避免图上只看到英文对象名。 */
 const objectTypeDisplayNames = ref<Record<string, string>>({})
 const objectTypeLabelPending = new Set<string>()
@@ -247,9 +259,13 @@ let exploreStartX = 0
 let exploreStartY = 0
 let exploreStartOffsetX = 0
 let exploreStartOffsetY = 0
+let exploreDragBaseX = 0
+let exploreDragBaseY = 0
+let exploreDragScaleX = 1
+let exploreDragScaleY = 1
 let exploreDragMoved = false
 
-const startExploreNodeDrag = (event: MouseEvent, node: { key: string; x: number; y: number }) => {
+const startExploreNodeDrag = (event: MouseEvent, node: { key: string; x: number; y: number; baseX?: number; baseY?: number }) => {
   event.preventDefault()
   event.stopPropagation()
   const offset = exploreNodeOffsets.value[node.key] || { x: 0, y: 0 }
@@ -259,6 +275,11 @@ const startExploreNodeDrag = (event: MouseEvent, node: { key: string; x: number;
   exploreStartY = event.clientY
   exploreStartOffsetX = offset.x
   exploreStartOffsetY = offset.y
+  exploreDragBaseX = node.baseX ?? node.x - offset.x
+  exploreDragBaseY = node.baseY ?? node.y - offset.y
+  const rect = exploreSvg.value?.getBoundingClientRect()
+  exploreDragScaleX = rect?.width ? exploreGraph.value.width / rect.width : 1
+  exploreDragScaleY = rect?.height ? exploreGraph.value.height / rect.height : 1
 }
 
 const onExploreNodeDrag = (event: MouseEvent) => {
@@ -266,11 +287,20 @@ const onExploreNodeDrag = (event: MouseEvent) => {
   if (Math.abs(event.clientX - exploreStartX) > 3 || Math.abs(event.clientY - exploreStartY) > 3) {
     exploreDragMoved = true
   }
+  const graph = exploreGraph.value
+  const nextX = Math.max(
+    100,
+    Math.min(graph.width - 100, exploreDragBaseX + (event.clientX - exploreStartX) * exploreDragScaleX)
+  )
+  const nextY = Math.max(
+    45,
+    Math.min(graph.height - 85, exploreDragBaseY + (event.clientY - exploreStartY) * exploreDragScaleY)
+  )
   exploreNodeOffsets.value = {
     ...exploreNodeOffsets.value,
     [draggingExploreKey.value]: {
-      x: exploreStartOffsetX + event.clientX - exploreStartX,
-      y: exploreStartOffsetY + event.clientY - exploreStartY
+      x: nextX - exploreDragBaseX,
+      y: nextY - exploreDragBaseY
     }
   }
 }
@@ -278,6 +308,58 @@ const onExploreNodeDrag = (event: MouseEvent) => {
 const endExploreNodeDrag = () => {
   draggingExploreKey.value = ''
 }
+
+const startGraphDetailResize = (event: MouseEvent) => {
+  event.preventDefault()
+  graphDetailStartX = event.clientX
+  graphDetailStartWidth = graphDetailWidth.value
+  window.addEventListener('mousemove', onGraphDetailResize)
+  window.addEventListener('mouseup', stopGraphDetailResize)
+}
+
+const onGraphDetailResize = (event: MouseEvent) => {
+  const next = graphDetailStartWidth + graphDetailStartX - event.clientX
+  graphDetailWidth.value = Math.max(240, Math.min(680, next))
+}
+
+const stopGraphDetailResize = () => {
+  window.removeEventListener('mousemove', onGraphDetailResize)
+  window.removeEventListener('mouseup', stopGraphDetailResize)
+}
+
+const resetGraphDetailWidth = () => {
+  graphDetailWidth.value = 320
+}
+
+const closeGraphDetail = () => {
+  showGraphProperties.value = false
+}
+
+const graphCanvasNodes = computed(() =>
+  Object.values(exploreNodes.value).map(node => ({
+    ...node,
+    typeLabel: objectTypeDisplayName(node.objectType)
+  }))
+)
+
+const graphCanvasEdges = computed(() => Object.values(exploreEdges.value))
+
+const toggleGraphFullscreen = async () => {
+  graphFullscreen.value = !graphFullscreen.value
+  await nextTick()
+  await graphCanvasRef.value?.resizeGraph()
+}
+
+const onGraphCanvasSelect = (key: string) => {
+  seedAfterLoad.value = false
+  exploreSelectedKey.value = key
+}
+
+const resetExploreLayout = () => {
+  graphCanvasRef.value?.resetLayout()
+}
+
+onBeforeUnmount(stopGraphDetailResize)
 
 const onExploreNodeClick = (rawKey: string) => {
   // 拖动结束后浏览器仍可能补发 click；拖动过的节点只移动，不切换选中/加载。
@@ -582,7 +664,9 @@ const exploreGraph = computed(() => {
   const graphNodes = nodes.map(node => {
     const point = positions.get(node.key)!
     const offset = exploreNodeOffsets.value[node.key] || { x: 0, y: 0 }
-    return { ...node, x: point.x + offset.x, y: point.y + offset.y }
+    const x = Math.max(100, Math.min(width - 100, point.x + offset.x))
+    const y = Math.max(45, Math.min(height - 85, point.y + offset.y))
+    return { ...node, x, y, baseX: point.x, baseY: point.y }
   })
   const byKey = new Map(graphNodes.map(node => [node.key, node]))
   const edges = Object.values(exploreEdges.value)
@@ -1110,9 +1194,6 @@ onMounted(() => void initialize())
           v-else
           class="rounded border border-slate-200 bg-white p-2"
           :class="graphFullscreen ? 'fixed inset-0 z-[var(--z-fullscreen-layer)] flex flex-col bg-white p-4' : ''"
-          @mousemove="onExploreNodeDrag"
-          @mouseup="endExploreNodeDrag"
-          @mouseleave="endExploreNodeDrag"
         >
           <el-alert
             v-if="graphFallbackNotice"
@@ -1149,137 +1230,98 @@ onMounted(() => void initialize())
             </span>
             <span v-if="exploreSelectedKey" class="font-mono text-[11px] text-slate-500">{{ exploreSelectedKey }}</span>
             <div class="ml-auto flex items-center gap-1">
-              <el-button size="small" @click="graphFullscreen = !graphFullscreen">
+              <el-button size="small" @click="toggleGraphFullscreen">
                 <i :class="['fa-solid mr-1 text-[10px]', graphFullscreen ? 'fa-compress' : 'fa-expand']"></i>
                 {{ graphFullscreen ? '退出全屏' : '全屏' }}
               </el-button>
+              <el-button v-if="showGraphProperties" size="small" @click="resetGraphDetailWidth">重置分栏</el-button>
+              <el-button size="small" :disabled="Object.keys(exploreNodes).length === 0" @click="resetExploreLayout">重置布局</el-button>
+              <el-button v-if="exploreSelectedKey" size="small" @click="viewNodeDetail(exploreSelectedKey)">查看详情</el-button>
+              <el-button v-if="exploreSelectedKey" size="small" @click="expandNodeOneHop(exploreSelectedKey)">展开一跳</el-button>
               <el-button size="small" :disabled="!detail" @click="seedExploreGraph">重置为当前对象</el-button>
               <el-button size="small" :disabled="Object.keys(exploreNodes).length === 0" @click="clearExploreGraph">清空</el-button>
             </div>
           </div>
           <div class="flex min-h-0 gap-2" :class="graphFullscreen ? 'flex-1' : ''">
-            <div class="min-w-0 flex-1">
+            <div class="flex min-h-0 min-w-0 flex-1 flex-col">
               <div
                 v-if="Object.keys(exploreNodes).length === 0"
                 :class="graphFullscreen ? 'flex h-full min-h-[340px] items-center justify-center text-xs text-slate-400' : 'flex h-[420px] items-center justify-center text-xs text-slate-400'"
               >
                 {{ detail ? '当前对象暂无关联关系，或图同步尚未覆盖' : '从左侧选择一个对象，或点击「重置为当前对象」开始' }}
               </div>
-              <svg
+              <ObjectGraphCanvas
                 v-else
-                :viewBox="`0 0 ${exploreGraph.width} ${exploreGraph.height}`"
-                :class="graphFullscreen ? 'h-full w-full' : 'h-[420px] w-full'"
-                role="img"
-                aria-label="对象实例探索图"
-              >
-                <g v-for="edge in exploreGraph.edges" :key="edge.key">
-                  <title>{{ edge.relationName }}</title>
-                  <line :x1="edge.x1" :y1="edge.y1" :x2="edge.x2" :y2="edge.y2" stroke="#cbd5e1" stroke-width="1.2" />
-                </g>
-                <g
-                  v-for="node in orderedGraphNodes"
-                  :key="node.key"
-                  class="cursor-move"
-                  @mousedown="startExploreNodeDrag($event, node)"
-                  @click="onExploreNodeClick(node.key)"
-                >
-                  <title>{{ node.key }}</title>
-                  <rect
-                    :x="node.x - 84"
-                    :y="node.y - 20"
-                    width="168"
-                    height="40"
-                    rx="5"
-                    :fill="node.key === exploreSelectedKey ? '#eff6ff' : '#ffffff'"
-                    :stroke="node.key === exploreSelectedKey ? '#3b82f6' : '#dbeafe'"
-                    :stroke-width="node.key === exploreSelectedKey ? 2 : 1.2"
-                  />
-                  <text
-                    :x="node.x"
-                    :y="node.y - 5"
-                    text-anchor="middle"
-                    class="fill-slate-400"
-                    style="font-size: 8px; font-weight: 500"
-                  >
-                    {{ objectTypeDisplayName(node.objectType) }}
-                  </text>
-                  <text
-                    :x="node.x"
-                    :y="node.y + 9"
-                    text-anchor="middle"
-                    :class="node.key === exploreSelectedKey ? 'fill-blue-700' : 'fill-slate-700'"
-                    style="font-size: 10px; font-weight: 500"
-                  >
-                    {{ node.label.length > 18 ? `${node.label.slice(0, 17)}…` : node.label }}
-                  </text>
-                  <foreignObject
-                    v-if="node.key === exploreSelectedKey"
-                    :x="node.x - 100"
-                    :y="node.y + 24"
-                    width="200"
-                    height="28"
-                  >
-                    <div xmlns="http://www.w3.org/1999/xhtml" class="flex items-center justify-center gap-1">
-                      <button
-                        type="button"
-                        class="rounded border border-slate-200 bg-white px-2 py-0.5 text-[10px] text-slate-600 hover:border-blue-300 hover:text-blue-600"
-                        @mousedown.stop.prevent
-                        @click.stop="viewNodeDetail(node.key)"
-                      >
-                        查看详情
-                      </button>
-                      <button
-                        type="button"
-                        class="rounded border border-slate-200 bg-white px-2 py-0.5 text-[10px] text-slate-600 hover:border-blue-300 hover:text-blue-600"
-                        @mousedown.stop.prevent
-                        @click.stop="expandNodeOneHop(node.key)"
-                      >
-                        展开一跳
-                      </button>
-                    </div>
-                  </foreignObject>
-                  <g v-if="exploreLoadingKey === node.key">
-                    <circle
-                      :cx="node.x - 64"
-                      :cy="node.y"
-                      r="6"
-                      fill="none"
-                      stroke="#3b82f6"
-                      stroke-width="2"
-                      stroke-dasharray="24 12"
-                    >
-                      <animateTransform
-                        attributeName="transform"
-                        type="rotate"
-                        :from="`0 ${node.x - 64} ${node.y}`"
-                        :to="`360 ${node.x - 64} ${node.y}`"
-                        dur="0.8s"
-                        repeatCount="indefinite"
-                      />
-                    </circle>
-                  </g>
-                </g>
-              </svg>
+                ref="graphCanvasRef"
+                :nodes="graphCanvasNodes"
+                :edges="graphCanvasEdges"
+                :selected-key="exploreSelectedKey"
+                :class="graphFullscreen ? 'h-full' : 'h-[460px]'"
+                @select="onGraphCanvasSelect"
+              />
+            </div>
+            <div
+              v-if="detail && showGraphProperties"
+              class="group relative -mx-0.5 w-3 shrink-0 cursor-col-resize self-stretch select-none"
+              title="左右拖动调整图与详情区域宽度；双击恢复默认"
+              @mousedown="startGraphDetailResize"
+              @dblclick="resetGraphDetailWidth"
+            >
+              <div class="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-slate-200 transition-colors group-hover:bg-blue-400" />
+              <div class="absolute left-1/2 top-1/2 flex h-10 w-1.5 -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center gap-0.5 rounded-full bg-slate-300 shadow-sm transition-colors group-hover:bg-blue-500">
+                <span class="h-0.5 w-0.5 rounded-full bg-white" />
+                <span class="h-0.5 w-0.5 rounded-full bg-white" />
+                <span class="h-0.5 w-0.5 rounded-full bg-white" />
+              </div>
             </div>
             <aside
               v-if="detail && showGraphProperties"
-              class="w-[250px] shrink-0 overflow-y-auto rounded border border-slate-100 bg-slate-50/50 p-2"
-              :class="graphFullscreen ? 'h-full' : 'max-h-[420px]'"
+              class="flex shrink-0 flex-col overflow-hidden rounded border border-slate-100 bg-slate-50/50 p-2"
+              :class="graphFullscreen ? 'h-full' : 'h-[460px]'"
+              :style="{ width: `${graphDetailWidth}px`, maxWidth: '62%' }"
             >
-              <div class="mb-1 flex items-center gap-1">
-                <span class="text-[11px] font-medium text-slate-700">选中对象</span>
-                <span class="ml-auto font-mono text-[10px] text-slate-400">{{ detail.object_key }}</span>
+              <div class="mb-2 flex min-w-0 items-center gap-1.5">
+                <span class="shrink-0 text-[11px] font-medium text-slate-700">选中对象</span>
+                <el-tag
+                  size="small"
+                  type="primary"
+                  effect="light"
+                  class="min-w-0 max-w-[45%]"
+                  :title="detailTitle || selectedGraphTitle || detail.object_key"
+                >
+                  <span class="block truncate">{{ detailTitle || selectedGraphTitle || detail.object_key }}</span>
+                </el-tag>
+                <span class="ml-auto min-w-0 truncate font-mono text-[10px] text-slate-400" :title="detail.object_key">{{ detail.object_key }}</span>
+                <button
+                  type="button"
+                  class="shrink-0 rounded px-1 text-[10px] text-slate-400 hover:bg-white hover:text-slate-600"
+                  title="收起详情"
+                  @click="closeGraphDetail"
+                >
+                  ×
+                </button>
               </div>
-              <div v-if="detailTitle" class="mb-2 text-xs font-medium text-slate-700">{{ detailTitle }}</div>
-              <div class="mb-1 text-[10px] text-slate-400">属性</div>
-              <div v-for="row in detailPropertyRows" :key="row.name" class="border-b border-slate-100 py-1">
-                <div class="flex items-center gap-1">
-                  <span class="font-mono text-[10px] text-slate-600">{{ row.name }}</span>
-                  <span v-if="row.label" class="text-[10px] text-slate-400">{{ row.label }}</span>
-                </div>
-                <div class="break-all text-[11px] text-slate-700">{{ previewValueText(row.value) }}</div>
+              <div class="min-h-0 flex-1">
+                <el-table
+                  :data="detailPropertyRows"
+                  size="small"
+                  border
+                  height="100%"
+                  empty-text="暂无属性"
+                >
+                  <el-table-column label="属性" min-width="110" show-overflow-tooltip>
+                    <template #default="{ row }">
+                      <span class="font-mono text-[10px] text-slate-600">{{ row.name }}</span>
+                      <span v-if="row.label" class="ml-1 text-[10px] text-slate-400">{{ row.label }}</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="值" min-width="130">
+                    <template #default="{ row }">
+                      <span class="break-all text-[11px] text-slate-700">{{ previewValueText(row.value) }}</span>
+                    </template>
+                  </el-table-column>
+                </el-table>
               </div>
-              <div v-if="detailPropertyRows.length === 0" class="text-[11px] text-slate-400">暂无属性</div>
             </aside>
           </div>
           <div class="mt-1 text-[10px] text-slate-400">
