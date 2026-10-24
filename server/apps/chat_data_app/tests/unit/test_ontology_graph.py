@@ -358,7 +358,7 @@ def test_traverse_marks_result_truncated_at_limit(monkeypatch):
     result = service.GraphQueryService(executor=executor).traverse_objects(
         "M:order:1", depth=1, direction="both", limit=2, member_ids=["M"]
     )
-    assert "limit=2" in result.degraded_reason
+    assert "前 2 条路径" in result.degraded_reason
 
 
 @pytest.mark.asyncio

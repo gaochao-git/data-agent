@@ -262,7 +262,9 @@ class GraphQueryService:
         )
         result = parse_path_rows(self._execute(query))
         if len(result.paths) >= limit:
-            result.degraded_reason = f"结果达到 limit={limit}，可能未展示全部关系；请缩小范围或从具体节点继续展开"
+            result.degraded_reason = (
+                f"当前节点关系较多，仅展示前 {limit} 条路径；请点击更具体的节点继续，或按需使用「展开一跳」"
+            )
         return result
 
     def find_paths(

@@ -248,6 +248,7 @@ let exploreStartY = 0
 let exploreStartOffsetX = 0
 let exploreStartOffsetY = 0
 
+const hoveredGraphNodeKey = ref('')
 const startExploreNodeDrag = (event: MouseEvent, node: { key: string; x: number; y: number }) => {
   event.preventDefault()
   event.stopPropagation()
@@ -402,7 +403,7 @@ const expandCurrentLinks = async () => {
   const currentKey = exploreSelectedKey.value || detail.value?.object_key || ''
   const nodeCount = Object.keys(exploreNodes.value).length
   const edgeCount = Object.keys(exploreEdges.value).length
-  const graphLoaded = await loadTraverseIntoExplore(currentKey, 2)
+  const graphLoaded = await loadTraverseIntoExplore(currentKey, 1)
   if (!graphLoaded) mergeCurrentLinksIntoExplore()
   const added = Object.keys(exploreNodes.value).length - nodeCount + Object.keys(exploreEdges.value).length - edgeCount
   if (added <= 0) {
@@ -453,7 +454,7 @@ const exploreGraph = computed(() => {
   const nodes = Object.values(exploreNodes.value)
   if (nodes.length === 0) return { nodes: [], edges: [], width: 760, height: 460 }
   const width = Math.max(760, Math.min(1300, 520 + nodes.length * 58))
-  const height = Math.max(460, Math.min(820, 300 + nodes.length * 34))
+  const height = Math.max(500, Math.min(860, 340 + nodes.length * 34))
   const centerX = width / 2
   const centerY = height / 2
   const positions = new Map<string, { x: number; y: number }>()
@@ -550,8 +551,8 @@ const exploreGraph = computed(() => {
           }
           first.x = Math.max(100, Math.min(width - 100, first.x))
           second.x = Math.max(100, Math.min(width - 100, second.x))
-          first.y = Math.max(45, Math.min(height - 45, first.y))
-          second.y = Math.max(45, Math.min(height - 45, second.y))
+          first.y = Math.max(45, Math.min(height - 85, first.y))
+          second.y = Math.max(45, Math.min(height - 85, second.y))
         }
       }
     }
@@ -585,16 +586,29 @@ const exploreGraph = computed(() => {
   return { nodes: graphNodes, edges, width, height }
 })
 
+const viewNodeDetail = async (rawKey: string) => {
+  if (!detail.value || detail.value.object_key !== rawKey) {
+    await openExploreNode(rawKey)
+  }
+  showGraphProperties.value = true
+}
+
+const expandNodeOneHop = async (rawKey: string) => {
+  if (!detail.value || detail.value.object_key !== rawKey) {
+    await openExploreNode(rawKey)
+  }
+  await expandCurrentLinks()
+}
+
 const openExploreNode = async (rawKey: string) => {
   const requestId = ++exploreRequestId
+  seedAfterLoad.value = false
   exploreSelectedKey.value = rawKey
   exploreLoadingKey.value = rawKey
   try {
+    // 点击节点只负责“选中 + 加载详情”，不自动扩图；扩图必须点「展开一跳」。
     await loadDetail(rawKey, exploreNodes.value[rawKey]?.objectType || props.objectType)
-    // 快速连点多个节点时，只允许最后一次请求补图。
     if (requestId !== exploreRequestId || detailMode.value !== 'graph') return
-    mergeCurrentLinksIntoExplore()
-    void loadTraverseIntoExplore(rawKey, 2)
   } finally {
     if (requestId === exploreRequestId) exploreLoadingKey.value = ''
   }
@@ -1117,11 +1131,6 @@ onMounted(() => void initialize())
                 <i :class="['fa-solid mr-1 text-[10px]', graphFullscreen ? 'fa-compress' : 'fa-expand']"></i>
                 {{ graphFullscreen ? '退出全屏' : '全屏' }}
               </el-button>
-              <el-button size="small" @click="showGraphProperties = !showGraphProperties">
-                <i class="fa-solid fa-table-columns mr-1 text-[10px]"></i>
-                {{ showGraphProperties ? '隐藏属性' : '显示属性' }}
-              </el-button>
-              <el-button size="small" :disabled="!detail" @click="expandCurrentLinks">展开关联</el-button>
               <el-button size="small" :disabled="!detail" @click="seedExploreGraph">重置为当前对象</el-button>
               <el-button size="small" :disabled="Object.keys(exploreNodes).length === 0" @click="clearExploreGraph">清空</el-button>
             </div>
@@ -1149,6 +1158,8 @@ onMounted(() => void initialize())
                   v-for="node in exploreGraph.nodes"
                   :key="node.key"
                   class="cursor-move"
+                  @mouseenter="hoveredGraphNodeKey = node.key"
+                  @mouseleave="hoveredGraphNodeKey = ''"
                   @mousedown="startExploreNodeDrag($event, node)"
                   @click="openExploreNode(node.key)"
                 >
@@ -1181,6 +1192,32 @@ onMounted(() => void initialize())
                   >
                     {{ node.label.length > 18 ? `${node.label.slice(0, 17)}…` : node.label }}
                   </text>
+                  <foreignObject
+                    v-if="node.key === exploreSelectedKey || node.key === hoveredGraphNodeKey"
+                    :x="node.x - 100"
+                    :y="node.y + 24"
+                    width="200"
+                    height="28"
+                  >
+                    <div xmlns="http://www.w3.org/1999/xhtml" class="flex items-center justify-center gap-1">
+                      <button
+                        type="button"
+                        class="rounded border border-slate-200 bg-white px-2 py-0.5 text-[10px] text-slate-600 hover:border-blue-300 hover:text-blue-600"
+                        @mousedown.stop.prevent
+                        @click.stop="viewNodeDetail(node.key)"
+                      >
+                        查看详情
+                      </button>
+                      <button
+                        type="button"
+                        class="rounded border border-slate-200 bg-white px-2 py-0.5 text-[10px] text-slate-600 hover:border-blue-300 hover:text-blue-600"
+                        @mousedown.stop.prevent
+                        @click.stop="expandNodeOneHop(node.key)"
+                      >
+                        展开一跳
+                      </button>
+                    </div>
+                  </foreignObject>
                   <g v-if="exploreLoadingKey === node.key">
                     <circle
                       :cx="node.x - 64"
@@ -1226,7 +1263,7 @@ onMounted(() => void initialize())
             </aside>
           </div>
           <div class="mt-1 text-[10px] text-slate-400">
-            点击节点切换选中；点击「展开关联」把当前节点的直接关联加入图，继续沿图探索。
+            点击节点只选中并加载详情；在节点下方选择「查看详情」或「展开一跳」，不会自动扩图。
           </div>
         </div>
       </template>
