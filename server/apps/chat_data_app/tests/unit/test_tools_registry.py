@@ -185,6 +185,7 @@ def test_required_skills_target_builtin_skills_only():
     assert TOOL_REQUIRED_SKILLS == {
         "officecli_run": (OFFICE_SKILL,),
         "data_analyzing_tool": (DATA_ANALYZING_SKILL,),
+        "ontology_tool": (DATA_ANALYZING_SKILL,),
     }
     known = {DATA_ANALYZING_SKILL, OFFICE_SKILL, SKILL_CREATOR_SKILL}
     for tool_name, skills in TOOL_REQUIRED_SKILLS.items():

@@ -156,6 +156,9 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
             else []
         ),
         note="本体对象/关系/Action 查询与导航：列对象类型/定位数据源绑定/关系探索/对象查询/Action（本体模式专用）",
+        # 本体查询流程、对象契约、图/一跳边界都在 data-analyzing 技能正文里；
+        # 未加载就调用容易凭记忆拼关系或误用图查询。
+        required_skills=(DATA_ANALYZING_SKILL,),
     ),
     ToolSpec(
         provides=("calculator_tool",),
