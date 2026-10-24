@@ -23,7 +23,12 @@ class QuerySource(str, Enum):
 
 @dataclass(frozen=True)
 class QuerySpec:
-    """一次查询的完整、可序列化描述（用于回放/审计/迁移）。"""
+    """一次查询的完整、可序列化描述（用于回放/审计/迁移）。
+
+    ``limit/timeout/max_rows/query_task_id/execution_id/statement_index/skip_query_cache``
+    由 ``execute_member_*`` 路径消费；``execute_agent_async`` 走 runtime 的
+    agent 任务配置（limit/timeout 由运行时设置决定），当前不读取这些字段。
+    """
 
     source: QuerySource | str
     datasource_group_id: str = ""
@@ -79,6 +84,10 @@ class QueryResult:
         payload = build_query_result_payload(sql=self.sql, member_results=self.members, fallback_error=self.error)
         if self.query_mode:
             payload["query_mode"] = self.query_mode
+        if self.lineage:
+            payload["lineage"] = self.lineage
+        if self.warnings:
+            payload["warnings"] = self.warnings
         return payload
 
 
