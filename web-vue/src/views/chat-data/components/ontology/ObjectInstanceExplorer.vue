@@ -246,6 +246,7 @@ const graphDegradedReason = ref('')
 const graphLoading = ref(false)
 let graphLoadingCount = 0
 const graphDetailWidth = ref(320)
+const exploreSvg = ref<SVGSVGElement | null>(null)
 let graphDetailStartX = 0
 let graphDetailStartWidth = 0
 /** 图节点类型显示名（客户/订单/发货单...），避免图上只看到英文对象名。 */
@@ -256,9 +257,13 @@ let exploreStartX = 0
 let exploreStartY = 0
 let exploreStartOffsetX = 0
 let exploreStartOffsetY = 0
+let exploreDragBaseX = 0
+let exploreDragBaseY = 0
+let exploreDragScaleX = 1
+let exploreDragScaleY = 1
 let exploreDragMoved = false
 
-const startExploreNodeDrag = (event: MouseEvent, node: { key: string; x: number; y: number }) => {
+const startExploreNodeDrag = (event: MouseEvent, node: { key: string; x: number; y: number; baseX?: number; baseY?: number }) => {
   event.preventDefault()
   event.stopPropagation()
   const offset = exploreNodeOffsets.value[node.key] || { x: 0, y: 0 }
@@ -268,6 +273,11 @@ const startExploreNodeDrag = (event: MouseEvent, node: { key: string; x: number;
   exploreStartY = event.clientY
   exploreStartOffsetX = offset.x
   exploreStartOffsetY = offset.y
+  exploreDragBaseX = node.baseX ?? node.x - offset.x
+  exploreDragBaseY = node.baseY ?? node.y - offset.y
+  const rect = exploreSvg.value?.getBoundingClientRect()
+  exploreDragScaleX = rect?.width ? exploreGraph.value.width / rect.width : 1
+  exploreDragScaleY = rect?.height ? exploreGraph.value.height / rect.height : 1
 }
 
 const onExploreNodeDrag = (event: MouseEvent) => {
@@ -275,11 +285,20 @@ const onExploreNodeDrag = (event: MouseEvent) => {
   if (Math.abs(event.clientX - exploreStartX) > 3 || Math.abs(event.clientY - exploreStartY) > 3) {
     exploreDragMoved = true
   }
+  const graph = exploreGraph.value
+  const nextX = Math.max(
+    100,
+    Math.min(graph.width - 100, exploreDragBaseX + (event.clientX - exploreStartX) * exploreDragScaleX)
+  )
+  const nextY = Math.max(
+    45,
+    Math.min(graph.height - 85, exploreDragBaseY + (event.clientY - exploreStartY) * exploreDragScaleY)
+  )
   exploreNodeOffsets.value = {
     ...exploreNodeOffsets.value,
     [draggingExploreKey.value]: {
-      x: exploreStartOffsetX + event.clientX - exploreStartX,
-      y: exploreStartOffsetY + event.clientY - exploreStartY
+      x: nextX - exploreDragBaseX,
+      y: nextY - exploreDragBaseY
     }
   }
 }
@@ -312,6 +331,10 @@ const resetGraphDetailWidth = () => {
 
 const closeGraphDetail = () => {
   showGraphProperties.value = false
+}
+
+const resetExploreLayout = () => {
+  exploreNodeOffsets.value = {}
 }
 
 onBeforeUnmount(stopGraphDetailResize)
@@ -619,7 +642,9 @@ const exploreGraph = computed(() => {
   const graphNodes = nodes.map(node => {
     const point = positions.get(node.key)!
     const offset = exploreNodeOffsets.value[node.key] || { x: 0, y: 0 }
-    return { ...node, x: point.x + offset.x, y: point.y + offset.y }
+    const x = Math.max(100, Math.min(width - 100, point.x + offset.x))
+    const y = Math.max(45, Math.min(height - 85, point.y + offset.y))
+    return { ...node, x, y, baseX: point.x, baseY: point.y }
   })
   const byKey = new Map(graphNodes.map(node => [node.key, node]))
   const edges = Object.values(exploreEdges.value)
@@ -1191,6 +1216,7 @@ onMounted(() => void initialize())
                 {{ graphFullscreen ? '退出全屏' : '全屏' }}
               </el-button>
               <el-button v-if="showGraphProperties" size="small" @click="resetGraphDetailWidth">重置分栏</el-button>
+              <el-button size="small" :disabled="Object.keys(exploreNodes).length === 0" @click="resetExploreLayout">重置布局</el-button>
               <el-button size="small" :disabled="!detail" @click="seedExploreGraph">重置为当前对象</el-button>
               <el-button size="small" :disabled="Object.keys(exploreNodes).length === 0" @click="clearExploreGraph">清空</el-button>
             </div>
@@ -1205,6 +1231,7 @@ onMounted(() => void initialize())
               </div>
               <svg
                 v-else
+                ref="exploreSvg"
                 :viewBox="`0 0 ${exploreGraph.width} ${exploreGraph.height}`"
                 :class="graphFullscreen ? 'h-full w-full' : 'h-[420px] w-full'"
                 role="img"
