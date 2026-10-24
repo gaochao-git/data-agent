@@ -190,3 +190,12 @@ status: delivered 4615 / shipped 117
 - **列表派生性能**：列表派生值改为一次 SQL `LEFT JOIN` 批量计算；count 查询不再携带仅用于 select 的派生 JOIN；
   sales_order 4 个派生属性服务层约 5.1s（原 38-42s）。
 - **派生聚合指标**：`aggregate_objects` 支持派生属性作为聚合指标（如 `sum(order_amount)`）。
+
+## 11. 官方对齐复审（2026-10-24）
+
+复审意见中大部分成立，已落到 README「与官方 Ontology 的概念差异」。
+
+其中一条需要纠正：
+
+- **「一源一对象类型」不是错误归因**：官方 `create-object-type.md` 明确写 “A single datasource can only be used to back one object type.”；官方另支持一个对象类型挂多个 datasource（MDO/OSv2），二者不矛盾。我们的约束与官方一致，但只覆盖单 datasource MVP；注释与报错文案已改成同时说明 MDO 缺口。
+- 已补文档边界：MDO、Interfaces/Shared Properties/Structs/Object Set/Time Series、数值类型七档、搜索算子、派生类型映射（Long/Double vs Integer/Decimal）、派生排序护栏、状态生命周期与 promoted、deprecated 元数据、Action 冲突解决策略。

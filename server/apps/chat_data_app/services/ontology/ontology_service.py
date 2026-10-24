@@ -184,7 +184,8 @@ class OntologyService:
         dataset_id: int,
         object_type_id: int,
     ) -> None:
-        """一源一对象类型校验（对齐 Palantir：一个 datasource 只能支撑一个对象类型）。"""
+        """一源一对象类型校验：官方同样要求单个 backing datasource 只能支撑一个对象类型；
+        官方另支持一个对象类型挂多个 datasource（MDO/OSv2），我们当前只做单 datasource MVP。"""
         conflicts = await self._dao.list_source_binding_conflicts_async(
             dataset_id, exclude_object_type_id=object_type_id
         )
@@ -193,7 +194,8 @@ class OntologyService:
         owners = "、".join(item["object_type_name"] for item in conflicts if item.get("object_type_name"))
         raise OntologyInvalidError(
             f"Dataset {dataset.get('dataset_name') or dataset_id} 已被对象类型 {owners} 绑定；"
-            "一张 Dataset 只能支撑一个对象类型（对齐 Palantir 一源一对象类型）"
+            "一张 Dataset 只能支撑一个对象类型（官方同样要求单个 backing datasource 只归属一个对象类型；"
+            "一个对象类型挂多 datasource 的 MDO 我们暂未实现）"
         )
 
     @staticmethod

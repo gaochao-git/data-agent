@@ -23,9 +23,9 @@
 - 对象身份 = `member_datasource_id:object_type:local_key`（不同 member 同主键不是同一对象）；
 - certified 前置：至少一个标识属性，且 source binding 的 `column_mappings` 必须覆盖全部
   标识属性（保证认证对象类型可唯一定位实体）；列名必须存在于 Dataset schema。
-- **一源一对象类型**：同一 Dataset 只能被一个活跃对象类型绑定（对齐 Palantir
-  「A single datasource can only be used to back one object type」）；`set_source_binding`
-  先查占用给友好报错，避免同一张表被解释成两种对象、对象身份语义发散。
+- **一源一对象类型**：同一 Dataset 只能被一个活跃对象类型绑定（官方同样要求
+  「A single datasource can only be used to back one object type」）；但官方允许一个对象类型
+  挂多个 datasource（multi-datasource object type / MDO，OSv2），我们当前只做单 datasource MVP。`set_source_binding` 先查占用给友好报错，避免同一张表被解释成两种对象、对象身份语义发散。
 - 本体层只引用 Dataset 逻辑列，不重复定义物理列；语义层与本体层共用 Dataset，但二者之间
   不互相依赖。
 
@@ -172,3 +172,16 @@ DDL 见 `next_version.md`「本体 Action Type 定义表」。
 - API：`OntologyObjectSearchRequest.where`；工具：`find_objects` / `aggregate_objects.where`；
 - 编译：`object_projection._where_condition`，派生属性会编译成 LEFT JOIN 表达式；
 - 注入防护：属性/列白名单、值 `escape_string`，不做任意 SQL 拼接。
+
+## 与官方 Ontology 的概念差异（2026-10-24 审计）
+
+以下是官方有、当前实现未覆盖或做了简化的能力，属于已知边界，不是 bug：
+
+- **多数据源对象类型（MDO）**：官方一个对象类型可挂多个 backing datasource（OSv2）；我们只有单 Dataset source binding。注意：官方仍要求单个 datasource 只能支撑一个对象类型，我们的「一源一对象类型」约束与其一致。
+- **概念级构件**：Interfaces、Shared Properties、Structs、Object Set、Time Series Properties 未实现；树中「共享属性/接口/函数」为占位。
+- **数值类型**：官方 byte/short/int/long/float/double/decimal 七档；我们只有 Integer/Decimal，缺 Long 与 Float/Double。
+- **搜索过滤**：官方支持 prefix/phrase/full-text/geographic/relative date；我们是 keyword LIKE + 比较/isNull/in + and/or/not。
+- **派生属性类型映射**：官方 count/count_distinct → Long、avg → Double；我们收窄为 Integer/Decimal（六类型集内合理，但超大整数有 JS Number 精度风险）。
+- **派生属性排序护栏**：官方 Workshop 对派生排序限制 200 行；我们的对象查询 limit 上限 100，天然低于该值，但聚合派生排序仍建议加显式上限。
+- **状态生命周期**：官方 active/experimental/deprecated/example + 对象类型 promoted；我们是 draft/experimental/certified/deprecated。官方 deprecated 需废弃原因/删除期限/替代资源，我们目前强制原因，期限与替代可选。
+- **Action 冲突解决**：官方支持用户编辑优先/最近时间戳优先两种数据源级策略，并区分 create/delete/link 编辑；我们只有 set_property 覆盖层，源行消失/源列被 Pipeline 重建时的行为未定义，开放更多写场景前必须先设计冲突策略。
