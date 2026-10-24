@@ -205,6 +205,8 @@ def test_resolve_semantic_mode_on_probe_error(monkeypatch):
     decision = asyncio.run(query_mode.resolve_query_mode_async("ds_a"))
     assert decision.is_semantic is True
     assert decision.reason == "probe_failed"
+    assert decision.is_degraded is True
+    assert "RuntimeError" in decision.degraded_reason
 
 
 def test_load_domain_bundle_filters_and_translates_bindings(monkeypatch):

@@ -2319,6 +2319,7 @@ export function upsertAdminOntologyObjectType(
   data: {
     display_name: string
     description?: string
+    write_mode?: 'read_only' | 'action_writable' | 'action_created'
     ontology_id?: number | null
     properties: OntologyPropertyItem[]
     allow_overwrite?: boolean

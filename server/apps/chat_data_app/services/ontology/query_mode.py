@@ -68,6 +68,13 @@ class QueryModeDecision:
     datasource_group_id: str | None = None
     active_object_type_count: int = 0
     reason: str = ""
+    # 探测异常降级时保留真实原因；正常判定为空。调用方/健康检查据此区分
+    # 「业务域没有本体」和「本体探测基础设施故障」，避免静默降级。
+    degraded_reason: str = ""
+
+    @property
+    def is_degraded(self) -> bool:
+        return bool(self.degraded_reason)
 
     @property
     def is_ontology(self) -> bool:
@@ -355,8 +362,20 @@ async def resolve_query_mode_async(datasource_group_id: str | None) -> QueryMode
     try:
         count = await _domain_has_active_object_type(group_id)
     except Exception as exc:  # noqa: BLE001 - 探测失败降级语义，记录真实原因
-        logger.warning("本体域模式探测失败，降级语义模式: datasource_group_id=%s error=%s", group_id, exc)
-        return QueryModeDecision(QueryMode.SEMANTIC, group_id, 0, "probe_failed")
+        detail = f"{type(exc).__name__}: {exc}"
+        logger.error(
+            "本体域模式探测失败，降级语义模式: datasource_group_id=%s error=%s",
+            group_id,
+            detail,
+            exc_info=True,
+        )
+        return QueryModeDecision(
+            QueryMode.SEMANTIC,
+            group_id,
+            0,
+            "probe_failed",
+            degraded_reason=detail[:500],
+        )
     return decide_query_mode(group_id, object_type_count=count, injection_enabled=True)
 
 

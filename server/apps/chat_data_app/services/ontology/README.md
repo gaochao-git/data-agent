@@ -112,6 +112,13 @@
 
 DDL 见 `next_version.md`「本体 Action Type 定义表」。
 
+## 代码边界（2026-10-24 治理）
+
+- `object_query_builder.py`：对象投影的纯 SQL 构造层（映射/过滤/排序/分页/聚合/关联键查询），不触库、不组装对象；
+- `object_projection.py`：投影服务层，负责数据源上下文、执行、关系/派生值组装与对外 API；
+- `object_errors.py`：投影错误类型，供构造层与服务层共用；
+- `query_mode.QueryModeDecision.degraded_reason`：探测异常时保留真实原因（`is_degraded`），禁止只返回 `probe_failed` 后静默降级。
+
 ## 对象实例只读投影（MVP，2026-10-22）
 
 在对象存储之前先提供“数据库查询 → 代码组装对象”的只读投影，验证对象契约：
