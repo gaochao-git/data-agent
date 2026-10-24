@@ -23,7 +23,9 @@ const props = defineProps({
   // 本体清单（父组件加载；对象类型挂本体=纯导航归属，不约束映射组）
   ontologies: { type: Array as PropType<OntologyItem[]>, default: () => [] },
   // 新建时的预选本体（树右键「新增对象」从本体节点发起）
-  defaultOntologyId: { type: Number as PropType<number | null>, default: null }
+  defaultOntologyId: { type: Number as PropType<number | null>, default: null },
+  // Dataset → 已绑定对象类型（一源一对象类型；编辑当前对象时允许回显自己的 Dataset）
+  occupiedDatasetIds: { type: Object as PropType<Record<number, string>>, default: () => ({}) }
 })
 
 const emit = defineEmits<{ saved: [] }>()
@@ -49,6 +51,23 @@ const sourceMappings = ref<Record<string, string>>({})
 
 const selectedDataset = computed(() => datasetOptions.value.find(item => item.id === sourceDatasetId.value) || null)
 const datasetColumnNames = computed(() => (selectedDataset.value?.columns || []).map(item => item.name))
+
+const datasetLayerLabel = (dataset: LogicalDatasetItem) => {
+  const layer = dataset.dataset_layer || 'source'
+  const origin = dataset.dataset_origin || 'datasource'
+  return `${layer} · ${origin}`
+}
+
+const datasetOptionLabel = (dataset: LogicalDatasetItem) => {
+  const name = dataset.display_name && dataset.display_name !== dataset.dataset_name ? dataset.display_name : ''
+  const bindings = dataset.binding_count ?? (dataset.bindings || []).length
+  return `${name || dataset.dataset_name} · ${datasetLayerLabel(dataset)} · ${bindings} 机构`
+}
+
+const isDatasetOccupied = (dataset: LogicalDatasetItem) => {
+  const owner = props.occupiedDatasetIds[dataset.id]
+  return !!owner && owner !== props.objectTypeName
+}
 
 const datasetColumnLabel = (column: { name: string; display_name?: string }) => {
   const label = (column.display_name || '').trim()
@@ -361,14 +380,25 @@ const saveObject = async () => {
         </div>
 
         <div class="mt-3">
-          <div class="mb-1 text-xs text-slate-500">Logical Dataset</div>
+          <div class="mb-1 flex items-center justify-between">
+            <span class="text-xs text-slate-500">Logical Dataset</span>
+            <span class="text-[11px] text-slate-400">一个 Dataset 只能绑定一个对象类型；已占用项置灰</span>
+          </div>
           <el-select v-model="sourceDatasetId" size="small" clearable filterable class="w-full" @change="syncSourceMappings">
             <el-option
               v-for="dataset in datasetOptions"
               :key="dataset.id"
-              :label="`${dataset.dataset_name}（${dataset.display_name || dataset.dataset_name}）`"
+              :label="datasetOptionLabel(dataset)"
               :value="dataset.id"
-            />
+              :disabled="isDatasetOccupied(dataset)"
+            >
+              <div class="flex items-center justify-between gap-2">
+                <span class="truncate">{{ datasetOptionLabel(dataset) }}</span>
+                <span v-if="isDatasetOccupied(dataset)" class="shrink-0 text-[11px] text-slate-400">
+                  已绑定 {{ props.occupiedDatasetIds[dataset.id] }}
+                </span>
+              </div>
+            </el-option>
           </el-select>
           <div v-if="selectedDataset" class="mt-1 flex items-center gap-2 text-[11px] text-slate-400">
             <span>{{ selectedDataset.dataset_name }}</span>

@@ -90,6 +90,14 @@ const hasLoaded = ref(false)
 
 // 关系分组数据源（不受工具栏筛选影响）：全量对象用于「对象→本体」映射，全量关系用于本体关系组
 const allObjects = ref<OntologyObjectTypeItem[]>([])
+const occupiedDatasetIds = computed<Record<number, string>>(() => {
+  const map: Record<number, string> = {}
+  for (const item of allObjects.value) {
+    const datasetId = Number(item.source_binding?.dataset_id || 0)
+    if (datasetId) map[datasetId] = item.object_type_name
+  }
+  return map
+})
 const relation_types = ref<OntologyRelationTypeItem[]>([])
 const action_types = ref<OntologyActionTypeItem[]>([])
 
@@ -1680,6 +1688,7 @@ const onRelationSaved = (objectTypeNames: string[]) => {
       :object-type-name="formObjectName"
       :ontologies="ontologies"
       :default-ontology-id="formDefaultOntologyId"
+      :occupied-dataset-ids="occupiedDatasetIds"
       @saved="onSaved"
     />
 
