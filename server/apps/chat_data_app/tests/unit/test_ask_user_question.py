@@ -77,3 +77,11 @@ def test_tool_accepts_question_without_options(monkeypatch):
     assert result["status"] == "answered"
     assert captured["questions"][0]["options"] == []
     assert captured["questions"][0]["multi_select"] is True
+
+
+def test_tool_returns_cancelled_status_when_user_cancels(monkeypatch):
+    monkeypatch.setattr(auq_module, "interrupt", lambda _payload: {"cancelled": True, "answers": []})
+
+    result = ask_user_question_tool.invoke({"questions": [_question()]})
+
+    assert result == {"status": "cancelled", "cancelled": True, "answers": []}
