@@ -338,9 +338,14 @@ class NebulaGraphWriter:
                 keys.add(_text(values[0]))
         return keys
 
-    def prune(self, member_id: str, keep_keys: set[str]) -> int:
+    def existing_keys(self, member_id: str) -> set[str]:
+        """写前读取当前 member 节点集合；全量写后只按差集清理。"""
+        return self._member_node_keys(member_id)
+
+    def prune(self, member_id: str, keep_keys: set[str], existing_keys: set[str] | None = None) -> int:
         """删除源数据已不存在、但 Nebula 仍残留的 member 节点及其边。"""
-        stale = sorted(self._member_node_keys(member_id) - keep_keys)
+        existing = existing_keys if existing_keys is not None else self._member_node_keys(member_id)
+        stale = sorted(existing - keep_keys)
         session = self._ensure_session()
         deleted = 0
         for object_key in stale:
@@ -671,11 +676,22 @@ async def sync_member_graph_batch(
             username=username,
         )
         graph_writer = writer or NebulaGraphWriter()
+        existing_keys: set[str] | None = None
+        existing_reader = getattr(graph_writer, "existing_keys", None)
+        if callable(existing_reader):
+            try:
+                existing_keys = existing_reader(member_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("图同步写前读取节点集合失败，写后回退全量清点: %s", exc)
         graph_writer.write(nodes, edges)
         prune = getattr(graph_writer, "prune", None)
         if callable(prune):
             try:
-                result.pruned_nodes = prune(member_id, {node.object_key for node in nodes})
+                keep_keys = {node.object_key for node in nodes}
+                if existing_keys is None:
+                    result.pruned_nodes = prune(member_id, keep_keys)
+                else:
+                    result.pruned_nodes = prune(member_id, keep_keys, existing_keys=existing_keys)
             except Exception as exc:  # noqa: BLE001
                 result.errors.append(f"图残留清理失败: {exc}")
         finished_at = datetime.now(UTC).replace(tzinfo=None)
