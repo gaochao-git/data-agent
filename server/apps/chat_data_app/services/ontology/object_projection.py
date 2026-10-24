@@ -277,7 +277,7 @@ def build_object_list_query(
         "object_type": _text(detail.get("object_type_name")),
         "identifier_property": identifier_property,
         "title_property": search_property,
-        "properties": [name for name, _column in columns],
+        "properties": [name for name, _column in columns] + list((derived_select or {}).keys()),
         "limit": safe_limit,
         "offset": safe_offset,
     }
@@ -468,6 +468,7 @@ def build_object_search_query(
     where: dict[str, Any] | None = None,
     derived_joins: list[str] | None = None,
     derived_expressions: dict[str, str] | None = None,
+    derived_select: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """构造通用对象查询：关键词 + 属性过滤 + 排序 + 分页，并附带 count SQL。"""
     safe_limit = max(1, min(int(limit), 100))
@@ -498,7 +499,9 @@ def build_object_search_query(
     )
     where_sql = f" WHERE {where_sql_text}" if where_sql_text else ""
     order_sql = _object_search_order_by(column_by_property, sorts or [], identifier_meta["column"], derived_expressions)
-    select_list = ", ".join(f"{_quote_identifier(column)} AS `{property_name}`" for property_name, column in columns)
+    select_parts = [f"{_quote_identifier(column)} AS `{property_name}`" for property_name, column in columns]
+    select_parts.extend(f"{expression} AS `{name}`" for name, expression in (derived_select or {}).items())
+    select_list = ", ".join(select_parts)
     from_sql = f"{_quote_identifier(table)}{''.join(derived_joins or [])}"
     sql = (
         f"SELECT {select_list} FROM {from_sql}{where_sql} "
@@ -512,7 +515,7 @@ def build_object_search_query(
         "object_type": _text(detail.get("object_type_name")),
         "identifier_property": identifier_property,
         "title_property": search_property,
-        "properties": [name for name, _column in columns],
+        "properties": [name for name, _column in columns] + list((derived_select or {}).keys()),
         "limit": safe_limit,
         "offset": safe_offset,
     }
@@ -1345,6 +1348,7 @@ async def _resolve_derived_filter_sort_async(
     username: str,
     semantic_config_id: str | None = None,
     where: dict[str, Any] | None = None,
+    include_all_derived: bool = False,
 ) -> tuple[list[str], dict[str, str]]:
     """把过滤/排序/where 引用的派生属性编译成 LEFT JOIN + 表达式（官方 filter/sort 的 MVP 下推）。"""
     property_names = {_text((item or {}).get("property")) for item in [*filters, *sorts] if isinstance(item, dict)}
@@ -1354,6 +1358,8 @@ async def _resolve_derived_filter_sort_async(
         for prop in detail.get("properties") or []
         if isinstance(prop, dict) and isinstance(prop.get("derivation"), dict) and prop["derivation"]
     }
+    if include_all_derived:
+        property_names |= set(derived)
     names = sorted(name for name in property_names if name in derived)
     if not names:
         return [], {}
@@ -1399,35 +1405,6 @@ def _derived_target_column(
     if target_table != table:
         raise ObjectProjectionError("派生属性目标属性与关联列不在同一张表，MVP 不支持")
     return target_column
-
-
-async def _derived_values_for_rows(
-    detail: dict[str, Any],
-    rows: list[dict[str, Any]],
-    scope: dict[str, str],
-    *,
-    user_id: str,
-    username: str,
-) -> list[dict[str, Any]]:
-    """列表页派生值：按当前页逐行计算（MVP，避免把派生值混进物理 SQL）。"""
-    has_derived = any(
-        isinstance(prop, dict) and isinstance(prop.get("derivation"), dict) and prop["derivation"]
-        for prop in detail.get("properties") or []
-    )
-    if not has_derived or not rows:
-        return [{} for _ in rows]
-    return await asyncio.gather(
-        *[
-            _derived_property_values(
-                detail,
-                row,
-                member_id=scope.get("member_datasource_id", ""),
-                user_id=user_id,
-                username=username,
-            )
-            for row in rows
-        ]
-    )
 
 
 def _assemble_list_item(
@@ -1484,7 +1461,9 @@ async def search_object_projection(
         username=username,
         semantic_config_id=semantic_config_id,
         where=where,
+        include_all_derived=True,
     )
+    derived_select = dict(derived_expressions)
     query = build_object_search_query(
         query_detail,
         config,
@@ -1497,6 +1476,7 @@ async def search_object_projection(
         where=where,
         derived_joins=derived_joins,
         derived_expressions=derived_expressions,
+        derived_select=derived_select,
     )
     started_at = time.perf_counter()
     count_rows = await _query_rows(
@@ -1519,17 +1499,14 @@ async def search_object_projection(
     execution_time_ms = int((time.perf_counter() - started_at) * 1000)
     has_more = len(rows) > query["limit"]
     page_rows = rows[: query["limit"]]
-    derived_values = await _derived_values_for_rows(detail, page_rows, scope, user_id=user_id, username=username)
     return {
-        "objects": [
-            _assemble_list_item(query, row, scope, derived_values[index]) for index, row in enumerate(page_rows)
-        ],
+        "objects": [_assemble_list_item(query, row, scope) for row in page_rows],
         "has_more": has_more,
         "limit": query["limit"],
         "offset": query["offset"],
         "total": total,
         "title_property": query["title_property"],
-        "properties": [*query["properties"], *sorted(_derived_property_names(detail))],
+        "properties": query["properties"],
         "sql": query["sql"],
         "execution_time_ms": execution_time_ms,
         **_member_scope(targets),

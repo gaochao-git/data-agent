@@ -670,15 +670,17 @@ def test_search_projection_includes_derived_values_in_page(monkeypatch):
         calls.append(sql)
         if "COUNT(*)" in sql and "total" in sql:
             return [{"total": 1}]
-        return [{"order_id": "O1", "amount": 10}]
+        return [{"order_id": "O1", "amount": 10, "order_count": 3}]
 
-    async def fake_derived(*_args, **_kwargs):
-        return {"order_count": 3}
+    async def fake_derived_sql(*_args, **_kwargs):
+        return [" LEFT JOIN `orders` AS `d0` ON `d0`.`customer_id` = `orders`.`order_id`"], {
+            "order_count": "`d0`.`value`"
+        }
 
     monkeypatch.setattr(object_projection.ontology_service, "get_object_type_async", fake_get_object_type)
     monkeypatch.setattr(object_projection, "_projection_context", fake_context)
     monkeypatch.setattr(object_projection, "_query_rows", fake_query_rows)
-    monkeypatch.setattr(object_projection, "_derived_property_values", fake_derived)
+    monkeypatch.setattr(object_projection, "_resolve_derived_filter_sort_async", fake_derived_sql)
     monkeypatch.setattr(
         object_projection, "_member_scope", lambda _targets: {"member_datasource_id": "M1", "member_name": "测试"}
     )
@@ -687,6 +689,7 @@ def test_search_projection_includes_derived_values_in_page(monkeypatch):
     assert result["objects"][0]["properties"]["order_count"] == 3
     assert "order_count" in result["properties"]
     assert len(calls) == 2
+    assert "`d0`.`value` AS `order_count`" in calls[1]
 
 
 def test_projection_column_and_identifier_guards():
