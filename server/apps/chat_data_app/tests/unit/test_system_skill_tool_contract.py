@@ -66,6 +66,9 @@ def test_data_analyzing_router_routes_to_every_capability_doc():
         "references/governance/quality-check.md",
         "references/governance/quality-rules.md",
         "references/governance/model-template.md",
+        "references/ontology/query.md",
+        "references/ontology/relations.md",
+        "references/ontology/actions.md",
     ):
         assert relative_path in router, f"路由层未指向 {relative_path}"
 

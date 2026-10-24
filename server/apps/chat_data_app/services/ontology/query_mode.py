@@ -78,6 +78,11 @@ class QueryModeDecision:
         return self.mode is QueryMode.SEMANTIC
 
 
+def hybrid_query_mode_enabled() -> bool:
+    """混合模式开关：本体业务域同时注入语义模型目录并装配语义查询工具。"""
+    return str(os.getenv("CHAT_DATA_QUERY_MODE_HYBRID") or "").strip().lower() in _TRUTHY
+
+
 def ontology_injection_enabled() -> bool:
     """本体消费链路部署级总闸（env 控制，默认关闭）。"""
     return str(os.getenv("CHAT_DATA_ONTOLOGY_INJECTION_ENABLED") or "").strip().lower() in _TRUTHY

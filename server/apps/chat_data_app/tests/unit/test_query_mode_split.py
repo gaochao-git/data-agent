@@ -368,3 +368,12 @@ def test_context_budget_consumes_mode_specific_prompt_and_tools(monkeypatch, tmp
     assert semantic_budget.static_input_tokens != ontology_budget.static_input_tokens
     semantic_budget.validate_static_input()
     ontology_budget.validate_static_input()
+
+
+def test_hybrid_query_mode_flag(monkeypatch):
+    from apps.chat_data_app.services.ontology import query_mode
+
+    monkeypatch.delenv("CHAT_DATA_QUERY_MODE_HYBRID", raising=False)
+    assert query_mode.hybrid_query_mode_enabled() is False
+    monkeypatch.setenv("CHAT_DATA_QUERY_MODE_HYBRID", "1")
+    assert query_mode.hybrid_query_mode_enabled() is True

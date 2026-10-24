@@ -2,7 +2,7 @@
 
 from utils.builtin_skills import DATA_ANALYZING_SKILL
 
-from ...services.ontology.query_mode import ontology_query_mode_active
+from ...services.ontology.query_mode import hybrid_query_mode_enabled, ontology_query_mode_active
 from ..runtime_options import AgentRuntimeOptions
 from .security_prompt import SECURITY_PROMPT
 
@@ -74,6 +74,31 @@ ONTOLOGY_SKILLS_USAGE_BLOCK = f"""## 技能使用
 - 本轮是本体查询模式：语义查询工具不在上下文中，**不要加载 `{DATA_ANALYZING_SKILL}` 技能做查数**，也不要尝试用语义模型 DSL/SQL 代替本体查询；
 - 工具返回「必须先加载技能」的拒绝提示时，按提示 `load_skill(name=技能名)` 后重试一次，不要改用其他工具绕过；
 - 用户消息形如“使用「xxx」技能回答：...”时，表示前端已经确认本轮指定技能，必须直接调用 `load_skill(name="xxx")` 加载该技能，禁止再向用户确认。"""
+
+HYBRID_ENVIRONMENT_BLOCK = """## 环境（混合模式）
+目录结构：
+/mnt/
+├── user-data/
+│   ├── workspace/   中间文件写入该工作区（可读写，脚本、草稿、中间文件）
+│   │   └── semantic/  只读语义目录：_semantic_catalog.yaml 是语义模型清单，
+│   │                   _ontology_catalog.yaml 是本体对象/关系/动作清单
+│   ├── outputs/     给用户展示的文件产物区（可读写，最终交付文件）
+│   └── uploads/     上传区（只读，不可写）
+└── skills/          当前可用技能（只读，含 SKILL.md、references、assets），入口一律用 load_skill(name) 加载"""
+
+HYBRID_SKILLS_USAGE_BLOCK = """## 技能使用（混合模式）
+- 用户意图命中当前可用技能时，读取对应技能；用户本轮显式引用技能，或前端传入本轮指定技能时，必须读取对应技能；
+- 本轮同时具备指标语义层与本体层：全局指标/趋势/复合分析走 `data_analyzing_tool`；对象/关系/派生属性/操作走 `ontology_tool`；
+- 用户意图不明确时先澄清，不要在同一回答里混用两套口径；
+- 工具返回「必须先加载技能」的拒绝提示时，按提示 `load_skill(name=技能名)` 后重试一次，不要改用其他工具绕过。"""
+
+HYBRID_WORKFLOW_BLOCK = """## 混合查询模式（指标语义层 + 本体层）
+- 当前业务域同时具备指标语义层与本体层，按问题意图选择入口，不能两套目录全量预读。
+- 全局指标、趋势、排名、同比环比、复合指标、看板 → `data_analyzing_tool`；先按技能检索语义模型与口径。
+- 具体对象、对象详情、关系、派生属性、对象操作 → `ontology_tool`；先读 `_ontology_catalog.yaml`。
+- 跨层：先做指标聚合，再用维度值/对象键下钻本体对象；不要用对象主键猜指标口径。
+- 结果口径：指标结果按指标语义层协议，对象结果按本体 `results[]` 协议；不要混用。
+- 动作：只有用户明确要求时执行 Action，高风险/批量先确认；Action 未启用如实说明。"""
 
 ONTOLOGY_WORKFLOW_BLOCK = """## 本体查询模式（当前业务域已启用本体层）
 - 当前业务域存在可用本体对象类型，本轮**唯一的数据查询入口是 `ontology_tool`**：只使用本体对象/关系/Action 工具，语义模型目录与语义查询工具不在本轮上下文，禁止使用语义模型 DSL/SQL，禁止自动回退或建议用户改用语义查询。
@@ -295,11 +320,15 @@ def build_unified_system_prompt(
     """
     context_text = build_data_context_text(data_context=data_context)
     ontology_mode = ontology_query_mode_active()
+    hybrid_mode = ontology_mode and hybrid_query_mode_enabled()
 
     sections: list[str] = [ROLE_BLOCK]
 
     # 环境目录树为纯静态文本；语义模式与本体模式对 semantic/ 的描述不同（二选一）。
-    sections.append(ONTOLOGY_ENVIRONMENT_BLOCK if ontology_mode else ENVIRONMENT_BLOCK)
+    if hybrid_mode:
+        sections.append(HYBRID_ENVIRONMENT_BLOCK)
+    else:
+        sections.append(ONTOLOGY_ENVIRONMENT_BLOCK if ontology_mode else ENVIRONMENT_BLOCK)
 
     # 会话记忆约定仅挂主智能体：子智能体是受委派的一次性执行者，
     # 看不到主对话历史，也没有维护会话记忆的职责（子图只读记忆段由
@@ -311,7 +340,9 @@ def build_unified_system_prompt(
 
     sections.append("# 数据上下文\n\n" + context_text)
 
-    if ontology_mode:
+    if hybrid_mode:
+        sections.append(HYBRID_WORKFLOW_BLOCK)
+    elif ontology_mode:
         # 本体工作流是模式专属规则：语义模式的查数流程在 data-analyzing 技能里。
         sections.append(ONTOLOGY_WORKFLOW_BLOCK)
 
@@ -319,7 +350,10 @@ def build_unified_system_prompt(
     # 空集合，不能回退扫描管理域，否则提示词与实际 /mnt/skills 发生版本漂移。
     sections.append(available_skills_xml if available_skills_xml is not None else EMPTY_AVAILABLE_SKILLS_XML)
 
-    sections.append(ONTOLOGY_SKILLS_USAGE_BLOCK if ontology_mode else SKILLS_USAGE_BLOCK)
+    if hybrid_mode:
+        sections.append(HYBRID_SKILLS_USAGE_BLOCK)
+    else:
+        sections.append(ONTOLOGY_SKILLS_USAGE_BLOCK if ontology_mode else SKILLS_USAGE_BLOCK)
     sections.extend(
         [
             HTML_REPORT_BLOCK,

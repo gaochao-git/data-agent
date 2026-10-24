@@ -19,6 +19,7 @@ from ...ontology.ontology_injection import materialize_ontology_catalog_async
 from ...ontology.query_mode import (
     QueryMode,
     QueryModeDecision,
+    hybrid_query_mode_enabled,
     publish_query_mode,
     resolve_query_mode_async,
 )
@@ -234,6 +235,14 @@ async def prematerialize_enabled_semantic_models(
     decision = await resolve_query_mode_async(normalized_datasource_id)
     publish_query_mode(decision)
     if decision.is_ontology:
+        if hybrid_query_mode_enabled():
+            return await _prematerialize_hybrid_mode(
+                workspace_runtime=workspace_runtime,
+                datasource_group_id=normalized_datasource_id,
+                user_id=user_id,
+                source_type=source_type,
+                started=started,
+            )
         return await _prematerialize_ontology_mode(
             workspace_runtime=workspace_runtime,
             datasource_group_id=normalized_datasource_id,
@@ -246,6 +255,43 @@ async def prematerialize_enabled_semantic_models(
         source_type=source_type,
         started=started,
     )
+
+
+async def _prematerialize_hybrid_mode(
+    *,
+    workspace_runtime: Any,
+    datasource_group_id: str,
+    user_id: str | None,
+    source_type: str,
+    started: float,
+) -> dict[str, Any]:
+    """混合模式：同时物化语义模型目录与本体目录，供技能路由。"""
+    semantic_result = await _prematerialize_semantic_mode(
+        workspace_runtime=workspace_runtime,
+        datasource_id=datasource_group_id,
+        user_id=user_id,
+        source_type=source_type,
+        started=started,
+    )
+    ontology_objects = await materialize_ontology_catalog_async(
+        workspace_runtime,
+        datasource_group_id=datasource_group_id,
+    )
+    logger.info(
+        "混合模式预物化完成: datasource_group_id=%s 语义模型=%s 对象类型=%s 总计=%.0fms",
+        datasource_group_id,
+        semantic_result.get("total"),
+        ontology_objects,
+        (time.perf_counter() - started) * 1000,
+    )
+    return {
+        "total": ontology_objects,
+        "failed_ids": list(semantic_result.get("failed_ids") or []),
+        "query_mode": QueryMode.ONTOLOGY.value,
+        "hybrid": True,
+        "ontology_object_types": ontology_objects,
+        "semantic_model_count": semantic_result.get("total"),
+    }
 
 
 async def _prematerialize_ontology_mode(

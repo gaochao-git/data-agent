@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING, Any
 
 from apps.chat_data_app.services.ontology.object_projection import ontology_object_read_enabled
 from apps.chat_data_app.services.ontology.object_type_locator import object_type_locator_enabled
-from apps.chat_data_app.services.ontology.query_mode import ontology_query_mode_active
+from apps.chat_data_app.services.ontology.query_mode import hybrid_query_mode_enabled, ontology_query_mode_active
 from utils.builtin_skills import DATA_ANALYZING_SKILL, OFFICE_SKILL
 
 from .ask_user_question import ask_user_question_tool
@@ -129,11 +129,10 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
     ),
     ToolSpec(
         provides=("data_analyzing_tool",),
-        # 语义/本体二选一（规则入口 services/ontology/query_mode.py）：本体模式下
-        # 语义查询工具整体不装配，模型上下文里不会出现 DSL/语义模型入口。
+        # 语义/本体二选一；hybrid 开关打开时本体域也装配语义工具，由技能路由。
         build=lambda ctx: (
             []
-            if ontology_query_mode_active()
+            if ontology_query_mode_active() and not hybrid_query_mode_enabled()
             else [
                 create_data_analyzing_tool(
                     ctx.datasource.datasource_id,
