@@ -75,19 +75,11 @@
   已按 LEFT JOIN 下推（aggregate 走对端 GROUP BY，select 直接 JOIN），聚合/分组仍显式拒绝；
 - 与语义层指标正交：派生属性是「对象身上的计算字段」，全局命名指标口径仍在语义层。
 
-## 指标关联（对象类型 ↔ 语义层）
+## 指标关联已下线（2026-10-24）
 
-对象类型不承载指标口径；指标定义唯一权威在语义层。二者的关联走 Logical Dataset 的
-`chat_data_dataset_semantic_link`（引用 + 列对照，见 `services/dataset/README.md`）：
-
-- 解析链路：对象类型 source_binding（属性→Dataset 逻辑列）→ Dataset 关联（逻辑列→语义维度）
-  → `SemanticConfig.metrics`；服务实现 `services/ontology/object_metrics.py`；
-- 目录：`_ontology_catalog.yaml` 的 `object_types[].metrics` 输出只读指标索引
-  （名称/kind/描述/executable_in_scope/unavailable_reason），不复制表达式；
-- 工具：`ontology_tool` 新增 `list_object_metrics`（只读）与
-  `aggregate_objects.metric_names`（按命名指标聚合，query_mode=`ontology_metric_aggregate`）；
-- 约束：指标与对象 Dataset 必须同表（MVP）；关联未 active、指标表不一致、维度未映射时
-  `executable_in_scope=false`，执行时明确报错，**不降级为属性 ad-hoc 聚合**。
+对象运行时不再消费语义指标：对象详情、本体目录、`ontology_tool` 均已移除对象指标入口，
+`chat_data_dataset_semantic_link` 表与对象指标管理 API 已删除。对象级统计改用派生属性；
+命名指标留在语义层，只服务语义模式。
 
 ## 治理门禁与不变量
 
