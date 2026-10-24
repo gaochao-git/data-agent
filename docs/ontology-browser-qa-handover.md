@@ -4,6 +4,9 @@
 > 目标：用真实浏览器把本体相关链路完整点一遍，**发现问题、记录证据、不要直接改代码或提交**；由主 Agent 统一评估优化。
 > 时间基准：2026-10-23 23:50（`feat/ontology-rebuild` 分支）
 
+
+> 全链路测试清单见 [ontology-full-chain-test-plan.md](ontology-full-chain-test-plan.md)（2026-10-24 版，覆盖导航/建模/派生/关系/Action/Dataset/对象实例/Agent/异常）。
+
 ---
 
 ## 1. 测试范围（只测这些，别扩散）
