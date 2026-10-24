@@ -26,19 +26,28 @@ def _execution_time(members: list[dict[str, Any]]) -> int:
 class QueryOrchestrator:
     """查询编排唯一入口；调用方不得直接连数据源。"""
 
-    async def execute_member_async(self, spec: QuerySpec, execution_target: dict[str, Any]) -> QueryResult:
-        """单 member 查询（对象投影、Pipeline 读取等）。"""
+    async def execute_member_raw_async(self, spec: QuerySpec, execution_target: dict[str, Any]) -> dict[str, Any]:
+        """单 member 查询原始结果（兼容任务/看板执行记录链）。"""
         from ..sql_run.runtime import execute_sql_for_member
 
-        result = await execute_sql_for_member(
-            execution_target,
-            spec.sql,
+        return await execute_sql_for_member(
+            execution_target=execution_target,
+            sql=spec.sql,
             limit=spec.limit,
             timeout=spec.timeout,
             user_id=spec.user_id or None,
             username=spec.username or None,
+            query_task_id=spec.query_task_id,
+            execution_id=spec.execution_id,
+            statement_index=spec.statement_index,
+            skip_query_cache=spec.skip_query_cache,
             datasource_id=spec.datasource_group_id or None,
+            max_rows=spec.max_rows,
         )
+
+    async def execute_member_async(self, spec: QuerySpec, execution_target: dict[str, Any]) -> QueryResult:
+        """单 member 查询（对象投影、Pipeline 读取等）。"""
+        result = await self.execute_member_raw_async(spec, execution_target)
         member = normalize_member_result(result)
         return QueryResult(
             source=_source_value(spec),
@@ -49,7 +58,14 @@ class QueryOrchestrator:
             execution_time_ms=member["execution_time_ms"],
             lineage=self._lineage(spec),
             warnings=[] if member["status"] == "succeeded" else [str(member.get("error") or "查询失败")],
+            error=None if member["status"] == "succeeded" else str(member.get("error") or "查询失败"),
         )
+
+    async def execute_task_async(self, task_id: str, task: dict[str, Any]) -> None:
+        """SQL 任务入口兼容门面；任务生命周期仍由 sql_run runtime 负责。"""
+        from ..sql_run.runtime import run_sql_query_task
+
+        await run_sql_query_task(task_id, task)
 
     async def execute_agent_async(self, spec: QuerySpec) -> QueryResult:
         """多 member / Agent 查询：复用统一 runtime 的 execute_agent_sql。"""
@@ -61,7 +77,8 @@ class QueryOrchestrator:
             member_datasource_ids=list(spec.member_datasource_ids),
             user_id=spec.user_id or None,
             semantic_config_id=spec.semantic_config_id,
-            conversation_id=None,
+            query_text=spec.query_text or None,
+            conversation_id=spec.conversation_id,
             operator_name=spec.username or None,
         )
         members = [normalize_member_result(item) for item in payload.get("results") or [] if isinstance(item, dict)]
@@ -74,6 +91,7 @@ class QueryOrchestrator:
             execution_time_ms=_execution_time(members),
             lineage=self._lineage(spec),
             warnings=[str(payload.get("error"))] if payload.get("error") else [],
+            error=str(payload.get("error")) if payload.get("error") else None,
         )
 
     @staticmethod

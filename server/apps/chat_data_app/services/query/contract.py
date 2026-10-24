@@ -30,10 +30,17 @@ class QuerySpec:
     member_datasource_ids: tuple[str, ...] = ()
     sql: str = ""
     limit: int = 100
-    timeout: int = 30
+    timeout: int | None = 30
+    max_rows: int | None = None
+    query_task_id: str | None = None
+    execution_id: str | None = None
+    statement_index: int | None = None
+    skip_query_cache: bool = False
     user_id: str = ""
     username: str = ""
     query_mode: str = ""
+    query_text: str = ""
+    conversation_id: str | None = None
     semantic_config_id: str | None = None
     object_type: str | None = None
     dataset_id: int | None = None
@@ -60,9 +67,19 @@ class QueryResult:
     execution_time_ms: int = 0
     lineage: dict[str, Any] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
+    error: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+    def to_legacy_payload(self) -> dict[str, Any]:
+        """兼容旧查询结果协议；迁移期调用方仍消费 results[]/status/error。"""
+        from ..sql_run.result import build_query_result_payload
+
+        payload = build_query_result_payload(sql=self.sql, member_results=self.members, fallback_error=self.error)
+        if self.query_mode:
+            payload["query_mode"] = self.query_mode
+        return payload
 
 
 def normalize_member_result(result: dict[str, Any]) -> dict[str, Any]:

@@ -28,8 +28,8 @@ def test_execute_member_normalizes_runtime_result(monkeypatch):
 
     captured = {}
 
-    async def fake_execute(target, sql, **kwargs):
-        captured.update(target=target, sql=sql, kwargs=kwargs)
+    async def fake_execute(*, execution_target, sql, **kwargs):
+        captured.update(target=execution_target, sql=sql, kwargs=kwargs)
         return {
             "member_datasource_id": "m1",
             "status": "succeeded",
@@ -86,3 +86,16 @@ def test_execute_agent_normalizes_results(monkeypatch):
     assert result.execution_time_ms == 7
     assert [item["member_datasource_id"] for item in result.members] == ["m1", "m2"]
     assert captured["kwargs"]["member_datasource_ids"] == ["m1", "m2"]
+
+
+def test_execute_task_delegates_to_runtime(monkeypatch):
+    from apps.chat_data_app.services.sql_run import runtime
+
+    calls = []
+
+    async def fake_run(task_id, task):
+        calls.append((task_id, task))
+
+    monkeypatch.setattr(runtime, "run_sql_query_task", fake_run)
+    asyncio.run(QueryOrchestrator().execute_task_async("t1", {"task_id": "t1"}))
+    assert calls == [("t1", {"task_id": "t1"})]
