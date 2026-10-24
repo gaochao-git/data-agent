@@ -78,6 +78,7 @@ def test_data_analyzing_references_are_layered_by_capability():
         "analysis",
         "dashboard",
         "governance",
+        "ontology",
     }
     assert not list(references_root.glob("*.md")), "references 根下不应再有散落文档"
     assert not list(references_root.glob("*.json")), "示例应放在 assets/ 下，不放 references"

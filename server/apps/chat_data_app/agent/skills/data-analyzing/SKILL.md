@@ -1,7 +1,7 @@
 ---
 name: data-analyzing
 title: 数据分析
-description: 数据分析场景统一入口，按需加载三类能力——用自然语言查数与结果分析（检索语义模型、确认指标维度口径、DSL/SQL 执行、同比环比计算），生成可预览的分析看板草案，以及体检语义模型质量、对话补齐口径并产出可回导的 Ossie YAML。用户提出查数、看明细、统计汇总、趋势排行、结论对比、做看板或分析面板、检查或优化语义模型、补充指标维度口径时使用本技能。
+description: 数据分析场景统一入口，按需加载查询分析、对象查询、关系导航、对象操作、看板生成与语义模型治理能力。用户提出查数、看明细、统计汇总、趋势排行、结论对比、查具体对象/详情/关系、执行对象操作、做看板或分析面板、检查或优化语义模型、补充指标维度口径时使用本技能。
 metadata:
   domain: 数据分析
   category: data_analyzing
@@ -12,15 +12,17 @@ metadata:
 
 ## 适用范围
 
-本技能是数据分析场景的统一入口，涵盖三类任务。**先判断任务属于哪一类，再读取该类对应的能力文档；不要预读全部资料。**
+本技能是数据分析场景的统一入口，涵盖查询、对象、操作、看板、治理多类任务。**先判断任务属于哪一类，再读取该类对应的能力文档；不要预读全部资料。**
 
 | 任务类别 | 典型触发语 | 能力文档 | 产物 |
 |---|---|---|---|
 | 查询与分析 | 查个数、看明细、统计、汇总、趋势、排行、对比、同环比、占比、Top N | `references/analysis/query.md` | 系统落盘的查询结果，前端按 `result_id` 展示 |
+| 对象查询与关系 | 具体对象、对象详情、对象关系、对象聚合、派生属性 | `references/ontology/query.md` + `relations.md` | 对象结果 / 查询结果 |
+| 对象操作 | 修改、标记、状态变更、执行 Action | `references/ontology/actions.md` | 执行结果 + 审计 |
 | 看板生成 | 生成看板、做分析面板、看板草案、预览看板、沉淀分析视图 | `references/dashboard/workflow.md` + `references/dashboard/guide.md` | `outputs/*.dashboard.json` |
 | 质量检查与治理 | 检查语义模型质量、覆盖度、口径一致性、补齐指标维度、优化模型、产出模型 YAML | `references/governance/quality-check.md` | 质量报告 / `outputs/governance/` 下交付的模型 YAML |
 
-三类任务一次只走一条主路径。「先查数，满意后再沉淀成看板」是两个连续轮次，各自按对应能力文档执行，不要在一条路径里预读另一条路径的资料。
+同一轮任务一次只走一条主路径。「先查数，满意后再沉淀成看板」是两个连续轮次，各自按对应能力文档执行，不要在一条路径里预读另一条路径的资料。
 
 ## 资料分层
 
@@ -28,7 +30,8 @@ metadata:
 references/
 ├── analysis/     查询与分析：取数与结果处理、SQL 方言差异
 ├── dashboard/    看板生成：入口与产物契约、规格与图表规范
-└── governance/   质量检查与治理：检查项清单、可回导 YAML 规范
+├── governance/   质量检查与治理：检查项清单、可回导 YAML 规范
+└── ontology/     对象查询、关系导航、Action 操作
 assets/dashboard/examples/   看板示例（需求宽泛时按需取一个）
 ```
 
@@ -52,6 +55,25 @@ assets/dashboard/examples/   看板示例（需求宽泛时按需取一个）
 ### 查询与分析
 
 读取 `references/analysis/query.md`，按其「标准流程」执行（Hive/MySQL 方言对照已并入该文档「查询方言对照」章节）。
+
+### 对象查询与关系
+
+读取 `references/ontology/query.md` 与 `references/ontology/relations.md`。
+
+- 具体对象/列表/详情/聚合：`ontology_tool` 的 `get_object` / `find_objects` / `aggregate_objects`
+- 关系导航：`search_around`
+- 一次查询只指定一个 member；多机构逐机构执行
+- 对象查询优先于用 SQL 手写同一语义
+
+### 对象操作
+
+读取 `references/ontology/actions.md`。
+
+- 先 `list_action_types` 确认 Action 可用
+- 用户必须明确要求写操作
+- 高风险/批量/状态迁移先确认
+- 禁止从分析问题自动推断写操作
+- 执行失败按原文说明，不绕过
 
 ### 看板生成
 
@@ -77,5 +99,7 @@ assets/dashboard/examples/   看板示例（需求宽泛时按需取一个）
 按任务类别分别判定，条件写在对应能力文档中，不在此处重复：
 
 - 查询与分析：`references/analysis/query.md`「多步分析与结果处理」——回答具体数值或形成业务结论前，必须已读取 `result_path` 中的实际数据。
+- 对象查询与关系：`references/ontology/query.md` / `relations.md`——必须返回对象主键、属性或关系结果，不能只复述目录。
+- 对象操作：`references/ontology/actions.md`——必须有执行结果与审计，不能只说“已处理”。
 - 看板生成：`references/dashboard/workflow.md`「完成判定」——只写入草稿不算完成，必须已 `present_artifacts` 展示最终 outputs 看板。
 - 质量检查与治理：`references/governance/quality-check.md`「产出新 YAML」——交付前必须用 `data_analyzing_tool` 的 `check_yaml` 自检通过。
