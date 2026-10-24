@@ -42,45 +42,35 @@ def test_identifiers_are_validated():
 
 
 def test_materialize_hive_output_rejects_input_table_and_writes(monkeypatch):
-    class Cursor:
-        def __init__(self):
-            self.sql = []
+    statements = []
 
-        def execute(self, sql):
-            self.sql.append(sql)
+    class Adapter:
+        async def execute_statements_async(self, _target, sqls):
+            statements.extend(sqls)
 
-    class Connection:
-        def __init__(self):
-            self.cur = Cursor()
-            self.closed = False
-
-        def cursor(self):
-            return self.cur
-
-        def close(self):
-            self.closed = True
-
-    connection = Connection()
-    monkeypatch.setattr(materializer, "_connection", lambda _target: connection)
+    monkeypatch.setattr(materializer, "get_write_adapter", lambda _target: Adapter())
     with pytest.raises(materializer.PipelineBuildError, match="输入 Dataset"):
-        materializer.materialize_hive_output(
+        asyncio.run(
+            materializer.materialize_hive_output_async(
+                {"source_config": {"database": "db"}},
+                table="shipments",
+                columns=[{"name": "id"}],
+                rows=[],
+                input_tables={"shipments"},
+            )
+        )
+    table = asyncio.run(
+        materializer.materialize_hive_output_async(
             {"source_config": {"database": "db"}},
-            table="shipments",
+            table="out",
             columns=[{"name": "id"}],
-            rows=[],
+            rows=[{"id": 1}],
             input_tables={"shipments"},
         )
-    table = materializer.materialize_hive_output(
-        {"source_config": {"database": "db"}},
-        table="out",
-        columns=[{"name": "id"}],
-        rows=[{"id": 1}],
-        input_tables={"shipments"},
     )
     assert table == "out"
-    assert connection.closed is True
-    assert any(sql.startswith("DROP TABLE IF EXISTS") for sql in connection.cur.sql)
-    assert any(sql.startswith("INSERT INTO") for sql in connection.cur.sql)
+    assert any(sql.startswith("DROP TABLE IF EXISTS") for sql in statements)
+    assert any(sql.startswith("INSERT INTO") for sql in statements)
 
 
 def test_materialize_output_async_builds_binding(monkeypatch):
@@ -89,7 +79,11 @@ def test_materialize_output_async_builds_binding(monkeypatch):
             return [{"member_datasource_id": "m1", "source_type": "hive", "source_config": {"database": "db"}}]
 
     monkeypatch.setattr(materializer, "get_datasource_manager", lambda: Manager())
-    monkeypatch.setattr(materializer, "materialize_hive_output", lambda *_args, **_kwargs: "out")
+
+    async def fake_materialize(*_args, **_kwargs):
+        return "out"
+
+    monkeypatch.setattr(materializer, "materialize_hive_output_async", fake_materialize)
     dataset = {"bindings": [{"datasource_group_id": "g1", "member_datasource_id": "m1", "physical_table": "shipments"}]}
     bindings = asyncio.run(
         materializer.materialize_output_async(
@@ -137,24 +131,6 @@ def test_hive_type_and_date_literal_branches():
     assert materializer._hive_type("double") == "double"
     assert materializer._hive_type("weird") == "string"
     assert materializer._sql_literal(__import__("datetime").date(2026, 1, 2)) == "'2026-01-02'"
-
-
-def test_connection_uses_source_config(monkeypatch):
-    captured = {}
-
-    class FakeHive:
-        @staticmethod
-        def Connection(**kwargs):
-            captured.update(kwargs)
-            return object()
-
-    import pyhive.hive
-
-    monkeypatch.setattr(pyhive.hive, "Connection", FakeHive.Connection)
-    materializer._connection(
-        {"source_config": {"host": "h", "port": 10001, "username": "u", "database": "db", "password": "p"}}
-    )
-    assert captured == {"host": "h", "port": 10001, "username": "u", "database": "db", "password": "p"}
 
 
 def test_materialize_output_async_rejects_incomplete_binding_and_missing_target(monkeypatch):

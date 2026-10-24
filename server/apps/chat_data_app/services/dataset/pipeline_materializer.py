@@ -12,6 +12,7 @@ from typing import Any
 
 from apps.chat_data_app.services.datasource.manager import get_datasource_manager
 from apps.chat_data_app.services.datasource.target_context import get_execution_target_member_id
+from apps.chat_data_app.services.write import get_write_adapter
 
 from .pipeline_errors import PipelineBuildError
 from .pipeline_runner import _select_binding
@@ -78,24 +79,7 @@ def build_insert_sql(database: str, table: str, columns: list[dict[str, Any]], r
     return f"INSERT INTO `{safe_db}`.`{safe_table}` VALUES ({', '.join(values)})"
 
 
-def _connection(target: dict[str, Any]):
-    source_config = target.get("source_config") or {}
-    try:
-        from pyhive import hive
-    except ImportError as exc:  # pragma: no cover - optional dependency
-        raise PipelineBuildError("当前环境缺少 Hive 客户端依赖") from exc
-    kwargs = {
-        "host": _text(source_config.get("host")),
-        "port": int(source_config.get("port") or 10000),
-        "username": _text(source_config.get("username")) or "hive",
-        "database": _text(source_config.get("database")) or "default",
-    }
-    if source_config.get("password"):
-        kwargs["password"] = str(source_config.get("password"))
-    return hive.Connection(**kwargs)
-
-
-def materialize_hive_output(
+async def materialize_hive_output_async(
     target: dict[str, Any],
     *,
     table: str,
@@ -109,16 +93,18 @@ def materialize_hive_output(
     safe_table = _safe_identifier(table, "physical_table")
     if safe_table in input_tables:
         raise PipelineBuildError(f"输出表不能覆盖输入 Dataset 物理表: {safe_table}")
-    create_sql = build_create_table_sql(database, safe_table, columns)
-    conn = _connection(target)
+    statements = [
+        f"DROP TABLE IF EXISTS `{database}`.`{safe_table}`",
+        build_create_table_sql(database, safe_table, columns),
+    ]
+    statements.extend(build_insert_sql(database, safe_table, columns, row) for row in rows)
+    adapter = get_write_adapter(target)
     try:
-        cur = conn.cursor()
-        cur.execute(f"DROP TABLE IF EXISTS `{database}`.`{safe_table}`")
-        cur.execute(create_sql)
-        for row in rows:
-            cur.execute(build_insert_sql(database, safe_table, columns, row))
-    finally:
-        conn.close()
+        await adapter.execute_statements_async(target, statements)
+    except PipelineBuildError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - 统一转成 Pipeline 构建错误
+        raise PipelineBuildError(f"Hive 写入失败: {exc}") from exc
     return safe_table
 
 
@@ -148,7 +134,7 @@ async def materialize_output_async(
     if _text(target.get("source_type")).lower() != "hive":
         raise PipelineBuildError("Pipeline 输出物化当前只支持 Hive direct 数据源")
     input_tables = {_text(item.get("physical_table")) for item in input_dataset.get("bindings") or []}
-    physical_table = materialize_hive_output(
+    physical_table = await materialize_hive_output_async(
         target,
         table=dataset_name,
         columns=columns,
