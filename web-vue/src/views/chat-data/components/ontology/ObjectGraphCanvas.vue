@@ -36,6 +36,8 @@ const containerRef = ref<HTMLDivElement | null>(null)
 const graphRef = ref<any>(null)
 const actionPosition = ref({ left: 0, top: 0 })
 let resizeObserver: ResizeObserver | null = null
+let resizeFrame: number | null = null
+let lastContainerSize = { width: 0, height: 0 }
 
 const selectedNode = computed(() => props.nodes.find(node => node.key === props.selectedKey) || null)
 
@@ -81,6 +83,9 @@ const fitToContainer = async () => {
   const width = container.clientWidth
   const height = container.clientHeight
   if (width <= 0 || height <= 0) return
+  // ResizeObserver 可能在 resize 过程中再次触发；尺寸未变化时不再 resize，避免循环。
+  if (width === lastContainerSize.width && height === lastContainerSize.height) return
+  lastContainerSize = { width, height }
   try {
     graph.resize(width, height)
     await graph.fitView()
@@ -89,6 +94,14 @@ const fitToContainer = async () => {
   } catch (err) {
     console.warn('适配 G6 图容器失败:', err)
   }
+}
+
+const scheduleFitToContainer = () => {
+  if (resizeFrame !== null) return
+  resizeFrame = window.requestAnimationFrame(() => {
+    resizeFrame = null
+    void fitToContainer()
+  })
 }
 
 const renderGraph = async () => {
@@ -190,7 +203,7 @@ onMounted(async () => {
   graph.on('viewportchange', updateActionPosition)
   graphRef.value = graph
   resizeObserver = new ResizeObserver(() => {
-    void fitToContainer()
+    scheduleFitToContainer()
   })
   resizeObserver.observe(containerRef.value)
   try {
@@ -219,6 +232,7 @@ watch(
 )
 
 onBeforeUnmount(() => {
+  if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame)
   resizeObserver?.disconnect()
   resizeObserver = null
   graphRef.value?.destroy()
