@@ -9,10 +9,11 @@
 """
 
 import asyncio
+import os
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from fastapi import Request
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
@@ -48,6 +49,7 @@ if TYPE_CHECKING:
     from .agent_stream import _AgentSseStreamAdapter
 
 logger = get_logger(__name__)
+
 
 # 用户输入超长时自动转为文件，阈值单位：字符数
 USER_INPUT_OFFLOAD_THRESHOLD = 4000
@@ -155,12 +157,57 @@ def _latest_ai_message_in_state(state: Any | None) -> Any | None:
     return None
 
 
+def _stamp_ai_message(
+    patched: Any,
+    additional_kwargs: dict[str, Any],
+    *,
+    has_timestamp: bool,
+    completed_at_ms: int | None,
+    generation_stats: dict[str, int] | None,
+) -> None:
+    patched.additional_kwargs = dict(additional_kwargs)
+    if not has_timestamp or completed_at_ms is not None:
+        if completed_at_ms is not None:
+            patched.additional_kwargs["timestamp"] = time.strftime(
+                "%Y-%m-%d %H:%M:%S", time.localtime(completed_at_ms / 1000)
+            )
+        else:
+            patched.additional_kwargs["timestamp"] = _get_timestamp()
+    if generation_stats:
+        patched.additional_kwargs["generation_stats"] = generation_stats
+
+
+def _replace_ai_message(messages: list[Any], latest: Any, patched: Any) -> list[Any] | None:
+    for index, message in enumerate(messages):
+        if message is latest:
+            replaced = list(messages)
+            replaced[index] = patched
+            return replaced
+    return None
+
+
+def _patch_ai_message_in_state(state: Any | None, latest: Any, patched: Any) -> Any | None:
+    if state is None:
+        return state
+    values = getattr(state, "values", None)
+    messages = values.get("messages") if isinstance(values, dict) else None
+    if not isinstance(messages, list):
+        return state
+    patched_messages = _replace_ai_message(messages, latest, patched)
+    if patched_messages is None or not hasattr(state, "_replace"):
+        return state
+    typed_values: dict[str, Any] = dict(cast(dict[str, Any], values))
+    typed_values["messages"] = patched_messages
+    return state._replace(values=typed_values)
+
+
 async def _persist_latest_ai_message_timestamp(
     agent: Any,
     config: dict[str, Any],
     state: Any | None,
     generation_stats: dict[str, int] | None = None,
     completed_at_ms: int | None = None,
+    write_checkpoint: bool = True,
 ) -> Any | None:
     """为最新 AIMessage 补充完成时间与生成统计，保持历史消息时间口径一致。
 
@@ -192,16 +239,15 @@ async def _persist_latest_ai_message_timestamp(
             if hasattr(latest_ai_message, "model_copy")
             else latest_ai_message.copy(deep=True)
         )
-        patched_message.additional_kwargs = dict(additional_kwargs)
-        if not has_timestamp or completed_at_ms is not None:
-            if completed_at_ms is not None:
-                patched_message.additional_kwargs["timestamp"] = time.strftime(
-                    "%Y-%m-%d %H:%M:%S", time.localtime(completed_at_ms / 1000)
-                )
-            else:
-                patched_message.additional_kwargs["timestamp"] = _get_timestamp()
-        if generation_stats:
-            patched_message.additional_kwargs["generation_stats"] = generation_stats
+        _stamp_ai_message(
+            patched_message,
+            additional_kwargs,
+            has_timestamp=has_timestamp,
+            completed_at_ms=completed_at_ms,
+            generation_stats=generation_stats,
+        )
+        if not write_checkpoint:
+            return _patch_ai_message_in_state(state, latest_ai_message, patched_message)
         await agent.aupdate_state(config, {"messages": [patched_message]}, as_node="model")
         return await agent.aget_state(config) if hasattr(agent, "aget_state") else state
     except Exception as exc:
@@ -687,6 +733,33 @@ def _resolve_agent_initial_state(
             "workspace_backend": runtime_options.workspace_backend,
         },
     )
+
+
+@dataclass
+class StreamStateView:
+    """从 astream(values) 捕获的最终状态视图，避免收尾再读完整 checkpoint。"""
+
+    values: dict[str, Any]
+    interrupts: tuple[Any, ...] = ()
+
+    def _replace(self, **kwargs: Any) -> "StreamStateView":
+        return StreamStateView(**{**self.__dict__, **kwargs})
+
+
+def finish_use_stream_state_enabled() -> bool:
+    raw = str(os.getenv("CHAT_DATA_FINISH_USE_STREAM_STATE") or "1").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def parse_agent_stream_event(event: Any) -> tuple[str, Any]:
+    """解析 create_agent 的 stream_mode 二元组。"""
+    if isinstance(event, tuple) and len(event) == 2:
+        stream_mode, payload = event
+        if isinstance(stream_mode, str) and stream_mode in {"custom", "messages", "values"}:
+            return stream_mode, payload
+        message_chunk, metadata = event
+        return "messages", (message_chunk, metadata)
+    return "unknown", event
 
 
 @dataclass

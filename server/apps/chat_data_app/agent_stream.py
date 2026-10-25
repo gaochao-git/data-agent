@@ -62,6 +62,7 @@ from .agent.workspace.workspace_path_policy import USER_DATA_VIRTUAL_ROOT, WORKS
 # 运行准备与历史持久化层（源模块：agent_run_support），以下均为 handlers 内部直接使用的符号。
 from .agent_run_support import (
     USER_INPUT_OFFLOAD_THRESHOLD,
+    StreamStateView,
     _AgentRunPreparationError,
     _AgentRunStreamCallbacks,
     _get_timestamp,
@@ -81,6 +82,8 @@ from .agent_run_support import (
     _resolve_file_attachments,
     _resolve_workspace_created_date,
     _write_agent_model_snapshot,
+    finish_use_stream_state_enabled,
+    parse_agent_stream_event,
 )
 from .agent_run_support import (
     persist_early_user_message_if_needed as _persist_early_user_message_if_needed,
@@ -602,6 +605,8 @@ class _AgentSseStreamAdapter:
         # 最后一次模型调用的模型名（token_usage 事件 sanitize 前提取），finish 时进 stats
         self.latest_model_name: str = ""
         self.state: Any | None = None
+        self.state_values: dict[str, Any] | None = None
+        self.question_requested = False
         self.disconnected = False
         self._first_visible_payload_seen = False
         self._first_token_timeout_alarm_emitted = False
@@ -669,25 +674,31 @@ class _AgentSseStreamAdapter:
         async for event in self.agent.astream(
             self.initial_state,
             config=self.config,
-            stream_mode=["messages", "custom"],
+            stream_mode=["messages", "custom", "values"],
         ):
             if not stream_started:
                 stream_started = True
                 await self._mark_stream_started()
             if await self._handle_disconnect():
                 return
+            async for sse_event in self._process_stream_event(event, started_at):
+                yield sse_event
 
-            event_kind, payload = self._parse_stream_event(event)
-            if event_kind == "custom":
-                for sse_event in self._handle_custom_payload(payload):
-                    yield sse_event
-                continue
-            if event_kind != "messages":
-                continue
-
-            message_chunk, metadata = payload
-            async for chunk_event in self._iter_message_chunk_events(message_chunk, metadata, started_at):
-                yield chunk_event
+    async def _process_stream_event(self, event: Any, started_at: float) -> AsyncIterator[dict[str, Any] | str]:
+        event_kind, payload = parse_agent_stream_event(event)
+        if event_kind == "values":
+            if isinstance(payload, dict):
+                self.state_values = payload
+            return
+        if event_kind == "custom":
+            for sse_event in self._handle_custom_payload(payload):
+                yield sse_event
+            return
+        if event_kind != "messages":
+            return
+        message_chunk, metadata = payload
+        async for chunk_event in self._iter_message_chunk_events(message_chunk, metadata, started_at):
+            yield chunk_event
 
     async def _mark_stream_started(self) -> None:
         """流首个事件到达：置位标记并触发外部回调（仅一次）。"""
@@ -716,7 +727,13 @@ class _AgentSseStreamAdapter:
         self, *, persist_latest_ai_timestamp: bool = False, prefer_latest_usage: bool = False
     ) -> dict[str, Any]:
         """读取最终状态并构造 message_end payload。"""
-        self.state = await self.agent.aget_state(self.config) if hasattr(self.agent, "aget_state") else None
+        use_stream_state = (
+            finish_use_stream_state_enabled() and self.state_values is not None and not self.question_requested
+        )
+        if use_stream_state:
+            self.state = StreamStateView(dict(self.state_values or {}))
+        else:
+            self.state = await self.agent.aget_state(self.config) if hasattr(self.agent, "aget_state") else None
         usage = self._resolve_end_usage(prefer_latest_usage)
         # 生成统计（服务端口径）随最后一条 AIMessage 持久化（历史回放可见），并随 message_end 下发。
         stats = _generation_stats_from_usage(
@@ -740,6 +757,7 @@ class _AgentSseStreamAdapter:
                 self.state,
                 generation_stats=stats,
                 completed_at_ms=self._stream_ended_wall_ms,
+                write_checkpoint=not use_stream_state,
             )
         payload = _message_end_payload_from_state(self.state, usage)
         payload["generation_stats"] = stats
@@ -1029,18 +1047,6 @@ class _AgentSseStreamAdapter:
         if isinstance(state_usage, dict) and {"llm_calls", "breakdown"} & state_usage.keys():
             return state_usage
         return self.latest_token_usage or state_usage
-
-    @staticmethod
-    def _parse_stream_event(event: Any) -> tuple[str, Any]:
-        if isinstance(event, tuple) and len(event) == 2:
-            stream_mode, payload = event
-            if stream_mode == "custom":
-                return "custom", payload
-            if stream_mode == "messages":
-                return "messages", payload
-            message_chunk, metadata = event
-            return "messages", (message_chunk, metadata)
-        return "unknown", event
 
 
 def _is_chat_data_visible_stream_message(message_chunk: Any, metadata: dict[str, Any]) -> bool:
