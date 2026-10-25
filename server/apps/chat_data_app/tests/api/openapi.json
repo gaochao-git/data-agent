@@ -9700,7 +9700,7 @@
     },
     "/api/chatdata/admin/meta/ontology/object-types/{object_type_name}/objects/search": {
       "post": {
-        "description": "通用对象实例查询：关键词、属性过滤、排序、分页和总数（只读投影）。",
+        "description": "通用对象实例查询：关键词、属性过滤、排序、分页和总数（只读投影）。\n\n单 member 保持原 ``objects[]`` 契约；显式传多个 member 时走多机构统一\n``results[]`` 契约（与指标层一致），逐机构并行查询。",
         "operationId": "search_ontology_objects_api_chatdata_admin_meta_ontology_object_types__object_type_name__objects_search_post",
         "parameters": [
           {
