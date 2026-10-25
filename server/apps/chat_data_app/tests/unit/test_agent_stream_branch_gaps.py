@@ -598,8 +598,8 @@ def test_parse_stream_event_marks_unknown_shape():
     """既不是二元组也不是已知 stream_mode 时归为 unknown（1062->1070）。"""
     sentinel = object()
 
-    assert agent_stream._AgentSseStreamAdapter._parse_stream_event(sentinel) == ("unknown", sentinel)
-    assert agent_stream._AgentSseStreamAdapter._parse_stream_event(("a", "b", "c")) == (
+    assert agent_run_support.parse_agent_stream_event(sentinel) == ("unknown", sentinel)
+    assert agent_run_support.parse_agent_stream_event(("a", "b", "c")) == (
         "unknown",
         ("a", "b", "c"),
     )

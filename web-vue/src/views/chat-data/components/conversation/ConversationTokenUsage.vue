@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ChatDataTokenUsage, ChatDataTokenUsageBreakdown, Message } from '../../types'
+import { copyTextToClipboard } from '../../utils/clipboard'
 
 type TokenUsageSort = 'round' | 'desc' | 'asc'
 
@@ -438,6 +439,17 @@ const getRowContent = (item: TokenUsageRow): string => {
   return item.description || item.label
 }
 
+const getCopyableRowText = (item: TokenUsageRow): string => {
+  const text = (item.content || item.description || '').trim()
+  return text
+}
+
+const copyTokenUsageRow = async (item: TokenUsageRow) => {
+  const text = getCopyableRowText(item)
+  if (!text) return
+  await copyTextToClipboard(text)
+}
+
 onMounted(() => {
   window.addEventListener('resize', handleViewportChange)
   window.addEventListener('scroll', handleViewportChange, true)
@@ -568,8 +580,19 @@ defineExpose({
               <span class="text-right">Token</span>
             </div>
             <div v-for="item in messageRows" :key="item.key" class="border-b border-gray-50 last:border-b-0">
-              <button type="button" class="grid w-full grid-cols-[minmax(0,1fr)_minmax(72px,0.5fr)_34px_42px_44px_48px] items-center gap-2 border-none bg-transparent px-2 py-1 text-left text-[11px] cursor-pointer hover:bg-slate-50" @click="toggleMessage(item.key)">
-                <span class="truncate text-gray-700" :title="item.content || getRowContent(item)">{{ getRowContent(item) }}</span>
+              <button type="button" class="group grid w-full grid-cols-[minmax(0,1fr)_minmax(72px,0.5fr)_34px_42px_44px_48px] items-center gap-2 border-none bg-transparent px-2 py-1 text-left text-[11px] cursor-pointer hover:bg-slate-50" @click="toggleMessage(item.key)">
+                <span class="flex min-w-0 items-center gap-1">
+                  <span class="truncate text-gray-700" :title="item.content || getRowContent(item)">{{ getRowContent(item) }}</span>
+                  <span
+                    v-if="getCopyableRowText(item)"
+                    class="shrink-0 cursor-pointer text-gray-300 opacity-0 transition-opacity hover:text-blue-500 group-hover:opacity-100"
+                    role="button"
+                    title="复制内容"
+                    @click.stop="copyTokenUsageRow(item)"
+                  >
+                    <i class="fa-regular fa-copy text-[10px]"></i>
+                  </span>
+                </span>
                 <span class="flex min-w-0 items-center gap-1.5">
                   <span class="h-1 flex-1 overflow-hidden rounded-full bg-gray-100">
                     <span class="block h-full rounded-full bg-blue-400" :style="{ width: `${Math.min(Math.abs(item.percentage), 100)}%` }"></span>
@@ -585,14 +608,25 @@ defineExpose({
                 <div v-for="child in item.children" :key="child.key" class="rounded bg-white">
                   <button
                     type="button"
-                    class="flex w-full items-center justify-between gap-2 border-none bg-transparent p-1.5 text-left text-[11px] text-gray-500 cursor-pointer hover:bg-slate-50"
+                    class="group flex w-full items-center justify-between gap-2 border-none bg-transparent p-1.5 text-left text-[11px] text-gray-500 cursor-pointer hover:bg-slate-50"
                     @click="toggleChild(child.key)"
                   >
                     <span class="flex min-w-0 items-center gap-1">
                       <i :class="['fa-solid text-[9px] text-gray-400', expandedChildKeys.has(child.key) ? 'fa-chevron-down' : 'fa-chevron-right']"></i>
                       <span class="truncate">{{ child.label }}</span>
                     </span>
-                    <span class="shrink-0 font-mono">{{ formatTokenUsageDisplay({ used: child.tokens, total: 1 }).split(' / ')[0] }}</span>
+                    <span class="flex shrink-0 items-center gap-1.5">
+                      <span
+                        v-if="getCopyableRowText(child)"
+                        class="cursor-pointer text-gray-300 opacity-0 transition-opacity hover:text-blue-500 group-hover:opacity-100"
+                        role="button"
+                        title="复制内容"
+                        @click.stop="copyTokenUsageRow(child)"
+                      >
+                        <i class="fa-regular fa-copy text-[10px]"></i>
+                      </span>
+                      <span class="font-mono">{{ formatTokenUsageDisplay({ used: child.tokens, total: 1 }).split(' / ')[0] }}</span>
+                    </span>
                   </button>
                   <pre
                     v-if="expandedChildKeys.has(child.key)"

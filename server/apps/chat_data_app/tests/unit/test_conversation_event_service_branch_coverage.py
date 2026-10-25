@@ -43,9 +43,11 @@ class SnapshotDao:
         self.hard_error = hard_error
         self.append_calls = 0
         self.max_sequence = 7
+        self.last_events = []
 
-    async def append_events_in_session(self, _session, **_kwargs):
+    async def append_events_in_session(self, _session, **kwargs):
         self.append_calls += 1
+        self.last_events = list(kwargs.get("events") or [])
         if self.hard_error is not None:
             raise self.hard_error
         if self.append_calls <= self.connection_failures:
@@ -113,6 +115,57 @@ def no_retry_delay(monkeypatch):
 # ---------------------------------------------------------------------------
 # persist_turn_with_checkpoint
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_persist_turn_rewrites_changed_payload_with_ledger():
+    dao = SnapshotDao()
+    service = _service(dao)
+    signatures: dict[str, str] = {}
+
+    await _persist(service, messages=[HumanMessage(content="old", id="turn-1")], persisted_signatures=signatures)
+    await _persist(service, messages=[HumanMessage(content="new", id="turn-1")], persisted_signatures=signatures)
+
+    assert [event["event_key"] for event in dao.last_events] == ["user:turn-1"]
+    assert "new" in dao.last_events[0]["payload"]
+
+
+@pytest.mark.asyncio
+async def test_persist_turn_skips_unchanged_events_with_ledger():
+    dao = SnapshotDao()
+    service = _service(dao)
+    signatures: dict[str, str] = {}
+
+    await _persist(service, persisted_signatures=signatures)
+    assert [event["event_key"] for event in dao.last_events] == ["user:turn-1"]
+    assert signatures
+
+    await _persist(service, persisted_signatures=signatures)
+    assert dao.last_events == []
+    assert dao.append_calls == 2
+
+
+def test_select_changed_events_keeps_changed_payload():
+    from apps.chat_data_app.agent.run.conversation_event_service import _event_signature, _select_changed_events
+
+    original = {"event_key": "assistant:a1", "event_type": "assistant_message", "payload": '{"content": "a"}'}
+    changed = {**original, "payload": '{"content": "b"}'}
+    signatures = {"assistant:a1": _event_signature(original)}
+
+    selected = _select_changed_events([changed], signatures)
+
+    assert selected == [changed]
+
+
+@pytest.mark.asyncio
+async def test_persist_turn_does_not_mark_signatures_on_failure(no_retry_delay):
+    dao = SnapshotDao(hard_error=RuntimeError("write failed"))
+    signatures: dict[str, str] = {}
+
+    with pytest.raises(RuntimeError, match="write failed"):
+        await _persist(_service(dao), persisted_signatures=signatures)
+
+    assert signatures == {}
 
 
 @pytest.mark.asyncio

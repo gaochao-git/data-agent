@@ -296,6 +296,39 @@ def sanitize_context_usage_for_response(usage: Any) -> Any:
     return sanitized
 
 
+HISTORY_BREAKDOWN_TEXT_LIMIT = 512
+
+
+def compact_context_usage_for_history(usage: Any) -> Any:
+    """压缩落库 token_usage：只保留计数与短文本，避免完整工具 schema 重复入库。
+
+    SSE 下发仍使用 sanitize_context_usage_for_response 的完整结构；这里只作用于
+    conversation_event 历史，前端靠 message_id 反查消息正文，工具 schema 仅保留
+    前缀供展开时识别。
+    """
+    if not isinstance(usage, dict):
+        return usage
+    if is_context_usage_system_prompt_visible():
+        # 调试模式需要完整 system prompt / 明细，不做截断
+        return usage
+    compact = copy.deepcopy(usage)
+    _compact_breakdown_text(compact.get("breakdown"))
+    return compact
+
+
+def _compact_breakdown_text(items: Any) -> None:
+    if not isinstance(items, list):
+        return
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        for key in ("content", "description"):
+            value = item.get(key)
+            if isinstance(value, str) and len(value) > HISTORY_BREAKDOWN_TEXT_LIMIT:
+                item[key] = value[:HISTORY_BREAKDOWN_TEXT_LIMIT] + "…"
+        _compact_breakdown_text(item.get("children"))
+
+
 def latest_model_name_from_usage(usage: Any) -> str:
     """取 usage 模型调用记录里最后一次调用的模型名；缺失返回空串。
 
