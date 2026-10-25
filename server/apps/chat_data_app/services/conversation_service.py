@@ -39,13 +39,13 @@ DATASOURCE_GROUP_PREFIX = "datasource:"
 # ============ 内部函数 ============
 
 
-def _get_title_llm() -> BaseChatModel:
+def _get_title_llm(model_id: str | None = None) -> BaseChatModel:
     """获取标题生成用的 LLM；源头关闭思考（forced 模型关不掉则由后处理剥离）。
 
     max_tokens 不能压得太低：forced thinking 模型会先消耗思考 token，
     预算过小时正文为空，表现为「LLM标题产物不可用」。
     """
-    return get_chat_data_llm(streaming=False, max_tokens=2048, enable_thinking=False)
+    return get_chat_data_llm(model=model_id, streaming=False, max_tokens=2048, enable_thinking=False)
 
 
 def _llm_model_id(llm: Any) -> str:
@@ -459,7 +459,7 @@ async def update_title(conversation_id: str, title: str, user_id: str | None = N
     return True
 
 
-async def generate_title(conversation_id: str, user_id: str | None = None) -> str | None:
+async def generate_title(conversation_id: str, user_id: str | None = None, model_id: str | None = None) -> str | None:
     """根据事件表中的第一条用户消息生成会话标题。
 
     标题仍是占位符（""/新会话/未命名会话）时才生成，已命名直接返回；
@@ -478,7 +478,7 @@ async def generate_title(conversation_id: str, user_id: str | None = None) -> st
         user_id=str(user_id or thread.user_id),
     )
     if first_message:
-        return await _generate_and_update_title(conversation_id, first_message, user_id)
+        return await _generate_and_update_title(conversation_id, first_message, user_id, model_id)
     logger.warning("生成标题失败: %s - 事件表中没有用户消息", conversation_id)
     return None
 
@@ -487,12 +487,13 @@ async def _generate_and_update_title(
     conversation_id: str,
     first_message: str,
     user_id: str | None,
+    model_id: str | None = None,
 ) -> str:
     """根据首条用户消息生成并更新会话标题；产物不可用返回空串（不落库，保持占位符待重试）。"""
     query = first_message.strip()[:500]
     llm = None
     try:
-        llm = _get_title_llm()
+        llm = _get_title_llm(model_id) if model_id else _get_title_llm()
         prompt = ChatPromptTemplate.from_messages([("system", TITLE_GENERATION_PROMPT), ("human", "{query}")])
 
         chain = prompt | llm

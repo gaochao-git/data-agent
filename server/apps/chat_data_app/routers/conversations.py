@@ -56,6 +56,12 @@ class UpdateTitleRequest(BaseModel):
     title: str
 
 
+class GenerateTitleRequest(BaseModel):
+    """生成标题请求；model_id 省略时沿用注册表默认模型。"""
+
+    model_id: str | None = None
+
+
 class CompletionRequest(BaseModel):
     """对话请求"""
 
@@ -597,7 +603,9 @@ async def update_conversation_title(conversation_id: str, request: UpdateTitleRe
 
 
 @router.post("/{conversation_id}/title")
-async def generate_conversation_title(conversation_id: str, req: Request) -> JSONResponse:
+async def generate_conversation_title(
+    conversation_id: str, req: Request, body: GenerateTitleRequest | None = None
+) -> JSONResponse:
     """
     自动生成会话标题
 
@@ -618,7 +626,7 @@ async def generate_conversation_title(conversation_id: str, req: Request) -> JSO
         if not config:
             return business_response(msg="对话不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
 
-        title = await conversation.generate_title(conversation_id, user_id)
+        title = await conversation.generate_title(conversation_id, user_id, (body.model_id if body else None))
         if not title:
             return business_response(
                 msg="无法生成标题，对话不存在或无消息", code=ErrorCode.CHATDATA_NOT_FOUND, status="error"

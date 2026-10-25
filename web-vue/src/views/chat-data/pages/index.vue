@@ -765,7 +765,7 @@ const retryConversationTitleIfNeeded = async (conversationId: string) => {
   if (!CONVERSATION_TITLE_PLACEHOLDERS.has(currentTitle.trim())) return
   titleRetryInFlight.add(conversationId)
   try {
-    const res = await generateConversationTitle(conversationId)
+    const res = await generateConversationTitle(conversationId, selectedConversationModelId.value || undefined)
     if (res?.status === 'success' && res.data?.title) {
       if (currentConversationId.value === conversationId) {
         currentConversationTitle.value = res.data.title
@@ -802,7 +802,7 @@ const handleToggleConversationFavorite = async (conversationId: string, isFavori
 // 首条消息对应的 SSE 建立后立即生成标题并完成分组迁移，不等待助手输出结束。
 const handleFirstMessageStarted = async (convId: string) => {
   const datasourcePromise = loadConversationDatasourceId(convId)
-  const titlePromise = generateConversationTitle(convId)
+  const titlePromise = generateConversationTitle(convId, selectedConversationModelId.value || undefined)
     .catch(error => {
       console.error('生成标题失败:', error)
       return null

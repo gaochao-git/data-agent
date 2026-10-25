@@ -1020,10 +1020,14 @@ export function updateConversationTitle(
 }
 
 /** 生成会话标题 */
-export function generateConversationTitle(conversationId: string): Promise<ApiResponse<{ title: string }>> {
+export function generateConversationTitle(
+  conversationId: string,
+  modelId?: string
+): Promise<ApiResponse<{ title: string }>> {
   return request({
     url: `/agents/api/chatdata/conversations/${conversationId}/title`,
-    method: 'post'
+    method: 'post',
+    data: modelId ? { model_id: modelId } : undefined
   })
 }
 
