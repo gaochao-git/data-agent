@@ -43,6 +43,14 @@ def graph_query_enabled() -> bool:
     return str(os.getenv("CHAT_DATA_NEBULA_ENABLED") or "").strip().lower() in _TRUTHY
 
 
+def graph_read_backend() -> str:
+    """图读后端：显式配置优先；未配置时 Nebula 开启用 nebula，否则用 sql。"""
+    raw = _text(os.getenv("CHAT_DATA_GRAPH_BACKEND")).lower()
+    if raw in {"sql", "nebula"}:
+        return raw
+    return "nebula" if graph_query_enabled() else "sql"
+
+
 def _text(value: Any) -> str:
     normalized = str(value or "").strip()
     if len(normalized) >= 2 and normalized[0] == normalized[-1] == '"':
@@ -261,10 +269,11 @@ class GraphQueryService:
             target_object_key=target_object_key,
         )
         result = parse_path_rows(self._execute(query))
-        if len(result.paths) >= limit:
-            result.degraded_reason = (
-                f"当前节点关系较多，仅展示前 {limit} 条路径；请点击更具体的节点继续，或按需使用「展开一跳」"
-            )
+        if depth == 1 and len(result.paths) >= limit:
+            # 一跳展开按「邻居对象数」计预算，避免路径去重导致用户误以为节点被丢。
+            result.degraded_reason = f"当前节点邻居较多，仅展示前 {limit} 个对象；请使用节点过滤缩小范围后再展开"
+        elif depth > 1 and len(result.paths) >= limit:
+            result.degraded_reason = f"当前查询路径较多，仅展示前 {limit} 条路径；请缩小起点/终点范围或减少展开深度"
         return result
 
     def find_paths(

@@ -10,6 +10,7 @@ from .service import (
     GraphQueryService,
     get_graph_query_service,
     graph_query_enabled,
+    graph_read_backend,
     reset_graph_query_service,
 )
 from .sync import (
@@ -40,6 +41,7 @@ __all__ = [
     "latest_graph_as_of_async",
     "get_graph_query_service",
     "graph_query_enabled",
+    "graph_read_backend",
     "reset_graph_query_service",
     "sync_member_graph",
     "sync_member_graph_batch",

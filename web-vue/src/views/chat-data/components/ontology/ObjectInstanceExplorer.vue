@@ -265,7 +265,161 @@ const graphDegradedReason = ref('')
 const graphLoading = ref(false)
 let graphLoadingCount = 0
 const GRAPH_NODE_LIMIT = 80
+const GRAPH_EXPAND_LIMIT = 10
 const graphExpansionNotice = ref('')
+const graphExpandFilterOpen = ref(false)
+const graphExpandFilterKey = ref('')
+const graphExpandAllowedTypes = ref<string[]>([])
+const graphNeighborTypeOptions = computed(() => {
+  const anchor = graphExpandFilterKey.value
+  if (!anchor) return []
+  const counts = new Map<string, number>()
+  for (const edge of Object.values(exploreEdges.value)) {
+    const otherKey = edge.fromKey === anchor ? edge.toKey : edge.toKey === anchor ? edge.fromKey : ''
+    if (!otherKey) continue
+    const type = exploreNodes.value[otherKey]?.objectType
+    if (type) counts.set(type, (counts.get(type) || 0) + 1)
+  }
+  return [...counts.entries()].map(([type, count]) => ({ type, count })).sort((a, b) => a.type.localeCompare(b.type))
+})
+const graphExpandRemoteTypes = ref<string[]>([])
+const graphExpandFilterLoading = ref(false)
+let graphExpandFilterRequestId = 0
+const loadGraphExpandTypeOptions = async (key: string) => {
+  const node = exploreNodes.value[key]
+  const objectType = node?.objectType
+  if (!objectType) return
+  const requestId = ++graphExpandFilterRequestId
+  graphExpandFilterLoading.value = true
+  try {
+    const [fromRes, toRes] = await Promise.all([
+      getAdminOntologyRelationTypes({ from_object_type: objectType }),
+      getAdminOntologyRelationTypes({ to_object_type: objectType })
+    ])
+    const types = new Set<string>()
+    for (const relation of fromRes.data?.relation_types || []) {
+      if (relation.from_object_type_name === objectType && relation.to_object_type_name) types.add(relation.to_object_type_name)
+    }
+    for (const relation of toRes.data?.relation_types || []) {
+      if (relation.to_object_type_name === objectType && relation.from_object_type_name) types.add(relation.from_object_type_name)
+    }
+    if (requestId !== graphExpandFilterRequestId) return
+    graphExpandRemoteTypes.value = [...types]
+    await ensureObjectTypeDisplayNames([...types])
+  } catch (err) {
+    console.warn('加载展开过滤类型失败:', err)
+  } finally {
+    if (requestId === graphExpandFilterRequestId) graphExpandFilterLoading.value = false
+  }
+}
+const graphExpandTypeChoices = computed(() => {
+  const choices = new Map<string, number>()
+  for (const option of graphNeighborTypeOptions.value) choices.set(option.type, option.count)
+  for (const type of graphExpandRemoteTypes.value) if (!choices.has(type)) choices.set(type, 0)
+  return [...choices.entries()].map(([type, count]) => ({ type, count })).sort((a, b) => a.type.localeCompare(b.type))
+})
+interface GraphExpandCondition {
+  type: string
+  property: string
+  operator: string
+  value: string
+}
+const graphExpandConditions = ref<GraphExpandCondition[]>([])
+const graphExpandConditionType = ref('')
+const graphExpandConditionProperty = ref('')
+const graphExpandConditionOperator = ref('=')
+const graphExpandConditionValue = ref('')
+const graphExpandTypeProperties = ref<Record<string, OntologyPropertyItem[]>>({})
+const graphExpandConditionLoading = ref(false)
+const graphExpandPropertyOptions = computed(() => graphExpandTypeProperties.value[graphExpandConditionType.value] || [])
+const graphExpandConditionText = (condition: GraphExpandCondition) => {
+  const property = graphExpandTypeProperties.value[condition.type]?.find(item => item.property_name === condition.property)
+  return `${objectTypeDisplayName(condition.type)}.${property?.display_name || condition.property} ${condition.operator} ${condition.value}`
+}
+const loadGraphExpandTypeProperties = async (type: string) => {
+  if (!type || graphExpandTypeProperties.value[type]) return
+  try {
+    const res = await getAdminOntologyObjectType(type)
+    const properties = res.data?.properties || []
+    graphExpandTypeProperties.value = { ...graphExpandTypeProperties.value, [type]: properties }
+  } catch (err) {
+    console.warn('加载对象类型属性失败:', type, err)
+  }
+}
+const applyGraphExpandFilter = () => {
+  const anchor = graphExpandFilterKey.value
+  const types = new Set(graphExpandConditions.value.map(condition => condition.type))
+  if (!anchor || types.size === 0) return
+  const nextNodes: Record<string, ExploreNode> = {}
+  for (const [key, node] of Object.entries(exploreNodes.value)) {
+    if (key === anchor || !types.has(node.objectType)) nextNodes[key] = node
+  }
+  const nextEdges: Record<string, ExploreEdge> = {}
+  for (const [key, edge] of Object.entries(exploreEdges.value)) {
+    if (nextNodes[edge.fromKey] && nextNodes[edge.toKey]) nextEdges[key] = edge
+  }
+  exploreNodes.value = nextNodes
+  exploreEdges.value = nextEdges
+  graphNodePropertiesCache.clear()
+  graphExpansionNotice.value = ''
+  void expandCurrentLinks()
+}
+
+const addGraphExpandCondition = () => {
+  const type = graphExpandConditionType.value
+  const property = graphExpandConditionProperty.value
+  const value = graphExpandConditionValue.value.trim()
+  if (!type || !property || !value) {
+    ElMessage.warning('请选择对象类型、属性并填写值')
+    return
+  }
+  graphExpandConditions.value = [
+    ...graphExpandConditions.value,
+    { type, property, operator: graphExpandConditionOperator.value, value }
+  ]
+  if (!graphExpandAllowedTypes.value.includes(type)) {
+    graphExpandAllowedTypes.value = [...graphExpandAllowedTypes.value, type]
+  }
+  graphExpandConditionValue.value = ''
+  applyGraphExpandFilter()
+}
+const removeGraphExpandCondition = (index: number) => {
+  graphExpandConditions.value = graphExpandConditions.value.filter((_, i) => i !== index)
+  if (graphExpandConditions.value.length > 0) applyGraphExpandFilter()
+}
+const toggleGraphExpandFilter = (key: string) => {
+  if (graphExpandFilterOpen.value && graphExpandFilterKey.value === key) {
+    graphExpandFilterOpen.value = false
+    return
+  }
+  graphExpandFilterOpen.value = true
+  graphExpandFilterKey.value = key
+  graphExpandAllowedTypes.value = []
+  graphExpandConditions.value = []
+  graphExpandConditionType.value = ''
+  graphExpandConditionProperty.value = ''
+  graphExpandConditionValue.value = ''
+  graphExpandRemoteTypes.value = []
+  void loadGraphExpandTypeOptions(key)
+}
+const clearGraphExpandFilter = () => {
+  graphExpandFilterOpen.value = false
+  graphExpandFilterKey.value = ''
+  graphExpandAllowedTypes.value = []
+  graphExpandConditions.value = []
+  graphExpandConditionType.value = ''
+  graphExpandConditionProperty.value = ''
+  graphExpandConditionValue.value = ''
+  graphExpandRemoteTypes.value = []
+  graphExpandFilterRequestId += 1
+}
+watch(graphExpandConditionType, type => {
+  graphExpandConditionProperty.value = ''
+  if (type) void loadGraphExpandTypeProperties(type)
+})
+watch(() => exploreSelectedKey.value, key => {
+  if (graphExpandFilterKey.value && graphExpandFilterKey.value !== key) clearGraphExpandFilter()
+})
 const graphNewKeys = ref<string[]>([])
 let graphNewKeysTimer: number | null = null
 
@@ -364,21 +518,36 @@ const addExploreEdge = (relationName: string, fromKey: string, toKey: string) =>
 const mergeCurrentLinksIntoExplore = () => {
   const data = detail.value
   if (!data) return
+  const filterAnchor = graphExpandFilterKey.value
+  const allowedTypes = new Set(graphExpandAllowedTypes.value)
+  const addedKeys: string[] = []
+  const anchorKey = data.object_key
+  addExploreNode(anchorKey, data.object_type || props.objectType, detailTitle.value || anchorKey, data.properties || {})
   const linkedTypes: string[] = []
-  addExploreNode(data.object_key, data.object_type || props.objectType, detailTitle.value || data.object_key, data.properties || {})
+  let added = 0
   for (const group of linkedGroups.value) {
     for (const entry of group.entries) {
       const relatedKey = String(entry.related_object_key || '')
       if (!relatedKey) continue
+      if (exploreNodes.value[relatedKey]) continue
       const keyParts = relatedKey.split(':')
       const relatedType = String(entry.related_object_type || '').trim() ||
         (keyParts.length >= 3 && keyParts[1] ? keyParts[1] : props.objectType)
+      if (filterAnchor && filterAnchor !== anchorKey && allowedTypes.size > 0 && !allowedTypes.has(relatedType)) continue
+      if (added >= GRAPH_EXPAND_LIMIT) {
+        graphExpansionNotice.value = `本次最多展开 ${GRAPH_EXPAND_LIMIT} 个对象，已截断；可用节点右上角「过滤展开」缩小范围。`
+        break
+      }
       const relatedTitle = String(entry.related_title || '').trim()
       linkedTypes.push(relatedType)
       addExploreNode(relatedKey, relatedType, relatedTitle || relatedKey.split(':').slice(1).join(':') || relatedKey, {})
-      addExploreEdge(group.relationName, data.object_key, relatedKey)
+      addExploreEdge(group.relationName, anchorKey, relatedKey)
+      addedKeys.push(relatedKey)
+      added += 1
     }
+    if (added >= GRAPH_EXPAND_LIMIT) break
   }
+  markGraphNewKeys(addedKeys)
   void ensureObjectTypeDisplayNames([data.object_type || props.objectType, ...linkedTypes])
 }
 
@@ -414,7 +583,37 @@ const ensureObjectTypeDisplayNames = async (types: string[]) => {
   )
 }
 
-const mergeGraphResult = (data: {
+const graphNodePropertiesCache = new Map<string, Record<string, unknown>>()
+const matchesGraphExpandConditions = async (node: { object_key: string; object_type: string }) => {
+  const conditions = graphExpandConditions.value.filter(condition => condition.type === node.object_type)
+  if (graphExpandConditions.value.length > 0 && conditions.length === 0) return false
+  if (conditions.length === 0) return true
+  let properties = graphNodePropertiesCache.get(node.object_key)
+  if (!properties) {
+    const member = selectedMember.value || parseObjectKey(node.object_key, props.objectType).member
+    const res = await readAdminOntologyObject(node.object_type, node.object_key, member ? [member] : [])
+    properties = (res.data?.properties || {}) as Record<string, unknown>
+    graphNodePropertiesCache.set(node.object_key, properties)
+  }
+  return conditions.every(condition => {
+    const actual = properties?.[condition.property]
+    const expected = condition.value
+    if (condition.operator === 'contains') return String(actual ?? '').includes(expected)
+    if (condition.operator === '!=') return String(actual ?? '') !== expected
+    if (condition.operator === '=') return String(actual ?? '') === expected
+    const actualNumber = Number(actual)
+    const expectedNumber = Number(expected)
+    if (Number.isFinite(actualNumber) && Number.isFinite(expectedNumber)) {
+      if (condition.operator === '>') return actualNumber > expectedNumber
+      if (condition.operator === '>=') return actualNumber >= expectedNumber
+      if (condition.operator === '<') return actualNumber < expectedNumber
+      if (condition.operator === '<=') return actualNumber <= expectedNumber
+    }
+    return false
+  })
+}
+
+const mergeGraphResult = async (data: {
   nodes?: Array<{ object_key: string; object_type: string; title: string }>
   edges?: Array<{ from_object_key: string; to_object_key: string; relation_type: string }>
   graph_as_of?: string
@@ -424,21 +623,28 @@ const mergeGraphResult = (data: {
   graphDegradedReason.value = data.degraded_reason || ''
   const addedKeys: string[] = []
   let truncated = false
+  const filterAnchor = graphExpandFilterKey.value
+  const allowedTypes = new Set(graphExpandAllowedTypes.value)
+  let addedThisExpand = 0
   for (const node of data.nodes || []) {
     if (!node.object_key) continue
-    if (!exploreNodes.value[node.object_key] && Object.keys(exploreNodes.value).length >= GRAPH_NODE_LIMIT) {
+    if (exploreNodes.value[node.object_key]) continue
+    if (filterAnchor && node.object_key !== filterAnchor && allowedTypes.size > 0 && !allowedTypes.has(node.object_type)) continue
+    if (!(await matchesGraphExpandConditions(node))) continue
+    if (addedThisExpand >= GRAPH_EXPAND_LIMIT || Object.keys(exploreNodes.value).length >= GRAPH_NODE_LIMIT) {
       truncated = true
       continue
     }
-    if (!exploreNodes.value[node.object_key]) addedKeys.push(node.object_key)
+    addedKeys.push(node.object_key)
     addExploreNode(node.object_key, node.object_type || '', node.title || node.object_key, {})
+    addedThisExpand += 1
   }
   for (const edge of data.edges || []) {
     if (!exploreNodes.value[edge.from_object_key] || !exploreNodes.value[edge.to_object_key]) continue
     addExploreEdge(edge.relation_type || 'related', edge.from_object_key, edge.to_object_key)
   }
   graphExpansionNotice.value = truncated
-    ? `本次展开达到 ${GRAPH_NODE_LIMIT} 个对象上限，已截断；请减少展开深度或缩小范围。`
+    ? `本次最多展开 ${GRAPH_EXPAND_LIMIT} 个对象，已截断；可用节点右上角「过滤展开」选择对象类型。`
     : ''
   markGraphNewKeys(addedKeys)
   void ensureObjectTypeDisplayNames((data.nodes || []).map(node => node.object_type))
@@ -456,7 +662,8 @@ const loadTraverseIntoExplore = async (objectKey: string, depth = 2): Promise<bo
       object_key: objectKey,
       depth,
       direction: 'both',
-      limit: 30,
+      // 一跳按邻居对象数量预算，多跳才按路径数量预算。
+      limit: depth === 1 ? 50 : 30,
       member_datasource_ids: [member]
     })
     if (res.status !== 'success' || !res.data) {
@@ -466,7 +673,7 @@ const loadTraverseIntoExplore = async (objectKey: string, depth = 2): Promise<bo
       return false
     }
     graphFallbackNotice.value = ''
-    mergeGraphResult(res.data)
+    await mergeGraphResult(res.data)
     return true
   } catch (err) {
     console.warn('Nebula 图查询不可用，回退一跳 links:', err)
@@ -488,25 +695,34 @@ const expandCurrentLinks = async () => {
   if (!graphLoaded) mergeCurrentLinksIntoExplore()
   const added = Object.keys(exploreNodes.value).length - nodeCount + Object.keys(exploreEdges.value).length - edgeCount
   if (added <= 0) {
-    ElMessage.info('当前节点已无更多可展开的关联')
+    if (graphExpandConditions.value.length > 0) {
+      graphExpansionNotice.value = '当前过滤条件下没有匹配的下一跳对象，请调整条件或值。'
+    } else {
+      ElMessage.info('当前节点已无更多可展开的关联')
+    }
   }
 }
 
-const seedExploreGraph = () => {
+const seedExploreGraph = async () => {
   graphFallbackNotice.value = ''
   graphAsOf.value = ''
   graphDegradedReason.value = ''
   graphExpansionNotice.value = ''
   graphNewKeys.value = []
+  clearGraphExpandFilter()
   graphLoadingCount = 0
   graphLoading.value = false
   exploreNodes.value = {}
   exploreEdges.value = {}
   exploreNodeOffsets.value = {}
-  exploreSelectedKey.value = detail.value?.object_key || ''
-  mergeCurrentLinksIntoExplore()
-  // 默认只展开 1 跳，避免一进图就铺满。
-  void loadTraverseIntoExplore(exploreSelectedKey.value, 1)
+  const anchorKey = detail.value?.object_key || ''
+  exploreSelectedKey.value = anchorKey
+  if (detail.value) {
+    addExploreNode(anchorKey, detail.value.object_type || props.objectType, detailTitle.value || anchorKey, detail.value.properties || {})
+  }
+  // 默认只展开 1 跳，避免一进图就铺满；图不可用时才回退 links。
+  const loaded = await loadTraverseIntoExplore(anchorKey, 1)
+  if (!loaded) mergeCurrentLinksIntoExplore()
 }
 
 const clearExploreGraph = () => {
@@ -1203,6 +1419,51 @@ onBeforeUnmount(() => stopGraphDetailResize())
             show-icon
             class="mb-2"
           />
+          <div
+            v-if="graphExpandFilterOpen"
+            class="mb-2 rounded border border-amber-100 bg-amber-50/70 px-2 py-1.5"
+          >
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="text-[10px] font-medium text-amber-700">下一跳过滤</span>
+              <span class="max-w-[220px] truncate font-mono text-[10px] text-slate-500" :title="graphExpandFilterKey">{{ graphExpandFilterKey }}</span>
+              <el-select v-model="graphExpandConditionType" size="small" clearable placeholder="对象类型" class="!w-36">
+                <el-option v-for="option in graphExpandTypeChoices" :key="option.type" :label="objectTypeDisplayName(option.type)" :value="option.type" />
+              </el-select>
+              <el-select v-model="graphExpandConditionProperty" size="small" clearable placeholder="属性" class="!w-40" :disabled="!graphExpandConditionType">
+                <el-option v-for="property in graphExpandPropertyOptions" :key="property.property_name" :label="property.display_name || property.property_name" :value="property.property_name" />
+              </el-select>
+              <el-select v-model="graphExpandConditionOperator" size="small" class="!w-24">
+                <el-option label="=" value="=" />
+                <el-option label="!=" value="!=" />
+                <el-option label=">" value=">" />
+                <el-option label=">=" value=">=" />
+                <el-option label="<" value="<" />
+                <el-option label="<=" value="<=" />
+                <el-option label="包含" value="contains" />
+              </el-select>
+              <el-input v-model="graphExpandConditionValue" size="small" clearable placeholder="值（回车或搜索）" class="!w-40" @keyup.enter="addGraphExpandCondition" />
+              <el-button size="small" type="primary" @click="addGraphExpandCondition">
+                <i class="fa-solid fa-magnifying-glass mr-1 text-[10px]"></i>搜索
+              </el-button>
+              <el-button size="small" @click="clearGraphExpandFilter">关闭</el-button>
+            </div>
+            <div class="mt-1 flex flex-wrap items-center gap-1">
+              <el-tag
+                v-for="(condition, index) in graphExpandConditions"
+                :key="`${condition.type}-${condition.property}-${index}`"
+                size="small"
+                closable
+                type="warning"
+                effect="plain"
+                @close="removeGraphExpandCondition(index)"
+              >
+                {{ graphExpandConditionText(condition) }}
+              </el-tag>
+              <span v-if="graphExpandFilterLoading" class="text-[10px] text-slate-400">加载下一跳类型…</span>
+              <span v-else-if="graphExpandTypeChoices.length === 0" class="text-[10px] text-slate-400">未找到下一跳类型</span>
+              <span v-if="graphExpandConditions.length === 0" class="text-[10px] text-slate-400">不添加条件时按默认规则展开，最多 10 个</span>
+            </div>
+          </div>
           <div class="mb-1 flex flex-wrap items-center gap-2">
             <span class="text-xs font-medium text-slate-700">图探索</span>
             <span class="text-[10px] text-slate-400">力导向布局</span>
@@ -1294,9 +1555,9 @@ onBeforeUnmount(() => stopGraphDetailResize())
                   </text>
                   <foreignObject
                     v-if="node.key === exploreSelectedKey"
-                    :x="node.x + 38"
+                    :x="node.x + 22"
                     :y="node.y - 18"
-                    width="44"
+                    width="60"
                     height="20"
                   >
                     <div xmlns="http://www.w3.org/1999/xhtml" class="flex h-full items-center justify-center gap-0.5">
@@ -1317,6 +1578,15 @@ onBeforeUnmount(() => stopGraphDetailResize())
                         @click.stop="expandNodeOneHop(node.key)"
                       >
                         <i class="fa-solid fa-arrow-up-right-from-square text-[8px]"></i>
+                      </button>
+                      <button
+                        type="button"
+                        title="过滤展开"
+                        class="flex h-4 w-4 items-center justify-center rounded border border-slate-200 bg-white text-slate-500 hover:border-amber-300 hover:text-amber-600"
+                        @mousedown.stop.prevent
+                        @click.stop="toggleGraphExpandFilter(node.key)"
+                      >
+                        <i class="fa-solid fa-filter text-[8px]"></i>
                       </button>
                     </div>
                   </foreignObject>
@@ -1384,7 +1654,7 @@ onBeforeUnmount(() => stopGraphDetailResize())
             </aside>
           </div>
           <div class="mt-1 text-[10px] text-slate-400">
-            先点击节点选中；选中后节点下方出现「查看详情」和「展开一跳」，不会自动加载或扩图。
+            先点击节点选中；节点右上角提供「查看详情」「展开一跳」「过滤展开」，不会自动加载或扩图。每次最多展开 10 个对象。
           </div>
         </div>
       </template>

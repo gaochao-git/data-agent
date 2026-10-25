@@ -48,9 +48,11 @@ from ..services.ontology.graph import (
     GraphSyncError,
     get_graph_query_service,
     graph_query_enabled,
+    graph_read_backend,
     latest_graph_as_of_async,
     sync_member_graph_batch,
 )
+from ..services.ontology.graph.sql_adapter import SqlGraphQueryAdapter
 from ..services.ontology.object_projection import (
     ObjectProjectionError,
     list_object_projection,
@@ -548,8 +550,9 @@ def _severity_summary(findings: list[dict]) -> dict[str, int]:
 async def traverse_ontology_graph(payload: OntologyGraphTraverseRequest, request: Request) -> JSONResponse:
     """前端图探索：Nebula 只读多跳；图不可用时由前端回退一跳详情。"""
     try:
-        _get_current_user(request)
-        if not graph_query_enabled():
+        current_user = _get_current_user(request)
+        backend = graph_read_backend()
+        if backend == "nebula" and not graph_query_enabled():
             return _error_response(
                 ValueError("图查询未启用：需设置 CHAT_DATA_NEBULA_ENABLED=1"),
                 "图查询未启用",
@@ -562,15 +565,27 @@ async def traverse_ontology_graph(payload: OntologyGraphTraverseRequest, request
                 "图查询参数不合法",
                 ErrorCode.CHATDATA_ONTOLOGY_INVALID,
             )
-        result = await asyncio.to_thread(
-            get_graph_query_service().traverse_objects,
-            payload.object_key,
-            depth=payload.depth,
-            direction=payload.direction,
-            limit=payload.limit,
-            member_ids=members,
-        )
-        result.graph_as_of = await latest_graph_as_of_async(members[0])
+        if backend == "sql":
+            result = await SqlGraphQueryAdapter(
+                user_id=str(current_user.user_id),
+                username=str(current_user.username or ""),
+            ).traverse_objects(
+                payload.object_key,
+                depth=payload.depth,
+                direction=payload.direction,
+                limit=payload.limit,
+                member_ids=members,
+            )
+        else:
+            result = await asyncio.to_thread(
+                get_graph_query_service().traverse_objects,
+                payload.object_key,
+                depth=payload.depth,
+                direction=payload.direction,
+                limit=payload.limit,
+                member_ids=members,
+            )
+            result.graph_as_of = await latest_graph_as_of_async(members[0])
         return business_response(data=result.as_dict(), msg="查询成功")
     except HTTPException:
         raise
