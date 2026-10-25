@@ -602,6 +602,7 @@ class _AgentSseStreamAdapter:
         self.reasoning_segments: list[dict[str, Any]] = []
         self.archived_turn_messages: list[Any] = []
         self.latest_token_usage: dict[str, Any] | None = None
+        self.history_event_signatures: dict[str, str] = {}
         # 最后一次模型调用的模型名（token_usage 事件 sanitize 前提取），finish 时进 stats
         self.latest_model_name: str = ""
         self.state: Any | None = None

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from collections.abc import Iterable
 from datetime import datetime
@@ -49,6 +50,27 @@ def _compare_stream_ids(left: str, right: str) -> int:
     left_key = key(left)
     right_key = key(right)
     return (left_key > right_key) - (left_key < right_key)
+
+
+def _event_signature(event: dict[str, Any]) -> str:
+    turn_id = str(event.get("turn_id") or "")
+    event_type = str(event.get("event_type") or "")
+    payload = str(event.get("payload") or "")
+    return hashlib.sha256(f"{turn_id}\x00{event_type}\x00{payload}".encode()).hexdigest()
+
+
+def _select_changed_events(
+    events: list[dict[str, Any]],
+    persisted_signatures: dict[str, str] | None,
+) -> list[dict[str, Any]]:
+    if persisted_signatures is None:
+        return events
+    changed: list[dict[str, Any]] = []
+    for event in events:
+        event_key = str(event.get("event_key") or "").strip()
+        if persisted_signatures.get(event_key) != _event_signature(event):
+            changed.append(event)
+    return changed
 
 
 class ConversationEventService:
@@ -102,6 +124,7 @@ class ConversationEventService:
         reasoning_segments: Iterable[dict[str, Any]],
         context_compression_events: Iterable[dict[str, Any]] = (),
         token_usage: dict[str, Any] | None = None,
+        persisted_signatures: dict[str, str] | None = None,
     ) -> None:
         events = _build_turn_events(
             turn_id=turn_id,
@@ -112,77 +135,86 @@ class ConversationEventService:
         )
         if not events:
             return
+        changed_events = _select_changed_events(events, persisted_signatures)
+        if not changed_events:
+            return
         await self._append_events(
             conversation_id=conversation_id,
             user_id=user_id,
             operator_name=operator_name,
-            events=events,
+            events=changed_events,
         )
+        if persisted_signatures is not None:
+            for event in events:
+                persisted_signatures[str(event.get("event_key") or "").strip()] = _event_signature(event)
 
-    async def persist_turn_with_checkpoint(
+    async def _commit_turn_checkpoint_once(
         self,
         *,
         conversation_id: str,
         user_id: str,
         operator_name: str,
         turn_id: str,
-        messages: Iterable[BaseMessage],
-        reasoning_segments: Iterable[dict[str, Any]],
-        context_compression_events: Iterable[dict[str, Any]] = (),
-        token_usage: dict[str, Any] | None = None,
+        events: list[dict[str, Any]],
         run_id: str,
+        owner_token: str | None,
         stream_id: str | None,
-        owner_token: str | None = None,
     ) -> dict[str, Any] | None:
-        """原子提交历史快照与 Run 的 Redis 恢复水位。
+        async with self._dao.session_context() as session:
+            await self._dao.append_events_in_session(
+                session,
+                conversation_id=conversation_id,
+                user_id=user_id,
+                operator_name=operator_name,
+                events=events,
+                now=datetime.now(),
+            )
+            # append_events_in_session locks the conversation row first.
+            # Keep the same conversation -> Run lock order as start_run
+            # and complete_run to avoid cross-process deadlocks. If the
+            # owner check fails, the surrounding transaction rolls back
+            # the provisional history append.
+            run = await self._inbox_dao.get_run_by_id_for_update(session, run_id)
+            self._validate_run_for_checkpoint(
+                run,
+                conversation_id=conversation_id,
+                user_id=user_id,
+                run_id=run_id,
+                owner_token=owner_token,
+            )
+            history_sequence_no = await self._dao.get_max_sequence_in_session(session, conversation_id)
+            return await self._update_history_checkpoint(
+                run_id=run_id,
+                turn_id=turn_id,
+                history_sequence_no=history_sequence_no,
+                stream_id=stream_id,
+                run=run,
+            )
 
-        Redis 发布和 MySQL 不在同一事务中，因此调用方必须先发布事件，再调用本方法。
-        事务内先写会话事件，再推进 checkpoint；失败时两者一起回滚，恢复最多重复读取，
-        不会因为游标提前推进而丢失历史事件。
-        """
-        events = _build_turn_events(
-            turn_id=turn_id,
-            messages=list(messages or []),
-            reasoning_segments=list(reasoning_segments or []),
-            context_compression_events=list(context_compression_events or []),
-            token_usage=token_usage,
-        )
-        if not events:
-            return None
-        normalized_stream_id = self._normalize_stream_id(stream_id)
+    async def _persist_checkpoint_with_retry(
+        self,
+        *,
+        conversation_id: str,
+        user_id: str,
+        operator_name: str,
+        turn_id: str,
+        events: list[dict[str, Any]],
+        run_id: str,
+        owner_token: str | None,
+        stream_id: str | None,
+    ) -> dict[str, Any] | None:
         for attempt in range(1, EVENT_APPEND_MAX_ATTEMPTS + 1):
             try:
-                async with self._dao.session_context() as session:
-                    await self._dao.append_events_in_session(
-                        session,
-                        conversation_id=conversation_id,
-                        user_id=user_id,
-                        operator_name=operator_name,
-                        events=events,
-                        now=datetime.now(),
-                    )
-                    # append_events_in_session locks the conversation row first.
-                    # Keep the same conversation -> Run lock order as start_run
-                    # and complete_run to avoid cross-process deadlocks. If the
-                    # owner check fails, the surrounding transaction rolls back
-                    # the provisional history append.
-                    run = await self._inbox_dao.get_run_by_id_for_update(session, run_id)
-                    self._validate_run_for_checkpoint(
-                        run,
-                        conversation_id=conversation_id,
-                        user_id=user_id,
-                        run_id=run_id,
-                        owner_token=owner_token,
-                    )
-                    history_sequence_no = await self._dao.get_max_sequence_in_session(session, conversation_id)
-                    checkpoint = await self._update_history_checkpoint(
-                        run_id=run_id,
-                        turn_id=turn_id,
-                        history_sequence_no=history_sequence_no,
-                        stream_id=normalized_stream_id,
-                        run=run,
-                    )
-                    return checkpoint
+                return await self._commit_turn_checkpoint_once(
+                    conversation_id=conversation_id,
+                    user_id=user_id,
+                    operator_name=operator_name,
+                    turn_id=turn_id,
+                    events=events,
+                    run_id=run_id,
+                    owner_token=owner_token,
+                    stream_id=stream_id,
+                )
             except AgentRunLeaseLostError:
                 raise
             except Exception as exc:
@@ -203,8 +235,57 @@ class ConversationEventService:
                     exc_info=True,
                 )
                 await asyncio.sleep(EVENT_APPEND_RETRY_DELAY_SECONDS)
-
         return None
+
+    async def persist_turn_with_checkpoint(
+        self,
+        *,
+        conversation_id: str,
+        user_id: str,
+        operator_name: str,
+        turn_id: str,
+        messages: Iterable[BaseMessage],
+        reasoning_segments: Iterable[dict[str, Any]],
+        context_compression_events: Iterable[dict[str, Any]] = (),
+        token_usage: dict[str, Any] | None = None,
+        run_id: str,
+        stream_id: str | None,
+        owner_token: str | None = None,
+        persisted_signatures: dict[str, str] | None = None,
+    ) -> dict[str, Any] | None:
+        """原子提交历史快照与 Run 的 Redis 恢复水位。
+
+        Redis 发布和 MySQL 不在同一事务中，因此调用方必须先发布事件，再调用本方法。
+        事务内先写会话事件，再推进 checkpoint；失败时两者一起回滚，恢复最多重复读取，
+        不会因为游标提前推进而丢失历史事件。
+        """
+        events = _build_turn_events(
+            turn_id=turn_id,
+            messages=list(messages or []),
+            reasoning_segments=list(reasoning_segments or []),
+            context_compression_events=list(context_compression_events or []),
+            token_usage=token_usage,
+        )
+        if not events:
+            return None
+        changed_events = _select_changed_events(events, persisted_signatures)
+        normalized_stream_id = self._normalize_stream_id(stream_id)
+        checkpoint = await self._persist_checkpoint_with_retry(
+            conversation_id=conversation_id,
+            user_id=user_id,
+            operator_name=operator_name,
+            turn_id=turn_id,
+            events=changed_events,
+            run_id=run_id,
+            owner_token=owner_token,
+            stream_id=normalized_stream_id,
+        )
+        if checkpoint is None:
+            return None
+        if persisted_signatures is not None:
+            for event in events:
+                persisted_signatures[str(event.get("event_key") or "").strip()] = _event_signature(event)
+        return checkpoint
 
     async def load_history_with_recovery(
         self,

@@ -310,6 +310,7 @@ async def _persist_agent_turn_history(
     )
     turn_ids = _resolve_history_turn_ids(messages, turn_id)
     usage = _resolve_history_usage(values, stream_adapter)
+    history_signatures = getattr(stream_adapter, "history_event_signatures", None)
     for current_turn_id in turn_ids:
         # token_usage 是会话级单行快照（event_key 固定），只随最后一轮写一次即可。
         is_last_turn = current_turn_id == turn_ids[-1]
@@ -333,9 +334,13 @@ async def _persist_agent_turn_history(
                 run_id=run_id,
                 owner_token=owner_token,
                 stream_id=_resolve_history_stream_id(snapshot_stream_id, stream_event_id_provider),
+                persisted_signatures=history_signatures,
             )
         else:
-            await conversation_event_service.persist_turn(**persist_kwargs)  # type: ignore[arg-type]
+            await conversation_event_service.persist_turn(
+                **persist_kwargs,  # type: ignore[arg-type]
+                persisted_signatures=history_signatures,
+            )
 
 
 class _LatestModelSnapshotWriter:
