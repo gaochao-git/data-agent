@@ -12,6 +12,7 @@ from apps.chat_data_app.services.ontology import schema_check
 def _table_columns(*, write_mode: bool = True) -> dict[str, set[str]]:
     return {
         "chat_data_ontology_object_type": {"id", "write_mode"} if write_mode else {"id"},
+        "chat_data_ontology_object_set": {"id"},
         "chat_data_ontology_action_object": {"id"},
         "chat_data_ontology_action_execution": {"id"},
         "chat_data_ontology_object_edit": {"id"},
@@ -21,6 +22,14 @@ def _table_columns(*, write_mode: bool = True) -> dict[str, set[str]]:
 def test_missing_schema_issues_detects_missing_write_mode():
     issues = schema_check.missing_schema_issues(_table_columns(write_mode=False), action_execute_enabled=False)
     assert issues == ["表 chat_data_ontology_object_type 缺少列: write_mode"]
+
+
+def test_missing_object_set_table_detected():
+    columns = _table_columns()
+    columns.pop("chat_data_ontology_object_set")
+    assert schema_check.missing_schema_issues(columns, action_execute_enabled=False) == [
+        "缺少表 chat_data_ontology_object_set"
+    ]
 
 
 def test_missing_schema_issues_action_tables_only_required_when_action_enabled():
@@ -35,7 +44,10 @@ def test_missing_schema_issues_action_tables_only_required_when_action_enabled()
 
 
 def test_required_tables_include_action_tables_only_when_enabled():
-    assert schema_check.required_tables(action_execute_enabled=False) == {"chat_data_ontology_object_type"}
+    assert schema_check.required_tables(action_execute_enabled=False) == {
+        "chat_data_ontology_object_type",
+        "chat_data_ontology_object_set",
+    }
     assert "chat_data_ontology_action_object" in schema_check.required_tables(action_execute_enabled=True)
 
 

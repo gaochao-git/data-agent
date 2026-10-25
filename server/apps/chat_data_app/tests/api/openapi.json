@@ -1914,6 +1914,24 @@
         "title": "DbConnectionRequest",
         "type": "object"
       },
+      "GenerateTitleRequest": {
+        "description": "生成标题请求；model_id 省略时沿用注册表默认模型。",
+        "properties": {
+          "model_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Id"
+          }
+        },
+        "title": "GenerateTitleRequest",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -2574,6 +2592,60 @@
           }
         },
         "title": "OntologyObjectSearchRequest",
+        "type": "object"
+      },
+      "OntologyObjectSetUpsertRequest": {
+        "description": "对象集合（static）保存请求（set_name 由路径参数携带）。\n\n对齐 Palantir Object Set static/temporary 子集：只保存主键列表，不保存过滤条件；\ntemporary=True 时 24 小时后过期。object_keys 可传 local_key 或完整对象身份。",
+        "properties": {
+          "allow_overwrite": {
+            "default": false,
+            "description": "覆盖既有活跃同名集合时为 True",
+            "title": "Allow Overwrite",
+            "type": "boolean"
+          },
+          "description": {
+            "default": "",
+            "description": "描述",
+            "maxLength": 1024,
+            "title": "Description",
+            "type": "string"
+          },
+          "display_name": {
+            "default": "",
+            "description": "展示名",
+            "maxLength": 128,
+            "title": "Display Name",
+            "type": "string"
+          },
+          "member_datasource_id": {
+            "description": "成员数据源ID，集合内对象同机构",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Member Datasource Id",
+            "type": "string"
+          },
+          "object_keys": {
+            "description": "对象主键列表（local_key 或完整身份）",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Object Keys",
+            "type": "array"
+          },
+          "temporary": {
+            "default": true,
+            "description": "临时集合（24h 过期）；False 为长期集合",
+            "title": "Temporary",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "member_datasource_id",
+          "object_keys"
+        ],
+        "title": "OntologyObjectSetUpsertRequest",
         "type": "object"
       },
       "OntologyObjectSort": {
@@ -9117,6 +9189,306 @@
         ]
       }
     },
+    "/api/chatdata/admin/meta/ontology/object-types/{object_type_name}/object-sets": {
+      "get": {
+        "operationId": "list_ontology_object_sets_api_chatdata_admin_meta_ontology_object_types__object_type_name__object_sets_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "object_type_name",
+            "required": true,
+            "schema": {
+              "title": "Object Type Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "List Ontology Object Sets",
+        "tags": [
+          "ChatData 本体管理（Admin）"
+        ]
+      }
+    },
+    "/api/chatdata/admin/meta/ontology/object-types/{object_type_name}/object-sets/{set_name}": {
+      "delete": {
+        "operationId": "delete_ontology_object_set_api_chatdata_admin_meta_ontology_object_types__object_type_name__object_sets__set_name__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "object_type_name",
+            "required": true,
+            "schema": {
+              "title": "Object Type Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "set_name",
+            "required": true,
+            "schema": {
+              "title": "Set Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Delete Ontology Object Set",
+        "tags": [
+          "ChatData 本体管理（Admin）"
+        ]
+      },
+      "get": {
+        "operationId": "get_ontology_object_set_api_chatdata_admin_meta_ontology_object_types__object_type_name__object_sets__set_name__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "object_type_name",
+            "required": true,
+            "schema": {
+              "title": "Object Type Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "set_name",
+            "required": true,
+            "schema": {
+              "title": "Set Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Get Ontology Object Set",
+        "tags": [
+          "ChatData 本体管理（Admin）"
+        ]
+      },
+      "put": {
+        "operationId": "upsert_ontology_object_set_api_chatdata_admin_meta_ontology_object_types__object_type_name__object_sets__set_name__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "object_type_name",
+            "required": true,
+            "schema": {
+              "title": "Object Type Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "set_name",
+            "required": true,
+            "schema": {
+              "title": "Set Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OntologyObjectSetUpsertRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Upsert Ontology Object Set",
+        "tags": [
+          "ChatData 本体管理（Admin）"
+        ]
+      }
+    },
+    "/api/chatdata/admin/meta/ontology/object-types/{object_type_name}/object-sets/{set_name}/objects": {
+      "get": {
+        "operationId": "load_ontology_object_set_objects_api_chatdata_admin_meta_ontology_object_types__object_type_name__object_sets__set_name__objects_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "object_type_name",
+            "required": true,
+            "schema": {
+              "title": "Object Type Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "set_name",
+            "required": true,
+            "schema": {
+              "title": "Set Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Load Ontology Object Set Objects",
+        "tags": [
+          "ChatData 本体管理（Admin）"
+        ]
+      }
+    },
     "/api/chatdata/admin/meta/ontology/object-types/{object_type_name}/objects": {
       "get": {
         "description": "对象实例分页列表（按标题键/主键搜索；只读投影）。",
@@ -13018,6 +13390,23 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/GenerateTitleRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "content": {

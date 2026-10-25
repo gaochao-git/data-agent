@@ -922,3 +922,116 @@ def test_traverse_objects_uses_graph_facade(monkeypatch):
     )
     assert payload["success"] is True
     assert payload["nodes"][0]["object_key"] == "ORG1:order:1"
+
+
+# ---------- object set（对象集合） ----------
+
+
+def test_object_set_payload_models_registered():
+    saved = ontology_tool.validate_ontology_payload(
+        "save_object_set",
+        {
+            "object_type": "customer",
+            "member_datasource_id": "ORG_CODE1",
+            "object_keys": ["ORG_CODE1:customer:C1"],
+        },
+    )
+    assert saved.object_keys == ["ORG_CODE1:customer:C1"]
+    assert (
+        ontology_tool.validate_ontology_payload(
+            "load_object_set", {"object_type": "customer", "set_name": "duyou_customers"}
+        )
+        is not None
+    )
+    assert ontology_tool.validate_ontology_payload("list_object_sets", {}) is not None
+    with pytest.raises(ValueError, match="member_datasource_id"):
+        ontology_tool.validate_ontology_payload("save_object_set", {"object_type": "customer", "object_keys": ["C1"]})
+
+
+def test_save_object_set_returns_summary(monkeypatch):
+    monkeypatch.setenv("CHAT_DATA_ONTOLOGY_OBJECT_READ_ENABLED", "1")
+
+    async def fake_navigable(_name):
+        return None
+
+    class _FakeService:
+        async def upsert_object_set_async(self, object_type, set_name, payload, **kwargs):
+            assert object_type == "customer"
+            assert payload["object_keys"] == ["C1", "C2"]
+            assert kwargs["operator"] == "u1"
+            return {
+                "set_name": set_name,
+                "display_name": "杜佑客户",
+                "object_type_name": "customer",
+                "member_datasource_id": "ORG_CODE1",
+                "object_key_count": 2,
+                "temporary": True,
+                "expires_at": "2026-10-26 19:00:00",
+                "update_time": "2026-10-25 19:00:00",
+            }
+
+    monkeypatch.setattr(ontology_tool, "_ensure_navigable_object_type", fake_navigable)
+    monkeypatch.setattr(ontology_tool, "OntologyObjectSetService", _FakeService)
+    raw = asyncio.run(
+        ontology_tool.create_ontology_tool(user_id="u1").ainvoke(
+            {
+                "action": "save_object_set",
+                "action_payload": {
+                    "object_type": "customer",
+                    "member_datasource_id": "ORG_CODE1",
+                    "object_keys": ["C1", "C2"],
+                    "set_name": "duyou_customers",
+                    "display_name": "杜佑客户",
+                },
+                "state": _onto_state(user_id="u1"),
+            }
+        )
+    )
+    payload = json.loads(raw.replace(RESULT_PREFIX, "", 1))
+    assert payload["success"] is True
+    assert payload["object_set"]["set_name"] == "duyou_customers"
+    assert payload["object_set"]["object_key_count"] == 2
+    assert "load_object_set" in payload["usage"]
+
+
+def test_load_object_set_returns_page(monkeypatch):
+    monkeypatch.setenv("CHAT_DATA_ONTOLOGY_OBJECT_READ_ENABLED", "1")
+
+    async def fake_navigable(_name):
+        return None
+
+    class _FakeService:
+        async def load_object_set_objects_async(self, object_type, set_name, **kwargs):
+            assert object_type == "customer"
+            assert set_name == "duyou_customers"
+            assert kwargs["limit"] == 20
+            return {
+                "set_name": set_name,
+                "display_name": "杜佑客户",
+                "object_type": object_type,
+                "member_datasource_id": "ORG_CODE1",
+                "objects": [{"object_key": "ORG_CODE1:customer:C1", "properties": {"customer_id": "C1"}}],
+                "total": 2,
+                "returned": 1,
+                "missing_count": 0,
+                "limit": 20,
+                "offset": 0,
+                "has_more": False,
+                "expires_at": "",
+            }
+
+    monkeypatch.setattr(ontology_tool, "_ensure_navigable_object_type", fake_navigable)
+    monkeypatch.setattr(ontology_tool, "OntologyObjectSetService", _FakeService)
+    raw = asyncio.run(
+        ontology_tool.create_ontology_tool(user_id="u1").ainvoke(
+            {
+                "action": "load_object_set",
+                "action_payload": {"object_type": "customer", "set_name": "duyou_customers"},
+                "state": _onto_state(user_id="u1"),
+            }
+        )
+    )
+    payload = json.loads(raw.replace(RESULT_PREFIX, "", 1))
+    assert payload["success"] is True
+    assert payload["total"] == 2
+    assert payload["objects"][0]["object_key"] == "ORG_CODE1:customer:C1"

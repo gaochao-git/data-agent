@@ -1410,6 +1410,44 @@ class ChatDataOntologyActionExecution(Base):
     )
 
 
+class ChatDataOntologyObjectSet(Base):
+    """本体对象集合（Object Set）：static 定义的主键列表，供跨轮/跨应用引用。
+
+    对齐 Palantir Object Set 的 static/temporary 子集：static 保存主键列表（不随源数据
+    变化），temporary 仅创建者使用且 24 小时后过期；dynamic（保存过滤条件）、permanent
+    共享与对象级权限暂不实现。主键只存 local_key，member 与 object_type 单独成列，
+    对象身份仍由 member:object_type:local_key 表达。
+    """
+
+    __tablename__ = "chat_data_ontology_object_set"
+
+    id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
+    set_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
+    description_text: Mapped[str] = mapped_column(String(1024), nullable=False, default="", server_default="")
+    object_type_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    object_type_name: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
+    member_datasource_id: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    definition_json: Mapped[str | None] = mapped_column(Text)
+    temporary: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=1, server_default="1")
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime)
+    delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
+    create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
+    update_time: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+    create_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+
+    __table_args__ = (
+        UniqueConstraint("set_name", name="uniq_object_set_name"),
+        Index("idx_object_set_type", "object_type_id", "delete_flag"),
+        Index("idx_object_set_expires", "expires_at"),
+    )
+
+
 class ChatDataGraphSyncRun(Base):
     """Nebula 图同步运行记录：用于 graph_as_of、失败排查和同步状态展示。"""
 

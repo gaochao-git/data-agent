@@ -472,9 +472,9 @@ const currentConversationTitle = ref<string>('新会话')
 const currentConversationDatasourceId = ref<string | null>(null)
 const conversationPageSize = 20
 const conversationKey = ref(0)
-// 模型选择跟随当前浏览器标签页（对话窗口）：刷新/路由切换后保持；新建任务/换组新建
-// 任务显式清空，回到注册表最新默认模型。用 sessionStorage 而非 localStorage，
-// 避免新开标签页或下次打开系统时继承上一次的临时选择。
+// 模型选择跟随当前浏览器标签页（对话窗口）：刷新/路由切换/新建任务后都保持；
+// 只有模型从注册表移除时才由 Conversation 的 modelOptions watcher 回填默认模型。
+// 用 sessionStorage 而非 localStorage，避免新开标签页或下次打开系统时继承上一次的临时选择。
 const SELECTED_MODEL_SESSION_KEY = 'chatdata.current_window_model_id'
 const readWindowSelectedModel = (): string => {
   try {
@@ -667,11 +667,10 @@ const handleNewConversation = () => {
   currentConversationTitle.value = '新会话'
   currentConversationDatasourceId.value = null
   conversationKey.value++ // 强制重新渲染以清空消息
-  // 模型注册表是模块级会话期缓存，后端改配置后本页不会自动感知；
-  // 新建会话时强制重拉 /config（后台静默），并清空显式模型选择——
-  // 新会话一律回到注册表最新默认模型（is_default），由 Conversation
-  // 内的 watch(modelOptions) 在数据到达后回填。
-  selectedConversationModelId.value = ''
+  // 模型注册表是模块级会话期缓存，后端改配置后本页不会自动感知，所以新建会话时
+  // 强制重拉 /config（后台静默）；但保留当前窗口已选模型，避免每次新建任务都静默
+  // 落回注册表默认模型（评测 OBS-01）。仅当该模型已从注册表移除时，由 Conversation
+  // 内的 watch(modelOptions) 回填默认模型。
   loadModelOptions(true)
 }
 
@@ -1160,12 +1159,11 @@ const handleConfirmContextSelector = () => {
     if (isGroupSwitchNewTask.value) {
       // 换组 = 基于新组新建任务：重置会话态（已有会话保留在历史），新任务在
       // 首次使用会话工作区（发送首条消息 / 输入 @）时兜底创建；模型选择同
-      // 「新建任务」口径——清空显式选择，回到注册表最新默认模型
+      // 「新建任务」口径——保留当前窗口已选模型，只刷新注册表
       currentConversationId.value = null
       currentConversationTitle.value = '新会话'
       currentConversationDatasourceId.value = null
       conversationKey.value++
-      selectedConversationModelId.value = ''
       loadModelOptions(true)
     }
     conversationMemberDatasourceIds.value = nextIds

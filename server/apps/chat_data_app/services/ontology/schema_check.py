@@ -25,6 +25,7 @@ from .query_mode import ontology_injection_enabled
 logger = get_logger(__name__)
 
 _OBJECT_TYPE_TABLE = "chat_data_ontology_object_type"
+_OBJECT_SET_TABLE = "chat_data_ontology_object_set"
 _ACTION_TABLES = (
     "chat_data_ontology_action_object",
     "chat_data_ontology_action_execution",
@@ -35,7 +36,7 @@ _REQUIRED_OBJECT_TYPE_COLUMNS = frozenset({"write_mode"})
 
 def required_tables(*, action_execute_enabled: bool) -> set[str]:
     """当前部署形态依赖的本体表集合。"""
-    tables = {_OBJECT_TYPE_TABLE}
+    tables = {_OBJECT_TYPE_TABLE, _OBJECT_SET_TABLE}
     if action_execute_enabled:
         tables.update(_ACTION_TABLES)
     return tables

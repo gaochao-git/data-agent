@@ -17,6 +17,8 @@
 - ``list_action_types``：列出当前业务域可执行 Action 定义（只读）；
 - ``execute_action``：执行 Action（写对象属性覆盖层 + 审计，不直接改源库；受
   ``CHAT_DATA_ONTOLOGY_ACTION_EXECUTE_ENABLED`` 门控）；
+- ``save_object_set`` / ``load_object_set`` / ``list_object_sets``：static 对象集合的保存、
+  分页加载与列表，让查询结果跨轮传递（temporary 24h 过期）；
 - ``list_execution_targets``：列出当前用户可执行的成员数据源（member 维度查询范围）。
 
 入参契约：``action`` + ``action_payload``（结构随 action 变化）+ ``intent``；payload
@@ -54,6 +56,10 @@ from apps.chat_data_app.services.ontology.object_projection import (
     ontology_object_read_enabled,
     read_object_projection,
     search_object_projection,
+)
+from apps.chat_data_app.services.ontology.object_set_service import (
+    OntologyObjectSetService,
+    build_default_object_set_name,
 )
 from apps.chat_data_app.services.ontology.object_type_locator import (
     build_locator_usage_hint,
@@ -242,6 +248,40 @@ class _ExecuteActionPayload(BaseModel):
     )
 
 
+class _SaveObjectSetPayload(BaseModel):
+    """``save_object_set`` 的入参结构：把查询结果主键保存为 static 对象集合。"""
+
+    object_type: str = Field(..., min_length=1, max_length=128, description='对象类型 API 名，如 "customer"')
+    member_datasource_id: str = Field(
+        ..., min_length=1, max_length=100, description="集合内对象所属机构 ID（同一集合只放同机构对象）"
+    )
+    object_keys: list[str] = Field(
+        ...,
+        min_length=1,
+        max_length=100,
+        description="对象主键列表（find_objects 返回的 object_key 或 local_key），单次最多 100 个",
+    )
+    set_name: str = Field(default="", max_length=128, description="可选集合 API 名；留空自动生成")
+    display_name: str = Field(default="", max_length=128, description="可选展示名")
+    temporary: bool = Field(default=True, description="临时集合（24h 过期）；False 为长期集合")
+    allow_overwrite: bool = Field(default=False, description="覆盖同名既有集合时为 True")
+
+
+class _LoadObjectSetPayload(BaseModel):
+    """``load_object_set`` 的入参结构：按集合名分页加载对象属性。"""
+
+    object_type: str = Field(..., min_length=1, max_length=128, description='对象类型 API 名，如 "customer"')
+    set_name: str = Field(..., min_length=1, max_length=128, description="save_object_set 返回的集合名")
+    limit: int = Field(default=20, ge=1, le=100, description="本次加载对象数上限")
+    offset: int = Field(default=0, ge=0, description="集合内偏移量")
+
+
+class _ListObjectSetsPayload(BaseModel):
+    """``list_object_sets`` 的入参结构：列出当前业务域已保存的对象集合。"""
+
+    object_type: str = Field(default="", max_length=128, description="可选；只列指定对象类型的集合")
+
+
 class _TraverseObjectsPayload(BaseModel):
     """``traverse_objects`` 的入参结构：对象起点 + 有界多跳/路径。"""
 
@@ -280,6 +320,9 @@ ONTOLOGY_ACTION_PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
     "list_execution_targets": _ListExecutionTargetsPayload,
     "list_action_types": _ListActionTypesPayload,
     "execute_action": _ExecuteActionPayload,
+    "save_object_set": _SaveObjectSetPayload,
+    "load_object_set": _LoadObjectSetPayload,
+    "list_object_sets": _ListObjectSetsPayload,
     "traverse_objects": _TraverseObjectsPayload,
     "find_graph_paths": _FindGraphPathsPayload,
 }
@@ -288,9 +331,10 @@ ONTOLOGY_ACTION_PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
 class OntologyToolInput(BaseModel):
     """本体导航工具入参：按 ``action`` 分派，``action_payload`` 结构随 action 变化。
 
-    共 11 个 action：``list_object_types`` / ``locate_object_type`` / ``search_around`` 负责导航，
+    共 14 个 action：``list_object_types`` / ``locate_object_type`` / ``search_around`` 负责导航，
     ``get_object`` / ``find_objects`` 负责对象读取，``aggregate_objects`` 负责属性白名单聚合，
-    ``list_execution_targets`` 列出执行对象，``list_action_types`` / ``execute_action`` 负责 Action。
+    ``list_execution_targets`` 列出执行对象，``list_action_types`` / ``execute_action`` 负责 Action，
+    ``save_object_set`` / ``load_object_set`` / ``list_object_sets`` 负责对象集合跨轮传递。
     action_payload 的校验在工具实现入口经 ``validate_ontology_payload`` 完成——不能放进
     model_validator：langgraph 的 ToolInvocationError 会过滤 loc 为空的校验错误，
     模型与用户都看不到原因；在工具函数体内抛错则走 ToolErrorMiddleware，详情完整可见。
@@ -306,6 +350,9 @@ class OntologyToolInput(BaseModel):
         "list_execution_targets",
         "list_action_types",
         "execute_action",
+        "save_object_set",
+        "load_object_set",
+        "list_object_sets",
         "traverse_objects",
         "find_graph_paths",
     ] = Field(
@@ -320,6 +367,9 @@ class OntologyToolInput(BaseModel):
             "list_execution_targets 列出当前用户可执行的成员数据源；"
             "list_action_types 列出当前业务域可执行的 Action 定义（只读）；"
             "execute_action 执行 Action（写对象属性覆盖层 + 审计，需部署开启 Action 执行开关）；"
+            "save_object_set 把查询结果的对象主键保存为 static 对象集合（跨轮引用/传给后续动作）；"
+            "load_object_set 按集合名分页加载对象属性；"
+            "list_object_sets 列出当前业务域已保存的对象集合；"
             "traverse_objects 从对象出发做 1~3 跳关系遍历（图查询：Nebula 支持多跳，SQL 后端当前仅支持 1 跳）；"
             "find_graph_paths 查询两个对象之间的有界路径（图查询，当前仅 Nebula 后端支持）"
         ),
@@ -337,6 +387,9 @@ class OntologyToolInput(BaseModel):
             "list_execution_targets 传 {}；"
             "list_action_types 传 {}；"
             'execute_action 传 {"action_type": "<Action Type API名>", "object_key": "<对象主键值>", "parameters": {"<参数名>": "<值>"}}；'
+            'save_object_set 传 {"object_type": "<对象类型API名>", "member_datasource_id": "<机构ID>", "object_keys": ["<对象主键>"], "set_name": "可选", "temporary": true}；'
+            'load_object_set 传 {"object_type": "<对象类型API名>", "set_name": "<集合名>", "limit": 20, "offset": 0}；'
+            'list_object_sets 传 {} 或 {"object_type": "<对象类型API名>"}；'
             'traverse_objects 传 {"object_key": "<完整对象身份>", "depth": 1, "direction": "both", "limit": 50, "member_datasource_ids": ["机构ID"]}；'
             'find_graph_paths 传 {"from_object_key": "<起点>", "to_object_key": "<终点>", "max_depth": 3, "limit": 10, "member_datasource_ids": ["机构ID"]}'
         ),
@@ -611,6 +664,104 @@ async def _run_execute_action(
             "edits": result.get("edits"),
             "usage": "Action 已写入对象属性覆盖层并记录审计；需要确认时用 get_object 重新读取对象属性。",
         },
+    )
+
+
+def _object_set_summary(item: dict[str, Any]) -> dict[str, Any]:
+    """对象集合对外摘要：不返回全部主键，避免工具结果过大。"""
+    return {
+        "set_name": item.get("set_name"),
+        "display_name": item.get("display_name"),
+        "object_type": item.get("object_type_name"),
+        "member_datasource_id": item.get("member_datasource_id"),
+        "object_key_count": item.get("object_key_count"),
+        "temporary": item.get("temporary"),
+        "expires_at": item.get("expires_at"),
+        "update_time": item.get("update_time"),
+    }
+
+
+async def _run_save_object_set(
+    *,
+    payload: Any,
+    state: dict | None,
+    bound_user_id: str,
+) -> str:
+    """保存 static 对象集合：只存主键，不复制属性；供跨轮/后续动作引用。"""
+    if not ontology_object_read_enabled():
+        raise ValueError("对象实例读取未启用：需设置环境变量 CHAT_DATA_ONTOLOGY_OBJECT_READ_ENABLED=1")
+    await _ensure_navigable_object_type(payload.object_type)
+    state = state or {}
+    user_id = str(state.get("user_id") or "").strip() or bound_user_id
+    operator_name = str(state.get("operator_name") or "").strip() or user_id
+    set_name = str(payload.set_name or "").strip() or build_default_object_set_name(payload.object_type)
+    saved = await OntologyObjectSetService().upsert_object_set_async(
+        payload.object_type,
+        set_name,
+        payload.model_dump(),
+        allow_overwrite=payload.allow_overwrite,
+        operator=user_id,
+        operator_name=operator_name,
+    )
+    return tool_result_payload(
+        ONTOLOGY_TOOL_NAME,
+        {
+            "success": True,
+            "object_set": _object_set_summary(saved),
+            "usage": "集合已保存；后续可用 load_object_set 按 set_name 加载对象属性，或把 set_name 作为动作目标集合引用。",
+        },
+    )
+
+
+async def _run_load_object_set(
+    *,
+    payload: Any,
+    state: dict | None,
+    bound_user_id: str,
+) -> str:
+    """按集合顺序分页加载对象属性；过期集合显式报错，缺失对象跳过。"""
+    if not ontology_object_read_enabled():
+        raise ValueError("对象实例读取未启用：需设置环境变量 CHAT_DATA_ONTOLOGY_OBJECT_READ_ENABLED=1")
+    await _ensure_navigable_object_type(payload.object_type)
+    state = state or {}
+    user_id = str(state.get("user_id") or "").strip() or bound_user_id
+    operator_name = str(state.get("operator_name") or "").strip() or user_id
+    result = await OntologyObjectSetService().load_object_set_objects_async(
+        payload.object_type,
+        payload.set_name,
+        limit=min(int(payload.limit), 50),
+        offset=int(payload.offset),
+        user_id=user_id,
+        username=operator_name,
+    )
+    return tool_result_payload(ONTOLOGY_TOOL_NAME, {"success": True, **result})
+
+
+async def _run_list_object_sets(
+    *,
+    payload: Any,
+    state: dict | None,
+    bound_datasource_id: str,
+) -> str:
+    """列出当前业务域已保存的对象集合（可限定对象类型）。"""
+    if not ontology_object_read_enabled():
+        raise ValueError("对象实例读取未启用：需设置环境变量 CHAT_DATA_ONTOLOGY_OBJECT_READ_ENABLED=1")
+    service = OntologyObjectSetService()
+    if payload.object_type:
+        await _ensure_navigable_object_type(payload.object_type)
+        items = await service.list_object_sets_async(payload.object_type)
+        return tool_result_payload(
+            ONTOLOGY_TOOL_NAME,
+            {"success": True, "count": len(items), "object_sets": [_object_set_summary(item) for item in items]},
+        )
+    bundle = await _load_domain_bundle(state, bound_datasource_id)
+    domain_names = {
+        str(item.get("object_type_name") or "") for item in bundle.get("object_types") or [] if isinstance(item, dict)
+    }
+    items = [item for item in await service.list_object_sets_async() if item.get("object_type_name") in domain_names]
+    return tool_result_payload(
+        ONTOLOGY_TOOL_NAME,
+        {"success": True, "count": len(items), "object_sets": [_object_set_summary(item) for item in items]},
     )
 
 
@@ -909,6 +1060,16 @@ async def _run_ontology_impl(
             state=state,
             bound_user_id=bound_user_id,
         )
+    if action == "save_object_set":
+        return await _run_save_object_set(payload=payload, state=state, bound_user_id=bound_user_id)
+    if action == "load_object_set":
+        return await _run_load_object_set(payload=payload, state=state, bound_user_id=bound_user_id)
+    if action == "list_object_sets":
+        return await _run_list_object_sets(
+            payload=payload,
+            state=state,
+            bound_datasource_id=bound_datasource_id,
+        )
     if action == "traverse_objects":
         return await _run_traverse_objects(payload=payload, state=state)
     if action == "find_graph_paths":
@@ -943,7 +1104,8 @@ def create_ontology_tool(
         使用顺序：先读 /mnt/user-data/workspace/semantic/_ontology_catalog.yaml 了解对象类型与数据源绑定；
         需要定位时用 list_object_types / locate_object_type；跨对象关联用 search_around 的物理连接列；
         查明细用 find_objects、聚合用 aggregate_objects、按主键读单对象用 get_object；
-        需要动作时用 list_action_types 查可用 Action，再 execute_action 执行。
+        需要动作时用 list_action_types 查可用 Action，再 execute_action 执行；
+        需要跨轮引用刚才查到的对象时，用 save_object_set 保存主键、load_object_set 回读。
 
         Args:
             action: 操作类型，枚举：
@@ -956,6 +1118,9 @@ def create_ontology_tool(
         - list_execution_targets: 列出当前用户可执行的成员数据源（member_datasource_id/名称/机构编码）；多机构时先调用它，再把选中的 ID 传给对象查询
         - list_action_types: 列出当前业务域可执行 Action 定义（只读）
         - execute_action: 执行 Action（set_property 写覆盖层 / create_object 写动作对象表 + 审计；受部署开关门控）
+        - save_object_set: 把查询结果的对象主键保存为 static 对象集合（可跨轮引用；temporary 24h 过期）
+        - load_object_set: 按集合名分页加载对象属性（缺失对象跳过，过期集合显式报错）
+        - list_object_sets: 列出当前业务域已保存的对象集合
         - traverse_objects: 从对象出发做 1~3 跳关系遍历（图查询；Nebula 支持多跳，SQL 后端仅 1 跳）
         - find_graph_paths: 查询两个对象之间的有界路径（图查询；当前仅 Nebula 后端支持）
             action_payload: 操作参数，结构随 action 变化：
@@ -968,6 +1133,9 @@ def create_ontology_tool(
         - list_execution_targets: {}（无参数；返回当前用户可见执行对象）
         - list_action_types: {}（无参数；返回当前业务域可执行 Action 定义）
         - execute_action: {"action_type": "<Action Type API名>", "object_key": "<对象主键值>", "parameters": {"<参数名>": "<值>"}}
+        - save_object_set: {"object_type": "<对象类型API名>", "member_datasource_id": "<机构ID>", "object_keys": ["<对象主键>"], "set_name": 可选, "temporary": true}
+        - load_object_set: {"object_type": "<对象类型API名>", "set_name": "<集合名>", "limit": 20, "offset": 0}
+        - list_object_sets: {} 或 {"object_type": "<对象类型API名>"}
         - traverse_objects: {"object_key": "<完整对象身份>", "depth": 1, "direction": "both", "limit": 50, "member_datasource_ids": ["机构ID"]}
         - find_graph_paths: {"from_object_key": "<起点>", "to_object_key": "<终点>", "max_depth": 3, "limit": 10, "member_datasource_ids": ["机构ID"]}
             intent: 一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示。

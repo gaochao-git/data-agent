@@ -1505,6 +1505,23 @@ class OntologyActionTypeUpsertRequest(BaseModel):
     allow_overwrite: bool = Field(default=False, description="编辑既有活跃 Action Type 时为 True")
 
 
+class OntologyObjectSetUpsertRequest(BaseModel):
+    """对象集合（static）保存请求（set_name 由路径参数携带）。
+
+    对齐 Palantir Object Set static/temporary 子集：只保存主键列表，不保存过滤条件；
+    temporary=True 时 24 小时后过期。object_keys 可传 local_key 或完整对象身份。
+    """
+
+    display_name: str = Field(default="", max_length=128, description="展示名")
+    description: str = Field(default="", max_length=1024, description="描述")
+    member_datasource_id: str = Field(..., min_length=1, max_length=100, description="成员数据源ID，集合内对象同机构")
+    object_keys: list[str] = Field(
+        ..., min_length=1, max_length=100, description="对象主键列表（local_key 或完整身份）"
+    )
+    temporary: bool = Field(default=True, description="临时集合（24h 过期）；False 为长期集合")
+    allow_overwrite: bool = Field(default=False, description="覆盖既有活跃同名集合时为 True")
+
+
 class OntologyActionTypeTestRunRequest(BaseModel):
     """Action Type 试运行请求（只校验参数与编辑解析，不写对象）"""
 

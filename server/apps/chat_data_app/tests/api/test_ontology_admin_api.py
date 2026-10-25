@@ -3,6 +3,7 @@
 import pytest
 
 from apps.chat_data_app.routers import ontology_admin as ontology_admin_routes
+from apps.chat_data_app.services.ontology.errors import OntologyNotFoundError
 
 _URL = "/api/chatdata/admin/meta/ontology/consistency-check"
 
@@ -477,3 +478,76 @@ def test_graph_traverse_uses_sql_backend_without_nebula(client, auth_headers, mo
     payload = response.json()
     assert payload["status"] == "success"
     assert payload["data"]["nodes"][0]["object_key"] == "M:order:1"
+
+
+# ---------- 对象集合（static） ----------
+
+
+class _StubObjectSetService:
+    def __init__(self, *, found: bool = True):
+        self.found = found
+
+    async def upsert_object_set_async(self, object_type_name, set_name, payload, **kwargs):
+        if not self.found:
+            raise OntologyNotFoundError("对象类型不存在")
+        return {
+            "set_name": set_name,
+            "object_type_name": object_type_name,
+            "member_datasource_id": payload["member_datasource_id"],
+            "object_key_count": len(payload["object_keys"]),
+            "temporary": payload["temporary"],
+            "expires_at": "2026-10-26 19:00:00",
+        }
+
+    async def load_object_set_objects_async(self, object_type_name, set_name, **kwargs):
+        return {
+            "set_name": set_name,
+            "object_type": object_type_name,
+            "objects": [{"object_key": "ORG_CODE1:customer:C1", "properties": {"customer_id": "C1"}}],
+            "total": 1,
+            "returned": 1,
+            "missing_count": 0,
+            "limit": kwargs["limit"],
+            "offset": kwargs["offset"],
+            "has_more": False,
+        }
+
+
+def test_object_set_upsert_and_load_contract(client, auth_headers, monkeypatch):
+    monkeypatch.setattr(ontology_admin_routes, "_object_set_service", _StubObjectSetService())
+    put_response = client.put(
+        "/api/chatdata/admin/meta/ontology/object-types/customer/object-sets/duyou_customers",
+        json={
+            "member_datasource_id": "ORG_CODE1",
+            "object_keys": ["ORG_CODE1:customer:C1"],
+            "temporary": True,
+        },
+        headers=auth_headers,
+    )
+    assert put_response.status_code == 200
+    put_payload = put_response.json()
+    assert put_payload["status"] == "success"
+    assert put_payload["data"]["set_name"] == "duyou_customers"
+    assert put_payload["data"]["object_key_count"] == 1
+
+    load_response = client.get(
+        "/api/chatdata/admin/meta/ontology/object-types/customer/object-sets/duyou_customers/objects",
+        headers=auth_headers,
+    )
+    assert load_response.status_code == 200
+    load_payload = load_response.json()
+    assert load_payload["status"] == "success"
+    assert load_payload["data"]["objects"][0]["object_key"] == "ORG_CODE1:customer:C1"
+
+
+def test_object_set_upsert_maps_not_found(client, auth_headers, monkeypatch):
+    monkeypatch.setattr(ontology_admin_routes, "_object_set_service", _StubObjectSetService(found=False))
+    response = client.put(
+        "/api/chatdata/admin/meta/ontology/object-types/customer/object-sets/duyou_customers",
+        json={"member_datasource_id": "ORG_CODE1", "object_keys": ["C1"]},
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "error"
+    assert payload["code"] == 40488

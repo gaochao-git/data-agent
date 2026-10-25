@@ -1006,6 +1006,41 @@ CREATE TABLE `chat_data_ontology_action_object` (
 - `read_object_projection` 对 `action_created` 对象类型走动作对象表读取（无源投影），
   列表/搜索视图对动作对象暂走 DAO 关键词查询（MVP）。
 
+### 本体对象集合（static）表（2026-10-25）
+
+对齐 Palantir Object Set 的 static/temporary 子集：只保存主键列表（不复制属性），
+temporary 24h 过期。新环境在 `server/utils/schema.py` 同步；存量环境执行同一 DDL
+（已在开发库 `fxcjg_ai` 执行）：
+
+```sql
+CREATE TABLE `chat_data_ontology_object_set` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `set_name` varchar(128) NOT NULL COMMENT '对象集合API名，全局唯一',
+  `display_name` varchar(128) NOT NULL DEFAULT '' COMMENT '展示名',
+  `description_text` varchar(1024) NOT NULL DEFAULT '' COMMENT '描述',
+  `object_type_id` bigint NOT NULL COMMENT '对象类型ID（chat_data_ontology_object_type.id）',
+  `object_type_name` varchar(128) NOT NULL DEFAULT '' COMMENT '对象类型API名快照',
+  `member_datasource_id` varchar(100) NOT NULL DEFAULT '' COMMENT '集合内对象所属成员数据源ID',
+  `definition_json` text COMMENT '集合定义JSON: {"kind":"static","object_keys":[...]}',
+  `temporary` tinyint NOT NULL DEFAULT '1' COMMENT '是否临时集合: 0-长期, 1-24h过期',
+  `expires_at` datetime DEFAULT NULL COMMENT '过期时间，NULL=长期',
+  `delete_flag` tinyint NOT NULL DEFAULT '0' COMMENT '删除标识: 0-未删除, 1-已删除',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `create_by` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人ID',
+  `create_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人名称',
+  `update_by` varchar(100) NOT NULL DEFAULT '' COMMENT '修改人ID',
+  `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '修改人名称',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_object_set_name` (`set_name`),
+  KEY `idx_object_set_type` (`object_type_id`,`delete_flag`),
+  KEY `idx_object_set_expires` (`expires_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='本体对象集合（static）';
+```
+
+边界：dynamic object set、permanent 共享权限、interface/跨类型集合、作为 Action 批量
+参数均未实现，见 `services/ontology/README.md`「对象集合」。
+
 ### 派生数值聚合口径修复（2026-10-24）
 
 `max_amount` 等派生属性在底层 `amount` 为字符串时，Hive `MAX`/`MIN` 会按字典序取值（例如 `"2.00" > "1502.46"`）。现在派生聚合的 `sum/avg/min/max` 在值类型为 `Integer/Decimal` 时先 `CAST(... AS DECIMAL(38,6))`，新属性会自动按目标属性数值类型推导。

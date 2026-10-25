@@ -25,6 +25,7 @@ from ..schema import (
     OntologyGraphSyncRequest,
     OntologyGraphTraverseRequest,
     OntologyObjectSearchRequest,
+    OntologyObjectSetUpsertRequest,
     OntologyObjectTypeOntologyRequest,
     OntologyObjectTypeStatusRequest,
     OntologyObjectTypeUpsertRequest,
@@ -56,6 +57,7 @@ from ..services.ontology.object_projection import (
     read_object_projection,
     search_object_projection,
 )
+from ..services.ontology.object_set_service import OntologyObjectSetService
 from ..services.ontology.ontology_consistency import check_ontology_model_consistency as _run_consistency_check
 from ..services.semantic.run.semantic_config_service import (
     get_semantic_config_service,
@@ -68,6 +70,7 @@ logger = get_logger(__name__)
 
 router = APIRouter(tags=["ChatData 本体管理（Admin）"], responses=JSON_API_RESPONSES)
 _action_type_service = OntologyActionTypeService()
+_object_set_service = OntologyObjectSetService()
 
 
 def _error_response(e: Exception, fallback_msg: str, fallback_code: ErrorCode) -> JSONResponse:
@@ -471,6 +474,76 @@ async def execute_ontology_action_type(
         operator_name=str(current_user.username or ""),
     )
     return business_response(data=data, msg="执行成功")
+
+
+@router.get("/admin/meta/ontology/object-types/{object_type_name}/object-sets")
+@_ontology_route("获取对象集合列表失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
+async def list_ontology_object_sets(object_type_name: str, request: Request) -> JSONResponse:
+    _get_current_user(request)
+    data = await _object_set_service.list_object_sets_async(object_type_name)
+    return business_response(data={"object_sets": data}, msg="获取成功")
+
+
+@router.get("/admin/meta/ontology/object-types/{object_type_name}/object-sets/{set_name}")
+@_ontology_route("获取对象集合失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
+async def get_ontology_object_set(object_type_name: str, set_name: str, request: Request) -> JSONResponse:
+    _get_current_user(request)
+    data = await _object_set_service.get_object_set_async(object_type_name, set_name)
+    return business_response(data=data, msg="获取成功")
+
+
+@router.put("/admin/meta/ontology/object-types/{object_type_name}/object-sets/{set_name}")
+@_ontology_route("保存对象集合失败，请检查对象类型与主键", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
+async def upsert_ontology_object_set(
+    object_type_name: str,
+    set_name: str,
+    payload: OntologyObjectSetUpsertRequest,
+    request: Request,
+) -> JSONResponse:
+    current_user = _get_current_user(request)
+    data = await _object_set_service.upsert_object_set_async(
+        object_type_name,
+        set_name,
+        payload.model_dump(),
+        allow_overwrite=payload.allow_overwrite,
+        operator=str(current_user.user_id or ""),
+        operator_name=str(current_user.username or ""),
+    )
+    return business_response(data=data, msg="保存成功")
+
+
+@router.delete("/admin/meta/ontology/object-types/{object_type_name}/object-sets/{set_name}")
+@_ontology_route("删除对象集合失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
+async def delete_ontology_object_set(object_type_name: str, set_name: str, request: Request) -> JSONResponse:
+    current_user = _get_current_user(request)
+    await _object_set_service.delete_object_set_async(
+        object_type_name,
+        set_name,
+        operator=str(current_user.user_id or ""),
+        operator_name=str(current_user.username or ""),
+    )
+    return business_response(data={"set_name": set_name}, msg="删除成功")
+
+
+@router.get("/admin/meta/ontology/object-types/{object_type_name}/object-sets/{set_name}/objects")
+@_ontology_route("加载对象集合对象失败，请稍后重试", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
+async def load_ontology_object_set_objects(
+    object_type_name: str,
+    set_name: str,
+    request: Request,
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> JSONResponse:
+    current_user = _get_current_user(request)
+    data = await _object_set_service.load_object_set_objects_async(
+        object_type_name,
+        set_name,
+        limit=limit,
+        offset=offset,
+        user_id=str(current_user.user_id or ""),
+        username=str(current_user.username or ""),
+    )
+    return business_response(data=data, msg="获取成功")
 
 
 async def _collect_consistency_scope() -> tuple[list[dict], dict[str, str], set[str], list[str]]:

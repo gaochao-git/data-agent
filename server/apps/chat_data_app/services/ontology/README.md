@@ -112,6 +112,27 @@
 
 DDL 见 `next_version.md`「本体 Action Type 定义表」。
 
+## 对象集合（Object Set static，2026-10-25）
+
+对齐官方 Object Set 的 static/temporary 子集（`docs/palantir-ontology/object-backend/overview.md:53-63`、
+`api/v2/.../ontology-object-sets/ontology-object-set-basics.md:8`）：
+
+- 表 `chat_data_ontology_object_set`：`set_name` + 对象类型 + `member_datasource_id` +
+  `definition_json`（`{"kind":"static","object_keys":[...]}`），只存主键、不复制属性；
+- 主键统一存 `local_key`，对象身份仍为 `member:object_type:local_key`；保存时接受
+  `local_key` 或完整身份并归一化，跨机构/跨类型主键直接拒绝；
+- `temporary`（默认）24 小时后过期，读取过期集合显式报错；`temporary=false` 为长期集合；
+- 加载按集合顺序分页回源，缺失对象跳过并在结果里返回 `missing_count`（static 集合允许
+  比源数据活得久，官方同样存主键快照）；
+- 智能体入口：`save_object_set` / `load_object_set` / `list_object_sets`，让「刚才查到的
+  对象」跨轮传递；
+- **边界（未实现）**：dynamic object set（保存过滤条件）、permanent 共享与对象级权限、
+  interface/跨类型集合、把 object set 作为 Action 批量参数（属 Action L2 前置）。
+
+依据与路线图见 `docs/palantir-study/00-synthesis-and-roadmap.md` Phase A；DDL 见
+`next_version.md`「本体对象集合（static）表」。本体开启时启动自检会把该表列为必需，
+缺表直接拒绝启动（部署顺序：先执行 DDL 再发版）。
+
 ## 图查询层（NebulaGraph，2026-10-24 PoC）
 
 - `graph/`：只读关系图投影，`traverse_objects` / `find_graph_paths` 支持 1~3 跳、方向与有界路径；
