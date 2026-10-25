@@ -3,7 +3,7 @@
  * ChatData 智能问数主页面
  * 参考 React 版本布局，支持数据智能体、可视化查询、SQL查询、数据看板、指标集配置
  */
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
@@ -13,11 +13,12 @@ import '../styles/markdown.css'
 // z-index 层级变量（:root CSS 变量，本模块层级唯一事实来源，定义见文件头注释）
 import '../styles/z-index.css'
 import useUserStore from '@/store/modules/user'
-import { getDatasources, createConversation, generateConversationTitle, getConversationContext, getSemanticConfigs, getMySemanticConfigs, createSemanticConfig, getDatasourceSchema } from '../api'
+import { getDatasources, createConversation, generateConversationTitle, getConversationContext, getConversationTeam, getTeamMemberMessages, sendTeamMemberMessage, getSemanticConfigs, getMySemanticConfigs, createSemanticConfig, getDatasourceSchema } from '../api'
 import { listDashboards, type Dashboard } from '../api/dashboard'
-import type { BuilderDragFieldData, DataSource, ViewMode, ChatDataOptions, SemanticConfigItem, SemanticYamlFile, ExecutionTargetOption, TableInfo } from '../types'
+import type { BuilderDragFieldData, DataSource, ViewMode, ChatDataOptions, SemanticConfigItem, SemanticYamlFile, ExecutionTargetOption, Message, TableInfo } from '../types'
 import { normalizeTableInfoList, resolveDatasourceType } from '../utils/datasourceSchema'
 import Conversation from '../components/conversation/Conversation.vue'
+import ConversationMessageList from '../components/conversation/ConversationMessageList.vue'
 import SqlEditor from '../components/SqlEditor.vue'
 import QueryBuilder from '../components/QueryBuilder/index.vue'
 import type { BuilderConfig } from '../components/QuickQueries.vue'
@@ -470,6 +471,104 @@ const handleImportSemanticYamlFromConversation = (files: SemanticYamlFile[]) => 
 const currentConversationId = ref<string | null>(null)
 const currentConversationTitle = ref<string>('新会话')
 const currentConversationDatasourceId = ref<string | null>(null)
+const teamPanelOpen = ref(false)
+const teamPanelLoading = ref(false)
+const teamPanelData = ref<{ lead: any; members: any[]; tasks: any[] } | null>(null)
+const selectedTeamMember = ref<string>('lead')
+const teamMemberMessages = ref<any[]>([])
+const teamMessageInput = ref('')
+const teamMessageSending = ref(false)
+
+const teamPanelChatMessages = computed<Message[]>(() => (
+  teamMemberMessages.value.map((item: any) => ({
+    id: String(item.id || ''),
+    role: item.role,
+    content: String(item.content || ''),
+    toolCallId: item.tool_call_id,
+    toolName: item.tool_name,
+    toolCalls: item.tool_calls,
+  })) as Message[]
+))
+
+const loadTeamMemberMessages = async (name: string) => {
+  if (!currentConversationId.value || name === 'lead') {
+    teamMemberMessages.value = []
+    return
+  }
+  try {
+    const response = await getTeamMemberMessages(currentConversationId.value, name)
+    teamMemberMessages.value = response.data?.messages || []
+  } catch (err) {
+    console.error('读取 teammate 历史失败:', err)
+    teamMemberMessages.value = []
+  }
+}
+
+const selectTeamMember = async (name: string) => {
+  selectedTeamMember.value = name
+  await loadTeamMemberMessages(name)
+}
+
+const sendTeamMessage = async () => {
+  const text = teamMessageInput.value.trim()
+  if (!text || selectedTeamMember.value === 'lead' || !currentConversationId.value) return
+  teamMessageSending.value = true
+  try {
+    await sendTeamMemberMessage(currentConversationId.value, selectedTeamMember.value, text)
+    teamMessageInput.value = ''
+    await Promise.all([loadTeamMemberMessages(selectedTeamMember.value), refreshTeam(false)])
+  } catch (err) {
+    console.error('发送 teammate 消息失败:', err)
+    ElMessage.error('发送 teammate 消息失败')
+  } finally {
+    teamMessageSending.value = false
+  }
+}
+
+let teamRefreshTimer: ReturnType<typeof setInterval> | null = null
+
+const refreshTeam = async (showError = false) => {
+  if (!currentConversationId.value) return
+  try {
+    const response = await getConversationTeam(currentConversationId.value)
+    teamPanelData.value = response.data || null
+  } catch (err) {
+    console.error('读取 Team 失败:', err)
+    if (showError) ElMessage.error('读取 Team 失败')
+  }
+}
+
+const stopTeamRefresh = () => {
+  if (teamRefreshTimer !== null) {
+    clearInterval(teamRefreshTimer)
+    teamRefreshTimer = null
+  }
+}
+
+const startTeamRefresh = () => {
+  stopTeamRefresh()
+  teamRefreshTimer = setInterval(() => { void refreshTeam(false) }, 3000)
+}
+
+const openTeamPanel = async () => {
+  if (!currentConversationId.value) {
+    ElMessage.info('先发起一轮对话后再查看 Team')
+    return
+  }
+  teamPanelLoading.value = true
+  teamPanelOpen.value = true
+  selectedTeamMember.value = 'lead'
+  await refreshTeam(true)
+  teamPanelLoading.value = false
+  startTeamRefresh()
+}
+
+watch(teamPanelOpen, (open) => {
+  stopTeamRefresh()
+  if (open) startTeamRefresh()
+})
+
+onBeforeUnmount(stopTeamRefresh)
 const conversationPageSize = 20
 const conversationKey = ref(0)
 // 模型选择跟随当前浏览器标签页（对话窗口）：刷新/路由切换后保持；新建任务/换组新建
@@ -1372,6 +1471,14 @@ onMounted(async () => {
         <div class="relative shrink-0 flex items-center gap-2">
           <button
             v-if="viewMode === 'conversation'"
+            class="h-8 shrink-0 rounded-lg border-0 bg-transparent px-2 text-xs text-slate-500 transition-colors hover:bg-slate-200/70 hover:text-slate-700"
+            title="查看 Team"
+            @click="openTeamPanel"
+          >
+            <i class="fa-solid fa-users mr-1"></i>Team
+          </button>
+          <button
+            v-if="viewMode === 'conversation'"
             class="w-8 h-8 flex shrink-0 items-center justify-center rounded-lg border-0 bg-transparent text-slate-500 cursor-pointer transition-colors hover:bg-slate-200/70 hover:text-slate-700"
             :title="conversationConsoleVisible ? '收起工作区' : '展开工作区'"
             :aria-label="conversationConsoleVisible ? '收起工作区' : '展开工作区'"
@@ -1887,6 +1994,93 @@ onMounted(async () => {
       :datasource-id="selectedDatasourceId || ''"
       @open-conversation="handleOpenScheduledConversation"
     />
+    <el-drawer v-model="teamPanelOpen" :with-header="false" size="560px" append-to-body>
+      <div class="flex h-full min-h-0 flex-col bg-[#F7F8FA]">
+        <div class="flex shrink-0 items-center justify-between border-b border-slate-200 bg-white px-5 py-4">
+          <div>
+            <div class="text-base font-semibold text-slate-800">Team</div>
+            <div class="mt-0.5 text-xs text-slate-400">主智能体与持久 teammate</div>
+          </div>
+          <div class="flex items-center gap-2">
+            <button type="button" class="rounded-md border border-slate-200 px-2.5 py-1 text-xs text-slate-500 hover:bg-slate-50" @click="refreshTeam(true)">刷新</button>
+            <button type="button" class="flex h-7 w-7 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100" @click="teamPanelOpen = false">
+              <i class="fa-solid fa-xmark"></i>
+            </button>
+          </div>
+        </div>
+
+        <div v-loading="teamPanelLoading" class="min-h-0 flex-1 overflow-hidden">
+          <div v-if="!teamPanelData" class="p-5 text-sm text-slate-400">暂无 Team 数据</div>
+          <div v-else class="flex h-full min-h-0 flex-col">
+            <div class="shrink-0 border-b border-slate-200 bg-white px-4 py-3">
+              <div class="mb-2 flex items-center gap-2">
+                <span class="text-[11px] font-medium uppercase tracking-wide text-slate-400">Teammates</span>
+                <span class="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500">{{ teamPanelData.members.length }}</span>
+              </div>
+              <div class="flex gap-2 overflow-x-auto pb-1">
+                <button
+                  type="button"
+                  class="flex shrink-0 items-center gap-2 rounded-lg border px-3 py-2 text-left transition-colors"
+                  :class="selectedTeamMember === 'lead' ? 'border-blue-300 bg-blue-50' : 'border-slate-200 bg-white hover:border-slate-300'"
+                  @click="selectTeamMember('lead')"
+                >
+                  <span class="flex h-7 w-7 items-center justify-center rounded-full bg-blue-100 text-[11px] font-semibold text-blue-700">L</span>
+                  <span>
+                    <span class="block text-xs font-medium text-slate-700">Lead（主智能体）</span>
+                    <span class="block text-[10px] text-emerald-600">active</span>
+                  </span>
+                </button>
+                <button
+                  v-for="member in teamPanelData.members"
+                  :key="member.name"
+                  type="button"
+                  class="flex shrink-0 items-center gap-2 rounded-lg border px-3 py-2 text-left transition-colors"
+                  :class="selectedTeamMember === member.name ? 'border-blue-300 bg-blue-50' : 'border-slate-200 bg-white hover:border-slate-300'"
+                  @click="selectTeamMember(member.name)"
+                >
+                  <span class="flex h-7 w-7 items-center justify-center rounded-full bg-slate-100 text-[11px] font-semibold text-slate-600">{{ member.name.slice(0, 1).toUpperCase() }}</span>
+                  <span class="max-w-[150px]">
+                    <span class="block truncate text-xs font-medium text-slate-700">{{ member.name }}</span>
+                    <span class="block text-[10px]" :class="member.status === 'active' ? 'text-emerald-600' : 'text-red-500'">{{ member.status }}</span>
+                  </span>
+                </button>
+              </div>
+            </div>
+
+            <div v-if="selectedTeamMember === 'lead'" class="min-h-0 flex-1 overflow-auto p-5">
+              <div class="rounded-xl border border-slate-200 bg-white p-4">
+                <div class="text-sm font-medium text-slate-800">Lead · 主智能体</div>
+                <div class="mt-1 text-xs text-slate-400">当前主对话 Agent；teammate 的消息与工具结果会显示在这里。</div>
+                <div class="mt-3 text-xs text-slate-500">共享任务：{{ teamPanelData.tasks.length }} 个</div>
+              </div>
+            </div>
+
+            <div v-else class="flex min-h-0 flex-1 flex-col bg-white">
+              <div class="flex shrink-0 items-center justify-between border-b border-slate-100 px-5 py-3">
+                <div class="flex items-center gap-2">
+                  <span class="flex h-8 w-8 items-center justify-center rounded-full bg-slate-100 text-xs font-semibold text-slate-600">{{ selectedTeamMember.slice(0, 1).toUpperCase() }}</span>
+                  <div>
+                    <div class="text-sm font-medium text-slate-800">{{ selectedTeamMember }}</div>
+                    <div class="text-[11px] text-slate-400">{{ teamPanelData.members.find((m: any) => m.name === selectedTeamMember)?.description || 'teammate' }}</div>
+                  </div>
+                </div>
+                <span class="rounded-full px-2 py-0.5 text-[11px]" :class="teamPanelData.members.find((m: any) => m.name === selectedTeamMember)?.status === 'active' ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-500'">
+                  {{ teamPanelData.members.find((m: any) => m.name === selectedTeamMember)?.status }}
+                </span>
+              </div>
+              <div class="min-h-0 flex-1 overflow-auto px-4 py-4">
+                <ConversationMessageList
+                  v-if="teamPanelChatMessages.length"
+                  :messages="teamPanelChatMessages"
+                  :conversation-id="currentConversationId"
+                />
+                <div v-else class="py-12 text-center text-xs text-slate-400">暂无历史消息</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </el-drawer>
     </el-config-provider>
   </div>
 </template>

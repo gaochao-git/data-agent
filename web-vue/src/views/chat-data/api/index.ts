@@ -1696,6 +1696,30 @@ export function getConversationHistory(
   })
 }
 
+/** 读取 teammate 的 checkpoint 历史。 */
+export function getTeamMemberMessages(conversationId: string, name: string): Promise<ApiResponse<{ messages: any[] }>> {
+  return request({
+    url: `/agents/api/chatdata/conversations/${conversationId}/team/${encodeURIComponent(name)}/messages`,
+    method: 'get',
+  })
+}
+
+/** 直接向 teammate 发消息。 */
+export function sendTeamMemberMessage(conversationId: string, name: string, message: string): Promise<ApiResponse<{ reply: string }>> {
+  return request({
+    url: `/agents/api/chatdata/conversations/${conversationId}/team/${encodeURIComponent(name)}/message`,
+    method: 'post',
+    data: { message },
+  })
+}
+
+export function getConversationTeam(conversationId: string): Promise<ApiResponse<{ lead: any; members: any[]; tasks: any[] }>> {
+  return request({
+    url: `/agents/api/chatdata/conversations/${conversationId}/team`,
+    method: 'get',
+  })
+}
+
 /** 获取历史会话绑定的数据源组。 */
 export function getConversationContext(conversationId: string): Promise<ApiResponse<{ conversation_id: string; datasource_id?: string | null }>> {
   return request({

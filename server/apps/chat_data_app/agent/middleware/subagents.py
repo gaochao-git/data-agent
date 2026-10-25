@@ -503,7 +503,7 @@ def _safe_subagent_budget_meta(
         return None
 
 
-def _compile_subagent(spec: SubagentSpec, run_controls: Any = None) -> Any:
+def _compile_subagent(spec: SubagentSpec, run_controls: Any = None, checkpointer: Any = None) -> Any:
     """把 spec 编译成独立 langgraph runnable。
 
     ``run_controls`` 完整时为子图挂上与主图相同的租约围栏：租约丢失/被接管后
@@ -566,6 +566,7 @@ def _compile_subagent(spec: SubagentSpec, run_controls: Any = None) -> Any:
         # 整个子图；挂上后与主图口径一致，异常统一转 status="error" 的
         # ToolMessage，子智能体可读取错误详情自行纠正。
         middleware=middleware,
+        checkpointer=checkpointer,
     )
 
 
@@ -1368,16 +1369,30 @@ class SubagentMiddleware(AgentMiddleware):
     """向主智能体注册 ``task`` 工具，并在系统提示追加子智能体使用说明。"""
 
     def __init__(
-        self, specs: list[SubagentSpec], *, system_prompt: str | None = None, run_controls: Any = None
+        self,
+        specs: list[SubagentSpec],
+        *,
+        system_prompt: str | None = None,
+        run_controls: Any = None,
+        team_tools: list[Any] | None = None,
     ) -> None:
         validate_subagent_specs(specs)
         self.specs = list(specs)
         self.subagent_names = frozenset(spec.name for spec in specs)
-        self.tools = [build_task_tool(specs, run_controls=run_controls)]
+        self.team_tools = list(team_tools or [])
+        self.tools = [build_task_tool(specs, run_controls=run_controls), *self.team_tools]
         agents_desc = "\n".join(f"- {spec.name}: {spec.description}" for spec in specs)
-        self.system_prompt = (system_prompt or _default_system_prompt()).format(
+        base_prompt = (system_prompt or _default_system_prompt()).format(
             available_agents=agents_desc,
         )
+        if self.team_tools:
+            base_prompt += (
+                "\n\n## 持久 teammate\n\n"
+                "你也可以用 spawn_teammate 创建具名持久 teammate，用 send_message 在原上下文继续对话；"
+                "用 list_agents 查看状态，用 team_task_* 协调共享任务。Teammate 与本会话共享工作区，"
+                "写文件时先按任务划分不重叠的范围。"
+            )
+        self.system_prompt = base_prompt
 
     def wrap_model_call(
         self, request: ModelRequest, handler: Callable[[ModelRequest], ModelCallResult]

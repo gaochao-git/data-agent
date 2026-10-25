@@ -50,6 +50,8 @@ from .prompts.chat_data import (
     build_unified_system_prompt,
 )
 from .runtime_options import AgentRuntimeOptions, get_chat_data_default_runtime_options
+from .team.service import TeamService, register_team_service
+from .team.tools import build_team_tools
 from .tools.registry import (
     DATA_EXPLORE_EXTRA_EXCLUDED_TOOL_NAMES,
     GENERAL_PURPOSE_EXTRA_EXCLUDED_TOOL_NAMES,
@@ -327,6 +329,11 @@ def _general_purpose_system_prompt(approval_tools_excluded: bool) -> str:
     return f"{GENERAL_PURPOSE_SUBAGENT_PROMPT}{GENERAL_PURPOSE_NO_DELETE_HINT}"
 
 
+def persistent_team_enabled() -> bool:
+    raw = str(os.getenv("CHAT_DATA_PERSISTENT_TEAM_ENABLED") or "0").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
 def build_subagent_middleware(
     runtime_options: AgentRuntimeOptions,
     tools: list,
@@ -337,6 +344,9 @@ def build_subagent_middleware(
     available_skills_xml: str | None = None,
     memory_block: str | None = None,
     approval_policies: dict[str, str] | None = None,
+    checkpointer: BaseCheckpointSaver | None = None,
+    conversation_id: str | None = None,
+    user_id: str | None = None,
 ) -> SubagentMiddleware | None:
     """按运行选项构建子智能体中间件；没有任何子智能体启用时返回 None。
 
@@ -594,6 +604,93 @@ def _with_mcp_control_tools(tools: list, mcp_tools: list, search_service: Any) -
     ]
 
 
+def _build_persistent_team_tools(
+    *,
+    subagent_middleware: SubagentMiddleware,
+    checkpointer: BaseCheckpointSaver,
+    conversation_id: str,
+    user_id: str,
+    username: str | None,
+    workspace_root: str,
+    workspace_backend: Any,
+) -> tuple[list[Any], str]:
+    service = TeamService(
+        conversation_id=conversation_id,
+        user_id=user_id,
+        specs={spec.name: spec for spec in subagent_middleware.specs},
+        checkpointer=checkpointer,
+        base_state={
+            "user_id": user_id,
+            "operator_name": username or "",
+            "conversation_id": conversation_id,
+            "workspace": {
+                "workspace_root": workspace_root,
+                "workspace_backend": workspace_backend,
+            },
+        },
+    )
+    register_team_service(service)
+    prompt = (
+        "\n\n## 持久 teammate\n\n"
+        "你也可以用 spawn_teammate 创建具名持久 teammate，用 send_message 在原上下文继续对话；"
+        "用 list_agents 查看状态，用 team_task_* 协调共享任务。Teammate 与本会话共享工作区，"
+        "写文件时先按任务划分不重叠的范围。调用工具时必须输出完整的 JSON 对象参数；"
+        "无参数工具也必须传 {}，不要省略 arguments。"
+    )
+    return build_team_tools(service), prompt
+
+
+def _attach_persistent_team(
+    tools: list[Any],
+    subagent_middleware: SubagentMiddleware | None,
+    approval_policies: dict[str, str],
+    *,
+    checkpointer: BaseCheckpointSaver | None,
+    conversation_id: str | None,
+    user_id: str,
+    username: str | None,
+    workspace_root: str,
+    workspace_backend: Any,
+) -> None:
+    if not persistent_team_enabled() or checkpointer is None or subagent_middleware is None or not conversation_id:
+        return
+    team_tools, team_prompt = _build_persistent_team_tools(
+        subagent_middleware=subagent_middleware,
+        checkpointer=checkpointer,
+        conversation_id=conversation_id,
+        user_id=user_id,
+        username=username,
+        workspace_root=workspace_root,
+        workspace_backend=workspace_backend,
+    )
+    tools[:0] = team_tools
+    for tool in team_tools:
+        approval_policies[str(getattr(tool, "name", ""))] = "allow"
+    subagent_middleware.system_prompt += team_prompt
+
+
+def _filter_unattended_tools(
+    builtin_tools: list[Any],
+    mcp_tools: list[Any],
+    approval_policies: dict[str, str],
+    run_controls: Any,
+) -> tuple[list[Any], list[Any], frozenset[str]]:
+    if run_controls is None or not run_controls.disable_user_interaction:
+        return builtin_tools, mcp_tools, frozenset()
+    filtered_builtin, filtered_mcp, excluded = _filter_tools_for_unattended(builtin_tools, mcp_tools, approval_policies)
+    return filtered_builtin, filtered_mcp, excluded
+
+
+def _with_unattended_boundary(prompt: str, run_controls: Any) -> str:
+    if run_controls is None or not run_controls.disable_user_interaction:
+        return prompt
+    return prompt + (
+        "\n\n## 无人值守能力边界\n"
+        "- 本次运行无人实时应答，需要人工审批的工具（例如 MCP 插件中 ask 档位的工具）不会挂载。\n"
+        "- 不要尝试调用这些工具；如任务必须使用，请明确说明能力受限并给出替代方案。"
+    )
+
+
 def create_agent_from_spec(
     spec: AgentAssemblySpec,
     runtime_options: AgentRuntimeOptions | None = None,
@@ -640,13 +737,11 @@ def create_agent_from_spec(
     )
     mcp_tools = _load_spec_mcp_tools(spec)
     approval_policies = resolve_approval_policies([*builtin_tools, *mcp_tools])
-    excluded_mcp_names: frozenset[str] = frozenset()
-    if run_controls is not None and run_controls.disable_user_interaction:
-        # 无人值守不装配审批中间件：ask 工具无人应答会悬挂，在装配层剔除（模型不可见且不可检索），
-        # fail-closed；allow 工具无需审批，可以继续使用。
-        builtin_tools, mcp_tools, excluded_mcp_names = _filter_tools_for_unattended(
-            builtin_tools, mcp_tools, approval_policies
-        )
+    # 无人值守不装配审批中间件：ask 工具无人应答会悬挂，在装配层剔除（模型不可见且不可检索），
+    # fail-closed；allow 工具无需审批，可以继续使用。
+    builtin_tools, mcp_tools, excluded_mcp_names = _filter_unattended_tools(
+        builtin_tools, mcp_tools, approval_policies, run_controls
+    )
     tool_tokens = count_tools_tokens([*builtin_tools, *mcp_tools]) if mcp_tools else 0
     search_service = (
         _resolve_mcp_tool_search_service(spec, tool_tokens, model_id, excluded_names=excluded_mcp_names)
@@ -673,12 +768,7 @@ def create_agent_from_spec(
         search_active=search_service is not None,
         mcp_tools=mcp_tools,
     )
-    if run_controls is not None and run_controls.disable_user_interaction:
-        effective_system_prompt += (
-            "\n\n## 无人值守能力边界\n"
-            "- 本次运行无人实时应答，需要人工审批的工具（例如 MCP 插件中 ask 档位的工具）不会挂载。\n"
-            "- 不要尝试调用这些工具；如任务必须使用，请明确说明能力受限并给出替代方案。"
-        )
+    effective_system_prompt = _with_unattended_boundary(effective_system_prompt, run_controls)
     context_request_budget.configure(effective_system_prompt, tools, model_id=model_id)
     context_request_budget.validate_static_input()
     model = create_streaming_chat_model(
@@ -697,6 +787,20 @@ def create_agent_from_spec(
         available_skills_xml=invocation.available_skills_xml,
         memory_block=invocation.memory_block,
         approval_policies=approval_policies,
+        checkpointer=checkpointer,
+        conversation_id=conversation_id,
+        user_id=identity.user_id,
+    )
+    _attach_persistent_team(
+        tools,
+        subagent_middleware,
+        approval_policies,
+        checkpointer=checkpointer,
+        conversation_id=conversation_id,
+        user_id=identity.user_id or "",
+        username=identity.operator_name,
+        workspace_root=runtime.workspace_root,
+        workspace_backend=options.workspace_backend,
     )
     context_usage_middleware = create_request_context_usage_middleware(
         model_id,

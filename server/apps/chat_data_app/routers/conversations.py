@@ -13,11 +13,13 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from auth import AuthenticatedUser, AuthenticationError, get_forwarded_user
+from utils.checkpoint import get_checkpointer
 from utils.error_codes import ErrorCode
 from utils.logger import get_logger
 from utils.response import business_response
 
 from .. import AGENT_ID
+from ..agent.middleware.subagents import _compile_subagent
 from ..agent.run.agent_inbox_service import (
     AgentQuestionNotFoundError,
     AgentQuestionNotWaitingError,
@@ -30,6 +32,8 @@ from ..agent.run.agent_inbox_service import (
 from ..agent.run.agent_run_event_service import agent_run_event_service
 from ..agent.run.agent_run_runtime import agent_run_runtime
 from ..agent.run.completion_options import parse_file_selections, parse_quoted_snippets
+from ..agent.team.service import TeamService, get_team_service
+from ..agent.team.store import TeamStore
 from ..agent.workspace.runtime_skill_snapshot import build_runtime_skill_snapshot_async
 from ..agent_run_support import (
     materialize_conversation_semantic_models,
@@ -59,6 +63,12 @@ class GenerateTitleRequest(BaseModel):
     """生成标题请求；model_id 省略时沿用注册表默认模型。"""
 
     model_id: str | None = None
+
+
+class TeamMessageRequest(BaseModel):
+    """直接向 teammate 发消息。"""
+
+    message: str = Field(min_length=1)
 
 
 class CompletionRequest(BaseModel):
@@ -555,6 +565,128 @@ async def get_conversation_detail(
         return business_response(
             msg="获取对话详情失败，请稍后重试", code=ErrorCode.CHATDATA_CONVERSATION_DETAIL_FAILED, status="error"
         )
+
+
+@router.get("/{conversation_id}/team")
+async def get_conversation_team(conversation_id: str, req: Request) -> JSONResponse:
+    """读取当前会话的持久 teammate 与共享任务板（只读视图）。"""
+    try:
+        user_id = _get_user_id(req)
+        config = await get_agent_config_by_conversation(conversation_id, user_id)
+        if not config:
+            return business_response(msg="对话不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
+        await TeamService.reconcile_stale_provisioning(conversation_id)
+        state = TeamStore().load(conversation_id)
+        return business_response(
+            data={
+                "lead": {"target": "lead", "name": "lead", "status": "active"},
+                "members": [
+                    {
+                        "target": member.name,
+                        "name": member.name,
+                        "description": member.description,
+                        "subagent_type": member.subagent_type,
+                        "status": member.status,
+                        "error": member.error,
+                        "last_message": member.last_message,
+                    }
+                    for member in state.members
+                ],
+                "tasks": [task.__dict__ for task in state.tasks if task.status != "deleted"],
+            },
+            msg="获取 Team 成功",
+        )
+    except AuthenticationError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message) from e
+    except Exception:
+        logger.error("获取 Team 失败: conversation_id=%s", conversation_id, exc_info=True)
+        return business_response(
+            msg="获取 Team 失败", code=ErrorCode.CHATDATA_CONVERSATION_DETAIL_FAILED, status="error"
+        )
+
+
+def _team_message_payload(message: Any) -> dict[str, Any] | None:
+    role = getattr(message, "type", "")
+    if role == "human":
+        return {"id": getattr(message, "id", ""), "role": "user", "content": str(message.content or "")}
+    if role == "ai":
+        return {
+            "id": getattr(message, "id", ""),
+            "role": "assistant",
+            "content": str(message.content or ""),
+            "tool_calls": getattr(message, "tool_calls", None) or [],
+        }
+    if role == "tool":
+        return {
+            "id": getattr(message, "id", ""),
+            "role": "tool",
+            "content": str(message.content or ""),
+            "tool_call_id": getattr(message, "tool_call_id", ""),
+            "tool_name": getattr(message, "name", ""),
+        }
+    return None
+
+
+@router.get("/{conversation_id}/team/{name}/messages")
+async def get_team_member_messages(conversation_id: str, name: str, req: Request) -> JSONResponse:
+    """读取 teammate 的 checkpoint 消息，供前端复用消息渲染。"""
+    try:
+        user_id = _get_user_id(req)
+        config = await get_agent_config_by_conversation(conversation_id, user_id)
+        if not config:
+            return business_response(msg="对话不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
+        service = get_team_service(conversation_id)
+        if service is None:
+            return business_response(msg="请先在主对话中启动 Team", code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
+        member = service._get_member(name)
+        spec = service.specs.get(member.subagent_type)
+        if spec is None or service.checkpointer is None:
+            return business_response(msg="teammate 运行态不可用", code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
+        async with get_checkpointer() as checkpointer:
+            graph = _compile_subagent(spec, checkpointer=checkpointer)
+            snapshot = await graph.aget_state({"configurable": {"thread_id": member.thread_id}})
+        values = getattr(snapshot, "values", None) or {}
+        messages = [
+            payload for message in values.get("messages", []) if (payload := _team_message_payload(message)) is not None
+        ]
+        return business_response(
+            data={"name": name, "thread_id": member.thread_id, "messages": messages}, msg="获取 teammate 历史成功"
+        )
+    except AuthenticationError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message) from e
+    except Exception:
+        logger.error("获取 teammate 历史失败: conversation_id=%s name=%s", conversation_id, name, exc_info=True)
+        return business_response(
+            msg="获取 teammate 历史失败", code=ErrorCode.CHATDATA_CONVERSATION_DETAIL_FAILED, status="error"
+        )
+
+
+@router.post("/{conversation_id}/team/{name}/message")
+async def send_team_member_message(
+    conversation_id: str, name: str, body: TeamMessageRequest, req: Request
+) -> JSONResponse:
+    """直接向 teammate 发消息，复用同一个 checkpoint thread。"""
+    try:
+        user_id = _get_user_id(req)
+        config = await get_agent_config_by_conversation(conversation_id, user_id)
+        if not config:
+            return business_response(msg="对话不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
+        service = get_team_service(conversation_id)
+        if service is None:
+            return business_response(msg="请先在主对话中启动 Team", code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
+        async with get_checkpointer() as checkpointer:
+            previous = service.checkpointer
+            service.checkpointer = checkpointer
+            try:
+                result = await service.send(target=name, message=body.message)
+            finally:
+                service.checkpointer = previous
+        return business_response(data=result, msg="消息已处理")
+    except AuthenticationError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message) from e
+    except Exception:
+        logger.error("teammate 直接对话失败: conversation_id=%s name=%s", conversation_id, name, exc_info=True)
+        return business_response(msg="teammate 对话失败", code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
 
 
 @router.put("/{conversation_id}/title")
