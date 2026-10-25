@@ -113,5 +113,6 @@ join table many-to-many（`create-link-type.md:105-117`）、object-backed link�
 | `docs/palantir-study/02-link-derived-storage.md` | Link Type 三形态、基数语义、派生属性、编辑落库、对象存储与索引 |
 | `docs/palantir-study/03-action-types.md` | Action 12 种规则、参数、提交条件、副作用、action log、revert、一致性、权限 |
 | `docs/palantir-study/04-query-objectset-api.md` | 查询/分页/关联对象/对象集合/聚合 API 语义，含「少返行」判定捷径 |
+| `docs/palantir-study/05-ontology-construction-methodology.md` | 本体构建方案与同构分库查询方法论：不变量、S0-S7、merge 语义、结果契约与检查清单 |
 
 使用约定：引用官方约束前先回读原文件行号；本目录笔记只作为索引与对照，不作为对外规范原文。
