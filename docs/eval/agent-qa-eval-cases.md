@@ -1,7 +1,7 @@
 # 智能体问答准确性评测
 
 > 2026-10-25：本文件保留为执行记录；问答对维护入口见
-> [`server/apps/chat_data_app/tests/eval-sets/电商问数评测集.md`](../../server/apps/chat_data_app/tests/eval-sets/电商问数评测集.md)。
+> [`server/apps/chat_data_app/tests/eval-sets/`](../../server/apps/chat_data_app/tests/eval-sets/)（按指标/本体/端到端拆成三份）。
 
 版本：2026-10-25  
 执行方式：其他智能体在智能问数页面逐条提问，按标准答案判定准确性。  
