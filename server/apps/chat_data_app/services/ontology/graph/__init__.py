@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from .contracts import GraphEdge, GraphNode, GraphQueryError, GraphQueryResult, GraphUnavailableError
+from .facade import GraphQueryFacade
 from .service import (
     GraphQueryService,
     get_graph_query_service,
@@ -30,6 +31,7 @@ __all__ = [
     "GraphNode",
     "GraphQueryError",
     "GraphQueryResult",
+    "GraphQueryFacade",
     "GraphQueryService",
     "GraphSyncCapacityError",
     "GraphSyncError",

@@ -7,7 +7,6 @@ service 层执行，本路由只做 HTTP 入参、权限入口、统一响应与
 
 from __future__ import annotations
 
-import asyncio
 import functools
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -45,14 +44,12 @@ from ..services.ontology import (
 from ..services.ontology.action_type_service import OntologyActionTypeService
 from ..services.ontology.graph import (
     GraphQueryError,
+    GraphQueryFacade,
     GraphSyncError,
-    get_graph_query_service,
     graph_query_enabled,
-    graph_read_backend,
     latest_graph_as_of_async,
     sync_member_graph_batch,
 )
-from ..services.ontology.graph.sql_adapter import SqlGraphQueryAdapter
 from ..services.ontology.object_projection import (
     ObjectProjectionError,
     list_object_projection,
@@ -551,13 +548,6 @@ async def traverse_ontology_graph(payload: OntologyGraphTraverseRequest, request
     """前端图探索：Nebula 只读多跳；图不可用时由前端回退一跳详情。"""
     try:
         current_user = _get_current_user(request)
-        backend = graph_read_backend()
-        if backend == "nebula" and not graph_query_enabled():
-            return _error_response(
-                ValueError("图查询未启用：需设置 CHAT_DATA_NEBULA_ENABLED=1"),
-                "图查询未启用",
-                ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED,
-            )
         members = [str(member).strip() for member in payload.member_datasource_ids if str(member).strip()]
         if len(members) != 1:
             return _error_response(
@@ -565,26 +555,18 @@ async def traverse_ontology_graph(payload: OntologyGraphTraverseRequest, request
                 "图查询参数不合法",
                 ErrorCode.CHATDATA_ONTOLOGY_INVALID,
             )
-        if backend == "sql":
-            result = await SqlGraphQueryAdapter(
-                user_id=str(current_user.user_id),
-                username=str(current_user.username or ""),
-            ).traverse_objects(
-                payload.object_key,
-                depth=payload.depth,
-                direction=payload.direction,
-                limit=payload.limit,
-                member_ids=members,
-            )
-        else:
-            result = await asyncio.to_thread(
-                get_graph_query_service().traverse_objects,
-                payload.object_key,
-                depth=payload.depth,
-                direction=payload.direction,
-                limit=payload.limit,
-                member_ids=members,
-            )
+        facade = GraphQueryFacade(
+            user_id=str(current_user.user_id),
+            username=str(current_user.username or ""),
+        )
+        result = await facade.traverse_objects(
+            payload.object_key,
+            depth=payload.depth,
+            direction=payload.direction,
+            limit=payload.limit,
+            member_ids=members,
+        )
+        if facade.backend == "nebula":
             result.graph_as_of = await latest_graph_as_of_async(members[0])
         return business_response(data=result.as_dict(), msg="查询成功")
     except HTTPException:

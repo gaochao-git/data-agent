@@ -44,8 +44,7 @@ from apps.chat_data_app.services.ontology import ontology_service
 from apps.chat_data_app.services.ontology.action_type_service import OntologyActionTypeService
 from apps.chat_data_app.services.ontology.graph import (
     GraphQueryError,
-    get_graph_query_service,
-    graph_query_enabled,
+    GraphQueryFacade,
     latest_graph_as_of_async,
 )
 from apps.chat_data_app.services.ontology.object_projection import (
@@ -321,8 +320,8 @@ class OntologyToolInput(BaseModel):
             "list_execution_targets 列出当前用户可执行的成员数据源；"
             "list_action_types 列出当前业务域可执行的 Action 定义（只读）；"
             "execute_action 执行 Action（写对象属性覆盖层 + 审计，需部署开启 Action 执行开关）；"
-            "traverse_objects 从对象出发做 1~3 跳关系遍历（Nebula 图查询，需开启图查询开关）；"
-            "find_graph_paths 查询两个对象之间的有界路径（Nebula 图查询）"
+            "traverse_objects 从对象出发做 1~3 跳关系遍历（图查询：Nebula 支持多跳，SQL 后端当前仅支持 1 跳）；"
+            "find_graph_paths 查询两个对象之间的有界路径（图查询，当前仅 Nebula 后端支持）"
         ),
     )
     action_payload: dict[str, Any] = Field(
@@ -785,15 +784,16 @@ async def _run_traverse_objects(
     state: dict | None,
 ) -> str:
     """从对象出发做有界多跳；只返回对象身份/标题/关系，属性回源。"""
-    if not graph_query_enabled():
-        raise ValueError("图查询未启用：需设置 CHAT_DATA_NEBULA_ENABLED=1")
     member_ids = _query_member_ids(payload.member_datasource_ids, state)
     members = [member for member in member_ids if member]
     if len(members) != 1:
         raise ValueError("图查询必须且只能指定一个 member_datasource_id")
+    facade = GraphQueryFacade(
+        user_id=str((state or {}).get("user_id") or ""),
+        username=str((state or {}).get("operator_name") or ""),
+    )
     try:
-        result = await asyncio.to_thread(
-            get_graph_query_service().traverse_objects,
+        result = await facade.traverse_objects(
             payload.object_key,
             depth=payload.depth,
             direction=payload.direction,
@@ -802,7 +802,8 @@ async def _run_traverse_objects(
         )
     except GraphQueryError as err:
         raise ValueError(str(err)) from err
-    result.graph_as_of = await latest_graph_as_of_async(members[0])
+    if facade.backend == "nebula":
+        result.graph_as_of = await latest_graph_as_of_async(members[0])
     return tool_result_payload(
         ONTOLOGY_TOOL_NAME,
         {
@@ -819,15 +820,16 @@ async def _run_find_graph_paths(
     state: dict | None,
 ) -> str:
     """两个对象之间的有界路径；用于多跳关联/路径解释。"""
-    if not graph_query_enabled():
-        raise ValueError("图查询未启用：需设置 CHAT_DATA_NEBULA_ENABLED=1")
     member_ids = _query_member_ids(payload.member_datasource_ids, state)
     members = [member for member in member_ids if member]
     if len(members) != 1:
         raise ValueError("图查询必须且只能指定一个 member_datasource_id")
+    facade = GraphQueryFacade(
+        user_id=str((state or {}).get("user_id") or ""),
+        username=str((state or {}).get("operator_name") or ""),
+    )
     try:
-        result = await asyncio.to_thread(
-            get_graph_query_service().find_paths,
+        result = await facade.find_paths(
             payload.from_object_key,
             payload.to_object_key,
             max_depth=payload.max_depth,
@@ -836,7 +838,8 @@ async def _run_find_graph_paths(
         )
     except GraphQueryError as err:
         raise ValueError(str(err)) from err
-    result.graph_as_of = await latest_graph_as_of_async(members[0])
+    if facade.backend == "nebula":
+        result.graph_as_of = await latest_graph_as_of_async(members[0])
     return tool_result_payload(
         ONTOLOGY_TOOL_NAME,
         {
@@ -953,8 +956,8 @@ def create_ontology_tool(
         - list_execution_targets: 列出当前用户可执行的成员数据源（member_datasource_id/名称/机构编码）；多机构时先调用它，再把选中的 ID 传给对象查询
         - list_action_types: 列出当前业务域可执行 Action 定义（只读）
         - execute_action: 执行 Action（set_property 写覆盖层 / create_object 写动作对象表 + 审计；受部署开关门控）
-        - traverse_objects: 从对象出发做 1~3 跳关系遍历（Nebula 图查询；需开启图查询开关）
-        - find_graph_paths: 查询两个对象之间的有界路径（Nebula 图查询；需开启图查询开关）
+        - traverse_objects: 从对象出发做 1~3 跳关系遍历（图查询；Nebula 支持多跳，SQL 后端仅 1 跳）
+        - find_graph_paths: 查询两个对象之间的有界路径（图查询；当前仅 Nebula 后端支持）
             action_payload: 操作参数，结构随 action 变化：
         - list_object_types: {}（无参数，范围=当前业务域）
         - locate_object_type: {"object_types": [<对象API名>...]（单次最多10个）}

@@ -864,16 +864,25 @@ def test_get_object_happy_path(monkeypatch):
     assert "aggregate_objects" in payload["usage"]
 
 
-def test_graph_actions_require_env(monkeypatch):
-    monkeypatch.delenv("CHAT_DATA_NEBULA_ENABLED", raising=False)
+def test_traverse_objects_maps_facade_error(monkeypatch):
+    from apps.chat_data_app.services.ontology.graph import GraphQueryError
+
+    class _FakeFacade:
+        backend = "sql"
+
+        async def traverse_objects(self, *_args, **_kwargs):
+            raise GraphQueryError("SQL 图查询当前只支持 1 跳")
+
+    monkeypatch.setattr(ontology_tool, "GraphQueryFacade", lambda **_kwargs: _FakeFacade())
     _patch_bundle(monkeypatch)
-    with pytest.raises(ValueError, match="CHAT_DATA_NEBULA_ENABLED"):
+    with pytest.raises(ValueError, match="只支持 1 跳"):
         asyncio.run(
             ontology_tool.create_ontology_tool().ainvoke(
                 {
                     "action": "traverse_objects",
                     "action_payload": {
                         "object_key": "ORG1:order:1",
+                        "depth": 2,
                         "member_datasource_ids": ["ORG1"],
                     },
                     "state": _onto_state(user_id="u1"),
@@ -882,14 +891,15 @@ def test_graph_actions_require_env(monkeypatch):
         )
 
 
-def test_traverse_objects_uses_graph_service(monkeypatch):
+def test_traverse_objects_uses_graph_facade(monkeypatch):
     from apps.chat_data_app.services.ontology.graph import GraphEdge, GraphNode, GraphQueryResult
 
-    monkeypatch.setenv("CHAT_DATA_NEBULA_ENABLED", "1")
     _patch_bundle(monkeypatch)
 
-    class _FakeService:
-        def traverse_objects(self, object_key, **kwargs):
+    class _FakeFacade:
+        backend = "sql"
+
+        async def traverse_objects(self, object_key, **kwargs):
             assert object_key == "ORG1:order:1"
             assert kwargs["member_ids"] == ["ORG1"]
             return GraphQueryResult(
@@ -898,7 +908,7 @@ def test_traverse_objects_uses_graph_service(monkeypatch):
                 paths=[["ORG1:order:1", "ORG1:customer:1"]],
             )
 
-    monkeypatch.setattr(ontology_tool, "get_graph_query_service", lambda: _FakeService())
+    monkeypatch.setattr(ontology_tool, "GraphQueryFacade", lambda **_kwargs: _FakeFacade())
     payload = _invoke(
         monkeypatch,
         "traverse_objects",

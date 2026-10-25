@@ -1441,7 +1441,7 @@ onBeforeUnmount(() => stopGraphDetailResize())
                 <el-option label="<=" value="<=" />
                 <el-option label="包含" value="contains" />
               </el-select>
-              <el-input v-model="graphExpandConditionValue" size="small" clearable placeholder="值（回车或搜索）" class="!w-40" @keyup.enter="addGraphExpandCondition" />
+              <el-input v-model="graphExpandConditionValue" size="small" clearable placeholder="值（回车或搜索）" class="!w-40 shrink-0" @keyup.enter="addGraphExpandCondition" />
               <el-button size="small" type="primary" @click="addGraphExpandCondition">
                 <i class="fa-solid fa-magnifying-glass mr-1 text-[10px]"></i>搜索
               </el-button>
