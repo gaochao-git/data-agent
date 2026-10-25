@@ -397,3 +397,50 @@ def test_count_messages_tokens_handles_empty_and_none():
     assert cb.count_messages_tokens(None) == 0
     assert cb.count_messages_tokens([]) == 0
     assert cb.count_messages_tokens([HumanMessage(content="你好")]) == 4 + cb.estimate_tokens("你好")
+
+
+def test_compact_context_usage_for_history_truncates_text_keeps_counts():
+    long_text = "x" * (cb.HISTORY_BREAKDOWN_TEXT_LIMIT + 10)
+    usage = {
+        "used": 100,
+        "breakdown": [
+            {
+                "key": "tool_schema",
+                "tokens": 12,
+                "content": long_text,
+                "description": long_text,
+                "children": [{"role": "tool_schema", "tokens": 3, "content": long_text}],
+            }
+        ],
+    }
+
+    compact = cb.compact_context_usage_for_history(usage)
+
+    assert compact["used"] == 100
+    row = compact["breakdown"][0]
+    assert row["tokens"] == 12
+    assert row["content"].endswith("…")
+    assert len(row["content"]) == cb.HISTORY_BREAKDOWN_TEXT_LIMIT + 1
+    assert row["children"][0]["content"].endswith("…")
+    # 原始 usage 不能被污染：SSE 仍要发完整内容
+    assert usage["breakdown"][0]["content"] == long_text
+
+
+def test_compact_context_usage_for_history_keeps_short_text_and_unknown_shapes():
+    usage = {"breakdown": ["junk", None, {"key": "system_prompt", "content": "short"}]}
+
+    compact = cb.compact_context_usage_for_history(usage)
+
+    assert compact["breakdown"][0] == "junk"
+    assert compact["breakdown"][1] is None
+    assert compact["breakdown"][2]["content"] == "short"
+    assert cb.compact_context_usage_for_history(None) is None
+
+
+def test_compact_context_usage_keeps_debug_payload(monkeypatch):
+    long_text = "x" * (cb.HISTORY_BREAKDOWN_TEXT_LIMIT + 10)
+    monkeypatch.setattr(cb, "is_context_usage_system_prompt_visible", lambda: True)
+
+    compact = cb.compact_context_usage_for_history({"breakdown": [{"content": long_text}]})
+
+    assert compact["breakdown"][0]["content"] == long_text

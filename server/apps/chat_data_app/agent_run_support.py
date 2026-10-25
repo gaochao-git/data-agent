@@ -22,7 +22,7 @@ from langgraph.types import Command
 from utils.logger import get_logger
 
 from .agent import AgentRuntimeOptions
-from .agent.context.context_budget import sanitize_context_usage_for_response
+from .agent.context.context_budget import compact_context_usage_for_history, sanitize_context_usage_for_response
 from .agent.middleware.steering import SteeringMessageTracker
 from .agent.run.agent_inbox_service import agent_inbox_service
 from .agent.run.conversation_event_service import conversation_event_service
@@ -321,7 +321,9 @@ async def _persist_agent_turn_history(
             "messages": messages,
             "reasoning_segments": stream_adapter.reasoning_segments,
             "context_compression_events": (values or {}).get("context_compression_events") or [],
-            "token_usage": sanitize_context_usage_for_response(usage) if is_last_turn else None,
+            "token_usage": compact_context_usage_for_history(sanitize_context_usage_for_response(usage))
+            if is_last_turn
+            else None,
         }
         if run_id and stream_event_id_provider is not None:
             # persist_kwargs 为异构 dict 展开，mypy 无法把 dict[str, 联合类型] 对齐到
