@@ -112,7 +112,7 @@ async def test_query_result_keeps_object_preview_and_source_tool(monkeypatch, tm
 
     assert payload["meta"]["query_mode"] == "ontology_find_objects"
     assert payload["meta"]["member_datasource_ids"] == ["ORG_CODE1"]
-    assert payload["meta"]["member_names"] == ["财付通"]
+    assert "member_names" not in payload["meta"]
     assert "preview" not in payload["meta"]
     assert result.artifact["chatdata_tool_result_recovery"]["source_tool"] == "ontology_tool"
     saved = json.loads(

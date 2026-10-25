@@ -17,6 +17,7 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 
 from apps.chat_data_app.agent.tools import ontology_tool
+from apps.chat_data_app.services.ontology import object_projection as projection_module
 
 RESULT_PREFIX = "[ontology_tool]\n"
 
@@ -522,7 +523,7 @@ def test_find_objects_happy_path(monkeypatch):
         }
 
     monkeypatch.setattr(ontology_tool.ontology_service, "get_object_type_async", fake_get_object_type)
-    monkeypatch.setattr(ontology_tool, "search_object_projection", fake_search)
+    monkeypatch.setattr(projection_module, "search_object_projection", fake_search)
     raw = asyncio.run(
         ontology_tool.create_ontology_tool().ainvoke(
             {
@@ -555,7 +556,7 @@ def test_find_objects_projection_error_is_reported(monkeypatch):
         raise ontology_tool.ObjectProjectionError("对象查询失败")
 
     monkeypatch.setattr(ontology_tool.ontology_service, "get_object_type_async", fake_get_object_type)
-    monkeypatch.setattr(ontology_tool, "search_object_projection", fake_search)
+    monkeypatch.setattr(projection_module, "search_object_projection", fake_search)
     with pytest.raises(ValueError, match="对象查询失败"):
         asyncio.run(
             ontology_tool.create_ontology_tool().ainvoke(
@@ -590,7 +591,7 @@ def test_find_objects_runs_per_member_scope(monkeypatch):
         }
 
     monkeypatch.setattr(ontology_tool.ontology_service, "get_object_type_async", fake_get_object_type)
-    monkeypatch.setattr(ontology_tool, "search_object_projection", fake_search)
+    monkeypatch.setattr(projection_module, "search_object_projection", fake_search)
     state = _onto_state(user_id="u1")
     state["execution_context"]["matched_member_datasource_ids"] = []
     state["execution_context"]["available_member_datasource_ids"] = ["ORG_CODE1", "ORG_CODE2"]
@@ -628,7 +629,7 @@ def test_find_objects_uses_single_context_member_when_scope_omitted(monkeypatch)
         }
 
     monkeypatch.setattr(ontology_tool.ontology_service, "get_object_type_async", fake_get_object_type)
-    monkeypatch.setattr(ontology_tool, "search_object_projection", fake_search)
+    monkeypatch.setattr(projection_module, "search_object_projection", fake_search)
     state = _onto_state(user_id="u1")
     state["execution_context"]["available_member_datasource_ids"] = ["ORG_CODE1"]
     raw = asyncio.run(
@@ -705,7 +706,7 @@ def test_aggregate_objects_projection_error_is_reported(monkeypatch):
         raise ontology_tool.ObjectProjectionError("指标属性未映射")
 
     monkeypatch.setattr(ontology_tool.ontology_service, "get_object_type_async", fake_get_object_type)
-    monkeypatch.setattr(ontology_tool, "aggregate_object_projection", fake_aggregate)
+    monkeypatch.setattr(projection_module, "aggregate_object_projection", fake_aggregate)
     with pytest.raises(ValueError, match="指标属性未映射"):
         asyncio.run(
             ontology_tool.create_ontology_tool().ainvoke(
@@ -743,7 +744,7 @@ def test_aggregate_objects_happy_path(monkeypatch):
         }
 
     monkeypatch.setattr(ontology_tool.ontology_service, "get_object_type_async", fake_get_object_type)
-    monkeypatch.setattr(ontology_tool, "aggregate_object_projection", fake_aggregate)
+    monkeypatch.setattr(projection_module, "aggregate_object_projection", fake_aggregate)
     raw = asyncio.run(
         ontology_tool.create_ontology_tool().ainvoke(
             {

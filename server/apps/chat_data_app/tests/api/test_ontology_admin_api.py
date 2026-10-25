@@ -551,3 +551,46 @@ def test_object_set_upsert_maps_not_found(client, auth_headers, monkeypatch):
     payload = response.json()
     assert payload["status"] == "error"
     assert payload["code"] == 40488
+
+
+def test_object_search_multi_member_returns_results_contract(client, auth_headers, monkeypatch):
+    captured: dict = {}
+
+    async def fake_multi(object_type_name, **kwargs):
+        captured["object_type"] = object_type_name
+        captured["members"] = kwargs.get("member_datasource_ids")
+        return {
+            "status": "succeeded",
+            "sql": "SELECT 1",
+            "total_count": 2,
+            "execution_time_ms": 6,
+            "error": None,
+            "query_mode": "ontology_find_objects",
+            "results": [
+                {
+                    "member_datasource_id": member,
+                    "member_name": member,
+                    "status": "succeeded",
+                    "sql": "SELECT 1",
+                    "columns": ["object_key"],
+                    "data": [{"object_key": f"{member}:customer:C1"}],
+                    "total_count": 1,
+                    "execution_time_ms": 6,
+                    "error": None,
+                }
+                for member in ["ORG_CODE1", "ORG_CODE2"]
+            ],
+        }
+
+    monkeypatch.setattr(ontology_admin_routes, "search_objects_multi_projection", fake_multi)
+    response = client.post(
+        "/api/chatdata/admin/meta/ontology/object-types/customer/objects/search",
+        json={"member_datasource_ids": ["ORG_CODE1", "ORG_CODE2"], "limit": 10},
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "success"
+    assert captured == {"object_type": "customer", "members": ["ORG_CODE1", "ORG_CODE2"]}
+    assert [item["member_datasource_id"] for item in payload["data"]["results"]] == ["ORG_CODE1", "ORG_CODE2"]
+    assert payload["data"]["total_count"] == 2

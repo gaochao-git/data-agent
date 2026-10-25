@@ -8,6 +8,7 @@ service 层执行，本路由只做 HTTP 入参、权限入口、统一响应与
 from __future__ import annotations
 
 import functools
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
@@ -56,6 +57,7 @@ from ..services.ontology.object_projection import (
     list_object_projection,
     read_object_projection,
     search_object_projection,
+    search_objects_multi_projection,
 )
 from ..services.ontology.object_set_service import OntologyObjectSetService
 from ..services.ontology.ontology_consistency import check_ontology_model_consistency as _run_consistency_check
@@ -221,22 +223,37 @@ async def search_ontology_objects(
     payload: OntologyObjectSearchRequest,
     request: Request,
 ) -> JSONResponse:
-    """通用对象实例查询：关键词、属性过滤、排序、分页和总数（只读投影）。"""
+    """通用对象实例查询：关键词、属性过滤、排序、分页和总数（只读投影）。
+
+    单 member 保持原 ``objects[]`` 契约；显式传多个 member 时走多机构统一
+    ``results[]`` 契约（与指标层一致），逐机构并行查询。
+    """
     try:
         current_user = _get_current_user(request)
-        data = await search_object_projection(
-            object_type_name,
-            keyword=payload.keyword,
-            filters=[item.model_dump() for item in payload.filters],
-            where=payload.where.model_dump() if payload.where else None,
-            sorts=[item.model_dump() for item in payload.sort],
-            limit=payload.limit,
-            offset=payload.offset,
-            semantic_config_id=payload.semantic_config_id,
-            member_datasource_ids=payload.member_datasource_ids,
-            user_id=str(current_user.user_id or ""),
-            username=str(current_user.username or ""),
-        )
+        selected_members = [str(member).strip() for member in payload.member_datasource_ids if str(member).strip()]
+        common_args: dict[str, Any] = {
+            "keyword": payload.keyword,
+            "filters": [item.model_dump() for item in payload.filters],
+            "where": payload.where.model_dump() if payload.where else None,
+            "sorts": [item.model_dump() for item in payload.sort],
+            "limit": payload.limit,
+            "offset": payload.offset,
+            "semantic_config_id": payload.semantic_config_id,
+            "user_id": str(current_user.user_id or ""),
+            "username": str(current_user.username or ""),
+        }
+        if len(selected_members) > 1:
+            data = await search_objects_multi_projection(
+                object_type_name,
+                member_datasource_ids=selected_members,
+                **common_args,
+            )
+        else:
+            data = await search_object_projection(
+                object_type_name,
+                member_datasource_ids=payload.member_datasource_ids,
+                **common_args,
+            )
         return business_response(data=data, msg="获取成功")
     except HTTPException:
         raise

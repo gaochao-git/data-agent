@@ -35,6 +35,7 @@ from ...daos.ontology_action_object_dao import OntologyActionObjectDao
 from ..datasource.manager import get_datasource_manager
 from ..datasource.target_context import get_execution_target_member_id, get_execution_target_name
 from ..query import QueryOrchestrator, QuerySource, QuerySpec
+from ..sql_run.result import build_query_result_payload
 from . import ontology_service
 from .object_errors import ObjectProjectionError
 from .object_query_builder import (  # noqa: F401 - 兼容投影层内部/测试对纯函数的直接引用
@@ -1064,6 +1065,234 @@ async def search_object_projection(
         "execution_time_ms": execution_time_ms,
         **_member_scope(targets),
     }
+
+
+_MULTI_MEMBER_CONCURRENCY = 8
+
+
+def _search_member_result(data: dict[str, Any], member_datasource_id: str) -> dict[str, Any]:
+    """把单 member 对象查询结果收敛成统一 results[] 成员结构。"""
+    properties = [str(name) for name in data.get("properties") or []]
+    rows = [
+        {"object_key": obj.get("object_key"), **(obj.get("properties") or {})}
+        for obj in data.get("objects") or []
+        if isinstance(obj, dict)
+    ]
+    return {
+        "member_datasource_id": _text(data.get("member_datasource_id")) or member_datasource_id,
+        "member_name": _text(data.get("member_name")),
+        "status": "succeeded",
+        "sql": _text(data.get("sql")),
+        "columns": ["object_key", *properties],
+        "data": rows,
+        "total_count": int(data.get("total") or 0),
+        "execution_time_ms": data.get("execution_time_ms"),
+        "error": None,
+        "has_more": bool(data.get("has_more")),
+        "limit": data.get("limit"),
+        "offset": data.get("offset"),
+    }
+
+
+def _failed_member_result(member_datasource_id: str, error: str) -> dict[str, Any]:
+    """单 member 失败结果：保持 results[] 成员状态，避免整体查询被拖垮。"""
+    return {
+        "member_datasource_id": member_datasource_id,
+        "member_name": "",
+        "status": "failed",
+        "sql": "",
+        "columns": [],
+        "data": [],
+        "total_count": 0,
+        "execution_time_ms": 0,
+        "error": error,
+    }
+
+
+def _aggregate_member_result(data: dict[str, Any], member_datasource_id: str) -> dict[str, Any]:
+    """把单 member 聚合结果收敛成统一 results[] 成员结构。"""
+    group_by = [str(name) for name in data.get("group_by") or []]
+    metric_keys = [str(name) for name in data.get("metric_keys") or []]
+    rows = [
+        {**(group.get("keys") or {}), **(group.get("metrics") or {})}
+        for group in data.get("groups") or []
+        if isinstance(group, dict)
+    ]
+    return {
+        "member_datasource_id": _text(data.get("member_datasource_id")) or member_datasource_id,
+        "member_name": _text(data.get("member_name")),
+        "status": "succeeded",
+        "sql": _text(data.get("sql")),
+        "columns": [*group_by, *metric_keys],
+        "data": rows,
+        "total_count": len(rows),
+        "execution_time_ms": data.get("execution_time_ms"),
+        "error": None,
+    }
+
+
+async def _run_member_projections(
+    members: list[str],
+    loader: Any,
+) -> list[dict[str, Any]]:
+    """按 member 并行执行单 member 查询；单成员异常收敛为 failed，不中断其他成员。"""
+    semaphore = asyncio.Semaphore(_MULTI_MEMBER_CONCURRENCY)
+
+    async def load(member_id: str) -> dict[str, Any]:
+        async with semaphore:
+            try:
+                return await loader(member_id)
+            except ObjectProjectionError as exc:
+                logger.warning("多机构本体查询单成员失败: %s: %s", member_id, exc)
+                return _failed_member_result(member_id, str(exc))
+            except Exception as exc:  # noqa: BLE001 - 单成员异常不能拖垮其它机构
+                logger.warning("多机构本体查询单成员异常: %s: %s", member_id, exc, exc_info=True)
+                return _failed_member_result(member_id, "对象查询失败")
+
+    return list(await asyncio.gather(*(load(member_id) for member_id in members)))
+
+
+async def search_objects_multi_projection(
+    object_type_name: str,
+    *,
+    member_datasource_ids: list[str] | None = None,
+    keyword: str = "",
+    filters: list[dict[str, Any]] | None = None,
+    sorts: list[dict[str, Any]] | None = None,
+    limit: int = 20,
+    offset: int = 0,
+    semantic_config_id: str | None = None,
+    where: dict[str, Any] | None = None,
+    user_id: str = "",
+    username: str = "",
+) -> dict[str, Any]:
+    """多机构对象查询：按 member 各生成一条 SQL 并行下发，返回与指标层一致的 results[]。
+
+    - 显式 member 列表：逐成员并行查询，单成员失败只影响该成员结果；
+    - 未指定 member：退化为单 member 语义（由 Dataset binding 决定，可能要求明确机构）；
+    - 顶层 total_count 为成功成员合计，分页/limit/offset 仍按各成员独立下推。
+    """
+    detail = await ontology_service.get_object_type_async(object_type_name)
+    if detail is None:
+        raise ObjectProjectionError(f"本体对象类型不存在: {object_type_name}")
+    members = [str(member).strip() for member in member_datasource_ids or [] if str(member).strip()]
+    if (_text(detail.get("write_mode")) or "read_only") == "action_created" or not members:
+        data = await search_object_projection(
+            object_type_name,
+            member_datasource_ids=members or None,
+            keyword=keyword,
+            filters=filters,
+            sorts=sorts,
+            limit=limit,
+            offset=offset,
+            semantic_config_id=semantic_config_id,
+            where=where,
+            user_id=user_id,
+            username=username,
+        )
+        members = [_text(data.get("member_datasource_id"))]
+        results = [_search_member_result(data, members[0])]
+    else:
+
+        async def load(member_id: str) -> dict[str, Any]:
+            data = await search_object_projection(
+                object_type_name,
+                member_datasource_ids=[member_id],
+                keyword=keyword,
+                filters=filters,
+                sorts=sorts,
+                limit=limit,
+                offset=offset,
+                semantic_config_id=semantic_config_id,
+                where=where,
+                user_id=user_id,
+                username=username,
+            )
+            return _search_member_result(data, member_id)
+
+        results = await _run_member_projections(members, load)
+    payload = build_query_result_payload(
+        sql=next((str(item.get("sql")) for item in results if item.get("sql")), ""),
+        member_results=results,
+    )
+    payload.update(
+        {
+            "query_mode": "ontology_find_objects",
+            "object_type": object_type_name,
+            "limit": limit,
+            "offset": offset,
+            "has_more": any(bool(item.get("has_more")) for item in results),
+        }
+    )
+    return payload
+
+
+async def aggregate_objects_multi_projection(
+    object_type_name: str,
+    *,
+    member_datasource_ids: list[str] | None = None,
+    group_by: list[str] | None = None,
+    metrics: list[dict[str, Any]] | None = None,
+    filters: list[dict[str, Any]] | None = None,
+    keyword: str = "",
+    limit: int = 100,
+    semantic_config_id: str | None = None,
+    where: dict[str, Any] | None = None,
+    user_id: str = "",
+    username: str = "",
+) -> dict[str, Any]:
+    """多机构对象聚合：按 member 并行下发聚合 SQL，返回 results[]（每机构一组结果）。"""
+    detail = await ontology_service.get_object_type_async(object_type_name)
+    if detail is None:
+        raise ObjectProjectionError(f"本体对象类型不存在: {object_type_name}")
+    members = [str(member).strip() for member in member_datasource_ids or [] if str(member).strip()]
+    if (_text(detail.get("write_mode")) or "read_only") == "action_created" or not members:
+        data = await aggregate_object_projection(
+            object_type_name,
+            member_datasource_ids=members or None,
+            group_by=group_by,
+            metrics=metrics,
+            filters=filters,
+            keyword=keyword,
+            limit=limit,
+            semantic_config_id=semantic_config_id,
+            where=where,
+            user_id=user_id,
+            username=username,
+        )
+        members = [_text(data.get("member_datasource_id"))]
+        results = [_aggregate_member_result(data, members[0])]
+    else:
+
+        async def load(member_id: str) -> dict[str, Any]:
+            data = await aggregate_object_projection(
+                object_type_name,
+                member_datasource_ids=[member_id],
+                group_by=group_by,
+                metrics=metrics,
+                filters=filters,
+                keyword=keyword,
+                limit=limit,
+                semantic_config_id=semantic_config_id,
+                where=where,
+                user_id=user_id,
+                username=username,
+            )
+            return _aggregate_member_result(data, member_id)
+
+        results = await _run_member_projections(members, load)
+    payload = build_query_result_payload(
+        sql=next((str(item.get("sql")) for item in results if item.get("sql")), ""),
+        member_results=results,
+    )
+    payload.update(
+        {
+            "query_mode": "ontology_aggregate_objects",
+            "object_type": object_type_name,
+            "limit": limit,
+        }
+    )
+    return payload
 
 
 async def aggregate_object_projection(

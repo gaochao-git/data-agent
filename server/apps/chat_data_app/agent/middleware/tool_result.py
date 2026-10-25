@@ -117,12 +117,11 @@ async def _finalize_query_result(
     )
 
     members = [item for item in query_result.get("results") or [] if isinstance(item, dict)]
+    # 只暴露 member id：调用方（模型/前端）已从 list_execution_targets/数据源列表拿到 id→名称映射，
+    # 结果信封不再重复携带 member_names；成员级 member_name 仍保留在 results[] 供结果表展示。
     member_ids = [str(item.get("member_datasource_id") or "").strip() for item in members]
-    member_names = [str(item.get("member_name") or "").strip() for item in members]
     if any(member_ids):
         public_meta["member_datasource_ids"] = [item for item in member_ids if item]
-    if any(member_names):
-        public_meta["member_names"] = [item for item in member_names if item]
     public_meta.update(
         {
             "result_id": record.result_id,
