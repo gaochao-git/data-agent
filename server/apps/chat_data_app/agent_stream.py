@@ -724,12 +724,20 @@ class _AgentSseStreamAdapter:
         if speed_event:
             yield speed_event
 
+    def _stream_state_has_pending_tool_call(self) -> bool:
+        """最后一条是带 tool_calls 的 AI 消息时，可能正在 interrupt，必须回读 checkpoint。"""
+        messages = (self.state_values or {}).get("messages")
+        return isinstance(messages, list) and bool(messages) and bool(getattr(messages[-1], "tool_calls", None))
+
     async def finish(
         self, *, persist_latest_ai_timestamp: bool = False, prefer_latest_usage: bool = False
     ) -> dict[str, Any]:
         """读取最终状态并构造 message_end payload。"""
         use_stream_state = (
-            finish_use_stream_state_enabled() and self.state_values is not None and not self.question_requested
+            finish_use_stream_state_enabled()
+            and self.state_values is not None
+            and not self.question_requested
+            and not self._stream_state_has_pending_tool_call()
         )
         if use_stream_state:
             self.state = StreamStateView(dict(self.state_values or {}))

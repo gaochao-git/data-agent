@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, nextTick, reactive, ref, watch } from 'vue'
 import type { PropType } from 'vue'
 import type { ApprovalItem, PendingUserQuestion, UserQuestionAnswer } from '../../types'
 import { formatLocalDateTime } from '../../utils/dateTime'
@@ -19,6 +19,7 @@ const selected = reactive<Record<string, string[]>>({})
 const custom = reactive<Record<string, string>>({})
 const skipped = reactive<Record<string, boolean>>({})
 const currentIndex = ref(0)
+const customTextarea = ref<HTMLTextAreaElement | null>(null)
 
 const currentQuestion = computed(() => props.question.questions[currentIndex.value])
 const currentQuestionId = computed(() => currentQuestion.value?.id || '')
@@ -116,6 +117,8 @@ const toggleOption = (questionId: string, label: string, multiSelect: boolean) =
   selected[questionId] = multiSelect
     ? values.includes(label) ? values.filter(value => value !== label) : [...values, label]
     : [label]
+  // 选完选项后把焦点交给补充说明，用户可以直接续写，不需要再点一次输入框。
+  void nextTick(() => customTextarea.value?.focus())
 }
 
 const answers = computed<UserQuestionAnswer[]>(() => props.question.questions.map(item => ({
@@ -273,6 +276,7 @@ const skipCurrent = () => {
                与其让人以为"说明理由即可放行"，不如不给这个输入框 -->
           <textarea
             v-if="question.kind !== 'approval'"
+            ref="customTextarea"
             v-model="custom[currentQuestion.id]"
             rows="2"
             class="mt-2 w-full resize-none rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 outline-none focus:border-blue-500"
