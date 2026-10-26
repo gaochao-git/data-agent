@@ -1069,7 +1069,8 @@ def test_tool_description_defers_payload_contract_to_help_and_skill_docs():
     description = str(ontology_tool.create_ontology_tool("ds_a", user_id="u1").description or "")
 
     assert "action=help" in description
-    for doc in ("references/ontology/query.md", "references/ontology/relations.md", "references/ontology/actions.md"):
+    assert "references/ontology/" in description
+    for doc in ("query.md", "relations.md", "actions.md"):
         assert doc in description, f"description 未指向技能文档: {doc}"
 
     # 内联模板回归护栏：这些 payload 片段哪里都不该出现在 description 里

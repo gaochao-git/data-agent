@@ -394,14 +394,9 @@ class OntologyToolInput(BaseModel):
     ] = Field(
         ...,
         description=(
-            "操作类型：导航 list_object_types / locate_object_type；"
-            "对象读取 get_object / find_objects / aggregate_objects / list_execution_targets；"
-            "对象集合 save_object_set / load_object_set / list_object_sets；"
-            "关系与图 search_around / traverse_objects / find_graph_paths；"
-            "动作 list_action_types / execute_action。"
-            "不确定某个 action 的 action_payload 结构时，先传 action=help、"
-            'action_payload={"action": "<动作名>"} 查字段/必填/上限；'
-            "模板与示例见 data-analyzing 技能的 references/ontology/ 能力文档。"
+            "操作类型：导航 / 对象读取 / 对象集合 / 关系与图 / 动作"
+            "（分组与选型见技能 references/ontology/ 文档）；"
+            "参数不确定时用 action=help 查字段/必填/上限。"
         ),
     )
     action_payload: dict[str, Any] = Field(
@@ -1226,13 +1221,11 @@ def create_ontology_tool(
         intent: str = "",
     ) -> str:
         """
-        本体对象 / 关系 / Action 查询工具（当前业务域已启用本体层时的唯一数据查询入口；不依赖语义模型，不回退语义查询）。
+        本体对象 / 关系 / Action 查询工具。
 
-        调用顺序：先读 /mnt/user-data/workspace/semantic/_ontology_catalog.yaml 确认对象类型/关系/Action。
-        参数：不确定 action_payload 结构时，先传 action=help、action_payload={"action": "<动作名>"}
-        查字段/必填/上限（由入参模型现算）。业务工作流、查询顺序与口径见 data-analyzing 技能：
-        对象查询/对象集合读 references/ontology/query.md，关系与图查询读 references/ontology/relations.md，
-        Action 读 references/ontology/actions.md。技能不重复参数模板。
+        调用前的目录阅读、业务工作流、查询顺序与 action_payload 结构见 data-analyzing 技能的
+        references/ontology/ 文档（query.md / relations.md / actions.md）；
+        字段契约（必填/默认/上限）用 action=help 动态查询，本文与技能均不内联参数模板。
         """
         return await _run_ontology_impl(
             action,

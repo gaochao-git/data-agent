@@ -43,6 +43,9 @@ metadata:
 
 同一轮只走一条主路径；跨层按“先聚合、后下钻”执行。
 
+本体模式调用前先 `file_read` 读取 `/mnt/user-data/workspace/semantic/_ontology_catalog.yaml`
+确认对象类型 / 关系 / Action（文件不存在说明当前会话未物化本体层，走语义层路径）。
+
 本体工具 `ontology_tool` 的参数契约（字段/必填/默认/上限）用
 `ontology_tool(action="help", action_payload={"action": "<动作名>"})` 查，由工具入参模型现算；
 `references/ontology/` 三份文档（query / relations / actions）只写用哪个动作、顺序、口径与边界，
