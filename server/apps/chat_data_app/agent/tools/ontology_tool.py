@@ -25,11 +25,16 @@
 校验在工具实现入口经 ``validate_ontology_payload`` 完成（共用
 ``ONTOLOGY_ACTION_PAYLOAD_MODELS`` 映射表）——校验不能放进 args model_validator：
 langgraph 会把 model_validator 抛出的校验错误过滤成空白消息，模型与用户都看不到原因。
+
+参数契约由 ``action="help"`` 按 ``ONTOLOGY_ACTION_PAYLOAD_MODELS`` 现算（字段/必填/默认/上限），
+不写进工具 description，也不写进技能文档——技能 ``references/ontology/`` 只负责
+何时用哪个动作、顺序、口径与边界。同一份契约只维护在 pydantic 模型一处。
 """
 
 from __future__ import annotations
 
-from typing import Annotated, Any, Literal
+from types import UnionType
+from typing import Annotated, Any, Literal, Union, get_args, get_origin
 
 from langchain_core.tools import BaseTool, tool
 from langgraph.prebuilt import InjectedState
@@ -184,7 +189,7 @@ class _FindObjectsPayload(BaseModel):
 
     object_type: str = Field(..., min_length=1, max_length=128, description='对象类型 API 名，如 "customer"')
     member_datasource_ids: list[str] | None = Field(
-        default=None, max_length=20, description="执行对象/机构范围；当前对象查询 MVP 一次只支持一个机构"
+        default=None, max_length=20, description="执行对象/机构范围；可传多个 member，工具按机构并行返回 results[]"
     )
     keyword: str = Field(default="", max_length=200, description="标题键/主键模糊搜索")
     filters: list[_FindObjectsFilter] = Field(default_factory=list, max_length=10, description="属性过滤（旧扁平格式）")
@@ -208,7 +213,7 @@ class _AggregateObjectsPayload(BaseModel):
 
     object_type: str = Field(..., min_length=1, max_length=128, description='对象类型 API 名，如 "shipment"')
     member_datasource_ids: list[str] | None = Field(
-        default=None, max_length=20, description="执行对象/机构范围；当前对象查询 MVP 一次只支持一个机构"
+        default=None, max_length=20, description="执行对象/机构范围；可传多个 member，工具按机构并行返回 results[]"
     )
     group_by: list[str] = Field(default_factory=list, max_length=5, description="分组属性 API 名列表")
     metrics: list[_AggregateObjectsMetric] = Field(
@@ -325,14 +330,46 @@ ONTOLOGY_ACTION_PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
     "find_graph_paths": _FindGraphPathsPayload,
 }
 
+# help 动作：模型不确定某动作的 payload 结构时按需查字段契约。字段/必填/上限一律由
+# ONTOLOGY_ACTION_PAYLOAD_MODELS 现算（见 _payload_fields），不手写第二份参数文档；
+# 这里只维护每个动作的一句话用法与对应能力文档，供 help 输出指路。
+HELP_ACTION = "help"
+ONTOLOGY_HELP_DOC_ROOT = "/mnt/skills/data-analyzing/references/ontology"
+ONTOLOGY_ACTION_HELP: dict[str, tuple[str, str]] = {
+    "list_object_types": ("列出当前业务域可导航对象类型（轻量清单，不执行查询），只读。", "query.md"),
+    "locate_object_type": (
+        "按对象类型批量返回属性、数据源绑定与关系跳转，只读导航，不执行查询。",
+        "query.md",
+    ),
+    "find_objects": ("按对象类型查询实例（关键词/属性过滤/排序/分页），只读，按机构返回 results[]。", "query.md"),
+    "get_object": ("按对象类型 + 主键读取单个对象属性与一跳 links，只读。", "query.md"),
+    "aggregate_objects": (
+        "按对象类型做属性白名单分组聚合（count/count_distinct/sum/avg/min/max），只读。",
+        "query.md",
+    ),
+    "list_execution_targets": ("列出当前用户可执行的成员数据源（机构），用于取 member_datasource_ids。", "query.md"),
+    "save_object_set": ("把查询结果的对象主键保存为对象集合，供跨轮或后续动作引用。", "query.md"),
+    "load_object_set": ("按集合名分页加载对象属性；缺失对象跳过，过期集合报错。", "query.md"),
+    "list_object_sets": ("列出当前业务域已保存的对象集合。", "query.md"),
+    "search_around": (
+        "以单个对象类型为中心沿关系走一跳，返回物理连接列与对端对象导航条目。",
+        "relations.md",
+    ),
+    "traverse_objects": ("从对象出发做 1~3 跳关系遍历（图查询，需 Nebula 且图已同步）。", "relations.md"),
+    "find_graph_paths": ("查询两个对象之间的有界路径（图查询，需 Nebula 且图已同步）。", "relations.md"),
+    "list_action_types": ("列出当前业务域可执行 Action 定义与参数，只读。", "actions.md"),
+    "execute_action": ("执行 Action（属性覆盖层/创建对象 + 审计），受部署开关门控。", "actions.md"),
+}
+
 
 class OntologyToolInput(BaseModel):
     """本体导航工具入参：按 ``action`` 分派，``action_payload`` 结构随 action 变化。
 
-    共 14 个 action：``list_object_types`` / ``locate_object_type`` / ``search_around`` 负责导航，
+    共 14 个业务 action：``list_object_types`` / ``locate_object_type`` / ``search_around`` 负责导航，
     ``get_object`` / ``find_objects`` 负责对象读取，``aggregate_objects`` 负责属性白名单聚合，
     ``list_execution_targets`` 列出执行对象，``list_action_types`` / ``execute_action`` 负责 Action，
-    ``save_object_set`` / ``load_object_set`` / ``list_object_sets`` 负责对象集合跨轮传递。
+    ``save_object_set`` / ``load_object_set`` / ``list_object_sets`` 负责对象集合跨轮传递；
+    另有 ``help`` 动作按需返回某个业务 action 的字段契约（由 payload 模型现算）。
     action_payload 的校验在工具实现入口经 ``validate_ontology_payload`` 完成——不能放进
     model_validator：langgraph 的 ToolInvocationError 会过滤 loc 为空的校验错误，
     模型与用户都看不到原因；在工具函数体内抛错则走 ToolErrorMiddleware，详情完整可见。
@@ -353,43 +390,25 @@ class OntologyToolInput(BaseModel):
         "list_object_sets",
         "traverse_objects",
         "find_graph_paths",
+        "help",
     ] = Field(
         ...,
         description=(
-            "操作类型：list_object_types 列出当前业务域可导航对象类型（轻量清单：对象类型名/展示名/描述 + 数据源绑定摘要，不执行查询）；"
-            "locate_object_type 按对象类型批量返回属性、数据源绑定（属性→逻辑列→物理列）与关系类型跳转（不执行查询）；"
-            "search_around 以单个对象类型为中心沿关系走一跳（返回物理连接列与对端对象完整导航条目，不执行查询）；"
-            "get_object 按对象类型 + 主键读取对象属性与一跳 links（只读，不回写）；"
-            "find_objects 按对象类型查询实例（关键词/属性过滤/排序/分页，只读）；"
-            "aggregate_objects 按对象类型分组聚合（count/count_distinct/sum/avg/min/max；只读）；"
-            "list_execution_targets 列出当前用户可执行的成员数据源；"
-            "list_action_types 列出当前业务域可执行的 Action 定义（只读）；"
-            "execute_action 执行 Action（写对象属性覆盖层 + 审计，需部署开启 Action 执行开关）；"
-            "save_object_set 把查询结果的对象主键保存为 static 对象集合（跨轮引用/传给后续动作）；"
-            "load_object_set 按集合名分页加载对象属性；"
-            "list_object_sets 列出当前业务域已保存的对象集合；"
-            "traverse_objects 从对象出发做 1~3 跳关系遍历（图查询：Nebula 支持多跳，SQL 后端当前仅支持 1 跳）；"
-            "find_graph_paths 查询两个对象之间的有界路径（图查询，当前仅 Nebula 后端支持）"
+            "操作类型：导航 list_object_types / locate_object_type；"
+            "对象读取 get_object / find_objects / aggregate_objects / list_execution_targets；"
+            "对象集合 save_object_set / load_object_set / list_object_sets；"
+            "关系与图 search_around / traverse_objects / find_graph_paths；"
+            "动作 list_action_types / execute_action。"
+            "不确定某个 action 的 action_payload 结构时，先传 action=help、"
+            'action_payload={"action": "<动作名>"} 查字段/必填/上限；'
+            "模板与示例见 data-analyzing 技能的 references/ontology/ 能力文档。"
         ),
     )
     action_payload: dict[str, Any] = Field(
         ...,
         description=(
-            "操作参数，结构随 action 变化："
-            "list_object_types 传 {}；"
-            'locate_object_type 传 {"object_types": [<对象类型API名>...]}；'
-            'search_around 传 {"object_type": "<中心对象类型API名>", "relation": "可选，只展开该关系"}；'
-            'get_object 传 {"object_type": "<对象类型API名>", "object_key": "<对象主键值>", "member_datasource_ids": ["可选机构ID"]}；'
-            'find_objects 传 {"object_type": "<对象类型API名>", "member_datasource_ids": ["可选机构ID"], "keyword": "可选", "filters": [{"property": "<属性>", "operator": "eq", "value": "<值>"}], "sort": [{"property": "<属性>", "direction": "asc"}], "limit": 10, "offset": 0}；'
-            'aggregate_objects 传 {"object_type": "<对象类型API名>", "member_datasource_ids": ["可选机构ID"], "group_by": ["<属性>"], "metrics": [{"operation": "count"}, {"operation": "sum", "property": "<数值属性>"}]}；'
-            "list_execution_targets 传 {}；"
-            "list_action_types 传 {}；"
-            'execute_action 传 {"action_type": "<Action Type API名>", "object_key": "<对象主键值>", "parameters": {"<参数名>": "<值>"}}；'
-            'save_object_set 传 {"object_type": "<对象类型API名>", "member_datasource_id": "<机构ID>", "object_keys": ["<对象主键>"], "set_name": "可选", "temporary": true}；'
-            'load_object_set 传 {"object_type": "<对象类型API名>", "set_name": "<集合名>", "limit": 20, "offset": 0}；'
-            'list_object_sets 传 {} 或 {"object_type": "<对象类型API名>"}；'
-            'traverse_objects 传 {"object_key": "<完整对象身份>", "depth": 1, "direction": "both", "limit": 50, "member_datasource_ids": ["机构ID"]}；'
-            'find_graph_paths 传 {"from_object_key": "<起点>", "to_object_key": "<终点>", "max_depth": 3, "limit": 10, "member_datasource_ids": ["机构ID"]}'
+            "操作参数 JSON，结构随 action 变化；完整模板与字段约束见 data-analyzing 技能的 "
+            "references/ontology/ 对应能力文档（参数不合法会返回具体字段错误，按提示修正）。"
         ),
     )
     intent: str = Field(
@@ -408,7 +427,10 @@ def validate_ontology_payload(action: str, action_payload: dict[str, Any]) -> An
     """
     payload_model = ONTOLOGY_ACTION_PAYLOAD_MODELS.get(action)
     if payload_model is None:
-        raise ValueError(f"不支持的 action: {action}")
+        raise ValueError(
+            f"不支持的 action: {action}；可用 action: {', '.join(ONTOLOGY_ACTION_PAYLOAD_MODELS)}；"
+            f'不确定 payload 结构时先传 action="{HELP_ACTION}" 查询'
+        )
     try:
         return payload_model.model_validate(action_payload)
     except ValidationError as exc:
@@ -417,6 +439,145 @@ def validate_ontology_payload(action: str, action_payload: dict[str, Any]) -> An
             for error in exc.errors()
         )
         raise ValueError(f"action={action} 的 action_payload 校验失败：{detail}") from None
+
+
+# help 输出用的 pydantic 约束标签：值直接从 Field 元数据读，不复制字段说明
+_CONSTRAINT_LABELS = {
+    "Ge": "ge",
+    "Gt": "gt",
+    "Le": "le",
+    "Lt": "lt",
+    "MinLen": "min_length",
+    "MaxLen": "max_length",
+    "MultipleOf": "multiple_of",
+}
+
+
+def _unwrap_optional(annotation: Any) -> Any:
+    """去掉 Optional 外壳；多类型联合原样返回。"""
+    origin = get_origin(annotation)
+    if origin not in (Union, UnionType):
+        return annotation
+    members = [member for member in get_args(annotation) if member is not type(None)]
+    return members[0] if len(members) == 1 else annotation
+
+
+def _type_label(annotation: Any) -> str:
+    """把 pydantic 字段注解压成模型可读的短类型标签。"""
+    normalized = _unwrap_optional(annotation)
+    origin = get_origin(normalized)
+    if origin in (list, tuple):
+        args = get_args(normalized)
+        return f"array<{_type_label(args[0])}>" if args else "array"
+    if origin is dict:
+        return "object"
+    if origin is Literal:
+        return "enum(" + "|".join(str(value) for value in get_args(normalized)) + ")"
+    if isinstance(normalized, type) and issubclass(normalized, BaseModel):
+        return "object"
+    if isinstance(normalized, type):
+        return normalized.__name__
+    return str(normalized)
+
+
+def _field_type_constraints(field: Any) -> dict[str, Any]:
+    """提取 Field(ge/le/min_length/max_length/...) 约束。"""
+    constraints: dict[str, Any] = {}
+    for meta in field.metadata or ():
+        label = _CONSTRAINT_LABELS.get(type(meta).__name__)
+        value = getattr(meta, label, None) if label else None
+        if label and value is not None:
+            constraints[label] = value
+    return constraints
+
+
+def _nested_payload_model(annotation: Any) -> tuple[type[BaseModel], str] | None:
+    """嵌套 payload 模型及挂载键：数组用 item_fields，单个对象用 fields。"""
+    normalized = _unwrap_optional(annotation)
+    origin = get_origin(normalized)
+    if origin in (list, tuple):
+        args = get_args(normalized)
+        if not args:
+            return None
+        item = _unwrap_optional(args[0])
+        return (item, "item_fields") if isinstance(item, type) and issubclass(item, BaseModel) else None
+    if isinstance(normalized, type) and issubclass(normalized, BaseModel):
+        return normalized, "fields"
+    return None
+
+
+def _payload_field_spec(name: str, field: Any, *, depth: int) -> dict[str, Any]:
+    """单个 payload 字段的紧凑契约：类型/必填/默认/上限；嵌套对象下沉一层。"""
+    spec: dict[str, Any] = {
+        "name": name,
+        "type": _type_label(field.annotation),
+        "required": field.is_required(),
+    }
+    if not spec["required"]:
+        default = field.get_default(call_default_factory=True)
+        if default is not None:
+            spec["default"] = default
+    spec.update(_field_type_constraints(field))
+    if spec["type"].startswith("array"):
+        # 数组的 min_length/max_length 是元素个数，改标签避免和字符串长度混淆
+        for old, new in (("min_length", "min_items"), ("max_length", "max_items")):
+            if old in spec:
+                spec[new] = spec.pop(old)
+    nested = _nested_payload_model(field.annotation)
+    if nested is not None and depth > 0:
+        nested_model, nested_key = nested
+        spec[nested_key] = [
+            _payload_field_spec(nested_name, nested_field, depth=depth - 1)
+            for nested_name, nested_field in nested_model.model_fields.items()
+        ]
+    return spec
+
+
+def _payload_fields(model: type[BaseModel]) -> list[dict[str, Any]]:
+    """help 输出的字段契约：遍历 pydantic 模型现算，不维护第二份手写参数表。"""
+    return [_payload_field_spec(name, field, depth=1) for name, field in model.model_fields.items()]
+
+
+def _payload_spec_map(fields: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """字段契约转成「字段名 → 契约」的紧凑 JSON 结构，避免每项重复 name 键。"""
+    spec_map: dict[str, dict[str, Any]] = {}
+    for item in fields:
+        entry = {key: value for key, value in item.items() if key != "name"}
+        for nested_key in ("fields", "item_fields"):
+            nested = entry.get(nested_key)
+            if nested:
+                entry[nested_key] = _payload_spec_map(nested)
+        spec_map[str(item["name"])] = entry
+    return spec_map
+
+
+def _run_help(action_payload: Any) -> str:
+    """按需返回单个动作的用法与 payload 字段契约（JSON）；不传动作时列出全部动作。"""
+    target = str((action_payload or {}).get("action") or "").strip()
+    if not target:
+        return tool_result_payload(
+            ONTOLOGY_TOOL_NAME,
+            {
+                "success": True,
+                "usage": 'ontology_tool(action="<action>", action_payload={...}, intent="<一句中文目的>")',
+                "actions": {name: usage for name, (usage, _doc) in ONTOLOGY_ACTION_HELP.items()},
+                "help": 'ontology_tool(action="help", action_payload={"action": "<action>"})  # 查单个动作参数',
+            },
+        )
+    payload_model = ONTOLOGY_ACTION_PAYLOAD_MODELS.get(target)
+    if payload_model is None:
+        raise ValueError(f"未知 action: {target}；可用 action: {', '.join(ONTOLOGY_ACTION_PAYLOAD_MODELS)}")
+    usage, doc_file = ONTOLOGY_ACTION_HELP[target]
+    return tool_result_payload(
+        ONTOLOGY_TOOL_NAME,
+        {
+            "success": True,
+            "action": target,
+            "usage": usage,
+            "payload": _payload_spec_map(_payload_fields(payload_model)),
+            "workflow_doc": f"{ONTOLOGY_HELP_DOC_ROOT}/{doc_file}",
+        },
+    )
 
 
 def _resolve_bound_datasource_id(state: dict | None, bound_datasource_id: str) -> str:
@@ -973,6 +1134,8 @@ async def _run_ontology_impl(
     bound_user_id: str,
 ) -> str:
     """按 action 分发到本体对象类型清单 / 定位实现。"""
+    if action == HELP_ACTION:
+        return _run_help(action_payload)
     # payload 校验必须在函数体内做（不能用 args_schema 的 model_validator）：
     # langgraph 会把 model_validator 抛出的校验错误过滤成空白消息，模型看不到原因
     payload = validate_ontology_payload(action, action_payload)
@@ -1065,44 +1228,11 @@ def create_ontology_tool(
         """
         本体对象 / 关系 / Action 查询工具（当前业务域已启用本体层时的唯一数据查询入口；不依赖语义模型，不回退语义查询）。
 
-        使用顺序：先读 /mnt/user-data/workspace/semantic/_ontology_catalog.yaml 了解对象类型与数据源绑定；
-        需要定位时用 list_object_types / locate_object_type；跨对象关联用 search_around 的物理连接列；
-        查明细用 find_objects、聚合用 aggregate_objects、按主键读单对象用 get_object；
-        需要动作时用 list_action_types 查可用 Action，再 execute_action 执行；
-        需要跨轮引用刚才查到的对象时，用 save_object_set 保存主键、load_object_set 回读。
-
-        Args:
-            action: 操作类型，枚举：
-        - list_object_types: 列出当前业务域可导航对象类型（轻量清单：对象类型API名/展示名/描述 + Dataset/物理表/member 摘要），范围限定当前数据源组
-        - locate_object_type: 按对象类型批量返回属性、数据源绑定（column_mappings 属性→逻辑列、columns 逻辑列→物理列）与关系类型跳转；纯导航不执行查询
-        - search_around: 以单个对象类型为中心沿关系走一跳——每条关系返回物理连接列（join）与对端对象完整导航条目（neighbor）；跨对象关联优先用它拿 join 列
-        - get_object: 按对象类型 + 主键读取对象属性与一跳 links（只读；需指定单一 member_datasource_id）
-        - find_objects: 按对象类型查询实例——关键词、属性过滤、排序、分页，返回对象主键/属性与 total；只读
-        - aggregate_objects: 按对象类型分组聚合——group_by + 属性白名单聚合（count/count_distinct/sum/avg/min/max）；只读
-        - list_execution_targets: 列出当前用户可执行的成员数据源（member_datasource_id/名称/机构编码）；多机构时先调用它，再把选中的 ID 传给对象查询
-        - list_action_types: 列出当前业务域可执行 Action 定义（只读）
-        - execute_action: 执行 Action（set_property 写覆盖层 / create_object 写动作对象表 + 审计；受部署开关门控）
-        - save_object_set: 把查询结果的对象主键保存为 static 对象集合（可跨轮引用；temporary 24h 过期）
-        - load_object_set: 按集合名分页加载对象属性（缺失对象跳过，过期集合显式报错）
-        - list_object_sets: 列出当前业务域已保存的对象集合
-        - traverse_objects: 从对象出发做 1~3 跳关系遍历（图查询；Nebula 支持多跳，SQL 后端仅 1 跳）
-        - find_graph_paths: 查询两个对象之间的有界路径（图查询；当前仅 Nebula 后端支持）
-            action_payload: 操作参数，结构随 action 变化：
-        - list_object_types: {}（无参数，范围=当前业务域）
-        - locate_object_type: {"object_types": [<对象API名>...]（单次最多10个）}
-        - search_around: {"object_type": "<中心对象API名>", "relation": 可选只展开该关系名}
-        - get_object: {"object_type": "<对象类型API名>", "object_key": "<对象主键值>", "member_datasource_ids": ["机构ID"]}
-        - find_objects: {"object_type": "<对象类型API名>", "member_datasource_ids": ["可选机构ID"], "keyword": 可选, "filters": [{"property": "<属性>", "operator": "eq", "value": "<值>"}], "sort": [{"property": "<属性>", "direction": "asc"}], "limit": 10, "offset": 0}
-        - aggregate_objects: {"object_type": "<对象类型API名>", "member_datasource_ids": ["可选机构ID"], "group_by": ["<属性>"], "metrics": [{"operation": "count"}, {"operation": "sum", "property": "<数值属性>"}]}
-        - list_execution_targets: {}（无参数；返回当前用户可见执行对象）
-        - list_action_types: {}（无参数；返回当前业务域可执行 Action 定义）
-        - execute_action: {"action_type": "<Action Type API名>", "object_key": "<对象主键值>", "parameters": {"<参数名>": "<值>"}}
-        - save_object_set: {"object_type": "<对象类型API名>", "member_datasource_id": "<机构ID>", "object_keys": ["<对象主键>"], "set_name": 可选, "temporary": true}
-        - load_object_set: {"object_type": "<对象类型API名>", "set_name": "<集合名>", "limit": 20, "offset": 0}
-        - list_object_sets: {} 或 {"object_type": "<对象类型API名>"}
-        - traverse_objects: {"object_key": "<完整对象身份>", "depth": 1, "direction": "both", "limit": 50, "member_datasource_ids": ["机构ID"]}
-        - find_graph_paths: {"from_object_key": "<起点>", "to_object_key": "<终点>", "max_depth": 3, "limit": 10, "member_datasource_ids": ["机构ID"]}
-            intent: 一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示。
+        调用顺序：先读 /mnt/user-data/workspace/semantic/_ontology_catalog.yaml 确认对象类型/关系/Action。
+        参数：不确定 action_payload 结构时，先传 action=help、action_payload={"action": "<动作名>"}
+        查字段/必填/上限（由入参模型现算）。业务工作流、查询顺序与口径见 data-analyzing 技能：
+        对象查询/对象集合读 references/ontology/query.md，关系与图查询读 references/ontology/relations.md，
+        Action 读 references/ontology/actions.md。技能不重复参数模板。
         """
         return await _run_ontology_impl(
             action,
@@ -1118,6 +1248,8 @@ def create_ontology_tool(
 __all__ = [
     "ONTOLOGY_TOOL_NAME",
     "ONTOLOGY_ACTION_PAYLOAD_MODELS",
+    "ONTOLOGY_ACTION_HELP",
+    "HELP_ACTION",
     "OntologyToolInput",
     "create_ontology_tool",
     "validate_ontology_payload",

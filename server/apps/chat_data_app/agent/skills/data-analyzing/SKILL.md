@@ -43,6 +43,11 @@ metadata:
 
 同一轮只走一条主路径；跨层按“先聚合、后下钻”执行。
 
+本体工具 `ontology_tool` 的参数契约（字段/必填/默认/上限）用
+`ontology_tool(action="help", action_payload={"action": "<动作名>"})` 查，由工具入参模型现算；
+`references/ontology/` 三份文档（query / relations / actions）只写用哪个动作、顺序、口径与边界，
+不重复参数模板。技能负责“怎么做业务”，工具负责“参数怎么填”。
+
 ## 共享边界
 
 - 指标、维度、对象属性、关系口径不明确时先澄清，不编造。

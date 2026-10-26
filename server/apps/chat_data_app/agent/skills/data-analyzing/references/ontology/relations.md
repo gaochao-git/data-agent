@@ -7,43 +7,32 @@
 沿关系找对端对象
 订单 ↔ 客户 / 发货单
 关系方向确认
+多跳 / 路径查询（图查询开启时）
 ```
 
-## 工具
+## 参数契约
 
-```text
-get_object        读取对象 links
-search_around     沿关系找对端
-```
+`action_payload` 的字段名、必填、默认值与上限不写进本文档：调
+`ontology_tool(action="help", action_payload={"action": "<动作名>"})` 查（由工具入参模型现算）。
+本文只写用哪个动作、返回什么、边界与回退规则。
 
-## 规则
+## 一跳关系
 
 ```text
 关系类型由本体定义，不能自行拼外键
-关系方向：
-  from 侧持有外键
-  to 侧持有主键
-单次一跳
-每关系最多 20 条
+关系方向：from 侧持有外键，to 侧持有主键
+单次一跳，每关系最多 20 条
 ```
 
-## search_around
+`search_around` 返回每条关系的物理连接列与对端对象导航条目：
 
 ```text
-object_type
-object_key
-relation_type
-direction
-member_datasource_ids
+join：from_columns / to_columns，未解析时带 unresolved: true
+neighbor：对端对象的属性 / 绑定 / 映射，relations 只列名字提示下一跳
+unresolved: true 时，回读对象类型 source_binding 的 column_mappings / columns 确认物理列
 ```
 
-返回：
-
-```text
-related_object_type
-related_key
-related_title
-```
+需要获取对象当前属性时用 `get_object`（对象查询流程见 `query.md`）。
 
 ## 多跳图查询（可选）
 
@@ -55,15 +44,7 @@ related_title
 从 A 到 B 中间经过什么
 ```
 
-这种“多跳 / 链路 / 路径”更适合图探索；如果只是：
-
-```text
-查对象属性
-查一跳对端
-拿 join 列写 SQL
-```
-
-继续用 `get_object` / `search_around` 即可。
+这种“多跳 / 链路 / 路径”更适合图探索；如果只是查对象属性、查一跳对端、拿 join 列写 SQL，继续用 `get_object` / `search_around` 即可。
 
 图查询不是硬性必经步骤：图未开启、未同步、超时或只需要一跳时，按普通对象查询处理，并在回答里说明范围。
 
@@ -74,21 +55,12 @@ traverse_objects   从对象出发 1~3 跳
 find_graph_paths   两个对象之间的有界路径
 ```
 
-用途：
-
-```text
-多跳关联
-关系链解释
-路径查询
-```
-
 注意：
 
 ```text
-图查询只返回对象身份/标题/关系
-对象属性仍需 get_object 回源
+图查询只返回对象身份/标题/关系，对象属性仍需 get_object 回源
 一次只能指定一个 member_datasource_id
-depth <= 3，limit <= 200
+depth / max_depth <= 3，limit <= 200
 ```
 
 图查询不可用时回退一跳 `search_around`，不要假装图查询成功。

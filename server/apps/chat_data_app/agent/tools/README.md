@@ -30,4 +30,9 @@
 - 路径参数只接受规范形式 `/mnt/user-data/{workspace,outputs,uploads}/...` 与只读
   `/mnt/skills/<name>/...`；docstring 是模型照抄的输入模板，示例必须用规范形式。
 - 工具错误分两类返回：参数/路径类给可纠正消息；意外异常给通用文案并记录完整堆栈。
+- `ontology_tool` 的分层约定：**参数契约归工具，业务规则归技能**。
+  参数（字段/必填/默认/上限）由 `action="help"` 从 `ONTOLOGY_ACTION_PAYLOAD_MODELS` 现算，
+  不写进工具 description、也不写进技能文档；`ONTOLOGY_ACTION_HELP` 只登记每个动作的一句话用法
+  与对应工作流文档。`data-analyzing` 技能的 `references/ontology/` 只写何时用哪个动作、顺序、
+  口径与边界，不重复参数模板（反向护栏见 `tests/unit/test_ontology_tool.py`）。
 - 新增工具需同步：注册表登记（`tools/registry.py` 的 `TOOL_SPECS`，含 `provides` 工具名与子智能体可见性策略）、前端展示类型（web-vue）、单元测试。

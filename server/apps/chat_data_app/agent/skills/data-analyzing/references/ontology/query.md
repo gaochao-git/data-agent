@@ -7,62 +7,22 @@
 对象属性过滤 / 排序 / 分页
 对象聚合（group_by + count/count_distinct/sum/avg/min/max）
 对象派生属性
+对象集合跨轮传递（保存 / 加载 / 列出）
 ```
 
-## 前置
+## 参数契约
 
-1. 先调 `ontology_tool` 的 `list_object_types` 确认当前业务域对象类型。
+`action_payload` 的字段名、必填、默认值与上限不写进本文档：调
+`ontology_tool(action="help", action_payload={"action": "<动作名>"})` 查（由工具入参模型现算）。
+本文只写用哪个动作、什么顺序、口径与边界。
+
+## 查询顺序
+
+1. 先调 `list_object_types` 确认当前业务域对象类型；需要属性、数据源绑定或关系类型详情时调 `locate_object_type`。
 2. 需要机构范围时调 `list_execution_targets`，`member_datasource_ids` 只能从返回清单选择。
-3. `find_objects` / `aggregate_objects` 支持一次传多个 member：工具按机构并行下发 SQL，返回 `results[]`；`get_object` 一次只能指定一个 member。
-
-## 工具
-
-```text
-find_objects
-get_object
-aggregate_objects
-```
-
-### find_objects
-
-```json
-{
-  "object_type": "customer",
-  "member_datasource_ids": ["ORG_CODE1"],
-  "filters": [{"property": "status", "operator": "eq", "value": "active"}],
-  "where": {"operator": "and", "children": []},
-  "sort": [{"property": "order_count", "direction": "desc"}],
-  "limit": 10,
-  "offset": 0
-}
-```
-
-规则：
-
-```text
-属性必须是对象类型已定义属性
-派生属性可用于过滤/排序
-in 用 values 数组；旧接口只传 value 时按逗号拆分
-member_datasource_ids 可一次传多个机构；单机构传一个，全部机构传清单里全部 ID
-```
-
-### get_object
-
-```text
-object_key 格式：member:object_type:local_key
-返回对象属性、派生属性、一跳 links
-```
-
-### aggregate_objects
-
-```text
-group_by 最多 5 个属性
-metrics 最多 5 个
-count 可省略 property
-其他算子必须指定属性
-派生属性可作为指标
-结果按分组列排序，不支持 HAVING / 指标排序
-```
+3. 明细/过滤/排序/分页用 `find_objects`，分组聚合用 `aggregate_objects`，按主键读单对象用 `get_object`。
+4. `find_objects` / `aggregate_objects` 支持一次传多个 member：工具按机构并行下发 SQL，返回 `results[]`；`get_object` 一次只能指定一个 member。
+5. 结果需要跨轮复用时用 `save_object_set` 保存主键，`load_object_set` 分页回读，`list_object_sets` 列出已有集合。
 
 ## 金额口径
 
@@ -114,6 +74,7 @@ get_object 单 member
 ```text
 对象类型不存在 → 列出可用对象
 属性未映射 → 指出可用属性
-单成员失败 → 该成员 results[] status=failed，其它成员照常返回；get_object 多 member → 要求选择一个
+单成员失败 → 该成员 results[] status=failed，其它成员照常返回
+get_object 多 member → 要求选择一个
 无权限 → 如实说明
 ```

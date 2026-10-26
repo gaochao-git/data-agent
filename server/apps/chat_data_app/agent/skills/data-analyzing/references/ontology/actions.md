@@ -9,29 +9,20 @@
 用户明确要求执行操作
 ```
 
-## 工具
+## 参数契约
+
+`action_payload` 的字段名、必填、默认值与上限不写进本文档：调
+`ontology_tool(action="help", action_payload={"action": "<动作名>"})` 查（由工具入参模型现算）。
+本文只写执行顺序、约束与失败处理。
+
+## 执行顺序
 
 ```text
-list_action_types
-execute_action
-```
-
-## 执行前
-
-```text
-1. list_action_types 确认 Action 存在且已启用
+1. list_action_types 确认 Action 存在、已启用，并看它的参数定义
 2. 确认目标对象
 3. 确认参数完整、值类型合法
 4. 高风险/批量/状态迁移先预览或征求确认
-```
-
-## 执行
-
-```text
-execute_action
-  action_type
-  object_key
-  parameters
+5. execute_action 执行
 ```
 
 ## 约束

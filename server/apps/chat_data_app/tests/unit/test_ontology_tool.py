@@ -8,6 +8,7 @@ import asyncio
 import json
 import os
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -20,6 +21,11 @@ from apps.chat_data_app.agent.tools import ontology_tool
 from apps.chat_data_app.services.ontology import object_projection as projection_module
 
 RESULT_PREFIX = "[ontology_tool]\n"
+
+# ontology_tool 的 action_payload 模板单一维护点：data-analyzing 技能的 ontology 能力文档
+ONTOLOGY_REFERENCE_DIR = (
+    Path(__file__).resolve().parents[2] / "agent" / "skills" / "data-analyzing" / "references" / "ontology"
+)
 
 
 def _internal_query_payload(raw: str) -> dict:
@@ -1036,3 +1042,86 @@ def test_load_object_set_returns_page(monkeypatch):
     assert payload["success"] is True
     assert payload["total"] == 2
     assert payload["objects"][0]["object_key"] == "ORG_CODE1:customer:C1"
+
+
+def test_skill_docs_defer_payload_contract_to_help():
+    """参数契约归工具 help（入参模型现算），技能文档只写流程/口径/边界，不重复参数模板。"""
+    docs = "\n".join(path.read_text(encoding="utf-8") for path in sorted(ONTOLOGY_REFERENCE_DIR.glob("*.md")))
+
+    assert "## 入参模板" not in docs
+    for action in ontology_tool.ONTOLOGY_ACTION_PAYLOAD_MODELS:
+        assert f"### {action}" not in docs, f"技能文档又写了 {action} 的参数小节"
+    for marker in ('"object_type":', '"group_by":', '"action_type":', '"object_keys":', '"from_object_key":'):
+        assert marker not in docs, f"技能文档重新内联了 payload 模板片段: {marker}"
+
+    # 技能路由必须把"参数怎么填"指回工具 help
+    router = (ONTOLOGY_REFERENCE_DIR.parents[1] / "SKILL.md").read_text(encoding="utf-8")
+    assert 'action="help"' in router
+
+    # help 的用法表/文档指路必须与业务 action 一一对应，不能漏也不能多
+    assert set(ontology_tool.ONTOLOGY_ACTION_HELP) == set(ontology_tool.ONTOLOGY_ACTION_PAYLOAD_MODELS)
+    for _usage, doc_file in ontology_tool.ONTOLOGY_ACTION_HELP.values():
+        assert (ONTOLOGY_REFERENCE_DIR / doc_file).is_file(), f"help 指向的技能文档不存在: {doc_file}"
+
+
+def test_tool_description_defers_payload_contract_to_help_and_skill_docs():
+    """工具 description 只做指路：参数用 help 查，流程看技能文档，不内联模板。"""
+    description = str(ontology_tool.create_ontology_tool("ds_a", user_id="u1").description or "")
+
+    assert "action=help" in description
+    for doc in ("references/ontology/query.md", "references/ontology/relations.md", "references/ontology/actions.md"):
+        assert doc in description, f"description 未指向技能文档: {doc}"
+
+    # 内联模板回归护栏：这些 payload 片段哪里都不该出现在 description 里
+    for marker in ('"object_type"', "group_by", '"action_type"', '"object_keys"', "member_datasource_ids"):
+        assert marker not in description, f"description 重新内联了 payload 模板片段: {marker}"
+
+    assert len(description) <= 800, f"description 过长（{len(description)} 字符），参数应走 help"
+
+
+def _invoke_help(action_payload: dict) -> dict:
+    raw = asyncio.run(
+        ontology_tool.create_ontology_tool("ds_a", user_id="u1").ainvoke(
+            {"action": ontology_tool.HELP_ACTION, "action_payload": action_payload, "intent": "查用法"}
+        )
+    )
+    return json.loads(raw.replace(RESULT_PREFIX, "", 1))
+
+
+def test_help_lists_every_business_action():
+    """不传动作时 help 返回 usage + 全部业务动作的一句话用法（JSON 协议）。"""
+    payload = _invoke_help({})
+
+    assert payload["usage"].startswith("ontology_tool(")
+    assert payload["help"].startswith('ontology_tool(action="help"')
+    listed = payload["actions"]
+    assert set(listed) == set(ontology_tool.ONTOLOGY_ACTION_PAYLOAD_MODELS)
+    assert all(usage.strip() for usage in listed.values())
+
+
+@pytest.mark.parametrize("action", tuple(ontology_tool.ONTOLOGY_ACTION_PAYLOAD_MODELS))
+def test_help_returns_payload_contract_for_every_action(action):
+    """help 的字段契约由 payload 模型现算：字段集合与模型一致，并带技能文档指路。"""
+    payload = _invoke_help({"action": action})
+
+    assert payload["action"] == action
+    assert payload["usage"] == ontology_tool.ONTOLOGY_ACTION_HELP[action][0]
+    assert payload["workflow_doc"].startswith("/mnt/skills/data-analyzing/references/ontology/")
+    assert set(payload["payload"]) == set(ontology_tool.ONTOLOGY_ACTION_PAYLOAD_MODELS[action].model_fields)
+
+
+def test_help_reports_limits_and_nested_contract():
+    """约束值来自 Field 元数据（不靠手写）：必填、ge/le、数组元素上限与嵌套字段。"""
+    fields = _invoke_help({"action": "find_objects"})["payload"]
+
+    assert fields["object_type"]["required"] is True
+    assert (fields["limit"]["ge"], fields["limit"]["le"]) == (1, 50)
+    assert fields["filters"]["max_items"] == 10
+    assert fields["sort"]["max_items"] == 5
+    assert set(fields["where"]["fields"]) >= {"operator", "children"}
+
+
+def test_help_unknown_action_lists_candidates():
+    """未知动作的报错必须列出可用 action，模型才能一步纠正。"""
+    with pytest.raises(ValueError, match="可用 action"):
+        ontology_tool._run_help({"action": "not_an_action"})
