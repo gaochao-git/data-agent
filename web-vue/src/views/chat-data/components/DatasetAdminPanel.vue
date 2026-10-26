@@ -4,7 +4,7 @@
  * Pipeline 页签采用 master-detail：左侧列表/搜索/新建，右侧 DAG 画布 + 节点配置 + 运行记录。
  * 定义保存走 PUT（后端只追加版本），build 走 POST；节点编辑全部先落到本地 draft，保存后才提交。
  */
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   bootstrapAdminDatasets,
@@ -37,7 +37,18 @@ const AGGREGATE_FUNCTIONS = ['sum', 'avg', 'min', 'max', 'count']
 const DEFAULT_SOURCE_LIMIT = 5000
 const OUTPUT_LAYERS: DatasetPipelineLayer[] = ['cleaned', 'enriched']
 
-const activeView = ref<'datasets' | 'pipelines'>('datasets')
+const props = withDefaults(defineProps<{ view?: 'datasets' | 'pipelines' }>(), { view: undefined })
+
+const activeView = ref<'datasets' | 'pipelines'>(props.view || 'datasets')
+// 固定视图模式（独立 Pipeline 页）：不再渲染数据集/Pipeline 切换条
+const showViewTabs = computed(() => !props.view)
+const effectiveView = computed<'datasets' | 'pipelines'>(() => props.view || activeView.value)
+watch(
+  () => props.view,
+  (view) => {
+    if (view) activeView.value = view
+  }
+)
 const loading = ref(false)
 const bootstrapping = ref(false)
 const pipelineLoading = ref(false)
@@ -430,6 +441,7 @@ const selectPipeline = async (pipelineName: string) => {
 }
 
 const switchView = async (view: 'datasets' | 'pipelines') => {
+  if (props.view) return
   activeView.value = view
   if (view === 'pipelines') {
     await loadPipelines()
@@ -1009,27 +1021,27 @@ defineExpose({ ensureLoaded })
       <div class="flex items-center justify-between gap-4">
         <div class="min-w-0">
           <div class="text-sm font-semibold text-slate-800">
-            {{ activeView === 'datasets' ? '数据集' : 'Dataset Pipeline' }}
+            {{ effectiveView === 'datasets' ? '数据集' : 'Dataset Pipeline' }}
           </div>
           <div class="mt-0.5 truncate text-[11px] text-slate-400">
             {{
-              activeView === 'datasets'
+              effectiveView === 'datasets'
                 ? '逻辑 Dataset：一套 schema 绑定多个机构数据源，按 source / cleaned / enriched 分层'
                 : 'Pipeline Builder：左侧选择 Pipeline，右侧编辑 DAG 节点、保存定义（追加版本）并手动构建'
             }}
           </div>
         </div>
-        <div class="flex shrink-0 items-center rounded-lg border border-slate-200 bg-slate-50 p-0.5">
+        <div v-if="showViewTabs" class="flex shrink-0 items-center rounded-lg border border-slate-200 bg-slate-50 p-0.5">
           <button
             class="rounded-md px-3 py-1.5 text-xs transition-colors"
-            :class="activeView === 'datasets' ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700'"
+            :class="effectiveView === 'datasets' ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700'"
             @click="switchView('datasets')"
           >
             数据集
           </button>
           <button
             class="rounded-md px-3 py-1.5 text-xs transition-colors"
-            :class="activeView === 'pipelines' ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700'"
+            :class="effectiveView === 'pipelines' ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700'"
             @click="switchView('pipelines')"
           >
             Pipeline
@@ -1037,7 +1049,7 @@ defineExpose({ ensureLoaded })
         </div>
       </div>
 
-      <div v-if="activeView === 'datasets'" class="mt-3 flex flex-wrap items-center gap-2">
+      <div v-if="effectiveView === 'datasets'" class="mt-3 flex flex-wrap items-center gap-2">
         <el-select v-model="layerFilter" size="small" clearable placeholder="全部层级" class="!w-32" @change="load">
           <el-option label="source" value="source" />
           <el-option label="cleaned" value="cleaned" />
@@ -1066,7 +1078,7 @@ defineExpose({ ensureLoaded })
       </div>
     </div>
 
-    <div v-if="activeView === 'datasets'" class="min-h-0 flex-1 overflow-auto p-5">
+    <div v-if="effectiveView === 'datasets'" class="min-h-0 flex-1 overflow-auto p-5">
       <div class="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
         <el-table v-loading="loading" :data="items" size="small" border>
         <el-table-column prop="dataset_name" label="Dataset" min-width="150" />

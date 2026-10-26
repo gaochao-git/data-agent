@@ -80,7 +80,7 @@ def test_search_multi_projection_fans_out_and_isolates_failure(monkeypatch):
     assert calls == ["ORG_CODE1", "ORG_CODE2"]
     assert payload["query_mode"] == "ontology_find_objects"
     assert payload["status"] == "succeeded"
-    assert payload["total_count"] == 1
+    assert payload["total_count"] is None
     assert [item["member_datasource_id"] for item in payload["results"]] == ["ORG_CODE1", "ORG_CODE2"]
     assert payload["results"][0]["status"] == "succeeded"
     assert payload["results"][0]["data"][0]["object_key"] == "ORG_CODE1:Order:1"
@@ -103,7 +103,7 @@ def test_search_multi_projection_without_members_uses_single_member(monkeypatch)
     payload = asyncio.run(projection.search_objects_multi_projection("Order"))
     assert len(payload["results"]) == 1
     assert payload["results"][0]["member_datasource_id"] == "ORG_CODE1"
-    assert payload["total_count"] == 1
+    assert payload["total_count"] is None
 
 
 def test_action_created_type_queries_once(monkeypatch):

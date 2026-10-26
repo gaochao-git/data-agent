@@ -111,7 +111,7 @@ def test_build_object_query_requires_semantic_model_choice_when_multiple():
         build_object_query(detail, _config(), object_key="A001")
 
 
-def test_build_object_search_query_applies_filters_sort_and_count():
+def test_build_object_search_query_applies_filters_sort_without_count():
     query = build_object_search_query(
         _detail(),
         _config(),
@@ -124,8 +124,9 @@ def test_build_object_search_query_applies_filters_sort_and_count():
     assert "`amount` >= 10" in query["sql"]
     assert "ORDER BY `orders`.`amount` DESC" in query["sql"]
     assert "LIMIT 11 OFFSET 5" in query["sql"]
-    assert "COUNT(*) AS `total`" in query["count_sql"]
-    assert "`amount` >= 10" in query["count_sql"]
+    # 对象查询不再生成 COUNT(*)（大表全扫描），分页只靠 LIMIT/has_more
+    assert "count_sql" not in query
+    assert "COUNT(" not in query["sql"]
 
 
 def test_build_object_search_query_supports_in_and_contains():
@@ -190,7 +191,7 @@ def test_build_object_search_query_rejects_long_keyword_and_bad_operator():
         )
 
 
-def test_search_object_projection_handles_empty_count(monkeypatch):
+def test_search_object_projection_handles_empty_rows(monkeypatch):
     from apps.chat_data_app.services.ontology import object_projection
 
     async def fake_get_object_type(_name):
@@ -200,13 +201,13 @@ def test_search_object_projection_handles_empty_count(monkeypatch):
         return _detail, _config(), [{"member_datasource_id": "m1"}], "g1"
 
     async def fake_query_rows(_targets, sql, **_kwargs):
-        return [] if "COUNT(*)" in sql else []
+        return []
 
     monkeypatch.setattr(object_projection.ontology_service, "get_object_type_async", fake_get_object_type)
     monkeypatch.setattr(object_projection, "_projection_context", fake_context)
     monkeypatch.setattr(object_projection, "_query_rows", fake_query_rows)
     result = asyncio.run(object_projection.search_object_projection("Order"))
-    assert result["total"] == 0
+    assert result["total"] is None
     assert result["objects"] == []
 
 
@@ -325,7 +326,7 @@ def test_build_object_search_query_requires_mapping_columns():
         build_object_search_query(detail, _config())
 
 
-def test_search_object_projection_returns_rows_and_total(monkeypatch):
+def test_search_object_projection_returns_rows_without_total(monkeypatch):
     from apps.chat_data_app.services.ontology import object_projection
 
     async def fake_get_object_type(_name):
@@ -335,15 +336,13 @@ def test_search_object_projection_returns_rows_and_total(monkeypatch):
         return _detail, _config(), [{"member_datasource_id": "m1"}], "g1"
 
     async def fake_query_rows(_targets, sql, **_kwargs):
-        if "COUNT(*)" in sql:
-            return [{"total": 2}]
         return [{"order_id": "A001", "amount": 10}, {"order_id": "A002", "amount": 20}]
 
     monkeypatch.setattr(object_projection.ontology_service, "get_object_type_async", fake_get_object_type)
     monkeypatch.setattr(object_projection, "_projection_context", fake_context)
     monkeypatch.setattr(object_projection, "_query_rows", fake_query_rows)
     result = asyncio.run(object_projection.search_object_projection("Order", limit=2))
-    assert result["total"] == 2
+    assert result["total"] is None
     assert [item["object_key"] for item in result["objects"]] == ["m1:Order:A001", "m1:Order:A002"]
 
 
@@ -678,8 +677,6 @@ def test_search_projection_includes_derived_values_in_page(monkeypatch):
 
     async def fake_query_rows(_targets, sql, **_kwargs):
         calls.append(sql)
-        if "COUNT(*)" in sql and "total" in sql:
-            return [{"total": 1}]
         return [{"order_id": "O1", "amount": 10, "order_count": 3}]
 
     async def fake_derived_sql(*_args, **_kwargs):
@@ -698,9 +695,9 @@ def test_search_projection_includes_derived_values_in_page(monkeypatch):
     result = asyncio.run(object_projection.search_object_projection("Order", limit=10))
     assert result["objects"][0]["properties"]["order_count"] == 3
     assert "order_count" in result["properties"]
-    assert len(calls) == 2
-    assert "LEFT JOIN" not in calls[0]
-    assert "`d0`.`value` AS `order_count`" in calls[1]
+    assert len(calls) == 1  # 不再额外发 COUNT 查询
+    assert "LEFT JOIN" in calls[0]
+    assert "`d0`.`value` AS `order_count`" in calls[0]
 
 
 def test_projection_column_and_identifier_guards():
@@ -982,7 +979,8 @@ def test_search_query_uses_where_and_derived_expression():
         derived_expressions={"order_count": "`d0`.`value`"},
     )
     assert "`d0`.`value` = 1" in query["sql"]
-    assert "`d0`.`value` = 1" in query["count_sql"]
+    assert "count_sql" not in query
+    assert "COUNT(" not in query["sql"]
 
 
 def test_where_property_names_and_derived_target_guards():

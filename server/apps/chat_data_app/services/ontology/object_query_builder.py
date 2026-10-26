@@ -493,7 +493,6 @@ def build_object_search_query(
     derived_joins: list[str] | None = None,
     derived_expressions: dict[str, str] | None = None,
     derived_select: dict[str, str] | None = None,
-    count_joins: list[str] | None = None,
 ) -> dict[str, Any]:
     """构造通用对象查询：关键词 + 属性过滤 + 排序 + 分页，并附带 count SQL。"""
     safe_limit = max(1, min(int(limit), 100))
@@ -540,11 +539,8 @@ def build_object_search_query(
         f"SELECT {select_list} FROM {from_sql}{where_sql} "
         f"ORDER BY {order_sql} LIMIT {safe_limit + 1} OFFSET {safe_offset}"
     )
-    count_from_sql = f"{_quote_identifier(table)}{''.join(count_joins or [])}"
-    count_sql = f"SELECT COUNT(*) AS `total` FROM {count_from_sql}{where_sql}"
     return {
         "sql": sql,
-        "count_sql": count_sql,
         "table": table,
         "object_type": _text(detail.get("object_type_name")),
         "identifier_property": identifier_property,

@@ -1013,10 +1013,6 @@ async def search_object_projection(
         include_all_derived=True,
     )
     derived_select = dict(derived_expressions)
-    derived_names = _derived_property_names(detail)
-    count_needs_derived = any(
-        _text((item or {}).get("property")) in derived_names for item in [*(filters or []), *(sorts or [])]
-    ) or bool(_where_property_names(where) & derived_names)
     query = build_object_search_query(
         query_detail,
         config,
@@ -1030,18 +1026,8 @@ async def search_object_projection(
         derived_joins=derived_joins,
         derived_expressions=derived_expressions,
         derived_select=derived_select,
-        count_joins=derived_joins if count_needs_derived else [],
     )
     started_at = time.perf_counter()
-    count_rows = await _query_rows(
-        targets,
-        query["count_sql"],
-        group_id=group_id,
-        user_id=user_id,
-        username=username,
-        limit=1,
-    )
-    total = int((count_rows[0].get("total") if count_rows else 0) or 0)
     rows = await _query_rows(
         targets,
         query["sql"],
@@ -1058,7 +1044,8 @@ async def search_object_projection(
         "has_more": has_more,
         "limit": query["limit"],
         "offset": query["offset"],
-        "total": total,
+        # 对象查询不再执行 COUNT(*)（大表全扫描），分页只依赖 has_more。
+        "total": None,
         "title_property": query["title_property"],
         "properties": query["properties"],
         "sql": query["sql"],
@@ -1085,7 +1072,8 @@ def _search_member_result(data: dict[str, Any], member_datasource_id: str) -> di
         "sql": _text(data.get("sql")),
         "columns": ["object_key", *properties],
         "data": rows,
-        "total_count": int(data.get("total") or 0),
+        # 对象查询不计算总数；消费方用 has_more 翻页，不能把已返回行数当 total。
+        "total_count": None,
         "execution_time_ms": data.get("execution_time_ms"),
         "error": None,
         "has_more": bool(data.get("has_more")),
@@ -1222,6 +1210,7 @@ async def search_objects_multi_projection(
             "limit": limit,
             "offset": offset,
             "has_more": any(bool(item.get("has_more")) for item in results),
+            "total_count": None,
         }
     )
     return payload

@@ -108,7 +108,7 @@ ONTOLOGY_WORKFLOW_BLOCK = """## 本体查询模式（当前业务域已启用本
 - 跨对象关联：用 `search_around` 的 `join.from_columns`/`join.to_columns` 作为关联列；图查询开启时，多跳/路径用 `traverse_objects`/`find_graph_paths`，图结果只当关系索引，属性回 `get_object`；`unresolved: true` 时回读对象类型 `source_binding` 的 `column_mappings`/`columns` 确认物理列，不要猜。
 - 导航：`list_object_types` 看对象类型清单，`locate_object_type` 看属性/绑定/关系详情；目录不存在或为空说明当前业务域没有可用本体，此时如实告知用户数据范围受限，不要自行切换语义查询。
 - 动作：`list_action_types` 查可用 Action 定义，`execute_action` 执行（部署开关关闭时工具会明确报错，不要改用其它写路径）。
-- 结果口径：工具返回 `results[]`（`member_datasource_id`/`member_name`/`status`/`sql`/`columns`/`data`/`total_count`/`execution_time_ms`/`error`），按共享结果协议展示，不要自行改变字段口径。"""
+- 结果口径：工具返回 `results[]`（`member_datasource_id`/`member_name`/`status`/`sql`/`columns`/`data`/`total_count`（对象查询不做 COUNT，可能为 null）/`execution_time_ms`/`error`），按共享结果协议展示，不要自行改变字段口径。"""
 
 ONTOLOGY_ERROR_HANDLING_BLOCK = """## 错误处理
 - 工具失败或报错时先读取返回的具体原因；同一工具同类错误重复出现时停止重试，简要说明失败原因或能力边界；不要继续使用相同参数反复调用。

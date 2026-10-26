@@ -39,7 +39,6 @@ const pageSize = 20
 const objects = ref<OntologyObjectListItem[]>([])
 const hasMore = ref(false)
 const titleProperty = ref('')
-const totalCount = ref(0)
 const filters = ref<OntologyObjectFilter[]>([])
 const sortProperty = ref('')
 const sortDirection = ref<'asc' | 'desc'>('asc')
@@ -1027,7 +1026,6 @@ const loadList = async (resetPage = false) => {
     if (res.status === 'success') {
       objects.value = res.data.objects || []
       hasMore.value = Boolean(res.data.has_more)
-      totalCount.value = Number(res.data.total || 0)
       titleProperty.value = res.data.title_property || ''
     } else {
       error.value = res.msg || '加载对象列表失败'
@@ -1173,7 +1171,6 @@ const initialize = async () => {
   page.value = 1
   filters.value = []
   sortProperty.value = ''
-  totalCount.value = 0
   detailMeta.value = null
   exploreNodes.value = {}
   exploreEdges.value = {}
@@ -1302,7 +1299,7 @@ onBeforeUnmount(() => stopGraphDetailResize())
         <el-table-column prop="object_key" label="对象主键" min-width="170" show-overflow-tooltip />
       </el-table>
       <div class="mt-2 flex items-center justify-end gap-2">
-        <span class="text-[11px] text-slate-400">共 {{ totalCount }} 个 · 第 {{ page }} 页</span>
+        <span class="text-[11px] text-slate-400">已加载 {{ objects.length }} 个 · 第 {{ page }} 页</span>
         <el-button size="small" :disabled="page <= 1 || loading" @click="page -= 1; loadList()">上一页</el-button>
         <el-button size="small" :disabled="!hasMore || loading" @click="page += 1; loadList()">下一页</el-button>
       </div>

@@ -10,6 +10,7 @@ import { Close } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import DataSourceManager from './DataSourceManager.vue'
 import DatasetAdminPanel from './DatasetAdminPanel.vue'
+import PipelineAdminPanel from './PipelineAdminPanel.vue'
 import GlobalEnumAdminPanel from './GlobalEnumAdminPanel.vue'
 import OntologyAdminPanel from './ontology/OntologyAdminPanel.vue'
 import SemanticModelAdminPanel from './SemanticModelAdminPanel.vue'
@@ -24,6 +25,7 @@ import type { DataSource } from '../types'
 type AdminNavKey =
   | 'datasource'
   | 'dataset'
+  | 'pipeline'
   | 'semantic'
   | 'enum'
   | 'ontology'
@@ -49,6 +51,7 @@ const NAV_GROUPS: Array<{ label: string; items: AdminNavItem[] }> = [
     items: [
       { key: 'datasource', label: '数据源管理', icon: 'fa-database' },
       { key: 'dataset', label: '数据集', icon: 'fa-layer-group' },
+      { key: 'pipeline', label: 'Pipeline', icon: 'fa-code-branch' },
       { key: 'lineage', label: '数据血缘', icon: 'fa-diagram-project', disabled: true, hint: '数据血缘管理规划中' }
     ]
   },
@@ -210,6 +213,7 @@ const switchNav = async (item: AdminNavItem) => {
           @datasources-updated="handleDatasourcesUpdated"
         />
         <DatasetAdminPanel v-show="activeNav === 'dataset'" class="h-full" />
+        <PipelineAdminPanel v-show="activeNav === 'pipeline'" class="h-full" />
         <SemanticModelAdminPanel
           v-show="activeNav === 'semantic'"
           class="h-full"

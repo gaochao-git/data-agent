@@ -7,7 +7,8 @@ export interface MemberQueryResult {
   sql?: string
   columns: string[]
   data: Record<string, unknown>[]
-  total_count: number
+  // 对象查询不执行 COUNT(*)，总数可能为 null；分页用 has_more
+  total_count?: number | null
   execution_time_ms?: number
   started_time?: string | null
   finished_time?: string | null
@@ -34,7 +35,7 @@ export interface MemberQueryResult {
 export interface QueryResult {
   status?: string | null
   sql?: string
-  total_count?: number
+  total_count?: number | null
   execution_time_ms?: number
   error?: string | null
   results?: MemberQueryResult[]
