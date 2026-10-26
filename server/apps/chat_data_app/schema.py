@@ -1052,23 +1052,16 @@ class DataAnalyzingInput(BaseModel):
     ] = Field(
         ...,
         description=(
-            "操作类型：validate_dsl 校验单个查询 DSL 并返回编译后 SQL（不执行）；"
-            "validate_dashboard 批量校验完整 dashboard_spec 的所有卡片；"
-            "execute_query 执行查询（DSL 或 SQL 二选一）；check_yaml 语义模型 YAML 交付前自检；"
-            "list_execution_targets 实时获取当前用户可用执行对象清单"
+            "操作类型：validate_dsl 校验 DSL；validate_dashboard 校验整份 dashboard_spec；"
+            "execute_query 执行查询（dsl/sql 二选一）；check_yaml 语义模型 YAML 自检；"
+            "list_execution_targets 列可用执行对象"
         ),
     )
     action_payload: dict[str, Any] = Field(
         ...,
         description=(
-            "操作参数，结构随 action 变化："
-            'validate_dsl 传 {"dsl": <单个查询DSL>, "semantic_config_id": "..."}；'
-            'validate_dashboard 传 {"dsl": <含 dashboard_name 和 cards 的完整 dashboard_spec>, '
-            '"semantic_config_id": "卡片缺省值，可选"}；'
-            'execute_query 传 {"dsl": <完整语义DSL> 或 "sql": "...", "semantic_config_id": "...", '
-            '"member_datasource_ids": ["<ID>"]}（member_datasource_ids 必须是 ID 字符串数组，单个机构也传数组）；'
-            'check_yaml 传 {"file_path": "/mnt/user-data/workspace/model.yaml"}；'
-            "list_execution_targets 传 {}"
+            "操作参数 JSON，结构随 action 变化；模板与约束见 data-analyzing 技能文档"
+            "（参数不合法会返回具体字段错误，按提示修正）。"
         ),
     )
     intent: str = Field(

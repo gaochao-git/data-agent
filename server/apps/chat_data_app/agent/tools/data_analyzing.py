@@ -746,22 +746,11 @@ def create_data_analyzing_tool(
         intent: str = "",
     ) -> str:
         """
-        数据分析合并工具：按 action 执行 DSL 校验、查询执行或语义模型 YAML 自检。调用前必须先 `load_skill("data-analyzing")` 加载技能（未加载会被前置门禁拒绝）；常规查数流程（检索语义模型、确认字段口径、生成 DSL、校验、执行）以 `data-analyzing` 技能为准，本工具不重复定义。
+        数据分析合并工具：按 action 执行 DSL/dashboard_spec 校验、语义查询执行、语义模型 YAML 自检、
+        执行对象清单（调用前必须先 load_skill("data-analyzing")，未加载会被前置门禁拒绝）。
 
-        Args:
-            action: 操作类型，枚举：
-        - validate_dsl: 校验单个查询 DSL，返回编译后的 SQL（不执行）
-        - validate_dashboard: 批量校验 dashboard_spec 的所有卡片
-        - execute_query: 执行查询（DSL 或 SQL 二选一），结果落盘到 outputs/query_result/
-        - check_yaml: 语义模型 YAML 质量自检
-        - list_execution_targets: 实时获取当前用户可用的执行对象清单（execute_query 前用于确认 member_datasource_ids 取值范围）
-            action_payload: 操作参数，结构随 action 变化：
-        - validate_dsl: {"dsl": {...}, "semantic_config_id": "..."}
-        - validate_dashboard: {"dsl": <含 dashboard_name 和 cards 的完整 dashboard_spec>, "semantic_config_id": "卡片缺省值，可选"}
-        - execute_query: {"dsl": {...} 或 "sql": "...", "semantic_config_id": "...", "member_datasource_ids": ["<ID>"]}（member_datasource_ids 必须是 ID 字符串数组，单个机构也传数组，如 ["ORG_CODE1"]）
-        - check_yaml: {"file_path": "/mnt/user-data/workspace/model.yaml"}（工作区 YAML 文件路径，后端直读，不要把 YAML 全文复制进参数）
-        - list_execution_targets: {}（无参数，范围由服务端会话上下文决定）
-            intent: 一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示。
+        action_payload 的结构、约束与示例以 data-analyzing 技能为准
+        （references/analysis/query.md、references/dashboard/workflow.md），本工具不内联参数模板。
         """
         return await _run_data_analyzing_impl(
             action,
