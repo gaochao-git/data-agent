@@ -1641,3 +1641,12 @@ async def test_task_tool_keeps_report_when_offload_fails(monkeypatch):
     message = result.update["messages"][0]
     assert message.content == "关键结论" * 3000
     assert message.status == "success"
+
+
+def test_task_tool_description_is_compact_chinese():
+    """task 是常驻注入工具：任务书要求保留，但描述模板不能无限膨胀。"""
+    from apps.chat_data_app.agent.middleware.subagents import _TASK_TOOL_DESCRIPTION_TEMPLATE
+
+    assert len(_TASK_TOOL_DESCRIPTION_TEMPLATE) <= 1200
+    for keyword in ("任务书", "data-explore", "general-purpose", "file_write", "present_artifacts"):
+        assert keyword in _TASK_TOOL_DESCRIPTION_TEMPLATE

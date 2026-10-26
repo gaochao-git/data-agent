@@ -322,3 +322,22 @@ def test_unattended_filter_excludes_ask_tools_and_builtin_approval():
     assert [tool.name for tool in kept_builtin] == ["file_read", "file_delete"]
     assert [tool.name for tool in kept_mcp] == ["mcp_allow_tool"]
     assert excluded == frozenset({"mcp_ask_tool", "mcp_default_tool"})
+
+
+def test_write_todos_middleware_uses_compact_chinese_prompt():
+    """write_todos 是常驻注入工具：描述与系统提示必须是中文短文本，避免官方长英文占上下文。"""
+    from langchain.agents.middleware import TodoListMiddleware
+
+    from apps.chat_data_app.agent.agent_runtime import build_standard_agent_middleware
+
+    middleware = build_standard_agent_middleware([])
+    todo = next(item for item in middleware if isinstance(item, TodoListMiddleware))
+    description = str(todo.tools[0].description or "")
+    system_prompt = str(todo.system_prompt or "")
+
+    assert len(description) <= 400
+    assert "任务清单" in description
+    assert "in_progress" in description
+    assert "completed" in description
+    assert len(system_prompt) <= 400
+    assert "多步任务" in system_prompt
