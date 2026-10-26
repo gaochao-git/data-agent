@@ -29,6 +29,19 @@ from .tools.registry import TOOL_REQUIRED_SKILLS
 
 logger = get_logger(__name__)
 
+# write_todos 是中间件注入的常驻工具，官方默认描述（3.9k 字符英文 + 1.4k 系统提示）
+# 会持续占用上下文。这里覆盖成中文短描述，语义保留、体积压到 1/10 左右。
+TODO_TOOL_DESCRIPTION = (
+    "记录并更新任务清单，用于规划多步工作并展示进度；简单的单步任务不要用。"
+    "开始前为每个具体步骤建一条 todo；未完成期间，正在处理的 todo 保持 in_progress（可并行多个）；"
+    "每完成一项立即标记 completed。"
+)
+TODO_SYSTEM_PROMPT = """## write_todos
+- 多步任务先维护待办清单并展示进度；简单单步任务不要用。
+- 开始前为每个具体步骤建一条 todo；未完成期间保持正在处理的 todo 为 in_progress（并行时可有多个）。
+- 完成一项立即标记 completed，不要批量补记。
+- 最终回答写在最后一次 write_todos 之后的正文里，不能只靠更新 todos 交付。"""
+
 
 def format_current_time_for_prompt(current_time: datetime | None = None) -> str:
     """格式化提示词中的当前时间，附带周几信息。"""
@@ -202,7 +215,10 @@ def build_standard_agent_middleware(
         "ToolCallHistoryRepairMiddleware": tool_call_history_repair_middleware,
         "SteeringMiddleware": steering_middleware,
         "SubagentMiddleware": subagent_middleware,
-        "TodoListMiddleware": TodoListMiddleware(),
+        "TodoListMiddleware": TodoListMiddleware(
+            system_prompt=TODO_SYSTEM_PROMPT,
+            tool_description=TODO_TOOL_DESCRIPTION,
+        ),
         "AfterModelHistoryMiddleware": after_model_history_middleware,
         "ContextCompressionMiddleware": context_compression_middleware,
         "ContextUsageMiddleware": context_usage_middleware,

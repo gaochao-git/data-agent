@@ -159,17 +159,21 @@ def test_input_rejects_unknown_action():
 
 
 def test_tool_description_points_at_data_analyzing_skill():
-    """工具描述是常量 docstring（f-string 会让 ``__doc__`` 变 ``None``），插不进常量，靠本例锁住。
+    """工具描述只做指路：技能名 + action 选型，参数模板不在 schema 内联。
 
     指向写**技能名**而不是显示名：显示名是 frontmatter ``title``，属展示层，
     改显示名不该让工具文案连带变红；技能名才是跨层契约。
     """
-    description = data_analyzing.create_data_analyzing_tool(datasource_id="ds_a").description
+    from apps.chat_data_app.schema import DataAnalyzingInput
 
-    assert f"`{DATA_ANALYZING_SKILL}`" in description
-    assert "validate_dsl" in description
-    assert "execute_query" in description
-    assert "check_yaml" in description
+    tool = data_analyzing.create_data_analyzing_tool(datasource_id="ds_a")
+    description = str(tool.description or "")
+    action_description = str(DataAnalyzingInput.model_fields["action"].description or "")
+
+    assert DATA_ANALYZING_SKILL in description
+    assert "load_skill" in description
+    for action in ("validate_dsl", "validate_dashboard", "execute_query", "check_yaml", "list_execution_targets"):
+        assert action in action_description
 
 
 # ---------------------------------------------------------------------------
@@ -1508,3 +1512,23 @@ def test_validate_member_scope_error_includes_available_list():
             available_member_datasource_ids=["m1", "m2"],
             matched_member_datasource_ids=[],
         )
+
+
+def test_tool_schema_defers_payload_contract_to_skill_docs():
+    """data_analyzing_tool 是常驻工具：参数模板只放技能文档，schema 不再内联。"""
+    from unittest.mock import MagicMock
+
+    from apps.chat_data_app.schema import DataAnalyzingInput
+
+    tool = data_analyzing.create_data_analyzing_tool(
+        "ds_a", user_id="u", operator_name="o", workspace_runtime=MagicMock()
+    )
+    description = str(tool.description or "")
+    payload_description = str(DataAnalyzingInput.model_fields["action_payload"].description or "")
+
+    assert len(description) <= 400
+    assert 'load_skill("data-analyzing")' in description
+    assert '"dsl"' not in description
+    assert "member_datasource_ids" not in description
+    assert len(payload_description) <= 120
+    assert "技能" in payload_description
