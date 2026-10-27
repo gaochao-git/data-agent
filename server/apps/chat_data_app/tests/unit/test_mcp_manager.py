@@ -359,16 +359,36 @@ def test_session_timeout_covers_longest_tool_timeout():
     assert manager._session_timeout_seconds(config) == 120
 
 
-def test_dedupe_qualified_names_preserves_label():
+def test_dedupe_qualified_names_preserves_timeout_and_configured():
     from apps.chat_data_app.agent.mcp.manager import _dedupe_qualified_names
 
     infos = [
-        MCPToolInfo(server_id="s", name="t", qualified_name="mcp_s_t", description="", input_schema={}, label="甲"),
-        MCPToolInfo(server_id="s", name="t", qualified_name="mcp_s_t", description="", input_schema={}, label="乙"),
+        MCPToolInfo(
+            server_id="s",
+            name="t",
+            qualified_name="mcp_s_t",
+            description="",
+            input_schema={},
+            label="甲",
+            timeout_ms=1000,
+            configured=True,
+        ),
+        MCPToolInfo(
+            server_id="s",
+            name="t",
+            qualified_name="mcp_s_t",
+            description="",
+            input_schema={},
+            label="乙",
+            timeout_ms=2000,
+            configured=False,
+        ),
     ]
     out = _dedupe_qualified_names(infos)
     assert [t.qualified_name for t in out] == ["mcp_s_t", "mcp_s_t_1"]
     assert [t.label for t in out] == ["甲", "乙"]
+    assert [t.timeout_ms for t in out] == [1000, 2000]
+    assert [t.configured for t in out] == [True, False]
 
 
 @pytest.mark.asyncio

@@ -126,6 +126,8 @@ def _dedupe_qualified_names(tools: list[MCPToolInfo]) -> list[MCPToolInfo]:
                 input_schema=info.input_schema,
                 label=info.label,
                 approval=info.approval,
+                timeout_ms=info.timeout_ms,
+                configured=info.configured,
             )
         out.append(info)
     return out
