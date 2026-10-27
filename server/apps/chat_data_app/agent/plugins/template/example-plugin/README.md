@@ -49,20 +49,24 @@ metadata:
   "headers": {
     "Authorization": "Bearer <token>"
   },
-  "tool_approvals": {
-    "read_data": "allow",
-    "write_data": "ask"
-  },
-  "tool_labels": {
-    "read_data": "读取数据"
+  "tools": {
+    "read_data": {
+      "label": "读取数据",
+      "approval": "allow",
+      "timeout_ms": 10000
+    },
+    "write_data": {
+      "label": "写入数据",
+      "approval": "ask"
+    }
   }
 }
 ```
 
 - `transport`：只支持 `streamable_http`；
 - `enabled`：`false` 表示该 server 只保留声明、不参与装配；模板默认 `false`，改成 `true` 才会连接；
-- `tool_approvals`：每工具 `ask` 或 `allow`，未配置默认 `ask`；
-- `tool_labels`：审批卡/工具卡展示名；
+- `tools`：按 MCP 原始工具名配置，每项支持 `label`（展示名）、`approval`（`ask`/`allow`）、`timeout_ms`（毫秒）；
+- 未配置的工具走默认：`label`=工具名、`approval`=ask、`timeout_ms`=全局默认；
 - 安装时会做 MCP 准入检查，未通过会拒绝安装。
 
 ### MCP Server 必须按新版协议实现

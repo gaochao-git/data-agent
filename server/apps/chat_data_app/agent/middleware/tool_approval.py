@@ -7,7 +7,7 @@
 - 需要审批的工具：系统工具 ``SYSTEM_TOOL_APPROVALS`` 映射（缺省 allow）
   + MCP 动态工具（不在注册表、第三方默认严格，按 ``mcp_`` 前缀统一 ask；
   ``mcp_tool_search`` 只读检索除外）；
-- 每工具审批档位（``plugin.json`` 的 ``mcp_servers[].tool_approvals``，按工具
+- 每工具审批档位（``plugin.json`` 的 ``mcp_servers[].tools.<name>.approval``，按工具
   metadata ``approval`` 透传到本中间件）：``allow`` 免审批；缺省 ``ask``。
   不使用 ``deny/force_ask/auto``；不需要的工具在装配层不挂载；
 - **一轮模型响应内的审批工具调用批量收集、单次中断**（``after_model`` 钩子）：

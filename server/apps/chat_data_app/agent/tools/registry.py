@@ -68,7 +68,7 @@ class ToolSpec:
 
     系统工具审批策略由下方 ``SYSTEM_TOOL_APPROVALS`` 映射统一配置（与 MCP
     插件相同的 tool -> ask/allow 口径）；第三方 MCP 工具由插件
-    ``tool_approvals`` 独立控制。
+    ``mcp_servers[].tools.<name>.approval`` 独立控制。
     """
 
     provides: tuple[str, ...]
@@ -197,7 +197,7 @@ SYSTEM_TOOL_APPROVALS: dict[str, str] = {
     "bash_run": "allow",
 }
 
-# 未显式配置的系统工具默认 ask；MCP 动态工具仍由插件 tool_approvals 默认 ask。
+# 未显式配置的系统工具默认 ask；MCP 动态工具仍由插件 tools.<name>.approval 默认 ask。
 SYSTEM_TOOL_APPROVAL_DEFAULT = "ask"
 
 # 由 middleware 在模型调用层动态注入、但需要纳入审批策略的工具。

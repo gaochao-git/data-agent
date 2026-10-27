@@ -34,7 +34,7 @@ export function getToolDisplayName(toolName?: string | null, args: ToolArgs = {}
     const target = typeof args.name === 'string' ? args.name.trim() : ''
     return target ? `调用 MCP 工具：${target.replace(/^mcp_/, '')}` : '调用 MCP 工具'
   }
-  // 控制工具用固定中文名；普通 MCP 限定名由后端 tool_labels 下发，
+  // 控制工具用固定中文名；普通 MCP 限定名由后端 tools.<name>.label 下发，
   // 缺失时直接展示限定名（含 server 归属信息），而不是笼统的「工具调用」。
   if (name in TOOL_DISPLAY_NAMES) return TOOL_DISPLAY_NAMES[name] ?? name
   if (name.startsWith('mcp_')) return name

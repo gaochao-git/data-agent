@@ -855,7 +855,7 @@ def _sanitize_user_message_content(content: Any) -> Any:
 
 
 def _tool_call_display_name(name: str, tool_call: dict[str, Any]) -> str:
-    """MCP 代理调用优先用目标工具的 tool_labels 展示名。"""
+    """MCP 代理调用优先用目标工具的 tools.<name>.label 展示名。"""
     display_name = get_mcp_tool_display_name(name)
     if name != MCP_TOOL_CALL_TOOL_NAME:
         return display_name

@@ -3,7 +3,7 @@
 系统工具与 MCP 工具当前仍从不同来源读取配置：
 
 - 系统工具：``tools.registry.SYSTEM_TOOL_APPROVALS``；
-- MCP 工具：插件 ``tool_approvals``，由 manager 透出到工具 metadata。
+- MCP 工具：插件 ``mcp_servers[].tools.<name>.approval``，由 manager 透出到工具 metadata。
 
 本模块把两边的差异收敛为一张 ``{tool_name: ask|allow}`` 映射，供审批中间件、
 无人值守过滤和子智能体排除集共同消费。未来改为数据库表时，只替换

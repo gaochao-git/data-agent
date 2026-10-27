@@ -56,7 +56,7 @@ token 估算；MCP 工具描述超过 500 字符时告警（提示插件作者�
 
 ```bash
 # server/.env（MCP 连接相关的全局参数）
-CHAT_DATA_MCP_TOOL_TIMEOUT_SECONDS=60       # 单次 initialize/list/call 超时
+CHAT_DATA_MCP_TOOL_TIMEOUT_SECONDS=60       # 全局默认工具超时；插件可按工具覆盖 timeout_ms
 CHAT_DATA_MCP_TOOLS_CACHE_TTL_SECONDS=300   # 工具枚举缓存 TTL
 ```
 
@@ -93,7 +93,7 @@ transport 只支持 `streamable_http`（`url`/`headers`）。`stdio`/`sse` 不�
 只跳过该 server 并记录原因；工具级准入在 `tools/list` 之后执行。插件安装时同口径校验
 声明的 `mcp_servers`，未通过直接拒绝安装。
 
-**MCP 工具审批（B 端固定策略）**：MCP 工具默认执行前审批；每工具档位由插件 `tool_approvals` 配置为 `ask/allow`，用户不能切换审批模式，也不能产生「本轮/本会话始终允许」授权。`deny` 不是审批档位：不需要的工具应在插件声明或装配层直接不挂载、不可检索。
+**MCP 工具策略（B 端固定策略）**：MCP 工具默认执行前审批；每工具的 `label/approval/timeout_ms` 统一由插件 `mcp_servers[].tools.<工具名>` 配置，未配置的工具走默认（工具名 / ask / 全局超时）。审批档位只有 `ask/allow`；不需要的工具应在插件声明或装配层直接不挂载、不可检索。
 
 服务端无用户角色模型，`/admin/plugins` 与其他 admin 接口同口径：靠 service token +
 可信代理入口控制；service token 不得下发到普通用户侧。

@@ -148,7 +148,7 @@ def test_catalog_entry_lookup():
 
 
 def test_catalog_label_participates_in_retrieval_and_summary():
-    """tool_labels 展示名既进 BM25 检索域，也随检索摘要下发给模型。"""
+    """tools.<name>.label 展示名既进 BM25 检索域，也随检索摘要下发给模型。"""
     labeled = _info("ssh", "system_overview", "查看系统整体运行状态", label="系统概览巡检")
     other = LOG_GREP()
     catalog = MCPCatalog()

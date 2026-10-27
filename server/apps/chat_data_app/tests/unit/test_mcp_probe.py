@@ -44,7 +44,7 @@ def test_installer_probe_tools_adds_approval(monkeypatch):
         "id": "demo",
         "transport": "streamable_http",
         "url": "https://mcp.example.com/mcp",
-        "tool_approvals": {"echo": "allow"},
+        "tools": {"echo": {"label": "回显", "approval": "allow", "timeout_ms": 12000}},
     }
     metadata = SimpleNamespace(manifest=SimpleNamespace(mcp_servers=(entry,)))
     monkeypatch.setattr(installer, "load_plugins_metadata", lambda: {"p": metadata})
@@ -54,8 +54,13 @@ def test_installer_probe_tools_adds_approval(monkeypatch):
 
     monkeypatch.setattr(installer, "_probe_mcp_server_tools", fake_probe)
     result = asyncio.run(installer.probe_mcp_server_tools("p", "demo"))
+    assert result["tools"][0]["label"] == "回显"
     assert result["tools"][0]["approval"] == "allow"
+    assert result["tools"][0]["timeout_ms"] == 12000
+    assert result["tools"][0]["configured"] is True
+    assert result["tools"][1]["label"] == "add"
     assert result["tools"][1]["approval"] == "ask"
+    assert result["tools"][1]["configured"] is False
 
 
 def test_installer_probe_rejects_unknown_plugin_and_server(monkeypatch):

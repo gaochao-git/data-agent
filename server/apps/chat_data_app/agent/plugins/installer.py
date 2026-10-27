@@ -24,7 +24,7 @@ from utils.logger import get_logger
 from utils.skill_paths import SKILL_MD_MAX_BYTES
 
 from ..mcp.admission import validate_mcp_server_config
-from ..mcp.config import MCPServerConfigError, parse_mcp_server_config
+from ..mcp.config import MCPServerConfigError, default_mcp_tool_timeout_ms, parse_mcp_server_config
 from ..mcp.probe import probe_mcp_server_tools as _probe_mcp_server_tools
 from ..skills.loader import parse_metadata_text
 from .loader import clear_metadata_cache, load_plugins_metadata, plugin_dir
@@ -161,8 +161,13 @@ async def probe_mcp_server_tools(plugin_name: str, server_id: str) -> dict[str, 
     except MCPServerConfigError as err:
         raise ValueError(str(err)) from err
     tools = await _probe_mcp_server_tools(config)
+    global_timeout_ms = default_mcp_tool_timeout_ms()
     for tool in tools:
-        tool["approval"] = config.tool_approvals.get(tool["name"], "ask")
+        policy = config.resolve_tool(tool["name"], global_timeout_ms)
+        tool["label"] = policy.label
+        tool["approval"] = policy.approval
+        tool["timeout_ms"] = policy.timeout_ms or global_timeout_ms
+        tool["configured"] = tool["name"] in config.tools
     return {"server_id": server_id, "count": len(tools), "tools": tools}
 
 

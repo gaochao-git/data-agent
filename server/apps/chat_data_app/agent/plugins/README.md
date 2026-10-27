@@ -26,13 +26,23 @@ CHAT_DATA_HOME/plugins/<name>/
   "description": "提供故障分析技能与只读 MCP 工具",
   "skills": ["fault-analysis"],
   "mcp_servers": [
-    {"id": "demo-http", "transport": "streamable_http", "url": "https://mcp.example.com/mcp"}
+    {
+      "id": "demo-http",
+      "transport": "streamable_http",
+      "url": "https://mcp.example.com/mcp",
+      "tools": {
+        "read_data": {"label": "读取数据", "approval": "allow", "timeout_ms": 10000},
+        "write_data": {"label": "写入数据", "approval": "ask"}
+      }
+    }
   ]
 }
 ```
 
 - `name`：`^[a-z][a-z0-9_-]{1,63}$`，同时是磁盘目录名与管理 API 资源 id；
 - `mcp_servers[].enabled`：`false` 时只保留声明、不参与装配（缺省 `true`）；
+- `mcp_servers[].tools`：按 MCP 原始工具名配置 `label` / `approval` / `timeout_ms`；未配置的工具走默认（工具名 / ask / 全局默认）；
+- `tools.<name>.timeout_ms` 为工具级超时（1000~1800000ms），未配置时使用全局 `CHAT_DATA_MCP_TOOL_TIMEOUT_SECONDS`；
 - `skills` / `mcp_servers` 可任选其一或同时声明；
 - 未知字段忽略（前向兼容）。
 

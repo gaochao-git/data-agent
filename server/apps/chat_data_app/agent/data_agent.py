@@ -75,7 +75,7 @@ class AgentRunControls:
     静默降级为无围栏、无 steering 的普通运行。
 
     ``disable_user_interaction``：无人值守时不装配审批中间件；系统工具
-    ``SYSTEM_TOOL_APPROVALS=ask`` 与 MCP ``tool_approvals=ask`` 工具在装配层
+    ``SYSTEM_TOOL_APPROVALS=ask`` 与 MCP ``tools.<name>.approval=ask`` 工具在装配层
     fail-closed 剔除，不向模型暴露。
     """
 

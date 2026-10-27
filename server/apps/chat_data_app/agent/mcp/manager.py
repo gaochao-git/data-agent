@@ -35,14 +35,13 @@ from utils.logger import get_logger
 
 from ...services.runtime_config import read_positive_int_env
 from .admission import MCPAdmissionError, validate_mcp_server_tools
-from .config import MCPServerConfig, load_mcp_server_configs
+from .config import MCPServerConfig, default_mcp_tool_timeout_ms, load_mcp_server_configs
 
 logger = get_logger(__name__)
 
 MCP_TOOL_NAME_PREFIX = "mcp_"
 MCP_TOOL_NAME_MAX_LENGTH = 64
 
-_MCP_TOOL_TIMEOUT_ENV = "CHAT_DATA_MCP_TOOL_TIMEOUT_SECONDS"
 _MCP_TOOLS_CACHE_TTL_ENV = "CHAT_DATA_MCP_TOOLS_CACHE_TTL_SECONDS"
 
 # MCP 工具入参 JSON schema type 到 Python 类型的映射，未知类型一律 Any。
@@ -56,6 +55,15 @@ _JSON_TYPE_MAP: dict[str, Any] = {
 }
 
 
+def _contains_timeout_error(error: BaseException) -> bool:
+    """AnyIO TaskGroup 会把 wait_for 的 TimeoutError 包进 ExceptionGroup，递归识别。"""
+    if isinstance(error, TimeoutError):
+        return True
+    if isinstance(error, BaseExceptionGroup):
+        return any(_contains_timeout_error(child) for child in error.exceptions)
+    return False
+
+
 @dataclass(frozen=True)
 class MCPToolInfo:
     """枚举得到的一个 MCP 工具描述。"""
@@ -65,8 +73,10 @@ class MCPToolInfo:
     qualified_name: str  # 挂到 LangChain 的工具名（mcp_<server>_<tool>）
     description: str
     input_schema: dict[str, Any]
-    label: str = ""  # 用户可见友好名（plugin.json tool_labels 配置，缺省回退原始工具名）
-    approval: str = "ask"  # 审批档位（plugin.json tool_approvals：ask/allow）
+    label: str = ""  # 用户可见友好名（plugin.json tools.<name>.label，缺省回退原始工具名）
+    approval: str = "ask"  # 审批档位（plugin.json tools.<name>.approval：ask/allow）
+    timeout_ms: int = 0  # 最终生效超时（ms）
+    configured: bool = False  # 是否在 plugin.json 的 tools 中显式配置
 
 
 @asynccontextmanager
@@ -176,15 +186,13 @@ class MCPToolManager:
         config_loader: Callable[[], list[MCPServerConfig]] | None = None,
     ) -> None:
         self._tool_timeout = (
-            tool_timeout_seconds
-            if tool_timeout_seconds is not None
-            else read_positive_int_env(_MCP_TOOL_TIMEOUT_ENV, 60)
+            tool_timeout_seconds if tool_timeout_seconds is not None else default_mcp_tool_timeout_ms() // 1_000
         )
         self._cache_ttl = (
             cache_ttl_seconds if cache_ttl_seconds is not None else read_positive_int_env(_MCP_TOOLS_CACHE_TTL_ENV, 300)
         )
         self._session_factory = session_factory or (
-            lambda config: open_mcp_session(config, timeout_seconds=self._tool_timeout)
+            lambda config: open_mcp_session(config, timeout_seconds=self._session_timeout_seconds(config))
         )
         self._config_loader = config_loader or load_mcp_server_configs
         self._tools_cache: list[MCPToolInfo] | None = None
@@ -192,6 +200,11 @@ class MCPToolManager:
         self._effective_cache_ttl = self._cache_ttl
 
     # ---- 枚举 ----
+
+    def _session_timeout_seconds(self, config: MCPServerConfig) -> int:
+        """session read timeout 必须覆盖该 server 最长的工具超时。"""
+        max_ms = config.max_tool_timeout_ms(self._tool_timeout * 1_000)
+        return max(self._tool_timeout, (max_ms + 999) // 1_000)
 
     def _cache_fresh(self) -> bool:
         return self._tools_cache is not None and (time.monotonic() - self._cache_time) < self._effective_cache_ttl
@@ -241,23 +254,25 @@ class MCPToolManager:
         async with self._session_factory(config) as client:
             result = await asyncio.wait_for(client.list_tools(), timeout=self._tool_timeout)
         ttl_ms = getattr(result, "ttlMs", None)
-        tools = [
-            MCPToolInfo(
-                server_id=config.server_id,
-                name=tool.name,
-                qualified_name=sanitize_mcp_tool_name(config.server_id, tool.name),
-                description=str(getattr(tool, "description", None) or ""),
-                # mcp 2.x MCPTool 字段名为 input_schema（inputSchema 仅为序列化 alias），
-                # 误取 alias 会恒为 None，导致全部工具 schema 退化为空、模型入参被丢弃
-                input_schema=dict(getattr(tool, "input_schema", None) or getattr(tool, "inputSchema", None) or {})
-                or {"type": "object", "properties": {}},
-                # 展示名按原始工具名查插件 tool_labels，未配置时回退原始工具名
-                label=str(config.tool_labels.get(tool.name) or "").strip() or str(tool.name or "").strip(),
-                # 审批档位按原始工具名查插件 tool_approvals，未配置时缺省 ask
-                approval=config.tool_approvals.get(tool.name, "ask"),
+        tools: list[MCPToolInfo] = []
+        for tool in list(getattr(result, "tools", None) or []):
+            policy = config.resolve_tool(tool.name, self._tool_timeout * 1_000)
+            tools.append(
+                MCPToolInfo(
+                    server_id=config.server_id,
+                    name=tool.name,
+                    qualified_name=sanitize_mcp_tool_name(config.server_id, tool.name),
+                    description=str(getattr(tool, "description", None) or ""),
+                    # mcp 2.x MCPTool 字段名为 input_schema（inputSchema 仅为序列化 alias），
+                    # 误取 alias 会恒为 None，导致全部工具 schema 退化为空、模型入参被丢弃
+                    input_schema=dict(getattr(tool, "input_schema", None) or getattr(tool, "inputSchema", None) or {})
+                    or {"type": "object", "properties": {}},
+                    label=policy.label,
+                    approval=policy.approval,
+                    timeout_ms=policy.timeout_ms or 0,
+                    configured=tool.name in config.tools,
+                )
             )
-            for tool in list(getattr(result, "tools", None) or [])
-        ]
         report = validate_mcp_server_tools(
             config.server_id,
             [{"name": info.name, "description": info.description, "input_schema": info.input_schema} for info in tools],
@@ -266,14 +281,7 @@ class MCPToolManager:
             logger.warning("MCP server 准入告警: id=%s %s: %s", config.server_id, issue.code, issue.message)
         if not report.ok:
             raise MCPAdmissionError(f"MCP server {config.server_id} 未通过准入: {report.summary()}")
-        kept = [info for info in tools if info.approval != "deny"]
-        if len(kept) != len(tools):
-            logger.warning(
-                "[mcp_tools] 旧配置 deny 工具不挂载: id=%s tools=%s",
-                config.server_id,
-                [info.name for info in tools if info.approval == "deny"],
-            )
-        return kept, ttl_ms if isinstance(ttl_ms, int) and ttl_ms > 0 else None
+        return tools, ttl_ms if isinstance(ttl_ms, int) and ttl_ms > 0 else None
 
     def list_tools(self, *, force_refresh: bool = False) -> list[MCPToolInfo]:
         """同步入口：供 agent 装配（同步函数）读取 MCP 工具清单。"""
@@ -301,11 +309,21 @@ class MCPToolManager:
         config = next((c for c in self._config_loader() if c.server_id == server_id), None)
         if config is None:
             raise ValueError(f"MCP server 未配置: {server_id}")
-        async with self._session_factory(config) as client:
-            result = await asyncio.wait_for(
-                client.call_tool(tool_name, arguments or {}),
-                timeout=max(self._tool_timeout * 3, 90),
-            )
+        timeout_ms = config.resolve_tool(tool_name, self._tool_timeout * 1_000).timeout_ms or 0
+        timeout_seconds = max(timeout_ms / 1_000, 1.0)
+        timeout_message = f"MCP tool {server_id}/{tool_name} timed out after {timeout_seconds:g}s"
+        try:
+            async with self._session_factory(config) as client:
+                result = await asyncio.wait_for(
+                    client.call_tool(tool_name, arguments or {}),
+                    timeout=timeout_seconds,
+                )
+        except TimeoutError as err:
+            raise TimeoutError(timeout_message) from err
+        except BaseExceptionGroup as group:
+            if _contains_timeout_error(group):
+                raise TimeoutError(timeout_message) from group
+            raise
         return _extract_call_result_text(result)
 
     # ---- 健康检查 ----

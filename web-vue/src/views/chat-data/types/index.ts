@@ -482,7 +482,7 @@ export interface VisualizationConfig {
 export interface ToolCallInfo {
   tool_call_id: string
   tool_name: string
-  // 用户可见展示名（MCP 工具由后端按 plugin.json tool_labels 下发；内置工具走前端映射表）
+  // 用户可见展示名（MCP 工具由后端按 plugin.json tools.<name>.label 下发；内置工具走前端映射表）
   display_name?: string
   args: Record<string, unknown>
   result?: string
@@ -1002,12 +1002,21 @@ export interface PluginMcpServerAdmission {
   warnings: string[]
 }
 
+export interface PluginMcpToolConfig {
+  /** 用户可见展示名；缺省回退原始工具名 */
+  label?: string
+  /** 审批档位；缺省 ask */
+  approval?: 'ask' | 'allow'
+  /** 工具级超时（ms）；缺省使用全局默认 */
+  timeout_ms?: number
+}
+
 export interface PluginMcpServerInfo {
   id: string
   transport: string
   url?: string
-  /** 原始工具名 → 审批档位；缺省 ask，deny 的工具不会挂载/被检索 */
-  tool_approvals?: Record<string, 'ask' | 'allow'>
+  /** MCP 原始工具名 → 工具配置（label/approval/timeout_ms） */
+  tools?: Record<string, PluginMcpToolConfig>
   /** 服务端准入检查结论（未通过时管理页标红并展示原因） */
   admission?: PluginMcpServerAdmission
 }
@@ -1026,6 +1035,12 @@ export interface PluginMcpToolInfo {
   description: string
   parameters?: PluginMcpToolParameter[]
   approval: 'ask' | 'allow'
+  /** 工具展示名（来自 plugin.json tools.<name>.label，缺省为原始工具名） */
+  label?: string
+  /** 最终生效超时（ms） */
+  timeout_ms?: number
+  /** 是否在插件 manifest 中显式配置 */
+  configured?: boolean
 }
 
 // 插件 manifest 信息

@@ -464,7 +464,7 @@ class _ToolStreamState:
         payload = {
             "tool_name": tool_name,
             "tool_call_id": tool_call_id,
-            # MCP 工具的用户可见展示名（plugin.json tool_labels）；内置工具为空串由前端映射表兜底
+            # MCP 工具的用户可见展示名（plugin.json tools.<name>.label）；内置工具为空串由前端映射表兜底
             "display_name": get_mcp_tool_display_name(tool_name),
             "status": "running",
             "args": args or {},

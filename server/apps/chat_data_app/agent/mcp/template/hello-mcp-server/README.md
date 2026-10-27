@@ -73,11 +73,25 @@ kill $(lsof -t -iTCP:8099 -sTCP:LISTEN)
       "headers": {
         "Authorization": "Bearer <YOUR_TOKEN>"
       },
-      "enabled": true
+      "enabled": true,
+      "tools": {
+        "hello": {
+          "label": "问候",
+          "approval": "allow",
+          "timeout_ms": 5000
+        },
+        "add": {
+          "label": "加法",
+          "approval": "allow"
+        }
+      }
     }
   ]
 }
 ```
+
+`tools.<工具名>` 支持 `label`（展示名）、`approval`（`ask`/`allow`）、`timeout_ms`（毫秒，1000～1800000）；
+未配置的工具使用默认值（工具名 / `ask` / 全局 `CHAT_DATA_MCP_TOOL_TIMEOUT_SECONDS`）。
 
 本地联调可使用 `http://127.0.0.1:8099/mcp`；生产要求 HTTPS（本地回环例外）。
 

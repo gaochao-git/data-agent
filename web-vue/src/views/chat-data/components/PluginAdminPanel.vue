@@ -34,23 +34,25 @@ const selectedProbeToolParametersJson = computed(() =>
 // MCP server 准入状态展示：未通过标红并给出原因，通过但有告警也提示
 const mcpServerLabel = (server: PluginMcpServerInfo) =>
   server.admission && !server.admission.ok ? `${server.id} ⚠` : server.id
-// 每工具审批配置摘要：管理员固定 ask/allow 两档，用户不可切换
-const mcpApprovalSummary = (server: PluginMcpServerInfo) => {
-  const entries = Object.entries(server.tool_approvals || {})
-  if (!entries.length) return '\n审批配置：全部默认执行前审批'
-  const counts = { ask: 0, allow: 0, deny: 0 } as Record<string, number>
-  entries.forEach(([, value]) => {
-    if (value in counts) counts[value] = (counts[value] ?? 0) + 1
+// 每工具配置摘要：approval/timeout 均按工具配置，未配置的工具走默认值
+const mcpToolSummary = (server: PluginMcpServerInfo) => {
+  const entries = Object.values(server.tools || {})
+  if (!entries.length) return '\n工具配置：全部默认（ask / 全局超时）'
+  const counts = { ask: 0, allow: 0 } as Record<string, number>
+  entries.forEach((value) => {
+    const approval = value.approval ?? 'ask'
+    counts[approval] = (counts[approval] ?? 0) + 1
   })
+  const timeoutCount = entries.filter((value) => value.timeout_ms !== undefined).length
   const parts = [
     counts.ask ? `${counts.ask} 执行前审批` : '',
     counts.allow ? `${counts.allow} 免审批` : '',
-    counts.deny ? `${counts.deny} 旧 deny 跳过` : ''
+    timeoutCount ? `${timeoutCount} 个自定义超时` : ''
   ].filter(Boolean)
-  return parts.length ? `\n审批配置：${parts.join(' / ')}，其余默认执行前审批` : '\n审批配置：全部默认执行前审批'
+  return parts.length ? `\n工具配置：${parts.join(' / ')}，其余默认 ask` : '\n工具配置：全部默认（ask / 全局超时）'
 }
 const mcpServerTitle = (server: PluginMcpServerInfo) => {
-  const base = `${server.id} · ${server.transport}${server.url ? ` · ${server.url}` : ''}${mcpApprovalSummary(server)}`
+  const base = `${server.id} · ${server.transport}${server.url ? ` · ${server.url}` : ''}${mcpToolSummary(server)}`
   const admission = server.admission
   if (!admission) return base
   if (!admission.ok) return `${base}\n未通过准入：${admission.errors.join('；')}`
@@ -348,7 +350,8 @@ defineExpose({ ensureLoaded })
         <span class="text-xs text-slate-500">
           {{ probePluginName }} / {{ probeServerId }}
           <template v-if="selectedProbeTool">
-            / <span class="font-mono font-medium text-slate-800">{{ selectedProbeTool.name }}</span>
+            / <span class="font-mono font-medium text-slate-800">{{ selectedProbeTool.label || selectedProbeTool.name }}</span>
+            <span v-if="selectedProbeTool.label && selectedProbeTool.label !== selectedProbeTool.name" class="ml-1 text-[11px] text-slate-400">{{ selectedProbeTool.name }}</span>
             <el-tag
               size="small"
               class="ml-1 align-middle"
@@ -356,6 +359,9 @@ defineExpose({ ensureLoaded })
               effect="plain"
             >
               {{ selectedProbeTool.approval === 'ask' ? 'ask' : 'allow' }}
+            </el-tag>
+            <el-tag v-if="selectedProbeTool.timeout_ms" size="small" class="ml-1 align-middle" type="info" effect="plain">
+              {{ selectedProbeTool.timeout_ms }}ms
             </el-tag>
           </template>
         </span>
@@ -391,9 +397,12 @@ defineExpose({ ensureLoaded })
         border
         max-height="420"
       >
-        <el-table-column label="工具名" width="190">
+        <el-table-column label="工具" width="230">
           <template #default="{ row: tool }">
-            <span class="font-mono text-xs text-slate-700">{{ tool.name }}</span>
+            <div class="min-w-0">
+              <div class="truncate text-xs text-slate-700">{{ tool.label || tool.name }}</div>
+              <div class="truncate font-mono text-[10px] text-slate-400">{{ tool.name }}</div>
+            </div>
           </template>
         </el-table-column>
         <el-table-column prop="description" label="描述" min-width="320" show-overflow-tooltip>
@@ -406,6 +415,11 @@ defineExpose({ ensureLoaded })
             <el-tag size="small" :type="tool.approval === 'ask' ? 'warning' : 'success'" effect="plain">
               {{ tool.approval === 'ask' ? 'ask' : 'allow' }}
             </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="超时" width="90" align="center">
+          <template #default="{ row: tool }">
+            <span class="text-xs text-slate-500">{{ tool.timeout_ms ? `${tool.timeout_ms}ms` : '-' }}</span>
           </template>
         </el-table-column>
         <el-table-column label="参数" width="70" align="center">

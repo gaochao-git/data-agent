@@ -84,7 +84,7 @@ class ToolCatalogEntry:
     description: str
     param_docs: str
     input_schema: dict[str, Any]
-    label: str = ""  # 用户可见友好名（tool_labels 配置），参与检索域并随摘要下发
+    label: str = ""  # 用户可见友好名（tools.<name>.label 配置），参与检索域并随摘要下发
 
     def summary(self) -> dict[str, Any]:
         """检索结果里给模型看的单条摘要。"""
