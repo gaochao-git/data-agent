@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """SSH Tools MCP Server（Linux 只读巡检）。
 
-一个 MCP 工具 ``ssh_exec``，通过 ``action`` 路由到具体巡检能力。这样客户端目录里
-只多一个工具 schema，而不是 12 个；action 的取值与必填参数由服务端统一校验。
+一个 MCP 工具 ``ssh_exec``，通过 ``action`` 选择命令：
+
+- 公共参数：``ip`` / ``timeout``
+- 命令参数：``action_payload``
+- 首次使用先 ``action="help"``，返回每个 action 的 payload 字段、必填项和示例
 """
 
 import json
 import logging
-from typing import Literal
+from typing import Any
 
 from mcp.server.mcpserver import MCPServer
 
@@ -15,15 +18,13 @@ from mcp_servers.common.config import MCP_SSH_EXEC_PORT
 from mcp_servers.common.output import truncate_output
 from mcp_servers.ssh_exec_server.tools import (
     disk,
+    grep,
     info,
     journal,
     network,
     process,
     read,
     snapshot,
-)
-from mcp_servers.ssh_exec_server.tools import (
-    grep as grep_module,
 )
 from mcp_servers.ssh_exec_server.tools import (
     list as list_module,
@@ -35,21 +36,130 @@ logger = logging.getLogger(__name__)
 mcp = MCPServer("SSH Tools Server")
 
 EMERGENCY_OUTPUT_LIMIT_KB = 2048
+_DEFAULT_SINCE = "30m"
 
-SSHAction = Literal[
-    "overview",
-    "disk_usage",
-    "process_list",
-    "network_overview",
-    "network_ping",
-    "network_port_check",
-    "network_conn_stat",
-    "file_read",
-    "file_grep",
-    "file_list",
-    "journal_query",
-    "snapshot",
-]
+# 每个 action 的命令参数契约。公共 ip/timeout 不在这里重复。
+_ACTIONS: dict[str, dict[str, Any]] = {
+    "overview": {
+        "description": "系统概览：CPU、内存、磁盘、负载、网卡",
+        "payload": {},
+        "example": {"action": "overview", "ip": "10.0.0.12"},
+    },
+    "disk_usage": {
+        "description": "分析磁盘使用情况，可查看目录明细和磁盘 IO",
+        "payload": {
+            "path": {"type": "string", "required": False, "default": "/", "description": "路径"},
+            "detail": {"type": "boolean", "required": False, "default": False, "description": "查看目录/大文件"},
+            "io": {"type": "boolean", "required": False, "default": False, "description": "查看磁盘 IO"},
+        },
+        "example": {"action": "disk_usage", "ip": "10.0.0.12", "action_payload": {"path": "/data", "detail": True}},
+    },
+    "process_list": {
+        "description": "进程列表，可按关键词过滤和 CPU/内存排序",
+        "payload": {
+            "filter": {"type": "string", "required": False, "description": "进程关键词"},
+            "sort_by": {"type": "string", "required": False, "description": "cpu 或 mem"},
+        },
+        "example": {"action": "process_list", "ip": "10.0.0.12", "action_payload": {"sort_by": "cpu"}},
+    },
+    "network_overview": {
+        "description": "网络总览：网卡、热点连接、监听端口",
+        "payload": {},
+        "example": {"action": "network_overview", "ip": "10.0.0.12"},
+    },
+    "network_ping": {
+        "description": "Ping 目标主机",
+        "payload": {
+            "target": {"type": "string", "required": True, "description": "目标主机或 IP"},
+            "count": {"type": "integer", "required": False, "default": 3, "description": "次数"},
+        },
+        "example": {"action": "network_ping", "ip": "10.0.0.12", "action_payload": {"target": "10.0.0.13"}},
+    },
+    "network_port_check": {
+        "description": "检测目标 TCP 端口连通性",
+        "payload": {
+            "target": {"type": "string", "required": True, "description": "目标主机或 IP"},
+            "target_port": {"type": "integer", "required": True, "description": "目标端口"},
+        },
+        "example": {
+            "action": "network_port_check",
+            "ip": "10.0.0.12",
+            "action_payload": {"target": "10.0.0.13", "target_port": 3306},
+        },
+    },
+    "network_conn_stat": {
+        "description": "TCP 连接状态统计",
+        "payload": {},
+        "example": {"action": "network_conn_stat", "ip": "10.0.0.12"},
+    },
+    "file_read": {
+        "description": "读取远程文件，支持分页",
+        "payload": {
+            "file_path": {"type": "string", "required": True, "description": "文件绝对路径"},
+            "offset": {"type": "integer", "required": False, "default": 0, "description": "起始行"},
+            "limit": {"type": "integer", "required": False, "default": 100, "description": "读取行数"},
+        },
+        "example": {
+            "action": "file_read",
+            "ip": "10.0.0.12",
+            "action_payload": {"file_path": "/var/log/app.log", "limit": 200},
+        },
+    },
+    "file_grep": {
+        "description": "在远程文件中用正则检索",
+        "payload": {
+            "file_path": {"type": "string", "required": True, "description": "文件绝对路径"},
+            "pattern": {"type": "string", "required": True, "description": "正则表达式"},
+            "max_lines": {"type": "integer", "required": False, "default": 1000, "description": "最大返回行数"},
+            "before_lines": {"type": "integer", "required": False, "default": 0, "description": "匹配前 N 行"},
+            "after_lines": {"type": "integer", "required": False, "default": 0, "description": "匹配后 N 行"},
+        },
+        "example": {
+            "action": "file_grep",
+            "ip": "10.0.0.12",
+            "action_payload": {"file_path": "/var/log/app.log", "pattern": "ERROR|Exception"},
+        },
+    },
+    "file_list": {
+        "description": "列出远程目录内容",
+        "payload": {
+            "path": {"type": "string", "required": False, "default": "/tmp", "description": "目录路径"},
+            "sort_by": {"type": "string", "required": False, "default": "name", "description": "name/size/time"},
+            "limit": {"type": "integer", "required": False, "default": 50, "description": "返回条数"},
+        },
+        "example": {"action": "file_list", "ip": "10.0.0.12", "action_payload": {"path": "/var/log"}},
+    },
+    "journal_query": {
+        "description": "查询 journalctl 系统日志",
+        "payload": {
+            "unit": {"type": "string", "required": False, "description": "服务单元，多个用逗号分隔"},
+            "priority": {"type": "string", "required": False, "description": "err/warning/info"},
+            "since": {"type": "string", "required": False, "description": "开始时间，如 1 hour ago"},
+            "until": {"type": "string", "required": False, "description": "结束时间"},
+            "grep": {"type": "string", "required": False, "description": "关键词/正则过滤"},
+            "lines": {"type": "integer", "required": False, "default": 500, "description": "最大行数"},
+            "output_format": {
+                "type": "string",
+                "required": False,
+                "default": "short",
+                "description": "short/json/verbose/cat",
+            },
+        },
+        "example": {
+            "action": "journal_query",
+            "ip": "10.0.0.12",
+            "action_payload": {"unit": "nginx", "priority": "err", "since": "30 min ago"},
+        },
+    },
+    "snapshot": {
+        "description": "采集现场快照（日志 + 系统状态）",
+        "payload": {
+            "since": {"type": "string", "required": False, "default": _DEFAULT_SINCE, "description": "日志时间窗"},
+            "service": {"type": "string", "required": False, "description": "可选服务名"},
+        },
+        "example": {"action": "snapshot", "ip": "10.0.0.12", "action_payload": {"service": "mysql.service"}},
+    },
+}
 
 
 def json_dumps(obj, **kwargs):
@@ -75,213 +185,171 @@ def format_result(result: dict, tool_name: str, max_size_kb: int = EMERGENCY_OUT
         output = ""
 
     msg = str(result.get("message") or "") if success else (error or "执行失败")
-    normalized = {
-        "status": "ok" if success else "error",
-        "msg": msg,
-        "data": {"tool": tool_name, "output": output, "meta": meta},
+    return json_dumps(
+        {
+            "status": "ok" if success else "error",
+            "msg": msg,
+            "data": {"tool": tool_name, "output": output, "meta": meta},
+        }
+    )
+
+
+def _help_payload() -> dict[str, Any]:
+    """action=help 的返回契约。"""
+    return {
+        "tool": "ssh_exec",
+        "description": "Linux 只读巡检统一入口；先 action=help，再按命令 payload 传参",
+        "common": {
+            "ip": {"type": "string", "required": True, "description": "目标主机 IP"},
+            "timeout": {"type": "integer", "required": False, "default": 30, "description": "命令超时（秒）"},
+        },
+        "actions": {
+            name: {
+                "description": spec["description"],
+                "action_payload": spec["payload"],
+                "example": spec["example"],
+            }
+            for name, spec in _ACTIONS.items()
+        },
     }
-    return json_dumps(normalized)
 
 
-def _validate_action(action: str) -> None:
-    known = set(SSHAction.__args__)
-    if action not in known:
-        raise ValueError(f"不支持的 action: {action!r}；可选: {', '.join(sorted(known))}")
-
-
-def _require(action: str, **values: object) -> None:
-    missing = [name for name, value in values.items() if value in (None, "")]
+def _validate_and_extract(action: str, payload: Any) -> dict[str, Any]:
+    """校验 action_payload：只允许该 action 声明的字段，并检查必填。"""
+    spec = _ACTIONS.get(action)
+    if spec is None:
+        raise ValueError(f"不支持的 action: {action!r}；请先调用 action='help'")
+    if payload is None:
+        payload = {}
+    if not isinstance(payload, dict):
+        raise ValueError(f"action {action!r} 的 action_payload 必须是对象")
+    allowed = set(spec["payload"])
+    unknown = sorted(set(payload) - allowed)
+    if unknown:
+        raise ValueError(
+            f"action {action!r} 的 action_payload 包含未知字段: {', '.join(unknown)}；"
+            f"可用字段: {', '.join(sorted(allowed)) or '无'}"
+        )
+    missing = [
+        name for name, field in spec["payload"].items() if field.get("required") and payload.get(name) in (None, "")
+    ]
     if missing:
-        raise ValueError(f"action {action!r} 缺少必填参数: {', '.join(missing)}")
+        raise ValueError(f"action {action!r} 缺少必填 payload 字段: {', '.join(missing)}")
+    defaults = {
+        name: field.get("default")
+        for name, field in spec["payload"].items()
+        if "default" in field and name not in payload
+    }
+    return {**defaults, **payload}
 
 
-def _dispatch(
-    action: str,
-    *,
-    ip: str,
-    path: str | None,
-    detail: bool,
-    io: bool,
-    process_filter: str | None,
-    sort_by: str | None,
-    target: str | None,
-    count: int,
-    target_port: int,
-    file_path: str | None,
-    offset: int,
-    limit: int,
-    pattern: str | None,
-    max_lines: int,
-    before_lines: int,
-    after_lines: int,
-    unit: str | None,
-    priority: str | None,
-    since: str | None,
-    until: str | None,
-    grep: str | None,
-    lines: int,
-    output_format: str,
-    service: str | None,
-    timeout: int,
-) -> dict:
+def _dispatch(action: str, *, ip: str, timeout: int, payload: dict[str, Any]) -> dict:
     if action == "overview":
         return info.execute(host=ip, timeout=timeout)
     if action == "disk_usage":
-        return disk.execute(host=ip, path=path or "/", detail=detail, io=io, timeout=timeout)
+        return disk.execute(
+            host=ip,
+            path=str(payload.get("path") or "/"),
+            detail=bool(payload.get("detail")),
+            io=bool(payload.get("io")),
+            timeout=timeout,
+        )
     if action == "process_list":
-        return process.execute(host=ip, filter=process_filter, sort_by=sort_by, timeout=timeout)
+        return process.execute(
+            host=ip,
+            filter=payload.get("filter"),
+            sort_by=payload.get("sort_by"),
+            timeout=timeout,
+        )
     if action == "network_overview":
         return network.execute(host=ip, timeout=timeout)
     if action == "network_ping":
-        _require(action, target=target)
-        return network.ping(host=ip, target=target, count=count, timeout=timeout)
+        return network.ping(
+            host=ip,
+            target=str(payload.get("target") or ""),
+            count=int(payload.get("count", 3)),
+            timeout=timeout,
+        )
     if action == "network_port_check":
-        _require(action, target=target)
-        if target_port <= 0:
-            raise ValueError("action 'network_port_check' 缺少必填参数: target_port")
-        return network.port_check(host=ip, target=target, port=target_port, timeout=timeout)
+        return network.port_check(
+            host=ip,
+            target=str(payload.get("target") or ""),
+            port=int(payload.get("target_port") or 0),
+            timeout=timeout,
+        )
     if action == "network_conn_stat":
         return network.conn_stat(host=ip, timeout=timeout)
     if action == "file_read":
-        _require(action, file_path=file_path)
-        return read.execute(host=ip, file_path=file_path, offset=offset, limit=limit, timeout=timeout)
-    if action == "file_grep":
-        _require(action, file_path=file_path, pattern=pattern)
-        return grep_module.execute(
+        return read.execute(
             host=ip,
-            file_path=file_path,
-            pattern=pattern,
-            max_lines=max_lines,
-            before_lines=before_lines,
-            after_lines=after_lines,
+            file_path=str(payload.get("file_path") or ""),
+            offset=int(payload.get("offset", 0)),
+            limit=int(payload.get("limit", 100)),
+            timeout=timeout,
+        )
+    if action == "file_grep":
+        return grep.execute(
+            host=ip,
+            file_path=str(payload.get("file_path") or ""),
+            pattern=str(payload.get("pattern") or ""),
+            max_lines=int(payload.get("max_lines", 1000)),
+            before_lines=int(payload.get("before_lines", 0)),
+            after_lines=int(payload.get("after_lines", 0)),
             timeout=timeout,
         )
     if action == "file_list":
         return list_module.execute(
             host=ip,
-            path=path or "/tmp",
-            sort_by=sort_by or "name",
-            limit=limit,
+            path=str(payload.get("path") or "/tmp"),
+            sort_by=str(payload.get("sort_by") or "name"),
+            limit=int(payload.get("limit", 50)),
             timeout=timeout,
         )
     if action == "journal_query":
         return journal.execute(
             host=ip,
-            unit=unit,
-            priority=priority,
-            since=since,
-            until=until,
-            grep=grep,
-            lines=lines,
-            output_format=output_format,
+            unit=payload.get("unit"),
+            priority=payload.get("priority"),
+            since=payload.get("since"),
+            until=payload.get("until"),
+            grep=payload.get("grep"),
+            lines=int(payload.get("lines", 500)),
+            output_format=str(payload.get("output_format") or "short"),
             timeout=timeout,
         )
-    return snapshot.execute(host=ip, since=since or "30m", service=service, timeout=timeout)
+    return snapshot.execute(
+        host=ip,
+        since=payload.get("since") or _DEFAULT_SINCE,
+        service=payload.get("service"),
+        timeout=timeout,
+    )
 
 
 @mcp.tool()
 async def ssh_exec(
-    action: SSHAction,
-    ip: str,
-    path: str | None = None,
-    detail: bool = False,
-    io: bool = False,
-    process_filter: str | None = None,
-    sort_by: str | None = None,
-    target: str | None = None,
-    count: int = 3,
-    target_port: int = 0,
-    file_path: str | None = None,
-    offset: int = 0,
-    limit: int = 100,
-    pattern: str | None = None,
-    max_lines: int = 1000,
-    before_lines: int = 0,
-    after_lines: int = 0,
-    unit: str | None = None,
-    priority: str | None = None,
-    since: str | None = None,
-    until: str | None = None,
-    grep: str | None = None,
-    lines: int = 500,
-    output_format: str = "short",
-    service: str | None = None,
+    action: str,
+    ip: str = "",
     timeout: int = 30,
+    action_payload: dict[str, Any] | None = None,
 ) -> str:
-    """Linux 只读巡检统一入口。先选 action，再按该 action 的参数说明传参。
+    """Linux 只读巡检统一入口。
 
-    action:
-      overview           系统概览（CPU/内存/磁盘/负载/网卡）；只用 ip/timeout
-      disk_usage         磁盘用量；path 路径，detail 目录/大文件，io 磁盘 IO
-      process_list       进程列表；process_filter 关键词，sort_by=cpu/mem
-      network_overview   网络总览（网卡/热点连接/监听端口）
-      network_ping       Ping；必填 target，count 次数
-      network_port_check TCP 端口；必填 target、target_port
-      network_conn_stat  TCP 连接状态统计
-      file_read          读文件；必填 file_path，offset/limit 分页
-      file_grep          文件检索；必填 file_path、pattern，max_lines/before_lines/after_lines
-      file_list          目录列表；path、sort_by=name/size/time、limit
-      journal_query      journalctl；unit/priority/since/until/grep/lines/output_format
-      snapshot           现场快照；since 时间窗（默认 30m）、service、timeout
+    使用顺序：
+    1. 首次调用 action="help"，读取每个命令的 action_payload 字段和示例。
+    2. 调用具体 action，公共参数传 ip/timeout，命令参数全部放进 action_payload。
 
-    Args:
-        action: 巡检动作，取值为上述 action 之一
-        ip: 目标主机 IP，字段名固定为 ip
-        path: disk_usage/file_list 的路径
-        detail: disk_usage 是否详细分析
-        io: disk_usage 是否查看磁盘 IO
-        process_filter: process_list 的过滤关键词
-        sort_by: process_list 用 cpu/mem；file_list 用 name/size/time
-        target: network_ping/network_port_check 的目标主机
-        count: network_ping 次数
-        target_port: network_port_check 的目标端口
-        file_path: file_read/file_grep 的文件绝对路径
-        offset: file_read 起始行
-        limit: file_read 读取行数 / file_list 返回条数
-        pattern: file_grep 搜索模式（支持正则）
-        max_lines: file_grep 最大返回行数
-        before_lines: file_grep 匹配前 N 行
-        after_lines: file_grep 匹配后 N 行
-        unit: journal_query 服务单元，多个用逗号分隔
-        priority: journal_query 优先级（err/warning/info）
-        since: journal_query 开始时间 / snapshot 时间窗
-        until: journal_query 结束时间
-        grep: journal_query 关键词过滤
-        lines: journal_query 最大行数
-        output_format: journal_query 输出格式（short/json/verbose/cat）
-        service: snapshot 可选服务名
-        timeout: 超时时间（秒）
+    已支持 action: overview / disk_usage / process_list / network_overview /
+    network_ping / network_port_check / network_conn_stat / file_read / file_grep /
+    file_list / journal_query / snapshot。
     """
+    action = str(action or "").strip()
+    if action == "help":
+        return json_dumps({"status": "ok", "data": _help_payload()}, indent=2)
     try:
-        _validate_action(action)
-        result = _dispatch(
-            action,
-            ip=ip,
-            path=path,
-            detail=detail,
-            io=io,
-            process_filter=process_filter,
-            sort_by=sort_by,
-            target=target,
-            count=count,
-            target_port=target_port,
-            file_path=file_path,
-            offset=offset,
-            limit=limit,
-            pattern=pattern,
-            max_lines=max_lines,
-            before_lines=before_lines,
-            after_lines=after_lines,
-            unit=unit,
-            priority=priority,
-            since=since,
-            until=until,
-            grep=grep,
-            lines=lines,
-            output_format=output_format,
-            service=service,
-            timeout=timeout,
-        )
+        if not str(ip or "").strip():
+            raise ValueError("缺少公共参数 ip")
+        payload = _validate_and_extract(action, action_payload)
+        result = _dispatch(action, ip=ip, timeout=timeout, payload=payload)
     except Exception as exc:  # noqa: BLE001 - MCP 边界统一转成模型可读错误
         logger.warning("ssh_exec action=%s failed: %s", action, exc)
         result = {"success": False, "error": str(exc)}

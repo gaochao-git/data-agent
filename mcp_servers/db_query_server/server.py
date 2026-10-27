@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
 """Database Tools MCP Server（MySQL 只读诊断）。
 
-一个 MCP 工具 ``db_query``，通过 ``action`` 路由到具体诊断能力。这样客户端目录里
-只多一个工具 schema，而不是 8 个；action 的取值与参数约束由服务端统一校验。
+一个 MCP 工具 ``db_query``，通过 ``action`` 选择命令：
+
+- 公共参数：``ip`` / ``port`` / ``timeout``
+- 命令参数：``action_payload``
+- 首次使用先 ``action="help"``，返回每个 action 的 payload 字段、必填项和示例
+
+这样工具 schema 不会随命令数量膨胀，同时每个命令仍有独立的参数契约。
 """
 
 import json
 import logging
-from typing import Literal
+from typing import Any
 
 from mcp.server.mcpserver import MCPServer
 
@@ -31,16 +36,73 @@ mcp = MCPServer("Database Tools Server")
 
 EMERGENCY_OUTPUT_LIMIT_KB = 2048
 
-DBAction = Literal[
-    "info",
-    "status",
-    "variables",
-    "connections",
-    "locks",
-    "replication",
-    "transactions",
-    "slowlog",
-]
+# 每个 action 的命令参数契约。公共 ip/port/timeout 不在这里重复。
+_ACTIONS: dict[str, dict[str, Any]] = {
+    "info": {
+        "description": "MySQL 基本信息：版本、运行时间、数据库列表、关键配置",
+        "payload": {},
+        "example": {"action": "info", "ip": "10.0.0.12", "port": 3306},
+    },
+    "status": {
+        "description": "SHOW STATUS 状态变量",
+        "payload": {
+            "pattern": {"type": "string", "required": False, "description": "变量名过滤，如 Threads、Conn、Query"},
+        },
+        "example": {"action": "status", "ip": "10.0.0.12", "action_payload": {"pattern": "Threads"}},
+    },
+    "variables": {
+        "description": "SHOW VARIABLES 系统变量",
+        "payload": {
+            "pattern": {"type": "string", "required": False, "description": "变量名过滤，如 timeout、buffer、innodb"},
+        },
+        "example": {"action": "variables", "ip": "10.0.0.12", "action_payload": {"pattern": "timeout"}},
+    },
+    "connections": {
+        "description": "当前连接数、最大连接数、来源分布、活跃查询",
+        "payload": {},
+        "example": {"action": "connections", "ip": "10.0.0.12", "port": 3306},
+    },
+    "locks": {
+        "description": "锁等待、持锁事务、死锁",
+        "payload": {},
+        "example": {"action": "locks", "ip": "10.0.0.12", "port": 3306},
+    },
+    "replication": {
+        "description": "主从复制、半同步状态",
+        "payload": {},
+        "example": {"action": "replication", "ip": "10.0.0.12", "port": 3306},
+    },
+    "transactions": {
+        "description": "长事务",
+        "payload": {
+            "min_seconds": {
+                "type": "integer",
+                "required": False,
+                "default": 1,
+                "description": "最小未提交秒数",
+            },
+        },
+        "example": {"action": "transactions", "ip": "10.0.0.12", "action_payload": {"min_seconds": 5}},
+    },
+    "slowlog": {
+        "description": "慢查询日志分析",
+        "payload": {
+            "since": {
+                "type": "string",
+                "required": False,
+                "description": "开始时间，如 1h/2d/1w 或 YYYY-MM-DD HH:MM:SS",
+            },
+            "until": {"type": "string", "required": False, "description": "结束时间，格式同 since"},
+            "min_time": {"type": "number", "required": False, "default": 1.0, "description": "最小执行时间（秒）"},
+            "limit": {"type": "integer", "required": False, "default": 50, "description": "返回 Top N"},
+        },
+        "example": {
+            "action": "slowlog",
+            "ip": "10.0.0.12",
+            "action_payload": {"since": "1h", "min_time": 2, "limit": 20},
+        },
+    },
+}
 
 
 def json_dumps(obj, **kwargs):
@@ -59,11 +121,52 @@ def format_result(result: dict, max_size_kb: int = EMERGENCY_OUTPUT_LIMIT_KB) ->
     return json_str
 
 
-def _validate_action(action: str) -> str:
-    known = set(DBAction.__args__)
-    if action not in known:
-        raise ValueError(f"不支持的 action: {action!r}；可选: {', '.join(sorted(known))}")
-    return action
+def _help_payload() -> dict[str, Any]:
+    """action=help 的返回契约。"""
+    return {
+        "tool": "db_query",
+        "description": "MySQL 只读诊断统一入口；先 action=help，再按命令 payload 传参",
+        "common": {
+            "ip": {"type": "string", "required": True, "description": "数据库主机 IP"},
+            "port": {"type": "integer", "required": False, "default": 3306},
+            "timeout": {"type": "integer", "required": False, "default": 60, "description": "命令超时（秒）"},
+        },
+        "actions": {
+            name: {
+                "description": spec["description"],
+                "action_payload": spec["payload"],
+                "example": spec["example"],
+            }
+            for name, spec in _ACTIONS.items()
+        },
+    }
+
+
+def _validate_and_extract(action: str, payload: Any) -> dict[str, Any]:
+    """校验 action_payload：只允许该 action 声明的字段，并检查必填。"""
+    spec = _ACTIONS.get(action)
+    if spec is None:
+        raise ValueError(f"不支持的 action: {action!r}；请先调用 action='help'")
+    if payload is None:
+        payload = {}
+    if not isinstance(payload, dict):
+        raise ValueError(f"action {action!r} 的 action_payload 必须是对象")
+    allowed = set(spec["payload"])
+    unknown = sorted(set(payload) - allowed)
+    if unknown:
+        raise ValueError(
+            f"action {action!r} 的 action_payload 包含未知字段: {', '.join(unknown)}；"
+            f"可用字段: {', '.join(sorted(allowed)) or '无'}"
+        )
+    missing = [
+        name for name, field in spec["payload"].items() if field.get("required") and payload.get(name) in (None, "")
+    ]
+    if missing:
+        raise ValueError(f"action {action!r} 缺少必填 payload 字段: {', '.join(missing)}")
+    defaults = {
+        name: field["default"] for name, field in spec["payload"].items() if "default" in field and name not in payload
+    }
+    return {**defaults, **payload}
 
 
 def _dispatch(
@@ -71,20 +174,15 @@ def _dispatch(
     *,
     ip: str,
     port: int,
-    pattern: str,
-    min_seconds: int,
-    since: str | None,
-    until: str | None,
-    min_time: float,
-    limit: int,
     timeout: int,
+    payload: dict[str, Any],
 ) -> dict:
     if action == "info":
         return mysql_info.execute(db_host=ip, port=port)
     if action == "status":
-        return mysql_status.execute(db_host=ip, port=port, pattern=pattern)
+        return mysql_status.execute(db_host=ip, port=port, pattern=str(payload.get("pattern") or ""))
     if action == "variables":
-        return mysql_variables.execute(db_host=ip, port=port, pattern=pattern)
+        return mysql_variables.execute(db_host=ip, port=port, pattern=str(payload.get("pattern") or ""))
     if action == "connections":
         return mysql_connections.execute(db_host=ip, port=port)
     if action == "locks":
@@ -92,69 +190,42 @@ def _dispatch(
     if action == "replication":
         return mysql_replication.execute(db_host=ip, port=port)
     if action == "transactions":
-        return mysql_transactions.execute(db_host=ip, port=port, min_seconds=min_seconds)
+        return mysql_transactions.execute(db_host=ip, port=port, min_seconds=int(payload.get("min_seconds", 1)))
     return mysql_slowlog.execute(
         db_host=ip,
         port=port,
-        since=since,
-        until=until,
-        min_time=min_time,
-        limit=limit,
+        since=payload.get("since"),
+        until=payload.get("until"),
+        min_time=float(payload.get("min_time", 1.0)),
+        limit=int(payload.get("limit", 50)),
         timeout=timeout,
     )
 
 
 @mcp.tool()
 async def db_query(
-    action: DBAction,
-    ip: str,
+    action: str,
+    ip: str = "",
     port: int = 3306,
-    pattern: str = "",
-    min_seconds: int = 1,
-    since: str | None = None,
-    until: str | None = None,
-    min_time: float = 1.0,
-    limit: int = 50,
     timeout: int = 60,
+    action_payload: dict[str, Any] | None = None,
 ) -> str:
-    """MySQL 只读诊断统一入口。先选 action，再按该 action 的参数说明传参。
+    """MySQL 只读诊断统一入口。
 
-    action:
-      info         基本信息（版本/运行时间/库列表/关键配置）；只用 ip/port
-      status       SHOW STATUS；pattern 过滤（如 Threads、Conn、Query）
-      variables    SHOW VARIABLES；pattern 过滤（如 timeout、buffer、innodb）
-      connections  当前连接数/最大连接数/来源分布/活跃查询；只用 ip/port
-      locks        锁等待/持锁事务/死锁；只用 ip/port
-      replication  主从复制 + 半同步；只用 ip/port
-      transactions 长事务；min_seconds 最小未提交秒数
-      slowlog      慢查询分析；since/until/min_time/limit/timeout
+    使用顺序：
+    1. 首次调用 action="help"，读取每个命令的 action_payload 字段和示例。
+    2. 调用具体 action，公共参数传 ip/port/timeout，命令参数全部放进 action_payload。
 
-    Args:
-        action: 诊断动作，取值为上述 action 之一
-        ip: 数据库主机 IP，字段名固定为 ip
-        port: 数据库端口
-        pattern: status/variables 的过滤模式，其他 action 忽略
-        min_seconds: transactions 的最小事务时长
-        since: slowlog 开始时间（"YYYY-MM-DD HH:MM:SS" 或 "1h"/"2d"/"1w"）
-        until: slowlog 结束时间
-        min_time: slowlog 最小执行时间（秒）
-        limit: slowlog 返回 Top N
-        timeout: slowlog 分析超时（秒）
+    已支持 action: info / status / variables / connections / locks / replication / transactions / slowlog。
     """
+    action = str(action or "").strip()
+    if action == "help":
+        return json_dumps({"status": "ok", "data": _help_payload()}, indent=2)
     try:
-        _validate_action(action)
-        result = _dispatch(
-            action,
-            ip=ip,
-            port=port,
-            pattern=pattern,
-            min_seconds=min_seconds,
-            since=since,
-            until=until,
-            min_time=min_time,
-            limit=limit,
-            timeout=timeout,
-        )
+        if not str(ip or "").strip():
+            raise ValueError("缺少公共参数 ip")
+        payload = _validate_and_extract(action, action_payload)
+        result = _dispatch(action, ip=ip, port=port, timeout=timeout, payload=payload)
     except Exception as exc:  # noqa: BLE001 - MCP 边界统一转成模型可读错误
         logger.warning("db_query action=%s failed: %s", action, exc)
         result = {"success": False, "error": str(exc)}

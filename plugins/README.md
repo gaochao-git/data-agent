@@ -16,8 +16,8 @@ plugins/<plugin-name>/
 
 | 声明 id | 上游服务 | 端口 | 工具 |
 |---|---|---|---|
-| fault-db | mcp_servers/db_query_server | 3001 | MySQL 只读诊断（`db_query` 单工具，action 路由 8 类能力） |
-| fault-ssh | mcp_servers/ssh_exec_server | 3002 | Linux 只读巡检（`ssh_exec` 单工具，action 路由 12 类能力） |
+| fault-db | mcp_servers/db_query_server | 3001 | MySQL 只读诊断（`db_query` 单工具，`action="help"` 查命令参数） |
+| fault-ssh | mcp_servers/ssh_exec_server | 3002 | Linux 只读巡检（`ssh_exec` 单工具，`action="help"` 查命令参数） |
 
 注意事项：
 

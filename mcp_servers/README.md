@@ -6,17 +6,20 @@
 
 | server | 端口（默认） | 工具 | 职责 |
 | --- | --- | --- | --- |
-| `db_query_server` | `MCP_DB_QUERY_PORT`（3001） | `db_query` | MySQL 只读诊断：连接/状态/变量/锁/复制/事务/慢查询 |
-| `ssh_exec_server` | `MCP_SSH_EXEC_PORT`（3002） | `ssh_exec` | Linux 只读巡检：系统/磁盘/进程/网络/文件/日志/快照 |
+| `db_query_server` | `MCP_DB_QUERY_PORT`（3001） | `db_query` | MySQL 只读诊断 |
+| `ssh_exec_server` | `MCP_SSH_EXEC_PORT`（3002） | `ssh_exec` | Linux 只读巡检 |
 
-每个 server 只暴露一个工具，具体能力由 `action` 路由：
+单工具命令模型：
 
 ```text
-db_query(action="info" | "status" | "variables" | "connections" | "locks" | "replication" | "transactions" | "slowlog", ...)
-ssh_exec(action="overview" | "disk_usage" | "process_list" | "network_overview" | "network_ping" | "network_port_check" | "network_conn_stat" | "file_read" | "file_grep" | "file_list" | "journal_query" | "snapshot", ...)
+db_query(action="help")     → 查看各 action 的 action_payload 字段与示例
+db_query(action="slowlog", ip="10.0.0.12", action_payload={"since": "1h", "limit": 20})
+
+ssh_exec(action="help")     → 查看各 action 的 action_payload 字段与示例
+ssh_exec(action="file_grep", ip="10.0.0.12", action_payload={"file_path": "/var/log/app.log", "pattern": "ERROR"})
 ```
 
-这样 MCP 目录从 20 个工具降到 2 个，减少工具 schema 与选择噪声；action 的必填参数由 server 侧校验。
+公共参数（`ip` / `port` / `timeout`）放在顶层；命令参数统一放 `action_payload`，由服务端按 action 校验未知字段和必填字段。
 
 ## 启动（需与主应用同一环境：CHAT_DATA_HOME 必填，依赖见 requirements.txt）
 
