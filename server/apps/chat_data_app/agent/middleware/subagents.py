@@ -63,6 +63,7 @@ from ..context.context_budget import (
 )
 from ..tools.registry import TOOL_REQUIRED_SKILLS
 from .context_compression import create_context_compression_middleware
+from .sandbox_renewal import create_sandbox_renewal_middleware
 from .skill_prerequisite import SkillPrerequisiteMiddleware
 from .tool_call_normalizer import create_tool_call_name_normalizer_middleware
 from .tool_execution_fence import create_tool_execution_fence_middleware
@@ -178,6 +179,8 @@ class SubagentSpec:
     # 主图同源）；在 dataclass 默认值里直接写死常量会在 import 时固化取值，
     # 运行时改配置表 / env / monkeypatch 都不生效。
     recursion_limit: int | None = None
+    # 仅 sandbox 模式：模型调用前后续期同一个沙箱（子智能体与主智能体共用工作区）。
+    sandbox_renewal: Any = None
 
 
 def validate_subagent_specs(specs: list[SubagentSpec]) -> None:
@@ -517,6 +520,8 @@ def _compile_subagent(spec: SubagentSpec, run_controls: Any = None) -> Any:
         create_tool_result_middleware(),
         ToolErrorMiddleware(on_tool_error),
     ]
+    if spec.sandbox_renewal is not None:
+        middleware.append(create_sandbox_renewal_middleware(spec.sandbox_renewal))
     if run_controls is not None and run_controls.is_complete():
         middleware.append(
             create_tool_execution_fence_middleware(

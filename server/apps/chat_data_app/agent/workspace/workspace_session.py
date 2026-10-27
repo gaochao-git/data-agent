@@ -50,9 +50,16 @@ def _workspace_session_cache_key(
     return f"{_application_workspace_root(workspace_root)}#{mode}#{skills}"
 
 
+_DEFAULT_SANDBOX_LIFETIME_SECONDS = 900
+
+
+def read_sandbox_lifetime_seconds() -> int:
+    """沙箱实例寿命（秒）；创建与续期共用这一处配置读取。"""
+    return _env_int("OPENSANDBOX_TIMEOUT_SECONDS", _DEFAULT_SANDBOX_LIFETIME_SECONDS)
+
+
 def _workspace_session_ttl_seconds() -> int:
-    timeout_seconds = _env_int("OPENSANDBOX_TIMEOUT_SECONDS", 600)
-    return max(30, min(timeout_seconds - 30, 300))
+    return max(30, min(read_sandbox_lifetime_seconds() - 30, 300))
 
 
 async def _cached_session_matches_application(session: SandboxExecutionSession) -> bool:
@@ -175,7 +182,7 @@ async def prepare_workspace_execution_session(
 ) -> SandboxExecutionSession:
     _validate_workspace_backend_config()
     Sandbox, _, _, _ = _import_opensandbox_sdk()
-    lifetime_seconds = _env_int("OPENSANDBOX_TIMEOUT_SECONDS", 600)
+    lifetime_seconds = read_sandbox_lifetime_seconds()
     request_timeout = _env_int("OPENSANDBOX_REQUEST_TIMEOUT_SECONDS", 10)
     ready_timeout = _env_int("OPENSANDBOX_READY_TIMEOUT_SECONDS", 60, minimum=10)
     create_timeout = _env_int(

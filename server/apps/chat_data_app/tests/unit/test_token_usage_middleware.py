@@ -800,6 +800,62 @@ def test_create_request_context_usage_middleware_records_and_merges_usage():
     assert middleware.get_context_usage()["llm_calls"][0]["actual_total_tokens"] == 120
 
 
+def test_context_usage_middleware_renews_sandbox_before_and_after_model():
+    """模型调用前、返回后各续期一次（工具执行由模型返回后的续期覆盖）。"""
+    import asyncio
+
+    async def run():
+        calls: list[str] = []
+
+        async def renew():
+            calls.append("renew")
+
+        middleware = create_request_context_usage_middleware(sandbox_renewal=renew)
+        request = SimpleNamespace(
+            system_message=SystemMessage(content="系统提示"),
+            messages=[HumanMessage(content="统计订单数")],
+            tools=[],
+            model=SimpleNamespace(model_name="qwen3.5-35b-a3b"),
+        )
+
+        async def handler(_request):
+            return AIMessage(content="ok")
+
+        await middleware.awrap_model_call(request, handler)
+        return calls
+
+    assert len(asyncio.run(run())) == 2
+
+
+def test_context_usage_middleware_does_not_renew_after_model_failure():
+    """模型调用失败时没有后续工具，不需要返回后续期。"""
+    import asyncio
+    from contextlib import suppress
+
+    async def run():
+        calls: list[str] = []
+
+        async def renew():
+            calls.append("renew")
+
+        middleware = create_request_context_usage_middleware(sandbox_renewal=renew)
+        request = SimpleNamespace(
+            system_message=SystemMessage(content="系统提示"),
+            messages=[HumanMessage(content="统计订单数")],
+            tools=[],
+            model=SimpleNamespace(model_name="qwen3.5-35b-a3b"),
+        )
+
+        async def handler(_request):
+            raise RuntimeError("model unavailable")
+
+        with suppress(RuntimeError):
+            await middleware.awrap_model_call(request, handler)
+        return calls
+
+    assert len(asyncio.run(run())) == 1
+
+
 def test_create_request_context_usage_middleware_stamps_execution_timing():
     """模型调用起止时间盖进 record 和响应消息，供面板/历史相减得耗时。"""
 

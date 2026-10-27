@@ -40,12 +40,19 @@ from .context_compression import format_todo_snapshot_lines, neutralize_stale_to
 logger = get_logger(__name__)
 
 
+async def _renew_sandbox_if_configured(sandbox_renewal: Callable[[], Awaitable[None]] | None) -> None:
+    """模型调用前后续期 sandbox；未配置（local 后端）时直接跳过。"""
+    if sandbox_renewal is not None:
+        await sandbox_renewal()
+
+
 def create_context_usage_middleware(
     model_id: str | None = None,
     *,
     tools: list[Any] | None = None,
     context_request_budget: ContextRequestBudget | None = None,
     state_schema: Any | None = None,
+    sandbox_renewal: Callable[[], Awaitable[None]] | None = None,
     name: str = "ContextUsageMiddleware",
 ) -> Any:
     """创建统一的上下文计量与 token usage middleware。"""
@@ -77,6 +84,8 @@ def create_context_usage_middleware(
         records.append(record)
         _emit_context_usage(get_context_usage())
 
+        # 模型调用前续期：覆盖本轮模型思考/生成耗时。
+        await _renew_sandbox_if_configured(sandbox_renewal)
         started_at_ms = _now_epoch_ms()
         try:
             response = await handler(
@@ -128,6 +137,9 @@ def create_context_usage_middleware(
         )
         usage = get_context_usage()
         _emit_context_usage(usage)
+        # 模型返回后续期：覆盖紧随其后的工具执行（bash/officecli 最长 120s）；放在计时之后，
+        # 避免控制面续期延迟被算进模型调用耗时。
+        await _renew_sandbox_if_configured(sandbox_renewal)
         return ExtendedModelResponse(
             model_response=_ensure_model_response(response),
             command=Command(update={"token_usage": compact_token_usage_for_state(usage)}),
@@ -147,6 +159,7 @@ def create_request_context_usage_middleware(
     tools: list[Any] | None = None,
     context_request_budget: ContextRequestBudget | None = None,
     state_schema: Any | None = None,
+    sandbox_renewal: Callable[[], Awaitable[None]] | None = None,
 ) -> Callable[[ModelRequest], Awaitable[ModelCallResult]]:
     """创建每次模型请求前的上下文计量与 token usage middleware。"""
     return create_context_usage_middleware(
@@ -154,6 +167,7 @@ def create_request_context_usage_middleware(
         tools=tools,
         context_request_budget=context_request_budget,
         state_schema=state_schema,
+        sandbox_renewal=sandbox_renewal,
     )
 
 

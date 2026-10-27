@@ -205,6 +205,13 @@ class ConversationWorkspaceRuntime:
     def backend_name(self) -> str:
         return self._resolved_backend.name
 
+    async def renew_sandbox_async(self) -> None:
+        """在模型调用前后续期 sandbox；local 后端无此能力时直接跳过。"""
+        renew = getattr(self._resolved_backend, "renew_sandbox_async", None)
+        if renew is None:
+            return
+        await renew()
+
     @property
     def runtime_skills_dir(self) -> Path:
         """本会话 runtime-skills 快照目录（运行域只读技能根）。"""

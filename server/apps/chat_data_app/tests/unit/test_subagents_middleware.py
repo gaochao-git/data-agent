@@ -1650,3 +1650,26 @@ def test_task_tool_description_is_compact_chinese():
     assert len(_TASK_TOOL_DESCRIPTION_TEMPLATE) <= 1200
     for keyword in ("任务书", "data-explore", "general-purpose", "file_write", "present_artifacts"):
         assert keyword in _TASK_TOOL_DESCRIPTION_TEMPLATE
+
+
+def test_sandbox_renewal_middleware_renews_before_and_after_model():
+    """子图 model 调用同样续期：前/后各一次，覆盖子智能体长任务。"""
+    import asyncio
+
+    from langchain_core.messages import AIMessage
+
+    from apps.chat_data_app.agent.middleware.sandbox_renewal import create_sandbox_renewal_middleware
+
+    calls: list[str] = []
+
+    async def renewal():
+        calls.append("renew")
+
+    middleware = create_sandbox_renewal_middleware(renewal)
+    request = SimpleNamespace(system_message=None, messages=[], tools=[])
+
+    async def handler(_request):
+        return AIMessage(content="ok")
+
+    asyncio.run(middleware.awrap_model_call(request, handler))
+    assert len(calls) == 2

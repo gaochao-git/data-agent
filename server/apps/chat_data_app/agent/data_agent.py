@@ -337,6 +337,7 @@ def build_subagent_middleware(
     available_skills_xml: str | None = None,
     memory_block: str | None = None,
     approval_policies: dict[str, str] | None = None,
+    sandbox_renewal: Any | None = None,
 ) -> SubagentMiddleware | None:
     """按运行选项构建子智能体中间件；没有任何子智能体启用时返回 None。
 
@@ -366,6 +367,7 @@ def build_subagent_middleware(
                 model_id=model_id,
                 available_skills_xml=available_skills_xml or "",
                 memory_block=memory_block or "",
+                sandbox_renewal=sandbox_renewal,
             )
         )
     if runtime_options.plan_subagent_enabled:
@@ -382,6 +384,7 @@ def build_subagent_middleware(
                 model_id=model_id,
                 available_skills_xml=available_skills_xml or "",
                 memory_block=memory_block or "",
+                sandbox_renewal=sandbox_renewal,
             )
         )
     if runtime_options.general_purpose_subagent_enabled:
@@ -398,6 +401,7 @@ def build_subagent_middleware(
                 model_id=model_id,
                 available_skills_xml=available_skills_xml or "",
                 memory_block=memory_block or "",
+                sandbox_renewal=sandbox_renewal,
             )
         )
     if not specs:
@@ -594,6 +598,13 @@ def _with_mcp_control_tools(tools: list, mcp_tools: list, search_service: Any) -
     ]
 
 
+def _sandbox_renewal_callback(runtime: ConversationWorkspaceRuntime) -> Any:
+    """仅 sandbox 后端需要模型前/后续期；local 模式返回 None，零额外调用。"""
+    if runtime.backend_name == "sandbox":
+        return runtime.renew_sandbox_async
+    return None
+
+
 def create_agent_from_spec(
     spec: AgentAssemblySpec,
     runtime_options: AgentRuntimeOptions | None = None,
@@ -697,12 +708,14 @@ def create_agent_from_spec(
         available_skills_xml=invocation.available_skills_xml,
         memory_block=invocation.memory_block,
         approval_policies=approval_policies,
+        sandbox_renewal=_sandbox_renewal_callback(runtime),
     )
     context_usage_middleware = create_request_context_usage_middleware(
         model_id,
         tools=tools,
         context_request_budget=context_request_budget,
         state_schema=ChatDataAgentState,
+        sandbox_renewal=_sandbox_renewal_callback(runtime),
     )
     context_compression_middleware = create_context_compression_middleware(
         system_prompt=effective_system_prompt,

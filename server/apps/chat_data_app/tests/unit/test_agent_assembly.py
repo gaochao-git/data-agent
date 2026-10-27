@@ -341,3 +341,19 @@ def test_write_todos_middleware_uses_compact_chinese_prompt():
     assert "completed" in description
     assert len(system_prompt) <= 400
     assert "多步任务" in system_prompt
+
+
+def test_sandbox_renewal_callback_only_for_sandbox_backend():
+    """local 模式返回 None（零续期开销）；sandbox 返回绑定的续期方法。"""
+    from types import SimpleNamespace
+
+    from apps.chat_data_app.agent.data_agent import _sandbox_renewal_callback
+
+    async def _renew():
+        return None
+
+    local = SimpleNamespace(backend_name="local")
+    assert _sandbox_renewal_callback(local) is None
+
+    sandbox = SimpleNamespace(backend_name="sandbox", renew_sandbox_async=_renew)
+    assert _sandbox_renewal_callback(sandbox) is _renew
