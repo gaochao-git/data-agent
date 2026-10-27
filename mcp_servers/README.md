@@ -4,10 +4,19 @@
 从 fullstack-langgraph 平移至本仓库自维护，基于官方 `mcp==2.2.0` 的
 `MCPServer`（MCP 协议 2026-07-28 世代 SDK）实现，streamable-http 传输。
 
-| server | 端口（默认） | 工具数 | 职责 |
+| server | 端口（默认） | 工具 | 职责 |
 | --- | --- | --- | --- |
-| `db_query_server` | `MCP_DB_QUERY_PORT`（3001） | 8 | MySQL 只读诊断：连接/状态/变量/锁/复制/事务/慢查询 |
-| `ssh_exec_server` | `MCP_SSH_EXEC_PORT`（3002） | 12 | Linux 只读巡检：系统/磁盘/进程/网络/文件/日志/快照 |
+| `db_query_server` | `MCP_DB_QUERY_PORT`（3001） | `db_query` | MySQL 只读诊断：连接/状态/变量/锁/复制/事务/慢查询 |
+| `ssh_exec_server` | `MCP_SSH_EXEC_PORT`（3002） | `ssh_exec` | Linux 只读巡检：系统/磁盘/进程/网络/文件/日志/快照 |
+
+每个 server 只暴露一个工具，具体能力由 `action` 路由：
+
+```text
+db_query(action="info" | "status" | "variables" | "connections" | "locks" | "replication" | "transactions" | "slowlog", ...)
+ssh_exec(action="overview" | "disk_usage" | "process_list" | "network_overview" | "network_ping" | "network_port_check" | "network_conn_stat" | "file_read" | "file_grep" | "file_list" | "journal_query" | "snapshot", ...)
+```
+
+这样 MCP 目录从 20 个工具降到 2 个，减少工具 schema 与选择噪声；action 的必填参数由 server 侧校验。
 
 ## 启动（需与主应用同一环境：CHAT_DATA_HOME 必填，依赖见 requirements.txt）
 
@@ -30,8 +39,8 @@ CHAT_DATA_HOME=<数据根> python -m mcp_servers.ssh_exec_server
 ```
 mcp_servers/
 ├── common/               # 配置、输出截断、参数校验、SSH/DB 客户端（两 server 共享）
-├── db_query_server/      # server.py（MCPServer + 8 工具）+ tools/（诊断实现）
-└── ssh_exec_server/      # server.py（MCPServer + 12 工具）+ tools/（巡检实现）
+├── db_query_server/      # server.py（MCPServer + db_query 单工具）+ tools/（诊断实现）
+└── ssh_exec_server/      # server.py（MCPServer + ssh_exec 单工具）+ tools/（巡检实现）
 ```
 
 ## 注意

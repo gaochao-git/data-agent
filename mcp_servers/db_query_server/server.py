@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Database Tools MCP Server（MySQL 只读诊断）。
 
-自 fullstack-langgraph 平移并迁移到官方 ``mcp`` 2.x ``MCPServer``（2026-07-28 协议世代）。
-诊断实现位于 ``tools/``，输出统一走 ``format_result`` JSON 契约。
+一个 MCP 工具 ``db_query``，通过 ``action`` 路由到具体诊断能力。这样客户端目录里
+只多一个工具 schema，而不是 8 个；action 的取值与参数约束由服务端统一校验。
 """
 
 import json
 import logging
+from typing import Literal
 
 from mcp.server.mcpserver import MCPServer
 
@@ -23,172 +24,146 @@ from mcp_servers.db_query_server.tools import (
     mysql_variables,
 )
 
-# 配置日志
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# 创建 MCP 服务器实例（官方 2.x MCPServer，streamable-http 传输）
 mcp = MCPServer("Database Tools Server")
 
-# 仅保留紧急安全兜底，正常的大结果由 agent 层统一做 artifact/offload 管理。
 EMERGENCY_OUTPUT_LIMIT_KB = 2048
+
+DBAction = Literal[
+    "info",
+    "status",
+    "variables",
+    "connections",
+    "locks",
+    "replication",
+    "transactions",
+    "slowlog",
+]
 
 
 def json_dumps(obj, **kwargs):
-    """输出不转义中文的 JSON"""
+    """输出不转义中文的 JSON。"""
     return json.dumps(obj, ensure_ascii=False, default=str, **kwargs)
 
 
 def format_result(result: dict, max_size_kb: int = EMERGENCY_OUTPUT_LIMIT_KB) -> str:
-    """格式化脚本执行结果，应用输出截断
-
-    Args:
-        result: 脚本执行结果 dict
-        max_size_kb: 最大输出大小（KB）
-
-    Returns:
-        格式化后的 JSON 字符串
-    """
-    # 先序列化为 JSON
+    """格式化脚本执行结果，应用输出截断。"""
     json_str = json_dumps(result, indent=2)
-
-    # 检查大小
-    if len(json_str.encode('utf-8')) <= max_size_kb * 1024:
+    if len(json_str.encode("utf-8")) <= max_size_kb * 1024:
         return json_str
-
-    # 需要截断
     truncated = truncate_output(json_str, max_size_kb=max_size_kb)
-
     if truncated["truncated"]:
-        # 返回截断后的内容和警告
         return f"{truncated['content']}\n\n⚠️ {truncated['warning']}"
-
     return json_str
 
 
-# ============== MySQL 工具 ==============
-
-@mcp.tool()
-async def db_mysql_info(ip: str, port: int = 3306) -> str:
-    """获取 MySQL 数据库基本信息（版本、运行时间、数据库列表、关键配置）
-
-    参考技能: skill_load("ops-health-inspection", ["sop/mysql-check"])
-
-    Args:
-        ip: 数据库主机 IP，字段名固定为 ip
-        port: 数据库端口
-    """
-    result = mysql_info.execute(db_host=ip, port=port)
-    return format_result(result)
+def _validate_action(action: str) -> str:
+    known = set(DBAction.__args__)
+    if action not in known:
+        raise ValueError(f"不支持的 action: {action!r}；可选: {', '.join(sorted(known))}")
+    return action
 
 
-@mcp.tool()
-async def db_mysql_status(ip: str, port: int = 3306, pattern: str = "") -> str:
-    """查询 MySQL 状态变量（SHOW STATUS）
-
-    Args:
-        ip: 数据库主机 IP，字段名固定为 ip
-        port: 数据库端口
-        pattern: 过滤模式（如 Threads、Conn、Query）
-    """
-    result = mysql_status.execute(db_host=ip, port=port, pattern=pattern)
-    return format_result(result)
-
-
-@mcp.tool()
-async def db_mysql_variables(ip: str, port: int = 3306, pattern: str = "") -> str:
-    """查询 MySQL 配置变量（SHOW VARIABLES）
-
-    Args:
-        ip: 数据库主机 IP，字段名固定为 ip
-        port: 数据库端口
-        pattern: 过滤模式（如 timeout、buffer、innodb）
-    """
-    result = mysql_variables.execute(db_host=ip, port=port, pattern=pattern)
-    return format_result(result)
-
-
-@mcp.tool()
-async def db_mysql_connections(ip: str, port: int = 3306) -> str:
-    """检查 MySQL 连接数（当前连接数、最大连接数、连接来源分布、活跃查询）
-
-    Args:
-        ip: 数据库主机 IP，字段名固定为 ip
-        port: 数据库端口
-    """
-    result = mysql_connections.execute(db_host=ip, port=port)
-    return format_result(result)
+def _dispatch(
+    action: str,
+    *,
+    ip: str,
+    port: int,
+    pattern: str,
+    min_seconds: int,
+    since: str | None,
+    until: str | None,
+    min_time: float,
+    limit: int,
+    timeout: int,
+) -> dict:
+    if action == "info":
+        return mysql_info.execute(db_host=ip, port=port)
+    if action == "status":
+        return mysql_status.execute(db_host=ip, port=port, pattern=pattern)
+    if action == "variables":
+        return mysql_variables.execute(db_host=ip, port=port, pattern=pattern)
+    if action == "connections":
+        return mysql_connections.execute(db_host=ip, port=port)
+    if action == "locks":
+        return mysql_locks.execute(db_host=ip, port=port)
+    if action == "replication":
+        return mysql_replication.execute(db_host=ip, port=port)
+    if action == "transactions":
+        return mysql_transactions.execute(db_host=ip, port=port, min_seconds=min_seconds)
+    return mysql_slowlog.execute(
+        db_host=ip,
+        port=port,
+        since=since,
+        until=until,
+        min_time=min_time,
+        limit=limit,
+        timeout=timeout,
+    )
 
 
 @mcp.tool()
-async def db_mysql_locks(ip: str, port: int = 3306) -> str:
-    """检查 MySQL 锁等待（锁等待、持锁事务、死锁信息）
-
-    Args:
-        ip: 数据库主机 IP，字段名固定为 ip
-        port: 数据库端口
-    """
-    result = mysql_locks.execute(db_host=ip, port=port)
-    return format_result(result)
-
-
-@mcp.tool()
-async def db_mysql_replication(ip: str, port: int = 3306) -> str:
-    """检查 MySQL 复制状态（主从复制 + 半同步）
-
-    Args:
-        ip: 数据库主机 IP，字段名固定为 ip
-        port: 数据库端口
-    """
-    result = mysql_replication.execute(db_host=ip, port=port)
-    return format_result(result)
-
-
-@mcp.tool()
-async def db_mysql_transactions(ip: str, port: int = 3306, min_seconds: int = 1) -> str:
-    """检查 MySQL 长事务（超过指定秒数的未提交事务）
-
-    Args:
-        ip: 数据库主机 IP，字段名固定为 ip
-        port: 数据库端口
-        min_seconds: 最小运行时间（秒）
-    """
-    result = mysql_transactions.execute(db_host=ip, port=port, min_seconds=min_seconds)
-    return format_result(result)
-
-
-@mcp.tool()
-async def db_mysql_slowlog(
+async def db_query(
+    action: DBAction,
     ip: str,
     port: int = 3306,
-    since: str = None,
-    until: str = None,
+    pattern: str = "",
+    min_seconds: int = 1,
+    since: str | None = None,
+    until: str | None = None,
     min_time: float = 1.0,
     limit: int = 50,
-    timeout: int = 60
+    timeout: int = 60,
 ) -> str:
-    """分析 MySQL 慢查询日志（使用 pt-query-digest）
+    """MySQL 只读诊断统一入口。先选 action，再按该 action 的参数说明传参。
+
+    action:
+      info         基本信息（版本/运行时间/库列表/关键配置）；只用 ip/port
+      status       SHOW STATUS；pattern 过滤（如 Threads、Conn、Query）
+      variables    SHOW VARIABLES；pattern 过滤（如 timeout、buffer、innodb）
+      connections  当前连接数/最大连接数/来源分布/活跃查询；只用 ip/port
+      locks        锁等待/持锁事务/死锁；只用 ip/port
+      replication  主从复制 + 半同步；只用 ip/port
+      transactions 长事务；min_seconds 最小未提交秒数
+      slowlog      慢查询分析；since/until/min_time/limit/timeout
 
     Args:
+        action: 诊断动作，取值为上述 action 之一
         ip: 数据库主机 IP，字段名固定为 ip
-        port: 数据库端口，默认 3306
-        since: 开始时间，格式 "YYYY-MM-DD HH:MM:SS" 或 "1h"/"2d"/"1w"
-        until: 结束时间，格式同 since
-        min_time: 最小执行时间（秒），过滤掉更快的查询，默认 1.0
-        limit: 返回 Top N 条慢查询，默认 50
-        timeout: 超时时间（秒），默认 60
+        port: 数据库端口
+        pattern: status/variables 的过滤模式，其他 action 忽略
+        min_seconds: transactions 的最小事务时长
+        since: slowlog 开始时间（"YYYY-MM-DD HH:MM:SS" 或 "1h"/"2d"/"1w"）
+        until: slowlog 结束时间
+        min_time: slowlog 最小执行时间（秒）
+        limit: slowlog 返回 Top N
+        timeout: slowlog 分析超时（秒）
     """
-    result = mysql_slowlog.execute(
-        db_host=ip, port=port, since=since, until=until,
-        min_time=min_time, limit=limit, timeout=timeout
-    )
+    try:
+        _validate_action(action)
+        result = _dispatch(
+            action,
+            ip=ip,
+            port=port,
+            pattern=pattern,
+            min_seconds=min_seconds,
+            since=since,
+            until=until,
+            min_time=min_time,
+            limit=limit,
+            timeout=timeout,
+        )
+    except Exception as exc:  # noqa: BLE001 - MCP 边界统一转成模型可读错误
+        logger.warning("db_query action=%s failed: %s", action, exc)
+        result = {"success": False, "error": str(exc)}
     return format_result(result)
 
 
 def main():
     logger.info("Starting Database Tools Server on port %s", MCP_DB_QUERY_PORT)
     logger.info("Database User: %s", "见 MCP_DIAG_DB_USER 环境变量")
-    # streamable-http 传输（MCP 2026-07-28 世代 SDK）
     mcp.run("streamable-http", host="0.0.0.0", port=MCP_DB_QUERY_PORT)
 
 
