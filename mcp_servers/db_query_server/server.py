@@ -202,6 +202,24 @@ def _dispatch(
     )
 
 
+def _error_result(action: str, exc: Exception) -> dict:
+    """参数/执行错误时附带 help，让模型能直接按 action_help 重试。"""
+    actions = _help_payload()["actions"]
+    if action in actions:
+        return {
+            "success": False,
+            "error": str(exc),
+            "hint": f"action={action} 参数错误；先调用 action='help'，或按下方 action_help 修正 action_payload",
+            "action_help": actions[action],
+        }
+    return {
+        "success": False,
+        "error": str(exc),
+        "hint": "先调用 action='help' 查看可用 action 及各命令的 action_payload",
+        "available_actions": sorted(_ACTIONS),
+    }
+
+
 @mcp.tool()
 async def db_query(
     action: str,
@@ -216,6 +234,8 @@ async def db_query(
     1. 首次调用 action="help"，读取每个命令的 action_payload 字段和示例。
     2. 调用具体 action，公共参数传 ip/port/timeout，命令参数全部放进 action_payload。
 
+    参数错误时返回体会带 hint/action_help（未知 action 带 available_actions），按提示修正后重试。
+
     已支持 action: info / status / variables / connections / locks / replication / transactions / slowlog。
     """
     action = str(action or "").strip()
@@ -228,7 +248,7 @@ async def db_query(
         result = _dispatch(action, ip=ip, port=port, timeout=timeout, payload=payload)
     except Exception as exc:  # noqa: BLE001 - MCP 边界统一转成模型可读错误
         logger.warning("db_query action=%s failed: %s", action, exc)
-        result = {"success": False, "error": str(exc)}
+        result = _error_result(action, exc)
     return format_result(result)
 
 

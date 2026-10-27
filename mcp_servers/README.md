@@ -19,7 +19,7 @@ ssh_exec(action="help")     → 查看各 action 的 action_payload 字段与示
 ssh_exec(action="file_grep", ip="10.0.0.12", action_payload={"file_path": "/var/log/app.log", "pattern": "ERROR"})
 ```
 
-公共参数（`ip` / `port` / `timeout`）放在顶层；命令参数统一放 `action_payload`，由服务端按 action 校验未知字段和必填字段。
+公共参数（`ip` / `port` / `timeout`）放在顶层；命令参数统一放 `action_payload`，由服务端按 action 校验未知字段和必填字段。参数错误时结果会带 `hint` 和 `action_help`，未知 action 会带 `available_actions`，模型可据此自行修正后重试。
 
 ## 启动（需与主应用同一环境：CHAT_DATA_HOME 必填，依赖见 requirements.txt）
 
