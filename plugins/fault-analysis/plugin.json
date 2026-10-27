@@ -10,8 +10,10 @@
       "transport": "streamable_http",
       "url": "http://127.0.0.1:3001/mcp",
       "description": "MySQL 诊断（本仓库 mcp_servers/db_query_server）：单工具 db_query，通过 action 路由连接/状态/变量/锁/复制/事务/慢查询",
-      "tool_labels": {
-        "db_query": "MySQL 只读诊断"
+      "tools": {
+        "db_query": {
+          "label": "MySQL 只读诊断"
+        }
       }
     },
     {
@@ -19,8 +21,10 @@
       "transport": "streamable_http",
       "url": "http://127.0.0.1:3002/mcp",
       "description": "Linux 只读巡检（本仓库 mcp_servers/ssh_exec_server）：单工具 ssh_exec，通过 action 路由系统/磁盘/进程/网络/文件/日志/快照",
-      "tool_labels": {
-        "ssh_exec": "Linux 只读巡检"
+      "tools": {
+        "ssh_exec": {
+          "label": "Linux 只读巡检"
+        }
       }
     }
   ]
