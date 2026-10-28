@@ -19,8 +19,6 @@ from apps.chat_data_app.daos.plugin_dao import PluginDao
 from utils.logger import get_logger
 from utils.storage_paths import CHAT_DATA_HOME
 
-from ..contracts.mcp_server_source import register_mcp_server_source
-from ..contracts.skill_source import register_skill_source
 from .manifest import (
     PLUGIN_MANIFEST_FILENAME,
     PluginManifest,
@@ -160,7 +158,7 @@ def enabled_plugin_mcp_servers() -> list[dict[str, Any]]:
     return entries
 
 
-class _LoaderSkillSource:
+class PluginSkillSource:
     """把 plugins.loader 的现有函数适配成 SkillSourcePort。"""
 
     def enabled_plugin_skill_sources(self) -> list[tuple[str, Path]]:
@@ -170,23 +168,19 @@ class _LoaderSkillSource:
         await refresh_plugin_state()
 
 
-register_skill_source(_LoaderSkillSource())
-
-
-class _LoaderMcpServerSource:
+class PluginMcpServerSource:
     """把 plugins.loader 的 MCP server 声明适配成 McpServerSourcePort。"""
 
     def enabled_plugin_mcp_servers(self) -> list[dict[str, Any]]:
         return enabled_plugin_mcp_servers()
 
 
-register_mcp_server_source(_LoaderMcpServerSource())
-
-
 __all__ = [
     "PLUGINS_DIR_NAME",
     "PLUGIN_MANIFEST_FILENAME",
+    "PluginMcpServerSource",
     "PluginMetadata",
+    "PluginSkillSource",
     "clear_metadata_cache",
     "enabled_plugin_mcp_servers",
     "enabled_plugin_skill_sources",

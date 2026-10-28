@@ -43,11 +43,17 @@ MCP_TOOL_LABEL_MAX_LENGTH = 100
 MCP_TOOL_TIMEOUT_MIN_MS = 1_000
 MCP_TOOL_TIMEOUT_MAX_MS = 30 * 60 * 1_000
 MCP_TOOL_TIMEOUT_ENV = "CHAT_DATA_MCP_TOOL_TIMEOUT_SECONDS"
+MCP_CONNECT_TIMEOUT_ENV = "CHAT_DATA_MCP_CONNECT_TIMEOUT_SECONDS"
 
 
 def default_mcp_tool_timeout_ms() -> int:
     """全局默认 MCP 工具超时（毫秒）；与 ``MCPToolManager`` 共用同一 env 口径。"""
     return read_positive_int_env(MCP_TOOL_TIMEOUT_ENV, 60) * 1_000
+
+
+def default_mcp_connect_timeout_seconds() -> int:
+    """连接/initialize/discover 握手超时（秒）；与工具调用超时分离。"""
+    return read_positive_int_env(MCP_CONNECT_TIMEOUT_ENV, 15)
 
 
 @dataclass(frozen=True)

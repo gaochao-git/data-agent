@@ -32,12 +32,11 @@ from pydantic import BaseModel, Field, create_model
 
 from utils.logger import get_logger
 
+from ..contracts.mcp_tools import MCP_TOOL_CALL_TOOL_NAME, MCP_TOOL_SEARCH_TOOL_NAME
 from .manager import MCPToolInfo, MCPToolManager
 
 logger = get_logger(__name__)
 
-MCP_TOOL_SEARCH_TOOL_NAME = "mcp_tool_search"
-MCP_TOOL_CALL_TOOL_NAME = "mcp_tool_call"
 MCP_TOOL_DESCRIPTION_WARN_CHARS = 500
 
 # BM25 (Okapi) 参数：业界常规取值。

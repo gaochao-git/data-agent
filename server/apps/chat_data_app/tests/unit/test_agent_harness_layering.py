@@ -13,6 +13,7 @@ AGENT_DIR = Path(__file__).resolve().parents[2] / "agent"
 
 # 当前基线：允许存在的包级依赖边（只许减少，不许新增）。
 KNOWN_EDGES = {
+    ("(root)", "contracts"),
     ("(root)", "mcp"),
     ("(root)", "middleware"),
     ("(root)", "plugins"),
@@ -29,9 +30,8 @@ KNOWN_EDGES = {
     ("middleware", "workspace"),
     ("plugins", "contracts"),
     ("plugins", "mcp"),
-    ("run", "mcp"),
+    ("run", "contracts"),
     ("skills", "contracts"),
-    ("skills", "workspace"),
     ("tools", "workspace"),
     ("workspace", "contracts"),
 }
@@ -124,3 +124,17 @@ def test_harness_package_graph_is_acyclic():
 
     for node in sorted(graph):
         _visit(node)
+
+
+def test_explicit_port_configuration_is_idempotent():
+    from apps.chat_data_app.agent.contracts.mcp_server_source import get_mcp_server_source
+    from apps.chat_data_app.agent.contracts.skill_source import get_skill_snapshot_source, get_skill_source
+    from apps.chat_data_app.agent.contracts.workspace_preview import get_workspace_preview_source
+    from apps.chat_data_app.agent.port_config import configure_default_harness_ports
+
+    configure_default_harness_ports()
+    configure_default_harness_ports()
+    assert get_mcp_server_source() is not None
+    assert get_skill_source() is not None
+    assert get_skill_snapshot_source() is not None
+    assert get_workspace_preview_source() is not None

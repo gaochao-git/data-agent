@@ -11,8 +11,8 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 
-from apps.chat_data_app.agent.mcp.catalog import MCP_TOOL_CALL_TOOL_NAME
-from apps.chat_data_app.agent.mcp.manager import get_mcp_tool_display_name
+from apps.chat_data_app.agent.contracts.mcp_display import get_mcp_tool_display_name
+from apps.chat_data_app.agent.contracts.mcp_tools import MCP_TOOL_CALL_TOOL_NAME
 from apps.chat_data_app.agent.run.agent_inbox_service import (
     AgentRunLeaseLostError,
     is_valid_redis_stream_id,

@@ -53,5 +53,5 @@ ChatData 的业务 Agent 运行域：装配、工具、中间件、提示词、�
 
 `agent/contracts/` 只放 `Protocol` 与纯类型，供上层依赖、由装配层注入实现；目前
 `InboxPort` 断开 `middleware -> run`，`SkillSourcePort` / `SkillSnapshotPort` /
-`McpServerSourcePort` 分别断开 skills/workspace/plugins 的包级环。新增跨层 Port 前先确认
+`McpServerSourcePort` / `WorkspacePreviewPort` 分别断开 skills/workspace/plugins 的包级环。新增跨层 Port 前先确认
 确实存在反向依赖/环，普通工具函数不抽 Port。

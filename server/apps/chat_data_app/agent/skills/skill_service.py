@@ -5,7 +5,6 @@ import mimetypes
 import os
 import re
 import shutil
-import tempfile
 import uuid
 from collections.abc import Mapping
 from pathlib import Path
@@ -31,7 +30,8 @@ from utils.skill_paths import (
     physical_skill_category_root,
 )
 
-from ..contracts.skill_source import get_skill_source, register_skill_snapshot_source
+from ..contracts.skill_source import get_skill_source
+from ..contracts.workspace_preview import get_workspace_preview_source
 from . import SkillMetadata, activate_skill, clear_metadata_cache, load_metadata, parse_metadata
 
 logger = get_logger(__name__)
@@ -1072,40 +1072,14 @@ class SkillService:
         office_source_max_bytes = office_source_max_mb * 1024 * 1024
         if target.stat().st_size > office_source_max_bytes:
             raise ValueError(f"文件过大，暂不支持预览超过 {_format_size_limit(office_source_max_bytes)} 的 Office 文件")
-        # 局部导入：agent.workspace 链路较重，且避免 agent/skills 与 agent/workspace 潜在循环导入
-        from apps.chat_data_app.agent.workspace.runtime import OFFICE_PREVIEW_MAX_CHARS, ConversationWorkspaceRuntime
-        from apps.chat_data_app.agent.workspace.workspace_special_services import workspace_office_preview_service
-
-        with tempfile.TemporaryDirectory(prefix="skill-office-preview-") as stage_root:
-            stage_dir = Path(stage_root) / "workspace"
-            stage_dir.mkdir()
-            staged = stage_dir / target.name
-            try:
-                # 同盘硬链接零拷贝；跨设备等失败时退回复制
-                os.link(target, staged)
-            except OSError:
-                await asyncio.to_thread(shutil.copyfile, target, staged)
-            runtime = ConversationWorkspaceRuntime(
-                workspace_root=stage_root,
-                user_id=user_id,
-                backend="local",
-            )
-            preview = await workspace_office_preview_service.render_html(
-                runtime,
-                file_path=f"/mnt/user-data/workspace/{target.name}",
-                max_chars=OFFICE_PREVIEW_MAX_CHARS,
-            )
-        if bool(preview.get("truncated")):
-            return {"available": False, "reason": "preview_too_large"}
-        html = str(preview.get("html") or "")
-        if not html:
-            raise RuntimeError("OfficeCLI 未返回 HTML 预览内容")
-        return {
-            "available": True,
-            "renderer": "officecli-html",
-            "html": html,
-            "truncated": False,
-        }
+        preview_source = get_workspace_preview_source()
+        if preview_source is None:
+            raise RuntimeError("Office 预览服务未注册")
+        return await preview_source.render_skill_office_preview(
+            target,
+            user_id,
+            max_bytes=office_source_max_bytes,
+        )
 
     async def _resolve_writable_draft_file_async(
         self, skill_id: str, dir_name: str, file_path: str, user_id: str, operator_name: str = ""
@@ -1623,11 +1597,8 @@ class SkillService:
 skill_service = SkillService()
 
 
-class _SkillSnapshotSource:
+class SkillSnapshotSource:
     """把 SkillService 的技能源查询适配成 workspace 快照端口。"""
 
     async def list_runtime_skill_sources_async(self, user_id: str) -> list[tuple[str, Path]]:
         return await skill_service.list_runtime_skill_sources_async(user_id)
-
-
-register_skill_snapshot_source(_SkillSnapshotSource())

@@ -19,6 +19,7 @@ from apps.chat_data_app.agent.mcp.config import (  # noqa: E402
     MCPServerConfig,
     MCPServerConfigError,
     MCPToolPolicy,
+    default_mcp_connect_timeout_seconds,
     load_mcp_server_configs,
     parse_mcp_server_config,
 )
@@ -714,3 +715,10 @@ async def test_tool_description_is_truncated_to_admission_limit(monkeypatch):
     assert tools
     assert all(len(tool.description) <= 5 for tool in tools)
     assert any("tool_description_too_long" in message for message in warnings)
+
+
+def test_default_mcp_connect_timeout_is_independent(monkeypatch):
+    monkeypatch.delenv("CHAT_DATA_MCP_CONNECT_TIMEOUT_SECONDS", raising=False)
+    assert default_mcp_connect_timeout_seconds() == 15
+    monkeypatch.setenv("CHAT_DATA_MCP_CONNECT_TIMEOUT_SECONDS", "7")
+    assert default_mcp_connect_timeout_seconds() == 7

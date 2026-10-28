@@ -57,6 +57,7 @@ token 估算；MCP 工具描述超过 500 字符时告警（提示插件作者�
 ```bash
 # server/.env（MCP 连接相关的全局参数）
 CHAT_DATA_MCP_TOOL_TIMEOUT_SECONDS=60       # 全局默认工具超时；插件可按工具覆盖 timeout_ms
+CHAT_DATA_MCP_CONNECT_TIMEOUT_SECONDS=15    # initialize/discover 握手超时，与工具超时分离
 CHAT_DATA_MCP_TOOLS_CACHE_TTL_SECONDS=300   # 工具枚举缓存 TTL
 ```
 

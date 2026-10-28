@@ -22,7 +22,7 @@ import re
 import time
 from collections.abc import AsyncIterator, Callable, Coroutine
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -35,7 +35,12 @@ from utils.logger import get_logger
 
 from ...services.runtime_config import read_positive_int_env
 from .admission import MCPAdmissionError, max_tool_description_chars, validate_mcp_server_tools
-from .config import MCPServerConfig, default_mcp_tool_timeout_ms, load_mcp_server_configs
+from .config import (
+    MCPServerConfig,
+    default_mcp_connect_timeout_seconds,
+    default_mcp_tool_timeout_ms,
+    load_mcp_server_configs,
+)
 
 logger = get_logger(__name__)
 
@@ -80,12 +85,18 @@ class MCPToolInfo:
 
 
 @asynccontextmanager
-async def open_mcp_session(config: MCPServerConfig, *, timeout_seconds: int = 60) -> AsyncIterator[Client]:
+async def open_mcp_session(
+    config: MCPServerConfig,
+    *,
+    timeout_seconds: int = 60,
+    connect_timeout_seconds: int | None = None,
+) -> AsyncIterator[Client]:
     """按传输类型打开一个已连接的 2.x ``Client`` 门面。
 
-    ``mode=auto``：新协议 server 走 ``server/discover``（按请求、无握手），
-    旧协议 server 回退 initialize 握手——对两代 server 同时兼容。
-    streamable_http 的自定义 headers 经 httpx2 客户端注入。
+    ``timeout_seconds`` 是握手后的请求 read timeout；``connect_timeout_seconds``
+    只约束 initialize/discover 握手，避免某个长工具超时把不可达 server 的失败
+    拖到几分钟。``mode=auto``：新协议走 ``server/discover``，旧协议回退
+    initialize；streamable_http 的自定义 headers 经 httpx2 注入。
     """
     if config.transport != "streamable_http":
         raise ValueError(f"只支持 streamable_http，当前: {config.transport}")
@@ -99,7 +110,14 @@ async def open_mcp_session(config: MCPServerConfig, *, timeout_seconds: int = 60
     else:
         server = config.url
 
-    async with Client(server, mode="auto", read_timeout_seconds=float(timeout_seconds)) as client:
+    connect_timeout = (
+        connect_timeout_seconds if connect_timeout_seconds is not None else default_mcp_connect_timeout_seconds()
+    )
+    async with AsyncExitStack() as stack:
+        client = Client(server, mode="auto", read_timeout_seconds=float(timeout_seconds))
+        # 只把握手包在 connect timeout 内；进入后仍用工具级 read timeout。
+        async with asyncio.timeout(connect_timeout):
+            await stack.enter_async_context(client)
         yield client
 
 
@@ -183,6 +201,7 @@ class MCPToolManager:
         self,
         *,
         tool_timeout_seconds: int | None = None,
+        connect_timeout_seconds: int | None = None,
         cache_ttl_seconds: int | None = None,
         session_factory: Callable | None = None,
         config_loader: Callable[[], list[MCPServerConfig]] | None = None,
@@ -190,11 +209,18 @@ class MCPToolManager:
         self._tool_timeout = (
             tool_timeout_seconds if tool_timeout_seconds is not None else default_mcp_tool_timeout_ms() // 1_000
         )
+        self._connect_timeout = (
+            connect_timeout_seconds if connect_timeout_seconds is not None else default_mcp_connect_timeout_seconds()
+        )
         self._cache_ttl = (
             cache_ttl_seconds if cache_ttl_seconds is not None else read_positive_int_env(_MCP_TOOLS_CACHE_TTL_ENV, 300)
         )
         self._session_factory = session_factory or (
-            lambda config: open_mcp_session(config, timeout_seconds=self._session_timeout_seconds(config))
+            lambda config: open_mcp_session(
+                config,
+                timeout_seconds=self._session_timeout_seconds(config),
+                connect_timeout_seconds=self._connect_timeout,
+            )
         )
         self._config_loader = config_loader or load_mcp_server_configs
         self._tools_cache: list[MCPToolInfo] | None = None
