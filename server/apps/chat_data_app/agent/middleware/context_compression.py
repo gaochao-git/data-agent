@@ -468,7 +468,11 @@ def create_context_compression_middleware(
             messages,
             str((state or {}).get("context_summary") or "").strip() or None,
         )
-        budget = compression_budget.configure(system_prompt, request_tools, model_id=model_id)
+        budget = (
+            compression_budget.budget
+            if compression_budget.is_configured
+            else compression_budget.configure(system_prompt, request_tools, model_id=model_id)
+        )
 
         def _notify_compression_started() -> None:
             _emit_compression_started_event(messages)

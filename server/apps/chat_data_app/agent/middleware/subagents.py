@@ -55,6 +55,8 @@ from utils.tool_call_args import coerce_tool_call_args
 from ..agent_runtime import on_tool_error
 from ..agent_state import merge_context_compression_events, merge_loaded_skill_names
 from ..context.context_budget import (
+    ContextBudget,
+    ContextRequestBudget,
     count_messages_tokens,
     count_tools_tokens,
     estimate_text_tokens,
@@ -181,6 +183,10 @@ class SubagentSpec:
     recursion_limit: int | None = None
     # 仅 sandbox 模式：模型调用前后续期同一个沙箱（子智能体与主智能体共用工作区）。
     sandbox_renewal: Any = None
+    # 编译期创建、压缩/预算告警/用量展示共享的同一份请求预算；运行期由
+    # ``_compile_subagent`` 写入（frozen dataclass 内部构建缓存，不参与身份），
+    # 避免三处重复解析模型预算与静态 token。
+    _context_request_budget: Any = field(default=None, init=False, compare=False, hash=False, repr=False)
 
 
 def validate_subagent_specs(specs: list[SubagentSpec]) -> None:
@@ -339,7 +345,12 @@ def create_subagent_budget_alert_middleware(
     前插进每次请求（与主图 ``ContextUsageMiddleware`` 同语义），且预算计数
     必须包含摘要 tokens，否则告警线漏算。只改当轮请求，不写 state、不落 checkpoint。
     """
-    meta = _subagent_budget_meta(spec, tools, system_prompt=system_prompt)
+    meta = _subagent_budget_meta(
+        spec,
+        tools,
+        system_prompt=system_prompt,
+        context_request_budget=getattr(spec, "_context_request_budget", None),
+    )
     static_tokens = meta["static_tokens"]
     threshold = meta["threshold_tokens"]
 
@@ -444,6 +455,7 @@ def _subagent_budget_meta(
     tools: list,
     *,
     system_prompt: str | None = None,
+    context_request_budget: ContextRequestBudget | None = None,
 ) -> dict[str, int]:
     """子图预算告警的公共口径：静态 token（system+tools）与告警阈值。
 
@@ -454,8 +466,17 @@ def _subagent_budget_meta(
     （窗口 × 比例，clamp 到硬限），换模型窗口后配置不失真。
     ``system_prompt`` 传入增强后的实际 system prompt（含技能目录段），缺省用
     spec.system_prompt。
+    传入已配置的 ``context_request_budget`` 时直接复用它，避免与压缩中间件
+    各自重复解析模型预算、重复估算 system+tools token。
     """
-    budget = get_model_context_budget(spec.model_id)
+    if context_request_budget is not None and context_request_budget.is_configured:
+        budget: ContextBudget = context_request_budget.budget
+        static_tokens = context_request_budget.static_input_tokens
+    else:
+        budget = get_model_context_budget(spec.model_id)
+        static_tokens = estimate_text_tokens(system_prompt or spec.system_prompt) + count_tools_tokens(
+            list(tools or [])
+        )
     if SUBAGENT_BUDGET_ALERT_TRIGGER_RATIO is not None:
         threshold_tokens = min(
             max(int(budget.context_window * SUBAGENT_BUDGET_ALERT_TRIGGER_RATIO), 1),
@@ -464,8 +485,7 @@ def _subagent_budget_meta(
     else:
         threshold_tokens = max(int(budget.compression_trigger_tokens), 1)
     return {
-        "static_tokens": estimate_text_tokens(system_prompt or spec.system_prompt)
-        + count_tools_tokens(list(tools or [])),
+        "static_tokens": static_tokens,
         "threshold_tokens": threshold_tokens,
     }
 
@@ -478,7 +498,12 @@ def _safe_subagent_budget_meta(
 ) -> dict[str, int] | None:
     """用量推送口径的降级封装：预算查询失败只放弃展示，不影响 task 执行。"""
     try:
-        return _subagent_budget_meta(spec, tools, system_prompt=system_prompt)
+        return _subagent_budget_meta(
+            spec,
+            tools,
+            system_prompt=system_prompt,
+            context_request_budget=getattr(spec, "_context_request_budget", None),
+        )
     except Exception as exc:
         logger.warning("[tools] 子图上下文用量口径获取失败，本次派发不做用量推送: %s", exc)
         return None
@@ -495,6 +520,17 @@ def _compile_subagent(spec: SubagentSpec, run_controls: Any = None) -> Any:
     # 技能目录与主智能体一致继承：增强后的 system prompt（含 <available_skills> 段）
     # 是压缩中间件、预算告警静态 token 与 create_agent 三处的同一份口径。
     effective_system_prompt = _subagent_system_prompt(spec)
+    # 同一份请求预算供压缩、预算告警、用量展示共用；静态 token 只按子图
+    # 增强后的 system prompt + 实际工具集算一次。
+    subagent_static_tokens = estimate_text_tokens(effective_system_prompt) + count_tools_tokens(tools)
+    subagent_request_budget = ContextRequestBudget(spec.model_id)
+    subagent_request_budget.configure(
+        effective_system_prompt,
+        tools,
+        model_id=spec.model_id,
+        static_input_tokens=subagent_static_tokens,
+    )
+    object.__setattr__(spec, "_context_request_budget", subagent_request_budget)
     # 相对顺序与主图 MIDDLEWARE_CANONICAL_ORDER 对齐：出口处理链（归一化→结果→
     # 错误）的次序保持不变。压缩中间件是 before_model 节点（独立图节点，先于
     # 模型调用改写 state），预算告警是 wrap_model_call，二者无顺序耦合；
@@ -509,6 +545,7 @@ def _compile_subagent(spec: SubagentSpec, run_controls: Any = None) -> Any:
             system_prompt=effective_system_prompt,
             tools=tools,
             model_id=spec.model_id,
+            context_request_budget=subagent_request_budget,
             state_schema=ChatDataSubAgentState,
         ),
         create_subagent_budget_alert_middleware(

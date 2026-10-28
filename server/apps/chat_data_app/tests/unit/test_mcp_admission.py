@@ -255,3 +255,23 @@ def test_report_summary_lists_error_codes():
     report = validate_mcp_server_tools("srv", [])
     assert json.dumps(report.error_codes()) == '["no_tools"]'
     assert "no_tools" in report.summary()
+
+
+def test_default_tool_limits_are_16_tools_2kb_schema_1024_desc(monkeypatch):
+    for key in (
+        "CHAT_DATA_MCP_MAX_TOOLS_PER_SERVER",
+        "CHAT_DATA_MCP_MAX_TOOL_SCHEMA_BYTES",
+        "CHAT_DATA_MCP_MAX_TOOL_DESCRIPTION_CHARS",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    many = validate_mcp_server_tools("srv", [_tool(f"t{i}") for i in range(17)])
+    assert "too_many_tools" in many.error_codes()
+
+    big_schema = {"type": "object", "properties": {"x": {"type": "string", "description": "x" * 3000}}}
+    big = validate_mcp_server_tools("srv", [_tool("a", big_schema)])
+    assert "tool_schema_too_large" in big.error_codes()
+
+    long_desc = validate_mcp_server_tools("srv", [_tool("a", description="x" * 1025)])
+    assert "tool_description_too_long" in [issue.code for issue in long_desc.warnings]
+    assert long_desc.ok

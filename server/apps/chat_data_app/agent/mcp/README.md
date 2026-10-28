@@ -86,8 +86,8 @@ transport 只支持 `streamable_http`（`url`/`headers`）。`stdio`/`sse` 不�
 | 远程 URL | 必须 https（loopback 例外，`CHAT_DATA_MCP_REQUIRE_HTTPS=true`）；禁止 URL 内嵌凭据 |
 | host 白名单 | `CHAT_DATA_MCP_ALLOWED_HOSTS`（逗号分隔，支持 `*.example.com`），留空不限制 |
 | headers | 含控制字符拒绝（防头注入） |
-| 工具面 | `tools/list` 空 → 拒绝；工具数/schema 字节数超限 → 拒绝；重名/非法 schema → 拒绝 |
-| 工具描述 | 超长/含控制字符 → 告警（按截断/原样展示，不阻断挂载） |
+| 工具面 | `tools/list` 空 → 拒绝；单 server 工具数 >16、单工具 schema >2KB → 拒绝；重名/非法 schema → 拒绝 |
+| 工具描述 | 单工具描述 >1024 字符 → 截断并告警；含控制字符 → 告警；不阻断挂载 |
 
 配置级准入在 `load_mcp_server_configs()` 逐条执行（env 与插件声明同口径），硬错误
 只跳过该 server 并记录原因；工具级准入在 `tools/list` 之后执行。插件安装时同口径校验

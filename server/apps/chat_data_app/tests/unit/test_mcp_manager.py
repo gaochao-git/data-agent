@@ -697,3 +697,12 @@ async def test_call_tool_async_unwraps_taskgroup_timeout():
     )
     with pytest.raises(TimeoutError, match="MCP tool srv/slow timed out after 1s"):
         await manager.call_tool_async("srv", "slow", {})
+
+
+@pytest.mark.asyncio
+async def test_tool_description_is_truncated_to_admission_limit(monkeypatch):
+    monkeypatch.setenv("CHAT_DATA_MCP_MAX_TOOL_DESCRIPTION_CHARS", "5")
+    manager, _opens = _make_manager()
+    tools = await manager.list_tools_async()
+    assert tools
+    assert all(len(tool.description) <= 5 for tool in tools)

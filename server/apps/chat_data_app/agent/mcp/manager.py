@@ -34,7 +34,7 @@ from pydantic import BaseModel, Field, create_model
 from utils.logger import get_logger
 
 from ...services.runtime_config import read_positive_int_env
-from .admission import MCPAdmissionError, validate_mcp_server_tools
+from .admission import MCPAdmissionError, max_tool_description_chars, validate_mcp_server_tools
 from .config import MCPServerConfig, default_mcp_tool_timeout_ms, load_mcp_server_configs
 
 logger = get_logger(__name__)
@@ -264,7 +264,7 @@ class MCPToolManager:
                     server_id=config.server_id,
                     name=tool.name,
                     qualified_name=sanitize_mcp_tool_name(config.server_id, tool.name),
-                    description=str(getattr(tool, "description", None) or ""),
+                    description=str(getattr(tool, "description", None) or "")[: max_tool_description_chars()],
                     # mcp 2.x MCPTool 字段名为 input_schema（inputSchema 仅为序列化 alias），
                     # 误取 alias 会恒为 None，导致全部工具 schema 退化为空、模型入参被丢弃
                     input_schema=dict(getattr(tool, "input_schema", None) or getattr(tool, "inputSchema", None) or {})

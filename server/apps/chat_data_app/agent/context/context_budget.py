@@ -425,6 +425,7 @@ class ContextRequestBudget:
         self._max_output_tokens = max_output_tokens
         self._budget = get_model_context_budget(model_id, max_output_tokens=max_output_tokens)
         self._static_input_tokens = REQUEST_OVERHEAD_TOKENS
+        self._configured = False
 
     def configure(
         self,
@@ -432,16 +433,28 @@ class ContextRequestBudget:
         tools: list[Any],
         *,
         model_id: str | None = None,
+        static_input_tokens: int | None = None,
     ) -> ContextBudget:
-        """记录当前 Agent 固定输入，供压缩与用量中间件共享。"""
+        """记录当前 Agent 固定输入，供压缩与用量中间件共享。
+
+        ``static_input_tokens`` 显式传入时复用调用方已算好的口径（子图预算
+        告警/用量与压缩共用同一次 token 估算）；缺省仍按 system+tools 现算。
+        """
         effective_model_id = self._model_id if model_id is None else model_id
         self._budget = get_model_context_budget(effective_model_id, max_output_tokens=self._max_output_tokens)
         self._static_input_tokens = (
-            count_messages_tokens([SystemMessage(content=system_prompt)])
+            max(int(static_input_tokens), 0)
+            if static_input_tokens is not None
+            else count_messages_tokens([SystemMessage(content=system_prompt)])
             + count_tools_tokens(tools)
             + REQUEST_OVERHEAD_TOKENS
         )
+        self._configured = True
         return self._budget
+
+    @property
+    def is_configured(self) -> bool:
+        return self._configured
 
     @property
     def budget(self) -> ContextBudget:
