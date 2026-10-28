@@ -47,6 +47,7 @@ from .prompts.chat_data import (
     build_unified_system_prompt,
 )
 from .runtime_options import AgentRuntimeOptions, get_chat_data_default_runtime_options
+from .tools.catalog import build_tool_catalog
 from .tools.registry import (
     DATA_EXPLORE_EXTRA_EXCLUDED_TOOL_NAMES,
     GENERAL_PURPOSE_EXTRA_EXCLUDED_TOOL_NAMES,
@@ -949,6 +950,7 @@ def describe_agent_assembly(
         "builtin_tools": [tool.name for tool in assembled.builtin_tools],
         "mcp_tools": [tool.name for tool in assembled.mcp_tools],
         "tools": [tool.name for tool in assembled.tools],
+        "tool_catalog": build_tool_catalog(assembled.tools).to_dicts(),
         "middleware": [getattr(item, "name", type(item).__name__) for item in middleware],
         "system_prompt_chars": len(system_prompt),
         "context": {
