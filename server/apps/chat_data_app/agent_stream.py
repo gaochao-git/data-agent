@@ -24,6 +24,7 @@ from langchain_core.messages import (
 
 from utils.alarm import emit_llm_connection_alarm_if_needed, emit_llm_first_token_timeout_alarm
 from utils.logger import get_logger
+from utils.tool_call_markup import sanitize_message_payload
 
 from .agent import (
     AgentRunControls,
@@ -121,9 +122,7 @@ from .services.memory.conversation_memory_service import (
     after_agent_turn_with_memory,
     render_session_memory_block,
 )
-from .services.runtime_config import (
-    LLM_FIRST_TOKEN_TIMEOUT_SECONDS,
-)
+from .services.runtime_config import LLM_FIRST_TOKEN_TIMEOUT_SECONDS
 from .services.setting_service import get_runtime_setting
 from .sse_protocol import (
     SSE_EVENT_CONTEXT_COMPRESSION,
@@ -1001,7 +1000,7 @@ class _AgentSseStreamAdapter:
             yield self.tool_stream_state.build_completion_event(tool_payload)
             yield _format_sse(SSE_EVENT_TOOL, tool_payload)
             return
-        msg_data = message_chunk.model_dump()
+        msg_data = sanitize_message_payload(message_chunk.model_dump())
         msg_data["timestamp"] = _get_timestamp()
         yield _format_sse(SSE_EVENT_MESSAGE, msg_data)
 
