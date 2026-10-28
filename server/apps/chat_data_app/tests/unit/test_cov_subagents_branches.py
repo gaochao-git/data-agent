@@ -88,7 +88,7 @@ def test_compile_subagent_appends_fence_when_run_controls_complete(monkeypatch):
     sm._compile_subagent(spec, run_controls=run_controls)
 
     assert spec._context_request_budget is not None
-    assert captured["compression"]["context_request_budget"] is spec._context_request_budget
+    assert captured["compression"]["context_runtime"].request_budget is spec._context_request_budget
     assert captured["fence"] == {"run_id": "run-1", "owner_token": "token", "inbox_service": "inbox"}
     assert captured["fence"] in captured["agent"]["middleware"]
 

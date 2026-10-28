@@ -23,7 +23,7 @@ import time
 from collections.abc import AsyncIterator, Callable, Coroutine
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from langchain_core.tools import StructuredTool
@@ -264,7 +264,7 @@ class MCPToolManager:
                     server_id=config.server_id,
                     name=tool.name,
                     qualified_name=sanitize_mcp_tool_name(config.server_id, tool.name),
-                    description=str(getattr(tool, "description", None) or "")[: max_tool_description_chars()],
+                    description=str(getattr(tool, "description", None) or ""),
                     # mcp 2.x MCPTool 字段名为 input_schema（inputSchema 仅为序列化 alias），
                     # 误取 alias 会恒为 None，导致全部工具 schema 退化为空、模型入参被丢弃
                     input_schema=dict(getattr(tool, "input_schema", None) or getattr(tool, "inputSchema", None) or {})
@@ -283,6 +283,15 @@ class MCPToolManager:
             logger.warning("MCP server 准入告警: id=%s %s: %s", config.server_id, issue.code, issue.message)
         if not report.ok:
             raise MCPAdmissionError(f"MCP server {config.server_id} 未通过准入: {report.summary()}")
+        # 先按完整描述做准入（超长会告警），再按同一上限截断模型可见描述；
+        # 反过来先截断会让 tool_description_too_long 告警永远无法触发。
+        max_description = max_tool_description_chars()
+        tools = [
+            replace(info, description=info.description[:max_description])
+            if len(info.description) > max_description
+            else info
+            for info in tools
+        ]
         return tools, ttl_ms if isinstance(ttl_ms, int) and ttl_ms > 0 else None
 
     def list_tools(self, *, force_refresh: bool = False) -> list[MCPToolInfo]:

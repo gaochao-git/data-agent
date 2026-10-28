@@ -14,6 +14,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 
+from apps.chat_data_app.agent.mcp import manager as manager_module  # noqa: E402
 from apps.chat_data_app.agent.mcp.config import (  # noqa: E402
     MCPServerConfig,
     MCPServerConfigError,
@@ -702,7 +703,14 @@ async def test_call_tool_async_unwraps_taskgroup_timeout():
 @pytest.mark.asyncio
 async def test_tool_description_is_truncated_to_admission_limit(monkeypatch):
     monkeypatch.setenv("CHAT_DATA_MCP_MAX_TOOL_DESCRIPTION_CHARS", "5")
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        manager_module.logger,
+        "warning",
+        lambda message, *args, **kwargs: warnings.append(str(message) % args if args else str(message)),
+    )
     manager, _opens = _make_manager()
     tools = await manager.list_tools_async()
     assert tools
     assert all(len(tool.description) <= 5 for tool in tools)
+    assert any("tool_description_too_long" in message for message in warnings)

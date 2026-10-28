@@ -33,6 +33,7 @@ from ..context.context_budget import (
     latest_model_name_from_usage,
     sanitize_context_usage_for_response,
 )
+from ..context.runtime import ContextRuntime
 from .context_compression import format_todo_snapshot_lines, neutralize_stale_todo_tool_messages
 
 logger = get_logger(__name__)
@@ -44,17 +45,37 @@ async def _renew_sandbox_if_configured(sandbox_renewal: Callable[[], Awaitable[N
         await sandbox_renewal()
 
 
+def _resolve_usage_runtime(
+    *,
+    model_id: str | None,
+    tools: list[Any] | None,
+    context_request_budget: ContextRequestBudget | None,
+    context_runtime: ContextRuntime | None,
+) -> tuple[str | None, list[Any] | None, ContextRequestBudget | None]:
+    """把 ContextRuntime 展开成工厂内部使用的预算/模型/工具口径。"""
+    if context_runtime is None:
+        return model_id, tools, context_request_budget
+    return context_runtime.model_id, list(context_runtime.tools), context_runtime.request_budget
+
+
 def create_context_usage_middleware(
     model_id: str | None = None,
     *,
     tools: list[Any] | None = None,
     context_request_budget: ContextRequestBudget | None = None,
+    context_runtime: ContextRuntime | None = None,
     state_schema: Any | None = None,
     sandbox_renewal: Callable[[], Awaitable[None]] | None = None,
     name: str = "ContextUsageMiddleware",
 ) -> Any:
     """创建统一的上下文计量与 token usage middleware。"""
     records: list[dict[str, Any]] = []
+    model_id, tools, context_request_budget = _resolve_usage_runtime(
+        model_id=model_id,
+        tools=tools,
+        context_request_budget=context_request_budget,
+        context_runtime=context_runtime,
+    )
     request_budget = context_request_budget or ContextRequestBudget(model_id)
 
     @wrap_model_call(name=name, state_schema=state_schema)
@@ -156,6 +177,7 @@ def create_request_context_usage_middleware(
     *,
     tools: list[Any] | None = None,
     context_request_budget: ContextRequestBudget | None = None,
+    context_runtime: ContextRuntime | None = None,
     state_schema: Any | None = None,
     sandbox_renewal: Callable[[], Awaitable[None]] | None = None,
 ) -> Callable[[ModelRequest], Awaitable[ModelCallResult]]:
@@ -164,6 +186,7 @@ def create_request_context_usage_middleware(
         model_id=model_id,
         tools=tools,
         context_request_budget=context_request_budget,
+        context_runtime=context_runtime,
         state_schema=state_schema,
         sandbox_renewal=sandbox_renewal,
     )

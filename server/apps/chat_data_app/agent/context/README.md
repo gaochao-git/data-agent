@@ -13,3 +13,13 @@
 - 注入时固定前插隐藏 HumanMessage，保持唯一 system 消息。
 
 不在各中间件里重复实现 legacy 迁移/摘要去重，避免主图与子图摘要口径漂移。
+
+## ContextRuntime
+
+`context/runtime.py` 提供一个 agent 运行内的统一上下文对象：
+
+- 一次性解析模型预算并记录 system prompt + tools 的静态 token；
+- 提供 `prepare_messages()` 统一剥离 legacy 摘要、合并运行态摘要、前插隐藏消息；
+- 主图与子图分别创建自己的 runtime，压缩/计量中间件共享同一个 `ContextRequestBudget`。
+
+后续压缩与计量的实现继续向 `runtime.py` 收拢，中间件只保留 LangChain 适配层。

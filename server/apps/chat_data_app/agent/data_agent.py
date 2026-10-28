@@ -18,11 +18,8 @@ from langgraph.graph.state import CompiledStateGraph
 
 from utils.logger import get_logger
 
-from ..agent.context.context_budget import (
-    ContextRequestBudget,
-    count_tools_tokens,
-    get_model_context_budget,
-)
+from ..agent.context.context_budget import count_tools_tokens, get_model_context_budget
+from ..agent.context.runtime import ContextRuntime
 from ..services.llm_config import get_chat_data_llm, get_chat_data_model_config, get_default_chat_data_model
 from ..services.memory.conversation_memory_service import schedule_memory_extraction_now
 from .agent_runtime import (
@@ -639,7 +636,6 @@ def create_agent_from_spec(
     enable_thinking = invocation.enable_thinking
     thinking_effort = invocation.thinking_effort
     runtime = _resolve_workspace_runtime(workspace_runtime, options, user_id)
-    context_request_budget = ContextRequestBudget(model_id)
     builtin_tools = assemble_tools(
         options,
         runtime,
@@ -690,8 +686,12 @@ def create_agent_from_spec(
             "- 本次运行无人实时应答，需要人工审批的工具（例如 MCP 插件中 ask 档位的工具）不会挂载。\n"
             "- 不要尝试调用这些工具；如任务必须使用，请明确说明能力受限并给出替代方案。"
         )
-    context_request_budget.configure(effective_system_prompt, tools, model_id=model_id)
-    context_request_budget.validate_static_input()
+    context_runtime = ContextRuntime.create(
+        model_id=model_id,
+        system_prompt=effective_system_prompt,
+        tools=tools,
+    )
+    context_runtime.request_budget.validate_static_input()
     model = create_streaming_chat_model(
         model_id=model_id,
         enable_thinking=enable_thinking,
@@ -713,7 +713,7 @@ def create_agent_from_spec(
     context_usage_middleware = create_request_context_usage_middleware(
         model_id,
         tools=tools,
-        context_request_budget=context_request_budget,
+        context_runtime=context_runtime,
         state_schema=ChatDataAgentState,
         sandbox_renewal=_sandbox_renewal_callback(runtime),
     )
@@ -721,7 +721,7 @@ def create_agent_from_spec(
         system_prompt=effective_system_prompt,
         tools=tools,
         model_id=model_id,
-        context_request_budget=context_request_budget,
+        context_runtime=context_runtime,
         state_schema=ChatDataAgentState,
         on_dropped_messages=_build_memory_compression_hook(
             conversation_id,

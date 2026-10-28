@@ -63,6 +63,7 @@ from ..context.context_budget import (
     get_model_context_budget,
     inject_runtime_context_summary,
 )
+from ..context.runtime import ContextRuntime
 from ..tools.registry import TOOL_REQUIRED_SKILLS
 from .context_compression import create_context_compression_middleware
 from .sandbox_renewal import create_sandbox_renewal_middleware
@@ -523,14 +524,13 @@ def _compile_subagent(spec: SubagentSpec, run_controls: Any = None) -> Any:
     # 同一份请求预算供压缩、预算告警、用量展示共用；静态 token 只按子图
     # 增强后的 system prompt + 实际工具集算一次。
     subagent_static_tokens = estimate_text_tokens(effective_system_prompt) + count_tools_tokens(tools)
-    subagent_request_budget = ContextRequestBudget(spec.model_id)
-    subagent_request_budget.configure(
-        effective_system_prompt,
-        tools,
+    subagent_runtime = ContextRuntime.create(
         model_id=spec.model_id,
+        system_prompt=effective_system_prompt,
+        tools=tools,
         static_input_tokens=subagent_static_tokens,
     )
-    object.__setattr__(spec, "_context_request_budget", subagent_request_budget)
+    object.__setattr__(spec, "_context_request_budget", subagent_runtime.request_budget)
     # 相对顺序与主图 MIDDLEWARE_CANONICAL_ORDER 对齐：出口处理链（归一化→结果→
     # 错误）的次序保持不变。压缩中间件是 before_model 节点（独立图节点，先于
     # 模型调用改写 state），预算告警是 wrap_model_call，二者无顺序耦合；
@@ -545,7 +545,7 @@ def _compile_subagent(spec: SubagentSpec, run_controls: Any = None) -> Any:
             system_prompt=effective_system_prompt,
             tools=tools,
             model_id=spec.model_id,
-            context_request_budget=subagent_request_budget,
+            context_runtime=subagent_runtime,
             state_schema=ChatDataSubAgentState,
         ),
         create_subagent_budget_alert_middleware(

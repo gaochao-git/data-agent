@@ -35,6 +35,7 @@ from ..context.context_budget import (
     resolve_context_summary_with_legacy,
     resolve_summary_output_budget,
 )
+from ..context.runtime import ContextRuntime
 from ..prompts.context_compression import build_context_compression_summary_prompt
 from ..tool_results import tool_result_recovery
 from .message_integrity import complete_message_boundaries
@@ -444,12 +445,32 @@ def _emit_compression_started_event(messages: list[BaseMessage]) -> None:
         _emit_context_compression_event(started_event)
 
 
+def _resolve_compression_runtime(
+    *,
+    system_prompt: str,
+    tools: list[Any] | None,
+    model_id: str | None,
+    context_request_budget: ContextRequestBudget | None,
+    context_runtime: ContextRuntime | None,
+) -> tuple[str, list[Any], str | None, ContextRequestBudget | None]:
+    """把 ContextRuntime 展开成压缩中间件使用的系统提示词/工具/预算。"""
+    if context_runtime is None:
+        return system_prompt, list(tools or []), model_id, context_request_budget
+    return (
+        context_runtime.system_prompt,
+        list(context_runtime.tools),
+        context_runtime.model_id,
+        context_runtime.request_budget,
+    )
+
+
 def create_context_compression_middleware(
     *,
     system_prompt: str,
     tools: list[Any] | None = None,
     model_id: str | None = None,
     context_request_budget: ContextRequestBudget | None = None,
+    context_runtime: ContextRuntime | None = None,
     state_schema: Any | None = None,
     on_dropped_messages: Callable[[list[BaseMessage]], None] | None = None,
 ) -> Any:
@@ -458,8 +479,14 @@ def create_context_compression_middleware(
     ``on_dropped_messages`` 在压缩即将丢弃消息时同步回调（拷贝传入），供
     会话记忆等外部监听者抢救信息；回调异常不影响压缩主流程。
     """
+    system_prompt, request_tools, model_id, context_request_budget = _resolve_compression_runtime(
+        system_prompt=system_prompt,
+        tools=tools,
+        model_id=model_id,
+        context_request_budget=context_request_budget,
+        context_runtime=context_runtime,
+    )
     compression_budget = context_request_budget or ContextRequestBudget(model_id)
-    request_tools = list(tools or [])
 
     @before_model(name="ContextCompressionMiddleware", state_schema=state_schema)
     async def context_compression_middleware(state: AgentState, _runtime: Runtime) -> dict[str, Any] | None:
