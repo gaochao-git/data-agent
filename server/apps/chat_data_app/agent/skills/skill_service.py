@@ -554,12 +554,39 @@ class SkillService:
     async def get_skill_async(
         self, name: str, include_draft: bool = False, user_id: str = "", user_names: dict[str, str] | None = None
     ) -> dict[str, Any] | None:
+        if str(name).startswith("plugin:"):
+            return await self._get_plugin_skill_detail_async(str(name))
         skill = await self._get_system_skill_detail_async(name)
         if skill:
             return skill
         return await self._get_db_skill_detail_async(
             name, include_draft=include_draft, user_id=user_id, user_names=user_names
         )
+
+    async def _get_plugin_skill_detail_async(self, name: str) -> dict[str, Any] | None:
+        """读取插件技能详情；列表用 plugin:<name> 作为唯一 id。"""
+        from ..contracts.skill_source import get_skill_source
+        from .loader import parse_metadata
+
+        plugin_skill_name = name[len("plugin:") :]
+        source = get_skill_source()
+        for skill_name, skill_dir in source.enabled_plugin_skill_sources() if source is not None else []:
+            if skill_name != plugin_skill_name:
+                continue
+            metadata = await asyncio.to_thread(parse_metadata, skill_dir / "SKILL.md")
+            if not metadata:
+                return None
+            content = await asyncio.to_thread((skill_dir / "SKILL.md").read_text, encoding="utf-8")
+            file_info = await asyncio.to_thread(_list_skill_files, str(skill_dir / "SKILL.md"))
+            info = _system_metadata_to_info(metadata)
+            info.update(
+                skill_id=name,
+                source="plugin",
+                can_manage=False,
+                favorite=False,
+            )
+            return {**info, "content": content, **file_info}
+        return None
 
     async def resolve_skill_path_async(self, name: str, user_id: str = "") -> dict[str, Any] | None:
         """异步解析可加载技能的 SKILL.md 路径。"""

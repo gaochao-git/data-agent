@@ -2557,3 +2557,22 @@ def test_write_skill_md_rejects_oversized_entry(tmp_path):
             tmp_path / "skill",
             {"skill_name": "demo", "skill_title": "Demo", "content": "x" * (SKILL_MD_MAX_BYTES + 1)},
         )
+
+
+def test_get_plugin_skill_detail_async_returns_content_and_files(tmp_path, monkeypatch):
+    skill_dir = _make_plugin_skill(tmp_path, "fault-analysis")
+    (skill_dir / "references").mkdir()
+    (skill_dir / "references" / "guide.md").write_text("guide", encoding="utf-8")
+    monkeypatch.setattr(
+        plugins_loader_module,
+        "enabled_plugin_skill_sources",
+        lambda: [("fault-analysis", skill_dir)],
+    )
+
+    detail = asyncio.run(SkillService().get_skill_async("plugin:fault-analysis", user_id="u1"))
+
+    assert detail is not None
+    assert detail["skill_id"] == "plugin:fault-analysis"
+    assert detail["source"] == "plugin"
+    assert "fault-analysis" in detail["content"]
+    assert detail["references"] == ["guide.md"]
