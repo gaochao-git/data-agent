@@ -55,3 +55,9 @@ ChatData 的业务 Agent 运行域：装配、工具、中间件、提示词、�
 `InboxPort` 断开 `middleware -> run`，`SkillSourcePort` / `SkillSnapshotPort` /
 `McpServerSourcePort` / `WorkspacePreviewPort` 分别断开 skills/workspace/plugins 的包级环。新增跨层 Port 前先确认
 确实存在反向依赖/环，普通工具函数不抽 Port。
+
+## 装配诊断
+
+`data_agent.describe_agent_assembly(...)` 复用真实 builder 返回本次装配的 tools /
+middleware / context budget 快照，用于启动日志、测试断言和排查“为什么某个工具没挂上”；
+它不创建 graph，也不应放进每轮热路径。

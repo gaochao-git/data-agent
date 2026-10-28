@@ -22,6 +22,7 @@ from .data_agent import (
     ModelInvocationConfig,
     create_agent_from_spec,
     create_data_agent,
+    describe_agent_assembly,
     get_data_agent_graph,
     validate_agent_assembly_spec,
 )
@@ -50,6 +51,7 @@ __all__ = [
     "resolve_agent_runtime_options",
     "create_agent_from_spec",
     "create_data_agent",
+    "describe_agent_assembly",
     "get_data_agent_graph",
     "validate_agent_assembly_spec",
     "build_unified_system_prompt",

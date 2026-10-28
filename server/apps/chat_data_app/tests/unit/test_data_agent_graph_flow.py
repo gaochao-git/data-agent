@@ -471,3 +471,25 @@ def test_create_data_agent_unattended_keeps_allow_system_tools(monkeypatch, tmp_
     assert "file_read" in names
     assert "file_delete" in names
     assert "file_move" in names
+
+
+def test_describe_agent_assembly_exposes_resolved_tools_and_middleware(monkeypatch, tmp_path):
+    runtime, options = _runtime(tmp_path)
+    monkeypatch.setattr(data_agent, "create_streaming_chat_model", lambda **_kwargs: SimpleNamespace())
+    monkeypatch.setattr(data_agent, "assemble_tools", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(data_agent, "create_request_context_usage_middleware", lambda *_args, **_kwargs: "usage")
+
+    description = data_agent.describe_agent_assembly(
+        data_agent.CHAT_DATA_AGENT_SPEC,
+        options,
+        identity_context=IdentityContext(user_id="u1"),
+        datasource_context=DatasourceContext(datasource_id="ds_a"),
+        model_invocation=ModelInvocationConfig(system_prompt="system"),
+        workspace_runtime=runtime,
+    )
+
+    assert description["agent_id"] == data_agent.CHAT_DATA_AGENT_SPEC.agent_id
+    assert description["tools"] == []
+    assert description["system_prompt_chars"] > 0
+    assert "ContextUsageMiddleware" not in description["middleware"]
+    assert description["context"]["context_window"] > 0
