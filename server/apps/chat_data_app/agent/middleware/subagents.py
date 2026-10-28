@@ -21,7 +21,7 @@ import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from itertools import count
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import AgentMiddleware, AgentState, ModelCallResult, ModelRequest, ToolErrorMiddleware
@@ -55,11 +55,11 @@ from utils.tool_call_args import coerce_tool_call_args
 from ..agent_runtime import on_tool_error
 from ..agent_state import merge_context_compression_events, merge_loaded_skill_names
 from ..context.context_budget import (
-    build_runtime_context_summary_message,
     count_messages_tokens,
     count_tools_tokens,
     estimate_text_tokens,
     get_model_context_budget,
+    inject_runtime_context_summary,
 )
 from ..tools.registry import TOOL_REQUIRED_SKILLS
 from .context_compression import create_context_compression_middleware
@@ -347,11 +347,12 @@ def create_subagent_budget_alert_middleware(
         messages = list(getattr(request, "messages", None) or [])
         summary = _request_subagent_context_summary(request)
         if summary:
-            summary_message = build_runtime_context_summary_message(summary)
-            if summary_message is not None:
-                # 摘要注入是无条件的（低于阈值也要注入，模型每轮都需要它续上下文）
-                messages = [summary_message, *messages]
-                request = request.override(messages=messages)
+            # 摘要注入是无条件的（低于阈值也要注入，模型每轮都需要它续上下文）；
+            # 与主图共用同一套 legacy 清洗/去重/前插规则。
+            injected_messages, _summary, injected = inject_runtime_context_summary(messages, summary)
+            messages = injected_messages
+            if injected:
+                request = request.override(messages=cast(Any, messages))
         used = static_tokens + count_messages_tokens(messages)
         if used < threshold:
             return request

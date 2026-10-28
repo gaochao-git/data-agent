@@ -29,10 +29,10 @@ from ..context.context_budget import (
     ContextRequestBudget,
     build_runtime_context_summary_message,
     count_messages_tokens,
-    extract_legacy_context_summary,
     get_model_context_budget,
     hard_input_guard_tokens,
-    merge_context_summaries,
+    resolve_context_summary,
+    resolve_context_summary_with_legacy,
     resolve_summary_output_budget,
 )
 from ..prompts.context_compression import build_context_compression_summary_prompt
@@ -70,8 +70,10 @@ async def compress_messages_for_state(
 ) -> tuple[list[BaseMessage], str | None, dict[str, Any]]:
     """压缩旧历史和当前回合较早的完整工具链。"""
     cfg = _config_from_mapping(config)
-    original_messages, legacy_summary = extract_legacy_context_summary(messages)
-    effective_previous_summary = merge_context_summaries(previous_summary, legacy_summary)
+    original_messages, effective_previous_summary, legacy_summary = resolve_context_summary_with_legacy(
+        messages,
+        previous_summary,
+    )
     static_tokens = max(int(static_input_tokens), 0)
     before_tokens = (
         static_tokens + count_messages_tokens(original_messages) + _summary_tokens(effective_previous_summary)
@@ -435,14 +437,6 @@ def _format_todo_snapshot(todos: list[dict[str, Any]] | None) -> str | None:
     return "\n".join(lines) if lines else None
 
 
-def _resolve_previous_summary(state: Any, legacy_summary: Any) -> Any:
-    """合并 state 中的 context_summary 与遗留摘要，得到上一轮压缩摘要。"""
-    return merge_context_summaries(
-        str((state or {}).get("context_summary") or "").strip() or None,
-        legacy_summary,
-    )
-
-
 def _emit_compression_started_event(messages: list[BaseMessage]) -> None:
     """构造并下发压缩开始事件（无事件则静默跳过）。"""
     started_event = _build_context_compression_started_event(messages)
@@ -470,8 +464,10 @@ def create_context_compression_middleware(
     @before_model(name="ContextCompressionMiddleware", state_schema=state_schema)
     async def context_compression_middleware(state: AgentState, _runtime: Runtime) -> dict[str, Any] | None:
         messages = _read_middleware_messages(state)
-        _, legacy_summary = extract_legacy_context_summary(messages)
-        previous_summary = _resolve_previous_summary(state, legacy_summary)
+        _, previous_summary = resolve_context_summary(
+            messages,
+            str((state or {}).get("context_summary") or "").strip() or None,
+        )
         budget = compression_budget.configure(system_prompt, request_tools, model_id=model_id)
 
         def _notify_compression_started() -> None:

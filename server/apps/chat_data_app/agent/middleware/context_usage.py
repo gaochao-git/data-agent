@@ -25,14 +25,12 @@ from ..context.context_budget import (
     ContextBudget,
     ContextRequestBudget,
     build_context_usage_payload,
-    build_runtime_context_summary_message,
     count_messages_tokens,
     count_tools_tokens,
     estimate_tokens,
-    extract_legacy_context_summary,
     hard_input_guard_tokens,
+    inject_runtime_context_summary,
     latest_model_name_from_usage,
-    merge_context_summaries,
     sanitize_context_usage_for_response,
 )
 from .context_compression import format_todo_snapshot_lines, neutralize_stale_todo_tool_messages
@@ -563,14 +561,8 @@ def _merge_compression_summary_into_system_prompt(
     context_summary: str | None = None,
 ) -> tuple[str, list[Any]]:
     """将摘要作为隐藏 human 数据上下文注入，保持唯一 system message。"""
-    cleaned_messages, legacy_summary = extract_legacy_context_summary(messages)
-    summary = merge_context_summaries(context_summary, legacy_summary)
-    if not summary:
-        return system_prompt, cleaned_messages
-    summary_message = build_runtime_context_summary_message(summary)
-    if summary_message is None:
-        return system_prompt, cleaned_messages
-    return system_prompt, [summary_message, *cleaned_messages]
+    summary_messages, _summary, _injected = inject_runtime_context_summary(messages, context_summary)
+    return system_prompt, summary_messages
 
 
 def _emit_context_usage(usage: dict[str, Any] | None) -> None:

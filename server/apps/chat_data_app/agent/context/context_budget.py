@@ -134,6 +134,49 @@ def extract_legacy_context_summary(messages: list[BaseMessage]) -> tuple[list[Ba
     return cleaned_messages, "\n\n".join(summaries) or None
 
 
+def resolve_context_summary_with_legacy(
+    messages: list[BaseMessage],
+    context_summary: str | None = None,
+) -> tuple[list[BaseMessage], str | None, str | None]:
+    """与 :func:`resolve_context_summary` 相同，额外返回迁移出的遗留摘要。
+
+    压缩逻辑需要 ``legacy_summary_migrated`` 标记；一次遍历同时拿到干净消息、
+    有效摘要与遗留摘要，避免压缩前重复扫描全部历史消息。
+    """
+    cleaned_messages, legacy_summary = extract_legacy_context_summary(messages)
+    return cleaned_messages, merge_context_summaries(context_summary, legacy_summary), legacy_summary
+
+
+def resolve_context_summary(
+    messages: list[BaseMessage],
+    context_summary: str | None = None,
+) -> tuple[list[BaseMessage], str | None]:
+    """剥离旧 checkpoint 摘要并合并运行态摘要，返回 (干净消息, 有效摘要)。
+
+    主图压缩、主图请求注入、子图压缩/预算提示都走这一处，避免旧摘要迁移和
+    摘要去重逻辑在多个中间件里各写一份。
+    """
+    cleaned_messages, summary, _legacy_summary = resolve_context_summary_with_legacy(messages, context_summary)
+    return cleaned_messages, summary
+
+
+def inject_runtime_context_summary(
+    messages: list[BaseMessage],
+    context_summary: str | None = None,
+) -> tuple[list[BaseMessage], str | None, bool]:
+    """返回 (注入摘要后的消息, 有效摘要, 是否实际前插摘要消息)。
+
+    摘要固定前插为隐藏 HumanMessage，保持 system 消息唯一；无摘要时只做
+    legacy 清洗，不改变消息顺序。调用方若只是“有摘要才 override 请求”，
+    应以第三个返回值判断，避免无摘要时也重写请求。
+    """
+    cleaned_messages, summary = resolve_context_summary(messages, context_summary)
+    summary_message = build_runtime_context_summary_message(summary)
+    if summary_message is None:
+        return cleaned_messages, summary, False
+    return [summary_message, *cleaned_messages], summary, True
+
+
 def count_tools_tokens(tools: list[Any] | None) -> int:
     """估算工具 schema 的 token 数。"""
     total = 0

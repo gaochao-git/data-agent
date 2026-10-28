@@ -444,3 +444,64 @@ def test_compact_context_usage_keeps_debug_payload(monkeypatch):
     compact = cb.compact_context_usage_for_history({"breakdown": [{"content": long_text}]})
 
     assert compact["breakdown"][0]["content"] == long_text
+
+
+# ---------------------------------------------------------------------------
+# 运行态摘要统一入口（主图/子图/压缩共用）
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_context_summary_strips_legacy_and_merges_state_summary():
+    messages = [
+        SystemMessage(content="[历史对话摘要]旧摘要", additional_kwargs={"context_compression": True}),
+        HumanMessage(content="用户问题"),
+    ]
+    cleaned, summary = cb.resolve_context_summary(messages, "运行态摘要")
+    assert cleaned == [messages[1]]
+    assert summary == "运行态摘要\n\n旧摘要"
+
+
+def test_inject_runtime_context_summary_prepends_hidden_message():
+    messages = [HumanMessage(content="用户问题")]
+    injected, summary, injected_flag = cb.inject_runtime_context_summary(messages, "运行态摘要")
+    assert summary == "运行态摘要"
+    assert injected_flag is True
+    assert len(injected) == 2
+    assert injected[0].additional_kwargs["context_summary"] is True
+    assert injected[0].additional_kwargs["hide_from_ui"] is True
+    assert injected[1] is messages[0]
+
+
+def test_inject_runtime_context_summary_dedupes_same_summary():
+    messages = [
+        SystemMessage(content="[历史对话摘要]同一段摘要", additional_kwargs={"context_compression": True}),
+        HumanMessage(content="用户问题"),
+    ]
+    injected, summary, injected_flag = cb.inject_runtime_context_summary(messages, "同一段摘要")
+    assert summary == "同一段摘要"
+    assert injected_flag is True
+    assert len(injected) == 2
+
+
+def test_inject_runtime_context_summary_migrates_legacy_summary():
+    messages = [
+        SystemMessage(content="[历史对话摘要]旧摘要", additional_kwargs={"context_compression": True}),
+        HumanMessage(content="用户问题"),
+    ]
+    injected, summary, injected_flag = cb.inject_runtime_context_summary(messages)
+    assert summary == "旧摘要"
+    assert injected_flag is True
+    assert len(injected) == 2
+    assert injected[0].additional_kwargs["context_summary"] is True
+    assert injected[1] == messages[1]
+
+
+def test_resolve_context_summary_with_legacy_returns_migrated_flag():
+    messages = [
+        SystemMessage(content="[历史对话摘要]旧摘要", additional_kwargs={"context_compression": True}),
+        HumanMessage(content="用户问题"),
+    ]
+    cleaned, summary, legacy = cb.resolve_context_summary_with_legacy(messages, None)
+    assert cleaned == [messages[1]]
+    assert summary == "旧摘要"
+    assert legacy == "旧摘要"

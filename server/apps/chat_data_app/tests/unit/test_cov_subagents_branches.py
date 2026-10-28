@@ -6,6 +6,7 @@ import pytest
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
 
+from apps.chat_data_app.agent.context import context_budget as cb
 from apps.chat_data_app.agent.middleware import subagents as sm
 from apps.chat_data_app.agent.middleware.subagents import (
     SubagentSpec,
@@ -41,7 +42,7 @@ def test_budget_alert_keeps_messages_when_summary_builder_returns_none(monkeypat
         "get_model_context_budget",
         lambda model_id: SimpleNamespace(compression_trigger_tokens=10**9),
     )
-    monkeypatch.setattr(sm, "build_runtime_context_summary_message", lambda _summary: None)
+    monkeypatch.setattr(cb, "build_runtime_context_summary_message", lambda _summary: None)
     middleware = sm.create_subagent_budget_alert_middleware(_spec(), [])
     seen = {}
 
