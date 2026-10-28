@@ -31,7 +31,7 @@ from utils.skill_paths import (
     physical_skill_category_root,
 )
 
-from ..plugins.loader import enabled_plugin_skill_sources, refresh_plugin_state
+from ..contracts.skill_source import get_skill_source, register_skill_snapshot_source
 from . import SkillMetadata, activate_skill, clear_metadata_cache, load_metadata, parse_metadata
 
 logger = get_logger(__name__)
@@ -350,11 +350,12 @@ def _plugin_skill_rows(existing_names: set[str]) -> list[dict[str, Any]]:
 
     与会话技能快照同语义：与系统/用户技能同名时跳过（快照为扁平 /mnt/skills/<name>）。
     """
-    from ..plugins.loader import enabled_plugin_skill_sources
+    from ..contracts.skill_source import get_skill_source
     from .loader import parse_metadata
 
     rows: list[dict[str, Any]] = []
-    for name, skill_dir in enabled_plugin_skill_sources():
+    source = get_skill_source()
+    for name, skill_dir in source.enabled_plugin_skill_sources() if source is not None else []:
         if name in existing_names:
             continue
         try:
@@ -533,7 +534,9 @@ class SkillService:
         scope: str = "all",
         user_names: dict[str, str] | None = None,
     ) -> list[dict[str, Any]]:
-        await refresh_plugin_state()
+        source = get_skill_source()
+        if source is not None:
+            await source.refresh_plugin_state()
         db_rows = await self._safe_db_skills_async(user_id=user_id)
         keyword = str(search or "").strip().lower()
         normalized_category = str(category or "").strip()
@@ -571,7 +574,9 @@ class SkillService:
         可见集合 = 系统技能 + 当前用户自己的当前版本 + 他人 ``visibility_type=global``
         的当前版本。``uniq_skill_name`` 保证名称全局唯一，调用方据此构建扁平快照。
         """
-        await refresh_plugin_state()
+        source = get_skill_source()
+        if source is not None:
+            await source.refresh_plugin_state()
         out: list[tuple[str, Path]] = []
         system_root = physical_skill_category_root(SYSTEM_SKILL_CATEGORY)
         system_metadata = await asyncio.to_thread(load_metadata)
@@ -581,7 +586,8 @@ class SkillService:
                 out.append((name, skill_dir))
         # 插件技能：与系统/用户技能同名时跳过（快照是扁平 /mnt/skills/<name>，不允许重名）。
         existing_names = {name for name, _dir in out}
-        for name, skill_dir in enabled_plugin_skill_sources():
+        plugin_sources = source.enabled_plugin_skill_sources() if source is not None else []
+        for name, skill_dir in plugin_sources:
             if name in existing_names:
                 logger.warning("插件技能与现有技能同名，跳过快照纳入: %s", name)
                 continue
@@ -1615,3 +1621,13 @@ class SkillService:
 
 
 skill_service = SkillService()
+
+
+class _SkillSnapshotSource:
+    """把 SkillService 的技能源查询适配成 workspace 快照端口。"""
+
+    async def list_runtime_skill_sources_async(self, user_id: str) -> list[tuple[str, Path]]:
+        return await skill_service.list_runtime_skill_sources_async(user_id)
+
+
+register_skill_snapshot_source(_SkillSnapshotSource())

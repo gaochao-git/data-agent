@@ -23,10 +23,10 @@ from typing import Any
 from utils.logger import get_logger
 from utils.skill_paths import SKILL_MD_MAX_BYTES
 
+from ..contracts.skill_metadata import parse_metadata_text
 from ..mcp.admission import validate_mcp_server_config
 from ..mcp.config import MCPServerConfigError, default_mcp_tool_timeout_ms, parse_mcp_server_config
 from ..mcp.probe import probe_mcp_server_tools as _probe_mcp_server_tools
-from ..skills.loader import parse_metadata_text
 from .loader import clear_metadata_cache, load_plugins_metadata, plugin_dir
 from .manifest import (
     PLUGIN_MANIFEST_FILENAME,

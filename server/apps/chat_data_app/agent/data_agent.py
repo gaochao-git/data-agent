@@ -39,6 +39,12 @@ from .middleware.tool_approval import create_tool_approval_middleware
 from .middleware.tool_call_history_repair import create_tool_call_history_repair_middleware
 from .middleware.tool_execution_fence import create_tool_execution_fence_middleware
 from .middleware.tool_result import create_tool_result_middleware
+
+# 装配层显式导入实现模块，确保 contracts 端口已注册：
+# - plugins.loader 注册 SkillSourcePort / McpServerSourcePort；
+# - skills.skill_service 注册 SkillSnapshotPort。
+# 否则在绕过 app 启动的脚本/直接建图路径里，会静默拿不到插件技能/MCP 配置。
+from .plugins import loader as _plugin_loader  # noqa: F401
 from .prompts.chat_data import (
     DATA_EXPLORE_SUBAGENT_PROMPT,
     GENERAL_PURPOSE_NO_DELETE_HINT,
@@ -47,6 +53,7 @@ from .prompts.chat_data import (
     build_unified_system_prompt,
 )
 from .runtime_options import AgentRuntimeOptions, get_chat_data_default_runtime_options
+from .skills import skill_service as _skill_service_module  # noqa: F401
 from .tools.registry import (
     DATA_EXPLORE_EXTRA_EXCLUDED_TOOL_NAMES,
     GENERAL_PURPOSE_EXTRA_EXCLUDED_TOOL_NAMES,

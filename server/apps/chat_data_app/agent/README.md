@@ -48,3 +48,10 @@ ChatData 的业务 Agent 运行域：装配、工具、中间件、提示词、�
 - `workspace_backend=local`：宿主机直接 IO，信任部署假设；**建议保持 `bash_enabled=False`**。
 - `workspace_backend=sandbox`：OpenSandbox 容器执行，强隔离形态。
 - `bash_enabled=True` 且 `workspace_backend=local` 是最危险组合（宿主机裸执行），开启前必须确认部署环境可信。
+
+## 跨层契约（contracts/）
+
+`agent/contracts/` 只放 `Protocol` 与纯类型，供上层依赖、由装配层注入实现；目前
+`InboxPort` 断开 `middleware -> run`，`SkillSourcePort` / `SkillSnapshotPort` /
+`McpServerSourcePort` 分别断开 skills/workspace/plugins 的包级环。新增跨层 Port 前先确认
+确实存在反向依赖/环，普通工具函数不抽 Port。

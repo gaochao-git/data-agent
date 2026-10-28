@@ -16,7 +16,7 @@ from ...chart_types import (
     is_supported_chart_type_input,
     normalize_chart_type,
 )
-from ..skills.loader import parse_metadata_text
+from ..contracts.skill_metadata import parse_metadata_text
 
 ArtifactMatcher = Callable[[PurePosixPath], bool]
 ArtifactParser = Callable[[PurePosixPath, bytes], dict[str, Any] | None]

@@ -216,11 +216,12 @@ def load_mcp_server_configs() -> list[MCPServerConfig]:
     """
     configs: list[MCPServerConfig] = []
     seen_ids: set[str] = set()
-    # 延迟导入避免 plugins -> manifest 之外的重依赖链在冷启动被拉起。
-    try:
-        from ..plugins.loader import enabled_plugin_mcp_servers
+    # 通过端口读取插件声明，避免 mcp -> plugins 的包级依赖/环。
+    from ..contracts.mcp_server_source import get_mcp_server_source
 
-        plugin_entries = enabled_plugin_mcp_servers()
+    source = get_mcp_server_source()
+    try:
+        plugin_entries = source.enabled_plugin_mcp_servers() if source is not None else []
     except Exception as err:  # pragma: no cover - 插件加载自身已兜底，这里防御
         logger.warning("读取插件 MCP 配置失败，忽略插件侧配置: %s", err)
         plugin_entries = []
