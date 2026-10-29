@@ -27,6 +27,7 @@ import os
 import tempfile
 from collections.abc import Iterable
 from contextlib import suppress
+from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -42,6 +43,7 @@ from utils.logger import get_logger
 from .memory_parser import (
     MAX_MEMORY_ITEMS,
     MemoryItem,
+    apply_memory_updates,
     enforce_memory_item_limit,
     escape_memory_for_prompt,
     normalize_memory_items,
@@ -57,10 +59,21 @@ MEMORY_LOCK_FILE_NAME = ".memory.lock"
 
 # 整轮结束后的防抖窗口：连续快速多轮时只抽最后一轮，避免每轮一次 LLM 调用
 EXTRACTION_DEBOUNCE_SECONDS = 30.0
-# 抽取快照消息条数上限：只看最近若干条，足够覆盖最近 1-2 轮的口径与纠错
+# 抽取快照轮次上限：按用户消息切轮，避免工具结果把用户原话挤出窗口
+EXTRACTION_MAX_TURNS = 10
+# 无用户消息时的兜底消息条数上限
 EXTRACTION_SNAPSHOT_MESSAGE_LIMIT = 40
 # 抽取 LLM 调用输出上限：条目本身限长，2000 tokens 富余
 EXTRACTION_LLM_MAX_TOKENS = 2000
+
+
+@dataclass(frozen=True)
+class MemoryExtraction:
+    """一次抽取的结构化结果：新增/覆盖条目 + 显式删除目标。"""
+
+    items: tuple[MemoryItem, ...] = ()
+    removals: tuple[str, ...] = ()
+
 
 # 会话级防抖任务表：conversation_id -> 最新调度任务；新调度取消旧任务
 _pending_extraction_tasks: dict[str, asyncio.Task] = {}
@@ -136,12 +149,13 @@ def merge_memory_items(
     workspace_root: str,
     new_items: Iterable[MemoryItem],
     *,
+    removals: Iterable[str] = (),
     max_items: int = MAX_MEMORY_ITEMS,
 ) -> list[MemoryItem]:
-    """跨进程安全的记忆合并：flock 临界区内「读-去重-淘汰-写」。
+    """跨进程安全的记忆合并：flock 临界区内「读-删除/覆盖-去重-淘汰-写」。
 
-    新条目按空白折叠键去重后追加在已有条目之后（文件内顺序即新旧，
-    越靠后越新）；超出上限时淘汰最早的条目。
+    新条目先应用 ``removals`` 与 ``supersedes``，再追加并去重；文件内顺序即
+    新旧，越靠后越新，超出上限时淘汰最早的条目。
     """
     normalized_new = normalize_memory_items(new_items)
     lock_path = memory_lock_path(workspace_root)
@@ -150,14 +164,7 @@ def merge_memory_items(
         fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX)
         try:
             existing = load_memory_items(workspace_root)
-            merged: list[MemoryItem] = []
-            seen_keys: set[str] = set()
-            for item in [*existing, *normalized_new]:
-                key = " ".join(f"{item.category} {item.content} {item.scope}".split())
-                if key in seen_keys:
-                    continue
-                seen_keys.add(key)
-                merged.append(item)
+            merged = apply_memory_updates(existing, normalized_new, removals)
             merged = enforce_memory_item_limit(merged, max_items=max_items)
             _atomic_write_text(
                 memory_file_path(workspace_root),
@@ -180,9 +187,14 @@ def _extract_llm_text(response: Any) -> str:
     return str(content or "").strip()
 
 
-async def extract_memory_items(messages: list[Any], *, model_id: str | None) -> list[MemoryItem]:
-    """调用 LLM 从消息快照抽取记忆条目；无候选或失败时返回空列表（不抛出）。"""
-    prompt = build_memory_extraction_prompt(messages)
+async def extract_memory_items(
+    messages: list[Any],
+    *,
+    model_id: str | None,
+    existing_items: Iterable[MemoryItem] = (),
+) -> MemoryExtraction:
+    """调用 LLM 从消息快照抽取记忆更新；无候选或失败时返回空结果（不抛出）。"""
+    prompt = build_memory_extraction_prompt(messages, existing_items=existing_items)
     try:
         llm = get_chat_data_llm(
             model=model_id,
@@ -193,25 +205,41 @@ async def extract_memory_items(messages: list[Any], *, model_id: str | None) -> 
         response = await llm.ainvoke([HumanMessage(content=prompt)])
     except Exception:
         logger.warning("[memory] 会话记忆抽取 LLM 调用失败: model_id=%s", model_id, exc_info=True)
-        return []
+        return MemoryExtraction()
     try:
         payload = parse_llm_json(_extract_llm_text(response))
     except Exception:
         logger.warning("[memory] 会话记忆抽取输出解析失败: model_id=%s", model_id, exc_info=True)
-        return []
-    raw_items = payload.get("items") if isinstance(payload, dict) else None
+        return MemoryExtraction()
+    if not isinstance(payload, dict):
+        return MemoryExtraction()
+    raw_items = payload.get("items")
     if not isinstance(raw_items, list):
-        return []
+        raw_items = []
     candidates = [
         MemoryItem(
             category=str(raw.get("category") or ""),
             content=str(raw.get("content") or ""),
             scope=str(raw.get("scope") or ""),
+            supersedes=tuple(
+                str(target).strip()
+                for target in (raw.get("supersedes") or [])
+                if isinstance(target, str) and str(target).strip()
+            ),
         )
         for raw in raw_items
         if isinstance(raw, dict)
     ]
-    return normalize_memory_items(candidates)
+    raw_remove = payload.get("remove")
+    removals = (
+        tuple(str(target).strip() for target in raw_remove if isinstance(target, str) and str(target).strip())
+        if isinstance(raw_remove, list)
+        else ()
+    )
+    return MemoryExtraction(
+        items=tuple(normalize_memory_items(candidates)),
+        removals=removals,
+    )
 
 
 async def extract_and_save_memory(
@@ -222,14 +250,16 @@ async def extract_and_save_memory(
     messages: list[Any],
 ) -> None:
     """抽取并合并落盘；抽取为空或写入失败只告警降级，不抛出。"""
-    items = await extract_memory_items(messages, model_id=model_id)
-    if not items:
+    existing = load_memory_items(workspace_root)
+    result = await extract_memory_items(messages, model_id=model_id, existing_items=existing)
+    if not result.items and not result.removals:
         return
     try:
         merged = await asyncio.to_thread(
             merge_memory_items,
             workspace_root,
-            items,
+            result.items,
+            removals=result.removals,
             max_items=session_memory_max_items(),
         )
     except Exception:
@@ -238,7 +268,7 @@ async def extract_and_save_memory(
     logger.info(
         "[memory] 会话记忆已更新: conversation_id=%s items=%s total=%s",
         conversation_id,
-        len(items),
+        len(result.items),
         len(merged),
     )
 
@@ -258,11 +288,19 @@ def _prepare_scheduled_extraction(*, conversation_id: str, messages: list[Any]) 
 
 
 def snapshot_messages_for_extraction(messages: Any) -> list[Any]:
-    """复制最近若干条消息作为抽取快照（非列表输入回退空列表，不抛出）。"""
+    """复制最近若干轮消息作为抽取快照；按用户消息切轮，避免工具结果挤占。
+
+    有用户消息时从倒数第 ``EXTRACTION_MAX_TURNS`` 个用户消息开始保留；
+    没有用户消息时退回最近 ``EXTRACTION_SNAPSHOT_MESSAGE_LIMIT`` 条。
+    """
     try:
         items = list(messages or [])
     except TypeError:
         return []
+    human_indexes = [index for index, message in enumerate(items) if isinstance(message, HumanMessage)]
+    if len(human_indexes) > EXTRACTION_MAX_TURNS:
+        start = human_indexes[-EXTRACTION_MAX_TURNS]
+        return items[start:]
     return items[-EXTRACTION_SNAPSHOT_MESSAGE_LIMIT:]
 
 
