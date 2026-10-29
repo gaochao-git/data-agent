@@ -105,6 +105,8 @@ type DatasourceGroupMetadataSyncPayload = { template_table_names: string[] }
 
 export interface ChatDataRuntimeConfig {
   models: ChatDataModelOption[]
+  /** 后端 ToolDeclaration 下发的工具展示名；前端本地映射只做兜底。 */
+  tool_display_names?: Record<string, string>
   default_row_limit?: number
   query_cache_enabled?: boolean
   user_semantic_model_enabled?: boolean

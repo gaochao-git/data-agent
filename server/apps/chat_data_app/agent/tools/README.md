@@ -29,3 +29,11 @@
 `tools/catalog.py` 把内置工具（`TOOL_SPECS`）、中间件注入工具和动态 MCP 工具收成
 `ToolCatalog`，统一提供来源、风险、权限、审批、子智能体可见性和可检索性。装配诊断、
 审批策略和管理端都应读取这份目录，不再各自维护 name map。
+
+## 声明分层
+
+- `ToolSpec`（`TOOL_SPECS`）只描述构建组：哪些工具共享一次构建、如何构建；
+- `ToolDeclaration`（`TOOL_DECLARATIONS`）逐工具声明审批/风险/展示名，构建组不再携带
+  `approval` / `risk` / `risk_overrides`；
+- `tool_display_names()` 由 `/config` 下发，前端本地映射只做兜底；
+- `ToolCatalog` 合并两类声明，运行时仍按工具粒度管理。

@@ -23,7 +23,8 @@ async def test_get_chat_data_config_success(monkeypatch):
     monkeypatch.setattr(config_router, "get_chat_data_runtime_config", fake_runtime_config)
     payload = _payload(await config_router.get_chat_data_config())
     assert payload["status"] == "success"
-    assert payload["data"] == {"model": "qwen"}
+    assert payload["data"]["model"] == "qwen"
+    assert payload["data"]["tool_display_names"]["file_read"] == "读取文件"
 
 
 @pytest.mark.asyncio

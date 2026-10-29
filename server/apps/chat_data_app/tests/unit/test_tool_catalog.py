@@ -16,6 +16,8 @@ def test_tool_catalog_covers_builtin_and_middleware_tools():
     assert by_name["write_todos"].source == "middleware"
     assert by_name["task"].source == "middleware"
     assert by_name["file_read"].approval == "allow"
+    assert by_name["file_read"].display_name == "读取文件"
+    assert catalog.to_dicts()[0]["display_name"]
 
 
 def test_tool_catalog_accepts_mcp_and_runtime_tools():

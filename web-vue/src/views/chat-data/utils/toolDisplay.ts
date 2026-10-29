@@ -1,44 +1,26 @@
-const TOOL_DISPLAY_NAMES: Record<string, string> = {
-  data_analyzing_tool: '数据分析',
-  calculator_tool: '精确计算',
-  file_read: '读取文件',
-  file_glob: '查找文件',
-  file_grep: '搜索文本',
-  file_diff: '对比文件',
-  file_edit: '修改文件',
-  file_write: '写入文件',
-  file_move: '移动文件',
-  file_copy: '复制文件',
-  file_delete: '删除文件',
-  parse_document: '解析文档',
-  read_image: '读取图片',
-  dir_create: '创建目录',
-  dir_list: '列出目录',
-  dir_delete: '删除目录',
-  bash_run: '运行脚本',
-  officecli_run: '运行 OfficeCLI',
-  get_current_time: '获取当前时间',
-  present_artifacts: '展示文件',
-  ask_user_question: '询问用户',
-  write_todos: '更新任务计划',
-  task: '派发子智能体',
-  load_skill: '加载技能',
-  mcp_tool_search: '搜索 MCP 工具',
-  mcp_tool_call: '调用 MCP 工具',
+import { shallowRef } from 'vue'
+
+// 工具展示名唯一来源是后端 /config 的 tool_display_names；前端不再维护第二张表。
+const backendToolDisplayNames = shallowRef<Record<string, string>>({})
+
+/** /config 下发后注入；后端声明是工具展示名的唯一来源。 */
+export function setToolDisplayNames(names?: Record<string, string> | null): void {
+  backendToolDisplayNames.value = names && typeof names === 'object' ? { ...names } : {}
 }
 
 export function getToolDisplayName(toolName?: string | null, args: ToolArgs = {}): string {
   const name = String(toolName || '').trim()
   if (!name) return '工具调用'
+  // mcp_tool_call 的展示对象是目标工具，不能被静态“调用 MCP 工具”覆盖。
   if (name === 'mcp_tool_call') {
     const target = typeof args.name === 'string' ? args.name.trim() : ''
     return target ? `调用 MCP 工具：${target.replace(/^mcp_/, '')}` : '调用 MCP 工具'
   }
-  // 控制工具用固定中文名；普通 MCP 限定名由后端 tools.<name>.label 下发，
-  // 缺失时直接展示限定名（含 server 归属信息），而不是笼统的「工具调用」。
-  if (name in TOOL_DISPLAY_NAMES) return TOOL_DISPLAY_NAMES[name] ?? name
+  const backendName = backendToolDisplayNames.value[name]
+  if (backendName) return backendName
+  // 普通 MCP 限定名由后端 tools.<name>.label / display_name 下发；缺失时展示限定名。
   if (name.startsWith('mcp_')) return name
-  return TOOL_DISPLAY_NAMES[name] || '工具调用'
+  return '工具调用'
 }
 
 /** 工具执行耗时文案：由后端盖章的起止时间（epoch 毫秒）相减得出，数据无效返回空串。 */

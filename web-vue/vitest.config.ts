@@ -6,6 +6,7 @@ export default defineConfig({
   plugins: [vue()],
   test: {
     environment: 'jsdom',
+    setupFiles: ['./src/views/chat-data/test/setupToolDisplay.ts'],
     exclude: [...configDefaults.exclude, 'e2e/**'],
     root: fileURLToPath(new URL('./', import.meta.url)),
   },

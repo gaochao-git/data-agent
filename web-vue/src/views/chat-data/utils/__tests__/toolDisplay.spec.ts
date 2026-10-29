@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { extractChangedFilePathsFromResult, extractWrittenFilePathCandidates, getDataAnalyzingActionName, getToolCompactDescription, getToolDisplayName, getToolTechnicalDescription, isFileDiffOffloaded, splitFileDiffLines } from '../toolDisplay'
+import { extractChangedFilePathsFromResult, extractWrittenFilePathCandidates, getDataAnalyzingActionName, getToolCompactDescription, getToolDisplayName, getToolTechnicalDescription, isFileDiffOffloaded, setToolDisplayNames, splitFileDiffLines } from '../toolDisplay'
 
 describe('toolDisplay', () => {
   it('maps every current ChatData tool to a user-facing name', () => {
@@ -301,3 +301,13 @@ describe('extractChangedFilePathsFromResult', () => {
     expect(extractChangedFilePathsFromResult(null)).toEqual([])
   })
 })
+
+  it('prefers backend ToolDeclaration display names over local fallback', () => {
+    setToolDisplayNames({ file_read: '后端读取文件', file_delete: '后端删除文件' })
+    try {
+      expect(getToolDisplayName('file_read')).toBe('后端读取文件')
+      expect(getToolDisplayName('file_delete')).toBe('后端删除文件')
+    } finally {
+      setToolDisplayNames(null)
+    }
+  })

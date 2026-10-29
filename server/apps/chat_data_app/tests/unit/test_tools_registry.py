@@ -169,3 +169,24 @@ def test_system_tool_approval_is_configurable_and_fail_closed(monkeypatch):
     monkeypatch.setitem(SYSTEM_TOOL_APPROVALS, "file_delete", "ask")
     assert system_tool_approval("file_delete") == "ask"
     assert "file_delete" in system_approval_required_tools()
+
+
+def test_tool_declarations_are_per_tool_and_complete():
+    """审批/风险必须逐工具声明；ToolSpec 只负责构建分组。"""
+    from apps.chat_data_app.agent.tools.registry import (
+        MIDDLEWARE_INJECTED_APPROVAL_TOOLS,
+        TOOL_DECLARATIONS,
+        TOOL_SPECS,
+        provided_tool_names,
+    )
+
+    expected = provided_tool_names() | MIDDLEWARE_INJECTED_APPROVAL_TOOLS
+    assert set(TOOL_DECLARATIONS) == expected
+    assert {"allow", "ask", "deny"} >= {declaration.approval for declaration in TOOL_DECLARATIONS.values()}
+    assert {"low", "medium", "high"} >= {declaration.risk for declaration in TOOL_DECLARATIONS.values()}
+    assert not any(hasattr(spec, "risk_overrides") for spec in TOOL_SPECS)
+    from apps.chat_data_app.agent.tools.registry import tool_display_names
+
+    names = tool_display_names()
+    assert set(names) == expected
+    assert names["file_read"] == "读取文件"

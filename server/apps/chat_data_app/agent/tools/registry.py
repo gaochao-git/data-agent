@@ -60,15 +60,14 @@ class ToolBuildContext:
 
 @dataclass(frozen=True)
 class ToolSpec:
-    """单个可装配条目：提供哪些工具名、如何构建、一句话职责（供审计与迁移）。
+    """构建组：哪些工具共享一次构建、如何构建、一句话职责。
+
+    只负责“怎么构建”，不承载单工具策略；审批/风险由 ``ToolDeclaration``
+    逐工具声明，避免同一构建组内不同风险工具被组级配置混在一起。
 
     ``requires_user_interaction``：工具需要用户实时应答（当前仅 ask_user_question）。
     无人值守运行（定时轮）装配时跳过此类条目——用户不在场，提问必然悬挂在
     waiting_user 等待应答，从装配层剔除即从根上关闭提问入口。
-
-    系统工具审批策略由下方 ``SYSTEM_TOOL_APPROVALS`` 映射统一配置（与 MCP
-    插件相同的 tool -> ask/allow 口径）；第三方 MCP 工具由插件
-    ``mcp_servers[].tools.<name>.approval`` 独立控制。
     """
 
     provides: tuple[str, ...]
@@ -77,11 +76,6 @@ class ToolSpec:
     requires_user_interaction: bool = False
     # 调用该工具前必须先 load_skill 的技能名；空表示无技能前置
     required_skills: tuple[str, ...] = ()
-    # 审批档位/风险分级；审批 map 与 ToolCatalog 都从注册表生成。
-    approval: str = "ask"
-    risk: str = "medium"
-    # 同一 ToolSpec 内不同工具的风险覆盖（如文件读低、删除高）。
-    risk_overrides: tuple[tuple[str, str], ...] = ()
 
 
 TOOL_SPECS: tuple[ToolSpec, ...] = (
@@ -102,52 +96,31 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
         ),
         build=lambda ctx: create_filesystem_tools(ctx.workspace_runtime),
         note="会话工作区文件读写、检索与目录操作",
-        approval="allow",
-        risk="low",
-        risk_overrides=(
-            ("file_edit", "medium"),
-            ("file_write", "medium"),
-            ("file_move", "medium"),
-            ("file_copy", "medium"),
-            ("dir_create", "medium"),
-            ("file_delete", "high"),
-            ("dir_delete", "high"),
-        ),
     ),
     ToolSpec(
         provides=("parse_document",),
         build=lambda ctx: create_parse_document_tool(ctx.workspace_runtime),
         note="解析 Office/PDF 等文档到工作区",
-        approval="allow",
-        risk="low",
     ),
     ToolSpec(
         provides=("read_image",),
         build=lambda ctx: create_read_image_tool(ctx.workspace_runtime),
         note="读取工作区图片供多模态模型查看",
-        approval="allow",
-        risk="low",
     ),
     ToolSpec(
         provides=("present_artifacts",),
         build=lambda ctx: [create_present_artifacts_tool(ctx.workspace_runtime)],
         note="向用户呈现最终产物（仅主智能体）",
-        approval="allow",
-        risk="low",
     ),
     ToolSpec(
         provides=("get_current_time",),
         build=lambda _ctx: [get_current_time_tool],
         note="当前时间",
-        approval="allow",
-        risk="low",
     ),
     ToolSpec(
         provides=("load_skill",),
         build=lambda ctx: [create_skill_tool(ctx.workspace_runtime)],
         note="加载会话技能正文（SKILL.md）到上下文；技能相关工具的前置入口",
-        approval="allow",
-        risk="low",
     ),
     ToolSpec(
         provides=("data_analyzing_tool",),
@@ -162,15 +135,11 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
         note="数据分析合并工具：DSL/dashboard_spec 校验、语义查询执行、语义模型 YAML 自检（按 action 分派）",
         # 查数口径与失败处理全在技能正文里，未加载就调工具会按「凭记忆编口径」处理
         required_skills=(DATA_ANALYZING_SKILL,),
-        approval="allow",
-        risk="medium",
     ),
     ToolSpec(
         provides=("calculator_tool",),
         build=lambda _ctx: [calculator_tool],
         note="精确数值计算",
-        approval="allow",
-        risk="low",
     ),
     ToolSpec(
         provides=("ask_user_question",),
@@ -178,57 +147,89 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
         note="向用户提问（仅主智能体）",
         # 需要用户实时应答：无人值守轮（定时任务）装配时剔除
         requires_user_interaction=True,
-        approval="allow",
-        risk="low",
     ),
     ToolSpec(
         provides=("officecli_run",),
         build=lambda ctx: [create_officecli_run_tool(ctx.workspace_runtime)],
         note="OfficeCLI 编辑/查询 Office 文件",
         required_skills=(OFFICE_SKILL,),
-        approval="allow",
-        risk="medium",
     ),
     ToolSpec(
         provides=("bash_run",),
         build=lambda ctx: ([create_bash_run_tool(ctx.workspace_runtime)] if ctx.runtime_options.bash_enabled else []),
         note="受 CHAT_DATA_DEFAULT_BASH_ENABLED 运行选项控制的可选执行工具；bash_run.BASH_RUN_DISABLED 代码级总闸生效时即使注册也拒绝执行",
-        approval="allow",
-        risk="high",
     ),
 )
 
 
-# 系统工具审批策略：与 MCP 插件相同的 tool -> ask/allow 映射。
-# 唯一声明源是上面的 ToolSpec.approval / risk；本 map 由注册表生成，保留可变视图
-# 供测试/运维覆盖。新增工具若未显式声明 approval，system_tool_approval 默认 ask。
 MIDDLEWARE_INJECTED_APPROVAL_TOOLS = frozenset({"write_todos", "task", "mcp_tool_search", "mcp_tool_call"})
-MIDDLEWARE_TOOL_APPROVALS: dict[str, str] = {
-    "write_todos": "allow",
-    "task": "allow",
-    "mcp_tool_search": "allow",
-    "mcp_tool_call": "allow",
-}
-MIDDLEWARE_TOOL_RISKS: dict[str, str] = {
-    "write_todos": "low",
-    "task": "low",
-    "mcp_tool_search": "medium",
-    "mcp_tool_call": "high",
+
+
+@dataclass(frozen=True)
+class ToolDeclaration:
+    """单个工具的管理声明：审批/风险/展示名；与构建组解耦。"""
+
+    approval: str = "allow"
+    risk: str = "medium"
+    display_name: str = ""
+
+
+# 每个工具一条声明：构建可以按 ToolSpec 分组，策略必须逐工具独立。
+TOOL_DECLARATIONS: dict[str, ToolDeclaration] = {
+    "file_read": ToolDeclaration(approval="allow", risk="low", display_name="读取文件"),
+    "file_edit": ToolDeclaration(approval="allow", risk="medium", display_name="修改文件"),
+    "file_write": ToolDeclaration(approval="allow", risk="medium", display_name="写入文件"),
+    "file_move": ToolDeclaration(approval="allow", risk="medium", display_name="移动文件"),
+    "file_copy": ToolDeclaration(approval="allow", risk="medium", display_name="复制文件"),
+    "file_delete": ToolDeclaration(approval="allow", risk="high", display_name="删除文件"),
+    "file_glob": ToolDeclaration(approval="allow", risk="low", display_name="查找文件"),
+    "file_grep": ToolDeclaration(approval="allow", risk="low", display_name="搜索文本"),
+    "file_diff": ToolDeclaration(approval="allow", risk="low", display_name="对比文件"),
+    "dir_create": ToolDeclaration(approval="allow", risk="medium", display_name="创建目录"),
+    "dir_list": ToolDeclaration(approval="allow", risk="low", display_name="列出目录"),
+    "dir_delete": ToolDeclaration(approval="allow", risk="high", display_name="删除目录"),
+    "parse_document": ToolDeclaration(approval="allow", risk="low", display_name="解析文档"),
+    "read_image": ToolDeclaration(approval="allow", risk="low", display_name="读取图片"),
+    "present_artifacts": ToolDeclaration(approval="allow", risk="low", display_name="展示文件"),
+    "get_current_time": ToolDeclaration(approval="allow", risk="low", display_name="获取当前时间"),
+    "load_skill": ToolDeclaration(approval="allow", risk="low", display_name="加载技能"),
+    "data_analyzing_tool": ToolDeclaration(approval="allow", risk="medium", display_name="数据分析"),
+    "calculator_tool": ToolDeclaration(approval="allow", risk="low", display_name="精确计算"),
+    "ask_user_question": ToolDeclaration(approval="allow", risk="low", display_name="询问用户"),
+    "officecli_run": ToolDeclaration(approval="allow", risk="medium", display_name="运行 OfficeCLI"),
+    "bash_run": ToolDeclaration(approval="allow", risk="high", display_name="运行脚本"),
+    "write_todos": ToolDeclaration(approval="allow", risk="low", display_name="更新任务计划"),
+    "task": ToolDeclaration(approval="allow", risk="low", display_name="派发子智能体"),
+    "mcp_tool_search": ToolDeclaration(approval="allow", risk="medium", display_name="搜索 MCP 工具"),
+    "mcp_tool_call": ToolDeclaration(approval="allow", risk="high", display_name="调用 MCP 工具"),
 }
 
-# 唯一声明源：内置工具从 TOOL_SPECS 生成，中间件工具从上面的显式声明生成。
-TOOL_RISK: dict[str, str] = {}
+# 由逐工具声明生成的兼容视图；消费方仍可读取/测试这些 map。
 SYSTEM_TOOL_APPROVALS: dict[str, str] = {}
+TOOL_RISK: dict[str, str] = {}
 for _spec in TOOL_SPECS:
-    _risk_lookup = dict(_spec.risk_overrides)
     for _tool_name in _spec.provides:
-        SYSTEM_TOOL_APPROVALS[_tool_name] = _spec.approval
-        TOOL_RISK[_tool_name] = _risk_lookup.get(_tool_name, _spec.risk)
-SYSTEM_TOOL_APPROVALS.update(MIDDLEWARE_TOOL_APPROVALS)
-TOOL_RISK.update(MIDDLEWARE_TOOL_RISKS)
+        _declaration = TOOL_DECLARATIONS.get(_tool_name)
+        if _declaration is None:
+            raise RuntimeError(f"工具缺少 ToolDeclaration: {_tool_name}")
+        SYSTEM_TOOL_APPROVALS[_tool_name] = _declaration.approval
+        TOOL_RISK[_tool_name] = _declaration.risk
+for _tool_name in MIDDLEWARE_INJECTED_APPROVAL_TOOLS:
+    _declaration = TOOL_DECLARATIONS.get(_tool_name)
+    if _declaration is None:
+        raise RuntimeError(f"中间件工具缺少 ToolDeclaration: {_tool_name}")
+    SYSTEM_TOOL_APPROVALS[_tool_name] = _declaration.approval
+    TOOL_RISK[_tool_name] = _declaration.risk
 
 # 未显式配置的系统工具默认 ask；MCP 动态工具仍由插件 tools.<name>.approval 默认 ask。
 SYSTEM_TOOL_APPROVAL_DEFAULT = "ask"
+
+
+def tool_display_names() -> dict[str, str]:
+    """返回所有系统/中间件工具的展示名；前端 /config 消费，未知工具由前端兜底。"""
+    return {
+        name: declaration.display_name for name, declaration in TOOL_DECLARATIONS.items() if declaration.display_name
+    }
 
 
 def system_tool_approval(tool_name: str) -> str:
@@ -306,10 +307,13 @@ GENERAL_PURPOSE_EXTRA_EXCLUDED_TOOL_NAMES = frozenset({"bash_run"})
 
 __all__ = [
     "ToolBuildContext",
+    "ToolDeclaration",
     "ToolSpec",
+    "TOOL_DECLARATIONS",
     "TOOL_SPECS",
     "SYSTEM_TOOL_APPROVALS",
     "TOOL_RISK",
+    "tool_display_names",
     "tool_risk",
     "SYSTEM_TOOL_APPROVAL_DEFAULT",
     "system_tool_approval",

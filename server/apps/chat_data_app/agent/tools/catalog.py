@@ -16,6 +16,7 @@ from utils.logger import get_logger
 from .registry import (
     MIDDLEWARE_INJECTED_APPROVAL_TOOLS,
     SUBAGENT_BASE_EXCLUDED_TOOL_NAMES,
+    TOOL_DECLARATIONS,
     TOOL_SPECS,
     system_tool_approval,
     tool_risk,
@@ -47,6 +48,7 @@ class ToolDescriptor:
     permission: str
     owner: str
     approval: ToolApproval
+    display_name: str = ""
     description: str = ""
     data_scope: frozenset[str] = frozenset()
     subagent_visible: bool = True
@@ -60,6 +62,7 @@ class ToolDescriptor:
             "permission": self.permission,
             "owner": self.owner,
             "approval": self.approval,
+            "display_name": self.display_name,
             "description": self.description,
             "data_scope": sorted(self.data_scope),
             "subagent_visible": self.subagent_visible,
@@ -108,6 +111,7 @@ def _builtin_descriptors() -> list[ToolDescriptor]:
                     permission=f"tool:{name}",
                     owner="platform",
                     approval=normalize_tool_approval(system_tool_approval(name)),
+                    display_name=TOOL_DECLARATIONS[name].display_name,
                     description=spec.note,
                     subagent_visible=name not in SUBAGENT_BASE_EXCLUDED_TOOL_NAMES,
                 )
@@ -121,6 +125,7 @@ def _builtin_descriptors() -> list[ToolDescriptor]:
                 permission=f"tool:{name}",
                 owner="platform",
                 approval=normalize_tool_approval(system_tool_approval(name)),
+                display_name=TOOL_DECLARATIONS[name].display_name,
                 description="middleware injected",
             )
         )
@@ -140,6 +145,7 @@ def _dynamic_descriptor(tool: Any) -> ToolDescriptor | None:
             permission=f"tool:{name}",
             owner="platform",
             approval=normalize_tool_approval(system_tool_approval(name)),
+            display_name=str(metadata.get("display_name") or getattr(tool, "name", "") or ""),
             description=str(getattr(tool, "description", "") or ""),
         )
     raw_approval = metadata.get("approval") or DEFAULT_TOOL_APPROVAL
@@ -153,6 +159,7 @@ def _dynamic_descriptor(tool: Any) -> ToolDescriptor | None:
         permission=f"tool:{name}",
         owner=str(metadata.get("mcp_server_id") or ""),
         approval=approval,
+        display_name=str(metadata.get("display_name") or name),
         description=str(getattr(tool, "description", "") or ""),
         subagent_visible=False,
         searchable=True,
