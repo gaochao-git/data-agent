@@ -127,7 +127,7 @@ export function useSqlGenerator() {
       quotedSnippets?: Array<{ text: string }>
       enableThinking?: boolean | null
       thinkingEffort?: string | null
-      runtimeOptions?: { workspace_backend: 'local' | 'sandbox'; bash_enabled: boolean } | null
+      runtimeOptions?: { workspace_backend: 'local' | 'sandbox' } | null
       onContextCompression?: (payload: ChatDataContextCompressionEvent) => void
       fileIds?: string[]
       queuedMessageId?: string | null

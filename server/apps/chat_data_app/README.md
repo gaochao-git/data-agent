@@ -87,7 +87,7 @@ SQL 查询（人工写 SQL）──────────────┐
 
 ### 1. 数据智能体
 
-数据智能体是唯一的 `chat_data` Agent，共用会话 SSE 入口，不直接走 SQL 查询页面的提交按钮。运行时始终提供会话工作区和文件工具；`workspace_backend`（运行环境）与 `bash_enabled`（安全策略）是两个独立维度：前者只决定工作区跑在受限本地目录还是 OpenSandbox，后者决定 `bash_run` 是否注册。两者职责不同且必须耦合选型，详见下文「运行环境后端与 Bash 安全模型」。
+数据智能体是唯一的 `chat_data` Agent，共用会话 SSE 入口，不直接走 SQL 查询页面的提交按钮。运行时始终提供会话工作区和文件工具；`workspace_backend`（运行环境）只决定工作区跑在受限本地目录还是 OpenSandbox；工具是否注册由 `tools/registry.py` 的 `ToolDefinition.enabled` 单一控制（`bash_run` 默认关闭）。
 
 ChatData 文件型数据统一位于 `CHAT_DATA_HOME`（**必填**，应用唯一数据根，禁止回退到其它变量推导）：会话路径为 `threads/{user_id}/{创建日期YYYY-MM-DD}/{conversation_id}/user-data/`（按会话创建日期归档，路径统一由 `utils.storage_paths.conversation_thread_dir` 拼装），其中固定创建 `workspace/`、`outputs/`、`uploads/`，查询结果统一保存到 `outputs/query_result/<id>.json`，普通工具大结果保存到 `outputs/.tool-offload/<id>.json|txt`。查询工具只返回简短元数据和受会话约束的 `result_id`、`result_path=/mnt/user-data/outputs/query_result/<id>.json`；前端按 `result_id` 回放完整结果，Agent 后续分析按 `result_path` 使用 `file_read` 或 Bash 读取。两个系统目录均不出现在工作区文件列表，`file_edit`、`file_copy`、`file_move`、`file_delete`、`present_artifacts` 与技能导入均拒绝它们，因此不作为用户产物。前端请求时携带会话 ID，服务端完成用户归属校验后按固定路径读取。系统技能位于 `CHAT_DATA_HOME/skills/system/`，用户技能位于 `CHAT_DATA_HOME/skills/user/{user_id}/<skill-name>/versions/vN/`；管理域不直接暴露给模型，每个会话在创建/首次运行时构建技能快照 `threads/{user_id}/{创建日期YYYY-MM-DD}/{conversation_id}/runtime-skills/`（系统技能 + 自己已发布 + 他人 global 已发布，会话内冻结不变），通过 Files API 上传到 sandbox 的扁平 `/mnt/skills/<技能名>/`；sandbox 也通过 Files API 上传 `/mnt/user-data`，操作完成后下载 `workspace/`、`outputs/` 变更回应用侧，不使用宿主机目录挂载。系统技能由发布流程从代码包复制到 `skills/system/`，运行时只读且不依赖技能数据库。
 
@@ -95,25 +95,25 @@ ChatData 文件型数据统一位于 `CHAT_DATA_HOME`（**必填**，应用唯�
 
 ### 运行环境后端与 Bash 安全模型
 
-运行环境后端（`workspace_backend`）与 Bash 开关（`bash_enabled`）职责不同，选型必须耦合，不能分开理解：
+运行环境后端（`workspace_backend`）与工具启停（`ToolDefinition.enabled`）职责不同：
 
 - **`workspace_backend` 是「运行环境标准化」，不是安全设备。** 选 `sandbox`（OpenSandbox）的目的只是把代码执行场所钉死为统一的 Python 版本、预装依赖、可复现环境，且不让 `pip install` / 临时进程 / 环境变量污染宿主生产服务。它的容器隔离（FS/网络/进程边界）只是顺带能力，本职是给代码一个一致的运行场所。
-- **`bash_enabled` 是真正的「安全策略控制」。** 它决定 Bash 工具是否注册；注册后对命令做黑名单（`nohup` / `setsid` / `su` / `sudo` / ...）+ 路径词法校验（`agent/tools/bash_run.py` 的 `_validate_command` / `_validate_command_paths`）。安全意图全部表达在这一层。
-- **代码级总闸（2026-09-18）：`agent/tools/bash_run.py` 的 `BASH_RUN_DISABLED = True`。** 产品决定生产环境不开放 bash：即使上面的 env 或请求覆盖被误开启，`bash_run` 执行时也直接返回「功能已禁用」的结构化结论，命令不触达运行时。工具注册链路不变（`bash_enabled=true` 时工具仍可见，模型会把禁用结论转告用户）。这是刻意「下线而非删除」——恢复 bash 须把该常量改回 `False` 并重启进程，再按 2×2 矩阵确认隔离选型。
+- **`ToolDefinition.enabled` 是唯一的工具启停开关。** `bash_run` 默认禁用；注册后对命令做黑名单（`nohup` / `setsid` / `su` / `sudo` / ...）+ 路径词法校验（`agent/tools/bash_run.py` 的 `_validate_command` / `_validate_command_paths`）。安全意图全部表达在这一层。
+- **代码级总闸（2026-09-18）：`agent/tools/bash_run.py` 的 `BASH_RUN_DISABLED = True`。** 产品决定生产环境不开放 bash：即使 `ToolDefinition.enabled` 被误改为开启，`bash_run` 执行时也直接返回「功能已禁用」的结构化结论，命令不触达运行时。这是刻意「下线而非删除」——恢复 bash 须同时把该常量改回 `False` 并重启进程。
 
 **但 Bash 工具的校验是「策略轨道」而非「执行之墙」：** agent 可先用 `file_edit` 把任意脚本写到 `workspace/`，再 `bash evil.sh` 执行——脚本内容完全不被检查；local 模式下子进程以宿主权限运行，校验是唯一闸门且可被引号/进程替换绕过。因此 Bash 工具的开关是 policy（是否允许代码执行），**enforcement（真正把越界代码关住）要由沙箱容器兜底**。
 
 两个维度正交，组合成 2×2 矩阵，由部署者自行选择（代码不强制）：
 
-| 运行模式（`bash_enabled`） | 隔离模式（`workspace_backend`） | 含义与风险 |
+| 运行模式（`ToolDefinition.enabled`） | 隔离模式（`workspace_backend`） | 含义与风险 |
 |---|---|---|
 | 受控（`false`） | 本地（`local`） | 无代码执行；文件工具经 `resolve_workspace_path` 严格限制在 `workspace` / `outputs` / `uploads` + 受权限管控的只读技能目录，100% 受控。**最轻量、最安全，推荐默认**。此时 sandbox 只增加 VM 开销与 I/O 延迟，无安全收益 |
 | 受控（`false`） | 沙箱（`sandbox`） | 无代码执行，但工具仍走容器 RPC；标准化运行环境在此无代码可作用，仅增开销，通常无意义 |
 | 灵活（`true`） | 沙箱（`sandbox`，推荐） | agent 可执行任意代码；sandbox 承担「标准化运行环境」与「Bash 校验被绕过时的隔离兜底」，宿主不直接暴露。**灵活模式推荐 sandbox** |
 | 灵活（`true`） | 本地（`local`） | agent 可执行任意代码，子进程以宿主权限运行、无容器隔离；Bash 校验被绕过即宿主直接暴露。**仅在可信 / 纯本地开发场景使用**，勿用于多租户或暴露环境 |
 
-- **文件工具（`file_read` / `file_edit` / `file_write` / `file_move` / `file_copy` / `file_delete` / `file_glob` / `file_grep` / `dir_create` / `dir_list` / `dir_delete` / `present_artifacts`）始终可用且始终严格路径管控**。工具只调用 `ConversationWorkspaceRuntime`；运行时将读写、目录遍历和产物解析委托给 `WorkspaceBackend`。会话开始前构建可见技能快照，模型通过 `file_read` 只读访问 `/mnt/skills/<name>/SKILL.md` 及其在技能入口中声明的资源。`local` 直接访问受控会话目录，`sandbox` 经 OpenSandbox Files API 访问一次性沙箱副本，不允许工具层按 backend 分支或直接读宿主路径。只有 Bash 工具会在受控模式（`bash_enabled=false`）下不注册。
-- **隔离模式 / Bash 属于部署能力**：只由 `CHAT_DATA_DEFAULT_WORKSPACE_BACKEND` / `CHAT_DATA_DEFAULT_BASH_ENABLED`（env 或部署配置）决定，**不再接受前端动态传参**（旧 `runtime_options` 请求字段已被忽略并移除，`CHAT_DATA_CAPABILITY_USER_OVERRIDABLE` 一并下线）。
+- **文件工具（`file_read` / `file_edit` / `file_write` / `file_move` / `file_copy` / `file_delete` / `file_glob` / `file_grep` / `dir_create` / `dir_list` / `dir_delete` / `present_artifacts`）始终可用且始终严格路径管控**。工具只调用 `ConversationWorkspaceRuntime`；运行时将读写、目录遍历和产物解析委托给 `WorkspaceBackend`。会话开始前构建可见技能快照，模型通过 `file_read` 只读访问 `/mnt/skills/<name>/SKILL.md` 及其在技能入口中声明的资源。`local` 直接访问受控会话目录，`sandbox` 经 OpenSandbox Files API 访问一次性沙箱副本，不允许工具层按 backend 分支或直接读宿主路径。Bash 工具默认由 `ToolDefinition.enabled=false` 关闭。
+- **隔离模式属于部署能力**：只由 `CHAT_DATA_DEFAULT_WORKSPACE_BACKEND` 决定，**不再接受前端动态传参**；工具启停由 `ToolDefinition.enabled` 控制。
 - **工具审批（B 端固定策略）**：系统工具通过 `SYSTEM_TOOL_APPROVALS` 映射配置，当前统一 allow，MCP 动态工具默认需审批（插件 `mcp_servers[].tools.<name>.approval=allow` 豁免，`mcp_tool_search` 只读检索除外）；每个工具档位固定为 `ask/allow`，用户不可切换。审批卡只提供「允许 / 拒绝」，并行工具调用合并为一张卡逐条选择，不产生本轮/本会话持久授权。无人值守运行（定时任务/评测）不装配审批中间件，ask 工具在装配层 fail-closed 剔除；子智能体不继承 MCP 动态工具。中间件实现见 `agent/middleware/tool_approval.py`。
 
 ```text
@@ -544,7 +544,7 @@ model → tools → model，直到模型不再发起工具调用后结束。
 -> 回答
 ```
 
-系统技能、当前用户已发布技能及他人 global 已发布技能会在会话创建或首次运行时构建为冻结的运行时快照；模型只可通过 `file_read` 访问快照中的 `/mnt/skills/<name>/SKILL.md` 与技能入口明确声明的只读资源。脚本是否能执行只由 `bash_enabled` 决定。但 Bash 工具自身校验可被「写脚本再执行」绕过，开启 Bash 时必须配合 `sandbox` 后端做隔离兜底（见「运行环境后端与 Bash 安全模型」）。技能不替代当前指标集，业务背景优先通过指标集配置维护；可用执行对象清单、方言与智能问数说明通过 `data_analyzing_tool` 的 `list_execution_targets` 实时获取（静态注入系统提示词的链路已于 2026-09-24 整体下线删除）。
+系统技能、当前用户已发布技能及他人 global 已发布技能会在会话创建或首次运行时构建为冻结的运行时快照；模型只可通过 `file_read` 访问快照中的 `/mnt/skills/<name>/SKILL.md` 与技能入口明确声明的只读资源。脚本是否能执行只由 `ToolDefinition.enabled` 决定。但 Bash 工具自身校验可被「写脚本再执行」绕过，开启 Bash 时必须配合 `sandbox` 后端做隔离兜底（见「运行环境后端与 Bash 安全模型」）。技能不替代当前指标集，业务背景优先通过指标集配置维护；可用执行对象清单、方言与智能问数说明通过 `data_analyzing_tool` 的 `list_execution_targets` 实时获取（静态注入系统提示词的链路已于 2026-09-24 整体下线删除）。
 
 指标集检索分两层：
 

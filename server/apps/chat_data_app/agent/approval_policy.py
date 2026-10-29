@@ -6,7 +6,7 @@
 - MCP 工具：插件 ``mcp_servers[].tools.<name>.approval``，由 manager 透出到工具 metadata。
 
 本模块把两边的差异收敛为一张 ``{tool_name: ask|allow}`` 映射，供审批中间件、
-无人值守过滤和子智能体排除集共同消费。未来改为数据库表时，只替换
+无人值守过滤和子智能体审批剔除共同消费。未来改为数据库表时，只替换
 ``resolve_approval_policies`` 的内部实现，消费方无需改动。
 """
 

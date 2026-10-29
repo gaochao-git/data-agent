@@ -17,7 +17,7 @@ from apps.chat_data_app.agent.middleware.subagents import (
 )
 
 
-def _spec(name="data-explore", **overrides):
+def _spec(name="explore", **overrides):
     kwargs = {
         "name": name,
         "description": "深度分析子智能体",
@@ -147,7 +147,7 @@ async def test_task_tool_without_usage_meta_omits_context_usage_snapshot(monkeyp
 
     result = await tool.coroutine(
         description="分析",
-        subagent_type="data-explore",
+        subagent_type="explore",
         runtime=SimpleNamespace(state={"user_id": "u1"}, tool_call_id="call-1"),
     )
 

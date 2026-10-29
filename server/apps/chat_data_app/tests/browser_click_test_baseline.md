@@ -218,7 +218,7 @@ ChatData
 | --- | --- | --- | --- | --- |
 | `ENT` 业务端入口与权限 | 建立普通用户进入 ChatData 后的模式和资源选择边界 | 模式切换、数据源/模型/执行对象选择、空态、权限回收、状态恢复 | `pages/index.vue`、查询入口 | `ENT-01/03/04/05` |
 | `SEM` 用户自定义语义模型 | 让用户维护个人查询所需的私有语义模型并验证其查询质量 | 私有模型 CRUD、表范围、别名、维度配置（一行 = 一个物理字段，勾选决定是否参与维度，可排除多表重复字段）、自定义维度、物理详情、表达式、指标管理（原子/派生/复合统一新建、编辑与聚合扩展）、关系/自关联、业务说明、字段字典只读、历史学习、私有模型评估、校验和删除 | `SemanticConfigPanel.vue`、`SemanticEvaluationDrawer.vue`、`components/semantic/` | `SEM-02/06-18`、`EVAL-*` |
-| `AG` 数据智能体 | 通过自然语言完成语义查询、后续分析和技能使用与管理 | 入口与资源选择（数据源组切换、执行对象选择与成员勾选、语义模型智能选择/手动切换/搜索、推荐问题使用并回填聚焦输入框、模型选择与深度思考开关、上传文件入口、工作区文件 @ 引用（输入框 `@` 唤起文件候选弹层与实时过滤、chip 多选与单独移除、发送后与历史回放的引用 chip 展示、生成中排队消息实时接纳后 chip 保留、点击 chip 在工作区面板定位预览文件））；回复划选引用（划选助手回复弹浮层「复制/添加到对话」、输入框引用 chip 展示与移除、上限 5×2000 字提示、发送后模型可见标记块与历史回放 chip、排队消息引用保留、内网 http 复制 textarea 兜底）；消息队列与插队执行（运行中连发入队、立即插入/转下轮策略切换、多轮链式自动接续、停止后队列保留、单条「执行」按钮插队、停止后输入框发送不合并队列按 FIFO 续跑、队列项编辑移除）；任务计划与询问确认（write_todos 任务计划进度条与步骤卡片、ask_user_question 询问卡片分页与选项）；安全防护（内容安全：输入输出合规、system prompt 与敏感信息不泄漏；行动安全：查询语言控制（SQL 只读校验、危险语句拦截）、运行能力控制（不引入沙箱、不启用 Bash、安全模式配置）、资源访问控制（文件虚拟目录边界、执行对象权限边界））；会话记忆（memory.md 口径沉淀与复用）、task 子智能体派发（plan 规划 / data-explore 只读探索）与报告工作流；DSL/SQL 两种模式、模型检索、单/多成员查询、空结果、错误、结果落盘、文件读取、分段分析、工具轨迹、流式停止和恢复、等待期知识轮播（状态行内联 8s 轮换，仅实时流式期间显示）；会话新建、切换、标题、收藏、删除与恢复，消息与上下文详情，Token 与缓存，上下文压缩，轮次导航，工具卡片意图悬浮详情与状态/起止时间/耗时展示，会话列表时间常显与操作束恒可用（见 CTX-07 新口径）；技能使用（搜索、命令选择、发布状态与权限范围、运行期快照执行）与技能管理（列表与分类搜索、草稿创建与元数据校验、文件树与内容编辑、版本查看、发布与回滚、复制、收藏、删除、工作区导入与运行期加载） | `conversation/Conversation.vue`、`ConversationInputBar.vue`、`AnalysisProgress.vue`、`ToolCallCard.vue`、`UserQuestionCard.vue`、`components/sidebars/ConversationSidebar.vue`、`ConversationTokenUsage.vue`、`ConversationTurnNavigator.vue`、`WaitingTip.vue`、`SkillManager.vue`、技能命令菜单 | `AG-*`、`CTX-*`（会话与上下文子分类）、`SKILL-*`（技能子分类） |
+| `AG` 数据智能体 | 通过自然语言完成语义查询、后续分析和技能使用与管理 | 入口与资源选择（数据源组切换、执行对象选择与成员勾选、语义模型智能选择/手动切换/搜索、推荐问题使用并回填聚焦输入框、模型选择与深度思考开关、上传文件入口、工作区文件 @ 引用（输入框 `@` 唤起文件候选弹层与实时过滤、chip 多选与单独移除、发送后与历史回放的引用 chip 展示、生成中排队消息实时接纳后 chip 保留、点击 chip 在工作区面板定位预览文件））；回复划选引用（划选助手回复弹浮层「复制/添加到对话」、输入框引用 chip 展示与移除、上限 5×2000 字提示、发送后模型可见标记块与历史回放 chip、排队消息引用保留、内网 http 复制 textarea 兜底）；消息队列与插队执行（运行中连发入队、立即插入/转下轮策略切换、多轮链式自动接续、停止后队列保留、单条「执行」按钮插队、停止后输入框发送不合并队列按 FIFO 续跑、队列项编辑移除）；任务计划与询问确认（write_todos 任务计划进度条与步骤卡片、ask_user_question 询问卡片分页与选项）；安全防护（内容安全：输入输出合规、system prompt 与敏感信息不泄漏；行动安全：查询语言控制（SQL 只读校验、危险语句拦截）、运行能力控制（不引入沙箱、不启用 Bash、安全模式配置）、资源访问控制（文件虚拟目录边界、执行对象权限边界））；会话记忆（memory.md 口径沉淀与复用）、task 子智能体派发（plan 规划 / explore 只读探索）与报告工作流；DSL/SQL 两种模式、模型检索、单/多成员查询、空结果、错误、结果落盘、文件读取、分段分析、工具轨迹、流式停止和恢复、等待期知识轮播（状态行内联 8s 轮换，仅实时流式期间显示）；会话新建、切换、标题、收藏、删除与恢复，消息与上下文详情，Token 与缓存，上下文压缩，轮次导航，工具卡片意图悬浮详情与状态/起止时间/耗时展示，会话列表时间常显与操作束恒可用（见 CTX-07 新口径）；技能使用（搜索、命令选择、发布状态与权限范围、运行期快照执行）与技能管理（列表与分类搜索、草稿创建与元数据校验、文件树与内容编辑、版本查看、发布与回滚、复制、收藏、删除、工作区导入与运行期加载） | `conversation/Conversation.vue`、`ConversationInputBar.vue`、`AnalysisProgress.vue`、`ToolCallCard.vue`、`UserQuestionCard.vue`、`components/sidebars/ConversationSidebar.vue`、`ConversationTokenUsage.vue`、`ConversationTurnNavigator.vue`、`WaitingTip.vue`、`SkillManager.vue`、技能命令菜单 | `AG-*`、`CTX-*`（会话与上下文子分类）、`SKILL-*`（技能子分类） |
 | `SCHED` 定时任务（数据智能体子功能） | 让用户把周期性问数任务托管给调度器，结果落在绑定会话中 | 任务列表与启停、新建/编辑（运行会话：指定历史会话 / 每次新建会话；运行配置：数据源组、模型、推理等级；调度：周期 cron 每小时/每天/每周/自定义、单次执行时间、有效期至）、编辑态只下发改动项的补丁式提交、立即执行与会话忙时转队列、执行历史、绑定会话跳转与复制会话 ID、到点自动触发与结果交付 | `AgentScheduleManager.vue`、`AgentScheduleRunsTable.vue`、会话侧栏「定时任务」入口 | `SCHED-01~04/08` |
 | `BI` 可视化查询 | 通过 Builder DSL 配置并执行语义查询 | 模型/主表、维度、指标、聚合、时间粒度、过滤、字段引用、`rightExpression`、派生/复合逻辑指标拖拽使用、排序、limit/offset、预览、执行、多成员、图表和结果分析 | `QueryBuilder/` | `BI-*` |
 | `SQL` SQL 查询 | 提供普通用户可控的只读 SQL 编辑和执行 | 编辑器、格式化、多语句、多成员、limit、安全校验、异步任务、停止、错误、历史、结果和收藏（AI 辅助面板已于 2026-09-27 下线，主智能体已覆盖该能力） | `SqlEditor.vue`、查询结果组件 | `SQL-*` |
@@ -806,12 +806,12 @@ ChatData
 - 操作：告诉模型一个明确口径（如"以后'销售额'一律指含税金额，先记下来"），让其确认并记录；追问一次需要该口径的查询；再发起一次同类任务观察是否先读记忆；另新建会话验证记忆按会话隔离。
 - 预期：模型按提示词使用绝对路径 `/mnt/user-data/workspace/memory.md` 首次 `file_read`/`file_write` 即成功（相对路径会被路径策略拒绝，不出现首次必失败）；记录追加不覆盖已有内容；后续同类任务先读记忆并应用口径，不向用户重复追问；子智能体系统提示不包含记忆块；不同会话的 memory.md 相互隔离。
 
-#### AG-17 task 子智能体派发（plan / data-explore）
+#### AG-17 task 子智能体派发（plan / explore）
 
 - 角色：`USER_A`
-- 前置：运行选项启用 plan 与 data-explore 子智能体。
+- 前置：运行选项启用 plan 与 explore 子智能体。
 - 操作：提交一个需要"先规划、再分步取数汇总"的复杂任务，展开工具详情观察 `task` 派发与子图过程；运行中点击停止。
-- 预期：主智能体通过 `task` 派发到 `plan`/`data-explore` 隔离上下文；plan 产出计划文件落 `/mnt/user-data/workspace/`（提示词与路径策略同口径）；data-explore 只回传结构化事实、不写文件；子图过程经 writer 实时下发可见；停止后子图与主图一起终止，不产生取消后仍出现的文件。
+- 预期：主智能体通过 `task` 派发到 `plan`/`explore` 隔离上下文；plan 产出计划文件落 `/mnt/user-data/workspace/`（提示词与路径策略同口径）；explore 只回传结构化事实、不写文件；子图过程经 writer 实时下发可见；停止后子图与主图一起终止，不产生取消后仍出现的文件。
 
 #### AG-18 报告工作流
 
@@ -1561,7 +1561,7 @@ ChatData
 | 项目 | 内容 |
 | --- | --- |
 | 版本/提交 | 代码 commit、前端构建版本、后端部署版本 |
-| 环境 | API 地址、数据库类型、执行器、`CHATDATA_ROW_LIMIT`、workspace backend；能力开关（发布记录必须逐项记录实际值）：`CHAT_DATA_QUERY_CACHE_ENABLED`、`CHAT_DATA_DEFAULT_BASH_ENABLED`、`CHAT_DATA_DEFAULT_WORKSPACE_BACKEND`、`CHAT_DATA_MAX_UPLOAD_SIZE_MB`、`CHAT_DATA_MAX_IMAGE_SIZE_MB`、`CHAT_DATA_CONTEXT_COMPRESSION_ENABLED`、`CHAT_DATA_AGENT_RECURSION_LIMIT` |
+| 环境 | API 地址、数据库类型、执行器、`CHATDATA_ROW_LIMIT`、workspace backend；能力开关（发布记录必须逐项记录实际值）：`CHAT_DATA_QUERY_CACHE_ENABLED`、`CHAT_DATA_DEFAULT_WORKSPACE_BACKEND`、`CHAT_DATA_MAX_UPLOAD_SIZE_MB`、`CHAT_DATA_MAX_IMAGE_SIZE_MB`、`CHAT_DATA_CONTEXT_COMPRESSION_ENABLED`、`CHAT_DATA_AGENT_RECURSION_LIMIT` |
 | 账号 | 使用的角色和账号标识，不记录密码/token |
 | 用例 | 按编号填写通过、失败、阻塞；失败必须关联缺陷 |
 | 证据 | 关键页面截图/录屏、请求路径、结果状态、错误信息 |

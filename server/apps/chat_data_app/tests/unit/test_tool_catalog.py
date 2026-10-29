@@ -17,6 +17,9 @@ def test_tool_catalog_covers_builtin_and_middleware_tools():
     assert by_name["task"].source == "middleware"
     assert by_name["file_read"].approval == "allow"
     assert by_name["file_read"].display_name == "读取文件"
+    assert by_name["data_analyzing_tool"].required_skills
+    assert by_name["ask_user_question"].requires_user_interaction is True
+    assert by_name["bash_run"].enabled is False
     assert catalog.to_dicts()[0]["display_name"]
 
 
@@ -40,7 +43,6 @@ def test_tool_catalog_accepts_mcp_and_runtime_tools():
     assert by_name["mcp_fault_db_info"].source == "mcp"
     assert by_name["mcp_fault_db_info"].approval == "ask"
     assert by_name["mcp_fault_db_info"].risk == "high"
-    assert by_name["mcp_fault_db_info"].subagent_visible is False
     assert by_name["mcp_fault_db_info"].searchable is True
     assert by_name["mcp_fault_db_read"].approval == "allow"
     assert by_name["mcp_fault_db_read"].risk == "medium"

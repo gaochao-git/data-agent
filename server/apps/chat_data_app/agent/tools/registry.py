@@ -1,14 +1,14 @@
 """工具注册单一事实源（Single Source of Truth）。
 
-工具清单、注册顺序与子智能体可见性此前散落在 ``data_agent.py`` 的装配函数与
-三个硬编码排除集：新增工具要同步改装配列表与排除集，漏一处就是静默失效
-（漏装配 = 模型看不到工具；漏排除 = 子智能体拿到不该有的写权限）。现集中到本模块：
+工具清单、注册顺序与单工具策略此前散落在 ``data_agent.py`` 的装配函数与
+多个硬编码集合：新增工具要同步改装配列表与策略，漏一处就是静默失效
+（漏装配 = 模型看不到工具；漏白名单 = 子智能体工具面漂移）。现集中到本模块：
 
-- ``TOOL_SPECS``：有哪些工具、按什么顺序注册（顺序即模型看到的工具顺序）、
+- ``TOOL_BUILD_GROUPS``：有哪些工具、按什么顺序注册（顺序即模型看到的工具顺序）、
   各自提供哪些工具名（``provides``，与 ``@tool`` 注册名一致，供权限排除匹配）；
 - ``ToolBuildContext``：一次装配的上下文（运行选项、工作区运行时、身份与数据源）；
-- 子智能体排除集：作为策略声明与注册表同处一地，配套 ``provided_tool_names()`` 与
-  ``tests/unit/test_tools_registry.py`` 护栏——排除集出现未注册的工具名直接变红。
+- 子智能体工具白名单：由 ``data_agent.SUBAGENT_TOOL_ALLOWLISTS`` 显式声明，
+  配套 ``provided_tool_names()`` 与 ``tests/unit/test_tools_registry.py`` 护栏。
 
 与 ``utils/builtin_skills.py`` 的分工：那里登记技能名，这里登记工具名；
 技能文档单向引用工具名，本模块不反向依赖技能。
@@ -59,27 +59,20 @@ class ToolBuildContext:
 
 
 @dataclass(frozen=True)
-class ToolSpec:
+class ToolBuildGroup:
     """构建组：哪些工具共享一次构建、如何构建、一句话职责。
 
-    只负责“怎么构建”，不承载单工具策略；审批/风险由 ``ToolDeclaration``
-    逐工具声明，避免同一构建组内不同风险工具被组级配置混在一起。
-
-    ``requires_user_interaction``：工具需要用户实时应答（当前仅 ask_user_question）。
-    无人值守运行（定时轮）装配时跳过此类条目——用户不在场，提问必然悬挂在
-    waiting_user 等待应答，从装配层剔除即从根上关闭提问入口。
+    只负责“怎么构建”；审批/风险/展示名/技能前置/交互需求等单工具策略
+    统一由 ``ToolDefinition`` 声明，避免组级配置混入不同工具语义。
     """
 
     provides: tuple[str, ...]
     build: Callable[[ToolBuildContext], Sequence[Any]]
     note: str = ""
-    requires_user_interaction: bool = False
-    # 调用该工具前必须先 load_skill 的技能名；空表示无技能前置
-    required_skills: tuple[str, ...] = ()
 
 
-TOOL_SPECS: tuple[ToolSpec, ...] = (
-    ToolSpec(
+TOOL_BUILD_GROUPS: tuple[ToolBuildGroup, ...] = (
+    ToolBuildGroup(
         provides=(
             "file_read",
             "file_edit",
@@ -97,32 +90,32 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
         build=lambda ctx: create_filesystem_tools(ctx.workspace_runtime),
         note="会话工作区文件读写、检索与目录操作",
     ),
-    ToolSpec(
+    ToolBuildGroup(
         provides=("parse_document",),
         build=lambda ctx: create_parse_document_tool(ctx.workspace_runtime),
         note="解析 Office/PDF 等文档到工作区",
     ),
-    ToolSpec(
+    ToolBuildGroup(
         provides=("read_image",),
         build=lambda ctx: create_read_image_tool(ctx.workspace_runtime),
         note="读取工作区图片供多模态模型查看",
     ),
-    ToolSpec(
+    ToolBuildGroup(
         provides=("present_artifacts",),
         build=lambda ctx: [create_present_artifacts_tool(ctx.workspace_runtime)],
         note="向用户呈现最终产物（仅主智能体）",
     ),
-    ToolSpec(
+    ToolBuildGroup(
         provides=("get_current_time",),
         build=lambda _ctx: [get_current_time_tool],
         note="当前时间",
     ),
-    ToolSpec(
+    ToolBuildGroup(
         provides=("load_skill",),
         build=lambda ctx: [create_skill_tool(ctx.workspace_runtime)],
         note="加载会话技能正文（SKILL.md）到上下文；技能相关工具的前置入口",
     ),
-    ToolSpec(
+    ToolBuildGroup(
         provides=("data_analyzing_tool",),
         build=lambda ctx: [
             create_data_analyzing_tool(
@@ -133,31 +126,26 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
             )
         ],
         note="数据分析合并工具：DSL/dashboard_spec 校验、语义查询执行、语义模型 YAML 自检（按 action 分派）",
-        # 查数口径与失败处理全在技能正文里，未加载就调工具会按「凭记忆编口径」处理
-        required_skills=(DATA_ANALYZING_SKILL,),
     ),
-    ToolSpec(
+    ToolBuildGroup(
         provides=("calculator_tool",),
         build=lambda _ctx: [calculator_tool],
         note="精确数值计算",
     ),
-    ToolSpec(
+    ToolBuildGroup(
         provides=("ask_user_question",),
         build=lambda _ctx: [ask_user_question_tool],
         note="向用户提问（仅主智能体）",
-        # 需要用户实时应答：无人值守轮（定时任务）装配时剔除
-        requires_user_interaction=True,
     ),
-    ToolSpec(
+    ToolBuildGroup(
         provides=("officecli_run",),
         build=lambda ctx: [create_officecli_run_tool(ctx.workspace_runtime)],
         note="OfficeCLI 编辑/查询 Office 文件",
-        required_skills=(OFFICE_SKILL,),
     ),
-    ToolSpec(
+    ToolBuildGroup(
         provides=("bash_run",),
-        build=lambda ctx: ([create_bash_run_tool(ctx.workspace_runtime)] if ctx.runtime_options.bash_enabled else []),
-        note="受 CHAT_DATA_DEFAULT_BASH_ENABLED 运行选项控制的可选执行工具；bash_run.BASH_RUN_DISABLED 代码级总闸生效时即使注册也拒绝执行",
+        build=lambda ctx: [create_bash_run_tool(ctx.workspace_runtime)],
+        note="受 ToolDefinition.enabled 控制的执行工具；bash_run.BASH_RUN_DISABLED 代码级总闸生效时即使注册也拒绝执行",
     ),
 )
 
@@ -166,58 +154,86 @@ MIDDLEWARE_INJECTED_APPROVAL_TOOLS = frozenset({"write_todos", "task", "mcp_tool
 
 
 @dataclass(frozen=True)
-class ToolDeclaration:
-    """单个工具的管理声明：审批/风险/展示名；与构建组解耦。"""
+class ToolDefinition:
+    """单个工具的管理声明：审批/风险/展示名/技能前置/交互需求/启停。"""
 
     approval: str = "allow"
     risk: str = "medium"
     display_name: str = ""
+    required_skills: tuple[str, ...] = ()
+    requires_user_interaction: bool = False
+    # 唯一启停开关：False 时装配阶段不构建该工具，不再依赖环境变量。
+    enabled: bool = True
 
 
-# 每个工具一条声明：构建可以按 ToolSpec 分组，策略必须逐工具独立。
-TOOL_DECLARATIONS: dict[str, ToolDeclaration] = {
-    "file_read": ToolDeclaration(approval="allow", risk="low", display_name="读取文件"),
-    "file_edit": ToolDeclaration(approval="allow", risk="medium", display_name="修改文件"),
-    "file_write": ToolDeclaration(approval="allow", risk="medium", display_name="写入文件"),
-    "file_move": ToolDeclaration(approval="allow", risk="medium", display_name="移动文件"),
-    "file_copy": ToolDeclaration(approval="allow", risk="medium", display_name="复制文件"),
-    "file_delete": ToolDeclaration(approval="allow", risk="high", display_name="删除文件"),
-    "file_glob": ToolDeclaration(approval="allow", risk="low", display_name="查找文件"),
-    "file_grep": ToolDeclaration(approval="allow", risk="low", display_name="搜索文本"),
-    "file_diff": ToolDeclaration(approval="allow", risk="low", display_name="对比文件"),
-    "dir_create": ToolDeclaration(approval="allow", risk="medium", display_name="创建目录"),
-    "dir_list": ToolDeclaration(approval="allow", risk="low", display_name="列出目录"),
-    "dir_delete": ToolDeclaration(approval="allow", risk="high", display_name="删除目录"),
-    "parse_document": ToolDeclaration(approval="allow", risk="low", display_name="解析文档"),
-    "read_image": ToolDeclaration(approval="allow", risk="low", display_name="读取图片"),
-    "present_artifacts": ToolDeclaration(approval="allow", risk="low", display_name="展示文件"),
-    "get_current_time": ToolDeclaration(approval="allow", risk="low", display_name="获取当前时间"),
-    "load_skill": ToolDeclaration(approval="allow", risk="low", display_name="加载技能"),
-    "data_analyzing_tool": ToolDeclaration(approval="allow", risk="medium", display_name="数据分析"),
-    "calculator_tool": ToolDeclaration(approval="allow", risk="low", display_name="精确计算"),
-    "ask_user_question": ToolDeclaration(approval="allow", risk="low", display_name="询问用户"),
-    "officecli_run": ToolDeclaration(approval="allow", risk="medium", display_name="运行 OfficeCLI"),
-    "bash_run": ToolDeclaration(approval="allow", risk="high", display_name="运行脚本"),
-    "write_todos": ToolDeclaration(approval="allow", risk="low", display_name="更新任务计划"),
-    "task": ToolDeclaration(approval="allow", risk="low", display_name="派发子智能体"),
-    "mcp_tool_search": ToolDeclaration(approval="allow", risk="medium", display_name="搜索 MCP 工具"),
-    "mcp_tool_call": ToolDeclaration(approval="allow", risk="high", display_name="调用 MCP 工具"),
+# 每个工具一条声明：构建可以按 ToolBuildGroup 分组，策略必须逐工具独立。
+TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
+    "file_read": ToolDefinition(approval="allow", risk="low", display_name="读取文件"),
+    "file_edit": ToolDefinition(approval="allow", risk="medium", display_name="修改文件"),
+    "file_write": ToolDefinition(approval="allow", risk="medium", display_name="写入文件"),
+    "file_move": ToolDefinition(approval="allow", risk="medium", display_name="移动文件"),
+    "file_copy": ToolDefinition(approval="allow", risk="medium", display_name="复制文件"),
+    "file_delete": ToolDefinition(approval="allow", risk="high", display_name="删除文件"),
+    "file_glob": ToolDefinition(approval="allow", risk="low", display_name="查找文件"),
+    "file_grep": ToolDefinition(approval="allow", risk="low", display_name="搜索文本"),
+    "file_diff": ToolDefinition(approval="allow", risk="low", display_name="对比文件"),
+    "dir_create": ToolDefinition(approval="allow", risk="medium", display_name="创建目录"),
+    "dir_list": ToolDefinition(approval="allow", risk="low", display_name="列出目录"),
+    "dir_delete": ToolDefinition(approval="allow", risk="high", display_name="删除目录"),
+    "parse_document": ToolDefinition(approval="allow", risk="low", display_name="解析文档"),
+    "read_image": ToolDefinition(approval="allow", risk="low", display_name="读取图片"),
+    "present_artifacts": ToolDefinition(
+        approval="allow",
+        risk="low",
+        display_name="展示文件",
+    ),
+    "get_current_time": ToolDefinition(approval="allow", risk="low", display_name="获取当前时间"),
+    "load_skill": ToolDefinition(approval="allow", risk="low", display_name="加载技能"),
+    "data_analyzing_tool": ToolDefinition(
+        approval="allow",
+        risk="medium",
+        display_name="数据分析",
+        required_skills=(DATA_ANALYZING_SKILL,),
+    ),
+    "calculator_tool": ToolDefinition(approval="allow", risk="low", display_name="精确计算"),
+    "ask_user_question": ToolDefinition(
+        approval="allow",
+        risk="low",
+        display_name="询问用户",
+        requires_user_interaction=True,
+    ),
+    "officecli_run": ToolDefinition(
+        approval="allow",
+        risk="medium",
+        display_name="运行 OfficeCLI",
+        required_skills=(OFFICE_SKILL,),
+    ),
+    "bash_run": ToolDefinition(
+        approval="allow",
+        risk="high",
+        display_name="运行脚本",
+        enabled=False,
+    ),
+    "write_todos": ToolDefinition(approval="allow", risk="low", display_name="更新任务计划"),
+    "task": ToolDefinition(approval="allow", risk="low", display_name="派发子智能体"),
+    "mcp_tool_search": ToolDefinition(approval="allow", risk="medium", display_name="搜索 MCP 工具"),
+    "mcp_tool_call": ToolDefinition(approval="allow", risk="high", display_name="调用 MCP 工具"),
 }
 
 # 由逐工具声明生成的兼容视图；消费方仍可读取/测试这些 map。
 SYSTEM_TOOL_APPROVALS: dict[str, str] = {}
 TOOL_RISK: dict[str, str] = {}
-for _spec in TOOL_SPECS:
+for _spec in TOOL_BUILD_GROUPS:
     for _tool_name in _spec.provides:
-        _declaration = TOOL_DECLARATIONS.get(_tool_name)
+        _declaration = TOOL_DEFINITIONS.get(_tool_name)
         if _declaration is None:
-            raise RuntimeError(f"工具缺少 ToolDeclaration: {_tool_name}")
+            raise RuntimeError(f"工具缺少 ToolDefinition: {_tool_name}")
         SYSTEM_TOOL_APPROVALS[_tool_name] = _declaration.approval
         TOOL_RISK[_tool_name] = _declaration.risk
 for _tool_name in MIDDLEWARE_INJECTED_APPROVAL_TOOLS:
-    _declaration = TOOL_DECLARATIONS.get(_tool_name)
+    _declaration = TOOL_DEFINITIONS.get(_tool_name)
     if _declaration is None:
-        raise RuntimeError(f"中间件工具缺少 ToolDeclaration: {_tool_name}")
+        raise RuntimeError(f"中间件工具缺少 ToolDefinition: {_tool_name}")
     SYSTEM_TOOL_APPROVALS[_tool_name] = _declaration.approval
     TOOL_RISK[_tool_name] = _declaration.risk
 
@@ -228,8 +244,20 @@ SYSTEM_TOOL_APPROVAL_DEFAULT = "ask"
 def tool_display_names() -> dict[str, str]:
     """返回所有系统/中间件工具的展示名；前端 /config 消费，未知工具由前端兜底。"""
     return {
-        name: declaration.display_name for name, declaration in TOOL_DECLARATIONS.items() if declaration.display_name
+        name: declaration.display_name for name, declaration in TOOL_DEFINITIONS.items() if declaration.display_name
     }
+
+
+def tool_enabled(tool_name: str) -> bool:
+    """工具是否启用；未知工具按 False 处理（不构建）。"""
+    declaration = TOOL_DEFINITIONS.get(str(tool_name or "").strip())
+    return bool(declaration.enabled) if declaration else False
+
+
+def tool_requires_user_interaction(tool_name: str) -> bool:
+    """工具是否需要用户实时应答；未知工具按 False 处理。"""
+    declaration = TOOL_DEFINITIONS.get(str(tool_name or "").strip())
+    return bool(declaration.requires_user_interaction) if declaration else False
 
 
 def system_tool_approval(tool_name: str) -> str:
@@ -244,7 +272,7 @@ def tool_risk(tool_name: str) -> str:
 
 def provided_tool_names() -> frozenset[str]:
     """注册表声明的全部工具名（含受开关控制、当前未挂载的工具）。"""
-    return frozenset(name for spec in TOOL_SPECS for name in spec.provides)
+    return frozenset(name for spec in TOOL_BUILD_GROUPS for name in spec.provides)
 
 
 def system_approval_required_tools() -> frozenset[str]:
@@ -253,75 +281,27 @@ def system_approval_required_tools() -> frozenset[str]:
     return frozenset(name for name in names if system_tool_approval(name) == "ask")
 
 
-# 工具 → 必需技能（调用前必须已加载）。只给明确依赖技能流程的工具声明，不全局强制。
+# 工具 → 必需技能（调用前必须已加载）；从逐工具声明派生，不全局强制。
 TOOL_REQUIRED_SKILLS: dict[str, tuple[str, ...]] = {
-    name: spec.required_skills for spec in TOOL_SPECS if spec.required_skills for name in spec.provides
+    name: declaration.required_skills for name, declaration in TOOL_DEFINITIONS.items() if declaration.required_skills
 }
 
 
-# 子智能体不继承的基础工具：ask_user_question 需要人工应答（子智能体不注册人工中断），
-# present_artifacts 是用户可见的产物呈现（最终交付由主智能体负责）。
-SUBAGENT_BASE_EXCLUDED_TOOL_NAMES = frozenset({"ask_user_question", "present_artifacts"})
-
-# data-explore 在基础排除集之上额外排除的写操作工具：只读事实收集不写文件、
-# 不执行命令、不做文档编辑，避免子智能体在探查过程中产生副作用。
-DATA_EXPLORE_EXTRA_EXCLUDED_TOOL_NAMES = frozenset(
-    {
-        "file_edit",
-        "file_write",
-        "file_move",
-        "file_copy",
-        "file_delete",
-        "dir_create",
-        "dir_delete",
-        "bash_run",
-        "officecli_run",
-    }
-)
-
-# plan 在基础排除集之上额外排除执行类工具：规划子智能体只盘点资料与产出计划，
-# 不运行查询、不做计算、不编辑文档，保证规划与执行分离（执行由主智能体完成）。
-# data_analyzing_tool 为合并工具（含执行查询的 execute_query action），整工具排除。
-PLAN_EXTRA_EXCLUDED_TOOL_NAMES = frozenset(
-    {
-        "file_edit",
-        "file_move",
-        "file_copy",
-        "file_delete",
-        "dir_create",
-        "dir_delete",
-        "bash_run",
-        "officecli_run",
-        "data_analyzing_tool",
-        "calculator_tool",
-        "read_image",
-        "parse_document",
-    }
-)
-
-# general-purpose 在基础排除集之上额外排除 bash_run：业内通行的通用执行角色
-# （对齐 deepagents/Claude Code 的 general-purpose），保留文件写工具与查询工具
-# （产出交付物、执行汇总需要），bash_run 沿用 data-explore/plan 的保守口径不开放
-# （任意执行面只在主智能体按 bash_enabled 开关注册）。
-GENERAL_PURPOSE_EXTRA_EXCLUDED_TOOL_NAMES = frozenset({"bash_run"})
-
 __all__ = [
     "ToolBuildContext",
-    "ToolDeclaration",
-    "ToolSpec",
-    "TOOL_DECLARATIONS",
-    "TOOL_SPECS",
+    "ToolDefinition",
+    "ToolBuildGroup",
+    "TOOL_DEFINITIONS",
+    "TOOL_BUILD_GROUPS",
     "SYSTEM_TOOL_APPROVALS",
     "TOOL_RISK",
     "tool_display_names",
+    "tool_enabled",
+    "tool_requires_user_interaction",
     "tool_risk",
     "SYSTEM_TOOL_APPROVAL_DEFAULT",
     "system_tool_approval",
     "system_approval_required_tools",
     "TOOL_REQUIRED_SKILLS",
     "provided_tool_names",
-    "SUBAGENT_BASE_EXCLUDED_TOOL_NAMES",
-    "DATA_EXPLORE_EXTRA_EXCLUDED_TOOL_NAMES",
-    "PLAN_EXTRA_EXCLUDED_TOOL_NAMES",
-    "GENERAL_PURPOSE_EXTRA_EXCLUDED_TOOL_NAMES",
 ]

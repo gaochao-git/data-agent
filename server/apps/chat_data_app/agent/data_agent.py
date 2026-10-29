@@ -40,21 +40,17 @@ from .middleware.tool_call_history_repair import create_tool_call_history_repair
 from .middleware.tool_execution_fence import create_tool_execution_fence_middleware
 from .middleware.tool_result import create_tool_result_middleware
 from .prompts.chat_data import (
-    DATA_EXPLORE_SUBAGENT_PROMPT,
-    GENERAL_PURPOSE_NO_DELETE_HINT,
-    GENERAL_PURPOSE_SUBAGENT_PROMPT,
+    EXPLORE_SUBAGENT_PROMPT,
     PLAN_SUBAGENT_PROMPT,
     build_unified_system_prompt,
 )
 from .runtime_options import AgentRuntimeOptions, get_chat_data_default_runtime_options
 from .tools.catalog import build_tool_catalog
 from .tools.registry import (
-    DATA_EXPLORE_EXTRA_EXCLUDED_TOOL_NAMES,
-    GENERAL_PURPOSE_EXTRA_EXCLUDED_TOOL_NAMES,
-    PLAN_EXTRA_EXCLUDED_TOOL_NAMES,
-    SUBAGENT_BASE_EXCLUDED_TOOL_NAMES,
-    TOOL_SPECS,
+    TOOL_BUILD_GROUPS,
     ToolBuildContext,
+    tool_enabled,
+    tool_requires_user_interaction,
 )
 from .workspace.runtime import ConversationWorkspaceRuntime, ensure_conversation_workspace
 
@@ -258,25 +254,31 @@ def assemble_tools(
         model_invocation=model_invocation or ModelInvocationConfig(),
     )
     skip_user_interaction = bool(run_controls and run_controls.disable_user_interaction)
-    tools = [
-        tool
-        for tool_spec in TOOL_SPECS
-        if not (skip_user_interaction and tool_spec.requires_user_interaction)
-        for tool in tool_spec.build(context)
-    ]
+    tools = _build_enabled_tools(context, skip_user_interaction=skip_user_interaction)
     if spec is not None:
         validate_agent_assembly_spec(spec)
         tools = _filter_tools_by_spec(tools, spec)
     return tools
 
 
-# 子智能体工具可见性策略（SUBAGENT_BASE_EXCLUDED_TOOL_NAMES /
-# DATA_EXPLORE_EXTRA_EXCLUDED_TOOL_NAMES / PLAN_EXTRA_EXCLUDED_TOOL_NAMES /
-# GENERAL_PURPOSE_EXTRA_EXCLUDED_TOOL_NAMES）
-# 单一事实源在 tools/registry.py，本模块按名字导入以保持既有引用路径不变。
+def _build_enabled_tools(context: ToolBuildContext, *, skip_user_interaction: bool) -> list:
+    """按构建组装配并按单工具定义过滤；禁用/交互工具不会进入模型工具面。"""
+    tools: list = []
+    for tool_spec in TOOL_BUILD_GROUPS:
+        if all(not tool_enabled(name) for name in tool_spec.provides):
+            continue
+        for tool in tool_spec.build(context):
+            name = str(getattr(tool, "name", "") or "")
+            if skip_user_interaction and tool_requires_user_interaction(name):
+                continue
+            if not tool_enabled(name):
+                continue
+            tools.append(tool)
+    return tools
 
-DATA_EXPLORE_SUBAGENT_NAME = "data-explore"
-DATA_EXPLORE_SUBAGENT_DESCRIPTION = (
+
+EXPLORE_SUBAGENT_NAME = "explore"
+EXPLORE_SUBAGENT_DESCRIPTION = (
     "只读事实收集：遍历语义模型/多表/多指标做批量盘点、口径确认与数据核对，"
     "只回传结构化事实清单，不写文件、不下最终结论。"
     "适合需要跨多模型/多表摸底数据事实的场景。"
@@ -292,37 +294,54 @@ PLAN_SUBAGENT_DESCRIPTION = (
     "用户自定义技能）建议在任务书中写明技能名称与 skill_file 路径。"
 )
 
-GENERAL_PURPOSE_SUBAGENT_NAME = "general-purpose"
-GENERAL_PURPOSE_SUBAGENT_DESCRIPTION = (
-    "通用执行：受委派在隔离上下文完成多步执行任务——按计划/要求生成报告、Excel、"
-    "Word、HTML 等交付物，批量文件加工，执行语义查询并汇总落盘。"
-    "可写 workspace/outputs，回传结论摘要与产物路径清单，产物展示由主智能体完成。"
-    "适合中间过程大体量、只需要结论与交付物的执行环节。"
-    "子智能体与主智能体共享技能清单，但看不到主对话历史：任务相关的技能（尤其"
-    "用户自定义技能）建议在任务书中写明技能名称与 skill_file 路径。"
-)
+# 每个子智能体显式声明需要哪些工具；不再使用“继承全部再排除”的隐式策略。
+SUBAGENT_TOOL_ALLOWLISTS: dict[str, frozenset[str]] = {
+    EXPLORE_SUBAGENT_NAME: frozenset(
+        {
+            "file_read",
+            "file_glob",
+            "file_grep",
+            "file_diff",
+            "dir_list",
+            "parse_document",
+            "read_image",
+            "get_current_time",
+            "load_skill",
+            "data_analyzing_tool",
+            "calculator_tool",
+        }
+    ),
+    PLAN_SUBAGENT_NAME: frozenset(
+        {
+            "file_read",
+            "file_write",
+            "file_glob",
+            "file_grep",
+            "file_diff",
+            "dir_list",
+            "get_current_time",
+            "load_skill",
+        }
+    ),
+}
 
 
-def _filter_subagent_tools(tools: list, excluded: frozenset) -> list:
-    """按排除集过滤子智能体工具。"""
-    return [tool for tool in tools if str(getattr(tool, "name", "") or "") not in excluded]
+def _select_subagent_tools(
+    tools: list,
+    allowed: frozenset[str],
+    approval_excluded: frozenset[str],
+) -> list:
+    """从主图已装配工具中，按子智能体白名单取工具，并剔除审批工具。"""
+    return [
+        tool
+        for tool in tools
+        if (name := str(getattr(tool, "name", "") or "")) in allowed and name not in approval_excluded
+    ]
 
 
 def _subagent_approval_exclusions(approval_policies: dict[str, str] | None = None) -> frozenset[str]:
     """子智能体不挂 ask 工具：子图不支持人工中断，避免委派绕过审批。"""
     return ask_tool_names(approval_policies or resolve_approval_policies([]))
-
-
-def _general_purpose_system_prompt(approval_tools_excluded: bool) -> str:
-    """general-purpose 的系统提示：审批工具被剔除时补一段能力边界说明。
-
-    剔除只解决了「能不能执行」，没有解决「模型知不知道自己不能执行」：不声明时
-    模型会先派一次工具拿到「工具不存在」，白跑一轮 token 才退回主智能体。这段
-    与 ``_subagent_approval_exclusions`` 共用同一判据。
-    """
-    if not approval_tools_excluded:
-        return GENERAL_PURPOSE_SUBAGENT_PROMPT
-    return f"{GENERAL_PURPOSE_SUBAGENT_PROMPT}{GENERAL_PURPOSE_NO_DELETE_HINT}"
 
 
 def build_subagent_middleware(
@@ -339,8 +358,8 @@ def build_subagent_middleware(
 ) -> SubagentMiddleware | None:
     """按运行选项构建子智能体中间件；没有任何子智能体启用时返回 None。
 
-    子智能体继承主智能体工具（各自扣除排除集），使用与主智能体相同的模型，
-    运行在隔离上下文中；data-explore 额外扣除全部写操作工具保持只读。
+    每个子智能体按 ``SUBAGENT_TOOL_ALLOWLISTS`` 显式选择工具，使用与主智能体
+    相同的模型，运行在隔离上下文中；explore 白名单只含只读工具。
     ``model_id`` 与主图同源传入：子图预算告警据此取同一 ContextBudget 的
     压缩触发阈值，保证「上下文将尽」的口径与主图一致。
     ``available_skills_xml`` 与主智能体同一会话技能清单（一致继承）：子图
@@ -349,17 +368,17 @@ def build_subagent_middleware(
     prompt 由此注入只读记忆段；未传或为空则不注入。
     """
     approval_excluded = _subagent_approval_exclusions(approval_policies)
-    base_excluded = SUBAGENT_BASE_EXCLUDED_TOOL_NAMES | approval_excluded
     specs: list[SubagentSpec] = []
     if runtime_options.explore_subagent_enabled:
         specs.append(
             SubagentSpec(
-                name=DATA_EXPLORE_SUBAGENT_NAME,
-                description=DATA_EXPLORE_SUBAGENT_DESCRIPTION,
-                system_prompt=DATA_EXPLORE_SUBAGENT_PROMPT,
-                tools=_filter_subagent_tools(
+                name=EXPLORE_SUBAGENT_NAME,
+                description=EXPLORE_SUBAGENT_DESCRIPTION,
+                system_prompt=EXPLORE_SUBAGENT_PROMPT,
+                tools=_select_subagent_tools(
                     tools,
-                    base_excluded | DATA_EXPLORE_EXTRA_EXCLUDED_TOOL_NAMES,
+                    SUBAGENT_TOOL_ALLOWLISTS[EXPLORE_SUBAGENT_NAME],
+                    approval_excluded,
                 ),
                 model=model,
                 model_id=model_id,
@@ -374,26 +393,10 @@ def build_subagent_middleware(
                 name=PLAN_SUBAGENT_NAME,
                 description=PLAN_SUBAGENT_DESCRIPTION,
                 system_prompt=PLAN_SUBAGENT_PROMPT,
-                tools=_filter_subagent_tools(
+                tools=_select_subagent_tools(
                     tools,
-                    base_excluded | PLAN_EXTRA_EXCLUDED_TOOL_NAMES,
-                ),
-                model=model,
-                model_id=model_id,
-                available_skills_xml=available_skills_xml or "",
-                memory_block=memory_block or "",
-                sandbox_renewal=sandbox_renewal,
-            )
-        )
-    if runtime_options.general_purpose_subagent_enabled:
-        specs.append(
-            SubagentSpec(
-                name=GENERAL_PURPOSE_SUBAGENT_NAME,
-                description=GENERAL_PURPOSE_SUBAGENT_DESCRIPTION,
-                system_prompt=_general_purpose_system_prompt(bool(approval_excluded)),
-                tools=_filter_subagent_tools(
-                    tools,
-                    base_excluded | GENERAL_PURPOSE_EXTRA_EXCLUDED_TOOL_NAMES,
+                    SUBAGENT_TOOL_ALLOWLISTS[PLAN_SUBAGENT_NAME],
+                    approval_excluded,
                 ),
                 model=model,
                 model_id=model_id,
@@ -874,8 +877,8 @@ def create_agent_from_spec(
     参数按关注点分组：``identity_context``（谁在问）、``datasource_context``
     （问哪个数据域）、``model_invocation``（模型怎么调）、``run_controls``
     （run 怎么管）；新增参数必须先归入其中一组或说明为何单列。
-    子智能体只继承内置工具（不含 MCP 等动态工具），且各子智能体的排除集策略
-    仍由 ``tools/registry.py`` 单一事实源约束。
+    子智能体只使用内置工具（不含 MCP 等动态工具），且各子智能体的工具白名单
+    由 ``SUBAGENT_TOOL_ALLOWLISTS`` 显式声明。
 
     ``conversation_id`` 单列：不参与 Agent 构建，仅供会话记忆压缩回调定位
     记忆文件（无会话标识的历史回放等调用方不传即关闭该回调）。

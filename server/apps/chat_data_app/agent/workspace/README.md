@@ -50,8 +50,8 @@
   编码/变量拼接的蓄意绕过。
 - 真正的安全边界：sandbox 后端（容器隔离）、env 白名单裁剪、文件 mode 只读区、网络白名单、
   全量事件审计。
-- `local 后端 = 可信部署前提`；不可信流量必须使用 sandbox 后端。`bash_enabled=True` 且
-  `local` 的组合属于高危配置（见上级 README）。
+- `local 后端 = 可信部署前提`；不可信流量必须使用 sandbox 后端。若在
+  `ToolDefinition.enabled` 中开启 Bash，`local` 组合属于高危配置（见上级 README）。
 
 ## 会话编排
 

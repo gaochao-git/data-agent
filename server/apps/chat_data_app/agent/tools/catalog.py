@@ -1,6 +1,6 @@
 """工具能力目录：内置、中间件、MCP 工具的统一元数据视图。
 
-目录只描述“工具是什么、来自哪里、风险/审批/可见性如何”，不负责构造工具；
+目录只描述“工具是什么、来自哪里、风险/审批/启停如何”，不负责构造工具；
 ``assemble_tools``、审批策略、装配诊断和管理端都从这里读取同一份元数据，
 避免再维护多张分散的 name map。
 """
@@ -15,9 +15,8 @@ from utils.logger import get_logger
 
 from .registry import (
     MIDDLEWARE_INJECTED_APPROVAL_TOOLS,
-    SUBAGENT_BASE_EXCLUDED_TOOL_NAMES,
-    TOOL_DECLARATIONS,
-    TOOL_SPECS,
+    TOOL_BUILD_GROUPS,
+    TOOL_DEFINITIONS,
     system_tool_approval,
     tool_risk,
 )
@@ -45,13 +44,15 @@ class ToolDescriptor:
     name: str
     source: ToolSource
     risk: ToolRisk
+    # reserved：预留给后续 PDP/审计；当前只输出，不参与任何鉴权控制。
     permission: str
     owner: str
     approval: ToolApproval
     display_name: str = ""
     description: str = ""
-    data_scope: frozenset[str] = frozenset()
-    subagent_visible: bool = True
+    enabled: bool = True
+    required_skills: tuple[str, ...] = ()
+    requires_user_interaction: bool = False
     searchable: bool = False
 
     def to_dict(self) -> dict[str, Any]:
@@ -64,8 +65,9 @@ class ToolDescriptor:
             "approval": self.approval,
             "display_name": self.display_name,
             "description": self.description,
-            "data_scope": sorted(self.data_scope),
-            "subagent_visible": self.subagent_visible,
+            "enabled": self.enabled,
+            "required_skills": list(self.required_skills),
+            "requires_user_interaction": self.requires_user_interaction,
             "searchable": self.searchable,
         }
 
@@ -101,7 +103,7 @@ def _is_mcp_tool(name: str, metadata: Mapping[str, Any]) -> bool:
 
 def _builtin_descriptors() -> list[ToolDescriptor]:
     descriptors: list[ToolDescriptor] = []
-    for spec in TOOL_SPECS:
+    for spec in TOOL_BUILD_GROUPS:
         for name in spec.provides:
             descriptors.append(
                 ToolDescriptor(
@@ -111,9 +113,11 @@ def _builtin_descriptors() -> list[ToolDescriptor]:
                     permission=f"tool:{name}",
                     owner="platform",
                     approval=normalize_tool_approval(system_tool_approval(name)),
-                    display_name=TOOL_DECLARATIONS[name].display_name,
+                    display_name=TOOL_DEFINITIONS[name].display_name,
                     description=spec.note,
-                    subagent_visible=name not in SUBAGENT_BASE_EXCLUDED_TOOL_NAMES,
+                    enabled=TOOL_DEFINITIONS[name].enabled,
+                    required_skills=TOOL_DEFINITIONS[name].required_skills,
+                    requires_user_interaction=TOOL_DEFINITIONS[name].requires_user_interaction,
                 )
             )
     for name in MIDDLEWARE_INJECTED_APPROVAL_TOOLS:
@@ -125,29 +129,34 @@ def _builtin_descriptors() -> list[ToolDescriptor]:
                 permission=f"tool:{name}",
                 owner="platform",
                 approval=normalize_tool_approval(system_tool_approval(name)),
-                display_name=TOOL_DECLARATIONS[name].display_name,
+                display_name=TOOL_DEFINITIONS[name].display_name,
                 description="middleware injected",
+                enabled=TOOL_DEFINITIONS[name].enabled,
+                required_skills=TOOL_DEFINITIONS[name].required_skills,
+                requires_user_interaction=TOOL_DEFINITIONS[name].requires_user_interaction,
             )
         )
     return descriptors
 
 
-def _dynamic_descriptor(tool: Any) -> ToolDescriptor | None:
-    name = str(getattr(tool, "name", "") or "").strip()
-    if not name:
-        return None
-    metadata = _metadata(tool)
-    if not _is_mcp_tool(name, metadata):
-        return ToolDescriptor(
-            name=name,
-            source="runtime",
-            risk="medium",
-            permission=f"tool:{name}",
-            owner="platform",
-            approval=normalize_tool_approval(system_tool_approval(name)),
-            display_name=str(metadata.get("display_name") or getattr(tool, "name", "") or ""),
-            description=str(getattr(tool, "description", "") or ""),
-        )
+def _runtime_descriptor(name: str, tool: Any, metadata: Mapping[str, Any]) -> ToolDescriptor:
+    declaration = TOOL_DEFINITIONS.get(name)
+    return ToolDescriptor(
+        name=name,
+        source="runtime",
+        risk="medium",
+        permission=f"tool:{name}",
+        owner="platform",
+        approval=normalize_tool_approval(system_tool_approval(name)),
+        display_name=str(metadata.get("display_name") or getattr(tool, "name", "") or ""),
+        description=str(getattr(tool, "description", "") or ""),
+        enabled=declaration.enabled if declaration else True,
+        required_skills=declaration.required_skills if declaration else (),
+        requires_user_interaction=declaration.requires_user_interaction if declaration else False,
+    )
+
+
+def _mcp_descriptor(name: str, tool: Any, metadata: Mapping[str, Any]) -> ToolDescriptor:
     raw_approval = metadata.get("approval") or DEFAULT_TOOL_APPROVAL
     approval = normalize_tool_approval(raw_approval)
     if approval != str(raw_approval).strip().lower():
@@ -161,9 +170,18 @@ def _dynamic_descriptor(tool: Any) -> ToolDescriptor | None:
         approval=approval,
         display_name=str(metadata.get("display_name") or name),
         description=str(getattr(tool, "description", "") or ""),
-        subagent_visible=False,
         searchable=True,
     )
+
+
+def _dynamic_descriptor(tool: Any) -> ToolDescriptor | None:
+    name = str(getattr(tool, "name", "") or "").strip()
+    if not name:
+        return None
+    metadata = _metadata(tool)
+    if not _is_mcp_tool(name, metadata):
+        return _runtime_descriptor(name, tool, metadata)
+    return _mcp_descriptor(name, tool, metadata)
 
 
 def build_tool_catalog(tools: Iterable[Any] = ()) -> ToolCatalog:

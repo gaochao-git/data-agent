@@ -10,7 +10,7 @@
 | `file_read`/`file_write`/`file_edit`/`file_move`/`file_copy`/`file_delete`/`dir_create`/`dir_list`/`file_glob`/`file_grep` | `filesystem.py` | 会话工作区文件操作（统一由 `create_filesystem_tools` 构建） |
 | `read_image` | `read_image.py` | 图片读入视觉上下文（下一轮注入） |
 | `parse_document` | `parse_document.py` | 上传文件解析为 Markdown 写入工作区 |
-| `bash_run` | `bash_run.py` | 受限命令执行；**由 `runtime_options.bash_enabled` 控制注册（默认关）** |
+| `bash_run` | `bash_run.py` | 受限命令执行；**由 `ToolDefinition.enabled` 控制注册（默认关）** |
 | `officecli_run` | `officecli_run.py` | OfficeCLI 文档解析/编辑（argv 直 execve，非通用执行器） |
 | `present_artifacts` | `present_artifacts.py` | 展示 outputs 最终产物 |
 | `data_analyzing_tool` | `data_analyzing.py` | 语义分析统一工具（`action` + `action_payload` 分派：`validate_dsl`/`validate_dashboard` DSL 与 dashboard_spec 校验（不执行）、`execute_query` 语义模型查询（DSL/只读 SQL 二选一执行）、`check_yaml` Ossie YAML 交付前自检（schema/结构/物理/质量，与导入接口同口径，只读）、`list_execution_targets` 实时获取当前用户可用执行对象清单（只读）） |
@@ -22,18 +22,18 @@
 - 路径参数只接受规范形式 `/mnt/user-data/{workspace,outputs,uploads}/...` 与只读
   `/mnt/skills/<name>/...`；docstring 是模型照抄的输入模板，示例必须用规范形式。
 - 工具错误分两类返回：参数/路径类给可纠正消息；意外异常给通用文案并记录完整堆栈。
-- 新增工具需同步：注册表登记（`tools/registry.py` 的 `TOOL_SPECS`，含 `provides` 工具名与子智能体可见性策略）、前端展示类型（web-vue）、单元测试。
+- 新增工具需同步：`ToolBuildGroup` 构建组、`ToolDefinition` 单工具策略、子智能体白名单（`data_agent.SUBAGENT_TOOL_ALLOWLISTS`）、前端展示类型（web-vue）、单元测试。
 
 ## 工具能力目录
 
-`tools/catalog.py` 把内置工具（`TOOL_SPECS`）、中间件注入工具和动态 MCP 工具收成
-`ToolCatalog`，统一提供来源、风险、权限、审批、子智能体可见性和可检索性。装配诊断、
+`tools/catalog.py` 把内置工具（`TOOL_BUILD_GROUPS`）、中间件注入工具和动态 MCP 工具收成
+`ToolCatalog`，统一提供来源、风险、权限、审批、启停和可检索性。装配诊断、
 审批策略和管理端都应读取这份目录，不再各自维护 name map。
 
 ## 声明分层
 
-- `ToolSpec`（`TOOL_SPECS`）只描述构建组：哪些工具共享一次构建、如何构建；
-- `ToolDeclaration`（`TOOL_DECLARATIONS`）逐工具声明审批/风险/展示名，构建组不再携带
-  `approval` / `risk` / `risk_overrides`；
+- `ToolBuildGroup`（`TOOL_BUILD_GROUPS`）只描述构建组：哪些工具共享一次构建、如何构建；
+- `ToolDefinition`（`TOOL_DEFINITIONS`）逐工具声明审批、风险、展示名、技能前置、
+  交互需求和启停，构建组不再携带 `approval` / `risk` / `risk_overrides`；
 - `tool_display_names()` 由 `/config` 下发，前端本地映射只做兜底；
 - `ToolCatalog` 合并两类声明，运行时仍按工具粒度管理。

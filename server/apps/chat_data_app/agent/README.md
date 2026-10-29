@@ -14,7 +14,7 @@ ChatData 的业务 Agent 运行域：装配、工具、中间件、提示词、�
 | `data_agent.py` | Agent 装配入口：`AgentAssemblySpec` / `create_agent_from_spec` / `create_data_agent` / `get_data_agent_graph`，工具按 `tools/registry.py` 注册表 + 规格筛选装配 |
 | `agent_state.py` | LangGraph 状态定义（`ChatDataAgentState`） |
 | `agent_runtime.py` | 共享运行时工具（模型获取等） |
-| `runtime_options.py` | 运行选项：`workspace_backend`（local/sandbox）、`bash_enabled`（默认 False） |
+| `runtime_options.py` | 运行选项：`workspace_backend`（local/sandbox）、子智能体开关；工具启停见 `tools/registry.py` 的 `ToolDefinition.enabled` |
 | `tool_results.py` | 工具结果通用结构 |
 | `tools/` | 模型可见工具（见 `tools/README.md`） |
 | `middleware/` | create_agent 中间件（上下文压缩、工具结果卸载、图片注入等） |
@@ -45,9 +45,9 @@ ChatData 的业务 Agent 运行域：装配、工具、中间件、提示词、�
 
 ## 运行选项与安全形态
 
-- `workspace_backend=local`：宿主机直接 IO，信任部署假设；**建议保持 `bash_enabled=False`**。
+- `workspace_backend=local`：宿主机直接 IO，信任部署假设；**建议保持 `bash_run` 的 `ToolDefinition.enabled=False`**。
 - `workspace_backend=sandbox`：OpenSandbox 容器执行，强隔离形态。
-- `bash_enabled=True` 且 `workspace_backend=local` 是最危险组合（宿主机裸执行），开启前必须确认部署环境可信。
+- `bash_run.enabled=True` 且 `workspace_backend=local` 是最危险组合（宿主机裸执行），开启前必须确认部署环境可信。
 
 ## 跨层契约（contracts/）
 

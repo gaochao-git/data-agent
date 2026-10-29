@@ -110,16 +110,8 @@ WORKSPACE_ARCHIVE_MAX_MB = read_positive_int_env("CHAT_DATA_WORKSPACE_ARCHIVE_MA
 DEFAULT_CONTEXT_WINDOW = 128000
 
 # ---- 单一 ChatData Agent 运行配置 ----
-# ``workspace_backend``（隔离模式：本地/沙箱）与 ``bash_enabled``（运行模式：受控/灵活）是两个正交维度：
-# - workspace_backend=sandbox（OpenSandbox）的职责是「标准化运行环境」：把代码执行场所钉死为
-#   统一的 Python 版本、预装依赖、可复现环境，且不污染宿主生产服务。它的容器隔离（FS/网络/进程
-#   边界）只是顺带能力，本职不是安全隔离设备。
-# - bash_enabled 才是真正的安全控制：决定 Bash 工具是否注册；注册后对命令做黑名单与路径词法校验。
-#   但这些校验是「策略轨道」而非「执行之墙」——agent 可写脚本落盘再执行，内容不被审计，
-#   因此 bash_enabled=true（灵活模式）推荐配合 sandbox 后端由容器隔离兜底，但本地亦可
-#   （local+true 即子进程以宿主权限执行代码，仅在可信 / 纯本地开发场景使用）。两个维度正交，组合交给部署者。
-# - bash_enabled=false（受控模式）时文件工具仍严格路径管控，用 local 即可，无需 sandbox 开销。
-# 完整选型矩阵见 chat_data_app/README.md「运行环境后端与 Bash 安全模型」。
+# ``workspace_backend``（隔离模式：本地/沙箱）只决定文件与执行环境；工具启停由
+# ``agent/tools/registry.py`` 的 ``ToolDefinition.enabled`` 单一控制。
 _raw_workspace_backend = str(os.getenv("CHAT_DATA_DEFAULT_WORKSPACE_BACKEND") or "local").strip().lower() or "local"
 if _raw_workspace_backend not in ("local", "sandbox"):
     logger.warning(
@@ -129,28 +121,15 @@ if _raw_workspace_backend not in ("local", "sandbox"):
     _raw_workspace_backend = "local"
 # 上面已做合法性校验回退，此处收紧为 Literal 供 AgentRuntimeOptions 使用
 CHAT_DATA_DEFAULT_WORKSPACE_BACKEND = cast('Literal["local", "sandbox"]', _raw_workspace_backend)
-# 注意：bash_run 另有代码级总闸（agent/tools/bash_run.py 的 BASH_RUN_DISABLED=True）：
-# env 或请求覆盖误开时，工具执行只会返回「功能已禁用」，命令不会真正触达运行时。
-CHAT_DATA_DEFAULT_BASH_ENABLED = read_bool_env("CHAT_DATA_DEFAULT_BASH_ENABLED", False)
-# 是否注册 data-explore 子智能体（只读事实收集）；任一子智能体启用即注册 task 工具。
+# 是否注册 explore 子智能体（只读事实收集）；任一子智能体启用即注册 task 工具。
 CHAT_DATA_DEFAULT_EXPLORE_SUBAGENT_ENABLED = read_bool_env("CHAT_DATA_DEFAULT_EXPLORE_SUBAGENT_ENABLED", False)
 # 是否注册 plan 子智能体（统一规划：产出计划文件，只规划不执行）。
 CHAT_DATA_DEFAULT_PLAN_SUBAGENT_ENABLED = read_bool_env("CHAT_DATA_DEFAULT_PLAN_SUBAGENT_ENABLED", False)
-# 是否注册 general-purpose 子智能体（业内通行的通用执行角色：产出交付物/批量加工/查询汇总）。
-CHAT_DATA_DEFAULT_GENERAL_PURPOSE_SUBAGENT_ENABLED = read_bool_env(
-    "CHAT_DATA_DEFAULT_GENERAL_PURPOSE_SUBAGENT_ENABLED", False
-)
 # 语义模型发现引导语（工具缺 semantic_config_id 的错误文案共用）：
 # 检索用法的单一维护点是「数据分析」技能（SKILL.md → references/analysis/query.md），错误提示统一
 # 指向该技能，不随工具开关切换文案，也不在此重复检索步骤。
 SEMANTIC_MODEL_DISCOVERY_HINT = f"按 {DATA_ANALYZING_SKILL} 技能检索并确认语义模型"
 
-if CHAT_DATA_DEFAULT_BASH_ENABLED and CHAT_DATA_DEFAULT_WORKSPACE_BACKEND == "local":
-    logger.warning(
-        "当前运行组合为 bash_enabled=true + workspace_backend=local：Agent 可以宿主进程权限执行任意代码，"
-        "命令黑名单与路径校验可被「写脚本再执行」绕过。仅可用于可信 / 纯本地开发场景，"
-        "多租户或对外暴露环境请改用 workspace_backend=sandbox 由容器隔离兜底。"
-    )
 CONTEXT_COMPRESSION_ENABLED = read_bool_env("CHAT_DATA_CONTEXT_COMPRESSION_ENABLED", True)
 CONTEXT_COMPRESSION_DEFAULT_TRIGGER_RATIO = 0.70
 CONTEXT_COMPRESSION_MAX_TRIGGER_RATIO = 0.95
