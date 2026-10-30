@@ -239,7 +239,9 @@ _STATE_USAGE_FIELDS = (
     "total_tokens",
     "estimated",
     "current_cached_input_tokens",
+    "current_actual_input_tokens",
     "cumulative_cached_input_tokens",
+    "cumulative_actual_input_tokens",
     "current_cache_hit_rate",
     "cumulative_cache_hit_rate",
 )
@@ -706,40 +708,68 @@ def _merge_response_usage(record: dict[str, Any], response: Any) -> None:
         record["cached_input_tokens"] = cached_input_tokens
 
 
+def _bounded_cached_tokens(cached_tokens: int, actual_input_tokens: int, *, scope: str) -> int:
+    """缓存 token 不应超过输入 token；provider 异常时按输入封顶并告警。"""
+    if cached_tokens <= actual_input_tokens:
+        return cached_tokens
+    logger.warning(
+        "[context_usage] 缓存 token 超过输入 token，按输入封顶: scope=%s cached=%s input=%s",
+        scope,
+        cached_tokens,
+        actual_input_tokens,
+    )
+    return actual_input_tokens
+
+
 def _add_cached_input_usage(
     payload: dict[str, Any],
     calls: list[dict[str, Any]],
     current_call: dict[str, Any],
 ) -> None:
-    """聚合模型实际返回的缓存命中数，缺失时不改变既有 payload。"""
+    """聚合模型实际返回的缓存命中数，同时暴露累计分母，缺失时不改变既有 payload。"""
     cache_calls = [call for call in calls if _optional_non_negative_int(call.get("cached_input_tokens")) is not None]
     if not cache_calls:
         return
     current_cached_tokens = _optional_non_negative_int(current_call.get("cached_input_tokens"))
-    if current_cached_tokens is not None:
+    current_actual_input_tokens = _optional_non_negative_int(current_call.get("actual_input_tokens"))
+    if current_cached_tokens is not None and current_actual_input_tokens is not None:
+        current_cached_tokens = _bounded_cached_tokens(
+            current_cached_tokens,
+            current_actual_input_tokens,
+            scope="current",
+        )
         payload["current_cached_input_tokens"] = current_cached_tokens
+        payload["current_actual_input_tokens"] = current_actual_input_tokens
         _add_cache_hit_rate(
             payload,
             "current_cache_hit_rate",
             current_cached_tokens,
-            _optional_non_negative_int(current_call.get("actual_input_tokens")),
+            current_actual_input_tokens,
         )
     calls_with_reported_input = [
         call for call in cache_calls if _optional_non_negative_int(call.get("actual_input_tokens")) is not None
     ]
-    cumulative_cached_tokens = sum(
-        _optional_non_negative_int(call.get("cached_input_tokens")) or 0 for call in calls_with_reported_input
-    )
+    cumulative_cached_tokens = 0
+    cumulative_actual_input_tokens = 0
+    for call in calls_with_reported_input:
+        actual_input_tokens = _optional_non_negative_int(call.get("actual_input_tokens")) or 0
+        cached_tokens = _optional_non_negative_int(call.get("cached_input_tokens")) or 0
+        if actual_input_tokens <= 0:
+            continue
+        cumulative_cached_tokens += _bounded_cached_tokens(
+            cached_tokens,
+            actual_input_tokens,
+            scope="cumulative",
+        )
+        cumulative_actual_input_tokens += actual_input_tokens
     payload["cumulative_cached_input_tokens"] = cumulative_cached_tokens
-    reported_input_tokens = [
-        _optional_non_negative_int(call.get("actual_input_tokens")) for call in calls_with_reported_input
-    ]
+    payload["cumulative_actual_input_tokens"] = cumulative_actual_input_tokens
     _add_cache_hit_rate(
         payload,
         "cumulative_cache_hit_rate",
         cumulative_cached_tokens,
-        sum(tokens for tokens in reported_input_tokens if tokens is not None),
-        has_reported_input=bool(calls_with_reported_input),
+        cumulative_actual_input_tokens,
+        has_reported_input=cumulative_actual_input_tokens > 0,
     )
 
 
@@ -847,7 +877,14 @@ def _response_metadata_usage(message: AIMessage) -> dict[str, Any] | None:
 def _cached_tokens_from_details(details: Any) -> int | None:
     if not isinstance(details, dict):
         return None
-    for key in ("cache_read", "priority_cache_read", "flex_cache_read", "cached_tokens"):
+    for key in (
+        "cache_read",
+        "priority_cache_read",
+        "flex_cache_read",
+        "cached_tokens",
+        "prompt_cache_hit_tokens",
+        "cache_hit_tokens",
+    ):
         cached_tokens = _optional_non_negative_int(details.get(key))
         if cached_tokens is not None:
             return cached_tokens
@@ -858,6 +895,9 @@ def _cached_tokens_from_openai_usage(usage: Any) -> int | None:
     if not isinstance(usage, dict):
         return None
     cached_tokens = _cached_tokens_from_details(usage.get("input_token_details"))
+    if cached_tokens is not None:
+        return cached_tokens
+    cached_tokens = _optional_non_negative_int(usage.get("prompt_cache_hit_tokens"))
     if cached_tokens is not None:
         return cached_tokens
     details = usage.get("prompt_tokens_details")

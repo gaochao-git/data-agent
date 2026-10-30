@@ -228,7 +228,9 @@ export interface ChatDataTokenUsage {
   max_input_tokens?: number
   cumulative_input_tokens?: number
   current_cached_input_tokens?: number
+  current_actual_input_tokens?: number
   cumulative_cached_input_tokens?: number
+  cumulative_actual_input_tokens?: number
   current_cache_hit_rate?: number
   cumulative_cache_hit_rate?: number
   output_tokens?: number

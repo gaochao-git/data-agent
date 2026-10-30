@@ -6,6 +6,7 @@ const cacheUsage = {
   used: 12000,
   total: 89600,
   cumulative_cached_input_tokens: 36900,
+  cumulative_actual_input_tokens: 57656,
   cumulative_cache_hit_rate: 64,
 }
 
@@ -25,6 +26,7 @@ describe('ConversationTokenUsage', () => {
     await wrapper.setProps({ isGenerating: false })
     expect(wrapper.text()).toContain('--')
     expect(wrapper.text()).toContain('64%')
+    expect(wrapper.text()).toContain('本轮累计命中')
 
     await wrapper.setProps({ usage: null, isGenerating: true })
     expect(wrapper.text()).not.toContain('模型缓存')

@@ -623,7 +623,9 @@ def test_build_usage_from_llm_calls_includes_cache_metrics_only_when_reported():
     )
 
     assert usage["current_cached_input_tokens"] == 320
+    assert usage["current_actual_input_tokens"] == 400
     assert usage["cumulative_cached_input_tokens"] == 320
+    assert usage["cumulative_actual_input_tokens"] == 520
     assert usage["current_cache_hit_rate"] == 80.0
     assert usage["cumulative_cache_hit_rate"] == 61.5
 
@@ -635,6 +637,7 @@ def test_build_usage_from_llm_calls_includes_cache_metrics_only_when_reported():
         1000,
     )
     assert partial_usage["cumulative_cached_input_tokens"] == 320
+    assert partial_usage["cumulative_actual_input_tokens"] == 400
     assert partial_usage["cumulative_cache_hit_rate"] == 80.0
 
     unsupported_usage = build_usage_from_llm_calls(
@@ -746,7 +749,7 @@ def test_merge_response_usage_extracts_normalized_and_openai_cache_metrics():
                     "prompt_tokens": 100,
                     "completion_tokens": 2,
                     "total_tokens": 102,
-                    "prompt_tokens_details": {"cached_tokens": 80},
+                    "prompt_cache_hit_tokens": 80,
                 }
             },
         ),
