@@ -158,10 +158,29 @@ def enabled_plugin_mcp_servers() -> list[dict[str, Any]]:
     return entries
 
 
+class PluginSkillSource:
+    """把 plugins.loader 的现有函数适配成 SkillSourcePort。"""
+
+    def enabled_plugin_skill_sources(self) -> list[tuple[str, Path]]:
+        return enabled_plugin_skill_sources()
+
+    async def refresh_plugin_state(self) -> None:
+        await refresh_plugin_state()
+
+
+class PluginMcpServerSource:
+    """把 plugins.loader 的 MCP server 声明适配成 McpServerSourcePort。"""
+
+    def enabled_plugin_mcp_servers(self) -> list[dict[str, Any]]:
+        return enabled_plugin_mcp_servers()
+
+
 __all__ = [
     "PLUGINS_DIR_NAME",
     "PLUGIN_MANIFEST_FILENAME",
+    "PluginMcpServerSource",
     "PluginMetadata",
+    "PluginSkillSource",
     "clear_metadata_cache",
     "enabled_plugin_mcp_servers",
     "enabled_plugin_skill_sources",

@@ -14,9 +14,12 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 
+from apps.chat_data_app.agent.mcp import manager as manager_module  # noqa: E402
 from apps.chat_data_app.agent.mcp.config import (  # noqa: E402
     MCPServerConfig,
     MCPServerConfigError,
+    MCPToolPolicy,
+    default_mcp_connect_timeout_seconds,
     load_mcp_server_configs,
     parse_mcp_server_config,
 )
@@ -143,33 +146,76 @@ def test_parse_mcp_server_config_http_ok():
     assert config.headers == {"k": "v"}
 
 
-def test_parse_mcp_server_config_tool_labels_ok():
+def test_parse_mcp_server_config_tools_ok():
     config = parse_mcp_server_config(
         {
             "id": "srv",
             "transport": "streamable_http",
             "url": "https://mcp.example.com/mcp",
-            "tool_labels": {" echo ": " 回显 ", "greet": "问候"},
+            "tools": {
+                "echo": {"label": " 回显 ", "approval": "allow", "timeout_ms": 10000},
+                "greet": {"label": "问候"},
+            },
         },
         source="env",
     )
-    assert config.tool_labels == {"echo": "回显", "greet": "问候"}
+    assert config.tools["echo"] == MCPToolPolicy(label="回显", approval="allow", timeout_ms=10000)
+    assert config.tools["greet"] == MCPToolPolicy(label="问候", approval="ask", timeout_ms=None)
+    assert config.resolve_tool("echo", 60000).timeout_ms == 10000
+    assert config.resolve_tool("greet", 60000).timeout_ms == 60000
+    assert config.resolve_tool("missing", 60000) == MCPToolPolicy(label="missing", approval="ask", timeout_ms=60000)
 
 
 @pytest.mark.parametrize(
-    "tool_labels",
+    "tools",
     [
         "not-a-dict",
-        {"echo": 1},
-        {1: "回显"},
-        {"echo": "  "},
-        {" ": "回显"},
+        {"echo": "not-a-dict"},
+        {" ": {"label": "x"}},
+        {"echo": {"label": 1}},
+        {"echo": {"approval": "deny"}},
+        {"echo": {"timeout_ms": 0}},
+        {"echo": {"timeout_ms": 1.5}},
+        {"echo": {"timeout_ms": True}},
+        {"echo": {"unknown": 1}},
     ],
 )
-def test_parse_mcp_server_config_rejects_invalid_tool_labels(tool_labels):
+def test_parse_mcp_server_config_rejects_invalid_tools(tools):
     with pytest.raises(MCPServerConfigError):
         parse_mcp_server_config(
-            {"id": "ok", "transport": "stdio", "command": "x", "tool_labels": tool_labels},
+            {
+                "id": "ok",
+                "transport": "streamable_http",
+                "url": "https://mcp.example.com/mcp",
+                "tools": tools,
+            },
+            source="env",
+        )
+
+
+def test_parse_mcp_server_config_caps_tool_timeout():
+    config = parse_mcp_server_config(
+        {
+            "id": "ok",
+            "transport": "streamable_http",
+            "url": "https://mcp.example.com/mcp",
+            "tools": {"slow": {"timeout_ms": 99_999_999}},
+        },
+        source="env",
+    )
+    assert config.tools["slow"].timeout_ms == 30 * 60 * 1000
+
+
+@pytest.mark.parametrize("legacy_key", ["tool_labels", "tool_approvals"])
+def test_parse_mcp_server_config_rejects_legacy_tool_maps(legacy_key):
+    with pytest.raises(MCPServerConfigError, match="已废弃"):
+        parse_mcp_server_config(
+            {
+                "id": "ok",
+                "transport": "streamable_http",
+                "url": "https://mcp.example.com/mcp",
+                legacy_key: {"echo": "allow"},
+            },
             source="env",
         )
 
@@ -331,8 +377,8 @@ async def test_list_tools_async_dedupes_colliding_qualified_names():
 
 
 @pytest.mark.asyncio
-async def test_list_tools_async_labels_from_config_and_fallback():
-    """tool_labels 命中原始工具名时透传 label，未配置的工具回退原始工具名。"""
+async def test_list_tools_async_tools_config_and_fallback():
+    """tools 命中原始工具名时透传 label/approval/timeout，未配置的工具走默认。"""
 
     def config_loader():
         return [
@@ -340,7 +386,7 @@ async def test_list_tools_async_labels_from_config_and_fallback():
                 server_id="srv",
                 transport="streamable_http",
                 url="https://mcp.example.com/mcp",
-                tool_labels={"echo": "回显输入"},
+                tools={"echo": MCPToolPolicy(label="回显输入", approval="allow", timeout_ms=12000)},
             ),
         ]
 
@@ -348,19 +394,59 @@ async def test_list_tools_async_labels_from_config_and_fallback():
     tools = await manager.list_tools_async()
     by_qualified = {t.qualified_name: t for t in tools}
     assert by_qualified["mcp_srv_echo"].label == "回显输入"
+    assert by_qualified["mcp_srv_echo"].approval == "allow"
+    assert by_qualified["mcp_srv_echo"].timeout_ms == 12000
+    assert by_qualified["mcp_srv_echo"].configured is True
     assert by_qualified["mcp_srv_greet"].label == "greet"
+    assert by_qualified["mcp_srv_greet"].timeout_ms == 10000
+    assert by_qualified["mcp_srv_greet"].configured is False
 
 
-def test_dedupe_qualified_names_preserves_label():
+def test_session_timeout_covers_longest_tool_timeout():
+    manager = MCPToolManager(
+        tool_timeout_seconds=10,
+        session_factory=lambda _config: None,
+        config_loader=lambda: [],
+    )
+    config = MCPServerConfig(
+        server_id="srv",
+        transport="streamable_http",
+        url="https://mcp.example.com/mcp",
+        tools={"slow": MCPToolPolicy(timeout_ms=120_000)},
+    )
+    assert manager._session_timeout_seconds(config) == 120
+
+
+def test_dedupe_qualified_names_preserves_timeout_and_configured():
     from apps.chat_data_app.agent.mcp.manager import _dedupe_qualified_names
 
     infos = [
-        MCPToolInfo(server_id="s", name="t", qualified_name="mcp_s_t", description="", input_schema={}, label="甲"),
-        MCPToolInfo(server_id="s", name="t", qualified_name="mcp_s_t", description="", input_schema={}, label="乙"),
+        MCPToolInfo(
+            server_id="s",
+            name="t",
+            qualified_name="mcp_s_t",
+            description="",
+            input_schema={},
+            label="甲",
+            timeout_ms=1000,
+            configured=True,
+        ),
+        MCPToolInfo(
+            server_id="s",
+            name="t",
+            qualified_name="mcp_s_t",
+            description="",
+            input_schema={},
+            label="乙",
+            timeout_ms=2000,
+            configured=False,
+        ),
     ]
     out = _dedupe_qualified_names(infos)
     assert [t.qualified_name for t in out] == ["mcp_s_t", "mcp_s_t_1"]
     assert [t.label for t in out] == ["甲", "乙"]
+    assert [t.timeout_ms for t in out] == [1000, 2000]
+    assert [t.configured for t in out] == [True, False]
 
 
 @pytest.mark.asyncio
@@ -593,33 +679,6 @@ def test_load_mcp_server_configs_uses_plugin_entries_only(monkeypatch):
     assert any("transport 只支持" in message for message in records)
 
 
-def test_parse_mcp_server_config_tool_approvals_ok():
-    config = parse_mcp_server_config(
-        {
-            "id": "srv",
-            "transport": "streamable_http",
-            "url": "https://mcp.example.com/mcp",
-            "tool_approvals": {"echo": "allow", "greet": "ask"},
-        },
-        source="env",
-    )
-    assert config.tool_approvals == {"echo": "allow", "greet": "ask"}
-
-
-def test_parse_mcp_server_config_rejects_invalid_tool_approvals():
-    for approvals in ({"echo": "bad"}, {" ": "ask"}, "not-a-dict"):
-        with pytest.raises(MCPServerConfigError):
-            parse_mcp_server_config(
-                {
-                    "id": "ok",
-                    "transport": "streamable_http",
-                    "url": "https://mcp.example.com/mcp",
-                    "tool_approvals": approvals,
-                },
-                source="env",
-            )
-
-
 @pytest.mark.asyncio
 async def test_list_tools_async_keeps_ask_allow_approval_policy():
     def config_loader():
@@ -628,7 +687,7 @@ async def test_list_tools_async_keeps_ask_allow_approval_policy():
                 server_id="srv",
                 transport="streamable_http",
                 url="https://mcp.example.com/mcp",
-                tool_approvals={"echo": "allow", "greet": "ask"},
+                tools={"echo": MCPToolPolicy(approval="allow"), "greet": MCPToolPolicy(approval="ask")},
             ),
         ]
 
@@ -652,44 +711,70 @@ def test_dedupe_qualified_names_preserves_approval():
     assert [t.approval for t in out] == ["allow", "ask"]
 
 
-def test_parse_mcp_server_config_normalizes_legacy_approval_values():
-    config = parse_mcp_server_config(
-        {
-            "id": "srv",
-            "transport": "streamable_http",
-            "url": "https://mcp.example.com/mcp",
-            "tool_approvals": {"old_auto": "auto", "old_force": "force_ask"},
-        },
-        source="env",
-    )
-    assert config.tool_approvals == {"old_auto": "allow", "old_force": "ask"}
+@pytest.mark.asyncio
+async def test_call_tool_async_translates_wait_for_timeout():
+    from contextlib import asynccontextmanager
 
+    class SlowClient:
+        async def call_tool(self, name, arguments):
+            raise TimeoutError("inner timeout")
 
-def test_parse_mcp_server_config_keeps_legacy_deny_for_tool_level_filter():
-    config = parse_mcp_server_config(
-        {
-            "id": "srv",
-            "transport": "streamable_http",
-            "url": "https://mcp.example.com/mcp",
-            "tool_approvals": {"old_deny": "deny"},
-        },
-        source="env",
+    @asynccontextmanager
+    async def factory(_config):
+        yield SlowClient()
+
+    manager = MCPToolManager(
+        tool_timeout_seconds=1,
+        session_factory=factory,
+        config_loader=lambda: [
+            MCPServerConfig(server_id="srv", transport="streamable_http", url="https://mcp.example.com/mcp")
+        ],
     )
-    assert config.tool_approvals == {"old_deny": "deny"}
+    with pytest.raises(TimeoutError, match="MCP tool srv/slow timed out after 1s"):
+        await manager.call_tool_async("srv", "slow", {})
 
 
 @pytest.mark.asyncio
-async def test_list_tools_async_skips_only_legacy_deny_tools():
-    def config_loader():
-        return [
-            MCPServerConfig(
-                server_id="srv",
-                transport="streamable_http",
-                url="https://mcp.example.com/mcp",
-                tool_approvals={"echo": "deny", "greet": "ask"},
-            ),
-        ]
+async def test_call_tool_async_unwraps_taskgroup_timeout():
+    from contextlib import asynccontextmanager
 
-    manager, _opens = _make_manager(config_loader=config_loader)
+    class SlowClient:
+        async def call_tool(self, name, arguments):
+            raise ExceptionGroup("unhandled errors in a TaskGroup", [TimeoutError("inner")])
+
+    @asynccontextmanager
+    async def factory(_config):
+        yield SlowClient()
+
+    manager = MCPToolManager(
+        tool_timeout_seconds=1,
+        session_factory=factory,
+        config_loader=lambda: [
+            MCPServerConfig(server_id="srv", transport="streamable_http", url="https://mcp.example.com/mcp")
+        ],
+    )
+    with pytest.raises(TimeoutError, match="MCP tool srv/slow timed out after 1s"):
+        await manager.call_tool_async("srv", "slow", {})
+
+
+@pytest.mark.asyncio
+async def test_tool_description_is_truncated_to_admission_limit(monkeypatch):
+    monkeypatch.setenv("CHAT_DATA_MCP_MAX_TOOL_DESCRIPTION_CHARS", "5")
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        manager_module.logger,
+        "warning",
+        lambda message, *args, **kwargs: warnings.append(str(message) % args if args else str(message)),
+    )
+    manager, _opens = _make_manager()
     tools = await manager.list_tools_async()
-    assert [tool.name for tool in tools] == ["greet"]
+    assert tools
+    assert all(len(tool.description) <= 5 for tool in tools)
+    assert any("tool_description_too_long" in message for message in warnings)
+
+
+def test_default_mcp_connect_timeout_is_independent(monkeypatch):
+    monkeypatch.delenv("CHAT_DATA_MCP_CONNECT_TIMEOUT_SECONDS", raising=False)
+    assert default_mcp_connect_timeout_seconds() == 15
+    monkeypatch.setenv("CHAT_DATA_MCP_CONNECT_TIMEOUT_SECONDS", "7")
+    assert default_mcp_connect_timeout_seconds() == 7

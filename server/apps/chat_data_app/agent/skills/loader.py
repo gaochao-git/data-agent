@@ -17,6 +17,13 @@ from xml.sax.saxutils import escape as xml_escape
 from utils.logger import get_logger
 from utils.skill_paths import SYSTEM_SKILL_CATEGORY, physical_skill_category_root
 
+# 兼容旧导入/包级重导出：skills 包和测试仍可从 loader 取这些符号。
+from ..contracts.skill_metadata import (  # noqa: F401
+    SkillMetadata,
+    parse_metadata,
+    parse_metadata_text,
+)
+
 try:
     import yaml
 except Exception:
@@ -26,19 +33,6 @@ logger = get_logger(__name__)
 
 
 # ============ 类型定义 ============
-
-
-class SkillMetadata(TypedDict):
-    """启动时加载的轻量元数据"""
-
-    name: str
-    title: str
-    description: str
-    domain: str
-    category: str
-    output_type: str
-    input_schema: dict[str, Any]
-    path: str  # SKILL.md 文件路径
 
 
 class Skill(TypedDict):
@@ -59,77 +53,15 @@ class Skill(TypedDict):
 _metadata_cache: dict[str, SkillMetadata] | None = None
 
 
-def system_skills_root() -> Path:
-    """Return the deployment-managed system skill root."""
-    return physical_skill_category_root(SYSTEM_SKILL_CATEGORY)
-
-
-def _parse_frontmatter(text: str) -> dict[str, Any]:
-    """解析 SKILL.md frontmatter，优先兼容 YAML，失败时走简单 key/value。"""
-    match = re.match(r"^---\s*\n(.*?)\n---", text, re.DOTALL)
-    if not match:
-        return {}
-    raw_frontmatter = match.group(1).strip()
-    if yaml is not None:
-        try:
-            parsed = yaml.safe_load(raw_frontmatter)
-            if isinstance(parsed, dict):
-                return parsed
-        except Exception as err:
-            logger.warning("[skills] YAML frontmatter 解析失败，回退简单解析: %s", err)
-    frontmatter: dict[str, Any] = {}
-    for line in raw_frontmatter.split("\n"):
-        if ":" in line:
-            k, v = line.split(":", 1)
-            frontmatter[k.strip()] = v.strip().strip('"').strip("'")
-    return frontmatter
-
-
 def clear_metadata_cache() -> None:
     """清理技能元数据缓存。"""
     global _metadata_cache
     _metadata_cache = None
 
 
-# ============ API ============
-
-
-def parse_metadata_text(text: str, *, path: str = "") -> SkillMetadata | None:
-    """解析 SKILL.md 文本中的 frontmatter 元数据。"""
-    frontmatter = _parse_frontmatter(text)
-
-    name = frontmatter.get("name", "")
-    if not name:
-        return None
-    metadata = frontmatter.get("metadata", {})
-    if not isinstance(metadata, dict):
-        metadata = {}
-    input_schema: dict[str, Any]
-    if isinstance(frontmatter.get("input_schema"), dict):
-        input_schema = frontmatter["input_schema"]
-    else:
-        fallback_schema = metadata.get("input_schema")
-        input_schema = fallback_schema if isinstance(fallback_schema, dict) else {}
-
-    return SkillMetadata(
-        name=name,
-        title=frontmatter.get("title") or metadata.get("title") or name,
-        description=frontmatter.get("description", ""),
-        domain=frontmatter.get("domain") or metadata.get("domain") or "",
-        category=frontmatter.get("category") or metadata.get("category") or "",
-        output_type=frontmatter.get("output_type") or metadata.get("output_type") or "text",
-        input_schema=input_schema,
-        path=path,
-    )
-
-
-def parse_metadata(skill_path: Path) -> SkillMetadata | None:
-    """解析单个技能的 frontmatter 元数据。"""
-    try:
-        text = skill_path.read_text(encoding="utf-8")
-    except Exception:
-        return None
-    return parse_metadata_text(text, path=str(skill_path))
+def system_skills_root() -> Path:
+    """Return the deployment-managed system skill root."""
+    return physical_skill_category_root(SYSTEM_SKILL_CATEGORY)
 
 
 def discover_skills(directories: list[Path]) -> list[Path]:

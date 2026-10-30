@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { extractChangedFilePathsFromResult, extractWrittenFilePathCandidates, getDataAnalyzingActionName, getOntologyActionName, getToolCompactDescription, getToolDisplayName, getToolTechnicalDescription, isFileDiffOffloaded, splitFileDiffLines } from '../toolDisplay'
+import { extractChangedFilePathsFromResult, extractWrittenFilePathCandidates, getDataAnalyzingActionName, getOntologyActionName, getToolCompactDescription, getToolDisplayName, getToolTechnicalDescription, isFileDiffOffloaded, setToolDisplayNames, splitFileDiffLines } from '../toolDisplay'
 
 describe('toolDisplay', () => {
   it('maps every current ChatData tool to a user-facing name', () => {
@@ -44,7 +44,7 @@ describe('toolDisplay', () => {
   })
 
   it('passes MCP qualified names through without local mapping', () => {
-    // 展示名由后端 tool_labels 下发（display_name），前端不维护 MCP 映射表
+    // 展示名由后端 tools.<name>.label 下发（display_name），前端不维护 MCP 映射表
     expect(getToolDisplayName('mcp_fault-ssh_system_overview')).toBe('mcp_fault-ssh_system_overview')
     expect(getToolDisplayName('mcp_tool_call')).toBe('调用 MCP 工具')
     expect(getToolDisplayName('mcp_tool_call', { name: 'mcp_fault-ssh_system_disk_usage' })).toContain('fault-ssh_system_disk_usage')
@@ -323,3 +323,13 @@ describe('extractChangedFilePathsFromResult', () => {
     expect(extractChangedFilePathsFromResult(null)).toEqual([])
   })
 })
+
+  it('prefers backend ToolDeclaration display names over local fallback', () => {
+    setToolDisplayNames({ file_read: '后端读取文件', file_delete: '后端删除文件' })
+    try {
+      expect(getToolDisplayName('file_read')).toBe('后端读取文件')
+      expect(getToolDisplayName('file_delete')).toBe('后端删除文件')
+    } finally {
+      setToolDisplayNames(null)
+    }
+  })

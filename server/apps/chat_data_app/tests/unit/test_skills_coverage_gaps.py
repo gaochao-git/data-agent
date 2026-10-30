@@ -171,7 +171,7 @@ def test_list_runtime_sources_skips_user_row_resolution_errors(tmp_path, monkeyp
         raise ValueError("历史绝对路径越界")
 
     monkeypatch.setattr(ss, "load_metadata", lambda: {})
-    monkeypatch.setattr(ss, "enabled_plugin_skill_sources", lambda: [])
+    monkeypatch.setattr(ss, "get_skill_source", lambda: None)
     monkeypatch.setattr(ss, "_append_runtime_user_skill_source", failing_append)
 
     service = ss.SkillService()

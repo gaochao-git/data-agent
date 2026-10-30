@@ -89,6 +89,7 @@ def test_add_cached_input_usage_without_current_cached_tokens():
     )
     assert "current_cached_input_tokens" not in payload
     assert payload["cumulative_cached_input_tokens"] == 5
+    assert payload["cumulative_actual_input_tokens"] == 10
     assert payload["cumulative_cache_hit_rate"] == 50.0
 
 
@@ -125,7 +126,24 @@ def test_cached_tokens_from_openai_usage_falls_back_to_prompt_details():
     """input_token_details 无命中时回退 prompt_tokens_details（798->799）。"""
     usage = {"prompt_tokens_details": {"cached_tokens": 7}}
     assert _cached_tokens_from_openai_usage(usage) == 7
+    assert _cached_tokens_from_openai_usage({"prompt_cache_hit_tokens": 9}) == 9
+    assert _cached_tokens_from_details({"prompt_cache_hit_tokens": 11}) == 11
     assert _cached_tokens_from_openai_usage("bad") is None
+
+
+def test_add_cached_input_usage_clamps_anomalous_cache_to_input():
+    payload = {}
+    _add_cached_input_usage(
+        payload,
+        [{"cached_input_tokens": 50, "actual_input_tokens": 20}],
+        {"cached_input_tokens": 50, "actual_input_tokens": 20},
+    )
+    assert payload["current_cached_input_tokens"] == 20
+    assert payload["current_actual_input_tokens"] == 20
+    assert payload["current_cache_hit_rate"] == 100.0
+    assert payload["cumulative_cached_input_tokens"] == 20
+    assert payload["cumulative_actual_input_tokens"] == 20
+    assert payload["cumulative_cache_hit_rate"] == 100.0
 
 
 # ---------------------------------------------------------------------------

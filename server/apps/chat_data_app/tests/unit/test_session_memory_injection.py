@@ -50,7 +50,7 @@ def test_memory_section_sits_between_convention_block_and_data_context():
 
 def _spec(**overrides):
     kwargs = {
-        "name": "data-explore",
+        "name": "explore",
         "description": "只读事实收集",
         "system_prompt": "你是子智能体",
         "tools": [],

@@ -208,6 +208,7 @@ def test_plugin_template_download_returns_installable_zip(client, auth_headers):
         assert "example-plugin/skills/example-skill/SKILL.md" in names
         assert "example-plugin/skills/example-skill/references/README.md" in names
         assert "example-plugin/skills/example-skill/assets/README.md" in names
+        assert not any("__pycache__" in name or name.endswith(".pyc") for name in names)
         manifest = parse_plugin_manifest(json.loads(archive.read("example-plugin/plugin.json")))
     assert manifest.name == "example-plugin"
     assert manifest.skills == ("example-skill",)
@@ -308,6 +309,7 @@ def test_mcp_server_template_download_contains_hello_server(client, auth_headers
     assert "hello-mcp-server/requirements.txt" in names
     assert "hello-mcp-server/README.md" in names
     assert "hello-mcp-server/mcp_auth.py" in names
+    assert not any("__pycache__" in name or name.endswith(".pyc") for name in names)
 
     with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
         server_source = archive.read("hello-mcp-server/server.py").decode()

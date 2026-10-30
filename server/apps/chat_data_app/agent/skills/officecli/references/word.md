@@ -8,7 +8,7 @@ OfficeCLI 对 `.docx` 提供语义路径 API（`/body/p[1]/r[2]`），几乎不�
 
 - 调用形态：`officecli_run(command_args=["add", "/mnt/user-data/workspace/report.docx", "/body", "--type", "paragraph", "--prop", "text=营收增长", "--prop", "font.ea=仿宋_GB2312", "--prop", "size=16"])`。路径、flag、值都是数组里的独立字符串。
 - **不要给路径加引号。** 在 argv 模型里引号会变成文件名的一部分，导致定位失败。上游 shell 文档写"ALWAYS quote `/body/p[1]`"在我们的模型下是**错的**——shell 才需要引号防 glob，我们没有 shell。
-- **`$` 安全、但 `\n`/`\t` 仍生效。** 无 shell，所以 `"$50M"` 原样写入、不会被展开；但 `--prop text=` 里的 `\n` 解释成软换行（`<w:br/>`）、`\t` 解释成制表符（`<w:tab/>`），表格单元格 `c1="a\nb"` 同理。这是 CLI 层行为，与调用方式无关。
+- **`$` 安全、但 `\n`/`\v`/`\t` 转义仍生效。** 无 shell，所以 `"$50M"` 原样写入、不会被展开。`--prop text=` 里：`\n` **新开一个段落**（新 `<w:p>` 继承源段落样式，实测 1.0.157+）、`\v` 才是段内软换行（`<w:br/>`）、`\t` 是制表符（`<w:tab/>`）。**例外**：表格行快捷方式 `c1="a\nb"` 里 `\n` 仍是单元格内 `<w:br/>`。**batch JSON 不解释两字符转义**——`"\\v"` 会落成字面文本；要传真实字符用 JSON 转义：`"\n"`（新段落）、`"\u000b"`（软换行）。这是 CLI 层行为，与调用方式无关。
 - **禁 `open`/`close`。** 当前工具不启用常驻进程；成功的修改命令会由运行时同步 `workspace`/`outputs` 文件。需要显式确认 OfficeCLI 刷新文件时再调用 `save`，不必每条修改后重复调用。`batch` 可一次提交整个 JSON 数组。
 - **Help-First。** 属性名/枚举不确定时先 `officecli_run(command_args=["help", "docx"])`、`help docx <element>`、`help docx <verb> <element>`、`--json` 可取机器可读 schema。skill 与 help 冲突时 **help 为准**。
 - **增量执行。** officecli 每条命令就地修改文件。一次只跑一条并看返回，结构性操作（新样式、表格、目录、分节）后先 `get` 确认再叠加。

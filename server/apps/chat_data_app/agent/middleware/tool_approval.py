@@ -7,7 +7,7 @@
 - 需要审批的工具：系统工具 ``SYSTEM_TOOL_APPROVALS`` 映射（缺省 allow）
   + MCP 动态工具（不在注册表、第三方默认严格，按 ``mcp_`` 前缀统一 ask；
   ``mcp_tool_search`` 只读检索除外）；
-- 每工具审批档位（``plugin.json`` 的 ``mcp_servers[].tool_approvals``，按工具
+- 每工具审批档位（``plugin.json`` 的 ``mcp_servers[].tools.<name>.approval``，按工具
   metadata ``approval`` 透传到本中间件）：``allow`` 免审批；缺省 ``ask``。
   不使用 ``deny/force_ask/auto``；不需要的工具在装配层不挂载；
 - **一轮模型响应内的审批工具调用批量收集、单次中断**（``after_model`` 钩子）：
@@ -76,13 +76,17 @@ class ToolApprovalMiddleware(AgentMiddleware):
         # 统一审批策略映射：中间件不再区分系统工具/MCP 工具。
         self._approval_policies = dict(approval_policies or {})
 
+    def _decision(self, tool_name: str) -> str:
+        """查统一策略：allow / ask / deny；未知按 ask fail-closed。"""
+        return str(self._approval_policies.get(tool_name, "ask") or "ask")
+
     def _needs_approval(self, tool_name: str) -> bool:
-        """只查统一策略映射；allow 直行，未知/ask 中断。"""
+        """只查统一策略映射；allow/deny 直行到 wrap 阶段，ask 中断。"""
         # 直连幻觉 MCP 名（不在本次装配工具表里）不弹审批：先让框架返回工具不存在，
         # 避免用户白批一次；代理到不存在目标同理。
         if tool_name.startswith(_MCP_TOOL_PREFIX) and tool_name not in self._tool_labels:
             return False
-        return self._approval_policies.get(tool_name, "ask") == "ask"
+        return self._decision(tool_name) == "ask"
 
     # ---- after_model：批量收集本轮到待审批调用，仅中断一次 ----
 
@@ -162,6 +166,8 @@ class ToolApprovalMiddleware(AgentMiddleware):
         if tool_name == _MCP_TOOL_CALL_TOOL_NAME and not _has_proxy_target(tool_call):
             return await handler(request)
         target_name, effective_call = _approval_target(tool_name, tool_call)
+        if self._decision(target_name) == "deny":
+            return _deny_message(request, "工具策略禁止调用")
         if not self._needs_approval(target_name):
             return await handler(request)
         call_id = str(tool_call.get("id") or "")

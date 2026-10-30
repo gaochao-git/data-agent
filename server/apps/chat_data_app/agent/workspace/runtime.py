@@ -36,6 +36,7 @@ from utils.tool_result_store import QUERY_RESULT_DIR_NAME, TOOL_OFFLOAD_DIR_NAME
 from utils.upload_storage_crypto import materialize_plaintext, original_upload_path
 
 from .artifact_registry import parse_output_artifact
+from .office_preview_html import normalize_office_preview_html
 from .officecli_adapter import OFFICECLI_NO_AUTO_RESIDENT_ENV
 from .workspace_path_policy import WORKSPACE_PATH_POLICY
 from .workspace_special_services import (
@@ -204,6 +205,13 @@ class ConversationWorkspaceRuntime:
     @property
     def backend_name(self) -> str:
         return self._resolved_backend.name
+
+    async def renew_sandbox_async(self) -> None:
+        """在模型调用前后续期 sandbox；local 后端无此能力时直接跳过。"""
+        renew = getattr(self._resolved_backend, "renew_sandbox_async", None)
+        if renew is None:
+            return
+        await renew()
 
     @property
     def runtime_skills_dir(self) -> Path:
@@ -694,7 +702,7 @@ def _render_local_office_html(
                 "html": "",
                 "truncated": True,
             }
-        html = preview_file.read_text(encoding="utf-8", errors="replace")
+        html = normalize_office_preview_html(preview_file.read_text(encoding="utf-8", errors="replace"))
     finally:
         with contextlib.suppress(OSError):
             os.unlink(preview_path)

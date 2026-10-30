@@ -271,35 +271,11 @@ def test_approval_middleware_mounted_for_interactive_runs_only():
     assert _build_tool_approval_middleware(AgentRunControls(disable_user_interaction=True)) is None
 
 
-def test_subagents_keep_system_tools_when_they_are_allow(monkeypatch):
-    """系统工具统一 allow 后，子智能体保留文件写/删除/移动能力。"""
-    from types import SimpleNamespace
-
-    from apps.chat_data_app.agent import data_agent as data_agent_module
-
-    captured: dict = {}
-
-    class _Recorder:
-        def __init__(self, specs, **_kwargs):
-            captured["specs"] = specs
-
-    monkeypatch.setattr(data_agent_module, "SubagentMiddleware", _Recorder)
-
-    tools = [SimpleNamespace(name=name) for name in ("file_read", "file_write", "file_delete", "file_move", "bash_run")]
-    options = AgentRuntimeOptions(general_purpose_subagent_enabled=True)
-    data_agent_module.build_subagent_middleware(options, tools, model=object())
-
-    names = {tool.name for spec in captured["specs"] for tool in spec.tools}
-    assert {"file_read", "file_delete", "file_move"} <= names
-    gp = next(spec for spec in captured["specs"] if spec.name == "general-purpose")
-    assert "删除与移动的能力边界" not in gp.system_prompt
-
-
 def test_unattended_excludes_every_user_interaction_tool(tmp_path):
     """无人值守必须不挂载任何 requires_user_interaction 工具（注册表全量校验）。"""
-    from apps.chat_data_app.agent.tools.registry import TOOL_SPECS
+    from apps.chat_data_app.agent.tools.registry import TOOL_DEFINITIONS
 
-    interactive = {name for spec in TOOL_SPECS if spec.requires_user_interaction for name in spec.provides}
+    interactive = {name for name, declaration in TOOL_DEFINITIONS.items() if declaration.requires_user_interaction}
     attended = set(_tool_names(tmp_path))
     unattended = set(_tool_names(tmp_path, run_controls=AgentRunControls(disable_user_interaction=True)))
     assert interactive
@@ -341,3 +317,19 @@ def test_write_todos_middleware_uses_compact_chinese_prompt():
     assert "completed" in description
     assert len(system_prompt) <= 400
     assert "多步任务" in system_prompt
+
+
+def test_sandbox_renewal_callback_only_for_sandbox_backend():
+    """local 模式返回 None（零续期开销）；sandbox 返回绑定的续期方法。"""
+    from types import SimpleNamespace
+
+    from apps.chat_data_app.agent.data_agent import _sandbox_renewal_callback
+
+    async def _renew():
+        return None
+
+    local = SimpleNamespace(backend_name="local")
+    assert _sandbox_renewal_callback(local) is None
+
+    sandbox = SimpleNamespace(backend_name="sandbox", renew_sandbox_async=_renew)
+    assert _sandbox_renewal_callback(sandbox) is _renew

@@ -248,7 +248,7 @@ SETTING_REGISTRY: dict[str, SettingSpec] = {
         default=False,
         category="agent",
         effect=EFFECT_NEXT_RUN,
-        description="是否注册 data-explore 只读子智能体（新会话装配时生效）",
+        description="是否注册 explore 只读子智能体（新会话装配时生效）",
     ),
     "CHAT_DATA_DEFAULT_PLAN_SUBAGENT_ENABLED": SettingSpec(
         key="CHAT_DATA_DEFAULT_PLAN_SUBAGENT_ENABLED",
@@ -257,14 +257,6 @@ SETTING_REGISTRY: dict[str, SettingSpec] = {
         category="agent",
         effect=EFFECT_NEXT_RUN,
         description="是否注册 plan 规划子智能体（新会话装配时生效）",
-    ),
-    "CHAT_DATA_DEFAULT_GENERAL_PURPOSE_SUBAGENT_ENABLED": SettingSpec(
-        key="CHAT_DATA_DEFAULT_GENERAL_PURPOSE_SUBAGENT_ENABLED",
-        value_type="bool",
-        default=False,
-        category="agent",
-        effect=EFFECT_NEXT_RUN,
-        description="是否注册 general-purpose 通用执行子智能体（新会话装配时生效）",
     ),
     "CHAT_DATA_SCHEDULE_POLL_SECONDS": SettingSpec(
         key="CHAT_DATA_SCHEDULE_POLL_SECONDS",

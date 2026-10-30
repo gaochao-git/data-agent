@@ -2,6 +2,7 @@
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
+from apps.chat_data_app.agent.context import context_budget as cb
 from apps.chat_data_app.agent.middleware import context_usage as cu
 
 
@@ -11,7 +12,7 @@ def test_compact_token_usage_for_state_rejects_non_mapping():
 
 
 def test_merge_summary_returns_cleaned_messages_when_builder_returns_none(monkeypatch):
-    monkeypatch.setattr(cu, "build_runtime_context_summary_message", lambda _summary: None)
+    monkeypatch.setattr(cb, "build_runtime_context_summary_message", lambda _summary: None)
     messages = [HumanMessage(content="问题"), AIMessage(content="回答")]
 
     system_prompt, merged = cu._merge_compression_summary_into_system_prompt(

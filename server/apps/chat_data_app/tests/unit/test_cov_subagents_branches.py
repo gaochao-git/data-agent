@@ -6,6 +6,7 @@ import pytest
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
 
+from apps.chat_data_app.agent.context import context_budget as cb
 from apps.chat_data_app.agent.middleware import subagents as sm
 from apps.chat_data_app.agent.middleware.subagents import (
     SubagentSpec,
@@ -16,7 +17,7 @@ from apps.chat_data_app.agent.middleware.subagents import (
 )
 
 
-def _spec(name="data-explore", **overrides):
+def _spec(name="explore", **overrides):
     kwargs = {
         "name": name,
         "description": "深度分析子智能体",
@@ -41,7 +42,7 @@ def test_budget_alert_keeps_messages_when_summary_builder_returns_none(monkeypat
         "get_model_context_budget",
         lambda model_id: SimpleNamespace(compression_trigger_tokens=10**9),
     )
-    monkeypatch.setattr(sm, "build_runtime_context_summary_message", lambda _summary: None)
+    monkeypatch.setattr(cb, "build_runtime_context_summary_message", lambda _summary: None)
     middleware = sm.create_subagent_budget_alert_middleware(_spec(), [])
     seen = {}
 
@@ -62,7 +63,11 @@ def test_budget_alert_keeps_messages_when_summary_builder_returns_none(monkeypat
 def test_compile_subagent_appends_fence_when_run_controls_complete(monkeypatch):
     captured = {}
     monkeypatch.setattr(sm, "_subagent_system_prompt", lambda spec: "系统提示词")
-    monkeypatch.setattr(sm, "create_context_compression_middleware", lambda **kwargs: "compression")
+    monkeypatch.setattr(
+        sm,
+        "create_context_compression_middleware",
+        lambda **kwargs: captured.setdefault("compression", kwargs) or "compression",
+    )
     monkeypatch.setattr(sm, "create_subagent_budget_alert_middleware", lambda *a, **k: "budget")
     monkeypatch.setattr(sm, "SkillPrerequisiteMiddleware", lambda *_a: "skill")
     monkeypatch.setattr(sm, "create_tool_call_name_normalizer_middleware", lambda _tools: "normalizer")
@@ -79,8 +84,11 @@ def test_compile_subagent_appends_fence_when_run_controls_complete(monkeypatch):
         inbox_service="inbox",
     )
 
-    sm._compile_subagent(_spec(), run_controls=run_controls)
+    spec = _spec()
+    sm._compile_subagent(spec, run_controls=run_controls)
 
+    assert spec._context_request_budget is not None
+    assert captured["compression"]["context_runtime"].request_budget is spec._context_request_budget
     assert captured["fence"] == {"run_id": "run-1", "owner_token": "token", "inbox_service": "inbox"}
     assert captured["fence"] in captured["agent"]["middleware"]
 
@@ -139,7 +147,7 @@ async def test_task_tool_without_usage_meta_omits_context_usage_snapshot(monkeyp
 
     result = await tool.coroutine(
         description="分析",
-        subagent_type="data-explore",
+        subagent_type="explore",
         runtime=SimpleNamespace(state={"user_id": "u1"}, tool_call_id="call-1"),
     )
 
@@ -147,3 +155,22 @@ async def test_task_tool_without_usage_meta_omits_context_usage_snapshot(monkeyp
     assert isinstance(message, ToolMessage)
     assert message.content == "分析完成"
     assert "subagent_context_usage" not in message.additional_kwargs
+
+
+def test_subagent_budget_meta_reuses_shared_request_budget(monkeypatch):
+    monkeypatch.setattr(
+        cb,
+        "get_model_context_budget",
+        lambda model_id, max_output_tokens=None: SimpleNamespace(
+            compression_trigger_tokens=1234,
+            context_window=10000,
+            hard_input_limit_tokens=8000,
+        ),
+    )
+    budget = cb.ContextRequestBudget(None)
+    budget.configure("系统提示词", [], static_input_tokens=777)
+
+    meta = sm._subagent_budget_meta(_spec(), [], context_request_budget=budget)
+
+    assert meta["static_tokens"] == 777
+    assert meta["threshold_tokens"] == 1234

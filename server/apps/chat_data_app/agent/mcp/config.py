@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 
 from utils.logger import get_logger
 
+from ...services.runtime_config import read_positive_int_env
 from .admission import validate_mcp_server_config
 
 logger = get_logger(__name__)
@@ -33,21 +34,64 @@ VALID_MCP_TRANSPORTS = frozenset({"streamable_http"})
 # server id 只用于日志、缓存键与工具名前缀，约束成安全的标识符片段。
 _SERVER_ID_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,31}$")
 
+# 每工具审批档位（B 端固定策略）：ask=执行前必须人工确认（缺省）；allow=无需人工确认。
+VALID_TOOL_APPROVALS = frozenset({"ask", "allow"})
+DEFAULT_TOOL_APPROVAL = "ask"
+TOOL_POLICY_KEYS = frozenset({"label", "approval", "timeout_ms"})
+MCP_TOOL_LABEL_MAX_LENGTH = 100
+# 工具级超时（毫秒）：低于下限视为非法；高于上限截到上限。
+MCP_TOOL_TIMEOUT_MIN_MS = 1_000
+MCP_TOOL_TIMEOUT_MAX_MS = 30 * 60 * 1_000
+MCP_TOOL_TIMEOUT_ENV = "CHAT_DATA_MCP_TOOL_TIMEOUT_SECONDS"
+MCP_CONNECT_TIMEOUT_ENV = "CHAT_DATA_MCP_CONNECT_TIMEOUT_SECONDS"
+
+
+def default_mcp_tool_timeout_ms() -> int:
+    """全局默认 MCP 工具超时（毫秒）；与 ``MCPToolManager`` 共用同一 env 口径。"""
+    return read_positive_int_env(MCP_TOOL_TIMEOUT_ENV, 60) * 1_000
+
+
+def default_mcp_connect_timeout_seconds() -> int:
+    """连接/initialize/discover 握手超时（秒）；与工具调用超时分离。"""
+    return read_positive_int_env(MCP_CONNECT_TIMEOUT_ENV, 15)
+
+
+@dataclass(frozen=True)
+class MCPToolPolicy:
+    """单个 MCP 工具的用户可配策略（解析后会补齐默认值）。"""
+
+    label: str = ""
+    approval: str = DEFAULT_TOOL_APPROVAL
+    timeout_ms: int | None = None
+
 
 @dataclass(frozen=True)
 class MCPServerConfig:
-    """单个 MCP server 的连接配置。"""
+    """单个 MCP server 的连接配置与工具策略。"""
 
     server_id: str
     transport: str  # streamable_http
     url: str = ""
     headers: dict[str, str] = field(default_factory=dict)
-    # 原始工具名 → 用户可见中文友好名（前端展示用，不参与调用与命名空间）。
-    tool_labels: dict[str, str] = field(default_factory=dict)
-    # 原始工具名 → 每工具审批档位（ask/allow，缺省 ask）；
-    # deny 在工具枚举层剔除（不挂载、不进检索目录），其余档位由审批中间件消费。
-    tool_approvals: dict[str, str] = field(default_factory=dict)
+    # MCP 原始工具名 → 工具策略（label/approval/timeout_ms）；未配置的工具走默认值。
+    tools: dict[str, MCPToolPolicy] = field(default_factory=dict)
     enabled: bool = True
+
+    def resolve_tool(self, tool_name: str, global_timeout_ms: int) -> MCPToolPolicy:
+        """返回工具最终生效策略：工具配置 > 全局默认。"""
+        policy = self.tools.get(str(tool_name))
+        name = str(tool_name or "").strip()
+        return MCPToolPolicy(
+            label=(policy.label if policy else "") or name,
+            approval=policy.approval if policy else DEFAULT_TOOL_APPROVAL,
+            timeout_ms=(policy.timeout_ms if policy and policy.timeout_ms else None) or global_timeout_ms,
+        )
+
+    def max_tool_timeout_ms(self, global_timeout_ms: int) -> int:
+        """该 server 下最长工具超时；用于设置 session read timeout，避免连接层先超时。"""
+        values = [global_timeout_ms]
+        values.extend(policy.timeout_ms for policy in self.tools.values() if policy.timeout_ms)
+        return max(values)
 
 
 class MCPServerConfigError(ValueError):
@@ -73,50 +117,72 @@ def _string_mapping_field(raw: dict, key: str, source: str) -> dict:
     return value
 
 
-def _clean_tool_labels(raw_tool_labels: dict, source: str) -> dict[str, str]:
-    """清洗 tool_labels 的键值空白；空值条目视为无效配置直接报错。"""
-    tool_labels = {str(k).strip(): str(v).strip() for k, v in raw_tool_labels.items()}
-    if any(not key or not value for key, value in tool_labels.items()):
-        raise MCPServerConfigError(f"{source}: tool_labels 的键值都不能为空白字符串")
-    return tool_labels
+def _parse_tool_label(raw_value: object, source: str, tool_name: str) -> str:
+    if not isinstance(raw_value, str):
+        raise MCPServerConfigError(f"{source}: tools.{tool_name}.label 必须是字符串")
+    label = raw_value.strip()
+    if len(label) > MCP_TOOL_LABEL_MAX_LENGTH:
+        raise MCPServerConfigError(f"{source}: tools.{tool_name}.label 不能超过 {MCP_TOOL_LABEL_MAX_LENGTH} 字符")
+    return label
 
 
-# 每工具审批档位（B 端固定策略）：ask=执行前必须人工确认（缺省）；allow=无需人工确认。
-# 不允许用户会话级切换；不引入 deny/force_ask/auto 等额外档位。
-VALID_TOOL_APPROVALS = frozenset({"ask", "allow"})
-# 旧版本值迁移：auto 等价 allow；force_ask 等价 ask；deny 仅保留“该工具不挂载”语义。
-_LEGACY_TOOL_APPROVALS = {"auto": "allow", "allow": "allow", "ask": "ask", "force_ask": "ask"}
-
-
-def _clean_tool_approvals(raw_tool_approvals: dict, source: str) -> dict[str, str]:
-    """校验 tool_approvals 的档位取值；键值空白或档位非法直接报错。"""
-    raw = {str(k).strip(): str(v).strip().lower() for k, v in raw_tool_approvals.items()}
-    if any(not key for key in raw):
-        raise MCPServerConfigError(f"{source}: tool_approvals 键不能为空白字符串")
-    tool_approvals = {key: _LEGACY_TOOL_APPROVALS.get(value, value) for key, value in raw.items()}
-    denied = sorted(key for key, value in tool_approvals.items() if value == "deny")
-    if denied:
-        logger.warning("%s: tool_approvals 旧档位 deny 仅按“该工具不挂载”处理，不再删除整台 server: %s", source, denied)
-    allowed_values = VALID_TOOL_APPROVALS | {"deny"}
-    invalid = sorted(value for value in tool_approvals.values() if value not in allowed_values)
-    if invalid:
+def _parse_tool_approval(raw_value: object, source: str, tool_name: str) -> str:
+    approval = str(raw_value if raw_value is not None else DEFAULT_TOOL_APPROVAL).strip().lower()
+    if approval not in VALID_TOOL_APPROVALS:
         raise MCPServerConfigError(
-            f"{source}: tool_approvals 值必须是 {sorted(VALID_TOOL_APPROVALS)} 之一（兼容 auto/force_ask，deny 仅跳过该工具），非法值: {invalid}"
+            f"{source}: tools.{tool_name}.approval 必须是 {sorted(VALID_TOOL_APPROVALS)} 之一，当前: {approval!r}"
         )
-    return tool_approvals
+    return approval
+
+
+def _parse_tool_timeout(raw_value: object, source: str, tool_name: str) -> int | None:
+    if raw_value is None:
+        return None
+    if isinstance(raw_value, bool) or not isinstance(raw_value, int):
+        raise MCPServerConfigError(f"{source}: tools.{tool_name}.timeout_ms 必须是正整数")
+    if raw_value < MCP_TOOL_TIMEOUT_MIN_MS:
+        raise MCPServerConfigError(f"{source}: tools.{tool_name}.timeout_ms 不能小于 {MCP_TOOL_TIMEOUT_MIN_MS}ms")
+    return min(raw_value, MCP_TOOL_TIMEOUT_MAX_MS)
+
+
+def _parse_tool_policy(tool_name: object, value: object, source: str) -> tuple[str, MCPToolPolicy]:
+    name = str(tool_name or "").strip()
+    if not name:
+        raise MCPServerConfigError(f"{source}: tools 的工具名不能为空白字符串")
+    if not isinstance(value, dict):
+        raise MCPServerConfigError(f"{source}: tools.{name} 必须是对象")
+    unknown = sorted(set(value) - TOOL_POLICY_KEYS)
+    if unknown:
+        raise MCPServerConfigError(f"{source}: tools.{name} 包含未知字段 {unknown}")
+    return name, MCPToolPolicy(
+        label=_parse_tool_label(value.get("label", ""), source, name),
+        approval=_parse_tool_approval(value.get("approval", DEFAULT_TOOL_APPROVAL), source, name),
+        timeout_ms=_parse_tool_timeout(value.get("timeout_ms"), source, name),
+    )
+
+
+def _parse_tools(raw: object, source: str) -> dict[str, MCPToolPolicy]:
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise MCPServerConfigError(f"{source}: tools 必须是对象")
+    return dict(_parse_tool_policy(name, value, source) for name, value in raw.items())
 
 
 def parse_mcp_server_config(raw: object, *, source: str) -> MCPServerConfig:
     """解析并校验单条 MCP server 配置，非法抛 ``MCPServerConfigError``。"""
     if not isinstance(raw, dict):
         raise MCPServerConfigError(f"{source}: 配置必须是对象")
+    for legacy_key in ("tool_labels", "tool_approvals"):
+        if legacy_key in raw:
+            raise MCPServerConfigError(
+                f"{source}: {legacy_key} 已废弃，请改用 tools: {{<工具名>: {{label/approval/timeout_ms}}}}"
+            )
     server_id = str(raw.get("id") or raw.get("server_id") or "").strip()
     if not _SERVER_ID_PATTERN.fullmatch(server_id):
         raise MCPServerConfigError(f"{source}: id 非法（需匹配 {_SERVER_ID_PATTERN.pattern}）: {server_id!r}")
     transport, url = _parse_transport_fields(raw, source)
     raw_headers = _string_mapping_field(raw, "headers", source)
-    tool_labels = _clean_tool_labels(_string_mapping_field(raw, "tool_labels", source), source)
-    tool_approvals = _clean_tool_approvals(_string_mapping_field(raw, "tool_approvals", source), source)
     enabled = raw.get("enabled", True)
     if not isinstance(enabled, bool):
         raise MCPServerConfigError(f"{source}: enabled 必须是布尔值")
@@ -125,8 +191,7 @@ def parse_mcp_server_config(raw: object, *, source: str) -> MCPServerConfig:
         transport=transport,
         url=url,
         headers=dict(raw_headers),
-        tool_labels=tool_labels,
-        tool_approvals=tool_approvals,
+        tools=_parse_tools(raw.get("tools"), source),
         enabled=bool(enabled),
     )
 
@@ -157,11 +222,12 @@ def load_mcp_server_configs() -> list[MCPServerConfig]:
     """
     configs: list[MCPServerConfig] = []
     seen_ids: set[str] = set()
-    # 延迟导入避免 plugins -> manifest 之外的重依赖链在冷启动被拉起。
-    try:
-        from ..plugins.loader import enabled_plugin_mcp_servers
+    # 通过端口读取插件声明，避免 mcp -> plugins 的包级依赖/环。
+    from ..contracts.mcp_server_source import get_mcp_server_source
 
-        plugin_entries = enabled_plugin_mcp_servers()
+    source = get_mcp_server_source()
+    try:
+        plugin_entries = source.enabled_plugin_mcp_servers() if source is not None else []
     except Exception as err:  # pragma: no cover - 插件加载自身已兜底，这里防御
         logger.warning("读取插件 MCP 配置失败，忽略插件侧配置: %s", err)
         plugin_entries = []
@@ -184,10 +250,16 @@ def load_mcp_server_configs() -> list[MCPServerConfig]:
 
 
 __all__ = [
+    "DEFAULT_TOOL_APPROVAL",
+    "MCP_TOOL_TIMEOUT_ENV",
+    "MCP_TOOL_TIMEOUT_MAX_MS",
+    "MCP_TOOL_TIMEOUT_MIN_MS",
+    "MCPToolPolicy",
     "MCPServerConfig",
     "MCPServerConfigError",
     "VALID_MCP_TRANSPORTS",
     "VALID_TOOL_APPROVALS",
+    "default_mcp_tool_timeout_ms",
     "load_mcp_server_configs",
     "parse_mcp_server_config",
 ]

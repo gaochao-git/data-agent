@@ -11,8 +11,8 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 
-from apps.chat_data_app.agent.mcp.catalog import MCP_TOOL_CALL_TOOL_NAME
-from apps.chat_data_app.agent.mcp.manager import get_mcp_tool_display_name
+from apps.chat_data_app.agent.contracts.mcp_display import get_mcp_tool_display_name
+from apps.chat_data_app.agent.contracts.mcp_tools import MCP_TOOL_CALL_TOOL_NAME
 from apps.chat_data_app.agent.run.agent_inbox_service import (
     AgentRunLeaseLostError,
     is_valid_redis_stream_id,
@@ -24,6 +24,7 @@ from apps.chat_data_app.daos.conversation_event_dao import ConversationEventDao
 from utils.database import get_session
 from utils.db_failover import is_mysql_connection_error
 from utils.logger import get_logger
+from utils.tool_call_markup import has_tool_call_markup, sanitize_message_content, sanitize_tool_call_markup
 
 logger = get_logger(__name__)
 
@@ -855,7 +856,7 @@ def _sanitize_user_message_content(content: Any) -> Any:
 
 
 def _tool_call_display_name(name: str, tool_call: dict[str, Any]) -> str:
-    """MCP 代理调用优先用目标工具的 tool_labels 展示名。"""
+    """MCP 代理调用优先用目标工具的 tools.<name>.label 展示名。"""
     display_name = get_mcp_tool_display_name(name)
     if name != MCP_TOOL_CALL_TOOL_NAME:
         return display_name
@@ -868,7 +869,7 @@ def _serialize_ai_message(message: AIMessage) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "id": _message_id(message),
         "role": "assistant",
-        "content": message.content,
+        "content": sanitize_message_content(message.content),
         "timestamp": _timestamp(message),
     }
     payload.update(_execution_timing(message))
@@ -894,9 +895,15 @@ def _serialize_ai_message(message: AIMessage) -> dict[str, Any]:
         )
     if tool_calls:
         payload["tool_calls"] = tool_calls
-    reasoning_content = _extract_reasoning_content(message)
+    reasoning_content = sanitize_tool_call_markup(_extract_reasoning_content(message))
     if reasoning_content:
         payload["reasoning_content"] = reasoning_content
+    if has_tool_call_markup(str(message.content or "")) or has_tool_call_markup(_extract_reasoning_content(message)):
+        logger.warning(
+            "模型输出包含裸 tool-call 标记，已清理: message_id=%s tool_calls=%d",
+            payload["id"],
+            len(tool_calls),
+        )
     return payload
 
 

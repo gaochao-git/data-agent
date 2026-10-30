@@ -451,3 +451,79 @@ describe('ToolCallList', () => {
     expect(header).not.toContain('部分工具失败')
   })
 })
+
+  it('only spins the latest thinking item while the parent task is running', () => {
+    const wrapper = mount(ToolCallList, {
+      props: {
+        defaultExpanded: true,
+        toolCalls: [
+          {
+            tool_call_id: 'call-task',
+            tool_name: 'task',
+            args: { description: '任务书' },
+            status: 'running',
+            subagentTrail: [
+              { kind: 'message', id: 'msg-1', content: '结论是 2。', thinking: '第一段思考' },
+              { kind: 'tool', id: 'inner-1', tool_name: 'calculator_tool', args: { expression: '1 + 1' }, status: 'completed', result: '2' },
+              { kind: 'message', id: 'msg-2', content: '', thinking: '第二段思考' },
+            ],
+          },
+        ],
+      },
+    })
+
+    const toggles = wrapper.findAll('.sub-thinking-toggle')
+    expect(toggles.length).toBe(2)
+    expect(toggles[0]?.text()).toContain('已思考')
+    expect(toggles[1]?.text()).toContain('思考中')
+    expect(wrapper.findAll('.sub-thinking-toggle .fa-spinner').length).toBe(1)
+  })
+
+  it('stops all thinking spinners after the parent task settles', async () => {
+    const wrapper = mount(ToolCallList, {
+      props: {
+        defaultExpanded: true,
+        toolCalls: [
+          {
+            tool_call_id: 'call-task',
+            tool_name: 'task',
+            args: { description: '任务书' },
+            status: 'completed',
+            subagentTrail: [
+              { kind: 'message', id: 'msg-1', content: '', thinking: '第一段思考' },
+              { kind: 'message', id: 'msg-2', content: '', thinking: '第二段思考' },
+            ],
+          },
+        ],
+      },
+    })
+
+    if (!wrapper.find('.sub-thinking-toggle').exists()) {
+      await wrapper.find('.subagent-chain-toggle').trigger('click')
+    }
+    expect(wrapper.findAll('.sub-thinking-toggle .fa-spinner').length).toBe(0)
+    expect(wrapper.findAll('.sub-thinking-toggle').map((item) => item.text()).join(' ')).toContain('已思考')
+  })
+
+  it('keeps the thinking row full width so the spinner does not shift with preview length', () => {
+    const wrapper = mount(ToolCallList, {
+      props: {
+        defaultExpanded: true,
+        toolCalls: [
+          {
+            tool_call_id: 'call-task',
+            tool_name: 'task',
+            args: { description: '任务书' },
+            status: 'running',
+            subagentTrail: [
+              { kind: 'message', id: 'msg-1', content: '', thinking: '正在分析结果' },
+            ],
+          },
+        ],
+      },
+    })
+
+    const toggle = wrapper.find('.sub-thinking-toggle')
+    expect(toggle.classes()).toContain('w-full')
+    expect(toggle.find('.fa-spinner').exists()).toBe(true)
+  })

@@ -206,12 +206,6 @@ onBeforeUnmount(() => {
           </button>
         </div>
       </div>
-      <!-- 审批策略由管理员固定配置，不提供用户会话级切换入口 -->
-      <div class="flex items-center gap-1.5 whitespace-nowrap rounded-full px-2 py-1 text-xs text-slate-500">
-        <i class="fa-solid fa-shield-halved text-[10px] text-blue-500"></i>
-        <span>工具审批由管理员配置</span>
-      </div>
-
       <slot name="toolbar-extra" />
     </template>
 

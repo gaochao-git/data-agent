@@ -18,11 +18,8 @@ from langgraph.graph.state import CompiledStateGraph
 
 from utils.logger import get_logger
 
-from ..agent.context.context_budget import (
-    ContextRequestBudget,
-    count_tools_tokens,
-    get_model_context_budget,
-)
+from ..agent.context.context_budget import count_tools_tokens, get_model_context_budget
+from ..agent.context.runtime import ContextRuntime
 from ..services.llm_config import get_chat_data_llm, get_chat_data_model_config, get_default_chat_data_model
 from ..services.memory.conversation_memory_service import schedule_memory_extraction_now
 from .agent_runtime import (
@@ -43,21 +40,18 @@ from .middleware.tool_call_history_repair import create_tool_call_history_repair
 from .middleware.tool_execution_fence import create_tool_execution_fence_middleware
 from .middleware.tool_result import create_tool_result_middleware
 from .prompts.chat_data import (
-    DATA_EXPLORE_SUBAGENT_PROMPT,
-    GENERAL_PURPOSE_NO_DELETE_HINT,
-    GENERAL_PURPOSE_SUBAGENT_PROMPT,
+    EXPLORE_SUBAGENT_PROMPT,
     PLAN_SUBAGENT_PROMPT,
     build_subagent_system_prompt,
     build_unified_system_prompt,
 )
 from .runtime_options import AgentRuntimeOptions, get_chat_data_default_runtime_options
+from .tools.catalog import build_tool_catalog
 from .tools.registry import (
-    DATA_EXPLORE_EXTRA_EXCLUDED_TOOL_NAMES,
-    GENERAL_PURPOSE_EXTRA_EXCLUDED_TOOL_NAMES,
-    PLAN_EXTRA_EXCLUDED_TOOL_NAMES,
-    SUBAGENT_BASE_EXCLUDED_TOOL_NAMES,
-    TOOL_SPECS,
+    TOOL_BUILD_GROUPS,
     ToolBuildContext,
+    tool_enabled,
+    tool_requires_user_interaction,
 )
 from .workspace.runtime import ConversationWorkspaceRuntime, ensure_conversation_workspace
 
@@ -76,7 +70,7 @@ class AgentRunControls:
     静默降级为无围栏、无 steering 的普通运行。
 
     ``disable_user_interaction``：无人值守时不装配审批中间件；系统工具
-    ``SYSTEM_TOOL_APPROVALS=ask`` 与 MCP ``tool_approvals=ask`` 工具在装配层
+    ``SYSTEM_TOOL_APPROVALS=ask`` 与 MCP ``tools.<name>.approval=ask`` 工具在装配层
     fail-closed 剔除，不向模型暴露。
     """
 
@@ -261,25 +255,31 @@ def assemble_tools(
         model_invocation=model_invocation or ModelInvocationConfig(),
     )
     skip_user_interaction = bool(run_controls and run_controls.disable_user_interaction)
-    tools = [
-        tool
-        for tool_spec in TOOL_SPECS
-        if not (skip_user_interaction and tool_spec.requires_user_interaction)
-        for tool in tool_spec.build(context)
-    ]
+    tools = _build_enabled_tools(context, skip_user_interaction=skip_user_interaction)
     if spec is not None:
         validate_agent_assembly_spec(spec)
         tools = _filter_tools_by_spec(tools, spec)
     return tools
 
 
-# 子智能体工具可见性策略（SUBAGENT_BASE_EXCLUDED_TOOL_NAMES /
-# DATA_EXPLORE_EXTRA_EXCLUDED_TOOL_NAMES / PLAN_EXTRA_EXCLUDED_TOOL_NAMES /
-# GENERAL_PURPOSE_EXTRA_EXCLUDED_TOOL_NAMES）
-# 单一事实源在 tools/registry.py，本模块按名字导入以保持既有引用路径不变。
+def _build_enabled_tools(context: ToolBuildContext, *, skip_user_interaction: bool) -> list:
+    """按构建组装配并按单工具定义过滤；禁用/交互工具不会进入模型工具面。"""
+    tools: list = []
+    for tool_spec in TOOL_BUILD_GROUPS:
+        if all(not tool_enabled(name) for name in tool_spec.provides):
+            continue
+        for tool in tool_spec.build(context):
+            name = str(getattr(tool, "name", "") or "")
+            if skip_user_interaction and tool_requires_user_interaction(name):
+                continue
+            if not tool_enabled(name):
+                continue
+            tools.append(tool)
+    return tools
 
-DATA_EXPLORE_SUBAGENT_NAME = "data-explore"
-DATA_EXPLORE_SUBAGENT_DESCRIPTION = (
+
+EXPLORE_SUBAGENT_NAME = "explore"
+EXPLORE_SUBAGENT_DESCRIPTION = (
     "只读事实收集：遍历语义模型/多表/多指标做批量盘点、口径确认与数据核对，"
     "只回传结构化事实清单，不写文件、不下最终结论。"
     "适合需要跨多模型/多表摸底数据事实的场景。"
@@ -295,37 +295,55 @@ PLAN_SUBAGENT_DESCRIPTION = (
     "用户自定义技能）建议在任务书中写明技能名称与 skill_file 路径。"
 )
 
-GENERAL_PURPOSE_SUBAGENT_NAME = "general-purpose"
-GENERAL_PURPOSE_SUBAGENT_DESCRIPTION = (
-    "通用执行：受委派在隔离上下文完成多步执行任务——按计划/要求生成报告、Excel、"
-    "Word、HTML 等交付物，批量文件加工，执行语义查询并汇总落盘。"
-    "可写 workspace/outputs，回传结论摘要与产物路径清单，产物展示由主智能体完成。"
-    "适合中间过程大体量、只需要结论与交付物的执行环节。"
-    "子智能体与主智能体共享技能清单，但看不到主对话历史：任务相关的技能（尤其"
-    "用户自定义技能）建议在任务书中写明技能名称与 skill_file 路径。"
-)
+# 每个子智能体显式声明需要哪些工具；不再使用“继承全部再排除”的隐式策略。
+SUBAGENT_TOOL_ALLOWLISTS: dict[str, frozenset[str]] = {
+    EXPLORE_SUBAGENT_NAME: frozenset(
+        {
+            "file_read",
+            "file_glob",
+            "file_grep",
+            "file_diff",
+            "dir_list",
+            "parse_document",
+            "read_image",
+            "get_current_time",
+            "load_skill",
+            "data_analyzing_tool",
+            "ontology_tool",
+            "calculator_tool",
+        }
+    ),
+    PLAN_SUBAGENT_NAME: frozenset(
+        {
+            "file_read",
+            "file_write",
+            "file_glob",
+            "file_grep",
+            "file_diff",
+            "dir_list",
+            "get_current_time",
+            "load_skill",
+        }
+    ),
+}
 
 
-def _filter_subagent_tools(tools: list, excluded: frozenset) -> list:
-    """按排除集过滤子智能体工具。"""
-    return [tool for tool in tools if str(getattr(tool, "name", "") or "") not in excluded]
+def _select_subagent_tools(
+    tools: list,
+    allowed: frozenset[str],
+    approval_excluded: frozenset[str],
+) -> list:
+    """从主图已装配工具中，按子智能体白名单取工具，并剔除审批工具。"""
+    return [
+        tool
+        for tool in tools
+        if (name := str(getattr(tool, "name", "") or "")) in allowed and name not in approval_excluded
+    ]
 
 
 def _subagent_approval_exclusions(approval_policies: dict[str, str] | None = None) -> frozenset[str]:
     """子智能体不挂 ask 工具：子图不支持人工中断，避免委派绕过审批。"""
     return ask_tool_names(approval_policies or resolve_approval_policies([]))
-
-
-def _general_purpose_system_prompt(approval_tools_excluded: bool) -> str:
-    """general-purpose 的系统提示：审批工具被剔除时补一段能力边界说明。
-
-    剔除只解决了「能不能执行」，没有解决「模型知不知道自己不能执行」：不声明时
-    模型会先派一次工具拿到「工具不存在」，白跑一轮 token 才退回主智能体。这段
-    与 ``_subagent_approval_exclusions`` 共用同一判据。
-    """
-    if not approval_tools_excluded:
-        return GENERAL_PURPOSE_SUBAGENT_PROMPT
-    return f"{GENERAL_PURPOSE_SUBAGENT_PROMPT}{GENERAL_PURPOSE_NO_DELETE_HINT}"
 
 
 def build_subagent_middleware(
@@ -338,11 +356,12 @@ def build_subagent_middleware(
     available_skills_xml: str | None = None,
     memory_block: str | None = None,
     approval_policies: dict[str, str] | None = None,
+    sandbox_renewal: Any | None = None,
 ) -> SubagentMiddleware | None:
     """按运行选项构建子智能体中间件；没有任何子智能体启用时返回 None。
 
-    子智能体继承主智能体工具（各自扣除排除集），使用与主智能体相同的模型，
-    运行在隔离上下文中；data-explore 额外扣除全部写操作工具保持只读。
+    每个子智能体按 ``SUBAGENT_TOOL_ALLOWLISTS`` 显式选择工具，使用与主智能体
+    相同的模型，运行在隔离上下文中；explore 白名单只含只读工具。
     ``model_id`` 与主图同源传入：子图预算告警据此取同一 ContextBudget 的
     压缩触发阈值，保证「上下文将尽」的口径与主图一致。
     ``available_skills_xml`` 与主智能体同一会话技能清单（一致继承）：子图
@@ -351,22 +370,23 @@ def build_subagent_middleware(
     prompt 由此注入只读记忆段；未传或为空则不注入。
     """
     approval_excluded = _subagent_approval_exclusions(approval_policies)
-    base_excluded = SUBAGENT_BASE_EXCLUDED_TOOL_NAMES | approval_excluded
     specs: list[SubagentSpec] = []
     if runtime_options.explore_subagent_enabled:
         specs.append(
             SubagentSpec(
-                name=DATA_EXPLORE_SUBAGENT_NAME,
-                description=DATA_EXPLORE_SUBAGENT_DESCRIPTION,
-                system_prompt=build_subagent_system_prompt(DATA_EXPLORE_SUBAGENT_PROMPT),
-                tools=_filter_subagent_tools(
+                name=EXPLORE_SUBAGENT_NAME,
+                description=EXPLORE_SUBAGENT_DESCRIPTION,
+                system_prompt=build_subagent_system_prompt(EXPLORE_SUBAGENT_PROMPT),
+                tools=_select_subagent_tools(
                     tools,
-                    base_excluded | DATA_EXPLORE_EXTRA_EXCLUDED_TOOL_NAMES,
+                    SUBAGENT_TOOL_ALLOWLISTS[EXPLORE_SUBAGENT_NAME],
+                    approval_excluded,
                 ),
                 model=model,
                 model_id=model_id,
                 available_skills_xml=available_skills_xml or "",
                 memory_block=memory_block or "",
+                sandbox_renewal=sandbox_renewal,
             )
         )
     if runtime_options.plan_subagent_enabled:
@@ -375,30 +395,16 @@ def build_subagent_middleware(
                 name=PLAN_SUBAGENT_NAME,
                 description=PLAN_SUBAGENT_DESCRIPTION,
                 system_prompt=build_subagent_system_prompt(PLAN_SUBAGENT_PROMPT),
-                tools=_filter_subagent_tools(
+                tools=_select_subagent_tools(
                     tools,
-                    base_excluded | PLAN_EXTRA_EXCLUDED_TOOL_NAMES,
+                    SUBAGENT_TOOL_ALLOWLISTS[PLAN_SUBAGENT_NAME],
+                    approval_excluded,
                 ),
                 model=model,
                 model_id=model_id,
                 available_skills_xml=available_skills_xml or "",
                 memory_block=memory_block or "",
-            )
-        )
-    if runtime_options.general_purpose_subagent_enabled:
-        specs.append(
-            SubagentSpec(
-                name=GENERAL_PURPOSE_SUBAGENT_NAME,
-                description=GENERAL_PURPOSE_SUBAGENT_DESCRIPTION,
-                system_prompt=build_subagent_system_prompt(_general_purpose_system_prompt(bool(approval_excluded))),
-                tools=_filter_subagent_tools(
-                    tools,
-                    base_excluded | GENERAL_PURPOSE_EXTRA_EXCLUDED_TOOL_NAMES,
-                ),
-                model=model,
-                model_id=model_id,
-                available_skills_xml=available_skills_xml or "",
-                memory_block=memory_block or "",
+                sandbox_renewal=sandbox_renewal,
             )
         )
     if not specs:
@@ -595,6 +601,266 @@ def _with_mcp_control_tools(tools: list, mcp_tools: list, search_service: Any) -
     ]
 
 
+def _sandbox_renewal_callback(runtime: ConversationWorkspaceRuntime) -> Any:
+    """仅 sandbox 后端需要模型前/后续期；local 模式返回 None，零额外调用。"""
+    if runtime.backend_name == "sandbox":
+        return runtime.renew_sandbox_async
+    return None
+
+
+@dataclass(frozen=True)
+class _AgentAssemblyInputs:
+    """一次装配解析后的稳定输入，供各 builder 共享。"""
+
+    spec: AgentAssemblySpec
+    options: AgentRuntimeOptions
+    identity: IdentityContext
+    datasource: DatasourceContext
+    invocation: ModelInvocationConfig
+    model_id: str | None
+    runtime: ConversationWorkspaceRuntime
+    checkpointer: BaseCheckpointSaver | None
+    conversation_id: str | None
+    run_controls: AgentRunControls | None
+    persist_model_snapshot: Callable[[dict[str, Any]], Awaitable[None]] | None
+
+
+@dataclass(frozen=True)
+class _AssembledTools:
+    """工具装配结果；builtin/mcp 保留原始集合，tools 为最终挂载集合。"""
+
+    builtin_tools: list[Any]
+    mcp_tools: list[Any]
+    tools: list[Any]
+    approval_policies: dict[str, Any]
+    search_service: Any | None
+
+
+def _resolve_assembly_inputs(
+    spec: AgentAssemblySpec,
+    runtime_options: AgentRuntimeOptions | None,
+    *,
+    checkpointer: BaseCheckpointSaver | None,
+    conversation_id: str | None,
+    identity_context: IdentityContext | None,
+    datasource_context: DatasourceContext | None,
+    model_invocation: ModelInvocationConfig | None,
+    workspace_runtime: ConversationWorkspaceRuntime | None,
+    run_controls: AgentRunControls | None,
+    persist_model_snapshot: Callable[[dict[str, Any]], Awaitable[None]] | None,
+) -> _AgentAssemblyInputs:
+    validate_agent_assembly_spec(spec)
+    options = runtime_options or get_chat_data_default_runtime_options()
+    identity = identity_context or IdentityContext()
+    datasource = datasource_context or DatasourceContext()
+    invocation = model_invocation or ModelInvocationConfig()
+    model_id = _normalize_model_id(invocation.model_id)
+    runtime = _resolve_workspace_runtime(workspace_runtime, options, identity.user_id)
+    return _AgentAssemblyInputs(
+        spec=spec,
+        options=options,
+        identity=identity,
+        datasource=datasource,
+        invocation=invocation,
+        model_id=model_id,
+        runtime=runtime,
+        checkpointer=checkpointer,
+        conversation_id=conversation_id,
+        run_controls=run_controls,
+        persist_model_snapshot=persist_model_snapshot,
+    )
+
+
+def _assemble_tools(inputs: _AgentAssemblyInputs) -> _AssembledTools:
+    builtin_tools = assemble_tools(
+        inputs.options,
+        inputs.runtime,
+        identity_context=inputs.identity,
+        datasource_context=inputs.datasource,
+        model_invocation=inputs.invocation,
+        spec=inputs.spec,
+        run_controls=inputs.run_controls,
+    )
+    mcp_tools = _load_spec_mcp_tools(inputs.spec)
+    approval_policies = resolve_approval_policies([*builtin_tools, *mcp_tools])
+    excluded_mcp_names: frozenset[str] = frozenset()
+    if inputs.run_controls is not None and inputs.run_controls.disable_user_interaction:
+        # 无人值守不装配审批中间件：ask 工具无人应答会悬挂，在装配层剔除（模型不可见且不可检索），
+        # fail-closed；allow 工具无需审批，可以继续使用。
+        builtin_tools, mcp_tools, excluded_mcp_names = _filter_tools_for_unattended(
+            builtin_tools, mcp_tools, approval_policies
+        )
+    tool_tokens = count_tools_tokens([*builtin_tools, *mcp_tools]) if mcp_tools else 0
+    search_service = (
+        _resolve_mcp_tool_search_service(
+            inputs.spec,
+            tool_tokens,
+            inputs.model_id,
+            excluded_names=excluded_mcp_names,
+        )
+        if mcp_tools
+        else None
+    )
+    tools = _with_mcp_control_tools([*builtin_tools, *mcp_tools], mcp_tools, search_service)
+    logger.info(
+        "[data_agent] 工具装配完成: agent=%s builtin=%d mcp=%d search_tool=%s total=%d tool_tokens=%d",
+        inputs.spec.agent_id,
+        len(builtin_tools),
+        len(mcp_tools),
+        search_service is not None,
+        len(tools),
+        tool_tokens,
+    )
+    return _AssembledTools(
+        builtin_tools=builtin_tools,
+        mcp_tools=mcp_tools,
+        tools=tools,
+        approval_policies=approval_policies,
+        search_service=search_service,
+    )
+
+
+def _assemble_system_prompt(inputs: _AgentAssemblyInputs, assembled: _AssembledTools) -> str:
+    prompt = inputs.invocation.system_prompt or inputs.spec.build_system_prompt(
+        inputs.options,
+        workspace_root=inputs.runtime.workspace_root,
+        memory_block=inputs.invocation.memory_block,
+    )
+    prompt = _system_prompt_with_mcp_tools(
+        prompt,
+        search_active=assembled.search_service is not None,
+        mcp_tools=assembled.mcp_tools,
+    )
+    if inputs.run_controls is not None and inputs.run_controls.disable_user_interaction:
+        prompt += (
+            "\n\n## 无人值守能力边界\n"
+            "- 本次运行无人实时应答，需要人工审批的工具（例如 MCP 插件中 ask 档位的工具）不会挂载。\n"
+            "- 不要尝试调用这些工具；如任务必须使用，请明确说明能力受限并给出替代方案。"
+        )
+    return prompt
+
+
+def _assemble_context_runtime(
+    inputs: _AgentAssemblyInputs,
+    system_prompt: str,
+    tools: list[Any],
+) -> ContextRuntime:
+    context_runtime = ContextRuntime.create(
+        model_id=inputs.model_id,
+        system_prompt=system_prompt,
+        tools=tools,
+    )
+    context_runtime.request_budget.validate_static_input()
+    return context_runtime
+
+
+def _assemble_model(inputs: _AgentAssemblyInputs) -> BaseChatModel:
+    return create_streaming_chat_model(
+        model_id=inputs.model_id,
+        enable_thinking=inputs.invocation.enable_thinking,
+        thinking_effort=inputs.invocation.thinking_effort,
+        stream_usage=True,
+        llm_factory=get_chat_data_llm,
+    )
+
+
+def _assemble_middleware(
+    inputs: _AgentAssemblyInputs,
+    assembled: _AssembledTools,
+    system_prompt: str,
+    context_runtime: ContextRuntime,
+    model: BaseChatModel,
+) -> list[Any]:
+    subagent_middleware = build_subagent_middleware(
+        inputs.options,
+        assembled.builtin_tools,
+        model=model,
+        model_id=inputs.model_id,
+        run_controls=inputs.run_controls,
+        available_skills_xml=inputs.invocation.available_skills_xml,
+        memory_block=inputs.invocation.memory_block,
+        approval_policies=assembled.approval_policies,
+        sandbox_renewal=_sandbox_renewal_callback(inputs.runtime),
+    )
+    context_usage_middleware = create_request_context_usage_middleware(
+        inputs.model_id,
+        tools=assembled.tools,
+        context_runtime=context_runtime,
+        state_schema=ChatDataAgentState,
+        sandbox_renewal=_sandbox_renewal_callback(inputs.runtime),
+    )
+    context_compression_middleware = create_context_compression_middleware(
+        system_prompt=system_prompt,
+        tools=assembled.tools,
+        model_id=inputs.model_id,
+        context_runtime=context_runtime,
+        state_schema=ChatDataAgentState,
+        on_dropped_messages=_build_memory_compression_hook(
+            inputs.conversation_id,
+            workspace_root=inputs.runtime.workspace_root,
+            user_id=inputs.identity.user_id,
+            username=inputs.identity.operator_name,
+            model_id=inputs.model_id,
+        ),
+    )
+    tool_result_middleware = create_tool_result_middleware()
+    image_injection_middleware = create_image_injection_middleware(
+        inputs.model_id,
+        state_schema=ChatDataAgentState,
+    )
+    tool_call_history_repair_middleware = create_tool_call_history_repair_middleware(
+        state_schema=ChatDataAgentState,
+    )
+    steering_middleware = None
+    tool_execution_fence_middleware = None
+    run_controls = inputs.run_controls
+    if run_controls is not None and run_controls.run_id and run_controls.owner_token and run_controls.is_complete():
+        tool_execution_fence_middleware = create_tool_execution_fence_middleware(
+            run_id=run_controls.run_id,
+            owner_token=run_controls.owner_token,
+            inbox_service=run_controls.inbox_service,
+        )
+        steering_middleware = create_steering_middleware(
+            run_id=run_controls.run_id,
+            owner_token=run_controls.owner_token,
+            inbox_service=run_controls.inbox_service,
+            admit_messages=run_controls.admit_inbox_messages,
+            tracker=run_controls.steering_tracker,
+            state_schema=ChatDataAgentState,
+        )
+    # 交互会话始终装配工具审批；无人值守不装配（ask 工具已 fail-closed 剔除）
+    tool_approval_middleware = _build_tool_approval_middleware(
+        run_controls,
+        assembled.tools,
+        assembled.approval_policies,
+    )
+    after_model_history_middleware = None
+    if inputs.persist_model_snapshot is not None:
+        after_model_history_middleware = create_after_model_history_middleware(
+            inputs.persist_model_snapshot,
+            state_schema=ChatDataAgentState,
+        )
+    return build_standard_agent_middleware(
+        assembled.tools,
+        tool_execution_fence_middleware=tool_execution_fence_middleware,
+        tool_approval_middleware=tool_approval_middleware,
+        image_injection_middleware=image_injection_middleware,
+        mcp_tool_discovery_middleware=(
+            MCPToolDiscoveryMiddleware(search_active=assembled.search_service is not None)
+            if assembled.search_service is not None
+            else None
+        ),
+        tool_call_history_repair_middleware=tool_call_history_repair_middleware,
+        steering_middleware=steering_middleware,
+        subagent_middleware=subagent_middleware,
+        context_compression_middleware=context_compression_middleware,
+        context_usage_middleware=context_usage_middleware,
+        tool_result_middleware=tool_result_middleware,
+        after_model_history_middleware=after_model_history_middleware,
+        include_flags=frozenset({"response_timestamp", "tool_call_normalizer"}),
+    )
+
+
 def create_agent_from_spec(
     spec: AgentAssemblySpec,
     runtime_options: AgentRuntimeOptions | None = None,
@@ -613,175 +879,93 @@ def create_agent_from_spec(
     参数按关注点分组：``identity_context``（谁在问）、``datasource_context``
     （问哪个数据域）、``model_invocation``（模型怎么调）、``run_controls``
     （run 怎么管）；新增参数必须先归入其中一组或说明为何单列。
-    子智能体只继承内置工具（不含 MCP 等动态工具），且各子智能体的排除集策略
-    仍由 ``tools/registry.py`` 单一事实源约束。
+    子智能体只使用内置工具（不含 MCP 等动态工具），且各子智能体的工具白名单
+    由 ``SUBAGENT_TOOL_ALLOWLISTS`` 显式声明。
 
     ``conversation_id`` 单列：不参与 Agent 构建，仅供会话记忆压缩回调定位
     记忆文件（无会话标识的历史回放等调用方不传即关闭该回调）。
     """
-    validate_agent_assembly_spec(spec)
-    options = runtime_options or get_chat_data_default_runtime_options()
-    identity = identity_context or IdentityContext()
-    datasource = datasource_context or DatasourceContext()
-    invocation = model_invocation or ModelInvocationConfig()
-    user_id = identity.user_id
-    model_id = _normalize_model_id(invocation.model_id)
-    enable_thinking = invocation.enable_thinking
-    thinking_effort = invocation.thinking_effort
-    runtime = _resolve_workspace_runtime(workspace_runtime, options, user_id)
-    context_request_budget = ContextRequestBudget(model_id)
-    builtin_tools = assemble_tools(
-        options,
-        runtime,
-        identity_context=identity,
-        datasource_context=datasource,
-        model_invocation=invocation,
-        spec=spec,
+    inputs = _resolve_assembly_inputs(
+        spec,
+        runtime_options,
+        checkpointer=checkpointer,
+        conversation_id=conversation_id,
+        identity_context=identity_context,
+        datasource_context=datasource_context,
+        model_invocation=model_invocation,
+        workspace_runtime=workspace_runtime,
         run_controls=run_controls,
+        persist_model_snapshot=persist_model_snapshot,
     )
-    mcp_tools = _load_spec_mcp_tools(spec)
-    approval_policies = resolve_approval_policies([*builtin_tools, *mcp_tools])
-    excluded_mcp_names: frozenset[str] = frozenset()
-    if run_controls is not None and run_controls.disable_user_interaction:
-        # 无人值守不装配审批中间件：ask 工具无人应答会悬挂，在装配层剔除（模型不可见且不可检索），
-        # fail-closed；allow 工具无需审批，可以继续使用。
-        builtin_tools, mcp_tools, excluded_mcp_names = _filter_tools_for_unattended(
-            builtin_tools, mcp_tools, approval_policies
-        )
-    tool_tokens = count_tools_tokens([*builtin_tools, *mcp_tools]) if mcp_tools else 0
-    search_service = (
-        _resolve_mcp_tool_search_service(spec, tool_tokens, model_id, excluded_names=excluded_mcp_names)
-        if mcp_tools
-        else None
-    )
-    tools = _with_mcp_control_tools([*builtin_tools, *mcp_tools], mcp_tools, search_service)
-    logger.info(
-        "[data_agent] 工具装配完成: agent=%s builtin=%d mcp=%d search_tool=%s total=%d tool_tokens=%d",
-        spec.agent_id,
-        len(builtin_tools),
-        len(mcp_tools),
-        search_service is not None,
-        len(tools),
-        tool_tokens,
-    )
-    effective_system_prompt = invocation.system_prompt or spec.build_system_prompt(
-        options,
-        workspace_root=runtime.workspace_root,
-        memory_block=invocation.memory_block,
-    )
-    effective_system_prompt = _system_prompt_with_mcp_tools(
-        effective_system_prompt,
-        search_active=search_service is not None,
-        mcp_tools=mcp_tools,
-    )
-    if run_controls is not None and run_controls.disable_user_interaction:
-        effective_system_prompt += (
-            "\n\n## 无人值守能力边界\n"
-            "- 本次运行无人实时应答，需要人工审批的工具（例如 MCP 插件中 ask 档位的工具）不会挂载。\n"
-            "- 不要尝试调用这些工具；如任务必须使用，请明确说明能力受限并给出替代方案。"
-        )
-    context_request_budget.configure(effective_system_prompt, tools, model_id=model_id)
-    context_request_budget.validate_static_input()
-    model = create_streaming_chat_model(
-        model_id=model_id,
-        enable_thinking=enable_thinking,
-        thinking_effort=thinking_effort,
-        stream_usage=True,
-        llm_factory=get_chat_data_llm,
-    )
-    subagent_middleware = build_subagent_middleware(
-        options,
-        builtin_tools,
+    assembled = _assemble_tools(inputs)
+    system_prompt = _assemble_system_prompt(inputs, assembled)
+    context_runtime = _assemble_context_runtime(inputs, system_prompt, assembled.tools)
+    model = _assemble_model(inputs)
+    middleware = _assemble_middleware(inputs, assembled, system_prompt, context_runtime, model)
+    return create_agent(
         model=model,
-        model_id=model_id,
-        run_controls=run_controls,
-        available_skills_xml=invocation.available_skills_xml,
-        memory_block=invocation.memory_block,
-        approval_policies=approval_policies,
-    )
-    context_usage_middleware = create_request_context_usage_middleware(
-        model_id,
-        tools=tools,
-        context_request_budget=context_request_budget,
-        state_schema=ChatDataAgentState,
-    )
-    context_compression_middleware = create_context_compression_middleware(
-        system_prompt=effective_system_prompt,
-        tools=tools,
-        model_id=model_id,
-        context_request_budget=context_request_budget,
-        state_schema=ChatDataAgentState,
-        on_dropped_messages=_build_memory_compression_hook(
-            conversation_id,
-            workspace_root=runtime.workspace_root,
-            user_id=identity.user_id,
-            username=identity.operator_name,
-            model_id=model_id,
-        ),
-    )
-    tool_result_middleware = create_tool_result_middleware()
-    image_injection_middleware = create_image_injection_middleware(
-        model_id,
-        state_schema=ChatDataAgentState,
-    )
-    tool_call_history_repair_middleware = create_tool_call_history_repair_middleware(
-        state_schema=ChatDataAgentState,
-    )
-    steering_middleware = None
-    tool_execution_fence_middleware = None
-    if run_controls is not None and run_controls.run_id and run_controls.owner_token and run_controls.is_complete():
-        tool_execution_fence_middleware = create_tool_execution_fence_middleware(
-            run_id=run_controls.run_id,
-            owner_token=run_controls.owner_token,
-            inbox_service=run_controls.inbox_service,
-        )
-        steering_middleware = create_steering_middleware(
-            run_id=run_controls.run_id,
-            owner_token=run_controls.owner_token,
-            inbox_service=run_controls.inbox_service,
-            admit_messages=run_controls.admit_inbox_messages,
-            tracker=run_controls.steering_tracker,
-            state_schema=ChatDataAgentState,
-        )
-    # 交互会话始终装配工具审批；无人值守不装配（ask 工具已 fail-closed 剔除）
-    tool_approval_middleware = _build_tool_approval_middleware(run_controls, tools, approval_policies)
-    after_model_history_middleware = None
-    if persist_model_snapshot is not None:
-        after_model_history_middleware = create_after_model_history_middleware(
-            persist_model_snapshot,
-            state_schema=ChatDataAgentState,
-        )
-    middleware = build_standard_agent_middleware(
-        tools,
-        tool_execution_fence_middleware=tool_execution_fence_middleware,
-        tool_approval_middleware=tool_approval_middleware,
-        image_injection_middleware=image_injection_middleware,
-        mcp_tool_discovery_middleware=(
-            MCPToolDiscoveryMiddleware(
-                search_active=search_service is not None,
-            )
-            if search_service is not None
-            else None
-        ),
-        tool_call_history_repair_middleware=tool_call_history_repair_middleware,
-        steering_middleware=steering_middleware,
-        subagent_middleware=subagent_middleware,
-        context_compression_middleware=context_compression_middleware,
-        context_usage_middleware=context_usage_middleware,
-        tool_result_middleware=tool_result_middleware,
-        after_model_history_middleware=after_model_history_middleware,
-        include_flags=frozenset({"response_timestamp", "tool_call_normalizer"}),
-    )
-    agent = create_agent(
-        model=model,
-        tools=tools,
-        system_prompt=effective_system_prompt,
+        tools=assembled.tools,
+        system_prompt=system_prompt,
         middleware=middleware,
         state_schema=ChatDataAgentState,
-        checkpointer=checkpointer,
+        checkpointer=inputs.checkpointer,
         name=spec.agent_name,
     )
-    return agent
+
+
+def describe_agent_assembly(
+    spec: AgentAssemblySpec,
+    runtime_options: AgentRuntimeOptions | None = None,
+    *,
+    conversation_id: str | None = None,
+    identity_context: IdentityContext | None = None,
+    datasource_context: DatasourceContext | None = None,
+    model_invocation: ModelInvocationConfig | None = None,
+    workspace_runtime: ConversationWorkspaceRuntime | None = None,
+    run_controls: AgentRunControls | None = None,
+    persist_model_snapshot: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+) -> dict[str, Any]:
+    """返回本次装配的可读快照，用于日志/测试排查，不创建 graph。
+
+    工具枚举、prompt、ContextRuntime 和 middleware 都复用真实 builder；
+    仅供诊断，不应在热路径每轮调用。
+    """
+    inputs = _resolve_assembly_inputs(
+        spec,
+        runtime_options,
+        checkpointer=None,
+        conversation_id=conversation_id,
+        identity_context=identity_context,
+        datasource_context=datasource_context,
+        model_invocation=model_invocation,
+        workspace_runtime=workspace_runtime,
+        run_controls=run_controls,
+        persist_model_snapshot=persist_model_snapshot,
+    )
+    assembled = _assemble_tools(inputs)
+    system_prompt = _assemble_system_prompt(inputs, assembled)
+    context_runtime = _assemble_context_runtime(inputs, system_prompt, assembled.tools)
+    model = _assemble_model(inputs)
+    middleware = _assemble_middleware(inputs, assembled, system_prompt, context_runtime, model)
+    budget = context_runtime.budget
+    return {
+        "agent_id": spec.agent_id,
+        "agent_name": spec.agent_name,
+        "model_id": inputs.model_id,
+        "builtin_tools": [tool.name for tool in assembled.builtin_tools],
+        "mcp_tools": [tool.name for tool in assembled.mcp_tools],
+        "tools": [tool.name for tool in assembled.tools],
+        "tool_catalog": build_tool_catalog(assembled.tools).to_dicts(),
+        "middleware": [getattr(item, "name", type(item).__name__) for item in middleware],
+        "system_prompt_chars": len(system_prompt),
+        "context": {
+            "context_window": getattr(budget, "context_window", None),
+            "compression_trigger_tokens": getattr(budget, "compression_trigger_tokens", None),
+            "compression_target_tokens": getattr(budget, "compression_target_tokens", None),
+            "hard_input_limit_tokens": getattr(budget, "hard_input_limit_tokens", None),
+        },
+        "unattended": bool(run_controls is not None and run_controls.disable_user_interaction),
+    }
 
 
 def create_data_agent(

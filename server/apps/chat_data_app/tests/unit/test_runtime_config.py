@@ -216,13 +216,10 @@ def test_module_level_backend_fallback_and_bash_local_warning(monkeypatch):
 
     monkeypatch.setattr(logging.Logger, "warning", _capture_warning)
     monkeypatch.setenv("CHAT_DATA_DEFAULT_WORKSPACE_BACKEND", "kubernetes")
-    monkeypatch.setenv("CHAT_DATA_DEFAULT_BASH_ENABLED", "true")
     reloaded = importlib.reload(runtime_config)
     try:
         assert reloaded.CHAT_DATA_DEFAULT_WORKSPACE_BACKEND == "local"
         assert any("非法，回退 local" in message for message in records)
-        assert any("bash_enabled=true + workspace_backend=local" in message for message in records)
     finally:
         monkeypatch.delenv("CHAT_DATA_DEFAULT_WORKSPACE_BACKEND", raising=False)
-        monkeypatch.delenv("CHAT_DATA_DEFAULT_BASH_ENABLED", raising=False)
         importlib.reload(runtime_config)

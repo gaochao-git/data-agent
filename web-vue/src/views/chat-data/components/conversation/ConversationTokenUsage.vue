@@ -199,9 +199,11 @@ const cacheUsageRows = computed(() => {
         : pendingValue,
     },
     {
-      label: '累计命中',
+      label: '本轮累计命中',
       value: typeof usage?.cumulative_cached_input_tokens === 'number'
-        ? formatTokenCount(usage.cumulative_cached_input_tokens)
+        ? typeof usage?.cumulative_actual_input_tokens === 'number'
+          ? `${formatTokenCount(usage.cumulative_cached_input_tokens)} / ${formatTokenCount(usage.cumulative_actual_input_tokens)}`
+          : formatTokenCount(usage.cumulative_cached_input_tokens)
         : pendingValue,
     },
     {
@@ -211,7 +213,7 @@ const cacheUsageRows = computed(() => {
         : pendingValue,
     },
     {
-      label: '累计命中率',
+      label: '本轮累计命中率',
       value: typeof usage?.cumulative_cache_hit_rate === 'number'
         ? formatPercentage(usage.cumulative_cache_hit_rate)
         : pendingValue,

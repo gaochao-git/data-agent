@@ -4,10 +4,22 @@
 从 fullstack-langgraph 平移至本仓库自维护，基于官方 `mcp==2.2.0` 的
 `MCPServer`（MCP 协议 2026-07-28 世代 SDK）实现，streamable-http 传输。
 
-| server | 端口（默认） | 工具数 | 职责 |
+| server | 端口（默认） | 工具 | 职责 |
 | --- | --- | --- | --- |
-| `db_query_server` | `MCP_DB_QUERY_PORT`（3001） | 8 | MySQL 只读诊断：连接/状态/变量/锁/复制/事务/慢查询 |
-| `ssh_exec_server` | `MCP_SSH_EXEC_PORT`（3002） | 12 | Linux 只读巡检：系统/磁盘/进程/网络/文件/日志/快照 |
+| `db_query_server` | `MCP_DB_QUERY_PORT`（3001） | `db_query` | MySQL 只读诊断 |
+| `ssh_exec_server` | `MCP_SSH_EXEC_PORT`（3002） | `ssh_exec` | Linux 只读巡检 |
+
+单工具命令模型：
+
+```text
+db_query(action="help")     → 查看各 action 的 action_payload 字段与示例
+db_query(action="slowlog", ip="10.0.0.12", action_payload={"since": "1h", "limit": 20})
+
+ssh_exec(action="help")     → 查看各 action 的 action_payload 字段与示例
+ssh_exec(action="file_grep", ip="10.0.0.12", action_payload={"file_path": "/var/log/app.log", "pattern": "ERROR"})
+```
+
+公共参数（`ip` / `port` / `timeout`）放在顶层；命令参数统一放 `action_payload`，由服务端按 action 校验未知字段和必填字段。参数错误时结果会带 `hint` 和 `action_help`，未知 action 会带 `available_actions`，模型可据此自行修正后重试。
 
 ## 启动（需与主应用同一环境：CHAT_DATA_HOME 必填，依赖见 requirements.txt）
 
@@ -30,8 +42,8 @@ CHAT_DATA_HOME=<数据根> python -m mcp_servers.ssh_exec_server
 ```
 mcp_servers/
 ├── common/               # 配置、输出截断、参数校验、SSH/DB 客户端（两 server 共享）
-├── db_query_server/      # server.py（MCPServer + 8 工具）+ tools/（诊断实现）
-└── ssh_exec_server/      # server.py（MCPServer + 12 工具）+ tools/（巡检实现）
+├── db_query_server/      # server.py（MCPServer + db_query 单工具）+ tools/（诊断实现）
+└── ssh_exec_server/      # server.py（MCPServer + ssh_exec 单工具）+ tools/（巡检实现）
 ```
 
 ## 注意

@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import shlex
+import time
 from dataclasses import dataclass, field
+from datetime import timedelta
 from typing import Any, Literal
 
 from apps.chat_data_app.agent.workspace.officecli_adapter import command_path_values, parse_officecli_args
@@ -41,9 +44,27 @@ from apps.chat_data_app.agent.workspace.workspace_search import sandbox_grep_tex
 from apps.chat_data_app.agent.workspace.workspace_session import (
     OPENSANDBOX_BACKEND,
     get_workspace_execution_session,
+    invalidate_workspace_execution_session,
+    read_sandbox_lifetime_seconds,
 )
-from apps.chat_data_app.agent.workspace.workspace_sync import sync_sandbox_working_trees
+from apps.chat_data_app.agent.workspace.workspace_sync import (
+    recover_pending_persistence,
+    sync_sandbox_working_trees,
+)
+from utils.logger import get_logger
 from utils.skill_paths import SKILLS_VIRTUAL_ROOT
+
+logger = get_logger(__name__)
+
+_RENEW_ENABLED_ENV = "OPENSANDBOX_RENEW_ENABLED"
+# 续期最小间隔：模型调用/工具执行共用。刚续过就跳过，避免每个工具、每轮模型都多一次
+# 控制面请求；审批中断或长间隔恢复后 _last_renew_at 较旧，会先续期兜底。
+_RENEW_MIN_INTERVAL_SECONDS = 30
+
+
+def _renew_enabled() -> bool:
+    raw = str(os.getenv(_RENEW_ENABLED_ENV) or "true").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
 
 
 @dataclass
@@ -53,11 +74,93 @@ class SandboxWorkspaceBackend:
     name: str = "sandbox"
     session_ref: SandboxExecutionSessionRef = field(default_factory=SandboxExecutionSessionRef)
     _session_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
+    _renew_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
+    _last_renew_at: float = field(default=0.0, init=False, repr=False)
+    _renew_failure_logged: bool = field(default=False, init=False, repr=False)
     _session_error: str = field(default="", init=False, repr=False)
+
+    async def _sandbox_alive(self, sandbox: Any) -> bool:
+        """续期失败时探活：控制面 5xx/网络抖动不应误杀仍存活的沙箱。"""
+        get_info = getattr(sandbox, "get_info", None)
+        if get_info is None:
+            return False
+        try:
+            await get_info()
+            return True
+        except Exception:
+            return False
+
+    async def _renew_current(self, session: Any) -> bool:
+        """把当前 sandbox 过期时间推到 now + read_sandbox_lifetime_seconds()。
+
+        按 ``_RENEW_MIN_INTERVAL_SECONDS`` 节流（模型调用与工具执行共用）；返回
+        False 表示续期失败（沙箱可能已过期/被回收），调用方需要重建。
+        """
+        if not _renew_enabled():
+            return True
+        sandbox = getattr(session, "sandbox", None)
+        renew = getattr(sandbox, "renew", None)
+        if renew is None:
+            return True
+        now = time.monotonic()
+        if now - self._last_renew_at < _RENEW_MIN_INTERVAL_SECONDS:
+            return True
+        async with self._renew_lock:
+            now = time.monotonic()
+            if now - self._last_renew_at < _RENEW_MIN_INTERVAL_SECONDS:
+                return True
+            try:
+                await renew(timedelta(seconds=read_sandbox_lifetime_seconds()))
+                self._last_renew_at = time.monotonic()
+                self._renew_failure_logged = False
+                return True
+            except Exception:
+                alive = await self._sandbox_alive(sandbox)
+                if not self._renew_failure_logged:
+                    if alive:
+                        logger.warning("OpenSandbox 沙箱续期失败但实例仍存活，本次跳过续期", exc_info=True)
+                    else:
+                        logger.warning("OpenSandbox 沙箱续期失败且实例不可用，将在下次访问时重建", exc_info=True)
+                    self._renew_failure_logged = True
+                return alive
+
+    async def renew_sandbox_async(self) -> None:
+        """模型调用前后续期：只在已有 sandbox 会话时续期，不提前创建沙箱。"""
+        session = self.session_ref.current
+        if session is None:
+            return
+        await self._renew_current(session)
+
+    async def _renew_before_tool(self) -> bool:
+        """工具执行前续期；失败返回 False（调用方重建会话）。"""
+        session = self.session_ref.current
+        if session is None:
+            return True
+        return await self._renew_current(session)
+
+    async def _reset_session(self) -> None:
+        """丢弃失效 session 并清理缓存，下一次访问会重新创建沙箱。"""
+        stale = self.session_ref.current
+        self.session_ref.current = None
+        self._last_renew_at = 0.0
+        self._renew_failure_logged = False
+        if stale is None:
+            return
+        try:
+            await recover_pending_persistence(stale)
+        except Exception:
+            logger.warning("OpenSandbox 失效会话回写 pending 变更失败，继续重建", exc_info=True)
+        try:
+            await invalidate_workspace_execution_session(stale)
+        except Exception:
+            logger.warning("OpenSandbox 失效会话清理失败", exc_info=True)
 
     async def _session_ref(self, runtime: ConversationWorkspaceRuntime) -> SandboxExecutionSessionRef:
         if self.session_ref.current is not None:
-            return self.session_ref
+            if await self._renew_before_tool():
+                return self.session_ref
+            # 审批等待超过 lifetime 等场景：续期失败说明沙箱已过期，重建后再执行工具。
+            await self._reset_session()
         async with self._session_lock:
             if self.session_ref.current is not None:
                 return self.session_ref
@@ -73,6 +176,7 @@ class SandboxWorkspaceBackend:
             except Exception as exc:
                 self._session_error = str(exc) or "OpenSandbox 执行环境初始化失败"
                 raise
+            self._last_renew_at = time.monotonic()
         return self.session_ref
 
     async def read_text_file(

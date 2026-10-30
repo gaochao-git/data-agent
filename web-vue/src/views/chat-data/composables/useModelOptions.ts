@@ -7,6 +7,7 @@ import { computed, ref } from 'vue'
 import { getChatDataConfig } from '../api'
 import type { ChatDataRuntimeConfig } from '../api'
 import type { ChatDataModelOption } from '../types'
+import { setToolDisplayNames } from '../utils/toolDisplay'
 
 // 状态提升到模块级：config 下发的是会话期静态数据（模型注册表等），
 // 且消费方（主对话）会因新建任务 conversationKey++ 强制重挂载，实例级缓存会被清空、
@@ -36,6 +37,7 @@ export function useModelOptions() {
         const res = await getChatDataConfig()
         if (res.status === 'success') {
           config.value = res.data
+          setToolDisplayNames(res.data.tool_display_names)
           modelOptions.value = (res.data.models || []) as ChatDataModelOption[]
         }
       } catch (err) {

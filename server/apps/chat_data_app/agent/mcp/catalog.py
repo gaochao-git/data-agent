@@ -32,12 +32,11 @@ from pydantic import BaseModel, Field, create_model
 
 from utils.logger import get_logger
 
+from ..contracts.mcp_tools import MCP_TOOL_CALL_TOOL_NAME, MCP_TOOL_SEARCH_TOOL_NAME
 from .manager import MCPToolInfo, MCPToolManager
 
 logger = get_logger(__name__)
 
-MCP_TOOL_SEARCH_TOOL_NAME = "mcp_tool_search"
-MCP_TOOL_CALL_TOOL_NAME = "mcp_tool_call"
 MCP_TOOL_DESCRIPTION_WARN_CHARS = 500
 
 # BM25 (Okapi) 参数：业界常规取值。
@@ -84,7 +83,7 @@ class ToolCatalogEntry:
     description: str
     param_docs: str
     input_schema: dict[str, Any]
-    label: str = ""  # 用户可见友好名（tool_labels 配置），参与检索域并随摘要下发
+    label: str = ""  # 用户可见友好名（tools.<name>.label 配置），参与检索域并随摘要下发
 
     def summary(self) -> dict[str, Any]:
         """检索结果里给模型看的单条摘要。"""

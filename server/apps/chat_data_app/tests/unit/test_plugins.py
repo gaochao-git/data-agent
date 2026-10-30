@@ -97,6 +97,36 @@ def test_parse_manifest_ok():
         {"mcp_servers": [None]},
         {"mcp_servers": [{"id": "bad id", "transport": "streamable_http", "url": "https://x.example/mcp"}]},
         {"mcp_servers": [{"id": "x", "transport": "streamable_http"}]},
+        {
+            "mcp_servers": [
+                {
+                    "id": "x",
+                    "transport": "streamable_http",
+                    "url": "https://mcp.example.com/mcp",
+                    "tools": {"read": {"unknown": 1}},
+                }
+            ]
+        },
+        {
+            "mcp_servers": [
+                {
+                    "id": "x",
+                    "transport": "streamable_http",
+                    "url": "https://mcp.example.com/mcp",
+                    "tools": "not-a-dict",
+                }
+            ]
+        },
+        {
+            "mcp_servers": [
+                {
+                    "id": "x",
+                    "transport": "streamable_http",
+                    "url": "https://mcp.example.com/mcp",
+                    "tool_approvals": {"read": "allow"},
+                }
+            ]
+        },
         {"display_name": "x" * 100},
         {"description": "x" * 600},
     ],
@@ -105,6 +135,24 @@ def test_parse_manifest_rejects_invalid(override):
     payload = {**VALID_MANIFEST, **override}
     with pytest.raises(PluginManifestError):
         parse_plugin_manifest(payload)
+
+
+def test_parse_manifest_preserves_tools_config():
+    parsed = parse_plugin_manifest(
+        {
+            **VALID_MANIFEST,
+            "skills": [],
+            "mcp_servers": [
+                {
+                    "id": "fs-ro",
+                    "transport": "streamable_http",
+                    "url": "https://mcp.example.com/mcp",
+                    "tools": {"read": {"label": "读取", "approval": "allow", "timeout_ms": 12000}},
+                }
+            ],
+        }
+    )
+    assert parsed.mcp_servers[0]["tools"]["read"]["timeout_ms"] == 12000
 
 
 def test_parse_manifest_allows_mcp_only_and_ignores_unknown_fields():

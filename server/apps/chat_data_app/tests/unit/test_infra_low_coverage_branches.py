@@ -12,6 +12,7 @@ from langchain_core.exceptions import ModelConnectionError, ModelRateLimitError,
 from sqlalchemy.exc import DBAPIError, OperationalError
 
 import auth
+from apps.chat_data_app.agent.contracts import skill_metadata as skill_metadata_module
 from apps.chat_data_app.agent.skills import loader
 from apps.chat_data_app.agent.tools import calculator
 from apps.chat_data_app.routers import (  # noqa: F401  # 测试按模块属性引用 conversation_workspace，属有意重导出
@@ -1451,17 +1452,21 @@ def test_skills_loader_frontmatter_metadata_and_activation(tmp_path, monkeypatch
 
 def test_skills_loader_yaml_fallback_and_load_metadata(tmp_path, monkeypatch):
     monkeypatch.setattr(
-        loader, "yaml", SimpleNamespace(safe_load=lambda _raw: (_ for _ in ()).throw(RuntimeError("bad yaml")))
+        skill_metadata_module,
+        "yaml",
+        SimpleNamespace(safe_load=lambda _raw: (_ for _ in ()).throw(RuntimeError("bad yaml"))),
     )
-    assert loader._parse_frontmatter("---\nname: fallback\nquoted: 'v'\n---\nbody") == {
+    assert skill_metadata_module._parse_frontmatter("---\nname: fallback\nquoted: 'v'\n---\nbody") == {
         "name": "fallback",
         "quoted": "v",
     }
-    assert loader._parse_frontmatter("no frontmatter") == {}
-    monkeypatch.setattr(loader, "yaml", None)
-    assert loader._parse_frontmatter("---\nname: no-yaml\nignored-line\n---\nbody") == {"name": "no-yaml"}
-    monkeypatch.setattr(loader, "yaml", SimpleNamespace(safe_load=lambda _raw: ["not", "dict"]))
-    assert loader._parse_frontmatter("---\nname: list-yaml\n---\nbody") == {"name": "list-yaml"}
+    assert skill_metadata_module._parse_frontmatter("no frontmatter") == {}
+    monkeypatch.setattr(skill_metadata_module, "yaml", None)
+    assert skill_metadata_module._parse_frontmatter("---\nname: no-yaml\nignored-line\n---\nbody") == {
+        "name": "no-yaml"
+    }
+    monkeypatch.setattr(skill_metadata_module, "yaml", SimpleNamespace(safe_load=lambda _raw: ["not", "dict"]))
+    assert skill_metadata_module._parse_frontmatter("---\nname: list-yaml\n---\nbody") == {"name": "list-yaml"}
 
     root = tmp_path / "skills"
     good = root / "good"
@@ -1477,7 +1482,7 @@ def test_skills_loader_yaml_fallback_and_load_metadata(tmp_path, monkeypatch):
     schema_skill.mkdir()
     schema_skill_file = schema_skill / "SKILL.md"
     schema_skill_file.write_text("---\nname: schema\ninput_schema:\n  type: object\n---\nbody", encoding="utf-8")
-    monkeypatch.setattr(loader, "yaml", __import__("yaml"))
+    monkeypatch.setattr(skill_metadata_module, "yaml", __import__("yaml"))
     assert loader.parse_metadata(schema_skill_file)["input_schema"] == {"type": "object"}
 
     class FakePath:

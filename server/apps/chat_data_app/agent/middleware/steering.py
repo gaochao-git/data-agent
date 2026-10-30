@@ -9,7 +9,7 @@ from langchain.agents.middleware import AgentMiddleware, AgentState, Runtime, be
 from langchain_core.messages import HumanMessage, ToolMessage
 from langgraph.config import get_stream_writer
 
-from ..run.agent_inbox_service import AgentInboxService
+from ..contracts.inbox import InboxPort
 
 
 class SteeringMessageTracker:
@@ -32,7 +32,7 @@ def create_steering_middleware(
     *,
     run_id: str,
     owner_token: str,
-    inbox_service: AgentInboxService,
+    inbox_service: InboxPort,
     admit_messages: Callable[[list[HumanMessage]], Awaitable[None]],
     tracker: SteeringMessageTracker,
     state_schema: Any | None = None,

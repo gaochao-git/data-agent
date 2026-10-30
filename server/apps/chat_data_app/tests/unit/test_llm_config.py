@@ -639,7 +639,7 @@ def test_data_agent_uses_configured_model_without_fallback(monkeypatch, tmp_path
     monkeypatch.setattr(data_agent, "assemble_tools", lambda *args, **kwargs: [])
 
     data_agent.create_data_agent(
-        AgentRuntimeOptions(workspace_backend="local", bash_enabled=False),
+        AgentRuntimeOptions(workspace_backend="local"),
         workspace_runtime=ConversationWorkspaceRuntime(
             workspace_root=str(tmp_path),
             user_id="u1",

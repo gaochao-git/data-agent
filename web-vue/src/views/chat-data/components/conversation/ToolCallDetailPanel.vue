@@ -29,7 +29,7 @@ const prettyJsonIfPossible = (raw: string): string => {
   }
 }
 
-// 标题链：后端下发展示名（MCP tool_labels）优先，内置映射/限定名兜底，与 ToolCallCard 口径一致
+// 标题链：后端下发展示名（MCP tools.<name>.label）优先，内置映射/限定名兜底，与 ToolCallCard 口径一致
 const toolDisplayName = computed(() => props.toolCall?.display_name?.trim() || getToolDisplayName(props.toolCall?.tool_name, props.toolCall?.args))
 // 合并工具/本体导航工具在标题露出动作中文名（如「语义模型自检」「对象定位」），只看卡片名分不清具体动作
 const toolActionName = computed(() => {

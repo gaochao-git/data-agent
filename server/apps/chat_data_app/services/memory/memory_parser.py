@@ -28,6 +28,8 @@ class MemoryItem:
     category: str
     content: str
     scope: str = ""
+    # 本次抽取相对已有记忆的覆盖关系；不落盘，只在合并时消费。
+    supersedes: tuple[str, ...] = ()
 
     def to_line(self) -> str:
         scope_suffix = f"（{self.scope}）" if self.scope else ""
@@ -58,8 +60,16 @@ def normalize_memory_items(
         scope = normalize_memory_text(item.scope, MAX_SCOPE_CHARS)
         if not category or not content:
             continue
-        candidate = MemoryItem(category=category, content=content, scope=scope)
-        if candidate in normalized:
+        supersedes = tuple(
+            text for raw in item.supersedes if (text := normalize_memory_text(raw, MAX_ITEM_CONTENT_CHARS))
+        )
+        candidate = MemoryItem(
+            category=category,
+            content=content,
+            scope=scope,
+            supersedes=supersedes,
+        )
+        if any(_memory_item_key(existing) == _memory_item_key(candidate) for existing in normalized):
             continue
         normalized.append(candidate)
     limit = max(int(max_items), 0)
@@ -107,6 +117,44 @@ def enforce_memory_item_limit(items: Sequence[MemoryItem], *, max_items: int) ->
     """条目封顶：超出时淘汰最早的条目，至少保留 1 条。"""
     limit = max(int(max_items), 1)
     return list(items[-limit:])
+
+
+def _normalize_update_target(text: str) -> str:
+    """删除/覆盖目标的比较键：折叠空白，保留用户可见文本。"""
+    return normalize_memory_text(text, MAX_ITEM_CONTENT_CHARS)
+
+
+def _matches_update_target(item: MemoryItem, targets: set[str]) -> bool:
+    """删除/覆盖目标匹配 content 或完整条目标识，兼容用户只给结论。"""
+    return _normalize_update_target(item.content) in targets or _normalize_update_target(item.to_line()) in targets
+
+
+def apply_memory_updates(
+    existing: Sequence[MemoryItem],
+    new_items: Sequence[MemoryItem],
+    removals: Iterable[str] = (),
+) -> list[MemoryItem]:
+    """应用删除与覆盖：先删旧条目，再追加新条目，最后按 content/scope 去重。
+
+    ``new_items[*].supersedes`` 与顶层 ``removals`` 都按 content 或完整条目行匹配；
+    写入文件时不保留 ``supersedes``，它只是本次合并的指令。
+    """
+    removal_targets = {target for raw in removals if (target := _normalize_update_target(raw))}
+    superseded_targets = {
+        target for item in new_items for raw in item.supersedes if (target := _normalize_update_target(raw))
+    }
+    targets = removal_targets | superseded_targets
+    kept = [item for item in existing if not _matches_update_target(item, targets)]
+    merged: list[MemoryItem] = []
+    seen: set[str] = set()
+    for item in [*kept, *new_items]:
+        stored = MemoryItem(category=item.category, content=item.content, scope=item.scope)
+        key = " ".join(f"{stored.category} {stored.content} {stored.scope}".split())
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(stored)
+    return merged
 
 
 def render_memory_document(items: Sequence[MemoryItem]) -> str:

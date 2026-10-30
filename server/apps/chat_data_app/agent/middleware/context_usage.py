@@ -25,19 +25,37 @@ from ..context.context_budget import (
     ContextBudget,
     ContextRequestBudget,
     build_context_usage_payload,
-    build_runtime_context_summary_message,
     count_messages_tokens,
     count_tools_tokens,
     estimate_tokens,
-    extract_legacy_context_summary,
     hard_input_guard_tokens,
+    inject_runtime_context_summary,
     latest_model_name_from_usage,
-    merge_context_summaries,
     sanitize_context_usage_for_response,
 )
+from ..context.runtime import ContextRuntime
 from .context_compression import format_todo_snapshot_lines, neutralize_stale_todo_tool_messages
 
 logger = get_logger(__name__)
+
+
+async def _renew_sandbox_if_configured(sandbox_renewal: Callable[[], Awaitable[None]] | None) -> None:
+    """模型调用前后续期 sandbox；未配置（local 后端）时直接跳过。"""
+    if sandbox_renewal is not None:
+        await sandbox_renewal()
+
+
+def _resolve_usage_runtime(
+    *,
+    model_id: str | None,
+    tools: list[Any] | None,
+    context_request_budget: ContextRequestBudget | None,
+    context_runtime: ContextRuntime | None,
+) -> tuple[str | None, list[Any] | None, ContextRequestBudget | None]:
+    """把 ContextRuntime 展开成工厂内部使用的预算/模型/工具口径。"""
+    if context_runtime is None:
+        return model_id, tools, context_request_budget
+    return context_runtime.model_id, list(context_runtime.tools), context_runtime.request_budget
 
 
 def create_context_usage_middleware(
@@ -45,11 +63,19 @@ def create_context_usage_middleware(
     *,
     tools: list[Any] | None = None,
     context_request_budget: ContextRequestBudget | None = None,
+    context_runtime: ContextRuntime | None = None,
     state_schema: Any | None = None,
+    sandbox_renewal: Callable[[], Awaitable[None]] | None = None,
     name: str = "ContextUsageMiddleware",
 ) -> Any:
     """创建统一的上下文计量与 token usage middleware。"""
     records: list[dict[str, Any]] = []
+    model_id, tools, context_request_budget = _resolve_usage_runtime(
+        model_id=model_id,
+        tools=tools,
+        context_request_budget=context_request_budget,
+        context_runtime=context_runtime,
+    )
     request_budget = context_request_budget or ContextRequestBudget(model_id)
 
     @wrap_model_call(name=name, state_schema=state_schema)
@@ -77,6 +103,8 @@ def create_context_usage_middleware(
         records.append(record)
         _emit_context_usage(get_context_usage())
 
+        # 模型调用前续期：覆盖本轮模型思考/生成耗时。
+        await _renew_sandbox_if_configured(sandbox_renewal)
         started_at_ms = _now_epoch_ms()
         try:
             response = await handler(
@@ -128,6 +156,9 @@ def create_context_usage_middleware(
         )
         usage = get_context_usage()
         _emit_context_usage(usage)
+        # 模型返回后续期：覆盖紧随其后的工具执行（bash/officecli 最长 120s）；放在计时之后，
+        # 避免控制面续期延迟被算进模型调用耗时。
+        await _renew_sandbox_if_configured(sandbox_renewal)
         return ExtendedModelResponse(
             model_response=_ensure_model_response(response),
             command=Command(update={"token_usage": compact_token_usage_for_state(usage)}),
@@ -146,14 +177,18 @@ def create_request_context_usage_middleware(
     *,
     tools: list[Any] | None = None,
     context_request_budget: ContextRequestBudget | None = None,
+    context_runtime: ContextRuntime | None = None,
     state_schema: Any | None = None,
+    sandbox_renewal: Callable[[], Awaitable[None]] | None = None,
 ) -> Callable[[ModelRequest], Awaitable[ModelCallResult]]:
     """创建每次模型请求前的上下文计量与 token usage middleware。"""
     return create_context_usage_middleware(
         model_id=model_id,
         tools=tools,
         context_request_budget=context_request_budget,
+        context_runtime=context_runtime,
         state_schema=state_schema,
+        sandbox_renewal=sandbox_renewal,
     )
 
 
@@ -204,7 +239,9 @@ _STATE_USAGE_FIELDS = (
     "total_tokens",
     "estimated",
     "current_cached_input_tokens",
+    "current_actual_input_tokens",
     "cumulative_cached_input_tokens",
+    "cumulative_actual_input_tokens",
     "current_cache_hit_rate",
     "cumulative_cache_hit_rate",
 )
@@ -549,14 +586,8 @@ def _merge_compression_summary_into_system_prompt(
     context_summary: str | None = None,
 ) -> tuple[str, list[Any]]:
     """将摘要作为隐藏 human 数据上下文注入，保持唯一 system message。"""
-    cleaned_messages, legacy_summary = extract_legacy_context_summary(messages)
-    summary = merge_context_summaries(context_summary, legacy_summary)
-    if not summary:
-        return system_prompt, cleaned_messages
-    summary_message = build_runtime_context_summary_message(summary)
-    if summary_message is None:
-        return system_prompt, cleaned_messages
-    return system_prompt, [summary_message, *cleaned_messages]
+    summary_messages, _summary, _injected = inject_runtime_context_summary(messages, context_summary)
+    return system_prompt, summary_messages
 
 
 def _emit_context_usage(usage: dict[str, Any] | None) -> None:
@@ -677,40 +708,68 @@ def _merge_response_usage(record: dict[str, Any], response: Any) -> None:
         record["cached_input_tokens"] = cached_input_tokens
 
 
+def _bounded_cached_tokens(cached_tokens: int, actual_input_tokens: int, *, scope: str) -> int:
+    """缓存 token 不应超过输入 token；provider 异常时按输入封顶并告警。"""
+    if cached_tokens <= actual_input_tokens:
+        return cached_tokens
+    logger.warning(
+        "[context_usage] 缓存 token 超过输入 token，按输入封顶: scope=%s cached=%s input=%s",
+        scope,
+        cached_tokens,
+        actual_input_tokens,
+    )
+    return actual_input_tokens
+
+
 def _add_cached_input_usage(
     payload: dict[str, Any],
     calls: list[dict[str, Any]],
     current_call: dict[str, Any],
 ) -> None:
-    """聚合模型实际返回的缓存命中数，缺失时不改变既有 payload。"""
+    """聚合模型实际返回的缓存命中数，同时暴露累计分母，缺失时不改变既有 payload。"""
     cache_calls = [call for call in calls if _optional_non_negative_int(call.get("cached_input_tokens")) is not None]
     if not cache_calls:
         return
     current_cached_tokens = _optional_non_negative_int(current_call.get("cached_input_tokens"))
-    if current_cached_tokens is not None:
+    current_actual_input_tokens = _optional_non_negative_int(current_call.get("actual_input_tokens"))
+    if current_cached_tokens is not None and current_actual_input_tokens is not None:
+        current_cached_tokens = _bounded_cached_tokens(
+            current_cached_tokens,
+            current_actual_input_tokens,
+            scope="current",
+        )
         payload["current_cached_input_tokens"] = current_cached_tokens
+        payload["current_actual_input_tokens"] = current_actual_input_tokens
         _add_cache_hit_rate(
             payload,
             "current_cache_hit_rate",
             current_cached_tokens,
-            _optional_non_negative_int(current_call.get("actual_input_tokens")),
+            current_actual_input_tokens,
         )
     calls_with_reported_input = [
         call for call in cache_calls if _optional_non_negative_int(call.get("actual_input_tokens")) is not None
     ]
-    cumulative_cached_tokens = sum(
-        _optional_non_negative_int(call.get("cached_input_tokens")) or 0 for call in calls_with_reported_input
-    )
+    cumulative_cached_tokens = 0
+    cumulative_actual_input_tokens = 0
+    for call in calls_with_reported_input:
+        actual_input_tokens = _optional_non_negative_int(call.get("actual_input_tokens")) or 0
+        cached_tokens = _optional_non_negative_int(call.get("cached_input_tokens")) or 0
+        if actual_input_tokens <= 0:
+            continue
+        cumulative_cached_tokens += _bounded_cached_tokens(
+            cached_tokens,
+            actual_input_tokens,
+            scope="cumulative",
+        )
+        cumulative_actual_input_tokens += actual_input_tokens
     payload["cumulative_cached_input_tokens"] = cumulative_cached_tokens
-    reported_input_tokens = [
-        _optional_non_negative_int(call.get("actual_input_tokens")) for call in calls_with_reported_input
-    ]
+    payload["cumulative_actual_input_tokens"] = cumulative_actual_input_tokens
     _add_cache_hit_rate(
         payload,
         "cumulative_cache_hit_rate",
         cumulative_cached_tokens,
-        sum(tokens for tokens in reported_input_tokens if tokens is not None),
-        has_reported_input=bool(calls_with_reported_input),
+        cumulative_actual_input_tokens,
+        has_reported_input=cumulative_actual_input_tokens > 0,
     )
 
 
@@ -818,7 +877,14 @@ def _response_metadata_usage(message: AIMessage) -> dict[str, Any] | None:
 def _cached_tokens_from_details(details: Any) -> int | None:
     if not isinstance(details, dict):
         return None
-    for key in ("cache_read", "priority_cache_read", "flex_cache_read", "cached_tokens"):
+    for key in (
+        "cache_read",
+        "priority_cache_read",
+        "flex_cache_read",
+        "cached_tokens",
+        "prompt_cache_hit_tokens",
+        "cache_hit_tokens",
+    ):
         cached_tokens = _optional_non_negative_int(details.get(key))
         if cached_tokens is not None:
             return cached_tokens
@@ -829,6 +895,9 @@ def _cached_tokens_from_openai_usage(usage: Any) -> int | None:
     if not isinstance(usage, dict):
         return None
     cached_tokens = _cached_tokens_from_details(usage.get("input_token_details"))
+    if cached_tokens is not None:
+        return cached_tokens
+    cached_tokens = _optional_non_negative_int(usage.get("prompt_cache_hit_tokens"))
     if cached_tokens is not None:
         return cached_tokens
     details = usage.get("prompt_tokens_details")

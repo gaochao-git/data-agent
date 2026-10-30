@@ -79,7 +79,7 @@ def list_snapshot_skill_metadata(snapshot_dir: Path) -> list[dict[str, Any]]:
     但仍保留可读取的快照技能。
     """
     # 延迟导入复用 loader 的唯一 frontmatter 解析入口，避免顶层相互 import。
-    from ..skills.loader import parse_metadata
+    from ..contracts.skill_metadata import parse_metadata
 
     entries: list[dict[str, Any]] = []
     for name in list_snapshot_skill_names(snapshot_dir):
@@ -240,9 +240,10 @@ async def build_runtime_skill_snapshot_async(
     target = Path(target_dir) if target_dir is not None else runtime_skills_snapshot_dir(user_id, conversation_id)
     was_ready = is_runtime_skill_snapshot_ready(target)
 
-    from apps.chat_data_app.agent.skills.skill_service import skill_service
+    from ..contracts.skill_source import get_skill_snapshot_source
 
-    sources = await skill_service.list_runtime_skill_sources_async(user_id)
+    source = get_skill_snapshot_source()
+    sources = await source.list_runtime_skill_sources_async(user_id) if source is not None else []
     current_fingerprints = compute_skill_fingerprints(sources)
 
     if was_ready:

@@ -1,7 +1,7 @@
 """``tools/registry.py`` 护栏：装配面必须与声明面一致。
 
 新增/下线工具只改 ``registry.py``；本文件防止漂移——
-漏装配、``provides`` 工具名写错、排除集引用了不存在的工具名，都在这里变红。
+漏装配、``provides`` 工具名写错、子智能体白名单引用了不存在的工具名，都在这里变红。
 """
 
 import os
@@ -19,11 +19,7 @@ from apps.chat_data_app.agent.data_agent import (  # noqa: E402
 )
 from apps.chat_data_app.agent.runtime_options import AgentRuntimeOptions  # noqa: E402
 from apps.chat_data_app.agent.tools.registry import (  # noqa: E402
-    DATA_EXPLORE_EXTRA_EXCLUDED_TOOL_NAMES,
-    GENERAL_PURPOSE_EXTRA_EXCLUDED_TOOL_NAMES,
-    PLAN_EXTRA_EXCLUDED_TOOL_NAMES,
-    SUBAGENT_BASE_EXCLUDED_TOOL_NAMES,
-    TOOL_SPECS,
+    TOOL_BUILD_GROUPS,
     provided_tool_names,
 )
 from apps.chat_data_app.services.agent_run.conversation_workspace import (  # noqa: E402
@@ -31,7 +27,7 @@ from apps.chat_data_app.services.agent_run.conversation_workspace import (  # no
 )
 from apps.chat_data_app.services.ontology import query_mode  # noqa: E402
 
-# 与 TOOL_SPECS 声明一一对应（bash_run 受运行选项控制，单独断言）
+# 与 TOOL_BUILD_GROUPS 声明一一对应（bash_run 受运行选项控制，单独断言）
 EXPECTED_WITHOUT_BASH = [
     "file_read",
     "file_edit",
@@ -57,16 +53,16 @@ EXPECTED_WITHOUT_BASH = [
 ]
 
 
-def _runtime(tmp_path, *, bash_enabled=False):
+def _runtime(tmp_path):
     return ConversationWorkspaceRuntime(
         workspace_root=str(tmp_path),
         user_id="u1",
         backend="local",
-    ), AgentRuntimeOptions(workspace_backend="local", bash_enabled=bash_enabled)
+    ), AgentRuntimeOptions(workspace_backend="local")
 
 
-def _tool_names(tmp_path, *, bash_enabled=False):
-    runtime, options = _runtime(tmp_path, bash_enabled=bash_enabled)
+def _tool_names(tmp_path):
+    runtime, options = _runtime(tmp_path)
     return [
         tool.name
         for tool in assemble_tools(
@@ -82,10 +78,11 @@ def test_assembled_tools_match_registry_order(tmp_path):
     assert _tool_names(tmp_path) == EXPECTED_WITHOUT_BASH
 
 
-def test_bash_run_gated_by_runtime_options(tmp_path):
-    names = _tool_names(tmp_path, bash_enabled=True)
-    assert names[-1] == "bash_run"
-    assert names[:-1] == EXPECTED_WITHOUT_BASH
+def test_bash_run_is_disabled_by_declaration(tmp_path):
+    from apps.chat_data_app.agent.tools.registry import TOOL_DEFINITIONS
+
+    assert TOOL_DEFINITIONS["bash_run"].enabled is False
+    assert "bash_run" not in _tool_names(tmp_path)
 
 
 def test_semantic_and_ontology_tools_are_mutually_exclusive(tmp_path, monkeypatch):
@@ -122,35 +119,38 @@ def test_ontology_tool_requires_feature_switch_in_ontology_mode(tmp_path, monkey
     assert "data_analyzing_tool" not in names
 
 
-def test_exclusion_sets_reference_registered_tools_only():
-    """排除集出现注册表之外的工具名 = 拼写错误或忘了登记 provides。"""
+def test_subagent_allowlists_are_explicit_and_registered():
+    """子智能体按需声明工具白名单，不再使用“继承后忽略”的隐式排除集。"""
+    from apps.chat_data_app.agent.data_agent import SUBAGENT_TOOL_ALLOWLISTS
+
     registered = provided_tool_names()
-    for label, excluded in (
-        ("SUBAGENT_BASE", SUBAGENT_BASE_EXCLUDED_TOOL_NAMES),
-        ("DATA_EXPLORE", DATA_EXPLORE_EXTRA_EXCLUDED_TOOL_NAMES),
-        ("PLAN", PLAN_EXTRA_EXCLUDED_TOOL_NAMES),
-        ("GENERAL_PURPOSE", GENERAL_PURPOSE_EXTRA_EXCLUDED_TOOL_NAMES),
-    ):
-        unknown = excluded - registered
-        assert not unknown, f"{label} 排除集引用了未注册工具: {sorted(unknown)}"
+    assert set(SUBAGENT_TOOL_ALLOWLISTS) == {"explore", "plan"}
+    for name, allowed in SUBAGENT_TOOL_ALLOWLISTS.items():
+        unknown = allowed - registered
+        assert not unknown, f"{name} 白名单引用了未注册工具: {sorted(unknown)}"
+        assert "ask_user_question" not in allowed
+        assert "present_artifacts" not in allowed
+        assert "bash_run" not in allowed
 
 
 def test_built_tools_are_declared_in_provides(tmp_path):
-    """实际装配出的工具必须全部登记在 provides：漏登记时排除集匹配会静默失效。"""
+    """实际装配出的工具必须全部登记在 provides：漏登记时白名单过滤会静默失效。"""
     missing = set(_tool_names(tmp_path)) - provided_tool_names()
     assert not missing, f"工具已装配但未登记 provides: {sorted(missing)}"
 
 
 def test_registry_names_are_unique_and_non_empty():
-    names = [name for spec in TOOL_SPECS for name in spec.provides]
-    assert all(spec.provides for spec in TOOL_SPECS)
+    names = [name for spec in TOOL_BUILD_GROUPS for name in spec.provides]
+    assert all(spec.provides for spec in TOOL_BUILD_GROUPS)
     assert len(names) == len(set(names)), "同一工具名被多个条目重复声明"
 
 
 def test_user_interaction_tools_are_marked():
     """ask_user_question 必须登记 requires_user_interaction：无人值守装配
     （定时轮）据此剔除，标记丢失 = 定时轮提问悬挂回归。"""
-    assert any("ask_user_question" in spec.provides and spec.requires_user_interaction for spec in TOOL_SPECS), (
+    from apps.chat_data_app.agent.tools.registry import TOOL_DEFINITIONS
+
+    assert TOOL_DEFINITIONS["ask_user_question"].requires_user_interaction, (
         "ask_user_question 丢失 requires_user_interaction 标记"
     )
 
@@ -166,7 +166,7 @@ def test_system_tools_use_same_ask_allow_map_as_mcp():
 
     assert set(SYSTEM_TOOL_APPROVALS) == provided_tool_names() | MIDDLEWARE_INJECTED_APPROVAL_TOOLS
     assert set(SYSTEM_TOOL_APPROVALS.values()) == {"allow"}
-    # write_todos / task 由中间件装配，不经过 TOOL_SPECS，但必须显式 allow 且进入铺底表
+    # write_todos / task 由中间件装配，不经过 TOOL_BUILD_GROUPS，但必须显式 allow 且进入铺底表
     assert {"write_todos", "task", "mcp_tool_search", "mcp_tool_call"} == MIDDLEWARE_INJECTED_APPROVAL_TOOLS
     assert not {name for name, approval in SYSTEM_TOOL_APPROVALS.items() if approval == "ask"}
     assert system_tool_approval("write_todos") == "allow"
@@ -205,3 +205,43 @@ def test_system_tool_approval_is_configurable_and_fail_closed(monkeypatch):
     monkeypatch.setitem(SYSTEM_TOOL_APPROVALS, "file_delete", "ask")
     assert system_tool_approval("file_delete") == "ask"
     assert "file_delete" in system_approval_required_tools()
+
+
+def test_tool_declarations_are_per_tool_and_complete():
+    """审批/风险必须逐工具声明；ToolBuildGroup 只负责构建分组。"""
+    from apps.chat_data_app.agent.tools.registry import (
+        MIDDLEWARE_INJECTED_APPROVAL_TOOLS,
+        TOOL_BUILD_GROUPS,
+        TOOL_DEFINITIONS,
+        provided_tool_names,
+    )
+
+    expected = provided_tool_names() | MIDDLEWARE_INJECTED_APPROVAL_TOOLS
+    assert set(TOOL_DEFINITIONS) == expected
+    assert TOOL_DEFINITIONS["bash_run"].enabled is False
+    assert {"allow", "ask", "deny"} >= {declaration.approval for declaration in TOOL_DEFINITIONS.values()}
+    assert {"low", "medium", "high"} >= {declaration.risk for declaration in TOOL_DEFINITIONS.values()}
+    assert not any(hasattr(spec, "risk_overrides") for spec in TOOL_BUILD_GROUPS)
+    assert not any(hasattr(spec, "required_skills") for spec in TOOL_BUILD_GROUPS)
+    assert not any(hasattr(spec, "requires_user_interaction") for spec in TOOL_BUILD_GROUPS)
+    from apps.chat_data_app.agent.tools.registry import tool_display_names
+
+    names = tool_display_names()
+    assert set(names) == expected
+    assert names["file_read"] == "读取文件"
+
+
+def test_disabled_definition_only_filters_that_tool(tmp_path, monkeypatch):
+    """单工具禁用不能把整个构建组一起跳过（文件工具组是 1:N 的关系）。"""
+    from dataclasses import replace
+
+    from apps.chat_data_app.agent.tools.registry import TOOL_DEFINITIONS
+
+    monkeypatch.setitem(
+        TOOL_DEFINITIONS,
+        "file_read",
+        replace(TOOL_DEFINITIONS["file_read"], enabled=False),
+    )
+    names = _tool_names(tmp_path)
+    assert "file_read" not in names
+    assert "file_write" in names

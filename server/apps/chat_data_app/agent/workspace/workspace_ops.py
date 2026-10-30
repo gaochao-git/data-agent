@@ -10,6 +10,7 @@ from uuid import uuid4
 from utils.logger import get_logger
 
 from .artifact_registry import parse_output_artifact
+from .office_preview_html import normalize_office_preview_html
 from .workspace_sandbox_api import (
     SandboxExecutionSession,
     SandboxExecutionSessionRef,
@@ -114,6 +115,7 @@ async def sandbox_render_office_html(
                     path=preview_path,
                 )
             ).decode("utf-8", errors="replace")
+            html = normalize_office_preview_html(html)
         finally:
             deleter = getattr(getattr(session.sandbox, "files", None), "delete_files", None)
             if callable(deleter):

@@ -116,7 +116,7 @@ const toolCallListRef = ref<HTMLElement | null>(null)
 const { schedule: scheduleMermaid } = useMermaidRenderer(() => toolCallListRef.value)
 watch(() => props.toolCalls, scheduleMermaid, { immediate: true })
 
-const buildTrailView = (item: SubagentTrailItem, isParentRunning: boolean): TrailView => {
+const buildTrailView = (item: SubagentTrailItem, thinkingRunning: boolean): TrailView => {
   if (item.kind === 'message') {
     const content = item.content || ''
     return {
@@ -127,7 +127,7 @@ const buildTrailView = (item: SubagentTrailItem, isParentRunning: boolean): Trai
       truncated: Boolean(item.truncated),
       thinking: item.thinking || '',
       thinkingTruncated: Boolean(item.thinkingTruncated),
-      thinkingRunning: isParentRunning,
+      thinkingRunning: thinkingRunning,
     }
   }
   return {
@@ -158,7 +158,15 @@ const trailViewsByToolCallId = computed(() => {
     for (const item of trail) {
       if (item.kind === 'message') aliveKeys.add(item.id)
     }
-    views.set(toolCall.tool_call_id, trail.map((item) => buildTrailView(item, isParentRunning)))
+    // 只有轨迹最后一条 message 的思考可能是“正在生成”；只要后面还有
+    // tool/message，说明前一段思考已经结束。父 task 运行中不代表所有历史
+    // 思考都在转圈。
+    views.set(
+      toolCall.tool_call_id,
+      trail.map((item, index) =>
+        buildTrailView(item, isParentRunning && index === trail.length - 1 && item.kind === 'message'),
+      ),
+    )
   }
   // 条目消失（如轨迹重建）后回收缓存，避免长会话累积
   for (const key of markdownCache.keys()) {
@@ -367,11 +375,11 @@ watch(
               <div v-if="entry.thinking" class="mb-1">
                 <button
                   type="button"
-                  class="sub-thinking-toggle flex max-w-full items-center gap-1.5 rounded px-1 py-0.5 text-[11px] text-slate-400 transition-colors hover:text-slate-600"
+                  class="sub-thinking-toggle flex w-full max-w-full items-center gap-1.5 rounded px-1 py-0.5 text-[11px] text-slate-400 transition-colors hover:text-slate-600"
                   @click.stop="toggleThinking(entry.key)"
                 >
                   <i class="fa-solid fa-brain text-[10px] shrink-0"></i>
-                  <span class="shrink-0">{{ expandedThinkingIds.has(entry.key) ? '收起思考' : '思考中' }}</span>
+                  <span class="shrink-0">{{ expandedThinkingIds.has(entry.key) ? '收起思考' : (entry.thinkingRunning ? '思考中' : '已思考') }}</span>
                   <span
                     v-if="!expandedThinkingIds.has(entry.key) && entry.thinkingRunning && entry.thinking"
                     class="min-w-0 flex-1 truncate text-left text-slate-300"

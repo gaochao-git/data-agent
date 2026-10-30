@@ -64,25 +64,6 @@ def test_build_data_context_text_returns_empty_without_data_context():
 # ---------------------------------------------------------------------------
 
 
-def test_system_prompt_invariant_to_bash_flag():
-    without_bash = chat_data.build_unified_system_prompt(AgentRuntimeOptions(bash_enabled=False))
-    with_bash = chat_data.build_unified_system_prompt(AgentRuntimeOptions(bash_enabled=True))
-
-    # bash_enabled 只控制 bash_run 工具注册；系统提示词不再有 bash 专属段落
-    assert without_bash == with_bash
-
-    # 其余段落始终存在
-    for block in (
-        chat_data.ROLE_BLOCK,
-        chat_data.HTML_REPORT_BLOCK,
-        chat_data.ENVIRONMENT_BLOCK,
-        chat_data.OUTPUT_AND_FINAL_ANSWER_BLOCK,
-        chat_data.ERROR_HANDLING_BLOCK,
-    ):
-        assert block in without_bash
-        assert block in with_bash
-
-
 def test_memory_block_only_in_main_agent_prompt():
     """会话记忆约定仅主智能体可见：子智能体是一次性执行者，不维护会话记忆。"""
     prompt = chat_data.build_unified_system_prompt(AgentRuntimeOptions())
@@ -91,7 +72,7 @@ def test_memory_block_only_in_main_agent_prompt():
     # 记忆文件路径必须是路径策略接受的绝对形式：相对形式(workspace/...)会被
     # WorkspacePathPolicy 拒绝，模型首次读写必失败
     assert "/mnt/user-data/memory/memory.md" in chat_data.MEMORY_BLOCK
-    assert chat_data.MEMORY_BLOCK not in chat_data.DATA_EXPLORE_SUBAGENT_PROMPT
+    assert chat_data.MEMORY_BLOCK not in chat_data.EXPLORE_SUBAGENT_PROMPT
     assert chat_data.MEMORY_BLOCK not in chat_data.PLAN_SUBAGENT_PROMPT
     # 防回归：MEMORY_BLOCK 独立成块，若并入 ENVIRONMENT_BLOCK 会被子智能体 prompt 连带引用
     assert chat_data.MEMORY_BLOCK not in chat_data.ENVIRONMENT_BLOCK
@@ -148,3 +129,9 @@ def test_system_prompt_inlines_semantic_materialize_note():
 
     assert "# 数据上下文" in prompt
     assert "已预物化 3 个语义模型" in prompt
+
+
+def test_system_prompt_is_stable():
+    assert chat_data.build_unified_system_prompt(AgentRuntimeOptions()) == chat_data.build_unified_system_prompt(
+        AgentRuntimeOptions()
+    )

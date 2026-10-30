@@ -19,7 +19,7 @@ from apps.chat_data_app.agent.middleware.subagents import (
 )
 
 
-def _spec(name="data-explore", **overrides):
+def _spec(name="explore", **overrides):
     kwargs = {
         "name": name,
         "description": "深度分析子智能体",
@@ -89,7 +89,6 @@ def test_build_subagent_middleware_passes_skills_catalog_to_specs():
     options = AgentRuntimeOptions(
         explore_subagent_enabled=True,
         plan_subagent_enabled=True,
-        general_purpose_subagent_enabled=True,
     )
     xml = "<available_skills>\n  <skill>\n    <name>x</name>\n  </skill>\n</available_skills>"
     mw = build_subagent_middleware(
@@ -100,7 +99,7 @@ def test_build_subagent_middleware_passes_skills_catalog_to_specs():
         available_skills_xml=xml,
     )
     assert mw is not None
-    assert {spec.name for spec in mw.specs} == {"data-explore", "plan", "general-purpose"}
+    assert {spec.name for spec in mw.specs} == {"explore", "plan"}
     assert all(spec.available_skills_xml == xml for spec in mw.specs)
     mw_default = build_subagent_middleware(options, tools=[], model=object(), model_id="m1")
     assert all(spec.available_skills_xml == "" for spec in mw_default.specs)
@@ -130,7 +129,7 @@ def test_build_subagent_invocation_config_cuts_callbacks():
 
     assert config["callbacks"] == []
     assert config["recursion_limit"] == 12
-    assert config["configurable"] == {"chatdata_subagent": "data-explore"}
+    assert config["configurable"] == {"chatdata_subagent": "explore"}
 
 
 @pytest.mark.asyncio
@@ -149,7 +148,7 @@ async def test_task_tool_returns_final_report_as_tool_message(monkeypatch):
 
     result = await tool.coroutine(
         description="分析入金趋势",
-        subagent_type="data-explore",
+        subagent_type="explore",
         runtime=_fake_runtime({"user_id": "u1"}),
     )
 
@@ -170,7 +169,7 @@ async def test_task_tool_falls_back_when_subagent_returns_empty_report(monkeypat
     monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
     tool = build_task_tool([_spec()])
 
-    result = await tool.coroutine(description="分析", subagent_type="data-explore", runtime=_fake_runtime())
+    result = await tool.coroutine(description="分析", subagent_type="explore", runtime=_fake_runtime())
 
     assert "未产出有效结论" in result.update["messages"][0].content
 
@@ -207,7 +206,7 @@ async def test_task_tool_forwards_inner_tool_events_to_parent_stream(monkeypatch
     monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
     tool = build_task_tool([_spec()])
 
-    result = await tool.coroutine(description="算一下 1+1", subagent_type="data-explore", runtime=_fake_runtime())
+    result = await tool.coroutine(description="算一下 1+1", subagent_type="explore", runtime=_fake_runtime())
 
     assert result.update["messages"][0].content == "1 + 1 = 2"
     # 用量事件（每个 updates 后一条）与过程事件同通道，序列断言先滤掉
@@ -258,7 +257,7 @@ async def test_task_tool_survives_missing_stream_writer(monkeypatch):
     monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
     tool = build_task_tool([_spec()])
 
-    result = await tool.coroutine(description="分析", subagent_type="data-explore", runtime=_fake_runtime())
+    result = await tool.coroutine(description="分析", subagent_type="explore", runtime=_fake_runtime())
 
     assert result.update["messages"][0].content == "结论"
 
@@ -347,7 +346,7 @@ async def test_task_tool_rejects_unknown_subagent_type():
     result = await tool.coroutine(description="分析", subagent_type="no-such-agent", runtime=_fake_runtime())
 
     assert "类型不存在" in result
-    assert "data-explore" in result
+    assert "explore" in result
 
 
 def test_middleware_appends_system_prompt_as_system_message():
@@ -378,8 +377,8 @@ def test_middleware_registers_single_task_tool_with_agent_catalog():
     middleware = SubagentMiddleware([_spec(), _spec(name="report-writer")])
 
     assert [tool.name for tool in middleware.tools] == ["task"]
-    assert middleware.subagent_names == {"data-explore", "report-writer"}
-    assert "data-explore" in middleware.tools[0].description
+    assert middleware.subagent_names == {"explore", "report-writer"}
+    assert "explore" in middleware.tools[0].description
     assert "report-writer" in middleware.tools[0].description
 
 
@@ -423,7 +422,7 @@ async def test_task_tool_streams_text_and_thinking_deltas(monkeypatch):
     monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
     tool = build_task_tool([_spec()])
 
-    result = await tool.coroutine(description="分析", subagent_type="data-explore", runtime=_fake_runtime())
+    result = await tool.coroutine(description="分析", subagent_type="explore", runtime=_fake_runtime())
 
     assert result.update["messages"][0].content == "结论是上升"
     # 用量事件（每个 updates 后一条）与过程事件同通道，序列断言先滤掉
@@ -464,7 +463,7 @@ async def test_task_tool_delta_streaming_caps_cumulative_text(monkeypatch):
     monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
     tool = build_task_tool([_spec()])
 
-    result = await tool.coroutine(description="分析", subagent_type="data-explore", runtime=_fake_runtime())
+    result = await tool.coroutine(description="分析", subagent_type="explore", runtime=_fake_runtime())
 
     assert result.update["messages"][0].content == "x" * cap + "yyyyyyyy"
     # 用量事件（每个 updates 后一条）与过程事件同通道，先滤掉再断言增量序列
@@ -547,7 +546,7 @@ async def test_task_tool_keeps_text_when_chunk_carries_tool_call(monkeypatch):
     monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
     tool = build_task_tool([_spec()])
 
-    await tool.coroutine(description="分析", subagent_type="data-explore", runtime=_fake_runtime())
+    await tool.coroutine(description="分析", subagent_type="explore", runtime=_fake_runtime())
 
     events = [payload["event"] for payload in written]
     deltas = [event["delta"] for event in events if event["event_type"] == "subagent_message_delta"]
@@ -579,7 +578,7 @@ async def test_task_tool_assigns_fallback_id_to_messages_without_id(monkeypatch)
     monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
     tool = build_task_tool([_spec()])
 
-    await tool.coroutine(description="分析", subagent_type="data-explore", runtime=_fake_runtime())
+    await tool.coroutine(description="分析", subagent_type="explore", runtime=_fake_runtime())
 
     finals = [payload["event"] for payload in written if payload["event"]["event_type"] == "subagent_message"]
     # 同一对象收敛到同一个兜底 id，去重后只发一次
@@ -722,7 +721,7 @@ async def test_task_tool_stamps_trail_snapshot_on_tool_message(monkeypatch):
     monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
     tool = build_task_tool([_spec()])
 
-    result = await tool.coroutine(description="算一下 1+1", subagent_type="data-explore", runtime=_fake_runtime())
+    result = await tool.coroutine(description="算一下 1+1", subagent_type="explore", runtime=_fake_runtime())
 
     tool_message = result.update["messages"][0]
     trail = tool_message.additional_kwargs["subagent_trail"]
@@ -742,7 +741,7 @@ async def test_task_tool_omits_trail_when_no_inner_activity(monkeypatch):
     monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
     tool = build_task_tool([_spec()])
 
-    result = await tool.coroutine(description="分析", subagent_type="data-explore", runtime=_fake_runtime())
+    result = await tool.coroutine(description="分析", subagent_type="explore", runtime=_fake_runtime())
 
     tool_message = result.update["messages"][0]
     assert "subagent_trail" not in tool_message.additional_kwargs
@@ -759,7 +758,7 @@ async def test_task_tool_trail_includes_final_message_like_live_stream(monkeypat
     monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
     tool = build_task_tool([_spec()])
 
-    result = await tool.coroutine(description="分析", subagent_type="data-explore", runtime=_fake_runtime())
+    result = await tool.coroutine(description="分析", subagent_type="explore", runtime=_fake_runtime())
 
     tool_message = result.update["messages"][0]
     trail = tool_message.additional_kwargs["subagent_trail"]
@@ -817,7 +816,7 @@ async def test_task_tool_stamps_trail_on_failure(monkeypatch):
     monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
     tool = build_task_tool([_spec()])
 
-    result = await tool.coroutine(description="分析订单", subagent_type="data-explore", runtime=_fake_runtime())
+    result = await tool.coroutine(description="分析订单", subagent_type="explore", runtime=_fake_runtime())
 
     tool_message = result.update["messages"][0]
     assert isinstance(tool_message, ToolMessage)
@@ -841,7 +840,7 @@ async def test_task_tool_failure_without_inner_activity_omits_trail(monkeypatch)
     monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
     tool = build_task_tool([_spec()])
 
-    result = await tool.coroutine(description="分析", subagent_type="data-explore", runtime=_fake_runtime())
+    result = await tool.coroutine(description="分析", subagent_type="explore", runtime=_fake_runtime())
 
     tool_message = result.update["messages"][0]
     assert tool_message.status == "error"
@@ -935,7 +934,7 @@ async def test_compiled_subagent_mounts_tool_result_middleware(monkeypatch, tmp_
 
     result = await tool.coroutine(
         description="统计总量",
-        subagent_type="data-explore",
+        subagent_type="explore",
         runtime=_fake_runtime(
             {
                 "user_id": "user_sub",
@@ -1008,7 +1007,7 @@ async def test_compiled_subagent_survives_raising_tool(monkeypatch, tmp_path):
 
     result = await tool.coroutine(
         description="统计总量",
-        subagent_type="data-explore",
+        subagent_type="explore",
         runtime=_fake_runtime(
             {
                 "user_id": "user_raise",
@@ -1316,7 +1315,7 @@ async def test_task_tool_streamed_deltas_exclude_markup(monkeypatch):
     monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
     tool = build_task_tool([_spec()])
 
-    await tool.coroutine(description="盘点", subagent_type="data-explore", runtime=_fake_runtime())
+    await tool.coroutine(description="盘点", subagent_type="explore", runtime=_fake_runtime())
 
     deltas = [payload["event"] for payload in written if payload["event"]["event_type"] == "subagent_message_delta"]
     joined = "".join(event["delta"] for event in deltas)
@@ -1344,7 +1343,7 @@ async def test_task_tool_emits_context_usage_events_and_stamps_tool_message(monk
     monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
     tool = build_task_tool([_spec()])
 
-    result = await tool.coroutine(description="盘点", subagent_type="data-explore", runtime=_fake_runtime())
+    result = await tool.coroutine(description="盘点", subagent_type="explore", runtime=_fake_runtime())
 
     usage_events = [
         payload["event"]
@@ -1384,7 +1383,7 @@ async def test_task_tool_prepends_budget_notice_when_forced_to_wrap_up(monkeypat
     monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
     tool = build_task_tool([_spec()])
 
-    result = await tool.coroutine(description="盘点", subagent_type="data-explore", runtime=_fake_runtime())
+    result = await tool.coroutine(description="盘点", subagent_type="explore", runtime=_fake_runtime())
 
     message = result.update["messages"][0]
     assert message.content.startswith("【子智能体预算提示】")
@@ -1429,7 +1428,7 @@ async def test_task_tool_offloads_report_over_parent_budget(monkeypatch):
         }
     )
 
-    result = await tool.coroutine(description="盘点", subagent_type="data-explore", runtime=runtime)
+    result = await tool.coroutine(description="盘点", subagent_type="explore", runtime=runtime)
 
     message = result.update["messages"][0]
     assert message.content.startswith("[tool_result_offloaded]")
@@ -1457,7 +1456,7 @@ async def test_task_tool_keeps_report_within_parent_budget(monkeypatch):
     tool = build_task_tool([_spec()])
     runtime = _fake_runtime(state={"token_usage": {"hard_input_limit_tokens": 1_000_000}})
 
-    result = await tool.coroutine(description="盘点", subagent_type="data-explore", runtime=runtime)
+    result = await tool.coroutine(description="盘点", subagent_type="explore", runtime=runtime)
 
     message = result.update["messages"][0]
     assert message.content == "简短结论"
@@ -1480,7 +1479,7 @@ async def test_task_tool_keeps_report_without_parent_usage(monkeypatch):
     monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
     tool = build_task_tool([_spec()])
 
-    result = await tool.coroutine(description="盘点", subagent_type="data-explore", runtime=_fake_runtime())
+    result = await tool.coroutine(description="盘点", subagent_type="explore", runtime=_fake_runtime())
 
     message = result.update["messages"][0]
     assert message.content == "结论" * 3000
@@ -1636,7 +1635,7 @@ async def test_task_tool_keeps_report_when_offload_fails(monkeypatch):
         }
     )
 
-    result = await tool.coroutine(description="盘点", subagent_type="data-explore", runtime=runtime)
+    result = await tool.coroutine(description="盘点", subagent_type="explore", runtime=runtime)
 
     message = result.update["messages"][0]
     assert message.content == "关键结论" * 3000
@@ -1648,5 +1647,28 @@ def test_task_tool_description_is_compact_chinese():
     from apps.chat_data_app.agent.middleware.subagents import _TASK_TOOL_DESCRIPTION_TEMPLATE
 
     assert len(_TASK_TOOL_DESCRIPTION_TEMPLATE) <= 1200
-    for keyword in ("任务书", "data-explore", "general-purpose", "file_write", "present_artifacts"):
+    for keyword in ("任务书", "explore", "file_write", "present_artifacts"):
         assert keyword in _TASK_TOOL_DESCRIPTION_TEMPLATE
+
+
+def test_sandbox_renewal_middleware_renews_before_and_after_model():
+    """子图 model 调用同样续期：前/后各一次，覆盖子智能体长任务。"""
+    import asyncio
+
+    from langchain_core.messages import AIMessage
+
+    from apps.chat_data_app.agent.middleware.sandbox_renewal import create_sandbox_renewal_middleware
+
+    calls: list[str] = []
+
+    async def renewal():
+        calls.append("renew")
+
+    middleware = create_sandbox_renewal_middleware(renewal)
+    request = SimpleNamespace(system_message=None, messages=[], tools=[])
+
+    async def handler(_request):
+        return AIMessage(content="ok")
+
+    asyncio.run(middleware.awrap_model_call(request, handler))
+    assert len(calls) == 2

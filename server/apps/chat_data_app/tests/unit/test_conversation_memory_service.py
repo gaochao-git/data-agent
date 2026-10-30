@@ -143,7 +143,7 @@ def test_merge_memory_items_two_processes_no_loss(tmp_path, workspace_root, memo
 def test_snapshot_messages_for_extraction_limits_and_coerces():
     messages = [HumanMessage(content=str(i)) for i in range(45)]
     snapshot = svc.snapshot_messages_for_extraction(messages)
-    assert len(snapshot) == svc.EXTRACTION_SNAPSHOT_MESSAGE_LIMIT
+    assert len(snapshot) == svc.EXTRACTION_MAX_TURNS
     assert snapshot[-1].content == "44"
     assert svc.snapshot_messages_for_extraction(None) == []
     assert svc.snapshot_messages_for_extraction(object()) == []
@@ -214,8 +214,8 @@ async def test_after_agent_turn_full_chain_writes_memory(monkeypatch, tmp_path, 
     """after_turn 钩子全链路：先打点，再从最终 state 取消息调度防抖抽取落盘。"""
     monkeypatch.setattr(svc, "EXTRACTION_DEBOUNCE_SECONDS", 0.01)
 
-    async def fake_extract_items(messages, *, model_id):
-        return [MemoryItem(category="口径", content="A")]
+    async def fake_extract_items(messages, *, model_id, existing_items=()):
+        return svc.MemoryExtraction(items=(MemoryItem(category="口径", content="A"),))
 
     monkeypatch.setattr(svc, "extract_memory_items", fake_extract_items)
     log_calls: list[bool] = []
@@ -305,8 +305,8 @@ async def test_extract_memory_items_builds_prompt_and_llm_kwargs(monkeypatch):
         return _FakeLLM('{"items": [{"category": "口径", "content": "A", "scope": ""}]}')
 
     monkeypatch.setattr(svc, "get_chat_data_llm", fake_llm)
-    items = await svc.extract_memory_items([HumanMessage("q")], model_id="m1")
-    assert [item.to_line() for item in items] == ["- [口径] A"]
+    result = await svc.extract_memory_items([HumanMessage("q")], model_id="m1")
+    assert [item.to_line() for item in result.items] == ["- [口径] A"]
     assert captured["model"] == "m1"
     assert captured["streaming"] is False
     assert captured["max_tokens"] == svc.EXTRACTION_LLM_MAX_TOKENS
@@ -322,8 +322,8 @@ async def test_extract_memory_items_normalizes_and_skips_invalid(monkeypatch):
         "]}"
     )
     monkeypatch.setattr(svc, "get_chat_data_llm", lambda **kwargs: _FakeLLM(payload))
-    items = await svc.extract_memory_items([HumanMessage("q"), AIMessage("a")], model_id="m")
-    assert items == [MemoryItem(category="口径", content="销售额含税", scope="订单分析")]
+    result = await svc.extract_memory_items([HumanMessage("q"), AIMessage("a")], model_id="m")
+    assert result.items == (MemoryItem(category="口径", content="销售额含税", scope="订单分析"),)
 
 
 @pytest.mark.asyncio
@@ -333,8 +333,8 @@ async def test_extract_memory_items_joins_chunked_content(monkeypatch):
             return SimpleNamespace(content=[{"text": '{"items":['}, {"text": '{"category":"口径","content":"A"}]}'}])
 
     monkeypatch.setattr(svc, "get_chat_data_llm", lambda **kwargs: _ChunkLLM())
-    items = await svc.extract_memory_items([HumanMessage("q")], model_id="m")
-    assert [item.content for item in items] == ["A"]
+    result = await svc.extract_memory_items([HumanMessage("q")], model_id="m")
+    assert [item.content for item in result.items] == ["A"]
 
 
 @pytest.mark.asyncio
@@ -343,15 +343,15 @@ async def test_extract_memory_items_llm_failure_returns_empty(monkeypatch):
         raise RuntimeError("llm down")
 
     monkeypatch.setattr(svc, "get_chat_data_llm", boom)
-    assert await svc.extract_memory_items([HumanMessage("q")], model_id="m") == []
+    assert await svc.extract_memory_items([HumanMessage("q")], model_id="m") == svc.MemoryExtraction()
 
 
 @pytest.mark.asyncio
 async def test_extract_memory_items_unparsable_or_non_list_returns_empty(monkeypatch):
     monkeypatch.setattr(svc, "get_chat_data_llm", lambda **kwargs: _FakeLLM("我说不出 JSON"))
-    assert await svc.extract_memory_items([HumanMessage("q")], model_id="m") == []
+    assert await svc.extract_memory_items([HumanMessage("q")], model_id="m") == svc.MemoryExtraction()
     monkeypatch.setattr(svc, "get_chat_data_llm", lambda **kwargs: _FakeLLM('{"items": "not-a-list"}'))
-    assert await svc.extract_memory_items([HumanMessage("q")], model_id="m") == []
+    assert await svc.extract_memory_items([HumanMessage("q")], model_id="m") == svc.MemoryExtraction()
 
 
 # ---------------------------------------------------------------------------
@@ -361,8 +361,8 @@ async def test_extract_memory_items_unparsable_or_non_list_returns_empty(monkeyp
 
 @pytest.mark.asyncio
 async def test_extract_and_save_memory_writes_via_merge(monkeypatch, workspace_root, memory_env):
-    async def fake_extract_items(messages, *, model_id):
-        return [MemoryItem(category="口径", content="A")]
+    async def fake_extract_items(messages, *, model_id, existing_items=()):
+        return svc.MemoryExtraction(items=(MemoryItem(category="口径", content="A"),))
 
     monkeypatch.setattr(svc, "extract_memory_items", fake_extract_items)
     await svc.extract_and_save_memory(
@@ -374,8 +374,8 @@ async def test_extract_and_save_memory_writes_via_merge(monkeypatch, workspace_r
 
 @pytest.mark.asyncio
 async def test_extract_and_save_memory_empty_items_skips_write(monkeypatch, workspace_root, memory_env):
-    async def fake_extract_items(messages, *, model_id):
-        return []
+    async def fake_extract_items(messages, *, model_id, existing_items=()):
+        return svc.MemoryExtraction()
 
     monkeypatch.setattr(svc, "extract_memory_items", fake_extract_items)
     await svc.extract_and_save_memory(
@@ -386,8 +386,8 @@ async def test_extract_and_save_memory_empty_items_skips_write(monkeypatch, work
 
 @pytest.mark.asyncio
 async def test_extract_and_save_memory_merge_failure_degrades(monkeypatch, tmp_path, memory_env):
-    async def fake_extract_items(messages, *, model_id):
-        return [MemoryItem(category="口径", content="A")]
+    async def fake_extract_items(messages, *, model_id, existing_items=()):
+        return svc.MemoryExtraction(items=(MemoryItem(category="口径", content="A"),))
 
     monkeypatch.setattr(svc, "extract_memory_items", fake_extract_items)
 
@@ -438,3 +438,54 @@ def test_render_session_memory_block_trims_by_budget_from_newest(monkeypatch, wo
     block = svc.render_session_memory_block(str(workspace_root), conversation_id="c1")
     assert "口径" not in block
     assert "偏好" in block
+
+
+def test_extraction_prompt_prioritizes_user_text_and_trims_tool_results():
+    from langchain_core.messages import ToolMessage
+
+    from apps.chat_data_app.agent.prompts.memory_extraction import (
+        MEMORY_TOOL_RESULT_MAX_CHARS,
+        build_memory_extraction_prompt,
+    )
+
+    prompt = build_memory_extraction_prompt(
+        [
+            HumanMessage("以后销售额按含税口径"),
+            ToolMessage(content="工" * 5000, name="data_analyzing_tool", tool_call_id="call-1"),
+            AIMessage("好的，已记录"),
+        ],
+        existing_items=[MemoryItem(category="偏好", content="报告默认用表格")],
+    )
+
+    assert "以后销售额按含税口径" in prompt
+    assert "报告默认用表格" in prompt
+    assert "工" * (MEMORY_TOOL_RESULT_MAX_CHARS + 1) not in prompt
+    assert "工具(data_analyzing_tool)结果摘要" in prompt
+
+
+@pytest.mark.asyncio
+async def test_extract_memory_items_parses_supersedes_and_remove(monkeypatch):
+    payload = (
+        '{"items":[{"category":"口径","content":"销售额未税","scope":"本次分析",'
+        '"supersedes":["销售额含税"]}],"remove":["旧偏好"]}'
+    )
+    monkeypatch.setattr(svc, "get_chat_data_llm", lambda **kwargs: _FakeLLM(payload))
+
+    result = await svc.extract_memory_items([HumanMessage("纠正口径")], model_id="m")
+
+    assert result.items[0].supersedes == ("销售额含税",)
+    assert result.removals == ("旧偏好",)
+
+
+def test_merge_memory_items_applies_supersedes_and_removals(workspace_root, memory_env):
+    root = str(workspace_root)
+    svc.merge_memory_items(root, [MemoryItem(category="口径", content="销售额含税")])
+    svc.merge_memory_items(root, [MemoryItem(category="偏好", content="旧偏好")])
+
+    merged = svc.merge_memory_items(
+        root,
+        [MemoryItem(category="口径", content="销售额未税", supersedes=("销售额含税",))],
+        removals=("旧偏好",),
+    )
+
+    assert [item.content for item in merged] == ["销售额未税"]

@@ -67,9 +67,9 @@ def test_parse_transport_rejects_non_http_url():
         config_module._parse_transport_fields({"transport": "streamable_http", "url": "ftp://mcp"}, "src")
 
 
-def test_clean_tool_labels_rejects_blank_value():
+def test_parse_tools_rejects_blank_tool_name():
     with pytest.raises(MCPServerConfigError, match="空白"):
-        config_module._clean_tool_labels({"read": "  "}, "src")
+        config_module._parse_tools({" ": {"label": "x"}}, "src")
 
 
 def test_parse_config_rejects_non_bool_enabled():

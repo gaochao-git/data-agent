@@ -297,3 +297,185 @@ def test_run_officecli_wraps_sync_failure(monkeypatch):
                 timeout_seconds=10,
             )
         )
+
+
+def test_renew_sandbox_async_skips_without_active_session(monkeypatch):
+    """模型调用前没有 sandbox 时不创建、不续期。"""
+    monkeypatch.setenv("OPENSANDBOX_RENEW_ENABLED", "true")
+    backend = SandboxWorkspaceBackend()
+    asyncio.run(backend.renew_sandbox_async())
+    assert backend.session_ref.current is None
+
+
+def test_renew_sandbox_async_renews_active_session(monkeypatch):
+    """模型调用前后续期：按 OPENSANDBOX_TIMEOUT_SECONDS 续到 now+900。"""
+    monkeypatch.setenv("OPENSANDBOX_RENEW_ENABLED", "true")
+    monkeypatch.setenv("OPENSANDBOX_TIMEOUT_SECONDS", "900")
+    backend = SandboxWorkspaceBackend()
+    calls: list = []
+
+    async def _renew(timeout):
+        calls.append(timeout)
+
+    backend.session_ref.current = SimpleNamespace(sandbox=SimpleNamespace(renew=_renew))
+    asyncio.run(backend.renew_sandbox_async())
+    assert len(calls) == 1
+    assert calls[0].total_seconds() == 900
+
+
+def test_renew_sandbox_async_can_be_disabled(monkeypatch):
+    monkeypatch.setenv("OPENSANDBOX_RENEW_ENABLED", "false")
+    backend = SandboxWorkspaceBackend()
+    calls: list = []
+
+    async def _renew(timeout):
+        calls.append(timeout)
+
+    backend.session_ref.current = SimpleNamespace(sandbox=SimpleNamespace(renew=_renew))
+    asyncio.run(backend.renew_sandbox_async())
+    assert calls == []
+
+
+def test_renew_sandbox_async_failure_is_logged_not_raised(monkeypatch):
+    monkeypatch.setenv("OPENSANDBOX_RENEW_ENABLED", "true")
+    backend = SandboxWorkspaceBackend()
+    calls: list = []
+
+    async def _renew(timeout):
+        calls.append(timeout)
+        raise RuntimeError("control plane unavailable")
+
+    backend.session_ref.current = SimpleNamespace(sandbox=SimpleNamespace(renew=_renew))
+    asyncio.run(backend.renew_sandbox_async())
+    assert len(calls) == 1
+
+
+def test_renew_before_tool_is_throttled_and_session_ref_triggers_it(monkeypatch):
+    """工具执行前续期：首次（上次续期较旧）续一次，30s 内第二次跳过。"""
+    monkeypatch.setenv("OPENSANDBOX_RENEW_ENABLED", "true")
+    monkeypatch.setenv("OPENSANDBOX_TIMEOUT_SECONDS", "900")
+    backend = SandboxWorkspaceBackend()
+    calls: list = []
+
+    async def _renew(timeout):
+        calls.append(timeout)
+
+    backend.session_ref.current = SimpleNamespace(sandbox=SimpleNamespace(renew=_renew))
+    asyncio.run(backend._session_ref(FakeRuntime()))
+    assert len(calls) == 1
+    asyncio.run(backend._session_ref(FakeRuntime()))
+    assert len(calls) == 1
+
+
+def test_read_sandbox_lifetime_seconds_default_and_env(monkeypatch):
+    """创建与续期共用同一配置读取入口。"""
+    from apps.chat_data_app.agent.workspace.workspace_session import read_sandbox_lifetime_seconds
+
+    monkeypatch.delenv("OPENSANDBOX_TIMEOUT_SECONDS", raising=False)
+    assert read_sandbox_lifetime_seconds() == 900
+    monkeypatch.setenv("OPENSANDBOX_TIMEOUT_SECONDS", "600")
+    assert read_sandbox_lifetime_seconds() == 600
+
+
+def test_session_ref_rebuilds_when_renew_fails(monkeypatch):
+    """续期失败（沙箱已过期）时丢弃旧 session，重新创建后再执行工具。"""
+    new_session = SimpleNamespace(sandbox_id="new", sandbox=SimpleNamespace(renew=None))
+    old_session = SimpleNamespace(sandbox_id="old", sandbox=SimpleNamespace(renew=None))
+
+    async def _get_session(*_args, **_kwargs):
+        return new_session
+
+    async def _invalidate(_session):
+        return None
+
+    monkeypatch.setattr(backend_mod, "get_workspace_execution_session", _get_session)
+    monkeypatch.setattr(backend_mod, "invalidate_workspace_execution_session", _invalidate)
+
+    backend = SandboxWorkspaceBackend()
+    backend.session_ref.current = old_session
+
+    async def _fail_renew():
+        return False
+
+    monkeypatch.setattr(backend, "_renew_before_tool", _fail_renew)
+    result = asyncio.run(backend._session_ref(FakeRuntime()))
+    assert result.current is new_session
+
+
+def test_renew_sandbox_async_skips_when_sandbox_has_no_renew(monkeypatch):
+    """session 没有 renew 能力时安全跳过，不抛异常。"""
+    monkeypatch.setenv("OPENSANDBOX_RENEW_ENABLED", "true")
+    backend = SandboxWorkspaceBackend()
+    backend.session_ref.current = SimpleNamespace(sandbox=SimpleNamespace())
+    asyncio.run(backend.renew_sandbox_async())
+
+
+def test_renew_sandbox_async_throttles_model_calls(monkeypatch):
+    """模型调用频繁时 30s 内只续一次，避免控制面请求放大。"""
+    monkeypatch.setenv("OPENSANDBOX_RENEW_ENABLED", "true")
+    backend = SandboxWorkspaceBackend()
+    calls: list = []
+
+    async def _renew(timeout):
+        calls.append(timeout)
+
+    backend.session_ref.current = SimpleNamespace(sandbox=SimpleNamespace(renew=_renew))
+    asyncio.run(backend.renew_sandbox_async())
+    asyncio.run(backend.renew_sandbox_async())
+    assert len(calls) == 1
+
+
+def test_renew_failure_warning_is_deduplicated(monkeypatch):
+    """连续续期失败只告警一次，避免日志刷屏。"""
+    monkeypatch.setenv("OPENSANDBOX_RENEW_ENABLED", "true")
+    backend = SandboxWorkspaceBackend()
+    calls: list = []
+
+    async def _renew(timeout):
+        calls.append(timeout)
+        raise RuntimeError("control plane unavailable")
+
+    backend.session_ref.current = SimpleNamespace(sandbox=SimpleNamespace(renew=_renew))
+    warnings: list[str] = []
+    monkeypatch.setattr(backend_mod.logger, "warning", lambda message, *args, **kwargs: warnings.append(str(message)))
+    for _ in range(2):
+        backend._last_renew_at = 0.0
+        asyncio.run(backend.renew_sandbox_async())
+    assert len(calls) == 2
+    assert sum("续期失败" in message for message in warnings) == 1
+
+
+def test_renew_failure_keeps_sandbox_when_get_info_succeeds(monkeypatch):
+    """续期失败但 get_info 探活成功：不销毁沙箱，返回可用。"""
+    monkeypatch.setenv("OPENSANDBOX_RENEW_ENABLED", "true")
+    backend = SandboxWorkspaceBackend()
+    info_calls: list = []
+
+    async def _renew(timeout):
+        raise RuntimeError("control plane 500")
+
+    async def _get_info():
+        info_calls.append(True)
+
+    backend.session_ref.current = SimpleNamespace(sandbox=SimpleNamespace(renew=_renew, get_info=_get_info))
+    asyncio.run(backend.renew_sandbox_async())
+    assert info_calls == [True]
+    assert backend.session_ref.current is not None
+
+
+def test_reset_session_recovers_pending_persistence_before_invalidate(monkeypatch):
+    """重建前必须先回写 pending 变更，再销毁旧沙箱。"""
+    backend = SandboxWorkspaceBackend()
+    calls: list[str] = []
+
+    async def _recover(_session):
+        calls.append("recover")
+
+    async def _invalidate(_session):
+        calls.append("invalidate")
+
+    monkeypatch.setattr(backend_mod, "recover_pending_persistence", _recover)
+    monkeypatch.setattr(backend_mod, "invalidate_workspace_execution_session", _invalidate)
+    backend.session_ref.current = SimpleNamespace(sandbox=SimpleNamespace())
+    asyncio.run(backend._reset_session())
+    assert calls == ["recover", "invalidate"]

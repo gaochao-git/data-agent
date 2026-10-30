@@ -31,9 +31,9 @@ MCP_MAX_TOOLS_ENV = "CHAT_DATA_MCP_MAX_TOOLS_PER_SERVER"
 MCP_MAX_TOOL_SCHEMA_BYTES_ENV = "CHAT_DATA_MCP_MAX_TOOL_SCHEMA_BYTES"
 MCP_MAX_TOOL_DESCRIPTION_CHARS_ENV = "CHAT_DATA_MCP_MAX_TOOL_DESCRIPTION_CHARS"
 
-_DEFAULT_MAX_TOOLS = 256
-_DEFAULT_MAX_TOOL_SCHEMA_BYTES = 64 * 1024
-_DEFAULT_MAX_TOOL_DESCRIPTION_CHARS = 4000
+_DEFAULT_MAX_TOOLS = 16
+_DEFAULT_MAX_TOOL_SCHEMA_BYTES = 2 * 1024
+_DEFAULT_MAX_TOOL_DESCRIPTION_CHARS = 1024
 _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "[::1]"})
 _NAME_MAX_LENGTH = 128
 _ALLOWED_JSON_SCHEMA_TYPES = frozenset({"string", "integer", "number", "boolean", "array", "object", "null"})
@@ -210,6 +210,11 @@ def _validate_tool_schema(report: AdmissionReport, name: str, schema: Any, max_s
     _validate_schema_required(report, name, schema, properties)
 
 
+def max_tool_description_chars() -> int:
+    """单工具描述字符上限；admission 告警与 manager 截断共用同一口径。"""
+    return read_positive_int_env(MCP_MAX_TOOL_DESCRIPTION_CHARS_ENV, _DEFAULT_MAX_TOOL_DESCRIPTION_CHARS)
+
+
 def _validate_tool_description(report: AdmissionReport, name: str, description: str, max_description: int) -> None:
     if len(description) > max_description:
         report.add(
@@ -235,7 +240,7 @@ def validate_mcp_server_tools(server_id: str, tools: list[dict[str, Any]]) -> Ad
             f"工具数 {len(tools)} 超过上限 {max_tools}（{MCP_MAX_TOOLS_ENV}）: {server_id}",
         )
     max_schema_bytes = read_positive_int_env(MCP_MAX_TOOL_SCHEMA_BYTES_ENV, _DEFAULT_MAX_TOOL_SCHEMA_BYTES)
-    max_description = read_positive_int_env(MCP_MAX_TOOL_DESCRIPTION_CHARS_ENV, _DEFAULT_MAX_TOOL_DESCRIPTION_CHARS)
+    max_description = max_tool_description_chars()
     seen: set[str] = set()
     for tool in tools:
         name = str(tool.get("name") or "").strip()
@@ -251,5 +256,6 @@ __all__ = [
     "AdmissionIssue",
     "AdmissionReport",
     "validate_mcp_server_config",
+    "max_tool_description_chars",
     "validate_mcp_server_tools",
 ]

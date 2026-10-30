@@ -590,3 +590,20 @@ def test_resolve_decision_legacy_always_label_allows_once():
     from apps.chat_data_app.agent.middleware.tool_approval import _resolve_decision
 
     assert _resolve_decision(_answer([APPROVAL_ALWAYS_ALLOW_LABEL])) == "allow"
+
+
+@pytest.mark.asyncio
+async def test_deny_policy_blocks_without_interrupt():
+    middleware = create_tool_approval_middleware(
+        approval_policies={"file_delete": "deny"},
+    )
+    request = SimpleNamespace(
+        tool_call={"id": "call-deny", "name": "file_delete", "args": {"path": "/a"}},
+        tool=None,
+        state={},
+    )
+
+    result = await middleware.awrap_tool_call(request, _ok_handler)
+
+    assert result.status == "error"
+    assert "工具策略禁止调用" in str(result.content)

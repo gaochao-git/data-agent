@@ -23,12 +23,12 @@ from apps.chat_data_app.agent.runtime_options import AgentRuntimeOptions
 from apps.chat_data_app.services.agent_run.conversation_workspace import ConversationWorkspaceRuntime
 
 
-def _runtime(tmp_path, *, bash_enabled=False):
+def _runtime(tmp_path):
     return ConversationWorkspaceRuntime(
         workspace_root=str(tmp_path),
         user_id="u1",
         backend="local",
-    ), AgentRuntimeOptions(workspace_backend="local", bash_enabled=bash_enabled)
+    ), AgentRuntimeOptions(workspace_backend="local")
 
 
 def test_chat_data_agent_state_exposes_execution_and_workspace_context():
@@ -43,29 +43,18 @@ def test_chat_data_agent_state_exposes_execution_and_workspace_context():
     assert "conversation_datasource_id" not in annotations
 
 
-def test_assemble_tools_registers_all_tools_except_optional_bash(tmp_path):
-    runtime, without_bash = _runtime(tmp_path, bash_enabled=False)
-    _, with_bash = _runtime(tmp_path, bash_enabled=True)
+def test_assemble_tools_skips_disabled_bash(tmp_path):
+    runtime, options = _runtime(tmp_path)
 
     tool_names = [
         tool.name
         for tool in assemble_tools(
-            without_bash,
+            options,
             runtime,
             identity_context=IdentityContext(user_id="u1", operator_name="测试用户"),
             datasource_context=DatasourceContext(datasource_id="ds_a"),
         )
     ]
-    bash_tool_names = [
-        tool.name
-        for tool in assemble_tools(
-            with_bash,
-            runtime,
-            identity_context=IdentityContext(user_id="u1", operator_name="测试用户"),
-            datasource_context=DatasourceContext(datasource_id="ds_a"),
-        )
-    ]
-
     assert tool_names == [
         "file_read",
         "file_edit",
@@ -89,8 +78,7 @@ def test_assemble_tools_registers_all_tools_except_optional_bash(tmp_path):
         "ask_user_question",
         "officecli_run",
     ]
-    assert bash_tool_names[-1] == "bash_run"
-    assert bash_tool_names[:-1] == tool_names
+    assert "bash_run" not in tool_names
 
 
 def test_create_data_agent_uses_standard_middleware_without_model_fallback(monkeypatch, tmp_path):
@@ -185,7 +173,7 @@ def test_create_data_agent_registers_after_model_history_middleware(monkeypatch,
 def test_create_data_agent_registers_subagent_middleware_when_enabled(monkeypatch, tmp_path):
     captured = {}
     runtime, base_options = _runtime(tmp_path)
-    options = AgentRuntimeOptions(workspace_backend="local", bash_enabled=False, explore_subagent_enabled=True)
+    options = AgentRuntimeOptions(workspace_backend="local", explore_subagent_enabled=True)
 
     def fake_create_agent(**kwargs):
         captured.update(kwargs)
@@ -226,7 +214,7 @@ def test_build_subagent_middleware_explore_excludes_write_tools(monkeypatch, tmp
     monkeypatch.setattr(data_agent, "create_streaming_chat_model", lambda **_kwargs: object())
     # 伪工具对象无法走真实 create_agent 编译，桩掉子图编译步骤
     monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: SimpleNamespace())
-    options = AgentRuntimeOptions(workspace_backend="local", bash_enabled=False, explore_subagent_enabled=True)
+    options = AgentRuntimeOptions(workspace_backend="local", explore_subagent_enabled=True)
     tools = [
         SimpleNamespace(name="file_read"),
         SimpleNamespace(name="file_grep"),
@@ -243,7 +231,7 @@ def test_build_subagent_middleware_explore_excludes_write_tools(monkeypatch, tmp
     middleware = build_subagent_middleware(options, tools, model=model)
 
     assert middleware is not None
-    assert _subagent_spec_names(middleware) == ["data-explore"]
+    assert _subagent_spec_names(middleware) == ["explore"]
     spec = middleware.specs[0]
     assert [tool.name for tool in spec.tools] == ["file_read", "file_grep", "calculator_tool"]
     assert spec.model is model
@@ -255,7 +243,7 @@ def test_build_subagent_middleware_plan_keeps_only_inventory_tools(monkeypatch, 
 
     monkeypatch.setattr(data_agent, "create_streaming_chat_model", lambda **_kwargs: object())
     monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: SimpleNamespace())
-    options = AgentRuntimeOptions(workspace_backend="local", bash_enabled=False, plan_subagent_enabled=True)
+    options = AgentRuntimeOptions(workspace_backend="local", plan_subagent_enabled=True)
     tools = [
         SimpleNamespace(name="file_read"),
         SimpleNamespace(name="file_write"),
@@ -284,10 +272,8 @@ def test_build_subagent_middleware_supports_all_specs(monkeypatch, tmp_path):
     monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: SimpleNamespace())
     options = AgentRuntimeOptions(
         workspace_backend="local",
-        bash_enabled=False,
         explore_subagent_enabled=True,
         plan_subagent_enabled=True,
-        general_purpose_subagent_enabled=True,
     )
     tools = [
         SimpleNamespace(name="file_read"),
@@ -299,19 +285,15 @@ def test_build_subagent_middleware_supports_all_specs(monkeypatch, tmp_path):
     middleware = build_subagent_middleware(options, tools, model=model)
 
     assert middleware is not None
-    assert _subagent_spec_names(middleware) == ["data-explore", "plan", "general-purpose"]
-    # 同一工具列表按各自排除集独立过滤：explore 不含写工具，plan 只留盘点与计划落盘，
-    # general-purpose 保留写工具（执行交付物需要）但 bash_run 仍排除
+    assert _subagent_spec_names(middleware) == ["explore", "plan"]
+    # 同一工具列表按各自白名单独立过滤：explore 不含写工具，plan 只留盘点与计划落盘，
     explore_tools = [tool.name for tool in middleware.specs[0].tools]
     plan_tools = [tool.name for tool in middleware.specs[1].tools]
-    gp_tools = [tool.name for tool in middleware.specs[2].tools]
     assert explore_tools == ["file_read"]
     assert plan_tools == ["file_read", "file_write"]
-    assert gp_tools == ["file_read", "file_write"]
     # task 工具描述中列出全部类型
-    assert "data-explore" in middleware.tools[0].description
+    assert "explore" in middleware.tools[0].description
     assert "plan" in middleware.tools[0].description
-    assert "general-purpose" in middleware.tools[0].description
 
 
 @pytest.mark.asyncio
@@ -471,3 +453,25 @@ def test_create_data_agent_unattended_keeps_allow_system_tools(monkeypatch, tmp_
     assert "file_read" in names
     assert "file_delete" in names
     assert "file_move" in names
+
+
+def test_describe_agent_assembly_exposes_resolved_tools_and_middleware(monkeypatch, tmp_path):
+    runtime, options = _runtime(tmp_path)
+    monkeypatch.setattr(data_agent, "create_streaming_chat_model", lambda **_kwargs: SimpleNamespace())
+    monkeypatch.setattr(data_agent, "assemble_tools", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(data_agent, "create_request_context_usage_middleware", lambda *_args, **_kwargs: "usage")
+
+    description = data_agent.describe_agent_assembly(
+        data_agent.CHAT_DATA_AGENT_SPEC,
+        options,
+        identity_context=IdentityContext(user_id="u1"),
+        datasource_context=DatasourceContext(datasource_id="ds_a"),
+        model_invocation=ModelInvocationConfig(system_prompt="system"),
+        workspace_runtime=runtime,
+    )
+
+    assert description["agent_id"] == data_agent.CHAT_DATA_AGENT_SPEC.agent_id
+    assert description["tools"] == []
+    assert description["system_prompt_chars"] > 0
+    assert "ContextUsageMiddleware" not in description["middleware"]
+    assert description["context"]["context_window"] > 0

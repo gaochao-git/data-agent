@@ -27,6 +27,7 @@ from langchain_core.messages import (
     ToolMessage,
 )
 
+from apps.chat_data_app.agent.context import context_budget as cb
 from apps.chat_data_app.agent.context.context_budget import ContextBudget
 from apps.chat_data_app.agent.middleware import context_compression as compression
 from apps.chat_data_app.agent.middleware import context_usage as usage
@@ -319,7 +320,7 @@ def test_compact_token_usage_for_state_returns_none_for_non_mapping():
 
 
 def test_merge_compression_summary_returns_original_when_builder_returns_none(monkeypatch):
-    monkeypatch.setattr(usage, "build_runtime_context_summary_message", lambda _summary: None)
+    monkeypatch.setattr(cb, "build_runtime_context_summary_message", lambda _summary: None)
 
     prompt, messages = usage._merge_compression_summary_into_system_prompt(
         "系统提示词",

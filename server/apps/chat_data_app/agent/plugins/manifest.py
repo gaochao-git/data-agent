@@ -2,8 +2,8 @@
 
 插件是「资源型」扩展包：声明技能目录（``skills/``）与 MCP server（``mcp_servers``），
 不做进程内 Python 代码注入。schema 保持宽松前向兼容：未知字段忽略，已知字段
-必须合法；单条 ``mcp_servers`` 声明在这里只做结构校验，完整校验与解析由
-``agent/mcp/config.py`` 负责。
+必须合法；单条 ``mcp_servers`` 声明复用 ``agent/mcp/config.py`` 的静态解析，
+保证 manifest 与运行时同一口径。
 """
 
 from __future__ import annotations
@@ -14,6 +14,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ..mcp.config import MCPServerConfigError, parse_mcp_server_config
+
 PLUGIN_MANIFEST_FILENAME = "plugin.json"
 
 # 插件名是磁盘目录名与管理 API 的资源 id，约束为小写安全标识。
@@ -23,9 +25,6 @@ PLUGIN_SKILL_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
 PLUGIN_VERSION_MAX_LENGTH = 32
 PLUGIN_DISPLAY_NAME_MAX_LENGTH = 64
 PLUGIN_DESCRIPTION_MAX_LENGTH = 500
-
-# 与 agent/mcp/config.py 的 VALID_MCP_TRANSPORTS 保持同一口径。
-VALID_PLUGIN_MCP_TRANSPORTS = frozenset({"streamable_http"})
 
 
 class PluginManifestError(ValueError):
@@ -56,17 +55,14 @@ class PluginManifest:
 
 
 def _validate_mcp_server_entry(entry: object, source: str) -> None:
-    """manifest 阶段的 MCP server 声明只做结构校验。"""
-    if not isinstance(entry, dict):
-        raise PluginManifestError(f"{source}: mcp_servers 每项必须是对象")
-    server_id = str(entry.get("id") or "").strip()
-    if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,31}", server_id):
-        raise PluginManifestError(f"{source}: mcp_servers 项的 id 非法: {server_id!r}")
-    transport = str(entry.get("transport") or "").strip()
-    if transport not in VALID_PLUGIN_MCP_TRANSPORTS:
-        raise PluginManifestError(f"{source}: mcp_servers 项的 transport 只支持 {sorted(VALID_PLUGIN_MCP_TRANSPORTS)}")
-    if not str(entry.get("url") or "").strip().startswith(("http://", "https://")):
-        raise PluginManifestError(f"{source}: mcp_servers 项 {server_id} 必须提供 http(s) url")
+    """manifest 阶段的 MCP server 声明：复用 mcp/config 的单条解析，保证唯一口径。
+
+    解析只做静态校验（不发起网络），非法声明在安装/加载阶段直接拒绝。
+    """
+    try:
+        parse_mcp_server_config(entry, source=source)
+    except MCPServerConfigError as err:
+        raise PluginManifestError(str(err)) from err
 
 
 def _parse_name(data: dict, source: str) -> str:

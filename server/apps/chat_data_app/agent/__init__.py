@@ -22,9 +22,11 @@ from .data_agent import (
     ModelInvocationConfig,
     create_agent_from_spec,
     create_data_agent,
+    describe_agent_assembly,
     get_data_agent_graph,
     validate_agent_assembly_spec,
 )
+from .port_config import configure_default_harness_ports
 from .prompts.chat_data import build_unified_system_prompt
 from .runtime_options import (
     AgentRuntimeOptions,
@@ -32,6 +34,8 @@ from .runtime_options import (
     get_subagent_hot_defaults,
     resolve_agent_runtime_options,
 )
+
+configure_default_harness_ports()
 
 __all__ = [
     "ChatDataAgentState",
@@ -47,6 +51,7 @@ __all__ = [
     "resolve_agent_runtime_options",
     "create_agent_from_spec",
     "create_data_agent",
+    "describe_agent_assembly",
     "get_data_agent_graph",
     "validate_agent_assembly_spec",
     "build_unified_system_prompt",

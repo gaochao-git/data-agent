@@ -8,6 +8,8 @@ from pathlib import Path
 
 TEMPLATE_ROOT = Path(__file__).with_name("template")
 TEMPLATE_SERVER_NAME = "hello-mcp-server"
+_IGNORED_DIR_NAMES = frozenset({"__pycache__"})
+_IGNORED_SUFFIXES = frozenset({".pyc", ".pyo"})
 
 
 def build_mcp_server_template_zip() -> bytes:
@@ -20,7 +22,10 @@ def build_mcp_server_template_zip() -> bytes:
         for path in sorted(source.rglob("*")):
             if not path.is_file() or path.is_symlink():
                 continue
-            archive.write(path, arcname=f"{TEMPLATE_SERVER_NAME}/{path.relative_to(source).as_posix()}")
+            relative = path.relative_to(source)
+            if any(part in _IGNORED_DIR_NAMES for part in relative.parts) or path.suffix in _IGNORED_SUFFIXES:
+                continue
+            archive.write(path, arcname=f"{TEMPLATE_SERVER_NAME}/{relative.as_posix()}")
     return buffer.getvalue()
 
 

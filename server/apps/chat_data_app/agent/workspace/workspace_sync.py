@@ -526,3 +526,8 @@ async def sync_sandbox_working_trees(session: SandboxExecutionSession) -> dict[s
 async def _recover_pending_persistence(session: SandboxExecutionSession) -> None:
     if session.pending_persistence:
         await _sync_sandbox_working_trees(session)
+
+
+async def recover_pending_persistence(session: SandboxExecutionSession) -> None:
+    """公开入口：重建/销毁沙箱前先把 pending 的沙箱变更回写到应用侧。"""
+    await _recover_pending_persistence(session)
