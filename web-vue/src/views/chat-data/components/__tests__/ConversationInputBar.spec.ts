@@ -188,7 +188,7 @@ describe('ConversationInputBar approval policy', () => {
         thinkingEffort: null, isGenerating: false, canSubmit: true,
       },
     })
-    expect(wrapper.text()).toContain('工具审批由管理员配置')
+    expect(wrapper.text()).not.toContain('工具审批由管理员配置')
     expect(wrapper.find('button[title="选择工具审批模式"]').exists()).toBe(false)
   })
 })
