@@ -20,6 +20,7 @@ setToolDisplayNames({
   present_artifacts: '展示文件',
   get_current_time: '获取当前时间',
   data_analyzing_tool: '数据分析',
+  ontology_tool: '本体查询',
   calculator_tool: '精确计算',
   bash_run: '运行脚本',
   officecli_run: '运行 OfficeCLI',
