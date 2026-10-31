@@ -280,6 +280,19 @@ const hasVisibleAssistantContent = (content: string): boolean => {
   return Boolean(text && text !== '正在思考...')
 }
 
+// 「工作中」九宫格像素动画（参考 ZCode 同款指示器）：中心块（index 4）恒暗，
+// 其余 8 块按螺旋顺序 110ms 错峰闪烁；时长与 keyframes 在 styles/loading-pixel.css。
+const LOADING_PIXEL_ORDER = [0, 1, 2, 5, 8, 7, 6, 3]
+const LOADING_PIXEL_COUNT = 9
+const loadingPixelStyle = (index: number): Record<string, string> => (
+  index === 4
+    ? { opacity: '0.07', animationName: 'none' }
+    : {
+        opacity: '0.15',
+        animationDelay: `${Math.max(0, LOADING_PIXEL_ORDER.indexOf(index)) * 110}ms`,
+      }
+)
+
 const shouldShowStreamingStatus = (message: Message): boolean => (
   hasVisibleAssistantContent(message.content)
   || Boolean(message.thinkingSegments?.length)
@@ -624,10 +637,15 @@ const handleCopyAssistantMessage = async (message: Message) => {
           </div>
 
           <div v-if="message.isStreaming && shouldShowStreamingStatus(message)" class="mt-2 ml-3 flex items-center gap-2 text-xs text-slate-400">
-            <span>{{ hasVisibleAssistantContent(message.content) ? '正在生成' : '正在思考' }}</span>
-            <span class="h-1.5 w-1.5 rounded-full bg-[#1677FF] animate-pulse"></span>
-            <span class="h-1.5 w-1.5 rounded-full bg-[#1677FF] animate-pulse [animation-delay:120ms]"></span>
-            <span class="h-1.5 w-1.5 rounded-full bg-[#1677FF] animate-pulse [animation-delay:240ms]"></span>
+            <span aria-hidden="true" class="grid size-[13px] shrink-0 grid-cols-3 grid-rows-3 gap-[1.3px] text-[#1677FF]">
+              <span
+                v-for="pixel in LOADING_PIXEL_COUNT"
+                :key="pixel"
+                class="chat-loading-pixel size-full rounded-[1px] bg-current"
+                :style="loadingPixelStyle(pixel - 1)"
+              ></span>
+            </span>
+            <span class="font-medium">工作中</span>
             <span v-if="liveGenerationSpeed" class="whitespace-nowrap text-[11px] text-slate-400">~{{ liveGenerationSpeed }} tok/s</span>
             <span v-if="liveElapsedMs" class="whitespace-nowrap text-[11px] text-slate-400">用时 {{ formatTotalDurationLabel(liveElapsedMs) }}</span>
             <!-- 等待期知识轮播：内联在用时之后，不额外占一行 -->

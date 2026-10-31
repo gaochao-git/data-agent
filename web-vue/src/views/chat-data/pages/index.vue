@@ -12,6 +12,8 @@ import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import '../styles/markdown.css'
 // z-index 层级变量（:root CSS 变量，本模块层级唯一事实来源，定义见文件头注释）
 import '../styles/z-index.css'
+// 「工作中」九宫格像素动画（流式状态行指示器，定义见文件头注释）
+import '../styles/loading-pixel.css'
 import useUserStore from '@/store/modules/user'
 import { getDatasources, createConversation, generateConversationTitle, getConversationContext, getSemanticConfigs, getMySemanticConfigs, createSemanticConfig, getDatasourceSchema } from '../api'
 import { listDashboards, type Dashboard } from '../api/dashboard'
