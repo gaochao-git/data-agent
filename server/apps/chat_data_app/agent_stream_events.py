@@ -299,6 +299,9 @@ class _ToolStreamState:
         self.progress_line_counts: dict[str, tuple[int, int]] = {}
         # 已推送的流式 intent，用于 intent 未变化时去重
         self.progress_intents: dict[str, str] = {}
+        # 工具开始运行的后端时间（tool_started 事件时刻）：完成事件缺失 ToolTimingMiddleware
+        # 盖章时（如被技能前置/审批等外层中间件拦下的失败）用它兜底，保证每个工具都有耗时。
+        self.tool_started_at: dict[str, int] = {}
 
     def visible_tool_count(self) -> int:
         return _visible_tool_count(self.tool_names)
@@ -435,6 +438,10 @@ class _ToolStreamState:
         tool_additional_kwargs = msg_data.get("additional_kwargs") or {}
         msg_data["started_at_ms"] = tool_additional_kwargs.get("started_at_ms")
         msg_data["ended_at_ms"] = tool_additional_kwargs.get("ended_at_ms")
+        # task 工具携带的子图 token 用量：随完成事件下发，前端任务卡/过程面板展示
+        subagent_token_usage = tool_additional_kwargs.get("subagent_token_usage")
+        if isinstance(subagent_token_usage, dict) and subagent_token_usage:
+            msg_data["subagent_token_usage"] = subagent_token_usage
         if tool_call_id:
             msg_data["accumulated_args"] = _parse_tool_args_buffer(
                 self.args_buffer.get(tool_call_id, ""),
@@ -454,13 +461,34 @@ class _ToolStreamState:
         data = dict(tool_payload)
         # 前端 onToolLifecycle 只读 args 字段，补齐一份与 accumulated_args 同源，直播侧才能展示参数。
         data["args"] = tool_payload.get("accumulated_args") or {}
+        self._fill_missing_timing(data)
         return _format_tool_lifecycle_event(event_type, data)
+
+    def _fill_missing_timing(self, data: dict[str, Any]) -> None:
+        """补齐工具完成事件的起止时间（后端计时，前端只展示不计算）。
+
+        正常路径由 ToolTimingMiddleware 盖章；被外层中间件（技能前置/审批/MCP 拦截等）
+        提前拒绝时 ToolMessage 上没有时间，这里用 tool_started 事件时刻兜底。
+        """
+        tool_call_id = str(data.get("tool_call_id") or "")
+        started_at_ms = data.get("started_at_ms") or self.tool_started_at.get(tool_call_id)
+        ended_at_ms = data.get("ended_at_ms")
+        if not started_at_ms:
+            return
+        if not ended_at_ms:
+            ended_at_ms = int(time.time() * 1000)
+        data["started_at_ms"] = started_at_ms
+        data["ended_at_ms"] = max(int(ended_at_ms), int(started_at_ms))
+        if tool_call_id:
+            self.tool_started_at.pop(tool_call_id, None)
 
     def _running_event(self, tool_call_id: str, tool_name: str, args: dict[str, Any] | None) -> list[str]:
         _register_running_tool(self.running_tool_ids, tool_call_id)
         if tool_call_id in self.emitted_running_tool_ids:
             return []
         self.emitted_running_tool_ids.add(tool_call_id)
+        started_at_ms = int(time.time() * 1000)
+        self.tool_started_at.setdefault(tool_call_id, started_at_ms)
         payload = {
             "tool_name": tool_name,
             "tool_call_id": tool_call_id,
@@ -469,7 +497,7 @@ class _ToolStreamState:
             "status": "running",
             "args": args or {},
             # 直播侧 tool_started 占位即带开始时间（epoch 毫秒）；结果事件以 ToolTimingMiddleware 盖章值为准。
-            "started_at_ms": int(time.time() * 1000),
+            "started_at_ms": started_at_ms,
         }
         return [
             _format_tool_lifecycle_event(SSE_EVENT_TOOL_STARTED, payload),

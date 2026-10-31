@@ -8,6 +8,7 @@ import type {
   ChatDataContextCompressionEvent,
   ChatDataTokenUsage,
   SubagentContextUsage,
+  SubagentTokenUsage,
   SubagentTrailItem,
   ToolCallInfo,
   Message,
@@ -132,6 +133,7 @@ interface HistoryMessagePayload {
   reasoning_turn_id?: unknown
   subagent_trail?: unknown
   subagent_context_usage?: unknown
+  subagent_token_usage?: unknown
   generation_stats?: unknown
 }
 
@@ -224,6 +226,9 @@ const normalizeSubagentTrail = (value: unknown): SubagentTrailItem[] | undefined
         args: item.args && typeof item.args === 'object' ? item.args as Record<string, unknown> : {},
         result: typeof item.result === 'string' ? item.result : '',
         status,
+        // 计时是可选项：缺失时不落键，历史快照与原 trail 保持同构
+        ...(typeof item.started_at_ms === 'number' ? { started_at_ms: item.started_at_ms } : {}),
+        ...(typeof item.ended_at_ms === 'number' ? { ended_at_ms: item.ended_at_ms } : {}),
       })
     }
   }
@@ -241,11 +246,44 @@ const normalizeSubagentContextUsage = (value: unknown): SubagentContextUsage | u
   }
   const usedTokens = toNonNegativeInt(raw.used_tokens)
   if (usedTokens <= 0) return undefined
+  const contextWindow = toNonNegativeInt(raw.context_window)
+  const percent = toNonNegativeInt(raw.percent)
+  const budgetPercent = toNonNegativeInt(raw.budget_percent)
+  // 旧快照只有 percent（当时是「占收尾阈值」口径）：归一到 budget_percent，
+  // 窗口百分比缺失时不硬编——前端据此退回「预算 N%」展示，避免伪造成窗口占比。
+  if (!contextWindow && !budgetPercent) {
+    return {
+      used_tokens: usedTokens,
+      threshold_tokens: toNonNegativeInt(raw.threshold_tokens),
+      budget_percent: percent,
+    }
+  }
   return {
     used_tokens: usedTokens,
     threshold_tokens: toNonNegativeInt(raw.threshold_tokens),
-    percent: toNonNegativeInt(raw.percent),
+    context_window: contextWindow || undefined,
+    percent: contextWindow ? percent : undefined,
+    budget_percent: budgetPercent,
   }
+}
+
+// 子智能体 token 用量（billing 口径）：随 task 的 tool_result payload 持久化，历史回放还原
+const normalizeSubagentTokenUsage = (value: unknown): SubagentTokenUsage | undefined => {
+  if (!value || typeof value !== 'object') return undefined
+  const raw = value as Record<string, unknown>
+  const toNonNegativeInt = (item: unknown): number | undefined => {
+    const parsed = Number(item)
+    return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : undefined
+  }
+  const usage: SubagentTokenUsage = {
+    input_tokens: toNonNegativeInt(raw.input_tokens),
+    output_tokens: toNonNegativeInt(raw.output_tokens),
+    total_tokens: toNonNegativeInt(raw.total_tokens),
+    cache_read_input_tokens: toNonNegativeInt(raw.cache_read_input_tokens),
+    cache_creation_input_tokens: toNonNegativeInt(raw.cache_creation_input_tokens),
+    reasoning_tokens: toNonNegativeInt(raw.reasoning_tokens),
+  }
+  return Object.values(usage).some(item => item !== undefined) ? usage : undefined
 }
 
 const withHistoryToolResult = (
@@ -254,6 +292,7 @@ const withHistoryToolResult = (
   subagentTrail?: SubagentTrailItem[],
   timing?: Pick<ToolCallInfo, 'started_at_ms' | 'ended_at_ms'>,
   subagentContextUsage?: SubagentContextUsage,
+  subagentTokenUsage?: SubagentTokenUsage,
 ): ToolCallInfo => {
   let renderId: string | undefined
   let renderType: ToolCallInfo['renderType']
@@ -281,6 +320,7 @@ const withHistoryToolResult = (
     semanticParams,
     subagentTrail,
     subagentContextUsage: subagentContextUsage ?? toolCall.subagentContextUsage,
+    subagentTokenUsage: subagentTokenUsage ?? toolCall.subagentTokenUsage,
     started_at_ms: timing?.started_at_ms ?? toolCall.started_at_ms ?? null,
     ended_at_ms: timing?.ended_at_ms ?? toolCall.ended_at_ms ?? null,
   }
@@ -408,8 +448,11 @@ export const buildHistoryMessagesFromEvents = (historyEvents: unknown): Message[
     const subagentTrail = normalizeSubagentTrail(messagePayload.subagent_trail)
     const timing = readExecutionTiming(messagePayload)
     const subagentContextUsage = normalizeSubagentContextUsage(messagePayload.subagent_context_usage)
+    const subagentTokenUsage = normalizeSubagentTokenUsage(messagePayload.subagent_token_usage)
     target.toolCalls = target.toolCalls.map(toolCall => (
-      toolCall.tool_call_id === toolCallId ? withHistoryToolResult(toolCall, result, subagentTrail, timing, subagentContextUsage) : toolCall
+      toolCall.tool_call_id === toolCallId
+        ? withHistoryToolResult(toolCall, result, subagentTrail, timing, subagentContextUsage, subagentTokenUsage)
+        : toolCall
     ))
   }
   return displayMessages
@@ -534,8 +577,11 @@ export const buildHistoryMessages = (
     const subagentTrail = normalizeSubagentTrail(rawMessage.subagent_trail)
     const timing = readExecutionTiming(rawMessage)
     const subagentContextUsage = normalizeSubagentContextUsage(rawMessage.subagent_context_usage)
+    const subagentTokenUsage = normalizeSubagentTokenUsage(rawMessage.subagent_token_usage)
     target.toolCalls = target.toolCalls.map(toolCall => (
-      toolCall.tool_call_id === toolCallId ? withHistoryToolResult(toolCall, result, subagentTrail, timing, subagentContextUsage) : toolCall
+      toolCall.tool_call_id === toolCallId
+        ? withHistoryToolResult(toolCall, result, subagentTrail, timing, subagentContextUsage, subagentTokenUsage)
+        : toolCall
     ))
   }
 

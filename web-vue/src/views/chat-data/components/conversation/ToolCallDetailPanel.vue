@@ -2,7 +2,8 @@
 import { computed, ref, watch } from 'vue'
 import type { PropType } from 'vue'
 import type { ToolCallInfo } from '../../types'
-import { getToolCompactDescription, getToolDisplayName, getDataAnalyzingActionName, formatToolDuration, formatToolTimingText, parseFileDiffResult, isFileDiffOffloaded } from '../../utils/toolDisplay'
+import { getToolCompactDescription, getToolDisplayName, getDataAnalyzingActionName, formatToolTimingText, parseFileDiffResult, isFileDiffOffloaded } from '../../utils/toolDisplay'
+import { useToolTiming } from '../../composables/useToolTiming'
 import FileDiffViewer from '../FileDiffViewer.vue'
 
 // 注意：Props 用运行时声明 + PropType（不用外部类型做 defineProps<T> 泛型），
@@ -77,7 +78,7 @@ const STATUS_META: Record<ToolCallInfo['status'], { label: string; className: st
   error: { label: '执行失败', className: 'text-red-500' },
 }
 const statusMeta = computed(() => STATUS_META[props.toolCall?.status || 'running'])
-const durationText = computed(() => formatToolDuration(props.toolCall?.started_at_ms, props.toolCall?.ended_at_ms))
+const { durationText } = useToolTiming(() => props.toolCall?.started_at_ms, () => props.toolCall?.ended_at_ms)
 const timingText = computed(() => formatToolTimingText(props.toolCall?.started_at_ms, props.toolCall?.ended_at_ms))
 const hasTiming = computed(() => Boolean(props.toolCall?.started_at_ms || props.toolCall?.ended_at_ms))
 </script>

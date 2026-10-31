@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { isScrolledToBottom } from '../../utils/scrollFollow'
 
 interface Props {
   open: boolean
@@ -9,13 +10,16 @@ interface Props {
   showTrigger?: boolean
   /** 是否渲染面板头部的关闭按钮（✕）。调用方若已有其它开关入口可传 false 隐藏。 */
   showClose?: boolean
+  /** 内容增长时贴底自动跟随（与主对话同一口径：距底 100px 内跟随，用户上翻暂停） */
+  autoFollow?: boolean
 }
 
-withDefaults(defineProps<Props>(), {
+const props = withDefaults(defineProps<Props>(), {
   subtitle: '',
   triggerLabel: '工作区',
   showTrigger: true,
   showClose: true,
+  autoFollow: false,
 })
 
 const emit = defineEmits<{
@@ -30,6 +34,66 @@ const MIN_CHAT_WIDTH = 280
 
 // 宽度：null 表示沿用样式表的 `w-[40%]`（含 min/max clamp），首次拖拽后转为固定 px
 const panelWidth = ref<number | null>(null)
+
+// ---- 内容贴底跟随（子智能体过程流式增长时自动滚到最新）----
+// 与主对话共用 isScrolledToBottom（100px 阈值）：用户上翻查看历史即暂停，
+// 滚回底部附近后内容继续增长时自动恢复跟随。
+const bodyRef = ref<HTMLElement | null>(null)
+const bodyNearBottom = ref(true)
+let bodyMutationObserver: MutationObserver | null = null
+let followFrame: number | null = null
+
+const scheduleFollowScroll = () => {
+  if (!props.autoFollow || !bodyNearBottom.value || followFrame !== null) return
+  followFrame = requestAnimationFrame(() => {
+    followFrame = null
+    const element = bodyRef.value
+    if (element && bodyNearBottom.value) element.scrollTop = element.scrollHeight
+  })
+}
+
+const handleBodyScroll = () => {
+  const element = bodyRef.value
+  if (element) bodyNearBottom.value = isScrolledToBottom(element)
+}
+
+const stopFollow = () => {
+  bodyMutationObserver?.disconnect()
+  bodyMutationObserver = null
+  if (followFrame !== null) {
+    cancelAnimationFrame(followFrame)
+    followFrame = null
+  }
+}
+
+const startFollow = () => {
+  stopFollow()
+  const element = bodyRef.value
+  if (!element) return
+  bodyNearBottom.value = true
+  bodyMutationObserver = new MutationObserver(scheduleFollowScroll)
+  bodyMutationObserver.observe(element, { childList: true, subtree: true, characterData: true })
+}
+
+/**
+ * 跟随开关与面板可见性必须一起判定：面板是 v-if 渲染的，点开工具详情时
+ * autoFollow 变 true 的那一刻 body 还没挂载，只监听 autoFollow 会拿到空 ref
+ * → observer 永远不挂，表现为「不自动滚、底部内容看不到」。统一等 DOM 更新后再挂。
+ */
+const syncFollow = async () => {
+  await nextTick()
+  if (!props.autoFollow || !props.open) {
+    stopFollow()
+    return
+  }
+  if (!bodyMutationObserver) startFollow()
+  bodyNearBottom.value = true
+  scheduleFollowScroll()
+}
+
+onMounted(() => { void syncFollow() })
+onBeforeUnmount(stopFollow)
+watch([() => props.autoFollow, () => props.open], () => { void syncFollow() }, { flush: 'post' })
 const isResizing = ref(false)
 const panelRef = ref<HTMLElement | null>(null)
 let detachResizeListeners: (() => void) | null = null
@@ -106,7 +170,7 @@ onBeforeUnmount(stopResize)
   <aside
     v-if="open"
     ref="panelRef"
-    class="relative flex w-[40%] min-w-[380px] max-w-[580px] flex-col border-l border-slate-200 bg-white"
+    class="relative flex min-h-0 w-[40%] min-w-[380px] max-w-[580px] flex-col border-l border-slate-200 bg-white"
     :style="panelStyle"
   >
     <!-- 左边缘拖拽调宽 -->
@@ -149,7 +213,12 @@ onBeforeUnmount(stopResize)
         <i class="fa-solid fa-xmark"></i>
       </button>
     </div>
-    <div class="flex-1 overflow-auto p-4">
+    <div
+      ref="bodyRef"
+      class="min-h-0 flex-1 overflow-auto p-4"
+      data-side-panel-body
+      @scroll.passive="handleBodyScroll"
+    >
       <slot />
     </div>
   </aside>

@@ -512,13 +512,35 @@ export interface ToolCallInfo {
   // 子智能体上下文用量快照（subagent_context_usage 事件实时更新，最终值随
   // task 结果持久化、历史回放还原）：task 卡片标题行显示「上下文 N%」徽标
   subagentContextUsage?: SubagentContextUsage
+  // 子智能体 token 用量（billing 口径，主对话统计不含它）：随 task 结果持久化
+  subagentTokenUsage?: SubagentTokenUsage
 }
 
-/** 子智能体上下文用量快照（percent 相对子图预算告警线，≥100 表示已注入收尾告警）。 */
+/**
+ * 子智能体上下文用量快照。
+ * - `percent`：占**模型上下文窗口**比例，与主对话「上下文 N%」同口径；
+ * - `budget_percent`：占**收尾阈值**（窗口 × 压缩触发比例）比例，≥100 触发提前收尾；
+ * - 旧会话快照没有窗口字段，只有 `percent`（当时是预算口径）→ 回放时归一到 `budget_percent`。
+ */
 export interface SubagentContextUsage {
   used_tokens: number
   threshold_tokens: number
-  percent: number
+  context_window?: number
+  percent?: number
+  budget_percent?: number
+}
+
+/**
+ * 子智能体 token 用量（billing 口径，按子图每次模型调用累加）。
+ * 主对话的 token 统计只算主图模型调用，这是一份独立的子智能体消耗汇总。
+ */
+export interface SubagentTokenUsage {
+  input_tokens?: number
+  output_tokens?: number
+  total_tokens?: number
+  cache_read_input_tokens?: number
+  cache_creation_input_tokens?: number
+  reasoning_tokens?: number
 }
 
 /** 子智能体内部过程条目：工具调用与中间文本输出按发生顺序混排。 */
@@ -537,6 +559,9 @@ export interface SubagentTrailItem {
   // 思考过程（流式增量拼接；默认收起，仅流式进行中露尾部预览）
   thinking?: string
   thinkingTruncated?: boolean
+  // 内层工具执行起止时间（epoch 毫秒）：后端 ToolTimingMiddleware 盖章，随事件下发并持久化
+  started_at_ms?: number | null
+  ended_at_ms?: number | null
 }
 
 // 消息内容片段（用于按顺序渲染文本和工具调用）
@@ -699,7 +724,13 @@ export interface ToolLifecycleEventData extends ToolEventData {
   // subagent_context_usage：子图上下文用量快照（每个节点更新后推送一次，最终值随 task 结果持久化）
   used_tokens?: number
   threshold_tokens?: number
+  /** task 完成事件：子图 token 用量（billing 口径） */
+  subagent_token_usage?: SubagentTokenUsage
+  context_window?: number
+  /** 占模型上下文窗口比例（与主对话同口径） */
   percent?: number
+  /** 占收尾阈值比例（100% 触发提前收尾） */
+  budget_percent?: number
 }
 
 // 语义层配置

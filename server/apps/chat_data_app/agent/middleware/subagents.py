@@ -18,6 +18,7 @@
 """
 
 import re
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from itertools import count
@@ -71,6 +72,7 @@ from .skill_prerequisite import SkillPrerequisiteMiddleware
 from .tool_call_normalizer import create_tool_call_name_normalizer_middleware
 from .tool_execution_fence import create_tool_execution_fence_middleware
 from .tool_result import create_tool_result_middleware, externalize_tool_text
+from .tool_timing import create_tool_timing_middleware
 
 logger = get_logger(__name__)
 
@@ -488,6 +490,9 @@ def _subagent_budget_meta(
     return {
         "static_tokens": static_tokens,
         "threshold_tokens": threshold_tokens,
+        # 上下文窗口：前端展示与主对话同口径的「占窗口百分比」需要它
+        # （测试桩/降级预算可能没有该字段，回退到阈值，保证百分比口径不炸）
+        "context_window": max(int(getattr(budget, "context_window", 0) or threshold_tokens), 1),
     }
 
 
@@ -554,6 +559,9 @@ def _compile_subagent(spec: SubagentSpec, run_controls: Any = None) -> Any:
             system_prompt=effective_system_prompt,
         ),
         SkillPrerequisiteMiddleware(TOOL_REQUIRED_SKILLS),
+        # 与主图同源的工具计时：ToolMessage 上盖 started_at_ms / ended_at_ms，
+        # 过程事件与持久化 trail 都能带上内层工具耗时（顺序同主图：在结果/错误包装外层）。
+        create_tool_timing_middleware(),
         create_tool_call_name_normalizer_middleware(tools),
         create_tool_result_middleware(),
         ToolErrorMiddleware(on_tool_error),
@@ -766,6 +774,7 @@ def _iter_subagent_stream_events(
     streamed_text_ids: set[str] | None = None,
     streamed_think_ids: set[str] | None = None,
     id_resolver: Callable[[Any], str] | None = None,
+    tool_started_at: dict[str, int] | None = None,
 ) -> list[dict[str, Any]]:
     """把子图节点更新里的消息翻译成子智能体内部过程事件序列。
 
@@ -803,9 +812,9 @@ def _iter_subagent_stream_events(
                         already_streamed=bool(message_id and message_id in streamed_text_ids),
                     )
                 )
-            events.extend(_subagent_tool_started_events(message, parent_tool_call_id))
+            events.extend(_subagent_tool_started_events(message, parent_tool_call_id, tool_started_at))
         elif isinstance(message, ToolMessage):
-            events.append(_subagent_tool_result_event(message, parent_tool_call_id))
+            events.append(_subagent_tool_result_event(message, parent_tool_call_id, tool_started_at))
     return events
 
 
@@ -845,36 +854,138 @@ def _subagent_message_event(
     }
 
 
-def _subagent_tool_started_events(message: AIMessage, parent_tool_call_id: str | None) -> list[dict[str, Any]]:
-    """把 AIMessage 的 tool_calls 翻译成 tool_started 事件（args 尽力规整为 dict）。"""
+def _subagent_tool_started_events(
+    message: AIMessage,
+    parent_tool_call_id: str | None,
+    tool_started_at: dict[str, int] | None = None,
+) -> list[dict[str, Any]]:
+    """把 AIMessage 的 tool_calls 翻译成 tool_started 事件（args 尽力规整为 dict）。
+
+    ``tool_started_at`` 仅直播路径传入：记录每个内层工具开始的后端时间，供完成事件
+    在 ToolTimingMiddleware 未盖章（被技能前置等外层中间件拒绝）时兜底计时。
+    """
     events: list[dict[str, Any]] = []
     for tool_call in getattr(message, "tool_calls", None) or []:
         if not isinstance(tool_call, dict):
             continue
-        events.append(
-            {
-                "event_type": SSE_EVENT_TOOL_STARTED,
-                "tool_call_id": tool_call.get("id"),
-                "tool_name": tool_call.get("name"),
-                "args": coerce_tool_call_args(tool_call.get("args")) or {},
-                "parent_tool_call_id": parent_tool_call_id,
-            }
-        )
+        tool_call_id = str(tool_call.get("id") or "")
+        event: dict[str, Any] = {
+            "event_type": SSE_EVENT_TOOL_STARTED,
+            "tool_call_id": tool_call.get("id"),
+            "tool_name": tool_call.get("name"),
+            "args": coerce_tool_call_args(tool_call.get("args")) or {},
+            "parent_tool_call_id": parent_tool_call_id,
+        }
+        if tool_started_at is not None and tool_call_id:
+            started_at_ms = tool_started_at.setdefault(tool_call_id, int(time.time() * 1000))
+            event["started_at_ms"] = started_at_ms
+        events.append(event)
     return events
 
 
-def _subagent_tool_result_event(message: ToolMessage, parent_tool_call_id: str | None) -> dict[str, Any]:
+def _read_tool_timing(message: ToolMessage) -> dict[str, int]:
+    """读取 ToolTimingMiddleware 盖在 ToolMessage 上的起止时间（epoch 毫秒）。"""
+    additional_kwargs = getattr(message, "additional_kwargs", None) or {}
+    timing: dict[str, int] = {}
+    for key in ("started_at_ms", "ended_at_ms"):
+        value = additional_kwargs.get(key)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            continue
+        timing[key] = value
+    return timing
+
+
+def _non_negative_int(value: Any) -> int:
+    """非负整数安全转换：布尔/负数/非数字一律按 0 处理。"""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return 0
+    return value
+
+
+def _usage_totals_from_metadata(usage: Any) -> dict[str, int] | None:
+    """单次模型调用的 usage_metadata → 统一 token 计数；无有效用量返回 None。"""
+    if not isinstance(usage, dict):
+        return None
+    input_tokens = _non_negative_int(usage.get("input_tokens"))
+    output_tokens = _non_negative_int(usage.get("output_tokens"))
+    total_tokens = _non_negative_int(usage.get("total_tokens")) or input_tokens + output_tokens
+    if total_tokens <= 0:
+        return None
+    input_details = usage.get("input_token_details")
+    output_details = usage.get("output_token_details")
+    input_details = input_details if isinstance(input_details, dict) else {}
+    output_details = output_details if isinstance(output_details, dict) else {}
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": total_tokens,
+        "cache_read_input_tokens": _non_negative_int(input_details.get("cache_read")),
+        "cache_creation_input_tokens": _non_negative_int(input_details.get("cache_creation")),
+        "reasoning_tokens": _non_negative_int(output_details.get("reasoning")),
+    }
+
+
+def _aggregate_subagent_token_usage(messages: list) -> dict[str, int]:
+    """汇总子图内每次模型调用的 token 用量（billing 口径，不是上下文占用估算）。
+
+    子图 ``callbacks=[]`` 且不挂主图 ContextUsageMiddleware，主对话 token 统计看不到
+    这部分；这里按消息上的 ``usage_metadata`` 累加，随 task 结果持久化供前端展示。
+    """
+    totals = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_tokens": 0,
+    }
+    for message in messages or []:
+        part = _usage_totals_from_metadata(getattr(message, "usage_metadata", None))
+        if part is None:
+            continue
+        for key, value in part.items():
+            totals[key] += value
+    return totals if totals["total_tokens"] > 0 else {}
+
+
+def _subagent_process_snapshot(messages: list, context_usage: Any) -> dict[str, Any]:
+    """task 结果上附带的子过程快照：上下文用量 + 子图 token 用量。"""
+    snapshot: dict[str, Any] = {}
+    if isinstance(context_usage, dict) and context_usage:
+        snapshot["subagent_context_usage"] = context_usage
+    # 子图 token 用量（billing 口径）：主对话统计不含子智能体消耗，这里单独随结果持久化
+    token_usage = _aggregate_subagent_token_usage(messages)
+    if token_usage:
+        snapshot["subagent_token_usage"] = token_usage
+    return snapshot
+
+
+def _subagent_tool_result_event(
+    message: ToolMessage,
+    parent_tool_call_id: str | None,
+    tool_started_at: dict[str, int] | None = None,
+) -> dict[str, Any]:
     """把 ToolMessage 翻译成 tool_completed / tool_failed 事件（结果截断为预览）。"""
     raw = _plain_text(getattr(message, "content", ""))
     status = str(getattr(message, "status", "") or "")
-    return {
+    event: dict[str, Any] = {
         "event_type": SSE_EVENT_TOOL_FAILED if status == "error" else SSE_EVENT_TOOL_COMPLETED,
         "tool_call_id": getattr(message, "tool_call_id", None),
         "tool_name": getattr(message, "name", None),
         "content": _truncate_text(raw, SUBAGENT_RESULT_PREVIEW_MAX_CHARS),
         "truncated": len(raw) > SUBAGENT_RESULT_PREVIEW_MAX_CHARS,
         "parent_tool_call_id": parent_tool_call_id,
+        **_read_tool_timing(message),
     }
+    if tool_started_at is not None:
+        tool_call_id = str(event.get("tool_call_id") or "")
+        started_at_ms = event.get("started_at_ms") or tool_started_at.get(tool_call_id)
+        if tool_call_id and started_at_ms:
+            ended_at_ms = event.get("ended_at_ms") or int(time.time() * 1000)
+            event["started_at_ms"] = started_at_ms
+            event["ended_at_ms"] = max(int(ended_at_ms), int(started_at_ms))
+            tool_started_at.pop(tool_call_id, None)
+    return event
 
 
 class _SubagentStreamState:
@@ -892,6 +1003,8 @@ class _SubagentStreamState:
         self.anonymous_seq = count(1)
         self.anonymous_ids: dict[int, str] = {}
         self.collected: list = []
+        # 内层工具开始的后端时间：完成事件缺少工具计时盖章时兜底（每个内层工具都有耗时）
+        self.tool_started_at: dict[str, int] = {}
 
     def resolve_anonymous_id(self, message: Any) -> str:
         """给缺失 id 的消息生成稳定 id。
@@ -1013,12 +1126,22 @@ class _SubagentStreamState:
 
 
 def _subagent_usage_snapshot(usage_meta: dict[str, int], collected: list) -> dict[str, int]:
-    """按静态口径+已收集消息估算当前子图上下文用量快照。"""
+    """按静态口径+已收集消息估算当前子图上下文用量快照。
+
+    两个百分比口径明确分工：
+    - ``percent``：占**模型上下文窗口**比例，与主对话「上下文 N%」同口径，可直接对比；
+    - ``budget_percent``：占**收尾阈值**（窗口 × 压缩触发比例）比例，100% 触发提前收尾，
+      前端用它做告警色/tooltip。
+    """
     used = usage_meta["static_tokens"] + count_messages_tokens(collected)
+    threshold_tokens = max(usage_meta["threshold_tokens"], 1)
+    context_window = max(int(usage_meta.get("context_window") or threshold_tokens), 1)
     return {
         "used_tokens": used,
-        "threshold_tokens": usage_meta["threshold_tokens"],
-        "percent": min(int(used * 100 / max(usage_meta["threshold_tokens"], 1)), 999),
+        "threshold_tokens": threshold_tokens,
+        "context_window": context_window,
+        "percent": min(int(used * 100 / context_window), 999),
+        "budget_percent": min(int(used * 100 / threshold_tokens), 999),
     }
 
 
@@ -1045,6 +1168,7 @@ def _process_subagent_chunk(
         stream_state.streamed_text_ids,
         stream_state.streamed_think_ids,
         stream_state.resolve_anonymous_id,
+        stream_state.tool_started_at,
     ):
         _emit_subagent_tool_event(writer, event)
     return True
@@ -1133,6 +1257,7 @@ def _collect_subagent_tool_results(messages: list) -> dict[str, dict[str, Any]]:
         tool_results[tool_call_id] = {
             "status": "error" if str(getattr(message, "status", "") or "") == "error" else "completed",
             "result": _truncate_text(raw, SUBAGENT_RESULT_PREVIEW_MAX_CHARS),
+            **_read_tool_timing(message),
         }
     return tool_results
 
@@ -1153,7 +1278,7 @@ def _trail_message_entry(message: AIMessage, message_id: str) -> dict[str, Any]:
 def _trail_tool_entry(tool_call: dict[str, Any], tool_results: dict[str, dict[str, Any]]) -> dict[str, Any]:
     tool_call_id = str(tool_call.get("id") or "")
     outcome = tool_results.get(tool_call_id) or {}
-    return {
+    entry = {
         "kind": "tool",
         "id": tool_call_id,
         "tool_name": str(tool_call.get("name") or ""),
@@ -1161,6 +1286,10 @@ def _trail_tool_entry(tool_call: dict[str, Any], tool_results: dict[str, dict[st
         "result": outcome.get("result", ""),
         "status": outcome.get("status", "completed"),
     }
+    for key in ("started_at_ms", "ended_at_ms"):
+        if isinstance(outcome.get(key), int):
+            entry[key] = outcome[key]
+    return entry
 
 
 def _trail_orphan_tool_entry(
@@ -1169,7 +1298,7 @@ def _trail_orphan_tool_entry(
 ) -> dict[str, Any]:
     tool_call_id = str(getattr(message, "tool_call_id", "") or "")
     outcome = tool_results[tool_call_id]
-    return {
+    entry = {
         "kind": "tool",
         "id": tool_call_id,
         "tool_name": str(getattr(message, "name", "") or ""),
@@ -1177,6 +1306,10 @@ def _trail_orphan_tool_entry(
         "result": outcome["result"],
         "status": outcome["status"],
     }
+    for key in ("started_at_ms", "ended_at_ms"):
+        if isinstance(outcome.get(key), int):
+            entry[key] = outcome[key]
+    return entry
 
 
 def _append_ai_message_trail(
@@ -1349,10 +1482,9 @@ async def _build_task_tool_impl(
     trail = _build_trail_snapshot(messages)
     if trail:
         additional_kwargs["subagent_trail"] = trail
-    # 上下文用量快照：随 ToolMessage 持久化，历史回放时前端在 task 卡片
-    # 标题行还原最后一次用量（直播路径走 subagent_context_usage SSE 事件）。
-    if context_usage:
-        additional_kwargs["subagent_context_usage"] = context_usage
+    # 上下文用量 + 子图 token 用量：随 ToolMessage 持久化，历史回放还原
+    # （直播路径上下文用量走 subagent_context_usage SSE 事件，token 用量随完成事件下发）。
+    additional_kwargs.update(_subagent_process_snapshot(messages, context_usage))
     return Command(
         update={
             "messages": [

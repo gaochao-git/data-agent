@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 from langchain_core.messages import ToolMessage
+from langgraph.types import Command
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
@@ -58,3 +59,20 @@ async def test_non_tool_message_result_passes_through_unchanged():
         return sentinel
 
     assert await middleware.awrap_tool_call(_request(), handler) is sentinel
+
+
+@pytest.mark.asyncio
+async def test_command_result_tool_message_is_stamped_with_execution_timing():
+    """返回 Command 的工具（task/子智能体）同样盖上起止时间，历史回放才有总耗时。"""
+    middleware = create_tool_timing_middleware()
+    message = ToolMessage(content="子智能体报告", name="task", tool_call_id="call-1")
+
+    async def handler(_request):
+        return Command(update={"messages": [message]})
+
+    result = await middleware.awrap_tool_call(_request(), handler)
+
+    assert isinstance(result, Command)
+    stamped = result.update["messages"][0]
+    assert isinstance(stamped.additional_kwargs["started_at_ms"], int)
+    assert stamped.additional_kwargs["ended_at_ms"] >= stamped.additional_kwargs["started_at_ms"]

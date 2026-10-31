@@ -10,9 +10,10 @@ import type { ExecutionTargetOption, ToolCallInfo } from '../types'
 import QueryResultPanel from './QueryResultPanel.vue'
 import SaveToPanelModal from './SaveToPanelModal.vue'
 import { extractGeneratedSqlFromToolCall, extractQueryResultPayload, extractSemanticDslFromArgs, getQueryResultError, parseQueryResultEnvelope } from '../utils/semanticTool'
-import { compactInlineText, getToolDisplayName, getToolTechnicalDescription, formatToolDuration, formatToolTimingText, parseFileDiffResult, isFileDiffOffloaded } from '../utils/toolDisplay'
+import { compactInlineText, getToolDisplayName, getToolTechnicalDescription, formatToolTimingText, parseFileDiffResult, isFileDiffOffloaded } from '../utils/toolDisplay'
 import FileDiffViewer from './FileDiffViewer.vue'
 import { useSaveToPanel } from '../composables/useSaveToPanel'
+import { useToolTiming } from '../composables/useToolTiming'
 
 interface Props {
   toolCall: ToolCallInfo
@@ -125,18 +126,11 @@ const displayName = computed(() => props.toolCall.display_name?.trim() || getToo
 
 // 状态
 const isRunning = computed(() => props.toolCall.status === 'generating' || props.toolCall.status === 'running')
-const isCompleted = computed(() => props.toolCall.status === 'completed')
 const isError = computed(() => props.toolCall.status === 'error')
 
 // 工具执行耗时与起止时间（格式化逻辑在 utils/toolDisplay 共享）
-const durationText = computed(() => formatToolDuration(props.toolCall.started_at_ms, props.toolCall.ended_at_ms))
+const { durationText } = useToolTiming(() => props.toolCall.started_at_ms, () => props.toolCall.ended_at_ms)
 const timingTitle = computed(() => formatToolTimingText(props.toolCall.started_at_ms, props.toolCall.ended_at_ms))
-
-const getResultField = (field: string): string => {
-  const result = String(props.toolCall.result || '')
-  const match = result.match(new RegExp(`^${field}=([^\\n]+)`, 'm'))
-  return match?.[1]?.trim() || ''
-}
 
 const compactDescription = computed(() => {
   // 流式 intent：args 未解析完成时由 tool_progress 提前推送，长耗时工具执行中即可展示目的

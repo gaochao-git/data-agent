@@ -929,6 +929,10 @@ def _serialize_tool_message(message: ToolMessage) -> dict[str, Any]:
     context_usage = (getattr(message, "additional_kwargs", None) or {}).get("subagent_context_usage")
     if isinstance(context_usage, dict) and context_usage:
         payload["subagent_context_usage"] = context_usage
+    # 子图 token 用量（billing 口径）：主对话 token 统计不含子智能体消耗，历史回放单独还原
+    token_usage = (getattr(message, "additional_kwargs", None) or {}).get("subagent_token_usage")
+    if isinstance(token_usage, dict) and token_usage:
+        payload["subagent_token_usage"] = token_usage
     return payload
 
 

@@ -222,16 +222,13 @@ async def test_task_tool_forwards_inner_tool_events_to_parent_stream(monkeypatch
     started = written_filtered[0]
     completed = written_filtered[1]
     assert written_filtered[2]["event"]["content"] == "1 + 1 = 2"
-    assert started == {
-        "type": "subagent_tool",
-        "event": {
-            "event_type": "tool_started",
-            "tool_call_id": "inner-1",
-            "tool_name": "calculator_tool",
-            "args": {"expression": "1 + 1"},
-            "parent_tool_call_id": "call_1",
-        },
-    }
+    assert started["type"] == "subagent_tool"
+    started_event = started["event"]
+    assert started_event["event_type"] == "tool_started"
+    assert started_event["tool_call_id"] == "inner-1"
+    assert started_event["tool_name"] == "calculator_tool"
+    assert started_event["args"] == {"expression": "1 + 1"}
+    assert started_event["parent_tool_call_id"] == "call_1"
     assert completed["type"] == "subagent_tool"
     event = completed["event"]
     assert event["event_type"] == "tool_completed"
@@ -283,6 +280,143 @@ def test_iter_subagent_stream_events_truncates_long_results():
     assert failed["event_type"] == "tool_failed"
     assert failed["content"] == "失败原因"
     assert failed["truncated"] is False
+
+
+def test_iter_subagent_stream_events_fills_missing_tool_timing():
+    """内层工具被前置校验拒绝时，完成事件用 tool_started 时刻兜底，保证有耗时。"""
+    tool_started_at: dict[str, int] = {}
+    events = subagents_module._iter_subagent_stream_events(
+        [
+            AIMessage(content="", tool_calls=[{"id": "inner-1", "name": "data_analyzing_tool", "args": {}}]),
+            ToolMessage(content="请先加载技能", tool_call_id="inner-1", name="data_analyzing_tool", status="error"),
+        ],
+        parent_tool_call_id="call_1",
+        tool_started_at=tool_started_at,
+    )
+
+    started = next(event for event in events if event["event_type"] == "tool_started")
+    failed = next(event for event in events if event["event_type"] == "tool_failed")
+    assert isinstance(started["started_at_ms"], int)
+    assert failed["started_at_ms"] == started["started_at_ms"]
+    assert failed["ended_at_ms"] >= failed["started_at_ms"]
+    # 完成后回收计时记录，避免长会话累积
+    assert tool_started_at == {}
+
+
+def test_aggregate_subagent_token_usage_sums_model_calls():
+    """子图 token 用量按每个模型调用的 usage_metadata 累加（含缓存/推理明细）。"""
+    usage = subagents_module._aggregate_subagent_token_usage(
+        [
+            AIMessage(
+                content="一步",
+                usage_metadata={
+                    "input_tokens": 1_000,
+                    "output_tokens": 100,
+                    "total_tokens": 1_100,
+                    "input_token_details": {"cache_read": 400, "cache_creation": 20},
+                    "output_token_details": {"reasoning": 30},
+                },
+            ),
+            AIMessage(
+                content="二步",
+                usage_metadata={
+                    "input_tokens": 2_000,
+                    "output_tokens": 200,
+                    "total_tokens": 2_200,
+                    "input_token_details": {"cache_read": 600},
+                },
+            ),
+            ToolMessage(content="工具结果", tool_call_id="inner-1", name="file_read"),
+            AIMessage(content="无 usage"),
+        ]
+    )
+    assert usage == {
+        "input_tokens": 3_000,
+        "output_tokens": 300,
+        "total_tokens": 3_300,
+        "cache_read_input_tokens": 1_000,
+        "cache_creation_input_tokens": 20,
+        "reasoning_tokens": 30,
+    }
+    assert subagents_module._aggregate_subagent_token_usage([]) == {}
+
+
+@pytest.mark.asyncio
+async def test_task_tool_stamps_subagent_token_usage(monkeypatch):
+    """task 结果附带子图 token 用量，供前端任务卡/过程面板展示。"""
+
+    class FakeRunnable:
+        async def astream(self, _state, _config, *, stream_mode):
+            yield (
+                "updates",
+                {
+                    "model": {
+                        "messages": [
+                            AIMessage(
+                                content="结论",
+                                usage_metadata={"input_tokens": 500, "output_tokens": 50, "total_tokens": 550},
+                            )
+                        ]
+                    }
+                },
+            )
+
+    monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
+    tool = build_task_tool([_spec()])
+
+    result = await tool.coroutine(description="盘点", subagent_type="explore", runtime=_fake_runtime())
+
+    tool_message = result.update["messages"][0]
+    assert tool_message.additional_kwargs["subagent_token_usage"] == {
+        "input_tokens": 500,
+        "output_tokens": 50,
+        "total_tokens": 550,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_tokens": 0,
+    }
+
+
+def test_tool_result_event_and_trail_carry_execution_timing():
+    """内层工具耗时与主图同源：ToolMessage 上的起止时间随事件转发并落 trail。"""
+
+    message = ToolMessage(
+        content="2",
+        tool_call_id="inner-1",
+        name="calculator_tool",
+        additional_kwargs={"started_at_ms": 1_000, "ended_at_ms": 1_250},
+    )
+    event = subagents_module._subagent_tool_result_event(message, "call_1")
+    assert event["started_at_ms"] == 1_000
+    assert event["ended_at_ms"] == 1_250
+
+    # 非法计时（布尔/负数）不落事件
+    invalid = subagents_module._subagent_tool_result_event(
+        ToolMessage(
+            content="x",
+            tool_call_id="inner-2",
+            name="file_read",
+            additional_kwargs={"started_at_ms": True, "ended_at_ms": -1},
+        ),
+        "call_1",
+    )
+    assert "started_at_ms" not in invalid
+    assert "ended_at_ms" not in invalid
+
+    results = subagents_module._collect_subagent_tool_results([message])
+    assert results["inner-1"]["started_at_ms"] == 1_000
+    assert results["inner-1"]["ended_at_ms"] == 1_250
+    trail_entry = subagents_module._trail_tool_entry(
+        {"id": "inner-1", "name": "calculator_tool", "args": {}},
+        results,
+    )
+    assert trail_entry["started_at_ms"] == 1_000
+    assert trail_entry["ended_at_ms"] == 1_250
+
+    # 历史孤儿工具条目同样保留计时
+    orphan = subagents_module._trail_orphan_tool_entry(message, results)
+    assert orphan["started_at_ms"] == 1_000
+    assert orphan["ended_at_ms"] == 1_250
 
 
 def test_iter_subagent_stream_events_emits_text_before_tool_calls():
@@ -1332,7 +1466,7 @@ async def test_task_tool_emits_context_usage_events_and_stamps_tool_message(monk
     monkeypatch.setattr(
         subagents_module,
         "get_model_context_budget",
-        lambda model_id: SimpleNamespace(compression_trigger_tokens=10_000),
+        lambda model_id: SimpleNamespace(compression_trigger_tokens=10_000, context_window=100_000),
     )
 
     class FakeRunnable:
@@ -1356,12 +1490,17 @@ async def test_task_tool_emits_context_usage_events_and_stamps_tool_message(monk
     assert len(usage_events) == 2
     assert usage_events[0]["used_tokens"] <= usage_events[1]["used_tokens"]
     assert usage_events[1]["threshold_tokens"] == 10_000
-    assert usage_events[1]["percent"] == usage_events[1]["used_tokens"] * 100 // 10_000
+    assert usage_events[1]["context_window"] == 100_000
+    # percent = 占模型窗口（与主对话同口径）；budget_percent = 占收尾阈值
+    assert usage_events[1]["percent"] == usage_events[1]["used_tokens"] * 100 // 100_000
+    assert usage_events[1]["budget_percent"] == usage_events[1]["used_tokens"] * 100 // 10_000
     stamped = result.update["messages"][0].additional_kwargs["subagent_context_usage"]
     assert stamped == {
         "used_tokens": usage_events[1]["used_tokens"],
         "threshold_tokens": usage_events[1]["threshold_tokens"],
+        "context_window": usage_events[1]["context_window"],
         "percent": usage_events[1]["percent"],
+        "budget_percent": usage_events[1]["budget_percent"],
     }
 
 

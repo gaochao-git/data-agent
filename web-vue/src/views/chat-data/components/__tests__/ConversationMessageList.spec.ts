@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { shallowMount } from '@vue/test-utils'
+import { mount } from '@vue/test-utils'
 import ConversationMessageList from '../conversation/ConversationMessageList.vue'
 import type { Message } from '../../types'
 
@@ -21,12 +21,17 @@ const streamingAssistantMessage: Message = {
   segments: [{ type: 'thinkingSegment', thinkingSegmentId: 'thinking-1' }],
 }
 
-const mountList = (messages: Message[], extraProps: Record<string, unknown> = {}) => shallowMount(ConversationMessageList, {
+const mountList = (messages: Message[], extraProps: Record<string, unknown> = {}) => mount(ConversationMessageList, {
   props: { messages, ...extraProps },
   global: {
     stubs: {
       ElTooltip: { template: '<div><slot /><slot name="content" /></div>' },
-      // shallowMount 的自动 stub 不渲染默认 slot，footer 内的复制按钮与 AI 声明需显式透出
+      ElPopover: { template: '<div><slot /><slot name="reference" /></div>' },
+      // 重型叶子组件：保留消息层真实渲染，只隔离工具/查询结果与等待轮播
+      ToolCallList: true,
+      QueryResultPanel: true,
+      WaitingTip: true,
+      // footer 内的复制按钮与 AI 声明需显式透出
       AssistantMessageFooter: { template: '<div><slot /><span>本回答由 AI 生成</span></div>' },
       // 思考正文抽为 ThinkingSegmentBody（流式粘底跟随），stub 需保留容器类与内容供断言
       ThinkingSegmentBody: {
@@ -347,6 +352,29 @@ describe('ConversationMessageList', () => {
       expect(selection.removeAllRanges).toHaveBeenCalledTimes(1)
       // 上抛后浮层收起
       expect(wrapper.text()).not.toContain('添加到对话')
+    })
+
+    it('真实点击序列（mouseup → click）下浮层按钮不失效：添加到对话/复制都生效', async () => {
+      const wrapper = mountWithAssistant()
+      const { anchorNode, selection } = stubSelection()
+      await mouseUpOnBubble(wrapper, anchorNode)
+
+      // 浏览器点击序列：mousedown → mouseup → click；mouseup 会冒泡到列表根节点
+      const addButton = wrapper.findAll('button').find(button => button.text().includes('添加到对话'))!
+      await addButton.trigger('mouseup', { button: 0 })
+      await addButton.trigger('click')
+      expect(wrapper.emitted('addToConversation')).toEqual([['选中的片段']])
+      expect(selection.removeAllRanges).toHaveBeenCalledTimes(1)
+
+      // 复制按钮同理：mouseup 后 click 仍然命中
+      const copyWrapper = mountWithAssistant()
+      const copySelection = stubSelection()
+      await mouseUpOnBubble(copyWrapper, copySelection.anchorNode)
+      const copyToolbar = copyWrapper.find('[data-quote-toolbar]')
+      const copyButton = copyToolbar.findAll('button').find(button => button.text().includes('复制'))!
+      await copyButton.trigger('mouseup', { button: 0 })
+      await copyButton.trigger('click')
+      expect(copyTextToClipboardMock).toHaveBeenCalledWith('选中的片段')
     })
 
     it('流式中的助手气泡不触发划选浮层', async () => {

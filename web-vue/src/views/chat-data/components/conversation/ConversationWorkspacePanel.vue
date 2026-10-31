@@ -24,6 +24,8 @@ import HtmlPagePreview from './HtmlPagePreview.vue'
 import CodeFilePreview from './CodeFilePreview.vue'
 import MermaidFilePreview from './MermaidFilePreview.vue'
 import ToolCallDetailPanel from './ToolCallDetailPanel.vue'
+import { useToolTiming } from '../../composables/useToolTiming'
+import SubagentTrail from './SubagentTrail.vue'
 import {
   deleteConversationWorkspaceFile,
   getConversationWorkspaceFileContent,
@@ -54,7 +56,6 @@ import {
   normalizeVisiblePath,
   buildProducedFileTree,
   buildProducedFiles,
-  toSandboxDisplayPath,
   type ProducedFile,
 } from '../../utils/consoleFileTree'
 import { evictWorkspaceFileCache } from '../../utils/workspacePreviewCache'
@@ -83,7 +84,28 @@ const emit = defineEmits<{
   conversationCreated: [conversationId: string]
   /** 工作区 yaml 一键导入语义模型：文件内容已在面板内读取完毕 */
   importSemanticYaml: [files: SemanticYamlFile[]]
+  /** 完整过程区内层工具再次选中：切到对应工具详情 */
+  selectTool: [toolCall: ToolCallInfo]
 }>()
+
+/** 选中 task 调用时，工具详情 tab 额外展示「完整过程」（与主对话共用同一套消息/工具组件） */
+const subagentTaskCall = computed(() => {
+  const toolCall = props.activeToolCall
+  return toolCall?.tool_name === 'task' && (toolCall.subagentTrail?.length ?? 0) > 0 ? toolCall : null
+})
+
+/**
+ * 工具详情 tab 的展示方式（仅子智能体 task 调用可选）：
+ * - agent：智能体模式，按聊天记录复用主对话消息组件；
+ * - generic：通用模式，与普通工具一致，只看参数与结果。
+ * 两种模式互斥渲染，不堆叠。
+ */
+const toolViewMode = ref<'agent' | 'generic'>('agent')
+
+watch(() => props.activeToolCall?.tool_call_id, () => {
+  // 每次选中新的子智能体任务默认回到聊天方式；普通工具不涉及该状态
+  if (subagentTaskCall.value) toolViewMode.value = 'agent'
+})
 
 const selectedConsoleFilePath = ref<string | null>(null)
 // 默认只收起 uploads / workspace，outputs 保持展开——理由见 consoleFileTree.ts 里的常量注释。
@@ -128,11 +150,35 @@ const producedFileTree = computed(() => buildProducedFileTree(producedFiles.valu
 const sidePanelTitle = computed(() => props.tab === 'console' ? '工作区' : '工具详情')
 // 工作区 tab 不再在头部重复显示根路径——文件树根节点已经写着同一个路径，
 // 需要恢复时把下面的 '' 换回 producedFileTree.value.root
-const sidePanelSubtitle = computed(() => (
-  props.tab === 'console'
-    ? ''
-    : '工具调用参数与结果'
-))
+const subagentTypeLabel = computed(() => {
+  const type = subagentTaskCall.value?.args?.subagent_type
+  return typeof type === 'string' ? type.trim() : ''
+})
+
+/** 子智能体总耗时：起点/终点都取后端 task 调用的计时（交给过程视图按主对话样式展示） */
+const { elapsedMs: subagentElapsedMs, isRunning: subagentTimingRunning } = useToolTiming(
+  () => subagentTaskCall.value?.started_at_ms,
+  () => subagentTaskCall.value?.ended_at_ms,
+)
+
+const sidePanelSubtitle = computed(() => {
+  if (props.tab === 'console') return ''
+  if (subagentTaskCall.value) {
+    if (toolViewMode.value === 'generic') return '工具调用参数与结果'
+    // 智能体模式：类型 + 子智能体合并成一个称呼；上下文占比占原来那一格，不再单独挂右侧徽标
+    const usage = subagentTaskCall.value.subagentContextUsage
+    const usageLabel = usage
+      ? (typeof usage.percent === 'number'
+          ? `上下文 ${usage.percent}%`
+          : (typeof usage.budget_percent === 'number' ? `预算 ${usage.budget_percent}%` : ''))
+      : ''
+    const agentLabel = subagentTypeLabel.value
+      ? `${subagentTypeLabel.value} 子智能体`
+      : '子智能体'
+    return [agentLabel, usageLabel].filter(Boolean).join(' · ')
+  }
+  return '工具调用参数与结果'
+})
 
 const selectedConsoleFile = computed(() => {
   const selectedPath = selectedConsoleFilePath.value
@@ -938,6 +984,7 @@ defineExpose({
     :open="open"
     :title="sidePanelTitle"
     :subtitle="sidePanelSubtitle"
+    :auto-follow="tab === 'tool' && toolViewMode === 'agent' && Boolean(subagentTaskCall)"
     :show-trigger="false"
     :show-close="false"
     @open="$emit('update:tab', 'console'); $emit('update:open', true)"
@@ -966,10 +1013,34 @@ defineExpose({
       </button>
     </template>
 
-    <template v-if="tab === 'console'" #header-extra>
-      <div class="flex shrink-0 items-center pr-[13px]">
+    <template #header-extra>
+      <div v-if="tab === 'console'" class="flex shrink-0 items-center pr-[13px]">
         <div class="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] leading-none text-slate-500">
           {{ isWorkspaceFilesLoading ? '加载中' : `${producedFiles.length} 个文件` }}
+        </div>
+      </div>
+      <div v-else-if="tab === 'tool' && subagentTaskCall" class="flex shrink-0 items-center gap-2">
+        <div class="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5 text-[11px]">
+          <button
+            type="button"
+            class="inline-flex items-center gap-1 rounded-md px-1.5 py-1 transition-colors"
+            :class="toolViewMode === 'agent' ? 'bg-white text-[#1f82d9] shadow-sm' : 'text-slate-500 hover:text-slate-700'"
+            title="智能体模式：按聊天方式查看子智能体过程"
+            @click="toolViewMode = 'agent'"
+          >
+            <i class="fa-solid fa-robot text-[10px]"></i>
+            <span>智能体</span>
+          </button>
+          <button
+            type="button"
+            class="inline-flex items-center gap-1 rounded-md px-1.5 py-1 transition-colors"
+            :class="toolViewMode === 'generic' ? 'bg-white text-[#1f82d9] shadow-sm' : 'text-slate-500 hover:text-slate-700'"
+            title="通用模式：与普通工具一致，只查看参数与结果"
+            @click="toolViewMode = 'generic'"
+          >
+            <i class="fa-solid fa-wrench text-[10px]"></i>
+            <span>通用</span>
+          </button>
         </div>
       </div>
     </template>
@@ -1392,7 +1463,19 @@ defineExpose({
     </template>
 
     <template v-else>
+      <SubagentTrail
+        v-if="subagentTaskCall && toolViewMode === 'agent'"
+        :tool-call="subagentTaskCall"
+        :conversation-id="conversationId"
+        :active-tool-call-id="activeToolCall?.tool_call_id || null"
+        :elapsed-ms="subagentElapsedMs"
+        :timing-running="subagentTimingRunning"
+        :token-usage="subagentTaskCall?.subagentTokenUsage || null"
+        class="mb-3"
+        @select-tool="emit('selectTool', $event)"
+      />
       <ToolCallDetailPanel
+        v-else
         :tool-call="activeToolCall"
         :conversation-id="conversationId || ''"
         :format-text="formatText"

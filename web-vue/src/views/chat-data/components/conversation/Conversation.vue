@@ -28,12 +28,13 @@ import WorkspaceFileMentionMenu from './WorkspaceFileMentionMenu.vue'
 import PresentedFileArtifacts from './PresentedFileArtifacts.vue'
 import SaveToPanelModal from '../SaveToPanelModal.vue'
 import { parseDateTimeValue, formatLocalDateTime, toGenerationStats } from '../../utils'
-import { extractSemanticParamsFromArgs, getRenderableQueryResultData } from '../../utils/semanticTool'
+import { normalizeToolCallForDisplay, shouldInlineRenderQueryResult } from '../../utils/semanticTool'
 import { admitInboxMessages, reconcileInboxSnapshot, type InboxQueueItem, type InboxQueueType } from '../../utils/inboxQueue'
 import UserQuestionCard from './UserQuestionCard.vue'
 import AnalysisProgress from './AnalysisProgress.vue'
 import { deriveAnalysisTodos } from '../../utils/analysisTodos'
 import { createTopReachTracker } from '../../utils/scrollReach'
+import { isScrolledToBottom } from '../../utils/scrollFollow'
 import { normalizeVisiblePath } from '../../utils/consoleFileTree'
 import {
   getCardChartType,
@@ -916,6 +917,8 @@ const findToolCallById = (id: string | null) => {
           args: inner.args || {},
           result: inner.result,
           status: inner.status || 'running',
+          started_at_ms: inner.started_at_ms ?? null,
+          ended_at_ms: inner.ended_at_ms ?? null,
         }
       }
     }
@@ -928,37 +931,8 @@ const activeToolCall = computed(() => {
   return findToolCallById(id)
 })
 
-// 查询结果渲染工具：data_analyzing_tool 的 execute_query
-const isQueryResultRenderTool = (toolInfo?: ToolCallInfo | null): boolean => {
-  if (!toolInfo) return false
-  return toolInfo.tool_name === 'data_analyzing_tool' && (toolInfo.args || {})?.action === 'execute_query'
-}
-
-const buildSemanticQueryToolRenderInfo = (toolInfo: ToolCallInfo): ToolCallInfo => {
-  if (!isQueryResultRenderTool(toolInfo)) return toolInfo
-  const result = String(toolInfo.result || '')
-  const queryResultData = getRenderableQueryResultData(result)
-  const semanticParams = extractSemanticParamsFromArgs(toolInfo.args) || toolInfo.semanticParams
-  return {
-    ...toolInfo,
-    renderId: queryResultData || toolInfo.renderId,
-    renderType: queryResultData ? 'queryResult' : toolInfo.renderType,
-    semanticParams,
-  }
-}
-
-const normalizeToolCallForDisplay = (toolInfo: ToolCallInfo): ToolCallInfo => (
-  isQueryResultRenderTool(toolInfo) ? buildSemanticQueryToolRenderInfo(toolInfo) : toolInfo
-)
-
-const shouldInlineRenderToolCall = (toolCall?: ToolCallInfo | null): boolean => (
-  Boolean(
-    isQueryResultRenderTool(toolCall) &&
-    toolCall?.status === 'completed' &&
-    toolCall?.renderId &&
-    toolCall?.renderType === 'queryResult'
-  )
-)
+// 查询结果渲染口径统一在 utils/semanticTool（主对话 / 子智能体过程共用）
+const shouldInlineRenderToolCall = (toolCall?: ToolCallInfo | null): boolean => shouldInlineRenderQueryResult(toolCall)
 
 const handleImportWorkspaceSkill = async (path: string) => {
   const conversationId = localConversationId.value
@@ -1094,7 +1068,10 @@ const handleCreateDashboardFromPreview = async (message: Message, tool: ToolCall
 }
 
 const selectToolCall = (toolCall: ToolCallInfo) => {
-  if (activeToolCallId.value === toolCall.tool_call_id && sidePanelOpen.value && sidePanelTab.value === 'tool') {
+  // task 卡（子智能体过程）打开后不切换关闭：入口同时承担「查看完整过程」，
+  // 再点一次关闭会让入口行为不可预期；普通工具/内层工具保持再点一次收起。
+  const isSubagentTask = toolCall.tool_name === 'task'
+  if (!isSubagentTask && activeToolCallId.value === toolCall.tool_call_id && sidePanelOpen.value && sidePanelTab.value === 'tool') {
     sidePanelOpen.value = false
     return
   }
@@ -1253,13 +1230,8 @@ watch(
   },
 )
 
-const getConversationDisplayContent = (content: string) => content.trim()
+// 距底部阈值内视为「贴底」：与右侧子智能体过程共用 utils/scrollFollow 的同一口径
 
-// 距底部 100px 内视为「贴底」：内容增长时自动跟随，也容忍用户的小幅回滚
-const NEAR_BOTTOM_THRESHOLD_PX = 100
-
-const isScrolledToBottom = (container: HTMLElement) =>
-  container.scrollHeight - container.scrollTop - container.clientHeight < NEAR_BOTTOM_THRESHOLD_PX
 
 // 滚到顶自动续页：只在「从阈值之外向上越过阈值」时放行一次（见 utils/scrollReach）
 const topReach = createTopReachTracker()
@@ -1692,7 +1664,9 @@ const upsertSubagentTrailItem = (event: ToolLifecycleEventData) => {
     const usage: SubagentContextUsage = {
       used_tokens: event.used_tokens,
       threshold_tokens: event.threshold_tokens ?? 0,
-      percent: event.percent ?? 0,
+      context_window: event.context_window,
+      percent: event.percent,
+      budget_percent: event.budget_percent,
     }
     const mergeParent = (tool: ToolCallInfo): ToolCallInfo => (
       { ...tool, subagentContextUsage: usage }
@@ -1772,13 +1746,22 @@ const upsertSubagentTrailItem = (event: ToolLifecycleEventData) => {
     args: { ...(event.args || {}) },
     result: event.content || event.result,
     status: event.type === 'tool_failed' ? 'error' : event.type === 'tool_completed' ? 'completed' : 'running',
+    started_at_ms: event.started_at_ms ?? null,
+    ended_at_ms: event.ended_at_ms ?? null,
   }
   commitTrail((trail) => {
     const idx = trail.findIndex(item => item.id === entryId)
     if (idx >= 0) {
       const prev = trail[idx]
       if (!prev) return trail
-      trail[idx] = { ...prev, ...entry, args: { ...(prev.args || {}), ...(entry.args || {}) } }
+      trail[idx] = {
+        ...prev,
+        ...entry,
+        args: { ...(prev.args || {}), ...(entry.args || {}) },
+        // tool_started 事件不带计时，完成事件才补齐：缺省时保留已有值
+        started_at_ms: entry.started_at_ms ?? prev.started_at_ms ?? null,
+        ended_at_ms: entry.ended_at_ms ?? prev.ended_at_ms ?? null,
+      }
     } else {
       trail.push(entry)
     }
@@ -2135,6 +2118,7 @@ const submitAnalysisQuery = async (
             streamingIntent: typeof event.intent === 'string' && event.intent ? event.intent : existing?.streamingIntent,
             status: isFailed ? 'error' : isCompleted ? 'completed' : 'running',
             subagentTrail: existing?.subagentTrail,
+            subagentTokenUsage: event.subagent_token_usage || existing?.subagentTokenUsage,
             started_at_ms: event.started_at_ms ?? existing?.started_at_ms ?? null,
             ended_at_ms: event.ended_at_ms ?? existing?.ended_at_ms ?? null,
           }
@@ -2617,7 +2601,6 @@ const handleKeyDown = (event: KeyboardEvent) => {
           :active-tool-call-id="activeToolCallId"
           :conversation-id="localConversationId"
           :on-save="handleSaveToDashboard"
-          :display-content="getConversationDisplayContent"
           :resolve-tool-call="getRenderableMessageToolCall"
           :should-inline-render-result="shouldInlineRenderToolCall"
           :run-active="isGenerating || hasActiveRun"
@@ -2977,6 +2960,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
       :ensure-conversation-id="ensureConversationId"
       @conversation-created="handlePanelConversationCreated"
       @import-semantic-yaml="emit('importSemanticYaml', $event)"
+      @select-tool="selectToolCall"
     />
 
     <el-dialog v-model="isSkillManagerOpen" width="min(1280px, 92vw)" title="技能管理" append-to-body>
