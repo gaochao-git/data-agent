@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElPopover, ElTooltip } from 'element-plus'
-import type { ExecutionTargetOption, Message, MessageAttachment, MessageSegment, ToolCallInfo } from '../../types'
+import type { ExecutionTargetOption, Message, MessageAttachment, ToolCallInfo } from '../../types'
 import { useMermaidRenderer } from '../../composables/useMermaidRenderer'
 import { extractGeneratedSqlFromToolCall } from '../../utils/semanticTool'
 import { fileIconNameByExtension } from '../../utils/fileTypeIcon'
@@ -295,39 +295,12 @@ const loadingPixelStyle = (index: number): Record<string, string> => (
 
 // ---- 工作过程回合级折叠 ----
 // 思考分段、工具卡片（含查询结果面板）与中间叙述文本整体收进「工作过程」一行，
-// 只留最终回答在外（对齐 ZCode：折叠区 = 最终回答行之前的过程行）。
-// 默认态：流式中展开（看得见过程），结束后折叠（答案为主）；
+// 只留最终回答在外。默认态：流式中/当前 run 活跃时展开，结束后折叠；
 // 用户手动切换后以手动态为准（覆盖默认）。
 const workProcessExpanded = ref<Record<string, boolean>>({})
 
-const hasWorkProcess = (message: Message): boolean => (
-  Boolean(message.thinkingSegments?.length || message.toolCalls?.length)
-)
-
-const isWorkProcessExpanded = (message: Message): boolean => {
-  const override = workProcessExpanded.value[message.id]
-  return override ?? Boolean(message.isStreaming)
-}
-
-const toggleWorkProcess = (message: Message): void => {
-  workProcessExpanded.value = {
-    ...workProcessExpanded.value,
-    [message.id]: !isWorkProcessExpanded(message),
-  }
-}
-
-const workProcessSummary = (message: Message): string => {
-  const parts: string[] = []
-  const thinkingCount = message.thinkingSegments?.length ?? 0
-  const toolCount = message.toolCalls?.length ?? 0
-  if (thinkingCount) parts.push(`思考 ${thinkingCount}`)
-  if (toolCount) parts.push(`工具 ${toolCount}`)
-  return parts.join(' · ')
-}
-
-// ZCode 同款切分（buildConversationTurnWorkSegments）：最后一段可见文本 = 最终回答，
-// 它之前的所有过程行（思考/工具/中间叙述文本）进折叠区，它自身留在折叠区外。
-// 无可见文本时返回 -1：此时折叠区收全部过程行。
+// ZCode 同款切分：最后一段可见文本 = 最终回答，它之前的过程行走折叠区。
+// 无可见文本时返回 -1：说明没有可留在折叠区外的最终回答。
 const findFinalAnswerSegmentIndex = (message: Message): number => {
   const segments = message.segments ?? []
   for (let index = segments.length - 1; index >= 0; index--) {
@@ -339,6 +312,68 @@ const findFinalAnswerSegmentIndex = (message: Message): number => {
 
 const isFinalAnswerSegment = (message: Message, index: number): boolean => (
   findFinalAnswerSegmentIndex(message) === index
+)
+
+// 渲染、按钮显隐和摘要统计必须共用 segments 这一事实源，
+// 否则会出现“有工作过程按钮、展开后却没有可渲染内容”的空壳。
+const hasWorkProcess = (message: Message): boolean => (
+  (message.segments ?? []).some(segment => {
+    if (segment.type === 'thinkingSegment') return Boolean(getThinkingSegment(message, segment.thinkingSegmentId))
+    if (segment.type === 'toolCall') return Boolean(resolveToolCall(message, segment.toolCallId))
+    return false
+  })
+)
+
+const activeRunStartIndex = computed(() => {
+  if (!props.runActive) return -1
+  for (let i = props.messages.length - 1; i >= 0; i--) {
+    if (props.messages[i]?.role === 'user') return i
+  }
+  return -1
+})
+
+const isCurrentRunMessage = (message: Message): boolean => {
+  if (activeRunStartIndex.value < 0) return false
+  const index = props.messages.findIndex(item => item.id === message.id)
+  return index > activeRunStartIndex.value
+}
+
+const isWorkProcessExpanded = (message: Message): boolean => {
+  const override = workProcessExpanded.value[message.id]
+  if (override !== undefined) return override
+  // 没有最终回答时必须展开，否则折叠后气泡只剩一个空按钮。
+  if (findFinalAnswerSegmentIndex(message) < 0) return true
+  return isCurrentRunMessage(message) || Boolean(message.isStreaming)
+}
+
+const toggleWorkProcess = (message: Message): void => {
+  workProcessExpanded.value = {
+    ...workProcessExpanded.value,
+    [message.id]: !isWorkProcessExpanded(message),
+  }
+}
+
+const workProcessSummary = (message: Message): string => {
+  const segments = message.segments ?? []
+  const thinkingCount = segments.filter(segment => segment.type === 'thinkingSegment').length
+  const toolCount = segments.filter(segment => segment.type === 'toolCall').length
+  const parts: string[] = []
+  if (thinkingCount) parts.push(`思考 ${thinkingCount}`)
+  if (toolCount) parts.push(`工具 ${toolCount}`)
+  return parts.join(' · ')
+}
+
+// 消息列表切换/裁剪后清理已不存在的展开态，避免同 id 复用时状态错位。
+watch(
+  () => props.messages.map(message => message.id),
+  ids => {
+    const valid = new Set(ids)
+    const current = workProcessExpanded.value
+    const next = Object.fromEntries(Object.entries(current).filter(([id]) => valid.has(id)))
+    if (Object.keys(next).length !== Object.keys(current).length) {
+      workProcessExpanded.value = next
+    }
+  },
 )
 
 const shouldShowStreamingStatus = (message: Message): boolean => (
@@ -358,22 +393,12 @@ const getCopyableAssistantContent = (message: Message): string => {
       if (finalText) return finalText
     }
   }
+  // 有 segments 但没有最终回答：隐藏的中间叙述不能通过复制泄露出去。
+  if (message.segments?.length) return getDisplayContent(message.error || '')
   return getDisplayContent(message.content) || getDisplayContent(message.error || '')
 }
 
 const shouldShowMessageCopyButton = (message: Message): boolean => Boolean(getCopyableAssistantContent(message))
-
-/**
- * run 活跃时，只有「当前 run 产生」的消息（最后一条 user 消息之后的）才抑制 footer；
- * 历史轮次的 footer 保持稳定，不随新 run 启停闪烁。
- */
-const activeRunStartIndex = computed(() => {
-  if (!props.runActive) return -1
-  for (let i = props.messages.length - 1; i >= 0; i--) {
-    if (props.messages[i]?.role === 'user') return i
-  }
-  return -1
-})
 
 const shouldShowAssistantFooter = (message: Message, index: number): boolean => {
   if (message.isStreaming) return false
@@ -552,6 +577,8 @@ const handleCopyAssistantMessage = async (message: Message) => {
               v-if="hasWorkProcess(message)"
               type="button"
               class="group inline-flex max-w-full items-center gap-2 self-start rounded-md border-none bg-transparent px-2.5 py-1.5 text-left text-xs font-medium text-slate-400 transition-colors duration-200 hover:text-slate-600"
+              :aria-expanded="isWorkProcessExpanded(message)"
+              :aria-controls="`work-process-${message.id}`"
               @click="toggleWorkProcess(message)"
             >
               <i class="fa-solid fa-list-check text-xs text-slate-400 transition-colors duration-200 group-hover:text-slate-600"></i>
@@ -563,11 +590,15 @@ const handleCopyAssistantMessage = async (message: Message) => {
               <i
                 :class="[
                   'fa-solid fa-chevron-right text-[10px] text-slate-400 transition-all duration-200 group-hover:text-slate-600',
-                  isWorkProcessExpanded(message) ? 'rotate-90 opacity-100' : 'opacity-0 group-hover:opacity-100',
+                  isWorkProcessExpanded(message) ? 'rotate-90 opacity-100' : 'opacity-60 group-hover:opacity-100',
                 ]"
               ></i>
             </button>
-            <div v-if="message.segments?.length" class="flex min-w-0 flex-col gap-3">
+            <div
+              v-if="message.segments?.length"
+              :id="`work-process-${message.id}`"
+              class="flex min-w-0 flex-col gap-3"
+            >
               <template v-for="(segment, index) in message.segments" :key="`${segment.type}-${index}`">
                 <div
                   v-if="segment.type === 'text' && getDisplayContent(segment.content)

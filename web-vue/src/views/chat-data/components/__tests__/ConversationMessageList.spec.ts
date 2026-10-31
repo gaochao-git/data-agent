@@ -87,12 +87,20 @@ describe('ConversationMessageList', () => {
   })
 
   it('folds the finished work process behind a toggle row and expands on click', async () => {
-    const wrapper = mountList([{ ...streamingAssistantMessage, isStreaming: false }])
+    const wrapper = mountList([{
+      ...streamingAssistantMessage,
+      isStreaming: false,
+      segments: [
+        { type: 'thinkingSegment', thinkingSegmentId: 'thinking-1' },
+        { type: 'text', content: '最终回答' },
+      ],
+    }])
 
     // 完成后默认折叠：思考正文隐藏，只剩「工作过程」一行 + 摘要
     expect(wrapper.text()).toContain('工作过程')
     expect(wrapper.text()).toContain('思考 1')
     expect(wrapper.find('.bg-slate-50').exists()).toBe(false)
+    expect(getWorkProcessButton(wrapper).attributes('aria-expanded')).toBe('false')
 
     await getWorkProcessButton(wrapper).trigger('click')
 
@@ -104,6 +112,15 @@ describe('ConversationMessageList', () => {
     await thinkingButton.trigger('click')
     expect(wrapper.find('.bg-slate-50').exists()).toBe(true)
     expect(wrapper.find('.bg-slate-50').text()).toContain(longThinkingContent)
+  })
+
+  it('auto-expands a finished work process when there is no final answer', () => {
+    const wrapper = mountList([{ ...streamingAssistantMessage, isStreaming: false }])
+
+    // 没有最终回答时不能把全部过程折叠掉，否则气泡只剩一个空按钮。
+    expect(wrapper.text()).toContain('工作过程')
+    expect(getThinkingButton(wrapper)).toBeTruthy()
+    expect(getWorkProcessButton(wrapper).attributes('aria-expanded')).toBe('true')
   })
 
   it('keeps the work process expanded while streaming and after manual toggle', async () => {
@@ -138,6 +155,39 @@ describe('ConversationMessageList', () => {
     expect(wrapper.text()).toContain('结论：数据已就绪。')
     expect(wrapper.text()).not.toContain('我先看一下数据分布。')
     expect(wrapper.find('.bg-slate-50').exists()).toBe(false)
+  })
+
+  it('does not show a work process button when only legacy arrays have content', () => {
+    const wrapper = mountList([{
+      id: 'assistant-legacy',
+      role: 'assistant',
+      content: '最终回答',
+      isStreaming: false,
+      thinkingSegments: [{ id: 'legacy-thinking', content: '旧思考', toolCallCount: 0 }],
+      segments: [],
+    }])
+
+    // 渲染源是 segments；没有可渲染过程行时不能出现空壳按钮。
+    expect(wrapper.text()).not.toContain('工作过程')
+    expect(wrapper.text()).toContain('最终回答')
+  })
+
+  it('keeps a finished work process open while its run is still active', () => {
+    const wrapper = mountList([
+      { id: 'user-run', role: 'user', content: '查一下', isStreaming: false },
+      {
+        ...streamingAssistantMessage,
+        id: 'assistant-run',
+        isStreaming: false,
+        segments: [
+          { type: 'thinkingSegment', thinkingSegmentId: 'thinking-1' },
+          { type: 'text', content: '阶段回答' },
+        ],
+      },
+    ], { runActive: true })
+
+    // 单条消息 isStreaming 提前结束，但当前 run 仍活跃，过程不应提前收起。
+    expect(getWorkProcessButton(wrapper).attributes('aria-expanded')).toBe('true')
   })
 
   it('copies only the final answer, not hidden intermediate narration', async () => {
