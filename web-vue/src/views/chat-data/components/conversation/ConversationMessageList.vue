@@ -576,12 +576,11 @@ const handleCopyAssistantMessage = async (message: Message) => {
             <button
               v-if="hasWorkProcess(message)"
               type="button"
-              class="group inline-flex max-w-full items-center gap-2 self-start rounded-md border-none bg-transparent px-2.5 py-1.5 text-left text-xs font-medium text-slate-400 transition-colors duration-200 hover:text-slate-600"
+              class="group inline-flex max-w-full items-center gap-2 self-start rounded-md border-none bg-transparent py-1.5 pl-0 pr-2.5 text-left text-xs font-medium text-slate-400 transition-colors duration-200 hover:text-slate-600"
               :aria-expanded="isWorkProcessExpanded(message)"
               :aria-controls="`work-process-${message.id}`"
               @click="toggleWorkProcess(message)"
             >
-              <i class="fa-solid fa-list-check text-xs text-slate-400 transition-colors duration-200 group-hover:text-slate-600"></i>
               <span>工作过程</span>
               <span
                 v-if="!isWorkProcessExpanded(message) && workProcessSummary(message)"

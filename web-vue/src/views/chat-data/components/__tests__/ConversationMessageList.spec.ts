@@ -119,6 +119,7 @@ describe('ConversationMessageList', () => {
 
     // 没有最终回答时不能把全部过程折叠掉，否则气泡只剩一个空按钮。
     expect(wrapper.text()).toContain('工作过程')
+    expect(getWorkProcessButton(wrapper).find('.fa-list-check').exists()).toBe(false)
     expect(getThinkingButton(wrapper)).toBeTruthy()
     expect(getWorkProcessButton(wrapper).attributes('aria-expanded')).toBe('true')
   })
