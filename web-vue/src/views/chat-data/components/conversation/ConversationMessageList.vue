@@ -293,6 +293,54 @@ const loadingPixelStyle = (index: number): Record<string, string> => (
       }
 )
 
+// ---- 工作过程回合级折叠 ----
+// 思考分段、工具卡片（含查询结果面板）与中间叙述文本整体收进「工作过程」一行，
+// 只留最终回答在外（对齐 ZCode：折叠区 = 最终回答行之前的过程行）。
+// 默认态：流式中展开（看得见过程），结束后折叠（答案为主）；
+// 用户手动切换后以手动态为准（覆盖默认）。
+const workProcessExpanded = ref<Record<string, boolean>>({})
+
+const hasWorkProcess = (message: Message): boolean => (
+  Boolean(message.thinkingSegments?.length || message.toolCalls?.length)
+)
+
+const isWorkProcessExpanded = (message: Message): boolean => {
+  const override = workProcessExpanded.value[message.id]
+  return override ?? Boolean(message.isStreaming)
+}
+
+const toggleWorkProcess = (message: Message): void => {
+  workProcessExpanded.value = {
+    ...workProcessExpanded.value,
+    [message.id]: !isWorkProcessExpanded(message),
+  }
+}
+
+const workProcessSummary = (message: Message): string => {
+  const parts: string[] = []
+  const thinkingCount = message.thinkingSegments?.length ?? 0
+  const toolCount = message.toolCalls?.length ?? 0
+  if (thinkingCount) parts.push(`思考 ${thinkingCount}`)
+  if (toolCount) parts.push(`工具 ${toolCount}`)
+  return parts.join(' · ')
+}
+
+// ZCode 同款切分（buildConversationTurnWorkSegments）：最后一段可见文本 = 最终回答，
+// 它之前的所有过程行（思考/工具/中间叙述文本）进折叠区，它自身留在折叠区外。
+// 无可见文本时返回 -1：此时折叠区收全部过程行。
+const findFinalAnswerSegmentIndex = (message: Message): number => {
+  const segments = message.segments ?? []
+  for (let index = segments.length - 1; index >= 0; index--) {
+    const segment = segments[index]
+    if (segment?.type === 'text' && getDisplayContent(segment.content)) return index
+  }
+  return -1
+}
+
+const isFinalAnswerSegment = (message: Message, index: number): boolean => (
+  findFinalAnswerSegmentIndex(message) === index
+)
+
 const shouldShowStreamingStatus = (message: Message): boolean => (
   hasVisibleAssistantContent(message.content)
   || Boolean(message.thinkingSegments?.length)
@@ -301,13 +349,16 @@ const shouldShowStreamingStatus = (message: Message): boolean => (
 
 const getCopyableAssistantContent = (message: Message): string => {
   if (message.role !== 'assistant') return ''
-  const segmentText = (message.segments || [])
-    .filter((segment): segment is Extract<MessageSegment, { type: 'text' }> => segment.type === 'text')
-    .map(segment => getDisplayContent(segment.content))
-    .filter(Boolean)
-    .join('\n\n')
-    .trim()
-  return segmentText || getDisplayContent(message.content) || getDisplayContent(message.error || '')
+  // 与折叠口径一致：只复制折叠区外的最终回答，中间叙述/思考/工具结果不可见也不复制。
+  const finalIndex = findFinalAnswerSegmentIndex(message)
+  if (finalIndex >= 0) {
+    const finalSegment = message.segments?.[finalIndex]
+    if (finalSegment?.type === 'text') {
+      const finalText = getDisplayContent(finalSegment.content).trim()
+      if (finalText) return finalText
+    }
+  }
+  return getDisplayContent(message.content) || getDisplayContent(message.error || '')
 }
 
 const shouldShowMessageCopyButton = (message: Message): boolean => Boolean(getCopyableAssistantContent(message))
@@ -497,16 +548,38 @@ const handleCopyAssistantMessage = async (message: Message) => {
             class="min-w-0 rounded-2xl rounded-bl-md border border-black/[0.06] bg-white p-4 shadow-[0_2px_8px_rgba(0,0,0,0.04)]"
             @mouseup="handleBubbleMouseUp($event, message)"
           >
+            <button
+              v-if="hasWorkProcess(message)"
+              type="button"
+              class="group inline-flex max-w-full items-center gap-2 self-start rounded-md border-none bg-transparent px-2.5 py-1.5 text-left text-xs font-medium text-slate-400 transition-colors duration-200 hover:text-slate-600"
+              @click="toggleWorkProcess(message)"
+            >
+              <i class="fa-solid fa-list-check text-xs text-slate-400 transition-colors duration-200 group-hover:text-slate-600"></i>
+              <span>工作过程</span>
+              <span
+                v-if="!isWorkProcessExpanded(message) && workProcessSummary(message)"
+                class="text-xs font-normal text-slate-400/80"
+              >{{ workProcessSummary(message) }}</span>
+              <i
+                :class="[
+                  'fa-solid fa-chevron-right text-[10px] text-slate-400 transition-all duration-200 group-hover:text-slate-600',
+                  isWorkProcessExpanded(message) ? 'rotate-90 opacity-100' : 'opacity-0 group-hover:opacity-100',
+                ]"
+              ></i>
+            </button>
             <div v-if="message.segments?.length" class="flex min-w-0 flex-col gap-3">
               <template v-for="(segment, index) in message.segments" :key="`${segment.type}-${index}`">
                 <div
-                  v-if="segment.type === 'text' && getDisplayContent(segment.content)"
+                  v-if="segment.type === 'text' && getDisplayContent(segment.content)
+                    && (isWorkProcessExpanded(message) || isFinalAnswerSegment(message, index))"
                   class="conversation-markdown min-w-0 text-sm leading-relaxed text-slate-700"
                   v-html="renderMarkdown(getDisplayContent(segment.content))"
                 ></div>
 
                 <div
-                  v-else-if="segment.type === 'thinkingSegment' && getThinkingSegment(message, segment.thinkingSegmentId)"
+                  v-else-if="segment.type === 'thinkingSegment'
+                    && isWorkProcessExpanded(message)
+                    && getThinkingSegment(message, segment.thinkingSegmentId)"
                   class="min-w-0"
                 >
                   <button
@@ -543,7 +616,12 @@ const handleCopyAssistantMessage = async (message: Message) => {
                   />
                 </div>
 
-                <div v-else-if="segment.type === 'toolCall' && resolveToolCall(message, segment.toolCallId)" class="min-w-0">
+                <div
+                  v-else-if="segment.type === 'toolCall'
+                    && isWorkProcessExpanded(message)
+                    && resolveToolCall(message, segment.toolCallId)"
+                  class="min-w-0"
+                >
                   <ToolCallList
                     :tool-calls="[resolveToolCall(message, segment.toolCallId)!]"
                     :datasource-id="datasourceId"

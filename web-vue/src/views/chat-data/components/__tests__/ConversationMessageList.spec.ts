@@ -3,6 +3,9 @@ import { shallowMount } from '@vue/test-utils'
 import ConversationMessageList from '../conversation/ConversationMessageList.vue'
 import type { Message } from '../../types'
 
+const copyTextToClipboardMock = vi.hoisted(() => vi.fn().mockResolvedValue(true))
+vi.mock('../../utils/clipboard', () => ({ copyTextToClipboard: copyTextToClipboardMock }))
+
 const longThinkingContent = `${'用户询问数据情况，需要先定位语义模型，再决定查询口径。'.repeat(3)}最后核对时间范围。`
 
 const streamingAssistantMessage: Message = {
@@ -35,7 +38,10 @@ const mountList = (messages: Message[], extraProps: Record<string, unknown> = {}
 })
 
 const getThinkingButton = (wrapper: ReturnType<typeof mountList>) =>
-  wrapper.findAll('button').find(button => button.text().includes('思考'))!
+  wrapper.findAll('button').find(button => button.text().includes('思考') && !button.text().includes('工作过程'))!
+
+const getWorkProcessButton = (wrapper: ReturnType<typeof mountList>) =>
+  wrapper.findAll('button').find(button => button.text().includes('工作过程'))!
 
 describe('ConversationMessageList', () => {
   it('keeps streaming thinking segments collapsed by default with a single-line tail preview', () => {
@@ -45,7 +51,7 @@ describe('ConversationMessageList', () => {
     expect(wrapper.find('.bg-slate-50').exists()).toBe(false)
     expect(wrapper.text()).toContain('思考中')
     expect(wrapper.text()).toContain(`…${longThinkingContent.slice(-80)}`)
-    expect(wrapper.find('.fa-chevron-right').classes()).not.toContain('rotate-90')
+    expect(getThinkingButton(wrapper).find('.fa-chevron-right').classes()).not.toContain('rotate-90')
   })
 
   it('expands a collapsed thinking segment on click and collapses it again', async () => {
@@ -56,12 +62,12 @@ describe('ConversationMessageList', () => {
 
     expect(wrapper.find('.bg-slate-50').exists()).toBe(true)
     expect(wrapper.find('.bg-slate-50').text()).toContain(longThinkingContent)
-    expect(wrapper.find('.fa-chevron-right').classes()).toContain('rotate-90')
+    expect(thinkingButton.find('.fa-chevron-right').classes()).toContain('rotate-90')
 
     await thinkingButton.trigger('click')
 
     expect(wrapper.find('.bg-slate-50').exists()).toBe(false)
-    expect(wrapper.find('.fa-chevron-right').classes()).not.toContain('rotate-90')
+    expect(thinkingButton.find('.fa-chevron-right').classes()).not.toContain('rotate-90')
   })
 
   it('keeps thinking segments collapsed and hides the preview when streaming finishes', async () => {
@@ -72,10 +78,85 @@ describe('ConversationMessageList', () => {
     })
 
     expect(wrapper.find('.bg-slate-50').exists()).toBe(false)
+    // 流式结束后整个工作过程折叠为一行（摘要里提及思考分段数）
+    expect(wrapper.text()).toContain('工作过程')
     expect(wrapper.text()).toContain('思考')
     expect(wrapper.text()).not.toContain('思考中')
     // 流式结束后不再显示尾部预览文字
     expect(wrapper.text()).not.toContain(longThinkingContent.slice(-80))
+  })
+
+  it('folds the finished work process behind a toggle row and expands on click', async () => {
+    const wrapper = mountList([{ ...streamingAssistantMessage, isStreaming: false }])
+
+    // 完成后默认折叠：思考正文隐藏，只剩「工作过程」一行 + 摘要
+    expect(wrapper.text()).toContain('工作过程')
+    expect(wrapper.text()).toContain('思考 1')
+    expect(wrapper.find('.bg-slate-50').exists()).toBe(false)
+
+    await getWorkProcessButton(wrapper).trigger('click')
+
+    // 手动展开后工作过程可见：思考分段行恢复（分段级仍默认收起，需再点一次展开正文）
+    const thinkingButton = getThinkingButton(wrapper)
+    expect(thinkingButton).toBeTruthy()
+    expect(wrapper.text()).not.toContain('思考 1')
+
+    await thinkingButton.trigger('click')
+    expect(wrapper.find('.bg-slate-50').exists()).toBe(true)
+    expect(wrapper.find('.bg-slate-50').text()).toContain(longThinkingContent)
+  })
+
+  it('keeps the work process expanded while streaming and after manual toggle', async () => {
+    const wrapper = mountList([streamingAssistantMessage])
+
+    // 流式中默认展开：思考分段行直接可见
+    expect(wrapper.text()).toContain('工作过程')
+    expect(wrapper.text()).toContain('思考中')
+
+    // 手动收起工作过程后，思考分段整体隐藏
+    await getWorkProcessButton(wrapper).trigger('click')
+    expect(wrapper.text()).not.toContain('思考中')
+    expect(wrapper.find('.bg-slate-50').exists()).toBe(false)
+
+    // 再展开恢复
+    await getWorkProcessButton(wrapper).trigger('click')
+    expect(wrapper.text()).toContain('思考中')
+  })
+
+  it('folds intermediate narration text and keeps only the final answer when collapsed', () => {
+    const wrapper = mountList([{
+      ...streamingAssistantMessage,
+      isStreaming: false,
+      segments: [
+        { type: 'text', content: '我先看一下数据分布。' },
+        { type: 'thinkingSegment', thinkingSegmentId: 'thinking-1' },
+        { type: 'text', content: '结论：数据已就绪。' },
+      ],
+    }])
+
+    // 折叠后只留最后一段文本（最终回答），中间叙述与思考分段一起进折叠区
+    expect(wrapper.text()).toContain('结论：数据已就绪。')
+    expect(wrapper.text()).not.toContain('我先看一下数据分布。')
+    expect(wrapper.find('.bg-slate-50').exists()).toBe(false)
+  })
+
+  it('copies only the final answer, not hidden intermediate narration', async () => {
+    copyTextToClipboardMock.mockClear()
+    const wrapper = mountList([{
+      id: 'assistant-copy',
+      role: 'assistant',
+      content: '中间叙述\n\n结论：数据已就绪。',
+      isStreaming: false,
+      segments: [
+        { type: 'text', content: '我先看一下数据分布。' },
+        { type: 'text', content: '结论：数据已就绪。' },
+      ],
+    }])
+
+    const copyButton = wrapper.findAll('button').find(button => button.text().includes('复制'))!
+    await copyButton.trigger('click')
+
+    expect(copyTextToClipboardMock).toHaveBeenCalledWith('结论：数据已就绪。')
   })
 
   it('hands the single-line preview over to the newly started thinking segment', async () => {
