@@ -349,6 +349,7 @@ async def test_task_tool_forwards_and_stamps_subagent_compactions(monkeypatch):
         {
             "id": "context-compression-abc",
             "timestamp": "2026-11-01 10:00:00",
+            "anchor_message_id": "",
             "estimated_tokens_before": 900,
             "estimated_tokens_after": 300,
             "estimated_cleared_tokens": 600,

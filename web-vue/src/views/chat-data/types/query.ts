@@ -1,9 +1,25 @@
+/** 查询结果状态（成员级与聚合级共用口径）。 */
+export type MemberQueryStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled'
+/** 聚合任务在成员状态之外多了部分成功。 */
+export type AggregatedQueryStatus = MemberQueryStatus | 'partial_success'
+
+/** 查询结果面板的展示条目（QueryResultPanel / QueryBuilder / SqlEditor 共用）。 */
+export interface QueryResultPanelItem {
+  key?: string | number
+  title?: string
+  resultData: string
+  sql?: string
+  memberDatasourceId?: string
+  memberName?: string
+  status?: 'success' | 'error' | 'none'
+}
+
 export interface MemberQueryResult {
   execution_id?: string
   member_datasource_id?: string
   member_name?: string
   executor_type?: string
-  status?: string | null
+  status?: MemberQueryStatus | null
   sql?: string
   columns: string[]
   data: Record<string, unknown>[]
@@ -32,7 +48,7 @@ export interface MemberQueryResult {
  *   顶层 `error` 聚合各成员错误。
  */
 export interface QueryResult {
-  status?: string | null
+  status?: AggregatedQueryStatus | null
   sql?: string
   total_count?: number
   execution_time_ms?: number
@@ -58,7 +74,7 @@ export type ToolQueryResult = Omit<MemberQueryResult, 'columns' | 'data' | 'tota
 export interface QueryTaskCreateResult {
   task_id: string
   task_type: 'sql' | 'sql_batch'
-  status: 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'partial_success'
+  status: AggregatedQueryStatus
   poll_interval_ms: number
 }
 

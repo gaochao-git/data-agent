@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
-import { createQueryTask, getQueryTask } from '../../api'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { createQueryTask } from '../../api'
+import { waitForQueryTask } from '../../utils/queryTaskPolling'
 import { isQuerySucceeded, quoteIdentifier } from '../../utils'
 
 const props = defineProps<{
@@ -37,25 +38,18 @@ const quoteTableIdentifier = (name: string) => {
     .join('.')
 }
 
-const sleep = (ms: number) => new Promise(resolve => window.setTimeout(resolve, ms))
+let previewAbortController: AbortController | null = null
+onBeforeUnmount(() => previewAbortController?.abort())
+watch(visible, (next) => { if (!next) previewAbortController?.abort() })
 
-const waitTablePreviewTask = async (taskId: string, pollIntervalMs = 1500) => {
-  const deadline = Date.now() + 60_000
-  while (Date.now() < deadline) {
-    const response = await getQueryTask(taskId)
-    const task = response.data
-    if (!task) {
-      throw new Error(response.msg || '查询任务不存在')
-    }
-    if (task.status === 'succeeded' || task.status === 'partial_success') {
-      return task
-    }
-    if (task.status === 'failed' || task.status === 'cancelled') {
-      throw new Error(task.error_message || '查询失败')
-    }
-    await sleep(Math.max(500, pollIntervalMs))
-  }
-  throw new Error('查询超时，请稍后重试')
+const waitTablePreviewTask = (taskId: string, pollIntervalMs = 1500) => {
+  previewAbortController?.abort()
+  previewAbortController = new AbortController()
+  return waitForQueryTask(taskId, {
+    pollIntervalMs,
+    timeoutMs: 60_000,
+    signal: previewAbortController.signal,
+  })
 }
 
 const previewTableData = async (tableName: string) => {

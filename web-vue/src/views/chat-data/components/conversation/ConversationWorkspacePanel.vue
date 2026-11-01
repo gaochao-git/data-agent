@@ -15,6 +15,7 @@
  */
 import { computed, nextTick, onMounted, onUnmounted, provide, ref, watch } from 'vue'
 import type { PropType } from 'vue'
+import type { ChatDataTokenUsage } from '../../types'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { SemanticYamlFile, ToolCallInfo } from '../../types'
 import ConversationSidePanel from './ConversationSidePanel.vue'
@@ -56,6 +57,7 @@ import {
 import { evictWorkspaceFileCache } from '../../utils/workspacePreviewCache'
 import { IMAGE_PREVIEW_EXTENSIONS, IMAGE_PREVIEW_MIME, OFFICE_HTML_PREVIEW_EXTENSIONS, isBinaryPreviewPath } from '../../utils'
 import { formatToolTableCell, parseChartSpecValue, replaceVisiblePathsForDisplay } from '../../utils/messageArtifacts'
+import ConversationTokenUsage from './ConversationTokenUsage.vue'
 import { extractChangedFilePathsFromResult, extractWrittenFilePathCandidates } from '../../utils/toolDisplay'
 import { ACCEPTED_FILE_TYPES, MAX_FILE_SIZE } from '../../utils/uploadLimits'
 
@@ -123,6 +125,23 @@ const subagentTaskCall = computed(() => {
 })
 
 /** 切换 tab：保存旧 tab 滚动位置、按需恢复新 tab 内容/位置（滚动读写由本组件持有）。 */
+// 复用主对话的上下文占用组件：有计量明细直接用明细；旧会话/首轮前用快照兜底，保证点击能打开同样面版
+const subagentUsageForPanel = computed<ChatDataTokenUsage | null>(() => {
+  const detail = subagentTaskCall.value?.subagentTokenUsageDetail
+  if (detail) return detail
+  const snapshot = subagentTaskCall.value?.subagentContextUsage
+  if (!snapshot) return null
+  return {
+    used: snapshot.used_tokens,
+    total: snapshot.context_window ?? snapshot.threshold_tokens,
+    percentage: snapshot.percent,
+    current_input_tokens: snapshot.used_tokens,
+    compression_trigger_tokens: snapshot.threshold_tokens,
+    context_window: snapshot.context_window,
+    estimated: true,
+  }
+})
+
 const selectPanelTab = (tabId: string) => {
   const previousTabId = activePanelTabId.value
   if (tabId !== previousTabId) rememberScroll(previousTabId, sidePanelRef.value?.getBodyScrollTop() ?? 0)
@@ -1209,10 +1228,13 @@ defineExpose({
 
     <template #subheader>
       <div v-if="isToolTabActive && subagentTaskCall" class="flex w-full items-center justify-between gap-2">
-        <span
-          v-if="subagentTaskCall.subagentContextUsage"
-          class="shrink-0 rounded-full bg-[#1f82d9]/10 px-1.5 py-0.5 text-[10px] leading-none text-[#1f82d9]/80 tabular-nums"
-        >上下文 {{ subagentTaskCall.subagentContextUsage.percent ?? 0 }}%</span>
+        <ConversationTokenUsage
+          v-if="subagentUsageForPanel"
+          :usage="subagentUsageForPanel"
+          :messages="[]"
+          compact
+          data-subagent-usage-trigger
+        />
         <span
           v-if="subagentTaskCall.subagentCompactions?.length"
           class="shrink-0 cursor-default rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] leading-none text-slate-500 tabular-nums"

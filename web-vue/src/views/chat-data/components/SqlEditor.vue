@@ -43,15 +43,7 @@ import { EditorSelection } from '@codemirror/state'
 import type { Extension } from '@codemirror/state'
 import IconPlay from './icons/IconPlay.vue'
 
-type QueryResultPanelItem = {
-  key?: string | number
-  title?: string
-  resultData: string
-  sql?: string
-  memberDatasourceId?: string
-  memberName?: string
-  status?: 'success' | 'error' | 'none'
-}
+import type { QueryResultPanelItem } from '../types'
 
 interface TableInfo {
   table_name: string

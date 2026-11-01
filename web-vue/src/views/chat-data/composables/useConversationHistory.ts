@@ -136,6 +136,7 @@ interface HistoryMessagePayload {
   subagent_context_usage?: unknown
   subagent_token_usage?: unknown
   subagent_compactions?: unknown
+  subagent_token_usage_detail?: unknown
   generation_stats?: unknown
 }
 
@@ -219,6 +220,16 @@ const normalizeSubagentTrail = (value: unknown): SubagentTrailItem[] | undefined
         thinking,
         thinkingTruncated: item.thinkingTruncated === true,
       })
+    } else if (item.kind === 'compaction') {
+      trail.push({
+        kind: 'compaction',
+        id,
+        timestamp: typeof item.timestamp === 'string' ? item.timestamp : undefined,
+        estimated_tokens_before: typeof item.estimated_tokens_before === 'number' ? item.estimated_tokens_before : undefined,
+        estimated_tokens_after: typeof item.estimated_tokens_after === 'number' ? item.estimated_tokens_after : undefined,
+        estimated_cleared_tokens: typeof item.estimated_cleared_tokens === 'number' ? item.estimated_cleared_tokens : undefined,
+        compressed_messages: typeof item.compressed_messages === 'number' ? item.compressed_messages : undefined,
+      })
     } else if (item.kind === 'tool') {
       const status = item.status === 'error' ? 'error' : item.status === 'running' ? 'running' : 'completed'
       trail.push({
@@ -294,6 +305,13 @@ const normalizeSubagentCompactions = (value: unknown): SubagentCompaction[] | un
   return records.length ? records : undefined
 }
 
+// 子图上下文计量明细：结构由后端保证（compact_context_usage_for_history），前端只做对象校验
+const normalizeSubagentTokenUsageDetail = (value: unknown): ChatDataTokenUsage | undefined => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const usage = value as ChatDataTokenUsage
+  return Number.isFinite(Number(usage.used)) && Number.isFinite(Number(usage.total)) ? usage : undefined
+}
+
 // 子智能体 token 用量（billing 口径）：随 task 的 tool_result payload 持久化，历史回放还原
 const normalizeSubagentTokenUsage = (value: unknown): SubagentTokenUsage | undefined => {
   if (!value || typeof value !== 'object') return undefined
@@ -321,6 +339,7 @@ const withHistoryToolResult = (
   subagentContextUsage?: SubagentContextUsage,
   subagentTokenUsage?: SubagentTokenUsage,
   subagentCompactions?: SubagentCompaction[],
+  subagentTokenUsageDetail?: ChatDataTokenUsage,
 ): ToolCallInfo => {
   let renderId: string | undefined
   let renderType: ToolCallInfo['renderType']
@@ -350,6 +369,7 @@ const withHistoryToolResult = (
     subagentContextUsage: subagentContextUsage ?? toolCall.subagentContextUsage,
     subagentTokenUsage: subagentTokenUsage ?? toolCall.subagentTokenUsage,
     subagentCompactions: subagentCompactions ?? toolCall.subagentCompactions,
+    subagentTokenUsageDetail: subagentTokenUsageDetail ?? toolCall.subagentTokenUsageDetail,
     started_at_ms: timing?.started_at_ms ?? toolCall.started_at_ms ?? null,
     ended_at_ms: timing?.ended_at_ms ?? toolCall.ended_at_ms ?? null,
   }
@@ -479,9 +499,10 @@ export const buildHistoryMessagesFromEvents = (historyEvents: unknown): Message[
     const subagentContextUsage = normalizeSubagentContextUsage(messagePayload.subagent_context_usage)
     const subagentTokenUsage = normalizeSubagentTokenUsage(messagePayload.subagent_token_usage)
     const subagentCompactions = normalizeSubagentCompactions(messagePayload.subagent_compactions)
+    const subagentTokenUsageDetail = normalizeSubagentTokenUsageDetail(messagePayload.subagent_token_usage_detail)
     target.toolCalls = target.toolCalls.map(toolCall => (
       toolCall.tool_call_id === toolCallId
-        ? withHistoryToolResult(toolCall, result, subagentTrail, timing, subagentContextUsage, subagentTokenUsage, subagentCompactions)
+        ? withHistoryToolResult(toolCall, result, subagentTrail, timing, subagentContextUsage, subagentTokenUsage, subagentCompactions, subagentTokenUsageDetail)
         : toolCall
     ))
   }
@@ -609,9 +630,10 @@ export const buildHistoryMessages = (
     const subagentContextUsage = normalizeSubagentContextUsage(rawMessage.subagent_context_usage)
     const subagentTokenUsage = normalizeSubagentTokenUsage(rawMessage.subagent_token_usage)
     const subagentCompactions = normalizeSubagentCompactions(rawMessage.subagent_compactions)
+    const subagentTokenUsageDetail = normalizeSubagentTokenUsageDetail(rawMessage.subagent_token_usage_detail)
     target.toolCalls = target.toolCalls.map(toolCall => (
       toolCall.tool_call_id === toolCallId
-        ? withHistoryToolResult(toolCall, result, subagentTrail, timing, subagentContextUsage, subagentTokenUsage, subagentCompactions)
+        ? withHistoryToolResult(toolCall, result, subagentTrail, timing, subagentContextUsage, subagentTokenUsage, subagentCompactions, subagentTokenUsageDetail)
         : toolCall
     ))
   }

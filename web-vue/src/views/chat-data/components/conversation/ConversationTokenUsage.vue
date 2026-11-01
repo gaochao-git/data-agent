@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ChatDataTokenUsage, ChatDataTokenUsageBreakdown, Message } from '../../types'
 import { copyTextToClipboard } from '../../utils/clipboard'
 
@@ -39,7 +39,7 @@ const sortMode = ref<TokenUsageSort>('round')
 const expandedMessageKeys = ref<Set<string>>(new Set())
 const buttonRef = ref<HTMLElement | null>(null)
 const panelRef = ref<HTMLElement | null>(null)
-const panelPosition = ref({ left: 24, bottom: 112 })
+const panelPosition = ref({ left: 24, top: 112 })
 const cacheSupportDetected = ref(false)
 
 // 面板层压策略：高于普通页面内容，低于 Element Plus 弹窗/弹层（初始 z-index 2000 起），
@@ -106,7 +106,7 @@ const ringStyle = computed(() => {
 const buttonTitle = computed(() => usageDisplay.value ? `上下文占用：${usageDisplay.value}` : '上下文计算中')
 const panelStyle = computed(() => ({
   left: `${panelPosition.value.left}px`,
-  bottom: `${panelPosition.value.bottom}px`,
+  top: `${panelPosition.value.top}px`,
   width: `${PANEL_WIDTH}px`,
   maxWidth: `calc(100vw - ${PANEL_MARGIN * 2}px)`,
 }))
@@ -117,9 +117,16 @@ const updatePanelPosition = () => {
   const viewportWidth = window.innerWidth || document.documentElement.clientWidth || PANEL_WIDTH
   const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0
   const maxLeft = Math.max(PANEL_MARGIN, viewportWidth - PANEL_WIDTH - PANEL_MARGIN)
+  // 面板优先开在触发按钮下方；下方放不下就翻到上方，并整体 clamp 在视口内，
+  // 避免按钮靠近视口顶部时面板顶部被裁掉（子智能体 tab 的徽标就在顶部）。
+  const panelHeight = panelRef.value?.offsetHeight ?? 0
+  const spaceBelow = viewportHeight - rect.bottom - PANEL_MARGIN
+  const openBelow = panelHeight === 0 || panelHeight + 8 <= spaceBelow
+  const preferredTop = openBelow ? rect.bottom + 8 : rect.top - panelHeight - 8
+  const maxTop = Math.max(PANEL_MARGIN, viewportHeight - panelHeight - PANEL_MARGIN)
   panelPosition.value = {
     left: Math.min(Math.max(rect.right - PANEL_WIDTH, PANEL_MARGIN), maxLeft),
-    bottom: Math.max(PANEL_MARGIN, viewportHeight - rect.top + 8),
+    top: Math.min(Math.max(preferredTop, PANEL_MARGIN), maxTop),
   }
 }
 
@@ -129,6 +136,7 @@ const togglePanel = () => {
     updatePanelPosition()
   }
   panelOpen.value = !panelOpen.value
+  if (panelOpen.value) void nextTick(updatePanelPosition)
 }
 
 const closePanel = () => {
@@ -156,7 +164,7 @@ const handleDocumentKeydown = (event: KeyboardEvent) => {
 
 const handleViewportChange = () => {
   if (panelOpen.value) {
-    updatePanelPosition()
+    void nextTick(updatePanelPosition)
   }
 }
 

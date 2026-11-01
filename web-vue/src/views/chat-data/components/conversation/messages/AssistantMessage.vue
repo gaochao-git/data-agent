@@ -56,6 +56,7 @@ const emit = defineEmits<{
 const blocks = computed(() => buildMessageBlocks(props.message, {
   resolveToolCall: props.resolveToolCall,
   shouldInlineRenderResult: props.shouldInlineRenderResult,
+  forceWorkProcess: props.message.forceWorkProcess,
 }))
 
 const copyText = computed(() => getAssistantCopyText(props.message))

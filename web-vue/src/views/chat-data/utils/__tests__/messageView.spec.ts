@@ -310,8 +310,11 @@ describe('子智能体过程 → 主对话消息投影', () => {
     expect(toolFirst.map(message => message.role)).toEqual(['user', 'assistant'])
     expect(toolFirst[1]!.segments).toHaveLength(2)
 
-    const promptOnly = buildSubagentMessages(taskCall({ subagentTrail: [] }))
+    const promptOnly = buildSubagentMessages(taskCall({ subagentTrail: [], status: 'completed' }))
     expect(promptOnly.map(message => message.role)).toEqual(['user'])
+    // 运行中即使没有正文/工具段也保留助手占位，状态行（工作中动画）可见
+    const runningEmpty = buildSubagentMessages(taskCall({ subagentTrail: [], status: 'running' }))
+    expect(runningEmpty.map(message => message.role)).toEqual(['user', 'assistant'])
   })
 })
 

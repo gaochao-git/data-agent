@@ -59,15 +59,18 @@ from ..agent_state import merge_context_compression_events, merge_loaded_skill_n
 from ..context.context_budget import (
     ContextBudget,
     ContextRequestBudget,
+    compact_context_usage_for_history,
     count_messages_tokens,
     count_tools_tokens,
     estimate_text_tokens,
     get_model_context_budget,
     inject_runtime_context_summary,
+    sanitize_context_usage_for_response,
 )
 from ..context.runtime import ContextRuntime
 from ..tools.registry import TOOL_REQUIRED_SKILLS
 from .context_compression import create_context_compression_middleware
+from .context_usage import create_context_usage_middleware
 from .sandbox_renewal import create_sandbox_renewal_middleware
 from .skill_prerequisite import SkillPrerequisiteMiddleware
 from .tool_call_normalizer import create_tool_call_name_normalizer_middleware
@@ -537,6 +540,14 @@ def _compile_subagent(spec: SubagentSpec, run_controls: Any = None) -> Any:
         static_input_tokens=subagent_static_tokens,
     )
     object.__setattr__(spec, "_context_request_budget", subagent_runtime.request_budget)
+    # 主图同款上下文计量实例：保留全量 usage（含 breakdown），子图 state 里的是压缩版
+    context_usage_middleware = create_context_usage_middleware(
+        context_runtime=subagent_runtime,
+        tools=tools,
+        state_schema=ChatDataSubAgentState,
+        name="SubagentContextUsageMiddleware",
+    )
+    object.__setattr__(spec, "_context_usage_middleware", context_usage_middleware)
     # 相对顺序与主图 MIDDLEWARE_CANONICAL_ORDER 对齐：出口处理链（归一化→结果→
     # 错误）的次序保持不变。压缩中间件是 before_model 节点（独立图节点，先于
     # 模型调用改写 state），预算告警是 wrap_model_call，二者无顺序耦合；
@@ -554,6 +565,9 @@ def _compile_subagent(spec: SubagentSpec, run_controls: Any = None) -> Any:
             context_runtime=subagent_runtime,
             state_schema=ChatDataSubAgentState,
         ),
+        # 与主图同源的上下文计量：产出 cache/breakdown 明细（前端「上下文占用明细」用）；
+        # 子图不订阅 custom 流，不会把 token_usage 事件透传到主对话。
+        context_usage_middleware,
         create_subagent_budget_alert_middleware(
             spec,
             tools,
@@ -949,13 +963,18 @@ def _aggregate_subagent_token_usage(messages: list) -> dict[str, int]:
     return totals if totals["total_tokens"] > 0 else {}
 
 
-def _subagent_process_snapshot(messages: list, context_usage: Any, compactions: Any = None) -> dict[str, Any]:
+def _subagent_process_snapshot(
+    messages: list, context_usage: Any, compactions: Any = None, token_detail: Any = None
+) -> dict[str, Any]:
     """task 结果上附带的子过程快照：上下文用量 + 子图 token 用量 + 压缩事件。"""
     snapshot: dict[str, Any] = {}
     if isinstance(context_usage, dict) and context_usage:
         snapshot["subagent_context_usage"] = context_usage
     if isinstance(compactions, list) and compactions:
         snapshot["subagent_compactions"] = compactions
+    if isinstance(token_detail, dict) and token_detail:
+        # 压缩落库体积在 middleware 层完成（run 层不允许直接依赖 context 包）
+        snapshot["subagent_token_usage_detail"] = compact_context_usage_for_history(token_detail)
     # 子图 token 用量（billing 口径）：主对话统计不含子智能体消耗，这里单独随结果持久化
     token_usage = _aggregate_subagent_token_usage(messages)
     if token_usage:
@@ -1162,6 +1181,7 @@ def _compaction_record_from_event(compaction: Any, seen_ids: set[str]) -> dict[s
     return {
         "id": compaction_id,
         "timestamp": str(compaction.get("timestamp") or ""),
+        "anchor_message_id": str(compaction.get("anchor_message_id") or ""),
         "estimated_tokens_before": int(compaction.get("estimated_tokens_before") or 0),
         "estimated_tokens_after": int(compaction.get("estimated_tokens_after") or 0),
         "estimated_cleared_tokens": int(compaction.get("estimated_cleared_tokens") or 0),
@@ -1224,6 +1244,29 @@ def _process_subagent_chunk(
     return True
 
 
+def _resolve_subagent_usage_detail(provider: Any, captured: dict[str, Any] | None) -> dict[str, Any] | None:
+    """取全量 usage 明细（优先 middleware 实例），失败时退回 updates 里抓到的 state 版本。"""
+    detail = provider() if callable(provider) else None
+    if not detail and isinstance(captured, dict):
+        detail = captured.get("token_usage_detail")
+    return sanitize_context_usage_for_response(detail) if isinstance(detail, dict) and detail else None
+
+
+def _capture_subagent_token_usage(chunk: Any, captured: dict[str, Any] | None) -> None:
+    """从子图 updates 里抓最近一次 token_usage 明细（ContextUsageMiddleware 写入）。"""
+    if captured is None or not (isinstance(chunk, tuple) and len(chunk) == 2):
+        return
+    mode, payload = chunk
+    if mode != "updates" or not isinstance(payload, dict):
+        return
+    for node_result in payload.values():
+        if not isinstance(node_result, dict):
+            continue
+        detail = node_result.get("token_usage")
+        if isinstance(detail, dict) and detail:
+            captured["token_usage_detail"] = detail
+
+
 async def _run_subagent_with_events(
     runnable: Any,
     state: dict[str, Any],
@@ -1233,6 +1276,7 @@ async def _run_subagent_with_events(
     collected: list | None = None,
     captured: dict[str, Any] | None = None,
     usage_meta: dict[str, int] | None = None,
+    usage_detail_provider: Any = None,
 ) -> list:
     """流式运行子图：向父图 custom 流转发内层事件，返回完整消息列表。
 
@@ -1262,10 +1306,13 @@ async def _run_subagent_with_events(
     if collected is not None:
         stream_state.collected = collected
 
-    def _emit_context_usage(*, emit: bool = True) -> dict[str, int] | None:
+    def _emit_context_usage(*, emit: bool = True) -> dict[str, Any] | None:
         if usage_meta is None:
             return None
-        usage = _subagent_usage_snapshot(usage_meta, stream_state.collected)
+        usage: dict[str, Any] = dict(_subagent_usage_snapshot(usage_meta, stream_state.collected))
+        detail = _resolve_subagent_usage_detail(usage_detail_provider, captured)
+        if detail:
+            usage["token_usage_detail"] = detail
         if emit:
             _emit_subagent_tool_event(
                 writer,
@@ -1279,6 +1326,7 @@ async def _run_subagent_with_events(
 
     try:
         async for chunk in runnable.astream(state, config, stream_mode=["updates", "messages"]):
+            _capture_subagent_token_usage(chunk, captured)
             if _process_subagent_chunk(chunk, stream_state, writer, parent_tool_call_id):
                 _emit_context_usage()
     finally:
@@ -1386,7 +1434,7 @@ def _append_ai_message_trail(
         trail.append(_trail_tool_entry(tool_call, tool_results))
 
 
-def _build_trail_snapshot(messages: list) -> list[dict[str, Any]]:
+def _build_trail_snapshot(messages: list, compactions: Any = None) -> list[dict[str, Any]]:
     """把子图消息序列化成与前端 ``SubagentTrailItem`` 同构的过程快照。
 
     用于历史回放：直播时过程经 SSE custom 流逐条转发，刷新/看历史后由
@@ -1413,7 +1461,58 @@ def _build_trail_snapshot(messages: list) -> list[dict[str, Any]]:
             if tool_call_id and tool_call_id not in seen_ids:
                 seen_ids.add(tool_call_id)
                 trail.append(_trail_orphan_tool_entry(message, tool_results))
-    return trail
+    return _insert_trail_compactions(trail, compactions)
+
+
+def _compaction_trail_entry(compaction: Any) -> dict[str, Any] | None:
+    """压缩事件 → 过程快照里的分隔卡条目。"""
+    if not isinstance(compaction, dict):
+        return None
+    return {
+        "kind": "compaction",
+        "id": str(compaction.get("id") or ""),
+        "timestamp": str(compaction.get("timestamp") or ""),
+        "estimated_tokens_before": int(compaction.get("estimated_tokens_before") or 0),
+        "estimated_tokens_after": int(compaction.get("estimated_tokens_after") or 0),
+        "estimated_cleared_tokens": int(compaction.get("estimated_cleared_tokens") or 0),
+        "compressed_messages": int(compaction.get("compressed_messages") or 0),
+        "anchor_message_id": str(compaction.get("anchor_message_id") or ""),
+    }
+
+
+def _trail_insert_index(trail: list[dict[str, Any]], anchor: str) -> int:
+    """锚点消息之后插入；找不到锚点则放在末尾（压缩发生在最新内容附近）。"""
+    if not anchor:
+        return len(trail)
+    for index, item in enumerate(trail):
+        if str(item.get("id") or "") == anchor:
+            return index + 1
+    return len(trail)
+
+
+def _insert_trail_compactions(trail: list[dict[str, Any]], compactions: Any) -> list[dict[str, Any]]:
+    """把压缩事件按锚点消息位置插进过程快照，历史回放与主对话一样在流程中看到分隔卡。"""
+    if not isinstance(compactions, list) or not compactions:
+        return trail
+    merged = list(trail)
+    for compaction in compactions:
+        entry = _compaction_trail_entry(compaction)
+        if entry is None:
+            continue
+        merged.insert(_trail_insert_index(merged, entry["anchor_message_id"]), entry)
+    return merged
+
+
+def _subagent_report_token_limit(runtime: ToolRuntime) -> int | None:
+    """报告封顶阈值 = 父上下文硬上限的固定占比，避免父上下文被单次报告推过压缩线。"""
+    state = getattr(runtime, "state", None)
+    usage = state.get("token_usage") if isinstance(state, dict) else None
+    if not isinstance(usage, dict):
+        return None
+    hard_limit = int(usage.get("hard_input_limit_tokens") or 0)
+    if hard_limit <= 0:
+        return None
+    return max(int(hard_limit * SUBAGENT_REPORT_MAX_TOKEN_RATIO), SUBAGENT_REPORT_MIN_TOKEN_LIMIT)
 
 
 async def _offload_subagent_report(report: str, runtime: ToolRuntime) -> str:
@@ -1448,16 +1547,27 @@ async def _offload_subagent_report(report: str, runtime: ToolRuntime) -> str:
     return envelope
 
 
-def _subagent_report_token_limit(runtime: ToolRuntime) -> int | None:
-    """报告封顶阈值 = 父上下文硬上限的固定占比，避免父上下文被单次报告推过压缩线。"""
-    state = getattr(runtime, "state", None)
-    usage = state.get("token_usage") if isinstance(state, dict) else None
-    if not isinstance(usage, dict):
-        return None
-    hard_limit = int(usage.get("hard_input_limit_tokens") or 0)
-    if hard_limit <= 0:
-        return None
-    return max(int(hard_limit * SUBAGENT_REPORT_MAX_TOKEN_RATIO), SUBAGENT_REPORT_MIN_TOKEN_LIMIT)
+def _build_task_result_artifacts(
+    spec: SubagentSpec,
+    messages: list,
+    context_usage: Any,
+    captured: dict[str, Any],
+) -> dict[str, Any]:
+    """task 结果的持久化产物：过程快照 + 上下文用量 + token 用量 + 压缩/计量明细。"""
+    artifacts: dict[str, Any] = {}
+    trail = _build_trail_snapshot(messages, captured.get("compactions"))
+    if trail:
+        artifacts["subagent_trail"] = trail
+    provider = getattr(getattr(spec, "_context_usage_middleware", None), "get_context_usage", None)
+    artifacts.update(
+        _subagent_process_snapshot(
+            messages,
+            context_usage,
+            captured.get("compactions"),
+            _resolve_subagent_usage_detail(provider, captured),
+        )
+    )
+    return artifacts
 
 
 async def _build_task_tool_impl(
@@ -1499,6 +1609,7 @@ async def _build_task_tool_impl(
                 list(spec.tools or []),
                 system_prompt=_subagent_system_prompt(spec),
             ),
+            usage_detail_provider=getattr(getattr(spec, "_context_usage_middleware", None), "get_context_usage", None),
         )
     except Exception as exc:
         # 失败路径同样盖 trail 快照：直播时内层过程已通过 SSE 转发给用户，
@@ -1529,13 +1640,9 @@ async def _build_task_tool_impl(
     # 过程快照盖在 ToolMessage 上随消息持久化：直播过程走 SSE，历史回放
     # 走 conversation_event 的 tool_result payload（见
     # conversation_event_service._serialize_tool_message）。
-    additional_kwargs: dict[str, Any] = {}
-    trail = _build_trail_snapshot(messages)
-    if trail:
-        additional_kwargs["subagent_trail"] = trail
     # 上下文用量 + 子图 token 用量：随 ToolMessage 持久化，历史回放还原
     # （直播路径上下文用量走 subagent_context_usage SSE 事件，token 用量随完成事件下发）。
-    additional_kwargs.update(_subagent_process_snapshot(messages, context_usage, captured.get("compactions")))
+    additional_kwargs = _build_task_result_artifacts(spec, messages, context_usage, captured)
     return Command(
         update={
             "messages": [

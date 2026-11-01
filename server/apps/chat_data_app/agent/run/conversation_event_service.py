@@ -907,6 +907,28 @@ def _serialize_ai_message(message: AIMessage) -> dict[str, Any]:
     return payload
 
 
+def _serialize_subagent_artifacts(message: ToolMessage) -> dict[str, Any]:
+    """task 工具的子过程产物：过程快照 / 上下文用量 / token 用量 / 压缩记录 / 计量明细。"""
+    additional_kwargs = getattr(message, "additional_kwargs", None) or {}
+    artifacts: dict[str, Any] = {}
+    trail = additional_kwargs.get("subagent_trail")
+    if isinstance(trail, list) and trail:
+        artifacts["subagent_trail"] = trail
+    context_usage = additional_kwargs.get("subagent_context_usage")
+    if isinstance(context_usage, dict) and context_usage:
+        artifacts["subagent_context_usage"] = context_usage
+    token_usage = additional_kwargs.get("subagent_token_usage")
+    if isinstance(token_usage, dict) and token_usage:
+        artifacts["subagent_token_usage"] = token_usage
+    compactions = additional_kwargs.get("subagent_compactions")
+    if isinstance(compactions, list) and compactions:
+        artifacts["subagent_compactions"] = compactions
+    token_detail = additional_kwargs.get("subagent_token_usage_detail")
+    if isinstance(token_detail, dict) and token_detail:
+        artifacts["subagent_token_usage_detail"] = token_detail
+    return artifacts
+
+
 def _serialize_tool_message(message: ToolMessage) -> dict[str, Any]:
     tool_name = str(getattr(message, "name", "") or "")
     payload: dict[str, Any] = {
@@ -920,22 +942,7 @@ def _serialize_tool_message(message: ToolMessage) -> dict[str, Any]:
         "timestamp": _timestamp(message),
     }
     payload.update(_execution_timing(message))
-    # task 工具的子智能体过程快照（subagents.py 盖在 additional_kwargs 上）：
-    # 随 tool_result 事件持久化，历史回放时前端据此还原「子智能体内部逻辑」。
-    trail = (getattr(message, "additional_kwargs", None) or {}).get("subagent_trail")
-    if isinstance(trail, list) and trail:
-        payload["subagent_trail"] = trail
-    # 子图上下文用量快照（最后一次估算）：历史回放时 task 卡片标题行还原用量徽标。
-    context_usage = (getattr(message, "additional_kwargs", None) or {}).get("subagent_context_usage")
-    if isinstance(context_usage, dict) and context_usage:
-        payload["subagent_context_usage"] = context_usage
-    # 子图 token 用量（billing 口径）：主对话 token 统计不含子智能体消耗，历史回放单独还原
-    token_usage = (getattr(message, "additional_kwargs", None) or {}).get("subagent_token_usage")
-    if isinstance(token_usage, dict) and token_usage:
-        payload["subagent_token_usage"] = token_usage
-    compactions = (getattr(message, "additional_kwargs", None) or {}).get("subagent_compactions")
-    if isinstance(compactions, list) and compactions:
-        payload["subagent_compactions"] = compactions
+    payload.update(_serialize_subagent_artifacts(message))
     return payload
 
 

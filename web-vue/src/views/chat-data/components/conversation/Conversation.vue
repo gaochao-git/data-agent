@@ -34,7 +34,7 @@ import UserQuestionCard from './UserQuestionCard.vue'
 import AnalysisProgress from './AnalysisProgress.vue'
 import { deriveAnalysisTodos } from '../../utils/analysisTodos'
 import { createTopReachTracker } from '../../utils/scrollReach'
-import { appendSubagentCompaction, buildSubagentCompactionRecord } from '../../utils/subagentCompaction'
+import { applySubagentCompactionToTool, buildSubagentCompactionRecord } from '../../utils/subagentCompaction'
 import { isScrolledToBottom } from '../../utils/scrollFollow'
 import { normalizeVisiblePath } from '../../utils/consoleFileTree'
 import {
@@ -1677,7 +1677,12 @@ const upsertSubagentTrailItem = (event: ToolLifecycleEventData) => {
       percent: event.percent,
       budget_percent: event.budget_percent,
     }
-    applySubagentToolPatch(parentId, tool => ({ ...tool, subagentContextUsage: usage }))
+    const usageDetail = event.token_usage_detail
+    applySubagentToolPatch(parentId, tool => ({
+      ...tool,
+      subagentContextUsage: usage,
+      ...(usageDetail ? { subagentTokenUsageDetail: usageDetail } : {}),
+    }))
   }
 
   // 子图压缩记录：按 id 去重追加到父 task 调用（过程面板展示「已压缩 N 次」）
@@ -1685,10 +1690,7 @@ const upsertSubagentTrailItem = (event: ToolLifecycleEventData) => {
     const parentId = event.parent_tool_call_id
     const record = buildSubagentCompactionRecord(event)
     if (!parentId || !record) return
-    applySubagentToolPatch(parentId, (tool) => {
-      const next = appendSubagentCompaction(tool.subagentCompactions, record)
-      return next ? { ...tool, subagentCompactions: next } : null
-    })
+    applySubagentToolPatch(parentId, tool => applySubagentCompactionToTool(tool, record))
   }
 
   if (event.type === 'subagent_context_usage') {
@@ -2129,7 +2131,7 @@ const submitAnalysisQuery = async (
             streamingIntent: typeof event.intent === 'string' && event.intent ? event.intent : existing?.streamingIntent,
             status: isFailed ? 'error' : isCompleted ? 'completed' : 'running',
             subagentTrail: existing?.subagentTrail,
-            subagentTokenUsage: event.subagent_token_usage || existing?.subagentTokenUsage,
+            subagentTokenUsage: event.subagent_token_usage || existing?.subagentTokenUsage, subagentContextUsage: existing?.subagentContextUsage, subagentCompactions: existing?.subagentCompactions, subagentTokenUsageDetail: existing?.subagentTokenUsageDetail,
             started_at_ms: event.started_at_ms ?? existing?.started_at_ms ?? null,
             ended_at_ms: event.ended_at_ms ?? existing?.ended_at_ms ?? null,
           }
@@ -2226,6 +2228,8 @@ const resumePendingQuestion = async (answers?: UserQuestionAnswer[], cancelled =
   if (!question || !conversationId || isSubmittingQuestion.value || isGenerating.value) return
   isSubmittingQuestion.value = true
   pendingUserQuestion.value = null
+  // 恢复流不带新 run 头、不会触发 onRunStarted；先切 active，否则答完题仍被 waiting_user 拦截发送/队列
+  hasActiveRun.value = true; activeRunStatus.value = 'active'; emit('runStatusChanged', conversationId, 'active')
   const resumeAssistant = activeAssistantMessageId.value
     ? messages.value.find(item => item.id === activeAssistantMessageId.value && item.role === 'assistant')
     : [...messages.value].reverse().find(item => item.role === 'assistant')

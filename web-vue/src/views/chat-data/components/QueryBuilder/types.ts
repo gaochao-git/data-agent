@@ -13,15 +13,7 @@ export interface ColumnInfo {
   primary_key?: boolean
 }
 
-export type QueryResultPanelItem = {
-  key?: string | number
-  title?: string
-  resultData: string
-  sql?: string
-  memberDatasourceId?: string
-  memberName?: string
-  status?: 'success' | 'error' | 'none'
-}
+export type { QueryResultPanelItem } from '../../types'
 
 export interface TableInfo {
   table_name: string

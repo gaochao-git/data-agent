@@ -58,6 +58,8 @@ export interface MessageToolBlock {
 export type MessageBlock = MessageTextBlock | MessageThinkingBlock | MessageToolBlock
 
 export interface MessageBlockDeps {
+  /** 强制整段内容都算工作过程（中间段助手消息不露最终回答） */
+  forceWorkProcess?: boolean;
   resolveToolCall?: (message: Message, toolCallId: string) => ToolCallInfo | null
   shouldInlineRenderResult?: (toolCall: ToolCallInfo) => boolean
   normalizeText?: TextNormalizer
@@ -110,7 +112,7 @@ const buildSegmentBlocks = (message: Message, deps: MessageBlockDeps): MessageBl
   const resolveToolCall = deps.resolveToolCall || resolveMessageToolCall
   const shouldInline = deps.shouldInlineRenderResult || (() => false)
   const activeThinkingId = getActiveThinkingSegmentId(message)
-  const finalAnswerIndex = findFinalAnswerSegmentIndex(message, normalizeText)
+  const finalAnswerIndex = deps.forceWorkProcess ? -1 : findFinalAnswerSegmentIndex(message, normalizeText)
   const blocks: MessageBlock[] = []
 
   for (const [index, segment] of (message.segments || []).entries()) {
@@ -326,7 +328,20 @@ export interface SubagentTrailToolBlock {
   queryResultToolCall: ToolCallInfo | null
 }
 
-export type SubagentTrailBlock = SubagentTrailMessageBlock | SubagentTrailToolBlock
+export interface SubagentTrailCompactionBlock {
+  type: 'compaction'
+  key: string
+  compaction: {
+    id: string
+    timestamp?: string
+    estimated_tokens_before?: number
+    estimated_tokens_after?: number
+    estimated_cleared_tokens?: number
+    compressed_messages?: number
+  }
+}
+
+export type SubagentTrailBlock = SubagentTrailMessageBlock | SubagentTrailToolBlock | SubagentTrailCompactionBlock
 
 const isSubagentParentRunning = (toolCall: ToolCallInfo): boolean => (
   toolCall.status === 'running' || toolCall.status === 'generating'
@@ -348,6 +363,20 @@ export const buildSubagentTrailBlocks = (toolCall: ToolCallInfo): SubagentTrailB
   const trail = toolCall.subagentTrail || []
   const parentRunning = isSubagentParentRunning(toolCall)
   return trail.map((item, index) => {
+    if (item.kind === 'compaction') {
+      return {
+        type: 'compaction',
+        key: item.id,
+        compaction: {
+          id: item.id,
+          timestamp: item.timestamp,
+          estimated_tokens_before: item.estimated_tokens_before,
+          estimated_tokens_after: item.estimated_tokens_after,
+          estimated_cleared_tokens: item.estimated_cleared_tokens,
+          compressed_messages: item.compressed_messages,
+        },
+      }
+    }
     if (item.kind === 'tool') {
       const toolCallItem = normalizeToolCallForDisplay(buildTrailToolCall(item))
       return {
@@ -412,6 +441,36 @@ export const buildSubagentMessages = (toolCall: ToolCallInfo): Message[] => {
   }
 
   for (const block of blocks) {
+    if (block.type === 'compaction') {
+      // 压缩分隔卡：按发生位置断开助手气泡，复用主对话的 CompactionMessage
+      if (assistant.segments?.length) {
+        messages.push({
+          ...assistant,
+          segments: [...assistant.segments],
+          thinkingSegments: [...(assistant.thinkingSegments || [])],
+          isStreaming: false,
+          forceWorkProcess: true,
+        })
+      }
+      messages.push({
+        id: block.compaction.id,
+        role: 'context_compression',
+        content: '',
+        contextCompression: {
+          id: block.compaction.id,
+          compressing: false,
+          estimated_tokens_before: block.compaction.estimated_tokens_before,
+          estimated_tokens_after: block.compaction.estimated_tokens_after,
+          estimated_cleared_tokens: block.compaction.estimated_cleared_tokens,
+          compressed_messages: block.compaction.compressed_messages,
+          timestamp: block.compaction.timestamp,
+        },
+      })
+      assistant.segments = []
+      assistant.thinkingSegments = []
+      assistant.toolCalls = []
+      continue
+    }
     if (block.type === 'tool') {
       assistant.toolCalls = [...(assistant.toolCalls || []), block.toolCall]
       assistant.segments = [...(assistant.segments || []), { type: 'toolCall', toolCallId: block.toolCall.tool_call_id }]
@@ -430,7 +489,8 @@ export const buildSubagentMessages = (toolCall: ToolCallInfo): Message[] => {
     }
   }
 
-  if (assistant.segments?.length) messages.push(assistant)
+  // 运行中即使还没有正文/工具段也要保留助手占位：状态行（工作中动画/已运行时长）要可见
+  if (assistant.segments?.length || parentRunning) messages.push(assistant)
   return messages
 }
 
