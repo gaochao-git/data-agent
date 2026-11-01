@@ -69,6 +69,44 @@ kill -TERM $(lsof -ti :5001)
 kill -9 $(lsof -ti :5001)
 ```
 
+### 日志轮转（多 worker 生产）
+
+生产默认 4 个 Gunicorn worker，**不要让多个进程各自轮转同一个日志文件**（`TimedRotatingFileHandler` 不是多进程安全的，跨天可能出现日志丢失/错位）。多 worker 部署必须改为外部轮转：
+
+1. 应用环境变量设置：
+
+   ```bash
+   LOG_ROTATION_MODE=external
+   LOG_DIR=/data/appLogs/dataagent
+   ```
+
+   此时应用使用 `WatchedFileHandler`，只写 `LOG_DIR` 下的 `{LOG_APP_NAME}_app.log`、`_acc.log`、`_alarm.log`，不自己 rename；文件名、路径、格式和单进程模式完全一致。
+
+2. 安装仓库内提供的 logrotate 配置：
+
+   ```bash
+   sudo cp server/logrotate-chatdata.conf /etc/logrotate.d/chatdata
+   ```
+
+   配置中的日志目录固定为 `/data/appLogs/dataagent`，与 `LOG_DIR` 保持一致；把 `<APP_USER>` / `<APP_GROUP>` 改成服务运行用户。
+
+3. 校验并演练：
+
+   ```bash
+   sudo logrotate -d /etc/logrotate.d/chatdata
+   sudo logrotate -f /etc/logrotate.d/chatdata
+   ```
+
+   确认旧日志被改名为 `*.log.2026-11-01`（日期后缀）、应用继续写新文件、多个 worker 日志都写进同一新文件；`delaycompress` 保证上一轮文件延迟一轮再压缩为 `*.log.2026-11-01.gz`，避免 worker 仍持有旧 fd 时压缩损坏；当前保留 **180 天**。
+
+4. 可选：高并发场景开启异步写日志，避免同步文件 IO 阻塞事件循环：
+
+   ```bash
+   LOG_ASYNC=true
+   ```
+
+   代价是进程被强制 kill 时队列中少量日志可能丢失。
+
 ## 关键配置
 
 运行配置位于 `server/conf/`：

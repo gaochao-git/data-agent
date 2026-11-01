@@ -9,17 +9,20 @@
   <log_time>|<log_level>|<thread_id>|<trace_id>|[idc]|<ip>|<filename>|<module>|<lineno>|<msg，能够打印错误堆栈>|[ext1]|[ext2]
 """
 
+import atexit
 import contextlib
 import logging
 import os
+import queue
 from contextvars import ContextVar
 from datetime import datetime
-from logging.handlers import TimedRotatingFileHandler
+from logging.handlers import QueueHandler, QueueListener, TimedRotatingFileHandler, WatchedFileHandler
 from typing import Any
 
 from utils.common_util import get_active_idc, get_local_ip
+from utils.log_redaction import mask_sensitive_text
 
-DEFAULT_BACKUP_COUNT = 30  # 保留30天
+DEFAULT_BACKUP_COUNT = 180  # 保留180天
 request_id_ctx: ContextVar[str | None] = ContextVar("request_id", default=None)
 user_ctx: ContextVar[str | None] = ContextVar("user", default=None)
 _STANDARD_LOG_RECORD_FIELDS = {
@@ -89,6 +92,22 @@ def _default_log_dir() -> str:
     显式设置 LOG_DIR 时行为不受影响（绝对路径原样、相对路径按 cwd 解析）。
     """
     return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs")
+
+
+def get_log_async_mode() -> bool:
+    """是否使用 QueueHandler/QueueListener 异步写日志（默认关闭，避免改变现有语义）。"""
+    return _env_bool("LOG_ASYNC", False)
+
+
+def get_log_rotation_mode() -> str:
+    """读取日志轮转方式。
+
+    builtin：应用内 TimedRotatingFileHandler（单进程/开发默认，向后兼容）。
+    external：应用不轮转，使用 WatchedFileHandler 跟随外部 logrotate；多 worker
+    生产环境必须用此模式，避免多个进程同时 rename 造成日志丢失/错位。
+    """
+    mode = _env_text("LOG_ROTATION_MODE", "builtin").strip().lower()
+    return mode if mode in ("builtin", "external") else "builtin"
 
 
 def get_current_log_dir() -> str:
@@ -202,6 +221,21 @@ def _append_message_parts(message: str, user: object, extra_fields: dict[str, ob
     return " | ".join(parts)
 
 
+class LogContextFilter(logging.Filter):
+    """在调用线程把 trace/user 固化到 record 上。
+
+    异步模式下 formatter 在 QueueListener 线程执行，ContextVar 不跨线程；不固化
+    会丢失 trace_id/user。同步模式同样受益：record 字段与 formatter 取值一致。
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not getattr(record, "request_id", None):
+            record.request_id = request_id_ctx.get() or "-"
+        if not getattr(record, "user", None):
+            record.user = user_ctx.get() or ""
+        return True
+
+
 class PipeLogFormatter(logging.Formatter):
     """应用日志管道分隔格式。"""
 
@@ -220,6 +254,8 @@ class PipeLogFormatter(logging.Formatter):
         if record.exc_info:
             message = f"{message}\n{self.formatException(record.exc_info)}"
         message = _append_message_parts(message, user, _collect_record_extra_fields(record))
+        # app 日志统一脱敏：业务日志可能带用户输入/异常字符串中的手机号、证件号等
+        message = mask_sensitive_text(message)
 
         return "|".join(
             [
@@ -287,9 +323,9 @@ class AlarmLogFormatter(logging.Formatter):
             getattr(record, "idc", get_current_log_idc()),
             getattr(record, "ip", LOCAL_IP),
             getattr(record, "error_code", "500"),
-            record.getMessage(),
-            getattr(record, "ext1", "-"),
-            getattr(record, "ext2", "-"),
+            mask_sensitive_text(record.getMessage()),
+            mask_sensitive_text(str(getattr(record, "ext1", "-"))),
+            mask_sensitive_text(str(getattr(record, "ext2", "-"))),
         ]
         return "|".join(_clean_log_part(field) for field in fields)
 
@@ -310,6 +346,7 @@ class LoggerManager:
     _formatter = None  # 全局唯一的格式化器
     _access_formatter = None  # 全局唯一的访问日志格式化器
     _alarm_formatter = None  # 全局唯一的告警日志格式化器
+    _async_listeners: dict[str, Any] = {}  # category -> (QueueListener, QueueHandler)
 
     @classmethod
     def _get_formatter(cls) -> logging.Formatter:
@@ -333,26 +370,41 @@ class LoggerManager:
         return cls._alarm_formatter
 
     @classmethod
-    def _build_file_handler(cls, log_dir: str, log_file_name: str, backup_count: int) -> TimedRotatingFileHandler:
-        """按当前配置创建文件 handler。"""
+    def _build_file_handler(
+        cls, log_dir: str, log_file_name: str, backup_count: int
+    ) -> TimedRotatingFileHandler | WatchedFileHandler:
+        """按当前配置创建文件 handler。
+
+        - builtin：应用内按天轮转（单进程/开发）
+        - external：WatchedFileHandler + 外部 logrotate（多 worker 生产）
+        两种模式文件路径、文件名、编码、格式化完全一致，只切换轮转责任方。
+        """
         resolved_dir = resolve_log_path(log_dir)
         os.makedirs(resolved_dir, exist_ok=True)
         log_file = os.path.join(resolved_dir, log_file_name)
-        file_handler = TimedRotatingFileHandler(
-            log_file,
-            when="midnight",
-            interval=1,
-            backupCount=backup_count,
-            encoding="utf-8",
-            utc=False,
-        )
-        file_handler.suffix = "%Y-%m-%d"
+        if get_log_rotation_mode() == "external":
+            file_handler: TimedRotatingFileHandler | WatchedFileHandler = WatchedFileHandler(
+                log_file,
+                encoding="utf-8",
+            )
+        else:
+            file_handler = TimedRotatingFileHandler(
+                log_file,
+                when="midnight",
+                interval=1,
+                backupCount=backup_count,
+                encoding="utf-8",
+                utc=False,
+            )
+            file_handler.suffix = "%Y-%m-%d"
         file_handler.setLevel(logging.DEBUG)
         file_handler.setFormatter(cls._get_formatter())
         return file_handler
 
     @classmethod
-    def _get_file_handler(cls, log_dir: str, log_file_name: str, backup_count: int) -> TimedRotatingFileHandler:
+    def _get_file_handler(
+        cls, log_dir: str, log_file_name: str, backup_count: int
+    ) -> TimedRotatingFileHandler | WatchedFileHandler:
         """
         获取全局唯一的文件 handler
 
@@ -360,7 +412,12 @@ class LoggerManager:
         若环境变量中的日志路径配置发生变化，则重新创建 handler。
         """
         resolved_dir = resolve_log_path(log_dir)
-        handler_key = (resolved_dir, str(log_file_name or "").strip() or get_current_log_file(), int(backup_count))
+        handler_key = (
+            resolved_dir,
+            str(log_file_name or "").strip() or get_current_log_file(),
+            int(backup_count),
+            get_log_rotation_mode(),
+        )
         if cls._file_handler is not None and cls._file_handler_key == handler_key:
             return cls._file_handler
         if cls._file_handler is not None:
@@ -374,20 +431,23 @@ class LoggerManager:
     @classmethod
     def _build_access_file_handler(
         cls, log_dir: str, log_file_name: str, backup_count: int
-    ) -> TimedRotatingFileHandler:
+    ) -> TimedRotatingFileHandler | WatchedFileHandler:
         """按当前配置创建访问日志文件 handler。"""
         handler = cls._build_file_handler(log_dir, log_file_name, backup_count)
         handler.setFormatter(cls._get_access_formatter())
         return handler
 
     @classmethod
-    def _get_access_file_handler(cls, log_dir: str, log_file_name: str, backup_count: int) -> TimedRotatingFileHandler:
+    def _get_access_file_handler(
+        cls, log_dir: str, log_file_name: str, backup_count: int
+    ) -> TimedRotatingFileHandler | WatchedFileHandler:
         """获取全局唯一的访问日志文件 handler。"""
         resolved_dir = resolve_log_path(log_dir)
         handler_key = (
             resolved_dir,
             str(log_file_name or "").strip() or get_current_access_log_file(),
             int(backup_count),
+            get_log_rotation_mode(),
         )
         if cls._access_file_handler is not None and cls._access_file_handler_key == handler_key:
             return cls._access_file_handler
@@ -400,20 +460,25 @@ class LoggerManager:
         return cls._access_file_handler
 
     @classmethod
-    def _build_alarm_file_handler(cls, log_dir: str, log_file_name: str, backup_count: int) -> TimedRotatingFileHandler:
+    def _build_alarm_file_handler(
+        cls, log_dir: str, log_file_name: str, backup_count: int
+    ) -> TimedRotatingFileHandler | WatchedFileHandler:
         """按当前配置创建告警日志文件 handler。"""
         handler = cls._build_file_handler(log_dir, log_file_name, backup_count)
         handler.setFormatter(cls._get_alarm_formatter())
         return handler
 
     @classmethod
-    def _get_alarm_file_handler(cls, log_dir: str, log_file_name: str, backup_count: int) -> TimedRotatingFileHandler:
+    def _get_alarm_file_handler(
+        cls, log_dir: str, log_file_name: str, backup_count: int
+    ) -> TimedRotatingFileHandler | WatchedFileHandler:
         """获取全局唯一的告警日志文件 handler。"""
         resolved_dir = resolve_log_path(log_dir)
         handler_key = (
             resolved_dir,
             str(log_file_name or "").strip() or get_current_alarm_log_file(),
             int(backup_count),
+            get_log_rotation_mode(),
         )
         if cls._alarm_file_handler is not None and cls._alarm_file_handler_key == handler_key:
             return cls._alarm_file_handler
@@ -441,13 +506,36 @@ class LoggerManager:
         return cls._console_handler
 
     @classmethod
+    def _attach_handlers(cls, logger: logging.Logger, category: str, handlers: list[logging.Handler]) -> None:
+        """按 LOG_ASYNC 决定直接挂 handler 还是经 QueueHandler 异步写。"""
+        if not get_log_async_mode():
+            for handler in handlers:
+                logger.addHandler(handler)
+            return
+        cached = cls._async_listeners.get(category)
+        if cached is None:
+            log_queue: queue.Queue = queue.Queue(-1)
+            queue_handler = QueueHandler(log_queue)
+            queue_handler.setLevel(logging.DEBUG)
+            listener = QueueListener(log_queue, *handlers, respect_handler_level=True)
+            listener.start()
+
+            def _stop_listener() -> None:
+                with contextlib.suppress(Exception):
+                    listener.stop()
+
+            atexit.register(_stop_listener)
+            cls._async_listeners[category] = (listener, queue_handler)
+        logger.addHandler(cls._async_listeners[category][1])
+
+    @classmethod
     def get_logger(
         cls,
         name: str,
         log_level: str = "INFO",
         log_dir: str = "logs",
         log_file_name: str = "",
-        backup_count: int = 30,
+        backup_count: int = DEFAULT_BACKUP_COUNT,
         console_output: bool = True,
         file_output: bool = True,
     ) -> logging.Logger:
@@ -477,11 +565,13 @@ class LoggerManager:
             cls._loggers[name] = logger
             return logger
 
+        logger.addFilter(LogContextFilter())
+        handlers: list[logging.Handler] = []
         if console_output:
-            logger.addHandler(cls._get_console_handler())
-
+            handlers.append(cls._get_console_handler())
         if file_output:
-            logger.addHandler(cls._get_file_handler(log_dir, log_file_name, backup_count))
+            handlers.append(cls._get_file_handler(log_dir, log_file_name, backup_count))
+        cls._attach_handlers(logger, "app", handlers)
 
         cls._loggers[name] = logger
         return logger
@@ -493,7 +583,7 @@ class LoggerManager:
         log_level: str = "INFO",
         log_dir: str = "logs",
         log_file_name: str = "",
-        backup_count: int = 30,
+        backup_count: int = DEFAULT_BACKUP_COUNT,
     ) -> logging.Logger:
         """获取访问日志 logger。"""
         if cls._access_logger is not None:
@@ -503,7 +593,8 @@ class LoggerManager:
         logger.setLevel(getattr(logging, log_level.upper(), logging.INFO))
         logger.propagate = False
         logger.handlers.clear()
-        logger.addHandler(cls._get_access_file_handler(log_dir, log_file_name, backup_count))
+        logger.addFilter(LogContextFilter())
+        cls._attach_handlers(logger, "access", [cls._get_access_file_handler(log_dir, log_file_name, backup_count)])
         cls._access_logger = logger
         return logger
 
@@ -514,7 +605,7 @@ class LoggerManager:
         log_level: str = "WARNING",
         log_dir: str = "logs",
         log_file_name: str = "",
-        backup_count: int = 30,
+        backup_count: int = DEFAULT_BACKUP_COUNT,
     ) -> logging.Logger:
         """获取告警日志 logger。"""
         if cls._alarm_logger is not None:
@@ -524,7 +615,8 @@ class LoggerManager:
         logger.setLevel(getattr(logging, log_level.upper(), logging.WARNING))
         logger.propagate = False
         logger.handlers.clear()
-        logger.addHandler(cls._get_alarm_file_handler(log_dir, log_file_name, backup_count))
+        logger.addFilter(LogContextFilter())
+        cls._attach_handlers(logger, "alarm", [cls._get_alarm_file_handler(log_dir, log_file_name, backup_count)])
         cls._alarm_logger = logger
         return logger
 
@@ -569,9 +661,6 @@ def get_logger(name: str, log_level: str | None = None, console_output: bool | N
     level = log_level or get_current_log_level()
     console = console_output if console_output is not None else get_current_console_output()
 
-    if level.upper() == "DEBUG":
-        console = True
-
     return LoggerManager.get_logger(
         name=name,
         log_level=level,
@@ -608,6 +697,8 @@ __all__ = [
     "get_logger",
     "get_access_logger",
     "get_alarm_logger",
+    "get_log_rotation_mode",
+    "get_log_async_mode",
     "get_current_log_dir",
     "get_current_log_file",
     "get_current_access_log_file",
