@@ -5,7 +5,7 @@
  */
 import { computed, nextTick, onMounted, onUnmounted, ref, toRef, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import type { ChatDataContextCompressionEvent, ChatDataTokenUsage, DashboardSpecPayload, DataSource, ExecutionTargetOption, LangGraphMessage, Message, MessageAttachment, PendingUserQuestion, SemanticYamlFile, SkillInfo, SubagentContextUsage, SubagentTrailItem, ThinkingSegment, ToolCallInfo, ToolLifecycleEventData, UserQuestionAnswer } from '../../types'
+import type { ChatDataContextCompressionEvent, ChatDataTokenUsage, DashboardSpecPayload, DataSource, ExecutionTargetOption, LangGraphMessage, Message, MessageAttachment, PendingUserQuestion, SemanticYamlFile, SkillInfo, SubagentCompaction, SubagentContextUsage, SubagentTrailItem, ThinkingSegment, ToolCallInfo, ToolLifecycleEventData, UserQuestionAnswer } from '../../types'
 import { useSqlGenerator, type RunDoneStatus } from '../../composables/useSqlGenerator'
 import { useConversationHistory } from '../../composables/useConversationHistory'
 import { useModelOptions } from '../../composables/useModelOptions'
@@ -34,6 +34,7 @@ import UserQuestionCard from './UserQuestionCard.vue'
 import AnalysisProgress from './AnalysisProgress.vue'
 import { deriveAnalysisTodos } from '../../utils/analysisTodos'
 import { createTopReachTracker } from '../../utils/scrollReach'
+import { appendSubagentCompaction, buildSubagentCompactionRecord } from '../../utils/subagentCompaction'
 import { isScrolledToBottom } from '../../utils/scrollFollow'
 import { normalizeVisiblePath } from '../../utils/consoleFileTree'
 import {
@@ -1651,8 +1652,24 @@ const upsertSubagentTrailItem = (event: ToolLifecycleEventData) => {
     }
   }
 
-  // 子智能体上下文用量：只更新父 task 调用上的快照字段（标题行徽标），
-  // 不进 trail 列表；同一事件流内每次节点更新覆盖一次，天然收敛到最新值
+  /** 只更新父 task 调用上的字段（不碰 trail），同一事件流内收敛到最新值。 */
+  const applySubagentToolPatch = (parentId: string, patch: (tool: ToolCallInfo) => ToolCallInfo | null) => {
+    const base = toolCallsMap.value.get(parentId) || {
+      tool_call_id: parentId,
+      tool_name: 'task',
+      args: {},
+      status: 'running',
+    }
+    const merged = patch(base)
+    if (!merged) return
+    toolCallsMap.value.set(parentId, merged)
+    for (const message of messages.value) {
+      if (!message.toolCalls?.some(item => item.tool_call_id === parentId)) continue
+      message.toolCalls = message.toolCalls.map(item => item.tool_call_id === parentId ? merged : item)
+    }
+  }
+
+  // 子智能体上下文用量：只更新父 task 调用上的快照字段（标题行徽标）
   const upsertSubagentContextUsage = (event: ToolLifecycleEventData) => {
     const parentId = event.parent_tool_call_id
     if (!parentId || typeof event.used_tokens !== 'number') return
@@ -1663,25 +1680,27 @@ const upsertSubagentTrailItem = (event: ToolLifecycleEventData) => {
       percent: event.percent,
       budget_percent: event.budget_percent,
     }
-    const mergeParent = (tool: ToolCallInfo): ToolCallInfo => (
-      { ...tool, subagentContextUsage: usage }
-    )
-    const parentFromMap = toolCallsMap.value.get(parentId)
-    const merged = mergeParent(parentFromMap || {
-      tool_call_id: parentId,
-      tool_name: 'task',
-      args: {},
-      status: 'running',
+    applySubagentToolPatch(parentId, tool => ({ ...tool, subagentContextUsage: usage }))
+  }
+
+  // 子图压缩记录：按 id 去重追加到父 task 调用（过程面板展示「已压缩 N 次」）
+  const upsertSubagentCompaction = (event: ToolLifecycleEventData) => {
+    const parentId = event.parent_tool_call_id
+    const record = buildSubagentCompactionRecord(event)
+    if (!parentId || !record) return
+    applySubagentToolPatch(parentId, (tool) => {
+      const next = appendSubagentCompaction(tool.subagentCompactions, record)
+      return next ? { ...tool, subagentCompactions: next } : null
     })
-    toolCallsMap.value.set(parentId, merged)
-    for (const message of messages.value) {
-      if (!message.toolCalls?.some(item => item.tool_call_id === parentId)) continue
-      message.toolCalls = message.toolCalls.map(item => item.tool_call_id === parentId ? merged : item)
-    }
   }
 
   if (event.type === 'subagent_context_usage') {
     upsertSubagentContextUsage(event)
+    return
+  }
+
+  if (event.type === 'subagent_context_compression') {
+    upsertSubagentCompaction(event)
     return
   }
 

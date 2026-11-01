@@ -803,6 +803,38 @@ const handleCopyWorkspacePreviewContent = () => {
   void copyPreviewText(text, '已复制文件内容')
 }
 
+// 预览头部路径：左侧固定前缀（/mnt/user-data/...）截掉不占宽度，优先露出有区分度的
+// 文件名与上一层目录；完整路径放到 title/hover
+// 预览头部路径：参照 DSH PathLabel —— 目录弱化成 tertiary、文件名保持主色；
+// 放不下时容器右对齐裁掉左侧（固定前缀先被裁），左侧用 28px 渐变淡出代替省略号。
+const selectedConsolePathParts = computed(() => {
+  const full = selectedConsoleFile.value?.displayPath || ''
+  const root = producedFileTree.value.root
+  const relative = root && full.startsWith(`${root}/`) ? full.slice(root.length + 1) : full
+  const index = relative.lastIndexOf('/')
+  return index >= 0
+    ? { directory: relative.slice(0, index + 1), name: relative.slice(index + 1) }
+    : { directory: '', name: relative }
+})
+const previewPathRef = ref<HTMLElement | null>(null)
+const previewPathInnerRef = ref<HTMLElement | null>(null)
+const previewPathClipped = ref(false)
+let previewPathObserver: ResizeObserver | null = null
+const syncPreviewPathClip = () => {
+  const outer = previewPathRef.value
+  const inner = previewPathInnerRef.value
+  if (outer && inner) previewPathClipped.value = inner.offsetWidth > outer.clientWidth
+}
+onMounted(() => {
+  void nextTick(syncPreviewPathClip)
+  if (typeof ResizeObserver === 'undefined') return
+  previewPathObserver = new ResizeObserver(syncPreviewPathClip)
+  if (previewPathRef.value) previewPathObserver.observe(previewPathRef.value)
+  if (previewPathInnerRef.value) previewPathObserver.observe(previewPathInnerRef.value)
+})
+onUnmounted(() => { previewPathObserver?.disconnect() })
+watch(() => selectedConsoleFile.value?.displayPath, () => { void nextTick(syncPreviewPathClip) })
+
 const handleCopyWorkspacePreviewPath = () => {
   const path = selectedConsoleFile.value?.displayPath || ''
   if (!path) return
@@ -1158,6 +1190,7 @@ defineExpose({
     :subtitle="sidePanelSubtitle"
     :auto-follow="isToolTabActive && toolViewMode === 'agent' && Boolean(subagentTaskCall)"
     :fill-body="isWorkspaceTabActive"
+    :show-subheader="isToolTabActive && Boolean(subagentTaskCall)"
     :show-trigger="false"
     :show-close="false"
     @open="$emit('update:tab', 'console'); $emit('update:open', true)"
@@ -1203,6 +1236,12 @@ defineExpose({
           v-if="subagentTaskCall.subagentContextUsage"
           class="shrink-0 rounded-full bg-[#1f82d9]/10 px-1.5 py-0.5 text-[10px] leading-none text-[#1f82d9]/80 tabular-nums"
         >上下文 {{ subagentTaskCall.subagentContextUsage.percent ?? 0 }}%</span>
+        <span
+          v-if="subagentTaskCall.subagentCompactions?.length"
+          class="shrink-0 cursor-default rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] leading-none text-slate-500 tabular-nums"
+          data-subagent-compactions
+          :title="subagentTaskCall.subagentCompactions.map(item => `${item.timestamp || ''} ${item.estimated_tokens_before ?? 0} → ${item.estimated_tokens_after ?? 0} tokens，压缩 ${item.compressed_messages ?? 0} 条`).join('\n')"
+        >已压缩 {{ subagentTaskCall.subagentCompactions.length }} 次</span>
         <div class="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5 text-[11px]">
           <button
             type="button"
@@ -1457,8 +1496,17 @@ defineExpose({
 
       <div v-if="activePanelTab.kind === 'file' && selectedConsoleFile" class="flex min-h-0 flex-1 flex-col rounded-lg border border-slate-100 bg-slate-50 p-3">
         <div class="mb-2 flex items-center justify-between gap-2">
-          <div class="min-w-0 truncate font-mono text-xs font-medium text-slate-500">
-            {{ selectedConsoleFile?.displayPath }}
+          <div
+            ref="previewPathRef"
+            class="flex min-w-0 flex-1 items-center justify-end overflow-hidden font-mono text-xs"
+            :style="previewPathClipped ? { maskImage: 'linear-gradient(to right, transparent, #000 28px)' } : undefined"
+            :title="selectedConsoleFile?.displayPath"
+            data-preview-path
+          >
+            <span ref="previewPathInnerRef" class="mr-auto whitespace-nowrap">
+              <span v-if="selectedConsolePathParts.directory" class="text-slate-400">{{ selectedConsolePathParts.directory }}</span>
+              <span class="font-medium text-slate-600">{{ selectedConsolePathParts.name }}</span>
+            </span>
           </div>
           <div class="flex shrink-0 items-center gap-2">
             <div v-if="selectedConsoleFile && (selectedConsoleChartSpec || hasSelectedConsoleTable || selectedConsoleIsMarkdown || selectedConsoleIsMermaid || selectedConsoleIsHtml)" class="flex rounded-md border border-slate-200 bg-white p-0.5">

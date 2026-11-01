@@ -303,6 +303,60 @@ def test_iter_subagent_stream_events_fills_missing_tool_timing():
     assert tool_started_at == {}
 
 
+@pytest.mark.asyncio
+async def test_task_tool_forwards_and_stamps_subagent_compactions(monkeypatch):
+    """子图压缩：自定义事件转发 + 压缩记录随 task 结果持久化。"""
+    written = []
+    monkeypatch.setattr(subagents_module, "get_stream_writer", lambda: written.append)
+
+    class FakeRunnable:
+        async def astream(self, _state, _config, *, stream_mode):
+            yield "updates", {"model": {"messages": [AIMessage(content="结论", id="m1")]}}
+            yield (
+                "updates",
+                {
+                    "compress": {
+                        "context_compression_events": [
+                            {
+                                "id": "context-compression-abc",
+                                "phase": "completed",
+                                "timestamp": "2026-11-01 10:00:00",
+                                "estimated_tokens_before": 900,
+                                "estimated_tokens_after": 300,
+                                "estimated_cleared_tokens": 600,
+                                "compressed_messages": 4,
+                            }
+                        ]
+                    }
+                },
+            )
+
+    monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
+    tool = build_task_tool([_spec()])
+
+    result = await tool.coroutine(description="盘点", subagent_type="explore", runtime=_fake_runtime())
+
+    compaction_events = [
+        payload["event"]
+        for payload in written
+        if isinstance(payload, dict)
+        and payload.get("type") == "subagent_tool"
+        and payload.get("event", {}).get("event_type") == "subagent_context_compression"
+    ]
+    assert len(compaction_events) == 1
+    assert compaction_events[0]["estimated_tokens_before"] == 900
+    assert result.update["messages"][0].additional_kwargs["subagent_compactions"] == [
+        {
+            "id": "context-compression-abc",
+            "timestamp": "2026-11-01 10:00:00",
+            "estimated_tokens_before": 900,
+            "estimated_tokens_after": 300,
+            "estimated_cleared_tokens": 600,
+            "compressed_messages": 4,
+        }
+    ]
+
+
 def test_aggregate_subagent_token_usage_sums_model_calls():
     """子图 token 用量按每个模型调用的 usage_metadata 累加（含缓存/推理明细）。"""
     usage = subagents_module._aggregate_subagent_token_usage(

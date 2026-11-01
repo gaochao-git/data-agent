@@ -7,6 +7,7 @@ import { getConversationHistory } from '../api'
 import type {
   ChatDataContextCompressionEvent,
   ChatDataTokenUsage,
+  SubagentCompaction,
   SubagentContextUsage,
   SubagentTokenUsage,
   SubagentTrailItem,
@@ -134,6 +135,7 @@ interface HistoryMessagePayload {
   subagent_trail?: unknown
   subagent_context_usage?: unknown
   subagent_token_usage?: unknown
+  subagent_compactions?: unknown
   generation_stats?: unknown
 }
 
@@ -267,6 +269,31 @@ const normalizeSubagentContextUsage = (value: unknown): SubagentContextUsage | u
   }
 }
 
+// 子图上下文压缩记录：随 task 的 tool_result payload 持久化，历史回放还原「已压缩 N 次」
+const normalizeSubagentCompactions = (value: unknown): SubagentCompaction[] | undefined => {
+  if (!Array.isArray(value)) return undefined
+  const records: SubagentCompaction[] = []
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue
+    const raw = item as Record<string, unknown>
+    const id = String(raw.id || '').trim()
+    if (!id) continue
+    const toInt = (v: unknown) => {
+      const n = Number(v)
+      return Number.isFinite(n) && n >= 0 ? Math.floor(n) : undefined
+    }
+    records.push({
+      id,
+      timestamp: typeof raw.timestamp === 'string' ? raw.timestamp : undefined,
+      estimated_tokens_before: toInt(raw.estimated_tokens_before),
+      estimated_tokens_after: toInt(raw.estimated_tokens_after),
+      estimated_cleared_tokens: toInt(raw.estimated_cleared_tokens),
+      compressed_messages: toInt(raw.compressed_messages),
+    })
+  }
+  return records.length ? records : undefined
+}
+
 // 子智能体 token 用量（billing 口径）：随 task 的 tool_result payload 持久化，历史回放还原
 const normalizeSubagentTokenUsage = (value: unknown): SubagentTokenUsage | undefined => {
   if (!value || typeof value !== 'object') return undefined
@@ -293,6 +320,7 @@ const withHistoryToolResult = (
   timing?: Pick<ToolCallInfo, 'started_at_ms' | 'ended_at_ms'>,
   subagentContextUsage?: SubagentContextUsage,
   subagentTokenUsage?: SubagentTokenUsage,
+  subagentCompactions?: SubagentCompaction[],
 ): ToolCallInfo => {
   let renderId: string | undefined
   let renderType: ToolCallInfo['renderType']
@@ -321,6 +349,7 @@ const withHistoryToolResult = (
     subagentTrail,
     subagentContextUsage: subagentContextUsage ?? toolCall.subagentContextUsage,
     subagentTokenUsage: subagentTokenUsage ?? toolCall.subagentTokenUsage,
+    subagentCompactions: subagentCompactions ?? toolCall.subagentCompactions,
     started_at_ms: timing?.started_at_ms ?? toolCall.started_at_ms ?? null,
     ended_at_ms: timing?.ended_at_ms ?? toolCall.ended_at_ms ?? null,
   }
@@ -449,9 +478,10 @@ export const buildHistoryMessagesFromEvents = (historyEvents: unknown): Message[
     const timing = readExecutionTiming(messagePayload)
     const subagentContextUsage = normalizeSubagentContextUsage(messagePayload.subagent_context_usage)
     const subagentTokenUsage = normalizeSubagentTokenUsage(messagePayload.subagent_token_usage)
+    const subagentCompactions = normalizeSubagentCompactions(messagePayload.subagent_compactions)
     target.toolCalls = target.toolCalls.map(toolCall => (
       toolCall.tool_call_id === toolCallId
-        ? withHistoryToolResult(toolCall, result, subagentTrail, timing, subagentContextUsage, subagentTokenUsage)
+        ? withHistoryToolResult(toolCall, result, subagentTrail, timing, subagentContextUsage, subagentTokenUsage, subagentCompactions)
         : toolCall
     ))
   }
@@ -578,9 +608,10 @@ export const buildHistoryMessages = (
     const timing = readExecutionTiming(rawMessage)
     const subagentContextUsage = normalizeSubagentContextUsage(rawMessage.subagent_context_usage)
     const subagentTokenUsage = normalizeSubagentTokenUsage(rawMessage.subagent_token_usage)
+    const subagentCompactions = normalizeSubagentCompactions(rawMessage.subagent_compactions)
     target.toolCalls = target.toolCalls.map(toolCall => (
       toolCall.tool_call_id === toolCallId
-        ? withHistoryToolResult(toolCall, result, subagentTrail, timing, subagentContextUsage, subagentTokenUsage)
+        ? withHistoryToolResult(toolCall, result, subagentTrail, timing, subagentContextUsage, subagentTokenUsage, subagentCompactions)
         : toolCall
     ))
   }

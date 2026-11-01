@@ -14,6 +14,8 @@ interface Props {
   autoFollow?: boolean
   /** 内容自己铺满并内部滚动（文件管理树 / 文件预览），关闭面板整体滚动 */
   fillBody?: boolean
+  /** 是否显示 tab 次级工具条（避免只有空行时也占一条高度） */
+  showSubheader?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -23,6 +25,7 @@ const props = withDefaults(defineProps<Props>(), {
   showClose: true,
   autoFollow: false,
   fillBody: false,
+  showSubheader: false,
 })
 
 const emit = defineEmits<{
@@ -208,7 +211,10 @@ onBeforeUnmount(stopResize)
       />
     </div>
 
-    <div class="flex h-14 items-center gap-3 border-b border-slate-100 px-4">
+    <div
+      class="flex items-center gap-3 border-b border-slate-100 px-4"
+      :class="$slots.tabs ? 'h-12' : 'h-14'"
+    >
       <div class="flex min-w-0 flex-1 items-center gap-2">
         <!-- 面板 tab 条：调用方提供时替代标题区（tab 即身份，不再重复标题/副标题） -->
         <slot name="tabs">
@@ -241,7 +247,7 @@ onBeforeUnmount(stopResize)
     </div>
     <!-- tab 自己的次级工具条（如子智能体的模式切换/上下文用量）：固定一条、不侵入 tab 条 -->
     <div
-      v-if="$slots.subheader"
+      v-if="showSubheader && $slots.subheader"
       class="flex shrink-0 items-center gap-2 border-b border-slate-100 px-4 py-1.5"
     >
       <slot name="subheader" />

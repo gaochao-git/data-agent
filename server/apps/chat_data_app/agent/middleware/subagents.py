@@ -42,6 +42,7 @@ from apps.chat_data_app.services.runtime_config import (
 )
 from apps.chat_data_app.services.setting_service import get_runtime_setting
 from apps.chat_data_app.sse_protocol import (
+    SSE_EVENT_SUBAGENT_CONTEXT_COMPRESSION,
     SSE_EVENT_SUBAGENT_CONTEXT_USAGE,
     SSE_EVENT_SUBAGENT_MESSAGE,
     SSE_EVENT_SUBAGENT_MESSAGE_DELTA,
@@ -948,11 +949,13 @@ def _aggregate_subagent_token_usage(messages: list) -> dict[str, int]:
     return totals if totals["total_tokens"] > 0 else {}
 
 
-def _subagent_process_snapshot(messages: list, context_usage: Any) -> dict[str, Any]:
-    """task 结果上附带的子过程快照：上下文用量 + 子图 token 用量。"""
+def _subagent_process_snapshot(messages: list, context_usage: Any, compactions: Any = None) -> dict[str, Any]:
+    """task 结果上附带的子过程快照：上下文用量 + 子图 token 用量 + 压缩事件。"""
     snapshot: dict[str, Any] = {}
     if isinstance(context_usage, dict) and context_usage:
         snapshot["subagent_context_usage"] = context_usage
+    if isinstance(compactions, list) and compactions:
+        snapshot["subagent_compactions"] = compactions
     # 子图 token 用量（billing 口径）：主对话统计不含子智能体消耗，这里单独随结果持久化
     token_usage = _aggregate_subagent_token_usage(messages)
     if token_usage:
@@ -1005,6 +1008,9 @@ class _SubagentStreamState:
         self.collected: list = []
         # 内层工具开始的后端时间：完成事件缺少工具计时盖章时兜底（每个内层工具都有耗时）
         self.tool_started_at: dict[str, int] = {}
+        # 子图上下文压缩事件（压缩节点 updates 里的 context_compression_events）
+        self.compression_events: list[dict[str, Any]] = []
+        self.seen_compression_ids: set[str] = set()
 
     def resolve_anonymous_id(self, message: Any) -> str:
         """给缺失 id 的消息生成稳定 id。
@@ -1145,6 +1151,49 @@ def _subagent_usage_snapshot(usage_meta: dict[str, int], collected: list) -> dic
     }
 
 
+def _compaction_record_from_event(compaction: Any, seen_ids: set[str]) -> dict[str, Any] | None:
+    """校验并归一一条压缩事件；完成态且首次出现才返回记录。"""
+    if not isinstance(compaction, dict) or compaction.get("phase") != "completed":
+        return None
+    compaction_id = str(compaction.get("id") or "").strip()
+    if not compaction_id or compaction_id in seen_ids:
+        return None
+    seen_ids.add(compaction_id)
+    return {
+        "id": compaction_id,
+        "timestamp": str(compaction.get("timestamp") or ""),
+        "estimated_tokens_before": int(compaction.get("estimated_tokens_before") or 0),
+        "estimated_tokens_after": int(compaction.get("estimated_tokens_after") or 0),
+        "estimated_cleared_tokens": int(compaction.get("estimated_cleared_tokens") or 0),
+        "compressed_messages": int(compaction.get("compressed_messages") or 0),
+    }
+
+
+def _forward_subagent_compaction_events(
+    payload: dict,
+    stream_state: "_SubagentStreamState",
+    writer: Any,
+    parent_tool_call_id: str | None,
+) -> None:
+    """把压缩节点更新里的 completed 事件转发为 subagent_context_compression（去重 + 记录）。"""
+    for node_result in payload.values():
+        if not isinstance(node_result, dict):
+            continue
+        for compaction in node_result.get("context_compression_events") or []:
+            record = _compaction_record_from_event(compaction, stream_state.seen_compression_ids)
+            if record is None:
+                continue
+            stream_state.compression_events.append(record)
+            _emit_subagent_tool_event(
+                writer,
+                {
+                    "event_type": SSE_EVENT_SUBAGENT_CONTEXT_COMPRESSION,
+                    "parent_tool_call_id": parent_tool_call_id,
+                    **record,
+                },
+            )
+
+
 def _process_subagent_chunk(
     chunk: Any, stream_state: "_SubagentStreamState", writer: Any, parent_tool_call_id: str | None
 ) -> bool:
@@ -1162,6 +1211,7 @@ def _process_subagent_chunk(
     if mode != "updates" or not isinstance(payload, dict):
         return False
     new_messages = stream_state.collect_update_messages(payload)
+    _forward_subagent_compaction_events(payload, stream_state, writer, parent_tool_call_id)
     for event in _iter_subagent_stream_events(
         new_messages,
         parent_tool_call_id,
@@ -1236,6 +1286,7 @@ async def _run_subagent_with_events(
         # 异常路径同样交给调用方（失败 ToolMessage 也带用量快照）。
         if captured is not None:
             captured["context_usage"] = _emit_context_usage(emit=False)
+            captured["compactions"] = list(stream_state.compression_events)
     return stream_state.collected
 
 
@@ -1484,7 +1535,7 @@ async def _build_task_tool_impl(
         additional_kwargs["subagent_trail"] = trail
     # 上下文用量 + 子图 token 用量：随 ToolMessage 持久化，历史回放还原
     # （直播路径上下文用量走 subagent_context_usage SSE 事件，token 用量随完成事件下发）。
-    additional_kwargs.update(_subagent_process_snapshot(messages, context_usage))
+    additional_kwargs.update(_subagent_process_snapshot(messages, context_usage, captured.get("compactions")))
     return Command(
         update={
             "messages": [

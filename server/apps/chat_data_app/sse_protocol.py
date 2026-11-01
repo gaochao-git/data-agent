@@ -52,6 +52,7 @@ SSE_EVENT_SUBAGENT_MESSAGE = "subagent_message"
 SSE_EVENT_SUBAGENT_MESSAGE_DELTA = "subagent_message_delta"
 SSE_EVENT_SUBAGENT_THINKING_DELTA = "subagent_thinking_delta"
 SSE_EVENT_SUBAGENT_CONTEXT_USAGE = "subagent_context_usage"
+SSE_EVENT_SUBAGENT_CONTEXT_COMPRESSION = "subagent_context_compression"
 
 SSE_EVENT_NAMES: frozenset[str] = frozenset(
     {

@@ -933,6 +933,9 @@ def _serialize_tool_message(message: ToolMessage) -> dict[str, Any]:
     token_usage = (getattr(message, "additional_kwargs", None) or {}).get("subagent_token_usage")
     if isinstance(token_usage, dict) and token_usage:
         payload["subagent_token_usage"] = token_usage
+    compactions = (getattr(message, "additional_kwargs", None) or {}).get("subagent_compactions")
+    if isinstance(compactions, list) and compactions:
+        payload["subagent_compactions"] = compactions
     return payload
 
 

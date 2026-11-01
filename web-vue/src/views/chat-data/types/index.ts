@@ -514,6 +514,8 @@ export interface ToolCallInfo {
   subagentContextUsage?: SubagentContextUsage
   // 子智能体 token 用量（billing 口径，主对话统计不含它）：随 task 结果持久化
   subagentTokenUsage?: SubagentTokenUsage
+  // 子图上下文压缩事件（静默压缩的可视化记录）
+  subagentCompactions?: SubagentCompaction[]
 }
 
 /**
@@ -541,6 +543,16 @@ export interface SubagentTokenUsage {
   cache_read_input_tokens?: number
   cache_creation_input_tokens?: number
   reasoning_tokens?: number
+}
+
+/** 子图上下文压缩记录（每条一次完成的压缩）。 */
+export interface SubagentCompaction {
+  id: string
+  timestamp?: string
+  estimated_tokens_before?: number
+  estimated_tokens_after?: number
+  estimated_cleared_tokens?: number
+  compressed_messages?: number
 }
 
 /** 子智能体内部过程条目：工具调用与中间文本输出按发生顺序混排。 */
@@ -638,7 +650,7 @@ export interface ChatDataOptions {
 export type SidebarTab = 'dashboards' | 'config' | 'history'
 
 // SSE 事件类型
-export type SSEEventType = 'message' | 'message_end' | 'token_usage' | 'generation_speed' | 'context_compression' | 'thinking' | 'tool' | 'tool_started' | 'tool_progress' | 'tool_completed' | 'tool_failed' | 'subagent_message' | 'subagent_message_delta' | 'subagent_thinking_delta' | 'subagent_context_usage' | 'inbox_admitted' | 'question_requested' | 'error' | 'done' | 'dashboard_spec'
+export type SSEEventType = 'message' | 'message_end' | 'token_usage' | 'generation_speed' | 'context_compression' | 'thinking' | 'tool' | 'tool_started' | 'tool_progress' | 'tool_completed' | 'tool_failed' | 'subagent_message' | 'subagent_message_delta' | 'subagent_thinking_delta' | 'subagent_context_usage' | 'subagent_context_compression' | 'inbox_admitted' | 'question_requested' | 'error' | 'done' | 'dashboard_spec'
 
 export interface UserQuestionOption {
   label: string
@@ -701,7 +713,7 @@ export interface ToolEventData {
 }
 
 export interface ToolLifecycleEventData extends ToolEventData {
-  type: 'tool_started' | 'tool_progress' | 'tool_completed' | 'tool_failed' | 'subagent_message' | 'subagent_message_delta' | 'subagent_thinking_delta' | 'subagent_context_usage'
+  type: 'tool_started' | 'tool_progress' | 'tool_completed' | 'tool_failed' | 'subagent_message' | 'subagent_message_delta' | 'subagent_thinking_delta' | 'subagent_context_usage' | 'subagent_context_compression'
   progress?: number
   accumulated_args?: Record<string, unknown>
   content?: string
@@ -721,11 +733,18 @@ export interface ToolLifecycleEventData extends ToolEventData {
   removed_lines?: number
   // tool_progress：流式提取的调用意图（args 未解析前提前推送，长耗时工具执行中即可展示）
   intent?: string
+  /** subagent_context_compression：压缩记录 id（去重） */
+  id?: string
   // subagent_context_usage：子图上下文用量快照（每个节点更新后推送一次，最终值随 task 结果持久化）
   used_tokens?: number
   threshold_tokens?: number
   /** task 完成事件：子图 token 用量（billing 口径） */
   subagent_token_usage?: SubagentTokenUsage
+  /** subagent_context_compression：一次完成的子图压缩记录 */
+  estimated_tokens_before?: number
+  estimated_tokens_after?: number
+  estimated_cleared_tokens?: number
+  compressed_messages?: number
   context_window?: number
   /** 占模型上下文窗口比例（与主对话同口径） */
   percent?: number
