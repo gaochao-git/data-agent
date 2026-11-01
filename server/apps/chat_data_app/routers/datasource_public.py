@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 
 from utils.error_codes import ErrorCode
 from utils.logger import get_logger
-from utils.response import business_response
+from utils.response import business_response, error_response
 
 from ..services.datasource.manager import get_datasource_manager
 from .datasource_helpers import (
@@ -43,9 +43,7 @@ async def get_datasources(request: Request, include_tables: bool = True) -> JSON
         raise
     except Exception as e:
         logger.error(f"获取数据源列表失败: {str(e)}", exc_info=True)
-        return business_response(
-            msg=f"获取失败: {str(e)}", code=ErrorCode.CHATDATA_DATASOURCE_LIST_FAILED, status="error"
-        )
+        return error_response(e, fallback="获取失败", code=ErrorCode.CHATDATA_DATASOURCE_LIST_FAILED)
 
 
 @router.get("/datasources/{datasource_id}/tables/{table_name}/columns/{column_name}/dict")
@@ -78,9 +76,7 @@ async def get_datasource_column_dict(
             e,
             exc_info=True,
         )
-        return business_response(
-            msg=f"获取失败: {str(e)}", code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED, status="error"
-        )
+        return error_response(e, fallback="获取失败", code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED)
 
 
 @router.get("/datasources/{datasource_id}/tables/{table_name}/column-dicts")
@@ -110,9 +106,7 @@ async def get_datasource_table_column_dicts(datasource_id: str, table_name: str,
             e,
             exc_info=True,
         )
-        return business_response(
-            msg=f"获取失败: {str(e)}", code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED, status="error"
-        )
+        return error_response(e, fallback="获取失败", code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED)
 
 
 @router.get("/datasources/{datasource_id}/schema")
@@ -149,9 +143,10 @@ async def get_schema(
     except ValueError as e:
         return business_response(msg=str(e), code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
     except ConnectionError as e:
-        return business_response(msg=str(e), code=ErrorCode.CHATDATA_QUERY_FAILED, status="error")
+        logger.error("获取表结构连接失败: datasource_id=%s error=%s", datasource_id, e, exc_info=True)
+        return error_response(e, fallback="获取失败", code=ErrorCode.CHATDATA_QUERY_FAILED)
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"获取表结构失败: {str(e)}", exc_info=True)
-        return business_response(msg=f"获取失败: {str(e)}", code=ErrorCode.CHATDATA_QUERY_FAILED, status="error")
+        return error_response(e, fallback="获取失败", code=ErrorCode.CHATDATA_QUERY_FAILED)

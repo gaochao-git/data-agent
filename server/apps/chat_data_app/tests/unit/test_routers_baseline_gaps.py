@@ -368,7 +368,8 @@ async def test_create_semantic_config_shields_unexpected_errors(monkeypatch):
     )
 
     assert response["code"] == ErrorCode.CHATDATA_SERVICE_ERROR
-    assert "db down" in response["msg"]
+    # 非 SQL 接口不返回底层错误：统一兜底文案，原始错误只进日志
+    assert response["msg"] == "创建失败"
 
 
 # --------------------------------------------------------------------------
@@ -502,7 +503,8 @@ async def test_get_scene_evaluation_cases_route_shields_unexpected_errors(monkey
     response = payload(await evaluation_routes._get_scene_evaluation_cases_route("ds-1", "cfg-1", REQUEST))
 
     assert response["code"] == ErrorCode.CHATDATA_EVALUATION_CASE_LIST_FAILED
-    assert "storage down" in response["msg"]
+    # 非 SQL 接口不返回底层错误：统一兜底文案，原始错误只进日志
+    assert response["msg"] == "获取测试集失败"
 
 
 @pytest.mark.asyncio
@@ -522,4 +524,4 @@ async def test_generate_scene_evaluation_cases_route_shields_unexpected_errors(m
     response = payload(await evaluation_routes._generate_scene_evaluation_cases_route("ds-1", "cfg-1", REQUEST))
 
     assert response["code"] == ErrorCode.CHATDATA_EVALUATION_HISTORY_FAILED
-    assert "llm down" in response["msg"]
+    assert response["msg"] == "生成测试集失败"

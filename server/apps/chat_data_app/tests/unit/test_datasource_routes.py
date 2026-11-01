@@ -4282,7 +4282,8 @@ def test_get_schema_uses_cache_and_handles_errors(monkeypatch):
     manager.get_cached_schema_async = raise_connection
     connection_body = _payload(asyncio.run(datasource_public_routes.get_schema("ds_a")))
     assert connection_body["code"] == ErrorCode.CHATDATA_QUERY_FAILED
-    assert connection_body["msg"] == "connect failed"
+    # 非 SQL 运行接口不返回底层错误：统一兜底文案，原始错误只进日志
+    assert connection_body["msg"] == "获取失败"
 
     async def raise_runtime(*_args, **_kwargs):
         raise RuntimeError("boom")
@@ -4290,7 +4291,7 @@ def test_get_schema_uses_cache_and_handles_errors(monkeypatch):
     manager.get_cached_schema_async = raise_runtime
     runtime_body = _payload(asyncio.run(datasource_public_routes.get_schema("ds_a")))
     assert runtime_body["code"] == ErrorCode.CHATDATA_QUERY_FAILED
-    assert "boom" in runtime_body["msg"]
+    assert runtime_body["msg"] == "获取失败"
 
 
 def test_get_db_tables_uses_manager_for_direct_http_and_error_branches(monkeypatch):

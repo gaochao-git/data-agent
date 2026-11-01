@@ -88,6 +88,24 @@ def business_response(
     return JSONResponse(response, status_code=http_status_code)
 
 
+def error_response(
+    exc: Exception,
+    *,
+    code: int,
+    fallback: str,
+    http_status_code: int = http_status.HTTP_200_OK,
+) -> JSONResponse:
+    """统一错误响应：业务错误透传安全文案，基础设施错误用兜底文案。
+
+    业务错误（ValueError）由 service 主动抛出，文案本身就是给用户看的；
+    其余异常（驱动/网络/文件系统）统一收敛为 fallback。原始异常由调用方
+    logger.error(..., exc_info=True) 落日志，不返回给前端。
+    """
+    raw = str(exc or "").strip()
+    msg = raw if isinstance(exc, ValueError) and raw else fallback
+    return business_response(msg=msg, code=code, status="error", http_status_code=http_status_code)
+
+
 def is_chatdata_request(request: Request) -> bool:
     """判断是否是 ChatData 业务接口。"""
     return request.url.path.startswith("/api/chatdata")

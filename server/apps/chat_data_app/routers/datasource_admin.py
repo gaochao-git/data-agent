@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 
 from utils.error_codes import ErrorCode
 from utils.logger import get_logger
-from utils.response import business_response
+from utils.response import business_response, error_response
 
 from ..schema import (
     DatasourceColumnDictGenerateRequest,
@@ -98,9 +98,7 @@ async def get_admin_datasources(request: Request, include_tables: bool = True) -
         raise
     except Exception as e:
         logger.error("获取后台数据源列表失败: %s", e, exc_info=True)
-        return business_response(
-            msg=f"获取失败: {str(e)}", code=ErrorCode.CHATDATA_DATASOURCE_LIST_FAILED, status="error"
-        )
+        return error_response(e, fallback="获取失败", code=ErrorCode.CHATDATA_DATASOURCE_LIST_FAILED)
 
 
 @router.post("/admin/datasources/groups")
@@ -140,9 +138,7 @@ async def create_datasource_group(body: DatasourceGroupCreateRequest, request: R
         raise
     except Exception as e:
         logger.error(f"创建数据源组失败: {str(e)}", exc_info=True)
-        return business_response(
-            msg=f"创建失败: {str(e)}", code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED, status="error"
-        )
+        return error_response(e, fallback="创建失败", code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED)
 
 
 @router.patch("/admin/datasources/{datasource_id}")
@@ -184,9 +180,7 @@ async def update_datasource_meta(datasource_id: str, body: DatasourceUpdateReque
         raise
     except Exception as e:
         logger.error(f"更新数据源失败: {str(e)}", exc_info=True)
-        return business_response(
-            msg=f"更新失败: {str(e)}", code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED, status="error"
-        )
+        return error_response(e, fallback="更新失败", code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED)
 
 
 @router.put("/admin/datasources/{datasource_id}/group-config")
@@ -239,9 +233,7 @@ async def update_datasource_group_config(
         raise
     except Exception as e:
         logger.error(f"更新数据源组失败: {str(e)}", exc_info=True)
-        return business_response(
-            msg=f"更新失败: {str(e)}", code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED, status="error"
-        )
+        return error_response(e, fallback="更新失败", code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED)
 
 
 @router.post("/admin/datasources/{datasource_id}/metadata-sync")
@@ -325,9 +317,7 @@ async def update_mapped_modules(datasource_id: str, body: dict, request: Request
         raise
     except Exception as e:
         logger.error(f"更新模块映射失败: {str(e)}", exc_info=True)
-        return business_response(
-            msg=f"更新失败: {str(e)}", code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED, status="error"
-        )
+        return error_response(e, fallback="更新失败", code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED)
 
 
 @router.get("/admin/datasources/{datasource_id}/table-groups")
@@ -348,9 +338,7 @@ async def get_datasource_table_groups(datasource_id: str, request: Request) -> J
         raise
     except Exception as e:
         logger.error("获取表分组失败: datasource_id=%s error=%s", datasource_id, e, exc_info=True)
-        return business_response(
-            msg=f"获取失败: {str(e)}", code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED, status="error"
-        )
+        return error_response(e, fallback="获取失败", code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED)
 
 
 @router.get("/admin/datasources/{datasource_id}/semantic-health")
@@ -393,9 +381,7 @@ async def get_datasource_semantic_health(datasource_id: str, request: Request) -
         raise
     except Exception as e:
         logger.error("指标集健康校验失败: datasource_id=%s error=%s", datasource_id, e, exc_info=True)
-        return business_response(
-            msg=f"校验失败: {str(e)}", code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED, status="error"
-        )
+        return error_response(e, fallback="校验失败", code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED)
 
 
 @router.put("/admin/datasources/{datasource_id}/table-groups")
@@ -420,9 +406,7 @@ async def update_datasource_table_groups(
         raise
     except Exception as e:
         logger.error("保存表分组失败: datasource_id=%s error=%s", datasource_id, e, exc_info=True)
-        return business_response(
-            msg=f"保存失败: {str(e)}", code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED, status="error"
-        )
+        return error_response(e, fallback="保存失败", code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED)
 
 
 @router.put("/admin/datasources/{datasource_id}/tables/{table_name}/business-desc")
@@ -451,9 +435,7 @@ async def update_datasource_table_business_desc(
         logger.error(
             "保存表业务说明失败: datasource_id=%s table_name=%s error=%s", datasource_id, table_name, e, exc_info=True
         )
-        return business_response(
-            msg=f"保存失败: {str(e)}", code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED, status="error"
-        )
+        return error_response(e, fallback="保存失败", code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED)
 
 
 @router.put("/admin/datasources/{datasource_id}/tables/{table_name}/columns/{column_name}/dict")
@@ -504,9 +486,7 @@ async def update_datasource_column_dict(
             e,
             exc_info=True,
         )
-        return business_response(
-            msg=f"保存失败: {str(e)}", code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED, status="error"
-        )
+        return error_response(e, fallback="保存失败", code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED)
 
 
 @router.get("/admin/datasources/{datasource_id}/tables/{table_name}/columns/{column_name}/dict")
@@ -529,11 +509,7 @@ async def get_admin_datasource_column_dict(
             e,
             exc_info=True,
         )
-        return business_response(
-            msg=f"获取失败: {str(e)}",
-            code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED,
-            status="error",
-        )
+        return error_response(e, fallback="获取失败", code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED)
 
 
 @router.get("/admin/datasources/{datasource_id}/tables/{table_name}/column-dicts")
@@ -555,11 +531,7 @@ async def get_admin_datasource_table_column_dicts(
             e,
             exc_info=True,
         )
-        return business_response(
-            msg=f"获取失败: {str(e)}",
-            code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED,
-            status="error",
-        )
+        return error_response(e, fallback="获取失败", code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED)
 
 
 # 字段字典候选生成的 LLM 编排已下沉 column_dict_generate；此处保留兼容导出，
@@ -619,9 +591,7 @@ async def generate_datasource_column_dict(
             e,
             exc_info=True,
         )
-        return business_response(
-            msg=f"生成失败: {str(e)}", code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED, status="error"
-        )
+        return error_response(e, fallback="生成失败", code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED)
 
 
 @router.get("/admin/datasources/{datasource_id}/tables/{table_name}/indexes")
@@ -716,9 +686,7 @@ async def set_default_datasource(datasource_id: str, request: Request) -> JSONRe
         raise
     except Exception as e:
         logger.error(f"设置默认数据源失败: {str(e)}", exc_info=True)
-        return business_response(
-            msg=f"设置失败: {str(e)}", code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED, status="error"
-        )
+        return error_response(e, fallback="设置失败", code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED)
 
 
 @router.delete("/admin/datasources/{datasource_id}/set-default")
@@ -739,9 +707,7 @@ async def clear_default_datasource(datasource_id: str, request: Request) -> JSON
         raise
     except Exception as e:
         logger.error(f"取消默认数据源失败: {str(e)}", exc_info=True)
-        return business_response(
-            msg=f"取消失败: {str(e)}", code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED, status="error"
-        )
+        return error_response(e, fallback="取消失败", code=ErrorCode.CHATDATA_DATASOURCE_OPERATION_FAILED)
 
 
 @router.delete("/admin/datasources/{datasource_id}")
@@ -765,11 +731,9 @@ async def delete_datasource(datasource_id: str, request: Request) -> JSONRespons
         raise
     except Exception as e:
         if isinstance(e, ValueError):
-            return business_response(msg=str(e), code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
+            return error_response(e, fallback="删除失败", code=ErrorCode.CHATDATA_BAD_REQUEST)
         logger.error(f"删除数据源失败: {str(e)}", exc_info=True)
-        return business_response(
-            msg=f"删除失败: {str(e)}", code=ErrorCode.CHATDATA_DATASOURCE_DELETE_FAILED, status="error"
-        )
+        return error_response(e, fallback="删除失败", code=ErrorCode.CHATDATA_DATASOURCE_DELETE_FAILED)
 
 
 @router.post("/admin/datasources/db-tables")

@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 from auth import AuthenticationError
 from utils.error_codes import ErrorCode
 from utils.logger import get_logger
-from utils.response import business_response
+from utils.response import business_response, error_response
 
 from ..schema import (
     SemanticConfigBatchToggleRequest,
@@ -182,7 +182,7 @@ async def list_semantic_configs(datasource_id: str, request: Request) -> JSONRes
         return business_response(data={"configs": configs, "total": len(configs)}, msg="获取成功")
     except Exception as e:
         logger.error(f"获取语义配置列表失败: {str(e)}", exc_info=True)
-        return business_response(msg=f"获取失败: {str(e)}", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
+        return error_response(e, fallback="获取失败", code=ErrorCode.CHATDATA_SERVICE_ERROR)
 
 
 @router.get("/datasources/{datasource_id}/my-semantic-configs")
@@ -202,7 +202,7 @@ async def list_my_semantic_configs(datasource_id: str, request: Request) -> JSON
         return business_response(data={"configs": configs, "total": len(configs)}, msg="获取成功")
     except Exception as e:
         logger.error(f"获取个人语义配置列表失败: {str(e)}", exc_info=True)
-        return business_response(msg=f"获取失败: {str(e)}", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
+        return error_response(e, fallback="获取失败", code=ErrorCode.CHATDATA_SERVICE_ERROR)
 
 
 @router.get("/admin/datasources/{datasource_id}/semantic-configs")
@@ -222,7 +222,7 @@ async def list_admin_semantic_configs(datasource_id: str, request: Request) -> J
         return business_response(data={"configs": configs, "total": len(configs)}, msg="获取成功")
     except Exception as e:
         logger.error(f"获取后台语义配置列表失败: {str(e)}", exc_info=True)
-        return business_response(msg=f"获取失败: {str(e)}", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
+        return error_response(e, fallback="获取失败", code=ErrorCode.CHATDATA_SERVICE_ERROR)
 
 
 async def _create_semantic_config_with_scope(
@@ -281,7 +281,7 @@ async def _create_semantic_config_with_scope(
         )
     except Exception as e:
         logger.error(f"创建语义配置失败: {str(e)}", exc_info=True)
-        return business_response(msg=f"创建失败: {str(e)}", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
+        return error_response(e, fallback="创建失败", code=ErrorCode.CHATDATA_SERVICE_ERROR)
 
 
 @router.post("/datasources/{datasource_id}/semantic-configs")
@@ -646,7 +646,7 @@ async def _learn_semantic_config_from_history_route(
         return business_response(msg=str(e), code=ErrorCode.CHATDATA_VALIDATION_FAILED, status="error")
     except Exception as e:
         logger.error("历史学习失败: datasource_id=%s config_id=%s error=%s", datasource_id, config_id, e, exc_info=True)
-        return business_response(msg=f"历史学习失败: {str(e)}", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
+        return error_response(e, fallback="历史学习失败", code=ErrorCode.CHATDATA_SERVICE_ERROR)
 
 
 @router.post("/datasources/{datasource_id}/semantic-configs/{config_id}/history-learning")
@@ -758,7 +758,7 @@ async def _update_semantic_config(
         )
     except Exception as e:
         logger.error(f"更新语义配置失败: {str(e)}", exc_info=True)
-        return business_response(msg=f"更新失败: {str(e)}", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
+        return error_response(e, fallback="更新失败", code=ErrorCode.CHATDATA_SERVICE_ERROR)
 
 
 async def _validate_semantic_config_with_scope(
@@ -813,7 +813,7 @@ async def _validate_semantic_config_with_scope(
         )
     except Exception as e:
         logger.error(f"保存前校验失败: {str(e)}", exc_info=True)
-        return business_response(msg=f"校验失败: {str(e)}", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
+        return error_response(e, fallback="校验失败", code=ErrorCode.CHATDATA_SERVICE_ERROR)
 
 
 @router.post("/datasources/{datasource_id}/semantic-configs/validate")
@@ -874,7 +874,7 @@ async def _delete_semantic_config(
         return business_response(data={"config_id": config_id}, msg="删除成功")
     except Exception as e:
         logger.error(f"删除语义配置失败: {str(e)}", exc_info=True)
-        return business_response(msg=f"删除失败: {str(e)}", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
+        return error_response(e, fallback="删除失败", code=ErrorCode.CHATDATA_SERVICE_ERROR)
 
 
 async def _toggle_semantic_config(
@@ -913,7 +913,7 @@ async def _toggle_semantic_config(
         return business_response(data=data, msg=f"语义配置已{'启用' if enabled else '禁用'}")
     except Exception as e:
         logger.error(f"切换语义配置失败: {str(e)}", exc_info=True)
-        return business_response(msg=f"操作失败: {str(e)}", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
+        return error_response(e, fallback="操作失败", code=ErrorCode.CHATDATA_SERVICE_ERROR)
 
 
 @router.put("/datasources/{datasource_id}/semantic-configs/{config_id}")
@@ -1004,7 +1004,7 @@ async def _batch_toggle_semantic_configs(
         return business_response(data=result, msg=_build_batch_toggle_message(result, payload.enabled))
     except Exception as e:
         logger.error(f"批量切换语义配置失败: {str(e)}", exc_info=True)
-        return business_response(msg=f"操作失败: {str(e)}", code=ErrorCode.CHATDATA_SERVICE_ERROR, status="error")
+        return error_response(e, fallback="操作失败", code=ErrorCode.CHATDATA_SERVICE_ERROR)
 
 
 @router.patch("/datasources/{datasource_id}/semantic-configs/{config_id}/toggle")

@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from utils.error_codes import ErrorCode, chatdata_http_exception_business_code
 from utils.logger import get_logger
-from utils.response import business_response
+from utils.response import business_response, error_response
 
 from ..schema import (
     AccuracyEvaluationCasesUpsertRequest,
@@ -835,9 +835,7 @@ async def _get_scene_evaluation_cases_route(
         logger.error(
             "获取场景评测测试集失败: datasource_id=%s config_id=%s error=%s", datasource_id, config_id, e, exc_info=True
         )
-        return business_response(
-            msg=f"获取测试集失败: {e}", code=ErrorCode.CHATDATA_EVALUATION_CASE_LIST_FAILED, status="error"
-        )
+        return error_response(e, fallback="获取测试集失败", code=ErrorCode.CHATDATA_EVALUATION_CASE_LIST_FAILED)
 
 
 async def _save_scene_evaluation_cases_route(
@@ -889,9 +887,7 @@ async def _save_scene_evaluation_cases_route(
         logger.error(
             "保存场景评测测试集失败: datasource_id=%s config_id=%s error=%s", datasource_id, config_id, e, exc_info=True
         )
-        return business_response(
-            msg=f"保存测试集失败: {e}", code=ErrorCode.CHATDATA_EVALUATION_CASE_SAVE_FAILED, status="error"
-        )
+        return error_response(e, fallback="保存测试集失败", code=ErrorCode.CHATDATA_EVALUATION_CASE_SAVE_FAILED)
 
 
 async def _generate_scene_evaluation_cases_route(
@@ -926,9 +922,7 @@ async def _generate_scene_evaluation_cases_route(
         logger.error(
             "生成场景评测测试集失败: datasource_id=%s config_id=%s error=%s", datasource_id, config_id, e, exc_info=True
         )
-        return business_response(
-            msg=f"生成测试集失败: {e}", code=ErrorCode.CHATDATA_EVALUATION_HISTORY_FAILED, status="error"
-        )
+        return error_response(e, fallback="生成测试集失败", code=ErrorCode.CHATDATA_EVALUATION_HISTORY_FAILED)
 
 
 async def _draft_scene_evaluation_case_route(
@@ -960,9 +954,7 @@ async def _draft_scene_evaluation_case_route(
             e,
             exc_info=True,
         )
-        return business_response(
-            msg=f"生成用例草稿失败: {e}", code=ErrorCode.CHATDATA_EVALUATION_DETAIL_FAILED, status="error"
-        )
+        return error_response(e, fallback="生成用例草稿失败", code=ErrorCode.CHATDATA_EVALUATION_DETAIL_FAILED)
 
 
 @router.get("/datasources/{datasource_id}/semantic-configs/{config_id}/evaluation-cases")

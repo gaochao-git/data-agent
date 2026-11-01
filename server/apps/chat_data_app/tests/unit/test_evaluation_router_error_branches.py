@@ -97,7 +97,7 @@ def test_save_route_masks_unexpected_error(monkeypatch):
     )
     body = _body(response)
     assert body["code"] == ErrorCode.CHATDATA_EVALUATION_CASE_SAVE_FAILED
-    assert body["msg"].startswith("保存测试集失败:")
+    assert body["msg"] == "保存测试集失败"
 
 
 def test_draft_route_masks_unexpected_error(monkeypatch):
@@ -117,7 +117,7 @@ def test_draft_route_masks_unexpected_error(monkeypatch):
     )
     body = _body(response)
     assert body["code"] == ErrorCode.CHATDATA_EVALUATION_DETAIL_FAILED
-    assert body["msg"].startswith("生成用例草稿失败:")
+    assert body["msg"] == "生成用例草稿失败"
 
 
 def test_admin_entries_forward_admin_manage(monkeypatch):
