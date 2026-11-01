@@ -27,6 +27,8 @@ from .result import (
 logger = get_logger(__name__)
 
 QUERY_TASK_POLL_INTERVAL_MS = 1500
+# 心跳间隔：须显著小于启动对账的 stale 阈值（默认 300s），供多 worker 区分活任务
+QUERY_TASK_HEARTBEAT_SECONDS = 30
 CANCEL_TARGET_WAIT_SECONDS = 3
 CANCEL_TARGET_POLL_INTERVAL_SECONDS = 0.1
 
@@ -1254,6 +1256,7 @@ class QueryTaskService:
         if not task:
             logger.warning("异步查询任务不存在: %s", task_id)
             return
+        heartbeat = asyncio.create_task(self._query_task_heartbeat(task_id))
         try:
             await self.dispatch_query_task(task_id, task)
         except ValueError as err:
@@ -1262,6 +1265,18 @@ class QueryTaskService:
         except Exception as err:
             logger.error("异步查询任务异常: %s", err, exc_info=True)
             await self.mark_query_task_failed(task_id, "执行失败，请稍后重试或联系管理员")
+        finally:
+            heartbeat.cancel()
+            await asyncio.gather(heartbeat, return_exceptions=True)
+
+    async def _query_task_heartbeat(self, task_id: str) -> None:
+        """运行期刷新任务 update_time；进程退出后停止，供启动对账识别僵尸任务。"""
+        while True:
+            await asyncio.sleep(QUERY_TASK_HEARTBEAT_SECONDS)
+            try:
+                await query_runtime.touch_query_task(task_id)
+            except Exception as err:  # 心跳失败不影响查询本身
+                logger.warning("查询任务心跳刷新失败: task_id=%s error=%s", task_id, err)
 
     async def dispatch_query_task(self, task_id: str, task: dict[str, Any]) -> None:
         """按任务类型分发后台查询任务。"""

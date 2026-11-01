@@ -43,6 +43,9 @@ async def lifespan(app: FastAPI):
     # 模型注册表启动预热必须最先执行：DB 是唯一真值，后续 context budget 校验
     # 等启动逻辑都要读注册表；预热失败时服务路径明确报错而非回落配置文件
     await refresh_registry_cache()
+    from apps.chat_data_app.services.sql_run.runtime import interrupt_stale_query_tasks
+
+    await interrupt_stale_query_tasks()
     validate_context_budget_startup_config()
     await setup_checkpointer()
     await agent_run_runtime.start()

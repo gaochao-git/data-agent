@@ -2026,7 +2026,9 @@ def test_get_sql_result_cache_returns_current_read_elapsed(monkeypatch):
     result = asyncio.run(query_cache.get_sql_result_cache({"cache_key": "cache_a"}))
 
     assert result["cache_hit"] is True
-    assert result["execution_time_ms"] == 7
+    # 命中缓存不能覆盖原始查询耗时；缓存读取耗时单独记录
+    assert result["execution_time_ms"] == 503
+    assert result["cache_read_ms"] == 7
     assert result["total_count"] == 1
     assert cache_item.hit_count == 1
     # 命中后回写 hit_count 的提交由 get_session 退出自动完成，fake session 观察不到
@@ -2064,7 +2066,7 @@ def test_sql_result_cache_key_uses_datasource_member_and_effective_sql():
         target, "select * from orders LIMIT 100", datasource_id="ds_b"
     )
 
-    assert same_sql_a["cache_key"] == same_sql_b["cache_key"]
+    assert same_sql_a["cache_key"] != same_sql_b["cache_key"]
     assert same_sql_a["cache_key"] != whitespace_changed["cache_key"]
     assert string_literal_changed["cache_key"] != string_literal_with_double_space["cache_key"]
     assert same_sql_a["cache_key"] != other_limit["cache_key"]

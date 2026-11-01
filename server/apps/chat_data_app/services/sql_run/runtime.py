@@ -12,7 +12,7 @@ import json
 import time
 import uuid
 from collections.abc import Awaitable, Callable
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Literal, cast
 
 from utils.alarm import emit_dangerous_sql_alarm
@@ -24,6 +24,7 @@ from ...daos.query_execution_dao import QueryExecutionDao
 from ...daos.query_task_dao import QueryTaskDao
 from ...schema import ExecuteSqlRequest, InternalQueryTaskCreateRequest, QueryTaskCreateRequest
 from ..datasource.manager import get_datasource_manager
+from ..runtime_config import read_positive_int_env
 from ..semantic.run.semantic_query_service import compile_semantic_builder_sql
 from ..setting_service import get_runtime_setting
 from . import cache as query_cache
@@ -715,7 +716,7 @@ async def execute_sql_for_member(
             max_rows=max_rows,
         )
         cache_identity = query_cache.build_sql_result_cache_identity(
-            execution_target, effective_sql, datasource_id=datasource_id
+            execution_target, effective_sql, datasource_id=datasource_id, user_id=user_id
         )
         if execution_id and await _guard_running_execution(execution_id):
             return _cancelled_member_result(member_datasource_id, member_name, effective_sql)
@@ -1595,6 +1596,9 @@ async def _run_agent_sql_execution(
                     user_id=user_id,
                     username=operator_name,
                     execution_id=get_execution_id_by_member(execution_map, target) if execution_map else None,
+                    # 与 SQL 编辑器链路对齐：带上任务 ID，HTTP 远端任务才能挂到
+                    # chat_data_query_task.remote_tasks 上，任务级实时结果合并才生效。
+                    query_task_id=task_info.get("task_id") if task_info else None,
                     datasource_id=datasource_id,
                     max_rows=row_limit_cap,
                 )
@@ -1686,3 +1690,40 @@ async def execute_agent_sql(
         logger.error("执行 SQL 异常: %s", e, exc_info=True)
         await _fail_agent_sql_task(task_info, str(e) or "SQL 执行失败")
         return build_query_result_payload(sql=sql, member_results=[], fallback_error=f"执行失败: {str(e)}")
+
+
+async def touch_query_task(task_id: str) -> int:
+    """刷新查询任务心跳时间（运行期由后台任务周期调用）。"""
+    return await query_task_dao.touch_unfinished_task(task_id)
+
+
+async def interrupt_stale_query_tasks() -> int:
+    """对账：把心跳早于阈值的 pending/running 任务置失败。
+
+    异步查询任务由进程内 asyncio 任务驱动；进程退出后不再心跳。多 worker 部署
+    下每个 worker 启动都会执行对账，用「心跳超时」而不是「早于启动时间」判定，
+    避免误杀其他存活 worker 正在跑的任务。
+    """
+    stalled_message = "服务重启，任务已中断，请重新执行"
+    stale_seconds = read_positive_int_env("CHAT_DATA_QUERY_TASK_STALE_SECONDS", 300)
+    stale_before = datetime.now() - timedelta(seconds=stale_seconds)
+    task_ids = await query_task_dao.list_stale_unfinished_tasks(stale_before=stale_before)
+    if not task_ids:
+        return 0
+    interrupted = await query_task_dao.interrupt_tasks(
+        task_ids,
+        error_message=stalled_message,
+        progress_text="服务重启，任务已中断",
+    )
+    execution_count = await query_execution_dao.interrupt_unfinished_executions(
+        error_message=stalled_message,
+        task_ids=task_ids,
+    )
+    if interrupted or execution_count:
+        logger.warning(
+            "查询任务对账完成：中断僵尸任务 %s 个、执行明细 %s 条（心跳阈值 %ss）",
+            interrupted,
+            execution_count,
+            stale_seconds,
+        )
+    return interrupted

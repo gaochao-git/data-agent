@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from utils.database import get_session as default_get_session
 from utils.models import ChatDataQueryExecution, ChatDataQueryTask
@@ -97,3 +97,25 @@ class QueryExecutionDao:
                 return executions, None
             task_result = await db.execute(select(ChatDataQueryTask).filter_by(task_id=task_id, delete_flag=0))
             return executions, task_result.scalar_one_or_none()
+
+    async def interrupt_unfinished_executions(self, *, error_message: str, task_ids: list[str]) -> int:
+        """对账：把指定僵尸任务下 pending/running 的执行明细标记为失败。"""
+        if not task_ids:
+            return 0
+        now = datetime.now()
+        async with self._session_context() as db:
+            result = await db.execute(
+                update(ChatDataQueryExecution)
+                .where(
+                    ChatDataQueryExecution.task_id.in_(task_ids),
+                    ChatDataQueryExecution.sql_status.in_(("pending", "running")),
+                    ChatDataQueryExecution.delete_flag == 0,
+                )
+                .values(
+                    sql_status="failed",
+                    error_message=error_message,
+                    finished_time=now,
+                    update_time=now,
+                )
+            )
+            return int(getattr(result, "rowcount", 0) or 0)

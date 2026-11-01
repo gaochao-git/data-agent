@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 
 from utils.database import get_session as default_get_session
 from utils.models import ChatDataQueryTask
@@ -82,3 +82,49 @@ class QueryTaskDao:
             await db.flush()
             await db.refresh(task)
             return task
+
+    async def touch_unfinished_task(self, task_id: str) -> int:
+        """心跳：刷新未完成任务 update_time，供多 worker 启动对账区分活任务。"""
+        now = datetime.now()
+        async with self._session_context() as db:
+            result = await db.execute(
+                update(ChatDataQueryTask)
+                .where(
+                    ChatDataQueryTask.task_id == task_id,
+                    ChatDataQueryTask.task_status.in_(("pending", "running")),
+                    ChatDataQueryTask.delete_flag == 0,
+                )
+                .values(update_time=now)
+            )
+            return int(getattr(result, "rowcount", 0) or 0)
+
+    async def list_stale_unfinished_tasks(self, *, stale_before: datetime) -> list[str]:
+        """读取心跳早于阈值的未完成任务（真正无人推进的僵尸任务）。"""
+        async with self._session_context() as db:
+            result = await db.execute(
+                select(ChatDataQueryTask.task_id).filter(
+                    ChatDataQueryTask.task_status.in_(("pending", "running")),
+                    ChatDataQueryTask.delete_flag == 0,
+                    func.coalesce(ChatDataQueryTask.update_time, ChatDataQueryTask.create_time) < stale_before,
+                )
+            )
+            return [str(row[0]) for row in result.all()]
+
+    async def interrupt_tasks(self, task_ids: list[str], *, error_message: str, progress_text: str) -> int:
+        """把指定僵尸任务置为 failed，返回中断数量。"""
+        if not task_ids:
+            return 0
+        now = datetime.now()
+        async with self._session_context() as db:
+            result = await db.execute(
+                update(ChatDataQueryTask)
+                .where(ChatDataQueryTask.task_id.in_(task_ids))
+                .values(
+                    task_status="failed",
+                    progress_text=progress_text,
+                    error_message=error_message,
+                    finished_time=now,
+                    update_time=now,
+                )
+            )
+            return int(getattr(result, "rowcount", 0) or 0)
