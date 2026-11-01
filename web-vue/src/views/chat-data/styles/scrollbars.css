@@ -1,0 +1,49 @@
+/*
+ * 滚动条统一：细、低对比。
+ * 浏览器默认滚动条（尤其 macOS Chrome 深色滑块）在浅色面板里过重，容易抢过内容；
+ * 这里只收敛 scrollbar 的尺寸与颜色，不改滚动行为。
+ * 作用域限定 chat-data 根容器与 Element Plus 弹层（弹层挂在 body 下，不在根容器内）。
+ */
+.chatdata-root,
+.chatdata-root *,
+.el-overlay,
+.el-overlay *,
+.el-popper,
+.el-popper * {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.2) transparent;
+}
+
+.chatdata-root ::-webkit-scrollbar,
+.el-overlay ::-webkit-scrollbar,
+.el-popper ::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+.chatdata-root ::-webkit-scrollbar-track,
+.el-overlay ::-webkit-scrollbar-track,
+.el-popper ::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.chatdata-root ::-webkit-scrollbar-thumb,
+.el-overlay ::-webkit-scrollbar-thumb,
+.el-popper ::-webkit-scrollbar-thumb {
+  border: 1px solid transparent;
+  border-radius: 9999px;
+  background-color: rgba(148, 163, 184, 0.16);
+  background-clip: content-box;
+}
+
+.chatdata-root ::-webkit-scrollbar-thumb:hover,
+.el-overlay ::-webkit-scrollbar-thumb:hover,
+.el-popper ::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(100, 116, 139, 0.28);
+}
+
+.chatdata-root ::-webkit-scrollbar-corner,
+.el-overlay ::-webkit-scrollbar-corner,
+.el-popper ::-webkit-scrollbar-corner {
+  background: transparent;
+}

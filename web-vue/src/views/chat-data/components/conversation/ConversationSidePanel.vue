@@ -12,6 +12,8 @@ interface Props {
   showClose?: boolean
   /** 内容增长时贴底自动跟随（与主对话同一口径：距底 100px 内跟随，用户上翻暂停） */
   autoFollow?: boolean
+  /** 内容自己铺满并内部滚动（文件管理树 / 文件预览），关闭面板整体滚动 */
+  fillBody?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -20,6 +22,7 @@ const props = withDefaults(defineProps<Props>(), {
   showTrigger: true,
   showClose: true,
   autoFollow: false,
+  fillBody: false,
 })
 
 const emit = defineEmits<{
@@ -187,12 +190,15 @@ onBeforeUnmount(stopResize)
 
     <div class="flex h-14 items-center gap-3 border-b border-slate-100 px-4">
       <div class="flex min-w-0 flex-1 items-center gap-2">
-        <div class="min-w-0">
-          <div class="truncate text-sm font-semibold text-slate-800">{{ title }}</div>
-          <div v-if="subtitle" class="mt-0.5 truncate font-mono text-xs text-slate-400">
-            {{ subtitle }}
+        <!-- 面板 tab 条：调用方提供时替代标题区（tab 即身份，不再重复标题/副标题） -->
+        <slot name="tabs">
+          <div class="min-w-0">
+            <div class="truncate text-sm font-semibold text-slate-800">{{ title }}</div>
+            <div v-if="subtitle" class="mt-0.5 truncate font-mono text-xs text-slate-400">
+              {{ subtitle }}
+            </div>
           </div>
-        </div>
+        </slot>
         <!-- 标题行的延伸信息（如工作区根路径 + 一键折叠全部目录）：与标题同一行、紧跟标题之后。
              放在标题组内而不是 header-extra，是因为标题组本身是 flex-1——插在这里的内容紧贴标题，
              插在 header-extra 会被整段推到行尾，跟右侧数量徽标挤成一组。 -->
@@ -215,7 +221,8 @@ onBeforeUnmount(stopResize)
     </div>
     <div
       ref="bodyRef"
-      class="min-h-0 flex-1 overflow-auto p-4"
+      class="min-h-0 flex-1 p-4"
+      :class="fillBody ? 'flex flex-col overflow-hidden' : 'overflow-auto'"
       data-side-panel-body
       @scroll.passive="handleBodyScroll"
     >

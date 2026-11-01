@@ -1068,21 +1068,16 @@ const handleCreateDashboardFromPreview = async (message: Message, tool: ToolCall
 }
 
 const selectToolCall = (toolCall: ToolCallInfo) => {
-  // task 卡（子智能体过程）打开后不切换关闭：入口同时承担「查看完整过程」，
-  // 再点一次关闭会让入口行为不可预期；普通工具/内层工具保持再点一次收起。
-  const isSubagentTask = toolCall.tool_name === 'task'
-  if (!isSubagentTask && activeToolCallId.value === toolCall.tool_call_id && sidePanelOpen.value && sidePanelTab.value === 'tool') {
-    sidePanelOpen.value = false
-    return
-  }
+  // 右侧面板是 tab 容器：点工具只负责打开/激活对应 tab，不再抢占其他 tab 的内容。
   activeToolCallId.value = toolCall.tool_call_id
-  sidePanelTab.value = 'tool'
   sidePanelOpen.value = true
+  workspacePanelRef.value?.openTool(toolCall)
 }
 
 const openConsolePanel = () => {
   sidePanelTab.value = 'console'
   sidePanelOpen.value = true
+  workspacePanelRef.value?.openWorkspace()
 }
 
 /**
@@ -2953,6 +2948,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
       v-model:open="sidePanelOpen"
       v-model:tab="sidePanelTab"
       :active-tool-call="activeToolCall"
+      :resolve-tool-call="findToolCallById"
       :conversation-id="localConversationId"
       :run-busy="runBusy"
       :can-import-semantic-model="props.canImportSemanticModel"

@@ -12,6 +12,8 @@ import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import '../styles/markdown.css'
 // z-index 层级变量（:root CSS 变量，本模块层级唯一事实来源，定义见文件头注释）
 import '../styles/z-index.css'
+// 滚动条样式统一（细、低对比；作用域 chat-data 根容器与 EP 弹层）
+import '../styles/scrollbars.css'
 // 「工作中」九宫格像素动画（流式状态行指示器，定义见文件头注释）
 import '../styles/loading-pixel.css'
 import useUserStore from '@/store/modules/user'
@@ -502,7 +504,7 @@ watch(selectedConversationModelId, (value) => {
 const sqlEditorRef = ref<InstanceType<typeof SqlEditor> | null>(null)
 const conversationRef = ref<InstanceType<typeof Conversation> | null>(null)
 
-// 控制台面板可见性：由 Conversation 广播（面板内的 ✕ 也会触发），
+// 右侧栏可见性：由 Conversation 广播（面板内的 ✕ 也会触发），
 // 右上角开关按钮的图标与提示都读它，不自己另存状态。
 const conversationConsoleVisible = ref(false)
 
@@ -1375,8 +1377,8 @@ onMounted(async () => {
           <button
             v-if="viewMode === 'conversation'"
             class="w-8 h-8 flex shrink-0 items-center justify-center rounded-lg border-0 bg-transparent text-slate-500 cursor-pointer transition-colors hover:bg-slate-200/70 hover:text-slate-700"
-            :title="conversationConsoleVisible ? '收起工作区' : '展开工作区'"
-            :aria-label="conversationConsoleVisible ? '收起工作区' : '展开工作区'"
+            :title="conversationConsoleVisible ? '收起右侧栏' : '展开右侧栏'"
+            :aria-label="conversationConsoleVisible ? '收起右侧栏' : '展开右侧栏'"
             :aria-expanded="conversationConsoleVisible"
             data-conversation-console-toggle="true"
             @click="toggleConversationConsole"
