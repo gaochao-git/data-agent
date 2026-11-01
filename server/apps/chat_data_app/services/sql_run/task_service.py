@@ -982,6 +982,10 @@ class QueryTaskService:
             "started_time": remote_result.get("started_time") or (local_execution or {}).get("started_time"),
             "finished_time": remote_result.get("finished_time") or (local_execution or {}).get("finished_time"),
             "error": error,
+            "error_source": remote_result.get("error_source")
+            or ("service" if (local_execution or {}).get("sql_status") == "failed" else "remote_http")
+            if error
+            else None,
         }
 
     def merge_direct_and_remote_results(
@@ -1005,6 +1009,12 @@ class QueryTaskService:
             for item in local_results
             if str((item or {}).get("member_datasource_id") or "").strip() not in remote_member_ids
         ]
+        for item in direct_results:
+            if str(item.get("status") or "").strip().lower() in {"failed", "cancelled"}:
+                item.setdefault("error_source", "datasource")
+        for item in remote_results:
+            if str(item.get("status") or "").strip().lower() in {"failed", "cancelled"}:
+                item.setdefault("error_source", "remote_http")
         return direct_results + remote_results
 
     def resolve_live_result_status(

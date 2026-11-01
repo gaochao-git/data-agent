@@ -142,7 +142,21 @@ const activeFailureLabel = computed(() => (
   normalizeQueryStatus(activeResult.value) === 'cancelled' ? '已取消' : '失败'
 ))
 const errorExpanded = ref(false)
-const errorSummary = computed(() => activeErrorText.value.split(/\r?\n/, 1)[0] || '查询失败')
+// 折叠态固定结论；原始错误只在展开详情里看，避免不同数据库错误格式直接糊在顶部
+const errorSummary = computed(() => (
+  normalizeQueryStatus(activeResult.value) === 'cancelled'
+    ? '查询已取消，请查看详情'
+    : 'SQL 执行错误，请查看详情'
+))
+const ERROR_SOURCE_LABELS: Record<string, string> = {
+  service: '服务内部',
+  datasource: '数据库',
+  remote_http: '外部接口',
+}
+const errorSourceLabel = computed(() => {
+  const source = String(activeResult.value?.error_source || '').trim()
+  return ERROR_SOURCE_LABELS[source] || ''
+})
 
 watch(
   () => props.resultData,
@@ -423,7 +437,8 @@ const getDimensionKey = (dim: string | { name: string }): string => {
           @click="errorExpanded = !errorExpanded"
         >
           <i class="fa-solid fa-circle-exclamation mt-0.5 shrink-0 text-base"></i>
-          <span class="min-w-0 flex-1 break-words font-medium">{{ errorSummary }}</span>
+          <span class="min-w-0 break-words font-medium">{{ errorSummary }}</span>
+          <span v-if="errorSourceLabel" class="shrink-0 rounded bg-white/70 px-1.5 py-0.5 text-[10px] font-normal text-red-500">{{ errorSourceLabel }}</span>
           <i :class="['fa-solid fa-chevron-down mt-1 shrink-0 text-[10px] transition-transform', errorExpanded && 'rotate-180']"></i>
         </button>
         <pre v-if="errorExpanded" class="mt-3 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded border border-red-200 bg-white p-3 font-mono text-xs leading-5 text-red-800">{{ activeErrorText }}</pre>

@@ -129,3 +129,23 @@ def test_agent_sql_execution_passes_query_task_id(monkeypatch):
     )
 
     assert captured["query_task_id"] == "task-agent"
+
+
+def test_attach_error_source_marks_which_layer_failed():
+    from apps.chat_data_app.services.sql_run.runtime import _attach_error_source
+
+    http_failure = _attach_error_source({"status": "failed", "error": "TExecuteStatementResp(...)"}, True)
+    assert http_failure["error_source"] == "remote_http"
+
+    direct_failure = _attach_error_source({"status": "failed", "error": "(1146, ...)"}, False)
+    assert direct_failure["error_source"] == "datasource"
+
+    cancelled = _attach_error_source({"status": "cancelled", "error": "已人工取消"}, True)
+    assert cancelled["error_source"] == "service"
+
+    # 执行器已标注的错误来源不被覆盖
+    marked = _attach_error_source({"status": "failed", "error": "SQL 语法错误", "error_source": "service"}, True)
+    assert marked["error_source"] == "service"
+
+    succeeded = _attach_error_source({"status": "succeeded", "data": []}, True)
+    assert "error_source" not in succeeded

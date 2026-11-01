@@ -315,6 +315,28 @@ def _apply_execution_field_updates(
         execution.finished_time = finished_time
 
 
+ERROR_SOURCE_SERVICE = "service"
+ERROR_SOURCE_DATASOURCE = "datasource"
+ERROR_SOURCE_REMOTE_HTTP = "remote_http"
+
+
+def _attach_error_source(result: dict[str, Any], http_target: bool) -> dict[str, Any]:
+    """为失败/取消成员结果补错误来源层：service / datasource / remote_http。
+
+    执行器只标注自身能确定的来源（服务校验、配置、超时等）；剩下的失败
+    按执行目标类型兜底：HTTP 目标视为外部接口，直连目标视为数据库。
+    """
+    if query_result_status(result) not in {"failed", "cancelled"}:
+        return result
+    if result.get("error_source"):
+        return result
+    if query_result_status(result) == "cancelled":
+        result["error_source"] = ERROR_SOURCE_SERVICE
+    else:
+        result["error_source"] = ERROR_SOURCE_REMOTE_HTTP if http_target else ERROR_SOURCE_DATASOURCE
+    return result
+
+
 def _execution_result_payload(status: str, result: dict[str, Any]) -> dict[str, Any]:
     """构造执行明细的 result_payload 落库快照。"""
     return {
@@ -324,6 +346,7 @@ def _execution_result_payload(status: str, result: dict[str, Any]) -> dict[str, 
         "total_count": int(result.get("total_count") or 0),
         "execution_time_ms": result.get("execution_time_ms"),
         "error": result.get("error"),
+        "error_source": result.get("error_source"),
         "cache_hit": bool(result.get("cache_hit")),
         "cache_age_seconds": result.get("cache_age_seconds"),
         "cache_expires_in_seconds": result.get("cache_expires_in_seconds"),
@@ -412,7 +435,14 @@ def _coerce_member_result(item: Any) -> dict[str, Any]:
     logger.error(
         "成员执行返回异常（已隔离为失败结果）: %s", item, exc_info=item if isinstance(item, BaseException) else None
     )
-    return {"status": "failed", "error": str(item) or "SQL 执行失败", "columns": [], "data": [], "total_count": 0}
+    return {
+        "status": "failed",
+        "error": str(item) or "SQL 执行失败",
+        "error_source": ERROR_SOURCE_SERVICE,
+        "columns": [],
+        "data": [],
+        "total_count": 0,
+    }
 
 
 async def _notify_remote_task_created(
@@ -471,6 +501,7 @@ def _cancelled_member_result(member_datasource_id: Any, member_name: str, effect
         "remote_task_id": None,
         "db_connection_id": None,
         "error": "已人工取消",
+        "error_source": ERROR_SOURCE_SERVICE,
     }
 
 
@@ -545,6 +576,7 @@ def _build_member_query_response(
         "remote_task_id": result.get("remote_task_id"),
         "db_connection_id": result.get("db_connection_id"),
         "error": result.get("error"),
+        "error_source": result.get("error_source"),
         "cache_hit": bool(result.get("cache_hit")),
         "cache_age_seconds": result.get("cache_age_seconds"),
         "cache_expires_in_seconds": result.get("cache_expires_in_seconds"),
@@ -750,10 +782,24 @@ async def execute_sql_for_member(
         else:
             result = await run_with_sql_user_datasource_limit(user_id, execution_target, execute_query)
         if execution_id and await get_query_execution_status(execution_id) == "cancelled":
-            result = {"status": "cancelled", "error": "已人工取消", "columns": [], "data": [], "total_count": 0}
+            result = {
+                "status": "cancelled",
+                "error": "已人工取消",
+                "error_source": ERROR_SOURCE_SERVICE,
+                "columns": [],
+                "data": [],
+                "total_count": 0,
+            }
     except Exception as e:
         logger.error("成员 SQL 执行异常: member_datasource_id=%s error=%s", member_datasource_id, e, exc_info=True)
-        result = {"status": "failed", "error": str(e) or "SQL 执行失败", "columns": [], "data": [], "total_count": 0}
+        result = {
+            "status": "failed",
+            "error": str(e) or "SQL 执行失败",
+            "error_source": ERROR_SOURCE_SERVICE,
+            "columns": [],
+            "data": [],
+            "total_count": 0,
+        }
     finally:
         if executor is not None:
             try:
@@ -761,6 +807,7 @@ async def execute_sql_for_member(
             except Exception:
                 # 关闭失败不能让本成员的收尾异常冒泡取消其他成员的在途查询
                 logger.warning("执行器资源关闭失败: member_datasource_id=%s", member_datasource_id, exc_info=True)
+    result = _attach_error_source(result, http_target)
     status = await _finalize_member_query_result(
         execution_id, result, http_target, member_datasource_id, local_started_at
     )

@@ -30,6 +30,8 @@ export interface MemberQueryResult {
   remote_task_id?: string | null
   db_connection_id?: string | null
   error?: string | null
+  /** 错误来源层：service=本服务校验/配置/超时，datasource=直连数据库，remote_http=外部 HTTP 接口 */
+  error_source?: 'service' | 'datasource' | 'remote_http' | string | null
   cache_hit?: boolean
   cache_age_seconds?: number | null
   cache_expires_in_seconds?: number | null
