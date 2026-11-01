@@ -123,6 +123,8 @@ const DSL_TAG_COLORS: Record<string, { bg: string; text: string }> = {
 
 // 标题链：后端下发的展示名（MCP tools.<name>.label）→ 内置映射表/限定名兜底
 const displayName = computed(() => props.toolCall.display_name?.trim() || getToolDisplayName(props.toolCall.tool_name, props.toolCall.args))
+// 子智能体派发用机器人图标，其余工具保持扳手：图标与「派发子智能体」语义一致
+const toolIconClass = computed(() => (props.toolCall.tool_name === 'task' ? 'fa-robot' : 'fa-wrench'))
 
 // 状态
 const isRunning = computed(() => props.toolCall.status === 'generating' || props.toolCall.status === 'running')
@@ -465,7 +467,7 @@ function getSqlTokenClass(type: string): string {
     ]"
     @click="emit('select')"
   >
-    <i class="fa-solid fa-wrench transition-colors duration-200 group-hover:text-slate-600"></i>
+    <i class="fa-solid transition-colors duration-200 group-hover:text-slate-600" :class="toolIconClass"></i>
     <span class="flex min-w-0 items-center" :title="[compactDescription || toolCall.tool_name, timingTitle].filter(Boolean).join(' · ')">
       <span class="shrink-0 font-semibold">{{ displayName }}</span>
       <span v-if="addedLinesText" class="ml-1.5 shrink-0 font-mono text-[11px] font-medium text-emerald-500">{{ addedLinesText }}</span>
@@ -495,7 +497,7 @@ function getSqlTokenClass(type: string): string {
     >
       <div class="flex min-w-0 items-center gap-3">
         <div class="w-6 h-6 flex items-center justify-center rounded-lg bg-black/5 text-[11px] text-gray-500">
-          <i class="fa-solid fa-wrench"></i>
+          <i class="fa-solid" :class="toolIconClass"></i>
         </div>
         <span class="min-w-0 truncate text-sm font-medium text-gray-700" :title="toolCall.tool_name">{{ displayName }}</span>
         <span v-if="addedLinesText" class="shrink-0 font-mono text-[11px] font-medium text-emerald-500">{{ addedLinesText }}</span>

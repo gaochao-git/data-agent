@@ -13,7 +13,7 @@
  * 注意：Props 用运行时声明 + PropType（不用外部类型做 defineProps<T> 泛型），
  * 见 AGENTS.md 4.3 —— chat-data 会被嵌入未安装 typescript 的宿主项目。
  */
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import type { PropType } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { SemanticYamlFile, ToolCallInfo } from '../../types'
@@ -24,8 +24,7 @@ import HtmlPagePreview from './HtmlPagePreview.vue'
 import CodeFilePreview from './CodeFilePreview.vue'
 import MermaidFilePreview from './MermaidFilePreview.vue'
 import ToolCallDetailPanel from './ToolCallDetailPanel.vue'
-import { useToolTiming } from '../../composables/useToolTiming'
-import SubagentTrail from './SubagentTrail.vue'
+import AgentProcessView from './AgentProcessView.vue'
 import {
   deleteConversationWorkspaceFile,
   getConversationWorkspaceFileContent,
@@ -105,6 +104,10 @@ interface PanelTab {
 }
 
 // 第一个 tab 是「文件管理」；整个右侧面板才是「工作区」，工具/文件/子智能体都是其中的 tab
+const sidePanelRef = ref<InstanceType<typeof ConversationSidePanel> | null>(null)
+// 每个 tab 的面板滚动位置：切回来恢复阅读位置（文件树自身滚动由 v-show 保留）
+const tabScrollTops = new Map<string, number>()
+
 const panelTabs = ref<PanelTab[]>([{ id: 'workspace', kind: 'workspace', title: '文件管理' }])
 const activePanelTabId = ref('workspace')
 const activePanelTab = computed(() => (
@@ -134,14 +137,31 @@ const toolCallForTab = (tab: PanelTab | null | undefined): ToolCallInfo | null =
 }
 
 const currentToolCall = computed(() => toolCallForTab(activePanelTab.value))
+// 工具/子智能体内容用「最后一次激活的工具 tab」渲染：切到文件 tab 时保持挂载，
+// 切回来时工作过程的展开态、滚动位置都还在（不再重置）
+const lastToolTab = ref<PanelTab | null>(null)
+watch(isToolTabActive, active => {
+  if (active) lastToolTab.value = activePanelTab.value
+}, { immediate: true })
+const displayToolTab = computed(() => (isToolTabActive.value ? activePanelTab.value : lastToolTab.value))
+const displayToolCall = computed(() => toolCallForTab(displayToolTab.value))
+const displayTabIsAgentProcess = computed(() => displayToolTab.value?.kind === 'agentProcess')
+const displayTabIsToolDetail = computed(() => displayToolTab.value?.kind === 'tool')
+// 每个子智能体 tab 各渲染一份过程视图（v-for 常驻）：多开子智能体时切回旧 tab
+// 内容不会串、展开态与滚动高度各自保留；点内层工具时也不会卸载轨迹
+const agentProcessTabs = computed(() => panelTabs.value.filter(tab => tab.kind === 'agentProcess'))
 
 /** 选中 task 调用时，工具详情视图额外展示「完整过程」（与主对话共用同一套消息/工具组件） */
 const subagentTaskCall = computed(() => {
-  const toolCall = currentToolCall.value
+  const toolCall = displayToolCall.value
   return toolCall?.tool_name === 'task' && (toolCall.subagentTrail?.length ?? 0) > 0 ? toolCall : null
 })
 
 const selectPanelTab = (tabId: string) => {
+  const previousTabId = activePanelTabId.value
+  if (tabId !== previousTabId) {
+    tabScrollTops.set(previousTabId, sidePanelRef.value?.getBodyScrollTop() ?? 0)
+  }
   const tab = panelTabs.value.find(item => item.id === tabId)
   // 文件 tab 各自持有路径：切回某个文件 tab 时恢复它的内容，不复用其他 tab 的预览
   if (tab?.kind === 'file' && tab.path && tab.path !== selectedConsoleFilePath.value) {
@@ -150,6 +170,18 @@ const selectPanelTab = (tabId: string) => {
   }
   activePanelTabId.value = tabId
   emit('update:open', true)
+  void nextTick(() => {
+    const sidePanel = sidePanelRef.value
+    if (!sidePanel) return
+    const savedTop = tabScrollTops.get(tabId)
+    // 首次打开该 tab 且需要跟随（子智能体过程）→ 停在最新；切回来的 tab → 恢复上次位置
+    const followActive = isToolTabActive.value && toolViewMode.value === 'agent' && Boolean(subagentTaskCall.value)
+    if (savedTop === undefined && followActive) {
+      sidePanel.scrollBodyToBottom()
+      return
+    }
+    sidePanel.setBodyScrollTop(savedTop ?? 0)
+  })
 }
 
 /** 打开/激活一个 tab：同 id 已存在则只激活，不替换其他 tab */
@@ -163,6 +195,7 @@ const closePanelTab = (tabId: string) => {
   if (index < 0) return
   if (panelTabs.value[index]!.kind === 'workspace') return
   panelTabs.value.splice(index, 1)
+  tabScrollTops.delete(tabId)
   if (activePanelTabId.value !== tabId) return
   const fallback = panelTabs.value[Math.max(0, index - 1)] ?? panelTabs.value[0]!
   // 走 activate 而不是直接改 id：file tab 需要恢复自己的预览内容
@@ -197,7 +230,7 @@ const openFilePanelTab = (path: string) => {
  */
 const toolViewMode = ref<'agent' | 'generic'>('agent')
 
-watch(() => currentToolCall.value?.tool_call_id, () => {
+watch(() => displayToolCall.value?.tool_call_id, () => {
   // 每次选中新的子智能体任务默认回到聊天方式；普通工具不涉及该状态
   if (subagentTaskCall.value) toolViewMode.value = 'agent'
 })
@@ -251,12 +284,6 @@ const subagentTypeLabel = computed(() => {
   const type = subagentTaskCall.value?.args?.subagent_type
   return typeof type === 'string' ? type.trim() : ''
 })
-
-/** 子智能体总耗时：起点/终点都取后端 task 调用的计时（交给过程视图按主对话样式展示） */
-const { elapsedMs: subagentElapsedMs, isRunning: subagentTimingRunning } = useToolTiming(
-  () => subagentTaskCall.value?.started_at_ms,
-  () => subagentTaskCall.value?.ended_at_ms,
-)
 
 const sidePanelSubtitle = computed(() => {
   if (props.tab === 'console') return ''
@@ -358,6 +385,25 @@ const toggleWorkspaceFilePreviewFullscreen = async () => {
   }
   await preview.requestFullscreen()
 }
+
+// 面板开关：关闭前记住当前 tab 的滚动位置，重新打开时恢复（关闭会卸载 body，滚动位置否则归零）
+watch(() => props.open, (open) => {
+  if (!open) {
+    tabScrollTops.set(activePanelTabId.value, sidePanelRef.value?.getBodyScrollTop() ?? 0)
+    return
+  }
+  void nextTick(() => {
+    const sidePanel = sidePanelRef.value
+    if (!sidePanel) return
+    const followActive = isToolTabActive.value && toolViewMode.value === 'agent' && Boolean(subagentTaskCall.value)
+    const savedTop = tabScrollTops.get(activePanelTabId.value)
+    if (savedTop === undefined && followActive) {
+      sidePanel.scrollBodyToBottom()
+      return
+    }
+    sidePanel.setBodyScrollTop(savedTop ?? 0)
+  })
+})
 
 onMounted(() => {
   document.addEventListener('fullscreenchange', syncWorkspaceFilePreviewFullscreen)
@@ -1039,6 +1085,8 @@ watch(
       // 会话切换：面板 tab 回到工作区根，不把上个会话的工具/文件 tab 带过来
       panelTabs.value = [{ id: 'workspace', kind: 'workspace', title: '文件管理' }]
       activePanelTabId.value = 'workspace'
+      lastToolTab.value = null
+      tabScrollTops.clear()
       officePreviewCache.value = {}
       selectedConsoleOfficeHtml.value = null
       selectedConsoleOfficePreviewReason.value = null
@@ -1104,6 +1152,7 @@ defineExpose({
 
 <template>
   <ConversationSidePanel
+    ref="sidePanelRef"
     :open="open"
     :title="sidePanelTitle"
     :subtitle="sidePanelSubtitle"
@@ -1148,16 +1197,8 @@ defineExpose({
       </div>
     </template>
 
-    <!-- 头部这一行从左到右：标题「工作区」→ 工作区根路径 →「折叠/展开全部」按钮 →（行尾）文件数量。
-         根路径原先占着文件树的第一行（/mnt/user-data 文件夹行），上移到标题行后树里不再有
-         这一级、同一件事不重复表达，树也少一行高度；一键折叠/展开按钮跟着根路径走——它折叠的
-         就是这棵树里的全部目录，与各目录行左侧的箭头属同一族操作，紧挨根路径放语义最直白。
-         上传是 uploads 目录专属的写入入口，已下沉到 uploads 目录行（就近绑定）。
-         数量徽标贴行尾：pr-[13px] 让它与下方文件树里的数量徽标落在同一条竖线上——头部容器有 px-4(16px)，
-         文件树里的数量徽标右边缘距面板右沿 29px（内容区 p-4 16 + 树容器 px-1 4 + 目录区域边框 1 + 滚动容器 px-1 4 + 行 pr-1 4），
-         这里补 13px 补齐差值。改文件树的内边距或边框时要同步这一处。 -->
-    <template #header-extra>
-      <div v-if="isToolTabActive && subagentTaskCall" class="flex shrink-0 items-center gap-2">
+    <template #subheader>
+      <div v-if="isToolTabActive && subagentTaskCall" class="flex w-full items-center justify-between gap-2">
         <span
           v-if="subagentTaskCall.subagentContextUsage"
           class="shrink-0 rounded-full bg-[#1f82d9]/10 px-1.5 py-0.5 text-[10px] leading-none text-[#1f82d9]/80 tabular-nums"
@@ -1187,7 +1228,7 @@ defineExpose({
       </div>
     </template>
 
-    <template v-if="isWorkspaceTabActive">
+    <div v-show="isWorkspaceTabActive" class="flex min-h-0 flex-1 flex-col">
       <!-- 文件管理 tab 自己的工具条：根路径 / 一键折叠 / 文件数量。
            这类信息属于「文件管理」，不能放进 tab 条（会和 tab 胶囊挤在一起）。 -->
       <div
@@ -1219,7 +1260,10 @@ defineExpose({
            文字行，没有边界时视线容易散到面板空白处；框住之后区域范围一眼可见（也顺带标出
            滚动区的范围）。空树时整块不渲染——留一个空框比不画更难解释。
            树容器仍带 @container：「时间 / 大小」两列的显隐按它的宽度算，与边框无关。 -->
-      <div v-if="activePanelTab.kind === 'workspace' && producedFileTree.directories.length" class="flex min-h-0 flex-1 flex-col px-1 py-1 text-xs @container">
+      <div
+        v-show="activePanelTab.kind === 'workspace'"
+        class="flex min-h-0 flex-1 flex-col px-1 py-1 text-xs @container"
+      >
         <div class="min-h-0 flex-1 space-y-0.5 overflow-auto rounded-md border border-slate-200 px-1 py-1">
           <div
             v-for="directory in producedFileTree.directories"
@@ -1632,27 +1676,28 @@ defineExpose({
       <div v-else-if="activePanelTab.kind === 'workspace' && SHOW_CONSOLE_FILE_PLACEHOLDER" class="rounded-lg border border-slate-100 bg-slate-50 p-3 text-xs text-slate-400">
         点击工作区文件查看内容。
       </div>
-    </template>
+    </div>
 
-    <template v-else>
-      <SubagentTrail
-        v-if="subagentTaskCall && toolViewMode === 'agent'"
-        :tool-call="subagentTaskCall"
+    <div v-show="isToolTabActive" class="min-h-0">
+      <!-- 每个子智能体 tab 一份常驻过程视图：多开/点内层工具/切文件 tab 都不卸载 -->
+      <AgentProcessView
+        v-for="processTab in agentProcessTabs"
+        :key="processTab.id"
+        v-show="displayToolTab?.id === processTab.id && toolViewMode === 'agent'"
+        :tool-call="toolCallForTab(processTab) as ToolCallInfo"
         :conversation-id="conversationId"
-        :active-tool-call-id="currentToolCall?.tool_call_id || null"
-        :elapsed-ms="subagentElapsedMs"
-        :timing-running="subagentTimingRunning"
-        :token-usage="subagentTaskCall?.subagentTokenUsage || null"
+        :active-tool-call-id="displayToolCall?.tool_call_id || null"
         class="mb-3"
         @select-tool="emit('selectTool', $event)"
       />
       <ToolCallDetailPanel
-        v-else
-        :tool-call="currentToolCall"
+        v-if="displayToolCall"
+        v-show="displayTabIsToolDetail || (displayTabIsAgentProcess && toolViewMode === 'generic')"
+        :tool-call="displayToolCall"
         :conversation-id="conversationId || ''"
         :format-text="formatText"
       />
-    </template>
+    </div>
   </ConversationSidePanel>
   <input
     ref="workspaceUploadInputRef"

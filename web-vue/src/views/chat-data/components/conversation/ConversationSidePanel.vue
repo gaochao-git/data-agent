@@ -30,6 +30,24 @@ const emit = defineEmits<{
   close: []
 }>()
 
+defineExpose({
+  /** 面板内容滚动位置（tab 切换时保存/恢复，避免定位丢失） */
+  getBodyScrollTop: () => bodyRef.value?.scrollTop ?? 0,
+  setBodyScrollTop: (top: number) => {
+    const element = bodyRef.value
+    if (!element) return
+    element.scrollTop = Math.max(top, 0)
+    // 恢复位置后按真实位置重算贴底态，避免随后的跟随逻辑把位置又拉回底部
+    bodyNearBottom.value = isScrolledToBottom(element)
+  },
+  scrollBodyToBottom: () => {
+    const element = bodyRef.value
+    if (!element) return
+    element.scrollTop = element.scrollHeight
+    bodyNearBottom.value = true
+  },
+})
+
 const MIN_PANEL_WIDTH = 320
 const MAX_PANEL_WIDTH = 900
 // 会话区至少要保留的宽度，避免拖拽把对话挤成 0 宽
@@ -90,8 +108,10 @@ const syncFollow = async () => {
     return
   }
   if (!bodyMutationObserver) startFollow()
-  bodyNearBottom.value = true
-  scheduleFollowScroll()
+  // 不强制贴底：用户切回某个 tab 时可能正停在中间，强制 true 会被跟随逻辑拉回底部
+  const element = bodyRef.value
+  if (element) bodyNearBottom.value = isScrolledToBottom(element)
+  if (bodyNearBottom.value) scheduleFollowScroll()
 }
 
 onMounted(() => { void syncFollow() })
@@ -218,6 +238,13 @@ onBeforeUnmount(stopResize)
       >
         <i class="fa-solid fa-xmark"></i>
       </button>
+    </div>
+    <!-- tab 自己的次级工具条（如子智能体的模式切换/上下文用量）：固定一条、不侵入 tab 条 -->
+    <div
+      v-if="$slots.subheader"
+      class="flex shrink-0 items-center gap-2 border-b border-slate-100 px-4 py-1.5"
+    >
+      <slot name="subheader" />
     </div>
     <div
       ref="bodyRef"

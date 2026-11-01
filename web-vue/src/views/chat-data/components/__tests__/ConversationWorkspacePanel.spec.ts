@@ -1,6 +1,7 @@
 import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
 import ConversationWorkspacePanel from '../conversation/ConversationWorkspacePanel.vue'
+import AgentProcessView from '../conversation/AgentProcessView.vue'
 import type { ToolCallInfo } from '../../types'
 
 const taskCall: ToolCallInfo = {
@@ -10,6 +11,14 @@ const taskCall: ToolCallInfo = {
   args: { subagent_type: 'explore' },
   result: '报告',
   subagentTrail: [{ kind: 'message', id: 'm1', content: '结论' }],
+}
+const taskCall2: ToolCallInfo = {
+  tool_call_id: 'task-2',
+  tool_name: 'task',
+  status: 'completed',
+  args: { subagent_type: 'plan' },
+  result: '第二份报告',
+  subagentTrail: [{ kind: 'message', id: 'm2', content: '第二个结论' }],
 }
 const toolCall: ToolCallInfo = {
   tool_call_id: 'tool-1',
@@ -24,13 +33,16 @@ const mountPanel = () => mount(ConversationWorkspacePanel, {
     open: true,
     conversationId: null,
     activeToolCall: null,
-    resolveToolCall: (toolCallId: string) => (
-      toolCallId === taskCall.tool_call_id ? taskCall : (toolCallId === toolCall.tool_call_id ? toolCall : null)
-    ),
+    resolveToolCall: (toolCallId: string) => {
+      if (toolCallId === taskCall.tool_call_id) return taskCall
+      if (toolCallId === taskCall2.tool_call_id) return taskCall2
+      return toolCallId === toolCall.tool_call_id ? toolCall : null
+    },
   },
   global: {
     stubs: {
       SubagentTrail: true,
+
       ToolCallDetailPanel: true,
       QueryResultPanel: true,
       ChartSpecRenderer: true,
@@ -56,6 +68,23 @@ describe('ConversationWorkspacePanel tab 容器', () => {
     vm.openTool(taskCall)
     await wrapper.vm.$nextTick()
     expect(tabTitles(wrapper)).toHaveLength(3)
+  })
+
+  it('多个子智能体 tab 各持有自己的过程视图（切回旧 tab 不会串内容）', async () => {
+    const wrapper = mountPanel()
+    const vm = wrapper.vm as unknown as { openTool: (call: ToolCallInfo) => void }
+    vm.openTool(taskCall)
+    vm.openTool(taskCall2)
+    await wrapper.vm.$nextTick()
+
+    const views = wrapper.findAllComponents(AgentProcessView)
+    expect(views.map(view => view.props('toolCall').tool_call_id)).toEqual(['task-1', 'task-2'])
+
+    // 切回第一个子智能体 tab：显示的是第一个 tab 的视图
+    await wrapper.findAll('[data-panel-tabs] > div')[1]!.find('button').trigger('click')
+    await wrapper.vm.$nextTick()
+    const visible = views.filter(view => (view.element as HTMLElement).style.display !== 'none')
+    expect(visible).toHaveLength(1)
   })
 
   it('关闭当前 tab 后回到相邻 tab，工作区不可关闭', async () => {
