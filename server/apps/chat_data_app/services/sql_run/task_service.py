@@ -85,10 +85,15 @@ class QueryTaskService:
         skip_query_cache: bool = False,
         datasource_id: str | None = None,
         max_rows: int | None = None,
+        source: QuerySource = QuerySource.SQL,
     ) -> dict[str, Any]:
-        """执行单个成员数据源 SQL（经查询层编排门面）。"""
+        """执行单个成员数据源 SQL（经查询层编排门面）。
+
+        ``source`` 由调用方按业务入口传入（看板=``DASHBOARD``），默认 SQL；
+        只影响审计/统计口径，不参与执行分支。
+        """
         spec = QuerySpec(
-            source=QuerySource.SQL,
+            source=source,
             datasource_group_id=datasource_id or "",
             sql=sql,
             limit=limit,

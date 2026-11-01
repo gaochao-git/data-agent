@@ -16,6 +16,7 @@ import { buildExecutionTargets } from '../../../utils/executionTargets'
 import { CHART_TYPE_HELP_TEXT } from '../../../chartTypes'
 import type { ThemeConfig } from '../constants'
 import { CHART_TYPES, KPI_ICONS, KPI_COLORS, CHART_COLOR_OPTIONS, LINE_STYLES } from '../constants'
+import { buildMemberWarningLines } from '../memberWarnings'
 import { flattenQueryResultForDisplay, getSafeNumericColumns, isNumericValue, QUERY_MEMBER_ID_COLUMN, QUERY_MEMBER_NAME_COLUMN, toSafeNumber } from '../../../utils'
 import { registerChinaMap, normalizeProvinceName, isChinaMapRegistered } from '../../../utils/mapRegistry'
 import ExecutionTargetPicker from '../../ExecutionTargetPicker.vue'
@@ -117,6 +118,15 @@ const currentDatasource = computed(() => {
 // 数据源名称
 const datasourceName = computed(() => {
   return currentDatasource.value?.group_name || props.panel.datasource_id || ''
+})
+
+// 部分成员失败：顶层 payload 仍可能是 succeeded（错误只挂在 results[] 成员上），
+// 这里汇总成一条不阻塞图表的提示，避免用户只看到「暂无数据」不知道有成员查询失败。
+const memberWarnings = computed(() => buildMemberWarningLines(props.data?.result?.results))
+
+const memberWarningText = computed(() => {
+  const text = memberWarnings.value.join('；')
+  return text.length > 160 ? `${text.slice(0, 160).trim()}...` : text
 })
 
 const displayError = computed(() => {
@@ -1252,6 +1262,17 @@ const isMultiKpiCard = computed(() => kpiItems.value.length > 1)
     <!-- 面板内容 -->
     <div class="flex-1 min-h-0 flex flex-col overflow-hidden">
       <!-- 加载状态 -->
+      <!-- 部分成员失败提示：不阻塞已成功成员的数据展示 -->
+      <div
+        v-if="memberWarningText && !displayError && !loading"
+        class="mx-3 mt-2 flex shrink-0 items-start gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] leading-4 text-amber-700"
+        :title="memberWarnings.join('\n')"
+        data-panel-member-warning
+      >
+        <i class="fa-solid fa-triangle-exclamation mt-0.5"></i>
+        <span class="break-words">部分成员查询失败：{{ memberWarningText }}</span>
+      </div>
+
       <div v-if="loading" class="flex-1 flex flex-col items-center justify-center gap-2 text-[13px] [&>i]:text-2xl [&>i]:opacity-50" :style="{ color: theme.textMuted }">
         <i class="fa-solid fa-spinner fa-spin"></i>
         <span>加载中...</span>

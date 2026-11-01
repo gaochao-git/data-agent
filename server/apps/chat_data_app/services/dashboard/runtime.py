@@ -16,6 +16,7 @@ from utils.database import get_session
 from utils.logger import get_logger
 
 from ...daos.query_execution_dao import QueryExecutionDao
+from ..query.contract import QuerySource
 from ..setting_service import get_runtime_setting
 from ..sql_run.executor import resolve_query_timeout
 from ..sql_run.result import build_query_result_payload, query_result_succeeded
@@ -123,6 +124,8 @@ async def execute_dashboard_panel_sql(
             query_task_id=query_task_id,
             execution_id=execution_id,
             datasource_id=datasource_id,
+            max_rows=row_limit,
+            source=QuerySource.DASHBOARD,
         )
 
     result = await run_dashboard_sql_operation(execute_single)
@@ -164,6 +167,8 @@ async def execute_dashboard_panel_sql_with_target(
             query_task_id=query_task_id,
             execution_id=execution_id,
             datasource_id=panel.get("datasource_id"),
+            max_rows=row_limit,
+            source=QuerySource.DASHBOARD,
         )
 
     result = await run_dashboard_sql_operation(execute_single)
@@ -206,6 +211,7 @@ async def execute_dashboard_panel_sql_for_targets(
                 execution_id=execution_id,
                 datasource_id=panel.get("datasource_id"),
                 max_rows=row_limit,
+                source=QuerySource.DASHBOARD,
             )
 
         return await run_dashboard_sql_operation(execute_member, semaphore)
