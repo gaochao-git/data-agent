@@ -4,7 +4,7 @@ import { isScrolledToBottom } from '../../utils/scrollFollow'
 
 interface Props {
   open: boolean
-  title: string
+  title?: string
   subtitle?: string
   triggerLabel?: string
   showTrigger?: boolean
@@ -19,6 +19,7 @@ interface Props {
 }
 
 const props = withDefaults(defineProps<Props>(), {
+  title: '工作区',
   subtitle: '',
   triggerLabel: '工作区',
   showTrigger: true,
@@ -225,10 +226,7 @@ onBeforeUnmount(stopResize)
             </div>
           </div>
         </slot>
-        <!-- 标题行的延伸信息（如工作区根路径 + 一键折叠全部目录）：与标题同一行、紧跟标题之后。
-             放在标题组内而不是 header-extra，是因为标题组本身是 flex-1——插在这里的内容紧贴标题，
-             插在 header-extra 会被整段推到行尾，跟右侧数量徽标挤成一组。 -->
-        <slot name="header-inline" />
+
       </div>
       <!-- 头部附加信息（如工作区文件数量）：靠右对齐，
            与下方文件树里目录行右端的数量徽标落在同一条竖线上，整体更统一。

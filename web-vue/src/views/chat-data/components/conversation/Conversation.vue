@@ -708,7 +708,6 @@ const resetTokenUsagePanel = (clearUsage = true) => {
 const toolCallsMap = ref<Map<string, ToolCallInfo>>(new Map())
 const activeToolCallId = ref<string | null>(null)
 const sidePanelOpen = ref(false)
-const sidePanelTab = ref<'console' | 'tool'>('console')
 // 工作区文件面板整体拆到 ConversationWorkspacePanel.vue：文件列表/树/预览/上传/下载/删除
 // 与刷新调度都在子组件内闭环，父级只通过 ref 调用刷新与打开入口。
 const workspacePanelRef = ref<InstanceType<typeof ConversationWorkspacePanel> | null>(null)
@@ -1076,9 +1075,8 @@ const selectToolCall = (toolCall: ToolCallInfo) => {
 }
 
 const openConsolePanel = () => {
-  sidePanelTab.value = 'console'
+  // 只负责展开：保持上次停留的 tab（关闭只卸载 aside，tab 状态还在），不强制回到「文件管理」
   sidePanelOpen.value = true
-  workspacePanelRef.value?.openWorkspace()
 }
 
 /**
@@ -1437,8 +1435,7 @@ watch(
       loadingPresentedArtifactKeys.value = new Set()
       activeToolCallId.value = null
       sidePanelOpen.value = false
-      sidePanelTab.value = 'console'
-      activeAssistantMessageId.value = null
+          activeAssistantMessageId.value = null
       resetTokenUsagePanel()
       resetHistory()
       clearQuotedSnippets()
@@ -2965,7 +2962,6 @@ const handleKeyDown = (event: KeyboardEvent) => {
     <ConversationWorkspacePanel
       ref="workspacePanelRef"
       v-model:open="sidePanelOpen"
-      v-model:tab="sidePanelTab"
       :active-tool-call="activeToolCall"
       :resolve-tool-call="findToolCallById"
       :conversation-id="localConversationId"
