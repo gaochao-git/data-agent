@@ -18,8 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from utils.logger import get_logger
 from utils.models import DatasourceColumnDict, DatasourceGroup, DatasourceTable, DatasourceTableGroupRel
 
-# _ORM_SESSION 在本模块未被直接使用，但测试按 datasource_dao._ORM_SESSION 打桩，属有意重导出
-from .dao_session import _ORM_SESSION, session_scope, transaction_scope  # noqa: F401
+from .dao_session import session_scope, transaction_scope
 from .datasource_dao_helpers import (
     _batch_items,
     _column_dict_is_empty,

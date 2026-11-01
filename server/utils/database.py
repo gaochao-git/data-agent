@@ -4,9 +4,11 @@ SQLAlchemy 数据库引擎和会话管理
 业务表统一使用 MySQL，通过 FXCJG_DB_* 环境变量配置
 """
 
+import asyncio
 import os
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from threading import RLock
 
 from sqlalchemy import text
@@ -20,6 +22,31 @@ from utils.logger import get_logger
 from .db_failover import DatabaseEndpoint, DatabaseEndpointSelector, is_mysql_connection_error, parse_database_endpoints
 
 logger = get_logger(__name__)
+
+# 当前事务持有的 ORM 会话：由 transaction_scope 绑定，事务内嵌套的 get_session /
+# session_scope 复用同一会话，避免「事务里偷偷开第二个连接」导致原子性失效或嵌套锁死。
+# 同时记录绑定时的 asyncio Task：ContextVar 会复制到子任务，子任务并发使用同一
+# AsyncSession 会破坏会话状态，必须显式拒绝而不是悄悄串数据。
+_ACTIVE_SESSION: ContextVar[AsyncSession | None] = ContextVar("chat_data_active_session", default=None)
+_ACTIVE_SESSION_OWNER: ContextVar[object | None] = ContextVar("chat_data_active_session_owner", default=None)
+
+
+def get_active_session() -> AsyncSession | None:
+    """返回当前事务绑定中的会话；无事务时返回 None。"""
+    return _ACTIVE_SESSION.get()
+
+
+def bind_active_session(session: AsyncSession) -> tuple[object | None, object | None]:
+    """把会话绑定到当前事务上下文，返回用于恢复的两个 token。"""
+    return _ACTIVE_SESSION.set(session), _ACTIVE_SESSION_OWNER.set(asyncio.current_task())
+
+
+def reset_active_session(tokens: tuple[object | None, object | None]) -> None:
+    """事务结束时恢复上下文绑定。"""
+    session_token, owner_token = tokens
+    _ACTIVE_SESSION.reset(session_token)  # type: ignore[arg-type]
+    _ACTIVE_SESSION_OWNER.reset(owner_token)  # type: ignore[arg-type]
+
 
 # ============ 配置 ============
 
@@ -202,10 +229,26 @@ def get_session_factory() -> async_sessionmaker[AsyncSession]:
 
 @asynccontextmanager
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
-    """获取数据库会话（上下文管理器）"""
+    """获取数据库会话（上下文管理器）。
+
+    事务上下文内（transaction_scope 已绑定会话）直接复用同一会话，不再新开连接；
+    若在事务的子 asyncio 任务中并发调用则拒绝，避免多个协程共享 AsyncSession。
+    """
+    active_session = _ACTIVE_SESSION.get()
+    if active_session is not None:
+        owner = _ACTIVE_SESSION_OWNER.get()
+        current_task = asyncio.current_task()
+        if owner is not None and current_task is not None and owner is not current_task:
+            raise RuntimeError("事务内禁止并发使用同一数据库会话：请在事务外并发，或让子任务自行开启会话")
+        yield active_session
+        return
+
     endpoint = _endpoint_selector.current()
     factory = get_session_factory()
     async with factory() as session:
+        # 每个 get_session 块即一个工作单元：块内嵌套的 get_session / session_scope /
+        # transaction_scope 都复用同一会话与事务，避免「事务里再开第二个连接」。
+        tokens = bind_active_session(session)
         try:
             yield session
             await session.commit()
@@ -219,6 +262,8 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
             if should_failover:
                 await _failover_database_endpoint(endpoint, err)
             raise
+        finally:
+            reset_active_session(tokens)
 
 
 async def init_database() -> None:

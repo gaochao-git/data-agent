@@ -1395,13 +1395,18 @@ class DataSourceManager:
 
         operator = update_by or datasource.get("update_by") or ""
         operator_name = update_by_name or datasource.get("update_by_name") or ""
-        await self.datasource_dao.clear_all_default_datasources_async(update_by=operator, update_by_name=operator_name)
-        await self.datasource_dao.update_datasource_group_async(
-            str(datasource.get("group_id") or ""),
-            is_default=True,
-            update_by=operator,
-            update_by_name=operator_name,
-        )
+        # 清旧默认 + 置新默认必须同一事务：否则第二步失败会留下「无默认数据源」，
+        # 并发设置时也可能出现两条默认或都清空。
+        async with self.datasource_dao.transaction_async():
+            await self.datasource_dao.clear_all_default_datasources_async(
+                update_by=operator, update_by_name=operator_name
+            )
+            await self.datasource_dao.update_datasource_group_async(
+                str(datasource.get("group_id") or ""),
+                is_default=True,
+                update_by=operator,
+                update_by_name=operator_name,
+            )
         logger.info("设置默认数据源: %s", datasource_id)
         return True
 
