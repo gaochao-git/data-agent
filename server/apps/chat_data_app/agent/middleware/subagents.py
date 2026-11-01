@@ -540,14 +540,15 @@ def _compile_subagent(spec: SubagentSpec, run_controls: Any = None) -> Any:
         static_input_tokens=subagent_static_tokens,
     )
     object.__setattr__(spec, "_context_request_budget", subagent_runtime.request_budget)
-    # 主图同款上下文计量实例：保留全量 usage（含 breakdown），子图 state 里的是压缩版
+    # 主图同款上下文计量实例：子图把全量 usage（含 breakdown）写进 state，
+    # 由调用方从 updates 里按 run 捕获——不依赖跨 run 共享的 middleware 实例状态。
     context_usage_middleware = create_context_usage_middleware(
         context_runtime=subagent_runtime,
         tools=tools,
         state_schema=ChatDataSubAgentState,
         name="SubagentContextUsageMiddleware",
+        store_full_usage=True,
     )
-    object.__setattr__(spec, "_context_usage_middleware", context_usage_middleware)
     # 相对顺序与主图 MIDDLEWARE_CANONICAL_ORDER 对齐：出口处理链（归一化→结果→
     # 错误）的次序保持不变。压缩中间件是 before_model 节点（独立图节点，先于
     # 模型调用改写 state），预算告警是 wrap_model_call，二者无顺序耦合；
@@ -1244,11 +1245,9 @@ def _process_subagent_chunk(
     return True
 
 
-def _resolve_subagent_usage_detail(provider: Any, captured: dict[str, Any] | None) -> dict[str, Any] | None:
-    """取全量 usage 明细（优先 middleware 实例），失败时退回 updates 里抓到的 state 版本。"""
-    detail = provider() if callable(provider) else None
-    if not detail and isinstance(captured, dict):
-        detail = captured.get("token_usage_detail")
+def _resolve_subagent_usage_detail(captured: dict[str, Any] | None) -> dict[str, Any] | None:
+    """从 updates 捕获的 state 明细（已含 breakdown）取最近一次 usage。"""
+    detail = captured.get("token_usage_detail") if isinstance(captured, dict) else None
     return sanitize_context_usage_for_response(detail) if isinstance(detail, dict) and detail else None
 
 
@@ -1276,7 +1275,6 @@ async def _run_subagent_with_events(
     collected: list | None = None,
     captured: dict[str, Any] | None = None,
     usage_meta: dict[str, int] | None = None,
-    usage_detail_provider: Any = None,
 ) -> list:
     """流式运行子图：向父图 custom 流转发内层事件，返回完整消息列表。
 
@@ -1310,7 +1308,7 @@ async def _run_subagent_with_events(
         if usage_meta is None:
             return None
         usage: dict[str, Any] = dict(_subagent_usage_snapshot(usage_meta, stream_state.collected))
-        detail = _resolve_subagent_usage_detail(usage_detail_provider, captured)
+        detail = _resolve_subagent_usage_detail(captured)
         if detail:
             usage["token_usage_detail"] = detail
         if emit:
@@ -1548,7 +1546,6 @@ async def _offload_subagent_report(report: str, runtime: ToolRuntime) -> str:
 
 
 def _build_task_result_artifacts(
-    spec: SubagentSpec,
     messages: list,
     context_usage: Any,
     captured: dict[str, Any],
@@ -1558,13 +1555,12 @@ def _build_task_result_artifacts(
     trail = _build_trail_snapshot(messages, captured.get("compactions"))
     if trail:
         artifacts["subagent_trail"] = trail
-    provider = getattr(getattr(spec, "_context_usage_middleware", None), "get_context_usage", None)
     artifacts.update(
         _subagent_process_snapshot(
             messages,
             context_usage,
             captured.get("compactions"),
-            _resolve_subagent_usage_detail(provider, captured),
+            _resolve_subagent_usage_detail(captured),
         )
     )
     return artifacts
@@ -1609,7 +1605,6 @@ async def _build_task_tool_impl(
                 list(spec.tools or []),
                 system_prompt=_subagent_system_prompt(spec),
             ),
-            usage_detail_provider=getattr(getattr(spec, "_context_usage_middleware", None), "get_context_usage", None),
         )
     except Exception as exc:
         # 失败路径同样盖 trail 快照：直播时内层过程已通过 SSE 转发给用户，
@@ -1642,7 +1637,7 @@ async def _build_task_tool_impl(
     # conversation_event_service._serialize_tool_message）。
     # 上下文用量 + 子图 token 用量：随 ToolMessage 持久化，历史回放还原
     # （直播路径上下文用量走 subagent_context_usage SSE 事件，token 用量随完成事件下发）。
-    additional_kwargs = _build_task_result_artifacts(spec, messages, context_usage, captured)
+    additional_kwargs = _build_task_result_artifacts(messages, context_usage, captured)
     return Command(
         update={
             "messages": [

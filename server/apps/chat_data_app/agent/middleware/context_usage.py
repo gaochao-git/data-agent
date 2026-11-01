@@ -67,6 +67,7 @@ def create_context_usage_middleware(
     state_schema: Any | None = None,
     sandbox_renewal: Callable[[], Awaitable[None]] | None = None,
     name: str = "ContextUsageMiddleware",
+    store_full_usage: bool = False,
 ) -> Any:
     """创建统一的上下文计量与 token usage middleware。"""
     records: list[dict[str, Any]] = []
@@ -161,7 +162,7 @@ def create_context_usage_middleware(
         await _renew_sandbox_if_configured(sandbox_renewal)
         return ExtendedModelResponse(
             model_response=_ensure_model_response(response),
-            command=Command(update={"token_usage": compact_token_usage_for_state(usage)}),
+            command=Command(update={"token_usage": _state_usage_payload(usage, store_full_usage)}),
         )
 
     def get_context_usage() -> dict[str, Any] | None:
@@ -170,6 +171,11 @@ def create_context_usage_middleware(
     context_usage_middleware.get_context_usage = get_context_usage  # type: ignore[attr-defined]
     context_usage_middleware.context_usage_records = records  # type: ignore[attr-defined]
     return context_usage_middleware
+
+
+def _state_usage_payload(usage: dict[str, Any] | None, store_full_usage: bool) -> dict[str, Any] | None:
+    """写回 state 的 usage：主图压缩体积，子图保留明细（由 updates 捕获）。"""
+    return sanitize_context_usage_for_response(usage) if store_full_usage else compact_token_usage_for_state(usage)
 
 
 def create_request_context_usage_middleware(
