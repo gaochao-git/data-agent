@@ -1208,21 +1208,21 @@ defineExpose({
             type="button"
             class="inline-flex items-center gap-1 rounded-md px-1.5 py-1 transition-colors"
             :class="toolViewMode === 'agent' ? 'bg-white text-[#1f82d9] shadow-sm' : 'text-slate-500 hover:text-slate-700'"
-            title="智能体模式：按聊天方式查看子智能体过程"
+            title="聊天模式：按聊天方式查看子智能体过程"
             @click="toolViewMode = 'agent'"
           >
             <i class="fa-solid fa-robot text-[10px]"></i>
-            <span>智能体</span>
+            <span>聊天</span>
           </button>
           <button
             type="button"
             class="inline-flex items-center gap-1 rounded-md px-1.5 py-1 transition-colors"
             :class="toolViewMode === 'generic' ? 'bg-white text-[#1f82d9] shadow-sm' : 'text-slate-500 hover:text-slate-700'"
-            title="通用模式：与普通工具一致，只查看参数与结果"
+            title="工具模式：与普通工具一致，只查看参数与结果"
             @click="toolViewMode = 'generic'"
           >
             <i class="fa-solid fa-wrench text-[10px]"></i>
-            <span>通用</span>
+            <span>工具</span>
           </button>
         </div>
       </div>
@@ -1690,9 +1690,10 @@ defineExpose({
         class="mb-3"
         @select-tool="emit('selectTool', $event)"
       />
+      <!-- 注意：这里必须用 v-if 而不是 v-show——DetailPanel 根节点自带 v-if，
+           v-show 无法可靠作用到其根元素，智能体模式下会漏出参数卡片 -->
       <ToolCallDetailPanel
-        v-if="displayToolCall"
-        v-show="displayTabIsToolDetail || (displayTabIsAgentProcess && toolViewMode === 'generic')"
+        v-if="displayToolCall && (displayTabIsToolDetail || (displayTabIsAgentProcess && toolViewMode === 'generic'))"
         :tool-call="displayToolCall"
         :conversation-id="conversationId || ''"
         :format-text="formatText"
