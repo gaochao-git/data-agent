@@ -138,8 +138,8 @@ def test_alarm_helper_formats_and_marks_same_llm_connection_exception_once(monke
     assert timeout_record["error_code"] == alarm_module.LLM_FAIL_FIRST_TOKEN_TIMEOUT
 
 
-def test_api_alarm_alarms_split_external_and_internal(monkeypatch):
-    """外部依赖与平台自身接口异常共用 API_CALL_EXCEPTION，细分落在 error_code。"""
+def test_external_api_alarm_uses_external_error_code(monkeypatch):
+    """只有外部依赖失败写 API_CALL_EXCEPTION。"""
     records = []
     monkeypatch.setattr(
         alarm_module,
@@ -148,15 +148,11 @@ def test_api_alarm_alarms_split_external_and_internal(monkeypatch):
     )
 
     alarm_module.emit_external_api_alarm("hive-gateway", TimeoutError("timed out"), method="POST", url="http://x/y")
-    alarm_module.emit_api_call_exception_path = None
-    alarm_module.emit_api_call_alarm("/chat/stream", ValueError("boom"), method="GET")
 
     external_extra = records[0][1]["extra"]
     assert external_extra["alarm_id"] == "API_CALL_EXCEPTION"
     assert external_extra["error_code"] == alarm_module.API_FAIL_EXTERNAL
-    internal_extra = records[1][1]["extra"]
-    assert internal_extra["alarm_id"] == "API_CALL_EXCEPTION"
-    assert internal_extra["error_code"] == alarm_module.API_FAIL_INTERNAL
+    assert len(records) == 1
 
 
 def test_dangerous_sql_alarm_splits_reason_code_from_alarm_id(monkeypatch):
@@ -171,7 +167,6 @@ def test_dangerous_sql_alarm_splits_reason_code_from_alarm_id(monkeypatch):
     monkeypatch.setattr(alarm_module.logger, "warning", lambda *args, **kwargs: warnings.append(args))
 
     cases = [
-        ("一次只能执行一条 SQL，请拆分后分别执行", None, alarm_module.SQL_BLOCK_MULTI_STATEMENT),
         ("只允许执行以下类型的 SQL: SELECT, SHOW", None, alarm_module.SQL_BLOCK_TYPE_NOT_ALLOWED),
         # 显式传入的 reason_code 优先于推断。
         ("任意文案", "CUSTOM_CODE", "CUSTOM_CODE"),
@@ -1300,7 +1295,7 @@ async def test_api_access_log_middleware_sets_and_clears_context(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_api_access_log_middleware_logs_access_error_with_alarm(monkeypatch):
-    records = {"set": [], "clear": 0, "access_info": [], "exception": [], "alarm": []}
+    records = {"set": [], "clear": 0, "access_info": [], "exception": []}
 
     monkeypatch.setattr(
         api_logging_module,
@@ -1315,9 +1310,6 @@ async def test_api_access_log_middleware_logs_access_error_with_alarm(monkeypatc
         SimpleNamespace(
             info=lambda msg, *args, **kwargs: records["access_info"].append((msg, args, kwargs)),
         ),
-    )
-    monkeypatch.setattr(
-        api_logging_module, "emit_api_call_alarm", lambda *args, **kwargs: records["alarm"].append((args, kwargs))
     )
     monkeypatch.setattr(api_logging_module, "set_log_context", lambda **kwargs: records["set"].append(kwargs))
     monkeypatch.setattr(
@@ -1352,8 +1344,6 @@ async def test_api_access_log_middleware_logs_access_error_with_alarm(monkeypatc
     assert records["clear"] == 1
     assert len(records["access_info"]) == 1
     assert records["access_info"][0][0] == "api_access_error"
-    assert records["alarm"][0][0][0] == "/fail"
-    assert records["alarm"][0][1]["method"] == "POST"
     assert records["exception"][0][0] == "[api_access] unhandled_error request_id=%s"
 
 

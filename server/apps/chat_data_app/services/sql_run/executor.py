@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 
 from utils.alarm import (
     DB_FAIL_DATASOURCE,
+    SQL_BLOCK_MULTI_STATEMENT,
     emit_dangerous_sql_alarm,
     emit_database_connection_alarm,
     emit_external_api_alarm,
@@ -526,6 +527,9 @@ def _emit_sql_execution_validation_alarm(
         reason_code = violation.reason_code if violation is not None else None
     except Exception:
         reason_code = None
+    if reason_code == SQL_BLOCK_MULTI_STATEMENT:
+        logger.warning("[sql_guard] 多语句已拒绝，不告警: sql=%s", str(sql or "")[:200])
+        return
     emit_dangerous_sql_alarm(
         sql,
         error_msg,

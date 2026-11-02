@@ -57,7 +57,7 @@ def test_validate_before_task_submit_skips_empty_sql_and_blocks_dangerous(monkey
     query_runtime._validate_sql_before_task_submit(content_request, {"source_type": "mysql"})
     assert alarms == []
 
-    # 多语句仍在提交阶段当场拒绝并报警
+    # 多语句在提交阶段当场拒绝，但属于输入形态问题，不写 alarm
     monkeypatch.setattr(
         query_runtime,
         "run_sql_guard",
@@ -72,9 +72,7 @@ def test_validate_before_task_submit_skips_empty_sql_and_blocks_dangerous(monkey
     multi_request = ExecuteSqlRequest(sql="select 1; drop table orders", datasource_id="ds_a", user_id="u1")
     with pytest.raises(ValueError, match="一次只能执行一条 SQL"):
         query_runtime._validate_sql_before_task_submit(multi_request, {"source_type": "mysql"})
-    assert alarms[0][0][0] == "select 1; drop table orders"
-    assert alarms[0][1]["execution_scope"] == "task_submit"
-    assert alarms[0][1]["reason_code"] == "MULTI_STATEMENT_BLOCKED"
+    assert alarms == []
 
 
 def test_normalize_execution_time_and_datetime_parse_branches():

@@ -10,7 +10,6 @@ from urllib.parse import parse_qs
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from middleware.log_redaction import dump_masked_payload
-from utils.alarm import emit_api_call_alarm
 from utils.logger import build_log_user, clear_log_context, get_access_logger, get_logger, set_log_context
 
 logger = get_logger(__name__)
@@ -225,20 +224,9 @@ class APIAccessLogMiddleware:
             await self.app(scope, receive, send_wrapper)
             response_state.log_response()
         except Exception as exc:
+            # 未捕获异常保留 access 日志与 error 堆栈，不写 alarm；
+            # 5xx 率/异常由监控平台按日志与指标告警，避免内部 bug 刷 alarm。
             response_state.log_error(exc)
-            emit_api_call_alarm(
-                response_state.path,
-                exc,
-                method=response_state.method,
-                ext1=_access_ext1(response_state.client_ip, response_state.user),
-                ext2={
-                    "request_id": request_id,
-                    "path": response_state.path,
-                    "query": response_state.query,
-                    "error_type": exc.__class__.__name__,
-                    "error": str(exc),
-                },
-            )
             logger.exception("[api_access] unhandled_error request_id=%s", request_id)
             raise
         finally:

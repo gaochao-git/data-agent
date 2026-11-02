@@ -243,10 +243,9 @@ def emit_dangerous_sql_alarm(
     )
 
 
-# 外部接口/平台自身接口异常的细分原因码。alarm_id 统一为 API_CALL_EXCEPTION，
-# 是否外部依赖只落在 error_code。
+# 外部接口异常的细分原因码。alarm_id 统一为 API_CALL_EXCEPTION。
+# 服务自身 5xx/未捕获异常不写 alarm，只保留 access/app 日志与监控告警。
 API_FAIL_EXTERNAL = "EXTERNAL_API_CALL_FAILED"
-API_FAIL_INTERNAL = "INTERNAL_API_CALL_FAILED"
 
 # 大模型异常的细分原因码。alarm_id 统一为 LLM_EXCEPTION。
 LLM_FAIL_CONNECTION = "LLM_CONNECTION_FAILED"
@@ -268,24 +267,6 @@ def emit_external_api_alarm(
         error_code=API_FAIL_EXTERNAL,
         ext1=ext1 or {"api": api_name, "method": method or "", "url": url or ""},
         ext2={"error_type": exc.__class__.__name__, "error": str(exc)},
-    )
-
-
-def emit_api_call_alarm(
-    path: str,
-    exc: Exception,
-    *,
-    method: str | None = None,
-    ext1: Any = None,
-    ext2: Any = None,
-) -> None:
-    emit_alarm(
-        "接口调用异常",
-        alarm_id="API_CALL_EXCEPTION",
-        request_type=method or "API",
-        error_code=API_FAIL_INTERNAL,
-        ext1=ext1,
-        ext2=ext2 or {"path": path, "error_type": exc.__class__.__name__, "error": str(exc)},
     )
 
 

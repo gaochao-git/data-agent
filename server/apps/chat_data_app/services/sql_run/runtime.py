@@ -15,7 +15,7 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 from typing import Any, Literal, cast
 
-from utils.alarm import emit_dangerous_sql_alarm
+from utils.alarm import SQL_BLOCK_MULTI_STATEMENT, emit_dangerous_sql_alarm
 from utils.database import get_session
 from utils.logger import get_logger
 from utils.models import ChatDataQueryExecution, ChatDataQueryTask
@@ -72,15 +72,19 @@ def _validate_sql_before_task_submit(
     violation = run_sql_guard(sql, source_type=source_type, defer_syntax_error=True)
     if violation is None or violation.rule != "single_statement":
         return
-    emit_dangerous_sql_alarm(
-        sql,
-        violation.message,
-        source_type=source_type,
-        datasource_id=str(getattr(request, "datasource_id", "") or ""),
-        user_id=str(getattr(request, "user_id", "") or ""),
-        execution_scope="task_submit",
-        reason_code=violation.reason_code,
-    )
+    if violation.reason_code == SQL_BLOCK_MULTI_STATEMENT:
+        # 多语句是输入形态问题：正常拒绝即可，不算安全事件，不写 alarm。
+        logger.warning("[sql_guard] 多语句已拒绝，不告警: sql=%s", sql[:200])
+    else:
+        emit_dangerous_sql_alarm(
+            sql,
+            violation.message,
+            source_type=source_type,
+            datasource_id=str(getattr(request, "datasource_id", "") or ""),
+            user_id=str(getattr(request, "user_id", "") or ""),
+            execution_scope="task_submit",
+            reason_code=violation.reason_code,
+        )
     raise ValueError(violation.message)
 
 

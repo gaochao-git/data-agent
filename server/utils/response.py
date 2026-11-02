@@ -14,8 +14,10 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.requests import Request
 
-from utils.alarm import emit_api_call_alarm
 from utils.error_codes import ErrorCode, chatdata_http_exception_business_code, ensure_defined_error_code
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 SAFE_INTERNAL_ERROR_MESSAGE = "后端服务异常，请稍后重试"
 
@@ -115,18 +117,17 @@ async def chatdata_http_exception_handler(request: Request, exc: StarletteHTTPEx
     """统一 ChatData HTTPException 响应格式，非 ChatData 路径走 FastAPI 默认处理。
 
     显式 raise 的 5xx 属于平台自身接口异常（未捕获异常由 APIAccessLogMiddleware
-    兜底告警，这里是它的互补面），统一走 emit_api_call_alarm 告警。
+    这里只记录 error 日志；5xx 不写 alarm。
     """
     if exc.status_code >= 500:
-        # 5xx 不区分 chatdata 路径，全部告警；响应格式仍按上面的分流处理。
-        emit_api_call_alarm(
+        # 5xx 属于服务自身异常：保留 access 日志与下方响应，不写 alarm。
+        # alarm 只留给外部依赖失败等需要值班介入的场景，避免内部 bug 刷爆告警。
+        logger.error(
+            "接口返回 5xx: method=%s path=%s status=%s detail=%s",
+            request.method,
             request.url.path,
-            exc,
-            method=request.method,
-            ext1={
-                "user_id": request.headers.get("X-User-Id") or "",
-                "client": request.client.host if request.client else "",
-            },
+            exc.status_code,
+            str(exc.detail or "")[:200],
         )
     if not is_chatdata_request(request):
         return await http_exception_handler(request, exc)
