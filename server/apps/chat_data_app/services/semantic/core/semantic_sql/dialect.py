@@ -130,7 +130,8 @@ class MySQLDialect(SQLDialect):
     name = "mysql"
 
     def quote_identifier(self, name: str) -> str:
-        return f"`{name}`"
+        # 标识符内的反引号必须双写，避免表/列名（虽然通常来自语义配置）闭合引用。
+        return f"`{str(name).replace('`', '``')}`"
 
     def format_date(self, column: str, grain: str) -> str:
         formats = {
@@ -186,7 +187,8 @@ class HiveDialect(SQLDialect):
     name = "hive"
 
     def quote_identifier(self, name: str) -> str:
-        return f"`{name}`"
+        # 标识符内的反引号必须双写，避免表/列名（虽然通常来自语义配置）闭合引用。
+        return f"`{str(name).replace('`', '``')}`"
 
     def format_date(self, column: str, grain: str) -> str:
         formats = {

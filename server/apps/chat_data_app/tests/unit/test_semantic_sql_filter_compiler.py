@@ -1,4 +1,9 @@
+import sqlglot
+
+from apps.chat_data_app.services.semantic.core.semantic_sql.dialect import get_dialect
 from apps.chat_data_app.services.semantic.core.semantic_sql.filter_compiler import (
+    _escape_like_value,
+    _sql_literal,
     build_filter_tree_clause,
     build_where_leaf_clause,
 )
@@ -183,3 +188,37 @@ def test_build_where_leaf_clause_rejects_unsafe_dimension_expression():
             get_column_expr=column,
             safe_functions=set(),
         )
+
+
+def test_sql_literal_escapes_backslash_before_quote():
+    """反斜杠+单引号不能提前闭合字符串（SQL 注入 P1 回归）。
+
+    修复前输入 ``a\\' OR 1=1 -- `` 会生成 ``'a\\'' OR 1=1 -- '``，
+    MySQL 把 ``\\'`` 解释成字面单引号后字符串提前结束，WHERE 变成恒真。
+    """
+    payload = "a\\' OR 1=1 -- "
+    literal = _sql_literal(payload, "literal", set())
+    sql = f"SELECT * FROM t WHERE c = {literal}"
+    parsed = sqlglot.parse_one(sql, read="mysql")
+    where = parsed.args.get("where")
+
+    assert where is not None
+    assert isinstance(where.this, sqlglot.exp.EQ)
+    assert where.this.right.is_string
+    assert "\\" in literal
+
+
+def test_like_value_escapes_backslash_before_quote():
+    payload = "a\\' OR 1=1 -- "
+    escaped = _escape_like_value(payload)
+    assert "\\" in escaped
+    sql = f"SELECT * FROM t WHERE c LIKE '{escaped}%'"
+    where = sqlglot.parse_one(sql, read="mysql").args.get("where")
+    assert where is not None
+    assert isinstance(where.this, sqlglot.exp.Like)
+    assert where.this.right.is_string
+
+
+def test_dialect_quote_identifier_escapes_backtick():
+    dialect = get_dialect("mysql")
+    assert dialect.quote_identifier("a`b") == "`a``b`"
