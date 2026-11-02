@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { deriveAnalysisTodos } from '../analysisTodos'
+import { deriveAnalysisTodos, shouldShowAnalysisProgress } from '../analysisTodos'
 import type { Message } from '../../types'
 
 const toolMessage = (toolName: string, args: Record<string, unknown>): Message => ({
@@ -53,5 +53,20 @@ describe('deriveAnalysisTodos', () => {
       todos: [{ content: '有效步骤', status: 'pending' }, { status: 'pending' }, 'junk'],
     })])
     expect(state.items).toEqual([{ content: '有效步骤', status: 'pending' }])
+  })
+})
+
+describe('shouldShowAnalysisProgress', () => {
+  it('hides the panel when all tasks are completed', () => {
+    expect(shouldShowAnalysisProgress({ items: [{ content: '步骤1', status: 'completed' }], finished: true })).toBe(false)
+  })
+
+  it('shows the panel while tasks are still pending or in progress', () => {
+    expect(shouldShowAnalysisProgress({ items: [{ content: '步骤1', status: 'in_progress' }], finished: false })).toBe(true)
+    expect(shouldShowAnalysisProgress({ items: [{ content: '步骤1', status: 'pending' }], finished: false })).toBe(true)
+  })
+
+  it('hides the panel when there is no task list', () => {
+    expect(shouldShowAnalysisProgress({ items: [], finished: false })).toBe(false)
   })
 })

@@ -32,7 +32,7 @@ import { normalizeToolCallForDisplay, shouldInlineRenderQueryResult } from '../.
 import { admitInboxMessages, reconcileInboxSnapshot, type InboxQueueItem, type InboxQueueType } from '../../utils/inboxQueue'
 import UserQuestionCard from './UserQuestionCard.vue'
 import AnalysisProgress from './AnalysisProgress.vue'
-import { deriveAnalysisTodos } from '../../utils/analysisTodos'
+import { deriveAnalysisTodos, shouldShowAnalysisProgress } from '../../utils/analysisTodos'
 import { createTopReachTracker } from '../../utils/scrollReach'
 import { applySubagentCompactionToTool, buildSubagentCompactionRecord } from '../../utils/subagentCompaction'
 import { isScrolledToBottom } from '../../utils/scrollFollow'
@@ -511,8 +511,9 @@ const fileInputRef = ref<HTMLInputElement | null>(null)
 const hasParsingFiles = computed(() => pendingFiles.value.some(f => f.status === 'uploading'))
 const hasCompletedPendingFiles = computed(() => pendingFiles.value.some(f => f.status === 'uploaded'))
 
-// 分析任务计划：从消息流中的 write_todos 派生，实时流与历史回放同源；出现后常驻本会话
+// 分析任务计划：从消息流中的 write_todos 派生，实时流与历史回放同源；全部完成后隐藏
 const analysisTodos = computed(() => deriveAnalysisTodos(messages.value))
+const showAnalysisProgress = computed(() => shouldShowAnalysisProgress(analysisTodos.value))
 
 const handleUploadFile = () => {
   fileInputRef.value?.click()
@@ -2762,7 +2763,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
       <div v-show="!isLoadingHistory || messages.length > 0" class="p-4 bg-gray-50 border-t border-slate-100">
         <div class="max-w-[774px] mx-auto w-[90%]">
           <AnalysisProgress
-            v-if="analysisTodos.items.length"
+            v-if="showAnalysisProgress"
             class="mb-3"
             :todos="analysisTodos"
           />
