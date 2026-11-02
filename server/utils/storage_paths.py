@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import re
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from urllib.parse import quote
 
@@ -78,6 +78,9 @@ def normalize_created_date(created_date: str | None = None) -> str:
         return date.today().strftime("%Y-%m-%d")
     if not isinstance(created_date, str) or not _CREATED_DATE_PATTERN.fullmatch(created_date):
         raise ValueError(f"created_date 必须为 'YYYY-MM-DD' 格式: {created_date!r}")
+    # 正则只能校验形状（2026-02-31 也会通过），这里再做一次真实日历校验，避免
+    # 生成语义上不存在的日期目录。
+    datetime.strptime(created_date, "%Y-%m-%d")
     return created_date
 
 

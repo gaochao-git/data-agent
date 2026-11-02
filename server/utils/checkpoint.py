@@ -3,11 +3,11 @@ Checkpoint 管理模块
 提供 LangGraph checkpointer 的配置和初始化
 
 支持的后端：
-- sqlite (默认): 本地 SQLite 数据库
-- mysql: MySQL 数据库
+- mysql (默认): MySQL 数据库，生产/测试/开发统一使用
+- sqlite: 仅保留给单测或本地临时场景，需显式设置 CHECKPOINTER_TYPE=sqlite
 
 通过环境变量配置：
-- CHECKPOINTER_TYPE: sqlite | mysql (默认 sqlite)
+- CHECKPOINTER_TYPE: mysql | sqlite (默认 mysql)
 
 SQLite 配置：
 - 使用 CHAT_DATA_HOME/checkpoints.db
@@ -20,8 +20,8 @@ MySQL 配置：
 """
 
 import os
-from collections.abc import Callable
-from contextlib import AbstractAsyncContextManager
+from collections.abc import AsyncIterator, Callable
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from types import TracebackType
 from typing import TYPE_CHECKING
 
@@ -40,7 +40,7 @@ logger = get_logger(__name__)
 
 # ============ 配置 ============
 
-CHECKPOINTER_TYPE = os.getenv("CHECKPOINTER_TYPE", "sqlite").lower()
+CHECKPOINTER_TYPE = os.getenv("CHECKPOINTER_TYPE", "mysql").strip().lower() or "mysql"
 
 # SQLite 配置
 DB_PATH = os.path.join(CHAT_DATA_HOME, "checkpoints.db")
@@ -49,7 +49,7 @@ DB_PATH = os.path.join(CHAT_DATA_HOME, "checkpoints.db")
 MYSQL_HOST = os.getenv("CHECKPOINTER_HOST", "")
 MYSQL_DB = os.getenv("CHECKPOINTER_DB", "langgraph_memory")
 MYSQL_USER = os.getenv("CHECKPOINTER_USER", "root")
-MYSQL_ENDPOINTS = parse_database_endpoints(MYSQL_HOST) if CHECKPOINTER_TYPE == "mysql" else []
+MYSQL_ENDPOINTS = parse_database_endpoints(MYSQL_HOST) if CHECKPOINTER_TYPE == "mysql" and MYSQL_HOST.strip() else []
 _endpoint_selector = DatabaseEndpointSelector(MYSQL_ENDPOINTS) if MYSQL_ENDPOINTS else None
 
 
@@ -199,19 +199,49 @@ def _get_mysql_checkpointer() -> _MySQLCheckpointerFailoverContext:
 def _build_mysql_checkpointer_context_factory() -> Callable[[DatabaseEndpoint], AbstractAsyncContextManager]:
     """构造 MySQL checkpointer 上下文工厂。"""
     try:
-        from langgraph.checkpoint.mysql.aio import AIOMySQLSaver
-    except ImportError:
-        raise ImportError("使用 MySQL checkpointer 需要安装: pip install langgraph-checkpoint-mysql aiomysql") from None
+        # 仅做依赖存在性检查；实际连接参数在 _mysql_saver_context 中使用
+        import aiomysql  # noqa: F401
+        import langgraph.checkpoint.mysql.aio  # noqa: F401
+    except ImportError as err:
+        raise ImportError("使用 MySQL checkpointer 需要安装: pip install langgraph-checkpoint-mysql aiomysql") from err
 
     password = _get_mysql_password()
     if _endpoint_selector is None:
         raise ValueError("MySQL checkpointer 需要配置 CHECKPOINTER_HOST，格式为 host:port")
 
     def context_factory(endpoint: DatabaseEndpoint) -> AbstractAsyncContextManager:
-        conn_string = f"mysql+aiomysql://{MYSQL_USER}:{password}@{endpoint.host}:{endpoint.port}/{MYSQL_DB}"
-        return AIOMySQLSaver.from_conn_string(conn_string)
+        return _mysql_saver_context(endpoint, password=password)
 
     return context_factory
+
+
+@asynccontextmanager
+async def _mysql_saver_context(endpoint: DatabaseEndpoint, *, password: str) -> AsyncIterator["AIOMySQLSaver"]:
+    """用 aiomysql 原生参数建立 checkpoint 连接。
+
+    不走 URL 字符串：密码里的 ``@ : / #`` 等字符会被 URL 解析拆坏，且
+    langgraph 的 parse_conn_string 不做 percent-decode。原生参数同时补齐
+    utf8mb4，避免 checkpoint JSON 中文受服务端默认字符集影响。
+    """
+    import aiomysql
+    from langgraph.checkpoint.mysql.aio import AIOMySQLSaver
+
+    conn = await aiomysql.connect(
+        host=endpoint.host,
+        port=endpoint.port,
+        user=MYSQL_USER,
+        password=password,
+        db=MYSQL_DB,
+        charset="utf8mb4",
+        autocommit=True,
+    )
+    try:
+        yield AIOMySQLSaver(conn=conn)
+    finally:
+        conn.close()
+        ensure_closed = getattr(conn, "ensure_closed", None)
+        if ensure_closed is not None:
+            await ensure_closed()
 
 
 async def _probe_mysql_checkpointer_endpoint(
@@ -251,6 +281,26 @@ async def select_available_checkpointer_endpoint() -> None:
 # ============ 初始化函数 ============
 
 
+async def probe_checkpoint_health() -> bool:
+    """轻量检查当前 checkpoint 后端是否可用（供 /ready 使用，不创建业务表）。"""
+    try:
+        if CHECKPOINTER_TYPE == "sqlite":
+            import aiosqlite
+
+            async with aiosqlite.connect(DB_PATH) as conn:
+                await conn.execute("SELECT 1")
+            return True
+        if CHECKPOINTER_TYPE == "mysql":
+            if _endpoint_selector is None or not _endpoint_selector.endpoints:
+                return False
+            context_factory = _build_mysql_checkpointer_context_factory()
+            return await _probe_mysql_checkpointer_endpoint(_endpoint_selector.current(), context_factory)
+        return False
+    except Exception:
+        logger.warning("checkpoint 健康检查失败", exc_info=True)
+        return False
+
+
 async def setup_checkpointer() -> None:
     """
     初始化 checkpointer 和业务表
@@ -262,6 +312,11 @@ async def setup_checkpointer() -> None:
     建议在应用启动时调用一次。
     """
     from .database import init_database
+
+    if CHECKPOINTER_TYPE not in ("sqlite", "mysql"):
+        # 配置写错时不能静默按 sqlite/mysql 初始化：否则运行期第一次使用
+        # get_checkpointer 才报错，定位成本高，这里启动即失败。
+        raise ValueError(f"不支持的 CHECKPOINTER_TYPE: {CHECKPOINTER_TYPE}")
 
     if CHECKPOINTER_TYPE == "sqlite":
         # SQLite: 先启用 WAL 模式（持久化到数据库文件）

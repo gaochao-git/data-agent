@@ -74,11 +74,17 @@ class WorkspacePathPolicy:
         if raw == SKILLS_VIRTUAL_ROOT:
             raise ValueError("技能路径必须包含技能名")
         if raw.startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
+            if "\\" in raw:
+                # Windows 风格分隔符在 Linux 下是文件名字符，但在本地模式
+                # （开发机可能为 Windows）会变成目录穿越；统一在入口拒绝。
+                raise ValueError("路径不能包含反斜杠分隔符")
             return self._build_skill_path(raw[len(SKILLS_VIRTUAL_ROOT) + 1 :], raw)
 
         prefix = f"{USER_DATA_VIRTUAL_ROOT}/"
         if not raw.startswith(prefix):
             raise ValueError(f"路径必须以 /mnt/user-data/ 或 /mnt/skills/ 开头: {path}")
+        if "\\" in raw:
+            raise ValueError("路径不能包含反斜杠分隔符")
         parts = PurePosixPath(raw[len(prefix) :]).parts
         if not parts or ".." in parts:
             raise ValueError(f"路径越界，禁止访问当前会话目录之外的路径: {path}")

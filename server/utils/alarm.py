@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import os
+import time
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 from langchain_core.exceptions import ModelConnectionError, ModelTimeoutError
@@ -13,6 +16,55 @@ logger = get_logger(__name__)
 
 MAX_ALARM_MESSAGE_LENGTH = 500
 MAX_ALARM_EXT_LENGTH = 1000
+
+# 告警限频：同一 alarm_id + error_code 在窗口内最多上报 N 条，超出只计数，
+# 下一次允许上报时把被抑制条数写进 message，避免数据库/外部接口整体故障时刷爆告警。
+DEFAULT_ALARM_RATE_LIMIT_WINDOW_SECONDS = 60
+DEFAULT_ALARM_RATE_LIMIT_MAX_PER_WINDOW = 20
+
+
+@dataclass
+class _AlarmRateState:
+    window_started: float
+    count: int = 0
+    suppressed: int = 0
+
+
+_rate_states: dict[tuple[str, str], _AlarmRateState] = {}
+
+
+def _env_int(name: str, default: int, minimum: int = 1) -> int:
+    raw = str(os.getenv(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        return max(minimum, int(raw))
+    except ValueError:
+        return default
+
+
+def _reset_alarm_rate_limits() -> None:
+    """测试/长生命周期进程手动重置限频状态。"""
+    _rate_states.clear()
+
+
+def _allow_alarm(alarm_id: str, error_code: str) -> tuple[bool, int]:
+    """返回 (是否允许上报, 上次窗口被抑制的条数)。"""
+    key = (alarm_id, error_code)
+    now = time.monotonic()
+    window = _env_int("CHAT_DATA_ALARM_RATE_LIMIT_WINDOW_SECONDS", DEFAULT_ALARM_RATE_LIMIT_WINDOW_SECONDS)
+    limit = _env_int("CHAT_DATA_ALARM_RATE_LIMIT_MAX_PER_WINDOW", DEFAULT_ALARM_RATE_LIMIT_MAX_PER_WINDOW)
+    state = _rate_states.get(key)
+    if state is None or now - state.window_started >= window:
+        state = _AlarmRateState(window_started=now)
+        _rate_states[key] = state
+    if state.count < limit:
+        state.count += 1
+        suppressed = state.suppressed
+        state.suppressed = 0
+        return True, suppressed
+    state.suppressed += 1
+    return False, 0
 
 
 def _safe_text(value: Any, max_length: int = MAX_ALARM_EXT_LENGTH) -> str:
@@ -69,22 +121,31 @@ def emit_alarm(
     ext2: Any = None,
 ) -> None:
     """Write one normalized alarm log record."""
-    normalized_alarm_id = str(alarm_id or "UNKNOWN_ALARM").strip() or "UNKNOWN_ALARM"
-    normalized_request_type = str(request_type or "ALARM").strip() or "ALARM"
-    normalized_error_code = str(error_code or normalized_alarm_id).strip() or normalized_alarm_id
-    safe_message = _safe_text(message or normalized_alarm_id, MAX_ALARM_MESSAGE_LENGTH)
-    safe_ext1 = _safe_text(ext1)
-    safe_ext2 = _safe_text(ext2)
-    get_alarm_logger().error(
-        safe_message,
-        extra={
-            "alarm_id": normalized_alarm_id,
-            "request_type": normalized_request_type,
-            "error_code": normalized_error_code,
-            "ext1": safe_ext1,
-            "ext2": safe_ext2,
-        },
-    )
+    try:
+        normalized_alarm_id = str(alarm_id or "UNKNOWN_ALARM").strip() or "UNKNOWN_ALARM"
+        normalized_request_type = str(request_type or "ALARM").strip() or "ALARM"
+        normalized_error_code = str(error_code or normalized_alarm_id).strip() or normalized_alarm_id
+        allowed, suppressed = _allow_alarm(normalized_alarm_id, normalized_error_code)
+        if not allowed:
+            return
+        safe_message = _safe_text(message or normalized_alarm_id, MAX_ALARM_MESSAGE_LENGTH)
+        if suppressed:
+            safe_message = f"{safe_message} (suppressed {suppressed} previous alarms)"
+        safe_ext1 = _safe_text(ext1)
+        safe_ext2 = _safe_text(ext2)
+        get_alarm_logger().error(
+            safe_message,
+            extra={
+                "alarm_id": normalized_alarm_id,
+                "request_type": normalized_request_type,
+                "error_code": normalized_error_code,
+                "ext1": safe_ext1,
+                "ext2": safe_ext2,
+            },
+        )
+    except Exception:
+        # 告警写入失败不能影响业务主流程；降级到 app warning 便于发现。
+        logger.warning("写入告警日志失败（已忽略，不影响业务）", exc_info=True)
 
 
 # 数据库连接失败的细分原因码（写入报警日志 error_code 字段，供检索与统计）。

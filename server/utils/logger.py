@@ -14,6 +14,8 @@ import contextlib
 import logging
 import os
 import queue
+import sys
+import time
 from contextvars import ContextVar
 from datetime import datetime
 from logging.handlers import QueueHandler, QueueListener, TimedRotatingFileHandler, WatchedFileHandler
@@ -97,6 +99,16 @@ def _default_log_dir() -> str:
 def get_log_async_mode() -> bool:
     """是否使用 QueueHandler/QueueListener 异步写日志（默认关闭，避免改变现有语义）。"""
     return _env_bool("LOG_ASYNC", False)
+
+
+def get_log_async_queue_size() -> int:
+    """异步日志队列上限，防止日志突发无界占用内存。"""
+    raw = _env_text("LOG_ASYNC_QUEUE_SIZE", "10000")
+    try:
+        size = int(raw)
+    except ValueError:
+        return 10000
+    return max(100, size)
 
 
 def get_log_rotation_mode() -> str:
@@ -219,6 +231,29 @@ def _append_message_parts(message: str, user: object, extra_fields: dict[str, ob
     if extra_fields:
         parts.append(", ".join(f"{key}={value}" for key, value in extra_fields.items()))
     return " | ".join(parts)
+
+
+class _BoundedQueueHandler(QueueHandler):
+    """有界队列 handler：队列满时丢弃并限频告警，避免阻塞业务线程。"""
+
+    def __init__(self, log_queue: queue.Queue) -> None:
+        super().__init__(log_queue)
+        self._dropped = 0
+        self._last_warn = 0.0
+
+    def enqueue(self, record: logging.LogRecord) -> None:
+        try:
+            self.queue.put_nowait(record)
+        except queue.Full:
+            self._dropped += 1
+            now = time.monotonic()
+            if now - self._last_warn >= 60:
+                self._last_warn = now
+                sys.stderr.write(
+                    f"[logging] LOG_ASYNC 队列已满，最近丢弃 {self._dropped} 条日志；"
+                    "请调大 LOG_ASYNC_QUEUE_SIZE 或降低日志量\n"
+                )
+                self._dropped = 0
 
 
 class LogContextFilter(logging.Filter):
@@ -346,7 +381,8 @@ class LoggerManager:
     _formatter = None  # 全局唯一的格式化器
     _access_formatter = None  # 全局唯一的访问日志格式化器
     _alarm_formatter = None  # 全局唯一的告警日志格式化器
-    _async_listeners: dict[str, Any] = {}  # category -> (QueueListener, QueueHandler)
+    _async_listeners: dict[str, Any] = {}  # category -> (QueueListener|None, QueueHandler)
+    _async_listener_handlers: dict[str, list[logging.Handler]] = {}  # category -> 原始 handler 列表
 
     @classmethod
     def _get_formatter(cls) -> logging.Formatter:
@@ -514,8 +550,8 @@ class LoggerManager:
             return
         cached = cls._async_listeners.get(category)
         if cached is None:
-            log_queue: queue.Queue = queue.Queue(-1)
-            queue_handler = QueueHandler(log_queue)
+            log_queue: queue.Queue = queue.Queue(maxsize=get_log_async_queue_size())
+            queue_handler = _BoundedQueueHandler(log_queue)
             queue_handler.setLevel(logging.DEBUG)
             listener = QueueListener(log_queue, *handlers, respect_handler_level=True)
             listener.start()
@@ -526,6 +562,14 @@ class LoggerManager:
 
             atexit.register(_stop_listener)
             cls._async_listeners[category] = (listener, queue_handler)
+            cls._async_listener_handlers[category] = list(handlers)
+        elif cached[0] is None:
+            # 上一次 stop_async_listeners 停过 listener：复用原队列/handler 重新起线程，
+            # 进程内重启（reload/测试）时已有 logger 的 QueueHandler 继续可用。
+            stored_handlers = cls._async_listener_handlers.get(category, list(handlers))
+            listener = QueueListener(cached[1].queue, *stored_handlers, respect_handler_level=True)
+            listener.start()
+            cls._async_listeners[category] = (listener, cached[1])
         logger.addHandler(cls._async_listeners[category][1])
 
     @classmethod
@@ -621,6 +665,27 @@ class LoggerManager:
         return logger
 
     @classmethod
+    def ensure_async_listeners(cls) -> None:
+        """进程内重启时恢复被停止的 QueueListener，复用原队列与 handler。"""
+        for category, (listener, handler) in list(cls._async_listeners.items()):
+            if listener is not None:
+                continue
+            stored_handlers = cls._async_listener_handlers.get(category, [])
+            new_listener = QueueListener(handler.queue, *stored_handlers, respect_handler_level=True)
+            new_listener.start()
+            cls._async_listeners[category] = (new_listener, handler)
+
+    @classmethod
+    def stop_async_listeners(cls) -> None:
+        """优雅退出时停止 QueueListener，尽量把队列里的日志刷到文件。"""
+        for category, (listener, handler) in list(cls._async_listeners.items()):
+            if listener is None:
+                continue
+            with contextlib.suppress(Exception):
+                listener.stop()
+            cls._async_listeners[category] = (None, handler)
+
+    @classmethod
     def set_level(cls, name: str, level: str):
         """
         设置指定 logger 的日志级别
@@ -644,6 +709,52 @@ class LoggerManager:
         log_level = getattr(logging, level.upper(), logging.INFO)
         for logger in cls._loggers.values():
             logger.setLevel(log_level)
+
+
+_THIRD_PARTY_LOGGER_LEVELS = {
+    "uvicorn": logging.INFO,
+    "uvicorn.error": logging.INFO,
+    "httpx": logging.WARNING,
+    "aiomysql": logging.WARNING,
+}
+_third_party_configured = False
+
+
+def configure_third_party_loggers() -> None:
+    """把 uvicorn/httpx/aiomysql 等库日志接入统一文件/格式/脱敏。
+
+    只接管白名单，避免 sqlalchemy/httpx 逐请求日志刷屏；gunicorn master 进程日志
+    早于应用启动，仍由 gunicorn 自己输出，这里只管 worker 内应用可见的库 logger。
+    """
+    global _third_party_configured
+    if _third_party_configured:
+        return
+
+    handlers: list[logging.Handler] = [
+        LoggerManager._get_file_handler(
+            get_current_log_dir(),
+            get_current_log_file(),
+            DEFAULT_BACKUP_COUNT,
+        )
+    ]
+    if get_current_console_output():
+        handlers.append(LoggerManager._get_console_handler())
+
+    for name, level in _THIRD_PARTY_LOGGER_LEVELS.items():
+        lib_logger = logging.getLogger(name)
+        lib_logger.handlers.clear()
+        lib_logger.setLevel(level)
+        lib_logger.propagate = False
+        lib_logger.addFilter(LogContextFilter())
+        LoggerManager._attach_handlers(lib_logger, "app", handlers)
+
+    # HTTP 访问日志由 APIAccessLogMiddleware 统一记录，避免 uvicorn 再写一份
+    access_logger = logging.getLogger("uvicorn.access")
+    access_logger.handlers.clear()
+    access_logger.propagate = False
+    access_logger.setLevel(logging.WARNING)
+
+    _third_party_configured = True
 
 
 def get_logger(name: str, log_level: str | None = None, console_output: bool | None = None) -> logging.Logger:
@@ -699,6 +810,8 @@ __all__ = [
     "get_alarm_logger",
     "get_log_rotation_mode",
     "get_log_async_mode",
+    "get_log_async_queue_size",
+    "configure_third_party_loggers",
     "get_current_log_dir",
     "get_current_log_file",
     "get_current_access_log_file",

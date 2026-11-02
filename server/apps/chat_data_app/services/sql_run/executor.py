@@ -515,7 +515,17 @@ def _emit_sql_execution_validation_alarm(
     datasource_id: str = "",
     user_id: str = "",
 ) -> None:
-    """记录执行边界拦截的高危 SQL。"""
+    """记录执行边界拦截的高危 SQL。
+
+    优先用 sql_guard 的结构化 reason_code，避免依赖中文文案映射；guard 不认为是
+    违规（如内部 LIMIT 终检缺陷）时回退到文案推断。
+    """
+    reason_code: str | None = None
+    try:
+        violation = run_sql_guard(sql, source_type=source_type)
+        reason_code = violation.reason_code if violation is not None else None
+    except Exception:
+        reason_code = None
     emit_dangerous_sql_alarm(
         sql,
         error_msg,
@@ -523,6 +533,7 @@ def _emit_sql_execution_validation_alarm(
         execution_scope=execution_scope,
         datasource_id=datasource_id or None,
         user_id=user_id or None,
+        reason_code=reason_code,
     )
 
 
