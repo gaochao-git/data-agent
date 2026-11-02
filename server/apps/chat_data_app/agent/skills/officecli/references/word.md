@@ -84,7 +84,7 @@ officecli_run(command_args=["set", "F", "/body/p[1]/r[1]", "--prop", "color=1F4E
 
 **单位（易错点）**：`size` 的单位是**磅**，`size=16` 即 16pt（三号），照 standard-report.md 映射表的 pt 值原样写，**不要按 OOXML 半磅（w:sz）翻倍**——半磅只在你用 `raw-set` 直接改 `w:sz` 时才出现。`indent`/`firstLineIndent` 裸数是 twips、也可带单位（`32pt`）；`spaceBefore`/`spaceAfter`/`lineSpacing` 一律带单位（`12pt`、`0.5cm`、`1.5x`）。
 
-> ⚠️ **`create` 产出的是极简文档，不含内置 Heading 样式。** `style=Heading1` 会回退为"按原样引用"（help 有 `WARNING: style 'Heading1' not found`）。报告类文档按 `standard-report.md` 样式映射表逐级显式设置字体/字号/行距（可 `view annotated` 样板 `standard-report-template.docx` 照抄具体配置）；用户提供了带样式的模板时以用户模板为准。TOC 只认内置 Heading 样式或带 `outlineLvl` 的自定义段落样式。
+> ⚠️ **`create` 产出的是极简文档，不含内置 Heading 样式。** `style=Heading1` 会回退为"按原样引用"（help 有 `WARNING: style 'Heading1' not found`）。报告类文档按 `standard-report.md` 样式映射表逐级显式设置字体/字号/行距（可 `view annotated` 样板 `standard-report-template.docx` 照抄具体配置；该样板已内置 `ReportTitle/Subtitle/Meta`、`Heading 1/2/3`、`TableCaption/FigureCaption`、`TableHeader/TableText`、`KeyConclusion`、`Note` 样式，从样板起步可直接复用）；用户提供了带样式的模板时以用户模板为准。TOC 只认内置 Heading 样式或带 `outlineLvl` 的自定义段落样式。
 
 ### 表格
 
@@ -174,7 +174,7 @@ officecli_run(command_args=["add", "F", "/body/p[2]", "--type", "hyperlink", "--
 
 当前稳定使用的图表类型是 `bar`、`column`、`line`、`pie`、`doughnut`、`area`、`scatter` 和 `funnel`。`combo`、`waterfall`、`treemap`、`sunburst` 等高级类型先用 `officecli_run(command_args=["help", "docx", "chart"])` 确认当前版本支持及参数，再使用；不要仅因为命令成功就声称视觉效果正确。
 
-图表添加到 `/body` 后，当前 OfficeCLI 版本返回的路径通常是 `/chart[1]`；用 `officecli_run(command_args=["query", "F", "chart", "--json"])` 查看所有图表，用返回的实际路径读取或修改，不要假定图表一定位于 `/body/p[N]/chart[M]`。
+图表所在段落必须使用**单倍/自动行距**（不能沿用正文固定行距），否则 Word/预览会把内嵌图表按行高裁切，表现为只剩图例/边框；图表段同时设置首行缩进 0、居中和 `keepNext`，图题放在图表下方。图表添加到 `/body` 后，当前 OfficeCLI 版本返回的路径通常是 `/chart[1]`；用 `officecli_run(command_args=["query", "F", "chart", "--json"])` 查看所有图表，用返回的实际路径读取或修改，不要假定图表一定位于 `/body/p[N]/chart[M]`。
 
 ### 分节与页面设置 / 分页
 
