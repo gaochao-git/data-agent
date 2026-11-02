@@ -16,9 +16,8 @@ from utils.common_util import load_runtime_env, merge_no_proxy
 
 _SERVER_DIR = Path(__file__).resolve().parent
 _RUNTIME_ENV = load_runtime_env(_SERVER_DIR)
-print(
-    f"env={_RUNTIME_ENV.active_env} loaded={','.join(_RUNTIME_ENV.loaded_files) or '-'} ips={','.join(_RUNTIME_ENV.local_ips) or '-'}"
-)
+# 运行环境信息等 lifespan 中日志初始化完成后再记录，避免 import 期 print 绕过
+# 统一格式/脱敏，也避免多 worker 时 stdout 与文件日志重复。
 # 必须在导入应用模块前合并：部分模块导入期就会创建 HTTP 客户端/读取代理配置。
 merge_no_proxy()
 
@@ -51,6 +50,12 @@ async def lifespan(app: FastAPI):
     # 然后再接管第三方 logger，避免已有 QueueHandler 指向已停止的队列。
     LoggerManager.ensure_async_listeners()
     configure_third_party_loggers()
+    logger.info(
+        "运行环境加载完成: env=%s loaded=%s ips=%s",
+        _RUNTIME_ENV.active_env,
+        ",".join(_RUNTIME_ENV.loaded_files) or "-",
+        ",".join(_RUNTIME_ENV.local_ips) or "-",
+    )
     schedule_started = False
     run_started = False
     try:
