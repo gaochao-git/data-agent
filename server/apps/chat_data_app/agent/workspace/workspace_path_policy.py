@@ -70,7 +70,6 @@ class WorkspacePathPolicy:
             raise ValueError("路径必须以 /mnt/user-data/ 或 /mnt/skills/ 开头")
         if "\x00" in raw:
             raise ValueError("路径不能包含空字节")
-
         if raw == SKILLS_VIRTUAL_ROOT:
             raise ValueError("技能路径必须包含技能名")
         if raw.startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
@@ -78,6 +77,7 @@ class WorkspacePathPolicy:
                 # Windows 风格分隔符在 Linux 下是文件名字符，但在本地模式
                 # （开发机可能为 Windows）会变成目录穿越；统一在入口拒绝。
                 raise ValueError("路径不能包含反斜杠分隔符")
+            self._assert_canonical(raw, path)
             return self._build_skill_path(raw[len(SKILLS_VIRTUAL_ROOT) + 1 :], raw)
 
         prefix = f"{USER_DATA_VIRTUAL_ROOT}/"
@@ -85,6 +85,7 @@ class WorkspacePathPolicy:
             raise ValueError(f"路径必须以 /mnt/user-data/ 或 /mnt/skills/ 开头: {path}")
         if "\\" in raw:
             raise ValueError("路径不能包含反斜杠分隔符")
+        self._assert_canonical(raw, path)
         parts = PurePosixPath(raw[len(prefix) :]).parts
         if not parts or ".." in parts:
             raise ValueError(f"路径越界，禁止访问当前会话目录之外的路径: {path}")
@@ -136,6 +137,16 @@ class WorkspacePathPolicy:
         if logical_path.is_skill:
             return f"{SKILLS_VIRTUAL_ROOT}/{logical_path.relative_path}"
         return f"{USER_DATA_VIRTUAL_ROOT}/{logical_path.normalized}"
+
+    @staticmethod
+    def _assert_canonical(raw: str, original: str) -> None:
+        """拒绝重复斜杠、尾斜杠和 "." 段，保证“规范形式”契约可验证。"""
+        if raw.endswith("/"):
+            raise ValueError(f"路径不能以斜杠结尾: {original}")
+        if "//" in raw:
+            raise ValueError(f"路径不能包含连续斜杠: {original}")
+        if any(segment == "." for segment in raw.split("/")):
+            raise ValueError(f"路径不能包含 '.' 段: {original}")
 
     @staticmethod
     def _build_skill_path(relative: str, original: str) -> LogicalWorkspacePath:

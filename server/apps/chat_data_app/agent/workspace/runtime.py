@@ -31,7 +31,7 @@ from apps.chat_data_app.agent.workspace.runtime_skill_snapshot import (
 )
 from utils.logger import get_logger
 from utils.skill_paths import SKILLS_VIRTUAL_ROOT, resolve_skill_snapshot_path, runtime_skill_visible_root
-from utils.storage_paths import CHAT_DATA_HOME, conversation_thread_dir
+from utils.storage_paths import CHAT_DATA_HOME, assert_workspace_root, conversation_thread_dir
 from utils.tool_result_store import QUERY_RESULT_DIR_NAME, TOOL_OFFLOAD_DIR_NAME
 from utils.upload_storage_crypto import materialize_plaintext, original_upload_path
 
@@ -551,8 +551,9 @@ def to_visible_path(workspace_root: str, path: Path) -> str:
         target = original
     try:
         relative = target.relative_to(root).as_posix()
-    except ValueError:
-        return str(target)
+    except ValueError as exc:
+        # 不返回宿主绝对路径：越界属于调用方 bug，应该 fail closed，避免泄漏部署路径。
+        raise ValueError(f"路径不在当前会话工作区内: {path}") from exc
     return f"/mnt/user-data/{relative}"
 
 
@@ -717,10 +718,7 @@ def _render_local_office_html(
 
 def _ensure_workspace_root_in_chat_data_home(workspace_root: str) -> None:
     """确保服务端直接读取的会话根仍属于 ChatData 共享数据目录。"""
-    root = Path(CHAT_DATA_HOME).expanduser().resolve()
-    target = Path(workspace_root).expanduser().resolve()
-    if target != root and root not in target.parents:
-        raise ValueError(f"会话工作区不在 CHAT_DATA_HOME 内: {workspace_root}")
+    assert_workspace_root(workspace_root, chat_data_home=CHAT_DATA_HOME)
 
 
 def create_workspace_backend(name: str) -> WorkspaceBackend:

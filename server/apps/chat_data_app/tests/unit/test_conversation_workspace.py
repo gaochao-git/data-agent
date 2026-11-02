@@ -16,8 +16,6 @@ os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 from pathlib import Path
 
 import pytest
-from langchain_core.messages import HumanMessage
-
 from apps.chat_data_app.agent.data_agent import DatasourceContext, assemble_tools
 from apps.chat_data_app.agent.runtime_options import AgentRuntimeOptions
 from apps.chat_data_app.agent.tools.common import normalize_json_like_payload
@@ -58,6 +56,7 @@ from apps.chat_data_app.services.agent_run.conversation_workspace import (
     workspace_runtime_from_state,
 )
 from apps.chat_data_app.services.semantic.run import semantic_query_service
+from langchain_core.messages import HumanMessage
 from utils import tool_result_store
 
 sql_tool_module = importlib.import_module("apps.chat_data_app.agent.tools.data_analyzing")
@@ -571,7 +570,8 @@ def test_workspace_json_list_read_and_visible_paths():
 
     outside_path = Path(paths["root"]).parent / "outside.txt"
     outside_path.write_text("outside", encoding="utf-8")
-    assert to_visible_path(paths["root"], outside_path) == str(outside_path)
+    with pytest.raises(ValueError, match="不在当前会话工作区"):
+        to_visible_path(paths["root"], outside_path)
 
 
 def test_read_workspace_text_file_rejects_missing_and_large_files():
@@ -2159,7 +2159,6 @@ async def test_workspace_office_preview_service_stabilizes_and_rechecks_size():
 def test_resolve_skill_snapshot_path_security_rules(tmp_path):
     """本地/沙箱共用的技能路径解析:隐藏名、穿越、前缀越界、symlink 全部拒绝。"""
     import pytest
-
     from utils.skill_paths import resolve_skill_snapshot_path
 
     skill_dir = tmp_path / "demo"

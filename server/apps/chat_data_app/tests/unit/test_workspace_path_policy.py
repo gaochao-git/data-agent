@@ -1,5 +1,4 @@
 import pytest
-
 from apps.chat_data_app.agent.workspace.workspace_path_policy import WORKSPACE_PATH_POLICY
 
 
@@ -80,4 +79,20 @@ def test_policy_keeps_special_directory_write_rules_in_one_place():
 )
 def test_policy_rejects_backslash_separators(path):
     with pytest.raises(ValueError, match="反斜杠"):
+        WORKSPACE_PATH_POLICY.parse(path)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/mnt/user-data/workspace/",
+        "/mnt/user-data/workspace//a.txt",
+        "/mnt/user-data/workspace/./a.txt",
+        "/mnt/skills/demo/",
+        "/mnt/skills//demo",
+        "/mnt/skills/demo/./SKILL.md",
+    ],
+)
+def test_policy_rejects_non_canonical_segments(path):
+    with pytest.raises(ValueError):
         WORKSPACE_PATH_POLICY.parse(path)
