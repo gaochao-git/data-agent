@@ -385,6 +385,12 @@ export function getFileCount(node: ProducedFileTreeNode): number {
   return (node.file ? 1 : 0) + node.children.reduce((count, child) => count + getFileCount(child), 0)
 }
 
+/** 统计节点（目录或文件）子树内所有文件的总字节数；文件大小来自工作区列表的 st_size。 */
+export function getFileSize(node: ProducedFileTreeNode): number {
+  const ownSize = node.file?.size ?? 0
+  return ownSize + node.children.reduce((total, child) => total + getFileSize(child), 0)
+}
+
 /**
  * 展平出「可见行」序列：文件行直接输出，目录行在未折叠时递归展开子级。
  * `depth` 从 1 起（顶层目录行本身是 depth 0 的独立渲染分支）。

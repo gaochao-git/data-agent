@@ -8,9 +8,11 @@
 import { inject } from 'vue'
 import FileManagerToolbar from './FileManagerToolbar.vue'
 import {
+  CONSOLE_TREE_META_VISIBILITY_CLASS,
   CONSOLE_TREE_SIZE_COLUMN_CLASS,
   CONSOLE_TREE_TIME_COLUMN_CLASS,
   flattenFileTreeNodes,
+  getFileSize,
 } from '../../utils/consoleFileTree'
 import { fileIconClass, formatEpochDateTime } from '../../utils'
 import { formatFileSize } from '../../utils/consoleFileTree'
@@ -124,7 +126,13 @@ const {
                 <i class="fa-solid" :class="isConsoleArchiveDownloading === directory.name ? 'fa-spinner fa-spin' : 'fa-download'"></i>
               </button>
               <!-- 数量徽标统一放在每行最右端（按钮在其左侧），与面板头部同序：
-                   所有数量落在同一条竖线上，扫一眼就能纵向比对。 -->
+                   所有数量落在同一条竖线上，扫一眼就能纵向比对；总大小紧挨数量左侧。 -->
+              <span
+                v-if="getFileCount(directory)"
+                class="shrink-0 text-[10px] tabular-nums text-slate-400"
+                :class="CONSOLE_TREE_META_VISIBILITY_CLASS"
+                title="目录占用总大小"
+              >{{ formatFileSize(getFileSize(directory)) }}</span>
               <span v-if="getFileCount(directory)" class="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] leading-none text-slate-500">{{ getFileCount(directory) }}</span>
             </div>
             <div v-if="directory.children.length && !isConsoleDirectoryCollapsed(directory.name)" class="space-y-0.5">
@@ -255,6 +263,12 @@ const {
                   </button>
                   <!-- 数量徽标与顶层目录行同构：放在可点击区域之外的行尾，
                        所有数量徽标的右边缘落在同一条竖线上（放在按钮内时会被 px-1.5 推走 2px）。 -->
+                  <span
+                    v-if="getFileCount(item.node)"
+                    class="shrink-0 text-[10px] tabular-nums text-slate-400"
+                    :class="CONSOLE_TREE_META_VISIBILITY_CLASS"
+                    title="目录占用总大小"
+                  >{{ formatFileSize(getFileSize(item.node)) }}</span>
                   <span v-if="getFileCount(item.node)" class="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] leading-none text-slate-500">{{ getFileCount(item.node) }}</span>
                 </div>
               </div>
