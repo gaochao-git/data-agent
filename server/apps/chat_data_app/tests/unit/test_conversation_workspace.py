@@ -16,6 +16,8 @@ os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 from pathlib import Path
 
 import pytest
+from langchain_core.messages import HumanMessage
+
 from apps.chat_data_app.agent.data_agent import DatasourceContext, assemble_tools
 from apps.chat_data_app.agent.runtime_options import AgentRuntimeOptions
 from apps.chat_data_app.agent.tools.common import normalize_json_like_payload
@@ -56,7 +58,6 @@ from apps.chat_data_app.services.agent_run.conversation_workspace import (
     workspace_runtime_from_state,
 )
 from apps.chat_data_app.services.semantic.run import semantic_query_service
-from langchain_core.messages import HumanMessage
 from utils import tool_result_store
 
 sql_tool_module = importlib.import_module("apps.chat_data_app.agent.tools.data_analyzing")
@@ -2159,6 +2160,7 @@ async def test_workspace_office_preview_service_stabilizes_and_rechecks_size():
 def test_resolve_skill_snapshot_path_security_rules(tmp_path):
     """本地/沙箱共用的技能路径解析:隐藏名、穿越、前缀越界、symlink 全部拒绝。"""
     import pytest
+
     from utils.skill_paths import resolve_skill_snapshot_path
 
     skill_dir = tmp_path / "demo"

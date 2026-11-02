@@ -1,4 +1,5 @@
 import pytest
+
 from apps.chat_data_app.agent.workspace.workspace_path_policy import WORKSPACE_PATH_POLICY
 
 
