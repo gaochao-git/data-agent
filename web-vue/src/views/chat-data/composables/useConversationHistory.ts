@@ -709,7 +709,7 @@ interface UseConversationHistoryOptions {
 }
 
 /** 历史事件单页条数：长会话全量拉取的字节量随会话线性增长，是加载变慢的主因 */
-export const HISTORY_PAGE_SIZE = 100
+export const HISTORY_PAGE_SIZE = 30
 
 /** 读取窗口内最小 sequence_no，作为向上翻页的游标；无法解析时返回 null */
 const readEarliestSequenceNo = (events: unknown[]): number | null => {
@@ -759,7 +759,7 @@ export function useConversationHistory({
     const showLoading = !force || messages.value.length === 0
     if (showLoading) isLoadingHistory.value = true
     try {
-      const response = await getConversationHistory(convId, { limit: HISTORY_PAGE_SIZE })
+      const response = await getConversationHistory(convId, { limit: HISTORY_PAGE_SIZE, strictLimit: true })
 
       if (response.ok) {
         const data = await response.json()
@@ -802,6 +802,7 @@ export function useConversationHistory({
       const response = await getConversationHistory(convId, {
         limit: HISTORY_PAGE_SIZE,
         beforeSequence: cursor,
+        strictLimit: true,
       })
       // 会话可能已在请求期间切换：只应用属于当前会话的响应，避免旧会话事件污染新会话
       if (!response.ok || conversationId.value !== convId) return

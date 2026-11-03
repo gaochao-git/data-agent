@@ -460,7 +460,7 @@ def test_read_workspace_raw_file_branches(tmp_path):
     target = Path(root) / "workspace" / "big.bin"
     target.write_bytes(b"x" * 100)
 
-    with pytest.raises(ValueError, match="不在工作区文件预览范围内"):
+    with pytest.raises(FileNotFoundError, match="文件不存在"):
         read_workspace_raw_file(
             "conv_raw", f"/mnt/user-data/outputs/{cw_runtime_module.TOOL_OFFLOAD_DIR_NAME}/r.json", 100, "user_a"
         )

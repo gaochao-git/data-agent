@@ -58,7 +58,6 @@ import {
   replaceVisiblePathsForDisplay,
 } from '../../utils/messageArtifacts'
 import { ACCEPTED_FILE_TYPES, MAX_FILE_SIZE } from '../../utils/uploadLimits'
-
 interface Props {
   datasource?: DataSource | null
   conversationId?: string | null
@@ -2929,6 +2928,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
               <ConversationTokenUsage
                 ref="tokenUsagePanelRef"
                 :usage="tokenUsage"
+                :conversation-id="localConversationId || props.conversationId || undefined"
                 :messages="messages"
                 :is-generating="isGenerating"
                 compact

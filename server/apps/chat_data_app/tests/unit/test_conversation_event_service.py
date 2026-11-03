@@ -1059,6 +1059,41 @@ async def test_history_window_finishes_single_turn_longer_than_limit(conversatio
 
 
 @pytest.mark.asyncio
+async def test_history_window_strict_limit_keeps_tail_without_expanding_long_turn(conversation_event_service):
+    """strict_limit 对超长轮次只返回尾页，避免 limit 被轮次闭包放大成整轮。"""
+    service, create_thread, _get_session = conversation_event_service
+    await create_thread("conv-strict", "user-1")
+    await _persist_qa_turn(
+        service,
+        conversation_id="conv-strict",
+        turn_id="turn-1",
+        question="长轮次问题",
+        answer="回答1",
+        extra_answers=("回答2", "回答3", "回答4"),
+    )
+
+    page = await service.load_history_with_recovery(
+        conversation_id="conv-strict",
+        user_id="user-1",
+        limit=2,
+        strict_limit=True,
+    )
+    assert len(page["history_events"]) == 2
+    assert page["has_more"] is True
+    assert [event["payload"]["content"] for event in page["history_events"]] == ["回答3", "回答4"]
+
+    older = await service.load_history_with_recovery(
+        conversation_id="conv-strict",
+        user_id="user-1",
+        limit=2,
+        before_sequence=page["earliest_sequence_no"],
+        strict_limit=True,
+    )
+    assert len(older["history_events"]) == 2
+    assert older["has_more"] is True
+
+
+@pytest.mark.asyncio
 async def test_history_window_returns_full_history_when_shorter_than_limit(conversation_event_service):
     service, create_thread, _get_session = conversation_event_service
     await create_thread("conv-short", "user-1")

@@ -296,6 +296,7 @@ class ConversationEventService:
         include_derived: bool = True,
         limit: int | None = None,
         before_sequence: int | None = None,
+        strict_limit: bool = False,
     ) -> dict[str, Any]:
         """在同一事务读取历史和活跃 Run 的恢复水位。
 
@@ -310,6 +311,7 @@ class ConversationEventService:
                 user_id=user_id,
                 limit=limit,
                 before_sequence=before_sequence,
+                strict_limit=strict_limit,
             )
             try:
                 token_usage_payload = await self._dao.get_latest_token_usage_payload_in_session(
@@ -380,6 +382,16 @@ class ConversationEventService:
             "is_continuation": content.get("run_kind") == "continuation",
             "history_checkpoint": normalize_history_checkpoint(content, run.run_id),
         }
+
+    async def get_latest_token_usage_detail(self, *, conversation_id: str, user_id: str) -> dict[str, Any] | None:
+        """按需读取完整上下文用量明细；timeline 首屏只返回摘要。"""
+        async with self._dao.session_context() as session:
+            raw_payload = await self._dao.get_latest_token_usage_payload_in_session(
+                session,
+                conversation_id=conversation_id,
+                user_id=user_id,
+            )
+        return _load_payload(raw_payload)
 
     async def get_first_user_message(self, *, conversation_id: str, user_id: str) -> str | None:
         """读取首条有效用户消息正文，不加载完整会话历史。"""

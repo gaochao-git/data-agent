@@ -369,7 +369,7 @@ async def test_internal_semantic_model_delete_cleans_residual_file(tmp_path, mon
 
 
 @pytest.mark.asyncio
-async def test_tool_results_are_hidden_from_workspace_api_but_readable_by_file_read(monkeypatch, tmp_path):
+async def test_tool_results_are_listed_but_read_only_and_reusable_by_file_read(monkeypatch, tmp_path):
     monkeypatch.setattr(workspace_runtime_module, "CHAT_DATA_HOME", str(tmp_path))
     monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "users")
     monkeypatch.setattr(tool_result_store, "CHAT_DATA_HOME", str(tmp_path))
@@ -378,9 +378,11 @@ async def test_tool_results_are_hidden_from_workspace_api_but_readable_by_file_r
     private_file.write_text('{"rows":[1]}', encoding="utf-8")
     runtime = ConversationWorkspaceRuntime(workspace_root=paths["root"], user_id="user_a", backend="local")
 
-    assert all(item["name"] != "result_1.json" for item in list_workspace_files("conv_private", "user_a"))
-    with pytest.raises(ValueError):
-        read_workspace_text_file("conv_private", "/mnt/user-data/outputs/.tool-offload/result_1.json", user_id="user_a")
+    assert any(item["name"] == "result_1.json" for item in list_workspace_files("conv_private", "user_a"))
+    preview = read_workspace_text_file(
+        "conv_private", "/mnt/user-data/outputs/.tool-offload/result_1.json", user_id="user_a"
+    )
+    assert preview["content"] == '{"rows":[1]}'
     result = await runtime.read_text_file(
         file_path="/mnt/user-data/outputs/.tool-offload/result_1.json",
         offset=0,
@@ -392,8 +394,21 @@ async def test_tool_results_are_hidden_from_workspace_api_but_readable_by_file_r
         resolve_workspace_path(paths["root"], "/mnt/user-data/outputs/.tool-offload/result_1.json", writable=True)
 
 
+def test_get_workspace_total_size_sums_all_four_directories(tmp_path):
+    from apps.chat_data_app.services.agent_run.conversation_workspace import get_workspace_total_size
+
+    root = tmp_path / "user-data"
+    for name in ("workspace", "outputs", "uploads", "memory"):
+        directory = root / name
+        directory.mkdir(parents=True)
+        (directory / "a.txt").write_bytes(b"123")
+        (directory / "nested").mkdir()
+        (directory / "nested" / "b.txt").write_bytes(b"45")
+    assert get_workspace_total_size(root) == 20
+
+
 @pytest.mark.asyncio
-async def test_query_result_is_hidden_read_only_and_reusable_by_file_read(monkeypatch, tmp_path):
+async def test_query_result_is_listed_read_only_and_reusable_by_file_read(monkeypatch, tmp_path):
     monkeypatch.setattr(workspace_runtime_module, "CHAT_DATA_HOME", str(tmp_path))
     monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "users")
     paths = ensure_conversation_workspace("conv_query_result", "user_a")
@@ -409,7 +424,8 @@ async def test_query_result_is_hidden_read_only_and_reusable_by_file_read(monkey
         tool for tool in filesystem_tool_module.create_filesystem_tools(runtime) if tool.name == "file_read"
     )
 
-    assert all(item["name"] != "result_1.json" for item in list_workspace_files("conv_query_result", "user_a"))
+    listed = list_workspace_files("conv_query_result", "user_a")
+    assert any(item["name"] == "result_1.json" for item in listed)
     content = await file_read.ainvoke(
         {
             "file_path": "/mnt/user-data/outputs/query_result/result_1.json",

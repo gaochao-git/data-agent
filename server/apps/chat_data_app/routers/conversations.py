@@ -18,6 +18,7 @@ from utils.logger import get_logger
 from utils.response import business_response
 
 from .. import AGENT_ID
+from ..agent.context.context_budget import strip_context_usage_content_for_history
 from ..agent.run.agent_inbox_service import (
     AgentQuestionNotFoundError,
     AgentQuestionNotWaitingError,
@@ -30,6 +31,7 @@ from ..agent.run.agent_inbox_service import (
 from ..agent.run.agent_run_event_service import agent_run_event_service
 from ..agent.run.agent_run_runtime import agent_run_runtime
 from ..agent.run.completion_options import parse_file_selections, parse_quoted_snippets
+from ..agent.run.conversation_event_service import conversation_event_service
 from ..agent.workspace.runtime_skill_snapshot import build_runtime_skill_snapshot_async
 from ..agent_run_support import (
     materialize_conversation_semantic_models,
@@ -499,6 +501,30 @@ async def list_conversations(
         )
 
 
+@router.get("/{conversation_id}/token-usage")
+async def get_conversation_token_usage(conversation_id: str, req: Request) -> JSONResponse:
+    """按需读取会话完整上下文用量明细，避免随每次 history timeline 重复传输。"""
+    try:
+        user_id = _get_user_id(req)
+        config = await get_agent_config_by_conversation(conversation_id, user_id)
+        if not config:
+            return business_response(msg="对话不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
+        detail = await conversation_event_service.get_latest_token_usage_detail(
+            conversation_id=conversation_id,
+            user_id=user_id,
+        )
+        return business_response(data=detail, msg="获取上下文用量成功")
+    except AuthenticationError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message) from e
+    except Exception:
+        logger.exception("获取上下文用量失败: conversation_id=%s", conversation_id)
+        return business_response(
+            msg="获取上下文用量失败，请稍后重试",
+            code=ErrorCode.CHATDATA_CONVERSATION_DETAIL_FAILED,
+            status="error",
+        )
+
+
 @router.get("/{conversation_id}")
 async def get_conversation_detail(
     conversation_id: str,
@@ -508,6 +534,7 @@ async def get_conversation_detail(
     before_sequence: int | None = Query(
         default=None, ge=0, description="翻页游标：只返回 sequence_no 小于该值的历史事件"
     ),
+    strict_limit: bool = Query(default=False, description="长轮次硬上限：只返回 limit 条尾部事件，不补齐整轮"),
 ) -> JSONResponse:
     """
     获取会话详情
@@ -540,6 +567,7 @@ async def get_conversation_detail(
             include_derived_history=view == "full",
             limit=limit,
             before_sequence=before_sequence,
+            strict_limit=strict_limit,
         )
         if not result:
             return business_response(msg="对话不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
@@ -547,6 +575,7 @@ async def get_conversation_detail(
         if view == "timeline":
             result.pop("messages", None)
             result.pop("reasoning_segments", None)
+            result["token_usage"] = strip_context_usage_content_for_history(result.get("token_usage"))
         return business_response(data=result, msg="获取对话详情成功")
     except AuthenticationError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message) from e

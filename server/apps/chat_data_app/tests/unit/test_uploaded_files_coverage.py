@@ -208,6 +208,21 @@ def test_upload_file_rejects_oversize_or_denied(uploads_root):
         asyncio.run(service_ok.upload_file(oversized, "t1", user_id="u1"))
 
 
+def test_upload_file_rejects_workspace_quota(uploads_root, monkeypatch):
+    dao = FakeDao(belongs=True)
+    service = ufs.UploadedFileService(dao=dao)
+
+    async def limit_1mb():
+        return 1, 1024 * 1024
+
+    monkeypatch.setattr(ufs, "get_workspace_size_limit", limit_1mb)
+    monkeypatch.setattr(ufs, "get_workspace_total_size", lambda _root: 1024 * 1024)
+
+    with pytest.raises(ValueError, match="总大小不能超过1MB"):
+        asyncio.run(service.upload_file(FakeUpload("a.txt", [b"x"]), "t1", user_id="u1"))
+    assert list(uploads_root.glob(".*upload")) == []
+
+
 def test_upload_file_rolls_back_record_failure(uploads_root):
     class BrokenDao(FakeDao):
         async def create_file(self, **kwargs):

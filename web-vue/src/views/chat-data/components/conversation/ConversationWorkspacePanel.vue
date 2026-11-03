@@ -35,6 +35,7 @@ import {
   getConversationWorkspaceArchive,
   uploadFile,
   type ConversationWorkspaceFile,
+  type ConversationWorkspaceUsage,
 } from '../../api'
 import {
   collapseAllDirectories,
@@ -214,6 +215,7 @@ const selectedConsoleFilePath = ref<string | null>(null)
 const collapsedConsoleDirectories = ref<Set<string>>(new Set(DEFAULT_COLLAPSED_CONSOLE_DIRECTORIES))
 const consoleFilePreviewMode = ref<'render' | 'table' | 'source'>('render')
 const workspaceFiles = ref<ConversationWorkspaceFile[]>([])
+const workspaceUsage = ref<ConversationWorkspaceUsage>({ used_bytes: 0, limit_bytes: 0, limit_mb: 0, percentage: 0 })
 const workspaceFileContents = ref<Record<string, string>>({})
 const workspaceFileBlobs = ref<Record<string, { url: string; arrayBuffer: ArrayBuffer; ext: string; mime: string; error?: boolean }>>({})
 const workspaceFilePreviewRef = ref<HTMLElement | null>(null)
@@ -368,6 +370,7 @@ onUnmounted(() => {
 const loadWorkspaceFiles = async (conversationId: string | null | undefined) => {
   if (!conversationId) {
     workspaceFiles.value = []
+    workspaceUsage.value = { used_bytes: 0, limit_bytes: 0, limit_mb: 0, percentage: 0 }
     Object.values(workspaceFileBlobs.value).forEach(b => { if (b.url) URL.revokeObjectURL(b.url) })
     workspaceFileBlobs.value = {}
     workspaceFileContents.value = {}
@@ -382,6 +385,7 @@ const loadWorkspaceFiles = async (conversationId: string | null | undefined) => 
     const response = await getConversationWorkspaceFiles(conversationId)
     if (conversationId !== props.conversationId) return
     workspaceFiles.value = response.data?.files || []
+    if (response.data?.usage) workspaceUsage.value = response.data.usage
   } catch (err) {
     if (conversationId !== props.conversationId) return
     workspaceFiles.value = []
@@ -1123,6 +1127,7 @@ provide(WorkspaceFilesContextKey, {
   consoleTreeLeadSlotStyle,
   deletingConsoleFilePath,
   getFileCount,
+  workspaceUsage,
   handleDeleteConsoleFile,
   handleDownloadConsoleDirectoryArchive,
   handleDownloadConsoleFile,

@@ -867,8 +867,15 @@ export interface ConversationWorkspaceFile {
   dashboard_spec?: unknown
 }
 
+export interface ConversationWorkspaceUsage {
+  used_bytes: number
+  limit_bytes: number
+  limit_mb: number
+  percentage: number
+}
+
 /** 获取会话工作区文件。 */
-export function getConversationWorkspaceFiles(conversationId: string): Promise<ApiResponse<{ files: ConversationWorkspaceFile[] }>> {
+export function getConversationWorkspaceFiles(conversationId: string): Promise<ApiResponse<{ files: ConversationWorkspaceFile[]; usage?: ConversationWorkspaceUsage }>> {
   return request({
     url: `/agents/api/chatdata/conversations/${conversationId}/workspace-files`,
     method: 'get'
@@ -1686,7 +1693,7 @@ export function cancelUserQuestion(
 /** 获取会话历史（流式接口）。limit 指定时只取尾部窗口，用 beforeSequence 向上翻页。 */
 export function getConversationHistory(
   conversationId: string,
-  options?: { limit?: number; beforeSequence?: number },
+  options?: { limit?: number; beforeSequence?: number; strictLimit?: boolean },
 ): Promise<Response> {
   return requestStream({
     url: `/agents/api/chatdata/conversations/${conversationId}`,
@@ -1694,7 +1701,16 @@ export function getConversationHistory(
       view: 'timeline',
       limit: options?.limit,
       before_sequence: options?.beforeSequence,
+      strict_limit: options?.strictLimit,
     },
+  })
+}
+
+/** 按需获取会话完整上下文用量明细（timeline 首屏只带摘要）。 */
+export function getConversationTokenUsageDetail(conversationId: string): Promise<ApiResponse<import('../types').ChatDataTokenUsage | null>> {
+  return request({
+    url: `/agents/api/chatdata/conversations/${conversationId}/token-usage`,
+    method: 'get',
   })
 }
 

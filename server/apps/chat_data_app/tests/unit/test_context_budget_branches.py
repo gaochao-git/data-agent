@@ -399,6 +399,35 @@ def test_count_messages_tokens_handles_empty_and_none():
     assert cb.count_messages_tokens([HumanMessage(content="你好")]) == 4 + cb.estimate_tokens("你好")
 
 
+def test_strip_context_usage_content_for_history_keeps_counts_and_drops_bodies():
+    usage = {
+        "used": 100,
+        "breakdown": [
+            {
+                "key": "messages",
+                "tokens": 80,
+                "content": "x" * 1000,
+                "children": [
+                    {"key": "message_1", "tokens": 40, "content": "y" * 1000},
+                ],
+            },
+            {"key": "tool_schema", "tokens": 20, "description": "工具定义", "content": "z" * 1000},
+        ],
+    }
+
+    stripped = cb.strip_context_usage_content_for_history(usage)
+
+    assert stripped["used"] == 100
+    assert stripped["breakdown"][0]["tokens"] == 80
+    assert "content" not in stripped["breakdown"][0]
+    assert "content" not in stripped["breakdown"][0]["children"][0]
+    assert stripped["breakdown"][1]["description"] == "工具定义"
+    assert "content" not in stripped["breakdown"][1]
+    # 原始 payload 不被修改
+    assert usage["breakdown"][0]["content"] == "x" * 1000
+    assert cb.strip_context_usage_content_for_history(None) is None
+
+
 def test_compact_context_usage_for_history_truncates_text_keeps_counts():
     long_text = "x" * (cb.HISTORY_BREAKDOWN_TEXT_LIMIT + 10)
     usage = {

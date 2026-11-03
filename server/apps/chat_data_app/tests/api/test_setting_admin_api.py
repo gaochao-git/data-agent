@@ -92,7 +92,7 @@ def test_settings_full_crud_flow(client, auth_headers, setting_db):
     assert resp.json()["data"]["action"] == "restored"
 
     # 列表可见恢复后的行（来源=表）
-    resp = client.get("/api/chatdata/admin/settings?keyword=UPLOAD", headers=auth_headers)
+    resp = client.get("/api/chatdata/admin/settings?keyword=MAX_UPLOAD_SIZE", headers=auth_headers)
     items = resp.json()["data"]["items"]
     assert len(items) == 1
     assert items[0]["source"] == "table"

@@ -25,6 +25,7 @@ const {
   isWorkspaceFilesLoading,
   consoleTreeCollapsiblePaths,
   isConsoleTreeFullyCollapsed,
+  workspaceUsage,
   isConsoleDirectoryCollapsed,
   toggleConsoleDirectory,
   consoleTreeIndentStyle,
@@ -60,6 +61,8 @@ const {
         v-if="activePanelTab.kind === 'workspace'"
         :root="producedFileTree.root"
         :file-count="producedFiles.length"
+        :used-bytes="workspaceUsage?.used_bytes || 0"
+        :limit-bytes="workspaceUsage?.limit_bytes || 0"
         :loading="isWorkspaceFilesLoading"
         :collapsible="consoleTreeCollapsiblePaths.length > 0"
         :fully-collapsed="isConsoleTreeFullyCollapsed"
@@ -187,8 +190,8 @@ const {
                     >
                       <i class="fa-solid fa-eye"></i>
                     </button>
-                    <!-- SQL 查询结果（outputs/query_result、outputs/.tool-offload）不提供下载，
-                         防数据泄漏；后端两侧已拦截，这里只是前端侧的纵深防御。 -->
+                    <!-- SQL 查询结果（outputs/query_result、outputs/.tool-offload）可展示/查看占用，
+                         但不提供下载，防数据泄漏；后端两侧已拦截。 -->
                     <button
                       v-if="isWorkspaceFileDownloadable(item.node.file.relativePath) && !isPdfFilePath(item.node.file.relativePath)"
                       type="button"
@@ -247,7 +250,7 @@ const {
                   <!-- 子目录打包下载：outputs 下的任意层级子目录都可单独打包（顶层范围仍是
                        outputs，见 utils/consoleFileTree.ts）。图标沿用文件行的 hover 显现——
                        子目录可能很多，常显会满屏都是下载图标压过目录名。
-                       系统结果目录（query_result / .tool-offload）不显示，包里本就不会有文件。 -->
+                       系统结果目录（query_result / .tool-offload）不提供打包，包里本就不会有文件。 -->
                   <button
                     v-if="isWorkspaceDirectoryArchiveDownloadable(item.node.path) && getFileCount(item.node)"
                     type="button"
