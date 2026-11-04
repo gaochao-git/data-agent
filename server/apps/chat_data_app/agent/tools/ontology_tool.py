@@ -15,8 +15,9 @@
   分组聚合（只读，走 Dataset source binding；受 ``CHAT_DATA_ONTOLOGY_OBJECT_READ_ENABLED``
   门控）；
 - ``list_action_types``：列出当前业务域可执行 Action 定义（只读）；
-- ``execute_action``：执行 Action（写对象属性覆盖层 + 审计，不直接改源库；受
-  ``CHAT_DATA_ONTOLOGY_ACTION_EXECUTE_ENABLED`` 门控）；
+- ``execute_action``：执行 Action（Modify 写覆盖层 / Create 建对象 / Delete 置不可见，
+  均记审计且不直接改源库；受 ``CHAT_DATA_ONTOLOGY_ACTION_EXECUTE_ENABLED`` 门控）；
+  ``dry_run=true`` 时只跑 test run 返回 proposed_changes，不写任何数据（不受开关门控）；
 - ``save_object_set`` / ``load_object_set`` / ``list_object_sets``：static 对象集合的保存、
   分页加载与列表，让查询结果跨轮传递（temporary 24h 过期）；
 - ``list_execution_targets``：列出当前用户可执行的成员数据源（member 维度查询范围）。
@@ -236,7 +237,7 @@ class _ListActionTypesPayload(BaseModel):
 
 
 class _ExecuteActionPayload(BaseModel):
-    """``execute_action`` 的入参结构：执行 Action（写对象属性覆盖层 + 审计）。"""
+    """``execute_action`` 的入参结构：执行 Action（Modify/Create/Delete + 审计）。"""
 
     action_type: str = Field(
         ..., min_length=1, max_length=128, description="Action Type API 名（来自 list_action_types）"
@@ -249,6 +250,22 @@ class _ExecuteActionPayload(BaseModel):
     parameters: dict[str, Any] = Field(
         default_factory=dict, description="Action 参数；按 list_action_types 的参数定义传"
     )
+    dry_run: bool = Field(
+        default=False,
+        description="True 时只跑 test run（返回 proposed_changes，不写任何数据）；确认后再以 False 提交",
+    )
+    expected_baseline: str = Field(
+        default="",
+        max_length=80,
+        description="可选：dry_run 返回的 baseline.row_hash。传了会在提交前比对对象是否被改过，不一致则整单取消",
+    )
+
+
+class _RevertActionPayload(BaseModel):
+    """``revert_action`` 的入参结构：撤销一次已成功的 Action 执行（仅执行者本人）。"""
+
+    action_type: str = Field(..., min_length=1, max_length=128, description="Action Type API 名")
+    execution_id: int = Field(..., ge=1, description="要撤销的执行 ID（来自 execute_action 返回或执行记录列表）")
 
 
 class _SaveObjectSetPayload(BaseModel):
@@ -323,6 +340,7 @@ ONTOLOGY_ACTION_PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
     "list_execution_targets": _ListExecutionTargetsPayload,
     "list_action_types": _ListActionTypesPayload,
     "execute_action": _ExecuteActionPayload,
+    "revert_action": _RevertActionPayload,
     "save_object_set": _SaveObjectSetPayload,
     "load_object_set": _LoadObjectSetPayload,
     "list_object_sets": _ListObjectSetsPayload,
@@ -358,17 +376,21 @@ ONTOLOGY_ACTION_HELP: dict[str, tuple[str, str]] = {
     "traverse_objects": ("从对象出发做 1~3 跳关系遍历（图查询，需 Nebula 且图已同步）。", "relations.md"),
     "find_graph_paths": ("查询两个对象之间的有界路径（图查询，需 Nebula 且图已同步）。", "relations.md"),
     "list_action_types": ("列出当前业务域可执行 Action 定义与参数，只读。", "actions.md"),
-    "execute_action": ("执行 Action（属性覆盖层/创建对象 + 审计），受部署开关门控。", "actions.md"),
+    "execute_action": ("执行 Action（属性覆盖/创建对象/删除对象 + 审计），受部署开关门控。", "actions.md"),
+    "revert_action": (
+        "撤销一次已成功的 Action 执行（仅执行者本人、且该编辑仍是对象最近一次），追加反向编辑。",
+        "actions.md",
+    ),
 }
 
 
 class OntologyToolInput(BaseModel):
     """本体导航工具入参：按 ``action`` 分派，``action_payload`` 结构随 action 变化。
 
-    共 14 个业务 action：``list_object_types`` / ``locate_object_type`` / ``search_around`` 负责导航，
+    共 15 个业务 action：``list_object_types`` / ``locate_object_type`` / ``search_around`` 负责导航，
     ``get_object`` / ``find_objects`` 负责对象读取，``aggregate_objects`` 负责属性白名单聚合，
-    ``list_execution_targets`` 列出执行对象，``list_action_types`` / ``execute_action`` 负责 Action，
-    ``save_object_set`` / ``load_object_set`` / ``list_object_sets`` 负责对象集合跨轮传递；
+    ``list_execution_targets`` 列出执行对象，``list_action_types`` / ``execute_action`` / ``revert_action``
+    负责 Action，``save_object_set`` / ``load_object_set`` / ``list_object_sets`` 负责对象集合跨轮传递；
     另有 ``help`` 动作按需返回某个业务 action 的字段契约（由 payload 模型现算）。
     action_payload 的校验在工具实现入口经 ``validate_ontology_payload`` 完成——不能放进
     model_validator：langgraph 的 ToolInvocationError 会过滤 loc 为空的校验错误，
@@ -385,6 +407,7 @@ class OntologyToolInput(BaseModel):
         "list_execution_targets",
         "list_action_types",
         "execute_action",
+        "revert_action",
         "save_object_set",
         "load_object_set",
         "list_object_sets",
@@ -804,18 +827,43 @@ async def _run_execute_action(
     state: dict | None,
     bound_user_id: str,
 ) -> str:
-    """执行 Action：校验参数/属性值后写对象属性覆盖层 + 执行审计（需部署开关）。"""
-    if not ontology_action_execute_enabled():
-        raise ValueError("Action 执行未启用：需设置环境变量 CHAT_DATA_ONTOLOGY_ACTION_EXECUTE_ENABLED=1")
+    """执行 Action：校验参数/属性值/提交条件后写覆盖层 + 审计；dry_run 只跑 test run。"""
     state = state or {}
     user_id = str(state.get("user_id") or "").strip() or bound_user_id
     operator_name = str(state.get("operator_name") or "").strip()
+    if payload.dry_run:
+        # test run 是只读动作，不受执行开关门控（对齐官方：预览不改数据）
+        result = await OntologyActionTypeService().test_run_action_type_async(
+            payload.action_type,
+            dict(payload.parameters or {}),
+            object_key=payload.object_key,
+            operator=user_id,
+            operator_name=operator_name or user_id,
+        )
+        return tool_result_payload(
+            ONTOLOGY_TOOL_NAME,
+            {
+                "dry_run": True,
+                "object_type": result.get("object_type_name"),
+                "proposed_changes": result.get("proposed_changes"),
+                "execution_log": result.get("execution_log"),
+                "errors": result.get("errors"),
+                "baseline": (result.get("baseline") or {}).get("row_hash"),
+                "usage": (
+                    "这是 test run，未写入任何数据；确认 proposed_changes 后再以 dry_run=false 提交，"
+                    "并把 baseline 作为 expected_baseline 传回（提交前会校验对象是否被改过）。"
+                ),
+            },
+        )
+    if not ontology_action_execute_enabled():
+        raise ValueError("Action 执行未启用：需设置环境变量 CHAT_DATA_ONTOLOGY_ACTION_EXECUTE_ENABLED=1")
     result = await OntologyActionTypeService().execute_action_type_async(
         payload.action_type,
         object_key=payload.object_key,
         parameters=dict(payload.parameters or {}),
         operator=user_id,
         operator_name=operator_name or user_id,
+        expected_baseline=payload.expected_baseline,
     )
     return tool_result_payload(
         ONTOLOGY_TOOL_NAME,
@@ -823,8 +871,49 @@ async def _run_execute_action(
             "execution": result.get("execution"),
             "object_type": result.get("object_type_name"),
             "object_key": result.get("object_key"),
+            "object_generation": result.get("object_generation"),
+            "lifecycle_status": result.get("lifecycle_status"),
+            "recreated": result.get("recreated"),
             "edits": result.get("edits"),
-            "usage": "Action 已写入对象属性覆盖层并记录审计；需要确认时用 get_object 重新读取对象属性。",
+            "usage": (
+                "Action 已写入对象属性覆盖层并记录审计；需要确认时用 get_object 重新读取对象属性。"
+                "lifecycle_status=deleted 表示对象已不可见（编辑值保留）；recreated=true 表示按新实例重建，"
+                "旧代际的覆盖值不会继承。"
+            ),
+        },
+    )
+
+
+async def _run_revert_action(
+    *,
+    payload: Any,
+    state: dict | None,
+    bound_user_id: str,
+) -> str:
+    """撤销一次已成功的执行：仅执行者本人、且该编辑仍是对象最近一次。"""
+    state = state or {}
+    user_id = str(state.get("user_id") or "").strip() or bound_user_id
+    operator_name = str(state.get("operator_name") or "").strip()
+    if not ontology_action_execute_enabled():
+        raise ValueError("Action 执行未启用：需设置环境变量 CHAT_DATA_ONTOLOGY_ACTION_EXECUTE_ENABLED=1")
+    result = await OntologyActionTypeService().revert_execution_async(
+        payload.action_type,
+        int(payload.execution_id),
+        operator=user_id,
+        operator_name=operator_name or user_id,
+    )
+    return tool_result_payload(
+        ONTOLOGY_TOOL_NAME,
+        {
+            "reverted_execution_id": result.get("reverted_execution_id"),
+            "revert_execution_id": (result.get("execution") or {}).get("id"),
+            "object_key": result.get("object_key"),
+            "operation": result.get("operation"),
+            "reversed_edits": result.get("reversed_edits"),
+            "usage": (
+                "撤销已追加反向编辑并记录审计；用 get_object 确认属性是否回到执行前的值。"
+                "撤销不触发也不回滚副作用（通知/Webhook）。"
+            ),
         },
     )
 
@@ -1178,6 +1267,12 @@ async def _run_ontology_impl(
         )
     if action == "execute_action":
         return await _run_execute_action(
+            payload=payload,
+            state=state,
+            bound_user_id=bound_user_id,
+        )
+    if action == "revert_action":
+        return await _run_revert_action(
             payload=payload,
             state=state,
             bound_user_id=bound_user_id,

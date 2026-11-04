@@ -306,7 +306,7 @@ def test_action_type_crud_and_test_run_contract(client, auth_headers, monkeypatc
         async def delete_action_type_async(self, name, **kwargs):
             return None
 
-        async def test_run_action_type_async(self, name, parameters):
+        async def test_run_action_type_async(self, name, parameters, **_kwargs):
             return {"action_type_name": name, "parameters": parameters, "edits": [], "executed": False}
 
         async def list_executions_async(self, name, *, object_key="", limit=50):
@@ -594,3 +594,65 @@ def test_object_search_multi_member_returns_results_contract(client, auth_header
     assert captured == {"object_type": "customer", "members": ["ORG_CODE1", "ORG_CODE2"]}
     assert [item["member_datasource_id"] for item in payload["data"]["results"]] == ["ORG_CODE1", "ORG_CODE2"]
     assert payload["data"]["total_count"] == 2
+
+
+# ---------- Action 执行 / 撤销 接口契约（L2.2-b 新增参数透传） ----------
+
+
+def test_execute_action_passes_baseline_and_conflict_level(client, auth_headers, monkeypatch):
+    captured = {}
+
+    class _StubService:
+        async def execute_action_type_async(self, name, **kwargs):
+            captured["name"] = name
+            captured["kwargs"] = kwargs
+            return {"execution": {"id": 7}, "idempotent_replay": False}
+
+    monkeypatch.setattr(ontology_admin_routes, "_action_type_service", _StubService())
+    response = client.post(
+        "/api/chatdata/admin/meta/ontology/action-types/update_order/execute",
+        json={
+            "object_key": "ORD1",
+            "parameters": {"status": "paid"},
+            "expected_baseline": "sha256:abc",
+            "conflict_check_level": "property",
+        },
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "success"
+    assert captured["name"] == "update_order"
+    assert captured["kwargs"]["expected_baseline"] == "sha256:abc"
+    assert captured["kwargs"]["conflict_check_level"] == "property"
+    assert captured["kwargs"]["object_key"] == "ORD1"
+
+
+def test_execute_action_rejects_unknown_conflict_level(client, auth_headers):
+    response = client.post(
+        "/api/chatdata/admin/meta/ontology/action-types/update_order/execute",
+        json={"object_key": "ORD1", "parameters": {}, "conflict_check_level": "row"},
+        headers=auth_headers,
+    )
+    assert response.status_code == 422
+
+
+def test_revert_execution_passes_execution_id_and_operator(client, auth_headers, monkeypatch):
+    captured = {}
+
+    class _StubService:
+        async def revert_execution_async(self, name, execution_id, **kwargs):
+            captured["call"] = (name, execution_id)
+            captured["kwargs"] = kwargs
+            return {"reverted_execution_id": execution_id, "execution": {"id": 8}}
+
+    monkeypatch.setattr(ontology_admin_routes, "_action_type_service", _StubService())
+    response = client.post(
+        "/api/chatdata/admin/meta/ontology/action-types/update_order/executions/42/revert",
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "success"
+    assert payload["data"]["reverted_execution_id"] == 42
+    assert captured["call"] == ("update_order", 42)
+    assert "operator" in captured["kwargs"]

@@ -9,13 +9,34 @@ import pytest
 from apps.chat_data_app.services.ontology import schema_check
 
 
-def _table_columns(*, write_mode: bool = True) -> dict[str, set[str]]:
+def _table_columns(
+    *,
+    write_mode: bool = True,
+    generation: bool = True,
+    conflict: bool = True,
+    applied_at: bool = True,
+    baseline: bool = True,
+) -> dict[str, set[str]]:
+    object_type = {"id"}
+    if write_mode:
+        object_type.add("write_mode")
+    if conflict:
+        object_type.add("conflict_resolution")
+    object_edit = {"id"}
+    if generation:
+        object_edit.add("object_generation")
+    if applied_at:
+        object_edit.add("applied_at")
+    execution = {"id"}
+    if baseline:
+        execution.update({"baseline_json", "revert_of_execution_id"})
     return {
-        "chat_data_ontology_object_type": {"id", "write_mode"} if write_mode else {"id"},
+        "chat_data_ontology_object_type": object_type,
         "chat_data_ontology_object_set": {"id"},
         "chat_data_ontology_action_object": {"id"},
-        "chat_data_ontology_action_execution": {"id"},
-        "chat_data_ontology_object_edit": {"id"},
+        "chat_data_ontology_action_execution": execution,
+        "chat_data_ontology_object_edit": object_edit,
+        "chat_data_ontology_object_instance": {"id", "generation", "lifecycle_status"},
     }
 
 
@@ -48,7 +69,39 @@ def test_required_tables_include_action_tables_only_when_enabled():
         "chat_data_ontology_object_type",
         "chat_data_ontology_object_set",
     }
-    assert "chat_data_ontology_action_object" in schema_check.required_tables(action_execute_enabled=True)
+    required = schema_check.required_tables(action_execute_enabled=True)
+    assert "chat_data_ontology_action_object" in required
+    # 删除/重建语义依赖实例表，必须随 Action 开关一起要求
+    assert "chat_data_ontology_object_instance" in required
+
+
+def test_missing_object_instance_table_detected_when_action_enabled():
+    columns = _table_columns()
+    columns.pop("chat_data_ontology_object_instance")
+    assert schema_check.missing_schema_issues(columns, action_execute_enabled=True) == [
+        "缺少表 chat_data_ontology_object_instance"
+    ]
+
+
+def test_missing_object_generation_column_detected_when_action_enabled():
+    columns = _table_columns(generation=False)
+    assert schema_check.missing_schema_issues(columns, action_execute_enabled=True) == [
+        "表 chat_data_ontology_object_edit 缺少列: object_generation"
+    ]
+
+
+def test_missing_conflict_resolution_column_detected_even_without_action():
+    columns = _table_columns(conflict=False)
+    assert schema_check.missing_schema_issues(columns, action_execute_enabled=False) == [
+        "表 chat_data_ontology_object_type 缺少列: conflict_resolution"
+    ]
+
+
+def test_missing_baseline_columns_detected_when_action_enabled():
+    columns = _table_columns(baseline=False)
+    assert schema_check.missing_schema_issues(columns, action_execute_enabled=True) == [
+        "表 chat_data_ontology_action_execution 缺少列: baseline_json, revert_of_execution_id"
+    ]
 
 
 class _Conn:
@@ -78,9 +131,9 @@ class _Inspector:
         return [{"name": name} for name in self.table_columns[table]]
 
 
-def _patch_schema(monkeypatch, table_columns):
+def _patch_schema(monkeypatch, table_columns, *, action_enabled=False):
     monkeypatch.setattr(schema_check, "ontology_injection_enabled", lambda: True)
-    monkeypatch.setattr(schema_check, "ontology_action_execute_enabled", lambda: False)
+    monkeypatch.setattr(schema_check, "ontology_action_execute_enabled", lambda: action_enabled)
     monkeypatch.setattr(schema_check, "get_engine", lambda: _Engine())
     monkeypatch.setattr(schema_check, "inspect", lambda _conn: _Inspector(table_columns))
 
@@ -88,6 +141,12 @@ def _patch_schema(monkeypatch, table_columns):
 def test_require_ontology_schema_passes_when_complete(monkeypatch):
     _patch_schema(monkeypatch, _table_columns())
     asyncio.run(schema_check.require_ontology_schema_async())
+
+
+def test_require_ontology_schema_rejects_missing_generation_column(monkeypatch):
+    _patch_schema(monkeypatch, _table_columns(generation=False), action_enabled=True)
+    with pytest.raises(RuntimeError, match="object_generation"):
+        asyncio.run(schema_check.require_ontology_schema_async())
 
 
 def test_require_ontology_schema_rejects_missing_write_mode(monkeypatch):

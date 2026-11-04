@@ -223,7 +223,7 @@ def test_read_object_projection_uses_dataset_scope(monkeypatch):
     monkeypatch.setattr(object_projection, "build_object_query", lambda *_args, **_kwargs: query)
     monkeypatch.setattr(object_projection, "_query_rows", fake_rows)
 
-    async def fake_edits(_detail, _key, row):
+    async def fake_edits(_detail, _key, row, *, generation=1):
         return row
 
     monkeypatch.setattr(object_projection, "_apply_object_edits", fake_edits)

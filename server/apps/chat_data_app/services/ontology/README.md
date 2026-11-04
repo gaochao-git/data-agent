@@ -95,22 +95,60 @@
 - 一致性巡检覆盖关系类型 join 可执行性（`ONT_REL_MODEL_PATH_MISSING` / `ONT_REL_CROSS_MODEL` / `ONT_REL_CROSS_SOURCE`），详见 `ontology_consistency.py`。
 - 一致性巡检的映射口径已跟随 Dataset 解耦：巡检 bundle 的 `mappings` 由 `chat_data_ontology_source_binding` 组装（左值=本体属性、右值=Dataset 逻辑列），关系列/属性未映射检查按 Dataset 绑定判定；带 `semantic_config_id` 的旧语义模型映射仍兼容，仅旧数据才会触发模型路径类规则。
 
-## Action Type 定义层（2026-10-22）
+## Action Type 定义与执行（2026-10-22，2026-11-04 补 L2.1/L2.2）
 
-对齐 Palantir Action Type 的「参数 + 编辑契约」，当前已支持定义、参数试运行与最小执行：
+对齐 Palantir Action Type 的「参数 + 编辑 + 提交条件」三段结构：
 
-- `chat_data_ontology_action_type`：动作名、目标对象类型、参数定义 JSON、编辑定义 JSON、生命周期；
+- `chat_data_ontology_action_type`：动作名、目标对象类型、参数定义 JSON、编辑定义 JSON、
+  提交条件 JSON、`config_version`（每次更新自增）、生命周期；
 - 参数：`{name, type, required, description}`，类型限内建值类型；
-- 编辑：当前仅 `set_property`，值可引用参数或静态值；标识属性禁改；目标属性必须存在；
-- 接口：`GET/PUT/DELETE /admin/meta/ontology/action-types...`、`POST .../test-run`；
-- 试运行只校验参数并解析编辑，`executed=false`；
-- `POST .../action-types/{name}/execute`：experimental/certified Action 执行，写对象属性覆盖层
-  `chat_data_ontology_object_edit` + 执行审计 `chat_data_ontology_action_execution`；
-- 对象读取在 `CHAT_DATA_ONTOLOGY_ACTION_EXECUTE_ENABLED=true` 时合并最新覆盖值；
-- agent 侧对应 `ontology_tool` 的 `list_action_types`（只读清单）与 `execute_action`（受同一开关门控）；
-- **不直接改源库/语义模型数据**；回滚、撤销、副作用/Webhook、Action UI 尚未实现。
+- 编辑：三种**互斥**操作，各对应官方一条 Ontology rule（`action-types/rules.md:19-21`）——
+  `set_property`（Modify object：值可引用参数/静态值，标识属性与派生属性禁改，要求
+  `write_mode=action_writable/action_created`）、`create_object`（Create object：标识属性
+  必填，要求 `write_mode=action_created`）、`delete_object`（Delete object：无参数，要求
+  非 `read_only`）；不可混合，因为官方禁止修改/删除本次新建的对象（`rules.md:19,54`）；
+- 提交条件 `submission_criteria`：`{logic: all|any, conditions[{subject, operator, value,
+  failure_message}]}`，主体支持参数与目标对象属性，算子 is/is_not/gt/gte/lt/lte/in/
+  includes_any/is_null/is_not_null；不满足即拒绝提交并返回失败文案（对齐
+  `action-types/submission-criteria.md:10,18,103`）。不含 user/execution-context 模板
+  （无 multipass 身份体系，属已知差异）；
+- 接口：`GET/PUT/DELETE /admin/meta/ontology/action-types...`、`POST .../test-run`、
+  `POST .../execute`、`GET .../executions`；
+- **test run 只算不写**：可选 `object_key`；传了会读对象并返回
+  `proposed_changes`（current vs proposed）/ `execution_log`（metadata → dependency →
+  submission criteria → parameter → edits calculation）/ `errors{admin_facing,
+  end_user_facing}`（对齐 `action-types/test-run.md:12,38,44,50-53`）。不传则只解析编辑；
+- 编辑在 plan 阶段**编译为「每对象一条编辑」**（`action-types/rules.md:52`），
+  `compiled_edits` 既进 test run 结果也进执行审计；
+- 执行写覆盖层 `chat_data_ontology_object_edit` + 审计
+  `chat_data_ontology_action_execution`；审计记 `action_type_version`、
+  `edited_object_keys`、`compiled_edits_json`（对齐 `action-types/action-log.md:63-68`）；
+- `idempotency_key` 为**本平台扩展**（官方靠内部重试重算，`consistency-guarantees.md:170`）：
+  同键重复提交返回既有执行，`idempotent_replay=true`，不再重复写入；
+- 对象读取在 `CHAT_DATA_ONTOLOGY_ACTION_EXECUTE_ENABLED=true` 时合并**当前实例代际**的覆盖值；
+- **删除不是编辑**：`delete_object` 只把对象实例标记为 `deleted`，不删覆盖值；删除后对象
+  不可见（与数据源是否仍有该行无关；详情/列表/搜索都过滤，聚合暂不排除），对已删对象再
+  执行 Action 会因「对象不存在」失败；
+- **重建不继承**：同主键 `create_object` 命中已删除对象时按新实例处理——代际 +1、复用原行，
+  旧代际覆盖值保留可追溯但**不参与合并**（对齐 `object-edits/how-edits-applied.md:86`）；
+  实例可见性与代际存 `chat_data_ontology_object_instance`，无实例行视为 `active/generation=1`；
+- agent 侧对应 `ontology_tool` 的 `list_action_types`（只读清单）、`execute_action`（受同一开关门控）
+  与 `revert_action`（撤销最近一次，仅执行者本人）；
+- **读时冲突两策略**（`conflict_resolution`，对齐 `object-edits/how-edits-applied.md:167-187`）：
+  `apply_user_edits`（默认）覆盖值恒胜；`apply_most_recent_value` 比较覆盖 `applied_at` 与源行
+  `conflict_timestamp_property` 属性值，仅覆盖更晚才生效；未绑物理列的 edit-only 属性恒生效；
+- **提交时写写检测**：test run 返回基线 `baseline.row_hash`，提交时作为 `expected_baseline`
+  回传，服务端重算源行指纹比对，不一致拒绝（`conflict_check_level` = `object`/`property`/`off`）。
+  基线同时记下被编辑属性的当时有效值，供撤销回填；指纹比**源数据**，不比合并后的值；
+- **撤销是追加反向编辑**（对齐 `action-types/action-reverts.md`）：仅执行者本人、仅对象级最近
+  一次、仅 `succeeded` 且非撤销记录；追加反向执行 + 反向 edit 并标记原执行 `reverted`。
+  `delete_object` 撤销把实例状态改回 `active`（代际不变，不算重建）；`create_object` 撤销把
+  对象标为 `deleted`；
+- **不直接改源库/语义模型数据**；关系编辑、审批、副作用/Webhook、Action UI 仍未实现，
+  设计见 `docs/ontology-action-l2-design.md`。
 
-DDL 见 `next_version.md`「本体 Action Type 定义表」。
+DDL 见 `next_version.md`「本体 Action Type 定义表」「本体 Action L2.1」「本体 Action L2.2」
+「本体 Action L2.2-b」。
 
 ## 对象集合（Object Set static，2026-10-25）
 
@@ -220,4 +258,7 @@ DDL 见 `next_version.md`「本体 Action Type 定义表」。
 - **派生属性类型映射**：官方 count/count_distinct → Long、avg → Double；我们收窄为 Integer/Decimal（六类型集内合理，但超大整数有 JS Number 精度风险）。
 - **派生属性排序护栏**：官方 Workshop 对派生排序限制 200 行；我们的对象查询 limit 上限 100，天然低于该值，但聚合派生排序仍建议加显式上限。
 - **状态生命周期**：官方 active/experimental/deprecated/example + 对象类型 promoted；我们是 draft/experimental/certified/deprecated。官方 deprecated 需废弃原因/删除期限/替代资源，我们目前强制原因，期限与替代可选。
-- **Action 冲突解决**：官方支持用户编辑优先/最近时间戳优先两种数据源级策略，并区分 create/delete/link 编辑；我们只有 set_property 覆盖层，源行消失/源列被 Pipeline 重建时的行为未定义，开放更多写场景前必须先设计冲突策略。
+- **Action 冲突解决**：已实现官方两种读时策略（`apply_user_edits` / `apply_most_recent_value`），
+  并在提交时做对象级/属性级写写检测（`expected_baseline` + `conflict_check_level`）；撤销按官方
+  「追加反向编辑」语义实现（仅执行者本人、对象级最近一次）。仍缺：create/delete/link 之外的
+  关系编辑写场景、源行物理消失后的孤儿处理、以及官方按用户/组配置的冲突策略粒度。

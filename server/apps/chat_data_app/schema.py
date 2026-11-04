@@ -603,6 +603,18 @@ class OntologyObjectTypeUpsertRequest(BaseModel):
         default="read_only",
         description="写性（对齐 Palantir Edits toggle，默认只读）：read_only=只读；action_writable=允许 Action 覆盖层编辑；action_created=动作对象（无源，仅由 Action 创建）",
     )
+    conflict_resolution: Literal["apply_user_edits", "apply_most_recent_value"] = Field(
+        default="apply_user_edits",
+        description=(
+            "读时冲突解决（对齐 Palantir 两档命名，默认用户编辑胜出）："
+            "apply_user_edits=覆盖值恒胜；apply_most_recent_value=比较覆盖生效时间与数据源 timestamp 属性"
+        ),
+    )
+    conflict_timestamp_property: str = Field(
+        default="",
+        max_length=128,
+        description="apply_most_recent_value 时用于比较的 DateTime 属性（必须是绑定到数据源的存储属性）",
+    )
     properties: list[OntologyPropertyItem] = Field(..., min_length=1, description="属性集（整体提交）")
     allow_overwrite: bool = Field(default=False, description="编辑既有活跃对象类型时为 True")
     confirm_destructive: bool = Field(default=False, description="破坏性变更（映射/主键/标题键变更）显式确认")
@@ -1442,7 +1454,7 @@ class OntologyActionTypeEditValue(BaseModel):
 
 
 class OntologyActionTypeSetPropertyEdit(BaseModel):
-    """set_property 编辑项：改目标对象属性（要求 write_mode=action_writable）"""
+    """set_property 编辑项：改目标对象属性（write_mode=action_writable/action_created）"""
 
     operation: Literal["set_property"] = Field(default="set_property", description="编辑操作")
     property: str = Field(..., min_length=1, max_length=128, description="目标对象属性API名")
@@ -1465,8 +1477,19 @@ class OntologyActionTypeCreateObjectEdit(BaseModel):
     )
 
 
-OntologyActionTypeEditItem = OntologyActionTypeSetPropertyEdit | OntologyActionTypeCreateObjectEdit
-"""编辑项联合类型：set_property（属性覆盖）或 create_object（创建动作对象），不可混合。"""
+class OntologyActionTypeDeleteObjectEdit(BaseModel):
+    """delete_object 编辑项：删除目标对象（官方 Delete object(s) 规则，单独一条）
+
+    删除不是编辑：对象不可见、编辑值保留；同主键重建属新实例，不继承旧编辑。
+    """
+
+    operation: Literal["delete_object"] = Field(..., description="编辑操作")
+
+
+OntologyActionTypeEditItem = (
+    OntologyActionTypeSetPropertyEdit | OntologyActionTypeCreateObjectEdit | OntologyActionTypeDeleteObjectEdit
+)
+"""编辑项联合类型：set_property（属性覆盖）/ create_object（创建对象）/ delete_object（删除对象），不可混合。"""
 
 
 class OntologyGraphTraverseRequest(BaseModel):
@@ -1486,6 +1509,36 @@ class OntologyGraphSyncRequest(BaseModel):
     datasource_group_id: str = Field(..., min_length=1, max_length=128, description="数据源组ID")
 
 
+class OntologyActionSubmissionSubject(BaseModel):
+    """提交条件的判定主体：参数或目标对象属性（对齐官方 Current user/Parameter 模板子集）"""
+
+    kind: Literal["parameter", "object_property"] = Field(..., description="主体类型")
+    name: str | None = Field(default=None, max_length=128, description="kind=parameter 时的参数名")
+    property: str | None = Field(default=None, max_length=128, description="kind=object_property 时的属性API名")
+
+
+class OntologyActionSubmissionCondition(BaseModel):
+    """单条提交条件：主体 + 算子 + 比较值 + 失败文案"""
+
+    subject: OntologyActionSubmissionSubject = Field(..., description="判定主体")
+    operator: Literal[
+        "is", "is_not", "gt", "gte", "lt", "lte", "in", "includes_any", "is_null", "is_not_null"
+    ] = Field(..., description="比较算子")
+    value: OntologyActionTypeEditValue | None = Field(
+        default=None, description="比较值（is_null/is_not_null 时省略）"
+    )
+    failure_message: str = Field(..., min_length=1, max_length=512, description="不满足时展示给用户的文案")
+
+
+class OntologyActionSubmissionCriteria(BaseModel):
+    """提交条件：决定这次提交允不允许（对齐官方 submission criteria）"""
+
+    logic: Literal["all", "any"] = Field(default="all", description="条件组合逻辑")
+    conditions: list[OntologyActionSubmissionCondition] = Field(
+        ..., min_length=1, max_length=10, description="条件项"
+    )
+
+
 class OntologyActionTypeUpsertRequest(BaseModel):
     """Action Type 创建/编辑请求（action_type_name 由路径参数携带）"""
 
@@ -1494,6 +1547,9 @@ class OntologyActionTypeUpsertRequest(BaseModel):
     description: str = Field(default="", max_length=1024, description="描述")
     parameters: list[OntologyActionTypeParameterItem] = Field(..., min_length=1, description="参数定义")
     edits: list[OntologyActionTypeEditItem] = Field(..., min_length=1, description="编辑定义")
+    submission_criteria: OntologyActionSubmissionCriteria | None = Field(
+        default=None, description="提交条件（为空表示无前置条件）"
+    )
     status: Literal["draft", "experimental", "certified"] = Field(default="draft", description="生命周期状态")
     allow_overwrite: bool = Field(default=False, description="编辑既有活跃 Action Type 时为 True")
 
@@ -1516,9 +1572,14 @@ class OntologyObjectSetUpsertRequest(BaseModel):
 
 
 class OntologyActionTypeTestRunRequest(BaseModel):
-    """Action Type 试运行请求（只校验参数与编辑解析，不写对象）"""
+    """Action Type 试运行请求（只算不写：不落覆盖层、不产生执行记录）"""
 
     parameters: dict[str, Any] = Field(default_factory=dict, description="参数值")
+    object_key: str = Field(
+        default="",
+        max_length=512,
+        description="目标对象主键；传了才计算 current/proposed 差异与提交条件结果",
+    )
 
 
 class OntologyActionTypeExecuteRequest(BaseModel):
@@ -1530,6 +1591,21 @@ class OntologyActionTypeExecuteRequest(BaseModel):
         description="对象主键值（set_property 必填；create_object 留空，标识值来自参数）",
     )
     parameters: dict[str, Any] = Field(default_factory=dict, description="Action 参数值")
+    idempotency_key: str = Field(
+        default="", max_length=64, description="幂等键（可选）：相同键重复提交返回既有执行，不再重复写入"
+    )
+    expected_baseline: str = Field(
+        default="",
+        max_length=80,
+        description=(
+            "可选：试运行返回的 baseline.row_hash。传了就在写事务前重算并比对，"
+            "不一致即整单取消（对齐官方对象级写写冲突）"
+        ),
+    )
+    conflict_check_level: Literal["object", "property", "off"] = Field(
+        default="object",
+        description="冲突检测级别：object=任一被绑定属性变化即冲突（官方口径）；property=仅被编辑属性；off=不检测",
+    )
 
 
 # ============ Logical Dataset ============

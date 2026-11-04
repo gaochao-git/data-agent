@@ -382,7 +382,18 @@ class _FakeActionTypeService:
             },
         ]
 
-    async def execute_action_type_async(self, name, *, object_key, parameters, operator="", operator_name=""):
+    async def execute_action_type_async(
+        self,
+        name,
+        *,
+        object_key,
+        parameters,
+        operator="",
+        operator_name="",
+        idempotency_key="",
+        expected_baseline="",
+        conflict_check_level="object",
+    ):
         assert name == "ship_order"
         assert object_key == "ORD1"
         assert parameters == {"carrier": "SF"}

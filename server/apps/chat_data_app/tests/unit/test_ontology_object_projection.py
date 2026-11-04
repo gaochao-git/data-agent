@@ -479,8 +479,9 @@ def test_object_projection_applies_action_overrides_when_enabled(monkeypatch):
     from apps.chat_data_app.services.ontology import object_projection
 
     class FakeExecutionDao:
-        async def latest_object_values_async(self, object_type_id, object_key):
-            return {"pay_status": "paid"}
+        async def latest_object_edits_async(self, object_type_id, object_key, object_generation=1):
+            assert object_generation == 1
+            return {"pay_status": {"value": "paid", "applied_at": None}}
 
     monkeypatch.setenv("CHAT_DATA_ONTOLOGY_ACTION_EXECUTE_ENABLED", "1")
     monkeypatch.setattr(object_projection, "OntologyActionExecutionDao", FakeExecutionDao)
@@ -1052,3 +1053,140 @@ def test_action_object_search_rejects_filters_before_dao(monkeypatch):
                 filters=[{"property": "status", "operator": "eq", "value": "open"}],
             )
         )
+
+
+# ---------- L2.2：删除不可见 + 覆盖值按实例代际过滤 ----------
+
+
+def _stub_read_chain(monkeypatch, *, instance_row, edits_by_generation=None):
+    """把 read_object_projection 的取数链路打桩，只保留可见性/代际逻辑真实执行。"""
+    from apps.chat_data_app.services.ontology import object_projection
+
+    calls: dict[str, list] = {"generations": []}
+
+    async def fake_detail(_name):
+        return {**_detail(), "id": 2, "write_mode": "action_writable"}
+
+    async def fake_ctx(*_args, **_kwargs):
+        return ({}, {}, [{"member_datasource_id": "m1"}], "g1")
+
+    async def fake_rows(*_args, **_kwargs):
+        return [{"order_id": "ORD1", "amount": "10"}]
+
+    async def fake_derived(*_args, **_kwargs):
+        return {}
+
+    async def fake_links(*_args, **_kwargs):
+        return {}
+
+    class FakeInstanceDao:
+        async def get_instance_async(self, object_type_id, object_key):
+            assert object_key == "m1:Order:ORD1"
+            return dict(instance_row) if instance_row else None
+
+    class FakeExecutionDao:
+        async def latest_object_edits_async(self, object_type_id, object_key, object_generation=1):
+            calls["generations"].append(object_generation)
+            return {
+                name: {"value": value, "applied_at": None}
+                for name, value in ((edits_by_generation or {}).get(object_generation, {})).items()
+            }
+
+    monkeypatch.setenv("CHAT_DATA_ONTOLOGY_ACTION_EXECUTE_ENABLED", "1")
+    monkeypatch.setattr(object_projection.ontology_service, "get_object_type_async", fake_detail)
+    monkeypatch.setattr(object_projection, "_projection_context", fake_ctx)
+    monkeypatch.setattr(object_projection, "build_object_query", lambda *_a, **_k: {"sql": "select 1"})
+    monkeypatch.setattr(object_projection, "_query_rows", fake_rows)
+    monkeypatch.setattr(object_projection, "_member_scope", lambda _t: {"member_datasource_id": "m1"})
+    monkeypatch.setattr(object_projection, "_derived_property_values", fake_derived)
+    monkeypatch.setattr(object_projection, "_read_links", fake_links)
+    monkeypatch.setattr(
+        object_projection,
+        "_assemble_object",
+        lambda _detail, _query, row, _links, _scope, **_kw: {"object_key": "m1:Order:ORD1", "properties": row},
+    )
+    monkeypatch.setattr(object_projection, "OntologyObjectInstanceDao", FakeInstanceDao)
+    monkeypatch.setattr(object_projection, "OntologyActionExecutionDao", FakeExecutionDao)
+    return calls
+
+
+def test_read_object_projection_hides_deleted_object_even_if_row_exists(monkeypatch):
+    from apps.chat_data_app.services.ontology import object_projection
+
+    _stub_read_chain(monkeypatch, instance_row={"generation": 1, "lifecycle_status": "deleted"})
+    with pytest.raises(ObjectProjectionError, match="对象不存在"):
+        asyncio.run(object_projection.read_object_projection("Order", "ORD1"))
+
+
+def test_read_object_projection_merges_only_current_generation(monkeypatch):
+    from apps.chat_data_app.services.ontology import object_projection
+
+    calls = _stub_read_chain(
+        monkeypatch,
+        instance_row={"generation": 2, "lifecycle_status": "active"},
+        edits_by_generation={1: {"amount": "1"}, 2: {"amount": "99"}},
+    )
+    result = asyncio.run(object_projection.read_object_projection("Order", "ORD1"))
+    assert result["properties"]["amount"] == "99"
+    assert calls["generations"] == [2]
+
+
+def test_read_object_projection_does_not_inherit_old_generation_edits(monkeypatch):
+    from apps.chat_data_app.services.ontology import object_projection
+
+    _stub_read_chain(
+        monkeypatch,
+        instance_row={"generation": 2, "lifecycle_status": "active"},
+        edits_by_generation={1: {"amount": "1"}},
+    )
+    result = asyncio.run(object_projection.read_object_projection("Order", "ORD1"))
+    # 旧代际（删除前）的覆盖值不参与合并：重建对象读到源值
+    assert result["properties"]["amount"] == "10"
+
+
+def test_list_object_projection_excludes_deleted_objects(monkeypatch):
+    from apps.chat_data_app.services.ontology import object_projection
+
+    async def fake_detail(_name):
+        return {**_detail(), "id": 2, "write_mode": "action_writable"}
+
+    async def fake_ctx(*_args, **_kwargs):
+        return ({}, {}, [{"member_datasource_id": "m1"}], "g1")
+
+    async def fake_rows(*_args, **_kwargs):
+        return [{"order_id": "ORD1", "amount": "10"}, {"order_id": "ORD2", "amount": "20"}]
+
+    class FakeInstanceDao:
+        async def instances_async(self, object_type_id, object_keys):
+            assert object_keys == ["m1:Order:ORD1", "m1:Order:ORD2"]
+            return {"m1:Order:ORD2": {"generation": 1, "lifecycle_status": "deleted"}}
+
+    class FakeExecutionDao:
+        async def overridden_keys_async(self, object_type_id, object_keys, generations=None):
+            assert object_keys == ["m1:Order:ORD1"]
+            return {"m1:Order:ORD1"}
+
+    monkeypatch.setenv("CHAT_DATA_ONTOLOGY_ACTION_EXECUTE_ENABLED", "1")
+    monkeypatch.setattr(object_projection.ontology_service, "get_object_type_async", fake_detail)
+    monkeypatch.setattr(object_projection, "_projection_context", fake_ctx)
+    monkeypatch.setattr(object_projection, "_query_rows", fake_rows)
+    monkeypatch.setattr(object_projection, "_member_scope", lambda _t: {"member_datasource_id": "m1"})
+    monkeypatch.setattr(
+        object_projection,
+        "build_object_list_query",
+        lambda *_a, **_k: {
+            "sql": "select 1",
+            "limit": 20,
+            "offset": 0,
+            "title_property": "order_id",
+            "properties": ["order_id", "amount"],
+            "identifier_property": "order_id",
+            "object_type": "Order",
+        },
+    )
+    monkeypatch.setattr(object_projection, "OntologyObjectInstanceDao", FakeInstanceDao)
+    monkeypatch.setattr(object_projection, "OntologyActionExecutionDao", FakeExecutionDao)
+    result = asyncio.run(object_projection.list_object_projection("Order"))
+    assert [item["object_key"] for item in result["objects"]] == ["m1:Order:ORD1"]
+    # 列表口径要给「属性来自覆盖层」的对象打角标，值仍由详情合并
+    assert result["objects"][0]["has_overrides"] is True

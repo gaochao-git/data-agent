@@ -30,6 +30,16 @@ def _format_time(value: Any) -> str:
     return value.strftime("%Y-%m-%d %H:%M:%S") if value else ""
 
 
+def _parse_json_obj(value: Any) -> dict[str, Any]:
+    if value in (None, ""):
+        return {}
+    try:
+        parsed = json.loads(value)
+    except Exception:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
 def _row_to_dict(row: ChatDataOntologyActionType, *, include_audit: bool = True) -> dict[str, Any]:
     data: dict[str, Any] = {
         "id": int(row.id),
@@ -39,6 +49,8 @@ def _row_to_dict(row: ChatDataOntologyActionType, *, include_audit: bool = True)
         "object_type_id": int(row.object_type_id),
         "parameters": _parse_json_list(row.parameter_schema_json),
         "edits": _parse_json_list(row.edit_schema_json),
+        "submission_criteria": _parse_json_obj(row.submission_criteria_json),
+        "config_version": int(row.config_version or 1),
         "status": _text(row.lifecycle_status),
         "delete_flag": int(row.delete_flag or 0),
     }
@@ -99,6 +111,9 @@ class OntologyActionTypeDao:
             )
             if row is not None and int(row.delete_flag or 0) == 0 and not allow_overwrite:
                 return None
+            # 软删行复用视为新建（版本回到 1），活跃行更新则定义版本自增，
+            # 对齐官方「action type version auto-increments each time an action type is updated」。
+            is_new_definition = row is None or int(row.delete_flag or 0) != 0
             if row is None:
                 row = ChatDataOntologyActionType(
                     action_type_name=name,
@@ -111,6 +126,10 @@ class OntologyActionTypeDao:
             row.object_type_id = int(payload.get("object_type_id") or 0)
             row.parameter_schema_json = json.dumps(payload.get("parameters") or [], ensure_ascii=False)
             row.edit_schema_json = json.dumps(payload.get("edits") or [], ensure_ascii=False)
+            row.submission_criteria_json = json.dumps(
+                payload.get("submission_criteria") or {}, ensure_ascii=False
+            )
+            row.config_version = 1 if is_new_definition else int(row.config_version or 1) + 1
             row.lifecycle_status = payload.get("status") or "draft"
             row.delete_flag = 0
             row.update_by = update_by

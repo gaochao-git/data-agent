@@ -619,6 +619,7 @@ CREATE TABLE `chat_data_ontology_object_edit` (
   `id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键ID',
   `object_type_id` bigint NOT NULL COMMENT '对象类型ID',
   `object_key` varchar(512) NOT NULL COMMENT '对象主键值（Action 执行时的 object_key）',
+  `object_generation` int NOT NULL DEFAULT '1' COMMENT '对象实例代际（重建后旧代际失效）',
   `property_name` varchar(128) NOT NULL COMMENT '被覆盖属性API名',
   `property_value_json` text COMMENT '覆盖值JSON文本（保留类型）',
   `action_execution_id` bigint NOT NULL DEFAULT '0' COMMENT '关联 Action 执行ID',
@@ -627,7 +628,7 @@ CREATE TABLE `chat_data_ontology_object_edit` (
   `create_by` varchar(100) NOT NULL DEFAULT '' COMMENT '操作人ID',
   `create_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '操作人名称',
   PRIMARY KEY (`id`),
-  KEY `idx_object_edit_lookup` (`object_type_id`,`object_key`,`property_name`),
+  KEY `idx_object_edit_lookup` (`object_type_id`,`object_key`,`object_generation`,`property_name`),
   KEY `idx_object_edit_execution` (`action_execution_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='本体对象属性写覆盖层';
 
@@ -1101,3 +1102,114 @@ CREATE TABLE IF NOT EXISTS `chat_data_graph_sync_run` (
   KEY `idx_graph_sync_group` (`datasource_group_id`, `id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Nebula图同步运行记录';
 ```
+
+### 本体 Action L2.1：提交条件 + 定义版本 + 执行溯源（2026-11-04）
+
+对齐 Palantir Action Type 的三处语义：提交条件（`action-types/submission-criteria.md:10`）、
+定义版本自增（`action-types/action-log.md:65`）、审计必记被编辑对象主键（`:63-68`）。
+新环境随建表语句直接带上；存量环境执行以下 `ALTER`。
+
+```sql
+ALTER TABLE `chat_data_ontology_action_type`
+  ADD COLUMN `submission_criteria_json` text COMMENT '提交条件JSON: {logic,conditions[]}',
+  ADD COLUMN `config_version` int NOT NULL DEFAULT '1' COMMENT '定义版本，每次更新自增';
+
+ALTER TABLE `chat_data_ontology_action_execution`
+  ADD COLUMN `action_type_version` int NOT NULL DEFAULT '0' COMMENT '执行时的定义版本',
+  ADD COLUMN `edited_object_keys` varchar(2048) NOT NULL DEFAULT '' COMMENT '被编辑对象主键JSON数组',
+  ADD COLUMN `compiled_edits_json` text COMMENT '编译后的每对象一条编辑JSON',
+  ADD COLUMN `idempotency_key` varchar(64) NOT NULL DEFAULT '' COMMENT '幂等键（本平台扩展，非官方概念）',
+  ADD KEY `idx_action_execution_idem` (`action_type_name`, `idempotency_key`);
+```
+
+行为变化（需同步到前端与文档）：
+
+- `POST .../action-types/{name}/test-run` 新增可选 `object_key`；传了会读对象并返回
+  `proposed_changes` / `execution_log` / `errors{admin_facing,end_user_facing}`，
+  未传则维持原行为（只解析编辑）。试运行**不写任何表**。
+- `POST .../action-types/{name}/execute` 新增可选 `idempotency_key`；相同键重复提交返回
+  既有执行（`idempotent_replay=true`），不再产生第二条执行与第二份覆盖。
+- `PUT .../action-types/{name}` 支持 `submission_criteria`；不满足时执行直接拒绝并返回失败文案。
+
+### 本体 Action L2.2：对象实例可见性与代际（2026-11-04）
+
+对齐官方两条语义（`docs/palantir-ontology/object-edits/how-edits-applied.md:86`）：
+**删除不是编辑**——删除后对象不可见、与数据源状态无关，编辑值保留；
+**删除后重建是新实例，不继承旧编辑**。
+
+实现方式：新增实例表承载「可见性 + 代际」，覆盖层按代际过滤。无实例行视为
+`active/generation=1`，存量数据无需回填。
+
+```sql
+CREATE TABLE `chat_data_ontology_object_instance` (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `object_type_id` bigint NOT NULL COMMENT '对象类型ID',
+  `object_key` varchar(512) NOT NULL COMMENT '对象身份 [member:]object_type:local_key',
+  `generation` int NOT NULL DEFAULT '1' COMMENT '实例代际，重建时 +1',
+  `lifecycle_status` varchar(16) NOT NULL DEFAULT 'active' COMMENT 'active/deleted',
+  `last_execution_id` bigint NOT NULL DEFAULT '0' COMMENT '最近一次影响生命周期的执行ID',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `create_by` varchar(100) NOT NULL DEFAULT '' COMMENT '操作人ID',
+  `create_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '操作人名称',
+  `update_by` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人ID',
+  `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人名称',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_object_instance_key` (`object_type_id`,`object_key`),
+  KEY `idx_object_instance_status` (`object_type_id`,`lifecycle_status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='本体对象实例可见性与代际';
+
+ALTER TABLE `chat_data_ontology_object_edit`
+  ADD COLUMN `object_generation` int NOT NULL DEFAULT '1' COMMENT '对象实例代际（重建后旧代际失效）',
+  DROP KEY `idx_object_edit_lookup`,
+  ADD KEY `idx_object_edit_lookup` (`object_type_id`,`object_key`,`object_generation`,`property_name`);
+```
+
+行为变化（需同步到前端与文档）：
+
+- Action 编辑契约新增 `delete_object`（官方 Delete object(s) 规则），只能单独一条、
+  仅 `action_writable`/`action_created`；执行后对象不可见但覆盖值保留。
+- `set_property` 放开到 `action_created`：动作对象也可 Modify（官方 Modify object 规则）。
+- `create_object` 命中已删除的同主键对象时按**重建**处理：代际 +1、复用原行，
+  旧代际覆盖值不再参与合并。
+- 对已删除对象再次执行 Action 会因「对象不存在」失败（与官方不能修改已删对象一致）。
+- 对象读取新增可见性判断：`lifecycle_status != active` 时抛 `对象不存在`，
+  与数据源是否仍有该行无关。
+
+### 本体 Action L2.2-b：读时冲突策略 + 提交时写写检测 + 撤销（2026-11-04）
+
+对齐官方三处语义：**读时冲突两策略**（`object-edits/how-edits-applied.md:167-187`）、
+**执行前基线 + 冲突检测**、**撤销是追加反向编辑**（`action-types/action-reverts.md`）。
+
+```sql
+ALTER TABLE `chat_data_ontology_object_type`
+  ADD COLUMN `conflict_resolution` varchar(32) NOT NULL DEFAULT 'apply_user_edits'
+    COMMENT '读时冲突策略：apply_user_edits=覆盖值恒胜；apply_most_recent_value=比较时间戳',
+  ADD COLUMN `conflict_timestamp_property` varchar(64) NOT NULL DEFAULT ''
+    COMMENT '源行 timestamp 属性 API 名（apply_most_recent_value 必填）';
+
+ALTER TABLE `chat_data_ontology_action_execution`
+  ADD COLUMN `baseline_json` longtext COMMENT '执行前基线快照 {row_hash,row_hash_scope,effective_values,object_generation,read_at}',
+  ADD COLUMN `conflict_check_level` varchar(16) NOT NULL DEFAULT 'object'
+    COMMENT '提交时冲突检测口径：object/property/off',
+  ADD COLUMN `revert_of_execution_id` bigint NOT NULL DEFAULT '0'
+    COMMENT '本执行是撤销哪条执行的（0=非撤销）',
+  ADD KEY `idx_action_execution_revert` (`revert_of_execution_id`);
+```
+
+行为变化：
+
+- **读时两策略**：`conflict_resolution=apply_user_edits`（默认）覆盖值恒胜；
+  `apply_most_recent_value` 仅当覆盖的 `applied_at` 晚于源行 `conflict_timestamp_property`
+  属性值时才采用覆盖值（源值为空或未绑物理列的 edit-only 属性恒生效）。动作对象
+  （`action_created`）没有输入数据源，全部属性按 edit-only 处理。
+- **提交时写写检测**：test run 返回 `baseline.row_hash`；提交时把它作为 `expected_baseline`
+  传回，服务端重算源行指纹比对，不一致即拒绝（`conflict_check_level` 支持
+  `object`/`property`/`off`，默认对象级）。基线同时记下被编辑属性当时的**有效值**，
+  供撤销回填；冲突检测比的是**源数据**而非合并后的值，避免自己刚写的覆盖值把检测带偏。
+- **撤销（revert）**：仅执行者本人、仅对象级最近一次、仅 `succeeded` 且非撤销记录本身；
+  撤销方式是**追加一条反向执行 + 反向编辑**（不删原 edit），原执行标记 `reverted`。
+  `delete_object` 的撤销把实例状态改回 `active`（代际不变，不是重建）；
+  `create_object` 的撤销把对象标为 `deleted`。
+- 接口：`POST .../action-types/{name}/executions/{execution_id}/revert`；
+  工具：`revert_action`（受同一执行开关门控）。

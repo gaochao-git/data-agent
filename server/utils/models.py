@@ -1191,6 +1191,15 @@ class ChatDataOntologyObjectType(Base):
     # action_writable=允许 Action 经覆盖层编辑属性（监管数据接入场景）；
     # action_created=动作对象（无源，行存于 chat_data_ontology_action_object，仅由 Action 创建）。
     write_mode: Mapped[str] = mapped_column(String(16), nullable=False, default="read_only", server_default="read_only")
+    # 读时冲突解决（对齐 Palantir object-edits/how-edits-applied 的两档策略）：
+    # apply_user_edits=用户编辑恒胜（默认，也是既有隐含行为）；
+    # apply_most_recent_value=比较覆盖生效时间与输入数据源 timestamp 属性，取较新者。
+    conflict_resolution: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="apply_user_edits", server_default="apply_user_edits"
+    )
+    conflict_timestamp_property: Mapped[str] = mapped_column(
+        String(128), nullable=False, default="", server_default=""
+    )
     ontology_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, default=None)
     deprecation_reason: Mapped[str] = mapped_column(String(512), nullable=False, default="", server_default="")
     deprecated_until: Mapped[datetime | None] = mapped_column(DateTime)
@@ -1292,11 +1301,13 @@ class ChatDataOntologyRelationType(Base):
 
 
 class ChatDataOntologyActionType(Base):
-    """本体 Action Type：对齐 Palantir Action Type 的定义层（参数 + 编辑契约）。
+    """本体 Action Type：对齐 Palantir Action Type 的定义层（参数 + 编辑 + 提交条件）。
 
-    当前阶段只存定义，不执行写回；执行/审计/副作用在对象写路径落地后接入。
-    parameter_schema_json 存参数数组，edit_schema_json 存编辑数组，均为 JSON 文本
-    （不用 MySQL JSON 类型）。动作类型名全局唯一，软删后同名重建复用原行并回到 draft。
+    parameter_schema_json 存参数数组，edit_schema_json 存编辑数组，
+    submission_criteria_json 存提交条件（能否提交 + 失败文案），均为 JSON 文本
+    （不用 MySQL JSON 类型）。config_version 每次定义更新自增，执行时快照进审计，
+    对齐官方 action log 的 action type version。动作类型名全局唯一，软删后同名重建
+    复用原行并回到 draft。
     """
 
     __tablename__ = "chat_data_ontology_action_type"
@@ -1308,6 +1319,8 @@ class ChatDataOntologyActionType(Base):
     object_type_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     parameter_schema_json: Mapped[str | None] = mapped_column(Text)
     edit_schema_json: Mapped[str | None] = mapped_column(Text)
+    submission_criteria_json: Mapped[str | None] = mapped_column(Text)
+    config_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
     lifecycle_status: Mapped[str] = mapped_column(String(16), nullable=False, default="draft", server_default="draft")
     delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
@@ -1329,7 +1342,11 @@ class ChatDataOntologyObjectEdit(Base):
     """本体对象写覆盖层：Action 执行后的属性覆盖值（append-only）。
 
     当前没有对象存储，Action 不改写源库/语义模型数据，而是追加 property override；
-    对象读取按 (object_type_id, object_key, property_name) 取最新一条覆盖值合并。
+    对象读取按 (object_type_id, object_key, object_generation, property_name) 取最新一条覆盖值合并。
+
+    object_generation 是对象实例代际：官方语义下「删除不是编辑」，对象被删除后编辑保留但
+    不再生效；同主键重建属于**新实例**，不继承旧编辑（object-edits/how-edits-applied.md:86）。
+    覆盖值只在代际与当前实例一致时参与合并，因此重建后旧代际记录自然失效而无需物理删除。
     """
 
     __tablename__ = "chat_data_ontology_object_edit"
@@ -1337,17 +1354,56 @@ class ChatDataOntologyObjectEdit(Base):
     id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
     object_type_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     object_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    object_generation: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
     property_name: Mapped[str] = mapped_column(String(128), nullable=False)
     property_value_json: Mapped[str | None] = mapped_column(Text)
     action_execution_id: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
     action_type_name: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
+    # 覆盖生效时间：apply_most_recent_value 策略比较「覆盖 vs 输入数据源 timestamp」用
+    applied_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
     create_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
 
     __table_args__ = (
-        Index("idx_object_edit_lookup", "object_type_id", "object_key", "property_name"),
+        Index("idx_object_edit_lookup", "object_type_id", "object_key", "object_generation", "property_name"),
         Index("idx_object_edit_execution", "action_execution_id"),
+    )
+
+
+class ChatDataOntologyObjectInstance(Base):
+    """本体对象实例生命周期与代际。
+
+    官方语义（object-edits/how-edits-applied.md:86）：
+    - 删除不是编辑：删除后对象**不可见**，与数据源状态无关；编辑值仍保留；
+    - 删除后再重建属于新实例，**不继承**旧编辑。
+
+    本平台没有对象存储，故用一张实例表承载「可见性 + 代际」：
+    - lifecycle_status=active/deleted 决定对象是否可见；
+    - generation 每次重建自增；覆盖层按 generation 过滤，旧代际编辑自然失效但保留可追溯。
+    无实例行时视为 active / generation=1（兼容既有数据，无需回填）。
+    """
+
+    __tablename__ = "chat_data_ontology_object_instance"
+
+    id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
+    object_type_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    object_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    generation: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    lifecycle_status: Mapped[str] = mapped_column(String(16), nullable=False, default="active", server_default="active")
+    last_execution_id: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
+    create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
+    update_time: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+    create_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+
+    __table_args__ = (
+        UniqueConstraint("object_type_id", "object_key", name="uniq_object_instance_key"),
+        Index("idx_object_instance_status", "object_type_id", "lifecycle_status"),
     )
 
 
@@ -1386,20 +1442,41 @@ class ChatDataOntologyActionObject(Base):
 
 
 class ChatDataOntologyActionExecution(Base):
-    """Action 执行审计：一次执行的参数/解析后的编辑/操作者；当前不做回滚与副作用。"""
+    """Action 执行审计：一次执行的参数/编译后的编辑/操作者。
+
+    对齐 Palantir action log 的必记字段口径（action-types/action-log.md:63-68）：
+    动作类型 + **定义版本** + 提交时间 + 操作者 + **被编辑对象主键集合**。
+    官方日志本身是对象类型（一一对应 action type），此处用表承担，属已知差异。
+    """
 
     __tablename__ = "chat_data_ontology_action_execution"
 
     id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
     action_type_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    action_type_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     object_type_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     object_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    edited_object_keys: Mapped[str] = mapped_column(String(2048), nullable=False, default="", server_default="")
     parameters_json: Mapped[str | None] = mapped_column(Text)
     edits_json: Mapped[str | None] = mapped_column(Text)
+    compiled_edits_json: Mapped[str | None] = mapped_column(Text)
+    # 执行前基线快照：{row_hash, row_hash_scope, effective_values, object_generation, read_at}。
+    # row_hash 用于提交时的对象级写写冲突检测；effective_values 用于撤销时回填执行前的有效值。
+    baseline_json: Mapped[str | None] = mapped_column(Text)
+    conflict_check_level: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="object", server_default="object"
+    )
+    isolation_level: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="legacy_equivalent", server_default="legacy_equivalent"
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
     execution_status: Mapped[str] = mapped_column(
         String(16), nullable=False, default="succeeded", server_default="succeeded"
     )
     error_message: Mapped[str] = mapped_column(String(1000), nullable=False, default="", server_default="")
+    revert_of_execution_id: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
+    reverted_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    reverted_at: Mapped[datetime | None] = mapped_column(DateTime)
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
     create_by: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
     create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
@@ -1407,6 +1484,8 @@ class ChatDataOntologyActionExecution(Base):
     __table_args__ = (
         Index("idx_action_execution_type", "action_type_name", "create_time"),
         Index("idx_action_execution_object", "object_type_id", "object_key"),
+        Index("idx_action_execution_idem", "action_type_name", "idempotency_key"),
+        Index("idx_action_execution_revert", "revert_of_execution_id"),
     )
 
 

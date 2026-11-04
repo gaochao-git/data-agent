@@ -462,8 +462,14 @@ async def delete_ontology_action_type(action_type_name: str, request: Request) -
 async def test_run_ontology_action_type(
     action_type_name: str, payload: OntologyActionTypeTestRunRequest, request: Request
 ) -> JSONResponse:
-    _get_current_user(request)
-    data = await _action_type_service.test_run_action_type_async(action_type_name, payload.parameters)
+    current_user = _get_current_user(request)
+    data = await _action_type_service.test_run_action_type_async(
+        action_type_name,
+        payload.parameters,
+        object_key=payload.object_key,
+        operator=str(current_user.user_id or ""),
+        operator_name=str(current_user.username or ""),
+    )
     return business_response(data=data, msg="试运行通过")
 
 
@@ -489,8 +495,26 @@ async def execute_ontology_action_type(
         parameters=payload.parameters,
         operator=str(current_user.user_id or ""),
         operator_name=str(current_user.username or ""),
+        idempotency_key=payload.idempotency_key,
+        expected_baseline=payload.expected_baseline,
+        conflict_check_level=payload.conflict_check_level,
     )
     return business_response(data=data, msg="执行成功")
+
+
+@router.post("/admin/meta/ontology/action-types/{action_type_name}/executions/{execution_id}/revert")
+@_ontology_route("Action 撤销失败，请检查执行状态与操作人", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
+async def revert_ontology_action_execution(
+    action_type_name: str, execution_id: int, request: Request
+) -> JSONResponse:
+    current_user = _get_current_user(request)
+    data = await _action_type_service.revert_execution_async(
+        action_type_name,
+        execution_id,
+        operator=str(current_user.user_id or ""),
+        operator_name=str(current_user.username or ""),
+    )
+    return business_response(data=data, msg="撤销成功")
 
 
 @router.get("/admin/meta/ontology/object-types/{object_type_name}/object-sets")

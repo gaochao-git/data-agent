@@ -23,7 +23,7 @@ import asyncio
 import os
 import re
 import time
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from pymysql.converters import escape_string
@@ -32,6 +32,7 @@ from utils.logger import get_logger
 
 from ...daos.ontology_action_execution_dao import OntologyActionExecutionDao
 from ...daos.ontology_action_object_dao import OntologyActionObjectDao
+from ...daos.ontology_object_instance_dao import ACTIVE, OntologyObjectInstanceDao
 from ..datasource.manager import get_datasource_manager
 from ..datasource.target_context import get_execution_target_member_id, get_execution_target_name
 from ..query import QueryOrchestrator, QuerySource, QuerySpec
@@ -424,15 +425,102 @@ async def _read_links(
     return links
 
 
-async def _apply_object_edits(detail: dict[str, Any], object_key: str, row: dict[str, Any]) -> dict[str, Any]:
-    """执行开关打开时，把 Action 覆盖值合并到数据库行上。"""
+async def _object_instance_state_async(object_type_id: int, object_key: str) -> dict[str, Any]:
+    """对象实例可见性与代际；无实例行时视为 active/generation=1（兼容既有数据）。"""
+    instance = await OntologyObjectInstanceDao().get_instance_async(object_type_id, object_key)
+    if instance is None:
+        return {"generation": 1, "lifecycle_status": ACTIVE, "last_execution_id": 0}
+    return instance
+
+
+def _coerce_timestamp(value: Any) -> datetime | None:
+    """把源行 timestamp 属性值归一成 naive UTC datetime；无法解析返回 None。"""
+    if value is None or value == "":
+        return None
+    parsed: datetime | None = None
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, date):
+        parsed = datetime(value.year, value.month, value.day)
+    else:
+        text = str(value).strip().replace("T", " ").removesuffix("Z")
+        for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+            try:
+                parsed = datetime.strptime(text, fmt)
+                break
+            except ValueError:
+                continue
+    if parsed is None:
+        return None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return parsed
+
+
+def _merge_conflict_values(
+    detail: dict[str, Any],
+    source_values: dict[str, Any],
+    edits: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """按对象类型的冲突策略把覆盖值合并到源行上（对齐官方两档命名）。
+
+    - `apply_user_edits`（默认）：覆盖值恒胜；
+    - `apply_most_recent_value`：仅当覆盖的 `applied_at` 晚于**输入数据源**该行的
+      timestamp 属性值才采用覆盖值；源行时间戳为空 → 覆盖值生效；未绑定物理列的
+      属性（等价官方 edit-only property）始终生效（how-edits-applied.md:167-187）。
+    """
+    resolution = _text(detail.get("conflict_resolution")) or "apply_user_edits"
+    if resolution != "apply_most_recent_value":
+        return {**source_values, **{name: entry["value"] for name, entry in edits.items()}}
+    timestamp_property = _text(detail.get("conflict_timestamp_property"))
+    source_applied = _coerce_timestamp(source_values.get(timestamp_property)) if timestamp_property else None
+    merged = dict(source_values)
+    for name, entry in edits.items():
+        if name not in source_values:  # 编辑层专有属性（无源列）：恒生效
+            merged[name] = entry["value"]
+            continue
+        applied_at = _coerce_timestamp(entry.get("applied_at") or entry.get("create_time"))
+        if source_applied is None or applied_at is None:
+            merged[name] = entry["value"]
+            continue
+        if applied_at > source_applied:
+            merged[name] = entry["value"]
+    return merged
+
+
+async def _merge_object_edits(
+    detail: dict[str, Any],
+    object_key: str,
+    values: dict[str, Any],
+    *,
+    generation: int = 1,
+) -> dict[str, Any]:
+    """把当前实例代际的 Action 覆盖值合并到属性集上（旧代际不参与，故重建不继承）。"""
     if not ontology_action_execute_enabled():
-        return row
+        return values
     object_type_id = int(detail.get("id") or 0)
     if not object_type_id:
-        return row
-    edits = await OntologyActionExecutionDao().latest_object_values_async(object_type_id, object_key)
-    return {**row, **edits} if edits else row
+        return values
+    edits = await OntologyActionExecutionDao().latest_object_edits_async(
+        object_type_id, object_key, int(generation or 1)
+    )
+    if not edits:
+        return values
+    if _text(detail.get("write_mode")) == "action_created":
+        # 动作对象没有输入数据源，全部属性等价 edit-only，覆盖值恒生效
+        return {**values, **{name: entry["value"] for name, entry in edits.items()}}
+    return _merge_conflict_values(detail, values, edits)
+
+
+async def _apply_object_edits(
+    detail: dict[str, Any],
+    object_key: str,
+    row: dict[str, Any],
+    *,
+    generation: int = 1,
+) -> dict[str, Any]:
+    """执行开关打开时，把 Action 覆盖值合并到数据库行上。"""
+    return await _merge_object_edits(detail, object_key, row, generation=generation)
 
 
 async def read_object_projection(
@@ -443,8 +531,13 @@ async def read_object_projection(
     member_datasource_ids: list[str] | None = None,
     user_id: str = "",
     username: str = "",
+    with_source_values: bool = False,
 ) -> dict[str, Any]:
-    """按对象类型 + 主键读取一个对象实例和一跳 links（只读数据库投影）。"""
+    """按对象类型 + 主键读取一个对象实例和一跳 links（只读数据库投影）。
+
+    `with_source_values=True` 时额外返回 `source_properties`（**未合并覆盖值**的源行），
+    供 Action 基线指纹与撤销快照使用：冲突检测必须比源数据，不能比已覆盖后的值。
+    """
     detail = await ontology_service.get_object_type_async(object_type_name)
     if detail is None:
         raise ObjectProjectionError(f"本体对象类型不存在: {object_type_name}")
@@ -479,7 +572,15 @@ async def read_object_projection(
     qualified_key = _qualified_object_key(
         key_member or _text(scope.get("member_datasource_id")), object_type_name, local_key
     )
-    row = await _apply_object_edits(detail, qualified_key, rows[0])
+    generation = 1
+    object_type_id = int(detail.get("id") or 0)
+    if ontology_action_execute_enabled() and object_type_id:
+        instance = await _object_instance_state_async(object_type_id, qualified_key)
+        if _text(instance.get("lifecycle_status")) != ACTIVE:
+            # 删除不是编辑：删除后对象不可见，与数据源是否还有该行无关
+            raise ObjectProjectionError(f"对象不存在: {object_type_name}:{local_key}")
+        generation = int(instance.get("generation") or 1)
+    row = await _apply_object_edits(detail, qualified_key, rows[0], generation=generation)
     derived = await _derived_property_values(
         detail, row, member_id=scope["member_datasource_id"], user_id=user_id, username=username
     )
@@ -492,20 +593,33 @@ async def read_object_projection(
         username=username,
         warnings=link_warnings,
     )
-    return _assemble_object(detail, query, row, links, scope, derived_values=derived, warnings=link_warnings)
+    payload = _assemble_object(detail, query, row, links, scope, derived_values=derived, warnings=link_warnings)
+    if with_source_values:
+        payload["source_properties"] = {name: rows[0].get(name) for name in query["properties"]}
+        payload["object_generation"] = generation
+    return payload
 
 
 async def _read_action_object(detail: dict[str, Any], object_key: str) -> dict[str, Any]:
     """动作对象读取：行存业务库动作对象表（无源投影），属性集原样展开。"""
     key_member, local_key = _parse_object_key(object_key, _text(detail.get("object_type_name")))
-    stored = await OntologyActionObjectDao().get_object_async(int(detail.get("id") or 0), local_key)
+    object_type_id = int(detail.get("id") or 0)
+    stored = await OntologyActionObjectDao().get_object_async(object_type_id, local_key)
     if stored is None:
         raise ObjectProjectionError(f"对象不存在: {detail.get('object_type_name')}:{local_key}")
-    properties = stored.get("properties") or {}
+    qualified_key = _qualified_object_key(key_member, _text(detail.get("object_type_name")), local_key)
+    generation = 1
+    if ontology_action_execute_enabled() and object_type_id:
+        instance = await _object_instance_state_async(object_type_id, qualified_key)
+        if _text(instance.get("lifecycle_status")) != ACTIVE:
+            raise ObjectProjectionError(f"对象不存在: {detail.get('object_type_name')}:{local_key}")
+        generation = int(instance.get("generation") or 1)
+    properties = await _merge_object_edits(detail, qualified_key, stored.get("properties") or {}, generation=generation)
     return {
         "object_type": _text(detail.get("object_type_name")),
-        "object_key": _qualified_object_key(key_member, _text(detail.get("object_type_name")), local_key),
+        "object_key": qualified_key,
         "properties": properties,
+        "object_generation": generation,
         "links": [],
         "title_property": _title_property_name(
             [prop for prop in detail.get("properties") or [] if isinstance(prop, dict)],
@@ -946,6 +1060,45 @@ def _derived_target_column(
     return target_column
 
 
+async def _annotate_list_objects_async(
+    detail: dict[str, Any], objects: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """列表/搜索口径：剔除已删除实例、给有覆盖值的对象打 `has_overrides` 角标。
+
+    与详情保持一致的两件事：删除后对象在任何入口都不可见；列表要能告诉前端
+    「这条对象的属性来自 Action 覆盖层，不是源数据」。值本身仍由详情合并
+    （列表不合并覆盖值是有意取舍，避免整页 N 次覆盖查询）。
+    """
+    if not objects or not ontology_action_execute_enabled():
+        return objects
+    object_type_id = int(detail.get("id") or 0)
+    if not object_type_id:
+        return objects
+    instance_dao = OntologyObjectInstanceDao()
+    instances = await instance_dao.instances_async(
+        object_type_id, [_text(item.get("object_key")) for item in objects]
+    )
+    visible = [
+        item
+        for item in objects
+        if _text((instances.get(_text(item.get("object_key"))) or {}).get("lifecycle_status") or ACTIVE) == ACTIVE
+    ]
+    if not visible:
+        return visible
+    generations = {
+        _text(item.get("object_key")): int(
+            (instances.get(_text(item.get("object_key"))) or {}).get("generation") or 1
+        )
+        for item in visible
+    }
+    overridden = await OntologyActionExecutionDao().overridden_keys_async(
+        object_type_id, list(generations), generations
+    )
+    for item in visible:
+        item["has_overrides"] = _text(item.get("object_key")) in overridden
+    return visible
+
+
 def _assemble_list_item(
     query: dict[str, Any],
     row: dict[str, Any],
@@ -1039,8 +1192,11 @@ async def search_object_projection(
     execution_time_ms = int((time.perf_counter() - started_at) * 1000)
     has_more = len(rows) > query["limit"]
     page_rows = rows[: query["limit"]]
+    page_objects = await _annotate_list_objects_async(
+        detail, [_assemble_list_item(query, row, scope) for row in page_rows]
+    )
     return {
-        "objects": [_assemble_list_item(query, row, scope) for row in page_rows],
+        "objects": page_objects,
         "has_more": has_more,
         "limit": query["limit"],
         "offset": query["offset"],
@@ -1404,7 +1560,9 @@ async def list_object_projection(
     )
     has_more = len(rows) > query["limit"]
     rows = rows[: query["limit"]]
-    objects = [_assemble_list_item(query, row, _member_scope(targets)) for row in rows]
+    objects = await _annotate_list_objects_async(
+        detail, [_assemble_list_item(query, row, _member_scope(targets)) for row in rows]
+    )
     return {
         "objects": objects,
         "has_more": has_more,

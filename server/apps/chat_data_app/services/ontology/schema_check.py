@@ -30,8 +30,15 @@ _ACTION_TABLES = (
     "chat_data_ontology_action_object",
     "chat_data_ontology_action_execution",
     "chat_data_ontology_object_edit",
+    "chat_data_ontology_object_instance",
 )
-_REQUIRED_OBJECT_TYPE_COLUMNS = frozenset({"write_mode"})
+_REQUIRED_OBJECT_TYPE_COLUMNS = frozenset({"write_mode", "conflict_resolution"})
+# 删除/重建语义依赖代际列；读时冲突策略依赖 applied_at。缺列时必须在启动阶段拦住，
+# 否则读路径（ORM 全字段 SELECT）会在运行期才报错。
+_REQUIRED_ACTION_COLUMNS = {
+    "chat_data_ontology_object_edit": frozenset({"object_generation", "applied_at"}),
+    "chat_data_ontology_action_execution": frozenset({"baseline_json", "revert_of_execution_id"}),
+}
 
 
 def required_tables(*, action_execute_enabled: bool) -> set[str]:
@@ -56,6 +63,12 @@ def missing_schema_issues(
             continue
         if table == _OBJECT_TYPE_TABLE:
             missing = sorted(_REQUIRED_OBJECT_TYPE_COLUMNS - set(columns))
+            if missing:
+                issues.append(f"表 {table} 缺少列: {', '.join(missing)}")
+            continue
+        required_columns = _REQUIRED_ACTION_COLUMNS.get(table)
+        if required_columns:
+            missing = sorted(required_columns - set(columns))
             if missing:
                 issues.append(f"表 {table} 缺少列: {', '.join(missing)}")
     return issues

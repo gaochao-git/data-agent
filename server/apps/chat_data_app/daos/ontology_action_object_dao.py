@@ -114,6 +114,129 @@ class OntologyActionObjectDao:
             )
             return _row_to_dict(row) if row is not None else None
 
+    async def get_object_including_deleted_async(
+        self, object_type_id: int, object_key: str
+    ) -> dict[str, Any] | None:
+        """取对象行（含已删除），用于判断「同主键重建」是否属于新实例。"""
+        async with session_scope() as session:
+            row = (
+                (
+                    await session.execute(
+                        select(ChatDataOntologyActionObject).where(
+                            ChatDataOntologyActionObject.object_type_id == int(object_type_id),
+                            ChatDataOntologyActionObject.object_key == object_key,
+                        )
+                    )
+                )
+                .scalars()
+                .first()
+            )
+            return {**_row_to_dict(row), "delete_flag": int(row.delete_flag or 0)} if row is not None else None
+
+    async def soft_delete_object_async(
+        self,
+        *,
+        object_type_id: int,
+        object_key: str,
+        action_execution_id: int = 0,
+        operator: str = "",
+        operator_name: str = "",
+    ) -> bool:
+        """软删对象行（保留行以便重建时复用，避免唯一约束与历史行冲突）。"""
+        async with session_scope() as session:
+            row = (
+                (
+                    await session.execute(
+                        select(ChatDataOntologyActionObject).where(
+                            ChatDataOntologyActionObject.object_type_id == int(object_type_id),
+                            ChatDataOntologyActionObject.object_key == object_key,
+                            ChatDataOntologyActionObject.delete_flag == 0,
+                        )
+                    )
+                )
+                .scalars()
+                .first()
+            )
+            if row is None:
+                return False
+            row.delete_flag = 1
+            row.action_execution_id = int(action_execution_id or 0)
+            row.update_by = operator
+            row.update_by_name = operator_name
+            await session.flush()
+            return True
+
+    async def restore_object_async(
+        self,
+        *,
+        object_type_id: int,
+        object_key: str,
+        action_execution_id: int = 0,
+        operator: str = "",
+        operator_name: str = "",
+    ) -> bool:
+        """撤销删除：把软删的对象行翻回可用（属性集不动，代际不变）。"""
+        async with session_scope() as session:
+            row = (
+                (
+                    await session.execute(
+                        select(ChatDataOntologyActionObject).where(
+                            ChatDataOntologyActionObject.object_type_id == int(object_type_id),
+                            ChatDataOntologyActionObject.object_key == object_key,
+                        )
+                    )
+                )
+                .scalars()
+                .first()
+            )
+            if row is None:
+                return False
+            row.delete_flag = 0
+            row.action_execution_id = int(action_execution_id or 0)
+            row.update_by = operator
+            row.update_by_name = operator_name
+            await session.flush()
+            return True
+
+    async def revive_object_async(
+        self,
+        *,
+        object_type_id: int,
+        object_key: str,
+        properties: dict[str, Any],
+        title_value: str = "",
+        action_execution_id: int = 0,
+        action_type_name: str = "",
+        operator: str = "",
+        operator_name: str = "",
+    ) -> dict[str, Any] | None:
+        """以新实参重建已删除对象行（复用同一行，代际由实例表推进）。"""
+        async with session_scope() as session:
+            row = (
+                (
+                    await session.execute(
+                        select(ChatDataOntologyActionObject).where(
+                            ChatDataOntologyActionObject.object_type_id == int(object_type_id),
+                            ChatDataOntologyActionObject.object_key == object_key,
+                        )
+                    )
+                )
+                .scalars()
+                .first()
+            )
+            if row is None:
+                return None
+            row.properties_json = json.dumps(properties, ensure_ascii=False)
+            row.title_value = title_value or ""
+            row.action_execution_id = int(action_execution_id or 0)
+            row.action_type_name = action_type_name or ""
+            row.delete_flag = 0
+            row.update_by = operator
+            row.update_by_name = operator_name
+            await session.flush()
+            await session.refresh(row)
+            return _row_to_dict(row)
+
     async def list_objects_async(
         self,
         object_type_id: int,

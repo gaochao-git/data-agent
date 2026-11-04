@@ -97,6 +97,20 @@ def _preserve_write_mode(
     return payload
 
 
+def _preserve_conflict_resolution(
+    payload: dict[str, Any], existing: dict[str, Any] | None, existing_active: bool
+) -> dict[str, Any]:
+    """整体编辑未显式传冲突解决配置时保留原值（默认 apply_user_edits，不改变既有行为）。"""
+    if not existing_active:
+        return payload
+    preserved = dict(payload)
+    if "conflict_resolution" not in payload:
+        preserved["conflict_resolution"] = (existing or {}).get("conflict_resolution") or "apply_user_edits"
+    if "conflict_timestamp_property" not in payload:
+        preserved["conflict_timestamp_property"] = (existing or {}).get("conflict_timestamp_property") or ""
+    return preserved
+
+
 _DATASET_VALUE_TYPE_MAP: dict[str, str] = {
     "string": "String",
     "varchar": "String",
@@ -328,6 +342,52 @@ class OntologyService:
                 "已绑定 Dataset 的对象类型不能改为动作对象（action_created 要求无源，请先移除 Dataset 绑定）"
             )
 
+    @staticmethod
+    def _validate_conflict_resolution(
+        meta_payload: dict[str, Any], properties: list[dict[str, Any]]
+    ) -> None:
+        """读时冲突解决配置校验（对齐 how-edits-applied.md:121-139 的前置条件）。
+
+        `apply_most_recent_value` 需要「输入数据源的 timestamp 属性」做比较：
+        - 属性必须存在、是存储属性、value_type 为 DateTime；
+        - 动作对象（action_created）没有输入数据源，不能用该策略。
+        """
+        resolution = _text(meta_payload.get("conflict_resolution")) or "apply_user_edits"
+        timestamp_property = _text(meta_payload.get("conflict_timestamp_property"))
+        write_mode = _text(meta_payload.get("write_mode")) or "read_only"
+        if resolution != "apply_most_recent_value":
+            return
+        if write_mode == "action_created":
+            raise OntologyInvalidError(
+                "动作对象（action_created）没有输入数据源，不能用 apply_most_recent_value 冲突策略"
+            )
+        if not timestamp_property:
+            raise OntologyInvalidError(
+                "apply_most_recent_value 必须配置 conflict_timestamp_property（输入数据源的 timestamp 属性）"
+            )
+        prop = next((item for item in properties if _text(item.get("property_name")) == timestamp_property), None)
+        if prop is None:
+            raise OntologyInvalidError(f"冲突时间戳属性不存在: {timestamp_property}")
+        if prop.get("derivation"):
+            raise OntologyInvalidError(f"冲突时间戳属性必须是存储属性: {timestamp_property}")
+        if _text(prop.get("value_type")) != "DateTime":
+            raise OntologyInvalidError(
+                f"冲突时间戳属性必须为 DateTime 类型: {timestamp_property}（当前 {_text(prop.get('value_type')) or '?'}）"
+            )
+
+    @staticmethod
+    def _validate_conflict_timestamp_binding(
+        detail: dict[str, Any], column_mappings: dict[str, str]
+    ) -> None:
+        """apply_most_recent_value 的比较基准必须来自输入数据源（官方 `:129`）。"""
+        if _text(detail.get("conflict_resolution")) != "apply_most_recent_value":
+            return
+        timestamp_property = _text(detail.get("conflict_timestamp_property"))
+        if timestamp_property and timestamp_property not in column_mappings:
+            raise OntologyInvalidError(
+                f"冲突时间戳属性必须绑定到数据源列: {timestamp_property}"
+            )
+
     async def set_source_binding_async(
         self,
         object_type_name: str,
@@ -351,6 +411,7 @@ class OntologyService:
             raise OntologyInvalidError(f"Dataset 不存在: {dataset_id}")
         await self._ensure_dataset_not_reused_async(dataset, dataset_id, int(detail["id"]))
         column_mappings = self._validate_source_binding_columns(detail, dataset, payload.get("column_mappings") or {})
+        self._validate_conflict_timestamp_binding(detail, column_mappings)
         return await self._dao.upsert_source_binding_async(
             int(detail["id"]),
             dataset_id=dataset_id,
@@ -384,10 +445,12 @@ class OntologyService:
         existing_active = existing is not None and int(existing.get("delete_flag") or 0) == 0
         payload = _preserve_ontology_id(payload, existing, existing_active)
         payload = _preserve_write_mode(payload, existing, existing_active)
+        payload = _preserve_conflict_resolution(payload, existing, existing_active)
         meta_payload = validator.validate_object_type_payload(payload)
         # 本体存在性校验（本体不绑组，挂靠只做归属导航，无组锚点校验）
         await self._resolve_object_type_ontology(meta_payload.get("ontology_id"))
         properties = validator.validate_property_items(payload.get("properties"))
+        self._validate_conflict_resolution(meta_payload, properties)
         if existing is not None and not existing_active:
             meta_payload.update(_REVIVED_OBJECT_RESET)
         if existing is not None and existing_active:

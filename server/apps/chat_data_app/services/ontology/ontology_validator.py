@@ -27,6 +27,9 @@ NON_IDENTIFIER_VALUE_TYPES = ("Decimal",)
 OBJECT_STATUSES = ("draft", "experimental", "certified", "deprecated")
 # 写性三档（对齐 Palantir Edits toggle opt-in 模型）：默认只读，可写须显式声明
 OBJECT_WRITE_MODES = ("read_only", "action_writable", "action_created")
+# 读时冲突解决两档（对齐 object-edits/how-edits-applied.md:88-91 的官方命名）
+CONFLICT_RESOLUTIONS = ("apply_user_edits", "apply_most_recent_value")
+DEFAULT_CONFLICT_RESOLUTION = "apply_user_edits"
 ONTOLOGY_NAME_MAX_LENGTH = 64  # 落库列 chat_data_ontology.ontology_name = varchar(64)
 RELATION_MULTIPLICITIES = ("many_to_one", "one_to_one")
 RENDER_HINT_KEYS = ("searchable", "sortable", "low_cardinality")
@@ -75,11 +78,21 @@ def validate_object_type_payload(payload: dict[str, Any]) -> dict[str, Any]:
     write_mode = _normalized_text(payload.get("write_mode")) or "read_only"
     if write_mode not in OBJECT_WRITE_MODES:
         raise _invalid(f"对象类型写性仅支持 {'/'.join(OBJECT_WRITE_MODES)}，当前为 {write_mode}")
+    conflict_resolution = _normalized_text(payload.get("conflict_resolution")) or DEFAULT_CONFLICT_RESOLUTION
+    if conflict_resolution not in CONFLICT_RESOLUTIONS:
+        raise _invalid(
+            f"冲突解决策略仅支持 {'/'.join(CONFLICT_RESOLUTIONS)}，当前为 {conflict_resolution}"
+        )
+    conflict_timestamp_property = _normalized_text(payload.get("conflict_timestamp_property"))
+    if conflict_timestamp_property and not API_NAME_PATTERN.match(conflict_timestamp_property):
+        raise _invalid("冲突时间戳属性名仅允许字母、数字、下划线，长度 1-128")
     return {
         "display_name": display_name,
         "description": description,
         "ontology_id": ontology_id,
         "write_mode": write_mode,
+        "conflict_resolution": conflict_resolution,
+        "conflict_timestamp_property": conflict_timestamp_property,
     }
 
 
