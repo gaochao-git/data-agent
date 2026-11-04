@@ -25,7 +25,7 @@ import {
 } from '../../utils/semanticFieldTooltip'
 import { useColumnDictCache } from '../../composables/useColumnDictCache'
 import { formatDateTimeValue, formatRelativeConversationTime } from '../../utils'
-import { shouldLoadMoreConversations } from '../../utils/conversationHistory'
+import { PINNED_GROUP_KEY, shouldLoadMoreConversations } from '../../utils/conversationHistory'
 import type { ConversationSortBy, ConversationViewMode } from '../../utils/conversationHistory'
 import FieldTypeIcon from '../icons/FieldTypeIcon.vue'
 
@@ -727,7 +727,13 @@ onUnmounted(() => {
                   class="fa-solid fa-chevron-down shrink-0 text-[9px] text-gray-400 transition-transform duration-150"
                   :class="{ '-rotate-90': isConversationGroupCollapsed(group.key) }"
                 ></i>
+                <!-- 置顶是状态分组，不是目录：用图钉；数据源分组才用文件夹（与工作区树同一套图标） -->
                 <i
+                  v-if="group.key === PINNED_GROUP_KEY"
+                  class="fa-solid fa-thumbtack shrink-0 text-[11px] text-amber-400"
+                ></i>
+                <i
+                  v-else
                   class="fa-solid shrink-0 text-[11px] text-amber-400"
                   :class="isConversationGroupCollapsed(group.key) ? 'fa-folder' : 'fa-folder-open'"
                 ></i>

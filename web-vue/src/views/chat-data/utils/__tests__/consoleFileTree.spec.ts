@@ -8,6 +8,7 @@ import {
   DEFAULT_COLLAPSED_CONSOLE_DIRECTORIES,
   expandAllDirectories,
   formatFileSize,
+  getFileSize,
   isTreeFullyCollapsed,
   isWorkspaceDirectoryArchiveDownloadable,
   isWorkspaceFileDeletable,
@@ -359,5 +360,29 @@ describe('buildProducedFileTree 同级排序', () => {
     expect(outputs.children.map(node => node.name)).toEqual(['data', 'data.txt'])
     expect(outputs.children[0]!.children.length).toBeGreaterThan(0)
     expect(outputs.children[1]!.file).toBeTruthy()
+  })
+})
+
+describe('getFileSize（目录占用总大小）', () => {
+  const entry = (relativePath: string, size: number): ProducedFileInput => ({ relative_path: relativePath, size, mtime: 0 })
+  const tree = (inputs: ProducedFileInput[]) => buildProducedFileTree(buildProducedFiles(inputs))
+
+  it('递归汇总目录下所有文件的 st_size', () => {
+    const { directories } = tree([
+      entry('outputs/a.docx', 1024),
+      entry('outputs/月报/b.xlsx', 2048),
+      entry('outputs/月报/子目录/c.csv', 512),
+      entry('workspace/d.txt', 256),
+    ])
+    const outputs = directories.find(node => node.path === 'outputs')!
+    const month = outputs.children.find(node => node.name === '月报')!
+    expect(getFileSize(outputs)).toBe(3584)
+    expect(getFileSize(month)).toBe(2560)
+    expect(getFileSize(directories.find(node => node.path === 'workspace')!)).toBe(256)
+  })
+
+  it('空目录返回 0', () => {
+    const { directories } = tree([])
+    expect(getFileSize(directories.find(node => node.path === 'uploads')!)).toBe(0)
   })
 })

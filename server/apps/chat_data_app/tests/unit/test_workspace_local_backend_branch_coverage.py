@@ -647,9 +647,8 @@ async def test_run_bash_timeout_and_skill_cwd(tmp_path):
         timeout_seconds=30,
     )
     assert from_skill["exit_code"] == 0
-    # runtime-skills 快照在工作区根之外，cwd 回落为物理路径（不做虚拟遮蔽）
-    assert Path(from_skill["cwd"]).name == "demo-skill"
-    assert "runtime-skills" in from_skill["cwd"]
+    # 技能 cwd 返回模型可见的虚拟路径，不泄漏 runtime-skills 物理位置
+    assert from_skill["cwd"] == "/mnt/skills/demo-skill"
 
 
 @pytest.mark.asyncio

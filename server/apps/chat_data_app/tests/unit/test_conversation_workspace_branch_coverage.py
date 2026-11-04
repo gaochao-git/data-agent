@@ -292,11 +292,12 @@ def test_resolve_uploads_root_creates_workspace(tmp_path):
     assert uploads.name == "uploads"
 
 
-def test_to_visible_path_outside_root_returns_physical(tmp_path):
+def test_to_visible_path_outside_root_fails_closed(tmp_path):
     root = _runtime_root(tmp_path)
     inside = root / "workspace" / "a.txt"
     assert to_visible_path(str(root), inside) == "/mnt/user-data/workspace/a.txt"
-    assert to_visible_path(str(root), Path("/somewhere/else/x.txt")) == "/somewhere/else/x.txt"
+    with pytest.raises(ValueError, match="不在当前会话工作区"):
+        to_visible_path(str(root), Path("/somewhere/else/x.txt"))
 
 
 def test_is_managed_semantic_model_workspace_path(tmp_path):
@@ -459,7 +460,7 @@ def test_read_workspace_raw_file_branches(tmp_path):
     target = Path(root) / "workspace" / "big.bin"
     target.write_bytes(b"x" * 100)
 
-    with pytest.raises(ValueError, match="不在工作区文件预览范围内"):
+    with pytest.raises(FileNotFoundError, match="文件不存在"):
         read_workspace_raw_file(
             "conv_raw", f"/mnt/user-data/outputs/{cw_runtime_module.TOOL_OFFLOAD_DIR_NAME}/r.json", 100, "user_a"
         )

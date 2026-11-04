@@ -453,6 +453,32 @@ def test_build_completion_event_carries_args_for_frontend():
     assert json.loads(event.split("data:", 1)[1])["args"] == payload["accumulated_args"]
 
 
+def test_build_completion_event_fills_missing_tool_timing():
+    """完成事件缺计时（被外层中间件提前拒绝）时，用 tool_started 时刻兜底补齐。"""
+    state = agent_stream._ToolStreamState()
+    state.handle_tool_calls([{"id": "call-1", "name": "data_analyzing_tool", "args": {}}])
+    started_at_ms = state.tool_started_at["call-1"]
+
+    payload = state.build_tool_message_payload(
+        ToolMessageChunk(
+            content='{"status": "error"}',
+            tool_call_id="call-1",
+            name="data_analyzing_tool",
+            status="error",
+        )
+    )
+    # 模拟被技能前置/审批等外层中间件拒绝：ToolMessage 没有 ToolTimingMiddleware 盖章
+    payload["started_at_ms"] = None
+    payload["ended_at_ms"] = None
+
+    event = state.build_completion_event(payload)
+    data = json.loads(event.split("data:", 1)[1])
+    assert "tool_failed" in event
+    assert data["started_at_ms"] == started_at_ms
+    assert data["ended_at_ms"] >= started_at_ms
+    assert "call-1" not in state.tool_started_at
+
+
 def test_handle_tool_call_chunks_skips_non_dict_entries():
     """非 dict 分片跳过（733->734）。"""
     state = agent_stream._ToolStreamState()

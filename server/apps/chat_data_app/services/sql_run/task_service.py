@@ -27,6 +27,8 @@ from .result import (
 logger = get_logger(__name__)
 
 QUERY_TASK_POLL_INTERVAL_MS = 1500
+# 心跳间隔：须显著小于启动对账的 stale 阈值（默认 300s），供多 worker 区分活任务
+QUERY_TASK_HEARTBEAT_SECONDS = 30
 CANCEL_TARGET_WAIT_SECONDS = 3
 CANCEL_TARGET_POLL_INTERVAL_SECONDS = 0.1
 
@@ -85,10 +87,15 @@ class QueryTaskService:
         skip_query_cache: bool = False,
         datasource_id: str | None = None,
         max_rows: int | None = None,
+        source: QuerySource = QuerySource.SQL,
     ) -> dict[str, Any]:
-        """执行单个成员数据源 SQL（经查询层编排门面）。"""
+        """执行单个成员数据源 SQL（经查询层编排门面）。
+
+        ``source`` 由调用方按业务入口传入（看板=``DASHBOARD``），默认 SQL；
+        只影响审计/统计口径，不参与执行分支。
+        """
         spec = QuerySpec(
-            source=QuerySource.SQL,
+            source=source,
             datasource_group_id=datasource_id or "",
             sql=sql,
             limit=limit,
@@ -975,6 +982,10 @@ class QueryTaskService:
             "started_time": remote_result.get("started_time") or (local_execution or {}).get("started_time"),
             "finished_time": remote_result.get("finished_time") or (local_execution or {}).get("finished_time"),
             "error": error,
+            "error_source": remote_result.get("error_source")
+            or ("service" if (local_execution or {}).get("sql_status") == "failed" else "remote_http")
+            if error
+            else None,
         }
 
     def merge_direct_and_remote_results(
@@ -998,6 +1009,12 @@ class QueryTaskService:
             for item in local_results
             if str((item or {}).get("member_datasource_id") or "").strip() not in remote_member_ids
         ]
+        for item in direct_results:
+            if str(item.get("status") or "").strip().lower() in {"failed", "cancelled"}:
+                item.setdefault("error_source", "datasource")
+        for item in remote_results:
+            if str(item.get("status") or "").strip().lower() in {"failed", "cancelled"}:
+                item.setdefault("error_source", "remote_http")
         return direct_results + remote_results
 
     def resolve_live_result_status(
@@ -1249,6 +1266,7 @@ class QueryTaskService:
         if not task:
             logger.warning("异步查询任务不存在: %s", task_id)
             return
+        heartbeat = asyncio.create_task(self._query_task_heartbeat(task_id))
         try:
             await self.dispatch_query_task(task_id, task)
         except ValueError as err:
@@ -1257,6 +1275,18 @@ class QueryTaskService:
         except Exception as err:
             logger.error("异步查询任务异常: %s", err, exc_info=True)
             await self.mark_query_task_failed(task_id, "执行失败，请稍后重试或联系管理员")
+        finally:
+            heartbeat.cancel()
+            await asyncio.gather(heartbeat, return_exceptions=True)
+
+    async def _query_task_heartbeat(self, task_id: str) -> None:
+        """运行期刷新任务 update_time；进程退出后停止，供启动对账识别僵尸任务。"""
+        while True:
+            await asyncio.sleep(QUERY_TASK_HEARTBEAT_SECONDS)
+            try:
+                await query_runtime.touch_query_task(task_id)
+            except Exception as err:  # 心跳失败不影响查询本身
+                logger.warning("查询任务心跳刷新失败: task_id=%s error=%s", task_id, err)
 
     async def dispatch_query_task(self, task_id: str, task: dict[str, Any]) -> None:
         """按任务类型分发后台查询任务。"""

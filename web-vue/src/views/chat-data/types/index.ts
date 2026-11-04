@@ -3,7 +3,7 @@
  */
 
 import type { ChartType } from '../chartTypes'
-export type { MemberQueryResult, QueryResult } from './query'
+export type { AggregatedQueryStatus, MemberQueryResult, MemberQueryStatus, QueryResult, QueryResultPanelItem } from './query'
 
 /** Ossie 语义模型 yaml 文件载荷（展示名 + 文本内容）：会话工作区「一键导入」与导入弹窗装载共用 */
 export interface SemanticYamlFile {
@@ -390,6 +390,8 @@ export interface Message {
   segments?: MessageSegment[]
   error?: string
   isStreaming?: boolean
+  /** 压缩分隔卡切开的中间段助手消息：全部内容进工作过程折叠，不把末段文本当最终回答 */
+  forceWorkProcess?: boolean
   turnId?: string
   dashboardSpec?: DashboardSpecPayload
   /** 用户消息 @ 引用的会话工作区文件清单（相对路径，本地发送与历史回放共用）。 */
@@ -512,18 +514,55 @@ export interface ToolCallInfo {
   // 子智能体上下文用量快照（subagent_context_usage 事件实时更新，最终值随
   // task 结果持久化、历史回放还原）：task 卡片标题行显示「上下文 N%」徽标
   subagentContextUsage?: SubagentContextUsage
+  // 子智能体 token 用量（billing 口径，主对话统计不含它）：随 task 结果持久化
+  subagentTokenUsage?: SubagentTokenUsage
+  // 子图上下文压缩事件（静默压缩的可视化记录）
+  subagentCompactions?: SubagentCompaction[]
+  // 子图上下文计量明细（cache/breakdown，与主对话 token_usage 同结构）
+  subagentTokenUsageDetail?: ChatDataTokenUsage
 }
 
-/** 子智能体上下文用量快照（percent 相对子图预算告警线，≥100 表示已注入收尾告警）。 */
+/**
+ * 子智能体上下文用量快照。
+ * - `percent`：占**模型上下文窗口**比例，与主对话「上下文 N%」同口径；
+ * - `budget_percent`：占**收尾阈值**（窗口 × 压缩触发比例）比例，≥100 触发提前收尾；
+ * - 旧会话快照没有窗口字段，只有 `percent`（当时是预算口径）→ 回放时归一到 `budget_percent`。
+ */
 export interface SubagentContextUsage {
   used_tokens: number
   threshold_tokens: number
-  percent: number
+  context_window?: number
+  percent?: number
+  budget_percent?: number
+}
+
+/**
+ * 子智能体 token 用量（billing 口径，按子图每次模型调用累加）。
+ * 主对话的 token 统计只算主图模型调用，这是一份独立的子智能体消耗汇总。
+ */
+export interface SubagentTokenUsage {
+  input_tokens?: number
+  output_tokens?: number
+  total_tokens?: number
+  cache_read_input_tokens?: number
+  cache_creation_input_tokens?: number
+  reasoning_tokens?: number
+}
+
+/** 子图上下文压缩记录（每条一次完成的压缩）。 */
+export interface SubagentCompaction {
+  id: string
+  timestamp?: string
+  anchor_message_id?: string
+  estimated_tokens_before?: number
+  estimated_tokens_after?: number
+  estimated_cleared_tokens?: number
+  compressed_messages?: number
 }
 
 /** 子智能体内部过程条目：工具调用与中间文本输出按发生顺序混排。 */
 export interface SubagentTrailItem {
-  kind: 'tool' | 'message'
+  kind: 'tool' | 'message' | 'compaction'
   /** tool：tool_call_id；message：message_id */
   id: string
   // 工具条目
@@ -537,6 +576,15 @@ export interface SubagentTrailItem {
   // 思考过程（流式增量拼接；默认收起，仅流式进行中露尾部预览）
   thinking?: string
   thinkingTruncated?: boolean
+  // 内层工具执行起止时间（epoch 毫秒）：后端 ToolTimingMiddleware 盖章，随事件下发并持久化
+  started_at_ms?: number | null
+  ended_at_ms?: number | null
+  // compaction 条目：子图压缩分隔卡（与主对话同款 CompactionMessage）
+  timestamp?: string
+  estimated_tokens_before?: number
+  estimated_tokens_after?: number
+  estimated_cleared_tokens?: number
+  compressed_messages?: number
 }
 
 // 消息内容片段（用于按顺序渲染文本和工具调用）
@@ -613,7 +661,7 @@ export interface ChatDataOptions {
 export type SidebarTab = 'dashboards' | 'config' | 'history'
 
 // SSE 事件类型
-export type SSEEventType = 'message' | 'message_end' | 'token_usage' | 'generation_speed' | 'context_compression' | 'thinking' | 'tool' | 'tool_started' | 'tool_progress' | 'tool_completed' | 'tool_failed' | 'subagent_message' | 'subagent_message_delta' | 'subagent_thinking_delta' | 'subagent_context_usage' | 'inbox_admitted' | 'question_requested' | 'error' | 'done' | 'dashboard_spec'
+export type SSEEventType = 'message' | 'message_end' | 'token_usage' | 'generation_speed' | 'context_compression' | 'thinking' | 'tool' | 'tool_started' | 'tool_progress' | 'tool_completed' | 'tool_failed' | 'subagent_message' | 'subagent_message_delta' | 'subagent_thinking_delta' | 'subagent_context_usage' | 'subagent_context_compression' | 'inbox_admitted' | 'question_requested' | 'error' | 'done' | 'dashboard_spec'
 
 export interface UserQuestionOption {
   label: string
@@ -676,7 +724,7 @@ export interface ToolEventData {
 }
 
 export interface ToolLifecycleEventData extends ToolEventData {
-  type: 'tool_started' | 'tool_progress' | 'tool_completed' | 'tool_failed' | 'subagent_message' | 'subagent_message_delta' | 'subagent_thinking_delta' | 'subagent_context_usage'
+  type: 'tool_started' | 'tool_progress' | 'tool_completed' | 'tool_failed' | 'subagent_message' | 'subagent_message_delta' | 'subagent_thinking_delta' | 'subagent_context_usage' | 'subagent_context_compression'
   progress?: number
   accumulated_args?: Record<string, unknown>
   content?: string
@@ -696,10 +744,25 @@ export interface ToolLifecycleEventData extends ToolEventData {
   removed_lines?: number
   // tool_progress：流式提取的调用意图（args 未解析前提前推送，长耗时工具执行中即可展示）
   intent?: string
+  /** subagent_context_compression：压缩记录 id（去重） */
+  id?: string
   // subagent_context_usage：子图上下文用量快照（每个节点更新后推送一次，最终值随 task 结果持久化）
   used_tokens?: number
   threshold_tokens?: number
+  /** task 完成事件：子图 token 用量（billing 口径） */
+  subagent_token_usage?: SubagentTokenUsage
+  /** subagent_context_usage：子图上下文计量明细（与主对话 token_usage 同结构） */
+  token_usage_detail?: ChatDataTokenUsage
+  /** subagent_context_compression：一次完成的子图压缩记录 */
+  estimated_tokens_before?: number
+  estimated_tokens_after?: number
+  estimated_cleared_tokens?: number
+  compressed_messages?: number
+  context_window?: number
+  /** 占模型上下文窗口比例（与主对话同口径） */
   percent?: number
+  /** 占收尾阈值比例（100% 触发提前收尾） */
+  budget_percent?: number
 }
 
 // 语义层配置

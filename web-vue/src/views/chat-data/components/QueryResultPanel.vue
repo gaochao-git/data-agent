@@ -44,15 +44,7 @@ type ResultTabItem = {
   status?: 'success' | 'error' | 'none'
 }
 
-interface QueryResultPanelItem {
-  key?: string | number
-  title?: string
-  resultData: string
-  sql?: string
-  memberDatasourceId?: string
-  memberName?: string
-  status?: 'success' | 'error' | 'none'
-}
+import type { QueryResultPanelItem } from '../types'
 
 type ViewMode = 'vertical' | 'card' | ChartType
 

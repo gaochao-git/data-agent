@@ -1,0 +1,24 @@
+/* 「工作中」九宫格像素动画（参考 ZCode chat loading 指示器同款实现）。
+   结构：13px 的 3×3 grid，9 个 1px 圆角方块按螺旋顺序 110ms 错峰闪烁，
+   中心块恒暗不参与动画；周期与峰值透明度对齐 ZCode（950ms / 0.75）。 */
+.chat-loading-pixel {
+  animation: chat-loading-pixel-on 950ms ease-in-out infinite;
+}
+
+@keyframes chat-loading-pixel-on {
+  0%,
+  100% {
+    opacity: 0.15;
+    transform: scale(1);
+  }
+  35% {
+    opacity: var(--loading-pixel-peak, 0.75);
+    transform: scale(1.08);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-loading-pixel {
+    animation: none;
+  }
+}

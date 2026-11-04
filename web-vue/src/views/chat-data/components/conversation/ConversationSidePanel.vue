@@ -1,27 +1,56 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { isScrolledToBottom } from '../../utils/scrollFollow'
 
 interface Props {
   open: boolean
-  title: string
+  title?: string
   subtitle?: string
   triggerLabel?: string
   showTrigger?: boolean
   /** 是否渲染面板头部的关闭按钮（✕）。调用方若已有其它开关入口可传 false 隐藏。 */
   showClose?: boolean
+  /** 内容增长时贴底自动跟随（与主对话同一口径：距底 100px 内跟随，用户上翻暂停） */
+  autoFollow?: boolean
+  /** 内容自己铺满并内部滚动（文件管理树 / 文件预览），关闭面板整体滚动 */
+  fillBody?: boolean
+  /** 是否显示 tab 次级工具条（避免只有空行时也占一条高度） */
+  showSubheader?: boolean
 }
 
-withDefaults(defineProps<Props>(), {
+const props = withDefaults(defineProps<Props>(), {
+  title: '工作区',
   subtitle: '',
   triggerLabel: '工作区',
   showTrigger: true,
   showClose: true,
+  autoFollow: false,
+  fillBody: false,
+  showSubheader: false,
 })
 
 const emit = defineEmits<{
   open: []
   close: []
 }>()
+
+defineExpose({
+  /** 面板内容滚动位置（tab 切换时保存/恢复，避免定位丢失） */
+  getBodyScrollTop: () => bodyRef.value?.scrollTop ?? 0,
+  setBodyScrollTop: (top: number) => {
+    const element = bodyRef.value
+    if (!element) return
+    element.scrollTop = Math.max(top, 0)
+    // 恢复位置后按真实位置重算贴底态，避免随后的跟随逻辑把位置又拉回底部
+    bodyNearBottom.value = isScrolledToBottom(element)
+  },
+  scrollBodyToBottom: () => {
+    const element = bodyRef.value
+    if (!element) return
+    element.scrollTop = element.scrollHeight
+    bodyNearBottom.value = true
+  },
+})
 
 const MIN_PANEL_WIDTH = 320
 const MAX_PANEL_WIDTH = 900
@@ -30,6 +59,68 @@ const MIN_CHAT_WIDTH = 280
 
 // 宽度：null 表示沿用样式表的 `w-[40%]`（含 min/max clamp），首次拖拽后转为固定 px
 const panelWidth = ref<number | null>(null)
+
+// ---- 内容贴底跟随（子智能体过程流式增长时自动滚到最新）----
+// 与主对话共用 isScrolledToBottom（100px 阈值）：用户上翻查看历史即暂停，
+// 滚回底部附近后内容继续增长时自动恢复跟随。
+const bodyRef = ref<HTMLElement | null>(null)
+const bodyNearBottom = ref(true)
+let bodyMutationObserver: MutationObserver | null = null
+let followFrame: number | null = null
+
+const scheduleFollowScroll = () => {
+  if (!props.autoFollow || !bodyNearBottom.value || followFrame !== null) return
+  followFrame = requestAnimationFrame(() => {
+    followFrame = null
+    const element = bodyRef.value
+    if (element && bodyNearBottom.value) element.scrollTop = element.scrollHeight
+  })
+}
+
+const handleBodyScroll = () => {
+  const element = bodyRef.value
+  if (element) bodyNearBottom.value = isScrolledToBottom(element)
+}
+
+const stopFollow = () => {
+  bodyMutationObserver?.disconnect()
+  bodyMutationObserver = null
+  if (followFrame !== null) {
+    cancelAnimationFrame(followFrame)
+    followFrame = null
+  }
+}
+
+const startFollow = () => {
+  stopFollow()
+  const element = bodyRef.value
+  if (!element) return
+  bodyNearBottom.value = true
+  bodyMutationObserver = new MutationObserver(scheduleFollowScroll)
+  bodyMutationObserver.observe(element, { childList: true, subtree: true, characterData: true })
+}
+
+/**
+ * 跟随开关与面板可见性必须一起判定：面板是 v-if 渲染的，点开工具详情时
+ * autoFollow 变 true 的那一刻 body 还没挂载，只监听 autoFollow 会拿到空 ref
+ * → observer 永远不挂，表现为「不自动滚、底部内容看不到」。统一等 DOM 更新后再挂。
+ */
+const syncFollow = async () => {
+  await nextTick()
+  if (!props.autoFollow || !props.open) {
+    stopFollow()
+    return
+  }
+  if (!bodyMutationObserver) startFollow()
+  // 不强制贴底：用户切回某个 tab 时可能正停在中间，强制 true 会被跟随逻辑拉回底部
+  const element = bodyRef.value
+  if (element) bodyNearBottom.value = isScrolledToBottom(element)
+  if (bodyNearBottom.value) scheduleFollowScroll()
+}
+
+onMounted(() => { void syncFollow() })
+onBeforeUnmount(stopFollow)
+watch([() => props.autoFollow, () => props.open], () => { void syncFollow() }, { flush: 'post' })
 const isResizing = ref(false)
 const panelRef = ref<HTMLElement | null>(null)
 let detachResizeListeners: (() => void) | null = null
@@ -106,7 +197,7 @@ onBeforeUnmount(stopResize)
   <aside
     v-if="open"
     ref="panelRef"
-    class="relative flex w-[40%] min-w-[380px] max-w-[580px] flex-col border-l border-slate-200 bg-white"
+    class="relative flex min-h-0 w-[40%] min-w-[380px] max-w-[580px] flex-col border-l border-slate-200 bg-white"
     :style="panelStyle"
   >
     <!-- 左边缘拖拽调宽 -->
@@ -121,18 +212,21 @@ onBeforeUnmount(stopResize)
       />
     </div>
 
-    <div class="flex h-14 items-center gap-3 border-b border-slate-100 px-4">
+    <div
+      class="flex items-center gap-3 border-b border-slate-100 px-4"
+      :class="$slots.tabs ? 'h-12' : 'h-14'"
+    >
       <div class="flex min-w-0 flex-1 items-center gap-2">
-        <div class="min-w-0">
-          <div class="truncate text-sm font-semibold text-slate-800">{{ title }}</div>
-          <div v-if="subtitle" class="mt-0.5 truncate font-mono text-xs text-slate-400">
-            {{ subtitle }}
+        <!-- 面板 tab 条：调用方提供时替代标题区（tab 即身份，不再重复标题/副标题） -->
+        <slot name="tabs">
+          <div class="min-w-0">
+            <div class="truncate text-sm font-semibold text-slate-800">{{ title }}</div>
+            <div v-if="subtitle" class="mt-0.5 truncate font-mono text-xs text-slate-400">
+              {{ subtitle }}
+            </div>
           </div>
-        </div>
-        <!-- 标题行的延伸信息（如工作区根路径 + 一键折叠全部目录）：与标题同一行、紧跟标题之后。
-             放在标题组内而不是 header-extra，是因为标题组本身是 flex-1——插在这里的内容紧贴标题，
-             插在 header-extra 会被整段推到行尾，跟右侧数量徽标挤成一组。 -->
-        <slot name="header-inline" />
+        </slot>
+
       </div>
       <!-- 头部附加信息（如工作区文件数量）：靠右对齐，
            与下方文件树里目录行右端的数量徽标落在同一条竖线上，整体更统一。
@@ -149,7 +243,20 @@ onBeforeUnmount(stopResize)
         <i class="fa-solid fa-xmark"></i>
       </button>
     </div>
-    <div class="flex-1 overflow-auto p-4">
+    <!-- tab 自己的次级工具条（如子智能体的模式切换/上下文用量）：固定一条、不侵入 tab 条 -->
+    <div
+      v-if="showSubheader && $slots.subheader"
+      class="flex shrink-0 items-center gap-2 border-b border-slate-100 px-4 py-1.5"
+    >
+      <slot name="subheader" />
+    </div>
+    <div
+      ref="bodyRef"
+      class="min-h-0 flex-1 p-4"
+      :class="fillBody ? 'flex flex-col overflow-hidden' : 'overflow-auto'"
+      data-side-panel-body
+      @scroll.passive="handleBodyScroll"
+    >
       <slot />
     </div>
   </aside>

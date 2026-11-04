@@ -239,6 +239,7 @@ class ConversationEventDao:
         user_id: str,
         limit: int | None = None,
         before_sequence: int | None = None,
+        strict_limit: bool = False,
     ) -> tuple[list[ChatDataConversationEvent], bool]:
         """读取可见历史事件窗口，返回 (按序号升序的事件, 是否还有更早)。
 
@@ -272,11 +273,22 @@ class ConversationEventDao:
         tail = list(reversed(list(tail_result.scalars().all())))
         if not tail:
             return [], False
-        cutoff = await self._expand_cutoff_to_turn_closure(
-            session,
-            conditions=conditions,
-            cutoff=int(tail[0].sequence_no),
-        )
+        if strict_limit:
+            # 硬上限：不补齐整轮，直接返回尾部窗口；更早内容仍可通过
+            # before_sequence 继续翻页，避免长轮次把 limit 放大成整轮。
+            # 向前收敛到最近的用户/助手消息边界，避免首行落在 tool_result 上、
+            # 丢失对应的 tool_call 定义而渲染出孤立结果。
+            cutoff = int(tail[0].sequence_no)
+            for row in tail:
+                if row.event_type in ("user_message", "assistant_message"):
+                    cutoff = int(row.sequence_no)
+                    break
+        else:
+            cutoff = await self._expand_cutoff_to_turn_closure(
+                session,
+                conditions=conditions,
+                cutoff=int(tail[0].sequence_no),
+            )
         window_result = await session.execute(
             stmt.where(ChatDataConversationEvent.sequence_no >= cutoff).order_by(
                 ChatDataConversationEvent.sequence_no.asc(), ChatDataConversationEvent.id.asc()

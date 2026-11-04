@@ -13,18 +13,19 @@
  * 注意：Props 用运行时声明 + PropType（不用外部类型做 defineProps<T> 泛型），
  * 见 AGENTS.md 4.3 —— chat-data 会被嵌入未安装 typescript 的宿主项目。
  */
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, provide, ref, watch } from 'vue'
 import type { PropType } from 'vue'
+import type { ChatDataTokenUsage } from '../../types'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { SemanticYamlFile, ToolCallInfo } from '../../types'
 import ConversationSidePanel from './ConversationSidePanel.vue'
-import ChartSpecRenderer from '../ChartSpecRenderer.vue'
-import MarkdownFilePreview from './MarkdownFilePreview.vue'
-import HtmlPagePreview from './HtmlPagePreview.vue'
-import CodeFilePreview from './CodeFilePreview.vue'
-import OntologyCatalogGraph from './OntologyCatalogGraph.vue'
-import MermaidFilePreview from './MermaidFilePreview.vue'
 import ToolCallDetailPanel from './ToolCallDetailPanel.vue'
+import AgentProcessView from './AgentProcessView.vue'
+import RightSidebarTabStrip from './RightSidebarTabStrip.vue'
+import FileManagerTab from './FileManagerTab.vue'
+import FilePreviewTab from './FilePreviewTab.vue'
+import { WorkspaceFilesContextKey } from '../../composables/workspaceFilesContext'
+import { useRightSidebarTabs, WORKSPACE_TAB_ID, type RightSidebarTab } from '../../composables/useRightSidebarTabs'
 import {
   deleteConversationWorkspaceFile,
   getConversationWorkspaceFileContent,
@@ -34,18 +35,15 @@ import {
   getConversationWorkspaceArchive,
   uploadFile,
   type ConversationWorkspaceFile,
+  type ConversationWorkspaceUsage,
 } from '../../api'
 import {
   collapseAllDirectories,
   collectCollapsibleDirectoryPaths,
   DEFAULT_COLLAPSED_CONSOLE_DIRECTORIES,
   expandAllDirectories,
-  formatFileSize,
-  flattenFileTreeNodes,
   consoleTreeIndentStyle,
   consoleTreeLeadSlotStyle,
-  CONSOLE_TREE_TIME_COLUMN_CLASS,
-  CONSOLE_TREE_SIZE_COLUMN_CLASS,
   getFileCount,
   isTreeFullyCollapsed,
   isWorkspaceFileDeletable,
@@ -55,20 +53,21 @@ import {
   normalizeVisiblePath,
   buildProducedFileTree,
   buildProducedFiles,
-  toSandboxDisplayPath,
   type ProducedFile,
 } from '../../utils/consoleFileTree'
 import { evictWorkspaceFileCache } from '../../utils/workspacePreviewCache'
-import { formatEpochDateTime, fileIconClass, IMAGE_PREVIEW_EXTENSIONS, IMAGE_PREVIEW_MIME, OFFICE_HTML_PREVIEW_EXTENSIONS, isBinaryPreviewPath } from '../../utils'
+import { IMAGE_PREVIEW_EXTENSIONS, IMAGE_PREVIEW_MIME, OFFICE_HTML_PREVIEW_EXTENSIONS, isBinaryPreviewPath } from '../../utils'
 import { formatToolTableCell, parseChartSpecValue, replaceVisiblePathsForDisplay } from '../../utils/messageArtifacts'
+import ConversationTokenUsage from './ConversationTokenUsage.vue'
 import { extractChangedFilePathsFromResult, extractWrittenFilePathCandidates } from '../../utils/toolDisplay'
 import { ACCEPTED_FILE_TYPES, MAX_FILE_SIZE } from '../../utils/uploadLimits'
 
 const props = defineProps({
   conversationId: { type: String as PropType<string | null>, default: null },
   open: { type: Boolean, default: false },
-  tab: { type: String as PropType<'console' | 'tool'>, default: 'console' },
   activeToolCall: { type: Object as PropType<ToolCallInfo | null>, default: null },
+  /** 按 tool_call_id 解析工具调用（tab 内容按 id 取，不依赖父级当前选中） */
+  resolveToolCall: { type: Function as PropType<(toolCallId: string) => ToolCallInfo | null>, default: null },
   /** Run 执行中禁用删除（沙箱回写冲突），与父级 runBusy 同源 */
   runBusy: { type: Boolean, default: false },
   /** 是否显示「导入为语义模型」行操作（管理员权限，与配置入口同源） */
@@ -80,23 +79,151 @@ const props = defineProps({
 
 const emit = defineEmits<{
   'update:open': [value: boolean]
-  'update:tab': [value: 'console' | 'tool']
   conversationCreated: [conversationId: string]
   /** 工作区 yaml 一键导入语义模型：文件内容已在面板内读取完毕 */
   importSemanticYaml: [files: SemanticYamlFile[]]
+  /** 完整过程区内层工具再次选中：切到对应工具详情 */
+  selectTool: [toolCall: ToolCallInfo]
 }>()
+
+// 右侧栏 tab 状态由 useRightSidebarTabs 唯一持有（列表/激活/复用/关闭/滚动记忆）
+const {
+  tabs: panelTabs,
+  activeTabId: activePanelTabId,
+  activeTab: activePanelTab,
+  isWorkspaceTabActive,
+  isToolTabActive,
+  displayToolTab,
+  selectTab,
+  activateTab,
+  activateWorkspace,
+  closeTab,
+  rememberScroll,
+  scrollTopFor,
+  resetTabs,
+} = useRightSidebarTabs()
+
+const sidePanelRef = ref<InstanceType<typeof ConversationSidePanel> | null>(null)
+
+const toolCallForTab = (tab: RightSidebarTab | null | undefined): ToolCallInfo | null => {
+  const toolCallId = tab?.toolCallId
+  if (!toolCallId) return null
+  const resolved = props.resolveToolCall?.(toolCallId)
+  if (resolved) return resolved
+  return props.activeToolCall?.tool_call_id === toolCallId ? props.activeToolCall : null
+}
+
+const displayToolCall = computed(() => toolCallForTab(displayToolTab.value))
+const displayTabIsAgentProcess = computed(() => displayToolTab.value?.kind === 'agentProcess')
+const displayTabIsToolDetail = computed(() => displayToolTab.value?.kind === 'tool')
+// 每个子智能体 tab 各渲染一份过程视图（v-for 常驻）：多开时内容不串、展开态与位置各自保留
+const agentProcessTabs = computed(() => panelTabs.value.filter(tab => tab.kind === 'agentProcess'))
+
+/** 选中 task 调用时，工具视图额外展示「完整过程」（与主对话共用同一套消息/工具组件） */
+const subagentTaskCall = computed(() => {
+  const toolCall = displayToolCall.value
+  return toolCall?.tool_name === 'task' && (toolCall.subagentTrail?.length ?? 0) > 0 ? toolCall : null
+})
+
+/** 切换 tab：保存旧 tab 滚动位置、按需恢复新 tab 内容/位置（滚动读写由本组件持有）。 */
+// 复用主对话的上下文占用组件：有计量明细直接用明细；旧会话/首轮前用快照兜底，保证点击能打开同样面版
+const subagentUsageForPanel = computed<ChatDataTokenUsage | null>(() => {
+  const detail = subagentTaskCall.value?.subagentTokenUsageDetail
+  if (detail) return detail
+  const snapshot = subagentTaskCall.value?.subagentContextUsage
+  if (!snapshot) return null
+  return {
+    used: snapshot.used_tokens,
+    total: snapshot.context_window ?? snapshot.threshold_tokens,
+    percentage: snapshot.percent,
+    current_input_tokens: snapshot.used_tokens,
+    compression_trigger_tokens: snapshot.threshold_tokens,
+    context_window: snapshot.context_window,
+    estimated: true,
+  }
+})
+
+const selectPanelTab = (tabId: string) => {
+  const previousTabId = activePanelTabId.value
+  if (tabId !== previousTabId) rememberScroll(previousTabId, sidePanelRef.value?.getBodyScrollTop() ?? 0)
+  const tab = panelTabs.value.find(item => item.id === tabId)
+  // 文件 tab 各自持有路径：切回某个文件 tab 时恢复它的内容
+  if (tab?.kind === 'file' && tab.path && tab.path !== selectedConsoleFilePath.value) {
+    selectConsoleFile(tab.path)
+    void loadWorkspaceFileContent(props.conversationId, tab.path)
+  }
+  selectTab(tabId)
+  emit('update:open', true)
+  void nextTick(() => {
+    const sidePanel = sidePanelRef.value
+    if (!sidePanel) return
+    const savedTop = scrollTopFor(tabId)
+    const followActive = isToolTabActive.value && toolViewMode.value === 'agent' && Boolean(subagentTaskCall.value)
+    // 首次打开跟随型 tab → 停在最新；切回已有 tab → 恢复上次位置
+    if (savedTop === undefined && followActive) {
+      sidePanel.scrollBodyToBottom()
+      return
+    }
+    sidePanel.setBodyScrollTop(savedTop ?? 0)
+  })
+}
+
+const closePanelTab = (tabId: string) => {
+  const fallbackId = closeTab(tabId)
+  // 关闭当前 tab 时回到相邻 tab：file tab 需要恢复自己的预览内容
+  if (fallbackId) selectPanelTab(fallbackId)
+}
+
+const openWorkspacePanelTab = () => {
+  void activateWorkspace()
+  selectPanelTab(WORKSPACE_TAB_ID)
+}
+
+const openToolPanelTab = (toolCall: ToolCallInfo) => {
+  const isTask = toolCall.tool_name === 'task' && (toolCall.subagentTrail?.length ?? 0) > 0
+  const subagentType = typeof toolCall.args?.subagent_type === 'string' ? toolCall.args.subagent_type.trim() : ''
+  activateTab({
+    id: `${isTask ? 'agent' : 'tool'}:${toolCall.tool_call_id}`,
+    kind: isTask ? 'agentProcess' : 'tool',
+    title: isTask ? (subagentType ? `${subagentType} 子智能体` : '子智能体') : '工具详情',
+    toolCallId: toolCall.tool_call_id,
+  })
+  selectPanelTab(`${isTask ? 'agent' : 'tool'}:${toolCall.tool_call_id}`)
+}
+
+const openFilePanelTab = (path: string) => {
+  const fileName = path.split('/').pop() || path
+  activateTab({ id: `file:${path}`, kind: 'file', title: fileName, path })
+  selectPanelTab(`file:${path}`)
+}
+
+/**
+ * 工具详情 tab 的展示方式（仅子智能体 task 调用可选）：
+ * - agent：智能体模式，按聊天记录复用主对话消息组件；
+ * - generic：通用模式，与普通工具一致，只看参数与结果。
+ * 两种模式互斥渲染，不堆叠。
+ */
+const toolViewMode = ref<'agent' | 'generic'>('agent')
+
+watch(() => displayToolCall.value?.tool_call_id, () => {
+  // 每次选中新的子智能体任务默认回到聊天方式；普通工具不涉及该状态
+  if (subagentTaskCall.value) toolViewMode.value = 'agent'
+})
 
 const selectedConsoleFilePath = ref<string | null>(null)
 // 默认只收起 uploads / workspace，outputs 保持展开——理由见 consoleFileTree.ts 里的常量注释。
 const collapsedConsoleDirectories = ref<Set<string>>(new Set(DEFAULT_COLLAPSED_CONSOLE_DIRECTORIES))
-const consoleFilePreviewMode = ref<'render' | 'table' | 'source' | 'graph'>('render')
+const consoleFilePreviewMode = ref<'render' | 'table' | 'source'>('render')
 const workspaceFiles = ref<ConversationWorkspaceFile[]>([])
+const workspaceUsage = ref<ConversationWorkspaceUsage>({ used_bytes: 0, limit_bytes: 0, limit_mb: 0, percentage: 0 })
 const workspaceFileContents = ref<Record<string, string>>({})
 const workspaceFileBlobs = ref<Record<string, { url: string; arrayBuffer: ArrayBuffer; ext: string; mime: string; error?: boolean }>>({})
 const workspaceFilePreviewRef = ref<HTMLElement | null>(null)
 const isWorkspaceFilePreviewFullscreen = ref(false)
 const selectedConsoleOfficeHtml = ref<string | null>(null)
 const selectedConsoleOfficePreviewReason = ref<string | null>(null)
+// Office 预览按路径缓存：切回已打开的文件 tab 时直接复用，不再重新请求 HTML
+const officePreviewCache = ref<Record<string, { html: string | null; reason: string | null }>>({})
 const loadingOfficePreviewKey = ref<string | null>(null)
 const workspaceFilePreviewRequestSequence = ref(0)
 const loadingOfficePreviewSequence = ref<number | null>(null)
@@ -126,14 +253,10 @@ const SHOW_CONSOLE_FILE_PLACEHOLDER = false
 const producedFiles = computed<ProducedFile[]>(() => buildProducedFiles(workspaceFiles.value))
 const producedFileTree = computed(() => buildProducedFileTree(producedFiles.value))
 
-const sidePanelTitle = computed(() => props.tab === 'console' ? '工作区' : '工具详情')
+
 // 工作区 tab 不再在头部重复显示根路径——文件树根节点已经写着同一个路径，
 // 需要恢复时把下面的 '' 换回 producedFileTree.value.root
-const sidePanelSubtitle = computed(() => (
-  props.tab === 'console'
-    ? ''
-    : '工具调用参数与结果'
-))
+
 
 const selectedConsoleFile = computed(() => {
   const selectedPath = selectedConsoleFilePath.value
@@ -196,8 +319,9 @@ const selectConsoleFile = (path: string) => {
     return
   }
 
-  selectedConsoleOfficeHtml.value = null
-  selectedConsoleOfficePreviewReason.value = null
+  const cachedOffice = officePreviewCache.value[normalizedPath]
+  selectedConsoleOfficeHtml.value = cachedOffice?.html ?? null
+  selectedConsoleOfficePreviewReason.value = cachedOffice?.reason ?? null
   loadingOfficePreviewKey.value = null
   consoleFilePreviewMode.value = 'render'
 }
@@ -216,6 +340,25 @@ const toggleWorkspaceFilePreviewFullscreen = async () => {
   await preview.requestFullscreen()
 }
 
+// 面板开关：关闭前记住当前 tab 的滚动位置，重新打开时恢复（关闭会卸载 body，滚动位置否则归零）
+watch(() => props.open, (open) => {
+  if (!open) {
+    rememberScroll(activePanelTabId.value, sidePanelRef.value?.getBodyScrollTop() ?? 0)
+    return
+  }
+  void nextTick(() => {
+    const sidePanel = sidePanelRef.value
+    if (!sidePanel) return
+    const followActive = isToolTabActive.value && toolViewMode.value === 'agent' && Boolean(subagentTaskCall.value)
+    const savedTop = scrollTopFor(activePanelTabId.value)
+    if (savedTop === undefined && followActive) {
+      sidePanel.scrollBodyToBottom()
+      return
+    }
+    sidePanel.setBodyScrollTop(savedTop ?? 0)
+  })
+})
+
 onMounted(() => {
   document.addEventListener('fullscreenchange', syncWorkspaceFilePreviewFullscreen)
 })
@@ -227,9 +370,11 @@ onUnmounted(() => {
 const loadWorkspaceFiles = async (conversationId: string | null | undefined) => {
   if (!conversationId) {
     workspaceFiles.value = []
+    workspaceUsage.value = { used_bytes: 0, limit_bytes: 0, limit_mb: 0, percentage: 0 }
     Object.values(workspaceFileBlobs.value).forEach(b => { if (b.url) URL.revokeObjectURL(b.url) })
     workspaceFileBlobs.value = {}
     workspaceFileContents.value = {}
+    officePreviewCache.value = {}
     selectedConsoleOfficeHtml.value = null
     selectedConsoleOfficePreviewReason.value = null
     loadingOfficePreviewKey.value = null
@@ -240,6 +385,7 @@ const loadWorkspaceFiles = async (conversationId: string | null | undefined) => 
     const response = await getConversationWorkspaceFiles(conversationId)
     if (conversationId !== props.conversationId) return
     workspaceFiles.value = response.data?.files || []
+    if (response.data?.usage) workspaceUsage.value = response.data.usage
   } catch (err) {
     if (conversationId !== props.conversationId) return
     workspaceFiles.value = []
@@ -295,6 +441,14 @@ const loadWorkspaceFileContent = async (
   if (!conversationId || !path) return
   const ext = path.split('.').pop()?.toLowerCase() || ''
   const officeRequestKey = `${conversationId}:${path}`
+  if (!options.forceReload && OFFICE_HTML_PREVIEW_EXTENSIONS.has(ext)) {
+    const cachedOffice = officePreviewCache.value[path]
+    if (cachedOffice) {
+      selectedConsoleOfficeHtml.value = cachedOffice.html
+      selectedConsoleOfficePreviewReason.value = cachedOffice.reason
+      return
+    }
+  }
   if (
     !options.forceReload
     && OFFICE_HTML_PREVIEW_EXTENSIONS.has(ext)
@@ -399,11 +553,19 @@ const loadWorkspaceOfficeHtmlPreview = async (
     selectedConsoleOfficePreviewReason.value = selectedConsoleOfficeHtml.value
       ? null
       : (preview?.reason || 'preview_unavailable')
+    officePreviewCache.value = {
+      ...officePreviewCache.value,
+      [path]: { html: selectedConsoleOfficeHtml.value, reason: selectedConsoleOfficePreviewReason.value },
+    }
   } catch (err) {
     if (!isCurrentWorkspaceFilePreviewRequest(conversationId, path, requestSequence)) return
     if (!forceReload || !selectedConsoleOfficeHtml.value) {
       selectedConsoleOfficeHtml.value = null
       selectedConsoleOfficePreviewReason.value = 'preview_failed'
+      officePreviewCache.value = {
+        ...officePreviewCache.value,
+        [path]: { html: null, reason: 'preview_failed' },
+      }
     }
     console.warn('OfficeCLI 文件预览不可用:', err)
   } finally {
@@ -472,11 +634,6 @@ const selectedConsoleIsImage = computed(() => IMAGE_PREVIEW_EXTENSIONS.has(selec
 const selectedConsoleIsMarkdown = computed(() => selectedConsoleFileExt.value === 'md')
 const selectedConsoleIsMermaid = computed(() => selectedConsoleFileExt.value === 'mmd')
 const selectedConsoleIsYaml = computed(() => ['yaml', 'yml'].includes(selectedConsoleFileExt.value))
-// 图谱预览只对本体目录物化产物开放（任意 YAML 画图会误判；语义模型 YAML 结构不同不适用）。
-// 本体目录已与语义资产同放 semantic/（目录二选一），旧 ontology/ 路径保留兼容历史会话残留。
-const selectedConsoleIsOntologyCatalog = computed(() =>
-  /workspace\/(semantic|ontology)\/_ontology_catalog\.(yaml|yml)$/.test(selectedConsoleFilePath.value || '')
-)
 const selectedConsoleIsHtml = computed(() => selectedConsoleFileExt.value === 'html' || selectedConsoleFileExt.value === 'htm')
 // HTML 渲染必须用原始文本：展示层的路径改写会破坏内联 JSON 数据与代码。仅源码视图走替换后的展示文案。
 const selectedConsoleHtmlDocument = computed(() => {
@@ -484,9 +641,10 @@ const selectedConsoleHtmlDocument = computed(() => {
   if (!selectedPath || !selectedConsoleIsHtml.value) return ''
   return workspaceFileContents.value[selectedPath] ?? ''
 })
-const workspaceFilePreviewHeightClass = computed(() => (
-  isWorkspaceFilePreviewFullscreen.value ? 'h-[calc(100vh-48px)]' : 'h-[46vh]'
-))
+const workspaceFilePreviewHeightClass = computed(() => {
+  if (isWorkspaceFilePreviewFullscreen.value) return 'h-[calc(100vh-48px)]'
+  return activePanelTab.value.kind === 'file' ? 'h-full' : 'h-[46vh]'
+})
 const selectedConsoleBinaryBlob = computed(() => {
   const p = selectedConsoleFilePath.value
   if (!p) return null
@@ -600,6 +758,38 @@ const handleCopyWorkspacePreviewContent = () => {
   }
   void copyPreviewText(text, '已复制文件内容')
 }
+
+// 预览头部路径：左侧固定前缀（/mnt/user-data/...）截掉不占宽度，优先露出有区分度的
+// 文件名与上一层目录；完整路径放到 title/hover
+// 预览头部路径：参照 DSH PathLabel —— 目录弱化成 tertiary、文件名保持主色；
+// 放不下时容器右对齐裁掉左侧（固定前缀先被裁），左侧用 28px 渐变淡出代替省略号。
+const selectedConsolePathParts = computed(() => {
+  const full = selectedConsoleFile.value?.displayPath || ''
+  const root = producedFileTree.value.root
+  const relative = root && full.startsWith(`${root}/`) ? full.slice(root.length + 1) : full
+  const index = relative.lastIndexOf('/')
+  return index >= 0
+    ? { directory: relative.slice(0, index + 1), name: relative.slice(index + 1) }
+    : { directory: '', name: relative }
+})
+const previewPathRef = ref<HTMLElement | null>(null)
+const previewPathInnerRef = ref<HTMLElement | null>(null)
+const previewPathClipped = ref(false)
+let previewPathObserver: ResizeObserver | null = null
+const syncPreviewPathClip = () => {
+  const outer = previewPathRef.value
+  const inner = previewPathInnerRef.value
+  if (outer && inner) previewPathClipped.value = inner.offsetWidth > outer.clientWidth
+}
+onMounted(() => {
+  void nextTick(syncPreviewPathClip)
+  if (typeof ResizeObserver === 'undefined') return
+  previewPathObserver = new ResizeObserver(syncPreviewPathClip)
+  if (previewPathRef.value) previewPathObserver.observe(previewPathRef.value)
+  if (previewPathInnerRef.value) previewPathObserver.observe(previewPathInnerRef.value)
+})
+onUnmounted(() => { previewPathObserver?.disconnect() })
+watch(() => selectedConsoleFile.value?.displayPath, () => { void nextTick(syncPreviewPathClip) })
 
 const handleCopyWorkspacePreviewPath = () => {
   const path = selectedConsoleFile.value?.displayPath || ''
@@ -868,8 +1058,7 @@ const openFile = async (path: string) => {
     await loadWorkspaceFiles(conversationId)
   }
   selectConsoleFile(relativePath)
-  emit('update:tab', 'console')
-  emit('update:open', true)
+  openFilePanelTab(relativePath)
   await loadWorkspaceFileContent(conversationId, relativePath)
 }
 
@@ -881,6 +1070,9 @@ watch(
     // 「切换到另一个已有会话」时的面板状态重置（null 边界交给重挂载与 loadWorkspaceFiles 清空）。
     if (prevId && nextId) {
       selectedConsoleFilePath.value = null
+      // 会话切换：面板 tab 回到工作区根，不把上个会话的工具/文件 tab 带过来
+      resetTabs()
+      officePreviewCache.value = {}
       selectedConsoleOfficeHtml.value = null
       selectedConsoleOfficePreviewReason.value = null
       loadingOfficePreviewKey.value = null
@@ -905,7 +1097,6 @@ watch(
     selectedConsoleIsMermaid.value,
     selectedConsoleIsHtml.value,
     selectedConsoleIsYaml.value,
-    selectedConsoleIsOntologyCatalog.value,
   ] as const,
   () => {
     if (selectedConsoleChartSpec.value) {
@@ -920,11 +1111,6 @@ watch(
       consoleFilePreviewMode.value = 'render'
       return
     }
-    // 本体目录默认进图谱（YAML 判定在其前，否则会被当作普通代码文件）
-    if (selectedConsoleIsOntologyCatalog.value) {
-      consoleFilePreviewMode.value = 'graph'
-      return
-    }
     if (selectedConsoleIsYaml.value) {
       consoleFilePreviewMode.value = 'render'
       return
@@ -933,9 +1119,86 @@ watch(
   }
 )
 
+provide(WorkspaceFilesContextKey, {
+  activePanelTab,
+  canImportSemanticModel: computed(() => props.canImportSemanticModel),
+  consoleTreeCollapsiblePaths,
+  consoleTreeIndentStyle,
+  consoleTreeLeadSlotStyle,
+  deletingConsoleFilePath,
+  getFileCount,
+  workspaceUsage,
+  handleDeleteConsoleFile,
+  handleDownloadConsoleDirectoryArchive,
+  handleDownloadConsoleFile,
+  handleImportSemanticYaml,
+  isConsoleArchiveDownloading,
+  isConsoleDirectoryCollapsed,
+  isConsoleTreeFullyCollapsed,
+  isFileTreeNodeCollapsed,
+  isGovernanceYaml,
+  isPdfFilePath,
+  isWorkspaceDirectoryArchiveDownloadable,
+  isWorkspaceFileDeletable,
+  isWorkspaceFileDownloadable,
+  importingSemanticFilePath,
+  isWorkspaceFileUploading,
+  isWorkspaceFilesLoading,
+  openFile,
+  openWorkspaceUploadPicker,
+  producedFileTree,
+  producedFiles,
+  runBusy: computed(() => props.runBusy),
+  selectedConsoleFilePath,
+  SHOW_CONSOLE_EMPTY_STATE,
+  syncTruncatedTitle,
+  toggleConsoleDirectory,
+  toggleConsoleTreeCollapsed,
+  conversationId: computed(() => props.conversationId),
+  consoleFilePreviewMode,
+  formatToolTableCell,
+  handleCopyWorkspacePreviewContent,
+  handleCopyWorkspacePreviewPath,
+  hasSelectedConsoleTable,
+  isWorkspaceFilePreviewFullscreen,
+  isWorkspaceRefreshBusy,
+  loadingOfficePreviewKey,
+  loadingWorkspaceFilePath,
+  previewPathClipped,
+  previewPathInnerRef,
+  previewPathRef,
+  refreshWorkspaceFiles,
+  selectedConsoleBinaryBlob,
+  selectedConsoleChartSpec,
+  selectedConsoleFile,
+  selectedConsoleFileText,
+  selectedConsoleHtmlDocument,
+  selectedConsoleIsHtml,
+  selectedConsoleIsImage,
+  selectedConsoleIsMarkdown,
+  selectedConsoleIsMermaid,
+  selectedConsoleIsOfficeFile,
+  selectedConsoleIsPdf,
+  selectedConsoleIsYaml,
+  selectedConsoleOfficeHtml,
+  selectedConsoleOfficePreviewReason,
+  selectedConsolePathParts,
+  selectedConsolePdfUrl,
+  selectedConsolePreviewRows,
+  selectedConsoleTableColumns,
+  SHOW_CONSOLE_FILE_PLACEHOLDER,
+  toggleWorkspaceFilePreviewFullscreen,
+  workspaceFilePreviewHeightClass,
+  workspaceFilePreviewRef,
+})
+
 defineExpose({
   /** 工具完成后的防抖刷新（列表 + 当前预览内容由各自请求自行触发） */
   scheduleRefresh: scheduleWorkspaceFilesRefresh,
+  /** 主对话点击工具卡：打开/激活对应工具详情或子智能体 tab */
+  openTool: openToolPanelTab,
+  /** 右上角面板入口：回到工作区 tab */
+  openWorkspace: openWorkspacePanelTab,
   /** 手动兜底刷新：同时刷列表与当前预览内容 */
   refreshFiles: refreshWorkspaceFiles,
   /** 工具写文件后的预览强制重载（仅当写的是当前预览文件） */
@@ -947,485 +1210,95 @@ defineExpose({
 
 <template>
   <ConversationSidePanel
+    ref="sidePanelRef"
     :open="open"
-    :title="sidePanelTitle"
-    :subtitle="sidePanelSubtitle"
+    :auto-follow="isToolTabActive && toolViewMode === 'agent' && Boolean(subagentTaskCall)"
+    :fill-body="isWorkspaceTabActive"
+    :show-subheader="isToolTabActive && Boolean(subagentTaskCall)"
     :show-trigger="false"
     :show-close="false"
-    @open="$emit('update:tab', 'console'); $emit('update:open', true)"
+    @open="$emit('update:open', true)"
     @close="$emit('update:open', false)"
   >
-    <!-- 头部这一行从左到右：标题「工作区」→ 工作区根路径 →「折叠/展开全部」按钮 →（行尾）文件数量。
-         根路径原先占着文件树的第一行（/mnt/user-data 文件夹行），上移到标题行后树里不再有
-         这一级、同一件事不重复表达，树也少一行高度；一键折叠/展开按钮跟着根路径走——它折叠的
-         就是这棵树里的全部目录，与各目录行左侧的箭头属同一族操作，紧挨根路径放语义最直白。
-         上传是 uploads 目录专属的写入入口，已下沉到 uploads 目录行（就近绑定）。
-         数量徽标贴行尾：pr-[13px] 让它与下方文件树里的数量徽标落在同一条竖线上——头部容器有 px-4(16px)，
-         文件树里的数量徽标右边缘距面板右沿 29px（内容区 p-4 16 + 树容器 px-1 4 + 目录区域边框 1 + 滚动容器 px-1 4 + 行 pr-1 4），
-         这里补 13px 补齐差值。改文件树的内边距或边框时要同步这一处。 -->
-    <template v-if="tab === 'console'" #header-inline>
-      <span class="min-w-0 truncate font-mono text-xs font-normal text-slate-400">{{ producedFileTree.root }}</span>
-      <button
-        v-if="consoleTreeCollapsiblePaths.length"
-        type="button"
-        class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-white text-[11px] leading-none text-slate-500 shadow-sm transition-colors hover:border-slate-300 hover:bg-slate-50 hover:text-slate-700 active:bg-slate-100"
-        :title="isConsoleTreeFullyCollapsed ? '展开全部目录' : '折叠全部目录'"
-        :aria-label="isConsoleTreeFullyCollapsed ? '展开全部目录' : '折叠全部目录'"
-        data-console-tree-toggle="true"
-        @click="toggleConsoleTreeCollapsed"
-      >
-        <i class="fa-solid" :class="isConsoleTreeFullyCollapsed ? 'fa-angles-down' : 'fa-angles-up'"></i>
-      </button>
+    <!-- 面板 tab 条：工作区常驻，工具详情 / 子智能体过程 / 文件各占一个 tab；
+         同对象再次打开只激活已有 tab，不替换其他内容。 -->
+    <template #tabs>
+      <RightSidebarTabStrip
+        :tabs="panelTabs"
+        :active-tab-id="activePanelTabId"
+        @select="selectPanelTab"
+        @close="closePanelTab"
+      />
     </template>
 
-    <template v-if="tab === 'console'" #header-extra>
-      <div class="flex shrink-0 items-center pr-[13px]">
-        <div class="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] leading-none text-slate-500">
-          {{ isWorkspaceFilesLoading ? '加载中' : `${producedFiles.length} 个文件` }}
-        </div>
-      </div>
-    </template>
-
-    <template v-if="tab === 'console'">
-      <!-- 树的左缩进体系：顶层目录行用 px-1.5（6px）作基准，子层用 consoleTreeIndentStyle(depth)。
-           改这里的 px-1.5 时必须同步 CONSOLE_TREE_INDENT_BASE_PX，否则第一级跨度会与后续级不等。
-           根路径（/mnt/user-data）那一行已上移到面板头部标题行，这里直接从顶层目录开始。
-           目录区域套一圈细边框，把「树」从面板的空白底上框出来：目录行是 7px 高、缩进逐级变化的
-           文字行，没有边界时视线容易散到面板空白处；框住之后区域范围一眼可见（也顺带标出
-           滚动区的范围）。空树时整块不渲染——留一个空框比不画更难解释。
-           树容器仍带 @container：「时间 / 大小」两列的显隐按它的宽度算，与边框无关。 -->
-      <div v-if="producedFileTree.directories.length" class="mb-3 px-1 py-1 text-xs @container">
-        <div class="max-h-[300px] space-y-0.5 overflow-auto rounded-md border border-slate-200 px-1 py-1">
-          <div
-            v-for="directory in producedFileTree.directories"
-            :key="directory.name"
-          >
-            <div class="flex h-7 min-w-0 items-center gap-1 rounded pr-1 transition-colors hover:bg-slate-50">
-              <button
-                type="button"
-                class="flex h-7 min-w-0 flex-1 items-center gap-1.5 border-none bg-transparent px-1.5 text-left text-slate-700"
-                @click="toggleConsoleDirectory(directory.path)"
-              >
-                <i class="w-3 shrink-0 text-[10px] text-slate-400" :style="consoleTreeLeadSlotStyle" :class="isConsoleDirectoryCollapsed(directory.name) ? 'fa-solid fa-chevron-right' : 'fa-solid fa-chevron-down'"></i>
-                <i class="fa-regular w-4 shrink-0 text-center text-amber-500" :class="isConsoleDirectoryCollapsed(directory.name) ? 'fa-folder' : 'fa-folder-open'"></i>
-                <span class="truncate font-mono font-semibold" @mouseenter="syncTruncatedTitle">{{ directory.name }}</span>
-                <span class="shrink-0 text-slate-400">{{ directory.label }}</span>
-              </button>
-              <!-- 上传入口挂在 uploads 目录行：它是 uploads 的唯一写入方，
-                   与「往这个目录补文件」在语义上就近绑定，比塞在面板头部更好找。
-                   该目录行由 PRODUCED_FILE_DIRECTORIES 常驻渲染，空会话也有入口。
-                   文件只落 uploads（不进消息附件），智能体需要时经 parse_document / file_list 自行读取。 -->
-              <button
-                v-if="directory.name === 'uploads'"
-                type="button"
-                class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border-none bg-transparent text-[11px] leading-none text-slate-400 transition-colors hover:bg-slate-200/70 hover:text-slate-700 disabled:opacity-50"
-                title="上传文件到工作区"
-                aria-label="上传文件到工作区"
-                :disabled="isWorkspaceFileUploading"
-                data-console-upload="true"
-                @click="openWorkspaceUploadPicker"
-              >
-                <i class="fa-solid" :class="isWorkspaceFileUploading ? 'fa-spinner fa-spin' : 'fa-upload'"></i>
-              </button>
-              <!-- 打包下载入口挂在 outputs 目录行：outputs 是智能体产出的汇聚地，
-                   是「一次拿走全部结果」的真实诉求；workspace 是中间文件、uploads
-                   内容用户本就有原件，不放开（见 utils/consoleFileTree.ts 白名单）。
-                   空目录不显示（打包只会得到报错）；大小限制在压缩产物，前端无预检。 -->
-              <button
-                v-if="directory.name === 'outputs' && getFileCount(directory)"
-                type="button"
-                class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border-none bg-transparent text-[11px] leading-none text-slate-400 transition-colors hover:bg-blue-100 hover:text-blue-600 disabled:opacity-50"
-                title="打包下载整个目录（zip）"
-                aria-label="打包下载整个目录"
-                :disabled="isConsoleArchiveDownloading === directory.name"
-                data-console-archive-download="true"
-                @click="handleDownloadConsoleDirectoryArchive(directory.name)"
-              >
-                <i class="fa-solid" :class="isConsoleArchiveDownloading === directory.name ? 'fa-spinner fa-spin' : 'fa-download'"></i>
-              </button>
-              <!-- 数量徽标统一放在每行最右端（按钮在其左侧），与面板头部同序：
-                   所有数量落在同一条竖线上，扫一眼就能纵向比对。 -->
-              <span v-if="getFileCount(directory)" class="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] leading-none text-slate-500">{{ getFileCount(directory) }}</span>
-            </div>
-            <div v-if="directory.children.length && !isConsoleDirectoryCollapsed(directory.name)" class="space-y-0.5">
-              <div
-                v-for="item in flattenFileTreeNodes(directory.children, 1, isFileTreeNodeCollapsed)"
-                :key="item.node.path"
-                class="min-w-0"
-              >
-                <!-- 文件行：单行承载「选中预览 + 行尾操作」。预览/下载按钮默认透明，
-                     hover 或该文件已选中时显现——面板窄、文件名长，常显会把文件名压没。
-                     预览按钮与点文件名等价（选中并在下方面板渲染），只是把动作显式化。 -->
-                <div
-                  v-if="item.node.file"
-                  :class="[
-                    'group flex h-7 min-w-0 items-center gap-0.5 rounded pr-1 transition-colors hover:bg-blue-50',
-                    selectedConsoleFilePath === item.node.file.relativePath ? 'bg-blue-50' : ''
-                  ]"
-                >
-                  <button
-                    type="button"
-                    :class="[
-                      'flex h-7 min-w-0 flex-1 items-center gap-1.5 border-none bg-transparent px-1.5 text-left transition-colors',
-                      selectedConsoleFilePath === item.node.file.relativePath ? 'text-blue-700' : 'text-slate-600 hover:text-blue-700'
-                    ]"
-                    :style="consoleTreeIndentStyle(item.depth)"
-                    @click="selectConsoleFile(item.node.file.relativePath)"
-                  >
-                    <!-- 占位与图标必须 shrink-0：文件名的 flex-basis 是 auto，取的是 max-content
-                         （长文件名可达 460px+）；只靠 truncate 的话，行内放不下时收缩量会按基础宽度
-                         比例摊到所有子项，这个 12px 占位和 16px 图标会被一起挤窄，
-                         导致「长文件名那一行」的图标与文字比上下行左移 6px/12px。 -->
-                    <span class="w-3 shrink-0"></span>
-                    <i class="w-4 shrink-0 text-center" :class="fileIconClass(item.node.name)"></i>
-                    <!-- 名字被截断时悬浮显示完整文件名：面板窄、长文件名必然省略号截断 -->
-                    <span class="min-w-0 flex-1 truncate font-mono text-[13px]" @mouseenter="syncTruncatedTitle">{{ item.node.name }}</span>
-                    <!-- 修改时间 + 文件大小：行尾两个扫读列（行内样式常量见 CONSOLE_TREE_TIME/SIZE_COLUMN_CLASS），
-                         名字让出空间（flex-1 + truncate），长名靠悬浮提示看全。
-                         时间用绝对格式 YYYY-MM-DD HH:mm:ss——文件多是版本对照，需要能直接比出具体时刻。 -->
-                    <span :class="CONSOLE_TREE_TIME_COLUMN_CLASS">{{ formatEpochDateTime(item.node.file.mtime) }}</span>
-                    <span :class="CONSOLE_TREE_SIZE_COLUMN_CLASS">{{ formatFileSize(item.node.file.size) }}</span>
-                  </button>
-                  <div
-                    class="flex shrink-0 items-center gap-0.5 transition-opacity"
-                    :class="selectedConsoleFilePath === item.node.file.relativePath ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'"
-                  >
-                    <button
-                      type="button"
-                      class="flex h-6 w-6 items-center justify-center rounded-md border-none bg-transparent text-[11px] text-slate-400 transition-colors hover:bg-blue-100 hover:text-blue-600"
-                      title="预览文件"
-                      data-console-file-preview="true"
-                      @click="selectConsoleFile(item.node.file.relativePath)"
-                    >
-                      <i class="fa-solid fa-eye"></i>
-                    </button>
-                    <!-- SQL 查询结果（outputs/query_result、outputs/.tool-offload）不提供下载，
-                         防数据泄漏；后端两侧已拦截，这里只是前端侧的纵深防御。 -->
-                    <button
-                      v-if="isWorkspaceFileDownloadable(item.node.file.relativePath) && !isPdfFilePath(item.node.file.relativePath)"
-                      type="button"
-                      class="flex h-6 w-6 items-center justify-center rounded-md border-none bg-transparent text-[11px] text-slate-400 transition-colors hover:bg-blue-100 hover:text-blue-600"
-                      title="下载文件"
-                      data-console-file-download="true"
-                      @click="handleDownloadConsoleFile(item.node.file)"
-                    >
-                      <i class="fa-solid fa-download"></i>
-                    </button>
-                    <!-- 导入为语义模型：仅治理目录（outputs/governance/、workspace/governance/）下的 yaml 且管理员可见（canImportSemanticModel）。
-                         点击读取文件内容并交由父级打开 Ossie 导入弹窗，免去下载后再上传。 -->
-                    <button
-                      v-if="canImportSemanticModel && isGovernanceYaml(item.node.file.relativePath)"
-                      type="button"
-                      class="flex h-6 w-6 items-center justify-center rounded-md border-none bg-transparent text-[11px] text-slate-400 transition-colors hover:bg-blue-100 hover:text-blue-600"
-                      title="导入为语义模型"
-                      data-console-file-import-semantic="true"
-                      @click="handleImportSemanticYaml(item.node.file)"
-                    >
-                      <i class="fa-solid" :class="importingSemanticFilePath === item.node.file.relativePath ? 'fa-spinner fa-spin' : 'fa-file-import'"></i>
-                    </button>
-                    <!-- 删除：与预览/下载同列（行尾操作组），危险动作用红色区分。
-                         查询结果（outputs/query_result、outputs/.tool-offload）不提供删除，
-                         那是审计留存；run 执行中禁用，避免打断沙箱回写。 -->
-                    <button
-                      v-if="isWorkspaceFileDeletable(item.node.file.relativePath)"
-                      type="button"
-                      class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border-none bg-transparent text-[11px] text-slate-400 transition-colors hover:bg-red-100 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40"
-                      title="删除文件"
-                      :disabled="runBusy || deletingConsoleFilePath === item.node.file.relativePath"
-                      data-console-file-delete="true"
-                      @click="handleDeleteConsoleFile(item.node.file)"
-                    >
-                      <i class="fa-solid" :class="deletingConsoleFilePath === item.node.file.relativePath ? 'fa-spinner fa-spin' : 'fa-trash-can'"></i>
-                    </button>
-                  </div>
-                </div>
-                <div
-                  v-else
-                  class="group flex h-7 min-w-0 items-center gap-1 rounded pr-1 transition-colors hover:bg-slate-50"
-                >
-                  <div
-                    role="button"
-                    tabindex="0"
-                    class="flex h-7 min-w-0 flex-1 items-center gap-1.5 border-none bg-transparent px-1.5 text-left text-slate-600"
-                    :style="consoleTreeIndentStyle(item.depth)"
-                    @click="toggleConsoleDirectory(item.node.path)"
-                    @keydown.enter.prevent="toggleConsoleDirectory(item.node.path)"
-                    @keydown.space.prevent="toggleConsoleDirectory(item.node.path)"
-                  >
-                    <i class="w-3 shrink-0 text-[10px] text-slate-400" :style="consoleTreeLeadSlotStyle" :class="isFileTreeNodeCollapsed(item.node.path) ? 'fa-solid fa-chevron-right' : 'fa-solid fa-chevron-down'"></i>
-                    <i class="fa-regular w-4 shrink-0 text-center text-amber-500" :class="isFileTreeNodeCollapsed(item.node.path) ? 'fa-folder' : 'fa-folder-open'"></i>
-                    <span class="truncate font-mono text-[13px] font-semibold" @mouseenter="syncTruncatedTitle">{{ item.node.name }}</span>
-                  </div>
-                  <!-- 子目录打包下载：outputs 下的任意层级子目录都可单独打包（顶层范围仍是
-                       outputs，见 utils/consoleFileTree.ts）。图标沿用文件行的 hover 显现——
-                       子目录可能很多，常显会满屏都是下载图标压过目录名。
-                       系统结果目录（query_result / .tool-offload）不显示，包里本就不会有文件。 -->
-                  <button
-                    v-if="isWorkspaceDirectoryArchiveDownloadable(item.node.path) && getFileCount(item.node)"
-                    type="button"
-                    class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border-none bg-transparent text-[11px] leading-none text-slate-400 transition-all hover:bg-blue-100 hover:text-blue-600 disabled:opacity-50"
-                    :class="isConsoleArchiveDownloading === item.node.path ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'"
-                    title="打包下载该目录（zip）"
-                    aria-label="打包下载该目录"
-                    :disabled="isConsoleArchiveDownloading === item.node.path"
-                    data-console-archive-download="true"
-                    @click="handleDownloadConsoleDirectoryArchive(item.node.path)"
-                  >
-                    <i class="fa-solid" :class="isConsoleArchiveDownloading === item.node.path ? 'fa-spinner fa-spin' : 'fa-download'"></i>
-                  </button>
-                  <!-- 数量徽标与顶层目录行同构：放在可点击区域之外的行尾，
-                       所有数量徽标的右边缘落在同一条竖线上（放在按钮内时会被 px-1.5 推走 2px）。 -->
-                  <span v-if="getFileCount(item.node)" class="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] leading-none text-slate-500">{{ getFileCount(item.node) }}</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-        <div v-if="SHOW_CONSOLE_EMPTY_STATE && !producedFiles.length" class="mt-2 rounded bg-slate-50 px-2 py-2 text-xs text-slate-400">
-          暂无文件
-        </div>
-      </div>
-
-      <div v-if="selectedConsoleFile" class="rounded-lg border border-slate-100 bg-slate-50 p-3">
-        <div class="mb-2 flex items-center justify-between gap-2">
-          <div class="min-w-0 truncate font-mono text-xs font-medium text-slate-500">
-            {{ selectedConsoleFile?.displayPath }}
-          </div>
-          <div class="flex shrink-0 items-center gap-2">
-            <div v-if="selectedConsoleFile && (selectedConsoleChartSpec || hasSelectedConsoleTable || selectedConsoleIsMarkdown || selectedConsoleIsMermaid || selectedConsoleIsHtml || selectedConsoleIsOntologyCatalog)" class="flex rounded-md border border-slate-200 bg-white p-0.5">
-              <button
-                v-if="selectedConsoleIsOntologyCatalog"
-                type="button"
-                :class="[
-                  'h-6 rounded px-2 text-[10px] transition-colors',
-                  consoleFilePreviewMode === 'graph' ? 'bg-blue-50 text-blue-700' : 'text-slate-500 hover:bg-slate-50'
-                ]"
-                @click="consoleFilePreviewMode = 'graph'"
-              >
-                图谱
-              </button>
-              <button
-                v-if="selectedConsoleChartSpec"
-                type="button"
-                :class="[
-                  'h-6 rounded px-2 text-[10px] transition-colors',
-                  consoleFilePreviewMode === 'render' ? 'bg-blue-50 text-blue-700' : 'text-slate-500 hover:bg-slate-50'
-                ]"
-                @click="consoleFilePreviewMode = 'render'"
-              >
-                图表
-              </button>
-              <button
-                v-if="hasSelectedConsoleTable"
-                type="button"
-                :class="[
-                  'h-6 rounded px-2 text-[10px] transition-colors',
-                  consoleFilePreviewMode === 'table' ? 'bg-blue-50 text-blue-700' : 'text-slate-500 hover:bg-slate-50'
-                ]"
-                @click="consoleFilePreviewMode = 'table'"
-              >
-                表格
-              </button>
-              <button
-                v-if="selectedConsoleIsMarkdown || selectedConsoleIsMermaid || selectedConsoleIsHtml"
-                type="button"
-                :class="[
-                  'h-6 rounded px-2 text-[10px] transition-colors',
-                  consoleFilePreviewMode === 'render' ? 'bg-blue-50 text-blue-700' : 'text-slate-500 hover:bg-slate-50'
-                ]"
-                @click="consoleFilePreviewMode = 'render'"
-              >
-                {{ selectedConsoleIsMermaid ? '图' : '预览' }}
-              </button>
-              <button
-                type="button"
-                :class="[
-                  'h-6 rounded px-2 text-[10px] transition-colors',
-                  consoleFilePreviewMode === 'source' ? 'bg-blue-50 text-blue-700' : 'text-slate-500 hover:bg-slate-50'
-                ]"
-                @click="consoleFilePreviewMode = 'source'"
-              >
-                源码
-              </button>
-            </div>
-            <!-- 复制内容/路径：内容口径=预览所见（表格模式=所见表格 TSV，文本类=全文，超大文件受预览截断）。
-                 路径=/mnt/user-data 沙箱可见路径（与 @ 引用、智能体视角一致）。 -->
-            <button
-              v-if="selectedConsoleFile && !selectedConsoleIsPdf"
-              type="button"
-              class="flex h-6 w-6 items-center justify-center rounded border border-slate-200 bg-white text-[11px] text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700"
-              title="复制文件内容（表格模式复制 TSV）"
-              data-console-preview-copy-content="true"
-              @click="handleCopyWorkspacePreviewContent"
-            >
-              <i class="fa-regular fa-copy"></i>
-            </button>
-            <button
-              v-if="selectedConsoleFile && !selectedConsoleIsPdf"
-              type="button"
-              class="flex h-6 w-6 items-center justify-center rounded border border-slate-200 bg-white text-[11px] text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700"
-              title="复制文件路径"
-              data-console-preview-copy-path="true"
-              @click="handleCopyWorkspacePreviewPath"
-            >
-              <i class="fa-solid fa-link"></i>
-            </button>
-            <!-- 下载已下沉到文件树每行右端（和文件名同处一行，不必先选中再来这里找）。
-                 这里改为刷新：tool_result / run 结束本就会自动刷新，此按钮是手动兜底。 -->
-            <button
-              v-if="selectedConsoleFile && !selectedConsoleIsPdf"
-              type="button"
-              class="flex h-6 w-6 items-center justify-center rounded border border-slate-200 bg-white text-[11px] text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700 disabled:opacity-50"
-              :title="isWorkspaceRefreshBusy ? '正在刷新' : '刷新文件列表与预览内容'"
-              :disabled="isWorkspaceRefreshBusy"
-              data-console-files-refresh="true"
-              @click="refreshWorkspaceFiles"
-            >
-              <i class="fa-solid fa-rotate-right" :class="isWorkspaceRefreshBusy ? 'fa-spin' : ''"></i>
-            </button>
-            <button
-              v-if="selectedConsoleFile && !selectedConsoleIsPdf"
-              type="button"
-              class="flex h-6 w-6 items-center justify-center rounded border border-slate-200 bg-white text-[11px] text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700"
-              title="放大预览"
-              @click="toggleWorkspaceFilePreviewFullscreen"
-            >
-              <i class="fa-solid fa-expand"></i>
-            </button>
-          </div>
-        </div>
-        <div ref="workspaceFilePreviewRef" class="workspace-file-preview relative bg-white" :class="isWorkspaceFilePreviewFullscreen ? 'h-screen w-screen overflow-auto p-6' : ''">
+    <template #subheader>
+      <div v-if="isToolTabActive && subagentTaskCall" class="flex w-full items-center justify-between gap-2">
+        <ConversationTokenUsage
+          v-if="subagentUsageForPanel"
+          :usage="subagentUsageForPanel"
+          :messages="[]"
+          compact
+          data-subagent-usage-trigger
+        />
+        <span
+          v-if="subagentTaskCall.subagentCompactions?.length"
+          class="shrink-0 cursor-default rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] leading-none text-slate-500 tabular-nums"
+          data-subagent-compactions
+          :title="subagentTaskCall.subagentCompactions.map(item => `${item.timestamp || ''} ${item.estimated_tokens_before ?? 0} → ${item.estimated_tokens_after ?? 0} tokens，压缩 ${item.compressed_messages ?? 0} 条`).join('\n')"
+        >已压缩 {{ subagentTaskCall.subagentCompactions.length }} 次</span>
+        <div class="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5 text-[11px]">
           <button
-            v-if="isWorkspaceFilePreviewFullscreen"
             type="button"
-            class="absolute right-14 top-3 z-20 flex h-8 w-8 items-center justify-center rounded border border-slate-200 bg-white text-xs text-slate-600 shadow-sm hover:bg-slate-50"
-            title="复制文件内容"
-            @click="handleCopyWorkspacePreviewContent"
+            class="inline-flex items-center gap-1 rounded-md px-1.5 py-1 transition-colors"
+            :class="toolViewMode === 'agent' ? 'bg-white text-[#1f82d9] shadow-sm' : 'text-slate-500 hover:text-slate-700'"
+            title="聊天模式：按聊天方式查看子智能体过程"
+            @click="toolViewMode = 'agent'"
           >
-            <i class="fa-regular fa-copy"></i>
+            <i class="fa-solid fa-robot text-[10px]"></i>
+            <span>聊天</span>
           </button>
           <button
-            v-if="isWorkspaceFilePreviewFullscreen"
             type="button"
-            class="absolute right-3 top-3 z-20 flex h-8 w-8 items-center justify-center rounded border border-slate-200 bg-white text-xs text-slate-600 shadow-sm hover:bg-slate-50"
-            title="退出放大预览"
-            @click="toggleWorkspaceFilePreviewFullscreen"
+            class="inline-flex items-center gap-1 rounded-md px-1.5 py-1 transition-colors"
+            :class="toolViewMode === 'generic' ? 'bg-white text-[#1f82d9] shadow-sm' : 'text-slate-500 hover:text-slate-700'"
+            title="工具模式：与普通工具一致，只查看参数与结果"
+            @click="toolViewMode = 'generic'"
           >
-            <i class="fa-solid fa-compress"></i>
+            <i class="fa-solid fa-wrench text-[10px]"></i>
+            <span>工具</span>
           </button>
-          <ChartSpecRenderer
-            v-if="selectedConsoleChartSpec && consoleFilePreviewMode === 'render'"
-            :spec="selectedConsoleChartSpec"
-          />
-          <MarkdownFilePreview
-            v-else-if="selectedConsoleIsMarkdown && consoleFilePreviewMode === 'render'"
-            :content="selectedConsoleFileText"
-            :class="workspaceFilePreviewHeightClass"
-          />
-          <MermaidFilePreview
-            v-else-if="selectedConsoleIsMermaid && consoleFilePreviewMode === 'render'"
-            :content="selectedConsoleFileText"
-            :class="workspaceFilePreviewHeightClass"
-          />
-          <HtmlPagePreview
-            v-else-if="selectedConsoleIsHtml && consoleFilePreviewMode === 'render'"
-            :html="selectedConsoleHtmlDocument"
-            :class="workspaceFilePreviewHeightClass"
-          />
-          <div v-else-if="hasSelectedConsoleTable && consoleFilePreviewMode === 'table'" :class="isWorkspaceFilePreviewFullscreen ? 'h-[calc(100vh-48px)] overflow-auto rounded-md border border-slate-100 bg-white' : 'max-h-[46vh] overflow-auto rounded-md border border-slate-100 bg-white'">
-            <table class="min-w-full border-separate border-spacing-0 text-left text-xs">
-            <thead class="sticky top-0 z-10 bg-slate-50">
-              <tr>
-                <th
-                  v-for="column in selectedConsoleTableColumns"
-                  :key="column"
-                  class="border-b border-slate-100 px-3 py-2 font-medium text-slate-500"
-                >
-                  {{ column }}
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="(row, rowIndex) in selectedConsolePreviewRows" :key="rowIndex" class="hover:bg-slate-50">
-                <td
-                  v-for="column in selectedConsoleTableColumns"
-                  :key="column"
-                  class="max-w-[220px] truncate border-b border-slate-50 px-3 py-2 text-slate-700"
-                  :title="formatToolTableCell(row[column])"
-                >
-                  {{ formatToolTableCell(row[column]) }}
-                </td>
-              </tr>
-            </tbody>
-          </table>
-          </div>
-          <OntologyCatalogGraph
-            v-else-if="selectedConsoleIsOntologyCatalog && consoleFilePreviewMode === 'graph'"
-            :content="selectedConsoleFileText"
-            :class="workspaceFilePreviewHeightClass"
-          />
-          <CodeFilePreview
-            v-else-if="selectedConsoleIsYaml && consoleFilePreviewMode === 'render'"
-            :content="selectedConsoleFileText"
-            :class="workspaceFilePreviewHeightClass"
-          />
-          <iframe
-            v-else-if="selectedConsoleIsPdf && selectedConsolePdfUrl"
-            :src="selectedConsolePdfUrl"
-            :class="isWorkspaceFilePreviewFullscreen ? 'm-0 h-[calc(100vh-48px)] min-w-0 w-full rounded-md border border-slate-100 bg-white' : 'm-0 h-[46vh] min-w-0 w-full rounded-md border border-slate-100 bg-white'"
-          ></iframe>
-          <div
-            v-else-if="selectedConsoleIsPdf && loadingWorkspaceFilePath === selectedConsoleFilePath"
-            :class="isWorkspaceFilePreviewFullscreen ? 'flex h-[calc(100vh-48px)] items-center justify-center text-xs text-slate-400' : 'flex h-[46vh] items-center justify-center text-xs text-slate-400'"
-          >PDF 加载中...</div>
-          <div
-            v-else-if="selectedConsoleIsOfficeFile && selectedConsoleOfficeHtml"
-            :class="isWorkspaceFilePreviewFullscreen ? 'h-[calc(100vh-48px)] min-w-0 overflow-auto rounded-md border border-slate-100 bg-white' : 'h-[46vh] min-w-0 overflow-auto rounded-md border border-slate-100 bg-white'"
-          >
-            <iframe
-              :srcdoc="selectedConsoleOfficeHtml"
-              sandbox="allow-scripts"
-              class="h-full min-w-0 w-full border-0 bg-white"
-              title="Office 文件预览"
-            ></iframe>
-          </div>
-          <div
-            v-else-if="selectedConsoleIsOfficeFile && loadingOfficePreviewKey === `${conversationId}:${selectedConsoleFilePath}`"
-            :class="isWorkspaceFilePreviewFullscreen ? 'flex h-[calc(100vh-48px)] items-center justify-center text-xs text-slate-400' : 'flex h-[46vh] items-center justify-center text-xs text-slate-400'"
-          >Office 文件加载中...</div>
-          <div
-            v-else-if="selectedConsoleIsOfficeFile && selectedConsoleOfficePreviewReason"
-            :class="isWorkspaceFilePreviewFullscreen ? 'flex h-[calc(100vh-48px)] flex-col items-center justify-center gap-2 text-xs text-slate-400' : 'flex h-[46vh] flex-col items-center justify-center gap-2 text-xs text-slate-400'"
-          >
-            <span v-if="selectedConsoleOfficePreviewReason === 'preview_too_large'">文件过大，暂不支持预览，请下载查看。</span>
-            <span v-else>当前环境不能预览 Office 文件，请下载查看。</span>
-          </div>
-          <div
-            v-else-if="selectedConsoleIsImage && selectedConsoleBinaryBlob?.url"
-            :class="isWorkspaceFilePreviewFullscreen ? 'flex h-[calc(100vh-48px)] items-center justify-center overflow-auto rounded-md border border-slate-100 bg-white p-2' : 'flex h-[46vh] items-center justify-center overflow-auto rounded-md border border-slate-100 bg-white p-2'"
-          >
-            <img :src="selectedConsoleBinaryBlob.url" :alt="selectedConsoleFilePath || ''" class="max-h-full max-w-full object-contain" />
-          </div>
-          <div
-            v-else-if="selectedConsoleIsImage && loadingWorkspaceFilePath === selectedConsoleFilePath"
-            :class="isWorkspaceFilePreviewFullscreen ? 'flex h-[calc(100vh-48px)] items-center justify-center text-xs text-slate-400' : 'flex h-[46vh] items-center justify-center text-xs text-slate-400'"
-          >图片加载中...</div>
-          <div v-else-if="selectedConsoleBinaryBlob?.error" :class="isWorkspaceFilePreviewFullscreen ? 'flex h-[calc(100vh-48px)] items-center justify-center text-xs text-red-400' : 'flex h-[46vh] items-center justify-center text-xs text-red-400'">文件加载失败，请重试。</div>
-          <pre v-else :class="isWorkspaceFilePreviewFullscreen ? 'm-0 h-[calc(100vh-48px)] overflow-auto whitespace-pre-wrap break-words text-xs leading-relaxed text-slate-700' : 'm-0 max-h-[46vh] overflow-auto whitespace-pre-wrap break-words text-xs leading-relaxed text-slate-700'">{{ selectedConsoleFileText || '暂无可预览内容' }}</pre>
         </div>
-      </div>
-      <div v-else-if="SHOW_CONSOLE_FILE_PLACEHOLDER" class="rounded-lg border border-slate-100 bg-slate-50 p-3 text-xs text-slate-400">
-        点击工作区文件查看内容。
       </div>
     </template>
 
-    <template v-else>
+    <div v-show="isWorkspaceTabActive" class="flex min-h-0 flex-1 flex-col">
+      <!-- 文件管理 tab 自己的工具条：根路径 / 一键折叠 / 文件数量。
+           这类信息属于「文件管理」，不能放进 tab 条（会和 tab 胶囊挤在一起）。 -->
+      <FileManagerTab />
+      <FilePreviewTab />
+    </div>
+
+    <div v-show="isToolTabActive" class="min-h-0">
+      <!-- 每个子智能体 tab 一份常驻过程视图：多开/点内层工具/切文件 tab 都不卸载 -->
+      <AgentProcessView
+        v-for="processTab in agentProcessTabs"
+        :key="processTab.id"
+        v-show="displayToolTab?.id === processTab.id && toolViewMode === 'agent'"
+        :tool-call="toolCallForTab(processTab) as ToolCallInfo"
+        :conversation-id="conversationId"
+        :active-tool-call-id="displayToolCall?.tool_call_id || null"
+        class="mb-3"
+        @select-tool="emit('selectTool', $event)"
+      />
+      <!-- 注意：这里必须用 v-if 而不是 v-show——DetailPanel 根节点自带 v-if，
+           v-show 无法可靠作用到其根元素，智能体模式下会漏出参数卡片 -->
       <ToolCallDetailPanel
-        :tool-call="activeToolCall"
+        v-if="displayToolCall && (displayTabIsToolDetail || (displayTabIsAgentProcess && toolViewMode === 'generic'))"
+        :tool-call="displayToolCall"
         :conversation-id="conversationId || ''"
         :format-text="formatText"
       />
-    </template>
+    </div>
   </ConversationSidePanel>
   <input
     ref="workspaceUploadInputRef"

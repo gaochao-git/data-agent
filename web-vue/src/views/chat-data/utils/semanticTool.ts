@@ -107,3 +107,39 @@ export const buildSemanticParamsFromDsl = (dsl: unknown): SemanticParams | undef
 export const extractSemanticParamsFromArgs = (args?: Record<string, unknown>): SemanticParams | undefined => (
   buildSemanticParamsFromDsl(extractSemanticDslFromArgs(args))
 )
+
+// ---- 查询结果工具显示口径（主对话 / 子智能体过程共用）----
+
+/** 查询结果渲染工具：data_analyzing_tool 的 execute_query。 */
+export const isQueryResultRenderTool = (toolInfo?: Pick<ToolCallInfo, 'tool_name' | 'args'> | null): boolean => {
+  if (!toolInfo) return false
+  return toolInfo.tool_name === 'data_analyzing_tool' && (toolInfo.args || {})?.action === 'execute_query'
+}
+
+/** 从工具结果里的 query_result 信封派生 renderId / renderType / semanticParams。 */
+export const buildSemanticQueryToolRenderInfo = (toolInfo: ToolCallInfo): ToolCallInfo => {
+  if (!isQueryResultRenderTool(toolInfo)) return toolInfo
+  const queryResultData = getRenderableQueryResultData(String(toolInfo.result || ''))
+  const semanticParams = extractSemanticParamsFromArgs(toolInfo.args) || toolInfo.semanticParams
+  return {
+    ...toolInfo,
+    renderId: queryResultData || toolInfo.renderId,
+    renderType: queryResultData ? 'queryResult' : toolInfo.renderType,
+    semanticParams,
+  }
+}
+
+/** 工具调用显示口径归一化：查询结果工具补齐可渲染字段，其余原样返回。 */
+export const normalizeToolCallForDisplay = (toolInfo: ToolCallInfo): ToolCallInfo => (
+  isQueryResultRenderTool(toolInfo) ? buildSemanticQueryToolRenderInfo(toolInfo) : toolInfo
+)
+
+/** 是否内联渲染查询结果面板：查询工具 + 已完成 + 有 renderId。 */
+export const shouldInlineRenderQueryResult = (toolCall?: ToolCallInfo | null): boolean => (
+  Boolean(
+    isQueryResultRenderTool(toolCall) &&
+    toolCall?.status === 'completed' &&
+    toolCall?.renderId &&
+    toolCall?.renderType === 'queryResult'
+  )
+)

@@ -10,6 +10,7 @@ pysqlite3-binary 自带新版 SQLite C 库，替换后 aiosqlite / sqlalchemy
 """
 
 import logging
+import sqlite3
 import sys
 
 logger = logging.getLogger(__name__)
@@ -38,9 +39,18 @@ def apply_sqlite_compat() -> bool:
         _applied = True
         return True
     except ImportError:
-        logger.warning(
-            "pysqlite3 未安装，继续使用系统自带 sqlite3；"
-            "若部署环境为旧编译 Python，运行时可能触发 "
-            "deterministic=True requires SQLite 3.8.3 or higher"
-        )
+        if sys.platform.startswith("linux") or sqlite3.sqlite_version_info < (3, 8, 3):
+            # Linux 生产环境依赖 pysqlite3-binary 兜底旧编译 Python；macOS 自带的
+            # 新版本 sqlite3 通常已满足要求，不再用 warning 刷启动日志。
+            logger.warning(
+                "pysqlite3 未安装，继续使用系统自带 sqlite3；"
+                "若部署环境为旧编译 Python，运行时可能触发 "
+                "deterministic=True requires SQLite 3.8.3 or higher"
+            )
+        else:
+            logger.debug(
+                "pysqlite3 未安装（%s），系统 sqlite3 %s 已满足 deterministic 要求",
+                sys.platform,
+                sqlite3.sqlite_version,
+            )
         return False

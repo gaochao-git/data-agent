@@ -32,7 +32,7 @@ def create_tool_timing_middleware() -> AgentMiddleware:
         started_at_ms = int(time.time() * 1000)
         result = await handler(request)
         ended_at_ms = int(time.time() * 1000)
-        message = result if isinstance(result, ToolMessage) else None
+        message = _extract_tool_message(result)
         if message is not None:
             additional_kwargs = dict(getattr(message, "additional_kwargs", None) or {})
             additional_kwargs["started_at_ms"] = started_at_ms
@@ -58,6 +58,24 @@ def create_tool_timing_middleware() -> AgentMiddleware:
         return result
 
     return tool_timing_middleware
+
+
+def _extract_tool_message(result: Any) -> ToolMessage | None:
+    """从工具返回值里取需要盖时间戳的 ToolMessage。
+
+    多数工具直接返回 ToolMessage；``task``（子智能体）等工具返回 ``Command``
+    通过 ``update.messages`` 注入结果消息，若只看 ToolMessage 会漏掉这些工具，
+    导致前端/历史回放没有总耗时。
+    """
+    if isinstance(result, ToolMessage):
+        return result
+    if isinstance(result, Command):
+        update = getattr(result, "update", None)
+        messages = update.get("messages") if isinstance(update, dict) else None
+        for message in messages or []:
+            if isinstance(message, ToolMessage):
+                return message
+    return None
 
 
 def _request_tool_name(request: ToolCallRequest) -> str:

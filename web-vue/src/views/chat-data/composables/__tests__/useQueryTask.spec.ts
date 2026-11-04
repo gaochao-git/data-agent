@@ -5,10 +5,12 @@ import { createAbortError } from '../../utils/abort'
 // 只 mock 用到的查询任务接口,避免拉起完整 api 模块(axios 等副作用)
 vi.mock('../../api', () => ({
   createQueryTask: vi.fn(),
+}))
+vi.mock('../../api/query', () => ({
   getQueryTask: vi.fn(),
 }))
 
-import { getQueryTask } from '../../api'
+import { getQueryTask } from '../../api/query'
 import { useQueryTask } from '../useQueryTask'
 
 const mockedGetQueryTask = vi.mocked(getQueryTask)

@@ -342,6 +342,30 @@ def sanitize_context_usage_for_response(usage: Any) -> Any:
 HISTORY_BREAKDOWN_TEXT_LIMIT = 512
 
 
+def strip_context_usage_content_for_history(usage: Any) -> Any:
+    """剥离历史接口 token_usage 明细里的正文，只保留计数/标签/说明。
+
+    上下文面板的正文可由前端按 message_id 从已加载消息反查；system prompt /
+    tool schema 等无法反查的正文应在需要时走独立详情接口，不随每次历史加载
+    重复传输。该函数不修改原始 usage，避免影响 SSE/调试数据。
+    """
+    if not isinstance(usage, dict):
+        return usage
+    stripped = copy.deepcopy(usage)
+
+    def strip_items(items: Any) -> None:
+        if not isinstance(items, list):
+            return
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            item.pop("content", None)
+            strip_items(item.get("children"))
+
+    strip_items(stripped.get("breakdown"))
+    return stripped
+
+
 def compact_context_usage_for_history(usage: Any) -> Any:
     """压缩落库 token_usage：只保留计数与短文本，避免完整工具 schema 重复入库。
 

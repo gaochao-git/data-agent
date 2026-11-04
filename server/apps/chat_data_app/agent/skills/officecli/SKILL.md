@@ -38,7 +38,7 @@ OfficeCLI 是 Office Open XML 的结构化编辑器，不需要安装 Microsoft 
 3. 先确定 Word 起始文件，优先级如下：
    - 用户提供或明确指定模板：保留用户模板，不套系统默认模板。
    - 党政机关正式公文（请示、通知、决定、函等）：按 `/mnt/skills/officecli/references/gb-t-9704-2012.md` 和用户单位模板处理，不使用标准汇报模版冒充正式公文。
-   - 其他新建 Word（经营分析、专题汇报、工作总结、情况报告、调研报告等普通报告）：默认执行标准汇报模版的样式约定，读取 `/mnt/skills/officecli/references/standard-report.md`，从 `officecli create` 起步并按样式映射表逐级显式设置字体/字号/行距（按标准配置，不是自由发挥）；可用 `view annotated` 查看样板 `/mnt/skills/officecli/assets/standard-report-template.docx` 获取各级具体属性配置；用户提供模板或明确要求样式时按用户执行。
+   - 其他新建 Word（经营分析、专题汇报、工作总结、情况报告、调研报告等普通报告）：默认执行标准汇报模版的样式约定，读取 `/mnt/skills/officecli/references/standard-report.md`，从 `officecli create` 起步并按样式映射表逐级显式设置字体/字号/行距（按标准配置，不是自由发挥）；可用 `view annotated` / `outline` 查看样板 `/mnt/skills/officecli/assets/standard-report-template.docx`；样板已包含封面、目录、正文分节、真实 `Heading 1/2/3` 样式、表格案例、柱状图案例与 TOC 活域，从样板起步时可直接复用样式；用户提供模板或明确要求样式时按用户执行。
 4. 编辑已有上传文件时，先复制到 workspace，例如：`file_copy(source_path="/mnt/user-data/uploads/原文件.docx", destination_path="/mnt/user-data/workspace/修订稿.docx")`。不要覆盖 uploads 中的原文件。
    技能内的 .docx 是只读样式样板，仅供 `view`/`get` 查看参考；新建起点按第 3 条执行；`/mnt/skills/` 禁止作为 OfficeCLI 的写入目标。
 5. 用 `view`、`get` 或 `query` 读取当前文件结构，例如 `officecli_run(command_args=["view", "/mnt/user-data/workspace/报告.docx", "outline"])`；每次编辑前重新读取目标结构。DOM 选择器（如 `/body/p[1]`、`/slide[1]`、`/Sheet1/A1`）是文档内部定位，作为独立数组元素原样传入即可。

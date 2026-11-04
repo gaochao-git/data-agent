@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ChatDataTokenUsage, ChatDataTokenUsageBreakdown, Message } from '../../types'
 import { copyTextToClipboard } from '../../utils/clipboard'
+import { getConversationTokenUsageDetail } from '../../api'
 
 type TokenUsageSort = 'round' | 'desc' | 'asc'
 
@@ -22,6 +23,8 @@ type TokenUsageRow = {
 
 interface Props {
   usage: ChatDataTokenUsage | null
+  /** 历史 timeline 只带用量摘要；打开面板时按会话 id 拉取 breakdown 明细 */
+  conversationId?: string
   /** 会话已加载消息：token_usage 明细行不再携带正文，展开时凭 message_id 在这里取 */
   messages?: Message[]
   compact?: boolean
@@ -35,11 +38,15 @@ const props = withDefaults(defineProps<Props>(), {
 })
 
 const panelOpen = ref(false)
+const detailUsage = ref<ChatDataTokenUsage | null>(null)
+const detailLoading = ref(false)
+const detailLoaded = ref(false)
+const effectiveUsage = computed(() => detailUsage.value ?? props.usage)
 const sortMode = ref<TokenUsageSort>('round')
 const expandedMessageKeys = ref<Set<string>>(new Set())
 const buttonRef = ref<HTMLElement | null>(null)
 const panelRef = ref<HTMLElement | null>(null)
-const panelPosition = ref({ left: 24, bottom: 112 })
+const panelPosition = ref({ left: 24, top: 112 })
 const cacheSupportDetected = ref(false)
 
 // 面板层压策略：高于普通页面内容，低于 Element Plus 弹窗/弹层（初始 z-index 2000 起），
@@ -67,9 +74,9 @@ const formatTokenUsageDisplay = (usage: Pick<ChatDataTokenUsage, 'used' | 'total
   return `${usage.estimated ? '约 ' : ''}${formatValue(usage.used)} / ${formatValue(usage.total)}`
 }
 
-const usageDisplay = computed(() => formatTokenUsageDisplay(props.usage))
+const usageDisplay = computed(() => formatTokenUsageDisplay(effectiveUsage.value))
 const usagePercentage = computed(() => {
-  const usage = props.usage
+  const usage = effectiveUsage.value
   if (!usage || !Number.isFinite(usage.used) || !Number.isFinite(usage.total) || usage.total <= 0) return 0
   const percentage = Number.isFinite(usage.percentage)
     ? Number(usage.percentage)
@@ -81,7 +88,7 @@ const usagePercentageText = computed(() => {
   return `${Math.round(usagePercentage.value)}`
 })
 const compressionTriggerPercentage = computed(() => {
-  const usage = props.usage
+  const usage = effectiveUsage.value
   const contextWindow = usage?.context_window
   const triggerTokens = usage?.compression_trigger_tokens
   if (
@@ -106,7 +113,7 @@ const ringStyle = computed(() => {
 const buttonTitle = computed(() => usageDisplay.value ? `上下文占用：${usageDisplay.value}` : '上下文计算中')
 const panelStyle = computed(() => ({
   left: `${panelPosition.value.left}px`,
-  bottom: `${panelPosition.value.bottom}px`,
+  top: `${panelPosition.value.top}px`,
   width: `${PANEL_WIDTH}px`,
   maxWidth: `calc(100vw - ${PANEL_MARGIN * 2}px)`,
 }))
@@ -117,18 +124,47 @@ const updatePanelPosition = () => {
   const viewportWidth = window.innerWidth || document.documentElement.clientWidth || PANEL_WIDTH
   const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0
   const maxLeft = Math.max(PANEL_MARGIN, viewportWidth - PANEL_WIDTH - PANEL_MARGIN)
+  // 面板优先开在触发按钮下方；下方放不下就翻到上方，并整体 clamp 在视口内，
+  // 避免按钮靠近视口顶部时面板顶部被裁掉（子智能体 tab 的徽标就在顶部）。
+  const panelHeight = panelRef.value?.offsetHeight ?? 0
+  const spaceBelow = viewportHeight - rect.bottom - PANEL_MARGIN
+  const openBelow = panelHeight === 0 || panelHeight + 8 <= spaceBelow
+  const preferredTop = openBelow ? rect.bottom + 8 : rect.top - panelHeight - 8
+  const maxTop = Math.max(PANEL_MARGIN, viewportHeight - panelHeight - PANEL_MARGIN)
   panelPosition.value = {
     left: Math.min(Math.max(rect.right - PANEL_WIDTH, PANEL_MARGIN), maxLeft),
-    bottom: Math.max(PANEL_MARGIN, viewportHeight - rect.top + 8),
+    top: Math.min(Math.max(preferredTop, PANEL_MARGIN), maxTop),
   }
 }
 
-const togglePanel = () => {
+const loadTokenUsageDetail = async () => {
+  if (!props.conversationId || detailLoaded.value || detailLoading.value) return
+  if (props.usage?.breakdown?.length) {
+    detailLoaded.value = true
+    return
+  }
+  detailLoading.value = true
+  try {
+    const response = await getConversationTokenUsageDetail(props.conversationId)
+    if (response.data) detailUsage.value = response.data
+    detailLoaded.value = true
+  } catch (error) {
+    console.warn('加载上下文用量明细失败:', error)
+  } finally {
+    detailLoading.value = false
+  }
+}
+
+const togglePanel = async () => {
   if (!usageDisplay.value) return
   if (!panelOpen.value) {
     updatePanelPosition()
   }
   panelOpen.value = !panelOpen.value
+  if (panelOpen.value) {
+    void nextTick(updatePanelPosition)
+    await loadTokenUsageDetail()
+  }
 }
 
 const closePanel = () => {
@@ -156,12 +192,12 @@ const handleDocumentKeydown = (event: KeyboardEvent) => {
 
 const handleViewportChange = () => {
   if (panelOpen.value) {
-    updatePanelPosition()
+    void nextTick(updatePanelPosition)
   }
 }
 
 const breakdownRows = computed(() => {
-  const usage = props.usage
+  const usage = effectiveUsage.value
   if (!usage?.breakdown?.length) return []
   return usage.breakdown
     .filter(item => Number.isFinite(item.tokens) && item.tokens !== 0)
@@ -172,7 +208,7 @@ const breakdownRows = computed(() => {
 })
 
 const contextSummary = computed(() => {
-  const usage = props.usage
+  const usage = effectiveUsage.value
   if (!usage) return ''
   const values = [
     ['当前输入', usage.current_input_tokens ?? usage.input_tokens ?? usage.used],
@@ -188,7 +224,7 @@ const contextSummary = computed(() => {
 const formatTokenCount = (value: number) => formatTokenUsageDisplay({ used: value, total: 1 }).split(' / ')[0] || ''
 const formatPercentage = (value: number) => `${value.toFixed(value % 1 === 0 ? 0 : 1)}%`
 const cacheUsageRows = computed(() => {
-  const usage = props.usage
+  const usage = effectiveUsage.value
   if (!cacheSupportDetected.value) return []
   const pendingValue = props.isGenerating ? '统计中' : '--'
   return [
@@ -221,8 +257,18 @@ const cacheUsageRows = computed(() => {
   ]
 })
 
+watch(() => props.usage, () => {
+  detailUsage.value = null
+  detailLoaded.value = false
+})
+
+watch(() => props.conversationId, () => {
+  detailUsage.value = null
+  detailLoaded.value = false
+})
+
 watch(
-  [() => props.usage, () => props.isGenerating],
+  [() => effectiveUsage.value, () => props.isGenerating],
   ([usage]) => {
     if (!usage) {
       cacheSupportDetected.value = false
@@ -307,7 +353,7 @@ const toTokenUsageRow = (item: ChatDataTokenUsageBreakdown, labelPrefix = '', ke
     key: keyPrefix ? `${keyPrefix}_${item.key}` : item.key,
     label,
     tokens: item.tokens,
-    percentage: props.usage?.used ? Math.round((item.tokens / props.usage.used) * 1000) / 10 : 0,
+    percentage: effectiveUsage.value?.used ? Math.round((item.tokens / effectiveUsage.value.used) * 1000) / 10 : 0,
     description: item.description || content.slice(0, 120),
     content,
     role: item.role,

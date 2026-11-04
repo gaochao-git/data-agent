@@ -403,6 +403,7 @@ async def get_detail(
     include_derived_history: bool = True,
     limit: int | None = None,
     before_sequence: int | None = None,
+    strict_limit: bool = False,
 ) -> dict[str, Any] | None:
     """从业务表和事件表获取会话详情。
 
@@ -421,6 +422,7 @@ async def get_detail(
         include_derived=include_derived_history,
         limit=limit,
         before_sequence=before_sequence,
+        strict_limit=strict_limit,
     )
     messages = [*(event_history.get("messages") or [])]
     history_events = [*(event_history.get("history_events") or [])]

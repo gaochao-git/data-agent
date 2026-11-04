@@ -59,6 +59,7 @@ describe('useConversationHistory 分页', () => {
 
     expect(apiMocks.getConversationHistory).toHaveBeenCalledWith('conv-1', {
       limit: HISTORY_PAGE_SIZE,
+      strictLimit: true,
     })
     expect(messages.value.map(item => item.content)).toEqual(['问题3', '回答3'])
     expect(history.hasMoreHistory.value).toBe(true)
@@ -77,6 +78,7 @@ describe('useConversationHistory 分页', () => {
     expect(apiMocks.getConversationHistory).toHaveBeenNthCalledWith(2, 'conv-1', {
       limit: HISTORY_PAGE_SIZE,
       beforeSequence: 5,
+      strictLimit: true,
     })
     expect(messages.value.map(item => item.content)).toEqual(['问题2', '回答2', '问题3', '回答3'])
     expect(history.hasMoreHistory.value).toBe(true)

@@ -1106,8 +1106,12 @@ class LocalWorkspaceBackend:
         raw_cwd = str(cwd or "/mnt/user-data/workspace").strip()
         if raw_cwd.startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
             local_cwd = (await runtime.resolve_readonly_skill_path_async(raw_cwd))[0]
+            # 技能快照在工作区根之外，cwd 必须回到技能虚拟路径，不能交给
+            # to_visible_path（它只认识 /mnt/user-data 根）。
+            visible_cwd = raw_cwd
         else:
             local_cwd = resolve_workspace_path(runtime.workspace_root, raw_cwd)
+            visible_cwd = to_visible_path(runtime.workspace_root, local_cwd)
         path_mapping = WorkspacePathMapping(
             workspace_root=runtime.workspace_root,
             runtime_skills_dir=runtime.runtime_skills_dir,
@@ -1137,7 +1141,7 @@ class LocalWorkspaceBackend:
             return {
                 "backend": self.name,
                 "sandbox_id": "",
-                "cwd": to_visible_path(runtime.workspace_root, local_cwd),
+                "cwd": visible_cwd,
                 "exit_code": int(process.returncode or 0),
                 "stdout": path_mapping.mask(stdout_bytes.decode("utf-8", errors="replace")),
                 "stderr": path_mapping.mask(stderr_bytes.decode("utf-8", errors="replace")),
@@ -1150,7 +1154,7 @@ class LocalWorkspaceBackend:
             return {
                 "backend": self.name,
                 "sandbox_id": "",
-                "cwd": to_visible_path(runtime.workspace_root, local_cwd),
+                "cwd": visible_cwd,
                 "exit_code": 124,
                 "stdout": "",
                 "stderr": "command timed out",

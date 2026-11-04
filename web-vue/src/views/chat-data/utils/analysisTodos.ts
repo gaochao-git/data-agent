@@ -38,3 +38,11 @@ export function deriveAnalysisTodos(messages: Message[]): AnalysisTodosState {
   const finished = items.length > 0 && items.every(item => item.status === 'completed')
   return { items, finished }
 }
+
+/**
+ * 任务面板只在仍有未完成事项时展示。
+ * 全部完成后它只是噪音；历史与审计信息仍保留在 write_todos 工具卡片里。
+ */
+export function shouldShowAnalysisProgress(todos: AnalysisTodosState): boolean {
+  return todos.items.length > 0 && !todos.finished
+}

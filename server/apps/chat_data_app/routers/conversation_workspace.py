@@ -37,6 +37,7 @@ from ..services.agent_run.conversation_workspace import (
 from ..services.agent_run.conversation_workspace import (
     read_conversation_workspace_file as read_workspace_file_for_conversation,
 )
+from ..services.setting_service import get_workspace_size_limit
 from . import BINARY_RESPONSES, JSON_API_RESPONSES
 from .dependencies import _get_current_user
 
@@ -76,7 +77,20 @@ async def list_conversation_workspace_files(conversation_id: str, request: Reque
             conversation_id,
             user_id=str(current_user.user_id),
         )
-        return business_response(data={"files": _filter_visible_workspace_files(files)}, msg="获取成功")
+        limit_mb, limit_bytes = await get_workspace_size_limit()
+        used_bytes = sum(int(item.get("size") or 0) for item in files)
+        return business_response(
+            data={
+                "files": _filter_visible_workspace_files(files),
+                "usage": {
+                    "used_bytes": used_bytes,
+                    "limit_bytes": limit_bytes,
+                    "limit_mb": limit_mb,
+                    "percentage": round(used_bytes / limit_bytes * 100, 1) if limit_bytes else 0,
+                },
+            },
+            msg="获取成功",
+        )
     except HTTPException:
         raise
     except ValueError as e:

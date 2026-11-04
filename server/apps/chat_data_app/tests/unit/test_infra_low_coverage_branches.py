@@ -138,8 +138,8 @@ def test_alarm_helper_formats_and_marks_same_llm_connection_exception_once(monke
     assert timeout_record["error_code"] == alarm_module.LLM_FAIL_FIRST_TOKEN_TIMEOUT
 
 
-def test_api_alarm_alarms_split_external_and_internal(monkeypatch):
-    """外部依赖与平台自身接口异常共用 API_CALL_EXCEPTION，细分落在 error_code。"""
+def test_external_api_alarm_uses_external_error_code(monkeypatch):
+    """只有外部依赖失败写 API_CALL_EXCEPTION。"""
     records = []
     monkeypatch.setattr(
         alarm_module,
@@ -148,15 +148,11 @@ def test_api_alarm_alarms_split_external_and_internal(monkeypatch):
     )
 
     alarm_module.emit_external_api_alarm("hive-gateway", TimeoutError("timed out"), method="POST", url="http://x/y")
-    alarm_module.emit_api_call_exception_path = None
-    alarm_module.emit_api_call_alarm("/chat/stream", ValueError("boom"), method="GET")
 
     external_extra = records[0][1]["extra"]
     assert external_extra["alarm_id"] == "API_CALL_EXCEPTION"
     assert external_extra["error_code"] == alarm_module.API_FAIL_EXTERNAL
-    internal_extra = records[1][1]["extra"]
-    assert internal_extra["alarm_id"] == "API_CALL_EXCEPTION"
-    assert internal_extra["error_code"] == alarm_module.API_FAIL_INTERNAL
+    assert len(records) == 1
 
 
 def test_dangerous_sql_alarm_splits_reason_code_from_alarm_id(monkeypatch):
@@ -171,7 +167,6 @@ def test_dangerous_sql_alarm_splits_reason_code_from_alarm_id(monkeypatch):
     monkeypatch.setattr(alarm_module.logger, "warning", lambda *args, **kwargs: warnings.append(args))
 
     cases = [
-        ("一次只能执行一条 SQL，请拆分后分别执行", None, alarm_module.SQL_BLOCK_MULTI_STATEMENT),
         ("只允许执行以下类型的 SQL: SELECT, SHOW", None, alarm_module.SQL_BLOCK_TYPE_NOT_ALLOWED),
         # 显式传入的 reason_code 优先于推断。
         ("任意文案", "CUSTOM_CODE", "CUSTOM_CODE"),
@@ -338,25 +333,45 @@ def test_checkpoint_config_branches(monkeypatch, tmp_path):
         checkpoint, "_endpoint_selector", DatabaseEndpointSelector(parse_database_endpoints("127.0.0.1:3306"))
     )
     monkeypatch.setattr(checkpoint, "MYSQL_DB", "db")
-    monkeypatch.setattr(checkpoint, "_get_mysql_password", lambda: "pwd")
+    monkeypatch.setattr(checkpoint, "_get_mysql_password", lambda: "p@ss:w/rd#")
     assert checkpoint.get_checkpoint_info()["type"] == "mysql"
 
-    class FakeSaver:
-        @classmethod
-        def from_conn_string(cls, conn_string):
-            return {"conn_string": conn_string}
+    class FakeConn:
+        def close(self):
+            return None
 
+        async def ensure_closed(self):
+            return None
+
+    connected = []
+
+    async def fake_connect(**kwargs):
+        connected.append(kwargs)
+        return FakeConn()
+
+    class FakeSaver:
+        def __init__(self, conn):
+            self.conn = conn
+
+    monkeypatch.setitem(sys.modules, "aiomysql", SimpleNamespace(connect=fake_connect))
     monkeypatch.setitem(sys.modules, "langgraph.checkpoint.mysql.aio", SimpleNamespace(AIOMySQLSaver=FakeSaver))
     get_context = checkpoint.get_checkpointer()
-    assert (
-        get_context.context_factory(checkpoint._endpoint_selector.current())["conn_string"]
-        == "mysql+aiomysql://user:pwd@127.0.0.1:3306/db"
-    )
-    mysql_context = checkpoint._get_mysql_checkpointer()
-    assert (
-        mysql_context.context_factory(checkpoint._endpoint_selector.current())["conn_string"]
-        == "mysql+aiomysql://user:pwd@127.0.0.1:3306/db"
-    )
+
+    async def enter_context():
+        async with get_context.context_factory(checkpoint._endpoint_selector.current()) as saver_obj:
+            return saver_obj
+
+    saver = asyncio.run(enter_context())
+    assert isinstance(saver, FakeSaver)
+    assert connected[0] == {
+        "host": "127.0.0.1",
+        "port": 3306,
+        "user": "user",
+        "password": "p@ss:w/rd#",
+        "db": "db",
+        "charset": "utf8mb4",
+        "autocommit": True,
+    }
 
     monkeypatch.setattr(checkpoint, "CHECKPOINTER_TYPE", "unknown")
     with pytest.raises(ValueError, match="不支持"):
@@ -434,28 +449,26 @@ def test_checkpoint_mysql_failover_retries_after_enter_error(monkeypatch):
         checkpoint, "emit_database_connection_alarm", lambda *args, **kwargs: alarm_records.append((args, kwargs))
     )
 
-    class FakeContext:
-        def __init__(self, conn_string):
-            self.conn_string = conn_string
+    connected = []
 
-        async def __aenter__(self):
-            FakeSaver.enter_calls.append(self.conn_string)
-            if len(FakeSaver.enter_calls) == 1:
-                raise OperationalError(statement=None, params=None, orig=SimpleNamespace(args=(2003, "down")))
-            return {"conn_string": self.conn_string}
+    class FakeConn:
+        def close(self):
+            return None
 
-        async def __aexit__(self, *_args):
-            return False
+        async def ensure_closed(self):
+            return None
+
+    async def fake_connect(**kwargs):
+        connected.append(kwargs)
+        if len(connected) == 1:
+            raise OperationalError(statement=None, params=None, orig=SimpleNamespace(args=(2003, "down")))
+        return FakeConn()
 
     class FakeSaver:
-        create_calls = []
-        enter_calls = []
+        def __init__(self, conn):
+            self.conn = conn
 
-        @classmethod
-        def from_conn_string(cls, conn_string):
-            cls.create_calls.append(conn_string)
-            return FakeContext(conn_string)
-
+    monkeypatch.setitem(sys.modules, "aiomysql", SimpleNamespace(connect=fake_connect))
     monkeypatch.setitem(sys.modules, "langgraph.checkpoint.mysql.aio", SimpleNamespace(AIOMySQLSaver=FakeSaver))
     context = checkpoint._get_mysql_checkpointer()
 
@@ -464,12 +477,8 @@ def test_checkpoint_mysql_failover_retries_after_enter_error(monkeypatch):
             return checkpointer_obj
 
     checkpointer_obj = asyncio.run(enter_context())
-    assert FakeSaver.create_calls == [
-        "mysql+aiomysql://user:pwd@127.0.0.1:3306/db",
-        "mysql+aiomysql://user:pwd@127.0.0.2:3307/db",
-    ]
-    assert FakeSaver.enter_calls == FakeSaver.create_calls
-    assert checkpointer_obj["conn_string"] == "mysql+aiomysql://user:pwd@127.0.0.2:3307/db"
+    assert [item["host"] for item in connected] == ["127.0.0.1", "127.0.0.2"]
+    assert isinstance(checkpointer_obj, FakeSaver)
     assert alarm_records == []
 
 
@@ -1286,7 +1295,7 @@ async def test_api_access_log_middleware_sets_and_clears_context(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_api_access_log_middleware_logs_access_error_with_alarm(monkeypatch):
-    records = {"set": [], "clear": 0, "access_info": [], "exception": [], "alarm": []}
+    records = {"set": [], "clear": 0, "access_info": [], "exception": []}
 
     monkeypatch.setattr(
         api_logging_module,
@@ -1301,9 +1310,6 @@ async def test_api_access_log_middleware_logs_access_error_with_alarm(monkeypatc
         SimpleNamespace(
             info=lambda msg, *args, **kwargs: records["access_info"].append((msg, args, kwargs)),
         ),
-    )
-    monkeypatch.setattr(
-        api_logging_module, "emit_api_call_alarm", lambda *args, **kwargs: records["alarm"].append((args, kwargs))
     )
     monkeypatch.setattr(api_logging_module, "set_log_context", lambda **kwargs: records["set"].append(kwargs))
     monkeypatch.setattr(
@@ -1338,8 +1344,6 @@ async def test_api_access_log_middleware_logs_access_error_with_alarm(monkeypatc
     assert records["clear"] == 1
     assert len(records["access_info"]) == 1
     assert records["access_info"][0][0] == "api_access_error"
-    assert records["alarm"][0][0][0] == "/fail"
-    assert records["alarm"][0][1]["method"] == "POST"
     assert records["exception"][0][0] == "[api_access] unhandled_error request_id=%s"
 
 
@@ -1629,12 +1633,13 @@ def test_checkpoint_select_endpoint_without_selector_raises(monkeypatch):
         asyncio.run(checkpoint.select_available_checkpointer_endpoint())
 
 
-def test_setup_checkpointer_unknown_type_skips_probe_and_initializes(monkeypatch):
+def test_setup_checkpointer_unknown_type_fails_fast(monkeypatch):
     events = []
     monkeypatch.setattr(checkpoint, "CHECKPOINTER_TYPE", "unknown")
     monkeypatch.setattr("utils.database.init_database", lambda: asyncio.sleep(0, result=events.append(("init", None))))
-    asyncio.run(checkpoint.setup_checkpointer())
-    assert events == [("init", None)]
+    with pytest.raises(ValueError, match="不支持的 CHECKPOINTER_TYPE"):
+        asyncio.run(checkpoint.setup_checkpointer())
+    assert events == []
 
 
 def test_checkpoint_info_mysql_without_selector(monkeypatch):

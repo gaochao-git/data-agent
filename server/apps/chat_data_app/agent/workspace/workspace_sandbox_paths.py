@@ -7,7 +7,7 @@ from typing import Any
 
 from utils.logger import get_logger
 from utils.skill_paths import SKILLS_VIRTUAL_ROOT
-from utils.storage_paths import CHAT_DATA_HOME
+from utils.storage_paths import CHAT_DATA_HOME, assert_workspace_root
 from utils.tool_result_store import QUERY_RESULT_DIR_NAME, TOOL_OFFLOAD_DIR_NAME
 
 from .workspace_path_policy import WORKSPACE_PATH_POLICY
@@ -52,13 +52,7 @@ def sandbox_skills_root() -> str:
 
 def _application_workspace_root(workspace_root: str) -> Path:
     """Validate the application-owned persistent conversation directory."""
-    resolved = Path(workspace_root).expanduser().resolve()
-    chat_data_root = Path(CHAT_DATA_HOME).expanduser().resolve()
-    if chat_data_root != resolved and chat_data_root not in resolved.parents:
-        raise ValueError(f"会话工作区不在 CHAT_DATA_HOME 内: {workspace_root}")
-    if resolved.name != "user-data":
-        raise ValueError(f"会话工作区必须是 user-data 目录: {workspace_root}")
-    return resolved
+    return assert_workspace_root(workspace_root, chat_data_home=CHAT_DATA_HOME, require_user_data_name=True)
 
 
 def _is_sandbox_descendant(path: str, root: str) -> bool:

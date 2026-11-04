@@ -762,14 +762,14 @@ def test_prepare_sql_request_for_execution_branches(monkeypatch):
     assert asyncio.run(query_runtime.prepare_sql_request_for_execution(dangerous)) is dangerous
     with pytest.raises(ValueError, match="一次只能执行一条 SQL"):
         asyncio.run(query_runtime.prepare_sql_request_for_execution(dangerous, {"source_type": "mysql"}))
-    assert alarm_records[0][0][0] == "select 1; drop table orders"
-    assert alarm_records[0][1]["execution_scope"] == "task_submit"
+    # 多语句只拒绝不告警
+    assert alarm_records == []
     # LIMIT 超限与语法错误同构：提交阶段放行，由执行期边界复检拦截并进结果面板
     assert (
         asyncio.run(query_runtime.prepare_sql_request_for_execution(oversized_limit, {"source_type": "mysql"}))
         is oversized_limit
     )
-    assert alarm_records == [alarm_records[0]]  # 仅多语句一条报警
+    assert alarm_records == []
     with pytest.raises(ValueError, match="必须基于指标集"):
         asyncio.run(query_runtime.prepare_sql_request_for_execution(builder_without_semantic_config))
     with pytest.raises(ValueError, match="缺少 semantic_config_id"):

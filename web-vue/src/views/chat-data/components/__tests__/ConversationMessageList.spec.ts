@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { shallowMount } from '@vue/test-utils'
+import { mount } from '@vue/test-utils'
 import ConversationMessageList from '../conversation/ConversationMessageList.vue'
 import type { Message } from '../../types'
+
+const copyTextToClipboardMock = vi.hoisted(() => vi.fn().mockResolvedValue(true))
+vi.mock('../../utils/clipboard', () => ({ copyTextToClipboard: copyTextToClipboardMock }))
 
 const longThinkingContent = `${'用户询问数据情况，需要先定位语义模型，再决定查询口径。'.repeat(3)}最后核对时间范围。`
 
@@ -18,12 +21,17 @@ const streamingAssistantMessage: Message = {
   segments: [{ type: 'thinkingSegment', thinkingSegmentId: 'thinking-1' }],
 }
 
-const mountList = (messages: Message[], extraProps: Record<string, unknown> = {}) => shallowMount(ConversationMessageList, {
+const mountList = (messages: Message[], extraProps: Record<string, unknown> = {}) => mount(ConversationMessageList, {
   props: { messages, ...extraProps },
   global: {
     stubs: {
       ElTooltip: { template: '<div><slot /><slot name="content" /></div>' },
-      // shallowMount 的自动 stub 不渲染默认 slot，footer 内的复制按钮与 AI 声明需显式透出
+      ElPopover: { template: '<div><slot /><slot name="reference" /></div>' },
+      // 重型叶子组件：保留消息层真实渲染，只隔离工具/查询结果与等待轮播
+      ToolCallList: true,
+      QueryResultPanel: true,
+      WaitingTip: true,
+      // footer 内的复制按钮与 AI 声明需显式透出
       AssistantMessageFooter: { template: '<div><slot /><span>本回答由 AI 生成</span></div>' },
       // 思考正文抽为 ThinkingSegmentBody（流式粘底跟随），stub 需保留容器类与内容供断言
       ThinkingSegmentBody: {
@@ -35,7 +43,10 @@ const mountList = (messages: Message[], extraProps: Record<string, unknown> = {}
 })
 
 const getThinkingButton = (wrapper: ReturnType<typeof mountList>) =>
-  wrapper.findAll('button').find(button => button.text().includes('思考'))!
+  wrapper.findAll('button').find(button => button.text().includes('思考') && !button.text().includes('工作过程'))!
+
+const getWorkProcessButton = (wrapper: ReturnType<typeof mountList>) =>
+  wrapper.findAll('button').find(button => button.text().includes('工作过程'))!
 
 describe('ConversationMessageList', () => {
   it('keeps streaming thinking segments collapsed by default with a single-line tail preview', () => {
@@ -45,7 +56,7 @@ describe('ConversationMessageList', () => {
     expect(wrapper.find('.bg-slate-50').exists()).toBe(false)
     expect(wrapper.text()).toContain('思考中')
     expect(wrapper.text()).toContain(`…${longThinkingContent.slice(-80)}`)
-    expect(wrapper.find('.fa-chevron-right').classes()).not.toContain('rotate-90')
+    expect(getThinkingButton(wrapper).find('.fa-chevron-right').classes()).not.toContain('rotate-90')
   })
 
   it('expands a collapsed thinking segment on click and collapses it again', async () => {
@@ -56,12 +67,12 @@ describe('ConversationMessageList', () => {
 
     expect(wrapper.find('.bg-slate-50').exists()).toBe(true)
     expect(wrapper.find('.bg-slate-50').text()).toContain(longThinkingContent)
-    expect(wrapper.find('.fa-chevron-right').classes()).toContain('rotate-90')
+    expect(thinkingButton.find('.fa-chevron-right').classes()).toContain('rotate-90')
 
     await thinkingButton.trigger('click')
 
     expect(wrapper.find('.bg-slate-50').exists()).toBe(false)
-    expect(wrapper.find('.fa-chevron-right').classes()).not.toContain('rotate-90')
+    expect(thinkingButton.find('.fa-chevron-right').classes()).not.toContain('rotate-90')
   })
 
   it('keeps thinking segments collapsed and hides the preview when streaming finishes', async () => {
@@ -72,10 +83,136 @@ describe('ConversationMessageList', () => {
     })
 
     expect(wrapper.find('.bg-slate-50').exists()).toBe(false)
+    // 流式结束后整个工作过程折叠为一行（摘要里提及思考分段数）
+    expect(wrapper.text()).toContain('工作过程')
     expect(wrapper.text()).toContain('思考')
     expect(wrapper.text()).not.toContain('思考中')
     // 流式结束后不再显示尾部预览文字
     expect(wrapper.text()).not.toContain(longThinkingContent.slice(-80))
+  })
+
+  it('folds the finished work process behind a toggle row and expands on click', async () => {
+    const wrapper = mountList([{
+      ...streamingAssistantMessage,
+      isStreaming: false,
+      segments: [
+        { type: 'thinkingSegment', thinkingSegmentId: 'thinking-1' },
+        { type: 'text', content: '最终回答' },
+      ],
+    }])
+
+    // 完成后默认折叠：思考正文隐藏，只剩「工作过程」一行 + 摘要
+    expect(wrapper.text()).toContain('工作过程')
+    expect(wrapper.text()).toContain('思考 1')
+    expect(wrapper.find('.bg-slate-50').exists()).toBe(false)
+    expect(getWorkProcessButton(wrapper).attributes('aria-expanded')).toBe('false')
+
+    await getWorkProcessButton(wrapper).trigger('click')
+
+    // 手动展开后工作过程可见：思考分段行恢复（分段级仍默认收起，需再点一次展开正文）
+    const thinkingButton = getThinkingButton(wrapper)
+    expect(thinkingButton).toBeTruthy()
+    expect(wrapper.text()).not.toContain('思考 1')
+
+    await thinkingButton.trigger('click')
+    expect(wrapper.find('.bg-slate-50').exists()).toBe(true)
+    expect(wrapper.find('.bg-slate-50').text()).toContain(longThinkingContent)
+  })
+
+  it('auto-expands a finished work process when there is no final answer', () => {
+    const wrapper = mountList([{ ...streamingAssistantMessage, isStreaming: false }])
+
+    // 没有最终回答时不能把全部过程折叠掉，否则气泡只剩一个空按钮。
+    expect(wrapper.text()).toContain('工作过程')
+    expect(getWorkProcessButton(wrapper).find('.fa-list-check').exists()).toBe(false)
+    expect(getThinkingButton(wrapper)).toBeTruthy()
+    expect(getWorkProcessButton(wrapper).attributes('aria-expanded')).toBe('true')
+  })
+
+  it('keeps the work process expanded while streaming and after manual toggle', async () => {
+    const wrapper = mountList([streamingAssistantMessage])
+
+    // 流式中默认展开：思考分段行直接可见
+    expect(wrapper.text()).toContain('工作过程')
+    expect(wrapper.text()).toContain('思考中')
+
+    // 手动收起工作过程后，思考分段整体隐藏
+    await getWorkProcessButton(wrapper).trigger('click')
+    expect(wrapper.text()).not.toContain('思考中')
+    expect(wrapper.find('.bg-slate-50').exists()).toBe(false)
+
+    // 再展开恢复
+    await getWorkProcessButton(wrapper).trigger('click')
+    expect(wrapper.text()).toContain('思考中')
+  })
+
+  it('folds intermediate narration text and keeps only the final answer when collapsed', () => {
+    const wrapper = mountList([{
+      ...streamingAssistantMessage,
+      isStreaming: false,
+      segments: [
+        { type: 'text', content: '我先看一下数据分布。' },
+        { type: 'thinkingSegment', thinkingSegmentId: 'thinking-1' },
+        { type: 'text', content: '结论：数据已就绪。' },
+      ],
+    }])
+
+    // 折叠后只留最后一段文本（最终回答），中间叙述与思考分段一起进折叠区
+    expect(wrapper.text()).toContain('结论：数据已就绪。')
+    expect(wrapper.text()).not.toContain('我先看一下数据分布。')
+    expect(wrapper.find('.bg-slate-50').exists()).toBe(false)
+  })
+
+  it('does not show a work process button when only legacy arrays have content', () => {
+    const wrapper = mountList([{
+      id: 'assistant-legacy',
+      role: 'assistant',
+      content: '最终回答',
+      isStreaming: false,
+      thinkingSegments: [{ id: 'legacy-thinking', content: '旧思考', toolCallCount: 0 }],
+      segments: [],
+    }])
+
+    // 渲染源是 segments；没有可渲染过程行时不能出现空壳按钮。
+    expect(wrapper.text()).not.toContain('工作过程')
+    expect(wrapper.text()).toContain('最终回答')
+  })
+
+  it('keeps a finished work process open while its run is still active', () => {
+    const wrapper = mountList([
+      { id: 'user-run', role: 'user', content: '查一下', isStreaming: false },
+      {
+        ...streamingAssistantMessage,
+        id: 'assistant-run',
+        isStreaming: false,
+        segments: [
+          { type: 'thinkingSegment', thinkingSegmentId: 'thinking-1' },
+          { type: 'text', content: '阶段回答' },
+        ],
+      },
+    ], { runActive: true })
+
+    // 单条消息 isStreaming 提前结束，但当前 run 仍活跃，过程不应提前收起。
+    expect(getWorkProcessButton(wrapper).attributes('aria-expanded')).toBe('true')
+  })
+
+  it('copies only the final answer, not hidden intermediate narration', async () => {
+    copyTextToClipboardMock.mockClear()
+    const wrapper = mountList([{
+      id: 'assistant-copy',
+      role: 'assistant',
+      content: '中间叙述\n\n结论：数据已就绪。',
+      isStreaming: false,
+      segments: [
+        { type: 'text', content: '我先看一下数据分布。' },
+        { type: 'text', content: '结论：数据已就绪。' },
+      ],
+    }])
+
+    const copyButton = wrapper.findAll('button').find(button => button.text().includes('复制'))!
+    await copyButton.trigger('click')
+
+    expect(copyTextToClipboardMock).toHaveBeenCalledWith('结论：数据已就绪。')
   })
 
   it('hands the single-line preview over to the newly started thinking segment', async () => {
@@ -215,6 +352,29 @@ describe('ConversationMessageList', () => {
       expect(selection.removeAllRanges).toHaveBeenCalledTimes(1)
       // 上抛后浮层收起
       expect(wrapper.text()).not.toContain('添加到对话')
+    })
+
+    it('真实点击序列（mouseup → click）下浮层按钮不失效：添加到对话/复制都生效', async () => {
+      const wrapper = mountWithAssistant()
+      const { anchorNode, selection } = stubSelection()
+      await mouseUpOnBubble(wrapper, anchorNode)
+
+      // 浏览器点击序列：mousedown → mouseup → click；mouseup 会冒泡到列表根节点
+      const addButton = wrapper.findAll('button').find(button => button.text().includes('添加到对话'))!
+      await addButton.trigger('mouseup', { button: 0 })
+      await addButton.trigger('click')
+      expect(wrapper.emitted('addToConversation')).toEqual([['选中的片段']])
+      expect(selection.removeAllRanges).toHaveBeenCalledTimes(1)
+
+      // 复制按钮同理：mouseup 后 click 仍然命中
+      const copyWrapper = mountWithAssistant()
+      const copySelection = stubSelection()
+      await mouseUpOnBubble(copyWrapper, copySelection.anchorNode)
+      const copyToolbar = copyWrapper.find('[data-quote-toolbar]')
+      const copyButton = copyToolbar.findAll('button').find(button => button.text().includes('复制'))!
+      await copyButton.trigger('mouseup', { button: 0 })
+      await copyButton.trigger('click')
+      expect(copyTextToClipboardMock).toHaveBeenCalledWith('选中的片段')
     })
 
     it('流式中的助手气泡不触发划选浮层', async () => {

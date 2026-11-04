@@ -212,6 +212,118 @@ describe('subagent trail replay', () => {
     expect(assistant.toolCalls?.[0]?.subagentTrail).toEqual(trail)
   })
 
+  it('restores subagent token usage from history events', () => {
+    const messages = buildHistoryMessagesFromEvents([
+      { sequence_no: 1, turn_id: 'turn-1', event_type: 'user_message', payload: { id: 'user-1', content: '盘点' } },
+      {
+        sequence_no: 2, turn_id: 'turn-1', event_type: 'assistant_message',
+        payload: { id: 'assistant-1', role: 'assistant', content: '', tool_calls: [{ id: 'task-1', name: 'task', args: {} }] },
+      },
+      {
+        sequence_no: 3, turn_id: 'turn-1', event_type: 'tool_result',
+        payload: {
+          id: 'tool-result-1', role: 'tool', tool_call_id: 'task-1', tool_name: 'task', content: '报告',
+          subagent_token_usage: {
+            input_tokens: 3_000,
+            output_tokens: 300,
+            total_tokens: 3_300,
+            cache_read_input_tokens: 1_000,
+          },
+        },
+      },
+    ])
+    const taskCall = messages.find(message => message.role === 'assistant')!.toolCalls?.[0]
+    expect(taskCall?.subagentTokenUsage).toEqual({
+      input_tokens: 3_000,
+      output_tokens: 300,
+      total_tokens: 3_300,
+      cache_read_input_tokens: 1_000,
+      cache_creation_input_tokens: undefined,
+      reasoning_tokens: undefined,
+    })
+  })
+
+  it('restores task tool execution timing (subagent total duration) from history events', () => {
+    const messages = buildHistoryMessagesFromEvents([
+      { sequence_no: 1, turn_id: 'turn-1', event_type: 'user_message', payload: { id: 'user-1', content: '盘点' } },
+      {
+        sequence_no: 2, turn_id: 'turn-1', event_type: 'assistant_message',
+        payload: { id: 'assistant-1', role: 'assistant', content: '', tool_calls: [{ id: 'task-1', name: 'task', args: {} }] },
+      },
+      {
+        sequence_no: 3, turn_id: 'turn-1', event_type: 'tool_result',
+        payload: {
+          id: 'tool-result-1', role: 'tool', tool_call_id: 'task-1', tool_name: 'task', content: '报告',
+          started_at_ms: 10_000, ended_at_ms: 190_000,
+        },
+      },
+    ])
+    const taskCall = messages.find(message => message.role === 'assistant')!.toolCalls?.[0]
+    expect(taskCall?.started_at_ms).toBe(10_000)
+    expect(taskCall?.ended_at_ms).toBe(190_000)
+  })
+
+  it('restores inner tool execution timing on the trail', () => {
+    const messages = buildHistoryMessagesFromEvents([
+      { sequence_no: 1, turn_id: 'turn-1', event_type: 'user_message', payload: { id: 'user-1', content: '算一下' } },
+      {
+        sequence_no: 2, turn_id: 'turn-1', event_type: 'assistant_message',
+        payload: { id: 'assistant-1', role: 'assistant', content: '', tool_calls: [{ id: 'task-1', name: 'task', args: {} }] },
+      },
+      {
+        sequence_no: 3, turn_id: 'turn-1', event_type: 'tool_result',
+        payload: {
+          id: 'tool-result-1', role: 'tool', tool_call_id: 'task-1', tool_name: 'task', content: '结论',
+          subagent_trail: [{
+            kind: 'tool', id: 'inner-1', tool_name: 'calculator_tool', args: {},
+            result: '2', status: 'completed', started_at_ms: 1_000, ended_at_ms: 1_250,
+          }],
+        },
+      },
+    ])
+    const assistant = messages.find(message => message.role === 'assistant')!
+    expect(assistant.toolCalls?.[0]?.subagentTrail?.[0]).toMatchObject({
+      started_at_ms: 1_000,
+      ended_at_ms: 1_250,
+    })
+  })
+
+  it('restores subagent context usage: window percent for new snapshots, legacy percent as budget', () => {
+    const buildUsage = (usage: Record<string, unknown>) => buildHistoryMessagesFromEvents([
+      { sequence_no: 1, turn_id: 'turn-1', event_type: 'user_message', payload: { id: 'user-1', content: '盘点' } },
+      {
+        sequence_no: 2, turn_id: 'turn-1', event_type: 'assistant_message',
+        payload: { id: 'assistant-1', role: 'assistant', content: '', tool_calls: [{ id: 'task-1', name: 'task', args: {} }] },
+      },
+      {
+        sequence_no: 3, turn_id: 'turn-1', event_type: 'tool_result',
+        payload: {
+          id: 'tool-result-1', role: 'tool', tool_call_id: 'task-1', tool_name: 'task', content: '结论',
+          subagent_context_usage: usage,
+        },
+      },
+    ]).find(message => message.role === 'assistant')!.toolCalls?.[0]?.subagentContextUsage
+
+    expect(buildUsage({
+      used_tokens: 30_000,
+      threshold_tokens: 70_000,
+      context_window: 100_000,
+      percent: 30,
+      budget_percent: 42,
+    })).toEqual({
+      used_tokens: 30_000,
+      threshold_tokens: 70_000,
+      context_window: 100_000,
+      percent: 30,
+      budget_percent: 42,
+    })
+
+    // 旧快照没有窗口字段：percent 当时是预算口径 → 归到 budget_percent，不伪造成窗口占比
+    const legacy = buildUsage({ used_tokens: 30_000, threshold_tokens: 70_000, percent: 42 })
+    expect(legacy?.budget_percent).toBe(42)
+    expect(legacy?.percent).toBeUndefined()
+  })
+
   it('drops invalid trail entries instead of failing the whole replay', () => {
     const messages = buildHistoryMessages([
       { id: 'user-1', role: 'user', content: '分析' },

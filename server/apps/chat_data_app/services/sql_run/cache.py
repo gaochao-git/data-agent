@@ -46,8 +46,14 @@ def build_sql_result_cache_identity(
     execution_target: dict[str, Any],
     effective_sql: str,
     datasource_id: str | None = None,
+    user_id: str | None = None,
 ) -> dict[str, Any]:
-    """Build identity fields for SQL result cache lookup."""
+    """Build identity fields for SQL result cache lookup.
+
+    HTTP 执行器会把 user_id/username 透传给外部查询服务，对方可能按用户做
+    数据可见性过滤；因此 HTTP 目标的缓存必须带用户/机构维度，不能跨用户复用。
+    直连模式使用共享数据源凭证，结果与用户无关，保持跨用户命中。
+    """
     normalized_datasource_id = str(
         datasource_id or (execution_target or {}).get("datasource_id") or (execution_target or {}).get("id") or ""
     ).strip()
@@ -56,11 +62,19 @@ def build_sql_result_cache_identity(
     source_type = str((execution_target or {}).get("source_type") or "").strip().lower()
     normalized_sql = normalize_sql_cache_text(effective_sql)
     sql_hash = hashlib.sha256(normalized_sql.encode("utf-8")).hexdigest()
+    # 仅用户态隔离的执行目标才把授权域纳入 key
+    auth_scope = ""
+    if executor_type == "http":
+        namespace = str(
+            (execution_target or {}).get("org_code") or (execution_target or {}).get("namespace") or ""
+        ).strip()
+        auth_scope = f"{user_id or ''}:{namespace}"
     raw_cache_key = json.dumps(
         {
             "datasource_id": normalized_datasource_id,
             "member_datasource_id": member_datasource_id,
             "sql_hash": sql_hash,
+            "auth_scope": auth_scope,
         },
         ensure_ascii=False,
         sort_keys=True,
@@ -102,7 +116,12 @@ async def get_sql_result_cache(cache_identity: dict[str, Any]) -> dict[str, Any]
     payload["status"] = query_result_status(payload)
     payload.pop("success", None)
     payload["cache_hit"] = True
-    payload["execution_time_ms"] = int((time.perf_counter() - started_at) * 1000)
+    cache_read_ms = int((time.perf_counter() - started_at) * 1000)
+    payload["cache_read_ms"] = cache_read_ms
+    # 保留原始查询耗时：execution_time_ms 是用户看到的“查询耗时”，
+    # 缓存读取开销单独放 cache_read_ms，不能用它覆盖原耗时。
+    if not isinstance(payload.get("execution_time_ms"), int):
+        payload["execution_time_ms"] = cache_read_ms
     payload["cache_age_seconds"] = cache_age_seconds
     payload["cache_expires_in_seconds"] = cache_expires_in_seconds
     return payload

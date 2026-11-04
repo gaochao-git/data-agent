@@ -151,12 +151,39 @@ async def test_list_conversations_grouped_and_unknown_agent_branches(router_stat
 
 
 @pytest.mark.asyncio
+async def test_token_usage_detail_route(router_state, monkeypatch):
+    async def config_found(conversation_id, user_id=None):
+        return {"get_checkpointer": None}
+
+    async def detail_ok(*_args, **_kwargs):
+        return {"used": 10, "breakdown": [{"content": "full"}]}
+
+    monkeypatch.setattr(conversation_router, "get_agent_config_by_conversation", config_found)
+    monkeypatch.setattr(conversation_router.conversation_event_service, "get_latest_token_usage_detail", detail_ok)
+    response = await conversation_router.get_conversation_token_usage("conv_1", FakeRequest())
+    assert payload(response)["data"] == {"used": 10, "breakdown": [{"content": "full"}]}
+
+    async def config_missing(conversation_id, user_id=None):
+        return None
+
+    monkeypatch.setattr(conversation_router, "get_agent_config_by_conversation", config_missing)
+    response = await conversation_router.get_conversation_token_usage("conv_x", FakeRequest())
+    assert payload(response)["msg"] == "对话不存在"
+
+
+@pytest.mark.asyncio
 async def test_detail_title_favorite_error_paths(router_state, monkeypatch):
     async def config_found(conversation_id, user_id=None):
         return {"get_checkpointer": None}
 
     async def detail_ok(*_args, **_kwargs):
-        return {"id": "conv_1", "messages": ["m"], "reasoning_segments": ["r"], "extra": True}
+        return {
+            "id": "conv_1",
+            "messages": ["m"],
+            "reasoning_segments": ["r"],
+            "extra": True,
+            "token_usage": {"used": 10, "breakdown": [{"content": "large"}]},
+        }
 
     monkeypatch.setattr(conversation_router, "get_agent_config_by_conversation", config_found)
     monkeypatch.setattr(conversation_router.conversation, "get_detail", detail_ok)
@@ -164,6 +191,7 @@ async def test_detail_title_favorite_error_paths(router_state, monkeypatch):
     data = payload(response)["data"]
     assert "messages" not in data and "reasoning_segments" not in data
     assert data["extra"] is True
+    assert "content" not in data["token_usage"]["breakdown"][0]
 
     async def detail_missing(*_args, **_kwargs):
         return None

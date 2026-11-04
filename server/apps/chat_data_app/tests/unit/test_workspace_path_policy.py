@@ -69,3 +69,31 @@ def test_policy_keeps_special_directory_write_rules_in_one_place():
         semantic,
         allow_managed_semantic_model_write=True,
     )
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/mnt/user-data/workspace\\..\\secret.txt",
+        "/mnt/user-data/workspace%5csecret.txt",
+    ],
+)
+def test_policy_rejects_backslash_separators(path):
+    with pytest.raises(ValueError, match="反斜杠"):
+        WORKSPACE_PATH_POLICY.parse(path)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/mnt/user-data/workspace/",
+        "/mnt/user-data/workspace//a.txt",
+        "/mnt/user-data/workspace/./a.txt",
+        "/mnt/skills/demo/",
+        "/mnt/skills//demo",
+        "/mnt/skills/demo/./SKILL.md",
+    ],
+)
+def test_policy_rejects_non_canonical_segments(path):
+    with pytest.raises(ValueError):
+        WORKSPACE_PATH_POLICY.parse(path)

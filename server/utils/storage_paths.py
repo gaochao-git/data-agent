@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import re
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from urllib.parse import quote
 
@@ -78,6 +78,9 @@ def normalize_created_date(created_date: str | None = None) -> str:
         return date.today().strftime("%Y-%m-%d")
     if not isinstance(created_date, str) or not _CREATED_DATE_PATTERN.fullmatch(created_date):
         raise ValueError(f"created_date 必须为 'YYYY-MM-DD' 格式: {created_date!r}")
+    # 正则只能校验形状（2026-02-31 也会通过），这里再做一次真实日历校验，避免
+    # 生成语义上不存在的日期目录。
+    datetime.strptime(created_date, "%Y-%m-%d")
     return created_date
 
 
@@ -95,8 +98,30 @@ def conversation_thread_dir(user_id: str, conversation_id: str, *, created_date:
     )
 
 
+def assert_workspace_root(
+    workspace_root: str,
+    *,
+    chat_data_home: str | None = None,
+    require_user_data_name: bool = False,
+) -> Path:
+    """校验 workspace root 属于 ChatData 共享数据目录。
+
+    会话工作区、sandbox 同步和本地后端各自需要同一套边界；集中在这里，避免
+    “某个入口只检查了一半”的漂移。``require_user_data_name`` 供 sandbox 使用：
+    工作区根必须正好是 ``.../<uid>/<date>/<cid>/user-data``。
+    """
+    root = Path(chat_data_home or CHAT_DATA_HOME).expanduser().resolve()
+    target = Path(str(workspace_root or "")).expanduser().resolve()
+    if target != root and root not in target.parents:
+        raise ValueError(f"会话工作区不在 CHAT_DATA_HOME 内: {workspace_root}")
+    if require_user_data_name and target.name != "user-data":
+        raise ValueError(f"会话工作区必须是 user-data 目录: {workspace_root}")
+    return target
+
+
 __all__ = [
     "CHAT_DATA_HOME",
+    "assert_workspace_root",
     "THREADS_DIR",
     "conversation_thread_dir",
     "normalize_conversation_id",

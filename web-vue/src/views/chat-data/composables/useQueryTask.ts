@@ -1,5 +1,5 @@
-import { createQueryTask, getQueryTask, type QueryTaskStatusResult } from '../api'
-import { abortableSleep, createAbortError } from '../utils/abort'
+import { createQueryTask, type QueryTaskStatusResult } from '../api'
+import { waitForQueryTask } from '../utils/queryTaskPolling'
 
 const DEFAULT_POLL_INTERVAL_MS = 1500
 
@@ -27,38 +27,13 @@ interface WaitTaskOptions {
 
 export function useQueryTask() {
   const waitForTask = async (taskId: string, options: WaitTaskOptions = {}) => {
-    const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS
-    const signal = options.signal
-
-    // 查询超时由后端 executor 层控制（MySQL/Hive 各有默认超时，可配置）。
-    // 前端只负责轮询到终态，不主动停止任务；长任务可在查询历史中手动停止。
-    while (true) {
-      // 每轮发起查询前先响应取消:调用方已中止就不再发起下一次状态查询
-      if (signal?.aborted) {
-        throw createAbortError()
-      }
-      const response = await getQueryTask(taskId)
-      const task = response.data
-      if (!task) {
-        throw new Error('任务不存在')
-      }
-      options.onProgress?.(task)
-
-      if (task.status === 'succeeded' || task.status === 'partial_success') {
-        return task
-      }
-      if (task.status === 'cancelled') {
-        if (options.returnTerminalTask) return task
-        throw new Error(task.error_message || '已人工取消')
-      }
-      if (task.status === 'failed') {
-        if (options.returnTerminalTask) return task
-        throw new Error(task.error_message || '任务执行失败')
-      }
-
-      // sleep 可被取消信号打断,卸载后不再空等一个完整轮询间隔
-      await abortableSleep(Math.max(500, pollIntervalMs), signal)
-    }
+    // 查询超时由后端 executor 层控制；前端只负责轮询到终态（表预览/看板共享同一实现）
+    return waitForQueryTask(taskId, {
+      pollIntervalMs: options.pollIntervalMs,
+      returnTerminalTask: options.returnTerminalTask,
+      onProgress: options.onProgress,
+      signal: options.signal,
+    })
   }
 
   const submitSqlTask = async (params: SubmitSqlTaskParams, options: WaitTaskOptions = {}) => {

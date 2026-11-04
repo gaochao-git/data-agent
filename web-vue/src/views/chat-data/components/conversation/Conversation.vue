@@ -5,7 +5,7 @@
  */
 import { computed, nextTick, onMounted, onUnmounted, ref, toRef, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import type { ChatDataContextCompressionEvent, ChatDataTokenUsage, DashboardSpecPayload, DataSource, ExecutionTargetOption, LangGraphMessage, Message, MessageAttachment, PendingUserQuestion, SemanticYamlFile, SkillInfo, SubagentContextUsage, SubagentTrailItem, ThinkingSegment, ToolCallInfo, ToolLifecycleEventData, UserQuestionAnswer } from '../../types'
+import type { ChatDataContextCompressionEvent, ChatDataTokenUsage, DashboardSpecPayload, DataSource, ExecutionTargetOption, LangGraphMessage, Message, MessageAttachment, PendingUserQuestion, SemanticYamlFile, SkillInfo, SubagentCompaction, SubagentContextUsage, SubagentTrailItem, ThinkingSegment, ToolCallInfo, ToolLifecycleEventData, UserQuestionAnswer } from '../../types'
 import { useSqlGenerator, type RunDoneStatus } from '../../composables/useSqlGenerator'
 import { useConversationHistory } from '../../composables/useConversationHistory'
 import { useModelOptions } from '../../composables/useModelOptions'
@@ -28,12 +28,14 @@ import WorkspaceFileMentionMenu from './WorkspaceFileMentionMenu.vue'
 import PresentedFileArtifacts from './PresentedFileArtifacts.vue'
 import SaveToPanelModal from '../SaveToPanelModal.vue'
 import { parseDateTimeValue, formatLocalDateTime, toGenerationStats } from '../../utils'
-import { extractSemanticParamsFromArgs, getRenderableQueryResultData } from '../../utils/semanticTool'
+import { normalizeToolCallForDisplay, shouldInlineRenderQueryResult } from '../../utils/semanticTool'
 import { admitInboxMessages, reconcileInboxSnapshot, type InboxQueueItem, type InboxQueueType } from '../../utils/inboxQueue'
 import UserQuestionCard from './UserQuestionCard.vue'
 import AnalysisProgress from './AnalysisProgress.vue'
-import { deriveAnalysisTodos } from '../../utils/analysisTodos'
+import { deriveAnalysisTodos, shouldShowAnalysisProgress } from '../../utils/analysisTodos'
 import { createTopReachTracker } from '../../utils/scrollReach'
+import { applySubagentCompactionToTool, buildSubagentCompactionRecord } from '../../utils/subagentCompaction'
+import { isScrolledToBottom } from '../../utils/scrollFollow'
 import { normalizeVisiblePath } from '../../utils/consoleFileTree'
 import {
   getCardChartType,
@@ -56,7 +58,6 @@ import {
   replaceVisiblePathsForDisplay,
 } from '../../utils/messageArtifacts'
 import { ACCEPTED_FILE_TYPES, MAX_FILE_SIZE } from '../../utils/uploadLimits'
-
 interface Props {
   datasource?: DataSource | null
   conversationId?: string | null
@@ -509,8 +510,9 @@ const fileInputRef = ref<HTMLInputElement | null>(null)
 const hasParsingFiles = computed(() => pendingFiles.value.some(f => f.status === 'uploading'))
 const hasCompletedPendingFiles = computed(() => pendingFiles.value.some(f => f.status === 'uploaded'))
 
-// 分析任务计划：从消息流中的 write_todos 派生，实时流与历史回放同源；出现后常驻本会话
+// 分析任务计划：从消息流中的 write_todos 派生，实时流与历史回放同源；全部完成后隐藏
 const analysisTodos = computed(() => deriveAnalysisTodos(messages.value))
+const showAnalysisProgress = computed(() => shouldShowAnalysisProgress(analysisTodos.value))
 
 const handleUploadFile = () => {
   fileInputRef.value?.click()
@@ -706,7 +708,6 @@ const resetTokenUsagePanel = (clearUsage = true) => {
 const toolCallsMap = ref<Map<string, ToolCallInfo>>(new Map())
 const activeToolCallId = ref<string | null>(null)
 const sidePanelOpen = ref(false)
-const sidePanelTab = ref<'console' | 'tool'>('console')
 // 工作区文件面板整体拆到 ConversationWorkspacePanel.vue：文件列表/树/预览/上传/下载/删除
 // 与刷新调度都在子组件内闭环，父级只通过 ref 调用刷新与打开入口。
 const workspacePanelRef = ref<InstanceType<typeof ConversationWorkspacePanel> | null>(null)
@@ -916,6 +917,8 @@ const findToolCallById = (id: string | null) => {
           args: inner.args || {},
           result: inner.result,
           status: inner.status || 'running',
+          started_at_ms: inner.started_at_ms ?? null,
+          ended_at_ms: inner.ended_at_ms ?? null,
         }
       }
     }
@@ -928,37 +931,8 @@ const activeToolCall = computed(() => {
   return findToolCallById(id)
 })
 
-const isQueryResultRenderTool = (toolInfo?: ToolCallInfo | null): boolean => {
-  if (!toolInfo) return false
-  const action = String((toolInfo.args || {})?.action || '')
-  return toolInfo.tool_name === 'ontology_tool' ? ['find_objects', 'aggregate_objects'].includes(action) : toolInfo.tool_name === 'data_analyzing_tool' && action === 'execute_query'
-}
-
-const buildSemanticQueryToolRenderInfo = (toolInfo: ToolCallInfo): ToolCallInfo => {
-  if (!isQueryResultRenderTool(toolInfo)) return toolInfo
-  const result = String(toolInfo.result || '')
-  const queryResultData = getRenderableQueryResultData(result)
-  const semanticParams = extractSemanticParamsFromArgs(toolInfo.args) || toolInfo.semanticParams
-  return {
-    ...toolInfo,
-    renderId: queryResultData || toolInfo.renderId,
-    renderType: queryResultData ? 'queryResult' : toolInfo.renderType,
-    semanticParams,
-  }
-}
-
-const normalizeToolCallForDisplay = (toolInfo: ToolCallInfo): ToolCallInfo => (
-  isQueryResultRenderTool(toolInfo) ? buildSemanticQueryToolRenderInfo(toolInfo) : toolInfo
-)
-
-const shouldInlineRenderToolCall = (toolCall?: ToolCallInfo | null): boolean => (
-  Boolean(
-    isQueryResultRenderTool(toolCall) &&
-    toolCall?.status === 'completed' &&
-    toolCall?.renderId &&
-    toolCall?.renderType === 'queryResult'
-  )
-)
+// 查询结果渲染口径统一在 utils/semanticTool（主对话 / 子智能体过程共用）
+const shouldInlineRenderToolCall = (toolCall?: ToolCallInfo | null): boolean => shouldInlineRenderQueryResult(toolCall)
 
 const handleImportWorkspaceSkill = async (path: string) => {
   const conversationId = localConversationId.value
@@ -1094,17 +1068,14 @@ const handleCreateDashboardFromPreview = async (message: Message, tool: ToolCall
 }
 
 const selectToolCall = (toolCall: ToolCallInfo) => {
-  if (activeToolCallId.value === toolCall.tool_call_id && sidePanelOpen.value && sidePanelTab.value === 'tool') {
-    sidePanelOpen.value = false
-    return
-  }
+  // 右侧面板是 tab 容器：点工具只负责打开/激活对应 tab，不再抢占其他 tab 的内容。
   activeToolCallId.value = toolCall.tool_call_id
-  sidePanelTab.value = 'tool'
   sidePanelOpen.value = true
+  workspacePanelRef.value?.openTool(toolCall)
 }
 
 const openConsolePanel = () => {
-  sidePanelTab.value = 'console'
+  // 只负责展开：保持上次停留的 tab（关闭只卸载 aside，tab 状态还在），不强制回到「文件管理」
   sidePanelOpen.value = true
 }
 
@@ -1253,13 +1224,8 @@ watch(
   },
 )
 
-const getConversationDisplayContent = (content: string) => content.trim()
+// 距底部阈值内视为「贴底」：与右侧子智能体过程共用 utils/scrollFollow 的同一口径
 
-// 距底部 100px 内视为「贴底」：内容增长时自动跟随，也容忍用户的小幅回滚
-const NEAR_BOTTOM_THRESHOLD_PX = 100
-
-const isScrolledToBottom = (container: HTMLElement) =>
-  container.scrollHeight - container.scrollTop - container.clientHeight < NEAR_BOTTOM_THRESHOLD_PX
 
 // 滚到顶自动续页：只在「从阈值之外向上越过阈值」时放行一次（见 utils/scrollReach）
 const topReach = createTopReachTracker()
@@ -1469,8 +1435,7 @@ watch(
       loadingPresentedArtifactKeys.value = new Set()
       activeToolCallId.value = null
       sidePanelOpen.value = false
-      sidePanelTab.value = 'console'
-      activeAssistantMessageId.value = null
+          activeAssistantMessageId.value = null
       resetTokenUsagePanel()
       resetHistory()
       clearQuotedSnippets()
@@ -1684,26 +1649,16 @@ const upsertSubagentTrailItem = (event: ToolLifecycleEventData) => {
     }
   }
 
-  // 子智能体上下文用量：只更新父 task 调用上的快照字段（标题行徽标），
-  // 不进 trail 列表；同一事件流内每次节点更新覆盖一次，天然收敛到最新值
-  const upsertSubagentContextUsage = (event: ToolLifecycleEventData) => {
-    const parentId = event.parent_tool_call_id
-    if (!parentId || typeof event.used_tokens !== 'number') return
-    const usage: SubagentContextUsage = {
-      used_tokens: event.used_tokens,
-      threshold_tokens: event.threshold_tokens ?? 0,
-      percent: event.percent ?? 0,
-    }
-    const mergeParent = (tool: ToolCallInfo): ToolCallInfo => (
-      { ...tool, subagentContextUsage: usage }
-    )
-    const parentFromMap = toolCallsMap.value.get(parentId)
-    const merged = mergeParent(parentFromMap || {
+  /** 只更新父 task 调用上的字段（不碰 trail），同一事件流内收敛到最新值。 */
+  const applySubagentToolPatch = (parentId: string, patch: (tool: ToolCallInfo) => ToolCallInfo | null) => {
+    const base = toolCallsMap.value.get(parentId) || {
       tool_call_id: parentId,
       tool_name: 'task',
       args: {},
       status: 'running',
-    })
+    }
+    const merged = patch(base)
+    if (!merged) return
     toolCallsMap.value.set(parentId, merged)
     for (const message of messages.value) {
       if (!message.toolCalls?.some(item => item.tool_call_id === parentId)) continue
@@ -1711,8 +1666,40 @@ const upsertSubagentTrailItem = (event: ToolLifecycleEventData) => {
     }
   }
 
+  // 子智能体上下文用量：只更新父 task 调用上的快照字段（标题行徽标）
+  const upsertSubagentContextUsage = (event: ToolLifecycleEventData) => {
+    const parentId = event.parent_tool_call_id
+    if (!parentId || typeof event.used_tokens !== 'number') return
+    const usage: SubagentContextUsage = {
+      used_tokens: event.used_tokens,
+      threshold_tokens: event.threshold_tokens ?? 0,
+      context_window: event.context_window,
+      percent: event.percent,
+      budget_percent: event.budget_percent,
+    }
+    const usageDetail = event.token_usage_detail
+    applySubagentToolPatch(parentId, tool => ({
+      ...tool,
+      subagentContextUsage: usage,
+      ...(usageDetail ? { subagentTokenUsageDetail: usageDetail } : {}),
+    }))
+  }
+
+  // 子图压缩记录：按 id 去重追加到父 task 调用（过程面板展示「已压缩 N 次」）
+  const upsertSubagentCompaction = (event: ToolLifecycleEventData) => {
+    const parentId = event.parent_tool_call_id
+    const record = buildSubagentCompactionRecord(event)
+    if (!parentId || !record) return
+    applySubagentToolPatch(parentId, tool => applySubagentCompactionToTool(tool, record))
+  }
+
   if (event.type === 'subagent_context_usage') {
     upsertSubagentContextUsage(event)
+    return
+  }
+
+  if (event.type === 'subagent_context_compression') {
+    upsertSubagentCompaction(event)
     return
   }
 
@@ -1772,13 +1759,22 @@ const upsertSubagentTrailItem = (event: ToolLifecycleEventData) => {
     args: { ...(event.args || {}) },
     result: event.content || event.result,
     status: event.type === 'tool_failed' ? 'error' : event.type === 'tool_completed' ? 'completed' : 'running',
+    started_at_ms: event.started_at_ms ?? null,
+    ended_at_ms: event.ended_at_ms ?? null,
   }
   commitTrail((trail) => {
     const idx = trail.findIndex(item => item.id === entryId)
     if (idx >= 0) {
       const prev = trail[idx]
       if (!prev) return trail
-      trail[idx] = { ...prev, ...entry, args: { ...(prev.args || {}), ...(entry.args || {}) } }
+      trail[idx] = {
+        ...prev,
+        ...entry,
+        args: { ...(prev.args || {}), ...(entry.args || {}) },
+        // tool_started 事件不带计时，完成事件才补齐：缺省时保留已有值
+        started_at_ms: entry.started_at_ms ?? prev.started_at_ms ?? null,
+        ended_at_ms: entry.ended_at_ms ?? prev.ended_at_ms ?? null,
+      }
     } else {
       trail.push(entry)
     }
@@ -2135,6 +2131,7 @@ const submitAnalysisQuery = async (
             streamingIntent: typeof event.intent === 'string' && event.intent ? event.intent : existing?.streamingIntent,
             status: isFailed ? 'error' : isCompleted ? 'completed' : 'running',
             subagentTrail: existing?.subagentTrail,
+            subagentTokenUsage: event.subagent_token_usage || existing?.subagentTokenUsage, subagentContextUsage: existing?.subagentContextUsage, subagentCompactions: existing?.subagentCompactions, subagentTokenUsageDetail: existing?.subagentTokenUsageDetail,
             started_at_ms: event.started_at_ms ?? existing?.started_at_ms ?? null,
             ended_at_ms: event.ended_at_ms ?? existing?.ended_at_ms ?? null,
           }
@@ -2231,6 +2228,8 @@ const resumePendingQuestion = async (answers?: UserQuestionAnswer[], cancelled =
   if (!question || !conversationId || isSubmittingQuestion.value || isGenerating.value) return
   isSubmittingQuestion.value = true
   pendingUserQuestion.value = null
+  // 恢复流不带新 run 头、不会触发 onRunStarted；先切 active，否则答完题仍被 waiting_user 拦截发送/队列
+  hasActiveRun.value = true; activeRunStatus.value = 'active'; emit('runStatusChanged', conversationId, 'active')
   const resumeAssistant = activeAssistantMessageId.value
     ? messages.value.find(item => item.id === activeAssistantMessageId.value && item.role === 'assistant')
     : [...messages.value].reverse().find(item => item.role === 'assistant')
@@ -2617,7 +2616,6 @@ const handleKeyDown = (event: KeyboardEvent) => {
           :active-tool-call-id="activeToolCallId"
           :conversation-id="localConversationId"
           :on-save="handleSaveToDashboard"
-          :display-content="getConversationDisplayContent"
           :resolve-tool-call="getRenderableMessageToolCall"
           :should-inline-render-result="shouldInlineRenderToolCall"
           :run-active="isGenerating || hasActiveRun"
@@ -2764,7 +2762,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
       <div v-show="!isLoadingHistory || messages.length > 0" class="p-4 bg-gray-50 border-t border-slate-100">
         <div class="max-w-[774px] mx-auto w-[90%]">
           <AnalysisProgress
-            v-if="analysisTodos.items.length"
+            v-if="showAnalysisProgress"
             class="mb-3"
             :todos="analysisTodos"
           />
@@ -2930,6 +2928,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
               <ConversationTokenUsage
                 ref="tokenUsagePanelRef"
                 :usage="tokenUsage"
+                :conversation-id="localConversationId || props.conversationId || undefined"
                 :messages="messages"
                 :is-generating="isGenerating"
                 compact
@@ -2968,8 +2967,8 @@ const handleKeyDown = (event: KeyboardEvent) => {
     <ConversationWorkspacePanel
       ref="workspacePanelRef"
       v-model:open="sidePanelOpen"
-      v-model:tab="sidePanelTab"
       :active-tool-call="activeToolCall"
+      :resolve-tool-call="findToolCallById"
       :conversation-id="localConversationId"
       :run-busy="runBusy"
       :can-import-semantic-model="props.canImportSemanticModel"
@@ -2977,6 +2976,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
       :ensure-conversation-id="ensureConversationId"
       @conversation-created="handlePanelConversationCreated"
       @import-semantic-yaml="emit('importSemanticYaml', $event)"
+      @select-tool="selectToolCall"
     />
 
     <el-dialog v-model="isSkillManagerOpen" width="min(1280px, 92vw)" title="技能管理" append-to-body>

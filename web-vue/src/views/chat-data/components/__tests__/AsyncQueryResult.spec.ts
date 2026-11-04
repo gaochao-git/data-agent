@@ -43,7 +43,8 @@ describe('AsyncQueryResult', () => {
       },
     })
 
-    expect(wrapper.text()).toContain('Invalid expression near LIMIT1')
+    expect(wrapper.text()).toContain('SQL 执行错误，请查看详情')
+    expect(wrapper.text()).not.toContain('Invalid expression near LIMIT1')
     expect(wrapper.text()).not.toContain('Please use LIMIT 100')
     expect(wrapper.text()).not.toContain('\u001b[4m')
     expect(wrapper.text()).toContain('失败')
@@ -56,6 +57,22 @@ describe('AsyncQueryResult', () => {
     expect(wrapper.text()).toContain('Please use LIMIT 100')
     expect(wrapper.text()).not.toContain('\u001b[4m')
     expect(wrapper.get('[data-testid="toggle-query-error"]').attributes('aria-expanded')).toBe('true')
+  })
+
+  it('失败结果展示错误来源标签', async () => {
+    const wrapper = mountResult({
+      status: 'failed',
+      error: 'TExecuteStatementResp(...)',
+      error_source: 'remote_http',
+      columns: [],
+      data: [],
+      total_count: 0,
+    }, {
+      global: { stubs: { 'el-dialog': true } },
+    })
+
+    expect(wrapper.text()).toContain('SQL 执行错误，请查看详情')
+    expect(wrapper.text()).toContain('外部接口')
   })
 
   it('DSL 模式徽标可点击，弹窗展示 DSL 与编译 SQL', async () => {

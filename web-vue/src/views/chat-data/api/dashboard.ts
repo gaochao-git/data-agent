@@ -5,6 +5,7 @@
 
 import request from '@/utils/request'
 import requestStream from '@/utils/requestStream'
+import { waitForQueryTask } from '../utils/queryTaskPolling'
 import { parseSseChunk } from '../utils/sse'
 import { abortableSleep, createAbortError } from '../utils/abort'
 import type { ChartType } from '../chartTypes'
@@ -289,30 +290,13 @@ async function waitForDashboardTask<T = unknown>(
   onProgress?: (task: QueryTaskStatusResult<T>) => void,
   signal?: AbortSignal
 ): Promise<QueryTaskStatusResult<T>> {
-  const startedAt = Date.now()
-  while (true) {
-    // 每轮发起查询前先响应取消,避免组件卸载后仍发起下一次状态查询
-    if (signal?.aborted) {
-      throw createAbortError()
-    }
-    const resp = await request({
-      url: `/agents/api/chatdata/query-tasks/${taskId}`,
-      method: 'get',
-    })
-    const task = resp.data as QueryTaskStatusResult<T>
-    onProgress?.(task)
-    if (task.status === 'succeeded' || task.status === 'partial_success') {
-      return task
-    }
-    if (task.status === 'failed' || task.status === 'cancelled') {
-      throw new Error(task.error_message || '任务执行失败')
-    }
-    if (Date.now() - startedAt > 15 * 60 * 1000) {
-      throw new Error('任务执行超时，请稍后重试')
-    }
-    // sleep 可被取消信号打断,卸载后不再空等一个完整轮询间隔
-    await abortableSleep(Math.max(500, pollIntervalMs), signal)
-  }
+  // 看板/表预览/普通任务共用同一轮询实现；看板保留 15 分钟前端兜底
+  return await waitForQueryTask(taskId, {
+    pollIntervalMs,
+    onProgress: onProgress as ((task: QueryTaskStatusResult) => void) | undefined,
+    signal,
+    timeoutMs: 15 * 60 * 1000,
+  }) as QueryTaskStatusResult<T>
 }
 
 /**

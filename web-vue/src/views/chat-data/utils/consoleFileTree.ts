@@ -89,9 +89,8 @@ export function isTreeFullyCollapsed(
  * 系统结果目录：`outputs/query_result`（SQL 查询结果）与 `outputs/.tool-offload`（工具结果卸载缓存）。
  *
  * 两者都是「原始数据 + 审计留存」：放开下载等于绕过问数的权限边界，会造成数据泄漏；
- * 删除则会让审计链路失去凭证。后端 `is_system_result_workspace_path` 已在「文件列表」
- * 「raw 读取」与删除接口三侧拦截，这些路径本就不会出现在文件树里；
- * 这里是前端侧的纵深防御，防止将来任一侧放开后静默失效。
+ * 删除则会让审计链路失去凭证。它们现在会出现在文件树里（便于查看占用），但下载/删除
+ * 仍由后端与这里共同拦截；这里是前端侧的纵深防御，防止将来任一侧放开后静默失效。
  */
 export const SYSTEM_RESULT_WORKSPACE_PREFIXES = [
   'outputs/query_result',
@@ -383,6 +382,12 @@ export function buildProducedFileTree(files: ProducedFile[]): {
 /** 统计节点（目录或文件）子树内的文件数量。 */
 export function getFileCount(node: ProducedFileTreeNode): number {
   return (node.file ? 1 : 0) + node.children.reduce((count, child) => count + getFileCount(child), 0)
+}
+
+/** 统计节点（目录或文件）子树内所有文件的总字节数；文件大小来自工作区列表的 st_size。 */
+export function getFileSize(node: ProducedFileTreeNode): number {
+  const ownSize = node.file?.size ?? 0
+  return ownSize + node.children.reduce((total, child) => total + getFileSize(child), 0)
 }
 
 /**

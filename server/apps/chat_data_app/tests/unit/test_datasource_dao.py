@@ -13,10 +13,7 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 
 from apps.chat_data_app.daos import datasource_dao_helpers as datasource_dao_helper_module
-from apps.chat_data_app.daos.datasource_dao import (
-    _ORM_SESSION,
-    DataSourceDao,
-)
+from apps.chat_data_app.daos.datasource_dao import DataSourceDao
 from apps.chat_data_app.daos.datasource_dao_helpers import (
     _build_member_identity,
     _build_member_source_text_line,
@@ -919,11 +916,9 @@ def test_transaction_reuses_active_orm_session(monkeypatch):
     async def run_checks():
         async with store.transaction_async() as active:
             assert active is session
-            assert _ORM_SESSION.get() is session
             assert await store.has_datasource_async("group_a") is True
             async with store.transaction_async() as nested:
                 assert nested is session
-        assert _ORM_SESSION.get() is None
 
     asyncio.run(run_checks())
 

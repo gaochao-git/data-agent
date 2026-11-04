@@ -32,7 +32,7 @@ describe('toolDisplay', () => {
     }
 
     for (const [toolName, displayName] of Object.entries(expectedNames)) {
-      expect(getToolDisplayName(toolName), toolName).toBe(displayName)
+      expect(getToolDisplayName(toolName)).toBe(displayName)
     }
   })
 
@@ -333,3 +333,4 @@ describe('extractChangedFilePathsFromResult', () => {
       setToolDisplayNames(null)
     }
   })
+

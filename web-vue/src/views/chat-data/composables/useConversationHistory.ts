@@ -7,7 +7,9 @@ import { getConversationHistory } from '../api'
 import type {
   ChatDataContextCompressionEvent,
   ChatDataTokenUsage,
+  SubagentCompaction,
   SubagentContextUsage,
+  SubagentTokenUsage,
   SubagentTrailItem,
   ToolCallInfo,
   Message,
@@ -132,6 +134,9 @@ interface HistoryMessagePayload {
   reasoning_turn_id?: unknown
   subagent_trail?: unknown
   subagent_context_usage?: unknown
+  subagent_token_usage?: unknown
+  subagent_compactions?: unknown
+  subagent_token_usage_detail?: unknown
   generation_stats?: unknown
 }
 
@@ -215,6 +220,16 @@ const normalizeSubagentTrail = (value: unknown): SubagentTrailItem[] | undefined
         thinking,
         thinkingTruncated: item.thinkingTruncated === true,
       })
+    } else if (item.kind === 'compaction') {
+      trail.push({
+        kind: 'compaction',
+        id,
+        timestamp: typeof item.timestamp === 'string' ? item.timestamp : undefined,
+        estimated_tokens_before: typeof item.estimated_tokens_before === 'number' ? item.estimated_tokens_before : undefined,
+        estimated_tokens_after: typeof item.estimated_tokens_after === 'number' ? item.estimated_tokens_after : undefined,
+        estimated_cleared_tokens: typeof item.estimated_cleared_tokens === 'number' ? item.estimated_cleared_tokens : undefined,
+        compressed_messages: typeof item.compressed_messages === 'number' ? item.compressed_messages : undefined,
+      })
     } else if (item.kind === 'tool') {
       const status = item.status === 'error' ? 'error' : item.status === 'running' ? 'running' : 'completed'
       trail.push({
@@ -224,6 +239,9 @@ const normalizeSubagentTrail = (value: unknown): SubagentTrailItem[] | undefined
         args: item.args && typeof item.args === 'object' ? item.args as Record<string, unknown> : {},
         result: typeof item.result === 'string' ? item.result : '',
         status,
+        // 计时是可选项：缺失时不落键，历史快照与原 trail 保持同构
+        ...(typeof item.started_at_ms === 'number' ? { started_at_ms: item.started_at_ms } : {}),
+        ...(typeof item.ended_at_ms === 'number' ? { ended_at_ms: item.ended_at_ms } : {}),
       })
     }
   }
@@ -241,11 +259,76 @@ const normalizeSubagentContextUsage = (value: unknown): SubagentContextUsage | u
   }
   const usedTokens = toNonNegativeInt(raw.used_tokens)
   if (usedTokens <= 0) return undefined
+  const contextWindow = toNonNegativeInt(raw.context_window)
+  const percent = toNonNegativeInt(raw.percent)
+  const budgetPercent = toNonNegativeInt(raw.budget_percent)
+  // 旧快照只有 percent（当时是「占收尾阈值」口径）：归一到 budget_percent，
+  // 窗口百分比缺失时不硬编——前端据此退回「预算 N%」展示，避免伪造成窗口占比。
+  if (!contextWindow && !budgetPercent) {
+    return {
+      used_tokens: usedTokens,
+      threshold_tokens: toNonNegativeInt(raw.threshold_tokens),
+      budget_percent: percent,
+    }
+  }
   return {
     used_tokens: usedTokens,
     threshold_tokens: toNonNegativeInt(raw.threshold_tokens),
-    percent: toNonNegativeInt(raw.percent),
+    context_window: contextWindow || undefined,
+    percent: contextWindow ? percent : undefined,
+    budget_percent: budgetPercent,
   }
+}
+
+// 子图上下文压缩记录：随 task 的 tool_result payload 持久化，历史回放还原「已压缩 N 次」
+const normalizeSubagentCompactions = (value: unknown): SubagentCompaction[] | undefined => {
+  if (!Array.isArray(value)) return undefined
+  const records: SubagentCompaction[] = []
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue
+    const raw = item as Record<string, unknown>
+    const id = String(raw.id || '').trim()
+    if (!id) continue
+    const toInt = (v: unknown) => {
+      const n = Number(v)
+      return Number.isFinite(n) && n >= 0 ? Math.floor(n) : undefined
+    }
+    records.push({
+      id,
+      timestamp: typeof raw.timestamp === 'string' ? raw.timestamp : undefined,
+      estimated_tokens_before: toInt(raw.estimated_tokens_before),
+      estimated_tokens_after: toInt(raw.estimated_tokens_after),
+      estimated_cleared_tokens: toInt(raw.estimated_cleared_tokens),
+      compressed_messages: toInt(raw.compressed_messages),
+    })
+  }
+  return records.length ? records : undefined
+}
+
+// 子图上下文计量明细：结构由后端保证（compact_context_usage_for_history），前端只做对象校验
+const normalizeSubagentTokenUsageDetail = (value: unknown): ChatDataTokenUsage | undefined => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const usage = value as ChatDataTokenUsage
+  return Number.isFinite(Number(usage.used)) && Number.isFinite(Number(usage.total)) ? usage : undefined
+}
+
+// 子智能体 token 用量（billing 口径）：随 task 的 tool_result payload 持久化，历史回放还原
+const normalizeSubagentTokenUsage = (value: unknown): SubagentTokenUsage | undefined => {
+  if (!value || typeof value !== 'object') return undefined
+  const raw = value as Record<string, unknown>
+  const toNonNegativeInt = (item: unknown): number | undefined => {
+    const parsed = Number(item)
+    return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : undefined
+  }
+  const usage: SubagentTokenUsage = {
+    input_tokens: toNonNegativeInt(raw.input_tokens),
+    output_tokens: toNonNegativeInt(raw.output_tokens),
+    total_tokens: toNonNegativeInt(raw.total_tokens),
+    cache_read_input_tokens: toNonNegativeInt(raw.cache_read_input_tokens),
+    cache_creation_input_tokens: toNonNegativeInt(raw.cache_creation_input_tokens),
+    reasoning_tokens: toNonNegativeInt(raw.reasoning_tokens),
+  }
+  return Object.values(usage).some(item => item !== undefined) ? usage : undefined
 }
 
 const withHistoryToolResult = (
@@ -254,6 +337,9 @@ const withHistoryToolResult = (
   subagentTrail?: SubagentTrailItem[],
   timing?: Pick<ToolCallInfo, 'started_at_ms' | 'ended_at_ms'>,
   subagentContextUsage?: SubagentContextUsage,
+  subagentTokenUsage?: SubagentTokenUsage,
+  subagentCompactions?: SubagentCompaction[],
+  subagentTokenUsageDetail?: ChatDataTokenUsage,
 ): ToolCallInfo => {
   let renderId: string | undefined
   let renderType: ToolCallInfo['renderType']
@@ -281,6 +367,9 @@ const withHistoryToolResult = (
     semanticParams,
     subagentTrail,
     subagentContextUsage: subagentContextUsage ?? toolCall.subagentContextUsage,
+    subagentTokenUsage: subagentTokenUsage ?? toolCall.subagentTokenUsage,
+    subagentCompactions: subagentCompactions ?? toolCall.subagentCompactions,
+    subagentTokenUsageDetail: subagentTokenUsageDetail ?? toolCall.subagentTokenUsageDetail,
     started_at_ms: timing?.started_at_ms ?? toolCall.started_at_ms ?? null,
     ended_at_ms: timing?.ended_at_ms ?? toolCall.ended_at_ms ?? null,
   }
@@ -408,8 +497,13 @@ export const buildHistoryMessagesFromEvents = (historyEvents: unknown): Message[
     const subagentTrail = normalizeSubagentTrail(messagePayload.subagent_trail)
     const timing = readExecutionTiming(messagePayload)
     const subagentContextUsage = normalizeSubagentContextUsage(messagePayload.subagent_context_usage)
+    const subagentTokenUsage = normalizeSubagentTokenUsage(messagePayload.subagent_token_usage)
+    const subagentCompactions = normalizeSubagentCompactions(messagePayload.subagent_compactions)
+    const subagentTokenUsageDetail = normalizeSubagentTokenUsageDetail(messagePayload.subagent_token_usage_detail)
     target.toolCalls = target.toolCalls.map(toolCall => (
-      toolCall.tool_call_id === toolCallId ? withHistoryToolResult(toolCall, result, subagentTrail, timing, subagentContextUsage) : toolCall
+      toolCall.tool_call_id === toolCallId
+        ? withHistoryToolResult(toolCall, result, subagentTrail, timing, subagentContextUsage, subagentTokenUsage, subagentCompactions, subagentTokenUsageDetail)
+        : toolCall
     ))
   }
   return displayMessages
@@ -534,8 +628,13 @@ export const buildHistoryMessages = (
     const subagentTrail = normalizeSubagentTrail(rawMessage.subagent_trail)
     const timing = readExecutionTiming(rawMessage)
     const subagentContextUsage = normalizeSubagentContextUsage(rawMessage.subagent_context_usage)
+    const subagentTokenUsage = normalizeSubagentTokenUsage(rawMessage.subagent_token_usage)
+    const subagentCompactions = normalizeSubagentCompactions(rawMessage.subagent_compactions)
+    const subagentTokenUsageDetail = normalizeSubagentTokenUsageDetail(rawMessage.subagent_token_usage_detail)
     target.toolCalls = target.toolCalls.map(toolCall => (
-      toolCall.tool_call_id === toolCallId ? withHistoryToolResult(toolCall, result, subagentTrail, timing, subagentContextUsage) : toolCall
+      toolCall.tool_call_id === toolCallId
+        ? withHistoryToolResult(toolCall, result, subagentTrail, timing, subagentContextUsage, subagentTokenUsage, subagentCompactions, subagentTokenUsageDetail)
+        : toolCall
     ))
   }
 
@@ -610,7 +709,7 @@ interface UseConversationHistoryOptions {
 }
 
 /** 历史事件单页条数：长会话全量拉取的字节量随会话线性增长，是加载变慢的主因 */
-export const HISTORY_PAGE_SIZE = 100
+export const HISTORY_PAGE_SIZE = 30
 
 /** 读取窗口内最小 sequence_no，作为向上翻页的游标；无法解析时返回 null */
 const readEarliestSequenceNo = (events: unknown[]): number | null => {
@@ -660,7 +759,7 @@ export function useConversationHistory({
     const showLoading = !force || messages.value.length === 0
     if (showLoading) isLoadingHistory.value = true
     try {
-      const response = await getConversationHistory(convId, { limit: HISTORY_PAGE_SIZE })
+      const response = await getConversationHistory(convId, { limit: HISTORY_PAGE_SIZE, strictLimit: true })
 
       if (response.ok) {
         const data = await response.json()
@@ -703,6 +802,7 @@ export function useConversationHistory({
       const response = await getConversationHistory(convId, {
         limit: HISTORY_PAGE_SIZE,
         beforeSequence: cursor,
+        strictLimit: true,
       })
       // 会话可能已在请求期间切换：只应用属于当前会话的响应，避免旧会话事件污染新会话
       if (!response.ok || conversationId.value !== convId) return

@@ -232,13 +232,34 @@ async def delete_conversation_workspace_file(
     return {**result, "record_cleaned": False}
 
 
+def get_workspace_total_size(workspace_root: str | Path) -> int:
+    """统计会话工作区四个目录的总字节数。
+
+    只统计普通文件；缺失目录按 0 处理。上传前校验与文件列表里的占用展示共用这一口径。
+    """
+    root = Path(workspace_root)
+    total = 0
+    for directory_name in WORKSPACE_DIR_NAMES:
+        directory = root / directory_name
+        if not directory.exists():
+            continue
+        for item in directory.rglob("*"):
+            if not item.is_file():
+                continue
+            try:
+                total += item.stat().st_size
+            except OSError:
+                continue
+    return total
+
+
 def list_workspace_files(
     conversation_id: str,
     user_id: str = "system",
     *,
     created_date: str | None = None,
 ) -> list[dict[str, Any]]:
-    """列出会话工作区中的可见文件，不跟随逃逸符号链接。"""
+    """列出会话工作区中的文件（含系统结果目录，仅用于展示/占用统计），不跟随逃逸符号链接。"""
     paths = ensure_conversation_workspace(conversation_id, user_id, created_date=created_date)
     root = Path(paths["root"]).resolve()
     files: list[dict[str, Any]] = []
@@ -254,8 +275,6 @@ def list_workspace_files(
                 resolved_item = resolve_workspace_path(
                     str(root), f"/mnt/user-data/{relative_path}", materialize_uploads=False
                 )
-                if is_system_result_workspace_path(str(root), resolved_item):
-                    continue
                 stat = item.stat()
             except (OSError, ValueError):
                 continue
@@ -285,8 +304,7 @@ def read_workspace_text_file(
     paths = ensure_conversation_workspace(conversation_id, user_id, created_date=created_date)
     root = paths["root"]
     target = resolve_workspace_path(root, path)
-    if is_system_result_workspace_path(root, target):
-        raise ValueError("工具结果缓存不在工作区文件预览范围内")
+    # 系统结果目录只读展示：允许查看内容，但下载/删除/打包仍由独立接口拦截。
     if not target.exists() or not target.is_file():
         raise FileNotFoundError(f"文件不存在: {path}")
     size = target.stat().st_size
@@ -414,16 +432,20 @@ def _archive_workspace_directory(
     normalized_directory = normalize_archive_directory(directory)
     if archive_max_bytes is None:
         archive_max_bytes = WORKSPACE_ARCHIVE_MAX_BYTES
+    paths = ensure_conversation_workspace(conversation_id, user_id, created_date=created_date)
+    root = str(Path(paths["root"]).resolve())
     files = [
         item
         for item in list_workspace_files(conversation_id, user_id, created_date=created_date)
         if _is_under_archive_directory(str(item["relative_path"]), normalized_directory)
+        and not is_system_result_workspace_path(
+            root,
+            resolve_workspace_path(root, f"{USER_DATA_VIRTUAL_ROOT}/{item['relative_path']}"),
+        )
     ]
     if not files:
         raise FileNotFoundError(f"{normalized_directory} 目录下没有可打包的文件")
 
-    paths = ensure_conversation_workspace(conversation_id, user_id, created_date=created_date)
-    root = str(Path(paths["root"]).resolve())
     # 临时文件名与 zip 名只用末段：子目录打包时全路径含斜杠，不能进文件名
     archive_name = normalized_directory.rsplit("/", 1)[-1]
     fd, tmp_path = tempfile.mkstemp(prefix=f"chatdata-{archive_name}-", suffix=".zip")
@@ -537,8 +559,7 @@ def read_workspace_raw_file(
     paths = ensure_conversation_workspace(conversation_id, user_id, created_date=created_date)
     root = paths["root"]
     target = resolve_workspace_path(root, path)
-    if is_system_result_workspace_path(root, target):
-        raise ValueError("工具结果缓存不在工作区文件预览范围内")
+    # 系统结果目录只读展示：允许原始字节预览，但下载/删除/打包仍被拦截。
     if not target.exists() or not target.is_file():
         raise FileNotFoundError(f"文件不存在: {path}")
     size = target.stat().st_size

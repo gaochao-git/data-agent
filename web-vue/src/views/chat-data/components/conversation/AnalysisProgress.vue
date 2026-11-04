@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
- * 分析计划进度条：常驻输入框上方，展示 write_todos 管理的当前分析任务。
- * 一旦出现即常驻本会话：不转圈、不主动消失，用分段计数实时反映清单状态。
+ * 分析计划进度条：仅在仍有未完成任务时展示 write_todos 管理的当前任务。
+ * 全部完成后由父组件隐藏；完整清单仍保留在历史工具卡片中，可回看。
  */
 import { computed, ref } from 'vue'
 import type { AnalysisTodosState } from '../../utils/analysisTodos'

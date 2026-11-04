@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from utils.error_codes import ErrorCode
 from utils.logger import get_logger
-from utils.response import business_response
+from utils.response import business_response, error_response
 
 from ..chart_types import get_chart_type_label
 from ..schema import (
@@ -137,9 +137,7 @@ async def list_dashboards(request: Request, scope: str = "mine") -> JSONResponse
 
     except Exception as e:
         logger.error(f"获取大屏列表失败: {str(e)}", exc_info=True)
-        return business_response(
-            msg=f"获取失败: {str(e)}", code=ErrorCode.CHATDATA_DASHBOARD_LIST_FAILED, status="error"
-        )
+        return error_response(e, fallback="获取失败", code=ErrorCode.CHATDATA_DASHBOARD_LIST_FAILED)
 
 
 @router.post("/dashboards")
@@ -173,9 +171,7 @@ async def create_dashboard(request: DashboardCreateRequest, http_request: Reques
 
     except Exception as e:
         logger.error(f"创建大屏失败: {str(e)}", exc_info=True)
-        return business_response(
-            msg=f"创建失败: {str(e)}", code=ErrorCode.CHATDATA_DASHBOARD_CREATE_FAILED, status="error"
-        )
+        return error_response(e, fallback="创建失败", code=ErrorCode.CHATDATA_DASHBOARD_CREATE_FAILED)
 
 
 def _spec_cards_have_semantic_config(cards: list[Any]) -> bool:
@@ -216,9 +212,9 @@ async def create_dashboard_from_spec(request: DashboardFromSpecRequest, http_req
         spec = request.dashboard_spec or {}
         raw_cards = spec.get("cards")
         cards: list[Any] = raw_cards if isinstance(raw_cards, list) else []
-        error_response = _dashboard_spec_error_response(request, spec, cards)
-        if error_response:
-            return error_response
+        spec_error = _dashboard_spec_error_response(request, spec, cards)
+        if spec_error:
+            return spec_error
         datasource_id = str(request.datasource_id or "").strip()
         semantic_config_id = str(request.semantic_config_id or spec.get("semantic_config_id") or "").strip() or None
 
@@ -242,9 +238,7 @@ async def create_dashboard_from_spec(request: DashboardFromSpecRequest, http_req
         raise
     except Exception as e:
         logger.error("根据 AI 看板规格创建大屏失败: %s", e, exc_info=True)
-        return business_response(
-            msg=f"创建失败: {str(e)}", code=ErrorCode.CHATDATA_DASHBOARD_AI_CREATE_FAILED, status="error"
-        )
+        return error_response(e, fallback="创建失败", code=ErrorCode.CHATDATA_DASHBOARD_AI_CREATE_FAILED)
 
 
 @router.post("/dashboards/{dashboard_id}/publish")
@@ -264,9 +258,7 @@ async def publish_dashboard(dashboard_id: str, request: Request) -> JSONResponse
         return business_response(data=dashboard, msg="发布成功")
     except Exception as e:
         logger.error("发布大屏失败: %s", e, exc_info=True)
-        return business_response(
-            msg=f"发布失败: {str(e)}", code=ErrorCode.CHATDATA_DASHBOARD_PUBLISH_FAILED, status="error"
-        )
+        return error_response(e, fallback="发布失败", code=ErrorCode.CHATDATA_DASHBOARD_PUBLISH_FAILED)
 
 
 @router.post("/dashboards/{dashboard_id}/unpublish")
@@ -286,9 +278,7 @@ async def unpublish_dashboard(dashboard_id: str, request: Request) -> JSONRespon
         return business_response(data=dashboard, msg="已取消发布")
     except Exception as e:
         logger.error("取消发布大屏失败: %s", e, exc_info=True)
-        return business_response(
-            msg=f"取消发布失败: {str(e)}", code=ErrorCode.CHATDATA_DASHBOARD_UNPUBLISH_FAILED, status="error"
-        )
+        return error_response(e, fallback="取消发布失败", code=ErrorCode.CHATDATA_DASHBOARD_UNPUBLISH_FAILED)
 
 
 @router.get("/dashboards/{dashboard_id}")
@@ -317,9 +307,7 @@ async def get_dashboard(dashboard_id: str, request: Request) -> JSONResponse:
 
     except Exception as e:
         logger.error(f"获取大屏详情失败: {str(e)}", exc_info=True)
-        return business_response(
-            msg=f"获取失败: {str(e)}", code=ErrorCode.CHATDATA_DASHBOARD_GET_FAILED, status="error"
-        )
+        return error_response(e, fallback="获取失败", code=ErrorCode.CHATDATA_DASHBOARD_GET_FAILED)
 
 
 @router.put("/dashboards/{dashboard_id}")
@@ -356,9 +344,7 @@ async def update_dashboard(dashboard_id: str, request: DashboardUpdateRequest, h
 
     except Exception as e:
         logger.error(f"更新大屏失败: {str(e)}", exc_info=True)
-        return business_response(
-            msg=f"更新失败: {str(e)}", code=ErrorCode.CHATDATA_DASHBOARD_UPDATE_FAILED, status="error"
-        )
+        return error_response(e, fallback="更新失败", code=ErrorCode.CHATDATA_DASHBOARD_UPDATE_FAILED)
 
 
 @router.delete("/dashboards/{dashboard_id}")
@@ -386,9 +372,7 @@ async def delete_dashboard(dashboard_id: str, request: Request) -> JSONResponse:
 
     except Exception as e:
         logger.error(f"删除大屏失败: {str(e)}", exc_info=True)
-        return business_response(
-            msg=f"删除失败: {str(e)}", code=ErrorCode.CHATDATA_DASHBOARD_DELETE_FAILED, status="error"
-        )
+        return error_response(e, fallback="删除失败", code=ErrorCode.CHATDATA_DASHBOARD_DELETE_FAILED)
 
 
 # ============ 面板接口 ============
@@ -440,9 +424,7 @@ async def add_panel(dashboard_id: str, request: PanelCreateRequest, http_request
 
     except Exception as e:
         logger.error(f"添加面板失败: {str(e)}", exc_info=True)
-        return business_response(
-            msg=f"添加失败: {str(e)}", code=ErrorCode.CHATDATA_DASHBOARD_PANEL_LIST_FAILED, status="error"
-        )
+        return error_response(e, fallback="添加失败", code=ErrorCode.CHATDATA_DASHBOARD_PANEL_LIST_FAILED)
 
 
 @router.post("/panel-name-generate")
@@ -505,9 +487,7 @@ async def update_panel(
 
     except Exception as e:
         logger.error(f"更新面板失败: {str(e)}", exc_info=True)
-        return business_response(
-            msg=f"更新失败: {str(e)}", code=ErrorCode.CHATDATA_DASHBOARD_PANEL_CREATE_FAILED, status="error"
-        )
+        return error_response(e, fallback="更新失败", code=ErrorCode.CHATDATA_DASHBOARD_PANEL_CREATE_FAILED)
 
 
 @router.delete("/dashboards/{dashboard_id}/panels/{panel_id}")
@@ -537,9 +517,7 @@ async def delete_panel(dashboard_id: str, panel_id: str, request: Request) -> JS
 
     except Exception as e:
         logger.error(f"删除面板失败: {str(e)}", exc_info=True)
-        return business_response(
-            msg=f"删除失败: {str(e)}", code=ErrorCode.CHATDATA_DASHBOARD_PANEL_UPDATE_FAILED, status="error"
-        )
+        return error_response(e, fallback="删除失败", code=ErrorCode.CHATDATA_DASHBOARD_PANEL_UPDATE_FAILED)
 
 
 @router.put("/dashboards/{dashboard_id}/layout")
@@ -575,9 +553,7 @@ async def update_layout(dashboard_id: str, request: LayoutUpdateRequest, http_re
 
     except Exception as e:
         logger.error(f"更新布局失败: {str(e)}", exc_info=True)
-        return business_response(
-            msg=f"更新失败: {str(e)}", code=ErrorCode.CHATDATA_DASHBOARD_PANEL_DELETE_FAILED, status="error"
-        )
+        return error_response(e, fallback="更新失败", code=ErrorCode.CHATDATA_DASHBOARD_PANEL_DELETE_FAILED)
 
 
 def _resolve_panel_batch_request(

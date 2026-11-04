@@ -1,73 +1,23 @@
-from __future__ import annotations
+"""兼容导出：脱敏实现已迁移到 utils/log_redaction，供 utils.logger 直接复用。"""
 
-import json
-import re
-from collections.abc import Mapping
-from typing import Any
+from utils.log_redaction import (  # noqa: F401  _mask_middle 等私有函数为单测兼容重导出
+    BANK_CARD_PATTERN,
+    ID_CARD_PATTERN,
+    PHONE_PATTERN,
+    REDACTED_HEADERS,
+    _mask_bank_card_match,
+    _mask_id_card_match,
+    _mask_middle,
+    _mask_phone_match,
+    dump_masked_payload,
+    mask_headers,
+    mask_sensitive_payload,
+    mask_sensitive_text,
+)
 
-PHONE_PATTERN = re.compile(r"(?<!\d)(1\d{10})(?!\d)")
-ID_CARD_PATTERN = re.compile(r"(?<![0-9Xx])(\d{17}[0-9Xx]|\d{15})(?![0-9Xx])")
-BANK_CARD_PATTERN = re.compile(r"(?<!\d)(\d{12,19})(?!\d)")
-REDACTED_HEADERS = {"authorization", "cookie", "set-cookie", "x-service-token"}
-
-
-def _mask_middle(value: str, keep_left: int, keep_right: int) -> str:
-    text = str(value or "")
-    if len(text) <= keep_left + keep_right:
-        return text
-    return f"{text[:keep_left]}{'*' * (len(text) - keep_left - keep_right)}{text[-keep_right:]}"
-
-
-def _mask_phone_match(match: re.Match[str]) -> str:
-    return _mask_middle(match.group(1), 3, 2)
-
-
-def _mask_id_card_match(match: re.Match[str]) -> str:
-    return _mask_middle(match.group(1), 6, 4)
-
-
-def _mask_bank_card_match(match: re.Match[str]) -> str:
-    return _mask_middle(match.group(1), 4, 4)
-
-
-def mask_sensitive_text(value: str) -> str:
-    text = str(value or "")
-    text = PHONE_PATTERN.sub(_mask_phone_match, text)
-    text = ID_CARD_PATTERN.sub(_mask_id_card_match, text)
-    text = BANK_CARD_PATTERN.sub(_mask_bank_card_match, text)
-    return text
-
-
-def mask_sensitive_payload(payload: Any) -> Any:
-    if isinstance(payload, dict):
-        return {str(key): mask_sensitive_payload(value) for key, value in payload.items()}
-    if isinstance(payload, list):
-        return [mask_sensitive_payload(item) for item in payload]
-    if isinstance(payload, tuple):
-        return [mask_sensitive_payload(item) for item in payload]
-    if isinstance(payload, str):
-        return mask_sensitive_text(payload)
-    return payload
-
-
-def mask_headers(headers: Mapping[str, str] | None) -> dict[str, str]:
-    if not headers:
-        return {}
-    result: dict[str, str] = {}
-    for key, value in headers.items():
-        lower_key = str(key).lower()
-        if lower_key in REDACTED_HEADERS:
-            result[str(key)] = "[redacted]"
-            continue
-        result[str(key)] = mask_sensitive_text(str(value or ""))
-    return result
-
-
-def dump_masked_payload(payload: Any) -> str:
-    masked = mask_sensitive_payload(payload)
-    if isinstance(masked, str):
-        return masked
-    try:
-        return json.dumps(masked, ensure_ascii=False, default=str)
-    except Exception:
-        return mask_sensitive_text(str(masked))
+__all__ = [
+    "mask_sensitive_text",
+    "mask_sensitive_payload",
+    "mask_headers",
+    "dump_masked_payload",
+]

@@ -12,10 +12,10 @@ import json
 import time
 import uuid
 from collections.abc import Awaitable, Callable
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Literal, cast
 
-from utils.alarm import emit_dangerous_sql_alarm
+from utils.alarm import SQL_BLOCK_MULTI_STATEMENT, emit_dangerous_sql_alarm
 from utils.database import get_session
 from utils.logger import get_logger
 from utils.models import ChatDataQueryExecution, ChatDataQueryTask
@@ -24,6 +24,7 @@ from ...daos.query_execution_dao import QueryExecutionDao
 from ...daos.query_task_dao import QueryTaskDao
 from ...schema import ExecuteSqlRequest, InternalQueryTaskCreateRequest, QueryTaskCreateRequest
 from ..datasource.manager import get_datasource_manager
+from ..runtime_config import read_positive_int_env
 from ..semantic.run.semantic_query_service import compile_semantic_builder_sql
 from ..setting_service import get_runtime_setting
 from . import cache as query_cache
@@ -71,15 +72,19 @@ def _validate_sql_before_task_submit(
     violation = run_sql_guard(sql, source_type=source_type, defer_syntax_error=True)
     if violation is None or violation.rule != "single_statement":
         return
-    emit_dangerous_sql_alarm(
-        sql,
-        violation.message,
-        source_type=source_type,
-        datasource_id=str(getattr(request, "datasource_id", "") or ""),
-        user_id=str(getattr(request, "user_id", "") or ""),
-        execution_scope="task_submit",
-        reason_code=violation.reason_code,
-    )
+    if violation.reason_code == SQL_BLOCK_MULTI_STATEMENT:
+        # 多语句是输入形态问题：正常拒绝即可，不算安全事件，不写 alarm。
+        logger.warning("[sql_guard] 多语句已拒绝，不告警: sql=%s", sql[:200])
+    else:
+        emit_dangerous_sql_alarm(
+            sql,
+            violation.message,
+            source_type=source_type,
+            datasource_id=str(getattr(request, "datasource_id", "") or ""),
+            user_id=str(getattr(request, "user_id", "") or ""),
+            execution_scope="task_submit",
+            reason_code=violation.reason_code,
+        )
     raise ValueError(violation.message)
 
 
@@ -314,6 +319,28 @@ def _apply_execution_field_updates(
         execution.finished_time = finished_time
 
 
+ERROR_SOURCE_SERVICE = "service"
+ERROR_SOURCE_DATASOURCE = "datasource"
+ERROR_SOURCE_REMOTE_HTTP = "remote_http"
+
+
+def _attach_error_source(result: dict[str, Any], http_target: bool) -> dict[str, Any]:
+    """为失败/取消成员结果补错误来源层：service / datasource / remote_http。
+
+    执行器只标注自身能确定的来源（服务校验、配置、超时等）；剩下的失败
+    按执行目标类型兜底：HTTP 目标视为外部接口，直连目标视为数据库。
+    """
+    if query_result_status(result) not in {"failed", "cancelled"}:
+        return result
+    if result.get("error_source"):
+        return result
+    if query_result_status(result) == "cancelled":
+        result["error_source"] = ERROR_SOURCE_SERVICE
+    else:
+        result["error_source"] = ERROR_SOURCE_REMOTE_HTTP if http_target else ERROR_SOURCE_DATASOURCE
+    return result
+
+
 def _execution_result_payload(status: str, result: dict[str, Any]) -> dict[str, Any]:
     """构造执行明细的 result_payload 落库快照。"""
     return {
@@ -323,6 +350,7 @@ def _execution_result_payload(status: str, result: dict[str, Any]) -> dict[str, 
         "total_count": int(result.get("total_count") or 0),
         "execution_time_ms": result.get("execution_time_ms"),
         "error": result.get("error"),
+        "error_source": result.get("error_source"),
         "cache_hit": bool(result.get("cache_hit")),
         "cache_age_seconds": result.get("cache_age_seconds"),
         "cache_expires_in_seconds": result.get("cache_expires_in_seconds"),
@@ -411,7 +439,14 @@ def _coerce_member_result(item: Any) -> dict[str, Any]:
     logger.error(
         "成员执行返回异常（已隔离为失败结果）: %s", item, exc_info=item if isinstance(item, BaseException) else None
     )
-    return {"status": "failed", "error": str(item) or "SQL 执行失败", "columns": [], "data": [], "total_count": 0}
+    return {
+        "status": "failed",
+        "error": str(item) or "SQL 执行失败",
+        "error_source": ERROR_SOURCE_SERVICE,
+        "columns": [],
+        "data": [],
+        "total_count": 0,
+    }
 
 
 async def _notify_remote_task_created(
@@ -470,6 +505,7 @@ def _cancelled_member_result(member_datasource_id: Any, member_name: str, effect
         "remote_task_id": None,
         "db_connection_id": None,
         "error": "已人工取消",
+        "error_source": ERROR_SOURCE_SERVICE,
     }
 
 
@@ -544,6 +580,7 @@ def _build_member_query_response(
         "remote_task_id": result.get("remote_task_id"),
         "db_connection_id": result.get("db_connection_id"),
         "error": result.get("error"),
+        "error_source": result.get("error_source"),
         "cache_hit": bool(result.get("cache_hit")),
         "cache_age_seconds": result.get("cache_age_seconds"),
         "cache_expires_in_seconds": result.get("cache_expires_in_seconds"),
@@ -715,7 +752,7 @@ async def execute_sql_for_member(
             max_rows=max_rows,
         )
         cache_identity = query_cache.build_sql_result_cache_identity(
-            execution_target, effective_sql, datasource_id=datasource_id
+            execution_target, effective_sql, datasource_id=datasource_id, user_id=user_id
         )
         if execution_id and await _guard_running_execution(execution_id):
             return _cancelled_member_result(member_datasource_id, member_name, effective_sql)
@@ -749,10 +786,24 @@ async def execute_sql_for_member(
         else:
             result = await run_with_sql_user_datasource_limit(user_id, execution_target, execute_query)
         if execution_id and await get_query_execution_status(execution_id) == "cancelled":
-            result = {"status": "cancelled", "error": "已人工取消", "columns": [], "data": [], "total_count": 0}
+            result = {
+                "status": "cancelled",
+                "error": "已人工取消",
+                "error_source": ERROR_SOURCE_SERVICE,
+                "columns": [],
+                "data": [],
+                "total_count": 0,
+            }
     except Exception as e:
         logger.error("成员 SQL 执行异常: member_datasource_id=%s error=%s", member_datasource_id, e, exc_info=True)
-        result = {"status": "failed", "error": str(e) or "SQL 执行失败", "columns": [], "data": [], "total_count": 0}
+        result = {
+            "status": "failed",
+            "error": str(e) or "SQL 执行失败",
+            "error_source": ERROR_SOURCE_SERVICE,
+            "columns": [],
+            "data": [],
+            "total_count": 0,
+        }
     finally:
         if executor is not None:
             try:
@@ -760,6 +811,7 @@ async def execute_sql_for_member(
             except Exception:
                 # 关闭失败不能让本成员的收尾异常冒泡取消其他成员的在途查询
                 logger.warning("执行器资源关闭失败: member_datasource_id=%s", member_datasource_id, exc_info=True)
+    result = _attach_error_source(result, http_target)
     status = await _finalize_member_query_result(
         execution_id, result, http_target, member_datasource_id, local_started_at
     )
@@ -1595,6 +1647,9 @@ async def _run_agent_sql_execution(
                     user_id=user_id,
                     username=operator_name,
                     execution_id=get_execution_id_by_member(execution_map, target) if execution_map else None,
+                    # 与 SQL 编辑器链路对齐：带上任务 ID，HTTP 远端任务才能挂到
+                    # chat_data_query_task.remote_tasks 上，任务级实时结果合并才生效。
+                    query_task_id=task_info.get("task_id") if task_info else None,
                     datasource_id=datasource_id,
                     max_rows=row_limit_cap,
                 )
@@ -1686,3 +1741,40 @@ async def execute_agent_sql(
         logger.error("执行 SQL 异常: %s", e, exc_info=True)
         await _fail_agent_sql_task(task_info, str(e) or "SQL 执行失败")
         return build_query_result_payload(sql=sql, member_results=[], fallback_error=f"执行失败: {str(e)}")
+
+
+async def touch_query_task(task_id: str) -> int:
+    """刷新查询任务心跳时间（运行期由后台任务周期调用）。"""
+    return await query_task_dao.touch_unfinished_task(task_id)
+
+
+async def interrupt_stale_query_tasks() -> int:
+    """对账：把心跳早于阈值的 pending/running 任务置失败。
+
+    异步查询任务由进程内 asyncio 任务驱动；进程退出后不再心跳。多 worker 部署
+    下每个 worker 启动都会执行对账，用「心跳超时」而不是「早于启动时间」判定，
+    避免误杀其他存活 worker 正在跑的任务。
+    """
+    stalled_message = "服务重启，任务已中断，请重新执行"
+    stale_seconds = read_positive_int_env("CHAT_DATA_QUERY_TASK_STALE_SECONDS", 300)
+    stale_before = datetime.now() - timedelta(seconds=stale_seconds)
+    task_ids = await query_task_dao.list_stale_unfinished_tasks(stale_before=stale_before)
+    if not task_ids:
+        return 0
+    interrupted = await query_task_dao.interrupt_tasks(
+        task_ids,
+        error_message=stalled_message,
+        progress_text="服务重启，任务已中断",
+    )
+    execution_count = await query_execution_dao.interrupt_unfinished_executions(
+        error_message=stalled_message,
+        task_ids=task_ids,
+    )
+    if interrupted or execution_count:
+        logger.warning(
+            "查询任务对账完成：中断僵尸任务 %s 个、执行明细 %s 条（心跳阈值 %ss）",
+            interrupted,
+            execution_count,
+            stale_seconds,
+        )
+    return interrupted

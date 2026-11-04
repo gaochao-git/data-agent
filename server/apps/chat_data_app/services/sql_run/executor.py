@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 
 from utils.alarm import (
     DB_FAIL_DATASOURCE,
+    SQL_BLOCK_MULTI_STATEMENT,
     emit_dangerous_sql_alarm,
     emit_database_connection_alarm,
     emit_external_api_alarm,
@@ -515,7 +516,20 @@ def _emit_sql_execution_validation_alarm(
     datasource_id: str = "",
     user_id: str = "",
 ) -> None:
-    """记录执行边界拦截的高危 SQL。"""
+    """记录执行边界拦截的高危 SQL。
+
+    优先用 sql_guard 的结构化 reason_code，避免依赖中文文案映射；guard 不认为是
+    违规（如内部 LIMIT 终检缺陷）时回退到文案推断。
+    """
+    reason_code: str | None = None
+    try:
+        violation = run_sql_guard(sql, source_type=source_type)
+        reason_code = violation.reason_code if violation is not None else None
+    except Exception:
+        reason_code = None
+    if reason_code == SQL_BLOCK_MULTI_STATEMENT:
+        logger.warning("[sql_guard] 多语句已拒绝，不告警: sql=%s", str(sql or "")[:200])
+        return
     emit_dangerous_sql_alarm(
         sql,
         error_msg,
@@ -523,6 +537,7 @@ def _emit_sql_execution_validation_alarm(
         execution_scope=execution_scope,
         datasource_id=datasource_id or None,
         user_id=user_id or None,
+        reason_code=reason_code,
     )
 
 
@@ -574,9 +589,20 @@ def _is_hive_connection_exception(err: Exception) -> bool:
     return any(marker in text for marker in markers)
 
 
-def _http_error_result(error: str | None, **extra: Any) -> dict[str, Any]:
-    """HTTP 链路统一错误结果结构；extra 携带 status、耗时等补充字段。"""
-    result: dict[str, Any] = {"status": "failed", "error": error, "columns": [], "data": [], "total_count": 0}
+def _http_error_result(error: str | None, *, error_source: str = "remote_http", **extra: Any) -> dict[str, Any]:
+    """HTTP 链路统一错误结果结构；extra 携带 status、耗时等补充字段。
+
+    error_source 标识错误来源层：remote_http=外部接口返回/调用失败，
+    service=本服务校验、配置、超时等自身产生。
+    """
+    result: dict[str, Any] = {
+        "status": "failed",
+        "error": error,
+        "error_source": error_source,
+        "columns": [],
+        "data": [],
+        "total_count": 0,
+    }
     result.update(extra)
     return result
 
@@ -710,7 +736,14 @@ class MySQLExecutor(SQLExecutor):
                 datasource_id=datasource_id or "",
                 user_id=user_id or "",
             )
-            return {"status": "failed", "error": error_msg, "columns": [], "data": [], "total_count": 0}
+            return {
+                "status": "failed",
+                "error": error_msg,
+                "error_source": "service",
+                "columns": [],
+                "data": [],
+                "total_count": 0,
+            }
 
         try:
             pool = await self._get_pool()
@@ -741,6 +774,7 @@ class MySQLExecutor(SQLExecutor):
                     return {
                         "status": "failed",
                         "error": f"查询超时（{resolved_timeout}秒）",
+                        "error_source": "service",
                         "columns": [],
                         "data": [],
                         "total_count": 0,
@@ -762,13 +796,21 @@ class MySQLExecutor(SQLExecutor):
             return {
                 "status": "failed",
                 "error": f"查询超时（{resolved_timeout}秒）",
+                "error_source": "service",
                 "columns": [],
                 "data": [],
                 "total_count": 0,
             }
         except ValueError as e:
             logger.warning("[MySQL] SQL 执行参数非法: %s", e)
-            return {"status": "failed", "error": str(e), "columns": [], "data": [], "total_count": 0}
+            return {
+                "status": "failed",
+                "error": str(e),
+                "error_source": "service",
+                "columns": [],
+                "data": [],
+                "total_count": 0,
+            }
         except Exception as e:
             _emit_query_database_connection_alarm(
                 "mysql",
@@ -893,7 +935,14 @@ class HiveExecutor(SQLExecutor):
                 datasource_id=datasource_id or "",
                 user_id=user_id or "",
             )
-            return {"status": "failed", "error": error_msg, "columns": [], "data": [], "total_count": 0}
+            return {
+                "status": "failed",
+                "error": error_msg,
+                "error_source": "service",
+                "columns": [],
+                "data": [],
+                "total_count": 0,
+            }
 
         # 使用专用线程池执行同步操作（Hive 查询通常较慢，默认60秒超时）
         loop = asyncio.get_event_loop()
@@ -915,6 +964,7 @@ class HiveExecutor(SQLExecutor):
             return {
                 "status": "failed",
                 "error": f"查询超时（{resolved_timeout}秒）",
+                "error_source": "service",
                 "columns": [],
                 "data": [],
                 "total_count": 0,
@@ -951,7 +1001,14 @@ class HiveExecutor(SQLExecutor):
         except Exception as e:
             if isinstance(e, ValueError):
                 logger.warning("[Hive] SQL 执行参数非法: %s", e)
-                return {"status": "failed", "error": str(e), "columns": [], "data": [], "total_count": 0}
+                return {
+                    "status": "failed",
+                    "error": str(e),
+                    "error_source": "service",
+                    "columns": [],
+                    "data": [],
+                    "total_count": 0,
+                }
             _emit_query_database_connection_alarm(
                 "hive",
                 self.database,
@@ -1153,7 +1210,7 @@ class HiveHttpExecutor(SQLExecutor):
         if validation_error:
             return validation_error
         if not self.namespace:
-            return _http_error_result("缺少 HTTP 执行标识，请配置机构编码")
+            return _http_error_result("缺少 HTTP 执行标识，请配置机构编码", error_source="service")
         config_error = self._http_config_error()
         if config_error:
             return config_error
@@ -1168,10 +1225,10 @@ class HiveHttpExecutor(SQLExecutor):
             return await self._poll_http_result(task_id, resolved_timeout, user_id, username)
         except TimeoutError:
             logger.error("[HTTPExecutor] 执行 SQL 超时（%ss）", resolved_timeout)
-            return _http_error_result(f"查询超时（{resolved_timeout}秒）")
+            return _http_error_result(f"查询超时（{resolved_timeout}秒）", error_source="service")
         except ValueError as e:
             logger.warning("[HTTPExecutor] SQL 执行参数非法: %s", e)
-            return _http_error_result(str(e))
+            return _http_error_result(str(e), error_source="service")
         except Exception as e:
             logger.error("[HTTPExecutor] 执行 SQL 失败: %s", e)
             engine_name = "MySQL" if self.source_type == "mysql" else "Hive"
@@ -1197,14 +1254,15 @@ class HiveHttpExecutor(SQLExecutor):
             datasource_id=datasource_id or "",
             user_id=user_id or "",
         )
-        return _http_error_result(error_msg)
+        return _http_error_result(error_msg, error_source="service")
 
     @staticmethod
     def _http_config_error() -> dict[str, Any] | None:
         """执行前置配置检查；缺配置返回错误结果，否则 None。"""
         if not HTTP_SUBMIT_URL or not HTTP_STATUS_URL:
             return _http_error_result(
-                "未配置 HTTP 查询接口，请检查 CHAT_DATA_HTTP_SUBMIT_URL/CHAT_DATA_HTTP_STATUS_URL"
+                "未配置 HTTP 查询接口，请检查 CHAT_DATA_HTTP_SUBMIT_URL/CHAT_DATA_HTTP_STATUS_URL",
+                error_source="service",
             )
         return None
 
@@ -1252,7 +1310,7 @@ class HiveHttpExecutor(SQLExecutor):
         poll_interval_ms = await get_runtime_setting("CHAT_DATA_HTTP_POLL_INTERVAL_MS")
         while True:
             if loop.time() >= deadline:
-                return _http_error_result(f"查询超时（{resolved_timeout}秒）")
+                return _http_error_result(f"查询超时（{resolved_timeout}秒）", error_source="service")
             status_params = add_http_user_params({}, user_id, username)
             if status_params:
                 status_payload = await self._request_json("GET", HTTP_STATUS_URL, task_id=task_id, params=status_params)

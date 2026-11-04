@@ -15,8 +15,8 @@ from utils.logger import get_logger
 from utils.upload_storage_crypto import MAGIC, encryption_enabled, new_stream_encryptor, read_plaintext_bytes
 
 from ...daos.uploaded_file_dao import UploadedFileDao
-from ..setting_service import get_upload_size_limit
-from .conversation_workspace import get_conversation_created_date, resolve_uploads_root
+from ..setting_service import get_upload_size_limit, get_workspace_size_limit
+from .conversation_workspace import get_conversation_created_date, get_workspace_total_size, resolve_uploads_root
 
 logger = get_logger(__name__)
 
@@ -115,6 +115,8 @@ class UploadedFileService:
         temporary_path = uploads_root / f".{storage_name}.{uuid.uuid4().hex}.upload"
         file_size = 0
         max_upload_size_mb, max_upload_size = await get_upload_size_limit()
+        max_workspace_size_mb, max_workspace_size = await get_workspace_size_limit()
+        workspace_used = await asyncio.to_thread(get_workspace_total_size, uploads_root.parent)
         try:
             encryptor = None
             with temporary_path.open("xb") as output:
@@ -126,12 +128,17 @@ class UploadedFileService:
                     file_size += len(chunk)
                     if file_size > max_upload_size:
                         raise ValueError(f"文件大小不能超过{max_upload_size_mb}MB")
+                    if workspace_used + file_size > max_workspace_size:
+                        raise ValueError(f"会话工作区总大小不能超过{max_workspace_size_mb}MB")
                     output.write(encryptor.update(chunk) if encryptor is not None else chunk)
                 if encryptor is not None:
                     output.write(encryptor.finalize())
                     output.write(encryptor.tag)
                 output.flush()
                 os.fsync(output.fileno())
+            # 加密会额外写入头部/tag；最终占用按临时文件真实字节复核，确保硬上限。
+            if workspace_used + temporary_path.stat().st_size > max_workspace_size:
+                raise ValueError(f"会话工作区总大小不能超过{max_workspace_size_mb}MB")
             os.replace(temporary_path, full_path)
             try:
                 await self.dao.create_file(

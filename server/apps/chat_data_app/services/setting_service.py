@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import time
 from dataclasses import dataclass
@@ -26,11 +27,12 @@ from utils.logger import get_logger
 from utils.models import ChatDataSetting
 
 from ..daos.dao_session import transaction_scope
+from .runtime_config import read_positive_int_env
 
 logger = get_logger(__name__)
 
-# 缓存 TTL：改后最迟该秒数全节点生效
-SETTING_CACHE_TTL_SECONDS = 30
+# 缓存 TTL：改后最迟该秒数全节点生效；可用 env 调整（1~300 秒）
+SETTING_CACHE_TTL_SECONDS = max(1, min(300, read_positive_int_env("CHAT_DATA_SETTING_CACHE_TTL_SECONDS", 30)))
 SETTING_VALUE_MAX_LENGTH = 2048
 
 EFFECT_IMMEDIATE = "immediate"
@@ -103,6 +105,16 @@ SETTING_REGISTRY: dict[str, SettingSpec] = {
         maximum=200,
         effect=EFFECT_IMMEDIATE,
         description="扫描版 PDF 视觉转写的最大页数上限（parse_document 兜底链路）",
+    ),
+    "CHAT_DATA_WORKSPACE_MAX_MB": SettingSpec(
+        key="CHAT_DATA_WORKSPACE_MAX_MB",
+        value_type="int",
+        default=100,
+        category="upload_preview",
+        minimum=1,
+        maximum=10240,
+        effect=EFFECT_IMMEDIATE,
+        description="单会话工作区总占用上限（MB），覆盖 uploads/workspace/outputs/memory，上传前校验",
     ),
     "CHAT_DATA_TEXT_PREVIEW_MAX_MB": SettingSpec(
         key="CHAT_DATA_TEXT_PREVIEW_MAX_MB",
@@ -368,6 +380,8 @@ class SettingNotFoundError(Exception):
 
 
 _cache: dict[str, tuple[float, str | None]] = {}
+# 单 key 加载锁：缓存过期瞬间避免多个协程同时打 DB（stampede）
+_load_locks: dict[str, asyncio.Lock] = {}
 # chat_data_setting 表未建（DDL 未执行）时每个读取都会抛异常：只告警一次，
 # 之后降为 debug，避免表缺失期间日志被刷屏（功能不受影响，读取走 env/默认）。
 _missing_table_warned = False
@@ -425,6 +439,24 @@ def _parse_registered_value(spec: SettingSpec, raw: str) -> Any:
     return value
 
 
+async def _load_cached_raw_setting(key: str) -> str | None:
+    """读取原始配置值：TTL 内走缓存，过期时按 key 单飞回源，避免并发打爆 DB。"""
+    now = time.monotonic()
+    cached = _cache.get(key)
+    if cached is not None and now - cached[0] < SETTING_CACHE_TTL_SECONDS:
+        return cached[1]
+
+    lock = _load_locks.setdefault(key, asyncio.Lock())
+    async with lock:
+        now = time.monotonic()
+        cached = _cache.get(key)
+        if cached is not None and now - cached[0] < SETTING_CACHE_TTL_SECONDS:
+            return cached[1]
+        raw = await _load_raw_setting(key)
+        _cache[key] = (time.monotonic(), raw)
+        return raw
+
+
 async def get_runtime_setting(key: str, default: Any = None) -> Any:
     """运行期读取单一入口：表覆盖行 > env > default（注册 key 回退 spec.default）。
 
@@ -432,11 +464,7 @@ async def get_runtime_setting(key: str, default: Any = None) -> Any:
     字符串（防御性读取，正常不会有未注册 key 入表），否则返回 default。
     """
     spec = SETTING_REGISTRY.get(key)
-    now = time.monotonic()
-    cached = _cache.get(key)
-    if cached is None or now - cached[0] >= SETTING_CACHE_TTL_SECONDS:
-        _cache[key] = (now, await _load_raw_setting(key))
-    raw = _cache[key][1]
+    raw = await _load_cached_raw_setting(key)
     if raw is not None:
         if spec is None:
             return str(raw)
@@ -458,6 +486,12 @@ async def get_runtime_setting(key: str, default: Any = None) -> Any:
         except (TypeError, ValueError) as exc:
             logger.error("配置变量 %s env 值 %r 非法（%s），回退默认", key, env_raw, exc)
     return spec.default
+
+
+async def get_workspace_size_limit() -> tuple[int, int]:
+    """单会话工作区总占用上限：返回 (MB, 字节)。"""
+    size_mb = await get_runtime_setting("CHAT_DATA_WORKSPACE_MAX_MB")
+    return size_mb, size_mb * 1024 * 1024
 
 
 async def get_upload_size_limit() -> tuple[int, int]:

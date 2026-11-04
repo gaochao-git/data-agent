@@ -14,6 +14,25 @@ ACTIVE_ENV_KEY = "CHAT_DATA_ACTIVE_ENV"
 DEPLOY_ENV_HOSTS_FILE = "deploy_env_hosts.json"
 
 
+DEFAULT_NO_PROXY = "localhost,127.0.0.1,::1,dashscope.aliyuncs.com"
+
+
+def merge_no_proxy(defaults: str = DEFAULT_NO_PROXY) -> str:
+    """把默认代理绕过项合并进已有的 NO_PROXY/no_proxy，返回合并后的值。
+
+    直接覆盖会丢掉部署环境自定义的内网绕过项，导致外部调用错误走代理。
+    """
+    existing = os.getenv("NO_PROXY") or os.getenv("no_proxy") or ""
+    parts = [item.strip() for item in existing.split(",") if item.strip()]
+    for item in defaults.split(","):
+        if item not in parts:
+            parts.append(item)
+    merged = ",".join(parts)
+    os.environ["NO_PROXY"] = merged
+    os.environ["no_proxy"] = merged
+    return merged
+
+
 def get_local_ip() -> str:
     """获取本机 IP，失败时回退本地环回地址。"""
     try:

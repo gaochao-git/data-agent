@@ -110,8 +110,14 @@ def _is_sql_function(value: Any, safe_functions: set[str]) -> bool:
 
 
 def _escape_sql_string(value: Any) -> str:
-    """单引号包裹并按 SQL 规则转义单引号。"""
-    return f"'{str(value).replace(chr(39), chr(39) * 2)}'"
+    """单引号包裹并按 SQL 规则转义：先反斜杠、再单引号。
+
+    MySQL/Hive 默认把反斜杠当转义符：只双写单引号时，反斜杠加单引号会被
+    数据库解释成“字面单引号”，攻击者可用反斜杠加引号提前闭合字符串并注入
+    条件。因此必须先转义反斜杠，再双写单引号，顺序不能反。
+    """
+    escaped = str(value).replace("\\", "\\\\").replace(chr(39), chr(39) * 2)
+    return f"'{escaped}'"
 
 
 def _unwrap_quoted_literal(raw: str) -> str:
@@ -227,7 +233,8 @@ def _operator_clause(
 
 
 def _escape_like_value(value: str) -> str:
-    return value.replace(chr(39), chr(39) * 2)
+    """LIKE/STARTS WITH/ENDS WITH 的值同样先转义反斜杠，再双写单引号。"""
+    return str(value).replace("\\", "\\\\").replace(chr(39), chr(39) * 2)
 
 
 def _render_special_operator_clause(expression: str, operator: str, leaf: dict[str, Any]) -> str | None:
