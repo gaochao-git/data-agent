@@ -564,3 +564,59 @@ ALTER TABLE `chat_data_ontology_object_edit`
 - **列表/搜索不合并覆盖值**：只标 `has_overrides`，合并仍限详情；批量合并要按当前页 key 二次查询，留待性能评估。
 - **聚合/分组不排除已删除对象**：需在 SQL 注入 `NOT IN` 子查询，与派生 JOIN 叠加有超时风险。
 - **官方按用户/组配置冲突策略**：我们只有对象类型级单值配置，没有多策略按主体切换。
+- **`apply_most_recent_value` 是近似语义**：官方比的是「对象存储 vs 输入数据源的一次 sync 写入」，
+  我们没有对象存储、源数据是每次查询实时读 SQL，只能拿业务表某个 timestamp 属性当作「源侧最后
+  写入时间」。若该列不是行版本时间（例如是业务创建时间）或不随更新变化，策略会退化。配置前必须
+  确认该列语义，不能只看「有没有这个列」。
+
+## 20. 闭环验证（2026-11-04，方向复盘后补做）
+
+复盘发现 L2.2-b 的语义虽对，但**交付闭环断在调用方与验证层**：5297 条单测通过，
+然而提示词没更新、`expected_baseline` 可选且空值直接跳过、新增 DAO 只有 fake 单测、
+DDL 只写在文档没执行过。本节记录补做内容与抓出的真实缺陷。
+
+### 20.1 抓出的四个真缺陷（都由新增测试首次发现）
+
+| 缺陷 | 后果 | 修复 |
+| --- | --- | --- |
+| 部署 DDL 漏 `applied_at` / `isolation_level` / `reverted_by` / `reverted_at` | ORM 默认 SELECT 全字段，缺列在运行期才炸 | 补齐 `next_version.md` 的 CREATE 与 ALTER，并加「文档 DDL 列 = ORM 列」全量断言 |
+| `conflict_timestamp_property` DDL `varchar(64)` vs 模型 `String(128)` | 长属性名被截断 | 统一为 128，并由测试锁死 |
+| `object_generation` 同时出现在 CREATE 与 ALTER，CREATE TABLE 又缺 L2.1 全部新列 | 新库缺列、存量库重复执行报 Duplicate column | CREATE TABLE 改为最终完整形态；文档明确「新库只执行 CREATE，所有 ALTER 仅供存量库」 |
+| `chat_data.py` 两处提示词仍写「`execute_action` 执行」 | LLM 不知道 dry_run / baseline / revert 存在；`_check_baseline` 空值直接 return，冲突检测在真实链路上默认不生效 | 提示词改为两步提交；服务端兜底自动补试运行；加提示词守卫测试 |
+
+### 20.2 接通调用方：两步提交 + 服务端兜底
+
+- `ONTOLOGY_WORKFLOW_BLOCK` / `ONTOLOGY_SUBAGENT_HINT` 明确写：`list_action_types` →
+  `execute_action(dry_run=true)` 看 `proposed_changes`/`errors` →
+  `execute_action(dry_run=false, expected_baseline=原样回传)`；冲突则重新试运行，不用旧基线重试；
+  撤销用 `revert_action` 传 `execution.id`。
+- **不把正确性押在 LLM 跨轮传字符串上**：`_run_execute_action` 在模型漏传 baseline 时，
+  自动补一次只读 test run 取基线再提交，返回 `baseline_source=auto_preview`；模型正常传了就用
+  模型的（`caller`），保留「预演 → 用户确认 → 提交」之间真实的冲突窗口。
+  管理 API 的 `expected_baseline` 仍可选，兼容旧客户端。
+- 补齐三类操作的一致性：`create_object` 的 test run 现在也返回预览基线（scope=create，
+  提交侧不比对）；`delete_object` 提交改为**接受并校验** `expected_baseline`
+  （此前只有 set_property 校验，删除是漏网之鱼）。
+
+### 20.3 真实 SQL 与端到端
+
+新增 `tests/unit/test_ontology_action_l2_sql.py`：内存 SQLite + `Base.metadata.create_all`，
+把 `dao_session.get_session` 指过去（事务复用语义不变），所有 Action 侧读写跑真实 SQL。
+
+- **DDL / 启动自检**：真实建表列集合通过 `missing_schema_issues(action_execute_enabled=True)`；
+  `require_ontology_schema_async()` 在本体开关全开时通过；文档 DDL 声明列与 ORM 列全量比对。
+- **DAO**：执行审计 JSON round-trip、代际过滤、`latest_edit_async` 取最后一条、
+  `overridden_keys_async` 忽略旧代际、`mark_reverted_async` 保留行、实例唯一键、
+  动作对象软删/恢复/重建。
+- **端到端**：定义 → 试运行零写入 → 带基线提交 → 读回覆盖值（走生产 `_merge_conflict_values`
+  + 真实覆盖层 SQL）→ 撤销 → 读回源值；以及「源行在两步间被改 → 整单取消且零写入」、
+  「撤销不可重复」、删除的两步提交与撤销恢复可见性、删除的旧基线拒绝。
+- **边界（如实说明）**：业务数据源用 SQLite `orders` 表模拟，`read_object_projection` 的
+  Dataset/member binding 解析仍由轻量桩替代；真实 MySQL + 数据源绑定下的启动与查询未在本机跑过，
+  上线前仍需在预发环境按 §20.1 的部署顺序执行一次完整冒烟。
+
+### 20.4 验收
+
+本体相关 6 个测试文件 **226 passed**（其中真实 SQL 闭环 18 条、Action 单测 54 条）；
+`chat_data_app` 全量结果见 §20 更新时的回归记录。既有环境性失败（4 条 filesystem 被本机
+`sitecustomize` 拦 `mkdir`、1 条 memory service 后台落盘超时）已在 HEAD 干净工作树复现，与本轮无关。

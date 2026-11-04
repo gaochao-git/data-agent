@@ -17,7 +17,11 @@
 - ``list_action_types``：列出当前业务域可执行 Action 定义（只读）；
 - ``execute_action``：执行 Action（Modify 写覆盖层 / Create 建对象 / Delete 置不可见，
   均记审计且不直接改源库；受 ``CHAT_DATA_ONTOLOGY_ACTION_EXECUTE_ENABLED`` 门控）；
-  ``dry_run=true`` 时只跑 test run 返回 proposed_changes，不写任何数据（不受开关门控）；
+  ``dry_run=true`` 时只跑 test run 返回 proposed_changes / ``baseline`` / 分级错误，不写任何数据
+  （不受开关门控）；提交时把 baseline 原样回传为 ``expected_baseline``，服务端重算源行指纹，
+  不一致整单取消。模型漏传时服务端自动补一次试运行（``baseline_source=auto_preview``），
+  保证冲突检测不会静默失效；
+- ``revert_action``：撤销一次成功执行（仅执行者本人、仅对象级最近一次），追加反向编辑；
 - ``save_object_set`` / ``load_object_set`` / ``list_object_sets``：static 对象集合的保存、
   分页加载与列表，让查询结果跨轮传递（temporary 24h 过期）；
 - ``list_execution_targets``：列出当前用户可执行的成员数据源（member 维度查询范围）。
@@ -257,7 +261,10 @@ class _ExecuteActionPayload(BaseModel):
     expected_baseline: str = Field(
         default="",
         max_length=80,
-        description="可选：dry_run 返回的 baseline.row_hash。传了会在提交前比对对象是否被改过，不一致则整单取消",
+        description=(
+            "dry_run 返回的 baseline 字符串，提交时原样回传；提交前会比对对象是否被改过，"
+            "不一致整单取消并提示重新试运行。留空时服务端会自动补一次试运行作为基线。"
+        ),
     )
 
 
@@ -376,7 +383,12 @@ ONTOLOGY_ACTION_HELP: dict[str, tuple[str, str]] = {
     "traverse_objects": ("从对象出发做 1~3 跳关系遍历（图查询，需 Nebula 且图已同步）。", "relations.md"),
     "find_graph_paths": ("查询两个对象之间的有界路径（图查询，需 Nebula 且图已同步）。", "relations.md"),
     "list_action_types": ("列出当前业务域可执行 Action 定义与参数，只读。", "actions.md"),
-    "execute_action": ("执行 Action（属性覆盖/创建对象/删除对象 + 审计），受部署开关门控。", "actions.md"),
+    "execute_action": (
+        "执行 Action（属性覆盖/创建对象/删除对象 + 审计），受部署开关门控；"
+        "先以 dry_run=true 试运行拿 proposed_changes 与 baseline，再以 dry_run=false 提交并原样回传 "
+        "expected_baseline（不传时服务端会自动补一次试运行，但就没有用户确认窗口）。",
+        "actions.md",
+    ),
     "revert_action": (
         "撤销一次已成功的 Action 执行（仅执行者本人、且该编辑仍是对象最近一次），追加反向编辑。",
         "actions.md",
@@ -857,13 +869,29 @@ async def _run_execute_action(
         )
     if not ontology_action_execute_enabled():
         raise ValueError("Action 执行未启用：需设置环境变量 CHAT_DATA_ONTOLOGY_ACTION_EXECUTE_ENABLED=1")
-    result = await OntologyActionTypeService().execute_action_type_async(
+    service = OntologyActionTypeService()
+    expected_baseline = payload.expected_baseline
+    baseline_source = "caller"
+    if not expected_baseline:
+        # 服务端兜底：模型可能忘记回传 baseline，此时不能让冲突检测静默失效。
+        # 自动补一次只读 test run，用刚算出的基线提交；LLM 传了则以 LLM 的为准，
+        # 保留「预演 → 用户确认 → 提交」之间的真实冲突窗口。
+        preview = await service.test_run_action_type_async(
+            payload.action_type,
+            dict(payload.parameters or {}),
+            object_key=payload.object_key,
+            operator=user_id,
+            operator_name=operator_name or user_id,
+        )
+        expected_baseline = (preview.get("baseline") or {}).get("row_hash") or ""
+        baseline_source = "auto_preview" if expected_baseline else "unavailable"
+    result = await service.execute_action_type_async(
         payload.action_type,
         object_key=payload.object_key,
         parameters=dict(payload.parameters or {}),
         operator=user_id,
         operator_name=operator_name or user_id,
-        expected_baseline=payload.expected_baseline,
+        expected_baseline=expected_baseline,
     )
     return tool_result_payload(
         ONTOLOGY_TOOL_NAME,
@@ -875,10 +903,12 @@ async def _run_execute_action(
             "lifecycle_status": result.get("lifecycle_status"),
             "recreated": result.get("recreated"),
             "edits": result.get("edits"),
+            "baseline_source": baseline_source,
             "usage": (
                 "Action 已写入对象属性覆盖层并记录审计；需要确认时用 get_object 重新读取对象属性。"
                 "lifecycle_status=deleted 表示对象已不可见（编辑值保留）；recreated=true 表示按新实例重建，"
-                "旧代际的覆盖值不会继承。"
+                "旧代际的覆盖值不会继承。baseline_source=auto_preview 表示模型未回传基线、"
+                "由服务端自动补了一次试运行；要撤销本次操作用 revert_action 传这里的 execution.id。"
             ),
         },
     )

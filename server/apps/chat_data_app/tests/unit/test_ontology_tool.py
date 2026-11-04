@@ -382,6 +382,18 @@ class _FakeActionTypeService:
             },
         ]
 
+    async def test_run_action_type_async(
+        self, name, parameters, *, object_key="", operator="", operator_name=""
+    ):
+        return {
+            "object_type_name": "order",
+            "proposed_changes": {"objects": [], "links": []},
+            "execution_log": [],
+            "errors": {"admin_facing": [], "end_user_facing": []},
+            "baseline": {"row_hash": "sha256:object:auto"},
+            "executed": False,
+        }
+
     async def execute_action_type_async(
         self,
         name,
@@ -1137,3 +1149,100 @@ def test_help_unknown_action_lists_candidates():
     """未知动作的报错必须列出可用 action，模型才能一步纠正。"""
     with pytest.raises(ValueError, match="可用 action"):
         ontology_tool._run_help({"action": "not_an_action"})
+
+
+# ---------- L2.2-b 闭环：agent 两步提交与调用方提示词 ----------
+
+
+class _RecordingActionTypeService(_FakeActionTypeService):
+    """记录 test run / execute 的调用，验证「没传基线时服务端是否自动补试运行」。"""
+
+    calls: list[tuple] = []
+
+    async def test_run_action_type_async(self, name, parameters, **kwargs):
+        self.calls.append(("test_run", name))
+        return await super().test_run_action_type_async(name, parameters, **kwargs)
+
+    async def execute_action_type_async(self, name, **kwargs):
+        self.calls.append(("execute", name, kwargs.get("expected_baseline")))
+        return await super().execute_action_type_async(name, **kwargs)
+
+    async def revert_execution_async(self, name, execution_id, **kwargs):
+        self.calls.append(("revert", name, execution_id))
+        return {"reverted_execution_id": execution_id, "execution": {"id": 9}}
+
+
+def _patch_recording(monkeypatch):
+    _RecordingActionTypeService.calls = []
+    monkeypatch.setenv("CHAT_DATA_ONTOLOGY_ACTION_EXECUTE_ENABLED", "1")
+    monkeypatch.setattr(ontology_tool, "OntologyActionTypeService", _RecordingActionTypeService)
+    return _RecordingActionTypeService.calls
+
+
+def test_execute_action_auto_previews_when_baseline_missing(monkeypatch):
+    """模型漏传 baseline 时不能静默跳过冲突检测：服务端自动补一次只读试运行。"""
+    calls = _patch_recording(monkeypatch)
+    payload = _invoke(
+        monkeypatch,
+        "execute_action",
+        {"action_type": "ship_order", "object_key": "ORD1", "parameters": {"carrier": "SF"}},
+    )
+    assert [call[0] for call in calls] == ["test_run", "execute"]
+    assert calls[1][2] == "sha256:object:auto"
+    assert payload["baseline_source"] == "auto_preview"
+
+
+def test_execute_action_prefers_caller_baseline(monkeypatch):
+    """模型正常走两步时，用模型回传的基线（保留用户确认窗口），不重复试运行。"""
+    calls = _patch_recording(monkeypatch)
+    payload = _invoke(
+        monkeypatch,
+        "execute_action",
+        {
+            "action_type": "ship_order",
+            "object_key": "ORD1",
+            "parameters": {"carrier": "SF"},
+            "expected_baseline": "sha256:object:caller",
+        },
+    )
+    assert [call[0] for call in calls] == ["execute"]
+    assert calls[0][2] == "sha256:object:caller"
+    assert payload["baseline_source"] == "caller"
+
+
+def test_dry_run_returns_baseline_for_two_step_submit(monkeypatch):
+    monkeypatch.setattr(ontology_tool, "OntologyActionTypeService", _FakeActionTypeService)
+    payload = _invoke(
+        monkeypatch,
+        "execute_action",
+        {
+            "action_type": "ship_order",
+            "object_key": "ORD1",
+            "parameters": {"carrier": "SF"},
+            "dry_run": True,
+        },
+    )
+    assert payload["dry_run"] is True
+    assert payload["baseline"] == "sha256:object:auto"
+    assert "expected_baseline" in payload["usage"]
+
+
+def test_revert_action_tool_path(monkeypatch):
+    calls = _patch_recording(monkeypatch)
+    payload = _invoke(
+        monkeypatch,
+        "revert_action",
+        {"action_type": "ship_order", "execution_id": 7},
+    )
+    assert ("revert", "ship_order", 7) in calls
+    assert payload["reverted_execution_id"] == 7
+
+
+def test_prompts_teach_two_step_submit_and_revert():
+    """闭环守卫：提示词必须与工具契约同步，否则 LLM 不知道新能力存在。"""
+    from apps.chat_data_app.agent.prompts import chat_data
+
+    for block in (chat_data.ONTOLOGY_WORKFLOW_BLOCK, chat_data.ONTOLOGY_SUBAGENT_HINT):
+        for keyword in ("dry_run", "expected_baseline", "revert_action"):
+            assert keyword in block, f"提示词缺少 {keyword}"
+    assert "写写冲突" in chat_data.ONTOLOGY_WORKFLOW_BLOCK

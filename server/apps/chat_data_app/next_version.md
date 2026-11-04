@@ -624,6 +624,7 @@ CREATE TABLE `chat_data_ontology_object_edit` (
   `property_value_json` text COMMENT '覆盖值JSON文本（保留类型）',
   `action_execution_id` bigint NOT NULL DEFAULT '0' COMMENT '关联 Action 执行ID',
   `action_type_name` varchar(128) NOT NULL DEFAULT '' COMMENT '动作类型API名',
+  `applied_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '覆盖生效时间（读时冲突策略比较用）',
   `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `create_by` varchar(100) NOT NULL DEFAULT '' COMMENT '操作人ID',
   `create_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '操作人名称',
@@ -635,18 +636,30 @@ CREATE TABLE `chat_data_ontology_object_edit` (
 CREATE TABLE `chat_data_ontology_action_execution` (
   `id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键ID',
   `action_type_name` varchar(128) NOT NULL COMMENT '动作类型API名',
+  `action_type_version` int NOT NULL DEFAULT '0' COMMENT '执行时的定义版本',
   `object_type_id` bigint NOT NULL COMMENT '目标对象类型ID',
   `object_key` varchar(512) NOT NULL COMMENT '对象主键值',
+  `edited_object_keys` varchar(2048) NOT NULL DEFAULT '' COMMENT '被编辑对象主键JSON数组',
   `parameters_json` text COMMENT '执行参数JSON文本',
   `edits_json` text COMMENT '解析后的编辑JSON文本',
+  `compiled_edits_json` text COMMENT '编译后的每对象一条编辑JSON',
+  `baseline_json` text COMMENT '执行前基线快照',
+  `conflict_check_level` varchar(16) NOT NULL DEFAULT 'object' COMMENT '冲突检测口径 object/property/off',
+  `isolation_level` varchar(32) NOT NULL DEFAULT 'legacy_equivalent' COMMENT '隔离级别（占位，当前仅 legacy 等价）',
+  `idempotency_key` varchar(64) NOT NULL DEFAULT '' COMMENT '幂等键（本平台扩展）',
   `execution_status` varchar(16) NOT NULL DEFAULT 'succeeded' COMMENT '执行状态',
   `error_message` varchar(1000) NOT NULL DEFAULT '' COMMENT '错误信息',
+  `revert_of_execution_id` bigint NOT NULL DEFAULT '0' COMMENT '本执行撤销的是哪条执行，0=非撤销',
+  `reverted_by` varchar(100) NOT NULL DEFAULT '' COMMENT '撤销人ID',
+  `reverted_at` datetime DEFAULT NULL COMMENT '撤销时间',
   `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `create_by` varchar(100) NOT NULL DEFAULT '' COMMENT '操作人ID',
   `create_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '操作人名称',
   PRIMARY KEY (`id`),
   KEY `idx_action_execution_type` (`action_type_name`,`create_time`),
-  KEY `idx_action_execution_object` (`object_type_id`,`object_key`)
+  KEY `idx_action_execution_object` (`object_type_id`,`object_key`),
+  KEY `idx_action_execution_idem` (`action_type_name`,`idempotency_key`),
+  KEY `idx_action_execution_revert` (`revert_of_execution_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='本体 Action 执行审计表';
 ```
 
@@ -1181,19 +1194,32 @@ ALTER TABLE `chat_data_ontology_object_edit`
 对齐官方三处语义：**读时冲突两策略**（`object-edits/how-edits-applied.md:167-187`）、
 **执行前基线 + 冲突检测**、**撤销是追加反向编辑**（`action-types/action-reverts.md`）。
 
+> **部署顺序**：上面 §「本体 Action 执行」的 `CREATE TABLE` 已是包含 L2.1/L2.2 全部列的
+> 最终形态，**全新库只执行 CREATE，不要执行本文档中的任何 ALTER**。所有 ALTER 仅供
+> 存量库升级，按 L2.1 → L2.2 → L2.2-b 顺序各执行一次；重复执行会报 Duplicate column。
+> 一致性由 `test_ontology_action_l2_sql.py` 的「文档 DDL 列 = ORM 列」用例守住。
+
 ```sql
 ALTER TABLE `chat_data_ontology_object_type`
   ADD COLUMN `conflict_resolution` varchar(32) NOT NULL DEFAULT 'apply_user_edits'
     COMMENT '读时冲突策略：apply_user_edits=覆盖值恒胜；apply_most_recent_value=比较时间戳',
-  ADD COLUMN `conflict_timestamp_property` varchar(64) NOT NULL DEFAULT ''
+  ADD COLUMN `conflict_timestamp_property` varchar(128) NOT NULL DEFAULT ''
     COMMENT '源行 timestamp 属性 API 名（apply_most_recent_value 必填）';
+
+ALTER TABLE `chat_data_ontology_object_edit`
+  ADD COLUMN `applied_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP
+    COMMENT '覆盖生效时间（apply_most_recent_value 与源行时间戳比较用）';
 
 ALTER TABLE `chat_data_ontology_action_execution`
   ADD COLUMN `baseline_json` longtext COMMENT '执行前基线快照 {row_hash,row_hash_scope,effective_values,object_generation,read_at}',
   ADD COLUMN `conflict_check_level` varchar(16) NOT NULL DEFAULT 'object'
     COMMENT '提交时冲突检测口径：object/property/off',
+  ADD COLUMN `isolation_level` varchar(32) NOT NULL DEFAULT 'legacy_equivalent'
+    COMMENT '隔离级别（占位，当前仅 legacy 等价）',
   ADD COLUMN `revert_of_execution_id` bigint NOT NULL DEFAULT '0'
     COMMENT '本执行是撤销哪条执行的（0=非撤销）',
+  ADD COLUMN `reverted_by` varchar(100) NOT NULL DEFAULT '' COMMENT '撤销人ID',
+  ADD COLUMN `reverted_at` datetime DEFAULT NULL COMMENT '撤销时间',
   ADD KEY `idx_action_execution_revert` (`revert_of_execution_id`);
 ```
 
@@ -1213,3 +1239,10 @@ ALTER TABLE `chat_data_ontology_action_execution`
   `create_object` 的撤销把对象标为 `deleted`。
 - 接口：`POST .../action-types/{name}/executions/{execution_id}/revert`；
   工具：`revert_action`（受同一执行开关门控）。
+- **agent 两步提交（闭环）**：提示词要求先 `execute_action(dry_run=true)` 看
+  `proposed_changes`，再把返回的 `baseline` 原样填到 `expected_baseline` 提交；
+  模型漏传时工具自动补一次只读试运行（`baseline_source=auto_preview`），不让冲突检测静默失效。
+  管理 API 的 `expected_baseline` 仍可选。`delete_object` 提交也校验基线；
+  `create_object` 的试运行返回预览凭证（不做源行比对）。
+- 真实 SQL 与端到端回归见 `tests/unit/test_ontology_action_l2_sql.py`：内存 SQLite 建表、
+  启动自检、「文档 DDL 声明列 = ORM 映射列」全量断言、试运行→提交→读回→撤销→读回全链路。

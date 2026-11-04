@@ -2,9 +2,10 @@
 
 对齐 Palantir Action Type 的三段结构：
 - parameters：参数名/类型/必填/说明；
-- edits：两种互斥操作——set_property（属性覆盖编辑，要求目标对象类型
-  write_mode=action_writable，编辑只落覆盖层不改源库）与 create_object
-  （创建动作对象，要求 write_mode=action_created，行存业务库动作对象表）；
+- edits：三种互斥操作（各对应官方一条 Ontology rule）——set_property（属性覆盖编辑，
+  要求 write_mode=action_writable/action_created，只落覆盖层不改源库）、
+  create_object（创建动作对象，要求 write_mode=action_created）、
+  delete_object（删除对象实例，要求非 read_only，只改可见性不删覆盖值）；
 - submission_criteria：提交条件（能否提交 + 失败文案），官方用于把业务规则
   编码进编辑权限（action-types/submission-criteria.md:10）。
 
@@ -854,6 +855,8 @@ class OntologyActionTypeService:
                 idempotency_key=idempotency_key,
                 operator=operator,
                 operator_name=operator_name,
+                expected_baseline=expected_baseline,
+                conflict_check_level=conflict_check_level,
             )
         if write_mode not in {"action_writable", "action_created"}:
             raise OntologyInvalidError("目标对象类型写性为 read_only，禁止属性编辑（原始业务数据只读）")
@@ -1075,6 +1078,8 @@ class OntologyActionTypeService:
         idempotency_key: str = "",
         operator: str = "",
         operator_name: str = "",
+        expected_baseline: str = "",
+        conflict_check_level: str = "object",
     ) -> dict[str, Any]:
         """delete_object 执行：只让对象不可见，不改源库、不删覆盖值。
 
@@ -1103,15 +1108,12 @@ class OntologyActionTypeService:
         )
         if failures:
             raise OntologyInvalidError("；".join(failures))
-        # 删除不改属性：基线只记代际，供撤销时确认「删的就是这个实例」
-        baseline = {
-            "object_key": overlay_object_key,
-            "object_generation": int(target_object.get("object_generation") or 1),
-            "row_hash": "",
-            "row_hash_scope": "off",
-            "effective_values": {},
-            "read_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        }
+        # 删除不改属性，但删之前仍要比基线：对象在试运行后被别人改过，这次删除同样应整单取消。
+        # effective_values 为空（无可回填属性），撤销靠实例状态与代际，不靠属性快照。
+        check_level = _normalize_conflict_check_level(conflict_check_level)
+        baseline = _build_baseline(target_object, edits, level=check_level)
+        baseline["effective_values"] = {}
+        _check_baseline(expected_baseline, baseline, level=check_level)
         compiled = _compile_edits(edits, object_key=overlay_object_key)
         async with transaction_scope():
             execution = await self._execution_dao.create_execution_async(
@@ -1127,7 +1129,7 @@ class OntologyActionTypeService:
                 compiled_edits=compiled,
                 idempotency_key=idempotency_key,
                 baseline=baseline,
-                conflict_check_level="off",
+                conflict_check_level=check_level,
             )
             if write_mode == "action_created":
                 soft_delete = getattr(self._action_object_dao, "soft_delete_object_async", None)
@@ -1400,7 +1402,18 @@ class OntologyActionTypeService:
         criteria_status = "skipped"
         criteria_detail: list[str] = []
         baseline: dict[str, Any] | None = None
-        if object_key and operation != "create_object":
+        if operation == "create_object":
+            # 创建对象没有「执行前源行」，但两步提交仍需要凭证：用本次参数指纹做
+            # 预览标记（scope=create，提交侧不做冲突比对），保证 agent 流程对三类操作一致。
+            baseline = {
+                "object_key": compiled_key,
+                "object_generation": 0,
+                "row_hash": _row_fingerprint(normalized, scope="create"),
+                "row_hash_scope": "create",
+                "effective_values": {},
+                "read_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            }
+        elif object_key:
             try:
                 target = await read_object_projection(
                     object_type_name,

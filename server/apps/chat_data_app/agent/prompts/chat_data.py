@@ -107,7 +107,7 @@ ONTOLOGY_WORKFLOW_BLOCK = """## 本体查询模式（当前业务域已启用本
 - 机构口径：用户未指定机构且可用 member 多于一个时，先询问用户选择哪个机构，或明确确认“全部机构”；用户确认“全部机构”后，把全部 member 一次传入同一次查询。跨机构结果按 `results[]` 分机构展示，不要把跨机构结果当作单个机构的“前 N”。
 - 跨对象关联：用 `search_around` 的 `join.from_columns`/`join.to_columns` 作为关联列；图查询开启时，多跳/路径用 `traverse_objects`/`find_graph_paths`，图结果只当关系索引，属性回 `get_object`；`unresolved: true` 时回读对象类型 `source_binding` 的 `column_mappings`/`columns` 确认物理列，不要猜。
 - 导航：`list_object_types` 看对象类型清单，`locate_object_type` 看属性/绑定/关系详情；目录不存在或为空说明当前业务域没有可用本体，此时如实告知用户数据范围受限，不要自行切换语义查询。
-- 动作：`list_action_types` 查可用 Action 定义，`execute_action` 执行（部署开关关闭时工具会明确报错，不要改用其它写路径）。
+- 动作（写操作必须两步）：`list_action_types` 查可用 Action 定义与参数；第一步 `execute_action` 带 `dry_run=true` 试运行，检查返回的 `proposed_changes` 与 `errors`，确认改动符合用户意图（不写任何数据，不受执行开关门控）；第二步 `execute_action` 带 `dry_run=false` 提交，并把试运行返回的 `baseline` 字符串**原样**填入 `expected_baseline`。返回「写写冲突」表示两步之间对象被改过，必须重新试运行再提交，不要用旧 baseline 重试，也不要自行省略 baseline。撤销用 `revert_action`，传 `execute_action` 返回的 `execution.id`（仅执行者本人、只能撤该对象最近一次编辑）。部署开关关闭时工具会明确报错，不要改用其它写路径。
 - 结果口径：工具返回 `results[]`（`member_datasource_id`/`member_name`/`status`/`sql`/`columns`/`data`/`total_count`（对象查询不做 COUNT，可能为 null）/`execution_time_ms`/`error`），按共享结果协议展示，不要自行改变字段口径。"""
 
 ONTOLOGY_ERROR_HANDLING_BLOCK = """## 错误处理
@@ -118,6 +118,7 @@ ONTOLOGY_SUBAGENT_HINT = """
 ## 本体查询模式
 - 本轮业务域已启用本体层：数据查询只能走 `ontology_tool`（find_objects/aggregate_objects/get_object/search_around/list_action_types），不要调用 data_analyzing_tool 或语义模型 DSL/SQL。
 - 先读 `/mnt/user-data/workspace/semantic/_ontology_catalog.yaml` 确认对象类型/属性/数据源绑定；对象查询的 member 范围用 list_execution_targets 获取。
+- 写操作：list_action_types 查定义 → execute_action(dry_run=true) 看 proposed_changes → execute_action(dry_run=false, expected_baseline=上一步的 baseline 原样) 提交；冲突则重新试运行。撤销用 revert_action 传 execution.id。
 """
 
 OUTPUT_AND_FINAL_ANSWER_BLOCK = """## 输出与最终回答

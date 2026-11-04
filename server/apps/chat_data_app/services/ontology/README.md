@@ -140,6 +140,11 @@
 - **提交时写写检测**：test run 返回基线 `baseline.row_hash`，提交时作为 `expected_baseline`
   回传，服务端重算源行指纹比对，不一致拒绝（`conflict_check_level` = `object`/`property`/`off`）。
   基线同时记下被编辑属性的当时有效值，供撤销回填；指纹比**源数据**，不比合并后的值；
+  `set_property` / `delete_object` 提交前都校验基线，`create_object` 的基线只作预览凭证；
+- **agent 两步提交（闭环）**：提示词要求「`dry_run=true` 看 proposed_changes → 带 baseline 提交」；
+  模型漏传 `expected_baseline` 时 `ontology_tool` 会**自动补一次只读试运行**再提交
+  （`baseline_source=auto_preview`），不让冲突检测静默失效；传了则用调用方的，保留确认窗口。
+  管理 API 的该字段仍可选，兼容旧客户端；
 - **撤销是追加反向编辑**（对齐 `action-types/action-reverts.md`）：仅执行者本人、仅对象级最近
   一次、仅 `succeeded` 且非撤销记录；追加反向执行 + 反向 edit 并标记原执行 `reverted`。
   `delete_object` 撤销把实例状态改回 `active`（代际不变，不算重建）；`create_object` 撤销把
@@ -148,7 +153,9 @@
   设计见 `docs/ontology-action-l2-design.md`。
 
 DDL 见 `next_version.md`「本体 Action Type 定义表」「本体 Action L2.1」「本体 Action L2.2」
-「本体 Action L2.2-b」。
+「本体 Action L2.2-b」。**CREATE TABLE 已是最终形态，新库只执行 CREATE；所有 ALTER 仅供存量库升级。**
+真实 SQL 与端到端闭环见 `tests/unit/test_ontology_action_l2_sql.py`（含「文档 DDL 列 = ORM 列」
+全量断言与启动自检），设计复盘见 `docs/ontology-action-l2-design.md` §20。
 
 ## 对象集合（Object Set static，2026-10-25）
 
@@ -262,3 +269,6 @@ DDL 见 `next_version.md`「本体 Action Type 定义表」「本体 Action L2.1
   并在提交时做对象级/属性级写写检测（`expected_baseline` + `conflict_check_level`）；撤销按官方
   「追加反向编辑」语义实现（仅执行者本人、对象级最近一次）。仍缺：create/delete/link 之外的
   关系编辑写场景、源行物理消失后的孤儿处理、以及官方按用户/组配置的冲突策略粒度。
+  **注意 `apply_most_recent_value` 是近似**：官方比的是「对象存储 vs 输入数据源一次 sync 写入」，
+  我们没有对象存储、源数据实时读 SQL，只能拿业务表某 timestamp 属性当「源侧最后写入时间」；
+  该列若不是行版本时间，策略会退化，配置前必须确认列语义。
