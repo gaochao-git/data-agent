@@ -8567,6 +8567,45 @@
               "description": "翻页游标：只返回 sequence_no 小于该值的历史事件",
               "title": "Before Sequence"
             }
+          },
+          {
+            "description": "按完整轮次分页：返回最近 limit_turns 轮",
+            "in": "query",
+            "name": "limit_turns",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 50,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "按完整轮次分页：返回最近 limit_turns 轮",
+              "title": "Limit Turns"
+            }
+          },
+          {
+            "description": "按轮次翻页游标：只返回该序号之前的轮次",
+            "in": "query",
+            "name": "before_turn_sequence",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "按轮次翻页游标：只返回该序号之前的轮次",
+              "title": "Before Turn Sequence"
+            }
           }
         ],
         "responses": {
@@ -9454,6 +9493,54 @@
           }
         ],
         "summary": "Update Conversation Title",
+        "tags": [
+          "ChatData 会话"
+        ]
+      }
+    },
+    "/api/chatdata/conversations/{conversation_id}/token-usage": {
+      "get": {
+        "description": "按需读取会话完整上下文用量明细，避免随每次 history timeline 重复传输。",
+        "operationId": "get_conversation_token_usage_api_chatdata_conversations__conversation_id__token_usage_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Get Conversation Token Usage",
         "tags": [
           "ChatData 会话"
         ]

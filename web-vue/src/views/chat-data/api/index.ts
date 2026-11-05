@@ -1690,18 +1690,17 @@ export function cancelUserQuestion(
   })
 }
 
-/** 获取会话历史（流式接口）。limit 指定时只取尾部窗口，用 beforeSequence 向上翻页。 */
+/** 获取会话历史（流式接口）。limitTurns 指定时按完整轮次取窗口，用 beforeTurnSequence 向上翻页。 */
 export function getConversationHistory(
   conversationId: string,
-  options?: { limit?: number; beforeSequence?: number; strictLimit?: boolean },
+  options?: { limitTurns?: number; beforeTurnSequence?: number },
 ): Promise<Response> {
   return requestStream({
     url: `/agents/api/chatdata/conversations/${conversationId}`,
     params: {
       view: 'timeline',
-      limit: options?.limit,
-      before_sequence: options?.beforeSequence,
-      strict_limit: options?.strictLimit,
+      limit_turns: options?.limitTurns,
+      before_turn_sequence: options?.beforeTurnSequence,
     },
   })
 }

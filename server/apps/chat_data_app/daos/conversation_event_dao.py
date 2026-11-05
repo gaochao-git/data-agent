@@ -239,7 +239,6 @@ class ConversationEventDao:
         user_id: str,
         limit: int | None = None,
         before_sequence: int | None = None,
-        strict_limit: bool = False,
     ) -> tuple[list[ChatDataConversationEvent], bool]:
         """读取可见历史事件窗口，返回 (按序号升序的事件, 是否还有更早)。
 
@@ -273,22 +272,11 @@ class ConversationEventDao:
         tail = list(reversed(list(tail_result.scalars().all())))
         if not tail:
             return [], False
-        if strict_limit:
-            # 硬上限：不补齐整轮，直接返回尾部窗口；更早内容仍可通过
-            # before_sequence 继续翻页，避免长轮次把 limit 放大成整轮。
-            # 向前收敛到最近的用户/助手消息边界，避免首行落在 tool_result 上、
-            # 丢失对应的 tool_call 定义而渲染出孤立结果。
-            cutoff = int(tail[0].sequence_no)
-            for row in tail:
-                if row.event_type in ("user_message", "assistant_message"):
-                    cutoff = int(row.sequence_no)
-                    break
-        else:
-            cutoff = await self._expand_cutoff_to_turn_closure(
-                session,
-                conditions=conditions,
-                cutoff=int(tail[0].sequence_no),
-            )
+        cutoff = await self._expand_cutoff_to_turn_closure(
+            session,
+            conditions=conditions,
+            cutoff=int(tail[0].sequence_no),
+        )
         window_result = await session.execute(
             stmt.where(ChatDataConversationEvent.sequence_no >= cutoff).order_by(
                 ChatDataConversationEvent.sequence_no.asc(), ChatDataConversationEvent.id.asc()
@@ -301,6 +289,62 @@ class ConversationEventDao:
             earlier_than=cutoff,
         )
         return rows, has_more
+
+    async def list_visible_turn_window_in_session(
+        self,
+        session: AsyncSession,
+        *,
+        conversation_id: str,
+        user_id: str,
+        limit_turns: int,
+        before_turn_sequence: int | None = None,
+    ) -> tuple[list[ChatDataConversationEvent], bool, int | None]:
+        """按完整轮次读取历史窗口，返回 (事件, 是否还有更早轮次, 游标)。
+
+        以 turn_id 为分页原子单位：先按每个 turn 的最大 sequence_no 取最新 N 轮，
+        再返回这些轮次的全部事件。即使并发事件与其他轮次交错，也不会把一轮拆到两页。
+        每页允许一个超长轮次完整返回，不按事件条数截断。
+        """
+        filters = self._visible_event_filters(conversation_id=conversation_id, user_id=user_id)
+        turn_conditions = [*filters, ChatDataConversationEvent.turn_id != ""]
+        turn_query = (
+            select(
+                ChatDataConversationEvent.turn_id,
+                func.max(ChatDataConversationEvent.sequence_no).label("last_seq"),
+            )
+            .where(*turn_conditions)
+            .group_by(ChatDataConversationEvent.turn_id)
+        )
+        if before_turn_sequence is not None:
+            # 按轮次最大序号过滤，不能先筛事件再分组：否则长轮次中较早的事件
+            # 会让本轮“看起来”落在游标之前，导致上一页被重复加载。
+            turn_query = turn_query.having(func.max(ChatDataConversationEvent.sequence_no) < before_turn_sequence)
+        turn_rows = await session.execute(
+            turn_query.order_by(func.max(ChatDataConversationEvent.sequence_no).desc()).limit(limit_turns)
+        )
+        turn_tail = list(turn_rows.all())
+        if not turn_tail:
+            return [], False, None
+        selected_turn_ids = [str(row.turn_id) for row in turn_tail]
+        earliest_turn_sequence = min(int(row.last_seq) for row in turn_tail)
+        event_result = await session.execute(
+            select(ChatDataConversationEvent)
+            .where(*filters, ChatDataConversationEvent.turn_id.in_(selected_turn_ids))
+            .order_by(ChatDataConversationEvent.sequence_no.asc(), ChatDataConversationEvent.id.asc())
+        )
+        rows = list(event_result.scalars().all())
+        older_turn = await session.scalar(
+            select(ChatDataConversationEvent.turn_id)
+            .where(
+                *filters,
+                ChatDataConversationEvent.turn_id != "",
+                ChatDataConversationEvent.turn_id.notin_(selected_turn_ids),
+            )
+            .group_by(ChatDataConversationEvent.turn_id)
+            .having(func.max(ChatDataConversationEvent.sequence_no) < earliest_turn_sequence)
+            .limit(1)
+        )
+        return rows, older_turn is not None, earliest_turn_sequence
 
     async def _expand_cutoff_to_turn_closure(
         self,

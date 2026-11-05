@@ -704,12 +704,13 @@ interface UseConversationHistoryOptions {
     status: string
     turn_id?: string | null
     is_continuation?: boolean
+    stream_started_wall_ms?: number | null
     history_checkpoint?: { run_id?: string; stream_id?: string } | null
   } | null) => void
 }
 
-/** 历史事件单页条数：长会话全量拉取的字节量随会话线性增长，是加载变慢的主因 */
-export const HISTORY_PAGE_SIZE = 30
+/** 历史每页的完整轮次数：分页必须按 turn_id，不能按事件条数切轮 */
+export const HISTORY_TURN_PAGE_SIZE = 5
 
 /** 读取窗口内最小 sequence_no，作为向上翻页的游标；无法解析时返回 null */
 const readEarliestSequenceNo = (events: unknown[]): number | null => {
@@ -736,6 +737,8 @@ export function useConversationHistory({
   const historyEvents = ref<unknown[]>([])
   const hasMoreHistory = ref(false)
   const isLoadingEarlierHistory = ref(false)
+  // 按轮次接口返回的最早轮次游标；不能直接用事件最小 sequence（会被并发长轮次骗过）
+  const earliestTurnSequence = ref<number | null>(null)
 
   const applyHistoryEvents = (events: unknown[]) => {
     historyEvents.value = events
@@ -759,7 +762,7 @@ export function useConversationHistory({
     const showLoading = !force || messages.value.length === 0
     if (showLoading) isLoadingHistory.value = true
     try {
-      const response = await getConversationHistory(convId, { limit: HISTORY_PAGE_SIZE, strictLimit: true })
+      const response = await getConversationHistory(convId, { limitTurns: HISTORY_TURN_PAGE_SIZE })
 
       if (response.ok) {
         const data = await response.json()
@@ -777,7 +780,9 @@ export function useConversationHistory({
           messages.value = buildHistoryMessages(historyMessages, historyReasoningSegments)
           isFirstMessage.value = messages.value.length === 0
         }
-        hasMoreHistory.value = Boolean(data.data?.has_more)
+        hasMoreHistory.value = Boolean(data.data?.has_more_turns ?? data.data?.has_more)
+        const nextCursor = Number(data.data?.earliest_turn_sequence)
+        earliestTurnSequence.value = Number.isFinite(nextCursor) ? nextCursor : null
       }
       loadedConversationId.value = convId
     } catch (error) {
@@ -791,7 +796,7 @@ export function useConversationHistory({
   const loadEarlierHistory = async () => {
     const convId = conversationId.value
     if (!convId || isLoadingEarlierHistory.value || !hasMoreHistory.value) return
-    const cursor = readEarliestSequenceNo(historyEvents.value)
+    const cursor = earliestTurnSequence.value ?? readEarliestSequenceNo(historyEvents.value)
     if (cursor === null) {
       // 拿不到游标说明历史结构异常，停止翻页避免死循环
       hasMoreHistory.value = false
@@ -800,22 +805,34 @@ export function useConversationHistory({
     isLoadingEarlierHistory.value = true
     try {
       const response = await getConversationHistory(convId, {
-        limit: HISTORY_PAGE_SIZE,
-        beforeSequence: cursor,
-        strictLimit: true,
+        limitTurns: HISTORY_TURN_PAGE_SIZE,
+        beforeTurnSequence: cursor,
       })
       // 会话可能已在请求期间切换：只应用属于当前会话的响应，避免旧会话事件污染新会话
       if (!response.ok || conversationId.value !== convId) return
       const data = await response.json()
       const olderEvents = Array.isArray(data.data?.history_events) ? data.data.history_events : []
-      hasMoreHistory.value = Boolean(data.data?.has_more)
+      hasMoreHistory.value = Boolean(data.data?.has_more_turns ?? data.data?.has_more)
+      const nextCursor = Number(data.data?.earliest_turn_sequence)
+      earliestTurnSequence.value = Number.isFinite(nextCursor) ? nextCursor : null
       if (olderEvents.length === 0) return
-      historyEvents.value = [...olderEvents, ...historyEvents.value]
-      // 前拼而不是整表重建：messages 里还有历史窗口之外的本会话实时消息
-      // （已发送未落库的提问、流式进行中的回答），applyHistoryEvents 全量重建会把它们抹掉。
-      // 后端保证每页是一段连续的 sequence_no 区间、且以轮次起点收尾，
-      // 所以「旧页单独构建 + 前拼」与「整段重建」等价，不会漏事件也不会切断轮次。
-      messages.value = [...buildHistoryMessagesFromEvents(olderEvents), ...messages.value]
+      const allEvents = [...olderEvents, ...historyEvents.value]
+      historyEvents.value = allEvents
+      // 即使后端已按轮次分页，合并窗口后仍统一重建，避免实时消息/历史窗口拼接
+      // 产生重复 assistant 块；新分页保证同一轮不会跨页。
+      const persistedIds = new Set<string>()
+      for (const raw of allEvents) {
+        if (!raw || typeof raw !== 'object') continue
+        const payload = (raw as { payload?: unknown }).payload
+        if (payload && typeof payload === 'object') {
+          const id = String((payload as { id?: unknown }).id || '').trim()
+          if (id) persistedIds.add(id)
+        }
+      }
+      // 本会话实时消息（已发送未落库、流式进行中）不在历史事件里，重建后追加保留。
+      const liveMessages = messages.value.filter(item => item.isStreaming || !persistedIds.has(item.id))
+      const rebuiltHistory = buildHistoryMessagesFromEvents(allEvents)
+      messages.value = [...rebuiltHistory, ...liveMessages]
       isFirstMessage.value = messages.value.length === 0
     } catch (error) {
       console.error('加载更早的历史消息失败:', error)
@@ -848,6 +865,7 @@ export function useConversationHistory({
     isFirstMessage.value = true
     historyEvents.value = []
     hasMoreHistory.value = false
+    earliestTurnSequence.value = null
   }
 
   return {
@@ -867,6 +885,7 @@ const normalizeActiveRun = (value: unknown): {
   status: string
   turn_id?: string | null
   is_continuation?: boolean
+  stream_started_wall_ms?: number | null
   history_checkpoint?: { run_id?: string; stream_id?: string } | null
 } | null => {
   if (!value || typeof value !== 'object') return null
@@ -884,6 +903,9 @@ const normalizeActiveRun = (value: unknown): {
     status,
     turn_id: String(raw.turn_id || '').trim() || null,
     is_continuation: raw.is_continuation === true,
+    stream_started_wall_ms: Number.isFinite(Number(raw.stream_started_wall_ms)) && Number(raw.stream_started_wall_ms) > 0
+      ? Number(raw.stream_started_wall_ms)
+      : null,
     history_checkpoint: streamId
       ? { run_id: String(checkpoint?.run_id || runId), stream_id: streamId }
       : null,

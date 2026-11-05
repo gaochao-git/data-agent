@@ -534,7 +534,8 @@ async def get_conversation_detail(
     before_sequence: int | None = Query(
         default=None, ge=0, description="翻页游标：只返回 sequence_no 小于该值的历史事件"
     ),
-    strict_limit: bool = Query(default=False, description="长轮次硬上限：只返回 limit 条尾部事件，不补齐整轮"),
+    limit_turns: int | None = Query(default=None, ge=1, le=50, description="按完整轮次分页：返回最近 limit_turns 轮"),
+    before_turn_sequence: int | None = Query(default=None, ge=0, description="按轮次翻页游标：只返回该序号之前的轮次"),
 ) -> JSONResponse:
     """
     获取会话详情
@@ -567,7 +568,8 @@ async def get_conversation_detail(
             include_derived_history=view == "full",
             limit=limit,
             before_sequence=before_sequence,
-            strict_limit=strict_limit,
+            limit_turns=limit_turns,
+            before_turn_sequence=before_turn_sequence,
         )
         if not result:
             return business_response(msg="对话不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")

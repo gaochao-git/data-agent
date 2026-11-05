@@ -296,7 +296,8 @@ class ConversationEventService:
         include_derived: bool = True,
         limit: int | None = None,
         before_sequence: int | None = None,
-        strict_limit: bool = False,
+        limit_turns: int | None = None,
+        before_turn_sequence: int | None = None,
     ) -> dict[str, Any]:
         """在同一事务读取历史和活跃 Run 的恢复水位。
 
@@ -305,14 +306,23 @@ class ConversationEventService:
         payload 字节数随会话线性增长，是历史加载变慢的主因。
         """
         async with self._dao.session_context() as session:
-            rows, has_more = await self._dao.list_visible_event_window_in_session(
-                session,
-                conversation_id=conversation_id,
-                user_id=user_id,
-                limit=limit,
-                before_sequence=before_sequence,
-                strict_limit=strict_limit,
-            )
+            earliest_turn_sequence: int | None = None
+            if limit_turns is not None:
+                rows, has_more, earliest_turn_sequence = await self._dao.list_visible_turn_window_in_session(
+                    session,
+                    conversation_id=conversation_id,
+                    user_id=user_id,
+                    limit_turns=limit_turns,
+                    before_turn_sequence=before_turn_sequence,
+                )
+            else:
+                rows, has_more = await self._dao.list_visible_event_window_in_session(
+                    session,
+                    conversation_id=conversation_id,
+                    user_id=user_id,
+                    limit=limit,
+                    before_sequence=before_sequence,
+                )
             try:
                 token_usage_payload = await self._dao.get_latest_token_usage_payload_in_session(
                     session,
@@ -335,7 +345,9 @@ class ConversationEventService:
                 **self._build_history_payload(rows, token_usage_payload, include_derived),
                 "active_run": self._active_run_payload(active_run),
                 "has_more": has_more,
+                "has_more_turns": has_more,
                 "earliest_sequence_no": int(rows[0].sequence_no) if rows else None,
+                "earliest_turn_sequence": earliest_turn_sequence,
             }
 
     @staticmethod
@@ -375,11 +387,15 @@ class ConversationEventService:
         if run is None:
             return None
         content = _load_run_content(run.record_content)
+        started_wall_ms = content.get("stream_started_wall_ms")
         return {
             "run_id": run.run_id,
             "status": run.record_status,
             "turn_id": str(content.get("turn_id") or "") or None,
             "is_continuation": content.get("run_kind") == "continuation",
+            "stream_started_wall_ms": (
+                int(started_wall_ms) if isinstance(started_wall_ms, (int, float)) and int(started_wall_ms) > 0 else None
+            ),
             "history_checkpoint": normalize_history_checkpoint(content, run.run_id),
         }
 

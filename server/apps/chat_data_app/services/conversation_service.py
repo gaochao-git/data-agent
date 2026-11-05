@@ -403,7 +403,8 @@ async def get_detail(
     include_derived_history: bool = True,
     limit: int | None = None,
     before_sequence: int | None = None,
-    strict_limit: bool = False,
+    limit_turns: int | None = None,
+    before_turn_sequence: int | None = None,
 ) -> dict[str, Any] | None:
     """从业务表和事件表获取会话详情。
 
@@ -422,7 +423,8 @@ async def get_detail(
         include_derived=include_derived_history,
         limit=limit,
         before_sequence=before_sequence,
-        strict_limit=strict_limit,
+        limit_turns=limit_turns,
+        before_turn_sequence=before_turn_sequence,
     )
     messages = [*(event_history.get("messages") or [])]
     history_events = [*(event_history.get("history_events") or [])]
@@ -437,7 +439,9 @@ async def get_detail(
         "token_usage": event_history.get("token_usage"),
         "active_run": event_history.get("active_run"),
         "has_more": bool(event_history.get("has_more")),
+        "has_more_turns": bool(event_history.get("has_more_turns")),
         "earliest_sequence_no": event_history.get("earliest_sequence_no"),
+        "earliest_turn_sequence": event_history.get("earliest_turn_sequence"),
         "is_favorited": is_favorited,
     }
 

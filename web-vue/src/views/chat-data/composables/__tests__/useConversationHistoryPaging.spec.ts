@@ -7,7 +7,7 @@ const apiMocks = vi.hoisted(() => ({
 
 vi.mock('../../api', () => apiMocks)
 
-import { HISTORY_PAGE_SIZE, useConversationHistory } from '../useConversationHistory'
+import { HISTORY_TURN_PAGE_SIZE, useConversationHistory } from '../useConversationHistory'
 
 const event = (sequenceNo: number, content: string) => ({
   sequence_no: sequenceNo,
@@ -21,6 +21,18 @@ const event = (sequenceNo: number, content: string) => ({
   },
 })
 
+const assistantEvent = (sequenceNo: number, turnId: string, id: string, content: string) => ({
+  sequence_no: sequenceNo,
+  turn_id: turnId,
+  event_type: 'assistant_message',
+  payload: {
+    id,
+    role: 'assistant',
+    content,
+    timestamp: '2026-09-11 10:00:00',
+  },
+})
+
 const historyResponse = (events: unknown[], hasMore: boolean) => ({
   ok: true,
   json: async () => ({
@@ -28,7 +40,11 @@ const historyResponse = (events: unknown[], hasMore: boolean) => ({
     data: {
       history_events: events,
       has_more: hasMore,
+      has_more_turns: hasMore,
       earliest_sequence_no: events.length
+        ? (events[0] as { sequence_no: number }).sequence_no
+        : null,
+      earliest_turn_sequence: events.length
         ? (events[0] as { sequence_no: number }).sequence_no
         : null,
     },
@@ -58,8 +74,7 @@ describe('useConversationHistory 分页', () => {
     await vi.waitFor(() => expect(history.isLoadingHistory.value).toBe(false))
 
     expect(apiMocks.getConversationHistory).toHaveBeenCalledWith('conv-1', {
-      limit: HISTORY_PAGE_SIZE,
-      strictLimit: true,
+      limitTurns: HISTORY_TURN_PAGE_SIZE,
     })
     expect(messages.value.map(item => item.content)).toEqual(['问题3', '回答3'])
     expect(history.hasMoreHistory.value).toBe(true)
@@ -76,13 +91,27 @@ describe('useConversationHistory 分页', () => {
     await history.loadEarlierHistory()
 
     expect(apiMocks.getConversationHistory).toHaveBeenNthCalledWith(2, 'conv-1', {
-      limit: HISTORY_PAGE_SIZE,
-      beforeSequence: 5,
-      strictLimit: true,
+      limitTurns: HISTORY_TURN_PAGE_SIZE,
+      beforeTurnSequence: 5,
     })
     expect(messages.value.map(item => item.content)).toEqual(['问题2', '回答2', '问题3', '回答3'])
     expect(history.hasMoreHistory.value).toBe(true)
     expect(history.isLoadingEarlierHistory.value).toBe(false)
+  })
+
+  it('长轮次跨页加载后重建为同一个回答块', async () => {
+    apiMocks.getConversationHistory
+      .mockResolvedValueOnce(historyResponse([assistantEvent(6, 'turn-1', 'a-late', '后半段')], true))
+      .mockResolvedValueOnce(historyResponse([
+        event(3, '前半段问题'),
+        assistantEvent(4, 'turn-1', 'a-early', '前半段'),
+      ], false))
+
+    const { messages, history } = setup()
+    await vi.waitFor(() => expect(history.isLoadingHistory.value).toBe(false))
+    await history.loadEarlierHistory()
+
+    expect(messages.value.map(item => item.content)).toEqual(['前半段问题', '前半段\n后半段'])
   })
 
   it('没有更早历史时不再发请求', async () => {

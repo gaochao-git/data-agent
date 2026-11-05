@@ -130,6 +130,8 @@ const ownedRunStorageKey = 'chatdata:active-run-conversation'
 const activeRunId = ref<string | null>(null)
 const activeRunEventId = ref('0-0')
 const activeRunResumeRunId = ref<string | null>(null)
+/** 恢复运行时的真实起点（服务端落库的点击墙钟），优先于历史消息时间戳 */
+const activeRunStartedAtMs = ref<number | null>(null)
 let steerRestoreTimer: ReturnType<typeof setInterval> | null = null
 const pendingSteerMessages = ref<InboxQueueItem[]>([])
 const pendingUserQuestion = ref<PendingUserQuestion | null>(null)
@@ -247,6 +249,7 @@ const applyRunDoneState = (
   activeRunIsContinuation.value = false
   activeRunEventId.value = '0-0'
   activeRunResumeRunId.value = null
+  activeRunStartedAtMs.value = null
   clearOwnedRun(currentRunId || undefined)
   emit('runStatusChanged', conversationId, null)
 }
@@ -352,7 +355,8 @@ const recoverInterruptedPageRun = async () => {
   const runId = activeRunId.value
   // 「用时」起点种子：正在生成的 run 在历史消息里有服务端盖章的用户消息时间戳
   // （= 客户端点击时刻），恢复订阅时从它起算，避免 ticker 从 0 重计。
-  const elapsedSeedMs = [...messages.value].reverse().find(item => item.role === 'user')?.timestamp?.getTime()
+  const elapsedSeedMs = activeRunStartedAtMs.value
+    ?? [...messages.value].reverse().find(item => item.role === 'user')?.timestamp?.getTime()
   await submitAnalysisQuery('', {
       appendUserMessage: false,
       preserveAssistant: !activeRunIsContinuation.value,
@@ -457,7 +461,6 @@ const toggleSteerMessageQueueType = async (item: { messageId?: string; queueType
     steerActionBusy.value = false
   }
 }
-
 const removePendingSteerMessage = async (item: { clientId: string; messageId?: string }) => {
   const conversationId = localConversationId.value || props.conversationId
   if (steerActionBusy.value || !conversationId) return
@@ -476,7 +479,6 @@ const removePendingSteerMessage = async (item: { clientId: string; messageId?: s
     steerActionBusy.value = false
   }
 }
-
 onMounted(() => {
   focusInput()
   void recoverInterruptedPageRun()
@@ -490,7 +492,6 @@ onUnmounted(() => {
   stopGeneration()
 })
 const isNearBottom = ref(true)
-
 // ---- 文件上传 ----
 // 上传格式/大小上限统一在 utils/uploadLimits.ts（与工作区面板上传共用），文本渲染上限随面板拆到子组件。
 // 用户输入超过该字符数时自动转为 .md 文件附件上传，避免上下文过长
@@ -1205,6 +1206,7 @@ const {
     activeRunIsContinuation.value = Boolean(activeRun?.is_continuation)
     activeRunResumeRunId.value = activeRun?.run_id || null
     activeRunEventId.value = activeRun?.history_checkpoint?.stream_id || '0-0'
+    activeRunStartedAtMs.value = activeRun?.stream_started_wall_ms ?? null
   },
 })
 
@@ -1223,9 +1225,7 @@ watch(
     if (editingSteerId.value && retiredSet.has(editingSteerId.value)) cancelEditSteer()
   },
 )
-
 // 距底部阈值内视为「贴底」：与右侧子智能体过程共用 utils/scrollFollow 的同一口径
-
 
 // 滚到顶自动续页：只在「从阈值之外向上越过阈值」时放行一次（见 utils/scrollReach）
 const topReach = createTopReachTracker()
