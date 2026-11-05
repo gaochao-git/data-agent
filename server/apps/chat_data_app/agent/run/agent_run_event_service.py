@@ -53,7 +53,7 @@ def format_terminal_done(status: str, next_run_id: str | None = None) -> str:
     status = str(status or "failed")
     if status == "succeeded":
         status = "finished"
-    if status not in {"finished", "failed", "cancelled", "waiting_user"}:
+    if status not in {"finished", "failed", "cancelled", "interrupted", "waiting_user"}:
         status = "failed"
     data = {"status": status}
     next_run_id = str(next_run_id or "").strip()

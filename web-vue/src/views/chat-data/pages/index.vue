@@ -787,7 +787,7 @@ const retryConversationTitleIfNeeded = async (conversationId: string) => {
 
 const handleConversationRunStatusChanged = (
   conversationId: string,
-  status: 'pending' | 'active' | 'cancelling' | 'waiting_user' | null,
+  status: 'pending' | 'active' | 'cancelling' | 'interrupting' | 'waiting_user' | null,
 ) => {
   updateHistoryConversationRunStatus(conversationId, status)
   if (status === null) {

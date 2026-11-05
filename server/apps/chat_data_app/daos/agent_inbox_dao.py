@@ -50,7 +50,9 @@ class AgentInboxDao:
                 ChatDataAgentInbox.conversation_id == conversation_id,
                 ChatDataAgentInbox.user_id == user_id,
                 ChatDataAgentInbox.record_type == "run",
-                ChatDataAgentInbox.record_status.in_(("pending", "active", "cancelling", "waiting_user")),
+                ChatDataAgentInbox.record_status.in_(
+                    ("pending", "active", "cancelling", "interrupting", "waiting_user")
+                ),
                 ChatDataAgentInbox.delete_flag == 0,
             )
             .order_by(ChatDataAgentInbox.id.desc())
@@ -72,7 +74,9 @@ class AgentInboxDao:
                 ChatDataAgentInbox.conversation_id == conversation_id,
                 ChatDataAgentInbox.user_id == user_id,
                 ChatDataAgentInbox.record_type == "run",
-                ChatDataAgentInbox.record_status.in_(("pending", "active", "cancelling", "waiting_user")),
+                ChatDataAgentInbox.record_status.in_(
+                    ("pending", "active", "cancelling", "interrupting", "waiting_user")
+                ),
                 ChatDataAgentInbox.delete_flag == 0,
             )
             .order_by(ChatDataAgentInbox.id.desc())
@@ -321,7 +325,7 @@ class AgentInboxDao:
             select(ChatDataAgentInbox)
             .where(
                 ChatDataAgentInbox.record_type == "run",
-                ChatDataAgentInbox.record_status.in_(("active", "cancelling")),
+                ChatDataAgentInbox.record_status.in_(("active", "cancelling", "interrupting")),
                 ChatDataAgentInbox.lease_expire_time.is_not(None),
                 ChatDataAgentInbox.lease_expire_time < now,
                 ChatDataAgentInbox.delete_flag == 0,

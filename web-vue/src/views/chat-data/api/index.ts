@@ -1614,7 +1614,7 @@ export function listSteerMessages(
 ): Promise<ApiResponse<{
   has_active_run: boolean
   run_id?: string | null
-  run_status?: 'pending' | 'active' | 'cancelling' | 'waiting_user' | 'finished' | 'failed' | 'cancelled' | null
+  run_status?: 'pending' | 'active' | 'cancelling' | 'interrupting' | 'waiting_user' | 'finished' | 'failed' | 'cancelled' | 'interrupted' | null
   next_run_id?: string | null
   turn_id?: string | null
   is_continuation?: boolean

@@ -355,7 +355,7 @@ export interface ConversationItem {
   agent_id?: string
   datasource_id?: string
   is_favorited?: boolean
-  run_status?: 'pending' | 'active' | 'cancelling' | 'waiting_user' | 'finished' | 'failed' | 'cancelled' | null
+  run_status?: 'pending' | 'active' | 'cancelling' | 'interrupting' | 'waiting_user' | 'finished' | 'failed' | 'cancelled' | 'interrupted' | null
 }
 
 export interface ConversationGroupPage {

@@ -18,10 +18,18 @@ from utils.database import get_session
 from utils.logger import get_logger
 from utils.models import ChatDataAgentInbox
 
+from ...services.setting_service import get_runtime_setting
+
 logger = get_logger(__name__)
 
 MESSAGE_LEASE_SECONDS = 60
-RUN_LEASE_SECONDS = 120
+RUN_REAP_GRACE_SECONDS = 10
+
+
+async def _run_lease_seconds() -> int:
+    """Run 租约秒数：配置文件/管理页覆盖 > env > 30 秒默认值。"""
+    return int(await get_runtime_setting("CHAT_DATA_RUN_LEASE_SECONDS"))
+
 
 # next-step 在下一次模型调用前注入；next-turn 每个新轮次按 FIFO 领取一条。
 INBOX_QUEUE_TYPES = {"next-step", "next-turn"}
@@ -46,6 +54,8 @@ def load_run_content(content: str | None) -> dict[str, Any]:
 RUN_STATUS_PENDING = "pending"
 RUN_STATUS_ACTIVE = "active"
 RUN_STATUS_CANCELLING = "cancelling"
+RUN_STATUS_INTERRUPTING = "interrupting"
+RUN_STATUS_INTERRUPTED = "interrupted"
 RUN_STATUS_WAITING_USER = "waiting_user"
 RUN_STATUS_FINISHED = "finished"
 RUN_STATUS_FAILED = "failed"
@@ -259,7 +269,7 @@ class AgentInboxService:
             run.record_content = json.dumps(content, ensure_ascii=False)
             owner_token = f"{owner_generation}:{uuid4().hex}"
             run.owner_token = owner_token
-            run.lease_expire_time = now + timedelta(seconds=RUN_LEASE_SECONDS)
+            run.lease_expire_time = now + timedelta(seconds=await _run_lease_seconds())
             run.update_time = now
             rows = await self._dao.list_claimed_messages(session, run_id)
             resume_question = content.get("resuming_question")
@@ -324,7 +334,7 @@ class AgentInboxService:
                 session,
                 run_id,
                 owner_token,
-                now + timedelta(seconds=RUN_LEASE_SECONDS),
+                now + timedelta(seconds=await _run_lease_seconds()),
                 now,
             )
             if renewed:
@@ -333,10 +343,14 @@ class AgentInboxService:
             # 0 行既可能是取消/完成，也可能是 owner 已被接管。只在这个
             # 竞争路径做一次普通读取，正常心跳始终只有一条 UPDATE。
             run = await self._dao.get_run_by_id(session, run_id)
-            if run is None or run.record_status not in {RUN_STATUS_ACTIVE, RUN_STATUS_CANCELLING}:
+            if run is None:
                 return "inactive"
             if run.record_status == RUN_STATUS_CANCELLING:
                 return RUN_STATUS_CANCELLING
+            if run.record_status != RUN_STATUS_ACTIVE:
+                # 交出真实终态，执行侧据此取消本地 task；不能只回 inactive，
+                # 否则 reaper 已判 failed 后旧任务仍会继续跑。
+                return run.record_status
             self._assert_owner(run, owner_token)
             return RUN_STATUS_ACTIVE
 
@@ -965,12 +979,54 @@ class AgentInboxService:
         排队消息退回 pending 由下一个新 Run 接管；有未开始的待答问题则还原为
         waiting_user，否则 active 收口为 failed、cancelling 收口为 cancelled。
         """
-        if run is None or run.record_status not in {RUN_STATUS_ACTIVE, RUN_STATUS_CANCELLING}:
+        if run is None or run.record_status not in {
+            RUN_STATUS_ACTIVE,
+            RUN_STATUS_CANCELLING,
+            RUN_STATUS_INTERRUPTING,
+        }:
             return run
         if run.lease_expire_time is None or run.lease_expire_time > now:
             return run
         result = await self._reap_expired_run_state(session, run, now, user_id, operator_name)
+        # interrupting 仍是活跃收口态：调用方应继续等待宽限期，不能并发开新 Run。
+        if run.record_status == RUN_STATUS_INTERRUPTING:
+            return run
         return run if result and result.status == RUN_STATUS_WAITING_USER else None
+
+    def _prepare_reap_status(
+        self,
+        run: ChatDataAgentInbox,
+        now: datetime,
+        user_id: str,
+        operator_name: str,
+    ) -> str | None:
+        """active 过期先转 interrupting；宽限到点后返回终态。"""
+        content = self._load_run_content(run.record_content)
+        if run.record_status == RUN_STATUS_INTERRUPTING:
+            deadline_ms = int(content.get("reap_deadline_ms") or 0)
+            now_ms = int(now.timestamp() * 1000)
+            if deadline_ms <= 0:
+                content["reap_deadline_ms"] = now_ms + RUN_REAP_GRACE_SECONDS * 1000
+                run.record_content = json.dumps(content, ensure_ascii=False)
+                run.update_time = now
+                return None
+            return RUN_STATUS_INTERRUPTED if now_ms >= deadline_ms else None
+        if run.record_status == RUN_STATUS_ACTIVE:
+            if run.lease_expire_time is None or run.lease_expire_time > now:
+                return None
+            content["reap_deadline_ms"] = int(now.timestamp() * 1000) + RUN_REAP_GRACE_SECONDS * 1000
+            content["reap_origin"] = "lease_expired"
+            run.record_content = json.dumps(content, ensure_ascii=False)
+            run.record_status = RUN_STATUS_INTERRUPTING
+            run.update_time = now
+            run.update_by = user_id
+            run.update_by_name = operator_name
+            return None
+        if run.record_status == RUN_STATUS_CANCELLING:
+            if run.lease_expire_time is None or run.lease_expire_time > now:
+                return None
+            return RUN_STATUS_CANCELLED
+        return None
 
     async def _reap_expired_run_state(
         self,
@@ -980,16 +1036,15 @@ class AgentInboxService:
         user_id: str,
         operator_name: str,
     ) -> AgentRunReapResult | None:
-        """收口单个过期 Run，并生成新的终态发布 fencing token。"""
-        if run.record_status not in {RUN_STATUS_ACTIVE, RUN_STATUS_CANCELLING}:
+        """两阶段收口：active 先转 interrupting，宽限后再落终态。"""
+        terminal_status = self._prepare_reap_status(run, now, user_id, operator_name)
+        if terminal_status is None:
             return None
-        if run.lease_expire_time is None or run.lease_expire_time > now:
-            return None
-        dead_status = RUN_STATUS_FAILED if run.record_status == RUN_STATUS_ACTIVE else RUN_STATUS_CANCELLED
+
         await self._dao.requeue_messages(session, run.run_id, now)
         content = self._load_run_content(run.record_content)
         self._restore_unstarted_question(content)
-        terminal_status = RUN_STATUS_WAITING_USER if content.get("pending_question") else dead_status
+        terminal_status = RUN_STATUS_WAITING_USER if content.get("pending_question") else terminal_status
         owner_generation = int(content.get("owner_generation") or 0) + 1
         content["owner_generation"] = owner_generation
         content.pop("next_run_id", None)

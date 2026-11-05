@@ -214,6 +214,16 @@ SETTING_REGISTRY: dict[str, SettingSpec] = {
         effect=EFFECT_IMMEDIATE,
         description="单进程数据智能体对话并发数（无在途运行时按新值重建）",
     ),
+    "CHAT_DATA_RUN_LEASE_SECONDS": SettingSpec(
+        key="CHAT_DATA_RUN_LEASE_SECONDS",
+        value_type="int",
+        default=30,
+        category="concurrency",
+        minimum=5,
+        maximum=300,
+        effect=EFFECT_IMMEDIATE,
+        description="Agent Run 租约有效期（秒）：心跳每 5 秒续约，超时后才回收失联 Run",
+    ),
     "CHAT_DATA_DASHBOARD_PANEL_MAX_CONCURRENCY": SettingSpec(
         key="CHAT_DATA_DASHBOARD_PANEL_MAX_CONCURRENCY",
         value_type="int",

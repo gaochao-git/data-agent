@@ -710,6 +710,24 @@ async def test_heartbeat_cancelling_status_cancels_owner_task(_fast_heartbeat, m
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("terminal_status", ["failed", "cancelled", "interrupted"])
+async def test_heartbeat_terminal_status_cancels_owner_task(_fast_heartbeat, monkeypatch, terminal_status):
+    """Run 已被外部收口时，旧执行 task 必须停止，不能只停续约。"""
+
+    async def heartbeat_run(run_id, owner_token):
+        return terminal_status
+
+    monkeypatch.setattr(agent_stream.agent_inbox_service, "heartbeat_run", heartbeat_run)
+
+    owner = asyncio.create_task(_pending_forever())
+    await agent_stream._heartbeat_agent_run("run-1", owner, "tok")
+
+    assert owner.cancelling()
+    with pytest.raises(asyncio.CancelledError):
+        await owner
+
+
+@pytest.mark.asyncio
 async def test_heartbeat_renews_owner_lease_while_active(_fast_heartbeat, monkeypatch):
     """active 且持有 owner_token 时续约事件流租约（1204->1205）。"""
     renewed: list[tuple] = []

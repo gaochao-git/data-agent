@@ -1200,8 +1200,6 @@ async def _heartbeat_agent_run(
 ) -> None:
     """保持运行租约；停止请求落到其他 worker 时协作取消本地执行。"""
     while True:
-        # 租约 120s，5s 心跳已足够及时感知跨 worker 的取消/接管，
-        # 同时把满载时的 inbox UPDATE 频率控制在个位数 QPS。
         await asyncio.sleep(5)
         try:
             heartbeat_status = await agent_inbox_service.heartbeat_run(run_id, owner_token)
@@ -1213,14 +1211,17 @@ async def _heartbeat_agent_run(
         except Exception:
             logger.warning("ChatData Agent Run 心跳续约失败，下一周期重试: run_id=%s", run_id, exc_info=True)
             continue
-        if heartbeat_status == "cancelling":
-            _cancel_agent_owner_task(owner_task, "agent_run_cancelled")
+        cancel_reason = {
+            "cancelling": "agent_run_cancelled",
+            "interrupting": "agent_run_interrupting",
+            "failed": "agent_run_terminal",
+            "cancelled": "agent_run_terminal",
+            "interrupted": "agent_run_terminal",
+        }.get(heartbeat_status)
+        if cancel_reason:
+            _cancel_agent_owner_task(owner_task, cancel_reason)
             return
         if heartbeat_status != "active":
-            # waiting_user/finished are normal transitions performed by this
-            # execution. Stop renewing without cancelling the stream, which
-            # still needs to publish question_requested/done. A true takeover
-            # keeps status active and fails the owner-token assertion above.
             return
 
 

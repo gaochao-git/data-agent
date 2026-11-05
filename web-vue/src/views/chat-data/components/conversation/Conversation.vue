@@ -71,7 +71,6 @@ interface Props {
   /** 工作区 yaml「导入为语义模型」行操作的可见性（管理员权限，与配置入口同源） */
   canImportSemanticModel?: boolean
 }
-
 const props = withDefaults(defineProps<Props>(), {
   datasource: null,
   executionTargets: () => [],
@@ -80,10 +79,9 @@ const props = withDefaults(defineProps<Props>(), {
   selectedModelId: '',
   canImportSemanticModel: false,
 })
-
 const emit = defineEmits<{
   firstMessageStarted: [conversationId: string]
-  runStatusChanged: [conversationId: string, status: 'pending' | 'active' | 'cancelling' | 'waiting_user' | null]
+  runStatusChanged: [conversationId: string, status: 'pending' | 'active' | 'cancelling' | 'interrupting' | 'waiting_user' | null]
   'update:selectedMemberDatasourceIds': [value: string[]]
   'update:selectedModelId': [value: string]
   dashboardCreated: [dashboard: Dashboard]
@@ -92,9 +90,7 @@ const emit = defineEmits<{
   /** 工作区 yaml 一键导入：由页面层直接打开 Ossie 导入弹窗并预置文件 */
   importSemanticYaml: [files: SemanticYamlFile[]]
 }>()
-
 const { generateSqlStream, stopGeneration } = useSqlGenerator()
-
 // 模型列表与运行时配置：与其他入口共用同一份加载逻辑；审批策略不提供前端切换。
 const { modelOptions, load: loadModelOptions } = useModelOptions()
 const selectedModel = computed({
@@ -110,7 +106,6 @@ watch(selectedModel, () => {
   enableDeepThinking.value = null
   thinkingEffort.value = null
 })
-
 const messages = ref<Message[]>([])
 const input = ref('')
 const inputFocused = ref(false)
@@ -122,7 +117,7 @@ const editingSteerDraft = ref('')
 const steerActionBusy = ref(false)
 const hasActiveRun = ref(false)
 /** Run 活跃状态的合法取值：与 runStatusChanged emit 的契约保持一致。 */
-type RunActiveStatus = 'pending' | 'active' | 'cancelling' | 'waiting_user'
+type RunActiveStatus = 'pending' | 'active' | 'cancelling' | 'interrupting' | 'waiting_user'
 const activeRunStatus = ref<RunActiveStatus | null>(null)
 const activeRunTurnId = ref<string | null>(null)
 const activeRunIsContinuation = ref(false)
@@ -203,6 +198,11 @@ const applyRunDoneState = (
     activeAssistantMessageId.value = null
   } else if (status === 'waiting_user') {
     finishStreamingMessages()
+  } else if (status === 'interrupted') {
+    finalizeUnfinishedToolCalls('error', '服务重启')
+    finishStreamingMessages()
+    activeAssistantMessageId.value = null
+    setActiveAssistantError('任务因服务重启中断，请重新发起')
   } else if (status === 'failed') {
     // 模型挂起等失败终态经 fallback done 到达时没有 error 事件兜底，
     // 必须在这里收尾占位消息，否则「正在处理...」会一直转下去。
@@ -237,7 +237,7 @@ const applyRunDoneState = (
 
   // failed/cancelled 会把未确认消费的消息退回 pending；本地队列已有这些
   // 消息时直接更新状态，避免为展示状态再发一次网络请求。
-  if (status === 'failed' || status === 'cancelled') {
+  if (status === 'failed' || status === 'cancelled' || status === 'interrupted') {
     pendingSteerMessages.value = pendingSteerMessages.value.map(item => (
       item.status === 'claimed' ? { ...item, status: 'pending' } : item
     ))
@@ -312,7 +312,7 @@ const restorePendingSteerQueue = async (options?: {
       options?.applyTerminal
       && !hasActiveRun.value
       && terminalStatus
-      && ['finished', 'failed', 'cancelled', 'waiting_user'].includes(terminalStatus)
+      && ['finished', 'failed', 'cancelled', 'interrupted', 'waiting_user'].includes(terminalStatus)
     ) {
       applyRunDoneState(
         conversationId,

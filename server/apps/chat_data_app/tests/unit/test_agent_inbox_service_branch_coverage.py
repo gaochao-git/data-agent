@@ -260,9 +260,14 @@ async def test_reap_expired_runs_skips_missing_and_collects():
 
     expired = _run(lease_expire_time=NOW.replace(year=2020))
     service = _service(list_expired_runs=[expired], get_run_by_id_for_update=expired)
+    assert await service.reap_expired_runs() == []
+    assert expired.record_status == "interrupting"
+    content = json.loads(expired.record_content)
+    content["reap_deadline_ms"] = 1
+    expired.record_content = json.dumps(content)
     results = await service.reap_expired_runs()
     assert len(results) == 1
-    assert results[0].status == "failed"
+    assert results[0].status == "interrupted"
 
 
 @pytest.mark.asyncio
@@ -336,6 +341,11 @@ async def test_reap_expired_run_keeps_waiting_user_and_drops_others():
         record_content=json.dumps({"pending_question": {"question_id": "q"}}),
     )
     assert await service._reap_expired_run(None, waiting, NOW, "u", "n") is waiting
+    assert waiting.record_status == "interrupting"
+    content = json.loads(waiting.record_content)
+    content["reap_deadline_ms"] = 1
+    waiting.record_content = json.dumps(content)
+    assert await service._reap_expired_run(None, waiting, NOW, "u", "n") is waiting
     assert waiting.record_status == "waiting_user"
 
     cancelling = _run(record_status="cancelling", lease_expire_time=NOW.replace(year=2020))
@@ -347,7 +357,7 @@ async def test_reap_expired_run_keeps_waiting_user_and_drops_others():
 async def test_heartbeat_run_competition_paths():
     assert await _service(renew_run_lease=False, get_run_by_id=None).heartbeat_run("r1", "tok-1") == "inactive"
     terminal = _service(renew_run_lease=False, get_run_by_id=_run(record_status="finished"))
-    assert await terminal.heartbeat_run("r1", "tok-1") == "inactive"
+    assert await terminal.heartbeat_run("r1", "tok-1") == "finished"
     cancelling = _service(renew_run_lease=False, get_run_by_id=_run(record_status="cancelling"))
     assert await cancelling.heartbeat_run("r1", "tok-1") == "cancelling"
     still_owner = _service(renew_run_lease=False, get_run_by_id=_run(record_status="active"))

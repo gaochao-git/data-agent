@@ -12,11 +12,12 @@ import { isAbortError } from '../utils/abort'
  * Run 终态：服务端结构化 done 事件的 status 字段。
  * legacy = 旧协议纯文本 [DONE]（只有流结束信号，无业务状态，不可推断成功）。
  */
-export type RunDoneStatus = 'finished' | 'failed' | 'cancelled' | 'waiting_user' | 'legacy'
+export type RunDoneStatus = 'finished' | 'failed' | 'cancelled' | 'interrupted' | 'waiting_user' | 'legacy'
 const STRUCTURED_DONE_STATUSES = new Set<RunDoneStatus>([
   'finished',
   'failed',
   'cancelled',
+  'interrupted',
   'waiting_user',
 ])
 
