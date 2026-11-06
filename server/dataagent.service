@@ -1,0 +1,15 @@
+[Unit]
+Description=Data Agent gunicorn service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nucc
+WorkingDirectory=/tools/apps/dataagent/server
+ExecStart=/tools/apps/dataagent/venv/bin/gunicorn main:app -c /tools/apps/dataagent/server/gunicorn.conf.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
