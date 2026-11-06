@@ -1,13 +1,25 @@
+# Data Agent 后端 systemd 服务单元。
+# 部署：
+#   cp /tools/apps/dataagent/server/dataagent.service /etc/systemd/system/dataagent.service 后执行
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable dataagent
+#   sudo systemctl start/restart/stop/status dataagent
+
 [Unit]
 Description=Data Agent gunicorn service
+# 网络就绪后再启动，避免启动阶段连接 Redis/MySQL 失败。
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
+# 运行用户，需要具备代码目录、日志目录和 CHAT_DATA_HOME 的读写权限。
 User=nucc
+# 后端工作目录；gunicorn.conf.py 中的相对日志路径以此为准。
 WorkingDirectory=/tools/apps/dataagent/server
+# 使用项目虚拟环境启动；gunicorn 会按配置拉起多个 Uvicorn worker。
 ExecStart=/tools/apps/dataagent/venv/bin/gunicorn main:app -c /tools/apps/dataagent/server/gunicorn.conf.py
+# 异常退出后自动重启，避免单次崩溃导致服务长期不可用。
 Restart=on-failure
 RestartSec=5
 
