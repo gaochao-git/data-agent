@@ -25,7 +25,7 @@ describe('useSseReconnect', () => {
 
     isGenerating.value = true
     reconnect.markActivity()
-    await vi.advanceTimersByTimeAsync(SSE_ACTIVITY_TIMEOUT_MS + SSE_RECONNECT_INTERVAL_MS)
+    await vi.advanceTimersByTimeAsync(SSE_RECONNECT_INTERVAL_MS * 2)
     expect(recover).toHaveBeenCalledOnce()
     reconnect.stop()
   })

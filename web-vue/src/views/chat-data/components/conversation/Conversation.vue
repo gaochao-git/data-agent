@@ -381,9 +381,10 @@ const resubscribeActiveRun = async () => {
     responseFactory: signal => streamRunEvents(conversationId, runId, activeRunEventId.value, signal),
   })
 }
-const { start: startSseReconnect, stop: stopSseReconnect, markActivity: markSseActivity, state: reconnectState } = useSseReconnect({
+const { start: startSseReconnect, stop: stopSseReconnect, markActivity: markSseActivity, signalDisconnect: signalSseDisconnect, state: reconnectState } = useSseReconnect({
   isGenerating,
   hasActiveRun,
+  hasRunId: activeRunId,
   stopGeneration,
   recover: resubscribeActiveRun,
   onUnknown: () => {
@@ -808,15 +809,12 @@ const {
   input,
   enabled: computed(() => true),
 })
-
 // ---- 输入框 @ 引用工作区文件（多选）----
 // @ 菜单数据源是当前会话工作区（uploads/outputs/workspace）可见文件，平铺展示（文件名 + 目录路径）；
 // 「工作区有什么就能引用什么」：新建会话工作区为空时菜单给空态说明，物化/产出后即可引用。
 // 选中信息随消息走 file_selections（相对路径列表），服务端校验白名单后并入正文短句。
 const mentionWorkspaceFiles = ref<WorkspaceFilePick[]>([])
-
 const resolveMentionConversationId = () => props.conversationId || localConversationId.value || ''
-
 const loadMentionWorkspaceFiles = async () => {
   const conversationId = resolveMentionConversationId()
   if (!conversationId) {
@@ -835,7 +833,6 @@ const loadMentionWorkspaceFiles = async () => {
     console.error('加载工作区文件列表失败:', err)
   }
 }
-
 const {
   mentionedFiles,
   displayedMentionFiles,
@@ -2062,7 +2059,10 @@ const submitAnalysisQuery = async (
           }
           finalizeUnfinishedToolCalls('error', error)
           setActiveAssistantError(error)
-          if (startedRunId) startSseReconnect()
+          if (startedRunId) {
+            startSseReconnect()
+            signalSseDisconnect()
+          }
         },
         onRunningTool: (toolInfo) => {
           if (!toolInfo.tool_call_id) return
