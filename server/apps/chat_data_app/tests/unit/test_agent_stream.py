@@ -1596,7 +1596,8 @@ def test_sql_completion_handler_wraps_stream(monkeypatch):
     assert response.headers["X-Accel-Buffering"] == "no"
     assert captured["conversation"] == ("chat_data", "conv_sql", "u1")
     chunks = asyncio.run(_collect_async_iter(response.body_iterator))
-    assert chunks == ["id: test-1-0\nevent: done\ndata: [DONE]\n\n"]
+    assert any("id: test-1-0" in chunk and "data: [DONE]" in chunk for chunk in chunks)
+    assert any("event: heartbeat" in chunk for chunk in chunks)
     runtime_context = captured["start_run_args"][3]
     assert captured["start_run_args"][:3] == ("conv_sql", "u1", "测试用户")
     assert runtime_context["member_datasource_ids"] == ["m1"]

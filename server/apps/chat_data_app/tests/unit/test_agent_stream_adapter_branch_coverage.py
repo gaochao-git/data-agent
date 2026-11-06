@@ -268,7 +268,8 @@ async def test_resume_handler_submits_and_streams_run_events(monkeypatch):
     assert response.media_type == "text/event-stream"
 
     body = [chunk async for chunk in response.body_iterator]
-    assert body == ["id: 3-1\ndata: chunk-a\n\n", "id: 3-2\ndata: chunk-b\n\n"]
+    assert any("id: 3-1" in chunk and "data: chunk-a" in chunk for chunk in body)
+    assert any("id: 3-2" in chunk and "data: chunk-b" in chunk for chunk in body)
     assert submitted == [
         {
             "run_id": "run-9",

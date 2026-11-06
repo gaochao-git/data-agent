@@ -140,6 +140,7 @@ export function useSqlGenerator() {
       responseFactory?: (signal: AbortSignal) => Promise<Response>
       onRunEvent?: (eventId: string) => void
       onFirstEvent?: () => void
+      onStreamActivity?: () => void
       onRunCompleted?: (info: { status: RunDoneStatus; nextRunId?: string | null }) => void
     } = {},
   ): Promise<void> => {
@@ -173,6 +174,7 @@ export function useSqlGenerator() {
       responseFactory,
       onRunEvent,
       onFirstEvent,
+      onStreamActivity,
       onRunCompleted,
     } = options
     if (!conversationId) {
@@ -272,12 +274,14 @@ export function useSqlGenerator() {
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
+        onStreamActivity?.()
 
         buffer += decoder.decode(value, { stream: true })
         const { events, remaining } = parseSSEEvents(buffer)
         buffer = remaining
 
         for (const { event, data: dataStr, id } of events) {
+          if (event === 'heartbeat') continue
           if (!firstEventHandled) {
             firstEventHandled = true
             onFirstEvent?.()

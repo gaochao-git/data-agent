@@ -1556,7 +1556,7 @@ export function steerConversation(
   meta?: { file_selections?: string[]; quoted_snippets?: Array<{ text: string }>; file_ids?: string[] },
 ): Promise<ApiResponse<{ message_id: string }>> {
   return request({
-    url: `/agents/api/chatdata/conversations/${conversationId}/steer`,
+    url: `/agents/api/chatdata/conversations/${conversationId}/run-state`,
     method: 'post',
     data: {
       query,
@@ -1609,7 +1609,7 @@ export function cancelSteerMessage(
 }
 
 /** 读取仍排队的追加消息与运行状态，供页面刷新后恢复展示。 */
-export function listSteerMessages(
+export function getRunState(
   conversationId: string,
 ): Promise<ApiResponse<{
   has_active_run: boolean
@@ -1635,11 +1635,14 @@ export function listSteerMessages(
   }>
 }>> {
   return request({
-    url: `/agents/api/chatdata/conversations/${conversationId}/steer`,
+    url: `/agents/api/chatdata/conversations/${conversationId}/run-state`,
     method: 'get',
   })
 }
 
+
+/** @deprecated 使用 getRunState；保留旧名避免调用方断裂。 */
+export const listSteerMessages = getRunState
 export function getPendingUserQuestion(
   conversationId: string,
 ): Promise<ApiResponse<PendingUserQuestion | null>> {

@@ -56,6 +56,7 @@ from .agent.run.conversation_runtime import (
     TurnResourceOptions,
     stream_agent_turn,
 )
+from .agent.run.sse_heartbeat import stream_sse_with_heartbeat
 from .agent.workspace.runtime import is_system_result_workspace_path, resolve_workspace_path
 from .agent.workspace.uploaded_file_parser import get_image_size_limit
 from .agent.workspace.workspace_path_policy import USER_DATA_VIRTUAL_ROOT, WORKSPACE_PATH_POLICY
@@ -91,7 +92,6 @@ from .agent_run_support import (
 )
 
 # 思考流/工具事件/工具参数运行态格式化助手（源模块：agent_stream_events，agent_stream 行数红线拆出）。
-# re-export 保持既有模块属性引用（含测试的 agent_stream._xxx 直接调用）不变。
 from .agent_stream_events import (  # noqa: F401  # 部分为有意重导出，供测试按模块属性引用
     REASONING_TOOL_DISPLAY_NAMES,
     _append_reasoning_segment,
@@ -143,7 +143,6 @@ from .sse_protocol import (
 )
 
 # 工具参数流式进度与 SSE 格式化（源模块：tool_stream_progress，agent_stream 行数红线拆出）。
-# re-export 保持既有模块属性引用（含测试）不变。
 from .tool_stream_progress import (
     _count_text_lines,  # noqa: F401  # 测试按模块属性引用 _count_text_lines，属有意重导出
     _extract_streaming_text_field,  # noqa: F401  # 测试按模块属性引用 _extract_streaming_text_field，属有意重导出
@@ -1941,18 +1940,19 @@ async def sql_completion_handler(
     )
 
 
-async def _stream_run_events(
+def _stream_run_events(
     run_id: str,
     last_event_id: str = "0-0",
     request: Request | None = None,
 ) -> AsyncIterator[str]:
-    """订阅后台 Run 的 Redis Stream 事件。"""
-    async for event in agent_run_event_service.stream(
-        run_id=run_id,
-        last_event_id=last_event_id,
+    return stream_sse_with_heartbeat(
+        agent_run_event_service.stream(
+            run_id=run_id,
+            last_event_id=last_event_id,
+            is_disconnected=request.is_disconnected if request else None,
+        ),
         is_disconnected=request.is_disconnected if request else None,
-    ):
-        yield f"id: {event['stream_id']}\n{event['payload']}"
+    )
 
 
 async def resume_chat_data_question_handler(

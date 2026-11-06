@@ -13,7 +13,8 @@ import { useSaveToPanel } from '../../composables/useSaveToPanel'
 import { useSkillCommandMenu } from '../../composables/useSkillCommandMenu'
 import { useWorkspaceFileMention, type WorkspaceFilePick } from '../../composables/useWorkspaceFileMention'
 import { useQuotedSnippets } from '../../composables/useQuotedSnippets'
-import { answerUserQuestion, cancelConversationRun, cancelSteerMessage, cancelUserQuestion, createDashboardFromSpec, getConversationWorkspaceFileContent, getConversationWorkspaceFiles, getConversationWorkspaceRawFile, getPendingUserQuestion, importConversationWorkspaceSkill, listSteerMessages, steerConversation, streamRunEvents, updateSteerMessage, uploadFile } from '../../api'
+import { useSseReconnect } from '../../composables/useSseReconnect'
+import { answerUserQuestion, cancelConversationRun, cancelSteerMessage, cancelUserQuestion, createDashboardFromSpec, getConversationWorkspaceFileContent, getConversationWorkspaceFiles, getConversationWorkspaceRawFile, getPendingUserQuestion, importConversationWorkspaceSkill, getRunState, steerConversation, streamRunEvents, updateSteerMessage, uploadFile } from '../../api'
 import type { Dashboard } from '../../api/dashboard'
 import QuickQueries, { type FallbackQuery } from '../QuickQueries.vue'
 import ChartSpecRenderer from '../ChartSpecRenderer.vue'
@@ -32,6 +33,7 @@ import { normalizeToolCallForDisplay, shouldInlineRenderQueryResult } from '../.
 import { admitInboxMessages, reconcileInboxSnapshot, type InboxQueueItem, type InboxQueueType } from '../../utils/inboxQueue'
 import UserQuestionCard from './UserQuestionCard.vue'
 import AnalysisProgress from './AnalysisProgress.vue'
+import ConversationReconnectBanner from './ConversationReconnectBanner.vue'
 import { deriveAnalysisTodos, shouldShowAnalysisProgress } from '../../utils/analysisTodos'
 import { createTopReachTracker } from '../../utils/scrollReach'
 import { applySubagentCompactionToTool, buildSubagentCompactionRecord } from '../../utils/subagentCompaction'
@@ -137,7 +139,6 @@ const tokenUsage = ref<ChatDataTokenUsage | null>(null)
 const tokenUsagePanelRef = ref<InstanceType<typeof ConversationTokenUsage> | null>(null)
 const hasLocalConversationStarted = ref(false)
 const chatContainerRef = ref<HTMLDivElement | null>(null)
-
 /**
  * Run 是否处于"执行中"的统一视图：本地 SSE 订阅（isGenerating）与
  * 刷新/SSE 断开后从服务端恢复的活跃 Run（hasActiveRun）必须表现一致，
@@ -152,7 +153,6 @@ const inputBarRef = ref<InstanceType<typeof ConversationInputBar> | null>(null)
 const focusInput = () => {
   inputBarRef.value?.focus()
 }
-
 const admitPendingMessages = (messageIds: string[]) => {
   if (!messageIds.length) return
   const active = activeAssistantMessageId.value
@@ -168,7 +168,6 @@ const admitPendingMessages = (messageIds: string[]) => {
     if (editingSteerId.value === messageId) cancelEditSteer()
   }
 }
-
 /**
  * done 已经代表后端完成了当前 Run 的收口。这里仅同步本地 UI，不能再用
  * GET /steer 重新确认同一个终态；下一轮由 done.next_run_id 直接订阅。
@@ -180,14 +179,13 @@ const applyRunDoneState = (
   currentRunId: string | null,
 ) => {
   stopSteerRestorePolling()
+  stopSseReconnect()
   isStoppingRun.value = false
-
   if (status !== 'waiting_user') {
     // Run 已收口（finished/failed/cancelled）时，旧审批卡一律失效，
     // 避免用户面对一个再也提交不成功的历史问题卡。
     pendingUserQuestion.value = null
   }
-
   if (status === 'finished') {
     finalizeUnfinishedToolCalls('completed')
     finishStreamingMessages()
@@ -210,7 +208,6 @@ const applyRunDoneState = (
     finishStreamingMessages()
     setActiveAssistantError('本轮执行失败，请重试')
   }
-
   if (status === 'finished' && nextRunId) {
     hasActiveRun.value = true
     activeRunId.value = nextRunId
@@ -223,7 +220,6 @@ const applyRunDoneState = (
     emit('runStatusChanged', conversationId, 'pending')
     return
   }
-
   if (status === 'waiting_user') {
     hasActiveRun.value = true
     activeRunStatus.value = 'waiting_user'
@@ -234,7 +230,6 @@ const applyRunDoneState = (
     emit('runStatusChanged', conversationId, 'waiting_user')
     return
   }
-
   // failed/cancelled 会把未确认消费的消息退回 pending；本地队列已有这些
   // 消息时直接更新状态，避免为展示状态再发一次网络请求。
   if (status === 'failed' || status === 'cancelled' || status === 'interrupted') {
@@ -253,13 +248,11 @@ const applyRunDoneState = (
   clearOwnedRun(currentRunId || undefined)
   emit('runStatusChanged', conversationId, null)
 }
-
 const startEditSteerMessage = (item: { content: string; messageId?: string }) => {
   if (!item.messageId || editingSteerId.value === item.messageId) return
   editingSteerId.value = item.messageId
   editingSteerDraft.value = item.content
 }
-
 /** 以服务端状态和持久历史共同恢复队列，不以 pending 暂时缺失作为删除依据。 */
 const restorePendingSteerQueue = async (options?: {
   restartPolling?: boolean
@@ -269,7 +262,7 @@ const restorePendingSteerQueue = async (options?: {
   const conversationId = localConversationId.value || props.conversationId
   if (!conversationId) return
   try {
-    const response = await listSteerMessages(conversationId)
+    const response = await getRunState(conversationId)
     const serverMessages = response.data?.messages ?? []
     hasActiveRun.value = Boolean(response.data?.has_active_run)
     activeRunId.value = response.data?.run_id || null
@@ -328,7 +321,6 @@ const restorePendingSteerQueue = async (options?: {
     startSteerRestorePolling()
   }
 }
-
 const restorePendingUserQuestion = async () => {
   const conversationId = localConversationId.value || props.conversationId
   if (!conversationId) return
@@ -343,7 +335,6 @@ const restorePendingUserQuestion = async () => {
     // 恢复失败保留当前卡片，避免网络抖动导致问题消失。
   }
 }
-
 const recoverInterruptedPageRun = async () => {
   while (isLoadingHistory.value) {
     await new Promise(resolve => window.setTimeout(resolve, 50))
@@ -369,7 +360,38 @@ const recoverInterruptedPageRun = async () => {
     ),
   })
 }
-
+/**
+ * 自动重连只做 SSE 重订阅：已有 run_id/last_event_id 时不再查 /steer，
+ * 避免断流期间每次重试都走恢复快照。缺少运行信息时才回退到页面恢复入口。
+ */
+const resubscribeActiveRun = async () => {
+  const conversationId = localConversationId.value || props.conversationId
+  const runId = activeRunId.value
+  if (!conversationId || !runId) {
+    await recoverInterruptedPageRun()
+    return
+  }
+  if (activeRunStatus.value === 'waiting_user' || activeRunStatus.value === 'cancelling' || activeRunStatus.value === 'interrupting') return
+  const elapsedSeedMs = activeRunStartedAtMs.value
+    ?? [...messages.value].reverse().find(item => item.role === 'user')?.timestamp?.getTime()
+  await submitAnalysisQuery('', {
+    appendUserMessage: false,
+    preserveAssistant: !activeRunIsContinuation.value,
+    elapsedSeedMs,
+    responseFactory: signal => streamRunEvents(conversationId, runId, activeRunEventId.value, signal),
+  })
+}
+const { start: startSseReconnect, stop: stopSseReconnect, markActivity: markSseActivity, state: reconnectState } = useSseReconnect({
+  isGenerating,
+  hasActiveRun,
+  stopGeneration,
+  recover: resubscribeActiveRun,
+  onUnknown: () => {
+    stopGeneration()
+    isGenerating.value = false
+    setActiveAssistantError('无法确认任务状态，请刷新后重试')
+  },
+})
 const readOwnedRun = (): { conversationId: string; runId: string } | null => {
   const raw = window.sessionStorage.getItem(ownedRunStorageKey)
   if (!raw) return null
@@ -382,29 +404,24 @@ const readOwnedRun = (): { conversationId: string; runId: string } | null => {
   window.sessionStorage.removeItem(ownedRunStorageKey)
   return null
 }
-
 const saveOwnedRun = (conversationId: string, runId: string) => {
   window.sessionStorage.setItem(ownedRunStorageKey, JSON.stringify({ conversationId, runId }))
 }
-
 const clearOwnedRun = (runId?: string) => {
   const owned = readOwnedRun()
   if (!runId || owned?.runId === runId) window.sessionStorage.removeItem(ownedRunStorageKey)
 }
-
 const reconcileOwnedRunMarker = (conversationId: string) => {
   const owned = readOwnedRun()
   if (!owned || owned.conversationId !== conversationId) return
   if (activeRunId.value !== owned.runId || !hasActiveRun.value) clearOwnedRun(owned.runId)
 }
-
 const stopSteerRestorePolling = () => {
   if (steerRestoreTimer) {
     window.clearInterval(steerRestoreTimer)
     steerRestoreTimer = null
   }
 }
-
 /** 刷新页面后模型仍在运行时，轮询同步队列消费状态。 */
 const startSteerRestorePolling = () => {
   stopSteerRestorePolling()
@@ -418,7 +435,6 @@ const startSteerRestorePolling = () => {
     restorePendingSteerQueue({ restartPolling: false, applyTerminal: true })
   }, 5000)
 }
-
 const saveEditSteerMessage = async (item: { messageId?: string; content: string }) => {
   const conversationId = localConversationId.value || props.conversationId
   if (!item.messageId || !conversationId || steerActionBusy.value) return
@@ -440,12 +456,10 @@ const saveEditSteerMessage = async (item: { messageId?: string; content: string 
     steerActionBusy.value = false
   }
 }
-
 const cancelEditSteer = () => {
   editingSteerId.value = null
   editingSteerDraft.value = ''
 }
-
 const toggleSteerMessageQueueType = async (item: { messageId?: string; queueType: InboxQueueType }) => {
   const conversationId = localConversationId.value || props.conversationId
   if (!item.messageId || !conversationId || steerActionBusy.value) return
@@ -484,9 +498,9 @@ onMounted(() => {
   void recoverInterruptedPageRun()
   restorePendingUserQuestion()
 })
-
 onUnmounted(() => {
   stopSteerRestorePolling()
+  stopSseReconnect()
   stopLiveGenerationSpeed()
   // 卸载时中止主 SSE 流:useSqlGenerator 对 AbortError 静默返回,不会误报错误
   stopGeneration()
@@ -507,18 +521,14 @@ interface PendingFile {
 }
 const pendingFiles = ref<PendingFile[]>([])
 const fileInputRef = ref<HTMLInputElement | null>(null)
-
 const hasParsingFiles = computed(() => pendingFiles.value.some(f => f.status === 'uploading'))
 const hasCompletedPendingFiles = computed(() => pendingFiles.value.some(f => f.status === 'uploaded'))
-
 // 分析任务计划：从消息流中的 write_todos 派生，实时流与历史回放同源；全部完成后隐藏
 const analysisTodos = computed(() => deriveAnalysisTodos(messages.value))
 const showAnalysisProgress = computed(() => shouldShowAnalysisProgress(analysisTodos.value))
-
 const handleUploadFile = () => {
   fileInputRef.value?.click()
 }
-
 /** 剪贴板图片可能没有扩展名（部分平台给 image/png），按 MIME 补一个名字。 */
 const normalizeClipboardFilename = (file: File): File => {
   const hasExt = /\.[a-z0-9]+$/i.test(file.name)
@@ -534,7 +544,6 @@ const normalizeClipboardFilename = (file: File): File => {
   const timestamp = Date.now()
   return new File([file], `clipboard-${timestamp}.${ext}`, { type: file.type })
 }
-
 /** 校验（格式/大小）并上传单个文件，成功后进入 pendingFiles。 */
 const uploadValidatedFile = async (file: File): Promise<boolean> => {
   const ext = '.' + (file.name.split('.').pop() || '').toLowerCase()
@@ -546,7 +555,6 @@ const uploadValidatedFile = async (file: File): Promise<boolean> => {
     ElMessage.warning('文件大小不能超过 50MB')
     return false
   }
-
   try {
     let convId = props.conversationId || localConversationId.value
     if (!convId) {
@@ -581,7 +589,6 @@ const uploadValidatedFile = async (file: File): Promise<boolean> => {
     return false
   }
 }
-
 const handleFileSelected = async (event: Event) => {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
@@ -589,24 +596,20 @@ const handleFileSelected = async (event: Event) => {
   input.value = ''
   await uploadValidatedFile(file)
 }
-
 /** 输入框粘贴截图/图片：走与手动上传相同的校验与上传链路。 */
 const handlePasteFiles = async (files: File[]) => {
   for (const raw of files) {
     await uploadValidatedFile(normalizeClipboardFilename(raw))
   }
 }
-
 const removePendingFile = (fileId: string) => {
   pendingFiles.value = pendingFiles.value.filter(f => f.file_id !== fileId)
 }
-
 // 超长用户输入在前端转为 .md 文件，走与手动上传一致的流程
 const convertOversizedInputToFile = async (text: string): Promise<boolean> => {
   const timestamp = formatLocalDateTime(new Date()).replace(/[/\\: ]/g, '-')
   const filename = `用户输入-${timestamp}.md`
   const file = new File([text], filename, { type: 'text/markdown' })
-
   // 立即在 pendingFiles 中显示占位卡片，让用户看到转换效果
   const placeholderId = `temp-${Date.now()}`
   const placeholder: PendingFile = {
@@ -615,7 +618,6 @@ const convertOversizedInputToFile = async (text: string): Promise<boolean> => {
     status: 'uploading',
   }
   pendingFiles.value.push(placeholder)
-
   let convId = props.conversationId || localConversationId.value
   if (!convId && props.ensureConversationId) {
     convId = await props.ensureConversationId()
@@ -630,7 +632,6 @@ const convertOversizedInputToFile = async (text: string): Promise<boolean> => {
     ElMessage.error('无法创建会话')
     return false
   }
-
   try {
     const res = await uploadFile(convId, file)
     if (res.status !== 'success') {
@@ -653,16 +654,13 @@ const convertOversizedInputToFile = async (text: string): Promise<boolean> => {
     return false
   }
 }
-
 // 实时检测：输入超长时自动转为文件附件
 const isProcessingOversizedInput = ref(false)
-
 const checkOversizedInput = (text: string) => {
   if (text.length <= MAX_INPUT_CHARS) return
   if (isProcessingOversizedInput.value) return
   handleOversizedInputAuto(text)
 }
-
 const handleOversizedInputAuto = async (text: string) => {
   if (isProcessingOversizedInput.value) return
   if (text.length <= MAX_INPUT_CHARS) return
@@ -677,7 +675,6 @@ const handleOversizedInputAuto = async (text: string) => {
     isProcessingOversizedInput.value = false
   }
 }
-
 type AnalysisSubmitOptions = {
   /** @ 引用文件快照（相对路径列表）；未传时按当前 chip 状态构建。 */
   fileSelections?: string[] | null
@@ -697,12 +694,10 @@ type AnalysisSubmitOptions = {
   interruptedQuestion?: PendingUserQuestion
   autoResumeQueuedRun?: boolean
 }
-
 const resetTokenUsagePanel = (clearUsage = true) => {
   if (clearUsage) tokenUsage.value = null
   tokenUsagePanelRef.value?.closePanel()
 }
-
 // 顶层工具调用状态注册表：只存顶层调用。子智能体内层工具不进此 map——
 // 它们挂在父 task 调用的 subagentTrail 上（见 upsertSubagentTrailItem），
 // 详情查找经 findToolCallById 的 trail 兜底完成。
@@ -729,7 +724,6 @@ watch(() => props.conversationId || localConversationId.value, () => {
 })
 const creatingDashboardToolCallId = ref<string | null>(null)
 const createdDashboardByToolId = ref<Record<string, Dashboard>>({})
-
 const selectedDatasource = computed(() => props.selectedDatasourceId || props.datasource?.id || '')
 // 产物内容缓存与会话上下文在这里绑定，模板保持单参调用（纯函数在 utils/messageArtifacts.ts）。
 const dashboardSpecContext = computed(() => ({
@@ -2068,6 +2062,7 @@ const submitAnalysisQuery = async (
           }
           finalizeUnfinishedToolCalls('error', error)
           setActiveAssistantError(error)
+          if (startedRunId) startSseReconnect()
         },
         onRunningTool: (toolInfo) => {
           if (!toolInfo.tool_call_id) return
@@ -2159,17 +2154,17 @@ const submitAnalysisQuery = async (
           }
           activeRunId.value = runId
           saveOwnedRun(resolvedConversationId, runId)
+          startSseReconnect()
           emit('runStatusChanged', resolvedConversationId, 'active')
         },
         responseFactory: options.responseFactory,
         onRunEvent: (eventId) => {
-          // 事件游标只由服务端数据库 checkpoint 提供，避免浏览器内存状态
-          // 在断线恢复时跳过尚未随历史一起读取的事件。
-          void eventId
+          if (eventId) activeRunEventId.value = eventId
         },
         onFirstEvent: () => {
           if (isFirstMessage) emit('firstMessageStarted', resolvedConversationId)
         },
+        onStreamActivity: markSseActivity,
         onRunCompleted: (info) => {
           completedRunStatus = info.status
           completedNextRunId = info.nextRunId || null
@@ -2761,6 +2756,11 @@ const handleKeyDown = (event: KeyboardEvent) => {
 
       <div v-show="!isLoadingHistory || messages.length > 0" class="p-4 bg-gray-50 border-t border-slate-100">
         <div class="max-w-[774px] mx-auto w-[90%]">
+          <ConversationReconnectBanner
+            v-if="reconnectState.phase !== 'idle'"
+            class="mb-3"
+            :state="reconnectState"
+          />
           <AnalysisProgress
             v-if="showAnalysisProgress"
             class="mb-3"

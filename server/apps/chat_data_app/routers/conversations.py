@@ -1030,6 +1030,7 @@ async def cancel_question(conversation_id: str, question_id: str, req: Request) 
         )
 
 
+@router.get("/{conversation_id}/run-state")
 @router.get("/{conversation_id}/steer")
 async def list_steer_messages(conversation_id: str, req: Request) -> JSONResponse:
     """读取当前会话仍在排队的追加消息与运行状态，供前端刷新后恢复展示。"""
@@ -1077,12 +1078,17 @@ async def stream_run_events(
         last_event_id = req.headers.get("Last-Event-ID") or "0-0"
 
         async def event_stream() -> AsyncIterator[str]:
-            async for event in agent_run_event_service.stream(
-                run_id=run_id,
-                last_event_id=last_event_id,
+            from ..agent.run.sse_heartbeat import stream_sse_with_heartbeat
+
+            async for frame in stream_sse_with_heartbeat(
+                agent_run_event_service.stream(
+                    run_id=run_id,
+                    last_event_id=last_event_id,
+                    is_disconnected=req.is_disconnected,
+                ),
                 is_disconnected=req.is_disconnected,
             ):
-                yield f"id: {event['stream_id']}\n{event['payload']}"
+                yield frame
 
         return StreamingResponse(
             event_stream(),

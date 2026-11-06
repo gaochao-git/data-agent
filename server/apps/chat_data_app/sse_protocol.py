@@ -38,6 +38,7 @@ SSE_EVENT_DONE = "done"
 SSE_EVENT_TOKEN_USAGE = "token_usage"
 SSE_EVENT_GENERATION_SPEED = "generation_speed"
 SSE_EVENT_CONTEXT_COMPRESSION = "context_compression"
+SSE_EVENT_HEARTBEAT = "heartbeat"
 SSE_EVENT_INBOX_ADMITTED = "inbox_admitted"
 SSE_EVENT_QUESTION_REQUESTED = "question_requested"
 # 工具生命周期：``tool`` 是旧的全量快照帧，与细粒度帧并行下发，
@@ -64,6 +65,7 @@ SSE_EVENT_NAMES: frozenset[str] = frozenset(
         SSE_EVENT_TOKEN_USAGE,
         SSE_EVENT_GENERATION_SPEED,
         SSE_EVENT_CONTEXT_COMPRESSION,
+        SSE_EVENT_HEARTBEAT,
         SSE_EVENT_INBOX_ADMITTED,
         SSE_EVENT_QUESTION_REQUESTED,
         SSE_EVENT_TOOL,

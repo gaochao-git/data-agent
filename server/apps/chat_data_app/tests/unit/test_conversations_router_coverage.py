@@ -568,7 +568,7 @@ async def test_list_steer_messages_and_stream_events(router_state, monkeypatch):
     assert response.media_type == "text/event-stream"
     assert response.headers["x-chatdata-run-id"] == "run_1"
     chunks = [chunk async for chunk in response.body_iterator]
-    assert "id: 1-0" in chunks[0]
+    assert any("id: 1-0" in chunk for chunk in chunks)
 
     monkeypatch.setattr(conversation_router.agent_inbox_service, "get_run_snapshot", snapshot_boom)
     body = payload(await conversation_router.stream_run_events("conv_1", "run_1", FakeRequest()))

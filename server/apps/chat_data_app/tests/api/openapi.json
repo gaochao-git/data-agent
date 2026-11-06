@@ -9091,6 +9091,54 @@
         ]
       }
     },
+    "/api/chatdata/conversations/{conversation_id}/run-state": {
+      "get": {
+        "description": "读取当前会话仍在排队的追加消息与运行状态，供前端刷新后恢复展示。",
+        "operationId": "list_steer_messages_api_chatdata_conversations__conversation_id__run_state_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "List Steer Messages",
+        "tags": [
+          "ChatData 会话"
+        ]
+      }
+    },
     "/api/chatdata/conversations/{conversation_id}/runs/{run_id}/events": {
       "get": {
         "description": "重新订阅后台 Run 的可重放 SSE 事件。",
