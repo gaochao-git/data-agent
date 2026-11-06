@@ -14,7 +14,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 # 运行用户，需要具备代码目录、日志目录和 CHAT_DATA_HOME 的读写权限。
-User=nucc
+User=改为运行需要的用户
 # 后端工作目录；gunicorn.conf.py 中的相对日志路径以此为准。
 WorkingDirectory=/tools/apps/dataagent/server
 # 使用项目虚拟环境启动；gunicorn 会按配置拉起多个 Uvicorn worker。

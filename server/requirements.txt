@@ -70,7 +70,6 @@ sqlglot==30.8.0
 # then verify: python -c "import ossie; print(ossie.OssieDocument)"
 wheels/apache_ossie-0.2.0.dev0-py3-none-any.whl
 # numpy / onnxruntime are transitive deps of markitdown -> magika. They are
-# vendored as offline wheels because the intranet PyPI mirror (pypi.nucc.com)
 # times out on them, and their versions are pinned for CPU compatibility:
 #   - numpy is pinned to 1.26.4: numpy 2.0+ raises the manylinux wheel baseline
 #     to x86_V2 (AVX2), which the target intranet CPU does not support -- it
