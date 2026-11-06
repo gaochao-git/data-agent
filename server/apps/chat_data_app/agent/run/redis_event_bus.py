@@ -219,13 +219,17 @@ class RedisEventBus:
                 raise ValueError("CHAT_DATA_REDIS_SENTINELS 未配置")
             if not self._master_name:
                 raise ValueError("CHAT_DATA_REDIS_MASTER_NAME 未配置")
+            # 哨兵密码不配置就完全不下发 password 键，绝不能继承 master 密码：
+            # 哨兵未开认证时收到 AUTH 会直接认证失败。
+            sentinel_kwargs: dict[str, object] = {
+                "socket_connect_timeout": REDIS_CONNECT_TIMEOUT_SECONDS,
+                "socket_timeout": REDIS_CONNECT_TIMEOUT_SECONDS,
+            }
+            if self._sentinel_password:
+                sentinel_kwargs["password"] = self._sentinel_password
             self._sentinel = Sentinel(
                 self._sentinel_addrs,
-                sentinel_kwargs={
-                    "password": self._sentinel_password,
-                    "socket_connect_timeout": REDIS_CONNECT_TIMEOUT_SECONDS,
-                    "socket_timeout": REDIS_CONNECT_TIMEOUT_SECONDS,
-                },
+                sentinel_kwargs=sentinel_kwargs,
                 password=self._password,
                 socket_connect_timeout=REDIS_CONNECT_TIMEOUT_SECONDS,
             )

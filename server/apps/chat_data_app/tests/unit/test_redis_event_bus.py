@@ -331,8 +331,8 @@ def test_sentinel_mode_resolves_master_via_sentinel(monkeypatch):
     addrs, kwargs = sentinel_cls.call_args.args[0], sentinel_cls.call_args.kwargs
     assert addrs == [("10.0.0.1", 26379), ("10.0.0.2", 26379)]
     assert kwargs["password"] == "secret"
-    # sentinel 密码未单独配置时不发送 AUTH（不继承 master 密码）
-    assert kwargs["sentinel_kwargs"]["password"] is None
+    # sentinel 密码未单独配置时不下发 password 键（不继承 master 密码）
+    assert "password" not in kwargs["sentinel_kwargs"]
     assert kwargs["socket_connect_timeout"] == 5.0
 
     master_kwargs = sentinel_cls.return_value.master_for.call_args.kwargs
@@ -411,7 +411,7 @@ def test_sentinel_mode_without_sentinel_password_skips_sentinel_auth(monkeypatch
 
     kwargs = sentinel_cls.call_args.kwargs
     assert kwargs["password"] == "master-pwd"
-    assert kwargs["sentinel_kwargs"]["password"] is None
+    assert "password" not in kwargs["sentinel_kwargs"]
 
 
 def test_sentinel_mode_supports_no_password(monkeypatch):
@@ -428,7 +428,7 @@ def test_sentinel_mode_supports_no_password(monkeypatch):
 
     kwargs = sentinel_cls.call_args.kwargs
     assert kwargs["password"] is None
-    assert kwargs["sentinel_kwargs"]["password"] is None
+    assert "password" not in kwargs["sentinel_kwargs"]
 
 
 def test_sentinel_mode_selects_db(monkeypatch):
