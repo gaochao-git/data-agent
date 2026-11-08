@@ -15,6 +15,7 @@ import GlobalSqlHistory from './GlobalSqlHistory.vue'
 import AgentScheduleAdminPanel from './AgentScheduleAdminPanel.vue'
 import ModelAdminPanel from './ModelAdminPanel.vue'
 import PluginAdminPanel from './PluginAdminPanel.vue'
+import SkillAdminPanel from './SkillAdminPanel.vue'
 import SettingAdminPanel from './SettingAdminPanel.vue'
 import { getAdminDatasources } from '../api'
 import type { DataSource } from '../types'
@@ -26,6 +27,7 @@ type AdminNavKey =
   | 'lineage'
   | 'schedule'
   | 'plugins'
+  | 'skills'
   | 'setting'
   | 'models'
   | 'sqlHistory'
@@ -54,7 +56,8 @@ const NAV_GROUPS: Array<{ label: string; items: AdminNavItem[] }> = [
     items: [
       { key: 'models', label: '大模型管理', icon: 'fa-microchip' },
       { key: 'schedule', label: '定时任务', icon: 'fa-stopwatch' },
-      { key: 'plugins', label: '插件管理', icon: 'fa-plug' }
+      { key: 'plugins', label: '插件管理', icon: 'fa-plug' },
+      { key: 'skills', label: '技能管理', icon: 'fa-wand-magic-sparkles' }
     ]
   },
   {
@@ -81,6 +84,7 @@ const sqlHistoryRef = ref<InstanceType<typeof GlobalSqlHistory> | null>(null)
 const schedulePanelRef = ref<InstanceType<typeof AgentScheduleAdminPanel> | null>(null)
 const modelPanelRef = ref<InstanceType<typeof ModelAdminPanel> | null>(null)
 const pluginPanelRef = ref<InstanceType<typeof PluginAdminPanel> | null>(null)
+const skillPanelRef = ref<InstanceType<typeof SkillAdminPanel> | null>(null)
 const settingPanelRef = ref<InstanceType<typeof SettingAdminPanel> | null>(null)
 const adminDatasourceOptions = ref<DataSource[]>([])
 const adminDatasourceOptionsLoaded = ref(false)
@@ -127,6 +131,8 @@ const switchNav = async (item: AdminNavItem) => {
     schedulePanelRef.value?.ensureLoaded()
   } else if (item.key === 'plugins') {
     pluginPanelRef.value?.ensureLoaded()
+  } else if (item.key === 'skills') {
+    skillPanelRef.value?.ensureLoaded()
   } else if (item.key === 'models') {
     modelPanelRef.value?.ensureLoaded()
   } else if (item.key === 'setting') {
@@ -206,6 +212,7 @@ const switchNav = async (item: AdminNavItem) => {
         />
         <AgentScheduleAdminPanel v-show="activeNav === 'schedule'" ref="schedulePanelRef" class="h-full" />
         <PluginAdminPanel v-show="activeNav === 'plugins'" ref="pluginPanelRef" class="h-full" />
+        <SkillAdminPanel v-show="activeNav === 'skills'" ref="skillPanelRef" class="h-full" />
         <ModelAdminPanel v-show="activeNav === 'models'" ref="modelPanelRef" class="h-full" />
         <SettingAdminPanel v-show="activeNav === 'setting'" ref="settingPanelRef" class="h-full" />
       </div>

@@ -7,6 +7,7 @@
 import request from '@/utils/request'
 import requestStream from '@/utils/requestStream'
 import { parseSseChunk } from '../utils/sse'
+import type { AdminSkillInfo } from '../utils/skillAdmin'
 import type {
   ApiResponse,
   DataSource,
@@ -2100,5 +2101,67 @@ export function generateAdminMetaEnumItems(text: string): Promise<ApiResponse<{ 
     method: 'post',
     data: { text },
     timeout: 120000 // LLM 生成，超过全局 30s
+  })
+}
+
+// ============ 后台技能总览（只读） ============
+
+/** 后台：全部技能总览（系统 / 用户 / 插件，跨用户且含停用），只读 */
+export function getAdminSkills(): Promise<ApiResponse<{ skills: AdminSkillInfo[]; total: number }>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/skills`,
+    method: 'get'
+  })
+}
+
+/** 后台：任一技能详情（SKILL.md 正文与 references/assets 文件清单），只读 */
+export function getAdminSkill(skillName: string): Promise<ApiResponse<SkillInfo & { content?: string }>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/skills/${encodeURIComponent(skillName)}`,
+    method: 'get'
+  })
+}
+
+/** 后台：任一技能版本目录下的文本文件内容，只读；插件技能不提供此能力 */
+export function getAdminSkillFile(
+  skillId: string,
+  params: { dir_name: SkillFileDirName; file_path: string; version_no?: number }
+): Promise<ApiResponse<{ dir_name: string; file_path: string; content: string }>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/skills/${encodeURIComponent(skillId)}/files/content`,
+    method: 'get',
+    params
+  })
+}
+
+/** 后台管理：读取技能版本原始字节文件（图片/PDF 在线预览，返回 Blob）。 */
+export function getAdminSkillVersionRawFile(
+  skillId: string,
+  params: { dir_name: SkillFileDirName; file_path: string; version_no?: number }
+): Promise<Blob> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/skills/${encodeURIComponent(skillId)}/files/raw`,
+    method: 'get',
+    params,
+    responseType: 'blob'
+  }) as unknown as Promise<Blob>
+}
+
+export interface AdminSkillOfficeHtmlPreview {
+  available: boolean
+  reason?: string
+  html?: string
+  truncated?: boolean
+}
+
+/** 后台管理：技能版本 Office 文件的服务端 HTML 预览（复用 OfficeCLI 引擎）。 */
+export function getAdminSkillOfficeHtmlPreview(
+  skillId: string,
+  params: { dir_name: SkillFileDirName; file_path: string; version_no?: number }
+): Promise<ApiResponse<AdminSkillOfficeHtmlPreview>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/skills/${encodeURIComponent(skillId)}/files/office-preview`,
+    method: 'get',
+    params
   })
 }

@@ -7932,6 +7932,313 @@
         ]
       }
     },
+    "/api/chatdata/admin/skills": {
+      "get": {
+        "description": "后台管理：技能总览（系统 / 用户 / 插件，跨用户且含停用），只读。",
+        "operationId": "list_admin_skills_api_chatdata_admin_skills_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "List Admin Skills",
+        "tags": [
+          "ChatData 技能"
+        ]
+      }
+    },
+    "/api/chatdata/admin/skills/{skill_id}/files/content": {
+      "get": {
+        "description": "后台管理：只读读取任一技能版本目录下的 references/assets 文本文件。",
+        "operationId": "read_admin_skill_file_api_chatdata_admin_skills__skill_id__files_content_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "skill_id",
+            "required": true,
+            "schema": {
+              "title": "Skill Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "dir_name",
+            "required": true,
+            "schema": {
+              "title": "Dir Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "file_path",
+            "required": true,
+            "schema": {
+              "title": "File Path",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "version_no",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "title": "Version No",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Read Admin Skill File",
+        "tags": [
+          "ChatData 技能"
+        ]
+      }
+    },
+    "/api/chatdata/admin/skills/{skill_id}/files/office-preview": {
+      "get": {
+        "description": "后台管理：渲染任一技能版本目录 Office 文件 HTML 预览（复用 OfficeCLI 引擎）。",
+        "operationId": "render_admin_skill_office_preview_api_chatdata_admin_skills__skill_id__files_office_preview_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "skill_id",
+            "required": true,
+            "schema": {
+              "title": "Skill Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "dir_name",
+            "required": true,
+            "schema": {
+              "title": "Dir Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "file_path",
+            "required": true,
+            "schema": {
+              "title": "File Path",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "version_no",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "title": "Version No",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Render Admin Skill Office Preview",
+        "tags": [
+          "ChatData 技能"
+        ]
+      }
+    },
+    "/api/chatdata/admin/skills/{skill_id}/files/raw": {
+      "get": {
+        "description": "后台管理：读取任一技能版本目录文件的原始字节（图片/PDF 在线预览，前端以 blob 方式消费）。",
+        "operationId": "read_admin_skill_file_raw_api_chatdata_admin_skills__skill_id__files_raw_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "skill_id",
+            "required": true,
+            "schema": {
+              "title": "Skill Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "dir_name",
+            "required": true,
+            "schema": {
+              "title": "Dir Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "file_path",
+            "required": true,
+            "schema": {
+              "title": "File Path",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "version_no",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "title": "Version No",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              },
+              "application/octet-stream": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Binary file response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Read Admin Skill File Raw",
+        "tags": [
+          "ChatData 技能"
+        ]
+      }
+    },
+    "/api/chatdata/admin/skills/{skill_name}": {
+      "get": {
+        "description": "后台管理：只读读取任一技能详情（系统 / 插件 / 全部用户技能，含草稿与停用）。",
+        "operationId": "get_admin_skill_api_chatdata_admin_skills__skill_name__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "skill_name",
+            "required": true,
+            "schema": {
+              "title": "Skill Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Get Admin Skill",
+        "tags": [
+          "ChatData 技能"
+        ]
+      }
+    },
     "/api/chatdata/agent-schedules": {
       "get": {
         "description": "获取当前用户的定时任务分页列表。",

@@ -32,6 +32,9 @@ KNOWN_EDGES = {
     ("plugins", "mcp"),
     ("run", "contracts"),
     ("skills", "contracts"),
+    # 运行技能源枚举包含插件提供的技能（skill_service._append_runtime_user_skill_source
+    # 读取 plugins.loader 的启用清单）；方向 skills→plugins 为有意设计，反向禁止。
+    ("skills", "plugins"),
     ("tools", "workspace"),
     ("workspace", "contracts"),
 }

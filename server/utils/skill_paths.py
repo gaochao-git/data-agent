@@ -1,9 +1,12 @@
 """技能路径的单一事实源（Single Source of Truth）。
 
 Agent 运行期看到的技能路径统一为扁平的 ``/mnt/skills/<name>/...``（会话级
-runtime-skills 快照，不区分系统 / 用户类别）；磁盘真实管理域位置为
-``CHAT_DATA_HOME/skills/system/<name>/...``（系统技能）、
-``CHAT_DATA_HOME/skills/user/<user_id>/<name>/...``（用户技能）。
+runtime-skills 快照，不区分系统 / 用户类别）；磁盘真实来源为
+``apps/chat_data_app/agent/skills/<name>/...``（系统技能，代码包只读真值）与
+``CHAT_DATA_HOME/skills/user/<user_id>/<name>/...``（用户技能，可写）。
+
+系统技能此前需由发布流程复制到 ``CHAT_DATA_HOME/skills/system`` 再运行时读取，
+多出一份会与代码包漂移的副本；现直读代码包，副本目录整体废弃。
 
 此前该虚拟根、类别集合、物理根在 ``conversation_workspace.py``、
 ``workspace_*`` 各沙箱模块、``skill_service.py``、``loader.py``
@@ -28,9 +31,23 @@ SKILL_MD_MAX_BYTES = 32 * 1024
 _SKILL_PHYSICAL_ROOT_NAME = "skills"
 
 # 受支持的技能类别。新增类别只需在此追加 + 确保 ``CHAT_DATA_HOME/skills/<类别>`` 存在。
+# 系统技能源目录（代码包内，随发版更新、只读）。系统技能不落 CHAT_DATA_HOME，
+# 因此该常量与数据根配置无关；单测切换 CHAT_DATA_HOME 也不会改变系统技能来源。
+_SYSTEM_SKILLS_PACKAGE_ROOT = Path(__file__).resolve().parents[1] / "apps" / "chat_data_app" / "agent" / "skills"
+
 SYSTEM_SKILL_CATEGORY = "system"
 USER_SKILL_CATEGORY = "user"
 SKILL_CATEGORIES = frozenset({SYSTEM_SKILL_CATEGORY, USER_SKILL_CATEGORY})
+
+
+def system_skills_source_root() -> Path:
+    """系统技能唯一真值目录：代码包 ``apps/chat_data_app/agent/skills``。
+
+    历史实现由发布流程把本目录复制到 ``CHAT_DATA_HOME/skills/system``，运行时读副本，
+    带来漂移（代码包更新后副本未同步）、发版额外步骤与 dev 手工建目录成本。现直读代码包：
+    发布即更新，副本目录整体废弃。返回值只读，任何技能写入都必须走 user 类别。
+    """
+    return _SYSTEM_SKILLS_PACKAGE_ROOT
 
 
 def is_valid_skill_category(category: str) -> bool:
@@ -90,11 +107,16 @@ def resolve_skill_snapshot_path(runtime_skills_dir: Path, path: str) -> tuple[Pa
 
 
 def physical_skill_category_root(category: str, chat_data_home: str | None = None) -> Path:
-    """类别级物理根，如 ``CHAT_DATA_HOME/skills/system``。
+    """类别级物理根。
 
-    ``chat_data_home`` 允许调用方显式传入数据根（如测试时切换），默认取
-    ``storage_paths.CHAT_DATA_HOME``。
+    - ``system``：代码包系统技能源目录（忽略 ``chat_data_home``，系统技能不落数据根）；
+    - ``user``：``CHAT_DATA_HOME/skills/user``（``chat_data_home`` 可显式覆盖数据根，测试用）。
+
+    分流放在此处而非各调用点，保证 ``loader`` / ``skill_service`` / 会话快照构建共用
+    同一来源，避免再次出现「代码包一份 + 数据根副本一份」的漂移。
     """
+    if category == SYSTEM_SKILL_CATEGORY:
+        return system_skills_source_root()
     home = chat_data_home or CHAT_DATA_HOME
     return Path(home) / _SKILL_PHYSICAL_ROOT_NAME / category
 
@@ -104,7 +126,7 @@ def physical_skill_root(
     name: str,
     chat_data_home: str | None = None,
 ) -> Path:
-    """技能级物理根，如 ``CHAT_DATA_HOME/skills/system/demo``。"""
+    """技能级物理根，如 ``CHAT_DATA_HOME/skills/user/<name>``。"""
     return physical_skill_category_root(category, chat_data_home=chat_data_home) / name
 
 
@@ -113,6 +135,7 @@ __all__ = [
     "SYSTEM_SKILL_CATEGORY",
     "USER_SKILL_CATEGORY",
     "SKILL_CATEGORIES",
+    "system_skills_source_root",
     "is_valid_skill_category",
     "runtime_skill_visible_root",
     "resolve_skill_snapshot_path",

@@ -26,6 +26,7 @@ const panelMocks = vi.hoisted(() => ({
   sqlHistory: { ensureLoaded: vi.fn() },
   schedule: { ensureLoaded: vi.fn() },
   plugins: { ensureLoaded: vi.fn() },
+  skills: { ensureLoaded: vi.fn() },
   models: { ensureLoaded: vi.fn() },
   setting: { ensureLoaded: vi.fn() },
 }))
@@ -52,6 +53,7 @@ const mountManager = () =>
         GlobalSqlHistory: panelStub('GlobalSqlHistory', 'sqlHistory'),
         AgentScheduleAdminPanel: panelStub('AgentScheduleAdminPanel', 'schedule'),
         PluginAdminPanel: panelStub('PluginAdminPanel', 'plugins'),
+        SkillAdminPanel: panelStub('SkillAdminPanel', 'skills'),
         ModelAdminPanel: panelStub('ModelAdminPanel', 'models'),
         SettingAdminPanel: panelStub('SettingAdminPanel', 'setting'),
       },
@@ -76,7 +78,7 @@ describe('ChatDataAdminManager 分组导航', () => {
   it('左侧渲染三组导航，枚举/血缘与数据源同组，大模型管理归智能体组', () => {
     const wrapper = mountManager()
     const text = wrapper.text()
-    for (const label of ['数据资产', '数据源管理', '模型管理', '枚举值', '数据血缘', '智能体', '定时任务', '插件管理', '系统', '大模型管理', '运行配置', '历史 SQL']) {
+    for (const label of ['数据资产', '数据源管理', '模型管理', '枚举值', '数据血缘', '智能体', '定时任务', '插件管理', '技能管理', '系统', '大模型管理', '运行配置', '历史 SQL']) {
       expect(text).toContain(label)
     }
     expect(text).not.toContain('元数据')
@@ -87,7 +89,7 @@ describe('ChatDataAdminManager 分组导航', () => {
   it('默认激活数据源管理，其余面板隐藏；新建按钮属于数据源面板而非弹窗头部', () => {
     const wrapper = mountManager()
     expect(isPanelVisible(wrapper, 'datasource')).toBe(true)
-    for (const panel of ['semantic', 'enum', 'sqlHistory', 'schedule', 'plugins', 'models', 'setting']) {
+    for (const panel of ['semantic', 'enum', 'sqlHistory', 'schedule', 'plugins', 'skills', 'models', 'setting']) {
       expect(isPanelVisible(wrapper, panel)).toBe(false)
     }
     expect(wrapper.findAll('button').some(b => b.text().includes('新建'))).toBe(false)
@@ -101,6 +103,16 @@ describe('ChatDataAdminManager 分组导航', () => {
     expect(isPanelVisible(wrapper, 'models')).toBe(true)
     expect(panelMocks.models.ensureLoaded).toHaveBeenCalledTimes(1)
     expect(panelMocks.enum.ensureLoaded).not.toHaveBeenCalled()
+  })
+
+  it('点击技能管理切换面板并触发懒加载', async () => {
+    const wrapper = mountManager()
+    await navButton(wrapper, '技能管理').trigger('click')
+    await flushPromises()
+
+    expect(isPanelVisible(wrapper, 'skills')).toBe(true)
+    expect(panelMocks.skills.ensureLoaded).toHaveBeenCalledTimes(1)
+    expect(panelMocks.plugins.ensureLoaded).not.toHaveBeenCalled()
   })
 
   it('禁用项（数据血缘）只提示不切换', async () => {

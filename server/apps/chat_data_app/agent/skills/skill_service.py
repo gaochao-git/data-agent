@@ -373,6 +373,26 @@ def _plugin_skill_rows(existing_names: set[str]) -> list[dict[str, Any]]:
     return rows
 
 
+def _plugin_name_by_skill() -> dict[str, str]:
+    """插件技能名 → 插件名，供管理端目录树按「插件 → 技能」分组。
+
+    插件清单不可用时返回空映射：总览仍可展示技能，只是归到「未归属插件」分组，
+    不应因为插件状态读取失败而让整个只读列表报错。
+    """
+    try:
+        from ..plugins.loader import enabled_plugins
+
+        mapping: dict[str, str] = {}
+        for plugin in enabled_plugins():
+            plugin_name = str(getattr(plugin.manifest, "name", "") or "")
+            for skill_name in getattr(plugin.manifest, "skills", None) or []:
+                mapping.setdefault(str(skill_name), plugin_name)
+        return mapping
+    except Exception as err:
+        logger.warning("读取插件技能归属失败: %s", err)
+        return {}
+
+
 def _build_skill_md(payload: dict[str, Any]) -> str:
     """根据用户输入生成标准 SKILL.md 内容。"""
     skill_name = str(payload.get("skill_name") or payload.get("name") or "").strip()
@@ -550,6 +570,53 @@ class SkillService:
                 continue
             skills.append(item)
         return sorted(skills, key=lambda value: (str(value.get("source") or ""), str(value.get("name") or "")))
+
+    async def list_all_skills_async(self) -> list[dict[str, Any]]:
+        """管理端只读总览：系统 + 全部用户技能 + 插件技能（跨用户、含停用/草稿/私有）。
+
+        与 ``list_skills_async`` 的差异只在数据范围：不套个人可见性过滤；用户技能行按
+        ``owner_user_id`` 自身构造展示信息，因此草稿版本与创建人字段完整，但不代表
+        管理端具备写权限（面板只调用只读接口）。
+        """
+        source = get_skill_source()
+        if source is not None:
+            await source.refresh_plugin_state()
+        db_rows = await self.dao.list_all_skills_async()
+        source_rows: list[dict[str, Any]] = [
+            _skill_row_to_info(row, user_id=str(row.get("owner_user_id") or ""))
+            for row in db_rows
+            if row.get("skill_source") == "user"
+        ]
+        system_metadata = await asyncio.to_thread(load_metadata)
+        for item in system_metadata.values():
+            source_rows.append(_system_metadata_to_info(item))
+        plugin_rows = _plugin_skill_rows(existing_names={str(item.get("name") or "") for item in source_rows})
+        plugin_names = _plugin_name_by_skill()
+        for row in plugin_rows:
+            row["plugin_name"] = plugin_names.get(str(row.get("name") or ""), "")
+        source_rows.extend(plugin_rows)
+        return sorted(
+            source_rows,
+            key=lambda value: (str(value.get("source") or ""), str(value.get("name") or "")),
+        )
+
+    async def get_skill_owner_for_admin_async(self, name: str) -> str:
+        """管理端只读详情前解析技能真实归属；系统 / 插件技能返回空串。
+
+        既有详情与文件读取链路都按 ``user_id`` 做属主校验，管理端先跨用户查出真实
+        属主，再以属主身份复用同一只读实现，避免复制一套绕过校验的路径解析逻辑。
+        """
+        value = str(name or "").strip()
+        if not value or value.startswith("plugin:"):
+            return ""
+        if await self._get_system_skill_metadata_async(value):
+            return ""
+        try:
+            row = await self.dao.get_skill_for_admin_async(value)
+        except Exception as err:
+            logger.warning("管理端解析技能归属失败: name=%s error=%s", value, err)
+            return ""
+        return str(row.get("owner_user_id") or "") if row else ""
 
     async def get_skill_async(
         self, name: str, include_draft: bool = False, user_id: str = "", user_names: dict[str, str] | None = None

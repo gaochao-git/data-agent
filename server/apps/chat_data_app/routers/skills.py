@@ -47,6 +47,116 @@ async def list_skills(
         )
 
 
+@router.get("/admin/skills")
+async def list_admin_skills(request: Request) -> JSONResponse:
+    """后台管理：技能总览（系统 / 用户 / 插件，跨用户且含停用），只读。"""
+    try:
+        _get_current_user(request)
+        skills = await skill_service.list_all_skills_async()
+        return business_response(data={"skills": skills, "total": len(skills)}, msg="获取成功")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("获取后台技能总览失败: %s", e, exc_info=True)
+        return business_response(
+            msg="获取技能总览失败，请稍后重试", code=ErrorCode.CHATDATA_SKILL_LIST_FAILED, status="error"
+        )
+
+
+@router.get("/admin/skills/{skill_id}/files/content")
+async def read_admin_skill_file(
+    skill_id: str,
+    dir_name: str,
+    file_path: str,
+    request: Request,
+    version_no: int = 1,
+) -> JSONResponse:
+    """后台管理：只读读取任一技能版本目录下的 references/assets 文本文件。"""
+    try:
+        _get_current_user(request)
+        owner = await skill_service.get_skill_owner_for_admin_async(skill_id)
+        file_data = await skill_service.read_skill_version_file_async(skill_id, version_no, dir_name, file_path, owner)
+        return business_response(data=file_data, msg="获取成功")
+    except HTTPException:
+        raise
+    except PermissionError as e:
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_SKILL_FILE_READ_FORBIDDEN, status="error")
+    except ValueError as e:
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_SKILL_FILE_READ_INVALID, status="error")
+    except Exception as e:
+        logger.error("读取后台技能文件失败: skill_id=%s error=%s", skill_id, e, exc_info=True)
+        return business_response(
+            msg="读取技能版本文件失败，请稍后重试", code=ErrorCode.CHATDATA_SKILL_FILE_READ_FAILED, status="error"
+        )
+
+
+@router.get("/admin/skills/{skill_id}/files/raw", responses=BINARY_RESPONSES)
+async def read_admin_skill_file_raw(
+    skill_id: str, dir_name: str, file_path: str, request: Request, version_no: int = 1
+) -> Response:
+    """后台管理：读取任一技能版本目录文件的原始字节（图片/PDF 在线预览，前端以 blob 方式消费）。"""
+    try:
+        _get_current_user(request)
+        owner = await skill_service.get_skill_owner_for_admin_async(skill_id)
+        content, content_type = await skill_service.read_skill_version_file_raw_async(
+            skill_id, version_no, dir_name, file_path, owner
+        )
+        return Response(content=content, media_type=content_type)
+    except HTTPException:
+        raise
+    except PermissionError as e:
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_SKILL_FILE_READ_FORBIDDEN, status="error")
+    except ValueError as e:
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_SKILL_FILE_READ_INVALID, status="error")
+    except Exception as e:
+        logger.error("读取后台技能原始文件失败: skill_id=%s error=%s", skill_id, e, exc_info=True)
+        return business_response(
+            msg="读取技能版本文件失败，请稍后重试", code=ErrorCode.CHATDATA_SKILL_FILE_READ_FAILED, status="error"
+        )
+
+
+@router.get("/admin/skills/{skill_id}/files/office-preview")
+async def render_admin_skill_office_preview(
+    skill_id: str, dir_name: str, file_path: str, request: Request, version_no: int = 1
+) -> JSONResponse:
+    """后台管理：渲染任一技能版本目录 Office 文件 HTML 预览（复用 OfficeCLI 引擎）。"""
+    try:
+        _get_current_user(request)
+        owner = await skill_service.get_skill_owner_for_admin_async(skill_id)
+        preview = await skill_service.render_skill_office_preview_async(
+            skill_id, version_no, dir_name, file_path, owner
+        )
+        return business_response(data=preview, msg="获取成功")
+    except HTTPException:
+        raise
+    except PermissionError as e:
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_SKILL_FILE_READ_FORBIDDEN, status="error")
+    except ValueError as e:
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_SKILL_FILE_READ_INVALID, status="error")
+    except Exception as e:
+        logger.error("后台技能 Office 预览失败: skill_id=%s error=%s", skill_id, e, exc_info=True)
+        return business_response(data={"available": False, "reason": "preview_failed"}, msg="Office 预览暂不可用")
+
+
+@router.get("/admin/skills/{skill_name}")
+async def get_admin_skill(skill_name: str, request: Request) -> JSONResponse:
+    """后台管理：只读读取任一技能详情（系统 / 插件 / 全部用户技能，含草稿与停用）。"""
+    try:
+        _get_current_user(request)
+        owner = await skill_service.get_skill_owner_for_admin_async(skill_name)
+        skill = await skill_service.get_skill_async(skill_name, include_draft=True, user_id=owner)
+        if not skill:
+            return business_response(msg=f"技能不存在: {skill_name}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
+        return business_response(data=skill, msg="获取成功")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("获取后台技能详情失败: skill_name=%s error=%s", skill_name, e, exc_info=True)
+        return business_response(
+            msg="获取技能详情失败，请稍后重试", code=ErrorCode.CHATDATA_SKILL_DETAIL_FAILED, status="error"
+        )
+
+
 @router.post("/skills")
 async def create_user_skill(payload: SkillCreateRequest, request: Request) -> JSONResponse:
     """创建用户技能草稿。"""

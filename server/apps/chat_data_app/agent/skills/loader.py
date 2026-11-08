@@ -60,7 +60,11 @@ def clear_metadata_cache() -> None:
 
 
 def system_skills_root() -> Path:
-    """Return the deployment-managed system skill root."""
+    """系统技能源目录：代码包 ``agent/skills``，随发版更新、只读。
+
+    路径口径统一由 ``utils/skill_paths.py`` 决定；不要再引入 ``CHAT_DATA_HOME``
+    下的数据根副本（历史实现会与代码包漂移）。
+    """
     return physical_skill_category_root(SYSTEM_SKILL_CATEGORY)
 
 
