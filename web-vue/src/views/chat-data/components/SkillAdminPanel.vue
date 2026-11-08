@@ -27,7 +27,6 @@ import {
 } from '../utils/skillAdmin'
 import type { AdminSkillInfo } from '../utils/skillAdmin'
 import { renderMarkdown } from '../utils/markdown'
-import AdminPanelToolbar from './AdminPanelToolbar.vue'
 
 type SkillDetail = SkillInfo & { content?: string; references?: string[]; assets?: string[] }
 type NodeType = 'group' | 'plugin' | 'skill' | 'dir' | 'file'
@@ -90,6 +89,8 @@ const fileLoading = ref(false)
 const fileKind = ref<'markdown' | 'image' | 'pdf' | 'office' | 'text'>('text')
 const fileObjectUrl = ref('')
 const officeHtml = ref('')
+// Markdown 预览模式：rendered-渲染 HTML，source-源码原文
+const markdownViewMode = ref<'rendered' | 'source'>('rendered')
 
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp'])
 
@@ -337,6 +338,7 @@ const showFile = async (node: TreeNode): Promise<void> => {
   fileHint.value = ''
   releaseFileObjectUrl()
   officeHtml.value = ''
+  markdownViewMode.value = 'rendered'
   fileKind.value = fileKindOf(node.filePath || '')
   if (!node.skillKey || !node.dirName || !node.filePath) return
   if (isPluginSkill.value) {
@@ -395,8 +397,12 @@ const onNodeClick = async (node: TreeNode): Promise<void> => {
       ? expandedKeys.value.filter(key => key !== node.key)
       : [...expandedKeys.value, node.key]
   }
-  if (node.type === 'skill' && node.skillKey) await loadDetail(node.skillKey)
-  if (node.type === 'file' && node.isSkillMd && node.skillKey) await loadDetail(node.skillKey)
+  if ((node.type === 'skill' || node.isSkillMd) && node.skillKey) {
+    // SKILL.md（技能节点与 SKILL.md 文件）固定按 markdown 预览，保证渲染/源码切换可用
+    fileKind.value = 'markdown'
+    markdownViewMode.value = 'rendered'
+    await loadDetail(node.skillKey)
+  }
   if (node.type === 'file' && !node.isSkillMd) await showFile(node)
 }
 
@@ -405,15 +411,6 @@ defineExpose({ ensureLoaded })
 
 <template>
   <div class="flex h-full min-h-0 flex-col overflow-hidden" :class="{ 'select-none': resizing }">
-    <AdminPanelToolbar>
-      <template #actions>
-        <span
-          class="text-[11px] text-slate-400"
-          title="只读总览：跨用户展示系统技能与全部用户技能（含停用、草稿）；启用停用、收藏与内容编辑请到对话内「技能管理」操作。"
-        >只读总览 · 共 {{ counts.all }} 个技能</span>
-      </template>
-    </AdminPanelToolbar>
-
     <div class="flex min-h-0 flex-1">
       <!-- 左：筛选控件 + 树状目录层级（宽度可拖动） -->
       <div
@@ -489,7 +486,30 @@ defineExpose({ ensureLoaded })
         <div class="mb-2 flex shrink-0 items-center gap-3 text-[11px] text-slate-500">
           <span class="min-w-0 flex-1 truncate" :title="breadcrumb">{{ breadcrumb || '技能总览' }}</span>
           <span v-if="metaInline" class="shrink-0 text-slate-400">{{ metaInline }}</span>
-          <span class="shrink-0 text-slate-400">只读</span>
+          <span
+            v-if="fileKind === 'markdown' && contentText"
+            class="flex shrink-0 overflow-hidden rounded border border-slate-200 leading-none"
+            data-qa="admin-skill-md-toggle"
+          >
+            <button
+              type="button"
+              class="px-1.5 py-0.5 transition-colors"
+              :class="markdownViewMode === 'rendered' ? 'bg-indigo-50 text-indigo-600' : 'text-slate-500 hover:bg-slate-50'"
+              data-qa="admin-skill-md-rendered"
+              @click="markdownViewMode = 'rendered'"
+            >渲染</button>
+            <button
+              type="button"
+              class="px-1.5 py-0.5 transition-colors"
+              :class="markdownViewMode === 'source' ? 'bg-indigo-50 text-indigo-600' : 'text-slate-500 hover:bg-slate-50'"
+              data-qa="admin-skill-md-source"
+              @click="markdownViewMode = 'source'"
+            >源码</button>
+          </span>
+          <span
+            class="shrink-0 text-slate-400"
+            title="只读总览：跨用户展示系统技能与全部用户技能（含停用、草稿）；启用停用、收藏与内容编辑请到对话内「技能管理」操作。"
+          >只读总览 · 共 {{ counts.all }} 个技能</span>
         </div>
         <div v-if="detailLoading || fileLoading" class="flex min-h-0 flex-1 items-center justify-center text-xs text-slate-400">加载中…</div>
         <template v-else>
@@ -510,12 +530,14 @@ defineExpose({ ensureLoaded })
             class="min-h-0 flex-1 overflow-auto rounded-md border border-slate-100 bg-white p-4 text-sm text-slate-700"
             v-html="officeHtml"
           ></div>
-          <!-- Markdown：渲染为 HTML -->
+          <!-- Markdown：渲染 / 源码切换（覆盖 SKILL.md 与附属 md 文件） -->
           <div
-            v-else-if="fileKind === 'markdown' && (selectedNode?.isSkillMd || selectedNode?.type === 'skill') && selectedDetail?.content"
+            v-else-if="fileKind === 'markdown' && contentText"
             class="min-h-0 flex-1 overflow-auto rounded-md border border-slate-100 bg-white p-4 text-sm leading-relaxed text-slate-700"
-            v-html="renderMarkdown(selectedDetail.content)"
-          ></div>
+          >
+            <pre v-if="markdownViewMode === 'source'" class="whitespace-pre-wrap break-words font-mono text-xs leading-relaxed text-slate-600">{{ contentText }}</pre>
+            <div v-else v-html="renderMarkdown(contentText)"></div>
+          </div>
           <!-- Word/图片/PDF 加载失败或普通文本：原样文本展示 -->
           <pre v-else class="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-words rounded-md border border-slate-100 bg-slate-50 p-3 text-xs leading-relaxed text-slate-700">{{ fileKind === 'office' ? 'Office 预览不可用，请下载后查看。' : fileKind === 'image' || fileKind === 'pdf' ? '文件加载失败，请稍后重试。' : (contentText || fileHint || '从左侧目录树选择技能、SKILL.md 或附属文件查看内容') }}</pre>
         </template>
