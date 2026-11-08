@@ -345,7 +345,7 @@ file_delete(file_path="/mnt/user-data/workspace/_batch.json")
 
 选**一条**路径：
 
-- **截图（默认）**：逐页 `officecli_run(command_args=["view", file, "screenshot", "--page", "1", "-o", "/mnt/user-data/workspace/slide1.png"])`，再 `--page 2` …直到页码越界（一截图=一页）。用 `file_read` 看每张 PNG。
+- **截图（默认）**：逐页 `officecli_run(command_args=["view", file, "screenshot", "--page", "1", "-o", "/mnt/user-data/workspace/slide1.png"])`，再 `--page 2` …直到页码越界（一截图=一页）。用 `read_image` 看每张 PNG。
 - **HTML 文本（无视觉能力或截图失败）**：`file_read` 读 `view <file> html` 打印的 HTML 路径。DOM 无法证明**深底深字/细微重叠/箭头/间距度量/列对齐**——这些标"未视觉验证"而非通过。
 
 **逐页对抗式审查**（假设有问题存在）：每页报一行 `slide N: <问题>` 或 `PASS`。检查清单：溢出/裁切、窄文本框（1–2 词换行）、深底深字、图片拉伸/文字压在忙图上（无卡/遮罩）、缺箭头、装饰线与标题不匹配、页脚碰撞、边距/间距过紧、间隙不均、列/重复元素未对齐、顺序合理性（封面→议程→分隔页在内容前→收尾）。
