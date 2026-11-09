@@ -1323,7 +1323,7 @@ defineExpose({
       <!-- 编辑器区域（左右分屏） -->
       <div ref="editorContainerRef" class="flex-1 min-h-0 flex overflow-hidden">
         <!-- 左侧：SQL 编辑器 -->
-        <div class="overflow-hidden bg-white editor-wrapper">
+        <div class="flex-1 min-w-0 overflow-hidden bg-white editor-wrapper">
           <Codemirror
             ref="codemirrorRef"
             v-model="sqlCode"

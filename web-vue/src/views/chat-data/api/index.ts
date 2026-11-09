@@ -1557,7 +1557,7 @@ export function steerConversation(
   meta?: { file_selections?: string[]; quoted_snippets?: Array<{ text: string }>; file_ids?: string[] },
 ): Promise<ApiResponse<{ message_id: string }>> {
   return request({
-    url: `/agents/api/chatdata/conversations/${conversationId}/run-state`,
+    url: `/agents/api/chatdata/conversations/${conversationId}/steer`,
     method: 'post',
     data: {
       query,
