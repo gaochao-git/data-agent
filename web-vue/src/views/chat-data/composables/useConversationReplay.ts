@@ -31,6 +31,16 @@ export function useConversationReplay(options: UseConversationReplayOptions) {
   const pendingAutoReplay = ref(false)
   /** 全量预拉进行中：长会话分页拉取，期间不重复触发 */
   const replayPreparing = ref(false)
+  /**
+   * 待启动（armed）态：requestReplay 通过门禁后先置位，宿主把第一条提问预填进输入框，
+   * 用户回车（handleSubmit → startReplay）才真正开演——演示起点与真实发送完全一致。
+   */
+  const replayArmed = ref(false)
+  /** 预填进输入框的种子文本：回放组第一条用户提问 */
+  const replaySeedText = computed(() => {
+    const first = collectFullReplay(options.messages.value)[0]
+    return first && first.role === 'user' ? String(first.content ?? '') : ''
+  })
 
   // 回放可见消息：把渐进填充的克隆消息按揭示顺序交给 ConversationMessageList
   const replayRevealedMessages = computed(() => {
@@ -60,6 +70,13 @@ export function useConversationReplay(options: UseConversationReplayOptions) {
     replayPlayer.start(group)
   }
 
+  /** 回车启动：仅 armed 态生效；消费 armed 标记并开演 */
+  const startReplay = () => {
+    if (!replayArmed.value) return
+    replayArmed.value = false
+    void openReplay()
+  }
+
   const exitReplay = () => {
     replayGroup.value = null
     replayPlayer.close()
@@ -80,7 +97,11 @@ export function useConversationReplay(options: UseConversationReplayOptions) {
       pendingAutoReplay.value = true
       return
     }
-    openReplay()
+    if (!collectFullReplay(options.messages.value).length) {
+      ElMessage.info('暂无可回放的历史消息')
+      return
+    }
+    replayArmed.value = true
   }
 
   /** 倍速循环切换：1x → 2x → 4x → 8x → 16x → 1x（浮标上单按钮） */
@@ -91,11 +112,16 @@ export function useConversationReplay(options: UseConversationReplayOptions) {
     replayPlayer.setSpeed(next ?? 1)
   }
 
-  // pending 消费：任何一次历史加载完成都消费掉标记（含空会话，openReplay 内统一提示），杜绝 flag 泄漏后突然自动开演
+  // pending 消费：任何一次历史加载完成都消费掉标记（含空会话，此处统一提示），杜绝 flag 泄漏后突然自动开演；
+  // 有可回放消息时进入 armed 态（等用户回车启动），不自动开演
   watch(options.isLoadingHistory, (loading) => {
     if (loading || !pendingAutoReplay.value) return
     pendingAutoReplay.value = false
-    openReplay()
+    if (!collectFullReplay(options.messages.value).length) {
+      ElMessage.info('暂无可回放的历史消息')
+      return
+    }
+    replayArmed.value = true
   })
 
   // 柔性跟随：仅当用户本就在底部时随播放拽底；上翻即停跟随（与直播 isNearBottom 同口径，回到最新按钮可恢复）
@@ -105,11 +131,12 @@ export function useConversationReplay(options: UseConversationReplayOptions) {
     if (el) el.scrollTop = el.scrollHeight
   })
 
-  // Esc 退出回放；卸载时停掉播放器定时器
+  // Esc 取消待启动 / 退出回放；卸载时停掉播放器定时器
   const handleReplayGlobalKeydown = (event: KeyboardEvent) => {
-    if (event.key === 'Escape' && replayGroup.value) {
+    if (event.key === 'Escape' && (replayGroup.value || replayArmed.value)) {
       event.preventDefault()
       exitReplay()
+      replayArmed.value = false
     }
   }
   onMounted(() => window.addEventListener('keydown', handleReplayGlobalKeydown))
@@ -122,8 +149,11 @@ export function useConversationReplay(options: UseConversationReplayOptions) {
     replayGroup,
     replayPlayer,
     replayRevealedMessages,
+    replayArmed,
+    replaySeedText,
     replayPreparing,
     requestReplay,
+    startReplay,
     exitReplay,
     restartReplay,
     cycleReplaySpeed,

@@ -1200,7 +1200,10 @@ const {
   replayGroup,
   replayPlayer,
   replayRevealedMessages,
+  replayArmed,
+  replaySeedText,
   requestReplay,
+  startReplay,
   exitReplay,
   restartReplay,
   cycleReplaySpeed,
@@ -1213,6 +1216,17 @@ const {
   isLoadingHistory,
   hasMoreHistory,
   loadEarlierHistory,
+})
+
+// armed 态预填：把第一条提问放进输入框并聚焦，用户回车启动（起点与真实发送一致）；
+// 退出 armed（回车启动或 Esc 取消）时清掉预填内容
+watch(replayArmed, (armed, prev) => {
+  if (armed) {
+    input.value = replaySeedText.value
+    inputBarRef.value?.focus()
+  } else if (prev) {
+    input.value = ''
+  }
 })
 
 defineExpose({
@@ -2270,7 +2284,12 @@ const resumePendingQuestion = async (answers?: UserQuestionAnswer[], cancelled =
 
 // options.queuedMessageId：单条队列消息"执行"入口透传的消息 ID（普通输入框发送不传）
 const handleSubmit = async (options: { queuedMessageId?: string } = {}) => {
-  // 回放演示中禁止发送（纯 view 层演示，不干扰会话状态）；grouping 合并连按回车的重复提示
+  // 回放待启动（armed）：预填内容回车 = 启动回放，不真实发送；
+  // 回放播放中：禁止发送（纯 view 层演示，不干扰会话状态），grouping 合并连按回车的重复提示
+  if (replayArmed.value) {
+    startReplay()
+    return
+  }
   if (replayGroup.value) {
     ElMessage.info({ message: '回放演示中，不能发送消息', grouping: true })
     return
@@ -2615,11 +2634,11 @@ const handleKeyDown = (event: KeyboardEvent) => {
         ref="chatContainerRef"
         :class="[
           'flex-1 overflow-y-auto p-4',
-          !hasLocalConversationStarted && messages.length === 0 && 'flex flex-col'
+          (replayArmed || (!hasLocalConversationStarted && messages.length === 0)) && 'flex flex-col'
         ]"
         @scroll="handleScroll"
       >
-        <div v-if="hasMoreHistory && !isLoadingHistory" class="mb-3 flex justify-center">
+        <div v-if="hasMoreHistory && !isLoadingHistory && !replayArmed" class="mb-3 flex justify-center">
           <!-- 滚到顶会自动翻页，这里主要负责反馈加载中状态；
                自动翻页被跳过的场景（运行中、内容不足以滚动）仍可点按钮手动加载 -->
           <div
@@ -2643,7 +2662,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
           <i class="fa-solid fa-spinner fa-spin mr-2 text-xs"></i>
           <span>加载历史消息...</span>
         </div>
-        <div v-else-if="!hasLocalConversationStarted && messages.length === 0" class="flex-1 flex items-center justify-center">
+        <div v-else-if="replayArmed || (!hasLocalConversationStarted && messages.length === 0)" class="flex-1 flex items-center justify-center">
           <div class="w-[774px] max-w-[90%] flex flex-col items-center pb-4">
             <div class="flex flex-col items-center text-center">
               <div class="bg-gradient-to-r from-blue-600 to-indigo-500 bg-clip-text text-[32px] font-bold leading-tight text-transparent">嗨，我是 DataBuddy</div>
@@ -2986,9 +3005,9 @@ const handleKeyDown = (event: KeyboardEvent) => {
             :model-options="modelOptions"
             :is-generating="replayGroup ? replayPlayer.status.value === 'playing' : runBusy"
             :is-stopping="isStoppingRun"
-            :can-submit="replayGroup ? false : (runBusy ? Boolean(input.trim() && !isSteering) : Boolean((input.trim() || hasCompletedPendingFiles || quotedSnippets.length > 0) && selectedDatasource))"
+            :can-submit="replayArmed ? true : (replayGroup ? false : (runBusy ? Boolean(input.trim() && !isSteering) : Boolean((input.trim() || hasCompletedPendingFiles || quotedSnippets.length > 0) && selectedDatasource)))"
             :input-focused="inputFocused"
-            :submit-title="!selectedDatasource ? '请先选择数据源' : '发送 (Enter)'"
+            :submit-title="replayArmed ? '回车开始回放' : (!selectedDatasource ? '请先选择数据源' : '发送 (Enter)')"
             @submit="handleSubmit"
             @stop="handleStop"
             @clear-skill="clearSelectedSkill"
