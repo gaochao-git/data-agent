@@ -715,8 +715,8 @@ const selectConversation = async (id: string): Promise<boolean> => {
   return true
 }
 
-// 侧栏「回放演示」入口：当前会话直接开演；其他会话先切换（key 自增重挂载），
-// 重挂载后 requestReplay 会等历史加载完成自动开演（Conversation 内 pendingAutoReplay）。
+// 侧栏「回放演示」入口：当前会话直接进入待启动；其他会话先切换（key 自增重挂载），
+// 重挂载后 requestReplay 会等历史加载完成再进入待启动（预填第一条提问），回车开演（Conversation 内 pendingAutoReplay）。
 const handleReplayConversation = async (conversationId: string) => {
   if (conversationId === currentConversationId.value) {
     conversationRef.value?.requestReplay()

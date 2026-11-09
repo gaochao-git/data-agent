@@ -1202,6 +1202,7 @@ const {
   replayRevealedMessages,
   replayArmed,
   replaySeedText,
+  replayPreparing,
   requestReplay,
   startReplay,
   exitReplay,
@@ -2588,57 +2589,61 @@ const handleKeyDown = (event: KeyboardEvent) => {
 <template>
   <div class="relative h-full flex min-h-0 bg-[#F7F8FA]">
     <div class="relative flex-1 min-w-0 flex flex-col">
-      <!-- 回放浮标：刻意低调，悬停在会话区右上角；Esc 也可退出回放 -->
+      <!-- 回放浮标：常驻仅一个低调小图标，悬停展开控制（状态/暂停/倍速/重播/退出）；Esc 也可退出回放 -->
       <div
         v-if="replayGroup"
-        class="absolute right-4 top-3 z-30 flex items-center gap-0.5 rounded-full bg-slate-900/50 py-1 pl-2.5 pr-1.5 text-white shadow-sm backdrop-blur-sm"
+        class="group absolute right-4 top-3 z-30 flex items-center gap-1 rounded-full bg-slate-900/40 py-1 pl-2 pr-2 text-white shadow-sm backdrop-blur-sm"
+        title="回放控制"
       >
-        <span
-          class="mr-1 inline-block h-1.5 w-1.5 rounded-full"
-          :class="replayPlayer.status.value === 'playing' ? 'animate-pulse bg-emerald-400' : 'bg-slate-300'"
-        />
-        <button
-          type="button"
-          class="inline-flex h-5 w-5 items-center justify-center rounded-full text-white/80 transition-colors hover:bg-white/15 hover:text-white"
-          :title="replayPlayer.status.value === 'paused' ? '继续回放' : '暂停回放'"
-          @click="replayPlayer.toggle()"
-        >
-          <i :class="replayPlayer.status.value === 'paused' ? 'fa-solid fa-play' : 'fa-solid fa-pause'" class="text-[9px]" />
-        </button>
-        <button
-          type="button"
-          class="inline-flex h-5 min-w-[28px] items-center justify-center rounded-full text-[10px] font-medium tabular-nums text-white/80 transition-colors hover:bg-white/15 hover:text-white"
-          :title="`回放倍速 ${replayPlayer.speed.value}x，点击切换`"
-          @click="cycleReplaySpeed"
-        >
-          {{ replayPlayer.speed.value }}x
-        </button>
-        <button
-          type="button"
-          class="inline-flex h-5 w-5 items-center justify-center rounded-full text-white/80 transition-colors hover:bg-white/15 hover:text-white"
-          title="从头重播"
-          @click="restartReplay"
-        >
-          <i class="fa-solid fa-rotate-right text-[9px]" />
-        </button>
-        <button
-          type="button"
-          class="inline-flex h-5 w-5 items-center justify-center rounded-full text-white/80 transition-colors hover:bg-white/15 hover:text-white"
-          title="退出回放（Esc）"
-          @click="exitReplay"
-        >
-          <i class="fa-solid fa-xmark text-[9px]" />
-        </button>
+        <i class="fa-solid fa-clapperboard text-[10px] text-white/50" />
+        <div class="flex items-center gap-1 overflow-hidden max-w-0 opacity-0 transition-all duration-200 group-hover:max-w-[220px] group-hover:opacity-100">
+          <span
+            class="inline-block h-1.5 w-1.5 rounded-full"
+            :class="replayPlayer.status.value === 'playing' ? 'animate-pulse bg-emerald-400' : 'bg-slate-300'"
+          />
+          <button
+            type="button"
+            class="inline-flex h-5 w-5 items-center justify-center rounded-full text-white/80 transition-colors hover:bg-white/15 hover:text-white"
+            :title="replayPlayer.status.value === 'paused' ? '继续回放' : '暂停回放'"
+            @click="replayPlayer.toggle()"
+          >
+            <i :class="replayPlayer.status.value === 'paused' ? 'fa-solid fa-play' : 'fa-solid fa-pause'" class="text-[9px]" />
+          </button>
+          <button
+            type="button"
+            class="inline-flex h-5 min-w-[28px] items-center justify-center rounded-full text-[10px] font-medium tabular-nums text-white/80 transition-colors hover:bg-white/15 hover:text-white"
+            :title="`回放倍速 ${replayPlayer.speed.value}x，点击切换`"
+            @click="cycleReplaySpeed"
+          >
+            {{ replayPlayer.speed.value }}x
+          </button>
+          <button
+            type="button"
+            class="inline-flex h-5 w-5 items-center justify-center rounded-full text-white/80 transition-colors hover:bg-white/15 hover:text-white"
+            title="从头重播"
+            @click="restartReplay"
+          >
+            <i class="fa-solid fa-rotate-right text-[9px]" />
+          </button>
+          <button
+            type="button"
+            class="inline-flex h-5 w-5 items-center justify-center rounded-full text-white/80 transition-colors hover:bg-white/15 hover:text-white"
+            title="退出回放（Esc）"
+            @click="exitReplay"
+          >
+            <i class="fa-solid fa-xmark text-[9px]" />
+          </button>
+        </div>
       </div>
       <div
         ref="chatContainerRef"
         :class="[
           'flex-1 overflow-y-auto p-4',
-          (replayArmed || (!hasLocalConversationStarted && messages.length === 0)) && 'flex flex-col'
+          (replayArmed || replayPreparing || (!hasLocalConversationStarted && messages.length === 0)) && 'flex flex-col'
         ]"
         @scroll="handleScroll"
       >
-        <div v-if="hasMoreHistory && !isLoadingHistory && !replayArmed" class="mb-3 flex justify-center">
+        <div v-if="hasMoreHistory && !isLoadingHistory && !replayArmed && !replayPreparing" class="mb-3 flex justify-center">
           <!-- 滚到顶会自动翻页，这里主要负责反馈加载中状态；
                自动翻页被跳过的场景（运行中、内容不足以滚动）仍可点按钮手动加载 -->
           <div
@@ -2662,7 +2667,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
           <i class="fa-solid fa-spinner fa-spin mr-2 text-xs"></i>
           <span>加载历史消息...</span>
         </div>
-        <div v-else-if="replayArmed || (!hasLocalConversationStarted && messages.length === 0)" class="flex-1 flex items-center justify-center">
+        <div v-else-if="replayArmed || replayPreparing || (!hasLocalConversationStarted && messages.length === 0)" class="flex-1 flex items-center justify-center">
           <div class="w-[774px] max-w-[90%] flex flex-col items-center pb-4">
             <div class="flex flex-col items-center text-center">
               <div class="bg-gradient-to-r from-blue-600 to-indigo-500 bg-clip-text text-[32px] font-bold leading-tight text-transparent">嗨，我是 DataBuddy</div>
@@ -2998,7 +3003,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
             v-model:selected-model="selectedModel"
             v-model:enable-deep-thinking="enableDeepThinking"
             v-model:thinking-effort="thinkingEffort"
-            :placeholder="hasLocalConversationStarted || messages.length > 0 ? '继续输入任务，输入 / 可选择技能，@ 可引用工作区文件' : '请输入任务，输入 / 可选择技能，@ 可引用工作区文件'"
+            :placeholder="replayArmed ? '请输入任务，输入 / 可选择技能，@ 可引用工作区文件' : (hasLocalConversationStarted || messages.length > 0 ? '继续输入任务，输入 / 可选择技能，@ 可引用工作区文件' : '请输入任务，输入 / 可选择技能，@ 可引用工作区文件')"
             :selected-skills="selectedSkills"
             :selected-mention-files="mentionedFiles"
             :quoted-snippets="quotedSnippets"
