@@ -116,6 +116,7 @@ const props = withDefaults(defineProps<Props>(), {
 
 const emit = defineEmits<{
   selectConversation: [conversationId: string]
+  replayConversation: [conversationId: string]
   newConversation: []
   loadMoreConversations: []
   loadMoreConversationGroup: [groupKey: string]
@@ -787,10 +788,10 @@ onUnmounted(() => {
                       <!-- 且和瞬时态图标不同，必须一眼读到，所以放右侧而不是标题前面占标题宽度。 -->
                       <!-- 三枚操作（置顶 / 复制会话 ID / 改名）同属一个按钮束：hover 时整体淡入， -->
                       <!-- 任何宽度都可用，不按宽度档位隐藏，也不做单个按钮的档位隐藏。 -->
-                      <!-- **宽度不变量**：角色区宽度恒定 ≥ 按钮束宽度（80px = 3×24 + 2×4）， -->
+                      <!-- **宽度不变量**：角色区宽度恒定 ≥ 按钮束宽度（108px = 4×24 + 3×4）， -->
                       <!-- 时间/徽标与按钮共用同一角色区、hover 互换，绝不溢出压标题。 -->
                       <!-- 置顶状态不常驻展示（分组视图靠「置顶」分组、平铺视图靠排序置前感知），hover 时钉按状态着色提示。 -->
-                      <div data-testid="conversation-role-zone" class="conversation-role-zone relative h-6 w-[80px] shrink-0 overflow-hidden @min-[380px]:w-[132px]">
+                      <div data-testid="conversation-role-zone" class="conversation-role-zone relative h-6 w-[108px] shrink-0 overflow-hidden @min-[380px]:w-[160px]">
                         <span
                           v-if="isPersistentRunStatus(conv.run_status)"
                           data-testid="conversation-run-status"
@@ -813,6 +814,14 @@ onUnmounted(() => {
                           data-testid="conversation-actions"
                           class="absolute inset-y-0 right-0 flex items-center gap-1 opacity-0 transition-opacity duration-150 group-hover:opacity-100"
                         >
+                          <button
+                            type="button"
+                            class="flex h-6 w-6 items-center justify-center rounded text-gray-400 transition-colors duration-150 hover:bg-blue-100 hover:text-blue-600"
+                            title="回放演示：在会话中流式模拟整个过程"
+                            @click.stop="emit('replayConversation', conv.id)"
+                          >
+                            <i class="fa-regular fa-circle-play text-[10px]"></i>
+                          </button>
                           <button
                             type="button"
                             class="flex h-6 w-6 items-center justify-center rounded transition-colors duration-150"

@@ -28,6 +28,7 @@ import SkillCommandMenu from './SkillCommandMenu.vue'
 import WorkspaceFileMentionMenu from './WorkspaceFileMentionMenu.vue'
 import PresentedFileArtifacts from './PresentedFileArtifacts.vue'
 import SaveToPanelModal from '../SaveToPanelModal.vue'
+import { useConversationReplay } from '../../composables/useConversationReplay'
 import { parseDateTimeValue, formatLocalDateTime, toGenerationStats } from '../../utils'
 import { normalizeToolCallForDisplay, shouldInlineRenderQueryResult } from '../../utils/semanticTool'
 import { admitInboxMessages, reconcileInboxSnapshot, type InboxQueueItem, type InboxQueueType } from '../../utils/inboxQueue'
@@ -751,6 +752,8 @@ const {
   saveMemberDatasourceIds,
   handleSaveToDashboard,
 } = useSaveToPanel({ getFallbackChartType: () => 'table' })
+// 历史消息回放（演示模式）的接线收敛在 useConversationReplay composable（纯 view 层，不写会话状态）；
+// 实例化在 useConversationHistory 解构之后（依赖其 isLoadingHistory/hasMoreHistory/loadEarlierHistory）
 const recommendationPage = ref(0)
 const recommendationPageSize = 5
 const recommendationOffset = computed(() => recommendationPage.value * recommendationPageSize)
@@ -1157,15 +1160,6 @@ const fillSemanticFieldQuestion = (payload: { fieldName: string; fieldType: 'dim
   inputBarRef.value?.focus()
 }
 
-defineExpose({
-  openConsolePanel,
-  toggleConsolePanel,
-  fillSemanticFieldQuestion,
-  openSkillManager: () => {
-    isSkillManagerOpen.value = true
-  },
-})
-
 const syncHistoryToolCalls = () => {
   const nextMap = new Map<string, ToolCallInfo>()
   for (const message of messages.value) {
@@ -1198,6 +1192,36 @@ const {
     activeRunResumeRunId.value = activeRun?.run_id || null
     activeRunEventId.value = activeRun?.history_checkpoint?.stream_id || '0-0'
     activeRunStartedAtMs.value = activeRun?.stream_started_wall_ms ?? null
+  },
+})
+
+// 回放（演示模式）宿主接线：入口门禁/全量预拉/pending 自动开演/柔性滚动跟随，收敛在 composable
+const {
+  replayGroup,
+  replayPlayer,
+  replayRevealedMessages,
+  requestReplay,
+  exitReplay,
+  restartReplay,
+  cycleReplaySpeed,
+} = useConversationReplay({
+  messages,
+  chatContainerRef,
+  isNearBottom,
+  isGenerating,
+  hasActiveRun,
+  isLoadingHistory,
+  hasMoreHistory,
+  loadEarlierHistory,
+})
+
+defineExpose({
+  openConsolePanel,
+  toggleConsolePanel,
+  fillSemanticFieldQuestion,
+  requestReplay,
+  openSkillManager: () => {
+    isSkillManagerOpen.value = true
   },
 })
 
@@ -2246,6 +2270,11 @@ const resumePendingQuestion = async (answers?: UserQuestionAnswer[], cancelled =
 
 // options.queuedMessageId：单条队列消息"执行"入口透传的消息 ID（普通输入框发送不传）
 const handleSubmit = async (options: { queuedMessageId?: string } = {}) => {
+  // 回放演示中禁止发送（纯 view 层演示，不干扰会话状态）；grouping 合并连按回车的重复提示
+  if (replayGroup.value) {
+    ElMessage.info({ message: '回放演示中，不能发送消息', grouping: true })
+    return
+  }
   if (isStoppingRun.value) return
   if (activeRunStatus.value === 'cancelling') {
     ElMessage.info('当前任务正在停止，请稍后再发送')
@@ -2454,6 +2483,12 @@ const handleSubmit = async (options: { queuedMessageId?: string } = {}) => {
 }
 
 const handleStop = async () => {
+  // 回放中停止键与真实运行同形（蓝色停止按钮）：点击映射为暂停/继续回放，
+  // 不触达真实 Run（此时本就没有活动 Run）
+  if (replayGroup.value) {
+    replayPlayer.toggle()
+    return
+  }
   if (isStoppingRun.value) return
   const conversationId = localConversationId.value || props.conversationId
   const runId = activeRunId.value
@@ -2534,6 +2569,48 @@ const handleKeyDown = (event: KeyboardEvent) => {
 <template>
   <div class="relative h-full flex min-h-0 bg-[#F7F8FA]">
     <div class="relative flex-1 min-w-0 flex flex-col">
+      <!-- 回放浮标：刻意低调，悬停在会话区右上角；Esc 也可退出回放 -->
+      <div
+        v-if="replayGroup"
+        class="absolute right-4 top-3 z-30 flex items-center gap-0.5 rounded-full bg-slate-900/50 py-1 pl-2.5 pr-1.5 text-white shadow-sm backdrop-blur-sm"
+      >
+        <span
+          class="mr-1 inline-block h-1.5 w-1.5 rounded-full"
+          :class="replayPlayer.status.value === 'playing' ? 'animate-pulse bg-emerald-400' : 'bg-slate-300'"
+        />
+        <button
+          type="button"
+          class="inline-flex h-5 w-5 items-center justify-center rounded-full text-white/80 transition-colors hover:bg-white/15 hover:text-white"
+          :title="replayPlayer.status.value === 'paused' ? '继续回放' : '暂停回放'"
+          @click="replayPlayer.toggle()"
+        >
+          <i :class="replayPlayer.status.value === 'paused' ? 'fa-solid fa-play' : 'fa-solid fa-pause'" class="text-[9px]" />
+        </button>
+        <button
+          type="button"
+          class="inline-flex h-5 min-w-[28px] items-center justify-center rounded-full text-[10px] font-medium tabular-nums text-white/80 transition-colors hover:bg-white/15 hover:text-white"
+          :title="`回放倍速 ${replayPlayer.speed.value}x，点击切换`"
+          @click="cycleReplaySpeed"
+        >
+          {{ replayPlayer.speed.value }}x
+        </button>
+        <button
+          type="button"
+          class="inline-flex h-5 w-5 items-center justify-center rounded-full text-white/80 transition-colors hover:bg-white/15 hover:text-white"
+          title="从头重播"
+          @click="restartReplay"
+        >
+          <i class="fa-solid fa-rotate-right text-[9px]" />
+        </button>
+        <button
+          type="button"
+          class="inline-flex h-5 w-5 items-center justify-center rounded-full text-white/80 transition-colors hover:bg-white/15 hover:text-white"
+          title="退出回放（Esc）"
+          @click="exitReplay"
+        >
+          <i class="fa-solid fa-xmark text-[9px]" />
+        </button>
+      </div>
       <div
         ref="chatContainerRef"
         :class="[
@@ -2605,7 +2682,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
 
         <ConversationMessageList
           v-else
-          :messages="messages"
+          :messages="replayGroup ? replayRevealedMessages : messages"
           :datasource-id="selectedDatasource"
           :execution-targets="props.executionTargets"
           :active-tool-call-id="activeToolCallId"
@@ -2613,7 +2690,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
           :on-save="handleSaveToDashboard"
           :resolve-tool-call="getRenderableMessageToolCall"
           :should-inline-render-result="shouldInlineRenderToolCall"
-          :run-active="isGenerating || hasActiveRun"
+          :run-active="replayGroup ? replayPlayer.status.value === 'playing' : (isGenerating || hasActiveRun)"
           :live-generation-speed="liveGenerationSpeed"
           :live-elapsed-ms="liveElapsedMs"
           @select-tool="selectToolCall"
@@ -2907,9 +2984,9 @@ const handleKeyDown = (event: KeyboardEvent) => {
             :selected-mention-files="mentionedFiles"
             :quoted-snippets="quotedSnippets"
             :model-options="modelOptions"
-            :is-generating="runBusy"
+            :is-generating="replayGroup ? replayPlayer.status.value === 'playing' : runBusy"
             :is-stopping="isStoppingRun"
-            :can-submit="runBusy ? Boolean(input.trim() && !isSteering) : Boolean((input.trim() || hasCompletedPendingFiles || quotedSnippets.length > 0) && selectedDatasource)"
+            :can-submit="replayGroup ? false : (runBusy ? Boolean(input.trim() && !isSteering) : Boolean((input.trim() || hasCompletedPendingFiles || quotedSnippets.length > 0) && selectedDatasource))"
             :input-focused="inputFocused"
             :submit-title="!selectedDatasource ? '请先选择数据源' : '发送 (Enter)'"
             @submit="handleSubmit"

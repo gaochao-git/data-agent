@@ -185,9 +185,9 @@ describe('ConversationSidebar conversation row role zone', () => {
   it('stacks time and buttons in one fixed-width zone so the hover swap causes no layout shift', () => {
     const wrapper = mountSidebar([{ id: 'conv-role', title: '角色区会话', create_time: '2026-08-14 10:00:00' }])
 
-    // 两态共用同一固定宽度容器（3×24px 按钮 + 2×4px 间距 = 80px），hover 时互不挤占
+    // 两态共用同一固定宽度容器（4×24px 按钮 + 3×4px 间距 = 108px），hover 时互不挤占
     const zone = wrapper.find('[data-testid="conversation-role-zone"]')
-    expect(zone.classes()).toContain('w-[80px]')
+    expect(zone.classes()).toContain('w-[108px]')
     expect(zone.classes()).toContain('relative')
     // 兜底裁剪：按钮束宽度一旦超过角色区，绝不能溢出压到标题（曾因「复制会话 ID」导致）
     expect(zone.classes()).toContain('overflow-hidden')
@@ -205,11 +205,11 @@ describe('ConversationSidebar conversation row role zone', () => {
     expect(actions.classes()).not.toContain('hidden')
     expect(actions.classes().some(name => name.startsWith('@min-'))).toBe(false)
 
-    // 原子性：三枚操作（置顶 / 复制会话 ID / 改名）同属一个按钮束，一起出现、一起消失，
+    // 原子性：四枚操作（回放演示 / 置顶 / 复制会话 ID / 改名）同属一个按钮束，一起出现、一起消失，
     // 不做单个按钮的档位隐藏（曾把复制按钮单独 hidden 到 380px）
     const actionButtons = actions.findAll('button')
-    expect(actionButtons).toHaveLength(3)
-    expect(actionButtons.map(button => button.attributes('title'))).toEqual(['置顶', '复制会话 ID', '修改标题'])
+    expect(actionButtons).toHaveLength(4)
+    expect(actionButtons.map(button => button.attributes('title'))).toEqual(['回放演示：在会话中流式模拟整个过程', '置顶', '复制会话 ID', '修改标题'])
     for (const button of actionButtons) {
       expect(button.classes()).not.toContain('hidden')
       expect(button.classes().some(name => name.startsWith('@min-'))).toBe(false)
@@ -235,10 +235,10 @@ describe('ConversationSidebar conversation row role zone', () => {
     expect(fullTime.classes()).toContain('@min-[380px]:block')
     expect(fullTime.text()).toBe('2026-08-14 10:00:00')
 
-    // 宽档角色区同步加宽（132px ≈ 19 字符完整时间），中窄档固定 80px（容得下三枚按钮/相对时间）
+    // 宽档角色区同步加宽（160px ≈ 19 字符完整时间），中窄档固定 108px（容得下四枚按钮/相对时间）
     const zone = wrapper.find('[data-testid="conversation-role-zone"]')
-    expect(zone.classes()).toContain('w-[80px]')
-    expect(zone.classes()).toContain('@min-[380px]:w-[132px]')
+    expect(zone.classes()).toContain('w-[108px]')
+    expect(zone.classes()).toContain('@min-[380px]:w-[160px]')
   })
 
   it('keeps pinned rows quiet by default and reveals the pinned state only on hover', () => {

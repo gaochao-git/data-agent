@@ -3,7 +3,7 @@
  * ChatData 智能问数主页面
  * 参考 React 版本布局，支持数据智能体、可视化查询、SQL查询、数据看板、指标集配置
  */
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
@@ -713,6 +713,18 @@ const selectConversation = async (id: string): Promise<boolean> => {
   currentConversationDatasourceId.value = conversationDatasourceId || null
   conversationKey.value++ // 强制重新渲染以加载历史
   return true
+}
+
+// 侧栏「回放演示」入口：当前会话直接开演；其他会话先切换（key 自增重挂载），
+// 重挂载后 requestReplay 会等历史加载完成自动开演（Conversation 内 pendingAutoReplay）。
+const handleReplayConversation = async (conversationId: string) => {
+  if (conversationId === currentConversationId.value) {
+    conversationRef.value?.requestReplay()
+    return
+  }
+  await handleHistoryConversationSelect(conversationId)
+  await nextTick()
+  conversationRef.value?.requestReplay()
 }
 
 const ensureConversationDatasource = async (): Promise<boolean> => {
@@ -1578,6 +1590,7 @@ onMounted(async () => {
                   :conversation-sort-by="conversationSortBy"
                   :hide-management="!!parentComponentName"
                   @select-conversation="handleHistoryConversationSelect"
+                  @replay-conversation="handleReplayConversation"
                   @new-conversation="handleNewConversation"
                   @load-more-conversations="loadMoreConversations"
                   @load-more-conversation-group="loadMoreConversationGroup"
