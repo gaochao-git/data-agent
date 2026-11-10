@@ -1,9 +1,10 @@
 """chat_data 系统提示词数据上下文区的固化测试。
 
-2026-09-24 起静态注入链路整体下线（可用执行对象清单/方言/智能问数说明改为
-``list_execution_targets`` 按需实时获取，语义模型选中信息并入当轮 Human 消息），
-本文件固化下线后的提示词形态：数据上下文区只承载 semantic_materialize_note，
-历史注入内容一律不出现。
+2026-09-24 起静态注入链路下线（执行对象清单/方言改为 ``list_execution_targets``
+按需实时获取，语义模型选中信息并入当轮 Human 消息）；2026-11-10 恢复数据源组
+智能问数说明（``query_context``）静态注入——用户按数据源组维护的业务上下文，
+规则性内容每轮需遵守。本文件固化当前口径：数据上下文区 = 问数说明（可选） +
+物化说明（可选），其余历史注入字段（方言块/选中模型/旧 key）一律不出现。
 """
 
 from __future__ import annotations
@@ -23,10 +24,10 @@ def test_format_conversation_context_rejects_non_dict():
 
 
 def test_format_conversation_context_keeps_semantic_note_only():
-    """数据上下文区只保留物化说明；历史注入字段（数据源组段/选中模型）被忽略。
+    """未提供 query_context 时只渲染物化说明；历史注入 key（datasource_group_context/选中模型）被忽略。
 
-    静态注入链路已下线：执行对象清单/方言/智能问数说明走 list_execution_targets，
-    语义模型指定由输入框 @ 引用挂在当轮 Human 消息上。
+    执行对象清单/方言走 list_execution_targets，语义模型指定由输入框 @ 引用挂在
+    当轮 Human 消息；问数说明走新 key query_context（见带说明用例）。
     """
     data_context = {
         "datasource_group_context": "数据源组说明",
@@ -37,6 +38,29 @@ def test_format_conversation_context_keeps_semantic_note_only():
     text = chat_data._format_conversation_context(data_context)
 
     assert text == "已预物化 3 个语义模型"
+
+
+def test_format_conversation_context_includes_query_context():
+    """数据源组智能问数说明（2026-11-10 恢复静态注入）：带旧口径标题，规则在前、物化说明在后。"""
+    text = chat_data._format_conversation_context(
+        {
+            "query_context": "本数据源组按机构分库，机构范围用 member_datasource_ids 控制",
+            "semantic_materialize_note": "已预物化 3 个语义模型",
+        }
+    )
+
+    assert "## 数据源组智能问数说明" in text
+    assert "本数据源组按机构分库" in text
+    # 问数说明（用户规则）在前，物化说明（环境事实）在后，两段间空行分隔
+    assert text.index("## 数据源组智能问数说明") < text.index("已预物化 3 个语义模型")
+    assert "\n\n" in text
+
+
+def test_format_conversation_context_query_context_only():
+    """只有问数说明没有物化说明时，单独成段、不产生多余空行。"""
+    text = chat_data._format_conversation_context({"query_context": "只有一段约束"})
+
+    assert text == "## 数据源组智能问数说明\n只有一段约束"
 
 
 def test_format_conversation_context_empty_without_note():
@@ -104,7 +128,7 @@ def test_system_prompt_environment_block_ignores_workspace_root():
 
 
 def test_system_prompt_omits_static_injection_content():
-    """静态注入链路下线固化：数据源组段、方言块、语义模型选中段都不进系统提示词。"""
+    """历史静态注入字段仍不进系统提示词：方言块、语义模型选中段、旧 key 数据源组段。"""
     prompt = chat_data.build_unified_system_prompt(
         AgentRuntimeOptions(),
         data_context={
@@ -119,6 +143,22 @@ def test_system_prompt_omits_static_injection_content():
     assert "当前数据库方言" not in prompt
     assert "## 当前语义模型" not in prompt
     assert "cfg_1" not in prompt
+
+
+def test_system_prompt_inlines_query_context():
+    """新 key query_context 渲染进数据上下文区（恢复注入的端到端形态）。"""
+    prompt = chat_data.build_unified_system_prompt(
+        AgentRuntimeOptions(),
+        data_context={
+            "query_context": "机构范围通过 member_datasource_ids 控制",
+            "semantic_materialize_note": "已预物化 3 个语义模型",
+        },
+    )
+
+    assert "# 数据上下文" in prompt
+    assert "## 数据源组智能问数说明" in prompt
+    assert "机构范围通过 member_datasource_ids 控制" in prompt
+    assert "已预物化 3 个语义模型" in prompt
 
 
 def test_system_prompt_inlines_semantic_materialize_note():

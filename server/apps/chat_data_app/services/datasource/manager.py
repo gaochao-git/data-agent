@@ -608,6 +608,24 @@ class DataSourceManager:
         """异步获取数据源轻量元信息，不加载表结构和语义配置。"""
         return await self.datasource_dao.get_datasource_meta_async(datasource_id)
 
+    async def get_query_context(self, datasource_id: str | None) -> str:
+        """获取数据源组的「智能问数说明」，供系统提示词静态注入。
+
+        这是用户按数据源组维护的业务信息（datasource_group.query_context，与组的
+        成员列表、执行对象清单是相互独立的内容），不属于 ``list_execution_targets``
+        的职责；查询失败或数据源不存在时返回空串并记录错误，只让本轮提示词缺段，
+        不允许拖垮整轮问数。
+        """
+        conv_id = str(datasource_id or "").strip()
+        if not conv_id:
+            return ""
+        try:
+            meta = await self.get_datasource_meta_async(conv_id)
+        except Exception:
+            logger.exception("读取数据源组智能问数说明失败，本轮跳过静态注入: datasource_id=%s", conv_id)
+            return ""
+        return str((meta or {}).get("query_context") or "").strip()
+
     async def get_datasource_meta_by_group_name_async(self, group_name: str) -> dict[str, Any] | None:
         """异步根据数据源组名称获取轻量元信息，不加载表结构和语义配置。"""
         return await self.datasource_dao.get_datasource_meta_by_group_name_async(group_name)

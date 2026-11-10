@@ -34,6 +34,13 @@ def _stub_datasource_binding(monkeypatch):
 
     monkeypatch.setattr(agent_run_support, "prematerialize_enabled_semantic_models", noop_prematerialize)
 
+    # 数据源组智能问数说明注入（2026-11-10 恢复）：桩为空串，避免用例触达真实数据源 DAO
+    class _StubPromptDatasourceManager:
+        async def get_query_context(self, _datasource_id):
+            return ""
+
+    monkeypatch.setattr(agent_stream, "get_datasource_manager", lambda: _StubPromptDatasourceManager())
+
 
 def _semantic_context_from_request(**kwargs) -> SemanticConversationContext:
     datasource_id = str(kwargs.get("datasource_id") or "").strip() or None

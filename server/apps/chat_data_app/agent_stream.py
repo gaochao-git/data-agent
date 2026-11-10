@@ -113,11 +113,11 @@ from .agent_stream_events import (  # noqa: F401  # 部分为有意重导出，�
     _visible_tool_count,
 )
 from .services import conversation_service as conversation
-from .services.agent_run.conversation_workspace import ConversationWorkspaceRuntime
 from .services.agent_run.message_compose import (
     build_file_attachment_text,
     select_vision_attachments,
 )
+from .services.datasource.manager import get_datasource_manager
 from .services.memory.conversation_memory_service import (
     after_agent_turn_with_memory,
     render_session_memory_block,
@@ -1402,26 +1402,6 @@ async def _before_agent_stream(callbacks: _AgentRunStreamCallbacks) -> bool:
     return True
 
 
-async def _prepare_agent_prompt_bundle(
-    semantic_materialize_note: str,
-    user_id: str | None,
-    thread_id: str,
-    workspace_runtime: ConversationWorkspaceRuntime,
-) -> tuple[Any, str]:
-    """构建数据上下文与会话技能提示词清单。
-
-    静态注入下线后，数据上下文区唯一有效字段是物化说明；恒传 dict 以兼容
-    build_unified_system_prompt 的既有口径（无说明时为空 dict → 空文本）。
-    """
-    data_context: Any = {"semantic_materialize_note": semantic_materialize_note} if semantic_materialize_note else {}
-    available_skills_xml = await _load_runtime_skills_xml(
-        user_id or "system",
-        thread_id,
-        workspace_runtime,
-    )
-    return data_context, available_skills_xml
-
-
 @dataclass(frozen=True)
 class TurnUserInput:
     """本轮用户侧输入：消息素材与上一轮遗留的排队消息。"""
@@ -1637,9 +1617,13 @@ async def _run_chat_data_agent_stream(
                 thread_id=thread_id,
             )
 
-    data_context, available_skills_xml = await _prepare_agent_prompt_bundle(
-        semantic_materialize_note,
-        user_id,
+    # 数据上下文区承载物化说明与数据源组智能问数说明（2026-11-10 恢复注入）；
+    # 恒传 dict 兼容 build_unified_system_prompt 的既有口径（无内容时空 dict → 空文本）。
+    data_context: Any = {"semantic_materialize_note": semantic_materialize_note} if semantic_materialize_note else {}
+    if query_context := await get_datasource_manager().get_query_context(datasource_id):
+        data_context["query_context"] = query_context
+    available_skills_xml = await _load_runtime_skills_xml(
+        user_id or "system",
         thread_id,
         workspace_runtime,
     )

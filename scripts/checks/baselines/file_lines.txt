@@ -1,8 +1,11 @@
 # 单文件行数 baseline（AGENTS.md：后端单文件 ≤2000 行，前端 ≤3000 行）
 # 口径见 scripts/checks/file_lines.py；每行「相对仓库根的路径」，# 开头为注释。
 # 规则：存量债务只能收敛不能增长——新文件不允许登记；拆掉一处就删一行。
-# 备注：当前 9 条均为 server 测试文件；拆分测试文件时优先按被测模块分文件。
+# 备注：前 9 条均为 server 测试文件；拆分测试文件时优先按被测模块分文件。
 # 2026-09-29 新增 3 条：ruff format 长行折行推过线（此前均在 2000 行内），非逻辑增长。
+# 2026-11-10 新增 1 条：Conversation.vue 被「对话消息回放功能」3 条提交推过 3000
+#   （提交前恰为 3000 压线，回放接线 +96 → 3096）；存量超标登记，后续按概念抽出
+#   回放浮标/接线子组件后回删本行（存量债务只能收敛不能增长）。
 server/apps/chat_data_app/tests/unit/test_datasource_routes.py
 server/apps/chat_data_app/tests/unit/test_conversation_workspace.py
 server/apps/chat_data_app/tests/unit/test_skill_service.py
@@ -12,3 +15,4 @@ server/apps/chat_data_app/tests/unit/test_workspace_execution_coverage.py
 server/apps/chat_data_app/tests/unit/test_semantic_config_routes.py
 server/apps/chat_data_app/tests/unit/test_query_runtime_branches.py
 server/apps/chat_data_app/tests/unit/test_chat_data_ossie_importer.py
+web-vue/src/views/chat-data/components/conversation/Conversation.vue

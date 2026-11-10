@@ -9,18 +9,34 @@ from .security_prompt import SECURITY_PROMPT
 # 数据上下文格式化（问数与分析两套输入形态统一为一段文本）
 # ---------------------------------------------------------------------------
 
-# 2026-09-24 起静态注入链路整体下线：可用执行对象清单/方言/智能问数说明改为
+# 2026-09-24 起静态注入链路下线：可用执行对象清单/方言改为
 # data_analyzing_tool 的 list_execution_targets 按需实时获取（引导语在
 # data-analyzing 技能 query.md「1. 获取执行对象清单」）；语义模型选中信息由
-# agent_stream 并入当轮 Human 消息（未选中即智能选择，按技能检索）。系统提示词
-# 的数据上下文区只保留 semantic_materialize_note。
+# agent_stream 并入当轮 Human 消息（未选中即智能选择，按技能检索）。
+# 2026-11-10 恢复数据源组智能问数说明（query_context）静态注入：它是用户按
+# 数据源组维护的业务信息（datasource_group.query_context），属于每轮对话都要
+# 遵守的规则性内容，与执行对象清单（list_execution_targets）是两个独立功能、
+# 互不降级；只随会话绑定的数据源组出现、体量恒定。data_analyzing 工具返回里
+# 的 query_context 字段只是同一信息的透传，供查数现场引用；此处保证不查数的
+# 轮次也始终可见。
 
 
 def _format_conversation_context(data_context: dict) -> str:
-    """格式化注入系统提示词的会话数据上下文。"""
+    """格式化注入系统提示词的会话数据上下文。
+
+    两段相互独立可各自存在：智能问数说明（用户规则，带标题）在前，
+    物化说明（环境事实，无标题）在后；仅剩一段时不加空行。
+    """
     if not isinstance(data_context, dict):
         return "{}"
-    return str(data_context.get("semantic_materialize_note") or "").strip()
+    parts: list[str] = []
+    query_context = str(data_context.get("query_context") or "").strip()
+    if query_context:
+        parts.append("## 数据源组智能问数说明\n" + query_context)
+    note = str(data_context.get("semantic_materialize_note") or "").strip()
+    if note:
+        parts.append(note)
+    return "\n\n".join(parts)
 
 
 def build_data_context_text(*, data_context: dict | None = None) -> str:
