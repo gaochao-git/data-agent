@@ -84,6 +84,9 @@ class _Inbox:
     async def reap_expired_runs(self, limit=20):
         return self.reap_results
 
+    async def reap_expired_pending_runs(self, limit=20):
+        return []
+
     async def record_terminal_event(self, run_id, stream_id):
         if self.terminal_error is not None:
             raise self.terminal_error

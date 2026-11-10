@@ -206,6 +206,23 @@ class AgentInboxDao:
             )
         )
 
+    async def cancel_messages_for_run(self, session: AsyncSession, run_id: str, now: datetime) -> None:
+        """取消 pending Run 尚未消费的消息，避免过期 Run 的消息被后续 Run 接管。"""
+        await session.execute(
+            update(ChatDataAgentInbox)
+            .where(
+                ChatDataAgentInbox.run_id == run_id,
+                ChatDataAgentInbox.record_type == "message",
+                ChatDataAgentInbox.record_status.in_(("pending", "claimed")),
+                ChatDataAgentInbox.delete_flag == 0,
+            )
+            .values(
+                record_status="cancelled",
+                lease_expire_time=None,
+                update_time=now,
+            )
+        )
+
     async def adopt_pending_messages(
         self,
         session: AsyncSession,
@@ -307,6 +324,26 @@ class AgentInboxDao:
             .where(
                 ChatDataAgentInbox.record_type == "run",
                 ChatDataAgentInbox.record_status == "pending",
+                ChatDataAgentInbox.delete_flag == 0,
+            )
+            .order_by(ChatDataAgentInbox.id.asc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+
+    async def list_stale_pending_runs(
+        self,
+        session: AsyncSession,
+        cutoff: datetime,
+        limit: int = 20,
+    ) -> list[ChatDataAgentInbox]:
+        """扫描等待过久的 pending Run，供 Active 节点失败收口。"""
+        result = await session.execute(
+            select(ChatDataAgentInbox)
+            .where(
+                ChatDataAgentInbox.record_type == "run",
+                ChatDataAgentInbox.record_status == "pending",
+                ChatDataAgentInbox.update_time < cutoff,
                 ChatDataAgentInbox.delete_flag == 0,
             )
             .order_by(ChatDataAgentInbox.id.asc())

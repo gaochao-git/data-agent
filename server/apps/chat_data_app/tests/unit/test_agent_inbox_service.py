@@ -1528,3 +1528,49 @@ async def test_has_active_run_reflects_run_lifecycle(inbox_service):
     assert await service.has_active_run("conv-1", "user-1") is True
     await service.complete_run(run_id, "user-1", "用户一", owners[run_id])
     assert await service.has_active_run("conv-1", "user-1") is False
+
+
+@pytest.mark.asyncio
+async def test_stale_pending_run_expires_instead_of_being_claimed(inbox_service, monkeypatch):
+    """pending 超过最大等待时间后失败收口，不能被后续节点延迟领取执行。"""
+    service, create_thread, get_session, _owners = inbox_service
+    await create_thread()
+    run_id, _adopted = await service.start_run("conv-1", "user-1", "用户一")
+
+    async with get_session() as session:
+        run = (
+            await session.execute(
+                select(ChatDataAgentInbox).where(
+                    ChatDataAgentInbox.run_id == run_id,
+                    ChatDataAgentInbox.record_type == "run",
+                )
+            )
+        ).scalar_one()
+        run.record_status = "pending"
+        run.owner_token = None
+        run.lease_expire_time = None
+        run.create_time = datetime.now() - timedelta(seconds=301)
+        run.update_time = run.create_time
+
+    async def fake_setting(key, default=None):
+        if key == "CHAT_DATA_PENDING_RUN_MAX_AGE_SECONDS":
+            return 300
+        return default
+
+    monkeypatch.setattr(inbox_module, "get_runtime_setting", fake_setting)
+
+    assert await service.prepare_pending_run(run_id) is None
+
+    async with get_session() as session:
+        rows = list(
+            (
+                await session.execute(
+                    select(ChatDataAgentInbox)
+                    .where(ChatDataAgentInbox.run_id == run_id)
+                    .order_by(ChatDataAgentInbox.id)
+                )
+            ).scalars()
+        )
+    assert rows[0].record_status == "failed"
+    assert rows[0].owner_token is None
+    assert all(row.record_status == "cancelled" for row in rows[1:] if row.record_type == "message")

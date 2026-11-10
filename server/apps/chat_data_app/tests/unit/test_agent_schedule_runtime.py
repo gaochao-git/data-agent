@@ -1081,3 +1081,20 @@ async def test_schedule_settings_explicit_injection_overrides_hot_values():
     assert await runtime._resolve_poll_seconds() == 99
     assert await runtime._resolve_dispatch_batch_size() == 11
     assert await runtime._resolve_user_max_concurrency() == 5
+
+
+def test_schedule_execution_allowlist_uses_bj_node_id(monkeypatch):
+    monkeypatch.setenv("CHAT_DATA_NODE_ID", "bj12-a")
+    runtime = AgentScheduleRuntime(node_id="schedule-owner-a")
+
+    async def blocked_setting(key, _default=None):
+        return "bj12-b" if key == "CHAT_DATA_AGENT_EXECUTOR_NODES" else 1
+
+    monkeypatch.setattr(runtime_module, "get_runtime_setting", blocked_setting)
+    assert asyncio.run(runtime._is_executor_allowed()) is False
+
+    async def allowed_setting(key, _default=None):
+        return "bj12-a,bj12-b" if key == "CHAT_DATA_AGENT_EXECUTOR_NODES" else 1
+
+    monkeypatch.setattr(runtime_module, "get_runtime_setting", allowed_setting)
+    assert asyncio.run(runtime._is_executor_allowed()) is True

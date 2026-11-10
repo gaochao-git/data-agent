@@ -130,6 +130,8 @@ class AgentScheduleRuntime:
         self._dao = dao
         self._inbox_service = inbox_service
         self._node_id = node_id or f"{socket.gethostname()}:{os.getpid()}"
+        # 与 Agent Run 执行准入共用同一节点白名单；不使用 hostname 兜底。
+        self._executor_node_id = str(os.getenv("CHAT_DATA_NODE_ID") or "").strip()
         self._poll_task: asyncio.Task | None = None
 
     async def _resolve_poll_seconds(self) -> float:
@@ -146,6 +148,18 @@ class AgentScheduleRuntime:
         if self._user_max_concurrency is not None:
             return self._user_max_concurrency
         return await get_runtime_setting("CHAT_DATA_SCHEDULE_USER_MAX_CONCURRENCY")
+
+    async def _is_executor_allowed(self) -> bool:
+        """Standby 节点不参与定时任务调度；白名单为空时不限制。"""
+        try:
+            raw = await get_runtime_setting("CHAT_DATA_AGENT_EXECUTOR_NODES")
+        except Exception:
+            logger.warning("读取定时任务执行节点白名单失败，按不限制处理", exc_info=True)
+            return True
+        if not isinstance(raw, str):
+            return True
+        allowed = {item.strip() for item in raw.split(",") if item.strip()}
+        return not allowed or (bool(self._executor_node_id) and self._executor_node_id in allowed)
 
     async def start(self) -> None:
         if not self.enabled:
@@ -181,6 +195,9 @@ class AgentScheduleRuntime:
         全局暂停（后台一键暂停）只冻结新触发的计划与派发，已派发 Run 的
         状态收口与悬挂 claimed 回收继续执行，保证暂停前后状态口径一致。
         """
+        if not await self._is_executor_allowed():
+            logger.debug("定时任务调度跳过：当前节点不在执行白名单 node_id=%s", self._executor_node_id)
+            return
         await self._finalize_dispatched()
         await self._reap_stale_claims(now)
         if await self._is_paused():

@@ -236,6 +236,58 @@ class AgentInboxService:
             rows = await self._claim_step_and_turn(session, run_id, now)
             return run_id, [self._to_human_message(row) for row in rows]
 
+    async def _expire_stale_pending_run(
+        self,
+        session: AsyncSession,
+        run: ChatDataAgentInbox,
+        now: datetime,
+        max_age_seconds: int | None = None,
+    ) -> bool:
+        """pending 超过配置年龄则失败收口，防止旧请求在未来被延迟领取执行。"""
+        if run.record_status != RUN_STATUS_PENDING:
+            return False
+        max_age = max_age_seconds
+        if max_age is None:
+            max_age = int(await get_runtime_setting("CHAT_DATA_PENDING_RUN_MAX_AGE_SECONDS"))
+        created_at = getattr(run, "create_time", None) or run.update_time
+        if created_at is None or now - created_at <= timedelta(seconds=max(1, max_age)):
+            return False
+        content = self._load_run_content(run.record_content)
+        content["reap_origin"] = "pending_expired"
+        content["pending_expired_at"] = now.isoformat()
+        run.record_content = json.dumps(content, ensure_ascii=False)
+        run.record_status = RUN_STATUS_FAILED
+        run.owner_token = None
+        run.lease_expire_time = None
+        run.update_time = now
+        await self._dao.cancel_messages_for_run(session, run.run_id, now)
+        logger.info(
+            "pending Run 超过最大等待时间，已失败收口: run_id=%s age_seconds=%.1f",
+            run.run_id,
+            (now - created_at).total_seconds(),
+        )
+        return True
+
+    async def reap_expired_pending_runs(self, limit: int = 20) -> list[str]:
+        """由 Active 节点定期收口超时 pending Run，不依赖执行并发槽位。"""
+        max_age = int(await get_runtime_setting("CHAT_DATA_PENDING_RUN_MAX_AGE_SECONDS"))
+        async with get_session() as session:
+            now = await self._dao.now(session)
+            cutoff = now - timedelta(seconds=max(1, max_age))
+            rows = await self._dao.list_stale_pending_runs(session, cutoff, max(limit, 1))
+            run_ids = [row.run_id for row in rows]
+        expired: list[str] = []
+        for run_id in run_ids:
+            try:
+                async with get_session() as session:
+                    now = await self._dao.now(session)
+                    run = await self._dao.get_run_by_id_for_update(session, run_id)
+                    if run is not None and await self._expire_stale_pending_run(session, run, now, max_age):
+                        expired.append(run_id)
+            except Exception:
+                logger.exception("回收超时 pending Run 失败，等待下一轮重试: run_id=%s", run_id)
+        return expired
+
     async def prepare_pending_run(self, run_id: str) -> dict[str, Any] | None:
         """领取 pending Run 并返回重建上下文。
 
@@ -254,6 +306,8 @@ class AgentInboxService:
             if run is None:
                 return None
             if run.record_status != RUN_STATUS_PENDING:
+                return None
+            if await self._expire_stale_pending_run(session, run, now):
                 return None
             active = await self._dao.get_active_run(session, run.conversation_id, run.user_id)
             if active is not None and active.run_id != run_id:

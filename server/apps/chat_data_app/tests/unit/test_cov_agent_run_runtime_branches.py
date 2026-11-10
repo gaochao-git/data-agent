@@ -56,13 +56,17 @@ class _Inbox:
     async def reap_expired_runs(self, **_kwargs):
         return []
 
+    async def reap_expired_pending_runs(self, **_kwargs):
+        return []
 
-def _runtime(*, inbox=None, events=None, max_concurrency: int = 1) -> AgentRunRuntime:
+
+def _runtime(*, inbox=None, events=None, max_concurrency: int = 1, node_id: str | None = None) -> AgentRunRuntime:
     return AgentRunRuntime(
         max_concurrency=max_concurrency,
         inbox_service=inbox or _Inbox(),  # type: ignore[arg-type]
         event_service=events or _Events(),  # type: ignore[arg-type]
         event_bus=_Bus(),  # type: ignore[arg-type]
+        node_id=node_id,
     )
 
 
@@ -150,6 +154,125 @@ def test_publish_closed_terminal_releases_owner_when_claimed():
 
     assert events.appended[0]["payload"]
     assert events.released == ["run-1"]
+
+
+def test_executor_allowlist_skips_run_on_unlisted_node(monkeypatch):
+    prepared: list[str] = []
+
+    class Inbox(_Inbox):
+        async def prepare_pending_run(self, run_id: str):
+            prepared.append(run_id)
+            return None
+
+    async def setting(key: str, _default: object = None) -> object:
+        if key == "CHAT_DATA_AGENT_EXECUTOR_NODES":
+            return "bj12-b"
+        return 1
+
+    monkeypatch.setattr(rt, "get_runtime_setting", setting)
+    runtime = _runtime(inbox=Inbox(), node_id="bj12-a")
+
+    asyncio.run(runtime._execute(run_id="run-1", conversation_id="conv-1", user_id="u1", operator_name="用户一"))
+
+    assert prepared == []
+
+
+def test_executor_allowlist_allows_listed_node(monkeypatch):
+    prepared: list[str] = []
+
+    class Inbox(_Inbox):
+        async def prepare_pending_run(self, run_id: str):
+            prepared.append(run_id)
+            return None
+
+    async def setting(key: str, _default: object = None) -> object:
+        if key == "CHAT_DATA_AGENT_EXECUTOR_NODES":
+            return "bj12-a,bj12-b"
+        return 1
+
+    monkeypatch.setattr(rt, "get_runtime_setting", setting)
+    runtime = _runtime(inbox=Inbox(), node_id="bj12-a")
+
+    asyncio.run(runtime._execute(run_id="run-1", conversation_id="conv-1", user_id="u1", operator_name="用户一"))
+
+    assert prepared == ["run-1"]
+
+
+def test_executor_allowlist_rejects_missing_node_id(monkeypatch):
+    prepared: list[str] = []
+
+    class Inbox(_Inbox):
+        async def prepare_pending_run(self, run_id: str):
+            prepared.append(run_id)
+            return None
+
+    async def setting(key: str, _default: object = None) -> object:
+        if key == "CHAT_DATA_AGENT_EXECUTOR_NODES":
+            return "bj12-a"
+        return 1
+
+    monkeypatch.delenv("CHAT_DATA_NODE_ID", raising=False)
+    monkeypatch.setattr(rt, "get_runtime_setting", setting)
+    runtime = _runtime(inbox=Inbox(), node_id="")
+
+    asyncio.run(runtime._execute(run_id="run-1", conversation_id="conv-1", user_id="u1", operator_name="用户一"))
+
+    assert prepared == []
+
+
+def test_executor_allowlist_empty_does_not_restrict(monkeypatch):
+    prepared: list[str] = []
+
+    class Inbox(_Inbox):
+        async def prepare_pending_run(self, run_id: str):
+            prepared.append(run_id)
+            return None
+
+    async def setting(key: str, _default: object = None) -> object:
+        if key == "CHAT_DATA_AGENT_EXECUTOR_NODES":
+            return ""
+        return 1
+
+    monkeypatch.setattr(rt, "get_runtime_setting", setting)
+    runtime = _runtime(inbox=Inbox(), node_id="bj12-a")
+
+    asyncio.run(runtime._execute(run_id="run-1", conversation_id="conv-1", user_id="u1", operator_name="用户一"))
+
+    assert prepared == ["run-1"]
+
+
+def test_poll_pending_runs_skips_disallowed_node(monkeypatch):
+    reaped: list[str] = []
+    listed: list[int] = []
+
+    async def setting(key: str, _default: object = None) -> object:
+        if key == "CHAT_DATA_AGENT_EXECUTOR_NODES":
+            return "bj12-b"
+        return 1
+
+    async def fake_reap() -> None:
+        reaped.append("reap")
+
+    async def fake_list(limit: int) -> list[str]:
+        listed.append(limit)
+        return []
+
+    monkeypatch.setattr(rt, "get_runtime_setting", setting)
+    runtime = _runtime(node_id="bj12-a")
+    monkeypatch.setattr(runtime, "_reap_expired_runs", fake_reap)
+    monkeypatch.setattr(runtime, "_list_runnable_runs", fake_list)
+
+    async def scenario() -> None:
+        poller = asyncio.ensure_future(runtime._poll_pending_runs())
+        await asyncio.sleep(0.02)
+        poller.cancel()
+        with suppress(asyncio.CancelledError):
+            await poller
+
+    asyncio.run(scenario())
+
+    assert reaped == []
+    assert listed == []
 
 
 def test_poll_pending_runs_waits_when_no_capacity(monkeypatch):

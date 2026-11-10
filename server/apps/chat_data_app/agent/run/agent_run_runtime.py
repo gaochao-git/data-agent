@@ -40,6 +40,21 @@ def _max_concurrency() -> int:
         raise ValueError("CHAT_DATA_AGENT_MAX_CONCURRENCY 必须是正整数") from None
 
 
+def _default_node_id() -> str:
+    """当前执行节点名：只认显式配置，不回退 hostname。"""
+    node_id = str(os.getenv("CHAT_DATA_NODE_ID") or "").strip()
+    if not node_id:
+        logger.warning("CHAT_DATA_NODE_ID 未配置：执行节点白名单非空时本节点不会执行 Agent Run")
+    return node_id
+
+
+def _parse_executor_nodes(raw: object) -> frozenset[str]:
+    """解析逗号分隔的执行节点白名单；空配置表示不限制。"""
+    if not isinstance(raw, str):
+        return frozenset()
+    return frozenset(item.strip() for item in raw.split(",") if item.strip())
+
+
 @dataclass
 class _RunExecutionState:
     """单次 Run 执行过程中的可变状态，供 _execute 与其各阶段 helper 共享。"""
@@ -67,6 +82,7 @@ class AgentRunRuntime:
         event_service: AgentRunEventService = agent_run_event_service,
         event_bus: RedisEventBus | None = None,
         stream_generator: Callable[..., AsyncIterator[str]] | None = None,
+        node_id: str | None = None,
     ) -> None:
         # 并发上限运行期经后台配置变量表读取（CHAT_DATA_AGENT_MAX_CONCURRENCY）：
         # _execute 每次执行前对账，无在途运行时按新值重建信号量（有在途时沿用旧的，
@@ -76,6 +92,7 @@ class AgentRunRuntime:
         self._event_service = event_service
         self._event_bus = event_bus or event_service.bus
         self._stream_generator = stream_generator
+        self._node_id = str(node_id or "").strip() or _default_node_id()
         self._semaphore = asyncio.Semaphore(self._semaphore_capacity)
         self._tasks: dict[str, asyncio.Task] = {}
         self._owned_runs: set[str] = set()
@@ -222,25 +239,40 @@ class AgentRunRuntime:
     async def _poll_pending_runs(self) -> None:
         while True:
             try:
+                # Standby/不允许执行的节点不参与任何调度，包括过期 Run 回收：
+                # active 节点负责 reaper，避免非执行节点误收口 active 的 Run。
+                if not await self._is_executor_allowed():
+                    logger.debug("Agent Run 调度跳过：当前节点不在执行白名单 node_id=%s", self._node_id)
+                    await asyncio.sleep(RUN_DISPATCH_POLL_SECONDS)
+                    continue
                 await self._reap_expired_runs()
-                available_slots = self._semaphore_capacity - len(self._tasks)
-                if available_slots > 0:
-                    runnable = await self._list_runnable_runs(available_slots)
-                    for run_id in runnable:
-                        if run_id in self._tasks:
-                            continue
-                        self.submit(
-                            run_id=run_id,
-                            conversation_id="",
-                            user_id="",
-                            operator_name="",
-                        )
+                await self._reap_expired_pending_runs()
+                await self._submit_runnable_runs()
                 await asyncio.sleep(RUN_DISPATCH_POLL_SECONDS)
             except asyncio.CancelledError:
                 raise
             except Exception:
                 logger.error("ChatData Agent Run 调度失败", exc_info=True)
                 await asyncio.sleep(1)
+
+    async def _reap_expired_pending_runs(self) -> None:
+        expired = await self._inbox_service.reap_expired_pending_runs(limit=20)
+        if expired:
+            logger.info("已失败收口超时 pending Run: count=%d", len(expired))
+
+    async def _submit_runnable_runs(self) -> None:
+        available_slots = self._semaphore_capacity - len(self._tasks)
+        if available_slots <= 0:
+            return
+        runnable = await self._list_runnable_runs(available_slots)
+        for run_id in runnable:
+            if run_id not in self._tasks:
+                self.submit(
+                    run_id=run_id,
+                    conversation_id="",
+                    user_id="",
+                    operator_name="",
+                )
 
     async def _reap_expired_runs(self) -> None:
         """后台收口 Worker 崩溃留下的过期 Run，并结束其 SSE。"""
@@ -482,6 +514,16 @@ class AgentRunRuntime:
         self._submit_chained_run(state)
         self._owned_runs.discard(state.run_id)
 
+    async def _is_executor_allowed(self) -> bool:
+        """执行节点准入：白名单为空不限制；读取失败保持可用，避免配置故障停跑。"""
+        try:
+            raw = await get_runtime_setting("CHAT_DATA_AGENT_EXECUTOR_NODES")
+        except Exception:
+            logger.warning("读取 Agent 执行节点白名单失败，按不限制处理", exc_info=True)
+            return True
+        allowed = _parse_executor_nodes(raw)
+        return not allowed or (bool(self._node_id) and self._node_id in allowed)
+
     async def _execute(
         self,
         *,
@@ -490,6 +532,14 @@ class AgentRunRuntime:
         user_id: str,
         operator_name: str,
     ) -> None:
+        # 节点白名单只拦新的 claim；已运行 Run 不受名单变更影响。
+        if not await self._is_executor_allowed():
+            logger.info(
+                "Agent Run 跳过：当前节点不在执行白名单 run_id=%s node_id=%s",
+                run_id,
+                self._node_id,
+            )
+            return
         # TTFT 观测：run_dispatch = submit → 本任务实际开跑（事件循环调度 +
         # 下方运行时设置读取 + 并发闸排队）；claim_pending_run = 领取的 DB/Redis 耗时。
         # 两段此前零日志，是「HTTP 入口 → graph 启动」2~6s 波动的嫌疑段。
