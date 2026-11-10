@@ -138,7 +138,7 @@ kill -9 $(lsof -ti :5001)
 - `DATABASE_URL` 或相关 MySQL 配置：业务库连接
 - `CHAT_DATA_HOME`：ChatData 应用**唯一的数据根目录**（**必填**，禁止回退到其它变量推导）；会话工作区、卸载的查询结果、用户技能（`skills/user`）、SQLite 检查点（`checkpoints.db`）均派生自此。系统技能不落本目录，运行时直读代码包 `apps/chat_data_app/agent/skills/`
 - `CHAT_DATA_NODE_ID`：当前节点唯一名字；多实例/多机房必填，不配置时白名单非空则本节点不执行 Agent Run
-- `CHAT_DATA_AGENT_EXECUTOR_NODES`：允许执行 Agent Run 的节点名列表（逗号分隔）；为空表示不限制；可在后台运行配置动态修改，生效有约 30 秒缓存
+- `CHAT_DATA_AGENT_EXECUTOR_NODES`：允许执行 Agent Run 的节点名列表（逗号分隔）；为空表示不限制；可在后台运行配置动态修改，生效有约 30 秒缓存；读取失败 fail-close
 - `CHAT_DATA_PENDING_RUN_MAX_AGE_SECONDS`：pending Run 最长等待执行时间（秒），默认 `300`；超时置 `failed` 并取消未消费消息，避免旧请求被延迟领取执行
 - `CHAT_DATA_MODELS_FILE`：**已废弃**，服务端不再读取。模型清单唯一真值是 DB 表 `chat_data_model_registry`（大模型管理页维护），表为空即空清单，不回源任何文件自动导入，模型直接在管理页添加（可先用「探测」拉上游可用模型）。旧变量 `CHAT_DATA_MODEL` 已废弃，残留会导致启动报错；`CHAT_DATA_API_KEY` / `CHAT_DATA_BASE_URL` 同样废弃
 - 模型注册键（`model_key`）：服务端生成 `{请求名slug}-{8位随机hex}`（如 `deepseek-v4-flash-3f2a9c1d`），URL 安全、编辑不改变；管理端写接口用 body/query 传键（`PUT /admin/models`、`PATCH /admin/models/enabled|default`、`DELETE /admin/models?model_key=`），旧路径接口保留一个发布周期兼容；存量含 `#`/`/` 的老注册键继续可用（入口自动还原网关重复编码）

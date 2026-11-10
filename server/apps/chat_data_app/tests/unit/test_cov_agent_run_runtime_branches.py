@@ -8,6 +8,7 @@ from contextlib import suppress
 import pytest
 
 from apps.chat_data_app.agent.run import agent_run_runtime as rt
+from apps.chat_data_app.agent.run import executor_gate
 from apps.chat_data_app.agent.run.agent_run_runtime import AgentRunRuntime, _RunExecutionState
 
 
@@ -154,6 +155,24 @@ def test_publish_closed_terminal_releases_owner_when_claimed():
 
     assert events.appended[0]["payload"]
     assert events.released == ["run-1"]
+
+
+def test_executor_gate_fails_closed_and_shares_parsing():
+    async def failing_setting(_key, _default=None):
+        raise RuntimeError("setting table down")
+
+    assert asyncio.run(executor_gate.is_executor_allowed("bj12-a", setting_reader=failing_setting)) is False
+
+    async def empty_setting(_key, _default=None):
+        return ""
+
+    assert asyncio.run(executor_gate.is_executor_allowed("bj12-a", setting_reader=empty_setting)) is True
+
+    async def blocked_setting(_key, _default=None):
+        return "bj12-b, bj12-c"
+
+    assert asyncio.run(executor_gate.is_executor_allowed("bj12-a", setting_reader=blocked_setting)) is False
+    assert asyncio.run(executor_gate.is_executor_allowed("bj12-b", setting_reader=blocked_setting)) is True
 
 
 def test_executor_allowlist_skips_run_on_unlisted_node(monkeypatch):

@@ -17,6 +17,7 @@ from utils.logger import get_logger
 from .agent_inbox_service import AgentInboxService, AgentRunLeaseLostError, agent_inbox_service
 from .agent_run_event_service import AgentRunEventService, agent_run_event_service, format_terminal_done
 from .chat_data_stream_request import ChatDataStreamRequest
+from .executor_gate import configured_node_id, is_executor_allowed
 from .redis_event_bus import RedisEventBus
 
 logger = get_logger(__name__)
@@ -38,21 +39,6 @@ def _max_concurrency() -> int:
         return max(int(raw), 1)
     except ValueError:
         raise ValueError("CHAT_DATA_AGENT_MAX_CONCURRENCY 必须是正整数") from None
-
-
-def _default_node_id() -> str:
-    """当前执行节点名：只认显式配置，不回退 hostname。"""
-    node_id = str(os.getenv("CHAT_DATA_NODE_ID") or "").strip()
-    if not node_id:
-        logger.warning("CHAT_DATA_NODE_ID 未配置：执行节点白名单非空时本节点不会执行 Agent Run")
-    return node_id
-
-
-def _parse_executor_nodes(raw: object) -> frozenset[str]:
-    """解析逗号分隔的执行节点白名单；空配置表示不限制。"""
-    if not isinstance(raw, str):
-        return frozenset()
-    return frozenset(item.strip() for item in raw.split(",") if item.strip())
 
 
 @dataclass
@@ -92,7 +78,7 @@ class AgentRunRuntime:
         self._event_service = event_service
         self._event_bus = event_bus or event_service.bus
         self._stream_generator = stream_generator
-        self._node_id = str(node_id or "").strip() or _default_node_id()
+        self._node_id = str(node_id or "").strip() or configured_node_id()
         self._semaphore = asyncio.Semaphore(self._semaphore_capacity)
         self._tasks: dict[str, asyncio.Task] = {}
         self._owned_runs: set[str] = set()
@@ -515,14 +501,8 @@ class AgentRunRuntime:
         self._owned_runs.discard(state.run_id)
 
     async def _is_executor_allowed(self) -> bool:
-        """执行节点准入：白名单为空不限制；读取失败保持可用，避免配置故障停跑。"""
-        try:
-            raw = await get_runtime_setting("CHAT_DATA_AGENT_EXECUTOR_NODES")
-        except Exception:
-            logger.warning("读取 Agent 执行节点白名单失败，按不限制处理", exc_info=True)
-            return True
-        allowed = _parse_executor_nodes(raw)
-        return not allowed or (bool(self._node_id) and self._node_id in allowed)
+        """执行节点准入统一委托给 executor_gate，保证与定时任务同一判断。"""
+        return await is_executor_allowed(self._node_id, setting_reader=get_runtime_setting)
 
     async def _execute(
         self,

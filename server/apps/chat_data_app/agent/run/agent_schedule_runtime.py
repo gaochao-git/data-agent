@@ -34,6 +34,7 @@ from apps.chat_data_app.agent.run.agent_inbox_service import (
 )
 from apps.chat_data_app.agent.run.agent_run_runtime import agent_run_runtime
 from apps.chat_data_app.agent.run.completion_options import parse_completion_run_options
+from apps.chat_data_app.agent.run.executor_gate import configured_node_id, is_executor_allowed
 from apps.chat_data_app.daos.agent_schedule_dao import (
     RUN_STATUS_TO_TRIGGER_STATUS,
     SCHEDULE_RUN_STATUS_CLAIMED,
@@ -131,7 +132,7 @@ class AgentScheduleRuntime:
         self._inbox_service = inbox_service
         self._node_id = node_id or f"{socket.gethostname()}:{os.getpid()}"
         # 与 Agent Run 执行准入共用同一节点白名单；不使用 hostname 兜底。
-        self._executor_node_id = str(os.getenv("CHAT_DATA_NODE_ID") or "").strip()
+        self._executor_node_id = configured_node_id()
         self._poll_task: asyncio.Task | None = None
 
     async def _resolve_poll_seconds(self) -> float:
@@ -150,16 +151,8 @@ class AgentScheduleRuntime:
         return await get_runtime_setting("CHAT_DATA_SCHEDULE_USER_MAX_CONCURRENCY")
 
     async def _is_executor_allowed(self) -> bool:
-        """Standby 节点不参与定时任务调度；白名单为空时不限制。"""
-        try:
-            raw = await get_runtime_setting("CHAT_DATA_AGENT_EXECUTOR_NODES")
-        except Exception:
-            logger.warning("读取定时任务执行节点白名单失败，按不限制处理", exc_info=True)
-            return True
-        if not isinstance(raw, str):
-            return True
-        allowed = {item.strip() for item in raw.split(",") if item.strip()}
-        return not allowed or (bool(self._executor_node_id) and self._executor_node_id in allowed)
+        """Standby 节点不参与定时任务调度；与 Agent Run 共用同一判断。"""
+        return await is_executor_allowed(self._executor_node_id, setting_reader=get_runtime_setting)
 
     async def is_executor_allowed(self) -> bool:
         """供路由在创建触发实例前判断当前节点是否有执行资格。"""
