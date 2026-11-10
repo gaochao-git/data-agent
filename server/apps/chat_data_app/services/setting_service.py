@@ -220,7 +220,7 @@ SETTING_REGISTRY: dict[str, SettingSpec] = {
         default="",
         category="concurrency",
         effect=EFFECT_IMMEDIATE,
-        description="允许执行 Agent Run 的节点名列表，逗号分隔；为空表示不限制",
+        description="允许执行 Agent Run 的节点/机房执行单元名列表，逗号分隔；为空表示不限制",
     ),
     "CHAT_DATA_PENDING_RUN_MAX_AGE_SECONDS": SettingSpec(
         key="CHAT_DATA_PENDING_RUN_MAX_AGE_SECONDS",
