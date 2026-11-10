@@ -792,53 +792,75 @@ export function useConversationHistory({
     }
   }
 
-  // 向上翻页：拉取比当前窗口更早的一页，拼回序列后重建消息
-  const loadEarlierHistory = async () => {
-    const convId = conversationId.value
-    if (!convId || isLoadingEarlierHistory.value || !hasMoreHistory.value) return
-    const cursor = earliestTurnSequence.value ?? readEarliestSequenceNo(historyEvents.value)
-    if (cursor === null) {
-      // 拿不到游标说明历史结构异常，停止翻页避免死循环
-      hasMoreHistory.value = false
-      return
-    }
-    isLoadingEarlierHistory.value = true
-    try {
-      const response = await getConversationHistory(convId, {
-        limitTurns: HISTORY_TURN_PAGE_SIZE,
-        beforeTurnSequence: cursor,
-      })
-      // 会话可能已在请求期间切换：只应用属于当前会话的响应，避免旧会话事件污染新会话
-      if (!response.ok || conversationId.value !== convId) return
-      const data = await response.json()
-      const olderEvents = Array.isArray(data.data?.history_events) ? data.data.history_events : []
-      hasMoreHistory.value = Boolean(data.data?.has_more_turns ?? data.data?.has_more)
-      const nextCursor = Number(data.data?.earliest_turn_sequence)
-      earliestTurnSequence.value = Number.isFinite(nextCursor) ? nextCursor : null
-      if (olderEvents.length === 0) return
-      const allEvents = [...olderEvents, ...historyEvents.value]
-      historyEvents.value = allEvents
-      // 即使后端已按轮次分页，合并窗口后仍统一重建，避免实时消息/历史窗口拼接
-      // 产生重复 assistant 块；新分页保证同一轮不会跨页。
-      const persistedIds = new Set<string>()
-      for (const raw of allEvents) {
-        if (!raw || typeof raw !== 'object') continue
-        const payload = (raw as { payload?: unknown }).payload
-        if (payload && typeof payload === 'object') {
-          const id = String((payload as { id?: unknown }).id || '').trim()
-          if (id) persistedIds.add(id)
+  /**
+   * 向上翻页：拉取比当前窗口更早的一页，拼回序列后重建消息列表。
+   * 返回三态：'loaded'=拉到新页/正常到底；'failed'=网络失败或响应异常；
+   * 'skipped'=并发跳过或会话切换中断（非失败，不应向用户报错）。
+   * 回放预拉按三态处置（failed 报错取消、skipped 静默取消、loaded 续拉）；
+   * hasMoreHistory 不因失败翻转，若不中止会空转到翻页护栏；
+   * 滚顶/按钮等正常对话入口忽略返回值，行为不变。
+   *
+   * 并发合流：滚顶自动加载与回放预拉同时触发时，后到方复用在途请求等待结果，
+   * 而非立即跳过误报失败（同一时刻至多一个在途翻页请求）。
+   */
+  let earlierLoadTask: Promise<'loaded' | 'failed' | 'skipped'> | null = null
+  const loadEarlierHistory = (): Promise<'loaded' | 'failed' | 'skipped'> => {
+    if (earlierLoadTask) return earlierLoadTask
+    earlierLoadTask = (async () => {
+      try {
+        const convId = conversationId.value
+        if (!convId || !hasMoreHistory.value) return 'skipped'
+        const cursor = earliestTurnSequence.value ?? readEarliestSequenceNo(historyEvents.value)
+        if (cursor === null) {
+          // 拿不到游标说明历史结构异常，停止翻页避免死循环
+          hasMoreHistory.value = false
+          return 'loaded'
         }
+        isLoadingEarlierHistory.value = true
+        try {
+          const response = await getConversationHistory(convId, {
+            limitTurns: HISTORY_TURN_PAGE_SIZE,
+            beforeTurnSequence: cursor,
+          })
+          if (!response.ok) return 'failed'
+          // 会话可能已在请求期间切换：只应用属于当前会话的响应，避免旧会话事件污染新会话
+          if (conversationId.value !== convId) return 'skipped'
+          const data = await response.json()
+          const olderEvents = Array.isArray(data.data?.history_events) ? data.data.history_events : []
+          hasMoreHistory.value = Boolean(data.data?.has_more_turns ?? data.data?.has_more)
+          const nextCursor = Number(data.data?.earliest_turn_sequence)
+          earliestTurnSequence.value = Number.isFinite(nextCursor) ? nextCursor : null
+          if (olderEvents.length === 0) return 'loaded'
+          const allEvents = [...olderEvents, ...historyEvents.value]
+          historyEvents.value = allEvents
+          // 即使后端已按轮次分页，合并窗口后仍统一重建，避免实时消息/历史窗口拼接
+          // 产生重复 assistant 块；新分页保证同一轮不会跨页。
+          const persistedIds = new Set<string>()
+          for (const raw of allEvents) {
+            if (!raw || typeof raw !== 'object') continue
+            const payload = (raw as { payload?: unknown }).payload
+            if (payload && typeof payload === 'object') {
+              const id = String((payload as { id?: unknown }).id || '').trim()
+              if (id) persistedIds.add(id)
+            }
+          }
+          // 本会话实时消息（已发送未落库、流式进行中）不在历史事件里，重建后追加保留。
+          const liveMessages = messages.value.filter(item => item.isStreaming || !persistedIds.has(item.id))
+          const rebuiltHistory = buildHistoryMessagesFromEvents(allEvents)
+          messages.value = [...rebuiltHistory, ...liveMessages]
+          isFirstMessage.value = messages.value.length === 0
+          return 'loaded'
+        } catch (error) {
+          console.error('加载更早的历史消息失败:', error)
+          return 'failed'
+        } finally {
+          isLoadingEarlierHistory.value = false
+        }
+      } finally {
+        earlierLoadTask = null
       }
-      // 本会话实时消息（已发送未落库、流式进行中）不在历史事件里，重建后追加保留。
-      const liveMessages = messages.value.filter(item => item.isStreaming || !persistedIds.has(item.id))
-      const rebuiltHistory = buildHistoryMessagesFromEvents(allEvents)
-      messages.value = [...rebuiltHistory, ...liveMessages]
-      isFirstMessage.value = messages.value.length === 0
-    } catch (error) {
-      console.error('加载更早的历史消息失败:', error)
-    } finally {
-      isLoadingEarlierHistory.value = false
-    }
+    })()
+    return earlierLoadTask
   }
 
   // 监听 conversationId 变化

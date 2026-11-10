@@ -21,7 +21,13 @@ export interface UseConversationReplayOptions {
   hasActiveRun: Ref<boolean>
   isLoadingHistory: Ref<boolean>
   hasMoreHistory: Ref<boolean>
-  loadEarlierHistory: () => Promise<void>
+  /** 当前会话：切换时丢弃 armed 待启动态（本地新建会话不重挂载组件，残留会让回车误触发回放） */
+  conversationId: Ref<string | null | undefined>
+  /**
+   * 向上翻页接口（useConversationHistory 同名函数）：三态 'loaded'|'failed'|'skipped'，
+   * 与宿主共用同一实例——回放预拉与滚顶自动加载并发时在途请求自动合流。
+   */
+  loadEarlierHistory: () => Promise<'loaded' | 'failed' | 'skipped'>
 }
 
 export function useConversationReplay(options: UseConversationReplayOptions) {
@@ -51,15 +57,45 @@ export function useConversationReplay(options: UseConversationReplayOptions) {
   const openReplay = async () => {
     if (replayPreparing.value) return
     replayPreparing.value = true
+    let prefetchFailed = false
+    let prefetchSkipped = false
     try {
-      // 历史按轮次分页加载：开演前预拉全量，避免长会话只演「最近一页」
+      // 历史按轮次分页加载：开演前预拉全量，避免长会话只演「最近一页」。
+      // 单页 failed 必须立即中止：hasMoreHistory 不因失败翻转，继续循环会打满护栏页数的失败请求；
+      // skipped（并发跳过/会话切换）非网络失败，静默取消即可，不弹误导提示。
       let pages = 0
       while (options.hasMoreHistory.value && pages < MAX_PREFETCH_PAGES) {
-        await options.loadEarlierHistory()
+        const result = await options.loadEarlierHistory()
+        if (result === 'failed') {
+          prefetchFailed = true
+          break
+        }
+        if (result === 'skipped') {
+          prefetchSkipped = true
+          break
+        }
         pages += 1
       }
     } finally {
       replayPreparing.value = false
+    }
+    if (prefetchFailed) {
+      ElMessage.error('历史消息加载失败，回放已取消，请稍后重试')
+      return
+    }
+    if (prefetchSkipped) {
+      // 会话已切换/清空：armed 已消费但消息不再是当前会话的内容，静默取消本次回放
+      return
+    }
+    if (options.hasMoreHistory.value) {
+      // 翻页护栏兜底：仅后端 has_more 异常时出现，提示已加载部分后继续，保证功能可用
+      ElMessage.warning('会话过长，回放仅覆盖已加载的历史消息')
+    }
+    // 预拉期间用户可能发送了新消息（armed 已消费、group 未建立，输入区未被禁用）：
+    // 中间态消息没有终态可回放，收集进去会变成永远转圈的半截消息，直接取消本次回放
+    if (options.isGenerating.value) {
+      ElMessage.info('有新消息正在发送，回放已取消，请稍后重试')
+      return
     }
     const group = collectFullReplay(options.messages.value)
     if (!group.length) {
@@ -122,6 +158,12 @@ export function useConversationReplay(options: UseConversationReplayOptions) {
       return
     }
     replayArmed.value = true
+  })
+
+  // 会话切换丢弃 armed 待启动：本地新建会话不重挂载组件，armed 残留会让输入框预填的
+  // 旧会话种子在回车时误触发一次回放尝试。pending 不在此清——它就是等新会话加载的待办。
+  watch(options.conversationId, () => {
+    replayArmed.value = false
   })
 
   // 柔性跟随：仅当用户本就在底部时随播放拽底；上翻即停跟随（与直播 isNearBottom 同口径，回到最新按钮可恢复）

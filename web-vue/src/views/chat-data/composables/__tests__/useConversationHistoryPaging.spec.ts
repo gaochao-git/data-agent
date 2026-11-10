@@ -80,6 +80,31 @@ describe('useConversationHistory 分页', () => {
     expect(history.hasMoreHistory.value).toBe(true)
   })
 
+  it('并发翻页合流：在途请求未完成时重复触发复用同一请求，不重复打接口', async () => {
+    apiMocks.getConversationHistory
+      .mockResolvedValueOnce(historyResponse([event(5, '问题3'), event(6, '回答3')], true))
+    const { history } = setup()
+    await vi.waitFor(() => expect(history.isLoadingHistory.value).toBe(false))
+    expect(history.hasMoreHistory.value).toBe(true)
+
+    // 模拟滚顶自动加载在途（请求未返回），回放预拉此时触发：必须合流等待而非误报失败
+    let release!: () => void
+    const gate = new Promise<void>(resolve => {
+      release = resolve
+    })
+    apiMocks.getConversationHistory.mockImplementationOnce(() =>
+      gate.then(() => historyResponse([event(3, '问题2'), event(4, '回答2')], false)),
+    )
+    const first = history.loadEarlierHistory()
+    const second = history.loadEarlierHistory()
+    release()
+    const [r1, r2] = await Promise.all([first, second])
+    expect(r1).toBe('loaded')
+    expect(r2).toBe('loaded')
+    // 1 次首屏 + 1 次翻页：并发调用合流后第二次没有额外请求
+    expect(apiMocks.getConversationHistory).toHaveBeenCalledTimes(2)
+  })
+
   it('向上翻页用最早序号作游标，并把更早事件拼到序列前面', async () => {
     apiMocks.getConversationHistory
       .mockResolvedValueOnce(historyResponse([event(5, '问题3'), event(6, '回答3')], true))

@@ -23,11 +23,13 @@ const createOptions = () => {
   const hasActiveRun = ref(false)
   const isLoadingHistory = ref(false)
   const hasMoreHistory = ref(false)
-  const loadEarlierHistory = vi.fn(async () => {
+  const conversationId = ref<string | null | undefined>('conv-1')
+  const loadEarlierHistory = vi.fn(async (): Promise<'loaded' | 'failed' | 'skipped'> => {
     hasMoreHistory.value = false
+    return 'loaded'
   })
-  const options: HostState = { messages, chatContainerRef, isNearBottom, isGenerating, hasActiveRun, isLoadingHistory, hasMoreHistory, loadEarlierHistory }
-  return { options, messages, chatContainerRef, isNearBottom, isGenerating, hasActiveRun, isLoadingHistory, hasMoreHistory, loadEarlierHistory }
+  const options: HostState = { messages, chatContainerRef, isNearBottom, isGenerating, hasActiveRun, isLoadingHistory, hasMoreHistory, conversationId, loadEarlierHistory }
+  return { options, messages, chatContainerRef, isNearBottom, isGenerating, hasActiveRun, isLoadingHistory, hasMoreHistory, conversationId, loadEarlierHistory }
 }
 
 const mountReplay = (options: HostState) => {
@@ -46,6 +48,8 @@ describe('useConversationReplay', () => {
   beforeEach(() => {
     vi.useFakeTimers()
     vi.mocked(ElMessage.info).mockClear()
+    vi.mocked(ElMessage.error).mockClear()
+    vi.mocked(ElMessage.warning).mockClear()
   })
   afterEach(() => {
     vi.useRealTimers()
@@ -88,6 +92,7 @@ describe('useConversationReplay', () => {
     state.loadEarlierHistory.mockImplementation(async () => {
       pages += 1
       if (pages >= 3) state.hasMoreHistory.value = false
+      return 'loaded'
     })
     state.options.hasMoreHistory.value = true
     const replay = mountReplay(state.options)
@@ -186,5 +191,67 @@ describe('useConversationReplay', () => {
     await nextTick()
     expect(replay.replayGroup.value).toBeNull()
     expect(replay.replayPlayer.status.value).toBe('idle')
+  })
+
+  it('预拉单页失败：立即中止回放并提示，不空转打满护栏页数', async () => {
+    const state = createOptions()
+    state.hasMoreHistory.value = true
+    // 失败不翻转 hasMoreHistory（与真实 loadEarlierHistory 的失败路径一致）
+    state.loadEarlierHistory.mockImplementation(async () => 'failed')
+    const replay = mountReplay(state.options)
+    replay.requestReplay()
+    replay.startReplay()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(state.loadEarlierHistory).toHaveBeenCalledTimes(1)
+    expect(ElMessage.error).toHaveBeenCalledWith('历史消息加载失败，回放已取消，请稍后重试')
+    expect(replay.replayGroup.value).toBeNull()
+    expect(replay.replayPlayer.status.value).toBe('idle')
+  })
+
+  it('预拉返回 skipped（会话切换/并发跳过）：静默取消，不误报网络失败', async () => {
+    const state = createOptions()
+    state.hasMoreHistory.value = true
+    state.loadEarlierHistory.mockImplementation(async () => 'skipped')
+    const replay = mountReplay(state.options)
+    replay.requestReplay()
+    replay.startReplay()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(ElMessage.error).not.toHaveBeenCalled()
+    expect(ElMessage.info).not.toHaveBeenCalled()
+    expect(replay.replayGroup.value).toBeNull()
+    expect(replay.replayPlayer.status.value).toBe('idle')
+  })
+
+  it('预拉期间用户发送新消息：开演前取消回放，不收集流式中间态', async () => {
+    const state = createOptions()
+    state.hasMoreHistory.value = true
+    // 模拟预拉过程中用户点了发送：loadEarlierHistory 执行时直播已在生成
+    state.loadEarlierHistory.mockImplementation(async () => {
+      state.isGenerating.value = true
+      state.hasMoreHistory.value = false
+      return 'loaded'
+    })
+    const replay = mountReplay(state.options)
+    replay.requestReplay()
+    replay.startReplay()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(ElMessage.info).toHaveBeenCalledWith('有新消息正在发送，回放已取消，请稍后重试')
+    expect(replay.replayGroup.value).toBeNull()
+    expect(replay.replayPlayer.status.value).toBe('idle')
+  })
+
+  it('会话切换丢弃 armed 待启动（本地新建会话不重挂载时 armed 会残留）', async () => {
+    const state = createOptions()
+    const replay = mountReplay(state.options)
+    replay.requestReplay()
+    expect(replay.replayArmed.value).toBe(true)
+    state.conversationId.value = 'conv-2'
+    await nextTick()
+    expect(replay.replayArmed.value).toBe(false)
+    // 回车不再触发回放
+    replay.startReplay()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(replay.replayPlayer.status.value).toBe('idle')
+    expect(replay.replayGroup.value).toBeNull()
   })
 })

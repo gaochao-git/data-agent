@@ -1216,6 +1216,7 @@ const {
   hasActiveRun,
   isLoadingHistory,
   hasMoreHistory,
+  conversationId: conversationIdRef,
   loadEarlierHistory,
 })
 
@@ -2704,6 +2705,8 @@ const handleKeyDown = (event: KeyboardEvent) => {
           </div>
         </div>
 
+        <!-- 回放 run-active 恒 active 直到 finished：若用 === 'playing'，暂停瞬间 run-active 跳 false，
+             播放中消息 is-current-run 变 false 导致工作过程区自动折叠（暂停正是想细看过程） -->
         <ConversationMessageList
           v-else
           :messages="replayGroup ? replayRevealedMessages : messages"
@@ -2714,7 +2717,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
           :on-save="handleSaveToDashboard"
           :resolve-tool-call="getRenderableMessageToolCall"
           :should-inline-render-result="shouldInlineRenderToolCall"
-          :run-active="replayGroup ? replayPlayer.status.value === 'playing' : (isGenerating || hasActiveRun)"
+          :run-active="replayGroup ? replayPlayer.status.value !== 'finished' : (isGenerating || hasActiveRun)"
           :live-generation-speed="liveGenerationSpeed"
           :live-elapsed-ms="liveElapsedMs"
           @select-tool="selectToolCall"
