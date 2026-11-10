@@ -161,6 +161,10 @@ class AgentScheduleRuntime:
         allowed = {item.strip() for item in raw.split(",") if item.strip()}
         return not allowed or (bool(self._executor_node_id) and self._executor_node_id in allowed)
 
+    async def is_executor_allowed(self) -> bool:
+        """供路由在创建触发实例前判断当前节点是否有执行资格。"""
+        return await self._is_executor_allowed()
+
     async def start(self) -> None:
         if not self.enabled:
             logger.info("智能体定时任务调度未启用（CHAT_DATA_SCHEDULE_ENABLED=false）")
@@ -482,6 +486,9 @@ class AgentScheduleRuntime:
         会话正忙等可重试错误会释放回 pending，由调度 tick 自动续派，此时
         返回 queued；全局暂停只冻结计划触发，不拦截用户主动的立即执行。
         """
+        if not await self._is_executor_allowed():
+            logger.warning("当前节点不在定时任务执行白名单，拒绝立即触发: node_id=%s", self._executor_node_id)
+            return {"status": SCHEDULE_RUN_STATUS_PENDING, "run_id": None, "reason": "not_executor"}
         async with get_session() as session:
             run = await self._dao.get_trigger_for_update(session, trigger_id)
             if run is None or run.trigger_status != SCHEDULE_RUN_STATUS_PENDING:

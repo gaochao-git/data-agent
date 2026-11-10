@@ -183,6 +183,12 @@ async def trigger_agent_schedule_now(job_id: str, request: Request) -> JSONRespo
     """立即执行：创建手动触发实例并同步尝试派发；会话正忙时转后台队列自动重试。"""
     try:
         current_user = _resolve_current_user(request)
+        if not await agent_schedule_runtime.is_executor_allowed():
+            return business_response(
+                msg="当前节点不执行智能体定时任务，请在 Active 机房操作",
+                code=ErrorCode.CHATDATA_SCHEDULE_TRIGGER_FAILED,
+                status="error",
+            )
         created = await agent_schedule_service.trigger_now(
             job_id=job_id,
             user_id=str(current_user.user_id),

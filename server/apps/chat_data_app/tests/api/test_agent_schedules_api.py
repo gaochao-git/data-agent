@@ -64,6 +64,9 @@ class FakeRuntime:
         self.run_id = run_id
         self.calls: list[str] = []
 
+    async def is_executor_allowed(self):
+        return True
+
     async def dispatch_trigger(self, trigger_id: str):
         self.calls.append(trigger_id)
         return {"run_id": self.run_id, "queued": self.run_id is None}
@@ -220,6 +223,23 @@ def test_trigger_agent_schedule_now_busy_queues(client, auth_headers, fake_servi
     monkeypatch.setattr(schedule_routes, "agent_schedule_runtime", FakeRuntime(run_id=None))
     response = client.post("/api/chatdata/agent-schedules/job_a/trigger-now", headers=auth_headers)
     assert "队列" in response.json()["msg"]
+
+
+def test_trigger_agent_schedule_now_rejected_on_standby(client, auth_headers, fake_service, monkeypatch):
+    runtime = FakeRuntime()
+
+    async def blocked() -> bool:
+        return False
+
+    monkeypatch.setattr(runtime, "is_executor_allowed", blocked)
+    monkeypatch.setattr(schedule_routes, "agent_schedule_runtime", runtime)
+
+    response = client.post("/api/chatdata/agent-schedules/job_a/trigger-now", headers=auth_headers)
+
+    assert response.status_code == 200
+    assert response.json()["code"] == ErrorCode.CHATDATA_SCHEDULE_TRIGGER_FAILED
+    assert "trigger_now" not in fake_service.calls
+    assert runtime.calls == []
 
 
 # ---------------------------------------------------------------------------
