@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import socket
+import time
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
@@ -184,6 +185,10 @@ def _is_stale_transport_error(exc: BaseException) -> bool:
     return False
 
 
+def _elapsed_ms(started: float) -> float:
+    return (time.perf_counter() - started) * 1000
+
+
 class RedisEventBus:
     """Publish and consume Run events using Redis Streams.
 
@@ -344,6 +349,9 @@ class RedisEventBus:
         payload: str,
         owner_token: str,
     ) -> str:
+        # XADD 经 Lua 原子执行；debug 日志带耗时与结果形态（新增/去重/属主失配/失败），
+        # 用于 Redis 稳定性排查（生产默认 INFO 不输出，开 DEBUG 得完整时间线）。
+        started = time.perf_counter()
         try:
             result = await self._run_ops(
                 lambda client: client.eval(
@@ -365,8 +373,33 @@ class RedisEventBus:
             )
         except ResponseError as exc:
             if "RUN_OWNER_MISMATCH" in str(exc):
+                logger.debug(
+                    "[redis-event-bus] XADD run_id=%s event_id=%s event_type=%s outcome=owner_mismatch elapsed_ms=%.1f",
+                    run_id,
+                    event_id,
+                    event_type,
+                    _elapsed_ms(started),
+                )
                 raise RedisRunOwnerMismatchError(run_id) from exc
+            logger.debug(
+                "[redis-event-bus] XADD run_id=%s event_id=%s event_type=%s outcome=failed error=%s elapsed_ms=%.1f",
+                run_id,
+                event_id,
+                event_type,
+                f"{type(exc).__name__}: {exc}",
+                _elapsed_ms(started),
+            )
             raise
+        logger.debug(
+            "[redis-event-bus] XADD run_id=%s event_id=%s event_type=%s stream_id=%s duplicate=%s payload_bytes=%d elapsed_ms=%.1f",
+            run_id,
+            event_id,
+            event_type,
+            result[0],
+            str(result[1]) == "duplicate",
+            len(payload.encode("utf-8")),
+            _elapsed_ms(started),
+        )
         return str(result[0])
 
     async def claim_run_owner(self, run_id: str, owner_token: str) -> None:
@@ -403,14 +436,38 @@ class RedisEventBus:
     async def read_run(
         self, run_id: str, cursor: str, *, block_ms: int = int(REDIS_READ_BLOCK_SECONDS * 1000), count: int = 100
     ) -> list[dict[str, str]]:
-        result = await self._run_read(
-            lambda client: client.xread(
-                {self.run_stream_key(run_id): cursor},
-                count=count,
-                block=block_ms,
+        # XREAD 是读档阻塞命令：elapsed_ms 应约等于 block_ms（健康时空转整周期返回空），
+        # 明显大于 block_ms+余量即网络停顿信号——这是稳定性排查的核心指标。
+        started = time.perf_counter()
+        try:
+            result = await self._run_read(
+                lambda client: client.xread(
+                    {self.run_stream_key(run_id): cursor},
+                    count=count,
+                    block=block_ms,
+                )
             )
+        except BaseException as exc:
+            logger.debug(
+                "[redis-event-bus] XREAD run_id=%s cursor=%s block_ms=%d outcome=failed error=%s elapsed_ms=%.1f",
+                run_id,
+                cursor,
+                block_ms,
+                f"{type(exc).__name__}: {exc}",
+                _elapsed_ms(started),
+            )
+            raise
+        events = [self._decode_event(stream_id, fields) for _key, rows in result for stream_id, fields in rows]
+        logger.debug(
+            "[redis-event-bus] XREAD run_id=%s cursor=%s block_ms=%d count_limit=%d returned=%d elapsed_ms=%.1f",
+            run_id,
+            cursor,
+            block_ms,
+            count,
+            len(events),
+            _elapsed_ms(started),
         )
-        return [self._decode_event(stream_id, fields) for _key, rows in result for stream_id, fields in rows]
+        return events
 
     async def run_stream_exists(self, run_id: str) -> bool:
         return bool(await self._run_ops(lambda client: client.exists(self.run_stream_key(run_id))))
