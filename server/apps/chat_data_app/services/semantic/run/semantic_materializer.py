@@ -377,6 +377,13 @@ async def _render_selected_configs(
     return entries, directory, cache_hits, failed_ids
 
 
+def _activate_semantic_cache(workspace_runtime: Any, datasource_id: str | None) -> None:
+    """固定本轮数据源组的语义缓存 ref；单模型物化不调用（不切 ref）。"""
+    activate = getattr(workspace_runtime, "activate_semantic_cache", None)
+    if activate is not None:
+        activate(datasource_id=str(datasource_id or ""))
+
+
 async def materialize_runtime_semantic_models(
     *,
     workspace_runtime: Any,
@@ -402,6 +409,10 @@ async def materialize_runtime_semantic_models(
     """
     normalized_ids = _normalize_config_ids(semantic_config_ids)
     if not normalized_ids:
+        # 切到「无启用模型」的数据源组时也必须换 ref，否则会话继续读上一个
+        # 数据源组的缓存（已停用模型会复活）。单模型物化 prune_stale=False 不切。
+        if prune_stale:
+            _activate_semantic_cache(workspace_runtime, datasource_id)
         return {"directory": [], "paths": {}, "configs": {}, "failed_ids": []}
 
     # 字段数据字典按数据源整体拉取一次，所有模型复用；
@@ -444,6 +455,8 @@ async def materialize_runtime_semantic_models(
             logger.warning("生成语义资产目录失败（模型快照不受影响）: %s", exc)
 
     written_at = time.perf_counter()
+    if prune_stale:
+        _activate_semantic_cache(workspace_runtime, datasource_id)
     await workspace_runtime.write_internal_text_files(entries)
     write_ms = (time.perf_counter() - written_at) * 1000
     if prune_stale:

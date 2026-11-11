@@ -16,6 +16,10 @@ class _FakeRuntime:
         self.entries = []
         self.files: set[str] = set()
         self.deleted: list[str] = []
+        self.activated: dict[str, str] | None = None
+
+    def activate_semantic_cache(self, *, datasource_id):
+        self.activated = {"datasource_id": datasource_id}
 
     async def write_internal_text_files(self, entries):
         self.entries.extend(entries)
@@ -728,6 +732,19 @@ def _catalog_content(runtime) -> str | None:
     )
 
 
+def test_prematerialize_activates_shared_semantic_cache_key(monkeypatch):
+    """全量物化写入共享缓存引用；配置变化生成不同 hash。"""
+    runtime = _FakeRuntime()
+    _prematerialize(runtime, [_config("sc_order")], monkeypatch)
+
+    assert runtime.activated is not None
+    assert runtime.activated["datasource_id"] == "ds_1"
+
+    previous = runtime.activated.copy()
+    _prematerialize(runtime, [_config("sc_order")], monkeypatch)
+    assert runtime.activated == previous
+
+
 def test_prematerialize_writes_semantic_catalog(monkeypatch):
     """全量物化生成语义资产目录：file/description/business_notes 字段，停用模型不出现。"""
     configs = [
@@ -817,3 +834,32 @@ def test_catalog_render_failure_does_not_block_models(monkeypatch):
     assert result["paths"] == {"sc_keep": "/mnt/user-data/workspace/semantic/订单模型__keep.yaml"}
     assert _catalog_content(runtime) is None
     assert runtime.deleted == [stale]
+
+
+def test_full_scope_empty_models_still_switches_semantic_cache_ref():
+    """切到无启用模型的数据源组也必须换 ref；单模型物化则不应切 ref。"""
+    full_scope = _FakeRuntime()
+    result = asyncio.run(
+        semantic_materializer.materialize_runtime_semantic_models(
+            workspace_runtime=full_scope,
+            datasource_id="ds_1",
+            user_id="user_1",
+            semantic_config_ids=[],
+            prune_stale=True,
+        )
+    )
+    assert result["directory"] == []
+    assert full_scope.entries == []
+    assert full_scope.activated == {"datasource_id": "ds_1"}
+
+    single_model = _FakeRuntime()
+    asyncio.run(
+        semantic_materializer.materialize_runtime_semantic_models(
+            workspace_runtime=single_model,
+            datasource_id="ds_1",
+            user_id="user_1",
+            semantic_config_ids=[],
+            prune_stale=False,
+        )
+    )
+    assert single_model.activated is None

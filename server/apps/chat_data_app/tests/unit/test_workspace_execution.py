@@ -919,10 +919,8 @@ def test_prepare_workspace_execution_session_uploads_snapshot_without_volumes(tm
     assert captured["timeout"] == timedelta(seconds=600)
     assert captured["connection_config"].kwargs["request_timeout"] == timedelta(seconds=7)
     assert uploaded["/mnt/user-data/workspace/report.txt"] == (b"report", 666)
-    assert uploaded["/mnt/user-data/workspace/semantic/sc_order.yaml"] == (
-        b"semantic_model: sc_order\n",
-        444,
-    )
+    # 共享工作区里的历史 semantic YAML 一律不上传沙箱；只有 ref 指向的缓存才上传。
+    assert "/mnt/user-data/workspace/semantic/sc_order.yaml" not in uploaded
     assert uploaded["/mnt/user-data/uploads/source.csv"] == (b"id\n1\n", 444)
     assert uploaded["/mnt/skills/demo-skill/SKILL.md"] == (b"# Demo", 444)
     permission_modes = {mode for _, mode in created_directories} | {mode for _, mode in uploaded.values()}
@@ -1164,6 +1162,30 @@ def test_path_mapping_mask_restores_virtual_paths():
     assert mapping.mask(f"pwd -> {_CLEAN_ROOT}/workspace/sub/x.py") == "pwd -> /mnt/user-data/workspace/sub/x.py"
     assert mapping.mask(f"ls {_CLEAN_ROOT}/outputs") == "ls /mnt/user-data/outputs"
     assert mapping.mask(f"ls {_CLEAN_ROOT}/uploads") == "ls /mnt/user-data/uploads"
+
+
+def test_path_mapping_semantic_prefix_respects_path_segment_boundary(tmp_path):
+    """语义缓存虚拟/物理前缀只能按路径段边界替换，不能吞掉同前缀的兄弟目录。"""
+    cache = tmp_path / "cache" / "semantic" / "u1" / "ds1"
+    mapping = WorkspacePathMapping(workspace_root=_CLEAN_ROOT, semantic_cache_dir=cache)
+
+    cmd = "cat /mnt/user-data/workspace/semantic/model.yaml"
+    translated = mapping.translate(cmd)
+    assert translated == f"cat {cache}/model.yaml"
+    assert mapping.mask(translated) == cmd
+    assert mapping.translate("ls /mnt/user-data/workspace/semantic") == f"ls {cache}"
+
+    for sibling in (
+        "/mnt/user-data/workspace/semantic-backup/a.txt",
+        "/mnt/user-data/workspace/semanticX/a.txt",
+        "/mnt/user-data/workspace/semantic.yaml",
+    ):
+        expected = "cat " + sibling.replace("/mnt/user-data", _CLEAN_ROOT)
+        assert mapping.translate(f"cat {sibling}") == expected
+
+    # 反向遮蔽同样不能把 ds1-backup 当成生效缓存目录
+    sibling_physical = f"{cache}-backup/a.txt"
+    assert mapping.mask(f"cat {sibling_physical}") == f"cat {sibling_physical}"
 
 
 def test_path_mapping_skill_translate_and_mask_roundtrip(tmp_path):

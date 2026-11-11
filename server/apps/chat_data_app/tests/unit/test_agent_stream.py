@@ -652,7 +652,14 @@ def test_generate_chat_data_stream_uses_runtime_snapshot_for_system_prompt(monke
     )
     monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.agent_run_support.prepare_conversation_workspace", fake_prepare_workspace)
-    monkeypatch.setattr("apps.chat_data_app.agent_run_support.build_runtime_skill_snapshot_async", fake_build_snapshot)
+
+    async def fake_ensure_runtime_skills(self):
+        return snapshot_dir
+
+    monkeypatch.setattr(
+        "apps.chat_data_app.agent_run_support.ConversationWorkspaceRuntime.ensure_runtime_skills_async",
+        fake_ensure_runtime_skills,
+    )
 
     def create_agent(_runtime_options, **kwargs):
         captured_agent_kwargs.update(kwargs)

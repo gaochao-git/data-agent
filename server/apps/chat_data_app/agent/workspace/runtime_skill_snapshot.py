@@ -1,12 +1,15 @@
-"""会话级 runtime-skills 快照：把当前用户在本会话「有权访问」的技能冻结为只读副本。
+"""用户级共享 runtime-skills 快照：把当前用户「有权访问」的技能冻结为只读副本。
 
-管理域（``CHAT_DATA_HOME/skills/...``）与运行域（``CHAT_DATA_CACHE_HOME/threads/<uid>/<yyyy-MM-DD>/<cid>/runtime-skills/``）
-解耦：模型在运行期只看到 ``/mnt/skills/<name>/...``，读取的是本会话快照，不直接访问管理域，
-也不跨用户 / 跨历史会话越权。
+管理域（代码包 / ``CHAT_DATA_HOME/skills/...``）与运行域
+（``CHAT_DATA_CACHE_HOME/runtime-skills/<uid>/``）解耦：模型在运行期只看到
+``/mnt/skills/<name>/...``，读取的是该用户的共享快照，不直接访问管理域，也不跨用户越权。
 
 刷新语义：每次运行前对管理域做指纹校验（各技能目录的文件路径/大小/mtime 摘要），
-指纹一致直接复用快照；管理域发生变化（技能新增/移除/内容变更）则在轮次开始前
-原子重建快照——单轮执行期间快照保持稳定，技能变更从用户的下一条消息起生效。
+指纹一致直接复用；技能新增/移除/内容变更则在轮次开始前原子重建。同一用户的多个
+会话共享一份目录，重建在进程内按目录加锁串行执行，提交阶段再由跨进程文件锁串行化
+（生产默认 4 个 Gunicorn worker），并以「临时目录填充 → 原子替换」收口，避免并发
+构建互相清扫或同时 rename 同一目录；等锁有超时，卡住的持锁者不会让其它 worker
+永久阻塞。技能变更从下一轮开始生效。
 早期无指纹的存量快照视为待升级，下一次运行自动重建对齐。
 
 可见技能集合 = 系统技能 + 当前用户自己的当前版本 + 他人 ``visibility_type=global`` 的当前版本。
@@ -16,17 +19,22 @@
 from __future__ import annotations
 
 import asyncio
+import errno
+import fcntl
 import hashlib
 import json
+import os
 import shutil
 import stat
+import threading
+import time
 from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 from utils.logger import get_logger
-from utils.storage_paths import conversation_cache_dir, conversation_cache_dir_from_workspace
+from utils.storage_paths import conversation_cache_dir, conversation_cache_dir_from_workspace, runtime_skills_cache_dir
 
 logger = get_logger(__name__)
 
@@ -210,55 +218,165 @@ def _remove_tree(path: Path) -> None:
         logger.debug("清理快照目录失败（忽略）: %s", path)
 
 
-def _sweep_stale_siblings(target: Path) -> None:
-    """清扫上次构建残留的 .building-* / .old-* 临时目录。"""
+# 同一用户共享一份快照目录后，多个会话可能同时构建。按 (事件循环, 目标目录)
+# 串行化重建，避免互相清扫临时目录、互相覆盖 target；跨进程由 _commit_snapshot
+# 的文件锁把提交阶段串行化，进程内锁保留作快速路径。
+_SNAPSHOT_LOCK_GUARD = threading.Lock()
+_SNAPSHOT_LOCKS: dict[tuple[int, str], asyncio.Lock] = {}
+# 只有超过此时长的临时目录才可能是残留；刚创建的属于别的会话正在构建。
+SNAPSHOT_TMP_TTL_SECONDS = 3600.0
+# 提交锁的最长等待：持锁进程若卡在共享盘 rename，其它 worker 不能无限阻塞。
+SNAPSHOT_LOCK_TIMEOUT_SECONDS = 30.0
+SNAPSHOT_LOCK_POLL_SECONDS = 0.05
+
+
+class SnapshotLockTimeoutError(RuntimeError):
+    """等跨进程提交锁超时，且没有可复用的现有快照。"""
+
+
+def _snapshot_lock_for(target: Path) -> asyncio.Lock:
+    key = (id(asyncio.get_running_loop()), str(target))
+    with _SNAPSHOT_LOCK_GUARD:
+        lock = _SNAPSHOT_LOCKS.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            _SNAPSHOT_LOCKS[key] = lock
+        return lock
+
+
+def _snapshot_matches(target: Path, fingerprints: dict[str, str]) -> bool:
+    """目标目录已就绪且指纹一致（含其它进程刚刚构建完成的情形）。"""
+    return is_runtime_skill_snapshot_ready(target) and _read_snapshot_fingerprints(target) == fingerprints
+
+
+def _snapshot_lock_path(target: Path) -> Path:
+    """跨进程锁文件：普通隐藏文件，放在共享快照根的父目录。
+
+    必须是普通文件且永不删除：GC 只递归删目录，不会碰它；删掉会换 inode，
+    使新旧进程持有不同的锁对象，互斥静默失效。用路径摘要命名，避免用户 ID
+    里的特殊字符进入文件名。
+    """
+    digest = hashlib.sha256(str(target).encode("utf-8")).hexdigest()[:32]
+    return target.parent / f".{digest}.lock"
+
+
+def _acquire_snapshot_lock(fd: int, *, timeout: float | None = None) -> bool:
+    """非阻塞轮询获取提交锁，超时返回 False（交给调用方决定复用还是失败）。
+
+    裸 ``LOCK_EX`` 会让持锁进程卡住时其它 worker 在 ``asyncio.to_thread`` 里永久
+    阻塞并长期占用线程池，因此改为带 deadline 的 ``LOCK_NB`` 轮询。只重试「锁被
+    别人持有」这类 errno，其它 errno 直接抛出，避免把磁盘/权限故障误判成锁竞争。
+    """
+    limit = SNAPSHOT_LOCK_TIMEOUT_SECONDS if timeout is None else timeout
+    deadline = time.monotonic() + limit
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except OSError as exc:
+            if exc.errno not in (errno.EAGAIN, errno.EWOULDBLOCK, errno.EACCES):
+                raise
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(SNAPSHOT_LOCK_POLL_SECONDS)
+
+
+def _commit_snapshot(
+    target: Path,
+    tmp: Path,
+    fingerprints: dict[str, str],
+    was_ready: bool,
+) -> tuple[bool, Path | None]:
+    """持跨进程文件锁完成「指纹复核 → 原子替换」，返回 (是否复用, 待清理旧目录)。
+
+    锁的获取与释放都在这个同步函数内完成，由调用方用一次 ``asyncio.to_thread``
+    执行：等锁有上界，持锁者也不必再申请线程，避免死锁。临界区只有 stat / rename；
+    递归删除旧目录留给调用方在锁外做，缩短持锁时间。
+    """
+    lock_path = _snapshot_lock_path(target)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    acquired = False
+    try:
+        acquired = _acquire_snapshot_lock(fd)
+        if not acquired:
+            # 不把本次可能已过期的 tmp 覆盖上去：有可用快照就降级复用，不阻断本轮 run。
+            if is_runtime_skill_snapshot_ready(target):
+                logger.warning("技能快照提交等待跨进程锁超时，本轮复用现有快照: %s", target)
+                return True, None
+            raise SnapshotLockTimeoutError(f"技能快照提交等待跨进程锁超时且无可用快照: {lock_path}")
+        if _snapshot_matches(target, fingerprints):
+            return True, None
+        if not was_ready and is_runtime_skill_snapshot_ready(target):
+            # 填充期间别人已建好快照：绝不覆盖正在被读的目录，本轮复用对方视图。
+            # 下一轮 was_ready=True 且指纹不匹配会自动重建收敛（见 _build_snapshot_locked_async）。
+            if _read_snapshot_fingerprints(target) is None:
+                logger.info("填充期间出现无指纹存量快照，本轮兼容复用: %s", target)
+            else:
+                logger.warning("填充期间并发请求已提交不同指纹，本轮复用其视图、下轮重建: %s", target)
+            return True, None
+        old_target: Path | None = None
+        if target.exists():
+            old_target = target.with_name(f"{target.name}.old-{uuid4().hex}")
+            target.rename(old_target)
+        tmp.rename(target)
+        return False, old_target
+    finally:
+        try:
+            if acquired:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+
+def _sweep_stale_siblings(target: Path, *, now: float | None = None) -> None:
+    """清扫超过 TTL 的 .building-* / .old-* 临时目录。
+
+    快照按用户共享后，同一目录下可能有多个会话在构建；新创建的临时目录
+    属于别的会话，绝不能按前缀一律删除（会让对方复制中途 FileNotFoundError）。
+    """
     parent = target.parent
     if not parent.is_dir():
         return
+    cutoff = (now if now is not None else time.time()) - SNAPSHOT_TMP_TTL_SECONDS
+    prefixes = (f"{target.name}.building-", f"{target.name}.old-")
     for item in parent.iterdir():
-        if item.name.startswith(f"{target.name}.building-") or item.name.startswith(f"{target.name}.old-"):
-            _remove_tree(item)
+        if not item.name.startswith(prefixes):
+            continue
+        try:
+            if item.stat().st_mtime >= cutoff:
+                continue
+        except OSError:
+            continue
+        _remove_tree(item)
 
 
-async def build_runtime_skill_snapshot_async(
+async def _build_snapshot_locked_async(
     user_id: str,
     conversation_id: str,
     *,
-    target_dir: Path | None = None,
+    target: Path,
+    sources: list[tuple[str, Path]],
+    current_fingerprints: dict[str, str],
+    was_ready: bool,
 ) -> Path:
-    """按管理域当前状态构建（指纹一致时复用）本会话的 runtime-skills 快照，返回快照目录。
+    """持进程内锁执行：填充临时目录 → 持跨进程锁复核指纹并原子替换共享目录。
 
-    每次调用先取技能源并计算指纹：与快照标记中的指纹一致则直接复用；不一致
-    （技能新增/移除/内容变更）或早期无指纹的存量快照则原子重建。重建发生在
-    轮次开始前，单轮执行期间快照保持稳定。
-    ``target_dir`` 显式指定快照目录（从工作区根推导，见
-    ``ConversationWorkspaceRuntime.runtime_skills_dir``），保证与实际工作区同层；
-    缺省按 ``threads/<uid>/<yyyy-MM-DD>/<cid>`` 当前日期拼装，仅适用于会话刚创建的预热场景。
-    注意：``ensure_conversation_workspace`` 会预先建出空的 runtime-skills 目录，
-    空目录视为未构建，必须填充；无可见技能时通过带指纹的隐藏完成标记冻结空快照。
+    ``was_ready`` 必须在取技能源之前采样：并发请求可能在本请求取源阶段就建好
+    快照，用锁内重新采样的值会把它误判成「本就存在的旧快照」而覆盖掉。
     """
-    target = Path(target_dir) if target_dir is not None else runtime_skills_snapshot_dir(user_id, conversation_id)
-    was_ready = is_runtime_skill_snapshot_ready(target)
-
-    from ..contracts.skill_source import get_skill_snapshot_source
-
-    source = get_skill_snapshot_source()
-    sources = await source.list_runtime_skill_sources_async(user_id) if source is not None else []
-    current_fingerprints = compute_skill_fingerprints(sources)
-
+    stored_fingerprints = _read_snapshot_fingerprints(target) if was_ready else None
+    if was_ready and stored_fingerprints == current_fingerprints:
+        return target
     if was_ready:
-        stored_fingerprints = _read_snapshot_fingerprints(target)
-        if stored_fingerprints == current_fingerprints:
-            return target
         logger.info(
-            "会话技能快照重建: user=%s conversation=%s 原因=%s",
+            "技能快照重建: user=%s conversation=%s 原因=%s",
             user_id,
             conversation_id,
             _describe_fingerprint_changes(stored_fingerprints, current_fingerprints),
         )
 
     await asyncio.to_thread(_sweep_stale_siblings, target)
-
     tmp = target.with_name(f"{target.name}.building-{uuid4().hex}")
     if tmp.exists():
         await asyncio.to_thread(_remove_tree, tmp)
@@ -269,27 +387,63 @@ async def build_runtime_skill_snapshot_async(
         def _populate() -> None:
             for name, source_dir in sources:
                 _copy_skill_dir(source_dir, tmp / name)
-            # 即使技能集合为空，也必须明确冻结本会话的运行时视图（标记带指纹）。
+            # 即使技能集合为空，也必须明确冻结本轮运行时视图（标记带指纹）。
             _write_ready_marker(tmp, current_fingerprints)
 
         await asyncio.to_thread(_populate)
 
-        if not was_ready and is_runtime_skill_snapshot_ready(target):
-            # 填充期间并发请求已先完成构建；快照会话内不变，丢弃本次临时目录并复用
-            _remove_tree(tmp)
-            return target
-        if target.exists():
-            # 重建路径：移除旧快照（空目录或指纹过期的旧版本）后就位
-            _remove_tree(target)
-        tmp.rename(target)
+        # 提交阶段（指纹复核 + 两次 rename）整体交给一个同步线程并持跨进程锁：
+        # 其它 worker 同时重建时，第二个会在锁内复用已有快照（同指纹或并发
+        # 不同指纹），不会出现「旧目录已被移走 / 目标已非空」的 rename 冲突；
+        # 等锁超时且已有可用快照时也走同一条复用降级路径，本轮不中断。
+        reused, old_target = await asyncio.to_thread(_commit_snapshot, target, tmp, current_fingerprints, was_ready)
+        if reused:
+            await asyncio.to_thread(_remove_tree, tmp)
+        if old_target is not None:
+            # 旧目录仍可被已打开 fd 的读侧继续访问，锁外再递归清理。
+            await asyncio.to_thread(_remove_tree, old_target)
     except BaseException:
         _remove_tree(tmp)
         raise
     return target
 
 
+async def build_runtime_skill_snapshot_async(
+    user_id: str,
+    conversation_id: str,
+    *,
+    target_dir: Path | None = None,
+) -> Path:
+    """按管理域当前状态构建（指纹一致时复用）该用户的 runtime-skills 快照。
+
+    每次调用先取技能源并计算指纹：与快照标记一致则直接复用；不一致（技能
+    新增/移除/内容变更）或早期无指纹的存量快照则原子重建。快照按用户共享
+    （``runtime-skills/<uid>``），重建在锁内串行执行，单轮执行期间保持稳定。
+    ``target_dir`` 显式指定目录仅保留给兼容/惰性构建路径。
+    无可见技能时通过带指纹的隐藏完成标记冻结空快照。
+    """
+    from ..contracts.skill_source import get_skill_snapshot_source
+
+    target = Path(target_dir) if target_dir is not None else runtime_skills_cache_dir(user_id)
+    was_ready = is_runtime_skill_snapshot_ready(target)
+    source = get_skill_snapshot_source()
+    sources = await source.list_runtime_skill_sources_async(user_id) if source is not None else []
+    current_fingerprints = compute_skill_fingerprints(sources)
+
+    async with _snapshot_lock_for(target):
+        return await _build_snapshot_locked_async(
+            user_id,
+            conversation_id,
+            target=target,
+            sources=list(sources),
+            current_fingerprints=current_fingerprints,
+            was_ready=was_ready,
+        )
+
+
 __all__ = [
     "SNAPSHOT_READY_MARKER",
+    "SnapshotLockTimeoutError",
     "runtime_skills_snapshot_dir",
     "runtime_skills_snapshot_dir_from_workspace",
     "list_snapshot_skill_names",

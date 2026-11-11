@@ -19,6 +19,13 @@ os.environ.setdefault("FXCJG_DB_PASSWORD", "test")
 
 @pytest.fixture(autouse=True)
 def _isolate_chat_data_cache(monkeypatch, tmp_path):
-    """每个用例使用独立的本地派生缓存根，避免跨用例共享 runtime-skills。"""
-    monkeypatch.setattr("utils.storage_paths.CACHE_THREADS_DIR", tmp_path / "chat_data_cache" / "threads")
-    monkeypatch.setattr("utils.storage_paths.CACHE_CONTEXT_DIR", tmp_path / "chat_data_cache" / "context")
+    """每个用例使用独立的本地派生缓存根，避免跨用例共享 runtime-skills。
+
+    ref 是语义缓存唯一真值源，占位目录也要隔离，否则「无 ref」用例会落到真实缓存根。
+    """
+    cache_root = tmp_path / "chat_data_cache"
+    monkeypatch.setattr("utils.storage_paths.CACHE_THREADS_DIR", cache_root / "threads")
+    monkeypatch.setattr("utils.storage_paths.CACHE_SEMANTIC_DIR", cache_root / "semantic")
+    monkeypatch.setattr("utils.storage_paths.CACHE_SEMANTIC_REF_DIR", cache_root / "semantic" / ".refs")
+    monkeypatch.setattr("utils.storage_paths.NO_SEMANTIC_CACHE_DIR", cache_root / "semantic" / ".no-ref")
+    monkeypatch.setattr("utils.storage_paths.CACHE_RUNTIME_SKILLS_DIR", cache_root / "runtime-skills")

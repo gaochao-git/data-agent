@@ -258,7 +258,8 @@ async def _initialize_sandbox_filesystem(
             f"{sandbox_outputs_dir()}/{QUERY_RESULT_DIR_NAME}",
             sandbox_uploads_dir(),
         ),
-        exclude_local_root=legacy_semantic_root if semantic_root.is_dir() else None,
+        # 历史会话的共享 semantic YAML 一律不上传沙箱；缓存是否就绪都不改这条边界。
+        exclude_local_root=legacy_semantic_root,
     )
     semantic_count = semantic_bytes = 0
     if semantic_root.is_dir():

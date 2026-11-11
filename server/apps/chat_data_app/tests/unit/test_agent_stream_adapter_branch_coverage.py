@@ -315,12 +315,16 @@ def _patch_stream_preamble(monkeypatch, semantic_context, *, workspace_root, run
         "resolve_agent_runtime_options",
         lambda **_kwargs: SimpleNamespace(workspace_backend="local"),
     )
-    monkeypatch.setattr(agent_run_support, "build_runtime_skill_snapshot_async", fake_snapshot)
     monkeypatch.setattr(agent_run_support, "list_snapshot_skill_metadata", lambda _dir: [])
+
+    class _FakeRuntime(SimpleNamespace):
+        async def ensure_runtime_skills_async(self):
+            return await fake_snapshot()
+
     monkeypatch.setattr(
         agent_run_support,
         "ConversationWorkspaceRuntime",
-        runtime_cls or SimpleNamespace,
+        runtime_cls or _FakeRuntime,
     )
 
 

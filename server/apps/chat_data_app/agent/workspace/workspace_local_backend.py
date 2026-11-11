@@ -522,9 +522,10 @@ def _list_local_workspace_dir(
         max_depth=max_depth,
     )
     if not is_skill and target == (root / "workspace").resolve():
+        # 共享工作区里的历史 semantic 目录一律不展示；只有当前缓存存在时才注入虚拟目录。
+        entries = [entry for entry in entries if entry.get("path") != "/mnt/user-data/workspace/semantic/"]
         semantic_root = conversation_semantic_dir_from_workspace(str(root))
         if semantic_root.is_dir():
-            entries = [entry for entry in entries if entry.get("path") != "/mnt/user-data/workspace/semantic/"]
             entries.append(
                 {
                     "type": "dir",
@@ -710,12 +711,11 @@ def _append_semantic_search_matches(
 
 
 def _is_stale_legacy_semantic(runtime: ConversationWorkspaceRuntime, target: Path, item: Path) -> bool:
-    """缓存已存在时跳过共享工作区内的旧 semantic 文件。"""
+    """无条件跳过共享工作区内的历史 semantic 文件（是否命中当前缓存都不展示）。"""
     if target != (Path(runtime.workspace_root).resolve() / "workspace"):
         return False
-    semantic_cache = conversation_semantic_dir_from_workspace(runtime.workspace_root)
     legacy_semantic = target / "semantic"
-    return semantic_cache.is_dir() and (item == legacy_semantic or legacy_semantic in item.parents)
+    return item == legacy_semantic or legacy_semantic in item.parents
 
 
 def _collect_local_search_matches(
@@ -958,12 +958,8 @@ def _grep_local_workspace_text(
     target, visible_root, is_skill = _resolve_grep_target(runtime, path)
     if target.is_symlink() or not target.exists():
         raise FileNotFoundError(f"路径不存在: {path}")
-    semantic_cache = conversation_semantic_dir_from_workspace(runtime.workspace_root)
-    exclude_globs = (
-        ("!semantic/**",)
-        if semantic_cache.is_dir() and target == (Path(runtime.workspace_root).resolve() / "workspace")
-        else ()
-    )
+    # 历史 semantic 目录不参与根目录 grep，缓存是否就绪都不改这条边界。
+    exclude_globs = ("!semantic/**",) if target == (Path(runtime.workspace_root).resolve() / "workspace") else ()
     args = build_rg_args(
         str(target),
         patterns,
@@ -1282,14 +1278,27 @@ class LocalWorkspaceBackend:
         *,
         command: str,
     ) -> None:
+        # 语义模型快照是系统只读派生数据。bash 无法可靠区分读/写意图：
+        # `cd semantic && echo x > a.yaml`、相对路径重定向、脚本间接写都不会暴露
+        # 绝对路径写目标，单纯靠命令文本白名单必然可绕过。因此命令与 cwd 一律
+        # 不向 bash_run 开放，读取改走 file_read / file_grep（后端已把缓存投影进
+        # 逻辑工作区）。sandbox 后端由只读挂载保证，但校验口径保持一致。
         for token in _absolute_command_path_tokens(command):
-            try:
-                if token.startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
+            if token.startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
+                try:
                     await runtime.resolve_readonly_skill_path_async(token)
-                else:
-                    resolve_workspace_path(runtime.workspace_root, token)
+                except ValueError as exc:
+                    raise ValueError("bash_run 只允许访问当前会话目录或当前用户有权访问的技能路径: " + token) from exc
+                continue
+            try:
+                resolved = resolve_workspace_path(runtime.workspace_root, token)
             except ValueError as exc:
                 raise ValueError("bash_run 只允许访问当前会话目录或当前用户有权访问的技能路径: " + token) from exc
+            if is_managed_semantic_model_workspace_path(runtime.workspace_root, resolved):
+                raise ValueError(
+                    "/mnt/user-data/workspace/semantic/ 是系统只读语义模型快照，"
+                    "bash_run 不允许访问；请用 file_read / file_grep 读取"
+                )
 
     async def run_bash(
         self,
@@ -1307,6 +1316,12 @@ class LocalWorkspaceBackend:
             visible_cwd = raw_cwd
         else:
             local_cwd = resolve_workspace_path(runtime.workspace_root, raw_cwd)
+            # cwd 本身指向语义快照时，命令里的相对路径写入会直接落进生效缓存，
+            # 与 validate_bash_paths 的只读口径必须一致。
+            if is_managed_semantic_model_workspace_path(runtime.workspace_root, local_cwd):
+                raise ValueError(
+                    "bash_run 不允许将 cwd 设置为系统只读语义模型快照目录；请用 file_read / file_grep 读取"
+                )
             visible_cwd = to_visible_path(runtime.workspace_root, local_cwd)
         path_mapping = WorkspacePathMapping(
             workspace_root=runtime.workspace_root,

@@ -652,6 +652,35 @@ async def test_run_bash_timeout_and_skill_cwd(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_validate_bash_paths_rejects_semantic_snapshot(tmp_path):
+    """语义缓存是生效的只读快照：bash 无法区分读/写意图，一律拒绝。"""
+    runtime, _root = _runtime(tmp_path)
+
+    for command in (
+        "echo x > /mnt/user-data/workspace/semantic/model.yaml",
+        "cat /mnt/user-data/workspace/semantic/model.yaml",
+        "cd /mnt/user-data/workspace/semantic && echo x > model.yaml",
+    ):
+        with pytest.raises(ValueError, match="只读语义模型快照"):
+            await runtime.validate_bash_paths(command=command)
+
+    # 仅前缀相似的普通目录不受影响
+    await runtime.validate_bash_paths(command="cat /mnt/user-data/workspace/semantic-backup/a.txt")
+
+
+@pytest.mark.asyncio
+async def test_run_bash_rejects_semantic_snapshot_cwd(tmp_path):
+    """cwd 指向 semantic 时相对路径写入会落进缓存，必须在执行前拒绝。"""
+    runtime, _root = _runtime(tmp_path)
+    with pytest.raises(ValueError, match="只读语义模型快照"):
+        await runtime.run_bash(
+            command="echo x > model.yaml",
+            cwd="/mnt/user-data/workspace/semantic",
+            timeout_seconds=30,
+        )
+
+
+@pytest.mark.asyncio
 async def test_run_officecli_requires_binary_and_rejects_skill_cwd(tmp_path, monkeypatch):
     runtime, _root = _runtime_with_skill(tmp_path)
     monkeypatch.setattr(lb.shutil, "which", lambda _name: None)

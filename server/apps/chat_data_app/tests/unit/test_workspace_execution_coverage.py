@@ -1905,6 +1905,7 @@ def test_sandbox_write_internal_text_files(tmp_path, monkeypatch):
     assert results[0]["bytes"] == 4
     target = "/mnt/user-data/workspace/semantic/model.yaml"
     assert sandbox.remote_files[target] == b"a: 1"
+    assert not (root / "workspace" / "semantic" / "model.yaml").exists()
     no_writer_sandbox = FakeSandbox()
     no_writer_sandbox.files.write_files = None
     no_writer = _make_session(no_writer_sandbox, root)

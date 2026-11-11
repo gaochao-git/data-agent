@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
+import uuid
 from datetime import date, datetime
 from pathlib import Path
 from urllib.parse import quote
@@ -41,7 +43,12 @@ CHAT_DATA_CACHE_HOME = str(_resolve_chat_data_cache_home())
 
 THREADS_DIR = Path(CHAT_DATA_HOME) / "threads"
 CACHE_THREADS_DIR = Path(CHAT_DATA_CACHE_HOME) / "threads"
-CACHE_CONTEXT_DIR = Path(CHAT_DATA_CACHE_HOME) / "context"
+CACHE_RUNTIME_SKILLS_DIR = Path(CHAT_DATA_CACHE_HOME) / "runtime-skills"
+CACHE_SEMANTIC_DIR = Path(CHAT_DATA_CACHE_HOME) / "semantic"
+CACHE_SEMANTIC_REF_DIR = CACHE_SEMANTIC_DIR / ".refs"
+# 会话尚未绑定数据源组时没有语义缓存；ref 是唯一真值，不再回退任何旧布局。
+# 占位目录只用于给出稳定且不存在的路径，调用方统一用 is_dir() 判断。
+NO_SEMANTIC_CACHE_DIR = CACHE_SEMANTIC_DIR / ".no-ref"
 
 _CREATED_DATE_PATTERN = re.compile(r"^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$")
 
@@ -143,22 +150,92 @@ def conversation_cache_dir_from_workspace(workspace_root: str) -> Path:
     return (CACHE_THREADS_DIR / relative).resolve()
 
 
-def conversation_semantic_dir(user_id: str, conversation_id: str, *, created_date: str | None = None) -> Path:
-    """会话语义模型缓存目录（派生数据，不进入共享会话目录）。"""
-    return (
-        CACHE_CONTEXT_DIR
-        / "semantic"
-        / normalize_user_id(user_id or "system")
-        / normalize_created_date(created_date)
-        / normalize_conversation_id(conversation_id)
-    )
+def _workspace_user_id(workspace_root: str) -> str:
+    relative = _cache_relative_from_workspace(workspace_root)
+    return relative.parts[0] if relative.parts else "system"
 
 
 def conversation_semantic_dir_from_workspace(workspace_root: str) -> Path:
-    """从共享工作区根定位同会话的语义模型缓存目录。"""
+    """定位会话当前语义缓存；会话 ref 是唯一真值。
+
+    无 ref 表示本会话尚未绑定数据源组，返回恒不存在的占位目录：调用方用
+    ``is_dir()`` 判断即可，不再回退共享工作区或旧会话级缓存里的历史 YAML。
+    """
+    ref = read_semantic_cache_ref(workspace_root)
+    if ref is None:
+        return (NO_SEMANTIC_CACHE_DIR / _cache_relative_from_workspace(workspace_root)).resolve()
+    user_id = str(ref.get("user_id") or "").strip() or _workspace_user_id(workspace_root)
+    return semantic_cache_dir(user_id, ref["datasource_id"]).resolve()
+
+
+def runtime_skills_cache_dir(user_id: str) -> Path:
+    """每个用户只保留一份最新的 runtime-skills 缓存目录。"""
+    return CACHE_RUNTIME_SKILLS_DIR / normalize_user_id(user_id or "system")
+
+
+def semantic_cache_dir(user_id: str, datasource_id: str) -> Path:
+    """每个用户在每个数据源组下保留一份最新语义缓存目录。"""
+    user_segment = normalize_user_id(user_id or "system")
+    datasource_segment = _normalize_segment(datasource_id, replace_invalid=True)
+    return CACHE_SEMANTIC_DIR / user_segment / datasource_segment
+
+
+def _cache_relative_from_workspace(workspace_root: str) -> Path:
     cached_thread = conversation_cache_dir_from_workspace(workspace_root)
-    relative = cached_thread.relative_to(CACHE_THREADS_DIR)
-    return (CACHE_CONTEXT_DIR / "semantic" / relative).resolve()
+    # 上游已对拼装结果做 resolve；若缓存根经符号链接挂载，两边必须同时 resolve，
+    # 否则 relative_to 会抛 ValueError 并让整条 ref / 路径映射链路 500。
+    return cached_thread.relative_to(CACHE_THREADS_DIR.resolve())
+
+
+def conversation_semantic_ref_path(workspace_root: str) -> Path:
+    """会话语义缓存引用文件路径。"""
+    relative = _cache_relative_from_workspace(workspace_root)
+    return (CACHE_SEMANTIC_REF_DIR / relative).with_suffix(".json")
+
+
+def _read_semantic_ref_file(path: Path) -> dict[str, str] | None:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    datasource_id = str(data.get("datasource_id") or "").strip()
+    if not datasource_id:
+        return None
+    values = {"datasource_id": datasource_id}
+    user_id = str(data.get("user_id") or "").strip()
+    if user_id:
+        values["user_id"] = user_id
+    return values
+
+
+def read_semantic_cache_ref(workspace_root: str) -> dict[str, str] | None:
+    """读取会话当前语义缓存引用；只有 ``semantic/.refs`` 一个真值源。"""
+    return _read_semantic_ref_file(conversation_semantic_ref_path(workspace_root))
+
+
+def write_semantic_cache_ref(
+    workspace_root: str,
+    *,
+    user_id: str,
+    datasource_id: str,
+) -> Path:
+    """原子写入会话语义缓存引用，供同会话后续读取。"""
+    path = conversation_semantic_ref_path(workspace_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(
+        {"user_id": user_id, "datasource_id": datasource_id},
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_text(payload, encoding="utf-8")
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return path
 
 
 def assert_workspace_root(
@@ -186,15 +263,22 @@ __all__ = [
     "CHAT_DATA_CACHE_HOME",
     "CHAT_DATA_HOME",
     "assert_workspace_root",
-    "CACHE_CONTEXT_DIR",
+    "CACHE_RUNTIME_SKILLS_DIR",
+    "CACHE_SEMANTIC_DIR",
+    "CACHE_SEMANTIC_REF_DIR",
     "CACHE_THREADS_DIR",
+    "NO_SEMANTIC_CACHE_DIR",
     "THREADS_DIR",
     "conversation_cache_dir",
     "conversation_cache_dir_from_workspace",
-    "conversation_semantic_dir",
     "conversation_semantic_dir_from_workspace",
+    "conversation_semantic_ref_path",
+    "read_semantic_cache_ref",
+    "semantic_cache_dir",
+    "write_semantic_cache_ref",
     "conversation_thread_dir",
     "normalize_conversation_id",
+    "runtime_skills_cache_dir",
     "normalize_created_date",
     "normalize_user_id",
 ]

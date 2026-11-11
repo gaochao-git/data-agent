@@ -59,8 +59,13 @@ from apps.chat_data_app.services.agent_run.conversation_workspace import (
     workspace_runtime_from_state,
 )
 from apps.chat_data_app.services.semantic.run import semantic_query_service
+from utils import storage_paths as storage_paths_module
 from utils import tool_result_store
-from utils.storage_paths import conversation_semantic_dir_from_workspace
+from utils.storage_paths import (
+    conversation_semantic_dir_from_workspace,
+    conversation_semantic_ref_path,
+    semantic_cache_dir,
+)
 
 sql_tool_module = importlib.import_module("apps.chat_data_app.agent.tools.data_analyzing")
 present_artifacts_tool_module = importlib.import_module("apps.chat_data_app.agent.tools.present_artifacts")
@@ -235,8 +240,8 @@ def test_ensure_conversation_workspace_creates_expected_dirs():
     assert Path(paths["outputs"]).exists()
     assert Path(paths["uploads"]).exists()
     assert (Path(paths["outputs"]) / ".tool-offload").exists()
-    # 运行域技能快照落在本地缓存根，不进入共享会话目录，也不进入 paths 字典
-    assert runtime_skills_snapshot_dir_from_workspace(paths["root"]).is_dir()
+    # 技能快照按用户/技能集合哈希共享，不在会话目录预建，也不进入 paths 字典
+    assert not runtime_skills_snapshot_dir_from_workspace(paths["root"]).exists()
     assert not (Path(paths["root"]).parent / "runtime-skills").exists()
     assert "runtime_skills" not in paths
 
@@ -348,8 +353,113 @@ async def test_internal_semantic_model_write_overwrites_only_selected_file(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_legacy_shared_semantic_is_readable_but_new_writes_go_cache(tmp_path, monkeypatch):
-    """迁移前旧 semantic 仍可读；新物化只写缓存，不回写共享目录。"""
+async def test_semantic_cache_shared_by_datasource_and_config(tmp_path, monkeypatch):
+    """同一数据源/权限/配置的语义缓存跨会话共享。"""
+    monkeypatch.setattr(workspace_runtime_module, "CHAT_DATA_HOME", str(tmp_path))
+    monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "threads")
+    first_paths = ensure_conversation_workspace("conv_semantic_shared_a", "user_a")
+    second_paths = ensure_conversation_workspace("conv_semantic_shared_b", "user_a")
+    first = ConversationWorkspaceRuntime(workspace_root=first_paths["root"], user_id="user_a")
+    second = ConversationWorkspaceRuntime(workspace_root=second_paths["root"], user_id="user_a")
+
+    expected = first.activate_semantic_cache(datasource_id="ds_a")
+    second.activate_semantic_cache(datasource_id="ds_a")
+    await first.write_internal_text_files([("/mnt/user-data/workspace/semantic/shared.yaml", "shared: true")])
+
+    assert conversation_semantic_dir_from_workspace(first_paths["root"]) == expected
+    assert conversation_semantic_dir_from_workspace(second_paths["root"]) == expected
+    assert (expected / "shared.yaml").read_text(encoding="utf-8") == "shared: true"
+    assert (
+        await second.read_text_file(
+            file_path="/mnt/user-data/workspace/semantic/shared.yaml", offset=0, limit=10, max_chars=100
+        )
+    )["lines"] == ["shared: true"]
+
+
+def test_workspace_path_mapping_translates_semantic_cache():
+    """bash 通道的 semantic 虚拟路径必须映射到本地缓存，而不是共享工作区。"""
+    workspace_root = "/tmp/chat_cache_map/threads/u1/2026-11-11/c1/user-data"
+    runtime = ConversationWorkspaceRuntime(workspace_root=workspace_root, user_id="u1")
+    runtime.activate_semantic_cache(datasource_id="ds_a")
+    mapping = workspace_runtime_module.WorkspacePathMapping(workspace_root=workspace_root)
+
+    translated = mapping.translate("cat /mnt/user-data/workspace/semantic/a.yaml")
+    expected = str(conversation_semantic_dir_from_workspace(workspace_root) / "a.yaml")
+
+    assert expected in translated
+    assert mapping.mask(translated) == "cat /mnt/user-data/workspace/semantic/a.yaml"
+
+
+def test_cache_relative_from_workspace_handles_symlinked_cache_root(tmp_path, monkeypatch):
+    """缓存根经符号链接配置时，反推相对路径不能抛 ValueError（会让 bash 校验 500）。"""
+    real_root = tmp_path / "real-cache"
+    real_root.mkdir()
+    linked_root = tmp_path / "cache-link"
+    try:
+        linked_root.symlink_to(real_root, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("当前平台不支持目录符号链接")
+    monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "threads")
+    monkeypatch.setattr(storage_paths_module, "CACHE_THREADS_DIR", linked_root / "threads")
+    workspace_root = tmp_path / "threads" / "user_a" / "2026-11-11" / "c1" / "user-data"
+    workspace_root.mkdir(parents=True)
+
+    assert conversation_semantic_dir_from_workspace(str(workspace_root)).is_absolute()
+
+
+def test_to_visible_path_semantic_root_is_canonical(tmp_path, monkeypatch):
+    """语义缓存目录本身的可见路径不能含 '.' 段（会被 _assert_canonical 拒绝）。"""
+    monkeypatch.setattr(workspace_runtime_module, "CHAT_DATA_HOME", str(tmp_path))
+    monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "threads")
+    paths = ensure_conversation_workspace("conv_visible_semantic_root", "user_a")
+    runtime = ConversationWorkspaceRuntime(workspace_root=paths["root"], user_id="user_a")
+    semantic_root = runtime.activate_semantic_cache(datasource_id="ds_a")
+
+    assert to_visible_path(paths["root"], semantic_root) == "/mnt/user-data/workspace/semantic"
+    assert (
+        to_visible_path(paths["root"], semantic_root / "model.yaml") == "/mnt/user-data/workspace/semantic/model.yaml"
+    )
+
+
+@pytest.mark.asyncio
+async def test_semantic_cache_isolated_between_users(tmp_path, monkeypatch):
+    """同一数据源组下不同用户的语义缓存不能互相共享。"""
+    monkeypatch.setattr(workspace_runtime_module, "CHAT_DATA_HOME", str(tmp_path))
+    monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "threads")
+    user_a_paths = ensure_conversation_workspace("conv_semantic_user_a", "user_a")
+    user_b_paths = ensure_conversation_workspace("conv_semantic_user_b", "user_b")
+    user_a = ConversationWorkspaceRuntime(workspace_root=user_a_paths["root"], user_id="user_a")
+    user_b = ConversationWorkspaceRuntime(workspace_root=user_b_paths["root"], user_id="user_b")
+
+    a_dir = user_a.activate_semantic_cache(datasource_id="ds_a")
+    b_dir = user_b.activate_semantic_cache(datasource_id="ds_a")
+    await user_a.write_internal_text_files([("/mnt/user-data/workspace/semantic/private.yaml", "private: true")])
+
+    assert a_dir != b_dir
+    assert (a_dir / "private.yaml").read_text(encoding="utf-8") == "private: true"
+    assert not (b_dir / "private.yaml").exists()
+
+
+@pytest.mark.asyncio
+async def test_hash_ref_resolves_only_new_layout(tmp_path, monkeypatch):
+    """旧版带 hash 的 ref 不再解析旧共享路径，只按 user + datasource 落到新布局。"""
+    monkeypatch.setattr(workspace_runtime_module, "CHAT_DATA_HOME", str(tmp_path))
+    monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "threads")
+    paths = ensure_conversation_workspace("conv_semantic_old_ref", "user_a")
+    ref_path = conversation_semantic_ref_path(paths["root"])
+    ref_path.parent.mkdir(parents=True, exist_ok=True)
+    ref_path.write_text('{"datasource_id":"ds_a","scope_hash":"scope_a","config_hash":"cfg_a"}', encoding="utf-8")
+
+    resolved = conversation_semantic_dir_from_workspace(paths["root"])
+
+    assert resolved == semantic_cache_dir("user_a", "ds_a").resolve()
+    assert "scope_a" not in resolved.parts
+    assert "cfg_a" not in resolved.parts
+
+
+@pytest.mark.asyncio
+async def test_legacy_shared_semantic_is_not_readable_or_listed(tmp_path, monkeypatch):
+    """历史会话共享 semantic 目录不再兜底读取、不进入工作区文件列表。"""
     monkeypatch.setattr(workspace_runtime_module, "CHAT_DATA_HOME", str(tmp_path))
     monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "threads")
     paths = ensure_conversation_workspace("conv_semantic_legacy", "user_a")
@@ -358,15 +468,16 @@ async def test_legacy_shared_semantic_is_readable_but_new_writes_go_cache(tmp_pa
     (legacy_root / "legacy.yaml").write_text("legacy: true", encoding="utf-8")
     runtime = ConversationWorkspaceRuntime(workspace_root=paths["root"], user_id="user_a", backend="local")
 
+    target = resolve_workspace_path(paths["root"], "/mnt/user-data/workspace/semantic/legacy.yaml")
+    assert not target.exists()
+    assert legacy_root not in target.parents
     read = await runtime.read_text_file(
         file_path="/mnt/user-data/workspace/semantic/legacy.yaml", offset=0, limit=10, max_chars=100
     )
-    assert read["lines"] == ["legacy: true"]
-
-    await runtime.write_internal_text_files([("/mnt/user-data/workspace/semantic/new.yaml", "new: true")])
-    cache_root = conversation_semantic_dir_from_workspace(paths["root"])
-    assert (cache_root / "new.yaml").read_text(encoding="utf-8") == "new: true"
-    assert not (legacy_root / "new.yaml").exists()
+    assert read["exists"] is False
+    assert not any(
+        item["path"].endswith("legacy.yaml") for item in list_workspace_files("conv_semantic_legacy", "user_a")
+    )
 
 
 @pytest.mark.asyncio
@@ -450,6 +561,21 @@ def test_get_workspace_total_size_sums_all_four_directories(tmp_path):
         (directory / "nested").mkdir()
         (directory / "nested" / "b.txt").write_bytes(b"45")
     assert get_workspace_total_size(root) == 20
+
+
+def test_get_workspace_total_size_ignores_legacy_semantic(tmp_path):
+    """历史会话共享 semantic YAML 不再计入工作区占用（也不再上传沙箱）。"""
+    from apps.chat_data_app.services.agent_run.conversation_workspace import get_workspace_total_size
+
+    root = tmp_path / "user-data"
+    for name in ("workspace", "outputs", "uploads", "memory"):
+        (root / name).mkdir(parents=True)
+        (root / name / "a.txt").write_bytes(b"123")
+    legacy_semantic = root / "workspace" / "semantic"
+    legacy_semantic.mkdir()
+    (legacy_semantic / "stale.yaml").write_bytes(b"1234567890")
+
+    assert get_workspace_total_size(root) == 12
 
 
 @pytest.mark.asyncio

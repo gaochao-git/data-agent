@@ -28,7 +28,6 @@ from .agent.run.agent_inbox_service import agent_inbox_service
 from .agent.run.conversation_event_service import conversation_event_service
 from .agent.skills import format_skills_prompt
 from .agent.workspace.runtime_skill_snapshot import (
-    build_runtime_skill_snapshot_async,
     list_snapshot_skill_metadata,
 )
 from .services import conversation_service as conversation
@@ -633,12 +632,10 @@ async def _load_runtime_skills_xml(
     available_skills: list[dict[str, Any]] = []
     available_skills_xml = format_skills_prompt([])
     # runtime-skills 是模型实际读取、file_read 解析及沙箱挂载的唯一技能真相。
-    # 先构建/复用会话快照，再从同一目录生成系统提示词技能清单，不能回退管理域。
+    # 先构建/复用该用户的共享快照，再从同一目录生成系统提示词技能清单，不能回退管理域。
     try:
-        # 快照目录由工作区根推导，保证与实际工作区同一日期分层（不从 uid/cid 反推）。
-        snapshot_dir = await build_runtime_skill_snapshot_async(
-            user_id, thread_id, target_dir=workspace_runtime.runtime_skills_dir
-        )
+        # 本轮固定使用 ``runtime-skills/<uid>``（每用户一份，按指纹重建）。
+        snapshot_dir = await workspace_runtime.ensure_runtime_skills_async()
         available_skills = await asyncio.to_thread(list_snapshot_skill_metadata, snapshot_dir)
         available_skills_xml = format_skills_prompt(available_skills)
     except Exception as err:

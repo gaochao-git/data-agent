@@ -258,17 +258,14 @@ def get_workspace_total_size(workspace_root: str | Path) -> int:
     root = Path(workspace_root)
     semantic_cache = conversation_semantic_dir_from_workspace(str(root))
     legacy_semantic = root / "workspace" / "semantic"
-    total = sum(
-        _tree_bytes(root / directory_name, exclude=legacy_semantic if semantic_cache.is_dir() else None)
-        for directory_name in WORKSPACE_DIR_NAMES
-    )
+    total = sum(_tree_bytes(root / directory_name, exclude=legacy_semantic) for directory_name in WORKSPACE_DIR_NAMES)
     return total + _tree_bytes(semantic_cache)
 
 
-def _is_stale_legacy_semantic(root: Path, path: Path, semantic_cache: Path) -> bool:
-    """缓存已存在时忽略共享目录里的旧 semantic 文件。"""
+def _is_stale_legacy_semantic(root: Path, path: Path) -> bool:
+    """无条件忽略共享目录里的历史 semantic 文件（是否命中当前缓存都不计）。"""
     legacy_semantic = root / "workspace" / "semantic"
-    return semantic_cache.is_dir() and (path == legacy_semantic or legacy_semantic in path.parents)
+    return path == legacy_semantic or legacy_semantic in path.parents
 
 
 def _append_semantic_workspace_entries(root: Path, files: list[dict[str, Any]]) -> None:
@@ -310,7 +307,6 @@ def list_workspace_files(
     paths = ensure_conversation_workspace(conversation_id, user_id, created_date=created_date)
     root = Path(paths["root"]).resolve()
     files: list[dict[str, Any]] = []
-    semantic_cache = conversation_semantic_dir_from_workspace(str(root))
     for directory_name in WORKSPACE_DIR_NAMES:
         directory = root / directory_name
         if not directory.exists():
@@ -318,7 +314,7 @@ def list_workspace_files(
         for item in sorted(directory.rglob("*")):
             if not item.is_file():
                 continue
-            if _is_stale_legacy_semantic(root, item, semantic_cache):
+            if _is_stale_legacy_semantic(root, item):
                 continue
             try:
                 relative_path = item.relative_to(root).as_posix()

@@ -635,7 +635,7 @@ async def sandbox_write_internal_text_files(
         )
         await _persist_sandbox_paths(
             session=session,
-            changed_paths=[target for target, _ in targets],
+            changed_paths=[target for target, _ in targets if not _is_managed_semantic_model_sandbox_path(target)],
         )
         results: list[dict[str, Any]] = [
             {

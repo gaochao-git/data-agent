@@ -13,8 +13,10 @@
 - 权限分层：`uploads/` 模型只读；`workspace/semantic/`、`outputs/query_result/`、
   `outputs/.tool-offload/` 为系统管理只读/隐藏区（`assert_writable` 强制）。
 - 存储分层：`workspace/semantic/` 的逻辑路径不变，物理文件落
-  `CHAT_DATA_CACHE_HOME/context/semantic/`；`runtime-skills` 落
-  `CHAT_DATA_CACHE_HOME/threads/.../runtime-skills/`，二者都不进入共享 `CHAT_DATA_HOME`。
+  `CHAT_DATA_CACHE_HOME/semantic/{user}/{datasource}/`，
+  会话 ref 在同目录 `.refs/`；
+  `runtime-skills` 落 `CHAT_DATA_CACHE_HOME/runtime-skills/{user}/`；
+  会话只保存 semantic ref，二者都不进入共享 `CHAT_DATA_HOME`。
 
 ## 模块
 

@@ -36,6 +36,7 @@ from apps.chat_data_app.agent.workspace.workspace_sandbox_api import (
     run_command_in_sandbox,
 )
 from apps.chat_data_app.agent.workspace.workspace_sandbox_paths import (
+    _is_managed_semantic_model_sandbox_path,
     sandbox_path_to_visible,
     sandbox_visible_path,
     sandbox_workspace_dir,
@@ -391,6 +392,11 @@ class SandboxWorkspaceBackend:
                 sandbox_visible_path(token)
             except ValueError:
                 invalid.append(token)
+                continue
+            # 与 local 后端同口径：语义模型快照只读，bash 无法区分读/写意图，
+            # 一律不开放（沙箱里是只读挂载，但校验口径保持一致）。
+            if _is_managed_semantic_model_sandbox_path(token):
+                invalid.append(token)
         if invalid:
             raise ValueError("bash_run 只允许访问当前会话目录或当前用户有权访问的技能路径: " + ", ".join(invalid[:3]))
 
@@ -403,6 +409,8 @@ class SandboxWorkspaceBackend:
         timeout_seconds: int,
     ) -> dict[str, Any]:
         sandbox_cwd = sandbox_visible_path(str(cwd or sandbox_workspace_dir()))
+        if _is_managed_semantic_model_sandbox_path(sandbox_cwd):
+            raise ValueError("bash_run 不允许将 cwd 设置为系统只读语义模型快照目录；请用 file_read / file_grep 读取")
         session_ref = await self._session_ref(runtime)
         session = session_ref.current
         if session is None:

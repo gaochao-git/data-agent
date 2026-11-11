@@ -28,7 +28,6 @@ from typing import Any, Literal, Protocol, runtime_checkable
 from apps.chat_data_app.agent.workspace.runtime_skill_snapshot import (
     build_runtime_skill_snapshot_async,
     is_runtime_skill_snapshot_ready,
-    runtime_skills_snapshot_dir,
     runtime_skills_snapshot_dir_from_workspace,
 )
 from utils.logger import get_logger
@@ -38,6 +37,8 @@ from utils.storage_paths import (
     assert_workspace_root,
     conversation_semantic_dir_from_workspace,
     conversation_thread_dir,
+    semantic_cache_dir,
+    write_semantic_cache_ref,
 )
 from utils.tool_result_store import QUERY_RESULT_DIR_NAME, TOOL_OFFLOAD_DIR_NAME
 from utils.upload_storage_crypto import materialize_plaintext, original_upload_path
@@ -198,6 +199,7 @@ class ConversationWorkspaceRuntime:
     # 当前用户有权访问的全部技能名（由请求入口按 user_id 解析得到）。
     # 仅用于说明/调试，不作为本地读取的前置条件。
     available_skill_names: list[str] = field(default_factory=list)
+    _runtime_skills_dir: Path | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         """Convert the configured backend name once; tools only see the backend contract."""
@@ -222,15 +224,35 @@ class ConversationWorkspaceRuntime:
 
     @property
     def runtime_skills_dir(self) -> Path:
-        """本会话 runtime-skills 快照目录（运行域只读技能根）。"""
-        return runtime_skills_snapshot_dir_from_workspace(self.workspace_root)
+        """本次运行固定的 runtime-skills 目录；未解析时回退旧会话路径。"""
+        return self._runtime_skills_dir or runtime_skills_snapshot_dir_from_workspace(self.workspace_root)
+
+    async def ensure_runtime_skills_async(self) -> Path:
+        """解析并返回本次运行最新的共享技能快照目录。"""
+        if self._runtime_skills_dir is not None and is_runtime_skill_snapshot_ready(self._runtime_skills_dir):
+            return self._runtime_skills_dir
+        cid = Path(self.workspace_root).resolve().parent.name
+        self._runtime_skills_dir = await build_runtime_skill_snapshot_async(self.user_id, cid)
+        return self._runtime_skills_dir
+
+    def activate_semantic_cache(self, *, datasource_id: str) -> Path:
+        """固定本次运行的数据源组语义缓存目录。"""
+        normalized_datasource = str(datasource_id or "").strip()
+        if not normalized_datasource:
+            raise ValueError("语义缓存缺少 datasource_id")
+        write_semantic_cache_ref(
+            self.workspace_root,
+            user_id=self.user_id,
+            datasource_id=normalized_datasource,
+        )
+        return semantic_cache_dir(self.user_id, normalized_datasource).resolve()
 
     async def _ensure_snapshot_async(self) -> None:
         """确保本会话技能快照存在且可用；为空则按当前用户可见集合惰性构建。
 
-        ``ensure_conversation_workspace`` 会先建出空的 ``runtime-skills`` 目录，因此不能仅以
-        目录是否存在判断快照就绪——空目录必须在此填充。已含技能内容或带完成标记的目录
-        视为会话内稳定快照，直接复用、不重复复制。单个技能路径异常不会中断构建
+        共享快照目录按用户复用，首次运行或运维清理后可能尚未就绪，因此不能仅以
+        目录是否存在判断快照就绪；未就绪时在此惰性构建。已含技能内容或带完成标记
+        的目录视为稳定快照，直接复用、不重复复制。单个技能路径异常不会中断构建
         （由 ``list_runtime_skill_sources_async`` 跳过），构建失败也不影响技能本地读取。
         """
         snapshot_dir = self.runtime_skills_dir
@@ -248,7 +270,7 @@ class ConversationWorkspaceRuntime:
         """将 /mnt/skills 路径解析到本会话快照真实文件系统。
 
         运行域技能统一为扁平路径 ``/mnt/skills/<name>/...``，直接映射到
-        ``threads/<uid>/<yyyy-MM-DD>/<cid>/runtime-skills/<name>/...``；不做按名远程解析，
+        ``CHAT_DATA_CACHE_HOME/runtime-skills/<uid>/<name>/...``；不做按名远程解析，
         快照内不存在即视为无权限。快照缺失时惰性构建。
         路径安全规则统一在 utils.skill_paths.resolve_skill_snapshot_path。
         """
@@ -257,7 +279,15 @@ class ConversationWorkspaceRuntime:
         if not raw.startswith(prefix):
             raise ValueError(f"只允许访问技能路径: {path}")
         await self._ensure_snapshot_async()
-        return resolve_skill_snapshot_path(self.runtime_skills_dir, path)
+        try:
+            return resolve_skill_snapshot_path(self.runtime_skills_dir, path)
+        except ValueError:
+            # 跨进程重建的两次 rename 之间快照根可能瞬时不可用；只在目录确实未就绪
+            # 时重建后重试一次，避免把「技能不存在 / 越权」误当成竞态吞掉。
+            if is_runtime_skill_snapshot_ready(self.runtime_skills_dir):
+                raise
+            await self._ensure_snapshot_async()
+            return resolve_skill_snapshot_path(self.runtime_skills_dir, path)
 
     def _executable_backend(self) -> ExecutableWorkspaceBackend:
         if not isinstance(self.backend, ExecutableWorkspaceBackend):
@@ -493,9 +523,9 @@ def ensure_conversation_workspace(
     """创建并返回 ChatData 会话目录结构。
 
     布局：共享根 ``threads/<uid>/<yyyy-MM-DD>/<cid>/user-data/``；
-    技能快照落到 ``CHAT_DATA_CACHE_HOME/threads/<uid>/<yyyy-MM-DD>/<cid>/runtime-skills/``。
+    技能快照按用户共享，落到 ``CHAT_DATA_CACHE_HOME/runtime-skills/<uid>/``。
     ``created_date`` 为会话创建日期（``YYYY-MM-DD``，缺省当前日期）。``user-data`` 为模型可写
-    运行域；``runtime-skills`` 为本地派生缓存，不进入共享数据根。
+    运行域；``runtime-skills`` 为本地派生缓存，不进入共享数据根，也不在会话目录预建。
     """
     try:
         base = conversation_thread_dir(user_id, conversation_id, created_date=created_date).resolve()
@@ -503,7 +533,6 @@ def ensure_conversation_workspace(
         raise ValueError(f"会话工作区路径参数非法: {exc}") from exc
     root = (base / "user-data").resolve()
     root.mkdir(parents=True, exist_ok=True)
-    runtime_skills_snapshot_dir(user_id, conversation_id, created_date=created_date).mkdir(parents=True, exist_ok=True)
     paths = {"root": str(root)}
     for name in WORKSPACE_DIR_NAMES:
         path = root / name
@@ -544,11 +573,8 @@ def _resolve_semantic_workspace_path(
     target = candidate.resolve()
     if target != semantic_root and semantic_root not in target.parents:
         raise ValueError(f"路径越界，禁止访问语义缓存之外的路径: {path}")
-    if not writable and not semantic_root.exists() and not target.exists():
-        legacy_root = (Path(workspace_root).resolve() / "workspace" / "semantic").resolve()
-        legacy_target = (legacy_root / suffix).resolve()
-        if (legacy_target == legacy_root or legacy_root in legacy_target.parents) and legacy_target.exists():
-            return legacy_target
+    # 会话 ref 是语义缓存的唯一真值：没有 ref 时 semantic_root 是占位目录，
+    # 读旧版共享工作区 workspace/semantic/ 里的历史 YAML 一律不兜底。
     return target
 
 
@@ -653,6 +679,8 @@ def is_system_result_workspace_path(workspace_root: str, path: Path) -> bool:
 
 def is_managed_semantic_model_workspace_path(workspace_root: str, path: Path) -> bool:
     """Return whether a path belongs to the system-owned semantic model directory."""
+    # 共享工作区里的历史 semantic 目录仍属系统只读区：这是写保护边界，
+    # 只阻止写入、不提供任何读取兜底；删掉会让历史目录变成可写。
     legacy_root = (Path(workspace_root).resolve() / "workspace" / "semantic").resolve()
     cache_root = conversation_semantic_dir_from_workspace(workspace_root).resolve()
     target = path.resolve()
@@ -664,15 +692,16 @@ def to_visible_path(workspace_root: str, path: Path) -> str:
     root = Path(workspace_root).resolve()
     target = path.resolve()
     semantic_root = conversation_semantic_dir_from_workspace(workspace_root).resolve()
+    # 仅做物理路径→规范前缀的显示映射；旧目录不再被读取、列举或上传。
     legacy_root = (root / "workspace" / "semantic").resolve()
     for current_root in (semantic_root, legacy_root):
         if target == current_root or current_root in target.parents:
             relative_semantic = target.relative_to(current_root).as_posix()
-            return (
-                f"/mnt/user-data/workspace/semantic/{relative_semantic}"
-                if relative_semantic
-                else ("/mnt/user-data/workspace/semantic")
-            )
+            # Path.relative_to(self) 返回 ".", 拼进去会变成含 "." 段的非规范路径，
+            # 被 _assert_canonical 拒绝；目录本身应直接返回规范前缀。
+            if relative_semantic and relative_semantic != ".":
+                return f"/mnt/user-data/workspace/semantic/{relative_semantic}"
+            return "/mnt/user-data/workspace/semantic"
     original = original_upload_path(target)
     if original is not None:
         target = original
@@ -726,6 +755,7 @@ class WorkspacePathMapping:
 
     workspace_root: str
     runtime_skills_dir: Path | None = None
+    semantic_cache_dir: Path | None = None
 
     # 裸别名仅在路径边界处匹配：前置负向断言挡住 server/uploads 之类内部段，
     # 后置负向断言挡住 /workspaceX 误吞。与工作区虚拟前缀共用同一套边界规则。
@@ -742,6 +772,15 @@ class WorkspacePathMapping:
                 "请检查 CHAT_DATA_HOME 环境变量是否误用了 sandbox 虚拟挂载点路径"
             )
         self._root = root
+        self._semantic_physical = str(
+            self.semantic_cache_dir or conversation_semantic_dir_from_workspace(self.workspace_root)
+        ).rstrip("/")
+        # 语义前缀必须按「路径段边界」替换：裸 str.replace 会把 semantic-backup、
+        # semanticX、semantic.yaml 之类同前缀路径一并改写，导致校验解析到共享根、
+        # 执行却翻到缓存目录。段字符含 . 与 -，结尾只允许分隔符或串尾。
+        self._semantic_virtual_re = re.compile(r"/mnt/user-data/workspace/semantic(?![A-Za-z0-9_.-])")
+        self._semantic_physical_re = re.compile(re.escape(self._semantic_physical) + r"(?![A-Za-z0-9_.-])")
+        self._virtual_semantic_prefix = "/mnt/user-data/workspace/semantic"
         self._physical_workspace = {
             "workspace": f"{root}/workspace",
             "outputs": f"{root}/outputs",
@@ -767,7 +806,9 @@ class WorkspacePathMapping:
         # 2) 技能虚拟 → 物理（最长优先）。
         for virtual_root, physical in sorted(self._skill_physical.items(), key=lambda kv: len(kv[0]), reverse=True):
             out = out.replace(virtual_root, physical)
-        # 3) 工作区虚拟 → 物理（单次替换，root 不含 /mnt/user-data/，不自引用）。
+        # 3) 语义缓存虚拟 → 物理（cache 在共享工作区之外，按路径段边界替换）。
+        out = self._semantic_virtual_re.sub(lambda _match: self._semantic_physical, out)
+        # 4) 其余工作区虚拟 → 物理（单次替换，root 不含 /mnt/user-data/，不自引用）。
         out = self._VIRTUAL_RE.sub(lambda m: f"{self._root}/{m.group(1)}", out)
         return out
 
@@ -780,7 +821,10 @@ class WorkspacePathMapping:
         for virtual_root, physical in sorted(self._skill_physical.items(), key=lambda kv: len(kv[0]), reverse=True):
             if physical:
                 out = out.replace(physical, virtual_root)
-        # 2) 工作区物理 → 虚拟。
+        # 2) 语义缓存物理 → 虚拟（同样按路径段边界，避免误遮蔽 ds1-backup 一类目录）。
+        if self._semantic_physical:
+            out = self._semantic_physical_re.sub(lambda _match: self._virtual_semantic_prefix, out)
+        # 3) 工作区物理 → 虚拟。
         for name, physical in self._physical_workspace.items():
             out = out.replace(physical, f"/mnt/user-data/{name}")
         return out

@@ -180,6 +180,32 @@ def test_validate_bash_paths_rejects_out_of_boundary_absolute_paths():
         asyncio.run(backend.validate_bash_paths(runtime, command="cat /etc/passwd"))
 
 
+def test_validate_bash_paths_rejects_semantic_snapshot():
+    """与 local 后端同口径：语义快照只读，bash 命令一律不开放。"""
+    backend = SandboxWorkspaceBackend()
+    runtime = FakeRuntime()
+
+    asyncio.run(backend.validate_bash_paths(runtime, command="cat /mnt/user-data/workspace/a.txt"))
+    asyncio.run(backend.validate_bash_paths(runtime, command="cat /mnt/user-data/workspace/semantic-backup/a.txt"))
+    with pytest.raises(ValueError, match="bash_run 只允许访问"):
+        asyncio.run(
+            backend.validate_bash_paths(runtime, command="echo x > /mnt/user-data/workspace/semantic/model.yaml")
+        )
+
+
+def test_run_bash_rejects_semantic_snapshot_cwd():
+    backend = SandboxWorkspaceBackend()
+    with pytest.raises(ValueError, match="只读语义模型快照"):
+        asyncio.run(
+            backend.run_bash(
+                FakeRuntime(),
+                command="ls",
+                cwd="/mnt/user-data/workspace/semantic",
+                timeout_seconds=10,
+            )
+        )
+
+
 def _no_session_ref(backend, monkeypatch):
     async def no_session(_runtime):
         return SandboxExecutionSessionRef()
