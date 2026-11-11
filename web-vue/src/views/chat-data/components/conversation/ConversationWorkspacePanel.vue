@@ -34,6 +34,7 @@ import {
   getConversationWorkspaceRawFile,
   getConversationWorkspaceArchive,
   uploadFile,
+  type ConversationWorkspaceDirectory,
   type ConversationWorkspaceFile,
   type ConversationWorkspaceUsage,
 } from '../../api'
@@ -215,6 +216,7 @@ const selectedConsoleFilePath = ref<string | null>(null)
 const collapsedConsoleDirectories = ref<Set<string>>(new Set(DEFAULT_COLLAPSED_CONSOLE_DIRECTORIES))
 const consoleFilePreviewMode = ref<'render' | 'table' | 'source'>('render')
 const workspaceFiles = ref<ConversationWorkspaceFile[]>([])
+const workspaceDirectories = ref<ConversationWorkspaceDirectory[]>([])
 const workspaceUsage = ref<ConversationWorkspaceUsage>({ used_bytes: 0, limit_bytes: 0, limit_mb: 0, percentage: 0 })
 const workspaceFileContents = ref<Record<string, string>>({})
 const workspaceFileBlobs = ref<Record<string, { url: string; arrayBuffer: ArrayBuffer; ext: string; mime: string; error?: boolean }>>({})
@@ -251,7 +253,7 @@ const SHOW_CONSOLE_EMPTY_STATE = false
 const SHOW_CONSOLE_FILE_PLACEHOLDER = false
 
 const producedFiles = computed<ProducedFile[]>(() => buildProducedFiles(workspaceFiles.value))
-const producedFileTree = computed(() => buildProducedFileTree(producedFiles.value))
+const producedFileTree = computed(() => buildProducedFileTree(producedFiles.value, workspaceDirectories.value))
 
 
 // 工作区 tab 不再在头部重复显示根路径——文件树根节点已经写着同一个路径，
@@ -303,6 +305,26 @@ const toggleConsoleTreeCollapsed = () => {
     ? expandAllDirectories(paths, collapsedConsoleDirectories.value)
     : collapseAllDirectories(paths, collapsedConsoleDirectories.value)
 }
+
+// 二级及更深目录首次出现时默认折叠：展开 workspace 只显示直接子目录，
+// 不会把 semantic/月报 等整棵子树一次性摊开。用户手动展开后不再自动收起。
+const knownNestedDirectories = new Set<string>()
+watch(
+  producedFileTree,
+  (tree) => {
+    const nestedPaths = collectCollapsibleDirectoryPaths(tree.directories).filter(path => path.includes('/'))
+    const next = new Set(collapsedConsoleDirectories.value)
+    let changed = false
+    nestedPaths.forEach((path) => {
+      if (knownNestedDirectories.has(path)) return
+      knownNestedDirectories.add(path)
+      next.add(path)
+      changed = true
+    })
+    if (changed) collapsedConsoleDirectories.value = next
+  },
+  { immediate: true },
+)
 
 const selectConsoleFile = (path: string) => {
   const normalizedPath = normalizeVisiblePath(path)
@@ -370,6 +392,7 @@ onUnmounted(() => {
 const loadWorkspaceFiles = async (conversationId: string | null | undefined) => {
   if (!conversationId) {
     workspaceFiles.value = []
+    workspaceDirectories.value = []
     workspaceUsage.value = { used_bytes: 0, limit_bytes: 0, limit_mb: 0, percentage: 0 }
     Object.values(workspaceFileBlobs.value).forEach(b => { if (b.url) URL.revokeObjectURL(b.url) })
     workspaceFileBlobs.value = {}
@@ -385,10 +408,12 @@ const loadWorkspaceFiles = async (conversationId: string | null | undefined) => 
     const response = await getConversationWorkspaceFiles(conversationId)
     if (conversationId !== props.conversationId) return
     workspaceFiles.value = response.data?.files || []
+    workspaceDirectories.value = response.data?.directories || []
     if (response.data?.usage) workspaceUsage.value = response.data.usage
   } catch (err) {
     if (conversationId !== props.conversationId) return
     workspaceFiles.value = []
+    workspaceDirectories.value = []
     console.error('加载智能分析工作区文件失败:', err)
   } finally {
     if (conversationId === props.conversationId) {
@@ -1070,6 +1095,8 @@ watch(
     // 「切换到另一个已有会话」时的面板状态重置（null 边界交给重挂载与 loadWorkspaceFiles 清空）。
     if (prevId && nextId) {
       selectedConsoleFilePath.value = null
+      knownNestedDirectories.clear()
+      collapsedConsoleDirectories.value = new Set(DEFAULT_COLLAPSED_CONSOLE_DIRECTORIES)
       // 会话切换：面板 tab 回到工作区根，不把上个会话的工具/文件 tab 带过来
       resetTabs()
       officePreviewCache.value = {}

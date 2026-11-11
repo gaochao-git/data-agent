@@ -52,6 +52,7 @@ from apps.chat_data_app.services.agent_run.conversation_workspace import (
     _render_local_office_html,
     create_workspace_backend,
     ensure_conversation_workspace,
+    list_workspace_directories,
     list_workspace_files,
     read_workspace_text_file,
     resolve_workspace_path,
@@ -746,9 +747,18 @@ def test_workspace_json_list_read_and_visible_paths():
     (Path(paths["outputs"]) / ".tool-offload").rmdir()
     (Path(paths["root"]) / "outputs").rmdir()
     (Path(paths["workspace"]) / "nested-dir").mkdir()
+    empty_dir = Path(paths["outputs"]) / "123"
+    empty_dir.mkdir(parents=True)
     files = list_workspace_files(conversation_id)
     assert any(
         item["path"] == "/mnt/user-data/workspace/context.json" and item["directory"] == "workspace" for item in files
+    )
+    directories = list_workspace_directories(conversation_id)
+    assert any(
+        item["path"] == "/mnt/user-data/outputs/123"
+        and item["relative_path"] == "outputs/123"
+        and item["directory"] == "outputs"
+        for item in directories
     )
 
     payload = read_workspace_text_file(conversation_id, "/mnt/user-data/workspace/context.json")

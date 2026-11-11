@@ -32,6 +32,9 @@ from ..services.agent_run.conversation_workspace import (
     delete_conversation_workspace_file as delete_workspace_file_for_conversation,
 )
 from ..services.agent_run.conversation_workspace import (
+    list_conversation_workspace_directories as list_workspace_directories_for_conversation,
+)
+from ..services.agent_run.conversation_workspace import (
     list_conversation_workspace_files as list_workspace_files_for_conversation,
 )
 from ..services.agent_run.conversation_workspace import (
@@ -58,6 +61,14 @@ def _is_internal_workspace_file(path: str) -> bool:
     return normalized in INTERNAL_WORKSPACE_FILE_PATHS
 
 
+def _filter_visible_workspace_directories(directories: list[dict]) -> list[dict]:
+    return [
+        item
+        for item in directories
+        if not _is_internal_workspace_file(str(item.get("relative_path") or item.get("path") or ""))
+    ]
+
+
 def _filter_visible_workspace_files(files: list[dict]) -> list[dict]:
     return [
         item
@@ -77,11 +88,16 @@ async def list_conversation_workspace_files(conversation_id: str, request: Reque
             conversation_id,
             user_id=str(current_user.user_id),
         )
+        directories = await list_workspace_directories_for_conversation(
+            conversation_id,
+            user_id=str(current_user.user_id),
+        )
         limit_mb, limit_bytes = await get_workspace_size_limit()
         used_bytes = sum(int(item.get("size") or 0) for item in files)
         return business_response(
             data={
                 "files": _filter_visible_workspace_files(files),
+                "directories": _filter_visible_workspace_directories(directories),
                 "usage": {
                     "used_bytes": used_bytes,
                     "limit_bytes": limit_bytes,

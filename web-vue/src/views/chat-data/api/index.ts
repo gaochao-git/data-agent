@@ -868,6 +868,15 @@ export interface ConversationWorkspaceFile {
   dashboard_spec?: unknown
 }
 
+export interface ConversationWorkspaceDirectory {
+  path: string
+  relative_path: string
+  directory: string
+  name: string
+  mtime: number
+  source: string
+}
+
 export interface ConversationWorkspaceUsage {
   used_bytes: number
   limit_bytes: number
@@ -876,7 +885,7 @@ export interface ConversationWorkspaceUsage {
 }
 
 /** 获取会话工作区文件。 */
-export function getConversationWorkspaceFiles(conversationId: string): Promise<ApiResponse<{ files: ConversationWorkspaceFile[]; usage?: ConversationWorkspaceUsage }>> {
+export function getConversationWorkspaceFiles(conversationId: string): Promise<ApiResponse<{ files: ConversationWorkspaceFile[]; directories?: ConversationWorkspaceDirectory[]; usage?: ConversationWorkspaceUsage }>> {
   return request({
     url: `/agents/api/chatdata/conversations/${conversationId}/workspace-files`,
     method: 'get'

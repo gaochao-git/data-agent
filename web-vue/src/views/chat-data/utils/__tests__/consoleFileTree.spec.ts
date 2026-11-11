@@ -351,6 +351,15 @@ describe('buildProducedFileTree 同级排序', () => {
     expect(nested.children.map(node => node.name)).toEqual(['子目录', 'a.csv', 'z.csv'])
   })
 
+  it('目录清单中的空目录也会建树', () => {
+    const { directories } = buildProducedFileTree([], [{ relative_path: 'outputs/123' }])
+    const outputs = directories.find(node => node.path === 'outputs')!
+    const emptyDir = outputs.children.find(node => node.path === 'outputs/123')!
+    expect(emptyDir.name).toBe('123')
+    expect(emptyDir.children).toEqual([])
+    expect(emptyDir.file).toBeUndefined()
+  })
+
   it('文件与同名目录并列时目录在前', () => {
     const { directories } = tree([
       entry('outputs/data/a.csv'),

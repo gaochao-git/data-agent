@@ -39,6 +39,9 @@ class FakeWorkspaceService:
     async def can_access(self, conversation_id, user_id):
         return self.access
 
+    async def list_directories(self, conversation_id, user_id=None):
+        return []
+
     async def list_files(self, conversation_id, user_id=None):
         exc = self.errors.get("list")
         if exc:
@@ -81,6 +84,7 @@ def fake_service(monkeypatch):
     service = FakeWorkspaceService()
     monkeypatch.setattr(cw_routes, "can_access_conversation_workspace", service.can_access)
     monkeypatch.setattr(cw_routes, "list_workspace_files_for_conversation", service.list_files)
+    monkeypatch.setattr(cw_routes, "list_workspace_directories_for_conversation", service.list_directories)
     monkeypatch.setattr(cw_routes, "read_workspace_file_for_conversation", service.read_file)
     monkeypatch.setattr(cw_routes, "read_conversation_workspace_raw_file", service.read_raw)
     monkeypatch.setattr(cw_routes, "render_conversation_workspace_office_preview", service.render_preview)

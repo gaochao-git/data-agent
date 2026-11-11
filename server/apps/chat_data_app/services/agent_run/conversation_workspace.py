@@ -339,6 +339,43 @@ def list_workspace_files(
     return files
 
 
+def list_workspace_directories(
+    conversation_id: str,
+    user_id: str = "system",
+    *,
+    created_date: str | None = None,
+) -> list[dict[str, Any]]:
+    """列出会话工作区中的目录（用于展示空目录），不跟随符号链接。"""
+    paths = ensure_conversation_workspace(conversation_id, user_id, created_date=created_date)
+    root = Path(paths["root"]).resolve()
+    directories: list[dict[str, Any]] = []
+    for directory_name in WORKSPACE_DIR_NAMES:
+        directory = root / directory_name
+        if not directory.exists():
+            continue
+        for item in sorted(directory.rglob("*")):
+            if not item.is_dir() or item.is_symlink():
+                continue
+            if _is_stale_legacy_semantic(root, item):
+                continue
+            try:
+                relative_path = item.relative_to(root).as_posix()
+                stat = item.stat()
+            except OSError:
+                continue
+            directories.append(
+                {
+                    "path": f"{USER_DATA_VIRTUAL_ROOT}/{relative_path}",
+                    "relative_path": relative_path,
+                    "directory": directory_name,
+                    "name": item.name,
+                    "mtime": stat.st_mtime,
+                    "source": directory_name,
+                }
+            )
+    return directories
+
+
 def read_workspace_text_file(
     conversation_id: str,
     path: str,
@@ -386,6 +423,20 @@ async def list_conversation_workspace_files(
     """读取当前用户会话的持久化工作区文件。"""
     return await asyncio.to_thread(
         list_workspace_files,
+        conversation_id,
+        user_id,
+        created_date=await get_conversation_created_date(conversation_id, user_id=user_id),
+    )
+
+
+async def list_conversation_workspace_directories(
+    conversation_id: str,
+    *,
+    user_id: str,
+) -> list[dict[str, Any]]:
+    """读取当前用户会话工作区目录（用于展示空目录）。"""
+    return await asyncio.to_thread(
+        list_workspace_directories,
         conversation_id,
         user_id,
         created_date=await get_conversation_created_date(conversation_id, user_id=user_id),

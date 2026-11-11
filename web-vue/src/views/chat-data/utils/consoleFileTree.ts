@@ -321,7 +321,48 @@ function sortTreeNodes(nodes: ProducedFileTreeNode[]): ProducedFileTreeNode[] {
  * 固定目录常驻（空也有上传入口等行级交互），额外顶层归入「其他文件」；
  * 每级子节点按「目录在上、文件在下」排序（顶层固定目录的常驻顺序不受影响）。
  */
-export function buildProducedFileTree(files: ProducedFile[]): {
+export interface ProducedDirectoryInput {
+  relative_path?: string
+  path?: string
+}
+
+function ensureProducedDirectoryNode(
+  directoryMap: Map<string, ProducedFileDirectory>,
+  relativePath: string,
+): ProducedFileTreeNode | null {
+  const parts = normalizeVisiblePath(relativePath).split('/').filter(Boolean)
+  const directoryName = parts[0]
+  if (!directoryName) return null
+  if (!directoryMap.has(directoryName)) {
+    directoryMap.set(directoryName, {
+      name: directoryName,
+      label: '其他文件',
+      path: directoryName,
+      depth: 0,
+      children: [],
+    })
+  }
+  let current: ProducedFileTreeNode = directoryMap.get(directoryName)!
+  parts.slice(1).forEach((part, index) => {
+    const nodePath = [directoryName, ...parts.slice(1, index + 2)].join('/')
+    let child = current.children.find(item => item.name === part && item.path === nodePath)
+    if (!child) {
+      child = { name: part, path: nodePath, depth: index + 1, children: [] }
+      current.children.push(child)
+    }
+    current = child
+  })
+  return current
+}
+
+/**
+ * 把文件与目录条目按相对路径挂到固定顶层目录下，逐级建立中间节点。
+ * 目录条目用于展示空目录；固定目录常驻，每级按「目录在上、文件在下」排序。
+ */
+export function buildProducedFileTree(
+  files: ProducedFile[],
+  directories: ProducedDirectoryInput[] = [],
+): {
   root: string
   directories: ProducedFileDirectory[]
 } {
@@ -334,6 +375,10 @@ export function buildProducedFileTree(files: ProducedFile[]): {
       children: [],
     })
   })
+
+  for (const directory of directories) {
+    ensureProducedDirectoryNode(directoryMap, directory.relative_path || directory.path || '')
+  }
 
   for (const file of files) {
     const relativePath = normalizeVisiblePath(file.path)
@@ -371,11 +416,11 @@ export function buildProducedFileTree(files: ProducedFile[]): {
     })
   }
 
-  const directories = Array.from(directoryMap.values())
-  directories.forEach((directory) => { directory.children = sortTreeNodes(directory.children) })
+  const directoriesResult = Array.from(directoryMap.values())
+  directoriesResult.forEach((directory) => { directory.children = sortTreeNodes(directory.children) })
   return {
     root: '/mnt/user-data',
-    directories,
+    directories: directoriesResult,
   }
 }
 

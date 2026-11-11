@@ -32,11 +32,16 @@ def test_conversation_workspace_file_routes_read_shared_persisted_workspace(clie
             {"path": "/outputs/chart.json", "relative_path": "outputs/chart.json"},
         ]
 
+    async def list_directories(conversation_id, *, user_id):
+        assert (conversation_id, user_id) == ("conv_a", "user_a")
+        return [{"path": "/mnt/user-data/outputs/123", "relative_path": "outputs/123", "name": "123"}]
+
     async def read_file(conversation_id, *, user_id, path):
         assert (conversation_id, user_id, path) == ("conv_a", "user_a", "/outputs/chart.json")
         return {"path": "/outputs/chart.json", "content": "{}"}
 
     monkeypatch.setattr(workspace_routes, "list_workspace_files_for_conversation", list_files)
+    monkeypatch.setattr(workspace_routes, "list_workspace_directories_for_conversation", list_directories)
     monkeypatch.setattr(workspace_routes, "read_workspace_file_for_conversation", read_file)
 
     list_response = client.get("/api/chatdata/conversations/conv_a/workspace-files", headers=auth_headers)
@@ -49,6 +54,9 @@ def test_conversation_workspace_file_routes_read_shared_persisted_workspace(clie
     assert list_response.status_code == 200
     assert list_response.json()["data"]["files"] == [
         {"path": "/outputs/chart.json", "relative_path": "outputs/chart.json"}
+    ]
+    assert list_response.json()["data"]["directories"] == [
+        {"path": "/mnt/user-data/outputs/123", "relative_path": "outputs/123", "name": "123"}
     ]
     assert read_response.status_code == 200
     assert read_response.json()["data"]["content"] == "{}"
