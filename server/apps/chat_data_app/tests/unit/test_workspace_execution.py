@@ -32,6 +32,7 @@ from apps.chat_data_app.agent.workspace import (
 from apps.chat_data_app.agent.workspace import (
     workspace_sync as we_sync,
 )
+from apps.chat_data_app.agent.workspace.runtime_skill_snapshot import runtime_skills_snapshot_dir_from_workspace
 from apps.chat_data_app.agent.workspace.workspace_sandbox_api import (
     SandboxExecutionSession,
     SandboxExecutionSessionRef,
@@ -721,7 +722,7 @@ def test_sandbox_list_dir_delegates_through_real_path(monkeypatch):
 def test_local_bash_can_read_only_loaded_skill_path(tmp_path):
     # 运行域技能直接来自本会话快照目录，不再经 register_runtime_skill 逐条登记。
     workspace_root = _workspace_root(tmp_path)
-    skill_dir = workspace_root.parent / "runtime-skills" / "data-analyzing"
+    skill_dir = runtime_skills_snapshot_dir_from_workspace(str(workspace_root)) / "data-analyzing"
     references = skill_dir / "references"
     references.mkdir(parents=True)
     (references / "guide.md").write_text("guide text\n", encoding="utf-8")

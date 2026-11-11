@@ -40,6 +40,7 @@ from apps.chat_data_app.agent.workspace import (
 from apps.chat_data_app.agent.workspace import (
     workspace_search as we_search,  # noqa: F401  # 测试按模块属性引用 workspace_search，属有意重导出
 )
+from apps.chat_data_app.agent.workspace.runtime_skill_snapshot import runtime_skills_snapshot_dir_from_workspace
 from apps.chat_data_app.agent.workspace.workspace_ops import _artifact_payload_from_bytes
 from apps.chat_data_app.agent.workspace.workspace_special_services import (
     WorkspaceOfficePreviewService,
@@ -59,6 +60,7 @@ from apps.chat_data_app.services.agent_run.conversation_workspace import (
 )
 from apps.chat_data_app.services.semantic.run import semantic_query_service
 from utils import tool_result_store
+from utils.storage_paths import conversation_semantic_dir_from_workspace
 
 sql_tool_module = importlib.import_module("apps.chat_data_app.agent.tools.data_analyzing")
 present_artifacts_tool_module = importlib.import_module("apps.chat_data_app.agent.tools.present_artifacts")
@@ -72,6 +74,7 @@ def _isolated_workspace(
     """把会话工作区建在 tmp_path 下，避免用例之间共享 CHAT_DATA_HOME。"""
     monkeypatch.setattr(workspace_runtime_module, "CHAT_DATA_HOME", str(tmp_path))
     monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "threads")
+    monkeypatch.setattr("utils.storage_paths.CACHE_THREADS_DIR", tmp_path / "cache" / "threads")
     return ensure_conversation_workspace(conversation_id, user_id, created_date=created_date)
 
 
@@ -232,8 +235,9 @@ def test_ensure_conversation_workspace_creates_expected_dirs():
     assert Path(paths["outputs"]).exists()
     assert Path(paths["uploads"]).exists()
     assert (Path(paths["outputs"]) / ".tool-offload").exists()
-    # 运行域技能快照目录随工作区一并创建（扁平 /mnt/skills/<name> 快照），但不进入 paths 字典
-    assert (Path(paths["root"]).parent / "runtime-skills").is_dir()
+    # 运行域技能快照落在本地缓存根，不进入共享会话目录，也不进入 paths 字典
+    assert runtime_skills_snapshot_dir_from_workspace(paths["root"]).is_dir()
+    assert not (Path(paths["root"]).parent / "runtime-skills").exists()
     assert "runtime_skills" not in paths
 
 
@@ -327,8 +331,8 @@ async def test_internal_semantic_model_write_overwrites_only_selected_file(tmp_p
     monkeypatch.setattr(workspace_runtime_module, "CHAT_DATA_HOME", str(tmp_path))
     monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "threads")
     paths = ensure_conversation_workspace("conv_semantic_replace", "user_a")
-    semantic_root = Path(paths["workspace"]) / "semantic"
-    semantic_root.mkdir()
+    semantic_root = conversation_semantic_dir_from_workspace(paths["root"])
+    semantic_root.mkdir(parents=True, exist_ok=True)
     (semantic_root / "old.yaml").write_text("old", encoding="utf-8")
     runtime = ConversationWorkspaceRuntime(workspace_root=paths["root"], user_id="user_a", backend="local")
 
@@ -344,13 +348,54 @@ async def test_internal_semantic_model_write_overwrites_only_selected_file(tmp_p
 
 
 @pytest.mark.asyncio
+async def test_legacy_shared_semantic_is_readable_but_new_writes_go_cache(tmp_path, monkeypatch):
+    """迁移前旧 semantic 仍可读；新物化只写缓存，不回写共享目录。"""
+    monkeypatch.setattr(workspace_runtime_module, "CHAT_DATA_HOME", str(tmp_path))
+    monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "threads")
+    paths = ensure_conversation_workspace("conv_semantic_legacy", "user_a")
+    legacy_root = Path(paths["workspace"]) / "semantic"
+    legacy_root.mkdir()
+    (legacy_root / "legacy.yaml").write_text("legacy: true", encoding="utf-8")
+    runtime = ConversationWorkspaceRuntime(workspace_root=paths["root"], user_id="user_a", backend="local")
+
+    read = await runtime.read_text_file(
+        file_path="/mnt/user-data/workspace/semantic/legacy.yaml", offset=0, limit=10, max_chars=100
+    )
+    assert read["lines"] == ["legacy: true"]
+
+    await runtime.write_internal_text_files([("/mnt/user-data/workspace/semantic/new.yaml", "new: true")])
+    cache_root = conversation_semantic_dir_from_workspace(paths["root"])
+    assert (cache_root / "new.yaml").read_text(encoding="utf-8") == "new: true"
+    assert not (legacy_root / "new.yaml").exists()
+
+
+@pytest.mark.asyncio
+async def test_internal_semantic_model_writes_cache_not_shared_workspace(tmp_path, monkeypatch):
+    """语义模型物化只落本地缓存，不进入共享 user-data。"""
+    monkeypatch.setattr(workspace_runtime_module, "CHAT_DATA_HOME", str(tmp_path))
+    monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "threads")
+    paths = ensure_conversation_workspace("conv_semantic_cache", "user_a")
+    runtime = ConversationWorkspaceRuntime(workspace_root=paths["root"], user_id="user_a", backend="local")
+
+    await runtime.write_internal_text_files([("/mnt/user-data/workspace/semantic/cache-only.yaml", "a: 1")])
+
+    cache_file = conversation_semantic_dir_from_workspace(paths["root"]) / "cache-only.yaml"
+    assert cache_file.read_text(encoding="utf-8") == "a: 1"
+    assert not (Path(paths["workspace"]) / "semantic" / "cache-only.yaml").exists()
+    assert any(
+        item["path"] == "/mnt/user-data/workspace/semantic/cache-only.yaml"
+        for item in list_workspace_files("conv_semantic_cache", "user_a")
+    )
+
+
+@pytest.mark.asyncio
 async def test_internal_semantic_model_delete_cleans_residual_file(tmp_path, monkeypatch):
     """系统残留清理通道：允许删 semantic 下 YAML；语义目录外的路径仍被拒。"""
     monkeypatch.setattr(workspace_runtime_module, "CHAT_DATA_HOME", str(tmp_path))
     monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "threads")
     paths = ensure_conversation_workspace("conv_semantic_delete", "user_a")
-    semantic_root = Path(paths["workspace"]) / "semantic"
-    semantic_root.mkdir()
+    semantic_root = conversation_semantic_dir_from_workspace(paths["root"])
+    semantic_root.mkdir(parents=True, exist_ok=True)
     stale = semantic_root / "已停用模型__deadbeef.yaml"
     stale.write_text("stale", encoding="utf-8")
     runtime = ConversationWorkspaceRuntime(workspace_root=paths["root"], user_id="user_a", backend="local")
@@ -528,7 +573,7 @@ async def test_file_copy_accepts_readonly_skill_source_and_keeps_skill_immutable
     """/mnt/skills 只读技能文件可作为 file_copy 源，且技能路径不能作为复制目标。"""
     workspace_root = tmp_path / "threads" / "u1" / "conv_skill_copy" / "user-data"
     (workspace_root / "workspace").mkdir(parents=True)
-    skill_dir = workspace_root.parent / "runtime-skills" / "demo-skill"
+    skill_dir = runtime_skills_snapshot_dir_from_workspace(str(workspace_root)) / "demo-skill"
     template = skill_dir / "assets" / "template.pptx"
     template.parent.mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text("---\nname: demo-skill\n---\n# demo", encoding="utf-8")
@@ -609,7 +654,7 @@ async def test_runtime_resolves_system_skill_file_under_system_path(tmp_path):
     # 不再按类别/远程解析 skill_service.resolve_skill_path_async。
     workspace_root = tmp_path / "threads" / "u1" / "conv_x" / "user-data"
     workspace_root.mkdir(parents=True)
-    skill_dir = workspace_root.parent / "runtime-skills" / "skill-creator"
+    skill_dir = runtime_skills_snapshot_dir_from_workspace(str(workspace_root)) / "skill-creator"
     doc_path = skill_dir / "references" / "guide.md"
     doc_path.parent.mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text("---\nname: skill-creator\n---\n# Skill Creator", encoding="utf-8")
@@ -641,7 +686,7 @@ async def test_runtime_resolves_system_skill_file_under_system_path(tmp_path):
 async def test_runtime_rejects_symlinked_skill_directory(tmp_path):
     workspace_root = tmp_path / "threads" / "u1" / "conv_x" / "user-data"
     workspace_root.mkdir(parents=True)
-    skill_root = workspace_root.parent / "runtime-skills"
+    skill_root = runtime_skills_snapshot_dir_from_workspace(str(workspace_root))
     valid_skill = skill_root / "skill-creator"
     valid_skill.mkdir(parents=True)
     (valid_skill / "SKILL.md").write_text("# Skill Creator", encoding="utf-8")
@@ -1987,7 +2032,7 @@ async def test_file_read_reads_session_skill_snapshot(tmp_path):
     """技能正文只能从当前会话的 runtime-skills 快照读取。"""
     workspace_root = tmp_path / "threads" / "u1" / "conv_a" / "user-data"
     workspace_root.mkdir(parents=True)
-    snapshot_skill = workspace_root.parent / "runtime-skills" / "demo-skill"
+    snapshot_skill = runtime_skills_snapshot_dir_from_workspace(str(workspace_root)) / "demo-skill"
     snapshot_skill.mkdir(parents=True)
     (snapshot_skill / "SKILL.md").write_text(
         "---\nname: demo-skill\ntitle: 快照版\ndescription: 来自快照\n---\n# 快照版正文\n",
@@ -2014,7 +2059,7 @@ async def test_file_read_rejects_skill_not_in_snapshot(tmp_path):
     workspace_root.mkdir(parents=True)
     # 预置另一个技能，使快照目录非空（_ensure_snapshot_async 直接复用、不触发管理域构建）；
     # 但不放入 demo-skill，模拟其被禁用/草稿而排除在快照外。
-    other = workspace_root.parent / "runtime-skills" / "other-skill"
+    other = runtime_skills_snapshot_dir_from_workspace(str(workspace_root)) / "other-skill"
     other.mkdir(parents=True)
     (other / "SKILL.md").write_text("---\nname: other-skill\ntitle: 其他\n---\n# 其他\n", encoding="utf-8")
 
@@ -2064,7 +2109,7 @@ async def test_file_grep_single_skill_file_returns_visible_path(monkeypatch, tmp
     """file_grep on a single skill file must return the /mnt/skills visible path."""
     workspace_root = tmp_path / "threads" / "u1" / "conv_grep_skill" / "user-data"
     workspace_root.mkdir(parents=True)
-    skill_dir = workspace_root.parent / "runtime-skills" / "demo-skill"
+    skill_dir = runtime_skills_snapshot_dir_from_workspace(str(workspace_root)) / "demo-skill"
     skill_dir.mkdir(parents=True)
     guide = skill_dir / "references" / "guide.md"
     guide.parent.mkdir(parents=True)

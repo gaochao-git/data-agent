@@ -45,6 +45,7 @@ from apps.chat_data_app.agent.workspace.workspace_path_policy import (
 from apps.chat_data_app.services.setting_service import get_runtime_setting
 from utils.database import get_session
 from utils.logger import get_logger
+from utils.storage_paths import conversation_semantic_dir_from_workspace
 from utils.tool_result_store import ToolResultStore
 
 from ... import AGENT_ID
@@ -232,25 +233,71 @@ async def delete_conversation_workspace_file(
     return {**result, "record_cleaned": False}
 
 
+def _tree_bytes(root: Path, *, exclude: Path | None = None) -> int:
+    """统计目录下普通文件字节数；可排除旧目录，缺失/异常按 0 处理。"""
+    if not root.is_dir():
+        return 0
+    total = 0
+    for item in root.rglob("*"):
+        if not item.is_file() or item.is_symlink():
+            continue
+        if exclude is not None and (item == exclude or exclude in item.parents):
+            continue
+        try:
+            total += item.stat().st_size
+        except OSError:
+            continue
+    return total
+
+
 def get_workspace_total_size(workspace_root: str | Path) -> int:
     """统计会话工作区四个目录的总字节数。
 
     只统计普通文件；缺失目录按 0 处理。上传前校验与文件列表里的占用展示共用这一口径。
     """
     root = Path(workspace_root)
-    total = 0
-    for directory_name in WORKSPACE_DIR_NAMES:
-        directory = root / directory_name
-        if not directory.exists():
+    semantic_cache = conversation_semantic_dir_from_workspace(str(root))
+    legacy_semantic = root / "workspace" / "semantic"
+    total = sum(
+        _tree_bytes(root / directory_name, exclude=legacy_semantic if semantic_cache.is_dir() else None)
+        for directory_name in WORKSPACE_DIR_NAMES
+    )
+    return total + _tree_bytes(semantic_cache)
+
+
+def _is_stale_legacy_semantic(root: Path, path: Path, semantic_cache: Path) -> bool:
+    """缓存已存在时忽略共享目录里的旧 semantic 文件。"""
+    legacy_semantic = root / "workspace" / "semantic"
+    return semantic_cache.is_dir() and (path == legacy_semantic or legacy_semantic in path.parents)
+
+
+def _append_semantic_workspace_entries(root: Path, files: list[dict[str, Any]]) -> None:
+    """把本地 semantic 缓存投影到逻辑工作区文件列表。"""
+    semantic_root = conversation_semantic_dir_from_workspace(str(root))
+    if not semantic_root.is_dir():
+        return
+    for item in sorted(semantic_root.rglob("*")):
+        if not item.is_file() or item.is_symlink():
             continue
-        for item in directory.rglob("*"):
-            if not item.is_file():
-                continue
-            try:
-                total += item.stat().st_size
-            except OSError:
-                continue
-    return total
+        relative_path = f"workspace/semantic/{item.relative_to(semantic_root).as_posix()}"
+        visible_path = f"{USER_DATA_VIRTUAL_ROOT}/{relative_path}"
+        if any(existing["path"] == visible_path for existing in files):
+            continue
+        try:
+            stat = item.stat()
+        except OSError:
+            continue
+        files.append(
+            {
+                "path": visible_path,
+                "relative_path": relative_path,
+                "directory": "workspace",
+                "name": item.name,
+                "size": stat.st_size,
+                "mtime": stat.st_mtime,
+                "source": "workspace",
+            }
+        )
 
 
 def list_workspace_files(
@@ -263,12 +310,15 @@ def list_workspace_files(
     paths = ensure_conversation_workspace(conversation_id, user_id, created_date=created_date)
     root = Path(paths["root"]).resolve()
     files: list[dict[str, Any]] = []
+    semantic_cache = conversation_semantic_dir_from_workspace(str(root))
     for directory_name in WORKSPACE_DIR_NAMES:
         directory = root / directory_name
         if not directory.exists():
             continue
         for item in sorted(directory.rglob("*")):
             if not item.is_file():
+                continue
+            if _is_stale_legacy_semantic(root, item, semantic_cache):
                 continue
             try:
                 relative_path = item.relative_to(root).as_posix()
@@ -289,6 +339,7 @@ def list_workspace_files(
                     "source": directory_name,
                 }
             )
+    _append_semantic_workspace_entries(root, files)
     return files
 
 

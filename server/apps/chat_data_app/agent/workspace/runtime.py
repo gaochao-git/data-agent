@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import os
 import re
@@ -27,11 +28,17 @@ from typing import Any, Literal, Protocol, runtime_checkable
 from apps.chat_data_app.agent.workspace.runtime_skill_snapshot import (
     build_runtime_skill_snapshot_async,
     is_runtime_skill_snapshot_ready,
+    runtime_skills_snapshot_dir,
     runtime_skills_snapshot_dir_from_workspace,
 )
 from utils.logger import get_logger
 from utils.skill_paths import SKILLS_VIRTUAL_ROOT, resolve_skill_snapshot_path, runtime_skill_visible_root
-from utils.storage_paths import CHAT_DATA_HOME, assert_workspace_root, conversation_thread_dir
+from utils.storage_paths import (
+    CHAT_DATA_HOME,
+    assert_workspace_root,
+    conversation_semantic_dir_from_workspace,
+    conversation_thread_dir,
+)
 from utils.tool_result_store import QUERY_RESULT_DIR_NAME, TOOL_OFFLOAD_DIR_NAME
 from utils.upload_storage_crypto import materialize_plaintext, original_upload_path
 
@@ -273,11 +280,62 @@ class ConversationWorkspaceRuntime:
         return await self._resolved_backend.write_text_file(self, file_path=file_path, content=content, mode=mode)
 
     async def write_internal_text_files(self, entries: list[tuple[str, str]]) -> list[dict[str, Any]]:
-        """Write system-owned semantic model files through the active backend."""
+        """Write system-owned semantic files to local cache, then sync sandbox copies."""
+        if self.backend_name != "local":
+            await asyncio.to_thread(self._write_semantic_cache, entries)
         return await semantic_model_workspace_service.write_files(self, entries)
 
+    @staticmethod
+    def _assert_semantic_path(path: str) -> None:
+        logical_path = WORKSPACE_PATH_POLICY.parse(path)
+        if not logical_path.is_semantic_model or not logical_path.relative_path.lower().endswith(".yaml"):
+            raise ValueError("内部语义模型写入只能覆盖 /mnt/user-data/workspace/semantic/ 下的 YAML 文件")
+
+    def _write_semantic_cache(self, entries: list[tuple[str, str]]) -> None:
+        """语义文件先落本地派生缓存；sandbox 仍由 backend 同步远端副本。"""
+        for raw_path, content in entries:
+            path = str(raw_path or "").strip()
+            if not path:
+                continue
+            self._assert_semantic_path(path)
+            target = resolve_workspace_path(
+                self.workspace_root,
+                path,
+                writable=True,
+                allow_managed_semantic_model_write=True,
+            )
+            target.parent.mkdir(parents=True, exist_ok=True)
+            temporary_path: Path | None = None
+            try:
+                with tempfile.NamedTemporaryFile(
+                    mode="w",
+                    encoding="utf-8",
+                    dir=target.parent,
+                    prefix=f".{target.name}.",
+                    suffix=".tmp",
+                    delete=False,
+                ) as file_obj:
+                    temporary_path = Path(file_obj.name)
+                    file_obj.write(content)
+                    file_obj.flush()
+                    os.fsync(file_obj.fileno())
+                os.replace(temporary_path, target)
+                temporary_path = None
+            finally:
+                if temporary_path is not None:
+                    temporary_path.unlink(missing_ok=True)
+
     async def delete_internal_text_files(self, *, path: str) -> dict[str, Any]:
-        """Delete one system-owned semantic model file through the active backend."""
+        """Delete one system-owned semantic file from local cache, then the sandbox copy."""
+        if self.backend_name != "local":
+            self._assert_semantic_path(path)
+            target = resolve_workspace_path(
+                self.workspace_root,
+                path,
+                writable=True,
+                allow_managed_semantic_model_write=True,
+            )
+            target.unlink(missing_ok=True)
         return await semantic_model_workspace_service.delete_files(self, path=path)
 
     async def replace_text_file(
@@ -434,10 +492,10 @@ def ensure_conversation_workspace(
 ) -> dict[str, str]:
     """创建并返回 ChatData 会话目录结构。
 
-    布局：``threads/<uid>/<yyyy-MM-DD>/<cid>/{user-data/{workspace,outputs,uploads}, runtime-skills/}``。
+    布局：共享根 ``threads/<uid>/<yyyy-MM-DD>/<cid>/user-data/``；
+    技能快照落到 ``CHAT_DATA_CACHE_HOME/threads/<uid>/<yyyy-MM-DD>/<cid>/runtime-skills/``。
     ``created_date`` 为会话创建日期（``YYYY-MM-DD``，缺省当前日期）。``user-data`` 为模型可写
-    运行域；``runtime-skills`` 为会话级技能快照（由
-    ``runtime_skill_snapshot.build_runtime_skill_snapshot_async`` 惰性填充）。
+    运行域；``runtime-skills`` 为本地派生缓存，不进入共享数据根。
     """
     try:
         base = conversation_thread_dir(user_id, conversation_id, created_date=created_date).resolve()
@@ -445,7 +503,7 @@ def ensure_conversation_workspace(
         raise ValueError(f"会话工作区路径参数非法: {exc}") from exc
     root = (base / "user-data").resolve()
     root.mkdir(parents=True, exist_ok=True)
-    (base / "runtime-skills").mkdir(parents=True, exist_ok=True)
+    runtime_skills_snapshot_dir(user_id, conversation_id, created_date=created_date).mkdir(parents=True, exist_ok=True)
     paths = {"root": str(root)}
     for name in WORKSPACE_DIR_NAMES:
         path = root / name
@@ -463,6 +521,76 @@ def resolve_uploads_root(user_id: str, thread_id: str, *, created_date: str | No
     """
     paths = ensure_conversation_workspace(thread_id, user_id, created_date=created_date)
     return Path(paths["uploads"])
+
+
+def _resolve_semantic_workspace_path(
+    workspace_root: str,
+    logical_path: Any,
+    *,
+    path: str,
+    writable: bool,
+    allow_managed_semantic_model_write: bool,
+) -> Path | None:
+    """语义模型逻辑路径映射到本地缓存；非语义路径返回 None。"""
+    if not getattr(logical_path, "is_semantic_model", False):
+        return None
+    if writable and not allow_managed_semantic_model_write:
+        raise ValueError("/mnt/user-data/workspace/semantic/ 是本轮语义模型只读快照，不能修改")
+    semantic_root = conversation_semantic_dir_from_workspace(workspace_root).resolve()
+    suffix = logical_path.relative_path[len("semantic") :].lstrip("/")
+    candidate = semantic_root / suffix
+    if candidate.is_symlink():
+        raise ValueError(f"不允许操作符号链接: {path}")
+    target = candidate.resolve()
+    if target != semantic_root and semantic_root not in target.parents:
+        raise ValueError(f"路径越界，禁止访问语义缓存之外的路径: {path}")
+    if not writable and not semantic_root.exists() and not target.exists():
+        legacy_root = (Path(workspace_root).resolve() / "workspace" / "semantic").resolve()
+        legacy_target = (legacy_root / suffix).resolve()
+        if (legacy_target == legacy_root or legacy_root in legacy_target.parents) and legacy_target.exists():
+            return legacy_target
+    return target
+
+
+def _resolve_regular_workspace_path(
+    root: Path,
+    *,
+    path: str,
+    logical_path: Any,
+    writable: bool,
+    allow_managed_semantic_model_write: bool,
+    materialize_uploads: bool,
+) -> Path:
+    """解析非 semantic 的工作区路径并实施目录边界。"""
+    # 与 sandbox 后端保持同一口径：符号链接一律拒绝操作（sandbox 侧由
+    # _sandbox_path_kind 对 entry_type=symlink 直接报错）。必须在 resolve 之前判断
+    # 最终组件，否则 realpath 会先把链接跟到目标，下游的 is_symlink() 守卫永远不可达，
+    # 造成「删链接实际删掉目标文件」。祖先目录已在 root=resolve() 时归一化，
+    # 因此这里只会命中被操作对象本身，不会误伤 CHAT_DATA_HOME 位于符号链接下的部署。
+    candidate = root / logical_path.normalized
+    if candidate.is_symlink():
+        raise ValueError(f"不允许操作符号链接: {path}")
+
+    target = candidate.resolve()
+    if root not in target.parents:
+        raise ValueError(f"路径越界，禁止访问当前会话目录之外的路径: {path}")
+
+    visible_roots = [(root / name).resolve() for name in WORKSPACE_DIR_NAMES]
+    if not any(target == item or item in target.parents for item in visible_roots):
+        raise ValueError(
+            "只允许访问 /mnt/user-data/workspace、/mnt/user-data/outputs、"
+            "/mnt/user-data/uploads 或 /mnt/user-data/memory"
+        )
+
+    if writable:
+        if is_system_result_workspace_path(str(root), target):
+            raise ValueError("不允许通过文件编辑工具修改系统结果目录")
+        if is_managed_semantic_model_workspace_path(str(root), target) and not allow_managed_semantic_model_write:
+            raise ValueError("/mnt/user-data/workspace/semantic/ 是本轮语义模型只读快照，不能修改")
+    elif logical_path.kind == "uploads" and materialize_uploads:
+        # 上传文件可能以应用层密文落盘；只有真正读取时才解密，列表/删除不触发。
+        target = materialize_plaintext(target)
+    return target
 
 
 def resolve_workspace_path(
@@ -492,36 +620,24 @@ def resolve_workspace_path(
     else:
         WORKSPACE_PATH_POLICY.assert_readable(logical_path)
 
-    # 与 sandbox 后端保持同一口径：符号链接一律拒绝操作（sandbox 侧由
-    # _sandbox_path_kind 对 entry_type=symlink 直接报错）。必须在 resolve 之前判断
-    # 最终组件，否则 realpath 会先把链接跟到目标，下游的 is_symlink() 守卫永远不可达，
-    # 造成「删链接实际删掉目标文件」。祖先目录已在 root=resolve() 时归一化，
-    # 因此这里只会命中被操作对象本身，不会误伤 CHAT_DATA_HOME 位于符号链接下的部署。
-    candidate = root / logical_path.normalized
-    if candidate.is_symlink():
-        raise ValueError(f"不允许操作符号链接: {path}")
+    semantic_target = _resolve_semantic_workspace_path(
+        workspace_root,
+        logical_path,
+        path=path,
+        writable=writable,
+        allow_managed_semantic_model_write=allow_managed_semantic_model_write,
+    )
+    if semantic_target is not None:
+        return semantic_target
 
-    target = candidate.resolve()
-    if root not in target.parents:
-        raise ValueError(f"路径越界，禁止访问当前会话目录之外的路径: {path}")
-
-    visible_roots = [(root / name).resolve() for name in WORKSPACE_DIR_NAMES]
-    if not any(target == item or item in target.parents for item in visible_roots):
-        raise ValueError(
-            "只允许访问 /mnt/user-data/workspace、/mnt/user-data/outputs、"
-            "/mnt/user-data/uploads 或 /mnt/user-data/memory"
-        )
-
-    if writable:
-        if is_system_result_workspace_path(str(root), target):
-            raise ValueError("不允许通过文件编辑工具修改系统结果目录")
-        if is_managed_semantic_model_workspace_path(str(root), target) and not allow_managed_semantic_model_write:
-            raise ValueError("/mnt/user-data/workspace/semantic/ 是本轮语义模型只读快照，不能修改")
-    elif logical_path.kind == "uploads" and materialize_uploads:
-        # 上传文件可能以应用层密文落盘；只有真正读取时才解密，列表/删除不触发。
-        target = materialize_plaintext(target)
-
-    return target
+    return _resolve_regular_workspace_path(
+        root,
+        path=path,
+        logical_path=logical_path,
+        writable=writable,
+        allow_managed_semantic_model_write=allow_managed_semantic_model_write,
+        materialize_uploads=materialize_uploads,
+    )
 
 
 def is_system_result_workspace_path(workspace_root: str, path: Path) -> bool:
@@ -537,15 +653,26 @@ def is_system_result_workspace_path(workspace_root: str, path: Path) -> bool:
 
 def is_managed_semantic_model_workspace_path(workspace_root: str, path: Path) -> bool:
     """Return whether a path belongs to the system-owned semantic model directory."""
-    semantic_root = (Path(workspace_root).resolve() / "workspace" / "semantic").resolve()
+    legacy_root = (Path(workspace_root).resolve() / "workspace" / "semantic").resolve()
+    cache_root = conversation_semantic_dir_from_workspace(workspace_root).resolve()
     target = path.resolve()
-    return target == semantic_root or semantic_root in target.parents
+    return any(target == root or root in target.parents for root in (legacy_root, cache_root))
 
 
 def to_visible_path(workspace_root: str, path: Path) -> str:
     """把物理路径转为模型/前端可见路径（统一规范前缀 /mnt/user-data/）。"""
     root = Path(workspace_root).resolve()
     target = path.resolve()
+    semantic_root = conversation_semantic_dir_from_workspace(workspace_root).resolve()
+    legacy_root = (root / "workspace" / "semantic").resolve()
+    for current_root in (semantic_root, legacy_root):
+        if target == current_root or current_root in target.parents:
+            relative_semantic = target.relative_to(current_root).as_posix()
+            return (
+                f"/mnt/user-data/workspace/semantic/{relative_semantic}"
+                if relative_semantic
+                else ("/mnt/user-data/workspace/semantic")
+            )
     original = original_upload_path(target)
     if original is not None:
         target = original

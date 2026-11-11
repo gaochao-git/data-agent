@@ -136,7 +136,8 @@ kill -9 $(lsof -ti :5001)
 - `LOG_LEVEL` / `LOG_DIR` / `LOG_APP_NAME`：日志配置，默认按应用名分为应用日志、访问日志和告警日志；日志 IDC 使用启动时识别出的环境名
 - `SERVICE_AUTH_TOKEN`：服务间调用认证 Token，存放 SM4 加密后的密文
 - `DATABASE_URL` 或相关 MySQL 配置：业务库连接
-- `CHAT_DATA_HOME`：ChatData 应用**唯一的数据根目录**（**必填**，禁止回退到其它变量推导）；会话工作区、卸载的查询结果、用户技能（`skills/user`）、SQLite 检查点（`checkpoints.db`）均派生自此。系统技能不落本目录，运行时直读代码包 `apps/chat_data_app/agent/skills/`
+- `CHAT_DATA_HOME`：ChatData 应用**共享持久数据根**（**必填**，禁止回退到其它变量推导）；会话工作区、用户文件、用户技能（`skills/user`）和插件派生自此。系统技能不落本目录，运行时直读代码包 `apps/chat_data_app/agent/skills/`；该根可放共享存储（JuiceFS/GlusterFS）。
+- `CHAT_DATA_CACHE_HOME`：本地派生缓存根（可选，默认 `CHAT_DATA_HOME` 同级 `<name>-cache`）；`runtime-skills`、`context/semantic` 等可重建数据落在这里。多机房部署时必须指向本机磁盘，不能放共享卷。
 - `CHAT_DATA_NODE_ID`：当前执行单元名；同一机房 3 节点可共用同一个机房名（执行资格一致时），需要单节点隔离时再配唯一节点名；不配置时白名单非空则本节点不执行 Agent Run
 - `CHAT_DATA_AGENT_EXECUTOR_NODES`：允许执行 Agent Run 的节点名列表（逗号分隔）；为空表示不限制；可在后台运行配置动态修改，生效有约 30 秒缓存；读取失败 fail-close
 - `CHAT_DATA_PENDING_RUN_MAX_AGE_SECONDS`：pending Run 最长等待执行时间（秒），默认 `300`；超时置 `failed` 并取消未消费消息，避免旧请求被延迟领取执行
@@ -160,7 +161,7 @@ kill -9 $(lsof -ti :5001)
 
 `CHAT_DATA_HOME` 是应用侧唯一的运行时文件根。local 直接在该目录读写；sandbox 不访问该目录，也不使用宿主机目录挂载，而是通过 OpenSandbox Files API 上传会话快照，并在操作完成后把允许同步的 `workspace/`、`outputs/` 文件下载回应用侧。多应用实例之间的持久化存储和并发协调由部署层负责，代码不实现跨节点文件同步。
 
-会话文件位于 `threads/{user_id}/{创建日期YYYY-MM-DD}/{conversation_id}/user-data/`（按会话创建日期归档，路径统一由 `utils.storage_paths.conversation_thread_dir` 拼装），系统技能直接读代码包 `apps/chat_data_app/agent/skills/`（不落数据根），用户技能位于 `skills/user/{user_id}/<skill-name>/versions/vN/`。每个会话在创建/首次运行时构建技能快照 `threads/{user_id}/{创建日期YYYY-MM-DD}/{conversation_id}/runtime-skills/`（系统技能 + 自己已发布 + 他人 global 已发布），会话内冻结不变。sandbox 运行时通过 Files API 上传该快照到 `/mnt/skills`，并上传 `user-data/` 到 `/mnt/user-data`；技能在沙箱内只读，工具对 `workspace/`、`outputs/` 的变更在操作完成后下载回应用侧。大工具结果统一位于会话 `outputs/.tool-offload/`：查询结果保存为 `<id>.json`，其他工具结果保存为 `<id>.txt`，虚拟路径为 `/mnt/user-data/outputs/.tool-offload/<id>.<suffix>`。该目录可由 Agent 的 `file_read` 分页读取或 Bash 处理，但前端工作区列表、产物展示、技能导入和 `file_edit` 均忽略或拒绝它。系统技能直读代码包 `apps/chat_data_app/agent/skills/`（发布流程不再复制副本，`CHAT_DATA_HOME/skills/system` 已废弃），应用运行时只读且不写入技能数据库；用户技能继续由数据库元数据和版本目录管理。前端始终携带会话 ID 请求查询结果，后端据此校验当前用户归属并按固定路径读取。生产环境的 LangGraph checkpoint 使用 MySQL。MinIO 不在工作区、技能或查询结果的运行时链路中。
+会话文件位于 `threads/{user_id}/{创建日期YYYY-MM-DD}/{conversation_id}/user-data/`（按会话创建日期归档，路径统一由 `utils.storage_paths.conversation_thread_dir` 拼装），系统技能直接读代码包 `apps/chat_data_app/agent/skills/`（不落数据根），用户技能位于 `skills/user/{user_id}/<skill-name>/versions/vN/`。每个会话在创建/首次运行时构建技能快照到 `CHAT_DATA_CACHE_HOME/threads/{user_id}/{创建日期YYYY-MM-DD}/{conversation_id}/runtime-skills/`（系统技能 + 自己已发布 + 他人 global 已发布），会话内冻结不变；该快照是本地派生数据，不进入共享数据根。sandbox 运行时通过 Files API 上传该快照到 `/mnt/skills`，并上传 `user-data/` 到 `/mnt/user-data`；技能在沙箱内只读，工具对 `workspace/`、`outputs/` 的变更在操作完成后下载回应用侧。大工具结果统一位于会话 `outputs/.tool-offload/`：查询结果保存为 `<id>.json`，其他工具结果保存为 `<id>.txt`，虚拟路径为 `/mnt/user-data/outputs/.tool-offload/<id>.<suffix>`。该目录可由 Agent 的 `file_read` 分页读取或 Bash 处理，但前端工作区列表、产物展示、技能导入和 `file_edit` 均忽略或拒绝它。系统技能直读代码包 `apps/chat_data_app/agent/skills/`（发布流程不再复制副本，`CHAT_DATA_HOME/skills/system` 已废弃），应用运行时只读且不写入技能数据库；用户技能继续由数据库元数据和版本目录管理。前端始终携带会话 ID 请求查询结果，后端据此校验当前用户归属并按固定路径读取。生产环境的 LangGraph checkpoint 使用 MySQL。MinIO 不在工作区、技能或查询结果的运行时链路中。
 
 ## 权限边界
 

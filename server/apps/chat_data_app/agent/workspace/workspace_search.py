@@ -42,6 +42,7 @@ def build_rg_args(
     ignore_case: bool = False,
     context_lines: int = 0,
     output_mode: str = "content",
+    exclude_globs: tuple[str, ...] = (),
 ) -> list[str]:
     """构造 rg 参数列表（本地后端 subprocess 直用；沙箱经 build_rg_command_str 转壳）。
 
@@ -59,6 +60,8 @@ def build_rg_args(
         parts.extend(["--context", str(int(context_lines))])
     if glob and glob != "**/*":
         parts.extend(["--glob", glob])
+    for exclude_glob in exclude_globs:
+        parts.extend(["--glob", exclude_glob])
     parts.append(target)
     for p in patterns:
         parts.extend(["-e", p])
@@ -74,6 +77,7 @@ def build_rg_command_str(
     ignore_case: bool = False,
     context_lines: int = 0,
     output_mode: str = "content",
+    exclude_globs: tuple[str, ...] = (),
 ) -> str:
     """Build an rg command string for the sandbox backend (shell-executed)."""
     return " ".join(
@@ -86,6 +90,7 @@ def build_rg_command_str(
             ignore_case=ignore_case,
             context_lines=context_lines,
             output_mode=output_mode,
+            exclude_globs=exclude_globs,
         )
     )
 

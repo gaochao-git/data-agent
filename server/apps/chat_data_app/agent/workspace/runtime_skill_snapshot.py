@@ -1,6 +1,6 @@
 """会话级 runtime-skills 快照：把当前用户在本会话「有权访问」的技能冻结为只读副本。
 
-管理域（``CHAT_DATA_HOME/skills/...``）与运行域（``threads/<uid>/<yyyy-MM-DD>/<cid>/runtime-skills/``）
+管理域（``CHAT_DATA_HOME/skills/...``）与运行域（``CHAT_DATA_CACHE_HOME/threads/<uid>/<yyyy-MM-DD>/<cid>/runtime-skills/``）
 解耦：模型在运行期只看到 ``/mnt/skills/<name>/...``，读取的是本会话快照，不直接访问管理域，
 也不跨用户 / 跨历史会话越权。
 
@@ -26,7 +26,7 @@ from typing import Any
 from uuid import uuid4
 
 from utils.logger import get_logger
-from utils.storage_paths import conversation_thread_dir
+from utils.storage_paths import conversation_cache_dir, conversation_cache_dir_from_workspace
 
 logger = get_logger(__name__)
 
@@ -41,14 +41,14 @@ def runtime_skills_snapshot_dir(
 ) -> Path:
     """返回某会话的 runtime-skills 快照目录（``threads/<uid>/<yyyy-MM-DD>/<cid>/runtime-skills``）。
 
-    路径经由 ``storage_paths.conversation_thread_dir`` 唯一拼装点，与工作区目录保持同一日期分层。
+    路径经 ``storage_paths.conversation_cache_dir`` 拼装，落到本地派生缓存根。
     """
-    return conversation_thread_dir(user_id, conversation_id, created_date=created_date) / "runtime-skills"
+    return conversation_cache_dir(user_id, conversation_id, created_date=created_date) / "runtime-skills"
 
 
 def runtime_skills_snapshot_dir_from_workspace(workspace_root: str) -> Path:
-    """从 user-data 工作区根推导同级 runtime-skills 快照目录。"""
-    return Path(workspace_root).resolve().parent / "runtime-skills"
+    """从 user-data 工作区根推导同会话的本地 runtime-skills 快照目录。"""
+    return conversation_cache_dir_from_workspace(workspace_root) / "runtime-skills"
 
 
 def list_snapshot_skill_names(snapshot_dir: Path) -> list[str]:

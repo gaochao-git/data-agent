@@ -22,13 +22,14 @@ def _make_skill(root: Path, name: str) -> Path:
 
 
 def _conv_dir(tmp_path: Path, user_id: str = "u1", conversation_id: str = "c1") -> Path:
-    """与 conversation_thread_dir 布局一致的会话目录（threads/<uid>/<yyyy-MM-DD>/<cid>）。"""
+    """与 conversation_cache_dir 布局一致的本地派生目录。"""
     date_str = datetime.now().strftime("%Y-%m-%d")
-    return tmp_path / "threads" / user_id / date_str / conversation_id
+    return tmp_path / "cache" / "threads" / user_id / date_str / conversation_id
 
 
 def _patch_env(monkeypatch, tmp_path, sources):
     monkeypatch.setattr(storage_paths_module, "THREADS_DIR", tmp_path / "threads")
+    monkeypatch.setattr(storage_paths_module, "CACHE_THREADS_DIR", tmp_path / "cache" / "threads")
 
     class FakeSkillService:
         async def list_runtime_skill_sources_async(self, user_id):
@@ -287,6 +288,7 @@ def test_remove_tree_swallows_os_error(tmp_path, monkeypatch):
 def test_build_snapshot_removes_preexisting_tmp_dir(tmp_path, monkeypatch):
     """固定 uuid，验证构建前会清掉同名的残留 building 临时目录。"""
     monkeypatch.setattr(storage_paths_module, "THREADS_DIR", tmp_path / "threads")
+    monkeypatch.setattr(storage_paths_module, "CACHE_THREADS_DIR", tmp_path / "cache" / "threads")
     conv_dir = _conv_dir(tmp_path)
     conv_dir.mkdir(parents=True)
 
@@ -313,6 +315,7 @@ def test_build_snapshot_removes_preexisting_tmp_dir(tmp_path, monkeypatch):
 def test_build_snapshot_reuses_snapshot_completed_during_populate(tmp_path, monkeypatch):
     """填充期间并发请求先完成构建时：丢弃本次临时目录，复用已有快照。"""
     monkeypatch.setattr(storage_paths_module, "THREADS_DIR", tmp_path / "threads")
+    monkeypatch.setattr(storage_paths_module, "CACHE_THREADS_DIR", tmp_path / "cache" / "threads")
     conv_dir = _conv_dir(tmp_path)
     conv_dir.mkdir(parents=True)
     target = conv_dir / "runtime-skills"

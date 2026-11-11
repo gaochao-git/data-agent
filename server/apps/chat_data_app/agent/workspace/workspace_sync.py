@@ -10,6 +10,7 @@ from typing import Any
 from uuid import uuid4
 
 from utils.logger import get_logger
+from utils.storage_paths import conversation_semantic_dir_from_workspace
 from utils.tool_result_store import QUERY_RESULT_DIR_NAME, TOOL_OFFLOAD_DIR_NAME
 from utils.upload_storage_crypto import read_plaintext_bytes
 
@@ -170,8 +171,13 @@ async def _upload_application_tree(
     sandbox_root: str,
     file_mode: int,
     readonly_roots: tuple[str, ...] = (),
+    exclude_local_root: Path | None = None,
 ) -> tuple[int, int]:
-    files = _iter_application_files(application_root)
+    files = [
+        (relative, path)
+        for relative, path in _iter_application_files(application_root)
+        if exclude_local_root is None or (path != exclude_local_root and exclude_local_root not in path.parents)
+    ]
     total_bytes = 0
     for relative, path in files:
         data = await asyncio.to_thread(read_plaintext_bytes, path)
@@ -239,6 +245,8 @@ async def _initialize_sandbox_filesystem(
         paths=readonly_directories,
         mode=_SANDBOX_READONLY_DIRECTORY_MODE,
     )
+    legacy_semantic_root = application_root / "workspace" / "semantic"
+    semantic_root = conversation_semantic_dir_from_workspace(session.workspace_root)
     user_data_count, user_data_bytes = await _upload_application_tree(
         sandbox=session.sandbox,
         application_root=application_root,
@@ -250,7 +258,23 @@ async def _initialize_sandbox_filesystem(
             f"{sandbox_outputs_dir()}/{QUERY_RESULT_DIR_NAME}",
             sandbox_uploads_dir(),
         ),
+        exclude_local_root=legacy_semantic_root if semantic_root.is_dir() else None,
     )
+    semantic_count = semantic_bytes = 0
+    if semantic_root.is_dir():
+        semantic_sandbox_root = f"{sandbox_workspace_dir()}/semantic"
+        await _create_sandbox_directories(
+            sandbox=session.sandbox,
+            paths=_sandbox_tree_directories(semantic_root, semantic_sandbox_root),
+            mode=_SANDBOX_READONLY_DIRECTORY_MODE,
+        )
+        semantic_count, semantic_bytes = await _upload_application_tree(
+            sandbox=session.sandbox,
+            application_root=semantic_root,
+            sandbox_root=semantic_sandbox_root,
+            file_mode=_SANDBOX_READONLY_FILE_MODE,
+        )
+
     skill_count = skill_bytes = 0
     if session.runtime_skills_dir is not None:
         await _create_sandbox_directories(
@@ -265,10 +289,13 @@ async def _initialize_sandbox_filesystem(
             file_mode=_SANDBOX_READONLY_FILE_MODE,
         )
     logger.info(
-        "OpenSandbox 会话快照上传完成: sandbox_id=%s user_data_files=%s user_data_bytes=%s skill_files=%s skill_bytes=%s",
+        "OpenSandbox 会话快照上传完成: sandbox_id=%s user_data_files=%s user_data_bytes=%s "
+        "semantic_files=%s semantic_bytes=%s skill_files=%s skill_bytes=%s",
         session.sandbox_id,
         user_data_count,
         user_data_bytes,
+        semantic_count,
+        semantic_bytes,
         skill_count,
         skill_bytes,
     )

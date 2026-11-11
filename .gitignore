@@ -103,3 +103,4 @@ server/logs/
 mcp_servers/.env
 /.tmp-chrome-profile/
 /.deepseek/
+/chat_data-cache/

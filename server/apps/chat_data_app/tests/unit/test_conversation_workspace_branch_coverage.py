@@ -21,6 +21,7 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 
 from apps.chat_data_app.agent.workspace import runtime as cw_runtime_module
+from apps.chat_data_app.agent.workspace.runtime_skill_snapshot import runtime_skills_snapshot_dir_from_workspace
 from apps.chat_data_app.services.agent_run import conversation_workspace as cw
 from apps.chat_data_app.services.agent_run.conversation_workspace import (
     ConversationWorkspaceRuntime,
@@ -182,7 +183,7 @@ async def test_ensure_snapshot_async_swallows_build_failure(tmp_path, monkeypatc
 @pytest.mark.asyncio
 async def test_resolve_readonly_skill_path_validation_branches(tmp_path):
     root = _runtime_root(tmp_path)
-    skill_dir = root.parent / "runtime-skills" / "demo-skill"
+    skill_dir = runtime_skills_snapshot_dir_from_workspace(str(root)) / "demo-skill"
     skill_dir.mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text("---\nname: demo-skill\n---\n# Demo", encoding="utf-8")
     runtime = ConversationWorkspaceRuntime(workspace_root=str(root), user_id="u1", backend="local")

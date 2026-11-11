@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 from datetime import date, datetime
@@ -23,7 +24,24 @@ def _resolve_chat_data_home() -> Path:
 
 CHAT_DATA_HOME = str(_resolve_chat_data_home())
 
+
+def _resolve_chat_data_cache_home() -> Path:
+    """本地派生缓存根；未配置时放在共享根同级的 ``<name>-cache``。"""
+    value = os.getenv("CHAT_DATA_CACHE_HOME")
+    if value:
+        path = Path(value).expanduser()
+        if not path.is_absolute():
+            raise RuntimeError("CHAT_DATA_CACHE_HOME 必须是绝对路径")
+        return path.resolve()
+    shared = Path(CHAT_DATA_HOME)
+    return (shared.parent / f"{shared.name}-cache").resolve()
+
+
+CHAT_DATA_CACHE_HOME = str(_resolve_chat_data_cache_home())
+
 THREADS_DIR = Path(CHAT_DATA_HOME) / "threads"
+CACHE_THREADS_DIR = Path(CHAT_DATA_CACHE_HOME) / "threads"
+CACHE_CONTEXT_DIR = Path(CHAT_DATA_CACHE_HOME) / "context"
 
 _CREATED_DATE_PATTERN = re.compile(r"^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$")
 
@@ -98,6 +116,51 @@ def conversation_thread_dir(user_id: str, conversation_id: str, *, created_date:
     )
 
 
+def conversation_cache_dir(user_id: str, conversation_id: str, *, created_date: str | None = None) -> Path:
+    """会话派生缓存目录：``<CHAT_DATA_CACHE_HOME>/threads/<uid>/<date>/<cid>``。"""
+    return (
+        CACHE_THREADS_DIR
+        / normalize_user_id(user_id or "system")
+        / normalize_created_date(created_date)
+        / normalize_conversation_id(conversation_id)
+    )
+
+
+def conversation_cache_dir_from_workspace(workspace_root: str) -> Path:
+    """从共享工作区根定位同会话的本地缓存目录。"""
+    workspace = Path(str(workspace_root or "")).expanduser().resolve()
+    thread_dir = workspace.parent
+    try:
+        relative = thread_dir.relative_to(THREADS_DIR.resolve())
+    except ValueError:
+        parts = thread_dir.parts
+        indexes = [index for index, part in enumerate(parts) if part == "threads"]
+        if indexes:
+            relative = Path(*parts[indexes[-1] + 1 :])
+        else:
+            digest = hashlib.sha1(str(thread_dir).encode("utf-8")).hexdigest()  # noqa: S324 - 仅用于路径去重
+            relative = Path("adhoc") / digest
+    return (CACHE_THREADS_DIR / relative).resolve()
+
+
+def conversation_semantic_dir(user_id: str, conversation_id: str, *, created_date: str | None = None) -> Path:
+    """会话语义模型缓存目录（派生数据，不进入共享会话目录）。"""
+    return (
+        CACHE_CONTEXT_DIR
+        / "semantic"
+        / normalize_user_id(user_id or "system")
+        / normalize_created_date(created_date)
+        / normalize_conversation_id(conversation_id)
+    )
+
+
+def conversation_semantic_dir_from_workspace(workspace_root: str) -> Path:
+    """从共享工作区根定位同会话的语义模型缓存目录。"""
+    cached_thread = conversation_cache_dir_from_workspace(workspace_root)
+    relative = cached_thread.relative_to(CACHE_THREADS_DIR)
+    return (CACHE_CONTEXT_DIR / "semantic" / relative).resolve()
+
+
 def assert_workspace_root(
     workspace_root: str,
     *,
@@ -120,9 +183,16 @@ def assert_workspace_root(
 
 
 __all__ = [
+    "CHAT_DATA_CACHE_HOME",
     "CHAT_DATA_HOME",
     "assert_workspace_root",
+    "CACHE_CONTEXT_DIR",
+    "CACHE_THREADS_DIR",
     "THREADS_DIR",
+    "conversation_cache_dir",
+    "conversation_cache_dir_from_workspace",
+    "conversation_semantic_dir",
+    "conversation_semantic_dir_from_workspace",
     "conversation_thread_dir",
     "normalize_conversation_id",
     "normalize_created_date",
