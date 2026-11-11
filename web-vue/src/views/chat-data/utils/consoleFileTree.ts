@@ -152,7 +152,10 @@ export function isWorkspaceDirectoryArchiveDownloadable(directoryPath: string | 
  * 两者将来分化（例如允许下载但不允许删）时改各自的函数即可，不必动常量。
  */
 export function isWorkspaceFileDeletable(relativePath: string | null | undefined): boolean {
-  return Boolean(normalizeWorkspaceRelativePath(relativePath)) && !isSystemResultWorkspacePath(relativePath)
+  const path = normalizeWorkspaceRelativePath(relativePath)
+  if (!path || isSystemResultWorkspacePath(path)) return false
+  // 语义模型是系统物化的只读快照，即使投影到文件树也不能由用户删除。
+  return path !== 'workspace/semantic' && !path.startsWith('workspace/semantic/')
 }
 
 /**

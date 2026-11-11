@@ -181,6 +181,12 @@ describe('isWorkspaceFileDeletable（查询结果需留存审计）', () => {
     expect(isWorkspaceFileDeletable('outputs/经营月报.docx')).toBe(true)
   })
 
+  it('semantic 只读快照不可删除', () => {
+    expect(isWorkspaceFileDeletable('workspace/semantic')).toBe(false)
+    expect(isWorkspaceFileDeletable('workspace/semantic/order.yaml')).toBe(false)
+    expect(isWorkspaceFileDeletable('/mnt/user-data/workspace/semantic/order.yaml')).toBe(false)
+  })
+
   it('SQL 查询结果与工具卸载缓存不可删除', () => {
     expect(isWorkspaceFileDeletable('outputs/query_result/abc.csv')).toBe(false)
     expect(isWorkspaceFileDeletable('outputs/query_result')).toBe(false)
