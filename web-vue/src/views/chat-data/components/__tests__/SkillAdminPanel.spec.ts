@@ -118,6 +118,9 @@ describe('SkillAdminPanel 左侧目录树 + 右侧只读内容', () => {
     expect(wrapper.find('[data-tree="skill:s1:SKILL.md"]').exists()).toBe(true)
     expect(wrapper.find('[data-tree="skill:s1:dir:references"]').exists()).toBe(true)
     expect(wrapper.find('[data-tree="skill:s1:dir:assets"]').exists()).toBe(true)
+    // 默认渲染态是 Markdown HTML（标题不带 #），校验正文源码需切到「源码」
+    await wrapper.find('[data-qa="admin-skill-md-source"]').trigger('click')
+    await flushPromises()
     expect(wrapper.text()).toContain('# 周报生成')
     expect(wrapper.text()).toContain('v3')
     expect(wrapper.text()).toContain('张三')
