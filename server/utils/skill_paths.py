@@ -59,7 +59,7 @@ def runtime_skill_visible_root(name: str) -> str:
     """会话运行期技能扁平虚拟根，如 ``/mnt/skills/demo``。
 
     运行域不区分系统 / 用户类别，所有可见技能统一挂在 ``/mnt/skills/<name>``
-    之下（快照来自 ``threads/<uid>/<yyyy-MM-DD>/<cid>/runtime-skills/<name>``）。
+    之下（快照来自用户共享目录 ``threads/<uid>/runtime/skills/<name>``）。
     """
     return f"{SKILLS_VIRTUAL_ROOT}/{name}"
 

@@ -60,7 +60,6 @@ from apps.chat_data_app.services.agent_run.conversation_workspace import (
     workspace_runtime_from_state,
 )
 from apps.chat_data_app.services.semantic.run import semantic_query_service
-from utils import storage_paths as storage_paths_module
 from utils import tool_result_store
 from utils.storage_paths import (
     conversation_semantic_dir_from_workspace,
@@ -80,7 +79,6 @@ def _isolated_workspace(
     """把会话工作区建在 tmp_path 下，避免用例之间共享 CHAT_DATA_HOME。"""
     monkeypatch.setattr(workspace_runtime_module, "CHAT_DATA_HOME", str(tmp_path))
     monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "threads")
-    monkeypatch.setattr("utils.storage_paths.CACHE_THREADS_DIR", tmp_path / "cache" / "threads")
     return ensure_conversation_workspace(conversation_id, user_id, created_date=created_date)
 
 
@@ -231,7 +229,8 @@ def _analysis_query_state(
     }
 
 
-def test_ensure_conversation_workspace_creates_expected_dirs():
+def test_ensure_conversation_workspace_creates_expected_dirs(tmp_path, monkeypatch):
+    monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "threads")
     paths = ensure_conversation_workspace("conv_workspace_test", "user_a")
 
     date_str = datetime.now().strftime("%Y-%m-%d")
@@ -391,18 +390,17 @@ def test_workspace_path_mapping_translates_semantic_cache():
     assert mapping.mask(translated) == "cat /mnt/user-data/workspace/semantic/a.yaml"
 
 
-def test_cache_relative_from_workspace_handles_symlinked_cache_root(tmp_path, monkeypatch):
-    """缓存根经符号链接配置时，反推相对路径不能抛 ValueError（会让 bash 校验 500）。"""
-    real_root = tmp_path / "real-cache"
+def test_semantic_path_handles_symlinked_shared_root(tmp_path, monkeypatch):
+    """共享根经符号链接配置时，语义路径反推不能抛 ValueError。"""
+    real_root = tmp_path / "real-root"
     real_root.mkdir()
-    linked_root = tmp_path / "cache-link"
+    linked_root = tmp_path / "root-link"
     try:
         linked_root.symlink_to(real_root, target_is_directory=True)
     except (OSError, NotImplementedError):
         pytest.skip("当前平台不支持目录符号链接")
-    monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "threads")
-    monkeypatch.setattr(storage_paths_module, "CACHE_THREADS_DIR", linked_root / "threads")
-    workspace_root = tmp_path / "threads" / "user_a" / "2026-11-11" / "c1" / "user-data"
+    monkeypatch.setattr("utils.storage_paths.THREADS_DIR", linked_root / "threads")
+    workspace_root = linked_root / "threads" / "user_a" / "2026-11-11" / "c1" / "user-data"
     workspace_root.mkdir(parents=True)
 
     assert conversation_semantic_dir_from_workspace(str(workspace_root)).is_absolute()
@@ -696,8 +694,9 @@ async def test_file_copy_rejects_invalid_source_and_destination(monkeypatch, tmp
 
 
 @pytest.mark.asyncio
-async def test_file_copy_accepts_readonly_skill_source_and_keeps_skill_immutable(tmp_path):
+async def test_file_copy_accepts_readonly_skill_source_and_keeps_skill_immutable(tmp_path, monkeypatch):
     """/mnt/skills 只读技能文件可作为 file_copy 源，且技能路径不能作为复制目标。"""
+    monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "threads")
     workspace_root = tmp_path / "threads" / "u1" / "conv_skill_copy" / "user-data"
     (workspace_root / "workspace").mkdir(parents=True)
     skill_dir = runtime_skills_snapshot_dir_from_workspace(str(workspace_root)) / "demo-skill"
@@ -785,9 +784,10 @@ def test_read_workspace_text_file_rejects_missing_and_large_files():
 
 
 @pytest.mark.asyncio
-async def test_runtime_resolves_system_skill_file_under_system_path(tmp_path):
+async def test_runtime_resolves_system_skill_file_under_system_path(tmp_path, monkeypatch):
     # 运行域技能统一为扁平 /mnt/skills/<name>：直接从本会话快照目录解析，
     # 不再按类别/远程解析 skill_service.resolve_skill_path_async。
+    monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "threads")
     workspace_root = tmp_path / "threads" / "u1" / "conv_x" / "user-data"
     workspace_root.mkdir(parents=True)
     skill_dir = runtime_skills_snapshot_dir_from_workspace(str(workspace_root)) / "skill-creator"
@@ -819,7 +819,8 @@ async def test_runtime_resolves_system_skill_file_under_system_path(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_runtime_rejects_symlinked_skill_directory(tmp_path):
+async def test_runtime_rejects_symlinked_skill_directory(tmp_path, monkeypatch):
+    monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "threads")
     workspace_root = tmp_path / "threads" / "u1" / "conv_x" / "user-data"
     workspace_root.mkdir(parents=True)
     skill_root = runtime_skills_snapshot_dir_from_workspace(str(workspace_root))
@@ -2164,8 +2165,9 @@ async def test_semantic_query_tool_returns_dependency_error(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_file_read_reads_session_skill_snapshot(tmp_path):
+async def test_file_read_reads_session_skill_snapshot(tmp_path, monkeypatch):
     """技能正文只能从当前会话的 runtime-skills 快照读取。"""
+    monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "threads")
     workspace_root = tmp_path / "threads" / "u1" / "conv_a" / "user-data"
     workspace_root.mkdir(parents=True)
     snapshot_skill = runtime_skills_snapshot_dir_from_workspace(str(workspace_root)) / "demo-skill"
@@ -2190,7 +2192,8 @@ async def test_file_read_reads_session_skill_snapshot(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_file_read_rejects_skill_not_in_snapshot(tmp_path):
+async def test_file_read_rejects_skill_not_in_snapshot(tmp_path, monkeypatch):
+    monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "threads")
     workspace_root = tmp_path / "threads" / "u1" / "conv_b" / "user-data"
     workspace_root.mkdir(parents=True)
     # 预置另一个技能，使快照目录非空（_ensure_snapshot_async 直接复用、不触发管理域构建）；
@@ -2243,6 +2246,7 @@ async def test_file_grep_single_file_returns_matches(monkeypatch, tmp_path):
 @pytest.mark.asyncio
 async def test_file_grep_single_skill_file_returns_visible_path(monkeypatch, tmp_path):
     """file_grep on a single skill file must return the /mnt/skills visible path."""
+    monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "threads")
     workspace_root = tmp_path / "threads" / "u1" / "conv_grep_skill" / "user-data"
     workspace_root.mkdir(parents=True)
     skill_dir = runtime_skills_snapshot_dir_from_workspace(str(workspace_root)) / "demo-skill"

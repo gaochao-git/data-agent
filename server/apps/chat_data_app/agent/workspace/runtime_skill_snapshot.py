@@ -1,7 +1,7 @@
 """用户级共享 runtime-skills 快照：把当前用户「有权访问」的技能冻结为只读副本。
 
 管理域（代码包 / ``CHAT_DATA_HOME/skills/...``）与运行域
-（``CHAT_DATA_CACHE_HOME/runtime-skills/<uid>/``）解耦：模型在运行期只看到
+（``threads/<uid>/runtime/skills/``）解耦：模型在运行期只看到
 ``/mnt/skills/<name>/...``，读取的是该用户的共享快照，不直接访问管理域，也不跨用户越权。
 
 刷新语义：每次运行前对管理域做指纹校验（各技能目录的文件路径/大小/mtime 摘要），
@@ -34,7 +34,8 @@ from typing import Any
 from uuid import uuid4
 
 from utils.logger import get_logger
-from utils.storage_paths import conversation_cache_dir, conversation_cache_dir_from_workspace, runtime_skills_cache_dir
+from utils.redis_lock import redis_lease, runtime_skills_lease_key
+from utils.storage_paths import runtime_skills_cache_dir, workspace_user_id
 
 logger = get_logger(__name__)
 
@@ -47,16 +48,14 @@ def runtime_skills_snapshot_dir(
     *,
     created_date: str | None = None,
 ) -> Path:
-    """返回某会话的 runtime-skills 快照目录（``threads/<uid>/<yyyy-MM-DD>/<cid>/runtime-skills``）。
-
-    路径经 ``storage_paths.conversation_cache_dir`` 拼装，落到本地派生缓存根。
-    """
-    return conversation_cache_dir(user_id, conversation_id, created_date=created_date) / "runtime-skills"
+    """返回用户的 runtime-skills 快照目录（``threads/<uid>/runtime/skills``）。"""
+    del conversation_id, created_date
+    return runtime_skills_cache_dir(user_id)
 
 
 def runtime_skills_snapshot_dir_from_workspace(workspace_root: str) -> Path:
-    """从 user-data 工作区根推导同会话的本地 runtime-skills 快照目录。"""
-    return conversation_cache_dir_from_workspace(workspace_root) / "runtime-skills"
+    """从 user-data 工作区根推导用户的 runtime-skills 快照目录。"""
+    return runtime_skills_cache_dir(workspace_user_id(workspace_root))
 
 
 def list_snapshot_skill_names(snapshot_dir: Path) -> list[str]:
@@ -286,6 +285,8 @@ def _commit_snapshot(
     tmp: Path,
     fingerprints: dict[str, str],
     was_ready: bool,
+    *,
+    use_file_lock: bool = True,
 ) -> tuple[bool, Path | None]:
     """持跨进程文件锁完成「指纹复核 → 原子替换」，返回 (是否复用, 待清理旧目录)。
 
@@ -295,10 +296,12 @@ def _commit_snapshot(
     """
     lock_path = _snapshot_lock_path(target)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
-    acquired = False
+    fd: int | None = None
+    acquired = not use_file_lock
     try:
-        acquired = _acquire_snapshot_lock(fd)
+        if use_file_lock:
+            fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+            acquired = _acquire_snapshot_lock(fd)
         if not acquired:
             # 不把本次可能已过期的 tmp 覆盖上去：有可用快照就降级复用，不阻断本轮 run。
             if is_runtime_skill_snapshot_ready(target):
@@ -322,11 +325,12 @@ def _commit_snapshot(
         tmp.rename(target)
         return False, old_target
     finally:
-        try:
-            if acquired:
-                fcntl.flock(fd, fcntl.LOCK_UN)
-        finally:
-            os.close(fd)
+        if fd is not None:
+            try:
+                if acquired:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+            finally:
+                os.close(fd)
 
 
 def _sweep_stale_siblings(target: Path, *, now: float | None = None) -> None:
@@ -359,6 +363,7 @@ async def _build_snapshot_locked_async(
     sources: list[tuple[str, Path]],
     current_fingerprints: dict[str, str],
     was_ready: bool,
+    use_file_lock: bool = True,
 ) -> Path:
     """持进程内锁执行：填充临时目录 → 持跨进程锁复核指纹并原子替换共享目录。
 
@@ -396,7 +401,14 @@ async def _build_snapshot_locked_async(
         # 其它 worker 同时重建时，第二个会在锁内复用已有快照（同指纹或并发
         # 不同指纹），不会出现「旧目录已被移走 / 目标已非空」的 rename 冲突；
         # 等锁超时且已有可用快照时也走同一条复用降级路径，本轮不中断。
-        reused, old_target = await asyncio.to_thread(_commit_snapshot, target, tmp, current_fingerprints, was_ready)
+        reused, old_target = await asyncio.to_thread(
+            _commit_snapshot,
+            target,
+            tmp,
+            current_fingerprints,
+            was_ready,
+            use_file_lock=use_file_lock,
+        )
         if reused:
             await asyncio.to_thread(_remove_tree, tmp)
         if old_target is not None:
@@ -418,7 +430,7 @@ async def build_runtime_skill_snapshot_async(
 
     每次调用先取技能源并计算指纹：与快照标记一致则直接复用；不一致（技能
     新增/移除/内容变更）或早期无指纹的存量快照则原子重建。快照按用户共享
-    （``runtime-skills/<uid>``），重建在锁内串行执行，单轮执行期间保持稳定。
+    （``threads/<uid>/runtime/skills``），重建在锁内串行执行，单轮执行期间保持稳定。
     ``target_dir`` 显式指定目录仅保留给兼容/惰性构建路径。
     无可见技能时通过带指纹的隐藏完成标记冻结空快照。
     """
@@ -429,8 +441,10 @@ async def build_runtime_skill_snapshot_async(
     source = get_skill_snapshot_source()
     sources = await source.list_runtime_skill_sources_async(user_id) if source is not None else []
     current_fingerprints = compute_skill_fingerprints(sources)
+    if was_ready and _read_snapshot_fingerprints(target) == current_fingerprints:
+        return target
 
-    async with _snapshot_lock_for(target):
+    async with _snapshot_lock_for(target), redis_lease(runtime_skills_lease_key(user_id)) as leased:
         return await _build_snapshot_locked_async(
             user_id,
             conversation_id,
@@ -438,6 +452,7 @@ async def build_runtime_skill_snapshot_async(
             sources=list(sources),
             current_fingerprints=current_fingerprints,
             was_ready=was_ready,
+            use_file_lock=not leased,
         )
 
 

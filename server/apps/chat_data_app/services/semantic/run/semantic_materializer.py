@@ -8,12 +8,15 @@ import json
 import re
 import time
 from collections import OrderedDict
+from contextlib import asynccontextmanager
 from pathlib import PurePosixPath
 from typing import Any
 
 import yaml
 
 from utils.logger import get_logger
+from utils.redis_lock import file_lock, redis_lease, semantic_lease_key
+from utils.storage_paths import semantic_cache_dir
 
 from .chat_data_ossie_converter import ChatDataToOssieConverter
 from .semantic_config_service import SemanticConfigService, get_semantic_config_service
@@ -384,6 +387,36 @@ def _activate_semantic_cache(workspace_runtime: Any, datasource_id: str | None) 
         activate(datasource_id=str(datasource_id or ""))
 
 
+@asynccontextmanager
+async def _semantic_write_guard(user_id: str, datasource_id: str) -> Any:
+    """Redis 跨节点租约；降级时用同机文件锁兜底，避免多进程交叠写。"""
+    async with redis_lease(semantic_lease_key(user_id, datasource_id)) as leased:
+        if leased:
+            yield
+            return
+        target = semantic_cache_dir(user_id, datasource_id)
+        async with file_lock(target.parent / f".{target.name}.lock"):
+            yield
+
+
+async def _write_semantic_entries_locked(
+    workspace_runtime: Any,
+    *,
+    datasource_id: str | None,
+    entries: list[tuple[str, str]],
+    prune_stale: bool,
+    keep_paths: set[str] | None = None,
+) -> None:
+    """共享 semantic 写入：Redis 租约优先，未配置时由本地后端原子写兜底。"""
+    user_id = str(getattr(workspace_runtime, "user_id", "") or "system")
+    async with _semantic_write_guard(user_id, str(datasource_id or "unknown")):
+        if prune_stale:
+            _activate_semantic_cache(workspace_runtime, datasource_id)
+        await workspace_runtime.write_internal_text_files(entries)
+        if prune_stale and keep_paths is not None:
+            await _prune_stale_semantic_files(workspace_runtime, keep_paths)
+
+
 async def materialize_runtime_semantic_models(
     *,
     workspace_runtime: Any,
@@ -412,7 +445,9 @@ async def materialize_runtime_semantic_models(
         # 切到「无启用模型」的数据源组时也必须换 ref，否则会话继续读上一个
         # 数据源组的缓存（已停用模型会复活）。单模型物化 prune_stale=False 不切。
         if prune_stale:
-            _activate_semantic_cache(workspace_runtime, datasource_id)
+            user_id = str(getattr(workspace_runtime, "user_id", "") or "system")
+            async with _semantic_write_guard(user_id, str(datasource_id or "unknown")):
+                _activate_semantic_cache(workspace_runtime, datasource_id)
         return {"directory": [], "paths": {}, "configs": {}, "failed_ids": []}
 
     # 字段数据字典按数据源整体拉取一次，所有模型复用；
@@ -455,10 +490,7 @@ async def materialize_runtime_semantic_models(
             logger.warning("生成语义资产目录失败（模型快照不受影响）: %s", exc)
 
     written_at = time.perf_counter()
-    if prune_stale:
-        _activate_semantic_cache(workspace_runtime, datasource_id)
-    await workspace_runtime.write_internal_text_files(entries)
-    write_ms = (time.perf_counter() - written_at) * 1000
+    keep_paths: set[str] | None = None
     if prune_stale:
         # 保留集以“加载成功的启用模型”为准而非 entries：
         # 转换失败的模型仍启用，不应因本轮转换异常丢掉原本有效的 YAML。
@@ -466,7 +498,14 @@ async def materialize_runtime_semantic_models(
             str(PurePosixPath(SEMANTIC_SNAPSHOT_DIR) / _safe_file_name(config)) for config in selected_configs
         }
         keep_paths.add(catalog_path)
-        await _prune_stale_semantic_files(workspace_runtime, keep_paths)
+    await _write_semantic_entries_locked(
+        workspace_runtime,
+        datasource_id=datasource_id,
+        entries=entries,
+        prune_stale=prune_stale,
+        keep_paths=keep_paths,
+    )
+    write_ms = (time.perf_counter() - written_at) * 1000
     logger.info(
         "语义模型按需物料化完成: datasource_id=%s files=%s cache_hits=%s backend=%s 渲染=%.0fms 写盘=%.0fms",
         datasource_id,

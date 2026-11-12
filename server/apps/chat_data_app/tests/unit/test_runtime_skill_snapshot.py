@@ -9,7 +9,6 @@ import sys
 import textwrap
 import threading
 import time
-from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -30,15 +29,13 @@ def _make_skill(root: Path, name: str) -> Path:
 
 
 def _conv_dir(tmp_path: Path, user_id: str = "u1", conversation_id: str = "c1") -> Path:
-    """与 conversation_cache_dir 布局一致的本地派生目录。"""
-    date_str = datetime.now().strftime("%Y-%m-%d")
-    return tmp_path / "cache" / "threads" / user_id / date_str / conversation_id
+    """用户运行目录；测试里的显式 target_dir 由调用方继续拼子目录。"""
+    del conversation_id
+    return tmp_path / "threads" / user_id / "runtime"
 
 
 def _patch_env(monkeypatch, tmp_path, sources):
     monkeypatch.setattr(storage_paths_module, "THREADS_DIR", tmp_path / "threads")
-    monkeypatch.setattr(storage_paths_module, "CACHE_THREADS_DIR", tmp_path / "cache" / "threads")
-    monkeypatch.setattr(storage_paths_module, "CACHE_RUNTIME_SKILLS_DIR", tmp_path / "cache" / "runtime-skills")
 
     class FakeSkillService:
         async def list_runtime_skill_sources_async(self, user_id):
@@ -85,7 +82,7 @@ def test_shared_snapshot_reused_across_conversations_and_users(tmp_path, monkeyp
 
     assert first == second
     assert first != other_user
-    assert first.is_relative_to(tmp_path / "cache" / "runtime-skills" / "u1")
+    assert first.is_relative_to(tmp_path / "threads" / "u1" / "runtime" / "skills")
 
 
 def test_runtime_skills_dir_is_pinned_for_one_runtime(tmp_path, monkeypatch):
@@ -154,14 +151,14 @@ def test_build_snapshot_sweeps_stale_temp_dirs(tmp_path, monkeypatch):
     _patch_env(monkeypatch, tmp_path, [("skill-a", _make_skill(tmp_path / "mgmt", "skill-a"))])
     conv_dir = _conv_dir(tmp_path)
     conv_dir.mkdir(parents=True)
-    stale_building = conv_dir / "runtime-skills.building-abc"
-    stale_old = conv_dir / "runtime-skills.old-def"
+    stale_building = conv_dir / "skills.building-abc"
+    stale_old = conv_dir / "skills.old-def"
     stale_building.mkdir()
     stale_old.mkdir()
     expired = time.time() - snapshot_module.SNAPSHOT_TMP_TTL_SECONDS - 60
     for stale in (stale_building, stale_old):
         os.utime(stale, (expired, expired))
-    target = conv_dir / "runtime-skills"
+    target = conv_dir / "skills"
 
     asyncio.run(snapshot_module.build_runtime_skill_snapshot_async("u1", "c1", target_dir=target))
     assert not stale_building.exists()
@@ -174,10 +171,10 @@ def test_build_snapshot_keeps_fresh_sibling_temp_dirs(tmp_path, monkeypatch):
     _patch_env(monkeypatch, tmp_path, [("skill-a", _make_skill(tmp_path / "mgmt", "skill-a"))])
     conv_dir = _conv_dir(tmp_path)
     conv_dir.mkdir(parents=True)
-    active = conv_dir / "runtime-skills.building-other-session"
+    active = conv_dir / "skills.building-other-session"
     active.mkdir()
     (active / "in-progress.txt").write_text("x", encoding="utf-8")
-    target = conv_dir / "runtime-skills"
+    target = conv_dir / "skills"
 
     asyncio.run(snapshot_module.build_runtime_skill_snapshot_async("u1", "c1", target_dir=target))
 
@@ -200,7 +197,7 @@ def test_build_snapshot_serializes_concurrent_conversations(tmp_path, monkeypatc
     assert first == second
     assert (first / "skill-a" / "SKILL.md").is_file()
     assert snapshot_module.is_runtime_skill_snapshot_ready(first)
-    assert not [item for item in first.parent.iterdir() if item.name.startswith("runtime-skills.building-")]
+    assert not [item for item in first.parent.iterdir() if item.name.startswith("skills.building-")]
 
 
 def test_build_snapshot_failure_cleans_tmp(tmp_path, monkeypatch):
@@ -210,9 +207,7 @@ def test_build_snapshot_failure_cleans_tmp(tmp_path, monkeypatch):
         asyncio.run(snapshot_module.build_runtime_skill_snapshot_async("u1", "c1"))
 
     conv_dir = _conv_dir(tmp_path)
-    leftovers = (
-        [p for p in conv_dir.iterdir() if p.name.startswith("runtime-skills.building-")] if conv_dir.is_dir() else []
-    )
+    leftovers = [p for p in conv_dir.iterdir() if p.name.startswith("skills.building-")] if conv_dir.is_dir() else []
     assert leftovers == []
 
 
@@ -220,7 +215,7 @@ def test_build_snapshot_upgrades_legacy_snapshot_without_fingerprint(tmp_path, m
     """早期无指纹的存量快照：下次运行自动重建对齐（写入指纹、纳入当前可见技能）。"""
     _patch_env(monkeypatch, tmp_path, [("skill-a", _make_skill(tmp_path / "mgmt", "skill-a"))])
     conv_dir = _conv_dir(tmp_path)
-    existing = conv_dir / "runtime-skills"
+    existing = conv_dir / "skills"
     existing.mkdir(parents=True)
     (existing / "skill-old").mkdir()  # 早期快照：非空但标记无指纹
     (existing / snapshot_module.SNAPSHOT_READY_MARKER).touch()
@@ -236,7 +231,7 @@ def test_build_snapshot_upgrades_legacy_snapshot_without_fingerprint(tmp_path, m
 def test_build_snapshot_populates_precreated_empty_dir(tmp_path, monkeypatch):
     _patch_env(monkeypatch, tmp_path, [("skill-a", _make_skill(tmp_path / "mgmt", "skill-a"))])
     conv_dir = _conv_dir(tmp_path)
-    target = conv_dir / "runtime-skills"
+    target = conv_dir / "skills"
     target.mkdir(parents=True)  # 兼容测试：显式预建空目录
 
     built = asyncio.run(snapshot_module.build_runtime_skill_snapshot_async("u1", "c1", target_dir=target))
@@ -369,7 +364,6 @@ def test_remove_tree_swallows_os_error(tmp_path, monkeypatch):
 def test_build_snapshot_removes_preexisting_tmp_dir(tmp_path, monkeypatch):
     """固定 uuid，验证构建前会清掉同名的残留 building 临时目录。"""
     monkeypatch.setattr(storage_paths_module, "THREADS_DIR", tmp_path / "threads")
-    monkeypatch.setattr(storage_paths_module, "CACHE_THREADS_DIR", tmp_path / "cache" / "threads")
     conv_dir = _conv_dir(tmp_path)
     conv_dir.mkdir(parents=True)
 
@@ -384,13 +378,11 @@ def test_build_snapshot_removes_preexisting_tmp_dir(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(snapshot_module, "uuid4", lambda: SimpleNamespace(hex="fixed"))
 
-    stale_tmp = conv_dir / "runtime-skills.building-fixed"
+    stale_tmp = conv_dir / "skills.building-fixed"
     stale_tmp.mkdir(parents=True)
     (stale_tmp / "leftover.txt").write_text("x", encoding="utf-8")
 
-    target = asyncio.run(
-        snapshot_module.build_runtime_skill_snapshot_async("u1", "c1", target_dir=conv_dir / "runtime-skills")
-    )
+    target = asyncio.run(snapshot_module.build_runtime_skill_snapshot_async("u1", "c1", target_dir=conv_dir / "skills"))
     assert target.is_dir()
     assert not stale_tmp.exists()
 
@@ -398,10 +390,9 @@ def test_build_snapshot_removes_preexisting_tmp_dir(tmp_path, monkeypatch):
 def test_build_snapshot_reuses_snapshot_completed_during_populate(tmp_path, monkeypatch):
     """填充期间并发请求先完成构建时：丢弃本次临时目录，复用已有快照。"""
     monkeypatch.setattr(storage_paths_module, "THREADS_DIR", tmp_path / "threads")
-    monkeypatch.setattr(storage_paths_module, "CACHE_THREADS_DIR", tmp_path / "cache" / "threads")
     conv_dir = _conv_dir(tmp_path)
     conv_dir.mkdir(parents=True)
-    target = conv_dir / "runtime-skills"
+    target = conv_dir / "skills"
 
     class FakeSkillService:
         async def list_runtime_skill_sources_async(self, user_id):
@@ -419,7 +410,7 @@ def test_build_snapshot_reuses_snapshot_completed_during_populate(tmp_path, monk
     assert result == target
     assert (target / "skill-other").is_dir()
     assert not (target / "skill-a").exists()
-    leftovers = [p.name for p in conv_dir.iterdir() if p.name.startswith("runtime-skills.building-")]
+    leftovers = [p.name for p in conv_dir.iterdir() if p.name.startswith("skills.building-")]
     assert leftovers == []
 
 
@@ -543,7 +534,7 @@ def test_build_snapshot_rebuilds_mismatched_fingerprint_next_round(tmp_path, mon
     """复用了不同指纹的视图后，下一轮 was_ready=True 会按当前管理域自动重建收敛。"""
     source = _make_skill(tmp_path / "mgmt", "skill-a")
     _patch_env(monkeypatch, tmp_path, [("skill-a", source)])
-    target = tmp_path / "cache" / "runtime-skills" / "u1"
+    target = tmp_path / "threads" / "u1" / "runtime" / "skills"
     _make_ready_snapshot(target, {"skill-b": "fp-b"})
 
     built = asyncio.run(snapshot_module.build_runtime_skill_snapshot_async("u1", "c1"))
@@ -606,7 +597,7 @@ def _cross_process_writer_script() -> str:
         from utils import storage_paths as sp
 
         cache_root = Path(os.environ["DA_CACHE"])
-        sp.CACHE_RUNTIME_SKILLS_DIR = cache_root / "runtime-skills"
+        sp.THREADS_DIR = cache_root
         sync_dir = Path(os.environ["DA_SYNC"])
         cid = sys.argv[1]
 
@@ -655,7 +646,6 @@ def test_build_snapshot_serializes_across_processes(tmp_path):
         **os.environ,
         "PYTHONPATH": str(server_root) + os.pathsep + os.environ.get("PYTHONPATH", ""),
         "CHAT_DATA_HOME": str(tmp_path / "chat_data"),
-        "CHAT_DATA_CACHE_HOME": str(cache_root),
         "DA_CACHE": str(cache_root),
         "DA_SKILL_SRC": str(skill_dir),
         "DA_SYNC": str(sync_dir),
@@ -677,7 +667,7 @@ def test_build_snapshot_serializes_across_processes(tmp_path):
     # 恰好一个进程完成提交，另一个在锁内发现新指纹后复用：这正是跨进程串行化的证据
     assert sorted(outcomes) == ["COMMIT", "REUSE"]
 
-    target = cache_root / "runtime-skills" / "u1"
+    target = cache_root / "u1" / "runtime" / "skills"
     assert snapshot_module.is_runtime_skill_snapshot_ready(target)
     assert (target / "skill-a" / "SKILL.md").is_file()
     assert not [item for item in target.parent.iterdir() if ".building-" in item.name]

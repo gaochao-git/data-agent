@@ -270,7 +270,7 @@ class ConversationWorkspaceRuntime:
         """将 /mnt/skills 路径解析到本会话快照真实文件系统。
 
         运行域技能统一为扁平路径 ``/mnt/skills/<name>/...``，直接映射到
-        ``CHAT_DATA_CACHE_HOME/runtime-skills/<uid>/<name>/...``；不做按名远程解析，
+        ``threads/<uid>/runtime/skills/<name>/...``；不做按名远程解析，
         快照内不存在即视为无权限。快照缺失时惰性构建。
         路径安全规则统一在 utils.skill_paths.resolve_skill_snapshot_path。
         """
@@ -523,9 +523,9 @@ def ensure_conversation_workspace(
     """创建并返回 ChatData 会话目录结构。
 
     布局：共享根 ``threads/<uid>/<yyyy-MM-DD>/<cid>/user-data/``；
-    技能快照按用户共享，落到 ``CHAT_DATA_CACHE_HOME/runtime-skills/<uid>/``。
+    技能快照按用户共享，落到 ``threads/<uid>/runtime/skills/``。
     ``created_date`` 为会话创建日期（``YYYY-MM-DD``，缺省当前日期）。``user-data`` 为模型可写
-    运行域；``runtime-skills`` 为本地派生缓存，不进入共享数据根，也不在会话目录预建。
+    运行域；``runtime-skills`` 落在用户 ``runtime/skills`` 派生目录，不在会话目录预建。
     """
     try:
         base = conversation_thread_dir(user_id, conversation_id, created_date=created_date).resolve()

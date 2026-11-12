@@ -49,8 +49,9 @@ from apps.chat_data_app.services.agent_run.conversation_workspace import (
 
 
 def _workspace_root(tmp_path: Path) -> Path:
-    # 新布局：threads/<uid>/<yyyy-MM-DD>/<cid>/{user-data/{workspace,outputs,uploads}, runtime-skills/}
     # 本用例直接手工搭目录传 workspace_root，不经 ensure_conversation_workspace，日期层不参与。
+    # 下方的 runtime-skills 是夹具自建的模拟快照目录（显式传入 runtime_skills_dir），
+    # 不是生产路径；生产快照按用户共享于 threads/<uid>/runtime/skills。
     root = tmp_path / "chat-data" / "threads" / "user_a" / "conv_a" / "user-data"
     for name in ("workspace", "outputs", "uploads"):
         (root / name).mkdir(parents=True, exist_ok=True)
@@ -719,8 +720,9 @@ def test_sandbox_list_dir_delegates_through_real_path(monkeypatch):
     assert any(entry.path == "/mnt/user-data/workspace" and entry.depth == 2 for entry in captured["directory_entries"])
 
 
-def test_local_bash_can_read_only_loaded_skill_path(tmp_path):
+def test_local_bash_can_read_only_loaded_skill_path(tmp_path, monkeypatch):
     # 运行域技能直接来自本会话快照目录，不再经 register_runtime_skill 逐条登记。
+    monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "threads")
     workspace_root = _workspace_root(tmp_path)
     skill_dir = runtime_skills_snapshot_dir_from_workspace(str(workspace_root)) / "data-analyzing"
     references = skill_dir / "references"

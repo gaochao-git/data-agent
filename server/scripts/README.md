@@ -28,23 +28,25 @@ CHAT_DATA_ENV=uat python scripts/crypto.py encrypt '数据库密码'
 python crypto.py encrypt '数据库密码'
 ```
 
-
-## 派生缓存清理
+## 共享 runtime 清理
 
 ```bash
-# 默认清理 7 天前未被会话 ref 引用的 runtime-skills / semantic 派生缓存
-python scripts/cleanup_chat_data_cache.py
+# 默认清理 7 天前、没有被会话 ref 引用的共享 semantic，
+# 以及过期的 skills.building-* / skills.old-* 临时目录
+python scripts/cleanup_shared_runtime.py
 
 # 只查看，不删除
-python scripts/cleanup_chat_data_cache.py --dry-run
+python scripts/cleanup_shared_runtime.py --dry-run
 
 # 自定义保留天数
-python scripts/cleanup_chat_data_cache.py --max-age-days 14
+python scripts/cleanup_shared_runtime.py --max-age-days 14
 ```
 
-清理只针对 `CHAT_DATA_CACHE_HOME` 的新布局目录（`runtime-skills/{user}/`、`semantic/{user}/{datasource}/`），不会删除共享 `CHAT_DATA_HOME` 或数据库记录；升级前的历史目录不在运行期 GC 范围内，需按只读扫描结果由运维单独处理。
-建议低峰期定时执行，例如每天 04:00：
+清理只针对 `CHAT_DATA_HOME/threads/{user_id}/runtime/`，不会删除会话 `user-data/`、技能管理源或插件。
+建议在低峰期由单个维护任务执行，不要每个应用节点同时跑：
 
 ```cron
-0 4 * * * cd /path/to/data-agent/server && python scripts/cleanup_chat_data_cache.py --max-age-days 7
+0 4 * * * cd /path/to/data-agent/server && python scripts/cleanup_shared_runtime.py --max-age-days 7
 ```
+
+共享 runtime 清理需要保护 semantic ref；脚本已按 ref 保护，建议只由单个维护任务执行。

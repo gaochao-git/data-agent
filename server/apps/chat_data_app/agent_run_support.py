@@ -634,7 +634,7 @@ async def _load_runtime_skills_xml(
     # runtime-skills 是模型实际读取、file_read 解析及沙箱挂载的唯一技能真相。
     # 先构建/复用该用户的共享快照，再从同一目录生成系统提示词技能清单，不能回退管理域。
     try:
-        # 本轮固定使用 ``runtime-skills/<uid>``（每用户一份，按指纹重建）。
+        # 本轮固定使用用户共享快照 ``threads/<uid>/runtime/skills``（按指纹重建）。
         snapshot_dir = await workspace_runtime.ensure_runtime_skills_async()
         available_skills = await asyncio.to_thread(list_snapshot_skill_metadata, snapshot_dir)
         available_skills_xml = format_skills_prompt(available_skills)
