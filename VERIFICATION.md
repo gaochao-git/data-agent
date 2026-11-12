@@ -34,9 +34,9 @@ CHAT_DATA_HOME/                         共享 JuiceFS/GlusterFS
 
 ```text
 scripts/verify --all：通过
-后端：4667 passed
+后端：4671 passed
 行覆盖：98.37%
-分支覆盖：97.42%
+分支覆盖：97.41%
 OpenAPI：无 diff
 前端：637 passed，type-check / build 通过
 共享目录写入：直接路径验证通过

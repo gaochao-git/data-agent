@@ -26,6 +26,8 @@ logger = get_logger(__name__)
 
 LEASE_WAIT_SECONDS = 30.0
 LEASE_POLL_SECONDS = 0.1
+FILE_LOCK_WAIT_SECONDS = 30.0
+FILE_LOCK_POLL_SECONDS = 0.1
 _CONNECT_TIMEOUT = 5.0
 _RELEASE_SCRIPT = """
 if redis.call('GET', KEYS[1]) == ARGV[1] then
@@ -128,11 +130,27 @@ def semantic_lease_key(user_id: str, datasource_id: str) -> str:
     return f"chatdata:lock:runtime:semantic:{user_id}:{datasource_id}"
 
 
-async def _acquire_file_lock(path: Path) -> int:
+class FileLockTimeoutError(TimeoutError):
+    """等待同机文件锁超时。"""
+
+
+def _acquire_file_lock_sync(path: Path, timeout: float) -> int:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
-    await asyncio.to_thread(fcntl.flock, fd, fcntl.LOCK_EX)
-    return fd
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return fd
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                os.close(fd)
+                raise FileLockTimeoutError(f"等待文件锁超时: {path}") from None
+            time.sleep(FILE_LOCK_POLL_SECONDS)
+
+
+async def _acquire_file_lock(path: Path, *, timeout: float = FILE_LOCK_WAIT_SECONDS) -> int:
+    return await asyncio.to_thread(_acquire_file_lock_sync, path, timeout)
 
 
 async def _release_file_lock(fd: int) -> None:
@@ -143,9 +161,9 @@ async def _release_file_lock(fd: int) -> None:
 
 
 @asynccontextmanager
-async def file_lock(path: Path) -> AsyncIterator[None]:
+async def file_lock(path: Path, *, timeout: float = FILE_LOCK_WAIT_SECONDS) -> AsyncIterator[None]:
     """Redis 不可用时的同机文件锁兜底；跨机房不能依赖该锁。"""
-    fd = await _acquire_file_lock(path)
+    fd = await _acquire_file_lock(path, timeout=timeout)
     try:
         yield
     finally:

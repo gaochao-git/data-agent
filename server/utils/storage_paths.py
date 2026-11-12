@@ -134,18 +134,6 @@ def conversation_semantic_ref_path(workspace_root: str) -> Path:
     return workspace.parent / "semantic-ref.json"
 
 
-def _legacy_semantic_ref_path(workspace_root: str) -> Path:
-    """兼容上一版放在用户运行目录 ``semantic/.refs`` 下的 ref。"""
-    user_id, created_date, conversation_id = _workspace_relative_parts(workspace_root)
-    return (
-        user_runtime_dir(user_id)
-        / "semantic"
-        / ".refs"
-        / created_date
-        / f"{normalize_conversation_id(conversation_id)}.json"
-    )
-
-
 def _read_semantic_ref_file(path: Path) -> dict[str, str] | None:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -156,19 +144,12 @@ def _read_semantic_ref_file(path: Path) -> dict[str, str] | None:
     datasource_id = str(data.get("datasource_id") or "").strip()
     if not datasource_id:
         return None
-    values = {"datasource_id": datasource_id}
-    user_id = str(data.get("user_id") or "").strip()
-    if user_id:
-        values["user_id"] = user_id
-    return values
+    return {"datasource_id": datasource_id}
 
 
 def read_semantic_cache_ref(workspace_root: str) -> dict[str, str] | None:
-    """读取会话语义绑定：新会话目录优先，兼容旧 ``.refs``。"""
-    ref = _read_semantic_ref_file(conversation_semantic_ref_path(workspace_root))
-    if ref is not None:
-        return ref
-    return _read_semantic_ref_file(_legacy_semantic_ref_path(workspace_root))
+    """读取会话语义绑定；会话目录 ``semantic-ref.json`` 是唯一真值源。"""
+    return _read_semantic_ref_file(conversation_semantic_ref_path(workspace_root))
 
 
 def write_semantic_cache_ref(
