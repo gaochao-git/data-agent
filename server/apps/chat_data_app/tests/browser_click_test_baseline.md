@@ -978,6 +978,20 @@ ChatData
 - 边界：目录参数容错 `outputs/../uploads`（拒绝，后端 `normalize_archive_directory` 拦 `..` 与非法首段，返回业务错误而非 500）；空目录不显示按钮；打包中按钮进 spin 且重复点击被吞。
 - 关联：`utils/consoleFileTree.ts`（`isWorkspaceDirectoryArchiveDownloadable`）、`ConversationWorkspacePanel.vue`、`routers/conversation_workspace.py`（archive）、`services/agent_run/conversation_workspace.py`（`normalize_archive_directory`）。
 
+#### FILE-11 空目录展示、二级目录默认折叠与语义快照只读（2026-11-12 新增）
+
+- 角色：`USER_A`
+- 前置：① 会话含空目录（`memory/`、`outputs/.tool-offload` 等）；② 至少一个**有子节点**的二级目录（如 `outputs/123`、`workspace/semantic`）；③ 有 `semantic-ref.json` 的会话已物化出 `workspace/semantic/*.yaml`。
+- 操作：展开右侧工作区 → 核对空目录与四个固定顶层目录 → 核对二级目录折叠态 → 手动展开 → 切到另一会话再切回 → 折叠全部 / 展开全部 → 展开 `workspace/semantic` 检查文件行 → 点 YAML 预览与刷新。
+- 预期：
+  - 接口 `directories` 字段进入 `buildProducedFileTree`；固定四目录（uploads / workspace / outputs / memory）常驻，**空目录与无文件的中间目录也渲染成目录行**，计数与大小取子树可见文件。
+  - 二级及更深**有子节点**的目录首次出现默认折叠（`fa-chevron-right`），空目录不折叠；用户手动展开后不自动收起；切会话清空 `knownNestedDirectories` 并把折叠集合重置为 `DEFAULT_COLLAPSED_CONSOLE_DIRECTORIES`。
+  - 折叠 / 展开全部只作用于可折叠目录，空目录不受影响；按钮 title 在「折叠全部目录」↔「展开全部目录」间翻转。
+  - `workspace/semantic/*.yaml` 由语义缓存投影渲染；文件行**无删除按钮**（`isWorkspaceFileDeletable` 拦 `workspace/semantic/`）；历史会话的旧 `user-data/workspace/semantic/` 不进入文件列表、目录列表与占用统计。
+  - 系统结果目录（`outputs/query_result`、`outputs/.tool-offload`）可展示、可只读预览，但无下载 / 删除 / 打包入口；空 `outputs` 不显示打包下载入口（FILE-10 边界）。
+  - 刷新同时发出 `workspace-files` 与 `content?path=...&_refresh=<token>`，均 200；预览内容正常渲染，无「文件内容加载失败」。
+- 关联：`services/agent_run/conversation_workspace.py`（`list_workspace_directories` / `_is_stale_legacy_semantic` / `_append_semantic_workspace_entries`）、`routers/conversation_workspace.py`、`utils/consoleFileTree.ts`（`ensureProducedDirectoryNode` / `buildProducedFileTree` / `isWorkspaceFileDeletable`）、`ConversationWorkspacePanel.vue`（`knownNestedDirectories` watch）。
+
 ### 4.7 上下文、消息和会话历史
 
 > 本节 `CTX-*` 用例归属数据智能体的会话与上下文子功能，与 `AG-*` 同属业务端数据智能体模块；会话收藏属于会话管理，不属于 `FAV`。
@@ -1601,4 +1615,5 @@ ChatData
 
 ### 5.3 最近执行记录
 
+- `browser_click_test_runs/2026-11-12.md`（feature/chat-data-storage-split 分支变更定向回归；含 FILE-11 新增与未覆盖项声明）
 - `browser_click_test_runs/2026-11-02.md`
