@@ -19,13 +19,19 @@ def _is_old(path: Path, cutoff: float) -> bool:
 
 def _protected_semantic_paths() -> set[Path]:
     protected: set[Path] = set()
-    for ref_file in THREADS_DIR.glob("*/runtime/semantic/.refs/**/*.json"):
+    ref_files = [
+        *THREADS_DIR.glob("*/*/*/semantic-ref.json"),
+        *THREADS_DIR.glob("*/runtime/semantic/.refs/**/*.json"),
+    ]
+    for ref_file in ref_files:
         try:
             data = json.loads(ref_file.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
         datasource_id = str(data.get("datasource_id") or "").strip()
-        user_id = str(data.get("user_id") or "").strip()
+        relative_parts = ref_file.relative_to(THREADS_DIR).parts
+        # ref 路径本身已包含 user_id：threads/<uid>/runtime/semantic/.refs/...
+        user_id = relative_parts[0] if relative_parts else ""
         if datasource_id and user_id:
             protected.add(semantic_cache_dir(user_id, datasource_id).resolve())
     return protected

@@ -242,7 +242,6 @@ class ConversationWorkspaceRuntime:
             raise ValueError("语义缓存缺少 datasource_id")
         write_semantic_cache_ref(
             self.workspace_root,
-            user_id=self.user_id,
             datasource_id=normalized_datasource,
         )
         return semantic_cache_dir(self.user_id, normalized_datasource).resolve()

@@ -390,16 +390,6 @@ class RedisEventBus:
                 _elapsed_ms(started),
             )
             raise
-        logger.debug(
-            "[redis-event-bus] XADD run_id=%s event_id=%s event_type=%s stream_id=%s duplicate=%s payload_bytes=%d elapsed_ms=%.1f",
-            run_id,
-            event_id,
-            event_type,
-            result[0],
-            str(result[1]) == "duplicate",
-            len(payload.encode("utf-8")),
-            _elapsed_ms(started),
-        )
         return str(result[0])
 
     async def claim_run_owner(self, run_id: str, owner_token: str) -> None:
@@ -458,15 +448,6 @@ class RedisEventBus:
             )
             raise
         events = [self._decode_event(stream_id, fields) for _key, rows in result for stream_id, fields in rows]
-        logger.debug(
-            "[redis-event-bus] XREAD run_id=%s cursor=%s block_ms=%d count_limit=%d returned=%d elapsed_ms=%.1f",
-            run_id,
-            cursor,
-            block_ms,
-            count,
-            len(events),
-            _elapsed_ms(started),
-        )
         return events
 
     async def run_stream_exists(self, run_id: str) -> bool:

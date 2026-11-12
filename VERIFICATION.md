@@ -9,16 +9,16 @@
 CHAT_DATA_HOME/                         共享 JuiceFS/GlusterFS
 ├── threads/
 │   └── {user_id}/
-│       ├── {yyyy-MM-dd}/{conversation_id}/user-data/
-│       │   ├── uploads/
-│       │   ├── workspace/
-│       │   ├── outputs/
-│       │   └── memory/
+│       ├── {yyyy-MM-dd}/{conversation_id}/
+│       │   ├── semantic-ref.json
+│       │   └── user-data/
+│       │       ├── uploads/
+│       │       ├── workspace/
+│       │       ├── outputs/
+│       │       └── memory/
 │       └── runtime/
 │           ├── skills/
-│           └── semantic/
-│               ├── .refs/{date}/{conversation_id}.json
-│               └── {datasource_id}/
+│           └── semantic/{datasource_id}/
 ├── skills/user/{user_id}/{skill}/versions/vN/
 └── plugins/{plugin_name}/
 ```
@@ -26,7 +26,7 @@ CHAT_DATA_HOME/                         共享 JuiceFS/GlusterFS
 ## 关键设计
 
 - 会话数据、技能运行快照、语义缓存、技能管理源、插件都在共享根。
-- semantic ref 为 `{user_id, datasource_id}`，与 semantic 目录同在共享根，跨节点可读。
+- semantic ref 位于会话目录 `{cid}/semantic-ref.json`，只保存 `datasource_id`；user_id 由路径推导。
 - runtime-skills 和 semantic 优先使用 Redis 租约串行写入；未配置 Redis 时降级本地锁。
 - 共享 runtime 清理：`scripts/cleanup_shared_runtime.py`，保护 ref 指向的 semantic。
 

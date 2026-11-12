@@ -14,7 +14,7 @@
   `outputs/.tool-offload/` 为系统管理只读/隐藏区（`assert_writable` 强制）。
 - 存储分层：`workspace/semantic/` 的逻辑路径不变，物理文件落
   `CHAT_DATA_HOME/threads/{user}/runtime/semantic/{datasource}/`，
-  会话 ref 在同目录 `.refs/`；
+  会话 ref 在会话目录 `{date}/{conversation_id}/semantic-ref.json`；
   `runtime-skills` 落 `CHAT_DATA_HOME/threads/{user}/runtime/skills/`；
   会话只保存 semantic ref；二者都是共享根下的派生缓存。
 

@@ -28,9 +28,9 @@ def test_cleanup_protects_referenced_semantic_and_clears_stale(tmp_path, monkeyp
     stale.mkdir(parents=True)
     _set_mtime(protected, old)
     _set_mtime(stale, old)
-    ref = threads / "u1" / "runtime" / "semantic" / ".refs" / "2026-11-12" / "c1.json"
+    ref = threads / "u1" / "2026-11-12" / "c1" / "semantic-ref.json"
     ref.parent.mkdir(parents=True)
-    ref.write_text(json.dumps({"user_id": "u1", "datasource_id": "ds1"}), encoding="utf-8")
+    ref.write_text(json.dumps({"datasource_id": "ds1"}), encoding="utf-8")
 
     tmp_skill = threads / "u1" / "runtime" / "skills.building-abc"
     tmp_skill.mkdir(parents=True)

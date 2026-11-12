@@ -129,7 +129,13 @@ def _workspace_relative_parts(workspace_root: str) -> tuple[str, str, str]:
 
 
 def conversation_semantic_ref_path(workspace_root: str) -> Path:
-    """会话与数据源组的绑定文件：用户运行目录下的 semantic/.refs。"""
+    """会话与数据源组的绑定文件：会话目录下的 ``semantic-ref.json``。"""
+    workspace = Path(str(workspace_root or "")).expanduser().resolve()
+    return workspace.parent / "semantic-ref.json"
+
+
+def _legacy_semantic_ref_path(workspace_root: str) -> Path:
+    """兼容上一版放在用户运行目录 ``semantic/.refs`` 下的 ref。"""
     user_id, created_date, conversation_id = _workspace_relative_parts(workspace_root)
     return (
         user_runtime_dir(user_id)
@@ -158,24 +164,22 @@ def _read_semantic_ref_file(path: Path) -> dict[str, str] | None:
 
 
 def read_semantic_cache_ref(workspace_root: str) -> dict[str, str] | None:
-    """读取会话当前语义缓存引用；只有 ``runtime/semantic/.refs`` 一个真值源。"""
-    return _read_semantic_ref_file(conversation_semantic_ref_path(workspace_root))
+    """读取会话语义绑定：新会话目录优先，兼容旧 ``.refs``。"""
+    ref = _read_semantic_ref_file(conversation_semantic_ref_path(workspace_root))
+    if ref is not None:
+        return ref
+    return _read_semantic_ref_file(_legacy_semantic_ref_path(workspace_root))
 
 
 def write_semantic_cache_ref(
     workspace_root: str,
     *,
-    user_id: str,
     datasource_id: str,
 ) -> Path:
     """原子写入会话语义缓存引用，供同会话后续读取。"""
     path = conversation_semantic_ref_path(workspace_root)
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = json.dumps(
-        {"user_id": user_id, "datasource_id": datasource_id},
-        ensure_ascii=False,
-        sort_keys=True,
-    )
+    payload = json.dumps({"datasource_id": datasource_id}, ensure_ascii=False, sort_keys=True)
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     try:
         temporary.write_text(payload, encoding="utf-8")
