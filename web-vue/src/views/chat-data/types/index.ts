@@ -356,6 +356,10 @@ export interface ConversationItem {
   datasource_id?: string
   is_favorited?: boolean
   run_status?: 'pending' | 'active' | 'cancelling' | 'interrupting' | 'waiting_user' | 'finished' | 'failed' | 'cancelled' | 'interrupted' | null
+  /** 最近一次成功完成时间（ISO 8601，带服务端时区偏移）；未读判断由浏览器本地记录，不落库。 */
+  last_finished_at?: string | null
+  /** 前端根据 last_finished_at 与本地已读时间计算，不来自后端。 */
+  has_unread_completion?: boolean
 }
 
 export interface ConversationGroupPage {

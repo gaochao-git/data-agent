@@ -53,8 +53,12 @@ def _llm_model_id(llm: Any) -> str:
     return str(getattr(llm, "model_name", None) or getattr(llm, "model", None) or "unknown")
 
 
-def _format_thread(t: UserThread, run_status: str | None = None) -> dict[str, Any]:
-    """转换会话列表返回结构"""
+def _format_thread(
+    t: UserThread,
+    run_status: str | None = None,
+    last_finished_at: datetime | None = None,
+) -> dict[str, Any]:
+    """转换会话列表返回结构。"""
     result = {
         "id": t.thread_id,
         "title": t.thread_title,
@@ -65,15 +69,21 @@ def _format_thread(t: UserThread, run_status: str | None = None) -> dict[str, An
         "is_favorited": bool(t.is_favorited) if t.is_favorited is not None else False,
     }
     result["run_status"] = run_status
+    # MySQL 的 update_time 是 naive 本地时间；附带本地时区偏移后再交给前端，
+    # 避免浏览器按自己的时区解析导致「完成未读」整体偏移。
+    result["last_finished_at"] = (
+        last_finished_at.astimezone().isoformat(timespec="seconds") if last_finished_at else None
+    )
     return result
 
 
 async def _format_threads(rows: list[UserThread], user_id: str | None) -> list[dict[str, Any]]:
-    statuses = await conversation_dao.list_active_run_statuses(
-        [thread.thread_id for thread in rows],
-        user_id,
-    )
-    return [_format_thread(thread, statuses.get(thread.thread_id)) for thread in rows]
+    conversation_ids = [thread.thread_id for thread in rows]
+    statuses = await conversation_dao.list_active_run_statuses(conversation_ids, user_id)
+    finished_times = await conversation_dao.list_latest_finished_run_times(conversation_ids, user_id)
+    return [
+        _format_thread(thread, statuses.get(thread.thread_id), finished_times.get(thread.thread_id)) for thread in rows
+    ]
 
 
 _THINK_TAG_RE = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
@@ -276,6 +286,7 @@ def _format_conversation_group(
     page: int,
     page_size: int,
     statuses: dict[str, str] | None = None,
+    finished_times: dict[str, datetime] | None = None,
 ) -> dict[str, Any]:
     datasource_id = group_key[len(DATASOURCE_GROUP_PREFIX) :] if group_key.startswith(DATASOURCE_GROUP_PREFIX) else None
     visible_rows = rows[:page_size]
@@ -283,7 +294,14 @@ def _format_conversation_group(
     return {
         "key": group_key,
         "datasource_id": datasource_id,
-        "conversations": [_format_thread(thread, (statuses or {}).get(thread.thread_id)) for thread in visible_rows],
+        "conversations": [
+            _format_thread(
+                thread,
+                (statuses or {}).get(thread.thread_id),
+                (finished_times or {}).get(thread.thread_id),
+            )
+            for thread in visible_rows
+        ],
         "page": page,
         "page_size": page_size,
         "has_more": has_more,
@@ -315,11 +333,10 @@ async def list_grouped(
             cursor_update_time=cursor_update_time,
             cursor_id=cursor_id,
         )
-        statuses = await conversation_dao.list_active_run_statuses(
-            [thread.thread_id for thread in rows[:page_size]],
-            user_id,
-        )
-        return {"groups": [_format_conversation_group(group_key, rows, page, page_size, statuses)]}
+        page_ids = [thread.thread_id for thread in rows[:page_size]]
+        statuses = await conversation_dao.list_active_run_statuses(page_ids, user_id)
+        finished_times = await conversation_dao.list_latest_finished_run_times(page_ids, user_id)
+        return {"groups": [_format_conversation_group(group_key, rows, page, page_size, statuses, finished_times)]}
 
     rows = await conversation_dao.list_thread_group_first_pages(
         agent_id=agent_id,
@@ -329,13 +346,12 @@ async def list_grouped(
     grouped_rows: dict[str, builtins.list[UserThread]] = {}
     for thread in rows:
         grouped_rows.setdefault(_thread_group_key(thread), []).append(thread)
-    statuses = await conversation_dao.list_active_run_statuses(
-        [thread.thread_id for thread in rows],
-        user_id,
-    )
+    conversation_ids = [thread.thread_id for thread in rows]
+    statuses = await conversation_dao.list_active_run_statuses(conversation_ids, user_id)
+    finished_times = await conversation_dao.list_latest_finished_run_times(conversation_ids, user_id)
     return {
         "groups": [
-            _format_conversation_group(key, group_rows, 1, page_size, statuses)
+            _format_conversation_group(key, group_rows, 1, page_size, statuses, finished_times)
             for key, group_rows in grouped_rows.items()
         ]
     }

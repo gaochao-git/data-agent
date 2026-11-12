@@ -182,6 +182,18 @@ describe('ConversationSidebar conversation row role zone', () => {
     expect(running.find('i.fa-spinner').exists()).toBe(true)
   })
 
+  it('shows a green dot only for completed conversations the user has not opened', () => {
+    const wrapper = mountSidebar([
+      { id: 'conv-unread', title: '完成未读', create_time: '2026-08-14 10:00:00', has_unread_completion: true },
+      { id: 'conv-read', title: '已经读过', create_time: '2026-08-14 10:00:00', has_unread_completion: false },
+    ])
+
+    const dots = wrapper.findAll('[data-testid="conversation-unread-completion"]')
+    expect(dots).toHaveLength(1)
+    expect(dots[0]!.attributes('title')).toBe('任务已完成，尚未查看')
+    expect(dots[0]!.find('i.fa-circle').classes()).toContain('text-emerald-500')
+  })
+
   it('stacks time and buttons in one fixed-width zone so the hover swap causes no layout shift', () => {
     const wrapper = mountSidebar([{ id: 'conv-role', title: '角色区会话', create_time: '2026-08-14 10:00:00' }])
 

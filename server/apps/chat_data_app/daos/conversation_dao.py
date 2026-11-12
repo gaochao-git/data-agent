@@ -137,6 +137,37 @@ class ConversationDao:
                     statuses[conversation_id] = status
             return statuses
 
+    async def list_latest_finished_run_times(
+        self,
+        conversation_ids: list[str],
+        user_id: str | None,
+    ) -> dict[str, datetime]:
+        """批量读取会话最近一次成功完成的 Run 时间。"""
+        if not conversation_ids:
+            return {}
+        conditions = [
+            ChatDataAgentInbox.conversation_id.in_(conversation_ids),
+            ChatDataAgentInbox.record_type == "run",
+            ChatDataAgentInbox.record_status == "finished",
+            ChatDataAgentInbox.delete_flag == 0,
+        ]
+        if user_id:
+            conditions.append(ChatDataAgentInbox.user_id == user_id)
+        async with self._session_context() as session:
+            result = await session.execute(
+                select(
+                    ChatDataAgentInbox.conversation_id,
+                    func.max(ChatDataAgentInbox.update_time),
+                )
+                .where(*conditions)
+                .group_by(ChatDataAgentInbox.conversation_id)
+            )
+            return {
+                conversation_id: finished_at
+                for conversation_id, finished_at in result.all()
+                if conversation_id and finished_at is not None
+            }
+
     @staticmethod
     def _list_conditions(agent_id: str, user_id: str | None) -> list[Any]:
         conditions = [UserThread.agent_id == agent_id, UserThread.delete_flag == 0]

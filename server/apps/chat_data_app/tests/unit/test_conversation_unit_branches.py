@@ -77,6 +77,7 @@ def test_conversation_formatting_helpers():
         "update_time": "2026-01-02 03:04:05",
         "is_favorited": True,
         "run_status": None,
+        "last_finished_at": None,
     }
     assert (
         conversation_module._format_thread(SimpleNamespace(**{**thread.__dict__, "datasource_id": None}))[
@@ -538,3 +539,17 @@ async def test_conversation_generate_title_unusable_output_keeps_placeholder(con
     assert await conversation_module.generate_title("conv_title_retry", "u1") == "IP攻击来源分析咨询"
     thread = await conversation_module.conversation_dao.get_thread("conv_title_retry", "u1")
     assert thread.thread_title == "IP攻击来源分析咨询"
+
+
+@pytest.mark.asyncio
+async def test_conversation_list_exposes_last_finished_at(conversation_db, monkeypatch):
+    await seed_conversation("conv_finished", title="已完成")
+    finished_at = datetime(2026, 11, 12, 17, 0, 0)
+
+    async def finished(_ids, _user_id):
+        return {"conv_finished": finished_at}
+
+    monkeypatch.setattr(conversation_module.conversation_dao, "list_latest_finished_run_times", finished)
+    listed = await conversation_module.list_conversations("agent_a", user_id="u1")
+    # 返回带时区偏移的 ISO 时间，前端可直接 Date.parse，不再依赖浏览器本地时区。
+    assert datetime.fromisoformat(listed[0]["last_finished_at"]) == finished_at.astimezone()

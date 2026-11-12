@@ -3,7 +3,7 @@
  * ChatData 智能问数主页面
  * 参考 React 版本布局，支持数据智能体、可视化查询、SQL查询、数据看板、指标集配置
  */
-import { ref, computed, watch, onMounted, nextTick } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
@@ -620,10 +620,12 @@ const {
   isLoadingMoreConversations,
   hasMoreConversations,
   ensureConversationsLoaded,
+  refreshConversationsPreservingPages,
   loadMoreConversations,
   loadMoreConversationGroup,
   updateConversationTitle: updateHistoryConversationTitle,
   updateConversationRunStatus: updateHistoryConversationRunStatus,
+  markConversationRead: markHistoryConversationRead,
   upsertConversation: upsertHistoryConversation,
   refreshAfterFavorite,
   invalidateInactiveView,
@@ -633,6 +635,7 @@ const {
   viewMode: conversationViewMode,
   datasources: allDatasources,
   sortBy: conversationSortBy,
+  currentUserId: computed(() => currentUser.value.id),
 })
 
 const setConversationViewMode = (mode: ConversationViewMode) => {
@@ -648,9 +651,9 @@ const setConversationSortBy = (sortBy: ConversationSortBy) => {
   writeLocalStorage(CONVERSATION_SORT_BY_KEY, sortBy)
 }
 
-// 手动刷新：强制重载当前视图首屏（ensureConversationsLoaded 内部保留旧数据展示，刷新期间不闪空态）
+// 手动刷新：强制重载当前视图并保留已展开的分页（刷新期间保留旧数据展示，不闪空态）
 const handleRefreshConversations = () => {
-  void ensureConversationsLoaded(true)
+  void refreshConversationsPreservingPages()
 }
 
 // 切换模式
@@ -711,6 +714,8 @@ const selectConversation = async (id: string): Promise<boolean> => {
   currentConversationId.value = id
   currentConversationTitle.value = conv?.title || '会话'
   currentConversationDatasourceId.value = conversationDatasourceId || null
+  markHistoryConversationRead(id)
+  if (CONVERSATION_TITLE_PLACEHOLDERS.has((conv?.title || '').trim())) void retryConversationTitleIfNeeded(id)
   conversationKey.value++ // 强制重新渲染以加载历史
   return true
 }
@@ -803,8 +808,10 @@ const handleConversationRunStatusChanged = (
 ) => {
   updateHistoryConversationRunStatus(conversationId, status)
   if (status === null) {
+    // 当前会话用户正在查看终态，直接记本地已读；后台会话的绿点由列表轮询补上。
+    if (conversationId === currentConversationId.value) markHistoryConversationRead(conversationId)
     // 终态先更新当前缓存，随后以服务端列表覆盖，避免停止/完成后历史项仍显示旧的 cancelling 状态。
-    void ensureConversationsLoaded(true)
+    void refreshConversationsPreservingPages()
     // 标题仍是占位符的会话借本轮终态重试命名（直到成功自停）
     void retryConversationTitleIfNeeded(conversationId)
   }
@@ -814,6 +821,72 @@ const handleConversationRunStatusChanged = (
 const handleToggleConversationFavorite = async (conversationId: string, isFavorited: boolean) => {
   await refreshAfterFavorite(conversationId, isFavorited)
 }
+
+// 会话列表状态轮询：后台会话没有自己的 SSE 监听，由列表轮询发现完成终态并刷新绿点。
+const ACTIVE_CONVERSATION_RUN_STATUSES = new Set(['pending', 'active', 'cancelling', 'interrupting'])
+const hasActiveConversationRun = computed(() => conversations.value.some(item => (
+  item.run_status ? ACTIVE_CONVERSATION_RUN_STATUSES.has(item.run_status) : false
+)))
+let runStatusPollTimer: ReturnType<typeof setInterval> | null = null
+let runStatusPollInFlight = false
+let runStatusPollIntervalMs = 0
+
+const stopRunStatusPolling = () => {
+  if (runStatusPollTimer !== null) {
+    clearInterval(runStatusPollTimer)
+    runStatusPollTimer = null
+  }
+  runStatusPollIntervalMs = 0
+}
+
+const activeConversationIds = (): Set<string> => new Set(
+  conversations.value
+    .filter(item => item.run_status && ACTIVE_CONVERSATION_RUN_STATUSES.has(item.run_status))
+    .map(item => item.id),
+)
+
+const TITLE_RETRY_COOLDOWN_MS = 5 * 60 * 1000
+const titleRetryCooldown = new Map<string, number>()
+
+const pollRunStatuses = async () => {
+  if (runStatusPollInFlight || document.hidden) return
+  runStatusPollInFlight = true
+  const activeBefore = activeConversationIds()
+  try {
+    await refreshConversationsPreservingPages()
+    const activeAfter = activeConversationIds()
+    activeBefore.forEach(conversationId => {
+      if (!activeAfter.has(conversationId)) void retryConversationTitleIfNeeded(conversationId)
+    })
+    // 别的窗口启动并完成的任务可能从未在本页出现过 active 状态；
+    // 占位标题按 5 分钟冷却补命名，既不漏掉首次失败，也不让每轮轮询反复调用 LLM。
+    const now = Date.now()
+    conversations.value
+      .filter(item => item.has_unread_completion && CONVERSATION_TITLE_PLACEHOLDERS.has(item.title.trim()))
+      .filter(item => now - (titleRetryCooldown.get(item.id) || 0) > TITLE_RETRY_COOLDOWN_MS)
+      .forEach(item => {
+        titleRetryCooldown.set(item.id, now)
+        void retryConversationTitleIfNeeded(item.id)
+      })
+  } finally {
+    runStatusPollInFlight = false
+  }
+}
+
+const startRunStatusPolling = (intervalMs: number) => {
+  if (runStatusPollTimer !== null && runStatusPollIntervalMs === intervalMs) return
+  stopRunStatusPolling()
+  runStatusPollIntervalMs = intervalMs
+  runStatusPollTimer = setInterval(() => { void pollRunStatuses() }, intervalMs)
+}
+
+watch(hasActiveConversationRun, (active) => {
+  // 有活跃 Run 时 5s 刷新；空闲时也保留 30s 低保真轮询，
+  // 否则别的窗口启动并完成的任务，本页永远发现不了。
+  startRunStatusPolling(active ? 5000 : 30000)
+}, { immediate: true })
+
+onBeforeUnmount(stopRunStatusPolling)
 
 // 首条消息对应的 SSE 建立后立即生成标题并完成分组迁移，不等待助手输出结束。
 const handleFirstMessageStarted = async (convId: string) => {
@@ -843,7 +916,7 @@ const handleFirstMessageStarted = async (convId: string) => {
   })
   // 刷新会话列表
   invalidateInactiveView()
-  void ensureConversationsLoaded(true)
+  void refreshConversationsPreservingPages()
 }
 
 // 数据源变更

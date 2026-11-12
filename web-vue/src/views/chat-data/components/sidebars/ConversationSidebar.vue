@@ -775,6 +775,14 @@ onUnmounted(() => {
                     <!-- 标题展示态 -->
                     <template v-else>
                       <span
+                        v-if="conv.has_unread_completion && !getRunStatusLabel(conv.run_status)"
+                        data-testid="conversation-unread-completion"
+                        title="任务已完成，尚未查看"
+                        class="flex shrink-0 items-center"
+                      >
+                        <i class="fa-solid fa-circle text-[8px] text-emerald-500"></i>
+                      </span>
+                      <span
                         v-if="getRunStatusLabel(conv.run_status) && !isPersistentRunStatus(conv.run_status)"
                         :class="['flex shrink-0 items-center gap-1 text-[11px]', getRunStatusClass(conv.run_status)]"
                         :title="getRunStatusLabel(conv.run_status)"
