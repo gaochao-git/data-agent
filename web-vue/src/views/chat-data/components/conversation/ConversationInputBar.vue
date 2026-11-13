@@ -39,6 +39,8 @@ interface Props {
   canSubmit: boolean
   inputFocused?: boolean
   submitTitle?: string
+  /** 由外层 composer 提供 header 时使用 attached 样式。 */
+  attached?: boolean
   /** 是否有待发送附件；用于与 @ 引用/技能 chip 共用同一个限高滚动容器。 */
   hasPendingFiles?: boolean
 }
@@ -118,6 +120,7 @@ onBeforeUnmount(() => {
     :can-submit="canSubmit"
     :submit-title="submitTitle"
     :input-focused="inputFocused"
+    :attached="attached"
     @update:input="emit('update:input', $event)"
     @submit="emit('submit')"
     @stop="emit('stop')"

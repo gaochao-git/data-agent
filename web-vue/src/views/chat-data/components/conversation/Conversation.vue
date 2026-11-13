@@ -2880,11 +2880,6 @@ const handleKeyDown = (event: KeyboardEvent) => {
             class="mb-3"
             :state="reconnectState"
           />
-          <AnalysisProgress
-            v-if="showAnalysisProgress"
-            class="mb-3"
-            :todos="analysisTodos"
-          />
           <div
             v-if="pendingSteerMessages.length"
             class="mb-2 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm"
@@ -2993,6 +2988,18 @@ const handleKeyDown = (event: KeyboardEvent) => {
             @submit="resumePendingQuestion($event)"
             @cancel="resumePendingQuestion(undefined, true)"
           />
+          <div
+            class="transition-colors"
+            :class="showAnalysisProgress ? [
+              'mb-3 overflow-hidden rounded-2xl border bg-white shadow-[0_2px_12px_rgba(0,0,0,0.06),0_0_0_1px_rgba(0,0,0,0.02)]',
+              inputFocused ? 'border-blue-400/40 ring-2 ring-[#1677FF]/10' : 'border-black/[0.08]',
+            ] : ''"
+          >
+            <AnalysisProgress
+              v-if="showAnalysisProgress"
+              embedded
+              :todos="analysisTodos"
+            />
           <ConversationInputBar
             v-if="!pendingUserQuestion"
             ref="inputBarRef"
@@ -3010,6 +3017,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
             :is-stopping="isStoppingRun"
             :can-submit="replayArmed ? true : (replayGroup ? false : (runBusy ? Boolean(input.trim() && !isSteering) : Boolean((input.trim() || hasCompletedPendingFiles || quotedSnippets.length > 0) && selectedDatasource)))"
             :input-focused="inputFocused"
+            :attached="showAnalysisProgress"
             :submit-title="replayArmed ? '回车开始回放' : (!selectedDatasource ? '请先选择数据源' : '发送 (Enter)')"
             @submit="handleSubmit"
             @stop="handleStop"
@@ -3077,6 +3085,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
               />
             </template>
           </ConversationInputBar>
+          </div>
         </div>
       </div>
       <input
