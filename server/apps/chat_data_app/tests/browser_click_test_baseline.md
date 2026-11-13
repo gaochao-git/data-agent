@@ -1659,6 +1659,7 @@ ChatData
 
 ### 5.3 最近执行记录
 
+- `browser_click_test_runs/2026-11-14_followup.md`（DEF-2026-11-13-01 隔离复核定性 + BLOCKED 补跑：SCHED-05/06/07、AG-26 转 PASS，SYS-05/06 补齐免写库子项）
 - `browser_click_test_runs/2026-11-13.md`（全量基线重跑 + 关键用例补漏：新增 AG-26 / CTX-09 / SKILL-07 / SYS-05 / SYS-06，157 → 162 条）
 - `browser_click_test_runs/2026-11-12.md`（feature/chat-data-storage-split 分支变更定向回归；含 FILE-11 新增与未覆盖项声明）
 - `browser_click_test_runs/2026-11-02.md`
