@@ -151,8 +151,19 @@ def test_upsert_enum_insert_revive_and_reject(harness):
 
 
 def test_soft_delete_noop_on_blank_name(harness):
+    """空名字直接返回，不应软删或改写任何枚举行。"""
     dao_module, dao, seed = harness
-    asyncio.run(dao.soft_delete_enum_async("", "订单"))  # 不抛异常即可
+    seed(
+        _seed_enum(domain="订单", name="order_status", desc="订单状态"),
+        _seed_enum(domain="订单", name="", desc="异常空名字行"),
+    )
+    before = asyncio.run(dao.list_enums_async(business_domain="订单"))
+    assert len(before) == 2
+
+    asyncio.run(dao.soft_delete_enum_async("", "订单"))
+
+    # 关键：连名字本就为空的行也不能被软删 —— 只有 early return 才能保证这一点
+    assert asyncio.run(dao.list_enums_async(business_domain="订单")) == before
 
 
 def test_find_column_dict_refs_two_step(harness):

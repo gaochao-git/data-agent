@@ -74,9 +74,29 @@ def test_emit_context_usage_none_is_noop(monkeypatch):
     assert len(calls) == 1
 
 
-def test_stamp_response_timing_without_message_returns_early():
-    """响应里提不出消息时直接返回（618->619）。"""
-    _stamp_response_timing(SimpleNamespace(), started_at_ms=1, ended_at_ms=2)  # 不抛错
+def test_stamp_response_timing_without_message_returns_early(monkeypatch):
+    """响应里提不出 AIMessage 时直接返回，不写时间戳、不触发写入失败告警（618->619）。"""
+    warnings: list[str] = []
+    monkeypatch.setattr(cu.logger, "warning", lambda *args, **kwargs: warnings.append(str(args[0])))
+
+    response = SimpleNamespace()
+    _stamp_response_timing(response, started_at_ms=1, ended_at_ms=2)
+    assert vars(response) == {}  # 早返回没有往响应上写任何东西
+
+    # result 里是非 AIMessage 的伪消息时同样不盖章
+    fake_message = SimpleNamespace(additional_kwargs={})
+    _stamp_response_timing(SimpleNamespace(result=[fake_message]), started_at_ms=1, ended_at_ms=2)
+    assert fake_message.additional_kwargs == {}
+
+    # 误删 early return 时会尝试给 None 盖章并走 except 分支告警；早返回则一次都不该告警
+    assert warnings == []
+
+    # 对照：能提取到 AIMessage 时确实把起止时间盖进去，证明上面是「无消息」而非写入失效
+    message = AIMessage(content="ok")
+    _stamp_response_timing(SimpleNamespace(result=[message]), started_at_ms=1, ended_at_ms=2)
+    assert message.additional_kwargs["started_at_ms"] == 1
+    assert message.additional_kwargs["ended_at_ms"] == 2
+    assert warnings == []
 
 
 def test_add_cached_input_usage_without_current_cached_tokens():

@@ -391,12 +391,19 @@ async def test_extract_and_save_memory_merge_failure_degrades(monkeypatch, tmp_p
 
     monkeypatch.setattr(svc, "extract_memory_items", fake_extract_items)
 
+    merge_calls: list[tuple] = []
+
     def broken_merge(*args, **kwargs):
+        merge_calls.append(args)
         raise OSError("disk full")
 
     monkeypatch.setattr(svc, "merge_memory_items", broken_merge)
-    # 不抛出即通过（失败只告警降级）
     await svc.extract_and_save_memory(conversation_id="c1", workspace_root=str(tmp_path), model_id="m", messages=[])
+
+    # 确实走到了写入（而非抽取为空提前返回），失败被吞掉且没有留下半写的记忆文件
+    assert len(merge_calls) == 1
+    assert not (tmp_path / "memory" / "memory.md").exists()
+    assert svc.load_memory_items(str(tmp_path)) == []
 
 
 # ---------------------------------------------------------------------------

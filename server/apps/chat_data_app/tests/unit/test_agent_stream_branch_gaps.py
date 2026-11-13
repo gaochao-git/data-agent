@@ -212,11 +212,21 @@ async def test_persist_agent_turn_history_uses_state_override_without_touching_a
 
 
 @pytest.mark.asyncio
-async def test_persist_partial_agent_turn_history_noop_without_adapter():
-    """adapter 为 None 时静默返回，不抛异常（543->544）。"""
-    await agent_run_support._persist_partial_agent_turn_history(
+async def test_persist_partial_agent_turn_history_noop_without_adapter(monkeypatch):
+    """adapter 为 None 时直接返回，不触碰历史补写链路（543->544）。"""
+    calls: list[dict] = []
+
+    async def fake_persist(adapter, **kwargs):
+        calls.append({"adapter": adapter, **kwargs})
+
+    monkeypatch.setattr(agent_run_support, "_persist_agent_turn_history", fake_persist)
+
+    result = await agent_run_support._persist_partial_agent_turn_history(
         None, conversation_id="conv-1", user_id="u1", username=None, turn_id="turn-1"
     )
+
+    assert result is None
+    assert calls == []
 
 
 # --------------------------------------------------------------------------- #
@@ -653,14 +663,31 @@ async def _pending_forever():
 
 @pytest.mark.asyncio
 async def test_heartbeat_lease_lost_without_owner_task_returns_quietly(_fast_heartbeat, monkeypatch):
-    """租约丢失但没有可取消的宿主任务时直接返回（1207->1209）。"""
+    """租约丢失但没有可取消的宿主任务时立即返回，不续约、不重试（1207->1209）。"""
+    heartbeat_calls: list[tuple] = []
+    cancel_calls: list[tuple] = []
+    renew_calls: list[tuple] = []
 
     async def heartbeat_run(run_id, owner_token):
+        heartbeat_calls.append((run_id, owner_token))
         raise AgentRunLeaseLostError("taken over")
 
-    monkeypatch.setattr(agent_stream.agent_inbox_service, "heartbeat_run", heartbeat_run)
+    async def fake_renew(run_id, owner_token):
+        renew_calls.append((run_id, owner_token))
 
-    await agent_stream._heartbeat_agent_run("run-1", None, "tok")
+    monkeypatch.setattr(agent_stream.agent_inbox_service, "heartbeat_run", heartbeat_run)
+    monkeypatch.setattr(agent_stream.agent_run_event_service, "renew_owner", fake_renew)
+    monkeypatch.setattr(
+        agent_stream, "_cancel_agent_owner_task", lambda task, reason: cancel_calls.append((task, reason))
+    )
+
+    # 加超时：实现若回归成「无限重试」会失败而不是把用例挂死
+    result = await asyncio.wait_for(agent_stream._heartbeat_agent_run("run-1", None, "tok"), timeout=2)
+
+    assert result is None
+    assert heartbeat_calls == [("run-1", "tok")]
+    assert cancel_calls == [(None, "agent_run_lease_lost")]
+    assert renew_calls == []
 
 
 @pytest.mark.asyncio
@@ -682,14 +709,30 @@ async def test_heartbeat_lease_lost_cancels_owner_task(_fast_heartbeat, monkeypa
 
 @pytest.mark.asyncio
 async def test_heartbeat_cancelling_status_without_owner_task_returns(_fast_heartbeat, monkeypatch):
-    """状态变为 cancelling 但没有宿主任务时直接返回（1214->1216）。"""
+    """状态变为 cancelling 但没有宿主任务时立即返回，不续约、不重试（1214->1216）。"""
+    heartbeat_calls: list[tuple] = []
+    cancel_calls: list[tuple] = []
+    renew_calls: list[tuple] = []
 
     async def heartbeat_run(run_id, owner_token):
+        heartbeat_calls.append((run_id, owner_token))
         return "cancelling"
 
-    monkeypatch.setattr(agent_stream.agent_inbox_service, "heartbeat_run", heartbeat_run)
+    async def fake_renew(run_id, owner_token):
+        renew_calls.append((run_id, owner_token))
 
-    await agent_stream._heartbeat_agent_run("run-1", None, "tok")
+    monkeypatch.setattr(agent_stream.agent_inbox_service, "heartbeat_run", heartbeat_run)
+    monkeypatch.setattr(agent_stream.agent_run_event_service, "renew_owner", fake_renew)
+    monkeypatch.setattr(
+        agent_stream, "_cancel_agent_owner_task", lambda task, reason: cancel_calls.append((task, reason))
+    )
+
+    result = await asyncio.wait_for(agent_stream._heartbeat_agent_run("run-1", None, "tok"), timeout=2)
+
+    assert result is None
+    assert heartbeat_calls == [("run-1", "tok")]
+    assert cancel_calls == [(None, "agent_run_cancelled")]
+    assert renew_calls == []
 
 
 @pytest.mark.asyncio

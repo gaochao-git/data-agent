@@ -303,11 +303,23 @@ def test_str_to_bool(monkeypatch):
 
 def test_workspace_session_ttl_seconds(monkeypatch):
     monkeypatch.setenv("OPENSANDBOX_TIMEOUT_SECONDS", "600")
-    assert we_session._workspace_session_ttl_seconds() == 300
+    assert we_session._workspace_session_ttl_seconds() == 570
     monkeypatch.setenv("OPENSANDBOX_TIMEOUT_SECONDS", "40")
     assert we_session._workspace_session_ttl_seconds() == 30
     monkeypatch.setenv("OPENSANDBOX_TIMEOUT_SECONDS", "1000")
-    assert we_session._workspace_session_ttl_seconds() == 300
+    assert we_session._workspace_session_ttl_seconds() == 970
+
+
+def test_refresh_workspace_execution_session_extends_cached_ttl(tmp_path):
+    """续期只延长远端实例还不够，进程缓存 TTL 也必须一起顺延。"""
+    root = _workspace_root(tmp_path)
+    session = _make_session(FakeSandbox(), root)
+    cache_key = _cache_key(root)
+    cached = _cached(session, ttl=1.0)
+    we_session._WORKSPACE_EXECUTION_SESSION_CACHE[cache_key] = cached
+    before = cached.expires_at
+    we_session.refresh_workspace_execution_session(session)
+    assert cached.expires_at > before
 
 
 def test_workspace_session_lock_reuses_instance():

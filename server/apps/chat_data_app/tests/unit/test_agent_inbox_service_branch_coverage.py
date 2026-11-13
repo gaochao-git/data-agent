@@ -472,8 +472,16 @@ async def test_enqueue_message_validation():
 
 @pytest.mark.asyncio
 async def test_mark_consumed_guards():
-    await _service().mark_consumed("r1", [], "tok-1")  # 空列表：直接返回
-    await _service().mark_consumed("r1", ["m1"], "tok-1")  # Run 不存在：静默返回
+    """空列表 / Run 不存在时都不触碰消息行，只按各自路径早返回。"""
+    empty = _service()
+    await empty.mark_consumed("r1", [], "tok-1")
+    assert empty._dao.calls == []  # 连 DB session 都没进
+
+    missing = _service()
+    await missing.mark_consumed("r1", ["m1"], "tok-1")
+    # 读到 Run 不存在即返回，没有 claim / 状态改写等后续 DAO 调用
+    assert missing._dao.calls == ["now", "get_run_by_id_for_update"]
+    assert "get_claimed_messages" not in missing._dao.calls
 
 
 @pytest.mark.asyncio
