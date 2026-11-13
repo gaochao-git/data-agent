@@ -13,7 +13,6 @@ from utils.logger import get_logger
 from utils.storage_paths import conversation_semantic_dir_from_workspace
 from utils.tool_result_store import QUERY_RESULT_DIR_NAME, TOOL_OFFLOAD_DIR_NAME
 from utils.upload_storage_crypto import read_plaintext_bytes
-from utils.workspace_system_paths import SYSTEM_DIR_NAME
 
 from .workspace_sandbox_api import (
     SandboxExecutionSession,
@@ -224,7 +223,8 @@ async def _initialize_sandbox_filesystem(
     writable_directories = [
         path
         for path in user_data_directories
-        if not _is_managed_semantic_model_sandbox_path(path)
+        if path != sandbox_system_dir()
+        and not _is_managed_semantic_model_sandbox_path(path)
         and not _is_tool_results_sandbox_path(path)
         and not _is_uploads_sandbox_path(path)
     ]
@@ -232,7 +232,8 @@ async def _initialize_sandbox_filesystem(
         path
         for path in user_data_directories
         if (
-            _is_managed_semantic_model_sandbox_path(path)
+            path == sandbox_system_dir()
+            or _is_managed_semantic_model_sandbox_path(path)
             or _is_tool_results_sandbox_path(path)
             or _is_uploads_sandbox_path(path)
         )
@@ -247,7 +248,7 @@ async def _initialize_sandbox_filesystem(
         paths=readonly_directories,
         mode=_SANDBOX_READONLY_DIRECTORY_MODE,
     )
-    legacy_semantic_root = application_root / "workspace" / SYSTEM_DIR_NAME / "semantic"
+    legacy_semantic_root = application_root / "workspace" / "semantic"
     semantic_root = conversation_semantic_dir_from_workspace(session.workspace_root)
     user_data_count, user_data_bytes = await _upload_application_tree(
         sandbox=session.sandbox,

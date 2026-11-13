@@ -27,9 +27,16 @@ import sys
 from collections.abc import Iterator
 from pathlib import Path
 
-SYSTEM_DIR_NAME = ".system"
-QUERY_RESULT_DIR = "query_result"
-TOOL_OFFLOAD_DIR = "tool-offload"
+_SERVER_ROOT = Path(__file__).resolve().parents[1]
+if str(_SERVER_ROOT) not in sys.path:
+    sys.path.insert(0, str(_SERVER_ROOT))
+
+from utils.workspace_system_paths import (  # noqa: E402
+    QUERY_RESULT_DIR_NAME,
+    SYSTEM_DIR_NAME,
+    TOOL_OFFLOAD_DIR_NAME,
+)
+
 LEGACY_TOOL_OFFLOAD_DIR = ".tool-offload"
 
 
@@ -74,9 +81,9 @@ def _migrate_one(user_data: Path, *, apply: bool) -> dict[str, tuple[int, int]]:
     legacy_query = user_data / "outputs" / "query_result"
     legacy_offload = user_data / "outputs" / LEGACY_TOOL_OFFLOAD_DIR
     if legacy_query.is_dir():
-        jobs.append(("query_result", legacy_query, system_root / QUERY_RESULT_DIR))
+        jobs.append(("query_result", legacy_query, system_root / QUERY_RESULT_DIR_NAME))
     if legacy_offload.is_dir():
-        jobs.append(("tool_offload", legacy_offload, system_root / TOOL_OFFLOAD_DIR))
+        jobs.append(("tool_offload", legacy_offload, system_root / TOOL_OFFLOAD_DIR_NAME))
     result: dict[str, tuple[int, int]] = {
         "query_result": (0, 0),
         "tool_offload": (0, 0),

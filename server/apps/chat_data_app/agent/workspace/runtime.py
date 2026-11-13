@@ -42,7 +42,7 @@ from utils.storage_paths import (
 )
 from utils.tool_result_store import QUERY_RESULT_DIR_NAME, TOOL_OFFLOAD_DIR_NAME
 from utils.upload_storage_crypto import materialize_plaintext, original_upload_path
-from utils.workspace_system_paths import SEMANTIC_DIR_NAME, SYSTEM_DIR_NAME
+from utils.workspace_system_paths import SEMANTIC_DIR_NAME, SEMANTIC_VIRTUAL_ROOT, SYSTEM_DIR_NAME
 
 from .artifact_registry import parse_output_artifact
 from .office_preview_html import normalize_office_preview_html
@@ -703,8 +703,8 @@ def to_visible_path(workspace_root: str, path: Path) -> str:
             # Path.relative_to(self) 返回 ".", 拼进去会变成含 "." 段的非规范路径，
             # 被 _assert_canonical 拒绝；目录本身应直接返回规范前缀。
             if relative_semantic and relative_semantic != ".":
-                return f"/mnt/user-data/workspace/{SYSTEM_DIR_NAME}/{SEMANTIC_DIR_NAME}/{relative_semantic}"
-            return f"/mnt/user-data/workspace/{SYSTEM_DIR_NAME}/{SEMANTIC_DIR_NAME}"
+                return f"{SEMANTIC_VIRTUAL_ROOT}/{relative_semantic}"
+            return SEMANTIC_VIRTUAL_ROOT
     original = original_upload_path(target)
     if original is not None:
         target = original
@@ -781,9 +781,9 @@ class WorkspacePathMapping:
         # 语义前缀必须按「路径段边界」替换：裸 str.replace 会把 semantic-backup、
         # semanticX、semantic.yaml 之类同前缀路径一并改写，导致校验解析到共享根、
         # 执行却翻到缓存目录。段字符含 . 与 -，结尾只允许分隔符或串尾。
-        self._semantic_virtual_re = re.compile(r"/mnt/user-data/workspace/.system/semantic(?![A-Za-z0-9_.-])")
+        self._semantic_virtual_re = re.compile(re.escape(SEMANTIC_VIRTUAL_ROOT) + r"(?![A-Za-z0-9_.-])")
         self._semantic_physical_re = re.compile(re.escape(self._semantic_physical) + r"(?![A-Za-z0-9_.-])")
-        self._virtual_semantic_prefix = "/mnt/user-data/workspace/.system/semantic"
+        self._virtual_semantic_prefix = SEMANTIC_VIRTUAL_ROOT
         self._physical_workspace = {
             "workspace": f"{root}/workspace",
             "outputs": f"{root}/outputs",

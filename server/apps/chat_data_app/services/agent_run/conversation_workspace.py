@@ -47,6 +47,7 @@ from utils.database import get_session
 from utils.logger import get_logger
 from utils.storage_paths import conversation_semantic_dir_from_workspace
 from utils.tool_result_store import ToolResultStore
+from utils.workspace_system_paths import SEMANTIC_DIR_NAME, SYSTEM_DIR_NAME
 
 from ... import AGENT_ID
 from ...daos.agent_inbox_dao import AgentInboxDao
@@ -276,7 +277,7 @@ def _append_semantic_workspace_entries(root: Path, files: list[dict[str, Any]]) 
     for item in sorted(semantic_root.rglob("*")):
         if not item.is_file() or item.is_symlink():
             continue
-        relative_path = f"workspace/.system/semantic/{item.relative_to(semantic_root).as_posix()}"
+        relative_path = f"workspace/{SYSTEM_DIR_NAME}/{SEMANTIC_DIR_NAME}/{item.relative_to(semantic_root).as_posix()}"
         visible_path = f"{USER_DATA_VIRTUAL_ROOT}/{relative_path}"
         if any(existing["path"] == visible_path for existing in files):
             continue
@@ -537,6 +538,7 @@ def _archive_workspace_directory(
         item
         for item in list_workspace_files(conversation_id, user_id, created_date=created_date)
         if _is_under_archive_directory(str(item["relative_path"]), normalized_directory)
+        and not str(item["relative_path"]).startswith(f"workspace/{SYSTEM_DIR_NAME}/")
         and not is_system_result_workspace_path(
             root,
             resolve_workspace_path(root, f"{USER_DATA_VIRTUAL_ROOT}/{item['relative_path']}"),

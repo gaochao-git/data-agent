@@ -48,6 +48,7 @@ from apps.chat_data_app.agent.workspace.workspace_text_budget import allocate_fi
 from utils.logger import get_logger
 from utils.skill_paths import SKILLS_VIRTUAL_ROOT, resolve_skill_snapshot_path
 from utils.storage_paths import conversation_semantic_dir_from_workspace
+from utils.workspace_system_paths import SEMANTIC_VIRTUAL_ROOT
 
 logger = get_logger(__name__)
 
@@ -523,13 +524,13 @@ def _list_local_workspace_dir(
     )
     if not is_skill and target == (root / "workspace").resolve():
         # 共享工作区里的历史 semantic 目录一律不展示；只有当前缓存存在时才注入虚拟目录。
-        entries = [entry for entry in entries if entry.get("path") != "/mnt/user-data/workspace/.system/semantic/"]
+        entries = [entry for entry in entries if entry.get("path") != f"{SEMANTIC_VIRTUAL_ROOT}/"]
         semantic_root = conversation_semantic_dir_from_workspace(str(root))
         if semantic_root.is_dir():
             entries.append(
                 {
                     "type": "dir",
-                    "path": "/mnt/user-data/workspace/.system/semantic/",
+                    "path": f"{SEMANTIC_VIRTUAL_ROOT}/",
                     "size": "-",
                     "mtime": datetime.datetime.fromtimestamp(semantic_root.stat().st_mtime).strftime("%Y-%m-%d %H:%M"),
                 }

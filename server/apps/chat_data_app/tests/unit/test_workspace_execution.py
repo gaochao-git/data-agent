@@ -1254,3 +1254,16 @@ def test_parse_rg_output_directory_target():
     assert matches[0]["line_number"] == 3
     assert "销售额" in matches[0]["content"]
     assert not has_more
+
+
+def test_path_mapping_semantic_regex_uses_literal_dot(tmp_path):
+    """虚拟语义根按字面量匹配，不能被 . 通配符误改写。"""
+    from utils.workspace_system_paths import SEMANTIC_VIRTUAL_ROOT
+
+    cache = tmp_path / "cache" / "semantic"
+    mapping = WorkspacePathMapping(workspace_root=_CLEAN_ROOT, semantic_cache_dir=cache)
+    assert mapping._virtual_semantic_prefix == SEMANTIC_VIRTUAL_ROOT
+    fake = "/mnt/user-data/workspace/xsystem/ysemantic/model.yaml"
+    translated = mapping.translate(fake)
+    assert str(cache) not in translated
+    assert translated.endswith("/workspace/xsystem/ysemantic/model.yaml")

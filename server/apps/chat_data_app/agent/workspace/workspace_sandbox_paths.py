@@ -82,8 +82,12 @@ def _is_hidden_tool_results_local_path(application_root: Path, path: Path) -> bo
 
 
 def _is_managed_semantic_model_local_path(application_root: Path, path: Path) -> bool:
-    semantic_root = application_root / "workspace" / SYSTEM_DIR_NAME / "semantic"
-    return path == semantic_root or semantic_root in path.parents
+    roots = (
+        application_root / "workspace" / SYSTEM_DIR_NAME / "semantic",
+        # 历史会话的 workspace/semantic 已不再读取，但仍必须保持只读，避免旧文件被沙箱回写。
+        application_root / "workspace" / "semantic",
+    )
+    return any(path == root or root in path.parents for root in roots)
 
 
 def _is_unmanaged_sandbox_path(path: str) -> bool:
