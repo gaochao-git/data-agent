@@ -39,6 +39,8 @@ interface Props {
   canSubmit: boolean
   inputFocused?: boolean
   submitTitle?: string
+  /** 是否有待发送附件；用于与 @ 引用/技能 chip 共用同一个限高滚动容器。 */
+  hasPendingFiles?: boolean
 }
 
 /** 划选引用片段 chip（props 内联结构，供 chip 与预览卡渲染）。 */
@@ -53,6 +55,7 @@ const props = withDefaults(defineProps<Props>(), {
   quotedSnippets: () => [],
   inputFocused: false,
   submitTitle: '发送 (Enter)',
+  hasPendingFiles: false,
 })
 const inputBoxRef = ref<InstanceType<typeof ChatInputBox> | null>(null)
 const plusMenuRef = ref<HTMLElement | null>(null)
@@ -125,9 +128,10 @@ onBeforeUnmount(() => {
   >
     <template #prepend>
       <div
-        v-if="props.selectedSkills.length || props.selectedMentionFiles.length || props.quotedSnippets.length"
-        class="mb-2 flex flex-wrap items-center gap-1.5"
+        v-if="props.hasPendingFiles || props.selectedSkills.length || props.selectedMentionFiles.length || props.quotedSnippets.length"
+        class="mb-2 flex max-h-[100px] flex-wrap items-center gap-1.5 overflow-y-auto"
       >
+        <slot name="prepend-extra" />
         <div
           v-for="file in props.selectedMentionFiles"
           :key="file.relativePath"

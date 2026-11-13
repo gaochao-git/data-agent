@@ -14,8 +14,9 @@ import { useSkillCommandMenu } from '../../composables/useSkillCommandMenu'
 import { useWorkspaceFileMention, type WorkspaceFilePick } from '../../composables/useWorkspaceFileMention'
 import { useQuotedSnippets } from '../../composables/useQuotedSnippets'
 import { useSseReconnect } from '../../composables/useSseReconnect'
-import { answerUserQuestion, cancelConversationRun, cancelSteerMessage, cancelUserQuestion, createDashboardFromSpec, getConversationWorkspaceFileContent, getConversationWorkspaceFiles, getConversationWorkspaceRawFile, getPendingUserQuestion, importConversationWorkspaceSkill, getRunState, steerConversation, streamRunEvents, updateSteerMessage, uploadFile } from '../../api'
+import { answerUserQuestion, cancelConversationRun, cancelSteerMessage, cancelUserQuestion, createDashboardFromSpec, deleteUploadedFile, getConversationWorkspaceFileContent, getConversationWorkspaceFiles, getConversationWorkspaceRawFile, getPendingUserQuestion, importConversationWorkspaceSkill, getRunState, steerConversation, streamRunEvents, updateSteerMessage, uploadFile } from '../../api'
 import type { Dashboard } from '../../api/dashboard'
+import { settleUploadedPlaceholder, type PendingFile } from '../../utils/pendingFiles'
 import QuickQueries, { type FallbackQuery } from '../QuickQueries.vue'
 import ChartSpecRenderer from '../ChartSpecRenderer.vue'
 import SkillManager from './SkillManager.vue'
@@ -512,15 +513,6 @@ const isNearBottom = ref(true)
 // 上传格式/大小上限统一在 utils/uploadLimits.ts（与工作区面板上传共用），文本渲染上限随面板拆到子组件。
 // 用户输入超过该字符数时自动转为 .md 文件附件上传，避免上下文过长
 const MAX_INPUT_CHARS = 4000
-interface PendingFile {
-  file_id: string
-  filename: string
-  status: 'uploading' | 'uploaded' | 'failed'
-  file_type?: string
-  file_size?: number
-  // 上传后实际存储文件名（去重后可能与 filename 不同），用于拼装可访问路径
-  storage_dir?: string
-}
 const pendingFiles = ref<PendingFile[]>([])
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const hasParsingFiles = computed(() => pendingFiles.value.some(f => f.status === 'uploading'))
@@ -604,7 +596,29 @@ const handlePasteFiles = async (files: File[]) => {
     await uploadValidatedFile(normalizeClipboardFilename(raw))
   }
 }
-const removePendingFile = (fileId: string) => {
+const handlePreviewPendingFile = async (file: PendingFile) => {
+  if (file.status !== 'uploaded') return
+  const relativePath = `uploads/${file.storage_dir || file.filename}`
+  await workspacePanelRef.value?.openFile(relativePath)
+}
+
+const removePendingFile = async (fileId: string) => {
+  const target = pendingFiles.value.find(f => f.file_id === fileId)
+  if (!target) return
+  if (target.status === 'uploaded') {
+    try {
+      const res = await deleteUploadedFile(target.file_id)
+      if (res.status !== 'success') {
+        ElMessage.error(res.msg || '删除附件失败')
+        return
+      }
+    } catch {
+      ElMessage.error('删除附件失败')
+      return
+    }
+    // uploads 会进入工作区文件树，删除后刷新，避免列表残留已删除的文件条目
+    scheduleWorkspacePanelRefresh()
+  }
   pendingFiles.value = pendingFiles.value.filter(f => f.file_id !== fileId)
 }
 // 超长用户输入在前端转为 .md 文件，走与手动上传一致的流程
@@ -642,13 +656,18 @@ const convertOversizedInputToFile = async (text: string): Promise<boolean> => {
       return false
     }
     // 用真实的 file_id 替换占位 id，标记已登记（不再等待预解析）
-    placeholder.file_id = res.data.file_id
-    placeholder.filename = res.data.original_filename
-    placeholder.file_type = res.data.file_type
-    placeholder.file_size = res.data.file_size
-    placeholder.storage_dir = res.data.storage_dir
-    placeholder.status = 'uploaded'
+    const stillPending = settleUploadedPlaceholder(pendingFiles.value, placeholder, res.data)
     scheduleWorkspacePanelRefresh()
+    // 上传期间用户已移除占位 chip：补一次后端删除，避免孤儿文件。
+    if (!stillPending) {
+      try {
+        await deleteUploadedFile(res.data.file_id)
+        scheduleWorkspacePanelRefresh()
+      } catch (error) {
+        console.error('清理已移除的超长输入附件失败:', error)
+      }
+      return false
+    }
     return true
   } catch {
     pendingFiles.value = pendingFiles.value.filter(f => f.file_id !== placeholderId)
@@ -2978,27 +2997,6 @@ const handleKeyDown = (event: KeyboardEvent) => {
             @submit="resumePendingQuestion($event)"
             @cancel="resumePendingQuestion(undefined, true)"
           />
-          <div v-if="!pendingUserQuestion && pendingFiles.length" class="mb-1.5 flex max-h-[100px] flex-wrap gap-1.5 overflow-y-auto">
-            <div
-              v-for="f in pendingFiles"
-              :key="f.file_id"
-              class="group flex items-center gap-1.5 rounded-full border border-[#1677FF]/30 bg-white px-2.5 py-1 text-[11px] text-[#1F3A56] shadow-sm transition-colors hover:border-[#1677FF]/50"
-            >
-              <i class="fa-solid fa-spinner fa-spin text-[9px] text-amber-500" v-if="f.status === 'uploading'"></i>
-              <i class="fa-regular fa-file-lines text-[11px] text-[#1677FF]" v-else></i>
-              <span class="max-w-[160px] truncate">{{ f.filename }}</span>
-              <span v-if="f.status === 'uploading'" class="text-amber-500">上传中</span>
-              <span v-else-if="f.status === 'failed'" class="text-red-400">失败</span>
-              <button
-                type="button"
-                class="ml-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full text-gray-300 transition-colors hover:bg-red-50 hover:text-red-500"
-                @click="removePendingFile(f.file_id)"
-                title="移除"
-              >
-                <i class="fa-solid fa-xmark text-[8px]"></i>
-              </button>
-            </div>
-          </div>
           <ConversationInputBar
             v-if="!pendingUserQuestion"
             ref="inputBarRef"
@@ -3010,6 +3008,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
             :selected-skills="selectedSkills"
             :selected-mention-files="mentionedFiles"
             :quoted-snippets="quotedSnippets"
+            :has-pending-files="pendingFiles.length > 0"
             :model-options="modelOptions"
             :is-generating="replayGroup ? replayPlayer.status.value === 'playing' : runBusy"
             :is-stopping="isStoppingRun"
@@ -3028,6 +3027,32 @@ const handleKeyDown = (event: KeyboardEvent) => {
             @focus="inputFocused = true"
             @blur="inputFocused = false"
           >
+            <template #prepend-extra>
+              <div
+                v-for="f in pendingFiles"
+                :key="f.file_id"
+                class="group flex w-fit cursor-pointer items-center gap-1.5 rounded-full border border-[#1677FF]/30 bg-white px-2.5 py-1 text-[11px] text-[#1F3A56] shadow-sm transition-colors hover:border-[#1677FF]/50"
+                title="点击预览附件"
+                role="button"
+                tabindex="0"
+                @click="handlePreviewPendingFile(f)"
+                @keydown.enter.prevent="handlePreviewPendingFile(f)"
+              >
+                <i class="fa-solid fa-spinner fa-spin text-[9px] text-amber-500" v-if="f.status === 'uploading'"></i>
+                <i class="fa-regular fa-file-lines text-[11px] text-[#1677FF]" v-else></i>
+                <span class="max-w-[160px] truncate">{{ f.filename }}</span>
+                <span v-if="f.status === 'uploading'" class="text-amber-500">上传中</span>
+                <span v-else-if="f.status === 'failed'" class="text-red-400">失败</span>
+                <button
+                  type="button"
+                  class="ml-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full text-gray-300 transition-colors hover:bg-red-50 hover:text-red-500"
+                  @click.stop="removePendingFile(f.file_id)"
+                  title="移除"
+                >
+                  <i class="fa-solid fa-xmark text-[8px]"></i>
+                </button>
+              </div>
+            </template>
             <template #model-prefix>
               <ConversationTokenUsage
                 ref="tokenUsagePanelRef"

@@ -1002,6 +1002,14 @@ export function uploadFile(conversationId: string, file: File): Promise<ApiRespo
   })
 }
 
+/** 删除已上传的附件（同时清理 uploads 文件和 uploaded_files 记录） */
+export function deleteUploadedFile(fileId: string): Promise<ApiResponse<{ file_id: string }>> {
+  return request({
+    url: `/agents/api/chatdata/uploaded-files/${fileId}`,
+    method: 'delete'
+  })
+}
+
 /** 修改会话标题（后端仅开放 title 子资源，标题会被截断到 20 字） */
 export function updateConversationTitle(
   conversationId: string,

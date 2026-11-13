@@ -23,6 +23,7 @@ const {
   producedFileTree,
   producedFiles,
   isWorkspaceFilesLoading,
+  refreshWorkspaceFiles,
   consoleTreeCollapsiblePaths,
   isConsoleTreeFullyCollapsed,
   workspaceUsage,
@@ -64,9 +65,11 @@ const {
         :used-bytes="workspaceUsage?.used_bytes || 0"
         :limit-bytes="workspaceUsage?.limit_bytes || 0"
         :loading="isWorkspaceFilesLoading"
+        :refreshing="isWorkspaceFilesLoading"
         :collapsible="consoleTreeCollapsiblePaths.length > 0"
         :fully-collapsed="isConsoleTreeFullyCollapsed"
         @toggle-collapsed="toggleConsoleTreeCollapsed"
+        @refresh="refreshWorkspaceFiles"
       />
 
       <!-- 树的左缩进体系：顶层目录行用 px-1.5（6px）作基准，子层用 consoleTreeIndentStyle(depth)。

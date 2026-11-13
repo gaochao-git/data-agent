@@ -192,3 +192,37 @@ describe('ConversationInputBar approval policy', () => {
     expect(wrapper.find('button[title="选择工具审批模式"]').exists()).toBe(false)
   })
 })
+
+describe('ConversationInputBar shared chip row', () => {
+  const mountWithPendingFiles = (hasPendingFiles: boolean) => mount(ConversationInputBar, {
+    props: {
+      input: '',
+      placeholder: '输入问题',
+      selectedModel: 'model-a',
+      modelOptions: [{ id: 'model-a', label: '模型 A' }],
+      enableDeepThinking: false,
+      thinkingEffort: null,
+      isGenerating: false,
+      canSubmit: false,
+      hasPendingFiles,
+    },
+    slots: {
+      'prepend-extra': '<span data-pending-chip="true">附件</span>',
+    },
+  })
+
+  it('opens the shared chip row for pending files even without other chips', () => {
+    const wrapper = mountWithPendingFiles(true)
+    const chip = wrapper.find('[data-pending-chip="true"]')
+
+    expect(chip.exists()).toBe(true)
+    expect(chip.element.parentElement?.className).toContain('max-h-[100px]')
+    expect(chip.element.parentElement?.className).toContain('overflow-y-auto')
+  })
+
+  it('hides the chip row when there are no chips at all', () => {
+    const wrapper = mountWithPendingFiles(false)
+
+    expect(wrapper.find('[data-pending-chip="true"]').exists()).toBe(false)
+  })
+})
