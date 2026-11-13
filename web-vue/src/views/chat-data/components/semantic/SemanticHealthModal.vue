@@ -11,7 +11,7 @@ defineProps<{
   result: DatasourceSemanticHealthResult | null
 }>()
 
-const visible = defineModel<boolean>({ default: false })
+const visible = defineModel<boolean>('visible', { default: false })
 
 const getHealthStatusLabel = (status?: string) => {
   return status === 'ok' ? '正常' : '有问题'
