@@ -50,3 +50,30 @@ python scripts/cleanup_shared_runtime.py --max-age-days 14
 ```
 
 共享 runtime 清理需要保护 semantic ref；脚本已按 ref 保护，建议只由单个维护任务执行。
+
+## 旧会话目录迁移到 workspace/.system
+
+新版本把系统数据统一放到会话的 `workspace/.system/`。旧开发数据可按下面步骤迁移：
+
+```bash
+cd server
+
+# 1. 先 dry-run，查看将移动多少文件
+CHAT_DATA_HOME=/path/to/chat_data python scripts/migrate_workspace_system_layout.py
+
+# 2. 确认后执行
+CHAT_DATA_HOME=/path/to/chat_data python scripts/migrate_workspace_system_layout.py --apply
+```
+
+迁移映射：
+
+```text
+outputs/query_result/   -> workspace/.system/query_result/
+outputs/.tool-offload/  -> workspace/.system/tool-offload/
+```
+
+脚本不处理旧 `workspace/semantic/`：应用会按当前数据源重新物化，旧文件不再读取。
+
+脚本幂等，目标已存在时不覆盖；只处理会话 `user-data`，不碰用户技能、插件和运行缓存。
+
+注意：历史消息里的旧 `result_path` 不会在数据库里自动改写，旧结果卡片可能需要重新查询或由前端按 `result_id` 重新定位。
