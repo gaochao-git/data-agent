@@ -149,7 +149,7 @@ def _patch_startup_budget_sources(monkeypatch, configs, output_tokens, summary_o
 
 
 def test_startup_validation_passes_when_reserves_fit_context_window(monkeypatch):
-    """两项预留都小于上下文窗口时不抛异常（210->215 + 220 正常退出）。"""
+    """两项预留都小于上下文窗口时放行；输出预留越界时必须拦（210->215 + 220 正常退出）。"""
     _patch_startup_budget_sources(
         monkeypatch,
         configs=[{"id": "big-model", "context_window": 100_000}],
@@ -158,6 +158,17 @@ def test_startup_validation_passes_when_reserves_fit_context_window(monkeypatch)
     )
 
     cb.validate_context_budget_startup_config()
+
+    # 反例：同一模型把全局输出预留调到不小于窗口，校验器必须报错
+    # （证明上面的「不抛」是条件满足后的放行，而不是校验器整体空实现）
+    _patch_startup_budget_sources(
+        monkeypatch,
+        configs=[{"id": "big-model", "context_window": 100_000}],
+        output_tokens=100_000,
+        summary_output_tokens=4_000,
+    )
+    with pytest.raises(RuntimeError, match="CHAT_DATA_OUTPUT_MAX_TOKENS=100000"):
+        cb.validate_context_budget_startup_config()
 
 
 def test_startup_validation_rejects_summary_reserve_larger_than_window(monkeypatch):

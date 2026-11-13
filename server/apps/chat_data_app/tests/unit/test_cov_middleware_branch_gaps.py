@@ -49,12 +49,18 @@ def _ai(tool_calls: list) -> AIMessage:
 # ---------------------------------------------------------------------------
 
 
-def test_notify_compression_started_swallows_callback_error():
+def test_notify_compression_started_swallows_callback_error(monkeypatch):
+    debug_logs: list[str] = []
+    monkeypatch.setattr(compression.logger, "debug", lambda *args, **kwargs: debug_logs.append(str(args[0])))
+
     def _boom() -> None:
         raise RuntimeError("stream unavailable")
 
     compression._notify_compression_started(_boom)
     compression._notify_compression_started(None)
+
+    # 只有回调抛错那次留下降级日志；None 回调直接跳过，不记日志
+    assert debug_logs == ["推送压缩开始事件失败，不影响压缩主流程"]
 
 
 @pytest.mark.asyncio
@@ -346,9 +352,15 @@ class _TimingWriteFailure:
 
 
 def test_stamp_response_timing_swallows_write_failure(monkeypatch):
+    warnings: list[str] = []
+    monkeypatch.setattr(usage.logger, "warning", lambda *args, **kwargs: warnings.append(str(args[0])))
     monkeypatch.setattr(usage, "_extract_response_message", lambda _response: _TimingWriteFailure())
 
     usage._stamp_response_timing(object(), started_at_ms=1, ended_at_ms=2)
+
+    # 注入的写入异常确实被吞并降级告警，而不是函数提前返回或压根没尝试盖章
+    assert len(warnings) == 1
+    assert "写入响应消息失败" in warnings[0]
 
 
 def test_add_cache_hit_rate_skips_without_reported_input():

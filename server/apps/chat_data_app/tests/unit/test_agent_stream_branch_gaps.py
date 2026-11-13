@@ -72,11 +72,13 @@ def _state_with(messages) -> SimpleNamespace:
 @pytest.mark.asyncio
 async def test_persist_timestamp_returns_state_when_no_ai_message():
     """消息里没有 AIMessage 时直接原样返回，不触碰 agent（305->304、308->309）。"""
+    agent = _FakeTimestampAgent()
     state = _state_with([HumanMessage(content="用户问题"), ToolMessage(content="工具结果", tool_call_id="c1")])
 
-    result = await agent_stream._persist_latest_ai_message_timestamp(_FakeTimestampAgent(), {"configurable": {}}, state)
+    result = await agent_stream._persist_latest_ai_message_timestamp(agent, {"configurable": {}}, state)
 
     assert result is state
+    assert agent.aupdate_calls == []  # docstring 声称「不触碰 agent」，由调用记录证明
 
 
 @pytest.mark.asyncio
@@ -137,13 +139,20 @@ async def test_persist_generation_stats_writes_even_when_timestamp_present():
 
 
 @pytest.mark.asyncio
-async def test_persist_timestamp_skips_when_agent_cannot_update_state():
-    """agent 没有 aupdate_state 时直接放弃，不抛错（311->312）。"""
-    state = _state_with([AIMessage(content="答案")])
+async def test_persist_timestamp_skips_when_agent_cannot_update_state(monkeypatch):
+    """agent 没有 aupdate_state 时直接短路放弃，不抛错也不触发写入失败兜底（311->312）。"""
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        agent_run_support.logger, "warning", lambda *args, **kwargs: warnings.append(str(args[0]))
+    )
+    message = AIMessage(content="答案")
+    state = _state_with([message])
 
     result = await agent_stream._persist_latest_ai_message_timestamp(object(), {"configurable": {}}, state)
 
     assert result is state
+    assert warnings == []  # 走的是短路，不是 aupdate_state 抛错后的吞错告警
+    assert "timestamp" not in message.additional_kwargs
 
 
 @pytest.mark.asyncio
@@ -180,11 +189,14 @@ async def test_persist_timestamp_falls_back_to_state_when_agent_has_no_aget_stat
 async def test_persist_timestamp_swallows_agent_update_failure():
     """aupdate_state 抛错只告警，不向上冒泡（319-321）。"""
     agent = _FakeTimestampAgent(aupdate_error=RuntimeError("checkpointer unavailable"))
-    state = _state_with([AIMessage(content="答案")])
+    message = AIMessage(content="答案")
+    state = _state_with([message])
 
     result = await agent_stream._persist_latest_ai_message_timestamp(agent, {"configurable": {}}, state)
 
     assert result is state
+    assert len(agent.aupdate_calls) == 1  # 确实尝试过写入，不是提前短路
+    assert "timestamp" not in message.additional_kwargs  # 失败后原消息未被就地盖章
 
 
 # --------------------------------------------------------------------------- #

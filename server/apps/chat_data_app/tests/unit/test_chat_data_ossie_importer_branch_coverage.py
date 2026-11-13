@@ -74,7 +74,12 @@ def _import(model) -> OssieSemanticModelImport:
 
 
 def test_normalize_datatypes_returns_early_when_data_not_dict():
-    _normalize_ossie_datatypes("not-a-dict")  # 不抛错即走非 dict 早返回
+    # 字符串没有 .get：若误删 isinstance 守卫会直接 AttributeError，故「不抛」本身即是护栏
+    _normalize_ossie_datatypes("not-a-dict")
+    # 可变非 dict 入参也应整体原样不动（归一正例已由同文件下方两个用例覆盖，不重复）
+    data = ["metrics"]
+    _normalize_ossie_datatypes(data)
+    assert data == ["metrics"]
 
 
 def test_normalize_datatypes_tolerates_non_list_metrics_and_datasets():
