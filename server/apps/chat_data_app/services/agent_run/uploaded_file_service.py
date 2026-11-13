@@ -66,6 +66,19 @@ def _unique_storage_name(uploads_root: Path, original_filename: str) -> str:
     return candidate
 
 
+def _reserve_storage_path(uploads_root: Path, original_filename: str) -> tuple[str, Path]:
+    """原子占位最终文件名，避免并发同名上传都通过 exists() 检查后互相覆盖。"""
+    while True:
+        storage_name = _unique_storage_name(uploads_root, original_filename)
+        full_path = uploads_root / storage_name
+        try:
+            descriptor = os.open(full_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except FileExistsError:
+            continue
+        os.close(descriptor)
+        return storage_name, full_path
+
+
 def _get_file_extension(filename: str) -> str:
     ext = Path(filename).suffix.lower()
     return ext[1:] if ext else ""
@@ -110,9 +123,9 @@ class UploadedFileService:
         file_type = _get_file_extension(original_filename)
         created_date = await get_conversation_created_date(thread_id, user_id=user_id)
         uploads_root = resolve_uploads_root(user_id, thread_id, created_date=created_date)
-        storage_name = _unique_storage_name(uploads_root, original_filename)
-        full_path = uploads_root / storage_name
+        storage_name, full_path = _reserve_storage_path(uploads_root, original_filename)
         temporary_path = uploads_root / f".{storage_name}.{uuid.uuid4().hex}.upload"
+        replaced = False
         file_size = 0
         max_upload_size_mb, max_upload_size = await get_upload_size_limit()
         max_workspace_size_mb, max_workspace_size = await get_workspace_size_limit()
@@ -140,6 +153,7 @@ class UploadedFileService:
             if workspace_used + temporary_path.stat().st_size > max_workspace_size:
                 raise ValueError(f"会话工作区总大小不能超过{max_workspace_size_mb}MB")
             os.replace(temporary_path, full_path)
+            replaced = True
             try:
                 await self.dao.create_file(
                     file_id=file_id,
@@ -155,6 +169,8 @@ class UploadedFileService:
                 raise
         finally:
             temporary_path.unlink(missing_ok=True)
+            if not replaced:
+                full_path.unlink(missing_ok=True)
         logger.info("文件上传成功: %s, %s", file_id, original_filename)
         return {
             "file_id": file_id,

@@ -179,6 +179,14 @@ def test_unique_storage_name_and_extension_helpers(uploads_root):
     assert ufs._get_file_extension("noext") == ""
 
 
+def test_reserve_storage_path_is_atomic_under_same_name(uploads_root):
+    first_name, first_path = ufs._reserve_storage_path(uploads_root, "report.pdf")
+    second_name, second_path = ufs._reserve_storage_path(uploads_root, "report.pdf")
+    assert first_name == "report.pdf"
+    assert second_name == "report-1.pdf"
+    assert first_path.exists() and second_path.exists()
+
+
 def test_upload_file_success_writes_chunked_file(uploads_root):
     dao = FakeDao(belongs=True)
     service = ufs.UploadedFileService(dao=dao)

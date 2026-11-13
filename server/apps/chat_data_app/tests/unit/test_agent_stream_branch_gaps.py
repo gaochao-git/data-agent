@@ -142,9 +142,7 @@ async def test_persist_generation_stats_writes_even_when_timestamp_present():
 async def test_persist_timestamp_skips_when_agent_cannot_update_state(monkeypatch):
     """agent 没有 aupdate_state 时直接短路放弃，不抛错也不触发写入失败兜底（311->312）。"""
     warnings: list[str] = []
-    monkeypatch.setattr(
-        agent_run_support.logger, "warning", lambda *args, **kwargs: warnings.append(str(args[0]))
-    )
+    monkeypatch.setattr(agent_run_support.logger, "warning", lambda *args, **kwargs: warnings.append(str(args[0])))
     message = AIMessage(content="答案")
     state = _state_with([message])
 

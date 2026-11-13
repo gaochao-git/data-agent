@@ -1456,12 +1456,16 @@ async def test_persist_turn_skips_empty_messages(conversation_event_service):
     # 注释声称「不触库」，由真实 DB 查询验证：该会话下不应产生任何事件行
     async with _get_session() as session:
         rows = (
-            await session.execute(
-                select(ChatDataConversationEvent).where(
-                    ChatDataConversationEvent.conversation_id == "conv-empty-turn"
+            (
+                await session.execute(
+                    select(ChatDataConversationEvent).where(
+                        ChatDataConversationEvent.conversation_id == "conv-empty-turn"
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
     assert rows == []
 
 
