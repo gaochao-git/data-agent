@@ -59,7 +59,29 @@ def read_sandbox_lifetime_seconds() -> int:
 
 
 def _workspace_session_ttl_seconds() -> int:
-    return max(30, min(read_sandbox_lifetime_seconds() - 30, 300))
+    # 缓存 TTL 必须跟随沙箱寿命而不是固定 300s：长任务里工具/模型调用会续期远端实例，
+    # 但缓存若先过期就会重建沙箱，导致同一会话出现两个文件系统视图。
+    return max(30, read_sandbox_lifetime_seconds() - 30)
+
+
+def refresh_workspace_execution_session(session: SandboxExecutionSession) -> None:
+    """Reserve the cached session after a successful remote renewal.
+
+    Renewal extends the OpenSandbox lifetime, but the process cache has its own
+    ``expires_at``. Without refreshing it, a long run can renew the sandbox and
+    still have the cache replaced, splitting reads and writes across instances.
+    """
+    workspace_root = getattr(session, "workspace_root", "")
+    if not workspace_root:
+        return
+    cache_key = getattr(session, "cache_key", "") or _workspace_session_cache_key(
+        workspace_root,
+        getattr(session, "mode", "sandbox"),
+        getattr(session, "runtime_skills_dir", None),
+    )
+    cached = _WORKSPACE_EXECUTION_SESSION_CACHE.get(cache_key)
+    if cached is not None and cached.session is session:
+        cached.expires_at = time.monotonic() + _workspace_session_ttl_seconds()
 
 
 async def _cached_session_matches_application(session: SandboxExecutionSession) -> bool:
@@ -253,6 +275,7 @@ async def get_workspace_execution_session(
         async with cached.session.operation_lock:
             if await _cached_session_matches_application(cached.session):
                 await _sync_sandbox_uploads(cached.session)
+                refresh_workspace_execution_session(cached.session)
                 return cached.session
 
     async with _workspace_session_lock(cache_key):
@@ -262,6 +285,7 @@ async def get_workspace_execution_session(
             async with cached.session.operation_lock:
                 if await _cached_session_matches_application(cached.session):
                     await _sync_sandbox_uploads(cached.session)
+                    refresh_workspace_execution_session(cached.session)
                     return cached.session
         if cached is not None:
             _WORKSPACE_EXECUTION_SESSION_CACHE.pop(cache_key, None)

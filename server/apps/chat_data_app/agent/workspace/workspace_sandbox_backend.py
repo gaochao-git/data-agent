@@ -47,6 +47,7 @@ from apps.chat_data_app.agent.workspace.workspace_session import (
     get_workspace_execution_session,
     invalidate_workspace_execution_session,
     read_sandbox_lifetime_seconds,
+    refresh_workspace_execution_session,
 )
 from apps.chat_data_app.agent.workspace.workspace_sync import (
     recover_pending_persistence,
@@ -105,6 +106,8 @@ class SandboxWorkspaceBackend:
             return True
         now = time.monotonic()
         if now - self._last_renew_at < _RENEW_MIN_INTERVAL_SECONDS:
+            # 刚续过期的缓存也要一起顺延，否则远端实例活着、进程缓存却先过期。
+            refresh_workspace_execution_session(session)
             return True
         async with self._renew_lock:
             now = time.monotonic()
@@ -114,6 +117,7 @@ class SandboxWorkspaceBackend:
                 await renew(timedelta(seconds=read_sandbox_lifetime_seconds()))
                 self._last_renew_at = time.monotonic()
                 self._renew_failure_logged = False
+                refresh_workspace_execution_session(session)
                 return True
             except Exception:
                 alive = await self._sandbox_alive(sandbox)
