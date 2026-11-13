@@ -1165,10 +1165,6 @@ const handleDownloadPresentedArtifact = async (artifact: { path: string; name: s
   }
 }
 
-// 工作区里的文件（uploads / workspace / outputs）都可直接下载，不依赖智能体是否调用过展示工具。
-// 后端 raw 接口对三个目录一视同仁，此前的 outputs 限制只是前端产品决策，已放开。
-// SQL 查询结果与工具结果卸载缓存除外——见 utils/consoleFileTree.ts 的下载白名单说明。
-// file 由文件树每行的下载按钮传入；不传时回退到当前选中文件（兼容旧调用点）。
 const fillSemanticFieldQuestion = (payload: { fieldName: string; fieldType: 'dimension' | 'metric' }) => {
   const fieldName = String(payload?.fieldName || '').trim()
   if (!fieldName) return

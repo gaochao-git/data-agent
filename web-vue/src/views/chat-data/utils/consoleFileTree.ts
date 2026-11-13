@@ -86,20 +86,17 @@ export function isTreeFullyCollapsed(
 }
 
 /**
- * 系统结果目录：`workspace/.system/query_result`（SQL 查询结果）与 `workspace/.system/tool-offload`（工具结果卸载缓存）。
+ * 系统数据目录（`workspace/.system/*`，含 semantic / query_result / tool-offload）。
  *
- * 两者都是「原始数据 + 审计留存」：放开下载等于绕过问数的权限边界，会造成数据泄漏；
- * 删除则会让审计链路失去凭证。它们现在会出现在文件树里（便于查看占用），但下载/删除
- * 仍由后端与这里共同拦截；这里是前端侧的纵深防御，防止将来任一侧放开后静默失效。
+ * 口径以 `server/utils/workspace_system_paths.py` 为准：用户可见、可预览、**可下载**，但不可删改；
+ * 智能体只读。因此这组前缀只用于「删除入口」与「目录打包入口」的拦截，不再限制单文件下载。
+ * 删除被拦是为了保住系统数据；打包范围只放开 outputs 是产品交互选择，不是安全边界。
  */
 export const SYSTEM_RESULT_WORKSPACE_PREFIXES = [
   'workspace/.system',
   'workspace/.system/query_result',
   'workspace/.system/tool-offload',
 ] as const
-
-/** 下载侧沿用的历史导出名（语义等价于系统结果目录）。 */
-export const NON_DOWNLOADABLE_WORKSPACE_PREFIXES = SYSTEM_RESULT_WORKSPACE_PREFIXES
 
 /** 把相对路径、带沙箱前缀的可见路径或 Windows 分隔符写法统一成 `outputs/...` 形式。 */
 function normalizeWorkspaceRelativePath(relativePath: string | null | undefined): string {
@@ -130,16 +127,16 @@ export function isWorkspaceFileDownloadable(relativePath: string | null | undefi
  * 用户拍板（2026-09-19）先只放开 outputs：它是「智能体产出」的汇聚地，是打包下载
  * 的真实诉求；workspace 是过程中间文件、uploads 内容用户本就有原件，暂不放开。
  * 2026-09-24 追加放开 outputs 下的**任意层级子目录**（顶层范围不变）。
- * 后端 archive 接口按 WORKSPACE_DIR_NAMES 校验路径首段并拒绝 `..` 逃逸，打包内容仍走
- * list_workspace_files 的可见清单——系统结果目录（workspace/.system 下）
- * 即便在 outputs 下也不会进包，与单文件下载同一防泄漏口径。
+ * 后端 archive 接口按 WORKSPACE_DIR_NAMES 校验路径首段并拒绝 `..` 逃逸，打包内容走
+ * list_workspace_files 的可见清单并显式排除 workspace/.system。此处白名单与单文件下载
+ * 口径不同：单文件下载已对所有可见文件（含 .system）放开，打包仍只放开 outputs。
  */
 export const ARCHIVE_DOWNLOADABLE_DIRECTORIES: readonly string[] = ['outputs']
 
 /**
  * 判断目录是否提供打包下载入口：顶层目录名或其下子目录路径（如 `outputs/月报`）都算。
  *
- * 系统结果目录即便在 outputs 下也拒绝：包里不会有任何文件，给了入口只会得到一个空包报错。
+ * 系统数据目录默认不给打包入口（打包范围只放开 outputs）；单文件下载不受此限制，二者口径差异属交互选择。
  */
 export function isWorkspaceDirectoryArchiveDownloadable(directoryPath: string | null | undefined): boolean {
   const path = normalizeWorkspaceRelativePath(directoryPath)
@@ -150,8 +147,8 @@ export function isWorkspaceDirectoryArchiveDownloadable(directoryPath: string | 
 /**
  * 判断工作区文件是否提供删除入口。
  *
- * 目前与下载共用同一组排除目录，但语义独立：下载被拦是防泄漏，删除被拦是保审计留存。
- * 两者将来分化（例如允许下载但不允许删）时改各自的函数即可，不必动常量。
+ * 与下载口径已经分化：单文件下载对所有可见文件都放开，删除仍需排除系统数据目录以保住审计留痕。
+ * 该边界与后端写侧 `assert_writable`（.system 整体拒写）一致，改一侧必须同步另一侧。
  */
 export function isWorkspaceFileDeletable(relativePath: string | null | undefined): boolean {
   const path = normalizeWorkspaceRelativePath(relativePath)

@@ -973,7 +973,7 @@ ChatData
 - 预期：
   - **顶层口径不变：只有 outputs 行出现该按钮**（白名单 `ARCHIVE_DOWNLOADABLE_DIRECTORIES`，2026-09-19 用户拍板）；uploads / workspace 顶层及其子目录都不可打包。
   - **outputs 下的任意层级子目录都可单独打包**（2026-09-24 放开）：按钮 hover 显现（与文件行下载同口径，避免子目录多时图标压过目录名），文件名取路径末段（`月报.zip`，不含斜杠）。
-  - zip 内容 = 该文件树节点下的可见文件（顶层打包时 arcname 保留 `outputs/...` 目录结构；系统结果目录 `query_result`/`.tool-offload` 与内部文件不进包，与单文件下载同一防泄漏口径，且这些目录行不出现打包按钮）。
+  - zip 内容 = 该文件树节点下的可见文件（顶层打包时 arcname 保留 `outputs/...` 目录结构；系统数据目录 `workspace/.system/*` 与内部文件不进包，且这些目录行不出现打包按钮）。注意这里与单文件下载口径不同：单文件下载已放开 `.system`，打包仍只放开 `outputs` 及其子目录。
   - 大小限制针对 **zip 产物**（`CHAT_DATA_WORKSPACE_ARCHIVE_MAX_MB` 默认 50MB，限压缩后大小无法前端预检），超限后端中止并 toast 业务文案「压缩包超过大小限制…已中止打包」；业务错误以 HTTP 200 + JSON 体返回（blob.type=application/json），前端解析 msg 提示。
 - 边界：目录参数容错 `outputs/../uploads`（拒绝，后端 `normalize_archive_directory` 拦 `..` 与非法首段，返回业务错误而非 500）；空目录不显示按钮；打包中按钮进 spin 且重复点击被吞。
 - 关联：`utils/consoleFileTree.ts`（`isWorkspaceDirectoryArchiveDownloadable`）、`ConversationWorkspacePanel.vue`、`routers/conversation_workspace.py`（archive）、`services/agent_run/conversation_workspace.py`（`normalize_archive_directory`）。
@@ -987,8 +987,8 @@ ChatData
   - 接口 `directories` 字段进入 `buildProducedFileTree`；固定四目录（uploads / workspace / outputs / memory）常驻，**空目录与无文件的中间目录也渲染成目录行**，计数与大小取子树可见文件。
   - 二级及更深**有子节点**的目录首次出现默认折叠（`fa-chevron-right`），空目录不折叠；用户手动展开后不自动收起；切会话清空 `knownNestedDirectories` 并把折叠集合重置为 `DEFAULT_COLLAPSED_CONSOLE_DIRECTORIES`。
   - 折叠 / 展开全部只作用于可折叠目录，空目录不受影响；按钮 title 在「折叠全部目录」↔「展开全部目录」间翻转。
-  - `workspace/.system/semantic/*.yaml` 由语义缓存投影渲染；文件行**无删除按钮**（`isWorkspaceFileDeletable` 拦 `workspace/.system/semantic/`）；历史会话的旧 `user-data/workspace/.system/semantic/` 不进入文件列表、目录列表与占用统计。
-  - 系统结果目录（`workspace/.system/query_result`、`workspace/.system/tool-offload`）可展示、可只读预览，但无下载 / 删除 / 打包入口；空 `outputs` 不显示打包下载入口（FILE-10 边界）。
+  - `workspace/.system/semantic/*.yaml` 由语义缓存投影渲染；文件行有「预览 / 下载」、**无删除按钮**（`isWorkspaceFileDeletable` 拦整个 `workspace/.system/` 前缀）；历史会话的旧 `user-data/workspace/semantic/`（共享目录时代遗留）由 `_is_stale_legacy_semantic` 无条件忽略，不进入文件列表、目录列表与占用统计。
+  - 系统结果目录（`workspace/.system/query_result`、`workspace/.system/tool-offload`）可展示、可预览、**可下载**（raw 接口按会话鉴权后返回 200），但无删除 / 打包入口；空 `outputs` 不显示打包下载入口（FILE-10 边界）。单文件下载与目录打包口径不同，不要沿用旧「防泄漏」说法。
   - 刷新同时发出 `workspace-files` 与 `content?path=...&_refresh=<token>`，均 200；预览内容正常渲染，无「文件内容加载失败」。
 - 关联：`services/agent_run/conversation_workspace.py`（`list_workspace_directories` / `_is_stale_legacy_semantic` / `_append_semantic_workspace_entries`）、`routers/conversation_workspace.py`、`utils/consoleFileTree.ts`（`ensureProducedDirectoryNode` / `buildProducedFileTree` / `isWorkspaceFileDeletable`）、`ConversationWorkspacePanel.vue`（`knownNestedDirectories` watch）。
 

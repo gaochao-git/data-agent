@@ -315,7 +315,7 @@ describe('isWorkspaceDirectoryArchiveDownloadable（目录打包下载白名单�
     // 顶层范围没有跟着放开：其它顶层的子目录仍不可打包
     expect(isWorkspaceDirectoryArchiveDownloadable('workspace/steps')).toBe(false)
     expect(isWorkspaceDirectoryArchiveDownloadable('uploads/batch')).toBe(false)
-    // 系统结果目录：包里本就不会有文件，给了入口只会得到一个空包报错
+    // 系统数据目录默认不给打包入口（打包范围仅 outputs），单文件下载仍放开；这是交互口径不是安全边界
     expect(isWorkspaceDirectoryArchiveDownloadable('workspace/.system/query_result')).toBe(false)
     expect(isWorkspaceDirectoryArchiveDownloadable('workspace/.system/tool-offload')).toBe(false)
     // 带沙箱前缀 / Windows 分隔符归一到同一口径

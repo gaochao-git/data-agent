@@ -303,7 +303,7 @@ def list_workspace_files(
     *,
     created_date: str | None = None,
 ) -> list[dict[str, Any]]:
-    """列出会话工作区中的文件（含系统结果目录，仅用于展示/占用统计），不跟随逃逸符号链接。"""
+    """列出会话工作区中的文件（含系统数据目录，可展示/预览/下载、不可删改），不跟随逃逸符号链接。"""
     paths = ensure_conversation_workspace(conversation_id, user_id, created_date=created_date)
     root = Path(paths["root"]).resolve()
     files: list[dict[str, Any]] = []
@@ -388,7 +388,7 @@ def read_workspace_text_file(
     paths = ensure_conversation_workspace(conversation_id, user_id, created_date=created_date)
     root = paths["root"]
     target = resolve_workspace_path(root, path)
-    # 系统结果目录只读展示：允许查看内容，但下载/删除/打包仍由独立接口拦截。
+    # 系统数据目录只读展示：可预览、可下载（按会话鉴权），删改由写侧 assert_writable 拦截。
     if not target.exists() or not target.is_file():
         raise FileNotFoundError(f"文件不存在: {path}")
     size = target.stat().st_size
@@ -518,9 +518,10 @@ def _archive_workspace_directory(
     """把会话工作区的目录（顶层目录或其下子目录）打成 zip，写入临时文件并返回其路径等信息。
 
     archive_max_bytes=None 时回退同步兜底常量（异步入口会显式传热值）。
-    内容来源是 ``list_workspace_files`` 的白名单列表（已排除系统结果目录、内部文件与
-    逃逸符号链接），**不重新遍历磁盘**——保证「单文件下载不了的，打包也下不到」，与
-    单文件下载、前端文件树三方共用同一权限口径（consoleFileTree.ts 的防泄漏边界）。
+    内容来源是 ``list_workspace_files`` 返回的可见清单（已排除内部文件与逃逸符号链接），
+    **不重新遍历磁盘**；此处再显式排除 ``workspace/.system``；打包范围只放开 outputs 是产品交互选择，不是安全边界。
+    注意与单文件下载口径不同：单文件下载已对所有可见文件（含 .system）放开，打包顶层范围
+    仍只有 outputs（前端 ``ARCHIVE_DOWNLOADABLE_DIRECTORIES`` 与之对应）。
 
     大小限制针对 zip 产物字节（用户拍板 2026-09-19）：压缩率不可控，无法预检，故
     边写边计量（每个文件落包后核对临时文件大小），超限抛 WorkspaceArchiveTooLargeError。
@@ -657,7 +658,7 @@ def read_workspace_raw_file(
     paths = ensure_conversation_workspace(conversation_id, user_id, created_date=created_date)
     root = paths["root"]
     target = resolve_workspace_path(root, path)
-    # 系统结果目录只读展示：允许原始字节预览，但下载/删除/打包仍被拦截。
+    # 系统数据目录只读展示：原始字节可预览、可下载（按会话鉴权），删改由写侧 assert_writable 拦截。
     if not target.exists() or not target.is_file():
         raise FileNotFoundError(f"文件不存在: {path}")
     size = target.stat().st_size

@@ -824,13 +824,15 @@ const handleCopyWorkspacePreviewPath = () => {
 
 // 工作区里的文件（uploads / workspace / outputs）都可直接下载，不依赖智能体是否调用过展示工具。
 // 后端 raw 接口对三个目录一视同仁，此前的 outputs 限制只是前端产品决策，已放开。
-// SQL 查询结果与工具结果卸载缓存除外——见 utils/consoleFileTree.ts 的下载白名单说明。
+// .system 下的文件也一律可下载（含 SQL 查询结果与工具卸载缓存），后端 raw 接口按会话鉴权；
+// 仅删除与目录打包仍被拦截，见 utils/consoleFileTree.ts 的 SYSTEM_RESULT_WORKSPACE_PREFIXES。
+// 下面的 isWorkspaceFileDownloadable 只在拿不到路径时返回 false，起保守兜底作用。
 // file 由文件树每行的下载按钮传入；不传时回退到当前选中文件（兼容旧调用点）。
 const handleDownloadConsoleFile = async (file: ProducedFile | null = selectedConsoleFile.value) => {
   const conversationId = props.conversationId
   if (!file) return
   if (!isWorkspaceFileDownloadable(file.relativePath)) {
-    ElMessage.warning('该文件不允许下载')
+    ElMessage.warning('文件路径为空，无法下载')
     return
   }
   if (!conversationId) {

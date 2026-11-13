@@ -193,8 +193,8 @@ const {
                     >
                       <i class="fa-solid fa-eye"></i>
                     </button>
-                    <!-- SQL 查询结果（workspace/.system/query_result、workspace/.system/tool-offload）可展示/查看占用，
-                         但不提供下载，防数据泄漏；后端两侧已拦截。 -->
+                    <!-- .system 下的文件同样可预览、可下载（后端 raw 接口按会话鉴权后放行）；
+                         删除入口由 isWorkspaceFileDeletable 拦截、打包入口由 archive 白名单拦截，保持审计留痕。 -->
                     <button
                       v-if="isWorkspaceFileDownloadable(item.node.file.relativePath) && !isPdfFilePath(item.node.file.relativePath)"
                       type="button"
@@ -253,7 +253,8 @@ const {
                   <!-- 子目录打包下载：outputs 下的任意层级子目录都可单独打包（顶层范围仍是
                        outputs，见 utils/consoleFileTree.ts）。图标沿用文件行的 hover 显现——
                        子目录可能很多，常显会满屏都是下载图标压过目录名。
-                       系统结果目录（workspace/.system 下）不提供打包，包里本就不会有文件。 -->
+                       系统数据目录（workspace/.system 下）默认不给打包入口（打包范围仅 outputs）；
+                       这与单文件下载口径不同，.system 下的文件本身仍可单独下载。 -->
                   <button
                     v-if="isWorkspaceDirectoryArchiveDownloadable(item.node.path) && getFileCount(item.node)"
                     type="button"
