@@ -186,12 +186,12 @@ describe('ToolCallCard', () => {
 
   it('keeps file_diff raw json as result and offers a separate diff viewer button', () => {
     const result = '[file_diff]\n' + JSON.stringify({
-      file_a: '/mnt/user-data/workspace/semantic/orders__a1.yaml',
+      file_a: '/mnt/user-data/workspace/.system/semantic/orders__a1.yaml',
       file_b: '/mnt/user-data/outputs/orders__a1.yaml',
       status: 'changed',
       added_lines: 2,
       removed_lines: 1,
-      diff: '--- /mnt/user-data/workspace/semantic/orders__a1.yaml\n+++ /mnt/user-data/outputs/orders__a1.yaml\n@@ -1,3 +1,4 @@\n version: \'1\'\n-name: orders\n+name: orders_v2\n+metrics: []\n',
+      diff: '--- /mnt/user-data/workspace/.system/semantic/orders__a1.yaml\n+++ /mnt/user-data/outputs/orders__a1.yaml\n@@ -1,3 +1,4 @@\n version: \'1\'\n-name: orders\n+name: orders_v2\n+metrics: []\n',
     })
     const wrapper = mount(ToolCallCard, {
       props: {
@@ -199,7 +199,7 @@ describe('ToolCallCard', () => {
         toolCall: {
           tool_call_id: 'call-diff',
           tool_name: 'file_diff',
-          args: { file_a: '/mnt/user-data/workspace/semantic/orders__a1.yaml', file_b: '/mnt/user-data/outputs/orders__a1.yaml' },
+          args: { file_a: '/mnt/user-data/workspace/.system/semantic/orders__a1.yaml', file_b: '/mnt/user-data/outputs/orders__a1.yaml' },
           status: 'completed',
           result,
         },

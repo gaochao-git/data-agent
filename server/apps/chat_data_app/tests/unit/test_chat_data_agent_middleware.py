@@ -304,7 +304,7 @@ async def test_context_compression_references_parallel_tool_results_without_brea
     )
     recovery_b = build_tool_result_recovery(
         source_tool="data_analyzing_tool",
-        result_path="/mnt/user-data/outputs/.tool-offload/result-b.json",
+        result_path="/mnt/user-data/workspace/.system/tool-offload/result-b.json",
         result_size_chars=6000,
         result_id="result-b",
     )

@@ -40,7 +40,7 @@ assets/dashboard/examples/   看板示例（需求宽泛时按需取一个）
 
 以下硬约束不因走哪条路径而放宽：
 
-- 当前用户可见（当前数据源组）的启用语义模型 Ossie YAML 已预物化到 `/mnt/user-data/workspace/semantic/`，文件名为 `{模型名}__{id后缀}.yaml`；同目录的 `_semantic_catalog.yaml` 是系统生成的语义资产目录（每个启用模型一条 file/description/business_notes，file 即快照文件名）。先用 `file_read` 整读目录定位候选模型，再用 `file_grep` 按业务关键词在语义目录内定位细节（宽泛词命中过多时先 `output_mode="files_with_matches"` 收敛到文件），只有命中候选才 `file_read` 分页精读。**禁止为找模型逐个读取目录里的 YAML。**
+- 当前用户可见（当前数据源组）的启用语义模型 Ossie YAML 已预物化到 `/mnt/user-data/workspace/.system/semantic/`，文件名为 `{模型名}__{id后缀}.yaml`；同目录的 `_semantic_catalog.yaml` 是系统生成的语义资产目录（每个启用模型一条 file/description/business_notes，file 即快照文件名）。先用 `file_read` 整读目录定位候选模型，再用 `file_grep` 按业务关键词在语义目录内定位细节（宽泛词命中过多时先 `output_mode="files_with_matches"` 收敛到文件），只有命中候选才 `file_read` 分页精读。**禁止为找模型逐个读取目录里的 YAML。**
 - 指标、维度、业务口径不明确时必须澄清，不能凭常识编造，也不能用 SQL 绕过。
 - 当前用户的可用执行对象清单不进系统提示词：涉及查询时先调 `data_analyzing_tool` 的 `list_execution_targets` 实时获取，`member_datasource_ids` 只能从返回清单中选（细则见 `references/analysis/query.md`「1. 获取执行对象清单」）。
 - 一次 `data_analyzing_tool` 调用只使用一个 `semantic_config_id`，不混合多个模型的字段、分组或 JOIN。
@@ -69,7 +69,7 @@ assets/dashboard/examples/   看板示例（需求宽泛时按需取一个）
 ## 通用边界
 
 - 不编造指标、维度、表、字段、枚举或查询结果；确认不了的口径就问，不猜。
-- 治理修改在统一治理目录 `/mnt/user-data/workspace/governance/` 下的拷贝件上进行，不改写 `/mnt/user-data/workspace/semantic/` 下已物化的原模型文件；自检通过后把文件复制到 `outputs/governance/` 交付，治理中间态文件不进 `outputs/`。
+- 治理修改在统一治理目录 `/mnt/user-data/workspace/governance/` 下的拷贝件上进行，不改写 `/mnt/user-data/workspace/.system/semantic/` 下已物化的原模型文件；自检通过后把文件复制到 `outputs/governance/` 交付，治理中间态文件不进 `outputs/`。
 - 每次调用工具前先输出一句短句说明当前动作，工具返回后用一句短句概括发现；不把参数、JSON、DSL、SQL 或原始工具返回原文写进用户正文，除非用户明确要求解释技术原因。
 
 ## 完成判定

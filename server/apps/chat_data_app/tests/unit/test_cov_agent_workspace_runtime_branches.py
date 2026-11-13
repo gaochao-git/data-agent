@@ -74,7 +74,7 @@ def test_resolve_workspace_path_rejects_system_result_write_after_policy(tmp_pat
 
     with pytest.raises(ValueError, match="系统结果目录"):
         workspace_runtime.resolve_workspace_path(
-            str(root), "/mnt/user-data/outputs/.tool-offload/private.json", writable=True
+            str(root), "/mnt/user-data/workspace/.system/tool-offload/private.json", writable=True
         )
 
 
@@ -85,7 +85,7 @@ def test_resolve_workspace_path_rejects_semantic_model_write_after_policy(tmp_pa
 
     with pytest.raises(ValueError, match="语义模型只读快照"):
         workspace_runtime.resolve_workspace_path(
-            str(root), "/mnt/user-data/workspace/semantic/model.yaml", writable=True
+            str(root), "/mnt/user-data/workspace/.system/semantic/model.yaml", writable=True
         )
 
 

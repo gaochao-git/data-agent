@@ -186,10 +186,14 @@ def test_validate_bash_paths_rejects_semantic_snapshot():
     runtime = FakeRuntime()
 
     asyncio.run(backend.validate_bash_paths(runtime, command="cat /mnt/user-data/workspace/a.txt"))
-    asyncio.run(backend.validate_bash_paths(runtime, command="cat /mnt/user-data/workspace/semantic-backup/a.txt"))
+    asyncio.run(
+        backend.validate_bash_paths(runtime, command="cat /mnt/user-data/workspace/.system/semantic-backup/a.txt")
+    )
     with pytest.raises(ValueError, match="bash_run 只允许访问"):
         asyncio.run(
-            backend.validate_bash_paths(runtime, command="echo x > /mnt/user-data/workspace/semantic/model.yaml")
+            backend.validate_bash_paths(
+                runtime, command="echo x > /mnt/user-data/workspace/.system/semantic/model.yaml"
+            )
         )
 
 
@@ -200,7 +204,7 @@ def test_run_bash_rejects_semantic_snapshot_cwd():
             backend.run_bash(
                 FakeRuntime(),
                 command="ls",
-                cwd="/mnt/user-data/workspace/semantic",
+                cwd="/mnt/user-data/workspace/.system/semantic",
                 timeout_seconds=10,
             )
         )

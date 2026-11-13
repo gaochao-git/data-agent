@@ -348,7 +348,7 @@ async def create_conversation(request: CreateConversationRequest, req: Request) 
             except Exception as err:
                 logger.warning("创建会话时技能快照构建失败，首次运行将重试: %s", err)
             # 选数据源即建会话（对齐 AI Coding：选定上下文 = 会话已存在）：
-            # 建会话即物化启用语义模型到 workspace/semantic/，输入框 @ 引用
+            # 建会话即物化启用语义模型到 workspace/.system/semantic/，输入框 @ 引用
             # 工作区文件从第一刻起就有语义模型可选。物化失败不阻断创建，
             # 首轮 run 的预物化会幂等兜底。
             if normalized_datasource_id:

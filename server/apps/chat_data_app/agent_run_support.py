@@ -88,7 +88,7 @@ async def materialize_conversation_semantic_models(
     user_id: str,
     datasource_id: str | None,
 ) -> dict[str, Any]:
-    """会话创建时把当前数据源组全部启用语义模型物化到 ``workspace/semantic/``。
+    """会话创建时把当前数据源组全部启用语义模型物化到 ``workspace/.system/semantic/``。
 
     输入框 @ 引用改走工作区文件后，语义模型以 YAML 文件形态出现在 @ 菜单里；
     在建会话时就物化，用户第一条消息即可引用，不必等首轮 run。物化本身幂等
@@ -579,7 +579,7 @@ async def _prepare_agent_workspace_runtime(
         backend=runtime_options.workspace_backend,
     )
     # 语义目录预物化：agent 循环前把全部启用模型写好，模型可不经 semantic_search
-    # 直接 dir_list/file_grep/file_read 检索 /mnt/user-data/workspace/semantic/。
+    # 直接 dir_list/file_grep/file_read 检索 /mnt/user-data/workspace/.system/semantic/。
     # 目录是语义检索的唯一来源，物化异常属基础设施故障：带着空目录继续只会让
     # 模型误判为“没有语义模型”，因此直接终止本轮，不进入 agent 循环。
     # 部分模型物化失败不终止本轮，但把缺失清单注入上下文，让模型能区分

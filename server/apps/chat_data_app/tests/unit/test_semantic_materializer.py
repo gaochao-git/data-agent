@@ -118,7 +118,7 @@ def test_materializer_overwrites_selected_models_and_reuses_conversion_cache(mon
     assert first["directory"][0]["metrics_total"] == 1
     assert first["directory"][0]["dimensions_total"] == 1
     assert first["directory"][0]["path"] == first["paths"]["sc_order"]
-    assert first_runtime.entries[0][0] == "/mnt/user-data/workspace/semantic/订单模型__order.yaml"
+    assert first_runtime.entries[0][0] == "/mnt/user-data/workspace/.system/semantic/订单模型__order.yaml"
     assert second_runtime.entries[0][1] == first_runtime.entries[0][1]
     assert calls == [("sc_order", "mysql")]
     # 每次 materialize（含 disabled 模型）只预取一次字段字典，两次调用共 2 次
@@ -237,8 +237,8 @@ def test_materializer_only_overwrites_selected_models(monkeypatch):
         )
     )
 
-    assert [path for path, _ in runtime.entries] == ["/mnt/user-data/workspace/semantic/订单模型__keep.yaml"]
-    assert result["paths"] == {"sc_keep": "/mnt/user-data/workspace/semantic/订单模型__keep.yaml"}
+    assert [path for path, _ in runtime.entries] == ["/mnt/user-data/workspace/.system/semantic/订单模型__keep.yaml"]
+    assert result["paths"] == {"sc_keep": "/mnt/user-data/workspace/.system/semantic/订单模型__keep.yaml"}
 
 
 def test_prematerialize_skips_without_datasource_or_runtime():
@@ -331,9 +331,9 @@ def test_prematerialize_writes_all_enabled_models(monkeypatch):
 
     assert result == {"total": 2, "failed_ids": []}
     assert [path for path, _ in runtime.entries] == [
-        "/mnt/user-data/workspace/semantic/订单模型__a.yaml",
-        "/mnt/user-data/workspace/semantic/订单模型__b.yaml",
-        "/mnt/user-data/workspace/semantic/_semantic_catalog.yaml",
+        "/mnt/user-data/workspace/.system/semantic/订单模型__a.yaml",
+        "/mnt/user-data/workspace/.system/semantic/订单模型__b.yaml",
+        "/mnt/user-data/workspace/.system/semantic/_semantic_catalog.yaml",
     ]
     assert runtime.deleted == []
 
@@ -404,7 +404,7 @@ def test_materializer_reuses_caller_supplied_configs(monkeypatch):
 
     assert list(result["paths"]) == ["sc_a"]
     assert result["failed_ids"] == []
-    assert [path for path, _ in runtime.entries] == ["/mnt/user-data/workspace/semantic/订单模型__a.yaml"]
+    assert [path for path, _ in runtime.entries] == ["/mnt/user-data/workspace/.system/semantic/订单模型__a.yaml"]
 
 
 def test_cache_key_uses_update_time_and_batch_salt(monkeypatch):
@@ -557,7 +557,7 @@ def test_materializer_prunes_stale_files_only_for_full_scope(monkeypatch):
         "convert",
         lambda self, config, *, source_type="": f"semantic_model: {config['id']}\n",
     )
-    stale = "/mnt/user-data/workspace/semantic/已停用模型__deadbeef.yaml"
+    stale = "/mnt/user-data/workspace/.system/semantic/已停用模型__deadbeef.yaml"
 
     # 全量范围（prune_stale=True）：残留文件被清理，有效文件保留
     runtime = _FakeRuntime()
@@ -573,7 +573,7 @@ def test_materializer_prunes_stale_files_only_for_full_scope(monkeypatch):
         )
     )
     assert runtime.deleted == [stale]
-    assert result["paths"] == {"sc_keep": "/mnt/user-data/workspace/semantic/订单模型__keep.yaml"}
+    assert result["paths"] == {"sc_keep": "/mnt/user-data/workspace/.system/semantic/订单模型__keep.yaml"}
 
     # 单模型范围（默认）：即使目录有残留也不清理，避免误删其它模型文件
     single_runtime = _FakeRuntime()
@@ -619,7 +619,7 @@ def test_prune_stale_survives_list_dir_failure(monkeypatch):
         )
     )
     # 清理失败不影响物化结果本身
-    assert result["paths"] == {"sc_keep": "/mnt/user-data/workspace/semantic/订单模型__keep.yaml"}
+    assert result["paths"] == {"sc_keep": "/mnt/user-data/workspace/.system/semantic/订单模型__keep.yaml"}
     assert runtime.deleted == []
 
 
@@ -636,7 +636,7 @@ def test_prune_stale_survives_delete_failure(monkeypatch):
         "convert",
         lambda self, config, *, source_type="": f"semantic_model: {config['id']}\n",
     )
-    stale = "/mnt/user-data/workspace/semantic/已停用模型__deadbeef.yaml"
+    stale = "/mnt/user-data/workspace/.system/semantic/已停用模型__deadbeef.yaml"
 
     class _BlockedDeleteRuntime(_FakeRuntime):
         async def delete_internal_text_files(self, *, path):
@@ -654,7 +654,7 @@ def test_prune_stale_survives_delete_failure(monkeypatch):
             prune_stale=True,
         )
     )
-    assert result["paths"] == {"sc_keep": "/mnt/user-data/workspace/semantic/订单模型__keep.yaml"}
+    assert result["paths"] == {"sc_keep": "/mnt/user-data/workspace/.system/semantic/订单模型__keep.yaml"}
     assert runtime.deleted == []
 
 
@@ -787,7 +787,7 @@ def test_single_model_materialization_skips_catalog(monkeypatch):
 
 def test_prune_keeps_semantic_catalog(monkeypatch):
     """残留清理只删停用模型遗留文件，语义资产目录始终在保留集内。"""
-    stale = "/mnt/user-data/workspace/semantic/已停用模型__deadbeef.yaml"
+    stale = "/mnt/user-data/workspace/.system/semantic/已停用模型__deadbeef.yaml"
     runtime = _FakeRuntime()
     runtime.files.add(
         semantic_materializer.SEMANTIC_SNAPSHOT_DIR + "/" + semantic_materializer.SEMANTIC_CATALOG_FILE_NAME
@@ -816,7 +816,7 @@ def test_catalog_render_failure_does_not_block_models(monkeypatch):
         "_render_semantic_catalog",
         lambda configs: (_ for _ in ()).throw(RuntimeError("render broken")),
     )
-    stale = "/mnt/user-data/workspace/semantic/已停用模型__deadbeef.yaml"
+    stale = "/mnt/user-data/workspace/.system/semantic/已停用模型__deadbeef.yaml"
     runtime = _FakeRuntime()
     runtime.files.add(stale)
 
@@ -831,7 +831,7 @@ def test_catalog_render_failure_does_not_block_models(monkeypatch):
         )
     )
 
-    assert result["paths"] == {"sc_keep": "/mnt/user-data/workspace/semantic/订单模型__keep.yaml"}
+    assert result["paths"] == {"sc_keep": "/mnt/user-data/workspace/.system/semantic/订单模型__keep.yaml"}
     assert _catalog_content(runtime) is None
     assert runtime.deleted == [stale]
 

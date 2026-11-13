@@ -42,6 +42,7 @@ from utils.storage_paths import (
 )
 from utils.tool_result_store import QUERY_RESULT_DIR_NAME, TOOL_OFFLOAD_DIR_NAME
 from utils.upload_storage_crypto import materialize_plaintext, original_upload_path
+from utils.workspace_system_paths import SEMANTIC_DIR_NAME, SYSTEM_DIR_NAME
 
 from .artifact_registry import parse_output_artifact
 from .office_preview_html import normalize_office_preview_html
@@ -318,7 +319,7 @@ class ConversationWorkspaceRuntime:
     def _assert_semantic_path(path: str) -> None:
         logical_path = WORKSPACE_PATH_POLICY.parse(path)
         if not logical_path.is_semantic_model or not logical_path.relative_path.lower().endswith(".yaml"):
-            raise ValueError("内部语义模型写入只能覆盖 /mnt/user-data/workspace/semantic/ 下的 YAML 文件")
+            raise ValueError("内部语义模型写入只能覆盖 /mnt/user-data/workspace/.system/semantic/ 下的 YAML 文件")
 
     def _write_semantic_cache(self, entries: list[tuple[str, str]]) -> None:
         """语义文件先落本地派生缓存；sandbox 仍由 backend 同步远端副本。"""
@@ -537,7 +538,9 @@ def ensure_conversation_workspace(
         path = root / name
         path.mkdir(parents=True, exist_ok=True)
         paths[name.replace("-", "_")] = str(path)
-    (root / "outputs" / TOOL_OFFLOAD_DIR_NAME).mkdir(parents=True, exist_ok=True)
+    system_root = root / "workspace" / SYSTEM_DIR_NAME
+    (system_root / TOOL_OFFLOAD_DIR_NAME).mkdir(parents=True, exist_ok=True)
+    (system_root / QUERY_RESULT_DIR_NAME).mkdir(parents=True, exist_ok=True)
     return paths
 
 
@@ -563,9 +566,10 @@ def _resolve_semantic_workspace_path(
     if not getattr(logical_path, "is_semantic_model", False):
         return None
     if writable and not allow_managed_semantic_model_write:
-        raise ValueError("/mnt/user-data/workspace/semantic/ 是本轮语义模型只读快照，不能修改")
+        raise ValueError("workspace/.system/semantic 是本轮语义模型只读快照，不能修改")
     semantic_root = conversation_semantic_dir_from_workspace(workspace_root).resolve()
-    suffix = logical_path.relative_path[len("semantic") :].lstrip("/")
+    semantic_prefix = f"{SYSTEM_DIR_NAME}/{SEMANTIC_DIR_NAME}"
+    suffix = logical_path.relative_path[len(semantic_prefix) :].lstrip("/")
     candidate = semantic_root / suffix
     if candidate.is_symlink():
         raise ValueError(f"不允许操作符号链接: {path}")
@@ -573,7 +577,7 @@ def _resolve_semantic_workspace_path(
     if target != semantic_root and semantic_root not in target.parents:
         raise ValueError(f"路径越界，禁止访问语义缓存之外的路径: {path}")
     # 会话 ref 是语义缓存的唯一真值：没有 ref 时 semantic_root 是占位目录，
-    # 读旧版共享工作区 workspace/semantic/ 里的历史 YAML 一律不兜底。
+    # 读旧版共享工作区 workspace/.system/semantic/ 里的历史 YAML 一律不兜底。
     return target
 
 
@@ -611,7 +615,7 @@ def _resolve_regular_workspace_path(
         if is_system_result_workspace_path(str(root), target):
             raise ValueError("不允许通过文件编辑工具修改系统结果目录")
         if is_managed_semantic_model_workspace_path(str(root), target) and not allow_managed_semantic_model_write:
-            raise ValueError("/mnt/user-data/workspace/semantic/ 是本轮语义模型只读快照，不能修改")
+            raise ValueError("workspace/.system/semantic 是本轮语义模型只读快照，不能修改")
     elif logical_path.kind == "uploads" and materialize_uploads:
         # 上传文件可能以应用层密文落盘；只有真正读取时才解密，列表/删除不触发。
         target = materialize_plaintext(target)
@@ -667,11 +671,12 @@ def resolve_workspace_path(
 
 def is_system_result_workspace_path(workspace_root: str, path: Path) -> bool:
     """Return whether a resolved path belongs to system-managed result storage."""
-    output_root = Path(workspace_root).resolve() / "outputs"
+    system_root = Path(workspace_root).resolve() / "workspace" / SYSTEM_DIR_NAME
     target = path.resolve()
     result_roots = (
-        (output_root / TOOL_OFFLOAD_DIR_NAME).resolve(),
-        (output_root / QUERY_RESULT_DIR_NAME).resolve(),
+        system_root.resolve(),
+        (system_root / TOOL_OFFLOAD_DIR_NAME).resolve(),
+        (system_root / QUERY_RESULT_DIR_NAME).resolve(),
     )
     return any(target == root or root in target.parents for root in result_roots)
 
@@ -680,10 +685,10 @@ def is_managed_semantic_model_workspace_path(workspace_root: str, path: Path) ->
     """Return whether a path belongs to the system-owned semantic model directory."""
     # 共享工作区里的历史 semantic 目录仍属系统只读区：这是写保护边界，
     # 只阻止写入、不提供任何读取兜底；删掉会让历史目录变成可写。
-    legacy_root = (Path(workspace_root).resolve() / "workspace" / "semantic").resolve()
     cache_root = conversation_semantic_dir_from_workspace(workspace_root).resolve()
+    local_system_root = (Path(workspace_root).resolve() / "workspace" / SYSTEM_DIR_NAME / SEMANTIC_DIR_NAME).resolve()
     target = path.resolve()
-    return any(target == root or root in target.parents for root in (legacy_root, cache_root))
+    return any(target == root or root in target.parents for root in (cache_root, local_system_root))
 
 
 def to_visible_path(workspace_root: str, path: Path) -> str:
@@ -692,15 +697,14 @@ def to_visible_path(workspace_root: str, path: Path) -> str:
     target = path.resolve()
     semantic_root = conversation_semantic_dir_from_workspace(workspace_root).resolve()
     # 仅做物理路径→规范前缀的显示映射；旧目录不再被读取、列举或上传。
-    legacy_root = (root / "workspace" / "semantic").resolve()
-    for current_root in (semantic_root, legacy_root):
+    for current_root in (semantic_root,):
         if target == current_root or current_root in target.parents:
             relative_semantic = target.relative_to(current_root).as_posix()
             # Path.relative_to(self) 返回 ".", 拼进去会变成含 "." 段的非规范路径，
             # 被 _assert_canonical 拒绝；目录本身应直接返回规范前缀。
             if relative_semantic and relative_semantic != ".":
-                return f"/mnt/user-data/workspace/semantic/{relative_semantic}"
-            return "/mnt/user-data/workspace/semantic"
+                return f"/mnt/user-data/workspace/{SYSTEM_DIR_NAME}/{SEMANTIC_DIR_NAME}/{relative_semantic}"
+            return f"/mnt/user-data/workspace/{SYSTEM_DIR_NAME}/{SEMANTIC_DIR_NAME}"
     original = original_upload_path(target)
     if original is not None:
         target = original
@@ -777,9 +781,9 @@ class WorkspacePathMapping:
         # 语义前缀必须按「路径段边界」替换：裸 str.replace 会把 semantic-backup、
         # semanticX、semantic.yaml 之类同前缀路径一并改写，导致校验解析到共享根、
         # 执行却翻到缓存目录。段字符含 . 与 -，结尾只允许分隔符或串尾。
-        self._semantic_virtual_re = re.compile(r"/mnt/user-data/workspace/semantic(?![A-Za-z0-9_.-])")
+        self._semantic_virtual_re = re.compile(r"/mnt/user-data/workspace/.system/semantic(?![A-Za-z0-9_.-])")
         self._semantic_physical_re = re.compile(re.escape(self._semantic_physical) + r"(?![A-Za-z0-9_.-])")
-        self._virtual_semantic_prefix = "/mnt/user-data/workspace/semantic"
+        self._virtual_semantic_prefix = "/mnt/user-data/workspace/.system/semantic"
         self._physical_workspace = {
             "workspace": f"{root}/workspace",
             "outputs": f"{root}/outputs",

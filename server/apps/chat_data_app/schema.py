@@ -1006,7 +1006,7 @@ class _CheckYamlActionPayload(BaseModel):
         if isinstance(data, dict) and "yaml_content" in data:
             raise ValueError(
                 "check_yaml 不再接受 yaml_content 全文参数，请改传文件路径："
-                '{"file_path": "/mnt/user-data/workspace/semantic/<模型文件>.yaml"}'
+                '{"file_path": "/mnt/user-data/workspace/.system/semantic/<模型文件>.yaml"}'
             )
         return data
 

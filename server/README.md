@@ -145,7 +145,7 @@ kill -9 $(lsof -ti :5001)
 - `CHAT_DATA_HTTP_*`：HTTP 模式下对接外部 Hive/查询服务，其中 `CHAT_DATA_HTTP_AUTH_TOKEN` 存放 SM4 加密后的密文
 - `OPENSANDBOX_API_KEY`：智能分析 OpenSandbox API Key，存放 SM4 加密后的密文；留空表示不传 API Key
 - `CHATDATA_ROW_LIMIT`：查询返回行数限制
-- `CHAT_DATA_TOOL_RESULT_OFFLOAD_SIZE`：普通工具结果卸载阈值，默认 32000 字符；查询结果统一保存到会话 `outputs/query_result/<id>.json`，普通工具大结果保存到 `outputs/.tool-offload/<id>.txt|json`
+- `CHAT_DATA_TOOL_RESULT_OFFLOAD_SIZE`：普通工具结果卸载阈值，默认 32000 字符；查询结果统一保存到会话 `workspace/.system/query_result/<id>.json`，普通工具大结果保存到 `workspace/.system/tool-offload/<id>.txt|json`
 - `CHAT_DATA_FILE_READ_MAX_CHARS`：`file_read` 单次返回给模型的正文上限，默认 25000 字符；按请求源行分页，单行最多返回 500 字符
 - `CHAT_DATA_MAX_UPLOAD_SIZE_MB`：单文件上传大小上限（MB，正整数），默认 `50`；流式边读边判，超限即拒绝并清理临时文件。前端另有一份 50MB 的客户端预检（`AnalysisConversation.vue` 的 `MAX_FILE_SIZE`），调大本值时须同步前端，否则大文件会在前端被拦下
 - `CHAT_DATA_MAX_IMAGE_SIZE_MB`：单张图片进入模型上下文的大小上限（MB，正整数），默认 `5`；同时约束 `read_image` 工具与视觉注入中间件
@@ -160,7 +160,7 @@ kill -9 $(lsof -ti :5001)
 
 `CHAT_DATA_HOME` 是应用侧唯一的运行时文件根。local 直接在该目录读写；sandbox 不访问该目录，也不使用宿主机目录挂载，而是通过 OpenSandbox Files API 上传会话快照，并在操作完成后把允许同步的 `workspace/`、`outputs/` 文件下载回应用侧。多应用实例之间的持久化存储和并发协调由部署层负责，代码不实现跨节点文件同步。
 
-会话文件位于 `threads/{user_id}/{创建日期YYYY-MM-DD}/{conversation_id}/user-data/`（按会话创建日期归档，路径统一由 `utils.storage_paths.conversation_thread_dir` 拼装），系统技能直接读代码包 `apps/chat_data_app/agent/skills/`（不落数据根），用户技能位于 `skills/user/{user_id}/<skill-name>/versions/vN/`。技能快照按用户落到 `CHAT_DATA_HOME/threads/{user_id}/runtime/skills/`（系统技能 + 自己已发布 + 他人 global 已发布），同一用户跨会话共享一份最新快照；每次 Run 首次解析后固定目录，技能变更下一轮覆盖更新。语义文件按用户 + 数据源组落到 `CHAT_DATA_HOME/threads/{user_id}/runtime/semantic/{datasource_id}/`（每个用户每组保留最新一份），会话 ref 放在 `threads/{user_id}/{date}/{conversation_id}/semantic-ref.json`；二者都是派生数据，可重建。sandbox 运行时通过 Files API 上传该快照到 `/mnt/skills`，并上传 `user-data/` 到 `/mnt/user-data`；技能在沙箱内只读，工具对 `workspace/`、`outputs/` 的变更在操作完成后下载回应用侧。大工具结果统一位于会话 `outputs/.tool-offload/`：查询结果保存为 `<id>.json`，其他工具结果保存为 `<id>.txt`，虚拟路径为 `/mnt/user-data/outputs/.tool-offload/<id>.<suffix>`。该目录可由 Agent 的 `file_read` 分页读取或 Bash 处理，但前端工作区列表、产物展示、技能导入和 `file_edit` 均忽略或拒绝它。系统技能直读代码包 `apps/chat_data_app/agent/skills/`（发布流程不再复制副本，`CHAT_DATA_HOME/skills/system` 已废弃），应用运行时只读且不写入技能数据库；用户技能继续由数据库元数据和版本目录管理。前端始终携带会话 ID 请求查询结果，后端据此校验当前用户归属并按固定路径读取。生产环境的 LangGraph checkpoint 使用 MySQL。MinIO 不在工作区、技能或查询结果的运行时链路中。
+会话文件位于 `threads/{user_id}/{创建日期YYYY-MM-DD}/{conversation_id}/user-data/`（按会话创建日期归档，路径统一由 `utils.storage_paths.conversation_thread_dir` 拼装），系统技能直接读代码包 `apps/chat_data_app/agent/skills/`（不落数据根），用户技能位于 `skills/user/{user_id}/<skill-name>/versions/vN/`。技能快照按用户落到 `CHAT_DATA_HOME/threads/{user_id}/runtime/skills/`（系统技能 + 自己已发布 + 他人 global 已发布），同一用户跨会话共享一份最新快照；每次 Run 首次解析后固定目录，技能变更下一轮覆盖更新。语义文件按用户 + 数据源组落到 `CHAT_DATA_HOME/threads/{user_id}/runtime/semantic/{datasource_id}/`（每个用户每组保留最新一份），会话 ref 放在 `threads/{user_id}/{date}/{conversation_id}/semantic-ref.json`；二者都是派生数据，可重建。sandbox 运行时通过 Files API 上传该快照到 `/mnt/skills`，并上传 `user-data/` 到 `/mnt/user-data`；技能在沙箱内只读，工具对 `workspace/`、`outputs/` 的变更在操作完成后下载回应用侧。大工具结果统一位于会话 `workspace/.system/tool-offload/`：查询结果保存为 `<id>.json`，其他工具结果保存为 `<id>.txt`，虚拟路径为 `/mnt/user-data/workspace/.system/tool-offload/<id>.<suffix>`。该目录可由 Agent 的 `file_read` 分页读取或 Bash 处理，但前端工作区列表、产物展示、技能导入和 `file_edit` 均忽略或拒绝它。系统技能直读代码包 `apps/chat_data_app/agent/skills/`（发布流程不再复制副本，`CHAT_DATA_HOME/skills/system` 已废弃），应用运行时只读且不写入技能数据库；用户技能继续由数据库元数据和版本目录管理。前端始终携带会话 ID 请求查询结果，后端据此校验当前用户归属并按固定路径读取。生产环境的 LangGraph checkpoint 使用 MySQL。MinIO 不在工作区、技能或查询结果的运行时链路中。
 
 ## 共享运行目录
 

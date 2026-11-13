@@ -1452,7 +1452,7 @@ async def test_agent_inbox_meta_roundtrip_to_human_message(inbox_service):
     await create_thread()
     run_id, _ = await service.start_run("conv-1", "user-1", "用户一")
 
-    meta = {"file_selections": ["workspace/semantic/a__1.yaml"], "file_ids": ["file-1", "file-2"]}
+    meta = {"file_selections": ["workspace/.system/semantic/a__1.yaml"], "file_ids": ["file-1", "file-2"]}
     with_meta_id = await service.enqueue_message(
         "conv-1",
         "user-1",

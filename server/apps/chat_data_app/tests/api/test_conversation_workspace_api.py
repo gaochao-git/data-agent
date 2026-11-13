@@ -346,7 +346,7 @@ def test_conversation_workspace_delete_route_maps_audit_and_missing_files(client
 
     audit_response = client.delete(
         "/api/chatdata/conversations/conv_a/workspace-files",
-        params={"path": "/mnt/user-data/outputs/query_result/result_1.json"},
+        params={"path": "/mnt/user-data/workspace/.system/query_result/result_1.json"},
         headers=auth_headers,
     )
     missing_response = client.delete(

@@ -49,7 +49,7 @@ def build_rg_args(
     默认 -F：fixed strings（与既有字面量语义兼容）；use_regex=True 时去掉 -F
     交给 ripgrep 正则引擎（Rust regex 线性时间，无经典 ReDoS 风险）。
     --json: structured JSON Lines output for robust parsing.
-    --hidden: include hidden dirs such as ``.tool-offload`` in the search.
+    --hidden: include hidden dirs such as ``.system`` in the search.
     """
     parts = ["rg", "--json", "--hidden"]
     if not use_regex:

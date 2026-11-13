@@ -193,7 +193,7 @@ const {
                     >
                       <i class="fa-solid fa-eye"></i>
                     </button>
-                    <!-- SQL 查询结果（outputs/query_result、outputs/.tool-offload）可展示/查看占用，
+                    <!-- SQL 查询结果（workspace/.system/query_result、workspace/.system/tool-offload）可展示/查看占用，
                          但不提供下载，防数据泄漏；后端两侧已拦截。 -->
                     <button
                       v-if="isWorkspaceFileDownloadable(item.node.file.relativePath) && !isPdfFilePath(item.node.file.relativePath)"
@@ -218,7 +218,7 @@ const {
                       <i class="fa-solid" :class="importingSemanticFilePath === item.node.file.relativePath ? 'fa-spinner fa-spin' : 'fa-file-import'"></i>
                     </button>
                     <!-- 删除：与预览/下载同列（行尾操作组），危险动作用红色区分。
-                         查询结果（outputs/query_result、outputs/.tool-offload）不提供删除，
+                         查询结果（workspace/.system/query_result、workspace/.system/tool-offload）不提供删除，
                          那是审计留存；run 执行中禁用，避免打断沙箱回写。 -->
                     <button
                       v-if="isWorkspaceFileDeletable(item.node.file.relativePath)"
@@ -253,7 +253,7 @@ const {
                   <!-- 子目录打包下载：outputs 下的任意层级子目录都可单独打包（顶层范围仍是
                        outputs，见 utils/consoleFileTree.ts）。图标沿用文件行的 hover 显现——
                        子目录可能很多，常显会满屏都是下载图标压过目录名。
-                       系统结果目录（query_result / .tool-offload）不提供打包，包里本就不会有文件。 -->
+                       系统结果目录（workspace/.system 下）不提供打包，包里本就不会有文件。 -->
                   <button
                     v-if="isWorkspaceDirectoryArchiveDownloadable(item.node.path) && getFileCount(item.node)"
                     type="button"

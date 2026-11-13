@@ -116,10 +116,11 @@ def test_system_prompt_environment_block_ignores_workspace_root():
     assert "## 环境" in with_root
     assert "├── workspace/   中间文件写入该工作区" in with_root
     # semantic/ 与 /mnt/skills 在环境块集中声明一次（只写目录属性，检索流程在技能文档）
-    assert "└── semantic/  语义模型目录（只读，不可写）" in with_root
+    assert "└── .system/ 系统数据区（只读，不可写、不可删）" in with_root
+    assert "├── semantic/      语义模型目录" in with_root
     assert "_semantic_catalog.yaml" not in with_root
-    assert "query_result/  查询结果卸载文件" in with_root
-    assert ".tool-offload/ 其它工具大结果卸载文件" in with_root
+    assert "├── query_result/  查询结果卸载文件" in with_root
+    assert "└── tool-offload/  其它工具大结果卸载文件" in with_root
     assert "└── skills/" in with_root
     assert "工作目录：\n/mnt/user-data/workspace" not in with_root
     assert "未初始化" not in with_root

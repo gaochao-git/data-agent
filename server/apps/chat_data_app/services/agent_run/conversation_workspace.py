@@ -146,11 +146,11 @@ def delete_workspace_file(
 
     只删文件、不删目录：目录递归删除需要单独的确认交互，不在这里代劳。
     路径安全全部下沉到 ``delete_local_workspace_file``（符号链接拒绝、realpath 越界校验、
-    系统结果目录拒绝），因此 ``outputs/query_result`` 在这里已被挡住。
+    系统结果目录拒绝），因此 ``workspace/.system/query_result`` 在这里已被挡住。
     """
     logical_path = WORKSPACE_PATH_POLICY.parse(path)
-    if logical_path.is_system_result:
-        raise ValueError("查询结果需要留存审计，不支持删除")
+    if logical_path.is_system_root:
+        raise ValueError("系统数据目录只读，不支持删除")
     workspace = ensure_conversation_workspace(conversation_id, user_id, created_date=created_date)
     return delete_local_workspace_file(workspace["root"], path, allow_uploads=True)
 
@@ -201,7 +201,7 @@ async def delete_conversation_workspace_file(
     """删除当前用户会话工作区中的单个文件。
 
     三条约束：
-    1. ``outputs/query_result``（SQL 查询结果）与 ``outputs/.tool-offload`` 是审计留存，永不删除；
+    1. ``workspace/.system/query_result``（SQL 查询结果）与 ``workspace/.system/tool-offload`` 是审计留存，永不删除；
     2. Run 正在执行时拒绝，避免把该 Run 的沙箱回写判成「应用侧已变更」而让它落盘失败；
     3. uploads 删除连带清理 ``uploaded_files`` 记录，避免历史附件卡片指向不存在的文件。
     """
@@ -209,8 +209,8 @@ async def delete_conversation_workspace_file(
         raise WorkspaceFileDeleteConflictError("智能体正在执行当前会话，请等本轮结束后再删除文件")
 
     logical_path = WORKSPACE_PATH_POLICY.parse(path)
-    if logical_path.is_system_result:
-        raise ValueError("查询结果需要留存审计，不支持删除")
+    if logical_path.is_system_root:
+        raise ValueError("系统数据目录只读，不支持删除")
 
     # uploads 命中上传记录时整条交给 UploadedFileService：它同时负责物理文件、解析产物与记录，
     # 不会留下「文件删了但账还在」的窗口；未命中记录（例如解析产物）才走纯物理删除。
@@ -276,7 +276,7 @@ def _append_semantic_workspace_entries(root: Path, files: list[dict[str, Any]]) 
     for item in sorted(semantic_root.rglob("*")):
         if not item.is_file() or item.is_symlink():
             continue
-        relative_path = f"workspace/semantic/{item.relative_to(semantic_root).as_posix()}"
+        relative_path = f"workspace/.system/semantic/{item.relative_to(semantic_root).as_posix()}"
         visible_path = f"{USER_DATA_VIRTUAL_ROOT}/{relative_path}"
         if any(existing["path"] == visible_path for existing in files):
             continue

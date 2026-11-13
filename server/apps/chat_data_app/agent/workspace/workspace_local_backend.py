@@ -308,7 +308,7 @@ def _write_local_text_file(
     if allow_managed_semantic_model_write and (
         not is_managed_semantic_model_workspace_path(workspace_root, target) or target.suffix.lower() != ".yaml"
     ):
-        raise ValueError("内部语义模型写入只能覆盖 /mnt/user-data/workspace/semantic/ 下的 YAML 文件")
+        raise ValueError("内部语义模型写入只能覆盖 /mnt/user-data/workspace/.system/semantic/ 下的 YAML 文件")
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary_path: Path | None = None
     try:
@@ -523,13 +523,13 @@ def _list_local_workspace_dir(
     )
     if not is_skill and target == (root / "workspace").resolve():
         # 共享工作区里的历史 semantic 目录一律不展示；只有当前缓存存在时才注入虚拟目录。
-        entries = [entry for entry in entries if entry.get("path") != "/mnt/user-data/workspace/semantic/"]
+        entries = [entry for entry in entries if entry.get("path") != "/mnt/user-data/workspace/.system/semantic/"]
         semantic_root = conversation_semantic_dir_from_workspace(str(root))
         if semantic_root.is_dir():
             entries.append(
                 {
                     "type": "dir",
-                    "path": "/mnt/user-data/workspace/semantic/",
+                    "path": "/mnt/user-data/workspace/.system/semantic/",
                     "size": "-",
                     "mtime": datetime.datetime.fromtimestamp(semantic_root.stat().st_mtime).strftime("%Y-%m-%d %H:%M"),
                 }
@@ -1296,7 +1296,7 @@ class LocalWorkspaceBackend:
                 raise ValueError("bash_run 只允许访问当前会话目录或当前用户有权访问的技能路径: " + token) from exc
             if is_managed_semantic_model_workspace_path(runtime.workspace_root, resolved):
                 raise ValueError(
-                    "/mnt/user-data/workspace/semantic/ 是系统只读语义模型快照，"
+                    "/mnt/user-data/workspace/.system/semantic/ 是系统只读语义模型快照，"
                     "bash_run 不允许访问；请用 file_read / file_grep 读取"
                 )
 

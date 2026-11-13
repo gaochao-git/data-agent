@@ -17,6 +17,7 @@ import yaml
 from utils.logger import get_logger
 from utils.redis_lock import file_lock, redis_lease, semantic_lease_key
 from utils.storage_paths import semantic_cache_dir
+from utils.workspace_system_paths import SEMANTIC_VIRTUAL_ROOT
 
 from .chat_data_ossie_converter import ChatDataToOssieConverter
 from .semantic_config_service import SemanticConfigService, get_semantic_config_service
@@ -28,7 +29,7 @@ _CACHE_LIMIT = 256
 _CACHE_HARD_LIMIT = 4096
 _YAML_CACHE: OrderedDict[str, str] = OrderedDict()
 # 语义模型 YAML 快照目录（受管只读区，仅供 file_grep/file_read）
-SEMANTIC_SNAPSHOT_DIR = "/mnt/user-data/workspace/semantic"
+SEMANTIC_SNAPSHOT_DIR = SEMANTIC_VIRTUAL_ROOT
 # 语义资产目录文件（agent 检索第一步整读；下划线前缀置顶排序并与模型快照 `{模型名}__{id后缀}.yaml` 区分）
 SEMANTIC_CATALOG_FILE_NAME = "_semantic_catalog.yaml"
 # unicode 感知：保留中文，仅把空白/路径分隔等不安全字符折叠成下划线
@@ -201,7 +202,7 @@ async def prematerialize_enabled_semantic_models(
     user_id: str | None,
     source_type: str = "",
 ) -> dict[str, Any]:
-    """Run 启动前把当前数据源组全部启用模型物化到 workspace/semantic/。
+    """Run 启动前把当前数据源组全部启用模型物化到 workspace/.system/semantic/。
 
     让模型无需先触发 semantic_search 即可用 file_read 读语义资产目录
     （semantic_catalog.yaml）、用 file_grep/file_read 检索语义模型；

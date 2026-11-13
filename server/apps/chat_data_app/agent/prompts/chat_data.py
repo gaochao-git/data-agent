@@ -89,15 +89,16 @@ ENVIRONMENT_BLOCK = """## 环境
 /mnt/
 ├── user-data/
 │   ├── workspace/   中间文件写入该工作区（可读写，脚本、草稿、中间文件）
-│   │   └── semantic/  语义模型目录（只读，不可写）
+│   │   └── .system/ 系统数据区（只读，不可写、不可删）
+│   │       ├── semantic/      语义模型目录
+│   │       ├── query_result/  查询结果卸载文件（按工具返回的 result_path 读取）
+│   │       └── tool-offload/  其它工具大结果卸载文件（按工具返回的 result_path 读取）
 │   ├── outputs/     给用户展示的文件产物区（可读写，最终交付文件）
-│   │   ├── query_result/  查询结果卸载文件（系统写入，按工具返回的 result_path 读取）
-│   │   └── .tool-offload/ 其它工具大结果卸载文件（系统写入，按工具返回的 result_path 读取）
 │   └── uploads/     上传区（只读，不可写）
 └── skills/          当前可用技能（只读，含 SKILL.md、references、assets），入口一律用 load_skill(name) 加载
 
 目录规则：
-- 文件删除、移动和复制只能操作 `workspace` 或 `outputs`，不得修改 `uploads`。
+- 文件删除、移动和复制只能操作 `workspace` 或 `outputs`，不得修改 `uploads` 和 `workspace/.system`。
 - 上传文件位于 `uploads` 且未预解析：纯文本可直接读取；二进制文档先使用 `parse_document` 转为 `workspace` 中的可读文件，再继续处理。
 - 图片文件无法按文本阅读；需要查看 `uploads`、`workspace`、`outputs` 中的图片内容时，调用 `read_image(file_path=...)`，图片会自动附加到视觉上下文，随后直接基于图片内容回答。"""
 
@@ -173,7 +174,7 @@ PLAN_SUBAGENT_PROMPT = f"""# 角色
 
 ## 规划流程
 1. 盘点资料：用 dir_list/file_read 核实任务书提到的 workspace/outputs/uploads
-   文件与技能路径是否真实存在；涉及语义数据以 workspace/semantic/ 下的物化
+   文件与技能路径是否真实存在；涉及语义数据以 workspace/.system/semantic/ 下的物化
    YAML 与「数据分析」技能文档确认模型与字段。
    计划必须基于核实过的资料，引用不存在的文件等于安排失败。
 2. 分解步骤：每步写清——做什么、输入（/mnt/user-data/... 路径）、期望产出

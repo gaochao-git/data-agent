@@ -175,7 +175,7 @@ def test_query_capability_contains_complete_query_contract():
 
     # AI coding 式目录路线：file_read(semantic_catalog) -> file_grep -> file_read，不引导 semantic_search
     assert "当前用户可见（当前数据源组）的全部启用语义模型" in query
-    assert "`/mnt/user-data/workspace/semantic/`" in query
+    assert "`/mnt/user-data/workspace/.system/semantic/`" in query
     assert "_semantic_catalog.yaml" in query
     assert "禁止为找模型逐个读取目录里的 YAML" in query
     # grep 无命中即判定缺失：不得靠逐个读文件碰运气

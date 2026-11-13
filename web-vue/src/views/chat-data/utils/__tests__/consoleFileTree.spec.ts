@@ -142,27 +142,27 @@ describe('一键折叠/展开的按钮状态流转', () => {
   })
 })
 
-describe('isWorkspaceFileDownloadable（SQL 查询结果不允许下载）', () => {
+describe('isWorkspaceFileDownloadable（系统结果允许下载）', () => {
   it('uploads / workspace / outputs 下的普通文件都可下载', () => {
     expect(isWorkspaceFileDownloadable('uploads/明细.xlsx')).toBe(true)
     expect(isWorkspaceFileDownloadable('workspace/月报/2025年11月经营月报.docx')).toBe(true)
     expect(isWorkspaceFileDownloadable('outputs/经营月报.docx')).toBe(true)
   })
 
-  it('SQL 查询结果与工具卸载缓存不可下载', () => {
-    expect(isWorkspaceFileDownloadable('outputs/query_result/abc.csv')).toBe(false)
-    expect(isWorkspaceFileDownloadable('outputs/query_result')).toBe(false)
-    expect(isWorkspaceFileDownloadable('outputs/.tool-offload/abc.json')).toBe(false)
+  it('查询结果与工具卸载缓存允许下载', () => {
+    expect(isWorkspaceFileDownloadable('workspace/.system/query_result/abc.csv')).toBe(true)
+    expect(isWorkspaceFileDownloadable('workspace/.system/query_result')).toBe(true)
+    expect(isWorkspaceFileDownloadable('workspace/.system/tool-offload/abc.json')).toBe(true)
   })
 
   it('目录名只是前缀相似的不受影响（不是子路径就不是同一目录）', () => {
-    expect(isWorkspaceFileDownloadable('outputs/query_result_backup/abc.csv')).toBe(true)
-    expect(isWorkspaceFileDownloadable('outputs/query_results/abc.csv')).toBe(true)
+    expect(isWorkspaceFileDownloadable('workspace/.system/query_result_backup/abc.csv')).toBe(true)
+    expect(isWorkspaceFileDownloadable('workspace/.system/query_results/abc.csv')).toBe(true)
   })
 
   it('规范化带沙箱前缀与 Windows 分隔符的路径', () => {
-    expect(isWorkspaceFileDownloadable('/mnt/user-data/outputs/query_result/abc.csv')).toBe(false)
-    expect(isWorkspaceFileDownloadable('\\outputs\\query_result\\abc.csv')).toBe(false)
+    expect(isWorkspaceFileDownloadable('/mnt/user-data/workspace/.system/query_result/abc.csv')).toBe(true)
+    expect(isWorkspaceFileDownloadable('\\workspace\\.system\\query_result\\abc.csv')).toBe(true)
     expect(isWorkspaceFileDownloadable('/mnt/user-data/outputs/经营月报.docx')).toBe(true)
   })
 
@@ -182,25 +182,25 @@ describe('isWorkspaceFileDeletable（查询结果需留存审计）', () => {
   })
 
   it('semantic 只读快照不可删除', () => {
-    expect(isWorkspaceFileDeletable('workspace/semantic')).toBe(false)
-    expect(isWorkspaceFileDeletable('workspace/semantic/order.yaml')).toBe(false)
-    expect(isWorkspaceFileDeletable('/mnt/user-data/workspace/semantic/order.yaml')).toBe(false)
+    expect(isWorkspaceFileDeletable('workspace/.system/semantic')).toBe(false)
+    expect(isWorkspaceFileDeletable('workspace/.system/semantic/order.yaml')).toBe(false)
+    expect(isWorkspaceFileDeletable('/mnt/user-data/workspace/.system/semantic/order.yaml')).toBe(false)
   })
 
   it('SQL 查询结果与工具卸载缓存不可删除', () => {
-    expect(isWorkspaceFileDeletable('outputs/query_result/abc.csv')).toBe(false)
-    expect(isWorkspaceFileDeletable('outputs/query_result')).toBe(false)
-    expect(isWorkspaceFileDeletable('outputs/.tool-offload/abc.json')).toBe(false)
+    expect(isWorkspaceFileDeletable('workspace/.system/query_result/abc.csv')).toBe(false)
+    expect(isWorkspaceFileDeletable('workspace/.system/query_result')).toBe(false)
+    expect(isWorkspaceFileDeletable('workspace/.system/tool-offload/abc.json')).toBe(false)
   })
 
-  it('目录名只是前缀相似的不受影响', () => {
-    expect(isWorkspaceFileDeletable('outputs/query_result_backup/abc.csv')).toBe(true)
-    expect(isWorkspaceFileDeletable('outputs/query_results/abc.csv')).toBe(true)
+  it('整个 .system 都是系统区，前缀相似也不可删除', () => {
+    expect(isWorkspaceFileDeletable('workspace/.system/query_result_backup/abc.csv')).toBe(false)
+    expect(isWorkspaceFileDeletable('workspace/.system/query_results/abc.csv')).toBe(false)
   })
 
   it('规范化带沙箱前缀与 Windows 分隔符的路径', () => {
-    expect(isWorkspaceFileDeletable('/mnt/user-data/outputs/query_result/abc.csv')).toBe(false)
-    expect(isWorkspaceFileDeletable('\\outputs\\query_result\\abc.csv')).toBe(false)
+    expect(isWorkspaceFileDeletable('/mnt/user-data/workspace/.system/query_result/abc.csv')).toBe(false)
+    expect(isWorkspaceFileDeletable('\\workspace\\.system\\query_result\\abc.csv')).toBe(false)
     expect(isWorkspaceFileDeletable('/mnt/user-data/uploads/明细.xlsx')).toBe(true)
   })
 
@@ -316,8 +316,8 @@ describe('isWorkspaceDirectoryArchiveDownloadable（目录打包下载白名单�
     expect(isWorkspaceDirectoryArchiveDownloadable('workspace/steps')).toBe(false)
     expect(isWorkspaceDirectoryArchiveDownloadable('uploads/batch')).toBe(false)
     // 系统结果目录：包里本就不会有文件，给了入口只会得到一个空包报错
-    expect(isWorkspaceDirectoryArchiveDownloadable('outputs/query_result')).toBe(false)
-    expect(isWorkspaceDirectoryArchiveDownloadable('outputs/.tool-offload')).toBe(false)
+    expect(isWorkspaceDirectoryArchiveDownloadable('workspace/.system/query_result')).toBe(false)
+    expect(isWorkspaceDirectoryArchiveDownloadable('workspace/.system/tool-offload')).toBe(false)
     // 带沙箱前缀 / Windows 分隔符归一到同一口径
     expect(isWorkspaceDirectoryArchiveDownloadable('/mnt/user-data/outputs/月报')).toBe(true)
     expect(isWorkspaceDirectoryArchiveDownloadable('\\outputs\\月报')).toBe(true)
@@ -327,7 +327,7 @@ describe('isWorkspaceDirectoryArchiveDownloadable（目录打包下载白名单�
     expect(isWorkspaceDirectoryArchiveDownloadable('')).toBe(false)
     expect(isWorkspaceDirectoryArchiveDownloadable(null)).toBe(false)
     expect(isWorkspaceDirectoryArchiveDownloadable(undefined)).toBe(false)
-    expect(isWorkspaceDirectoryArchiveDownloadable('outputs/query_result')).toBe(false)
+    expect(isWorkspaceDirectoryArchiveDownloadable('workspace/.system/query_result')).toBe(false)
   })
 })
 

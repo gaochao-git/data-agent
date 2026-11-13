@@ -4,19 +4,19 @@ from apps.chat_data_app.agent.workspace.workspace_path_policy import WORKSPACE_P
 
 
 def test_policy_accepts_only_canonical_forms_and_classifies_special_paths():
-    workspace = WORKSPACE_PATH_POLICY.parse("/mnt/user-data/workspace/semantic/order.yaml")
-    outputs = WORKSPACE_PATH_POLICY.parse("/mnt/user-data/outputs/.tool-offload/result.json")
-    query_result = WORKSPACE_PATH_POLICY.parse("/mnt/user-data/outputs/query_result/result.json")
+    workspace = WORKSPACE_PATH_POLICY.parse("/mnt/user-data/workspace/.system/semantic/order.yaml")
+    outputs = WORKSPACE_PATH_POLICY.parse("/mnt/user-data/workspace/.system/tool-offload/result.json")
+    query_result = WORKSPACE_PATH_POLICY.parse("/mnt/user-data/workspace/.system/query_result/result.json")
     uploads = WORKSPACE_PATH_POLICY.parse("/mnt/user-data/uploads/source.csv")
     skill = WORKSPACE_PATH_POLICY.parse("/mnt/skills/officecli/SKILL.md")
 
-    assert workspace.normalized == "workspace/semantic/order.yaml"
+    assert workspace.normalized == "workspace/.system/semantic/order.yaml"
     assert workspace.is_semantic_model is True
     assert outputs.is_tool_offload is True
     assert query_result.is_query_result is True
     assert uploads.kind == "uploads"
     assert skill.is_skill is True
-    assert WORKSPACE_PATH_POLICY.to_sandbox_path(workspace) == ("/mnt/user-data/workspace/semantic/order.yaml")
+    assert WORKSPACE_PATH_POLICY.to_sandbox_path(workspace) == ("/mnt/user-data/workspace/.system/semantic/order.yaml")
     assert WORKSPACE_PATH_POLICY.to_sandbox_path(skill) == ("/mnt/skills/officecli/SKILL.md")
 
 
@@ -52,14 +52,14 @@ def test_policy_error_messages_name_the_canonical_prefix(path):
 
 
 def test_policy_keeps_special_directory_write_rules_in_one_place():
-    tool_result = WORKSPACE_PATH_POLICY.parse("/mnt/user-data/outputs/.tool-offload/result.json")
-    query_result = WORKSPACE_PATH_POLICY.parse("/mnt/user-data/outputs/query_result/result.json")
-    semantic = WORKSPACE_PATH_POLICY.parse("/mnt/user-data/workspace/semantic/order.yaml")
+    tool_result = WORKSPACE_PATH_POLICY.parse("/mnt/user-data/workspace/.system/tool-offload/result.json")
+    query_result = WORKSPACE_PATH_POLICY.parse("/mnt/user-data/workspace/.system/query_result/result.json")
+    semantic = WORKSPACE_PATH_POLICY.parse("/mnt/user-data/workspace/.system/semantic/order.yaml")
     upload = WORKSPACE_PATH_POLICY.parse("/mnt/user-data/uploads/source.csv")
 
-    with pytest.raises(ValueError, match="系统结果目录"):
+    with pytest.raises(ValueError, match="workspace/.system"):
         WORKSPACE_PATH_POLICY.assert_writable(tool_result)
-    with pytest.raises(ValueError, match="系统结果目录"):
+    with pytest.raises(ValueError, match="workspace/.system"):
         WORKSPACE_PATH_POLICY.assert_writable(query_result)
     with pytest.raises(ValueError, match="只读快照"):
         WORKSPACE_PATH_POLICY.assert_writable(semantic)

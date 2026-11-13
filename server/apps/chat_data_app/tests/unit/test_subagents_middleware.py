@@ -1145,7 +1145,7 @@ async def test_compiled_subagent_mounts_tool_result_middleware(monkeypatch, tmp_
     # 全量数据被外置，不内联进子图上下文
     assert '[{"value": 1}]' not in inner_result
     # 完整结果落到会话工作区私有目录
-    saved = list((Path(paths["outputs"]) / "query_result").glob("*.json"))
+    saved = list((Path(paths["workspace"]) / ".system" / "query_result").glob("*.json"))
     assert len(saved) == 1
     assert json.loads(saved[0].read_text(encoding="utf-8"))["results"][0]["data"] == [{"value": 1}]
 

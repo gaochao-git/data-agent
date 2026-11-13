@@ -181,9 +181,9 @@ def test_normalize_enable_thinking_branches():
 def test_validate_workspace_file_selections_filters_invalid(tmp_path):
     root = tmp_path / "user-data"
     (root / "uploads").mkdir(parents=True)
-    (root / "outputs" / "query_result").mkdir(parents=True)
+    (root / "workspace" / ".system" / "query_result").mkdir(parents=True)
     (root / "uploads" / "a.pdf").write_text("data", encoding="utf-8")
-    (root / "outputs" / "query_result" / "r.json").write_text("{}", encoding="utf-8")
+    (root / "workspace" / ".system" / "query_result" / "r.json").write_text("{}", encoding="utf-8")
     root_str = str(root)
 
     # 合法文件保留；不存在/系统结果区/越界路径丢弃；按序去重
@@ -191,7 +191,7 @@ def test_validate_workspace_file_selections_filters_invalid(tmp_path):
         [
             "uploads/a.pdf",
             "uploads/missing.pdf",
-            "outputs/query_result/r.json",
+            "workspace/.system/query_result/r.json",
             "uploads/a.pdf",
             "../../etc/passwd",
             "/abs/path.pdf",
@@ -763,8 +763,8 @@ def test_generate_chat_data_stream_passes_valid_file_selections(monkeypatch, tmp
     workspace_root = tmp_path / "user-data"
     (workspace_root / "uploads").mkdir(parents=True)
     (workspace_root / "uploads" / "a.pdf").write_text("data", encoding="utf-8")
-    (workspace_root / "outputs" / "query_result").mkdir(parents=True)
-    (workspace_root / "outputs" / "query_result" / "r.json").write_text("{}", encoding="utf-8")
+    (workspace_root / "workspace" / ".system" / "query_result").mkdir(parents=True)
+    (workspace_root / "workspace" / ".system" / "query_result" / "r.json").write_text("{}", encoding="utf-8")
 
     async def fake_prepare_workspace(*_args, **_kwargs):
         return {"root": str(workspace_root)}
@@ -786,7 +786,7 @@ def test_generate_chat_data_stream_passes_valid_file_selections(monkeypatch, tmp
                     thread_id="conv_file_selections",
                     user_query="分析这个文件",
                     datasource_id="ds_a",
-                    file_selections=["uploads/a.pdf", "uploads/missing.pdf", "outputs/query_result/r.json"],
+                    file_selections=["uploads/a.pdf", "uploads/missing.pdf", "workspace/.system/query_result/r.json"],
                 )
             )
         )

@@ -10,9 +10,9 @@
   `workspace_path_policy.WORKSPACE_PATH_POLICY.parse` 拒绝，错误消息携带规范形式要求，模型可自纠。
 - 输出统一规范前缀：`to_visible_path`（runtime.py）产出 `/mnt/user-data/...`；提示词、工具
   docstring、错误消息、技能内容均以此口径教学。
-- 权限分层：`uploads/` 模型只读；`workspace/semantic/`、`outputs/query_result/`、
-  `outputs/.tool-offload/` 为系统管理只读/隐藏区（`assert_writable` 强制）。
-- 存储分层：`workspace/semantic/` 的逻辑路径不变，物理文件落
+- 权限分层：`uploads/` 模型只读；`workspace/.system/semantic/`、`workspace/.system/query_result/`、
+  `workspace/.system/tool-offload/` 为系统管理只读/隐藏区（`assert_writable` 强制）。
+- 存储分层：`workspace/.system/semantic/` 的逻辑路径不变，物理文件落
   `CHAT_DATA_HOME/threads/{user}/runtime/semantic/{datasource}/`，
   会话 ref 在会话目录 `{date}/{conversation_id}/semantic-ref.json`；
   `runtime-skills` 落 `CHAT_DATA_HOME/threads/{user}/runtime/skills/`；

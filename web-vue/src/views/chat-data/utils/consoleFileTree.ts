@@ -86,15 +86,16 @@ export function isTreeFullyCollapsed(
 }
 
 /**
- * 系统结果目录：`outputs/query_result`（SQL 查询结果）与 `outputs/.tool-offload`（工具结果卸载缓存）。
+ * 系统结果目录：`workspace/.system/query_result`（SQL 查询结果）与 `workspace/.system/tool-offload`（工具结果卸载缓存）。
  *
  * 两者都是「原始数据 + 审计留存」：放开下载等于绕过问数的权限边界，会造成数据泄漏；
  * 删除则会让审计链路失去凭证。它们现在会出现在文件树里（便于查看占用），但下载/删除
  * 仍由后端与这里共同拦截；这里是前端侧的纵深防御，防止将来任一侧放开后静默失效。
  */
 export const SYSTEM_RESULT_WORKSPACE_PREFIXES = [
-  'outputs/query_result',
-  'outputs/.tool-offload',
+  'workspace/.system',
+  'workspace/.system/query_result',
+  'workspace/.system/tool-offload',
 ] as const
 
 /** 下载侧沿用的历史导出名（语义等价于系统结果目录）。 */
@@ -119,7 +120,8 @@ function isSystemResultWorkspacePath(relativePath: string | null | undefined): b
 
 /** 判断工作区文件是否提供下载入口。空路径视为不可下载（保守取值）。 */
 export function isWorkspaceFileDownloadable(relativePath: string | null | undefined): boolean {
-  return Boolean(normalizeWorkspaceRelativePath(relativePath)) && !isSystemResultWorkspacePath(relativePath)
+  // .system 下也是用户可查看数据，按产品口径允许下载；仍由后端鉴权。
+  return Boolean(normalizeWorkspaceRelativePath(relativePath))
 }
 
 /**
@@ -129,7 +131,7 @@ export function isWorkspaceFileDownloadable(relativePath: string | null | undefi
  * 的真实诉求；workspace 是过程中间文件、uploads 内容用户本就有原件，暂不放开。
  * 2026-09-24 追加放开 outputs 下的**任意层级子目录**（顶层范围不变）。
  * 后端 archive 接口按 WORKSPACE_DIR_NAMES 校验路径首段并拒绝 `..` 逃逸，打包内容仍走
- * list_workspace_files 的可见清单——系统结果目录（query_result / .tool-offload）
+ * list_workspace_files 的可见清单——系统结果目录（workspace/.system 下）
  * 即便在 outputs 下也不会进包，与单文件下载同一防泄漏口径。
  */
 export const ARCHIVE_DOWNLOADABLE_DIRECTORIES: readonly string[] = ['outputs']
@@ -155,7 +157,7 @@ export function isWorkspaceFileDeletable(relativePath: string | null | undefined
   const path = normalizeWorkspaceRelativePath(relativePath)
   if (!path || isSystemResultWorkspacePath(path)) return false
   // 语义模型是系统物化的只读快照，即使投影到文件树也不能由用户删除。
-  return path !== 'workspace/semantic' && !path.startsWith('workspace/semantic/')
+  return path !== 'workspace/.system/semantic' && !path.startsWith('workspace/.system/semantic/')
 }
 
 /**

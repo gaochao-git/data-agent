@@ -40,7 +40,7 @@ def test_tool_result_store_writes_and_loads_current_conversation_only(tmp_path):
     record = store.save_query_result({"rows": [1]}, conversation_id="conv_a", user_id="u1")
     date_str = datetime.now().strftime("%Y-%m-%d")
 
-    assert record.virtual_path == f"/mnt/user-data/outputs/query_result/{record.result_id}.json"
+    assert record.virtual_path == f"/mnt/user-data/workspace/.system/query_result/{record.result_id}.json"
     assert (
         tmp_path
         / "threads"
@@ -48,7 +48,8 @@ def test_tool_result_store_writes_and_loads_current_conversation_only(tmp_path):
         / date_str
         / "conv_a"
         / "user-data"
-        / "outputs"
+        / "workspace"
+        / ".system"
         / "query_result"
         / f"{record.result_id}.json"
     ).is_file()

@@ -474,7 +474,7 @@ def _validate_workspace_file_selections(file_selections: list[str], workspace_ro
     """校验 @ 引用文件：必须落在当前会话工作区白名单目录内且真实存在。
 
     白名单校验复用 WORKSPACE_PATH_POLICY（拒越界/裸别名），系统结果区
-    （outputs/query_result、outputs/.tool-offload）不可引用；不存在的文件
+    （workspace/.system/query_result、workspace/.system/tool-offload）不可引用；不存在的文件
     （@ 后被删除）丢弃。无效条目记日志后跳过，不阻断本轮。
     """
     if not file_selections:

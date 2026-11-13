@@ -772,13 +772,13 @@ async def test_steer_enqueue_normalizes_meta(steer_router_state):
     calls = steer_router_state
     request = conversation_router.SteerRequest(
         query="带引用",
-        file_selections=["uploads/a.pdf", "/workspace/semantic/a__1.yaml/", "uploads/a.pdf", " "],
+        file_selections=["uploads/a.pdf", "/workspace/.system/semantic/a__1.yaml/", "uploads/a.pdf", " "],
         file_ids=[" file-1 ", "file-2", "file-1", ""],
     )
     response = await conversation_router.steer("conv-1", request, FakeRequest())
     assert payload(response)["code"] == ErrorCode.SUCCESS
     assert calls["enqueue"]["meta"] == {
-        "file_selections": ["uploads/a.pdf", "workspace/semantic/a__1.yaml"],
+        "file_selections": ["uploads/a.pdf", "workspace/.system/semantic/a__1.yaml"],
         "file_ids": ["file-1", "file-2"],
     }
 

@@ -20,8 +20,8 @@ def _prepare_root(tmp_path: Path) -> Path:
 
 def test_delete_workspace_file_rejects_system_result_path():
     """系统结果目录（查询结果/工具缓存）不允许删除。"""
-    with pytest.raises(ValueError, match="查询结果需要留存审计"):
-        cw.delete_workspace_file("conv_a", "/mnt/user-data/outputs/query_result/r1.json")
+    with pytest.raises(ValueError, match="系统数据目录只读"):
+        cw.delete_workspace_file("conv_a", "/mnt/user-data/workspace/.system/query_result/r1.json")
 
 
 def test_list_workspace_files_skips_missing_directory(tmp_path, monkeypatch):

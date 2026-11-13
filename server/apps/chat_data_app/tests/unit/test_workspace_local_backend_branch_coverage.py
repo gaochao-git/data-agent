@@ -208,7 +208,7 @@ def test_copy_local_path_branches(tmp_path):
     with pytest.raises(ValueError, match="系统结果目录"):
         lb._copy_local_path(
             str(root),
-            f"/mnt/user-data/outputs/{cw_runtime_module.TOOL_OFFLOAD_DIR_NAME}/r.json",
+            "/mnt/user-data/workspace/.system/tool-offload/r.json",
             "/mnt/user-data/workspace/r.json",
         )
     with pytest.raises(FileNotFoundError, match="源路径不存在"):
@@ -657,15 +657,15 @@ async def test_validate_bash_paths_rejects_semantic_snapshot(tmp_path):
     runtime, _root = _runtime(tmp_path)
 
     for command in (
-        "echo x > /mnt/user-data/workspace/semantic/model.yaml",
-        "cat /mnt/user-data/workspace/semantic/model.yaml",
-        "cd /mnt/user-data/workspace/semantic && echo x > model.yaml",
+        "echo x > /mnt/user-data/workspace/.system/semantic/model.yaml",
+        "cat /mnt/user-data/workspace/.system/semantic/model.yaml",
+        "cd /mnt/user-data/workspace/.system/semantic && echo x > model.yaml",
     ):
         with pytest.raises(ValueError, match="只读语义模型快照"):
             await runtime.validate_bash_paths(command=command)
 
     # 仅前缀相似的普通目录不受影响
-    await runtime.validate_bash_paths(command="cat /mnt/user-data/workspace/semantic-backup/a.txt")
+    await runtime.validate_bash_paths(command="cat /mnt/user-data/workspace/.system/semantic-backup/a.txt")
 
 
 @pytest.mark.asyncio
@@ -675,7 +675,7 @@ async def test_run_bash_rejects_semantic_snapshot_cwd(tmp_path):
     with pytest.raises(ValueError, match="只读语义模型快照"):
         await runtime.run_bash(
             command="echo x > model.yaml",
-            cwd="/mnt/user-data/workspace/semantic",
+            cwd="/mnt/user-data/workspace/.system/semantic",
             timeout_seconds=30,
         )
 

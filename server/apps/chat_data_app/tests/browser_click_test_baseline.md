@@ -276,7 +276,7 @@ ChatData
 - 仅允许系统管理员操作系统级资源。普通用户的私有资源由 `user_id/owner` 隔离，公共资源可查看但不能修改原件。
 - 字段字典的普通用户查看必须走 `/datasources/...` 普通 GET 接口；修改、AI 生成、枚举维护必须只在系统管理页面走 `/admin/datasources/...` 管理接口。不能以 admin 接口作为普通用户查看接口。
 - 查询结果统一按 `results[]` 展示；每个成员核对 `member_datasource_id`、`member_name`、`status`、`sql`、`columns`、`data`、`total_count`、`execution_time_ms`、`error`。
-- 查询结果写入 `outputs/query_result` 后，页面展示摘要和结果路径；智能体要回答具体数值、比较、分析或判断空结果时，必须继续从 `result_path` 读取文件，不能把“模型未直接看到结果”当成查询失败。
+- 查询结果写入 `workspace/.system/query_result` 后，页面展示摘要和结果路径；智能体要回答具体数值、比较、分析或判断空结果时，必须继续从 `result_path` 读取文件，不能把“模型未直接看到结果”当成查询失败。
 - 查询执行成功与结果交付成功分开核对。保存失败时检查 `query_status=succeeded`、`delivery_status=persistence_failed`，小结果按约定有限内联，大结果明确提示结果保存失败，不能伪装为普通截断或无条件重跑查询。
 - 任何权限失败、数据源不存在、网络失败、模型失败和工具失败都要有用户可读提示；除 SQL 运行接口外，不向前端直接展示后端堆栈。
 - 浏览器自动化点击前必须做可见性过滤：语义面板场景存在两类隐藏 0×0 副本按钮（① `pages/index.vue` 对 `SemanticConfigPanel` 的双挂载——内嵌用户面板 `:1520` 与全屏 admin 面板 `:1869` 同名按钮各一份；② 未打开 `el-dialog` 的预渲染 DOM，确认弹窗按钮常驻 `display:none` 的 `.el-overlay` 内）。按文本选择器直点会命中隐藏副本静默落空，表现为「点了没反应」且无报错。统一口径：枚举全部匹配后按 `getBoundingClientRect().width>0 && height>0` 过滤，或 `elementFromPoint` 命中测试后再点。
@@ -709,7 +709,7 @@ ChatData
 #### AG-06 结果落盘和后续分析
 
 - 角色：`USER_A`
-- 前置：查询结果会保存到 `outputs/query_result`。
+- 前置：查询结果会保存到 `workspace/.system/query_result`。
 - 操作：先请求“查询/列出结果”，再追问“是多少/比较/分析/计算”；查看结果路径和后续工具调用。
 - 预期：首轮可只展示摘要和 `result_path`；后续需要具体数值、结论、比较、分析、计算或判断空结果时，智能体先用 `file_read` 读取结果文件，再回答；不因未内联全部数据而误报查询失败。
 
@@ -718,7 +718,7 @@ ChatData
 - 角色：`USER_A`
 - 前置：准备超过 `CHATDATA_ROW_LIMIT` 的查询结果和超大文件。
 - 操作：查看结果摘要中的 `total_lines`/行数和路径；按 `offset`、`limit` 分段读取；再发起更小聚合查询。
-- 预期：大结果不会被模型一次性全部注入；超出阈值的工具结果卸载到 `outputs/.tool-offload`，不直接进入上下文，需要时可按路径回读；模型可根据总行数选择统计、聚合或分段读取；行数未知时显示 `unknown` 并允许继续读取；读取范围和返回行数准确。
+- 预期：大结果不会被模型一次性全部注入；超出阈值的工具结果卸载到 `workspace/.system/tool-offload`，不直接进入上下文，需要时可按路径回读；模型可根据总行数选择统计、聚合或分段读取；行数未知时显示 `unknown` 并允许继续读取；读取范围和返回行数准确。
 
 #### AG-08 结果持久化失败
 
@@ -841,7 +841,7 @@ ChatData
 - 角色：`USER_A`
 - 前置：会话内已有可引用文件——至少一个上传附件（`uploads/`）与一个智能体产出文件（`workspace/`）；另准备一个可控耗时的查询任务，用于验证生成中入队场景。
 - 操作与预期：
-  - **唤起与过滤**：输入框输入 `@` 弹出文件候选弹层（平铺列表，每项显示文件名 + 目录路径，如 `uploads/`、`workspace/semantic/`）；`@` 后继续输入实时过滤（匹配文件名或相对路径）；↑↓ 移动高亮、Enter/Tab 选中、Esc 关闭、鼠标点击选中均可用。
+  - **唤起与过滤**：输入框输入 `@` 弹出文件候选弹层（平铺列表，每项显示文件名 + 目录路径，如 `uploads/`、`workspace/.system/semantic/`）；`@` 后继续输入实时过滤（匹配文件名或相对路径）；↑↓ 移动高亮、Enter/Tab 选中、Esc 关闭、鼠标点击选中均可用。
   - **多选与移除**：选中后 `@token` 从输入文本移除、文件进入 chip 列表；再次输入 `@` 可继续追加第二个文件；同一文件重复选择不产生重复 chip；每个 chip 可单独移除。
   - **消息展示**：发送后用户气泡上方展示引用 chip（`@` 图标 + 文件名，悬浮显示相对路径）；刷新页面后历史回放的 chip 与实时一致（由事件 payload 的 `file_selections` 重建）。
   - **排队消息 chip 保留**：上一轮流式生成期间发送带 @ 引用的消息（走 steer 队列），消息被服务端消费实时接纳后，气泡上 chip 仍在，不得退化为纯文本；随消息携带的划选引用 chip 同样保留（AG-22）。
@@ -904,7 +904,7 @@ ChatData
 
 - 角色：`USER_A`
 - 前置：打开一个会话。
-- 操作：上传文本、Office 和不支持格式文件；在文件树刷新；尝试选择 `workspace`、`uploads`、`outputs`、`outputs/query_result`、`outputs/.tool-offload`。
+- 操作：上传文本、Office 和不支持格式文件；在文件树刷新；尝试选择 `workspace`、`uploads`、`outputs`、`workspace/.system/query_result`、`workspace/.system/tool-offload`。
 - 预期：支持文件进入当前会话 `uploads` 且不可被 Agent 覆盖；不支持格式有提示；内部结果/卸载目录不作为普通用户产物展示，也不能通过文件操作修改。
 
 #### FILE-02 文本和结构化文件
@@ -955,8 +955,8 @@ ChatData
 
 - 角色：`USER_A`
 - 前置：会话内已有 `uploads` 上传文件和 `workspace` 下 Agent 产物各至少一个。
-- 操作：在文件树删除一个 `uploads` 文件；再上传同名文件并点击预览；尝试删除 `outputs/query_result` 下结果文件；对正被其他程序占用的文件执行删除。
-- 预期：删除走人侧删除接口且校验会话归属；`uploads` 文件可删、删除后列表与预览缓存同步作废，重传同名文件预览显示新内容（不读回旧缓存）；`outputs/query_result` 审计目录拒绝删除；物理删除失败（文件被占用）时接口返回失败提示且上传记录保留，重试可删除；Agent 工具不受影响（模型工具仍无 uploads 写权限）。
+- 操作：在文件树删除一个 `uploads` 文件；再上传同名文件并点击预览；尝试删除 `workspace/.system/query_result` 下结果文件；对正被其他程序占用的文件执行删除。
+- 预期：删除走人侧删除接口且校验会话归属；`uploads` 文件可删、删除后列表与预览缓存同步作废，重传同名文件预览显示新内容（不读回旧缓存）；`workspace/.system/query_result` 审计目录拒绝删除；物理删除失败（文件被占用）时接口返回失败提示且上传记录保留，重试可删除；Agent 工具不受影响（模型工具仍无 uploads 写权限）。
 
 #### FILE-09 自包含 HTML 交互报告
 
@@ -981,14 +981,14 @@ ChatData
 #### FILE-11 空目录展示、二级目录默认折叠与语义快照只读（2026-11-12 新增）
 
 - 角色：`USER_A`
-- 前置：① 会话含空目录（`memory/`、`outputs/.tool-offload` 等）；② 至少一个**有子节点**的二级目录（如 `outputs/123`、`workspace/semantic`）；③ 有 `semantic-ref.json` 的会话已物化出 `workspace/semantic/*.yaml`。
-- 操作：展开右侧工作区 → 核对空目录与四个固定顶层目录 → 核对二级目录折叠态 → 手动展开 → 切到另一会话再切回 → 折叠全部 / 展开全部 → 展开 `workspace/semantic` 检查文件行 → 点 YAML 预览与刷新。
+- 前置：① 会话含空目录（`memory/`、`workspace/.system/tool-offload` 等）；② 至少一个**有子节点**的二级目录（如 `outputs/123`、`workspace/.system/semantic`）；③ 有 `semantic-ref.json` 的会话已物化出 `workspace/.system/semantic/*.yaml`。
+- 操作：展开右侧工作区 → 核对空目录与四个固定顶层目录 → 核对二级目录折叠态 → 手动展开 → 切到另一会话再切回 → 折叠全部 / 展开全部 → 展开 `workspace/.system/semantic` 检查文件行 → 点 YAML 预览与刷新。
 - 预期：
   - 接口 `directories` 字段进入 `buildProducedFileTree`；固定四目录（uploads / workspace / outputs / memory）常驻，**空目录与无文件的中间目录也渲染成目录行**，计数与大小取子树可见文件。
   - 二级及更深**有子节点**的目录首次出现默认折叠（`fa-chevron-right`），空目录不折叠；用户手动展开后不自动收起；切会话清空 `knownNestedDirectories` 并把折叠集合重置为 `DEFAULT_COLLAPSED_CONSOLE_DIRECTORIES`。
   - 折叠 / 展开全部只作用于可折叠目录，空目录不受影响；按钮 title 在「折叠全部目录」↔「展开全部目录」间翻转。
-  - `workspace/semantic/*.yaml` 由语义缓存投影渲染；文件行**无删除按钮**（`isWorkspaceFileDeletable` 拦 `workspace/semantic/`）；历史会话的旧 `user-data/workspace/semantic/` 不进入文件列表、目录列表与占用统计。
-  - 系统结果目录（`outputs/query_result`、`outputs/.tool-offload`）可展示、可只读预览，但无下载 / 删除 / 打包入口；空 `outputs` 不显示打包下载入口（FILE-10 边界）。
+  - `workspace/.system/semantic/*.yaml` 由语义缓存投影渲染；文件行**无删除按钮**（`isWorkspaceFileDeletable` 拦 `workspace/.system/semantic/`）；历史会话的旧 `user-data/workspace/.system/semantic/` 不进入文件列表、目录列表与占用统计。
+  - 系统结果目录（`workspace/.system/query_result`、`workspace/.system/tool-offload`）可展示、可只读预览，但无下载 / 删除 / 打包入口；空 `outputs` 不显示打包下载入口（FILE-10 边界）。
   - 刷新同时发出 `workspace-files` 与 `content?path=...&_refresh=<token>`，均 200；预览内容正常渲染，无「文件内容加载失败」。
 - 关联：`services/agent_run/conversation_workspace.py`（`list_workspace_directories` / `_is_stale_legacy_semantic` / `_append_semantic_workspace_entries`）、`routers/conversation_workspace.py`、`utils/consoleFileTree.ts`（`ensureProducedDirectoryNode` / `buildProducedFileTree` / `isWorkspaceFileDeletable`）、`ConversationWorkspacePanel.vue`（`knownNestedDirectories` watch）。
 
@@ -1094,7 +1094,7 @@ ChatData
 - 角色：`USER_A`
 - 前置：准备小结果和大结果，workspace backend 可写。
 - 操作：从智能体、SQL、Builder 和看板分别执行；查看结果摘要、`result_path`、文件树、历史结果和看板面板；对智能体结果继续请求数值分析。
-- 预期：查询结果统一落到 `outputs/query_result`；页面展示摘要和路径，后续工具可按路径读取；智能体在需要具体结论时先读取结果文件；历史和看板消费的字段、成员、SQL 与原查询一致；内部目录不误作为普通产物。
+- 预期：查询结果统一落到 `workspace/.system/query_result`；页面展示摘要和路径，后续工具可按路径读取；智能体在需要具体结论时先读取结果文件；历史和看板消费的字段、成员、SQL 与原查询一致；内部目录不误作为普通产物。
 
 #### RUN-05 结果保存失败交付
 
@@ -1590,7 +1590,7 @@ ChatData
 - 角色：`USER_A`
 - 前置：准备一个单次任务，执行时间设为近未来 2~5 分钟，绑定一个历史会话并配置可成功查询的数据源组；另准备一个绑定会话已删除、以及一个数据源组被删/无权限的任务。
 - 操作：等到点后观察绑定会话是否产生新轮次；打开任务「执行历史」与「立即执行」核对；打开绑定会话核对问答内容与结果文件；分别对异常任务等到点或在会话正忙时立即执行。
-- 预期：到点后任务在绑定会话内自动执行一次智能问数，会话中出现新的用户指令轮次与回答，查询结果按统一 `results[]` 落盘到 `outputs/query_result`（口径同 RUN-04）；执行历史新增一条来源为「计划」的记录，状态与 Agent Run 状态一致；绑定会话已删除时执行历史给出可读失败原因而不是静默丢弃；数据源组无权限/不存在时同样落到可读失败；「每次新建会话」模式每次触发新建一个会话并把结果留在新会话中，不往同一个会话叠加；**定时轮无人值守不装配 `ask_user_question`**：执行全程不出现「等待用户回答」的提问交互（即使指令里明确要求向用户提问，模型也只能收到工具不存在的错误提示后自行改道继续）。
+- 预期：到点后任务在绑定会话内自动执行一次智能问数，会话中出现新的用户指令轮次与回答，查询结果按统一 `results[]` 落盘到 `workspace/.system/query_result`（口径同 RUN-04）；执行历史新增一条来源为「计划」的记录，状态与 Agent Run 状态一致；绑定会话已删除时执行历史给出可读失败原因而不是静默丢弃；数据源组无权限/不存在时同样落到可读失败；「每次新建会话」模式每次触发新建一个会话并把结果留在新会话中，不往同一个会话叠加；**定时轮无人值守不装配 `ask_user_question`**：执行全程不出现「等待用户回答」的提问交互（即使指令里明确要求向用户提问，模型也只能收到工具不存在的错误提示后自行改道继续）。
 - 边界：调度器重启或任务到点时系统繁忙，不应产生重复执行；已停用/已删除任务不再触发；同一次触发只产生一条执行记录。
 - 关联：SCHED-02/04；AG-06 结果落盘；RUN-04 结果交付；`agent/run/agent_schedule_runtime.py`、`services/agent_schedule/`。
 

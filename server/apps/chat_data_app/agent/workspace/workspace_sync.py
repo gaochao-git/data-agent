@@ -13,6 +13,7 @@ from utils.logger import get_logger
 from utils.storage_paths import conversation_semantic_dir_from_workspace
 from utils.tool_result_store import QUERY_RESULT_DIR_NAME, TOOL_OFFLOAD_DIR_NAME
 from utils.upload_storage_crypto import read_plaintext_bytes
+from utils.workspace_system_paths import SYSTEM_DIR_NAME
 
 from .workspace_sandbox_api import (
     SandboxExecutionSession,
@@ -37,6 +38,7 @@ from .workspace_sandbox_paths import (
     _is_uploads_sandbox_path,
     sandbox_outputs_dir,
     sandbox_skills_root,
+    sandbox_system_dir,
     sandbox_thread_root,
     sandbox_uploads_dir,
     sandbox_workspace_dir,
@@ -214,8 +216,8 @@ async def _initialize_sandbox_filesystem(
         [
             sandbox_workspace_dir(),
             sandbox_outputs_dir(),
-            f"{sandbox_outputs_dir()}/{TOOL_OFFLOAD_DIR_NAME}",
-            f"{sandbox_outputs_dir()}/{QUERY_RESULT_DIR_NAME}",
+            f"{sandbox_system_dir()}/{TOOL_OFFLOAD_DIR_NAME}",
+            f"{sandbox_system_dir()}/{QUERY_RESULT_DIR_NAME}",
             sandbox_uploads_dir(),
         ]
     )
@@ -245,7 +247,7 @@ async def _initialize_sandbox_filesystem(
         paths=readonly_directories,
         mode=_SANDBOX_READONLY_DIRECTORY_MODE,
     )
-    legacy_semantic_root = application_root / "workspace" / "semantic"
+    legacy_semantic_root = application_root / "workspace" / SYSTEM_DIR_NAME / "semantic"
     semantic_root = conversation_semantic_dir_from_workspace(session.workspace_root)
     user_data_count, user_data_bytes = await _upload_application_tree(
         sandbox=session.sandbox,
@@ -253,9 +255,9 @@ async def _initialize_sandbox_filesystem(
         sandbox_root=sandbox_thread_root(),
         file_mode=_SANDBOX_WRITABLE_FILE_MODE,
         readonly_roots=(
-            f"{sandbox_workspace_dir()}/semantic",
-            f"{sandbox_outputs_dir()}/{TOOL_OFFLOAD_DIR_NAME}",
-            f"{sandbox_outputs_dir()}/{QUERY_RESULT_DIR_NAME}",
+            f"{sandbox_system_dir()}/semantic",
+            f"{sandbox_system_dir()}/{TOOL_OFFLOAD_DIR_NAME}",
+            f"{sandbox_system_dir()}/{QUERY_RESULT_DIR_NAME}",
             sandbox_uploads_dir(),
         ),
         # 历史会话的共享 semantic YAML 一律不上传沙箱；缓存是否就绪都不改这条边界。
@@ -263,7 +265,7 @@ async def _initialize_sandbox_filesystem(
     )
     semantic_count = semantic_bytes = 0
     if semantic_root.is_dir():
-        semantic_sandbox_root = f"{sandbox_workspace_dir()}/semantic"
+        semantic_sandbox_root = f"{sandbox_system_dir()}/semantic"
         await _create_sandbox_directories(
             sandbox=session.sandbox,
             paths=_sandbox_tree_directories(semantic_root, semantic_sandbox_root),

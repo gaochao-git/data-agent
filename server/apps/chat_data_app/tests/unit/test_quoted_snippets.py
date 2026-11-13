@@ -29,16 +29,16 @@ def test_parse_file_selections_branches():
         ]
     ) == ["uploads/a.pdf", "outputs/b.md"]
     # 首尾斜杠归一（前端容错）
-    assert parse_file_selections("/workspace/semantic/a__1.yaml/") == ["workspace/semantic/a__1.yaml"]
+    assert parse_file_selections("/workspace/.system/semantic/a__1.yaml/") == ["workspace/.system/semantic/a__1.yaml"]
 
 
 def test_file_selection_mention_suffix_lists_files():
     assert _file_selection_mention_suffix(
         [
             "uploads/a.pdf",
-            "workspace/semantic/b__1.yaml",
+            "workspace/.system/semantic/b__1.yaml",
         ]
-    ) == ("\n\n[引用文件：/mnt/user-data/uploads/a.pdf、/mnt/user-data/workspace/semantic/b__1.yaml]")
+    ) == ("\n\n[引用文件：/mnt/user-data/uploads/a.pdf、/mnt/user-data/workspace/.system/semantic/b__1.yaml]")
     assert _file_selection_mention_suffix([]) == ""
 
 

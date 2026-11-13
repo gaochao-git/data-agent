@@ -40,8 +40,8 @@
 
 ### 2. 检索语义模型
 
-1. 当前用户可见（当前数据源组）的全部启用语义模型 Ossie YAML 已预物化到会话工作区 `/mnt/user-data/workspace/semantic/`，文件名为 `{模型名}__{id后缀}.yaml`；同目录的 `_semantic_catalog.yaml` 是系统生成的语义资产目录（每个启用模型一条 file/description/business_notes，file 即快照文件名）。先用 `file_read` 整读目录得到模型清单与各自适用业务，结合用户业务问题圈定候选范围。
-2. 多个模型可能包含相关内容、或模型名与业务术语对不上时，用 `file_grep(path="/mnt/user-data/workspace/semantic/", pattern="<指标名|维度名|业务关键词>")` 按内容定位包含关键词的模型，缩小候选范围。英文关键词加 `ignore_case=true` 一次覆盖大小写变体；宽泛关键词命中过多（返回 `has_more=true`）时，先用 `output_mode="files_with_matches"` 看哪些文件命中、必要时再用 `output_mode="count"` 看热点分布，最后收敛 `pattern`/`glob` 后取默认 content 看具体行。同一关键词无命中时，先换词再判无：至少覆盖三类换法——业务同义词（如“入金/来账/收款”）、中英文对照、词组拆分；三类换法全部落空才判定为「确认无命中」。
+1. 当前用户可见（当前数据源组）的全部启用语义模型 Ossie YAML 已预物化到会话工作区 `/mnt/user-data/workspace/.system/semantic/`，文件名为 `{模型名}__{id后缀}.yaml`；同目录的 `_semantic_catalog.yaml` 是系统生成的语义资产目录（每个启用模型一条 file/description/business_notes，file 即快照文件名）。先用 `file_read` 整读目录得到模型清单与各自适用业务，结合用户业务问题圈定候选范围。
+2. 多个模型可能包含相关内容、或模型名与业务术语对不上时，用 `file_grep(path="/mnt/user-data/workspace/.system/semantic/", pattern="<指标名|维度名|业务关键词>")` 按内容定位包含关键词的模型，缩小候选范围。英文关键词加 `ignore_case=true` 一次覆盖大小写变体；宽泛关键词命中过多（返回 `has_more=true`）时，先用 `output_mode="files_with_matches"` 看哪些文件命中、必要时再用 `output_mode="count"` 看热点分布，最后收敛 `pattern`/`glob` 后取默认 content 看具体行。同一关键词无命中时，先换词再判无：至少覆盖三类换法——业务同义词（如“入金/来账/收款”）、中英文对照、词组拆分；三类换法全部落空才判定为「确认无命中」。
 3. 一旦确认无命中，就是当前语义目录不含该术语：立即停止检索，用业务语言说明当前缺少的指标或模型并向用户澄清，不得用相同或相近关键词重复检索。**禁止为找模型逐个读取目录里的 YAML**——逐个读取不是检索手段，目录里文件很多时会耗尽上下文，且读不到关键词一样无解。
 4. 只有 `file_grep` 命中后的候选模型才用 `file_read` 分页精读 YAML，比较各自的指标、维度、关系与口径后确定本轮使用的模型。不能根据模型名称、文件名或字段相似性猜测。
 5. 手动选择的模型只是优先参考，不代表锁定。
@@ -197,7 +197,7 @@ SQL 只能是只读查询。规划 SQL 时只能使用当前语义模型维度�
 
 ## 多步分析与结果处理
 
-- 查询成功后系统始终将完整结果保存到当前会话 `outputs/query_result/<result_id>.json`，工具只返回状态、行数/执行耗时、`result_id` 和 `result_path`，不把明细放入模型上下文。前端按 `result_id` 展示，后续分析使用 `file_read` 读取工具返回的 `result_path`。
+- 查询成功后系统始终将完整结果保存到当前会话 `workspace/.system/query_result/<result_id>.json`，工具只返回状态、行数/执行耗时、`result_id` 和 `result_path`，不把明细放入模型上下文。前端按 `result_id` 展示，后续分析使用 `file_read` 读取工具返回的 `result_path`。
 - 同比和环比分别查询当前周期与对比周期的基础数据，按周期对齐后调用 `calculator_tool` 计算差值、增长率或比例；对比值为 0 或为空时不能输出普通百分比。
 - 多个独立查询分别执行，最后统一总结；中间过程不必输出完整原始数据。
 - 用户只要求查询、查看或列出结果时，不读取结果文件；前端会按 `result_id` 展示完整结果，直接说明查询已完成，不要再次粘贴表格、逐行明细、完整 JSON 或原始 SQL。

@@ -927,7 +927,7 @@ const forgetWorkspaceFileCache = (path: string) => {
 
 // 「导入为语义模型」仅对治理目录下的 Ossie yaml 开放：outputs/governance/（自检通过的交付副本）
 // 与 workspace/governance/（治理工作副本，用户确认后也可直接导）。任意 yaml（其他技能产物、
-// 用户上传）不提供导入入口；workspace/semantic/ 是原模型只读快照，不开放。
+// 用户上传）不提供导入入口；workspace/.system/semantic/ 是原模型只读快照，不开放。
 // 扩展名判断与上方 selectedConsoleFileExt 同一套取后缀习惯用法。
 const isGovernanceYaml = (path: string) => {
   const lower = path.toLowerCase()

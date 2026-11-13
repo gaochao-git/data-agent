@@ -233,9 +233,12 @@ async def test_runtime_delegates_directory_and_preview_operations(tmp_path, monk
         old_content="a",
         new_content="b",
     ) == {"replaced": True}
-    assert await runtime.write_internal_text_files(entries=[("/mnt/user-data/workspace/semantic/m.yaml", "a: 1")]) == []
-    assert await runtime.delete_internal_text_files(path="/mnt/user-data/workspace/semantic/m.yaml") == {
-        "path": "/mnt/user-data/workspace/semantic/m.yaml",
+    assert (
+        await runtime.write_internal_text_files(entries=[("/mnt/user-data/workspace/.system/semantic/m.yaml", "a: 1")])
+        == []
+    )
+    assert await runtime.delete_internal_text_files(path="/mnt/user-data/workspace/.system/semantic/m.yaml") == {
+        "path": "/mnt/user-data/workspace/.system/semantic/m.yaml",
         "type": "file",
     }
     assert await runtime.grep_text(
@@ -303,7 +306,7 @@ def test_to_visible_path_outside_root_fails_closed(tmp_path):
 
 def test_is_managed_semantic_model_workspace_path(tmp_path):
     root = _runtime_root(tmp_path)
-    semantic = root / "workspace" / "semantic"
+    semantic = root / "workspace" / ".system" / "semantic"
     assert is_managed_semantic_model_workspace_path(str(root), semantic) is True
     assert is_managed_semantic_model_workspace_path(str(root), semantic / "m.yaml") is True
     assert is_managed_semantic_model_workspace_path(str(root), root / "workspace" / "a.txt") is False
@@ -339,11 +342,11 @@ def test_resolve_output_skill_directory_success(tmp_path):
 
 def test_resolve_output_skill_directory_rejects_system_results(tmp_path):
     root = _runtime_root(tmp_path)
-    offload = root / "outputs" / cw_runtime_module.TOOL_OFFLOAD_DIR_NAME / "demo-skill"
+    offload = root / "workspace" / ".system" / cw_runtime_module.TOOL_OFFLOAD_DIR_NAME / "demo-skill"
     _write_output_skill(offload, "demo-skill", "demo-skill")
     with pytest.raises(ValueError, match="不允许导入系统结果目录"):
         cw_runtime_module.resolve_output_skill_directory(
-            str(root), f"/mnt/user-data/outputs/{cw_runtime_module.TOOL_OFFLOAD_DIR_NAME}/demo-skill"
+            str(root), "/mnt/user-data/workspace/.system/tool-offload/demo-skill"
         )
 
 
@@ -462,9 +465,7 @@ def test_read_workspace_raw_file_branches(tmp_path):
     target.write_bytes(b"x" * 100)
 
     with pytest.raises(FileNotFoundError, match="文件不存在"):
-        read_workspace_raw_file(
-            "conv_raw", f"/mnt/user-data/outputs/{cw_runtime_module.TOOL_OFFLOAD_DIR_NAME}/r.json", 100, "user_a"
-        )
+        read_workspace_raw_file("conv_raw", "/mnt/user-data/workspace/.system/tool-offload/r.json", 100, "user_a")
     with pytest.raises(FileNotFoundError, match="文件不存在"):
         read_workspace_raw_file("conv_raw", "/mnt/user-data/workspace/missing.bin", 100, "user_a")
     with pytest.raises(ValueError, match="文件过大"):
@@ -487,9 +488,7 @@ def test_validate_office_preview_source_branches(tmp_path):
     _validate_office_preview_source(root, "/mnt/user-data/workspace/report.docx")
 
     with pytest.raises(ValueError, match="不支持 Office 预览"):
-        _validate_office_preview_source(
-            root, f"/mnt/user-data/outputs/{cw_runtime_module.TOOL_OFFLOAD_DIR_NAME}/r.docx"
-        )
+        _validate_office_preview_source(root, "/mnt/user-data/workspace/.system/tool-offload/r.docx")
     with pytest.raises(ValueError, match="仅支持 .docx"):
         _validate_office_preview_source(root, "/mnt/user-data/workspace/notes.txt")
     with pytest.raises(FileNotFoundError, match="文件不存在"):
