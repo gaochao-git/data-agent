@@ -1659,6 +1659,7 @@ ChatData
 
 ### 5.3 最近执行记录
 
+- `browser_click_test_runs/2026-11-14_followup.md` §6（**DS-12 定向回归**：`SemanticHealthModal` 模型名修复后可打开 / 可关闭 / 可再次打开，FAIL → PASS，DEF-2026-11-13-01 关闭；`npm run type-check` 与 81 files / 648 tests 前端定向单测全绿。**定向回归不覆盖其余编号，发布前仍需全量执行**）
 - `browser_click_test_runs/2026-11-14_followup.md`（DEF-2026-11-13-01 隔离复核定性 + BLOCKED 补跑：SCHED-05/06/07、AG-26 转 PASS，SYS-05/06 补齐免写库子项）
 - `browser_click_test_runs/2026-11-13.md`（全量基线重跑 + 关键用例补漏：新增 AG-26 / CTX-09 / SKILL-07 / SYS-05 / SYS-06，157 → 162 条）
 - `browser_click_test_runs/2026-11-12.md`（feature/chat-data-storage-split 分支变更定向回归；含 FILE-11 新增与未覆盖项声明）
