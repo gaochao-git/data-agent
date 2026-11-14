@@ -123,20 +123,40 @@ async def test_persist_agent_user_message_schedules_title_after_persistence(monk
 
     await agent_run_support._persist_agent_user_message(callbacks)  # type: ignore[arg-type]
 
-    assert calls == [
-        ("persist", "conv-1"),
-        (
-            "title",
-            {
-                "conversation_id": "conv-1",
-                "user_id": "user-1",
-                "model_id": "model-1",
-                "run_id": "run-1",
-                "owner_token": "owner-1",
-            },
-        ),
-    ]
+    assert calls[0] == ("persist", "conv-1")
+    assert calls[1][0] == "title"
+    schedule_kwargs = calls[1][1]
+    assert schedule_kwargs["conversation_id"] == "conv-1"
+    assert schedule_kwargs["user_id"] == "user-1"
+    assert schedule_kwargs["model_id"] == "model-1"
+    assert callable(schedule_kwargs["on_updated"])
     assert phases == ["persist_user_message"]
+
+
+@pytest.mark.asyncio
+async def test_publish_agent_title_updated_appends_title_sse(monkeypatch):
+    captured: dict = {}
+
+    async def fake_append(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(agent_run_support.agent_run_event_service, "append", fake_append)
+    callbacks = SimpleNamespace(
+        thread_id="conv-1",
+        user_id="user-1",
+        run_id="run-1",
+        owner_token="owner-1",
+    )
+
+    await agent_run_support._publish_agent_title_updated(callbacks, "销售额分析")  # type: ignore[arg-type]
+
+    assert captured["run_id"] == "run-1"
+    assert captured["conversation_id"] == "conv-1"
+    assert captured["user_id"] == "user-1"
+    assert captured["owner_token"] == "owner-1"
+    assert captured["event_id"].startswith("run-1:title:")
+    assert "event: conversation_title_updated" in captured["payload"]
+    assert '"title": "销售额分析"' in captured["payload"]
 
 
 @pytest.mark.asyncio

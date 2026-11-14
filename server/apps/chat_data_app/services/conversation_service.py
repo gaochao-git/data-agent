@@ -16,14 +16,13 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import Any
 
+from langchain_core.language_models import BaseChatModel
+from langchain_core.prompts import ChatPromptTemplate
+
 from apps.chat_data_app.agent.prompts.conversation_title import TITLE_GENERATION_PROMPT
-from apps.chat_data_app.agent.run.agent_run_event_service import agent_run_event_service
 from apps.chat_data_app.agent.run.conversation_event_service import conversation_event_service
 from apps.chat_data_app.daos.conversation_dao import ConversationDao
 from apps.chat_data_app.services.llm_config import get_chat_data_llm
-from apps.chat_data_app.sse_protocol import SSE_EVENT_CONVERSATION_TITLE_UPDATED, format_sse
-from langchain_core.language_models import BaseChatModel
-from langchain_core.prompts import ChatPromptTemplate
 from utils.alarm import emit_llm_connection_alarm_if_needed
 from utils.database import get_session
 from utils.logger import get_logger
@@ -576,56 +575,23 @@ def _cleanup_title_task(conversation_id: str, task: asyncio.Task[None]) -> None:
         _TITLE_TASKS.pop(conversation_id, None)
 
 
-async def _publish_title_updated(
-    *,
-    conversation_id: str,
-    user_id: str,
-    run_id: str | None,
-    owner_token: str | None,
-    title: str,
-) -> None:
-    """把标题结果追加到当前 Run 的 SSE；Run 已收口时由列表刷新兜底。"""
-    if not run_id or not owner_token:
-        return
-    payload = format_sse(
-        SSE_EVENT_CONVERSATION_TITLE_UPDATED,
-        {"conversation_id": conversation_id, "title": title},
-    )
-    try:
-        await agent_run_event_service.append(
-            run_id=run_id,
-            conversation_id=conversation_id,
-            user_id=user_id,
-            event_id=f"{run_id}:title:{uuid.uuid4().hex}",
-            payload=payload,
-            owner_token=owner_token,
-        )
-    except Exception:
-        logger.info("标题事件推送失败，等待会话列表刷新兜底: %s", conversation_id, exc_info=True)
-
-
 async def _generate_title_in_background(
     *,
     conversation_id: str,
     user_id: str,
     model_id: str | None,
-    run_id: str | None,
-    owner_token: str | None,
     on_updated: Callable[[str], Awaitable[None]] | None,
 ) -> None:
     thread = await conversation_dao.get_thread(conversation_id, user_id)
     if thread is None or not _is_title_placeholder(thread.thread_title):
         return
 
-    title = ""
+    title: str | None = None
     for attempt in range(2):
         try:
-            title = (
-                await asyncio.wait_for(
-                    generate_title(conversation_id, user_id, model_id),
-                    timeout=TITLE_GENERATION_TIMEOUT_SECONDS,
-                )
-                or ""
+            title = await asyncio.wait_for(
+                generate_title(conversation_id, user_id, model_id),
+                timeout=TITLE_GENERATION_TIMEOUT_SECONDS,
             )
         except TimeoutError:
             logger.warning("后台生成标题超时: conversation_id=%s attempt=%s", conversation_id, attempt + 1)
@@ -642,13 +608,6 @@ async def _generate_title_in_background(
         logger.warning("后台标题生成未完成，保留占位符等待下一轮 Run 重试: %s", conversation_id)
         return
 
-    await _publish_title_updated(
-        conversation_id=conversation_id,
-        user_id=user_id,
-        run_id=run_id,
-        owner_token=owner_token,
-        title=title,
-    )
     if on_updated is not None:
         await on_updated(title)
 
@@ -658,8 +617,6 @@ def schedule_title_generation(
     conversation_id: str,
     user_id: str,
     model_id: str | None = None,
-    run_id: str | None = None,
-    owner_token: str | None = None,
     on_updated: Callable[[str], Awaitable[None]] | None = None,
 ) -> None:
     """在后台生成标题；同一会话已有任务时直接复用，不阻塞主回答。"""
@@ -671,8 +628,6 @@ def schedule_title_generation(
             conversation_id=conversation_id,
             user_id=user_id,
             model_id=model_id,
-            run_id=run_id,
-            owner_token=owner_token,
             on_updated=on_updated,
         )
     )

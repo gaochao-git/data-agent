@@ -13,17 +13,21 @@ import os
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from functools import partial
 from typing import TYPE_CHECKING, Any, cast
+from uuid import uuid4
 
 from fastapi import Request
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langgraph.types import Command
+
 from utils.logger import get_logger
 
 from .agent import AgentRuntimeOptions
 from .agent.context.context_budget import compact_context_usage_for_history, sanitize_context_usage_for_response
 from .agent.middleware.steering import SteeringMessageTracker
 from .agent.run.agent_inbox_service import agent_inbox_service
+from .agent.run.agent_run_event_service import agent_run_event_service
 from .agent.run.conversation_event_service import conversation_event_service
 from .agent.skills import format_skills_prompt
 from .agent.workspace.runtime_skill_snapshot import (
@@ -42,6 +46,7 @@ from .services.semantic.run.semantic_conversation_context import (
     prepare_semantic_conversation_context,
 )
 from .services.semantic.run.semantic_materializer import prematerialize_enabled_semantic_models
+from .sse_protocol import SSE_EVENT_CONVERSATION_TITLE_UPDATED, format_sse
 
 if TYPE_CHECKING:
     from .agent_stream import _AgentSseStreamAdapter
@@ -917,10 +922,30 @@ async def _persist_agent_user_message(callbacks: _AgentRunStreamCallbacks) -> No
         conversation_id=callbacks.thread_id,
         user_id=callbacks.user_id,
         model_id=callbacks.model_id,
-        run_id=callbacks.run_id,
-        owner_token=callbacks.owner_token,
+        on_updated=partial(_publish_agent_title_updated, callbacks),
     )
     callbacks.log_phase("persist_user_message")
+
+
+async def _publish_agent_title_updated(callbacks: _AgentRunStreamCallbacks, title: str) -> None:
+    """把标题结果追加到当前 Run 的 SSE；Run 已收口时由列表刷新兜底。"""
+    if not callbacks.run_id or not callbacks.owner_token:
+        return
+    payload = format_sse(
+        SSE_EVENT_CONVERSATION_TITLE_UPDATED,
+        {"conversation_id": callbacks.thread_id, "title": title},
+    )
+    try:
+        await agent_run_event_service.append(
+            run_id=callbacks.run_id,
+            conversation_id=callbacks.thread_id,
+            user_id=callbacks.user_id,
+            event_id=f"{callbacks.run_id}:title:{uuid4().hex}",
+            payload=payload,
+            owner_token=callbacks.owner_token,
+        )
+    except Exception:
+        logger.info("标题事件推送失败，等待会话列表刷新兜底: %s", callbacks.thread_id, exc_info=True)
 
 
 async def _persist_agent_turn_history_snapshot(callbacks: _AgentRunStreamCallbacks) -> None:

@@ -8,6 +8,7 @@ from typing import Any, cast
 
 from sqlalchemy import CursorResult, and_, func, or_, select
 from sqlalchemy import update as sa_update
+
 from utils.database import get_session as default_get_session
 from utils.models import ChatDataAgentInbox, UserThread
 
@@ -289,7 +290,7 @@ class ConversationDao:
                 .where(*update_conditions)
                 .values(thread_title=title, update_time=datetime.now(), update_by=user_id or "")
             )
-            return bool(result.rowcount)
+            return bool(cast(CursorResult[Any], result).rowcount)
 
     async def toggle_favorite(self, *, conversation_id: str, user_id: str | None) -> bool | None:
         async with self._session_context() as session:
