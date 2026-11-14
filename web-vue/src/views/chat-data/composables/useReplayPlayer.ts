@@ -198,8 +198,9 @@ export function useReplayPlayer(): ReplayPlayerState {
     const store = liveThinking.get(action.index) ?? new Map<string, ThinkingSegment>()
     liveThinking.set(action.index, store)
     if (!store.has(action.segment.id)) {
-      store.set(action.segment.id, { ...action.segment, content: '' })
-      live.thinkingSegments = [...(live.thinkingSegments || []), { ...action.segment, content: '' }]
+      const segment: ThinkingSegment = { ...action.segment, content: '' }
+      store.set(action.segment.id, segment)
+      live.thinkingSegments = [...(live.thinkingSegments || []), segment]
       live.segments = [...(live.segments || []), { type: 'thinkingSegment', thinkingSegmentId: action.segment.id }]
     }
     // 逐字更新必须通过响应式代理引用改值：直接改存入 Map 的原始对象不会触发渲染
@@ -229,8 +230,9 @@ export function useReplayPlayer(): ReplayPlayerState {
     const store = liveTextSegments.get(action.index) ?? new Map<number, { type: 'text'; content: string }>()
     liveTextSegments.set(action.index, store)
     if (!store.has(action.ordinal)) {
-      store.set(action.ordinal, { type: 'text', content: '' })
-      live.segments = [...(live.segments || []), store.get(action.ordinal)]
+      const segment: MessageSegment = { type: 'text', content: '' }
+      store.set(action.ordinal, segment)
+      live.segments = [...(live.segments || []), segment]
     }
     // 逐字更新必须通过响应式代理引用改值：直接改存入 Map 的原始对象不会触发渲染
     const liveSegment = (live.segments || []).filter(item => item.type === 'text')[action.ordinal]

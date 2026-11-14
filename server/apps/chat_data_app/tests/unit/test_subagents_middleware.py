@@ -565,7 +565,13 @@ def test_middleware_creates_system_message_when_request_has_none():
 def test_middleware_registers_single_task_tool_with_agent_catalog():
     middleware = SubagentMiddleware([_spec(), _spec(name="report-writer")])
 
-    assert [tool.name for tool in middleware.tools] == ["task"]
+    # task（前台/后台派发）+ 后台任务管理三件套（查询/取消/列表）
+    assert [tool.name for tool in middleware.tools] == [
+        "task",
+        "check_async_task",
+        "cancel_async_task",
+        "list_async_tasks",
+    ]
     assert middleware.subagent_names == {"explore", "report-writer"}
     assert "explore" in middleware.tools[0].description
     assert "report-writer" in middleware.tools[0].description

@@ -73,6 +73,15 @@ from .context_compression import create_context_compression_middleware
 from .context_usage import create_context_usage_middleware
 from .sandbox_renewal import create_sandbox_renewal_middleware
 from .skill_prerequisite import SkillPrerequisiteMiddleware
+from .subagent_async import (
+    _BackgroundTaskEntry,
+    _collect_background_notifications,
+    _spawn_background_task,
+    _truncate_text,
+    build_cancel_async_task_tool,
+    build_check_async_task_tool,
+    build_list_async_tasks_tool,
+)
 from .tool_call_normalizer import create_tool_call_name_normalizer_middleware
 from .tool_execution_fence import create_tool_execution_fence_middleware
 from .tool_result import create_tool_result_middleware, externalize_tool_text
@@ -110,6 +119,7 @@ SUBAGENT_REPORT_MAX_TOKEN_RATIO = 0.08
 SUBAGENT_REPORT_MIN_TOKEN_LIMIT = 1000
 SUBAGENT_REPORT_PREVIEW_CHARS = 2000
 
+
 _TASK_TOOL_DESCRIPTION_TEMPLATE = """派发隔离上下文的子智能体处理复杂多步任务，只把最终结论带回主对话（大量文件/数据读取留在子图消化，保护主对话上下文）。
 
 可用子智能体类型：
@@ -121,6 +131,7 @@ _TASK_TOOL_DESCRIPTION_TEMPLATE = """派发隔离上下文的子智能体处理�
 - 大块背景先用 file_write 落盘，任务书给路径；只存在于对话里的信息子智能体拿不到。
 - explore 只读不写盘；需要落盘的交付物由主智能体收尾写。
 - 已派发任务不要重复执行；相互独立的子任务可在同一条消息里并行发起多个 task。
+- 耗时长且当轮不需要其结论的任务可传 background=true 转后台：立即返回 task_id，期间继续其他工作或直接结束本轮；完成后报告自动注入下一轮上下文，也可随时用 task_status 工具查询。
 - 回传是结论：向用户汇报时用自己的话转述关键结论与产物路径；产物由主智能体用 present_artifacts 展示。"""
 
 
@@ -159,6 +170,13 @@ class TaskToolArgs(BaseModel):
         min_length=1,
         max_length=64,
         description="子智能体类型，必须是工具描述中列出的类型之一。",
+    )
+    background: bool = Field(
+        default=False,
+        description=(
+            "true=后台执行：立即返回任务 ID 不阻塞，完成后报告自动注入对话；"
+            "适合耗时长且当轮不需要其结论的任务。false（默认）=等待完成后返回结论。"
+        ),
     )
 
 
@@ -636,12 +654,6 @@ def _plain_text(content: Any) -> str:
     if isinstance(content, list):
         return "\n".join(part if isinstance(part, str) else str(part) for part in content)
     return content if isinstance(content, str) else str(content or "")
-
-
-def _truncate_text(text: str, max_chars: int, label: str = "结果") -> str:
-    if len(text) <= max_chars:
-        return text
-    return text[:max_chars] + f"\n…[{label}过长已截断，完整内容共 {len(text)} 字符]"
 
 
 def _truncate_subagent_result(content: Any) -> str:
@@ -1572,20 +1584,28 @@ async def _build_task_tool_impl(
     subagent_type: str,
     description: str,
     runtime: ToolRuntime,
+    *,
+    stream_events: bool = True,
 ) -> Any:
-    """执行单一 task 工具调用：派发子图、收集过程、产出 Command 更新。"""
+    """执行单一 task 工具调用：派发子图、收集过程、产出 Command 更新。
+
+    ``stream_events=False`` 用于后台子智能体：父级 task 调用已先行返回
+    （卡片已关闭），子图过程不再往父流转发，静默执行只留最终报告。
+    """
     runnable = compiled.get(subagent_type)
     if runnable is None:
         allowed = ", ".join(f"`{name}`" for name in compiled)
         return f"无法调用子智能体 {subagent_type}：类型不存在，可用类型为 {allowed}"
     spec = next(item for item in specs if item.name == subagent_type)
     # writer 必须在子图调用前获取：调用后当前上下文会切进子图运行
-    try:
-        writer = get_stream_writer()
-    except Exception as exc:
-        # 拿不到 writer 只影响子图过程实时下发(SSE),子智能体仍要继续执行,故降级为 None。
-        logger.warning("[tools] 获取子图流式 writer 失败,子智能体过程将不做实时下发: %s", exc)
-        writer = None
+    writer = None
+    if stream_events:
+        try:
+            writer = get_stream_writer()
+        except Exception as exc:
+            # 拿不到 writer 只影响子图过程实时下发(SSE),子智能体仍要继续执行,故降级为 None。
+            logger.warning("[tools] 获取子图流式 writer 失败,子智能体过程将不做实时下发: %s", exc)
+            writer = None
     collected: list = []
     captured: dict[str, Any] = {}
     try:
@@ -1652,13 +1672,58 @@ async def _build_task_tool_impl(
     )
 
 
+async def _run_background_task(
+    entry: _BackgroundTaskEntry,
+    specs: list[SubagentSpec],
+    compiled: dict[str, Any],
+    subagent_type: str,
+    description: str,
+    runtime: ToolRuntime,
+) -> None:
+    """后台子智能体执行体：跑同步同款子图路径（静默），把最终报告写回条目。"""
+    try:
+        command = await _build_task_tool_impl(specs, compiled, subagent_type, description, runtime, stream_events=False)
+        update = getattr(command, "update", None) or {}
+        messages = update.get("messages") or []
+        message = messages[0] if messages else None
+        entry.report = str(getattr(message, "content", "") or "")
+        entry.tool_status = str(getattr(message, "status", "") or "success")
+        entry.status = "failed" if entry.tool_status == "error" else "completed"
+        logger.info(
+            "[tools] 后台子智能体执行完成: task_id=%s status=%s",
+            entry.task_id,
+            entry.status,
+        )
+    except Exception as exc:
+        entry.status = "failed"
+        entry.report = f"后台子智能体执行异常：{_truncate_text(str(exc) or exc.__class__.__name__, 200)}"
+        logger.error("[tools] 后台子智能体执行异常: task_id=%s", entry.task_id, exc_info=True)
+
+
 def build_task_tool(specs: list[SubagentSpec], run_controls: Any = None) -> StructuredTool:
-    """构建单一 ``task`` 工具：按 subagent_type 派发到隔离上下文的子图。"""
+    """构建单一 ``task`` 工具：按 subagent_type 派发到隔离上下文的子图。
+
+    ``background=true`` 时转入后台执行（立即返回 task_id，报告跨 Run 注入）。
+    """
     validate_subagent_specs(specs)
     compiled = {spec.name: _compile_subagent(spec, run_controls=run_controls) for spec in specs}
     available = "\n".join(f"- {spec.name}: {spec.description}" for spec in specs)
 
-    async def atask(description: str, subagent_type: str, runtime: ToolRuntime) -> Command | str:
+    async def atask(
+        description: str, subagent_type: str, runtime: ToolRuntime, background: bool = False
+    ) -> Command | str:
+        if background and compiled.get(subagent_type) is None:
+            allowed = ", ".join(f"`{name}`" for name in compiled)
+            return f"无法调用子智能体 {subagent_type}：类型不存在，可用类型为 {allowed}"
+        if background:
+            return _spawn_background_task(
+                subagent_type=subagent_type,
+                description=description,
+                runtime=runtime,
+                runner_factory=lambda entry: _run_background_task(
+                    entry, specs, compiled, subagent_type, description, runtime
+                ),
+            )
         return await _build_task_tool_impl(specs, compiled, subagent_type, description, runtime)
 
     return StructuredTool.from_function(
@@ -1670,7 +1735,7 @@ def build_task_tool(specs: list[SubagentSpec], run_controls: Any = None) -> Stru
 
 
 class SubagentMiddleware(AgentMiddleware):
-    """向主智能体注册 ``task`` 工具，并在系统提示追加子智能体使用说明。"""
+    """向主智能体注册 ``task``/后台管理工具，并在系统提示追加子智能体使用说明。"""
 
     def __init__(
         self, specs: list[SubagentSpec], *, system_prompt: str | None = None, run_controls: Any = None
@@ -1678,21 +1743,40 @@ class SubagentMiddleware(AgentMiddleware):
         validate_subagent_specs(specs)
         self.specs = list(specs)
         self.subagent_names = frozenset(spec.name for spec in specs)
-        self.tools = [build_task_tool(specs, run_controls=run_controls)]
+        self.tools = [
+            build_task_tool(specs, run_controls=run_controls),
+            build_check_async_task_tool(),
+            build_cancel_async_task_tool(),
+            build_list_async_tasks_tool(),
+        ]
         agents_desc = "\n".join(f"- {spec.name}: {spec.description}" for spec in specs)
         self.system_prompt = (system_prompt or _default_system_prompt()).format(
             available_agents=agents_desc,
         )
 
+    def _with_background_notifications(self, request: ModelRequest) -> ModelRequest:
+        """按当前会话收集已完成未上报的后台任务报告，追加进系统提示。
+
+        请求 state 里没有 conversation_id（理论外）时不注入，避免误投其他会话。
+        """
+        extra = self.system_prompt
+        state = getattr(request, "state", None) or {}
+        conversation_id = str(state.get("conversation_id") or "").strip()
+        if conversation_id:
+            note = _collect_background_notifications(conversation_id)
+            if note:
+                extra = f"{extra}\n\n{note}"
+        return _append_system_prompt(request, extra)
+
     def wrap_model_call(
         self, request: ModelRequest, handler: Callable[[ModelRequest], ModelCallResult]
     ) -> ModelCallResult:
-        return handler(_append_system_prompt(request, self.system_prompt))
+        return handler(self._with_background_notifications(request))
 
     async def awrap_model_call(
         self, request: ModelRequest, handler: Callable[[ModelRequest], Awaitable[ModelCallResult]]
     ) -> ModelCallResult:
-        return await handler(_append_system_prompt(request, self.system_prompt))
+        return await handler(self._with_background_notifications(request))
 
 
 def _append_system_prompt(request: ModelRequest, extra: str) -> ModelRequest:
@@ -1717,5 +1801,11 @@ def _default_system_prompt() -> str:
         "派发判断：预计需要多轮工具调用（如批量盘点、成稿写作）且过程中无需"
         "用户参与的任务才派发；简单查询和需要向用户提问、展示中间过程的工作"
         "直接自己完成。派发前必须先把子智能体需要的背景事实写入 workspace 文件，"
-        "任务书里给文件路径——子智能体看不到对话历史，只存在于对话中的信息它拿不到。"
+        "任务书里给文件路径——子智能体看不到对话历史，只存在于对话中的信息它拿不到。\n\n"
+        "## 后台子智能体\n\n"
+        "耗时长且当轮不需要其结论的任务（如批量盘点、多份成稿）传 background=true "
+        "转后台执行：立即返回 task_id，期间继续其他工作或直接结束本轮，完成后的"
+        "报告会自动注入你的上下文。配套工具：list_async_tasks 列出全部后台任务、"
+        "check_async_task 按 task_id 查报告、cancel_async_task 取消执行中的任务。"
+        "用户询问「之前的后台任务怎么样了」时，用 list_async_tasks / check_async_task 回答。"
     )
