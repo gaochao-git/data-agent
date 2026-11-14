@@ -337,7 +337,7 @@ class AgentRunRuntime:
         try:
             await self._event_service.claim_owner(state.run_id, prepared["owner_token"])
         except Exception:
-            # prepare 已把 Run 行置为 ACTIVE（租约 120s）；claim_owner 失败
+            # prepare 已把 Run 行置为 ACTIVE（租约 CHAT_DATA_RUN_LEASE_SECONDS，默认 30s）；claim_owner 失败
             # （典型为 Redis 不可达）若不收口，行会作为无主 ACTIVE 僵尸挂到
             # 租约过期被 reaper 回收，期间 SSE 一直显示「进行中」假状态。
             # finish_run("failed") 断言 DB owner（prepare 已写入）并重排队消息，
