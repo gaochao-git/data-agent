@@ -122,6 +122,30 @@ describe('buildHistoryMessages', () => {
     ])
   })
 
+  it('restores annotation chip from selection marker blocks and hides internal instructions', () => {
+    const content = [
+      '这段话的来源是哪里',
+      '[文档选中内容开始]',
+      '文件：/mnt/user-data/outputs/示例文档.docx',
+      '定位：/body/p[4]（第 1 页）',
+      '选中原文：这是一份示例文档',
+      '处理建议：先根据用户的问题或要求判断意图；只需解释、核对或回答时，不要改动文件。',
+      '[文档选中内容结束]',
+    ].join('\n')
+    const messages = buildHistoryMessagesFromEvents([
+      { sequence_no: 1, turn_id: 'turn-1', event_type: 'user_message', payload: { id: 'user-1', content } },
+    ])
+
+    expect(messages[0]).toMatchObject({
+      content: '这段话的来源是哪里',
+      documentAnnotations: [{
+        filePath: 'outputs/示例文档.docx',
+        docPath: '/body/p[4]',
+        comment: '',
+      }],
+    })
+  })
+
   it('keeps assistant text before a tool call stored in the same AI message', () => {
     const messages = buildHistoryMessagesFromEvents([
       { sequence_no: 1, turn_id: 'turn-1', event_type: 'user_message', payload: { id: 'user-1', content: '生成报告' } },
@@ -398,6 +422,28 @@ describe('stripHistoryUserContent', () => {
     const content = '正文\n\n[引用助手回复片段开始]\n引用原文\n[引用助手回复片段结束]\n\n\n\n结尾'
 
     expect(stripHistoryUserContent(content)).toBe('正文\n\n结尾')
+  })
+
+  it('strips document annotation blocks and their trailing instruction', () => {
+    const content = [
+      '请修改这处',
+      '',
+      '[文档修改请求开始]',
+      '文件：/mnt/user-data/outputs/示例文档.docx',
+      '定位：/body/p[4]（第 1 页）',
+      '原文：这是一份示例文档',
+      '修改要求：改成季度经营分析',
+      '[文档修改请求结束]',
+      '',
+      '请使用 officecli 技能按「定位」修改文档（先 view 确认，再 set/batch），validate 通过后重新展示修改后的文件。',
+    ].join('\n')
+
+    expect(stripHistoryUserContent(content)).toBe('请修改这处')
+  })
+
+  it('strips legacy instruction text appended outside the annotation block', () => {
+    const content = '这段话的来源是哪里\n请按「定位」修改文档；完成后重新展示修改后的文件。'
+    expect(stripHistoryUserContent(content)).toBe('这段话的来源是哪里')
   })
 
   it('strips legacy semantic-model mention suffix', () => {

@@ -28,6 +28,8 @@ interface Props {
   selectedMentionFiles?: Array<{ relativePath: string; name: string }>
   /** 划选助手消息「添加到对话」的引用片段（chip 展示 + hover 预览原文、单项可移除）。 */
   quotedSnippets?: QuotedSnippetChip[]
+  /** Office 预览划选后添加的文档选中内容（chip 展示 + hover 预览原文与问题/要求）。 */
+  documentAnnotations?: DocumentAnnotationChip[]
   selectedModel: string
   modelOptions: ModelOption[]
   /** 三态：true/false 用户显式选择；null 未触碰（展示回退模型 default_on）。 */
@@ -51,10 +53,20 @@ interface QuotedSnippetChip {
   text: string
 }
 
+/** 文档标注 chip：文件 + 选中原文 + 问题/修改要求。 */
+interface DocumentAnnotationChip {
+  id: string
+  filePath: string
+  docPath: string
+  quote?: string
+  comment: string
+}
+
 const props = withDefaults(defineProps<Props>(), {
   selectedSkills: () => [],
   selectedMentionFiles: () => [],
   quotedSnippets: () => [],
+  documentAnnotations: () => [],
   inputFocused: false,
   submitTitle: '发送 (Enter)',
   hasPendingFiles: false,
@@ -69,6 +81,7 @@ const emit = defineEmits<{
   clearSkill: [name: string]
   clearMentionFile: [relativePath: string]
   removeQuoteSnippet: [id: string]
+  removeDocumentAnnotation: [id: string]
   openSkillManager: []
   uploadFile: []
   pasteFiles: [files: File[]]
@@ -131,7 +144,7 @@ onBeforeUnmount(() => {
   >
     <template #prepend>
       <div
-        v-if="props.hasPendingFiles || props.selectedSkills.length || props.selectedMentionFiles.length || props.quotedSnippets.length"
+        v-if="props.hasPendingFiles || props.selectedSkills.length || props.selectedMentionFiles.length || props.quotedSnippets.length || props.documentAnnotations.length"
         class="mb-2 flex max-h-[100px] flex-wrap items-center gap-1.5 overflow-y-auto"
       >
         <slot name="prepend-extra" />
@@ -144,6 +157,29 @@ onBeforeUnmount(() => {
           <i class="fa-solid fa-at text-[10px]"></i>
           <span class="max-w-[140px] truncate">@{{ file.name }}</span>
           <button type="button" class="text-blue-400 hover:text-blue-700" @click="emit('clearMentionFile', file.relativePath)">
+            <i class="fa-solid fa-xmark text-[10px]"></i>
+          </button>
+        </div>
+        <div
+          v-for="annotation in props.documentAnnotations"
+          :key="annotation.id"
+          class="flex w-fit items-center gap-1.5 rounded-full bg-amber-50 px-2 py-1 text-xs text-amber-800"
+        >
+          <el-popover placement="top" :width="420" trigger="hover">
+            <template #reference>
+              <span class="flex min-w-0 cursor-default items-center gap-1.5" title="本轮引用的文档选中内容">
+                <i class="fa-solid fa-highlighter text-[10px] text-amber-500"></i>
+                <span class="max-w-[160px] truncate">
+                  {{ annotation.filePath.split('/').pop() }}
+                </span>
+              </span>
+            </template>
+            <div class="space-y-1.5 text-xs leading-relaxed text-slate-700">
+              <div class="text-[10px] text-slate-400">{{ annotation.filePath }} · {{ annotation.docPath }}</div>
+              <div v-if="annotation.quote" class="max-h-[120px] overflow-y-auto rounded bg-slate-50 px-2 py-1 text-slate-500">{{ annotation.quote }}</div>
+            </div>
+          </el-popover>
+          <button type="button" class="text-amber-400 hover:text-amber-700" title="移除标注" @click="emit('removeDocumentAnnotation', annotation.id)">
             <i class="fa-solid fa-xmark text-[10px]"></i>
           </button>
         </div>

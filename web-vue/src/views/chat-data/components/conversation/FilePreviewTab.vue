@@ -5,23 +5,36 @@
  * 状态仍由 ConversationWorkspacePanel 持有，通过 WorkspaceFilesContextKey 提供，
  * 这里只做「粗粒度 tab 组件」拆分，不做更细的状态重组。
  */
-import { defineComponent, inject } from 'vue'
+import { defineComponent, inject, unref } from 'vue'
 import ChartSpecRenderer from '../ChartSpecRenderer.vue'
 import MarkdownFilePreview from './MarkdownFilePreview.vue'
 import HtmlPagePreview from './HtmlPagePreview.vue'
 import CodeFilePreview from './CodeFilePreview.vue'
 import MermaidFilePreview from './MermaidFilePreview.vue'
+import OfficePreviewFrame from './OfficePreviewFrame.vue'
 import { formatToolTableCell } from '../../utils/messageArtifacts'
 import { WorkspaceFilesContextKey } from '../../composables/workspaceFilesContext'
 
 export default defineComponent({
   name: 'FilePreviewTab',
-  components: { ChartSpecRenderer, MarkdownFilePreview, HtmlPagePreview, CodeFilePreview, MermaidFilePreview },
+  components: { ChartSpecRenderer, MarkdownFilePreview, HtmlPagePreview, CodeFilePreview, MermaidFilePreview, OfficePreviewFrame },
   setup() {
     const context = inject(WorkspaceFilesContextKey)
     if (!context) throw new Error('FilePreviewTab 必须在 ConversationWorkspacePanel 内使用')
+    // Office 预览划选标注：把文件路径与选区锚点合并后交给上层面板
+    const handleOfficeAnnotation = (payload: { docPath: string; quote: string; comment: string }) => {
+      const request = context.requestDocumentAnnotation
+      if (typeof request !== 'function') return
+      const filePath = String(unref(context.selectedConsoleFilePath) || '')
+      if (!filePath) return
+      request({ filePath, ...payload })
+    }
+    const updateDocumentAnnotationDraft = (value: string) => {
+      const update = context.updateDocumentAnnotationDraft
+      if (typeof update === 'function') update(value)
+    }
     // 注入的是同一个面板作用域：key 由面板保证齐全，这里按原变量名暴露给模板
-    return { ...context, formatToolTableCell } as Record<string, any>
+    return { ...context, formatToolTableCell, handleOfficeAnnotation, updateDocumentAnnotationDraft } as Record<string, any>
   },
 })
 </script>
@@ -218,17 +231,16 @@ export default defineComponent({
             v-else-if="selectedConsoleIsPdf && loadingWorkspaceFilePath === selectedConsoleFilePath"
             :class="isWorkspaceFilePreviewFullscreen ? 'flex h-[calc(100vh-48px)] items-center justify-center text-xs text-slate-400' : 'flex min-h-0 flex-1 items-center justify-center text-xs text-slate-400'"
           >PDF 加载中...</div>
-          <div
+          <OfficePreviewFrame
             v-else-if="selectedConsoleIsOfficeFile && selectedConsoleOfficeHtml"
-            :class="isWorkspaceFilePreviewFullscreen ? 'h-[calc(100vh-48px)] min-w-0 overflow-auto rounded-md border border-slate-100 bg-white' : 'min-h-0 flex-1 min-w-0 overflow-auto rounded-md border border-slate-100 bg-white'"
-          >
-            <iframe
-              :srcdoc="selectedConsoleOfficeHtml"
-              sandbox="allow-scripts"
-              class="h-full min-w-0 w-full border-0 bg-white"
-              title="Office 文件预览"
-            ></iframe>
-          </div>
+            :html="selectedConsoleOfficeHtml"
+            :file-path="selectedConsoleFilePath"
+            :file-name="selectedConsolePathParts.name"
+            :draft-text="documentAnnotationDraft"
+            :fullscreen="isWorkspaceFilePreviewFullscreen"
+            @add="handleOfficeAnnotation"
+            @update:draft-text="updateDocumentAnnotationDraft"
+          />
           <div
             v-else-if="selectedConsoleIsOfficeFile && loadingOfficePreviewKey === `${conversationId}:${selectedConsoleFilePath}`"
             :class="isWorkspaceFilePreviewFullscreen ? 'flex h-[calc(100vh-48px)] items-center justify-center text-xs text-slate-400' : 'flex min-h-0 flex-1 items-center justify-center text-xs text-slate-400'"

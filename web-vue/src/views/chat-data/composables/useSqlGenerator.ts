@@ -31,6 +31,7 @@ import type {
   ChatDataMessageEndPayload,
   ToolLifecycleEventData,
   PendingUserQuestion,
+  DocumentAnnotationRequest,
 } from '../types'
 
 /**
@@ -126,6 +127,8 @@ export function useSqlGenerator() {
       fileSelections?: string[]
       /** 划选引用片段（[{text}]）：模型可见标记块由服务端统一追加，前端只透传。 */
       quotedSnippets?: Array<{ text: string }>
+      /** 文档选中内容：带 OfficeCLI 文档内定位，服务端拼成模型可见标记块。 */
+      documentAnnotations?: DocumentAnnotationRequest[]
       enableThinking?: boolean | null
       thinkingEffort?: string | null
       runtimeOptions?: { workspace_backend: 'local' | 'sandbox' } | null
@@ -161,6 +164,7 @@ export function useSqlGenerator() {
       onGenerationSpeed,
       fileSelections,
       quotedSnippets,
+      documentAnnotations,
       enableThinking,
       thinkingEffort,
       onContextCompression,
@@ -216,6 +220,11 @@ export function useSqlGenerator() {
       // 划选引用片段：存引用、服务端晚解析（标记块 + additional_kwargs 留痕）
       if (quotedSnippets?.length) {
         options.quoted_snippets = quotedSnippets
+      }
+
+      // 文档选中内容：结构字段随 options 透传，服务端统一收敛与拼块
+      if (documentAnnotations?.length) {
+        options.annotations = documentAnnotations
       }
 
       if (memberDatasourceIds && memberDatasourceIds.length > 0) {

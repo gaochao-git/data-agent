@@ -22,6 +22,9 @@ class CompletionRunOptions:
     file_selections: list[str]
     skill_names: list[str]
     quoted_snippets: list[dict[str, str]]
+    # 文档选中内容（[{"file_path", "doc_path", "quote", "comment"}]）：
+    # 前端在 Office 预览里划选后引用，问题/修改要求随消息透传到 Human 消息标记块。
+    annotations: list[dict[str, Any]]
     # 无人值守运行（评测/批量等内部调用方经 options 显式置 True）：工具装配
     # 剔除 ask_user_question（用户不在场，提问只会悬挂在 waiting_user）。
     # chat 入口不传恒为 False；定时轮派发链路不走本解析（直接在 runtime_context
@@ -98,6 +101,87 @@ def parse_quoted_snippets(value: Any) -> list[dict[str, str]]:
 _QUOTED_SNIPPET_MAX_CHARS = 2000
 _QUOTED_SNIPPET_MAX_ITEMS = 5
 
+_ANNOTATION_MAX_ITEMS = 5
+_ANNOTATION_QUOTE_MAX_CHARS = 1000
+_ANNOTATION_COMMENT_MAX_CHARS = 1000
+_ANNOTATION_DOC_PATH_MAX_CHARS = 200
+_ANNOTATION_FILE_ROOTS = ("uploads/", "workspace/", "outputs/")
+_ANNOTATION_USER_DATA_PREFIX = "/mnt/user-data/"
+
+
+def _normalize_annotation_file_path(value: Any) -> str:
+    """标注文件路径归一到工作区相对路径（uploads/workspace/outputs 三根之一）。
+
+    这是 HTTP 入参边界：客户端可以伪造任意路径，只接受会话工作区三根下的
+    相对路径，其余丢弃；真正的写权限仍由工作区/OfficeCLI 层兜底。
+    """
+    path = str(value or "").strip()
+    if path.startswith(_ANNOTATION_USER_DATA_PREFIX):
+        path = path[len(_ANNOTATION_USER_DATA_PREFIX) :]
+    path = path.lstrip("/")
+    if not path or ".." in path.split("/"):
+        return ""
+    if not any(path.startswith(root) for root in _ANNOTATION_FILE_ROOTS):
+        return ""
+    return path
+
+
+def _normalize_annotation_doc_path(value: Any) -> str:
+    """OfficeCLI 文档内定位（/body/p[4]、/slide[1]、/Sheet1/A1）。"""
+    doc_path = str(value or "").strip()
+    if not doc_path.startswith("/") or len(doc_path) > _ANNOTATION_DOC_PATH_MAX_CHARS:
+        return ""
+    if any(char.isspace() for char in doc_path):
+        return ""
+    return doc_path
+
+
+def _normalize_annotation_item(item: Any) -> dict[str, Any] | None:
+    """单条标注归一：非法形状返回 None，由调用方丢弃。"""
+    if not isinstance(item, dict):
+        return None
+    file_path = _normalize_annotation_file_path(item.get("file_path"))
+    doc_path = _normalize_annotation_doc_path(item.get("doc_path"))
+    quote = str(item.get("quote") or "").strip()[:_ANNOTATION_QUOTE_MAX_CHARS]
+    comment = str(item.get("comment") or "").strip()[:_ANNOTATION_COMMENT_MAX_CHARS]
+    if not file_path or not doc_path or not comment:
+        return None
+    return {
+        "file_path": file_path,
+        "doc_path": doc_path,
+        "quote": quote,
+        "comment": comment,
+    }
+
+
+def parse_document_annotations(value: Any) -> list[dict[str, Any]]:
+    """解析文档选中内容；空条目与非法路径直接丢弃，按序去重。
+
+    与 quoted_snippets 同一信任边界：HTTP options 由客户端提交，这里只做
+    形状与长度收敛，不承担文件权限校验。
+    """
+    if not isinstance(value, list):
+        return []
+    annotations: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    for item in value:
+        annotation = _normalize_annotation_item(item)
+        if annotation is None:
+            continue
+        key = (
+            annotation["file_path"],
+            annotation["doc_path"],
+            annotation["quote"],
+            annotation["comment"],
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        annotations.append(annotation)
+        if len(annotations) >= _ANNOTATION_MAX_ITEMS:
+            break
+    return annotations
+
 
 def parse_unattended_flag(value: Any) -> bool:
     """无人值守标记：服务端内部调用方（评测/批量）使用；chat 正常链路不传。
@@ -129,5 +213,6 @@ def parse_completion_run_options(options: dict[str, Any] | None) -> CompletionRu
         file_selections=parse_file_selections(options_data.get("file_selections")),
         skill_names=skill_names,
         quoted_snippets=parse_quoted_snippets(options_data.get("quoted_snippets")),
+        annotations=parse_document_annotations(options_data.get("annotations")),
         disable_user_interaction=parse_unattended_flag(options_data.get("disable_user_interaction")),
     )

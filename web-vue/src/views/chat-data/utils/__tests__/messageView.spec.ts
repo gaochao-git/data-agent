@@ -8,6 +8,7 @@ import {
   getActiveThinkingSegmentId,
   getAssistantCopyText,
   getEffectiveAttachments,
+  getUserDocumentAnnotations,
   findFinalAnswerSegmentIndex,
   getThinkingPreviewText,
   hasWorkProcess,
@@ -18,10 +19,12 @@ import {
   hasVisibleAssistantContent,
   isLongUserMessage,
   parseAttachmentPlaceholders,
+  parseDocumentAnnotationBlocks,
   resolveActiveRunStartIndex,
   shouldShowAssistantFooter,
   shouldShowStreamingStatus,
   stripAttachmentPlaceholders,
+  stripUserMessageInternalSuffixes,
 } from '../messageView'
 
 const assistant = (patch: Partial<Message> = {}): Message => ({
@@ -261,6 +264,85 @@ describe('用户消息投影', () => {
     expect(formatFileSize(512)).toBe('512 B')
     expect(formatFileSize(2048)).toBe('2.0 KB')
     expect(formatFileSize(3 * 1024 * 1024)).toBe('3.0 MB')
+  })
+
+  it('展示层剥离文档选中内容块与旧版散落的执行提示', () => {
+    const content = [
+      '这段话的来源是哪里',
+      '',
+      '[文档选中内容开始]',
+      '文件：/mnt/user-data/outputs/示例文档.docx',
+      '定位：/body/p[4]（第 1 页）',
+      '选中原文：这是一份示例文档',
+      '问题或要求：这段话的依据是什么？',
+      '处理建议：先根据用户的问题或要求判断意图；只需解释、核对或回答时，不要改动文件。',
+      '[文档选中内容结束]',
+      '',
+      '请按「定位」修改文档；完成后重新展示修改后的文件。',
+    ].join('\n')
+    expect(stripUserMessageInternalSuffixes(content)).toBe('这段话的来源是哪里')
+  })
+
+  it('旧历史只有标记块时反解出文档标注 chip', () => {
+    const content = [
+      '请修改这处',
+      '[文档修改请求开始]',
+      '文件：/mnt/user-data/outputs/示例文档.docx',
+      '定位：/body/p[4]（第 1 页）',
+      '原文：这是一份示例文档',
+      '修改要求：改成季度经营分析',
+      '[文档修改请求结束]',
+    ].join('\n')
+    expect(parseDocumentAnnotationBlocks(content)).toEqual([
+      {
+        id: 'doc-annotation-legacy-0',
+        filePath: 'outputs/示例文档.docx',
+        docPath: '/body/p[4]',
+        quote: '这是一份示例文档',
+        comment: '改成季度经营分析',
+      },
+    ])
+    expect(getUserDocumentAnnotations({ id: 'u', role: 'user', content })).toHaveLength(1)
+  })
+
+  it('问题已在消息正文时，标记块可省略问题字段且 chip 仍保留', () => {
+    const content = [
+      '这段话的依据是什么？',
+      '[文档选中内容开始]',
+      '文件：/mnt/user-data/outputs/示例文档.docx',
+      '定位：/body/p[4]（第 1 页）',
+      '选中原文：这是一份示例文档',
+      '[文档选中内容结束]',
+    ].join('\n')
+    expect(parseDocumentAnnotationBlocks(content)).toEqual([
+      expect.objectContaining({
+        filePath: 'outputs/示例文档.docx',
+        docPath: '/body/p[4]',
+        comment: '',
+      }),
+    ])
+    expect(getUserDocumentAnnotations({ id: 'u', role: 'user', content })).toHaveLength(1)
+  })
+
+  it('旧消息原文跨行时保留续行，不丢字段', () => {
+    const content = [
+      '这个来源是哪里',
+      '[文档选中内容开始]',
+      '文件：/mnt/user-data/outputs/示例文档.docx',
+      '定位：/body/table[3]/tr[11]/tc[5]',
+      '选中原文：第一行原文',
+      '第二行：仍属于原文',
+      '问题或要求：这个来源是哪里',
+      '[文档选中内容结束]',
+    ].join('\n')
+    expect(parseDocumentAnnotationBlocks(content)).toEqual([
+      expect.objectContaining({
+        filePath: 'outputs/示例文档.docx',
+        docPath: '/body/table[3]/tr[11]/tc[5]',
+        quote: '第一行原文\n第二行：仍属于原文',
+        comment: '这个来源是哪里',
+      }),
+    ])
   })
 })
 

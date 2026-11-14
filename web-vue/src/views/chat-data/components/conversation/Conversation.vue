@@ -5,7 +5,7 @@
  */
 import { computed, nextTick, onMounted, onUnmounted, ref, toRef, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import type { ChatDataContextCompressionEvent, ChatDataTokenUsage, DashboardSpecPayload, DataSource, ExecutionTargetOption, LangGraphMessage, Message, MessageAttachment, PendingUserQuestion, SemanticYamlFile, SkillInfo, SubagentCompaction, SubagentContextUsage, SubagentTrailItem, ThinkingSegment, ToolCallInfo, ToolLifecycleEventData, UserQuestionAnswer } from '../../types'
+import type { ChatDataContextCompressionEvent, ChatDataTokenUsage, DashboardSpecPayload, DataSource, DocumentAnnotation, ExecutionTargetOption, LangGraphMessage, Message, MessageAttachment, PendingUserQuestion, SemanticYamlFile, SkillInfo, SubagentCompaction, SubagentContextUsage, SubagentTrailItem, ThinkingSegment, ToolCallInfo, ToolLifecycleEventData, UserQuestionAnswer } from '../../types'
 import { useSqlGenerator, type RunDoneStatus } from '../../composables/useSqlGenerator'
 import { useConversationHistory } from '../../composables/useConversationHistory'
 import { useModelOptions } from '../../composables/useModelOptions'
@@ -13,6 +13,7 @@ import { useSaveToPanel } from '../../composables/useSaveToPanel'
 import { useSkillCommandMenu } from '../../composables/useSkillCommandMenu'
 import { useWorkspaceFileMention, type WorkspaceFilePick } from '../../composables/useWorkspaceFileMention'
 import { useQuotedSnippets } from '../../composables/useQuotedSnippets'
+import { toDocumentAnnotationRequests, useDocumentAnnotations } from '../../composables/useDocumentAnnotations'
 import { useSseReconnect } from '../../composables/useSseReconnect'
 import { answerUserQuestion, cancelConversationRun, cancelSteerMessage, cancelUserQuestion, createDashboardFromSpec, deleteUploadedFile, getConversationWorkspaceFileContent, getConversationWorkspaceFiles, getConversationWorkspaceRawFile, getPendingUserQuestion, importConversationWorkspaceSkill, getRunState, steerConversation, streamRunEvents, updateSteerMessage, uploadFile } from '../../api'
 import type { Dashboard } from '../../api/dashboard'
@@ -701,6 +702,8 @@ type AnalysisSubmitOptions = {
   fileSelections?: string[] | null
   /** 划选引用片段快照（[{text}]）；未传时按当前 chip 状态构建，随请求透传服务端。 */
   quotedSnippets?: Array<{ text: string }> | null
+  /** 文档选中内容快照；未传时按当前 chip 状态构建，随请求透传服务端。 */
+  documentAnnotations?: DocumentAnnotation[] | null
   assistantMessageId?: string
   appendUserMessage?: boolean
   fileIds?: string[]
@@ -902,6 +905,43 @@ const {
   removeQuotedSnippet,
   clearQuotedSnippets,
 } = useQuotedSnippets()
+
+// ---- 文档选中内容：Office 预览划选「引用选中内容」→ 输入框 chip；随消息透传服务端 ----
+const {
+  documentAnnotations,
+  addDocumentAnnotation,
+  removeDocumentAnnotation,
+  clearDocumentAnnotations,
+  alignDocumentAnnotationComment,
+} = useDocumentAnnotations()
+
+/** 浮层输入与下方对话输入共享草稿；任一侧编辑后 chip 要求跟随最终正文。 */
+const updateDocumentAnnotationDraft = (value: string) => {
+  input.value = value
+  alignDocumentAnnotationComment(value)
+}
+watch(input, value => alignDocumentAnnotationComment(value))
+
+/** 预览区标注回调：进 chip 列表；草稿已同步到输入框，空正文时用标注要求兜底。 */
+const handleDocumentAnnotation = (payload: {
+  filePath: string
+  docPath: string
+  quote: string
+  comment: string
+}) => {
+  const result = addDocumentAnnotation(payload)
+  if (!result.ok) {
+    const message = result.reason === 'duplicate'
+      ? '该标注已在请求列表中'
+      : (result.reason === 'limit' ? '标注已达上限（5 条），请先发送或移除' : '请填写问题或修改要求')
+    ElMessage.warning(message)
+    return
+  }
+  if (!input.value.trim()) {
+    input.value = payload.comment
+  }
+  focusInput()
+}
 
 /** 浮层「添加到对话」回调：片段进 chip 列表并聚焦输入框；超限/重复时提示。 */
 const handleAddQuoteSnippet = (text: string) => {
@@ -1990,6 +2030,9 @@ const submitAnalysisQuery = async (
   const quotedSnippetsSnapshot = options.quotedSnippets !== undefined
     ? (options.quotedSnippets || [])
     : quotedSnippets.value.map(item => ({ text: item.text }))
+  const documentAnnotationsSnapshot = options.documentAnnotations !== undefined
+    ? (options.documentAnnotations || [])
+    : documentAnnotations.value
   const userMessage: Message = {
     id: options.userMessageId || `user-${Date.now()}`,
     role: 'user',
@@ -2008,6 +2051,9 @@ const submitAnalysisQuery = async (
       id: `quote-${index}`,
       text: item.text,
     }))
+  }
+  if (documentAnnotationsSnapshot.length > 0) {
+    userMessage.documentAnnotations = documentAnnotationsSnapshot
   }
   if (options.appendUserMessage !== false) {
     messages.value.push(userMessage)
@@ -2034,6 +2080,7 @@ const submitAnalysisQuery = async (
     clearSelectedSkills()
     clearMentionFiles()
     clearQuotedSnippets()
+    clearDocumentAnnotations()
   }
   isGenerating.value = true
   startLiveElapsedTicker(options.elapsedSeedMs)
@@ -2151,6 +2198,7 @@ const submitAnalysisQuery = async (
         },
         fileSelections: mentionFileSelections,
         quotedSnippets: quotedSnippetsSnapshot,
+        documentAnnotations: toDocumentAnnotationRequests(documentAnnotationsSnapshot),
         enableThinking: enableDeepThinking.value,
         thinkingEffort: thinkingEffort.value,
         onContextCompression: (event) => appendContextCompressionEvent(event),
@@ -2438,7 +2486,7 @@ const handleSubmit = async (options: { queuedMessageId?: string } = {}) => {
   const hasUploadedFiles = pendingFiles.value.some(
     f => f.status === 'uploaded' && f.file_id && !f.file_id.startsWith('temp-'),
   )
-  if (!input.value.trim() && !hasUploadedFiles && quotedSnippets.value.length === 0) return
+  if (!input.value.trim() && !hasUploadedFiles && quotedSnippets.value.length === 0 && documentAnnotations.value.length === 0) return
   if (!selectedDatasource.value) {
     ElMessage.warning('请先选择数据源')
     return
@@ -2501,6 +2549,12 @@ const handleSubmit = async (options: { queuedMessageId?: string } = {}) => {
   if (!effectiveQueryText.trim() && quotedSnippetsSnapshot.length > 0) {
     effectiveQueryText = '请结合引用的内容继续分析'
   }
+  // 只有文档选中内容时不能再要求用户重复输入问题：标注里的问题/要求就是正文。
+  if (!effectiveQueryText.trim() && documentAnnotations.value.length > 0) {
+    effectiveQueryText = documentAnnotations.value[0]?.comment || '请结合选中的内容回答'
+  }
+  alignDocumentAnnotationComment(effectiveQueryText)
+  const documentAnnotationsSnapshot = [...documentAnnotations.value]
 
   const requestText = buildSkillRequestText(effectiveQueryText, skillNames)
   // 附件已捕获进 completedFileIds/attachments，发送瞬间即清空输入框附件卡片，
@@ -2512,6 +2566,7 @@ const handleSubmit = async (options: { queuedMessageId?: string } = {}) => {
     restoreInputText: queryText,
     fileSelections: mentionFileSelectionsSnapshot,
     quotedSnippets: quotedSnippetsSnapshot.length > 0 ? quotedSnippetsSnapshot : [],
+    documentAnnotations: documentAnnotationsSnapshot.length > 0 ? documentAnnotationsSnapshot : [],
     fileIds: completedFileIds.length > 0 ? completedFileIds : undefined,
     preserveQueuedMessages: pendingSteerMessages.value.length > 0,
     attachments: attachments.length > 0 ? attachments : undefined,
@@ -3011,11 +3066,12 @@ const handleKeyDown = (event: KeyboardEvent) => {
             :selected-skills="selectedSkills"
             :selected-mention-files="mentionedFiles"
             :quoted-snippets="quotedSnippets"
+            :document-annotations="documentAnnotations"
             :has-pending-files="pendingFiles.length > 0"
             :model-options="modelOptions"
             :is-generating="replayGroup ? replayPlayer.status.value === 'playing' : runBusy"
             :is-stopping="isStoppingRun"
-            :can-submit="replayArmed ? true : (replayGroup ? false : (runBusy ? Boolean(input.trim() && !isSteering) : Boolean((input.trim() || hasCompletedPendingFiles || quotedSnippets.length > 0) && selectedDatasource)))"
+            :can-submit="replayArmed ? true : (replayGroup ? false : (runBusy ? Boolean(input.trim() && !isSteering) : Boolean((input.trim() || hasCompletedPendingFiles || quotedSnippets.length > 0 || documentAnnotations.length > 0) && selectedDatasource)))"
             :input-focused="inputFocused"
             :attached="showAnalysisProgress"
             :submit-title="replayArmed ? '回车开始回放' : (!selectedDatasource ? '请先选择数据源' : '发送 (Enter)')"
@@ -3024,6 +3080,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
             @clear-skill="clearSelectedSkill"
             @clear-mention-file="handleMentionFileClear"
             @remove-quote-snippet="removeQuotedSnippet"
+            @remove-document-annotation="removeDocumentAnnotation"
             @upload-file="handleUploadFile"
             @paste-files="handlePasteFiles"
             @open-skill-manager="isSkillManagerOpen = true"
@@ -3108,6 +3165,9 @@ const handleKeyDown = (event: KeyboardEvent) => {
       :can-import-semantic-model="props.canImportSemanticModel"
       :format-text="replaceVisiblePathsForDisplay"
       :ensure-conversation-id="ensureConversationId"
+      :document-annotation-handler="handleDocumentAnnotation"
+      :document-annotation-draft="input"
+      :document-annotation-draft-handler="updateDocumentAnnotationDraft"
       @conversation-created="handlePanelConversationCreated"
       @import-semantic-yaml="emit('importSemanticYaml', $event)"
       @select-tool="selectToolCall"

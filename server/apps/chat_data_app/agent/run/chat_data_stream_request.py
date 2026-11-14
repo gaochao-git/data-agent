@@ -43,6 +43,10 @@ class ChatDataStreamRequest:
     # 划选引用片段（[{"text": ...}]）：前端划选助手回复后随消息透传，语义同 IM
     # 引用回复；进入 _build_user_message 时经 parse_quoted_snippets 归一校验
     quoted_snippets: Any | None = None
+    # 文档选中内容（[{"file_path", "doc_path", "quote", "comment"}]）：
+    # 前端 Office 预览划选后透传；进入 _build_user_message 时经
+    # parse_document_annotations 收敛，并拼成模型可见的 [文档选中内容] 标记块。
+    annotations: Any | None = None
     enable_thinking: bool | None = None
     thinking_effort: str | None = None
     skill_names: list[str] | None = None

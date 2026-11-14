@@ -382,6 +382,25 @@ export interface ConversationGroupView {
   is_loading_more?: boolean
 }
 
+/** 文档标注：Office 预览里划选后引用，携带 OfficeCLI 文档内定位与问题/要求。 */
+export interface DocumentAnnotation {
+  id: string
+  /** 会话工作区相对路径（uploads/、workspace/、outputs/ 三根之一）。 */
+  filePath: string
+  /** OfficeCLI 文档内定位，如 /body/p[4]、/slide[1]、/Sheet1/A1。 */
+  docPath: string
+  quote?: string
+  comment: string
+}
+
+/** 文档标注的请求体形状（snake_case 对齐后端 options.annotations）。 */
+export interface DocumentAnnotationRequest {
+  file_path: string
+  doc_path: string
+  quote?: string
+  comment: string
+}
+
 // 消息
 export interface Message {
   id: string
@@ -402,6 +421,8 @@ export interface Message {
   fileSelections?: string[]
   /** 用户消息划选引用的助手回复片段（id 供前端 key，本地发送与历史回放共用）。 */
   quotedSnippets?: Array<{ id: string; text: string }>
+  /** 用户消息附带的文档选中内容（Office 预览划选后添加）。 */
+  documentAnnotations?: DocumentAnnotation[]
   skills?: Array<Pick<SkillInfo, 'name' | 'title' | 'description'>>
   // 用户消息附带的文件信息（上传文件或超长输入转文件）
   attachments?: MessageAttachment[]

@@ -76,6 +76,16 @@ const props = defineProps({
   formatText: { type: Function as PropType<(value: string) => string>, default: (value: string) => value },
   /** 面板内上传需要新建会话时调用；创建成功后父级负责同步会话状态 */
   ensureConversationId: { type: Function as PropType<() => Promise<string | null>>, default: null },
+  /** Office 预览划选「引用选中内容」：父级把标注收进输入框，随下一条消息发送 */
+  documentAnnotationHandler: { type: Function as PropType<(payload: {
+    filePath: string
+    docPath: string
+    quote: string
+    comment: string
+  }) => void>, default: null },
+  /** 与浮层文本框共享的对话草稿；在浮层中编辑时回写主输入框。 */
+  documentAnnotationDraft: { type: String, default: '' },
+  documentAnnotationDraftHandler: { type: Function as PropType<(value: string) => void>, default: null },
 })
 
 const emit = defineEmits<{
@@ -1197,6 +1207,9 @@ provide(WorkspaceFilesContextKey, {
   previewPathInnerRef,
   previewPathRef,
   refreshWorkspaceFiles,
+  requestDocumentAnnotation: props.documentAnnotationHandler,
+  documentAnnotationDraft: computed(() => props.documentAnnotationDraft),
+  updateDocumentAnnotationDraft: props.documentAnnotationDraftHandler,
   selectedConsoleBinaryBlob,
   selectedConsoleChartSpec,
   selectedConsoleFile,

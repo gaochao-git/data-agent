@@ -1,4 +1,4 @@
-"""用户消息引用链路单测：@ 引用工作区文件短句 + 划选引用片段（quoted_snippets）。
+"""用户消息引用链路单测：@ 引用工作区文件短句 + 划选引用片段 + 文档选中内容。
 
 覆盖：入参解析归一（parse_file_selections / parse_quoted_snippets）、模型可见
 短句/标记块后缀（_file_selection_mention_suffix / _quote_snippets_suffix）、
@@ -81,3 +81,116 @@ def test_build_user_message_quoted_snippets_trace():
     plain = _build_user_message("这是什么")
     assert plain.content == "这是什么"
     assert "quoted_snippets" not in plain.additional_kwargs
+
+
+def test_parse_document_annotations_normalizes_and_filters():
+    from apps.chat_data_app.agent.run.completion_options import parse_document_annotations
+
+    assert parse_document_annotations(None) == []
+    assert parse_document_annotations("x") == []
+    assert parse_document_annotations([{"file_path": "outputs/a.docx"}]) == []
+    annotations = parse_document_annotations(
+        [
+            {
+                "file_path": "/mnt/user-data/outputs/示例文档.docx",
+                "doc_path": " /body/p[4] ",
+                "quote": " 选中原文 ",
+                "comment": " 改成季度分析 ",
+            },
+            {
+                "file_path": "outputs/示例文档.docx",
+                "doc_path": "/body/p[4]",
+                "quote": "选中原文",
+                "comment": "改成季度分析",
+            },
+            {"file_path": "../secret.docx", "doc_path": "/body/p[1]", "comment": "越权"},
+            {"file_path": "outputs/a.docx", "doc_path": "/body/p 1", "comment": "非法定位"},
+            {"file_path": "outputs/a.docx", "doc_path": "/body/p[1]", "comment": ""},
+        ]
+    )
+    assert annotations == [
+        {
+            "file_path": "outputs/示例文档.docx",
+            "doc_path": "/body/p[4]",
+            "quote": "选中原文",
+            "comment": "改成季度分析",
+        }
+    ]
+
+
+def test_document_annotations_suffix_and_message_trace():
+    from apps.chat_data_app.agent_stream import _document_annotations_suffix
+
+    annotation = {
+        "file_path": "outputs/示例文档.docx",
+        "doc_path": "/body/p[4]",
+        "quote": "这是一份示例文档",
+        "comment": "改成季度经营分析",
+    }
+    assert _document_annotations_suffix([annotation], user_content="这段话的依据是什么？") == (
+        "\n\n[文档选中内容开始]\n"
+        "文件：/mnt/user-data/outputs/示例文档.docx\n"
+        "定位：/body/p[4]\n"
+        "选中原文：这是一份示例文档\n"
+        "问题或要求：改成季度经营分析\n"
+        "处理建议：先根据用户的问题或要求判断意图；只需解释、核对或回答时，不要改动文件；只有明确要求修改时，才使用 officecli 按「定位」编辑并重新展示。\n"
+        "[文档选中内容结束]"
+    )
+    assert _document_annotations_suffix([annotation], user_content="改成季度经营分析") == (
+        "\n\n[文档选中内容开始]\n"
+        "文件：/mnt/user-data/outputs/示例文档.docx\n"
+        "定位：/body/p[4]\n"
+        "选中原文：这是一份示例文档\n"
+        "处理建议：先根据用户的问题或要求判断意图；只需解释、核对或回答时，不要改动文件；只有明确要求修改时，才使用 officecli 按「定位」编辑并重新展示。\n"
+        "[文档选中内容结束]"
+    )
+    assert _document_annotations_suffix(None) == ""
+    assert _document_annotations_suffix([{"file_path": "outputs/a.docx"}]) == ""
+
+    message = _build_user_message("改成季度经营分析", annotations=[annotation])
+    assert "[文档选中内容开始]" in message.content
+    assert "问题或要求：改成季度经营分析" not in message.content
+    assert message.additional_kwargs["annotations"] == [annotation]
+
+
+def test_document_annotation_quote_is_flattened_for_line_based_block():
+    from apps.chat_data_app.agent_stream import _document_annotations_suffix
+
+    suffix = _document_annotations_suffix(
+        [
+            {
+                "file_path": "outputs/示例文档.docx",
+                "doc_path": "/body/table[3]/tr[11]/tc[5]",
+                "quote": "第一行原文\n第二行：仍属于原文",
+                "comment": "这个来源是哪里",
+            }
+        ]
+    )
+
+    assert "选中原文：第一行原文 第二行：仍属于原文\n" in suffix
+    assert "选中原文：第一行原文\n第二行" not in suffix
+
+
+def test_completion_run_options_reads_document_annotations():
+    from apps.chat_data_app.agent.run.completion_options import parse_completion_run_options
+
+    options = parse_completion_run_options(
+        {
+            "annotations": [
+                {
+                    "file_path": "outputs/示例文档.docx",
+                    "doc_path": "/body/p[4]",
+                    "quote": "选中原文",
+                    "comment": "改成季度分析",
+                }
+            ],
+        }
+    )
+    assert options.annotations == [
+        {
+            "file_path": "outputs/示例文档.docx",
+            "doc_path": "/body/p[4]",
+            "quote": "选中原文",
+            "comment": "改成季度分析",
+        }
+    ]

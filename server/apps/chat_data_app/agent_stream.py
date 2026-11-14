@@ -48,7 +48,12 @@ from .agent.run.agent_inbox_service import AgentRunLeaseLostError, agent_inbox_s
 from .agent.run.agent_run_event_service import agent_run_event_service
 from .agent.run.agent_run_runtime import agent_run_runtime
 from .agent.run.chat_data_stream_request import ChatDataStreamRequest
-from .agent.run.completion_options import parse_completion_run_options, parse_file_selections, parse_quoted_snippets
+from .agent.run.completion_options import (
+    parse_completion_run_options,
+    parse_document_annotations,
+    parse_file_selections,
+    parse_quoted_snippets,
+)
 from .agent.run.conversation_event_service import conversation_event_service
 from .agent.run.conversation_runtime import (
     TurnLifecycleHooks,
@@ -57,6 +62,15 @@ from .agent.run.conversation_runtime import (
     stream_agent_turn,
 )
 from .agent.run.sse_heartbeat import stream_sse_with_heartbeat
+from .agent.run.user_message_suffixes import (
+    document_annotations_suffix as _document_annotations_suffix,
+)
+from .agent.run.user_message_suffixes import (
+    file_selection_mention_suffix as _file_selection_mention_suffix,
+)
+from .agent.run.user_message_suffixes import (
+    quote_snippets_suffix as _quote_snippets_suffix,
+)
 from .agent.workspace.runtime import is_system_result_workspace_path, resolve_workspace_path
 from .agent.workspace.uploaded_file_parser import get_image_size_limit
 from .agent.workspace.workspace_path_policy import USER_DATA_VIRTUAL_ROOT, WORKSPACE_PATH_POLICY
@@ -223,41 +237,13 @@ def _model_failure_user_message(exc: Exception) -> str:
     return "智能问数执行失败，请稍后重试。"
 
 
-def _file_selection_mention_suffix(file_selections: list[str]) -> str:
-    """用户在输入框 @ 引用工作区文件时，给 Human 消息追加模型可见的引用短句。
-
-    前端 @ 菜单数据源是会话工作区（uploads/outputs/workspace）文件树，chip 随
-    消息传 file_selections（相对路径列表）；引用的感知完全靠这行短句，模型从
-    对话即可看到本轮用户点名了哪些文件。未引用时不追加任何内容。
-    """
-    if not file_selections:
-        return ""
-    references = "、".join(f"{USER_DATA_VIRTUAL_ROOT}/{path}" for path in file_selections)
-    return f"\n\n[引用文件：{references}]"
-
-
-def _quote_snippets_suffix(quoted_snippets: list[dict[str, str]] | None) -> str:
-    """划选引用的模型可见后缀：片段原文按标记块逐一包住，追加在正文之后。
-
-    前端划选助手回复片段后随消息传 quoted_snippets（[{"text": ...}]），
-    语义等同 IM 引用回复——模型能看到被引用的原文与「继续问答」意图。
-    开始/结束标记成对出现，前端气泡展示时按同一标记剥离（引用原文以
-    additional_kwargs 的结构化字段渲染 chip，不在正文重复平铺）。
-    """
-    blocks = [str(item.get("text") or "").strip() for item in (quoted_snippets or [])]
-    blocks = [block for block in blocks if block]
-    if not blocks:
-        return ""
-    lines = "\n\n".join(f"[引用助手回复片段开始]\n{block}\n[引用助手回复片段结束]" for block in blocks)
-    return f"\n\n{lines}"
-
-
 def _build_user_message(
     content: str | list[str | dict[str, Any]],
     file_selections: list[str] | None = None,
     *,
     message_id: str | None = None,
     quoted_snippets: list[dict[str, str]] | None = None,
+    annotations: list[dict[str, Any]] | None = None,
     **extra_kwargs: Any,
 ) -> HumanMessage:
     """构造带服务端时间戳和前端选择留痕的用户消息。
@@ -270,8 +256,12 @@ def _build_user_message(
     """
     mention_suffix = _file_selection_mention_suffix(file_selections or [])
     quote_suffix = _quote_snippets_suffix(quoted_snippets)
+    annotation_suffix = _document_annotations_suffix(
+        annotations,
+        user_content=content if isinstance(content, str) else "",
+    )
     if isinstance(content, str):
-        content = f"{content}{mention_suffix}{quote_suffix}"
+        content = f"{content}{mention_suffix}{quote_suffix}{annotation_suffix}"
     reasoning_turn_id = message_id or str(uuid4())
     additional_kwargs: dict[str, Any] = {
         "timestamp": _get_timestamp(),
@@ -281,6 +271,8 @@ def _build_user_message(
         additional_kwargs["file_selections"] = list(file_selections)
     if quoted_snippets:
         additional_kwargs["quoted_snippets"] = [dict(item) for item in quoted_snippets]
+    if annotations:
+        additional_kwargs["annotations"] = [dict(item) for item in annotations]
     additional_kwargs.update({key: value for key, value in extra_kwargs.items() if value})
     return HumanMessage(id=reasoning_turn_id, content=content, additional_kwargs=additional_kwargs)
 
@@ -1087,6 +1079,7 @@ async def _generate_chat_data_stream(
     model_id = req.model_id
     file_selections = req.file_selections
     quoted_snippets = req.quoted_snippets
+    annotations = req.annotations
     enable_thinking = req.enable_thinking
     thinking_effort = req.thinking_effort
     skill_names = req.skill_names
@@ -1143,6 +1136,7 @@ async def _generate_chat_data_stream(
                 model_id=model_id,
                 file_selections=file_selections,
                 quoted_snippets=quoted_snippets,
+                annotations=annotations,
                 enable_thinking=enable_thinking,
                 thinking_effort=thinking_effort,
                 skill_names=normalized_skill_names,
@@ -1295,7 +1289,8 @@ async def _resolve_inbox_message_references(
     selections = kwargs.get("file_selections") or []
     file_ids = kwargs.get("file_ids") or []
     quoted_snippets = parse_quoted_snippets(kwargs.get("quoted_snippets"))
-    if not selections and not file_ids and not quoted_snippets:
+    annotations = parse_document_annotations(kwargs.get("annotations"))
+    if not selections and not file_ids and not quoted_snippets and not annotations:
         return message
     valid_selections = _validate_workspace_file_selections(selections, workspace_root) if selections else []
     file_attachments = (
@@ -1313,14 +1308,22 @@ async def _resolve_inbox_message_references(
     if quoted_snippets:
         # 片段为纯文本，无外部资源可校验；重解析去重截断后留痕，供事件表持久化
         new_kwargs["quoted_snippets"] = quoted_snippets
+    if annotations:
+        # 标注同样在入参边界收敛一次，排队消息与首条消息走同一份解析口径
+        new_kwargs["annotations"] = annotations
     _, max_image_size = await get_image_size_limit()
     vision_attachments = select_vision_attachments(file_attachments, max_image_size=max_image_size)
     if vision_attachments:
         new_kwargs["vision_attachments"] = vision_attachments
+    annotation_suffix = _document_annotations_suffix(
+        annotations,
+        user_content=message.content if isinstance(message.content, str) else "",
+    )
     new_content = (
         f"{message.content}"
         f"{_file_selection_mention_suffix(valid_selections)}"
         f"{_quote_snippets_suffix(quoted_snippets)}"
+        f"{annotation_suffix}"
         f"{build_file_attachment_text(file_attachments)}"
     )
     return message.model_copy(update={"content": new_content, "additional_kwargs": new_kwargs})
@@ -1412,6 +1415,7 @@ class TurnUserInput:
     vision_attachments: list[str]
     skill_names: list[str]
     quoted_snippets: list[dict[str, str]]
+    annotations: list[dict[str, Any]] | None = None
     adopted_messages: list[HumanMessage] | None = None
 
 
@@ -1459,6 +1463,7 @@ async def _resolve_agent_turn_inputs(
     vision_attachments = user_input.vision_attachments
     skill_names = user_input.skill_names
     quoted_snippets = user_input.quoted_snippets
+    annotations = user_input.annotations
     adopted_messages = user_input.adopted_messages
     resume_answer = resume.resume_answer
     turn_id = resume.turn_id
@@ -1486,6 +1491,7 @@ async def _resolve_agent_turn_inputs(
             message_id=turn_id,
             vision_attachments=vision_attachments,
             quoted_snippets=quoted_snippets,
+            annotations=annotations,
             **message_kwargs,
         )
     initial_state = _resolve_agent_initial_state(
@@ -1551,6 +1557,7 @@ async def _run_chat_data_agent_stream(
     model_id = req.model_id
     file_selections = req.file_selections
     quoted_snippets = parse_quoted_snippets(req.quoted_snippets)
+    annotations = parse_document_annotations(req.annotations)
     enable_thinking = req.enable_thinking
     thinking_effort = req.thinking_effort
     skill_names = req.skill_names
@@ -1677,6 +1684,7 @@ async def _run_chat_data_agent_stream(
                         vision_attachments=vision_attachments,
                         skill_names=skill_names or [],
                         quoted_snippets=quoted_snippets,
+                        annotations=annotations,
                         adopted_messages=adopted_messages,
                     ),
                     resume=TurnResumeContext(
@@ -1870,6 +1878,7 @@ async def sql_completion_handler(
         "model_id": run_options.model_id,
         "file_selections": run_options.file_selections,
         "quoted_snippets": run_options.quoted_snippets,
+        "annotations": run_options.annotations,
         "enable_thinking": run_options.enable_thinking,
         "thinking_effort": run_options.thinking_effort,
         "skill_names": run_options.skill_names,

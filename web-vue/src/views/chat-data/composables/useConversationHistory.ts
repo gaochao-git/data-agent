@@ -18,6 +18,10 @@ import type {
 } from '../types'
 import { extractSemanticParamsFromArgs, getQueryResultError, getRenderableQueryResultData } from '../utils/semanticTool'
 import { toGenerationStats } from '../utils/generationSpeed'
+import {
+  parseDocumentAnnotationBlocks,
+  stripUserMessageInternalSuffixes,
+} from '../utils/messageView'
 
 const parseHistoryTimestamp = (value: unknown): Date | null => {
   if (typeof value !== 'string' || !value.trim()) return null
@@ -128,6 +132,7 @@ interface HistoryMessagePayload {
   reasoning_content?: unknown
   file_selections?: unknown
   quoted_snippets?: unknown
+  annotations?: unknown
   tool_calls?: unknown
   tool_call_id?: unknown
   tool_name?: unknown
@@ -419,7 +424,12 @@ export const buildHistoryMessagesFromEvents = (historyEvents: unknown): Message[
       activeAssistant = null
       const fileSelections = normalizeFileSelections(messagePayload.file_selections)
       const quotedSnippets = normalizeQuotedSnippets(messagePayload.quoted_snippets)
-      const userContent = stripHistoryUserContent(normalizeUserMessageContent(messagePayload.content))
+      const rawContent = normalizeUserMessageContent(messagePayload.content)
+      const structuredAnnotations = normalizeDocumentAnnotations(messagePayload.annotations)
+      const documentAnnotations = structuredAnnotations.length > 0
+        ? structuredAnnotations
+        : parseDocumentAnnotationBlocks(rawContent)
+      const userContent = stripHistoryUserContent(rawContent)
       displayMessages.push({
         id: String(messagePayload.id || `user-history-${index}`),
         role: 'user',
@@ -428,6 +438,7 @@ export const buildHistoryMessagesFromEvents = (historyEvents: unknown): Message[
         timestamp: parseHistoryTimestamp(messagePayload.timestamp) || undefined,
         fileSelections: fileSelections.length > 0 ? fileSelections : undefined,
         quotedSnippets: quotedSnippets.length > 0 ? quotedSnippets : undefined,
+        documentAnnotations: documentAnnotations.length > 0 ? documentAnnotations : undefined,
       })
       continue
     }
@@ -580,13 +591,19 @@ export const buildHistoryMessages = (
       activeAssistant = null
       const fileSelections = normalizeFileSelections(rawMessage.file_selections)
       const quotedSnippets = normalizeQuotedSnippets(rawMessage.quoted_snippets)
+      const rawContent = String(rawMessage.content || '').trim()
+      const structuredAnnotations = normalizeDocumentAnnotations(rawMessage.annotations)
+      const documentAnnotations = structuredAnnotations.length > 0
+        ? structuredAnnotations
+        : parseDocumentAnnotationBlocks(rawContent)
       displayMessages.push({
         id: String(rawMessage.id || `user-history-${displayMessages.length}`),
         role: 'user',
-        content: stripHistoryUserContent(String(rawMessage.content || '').trim()),
+        content: stripHistoryUserContent(rawContent),
         timestamp: parseHistoryTimestamp(rawMessage.timestamp) || undefined,
         fileSelections: fileSelections.length > 0 ? fileSelections : undefined,
         quotedSnippets: quotedSnippets.length > 0 ? quotedSnippets : undefined,
+        documentAnnotations: documentAnnotations.length > 0 ? documentAnnotations : undefined,
       })
       continue
     }
@@ -668,32 +685,29 @@ const normalizeQuotedSnippets = (value: unknown): Array<{ id: string; text: stri
   return snippets.slice(0, 5)
 }
 
-// 历史用户消息正文里的服务端注入短句不重复展示，引用改由 chip 呈现：
-// 现行为 [引用文件：...]；历史存量还有 [本轮指定语义模型：...]（通道已废弃，仅剥文本）。
-// m 多行锚定：排队消息的正文顺序是 mention + quote 块 + attachment 占位行，
-// 剥掉 quote 块后 mention 短句后面仍跟 [attachment] 行，纯字符串 $ 锚定会失配漏剥
-const MENTION_SUFFIX_RES = [
-  /\s*\[引用文件：[^\]]*\]\s*$/gm,
-  /\s*\[本轮指定语义模型：[^\]]*\]\s*$/gm,
-]
-const stripMentionSuffix = (content: string): string =>
-  MENTION_SUFFIX_RES.reduce((text, regex) => text.replace(regex, ''), content).trimEnd()
+const normalizeDocumentAnnotations = (value: unknown): NonNullable<Message['documentAnnotations']> => {
+  if (!Array.isArray(value)) return []
+  const annotations: NonNullable<Message['documentAnnotations']> = []
+  for (const item of value) {
+    const raw = (item || {}) as Record<string, unknown>
+    const filePath = String(raw.file_path || '').trim()
+    const docPath = String(raw.doc_path || '').trim()
+    const comment = String(raw.comment || '').trim()
+    if (!filePath || !docPath) continue
+    annotations.push({
+      id: `doc-annotation-${annotations.length}`,
+      filePath,
+      docPath,
+      quote: String(raw.quote || '').trim(),
+      comment,
+    })
+  }
+  return annotations.slice(0, 5)
+}
 
-// 划选引用的模型可见标记块（后端追加）不在气泡重复平铺，引用原文由 chip 呈现；
-// 块内为多行原文，用成对标记非贪婪剥离，残余孤立标记一并清理
-const QUOTE_BLOCK_RES = [
-  /\s*\[引用助手回复片段开始\][\s\S]*?\[引用助手回复片段结束\]/g,
-  /^\s*\[引用助手回复片段(?:开始|结束)\]\s*$/gm,
-]
-const stripQuoteBlocks = (content: string): string =>
-  QUOTE_BLOCK_RES.reduce((text, regex) => text.replace(regex, '\n'), content)
-    .replace(/\n{3,}/g, '\n\n')
-    .trim()
-
-// 历史用户消息展示正文：先剥划选引用标记块（位于 mention 短句之后，必须先剥，
-// 否则 mention 后缀的行尾锚定失配），再剥引用短句
+// 历史加载与气泡渲染共用同一套注入内容剥离口径；保留导出供测试与旧调用方使用。
 export const stripHistoryUserContent = (content: string): string =>
-  stripMentionSuffix(stripQuoteBlocks(content))
+  stripUserMessageInternalSuffixes(content)
 
 interface UseConversationHistoryOptions {
   conversationId: Ref<string | null | undefined>

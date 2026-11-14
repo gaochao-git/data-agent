@@ -12,8 +12,10 @@ import {
   getEffectiveAttachments,
   getUserMentionedFiles,
   getUserQuotedSnippets,
+  getUserDocumentAnnotations,
   isLongUserMessage,
   stripAttachmentPlaceholders,
+  stripUserMessageInternalSuffixes,
   USER_MESSAGE_SCROLL_MAX_HEIGHT,
 } from '../../../utils/messageView'
 import { fileIconNameByExtension } from '../../../utils/fileTypeIcon'
@@ -28,9 +30,12 @@ const emit = defineEmits<{
 }>()
 
 const quotedSnippets = computed(() => getUserQuotedSnippets(props.message))
+const documentAnnotations = computed(() => getUserDocumentAnnotations(props.message))
 const mentionedFiles = computed(() => getUserMentionedFiles(props.message))
 const attachments = computed(() => getEffectiveAttachments(props.message))
-const displayContent = computed(() => stripAttachmentPlaceholders(props.message.content))
+const displayContent = computed(() => (
+  stripAttachmentPlaceholders(stripUserMessageInternalSuffixes(props.message.content))
+))
 const longMessage = computed(() => isLongUserMessage(displayContent.value))
 
 const handleAttachmentClick = (attachment: MessageAttachment) => {
@@ -53,10 +58,36 @@ const getFileIconClass = (fileType?: string): string => fileIconNameByExtension(
 
 <template>
   <div
+    v-if="documentAnnotations.length"
+    class="flex w-full flex-row-reverse flex-wrap items-start gap-1.5"
+    title="本轮引用的文档选中内容"
+  >
+      <ElPopover
+        v-for="annotation in documentAnnotations"
+        :key="annotation.id || `${annotation.filePath}-${annotation.docPath}-${annotation.comment}`"
+        placement="top-end"
+        :width="420"
+        trigger="hover"
+      >
+        <template #reference>
+          <span class="flex max-w-[280px] items-center gap-1.5 rounded-full border border-amber-200/70 bg-amber-50/80 px-2.5 py-1 text-xs text-amber-800">
+            <i class="fa-solid fa-highlighter text-[11px] shrink-0 text-amber-500"></i>
+            <span class="truncate">
+              {{ annotation.filePath.split('/').pop() }}
+            </span>
+          </span>
+        </template>
+        <div class="space-y-1.5 text-xs leading-relaxed text-slate-700">
+          <div class="text-[10px] text-slate-400">{{ annotation.filePath }} · {{ annotation.docPath }}</div>
+          <div v-if="annotation.quote" class="max-h-[120px] overflow-y-auto rounded bg-slate-50 px-2 py-1 text-slate-500">{{ annotation.quote }}</div>
+        </div>
+      </ElPopover>
+  </div>
+  <div
     v-if="quotedSnippets.length"
-      class="flex w-full flex-row-reverse flex-wrap items-start gap-1.5"
-      title="本轮引用的助手回复片段"
-    >
+    class="flex w-full flex-row-reverse flex-wrap items-start gap-1.5"
+    title="本轮引用的助手回复片段"
+  >
       <ElPopover
         v-for="snippet in quotedSnippets"
         :key="snippet.id || snippet.text"
@@ -72,7 +103,7 @@ const getFileIconClass = (fileType?: string): string => fileIconNameByExtension(
         </template>
         <div class="max-h-[240px] overflow-y-auto whitespace-pre-wrap text-xs leading-relaxed text-slate-700">{{ snippet.text }}</div>
       </ElPopover>
-    </div>
+  </div>
     <div
       v-if="mentionedFiles.length"
       class="flex w-full flex-row-reverse flex-wrap gap-1.5"
