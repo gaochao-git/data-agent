@@ -87,6 +87,7 @@ const props = withDefaults(defineProps<Props>(), {
 const emit = defineEmits<{
   firstMessageStarted: [conversationId: string]
   runStatusChanged: [conversationId: string, status: 'pending' | 'active' | 'cancelling' | 'interrupting' | 'waiting_user' | null]
+  conversationTitleChanged: [conversationId: string, title: string]
   'update:selectedMemberDatasourceIds': [value: string[]]
   'update:selectedModelId': [value: string]
   dashboardCreated: [dashboard: Dashboard]
@@ -2247,6 +2248,11 @@ const submitAnalysisQuery = async (
             ? messages.value.find(item => item.id === activeAssistantMessageId.value)
             : null
           if (active?.role === 'assistant') active.isStreaming = false
+        },
+        onConversationTitleUpdated: (payload) => {
+          const title = String(payload.title || '').trim()
+          const conversationId = String(payload.conversation_id || resolvedConversationId).trim()
+          if (title && conversationId) emit('conversationTitleChanged', conversationId, title)
         },
         onRunStarted: (runId) => {
           startedRunId = runId

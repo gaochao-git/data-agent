@@ -18,7 +18,6 @@ from typing import TYPE_CHECKING, Any, cast
 from fastapi import Request
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langgraph.types import Command
-
 from utils.logger import get_logger
 
 from .agent import AgentRuntimeOptions
@@ -786,6 +785,7 @@ class _AgentRunStreamCallbacks:
     stream_event_id_provider: Callable[[], str | None] | None
     log_phase: Callable[[str], Any]
     steering_tracker: SteeringMessageTracker
+    model_id: str | None = None
     workspace_root: str = ""
     adopted_messages: list[HumanMessage] | None = None
     user_message: HumanMessage | None = None
@@ -910,6 +910,15 @@ async def _persist_agent_user_message(callbacks: _AgentRunStreamCallbacks) -> No
         user_id=callbacks.user_id,
         operator_name=callbacks.username or callbacks.user_id,
         message=callbacks.user_message,
+    )
+    # 标题是会话元数据：用户消息落库后再异步生成，不阻塞主回答。
+    # 每轮都调度，服务层只会在标题仍是占位符时真正调用模型。
+    conversation.schedule_title_generation(
+        conversation_id=callbacks.thread_id,
+        user_id=callbacks.user_id,
+        model_id=callbacks.model_id,
+        run_id=callbacks.run_id,
+        owner_token=callbacks.owner_token,
     )
     callbacks.log_phase("persist_user_message")
 

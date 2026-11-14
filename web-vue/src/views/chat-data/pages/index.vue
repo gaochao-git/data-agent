@@ -17,7 +17,7 @@ import '../styles/scrollbars.css'
 // 「工作中」九宫格像素动画（流式状态行指示器，定义见文件头注释）
 import '../styles/loading-pixel.css'
 import useUserStore from '@/store/modules/user'
-import { getDatasources, createConversation, generateConversationTitle, getConversationContext, getSemanticConfigs, getMySemanticConfigs, createSemanticConfig, getDatasourceSchema } from '../api'
+import { getDatasources, createConversation, getConversationContext, getSemanticConfigs, getMySemanticConfigs, createSemanticConfig, getDatasourceSchema } from '../api'
 import { listDashboards, type Dashboard } from '../api/dashboard'
 import type { BuilderDragFieldData, DataSource, ViewMode, ChatDataOptions, SemanticConfigItem, SemanticYamlFile, ExecutionTargetOption, TableInfo } from '../types'
 import { normalizeTableInfoList, resolveDatasourceType } from '../utils/datasourceSchema'
@@ -715,7 +715,6 @@ const selectConversation = async (id: string): Promise<boolean> => {
   currentConversationTitle.value = conv?.title || '会话'
   currentConversationDatasourceId.value = conversationDatasourceId || null
   markHistoryConversationRead(id)
-  if (CONVERSATION_TITLE_PLACEHOLDERS.has((conv?.title || '').trim())) void retryConversationTitleIfNeeded(id)
   conversationKey.value++ // 强制重新渲染以加载历史
   return true
 }
@@ -772,34 +771,14 @@ const handleUpdateConversationTitle = (conversationId: string, title: string) =>
   }
 }
 
-// 会话标题占位符：与后端 generate_title 的占位符集合保持一致。
-// 命名只成功写库一次；失败时后端不落降级标题（保持占位符），
-// 由下一轮 Run 终态再次触发，直到成功自停。
+// 后端异步生成标题后通过 Run SSE 推送；列表刷新是断线/迟到结果的兜底。
 const CONVERSATION_TITLE_PLACEHOLDERS = new Set(['', '新会话', '未命名会话'])
-const titleRetryInFlight = new Set<string>()
 
-const retryConversationTitleIfNeeded = async (conversationId: string) => {
-  if (titleRetryInFlight.has(conversationId)) return
-  const currentTitle = currentConversationId.value === conversationId
-    ? currentConversationTitle.value
-    : conversations.value.find(item => item.id === conversationId)?.title || ''
-  if (!CONVERSATION_TITLE_PLACEHOLDERS.has(currentTitle.trim())) return
-  titleRetryInFlight.add(conversationId)
-  try {
-    const res = await generateConversationTitle(conversationId, selectedConversationModelId.value || undefined)
-    if (res?.status === 'success' && res.data?.title) {
-      if (currentConversationId.value === conversationId) {
-        currentConversationTitle.value = res.data.title
-      }
-      updateHistoryConversationTitle(conversationId, res.data.title)
-      invalidateInactiveView()
-    }
-  } catch (error) {
-    // 失败保持占位符，等下一轮 Run 终态再试
-    console.error('重试生成会话标题失败:', error)
-  } finally {
-    titleRetryInFlight.delete(conversationId)
-  }
+const syncCurrentConversationTitleFromList = () => {
+  const conversationId = currentConversationId.value
+  if (!conversationId) return
+  const title = conversations.value.find(item => item.id === conversationId)?.title?.trim() || ''
+  if (title && !CONVERSATION_TITLE_PLACEHOLDERS.has(title)) currentConversationTitle.value = title
 }
 
 const handleConversationRunStatusChanged = (
@@ -811,9 +790,7 @@ const handleConversationRunStatusChanged = (
     // 当前会话用户正在查看终态，直接记本地已读；后台会话的绿点由列表轮询补上。
     if (conversationId === currentConversationId.value) markHistoryConversationRead(conversationId)
     // 终态先更新当前缓存，随后以服务端列表覆盖，避免停止/完成后历史项仍显示旧的 cancelling 状态。
-    void refreshConversationsPreservingPages()
-    // 标题仍是占位符的会话借本轮终态重试命名（直到成功自停）
-    void retryConversationTitleIfNeeded(conversationId)
+    void refreshConversationsPreservingPages().then(syncCurrentConversationTitleFromList)
   }
 }
 
@@ -839,35 +816,12 @@ const stopRunStatusPolling = () => {
   runStatusPollIntervalMs = 0
 }
 
-const activeConversationIds = (): Set<string> => new Set(
-  conversations.value
-    .filter(item => item.run_status && ACTIVE_CONVERSATION_RUN_STATUSES.has(item.run_status))
-    .map(item => item.id),
-)
-
-const TITLE_RETRY_COOLDOWN_MS = 5 * 60 * 1000
-const titleRetryCooldown = new Map<string, number>()
-
 const pollRunStatuses = async () => {
   if (runStatusPollInFlight || document.hidden) return
   runStatusPollInFlight = true
-  const activeBefore = activeConversationIds()
   try {
     await refreshConversationsPreservingPages()
-    const activeAfter = activeConversationIds()
-    activeBefore.forEach(conversationId => {
-      if (!activeAfter.has(conversationId)) void retryConversationTitleIfNeeded(conversationId)
-    })
-    // 别的窗口启动并完成的任务可能从未在本页出现过 active 状态；
-    // 占位标题按 5 分钟冷却补命名，既不漏掉首次失败，也不让每轮轮询反复调用 LLM。
-    const now = Date.now()
-    conversations.value
-      .filter(item => item.has_unread_completion && CONVERSATION_TITLE_PLACEHOLDERS.has(item.title.trim()))
-      .filter(item => now - (titleRetryCooldown.get(item.id) || 0) > TITLE_RETRY_COOLDOWN_MS)
-      .forEach(item => {
-        titleRetryCooldown.set(item.id, now)
-        void retryConversationTitleIfNeeded(item.id)
-      })
+    syncCurrentConversationTitleFromList()
   } finally {
     runStatusPollInFlight = false
   }
@@ -888,35 +842,28 @@ watch(hasActiveConversationRun, (active) => {
 
 onBeforeUnmount(stopRunStatusPolling)
 
-// 首条消息对应的 SSE 建立后立即生成标题并完成分组迁移，不等待助手输出结束。
-const handleFirstMessageStarted = async (convId: string) => {
-  const datasourcePromise = loadConversationDatasourceId(convId)
-  const titlePromise = generateConversationTitle(convId, selectedConversationModelId.value || undefined)
-    .catch(error => {
-      console.error('生成标题失败:', error)
-      return null
-    })
-  const [boundDatasourceId, res] = await Promise.all([datasourcePromise, titlePromise])
-
-  if (currentConversationId.value === convId && boundDatasourceId) {
-    currentConversationDatasourceId.value = boundDatasourceId
-  }
-  let generatedTitle = currentConversationTitle.value
-  if (res?.status === 'success' && res.data?.title) {
-    generatedTitle = res.data.title
-    if (currentConversationId.value === convId) currentConversationTitle.value = generatedTitle
-    updateHistoryConversationTitle(convId, generatedTitle)
-  }
-
+// 首条消息的 SSE 建立后先落占位会话；标题由服务端异步生成，不阻塞侧边栏出现。
+const handleFirstMessageStarted = (convId: string) => {
+  const fallbackTitle = currentConversationTitle.value || '新会话'
   upsertHistoryConversation({
     id: convId,
-    title: generatedTitle,
-    ...(boundDatasourceId ? { datasource_id: boundDatasourceId } : {}),
+    title: fallbackTitle,
     updated_at: new Date().toISOString(),
   })
-  // 刷新会话列表
   invalidateInactiveView()
-  void refreshConversationsPreservingPages()
+  void loadConversationDatasourceId(convId).then(boundDatasourceId => {
+    if (currentConversationId.value === convId && boundDatasourceId) {
+      currentConversationDatasourceId.value = boundDatasourceId
+    }
+    if (boundDatasourceId) {
+      upsertHistoryConversation({
+        id: convId,
+        datasource_id: boundDatasourceId,
+        updated_at: new Date().toISOString(),
+      })
+    }
+    void refreshConversationsPreservingPages().then(syncCurrentConversationTitleFromList)
+  })
 }
 
 // 数据源变更
@@ -1831,6 +1778,7 @@ onMounted(async () => {
                   class="h-full"
                   @first-message-started="handleFirstMessageStarted"
                   @run-status-changed="handleConversationRunStatusChanged"
+                  @conversation-title-changed="handleUpdateConversationTitle"
                   @console-visibility-changed="conversationConsoleVisible = $event"
                   @update:selected-member-datasource-ids="conversationMemberDatasourceIds = $event"
                   @dashboard-created="handleDashboardCreatedFromConversation"

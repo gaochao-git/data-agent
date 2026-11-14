@@ -4,12 +4,11 @@ from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-
 from apps.chat_data_app.daos.conversation_dao import ConversationDao
 from apps.chat_data_app.daos.conversation_event_dao import ConversationEventDao
 from apps.chat_data_app.services import conversation_service as conversation_module
+from langchain_core.messages import AIMessage, HumanMessage
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from utils.models import Base, UserThread
 
 
@@ -242,6 +241,58 @@ async def test_conversation_sync_get_detail_and_generate_title(conversation_db, 
     monkeypatch.setattr(conversation_module, "update_title", fake_update_title)
     assert await conversation_module.generate_title("conv_sync", "u1") is None
     assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_conversation_title_cas_does_not_overwrite_user_rename(conversation_db):
+    await seed_conversation("conv_cas")
+
+    assert (
+        await conversation_module.conversation_dao.update_title_if_placeholder(
+            conversation_id="conv_cas",
+            title="自动标题",
+            user_id="u1",
+            placeholders=conversation_module.TITLE_PLACEHOLDERS,
+        )
+        is True
+    )
+    await conversation_module.update_title("conv_cas", "用户标题", user_id="u1")
+    assert (
+        await conversation_module.conversation_dao.update_title_if_placeholder(
+            conversation_id="conv_cas",
+            title="迟到的自动标题",
+            user_id="u1",
+            placeholders=conversation_module.TITLE_PLACEHOLDERS,
+        )
+        is False
+    )
+    thread = await conversation_module.conversation_dao.get_thread("conv_cas", "u1")
+    assert thread.thread_title == "用户标题"
+
+
+@pytest.mark.asyncio
+async def test_schedule_title_generation_runs_in_background(conversation_db, monkeypatch):
+    await seed_conversation("conv_background_title")
+    seen: list[str] = []
+
+    async def fake_generate_title(conversation_id, user_id=None, model_id=None):
+        assert conversation_id == "conv_background_title"
+        return "销售额分析"
+
+    async def on_updated(title: str):
+        seen.append(title)
+
+    monkeypatch.setattr(conversation_module, "generate_title", fake_generate_title)
+    conversation_module.schedule_title_generation(
+        conversation_id="conv_background_title",
+        user_id="u1",
+        on_updated=on_updated,
+    )
+    task = conversation_module._TITLE_TASKS["conv_background_title"]
+    await asyncio.wait_for(task, timeout=1)
+
+    assert seen == ["销售额分析"]
+    assert "conv_background_title" not in conversation_module._TITLE_TASKS
 
 
 @pytest.mark.asyncio

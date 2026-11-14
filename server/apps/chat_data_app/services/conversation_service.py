@@ -5,22 +5,25 @@
 使用 SQLAlchemy 统一管理业务数据库操作
 """
 
+import asyncio
 import base64
 import binascii
 import builtins
 import json
 import re
 import uuid
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import Any
 
-from langchain_core.language_models import BaseChatModel
-from langchain_core.prompts import ChatPromptTemplate
-
 from apps.chat_data_app.agent.prompts.conversation_title import TITLE_GENERATION_PROMPT
+from apps.chat_data_app.agent.run.agent_run_event_service import agent_run_event_service
 from apps.chat_data_app.agent.run.conversation_event_service import conversation_event_service
 from apps.chat_data_app.daos.conversation_dao import ConversationDao
 from apps.chat_data_app.services.llm_config import get_chat_data_llm
+from apps.chat_data_app.sse_protocol import SSE_EVENT_CONVERSATION_TITLE_UPDATED, format_sse
+from langchain_core.language_models import BaseChatModel
+from langchain_core.prompts import ChatPromptTemplate
 from utils.alarm import emit_llm_connection_alarm_if_needed
 from utils.database import get_session
 from utils.logger import get_logger
@@ -34,6 +37,10 @@ conversation_dao = ConversationDao(session_context=lambda: get_session())
 PINNED_GROUP_KEY = "system:pinned"
 UNCLASSIFIED_GROUP_KEY = "system:unclassified"
 DATASOURCE_GROUP_PREFIX = "datasource:"
+TITLE_PLACEHOLDERS = ("", "新会话", "未命名会话")
+TITLE_GENERATION_TIMEOUT_SECONDS = 45.0
+TITLE_GENERATION_RETRY_DELAY_SECONDS = 1.0
+_TITLE_TASKS: dict[str, asyncio.Task[None]] = {}
 
 
 # ============ 内部函数 ============
@@ -51,6 +58,10 @@ def _get_title_llm(model_id: str | None = None) -> BaseChatModel:
 def _llm_model_id(llm: Any) -> str:
     """告警用：尽力从 LLM 实例解析模型标识，与主链路告警的 model_id 字段对齐。"""
     return str(getattr(llm, "model_name", None) or getattr(llm, "model", None) or "unknown")
+
+
+def _is_title_placeholder(title: str | None) -> bool:
+    return title is None or str(title).strip() in TITLE_PLACEHOLDERS
 
 
 def _format_thread(
@@ -481,7 +492,11 @@ async def update_title(conversation_id: str, title: str, user_id: str | None = N
     return True
 
 
-async def generate_title(conversation_id: str, user_id: str | None = None, model_id: str | None = None) -> str | None:
+async def generate_title(
+    conversation_id: str,
+    user_id: str | None = None,
+    model_id: str | None = None,
+) -> str | None:
     """根据事件表中的第一条用户消息生成会话标题。
 
     标题仍是占位符（""/新会话/未命名会话）时才生成，已命名直接返回；
@@ -492,7 +507,7 @@ async def generate_title(conversation_id: str, user_id: str | None = None, model
         return None
 
     existing_title = str(thread.thread_title or "").strip()
-    if existing_title not in {"", "新会话", "未命名会话"}:
+    if not _is_title_placeholder(existing_title):
         return existing_title
 
     first_message = await conversation_event_service.get_first_user_message(
@@ -525,7 +540,7 @@ async def _generate_and_update_title(
         if not title:
             # LLM 调用成功但产物不可用（思考挤占/泄漏等）：与连接失败同策略——
             # 不写降级标题（原始 query 会被原样占用标题位且永不重试），保持
-            # 占位符，下一轮 Run 终态时前端会再次触发命名；区别是不发连接告警。
+            # 占位符，下一轮 Run 落库用户消息后会再次触发命名；区别是不发连接告警。
             logger.warning(f"LLM标题产物不可用，保持占位符待重试: {conversation_id}")
             return ""
     except Exception as e:
@@ -538,14 +553,131 @@ async def _generate_and_update_title(
             },
         )
         logger.warning(f"LLM生成标题失败: {e}")
-        # 命名失败不写降级标题：保持「未命名会话」占位符状态，下一轮 Run 终态时
-        # 前端会再次触发命名，直到成功自停。写降级标题会占用标题位，永久放弃重试。
+        # 命名失败不写降级标题：保持「未命名会话」占位符状态，下一轮 Run 落库
+        # 用户消息后会再次触发命名，直到成功自停。写降级标题会占用标题位，永久放弃重试。
         raise
 
-    # 更新到数据库
-    await update_title(conversation_id, title, user_id)
+    # 生成结果只能占用占位符；用户在这期间手动改名时，迟到的结果必须丢弃。
+    updated = await conversation_dao.update_title_if_placeholder(
+        conversation_id=conversation_id,
+        title=title,
+        user_id=user_id,
+        placeholders=TITLE_PLACEHOLDERS,
+    )
+    if not updated:
+        logger.info("会话标题已被用户修改，丢弃自动生成结果: %s", conversation_id)
+        return ""
 
     return title
+
+
+def _cleanup_title_task(conversation_id: str, task: asyncio.Task[None]) -> None:
+    if _TITLE_TASKS.get(conversation_id) is task:
+        _TITLE_TASKS.pop(conversation_id, None)
+
+
+async def _publish_title_updated(
+    *,
+    conversation_id: str,
+    user_id: str,
+    run_id: str | None,
+    owner_token: str | None,
+    title: str,
+) -> None:
+    """把标题结果追加到当前 Run 的 SSE；Run 已收口时由列表刷新兜底。"""
+    if not run_id or not owner_token:
+        return
+    payload = format_sse(
+        SSE_EVENT_CONVERSATION_TITLE_UPDATED,
+        {"conversation_id": conversation_id, "title": title},
+    )
+    try:
+        await agent_run_event_service.append(
+            run_id=run_id,
+            conversation_id=conversation_id,
+            user_id=user_id,
+            event_id=f"{run_id}:title:{uuid.uuid4().hex}",
+            payload=payload,
+            owner_token=owner_token,
+        )
+    except Exception:
+        logger.info("标题事件推送失败，等待会话列表刷新兜底: %s", conversation_id, exc_info=True)
+
+
+async def _generate_title_in_background(
+    *,
+    conversation_id: str,
+    user_id: str,
+    model_id: str | None,
+    run_id: str | None,
+    owner_token: str | None,
+    on_updated: Callable[[str], Awaitable[None]] | None,
+) -> None:
+    thread = await conversation_dao.get_thread(conversation_id, user_id)
+    if thread is None or not _is_title_placeholder(thread.thread_title):
+        return
+
+    title = ""
+    for attempt in range(2):
+        try:
+            title = (
+                await asyncio.wait_for(
+                    generate_title(conversation_id, user_id, model_id),
+                    timeout=TITLE_GENERATION_TIMEOUT_SECONDS,
+                )
+                or ""
+            )
+        except TimeoutError:
+            logger.warning("后台生成标题超时: conversation_id=%s attempt=%s", conversation_id, attempt + 1)
+        except Exception as exc:
+            logger.warning(
+                "后台生成标题失败: conversation_id=%s attempt=%s error=%s", conversation_id, attempt + 1, exc
+            )
+        if title:
+            break
+        if attempt == 0:
+            await asyncio.sleep(TITLE_GENERATION_RETRY_DELAY_SECONDS)
+
+    if not title:
+        logger.warning("后台标题生成未完成，保留占位符等待下一轮 Run 重试: %s", conversation_id)
+        return
+
+    await _publish_title_updated(
+        conversation_id=conversation_id,
+        user_id=user_id,
+        run_id=run_id,
+        owner_token=owner_token,
+        title=title,
+    )
+    if on_updated is not None:
+        await on_updated(title)
+
+
+def schedule_title_generation(
+    *,
+    conversation_id: str,
+    user_id: str,
+    model_id: str | None = None,
+    run_id: str | None = None,
+    owner_token: str | None = None,
+    on_updated: Callable[[str], Awaitable[None]] | None = None,
+) -> None:
+    """在后台生成标题；同一会话已有任务时直接复用，不阻塞主回答。"""
+    existing = _TITLE_TASKS.get(conversation_id)
+    if existing is not None and not existing.done():
+        return
+    task = asyncio.create_task(
+        _generate_title_in_background(
+            conversation_id=conversation_id,
+            user_id=user_id,
+            model_id=model_id,
+            run_id=run_id,
+            owner_token=owner_token,
+            on_updated=on_updated,
+        )
+    )
+    _TITLE_TASKS[conversation_id] = task
+    task.add_done_callback(lambda done: _cleanup_title_task(conversation_id, done))
 
 
 async def toggle_favorite(conversation_id: str, user_id: str | None = None) -> bool | None:

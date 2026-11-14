@@ -139,6 +139,7 @@ export function useSqlGenerator() {
       onToolLifecycle?: (payload: ToolLifecycleEventData) => void
       onInboxAdmitted?: (messageIds: string[]) => void
       onQuestionRequested?: (question: PendingUserQuestion) => void
+      onConversationTitleUpdated?: (payload: { conversation_id?: string; title: string }) => void
       onRunStarted?: (runId: string) => void
       responseFactory?: (signal: AbortSignal) => Promise<Response>
       onRunEvent?: (eventId: string) => void
@@ -174,6 +175,7 @@ export function useSqlGenerator() {
       onToolLifecycle,
       onInboxAdmitted,
       onQuestionRequested,
+      onConversationTitleUpdated,
       onRunStarted,
       responseFactory,
       onRunEvent,
@@ -406,6 +408,21 @@ export function useSqlGenerator() {
               }
             } catch (err) {
               console.error('解析 question_requested 数据失败:', err, dataStr)
+            }
+            continue
+          }
+
+          if (event === 'conversation_title_updated') {
+            try {
+              const data = JSON.parse(dataStr)
+              if (data && typeof data.title === 'string') {
+                onConversationTitleUpdated?.({
+                  conversation_id: typeof data.conversation_id === 'string' ? data.conversation_id : undefined,
+                  title: data.title,
+                })
+              }
+            } catch (err) {
+              console.error('解析 conversation_title_updated 数据失败:', err, dataStr)
             }
             continue
           }

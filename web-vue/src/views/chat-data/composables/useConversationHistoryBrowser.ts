@@ -28,6 +28,16 @@ const sortConversations = (
   return keyOf(b).localeCompare(keyOf(a))
 })
 
+const TITLE_PLACEHOLDERS = new Set(['', '新会话', '未命名会话'])
+
+const preservePlaceholderTitle = (incoming: ConversationItem, previousById: Map<string, ConversationItem>) => {
+  const previous = previousById.get(incoming.id)
+  if (!previous || !TITLE_PLACEHOLDERS.has(incoming.title.trim())) {
+    return incoming
+  }
+  return { ...incoming, title: previous.title }
+}
+
 const normalizeConversation = (raw: unknown, fallbackAgentId: string): ConversationItem => {
   const conversation = raw as Record<string, unknown>
   return {
@@ -56,7 +66,7 @@ const mergeConversations = (
   sortBy: ConversationSortBy = 'updated',
 ) => {
   const merged = new Map(current.map(item => [item.id, item]))
-  incoming.forEach(item => merged.set(item.id, item))
+  incoming.forEach(item => merged.set(item.id, preservePlaceholderTitle(item, merged)))
   return sortConversations([...merged.values()], sortBy)
 }
 
@@ -177,7 +187,8 @@ export const useConversationHistoryBrowser = (options: {
       const payload = response.data as ConversationListPayload
       const rawIncoming = normalizeConversations(payload.conversations || [], options.agentId)
       ensureUnreadBaseline()
-      const incoming = decorateUnread(rawIncoming)
+      const previousById = new Map(flatConversations.value.map(item => [item.id, item]))
+      const incoming = decorateUnread(rawIncoming.map(item => preservePlaceholderTitle(item, previousById)))
       if (page === 1) {
         // 强制刷新时保留用户已翻出来的页，避免定时轮询把列表弹回首屏。
         const keepPaging = preservePaging && flatPage.value > 1
@@ -223,8 +234,9 @@ export const useConversationHistoryBrowser = (options: {
       ensureUnreadBaseline()
       const previousGroups = new Map(groupPages.value.map(group => [group.key, group]))
       groupPages.value = nextGroupPages.map(group => {
-        const conversations = decorateUnread(group.conversations)
         const previous = previousGroups.get(group.key)
+        const previousById = new Map((previous?.conversations || []).map(item => [item.id, item]))
+        const conversations = decorateUnread(group.conversations.map(item => preservePlaceholderTitle(item, previousById)))
         if (!preservePaging || !previous || previous.page <= 1) {
           return { ...group, conversations }
         }

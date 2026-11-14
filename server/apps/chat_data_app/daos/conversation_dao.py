@@ -8,7 +8,6 @@ from typing import Any, cast
 
 from sqlalchemy import CursorResult, and_, func, or_, select
 from sqlalchemy import update as sa_update
-
 from utils.database import get_session as default_get_session
 from utils.models import ChatDataAgentInbox, UserThread
 
@@ -270,6 +269,27 @@ class ConversationDao:
                 .values(thread_title=title, update_time=datetime.now(), update_by=user_id or "")
             )
             return True
+
+    async def update_title_if_placeholder(
+        self,
+        *,
+        conversation_id: str,
+        title: str,
+        user_id: str | None,
+        placeholders: tuple[str, ...],
+    ) -> bool:
+        """仅在标题仍为占位符时更新，避免迟到的自动标题覆盖用户改名。"""
+        async with self._session_context() as session:
+            update_conditions = [
+                *self._thread_conditions(conversation_id, user_id),
+                or_(UserThread.thread_title.is_(None), UserThread.thread_title.in_(placeholders)),
+            ]
+            result = await session.execute(
+                sa_update(UserThread)
+                .where(*update_conditions)
+                .values(thread_title=title, update_time=datetime.now(), update_by=user_id or "")
+            )
+            return bool(result.rowcount)
 
     async def toggle_favorite(self, *, conversation_id: str, user_id: str | None) -> bool | None:
         async with self._session_context() as session:

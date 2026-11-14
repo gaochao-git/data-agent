@@ -21,7 +21,6 @@ from langchain_core.messages import (
     ToolMessage,
     ToolMessageChunk,
 )
-
 from utils.alarm import emit_llm_connection_alarm_if_needed, emit_llm_first_token_timeout_alarm
 from utils.logger import get_logger
 from utils.tool_call_markup import sanitize_message_payload
@@ -1722,6 +1721,7 @@ async def _run_chat_data_agent_stream(
                 stream_event_id_provider=stream_event_id_provider,
                 log_phase=log_phase,
                 steering_tracker=steering_tracker,
+                model_id=model_id,
                 workspace_root=workspace_paths["root"],
                 adopted_messages=adopted_messages,
                 user_message=user_message,

@@ -7,6 +7,7 @@ import sys
 from types import SimpleNamespace
 
 import pytest
+from langchain_core.messages import HumanMessage
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 
@@ -94,6 +95,48 @@ async def test_flush_agent_model_snapshots_without_writer_is_noop():
 async def test_persist_agent_user_message_without_message_is_noop():
     callbacks = SimpleNamespace(user_message=None)
     await agent_run_support._persist_agent_user_message(callbacks)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_persist_agent_user_message_schedules_title_after_persistence(monkeypatch):
+    calls: list[tuple] = []
+    phases: list[str] = []
+
+    async def fake_persist(**kwargs):
+        calls.append(("persist", kwargs["conversation_id"]))
+
+    def fake_schedule(**kwargs):
+        calls.append(("title", kwargs))
+
+    monkeypatch.setattr(agent_run_support.conversation_event_service, "persist_user_message", fake_persist)
+    monkeypatch.setattr(agent_run_support.conversation, "schedule_title_generation", fake_schedule)
+    callbacks = SimpleNamespace(
+        user_message=HumanMessage(content="分析销售额", id="turn-1"),
+        thread_id="conv-1",
+        user_id="user-1",
+        username="用户一",
+        run_id="run-1",
+        owner_token="owner-1",
+        model_id="model-1",
+        log_phase=phases.append,
+    )
+
+    await agent_run_support._persist_agent_user_message(callbacks)  # type: ignore[arg-type]
+
+    assert calls == [
+        ("persist", "conv-1"),
+        (
+            "title",
+            {
+                "conversation_id": "conv-1",
+                "user_id": "user-1",
+                "model_id": "model-1",
+                "run_id": "run-1",
+                "owner_token": "owner-1",
+            },
+        ),
+    ]
+    assert phases == ["persist_user_message"]
 
 
 @pytest.mark.asyncio

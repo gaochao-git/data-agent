@@ -270,6 +270,47 @@ describe('useConversationHistoryBrowser', () => {
     expect(history.groupedConversations.value[0]?.items[0]?.id).toBe('a-2')
   })
 
+  it('keeps the local placeholder title when a refresh returns the server placeholder', async () => {
+    apiMocks.getConversations
+      .mockResolvedValueOnce({
+        status: 'success',
+        data: {
+          groups: [{
+            key: 'datasource:ds_a',
+            datasource_id: 'ds_a',
+            conversations: [{ ...conversation('new-1', 'ds_a'), title: '新会话' }],
+            page: 1,
+            page_size: 20,
+            has_more: false,
+          }],
+        },
+      })
+      .mockResolvedValueOnce({
+        status: 'success',
+        data: {
+          groups: [{
+            key: 'datasource:ds_a',
+            datasource_id: 'ds_a',
+            conversations: [{ ...conversation('new-1', 'ds_a'), title: '未命名会话' }],
+            page: 1,
+            page_size: 20,
+            has_more: false,
+          }],
+        },
+      })
+
+    const history = useConversationHistoryBrowser({
+      agentId: 'chat_data',
+      pageSize: 20,
+      viewMode: ref('grouped'),
+      datasources: ref([{ id: 'ds_a', group_name: '数据源 A' }] as any),
+    })
+    await history.ensureConversationsLoaded()
+    await history.refreshConversationsPreservingPages()
+
+    expect(history.conversations.value.find(item => item.id === 'new-1')?.title).toBe('新会话')
+  })
+
   it('inserts a newly created conversation and updates its running status', async () => {
     const history = useConversationHistoryBrowser({
       agentId: 'chat_data',
