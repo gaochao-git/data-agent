@@ -10,3 +10,12 @@ steering 插话、工具计时与单会话调用频率告警、历史消息时�
 工具调用频率告警（`tool_call_rate_alert.py`）按会话维护滑动窗口计数，窗口内调用数超过
 `CHAT_DATA_TOOL_CALL_RATE_ALERT_THRESHOLD`（默认 100 次 / 60 秒）时写 alarm 日志，同一窗口
 内每个会话最多一条；只统计通过租约围栏的真实调用，且任何统计异常都不影响工具执行。
+
+## 后台子智能体
+
+`task` 工具传 `background=true` 时转入持久任务账本（见 `agent/run/README.md`），立即返回
+`task_id`；执行体在独立 asyncio task 中做子图心跳、超时与取消观察。同一个 `task` 工具
+用 `action` 统一管理后台任务：`list` 列任务、`check` 查单个、`wait` 等终态、`cancel` 取消；
+都按当前会话与用户隔离读取账本，不依赖进程内注册表。`check` 对终态任务返回完整
+报告；超长报告会落盘并返回 `result_path`，可直接用 `file_read` 读取完整正文，
+不对报告做分页。通知里的报告只是预览，不代表任务结论被截断。

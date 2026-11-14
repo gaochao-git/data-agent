@@ -37,6 +37,24 @@ describe('ToolCallCard', () => {
     expect(wrapper.text()).toContain('sc_a')
   })
 
+  it('shows task management actions without the subagent dispatch label', () => {
+    const wrapper = mount(ToolCallCard, {
+      props: {
+        compact: true,
+        toolCall: {
+          tool_call_id: 'call-task-check',
+          tool_name: 'task',
+          args: { action: 'check', task_id: 'task-1' },
+          status: 'completed',
+        },
+      },
+    })
+
+    expect(wrapper.text()).toContain('查看后台任务')
+    expect(wrapper.text()).toContain('task-1')
+    expect(wrapper.text()).not.toContain('派发子智能体')
+  })
+
   it('shows the full file path after the write-file tool name', () => {
     const filePath = '/mnt/user-data/outputs/语义模型分析报告.md'
     const wrapper = mount(ToolCallCard, {

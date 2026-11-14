@@ -543,6 +543,8 @@ export interface ToolCallInfo {
   subagentTokenUsage?: SubagentTokenUsage
   // 子图上下文压缩事件（静默压缩的可视化记录）
   subagentCompactions?: SubagentCompaction[]
+  // 子智能体任务错误（后台任务账本的 task.error；主对话助手气泡同款错误行）
+  subagentError?: string
   // 子图上下文计量明细（cache/breakdown，与主对话 token_usage 同结构）
   subagentTokenUsageDetail?: ChatDataTokenUsage
 }
@@ -610,6 +612,62 @@ export interface SubagentTrailItem {
   estimated_tokens_after?: number
   estimated_cleared_tokens?: number
   compressed_messages?: number
+}
+
+export type SubagentTaskStatus =
+  | 'pending'
+  | 'running'
+  | 'cancelling'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'timeout'
+  | 'interrupted'
+  | 'lost'
+
+export interface SubagentTaskProgress {
+  phase?: string
+  tool_calls?: number
+  running_tools?: number
+  message_count?: number
+  last_tool?: string
+  updated_at?: string
+  finished_at?: string
+}
+
+export interface SubagentTaskResultMeta {
+  tool_status?: string
+  trail_items?: number
+  subagent_trail?: SubagentTrailItem[]
+  subagent_context_usage?: SubagentContextUsage
+  subagent_token_usage?: SubagentTokenUsage
+  subagent_token_usage_detail?: ChatDataTokenUsage
+  subagent_compactions?: SubagentCompaction[]
+  [key: string]: unknown
+}
+
+/** 后台子智能体任务账本（列表接口不含 report/result_meta，详情接口返回完整字段）。 */
+export interface SubagentTaskRecord {
+  task_id: string
+  conversation_id: string
+  parent_run_id: string
+  parent_tool_call_id: string
+  subagent_type: string
+  label: string
+  description: string
+  status: SubagentTaskStatus
+  status_label: string
+  progress: SubagentTaskProgress
+  created_at: string | null
+  updated_at: string | null
+  started_at: string | null
+  finished_at: string | null
+  notified_at: string | null
+  timeout_seconds: number
+  report?: string
+  report_path?: string
+  error?: string
+  result_meta?: SubagentTaskResultMeta
 }
 
 // 消息内容片段（用于按顺序渲染文本和工具调用）
@@ -686,7 +744,7 @@ export interface ChatDataOptions {
 export type SidebarTab = 'dashboards' | 'config' | 'history'
 
 // SSE 事件类型
-export type SSEEventType = 'message' | 'message_end' | 'heartbeat' | 'token_usage' | 'generation_speed' | 'context_compression' | 'conversation_title_updated' | 'thinking' | 'tool' | 'tool_started' | 'tool_progress' | 'tool_completed' | 'tool_failed' | 'subagent_message' | 'subagent_message_delta' | 'subagent_thinking_delta' | 'subagent_context_usage' | 'subagent_context_compression' | 'inbox_admitted' | 'question_requested' | 'error' | 'done' | 'dashboard_spec'
+export type SSEEventType = 'message' | 'message_end' | 'heartbeat' | 'token_usage' | 'generation_speed' | 'context_compression' | 'conversation_title_updated' | 'thinking' | 'tool' | 'tool_started' | 'tool_progress' | 'tool_completed' | 'tool_failed' | 'subagent_message' | 'subagent_message_delta' | 'subagent_thinking_delta' | 'subagent_context_usage' | 'subagent_context_compression' | 'subagent_task_updated' | 'inbox_admitted' | 'question_requested' | 'error' | 'done' | 'dashboard_spec'
 
 export interface UserQuestionOption {
   label: string

@@ -382,7 +382,7 @@ describe('子智能体过程 → 主对话消息投影', () => {
     expect(settled[1]!.isStreaming).toBe(false)
   })
 
-  it('工具先于消息出现时仍合并进同一条助手消息；无有效过程时只有任务书', () => {
+  it('工具先于消息出现时仍合并进同一条助手消息；无 trail 时任务书 + 报告气泡', () => {
     const toolFirst = buildSubagentMessages(taskCall({
       subagentTrail: [
         { kind: 'tool', id: 'inner-1', tool_name: 'file_read', args: {}, status: 'running' },
@@ -393,7 +393,8 @@ describe('子智能体过程 → 主对话消息投影', () => {
     expect(toolFirst[1]!.segments).toHaveLength(2)
 
     const promptOnly = buildSubagentMessages(taskCall({ subagentTrail: [], status: 'completed' }))
-    expect(promptOnly.map(message => message.role)).toEqual(['user'])
+    expect(promptOnly.map(message => message.role)).toEqual(['user', 'assistant'])
+    expect(promptOnly[1]!.segments).toEqual([{ type: 'text', content: '报告' }])
     // 运行中即使没有正文/工具段也保留助手占位，状态行（工作中动画）可见
     const runningEmpty = buildSubagentMessages(taskCall({ subagentTrail: [], status: 'running' }))
     expect(runningEmpty.map(message => message.role)).toEqual(['user', 'assistant'])
@@ -505,6 +506,27 @@ describe('子智能体过程投影', () => {
     expect(queryBlock?.queryResultToolCall).toMatchObject({ renderType: 'queryResult' })
     expect(queryBlock?.queryResultToolCall?.renderId).toBeTruthy()
     expect(calcBlock?.queryResultToolCall).toBeNull()
+  })
+
+  it('无 trail 的后台任务也投影成主对话消息：任务书 + 报告气泡', () => {
+    const messages = buildSubagentMessages(taskCall({
+      status: 'completed',
+      result: '完整报告正文',
+      subagentTrail: [],
+    }))
+    expect(messages.map(message => message.role)).toEqual(['user', 'assistant'])
+    expect(messages[0]?.content).toBe('任务书')
+    expect(messages[1]?.segments).toEqual([{ type: 'text', content: '完整报告正文' }])
+    expect(buildMessageBlocks(messages[1]!)).toEqual([
+      { type: 'text', key: 'text-0', content: '完整报告正文', finalAnswer: true },
+    ])
+  })
+
+  it('无 trail 的进行中任务保留助手占位，详情页能显示“正在处理”', () => {
+    const messages = buildSubagentMessages(taskCall({ status: 'running', result: '', subagentTrail: [] }))
+    expect(messages.map(message => message.role)).toEqual(['user', 'assistant'])
+    expect(messages[1]?.isStreaming).toBe(true)
+    expect(messages[1]?.segments).toEqual([])
   })
 
   it('非 task / 无 trail 不算过程区', () => {

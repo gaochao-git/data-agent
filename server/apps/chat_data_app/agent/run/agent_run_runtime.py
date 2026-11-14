@@ -19,6 +19,7 @@ from .agent_run_event_service import AgentRunEventService, agent_run_event_servi
 from .chat_data_stream_request import ChatDataStreamRequest
 from .executor_gate import configured_node_id, is_executor_allowed
 from .redis_event_bus import RedisEventBus
+from .subagent_task_service import subagent_task_service
 
 logger = get_logger(__name__)
 
@@ -220,6 +221,7 @@ class AgentRunRuntime:
             await asyncio.gather(*tasks, return_exceptions=True)
         self._tasks.clear()
         self._owned_runs.clear()
+        await subagent_task_service.shutdown_local_tasks()
         await self._event_bus.close()
 
     async def _poll_pending_runs(self) -> None:
@@ -233,6 +235,8 @@ class AgentRunRuntime:
                     continue
                 await self._reap_expired_runs()
                 await self._reap_expired_pending_runs()
+                await self._reap_expired_subagent_tasks()
+                await self._dispatch_subagent_notifications()
                 await self._submit_runnable_runs()
                 await asyncio.sleep(RUN_DISPATCH_POLL_SECONDS)
             except asyncio.CancelledError:
@@ -245,6 +249,18 @@ class AgentRunRuntime:
         expired = await self._inbox_service.reap_expired_pending_runs(limit=20)
         if expired:
             logger.info("已失败收口超时 pending Run: count=%d", len(expired))
+
+    async def _reap_expired_subagent_tasks(self) -> None:
+        """活动节点统一回收租约过期的后台子智能体，避免各进程重复判断。"""
+        reaped = await subagent_task_service.reap_expired_tasks(limit=20)
+        if reaped:
+            logger.info("已回收租约过期的后台子智能体任务: count=%d", reaped)
+
+    async def _dispatch_subagent_notifications(self) -> None:
+        """把终态任务写成隐藏 inbox 消息；空闲会话创建通知 Run 自动唤醒。"""
+        dispatched = await subagent_task_service.dispatch_pending_notifications(limit=10)
+        if dispatched:
+            logger.info("已派发后台子智能体完成通知: count=%d", dispatched)
 
     async def _submit_runnable_runs(self) -> None:
         available_slots = self._semaphore_capacity - len(self._tasks)

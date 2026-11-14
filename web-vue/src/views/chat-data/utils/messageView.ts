@@ -546,6 +546,7 @@ export const buildSubagentMessages = (toolCall: ToolCallInfo): Message[] => {
     thinkingSegments: [],
     toolCalls: [],
     isStreaming: parentRunning,
+    error: String(toolCall.subagentError || '').trim() || undefined,
   }
 
   for (const block of blocks) {
@@ -597,8 +598,19 @@ export const buildSubagentMessages = (toolCall: ToolCallInfo): Message[] => {
     }
   }
 
+  // 没有过程 trail 的终态任务（如完成后 trail 尚未落库/被清理）也要有结论：
+  // 把 task 结果当作最后一段助手正文，渲染成和主对话一样的气泡，而不是另起一张
+  // 自定义「最终报告」卡。
+  const report = String(toolCall.result || '').trim()
+  const hasTextSegment = (assistant.segments || []).some(
+    segment => segment.type === 'text' && segment.content.trim(),
+  )
+  if (!hasTextSegment && report && !parentRunning) {
+    assistant.segments = [...(assistant.segments || []), { type: 'text', content: report }]
+  }
+
   // 运行中即使还没有正文/工具段也要保留助手占位：状态行（工作中动画/已运行时长）要可见
-  if (assistant.segments?.length || parentRunning) messages.push(assistant)
+  if (assistant.segments?.length || parentRunning || assistant.error) messages.push(assistant)
   return messages
 }
 

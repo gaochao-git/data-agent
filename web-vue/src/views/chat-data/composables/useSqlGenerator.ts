@@ -32,6 +32,7 @@ import type {
   ToolLifecycleEventData,
   PendingUserQuestion,
   DocumentAnnotationRequest,
+  SubagentTaskRecord,
 } from '../types'
 
 /**
@@ -140,6 +141,7 @@ export function useSqlGenerator() {
       onInboxAdmitted?: (messageIds: string[]) => void
       onQuestionRequested?: (question: PendingUserQuestion) => void
       onConversationTitleUpdated?: (payload: { conversation_id?: string; title: string }) => void
+      onSubagentTaskUpdated?: (task: SubagentTaskRecord) => void
       onRunStarted?: (runId: string) => void
       responseFactory?: (signal: AbortSignal) => Promise<Response>
       onRunEvent?: (eventId: string) => void
@@ -176,6 +178,7 @@ export function useSqlGenerator() {
       onInboxAdmitted,
       onQuestionRequested,
       onConversationTitleUpdated,
+      onSubagentTaskUpdated,
       onRunStarted,
       responseFactory,
       onRunEvent,
@@ -423,6 +426,18 @@ export function useSqlGenerator() {
               }
             } catch (err) {
               console.error('解析 conversation_title_updated 数据失败:', err, dataStr)
+            }
+            continue
+          }
+
+          if (event === 'subagent_task_updated') {
+            try {
+              const data = JSON.parse(dataStr)
+              if (data?.task && typeof data.task.task_id === 'string') {
+                onSubagentTaskUpdated?.(data.task as SubagentTaskRecord)
+              }
+            } catch (err) {
+              console.error('解析 subagent_task_updated 数据失败:', err, dataStr)
             }
             continue
           }

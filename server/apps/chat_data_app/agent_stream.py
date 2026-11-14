@@ -680,6 +680,8 @@ class _AgentSseStreamAdapter:
         if event_kind == "values":
             if isinstance(payload, dict):
                 self.state_values = payload
+                for sse_event in self.tool_stream_state.reconcile_state_messages(payload.get("messages")):
+                    yield sse_event
             return
         if event_kind == "custom":
             for sse_event in self._handle_custom_payload(payload):
@@ -1335,6 +1337,8 @@ async def _persist_admitted_inbox_messages(
 ) -> None:
     """把已解析的排队消息持久化为 admitted 用户历史（上屏与回放的依据）。"""
     for message in messages:
+        if (getattr(message, "additional_kwargs", None) or {}).get("hide_from_ui"):
+            continue
         await conversation_event_service.persist_user_message(
             conversation_id=callbacks.thread_id,
             user_id=callbacks.user_id or "system",
@@ -1529,14 +1533,13 @@ async def _admit_adopted_messages(
     if adopted_messages:
         adopted_ids = [str(message.id or "") for message in adopted_messages]
         steering_tracker.record(adopted_ids)
-        stream_adapter.queue_event(
-            _format_sse(
-                SSE_EVENT_INBOX_ADMITTED,
-                {
-                    "message_ids": adopted_ids,
-                },
-            )
-        )
+        visible_ids = [
+            message_id
+            for message_id, message in zip(adopted_ids, adopted_messages, strict=False)
+            if not (getattr(message, "additional_kwargs", None) or {}).get("hide_from_ui")
+        ]
+        if visible_ids:
+            stream_adapter.queue_event(_format_sse(SSE_EVENT_INBOX_ADMITTED, {"message_ids": visible_ids}))
 
 
 async def _run_chat_data_agent_stream(

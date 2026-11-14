@@ -132,6 +132,37 @@ def test_build_subagent_invocation_config_cuts_callbacks():
     assert config["configurable"] == {"chatdata_subagent": "explore"}
 
 
+def test_background_invocation_config_drops_parent_checkpoint_state():
+    """后台任务只带自己的 thread_id，不继承父 Run 的 checkpointer/namespace。"""
+    from langchain_core.runnables.config import var_child_runnable_config
+    from langgraph._internal._config import ensure_config
+
+    sentinel = object()
+    token = var_child_runnable_config.set(
+        {
+            "configurable": {
+                "__pregel_checkpointer": sentinel,
+                "thread_id": "parent-run",
+                "checkpoint_ns": "parent:task",
+            },
+            "callbacks": [],
+        }
+    )
+    try:
+        config = build_subagent_invocation_config(_spec(), background_task_id="task-1")
+        effective = ensure_config(config)
+    finally:
+        var_child_runnable_config.reset(token)
+
+    assert config["configurable"]["thread_id"] == "chatdata-subagent-task-task-1"
+    assert effective["configurable"] == {
+        "chatdata_subagent": "explore",
+        "thread_id": "chatdata-subagent-task-task-1",
+    }
+    assert "__pregel_checkpointer" not in effective["configurable"]
+    assert "checkpoint_ns" not in effective["configurable"]
+
+
 @pytest.mark.asyncio
 async def test_task_tool_returns_final_report_as_tool_message(monkeypatch):
     captured = {}
@@ -491,6 +522,59 @@ def test_iter_subagent_stream_events_emits_text_before_tool_calls():
     assert events[1]["tool_call_id"] == "inner-1"
 
 
+def test_progress_snapshot_counts_completed_tools_and_running_tools_separately():
+    """工具完成后仍计入累计 tool_calls；running_tools 只表示当前执行中的工具。"""
+    message = AIMessage(
+        id="assistant-1",
+        content="",
+        tool_calls=[
+            {"id": "inner-1", "name": "file_read", "args": {"path": "/a"}},
+            {"id": "inner-2", "name": "query_data", "args": {}},
+        ],
+    )
+    state = subagents_module._SubagentStreamState("call-1")
+    subagents_module._process_subagent_chunk(
+        ("updates", {"agent": {"messages": [message]}}),
+        state,
+        None,
+        "call-1",
+    )
+    subagents_module._process_subagent_chunk(
+        ("updates", {"tools": {"messages": [ToolMessage(content="ok", tool_call_id="inner-1")]}}),
+        state,
+        None,
+        "call-1",
+    )
+
+    snapshot = subagents_module._subagent_progress_snapshot(state)
+    assert snapshot["tool_calls"] == 2
+    assert snapshot["running_tools"] == 1
+    assert snapshot["last_tool"] == "query_data"
+    assert snapshot["message_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_offload_subagent_report_returns_recovery_for_long_report(monkeypatch):
+    """超长报告复用统一落盘通道，返回 recovery 供后台任务记录路径。"""
+
+    async def fake_externalize(content, *, source_tool, state, suffix, preview_chars):
+        return "offloaded-envelope", {
+            "source_tool": source_tool,
+            "result_path": "/mnt/user-data/workspace/.system/tool-results/report.md",
+            "result_size_chars": len(content),
+        }
+
+    monkeypatch.setattr(subagents_module, "externalize_tool_text", fake_externalize)
+    runtime = SimpleNamespace(state={"token_usage": {"hard_input_limit_tokens": 1_000}})
+    report = "x" * (subagents_module.TOOL_RESULT_OFFLOAD_SIZE + 1)
+
+    delivered, recovery = await subagents_module._offload_subagent_report(report, runtime)
+
+    assert delivered == "offloaded-envelope"
+    assert recovery["result_size_chars"] == len(report)
+    assert recovery["result_path"].endswith("report.md")
+
+
 def test_iter_subagent_stream_events_skips_blank_text_and_truncates_long_text():
     long_text = "分析" * (subagents_module.SUBAGENT_MESSAGE_PREVIEW_MAX_CHARS + 10)
     events = subagents_module._iter_subagent_stream_events(
@@ -565,29 +649,32 @@ def test_middleware_creates_system_message_when_request_has_none():
 def test_middleware_registers_single_task_tool_with_agent_catalog():
     middleware = SubagentMiddleware([_spec(), _spec(name="report-writer")])
 
-    # task（前台/后台派发）+ 后台任务管理三件套（查询/取消/列表）
-    assert [tool.name for tool in middleware.tools] == [
-        "task",
-        "check_async_task",
-        "cancel_async_task",
-        "list_async_tasks",
-    ]
+    # 单一 task 工具同时承担派发与后台任务管理
+    assert [tool.name for tool in middleware.tools] == ["task"]
     assert middleware.subagent_names == {"explore", "report-writer"}
     assert "explore" in middleware.tools[0].description
     assert "report-writer" in middleware.tools[0].description
+    assert 'action="start"' in middleware.tools[0].description
+    assert 'action="check"' in middleware.tools[0].description
 
 
 def test_passthrough_keys_cover_subagent_state_schema_fields():
     """白名单必须覆盖子智能体状态 schema 的全部透传业务字段。
 
     不含基类框架字段；压缩三键（context_summary / context_compression /
-    context_compression_events）是子图自有状态（子图压缩中间件写入，
-    生命周期属于本次派发），有意不从主图透传，也不得出现在白名单里。
+    context_compression_events）与 token_usage 是子图自有状态（子图压缩/用量
+    中间件写入，生命周期属于本次派发），有意不从主图透传，也不得出现在白名单里。
     """
     from apps.chat_data_app.agent.middleware.subagents import ChatDataSubAgentState
 
     framework_keys = {"messages", "jump_to", "structured_response"}
-    subgraph_owned_keys = {"context_summary", "context_compression", "context_compression_events", "loaded_skills"}
+    subgraph_owned_keys = {
+        "context_summary",
+        "context_compression",
+        "context_compression_events",
+        "loaded_skills",
+        "token_usage",
+    }
     schema_keys = {
         key
         for key in ChatDataSubAgentState.__annotations__
@@ -595,6 +682,13 @@ def test_passthrough_keys_cover_subagent_state_schema_fields():
     }
     assert schema_keys and schema_keys <= set(SUBAGENT_STATE_PASSTHROUGH_KEYS)
     assert not (set(SUBAGENT_STATE_PASSTHROUGH_KEYS) & subgraph_owned_keys)
+
+
+def test_subagent_state_declares_token_usage_channel():
+    """子图必须声明 token_usage channel，用量中间件的明细更新才不会被丢弃。"""
+    from apps.chat_data_app.agent.middleware.subagents import ChatDataSubAgentState
+
+    assert "token_usage" in ChatDataSubAgentState.__annotations__
 
 
 @pytest.mark.asyncio
@@ -1563,6 +1657,54 @@ async def test_task_tool_emits_context_usage_events_and_stamps_tool_message(monk
         "percent": usage_events[1]["percent"],
         "budget_percent": usage_events[1]["budget_percent"],
     }
+
+
+@pytest.mark.asyncio
+async def test_subagent_usage_detail_flows_from_state_update_to_sse_and_snapshot():
+    """updates 里的 token_usage 明细要同时进 SSE、回放快照与持久化产物。"""
+    written = []
+    detail = {
+        "used": 1234,
+        "input_tokens": 1234,
+        "total": 64000,
+        "breakdown": [
+            {"key": "system_prompt", "label": "系统提示词", "tokens": 800, "percentage": 64.8},
+            {"key": "tool_schema", "role": "tool_schema", "label": "工具定义", "tokens": 434, "percentage": 35.2},
+        ],
+    }
+
+    class FakeRunnable:
+        async def astream(self, _state, _config, *, stream_mode):
+            yield "updates", {
+                "model": {
+                    "messages": [AIMessage(content="结论", id="m1")],
+                    "token_usage": detail,
+                }
+            }
+
+    captured: dict = {}
+    collected = await subagents_module._run_subagent_with_events(
+        FakeRunnable(),
+        {},
+        {},
+        written.append,
+        collected=[],
+        captured=captured,
+        usage_meta={"static_tokens": 0, "threshold_tokens": 32000, "context_window": 64000},
+    )
+
+    usage_events = [payload["event"] for payload in written if payload["event"]["event_type"] == "subagent_context_usage"]
+    assert usage_events
+    assert usage_events[-1]["token_usage_detail"]["breakdown"][0]["label"] == "系统提示词"
+    assert captured["context_usage"]["token_usage_detail"]["breakdown"][1]["tokens"] == 434
+
+    snapshot = subagents_module._subagent_process_snapshot(
+        collected,
+        captured["context_usage"],
+        None,
+        subagents_module._resolve_subagent_usage_detail(captured),
+    )
+    assert snapshot["subagent_token_usage_detail"]["breakdown"]
 
 
 @pytest.mark.asyncio

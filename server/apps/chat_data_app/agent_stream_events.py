@@ -302,6 +302,10 @@ class _ToolStreamState:
         # 工具开始运行的后端时间（tool_started 事件时刻）：完成事件缺失 ToolTimingMiddleware
         # 盖章时（如被技能前置/审批等外层中间件拦下的失败）用它兜底，保证每个工具都有耗时。
         self.tool_started_at: dict[str, int] = {}
+        # 已下发完成事件的工具：values 快照补发时据此去重，避免同一结果重复入 UI。
+        self.finished_tool_ids: set[str] = set()
+        # 已被判定「模型最终没有真正调用」的占位工具，避免重复下发取消事件。
+        self.cancelled_tool_ids: set[str] = set()
 
     def visible_tool_count(self) -> int:
         return _visible_tool_count(self.tool_names)
@@ -443,6 +447,8 @@ class _ToolStreamState:
         if isinstance(subagent_token_usage, dict) and subagent_token_usage:
             msg_data["subagent_token_usage"] = subagent_token_usage
         if tool_call_id:
+            self.finished_tool_ids.add(tool_call_id)
+            self.cancelled_tool_ids.discard(tool_call_id)
             msg_data["accumulated_args"] = _parse_tool_args_buffer(
                 self.args_buffer.get(tool_call_id, ""),
                 self.args_fallback.get(tool_call_id),
@@ -453,6 +459,86 @@ class _ToolStreamState:
             self.progress_intents.pop(tool_call_id, None)
         self.active_tool_call_id = _finish_running_tool(self.running_tool_ids, self.active_tool_call_id, tool_call_id)
         return msg_data
+
+    def reconcile_state_messages(self, messages: Any) -> list[str]:
+        """用 LangGraph values 快照收口工具生命周期。
+
+        流式协议会先播报 tool_call_chunks 的 running 占位，但模型可能在同一条
+        回复里重新规划，最终 AIMessage 并不包含这些调用（后端从未执行，也就没有
+        ToolMessage）。另外 ``after_model`` 等中间件生成的拒绝 ToolMessage 可能
+        只出现在 values 里、没有进 messages 流。两种缺口都会让前端工具卡一直转。
+
+        这里以快照为准做两件事：补发漏掉的 ToolMessage 完成事件；把未进入最新
+        AIMessage.tool_calls 的 running 占位以失败事件收口（文案明确「未执行」）。
+        """
+        if not isinstance(messages, list) or not messages:
+            return []
+
+        latest_ai_index = -1
+        for index in range(len(messages) - 1, -1, -1):
+            if getattr(messages[index], "type", "") == "ai":
+                latest_ai_index = index
+                break
+        if latest_ai_index < 0:
+            return []
+
+        latest_ai = messages[latest_ai_index]
+        events: list[str] = []
+        # 1) 补发 values 里才出现的 ToolMessage（如 after_model 的拒绝消息）
+        for message in messages[latest_ai_index + 1 :]:
+            if getattr(message, "type", "") != "tool":
+                continue
+            tool_call_id = str(getattr(message, "tool_call_id", "") or "").strip()
+            if (
+                not tool_call_id
+                or tool_call_id in self.finished_tool_ids
+                or tool_call_id not in self.emitted_running_tool_ids
+            ):
+                continue
+            payload = self.build_tool_message_payload(message)
+            events.append(self.build_completion_event(payload))
+            events.append(_format_sse(SSE_EVENT_TOOL, payload))
+
+        # 2) 最新 AIMessage 是权威调用集：不在其中的 running 占位从未执行
+        actual_ids = {
+            str(tool_call.get("id") or "").strip()
+            for tool_call in (getattr(latest_ai, "tool_calls", None) or [])
+            if isinstance(tool_call, dict)
+        }
+        actual_ids.discard("")
+        for tool_call_id in list(self.running_tool_ids):
+            if tool_call_id in actual_ids or tool_call_id in self.finished_tool_ids:
+                continue
+            if tool_call_id in self.cancelled_tool_ids:
+                continue
+            events.append(self._cancel_orphaned_tool(tool_call_id))
+        return events
+
+    def _cancel_orphaned_tool(self, tool_call_id: str) -> str:
+        """关闭「播报过但模型最终没有真正调用」的占位工具卡。"""
+        tool_name = self.tool_names.get(tool_call_id, "tool_call")
+        started_at_ms = self.tool_started_at.get(tool_call_id)
+        ended_at_ms = int(time.time() * 1000)
+        payload = {
+            "tool_name": tool_name,
+            "tool_call_id": tool_call_id,
+            "display_name": get_mcp_tool_display_name(tool_name),
+            "status": "error",
+            "args": self.args_fallback.get(tool_call_id) or {},
+            "content": "本次工具调用未执行：模型重新规划了调用。",
+            "message": "未执行",
+            "started_at_ms": started_at_ms,
+            "ended_at_ms": max(ended_at_ms, started_at_ms or ended_at_ms),
+        }
+        if tool_call_id in self.running_tool_ids:
+            self.running_tool_ids.remove(tool_call_id)
+        self.tool_started_at.pop(tool_call_id, None)
+        self.progress_line_counts.pop(tool_call_id, None)
+        self.progress_intents.pop(tool_call_id, None)
+        self.args_buffer.pop(tool_call_id, None)
+        self.args_fallback.pop(tool_call_id, None)
+        self.cancelled_tool_ids.add(tool_call_id)
+        return _format_tool_lifecycle_event(SSE_EVENT_TOOL_FAILED, payload)
 
     def build_completion_event(self, tool_payload: dict[str, Any]) -> str:
         """将工具结果映射为完成或失败的统一生命周期事件。"""

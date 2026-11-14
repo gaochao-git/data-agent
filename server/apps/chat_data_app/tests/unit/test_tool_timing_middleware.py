@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -13,6 +14,12 @@ os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_PASSWORD", "dummy")
 
 from apps.chat_data_app.agent.middleware.tool_timing import create_tool_timing_middleware
+from apps.chat_data_app.agent.tool_execution_timing import (
+    begin_tool_execution_clock,
+    mark_tool_execution_started,
+    reset_tool_execution_clock,
+)
+from apps.chat_data_app.agent.workspace.workspace_sandbox_api import InstrumentedOperationLock
 
 
 def _request():
@@ -76,3 +83,32 @@ async def test_command_result_tool_message_is_stamped_with_execution_timing():
     stamped = result.update["messages"][0]
     assert isinstance(stamped.additional_kwargs["started_at_ms"], int)
     assert stamped.additional_kwargs["ended_at_ms"] >= stamped.additional_kwargs["started_at_ms"]
+
+
+@pytest.mark.asyncio
+async def test_middleware_prefers_real_execution_start_over_wrapper_start():
+    """排队等待后的真实执行起点覆盖 wrapper 开始时间。"""
+    middleware = create_tool_timing_middleware()
+    marked_at_ms = 0
+
+    async def handler(_request):
+        nonlocal marked_at_ms
+        marked_at_ms = int(time.time() * 1000)
+        mark_tool_execution_started(marked_at_ms)
+        return ToolMessage(content="结果", name="file_read", tool_call_id="call-1")
+
+    result = await middleware.awrap_tool_call(_request(), handler)
+
+    assert result.additional_kwargs["started_at_ms"] == marked_at_ms
+
+
+@pytest.mark.asyncio
+async def test_operation_lock_marks_execution_clock_after_acquiring():
+    clock, token = begin_tool_execution_clock()
+    try:
+        lock = InstrumentedOperationLock()
+        assert clock.execution_started_at_ms is None
+        async with lock:
+            assert isinstance(clock.execution_started_at_ms, int)
+    finally:
+        reset_tool_execution_clock(token)

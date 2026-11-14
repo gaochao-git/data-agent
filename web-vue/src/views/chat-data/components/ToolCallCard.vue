@@ -10,7 +10,7 @@ import type { ExecutionTargetOption, ToolCallInfo } from '../types'
 import QueryResultPanel from './QueryResultPanel.vue'
 import SaveToPanelModal from './SaveToPanelModal.vue'
 import { extractGeneratedSqlFromToolCall, extractQueryResultPayload, extractSemanticDslFromArgs, getQueryResultError, parseQueryResultEnvelope } from '../utils/semanticTool'
-import { compactInlineText, getToolDisplayName, getToolTechnicalDescription, formatToolTimingText, parseFileDiffResult, isFileDiffOffloaded } from '../utils/toolDisplay'
+import { compactInlineText, getTaskActionDisplayName, getToolDisplayName, getToolTechnicalDescription, formatToolTimingText, parseFileDiffResult, isFileDiffOffloaded } from '../utils/toolDisplay'
 import FileDiffViewer from './FileDiffViewer.vue'
 import { useSaveToPanel } from '../composables/useSaveToPanel'
 import { useToolTiming } from '../composables/useToolTiming'
@@ -121,10 +121,19 @@ const DSL_TAG_COLORS: Record<string, { bg: string; text: string }> = {
   order_by: { bg: 'rgba(236, 72, 153, 0.1)', text: '#db2777' }
 }
 
-// 标题链：后端下发的展示名（MCP tools.<name>.label）→ 内置映射表/限定名兜底
-const displayName = computed(() => props.toolCall.display_name?.trim() || getToolDisplayName(props.toolCall.tool_name, props.toolCall.args))
-// 子智能体派发用机器人图标，其余工具保持扳手：图标与「派发子智能体」语义一致
-const toolIconClass = computed(() => (props.toolCall.tool_name === 'task' ? 'fa-robot' : 'fa-wrench'))
+// 标题链：task 管理动作的专用名 → 后端展示名（MCP tools.<name>.label）→ 内置映射表/限定名兜底
+const displayName = computed(() => {
+  const args = props.toolCall.args || {}
+  const taskActionName = props.toolCall.tool_name === 'task' ? getTaskActionDisplayName(args) : ''
+  return taskActionName
+    || props.toolCall.display_name?.trim()
+    || getToolDisplayName(props.toolCall.tool_name, args)
+})
+// 只有真正派发子智能体用机器人图标；task 的查询/等待/取消保持扳手。
+const toolIconClass = computed(() => {
+  const action = String(props.toolCall.args?.action || 'start').trim()
+  return props.toolCall.tool_name === 'task' && action === 'start' ? 'fa-robot' : 'fa-wrench'
+})
 
 // 状态
 const isRunning = computed(() => props.toolCall.status === 'generating' || props.toolCall.status === 'running')

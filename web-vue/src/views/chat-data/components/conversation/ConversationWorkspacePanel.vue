@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 会话右侧面板：工作区文件 tab + 工具详情 tab。
+ * 会话右侧面板：管理首页 → 文件管理 / 子智能体管理 → 任务或工具详情 tab。
  *
  * 从 conversation/Conversation.vue 拆出（原 900 行面板逻辑 + 385 行模板）。职责边界：
  * - 文件列表/树/预览（文本、JSON 表格、图表、Markdown、HTML、PDF、图片、Office、YAML）；
@@ -17,15 +17,25 @@ import { computed, nextTick, onMounted, onUnmounted, provide, ref, watch } from 
 import type { PropType } from 'vue'
 import type { ChatDataTokenUsage } from '../../types'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import type { SemanticYamlFile, ToolCallInfo } from '../../types'
+import type { SemanticYamlFile, SubagentTaskRecord, ToolCallInfo } from '../../types'
 import ConversationSidePanel from './ConversationSidePanel.vue'
 import ToolCallDetailPanel from './ToolCallDetailPanel.vue'
 import AgentProcessView from './AgentProcessView.vue'
+import SubagentTaskProcessView from './SubagentTaskProcessView.vue'
+import SubagentManagerTab from './SubagentManagerTab.vue'
+import RightSidebarHome from './RightSidebarHome.vue'
 import RightSidebarTabStrip from './RightSidebarTabStrip.vue'
 import FileManagerTab from './FileManagerTab.vue'
 import FilePreviewTab from './FilePreviewTab.vue'
 import { WorkspaceFilesContextKey } from '../../composables/workspaceFilesContext'
-import { useRightSidebarTabs, WORKSPACE_TAB_ID, type RightSidebarTab } from '../../composables/useRightSidebarTabs'
+import {
+  HOME_TAB_ID,
+  SUBAGENT_MANAGER_TAB_ID,
+  WORKSPACE_TAB_ID,
+  useRightSidebarTabs,
+  type RightSidebarTab,
+} from '../../composables/useRightSidebarTabs'
+import { isSubagentTaskActive } from '../../composables/useSubagentTasks'
 import {
   deleteConversationWorkspaceFile,
   getConversationWorkspaceFileContent,
@@ -86,6 +96,12 @@ const props = defineProps({
   /** 与浮层文本框共享的对话草稿；在浮层中编辑时回写主输入框。 */
   documentAnnotationDraft: { type: String, default: '' },
   documentAnnotationDraftHandler: { type: Function as PropType<(value: string) => void>, default: null },
+  /** 会话后台任务列表；任务详情 tab 从这里取标题/状态，完整报告由 loadSubagentTaskDetail 拉取。 */
+  subagentTasks: { type: Array as PropType<SubagentTaskRecord[]>, default: () => [] },
+  subagentTaskDetails: { type: Object as PropType<Record<string, SubagentTaskRecord>>, default: () => ({}) },
+  subagentTaskCancellingIds: { type: Array as PropType<string[]>, default: () => [] },
+  loadSubagentTaskDetail: { type: Function as PropType<(taskId: string) => Promise<SubagentTaskRecord | null>>, default: null },
+  cancelSubagentTask: { type: Function as PropType<(task: SubagentTaskRecord) => Promise<void>>, default: null },
 })
 
 const emit = defineEmits<{
@@ -102,12 +118,16 @@ const {
   tabs: panelTabs,
   activeTabId: activePanelTabId,
   activeTab: activePanelTab,
+  isHomeTabActive,
   isWorkspaceTabActive,
+  isSubagentManagerTabActive,
   isToolTabActive,
   displayToolTab,
   selectTab,
   activateTab,
+  activateHome,
   activateWorkspace,
+  activateSubagentManager,
   closeTab,
   rememberScroll,
   scrollTopFor,
@@ -127,8 +147,76 @@ const toolCallForTab = (tab: RightSidebarTab | null | undefined): ToolCallInfo |
 const displayToolCall = computed(() => toolCallForTab(displayToolTab.value))
 const displayTabIsAgentProcess = computed(() => displayToolTab.value?.kind === 'agentProcess')
 const displayTabIsToolDetail = computed(() => displayToolTab.value?.kind === 'tool')
+const displayTabIsSubagentTask = computed(() => displayToolTab.value?.kind === 'subagentTask')
 // 每个子智能体 tab 各渲染一份过程视图（v-for 常驻）：多开时内容不串、展开态与位置各自保留
 const agentProcessTabs = computed(() => panelTabs.value.filter(tab => tab.kind === 'agentProcess'))
+const subagentTaskTabs = computed(() => panelTabs.value.filter(tab => tab.kind === 'subagentTask'))
+
+const subagentTaskForTab = (tab: RightSidebarTab | null | undefined): SubagentTaskRecord | null => {
+  const taskId = tab?.taskId
+  if (!taskId) return null
+  return props.subagentTaskDetails[taskId] || props.subagentTasks.find(task => task.task_id === taskId) || null
+}
+const displaySubagentTask = computed(() => subagentTaskForTab(displayToolTab.value))
+// 运行中任务来自详情 SSE 的实时占用；列表快照不含 result_meta，不能作为顶部唯一来源
+const liveSubagentTaskUsage = ref<Record<string, ChatDataTokenUsage>>({})
+const subagentTaskStatusIcon = (task: SubagentTaskRecord): string => {
+  switch (task.status) {
+    case 'pending': return 'fa-clock'
+    case 'running': return 'fa-spinner fa-spin'
+    case 'cancelling': return 'fa-circle-notch fa-spin'
+    case 'completed': return 'fa-check'
+    case 'failed': return 'fa-xmark'
+    case 'cancelled': return 'fa-ban'
+    case 'timeout': return 'fa-hourglass-end'
+    case 'interrupted': return 'fa-circle-exclamation'
+    case 'lost': return 'fa-link-slash'
+    default: return 'fa-circle'
+  }
+}
+const subagentTaskStatusTone = (task: SubagentTaskRecord): string => {
+  if (isSubagentTaskActive(task)) return 'border-sky-200 bg-sky-50 text-sky-700'
+  if (task.status === 'completed') return 'border-emerald-200 bg-emerald-50 text-emerald-700'
+  if (task.status === 'failed' || task.status === 'timeout' || task.status === 'lost') {
+    return 'border-rose-200 bg-rose-50 text-rose-600'
+  }
+  return 'border-slate-200 bg-slate-50 text-slate-600'
+}
+const displaySubagentTaskUsage = computed<ChatDataTokenUsage | null>(() => {
+  const task = displaySubagentTask.value
+  if (!task) return null
+  if (isSubagentTaskActive(task)) {
+    const live = liveSubagentTaskUsage.value[task.task_id]
+    if (live) return live
+  }
+  const meta = task.result_meta
+  const detail = meta?.subagent_token_usage_detail
+  if (detail) return detail
+  const snapshot = meta?.subagent_context_usage
+  if (!snapshot) return null
+  return {
+    used: snapshot.used_tokens,
+    total: snapshot.context_window ?? snapshot.threshold_tokens,
+    percentage: snapshot.percent,
+    current_input_tokens: snapshot.used_tokens,
+    compression_trigger_tokens: snapshot.threshold_tokens,
+    context_window: snapshot.context_window,
+    estimated: true,
+  }
+})
+const handleSubagentTaskUsageUpdated = (taskId: string, usage: ChatDataTokenUsage | null) => {
+  if (usage) {
+    liveSubagentTaskUsage.value = { ...liveSubagentTaskUsage.value, [taskId]: usage }
+    return
+  }
+  if (!liveSubagentTaskUsage.value[taskId]) return
+  const next = { ...liveSubagentTaskUsage.value }
+  delete next[taskId]
+  liveSubagentTaskUsage.value = next
+}
+const displaySubagentTaskCompactions = computed(
+  () => displaySubagentTask.value?.result_meta?.subagent_compactions || [],
+)
 
 /** 选中 task 调用时，工具视图额外展示「完整过程」（与主对话共用同一套消息/工具组件） */
 const subagentTaskCall = computed(() => {
@@ -154,8 +242,9 @@ const subagentUsageForPanel = computed<ChatDataTokenUsage | null>(() => {
   }
 })
 
-const selectPanelTab = (tabId: string) => {
+const selectPanelTab = (tabId: string, fromTabStrip = false) => {
   const previousTabId = activePanelTabId.value
+  const isSameActiveTab = tabId === previousTabId
   if (tabId !== previousTabId) rememberScroll(previousTabId, sidePanelRef.value?.getBodyScrollTop() ?? 0)
   const tab = panelTabs.value.find(item => item.id === tabId)
   // 文件 tab 各自持有路径：切回某个文件 tab 时恢复它的内容
@@ -163,20 +252,34 @@ const selectPanelTab = (tabId: string) => {
     selectConsoleFile(tab.path)
     void loadWorkspaceFileContent(props.conversationId, tab.path)
   }
+  if (tab?.kind === 'subagentTask' && tab.taskId) {
+    void props.loadSubagentTaskDetail?.(tab.taskId)
+  }
   selectTab(tabId)
   emit('update:open', true)
   void nextTick(() => {
     const sidePanel = sidePanelRef.value
     if (!sidePanel) return
+    // 从 tab 条重复点击当前项只重新聚焦：不打断用户正在阅读的位置；
+    // 业务入口（工具卡 / 管理页）即使激活的是同一个 tab 仍按首次打开处理。
+    if (fromTabStrip && isSameActiveTab && props.open) return
     const savedTop = scrollTopFor(tabId)
-    const followActive = isToolTabActive.value && toolViewMode.value === 'agent' && Boolean(subagentTaskCall.value)
-    // 首次打开跟随型 tab → 停在最新；切回已有 tab → 恢复上次位置
-    if (savedTop === undefined && followActive) {
+    // 首次打开过程类 tab（前台子智能体 / 后台任务详情）→ 停在最新；
+    // 切回已有 tab → 恢复上次位置，由上翻/回到底部决定是否继续跟随
+    if (savedTop === undefined && panelAutoFollow.value) {
       sidePanel.scrollBodyToBottom()
       return
     }
     sidePanel.setBodyScrollTop(savedTop ?? 0)
   })
+}
+
+const selectPanelTabFromStrip = (tabId: string) => selectPanelTab(tabId, true)
+
+/** 业务入口会先激活再走 selectPanelTab，旧 tab 的阅读位置需要在这里先落账。 */
+const rememberActivePanelScroll = () => {
+  if (!props.open) return
+  rememberScroll(activePanelTabId.value, sidePanelRef.value?.getBodyScrollTop() ?? 0)
 }
 
 const closePanelTab = (tabId: string) => {
@@ -185,14 +288,48 @@ const closePanelTab = (tabId: string) => {
   if (fallbackId) selectPanelTab(fallbackId)
 }
 
+const openHomePanelTab = () => {
+  rememberActivePanelScroll()
+  activateHome()
+  selectPanelTab(HOME_TAB_ID)
+}
+
 const openWorkspacePanelTab = () => {
-  void activateWorkspace()
+  rememberActivePanelScroll()
+  activateWorkspace()
   selectPanelTab(WORKSPACE_TAB_ID)
 }
 
+const openSubagentManagerPanelTab = () => {
+  rememberActivePanelScroll()
+  activateSubagentManager()
+  selectPanelTab(SUBAGENT_MANAGER_TAB_ID)
+}
+
+const cancelSubagentTaskFromManager = (task: SubagentTaskRecord) => {
+  void props.cancelSubagentTask?.(task)
+}
+
+const findSubagentTaskByToolCall = (toolCallId: string): SubagentTaskRecord | null => {
+  const listed = props.subagentTasks.find(task => task.parent_tool_call_id === toolCallId)
+  if (listed) return listed
+  return Object.values(props.subagentTaskDetails).find(task => task.parent_tool_call_id === toolCallId) || null
+}
+
 const openToolPanelTab = (toolCall: ToolCallInfo) => {
+  // 后台 task 调用的工具结果只是「已启动」，真正过程/报告在任务账本里；
+  // 能按 parent_tool_call_id 找到任务时直接进任务详情页（与「子智能体管理」
+  // 同一个页面），避免停在空工具详情。前台 task 没有账本记录，走原链路。
+  if (toolCall.tool_name === 'task') {
+    const task = findSubagentTaskByToolCall(toolCall.tool_call_id)
+    if (task) {
+      openSubagentTaskPanelTab(task)
+      return
+    }
+  }
   const isTask = toolCall.tool_name === 'task' && (toolCall.subagentTrail?.length ?? 0) > 0
   const subagentType = typeof toolCall.args?.subagent_type === 'string' ? toolCall.args.subagent_type.trim() : ''
+  rememberActivePanelScroll()
   activateTab({
     id: `${isTask ? 'agent' : 'tool'}:${toolCall.tool_call_id}`,
     kind: isTask ? 'agentProcess' : 'tool',
@@ -204,8 +341,22 @@ const openToolPanelTab = (toolCall: ToolCallInfo) => {
 
 const openFilePanelTab = (path: string) => {
   const fileName = path.split('/').pop() || path
+  rememberActivePanelScroll()
   activateTab({ id: `file:${path}`, kind: 'file', title: fileName, path })
   selectPanelTab(`file:${path}`)
+}
+
+/** 后台任务独立 tab：同一 task_id 只激活已有 tab，滚动位置与展开态各自保留。 */
+const openSubagentTaskPanelTab = (task: SubagentTaskRecord) => {
+  const tabId = `subagent-task:${task.task_id}`
+  rememberActivePanelScroll()
+  activateTab({
+    id: tabId,
+    kind: 'subagentTask',
+    title: task.label || task.description || '后台任务',
+    taskId: task.task_id,
+  })
+  selectPanelTab(tabId)
 }
 
 /**
@@ -215,6 +366,15 @@ const openFilePanelTab = (path: string) => {
  * 两种模式互斥渲染，不堆叠。
  */
 const toolViewMode = ref<'agent' | 'generic'>('agent')
+
+/** 过程类 tab 是否开启贴底跟随：后台任务详情始终跟随；前台子智能体按聊天模式跟随。 */
+const panelAutoFollow = computed(() => (
+  isToolTabActive.value
+  && (
+    displayTabIsSubagentTask.value
+    || (toolViewMode.value === 'agent' && Boolean(subagentTaskCall.value))
+  )
+))
 
 watch(() => displayToolCall.value?.tool_call_id, () => {
   // 每次选中新的子智能体任务默认回到聊天方式；普通工具不涉及该状态
@@ -381,9 +541,8 @@ watch(() => props.open, (open) => {
   void nextTick(() => {
     const sidePanel = sidePanelRef.value
     if (!sidePanel) return
-    const followActive = isToolTabActive.value && toolViewMode.value === 'agent' && Boolean(subagentTaskCall.value)
     const savedTop = scrollTopFor(activePanelTabId.value)
-    if (savedTop === undefined && followActive) {
+    if (savedTop === undefined && panelAutoFollow.value) {
       sidePanel.scrollBodyToBottom()
       return
     }
@@ -1112,6 +1271,7 @@ watch(
       // 会话切换：面板 tab 回到工作区根，不把上个会话的工具/文件 tab 带过来
       resetTabs()
       officePreviewCache.value = {}
+      liveSubagentTaskUsage.value = {}
       selectedConsoleOfficeHtml.value = null
       selectedConsoleOfficePreviewReason.value = null
       loadingOfficePreviewKey.value = null
@@ -1239,8 +1399,14 @@ defineExpose({
   scheduleRefresh: scheduleWorkspaceFilesRefresh,
   /** 主对话点击工具卡：打开/激活对应工具详情或子智能体 tab */
   openTool: openToolPanelTab,
-  /** 右上角面板入口：回到工作区 tab */
+  /** 输入框任务栏点击：打开该后台任务的完整过程/报告 */
+  openSubagentTask: openSubagentTaskPanelTab,
+  /** 右上角面板入口：回到管理首页 */
+  openHome: openHomePanelTab,
+  /** 管理首页 → 文件管理 */
   openWorkspace: openWorkspacePanelTab,
+  /** 管理首页 → 子智能体管理 */
+  openSubagentManager: openSubagentManagerPanelTab,
   /** 手动兜底刷新：同时刷列表与当前预览内容 */
   refreshFiles: refreshWorkspaceFiles,
   /** 工具写文件后的预览强制重载（仅当写的是当前预览文件） */
@@ -1254,27 +1420,53 @@ defineExpose({
   <ConversationSidePanel
     ref="sidePanelRef"
     :open="open"
-    :auto-follow="isToolTabActive && toolViewMode === 'agent' && Boolean(subagentTaskCall)"
+    :auto-follow="panelAutoFollow"
     :fill-body="isWorkspaceTabActive"
-    :show-subheader="isToolTabActive && Boolean(subagentTaskCall)"
+    :show-subheader="isToolTabActive && (Boolean(subagentTaskCall) || (displayTabIsSubagentTask && Boolean(displaySubagentTask)))"
     :show-trigger="false"
     :show-close="false"
     @open="$emit('update:open', true)"
     @close="$emit('update:open', false)"
   >
-    <!-- 面板 tab 条：工作区常驻，工具详情 / 子智能体过程 / 文件各占一个 tab；
+    <!-- 面板 tab 条：管理首页常驻，文件 / 子智能体管理 / 任务详情各占一个 tab；
          同对象再次打开只激活已有 tab，不替换其他内容。 -->
     <template #tabs>
       <RightSidebarTabStrip
         :tabs="panelTabs"
         :active-tab-id="activePanelTabId"
-        @select="selectPanelTab"
+        @select="selectPanelTabFromStrip"
         @close="closePanelTab"
       />
     </template>
 
     <template #subheader>
-      <div v-if="isToolTabActive && subagentTaskCall" class="flex w-full items-center justify-between gap-2">
+      <div v-if="isToolTabActive && displayTabIsSubagentTask && displaySubagentTask" class="flex w-full items-center justify-between gap-2" data-subagent-task-subheader>
+        <div class="flex min-w-0 items-center gap-2">
+          <span
+            class="inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium"
+            :class="subagentTaskStatusTone(displaySubagentTask)"
+            :title="displaySubagentTask.status_label"
+            :aria-label="`${displaySubagentTask.subagent_type} ${displaySubagentTask.status_label}`"
+            data-subagent-task-status
+          >
+            <span>{{ displaySubagentTask.subagent_type }}</span>
+            <i class="fa-solid text-[9px]" :class="subagentTaskStatusIcon(displaySubagentTask)" aria-hidden="true"></i>
+          </span>
+          <ConversationTokenUsage
+            v-if="displaySubagentTaskUsage"
+            :usage="displaySubagentTaskUsage"
+            :messages="[]"
+            compact
+            data-subagent-task-usage
+          />
+          <span
+            v-if="displaySubagentTaskCompactions.length"
+            class="shrink-0 cursor-default rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] leading-none text-slate-500 tabular-nums"
+            :title="displaySubagentTaskCompactions.map(item => `${item.timestamp || ''} ${item.estimated_tokens_before ?? 0} → ${item.estimated_tokens_after ?? 0} tokens，压缩 ${item.compressed_messages ?? 0} 条`).join('\n')"
+          >已压缩 {{ displaySubagentTaskCompactions.length }} 次</span>
+        </div>
+      </div>
+      <div v-else-if="isToolTabActive && subagentTaskCall" class="flex w-full items-center justify-between gap-2">
         <ConversationTokenUsage
           v-if="subagentUsageForPanel"
           :usage="subagentUsageForPanel"
@@ -1313,6 +1505,27 @@ defineExpose({
       </div>
     </template>
 
+    <div v-show="isHomeTabActive" class="min-h-full">
+      <RightSidebarHome
+        :file-count="producedFiles.length"
+        :used-bytes="workspaceUsage.used_bytes"
+        :limit-bytes="workspaceUsage.limit_bytes"
+        :task-count="subagentTasks.length"
+        :active-task-count="subagentTasks.filter(isSubagentTaskActive).length"
+        @open-files="openWorkspacePanelTab"
+        @open-subagents="openSubagentManagerPanelTab"
+      />
+    </div>
+
+    <div v-show="isSubagentManagerTabActive" class="min-h-0">
+      <SubagentManagerTab
+        :tasks="subagentTasks"
+        :cancelling-task-ids="subagentTaskCancellingIds"
+        @open="openSubagentTaskPanelTab"
+        @cancel="cancelSubagentTaskFromManager"
+      />
+    </div>
+
     <div v-show="isWorkspaceTabActive" class="flex min-h-0 flex-1 flex-col">
       <!-- 文件管理 tab 自己的工具条：根路径 / 一键折叠 / 文件数量。
            这类信息属于「文件管理」，不能放进 tab 条（会和 tab 胶囊挤在一起）。 -->
@@ -1321,6 +1534,26 @@ defineExpose({
     </div>
 
     <div v-show="isToolTabActive" class="min-h-0">
+      <!-- 后台任务 tab：过程/报告直接来自任务账本详情，不依赖父 Run 的工具调用 -->
+      <template v-for="taskTab in subagentTaskTabs" :key="taskTab.id">
+        <SubagentTaskProcessView
+          v-if="subagentTaskForTab(taskTab)"
+          v-show="displayToolTab?.id === taskTab.id"
+          :task="subagentTaskForTab(taskTab) as SubagentTaskRecord"
+          :conversation-id="conversationId"
+          :active-tool-call-id="activeToolCall?.tool_call_id || null"
+          class="mb-3"
+          @select-tool="emit('selectTool', $event)"
+          @usage-updated="handleSubagentTaskUsageUpdated"
+        />
+      </template>
+      <div
+        v-if="displayTabIsSubagentTask && !displaySubagentTask"
+        class="flex items-center gap-2 rounded-xl border border-dashed border-slate-200 px-3.5 py-4 text-[12px] text-slate-500"
+      >
+        <i class="fa-solid fa-spinner fa-spin text-slate-400"></i>
+        <span>正在读取任务详情…</span>
+      </div>
       <!-- 每个子智能体 tab 一份常驻过程视图：多开/点内层工具/切文件 tab 都不卸载 -->
       <AgentProcessView
         v-for="processTab in agentProcessTabs"

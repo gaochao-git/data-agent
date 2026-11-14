@@ -99,6 +99,30 @@ describe('useSqlGenerator', () => {
     expect(onMessage).toHaveBeenCalledWith({ content: '2' })
   })
 
+  it('dispatches subagent task snapshots without treating them as chat content', async () => {
+    const onMessage = vi.fn()
+    const onSubagentTaskUpdated = vi.fn()
+    const { generateSqlStream } = useSqlGenerator()
+    await generateSqlStream('1+1', true, null, conversationId, {
+      mode: 'query',
+      agentId: 'chat_data',
+      onMessage,
+      onSubagentTaskUpdated,
+      responseFactory: async () => streamResponse([
+        'event: subagent_task_updated\ndata: {"task":{"task_id":"t1","conversation_id":"conversation-1","status":"running","progress":{"last_tool":"file_read"}}}\n\n',
+        'event: done\ndata: {"status":"finished"}\n\n',
+      ]),
+    })
+
+    expect(onSubagentTaskUpdated).toHaveBeenCalledWith({
+      task_id: 't1',
+      conversation_id: 'conversation-1',
+      status: 'running',
+      progress: { last_tool: 'file_read' },
+    })
+    expect(onMessage).not.toHaveBeenCalled()
+  })
+
   it('keeps reading until structured done after an error event', async () => {
     const onResult = vi.fn()
     const onError = vi.fn()

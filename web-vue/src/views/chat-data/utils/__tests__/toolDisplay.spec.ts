@@ -50,6 +50,14 @@ describe('toolDisplay', () => {
     expect(getToolDisplayName('mcp_tool_search')).toBe('搜索 MCP 工具')
   })
 
+  it('labels task management actions separately from subagent dispatch', () => {
+    expect(getToolDisplayName('task', { action: 'list' })).toBe('查看后台任务')
+    expect(getToolDisplayName('task', { action: 'check', task_id: 't1' })).toBe('查看后台任务')
+    expect(getToolDisplayName('task', { action: 'wait', task_ids: ['t1'] })).toBe('等待后台任务')
+    expect(getToolDisplayName('task', { action: 'cancel', task_id: 't1' })).toBe('取消后台任务')
+    expect(getToolDisplayName('task')).toBe('派发子智能体')
+  })
+
   it('extracts the primary argument shown after compact tool names', () => {
     expect(getToolCompactDescription('file_write', {
       file_path: '/mnt/user-data/outputs/语义模型分析报告.md',
@@ -120,6 +128,18 @@ describe('toolDisplay', () => {
     expect(getToolCompactDescription('task', {
       description: '只给了任务书没有类型',
     })).toBe('只给了任务书没有类型')
+    expect(getToolCompactDescription('task', {
+      action: 'check',
+      task_id: 't1',
+    })).toBe('t1')
+    expect(getToolCompactDescription('task', {
+      action: 'wait',
+      task_ids: ['t1', 't2'],
+    })).toBe('t1 等 2 个任务')
+    expect(getToolCompactDescription('task', {
+      action: 'cancel',
+      task_id: 't1',
+    })).toBe('t1')
     expect(getToolCompactDescription('unknown_tool', { query: '不展示' })).toBe('')
   })
 

@@ -376,7 +376,13 @@ async def test_poll_pending_runs_submits_then_exits_on_cancel(monkeypatch):
     async def fake_list(_limit):
         return ["run-new", "run-known"]
 
+    async def noop() -> None:
+        return None
+
     runtime._reap_expired_runs = fake_reap
+    runtime._reap_expired_pending_runs = noop
+    runtime._reap_expired_subagent_tasks = noop
+    runtime._dispatch_subagent_notifications = noop
     runtime._list_runnable_runs = fake_list
     runtime._tasks["run-known"] = asyncio.create_task(asyncio.sleep(0))
     monkeypatch.setattr(

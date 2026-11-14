@@ -31,6 +31,17 @@ export const appendSubagentCompaction = (
   return [...list, record]
 }
 
+/** 把压缩记录映射成过程 trail 的分隔卡。 */
+export const buildSubagentCompactionTrailItem = (record: SubagentCompaction): SubagentTrailItem => ({
+  kind: 'compaction',
+  id: record.id,
+  timestamp: record.timestamp,
+  estimated_tokens_before: record.estimated_tokens_before,
+  estimated_tokens_after: record.estimated_tokens_after,
+  estimated_cleared_tokens: record.estimated_cleared_tokens,
+  compressed_messages: record.compressed_messages,
+})
+
 /** 把压缩记录合进 task 调用：列表去重 + 过程 trail 插入分隔卡；无变化返回 null。 */
 export const applySubagentCompactionToTool = (
   tool: ToolCallInfo,
@@ -38,18 +49,9 @@ export const applySubagentCompactionToTool = (
 ): ToolCallInfo | null => {
   const next = appendSubagentCompaction(tool.subagentCompactions, record)
   if (!next) return null
-  const trailItem: SubagentTrailItem = {
-    kind: 'compaction',
-    id: record.id,
-    timestamp: record.timestamp,
-    estimated_tokens_before: record.estimated_tokens_before,
-    estimated_tokens_after: record.estimated_tokens_after,
-    estimated_cleared_tokens: record.estimated_cleared_tokens,
-    compressed_messages: record.compressed_messages,
-  }
   return {
     ...tool,
     subagentCompactions: next,
-    subagentTrail: [...(tool.subagentTrail || []), trailItem],
+    subagentTrail: [...(tool.subagentTrail || []), buildSubagentCompactionTrailItem(record)],
   }
 }

@@ -29,6 +29,8 @@ const props = defineProps({
   timingRunning: { type: Boolean, default: false },
   /** 子智能体 token 用量（billing 口径）：完成后与「用时」同一行展示 */
   tokenUsage: { type: Object as PropType<SubagentTokenUsage | null>, default: null },
+  /** 后台任务详情没有 trail 时也要展示任务书/报告；前台工具详情保持原口径 */
+  showWithoutTrail: { type: Boolean, default: false },
 })
 
 const emit = defineEmits<{
@@ -40,7 +42,11 @@ const tokenUsageText = computed(() => buildSubagentTokenUsageText(props.tokenUsa
 </script>
 
 <template>
-  <div v-if="hasSubagentTrail(toolCall)" data-subagent-process class="flex flex-col gap-3">
+  <div
+    v-if="messages.length && (showWithoutTrail || hasSubagentTrail(toolCall))"
+    data-subagent-process
+    class="flex flex-col gap-3"
+  >
     <!-- 过程记录直接复用主对话消息分派：user（任务书）+ assistant（思考/正文/工具） -->
     <MessageItem
       v-for="message in messages"

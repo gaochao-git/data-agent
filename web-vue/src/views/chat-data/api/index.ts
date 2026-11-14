@@ -37,6 +37,7 @@ import type {
   MetaGlobalEnum,
   MetaGlobalEnumRef,
   MetaGlobalEnumValueItem,
+  SubagentTaskRecord,
 } from '../types'
 import type { Dashboard } from './dashboard'
 
@@ -1655,6 +1656,56 @@ export function getRunState(
   return request({
     url: `/agents/api/chatdata/conversations/${conversationId}/run-state`,
     method: 'get',
+  })
+}
+
+
+/** 读取当前会话的后台子智能体任务；刷新页面后据此恢复任务面板。 */
+export async function listSubagentTasks(
+  conversationId: string,
+  options?: { status?: string; limit?: number },
+): Promise<SubagentTaskRecord[]> {
+  const response = await request({
+    url: `/agents/api/chatdata/conversations/${conversationId}/subagent-tasks`,
+    method: 'get',
+    params: {
+      ...(options?.status ? { status: options.status } : {}),
+      ...(options?.limit ? { limit: options.limit } : {}),
+    },
+  })
+  return Array.isArray(response.data?.tasks) ? response.data.tasks as SubagentTaskRecord[] : []
+}
+
+/** 读取单个任务的完整报告与过程快照。 */
+export async function getSubagentTask(conversationId: string, taskId: string): Promise<SubagentTaskRecord> {
+  const response = await request({
+    url: `/agents/api/chatdata/conversations/${conversationId}/subagent-tasks/${taskId}`,
+    method: 'get',
+  })
+  return response.data as SubagentTaskRecord
+}
+
+/** 请求取消后台任务；跨 worker 在下一次心跳生效。 */
+export async function cancelSubagentTask(conversationId: string, taskId: string): Promise<SubagentTaskRecord> {
+  const response = await request({
+    url: `/agents/api/chatdata/conversations/${conversationId}/subagent-tasks/${taskId}/cancel`,
+    method: 'post',
+  })
+  return response.data as SubagentTaskRecord
+}
+
+/** 订阅后台子智能体的实时过程事件；父 Run 结束后仍可继续接收。 */
+export function streamSubagentTaskEvents(
+  conversationId: string,
+  taskId: string,
+  lastEventId = '0-0',
+  signal?: AbortSignal,
+): Promise<Response> {
+  return requestStream({
+    url: `/agents/api/chatdata/conversations/${conversationId}/subagent-tasks/${taskId}/events`,
+    method: 'get',
+    headers: { 'Last-Event-ID': lastEventId },
+    signal,
   })
 }
 

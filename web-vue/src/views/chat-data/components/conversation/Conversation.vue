@@ -5,7 +5,7 @@
  */
 import { computed, nextTick, onMounted, onUnmounted, ref, toRef, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import type { ChatDataContextCompressionEvent, ChatDataTokenUsage, DashboardSpecPayload, DataSource, DocumentAnnotation, ExecutionTargetOption, LangGraphMessage, Message, MessageAttachment, PendingUserQuestion, SemanticYamlFile, SkillInfo, SubagentCompaction, SubagentContextUsage, SubagentTrailItem, ThinkingSegment, ToolCallInfo, ToolLifecycleEventData, UserQuestionAnswer } from '../../types'
+import type { ChatDataContextCompressionEvent, ChatDataTokenUsage, DashboardSpecPayload, DataSource, DocumentAnnotation, ExecutionTargetOption, LangGraphMessage, Message, MessageAttachment, PendingUserQuestion, SemanticYamlFile, SkillInfo, SubagentCompaction, SubagentContextUsage, SubagentTaskRecord, SubagentTrailItem, ThinkingSegment, ToolCallInfo, ToolLifecycleEventData, UserQuestionAnswer } from '../../types'
 import { useSqlGenerator, type RunDoneStatus } from '../../composables/useSqlGenerator'
 import { useConversationHistory } from '../../composables/useConversationHistory'
 import { useModelOptions } from '../../composables/useModelOptions'
@@ -13,6 +13,8 @@ import { useSaveToPanel } from '../../composables/useSaveToPanel'
 import { useSkillCommandMenu } from '../../composables/useSkillCommandMenu'
 import { useWorkspaceFileMention, type WorkspaceFilePick } from '../../composables/useWorkspaceFileMention'
 import { useQuotedSnippets } from '../../composables/useQuotedSnippets'
+import { useSubagentTasks } from '../../composables/useSubagentTasks'
+import { useBackgroundRunWakeup } from '../../composables/useBackgroundRunWakeup'
 import { toDocumentAnnotationRequests, useDocumentAnnotations } from '../../composables/useDocumentAnnotations'
 import { useSseReconnect } from '../../composables/useSseReconnect'
 import { answerUserQuestion, cancelConversationRun, cancelSteerMessage, cancelUserQuestion, createDashboardFromSpec, deleteUploadedFile, getConversationWorkspaceFileContent, getConversationWorkspaceFiles, getConversationWorkspaceRawFile, getPendingUserQuestion, importConversationWorkspaceSkill, getRunState, steerConversation, streamRunEvents, updateSteerMessage, uploadFile } from '../../api'
@@ -40,6 +42,7 @@ import ConversationReconnectBanner from './ConversationReconnectBanner.vue'
 import { deriveAnalysisTodos, shouldShowAnalysisProgress } from '../../utils/analysisTodos'
 import { createTopReachTracker } from '../../utils/scrollReach'
 import { applySubagentCompactionToTool, buildSubagentCompactionRecord } from '../../utils/subagentCompaction'
+import { applySubagentTrailEvent } from '../../utils/subagentTrail'
 import { isScrolledToBottom } from '../../utils/scrollFollow'
 import { normalizeVisiblePath } from '../../utils/consoleFileTree'
 import {
@@ -729,7 +732,7 @@ const resetTokenUsagePanel = (clearUsage = true) => {
 const toolCallsMap = ref<Map<string, ToolCallInfo>>(new Map())
 const activeToolCallId = ref<string | null>(null)
 const sidePanelOpen = ref(false)
-// 工作区文件面板整体拆到 ConversationWorkspacePanel.vue：文件列表/树/预览/上传/下载/删除
+// 右侧管理面板整体拆到 ConversationWorkspacePanel.vue：管理首页、文件列表/树/预览、子智能体任务
 // 与刷新调度都在子组件内闭环，父级只通过 ref 调用刷新与打开入口。
 const workspacePanelRef = ref<InstanceType<typeof ConversationWorkspacePanel> | null>(null)
 const presentedArtifactContents = ref<Record<string, string>>({})
@@ -742,6 +745,48 @@ const importedWorkspaceSkillIds = ref<Record<string, string>>({})
 const activeAssistantMessageId = ref<string | null>(null)
 const localConversationId = ref<string | null>(props.conversationId || null)
 const conversationIdRef = toRef(props, 'conversationId')
+// 后台任务状态源：列表/轮询恢复真值，SSE 只负责把快照合进来。
+const {
+  tasks: subagentTasks,
+  details: subagentTaskDetails,
+  setConversation: setSubagentTasksConversation,
+  applyTaskUpdate: applySubagentTaskUpdate,
+  loadTaskDetail: loadSubagentTaskDetail,
+  cancelTask: cancelSubagentTaskRequest,
+} = useSubagentTasks()
+const cancellingTaskIds = ref<string[]>([])
+
+// 后台任务收口后服务端可能新建隐藏通知 Run；空闲会话在这里自动接上它的 SSE，
+// 不再要求用户重新进入会话才能看到主智能体的后续工作。
+useBackgroundRunWakeup({
+  conversationId: localConversationId,
+  tasks: subagentTasks,
+  isGenerating,
+  hasActiveRun,
+  recover: recoverInterruptedPageRun,
+})
+
+watch(
+  () => localConversationId.value,
+  (nextId) => { void setSubagentTasksConversation(nextId) },
+  { immediate: true },
+)
+
+const cancelSubagentTask = async (task: SubagentTaskRecord) => {
+  if (cancellingTaskIds.value.includes(task.task_id)) return
+  cancellingTaskIds.value = [...cancellingTaskIds.value, task.task_id]
+  try {
+    const updated = await cancelSubagentTaskRequest(task.task_id)
+    if (!updated) {
+      ElMessage.error('取消任务失败，请稍后重试')
+      return
+    }
+    if (updated.status === 'cancelled') ElMessage.success('任务已取消')
+    else ElMessage.success('已请求取消，任务会在下一次心跳后停止')
+  } finally {
+    cancellingTaskIds.value = cancellingTaskIds.value.filter(id => id !== task.task_id)
+  }
+}
 // 切换会话同样重置思考意图：显式选择不跨会话记忆（默认永远以注册表配置为准）
 watch(() => props.conversationId || localConversationId.value, () => {
   enableDeepThinking.value = null
@@ -1130,7 +1175,8 @@ const selectToolCall = (toolCall: ToolCallInfo) => {
 }
 
 const openConsolePanel = () => {
-  // 只负责展开：保持上次停留的 tab（关闭只卸载 aside，tab 状态还在），不强制回到「文件管理」
+  // 用户从右上角入口打开时进入管理首页；工具/文件点击仍直接打开各自 tab。
+  workspacePanelRef.value?.openHome()
   sidePanelOpen.value = true
 }
 
@@ -1790,83 +1836,8 @@ const upsertSubagentTrailItem = (event: ToolLifecycleEventData) => {
     return
   }
 
-  // 流式增量：按 message_id 追加正文/思考
-  if (event.type === 'subagent_message_delta' || event.type === 'subagent_thinking_delta') {
-    const entryId = event.message_id
-    const delta = event.delta || ''
-    if (!entryId || !delta) return
-    const isText = event.type === 'subagent_message_delta'
-    commitTrail((trail) => {
-      const idx = trail.findIndex(item => item.id === entryId && item.kind === 'message')
-      if (idx >= 0) {
-        const prev = trail[idx]
-        if (!prev) return trail
-        trail[idx] = isText
-          ? { ...prev, content: (prev.content || '') + delta, truncated: Boolean(event.truncated) || Boolean(prev.truncated) }
-          : { ...prev, thinking: (prev.thinking || '') + delta, thinkingTruncated: Boolean(event.truncated) || Boolean(prev.thinkingTruncated) }
-      } else {
-        trail.push(isText
-          ? { kind: 'message', id: entryId, content: delta, truncated: Boolean(event.truncated) }
-          : { kind: 'message', id: entryId, thinking: delta, thinkingTruncated: Boolean(event.truncated) })
-      }
-      return trail
-    })
-    return
-  }
-
-  if (event.type === 'subagent_message') {
-    const entryId = event.message_id
-    if (!entryId) return
-    const content = event.content || ''
-    commitTrail((trail) => {
-      const idx = trail.findIndex(item => item.id === entryId && item.kind === 'message')
-      if (idx >= 0) {
-        const prev = trail[idx]
-        if (!prev) return trail
-        // 收敛策略「只补标记不覆盖」：已增量流过的消息保留前端拼出的全文，
-        // 完整事件只补截断标记；未流过（如后端降级路径）才写入完整内容
-        trail[idx] = event.streamed
-          ? { ...prev, truncated: Boolean(event.truncated) || Boolean(prev.truncated) }
-          : { ...prev, content: content || prev.content || '', truncated: Boolean(event.truncated) }
-      } else {
-        trail.push({ kind: 'message', id: entryId, content, truncated: Boolean(event.truncated) })
-      }
-      return trail
-    })
-    return
-  }
-
-  // 工具生命周期事件：tool_started / tool_completed / tool_failed
-  const entryId = event.tool_call_id
-  if (!entryId) return
-  const entry: SubagentTrailItem = {
-    kind: 'tool',
-    id: entryId,
-    tool_name: event.tool_name || 'tool_call',
-    args: { ...(event.args || {}) },
-    result: event.content || event.result,
-    status: event.type === 'tool_failed' ? 'error' : event.type === 'tool_completed' ? 'completed' : 'running',
-    started_at_ms: event.started_at_ms ?? null,
-    ended_at_ms: event.ended_at_ms ?? null,
-  }
-  commitTrail((trail) => {
-    const idx = trail.findIndex(item => item.id === entryId)
-    if (idx >= 0) {
-      const prev = trail[idx]
-      if (!prev) return trail
-      trail[idx] = {
-        ...prev,
-        ...entry,
-        args: { ...(prev.args || {}), ...(entry.args || {}) },
-        // tool_started 事件不带计时，完成事件才补齐：缺省时保留已有值
-        started_at_ms: entry.started_at_ms ?? prev.started_at_ms ?? null,
-        ended_at_ms: entry.ended_at_ms ?? prev.ended_at_ms ?? null,
-      }
-    } else {
-      trail.push(entry)
-    }
-    return trail
-  })
+  // 流式增量 / 完整消息 / 工具生命周期统一由共享 reducer 归并。
+  commitTrail(trail => applySubagentTrailEvent(trail, event))
 
   // 子智能体内部工具落盘（如 OfficeCLI 写 docx）后同步刷新控制台文件树，
   // 与主智能体工具完成后的刷新行为保持一致；schedule 内部有 500ms 防抖
@@ -2130,6 +2101,7 @@ const submitAnalysisQuery = async (
       {
         mode: 'query',
         onMessage: (msg) => handleLangGraphMessage(msg),
+        onSubagentTaskUpdated: (task) => applySubagentTaskUpdate(task),
         onResult: () => {},
         onStatus: () => {},
         onError: (error, meta) => {
@@ -3174,6 +3146,11 @@ const handleKeyDown = (event: KeyboardEvent) => {
       :document-annotation-handler="handleDocumentAnnotation"
       :document-annotation-draft="input"
       :document-annotation-draft-handler="updateDocumentAnnotationDraft"
+      :subagent-tasks="subagentTasks"
+      :subagent-task-details="subagentTaskDetails"
+      :subagent-task-cancelling-ids="cancellingTaskIds"
+      :load-subagent-task-detail="loadSubagentTaskDetail"
+      :cancel-subagent-task="cancelSubagentTask"
       @conversation-created="handlePanelConversationCreated"
       @import-semantic-yaml="emit('importSemanticYaml', $event)"
       @select-tool="selectToolCall"

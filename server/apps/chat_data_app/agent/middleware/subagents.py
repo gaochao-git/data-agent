@@ -17,12 +17,14 @@
 - 子智能体不注册 ``ask_user_question``，第一版不支持嵌套人工中断。
 """
 
+import asyncio
 import re
 import time
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from dataclasses import dataclass, field
 from itertools import count
-from typing import Annotated, Any, cast
+from typing import Annotated, Any, Literal, cast
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import AgentMiddleware, AgentState, ModelCallResult, ModelRequest, ToolErrorMiddleware
@@ -39,6 +41,7 @@ from apps.chat_data_app.services.runtime_config import (
     SUBAGENT_MESSAGE_PREVIEW_MAX_CHARS,
     SUBAGENT_RESULT_PREVIEW_MAX_CHARS,
     SUBAGENT_THINKING_PREVIEW_MAX_CHARS,
+    TOOL_RESULT_OFFLOAD_SIZE,
 )
 from apps.chat_data_app.services.setting_service import get_runtime_setting
 from apps.chat_data_app.sse_protocol import (
@@ -68,20 +71,32 @@ from ..context.context_budget import (
     sanitize_context_usage_for_response,
 )
 from ..context.runtime import ContextRuntime
+from ..contracts.subagent_task import (
+    TASK_STATUS_CANCELLED,
+    TASK_STATUS_COMPLETED,
+    TASK_STATUS_FAILED,
+    TASK_STATUS_INTERRUPTED,
+    TASK_STATUS_TIMEOUT,
+    SubagentTaskPort,
+    SubagentTaskView,
+    get_subagent_task_service,
+)
 from ..tools.registry import TOOL_REQUIRED_SKILLS
 from .context_compression import create_context_compression_middleware
 from .context_usage import create_context_usage_middleware
 from .sandbox_renewal import create_sandbox_renewal_middleware
 from .skill_prerequisite import SkillPrerequisiteMiddleware
 from .subagent_async import (
-    _BackgroundTaskEntry,
-    _collect_background_notifications,
+    DEFAULT_WAIT_TIMEOUT_SECONDS,
+    MAX_WAIT_TASKS,
+    _append_partial_report,
+    _get_subagent_stream_writer,
     _spawn_background_task,
     _truncate_text,
-    build_cancel_async_task_tool,
-    build_check_async_task_tool,
-    build_list_async_tasks_tool,
+    _watch_background_task,
+    manage_async_task,
 )
+from .subagent_config import build_subagent_invocation_config
 from .tool_call_normalizer import create_tool_call_name_normalizer_middleware
 from .tool_execution_fence import create_tool_execution_fence_middleware
 from .tool_result import create_tool_result_middleware, externalize_tool_text
@@ -107,8 +122,8 @@ SUBAGENT_STATE_PASSTHROUGH_KEYS = frozenset(
 
 主图的压缩账本（context_compression_events / context_summary）、token_usage
 等一律不透传：前者带自定义 reducer，回流会污染主对话的流重试去重；后者是
-主对话的记账口径。子图挂压缩中间件后在 ``ChatDataSubAgentState`` 里维护
-自己的压缩账本，与主图互不影响。"""
+主对话的记账口径。子图挂压缩/用量中间件后在 ``ChatDataSubAgentState`` 里
+维护自己的压缩账本与 token_usage，与主图互不影响。"""
 
 TASK_TOOL_NAME = "task"
 
@@ -120,18 +135,19 @@ SUBAGENT_REPORT_MIN_TOKEN_LIMIT = 1000
 SUBAGENT_REPORT_PREVIEW_CHARS = 2000
 
 
-_TASK_TOOL_DESCRIPTION_TEMPLATE = """派发隔离上下文的子智能体处理复杂多步任务，只把最终结论带回主对话（大量文件/数据读取留在子图消化，保护主对话上下文）。
+_TASK_TOOL_DESCRIPTION_TEMPLATE = """派发隔离上下文的子智能体处理复杂多步任务，只把最终结论带回主对话（大量文件/数据读取留在子图消化，保护主对话上下文）。同一个工具也负责后台任务管理。
 
 可用子智能体类型：
 {available_agents}
 
 要求：
+- action="start"（默认）派发子智能体；后台任务管理用 action="list"/"check"/"wait"/"cancel"，不需要传 description/subagent_type。
 - 子智能体看不到主对话历史：任务书必须自带 ① 目标 ② 已知事实与文件路径 ③ 交付格式 ④ 约束与禁止项，并写明任务意图（研究盘点 / 分析 / 产出交付物）。
 - 适合：多文件或大体量数据的盘点调研、可并行的独立子任务；不适合：单点查询、需要向用户提问或展示过程的步骤（直接自己做）。
 - 大块背景先用 file_write 落盘，任务书给路径；只存在于对话里的信息子智能体拿不到。
 - explore 只读不写盘；需要落盘的交付物由主智能体收尾写。
 - 已派发任务不要重复执行；相互独立的子任务可在同一条消息里并行发起多个 task。
-- 耗时长且当轮不需要其结论的任务可传 background=true 转后台：立即返回 task_id，期间继续其他工作或直接结束本轮；完成后报告自动注入下一轮上下文，也可随时用 task_status 工具查询。
+- 耗时长且当轮不需要其结论的任务可传 background=true 转后台：立即返回持久 task_id（可配 label/timeout_seconds），期间继续其他工作或直接结束本轮；完成/失败/超时后会自动唤醒当前会话并注入通知。需要立即拿到先前任务结果时用 task(action="wait", task_ids=[...])；查单个任务用 task(action="check", task_id=...)；列任务用 task(action="list")；取消用 task(action="cancel", task_id=...)。
 - 回传是结论：向用户汇报时用自己的话转述关键结论与产物路径；产物由主智能体用 present_artifacts 展示。"""
 
 
@@ -153,23 +169,34 @@ class ChatDataSubAgentState(AgentState, total=False):
     context_compression: dict[str, Any] | None
     context_compression_events: Annotated[list[dict[str, Any]], merge_context_compression_events]
     loaded_skills: Annotated[list[str], merge_loaded_skill_names]
+    # 子图自有记账：SubagentContextUsageMiddleware 每次模型调用后写回全量明细
+    # （含 breakdown），调用方从 updates 捕获。必须在此声明 channel，否则
+    # Command(update=...) 会被 LangGraph 丢弃，前端只能看到汇总、无明细。
+    token_usage: dict[str, Any] | None
 
 
 class TaskToolArgs(BaseModel):
     """``task`` 工具入参。"""
 
-    description: str = Field(
-        min_length=1,
+    action: Literal["start", "list", "check", "wait", "cancel"] = Field(
+        default="start",
+        description=(
+            "start=派发子智能体（默认）；list=列后台任务；check=查单个任务；"
+            "wait=等待一个或多个任务终态；cancel=取消任务。"
+        ),
+    )
+    description: str | None = Field(
+        default=None,
         max_length=8000,
         description=(
-            "给子智能体的完整任务书：背景、要做什么、期望的交付格式。"
+            "action=start 时必填：给子智能体的完整任务书：背景、要做什么、期望的交付格式。"
             "子智能体看不到主对话，所有必要上下文都必须写在里面。"
         ),
     )
-    subagent_type: str = Field(
-        min_length=1,
+    subagent_type: str | None = Field(
+        default=None,
         max_length=64,
-        description="子智能体类型，必须是工具描述中列出的类型之一。",
+        description="action=start 时必填：子智能体类型，必须是工具描述中列出的类型之一。",
     )
     background: bool = Field(
         default=False,
@@ -177,6 +204,39 @@ class TaskToolArgs(BaseModel):
             "true=后台执行：立即返回任务 ID 不阻塞，完成后报告自动注入对话；"
             "适合耗时长且当轮不需要其结论的任务。false（默认）=等待完成后返回结论。"
         ),
+    )
+    label: str | None = Field(
+        default=None,
+        max_length=120,
+        description="后台任务列表里展示的短标题；不传时取任务书首行。",
+    )
+    timeout_seconds: int | None = Field(
+        default=None,
+        ge=30,
+        le=86400,
+        description="action=start 且 background=true 时生效：任务超时秒数；不传使用运行配置默认值。",
+    )
+    task_id: str | None = Field(
+        default=None,
+        max_length=64,
+        description="action=check/cancel 时要查询或取消的任务 ID。",
+    )
+    task_ids: list[str] | None = Field(
+        default=None,
+        max_length=MAX_WAIT_TASKS,
+        description="action=wait 时要等待的任务 ID 列表（最多 10 个）。",
+    )
+    status: str | None = Field(
+        default=None,
+        max_length=64,
+        description="action=list 时的可选过滤：active、terminal，或单个状态（如 running/completed/failed/cancelled）。",
+    )
+    limit: int = Field(default=20, ge=1, le=50, description="action=list 时最多返回条数。")
+    wait_seconds: int = Field(
+        default=DEFAULT_WAIT_TIMEOUT_SECONDS,
+        ge=1,
+        le=60,
+        description="action=wait 时最长等待秒数；超时返回当前状态，不取消任务。",
     )
 
 
@@ -631,24 +691,6 @@ def _compile_subagent(spec: SubagentSpec, run_controls: Any = None) -> Any:
     )
 
 
-def build_subagent_invocation_config(
-    spec: SubagentSpec,
-    *,
-    default_recursion_limit: int | None = None,
-) -> dict[str, Any]:
-    """构造子图调用配置：切断回调继承，避免子图 token 进入主 SSE 流。
-
-    default_recursion_limit 由调用方（异步装配链路）运行期经配置服务解析后传入
-    （get_runtime_setting 对注册 key 恒返回 int，不会为 None）；两者都缺省时
-    langgraph 默认 25 个 super-step，不低于 1 的下限由 max 保证。
-    """
-    return {
-        "callbacks": [],
-        "recursion_limit": max(int(spec.recursion_limit or default_recursion_limit or 0), 1),
-        "configurable": {"chatdata_subagent": spec.name},
-    }
-
-
 def _plain_text(content: Any) -> str:
     """把消息 content 归一化成纯文本（多模态 list 按行拼接）。"""
     if isinstance(content, list):
@@ -1040,6 +1082,8 @@ class _SubagentStreamState:
         self.collected: list = []
         # 内层工具开始的后端时间：完成事件缺少工具计时盖章时兜底（每个内层工具都有耗时）
         self.tool_started_at: dict[str, int] = {}
+        # 累计工具 id→name（完成也保留）：tool_started_at 只放正在执行的。
+        self.tool_history: dict[str, str] = {}
         # 子图上下文压缩事件（压缩节点 updates 里的 context_compression_events）
         self.compression_events: list[dict[str, Any]] = []
         self.seen_compression_ids: set[str] = set()
@@ -1230,10 +1274,7 @@ def _forward_subagent_compaction_events(
 def _process_subagent_chunk(
     chunk: Any, stream_state: "_SubagentStreamState", writer: Any, parent_tool_call_id: str | None
 ) -> bool:
-    """消费单个子图流 chunk：messages 模式转发增量、updates 模式发工具生命周期事件。
-
-    返回是否为 updates 模式（调用方据此推送 subagent_context_usage）。
-    """
+    """消费子图流 chunk；返回是否为 updates 模式。"""
     if not (isinstance(chunk, tuple) and len(chunk) == 2):
         return False
     mode, payload = chunk
@@ -1253,8 +1294,18 @@ def _process_subagent_chunk(
         stream_state.resolve_anonymous_id,
         stream_state.tool_started_at,
     ):
+        _track_subagent_tool_event(stream_state, event)
         _emit_subagent_tool_event(writer, event)
     return True
+
+
+def _track_subagent_tool_event(stream_state: "_SubagentStreamState", event: dict[str, Any]) -> None:
+    """记录累计工具（完成后仍保留），避免进度只剩正在执行的工具数。"""
+    if event.get("event_type") != SSE_EVENT_TOOL_STARTED:
+        return
+    tool_call_id = str(event.get("tool_call_id") or "")
+    if tool_call_id:
+        stream_state.tool_history[tool_call_id] = str(event.get("tool_name") or "")
 
 
 def _resolve_subagent_usage_detail(captured: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -1287,30 +1338,16 @@ async def _run_subagent_with_events(
     collected: list | None = None,
     captured: dict[str, Any] | None = None,
     usage_meta: dict[str, int] | None = None,
+    on_progress: Callable[[dict[str, Any]], None] | None = None,
 ) -> list:
-    """流式运行子图：向父图 custom 流转发内层事件，返回完整消息列表。
+    """流式运行子图：转发内层事件并返回完整消息列表。
 
-    ``collected`` 可由调用方传入并持有：子图中途抛异常（如 recursion_limit、
-    模型网络错误）时，调用方仍能用已收集的消息为失败路径构建 trail 快照。
+    ``collected`` / ``captured`` / ``usage_meta`` 分别承载已收集消息（失败路径
+    trail 快照）、上下文用量（写入 ToolMessage 供回放）与实时
+    ``subagent_context_usage`` 推送（口径与预算告警共用 ``_subagent_budget_meta``）。
 
-    ``captured`` 可由调用方传入收集附加产物：子图结束时写入 ``context_usage``
-    （最终上下文用量快照，成功与失败路径都可用），供调用方盖
-    ``subagent_context_usage`` 到 ToolMessage 供历史回放还原。
-
-    ``usage_meta`` 非 None 时，每个节点更新后估算当前子图上下文用量并向前端
-    发 ``subagent_context_usage`` 事件（task 卡片标题行实时显示）；静态口径
-    （system+tools）由调用方传入，与预算告警中间件共用 ``_subagent_budget_meta``。
-
-    双模式并用：
-
-    - ``messages``：token 级 ``AIMessageChunk``，正文/思考增量经
-      ``subagent_message_delta`` / ``subagent_thinking_delta`` 转发，
-      前端即时渲染；``callbacks=[]`` 不受影响（增量走 langgraph 流通道，
-      不经过回调）。
-    - ``updates``：节点完成后的完整消息，负责工具生命周期事件
-      （tool_started / tool_completed / tool_failed）与最终报告提取；
-      完整 ``subagent_message`` 事件对已增量转发的消息只补截断标记
-      （收敛策略见 ``_iter_subagent_stream_events``）。
+    双模式：``messages`` 转发 token 增量；``updates`` 负责工具生命周期与最终报告，
+    已增量转发的消息只补截断标记（见 ``_iter_subagent_stream_events``）。
     """
     stream_state = _SubagentStreamState(parent_tool_call_id)
     if collected is not None:
@@ -1339,6 +1376,8 @@ async def _run_subagent_with_events(
             _capture_subagent_token_usage(chunk, captured)
             if _process_subagent_chunk(chunk, stream_state, writer, parent_tool_call_id):
                 _emit_context_usage()
+            if on_progress is not None:
+                on_progress(_subagent_progress_snapshot(stream_state))
     finally:
         # 用量只重算不外发（直播期最后一次已随节点更新发出，避免重复事件），
         # 异常路径同样交给调用方（失败 ToolMessage 也带用量快照）。
@@ -1346,6 +1385,18 @@ async def _run_subagent_with_events(
             captured["context_usage"] = _emit_context_usage(emit=False)
             captured["compactions"] = list(stream_state.compression_events)
     return stream_state.collected
+
+
+def _subagent_progress_snapshot(stream_state: "_SubagentStreamState") -> dict[str, Any]:
+    """后台任务心跳落库用的轻量进度：不携带正文，避免任务账本膨胀。"""
+    last_tool = next(reversed(stream_state.tool_history.values()), "")
+    return {
+        "phase": "running",
+        "message_count": len(stream_state.collected),
+        "tool_calls": len(stream_state.tool_history),
+        "running_tools": len(stream_state.tool_started_at),
+        "last_tool": last_tool,
+    }
 
 
 def _build_subagent_state(runtime: ToolRuntime, description: str) -> dict[str, Any]:
@@ -1525,14 +1576,13 @@ def _subagent_report_token_limit(runtime: ToolRuntime) -> int | None:
     return max(int(hard_limit * SUBAGENT_REPORT_MAX_TOKEN_RATIO), SUBAGENT_REPORT_MIN_TOKEN_LIMIT)
 
 
-async def _offload_subagent_report(report: str, runtime: ToolRuntime) -> str:
-    """子智能体报告超过父上下文预算时落盘，返回统一 offload 信封。"""
+async def _offload_subagent_report(report: str, runtime: ToolRuntime) -> tuple[str, dict[str, Any] | None]:
+    """超长报告落盘：前台用信封保护上下文，后台只取 recovery 元数据。"""
     limit = _subagent_report_token_limit(runtime)
-    if limit is None:
-        return report
     report_tokens = estimate_text_tokens(report)
-    if report_tokens <= limit:
-        return report
+    over_token_budget = limit is not None and report_tokens > limit
+    if not over_token_budget and len(report) <= TOOL_RESULT_OFFLOAD_SIZE:
+        return report, None
     state = getattr(runtime, "state", None)
     envelope, recovery = await externalize_tool_text(
         report,
@@ -1548,13 +1598,13 @@ async def _offload_subagent_report(report: str, runtime: ToolRuntime) -> str:
             limit,
             report_tokens,
         )
-        return report
+        return report, None
     logger.info(
         "[tools] 子智能体报告超过父上下文预算，已落盘外置: limit_tokens=%s report_tokens=%s",
         limit,
         report_tokens,
     )
-    return envelope
+    return envelope, recovery
 
 
 def _build_task_result_artifacts(
@@ -1586,6 +1636,11 @@ async def _build_task_tool_impl(
     runtime: ToolRuntime,
     *,
     stream_events: bool = True,
+    stream_writer: Callable[[Any], None] | None = None,
+    offload_report: bool = True,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    state_sink: dict[str, Any] | None = None,
+    background_task_id: str | None = None,
 ) -> Any:
     """执行单一 task 工具调用：派发子图、收集过程、产出 Command 更新。
 
@@ -1597,49 +1652,23 @@ async def _build_task_tool_impl(
         allowed = ", ".join(f"`{name}`" for name in compiled)
         return f"无法调用子智能体 {subagent_type}：类型不存在，可用类型为 {allowed}"
     spec = next(item for item in specs if item.name == subagent_type)
-    # writer 必须在子图调用前获取：调用后当前上下文会切进子图运行
-    writer = None
-    if stream_events:
-        try:
-            writer = get_stream_writer()
-        except Exception as exc:
-            # 拿不到 writer 只影响子图过程实时下发(SSE),子智能体仍要继续执行,故降级为 None。
-            logger.warning("[tools] 获取子图流式 writer 失败,子智能体过程将不做实时下发: %s", exc)
-            writer = None
+    writer = stream_writer or _get_subagent_stream_writer(stream_events, get_stream_writer)
     collected: list = []
     captured: dict[str, Any] = {}
-    try:
-        messages = await _run_subagent_with_events(
-            runnable,
-            _build_subagent_state(runtime, description),
-            build_subagent_invocation_config(
-                spec,
-                default_recursion_limit=await get_runtime_setting("CHAT_DATA_AGENT_RECURSION_LIMIT"),
-            ),
-            writer,
-            runtime.tool_call_id,
-            collected=collected,
-            captured=captured,
-            usage_meta=_safe_subagent_budget_meta(
-                spec,
-                list(spec.tools or []),
-                system_prompt=_subagent_system_prompt(spec),
-            ),
-        )
-    except Exception as exc:
-        # 失败路径同样盖 trail 快照：直播时内层过程已通过 SSE 转发给用户，
-        # 若异常直接抛给 tool_error 中间件（无 additional_kwargs），历史里
-        # trail 会丢失，造成「直播看得到、历史看不到」的不一致。这里就地
-        # 转成 error ToolMessage，主智能体可据失败原因降级接手。
-        logger.error("[tools] 子智能体执行异常: %s", exc, exc_info=True)
-        report = f"子智能体执行失败：{_truncate_text(str(exc) or exc.__class__.__name__, 200)}"
-        messages = collected
-        tool_status = "error"
-    else:
-        report = _extract_final_report(messages)
-        if not report:
-            report = "子智能体未产出有效结论，请检查任务书后重试或自行完成该任务。"
-        tool_status = "success"
+    if state_sink is not None:
+        state_sink["messages"] = collected
+        state_sink["captured"] = captured
+    messages, report, tool_status = await _invoke_task_subagent(
+        runnable,
+        spec,
+        description,
+        runtime,
+        writer=writer,
+        collected=collected,
+        captured=captured,
+        progress_callback=progress_callback,
+        background_task_id=background_task_id,
+    )
     context_usage = captured.get("context_usage")
     if tool_status == "success" and context_usage and int(context_usage.get("percent", 0) or 0) >= 100:
         # 预算收尾路径：报告可能残缺，必须在正文里告知主智能体（模型只可靠
@@ -1650,8 +1679,8 @@ async def _build_task_tool_impl(
             f"（约 {context_usage.get('used_tokens', 0)} / {context_usage.get('threshold_tokens', 0)} tokens）"
             "并已提前收尾，以下结论可能不完整。\n\n" + report
         )
-    if tool_status == "success":
-        report = await _offload_subagent_report(report, runtime)
+    if tool_status == "success" and offload_report:
+        report, _recovery = await _offload_subagent_report(report, runtime)
     # 过程快照盖在 ToolMessage 上随消息持久化：直播过程走 SSE，历史回放
     # 走 conversation_event 的 tool_result payload（见
     # conversation_event_service._serialize_tool_message）。
@@ -1672,56 +1701,301 @@ async def _build_task_tool_impl(
     )
 
 
-async def _run_background_task(
-    entry: _BackgroundTaskEntry,
-    specs: list[SubagentSpec],
-    compiled: dict[str, Any],
-    subagent_type: str,
+async def _invoke_task_subagent(
+    runnable: Any,
+    spec: SubagentSpec,
     description: str,
     runtime: ToolRuntime,
-) -> None:
-    """后台子智能体执行体：跑同步同款子图路径（静默），把最终报告写回条目。"""
+    *,
+    writer: Any,
+    collected: list,
+    captured: dict[str, Any],
+    progress_callback: Callable[[dict[str, Any]], None] | None,
+    background_task_id: str | None = None,
+) -> tuple[list, str, str]:
+    """运行子图并归一成功/失败结果，失败也保留已收集的过程。"""
     try:
-        command = await _build_task_tool_impl(specs, compiled, subagent_type, description, runtime, stream_events=False)
-        update = getattr(command, "update", None) or {}
-        messages = update.get("messages") or []
-        message = messages[0] if messages else None
-        entry.report = str(getattr(message, "content", "") or "")
-        entry.tool_status = str(getattr(message, "status", "") or "success")
-        entry.status = "failed" if entry.tool_status == "error" else "completed"
-        logger.info(
-            "[tools] 后台子智能体执行完成: task_id=%s status=%s",
-            entry.task_id,
-            entry.status,
+        messages = await _run_subagent_with_events(
+            runnable,
+            _build_subagent_state(runtime, description),
+            build_subagent_invocation_config(
+                spec,
+                default_recursion_limit=await get_runtime_setting("CHAT_DATA_AGENT_RECURSION_LIMIT"),
+                background_task_id=background_task_id,
+            ),
+            writer,
+            runtime.tool_call_id,
+            collected=collected,
+            captured=captured,
+            usage_meta=_safe_subagent_budget_meta(
+                spec,
+                list(spec.tools or []),
+                system_prompt=_subagent_system_prompt(spec),
+            ),
+            on_progress=progress_callback,
         )
     except Exception as exc:
-        entry.status = "failed"
-        entry.report = f"后台子智能体执行异常：{_truncate_text(str(exc) or exc.__class__.__name__, 200)}"
-        logger.error("[tools] 后台子智能体执行异常: task_id=%s", entry.task_id, exc_info=True)
+        # 失败路径同样盖 trail 快照：直播时内层过程已通过 SSE 转发给用户，
+        # 若异常直接抛给 tool_error 中间件（无 additional_kwargs），历史里
+        # trail 会丢失，造成「直播看得到、历史看不到」的不一致。这里就地
+        # 转成 error ToolMessage，主智能体可据失败原因降级接手。
+        logger.error("[tools] 子智能体执行异常: %s", exc, exc_info=True)
+        report = f"子智能体执行失败：{_truncate_text(str(exc) or exc.__class__.__name__, 200)}"
+        return collected, report, "error"
+    report = _extract_final_report(messages)
+    if not report:
+        report = "子智能体未产出有效结论，请检查任务书后重试或自行完成该任务。"
+    return messages, report, "success"
+
+
+async def _run_background_task(
+    record: SubagentTaskView,
+    runtime: Any,
+    specs: list[SubagentSpec],
+    compiled: dict[str, Any],
+) -> None:
+    """后台子智能体执行体：租约 + 心跳 + 超时 + 取消收口。"""
+    service = get_subagent_task_service()
+    if service is None:
+        logger.error("[tools] 后台任务账本服务未初始化，无法执行: task_id=%s", record.task_id)
+        return
+    started = await service.start_task(record.task_id, record.owner_token or "")
+    if started is None:
+        logger.info("[tools] 后台任务已取消或归属变化，跳过执行: task_id=%s", record.task_id)
+        return
+    progress: dict[str, Any] = {"phase": "running"}
+    partial_state: dict[str, Any] = {}
+    event_writer = service.create_event_writer(record)
+    await event_writer.start()
+    watcher = asyncio.create_task(
+        _watch_background_task(
+            record.task_id,
+            record.owner_token or "",
+            progress,
+            asyncio.current_task(),
+            service,
+        ),
+        name=f"chatdata-subagent-watch-{record.task_id}",
+    )
+    try:
+        try:
+            outcome = await _run_background_attempt(
+                record,
+                runtime,
+                specs,
+                compiled,
+                progress,
+                partial_state,
+                stream_writer=event_writer,
+            )
+        except asyncio.CancelledError:
+            await event_writer.aclose()
+            await _finish_cancelled_background_task(service, record, partial_state)
+            raise
+        except Exception:
+            await event_writer.aclose()
+            raise
+        else:
+            await event_writer.aclose()
+    finally:
+        watcher.cancel()
+        with suppress(asyncio.CancelledError):
+            await watcher
+    status, report, error, result_meta = outcome
+    await service.finish_task(
+        record.task_id,
+        record.owner_token or "",
+        status=status,
+        report=report,
+        error=error,
+        result_meta=result_meta,
+    )
+    try:
+        await service.dispatch_pending_notifications(limit=1)
+    except Exception:
+        logger.warning("[tools] 后台任务完成通知即时派发失败，等待调度轮询: task_id=%s", record.task_id, exc_info=True)
+
+
+async def _run_background_attempt(
+    record: SubagentTaskView,
+    runtime: Any,
+    specs: list[SubagentSpec],
+    compiled: dict[str, Any],
+    progress: dict[str, Any],
+    partial_state: dict[str, Any],
+    *,
+    stream_writer: Callable[[Any], None] | None = None,
+) -> tuple[str, str, str, dict[str, Any]]:
+    try:
+        command = await asyncio.wait_for(
+            _build_task_tool_impl(
+                specs,
+                compiled,
+                record.subagent_type,
+                record.description,
+                runtime,
+                # 后台任务不再复写父 Run 的 custom 流（父 Run 收口后没有消费者）；
+                # 过程事件改走任务自己的可重放 SSE 流，详情页可在父 Run 结束后继续订阅。
+                stream_events=True,
+                stream_writer=stream_writer,
+                offload_report=False,
+                progress_callback=lambda snapshot: progress.update(snapshot),
+                state_sink=partial_state,
+                background_task_id=record.task_id,
+            ),
+            timeout=record.timeout_seconds,
+        )
+    except TimeoutError:
+        return _timeout_background_outcome(record, partial_state)
+    except Exception as exc:
+        return _failed_background_outcome(record, exc, partial_state)
+    status, report, error, result_meta = _extract_background_result(command)
+    if status == TASK_STATUS_COMPLETED:
+        # 账本保留全文；超长时额外落一份隐藏文件，通知与 task(action="check")
+        # 会带 result_path，主智能体可直接用 file_read 读取完整报告。
+        _delivered, recovery = await _offload_subagent_report(report, runtime)
+        if recovery:
+            result_meta["report_path"] = recovery["result_path"]
+            result_meta["report_size_chars"] = recovery["result_size_chars"]
+    return status, report, error, result_meta
+
+
+def _timeout_background_outcome(
+    record: SubagentTaskView, partial_state: dict[str, Any]
+) -> tuple[str, str, str, dict[str, Any]]:
+    error = f"任务超过 {record.timeout_seconds} 秒未完成"
+    partial_report, result_meta = _capture_partial_background_result(partial_state)
+    report = f"后台子智能体执行超时：{error}。可重新派发更小的任务。"
+    logger.warning("[tools] 后台子智能体执行超时: task_id=%s", record.task_id)
+    return TASK_STATUS_TIMEOUT, _append_partial_report(report, partial_report), error, result_meta
+
+
+def _failed_background_outcome(
+    record: SubagentTaskView, exc: Exception, partial_state: dict[str, Any]
+) -> tuple[str, str, str, dict[str, Any]]:
+    error = str(exc) or exc.__class__.__name__
+    partial_report, result_meta = _capture_partial_background_result(partial_state)
+    report = f"后台子智能体执行异常：{_truncate_text(error, 300)}"
+    logger.error("[tools] 后台子智能体执行异常: task_id=%s", record.task_id, exc_info=True)
+    return TASK_STATUS_FAILED, _append_partial_report(report, partial_report), error, result_meta
+
+
+async def _finish_cancelled_background_task(
+    service: SubagentTaskPort,
+    record: SubagentTaskView,
+    partial_state: dict[str, Any],
+) -> None:
+    """取消/进程中断时先落终态再继续向上抛，保留中断前过程。"""
+    current_record = await service.get_task(record.task_id)
+    partial_report, result_meta = _capture_partial_background_result(partial_state)
+    cancelled = current_record is not None and current_record.status in {"cancelling", TASK_STATUS_CANCELLED}
+    status = TASK_STATUS_CANCELLED if cancelled else TASK_STATUS_INTERRUPTED
+    report = "任务已被用户或主智能体取消。" if cancelled else "任务因执行节点中断而停止；可重新派发。"
+    await service.finish_task(
+        record.task_id,
+        record.owner_token or "",
+        status=status,
+        report=_append_partial_report(report, partial_report),
+        error=str(current_record.error if current_record else ""),
+        result_meta=result_meta,
+    )
+
+
+def _capture_partial_background_result(state_sink: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    """超时/取消时取出子图已收集的过程，避免任务详情只剩一句终止提示。"""
+    messages = list(state_sink.get("messages") or [])
+    captured = state_sink.get("captured")
+    if not isinstance(captured, dict):
+        captured = {}
+    result_meta = _build_task_result_artifacts(messages, captured.get("context_usage"), captured)
+    result_meta["tool_status"] = "error"
+    report = _extract_final_report(messages) if messages else ""
+    return report, result_meta
+
+
+def _extract_background_result(command: Any) -> tuple[str, str, str, dict[str, Any]]:
+    update = getattr(command, "update", None) or {}
+    messages = update.get("messages") or []
+    message = messages[0] if messages else None
+    report = str(getattr(message, "content", "") or "")
+    tool_status = str(getattr(message, "status", "") or "success")
+    additional = dict(getattr(message, "additional_kwargs", None) or {})
+    trail = additional.get("subagent_trail")
+    result_meta = {"tool_status": tool_status, "trail_items": len(trail) if isinstance(trail, list) else 0}
+    for key in (
+        "subagent_trail",
+        "subagent_context_usage",
+        "subagent_token_usage",
+        "subagent_token_usage_detail",
+        "subagent_compactions",
+    ):
+        value = additional.get(key)
+        if value:
+            result_meta[key] = value
+    if tool_status == "error":
+        return TASK_STATUS_FAILED, report, report, result_meta
+    return TASK_STATUS_COMPLETED, report, "", result_meta
 
 
 def build_task_tool(specs: list[SubagentSpec], run_controls: Any = None) -> StructuredTool:
-    """构建单一 ``task`` 工具：按 subagent_type 派发到隔离上下文的子图。
+    """构建单一 ``task`` 工具：派发子智能体，并管理后台任务。
 
-    ``background=true`` 时转入后台执行（立即返回 task_id，报告跨 Run 注入）。
+    ``action="start"``（默认）按 subagent_type 派发到隔离上下文的子图；
+    ``background=true`` 时转入后台执行。``action=list/check/wait/cancel``
+    操作已创建的后台任务。
     """
     validate_subagent_specs(specs)
     compiled = {spec.name: _compile_subagent(spec, run_controls=run_controls) for spec in specs}
+    background_compiled: dict[str, Any] | None = None
     available = "\n".join(f"- {spec.name}: {spec.description}" for spec in specs)
 
     async def atask(
-        description: str, subagent_type: str, runtime: ToolRuntime, background: bool = False
+        runtime: ToolRuntime,
+        action: Literal["start", "list", "check", "wait", "cancel"] = "start",
+        description: str | None = None,
+        subagent_type: str | None = None,
+        background: bool = False,
+        label: str | None = None,
+        timeout_seconds: int | None = None,
+        task_id: str | None = None,
+        task_ids: list[str] | None = None,
+        status: str | None = None,
+        limit: int = 20,
+        wait_seconds: int = DEFAULT_WAIT_TIMEOUT_SECONDS,
     ) -> Command | str:
+        if action != "start":
+            return await manage_async_task(
+                action,
+                runtime=runtime,
+                task_id=task_id,
+                task_ids=task_ids,
+                status=status,
+                limit=limit,
+                wait_seconds=wait_seconds,
+            )
+        if not description or not description.strip():
+            return 'action="start" 需要提供 description（任务书）。'
+        if not subagent_type or not subagent_type.strip():
+            return 'action="start" 需要提供 subagent_type。'
         if background and compiled.get(subagent_type) is None:
             allowed = ", ".join(f"`{name}`" for name in compiled)
             return f"无法调用子智能体 {subagent_type}：类型不存在，可用类型为 {allowed}"
         if background:
-            return _spawn_background_task(
+            nonlocal background_compiled
+            if background_compiled is None:
+                # 后台任务的生命周期独立于派发它的父 Run：不能挂父 Run 的
+                # 执行围栏（owner_token 会随父 Run 收口失效），否则任务在
+                # 后台继续跑时每个内层工具都会被判成「租约丢失」。
+                background_compiled = {spec.name: _compile_subagent(spec) for spec in specs}
+            return await _spawn_background_task(
                 subagent_type=subagent_type,
                 description=description,
+                label=label,
+                timeout_seconds=timeout_seconds,
                 runtime=runtime,
-                runner_factory=lambda entry: _run_background_task(
-                    entry, specs, compiled, subagent_type, description, runtime
+                run_controls=run_controls,
+                runner_factory=lambda record, snapshot: _run_background_task(
+                    record, snapshot, specs, background_compiled
                 ),
             )
         return await _build_task_tool_impl(specs, compiled, subagent_type, description, runtime)
@@ -1735,7 +2009,7 @@ def build_task_tool(specs: list[SubagentSpec], run_controls: Any = None) -> Stru
 
 
 class SubagentMiddleware(AgentMiddleware):
-    """向主智能体注册 ``task``/后台管理工具，并在系统提示追加子智能体使用说明。"""
+    """向主智能体注册 ``task`` 工具，并在系统提示追加子智能体使用说明。"""
 
     def __init__(
         self, specs: list[SubagentSpec], *, system_prompt: str | None = None, run_controls: Any = None
@@ -1743,40 +2017,21 @@ class SubagentMiddleware(AgentMiddleware):
         validate_subagent_specs(specs)
         self.specs = list(specs)
         self.subagent_names = frozenset(spec.name for spec in specs)
-        self.tools = [
-            build_task_tool(specs, run_controls=run_controls),
-            build_check_async_task_tool(),
-            build_cancel_async_task_tool(),
-            build_list_async_tasks_tool(),
-        ]
+        self.tools = [build_task_tool(specs, run_controls=run_controls)]
         agents_desc = "\n".join(f"- {spec.name}: {spec.description}" for spec in specs)
         self.system_prompt = (system_prompt or _default_system_prompt()).format(
             available_agents=agents_desc,
         )
 
-    def _with_background_notifications(self, request: ModelRequest) -> ModelRequest:
-        """按当前会话收集已完成未上报的后台任务报告，追加进系统提示。
-
-        请求 state 里没有 conversation_id（理论外）时不注入，避免误投其他会话。
-        """
-        extra = self.system_prompt
-        state = getattr(request, "state", None) or {}
-        conversation_id = str(state.get("conversation_id") or "").strip()
-        if conversation_id:
-            note = _collect_background_notifications(conversation_id)
-            if note:
-                extra = f"{extra}\n\n{note}"
-        return _append_system_prompt(request, extra)
-
     def wrap_model_call(
         self, request: ModelRequest, handler: Callable[[ModelRequest], ModelCallResult]
     ) -> ModelCallResult:
-        return handler(self._with_background_notifications(request))
+        return handler(_append_system_prompt(request, self.system_prompt))
 
     async def awrap_model_call(
         self, request: ModelRequest, handler: Callable[[ModelRequest], Awaitable[ModelCallResult]]
     ) -> ModelCallResult:
-        return await handler(self._with_background_notifications(request))
+        return await handler(_append_system_prompt(request, self.system_prompt))
 
 
 def _append_system_prompt(request: ModelRequest, extra: str) -> ModelRequest:
@@ -1804,8 +2059,11 @@ def _default_system_prompt() -> str:
         "任务书里给文件路径——子智能体看不到对话历史，只存在于对话中的信息它拿不到。\n\n"
         "## 后台子智能体\n\n"
         "耗时长且当轮不需要其结论的任务（如批量盘点、多份成稿）传 background=true "
-        "转后台执行：立即返回 task_id，期间继续其他工作或直接结束本轮，完成后的"
-        "报告会自动注入你的上下文。配套工具：list_async_tasks 列出全部后台任务、"
-        "check_async_task 按 task_id 查报告、cancel_async_task 取消执行中的任务。"
-        "用户询问「之前的后台任务怎么样了」时，用 list_async_tasks / check_async_task 回答。"
+        "转后台执行：立即返回持久 task_id，期间继续其他工作或直接结束本轮。任务完成、失败、"
+        "超时或租约失联都会自动通知当前会话；无需轮询。后台任务统一用 task 工具管理："
+        'task(action="list") 列任务、task(action="check", task_id=...) 查单个任务、'
+        'task(action="wait", task_ids=[...]) 等一个/多个任务、'
+        'task(action="cancel", task_id=...) 取消。'
+        "给后台任务写清 label，便于用户在任务列表识别。用户询问「之前的后台任务怎么样了」时，"
+        '先用 task(action="list")，再按需 task(action="check", task_id=...)。'
     )

@@ -691,3 +691,95 @@ async def test_get_conversation_context_branches(router_state, monkeypatch):
     )
     with pytest.raises(HTTPException):
         await conversation_router.get_conversation_context("conv_1", FakeRequest())
+
+
+def _subagent_task_record(status="completed", report="完整报告"):
+    def as_dict(include_report=True):
+        data = {
+            "task_id": "t1",
+            "conversation_id": "conv_1",
+            "status": status,
+            "status_label": "已完成" if status == "completed" else status,
+        }
+        if include_report:
+            data["report"] = report
+            data["result_meta"] = {"subagent_trail": []}
+        return data
+
+    return SimpleNamespace(task_id="t1", status=status, as_dict=as_dict)
+
+
+@pytest.mark.asyncio
+async def test_subagent_task_routes_list_detail_and_cancel(router_state, monkeypatch):
+    monkeypatch.setattr(conversation_router, "_get_current_user_identity", identity_sync)
+    calls = []
+
+    async def list_tasks(conversation_id, user_id, *, statuses=None, limit=50):
+        calls.append((conversation_id, user_id, statuses, limit))
+        return [_subagent_task_record()]
+
+    monkeypatch.setattr(conversation_router.subagent_task_service, "list_tasks", list_tasks)
+    body = payload(
+        await conversation_router.list_subagent_tasks(
+            "conv_1",
+            FakeRequest(),
+            status_filter="active",
+            limit=5,
+        )
+    )
+    assert calls == [("conv_1", "u1", {"pending", "running", "cancelling"}, 5)]
+    assert body["data"]["count"] == 1
+    assert body["data"]["tasks"][0]["task_id"] == "t1"
+    assert "report" not in body["data"]["tasks"][0]
+
+    async def get_task(task_id, *, conversation_id=None, user_id=None):
+        if task_id == "missing":
+            return None
+        return _subagent_task_record()
+
+    monkeypatch.setattr(conversation_router.subagent_task_service, "get_task", get_task)
+    body = payload(await conversation_router.get_subagent_task("conv_1", "t1", FakeRequest()))
+    assert body["data"]["report"] == "完整报告"
+    assert body["data"]["result_meta"] == {"subagent_trail": []}
+
+    missing = await conversation_router.get_subagent_task("conv_1", "missing", FakeRequest())
+    assert missing.status_code == 404
+    assert payload(missing)["msg"] == "后台任务不存在"
+
+    async def cancel_task(conversation_id, user_id, task_id, operator_name):
+        return _subagent_task_record(status="cancelling", report="")
+
+    monkeypatch.setattr(conversation_router.subagent_task_service, "cancel_task", cancel_task)
+    body = payload(await conversation_router.cancel_subagent_task("conv_1", "t1", FakeRequest()))
+    assert body["msg"] == "已提交取消请求"
+    assert body["data"]["status"] == "cancelling"
+
+
+@pytest.mark.asyncio
+async def test_subagent_task_event_stream_route(router_state, monkeypatch):
+    monkeypatch.setattr(conversation_router, "_get_current_user_identity", identity_sync)
+
+    async def get_task(task_id, *, conversation_id=None, user_id=None):
+        return None if task_id == "missing" else _subagent_task_record(status="running")
+
+    async def stream_events(**_kwargs):
+        yield {
+            "stream_id": "1-0",
+            "payload": "event: subagent_message_delta\ndata: {\"delta\":\"hi\"}\n\n",
+        }
+
+    monkeypatch.setattr(conversation_router.subagent_task_service, "get_task", get_task)
+    monkeypatch.setattr(conversation_router.subagent_task_event_service, "stream", stream_events)
+
+    response = await conversation_router.stream_subagent_task_events(
+        "conv_1",
+        "t1",
+        FakeRequest(headers={"Last-Event-ID": "0-0"}),
+    )
+    assert response.media_type == "text/event-stream"
+    assert response.headers["x-chatdata-subagent-task-id"] == "t1"
+    chunks = [chunk async for chunk in response.body_iterator]
+    assert any("id: 1-0" in chunk and "subagent_message_delta" in chunk for chunk in chunks)
+
+    missing = await conversation_router.stream_subagent_task_events("conv_1", "missing", FakeRequest())
+    assert missing.status_code == 404

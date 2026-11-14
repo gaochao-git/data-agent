@@ -16,6 +16,8 @@ export function getToolDisplayName(toolName?: string | null, args: ToolArgs = {}
     const target = typeof args.name === 'string' ? args.name.trim() : ''
     return target ? `调用 MCP 工具：${target.replace(/^mcp_/, '')}` : '调用 MCP 工具'
   }
+  const taskActionName = name === 'task' ? getTaskActionDisplayName(args) : ''
+  if (taskActionName) return taskActionName
   const backendName = backendToolDisplayNames.value[name]
   if (backendName) return backendName
   // 普通 MCP 限定名由后端 tools.<name>.label / display_name 下发；缺失时展示限定名。
@@ -130,6 +132,35 @@ const dataAnalyzingDescription: DescriptionBuilder = (args) => {
   return compactInlineText(payload.user_query || payload.semantic_config_id)
 }
 
+const TASK_ACTION_NAMES: Record<string, string> = {
+  list: '查看后台任务',
+  check: '查看后台任务',
+  wait: '等待后台任务',
+  cancel: '取消后台任务',
+}
+
+/** task 的管理动作展示名；start（默认派发）返回空串，沿用后端展示名。 */
+export function getTaskActionDisplayName(args: ToolArgs = {}): string {
+  const action = String(args.action || 'start').trim()
+  return TASK_ACTION_NAMES[action] || ''
+}
+
+const taskDescription: DescriptionBuilder = (args) => {
+  const action = String(args.action || 'start').trim()
+  if (action === 'check' || action === 'cancel') return compactInlineText(args.task_id)
+  if (action === 'list') return compactInlineText(args.status)
+  if (action === 'wait') {
+    const ids = Array.isArray(args.task_ids)
+      ? args.task_ids.map(item => compactInlineText(item)).filter(Boolean)
+      : []
+    if (ids.length === 0) return ''
+    return ids.length === 1 ? ids[0]! : `${ids[0]} 等 ${ids.length} 个任务`
+  }
+  const type = String(args.subagent_type || '').trim()
+  const summary = compactInlineText(args.description, 80)
+  return type && summary ? `${type} · ${summary}` : type || summary
+}
+
 const TOOL_DESCRIPTION_BUILDERS: Record<string, DescriptionBuilder> = {
   file_read: filePathDescription,
   file_edit: filePathDescription,
@@ -150,11 +181,7 @@ const TOOL_DESCRIPTION_BUILDERS: Record<string, DescriptionBuilder> = {
   calculator_tool: calculatorDescription,
   officecli_run: args => Array.isArray(args.command_args) ? compactInlineText(args.command_args.join(' ')) : '',
   bash_run: args => compactInlineText(args.command),
-  task: args => {
-    const type = String(args.subagent_type || '').trim()
-    const summary = compactInlineText(args.description, 80)
-    return type && summary ? `${type} · ${summary}` : type || summary
-  },
+  task: taskDescription,
   write_todos: args => {
     const todos = Array.isArray(args.todos) ? args.todos : []
     const done = todos.filter(item => item?.status === 'completed').length

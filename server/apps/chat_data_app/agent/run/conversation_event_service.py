@@ -618,6 +618,13 @@ def _build_turn_events_human_message(
     message_id = _message_id(message)
     if not message_id:
         return
+    if (getattr(message, "additional_kwargs", None) or {}).get("hide_from_ui"):
+        # 后台任务通知只进入模型上下文，不写入用户历史/气泡；但仍要推进
+        # 该消息锚点后的压缩事件，避免压缩分隔卡丢失。
+        _build_turn_events_anchor_events(events, compression_events_by_anchor, message_id, turn_id)
+        if unanchored_compression_events:
+            _build_turn_events_flush_unanchored(events, unanchored_compression_events, turn_id)
+        return
     events.append(
         _event(
             turn_id=turn_id,

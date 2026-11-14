@@ -14,9 +14,11 @@ const emit = defineEmits<{
 }>()
 
 const tabIcon = (tab: RightSidebarTab): string => {
+  if (tab.kind === 'home') return 'fa-table-cells-large'
   if (tab.kind === 'workspace') return 'fa-folder'
   if (tab.kind === 'file') return 'fa-file-lines'
   if (tab.kind === 'agentProcess') return 'fa-robot'
+  if (tab.kind === 'subagentManager' || tab.kind === 'subagentTask') return 'fa-diagram-project'
   return 'fa-wrench'
 }
 </script>
@@ -41,7 +43,7 @@ const tabIcon = (tab: RightSidebarTab): string => {
         <span class="truncate">{{ tab.title }}</span>
       </button>
       <button
-        v-if="tab.kind !== 'workspace'"
+        v-if="tab.kind !== 'home'"
         type="button"
         class="flex size-4 shrink-0 items-center justify-center rounded text-slate-400 opacity-60 transition-opacity hover:bg-slate-200 hover:text-slate-700 group-hover:opacity-100"
         title="关闭"

@@ -157,6 +157,27 @@ describe('SubagentTrail（右侧聊天式完整过程）', () => {
     expect(wrapper.find('.thinking-block').exists()).toBe(false)
   })
 
+  it('showWithoutTrail：无过程 trail 的后台任务也走主对话气泡（任务书 + 报告）', () => {
+    const toolCall = { ...taskCall([], 'completed'), result: '完整报告正文' }
+    const wrapper = mount(SubagentTrail, {
+      props: { toolCall, conversationId: 'conv-1', showWithoutTrail: true },
+      global: {
+        stubs: {
+          MarkdownBlock: { props: ['content'], template: '<div class="conversation-markdown">{{ content }}</div>' },
+          ThinkingBlock: true,
+          ToolCallList: true,
+          QueryResultPanel: true,
+          WaitingTip: true,
+        },
+      },
+    })
+
+    expect(wrapper.findAll('[data-assistant-bubble]')).toHaveLength(1)
+    expect(wrapper.text()).toContain('盘点语义模型中的指标与维度')
+    expect(wrapper.text()).toContain('完整报告正文')
+    expect(wrapper.text()).not.toContain('工作过程')
+  })
+
   it('非 task 调用 / 无 trail 时不渲染过程区', () => {
     expect(mountTrail(taskCall([])).find('[data-subagent-process]').exists()).toBe(false)
     expect(mountTrail({

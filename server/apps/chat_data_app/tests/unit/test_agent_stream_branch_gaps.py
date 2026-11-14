@@ -593,6 +593,55 @@ def test_build_tool_message_payload_skips_args_without_tool_call_id():
     assert state.args_buffer == {"": "ignored"}
 
 
+def test_reconcile_state_messages_cancels_announced_but_unexecuted_tool_calls():
+    """流式播报过、但最终 AIMessage 不包含的工具调用要收口为「未执行」，不能一直转。"""
+    state = agent_stream._ToolStreamState()
+    state.handle_tool_call_chunks([
+        {"id": "ghost-1", "name": "officecli_run", "index": 0, "args": '{"intent":"验证 OfficeCLI 可用"}'},
+    ])
+    final_ai = AIMessage(
+        content="",
+        tool_calls=[{"id": "real-1", "name": "file_read", "args": {"path": "/a"}}],
+    )
+
+    events = state.reconcile_state_messages([final_ai])
+
+    assert len(events) == 1
+    assert "tool_failed" in events[0]
+    data = json.loads(events[0].split("data:", 1)[1])
+    assert data["tool_call_id"] == "ghost-1"
+    assert "未执行" in data["content"]
+    assert "ghost-1" not in state.running_tool_ids
+    # 同一快照重复到达不重复下发
+    assert state.reconcile_state_messages([final_ai]) == []
+
+
+def test_reconcile_state_messages_backfills_tool_message_missing_from_stream():
+    """after_model 等中间件生成的 ToolMessage 只出现在 values 时，补发完成事件。"""
+    state = agent_stream._ToolStreamState()
+    state.handle_tool_calls([{"id": "todos-1", "name": "write_todos", "args": {"todos": []}}])
+    ai = AIMessage(
+        content="",
+        tool_calls=[{"id": "todos-1", "name": "write_todos", "args": {"todos": []}}],
+    )
+    rejected = ToolMessage(
+        content="Error: write_todos should never be called multiple times",
+        tool_call_id="todos-1",
+        name="write_todos",
+        status="error",
+    )
+
+    events = state.reconcile_state_messages([ai, rejected])
+
+    assert len(events) == 2
+    assert "tool_failed" in events[0]
+    data = json.loads(events[0].split("data:", 1)[1])
+    assert data["tool_call_id"] == "todos-1"
+    assert "multiple times" in data["content"]
+    assert "todos-1" not in state.running_tool_ids
+    assert state.reconcile_state_messages([ai, rejected]) == []
+
+
 # --------------------------------------------------------------------------- #
 # _resolve_end_usage / _parse_stream_event
 # --------------------------------------------------------------------------- #
@@ -603,6 +652,32 @@ def _adapter_with(**kwargs) -> agent_stream._AgentSseStreamAdapter:
     for key, value in kwargs.items():
         setattr(adapter, key, value)
     return adapter
+
+
+@pytest.mark.asyncio
+async def test_values_stream_event_reconciles_ghost_tool_cards():
+    """values 快照到达时要把未执行的 running 占位转成 tool_failed 下发。"""
+    adapter = _adapter_with()
+    adapter.tool_stream_state.handle_tool_call_chunks([
+        {"id": "ghost-1", "name": "write_todos", "index": 0, "args": '{"todos":[]}'},
+    ])
+    final_ai = AIMessage(
+        content="",
+        tool_calls=[{"id": "real-1", "name": "file_read", "args": {"path": "/a"}}],
+    )
+
+    events = [
+        event
+        async for event in adapter._process_stream_event(
+            ("values", {"messages": [final_ai]}),
+            0.0,
+        )
+    ]
+
+    assert adapter.state_values["messages"] == [final_ai]
+    assert len(events) == 1
+    assert "tool_failed" in events[0]
+    assert "ghost-1" in events[0]
 
 
 def test_resolve_end_usage_prefers_latest_in_memory_payload():
