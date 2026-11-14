@@ -21,13 +21,16 @@ const PACE = {
   userReveal: 500,
   assistantStart: 400,
   thinkingFirst: 600,
-  thinkingChunk: 30,
-  thinkingChunkChars: 40,
+  // 思考约 500 字/秒（思考本就快速略读）；正文约 100 字/秒，贴近真实直播观感。
+  // 旧值（30ms/40 字、26ms/16 字≈615 字/秒）快过直播 6-8 倍，中短答案一秒跑完，
+  // 观感等同一次性出全，无打字机效果。
+  thinkingChunk: 24,
+  thinkingChunkChars: 12,
   toolStart: 200,
   toolMin: 500,
   toolMax: 2000,
-  textChunk: 26,
-  textChunkChars: 16,
+  textChunk: 40,
+  textChunkChars: 4,
   newlineGap: 220,
   minTick: 16,
 } as const
@@ -194,14 +197,14 @@ export function useReplayPlayer(): ReplayPlayerState {
   const applyThinking = (action: ReplayAction & { kind: 'thinking' }, { live }: { target: Message; live: Message }) => {
     const store = liveThinking.get(action.index) ?? new Map<string, ThinkingSegment>()
     liveThinking.set(action.index, store)
-    let segment = store.get(action.segment.id)
-    if (!segment) {
-      segment = { ...action.segment, content: '' }
-      store.set(action.segment.id, segment)
-      live.thinkingSegments = [...(live.thinkingSegments || []), segment]
+    if (!store.has(action.segment.id)) {
+      store.set(action.segment.id, { ...action.segment, content: '' })
+      live.thinkingSegments = [...(live.thinkingSegments || []), { ...action.segment, content: '' }]
       live.segments = [...(live.segments || []), { type: 'thinkingSegment', thinkingSegmentId: action.segment.id }]
     }
-    segment.content = action.segment.content.slice(0, action.upto)
+    // 逐字更新必须通过响应式代理引用改值：直接改存入 Map 的原始对象不会触发渲染
+    const liveSegment = (live.thinkingSegments || []).find(item => item.id === action.segment.id)
+    if (liveSegment) liveSegment.content = action.segment.content.slice(0, action.upto)
   }
 
   const applyToolStart = (action: ReplayAction & { kind: 'toolStart' }, { live, target }: { target: Message; live: Message }) => {
@@ -225,13 +228,13 @@ export function useReplayPlayer(): ReplayPlayerState {
     if (!sourceSegment || sourceSegment.type !== 'text') return
     const store = liveTextSegments.get(action.index) ?? new Map<number, { type: 'text'; content: string }>()
     liveTextSegments.set(action.index, store)
-    let segment = store.get(action.ordinal)
-    if (!segment) {
-      segment = { type: 'text', content: '' }
-      store.set(action.ordinal, segment)
-      live.segments = [...(live.segments || []), segment]
+    if (!store.has(action.ordinal)) {
+      store.set(action.ordinal, { type: 'text', content: '' })
+      live.segments = [...(live.segments || []), store.get(action.ordinal)]
     }
-    segment.content = sourceSegment.content.slice(0, action.upto)
+    // 逐字更新必须通过响应式代理引用改值：直接改存入 Map 的原始对象不会触发渲染
+    const liveSegment = (live.segments || []).filter(item => item.type === 'text')[action.ordinal]
+    if (liveSegment) liveSegment.content = sourceSegment.content.slice(0, action.upto)
     live.content = (live.segments || []).reduce((acc, item) => item.type === 'text' ? acc + item.content : acc, '')
   }
 
