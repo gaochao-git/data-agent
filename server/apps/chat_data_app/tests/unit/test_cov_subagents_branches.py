@@ -1,4 +1,4 @@
-"""subagents 残余分支补测：流式过滤 flush、摘要注入兜底、编译围栏与消息记账。"""
+"""subagents 残余分支补测：流式过滤 flush、编译围栏与消息记账。"""
 
 from types import SimpleNamespace
 
@@ -36,30 +36,6 @@ def test_stream_filter_flush_drops_exact_opener_pending():
     assert markup_filter.flush() == ""
 
 
-def test_budget_alert_keeps_messages_when_summary_builder_returns_none(monkeypatch):
-    monkeypatch.setattr(
-        sm,
-        "get_model_context_budget",
-        lambda model_id: SimpleNamespace(compression_trigger_tokens=10**9),
-    )
-    monkeypatch.setattr(cb, "build_runtime_context_summary_message", lambda _summary: None)
-    middleware = sm.create_subagent_budget_alert_middleware(_spec(), [])
-    seen = {}
-
-    def handler(request):
-        seen["request"] = request
-        return "done"
-
-    request = SimpleNamespace(
-        messages=[AIMessage(content="短任务")],
-        state={"context_summary": "上一轮摘要"},
-        override=lambda **kwargs: SimpleNamespace(**kwargs),
-    )
-
-    assert middleware.wrap_model_call(request, handler) == "done"
-    assert seen["request"] is request
-
-
 def test_compile_subagent_appends_fence_when_run_controls_complete(monkeypatch):
     captured = {}
     monkeypatch.setattr(sm, "_subagent_system_prompt", lambda spec: "系统提示词")
@@ -68,7 +44,6 @@ def test_compile_subagent_appends_fence_when_run_controls_complete(monkeypatch):
         "create_context_compression_middleware",
         lambda **kwargs: captured.setdefault("compression", kwargs) or "compression",
     )
-    monkeypatch.setattr(sm, "create_subagent_budget_alert_middleware", lambda *a, **k: "budget")
     monkeypatch.setattr(sm, "SkillPrerequisiteMiddleware", lambda *_a: "skill")
     monkeypatch.setattr(sm, "create_tool_call_name_normalizer_middleware", lambda _tools: "normalizer")
     monkeypatch.setattr(sm, "create_tool_result_middleware", lambda: "result")

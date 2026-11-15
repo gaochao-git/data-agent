@@ -8,7 +8,7 @@
 - 仅白名单状态键进入子智能体（身份/数据域/工作区），主图的压缩账本与 token
   用量不透传，子图消息永远不回流——主对话上下文只增加一条 ToolMessage 结论。
   子图内部挂载与主图同源的压缩中间件（见 ``_compile_subagent``）：上下文逼近
-  触发线时先压缩续命，预算告警只在压缩后仍超线时才注入，两层口径同源。
+  触发线时压缩续命并持续执行，不再依赖「提前收尾」软提示。
 - 子图调用显式切断回调继承（``callbacks=[]``），子图内的模型 token 不进入
   主 SSE 流；内层事件通过 ``_run_subagent_with_events`` 挑选后经父图 custom
   流转发（``parent_tool_call_id`` 挂到所属 subagent 调用下），前端在 subagent 卡片内
@@ -36,12 +36,11 @@ from langgraph.types import Command
 from pydantic import BaseModel, Field
 
 from apps.chat_data_app.services.runtime_config import (
-    SUBAGENT_BUDGET_ALERT_TRIGGER_RATIO,
-    SUBAGENT_RESULT_PREVIEW_MAX_CHARS,
-    TOOL_RESULT_OFFLOAD_SIZE,
+    SUBAGENT_MESSAGE_PREVIEW_MAX_CHARS as SUBAGENT_MESSAGE_PREVIEW_MAX_CHARS,  # noqa: F401 - 兼容 re-export
 )
 from apps.chat_data_app.services.runtime_config import (
-    SUBAGENT_MESSAGE_PREVIEW_MAX_CHARS as SUBAGENT_MESSAGE_PREVIEW_MAX_CHARS,  # noqa: F401 - 兼容 re-export
+    SUBAGENT_RESULT_PREVIEW_MAX_CHARS,
+    TOOL_RESULT_OFFLOAD_SIZE,
 )
 from apps.chat_data_app.services.runtime_config import (
     SUBAGENT_THINKING_PREVIEW_MAX_CHARS as SUBAGENT_THINKING_PREVIEW_MAX_CHARS,  # noqa: F401 - 兼容 re-export
@@ -56,11 +55,9 @@ from ..approval_policy import ask_tool_names, resolve_approval_policies
 from ..context.context_budget import (
     ContextBudget,
     ContextRequestBudget,
-    count_messages_tokens,
     count_tools_tokens,
     estimate_text_tokens,
     get_model_context_budget,
-    inject_runtime_context_summary,
 )
 from ..context.runtime import ContextRuntime
 from ..contracts.subagent_task import (
@@ -341,10 +338,8 @@ class SubagentSpec:
     # 产物，已逐条转义）。子智能体看不到主对话历史，注入记忆帮助它沿用已确认的
     # 口径与偏好；子任务只引用不写入，注入为只读段，空串时不注入。
     memory_block: str = ""
-    # 预算告警的口径来源：默认与主图同一 model_id，取同一 ContextBudget 的压缩触发
-    # 阈值作为「上下文将尽」的告警线（与主图同源）；压测/调试可用
-    # CHAT_DATA_SUBAGENT_BUDGET_ALERT_TRIGGER_RATIO 单独覆盖子图告警线
-    # （窗口比例口径，只影响子图，主图压缩不受影响，见 runtime_config.py 常量注释）。
+    # 上下文预算口径来源：与主图同一 model_id，取同一 ContextBudget 的压缩触发
+    # 阈值与上下文窗口，用于子图压缩和前端用量展示。
     model_id: str | None = None
     # None 表示跟随调用方传入的运行期配置（CHAT_DATA_AGENT_RECURSION_LIMIT，
     # 主图同源）；在 dataclass 默认值里直接写死常量会在 import 时固化取值，
@@ -352,7 +347,7 @@ class SubagentSpec:
     recursion_limit: int | None = None
     # 仅 sandbox 模式：模型调用前后续期同一个沙箱（子智能体与主智能体共用工作区）。
     sandbox_renewal: Any = None
-    # 编译期创建、压缩/预算告警/用量展示共享的同一份请求预算；运行期由
+    # 编译期创建、压缩/用量展示共享的同一份请求预算；运行期由
     # ``_compile_subagent`` 写入（frozen dataclass 内部构建缓存，不参与身份），
     # 避免三处重复解析模型预算与静态 token。
     _context_request_budget: Any = field(default=None, init=False, compare=False, hash=False, repr=False)
@@ -379,124 +374,6 @@ def _extract_final_report(messages: list) -> str:
         if text:
             return text
     return ""
-
-
-_SUBAGENT_BUDGET_ALERT_PROMPT = """## 上下文预算提示
-
-当前上下文估算已使用约 {used_tokens} tokens，达到本任务上限 {threshold_tokens} tokens（约 {percent}%）。请就地停止收尾：从本轮起不要再调用任何工具（包括 file_read、dir_list 与一切查询），也不要"先补读几条再收尾"——未完成的部分直接写进下方待完成清单，不缺证据。直接输出如下格式的收尾报告：
-
-子智能体由于本轮上下文限制未能完成全部任务。
-当前已完成任务为：
-（逐项列出：做了什么、结果或数据、来源文件/模型/指标）
-待完成任务为：
-（逐项列出：还差什么、停在哪一步、已尝试的口径）
-
-只汇报事实，不要替主智能体决定后续安排；收尾本身比多收集一条事实更重要。"""
-
-
-def create_subagent_budget_alert_middleware(
-    spec: SubagentSpec,
-    tools: list,
-    *,
-    system_prompt: str | None = None,
-) -> AgentMiddleware:
-    """子图预算软约束中间件：上下文逼近上限时注入「提前收尾」提示。
-
-    演进结论（2026-09-20 实测 → 09-21 双阈值试验 → 当日回归纯软约束）：
-    - ``override(tools=[])`` 强制收尾实测会诱发 Qwen 系退化：模型把待发的
-      工具调用意图输出成正文里的裸 ``<tool_call>`` 标记与「我还需要读取…」
-      类无效叙述，报告质量反而不如不摘工具，且展示层要为此挂一整套流式
-      净化补丁；
-    - 最终定稿纯软约束 + 子图压缩（同日落地）：压缩中间件先于本件消费上下文
-      增量（trigger=窗口 70% 压到 30%），本件只兜「压缩后仍超线」的残量
-      （如摘要生成失败）；超线只注入收尾提示，**不摘工具**，是否收尾由模型
-      自行决定；模型无视提示时由窗口溢出失败路径兜底（失败 ToolMessage
-      同样盖 trail 快照与用量，主智能体可据失败原因降级接手）。
-    每个超限轮次都注入（水位不降提示会重复出现，属预期）；低于阈值零注入。
-    注入通道是隐藏 HumanMessage 追加在消息尾部（见 ``_with_budget_alert`` 内注释），
-    不走 system prompt 追加。超限轮次同时设置 ``tool_choice="none"``（API 层禁止
-    工具调用，双层收尾的保险丝；提示为引导层），工具 schema 保留在请求里。
-    阈值默认与主图压缩触发阈值同源（同一 ``ContextBudget.compression_trigger_tokens``，
-    同一 env 口径），可用 CHAT_DATA_SUBAGENT_BUDGET_ALERT_TRIGGER_RATIO
-    按窗口比例单独覆盖（仅子图，主图不受影响）。
-
-    另外负责把子图压缩摘要（state ``context_summary``）注入请求：压缩发生在
-    before_model 节点改写 state，但摘要是给模型看的——必须以隐藏 HumanMessage
-    前插进每次请求（与主图 ``ContextUsageMiddleware`` 同语义），且预算计数
-    必须包含摘要 tokens，否则告警线漏算。只改当轮请求，不写 state、不落 checkpoint。
-    """
-    meta = _subagent_budget_meta(
-        spec,
-        tools,
-        system_prompt=system_prompt,
-        context_request_budget=getattr(spec, "_context_request_budget", None),
-    )
-    static_tokens = meta["static_tokens"]
-    threshold = meta["threshold_tokens"]
-
-    def _with_budget_alert(request: ModelRequest) -> ModelRequest:
-        messages = list(getattr(request, "messages", None) or [])
-        summary = _request_subagent_context_summary(request)
-        if summary:
-            # 摘要注入是无条件的（低于阈值也要注入，模型每轮都需要它续上下文）；
-            # 与主图共用同一套 legacy 清洗/去重/前插规则。
-            injected_messages, _summary, injected = inject_runtime_context_summary(messages, summary)
-            messages = injected_messages
-            if injected:
-                request = request.override(messages=cast(Any, messages))
-        used = static_tokens + count_messages_tokens(messages)
-        if used < threshold:
-            return request
-        percent = min(int(used * 100 / threshold), 999)
-        logger.info(
-            "[subagent] 预算提示注入 spec=%s used=%s threshold=%s percent=%s%%",
-            spec.name,
-            used,
-            threshold,
-            percent,
-        )
-        # 注入通道=隐藏 HumanMessage 追加在消息尾部（2026-09-21 从 system prompt
-        # 追加改来）：system 末尾的追加提示实测服从率低（模型触发后仍快速补读），
-        # 用户角色 + 离最新轮次最近的位置注意力权重最高。只改当轮请求——注入消息
-        # 不写 state、不进 checkpoint、不进直播/历史，每个超限轮次重新注入。
-        alert_message = HumanMessage(
-            content=_SUBAGENT_BUDGET_ALERT_PROMPT.format(
-                used_tokens=used,
-                threshold_tokens=threshold,
-                percent=percent,
-            ),
-            additional_kwargs={"budget_alert": True, "hide_from_ui": True},
-        )
-        # 双层收尾（2026-10-10 接入）：①上方隐藏 HumanMessage=引导层；②tool_choice="none"
-        # =保险丝——API 参数层禁止本轮工具调用，模型只能输出文本、自然走向总结。
-        # 与 09-20/09-21 失败的 override(tools=[]) 本质不同：工具 schema 完整保留在请求里
-        # （Qwen 裸 <tool_call> 正文退化的诱因是 schema 消失，本参数不触碰 schema）。
-        # 服从性已实测通过（oMLX Qwen3.6-35B 三场景：诱导下不调工具、无退化；脚本与
-        # 判据见 2026-10-10 日志）。防御纵深照留：_StreamingToolCallMarkupFilter +
-        # recursion_limit。只改当轮请求，不写 state、不落 checkpoint。
-        return request.override(messages=[*messages, alert_message], tool_choice="none")
-
-    class _SubagentBudgetAlertMiddleware(AgentMiddleware):
-        def wrap_model_call(
-            self, request: ModelRequest, handler: Callable[[ModelRequest], ModelCallResult]
-        ) -> ModelCallResult:
-            return handler(_with_budget_alert(request))
-
-        async def awrap_model_call(
-            self, request: ModelRequest, handler: Callable[[ModelRequest], Awaitable[ModelCallResult]]
-        ) -> ModelCallResult:
-            return await handler(_with_budget_alert(request))
-
-    return _SubagentBudgetAlertMiddleware()
-
-
-def _request_subagent_context_summary(request: Any) -> str | None:
-    """从当轮请求 state 读取子图运行态压缩摘要（无则 None）。"""
-    state = getattr(request, "state", None)
-    if not isinstance(state, dict):
-        return None
-    summary = str(state.get("context_summary") or "").strip()
-    return summary or None
 
 
 # 子图技能目录段的引导语与 XML 拼装：目录与主智能体同一份 <available_skills>，
@@ -537,13 +414,11 @@ def _subagent_budget_meta(
     system_prompt: str | None = None,
     context_request_budget: ContextRequestBudget | None = None,
 ) -> dict[str, int]:
-    """子图预算告警的公共口径：静态 token（system+tools）与告警阈值。
+    """子图用量展示的公共口径：静态 token（system+tools）与压缩触发阈值。
 
-    预算告警中间件（决定何时注入收尾提示）与 ``subagent_context_usage``
-    事件（推送给前端展示用量）共用同一份计算，保证「注入线」与「展示线」
-    永远一致；阈值覆盖 env 只在这里生效一处。默认与压缩线同源（同一
-    ``ContextBudget.compression_trigger_tokens``）；覆盖 env 用窗口比例口径
-    （窗口 × 比例，clamp 到硬限），换模型窗口后配置不失真。
+    ``subagent_context_usage`` 事件与子图压缩共用同一份 ``ContextBudget``，
+    保证前端展示的阈值与实际压缩线一致（同一
+    ``ContextBudget.compression_trigger_tokens``），换模型后不会漂移。
     ``system_prompt`` 传入增强后的实际 system prompt（含技能目录段），缺省用
     spec.system_prompt。
     传入已配置的 ``context_request_budget`` 时直接复用它，避免与压缩中间件
@@ -557,13 +432,7 @@ def _subagent_budget_meta(
         static_tokens = estimate_text_tokens(system_prompt or spec.system_prompt) + count_tools_tokens(
             list(tools or [])
         )
-    if SUBAGENT_BUDGET_ALERT_TRIGGER_RATIO is not None:
-        threshold_tokens = min(
-            max(int(budget.context_window * SUBAGENT_BUDGET_ALERT_TRIGGER_RATIO), 1),
-            max(int(budget.hard_input_limit_tokens), 1),
-        )
-    else:
-        threshold_tokens = max(int(budget.compression_trigger_tokens), 1)
+    threshold_tokens = max(int(budget.compression_trigger_tokens), 1)
     return {
         "static_tokens": static_tokens,
         "threshold_tokens": threshold_tokens,
@@ -601,9 +470,9 @@ def _compile_subagent(spec: SubagentSpec, run_controls: Any = None, *, control_e
     """
     tools = list(spec.tools or [])
     # 技能目录与主智能体一致继承：增强后的 system prompt（含 <available_skills> 段）
-    # 是压缩中间件、预算告警静态 token 与 create_agent 三处的同一份口径。
+    # 是压缩中间件、用量展示与 create_agent 三处的同一份口径。
     effective_system_prompt = _subagent_system_prompt(spec)
-    # 同一份请求预算供压缩、预算告警、用量展示共用；静态 token 只按子图
+    # 同一份请求预算供压缩与用量展示共用；静态 token 只按子图
     # 增强后的 system prompt + 实际工具集算一次。
     subagent_static_tokens = estimate_text_tokens(effective_system_prompt) + count_tools_tokens(tools)
     subagent_runtime = ContextRuntime.create(
@@ -624,14 +493,12 @@ def _compile_subagent(spec: SubagentSpec, run_controls: Any = None, *, control_e
     )
     # 相对顺序与主图 MIDDLEWARE_CANONICAL_ORDER 对齐：出口处理链（归一化→结果→
     # 错误）的次序保持不变。压缩中间件是 before_model 节点（独立图节点，先于
-    # 模型调用改写 state），预算告警是 wrap_model_call，二者无顺序耦合；
-    # 口径同源：同一 model_id 的 ContextBudget 决定压缩触发线与告警线。
+    # 模型调用改写 state）；上下文计量负责把压缩摘要注入当轮请求。
     # 注意：子图不挂 TodoListMiddleware——子智能体不给规划/进度类工具，
     # 进度与完成情况由收尾协议直接写进最终报告。
     middleware = [
         # 与主图同源的上下文压缩：trigger=窗口 70% 时摘要/引用外置/确定性收缩
-        # 压到 30%，模型该调工具照常调（不改工具面）。这是「提前收尾不优雅」
-        # 的结构性解法——超预算先无害化（改 state），软提示只兜压缩后的残量。
+        # 压到 30%，模型该调工具照常调（不改工具面），压缩后可继续执行。
         create_context_compression_middleware(
             system_prompt=effective_system_prompt,
             tools=tools,
@@ -642,11 +509,6 @@ def _compile_subagent(spec: SubagentSpec, run_controls: Any = None, *, control_e
         # 与主图同源的上下文计量：产出 cache/breakdown 明细（前端「上下文占用明细」用）；
         # 子图不订阅 custom 流，不会把 token_usage 事件透传到主对话。
         context_usage_middleware,
-        create_subagent_budget_alert_middleware(
-            spec,
-            tools,
-            system_prompt=effective_system_prompt,
-        ),
         SkillPrerequisiteMiddleware(TOOL_REQUIRED_SKILLS),
         # 与主图同源的工具计时：ToolMessage 上盖 started_at_ms / ended_at_ms，
         # 过程事件与持久化 trail 都能带上内层工具耗时（顺序同主图：在结果/错误包装外层）。
@@ -819,15 +681,6 @@ async def _build_task_tool_impl(
         execution=execution,
     )
     context_usage = captured.get("context_usage")
-    if tool_status == "success" and context_usage and int(context_usage.get("percent", 0) or 0) >= 100:
-        # 预算收尾路径：报告可能残缺，必须在正文里告知主智能体（模型只可靠
-        # 读取 content，additional_kwargs 不进模型上下文）；只陈述事实，
-        # 如何续接由主智能体自行决定。
-        report = (
-            "【子智能体预算提示】子智能体上下文已达预算上限"
-            f"（约 {context_usage.get('used_tokens', 0)} / {context_usage.get('threshold_tokens', 0)} tokens）"
-            "并已提前收尾，以下结论可能不完整。\n\n" + report
-        )
     if state_sink is not None:
         # 账本需要保留完整原文；报告外置只会改写返回给父上下文的 content。
         state_sink["report"] = report

@@ -439,6 +439,25 @@ describe('ConversationWorkspacePanel tab 容器', () => {
     expect(wrapper.find('[data-subagent-task-detail]').exists()).toBe(true)
   })
 
+  it('子智能体管理页可暂停运行中的后台任务', async () => {
+    const running: SubagentTaskRecord = {
+      ...backgroundTask,
+      status: 'running',
+      status_label: '执行中',
+      finished_at: null,
+    }
+    const pauseSubagentTask = vi.fn().mockResolvedValue(undefined)
+    const wrapper = mountPanel({ subagentTasks: [running], pauseSubagentTask })
+    const vm = wrapper.vm as unknown as { openSubagentManager: () => void }
+    vm.openSubagentManager()
+    await wrapper.vm.$nextTick()
+
+    const button = wrapper.find('[data-subagent-task-pause]')
+    expect(button.exists()).toBe(true)
+    await button.trigger('click')
+    expect(pauseSubagentTask).toHaveBeenCalledWith(expect.objectContaining({ task_id: 'bg-task-1' }))
+  })
+
   it('首次打开后台任务详情停在最新，并开启贴底跟随', async () => {
     const wrapper = mountPanel({
       subagentTasks: [backgroundTask],

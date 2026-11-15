@@ -64,6 +64,31 @@ describe('SubagentTrail（右侧聊天式完整过程）', () => {
     }
   })
 
+  it('用户与助手气泡带任务起止时间，与主对话一致', () => {
+    const completed = mountTrail({
+      ...taskCall([{ kind: 'message', id: 'msg-1', content: '结论：已完成' }], 'completed'),
+      started_at_ms: Date.parse('2026-11-15T10:00:00'),
+      ended_at_ms: Date.parse('2026-11-15T10:02:30'),
+    })
+    const items = completed.findAllComponents(MessageItemStub)
+    expect(items[0]!.props('message').timestamp).toEqual(new Date('2026-11-15T10:00:00'))
+    expect(items[1]!.props('message').timestamp).toEqual(new Date('2026-11-15T10:02:30'))
+    // footer 由子智能体自己的底栏渲染（复制 + 用时 + tokens + 时间），不再走 MessageItem 内建 footer
+    expect(items.map(item => item.props('showFooter'))).toEqual([false, false])
+    expect(completed.find('[data-subagent-message-footer]').exists()).toBe(true)
+    expect(completed.find('[data-subagent-timestamp]').text()).toContain('2026-11-15')
+
+    // 运行中只给用户气泡派发时间，助手气泡等收口后再出 footer
+    const running = mountTrail({
+      ...taskCall([{ kind: 'message', id: 'msg-1', content: '过程' }], 'running'),
+      started_at_ms: Date.parse('2026-11-15T10:00:00'),
+    })
+    const runningItems = running.findAllComponents(MessageItemStub)
+    expect(runningItems[0]!.props('message').timestamp).toEqual(new Date('2026-11-15T10:00:00'))
+    expect(runningItems[1]!.props('message').timestamp).toBeUndefined()
+    expect(runningItems[1]!.props('showFooter')).toBe(false)
+  })
+
   it('内层工具再次选中：由 MessageItem 上抛 selectTool', () => {
     const wrapper = mountTrail(taskCall([
       { kind: 'message', id: 'msg-1', content: '先看目录' },
@@ -115,6 +140,8 @@ describe('SubagentTrail（右侧聊天式完整过程）', () => {
       { kind: 'message', id: 'msg-1', content: '结论：已完成' },
     ], 'completed'), { elapsedMs: 90_000, timingRunning: false })
     expect(finished.findAllComponents(MessageItemStub)[1]!.props('liveElapsedMs')).toBeNull()
+    expect(finished.find('[data-subagent-message-footer]').exists()).toBe(true)
+    expect(finished.find('[data-subagent-copy]').exists()).toBe(true)
     expect(finished.find('[data-subagent-duration]').text()).toContain('用时 1 分 30 秒')
   })
 
@@ -127,7 +154,8 @@ describe('SubagentTrail（右侧聊天式完整过程）', () => {
       tokenUsage: { input_tokens: 12_345, output_tokens: 678, cache_read_input_tokens: 4_000 },
     })
     const tokens = wrapper.find('[data-subagent-tokens]')
-    expect(tokens.text()).toBe('tokens 输入 12.3k · 输出 678 · 缓存命中 32%')
+    expect(tokens.text()).toContain('tokens')
+    expect(tokens.attributes('aria-label')).toBe('tokens 输入 12.3k · 输出 678 · 缓存命中 32%')
   })
 
   it('完成态默认收起工作过程，只留最终报告（与主对话口径一致）', () => {

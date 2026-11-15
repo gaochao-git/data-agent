@@ -14,11 +14,12 @@
 import type { PropType } from 'vue'
 import { computed } from 'vue'
 import type { SubagentTokenUsage, ToolCallInfo } from '../../types'
-import { buildSubagentMessages, hasSubagentTrail } from '../../utils/messageView'
+import { buildSubagentMessages, getAssistantCopyText, hasSubagentTrail } from '../../utils/messageView'
 import { shouldInlineRenderQueryResult } from '../../utils/semanticTool'
-import { formatTotalDurationLabel } from '../../utils'
+import { formatDateTimeValue } from '../../utils'
 import { buildSubagentTokenUsageText } from '../../utils/subagentUsage'
 import MessageItem from './messages/MessageItem.vue'
+import SubagentMessageFooter from './SubagentMessageFooter.vue'
 
 const props = defineProps({
   toolCall: { type: Object as PropType<ToolCallInfo>, required: true },
@@ -39,6 +40,15 @@ const emit = defineEmits<{
 
 const messages = computed(() => buildSubagentMessages(props.toolCall))
 const tokenUsageText = computed(() => buildSubagentTokenUsageText(props.tokenUsage))
+/** 每轮只在最后一条助手消息上挂 footer，压缩切出的中间段不重复展示整轮统计。 */
+const lastAssistantId = computed(() => (
+  [...messages.value].reverse().find(message => message.role === 'assistant')?.id || ''
+))
+const showFooterFor = (message: { id: string; role: string; isStreaming?: boolean }): boolean => (
+  message.role === 'assistant'
+  && message.id === lastAssistantId.value
+  && !message.isStreaming
+)
 </script>
 
 <template>
@@ -48,25 +58,23 @@ const tokenUsageText = computed(() => buildSubagentTokenUsageText(props.tokenUsa
     class="flex flex-col gap-3"
   >
     <!-- 过程记录直接复用主对话消息分派：user（任务书）+ assistant（思考/正文/工具） -->
-    <MessageItem
-      v-for="message in messages"
-      :key="message.id"
-      :message="message"
-      :show-footer="false"
-      :conversation-id="conversationId"
-      :active-tool-call-id="activeToolCallId"
-      :should-inline-render-result="shouldInlineRenderQueryResult"
-      :live-elapsed-ms="timingRunning ? elapsedMs : null"
-      @select-tool="emit('selectTool', $event)"
-    />
-
-    <!-- 完成后与主对话一致：气泡下方一行「用时 X」+ 子智能体 token 用量 -->
-    <div
-      v-if="!timingRunning && (elapsedMs || tokenUsageText)"
-      class="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-[11px] text-gray-400"
-    >
-      <span v-if="elapsedMs" data-subagent-duration>用时 {{ formatTotalDurationLabel(elapsedMs) }}</span>
-      <span v-if="tokenUsageText" data-subagent-tokens>{{ tokenUsageText }}</span>
+    <div v-for="message in messages" :key="message.id" class="flex flex-col gap-1">
+      <MessageItem
+        :message="message"
+        :show-footer="false"
+        :conversation-id="conversationId"
+        :active-tool-call-id="activeToolCallId"
+        :should-inline-render-result="shouldInlineRenderQueryResult"
+        :live-elapsed-ms="timingRunning ? elapsedMs : null"
+        @select-tool="emit('selectTool', $event)"
+      />
+      <SubagentMessageFooter
+        v-if="showFooterFor(message)"
+        :timestamp="formatDateTimeValue(message.timestamp)"
+        :copy-text="getAssistantCopyText(message)"
+        :duration-ms="timingRunning ? null : elapsedMs"
+        :usage-text="tokenUsageText"
+      />
     </div>
   </div>
 </template>

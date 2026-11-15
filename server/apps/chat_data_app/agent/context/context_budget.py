@@ -153,7 +153,7 @@ def resolve_context_summary(
 ) -> tuple[list[BaseMessage], str | None]:
     """剥离旧 checkpoint 摘要并合并运行态摘要，返回 (干净消息, 有效摘要)。
 
-    主图压缩、主图请求注入、子图压缩/预算提示都走这一处，避免旧摘要迁移和
+    主图压缩、主图请求注入、子图压缩都走这一处，避免旧摘要迁移和
     摘要去重逻辑在多个中间件里各写一份。
     """
     cleaned_messages, summary, _legacy_summary = resolve_context_summary_with_legacy(messages, context_summary)

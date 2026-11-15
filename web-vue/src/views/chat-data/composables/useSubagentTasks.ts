@@ -7,7 +7,7 @@
  * - 有活跃任务时低频轮询，空闲 Run 也能看到进度，不依赖父 Run 一直在线。
  */
 import { computed, onBeforeUnmount, ref } from 'vue'
-import { cancelSubagentTask, getSubagentTask, listSubagentTasks } from '../api'
+import { cancelSubagentTask, getSubagentTask, listSubagentTasks, pauseSubagentTask } from '../api'
 import type { SubagentTaskRecord, SubagentTaskStatus } from '../types'
 
 export const ACTIVE_SUBAGENT_TASK_STATUSES: ReadonlySet<SubagentTaskStatus> = new Set([
@@ -214,6 +214,19 @@ export const useSubagentTasks = () => {
     }
   }
 
+  const pauseTask = async (taskId: string): Promise<SubagentTaskRecord | null> => {
+    const currentConversationId = conversationId
+    if (!currentConversationId) return null
+    try {
+      const task = await pauseSubagentTask(currentConversationId, taskId)
+      if (currentConversationId === conversationId) applyTaskUpdate(task)
+      return task
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : '暂停任务失败'
+      return null
+    }
+  }
+
   const setConversation = async (nextConversationId: string | null) => {
     const normalized = nextConversationId || null
     if (normalized === conversationId) {
@@ -243,6 +256,7 @@ export const useSubagentTasks = () => {
     applyTaskUpdate,
     loadTaskDetail,
     cancelTask,
+    pauseTask,
     stopPolling,
   }
 }

@@ -45,6 +45,31 @@ describe('SubagentTaskRow', () => {
     expect(wrapper.emitted('cancel')?.[0]?.[0]).toEqual(background)
   })
 
+  it('shows pause for a running background task and emits pause', async () => {
+    const background = task()
+    const wrapper = mount(SubagentTaskRow, {
+      props: { task: background },
+    })
+    const button = wrapper.find('[data-subagent-task-pause]')
+
+    expect(button.exists()).toBe(true)
+    await button.trigger('click')
+    expect(wrapper.emitted('pause')?.[0]?.[0]).toEqual(background)
+  })
+
+  it('hides pause for sync, paused and cancelling tasks', () => {
+    for (const overrides of [
+      { execution_mode: 'sync' as const },
+      { status: 'paused' as const },
+      { status: 'cancelling' as const },
+    ]) {
+      const wrapper = mount(SubagentTaskRow, {
+        props: { task: task(overrides) },
+      })
+      expect(wrapper.find('[data-subagent-task-pause]').exists()).toBe(false)
+    }
+  })
+
   it('shows session-level rounds, tool calls and first/last timestamps', () => {
     const first = task({
       task_id: 'task-1',

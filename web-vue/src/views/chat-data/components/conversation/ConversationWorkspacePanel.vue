@@ -105,8 +105,10 @@ const props = defineProps({
   subagentTasks: { type: Array as PropType<SubagentTaskRecord[]>, default: () => [] },
   subagentTaskDetails: { type: Object as PropType<Record<string, SubagentTaskRecord>>, default: () => ({}) },
   subagentTaskCancellingIds: { type: Array as PropType<string[]>, default: () => [] },
+  subagentTaskPausingIds: { type: Array as PropType<string[]>, default: () => [] },
   loadSubagentTaskDetail: { type: Function as PropType<(taskId: string, refresh?: boolean) => Promise<SubagentTaskRecord | null>>, default: null },
   cancelSubagentTask: { type: Function as PropType<(task: SubagentTaskRecord) => Promise<void>>, default: null },
+  pauseSubagentTask: { type: Function as PropType<(task: SubagentTaskRecord) => Promise<void>>, default: null },
 })
 
 const emit = defineEmits<{
@@ -332,6 +334,10 @@ const openSubagentManagerPanelTab = () => {
 
 const cancelSubagentTaskFromManager = (task: SubagentTaskRecord) => {
   void props.cancelSubagentTask?.(task)
+}
+
+const pauseSubagentTaskFromManager = (task: SubagentTaskRecord) => {
+  void props.pauseSubagentTask?.(task)
 }
 
 const findSubagentTaskByToolCall = (toolCallId: string): SubagentTaskRecord | null => {
@@ -1578,9 +1584,11 @@ defineExpose({
       <SubagentManagerTab
         :tasks="allSubagentTasks"
         :cancelling-task-ids="subagentTaskCancellingIds"
+        :pausing-task-ids="subagentTaskPausingIds"
         :load-task-detail="loadSubagentTaskDetail"
         @open="openSubagentTaskPanelTab"
         @cancel="cancelSubagentTaskFromManager"
+        @pause="pauseSubagentTaskFromManager"
       />
     </div>
 

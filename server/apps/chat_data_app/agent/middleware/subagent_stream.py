@@ -563,8 +563,8 @@ def _subagent_usage_snapshot(usage_meta: dict[str, int], collected: list) -> dic
 
     两个百分比口径明确分工：
     - ``percent``：占**模型上下文窗口**比例，与主对话「上下文 N%」同口径，可直接对比；
-    - ``budget_percent``：占**收尾阈值**（窗口 × 压缩触发比例）比例，100% 触发提前收尾，
-      前端用它做告警色/tooltip。
+    - ``budget_percent``：占**压缩触发阈值**（窗口 × 压缩触发比例）比例，
+      前端用它展示与主图一致的压缩水位。
     """
     used = usage_meta["static_tokens"] + count_messages_tokens(collected)
     threshold_tokens = max(usage_meta["threshold_tokens"], 1)
@@ -713,7 +713,7 @@ async def _run_subagent_with_events(
 
     ``collected`` / ``captured`` / ``usage_meta`` 分别承载已收集消息（失败路径
     trail 快照）、上下文用量（写入 ToolMessage 供回放）与实时
-    ``subagent_context_usage`` 推送（口径与预算告警共用 ``_subagent_budget_meta``）。
+    ``subagent_context_usage`` 推送（口径与压缩阈值共用 ``_subagent_budget_meta``）。
 
     双模式：``messages`` 转发 token 增量；``updates`` 负责工具生命周期与最终报告，
     已增量转发的消息只补截断标记（见 ``_iter_subagent_stream_events``）。

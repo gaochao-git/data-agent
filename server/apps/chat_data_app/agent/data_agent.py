@@ -379,8 +379,8 @@ def build_subagent_middleware(
     子智能体使用与主智能体相同的模型，运行在隔离上下文中：explore 按只读白名单
     fail-closed；general 默认继承主图可用工具（含 MCP 实体工具），仅按
     ``SUBAGENT_TOOL_DENYLISTS`` 剔除不可安全承载的工具。
-    ``model_id`` 与主图同源传入：子图预算告警据此取同一 ContextBudget 的
-    压缩触发阈值，保证「上下文将尽」的口径与主图一致。
+    ``model_id`` 与主图同源传入：子图据此取同一 ContextBudget 的压缩触发阈值，
+    保证压缩与用量展示口径和主图一致。
     ``available_skills_xml`` 与主智能体同一会话技能清单（一致继承）：子图
     system prompt 由此注入目录段，正文仍按需 file_read；未传或为空则不注入。
     ``memory_block`` 与主智能体同一份会话记忆条目（一致继承）：子图 system

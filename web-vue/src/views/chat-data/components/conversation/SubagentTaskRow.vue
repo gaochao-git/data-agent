@@ -13,14 +13,21 @@ const props = defineProps({
   /** 同一子会话的全部轮次，用于汇总工具调用次数与首末时间。 */
   sessionTasks: { type: Array as PropType<SubagentTaskRecord[]>, default: () => [] },
   cancelling: { type: Boolean, default: false },
+  pausing: { type: Boolean, default: false },
 })
 
 const emit = defineEmits<{
   open: [task: SubagentTaskRecord]
   cancel: [task: SubagentTaskRecord]
+  pause: [task: SubagentTaskRecord]
 }>()
 
 const active = computed(() => isSubagentTaskActive(props.task))
+// 暂停依赖子图控制中间件，仅后台任务可用；同步任务随主 Run 执行，不提供独立暂停。
+const canPause = computed(() => (
+  props.task.execution_mode !== 'sync'
+  && (props.task.status === 'running' || props.task.status === 'pending')
+))
 const startedAt = computed(() => {
   const value = Date.parse(props.task.started_at || props.task.created_at || '')
   return Number.isFinite(value) ? value : null
@@ -172,17 +179,30 @@ const progressText = computed(() => {
           <span>{{ taskTitle }}</span>
         </h3>
 
-        <button
-          v-if="active"
-          type="button"
-          class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-slate-300 opacity-70 transition-all hover:bg-rose-50 hover:text-rose-500 group-hover:opacity-100"
-          :disabled="cancelling"
-          data-subagent-task-cancel
-          title="取消子智能体任务"
-          @click.stop="emit('cancel', task)"
-        >
-          <i :class="cancelling ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-xmark'" class="text-[11px]"></i>
-        </button>
+        <div class="flex shrink-0 items-center gap-0.5">
+          <button
+            v-if="canPause"
+            type="button"
+            class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-slate-300 opacity-70 transition-all hover:bg-amber-50 hover:text-amber-500 group-hover:opacity-100"
+            :disabled="pausing"
+            data-subagent-task-pause
+            title="暂停子智能体任务"
+            @click.stop="emit('pause', task)"
+          >
+            <i :class="pausing ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-pause'" class="text-[11px]"></i>
+          </button>
+          <button
+            v-if="active"
+            type="button"
+            class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-slate-300 opacity-70 transition-all hover:bg-rose-50 hover:text-rose-500 group-hover:opacity-100"
+            :disabled="cancelling"
+            data-subagent-task-cancel
+            title="取消子智能体任务"
+            @click.stop="emit('cancel', task)"
+          >
+            <i :class="cancelling ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-xmark'" class="text-[11px]"></i>
+          </button>
+        </div>
       </div>
 
       <div class="mt-2.5 flex flex-col gap-1 text-[10.5px] text-slate-400" data-subagent-task-meta>

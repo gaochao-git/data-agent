@@ -529,19 +529,31 @@ export const buildSubagentTrailBlocks = (toolCall: ToolCallInfo): SubagentTrailB
  * 合并成单条消息而不是每条 trail 记录一个气泡：子智能体一轮任务会有多个内层
  * 模型轮次，拆成多个气泡会出现一屏「工作过程」重复标题，反而不像主对话。
  */
+const parseMessageTimestamp = (value?: number | string | null): Date | undefined => {
+  if (value === null || value === undefined || value === '') return undefined
+  const parsed = typeof value === 'number' ? value : Date.parse(String(value))
+  if (!Number.isFinite(parsed)) return undefined
+  return new Date(parsed)
+}
+
 export const buildSubagentMessages = (toolCall: ToolCallInfo): Message[] => {
   const blocks = buildSubagentTrailBlocks(toolCall)
   const parentRunning = isSubagentParentRunning(toolCall)
   const messages: Message[] = []
+  // 与主对话一致：用户气泡展示派发时间，助手气泡完成后展示收口时间；
+  // 运行中不出 footer（时间尚未确定，且与主对话的流式口径一致）。
+  const startedAt = parseMessageTimestamp(toolCall.started_at_ms)
+  const endedAt = parentRunning ? undefined : parseMessageTimestamp(toolCall.ended_at_ms)
   const prompt = String(toolCall.args?.description || '').trim()
   if (prompt) {
-    messages.push({ id: `${toolCall.tool_call_id}-task`, role: 'user', content: prompt })
+    messages.push({ id: `${toolCall.tool_call_id}-task`, role: 'user', content: prompt, timestamp: startedAt })
   }
 
   const assistant: Message = {
     id: `${toolCall.tool_call_id}-process`,
     role: 'assistant',
     content: '',
+    timestamp: endedAt,
     segments: [],
     thinkingSegments: [],
     toolCalls: [],
@@ -559,6 +571,7 @@ export const buildSubagentMessages = (toolCall: ToolCallInfo): Message[] => {
           thinkingSegments: [...(assistant.thinkingSegments || [])],
           isStreaming: false,
           forceWorkProcess: true,
+          timestamp: parseMessageTimestamp(block.compaction.timestamp) ?? endedAt,
         })
       }
       messages.push({

@@ -1593,148 +1593,16 @@ async def test_compiled_subagent_survives_raising_tool(monkeypatch, tmp_path):
     assert "未绑定数据源" in tool_entries[0]["result"]
 
 
-def test_budget_alert_middleware_silent_below_threshold(monkeypatch):
-    """上下文未达告警阈值时原样放行请求，不追加任何提示。"""
-    monkeypatch.setattr(
-        subagents_module,
-        "get_model_context_budget",
-        lambda model_id: SimpleNamespace(compression_trigger_tokens=10**9),
-    )
-    middleware = subagents_module.create_subagent_budget_alert_middleware(_spec(), [])
-    request = SimpleNamespace(
-        system_message=SystemMessage(content="主提示词"),
-        messages=[AIMessage(content="短任务结论")],
-        override=lambda **kwargs: SimpleNamespace(**kwargs),
-    )
-    seen = {}
-
-    def handler(req):
-        seen["request"] = req
-        return "done"
-
-    assert middleware.wrap_model_call(request, handler) == "done"
-    assert seen["request"] is request
-
-
-class _FakeModelRequest:
-    """保留属性的假 ModelRequest：override 合并字段，供跨轮次断言 tools/system_message。"""
-
-    def __init__(self, **kwargs):
-        self.__dict__.update(kwargs)
-
-    def override(self, **kwargs):
-        merged = dict(self.__dict__)
-        merged.update(kwargs)
-        return _FakeModelRequest(**merged)
-
-
-def _over_threshold_request():
-    return _FakeModelRequest(
-        system_message=SystemMessage(content="主提示词"),
-        messages=[AIMessage(content="事实" * 1000)],
-        tools=["file_read"],
-    )
-
-
-def test_budget_alert_middleware_appends_warning_over_threshold(monkeypatch):
-    """上下文估算达到阈值时，本轮请求尾部追加预算收尾提示 + tool_choice="none"（双层收尾）。"""
-    monkeypatch.setattr(
-        subagents_module,
-        "get_model_context_budget",
-        lambda model_id: SimpleNamespace(compression_trigger_tokens=100),
-    )
-    middleware = subagents_module.create_subagent_budget_alert_middleware(_spec(), [])
-    seen = {}
-
-    def handler(req):
-        seen["request"] = req
-        return "done"
-
-    request = _over_threshold_request()
-
-    assert middleware.wrap_model_call(request, handler) == "done"
-    # 注入通道=隐藏 HumanMessage 追加在消息尾部，system prompt 保持原样
-    request_messages = seen["request"].messages
-    assert len(request_messages) == len(request.messages) + 1
-    alert_message = request_messages[-1]
-    assert isinstance(alert_message, HumanMessage)
-    assert alert_message.additional_kwargs.get("budget_alert") is True
-    assert alert_message.additional_kwargs.get("hide_from_ui") is True
-    content = alert_message.content
-    assert "上下文预算提示" in content
-    assert "当前已完成任务为" in content
-    assert "待完成任务为" in content
-    # 只汇报事实，不替主智能体决定后续安排
-    assert "续接任务书为" not in content
-    assert seen["request"].system_message.content == "主提示词"
-    assert "建议" not in content
-    # 工具 schema 保留（与已废弃的 override(tools=[]) 的本质区别：schema 消失才是
-    # Qwen 裸 <tool_call> 正文退化的诱因），仅 API 参数层禁止本轮调用
-    assert seen["request"].tools == ["file_read"]
-    assert seen["request"].tool_choice == "none"
-
-    # 低于阈值零注入，tool_choice 不设置（模型正常自主决策）
-    fresh = _FakeModelRequest(
-        system_message=SystemMessage(content="主提示词"),
-        messages=[AIMessage(content="短")],
-        tools=["file_read"],
-    )
-    assert middleware.wrap_model_call(fresh, handler) == "done"
-    assert seen["request"].system_message.content == "主提示词"
-    assert getattr(seen["request"], "tool_choice", None) is None
-
-
-def test_budget_alert_middleware_env_override_takes_precedence(monkeypatch):
-    """SUBAGENT_BUDGET_ALERT_TRIGGER_RATIO 覆盖主图同源阈值（压测/调试用）。
-
-    主图预算取超大值（正常情况下永不提示）；覆盖比例 0.5 × 窗口 200 = 100，
-    同样体量的消息即触发提示，且提示文案里的阈值是换算后的覆盖值而非主图值；
-    覆盖线被硬限 clamp（150）兜住；软约束不摘工具。
-    """
+def test_subagent_budget_meta_uses_compression_threshold(monkeypatch):
+    """用量展示口径直接复用压缩触发阈值，不再维护独立告警线。"""
     monkeypatch.setattr(
         subagents_module,
         "get_model_context_budget",
         lambda model_id: SimpleNamespace(
-            compression_trigger_tokens=10**9,
-            context_window=200,
-            hard_input_limit_tokens=150,
+            compression_trigger_tokens=51_200,
+            context_window=128_000,
         ),
     )
-    monkeypatch.setattr(subagents_module, "SUBAGENT_BUDGET_ALERT_TRIGGER_RATIO", 0.5)
-    middleware = subagents_module.create_subagent_budget_alert_middleware(_spec(), [])
-    seen = {}
-
-    def handler(req):
-        seen["request"] = req
-        return "done"
-
-    request = _over_threshold_request()
-
-    assert middleware.wrap_model_call(request, handler) == "done"
-    # 注入通道=隐藏 HumanMessage 追加在消息尾部（非 system prompt 追加）
-    request_messages = seen["request"].messages
-    assert len(request_messages) == len(request.messages) + 1
-    alert_message = request_messages[-1]
-    assert isinstance(alert_message, HumanMessage)
-    assert alert_message.additional_kwargs.get("budget_alert") is True
-    assert alert_message.additional_kwargs.get("hide_from_ui") is True
-    assert "上下文预算提示" in alert_message.content
-    assert "100 tokens" in alert_message.content
-    assert seen["request"].system_message.content == "主提示词"
-    assert seen["request"].tools == ["file_read"]
-
-
-def test_budget_alert_ratio_override_clamped_by_hard_limit(monkeypatch):
-    """比例换算出的告警线超过硬限时被 clamp 到硬限，不会出现告警线越过硬限。"""
-    monkeypatch.setattr(
-        subagents_module,
-        "get_model_context_budget",
-        lambda model_id: SimpleNamespace(
-            compression_trigger_tokens=10**9,
-            context_window=1000,
-            hard_input_limit_tokens=60,
-        ),
-    )
-    monkeypatch.setattr(subagents_module, "SUBAGENT_BUDGET_ALERT_TRIGGER_RATIO", 0.9)
     meta = subagents_module._subagent_budget_meta(_spec(), [])
-    assert meta["threshold_tokens"] == 60
+    assert meta["threshold_tokens"] == 51_200
+    assert meta["context_window"] == 128_000

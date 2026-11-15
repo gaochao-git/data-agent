@@ -179,23 +179,6 @@ def test_read_optional_positive_int_env_unset_invalid_and_valid(monkeypatch):
     assert runtime_config.read_optional_positive_int_env("CHATDATA_TEST_OPT_INT") == 7
 
 
-def test_read_optional_positive_ratio_env_validates_range(monkeypatch):
-    """可选比例 env：未设置返回 None；合法返回数值；超上限/非法数字 fail-fast 不静默回退。"""
-    monkeypatch.delenv("CHATDATA_TEST_RATIO_OPT", raising=False)
-    assert runtime_config.read_optional_positive_ratio_env("CHATDATA_TEST_RATIO_OPT", maximum=0.95) is None
-
-    monkeypatch.setenv("CHATDATA_TEST_RATIO_OPT", "0.05")
-    assert runtime_config.read_optional_positive_ratio_env("CHATDATA_TEST_RATIO_OPT", maximum=0.95) == 0.05
-
-    monkeypatch.setenv("CHATDATA_TEST_RATIO_OPT", "1.5")
-    with pytest.raises(RuntimeError, match="必须大于 0 且不超过 0.95"):
-        runtime_config.read_optional_positive_ratio_env("CHATDATA_TEST_RATIO_OPT", maximum=0.95)
-
-    monkeypatch.setenv("CHATDATA_TEST_RATIO_OPT", "bad")
-    with pytest.raises(RuntimeError, match="必须是 0 到 0.95 之间的数字"):
-        runtime_config.read_optional_positive_ratio_env("CHATDATA_TEST_RATIO_OPT", maximum=0.95)
-
-
 def test_module_level_backend_fallback_and_bash_local_warning(monkeypatch):
     """模块级自检：非法 workspace_backend 回退 local；bash+local 高危组合触发告警。
 

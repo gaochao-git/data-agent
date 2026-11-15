@@ -552,7 +552,7 @@ export interface ToolCallInfo {
 /**
  * 子智能体上下文用量快照。
  * - `percent`：占**模型上下文窗口**比例，与主对话「上下文 N%」同口径；
- * - `budget_percent`：占**收尾阈值**（窗口 × 压缩触发比例）比例，≥100 触发提前收尾；
+ * - `budget_percent`：占**压缩触发阈值**（窗口 × 压缩触发比例）比例；
  * - 旧会话快照没有窗口字段，只有 `percent`（当时是预算口径）→ 回放时归一到 `budget_percent`。
  */
 export interface SubagentContextUsage {
@@ -866,7 +866,7 @@ export interface ToolLifecycleEventData extends ToolEventData {
   context_window?: number
   /** 占模型上下文窗口比例（与主对话同口径） */
   percent?: number
-  /** 占收尾阈值比例（100% 触发提前收尾） */
+  /** 占压缩触发阈值比例 */
   budget_percent?: number
 }
 

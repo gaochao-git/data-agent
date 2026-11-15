@@ -1158,6 +1158,48 @@ async def cancel_subagent_task(conversation_id: str, task_id: str, req: Request)
         )
 
 
+@router.post("/{conversation_id}/subagent-tasks/{task_id}/pause")
+async def pause_subagent_task(conversation_id: str, task_id: str, req: Request) -> JSONResponse:
+    """用户手动暂停后台子智能体任务；运行中的任务在下一个模型调用前停下。"""
+    try:
+        user_id, username = _get_current_user_identity(req)
+        record = await subagent_task_service.request_pause(
+            task_id,
+            conversation_id=conversation_id,
+            user_id=user_id,
+            operator_name=username,
+        )
+        if record is None:
+            return business_response(
+                msg="后台任务不存在",
+                code=ErrorCode.CHATDATA_NOT_FOUND,
+                status="error",
+                http_status_code=http_status.HTTP_404_NOT_FOUND,
+            )
+        if record.status in TERMINAL_TASK_STATUSES:
+            return business_response(
+                data=record.as_dict(),
+                msg=f"任务已是{TASK_STATUS_LABELS.get(record.status, record.status)}",
+            )
+        if record.status == "paused":
+            msg = "子智能体已暂停"
+        elif record.status == "waiting_approval":
+            msg = "任务正在等待审批，无需暂停"
+        else:
+            msg = "已提交暂停请求，任务会在下一个模型调用前暂停"
+        return business_response(data=record.as_dict(), msg=msg)
+    except AuthenticationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+    except Exception:
+        logger.error("暂停后台子智能体任务失败: conversation_id=%s task_id=%s", conversation_id, task_id, exc_info=True)
+        return business_response(
+            msg="暂停后台任务失败，请稍后重试",
+            code=ErrorCode.CHATDATA_BAD_REQUEST,
+            status="error",
+            http_status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
 @router.get("/{conversation_id}/subagent-tasks/{task_id}/events", responses=SSE_RESPONSES)
 async def stream_subagent_task_events(conversation_id: str, task_id: str, req: Request) -> Response:
     """订阅后台子智能体的过程消息；父 Run 结束后仍可实时查看。"""

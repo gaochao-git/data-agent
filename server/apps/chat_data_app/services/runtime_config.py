@@ -135,32 +135,6 @@ CONTEXT_COMPRESSION_DEFAULT_TRIGGER_RATIO = 0.70
 CONTEXT_COMPRESSION_MAX_TRIGGER_RATIO = 0.95
 
 
-def read_optional_positive_ratio_env(name: str, *, maximum: float) -> float | None:
-    """读取可选的正比例 env（0 < value <= maximum）：无效配置直接拒启，不静默回退。"""
-    raw = str(os.getenv(name) or "").strip()
-    if not raw:
-        return None
-    try:
-        value = float(raw)
-    except ValueError as exc:
-        raise RuntimeError(f"{name} 必须是 0 到 {maximum} 之间的数字") from exc
-    if not math.isfinite(value) or value <= 0 or value > maximum:
-        raise RuntimeError(f"{name} 必须大于 0 且不超过 {maximum}，当前值: {value}")
-    return value
-
-
-# 子智能体预算告警线的可选覆盖（上下文窗口比例）：不设置时与主图压缩触发阈值
-# 同源（同一 ContextBudget.compression_trigger_tokens = 窗口 × TRIGGER_RATIO）；
-# 设置后仅覆盖子图告警线 = 窗口 × 该比例（不超过硬限），主图与子图压缩均不受
-# 影响。与压缩线同用比例口径，换模型/调窗口后配置不失真。主要用于压测/调试——
-# 设 0.05 之类的小值让告警线先于压缩线触发，肉眼验证「预算告警 → 提前收尾」
-# 链路，测完删除该 env 即恢复同源口径。
-SUBAGENT_BUDGET_ALERT_TRIGGER_RATIO = read_optional_positive_ratio_env(
-    "CHAT_DATA_SUBAGENT_BUDGET_ALERT_TRIGGER_RATIO",
-    maximum=CONTEXT_COMPRESSION_MAX_TRIGGER_RATIO,
-)
-
-
 def read_bounded_float_env(name: str, default: float, *, minimum: float, maximum: float) -> float:
     """读取并限制浮点环境变量。"""
     raw = str(os.getenv(name) or "").strip()
