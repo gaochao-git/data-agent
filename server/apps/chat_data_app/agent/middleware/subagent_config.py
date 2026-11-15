@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from langgraph.constants import CONFIG_KEY_CHECKPOINTER
+
 if TYPE_CHECKING:
     from .subagents import SubagentSpec
 
@@ -19,6 +21,8 @@ def build_subagent_invocation_config(
     *,
     default_recursion_limit: int | None = None,
     background_task_id: str | None = None,
+    agent_session_id: str | None = None,
+    checkpointer: Any = None,
 ) -> dict[str, Any]:
     """构造子图调用配置：切断回调继承，避免子图 token 进入主 SSE 流。
 
@@ -33,7 +37,15 @@ def build_subagent_invocation_config(
     langgraph 默认 25 个 super-step，不低于 1 的下限由 max 保证。
     """
     configurable: dict[str, Any] = {"chatdata_subagent": spec.name}
-    if background_task_id:
+    if checkpointer is not None:
+        # 子图独立检查点：线程按智能体会话稳定，命名空间按任务隔离。
+        # 追问复用同一会话线程，但每轮独立命名空间，避免把上一轮已从
+        # 会话快照重建的历史重复追加进 messages。
+        session_key = agent_session_id or background_task_id
+        configurable["thread_id"] = f"chatdata-agent-session-{session_key}"
+        configurable["checkpoint_ns"] = f"task-{background_task_id}" if background_task_id else ""
+        configurable[CONFIG_KEY_CHECKPOINTER] = checkpointer
+    elif background_task_id:
         configurable["thread_id"] = f"chatdata-subagent-task-{background_task_id}"
     return {
         "callbacks": [],
