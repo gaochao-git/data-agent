@@ -123,8 +123,8 @@ if _raw_workspace_backend not in ("local", "sandbox"):
 CHAT_DATA_DEFAULT_WORKSPACE_BACKEND = cast('Literal["local", "sandbox"]', _raw_workspace_backend)
 # 是否注册 explore 子智能体（只读事实收集）；任一子智能体启用即注册 task 工具。
 CHAT_DATA_DEFAULT_EXPLORE_SUBAGENT_ENABLED = read_bool_env("CHAT_DATA_DEFAULT_EXPLORE_SUBAGENT_ENABLED", False)
-# 是否注册 plan 子智能体（统一规划：产出计划文件，只规划不执行）。
-CHAT_DATA_DEFAULT_PLAN_SUBAGENT_ENABLED = read_bool_env("CHAT_DATA_DEFAULT_PLAN_SUBAGENT_ENABLED", False)
+# 是否注册 general 子智能体（可读写执行：整理文件、查询分析、产出交付物）。
+CHAT_DATA_DEFAULT_GENERAL_SUBAGENT_ENABLED = read_bool_env("CHAT_DATA_DEFAULT_GENERAL_SUBAGENT_ENABLED", False)
 # 语义模型发现引导语（工具缺 semantic_config_id 的错误文案共用）：
 # 检索用法的单一维护点是「数据分析」技能（SKILL.md → references/analysis/query.md），错误提示统一
 # 指向该技能，不随工具开关切换文案，也不在此重复检索步骤。

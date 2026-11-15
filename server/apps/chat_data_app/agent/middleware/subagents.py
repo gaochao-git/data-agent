@@ -203,7 +203,7 @@ _TASK_TOOL_DESCRIPTION_TEMPLATE = """派发隔离上下文的子智能体处理�
 - 子智能体看不到主对话历史：任务书必须自带 ① 目标 ② 已知事实与文件路径 ③ 交付格式 ④ 约束与禁止项，并写明任务意图（研究盘点 / 分析 / 产出交付物）。
 - 适合：多文件或大体量数据的盘点调研、可并行的独立子任务；不适合：单点查询、需要向用户提问或展示过程的步骤（直接自己做）。
 - 大块背景先用 file_write 落盘，任务书给路径；只存在于对话里的信息子智能体拿不到。
-- explore 只读不写盘；需要落盘的交付物由主智能体收尾写。
+- explore 只读不写盘；需要落盘交付物时派 general（可读写工作区），或由主智能体收尾写。
 - 已派发任务不要重复执行；相互独立的子任务可在同一条消息里并行发起多个 task。
 - 耗时长且当轮不需要其结论的任务可传 background=true 转后台：立即返回持久 task_id（可配 label/timeout_seconds），期间继续其他工作或直接结束本轮；完成/失败/超时后会自动唤醒当前会话并注入通知。需要立即拿到先前任务结果时用 task(action="wait", task_ids=[...])；查单个任务用 task(action="check", task_id=...)；列任务用 task(action="list")；取消用 task(action="cancel", task_id=...)；已结束任务需要补充分析/修改结论时用 task(action="follow_up", task_id=..., message=...)，不要用 start 重复派发。
 - 运行中可管理：task(action="steer", task_id=..., message=...) 在下一个模型步注入补充说明；task(action="pause", task_id=...) 在安全点暂停；暂停或等待审批后用 task(action="resume"/"approve"/"reject", task_id=...) 继续。审批通知会给出待执行工具，主智能体必须先征得用户同意再 approve。
@@ -588,7 +588,7 @@ def _compile_subagent(spec: SubagentSpec, run_controls: Any = None, *, control_e
     """把 spec 编译成独立 langgraph runnable。
 
     ``run_controls`` 完整时为子图挂上与主图相同的租约围栏：租约丢失/被接管后
-    内层工具（plan 的 file_write、explore 的查询等）同样拒绝产生新副作用，
+    内层工具（general 的 file_write、explore 的查询等）同样拒绝产生新副作用，
     而不是只靠心跳的协作式取消。
     """
     tools = list(spec.tools or [])

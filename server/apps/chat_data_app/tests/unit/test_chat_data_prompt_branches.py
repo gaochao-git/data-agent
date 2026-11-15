@@ -97,7 +97,7 @@ def test_memory_block_only_in_main_agent_prompt():
     # WorkspacePathPolicy 拒绝，模型首次读写必失败
     assert "/mnt/user-data/memory/memory.md" in chat_data.MEMORY_BLOCK
     assert chat_data.MEMORY_BLOCK not in chat_data.EXPLORE_SUBAGENT_PROMPT
-    assert chat_data.MEMORY_BLOCK not in chat_data.PLAN_SUBAGENT_PROMPT
+    assert chat_data.MEMORY_BLOCK not in chat_data.GENERAL_SUBAGENT_PROMPT
     # 防回归：MEMORY_BLOCK 独立成块，若并入 ENVIRONMENT_BLOCK 会被子智能体 prompt 连带引用
     assert chat_data.MEMORY_BLOCK not in chat_data.ENVIRONMENT_BLOCK
 

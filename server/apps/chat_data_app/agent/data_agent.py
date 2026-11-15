@@ -41,7 +41,7 @@ from .middleware.tool_execution_fence import create_tool_execution_fence_middlew
 from .middleware.tool_result import create_tool_result_middleware
 from .prompts.chat_data import (
     EXPLORE_SUBAGENT_PROMPT,
-    PLAN_SUBAGENT_PROMPT,
+    GENERAL_SUBAGENT_PROMPT,
     build_unified_system_prompt,
 )
 from .runtime_options import AgentRuntimeOptions, get_chat_data_default_runtime_options
@@ -284,12 +284,11 @@ EXPLORE_SUBAGENT_DESCRIPTION = (
     "适合需要跨多模型/多表摸底数据事实的场景。"
 )
 
-PLAN_SUBAGENT_NAME = "plan"
-PLAN_SUBAGENT_DESCRIPTION = (
-    "统一规划：为复杂任务产出可执行计划文件（步骤分解、输入路径、期望产出、验收标准），"
-    "报告类任务按办公技能 report-workflow 产出需求说明、样式清单与大纲。"
-    "只规划不执行，计划写入会话工作区，只回传计划路径与步骤清单。"
-    "适合多步骤报告、跨数据源综合分析等先规划后执行的任务。"
+GENERAL_SUBAGENT_NAME = "general"
+GENERAL_SUBAGENT_DESCRIPTION = (
+    "通用执行：按任务书完成可读写的多步任务——读取与整理文件、查询分析数据、"
+    "用办公技能产出文档/报告等交付物，并回传结论与产出路径。"
+    "适合已明确要做、需要落盘产出的委派任务。"
     "子智能体与主智能体共享技能清单，但看不到主对话历史：任务相关的技能（尤其"
     "用户自定义技能）建议在任务书中写明技能名称与 skill_file 路径。"
 )
@@ -311,16 +310,27 @@ SUBAGENT_TOOL_ALLOWLISTS: dict[str, frozenset[str]] = {
             "calculator_tool",
         }
     ),
-    PLAN_SUBAGENT_NAME: frozenset(
+    GENERAL_SUBAGENT_NAME: frozenset(
         {
             "file_read",
+            "file_edit",
             "file_write",
+            "file_move",
+            "file_copy",
+            "file_delete",
             "file_glob",
             "file_grep",
             "file_diff",
+            "dir_create",
             "dir_list",
+            "dir_delete",
+            "parse_document",
+            "read_image",
             "get_current_time",
             "load_skill",
+            "data_analyzing_tool",
+            "calculator_tool",
+            "officecli_run",
         }
     ),
 }
@@ -359,7 +369,7 @@ def build_subagent_middleware(
     """按运行选项构建子智能体中间件；没有任何子智能体启用时返回 None。
 
     每个子智能体按 ``SUBAGENT_TOOL_ALLOWLISTS`` 显式选择工具，使用与主智能体
-    相同的模型，运行在隔离上下文中；explore 白名单只含只读工具。
+    相同的模型，运行在隔离上下文中；explore 白名单只含只读工具，general 可读写工作区。
     ``model_id`` 与主图同源传入：子图预算告警据此取同一 ContextBudget 的
     压缩触发阈值，保证「上下文将尽」的口径与主图一致。
     ``available_skills_xml`` 与主智能体同一会话技能清单（一致继承）：子图
@@ -387,15 +397,15 @@ def build_subagent_middleware(
                 sandbox_renewal=sandbox_renewal,
             )
         )
-    if runtime_options.plan_subagent_enabled:
+    if runtime_options.general_subagent_enabled:
         specs.append(
             SubagentSpec(
-                name=PLAN_SUBAGENT_NAME,
-                description=PLAN_SUBAGENT_DESCRIPTION,
-                system_prompt=PLAN_SUBAGENT_PROMPT,
+                name=GENERAL_SUBAGENT_NAME,
+                description=GENERAL_SUBAGENT_DESCRIPTION,
+                system_prompt=GENERAL_SUBAGENT_PROMPT,
                 tools=_select_subagent_tools(
                     tools,
-                    SUBAGENT_TOOL_ALLOWLISTS[PLAN_SUBAGENT_NAME],
+                    SUBAGENT_TOOL_ALLOWLISTS[GENERAL_SUBAGENT_NAME],
                     approval_excluded,
                 ),
                 model=model,

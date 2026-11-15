@@ -18,7 +18,7 @@ const taskCall2: ToolCallInfo = {
   tool_call_id: 'task-2',
   tool_name: 'task',
   status: 'completed',
-  args: { subagent_type: 'plan' },
+  args: { subagent_type: 'general' },
   result: '第二份报告',
   subagentTrail: [{ kind: 'message', id: 'm2', content: '第二个结论' }],
 }

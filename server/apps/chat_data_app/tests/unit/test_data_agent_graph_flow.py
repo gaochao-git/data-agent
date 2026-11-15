@@ -237,13 +237,13 @@ def test_build_subagent_middleware_explore_excludes_write_tools(monkeypatch, tmp
     assert spec.model is model
 
 
-def test_build_subagent_middleware_plan_keeps_only_inventory_tools(monkeypatch, tmp_path):
+def test_build_subagent_middleware_general_keeps_read_write_tools(monkeypatch, tmp_path):
     from apps.chat_data_app.agent.data_agent import build_subagent_middleware
     from apps.chat_data_app.agent.middleware import subagents as subagents_module
 
     monkeypatch.setattr(data_agent, "create_streaming_chat_model", lambda **_kwargs: object())
     monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: SimpleNamespace())
-    options = AgentRuntimeOptions(workspace_backend="local", plan_subagent_enabled=True)
+    options = AgentRuntimeOptions(workspace_backend="local", general_subagent_enabled=True)
     tools = [
         SimpleNamespace(name="file_read"),
         SimpleNamespace(name="file_write"),
@@ -258,10 +258,10 @@ def test_build_subagent_middleware_plan_keeps_only_inventory_tools(monkeypatch, 
     middleware = build_subagent_middleware(options, tools, model=model)
 
     assert middleware is not None
-    assert _subagent_spec_names(middleware) == ["plan"]
+    assert _subagent_spec_names(middleware) == ["general"]
     spec = middleware.specs[0]
-    # plan 只保留盘点与计划落盘工具：执行类工具（bash/officecli）与人工应答/产物呈现全部扣除
-    assert [tool.name for tool in spec.tools] == ["file_read", "file_write"]
+    # general 保留读写与办公执行工具；bash、嵌套派发、人工应答与产物呈现全部扣除
+    assert [tool.name for tool in spec.tools] == ["file_read", "file_write", "officecli_run"]
     assert spec.model is model
 
 
@@ -274,7 +274,7 @@ def test_build_subagent_middleware_supports_all_specs(monkeypatch, tmp_path):
     options = AgentRuntimeOptions(
         workspace_backend="local",
         explore_subagent_enabled=True,
-        plan_subagent_enabled=True,
+        general_subagent_enabled=True,
     )
     tools = [
         SimpleNamespace(name="file_read"),
@@ -286,18 +286,18 @@ def test_build_subagent_middleware_supports_all_specs(monkeypatch, tmp_path):
     middleware = build_subagent_middleware(options, tools, model=model)
 
     assert middleware is not None
-    assert _subagent_spec_names(middleware) == ["explore", "plan"]
-    # 同一工具列表按各自白名单独立过滤：explore 不含写工具，plan 只留盘点与计划落盘，
+    assert _subagent_spec_names(middleware) == ["explore", "general"]
+    # 同一工具列表按各自白名单独立过滤：explore 不含写工具，general 可读写工作区，
     explore_tools = [tool.name for tool in middleware.specs[0].tools]
-    plan_tools = [tool.name for tool in middleware.specs[1].tools]
+    general_tools = [tool.name for tool in middleware.specs[1].tools]
     assert explore_tools == ["file_read"]
-    assert plan_tools == ["file_read", "file_write"]
+    assert general_tools == ["file_read", "file_write"]
     # 即使主图工具列表里带了 task，也不能透传给子图——否则会形成无限嵌套派发。
     assert "task" not in explore_tools
-    assert "task" not in plan_tools
+    assert "task" not in general_tools
     # task 工具描述中列出全部类型
     assert "explore" in middleware.tools[0].description
-    assert "plan" in middleware.tools[0].description
+    assert "general" in middleware.tools[0].description
 
 
 @pytest.mark.asyncio

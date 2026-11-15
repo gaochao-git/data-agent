@@ -89,7 +89,7 @@ def test_subagent_allowlists_are_explicit_and_registered():
     from apps.chat_data_app.agent.data_agent import SUBAGENT_TOOL_ALLOWLISTS
 
     registered = provided_tool_names()
-    assert set(SUBAGENT_TOOL_ALLOWLISTS) == {"explore", "plan"}
+    assert set(SUBAGENT_TOOL_ALLOWLISTS) == {"explore", "general"}
     for name, allowed in SUBAGENT_TOOL_ALLOWLISTS.items():
         unknown = allowed - registered
         assert not unknown, f"{name} 白名单引用了未注册工具: {sorted(unknown)}"

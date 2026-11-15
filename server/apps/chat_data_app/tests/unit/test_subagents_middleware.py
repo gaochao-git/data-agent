@@ -91,7 +91,7 @@ def test_build_subagent_middleware_passes_skills_catalog_to_specs():
 
     options = AgentRuntimeOptions(
         explore_subagent_enabled=True,
-        plan_subagent_enabled=True,
+        general_subagent_enabled=True,
     )
     xml = "<available_skills>\n  <skill>\n    <name>x</name>\n  </skill>\n</available_skills>"
     mw = build_subagent_middleware(
@@ -102,7 +102,7 @@ def test_build_subagent_middleware_passes_skills_catalog_to_specs():
         available_skills_xml=xml,
     )
     assert mw is not None
-    assert {spec.name for spec in mw.specs} == {"explore", "plan"}
+    assert {spec.name for spec in mw.specs} == {"explore", "general"}
     assert all(spec.available_skills_xml == xml for spec in mw.specs)
     mw_default = build_subagent_middleware(options, tools=[], model=object(), model_id="m1")
     assert all(spec.available_skills_xml == "" for spec in mw_default.specs)
