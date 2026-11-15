@@ -22,7 +22,7 @@
 - 路径参数只接受规范形式 `/mnt/user-data/{workspace,outputs,uploads}/...` 与只读
   `/mnt/skills/<name>/...`；docstring 是模型照抄的输入模板，示例必须用规范形式。
 - 工具错误分两类返回：参数/路径类给可纠正消息；意外异常给通用文案并记录完整堆栈。
-- 新增工具需同步：`ToolBuildGroup` 构建组、`ToolDefinition` 单工具策略、子智能体白名单（`data_agent.SUBAGENT_TOOL_ALLOWLISTS`）、前端展示类型（web-vue）、单元测试。
+- 新增工具需同步：`ToolBuildGroup` 构建组、`ToolDefinition` 单工具策略、子智能体工具面（explore 只读白名单 `SUBAGENT_TOOL_ALLOWLISTS`、general 剔除集 `SUBAGENT_TOOL_DENYLISTS`）、前端展示类型（web-vue）、单元测试。
 
 ## 工具能力目录
 

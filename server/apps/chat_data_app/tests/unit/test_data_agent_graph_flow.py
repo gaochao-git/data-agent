@@ -265,6 +265,53 @@ def test_build_subagent_middleware_general_keeps_read_write_tools(monkeypatch, t
     assert spec.model is model
 
 
+def test_build_subagent_middleware_general_inherits_dynamic_tools(monkeypatch, tmp_path):
+    from apps.chat_data_app.agent.data_agent import build_subagent_middleware
+    from apps.chat_data_app.agent.middleware import subagents as subagents_module
+
+    monkeypatch.setattr(data_agent, "create_streaming_chat_model", lambda **_kwargs: object())
+    monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: SimpleNamespace())
+    options = AgentRuntimeOptions(workspace_backend="local", general_subagent_enabled=True)
+    tools = [
+        SimpleNamespace(name="file_read"),
+        SimpleNamespace(name="mcp_crm_lookup"),
+        SimpleNamespace(name="mcp_tool_search"),
+        SimpleNamespace(name="mcp_tool_call"),
+        SimpleNamespace(name="write_todos"),
+    ]
+
+    middleware = build_subagent_middleware(options, tools, model=object())
+
+    assert middleware is not None
+    assert _subagent_spec_names(middleware) == ["general"]
+    # 动态 MCP 实体工具默认继承；检索网关依赖主图发现中间件，不能进入子图。
+    assert [tool.name for tool in middleware.specs[0].tools] == ["file_read", "mcp_crm_lookup"]
+
+
+def test_build_subagent_middleware_general_excludes_ask_tools(monkeypatch, tmp_path):
+    from apps.chat_data_app.agent.data_agent import build_subagent_middleware
+    from apps.chat_data_app.agent.middleware import subagents as subagents_module
+
+    monkeypatch.setattr(data_agent, "create_streaming_chat_model", lambda **_kwargs: object())
+    monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: SimpleNamespace())
+    options = AgentRuntimeOptions(workspace_backend="local", general_subagent_enabled=True)
+    tools = [
+        SimpleNamespace(name="file_read"),
+        SimpleNamespace(name="mcp_secret_write"),
+    ]
+
+    middleware = build_subagent_middleware(
+        options,
+        tools,
+        model=object(),
+        approval_policies={"file_read": "allow", "mcp_secret_write": "ask"},
+    )
+
+    assert middleware is not None
+    # 默认继承也必须服从审批边界：ask 档 MCP 工具在子图不可交互，直接剔除。
+    assert [tool.name for tool in middleware.specs[0].tools] == ["file_read"]
+
+
 def test_build_subagent_middleware_supports_all_specs(monkeypatch, tmp_path):
     from apps.chat_data_app.agent.data_agent import build_subagent_middleware
     from apps.chat_data_app.agent.middleware import subagents as subagents_module

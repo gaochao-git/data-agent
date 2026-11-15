@@ -129,7 +129,8 @@ class AgentAssemblySpec:
 
     - ``tool_includes`` / ``tool_excludes``：对 ``tools/registry.py`` 内置注册表
       的工具名级筛选；``tool_includes=None`` 表示全部内置工具，``tool_excludes``
-      优先级更高。子智能体仍只使用内置工具（MCP 等动态工具不下发给子智能体）。
+      优先级更高。explore 子智能体只继承只读内置工具；general 默认继承内置与
+      MCP 实体工具（MCP 检索网关仍只属于主图）。
     - ``enable_mcp_tools``：是否在装配时枚举 MCP/插件声明的动态工具
       （见 ``agent/mcp/manager.py``）；未配置任何 MCP server 时为空、零开销。
     - ``mcp_server_ids``：MCP server 白名单（``None`` 表示全部允许）；在
@@ -288,12 +289,14 @@ GENERAL_SUBAGENT_NAME = "general"
 GENERAL_SUBAGENT_DESCRIPTION = (
     "通用执行：按任务书完成可读写的多步任务——读取与整理文件、查询分析数据、"
     "用办公技能产出文档/报告等交付物，并回传结论与产出路径。"
-    "适合已明确要做、需要落盘产出的委派任务。"
+    "默认继承主智能体可用工具（含 MCP 实体工具），适合已明确要做、需要落盘产出的委派任务。"
     "子智能体与主智能体共享技能清单，但看不到主对话历史：任务相关的技能（尤其"
     "用户自定义技能）建议在任务书中写明技能名称与 skill_file 路径。"
 )
 
-# 每个子智能体显式声明需要哪些工具；不再使用“继承全部再排除”的隐式策略。
+# explore 是只读子智能体，必须 fail-closed：白名单固定只读工具，新增工具不会
+# 自动获得写权限。general 是通用执行体，默认继承主图可用工具（含 MCP 实体工具），
+# 只显式剔除子图无法安全承载的工具，新增能力无需同步维护清单。
 SUBAGENT_TOOL_ALLOWLISTS: dict[str, frozenset[str]] = {
     EXPLORE_SUBAGENT_NAME: frozenset(
         {
@@ -310,27 +313,21 @@ SUBAGENT_TOOL_ALLOWLISTS: dict[str, frozenset[str]] = {
             "calculator_tool",
         }
     ),
+}
+SUBAGENT_TOOL_DENYLISTS: dict[str, frozenset[str]] = {
     GENERAL_SUBAGENT_NAME: frozenset(
         {
-            "file_read",
-            "file_edit",
-            "file_write",
-            "file_move",
-            "file_copy",
-            "file_delete",
-            "file_glob",
-            "file_grep",
-            "file_diff",
-            "dir_create",
-            "dir_list",
-            "dir_delete",
-            "parse_document",
-            "read_image",
-            "get_current_time",
-            "load_skill",
-            "data_analyzing_tool",
-            "calculator_tool",
-            "officecli_run",
+            # 子图不支持人工中断：询问/审批类工具必须剔除，避免委派绕过审批。
+            "ask_user_question",
+            # 产物展示与任务计划由主智能体负责，子智能体只回传结论与路径。
+            "present_artifacts",
+            "write_todos",
+            # 禁止嵌套派发子智能体，也禁止子智能体绕过登记使用通用脚本执行器。
+            "task",
+            "bash_run",
+            # MCP 检索网关依赖主图发现中间件与可见性过滤，子图直接继承实体工具。
+            "mcp_tool_search",
+            "mcp_tool_call",
         }
     ),
 }
@@ -338,15 +335,25 @@ SUBAGENT_TOOL_ALLOWLISTS: dict[str, frozenset[str]] = {
 
 def _select_subagent_tools(
     tools: list,
-    allowed: frozenset[str],
-    approval_excluded: frozenset[str],
+    *,
+    allowed: frozenset[str] | None,
+    denied: frozenset[str] = frozenset(),
+    approval_excluded: frozenset[str] = frozenset(),
 ) -> list:
-    """从主图已装配工具中，按子智能体白名单取工具，并剔除审批工具。"""
-    return [
-        tool
-        for tool in tools
-        if (name := str(getattr(tool, "name", "") or "")) in allowed and name not in approval_excluded
-    ]
+    """按白名单或剔除集选择子智能体工具。
+
+    ``allowed`` 为 None 表示默认继承全部可用工具，再用 ``denied`` 显式剔除；
+    ``approval_excluded`` 始终生效（ask 档工具在子图不可交互）。
+    """
+    selected: list = []
+    for tool in tools:
+        name = str(getattr(tool, "name", "") or "")
+        if not name or name in denied or name in approval_excluded:
+            continue
+        if allowed is not None and name not in allowed:
+            continue
+        selected.append(tool)
+    return selected
 
 
 def _subagent_approval_exclusions(approval_policies: dict[str, str] | None = None) -> frozenset[str]:
@@ -368,8 +375,9 @@ def build_subagent_middleware(
 ) -> SubagentMiddleware | None:
     """按运行选项构建子智能体中间件；没有任何子智能体启用时返回 None。
 
-    每个子智能体按 ``SUBAGENT_TOOL_ALLOWLISTS`` 显式选择工具，使用与主智能体
-    相同的模型，运行在隔离上下文中；explore 白名单只含只读工具，general 可读写工作区。
+    子智能体使用与主智能体相同的模型，运行在隔离上下文中：explore 按只读白名单
+    fail-closed；general 默认继承主图可用工具（含 MCP 实体工具），仅按
+    ``SUBAGENT_TOOL_DENYLISTS`` 剔除不可安全承载的工具。
     ``model_id`` 与主图同源传入：子图预算告警据此取同一 ContextBudget 的
     压缩触发阈值，保证「上下文将尽」的口径与主图一致。
     ``available_skills_xml`` 与主智能体同一会话技能清单（一致继承）：子图
@@ -387,8 +395,8 @@ def build_subagent_middleware(
                 system_prompt=EXPLORE_SUBAGENT_PROMPT,
                 tools=_select_subagent_tools(
                     tools,
-                    SUBAGENT_TOOL_ALLOWLISTS[EXPLORE_SUBAGENT_NAME],
-                    approval_excluded,
+                    allowed=SUBAGENT_TOOL_ALLOWLISTS[EXPLORE_SUBAGENT_NAME],
+                    approval_excluded=approval_excluded,
                 ),
                 model=model,
                 model_id=model_id,
@@ -405,8 +413,9 @@ def build_subagent_middleware(
                 system_prompt=GENERAL_SUBAGENT_PROMPT,
                 tools=_select_subagent_tools(
                     tools,
-                    SUBAGENT_TOOL_ALLOWLISTS[GENERAL_SUBAGENT_NAME],
-                    approval_excluded,
+                    allowed=None,
+                    denied=SUBAGENT_TOOL_DENYLISTS[GENERAL_SUBAGENT_NAME],
+                    approval_excluded=approval_excluded,
                 ),
                 model=model,
                 model_id=model_id,
@@ -781,7 +790,7 @@ def _assemble_middleware(
 ) -> list[Any]:
     subagent_middleware = build_subagent_middleware(
         inputs.options,
-        assembled.builtin_tools,
+        [*assembled.builtin_tools, *assembled.mcp_tools],
         model=model,
         model_id=inputs.model_id,
         run_controls=inputs.run_controls,
@@ -887,8 +896,8 @@ def create_agent_from_spec(
     参数按关注点分组：``identity_context``（谁在问）、``datasource_context``
     （问哪个数据域）、``model_invocation``（模型怎么调）、``run_controls``
     （run 怎么管）；新增参数必须先归入其中一组或说明为何单列。
-    子智能体只使用内置工具（不含 MCP 等动态工具），且各子智能体的工具白名单
-    由 ``SUBAGENT_TOOL_ALLOWLISTS`` 显式声明。
+    explore 只使用只读白名单；general 默认继承主图可用工具（含 MCP 实体工具），
+    再由 ``SUBAGENT_TOOL_DENYLISTS`` 剔除不可安全承载的工具。
 
     ``conversation_id`` 单列：不参与 Agent 构建，仅供会话记忆压缩回调定位
     记忆文件（无会话标识的历史回放等调用方不传即关闭该回调）。

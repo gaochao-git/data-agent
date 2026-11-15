@@ -84,12 +84,17 @@ def test_bash_run_is_disabled_by_declaration(tmp_path):
     assert "bash_run" not in _tool_names(tmp_path)
 
 
-def test_subagent_allowlists_are_explicit_and_registered():
-    """子智能体按需声明工具白名单，不再使用“继承后忽略”的隐式排除集。"""
-    from apps.chat_data_app.agent.data_agent import SUBAGENT_TOOL_ALLOWLISTS
+def test_subagent_tool_selection_is_explicit_and_registered():
+    """explore 用只读白名单 fail-closed；general 默认继承并显式剔除不可承载工具。"""
+    from apps.chat_data_app.agent.data_agent import (
+        SUBAGENT_TOOL_ALLOWLISTS,
+        SUBAGENT_TOOL_DENYLISTS,
+    )
+    from apps.chat_data_app.agent.tools.registry import MIDDLEWARE_INJECTED_APPROVAL_TOOLS
 
-    registered = provided_tool_names()
-    assert set(SUBAGENT_TOOL_ALLOWLISTS) == {"explore", "general"}
+    registered = provided_tool_names() | set(MIDDLEWARE_INJECTED_APPROVAL_TOOLS)
+    assert set(SUBAGENT_TOOL_ALLOWLISTS) == {"explore"}
+    assert set(SUBAGENT_TOOL_DENYLISTS) == {"general"}
     for name, allowed in SUBAGENT_TOOL_ALLOWLISTS.items():
         unknown = allowed - registered
         assert not unknown, f"{name} 白名单引用了未注册工具: {sorted(unknown)}"
@@ -98,6 +103,20 @@ def test_subagent_allowlists_are_explicit_and_registered():
         assert "bash_run" not in allowed
         # 子智能体不能再派子智能体：task 工具只能由主智能体持有。
         assert "task" not in allowed
+    denied = SUBAGENT_TOOL_DENYLISTS["general"]
+    unknown_denied = denied - registered
+    assert not unknown_denied, f"general 剔除集引用了未注册工具: {sorted(unknown_denied)}"
+    # 询问/审批、产物展示、任务计划、嵌套派发、脚本执行与 MCP 检索网关
+    # 都不能进入子图；新增工具默认继承，不在这张表里就自动可用。
+    assert {
+        "ask_user_question",
+        "present_artifacts",
+        "write_todos",
+        "task",
+        "bash_run",
+        "mcp_tool_search",
+        "mcp_tool_call",
+    } <= denied
 
 
 def test_built_tools_are_declared_in_provides(tmp_path):

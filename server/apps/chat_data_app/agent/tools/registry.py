@@ -7,7 +7,8 @@
 - ``TOOL_BUILD_GROUPS``：有哪些工具、按什么顺序注册（顺序即模型看到的工具顺序）、
   各自提供哪些工具名（``provides``，与 ``@tool`` 注册名一致，供权限排除匹配）；
 - ``ToolBuildContext``：一次装配的上下文（运行选项、工作区运行时、身份与数据源）；
-- 子智能体工具白名单：由 ``data_agent.SUBAGENT_TOOL_ALLOWLISTS`` 显式声明，
+- 子智能体工具面：explore 由 ``data_agent.SUBAGENT_TOOL_ALLOWLISTS`` 只读白名单
+  兜底；general 默认继承主图可用工具，由 ``SUBAGENT_TOOL_DENYLISTS`` 显式剔除。
   配套 ``provided_tool_names()`` 与 ``tests/unit/test_tools_registry.py`` 护栏。
 
 与 ``utils/builtin_skills.py`` 的分工：那里登记技能名，这里登记工具名；
