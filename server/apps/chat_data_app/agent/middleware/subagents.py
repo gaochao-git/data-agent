@@ -507,7 +507,8 @@ def _compile_subagent(spec: SubagentSpec, run_controls: Any = None, *, control_e
             state_schema=ChatDataSubAgentState,
         ),
         # 与主图同源的上下文计量：产出 cache/breakdown 明细（前端「上下文占用明细」用）；
-        # 子图不订阅 custom 流，不会把 token_usage 事件透传到主对话。
+        # 子图虽订阅 custom 流，但只挑选压缩 started 占位转发，token_usage 依旧
+        # 不会透传到主对话。
         context_usage_middleware,
         SkillPrerequisiteMiddleware(TOOL_REQUIRED_SKILLS),
         # 与主图同源的工具计时：ToolMessage 上盖 started_at_ms / ended_at_ms，

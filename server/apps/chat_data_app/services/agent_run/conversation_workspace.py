@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import fcntl
 import mimetypes
 import os
 import tempfile
@@ -37,10 +38,15 @@ from apps.chat_data_app.agent.workspace.runtime import (  # noqa: F401
 )
 from apps.chat_data_app.agent.workspace.workspace_local_backend import (
     delete_local_workspace_file,
+    write_local_workspace_text_file,
 )
 from apps.chat_data_app.agent.workspace.workspace_path_policy import (
     USER_DATA_VIRTUAL_ROOT,
     WORKSPACE_PATH_POLICY,
+)
+from apps.chat_data_app.services.memory.conversation_memory_service import (
+    MemoryDocumentConflictError,
+    replace_memory_document,
 )
 from apps.chat_data_app.services.setting_service import get_runtime_setting
 from utils.database import get_session
@@ -100,10 +106,15 @@ def _format_size_limit(max_bytes: int) -> str:
 # 这些状态下的 Run 正在写工作区，此时删除会让沙箱回写被判成「应用侧已变更」而使该 Run 落盘失败。
 # 「waiting_user」是挂起等待用户输入，Run 自身不在写盘，且前端 runBusy 已为 false，故放行。
 _BLOCKING_WORKSPACE_DELETE_RUN_STATUSES = frozenset({"pending", "active", "cancelling"})
+_WORKSPACE_EDIT_LOCK_FILE_NAME = ".workspace-edit.lock"
 
 
 class WorkspaceFileDeleteConflictError(RuntimeError):
     """删除请求与正在执行的 Run 冲突。"""
+
+
+class WorkspaceFileSaveConflictError(RuntimeError):
+    """保存请求与正在执行的 Run 或并发写入冲突。"""
 
 
 class WorkspaceArchiveTooLargeError(RuntimeError):
@@ -392,7 +403,8 @@ def read_workspace_text_file(
     # 系统数据目录只读展示：可预览、可下载（按会话鉴权），删改由写侧 assert_writable 拦截。
     if not target.exists() or not target.is_file():
         raise FileNotFoundError(f"文件不存在: {path}")
-    size = target.stat().st_size
+    stat = target.stat()
+    size = stat.st_size
     if size > max_bytes:
         raise ValueError(f"文件过大，暂不支持预览超过 {_format_size_limit(max_bytes)} 的文件")
     content = target.read_text(encoding="utf-8", errors="replace")
@@ -402,7 +414,64 @@ def read_workspace_text_file(
         "relative_path": visible_path.removeprefix("/mnt/user-data/"),
         "content": content,
         "size": size,
+        "mtime": stat.st_mtime,
     }
+
+
+def save_workspace_text_file(
+    conversation_id: str,
+    path: str,
+    content: str,
+    expected_mtime: float,
+    max_bytes: int,
+    user_id: str = "system",
+    *,
+    created_date: str | None = None,
+) -> dict[str, Any]:
+    """保存已存在的工作区文本文件（同步实现，由 ``asyncio.to_thread`` 调用）。"""
+    logical_path = WORKSPACE_PATH_POLICY.parse(path)
+    WORKSPACE_PATH_POLICY.assert_writable(logical_path)
+    if logical_path.is_system_root:
+        raise ValueError("workspace/.system 系统目录不能编辑")
+    content_size = len(str(content or "").encode("utf-8"))
+    if content_size > max_bytes:
+        raise ValueError(f"文件内容超过大小限制（{_format_size_limit(max_bytes)}）")
+
+    paths = ensure_conversation_workspace(conversation_id, user_id, created_date=created_date)
+    root = str(Path(paths["root"]).resolve())
+    lock_path = Path(root) / _WORKSPACE_EDIT_LOCK_FILE_NAME
+    with open(lock_path, "a+", encoding="utf-8") as lock_fd:
+        fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX)
+        try:
+            if logical_path.normalized == "memory/memory.md":
+                try:
+                    return replace_memory_document(
+                        root,
+                        content,
+                        expected_mtime=expected_mtime,
+                        max_bytes=max_bytes,
+                    )
+                except MemoryDocumentConflictError as exc:
+                    raise WorkspaceFileSaveConflictError(str(exc)) from exc
+
+            target = resolve_workspace_path(root, path, writable=True)
+            if not target.exists():
+                raise FileNotFoundError(f"文件不存在: {path}")
+            if not target.is_file():
+                raise ValueError(f"目标是目录，不是文件: {path}")
+            stat = target.stat()
+            if stat.st_size > max_bytes:
+                raise ValueError(f"文件过大，暂不支持编辑超过 {_format_size_limit(max_bytes)} 的文件")
+            if abs(stat.st_mtime - float(expected_mtime)) > 1e-6:
+                raise WorkspaceFileSaveConflictError("文件已被更新，请刷新后重试")
+            result = write_local_workspace_text_file(root, path, content)
+            return {
+                "path": f"{USER_DATA_VIRTUAL_ROOT}/{logical_path.normalized}",
+                "bytes": result["bytes"],
+                "mtime": result["mtime"],
+            }
+        finally:
+            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
 
 
 async def can_access_conversation_workspace(conversation_id: str, user_id: str) -> bool:
@@ -457,6 +526,29 @@ async def read_conversation_workspace_file(
         conversation_id,
         path,
         max_bytes if max_bytes is not None else await _text_preview_max_bytes(),
+        user_id,
+        created_date=await get_conversation_created_date(conversation_id, user_id=user_id),
+    )
+
+
+async def save_conversation_workspace_file(
+    conversation_id: str,
+    *,
+    user_id: str,
+    path: str,
+    content: str,
+    expected_mtime: float,
+) -> dict[str, Any]:
+    """保存当前用户会话中已存在的文本文件（人工在线编辑通道）。"""
+    if await _has_running_agent_run(conversation_id, user_id):
+        raise WorkspaceFileSaveConflictError("智能体正在执行当前会话，请等本轮结束后再保存文件")
+    return await asyncio.to_thread(
+        save_workspace_text_file,
+        conversation_id,
+        path,
+        content,
+        expected_mtime,
+        await _text_preview_max_bytes(),
         user_id,
         created_date=await get_conversation_created_date(conversation_id, user_id=user_id),
     )

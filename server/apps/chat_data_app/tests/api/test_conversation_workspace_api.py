@@ -80,6 +80,38 @@ def test_conversation_workspace_hides_internal_context_file(client, auth_headers
     assert response.json()["code"] == ErrorCode.CHATDATA_NOT_FOUND
 
 
+def test_conversation_workspace_saves_text_file(client, auth_headers, monkeypatch):
+    _install_accessible_workspace(monkeypatch)
+
+    async def save_file(conversation_id, *, user_id, path, content, expected_mtime):
+        assert (conversation_id, user_id, path) == ("conv_a", "user_a", "/mnt/user-data/workspace/notes.md")
+        assert content == "- [口径] 新值\n"
+        assert expected_mtime == 123.5
+        return {"path": path, "bytes": len(content.encode("utf-8")), "mtime": 124.5}
+
+    monkeypatch.setattr(workspace_routes, "save_workspace_file_for_conversation", save_file)
+
+    response = client.put(
+        "/api/chatdata/conversations/conv_a/workspace-files/content",
+        json={
+            "path": "/mnt/user-data/workspace/notes.md",
+            "content": "- [口径] 新值\n",
+            "expected_mtime": 123.5,
+        },
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["msg"] == "保存成功"
+    assert payload["data"] == {
+        "path": "/mnt/user-data/workspace/notes.md",
+        "bytes": len("- [口径] 新值\n".encode()),
+        "mtime": 124.5,
+        "saved": True,
+    }
+
+
 def test_conversation_workspace_raw_route_hides_internal_context_file(client, auth_headers, monkeypatch):
     _install_accessible_workspace(monkeypatch)
 

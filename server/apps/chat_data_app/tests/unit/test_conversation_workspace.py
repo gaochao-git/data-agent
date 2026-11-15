@@ -56,6 +56,7 @@ from apps.chat_data_app.services.agent_run.conversation_workspace import (
     list_workspace_files,
     read_workspace_text_file,
     resolve_workspace_path,
+    save_workspace_text_file,
     to_visible_path,
     workspace_runtime_from_state,
 )
@@ -788,6 +789,59 @@ def test_read_workspace_text_file_rejects_missing_and_large_files():
     target.write_text("abcdef", encoding="utf-8")
     with pytest.raises(ValueError):
         read_workspace_text_file(conversation_id, "/mnt/user-data/workspace/big.txt", max_bytes=3)
+
+
+def test_save_workspace_text_file_supports_memory_and_regular_text(monkeypatch, tmp_path):
+    conversation_id = f"conv_memory_edit_{uuid.uuid4().hex}"
+    paths = _isolated_workspace(monkeypatch, tmp_path, conversation_id)
+    memory_path = Path(paths["memory"]) / "memory.md"
+    memory_path.write_text("- [口径] 旧值\n", encoding="utf-8")
+    notes_path = Path(paths["workspace"]) / "notes.md"
+    notes_path.write_text("# 旧标题\n", encoding="utf-8")
+
+    payload = save_workspace_text_file(
+        conversation_id,
+        "/mnt/user-data/memory/memory.md",
+        "- [口径] 用户修正后的值\n",
+        memory_path.stat().st_mtime,
+        1024,
+        user_id="user_a",
+    )
+
+    assert payload["path"] == "/mnt/user-data/memory/memory.md"
+    assert payload["bytes"] == len("- [口径] 用户修正后的值\n".encode())
+    assert memory_path.read_text(encoding="utf-8") == "- [口径] 用户修正后的值\n"
+
+    payload = save_workspace_text_file(
+        conversation_id,
+        "/mnt/user-data/workspace/notes.md",
+        "# 新标题\n",
+        notes_path.stat().st_mtime,
+        1024,
+        user_id="user_a",
+    )
+    assert payload["path"] == "/mnt/user-data/workspace/notes.md"
+    assert notes_path.read_text(encoding="utf-8") == "# 新标题\n"
+
+    with pytest.raises(conversation_workspace_module.WorkspaceFileSaveConflictError, match="刷新后重试"):
+        save_workspace_text_file(
+            conversation_id,
+            "/mnt/user-data/workspace/notes.md",
+            "# 过期内容\n",
+            notes_path.stat().st_mtime - 10,
+            1024,
+            user_id="user_a",
+        )
+
+    with pytest.raises(ValueError):
+        save_workspace_text_file(
+            conversation_id,
+            "/mnt/user-data/uploads/private.txt",
+            "x",
+            notes_path.stat().st_mtime,
+            1024,
+            user_id="user_a",
+        )
 
 
 @pytest.mark.asyncio

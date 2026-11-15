@@ -28,7 +28,7 @@ steering 插话、工具计时与单会话调用频率告警、历史消息时�
 打开的详情页不会出现空过程。
 
 每个主对话创建的子智能体总数（同步与后台任务都计入）由
-`CHAT_DATA_SUBAGENT_MAX_SESSIONS_PER_CONVERSATION` 限制；该额度按
+`CHAT_DATA_SUBAGENT_MAX_PER_CONVERSATION` 限制；该额度按
 `agent_session_id` 去重，追问沿用原会话不占新额度。任务相似时，提示词要求主智能体
 先 `subagent(action="list")` 找到已有子智能体并用 `follow_up` 续写；相似度不做代码层
 匹配，避免误合并不同目标或交付物。

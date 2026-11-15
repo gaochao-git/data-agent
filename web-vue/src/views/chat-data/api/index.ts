@@ -885,6 +885,14 @@ export interface ConversationWorkspaceUsage {
   percentage: number
 }
 
+export interface ConversationWorkspaceFileContent {
+  path: string
+  relative_path: string
+  content: string
+  size: number
+  mtime: number
+}
+
 /** 获取会话工作区文件。 */
 export function getConversationWorkspaceFiles(conversationId: string): Promise<ApiResponse<{ files: ConversationWorkspaceFile[]; directories?: ConversationWorkspaceDirectory[]; usage?: ConversationWorkspaceUsage }>> {
   return request({
@@ -916,11 +924,29 @@ export function deleteConversationWorkspaceFile(
 }
 
 /** 读取会话工作区文本文件。 */
-export function getConversationWorkspaceFileContent(conversationId: string, path: string, refreshToken?: string): Promise<ApiResponse<{ path: string; relative_path: string; content: string; size: number }>> {
+export function getConversationWorkspaceFileContent(conversationId: string, path: string, refreshToken?: string): Promise<ApiResponse<ConversationWorkspaceFileContent>> {
   return request({
     url: `/agents/api/chatdata/conversations/${conversationId}/workspace-files/content`,
     method: 'get',
     params: refreshToken ? { path: toCanonicalWorkspacePath(path), _refresh: refreshToken } : { path: toCanonicalWorkspacePath(path) }
+  })
+}
+
+/** 保存会话工作区中已存在的文本文件。 */
+export function saveConversationWorkspaceFile(
+  conversationId: string,
+  path: string,
+  content: string,
+  expectedMtime: number,
+): Promise<ApiResponse<{ path: string; bytes: number; mtime: number; saved: boolean }>> {
+  return request({
+    url: `/agents/api/chatdata/conversations/${conversationId}/workspace-files/content`,
+    method: 'put',
+    data: {
+      path: toCanonicalWorkspacePath(path),
+      content,
+      expected_mtime: expectedMtime,
+    },
   })
 }
 

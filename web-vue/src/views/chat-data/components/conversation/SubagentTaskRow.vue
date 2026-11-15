@@ -6,7 +6,7 @@ import { isSubagentTaskActive, subagentSessionCompactionCount } from '../../comp
 import { useToolTiming } from '../../composables/useToolTiming'
 import { formatDateTimeValue } from '../../utils'
 import { copyTextToClipboard } from '../../utils/clipboard'
-import { formatTokenCount } from '../../utils/subagentUsage'
+import { formatTokenCount, resolveSubagentContextUsage } from '../../utils/subagentUsage'
 
 const props = defineProps({
   task: { type: Object as PropType<SubagentTaskRecord>, required: true },
@@ -58,31 +58,20 @@ const formatContextTokens = (value: number): string => formatTokenCount(value).r
 const contextUsage = computed(() => {
   for (let index = sessionTimeline.value.length - 1; index >= 0; index -= 1) {
     const latest = sessionTimeline.value[index]
-    const detail = latest?.result_meta?.subagent_token_usage_detail
-    if (detail && Number.isFinite(detail.used)) {
-      const total = Number(detail.total) || 0
-      return {
-        used: Number(detail.current_input_tokens ?? detail.input_tokens ?? detail.used),
-        total,
-        percentage: Number.isFinite(detail.percentage)
-          ? Number(detail.percentage)
-          : total > 0 ? (detail.used / total) * 100 : null,
-        compressionTriggerTokens: Number(detail.compression_trigger_tokens),
-        contextWindow: Number(detail.context_window),
-      }
-    }
-    // 列表接口只返回 progress；运行中/取消/失联任务用心跳快照兜底。
-    const snapshot = latest?.result_meta?.subagent_context_usage || latest?.progress?.context_usage
-    if (!snapshot || !Number.isFinite(snapshot.used_tokens)) continue
-    const total = Number(snapshot.context_window || snapshot.threshold_tokens) || 0
+    // 与详情页/右上角共用同一优先级：上下文快照优先，token 明细只做补充。
+    const usage = resolveSubagentContextUsage(
+      latest?.result_meta?.subagent_context_usage || latest?.progress?.context_usage,
+      latest?.result_meta?.subagent_token_usage_detail,
+    )
+    if (!usage) continue
     return {
-      used: snapshot.used_tokens,
-      total,
-      percentage: Number.isFinite(snapshot.percent)
-        ? Number(snapshot.percent)
-        : total > 0 ? (snapshot.used_tokens / total) * 100 : null,
-      compressionTriggerTokens: Number(snapshot.threshold_tokens),
-      contextWindow: Number(snapshot.context_window),
+      used: Number(usage.current_input_tokens ?? usage.used),
+      total: Number(usage.total),
+      percentage: Number.isFinite(usage.percentage)
+        ? Number(usage.percentage)
+        : usage.total > 0 ? (usage.used / usage.total) * 100 : null,
+      compressionTriggerTokens: Number(usage.compression_trigger_tokens),
+      contextWindow: Number(usage.context_window),
     }
   }
   return null

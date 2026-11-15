@@ -74,7 +74,8 @@ CREATE TABLE `chat_data_subagent_event` (
 以 `server/.env.example` 为对照，把以下变更同步到生产 `server/conf/.env-<环境>`（示例文件本身不参与运行）：
 
 - 子智能体收敛为 explore / general：`CHAT_DATA_DEFAULT_PLAN_SUBAGENT_ENABLED` 已无对应实现，生产若残留可删除；新增 `CHAT_DATA_DEFAULT_GENERAL_SUBAGENT_ENABLED=false`（默认关闭，按需开启）。
-- 新增 4 个后台任务控制项：`CHAT_DATA_SUBAGENT_TASK_TIMEOUT_SECONDS=1800`、`CHAT_DATA_SUBAGENT_TASK_LEASE_SECONDS=30`、`CHAT_DATA_SUBAGENT_TASK_MAX_ACTIVE=20`、`CHAT_DATA_SUBAGENT_MAX_SESSIONS_PER_CONVERSATION=5`。最后一项是**单个主对话内子智能体会话总数上限**，长会话容易撞到，若线上同步派发较多需按实际评估后调大。
+- 新增 4 个后台任务控制项：`CHAT_DATA_SUBAGENT_TASK_TIMEOUT_SECONDS=1800`、`CHAT_DATA_SUBAGENT_TASK_LEASE_SECONDS=30`、`CHAT_DATA_SUBAGENT_TASK_MAX_ACTIVE=20`、`CHAT_DATA_SUBAGENT_MAX_PER_CONVERSATION=5`。最后一项是**单个主对话内子智能体总数上限**，长会话容易撞到，若线上同步派发较多需按实际评估后调大。
+- 旧名 `CHAT_DATA_SUBAGENT_MAX_SESSIONS_PER_CONVERSATION` 已统一为 `CHAT_DATA_SUBAGENT_MAX_PER_CONVERSATION`，旧名不再读取；生产配置若残留请直接删除。子智能体预算告警软约束 `CHAT_DATA_SUBAGENT_BUDGET_ALERT_TRIGGER_RATIO` 已无实现，残留配置同样可删除。
 
 ## 依赖升级（LangChain / LangGraph 全家桶）
 

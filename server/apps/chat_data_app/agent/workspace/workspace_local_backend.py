@@ -338,6 +338,26 @@ def _write_local_text_file(
     }
 
 
+def write_local_workspace_text_file(workspace_root: str, file_path: str, content: str) -> dict[str, Any]:
+    """覆盖应用侧已存在的文本文件（人侧在线编辑入口）。
+
+    只覆盖不创建新文件；写权限复用 ``resolve_workspace_path(writable=True)``，
+    因此 uploads 与 ``workspace/.system`` 仍会被路径策略拒绝。
+    """
+    target = resolve_workspace_path(workspace_root, file_path, writable=True)
+    if not target.exists():
+        raise FileNotFoundError(f"文件不存在: {file_path}")
+    if not target.is_file():
+        raise ValueError(f"目标是目录，不是文件: {file_path}")
+    try:
+        target.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"暂不支持编辑二进制文件: {file_path}") from exc
+    result = _write_local_text_file(workspace_root, file_path, content, "overwrite")
+    result["mtime"] = target.stat().st_mtime
+    return result
+
+
 def _replace_local_text_file(
     workspace_root: str,
     file_path: str,

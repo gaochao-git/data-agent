@@ -420,6 +420,9 @@ class _SubagentStreamState:
         # 子图上下文压缩事件（压缩节点 updates 里的 context_compression_events）
         self.compression_events: list[dict[str, Any]] = []
         self.seen_compression_ids: set[str] = set()
+        # 压缩发生前最后一条过程条目的 id：与 _build_trail_snapshot 的条目 id
+        # 同源，历史回放按它把分隔卡插回真实位置，避免多条压缩挤成一堆。
+        self.last_trail_anchor: str = ""
         # 续聊快照用的“当前完整状态消息”。collected 只记本轮新增，且压缩后会
         # 重建；追问需要的是包含历史在内的最终状态，因此单独按 reducer 维护。
         self.state_messages: list[Any] = []
@@ -611,6 +614,11 @@ def _forward_subagent_compaction_events(
             record = _compaction_record_from_event(compaction, stream_state.seen_compression_ids)
             if record is None:
                 continue
+            # 压缩 middleware 的 anchor 取的是 LangChain message.id，工具结果的 id
+            # 常为空或与 trail 的 tool_call_id 不同源；改用实时过程里最后一条
+            # 已发生的条目 id，历史快照才能精确插回压缩当时所在的位置。
+            if stream_state.last_trail_anchor:
+                record["anchor_message_id"] = stream_state.last_trail_anchor
             stream_state.compression_events.append(record)
             _emit_subagent_tool_event(
                 writer,
@@ -620,6 +628,37 @@ def _forward_subagent_compaction_events(
                     **record,
                 },
             )
+
+
+def _forward_subagent_compression_started(
+    payload: Any,
+    writer: Any,
+    parent_tool_call_id: str | None,
+) -> None:
+    """把子图 custom 流里的「压缩中」占位转发为 subagent_context_compression。
+
+    压缩 middleware 的 started 事件只走 custom channel、不写检查点，因此历史
+    回放不会残留占位；完成态仍由 ``_forward_subagent_compaction_events`` 从
+    updates 转发。子图 custom 流里的其它事件一律忽略，避免污染主对话帧。
+    """
+    if not isinstance(payload, dict) or payload.get("type") != "context_compression":
+        return
+    event = payload.get("event")
+    if not isinstance(event, dict) or event.get("phase") != "started":
+        return
+    event_id = str(event.get("id") or "").strip()
+    if not event_id:
+        return
+    _emit_subagent_tool_event(
+        writer,
+        {
+            "event_type": SSE_EVENT_SUBAGENT_CONTEXT_COMPRESSION,
+            "parent_tool_call_id": parent_tool_call_id,
+            "phase": "started",
+            "id": event_id,
+            "timestamp": str(event.get("timestamp") or ""),
+        },
+    )
 
 
 def _process_subagent_chunk(
@@ -632,6 +671,9 @@ def _process_subagent_chunk(
     if mode == "messages":
         if isinstance(payload, tuple) and len(payload) == 2:
             stream_state.emit_messages_chunk(payload[0], writer)
+        return False
+    if mode == "custom":
+        _forward_subagent_compression_started(payload, writer, parent_tool_call_id)
         return False
     if mode != "updates" or not isinstance(payload, dict):
         return False
@@ -651,6 +693,9 @@ def _process_subagent_chunk(
     ):
         _track_subagent_tool_event(stream_state, event)
         _emit_subagent_tool_event(writer, event)
+        anchor = str(event.get("tool_call_id") or event.get("message_id") or "").strip()
+        if anchor:
+            stream_state.last_trail_anchor = anchor
     return True
 
 
@@ -763,7 +808,7 @@ async def _consume_subagent_stream(
     usage_meta: dict[str, int] | None,
     on_progress: Callable[[dict[str, Any]], None] | None,
 ) -> None:
-    async for chunk in runnable.astream(state, config, stream_mode=["updates", "messages"]):
+    async for chunk in runnable.astream(state, config, stream_mode=["updates", "messages", "custom"]):
         _capture_subagent_token_usage(chunk, captured)
         context_usage = None
         if _process_subagent_chunk(chunk, stream_state, writer, parent_tool_call_id):
@@ -818,6 +863,9 @@ def _subagent_progress_snapshot(
         "tool_calls": len(stream_state.tool_history),
         "running_tools": len(stream_state.tool_started_at),
         "last_tool": last_tool,
+        # 运行中还没有 result_meta，压缩次数只能随心跳落 progress，任务卡才不会
+        # 一直显示 0；终态由 SubagentTaskRecord.compaction_count 以结果快照为准。
+        "compaction_count": len(stream_state.compression_events),
     }
     if context_usage:
         # 上下文快照随心跳落进任务账本的 progress：列表接口不返回 result_meta，

@@ -493,6 +493,14 @@ class SkillImportFromWorkspaceRequest(BaseModel):
     skill_dir_path: str = Field(..., min_length=1, max_length=500, description="工作区技能目录路径")
 
 
+class ConversationWorkspaceFileSaveRequest(BaseModel):
+    """会话工作区文本文件保存请求。"""
+
+    path: str = Field(..., min_length=1, max_length=500, description="工作区规范路径")
+    content: str = Field(default="", description="完整文件内容")
+    expected_mtime: float = Field(..., ge=0, description="读取时的文件修改时间（秒级 Unix 时间戳）")
+
+
 class DatasourceSourceItem(BaseModel):
     """数据源连接项"""
 

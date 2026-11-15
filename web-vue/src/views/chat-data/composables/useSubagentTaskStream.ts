@@ -15,7 +15,7 @@ import type {
   ToolLifecycleEventData,
 } from '../types'
 import { parseSseChunk } from '../utils/sse'
-import { buildSubagentCompactionRecord } from '../utils/subagentCompaction'
+import { buildSubagentCompactionRecord, buildSubagentCompactionStartedTrail, buildSubagentCompactionTrailItem, clearSubagentCompactionPlaceholders, replaceSubagentCompactionPlaceholder } from '../utils/subagentCompaction'
 import { applySubagentTrailEvent } from '../utils/subagentTrail'
 
 const RECONNECT_DELAY_MS = 800
@@ -68,18 +68,22 @@ export const useSubagentTaskStream = (
       return
     }
     if (type === 'subagent_context_compression') {
+      // 「压缩中」只是实时占位，不进 compactions（压缩次数只数完成的压缩）；
+      // 完成帧到达时由 replaceSubagentCompactionPlaceholder 顶掉占位。
+      if (event.phase === 'started') {
+        const placeholder = buildSubagentCompactionStartedTrail(event)
+        if (placeholder) trail.value = replaceSubagentCompactionPlaceholder(trail.value, placeholder)
+        return
+      }
       const record = buildSubagentCompactionRecord(event)
-      if (!record || compactions.value.some(item => item.id === record.id)) return
+      if (!record) return
+      if (compactions.value.some(item => item.id === record.id)) {
+        // 重连回放的重复完成帧：不重复加卡，但仍清掉可能残留的「压缩中」占位。
+        trail.value = clearSubagentCompactionPlaceholders(trail.value)
+        return
+      }
       compactions.value = [...compactions.value, record]
-      trail.value = [...trail.value, {
-        kind: 'compaction',
-        id: record.id,
-        timestamp: record.timestamp,
-        estimated_tokens_before: record.estimated_tokens_before,
-        estimated_tokens_after: record.estimated_tokens_after,
-        estimated_cleared_tokens: record.estimated_cleared_tokens,
-        compressed_messages: record.compressed_messages,
-      }]
+      trail.value = replaceSubagentCompactionPlaceholder(trail.value, buildSubagentCompactionTrailItem(record))
       return
     }
     trail.value = applySubagentTrailEvent(trail.value, event)

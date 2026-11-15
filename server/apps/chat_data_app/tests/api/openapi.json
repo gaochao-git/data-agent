@@ -962,6 +962,36 @@
         "title": "CompletionRequest",
         "type": "object"
       },
+      "ConversationWorkspaceFileSaveRequest": {
+        "description": "会话工作区文本文件保存请求。",
+        "properties": {
+          "content": {
+            "default": "",
+            "description": "完整文件内容",
+            "title": "Content",
+            "type": "string"
+          },
+          "expected_mtime": {
+            "description": "读取时的文件修改时间（秒级 Unix 时间戳）",
+            "minimum": 0.0,
+            "title": "Expected Mtime",
+            "type": "number"
+          },
+          "path": {
+            "description": "工作区规范路径",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "expected_mtime"
+        ],
+        "title": "ConversationWorkspaceFileSaveRequest",
+        "type": "object"
+      },
       "CreateConversationRequest": {
         "description": "创建会话请求",
         "properties": {
@@ -10368,6 +10398,62 @@
           }
         ],
         "summary": "Read Conversation Workspace File",
+        "tags": [
+          "ChatData 会话工作区文件"
+        ]
+      },
+      "put": {
+        "description": "保存会话工作区中已存在的文本文件。",
+        "operationId": "save_conversation_workspace_file_api_chatdata_conversations__conversation_id__workspace_files_content_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConversationWorkspaceFileSaveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Save Conversation Workspace File",
         "tags": [
           "ChatData 会话工作区文件"
         ]

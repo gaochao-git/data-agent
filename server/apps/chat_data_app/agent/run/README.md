@@ -70,7 +70,7 @@ cancelled/interrupted/lost`；`cancelling` 是跨 worker 的取消请求，执�
   任务发起，同一子会话同时只能有一个活跃轮次。运行中需要补充说明用
   `subagent(action="steer", task_id=..., message=...)`，停止仍用
   `subagent(action="cancel", task_id=...)`。
-- 每个主对话新建子智能体的总数受 `CHAT_DATA_SUBAGENT_MAX_SESSIONS_PER_CONVERSATION`
+- 每个主对话新建子智能体的总数受 `CHAT_DATA_SUBAGENT_MAX_PER_CONVERSATION`
   约束，按 `agent_session_id` 去重；追问复用原会话不占新额度。该限制只兜底“无限新开”，
   相似任务是否合并由提示词约束主智能体判断，不在后端硬编码任务相似度。
 - 即使用户从旧任务卡发起追问，后端也会锚定该子会话最新一轮作为 `parent_task_id`，上下文

@@ -222,7 +222,7 @@ class SubagentTaskDao:
         )
         return int(result.scalar() or 0)
 
-    async def count_sessions(
+    async def count_subagents(
         self,
         session: AsyncSession,
         conversation_id: str,

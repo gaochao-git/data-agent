@@ -38,6 +38,20 @@ TEST_REGISTRY = {
 }
 
 
+def test_subagent_limits_use_semantic_names():
+    """执行参数使用 TASK_ 前缀；总量限制直接表达子智能体，旧名与预算软约束不注册。"""
+    task_keys = {
+        "CHAT_DATA_SUBAGENT_TASK_TIMEOUT_SECONDS",
+        "CHAT_DATA_SUBAGENT_TASK_LEASE_SECONDS",
+        "CHAT_DATA_SUBAGENT_TASK_MAX_ACTIVE",
+    }
+    assert task_keys <= setting_service.SETTING_REGISTRY.keys()
+    assert setting_service.SETTING_REGISTRY["CHAT_DATA_SUBAGENT_MAX_PER_CONVERSATION"].default == 5
+    assert "CHAT_DATA_SUBAGENT_MAX_SESSIONS_PER_CONVERSATION" not in setting_service.SETTING_REGISTRY
+    assert "CHAT_DATA_SUBAGENT_TASK_MAX_PER_CONVERSATION" not in setting_service.SETTING_REGISTRY
+    assert "CHAT_DATA_SUBAGENT_BUDGET_ALERT_TRIGGER_RATIO" not in setting_service.SETTING_REGISTRY
+
+
 @pytest.fixture()
 def harness(monkeypatch):
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")

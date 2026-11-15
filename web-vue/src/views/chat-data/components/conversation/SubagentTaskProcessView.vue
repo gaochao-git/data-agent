@@ -12,6 +12,8 @@ import type { ChatDataTokenUsage, SubagentTaskRecord, SubagentTokenUsage, ToolCa
 import { isSubagentTaskActive } from '../../composables/useSubagentTasks'
 import { useSubagentTaskStream } from '../../composables/useSubagentTaskStream'
 import { useToolTiming } from '../../composables/useToolTiming'
+import { resolveSubagentContextUsage } from '../../utils/subagentUsage'
+import { clearSubagentCompactionPlaceholders } from '../../utils/subagentCompaction'
 import SubagentTrail from './SubagentTrail.vue'
 import ToolCallDetailPanel from './ToolCallDetailPanel.vue'
 
@@ -54,8 +56,15 @@ const stream = useSubagentTaskStream(
 const isCurrentTask = (task: SubagentTaskRecord): boolean => task.task_id === props.task.task_id
 const trailForTask = (task: SubagentTaskRecord) => {
   const persisted = task.result_meta?.subagent_trail || []
-  if (isCurrentTask(task) && active.value && stream.trail.value.length) return stream.trail.value
-  return persisted.length ? persisted : (isCurrentTask(task) ? stream.trail.value : [])
+  const candidate = isCurrentTask(task) && active.value && stream.trail.value.length
+    ? stream.trail.value
+    : (persisted.length ? persisted : (isCurrentTask(task) ? stream.trail.value : []))
+  // 占位只属于实时流：任务已收口或已有持久化快照时，异常取消/失败/超时可能
+  // 等不到 completed 帧，这里统一清掉，避免一直显示「上下文压缩中」。
+  if (!isSubagentTaskActive(task) || persisted.length) {
+    return clearSubagentCompactionPlaceholders(candidate)
+  }
+  return candidate
 }
 const compactionsForTask = (task: SubagentTaskRecord) => {
   const persisted = task.result_meta?.subagent_compactions || []
@@ -90,19 +99,10 @@ const hasConversationForTask = (task: SubagentTaskRecord): boolean => Boolean(
 )
 
 const usageForPanel = computed<ChatDataTokenUsage | null>(() => {
-  const detail = tokenUsageDetailForTask(props.task)
-  if (detail) return detail
-  const snapshot = contextUsageForTask(props.task)
-  if (!snapshot) return null
-  return {
-    used: snapshot.used_tokens,
-    total: snapshot.context_window ?? snapshot.threshold_tokens,
-    percentage: snapshot.percent,
-    current_input_tokens: snapshot.used_tokens,
-    compression_trigger_tokens: snapshot.threshold_tokens,
-    context_window: snapshot.context_window,
-    estimated: true,
-  }
+  return resolveSubagentContextUsage(
+    contextUsageForTask(props.task),
+    tokenUsageDetailForTask(props.task),
+  )
 })
 const taskResultText = (task: SubagentTaskRecord): string => {
   const report = String(task.report || '').trim()

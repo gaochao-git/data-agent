@@ -50,6 +50,7 @@ import {
   getConversationWorkspaceOfficeHtmlPreview,
   getConversationWorkspaceRawFile,
   getConversationWorkspaceArchive,
+  saveConversationWorkspaceFile,
   uploadFile,
   type ConversationWorkspaceDirectory,
   type ConversationWorkspaceFile,
@@ -78,6 +79,7 @@ import { IMAGE_PREVIEW_EXTENSIONS, IMAGE_PREVIEW_MIME, OFFICE_HTML_PREVIEW_EXTEN
 import { formatToolTableCell, parseChartSpecValue, replaceVisiblePathsForDisplay } from '../../utils/messageArtifacts'
 import ConversationTokenUsage from './ConversationTokenUsage.vue'
 import { extractChangedFilePathsFromResult, extractWrittenFilePathCandidates, isSubagentToolName } from '../../utils/toolDisplay'
+import { resolveSubagentContextUsage } from '../../utils/subagentUsage'
 import { ACCEPTED_FILE_TYPES, MAX_FILE_SIZE } from '../../utils/uploadLimits'
 
 const props = defineProps({
@@ -213,19 +215,10 @@ const displaySubagentTaskUsage = computed<ChatDataTokenUsage | null>(() => {
     if (live) return live
   }
   const meta = task.result_meta
-  const detail = meta?.subagent_token_usage_detail
-  if (detail) return detail
-  const snapshot = meta?.subagent_context_usage || task.progress?.context_usage
-  if (!snapshot) return null
-  return {
-    used: snapshot.used_tokens,
-    total: snapshot.context_window ?? snapshot.threshold_tokens,
-    percentage: snapshot.percent,
-    current_input_tokens: snapshot.used_tokens,
-    compression_trigger_tokens: snapshot.threshold_tokens,
-    context_window: snapshot.context_window,
-    estimated: true,
-  }
+  return resolveSubagentContextUsage(
+    meta?.subagent_context_usage || task.progress?.context_usage,
+    meta?.subagent_token_usage_detail,
+  )
 })
 const handleSubagentTaskUsageUpdated = (taskId: string, usage: ChatDataTokenUsage | null) => {
   if (usage) {
@@ -259,21 +252,12 @@ const subagentTaskCall = computed(() => {
 })
 
 /** 切换 tab：保存旧 tab 滚动位置、按需恢复新 tab 内容/位置（滚动读写由本组件持有）。 */
-// 复用主对话的上下文占用组件：有计量明细直接用明细；旧会话/首轮前用快照兜底，保证点击能打开同样面版
+// 复用主对话的上下文占用组件：上下文快照定百分比，计量明细只补充明细字段。
 const subagentUsageForPanel = computed<ChatDataTokenUsage | null>(() => {
-  const detail = subagentTaskCall.value?.subagentTokenUsageDetail
-  if (detail) return detail
-  const snapshot = subagentTaskCall.value?.subagentContextUsage
-  if (!snapshot) return null
-  return {
-    used: snapshot.used_tokens,
-    total: snapshot.context_window ?? snapshot.threshold_tokens,
-    percentage: snapshot.percent,
-    current_input_tokens: snapshot.used_tokens,
-    compression_trigger_tokens: snapshot.threshold_tokens,
-    context_window: snapshot.context_window,
-    estimated: true,
-  }
+  return resolveSubagentContextUsage(
+    subagentTaskCall.value?.subagentContextUsage,
+    subagentTaskCall.value?.subagentTokenUsageDetail,
+  )
 })
 
 const selectPanelTab = (tabId: string, fromTabStrip = false) => {
@@ -432,7 +416,14 @@ const workspaceFiles = ref<ConversationWorkspaceFile[]>([])
 const workspaceDirectories = ref<ConversationWorkspaceDirectory[]>([])
 const workspaceUsage = ref<ConversationWorkspaceUsage>({ used_bytes: 0, limit_bytes: 0, limit_mb: 0, percentage: 0 })
 const workspaceFileContents = ref<Record<string, string>>({})
+const workspaceFileContentMtimes = ref<Record<string, number>>({})
 const workspaceFileBlobs = ref<Record<string, { url: string; arrayBuffer: ArrayBuffer; ext: string; mime: string; error?: boolean }>>({})
+const workspaceFileEditorPath = ref<string | null>(null)
+const workspaceFileEditorDraft = ref('')
+const workspaceFileEditorSaving = ref(false)
+const workspaceFileEditorBaseMtime = ref<number | null>(null)
+// 文本预览源上限 5MB，但超过 1MB 的文本只渲染截断副本；截断副本绝不能回存覆盖完整文件。
+const CONSOLE_TEXT_RENDER_MAX_CHARS = 1 * 1024 * 1024
 const workspaceFilePreviewRef = ref<HTMLElement | null>(null)
 const isWorkspaceFilePreviewFullscreen = ref(false)
 const selectedConsoleOfficeHtml = ref<string | null>(null)
@@ -609,6 +600,10 @@ const loadWorkspaceFiles = async (conversationId: string | null | undefined) => 
     Object.values(workspaceFileBlobs.value).forEach(b => { if (b.url) URL.revokeObjectURL(b.url) })
     workspaceFileBlobs.value = {}
     workspaceFileContents.value = {}
+    workspaceFileContentMtimes.value = {}
+    workspaceFileEditorPath.value = null
+    workspaceFileEditorDraft.value = ''
+    workspaceFileEditorBaseMtime.value = null
     officePreviewCache.value = {}
     selectedConsoleOfficeHtml.value = null
     selectedConsoleOfficePreviewReason.value = null
@@ -666,10 +661,6 @@ type WorkspaceFileLoadOptions = {
   forceReload?: boolean
 }
 
-// 文本预览渲染上限：后端文本预览源上限为 5MB，但超大文本全量进 DOM（JSON 还要 parse+stringify）会卡死页面，
-// 超限只渲染前 1MB 并提示下载查看（对齐 Office 预览「源 50MB / 渲染 12MB」的双层设计）。
-const CONSOLE_TEXT_RENDER_MAX_CHARS = 1 * 1024 * 1024
-
 const loadWorkspaceFileContent = async (
   conversationId: string | null | undefined,
   path: string | null,
@@ -723,6 +714,10 @@ const loadWorkspaceFileContent = async (
       ...workspaceFileContents.value,
       [path]: capWorkspaceTextPreview(response.data?.content || ''),
     }
+    workspaceFileContentMtimes.value = {
+      ...workspaceFileContentMtimes.value,
+      [path]: Number(response.data?.mtime || 0),
+    }
   } catch (err) {
     if (!isCurrentWorkspaceFilePreviewRequest(conversationId, path, requestSequence)) return
     if (!options.forceReload || workspaceFileContents.value[path] === undefined) {
@@ -730,6 +725,9 @@ const loadWorkspaceFileContent = async (
         ...workspaceFileContents.value,
         [path]: '文件内容加载失败。',
       }
+      const nextMtimes = { ...workspaceFileContentMtimes.value }
+      delete nextMtimes[path]
+      workspaceFileContentMtimes.value = nextMtimes
     }
     console.error('加载智能分析工作区文件内容失败:', err)
   } finally {
@@ -737,6 +735,116 @@ const loadWorkspaceFileContent = async (
       loadingWorkspaceFilePath.value = null
       loadingWorkspaceFileSequence.value = null
     }
+  }
+}
+
+const isWorkspaceFileEditing = computed(() => (
+  Boolean(workspaceFileEditorPath.value)
+  && workspaceFileEditorPath.value === selectedConsoleFilePath.value
+))
+
+const isWorkspaceFileDirty = computed(() => (
+  isWorkspaceFileEditing.value
+  && workspaceFileEditorDraft.value !== (workspaceFileContents.value[workspaceFileEditorPath.value || ''] ?? '')
+))
+
+const canEditSelectedWorkspaceFile = computed(() => {
+  const path = selectedConsoleFilePath.value
+  const file = selectedWorkspaceFile.value
+  if (!path || !file) return false
+  const editableRoot = ['workspace/', 'outputs/', 'memory/'].some(prefix => path.startsWith(prefix))
+  if (!editableRoot || path.startsWith('workspace/.system/') || props.runBusy) return false
+  if (isBinaryPreviewPath(path) || file.size > CONSOLE_TEXT_RENDER_MAX_CHARS) return false
+  if (loadingWorkspaceFilePath.value === path || isWorkspaceRefreshBusy.value) return false
+  return workspaceFileContentMtimes.value[path] !== undefined
+})
+
+const startWorkspaceFileEdit = () => {
+  const path = selectedConsoleFilePath.value
+  if (!path || !canEditSelectedWorkspaceFile.value) {
+    ElMessage.warning('当前文件暂不支持编辑')
+    return
+  }
+  const baseMtime = workspaceFileContentMtimes.value[path]
+  if (baseMtime === undefined) {
+    ElMessage.warning('文件版本信息缺失，请刷新后重试')
+    return
+  }
+  workspaceFileEditorPath.value = path
+  workspaceFileEditorDraft.value = workspaceFileContents.value[path] ?? ''
+  workspaceFileEditorBaseMtime.value = baseMtime
+  consoleFilePreviewMode.value = 'source'
+}
+
+const cancelWorkspaceFileEdit = async () => {
+  if (workspaceFileEditorSaving.value) return
+  if (isWorkspaceFileDirty.value) {
+    try {
+      await ElMessageBox.confirm('放弃尚未保存的修改？', '取消编辑', {
+        confirmButtonText: '放弃',
+        cancelButtonText: '继续编辑',
+        type: 'warning',
+      })
+    } catch {
+      return
+    }
+  }
+  workspaceFileEditorPath.value = null
+  workspaceFileEditorDraft.value = ''
+  workspaceFileEditorBaseMtime.value = null
+}
+
+const saveWorkspaceFileEdit = async () => {
+  const conversationId = props.conversationId
+  const path = workspaceFileEditorPath.value
+  if (!conversationId || !path || workspaceFileEditorSaving.value) return
+  if (!isWorkspaceFileDirty.value) {
+    await cancelWorkspaceFileEdit()
+    return
+  }
+  const expectedMtime = workspaceFileEditorBaseMtime.value
+  if (expectedMtime === null) {
+    ElMessage.warning('文件版本信息缺失，请刷新后重试')
+    return
+  }
+
+  workspaceFileEditorSaving.value = true
+  try {
+    const response = await saveConversationWorkspaceFile(
+      conversationId,
+      path,
+      workspaceFileEditorDraft.value,
+      expectedMtime,
+    )
+    if (response.status !== 'success') {
+      ElMessage.error(response.msg || '保存失败')
+      return
+    }
+    const nextContent = workspaceFileEditorDraft.value
+    const nextMtime = Number(response.data?.mtime || expectedMtime)
+    const nextBytes = Number(response.data?.bytes || new TextEncoder().encode(nextContent).length)
+    workspaceFileContents.value = {
+      ...workspaceFileContents.value,
+      [path]: capWorkspaceTextPreview(nextContent),
+    }
+    workspaceFileContentMtimes.value = {
+      ...workspaceFileContentMtimes.value,
+      [path]: nextMtime,
+    }
+    workspaceFiles.value = workspaceFiles.value.map((file) => (
+      normalizeVisiblePath(file.relative_path || file.path) === path
+        ? { ...file, size: nextBytes, mtime: nextMtime }
+        : file
+    ))
+    workspaceFileEditorPath.value = null
+    workspaceFileEditorDraft.value = ''
+    workspaceFileEditorBaseMtime.value = null
+    consoleFilePreviewMode.value = 'render'
+    ElMessage.success(path === 'memory/memory.md' ? '记忆已保存，下一轮对话生效' : '文件已保存')
+  } catch (err) {
+    console.error('保存会话记忆文件失败:', err)
+  } finally {
+    workspaceFileEditorSaving.value = false
   }
 }
 
@@ -1136,6 +1244,16 @@ const forgetWorkspaceFileCache = (path: string) => {
   )
   workspaceFileContents.value = contents
   workspaceFileBlobs.value = blobs
+  if (workspaceFileContentMtimes.value[path] !== undefined) {
+    const nextMtimes = { ...workspaceFileContentMtimes.value }
+    delete nextMtimes[path]
+    workspaceFileContentMtimes.value = nextMtimes
+  }
+  if (workspaceFileEditorPath.value === path) {
+    workspaceFileEditorPath.value = null
+    workspaceFileEditorDraft.value = ''
+    workspaceFileEditorBaseMtime.value = null
+  }
   if (revokedUrl) URL.revokeObjectURL(revokedUrl)
 }
 
@@ -1314,6 +1432,10 @@ watch(
       // 会话切换：面板 tab 回到工作区根，不把上个会话的工具/文件 tab 带过来
       resetTabs()
       officePreviewCache.value = {}
+      workspaceFileContentMtimes.value = {}
+      workspaceFileEditorPath.value = null
+      workspaceFileEditorDraft.value = ''
+      workspaceFileEditorBaseMtime.value = null
       liveSubagentTaskUsage.value = {}
       selectedConsoleOfficeHtml.value = null
       selectedConsoleOfficePreviewReason.value = null
@@ -1370,6 +1492,14 @@ provide(WorkspaceFilesContextKey, {
   deletingConsoleFilePath,
   getFileCount,
   workspaceUsage,
+  isWorkspaceFileEditing,
+  isWorkspaceFileDirty,
+  canEditSelectedWorkspaceFile,
+  workspaceFileEditorDraft,
+  workspaceFileEditorSaving,
+  startWorkspaceFileEdit,
+  cancelWorkspaceFileEdit,
+  saveWorkspaceFileEdit,
   handleDeleteConsoleFile,
   handleDownloadConsoleDirectoryArchive,
   handleDownloadConsoleFile,

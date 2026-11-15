@@ -607,6 +607,8 @@ export interface SubagentTrailItem {
   started_at_ms?: number | null
   ended_at_ms?: number | null
   // compaction 条目：子图压缩分隔卡（与主对话同款 CompactionMessage）
+  // compressing=true 表示「压缩中」占位：只存在于实时流，不写入历史/结果快照
+  compressing?: boolean
   timestamp?: string
   estimated_tokens_before?: number
   estimated_tokens_after?: number
@@ -855,6 +857,8 @@ export interface ToolLifecycleEventData extends ToolEventData {
   intent?: string
   /** subagent_context_compression：压缩记录 id（去重） */
   id?: string
+  /** subagent_context_compression：started=压缩中占位，completed=完成分隔卡 */
+  phase?: 'started' | 'completed'
   // subagent_context_usage：子图上下文用量快照（每个节点更新后推送一次，最终值随 subagent 结果持久化）
   used_tokens?: number
   threshold_tokens?: number

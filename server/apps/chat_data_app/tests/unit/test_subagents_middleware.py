@@ -342,7 +342,7 @@ async def test_subagent_tool_returns_final_report_as_tool_message(monkeypatch):
     assert captured["state"]["messages"][0].content == "分析入金趋势"
     assert captured["state"]["user_id"] == "u1"
     assert captured["config"]["callbacks"] == []
-    assert captured["stream_mode"] == ["updates", "messages"]
+    assert captured["stream_mode"] == ["updates", "messages", "custom"]
 
 
 @pytest.mark.asyncio
@@ -542,13 +542,191 @@ async def test_subagent_tool_forwards_and_stamps_subagent_compactions(monkeypatc
         {
             "id": "context-compression-abc",
             "timestamp": "2026-11-01 10:00:00",
-            "anchor_message_id": "",
+            # 压缩发生前最后一条过程条目是 m1，历史快照据此插回真实位置
+            "anchor_message_id": "m1",
             "estimated_tokens_before": 900,
             "estimated_tokens_after": 300,
             "estimated_cleared_tokens": 600,
             "compressed_messages": 4,
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_multiple_compactions_stamp_distinct_realtime_anchors(monkeypatch):
+    """同一次子图里多次压缩锚点各不相同，历史快照不会把分隔卡叠成一团。"""
+    written = []
+    monkeypatch.setattr(subagents_module, "get_stream_writer", lambda: written.append)
+
+    def _compaction(index: int) -> dict:
+        return {
+            "id": f"context-compression-{index}",
+            "phase": "completed",
+            "timestamp": f"2026-11-01 10:00:0{index}",
+            "estimated_tokens_before": 900,
+            "estimated_tokens_after": 300,
+            "estimated_cleared_tokens": 600,
+            "compressed_messages": 4,
+        }
+
+    class FakeRunnable:
+        async def astream(self, _state, _config, *, stream_mode):
+            for index in (1, 2):
+                yield (
+                    "updates",
+                    {
+                        "model": {
+                            "messages": [
+                                AIMessage(
+                                    content=f"第{index}遍",
+                                    id=f"m{index}",
+                                    tool_calls=[{"id": f"t{index}", "name": "file_read", "args": {}}],
+                                )
+                            ]
+                        }
+                    },
+                )
+                yield (
+                    "updates",
+                    {"tools": {"messages": [ToolMessage(content="ok", tool_call_id=f"t{index}")]}},
+                )
+                yield (
+                    "updates",
+                    {"compress": {"context_compression_events": [_compaction(index)]}},
+                )
+
+    monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
+    tool = build_task_tool([_spec()])
+
+    result = await tool.coroutine(
+        background=False, description="盘点", subagent_type="explore", runtime=_fake_runtime()
+    )
+    tool_message = result.update["messages"][0]
+    compactions = tool_message.additional_kwargs["subagent_compactions"]
+    assert [item["anchor_message_id"] for item in compactions] == ["t1", "t2"]
+
+    trail = tool_message.additional_kwargs["subagent_trail"]
+    positions = [i for i, item in enumerate(trail) if item["kind"] == "compaction"]
+    assert len(positions) == 2
+    assert positions[1] - positions[0] >= 2
+
+
+def test_subagent_compression_frame_is_registered_on_both_streams():
+    """压缩帧既要过主 Run 白名单，也要过后台任务 Redis 事件白名单。"""
+    from apps.chat_data_app import agent_stream as agent_stream_module
+    from apps.chat_data_app.sse_protocol import SSE_EVENT_NAMES, SSE_EVENT_SUBAGENT_CONTEXT_COMPRESSION
+
+    assert SSE_EVENT_SUBAGENT_CONTEXT_COMPRESSION in SSE_EVENT_NAMES
+    assert SSE_EVENT_SUBAGENT_CONTEXT_COMPRESSION in agent_stream_module._SUBAGENT_TOOL_EVENT_TYPES
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        None,
+        {"type": "token_usage"},
+        {"type": "context_compression"},
+        {"type": "context_compression", "event": "not-a-dict"},
+        {"type": "context_compression", "event": {"phase": "completed"}},
+        {"type": "context_compression", "event": {"phase": "started"}},
+        {"type": "context_compression", "event": {"phase": "started", "id": "  "}},
+    ],
+)
+def test_forward_subagent_compression_started_ignores_other_custom_chunks(payload):
+    """子图 custom 流里只有「压缩中」占位会被转发，其余一律忽略。"""
+    from apps.chat_data_app.agent.middleware import subagent_stream as stream_module
+
+    written = []
+    stream_module._forward_subagent_compression_started(payload, written.append, "call_1")
+    assert written == []
+
+
+def test_forward_subagent_compression_started_emits_phase_started_frame():
+    """「压缩中」占位不带 token 明细，前端据此渲染 spinner 分隔卡。"""
+    from apps.chat_data_app.agent.middleware import subagent_stream as stream_module
+    from apps.chat_data_app.sse_protocol import SSE_EVENT_SUBAGENT_CONTEXT_COMPRESSION
+
+    written = []
+    stream_module._forward_subagent_compression_started(
+        {
+            "type": "context_compression",
+            "event": {
+                "id": "context-compression-started-abc",
+                "phase": "started",
+                "timestamp": "2026-11-15 20:30:00",
+            },
+        },
+        written.append,
+        "call_1",
+    )
+    assert len(written) == 1
+    event = written[0]["event"]
+    assert event["event_type"] == SSE_EVENT_SUBAGENT_CONTEXT_COMPRESSION
+    assert event["phase"] == "started"
+    assert event["parent_tool_call_id"] == "call_1"
+    assert event["id"] == "context-compression-started-abc"
+    assert event["timestamp"] == "2026-11-15 20:30:00"
+    assert "estimated_tokens_before" not in event
+
+
+def test_process_subagent_chunk_routes_custom_chunk(monkeypatch):
+    """custom chunk 只喂压缩占位转发，不触发 updates 模式的用量快照。"""
+    from apps.chat_data_app.agent.middleware import subagent_stream as stream_module
+
+    seen = []
+    monkeypatch.setattr(
+        stream_module,
+        "_forward_subagent_compression_started",
+        lambda payload, writer, parent: seen.append((payload, parent)),
+    )
+    is_updates = stream_module._process_subagent_chunk(
+        ("custom", {"type": "context_compression"}), object(), None, "call_1"
+    )
+    assert is_updates is False
+    assert seen == [({"type": "context_compression"}, "call_1")]
+
+
+@pytest.mark.asyncio
+async def test_subagent_tool_streams_compression_started_and_completed(monkeypatch):
+    """同一轮压缩：custom 流给「压缩中」占位，updates 给完成分隔卡。"""
+    written = []
+    monkeypatch.setattr(subagents_module, "get_stream_writer", lambda: written.append)
+
+    class FakeRunnable:
+        async def astream(self, _state, _config, *, stream_mode):
+            yield "custom", {
+                "type": "context_compression",
+                "event": {"id": "started-1", "phase": "started", "timestamp": "2026-11-15 20:30:00"},
+            }
+            yield "updates", {
+                "compress": {
+                    "context_compression_events": [
+                        {
+                            "id": "done-1",
+                            "phase": "completed",
+                            "estimated_tokens_before": 900,
+                            "estimated_tokens_after": 300,
+                            "compressed_messages": 4,
+                        }
+                    ]
+                }
+            }
+
+    monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
+    tool = build_task_tool([_spec()])
+    await tool.coroutine(
+        background=False, description="盘点", subagent_type="explore", runtime=_fake_runtime()
+    )
+    frames = [
+        payload["event"]
+        for payload in written
+        if isinstance(payload, dict)
+        and payload.get("type") == "subagent_tool"
+        and payload.get("event", {}).get("event_type") == "subagent_context_compression"
+    ]
+    assert [frame["id"] for frame in frames] == ["started-1", "done-1"]
+    assert frames[0]["phase"] == "started"
+    assert frames[1]["estimated_tokens_before"] == 900
 
 
 def test_aggregate_subagent_token_usage_sums_model_calls():
@@ -715,6 +893,14 @@ def test_progress_snapshot_counts_completed_tools_and_running_tools_separately()
     assert snapshot["running_tools"] == 1
     assert snapshot["last_tool"] == "query_data"
     assert snapshot["message_count"] == 2
+    assert snapshot["compaction_count"] == 0
+
+
+def test_progress_snapshot_carries_running_compaction_count():
+    """运行期压缩次数随心跳落 progress，任务卡不必等任务收口。"""
+    state = subagents_module._SubagentStreamState("call-1")
+    state.compression_events.extend([{"id": "c1"}, {"id": "c2"}])
+    assert subagents_module._subagent_progress_snapshot(state)["compaction_count"] == 2
 
 
 @pytest.mark.asyncio
@@ -986,7 +1172,7 @@ async def test_subagent_tool_streams_text_and_thinking_deltas(monkeypatch):
 
     class FakeRunnable:
         async def astream(self, _state, _config, *, stream_mode):
-            assert stream_mode == ["updates", "messages"]
+            assert stream_mode == ["updates", "messages", "custom"]
             yield (
                 "messages",
                 (AIMessageChunk(content="", additional_kwargs={"reasoning_content": "先查数据"}, id="m1"), {}),
@@ -1224,6 +1410,53 @@ def test_build_trail_snapshot_mirrors_sse_shape():
         "thinking": "",
         "thinkingTruncated": False,
     }
+
+
+def _compression_record(index: int, anchor: str) -> dict:
+    return {
+        "id": f"c{index}",
+        "timestamp": f"2026-11-15 20:4{index}:00",
+        "anchor_message_id": anchor,
+        "estimated_tokens_before": 50_000,
+        "estimated_tokens_after": 13_000,
+        "estimated_cleared_tokens": 37_000,
+        "compressed_messages": 30,
+    }
+
+
+def test_build_trail_snapshot_spreads_compaction_cards_by_anchor():
+    """多次压缩分别插回各自发生位置，不叠成连续三张卡。"""
+    messages: list = []
+    for i in range(1, 7):
+        messages.append(AIMessage(content=f"第{i}遍", id=f"m{i}", tool_calls=[
+            {"id": f"t{i}", "name": "file_read", "args": {}}
+        ]))
+        messages.append(ToolMessage(content="ok", tool_call_id=f"t{i}"))
+
+    trail = subagents_module._build_trail_snapshot(
+        messages, [_compression_record(1, "t2"), _compression_record(2, "t4"), _compression_record(3, "t6")]
+    )
+    positions = [i for i, item in enumerate(trail) if item["kind"] == "compaction"]
+    assert positions == [4, 9, 14]
+    assert [trail[i]["id"] for i in positions] == ["c1", "c2", "c3"]
+
+
+def test_build_trail_snapshot_keeps_compaction_cards_apart_on_repeated_anchor():
+    """锚点重复时退化插入也要隔开真实过程条目，历史回放才不会挤成一团。"""
+    messages: list = []
+    for i in range(1, 7):
+        messages.append(AIMessage(content=f"第{i}遍", id=f"m{i}", tool_calls=[
+            {"id": f"t{i}", "name": "file_read", "args": {}}
+        ]))
+        messages.append(ToolMessage(content="ok", tool_call_id=f"t{i}"))
+
+    trail = subagents_module._build_trail_snapshot(
+        messages, [_compression_record(i, "t2") for i in range(1, 4)]
+    )
+    positions = [i for i, item in enumerate(trail) if item["kind"] == "compaction"]
+    assert len(positions) == 3
+    assert all(after - before >= 2 for before, after in zip(positions, positions[1:], strict=False))
+    assert [trail[i]["id"] for i in positions] == ["c1", "c2", "c3"]
 
 
 def test_build_trail_snapshot_marks_error_and_truncates():

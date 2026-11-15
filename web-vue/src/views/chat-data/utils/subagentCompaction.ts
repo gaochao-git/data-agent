@@ -31,6 +31,27 @@ export const appendSubagentCompaction = (
   return [...list, record]
 }
 
+/** 清掉所有「压缩中」占位（任务收口 / 重复完成帧兜底）；占位只属于实时流。 */
+export const clearSubagentCompactionPlaceholders = (
+  trail: SubagentTrailItem[],
+): SubagentTrailItem[] => trail.filter(item => !(item.kind === 'compaction' && item.compressing))
+
+/** 用一条压缩条目替换掉此前所有「压缩中」占位（占位只属于实时流，不落历史）。 */
+export const replaceSubagentCompactionPlaceholder = (
+  trail: SubagentTrailItem[],
+  item: SubagentTrailItem,
+): SubagentTrailItem[] => [...clearSubagentCompactionPlaceholders(trail), item]
+
+/** 从「压缩中」SSE 帧构造占位条目；缺 id 丢弃。 */
+export const buildSubagentCompactionStartedTrail = (raw: {
+  id?: string
+  timestamp?: string
+}): SubagentTrailItem | null => {
+  const id = String(raw.id || '').trim()
+  if (!id) return null
+  return { kind: 'compaction', id, compressing: true, timestamp: raw.timestamp }
+}
+
 /** 把压缩记录映射成过程 trail 的分隔卡。 */
 export const buildSubagentCompactionTrailItem = (record: SubagentCompaction): SubagentTrailItem => ({
   kind: 'compaction',
@@ -42,16 +63,34 @@ export const buildSubagentCompactionTrailItem = (record: SubagentCompaction): Su
   compressed_messages: record.compressed_messages,
 })
 
-/** 把压缩记录合进 subagent 调用：列表去重 + 过程 trail 插入分隔卡；无变化返回 null。 */
+/** 把压缩记录合进 subagent 调用：列表去重 + 过程 trail 插入完成分隔卡；无变化返回 null。 */
 export const applySubagentCompactionToTool = (
   tool: ToolCallInfo,
   record: SubagentCompaction,
 ): ToolCallInfo | null => {
+  const cleaned = clearSubagentCompactionPlaceholders(tool.subagentTrail || [])
   const next = appendSubagentCompaction(tool.subagentCompactions, record)
-  if (!next) return null
+  if (!next) {
+    // 重连回放的重复完成帧：不重复计数，但仍要清掉可能残留的「压缩中」占位。
+    if (cleaned.length === (tool.subagentTrail || []).length) return null
+    return { ...tool, subagentTrail: cleaned }
+  }
   return {
     ...tool,
     subagentCompactions: next,
-    subagentTrail: [...(tool.subagentTrail || []), buildSubagentCompactionTrailItem(record)],
+    subagentTrail: [...cleaned, buildSubagentCompactionTrailItem(record)],
+  }
+}
+
+/** 实时流收到「压缩中」：替换占位；不写 subagentCompactions（只记完成的压缩）。 */
+export const applySubagentCompactionStartedToTool = (
+  tool: ToolCallInfo,
+  event: { id?: string; timestamp?: string },
+): ToolCallInfo | null => {
+  const item = buildSubagentCompactionStartedTrail(event)
+  if (!item) return null
+  return {
+    ...tool,
+    subagentTrail: replaceSubagentCompactionPlaceholder(tool.subagentTrail || [], item),
   }
 }

@@ -281,9 +281,18 @@ class SubagentTaskRecord:
 
     @property
     def compaction_count(self) -> int:
-        """已完成的子图上下文压缩次数；事件在生成时已按 id 去重。"""
+        """已完成的子图上下文压缩次数；终态以结果快照为准，运行态读心跳 progress。
+
+        事件在生成时已按 id 去重；两处都是累计值，取较大者可避免最后一次心跳
+        滞后于结果快照时反而把次数算少（取消/失联任务尤其常见）。
+        """
         compactions = self.result_meta.get("subagent_compactions")
-        return len(compactions) if isinstance(compactions, list) else 0
+        result_count = len(compactions) if isinstance(compactions, list) else 0
+        running = self.progress.get("compaction_count")
+        running_count = (
+            running if isinstance(running, int) and not isinstance(running, bool) and running > 0 else 0
+        )
+        return max(result_count, running_count)
 
     def as_dict(self, *, include_report: bool = True) -> dict[str, Any]:
         """API / 工具共用结构；时间统一 ISO，避免前端重复解析格式。"""
@@ -527,7 +536,7 @@ class SubagentTaskService:
         root_task_id: str | None = None,
     ) -> SubagentTaskRecord:
         max_active = int(await get_runtime_setting("CHAT_DATA_SUBAGENT_TASK_MAX_ACTIVE"))
-        max_sessions = int(await get_runtime_setting("CHAT_DATA_SUBAGENT_MAX_SESSIONS_PER_CONVERSATION"))
+        max_subagents_per_conversation = int(await get_runtime_setting("CHAT_DATA_SUBAGENT_MAX_PER_CONVERSATION"))
         lease_seconds = int(await get_runtime_setting("CHAT_DATA_SUBAGENT_TASK_LEASE_SECONDS"))
         effective_timeout = int(timeout_seconds or await get_runtime_setting("CHAT_DATA_SUBAGENT_TASK_TIMEOUT_SECONDS"))
         task_id = uuid4().hex
@@ -543,7 +552,7 @@ class SubagentTaskService:
                 conversation_id=conversation_id,
                 user_id=user_id,
                 max_active=max_active,
-                max_sessions=max_sessions,
+                max_subagents_per_conversation=max_subagents_per_conversation,
                 continuing=bool(parent_task_id or agent_session_id or root_task_id),
             )
             root_task = str(agent_session_id or root_task_id or task_id)
@@ -660,10 +669,10 @@ class SubagentTaskService:
         conversation_id: str,
         user_id: str,
         max_active: int,
-        max_sessions: int,
+        max_subagents_per_conversation: int,
         continuing: bool,
     ) -> None:
-        """在会话行锁内校验并发额度与新子智能体会话总额度。"""
+        """在会话行锁内校验并发额度与新子智能体总额度。"""
         active = await self._dao.count_active(session, conversation_id, user_id, ACTIVE_TASK_STATUSES)
         if active >= max_active:
             raise SubagentTaskCapacityError(
@@ -671,10 +680,10 @@ class SubagentTaskService:
             )
         if continuing:
             return
-        session_count = await self._dao.count_sessions(session, conversation_id, user_id)
-        if session_count >= max_sessions:
+        subagent_count = await self._dao.count_subagents(session, conversation_id, user_id)
+        if subagent_count >= max_subagents_per_conversation:
             raise SubagentTaskCapacityError(
-                f"当前主对话已创建 {session_count} 个子智能体，达到上限（{max_sessions} 个）。"
+                f"当前主对话已创建 {subagent_count} 个子智能体，达到上限（{max_subagents_per_conversation} 个）。"
                 '请先用 subagent(action="list") 查看已有子智能体；任务类似时用 '
                 'subagent(action="follow_up", task_id=..., message=...) 复用原会话，不要新开。'
             )

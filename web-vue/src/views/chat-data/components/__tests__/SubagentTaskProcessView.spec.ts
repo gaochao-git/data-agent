@@ -133,4 +133,33 @@ describe('SubagentTaskProcessView', () => {
 
     expect(wrapper.find('[data-tool-detail-stub]').attributes('data-result')).toBe('错误：模型调用超时')
   })
+
+  it('详情页上下文用量以快照为准，token 明细只补充明细', () => {
+    const taskWithUsage = turn({
+      result_meta: {
+        subagent_context_usage: {
+          used_tokens: 20_000,
+          threshold_tokens: 64_000,
+          context_window: 128_000,
+          percent: 16,
+        },
+        subagent_token_usage_detail: {
+          used: 50_000,
+          total: 128_000,
+          percentage: 39,
+          context_window: 128_000,
+          compression_trigger_tokens: 64_000,
+        },
+      },
+    })
+    const wrapper = mount(SubagentTaskProcessView, {
+      props: { task: taskWithUsage, sessionTasks: [taskWithUsage], conversationId: 'conv-1' },
+      global: { stubs: { SubagentTrail: TrailStub } },
+    })
+
+    const emitted = wrapper.emitted('usageUpdated') || []
+    const usage = emitted[emitted.length - 1]?.[1] as { used: number; percentage?: number } | undefined
+    expect(usage?.used).toBe(20_000)
+    expect(usage?.percentage).toBe(16)
+  })
 })

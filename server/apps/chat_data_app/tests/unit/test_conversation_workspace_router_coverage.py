@@ -25,6 +25,7 @@ class FakeWorkspaceService:
         self.access = True
         self.files = [{"relative_path": "reports/result.csv", "path": "reports/result.csv"}]
         self.file_payload = {"relative_path": "a.md", "content": "hello"}
+        self.saved_payload = {"path": "/mnt/user-data/memory/memory.md", "bytes": 5, "mtime": 2.0}
         self.raw_payload = {"relative_path": "docs/报告.pdf", "data": b"bytes", "mime": "application/pdf"}
         self.query_result = {"result_id": "res_1"}
         self.preview = {"available": True}
@@ -53,6 +54,12 @@ class FakeWorkspaceService:
         if exc:
             raise exc
         return self.file_payload
+
+    async def save_memory(self, conversation_id, user_id=None, path=None, content=None, expected_mtime=None):
+        exc = self.errors.get("save")
+        if exc:
+            raise exc
+        return self.saved_payload
 
     async def read_raw(self, conversation_id, user_id=None, path=None):
         exc = self.errors.get("raw")
@@ -86,6 +93,7 @@ def fake_service(monkeypatch):
     monkeypatch.setattr(cw_routes, "list_workspace_files_for_conversation", service.list_files)
     monkeypatch.setattr(cw_routes, "list_workspace_directories_for_conversation", service.list_directories)
     monkeypatch.setattr(cw_routes, "read_workspace_file_for_conversation", service.read_file)
+    monkeypatch.setattr(cw_routes, "save_workspace_file_for_conversation", service.save_memory)
     monkeypatch.setattr(cw_routes, "read_conversation_workspace_raw_file", service.read_raw)
     monkeypatch.setattr(cw_routes, "render_conversation_workspace_office_preview", service.render_preview)
     monkeypatch.setattr(cw_routes, "read_conversation_query_result", service.read_query_result)
@@ -186,6 +194,35 @@ def test_read_workspace_file_branches(fake_service, monkeypatch):
     monkeypatch.setattr(cw_routes, "_get_current_user", raise_http)
     with pytest.raises(HTTPException):
         asyncio.run(cw_routes.read_conversation_workspace_file("conv_1", "a.md", fake_request()))
+
+
+def test_save_workspace_file_branches(fake_service, monkeypatch):
+    patch_user(monkeypatch)
+    payload = SimpleNamespace(
+        path="/mnt/user-data/memory/memory.md",
+        content="hello",
+        expected_mtime=1.0,
+    )
+
+    response = asyncio.run(cw_routes.save_conversation_workspace_file("conv_1", payload, fake_request()))
+    response_payload_data = response_payload(response)
+    assert response_payload_data["msg"] == "保存成功"
+    assert response_payload_data["data"]["saved"] is True
+
+    fake_service.access = False
+    response = asyncio.run(cw_routes.save_conversation_workspace_file("conv_1", payload, fake_request()))
+    assert response_payload(response)["code"] == ErrorCode.CHATDATA_NOT_FOUND
+
+    fake_service.access = True
+    for exc, expected_code in [
+        (cw_routes.WorkspaceFileSaveConflictError("冲突"), ErrorCode.CHATDATA_WORKSPACE_FILE_CONFLICT),
+        (FileNotFoundError("不存在"), ErrorCode.CHATDATA_NOT_FOUND),
+        (ValueError("非法路径"), ErrorCode.CHATDATA_BAD_REQUEST),
+        (RuntimeError("boom"), ErrorCode.CHATDATA_WORKSPACE_FILE_SAVE_FAILED),
+    ]:
+        fake_service.errors["save"] = exc
+        response = asyncio.run(cw_routes.save_conversation_workspace_file("conv_1", payload, fake_request()))
+        assert response_payload(response)["code"] == expected_code
 
 
 def test_read_raw_file_returns_binary_response(fake_service, monkeypatch):

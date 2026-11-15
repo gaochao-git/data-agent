@@ -155,4 +155,32 @@ describe('SubagentTaskRow', () => {
     const cancelledWrapper = mount(SubagentTaskRow, { props: { task: cancelled } })
     expect(cancelledWrapper.find('[data-subagent-task-context]').text()).toContain('上下文 30%')
   })
+
+  it('context percentage prefers the live context snapshot over token detail', () => {
+    const staleDetail = task({
+      status: 'running',
+      progress: {
+        context_usage: {
+          used_tokens: 20_000,
+          threshold_tokens: 64_000,
+          context_window: 128_000,
+          percent: 16,
+        },
+      },
+      result_meta: {
+        subagent_token_usage_detail: {
+          used: 50_000,
+          total: 128_000,
+          percentage: 39,
+          context_window: 128_000,
+          compression_trigger_tokens: 64_000,
+        },
+      },
+    })
+    const wrapper = mount(SubagentTaskRow, { props: { task: staleDetail } })
+    const context = wrapper.find('[data-subagent-task-context]')
+
+    expect(context.text()).toContain('上下文 16%')
+    expect(context.attributes('title')).toBe('当前输入 20k · 压缩阈值 64k · 上下文窗口 128k')
+  })
 })

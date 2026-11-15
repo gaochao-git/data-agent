@@ -442,6 +442,8 @@ export interface SubagentTrailCompactionBlock {
   compaction: {
     id: string
     timestamp?: string
+    /** 压缩中占位（只来自实时流），渲染成带 spinner 的 CompactionMessage */
+    compressing?: boolean
     estimated_tokens_before?: number
     estimated_tokens_after?: number
     estimated_cleared_tokens?: number
@@ -478,6 +480,7 @@ export const buildSubagentTrailBlocks = (toolCall: ToolCallInfo): SubagentTrailB
         compaction: {
           id: item.id,
           timestamp: item.timestamp,
+          compressing: item.compressing === true,
           estimated_tokens_before: item.estimated_tokens_before,
           estimated_tokens_after: item.estimated_tokens_after,
           estimated_cleared_tokens: item.estimated_cleared_tokens,
@@ -580,7 +583,7 @@ export const buildSubagentMessages = (toolCall: ToolCallInfo): Message[] => {
         content: '',
         contextCompression: {
           id: block.compaction.id,
-          compressing: false,
+          compressing: block.compaction.compressing === true,
           estimated_tokens_before: block.compaction.estimated_tokens_before,
           estimated_tokens_after: block.compaction.estimated_tokens_after,
           estimated_cleared_tokens: block.compaction.estimated_cleared_tokens,

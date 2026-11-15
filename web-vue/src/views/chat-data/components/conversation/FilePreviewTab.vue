@@ -55,7 +55,7 @@ export default defineComponent({
             </span>
           </div>
           <div class="flex shrink-0 items-center gap-2">
-            <div v-if="selectedConsoleFile && (selectedConsoleChartSpec || hasSelectedConsoleTable || selectedConsoleIsMarkdown || selectedConsoleIsMermaid || selectedConsoleIsHtml)" class="flex rounded-md border border-slate-200 bg-white p-0.5">
+            <div v-if="!isWorkspaceFileEditing && selectedConsoleFile && (selectedConsoleChartSpec || hasSelectedConsoleTable || selectedConsoleIsMarkdown || selectedConsoleIsMermaid || selectedConsoleIsHtml)" class="flex rounded-md border border-slate-200 bg-white p-0.5">
               <button
                 v-if="selectedConsoleChartSpec"
                 type="button"
@@ -100,10 +100,45 @@ export default defineComponent({
                 源码
               </button>
             </div>
+            <button
+              v-if="canEditSelectedWorkspaceFile && !isWorkspaceFileEditing"
+              type="button"
+              class="flex h-6 items-center justify-center gap-1 rounded border border-slate-200 bg-white px-2 text-[11px] text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700"
+              title="编辑文件内容"
+              data-console-memory-edit="true"
+              @click="startWorkspaceFileEdit"
+            >
+              <i class="fa-solid fa-pen text-[10px]"></i>
+              <span>编辑</span>
+            </button>
+            <template v-if="isWorkspaceFileEditing">
+              <button
+                type="button"
+                class="flex h-6 items-center justify-center gap-1 rounded border border-blue-200 bg-blue-50 px-2 text-[11px] text-blue-700 transition-colors hover:bg-blue-100 disabled:opacity-50"
+                title="保存文件内容"
+                :disabled="workspaceFileEditorSaving"
+                data-console-memory-save="true"
+                @click="saveWorkspaceFileEdit"
+              >
+                <i class="fa-solid text-[10px]" :class="workspaceFileEditorSaving ? 'fa-spinner fa-spin' : 'fa-floppy-disk'"></i>
+                <span>{{ workspaceFileEditorSaving ? '保存中' : '保存' }}</span>
+              </button>
+              <button
+                type="button"
+                class="flex h-6 items-center justify-center gap-1 rounded border border-slate-200 bg-white px-2 text-[11px] text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700 disabled:opacity-50"
+                title="取消编辑"
+                :disabled="workspaceFileEditorSaving"
+                data-console-memory-cancel="true"
+                @click="cancelWorkspaceFileEdit"
+              >
+                <i class="fa-solid fa-xmark text-[10px]"></i>
+                <span>取消</span>
+              </button>
+            </template>
             <!-- 复制内容/路径：内容口径=预览所见（表格模式=所见表格 TSV，文本类=全文，超大文件受预览截断）。
                  路径=/mnt/user-data 沙箱可见路径（与 @ 引用、智能体视角一致）。 -->
             <button
-              v-if="selectedConsoleFile && !selectedConsoleIsPdf"
+              v-if="!isWorkspaceFileEditing && selectedConsoleFile && !selectedConsoleIsPdf"
               type="button"
               class="flex h-6 w-6 items-center justify-center rounded border border-slate-200 bg-white text-[11px] text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700"
               title="复制文件内容（表格模式复制 TSV）"
@@ -113,7 +148,7 @@ export default defineComponent({
               <i class="fa-regular fa-copy"></i>
             </button>
             <button
-              v-if="selectedConsoleFile && !selectedConsoleIsPdf"
+              v-if="!isWorkspaceFileEditing && selectedConsoleFile && !selectedConsoleIsPdf"
               type="button"
               class="flex h-6 w-6 items-center justify-center rounded border border-slate-200 bg-white text-[11px] text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700"
               title="复制文件路径"
@@ -125,7 +160,7 @@ export default defineComponent({
             <!-- 下载已下沉到文件树每行右端（和文件名同处一行，不必先选中再来这里找）。
                  这里改为刷新：tool_result / run 结束本就会自动刷新，此按钮是手动兜底。 -->
             <button
-              v-if="selectedConsoleFile && !selectedConsoleIsPdf"
+              v-if="!isWorkspaceFileEditing && selectedConsoleFile && !selectedConsoleIsPdf"
               type="button"
               class="flex h-6 w-6 items-center justify-center rounded border border-slate-200 bg-white text-[11px] text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700 disabled:opacity-50"
               :title="isWorkspaceRefreshBusy ? '正在刷新' : '刷新文件列表与预览内容'"
@@ -136,7 +171,7 @@ export default defineComponent({
               <i class="fa-solid fa-rotate-right" :class="isWorkspaceRefreshBusy ? 'fa-spin' : ''"></i>
             </button>
             <button
-              v-if="selectedConsoleFile && !selectedConsoleIsPdf"
+              v-if="!isWorkspaceFileEditing && selectedConsoleFile && !selectedConsoleIsPdf"
               type="button"
               class="flex h-6 w-6 items-center justify-center rounded border border-slate-200 bg-white text-[11px] text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700"
               title="放大预览"
@@ -171,8 +206,17 @@ export default defineComponent({
           >
             <i class="fa-solid fa-compress"></i>
           </button>
+          <textarea
+            v-if="isWorkspaceFileEditing"
+            v-model="workspaceFileEditorDraft"
+            :class="isWorkspaceFilePreviewFullscreen
+              ? 'h-[calc(100vh-48px)] w-full resize-none rounded-md border border-blue-200 bg-white p-3 font-mono text-xs leading-relaxed text-slate-700 outline-none focus:border-blue-400'
+              : 'min-h-0 w-full flex-1 resize-none rounded-md border border-blue-200 bg-white p-3 font-mono text-xs leading-relaxed text-slate-700 outline-none focus:border-blue-400'"
+            spellcheck="false"
+            data-workspace-memory-editor="true"
+          ></textarea>
           <ChartSpecRenderer
-            v-if="selectedConsoleChartSpec && consoleFilePreviewMode === 'render'"
+            v-else-if="selectedConsoleChartSpec && consoleFilePreviewMode === 'render'"
             :spec="selectedConsoleChartSpec"
           />
           <MarkdownFilePreview

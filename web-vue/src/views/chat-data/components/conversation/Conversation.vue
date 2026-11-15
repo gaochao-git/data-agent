@@ -41,7 +41,7 @@ import AnalysisProgress from './AnalysisProgress.vue'
 import ConversationReconnectBanner from './ConversationReconnectBanner.vue'
 import { deriveAnalysisTodos, shouldShowAnalysisProgress } from '../../utils/analysisTodos'
 import { createTopReachTracker } from '../../utils/scrollReach'
-import { applySubagentCompactionToTool, buildSubagentCompactionRecord } from '../../utils/subagentCompaction'
+import { applySubagentCompactionStartedToTool, applySubagentCompactionToTool, buildSubagentCompactionRecord } from '../../utils/subagentCompaction'
 import { applySubagentTrailEvent } from '../../utils/subagentTrail'
 import { isScrolledToBottom } from '../../utils/scrollFollow'
 import { normalizeVisiblePath } from '../../utils/consoleFileTree'
@@ -1819,11 +1819,16 @@ const upsertSubagentTrailItem = (event: ToolLifecycleEventData) => {
     }))
   }
 
-  // 子图压缩记录：按 id 去重追加到父 subagent 调用（过程面板展示「已压缩 N 次」）
+  // 子图压缩记录：压缩中占位实时替换，完成态按 id 去重追加到父 subagent 调用
   const upsertSubagentCompaction = (event: ToolLifecycleEventData) => {
     const parentId = event.parent_tool_call_id
+    if (!parentId) return
+    if (event.phase === 'started') {
+      applySubagentToolPatch(parentId, tool => applySubagentCompactionStartedToTool(tool, event))
+      return
+    }
     const record = buildSubagentCompactionRecord(event)
-    if (!parentId || !record) return
+    if (!record) return
     applySubagentToolPatch(parentId, tool => applySubagentCompactionToTool(tool, record))
   }
 

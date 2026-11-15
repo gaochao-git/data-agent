@@ -181,9 +181,16 @@ def _insert_trail_compactions(trail: list[dict[str, Any]], compactions: Any) -> 
     if not isinstance(compactions, list) or not compactions:
         return trail
     merged = list(trail)
+    previous = -2
     for compaction in compactions:
         entry = _compaction_trail_entry(compaction)
         if entry is None:
             continue
-        merged.insert(_trail_insert_index(merged, entry["anchor_message_id"]), entry)
+        index = _trail_insert_index(merged, entry["anchor_message_id"])
+        if index <= previous + 1:
+            # 锚点缺失或重复（压缩后历史消息被删、多次压缩共享同一锚点）时，
+            # 至少隔开一条真实过程条目，避免多张分隔卡堆在一起看不出发生位置。
+            index = min(previous + 2, len(merged))
+        merged.insert(index, entry)
+        previous = index
     return merged

@@ -35,6 +35,8 @@ DYNAMIC_ARGS = {"event_type"}
 EMIT_ARG_RE = re.compile(r"(?:format_sse|_format_tool_lifecycle_event)\(\s*([A-Za-z_\"']+)")
 RAW_FRAME_RE = re.compile(r'f"event:\s*([A-Za-z_]+)')
 CONSTANT_DEF_RE = re.compile(r'^(SSE_EVENT_[A-Z_]+) = "([^"]+)"$', re.M)
+REGISTRY_BLOCK_RE = re.compile(r"SSE_EVENT_NAMES:.*?=\s*frozenset\(\s*\{(.*?)\}\s*\)", re.S)
+REGISTERED_CONSTANT_RE = re.compile(r"SSE_EVENT_[A-Z_]+")
 FRONTEND_UNION_RE = re.compile(r"export type SSEEventType = ([^\n]+)")
 UNION_MEMBER_RE = re.compile(r"'([^']+)'")
 
@@ -99,6 +101,30 @@ def _frontend_event_names() -> set[str]:
     return set(UNION_MEMBER_RE.findall(match.group(1)))
 
 
+def _check_registry(catalog: dict[str, str]) -> list[str]:
+    """常量定义与 SSE_EVENT_NAMES 登记必须严格一致。
+
+    定义了帧名却漏登记时，主 Run 的 format_sse 仍会照常发出，只有后台子智能体
+    的 Redis 事件流（publish_event 按 SSE_EVENT_NAMES 过滤）会静默丢帧——这类
+    漂移只靠"帧名用常量引用"检查发现不了，必须由门禁双向比对。
+    """
+    text = PROTOCOL_MODULE.read_text(encoding="utf-8")
+    match = REGISTRY_BLOCK_RE.search(text)
+    if not match:
+        return [f"{_rel(PROTOCOL_MODULE)} 无法解析 SSE_EVENT_NAMES，门禁失效"]
+    # 去掉行内注释，避免注释里提到的常量名被误当成已登记
+    body = "\n".join(line.split("#", 1)[0] for line in match.group(1).splitlines())
+    registered = set(REGISTERED_CONSTANT_RE.findall(body))
+    problems = [
+        f"常量 {name} 定义了帧名但漏登记进 SSE_EVENT_NAMES，后台任务事件会被静默丢弃"
+        for name in sorted(set(catalog) - registered)
+    ]
+    problems.extend(
+        f"SSE_EVENT_NAMES 登记了未定义的常量 {name}" for name in sorted(registered - set(catalog))
+    )
+    return problems
+
+
 def _check_parity(catalog: dict[str, str], frontend: set[str]) -> tuple[list[str], list[str]]:
     emitted = set(catalog.values())
     unhandled = sorted(emitted - frontend)
@@ -113,6 +139,7 @@ def main() -> int:
         print(f"{_rel(PROTOCOL_MODULE)} 未解析到任何 SSE_EVENT_* 常量，门禁失效", file=sys.stderr)
         return 1
     problems = _check_emits(_iter_backend_sources(), catalog)
+    problems.extend(_check_registry(catalog))
     frontend = _frontend_event_names()
     parity_failures, unused = _check_parity(catalog, frontend)
     for line in [*problems, *parity_failures]:

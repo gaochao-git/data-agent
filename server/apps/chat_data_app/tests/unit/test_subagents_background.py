@@ -46,10 +46,10 @@ class _FakeEventService:
         self.events.append(kwargs)
 
 
-def _settings(max_active: int = 20, max_sessions: int = 5):
+def _settings(max_active: int = 20, max_subagents_per_conversation: int = 5):
     values = {
         "CHAT_DATA_SUBAGENT_TASK_MAX_ACTIVE": max_active,
-        "CHAT_DATA_SUBAGENT_MAX_SESSIONS_PER_CONVERSATION": max_sessions,
+        "CHAT_DATA_SUBAGENT_MAX_PER_CONVERSATION": max_subagents_per_conversation,
         "CHAT_DATA_SUBAGENT_TASK_LEASE_SECONDS": 30,
         "CHAT_DATA_SUBAGENT_TASK_TIMEOUT_SECONDS": 60,
     }
@@ -545,12 +545,12 @@ async def test_capacity_guard_serializes_active_tasks(harness, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_session_capacity_counts_distinct_agents_and_allows_follow_up(harness, monkeypatch):
-    """主对话子会话总数有新开上限；追问复用原会话不占新额度。"""
+async def test_subagent_capacity_counts_distinct_agents_and_allows_follow_up(harness, monkeypatch):
+    """主对话子智能体总数有新开上限；追问复用原子智能体不占新额度。"""
     monkeypatch.setattr(
         service_module,
         "get_runtime_setting",
-        _settings(max_active=20, max_sessions=2),
+        _settings(max_active=20, max_subagents_per_conversation=2),
     )
     await harness.create_conversation()
     first = await _create_task(harness)
@@ -582,7 +582,7 @@ async def test_session_capacity_counts_distinct_agents_and_allows_follow_up(harn
     with pytest.raises(SubagentTaskCapacityError, match="达到上限"):
         await _create_task(harness)
     async with harness.get_session() as session:
-        assert await harness.service._dao.count_sessions(session, CONV, USER) == 2
+        assert await harness.service._dao.count_subagents(session, CONV, USER) == 2
 
     follow_up = await harness.service.create_task(
         conversation_id=CONV,
@@ -601,7 +601,7 @@ async def test_session_capacity_counts_distinct_agents_and_allows_follow_up(harn
     assert follow_up.agent_session_id == second.agent_session_id
     assert follow_up.turn_index == 2
     async with harness.get_session() as session:
-        assert await harness.service._dao.count_sessions(session, CONV, USER) == 2
+        assert await harness.service._dao.count_subagents(session, CONV, USER) == 2
 
 
 @pytest.mark.asyncio
@@ -1182,6 +1182,53 @@ def test_task_record_compaction_count_from_result_meta():
 
     assert record.compaction_count == 2
     assert record.as_dict(include_report=False)["compaction_count"] == 2
+
+
+def test_task_record_compaction_count_from_running_progress():
+    """运行中还没有 result_meta，压缩次数随心跳透出，任务卡不会一直显示 0。"""
+    record = SubagentTaskRecord(
+        task_id="turn-1",
+        conversation_id=CONV,
+        user_id=USER,
+        parent_run_id="run-parent",
+        owner_token=None,
+        status="running",
+        report="",
+        result_meta={},
+        meta={"progress": {"phase": "running", "compaction_count": 3}},
+        created_at=datetime.now(),
+        updated_at=None,
+        started_at=None,
+        finished_at=None,
+        notified_at=None,
+        lease_expire_time=None,
+    )
+
+    assert record.compaction_count == 3
+    assert record.as_dict(include_report=False)["compaction_count"] == 3
+
+
+def test_task_record_compaction_count_uses_larger_of_progress_and_result():
+    """最后一次心跳滞后于结果快照时，取较大值避免把次数算少。"""
+    record = SubagentTaskRecord(
+        task_id="turn-1",
+        conversation_id=CONV,
+        user_id=USER,
+        parent_run_id="run-parent",
+        owner_token=None,
+        status="completed",
+        report="",
+        result_meta={"subagent_compactions": [{"id": "c1"}, {"id": "c2"}]},
+        meta={"progress": {"phase": "running", "compaction_count": 1}},
+        created_at=datetime.now(),
+        updated_at=None,
+        started_at=None,
+        finished_at=None,
+        notified_at=None,
+        lease_expire_time=None,
+    )
+
+    assert record.compaction_count == 2
 
 
 @pytest.mark.asyncio
