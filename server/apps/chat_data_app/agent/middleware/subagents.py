@@ -209,7 +209,8 @@ _TASK_TOOL_DESCRIPTION_TEMPLATE = """派发隔离子智能体处理复杂多步�
 - 相互独立的子任务可在同一条消息里并行发起多个 subagent。
 - 默认异步（background=true）：批量盘点/全量扫描、多份交付物、多个可并行独立子任务，或当轮不需要结论时使用；立即返回 task_id（可配 label/timeout_seconds），完成/失败/超时后自动唤醒会话。
 - 同步（background=false）：当前步骤必须拿到结论才能继续、用户要求当轮给出结果，或小范围核对/单点查询时使用；等待完成后返回结论。
-- 需要先等任务结果用 subagent(action="wait", task_ids=[...])；查单个用 subagent(action="check", task_id=...)、列任务用 subagent(action="list")、取消用 subagent(action="cancel", task_id=...)；已结束任务补充分析用 subagent(action="follow_up", task_id=..., message=...)，不要用 start 重复派发。
+- 需要先等任务结果用 subagent(action="wait", task_ids=[...])；查单个用 subagent(action="check", task_id=...)、列子智能体用 subagent(action="list")、取消用 subagent(action="cancel", task_id=...)；查看某个 agent_id 名下的任务 ID 用 subagent(action="list", agent_id=...)；已结束任务补充分析用 subagent(action="follow_up", task_id=..., message=...)，不要用 start 重复派发。
+- 身份口径：agent_id 是稳定子智能体 ID（同一子智能体追问不变），task_id 是单轮任务 ID；管理动作传 task_id，向用户汇报子智能体身份用 agent_id。
 - 运行中可管理：steer 在下个模型步注入说明；pause 在安全点暂停；resume/approve/reject 继续。审批通知给出待执行工具，须经用户同意再 approve。
 - 回传是结论：向用户转述关键结论与产物路径，产物用 present_artifacts 展示。"""
 
@@ -292,7 +293,10 @@ class TaskToolArgs(BaseModel):
     task_id: str | None = Field(
         default=None,
         max_length=64,
-        description="action=check/cancel/follow_up 时要查询、取消或追问的任务 ID。",
+        description=(
+            "action=check/cancel/follow_up 时要查询、取消或追问的任务 ID（list 返回的 task_id）；"
+            "不要传稳定的 agent_id。"
+        ),
     )
     message: str | None = Field(
         default=None,
@@ -307,6 +311,11 @@ class TaskToolArgs(BaseModel):
         default=None,
         max_length=MAX_WAIT_TASKS,
         description="action=wait 时要等待的任务 ID 列表（最多 10 个）。",
+    )
+    agent_id: str | None = Field(
+        default=None,
+        max_length=64,
+        description="action=list 时可选：只列出该稳定子智能体 ID 名下的任务 ID。",
     )
     status: str | None = Field(
         default=None,
@@ -1694,9 +1703,12 @@ def build_task_tool(specs: list[SubagentSpec], run_controls: Any = None) -> Stru
         message: str | None = None,
         decision: Literal["allow", "deny"] = "allow",
         task_ids: list[str] | None = None,
+        agent_id: str | None = None,
         status: str | None = None,
         wait_seconds: int = DEFAULT_WAIT_TIMEOUT_SECONDS,
     ) -> Command | str:
+        if agent_id and action != "list":
+            return 'agent_id 仅用于 action="list" 查询任务明细；check/cancel/follow_up 等动作请传 task_id。'
         if action == "follow_up":
             return await _follow_up_task_action(
                 task_id=task_id,
@@ -1725,8 +1737,9 @@ def build_task_tool(specs: list[SubagentSpec], run_controls: Any = None) -> Stru
                 runtime=runtime,
                 task_id=task_id,
                 task_ids=task_ids,
+                agent_id=agent_id,
                 status=status,
-                limit=20,
+                limit=200,
                 wait_seconds=wait_seconds,
             )
         return await _start_task_action(
@@ -1846,7 +1859,8 @@ def _default_system_prompt() -> str:
         "只在当前步骤必须拿到结论才能继续、用户要求当轮给出结果，或只是小范围核对/单点查询时，"
         "显式传 background=false 同步等待；已结束子智能体的 follow_up 同样支持该参数。"
         "子智能体任务统一用 subagent 工具管理："
-        'subagent(action="list") 列任务、subagent(action="check", task_id=...) 查单个任务、'
+        'subagent(action="list") 先列子智能体（agent_id + 最近 task_id），'
+        '再传 agent_id 下钻该智能体的任务 ID；subagent(action="check", task_id=...) 查单个任务、'
         'subagent(action="wait", task_ids=[...]) 等一个/多个任务、'
         'subagent(action="cancel", task_id=...) 取消。'
         "系统会在每轮模型调用前附带当前活跃子智能体数量；用户问数量时直接依据该摘要回答，"

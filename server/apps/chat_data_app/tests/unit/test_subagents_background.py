@@ -289,6 +289,7 @@ def test_terminal_report_returns_full_text_when_not_offloaded():
     report = "".join(f"第{i:05d}行\n" for i in range(1500))
     record = SimpleNamespace(
         task_id="task-long",
+        agent_id="agent-stable",
         subagent_type="explore",
         label="盘点语义模型",
         status="completed",
@@ -300,6 +301,7 @@ def test_terminal_report_returns_full_text_when_not_offloaded():
 
     result = _format_task_report(record)
     assert report in result
+    assert "agent_id=agent-stable task_id=task-long" in result
     assert "分页" not in result
     assert "阶段=running" not in result
 

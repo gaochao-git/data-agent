@@ -166,31 +166,63 @@ def _compaction_trail_entry(compaction: Any) -> dict[str, Any] | None:
     }
 
 
-def _trail_insert_index(trail: list[dict[str, Any]], anchor: str) -> int:
-    """锚点消息之后插入；找不到锚点则放在末尾（压缩发生在最新内容附近）。"""
+def _trail_anchor_index(trail: list[dict[str, Any]], anchor: str) -> int:
+    """返回锚点条目之后的位置；锚点已被后续压缩清掉时返回 -1。"""
     if not anchor:
-        return len(trail)
+        return -1
     for index, item in enumerate(trail):
         if str(item.get("id") or "") == anchor:
             return index + 1
-    return len(trail)
+    return -1
+
+
+def _compaction_targets(
+    trail: list[dict[str, Any]], compactions: list[Any]
+) -> list[tuple[int, dict[str, Any]]]:
+    """按发生顺序算出每张压缩卡的目标位置，再按位置升序返回。
+
+    快照是事后从最终消息重建的，压缩会删掉旧消息，所以早期压缩的锚点在
+    最终 trail 里经常已不存在。锚点失效时借用它之后最早的一个已知位置，
+    保持压缩卡的发生顺序；全部失效则均匀铺在过程尾部。注意不能拿绝对下标
+    跟上一张卡比较来判断「堆叠」——真实锚点本来就可能落在上一张卡之前，
+    那样会把所有卡推到末尾挤成一团。
+    """
+    raw: list[tuple[int, dict[str, Any]]] = []
+    for compaction in compactions:
+        entry = _compaction_trail_entry(compaction)
+        if entry is None:
+            continue
+        raw.append((_trail_anchor_index(trail, entry["anchor_message_id"]), entry))
+    found = [target for target, _ in raw if target >= 0]
+    fallback = min(found) if found else max(len(trail) - len(raw), 0)
+    positioned: list[tuple[int, int, dict[str, Any]]] = []
+    for order, (target, entry) in enumerate(raw):
+        if target >= 0:
+            positioned.append((target, order, entry))
+        elif found:
+            positioned.append((fallback, order, entry))
+        else:
+            positioned.append((min(fallback + order, len(trail)), order, entry))
+    positioned.sort(key=lambda item: (item[0], item[1]))
+    return [(target, entry) for target, _, entry in positioned]
 
 
 def _insert_trail_compactions(trail: list[dict[str, Any]], compactions: Any) -> list[dict[str, Any]]:
     """把压缩事件按锚点消息位置插进过程快照，历史回放与主对话一样在流程中看到分隔卡。"""
     if not isinstance(compactions, list) or not compactions:
         return trail
-    merged = list(trail)
+    base = list(trail)
+    merged = list(base)
+    offset = 0
     previous = -2
-    for compaction in compactions:
-        entry = _compaction_trail_entry(compaction)
-        if entry is None:
-            continue
-        index = _trail_insert_index(merged, entry["anchor_message_id"])
-        if index <= previous + 1:
-            # 锚点缺失或重复（压缩后历史消息被删、多次压缩共享同一锚点）时，
-            # 至少隔开一条真实过程条目，避免多张分隔卡堆在一起看不出发生位置。
+    previous_target = -1
+    for target, entry in _compaction_targets(base, compactions):
+        index = min(target + offset, len(merged))
+        if target == previous_target and index <= previous + 1:
+            # 目标位置相同（锚点重复或同时失效）时至少隔开一条真实过程条目。
             index = min(previous + 2, len(merged))
         merged.insert(index, entry)
+        offset += 1
         previous = index
+        previous_target = target
     return merged

@@ -9,7 +9,11 @@ from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, Sys
 
 from apps.chat_data_app.agent.middleware import subagents as subagents_module
 from apps.chat_data_app.agent.middleware.subagent_async import (
+    _format_task_status,
+    _list_async_tasks,
     format_active_subagent_summary,
+    format_subagent_agent_list,
+    format_subagent_agent_tasks,
     format_subagent_task_list_summary,
 )
 from apps.chat_data_app.agent.middleware.subagents import (
@@ -1045,7 +1049,140 @@ def test_task_list_summary_reports_tasks_sessions_and_active_count():
         SimpleNamespace(task_id="t2", agent_session_id="s1", status="running"),
     ]
 
-    assert format_subagent_task_list_summary(records) == ("子智能体任务（共 2 条，涉及 1 个子智能体，活跃 1 条）：")
+    assert format_subagent_task_list_summary(records) == "子智能体（共 1 个，任务 2 条，活跃 1 条）："
+
+
+def test_agent_list_shows_latest_task_without_dumping_all_task_ids():
+    records = [
+        SimpleNamespace(
+            task_id="task-latest",
+            agent_id="agent-stable",
+            agent_session_id="agent-stable",
+            status="running",
+            subagent_type="general",
+            label="检查磁盘空间",
+            turn_index=3,
+        ),
+        SimpleNamespace(
+            task_id="task-old",
+            agent_id="agent-stable",
+            agent_session_id="agent-stable",
+            status="completed",
+            subagent_type="general",
+            label="检查磁盘空间",
+            turn_index=2,
+        ),
+    ]
+
+    output = format_subagent_agent_list(records)
+
+    assert "agent_id=agent-stable" in output
+    assert "最近 task_id=task-latest" in output
+    assert "最近匹配 task_id" not in output
+    assert "task-old" not in output
+    assert 'subagent(action="list", agent_id="<agent_id>")' in output
+
+    filtered_output = format_subagent_agent_list(records, status_filtered=True)
+    assert "最近匹配 task_id=task-latest" in filtered_output
+
+
+def test_agent_task_list_drills_down_all_task_ids_for_one_agent():
+    records = [
+        SimpleNamespace(
+            task_id="task-latest",
+            agent_id="agent-stable",
+            status="running",
+            subagent_type="general",
+            label="检查磁盘空间",
+            turn_index=3,
+        ),
+        SimpleNamespace(
+            task_id="task-old",
+            agent_id="agent-stable",
+            status="completed",
+            subagent_type="general",
+            label="检查磁盘空间",
+            turn_index=2,
+        ),
+    ]
+
+    output = format_subagent_agent_tasks("agent-stable", records)
+
+    assert "agent_id=agent-stable" in output
+    assert "task_id=task-latest" in output
+    assert "task_id=task-old" in output
+    assert "check/cancel/follow_up 使用上面的 task_id" in output
+
+
+def test_task_list_line_separates_agent_id_from_task_id():
+    record = SimpleNamespace(
+        task_id="task-current",
+        agent_id="agent-stable",
+        agent_session_id="agent-stable",
+        status="completed",
+        subagent_type="general",
+        label="检查磁盘空间",
+        is_terminal=True,
+        turn_index=3,
+    )
+
+    line = _format_task_status(record)
+
+    assert "agent_id=agent-stable" in line
+    assert "task_id=task-current" in line
+    assert "轮次=3" in line
+
+
+@pytest.mark.asyncio
+async def test_agent_list_marks_scan_limit():
+    records = [
+        SimpleNamespace(
+            task_id="task-1",
+            agent_id="agent-1",
+            agent_session_id="agent-1",
+            status="completed",
+            subagent_type="general",
+            label="任务一",
+            turn_index=1,
+        ),
+        SimpleNamespace(
+            task_id="task-2",
+            agent_id="agent-2",
+            agent_session_id="agent-2",
+            status="completed",
+            subagent_type="explore",
+            label="任务二",
+            turn_index=1,
+        ),
+    ]
+
+    class _Service:
+        async def list_tasks(self, *_args, **_kwargs):
+            return records
+
+    output = await _list_async_tasks(
+        _Service(),
+        conversation_id="conv-1",
+        user_id="u1",
+        agent_id=None,
+        status=None,
+        limit=2,
+    )
+
+    assert "仅扫描最近 2 条任务" in output
+
+
+@pytest.mark.asyncio
+async def test_agent_id_is_rejected_for_non_list_actions():
+    tool = build_task_tool([_spec()])
+
+    result = await tool.coroutine(
+        action="check",
+        agent_id="agent-stable",
+        runtime=_fake_runtime(),
+    )
+
+    assert 'agent_id 仅用于 action="list"' in result
 
 
 @pytest.mark.asyncio
@@ -1452,6 +1589,48 @@ def test_build_trail_snapshot_keeps_compaction_cards_apart_on_repeated_anchor():
 
     trail = subagents_module._build_trail_snapshot(
         messages, [_compression_record(i, "t2") for i in range(1, 4)]
+    )
+    positions = [i for i, item in enumerate(trail) if item["kind"] == "compaction"]
+    assert len(positions) == 3
+    assert all(after - before >= 2 for before, after in zip(positions, positions[1:], strict=False))
+    assert [trail[i]["id"] for i in positions] == ["c1", "c2", "c3"]
+
+
+def test_build_trail_snapshot_handles_partially_missing_anchors():
+    """早期压缩的锚点被后续压缩删掉时，卡仍按发生顺序分散，不能全堆末尾。"""
+    messages: list = []
+    for i in range(1, 9):
+        messages.append(AIMessage(content=f"第{i}遍", id=f"m{i}", tool_calls=[
+            {"id": f"t{i}", "name": "file_read", "args": {}}
+        ]))
+        messages.append(ToolMessage(content="ok", tool_call_id=f"t{i}"))
+
+    trail = subagents_module._build_trail_snapshot(
+        messages,
+        [
+            _compression_record(1, "已被压缩删除的锚点"),
+            _compression_record(2, "t3"),
+            _compression_record(3, "t6"),
+        ],
+    )
+    positions = [i for i, item in enumerate(trail) if item["kind"] == "compaction"]
+    assert len(positions) == 3
+    assert positions[-1] < len(trail) - 1  # 没有全部堆在末尾
+    assert all(after - before >= 2 for before, after in zip(positions, positions[1:], strict=False))
+    assert [trail[i]["id"] for i in positions] == ["c1", "c2", "c3"]
+
+
+def test_build_trail_snapshot_spreads_cards_when_all_anchors_missing():
+    """全部锚点失效时均匀铺在过程尾部，保持发生顺序且不叠成连续卡。"""
+    messages: list = []
+    for i in range(1, 9):
+        messages.append(AIMessage(content=f"第{i}遍", id=f"m{i}", tool_calls=[
+            {"id": f"t{i}", "name": "file_read", "args": {}}
+        ]))
+        messages.append(ToolMessage(content="ok", tool_call_id=f"t{i}"))
+
+    trail = subagents_module._build_trail_snapshot(
+        messages, [_compression_record(i, "") for i in range(1, 4)]
     )
     positions = [i for i, item in enumerate(trail) if item["kind"] == "compaction"]
     assert len(positions) == 3

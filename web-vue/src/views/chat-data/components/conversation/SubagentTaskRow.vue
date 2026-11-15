@@ -34,9 +34,13 @@ const endedAt = computed(() => {
 const { durationText } = useToolTiming(() => startedAt.value, () => endedAt.value)
 
 const taskTitle = computed(() => props.task.label?.trim() || props.task.description?.trim() || '子智能体任务')
-const copyTaskId = async () => {
-  if (!props.task.task_id) return
-  await copyTextToClipboard(props.task.task_id, '已复制任务 ID')
+const agentId = computed(() => String(
+  props.task.agent_id || props.task.agent_session_id || props.task.root_task_id || props.task.task_id || '',
+))
+const agentIdShort = computed(() => agentId.value.slice(0, 6))
+const copyAgentId = async () => {
+  if (!agentId.value) return
+  await copyTextToClipboard(agentId.value, '已复制智能体 ID')
 }
 const sessionTimeline = computed(() => (props.sessionTasks.length ? props.sessionTasks : [props.task]))
 const sessionToolCallCount = computed(() => sessionTimeline.value.reduce(
@@ -163,21 +167,29 @@ const progressText = computed(() => {
     <div class="flex flex-1 flex-col p-4">
       <div class="flex items-start justify-between gap-3">
         <h3 class="m-0 flex min-w-0 flex-1 flex-wrap items-center gap-x-1.5 gap-y-1" data-subagent-task-title>
-          <span
-            class="inline-flex shrink-0 items-center rounded-sm bg-sky-50 px-1.5 py-0.5 text-[11px] font-semibold leading-none text-sky-600 ring-1 ring-inset ring-sky-100"
-            data-subagent-task-agent-tag
-          >{{ task.subagent_type }}</span>
+          <span class="inline-flex shrink-0 items-center" data-subagent-identity>
+            <span class="inline-flex shrink-0 items-center overflow-hidden rounded-sm bg-sky-50 leading-none text-sky-600 ring-1 ring-inset ring-sky-100">
+              <span class="px-1.5 py-0.5 text-[11px] font-semibold" data-subagent-task-agent-tag>{{ task.subagent_type }}</span>
+              <span class="py-0.5 text-[11px] font-normal text-slate-400">-</span>
+              <span
+                v-if="agentIdShort"
+                class="py-0.5 pr-1.5 font-mono text-[10px] font-normal text-slate-500"
+                :title="agentId"
+                data-subagent-agent-id
+              >{{ agentIdShort }}</span>
+            </span>
+            <button
+              v-if="agentId"
+              type="button"
+              class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-slate-400 transition-all hover:bg-sky-50 hover:text-sky-500"
+              data-subagent-agent-copy-id
+              :title="`复制智能体 ID：${agentId}`"
+              @click.stop="copyAgentId"
+            >
+              <i class="fa-regular fa-copy text-[10px]"></i>
+            </button>
+          </span>
           <span class="line-clamp-2 min-w-0 text-[14px] font-semibold leading-5 text-slate-800" data-subagent-task-title-text>{{ taskTitle }}</span>
-          <button
-            v-if="task.task_id"
-            type="button"
-            class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-slate-300 opacity-70 transition-all hover:bg-sky-50 hover:text-sky-500 group-hover:opacity-100"
-            data-subagent-task-copy-id
-            :title="`复制任务 ID：${task.task_id}`"
-            @click.stop="copyTaskId"
-          >
-            <i class="fa-regular fa-copy text-[10px]"></i>
-          </button>
         </h3>
 
         <div class="flex shrink-0 items-center gap-0.5">

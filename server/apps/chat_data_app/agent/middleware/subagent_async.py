@@ -97,7 +97,10 @@ def _format_task_status(record: SubagentTaskView) -> str:
     label = TASK_STATUS_LABELS.get(record.status, record.status)
     turn_index = int(getattr(record, "turn_index", 1) or 1)
     turn = f" 轮次={turn_index}" if turn_index > 1 else ""
-    prefix = f"[{label}] task_id={record.task_id}{turn} 类型={record.subagent_type} 任务={record.label}"
+    prefix = (
+        f"[{label}] agent_id={_task_agent_id(record)} task_id={record.task_id}{turn} "
+        f"类型={record.subagent_type} 任务={record.label}"
+    )
     if record.is_terminal:
         return prefix
     return f"{prefix}\n  {_task_progress_text(record)}"
@@ -106,6 +109,11 @@ def _format_task_status(record: SubagentTaskView) -> str:
 def _task_session_id(record: SubagentTaskView) -> str:
     """任务对应的子会话 ID；兼容改造前没有 agent_session_id 的记录。"""
     return str(getattr(record, "agent_session_id", "") or record.task_id)
+
+
+def _task_agent_id(record: SubagentTaskView) -> str:
+    """任务所属子智能体的稳定 ID；兼容旧记录回退到子会话或任务 ID。"""
+    return str(getattr(record, "agent_id", "") or _task_session_id(record))
 
 
 def format_active_subagent_summary(records: Sequence[SubagentTaskView]) -> str:
@@ -129,22 +137,58 @@ def format_active_subagent_summary(records: Sequence[SubagentTaskView]) -> str:
 
 
 def format_subagent_task_list_summary(records: Sequence[SubagentTaskView]) -> str:
-    """任务列表抬头：同时给出任务条数、子智能体数和活跃条数。"""
+    """子智能体列表抬头：同时给出智能体数、任务条数和活跃条数。"""
     if not records:
         return "当前会话没有匹配的子智能体任务。"
-    session_ids = {_task_session_id(record) for record in records}
+    agent_ids = {_task_agent_id(record) for record in records}
     active = sum(1 for record in records if record.status in ACTIVE_TASK_STATUSES)
-    return f"子智能体任务（共 {len(records)} 条，涉及 {len(session_ids)} 个子智能体，活跃 {active} 条）："
+    return f"子智能体（共 {len(agent_ids)} 个，任务 {len(records)} 条，活跃 {active} 条）："
+
+
+def format_subagent_agent_list(records: Sequence[SubagentTaskView], *, status_filtered: bool = False) -> str:
+    """按智能体分组展示最近状态；任务 ID 明细留到二次查询。"""
+    grouped: dict[str, list[SubagentTaskView]] = {}
+    for record in records:
+        grouped.setdefault(_task_agent_id(record), []).append(record)
+    lines: list[str] = []
+    for agent_id, tasks in grouped.items():
+        latest = tasks[0]
+        status = TASK_STATUS_LABELS.get(latest.status, latest.status)
+        turn_index = int(getattr(latest, "turn_index", 1) or 1)
+        latest_label = "最近匹配 task_id" if status_filtered else "最近 task_id"
+        lines.append(
+            f"- agent_id={agent_id} 类型={latest.subagent_type} 轮次={turn_index} "
+            f"{latest_label}={latest.task_id} 状态={status} 任务={_truncate_text(latest.label, 100, '任务标题')}"
+        )
+    lines.append('查看某个子智能体的任务 ID：subagent(action="list", agent_id="<agent_id>")。')
+    return "\n".join(lines)
+
+
+def format_subagent_agent_tasks(agent_id: str, records: Sequence[SubagentTaskView]) -> str:
+    """某个智能体名下的任务 ID 明细，供二次下钻查询。"""
+    if not records:
+        return f"没有找到子智能体 {agent_id} 的任务。"
+    subagent_type = records[0].subagent_type
+    lines = [f"子智能体 agent_id={agent_id}（类型={subagent_type}）的任务（共 {len(records)} 条）："]
+    for record in records:
+        status = TASK_STATUS_LABELS.get(record.status, record.status)
+        turn_index = int(getattr(record, "turn_index", 1) or 1)
+        lines.append(
+            f"- task_id={record.task_id} 状态={status} 轮次={turn_index} "
+            f"任务={_truncate_text(record.label, 100, '任务标题')}"
+        )
+    lines.append("check/cancel/follow_up 使用上面的 task_id；agent_id 只用于识别子智能体。")
+    return "\n".join(lines)
 
 
 def _format_task_report(record: SubagentTaskView) -> str:
     """终态任务报告：有落盘路径返回路径+预览，否则直接返回完整正文。"""
     body = record.report or record.error or "（无报告正文）"
-    session_id = str(getattr(record, "agent_session_id", "") or getattr(record, "root_task_id", "") or record.task_id)
     turn_index = int(getattr(record, "turn_index", 1) or 1)
     lines = [
-        f"[{TASK_STATUS_LABELS.get(record.status, record.status)}] task_id={record.task_id} "
-        f"类型={record.subagent_type} 子会话={session_id} 轮次={turn_index}",
+        f"[{TASK_STATUS_LABELS.get(record.status, record.status)}] "
+        f"agent_id={_task_agent_id(record)} task_id={record.task_id} "
+        f"类型={record.subagent_type} 轮次={turn_index}",
         f"任务：{record.label}",
     ]
     report_path = str(getattr(record, "report_path", "") or "")
@@ -211,7 +255,7 @@ async def _spawn_background_task(
         conversation_id,
     )
     return (
-        f"子智能体已在后台启动（task_id={record.task_id}，类型={subagent_type}）。"
+        f"子智能体已在后台启动（agent_id={record.agent_id}，task_id={record.task_id}，类型={subagent_type}）。"
         f"超时={record.timeout_seconds} 秒。任务不会阻塞当前对话：完成/失败/超时后系统会自动唤醒"
         "一条隐藏通知（不需要等用户先发消息）；期间可继续其他工作，也可用 "
         'subagent 查询：action="list" 列任务，action="check" 查单个，action="wait" 等结果。'
@@ -425,7 +469,7 @@ async def _spawn_follow_up_task(
     )
     return (
         f"已向子智能体 {target.subagent_type} 发起第 {record.turn_index} 轮追问"
-        f"（task_id={record.task_id}，子会话={record.agent_session_id}，上一轮={base.task_id}）。"
+        f"（agent_id={record.agent_id}，task_id={record.task_id}，上一轮 task_id={base.task_id}）。"
         "任务在后台执行，会沿用该子会话的完整消息历史；完成后自动唤醒并注入通知，"
         f'也可用 subagent(action="check", task_id="{record.task_id}") 查询。'
     )
@@ -481,7 +525,8 @@ async def _cancel_async_task(
     if record.status in TERMINAL_TASK_STATUSES:
         return f"子智能体任务 {normalized} 已是 {TASK_STATUS_LABELS.get(record.status, record.status)}，无需取消。"
     return (
-        f"已提交取消请求（task_id={normalized}）。执行节点会在下一次心跳时停止任务，"
+        f"已提交取消请求（agent_id={_task_agent_id(record)}，task_id={normalized}）。"
+        "执行节点会在下一次心跳时停止任务，"
         f'最终状态可稍后 subagent(action="check", task_id="{normalized}") 查询。'
     )
 
@@ -491,10 +536,11 @@ async def _list_async_tasks(
     *,
     conversation_id: str,
     user_id: str | None,
+    agent_id: str | None,
     status: str | None,
     limit: int,
 ) -> str:
-    """列出当前会话子智能体任务。"""
+    """先列子智能体；指定 agent_id 时再下钻该智能体的任务 ID。"""
     if not user_id:
         return "当前会话缺少用户身份。"
     records = await service.list_tasks(
@@ -505,7 +551,21 @@ async def _list_async_tasks(
     )
     if not records:
         return "当前会话没有匹配的后台子智能体任务。"
-    return format_subagent_task_list_summary(records) + "\n" + "\n".join(_format_task_status(item) for item in records)
+    truncated_note = (
+        f"\n注：仅扫描最近 {limit} 条任务；更早记录请加 status 或 agent_id 缩小范围。"
+        if len(records) >= limit
+        else ""
+    )
+    normalized_agent_id = str(agent_id or "").strip()
+    if normalized_agent_id:
+        matched = [item for item in records if _task_agent_id(item) == normalized_agent_id]
+        return format_subagent_agent_tasks(normalized_agent_id, matched) + truncated_note
+    return (
+        format_subagent_task_list_summary(records)
+        + "\n"
+        + format_subagent_agent_list(records, status_filtered=bool(str(status or "").strip()))
+        + truncated_note
+    )
 
 
 async def _wait_async_tasks(
@@ -537,6 +597,7 @@ async def manage_async_task(
     runtime: ToolRuntime,
     task_id: str | None = None,
     task_ids: list[str] | None = None,
+    agent_id: str | None = None,
     status: str | None = None,
     limit: int = 20,
     wait_seconds: int = DEFAULT_WAIT_TIMEOUT_SECONDS,
@@ -551,6 +612,7 @@ async def manage_async_task(
             service,
             conversation_id=conversation_id,
             user_id=user_id,
+            agent_id=agent_id,
             status=status,
             limit=limit,
         )

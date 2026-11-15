@@ -28,17 +28,28 @@ const task = (overrides: Partial<SubagentTaskRecord> = {}): SubagentTaskRecord =
 })
 
 describe('SubagentTaskRow', () => {
-  it('renders agent type as a tag and copies the task id', async () => {
-    const background = task({ subagent_type: 'general' })
+  it('renders the stable agent id with a copy button for the full id', async () => {
+    const taskId = 'b9b2242e9f1c44e38a64c62e80db1235'
+    const agentId = 'fc1a5456a3604864a0454048b2664c10'
+    const background = task({ task_id: taskId, agent_id: agentId, subagent_type: 'general' })
     const wrapper = mount(SubagentTaskRow, {
       props: { task: background },
     })
 
     expect(wrapper.find('[data-subagent-task-agent-tag]').text()).toBe('general')
-    const copyButton = wrapper.find('[data-subagent-task-copy-id]')
-    expect(copyButton.attributes('title')).toContain('task-1')
+    const identity = wrapper.find('[data-subagent-identity]')
+    const shortId = wrapper.find('[data-subagent-agent-id]')
+    expect(shortId.text()).toBe('fc1a54')
+    expect(identity.text()).toContain('general-fc1a54')
+    expect(shortId.attributes('title')).toBe(agentId)
+    const copyButton = wrapper.find('[data-subagent-agent-copy-id]')
+    expect(copyButton.attributes('title')).toContain(agentId)
+    expect(identity.find('[data-subagent-agent-id]').exists()).toBe(true)
+    expect(identity.find('[data-subagent-agent-copy-id]').exists()).toBe(true)
+    expect(wrapper.find('[data-subagent-task-title-text]').element.previousElementSibling).toBe(identity.element)
     await copyButton.trigger('click')
-    expect(copyTextToClipboard).toHaveBeenCalledWith('task-1', '已复制任务 ID')
+    expect(copyTextToClipboard).toHaveBeenCalledWith(agentId, '已复制智能体 ID')
+    expect(copyTextToClipboard).not.toHaveBeenCalledWith(taskId, '已复制任务 ID')
     expect(wrapper.emitted('open')).toBeUndefined()
   })
 
@@ -117,7 +128,7 @@ describe('SubagentTaskRow', () => {
     expect(context.attributes('title')).toBe('当前输入 12.8k · 压缩阈值 44.8k · 上下文窗口 128k')
     const taskType = wrapper.find('[data-subagent-task-agent-tag]')
     expect(taskType.text()).toBe('explore')
-    expect(taskType.classes()).toContain('rounded-sm')
+    expect(taskType.element.parentElement?.classList.contains('rounded-sm')).toBe(true)
     expect(taskType.classes()).toContain('font-semibold')
     expect(wrapper.find('[data-subagent-task-created]').text()).toContain('创建 2026-11-15 10:00')
     expect(wrapper.find('[data-subagent-task-finished]').text()).toContain('结束 2026-11-15 10:03')
