@@ -175,6 +175,18 @@ class SubagentTaskRecord:
             return 1
 
     @property
+    def execution_mode(self) -> str:
+        """sync=前台同步等待；background=后台独立执行。旧任务默认按后台处理。"""
+        mode = str(self.meta.get("execution_mode") or "").strip()
+        return mode if mode in {"sync", "background"} else "background"
+
+    @property
+    def notify_on_finish(self) -> bool:
+        """同步任务由当前轮直接返回结果，不生成完成通知；旧任务默认通知。"""
+        value = self.meta.get("notify_on_finish")
+        return True if value is None else bool(value)
+
+    @property
     def progress(self) -> dict[str, Any]:
         progress = self.meta.get("progress")
         if not isinstance(progress, dict):
@@ -280,6 +292,7 @@ class SubagentTaskRecord:
             "finished_at": _iso(self.finished_at),
             "notified_at": _iso(self.notified_at),
             "timeout_seconds": self.timeout_seconds,
+            "execution_mode": self.execution_mode,
         }
         if include_report:
             payload["report"] = self.report
@@ -531,6 +544,8 @@ class SubagentTaskService:
                 "turn_index": turn_index,
                 "operator_name": operator_name,
                 "timeout_seconds": effective_timeout,
+                "execution_mode": "background",
+                "notify_on_finish": True,
                 "progress": {},
             }
             row = await self._dao.create(
@@ -547,11 +562,34 @@ class SubagentTaskService:
                 operator_name=operator_name,
             )
             logger.info(
-                "后台子智能体任务已登记: task_id=%s conversation_id=%s type=%s",
+                "子智能体任务已登记: task_id=%s conversation_id=%s type=%s",
                 task_id,
                 conversation_id,
                 subagent_type,
             )
+            record = SubagentTaskRecord.from_row(row)
+        await self.publish_task_update(record)
+        return record
+
+    async def configure_task_execution(
+        self,
+        task_id: str,
+        owner_token: str,
+        *,
+        execution_mode: str,
+    ) -> SubagentTaskRecord | None:
+        """在任务启动前写入执行模式；同步任务据此关闭完成通知。"""
+        normalized_mode = "sync" if execution_mode == "sync" else "background"
+        async with get_session() as session:
+            now = await self._dao.now(session)
+            row = await self._dao.get(session, task_id, for_update=True)
+            if row is None or row.owner_token != owner_token or row.record_status != TASK_STATUS_PENDING:
+                return None
+            meta = load_task_meta(row.record_meta)
+            meta["execution_mode"] = normalized_mode
+            meta["notify_on_finish"] = normalized_mode != "sync"
+            row.record_meta = _task_meta_text(meta)
+            row.update_time = now
             record = SubagentTaskRecord.from_row(row)
         await self.publish_task_update(record)
         return record
@@ -1082,6 +1120,10 @@ class SubagentTaskService:
             # TEXT 列（64KB），写进去会 DataError 1406 并回滚收口事务，任务
             # 只能等租约过期变 lost。改存 record_content（MEDIUMTEXT）的信封。
             meta.pop("result_meta", None)
+            notify_on_finish = bool(meta.get("notify_on_finish", True))
+            if not notify_on_finish and row.consumed_time is None:
+                # 同步任务在父 Run 内直接返回结论，不能再派生完成通知 Run。
+                row.consumed_time = now
             meta.update(
                 {
                     "finished_at": now.isoformat(),
@@ -1287,6 +1329,7 @@ class SubagentTaskService:
                         "record_meta": _task_meta_text(meta),
                         "owner_token": None,
                         "lease_expire_time": None,
+                        **({"consumed_time": now} if not bool(meta.get("notify_on_finish", True)) else {}),
                         "update_time": now,
                         "update_by": "system",
                         "update_by_name": "system",
@@ -1313,7 +1356,12 @@ class SubagentTaskService:
         dispatched = 0
         for row in rows:
             try:
-                if await self._dispatch_task_notification(SubagentTaskRecord.from_row(row)):
+                record = SubagentTaskRecord.from_row(row)
+                if not record.notify_on_finish:
+                    # 兼容上线前已存在、尚未消费的同步任务行：静默标记已处理。
+                    await self.mark_viewed(record)
+                    continue
+                if await self._dispatch_task_notification(record):
                     dispatched += 1
             except Exception:
                 logger.error("后台子智能体完成通知派发失败: task_id=%s", row.message_id, exc_info=True)

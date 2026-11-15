@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 后台子智能体会话详情：与主对话消息列表同构，并按轮次连续展示多轮问答。
+ * 子智能体会话详情：与主对话消息列表同构，并按轮次连续展示多轮问答。
  *
  * 每一轮任务书是 user 气泡，子智能体过程 + 最终报告是 assistant 气泡；工作过程折叠、
  * 思考块、内层工具卡、查询结果全部复用 MessageItem。状态/类型/上下文用量放在
@@ -108,7 +108,7 @@ const toolCallForTask = (task: SubagentTaskRecord): ToolCallInfo => ({
   args: {
     subagent_type: task.subagent_type,
     description: task.description,
-    background: true,
+    background: task.execution_mode !== 'sync',
     label: task.label,
   },
   result: task.report || '',

@@ -101,7 +101,7 @@ const props = defineProps({
   /** 与浮层文本框共享的对话草稿；在浮层中编辑时回写主输入框。 */
   documentAnnotationDraft: { type: String, default: '' },
   documentAnnotationDraftHandler: { type: Function as PropType<(value: string) => void>, default: null },
-  /** 会话后台任务列表；任务详情 tab 从这里取标题/状态，完整报告由 loadSubagentTaskDetail 拉取。 */
+  /** 会话子智能体任务列表；任务详情 tab 从这里取标题/状态，完整报告由 loadSubagentTaskDetail 拉取。 */
   subagentTasks: { type: Array as PropType<SubagentTaskRecord[]>, default: () => [] },
   subagentTaskDetails: { type: Object as PropType<Record<string, SubagentTaskRecord>>, default: () => ({}) },
   subagentTaskCancellingIds: { type: Array as PropType<string[]>, default: () => [] },
@@ -341,9 +341,9 @@ const findSubagentTaskByToolCall = (toolCallId: string): SubagentTaskRecord | nu
 }
 
 const openToolPanelTab = (toolCall: ToolCallInfo) => {
-  // 后台 subagent 调用的工具结果只是「已启动」，真正过程/报告在任务账本里；
+  // subagent 调用的工具结果只是「已开始/已结束」，真正过程与报告在任务账本里；
   // 能按 parent_tool_call_id 找到任务时直接进任务详情页（与「子智能体管理」
-  // 同一个页面），避免停在空工具详情。前台 subagent 没有账本记录，走原链路。
+  // 同一个页面），避免同步与异步出现两套展示。
   if (isSubagentToolName(toolCall.tool_name)) {
     const task = findSubagentTaskByToolCall(toolCall.tool_call_id)
     if (task) {
@@ -370,7 +370,7 @@ const openFilePanelTab = (path: string) => {
   selectPanelTab(`file:${path}`)
 }
 
-/** 后台任务独立 tab：同一子会话只保留一个 tab，追问时切到最新一轮。 */
+/** 子智能体任务独立 tab：同一子会话只保留一个 tab，追问时切到最新一轮。 */
 const openSubagentTaskPanelTab = (task: SubagentTaskRecord) => {
   const sessionId = subagentTaskSessionId(task)
   const sessionRoot = props.subagentTasks.find(item => item.task_id === sessionId)
@@ -380,7 +380,7 @@ const openSubagentTaskPanelTab = (task: SubagentTaskRecord) => {
   activateTab({
     id: tabId,
     kind: 'subagentTask',
-    title: sessionRoot?.label?.trim() || task.label || task.description || '后台任务',
+    title: sessionRoot?.label?.trim() || task.label || task.description || '子智能体任务',
     taskId: task.task_id,
   })
   selectPanelTab(tabId)
@@ -1561,7 +1561,7 @@ defineExpose({
     </div>
 
     <div v-show="isToolTabActive" class="min-h-0">
-      <!-- 后台任务 tab：过程/报告直接来自任务账本详情，不依赖父 Run 的工具调用 -->
+      <!-- 子智能体任务 tab：过程/报告直接来自任务账本详情，不依赖父 Run 的工具调用 -->
       <template v-for="taskTab in subagentTaskTabs" :key="taskTab.id">
         <SubagentTaskProcessView
           v-if="subagentTaskForTab(taskTab)"

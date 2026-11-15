@@ -20,7 +20,14 @@ steering 插话、工具计时与单会话调用频率告警、历史消息时�
 报告；超长报告会落盘并返回 `result_path`，可直接用 `file_read` 读取完整正文，
 不对报告做分页。通知里的报告只是预览，不代表任务结论被截断。
 
-每个主对话创建的子智能体总数由
+同步模式（`start` 或 `follow_up` 传 `background=false`）同样登记 `execution_mode=sync`
+的任务行，并在任务详情中展示与后台任务一致的过程、报告、上下文与 token 用量；区别只在
+执行体阻塞当前轮、结果直接作为 ToolMessage 返回，并且收口后不生成完成通知、不自动唤醒
+主会话。追问的同步/后台模式可逐轮切换，但始终沿用同一 `agent_session_id`、线性
+`parent_task_id` 与 `turn_index`。同步过程事件同时写父对话流与任务详情流，父 Run 内
+打开的详情页不会出现空过程。
+
+每个主对话创建的子智能体总数（同步与后台任务都计入）由
 `CHAT_DATA_SUBAGENT_MAX_SESSIONS_PER_CONVERSATION` 限制；该额度按
 `agent_session_id` 去重，追问沿用原会话不占新额度。任务相似时，提示词要求主智能体
 先 `subagent(action="list")` 找到已有子智能体并用 `follow_up` 续写；相似度不做代码层

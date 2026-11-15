@@ -58,7 +58,12 @@ export function useBackgroundRunWakeup(options: BackgroundRunWakeupOptions) {
     let becameTerminal = false
     for (const task of tasks) {
       const previous = lastStatuses.get(task.task_id)
-      if (previous && isSubagentTaskActive({ status: previous }) && !isSubagentTaskActive(task)) {
+      if (
+        task.execution_mode !== 'sync'
+        && previous
+        && isSubagentTaskActive({ status: previous })
+        && !isSubagentTaskActive(task)
+      ) {
         becameTerminal = true
       }
       lastStatuses.set(task.task_id, task.status)

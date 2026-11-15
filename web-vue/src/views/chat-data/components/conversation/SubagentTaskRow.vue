@@ -28,7 +28,7 @@ const endedAt = computed(() => {
 })
 const { durationText } = useToolTiming(() => startedAt.value, () => endedAt.value)
 
-const taskTitle = computed(() => props.task.label?.trim() || props.task.description?.trim() || '后台任务')
+const taskTitle = computed(() => props.task.label?.trim() || props.task.description?.trim() || '子智能体任务')
 
 const statusLabel = computed(() => {
   const label = props.task.status_label?.trim()
@@ -115,11 +115,11 @@ const progressText = computed(() => {
         </h3>
 
         <button
-          v-if="active"
+          v-if="active && task.execution_mode !== 'sync'"
           type="button"
           class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-slate-300 opacity-70 transition-all hover:bg-rose-50 hover:text-rose-500 group-hover:opacity-100"
           :disabled="cancelling"
-          title="取消后台任务"
+          title="取消子智能体任务"
           @click.stop="emit('cancel', task)"
         >
           <i :class="cancelling ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-xmark'" class="text-[11px]"></i>

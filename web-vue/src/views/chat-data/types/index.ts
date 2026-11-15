@@ -648,7 +648,7 @@ export interface SubagentTaskResultMeta {
   [key: string]: unknown
 }
 
-/** 后台子智能体任务账本（列表接口不含 report/result_meta，详情接口返回完整字段）。 */
+/** 子智能体任务账本（列表接口不含 report/result_meta，详情接口返回完整字段）。 */
 export interface SubagentTaskRecord {
   task_id: string
   conversation_id: string
@@ -675,6 +675,8 @@ export interface SubagentTaskRecord {
   description: string
   status: SubagentTaskStatus
   status_label: string
+  /** sync=当前轮同步等待；background=后台独立执行。旧接口缺省按后台处理。 */
+  execution_mode?: 'sync' | 'background'
   pending_interrupt?: Record<string, unknown> | null
   pause_requested?: boolean
   progress: SubagentTaskProgress

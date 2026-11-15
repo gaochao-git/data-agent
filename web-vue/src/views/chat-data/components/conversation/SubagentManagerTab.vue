@@ -41,8 +41,8 @@ const sessionCardTask = (session: SubagentTaskSession): SubagentTaskRecord => ({
       <span class="mx-auto flex h-10 w-10 items-center justify-center rounded-full bg-white text-slate-300 ring-1 ring-slate-200">
         <i class="fa-solid fa-wand-magic-sparkles text-sm"></i>
       </span>
-      <p class="mt-3 text-[12px] font-medium text-slate-600">还没有后台子智能体任务</p>
-      <p class="mt-1 text-[11px] text-slate-400">在对话中派发后台任务后，会在这里汇总进度与报告。</p>
+      <p class="mt-3 text-[12px] font-medium text-slate-600">还没有子智能体任务</p>
+      <p class="mt-1 text-[11px] text-slate-400">在对话中派发子智能体后，会在这里汇总进度与报告。</p>
     </div>
   </section>
 </template>

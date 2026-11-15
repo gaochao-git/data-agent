@@ -74,6 +74,7 @@ from ..contracts.subagent_task import (
     TASK_STATUS_PAUSED,
     TASK_STATUS_TIMEOUT,
     TASK_STATUS_WAITING_APPROVAL,
+    SubagentTaskCapacityError,
     SubagentTaskPort,
     SubagentTaskView,
     get_subagent_task_service,
@@ -87,9 +88,11 @@ from .subagent_async import (
     DEFAULT_WAIT_TIMEOUT_SECONDS,
     MAX_WAIT_TASKS,
     _append_partial_report,
+    _close_aborted_sync_task,
     _get_subagent_stream_writer,
     _launch_task_runner,
     _read_conversation_context,
+    _run_sync_follow_up,
     _spawn_background_task,
     _spawn_follow_up_task,
     _truncate_text,
@@ -253,7 +256,7 @@ class TaskToolArgs(BaseModel):
         description=(
             "start=派发子智能体（默认）；list=列后台任务；check=查单个任务；"
             "wait=等待一个或多个任务终态；cancel=取消任务；"
-            "follow_up=对已结束的后台子智能体继续追问；steer=给运行中的子智能体插话；"
+            "follow_up=对已结束的子智能体继续追问（可同步或后台）；steer=给运行中的子智能体插话；"
             "pause=请求在下一个安全点暂停；resume=恢复已暂停任务；approve/reject=审批子智能体待执行工具。"
         ),
     )
@@ -273,7 +276,7 @@ class TaskToolArgs(BaseModel):
     background: bool = Field(
         default=True,
         description=(
-            "true（默认）=后台执行：立即返回任务 ID 不阻塞，完成后报告自动注入对话；"
+            "action=start/follow_up 时生效。true（默认）=后台执行：立即返回任务 ID 不阻塞，完成后报告自动注入对话；"
             "适合批量盘点/全量扫描、多份交付物、多个可并行独立子任务，"
             "或当轮不需要其结论的任务。false=当前步骤依赖其结论时同步等待。"
         ),
@@ -825,8 +828,15 @@ async def _build_task_tool_impl(
             f"（约 {context_usage.get('used_tokens', 0)} / {context_usage.get('threshold_tokens', 0)} tokens）"
             "并已提前收尾，以下结论可能不完整。\n\n" + report
         )
+    if state_sink is not None:
+        # 账本需要保留完整原文；报告外置只会改写返回给父上下文的 content。
+        state_sink["report"] = report
+        state_sink["tool_status"] = tool_status
     if tool_status == "success" and offload_report:
-        report, _recovery = await _offload_subagent_report(report, runtime)
+        report, recovery = await _offload_subagent_report(report, runtime)
+        if state_sink is not None and recovery is not None:
+            state_sink["report_path"] = recovery["result_path"]
+            state_sink["report_size_chars"] = recovery["result_size_chars"]
     # 过程快照盖在 ToolMessage 上随消息持久化：直播过程走 SSE，历史回放
     # 走 conversation_event 的 tool_result payload（见
     # conversation_event_service._serialize_tool_message）。
@@ -1278,15 +1288,34 @@ async def _follow_up_task_action(
     runtime: ToolRuntime,
     run_controls: Any,
     specs: list[SubagentSpec],
+    background: bool,
+    compiled: dict[str, Any],
     background_runnables: dict[str, Any],
-) -> str:
+) -> Command | str:
+    async def _sync_runner(service: SubagentTaskPort, record: SubagentTaskView) -> Command | str:
+        async def _run(started: SubagentTaskView) -> Command | str:
+            return await _run_registered_sync_task(
+                service,
+                started,
+                specs,
+                compiled,
+                started.subagent_type,
+                started.description,
+                runtime,
+                history_loader=lambda: _load_background_history(service, started),
+            )
+
+        return await _run_sync_follow_up(service, record, _run)
+
     return await _spawn_follow_up_task(
         task_id=task_id,
         message=message,
         available_types=set(background_runnables),
         runtime=runtime,
         run_controls=run_controls,
+        background=background,
         runner_factory=lambda record, snapshot: _run_background_task(record, snapshot, specs, background_runnables),
+        sync_runner=_sync_runner,
     )
 
 
@@ -1299,6 +1328,232 @@ def _raise_tool_error(message: str) -> NoReturn:
     ``status="error"`` 并按"预期校验错误"降级日志。
     """
     raise ValueError(message)
+
+
+def _tee_stream_writers(*writers: Any) -> Callable[[Any], None] | None:
+    """一路过程同时写父对话流与任务详情流；单路失败不影响另一条链路。"""
+    active = tuple(writer for writer in writers if callable(writer))
+    if not active:
+        return None
+
+    def _write(payload: Any) -> None:
+        for writer in active:
+            try:
+                writer(payload)
+            except Exception:
+                logger.debug("[tools] 子智能体过程事件单路写入失败，继续其他链路", exc_info=True)
+
+    return _write
+
+
+def _sync_task_outcome(
+    command: Any,
+    partial_state: dict[str, Any],
+) -> tuple[str, str, str, dict[str, Any]]:
+    """从同步 Command 与执行快照生成账本收口数据。"""
+    status, report, error, result_meta = _extract_background_result(command)
+    if status == TASK_STATUS_COMPLETED:
+        # ToolMessage 可能已被外置成预览信封；任务账本保留完整原文。
+        ledger_report = str(partial_state.get("report") or "").strip()
+        if ledger_report:
+            report = ledger_report
+    report_path = str(partial_state.get("report_path") or "").strip()
+    if report_path:
+        result_meta["report_path"] = report_path
+        result_meta["report_size_chars"] = int(partial_state.get("report_size_chars") or len(report))
+    return status, report, error, result_meta
+
+
+def _sync_task_failure_outcome(
+    exc: BaseException, partial_state: dict[str, Any]
+) -> tuple[str, str, str, dict[str, Any]]:
+    """同步执行被取消或基础设施异常时，仍按统一终态收口。"""
+    partial_report, result_meta = _capture_partial_background_result(partial_state)
+    if isinstance(exc, asyncio.CancelledError):
+        return TASK_STATUS_CANCELLED, _append_partial_report("同步子智能体已取消。", partial_report), "", result_meta
+    error = str(exc) or exc.__class__.__name__
+    report = f"同步子智能体执行异常：{_truncate_text(error, 300)}"
+    logger.error("[tools] 同步子智能体执行异常: %s", exc, exc_info=True)
+    return TASK_STATUS_FAILED, _append_partial_report(report, partial_report), error, result_meta
+
+
+async def _register_sync_task(
+    *,
+    description: str,
+    subagent_type: str,
+    label: str | None,
+    runtime: ToolRuntime,
+    run_controls: Any,
+) -> tuple[SubagentTaskPort, SubagentTaskView] | None:
+    """登记并启动同步任务；账本不可用时返回 None 由调用方降级执行。"""
+    service = get_subagent_task_service()
+    conversation_id, user_id, operator_name, parent_run_id = _read_conversation_context(runtime, run_controls)
+    if service is None or not user_id:
+        logger.debug(
+            "[tools] 同步子智能体缺少任务账本或用户身份，按无账本模式执行: conversation_id=%s",
+            conversation_id,
+        )
+        return None
+    try:
+        record = await service.create_task(
+            conversation_id=conversation_id,
+            user_id=user_id,
+            parent_run_id=parent_run_id,
+            subagent_type=subagent_type,
+            description=description,
+            label=label,
+            parent_tool_call_id=str(getattr(runtime, "tool_call_id", "") or ""),
+            parent_owner_token=str(getattr(run_controls, "owner_token", None) or ""),
+            timeout_seconds=None,
+            operator_name=operator_name,
+        )
+    except SubagentTaskCapacityError as exc:
+        _raise_tool_error(str(exc))
+    except Exception:
+        # 同步链路的首要契约是把结论带回当前轮；账本故障不能阻断业务执行。
+        logger.error(
+            "[tools] 同步子智能体任务登记失败，降级为无账本执行: conversation_id=%s type=%s",
+            conversation_id,
+            subagent_type,
+            exc_info=True,
+        )
+        return None
+    try:
+        configured = await service.configure_task_execution(
+            record.task_id,
+            record.owner_token or "",
+            execution_mode="sync",
+        )
+        started = await service.start_task(record.task_id, record.owner_token or "")
+    except Exception:
+        logger.error("[tools] 同步子智能体任务启动失败，降级为无账本执行: task_id=%s", record.task_id, exc_info=True)
+        await _close_aborted_sync_task(service, record)
+        return None
+    if configured is None:
+        await _close_aborted_sync_task(service, record)
+        _raise_tool_error("同步子智能体任务启动失败：任务已被取消或归属发生变化。")
+    if started is None:
+        await _close_aborted_sync_task(service, record)
+        _raise_tool_error("同步子智能体任务启动失败：任务已被取消或归属发生变化。")
+    return service, started
+
+
+async def _run_registered_sync_task(
+    service: SubagentTaskPort,
+    started: SubagentTaskView,
+    specs: list[SubagentSpec],
+    compiled: dict[str, Any],
+    subagent_type: str,
+    description: str,
+    runtime: ToolRuntime,
+    history_loader: Callable[[], Awaitable[list[Any]]] | None = None,
+) -> Any:
+    """执行已登记的同步任务：过程双写、心跳续租、统一收口。"""
+
+    event_writer = service.create_event_writer(started)
+    await event_writer.start()
+    parent_writer = _get_subagent_stream_writer(True, get_stream_writer)
+    writer = _tee_stream_writers(event_writer, parent_writer)
+    progress: dict[str, Any] = {"phase": "running"}
+    partial_state: dict[str, Any] = {}
+    heartbeat = asyncio.create_task(
+        _watch_background_task(
+            started.task_id,
+            started.owner_token or "",
+            progress,
+            asyncio.current_task(),
+            service,
+        ),
+        name=f"chatdata-subagent-sync-watch-{started.task_id}",
+    )
+    command: Any = None
+    failure: BaseException | None = None
+    history: list[Any] | None = None
+    try:
+        if history_loader is not None:
+            history = await history_loader()
+        command = await _build_task_tool_impl(
+            specs,
+            compiled,
+            subagent_type,
+            description,
+            runtime,
+            stream_events=True,
+            stream_writer=writer,
+            # 父上下文仍按原口径外置超长报告；完整原文由账本保存。
+            offload_report=True,
+            progress_callback=lambda snapshot: progress.update(snapshot),
+            state_sink=partial_state,
+            execution=_TaskExecution(
+                background_task_id=started.task_id,
+                background_agent_session_id=started.agent_session_id,
+                background_owner_token=started.owner_token,
+                history=history,
+            ),
+        )
+    except BaseException as exc:
+        failure = exc
+    finally:
+        heartbeat.cancel()
+        with suppress(asyncio.CancelledError):
+            await heartbeat
+        try:
+            await event_writer.aclose()
+        except Exception:
+            logger.warning("[tools] 同步子智能体过程流关闭失败: task_id=%s", started.task_id, exc_info=True)
+
+    if failure is None:
+        status, report, error, result_meta = _sync_task_outcome(command, partial_state)
+    else:
+        status, report, error, result_meta = _sync_task_failure_outcome(failure, partial_state)
+    try:
+        await service.finish_task(
+            started.task_id,
+            started.owner_token or "",
+            status=status,
+            report=report,
+            error=error,
+            result_meta=result_meta,
+            history=_session_history_payload(started, [], partial_state),
+        )
+    except Exception:
+        # 账本收口失败会由租约回收兜底；不能把已经拿到的同步结论丢掉。
+        logger.error("[tools] 同步子智能体任务收口失败: task_id=%s", started.task_id, exc_info=True)
+    if failure is not None:
+        raise failure
+    return command
+
+
+async def _run_sync_task(
+    *,
+    description: str,
+    subagent_type: str,
+    label: str | None,
+    runtime: ToolRuntime,
+    run_controls: Any,
+    specs: list[SubagentSpec],
+    compiled: dict[str, Any],
+) -> Any:
+    """同步执行也登记统一任务账本，但不派生完成通知、不唤醒会话。"""
+    registered = await _register_sync_task(
+        description=description,
+        subagent_type=subagent_type,
+        label=label,
+        runtime=runtime,
+        run_controls=run_controls,
+    )
+    if registered is None:
+        return await _build_task_tool_impl(specs, compiled, subagent_type, description, runtime)
+    service, started = registered
+    return await _run_registered_sync_task(
+        service,
+        started,
+        specs,
+        compiled,
+        subagent_type,
+        description,
+        runtime,
+    )
 
 
 async def _start_task_action(
@@ -1318,11 +1573,19 @@ async def _start_task_action(
         _raise_tool_error('action="start" 需要提供 description（任务书）。')
     if not subagent_type or not subagent_type.strip():
         _raise_tool_error('action="start" 需要提供 subagent_type。')
-    if background and compiled.get(subagent_type) is None:
+    if compiled.get(subagent_type) is None:
         allowed = ", ".join(f"`{name}`" for name in compiled)
         _raise_tool_error(f"无法调用子智能体 {subagent_type}：类型不存在，可用类型为 {allowed}")
     if not background:
-        return await _build_task_tool_impl(specs, compiled, subagent_type, description, runtime)
+        return await _run_sync_task(
+            description=description,
+            subagent_type=subagent_type,
+            label=label,
+            runtime=runtime,
+            run_controls=run_controls,
+            specs=specs,
+            compiled=compiled,
+        )
     background_runnables = background_cache.get()
     return await _spawn_background_task(
         subagent_type=subagent_type,
@@ -1567,6 +1830,8 @@ def build_task_tool(specs: list[SubagentSpec], run_controls: Any = None) -> Stru
                 runtime=runtime,
                 run_controls=run_controls,
                 specs=specs,
+                background=background,
+                compiled=compiled,
                 background_runnables=background_cache.get(),
             )
         if action in {"steer", "pause", "resume", "approve", "reject"}:
@@ -1696,7 +1961,8 @@ def _default_system_prompt() -> str:
         'subagent(action="list") 检查已有子智能体：目标相同、数据范围相同，或交付物只是补充、'
         '修订时不要新开：同类子智能体仍在执行时用 subagent(action="steer") 补充或等待；'
         '已结束时对最近一个终态 task_id 用 subagent(action="follow_up", task_id=..., message=...)，'
-        '在同一子会话续写。只有目标、范围或交付物明确不同才 subagent(action="start") 新建。'
+        "在同一子会话续写；当前轮必须拿到追问结论时传 background=false。"
+        '只有目标、范围或交付物明确不同才 subagent(action="start") 新建。'
         "达到上限后 start 会被拒绝，此时只能复用已有子智能体或由主智能体自己完成；"
         "追问沿用原会话，不新增子智能体数量。\n\n"
         "## 子智能体执行方式\n\n"
@@ -1704,7 +1970,8 @@ def _default_system_prompt() -> str:
         "或当轮不需要其结论时，直接用 subagent 派发（默认 background=true）；立即返回持久 task_id，"
         "期间继续其他工作或直接结束本轮，完成/失败/超时/租约失联都会自动通知当前会话。"
         "只在当前步骤必须拿到结论才能继续、用户要求当轮给出结果，或只是小范围核对/单点查询时，"
-        "显式传 background=false 同步等待。后台任务统一用 subagent 工具管理："
+        "显式传 background=false 同步等待；已结束子智能体的 follow_up 同样支持该参数。"
+        "后台任务统一用 subagent 工具管理："
         'subagent(action="list") 列任务、subagent(action="check", task_id=...) 查单个任务、'
         'subagent(action="wait", task_ids=[...]) 等一个/多个任务、'
         'subagent(action="cancel", task_id=...) 取消。'

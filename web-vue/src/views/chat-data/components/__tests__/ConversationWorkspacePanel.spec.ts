@@ -61,6 +61,15 @@ const followUpBackgroundTask: SubagentTaskRecord = {
   finished_at: '2026-11-15T10:02:00',
 }
 
+const syncTask: SubagentTaskRecord = {
+  ...backgroundTask,
+  task_id: 'sync-task-1',
+  parent_tool_call_id: 'call-sync-1',
+  label: '同步核对',
+  description: '当前轮同步核对',
+  execution_mode: 'sync',
+}
+
 const mountPanel = (
   overrides: Record<string, unknown> = {},
   options: { stubs?: Record<string, unknown> } = {},
@@ -165,6 +174,28 @@ describe('ConversationWorkspacePanel tab 容器', () => {
     await wrapper.vm.$nextTick()
 
     expect(tabTitles(wrapper)).toEqual(['工作台', '入金趋势'])
+    expect(wrapper.find('[data-subagent-task-detail]').exists()).toBe(true)
+  })
+
+  it('同步 subagent 工具卡与后台任务打开同一套任务详情页', async () => {
+    const syncCall: ToolCallInfo = {
+      tool_call_id: 'call-sync-1',
+      tool_name: 'subagent',
+      status: 'completed',
+      args: { subagent_type: 'explore', background: false },
+      result: '同步核对结论',
+    }
+    const wrapper = mountPanel({
+      subagentTasks: [syncTask],
+      subagentTaskDetails: { [syncTask.task_id]: syncTask },
+      resolveToolCall: () => syncCall,
+    })
+    const vm = wrapper.vm as unknown as { openTool: (call: ToolCallInfo) => void }
+
+    vm.openTool(syncCall)
+    await wrapper.vm.$nextTick()
+
+    expect(tabTitles(wrapper)).toEqual(['工作台', '同步核对'])
     expect(wrapper.find('[data-subagent-task-detail]').exists()).toBe(true)
   })
 

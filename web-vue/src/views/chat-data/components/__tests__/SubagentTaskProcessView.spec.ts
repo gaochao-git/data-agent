@@ -10,7 +10,7 @@ const TrailStub = defineComponent({
     toolCall: { type: Object, required: true },
   },
   emits: ['selectTool'],
-  template: '<div data-subagent-trail-stub :data-result="toolCall.result" :data-description="toolCall.args.description" />',
+  template: '<div data-subagent-trail-stub :data-result="toolCall.result" :data-description="toolCall.args.description" :data-background="String(toolCall.args.background)" />',
 })
 
 const turn = (overrides: Partial<SubagentTaskRecord> = {}): SubagentTaskRecord => ({
@@ -69,5 +69,15 @@ describe('SubagentTaskProcessView', () => {
     ])
     expect(turns[0]!.find('[data-subagent-trail-stub]').attributes('data-description')).toBe('盘点语义模型目录')
     expect(turns[1]!.find('[data-subagent-trail-stub]').attributes('data-description')).toBe('先给自己起一个响亮的名字')
+  })
+
+  it('同步任务详情保留同步执行语义，不伪装成后台任务', () => {
+    const synchronous = turn({ execution_mode: 'sync' })
+    const wrapper = mount(SubagentTaskProcessView, {
+      props: { task: synchronous, sessionTasks: [synchronous], conversationId: 'conv-1' },
+      global: { stubs: { SubagentTrail: TrailStub } },
+    })
+
+    expect(wrapper.find('[data-subagent-trail-stub]').attributes('data-background')).toBe('false')
   })
 })

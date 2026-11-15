@@ -17,8 +17,10 @@ Standby/C 节点不参与 pending 轮询、过期 Run 回收、定时任务调�
 
 ## 后台子智能体任务
 
-`subagent`（默认 `background=true`）的任务真值落在 `chat_data_agent_inbox` 的 `record_type='task'` 行，
-进程内只保留 asyncio 执行句柄。任务状态：`pending → running → completed/failed/timeout/
+`subagent` 的任务真值落在 `chat_data_agent_inbox` 的 `record_type='task'` 行，
+进程内只保留 asyncio 执行句柄。默认 `background=true`；显式 `background=false` 的同步执行
+同样落一行，但 `execution_mode=sync`、`notify_on_finish=false`，结果直接回到当前轮，不创建
+完成通知 Run。任务状态：`pending → running → completed/failed/timeout/
 cancelled/interrupted/lost`；`cancelling` 是跨 worker 的取消请求，执行节点在下一次心跳
 （固定 5 秒）停止协程并收口。租约过期由
 活动节点的 `agent_run_runtime` 统一回收为 `lost`，避免多副本重复判断。
@@ -36,6 +38,8 @@ cancelled/interrupted/lost`；`cancelling` 是跨 worker 的取消请求，执�
   主智能体直接用 `file_read` 读取完整正文，不再对报告做分页。
 - 状态口径：终态优先，收口时 `progress.phase` 同步改为终态；`progress.tool_calls` 是累计
   调用过的工具总数，`progress.running_tools` 才是当前仍在执行的工具数。
+- 实时过程流对同步/后台任务同构：任务详情都从任务事件流读取过程；同步任务额外把同一批
+  事件写回父对话流，保证当前轮的工具卡与详情页都能实时展示。
 - 实时推送走 SSE `subagent_task_updated`（只带紧凑快照，不带报告）；断线、空闲或刷新后由
   `GET /conversations/{id}/subagent-tasks` 轮询/列表恢复。详情接口返回完整报告与
   `result_meta`（过程快照、上下文/token 用量、压缩记录），列表接口不返回大字段。

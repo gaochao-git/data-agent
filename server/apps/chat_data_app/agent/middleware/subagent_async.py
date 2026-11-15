@@ -13,7 +13,8 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Callable, Coroutine, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Sequence
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from langchain.tools import ToolRuntime
@@ -23,6 +24,7 @@ from utils.logger import get_logger
 from ..contracts.subagent_task import (
     ACTIVE_TASK_STATUSES,
     TASK_HEARTBEAT_SECONDS,
+    TASK_STATUS_CANCELLED,
     TASK_STATUS_CANCELLING,
     TASK_STATUS_LABELS,
     TASK_STATUS_PAUSED,
@@ -110,7 +112,7 @@ def format_active_subagent_summary(records: Sequence[SubagentTaskView]) -> str:
     """把活跃任务压成主智能体可读的一行摘要，按子会话去重。"""
     session_statuses = {_task_session_id(record): record.status for record in records}
     if not session_statuses:
-        return "当前会话没有活跃的后台子智能体。"
+        return "当前会话没有活跃的子智能体。"
     executing = sum(
         1
         for status in session_statuses.values()
@@ -129,10 +131,10 @@ def format_active_subagent_summary(records: Sequence[SubagentTaskView]) -> str:
 def format_subagent_task_list_summary(records: Sequence[SubagentTaskView]) -> str:
     """任务列表抬头：同时给出任务条数、子智能体数和活跃条数。"""
     if not records:
-        return "当前会话没有匹配的后台子智能体任务。"
+        return "当前会话没有匹配的子智能体任务。"
     session_ids = {_task_session_id(record) for record in records}
     active = sum(1 for record in records if record.status in ACTIVE_TASK_STATUSES)
-    return f"后台子智能体任务（共 {len(records)} 条，涉及 {len(session_ids)} 个子智能体，活跃 {active} 条）："
+    return f"子智能体任务（共 {len(records)} 条，涉及 {len(session_ids)} 个子智能体，活跃 {active} 条）："
 
 
 def _format_task_report(record: SubagentTaskView) -> str:
@@ -239,38 +241,37 @@ def _launch_task_runner(
     task.add_done_callback(_on_done)
 
 
-async def _spawn_follow_up_task(
+@dataclass(frozen=True)
+class _FollowUpTarget:
+    service: SubagentTaskPort
+    target: SubagentTaskView
+    base: SubagentTaskView
+    conversation_id: str
+    user_id: str
+    operator_name: str
+    parent_run_id: str
+
+
+async def _resolve_follow_up_target(
     *,
-    task_id: str | None,
-    message: str | None,
+    task_id: str,
     available_types: set[str],
     runtime: ToolRuntime,
     run_controls: Any,
-    runner_factory: Callable[[SubagentTaskView, Any], Coroutine[Any, Any, None]],
-) -> str:
-    """对已结束的子智能体发起下一轮；沿用同一子会话历史。"""
-    normalized = _clean_task_id(task_id)
-    content = str(message or "").strip()
-    if not normalized:
-        return "action=follow_up 需要提供 task_id（要追问的子智能体任务）。"
-    if not content:
-        return "action=follow_up 需要提供 message（追问内容）。"
+) -> _FollowUpTarget | str:
+    """校验追问目标并定位最新一轮；返回统一绑定信息或可直接回给模型的错误。"""
     conversation_id, user_id, operator_name, parent_run_id = _read_conversation_context(runtime, run_controls)
     if not user_id:
         return "无法追问子智能体：当前会话缺少用户身份。"
     service = _task_service()
     if service is None:
         return "子智能体追问失败：任务账本服务未初始化。"
-    target = await service.get_task(
-        normalized,
-        conversation_id=conversation_id,
-        user_id=user_id,
-    )
+    target = await service.get_task(task_id, conversation_id=conversation_id, user_id=user_id)
     if target is None:
-        return f'子智能体任务 {normalized} 不存在。可用 subagent(action="list") 查看当前会话任务。'
+        return f'子智能体任务 {task_id} 不存在。可用 subagent(action="list") 查看当前会话任务。'
     if not target.is_terminal:
         return (
-            f"子智能体任务 {normalized} 仍在执行（{TASK_STATUS_LABELS.get(target.status, target.status)}），"
+            f"子智能体任务 {task_id} 仍在执行（{TASK_STATUS_LABELS.get(target.status, target.status)}），"
             '不能追问；可先用 subagent(action="wait") 等结果，或 subagent(action="cancel") 取消后再开始新一轮。'
         )
     if target.subagent_type not in available_types:
@@ -296,18 +297,109 @@ async def _spawn_follow_up_task(
         # 快照更新失败时 latest_task_id 可能仍指向旧轮次；宁可锚定用户指定的
         # 终态任务，也不能把新追问接到更早的 parent 上。
         base = target
+    return _FollowUpTarget(
+        service=service,
+        target=target,
+        base=base,
+        conversation_id=conversation_id,
+        user_id=user_id,
+        operator_name=operator_name,
+        parent_run_id=parent_run_id,
+    )
+
+
+async def _close_aborted_sync_task(service: SubagentTaskPort, record: SubagentTaskView) -> None:
+    """同步任务未真正开始执行时立即收口，避免残留 pending 行被租约回收。"""
+    try:
+        closed = await service.finish_task(
+            record.task_id,
+            record.owner_token or "",
+            status=TASK_STATUS_CANCELLED,
+            report="同步子智能体任务启动失败，已取消。",
+        )
+        if closed is not None and closed.is_terminal:
+            await service.mark_viewed(closed)
+    except Exception:
+        logger.warning("同步子智能体任务启动失败后收口失败: task_id=%s", record.task_id, exc_info=True)
+
+
+async def _start_registered_sync_follow_up(
+    service: SubagentTaskPort,
+    record: SubagentTaskView,
+) -> SubagentTaskView | None:
+    """启动已登记的同步追问；失败时立即收口，避免留下运行中的孤儿任务。"""
+    try:
+        configured = await service.configure_task_execution(
+            record.task_id,
+            record.owner_token or "",
+            execution_mode="sync",
+        )
+        started = await service.start_task(record.task_id, record.owner_token or "")
+    except Exception:
+        logger.error("同步子智能体追问启动失败: task_id=%s", record.task_id, exc_info=True)
+        await _close_aborted_sync_task(service, record)
+        return None
+    if configured is None or started is None:
+        await _close_aborted_sync_task(service, record)
+        return None
+    return started
+
+
+async def _run_sync_follow_up(
+    service: SubagentTaskPort,
+    record: SubagentTaskView,
+    runner: Callable[[SubagentTaskView], Awaitable[Any]],
+) -> Any:
+    """同步追问沿用原会话历史，由调用方注入当前轮执行体。"""
+    started = await _start_registered_sync_follow_up(service, record)
+    if started is None:
+        return "子智能体追问失败：任务状态已变化，请先查询最新状态后再试。"
+    return await runner(started)
+
+
+async def _spawn_follow_up_task(
+    *,
+    task_id: str | None,
+    message: str | None,
+    available_types: set[str],
+    runtime: ToolRuntime,
+    run_controls: Any,
+    background: bool,
+    runner_factory: Callable[[SubagentTaskView, Any], Coroutine[Any, Any, None]],
+    sync_runner: Callable[[SubagentTaskPort, SubagentTaskView], Coroutine[Any, Any, Any]] | None = None,
+) -> Any:
+    """对已结束的子智能体发起下一轮；沿用同一子会话，可按同步或后台执行。"""
+    normalized = _clean_task_id(task_id)
+    content = str(message or "").strip()
+    if not normalized:
+        return "action=follow_up 需要提供 task_id（要追问的子智能体任务）。"
+    if not content:
+        return "action=follow_up 需要提供 message（追问内容）。"
+    if not background and sync_runner is None:
+        return "子智能体追问失败：同步执行器未初始化。"
+    resolved = await _resolve_follow_up_target(
+        task_id=normalized,
+        available_types=available_types,
+        runtime=runtime,
+        run_controls=run_controls,
+    )
+    if isinstance(resolved, str):
+        return resolved
+    service = resolved.service
+    target = resolved.target
+    base = resolved.base
     try:
         record = await service.create_task(
-            conversation_id=conversation_id,
-            user_id=user_id,
-            parent_run_id=parent_run_id,
+            conversation_id=resolved.conversation_id,
+            user_id=resolved.user_id,
+            parent_run_id=resolved.parent_run_id,
             subagent_type=target.subagent_type,
             description=content,
             label=None,
             parent_tool_call_id=str(getattr(runtime, "tool_call_id", "") or ""),
             parent_owner_token=str(getattr(run_controls, "owner_token", None) or ""),
             timeout_seconds=None,
-            operator_name=operator_name,
+            operator_name=resolved.operator_name,
             parent_task_id=base.task_id,
             agent_session_id=base.agent_session_id,
         )
@@ -321,6 +413,9 @@ async def _spawn_follow_up_task(
             exc_info=True,
         )
         return "子智能体追问失败：任务登记未成功，请稍后重试。"
+    if not background:
+        assert sync_runner is not None
+        return await sync_runner(service, record)
     _launch_task_runner(service, record, runtime, runner_factory)
     logger.info(
         "[tools] 子智能体追问已转入后台: task_id=%s parent=%s session=%s",

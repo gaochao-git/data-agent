@@ -142,6 +142,12 @@ class SubagentTaskView(Protocol):
     def timeout_seconds(self) -> int: ...
 
     @property
+    def execution_mode(self) -> str: ...
+
+    @property
+    def notify_on_finish(self) -> bool: ...
+
+    @property
     def is_terminal(self) -> bool: ...
 
 
@@ -165,6 +171,14 @@ class SubagentTaskPort(Protocol):
         agent_session_id: str | None = None,
         root_task_id: str | None = None,
     ) -> SubagentTaskView: ...
+
+    async def configure_task_execution(
+        self,
+        task_id: str,
+        owner_token: str,
+        *,
+        execution_mode: str,
+    ) -> SubagentTaskView | None: ...
 
     async def get_task(
         self,

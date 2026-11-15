@@ -823,7 +823,7 @@ def test_active_subagent_summary_counts_sessions_and_statuses():
     summary = format_active_subagent_summary(records)
 
     assert summary == "当前会话有 3 个活跃子智能体（执行中 1、等待审批 1、已暂停 1）。"
-    assert format_active_subagent_summary([]) == "当前会话没有活跃的后台子智能体。"
+    assert format_active_subagent_summary([]) == "当前会话没有活跃的子智能体。"
 
 
 def test_task_list_summary_reports_tasks_sessions_and_active_count():
@@ -832,7 +832,7 @@ def test_task_list_summary_reports_tasks_sessions_and_active_count():
         SimpleNamespace(task_id="t2", agent_session_id="s1", status="running"),
     ]
 
-    assert format_subagent_task_list_summary(records) == ("后台子智能体任务（共 2 条，涉及 1 个子智能体，活跃 1 条）：")
+    assert format_subagent_task_list_summary(records) == ("子智能体任务（共 2 条，涉及 1 个子智能体，活跃 1 条）：")
 
 
 @pytest.mark.asyncio

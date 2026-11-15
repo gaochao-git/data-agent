@@ -228,6 +228,7 @@ async def test_create_task_persists_snapshot_and_publishes_compact_sse(harness):
     assert payload["parent_agent_id"] is None
     assert payload["root_agent_id"] == record.task_id
     assert payload["depth"] == 1
+    assert payload["execution_mode"] == "background"
     assert "report" not in payload
     assert "result_meta" not in payload
 
@@ -919,6 +920,114 @@ async def test_follow_up_reuses_session_history(harness, monkeypatch):
     assert session[-1]["content"] == "第 2 轮结论"
 
 
+@pytest.mark.asyncio
+async def test_follow_up_can_switch_from_background_to_sync(harness, monkeypatch):
+    """后台首轮完成后，当前轮可用同步追问直接拿结论；历史与会话身份保持不变。"""
+    await harness.create_conversation()
+    captured_states: list[dict] = []
+
+    class _Runnable:
+        async def astream(self, state, _config, *, stream_mode):
+            captured_states.append(dict(state))
+            yield "updates", {"model": {"messages": [AIMessage(content=f"第 {len(captured_states)} 轮结论")]}}
+
+    monkeypatch.setattr(
+        subagents_module,
+        "_compile_subagent",
+        lambda spec, run_controls=None, **kwargs: _Runnable(),
+    )
+    tool = build_task_tool([_spec()])
+    first = await tool.coroutine(
+        description="后台盘点近 30 天入金趋势",
+        subagent_type="explore",
+        runtime=_fake_runtime(tool_call_id="call_bg_to_sync_1"),
+        background=True,
+    )
+    first_record = await _wait_terminal(harness, _task_id_from_text(first))
+    await harness.service.mark_viewed(first_record)
+
+    follow = await tool.coroutine(
+        action="follow_up",
+        task_id=first_record.task_id,
+        message="同步补充渠道 Top3",
+        runtime=_fake_runtime(tool_call_id="call_bg_to_sync_2"),
+        background=False,
+    )
+
+    assert follow.update["messages"][0].content == "第 2 轮结论"
+    records = await harness.service.list_tasks(CONV, USER, limit=10)
+    second_record = next(item for item in records if item.parent_task_id == first_record.task_id)
+    assert second_record.status == "completed"
+    assert second_record.execution_mode == "sync"
+    assert second_record.notify_on_finish is False
+    assert second_record.agent_session_id == first_record.agent_session_id
+    assert second_record.turn_index == 2
+    assert [message.content for message in captured_states[1]["messages"]] == [
+        "后台盘点近 30 天入金趋势",
+        "第 1 轮结论",
+        "同步补充渠道 Top3",
+    ]
+    async with harness.get_session() as session:
+        notification = (
+            await session.execute(
+                select(ChatDataAgentInbox).where(
+                    ChatDataAgentInbox.message_id == notification_message_id(second_record.task_id),
+                    ChatDataAgentInbox.conversation_id == CONV,
+                    ChatDataAgentInbox.user_id == USER,
+                )
+            )
+        ).scalar_one_or_none()
+    assert notification is None
+
+
+@pytest.mark.asyncio
+async def test_follow_up_can_switch_from_sync_to_background(harness, monkeypatch):
+    """同步首轮完成后，仍可异步追问；后台轮次沿用同一子会话与历史。"""
+    await harness.create_conversation()
+    captured_states: list[dict] = []
+
+    class _Runnable:
+        async def astream(self, state, _config, *, stream_mode):
+            captured_states.append(dict(state))
+            yield "updates", {"model": {"messages": [AIMessage(content=f"第 {len(captured_states)} 轮结论")]}}
+
+    monkeypatch.setattr(
+        subagents_module,
+        "_compile_subagent",
+        lambda spec, run_controls=None, **kwargs: _Runnable(),
+    )
+    tool = build_task_tool([_spec()])
+    first = await tool.coroutine(
+        description="同步盘点近 30 天入金趋势",
+        subagent_type="explore",
+        runtime=_fake_runtime(tool_call_id="call_sync_to_bg_1"),
+        background=False,
+    )
+    assert first.update["messages"][0].content == "第 1 轮结论"
+    records = await harness.service.list_tasks(CONV, USER, limit=10)
+    first_record = next(item for item in records if item.execution_mode == "sync")
+
+    follow = await tool.coroutine(
+        action="follow_up",
+        task_id=first_record.task_id,
+        message="后台补充渠道 Top3",
+        runtime=_fake_runtime(tool_call_id="call_sync_to_bg_2"),
+        background=True,
+    )
+    second_record = await _wait_terminal(harness, _task_id_from_text(follow))
+
+    assert second_record.status == "completed"
+    assert second_record.execution_mode == "background"
+    assert second_record.parent_task_id == first_record.task_id
+    assert second_record.agent_session_id == first_record.agent_session_id
+    assert second_record.turn_index == 2
+    assert [message.content for message in captured_states[1]["messages"]] == [
+        "同步盘点近 30 天入金趋势",
+        "第 1 轮结论",
+        "后台补充渠道 Top3",
+    ]
+
+
 def test_task_identity_falls_back_for_legacy_meta():
     """旧任务行没有 agent_* 字段时按 root_task_id 推导，历史数据无需回填。"""
     record = SubagentTaskRecord(
@@ -949,6 +1058,88 @@ def test_task_identity_falls_back_for_legacy_meta():
     assert record.parent_agent_id == ""
     assert record.root_agent_id == "session-1"
     assert record.depth == 1
+
+
+@pytest.mark.asyncio
+async def test_sync_task_is_tracked_without_finish_notification(harness, monkeypatch):
+    """同步执行也进入统一任务账本；终态可供前端展示，但不生成唤醒通知。"""
+    await harness.create_conversation()
+    monkeypatch.setattr(
+        subagents_module,
+        "_compile_subagent",
+        lambda spec, run_controls=None, **kwargs: _runnable("同步任务结论"),
+    )
+    tool = build_task_tool([_spec()])
+
+    result = await tool.coroutine(
+        background=False,
+        description="当前轮同步核对",
+        subagent_type="explore",
+        label="同步核对",
+        runtime=_fake_runtime(tool_call_id="call_sync_tracked"),
+    )
+
+    assert result.update["messages"][0].content == "同步任务结论"
+    records = await harness.service.list_tasks(CONV, USER, limit=10)
+    assert len(records) == 1
+    listed = records[0]
+    assert listed.execution_mode == "sync"
+    record = await harness.service.get_task(listed.task_id, conversation_id=CONV, user_id=USER)
+    assert record is not None
+    assert record.parent_tool_call_id == "call_sync_tracked"
+    assert record.notify_on_finish is False
+    assert record.status == "completed"
+    assert record.report == "同步任务结论"
+    assert record.notified_at is not None
+    assert record.result_meta.get("tool_status") == "success"
+    assert record.result_meta.get("subagent_trail")
+    assert await harness.service.dispatch_pending_notifications(limit=10) == 0
+    async with harness.get_session() as session:
+        notification = (
+            await session.execute(
+                select(ChatDataAgentInbox).where(
+                    ChatDataAgentInbox.message_id == notification_message_id(record.task_id),
+                    ChatDataAgentInbox.conversation_id == CONV,
+                    ChatDataAgentInbox.user_id == USER,
+                )
+            )
+        ).scalar_one_or_none()
+    assert notification is None
+
+
+@pytest.mark.asyncio
+async def test_sync_task_start_failure_does_not_leave_pending_row(harness, monkeypatch):
+    """账本启动失败时降级执行，但已登记任务必须立即收口而不是残留 pending。"""
+    await harness.create_conversation()
+    monkeypatch.setattr(
+        subagents_module,
+        "_compile_subagent",
+        lambda spec, run_controls=None, **kwargs: _runnable("降级同步结论"),
+    )
+
+    async def fail_start(_task_id: str, _owner_token: str):
+        raise RuntimeError("模拟启动失败")
+
+    monkeypatch.setattr(harness.service, "start_task", fail_start)
+    tool = build_task_tool([_spec()])
+
+    result = await tool.coroutine(
+        background=False,
+        description="启动失败降级核对",
+        subagent_type="explore",
+        label="降级核对",
+        runtime=_fake_runtime(tool_call_id="call_sync_start_failure"),
+    )
+
+    assert result.update["messages"][0].content == "降级同步结论"
+    records = await harness.service.list_tasks(CONV, USER, limit=10)
+    assert len(records) == 1
+    record = records[0]
+    assert record.execution_mode == "sync"
+    assert record.status == "cancelled"
+    assert record.notify_on_finish is False
+    assert record.notified_at is not None
+    assert await harness.service.dispatch_pending_notifications(limit=10) == 0
 
 
 @pytest.mark.asyncio

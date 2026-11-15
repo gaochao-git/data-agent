@@ -9,7 +9,7 @@ import type { SubagentTaskRecord } from '../../types'
 
 const LAST_WAKE_DELAY = BACKGROUND_RUN_WAKE_DELAYS_MS[BACKGROUND_RUN_WAKE_DELAYS_MS.length - 1] ?? 9_000
 
-const task = (status: SubagentTaskRecord['status']): SubagentTaskRecord => ({
+const task = (status: SubagentTaskRecord['status'], executionMode: SubagentTaskRecord['execution_mode'] = 'background'): SubagentTaskRecord => ({
   task_id: 'task-1',
   conversation_id: 'conv-1',
   parent_run_id: 'run-parent',
@@ -19,6 +19,7 @@ const task = (status: SubagentTaskRecord['status']): SubagentTaskRecord => ({
   description: '分析近 30 天入金趋势',
   status,
   status_label: status,
+  execution_mode: executionMode,
   progress: {},
   created_at: '2026-11-15T10:00:00',
   updated_at: '2026-11-15T10:00:00',
@@ -77,6 +78,17 @@ describe('useBackgroundRunWakeup', () => {
     isGenerating.value = true
 
     tasks.value = [task('completed')]
+    await nextTick()
+    await vi.advanceTimersByTimeAsync(LAST_WAKE_DELAY + 1)
+
+    expect(recover).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('同步任务收口不触发后台 Run 自动续订', async () => {
+    const { wrapper, tasks, recover } = mountWakeup()
+
+    tasks.value = [task('completed', 'sync')]
     await nextTick()
     await vi.advanceTimersByTimeAsync(LAST_WAKE_DELAY + 1)
 
