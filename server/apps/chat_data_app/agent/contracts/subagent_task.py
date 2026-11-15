@@ -54,7 +54,7 @@ TASK_HEARTBEAT_SECONDS = 5
 
 
 class SubagentTaskCapacityError(RuntimeError):
-    """当前会话后台任务已达到并发或子智能体总数上限。"""
+    """当前会话子智能体任务已达到并发或子智能体总数上限。"""
 
 
 def parse_task_status_filter(raw: str | None) -> set[str] | None:

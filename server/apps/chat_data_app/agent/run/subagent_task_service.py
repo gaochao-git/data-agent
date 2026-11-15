@@ -608,7 +608,7 @@ class SubagentTaskService:
         active = await self._dao.count_active(session, conversation_id, user_id, ACTIVE_TASK_STATUSES)
         if active >= max_active:
             raise SubagentTaskCapacityError(
-                f"后台子智能体任务已达上限（{max_active} 个执行中），请等待任务完成或取消后再派发。"
+                f"子智能体任务已达上限（{max_active} 个执行中），请等待任务完成或取消后再派发。"
             )
         if continuing:
             return

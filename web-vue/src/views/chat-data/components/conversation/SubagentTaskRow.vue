@@ -119,6 +119,7 @@ const progressText = computed(() => {
           type="button"
           class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-slate-300 opacity-70 transition-all hover:bg-rose-50 hover:text-rose-500 group-hover:opacity-100"
           :disabled="cancelling"
+          data-subagent-task-cancel
           title="取消子智能体任务"
           @click.stop="emit('cancel', task)"
         >

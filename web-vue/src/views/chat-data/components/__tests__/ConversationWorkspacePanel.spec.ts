@@ -6,6 +6,12 @@ import AgentProcessView from '../conversation/AgentProcessView.vue'
 import ConversationSidePanel from '../conversation/ConversationSidePanel.vue'
 import type { SubagentTaskRecord, ToolCallInfo } from '../../types'
 
+const SubagentTrailStub = defineComponent({
+  name: 'SubagentTrail',
+  props: { toolCall: { type: Object, required: true } },
+  template: '<div data-subagent-trail-stub :data-background="String(toolCall.args.background)" />',
+})
+
 const taskCall: ToolCallInfo = {
   tool_call_id: 'task-1',
   tool_name: 'subagent',
@@ -189,7 +195,7 @@ describe('ConversationWorkspacePanel tab 容器', () => {
       subagentTasks: [syncTask],
       subagentTaskDetails: { [syncTask.task_id]: syncTask },
       resolveToolCall: () => syncCall,
-    })
+    }, { stubs: { SubagentTrail: SubagentTrailStub } })
     const vm = wrapper.vm as unknown as { openTool: (call: ToolCallInfo) => void }
 
     vm.openTool(syncCall)
@@ -197,6 +203,7 @@ describe('ConversationWorkspacePanel tab 容器', () => {
 
     expect(tabTitles(wrapper)).toEqual(['工作台', '同步核对'])
     expect(wrapper.find('[data-subagent-task-detail]').exists()).toBe(true)
+    expect(wrapper.find('[data-subagent-trail-stub]').attributes('data-background')).toBe('false')
   })
 
   it('历史 task 工具卡仍打开子智能体过程页', async () => {

@@ -9732,6 +9732,257 @@
         ]
       }
     },
+    "/api/chatdata/conversations/{conversation_id}/subagent-tasks": {
+      "get": {
+        "description": "列出当前会话的后台子智能体任务；刷新/重连后仍可恢复任务卡。",
+        "operationId": "list_subagent_tasks_api_chatdata_conversations__conversation_id__subagent_tasks_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "List Subagent Tasks",
+        "tags": [
+          "ChatData 会话"
+        ]
+      }
+    },
+    "/api/chatdata/conversations/{conversation_id}/subagent-tasks/{task_id}": {
+      "get": {
+        "description": "读取单个后台任务的完整报告、错误与过程快照。",
+        "operationId": "get_subagent_task_api_chatdata_conversations__conversation_id__subagent_tasks__task_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Get Subagent Task",
+        "tags": [
+          "ChatData 会话"
+        ]
+      }
+    },
+    "/api/chatdata/conversations/{conversation_id}/subagent-tasks/{task_id}/cancel": {
+      "post": {
+        "description": "用户手动取消后台子智能体任务；执行节点下一次心跳停止协程。",
+        "operationId": "cancel_subagent_task_api_chatdata_conversations__conversation_id__subagent_tasks__task_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Cancel Subagent Task",
+        "tags": [
+          "ChatData 会话"
+        ]
+      }
+    },
+    "/api/chatdata/conversations/{conversation_id}/subagent-tasks/{task_id}/events": {
+      "get": {
+        "description": "订阅后台子智能体的过程消息；父 Run 结束后仍可实时查看。",
+        "operationId": "stream_subagent_task_events_api_chatdata_conversations__conversation_id__subagent_tasks__task_id__events_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              },
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Server-sent event stream"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Stream Subagent Task Events",
+        "tags": [
+          "ChatData 会话"
+        ]
+      }
+    },
     "/api/chatdata/conversations/{conversation_id}/title": {
       "post": {
         "description": "自动生成会话标题\n\nPOST /api/chatdata/conversations/{id}/title\n\n返回：\n{\n    \"status\": \"success\",\n    \"data\": {\"id\": \"...\", \"title\": \"...\"}\n}",

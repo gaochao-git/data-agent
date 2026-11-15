@@ -196,13 +196,13 @@ SUBAGENT_REPORT_MAX_TOKEN_RATIO = 0.08
 SUBAGENT_REPORT_MIN_TOKEN_LIMIT = 1000
 SUBAGENT_REPORT_PREVIEW_CHARS = 2000
 
-_TASK_TOOL_DESCRIPTION_TEMPLATE = """派发隔离子智能体处理复杂多步任务，只把结论带回主对话（过程留在子图，保护上下文）。兼管后台任务。
+_TASK_TOOL_DESCRIPTION_TEMPLATE = """派发隔离子智能体处理复杂多步任务，只把结论带回主对话（过程留在子图，保护上下文）。兼管任务。
 
 可用子智能体类型：
 {available_agents}
 
 要求：
-- action="start"（默认）派发；后台任务用 action="list"/"check"/"wait"/"cancel"；已结束任务追问用 action="follow_up"（task_id + message），沿用子会话历史。
+- action="start"（默认）派发；任务用 action="list"/"check"/"wait"/"cancel"；已结束任务追问用 action="follow_up"（task_id + message），沿用子会话历史。
 - 子智能体看不到主对话：任务书必须包含目标、任务意图（盘点/分析/产出）、已知事实与文件路径、交付格式、约束与禁止项。
 - 适合多文件/大体量盘点调研、可并行独立子任务；单点查询、需向用户提问或展示过程的步骤直接自己做。
 - 派发前先 subagent(action="list")：同类目标/范围/交付物已有子智能体时不要新开；运行中用 steer 或等结果，终态用 follow_up 续用 task_id。只有明确不同才 start。
@@ -212,7 +212,7 @@ _TASK_TOOL_DESCRIPTION_TEMPLATE = """派发隔离子智能体处理复杂多步�
 - 相互独立的子任务可在同一条消息里并行发起多个 subagent。
 - 默认异步（background=true）：批量盘点/全量扫描、多份交付物、多个可并行独立子任务，或当轮不需要结论时使用；立即返回 task_id（可配 label/timeout_seconds），完成/失败/超时后自动唤醒会话。
 - 同步（background=false）：当前步骤必须拿到结论才能继续、用户要求当轮给出结果，或小范围核对/单点查询时使用；等待完成后返回结论。
-- 需要先前后台任务结果用 subagent(action="wait", task_ids=[...])；查单个用 subagent(action="check", task_id=...)、列任务用 subagent(action="list")、取消用 subagent(action="cancel", task_id=...)；已结束任务补充分析用 subagent(action="follow_up", task_id=..., message=...)，不要用 start 重复派发。
+- 需要先等任务结果用 subagent(action="wait", task_ids=[...])；查单个用 subagent(action="check", task_id=...)、列任务用 subagent(action="list")、取消用 subagent(action="cancel", task_id=...)；已结束任务补充分析用 subagent(action="follow_up", task_id=..., message=...)，不要用 start 重复派发。
 - 运行中可管理：steer 在下个模型步注入说明；pause 在安全点暂停；resume/approve/reject 继续。审批通知给出待执行工具，须经用户同意再 approve。
 - 回传是结论：向用户转述关键结论与产物路径，产物用 present_artifacts 展示。"""
 
@@ -254,7 +254,7 @@ class TaskToolArgs(BaseModel):
     ] = Field(
         default="start",
         description=(
-            "start=派发子智能体（默认）；list=列后台任务；check=查单个任务；"
+            "start=派发子智能体（默认）；list=列子智能体任务；check=查单个任务；"
             "wait=等待一个或多个任务终态；cancel=取消任务；"
             "follow_up=对已结束的子智能体继续追问（可同步或后台）；steer=给运行中的子智能体插话；"
             "pause=请求在下一个安全点暂停；resume=恢复已暂停任务；approve/reject=审批子智能体待执行工具。"
@@ -284,7 +284,7 @@ class TaskToolArgs(BaseModel):
     label: str | None = Field(
         default=None,
         max_length=120,
-        description="后台任务列表里展示的短标题；不传时取任务书首行。",
+        description="子智能体任务列表里展示的短标题；不传时取任务书首行。",
     )
     timeout_seconds: int | None = Field(
         default=None,
@@ -1377,6 +1377,14 @@ def _sync_task_failure_outcome(
     return TASK_STATUS_FAILED, _append_partial_report(report, partial_report), error, result_meta
 
 
+_SYNC_TASK_CANCEL_REASONS = frozenset({"subagent_task_cancelled", "subagent_task_closed"})
+
+
+def _is_sync_task_cancellation(exc: BaseException) -> bool:
+    """区分任务账本取消与父 Run 取消；父 Run 取消必须继续向外传播。"""
+    return isinstance(exc, asyncio.CancelledError) and str(exc) in _SYNC_TASK_CANCEL_REASONS
+
+
 async def _register_sync_task(
     *,
     description: str,
@@ -1514,12 +1522,19 @@ async def _run_registered_sync_task(
             report=report,
             error=error,
             result_meta=result_meta,
-            history=_session_history_payload(started, [], partial_state),
+            history=_session_history_payload(started, history or [], partial_state),
         )
     except Exception:
         # 账本收口失败会由租约回收兜底；不能把已经拿到的同步结论丢掉。
         logger.error("[tools] 同步子智能体任务收口失败: task_id=%s", started.task_id, exc_info=True)
     if failure is not None:
+        if _is_sync_task_cancellation(failure):
+            # 任务账本取消只影响这一个子智能体调用，父 Run 继续处理即可；
+            # 父 Run 自身的 CancelledError 没有该标记，仍走下面的原样上抛。
+            msg = ToolMessage(
+                content=report or "同步子智能体已取消。", tool_call_id=runtime.tool_call_id or "", status="error"
+            )
+            return Command(update={"messages": [msg]})
         raise failure
     return command
 
@@ -1971,12 +1986,12 @@ def _default_system_prompt() -> str:
         "期间继续其他工作或直接结束本轮，完成/失败/超时/租约失联都会自动通知当前会话。"
         "只在当前步骤必须拿到结论才能继续、用户要求当轮给出结果，或只是小范围核对/单点查询时，"
         "显式传 background=false 同步等待；已结束子智能体的 follow_up 同样支持该参数。"
-        "后台任务统一用 subagent 工具管理："
+        "子智能体任务统一用 subagent 工具管理："
         'subagent(action="list") 列任务、subagent(action="check", task_id=...) 查单个任务、'
         'subagent(action="wait", task_ids=[...]) 等一个/多个任务、'
         'subagent(action="cancel", task_id=...) 取消。'
         "系统会在每轮模型调用前附带当前活跃子智能体数量；用户问数量时直接依据该摘要回答，"
         '需要任务明细或历史任务时再调用 subagent(action="list")。'
-        "给后台任务写清 label，便于用户在任务列表识别。用户询问「之前的后台任务怎么样了」时，"
+        "给任务写清 label，便于用户在任务列表识别。用户询问「之前的子智能体任务怎么样了」时，"
         '先用 subagent(action="list")，再按需 subagent(action="check", task_id=...)。'
     )

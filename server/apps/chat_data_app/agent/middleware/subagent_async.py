@@ -454,7 +454,7 @@ async def _check_async_task(
         user_id=user_id,
     )
     if record is None:
-        return f'后台任务 {normalized} 不存在。可用 subagent(action="list") 查看当前会话任务。'
+        return f'子智能体任务 {normalized} 不存在。可用 subagent(action="list") 查看当前会话任务。'
     if record.is_terminal:
         await service.mark_viewed(record)
         return _format_task_report(record)
@@ -469,7 +469,7 @@ async def _cancel_async_task(
     operator_name: str,
     task_id: str | None,
 ) -> str:
-    """跨 worker 请求取消后台任务。"""
+    """跨 worker 请求取消子智能体任务。"""
     normalized = _clean_task_id(task_id)
     if not normalized:
         return "action=cancel 需要提供 task_id。"
@@ -477,9 +477,9 @@ async def _cancel_async_task(
         return "无法取消：当前会话缺少用户身份。"
     record = await service.cancel_task(conversation_id, user_id, normalized, operator_name)
     if record is None:
-        return f"后台任务 {normalized} 不存在。"
+        return f"子智能体任务 {normalized} 不存在。"
     if record.status in TERMINAL_TASK_STATUSES:
-        return f"后台任务 {normalized} 已是 {TASK_STATUS_LABELS.get(record.status, record.status)}，无需取消。"
+        return f"子智能体任务 {normalized} 已是 {TASK_STATUS_LABELS.get(record.status, record.status)}，无需取消。"
     return (
         f"已提交取消请求（task_id={normalized}）。执行节点会在下一次心跳时停止任务，"
         f'最终状态可稍后 subagent(action="check", task_id="{normalized}") 查询。'
@@ -494,7 +494,7 @@ async def _list_async_tasks(
     status: str | None,
     limit: int,
 ) -> str:
-    """列出当前会话后台任务。"""
+    """列出当前会话子智能体任务。"""
     if not user_id:
         return "当前会话缺少用户身份。"
     records = await service.list_tasks(
@@ -541,11 +541,11 @@ async def manage_async_task(
     limit: int = 20,
     wait_seconds: int = DEFAULT_WAIT_TIMEOUT_SECONDS,
 ) -> str:
-    """执行 ``subagent`` 工具的后台任务管理动作。"""
+    """执行 ``subagent`` 工具的子智能体任务管理动作。"""
     conversation_id, user_id, operator_name, _parent_run_id = _read_conversation_context(runtime)
     service = _task_service()
     if service is None:
-        return "后台任务服务未初始化。"
+        return "子智能体任务服务未初始化。"
     if action == "list":
         return await _list_async_tasks(
             service,
@@ -599,7 +599,7 @@ async def _wait_for_task_views(
             user_id=user_id,
         )
         if missing:
-            return f"后台任务 {missing} 不存在。"
+            return f"子智能体任务 {missing} 不存在。"
         if all(item.is_terminal for item in records):
             for item in records:
                 await service.mark_viewed(item)

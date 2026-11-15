@@ -51,13 +51,13 @@ describe('toolDisplay', () => {
   })
 
   it('labels task management actions separately from subagent dispatch', () => {
-    expect(getToolDisplayName('subagent', { action: 'list' })).toBe('查看后台任务')
-    expect(getToolDisplayName('subagent', { action: 'check', task_id: 't1' })).toBe('查看后台任务')
-    expect(getToolDisplayName('subagent', { action: 'wait', task_ids: ['t1'] })).toBe('等待后台任务')
-    expect(getToolDisplayName('subagent', { action: 'cancel', task_id: 't1' })).toBe('取消后台任务')
+    expect(getToolDisplayName('subagent', { action: 'list' })).toBe('查看子智能体任务')
+    expect(getToolDisplayName('subagent', { action: 'check', task_id: 't1' })).toBe('查看子智能体任务')
+    expect(getToolDisplayName('subagent', { action: 'wait', task_ids: ['t1'] })).toBe('等待子智能体任务')
+    expect(getToolDisplayName('subagent', { action: 'cancel', task_id: 't1' })).toBe('取消子智能体任务')
     expect(getToolDisplayName('subagent')).toBe('派发子智能体')
     // 历史消息仍使用旧工具名 task
-    expect(getToolDisplayName('task', { action: 'check', task_id: 't1' })).toBe('查看后台任务')
+    expect(getToolDisplayName('task', { action: 'check', task_id: 't1' })).toBe('查看子智能体任务')
     expect(getToolDisplayName('task')).toBe('派发子智能体')
   })
 

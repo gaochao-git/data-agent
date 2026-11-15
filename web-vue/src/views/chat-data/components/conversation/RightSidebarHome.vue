@@ -67,7 +67,7 @@ const workspaceUsage = computed(() => {
               </span>
             </span>
           </span>
-          <span class="mt-3 text-[11px] leading-5 text-slate-500">查看后台任务进度、过程、报告，或取消仍在执行的任务。</span>
+          <span class="mt-3 text-[11px] leading-5 text-slate-500">查看子智能体任务进度、过程、报告，或取消仍在执行的任务。</span>
           <span class="mt-auto flex w-full items-center justify-between gap-2 pt-4 text-[11px] text-slate-400">
             <span>{{ taskCount }} 个智能体</span>
             <i class="fa-solid fa-arrow-right text-[10px] transition-transform group-hover:translate-x-0.5 group-hover:text-sky-500"></i>

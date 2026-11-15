@@ -45,7 +45,7 @@ class _FakeEventService:
         self.events.append(kwargs)
 
 
-def _settings(max_active: int = 20, max_sessions: int = 20):
+def _settings(max_active: int = 20, max_sessions: int = 5):
     values = {
         "CHAT_DATA_SUBAGENT_TASK_MAX_ACTIVE": max_active,
         "CHAT_DATA_SUBAGENT_MAX_SESSIONS_PER_CONVERSATION": max_sessions,
@@ -981,6 +981,54 @@ async def test_follow_up_can_switch_from_background_to_sync(harness, monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_sync_follow_up_failure_preserves_prior_history(harness, monkeypatch):
+    """A failed sync follow-up must not discard the previous session snapshot."""
+    await harness.create_conversation()
+    fail_follow_up = False
+
+    class _Runnable:
+        async def astream(self, state, _config, *, stream_mode):
+            if fail_follow_up:
+                raise RuntimeError("sync follow-up failure")
+            yield "updates", {"model": {"messages": [AIMessage(content="first answer")]}}
+
+    monkeypatch.setattr(
+        subagents_module,
+        "_compile_subagent",
+        lambda spec, run_controls=None, **kwargs: _Runnable(),
+    )
+    tool = build_task_tool([_spec()])
+    first = await tool.coroutine(
+        description="first task",
+        subagent_type="explore",
+        runtime=_fake_runtime(tool_call_id="call_sync_history_1"),
+        background=True,
+    )
+    first_record = await _wait_terminal(harness, _task_id_from_text(first))
+
+    fail_follow_up = True
+    follow = await tool.coroutine(
+        action="follow_up",
+        task_id=first_record.task_id,
+        message="follow-up task",
+        runtime=_fake_runtime(tool_call_id="call_sync_history_2"),
+        background=False,
+    )
+
+    assert follow.update["messages"][0].status == "error"
+    records = await harness.service.list_tasks(CONV, USER, limit=10)
+    second_record = next(item for item in records if item.parent_task_id == first_record.task_id)
+    assert second_record.status == "failed"
+    session = await harness.service.load_session_messages(
+        first_record.task_id,
+        conversation_id=CONV,
+        user_id=USER,
+    )
+    assert [item["type"] for item in session] == ["human", "ai", "human"]
+    assert [item["content"] for item in session] == ["first task", "first answer", "follow-up task"]
+
+
+@pytest.mark.asyncio
 async def test_follow_up_can_switch_from_sync_to_background(harness, monkeypatch):
     """同步首轮完成后，仍可异步追问；后台轮次沿用同一子会话与历史。"""
     await harness.create_conversation()
@@ -1105,6 +1153,93 @@ async def test_sync_task_is_tracked_without_finish_notification(harness, monkeyp
             )
         ).scalar_one_or_none()
     assert notification is None
+
+
+@pytest.mark.asyncio
+async def test_sync_task_cancellation_becomes_tool_error(monkeypatch):
+    class _Writer:
+        async def start(self):
+            return None
+
+        async def aclose(self):
+            return None
+
+    finished: dict = {}
+
+    class _Service:
+        def create_event_writer(self, _started):
+            return _Writer()
+
+        async def finish_task(self, *_args, **kwargs):
+            finished.update(kwargs)
+
+    async def cancelled(*_args, **_kwargs):
+        raise asyncio.CancelledError("subagent_task_cancelled")
+
+    monkeypatch.setattr(subagents_module, "_build_task_tool_impl", cancelled)
+    started = SimpleNamespace(
+        task_id="task-1",
+        owner_token="owner-1",
+        subagent_type="explore",
+        description="task",
+        agent_session_id="session-1",
+    )
+
+    result = await subagents_module._run_registered_sync_task(
+        _Service(),
+        started,
+        [],
+        {},
+        "explore",
+        "task",
+        _fake_runtime(tool_call_id="call-cancel"),
+    )
+
+    message = result.update["messages"][0]
+    assert isinstance(message, ToolMessage)
+    assert message.status == "error"
+    assert message.tool_call_id == "call-cancel"
+    assert finished["status"] == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_parent_cancellation_still_propagates_from_sync_task(monkeypatch):
+    class _Writer:
+        async def start(self):
+            return None
+
+        async def aclose(self):
+            return None
+
+    class _Service:
+        def create_event_writer(self, _started):
+            return _Writer()
+
+        async def finish_task(self, *_args, **_kwargs):
+            return None
+
+    async def cancelled(*_args, **_kwargs):
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(subagents_module, "_build_task_tool_impl", cancelled)
+    started = SimpleNamespace(
+        task_id="task-1",
+        owner_token="owner-1",
+        subagent_type="explore",
+        description="task",
+        agent_session_id="session-1",
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await subagents_module._run_registered_sync_task(
+            _Service(),
+            started,
+            [],
+            {},
+            "explore",
+            "task",
+            _fake_runtime(tool_call_id="call-parent-cancel"),
+        )
 
 
 @pytest.mark.asyncio

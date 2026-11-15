@@ -331,7 +331,7 @@ SETTING_REGISTRY: dict[str, SettingSpec] = {
     "CHAT_DATA_SUBAGENT_MAX_SESSIONS_PER_CONVERSATION": SettingSpec(
         key="CHAT_DATA_SUBAGENT_MAX_SESSIONS_PER_CONVERSATION",
         value_type="int",
-        default=20,
+        default=5,
         category="agent",
         minimum=1,
         maximum=200,

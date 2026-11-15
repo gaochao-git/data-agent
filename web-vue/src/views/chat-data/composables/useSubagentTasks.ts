@@ -65,7 +65,7 @@ export const groupSubagentTaskSessions = (tasks: SubagentTaskRecord[]): Subagent
       tasks: ordered,
       rootTask,
       latestTask,
-      label: rootTask.label?.trim() || rootTask.description?.trim() || latestTask.label?.trim() || '后台任务',
+      label: rootTask.label?.trim() || rootTask.description?.trim() || latestTask.label?.trim() || '子智能体任务',
       turnCount: Math.max(ordered.length, ...ordered.map(taskTurnIndex)),
     }
   })
@@ -143,7 +143,7 @@ export const useSubagentTasks = () => {
       syncPolling(tasks.value)
     } catch (err) {
       if (sequence !== loadSequence) return
-      error.value = err instanceof Error ? err.message : '读取后台任务失败'
+      error.value = err instanceof Error ? err.message : '读取子智能体任务失败'
     } finally {
       if (sequence === loadSequence && showLoading) loading.value = false
     }

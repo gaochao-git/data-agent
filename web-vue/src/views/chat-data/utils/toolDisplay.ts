@@ -147,10 +147,10 @@ const dataAnalyzingDescription: DescriptionBuilder = (args) => {
 }
 
 const TASK_ACTION_NAMES: Record<string, string> = {
-  list: '查看后台任务',
-  check: '查看后台任务',
-  wait: '等待后台任务',
-  cancel: '取消后台任务',
+  list: '查看子智能体任务',
+  check: '查看子智能体任务',
+  wait: '等待子智能体任务',
+  cancel: '取消子智能体任务',
 }
 
 /** task 的管理动作展示名；start（默认派发）返回空串，沿用后端展示名。 */

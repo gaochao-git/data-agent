@@ -50,7 +50,7 @@ describe('ToolCallCard', () => {
       },
     })
 
-    expect(wrapper.text()).toContain('查看后台任务')
+    expect(wrapper.text()).toContain('查看子智能体任务')
     expect(wrapper.text()).toContain('task-1')
     expect(wrapper.text()).not.toContain('派发子智能体')
   })
