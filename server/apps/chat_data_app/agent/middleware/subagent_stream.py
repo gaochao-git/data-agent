@@ -765,8 +765,9 @@ async def _consume_subagent_stream(
 ) -> None:
     async for chunk in runnable.astream(state, config, stream_mode=["updates", "messages"]):
         _capture_subagent_token_usage(chunk, captured)
+        context_usage = None
         if _process_subagent_chunk(chunk, stream_state, writer, parent_tool_call_id):
-            _emit_context_usage_snapshot(
+            context_usage = _emit_context_usage_snapshot(
                 writer=writer,
                 parent_tool_call_id=parent_tool_call_id,
                 usage_meta=usage_meta,
@@ -774,7 +775,7 @@ async def _consume_subagent_stream(
                 captured=captured,
             )
         if on_progress is not None:
-            on_progress(_subagent_progress_snapshot(stream_state))
+            on_progress(_subagent_progress_snapshot(stream_state, context_usage))
 
 
 def _emit_context_usage_snapshot(
@@ -805,16 +806,24 @@ def _emit_context_usage_snapshot(
     return usage
 
 
-def _subagent_progress_snapshot(stream_state: _SubagentStreamState) -> dict[str, Any]:
+def _subagent_progress_snapshot(
+    stream_state: _SubagentStreamState,
+    context_usage: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """后台任务心跳落库用的轻量进度：不携带正文，避免任务账本膨胀。"""
     last_tool = next(reversed(stream_state.tool_history.values()), "")
-    return {
+    snapshot = {
         "phase": "running",
         "message_count": len(stream_state.collected),
         "tool_calls": len(stream_state.tool_history),
         "running_tools": len(stream_state.tool_started_at),
         "last_tool": last_tool,
     }
+    if context_usage:
+        # 上下文快照随心跳落进任务账本的 progress：列表接口不返回 result_meta，
+        # 运行中/取消/失联状态也能从统一进度里展示占比；明细体积大，只留计数。
+        snapshot["context_usage"] = {key: value for key, value in context_usage.items() if key != "token_usage_detail"}
+    return snapshot
 
 
 def _build_subagent_state(

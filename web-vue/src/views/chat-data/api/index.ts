@@ -1694,15 +1694,6 @@ export async function cancelSubagentTask(conversationId: string, taskId: string)
   return response.data as SubagentTaskRecord
 }
 
-/** 请求暂停后台任务；执行体在下一个模型调用前停下，之后可由主智能体 resume。 */
-export async function pauseSubagentTask(conversationId: string, taskId: string): Promise<SubagentTaskRecord> {
-  const response = await request({
-    url: `/agents/api/chatdata/conversations/${conversationId}/subagent-tasks/${taskId}/pause`,
-    method: 'post',
-  })
-  return response.data as SubagentTaskRecord
-}
-
 /** 订阅后台子智能体的实时过程事件；父 Run 结束后仍可继续接收。 */
 export function streamSubagentTaskEvents(
   conversationId: string,

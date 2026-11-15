@@ -257,10 +257,10 @@ class AgentRunRuntime:
             logger.info("已回收租约过期的后台子智能体任务: count=%d", reaped)
 
     async def _dispatch_subagent_notifications(self) -> None:
-        """把终态任务写成隐藏 inbox 消息；空闲会话创建通知 Run 自动唤醒。"""
+        """投递子智能体生命周期事件；wake 策略在空闲会话创建通知 Run。"""
         dispatched = await subagent_task_service.dispatch_pending_notifications(limit=10)
         if dispatched:
-            logger.info("已派发后台子智能体完成通知: count=%d", dispatched)
+            logger.info("已派发后台子智能体生命周期事件: count=%d", dispatched)
 
     async def _submit_runnable_runs(self) -> None:
         available_slots = self._semaphore_capacity - len(self._tasks)

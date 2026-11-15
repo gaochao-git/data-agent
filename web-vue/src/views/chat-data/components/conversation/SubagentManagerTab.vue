@@ -8,18 +8,15 @@ import SubagentTaskRow from './SubagentTaskRow.vue'
 const props = defineProps({
   tasks: { type: Array as PropType<SubagentTaskRecord[]>, default: () => [] },
   cancellingTaskIds: { type: Array as PropType<string[]>, default: () => [] },
-  pausingTaskIds: { type: Array as PropType<string[]>, default: () => [] },
   loadTaskDetail: { type: Function as PropType<(taskId: string, refresh?: boolean) => Promise<SubagentTaskRecord | null>>, default: null },
 })
 
 const emit = defineEmits<{
   open: [task: SubagentTaskRecord]
   cancel: [task: SubagentTaskRecord]
-  pause: [task: SubagentTaskRecord]
 }>()
 
 const cancellingIds = computed(() => new Set(props.cancellingTaskIds))
-const pausingIds = computed(() => new Set(props.pausingTaskIds))
 const sessions = computed(() => groupSubagentTaskSessions(props.tasks))
 const requestedDetailKeys = new Set<string>()
 const taskStatusById = new Map<string, string>()
@@ -59,10 +56,8 @@ watch(
         :session-turn-count="session.turnCount"
         :session-tasks="session.tasks"
         :cancelling="cancellingIds.has(session.latestTask.task_id)"
-        :pausing="pausingIds.has(session.latestTask.task_id)"
         @open="emit('open', $event)"
         @cancel="emit('cancel', $event)"
-        @pause="emit('pause', $event)"
       />
     </div>
 

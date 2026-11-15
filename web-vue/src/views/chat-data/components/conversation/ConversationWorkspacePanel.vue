@@ -39,6 +39,8 @@ import {
   groupSubagentTaskSessions,
   isSubagentTaskActive,
   mergeSubagentTasks,
+  subagentSessionCompactionCount,
+  subagentTaskCompactionCount,
   subagentTaskSessionId,
 } from '../../composables/useSubagentTasks'
 import {
@@ -105,10 +107,8 @@ const props = defineProps({
   subagentTasks: { type: Array as PropType<SubagentTaskRecord[]>, default: () => [] },
   subagentTaskDetails: { type: Object as PropType<Record<string, SubagentTaskRecord>>, default: () => ({}) },
   subagentTaskCancellingIds: { type: Array as PropType<string[]>, default: () => [] },
-  subagentTaskPausingIds: { type: Array as PropType<string[]>, default: () => [] },
   loadSubagentTaskDetail: { type: Function as PropType<(taskId: string, refresh?: boolean) => Promise<SubagentTaskRecord | null>>, default: null },
   cancelSubagentTask: { type: Function as PropType<(task: SubagentTaskRecord) => Promise<void>>, default: null },
-  pauseSubagentTask: { type: Function as PropType<(task: SubagentTaskRecord) => Promise<void>>, default: null },
 })
 
 const emit = defineEmits<{
@@ -215,7 +215,7 @@ const displaySubagentTaskUsage = computed<ChatDataTokenUsage | null>(() => {
   const meta = task.result_meta
   const detail = meta?.subagent_token_usage_detail
   if (detail) return detail
-  const snapshot = meta?.subagent_context_usage
+  const snapshot = meta?.subagent_context_usage || task.progress?.context_usage
   if (!snapshot) return null
   return {
     used: snapshot.used_tokens,
@@ -240,6 +240,16 @@ const handleSubagentTaskUsageUpdated = (taskId: string, usage: ChatDataTokenUsag
 const displaySubagentTaskCompactions = computed(
   () => displaySubagentTask.value?.result_meta?.subagent_compactions || [],
 )
+const displaySubagentTaskSessionTasks = computed(() => subagentTasksForTab(displayToolTab.value))
+const displaySubagentTaskCompactionCount = computed(
+  () => subagentSessionCompactionCount(displaySubagentTaskSessionTasks.value),
+)
+const displaySubagentTaskCompactionTurns = computed(() => displaySubagentTaskSessionTasks.value
+  .map((task, index) => ({
+    turn: Math.max(Number(task.turn_index) || index + 1, 1),
+    count: subagentTaskCompactionCount(task),
+  }))
+  .filter(item => item.count > 0))
 
 /** 选中 subagent 调用时，工具视图额外展示「完整过程」（与主对话共用同一套消息/工具组件） */
 const subagentTaskCall = computed(() => {
@@ -334,10 +344,6 @@ const openSubagentManagerPanelTab = () => {
 
 const cancelSubagentTaskFromManager = (task: SubagentTaskRecord) => {
   void props.cancelSubagentTask?.(task)
-}
-
-const pauseSubagentTaskFromManager = (task: SubagentTaskRecord) => {
-  void props.pauseSubagentTask?.(task)
 }
 
 const findSubagentTaskByToolCall = (toolCallId: string): SubagentTaskRecord | null => {
@@ -1497,10 +1503,14 @@ defineExpose({
             data-subagent-task-usage
           />
           <span
-            v-if="displaySubagentTaskCompactions.length"
+            v-if="displaySubagentTaskCompactionCount > 0"
             class="shrink-0 cursor-default rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] leading-none text-slate-500 tabular-nums"
-            :title="displaySubagentTaskCompactions.map(item => `${item.timestamp || ''} ${item.estimated_tokens_before ?? 0} → ${item.estimated_tokens_after ?? 0} tokens，压缩 ${item.compressed_messages ?? 0} 条`).join('\n')"
-          >已压缩 {{ displaySubagentTaskCompactions.length }} 次</span>
+            :title="[
+              `本会话共压缩 ${displaySubagentTaskCompactionCount} 次`,
+              ...displaySubagentTaskCompactionTurns.map(item => `第 ${item.turn} 轮 ${item.count} 次`),
+              ...displaySubagentTaskCompactions.map(item => `${item.timestamp || ''} ${item.estimated_tokens_before ?? 0} → ${item.estimated_tokens_after ?? 0} tokens，压缩 ${item.compressed_messages ?? 0} 条`),
+            ].join('\n')"
+          >已压缩 {{ displaySubagentTaskCompactionCount }} 次</span>
         </div>
         <div class="inline-flex shrink-0 rounded-lg border border-slate-200 bg-slate-50 p-0.5 text-[11px]">
           <button
@@ -1584,11 +1594,9 @@ defineExpose({
       <SubagentManagerTab
         :tasks="allSubagentTasks"
         :cancelling-task-ids="subagentTaskCancellingIds"
-        :pausing-task-ids="subagentTaskPausingIds"
         :load-task-detail="loadSubagentTaskDetail"
         @open="openSubagentTaskPanelTab"
         @cancel="cancelSubagentTaskFromManager"
-        @pause="pauseSubagentTaskFromManager"
       />
     </div>
 

@@ -150,6 +150,51 @@ class ChatDataSubagentSession(Base):
     )
 
 
+class ChatDataSubagentEvent(Base):
+    """子智能体生命周期事件 outbox。
+
+    状态变更与事件写入同一事务，由统一 dispatcher 投递到主智能体：
+    ``wake`` 会在会话空闲时创建唤醒 Run，``attach`` 只挂当前活跃 Run，
+    ``silent`` 仅留审计不投递。每个事件独立记录投递状态，因此同一任务
+    可以先后产生审批、取消、用户追问等多条通知，不再依赖任务行的
+    ``consumed_time`` 表达全部语义。
+    """
+
+    __tablename__ = "chat_data_subagent_event"
+
+    id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
+    event_id: Mapped[str] = mapped_column(String(96), nullable=False)
+    parent_run_id: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
+    task_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    session_id: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
+    conversation_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    user_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    task_status: Mapped[str] = mapped_column(String(32), nullable=False, default="", server_default="")
+    wake_policy: Mapped[str] = mapped_column(String(16), nullable=False, default="wake", server_default="wake")
+    event_content: Mapped[str] = mapped_column(MediumTextType, nullable=False, default="")
+    record_meta: Mapped[str | None] = mapped_column(Text, nullable=True)
+    delivery_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="pending", server_default="pending"
+    )
+    delivery_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    last_error: Mapped[str] = mapped_column(String(500), nullable=False, default="", server_default="")
+    delivered_time: Mapped[datetime | None] = mapped_column(DateTime)
+    delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
+    create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    update_time: Mapped[datetime | None] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+    create_by: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
+    create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
+    update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+
+    __table_args__ = (
+        UniqueConstraint("event_id", name="uniq_subagent_event_id"),
+        Index("idx_subagent_event_conv", "conversation_id", "user_id", "delivery_status"),
+        Index("idx_subagent_event_task", "task_id", "event_type", "delivery_status"),
+    )
+
+
 class UploadedFile(Base):
     """上传文件表"""
 

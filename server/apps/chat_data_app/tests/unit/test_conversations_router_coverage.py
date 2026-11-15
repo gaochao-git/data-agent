@@ -300,32 +300,6 @@ async def test_toggle_favorite_all_branches(router_state, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_pause_subagent_task(router_state, monkeypatch):
-    async def pause_running(_task_id, **_kwargs):
-        return SimpleNamespace(status="running", as_dict=lambda: {"task_id": "t1", "status": "running"})
-
-    monkeypatch.setattr(conversation_router.subagent_task_service, "request_pause", pause_running)
-    body = payload(await conversation_router.pause_subagent_task("conv_1", "t1", FakeRequest()))
-    assert body["msg"] == "已提交暂停请求，任务会在下一个模型调用前暂停"
-    assert body["data"]["status"] == "running"
-
-    async def pause_queued(_task_id, **_kwargs):
-        return SimpleNamespace(status="paused", as_dict=lambda: {"task_id": "t1", "status": "paused"})
-
-    monkeypatch.setattr(conversation_router.subagent_task_service, "request_pause", pause_queued)
-    body = payload(await conversation_router.pause_subagent_task("conv_1", "t1", FakeRequest()))
-    assert body["msg"] == "子智能体已暂停"
-
-    async def pause_missing(_task_id, **_kwargs):
-        return None
-
-    monkeypatch.setattr(conversation_router.subagent_task_service, "request_pause", pause_missing)
-    response = await conversation_router.pause_subagent_task("conv_1", "t1", FakeRequest())
-    assert response.status_code == 404
-    assert payload(response)["code"] == ErrorCode.CHATDATA_NOT_FOUND
-
-
-@pytest.mark.asyncio
 async def test_steer_cancel_pending_question_error_paths(router_state, monkeypatch):
     request = conversation_router.SteerRequest(query="继续")
 

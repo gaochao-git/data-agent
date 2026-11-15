@@ -169,6 +169,19 @@ class SubagentTaskDao:
         )
         return list(result.scalars().all())
 
+    async def mark_consumed(self, session: AsyncSession, task_id: str, now: datetime) -> None:
+        """标记任务已通知/已读；事件投递成功后用于维持 ``notified_at`` 口径。"""
+        await session.execute(
+            update(ChatDataAgentInbox)
+            .where(
+                ChatDataAgentInbox.message_id == task_id,
+                ChatDataAgentInbox.record_type == TASK_RECORD_TYPE,
+                ChatDataAgentInbox.consumed_time.is_(None),
+                ChatDataAgentInbox.delete_flag == 0,
+            )
+            .values(consumed_time=now, update_time=now)
+        )
+
     async def list_expired(
         self,
         session: AsyncSession,

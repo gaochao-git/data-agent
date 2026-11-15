@@ -63,7 +63,7 @@ const compactionsForTask = (task: SubagentTaskRecord) => {
   return persisted.length ? persisted : (isCurrentTask(task) ? stream.compactions.value : [])
 }
 const contextUsageForTask = (task: SubagentTaskRecord) => {
-  const persisted = task.result_meta?.subagent_context_usage
+  const persisted = task.result_meta?.subagent_context_usage || task.progress?.context_usage
   if (isCurrentTask(task) && active.value && stream.contextUsage.value) return stream.contextUsage.value
   return persisted || (isCurrentTask(task) ? stream.contextUsage.value : null)
 }

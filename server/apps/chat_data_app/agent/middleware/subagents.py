@@ -1064,6 +1064,11 @@ async def _finish_cancelled_background_task(
         result_meta=result_meta,
         history=_session_history_payload(record, history or [], partial_state),
     )
+    try:
+        # 用户取消后同样通知主智能体；空闲会话由通知 Run 自动唤醒。
+        await service.dispatch_pending_notifications(limit=1)
+    except Exception:
+        logger.warning("[tools] 子智能体取消通知即时派发失败: task_id=%s", record.task_id, exc_info=True)
 
 
 def _session_history_payload(

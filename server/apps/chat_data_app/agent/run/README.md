@@ -25,12 +25,23 @@ cancelled/interrupted/lost`；`cancelling` 是跨 worker 的取消请求，执�
 （固定 5 秒）停止协程并收口。租约过期由
 活动节点的 `agent_run_runtime` 统一回收为 `lost`，避免多副本重复判断。
 
-- 完成通知写成隐藏的 `next-step` inbox 消息（`message_id=ntf-<task_id>`，`hide_from_ui=true`）；
+- 所有需要主智能体感知的生命周期变化统一写入 `chat_data_subagent_event` outbox：
+  `terminal`、`waiting_approval`、`paused`、`resumed`，以及未来用户直聊子智能体的
+  `user_message`。状态变更与事件同一事务落库，投递状态按事件独立记录，不再受
+  「一任务一通知」限制，也不再依赖任务行的 `consumed_time` 表达全部语义。
+- 事件有三种投递策略：`wake` 在会话空闲时创建隐藏通知 Run 自动唤醒，忙时挂当前 Run；
+  `attach` 只挂活跃 Run，不唤醒空闲会话；`silent` 只留审计。审批和终态用 `wake`，
+  暂停/恢复与用户直聊事件用 `attach`。
+- 通知写成隐藏的 `next-step` inbox 消息（`message_id=evt-<hash>`，`hide_from_ui=true`）；
   会话空闲时用 `adopt_pending_messages=False + selected_message_id` 创建通知 Run，只领取
   自己的通知，不劫持用户排队消息。隐藏消息不进用户历史/气泡。
-- 通知会**自动唤醒**通知 Run：会话空闲时由调度器直接创建（`query` 为空、
-  `disable_user_interaction=true`），会占用一次模型轮次但不产生用户气泡；会话忙时挂到
-  当前 Run 的下一轮消息。用户不发消息也会推进，不需要手动轮询。
+- 通知 Run 的 `runtime_context` 携带 `subagent_notification_event_id/event_type/task_id/status`，
+  会话空闲时由调度器直接创建（`query` 为空、`disable_user_interaction=true`），会占用一次
+  模型轮次但不产生用户气泡；会话忙时挂到当前 Run 的下一轮消息。用户不发消息也会推进。
+- 投递成功后事件标记 `delivered` 并维持终态任务 `consumed_time/notified_at` 口径；失败保留
+  `pending` 由调度重试，超过重试上限标记 `failed`。`subagent(action="check/wait")` 已读到
+  终态会取消尚未投递的终态事件和尚未消费的隐藏消息；恢复/取消会让旧的审批或暂停事件失效。
+- 同步任务仍在当前轮返回，不生成终态事件或唤醒 Run。
 - 任务结论始终先落在账本的 `record_content`；通知里只是预览。终态任务用
   `subagent(action="check", task_id=...)` 一次读取完整报告。
 - 报告超过父上下文预算或 `TOOL_RESULT_OFFLOAD_SIZE` 时，账本仍保存全文，同时额外落一份
@@ -38,6 +49,8 @@ cancelled/interrupted/lost`；`cancelling` 是跨 worker 的取消请求，执�
   主智能体直接用 `file_read` 读取完整正文，不再对报告做分页。
 - 状态口径：终态优先，收口时 `progress.phase` 同步改为终态；`progress.tool_calls` 是累计
   调用过的工具总数，`progress.running_tools` 才是当前仍在执行的工具数。
+- 运行期上下文快照写入 `progress.context_usage` 随心跳持久化：列表接口不返回
+  `result_meta`，前端任务卡靠这份轻量快照展示运行中、取消、超时和失联任务的上下文占比。
 - 实时过程流对同步/后台任务同构：任务详情都从任务事件流读取过程；同步任务额外把同一批
   事件写回父对话流，保证当前轮的工具卡与详情页都能实时展示。
 - 实时推送走 SSE `subagent_task_updated`（只带紧凑快照，不带报告）；断线、空闲或刷新后由
@@ -98,8 +111,9 @@ cancelled/interrupted/lost`；`cancelling` 是跨 worker 的取消请求，执�
   `task_id`），以及 `paused/waiting_approval` 状态与统一的
   `steer/pause/resume/approve/reject/cancel` 控制命令。账本仍是业务真值，
   checkpoint 只负责执行恢复；暂停与审批都落在模型调用前的安全点，恢复用
-  `Command(resume=...)`。等待审批时会主动向主会话冒泡一条内部通知，用户
-  明确允许/拒绝后由主智能体调用 `subagent(action="approve"/"reject")` 继续。
+  `Command(resume=...)`。等待审批、暂停和恢复都会写生命周期事件，按
+  wake/attach 策略同步给主会话；用户明确允许/拒绝后由主智能体调用
+  `subagent(action="approve"/"reject")` 继续。
 - 阶段 2：通知聚合、全局/节点容量、运行期子智能体类型注册与预算配置。
 - 阶段 3：单层任务的查询/可观测性增强；API 只暴露智能体视图，不把 inbox
   扁平行泄露给前端。

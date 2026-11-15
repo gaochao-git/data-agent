@@ -9983,63 +9983,6 @@
         ]
       }
     },
-    "/api/chatdata/conversations/{conversation_id}/subagent-tasks/{task_id}/pause": {
-      "post": {
-        "description": "用户手动暂停后台子智能体任务；运行中的任务在下一个模型调用前停下。",
-        "operationId": "pause_subagent_task_api_chatdata_conversations__conversation_id__subagent_tasks__task_id__pause_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "conversation_id",
-            "required": true,
-            "schema": {
-              "title": "Conversation Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "task_id",
-            "required": true,
-            "schema": {
-              "title": "Task Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "ServiceToken": []
-          }
-        ],
-        "summary": "Pause Subagent Task",
-        "tags": [
-          "ChatData 会话"
-        ]
-      }
-    },
     "/api/chatdata/conversations/{conversation_id}/title": {
       "post": {
         "description": "自动生成会话标题\n\nPOST /api/chatdata/conversations/{id}/title\n\n返回：\n{\n    \"status\": \"success\",\n    \"data\": {\"id\": \"...\", \"title\": \"...\"}\n}",

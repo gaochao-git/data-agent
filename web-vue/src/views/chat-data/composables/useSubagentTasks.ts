@@ -7,7 +7,7 @@
  * - 有活跃任务时低频轮询，空闲 Run 也能看到进度，不依赖父 Run 一直在线。
  */
 import { computed, onBeforeUnmount, ref } from 'vue'
-import { cancelSubagentTask, getSubagentTask, listSubagentTasks, pauseSubagentTask } from '../api'
+import { cancelSubagentTask, getSubagentTask, listSubagentTasks } from '../api'
 import type { SubagentTaskRecord, SubagentTaskStatus } from '../types'
 
 export const ACTIVE_SUBAGENT_TASK_STATUSES: ReadonlySet<SubagentTaskStatus> = new Set([
@@ -45,6 +45,18 @@ export interface SubagentTaskSession {
 const taskTurnIndex = (task: SubagentTaskRecord): number => Math.max(Number(task.turn_index) || 1, 1)
 export const subagentTaskSessionId = (task: SubagentTaskRecord): string =>
   task.agent_session_id || task.agent_id || task.root_task_id || task.task_id
+
+/** 单个任务的压缩次数：优先用列表摘要字段，旧数据回退到已加载的 result_meta。 */
+export const subagentTaskCompactionCount = (task: SubagentTaskRecord): number => {
+  const summary = Number(task.compaction_count)
+  if (Number.isFinite(summary) && summary >= 0) return Math.floor(summary)
+  const compactions = task.result_meta?.subagent_compactions
+  return Array.isArray(compactions) ? compactions.length : 0
+}
+
+/** 同一子会话所有轮次的压缩次数合计。 */
+export const subagentSessionCompactionCount = (tasks: SubagentTaskRecord[]): number =>
+  tasks.reduce((total, task) => total + subagentTaskCompactionCount(task), 0)
 
 /** 任务账本按轮次落记录；管理页按子会话聚合，避免追问被展示成新的智能体。 */
 export const groupSubagentTaskSessions = (tasks: SubagentTaskRecord[]): SubagentTaskSession[] => {
@@ -214,19 +226,6 @@ export const useSubagentTasks = () => {
     }
   }
 
-  const pauseTask = async (taskId: string): Promise<SubagentTaskRecord | null> => {
-    const currentConversationId = conversationId
-    if (!currentConversationId) return null
-    try {
-      const task = await pauseSubagentTask(currentConversationId, taskId)
-      if (currentConversationId === conversationId) applyTaskUpdate(task)
-      return task
-    } catch (err) {
-      error.value = err instanceof Error ? err.message : '暂停任务失败'
-      return null
-    }
-  }
-
   const setConversation = async (nextConversationId: string | null) => {
     const normalized = nextConversationId || null
     if (normalized === conversationId) {
@@ -256,7 +255,6 @@ export const useSubagentTasks = () => {
     applyTaskUpdate,
     loadTaskDetail,
     cancelTask,
-    pauseTask,
     stopPolling,
   }
 }

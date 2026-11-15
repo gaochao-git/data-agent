@@ -225,13 +225,20 @@ describe('ConversationWorkspacePanel tab 容器', () => {
   it('后台任务独立 tab：同一 task_id 只激活不重复，详情来自任务账本', async () => {
     const detailedTask = {
       ...backgroundTask,
+      compaction_count: 1,
       result_meta: {
         subagent_context_usage: { used_tokens: 1_000, context_window: 10_000, percent: 10 },
         subagent_compactions: [{ id: 'compact-1', compressed_messages: 3 }],
       },
     }
+    const previousTask = {
+      ...backgroundTask,
+      task_id: 'bg-task-0',
+      root_task_id: backgroundTask.task_id,
+      compaction_count: 2,
+    }
     const wrapper = mountPanel({
-      subagentTasks: [detailedTask],
+      subagentTasks: [previousTask, detailedTask],
       subagentTaskDetails: { [backgroundTask.task_id]: detailedTask },
     })
     const vm = wrapper.vm as unknown as { openSubagentTask: (task: SubagentTaskRecord) => void }
@@ -243,7 +250,7 @@ describe('ConversationWorkspacePanel tab 容器', () => {
     const usage = wrapper.find('[data-subagent-task-usage]')
     expect(usage.exists()).toBe(true)
     expect(usage.find('button').attributes('title')).toContain('上下文占用')
-    expect(wrapper.text()).toContain('已压缩 1 次')
+    expect(wrapper.text()).toContain('已压缩 3 次')
 
     vm.openSubagentTask(backgroundTask)
     await wrapper.vm.$nextTick()
@@ -428,7 +435,8 @@ describe('ConversationWorkspacePanel tab 容器', () => {
 
     const card = wrapper.find('[data-subagent-task-card]')
     expect(card.exists()).toBe(true)
-    expect(card.find('[data-subagent-task-title]').text()).toContain('explore-入金趋势')
+    expect(card.find('[data-subagent-task-agent-tag]').text()).toBe('explore')
+    expect(card.find('[data-subagent-task-title-text]').text()).toContain('入金趋势')
     expect(card.find('[data-subagent-task-progress]').exists()).toBe(false)
     expect(card.find('[data-subagent-task-footer] [data-subagent-task-status]').text()).toContain('已完成')
     expect(card.text()).not.toContain('任务记录已保留')
@@ -437,25 +445,6 @@ describe('ConversationWorkspacePanel tab 容器', () => {
     await wrapper.vm.$nextTick()
     expect(tabTitles(wrapper)).toEqual(['工作台', '子智能体管理', '入金趋势'])
     expect(wrapper.find('[data-subagent-task-detail]').exists()).toBe(true)
-  })
-
-  it('子智能体管理页可暂停运行中的后台任务', async () => {
-    const running: SubagentTaskRecord = {
-      ...backgroundTask,
-      status: 'running',
-      status_label: '执行中',
-      finished_at: null,
-    }
-    const pauseSubagentTask = vi.fn().mockResolvedValue(undefined)
-    const wrapper = mountPanel({ subagentTasks: [running], pauseSubagentTask })
-    const vm = wrapper.vm as unknown as { openSubagentManager: () => void }
-    vm.openSubagentManager()
-    await wrapper.vm.$nextTick()
-
-    const button = wrapper.find('[data-subagent-task-pause]')
-    expect(button.exists()).toBe(true)
-    await button.trigger('click')
-    expect(pauseSubagentTask).toHaveBeenCalledWith(expect.objectContaining({ task_id: 'bg-task-1' }))
   })
 
   it('首次打开后台任务详情停在最新，并开启贴底跟随', async () => {

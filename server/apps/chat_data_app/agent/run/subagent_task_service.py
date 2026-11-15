@@ -4,9 +4,9 @@
 - 进程内只保留 asyncio 执行句柄，任务状态以 MySQL 为唯一真值；
 - worker 每 5 秒续租并写进度，取消请求先落 ``cancelling``，执行 worker 通过
   心跳观察后停止本地协程，因而跨 worker 也能取消；
-- 任务终态后写一条隐藏的 ``next-step`` inbox 消息。父 Run 仍活跃时按现有
-  steering 通道注入；会话空闲时创建一个 pending notification Run，由现有
-  Run 调度器领取。通知消息 ID 由 task_id 派生，重复派发不会重复注入。
+- 生命周期变化（终态、审批、暂停/恢复、未来用户直聊）写入
+  ``chat_data_subagent_event`` outbox；统一 dispatcher 按 wake/attach/silent
+  策略投递，事件 ID 与隐藏消息 ID 都幂等，重复派发不会重复注入。
 """
 
 from __future__ import annotations
@@ -58,12 +58,25 @@ from ..contracts.subagent_task import (
     register_subagent_task_service,
 )
 from .agent_inbox_service import (
-    AgentRunConflictError,
     AgentRunNotActiveError,
     agent_inbox_service,
-    load_run_content,
 )
 from .agent_run_event_service import agent_run_event_service
+from .subagent_event_service import (
+    EVENT_PAUSED,
+    EVENT_RESUMED,
+    EVENT_TERMINAL,
+    EVENT_USER_MESSAGE,
+    EVENT_WAITING_APPROVAL,
+    SUSPENSION_NOTIFICATION_EVENTS,
+    WAKE_POLICY_ATTACH,
+    WAKE_POLICY_WAKE,
+    build_event_meta,
+    event_message_id,
+    lifecycle_event_id,
+    subagent_event_service,
+    terminal_event_id,
+)
 from .subagent_task_event_service import (
     SubagentTaskStreamWriter,
     subagent_task_event_service,
@@ -161,7 +174,8 @@ class SubagentTaskRecord:
 
     @property
     def label(self) -> str:
-        return str(self.meta.get("label") or "") or self.description.splitlines()[0][:80]
+        explicit = str(self.meta.get("label") or "")
+        return explicit or next(iter(self.description.splitlines()), "")[:80]
 
     @property
     def parent_tool_call_id(self) -> str:
@@ -265,6 +279,12 @@ class SubagentTaskRecord:
     def is_terminal(self) -> bool:
         return self.status in TERMINAL_TASK_STATUSES
 
+    @property
+    def compaction_count(self) -> int:
+        """已完成的子图上下文压缩次数；事件在生成时已按 id 去重。"""
+        compactions = self.result_meta.get("subagent_compactions")
+        return len(compactions) if isinstance(compactions, list) else 0
+
     def as_dict(self, *, include_report: bool = True) -> dict[str, Any]:
         """API / 工具共用结构；时间统一 ISO，避免前端重复解析格式。"""
         payload: dict[str, Any] = {
@@ -293,6 +313,7 @@ class SubagentTaskRecord:
             "notified_at": _iso(self.notified_at),
             "timeout_seconds": self.timeout_seconds,
             "execution_mode": self.execution_mode,
+            "compaction_count": self.compaction_count,
         }
         if include_report:
             payload["report"] = self.report
@@ -364,6 +385,12 @@ def _preview(text: str, max_chars: int = NOTIFICATION_REPORT_PREVIEW_CHARS) -> s
 
 
 def notification_message_id(task_id: str) -> str:
+    """兼容旧调用方的完成通知消息 ID；统一走事件哈希，保证列宽稳定。"""
+    return event_message_id(terminal_event_id(task_id))
+
+
+def _legacy_notification_message_id(task_id: str) -> str:
+    """升级前已生成的通知消息 ID，只用于已读时清理存量 pending 消息。"""
     return f"ntf-{task_id}"
 
 
@@ -390,6 +417,36 @@ def _suspension_notification_text(task: SubagentTaskRecord) -> str:
     )
 
 
+def _paused_notification_text(task: SubagentTaskRecord) -> str:
+    return (
+        "## 后台子智能体已暂停（内部消息）\n"
+        f"task_id={task.task_id}\n"
+        f"类型={task.subagent_type}；任务={task.label}\n\n"
+        f'需要继续时调用 subagent(action="resume", task_id="{task.task_id}")；'
+        '不需要继续时调用 subagent(action="cancel", task_id=...)。'
+    )
+
+
+def _resumed_notification_text(task: SubagentTaskRecord) -> str:
+    return (
+        "## 后台子智能体已恢复（内部消息）\n"
+        f"task_id={task.task_id}\n"
+        f"类型={task.subagent_type}；任务={task.label}\n\n"
+        "后续终态仍会另行通知，不要因为恢复而重复派发同一任务。"
+    )
+
+
+def _user_message_notification_text(task: SubagentTaskRecord, excerpt: str) -> str:
+    return (
+        "## 用户直接联系了子智能体（内部消息）\n"
+        f"task_id={task.task_id}\n"
+        f"类型={task.subagent_type}；任务={task.label}\n\n"
+        f"用户消息：{excerpt}\n\n"
+        "这是用户与子智能体的独立对话，不要把它当成新的派发指令；"
+        '如需继续管理该子会话，先调用 subagent(action="check", task_id=...) 获取最新状态。'
+    )
+
+
 class SubagentTaskService:
     """任务生命周期、取消、回收与通知派发。"""
 
@@ -398,10 +455,12 @@ class SubagentTaskService:
         dao: SubagentTaskDao = subagent_task_dao,
         inbox: Any = agent_inbox_service,
         event_service: Any = agent_run_event_service,
+        notification_service: Any = subagent_event_service,
     ) -> None:
         self._dao = dao
         self._inbox = inbox
         self._event_service = event_service
+        self._notification_service = notification_service
         self._local_tasks: dict[str, asyncio.Task] = {}
         # 任务卡推送降级截止时间（monotonic），避免失败后每个心跳重复重试。
         self._push_degraded_until: dict[str, float] = {}
@@ -976,6 +1035,7 @@ class SubagentTaskService:
         """执行体在 interrupt 后把任务落到暂停/等待审批，并释放租约。"""
         if status not in SUSPENDED_TASK_STATUSES:
             raise ValueError(f"不支持的挂起状态: {status}")
+        notification_event_id: str | None = None
         async with get_session() as session:
             now = await self._dao.now(session)
             row = await self._dao.get(session, task_id, for_update=True)
@@ -997,61 +1057,31 @@ class SubagentTaskService:
             row.record_meta = _task_meta_text(meta)
             row.update_time = now
             record = SubagentTaskRecord.from_row(row)
+            event_type = EVENT_WAITING_APPROVAL if status == TASK_STATUS_WAITING_APPROVAL else EVENT_PAUSED
+            notification_event_id = lifecycle_event_id(event_type, task_id, now)
+            await self._notification_service.cancel_pending_in_session(
+                session,
+                task_id,
+                SUSPENSION_NOTIFICATION_EVENTS,
+                now,
+            )
+            await self._emit_event_in_session(
+                session,
+                record,
+                now,
+                event_id=notification_event_id,
+                event_type=event_type,
+                wake_policy=WAKE_POLICY_WAKE if event_type == EVENT_WAITING_APPROVAL else WAKE_POLICY_ATTACH,
+                content=(
+                    _suspension_notification_text(record)
+                    if event_type == EVENT_WAITING_APPROVAL
+                    else _paused_notification_text(record)
+                ),
+            )
         await self.publish_task_update(record)
         logger.info("后台子智能体已挂起: task_id=%s status=%s", task_id, status)
-        if status == TASK_STATUS_WAITING_APPROVAL:
-            await self._announce_suspended_task(record)
+        await self._dispatch_event_best_effort(notification_event_id)
         return record
-
-    async def _announce_suspended_task(self, task: SubagentTaskRecord) -> None:
-        """等待审批时主动冒泡到主会话：不依赖用户先轮询任务详情。"""
-        notif_id = f"subagent-approval-{task.task_id}"
-        content = _suspension_notification_text(task)
-        async with get_session() as session:
-            now = await self._dao.now(session)
-            existing = await agent_inbox_dao.get_message_by_id(
-                session,
-                task.conversation_id,
-                task.user_id,
-                notif_id,
-            )
-            if existing is not None and existing.record_status in {"claimed", "consumed"}:
-                return
-            active = await agent_inbox_dao.get_active_run_snapshot(
-                session,
-                task.conversation_id,
-                task.user_id,
-            )
-            if active is not None:
-                if existing is None:
-                    await self._dao.create_notification_message(
-                        session,
-                        conversation_id=task.conversation_id,
-                        user_id=task.user_id,
-                        run_id=active.run_id,
-                        message_id=notif_id,
-                        content=content,
-                        record_meta=self._notification_meta(task),
-                        now=now,
-                        operator_name=self._operator_name(task),
-                    )
-                else:
-                    await self._dao.attach_pending_message(session, existing, active.run_id, now)
-                return
-            if existing is None:
-                await self._dao.create_notification_message(
-                    session,
-                    conversation_id=task.conversation_id,
-                    user_id=task.user_id,
-                    run_id=task.parent_run_id,
-                    message_id=notif_id,
-                    content=content,
-                    record_meta=self._notification_meta(task),
-                    now=now,
-                    operator_name=self._operator_name(task),
-                )
-        # 审批冒泡不能标记 task.consumed_time：任务恢复后仍需发送完成通知。
-        await self._start_notification_run(task, selected_message_id=notif_id, mark_notified=False)
 
     async def resume_task(
         self,
@@ -1062,6 +1092,7 @@ class SubagentTaskService:
         resume_value: Any,
     ) -> tuple[SubagentTaskRecord, Any] | None:
         """把挂起任务重新置为运行中并返回新的执行者身份与恢复值。"""
+        notification_event_id: str | None = None
         async with get_session() as session:
             now = await self._dao.now(session)
             lease_seconds = int(await get_runtime_setting("CHAT_DATA_SUBAGENT_TASK_LEASE_SECONDS"))
@@ -1092,8 +1123,25 @@ class SubagentTaskService:
             row.record_meta = _task_meta_text(meta)
             row.update_time = now
             record = SubagentTaskRecord.from_row(row)
+            await self._notification_service.cancel_pending_in_session(
+                session,
+                task_id,
+                SUSPENSION_NOTIFICATION_EVENTS,
+                now,
+            )
+            notification_event_id = lifecycle_event_id(EVENT_RESUMED, task_id, now)
+            await self._emit_event_in_session(
+                session,
+                record,
+                now,
+                event_id=notification_event_id,
+                event_type=EVENT_RESUMED,
+                wake_policy=WAKE_POLICY_ATTACH,
+                content=_resumed_notification_text(record),
+            )
         await self.publish_task_update(record)
         logger.info("后台子智能体恢复执行: task_id=%s", task_id)
+        await self._dispatch_event_best_effort(notification_event_id)
         return record, resume_value
 
     async def finish_task(
@@ -1152,6 +1200,23 @@ class SubagentTaskService:
             row.update_time = now
             logger.info("后台子智能体任务收口: task_id=%s status=%s", task_id, final_status)
             record = SubagentTaskRecord.from_row(row)
+            # 审批/暂停已不再成立，先撤回尚未投递的旧事件，避免终态之后又冒泡。
+            await self._notification_service.cancel_pending_in_session(
+                session,
+                task_id,
+                SUSPENSION_NOTIFICATION_EVENTS,
+                now,
+            )
+            if record.notify_on_finish:
+                await self._emit_event_in_session(
+                    session,
+                    record,
+                    now,
+                    event_id=terminal_event_id(task_id),
+                    event_type=EVENT_TERMINAL,
+                    wake_policy=WAKE_POLICY_WAKE,
+                    content=self._notification_text(record),
+                )
         if history is not None:
             # 会话快照单独事务：新表未上线/写失败不能让任务收口回滚，否则任务
             # 只能等租约过期变 lost。历史缺失时追问会走“任务书+报告”兜底。
@@ -1221,6 +1286,7 @@ class SubagentTaskService:
         operator_name: str,
     ) -> SubagentTaskRecord | None:
         cancelled_running = False
+        notification_event_id: str | None = None
         async with get_session() as session:
             now = await self._dao.now(session)
             row = await self._dao.get(
@@ -1236,11 +1302,8 @@ class SubagentTaskService:
                 return SubagentTaskRecord.from_row(row)
             meta = load_task_meta(row.record_meta)
             meta["cancel_requested_at"] = now.isoformat()
-            # 用户主动取消不再自动唤醒一个「任务已取消」Run：即时状态已经
-            # 通过 API/SSE 返回给用户，自动通知只会制造一条无信息量的回复。
-            # 标记 consumed 只抑制通知，不影响任务详情与取消收口。
-            if row.consumed_time is None:
-                row.consumed_time = now
+            # 取消同样要告知主智能体：运行中的任务在下次心跳才真正停下，
+            # 调用方只拿到「已提交」；终态通知才是主智能体继续编排的依据。
             if row.record_status in (TASK_STATUS_PENDING, *SUSPENDED_TASK_STATUSES):
                 meta["finished_at"] = now.isoformat()
                 meta["phase"] = TASK_STATUS_CANCELLED
@@ -1261,9 +1324,28 @@ class SubagentTaskService:
             row.update_by = user_id
             row.update_by_name = operator_name
             record = SubagentTaskRecord.from_row(row)
+            await self._notification_service.cancel_pending_in_session(
+                session,
+                task_id,
+                SUSPENSION_NOTIFICATION_EVENTS,
+                now,
+            )
+            if record.status == TASK_STATUS_CANCELLED and record.notify_on_finish:
+                notification_event_id = terminal_event_id(task_id)
+                await self._emit_event_in_session(
+                    session,
+                    record,
+                    now,
+                    event_id=notification_event_id,
+                    event_type=EVENT_TERMINAL,
+                    wake_policy=WAKE_POLICY_WAKE,
+                    content=self._notification_text(record),
+                )
         if cancelled_running:
             self.cancel_local_task(task_id)
         await self.publish_task_update(record)
+        # 排队中/已挂起的任务取消即终态，当场派发终态事件；运行中任务由收口路径派发。
+        await self._dispatch_event_best_effort(notification_event_id)
         logger.info("后台子智能体取消请求: task_id=%s local=%s", task_id, cancelled_running)
         return record
 
@@ -1284,11 +1366,17 @@ class SubagentTaskService:
                 return
             if row.consumed_time is None:
                 row.consumed_time = now
+            await self._notification_service.cancel_pending_in_session(
+                session,
+                row.message_id,
+                SUSPENSION_NOTIFICATION_EVENTS | {EVENT_TERMINAL},
+                now,
+            )
             notification = await agent_inbox_dao.get_message_by_id(
                 session,
                 row.conversation_id,
                 row.user_id,
-                notification_message_id(row.message_id),
+                _legacy_notification_message_id(row.message_id),
             )
             if notification is not None and notification.record_status == "pending":
                 notification.record_status = "cancelled"
@@ -1348,188 +1436,112 @@ class SubagentTaskService:
             record = await self.get_task(task_id)
             if record is not None:
                 await self.publish_task_update(record)
+                await self._notify_reaped_terminal(record)
         return reaped
 
-    async def dispatch_pending_notifications(self, *, limit: int = 10) -> int:
-        async with get_session() as session:
-            rows = await self._dao.list_pending_notifications(session, set(TERMINAL_TASK_STATUSES), limit=limit)
-        dispatched = 0
-        for row in rows:
-            try:
-                record = SubagentTaskRecord.from_row(row)
-                if not record.notify_on_finish:
-                    # 兼容上线前已存在、尚未消费的同步任务行：静默标记已处理。
-                    await self.mark_viewed(record)
-                    continue
-                if await self._dispatch_task_notification(record):
-                    dispatched += 1
-            except Exception:
-                logger.error("后台子智能体完成通知派发失败: task_id=%s", row.message_id, exc_info=True)
-        return dispatched
-
-    async def _dispatch_task_notification(self, task: SubagentTaskRecord) -> bool:
-        notif_id = notification_message_id(task.task_id)
-        active_run_id: str | None = None
-        existing_status: str | None = None
-        async with get_session() as session:
-            now = await self._dao.now(session)
-            existing = await agent_inbox_dao.get_message_by_id(
-                session,
-                task.conversation_id,
-                task.user_id,
-                notif_id,
-            )
-            existing_status = existing.record_status if existing else None
-            active = await agent_inbox_dao.get_active_run_snapshot(
-                session,
-                task.conversation_id,
-                task.user_id,
-            )
-            active_run_id = active.run_id if active else None
-            if existing is not None and existing.record_status in {"claimed", "consumed"}:
-                await self._mark_notified_in_session(session, task.task_id, now)
-                return True
-            content = self._notification_text(task)
-            if active_run_id:
-                if existing is None:
-                    await self._dao.create_notification_message(
-                        session,
-                        conversation_id=task.conversation_id,
-                        user_id=task.user_id,
-                        run_id=active_run_id,
-                        message_id=notif_id,
-                        content=content,
-                        record_meta=self._notification_meta(task),
-                        now=now,
-                        operator_name=self._operator_name(task),
-                    )
-                else:
-                    await self._dao.attach_pending_message(session, existing, active_run_id, now)
-                await self._mark_notified_in_session(session, task.task_id, now)
-                return True
-            if existing is None:
-                await self._dao.create_notification_message(
-                    session,
-                    conversation_id=task.conversation_id,
-                    user_id=task.user_id,
-                    run_id=task.parent_run_id,
-                    message_id=notif_id,
-                    content=content,
-                    record_meta=self._notification_meta(task),
-                    now=now,
-                    operator_name=self._operator_name(task),
-                )
-        if existing_status == "cancelled":
-            await self.mark_viewed(task)
-            return True
-        return await self._start_notification_run(task)
-
-    async def _start_notification_run(
-        self,
-        task: SubagentTaskRecord,
-        *,
-        selected_message_id: str | None = None,
-        mark_notified: bool = True,
-    ) -> bool:
-        runtime_context = await self._notification_runtime_context(task)
-        message_id = selected_message_id or notification_message_id(task.task_id)
-        try:
-            await self._inbox.start_run(
-                task.conversation_id,
-                task.user_id,
-                self._operator_name(task),
-                runtime_context,
-                adopt_pending_messages=False,
-                selected_message_id=message_id,
-            )
-        except AgentRunConflictError:
-            return await self._attach_notification_to_active_run(
-                task, message_id=message_id, mark_notified=mark_notified
-            )
-        except AgentRunNotActiveError:
-            logger.warning("后台任务通知 Run 无法创建：会话不存在 task_id=%s", task.task_id)
-            await self._mark_notified(task)
-            return True
-        except Exception:
-            logger.error("后台任务通知 Run 创建失败，下轮重试: task_id=%s", task.task_id, exc_info=True)
-            return False
-        if mark_notified:
-            await self._mark_notified(task)
-        logger.info("后台任务完成通知 Run 已创建: task_id=%s", task.task_id)
-        return True
-
-    async def _attach_notification_to_active_run(
-        self,
-        task: SubagentTaskRecord,
-        *,
-        message_id: str | None = None,
-        mark_notified: bool = True,
-    ) -> bool:
-        async with get_session() as session:
-            now = await self._dao.now(session)
-            active = await agent_inbox_dao.get_active_run_snapshot(
-                session,
-                task.conversation_id,
-                task.user_id,
-            )
-            message = await agent_inbox_dao.get_message_by_id(
-                session,
-                task.conversation_id,
-                task.user_id,
-                message_id or notification_message_id(task.task_id),
-            )
-            if active is not None and message is not None:
-                await self._dao.attach_pending_message(session, message, active.run_id, now)
-            if mark_notified:
-                await self._mark_notified_in_session(session, task.task_id, now)
-        return True
-
-    async def _notification_runtime_context(self, task: SubagentTaskRecord) -> dict[str, Any]:
-        parent_context: dict[str, Any] = {}
-        async with get_session() as session:
-            parent = await agent_inbox_dao.get_run_by_id(session, task.parent_run_id)
-            if parent is not None:
-                loaded = load_run_content(parent.record_content).get("runtime_context")
-                if isinstance(loaded, dict):
-                    parent_context = dict(loaded)
-        return {
-            **parent_context,
-            "query": "",
-            "disable_user_interaction": True,
-            "subagent_notification_task_id": task.task_id,
-            "subagent_notification_status": task.status,
-        }
-
-    async def _mark_notified(self, task: SubagentTaskRecord) -> None:
-        async with get_session() as session:
-            now = await self._dao.now(session)
-            await self._mark_notified_in_session(session, task.task_id, now)
-
-    async def _mark_notified_in_session(self, session: Any, task_id: str, now: datetime) -> None:
-        row = await self._dao.get(session, task_id, for_update=True)
-        if row is None or row.consumed_time is not None:
+    async def _notify_reaped_terminal(self, record: SubagentTaskRecord) -> None:
+        if not record.notify_on_finish:
             return
-        row.consumed_time = now
-        row.update_time = now
+        event_id = terminal_event_id(record.task_id)
+        try:
+            async with get_session() as session:
+                now = await self._dao.now(session)
+                await self._notification_service.cancel_pending_in_session(
+                    session,
+                    record.task_id,
+                    SUSPENSION_NOTIFICATION_EVENTS,
+                    now,
+                )
+                await self._emit_event_in_session(
+                    session,
+                    record,
+                    now,
+                    event_id=event_id,
+                    event_type=EVENT_TERMINAL,
+                    wake_policy=WAKE_POLICY_WAKE,
+                    content=self._notification_text(record),
+                )
+        except Exception:
+            logger.error("回收子智能体终态事件写入失败: task_id=%s", record.task_id, exc_info=True)
+            return
+        await self._dispatch_event_best_effort(event_id)
+
+    async def dispatch_pending_notifications(self, *, limit: int = 10) -> int:
+        return await self._notification_service.dispatch_pending(limit=limit)
+
+    async def _dispatch_event_best_effort(self, event_id: str | None) -> None:
+        if not event_id:
+            return
+        try:
+            await self._notification_service.dispatch_event(event_id)
+        except Exception:
+            logger.warning("子智能体事件即时派发失败，等待调度重试: event_id=%s", event_id, exc_info=True)
+
+    async def _emit_event_in_session(
+        self,
+        session: Any,
+        task: SubagentTaskRecord,
+        now: datetime,
+        *,
+        event_id: str,
+        event_type: str,
+        wake_policy: str,
+        content: str,
+    ) -> Any:
+        return await self._notification_service.emit_in_session(
+            session,
+            event_id=event_id,
+            parent_run_id=task.parent_run_id,
+            task_id=task.task_id,
+            session_id=task.agent_session_id,
+            conversation_id=task.conversation_id,
+            user_id=task.user_id,
+            event_type=event_type,
+            task_status=task.status,
+            wake_policy=wake_policy,
+            content=content,
+            meta=self._event_meta(task),
+            now=now,
+        )
+
+    async def notify_user_message(self, task: SubagentTaskRecord, message: str) -> str | None:
+        """用户直接与子智能体对话时，把消息作为 attach 事件同步给主智能体。"""
+        excerpt = str(message or "").strip()[:1000]
+        if not excerpt:
+            return None
+        event_id: str | None = None
+        async with get_session() as session:
+            now = await self._dao.now(session)
+            event_id = lifecycle_event_id(EVENT_USER_MESSAGE, task.task_id, now)
+            await self._emit_event_in_session(
+                session,
+                task,
+                now,
+                event_id=event_id,
+                event_type=EVENT_USER_MESSAGE,
+                wake_policy=WAKE_POLICY_ATTACH,
+                content=_user_message_notification_text(task, excerpt),
+            )
+        await self._dispatch_event_best_effort(event_id)
+        return event_id
+
+    def _event_meta(self, task: SubagentTaskRecord) -> dict[str, Any]:
+        return build_event_meta(
+            operator_name=self._operator_name(task),
+            subagent_type=task.subagent_type,
+            execution_mode=task.execution_mode,
+            turn_index=task.turn_index,
+            label=task.label,
+        )
 
     @staticmethod
     def _operator_name(task: SubagentTaskRecord) -> str:
         return str(task.meta.get("operator_name") or task.user_id or "系统")
 
     @staticmethod
-    def _notification_meta(task: SubagentTaskRecord) -> dict[str, Any]:
-        return {
-            "hide_from_ui": True,
-            "subagent_notification": {
-                "task_id": task.task_id,
-                "subagent_type": task.subagent_type,
-                "status": task.status,
-            },
-        }
-
-    @staticmethod
     def _notification_text(task: SubagentTaskRecord) -> str:
         outcome = TASK_STATUS_LABELS.get(task.status, task.status)
+        cancelled = task.status == TASK_STATUS_CANCELLED
         report = _preview(task.report or task.error or "无报告正文")
         report_path = task.report_path
         path_line = (
@@ -1537,21 +1549,35 @@ class SubagentTaskService:
             if report_path
             else ""
         )
+        header = "后台子智能体任务状态通知" if cancelled else "后台子智能体完成通知"
+        guidance = (
+            "任务已被取消，不需要汇报完成结论；如中断前已有结论可简要告知用户。"
+            f'需要基于同一子会话继续时调用 subagent(action="follow_up", task_id="{task.task_id}", message="...")，'
+            "或重新派发新任务。"
+            if cancelled
+            else "请根据报告向用户简要汇报结论（不要重复执行任务）；"
+        )
         return (
-            "## 后台子智能体完成通知（内部消息）\n"
+            f"## {header}（内部消息）\n"
             f"task_id={task.task_id}\n"
             f"类型={task.subagent_type}；状态={outcome}\n"
             f"任务={task.label}\n\n"
-            f"报告预览：\n{report}\n\n{path_line}"
-            "请根据报告向用户简要汇报结论（不要重复执行任务）；"
-            f'需要完整报告或最新状态时调用 subagent(action="check", task_id="{task.task_id}")；'
+            f"{'中断前内容预览' if cancelled else '报告预览'}：\n{report}\n\n{path_line}"
+            f"{guidance}"
             + (
-                "完整报告已落盘，请优先用 file_read 读取 result_path，不要只凭预览下结论。"
-                if report_path
-                else 'subagent(action="check") 会返回完整正文，不要只凭预览下结论。'
+                ""
+                if cancelled
+                else (
+                    f'需要完整报告或最新状态时调用 subagent(action="check", task_id="{task.task_id}")；'
+                    + (
+                        "完整报告已落盘，请优先用 file_read 读取 result_path，不要只凭预览下结论。"
+                        if report_path
+                        else 'subagent(action="check") 会返回完整正文，不要只凭预览下结论。'
+                    )
+                    + "如报告中提到产物文件，用 present_artifacts 展示。"
+                    + f'需要基于同一子会话继续分析/修改结论时，用 subagent(action="follow_up", task_id="{task.task_id}", message="...")。'
+                )
             )
-            + "如报告中提到产物文件，用 present_artifacts 展示。"
-            + f'需要基于同一子会话继续分析/修改结论时，用 subagent(action="follow_up", task_id="{task.task_id}", message="...")。'
         )
 
 

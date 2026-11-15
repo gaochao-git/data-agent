@@ -718,6 +718,33 @@ def test_progress_snapshot_counts_completed_tools_and_running_tools_separately()
 
 
 @pytest.mark.asyncio
+async def test_progress_snapshot_carries_lightweight_context_usage():
+    """运行期进度必须带上下文快照，列表/取消/失联任务才不显示「—」。"""
+
+    class FakeRunnable:
+        async def astream(self, _state, _config, *, stream_mode):
+            yield "updates", {"model": {"messages": [AIMessage(content="分析完成")]}}
+
+    snapshots: list[dict] = []
+    await subagents_module._run_subagent_with_events(
+        FakeRunnable(),
+        {"messages": [HumanMessage(content="分析")]},
+        {},
+        lambda _event: None,
+        parent_tool_call_id="call-1",
+        usage_meta={"static_tokens": 100, "threshold_tokens": 1_000, "context_window": 4_000},
+        on_progress=snapshots.append,
+    )
+
+    usage = next(snapshot["context_usage"] for snapshot in snapshots if snapshot.get("context_usage"))
+    assert usage["threshold_tokens"] == 1_000
+    assert usage["context_window"] == 4_000
+    assert usage["used_tokens"] >= 100
+    assert isinstance(usage["percent"], int)
+    assert "token_usage_detail" not in usage
+
+
+@pytest.mark.asyncio
 async def test_offload_subagent_report_returns_recovery_for_long_report(monkeypatch):
     """超长报告复用统一落盘通道，返回 recovery 供后台任务记录路径。"""
 

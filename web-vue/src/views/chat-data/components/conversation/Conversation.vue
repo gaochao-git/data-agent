@@ -753,10 +753,8 @@ const {
   applyTaskUpdate: applySubagentTaskUpdate,
   loadTaskDetail: loadSubagentTaskDetail,
   cancelTask: cancelSubagentTaskRequest,
-  pauseTask: pauseSubagentTaskRequest,
 } = useSubagentTasks()
 const cancellingTaskIds = ref<string[]>([])
-const pausingTaskIds = ref<string[]>([])
 
 // 后台任务收口后服务端可能新建隐藏通知 Run；空闲会话在这里自动接上它的 SSE，
 // 不再要求用户重新进入会话才能看到主智能体的后续工作。
@@ -789,22 +787,6 @@ const cancelSubagentTask = async (task: SubagentTaskRecord) => {
     cancellingTaskIds.value = cancellingTaskIds.value.filter(id => id !== task.task_id)
   }
 }
-const pauseSubagentTask = async (task: SubagentTaskRecord) => {
-  if (pausingTaskIds.value.includes(task.task_id)) return
-  pausingTaskIds.value = [...pausingTaskIds.value, task.task_id]
-  try {
-    const updated = await pauseSubagentTaskRequest(task.task_id)
-    if (!updated) {
-      ElMessage.error('暂停任务失败，请稍后重试')
-      return
-    }
-    if (updated.status === 'paused') ElMessage.success('子智能体已暂停')
-    else ElMessage.success('已提交暂停请求，任务会在下一个模型调用前暂停')
-  } finally {
-    pausingTaskIds.value = pausingTaskIds.value.filter(id => id !== task.task_id)
-  }
-}
-
 // 切换会话同样重置思考意图：显式选择不跨会话记忆（默认永远以注册表配置为准）
 watch(() => props.conversationId || localConversationId.value, () => {
   enableDeepThinking.value = null
@@ -3172,10 +3154,8 @@ const handleKeyDown = (event: KeyboardEvent) => {
       :subagent-tasks="subagentTasks"
       :subagent-task-details="subagentTaskDetails"
       :subagent-task-cancelling-ids="cancellingTaskIds"
-      :subagent-task-pausing-ids="pausingTaskIds"
       :load-subagent-task-detail="loadSubagentTaskDetail"
       :cancel-subagent-task="cancelSubagentTask"
-      :pause-subagent-task="pauseSubagentTask"
       @conversation-created="handlePanelConversationCreated"
       @import-semantic-yaml="emit('importSemanticYaml', $event)"
       @select-tool="selectToolCall"

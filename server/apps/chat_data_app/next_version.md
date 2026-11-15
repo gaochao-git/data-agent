@@ -32,6 +32,43 @@ CREATE TABLE `chat_data_subagent_session` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='后台子智能体多轮会话快照';
 ```
 
+### 子智能体生命周期事件 outbox
+
+统一承载审批、取消、终态以及后续用户直聊等需要同步给主智能体的通知；
+状态变更与事件同事务写入，由调度器统一投递、重试和唤醒。上线前执行：
+
+```sql
+CREATE TABLE `chat_data_subagent_event` (
+  `id` bigint(20) NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `event_id` varchar(96) NOT NULL COMMENT '事件唯一ID（含任务与事件类型的确定性去重键）',
+  `parent_run_id` varchar(64) NOT NULL DEFAULT '' COMMENT '派发该子智能体的父Run ID',
+  `task_id` varchar(64) NOT NULL COMMENT '子智能体任务ID',
+  `session_id` varchar(64) NOT NULL DEFAULT '' COMMENT '子智能体会话ID',
+  `conversation_id` varchar(255) NOT NULL COMMENT '父会话ID',
+  `user_id` varchar(255) NOT NULL COMMENT '业务归属用户ID',
+  `event_type` varchar(32) NOT NULL COMMENT '事件类型: waiting_approval/terminal/paused/resumed/user_message',
+  `task_status` varchar(32) NOT NULL DEFAULT '' COMMENT '事件发生时的任务状态',
+  `wake_policy` varchar(16) NOT NULL DEFAULT 'wake' COMMENT '投递策略: wake-可唤醒/attach-仅挂活跃Run/silent-仅审计',
+  `event_content` mediumtext NOT NULL COMMENT '通知正文（内部隐藏消息）',
+  `record_meta` text COMMENT '事件附加元数据JSON',
+  `delivery_status` varchar(16) NOT NULL DEFAULT 'pending' COMMENT '投递状态: pending/delivered/failed/cancelled',
+  `delivery_attempts` int NOT NULL DEFAULT '0' COMMENT '投递尝试次数',
+  `last_error` varchar(500) NOT NULL DEFAULT '' COMMENT '最近一次投递错误',
+  `delivered_time` datetime DEFAULT NULL COMMENT '投递成功时间',
+  `delete_flag` tinyint NOT NULL DEFAULT '0' COMMENT '删除标识: 0-未删除, 1-已删除',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `create_by` varchar(255) NOT NULL DEFAULT '' COMMENT '创建人',
+  `create_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人名称',
+  `update_by` varchar(255) NOT NULL DEFAULT '' COMMENT '更新人',
+  `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人名称',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_subagent_event_id` (`event_id`),
+  KEY `idx_subagent_event_conv` (`conversation_id`, `user_id`, `delivery_status`),
+  KEY `idx_subagent_event_task` (`task_id`, `event_type`, `delivery_status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='子智能体生命周期事件outbox';
+```
+
 ## 运行期配置变更
 
 以 `server/.env.example` 为对照，把以下变更同步到生产 `server/conf/.env-<环境>`（示例文件本身不参与运行）：

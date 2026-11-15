@@ -23,6 +23,7 @@ from apps.chat_data_app.agent.middleware import subagent_history as subagent_his
 from apps.chat_data_app.agent.middleware import subagents as subagents_module
 from apps.chat_data_app.agent.middleware.subagent_async import _format_task_report
 from apps.chat_data_app.agent.middleware.subagents import build_task_tool
+from apps.chat_data_app.agent.run import subagent_event_service as event_service_module
 from apps.chat_data_app.agent.run import subagent_task_service as service_module
 from apps.chat_data_app.agent.run.agent_inbox_service import AgentRunConflictError, agent_inbox_service
 from apps.chat_data_app.agent.run.subagent_task_service import (
@@ -81,6 +82,7 @@ def harness(monkeypatch):
                 raise
 
     monkeypatch.setattr(service_module, "get_session", get_test_session)
+    monkeypatch.setattr(event_service_module, "get_session", get_test_session)
     monkeypatch.setattr(service_module, "get_runtime_setting", _settings())
     fake_events = _FakeEventService()
     monkeypatch.setattr(subagent_task_service, "_event_service", fake_events)
@@ -229,6 +231,7 @@ async def test_create_task_persists_snapshot_and_publishes_compact_sse(harness):
     assert payload["root_agent_id"] == record.task_id
     assert payload["depth"] == 1
     assert payload["execution_mode"] == "background"
+    assert payload["compaction_count"] == 0
     assert "report" not in payload
     assert "result_meta" not in payload
 
@@ -421,8 +424,15 @@ async def test_finish_task_keeps_large_result_snapshot_out_of_text_meta(harness)
 
 
 @pytest.mark.asyncio
-async def test_cancel_pending_and_running_tasks(harness):
+async def test_cancel_pending_and_running_tasks(harness, monkeypatch):
     await harness.create_conversation()
+    calls: list[dict] = []
+
+    async def start_run(conversation_id, user_id, operator_name, runtime_context, **kwargs):
+        calls.append(runtime_context)
+        return "run-notification"
+
+    monkeypatch.setattr(agent_inbox_service, "start_run", start_run)
     pending = await _create_task(harness)
 
     cancelled = await harness.service.cancel_task(CONV, USER, pending.task_id, "用户一")
@@ -430,12 +440,28 @@ async def test_cancel_pending_and_running_tasks(harness):
     assert cancelled.status == "cancelled"
     assert cancelled.report == "任务在开始执行前已取消。"
     assert cancelled.owner_token is None
+    # 排队中任务取消即终态：立刻通知并唤醒主智能体。
+    assert len(calls) == 1
+    assert calls[0]["subagent_notification_task_id"] == pending.task_id
+    assert calls[0]["subagent_notification_status"] == "cancelled"
+    async with harness.get_session() as session:
+        notification = (
+            await session.execute(
+                select(ChatDataAgentInbox).where(
+                    ChatDataAgentInbox.message_id == notification_message_id(pending.task_id)
+                )
+            )
+        ).scalar_one()
+    assert "不需要汇报完成结论" in notification.record_content
+    assert "任务在开始执行前已取消" in notification.record_content
 
     running = await _create_task(harness)
     await _start(harness, running)
     requested = await harness.service.cancel_task(CONV, USER, running.task_id, "用户一")
     assert requested is not None
     assert requested.status == "cancelling"
+    # 运行中的任务要等执行体收口，收口前不能谎报已停止。
+    assert len(calls) == 1
 
     settled = await harness.service.finish_task(
         running.task_id,
@@ -447,8 +473,34 @@ async def test_cancel_pending_and_running_tasks(harness):
     assert settled.status == "cancelled"
     # 取消请求优先于迟到的完成结果，但已产出的报告仍保留供用户查看。
     assert settled.report == "迟到的完成结果"
-    # 主动取消不再制造「任务已取消」自动通知 Run。
-    assert await harness.service.dispatch_pending_notifications(limit=10) == 0
+    # 取消终态不再被抑制：通知可派发并唤醒主智能体。
+    assert await harness.service.dispatch_pending_notifications(limit=10) == 1
+    assert len(calls) == 2
+    assert calls[1]["subagent_notification_task_id"] == running.task_id
+    assert calls[1]["subagent_notification_status"] == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_cancelled_background_runner_dispatches_wakeup_notification():
+    """执行体被取消收口后立即派发通知；跨节点路径由调度轮询兜底。"""
+    calls: list[tuple[str, object]] = []
+
+    class _Service:
+        async def get_task(self, _task_id):
+            return SimpleNamespace(status="cancelling", error="")
+
+        async def finish_task(self, *_args, **kwargs):
+            calls.append(("finish", kwargs.get("status")))
+
+        async def dispatch_pending_notifications(self, *, limit=10):
+            calls.append(("dispatch", limit))
+            return 1
+
+    record = SimpleNamespace(task_id="task-cancel", owner_token="owner-1", description="取消通知核对")
+    await subagents_module._finish_cancelled_background_task(_Service(), record, {}, history=[])
+
+    assert calls[0] == ("finish", "cancelled")
+    assert calls[1] == ("dispatch", 1)
 
 
 @pytest.mark.asyncio
@@ -1106,6 +1158,30 @@ def test_task_identity_falls_back_for_legacy_meta():
     assert record.parent_agent_id == ""
     assert record.root_agent_id == "session-1"
     assert record.depth == 1
+
+
+def test_task_record_compaction_count_from_result_meta():
+    """列表摘要也要带压缩次数，前端无需拉完整 result_meta 即可按会话求和。"""
+    record = SubagentTaskRecord(
+        task_id="turn-1",
+        conversation_id=CONV,
+        user_id=USER,
+        parent_run_id="run-parent",
+        owner_token=None,
+        status="completed",
+        report="",
+        result_meta={"subagent_compactions": [{"id": "compact-1"}, {"id": "compact-2"}]},
+        meta={},
+        created_at=datetime.now(),
+        updated_at=None,
+        started_at=None,
+        finished_at=None,
+        notified_at=None,
+        lease_expire_time=None,
+    )
+
+    assert record.compaction_count == 2
+    assert record.as_dict(include_report=False)["compaction_count"] == 2
 
 
 @pytest.mark.asyncio
