@@ -1660,6 +1660,7 @@ ChatData
 
 ### 5.3 最近执行记录
 
+- `browser_click_test_runs/2026-11-15.md`（**压缩链路整体 Review + 浏览器定向回归**：任务卡压缩次数 / 完成卡 / 异常终态清占位 / 压缩中占位与替换均 PASS；实测发现新任务压缩卡仍堆末尾，登记 `DEF-2026-11-15-01` 并修复 `subagent_trail` 插入逻辑，真实数据重算 [64,65,66] → [26,28,51]。后端定向 385 passed、前端 type-check + 73 passed。**定向回归不覆盖其余编号，发布前仍需全量执行**）
 - `browser_click_test_runs/2026-11-14_followup.md` §6（**DS-12 定向回归**：`SemanticHealthModal` 模型名修复后可打开 / 可关闭 / 可再次打开，FAIL → PASS，DEF-2026-11-13-01 关闭；`npm run type-check` 与 81 files / 648 tests 前端定向单测全绿。**定向回归不覆盖其余编号，发布前仍需全量执行**）
 - `browser_click_test_runs/2026-11-14_followup.md`（DEF-2026-11-13-01 隔离复核定性 + BLOCKED 补跑：SCHED-05/06/07、AG-26 转 PASS，SYS-05/06 补齐免写库子项）
 - `browser_click_test_runs/2026-11-13.md`（全量基线重跑 + 关键用例补漏：新增 AG-26 / CTX-09 / SKILL-07 / SYS-05 / SYS-06，157 → 162 条）

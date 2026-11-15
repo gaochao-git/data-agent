@@ -213,16 +213,14 @@ def _insert_trail_compactions(trail: list[dict[str, Any]], compactions: Any) -> 
         return trail
     base = list(trail)
     merged = list(base)
-    offset = 0
     previous = -2
     previous_target = -1
-    for target, entry in _compaction_targets(base, compactions):
+    for offset, (target, entry) in enumerate(_compaction_targets(base, compactions)):
         index = min(target + offset, len(merged))
         if target == previous_target and index <= previous + 1:
             # 目标位置相同（锚点重复或同时失效）时至少隔开一条真实过程条目。
             index = min(previous + 2, len(merged))
         merged.insert(index, entry)
-        offset += 1
         previous = index
         previous_target = target
     return merged
