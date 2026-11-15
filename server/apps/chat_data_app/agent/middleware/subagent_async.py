@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Sequence
 from typing import Any, Literal
 
 from langchain.tools import ToolRuntime
@@ -21,9 +21,14 @@ from langchain.tools import ToolRuntime
 from utils.logger import get_logger
 
 from ..contracts.subagent_task import (
+    ACTIVE_TASK_STATUSES,
     TASK_HEARTBEAT_SECONDS,
     TASK_STATUS_CANCELLING,
     TASK_STATUS_LABELS,
+    TASK_STATUS_PAUSED,
+    TASK_STATUS_PENDING,
+    TASK_STATUS_RUNNING,
+    TASK_STATUS_WAITING_APPROVAL,
     TERMINAL_TASK_STATUSES,
     SubagentTaskCapacityError,
     SubagentTaskPort,
@@ -94,6 +99,40 @@ def _format_task_status(record: SubagentTaskView) -> str:
     if record.is_terminal:
         return prefix
     return f"{prefix}\n  {_task_progress_text(record)}"
+
+
+def _task_session_id(record: SubagentTaskView) -> str:
+    """任务对应的子会话 ID；兼容改造前没有 agent_session_id 的记录。"""
+    return str(getattr(record, "agent_session_id", "") or record.task_id)
+
+
+def format_active_subagent_summary(records: Sequence[SubagentTaskView]) -> str:
+    """把活跃任务压成主智能体可读的一行摘要，按子会话去重。"""
+    session_statuses = {_task_session_id(record): record.status for record in records}
+    if not session_statuses:
+        return "当前会话没有活跃的后台子智能体。"
+    executing = sum(
+        1
+        for status in session_statuses.values()
+        if status in {TASK_STATUS_PENDING, TASK_STATUS_RUNNING, TASK_STATUS_CANCELLING}
+    )
+    waiting = sum(1 for status in session_statuses.values() if status == TASK_STATUS_WAITING_APPROVAL)
+    paused = sum(1 for status in session_statuses.values() if status == TASK_STATUS_PAUSED)
+    parts = [f"执行中 {executing}"] if executing else []
+    if waiting:
+        parts.append(f"等待审批 {waiting}")
+    if paused:
+        parts.append(f"已暂停 {paused}")
+    return f"当前会话有 {len(session_statuses)} 个活跃子智能体（{'、'.join(parts)}）。"
+
+
+def format_subagent_task_list_summary(records: Sequence[SubagentTaskView]) -> str:
+    """任务列表抬头：同时给出任务条数、子智能体数和活跃条数。"""
+    if not records:
+        return "当前会话没有匹配的后台子智能体任务。"
+    session_ids = {_task_session_id(record) for record in records}
+    active = sum(1 for record in records if record.status in ACTIVE_TASK_STATUSES)
+    return f"后台子智能体任务（共 {len(records)} 条，涉及 {len(session_ids)} 个子智能体，活跃 {active} 条）："
 
 
 def _format_task_report(record: SubagentTaskView) -> str:
@@ -369,7 +408,7 @@ async def _list_async_tasks(
     )
     if not records:
         return "当前会话没有匹配的后台子智能体任务。"
-    return "后台子智能体任务：\n" + "\n".join(_format_task_status(item) for item in records)
+    return format_subagent_task_list_summary(records) + "\n" + "\n".join(_format_task_status(item) for item in records)
 
 
 async def _wait_async_tasks(

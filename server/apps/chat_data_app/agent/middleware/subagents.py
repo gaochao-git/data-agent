@@ -64,6 +64,7 @@ from ..context.context_budget import (
 )
 from ..context.runtime import ContextRuntime
 from ..contracts.subagent_task import (
+    ACTIVE_TASK_STATUSES,
     SUSPENDED_TASK_STATUSES,
     TASK_STATUS_CANCELLED,
     TASK_STATUS_COMPLETED,
@@ -93,6 +94,7 @@ from .subagent_async import (
     _spawn_follow_up_task,
     _truncate_text,
     _watch_background_task,
+    format_active_subagent_summary,
     manage_async_task,
 )
 from .subagent_config import build_subagent_invocation_config
@@ -1616,7 +1618,35 @@ class SubagentMiddleware(AgentMiddleware):
     async def awrap_model_call(
         self, request: ModelRequest, handler: Callable[[ModelRequest], Awaitable[ModelCallResult]]
     ) -> ModelCallResult:
-        return await handler(_append_system_prompt(request, self.system_prompt))
+        extra = self.system_prompt
+        try:
+            activity = await self._current_activity_summary(request)
+        except Exception:
+            # 数量摘要只是增强上下文，数据库抖动不能阻断主模型调用。
+            logger.warning("[tools] 读取子智能体活跃数量失败，跳过动态摘要", exc_info=True)
+            activity = ""
+        return await handler(_append_system_prompt(request, f"{extra}\n\n{activity}" if activity else extra))
+
+    async def _current_activity_summary(self, request: ModelRequest) -> str:
+        """按当前会话身份查询活跃子智能体，供主模型每轮直接感知数量。"""
+        state = getattr(request, "state", None)
+        if not isinstance(state, dict):
+            return ""
+        conversation_id = str(state.get("conversation_id") or "").strip()
+        user_id = str(state.get("user_id") or "").strip()
+        if not conversation_id or not user_id:
+            return ""
+        service = get_subagent_task_service()
+        if service is None:
+            return ""
+        records = await service.list_tasks(
+            conversation_id,
+            user_id,
+            statuses=set(ACTIVE_TASK_STATUSES),
+            # 与 CHAT_DATA_SUBAGENT_TASK_MAX_ACTIVE 的配置上限一致；额度内任务足以算准活跃数。
+            limit=200,
+        )
+        return "## 当前子智能体状态\n" + format_active_subagent_summary(records)
 
 
 def _append_system_prompt(request: ModelRequest, extra: str) -> ModelRequest:
@@ -1649,6 +1679,8 @@ def _default_system_prompt() -> str:
         'task(action="list") 列任务、task(action="check", task_id=...) 查单个任务、'
         'task(action="wait", task_ids=[...]) 等一个/多个任务、'
         'task(action="cancel", task_id=...) 取消。'
+        "系统会在每轮模型调用前附带当前活跃子智能体数量；用户问数量时直接依据该摘要回答，"
+        '需要任务明细或历史任务时再调用 task(action="list")。'
         "给后台任务写清 label，便于用户在任务列表识别。用户询问「之前的后台任务怎么样了」时，"
         '先用 task(action="list")，再按需 task(action="check", task_id=...)。'
     )

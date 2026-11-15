@@ -8,6 +8,10 @@ import pytest
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, SystemMessage, ToolMessage
 
 from apps.chat_data_app.agent.middleware import subagents as subagents_module
+from apps.chat_data_app.agent.middleware.subagent_async import (
+    format_active_subagent_summary,
+    format_subagent_task_list_summary,
+)
 from apps.chat_data_app.agent.middleware.subagents import (
     SUBAGENT_STATE_PASSTHROUGH_KEYS,
     SubagentMiddleware,
@@ -793,6 +797,95 @@ def test_middleware_creates_system_message_when_request_has_none():
 
     assert isinstance(merged.system_message, SystemMessage)
     assert "## 子智能体委派" in merged.system_message.content
+
+
+def test_active_subagent_summary_counts_sessions_and_statuses():
+    records = [
+        SimpleNamespace(task_id="t1", agent_session_id="s1", status="running"),
+        SimpleNamespace(task_id="t2", agent_session_id="s2", status="waiting_approval"),
+        SimpleNamespace(task_id="t3", agent_session_id="s3", status="paused"),
+    ]
+
+    summary = format_active_subagent_summary(records)
+
+    assert summary == "当前会话有 3 个活跃子智能体（执行中 1、等待审批 1、已暂停 1）。"
+    assert format_active_subagent_summary([]) == "当前会话没有活跃的后台子智能体。"
+
+
+def test_task_list_summary_reports_tasks_sessions_and_active_count():
+    records = [
+        SimpleNamespace(task_id="t1", agent_session_id="s1", status="completed"),
+        SimpleNamespace(task_id="t2", agent_session_id="s1", status="running"),
+    ]
+
+    assert format_subagent_task_list_summary(records) == ("后台子智能体任务（共 2 条，涉及 1 个子智能体，活跃 1 条）：")
+
+
+@pytest.mark.asyncio
+async def test_subagent_middleware_injects_current_active_activity_summary(monkeypatch):
+    middleware = SubagentMiddleware([_spec()])
+    records = [
+        SimpleNamespace(task_id="t1", agent_session_id="s1", status="running"),
+        SimpleNamespace(task_id="t2", agent_session_id="s2", status="waiting_approval"),
+    ]
+    calls = {}
+
+    class _ActivityService:
+        async def list_tasks(self, conversation_id, user_id, *, statuses, limit):
+            calls.update(
+                conversation_id=conversation_id,
+                user_id=user_id,
+                statuses=statuses,
+                limit=limit,
+            )
+            return records
+
+    monkeypatch.setattr(subagents_module, "get_subagent_task_service", lambda: _ActivityService())
+    request = SimpleNamespace(
+        system_message=SystemMessage(content="主提示词"),
+        state={"conversation_id": "conv-1", "user_id": "u1"},
+        override=lambda **kwargs: SimpleNamespace(**kwargs),
+    )
+    seen = {}
+
+    async def handler(current):
+        seen["request"] = current
+        return "handled"
+
+    assert await middleware.awrap_model_call(request, handler) == "handled"
+    content = seen["request"].system_message.content
+    assert "## 子智能体委派" in content
+    assert "## 当前子智能体状态" in content
+    assert "当前会话有 2 个活跃子智能体（执行中 1、等待审批 1）" in content
+    assert calls["conversation_id"] == "conv-1"
+    assert calls["user_id"] == "u1"
+    assert "running" in calls["statuses"]
+
+
+@pytest.mark.asyncio
+async def test_subagent_middleware_activity_query_failure_does_not_block_prompt(monkeypatch):
+    middleware = SubagentMiddleware([_spec()])
+
+    class _BrokenService:
+        async def list_tasks(self, *_args, **_kwargs):
+            raise RuntimeError("db down")
+
+    monkeypatch.setattr(subagents_module, "get_subagent_task_service", lambda: _BrokenService())
+    request = SimpleNamespace(
+        system_message=SystemMessage(content="主提示词"),
+        state={"conversation_id": "conv-1", "user_id": "u1"},
+        override=lambda **kwargs: SimpleNamespace(**kwargs),
+    )
+    seen = {}
+
+    async def handler(current):
+        seen["request"] = current
+        return "handled"
+
+    assert await middleware.awrap_model_call(request, handler) == "handled"
+    content = seen["request"].system_message.content
+    assert "## 子智能体委派" in content
+    assert "## 当前子智能体状态" not in content
 
 
 def test_middleware_registers_single_task_tool_with_agent_catalog():
