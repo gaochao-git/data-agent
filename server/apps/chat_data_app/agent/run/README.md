@@ -17,7 +17,7 @@ Standby/C 节点不参与 pending 轮询、过期 Run 回收、定时任务调�
 
 ## 后台子智能体任务
 
-`task`（默认 `background=true`）的任务真值落在 `chat_data_agent_inbox` 的 `record_type='task'` 行，
+`subagent`（默认 `background=true`）的任务真值落在 `chat_data_agent_inbox` 的 `record_type='task'` 行，
 进程内只保留 asyncio 执行句柄。任务状态：`pending → running → completed/failed/timeout/
 cancelled/interrupted/lost`；`cancelling` 是跨 worker 的取消请求，执行节点在下一次心跳
 （固定 5 秒）停止协程并收口。租约过期由
@@ -30,9 +30,9 @@ cancelled/interrupted/lost`；`cancelling` 是跨 worker 的取消请求，执�
   `disable_user_interaction=true`），会占用一次模型轮次但不产生用户气泡；会话忙时挂到
   当前 Run 的下一轮消息。用户不发消息也会推进，不需要手动轮询。
 - 任务结论始终先落在账本的 `record_content`；通知里只是预览。终态任务用
-  `task(action="check", task_id=...)` 一次读取完整报告。
+  `subagent(action="check", task_id=...)` 一次读取完整报告。
 - 报告超过父上下文预算或 `TOOL_RESULT_OFFLOAD_SIZE` 时，账本仍保存全文，同时额外落一份
-  隐藏文件并写入 `result_meta.report_path`；通知/`task(action="check")` 会返回 `result_path`，
+  隐藏文件并写入 `result_meta.report_path`；通知/`subagent(action="check")` 会返回 `result_path`，
   主智能体直接用 `file_read` 读取完整正文，不再对报告做分页。
 - 状态口径：终态优先，收口时 `progress.phase` 同步改为终态；`progress.tool_calls` 是累计
   调用过的工具总数，`progress.running_tools` 才是当前仍在执行的工具数。
@@ -49,10 +49,10 @@ cancelled/interrupted/lost`；`cancelling` 是跨 worker 的取消请求，执�
 - 完整消息历史保存在 `chat_data_subagent_session`：`session_id` 唯一，`messages_json`
   在每轮收口时整体覆盖，避免按轮次追加造成 O(n²) 增长。任务账本仍每轮一行，便于审计、
   取消和追溯报告。
-- 主智能体统一用 `task(action="follow_up", task_id=..., message=...)` 续聊；只允许对终态
+- 主智能体统一用 `subagent(action="follow_up", task_id=..., message=...)` 续聊；只允许对终态
   任务发起，同一子会话同时只能有一个活跃轮次。运行中需要补充说明用
-  `task(action="steer", task_id=..., message=...)`，停止仍用
-  `task(action="cancel", task_id=...)`。
+  `subagent(action="steer", task_id=..., message=...)`，停止仍用
+  `subagent(action="cancel", task_id=...)`。
 - 每个主对话新建子智能体的总数受 `CHAT_DATA_SUBAGENT_MAX_SESSIONS_PER_CONVERSATION`
   约束，按 `agent_session_id` 去重；追问复用原会话不占新额度。该限制只兜底“无限新开”，
   相似任务是否合并由提示词约束主智能体判断，不在后端硬编码任务相似度。
@@ -82,8 +82,8 @@ cancelled/interrupted/lost`；`cancelling` 是跨 worker 的取消请求，执�
 
 ### 明确非目标：子智能体不得再派发
 
-- 子图工具白名单不包含 `task`，`SubagentMiddleware` 只挂主图；即使主图工具列表
-  误带 `task`，也会被白名单过滤。相关回归见 `test_tools_registry.py` 与
+- 子图工具白名单不包含 `subagent`，`SubagentMiddleware` 只挂主图；即使主图工具列表
+  误带 `subagent`，也会被白名单过滤。相关回归见 `test_tools_registry.py` 与
   `test_data_agent_graph_flow.py`。
 - 因此不建设嵌套派发、树形 UI、子树取消、树级预算/查询；`depth` /
   `parent_agent_id` 仅作身份元数据，当前恒为 1 / 空。
@@ -95,7 +95,7 @@ cancelled/interrupted/lost`；`cancelling` 是跨 worker 的取消请求，执�
   `steer/pause/resume/approve/reject/cancel` 控制命令。账本仍是业务真值，
   checkpoint 只负责执行恢复；暂停与审批都落在模型调用前的安全点，恢复用
   `Command(resume=...)`。等待审批时会主动向主会话冒泡一条内部通知，用户
-  明确允许/拒绝后由主智能体调用 `task(action="approve"/"reject")` 继续。
+  明确允许/拒绝后由主智能体调用 `subagent(action="approve"/"reject")` 继续。
 - 阶段 2：通知聚合、全局/节点容量、运行期子智能体类型注册与预算配置。
 - 阶段 3：单层任务的查询/可观测性增强；API 只暴露智能体视图，不把 inbox
   扁平行泄露给前端。

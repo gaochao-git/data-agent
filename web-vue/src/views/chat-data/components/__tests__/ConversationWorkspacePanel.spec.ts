@@ -8,7 +8,7 @@ import type { SubagentTaskRecord, ToolCallInfo } from '../../types'
 
 const taskCall: ToolCallInfo = {
   tool_call_id: 'task-1',
-  tool_name: 'task',
+  tool_name: 'subagent',
   status: 'completed',
   args: { subagent_type: 'explore' },
   result: '报告',
@@ -16,7 +16,7 @@ const taskCall: ToolCallInfo = {
 }
 const taskCall2: ToolCallInfo = {
   tool_call_id: 'task-2',
-  tool_name: 'task',
+  tool_name: 'subagent',
   status: 'completed',
   args: { subagent_type: 'general' },
   result: '第二份报告',
@@ -149,7 +149,7 @@ describe('ConversationWorkspacePanel tab 容器', () => {
   it('主对话点击后台 task 工具卡直接进入任务详情页（与主对话同构的聊天消息）', async () => {
     const backgroundCall: ToolCallInfo = {
       tool_call_id: 'call-bg-1',
-      tool_name: 'task',
+      tool_name: 'subagent',
       status: 'completed',
       args: { subagent_type: 'explore', background: true },
       result: '子智能体已在后台启动',
@@ -166,6 +166,22 @@ describe('ConversationWorkspacePanel tab 容器', () => {
 
     expect(tabTitles(wrapper)).toEqual(['工作台', '入金趋势'])
     expect(wrapper.find('[data-subagent-task-detail]').exists()).toBe(true)
+  })
+
+  it('历史 task 工具卡仍打开子智能体过程页', async () => {
+    const legacyCall: ToolCallInfo = {
+      ...taskCall,
+      tool_call_id: 'legacy-task-1',
+      tool_name: 'task',
+    }
+    const wrapper = mountPanel({ resolveToolCall: () => legacyCall })
+    const vm = wrapper.vm as unknown as { openTool: (call: ToolCallInfo) => void }
+
+    vm.openTool(legacyCall)
+    await wrapper.vm.$nextTick()
+
+    expect(tabTitles(wrapper)).toEqual(['工作台', 'explore 子智能体'])
+    expect(wrapper.findComponent(AgentProcessView).exists()).toBe(true)
   })
 
   it('后台任务独立 tab：同一 task_id 只激活不重复，详情来自任务账本', async () => {

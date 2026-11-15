@@ -1,6 +1,6 @@
-"""ChatData 子智能体：单一 ``task`` 工具 + 上下文隔离。
+"""ChatData 子智能体：单一 ``subagent`` 工具 + 上下文隔离。
 
-参考 deepagents ``SubAgentMiddleware`` 的三个核心机制（单 task 工具、状态裁剪
+参考 deepagents ``SubAgentMiddleware`` 的三个核心机制（单 subagent 工具、状态裁剪
 透传、Command 回传结论），并按 ChatData 的事件流与状态设计做了裁剪：
 
 - 首轮是隔离上下文调用：子智能体只看到任务书（HumanMessage），不继承主对话历史；
@@ -11,7 +11,7 @@
   触发线时先压缩续命，预算告警只在压缩后仍超线时才注入，两层口径同源。
 - 子图调用显式切断回调继承（``callbacks=[]``），子图内的模型 token 不进入
   主 SSE 流；内层事件通过 ``_run_subagent_with_events`` 挑选后经父图 custom
-  流转发（``parent_tool_call_id`` 挂到所属 task 调用下），前端在 task 卡片内
+  流转发（``parent_tool_call_id`` 挂到所属 subagent 调用下），前端在 subagent 卡片内
   展示调用过程。文本与思考以 ``messages`` 模式做 token 级增量转发
   （``subagent_message_delta`` / ``subagent_thinking_delta``），工具生命周期
   仍以 ``updates`` 模式为准。
@@ -184,7 +184,7 @@ logger = get_logger(__name__)
 # 已被替换成信封），正文/思考单独配置。三者都保留截断逻辑作为安全兜底，
 # 正常路径下不会触发——过程区的意图就是让用户看到子智能体实际做了什么。
 
-TASK_TOOL_NAME = "task"
+SUBAGENT_TOOL_NAME = "subagent"
 
 # 子智能体报告进入父上下文前的封顶：报告是结论而非过程，单次派发不应把父
 # 上下文推过压缩线。阈值按父 state 的硬上限占比算（32k 与 128k 窗口的合理
@@ -193,7 +193,7 @@ SUBAGENT_REPORT_MAX_TOKEN_RATIO = 0.08
 SUBAGENT_REPORT_MIN_TOKEN_LIMIT = 1000
 SUBAGENT_REPORT_PREVIEW_CHARS = 2000
 
-_TASK_TOOL_DESCRIPTION_TEMPLATE = """派发隔离上下文的子智能体处理复杂多步任务，只把最终结论带回主对话（过程留在子图，保护主上下文）。兼管后台任务。
+_TASK_TOOL_DESCRIPTION_TEMPLATE = """派发隔离子智能体处理复杂多步任务，只把结论带回主对话（过程留在子图，保护上下文）。兼管后台任务。
 
 可用子智能体类型：
 {available_agents}
@@ -202,16 +202,16 @@ _TASK_TOOL_DESCRIPTION_TEMPLATE = """派发隔离上下文的子智能体处理�
 - action="start"（默认）派发；后台任务用 action="list"/"check"/"wait"/"cancel"；已结束任务追问用 action="follow_up"（task_id + message），沿用子会话历史。
 - 子智能体看不到主对话：任务书必须包含目标、任务意图（盘点/分析/产出）、已知事实与文件路径、交付格式、约束与禁止项。
 - 适合多文件/大体量盘点调研、可并行独立子任务；单点查询、需向用户提问或展示过程的步骤直接自己做。
-- 派发前先 task(action="list")：同类目标/范围/交付物已有子智能体时不要新开；运行中用 steer 或等结果，终态用 follow_up 续用 task_id。只有明确不同才 start。
+- 派发前先 subagent(action="list")：同类目标/范围/交付物已有子智能体时不要新开；运行中用 steer 或等结果，终态用 follow_up 续用 task_id。只有明确不同才 start。
 - 每个主对话的子智能体有上限；达到上限后 start 会被拒绝，只能 follow_up 复用已有子智能体。
-- 大块背景先用 file_write 落盘，任务书给路径；只存在于对话的信息子智能体拿不到。
+- 大块背景先 file_write 落盘给路径；只在对话里的信息子智能体拿不到。
 - explore 只读不写盘；需要落盘交付物时派 general（可读写工作区），或主智能体收尾写。
-- 相互独立的子任务可在同一条消息里并行发起多个 task。
+- 相互独立的子任务可在同一条消息里并行发起多个 subagent。
 - 默认异步（background=true）：批量盘点/全量扫描、多份交付物、多个可并行独立子任务，或当轮不需要结论时使用；立即返回 task_id（可配 label/timeout_seconds），完成/失败/超时后自动唤醒会话。
 - 同步（background=false）：当前步骤必须拿到结论才能继续、用户要求当轮给出结果，或小范围核对/单点查询时使用；等待完成后返回结论。
-- 需要先前后台任务结果用 task(action="wait", task_ids=[...])；查单个用 task(action="check", task_id=...)、列任务用 task(action="list")、取消用 task(action="cancel", task_id=...)；已结束任务补充分析用 task(action="follow_up", task_id=..., message=...)，不要用 start 重复派发。
-- 运行中可管理：steer 在下个模型步注入说明；pause 在安全点暂停；resume/approve/reject 继续。审批通知会给出待执行工具，主智能体必须先征得用户同意再 approve。
-- 回传是结论：向用户转述关键结论与产物路径；产物由主智能体用 present_artifacts 展示。"""
+- 需要先前后台任务结果用 subagent(action="wait", task_ids=[...])；查单个用 subagent(action="check", task_id=...)、列任务用 subagent(action="list")、取消用 subagent(action="cancel", task_id=...)；已结束任务补充分析用 subagent(action="follow_up", task_id=..., message=...)，不要用 start 重复派发。
+- 运行中可管理：steer 在下个模型步注入说明；pause 在安全点暂停；resume/approve/reject 继续。审批通知给出待执行工具，须经用户同意再 approve。
+- 回传是结论：向用户转述关键结论与产物路径，产物用 present_artifacts 展示。"""
 
 
 class ChatDataSubAgentState(AgentState, total=False):
@@ -244,7 +244,7 @@ class ChatDataSubAgentState(AgentState, total=False):
 
 
 class TaskToolArgs(BaseModel):
-    """``task`` 工具入参。"""
+    """``subagent`` 工具入参。"""
 
     action: Literal[
         "start", "list", "check", "wait", "cancel", "follow_up", "steer", "pause", "resume", "approve", "reject"
@@ -576,7 +576,7 @@ def _safe_subagent_budget_meta(
     *,
     system_prompt: str | None = None,
 ) -> dict[str, int] | None:
-    """用量推送口径的降级封装：预算查询失败只放弃展示，不影响 task 执行。"""
+    """用量推送口径的降级封装：预算查询失败只放弃展示，不影响子智能体执行。"""
     try:
         return _subagent_budget_meta(
             spec,
@@ -718,7 +718,7 @@ async def _offload_subagent_report(report: str, runtime: ToolRuntime) -> tuple[s
     state = getattr(runtime, "state", None)
     envelope, recovery = await externalize_tool_text(
         report,
-        source_tool=TASK_TOOL_NAME,
+        source_tool=SUBAGENT_TOOL_NAME,
         state=dict(state) if isinstance(state, dict) else {},
         suffix=".md",
         preview_chars=SUBAGENT_REPORT_PREVIEW_CHARS,
@@ -744,7 +744,7 @@ def _build_task_result_artifacts(
     context_usage: Any,
     captured: dict[str, Any],
 ) -> dict[str, Any]:
-    """task 结果的持久化产物：过程快照 + 上下文用量 + token 用量 + 压缩/计量明细。"""
+    """subagent 结果的持久化产物：过程快照 + 上下文用量 + token 用量 + 压缩/计量明细。"""
     artifacts: dict[str, Any] = {}
     trail = _build_trail_snapshot(messages, captured.get("compactions"))
     if trail:
@@ -787,9 +787,9 @@ async def _build_task_tool_impl(
     state_sink: dict[str, Any] | None = None,
     execution: _TaskExecution | None = None,
 ) -> Any:
-    """执行单一 task 工具调用：派发子图、收集过程、产出 Command 更新。
+    """执行单一 subagent 工具调用：派发子图、收集过程、产出 Command 更新。
 
-    ``stream_events=False`` 用于后台子智能体：父级 task 调用已先行返回
+    ``stream_events=False`` 用于后台子智能体：父级 subagent 调用已先行返回
     （卡片已关闭），子图过程不再往父流转发，静默执行只留最终报告。
     """
     execution = execution or _TaskExecution()
@@ -1066,7 +1066,7 @@ async def _open_subgraph_checkpointer(stack: AsyncExitStack, task_id: str) -> An
     """检查点生命周期跟随执行体；初始化失败降级为无检查点。"""
     try:
         # 子图检查点不继承父 Run；多 worker 也能从数据库恢复同一
-        # agent_session + task 命名空间。
+        # agent_session + subagent 命名空间。
         return await stack.enter_async_context(get_checkpointer())
     except Exception:
         logger.warning(
@@ -1150,7 +1150,7 @@ async def _run_background_attempt(
         return _failed_background_outcome(record, exc, partial_state)
     status, report, error, result_meta = _extract_background_result(command)
     if status == TASK_STATUS_COMPLETED:
-        # 账本保留全文；超长时额外落一份隐藏文件，通知与 task(action="check")
+        # 账本保留全文；超长时额外落一份隐藏文件，通知与 subagent(action="check")
         # 会带 result_path，主智能体可直接用 file_read 读取完整报告。
         _delivered, recovery = await _offload_subagent_report(report, runtime)
         if recovery:
@@ -1373,7 +1373,7 @@ async def _control_task_action(
         return "无法操作子智能体：当前会话缺少用户身份。"
     target = await service.get_task(normalized, conversation_id=conversation_id, user_id=user_id)
     if target is None:
-        return f'子智能体任务 {normalized} 不存在。可用 task(action="list") 查看当前会话任务。'
+        return f'子智能体任务 {normalized} 不存在。可用 subagent(action="list") 查看当前会话任务。'
     if action == "steer":
         return await _control_steer(
             service,
@@ -1457,7 +1457,7 @@ async def _control_pause(
     if record is None:
         return "暂停请求未生效：任务不存在或状态已变化。"
     if record.status == TASK_STATUS_PAUSED:
-        return f'子智能体已暂停（task_id={task_id}）。可用 task(action="resume", task_id=...) 恢复。'
+        return f'子智能体已暂停（task_id={task_id}）。可用 subagent(action="resume", task_id=...) 恢复。'
     return "暂停请求已提交：子智能体会在下一个模型调用前中断，届时状态变为已暂停。"
 
 
@@ -1532,7 +1532,7 @@ def _prepare_resume(
 
 
 def build_task_tool(specs: list[SubagentSpec], run_controls: Any = None) -> StructuredTool:
-    """构建单一 ``task`` 工具：派发子智能体，并管理后台任务。
+    """构建单一 ``subagent`` 工具：派发子智能体，并管理后台任务。
 
     ``action="start"``（默认）按 subagent_type 派发到隔离上下文的子图；
     默认 ``background=true`` 转入后台执行，传 ``background=false`` 同步等待。
@@ -1604,7 +1604,7 @@ def build_task_tool(specs: list[SubagentSpec], run_controls: Any = None) -> Stru
         )
 
     return StructuredTool.from_function(
-        name=TASK_TOOL_NAME,
+        name=SUBAGENT_TOOL_NAME,
         coroutine=atask,
         description=_TASK_TOOL_DESCRIPTION_TEMPLATE.format(available_agents=available),
         args_schema=TaskToolArgs,
@@ -1612,7 +1612,7 @@ def build_task_tool(specs: list[SubagentSpec], run_controls: Any = None) -> Stru
 
 
 class SubagentMiddleware(AgentMiddleware):
-    """向主智能体注册 ``task`` 工具，并在系统提示追加子智能体使用说明。"""
+    """向主智能体注册 ``subagent`` 工具，并在系统提示追加子智能体使用说明。"""
 
     def __init__(
         self, specs: list[SubagentSpec], *, system_prompt: str | None = None, run_controls: Any = None
@@ -1682,31 +1682,34 @@ def _append_system_prompt(request: ModelRequest, extra: str) -> ModelRequest:
 def _default_system_prompt() -> str:
     return (
         "## 子智能体委派\n\n"
-        "你可以通过 task 工具把复杂多步任务派发给隔离上下文的子智能体，"
+        "你可以通过 subagent 工具把复杂多步任务派发给隔离上下文的子智能体，"
         "只有子智能体的最终结论会回到对话。可用类型：\n\n{available_agents}\n\n"
         "派发判断：预计需要多轮工具调用（如批量盘点、成稿写作）且过程中无需"
         "用户参与的任务才派发；简单查询和需要向用户提问、展示中间过程的工作"
         "直接自己完成。派发前必须先把子智能体需要的背景事实写入 workspace 文件，"
         "任务书里给文件路径——子智能体看不到对话历史，只存在于对话中的信息它拿不到。\n\n"
+        "类型边界：general 默认继承主智能体工具，可调用已接入的 MCP 实体工具；explore "
+        "只有只读查询/文件工具，不挂 MCP。依赖 MCP 数据或需要落盘产出的任务派 general，"
+        "纯数据事实核对才派 explore，不要选错类型。\n\n"
         "## 子智能体复用与额度\n\n"
         "每个主对话创建的子智能体总数有运行时上限。派发新任务前先用 "
-        'task(action="list") 检查已有子智能体：目标相同、数据范围相同，或交付物只是补充、'
-        '修订时不要新开：同类子智能体仍在执行时用 task(action="steer") 补充或等待；'
-        '已结束时对最近一个终态 task_id 用 task(action="follow_up", task_id=..., message=...)，'
-        '在同一子会话续写。只有目标、范围或交付物明确不同才 task(action="start") 新建。'
+        'subagent(action="list") 检查已有子智能体：目标相同、数据范围相同，或交付物只是补充、'
+        '修订时不要新开：同类子智能体仍在执行时用 subagent(action="steer") 补充或等待；'
+        '已结束时对最近一个终态 task_id 用 subagent(action="follow_up", task_id=..., message=...)，'
+        '在同一子会话续写。只有目标、范围或交付物明确不同才 subagent(action="start") 新建。'
         "达到上限后 start 会被拒绝，此时只能复用已有子智能体或由主智能体自己完成；"
         "追问沿用原会话，不新增子智能体数量。\n\n"
         "## 子智能体执行方式\n\n"
         "默认异步：批量盘点/全量扫描、多份成稿/多交付物、多个可并行且彼此独立的子任务，"
-        "或当轮不需要其结论时，直接用 task 派发（默认 background=true）；立即返回持久 task_id，"
+        "或当轮不需要其结论时，直接用 subagent 派发（默认 background=true）；立即返回持久 task_id，"
         "期间继续其他工作或直接结束本轮，完成/失败/超时/租约失联都会自动通知当前会话。"
         "只在当前步骤必须拿到结论才能继续、用户要求当轮给出结果，或只是小范围核对/单点查询时，"
-        "显式传 background=false 同步等待。后台任务统一用 task 工具管理："
-        'task(action="list") 列任务、task(action="check", task_id=...) 查单个任务、'
-        'task(action="wait", task_ids=[...]) 等一个/多个任务、'
-        'task(action="cancel", task_id=...) 取消。'
+        "显式传 background=false 同步等待。后台任务统一用 subagent 工具管理："
+        'subagent(action="list") 列任务、subagent(action="check", task_id=...) 查单个任务、'
+        'subagent(action="wait", task_ids=[...]) 等一个/多个任务、'
+        'subagent(action="cancel", task_id=...) 取消。'
         "系统会在每轮模型调用前附带当前活跃子智能体数量；用户问数量时直接依据该摘要回答，"
-        '需要任务明细或历史任务时再调用 task(action="list")。'
+        '需要任务明细或历史任务时再调用 subagent(action="list")。'
         "给后台任务写清 label，便于用户在任务列表识别。用户询问「之前的后台任务怎么样了」时，"
-        '先用 task(action="list")，再按需 task(action="check", task_id=...)。'
+        '先用 subagent(action="list")，再按需 subagent(action="check", task_id=...)。'
     )

@@ -43,7 +43,7 @@ describe('ToolCallCard', () => {
         compact: true,
         toolCall: {
           tool_call_id: 'call-task-check',
-          tool_name: 'task',
+          tool_name: 'subagent',
           args: { action: 'check', task_id: 'task-1' },
           status: 'completed',
         },
@@ -147,7 +147,7 @@ describe('ToolCallCard', () => {
         isExpanded: true,
         toolCall: {
           tool_call_id: 'call-task',
-          tool_name: 'task',
+          tool_name: 'subagent',
           args: { description: '任务书', subagent_type: 'data-explore' },
           status: 'running',
           subagentTrail: [
@@ -165,6 +165,24 @@ describe('ToolCallCard', () => {
 
     expect(wrapper.find('.subagent-chain').exists()).toBe(false)
     expect(wrapper.findAll('.sub-tool-chip').length).toBe(0)
+  })
+
+  it('keeps the legacy task tool name compatible with subagent labels', () => {
+    const wrapper = mount(ToolCallCard, {
+      props: {
+        isExpanded: true,
+        toolCall: {
+          tool_call_id: 'call-legacy-task',
+          tool_name: 'task',
+          args: { description: '历史任务书', subagent_type: 'explore' },
+          status: 'running',
+        },
+      },
+    })
+
+    expect(wrapper.text()).toContain('派发子智能体')
+    expect(wrapper.text()).toContain('任务书')
+    expect(wrapper.find('.fa-robot').exists()).toBe(true)
   })
 
   it('shows streaming intent while args are not yet parsed', () => {

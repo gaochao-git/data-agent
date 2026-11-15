@@ -15,7 +15,7 @@ import type {
   ThinkingSegment,
   ToolCallInfo,
 } from '../types'
-import { getToolCompactDescription, getToolDisplayName, getToolTechnicalDescription } from './toolDisplay'
+import { getToolCompactDescription, getToolDisplayName, getToolTechnicalDescription, isSubagentToolName } from './toolDisplay'
 import { normalizeToolCallForDisplay, shouldInlineRenderQueryResult } from './semanticTool'
 
 /** 思考收起态尾部预览长度（主对话与子智能体共用口径）。 */
@@ -410,7 +410,7 @@ export const formatCompressionTokens = (value?: number): string => (
 export interface SubagentTrailThinking {
   content: string
   truncated: boolean
-  /** 父 task 仍在跑且这是最后一条条目：思考可能还在增量。 */
+  /** 父 subagent 仍在跑且这是最后一条条目：思考可能还在增量。 */
   active: boolean
   preview: string
 }
@@ -521,7 +521,7 @@ export const buildSubagentTrailBlocks = (toolCall: ToolCallInfo): SubagentTrailB
 /**
  * 子智能体 trail → 主对话消息模型（聊天式过程视图复用消息组件）。
  *
- * - 任务书（task.description）→ 一条 user 消息；
+ * - 任务书（subagent.description）→ 一条 user 消息；
  * - 整段子智能体过程 → **一条** assistant 消息：思考/中间叙述/内层工具都进
  *   segments（与主对话「一条助手消息里过程 + 最终回答」结构一致），最后一段
  *   文本即最终报告，由消息组件按工作过程折叠口径渲染。
@@ -599,7 +599,7 @@ export const buildSubagentMessages = (toolCall: ToolCallInfo): Message[] => {
   }
 
   // 没有过程 trail 的终态任务（如完成后 trail 尚未落库/被清理）也要有结论：
-  // 把 task 结果当作最后一段助手正文，渲染成和主对话一样的气泡，而不是另起一张
+  // 把 subagent 结果当作最后一段助手正文，渲染成和主对话一样的气泡，而不是另起一张
   // 自定义「最终报告」卡。
   const report = String(toolCall.result || '').trim()
   const hasTextSegment = (assistant.segments || []).some(
@@ -616,5 +616,5 @@ export const buildSubagentMessages = (toolCall: ToolCallInfo): Message[] => {
 
 /** 子智能体过程区是否有可渲染内容。 */
 export const hasSubagentTrail = (toolCall: ToolCallInfo): boolean => (
-  toolCall.tool_name === 'task' && Boolean(toolCall.subagentTrail?.length)
+  isSubagentToolName(toolCall.tool_name) && Boolean(toolCall.subagentTrail?.length)
 )

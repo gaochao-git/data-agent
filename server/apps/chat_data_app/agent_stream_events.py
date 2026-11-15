@@ -56,6 +56,7 @@ REASONING_TOOL_DISPLAY_NAMES = {
     "present_artifacts": "展示文件",
     "ask_user_question": "询问用户",
     "task": "派发子智能体",
+    "subagent": "派发子智能体",
 }
 
 
@@ -442,7 +443,7 @@ class _ToolStreamState:
         tool_additional_kwargs = msg_data.get("additional_kwargs") or {}
         msg_data["started_at_ms"] = tool_additional_kwargs.get("started_at_ms")
         msg_data["ended_at_ms"] = tool_additional_kwargs.get("ended_at_ms")
-        # task 工具携带的子图 token 用量：随完成事件下发，前端任务卡/过程面板展示
+        # subagent 工具携带的子图 token 用量：随完成事件下发，前端任务卡/过程面板展示
         subagent_token_usage = tool_additional_kwargs.get("subagent_token_usage")
         if isinstance(subagent_token_usage, dict) and subagent_token_usage:
             msg_data["subagent_token_usage"] = subagent_token_usage

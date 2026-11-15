@@ -248,7 +248,7 @@ def test_build_subagent_middleware_general_keeps_read_write_tools(monkeypatch, t
         SimpleNamespace(name="file_read"),
         SimpleNamespace(name="file_write"),
         SimpleNamespace(name="bash_run"),
-        SimpleNamespace(name="task"),
+        SimpleNamespace(name="subagent"),
         SimpleNamespace(name="officecli_run"),
         SimpleNamespace(name="ask_user_question"),
         SimpleNamespace(name="present_artifacts"),
@@ -312,6 +312,26 @@ def test_build_subagent_middleware_general_excludes_ask_tools(monkeypatch, tmp_p
     assert [tool.name for tool in middleware.specs[0].tools] == ["file_read"]
 
 
+def test_subagent_type_descriptions_explain_mcp_boundary():
+    """主智能体选型依据：general 可调用 MCP，explore 不挂 MCP。"""
+    from apps.chat_data_app.agent.data_agent import (
+        EXPLORE_SUBAGENT_DESCRIPTION,
+        GENERAL_SUBAGENT_DESCRIPTION,
+    )
+    from apps.chat_data_app.agent.middleware.subagents import _default_system_prompt
+    from apps.chat_data_app.agent.prompts.chat_data import (
+        EXPLORE_SUBAGENT_PROMPT,
+        GENERAL_SUBAGENT_PROMPT,
+    )
+
+    assert "不能调用 MCP 工具" in EXPLORE_SUBAGENT_DESCRIPTION
+    assert "可调用已接入的 MCP 实体工具" in GENERAL_SUBAGENT_DESCRIPTION
+    prompt = _default_system_prompt().format(available_agents="- explore: 只读")
+    assert "explore 只有只读查询/文件工具，不挂 MCP" in prompt
+    assert "需要 general 子智能体" in EXPLORE_SUBAGENT_PROMPT
+    assert "你会继承这些工具" in GENERAL_SUBAGENT_PROMPT
+
+
 def test_build_subagent_middleware_supports_all_specs(monkeypatch, tmp_path):
     from apps.chat_data_app.agent.data_agent import build_subagent_middleware
     from apps.chat_data_app.agent.middleware import subagents as subagents_module
@@ -339,10 +359,10 @@ def test_build_subagent_middleware_supports_all_specs(monkeypatch, tmp_path):
     general_tools = [tool.name for tool in middleware.specs[1].tools]
     assert explore_tools == ["file_read"]
     assert general_tools == ["file_read", "file_write"]
-    # 即使主图工具列表里带了 task，也不能透传给子图——否则会形成无限嵌套派发。
-    assert "task" not in explore_tools
-    assert "task" not in general_tools
-    # task 工具描述中列出全部类型
+    # 即使主图工具列表里带了 subagent，也不能透传给子图——否则会形成无限嵌套派发。
+    assert "subagent" not in explore_tools
+    assert "subagent" not in general_tools
+    # subagent 工具描述中列出全部类型
     assert "explore" in middleware.tools[0].description
     assert "general" in middleware.tools[0].description
 

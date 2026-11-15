@@ -534,12 +534,12 @@ export interface ToolCallInfo {
   // 工具执行起止时间（epoch 毫秒，后端 ToolTimingMiddleware 盖章）：耗时由两者相减得出
   started_at_ms?: number | null
   ended_at_ms?: number | null
-  // 子智能体内部过程（task 卡片下方独立区域，按真实发生顺序交错展示）
+  // 子智能体内部过程（subagent 卡片下方独立区域，按真实发生顺序交错展示）
   subagentTrail?: SubagentTrailItem[]
   // 子智能体上下文用量快照（subagent_context_usage 事件实时更新，最终值随
-  // task 结果持久化、历史回放还原）：task 卡片标题行显示「上下文 N%」徽标
+  // subagent 结果持久化、历史回放还原）：subagent 卡片标题行显示「上下文 N%」徽标
   subagentContextUsage?: SubagentContextUsage
-  // 子智能体 token 用量（billing 口径，主对话统计不含它）：随 task 结果持久化
+  // 子智能体 token 用量（billing 口径，主对话统计不含它）：随 subagent 结果持久化
   subagentTokenUsage?: SubagentTokenUsage
   // 子图上下文压缩事件（静默压缩的可视化记录）
   subagentCompactions?: SubagentCompaction[]
@@ -831,7 +831,7 @@ export interface ToolLifecycleEventData extends ToolEventData {
   progress?: number
   accumulated_args?: Record<string, unknown>
   content?: string
-  // 子智能体内部过程事件：所属 task 工具调用的 ID（前端据此嵌套展示）
+  // 子智能体内部过程事件：所属 subagent 工具调用的 ID（前端据此嵌套展示）
   parent_tool_call_id?: string
   // 子智能体中间文本输出的稳定 ID（message 条目去重）
   message_id?: string
@@ -849,10 +849,10 @@ export interface ToolLifecycleEventData extends ToolEventData {
   intent?: string
   /** subagent_context_compression：压缩记录 id（去重） */
   id?: string
-  // subagent_context_usage：子图上下文用量快照（每个节点更新后推送一次，最终值随 task 结果持久化）
+  // subagent_context_usage：子图上下文用量快照（每个节点更新后推送一次，最终值随 subagent 结果持久化）
   used_tokens?: number
   threshold_tokens?: number
-  /** task 完成事件：子图 token 用量（billing 口径） */
+  /** subagent 完成事件：子图 token 用量（billing 口径） */
   subagent_token_usage?: SubagentTokenUsage
   /** subagent_context_usage：子图上下文计量明细（与主对话 token_usage 同结构） */
   token_usage_detail?: ChatDataTokenUsage

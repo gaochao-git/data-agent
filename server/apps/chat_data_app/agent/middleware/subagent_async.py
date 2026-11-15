@@ -1,4 +1,4 @@
-"""后台子智能体：task 工具默认 background=true 的持久任务账本与配套工具。
+"""后台子智能体：subagent 工具默认 background=true 的持久任务账本与配套工具。
 
 与 ``middleware/subagents.py`` 的分工：本模块负责任务登记、稳定 task_id、
 check/list/wait/cancel 工具；子图执行体（``_run_background_task``）留在
@@ -157,7 +157,9 @@ def _format_task_report(record: SubagentTaskView) -> str:
     else:
         lines.append(f"报告：{body}")
     if record.is_terminal:
-        lines.append(f'可基于同一子会话继续追问：task(action="follow_up", task_id="{record.task_id}", message="...")。')
+        lines.append(
+            f'可基于同一子会话继续追问：subagent(action="follow_up", task_id="{record.task_id}", message="...")。'
+        )
     return "\n".join(lines)
 
 
@@ -210,7 +212,7 @@ async def _spawn_background_task(
         f"子智能体已在后台启动（task_id={record.task_id}，类型={subagent_type}）。"
         f"超时={record.timeout_seconds} 秒。任务不会阻塞当前对话：完成/失败/超时后系统会自动唤醒"
         "一条隐藏通知（不需要等用户先发消息）；期间可继续其他工作，也可用 "
-        'task 查询：action="list" 列任务，action="check" 查单个，action="wait" 等结果。'
+        'subagent 查询：action="list" 列任务，action="check" 查单个，action="wait" 等结果。'
     )
 
 
@@ -265,11 +267,11 @@ async def _spawn_follow_up_task(
         user_id=user_id,
     )
     if target is None:
-        return f'子智能体任务 {normalized} 不存在。可用 task(action="list") 查看当前会话任务。'
+        return f'子智能体任务 {normalized} 不存在。可用 subagent(action="list") 查看当前会话任务。'
     if not target.is_terminal:
         return (
             f"子智能体任务 {normalized} 仍在执行（{TASK_STATUS_LABELS.get(target.status, target.status)}），"
-            '不能追问；可先用 task(action="wait") 等结果，或 task(action="cancel") 取消后再开始新一轮。'
+            '不能追问；可先用 subagent(action="wait") 等结果，或 subagent(action="cancel") 取消后再开始新一轮。'
         )
     if target.subagent_type not in available_types:
         return f"子智能体类型 {target.subagent_type} 当前未启用，无法追问。"
@@ -330,7 +332,7 @@ async def _spawn_follow_up_task(
         f"已向子智能体 {target.subagent_type} 发起第 {record.turn_index} 轮追问"
         f"（task_id={record.task_id}，子会话={record.agent_session_id}，上一轮={base.task_id}）。"
         "任务在后台执行，会沿用该子会话的完整消息历史；完成后自动唤醒并注入通知，"
-        f'也可用 task(action="check", task_id="{record.task_id}") 查询。'
+        f'也可用 subagent(action="check", task_id="{record.task_id}") 查询。'
     )
 
 
@@ -357,7 +359,7 @@ async def _check_async_task(
         user_id=user_id,
     )
     if record is None:
-        return f'后台任务 {normalized} 不存在。可用 task(action="list") 查看当前会话任务。'
+        return f'后台任务 {normalized} 不存在。可用 subagent(action="list") 查看当前会话任务。'
     if record.is_terminal:
         await service.mark_viewed(record)
         return _format_task_report(record)
@@ -385,7 +387,7 @@ async def _cancel_async_task(
         return f"后台任务 {normalized} 已是 {TASK_STATUS_LABELS.get(record.status, record.status)}，无需取消。"
     return (
         f"已提交取消请求（task_id={normalized}）。执行节点会在下一次心跳时停止任务，"
-        f'最终状态可稍后 task(action="check", task_id="{normalized}") 查询。'
+        f'最终状态可稍后 subagent(action="check", task_id="{normalized}") 查询。'
     )
 
 
@@ -444,7 +446,7 @@ async def manage_async_task(
     limit: int = 20,
     wait_seconds: int = DEFAULT_WAIT_TIMEOUT_SECONDS,
 ) -> str:
-    """执行 ``task`` 工具的后台任务管理动作。"""
+    """执行 ``subagent`` 工具的后台任务管理动作。"""
     conversation_id, user_id, operator_name, _parent_run_id = _read_conversation_context(runtime)
     service = _task_service()
     if service is None:
@@ -529,7 +531,7 @@ async def _load_task_views(
 
 
 def _get_subagent_stream_writer(stream_events: bool, writer_factory: Callable[[], Any]) -> Any:
-    """只有前台 task 需要父流 writer；拿不到时降级为静默过程。"""
+    """只有前台 subagent 需要父流 writer；拿不到时降级为静默过程。"""
     if not stream_events:
         return None
     try:

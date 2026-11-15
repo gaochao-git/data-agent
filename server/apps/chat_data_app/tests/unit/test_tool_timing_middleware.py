@@ -70,9 +70,9 @@ async def test_non_tool_message_result_passes_through_unchanged():
 
 @pytest.mark.asyncio
 async def test_command_result_tool_message_is_stamped_with_execution_timing():
-    """返回 Command 的工具（task/子智能体）同样盖上起止时间，历史回放才有总耗时。"""
+    """返回 Command 的工具（subagent/子智能体）同样盖上起止时间，历史回放才有总耗时。"""
     middleware = create_tool_timing_middleware()
-    message = ToolMessage(content="子智能体报告", name="task", tool_call_id="call-1")
+    message = ToolMessage(content="子智能体报告", name="subagent", tool_call_id="call-1")
 
     async def handler(_request):
         return Command(update={"messages": [message]})

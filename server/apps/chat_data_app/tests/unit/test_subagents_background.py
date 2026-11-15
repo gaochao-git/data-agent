@@ -451,7 +451,7 @@ async def test_cancel_pending_and_running_tasks(harness):
 
 
 @pytest.mark.asyncio
-async def test_task_tool_dispatches_management_actions(harness, monkeypatch):
+async def test_subagent_tool_dispatches_management_actions(harness, monkeypatch):
     await harness.create_conversation()
     monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None, **kwargs: object())
     record = await _create_task(harness)
@@ -790,13 +790,13 @@ async def test_sync_task_path_still_returns_tool_message(monkeypatch):
     assert message.content == "同步结论"
 
 
-def test_system_prompt_documents_background_and_task_tools():
+def test_system_prompt_documents_background_and_subagent_tools():
     middleware = subagents_module.SubagentMiddleware([_spec()])
     assert "background=true" in middleware.system_prompt
-    assert 'task(action="list")' in middleware.system_prompt
-    assert 'task(action="check"' in middleware.system_prompt
-    assert 'task(action="wait"' in middleware.system_prompt
-    assert 'task(action="cancel"' in middleware.system_prompt
+    assert 'subagent(action="list")' in middleware.system_prompt
+    assert 'subagent(action="check"' in middleware.system_prompt
+    assert 'subagent(action="wait"' in middleware.system_prompt
+    assert 'subagent(action="cancel"' in middleware.system_prompt
     assert "async_task" not in middleware.system_prompt
     assert "list_async_tasks" not in middleware.system_prompt
     assert "check_async_task" not in middleware.system_prompt

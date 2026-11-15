@@ -103,7 +103,7 @@ const usageForPanel = computed<ChatDataTokenUsage | null>(() => {
 })
 const toolCallForTask = (task: SubagentTaskRecord): ToolCallInfo => ({
   tool_call_id: task.parent_tool_call_id || task.task_id,
-  tool_name: 'task',
+  tool_name: 'subagent',
   status: isSubagentTaskActive(task) ? 'running' : task.status === 'completed' ? 'completed' : 'error',
   args: {
     subagent_type: task.subagent_type,

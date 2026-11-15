@@ -727,7 +727,7 @@ const resetTokenUsagePanel = (clearUsage = true) => {
   tokenUsagePanelRef.value?.closePanel()
 }
 // 顶层工具调用状态注册表：只存顶层调用。子智能体内层工具不进此 map——
-// 它们挂在父 task 调用的 subagentTrail 上（见 upsertSubagentTrailItem），
+// 它们挂在父 subagent 调用的 subagentTrail 上（见 upsertSubagentTrailItem），
 // 详情查找经 findToolCallById 的 trail 兜底完成。
 const toolCallsMap = ref<Map<string, ToolCallInfo>>(new Map())
 const activeToolCallId = ref<string | null>(null)
@@ -1006,7 +1006,7 @@ const findToolCallById = (id: string | null) => {
   for (const message of messages.value) {
     for (const toolCall of message.toolCalls || []) {
       if (toolCall.tool_call_id === id) return toolCall
-      // 子智能体内层工具：挂在父 task 调用的 subagentTrail 上（与
+      // 子智能体内层工具：挂在父 subagent 调用的 subagentTrail 上（与
       // ToolCallList 的 chip 构建口径一致），历史恢复后 map 中无内层条目，
       // 详情面板靠这条兜底取数。
       const inner = toolCall.subagentTrail?.find(item => item.kind === 'tool' && item.id === id)
@@ -1763,7 +1763,7 @@ const upsertSubagentTrailItem = (event: ToolLifecycleEventData) => {
   const parentId = event.parent_tool_call_id
   if (!parentId) return
 
-  // 提交挂到父 task 调用下的 trail 变更：写 map 与消息引用（内层工具不进
+  // 提交挂到父 subagent 调用下的 trail 变更：写 map 与消息引用（内层工具不进
   // 全局 map，详情查找走 findToolCallById 的 trail 兜底）
   const commitTrail = (transform: (trail: SubagentTrailItem[]) => SubagentTrailItem[]) => {
     const mergeParent = (tool: ToolCallInfo): ToolCallInfo => (
@@ -1772,7 +1772,7 @@ const upsertSubagentTrailItem = (event: ToolLifecycleEventData) => {
     const parentFromMap = toolCallsMap.value.get(parentId)
     const merged = mergeParent(parentFromMap || {
       tool_call_id: parentId,
-      tool_name: 'task',
+      tool_name: 'subagent',
       args: {},
       status: 'running',
     })
@@ -1783,11 +1783,11 @@ const upsertSubagentTrailItem = (event: ToolLifecycleEventData) => {
     }
   }
 
-  /** 只更新父 task 调用上的字段（不碰 trail），同一事件流内收敛到最新值。 */
+  /** 只更新父 subagent 调用上的字段（不碰 trail），同一事件流内收敛到最新值。 */
   const applySubagentToolPatch = (parentId: string, patch: (tool: ToolCallInfo) => ToolCallInfo | null) => {
     const base = toolCallsMap.value.get(parentId) || {
       tool_call_id: parentId,
-      tool_name: 'task',
+      tool_name: 'subagent',
       args: {},
       status: 'running',
     }
@@ -1800,7 +1800,7 @@ const upsertSubagentTrailItem = (event: ToolLifecycleEventData) => {
     }
   }
 
-  // 子智能体上下文用量：只更新父 task 调用上的快照字段（标题行徽标）
+  // 子智能体上下文用量：只更新父 subagent 调用上的快照字段（标题行徽标）
   const upsertSubagentContextUsage = (event: ToolLifecycleEventData) => {
     const parentId = event.parent_tool_call_id
     if (!parentId || typeof event.used_tokens !== 'number') return
@@ -1819,7 +1819,7 @@ const upsertSubagentTrailItem = (event: ToolLifecycleEventData) => {
     }))
   }
 
-  // 子图压缩记录：按 id 去重追加到父 task 调用（过程面板展示「已压缩 N 次」）
+  // 子图压缩记录：按 id 去重追加到父 subagent 调用（过程面板展示「已压缩 N 次」）
   const upsertSubagentCompaction = (event: ToolLifecycleEventData) => {
     const parentId = event.parent_tool_call_id
     const record = buildSubagentCompactionRecord(event)
@@ -2180,7 +2180,7 @@ const submitAnalysisQuery = async (
         queuedMessageId: options.queuedMessageId,
         preserveQueuedMessages: options.preserveQueuedMessages,
         onToolLifecycle: (event) => {
-          // 子智能体内部过程事件：挂到所属 task 调用下，不建顶层片段
+          // 子智能体内部过程事件：挂到所属 subagent 调用下，不建顶层片段
           // 必须在 tool_call_id 判空之前分流——文本条目本身没有 tool_call_id
           if (event.parent_tool_call_id) {
             upsertSubagentTrailItem(event)

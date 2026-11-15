@@ -75,7 +75,7 @@ import { evictWorkspaceFileCache } from '../../utils/workspacePreviewCache'
 import { IMAGE_PREVIEW_EXTENSIONS, IMAGE_PREVIEW_MIME, OFFICE_HTML_PREVIEW_EXTENSIONS, isBinaryPreviewPath } from '../../utils'
 import { formatToolTableCell, parseChartSpecValue, replaceVisiblePathsForDisplay } from '../../utils/messageArtifacts'
 import ConversationTokenUsage from './ConversationTokenUsage.vue'
-import { extractChangedFilePathsFromResult, extractWrittenFilePathCandidates } from '../../utils/toolDisplay'
+import { extractChangedFilePathsFromResult, extractWrittenFilePathCandidates, isSubagentToolName } from '../../utils/toolDisplay'
 import { ACCEPTED_FILE_TYPES, MAX_FILE_SIZE } from '../../utils/uploadLimits'
 
 const props = defineProps({
@@ -239,10 +239,11 @@ const displaySubagentTaskCompactions = computed(
   () => displaySubagentTask.value?.result_meta?.subagent_compactions || [],
 )
 
-/** 选中 task 调用时，工具视图额外展示「完整过程」（与主对话共用同一套消息/工具组件） */
+/** 选中 subagent 调用时，工具视图额外展示「完整过程」（与主对话共用同一套消息/工具组件） */
 const subagentTaskCall = computed(() => {
   const toolCall = displayToolCall.value
-  return toolCall?.tool_name === 'task' && (toolCall.subagentTrail?.length ?? 0) > 0 ? toolCall : null
+  if (!toolCall) return null
+  return isSubagentToolName(toolCall.tool_name) && (toolCall.subagentTrail?.length ?? 0) > 0 ? toolCall : null
 })
 
 /** 切换 tab：保存旧 tab 滚动位置、按需恢复新 tab 内容/位置（滚动读写由本组件持有）。 */
@@ -340,17 +341,17 @@ const findSubagentTaskByToolCall = (toolCallId: string): SubagentTaskRecord | nu
 }
 
 const openToolPanelTab = (toolCall: ToolCallInfo) => {
-  // 后台 task 调用的工具结果只是「已启动」，真正过程/报告在任务账本里；
+  // 后台 subagent 调用的工具结果只是「已启动」，真正过程/报告在任务账本里；
   // 能按 parent_tool_call_id 找到任务时直接进任务详情页（与「子智能体管理」
-  // 同一个页面），避免停在空工具详情。前台 task 没有账本记录，走原链路。
-  if (toolCall.tool_name === 'task') {
+  // 同一个页面），避免停在空工具详情。前台 subagent 没有账本记录，走原链路。
+  if (isSubagentToolName(toolCall.tool_name)) {
     const task = findSubagentTaskByToolCall(toolCall.tool_call_id)
     if (task) {
       openSubagentTaskPanelTab(task)
       return
     }
   }
-  const isTask = toolCall.tool_name === 'task' && (toolCall.subagentTrail?.length ?? 0) > 0
+  const isTask = isSubagentToolName(toolCall.tool_name) && (toolCall.subagentTrail?.length ?? 0) > 0
   const subagentType = typeof toolCall.args?.subagent_type === 'string' ? toolCall.args.subagent_type.trim() : ''
   rememberActivePanelScroll()
   activateTab({
@@ -386,7 +387,7 @@ const openSubagentTaskPanelTab = (task: SubagentTaskRecord) => {
 }
 
 /**
- * 工具详情 tab 的展示方式（仅子智能体 task 调用可选）：
+ * 工具详情 tab 的展示方式（仅子智能体调用可选）：
  * - agent：智能体模式，按聊天记录复用主对话消息组件；
  * - generic：通用模式，与普通工具一致，只看参数与结果。
  * 两种模式互斥渲染，不堆叠。

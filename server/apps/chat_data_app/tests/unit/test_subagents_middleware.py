@@ -1,4 +1,4 @@
-"""子智能体中间件测试：task 工具派发、状态透传白名单与系统提示合并。"""
+"""子智能体中间件测试：subagent 工具派发、状态透传白名单与系统提示合并。"""
 
 import json
 from pathlib import Path
@@ -317,7 +317,7 @@ async def test_subgraph_approval_interrupt_and_resume_with_injected_checkpointer
 
 
 @pytest.mark.asyncio
-async def test_task_tool_returns_final_report_as_tool_message(monkeypatch):
+async def test_subagent_tool_returns_final_report_as_tool_message(monkeypatch):
     captured = {}
 
     class FakeRunnable:
@@ -346,7 +346,7 @@ async def test_task_tool_returns_final_report_as_tool_message(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_task_tool_falls_back_when_subagent_returns_empty_report(monkeypatch):
+async def test_subagent_tool_falls_back_when_subagent_returns_empty_report(monkeypatch):
     class FakeRunnable:
         async def astream(self, _state, _config, *, stream_mode):
             yield "updates", {"model": {"messages": []}}
@@ -362,7 +362,7 @@ async def test_task_tool_falls_back_when_subagent_returns_empty_report(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_task_tool_forwards_inner_tool_events_to_parent_stream(monkeypatch):
+async def test_subagent_tool_forwards_inner_tool_events_to_parent_stream(monkeypatch):
     """内层工具生命周期事件经 custom 通道转发，带 parent_tool_call_id。"""
     written = []
     monkeypatch.setattr(subagents_module, "get_stream_writer", lambda: written.append)
@@ -428,7 +428,7 @@ async def test_task_tool_forwards_inner_tool_events_to_parent_stream(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_task_tool_survives_missing_stream_writer(monkeypatch):
+async def test_subagent_tool_survives_missing_stream_writer(monkeypatch):
     """无 custom 流上下文（如离线批处理）时事件转发静默降级，不影响结论回传。"""
 
     def _raise():
@@ -495,8 +495,8 @@ def test_iter_subagent_stream_events_fills_missing_tool_timing():
 
 
 @pytest.mark.asyncio
-async def test_task_tool_forwards_and_stamps_subagent_compactions(monkeypatch):
-    """子图压缩：自定义事件转发 + 压缩记录随 task 结果持久化。"""
+async def test_subagent_tool_forwards_and_stamps_subagent_compactions(monkeypatch):
+    """子图压缩：自定义事件转发 + 压缩记录随 subagent 结果持久化。"""
     written = []
     monkeypatch.setattr(subagents_module, "get_stream_writer", lambda: written.append)
 
@@ -590,8 +590,8 @@ def test_aggregate_subagent_token_usage_sums_model_calls():
 
 
 @pytest.mark.asyncio
-async def test_task_tool_stamps_subagent_token_usage(monkeypatch):
-    """task 结果附带子图 token 用量，供前端任务卡/过程面板展示。"""
+async def test_subagent_tool_stamps_subagent_token_usage(monkeypatch):
+    """subagent 结果附带子图 token 用量，供前端任务卡/过程面板展示。"""
 
     class FakeRunnable:
         async def astream(self, _state, _config, *, stream_mode):
@@ -777,7 +777,7 @@ def test_iter_subagent_stream_events_coerces_string_args():
 
 
 @pytest.mark.asyncio
-async def test_task_tool_rejects_unknown_subagent_type():
+async def test_subagent_tool_rejects_unknown_subagent_type():
     tool = build_task_tool([_spec()])
 
     with pytest.raises(ValueError) as exc_info:
@@ -902,11 +902,11 @@ async def test_subagent_middleware_activity_query_failure_does_not_block_prompt(
     assert "## 当前子智能体状态" not in content
 
 
-def test_middleware_registers_single_task_tool_with_agent_catalog():
+def test_middleware_registers_single_subagent_tool_with_agent_catalog():
     middleware = SubagentMiddleware([_spec(), _spec(name="report-writer")])
 
-    # 单一 task 工具同时承担派发与后台任务管理
-    assert [tool.name for tool in middleware.tools] == ["task"]
+    # 单一 subagent 工具同时承担派发与后台任务管理
+    assert [tool.name for tool in middleware.tools] == ["subagent"]
     assert middleware.subagent_names == {"explore", "report-writer"}
     assert "explore" in middleware.tools[0].description
     assert "report-writer" in middleware.tools[0].description
@@ -952,7 +952,7 @@ def test_subagent_state_declares_token_usage_channel():
 
 
 @pytest.mark.asyncio
-async def test_task_tool_streams_text_and_thinking_deltas(monkeypatch):
+async def test_subagent_tool_streams_text_and_thinking_deltas(monkeypatch):
     """正文/思考以 token 级增量经 custom 流转发；完整消息只补收敛标记不重复带内容。"""
     written = []
     monkeypatch.setattr(subagents_module, "get_stream_writer", lambda: written.append)
@@ -997,7 +997,7 @@ async def test_task_tool_streams_text_and_thinking_deltas(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_task_tool_delta_streaming_caps_cumulative_text(monkeypatch):
+async def test_subagent_tool_delta_streaming_caps_cumulative_text(monkeypatch):
     """正文增量累计超过上限后停止转发，完整消息事件带截断标记。"""
     written = []
     monkeypatch.setattr(subagents_module, "get_stream_writer", lambda: written.append)
@@ -1072,7 +1072,7 @@ def test_iter_chunk_stream_events_keeps_text_alongside_tool_call_chunks():
 
 
 @pytest.mark.asyncio
-async def test_task_tool_keeps_text_when_chunk_carries_tool_call(monkeypatch):
+async def test_subagent_tool_keeps_text_when_chunk_carries_tool_call(monkeypatch):
     """正文与工具增量同 chunk：前端拼出的全文必须等于完整消息（丢内容回归）。"""
     written = []
     monkeypatch.setattr(subagents_module, "get_stream_writer", lambda: written.append)
@@ -1110,7 +1110,7 @@ async def test_task_tool_keeps_text_when_chunk_carries_tool_call(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_task_tool_assigns_fallback_id_to_messages_without_id(monkeypatch):
+async def test_subagent_tool_assigns_fallback_id_to_messages_without_id(monkeypatch):
     """provider 不返回 chunk id 时，完整消息事件仍带可用 message_id。
 
     前端以 message_id 作为 trail 条目主键，空 id 会被整条丢弃——不能把「中间文本
@@ -1235,7 +1235,7 @@ def test_build_trail_snapshot_skips_blank_and_deduplicates():
 
 
 @pytest.mark.asyncio
-async def test_task_tool_stamps_trail_snapshot_on_tool_message(monkeypatch):
+async def test_subagent_tool_stamps_trail_snapshot_on_tool_message(monkeypatch):
     """task ToolMessage 携带过程快照，随消息持久化供历史回放还原。"""
 
     class FakeRunnable:
@@ -1286,7 +1286,7 @@ async def test_task_tool_stamps_trail_snapshot_on_tool_message(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_task_tool_omits_trail_when_no_inner_activity(monkeypatch):
+async def test_subagent_tool_omits_trail_when_no_inner_activity(monkeypatch):
     """子图完全无可见输出时不塞空快照；仅有最终结论时快照与直播一致（含该消息）。"""
 
     class FakeRunnable:
@@ -1305,7 +1305,7 @@ async def test_task_tool_omits_trail_when_no_inner_activity(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_task_tool_trail_includes_final_message_like_live_stream(monkeypatch):
+async def test_subagent_tool_trail_includes_final_message_like_live_stream(monkeypatch):
     """最终结论消息在直播中本就作为 subagent_message 出现在 trail 尾部，快照保持一致。"""
 
     class FakeRunnable:
@@ -1334,7 +1334,7 @@ async def test_task_tool_trail_includes_final_message_like_live_stream(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_task_tool_stamps_trail_on_failure(monkeypatch):
+async def test_subagent_tool_stamps_trail_on_failure(monkeypatch):
     """子图中途抛异常时返回 error ToolMessage 并盖章已收集的 trail 快照。
 
     真实场景：子图耗尽 recursion_limit —— 直播时内层过程已通过 SSE 转发，
@@ -1390,7 +1390,7 @@ async def test_task_tool_stamps_trail_on_failure(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_task_tool_failure_without_inner_activity_omits_trail(monkeypatch):
+async def test_subagent_tool_failure_without_inner_activity_omits_trail(monkeypatch):
     """异常发生在任何可见输出之前时不塞空快照，与成功路径口径一致。"""
 
     class FakeRunnable:

@@ -138,16 +138,16 @@ async def test_externalize_tool_text_reuses_offload_envelope(monkeypatch, tmp_pa
 
     envelope, recovery = await tool_result.externalize_tool_text(
         text,
-        source_tool="task",
+        source_tool="subagent",
         state=request.state,
         suffix=".md",
         preview_chars=100,
     )
 
     assert envelope.startswith("[tool_result_offloaded]")
-    assert "source_tool=task" in envelope
+    assert "source_tool=subagent" in envelope
     assert f"result_size_chars={len(text)}" in envelope
-    assert recovery["source_tool"] == "task"
+    assert recovery["source_tool"] == "subagent"
     assert recovery["result_path"].endswith(".md")
     assert recovery["result_size_chars"] == len(text)
 

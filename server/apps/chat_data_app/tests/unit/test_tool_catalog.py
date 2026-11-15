@@ -14,7 +14,7 @@ def test_tool_catalog_covers_builtin_and_middleware_tools():
     assert by_name["file_read"].risk == "low"
     assert by_name["file_delete"].risk == "high"
     assert by_name["write_todos"].source == "middleware"
-    assert by_name["task"].source == "middleware"
+    assert by_name["subagent"].source == "middleware"
     assert by_name["file_read"].approval == "allow"
     assert by_name["file_read"].display_name == "读取文件"
     assert by_name["data_analyzing_tool"].required_skills

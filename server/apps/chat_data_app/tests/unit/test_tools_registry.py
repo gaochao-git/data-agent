@@ -101,8 +101,8 @@ def test_subagent_tool_selection_is_explicit_and_registered():
         assert "ask_user_question" not in allowed
         assert "present_artifacts" not in allowed
         assert "bash_run" not in allowed
-        # 子智能体不能再派子智能体：task 工具只能由主智能体持有。
-        assert "task" not in allowed
+        # 子智能体不能再派子智能体：subagent 工具只能由主智能体持有。
+        assert "subagent" not in allowed
     denied = SUBAGENT_TOOL_DENYLISTS["general"]
     unknown_denied = denied - registered
     assert not unknown_denied, f"general 剔除集引用了未注册工具: {sorted(unknown_denied)}"
@@ -112,7 +112,7 @@ def test_subagent_tool_selection_is_explicit_and_registered():
         "ask_user_question",
         "present_artifacts",
         "write_todos",
-        "task",
+        "subagent",
         "bash_run",
         "mcp_tool_search",
         "mcp_tool_call",
@@ -152,11 +152,11 @@ def test_system_tools_use_same_ask_allow_map_as_mcp():
 
     assert set(SYSTEM_TOOL_APPROVALS) == provided_tool_names() | MIDDLEWARE_INJECTED_APPROVAL_TOOLS
     assert set(SYSTEM_TOOL_APPROVALS.values()) == {"allow"}
-    # write_todos / task 由中间件装配，不经过 TOOL_BUILD_GROUPS，但必须显式 allow 且进入铺底表
-    assert {"write_todos", "task", "mcp_tool_search", "mcp_tool_call"} == MIDDLEWARE_INJECTED_APPROVAL_TOOLS
+    # write_todos / subagent 由中间件装配，不经过 TOOL_BUILD_GROUPS，但必须显式 allow 且进入铺底表
+    assert {"write_todos", "subagent", "mcp_tool_search", "mcp_tool_call"} == MIDDLEWARE_INJECTED_APPROVAL_TOOLS
     assert not {name for name, approval in SYSTEM_TOOL_APPROVALS.items() if approval == "ask"}
     assert system_tool_approval("write_todos") == "allow"
-    assert system_tool_approval("task") == "allow"
+    assert system_tool_approval("subagent") == "allow"
 
 
 def test_required_skills_target_builtin_skills_only():

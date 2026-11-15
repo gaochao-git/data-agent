@@ -13,8 +13,8 @@ steering 插话、工具计时与单会话调用频率告警、历史消息时�
 
 ## 后台子智能体
 
-`task` 工具默认 `background=true`，转入持久任务账本（见 `agent/run/README.md`），立即返回
-`task_id`；执行体在独立 asyncio task 中做子图心跳、超时与取消观察。同一个 `task` 工具
+`subagent` 工具默认 `background=true`，转入持久任务账本（见 `agent/run/README.md`），立即返回
+`task_id`；执行体在独立 asyncio task 中做子图心跳、超时与取消观察。同一个 `subagent` 工具
 用 `action` 统一管理后台任务：`list` 列任务、`check` 查单个、`wait` 等终态、`cancel` 取消；
 都按当前会话与用户隔离读取账本，不依赖进程内注册表。`check` 对终态任务返回完整
 报告；超长报告会落盘并返回 `result_path`，可直接用 `file_read` 读取完整正文，
@@ -23,5 +23,5 @@ steering 插话、工具计时与单会话调用频率告警、历史消息时�
 每个主对话创建的子智能体总数由
 `CHAT_DATA_SUBAGENT_MAX_SESSIONS_PER_CONVERSATION` 限制；该额度按
 `agent_session_id` 去重，追问沿用原会话不占新额度。任务相似时，提示词要求主智能体
-先 `task(action="list")` 找到已有子智能体并用 `follow_up` 续写；相似度不做代码层
+先 `subagent(action="list")` 找到已有子智能体并用 `follow_up` 续写；相似度不做代码层
 匹配，避免误合并不同目标或交付物。

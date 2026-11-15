@@ -197,8 +197,8 @@ def _iter_subagent_stream_events(
       叙述/分析结论，用 ``message_id`` 去重
     - AIMessage.tool_calls → ``tool_started``（args 尽力规整为 dict）
     - ToolMessage → ``tool_completed`` / ``tool_failed``（结果截断为预览）
-    - 每个事件都挂 ``parent_tool_call_id`` 指向所属外层 task 调用，便于前端
-      把内部过程挂在 task 卡片下、而不是当作顶层调用渲染。
+    - 每个事件都挂 ``parent_tool_call_id`` 指向所属外层 subagent 调用，便于前端
+      把内部过程挂在 subagent 卡片下、而不是当作顶层调用渲染。
 
     收敛策略（只补标记不覆盖）：``messages`` 模式已增量转发过文本/思考的
     消息（命中 ``streamed_text_ids`` / ``streamed_think_ids``），完整消息事件
@@ -332,7 +332,7 @@ def _aggregate_subagent_token_usage(messages: list) -> dict[str, int]:
     """汇总子图内每次模型调用的 token 用量（billing 口径，不是上下文占用估算）。
 
     子图 ``callbacks=[]`` 且不挂主图 ContextUsageMiddleware，主对话 token 统计看不到
-    这部分；这里按消息上的 ``usage_metadata`` 累加，随 task 结果持久化供前端展示。
+    这部分；这里按消息上的 ``usage_metadata`` 累加，随 subagent 结果持久化供前端展示。
     """
     totals = {
         "input_tokens": 0,
@@ -354,7 +354,7 @@ def _aggregate_subagent_token_usage(messages: list) -> dict[str, int]:
 def _subagent_process_snapshot(
     messages: list, context_usage: Any, compactions: Any = None, token_detail: Any = None
 ) -> dict[str, Any]:
-    """task 结果上附带的子过程快照：上下文用量 + 子图 token 用量 + 压缩事件。"""
+    """subagent 结果上附带的子过程快照：上下文用量 + 子图 token 用量 + 压缩事件。"""
     snapshot: dict[str, Any] = {}
     if isinstance(context_usage, dict) and context_usage:
         snapshot["subagent_context_usage"] = context_usage

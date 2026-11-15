@@ -146,6 +146,7 @@ def test_reasoning_and_thinking_helper_branches():
     assert _format_reasoning_for_display("调用 data_analyzing_tool") == "调用 数据分析"
     assert _format_reasoning_for_display("调用 get_current_time") == "调用 获取当前时间"
     # 短工具名（task）只按词边界替换，不能命中 subtask / task_id / tasks 等长词的子串
+    assert _format_reasoning_for_display("派发 subagent 处理") == "派发 派发子智能体 处理"
     assert _format_reasoning_for_display("派发 task 处理") == "派发 派发子智能体 处理"
     assert _format_reasoning_for_display("拆成 3 个 subtask 分别处理") == "拆成 3 个 subtask 分别处理"
     assert _format_reasoning_for_display("先记录 task_id，再调用工具") == "先记录 task_id，再调用工具"

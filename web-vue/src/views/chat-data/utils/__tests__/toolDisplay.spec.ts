@@ -26,8 +26,8 @@ describe('toolDisplay', () => {
       officecli_run: '运行 OfficeCLI',
       ask_user_question: '询问用户',
       write_todos: '更新任务计划',
-      task: '派发子智能体',
-    load_skill: '加载技能',
+      subagent: '派发子智能体',
+      load_skill: '加载技能',
     }
 
     for (const [toolName, displayName] of Object.entries(expectedNames)) {
@@ -51,10 +51,13 @@ describe('toolDisplay', () => {
   })
 
   it('labels task management actions separately from subagent dispatch', () => {
-    expect(getToolDisplayName('task', { action: 'list' })).toBe('查看后台任务')
+    expect(getToolDisplayName('subagent', { action: 'list' })).toBe('查看后台任务')
+    expect(getToolDisplayName('subagent', { action: 'check', task_id: 't1' })).toBe('查看后台任务')
+    expect(getToolDisplayName('subagent', { action: 'wait', task_ids: ['t1'] })).toBe('等待后台任务')
+    expect(getToolDisplayName('subagent', { action: 'cancel', task_id: 't1' })).toBe('取消后台任务')
+    expect(getToolDisplayName('subagent')).toBe('派发子智能体')
+    // 历史消息仍使用旧工具名 task
     expect(getToolDisplayName('task', { action: 'check', task_id: 't1' })).toBe('查看后台任务')
-    expect(getToolDisplayName('task', { action: 'wait', task_ids: ['t1'] })).toBe('等待后台任务')
-    expect(getToolDisplayName('task', { action: 'cancel', task_id: 't1' })).toBe('取消后台任务')
     expect(getToolDisplayName('task')).toBe('派发子智能体')
   })
 
@@ -121,25 +124,29 @@ describe('toolDisplay', () => {
     expect(getToolCompactDescription('read_image', {
       file_path: '/mnt/user-data/uploads/登录页面.png',
     })).toBe('/mnt/user-data/uploads/登录页面.png')
-    expect(getToolCompactDescription('task', {
+    expect(getToolCompactDescription('subagent', {
       subagent_type: 'data-explore',
       description: '分析近 30 天入金金额趋势并给出结论',
     })).toBe('data-explore · 分析近 30 天入金金额趋势并给出结论')
-    expect(getToolCompactDescription('task', {
+    expect(getToolCompactDescription('subagent', {
       description: '只给了任务书没有类型',
     })).toBe('只给了任务书没有类型')
-    expect(getToolCompactDescription('task', {
+    expect(getToolCompactDescription('subagent', {
       action: 'check',
       task_id: 't1',
     })).toBe('t1')
-    expect(getToolCompactDescription('task', {
+    expect(getToolCompactDescription('subagent', {
       action: 'wait',
       task_ids: ['t1', 't2'],
     })).toBe('t1 等 2 个任务')
-    expect(getToolCompactDescription('task', {
+    expect(getToolCompactDescription('subagent', {
       action: 'cancel',
       task_id: 't1',
     })).toBe('t1')
+    expect(getToolCompactDescription('task', {
+      subagent_type: 'explore',
+      description: '历史任务书',
+    })).toBe('explore · 历史任务书')
     expect(getToolCompactDescription('unknown_tool', { query: '不展示' })).toBe('')
   })
 

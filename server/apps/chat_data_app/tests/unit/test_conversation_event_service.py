@@ -826,7 +826,7 @@ def test_human_message_payload_strips_blocks_and_carries_vision_attachments():
 
 
 def test_tool_message_payload_carries_subagent_trail_snapshot():
-    """task 工具的子智能体过程快照随 tool_result 事件持久化（历史回放还原用）。"""
+    """subagent 工具的子智能体过程快照随 tool_result 事件持久化（历史回放还原用）。"""
     from apps.chat_data_app.agent.run.conversation_event_service import (
         _serialize_tool_message,
     )
@@ -853,12 +853,12 @@ def test_tool_message_payload_carries_subagent_trail_snapshot():
         ToolMessage(
             content="1 + 1 = 2",
             tool_call_id="call-task-1",
-            name="task",
+            name="subagent",
             additional_kwargs={"subagent_trail": trail},
         )
     )
     assert payload["subagent_trail"] == trail
-    assert payload["tool_name"] == "task"
+    assert payload["tool_name"] == "subagent"
 
     # 无快照（普通工具 / 空快照）不出现该字段
     plain = _serialize_tool_message(ToolMessage(content="结果", tool_call_id="call-2", name="calculator_tool"))
@@ -867,7 +867,7 @@ def test_tool_message_payload_carries_subagent_trail_snapshot():
         ToolMessage(
             content="结论",
             tool_call_id="call-3",
-            name="task",
+            name="subagent",
             additional_kwargs={"subagent_trail": []},
         )
     )
@@ -875,7 +875,7 @@ def test_tool_message_payload_carries_subagent_trail_snapshot():
 
 
 def test_tool_message_payload_carries_subagent_context_usage():
-    """task 工具的上下文用量快照随 tool_result 事件持久化（历史回放还原徽标用）。"""
+    """subagent 工具的上下文用量快照随 tool_result 事件持久化（历史回放还原徽标用）。"""
     from apps.chat_data_app.agent.run.conversation_event_service import (
         _serialize_tool_message,
     )
@@ -885,7 +885,7 @@ def test_tool_message_payload_carries_subagent_context_usage():
         ToolMessage(
             content="盘点结论",
             tool_call_id="call-task-1",
-            name="task",
+            name="subagent",
             additional_kwargs={"subagent_context_usage": usage},
         )
     )
@@ -898,7 +898,7 @@ def test_tool_message_payload_carries_subagent_context_usage():
         ToolMessage(
             content="结论",
             tool_call_id="call-3",
-            name="task",
+            name="subagent",
             additional_kwargs={"subagent_context_usage": "not-a-dict"},
         )
     )

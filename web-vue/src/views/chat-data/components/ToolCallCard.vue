@@ -10,7 +10,7 @@ import type { ExecutionTargetOption, ToolCallInfo } from '../types'
 import QueryResultPanel from './QueryResultPanel.vue'
 import SaveToPanelModal from './SaveToPanelModal.vue'
 import { extractGeneratedSqlFromToolCall, extractQueryResultPayload, extractSemanticDslFromArgs, getQueryResultError, parseQueryResultEnvelope } from '../utils/semanticTool'
-import { compactInlineText, getTaskActionDisplayName, getToolDisplayName, getToolTechnicalDescription, formatToolTimingText, parseFileDiffResult, isFileDiffOffloaded } from '../utils/toolDisplay'
+import { compactInlineText, getTaskActionDisplayName, getToolDisplayName, getToolTechnicalDescription, formatToolTimingText, isSubagentToolName, parseFileDiffResult, isFileDiffOffloaded } from '../utils/toolDisplay'
 import FileDiffViewer from './FileDiffViewer.vue'
 import { useSaveToPanel } from '../composables/useSaveToPanel'
 import { useToolTiming } from '../composables/useToolTiming'
@@ -103,14 +103,16 @@ const PARAM_LABELS: Record<string, string> = {
   subagent_type: '子智能体类型'
 }
 
-// 个别工具的参数名与通用语义冲突（如 task 的 description 是「任务书」，
+// 个别工具的参数名与通用语义冲突（如 subagent 的 description 是「任务书」，
 // 不代表所有工具的 description 都该这么显示），按工具维度覆盖全局表。
 const TOOL_PARAM_LABEL_OVERRIDES: Record<string, Record<string, string>> = {
-  task: { description: '任务书' }
+  subagent: { description: '任务书' }
 }
 
-const paramLabel = (key: string): string =>
-  TOOL_PARAM_LABEL_OVERRIDES[props.toolCall.tool_name]?.[key] ?? PARAM_LABELS[key] ?? key
+const paramLabel = (key: string): string => {
+  const toolName = isSubagentToolName(props.toolCall.tool_name) ? 'subagent' : props.toolCall.tool_name
+  return TOOL_PARAM_LABEL_OVERRIDES[toolName]?.[key] ?? PARAM_LABELS[key] ?? key
+}
 
 // DSL 参数标签颜色
 const DSL_TAG_COLORS: Record<string, { bg: string; text: string }> = {
@@ -121,18 +123,18 @@ const DSL_TAG_COLORS: Record<string, { bg: string; text: string }> = {
   order_by: { bg: 'rgba(236, 72, 153, 0.1)', text: '#db2777' }
 }
 
-// 标题链：task 管理动作的专用名 → 后端展示名（MCP tools.<name>.label）→ 内置映射表/限定名兜底
+// 标题链：subagent 管理动作的专用名 → 后端展示名（MCP tools.<name>.label）→ 内置映射表/限定名兜底
 const displayName = computed(() => {
   const args = props.toolCall.args || {}
-  const taskActionName = props.toolCall.tool_name === 'task' ? getTaskActionDisplayName(args) : ''
+  const taskActionName = isSubagentToolName(props.toolCall.tool_name) ? getTaskActionDisplayName(args) : ''
   return taskActionName
     || props.toolCall.display_name?.trim()
     || getToolDisplayName(props.toolCall.tool_name, args)
 })
-// 只有真正派发子智能体用机器人图标；task 的查询/等待/取消保持扳手。
+// 只有真正派发子智能体用机器人图标；subagent 的查询/等待/取消保持扳手。
 const toolIconClass = computed(() => {
   const action = String(props.toolCall.args?.action || 'start').trim()
-  return props.toolCall.tool_name === 'task' && action === 'start' ? 'fa-robot' : 'fa-wrench'
+  return isSubagentToolName(props.toolCall.tool_name) && action === 'start' ? 'fa-robot' : 'fa-wrench'
 })
 
 // 状态

@@ -25,7 +25,7 @@ setToolDisplayNames({
   officecli_run: '运行 OfficeCLI',
   ask_user_question: '询问用户',
   write_todos: '更新任务计划',
-  task: '派发子智能体',
+  subagent: '派发子智能体',
   load_skill: '加载技能',
   mcp_tool_search: '搜索 MCP 工具',
   mcp_tool_call: '调用 MCP 工具',

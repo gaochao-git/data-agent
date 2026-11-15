@@ -165,7 +165,7 @@ def test_full_message_events_and_trail_sanitize_markup():
 
 
 @pytest.mark.asyncio
-async def test_task_tool_streamed_deltas_exclude_markup(monkeypatch):
+async def test_subagent_tool_streamed_deltas_exclude_markup(monkeypatch):
     """硬线摘工具轮次的退化文本流经增量通道时同样被剥除（直播路径）。"""
     written = []
     monkeypatch.setattr(subagents_module, "get_stream_writer", lambda: written.append)
@@ -191,7 +191,7 @@ async def test_task_tool_streamed_deltas_exclude_markup(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_task_tool_emits_context_usage_events_and_stamps_tool_message(monkeypatch):
+async def test_subagent_tool_emits_context_usage_events_and_stamps_tool_message(monkeypatch):
     """每个节点更新后发 subagent_context_usage 事件，最终用量盖到 ToolMessage。"""
     written = []
     monkeypatch.setattr(subagents_module, "get_stream_writer", lambda: written.append)
@@ -292,7 +292,7 @@ async def test_subagent_usage_detail_flows_from_state_update_to_sse_and_snapshot
 
 
 @pytest.mark.asyncio
-async def test_task_tool_prepends_budget_notice_when_forced_to_wrap_up(monkeypatch):
+async def test_subagent_tool_prepends_budget_notice_when_forced_to_wrap_up(monkeypatch):
     """用量达阈值后，回传正文陈述事实（结论可能残缺），不替主智能体安排后续。"""
     written = []
     monkeypatch.setattr(subagents_module, "get_stream_writer", lambda: written.append)
@@ -325,7 +325,7 @@ async def test_task_tool_prepends_budget_notice_when_forced_to_wrap_up(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_task_tool_offloads_report_over_parent_budget(monkeypatch):
+async def test_subagent_tool_offloads_report_over_parent_budget(monkeypatch):
     """报告超过父上下文预算占比时落盘外置，正文换成统一信封。"""
     calls: list[dict] = []
 
@@ -339,7 +339,7 @@ async def test_task_tool_offloads_report_over_parent_budget(monkeypatch):
                 "preview_chars": preview_chars,
             }
         )
-        return "[tool_result_offloaded]\nsource_tool=task", {"source_tool": "task"}
+        return "[tool_result_offloaded]\nsource_tool=subagent", {"source_tool": "subagent"}
 
     monkeypatch.setattr(subagents_module, "externalize_tool_text", fake_externalize)
 
@@ -361,14 +361,14 @@ async def test_task_tool_offloads_report_over_parent_budget(monkeypatch):
     message = result.update["messages"][0]
     assert message.content.startswith("[tool_result_offloaded]")
     assert message.status == "success"
-    assert calls[0]["source_tool"] == "task"
+    assert calls[0]["source_tool"] == "subagent"
     assert calls[0]["suffix"] == ".md"
     assert calls[0]["preview_chars"] == subagents_module.SUBAGENT_REPORT_PREVIEW_CHARS
     assert calls[0]["state"]["token_usage"]["hard_input_limit_tokens"] == 1000
 
 
 @pytest.mark.asyncio
-async def test_task_tool_keeps_report_within_parent_budget(monkeypatch):
+async def test_subagent_tool_keeps_report_within_parent_budget(monkeypatch):
     """报告未超父上下文预算时不外置，正文保持结论原文。"""
 
     async def fake_externalize(*_args, **_kwargs):
@@ -392,7 +392,7 @@ async def test_task_tool_keeps_report_within_parent_budget(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_task_tool_keeps_report_without_parent_usage(monkeypatch):
+async def test_subagent_tool_keeps_report_without_parent_usage(monkeypatch):
     """父 state 没有用量时无法按预算封顶，保持原文（不猜窗口大小）。"""
 
     async def fake_externalize(*_args, **_kwargs):
@@ -544,7 +544,7 @@ def test_budget_alert_counts_summary_tokens_for_threshold(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_task_tool_keeps_report_when_offload_fails(monkeypatch):
+async def test_subagent_tool_keeps_report_when_offload_fails(monkeypatch):
     """落盘失败不能丢掉子智能体结论，也不得误报已外置。"""
 
     async def failed_externalize(*_args, **_kwargs):

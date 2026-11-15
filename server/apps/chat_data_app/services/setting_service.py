@@ -306,7 +306,7 @@ SETTING_REGISTRY: dict[str, SettingSpec] = {
         minimum=30,
         maximum=86400,
         effect=EFFECT_IMMEDIATE,
-        description="后台子智能体单任务默认超时时间（秒），单个任务可用 task.timeout_seconds 覆盖",
+        description="后台子智能体单任务默认超时时间（秒），单个任务可用 subagent 的 timeout_seconds 覆盖",
     ),
     "CHAT_DATA_SUBAGENT_TASK_LEASE_SECONDS": SettingSpec(
         key="CHAT_DATA_SUBAGENT_TASK_LEASE_SECONDS",

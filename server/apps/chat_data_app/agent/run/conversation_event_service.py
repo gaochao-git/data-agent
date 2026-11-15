@@ -958,7 +958,7 @@ def _serialize_ai_message(message: AIMessage) -> dict[str, Any]:
 
 
 def _serialize_subagent_artifacts(message: ToolMessage) -> dict[str, Any]:
-    """task 工具的子过程产物：过程快照 / 上下文用量 / token 用量 / 压缩记录 / 计量明细。"""
+    """subagent 工具的子过程产物：过程快照 / 上下文用量 / token 用量 / 压缩记录 / 计量明细。"""
     additional_kwargs = getattr(message, "additional_kwargs", None) or {}
     artifacts: dict[str, Any] = {}
     trail = additional_kwargs.get("subagent_trail")

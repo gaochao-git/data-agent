@@ -159,7 +159,7 @@ MIDDLEWARE_CANONICAL_ORDER: tuple[str, ...] = (
     "ToolCallRateAlertMiddleware",  # 与计时同层：只统计通过围栏的真实调用，被拒绝的调用不计入频次
     "ToolCallHistoryRepairMiddleware",  # 历史修复先于 steering / 压缩消费消息
     "SteeringMiddleware",  # 在压缩之前注入插话，避免被摘要吞掉
-    "SubagentMiddleware",  # 派发决策先于任务规划：task 工具注册 + 子智能体使用说明追加进系统提示
+    "SubagentMiddleware",  # 派发决策先于任务规划：subagent 工具注册 + 子智能体使用说明追加进系统提示
     "TodoListMiddleware",  # 复杂分析的任务分解规划（langchain 官方）：todos 存 state 随 checkpoint 持久，压缩不丢
     "AfterModelHistoryMiddleware",  # after_model 按列表逆序执行：本行先于 ToolApprovalMiddleware（列表更靠前）跑
     # ToolApprovalMiddleware 也是 after_model（批量审批中断）：逆序执行意味着历史快照先落、

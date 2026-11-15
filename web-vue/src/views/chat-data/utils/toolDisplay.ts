@@ -3,20 +3,34 @@ import { shallowRef } from 'vue'
 // 工具展示名唯一来源是后端 /config 的 tool_display_names；前端不再维护第二张表。
 const backendToolDisplayNames = shallowRef<Record<string, string>>({})
 
+const SUBAGENT_TOOL_NAME = 'subagent'
+const LEGACY_SUBAGENT_TOOL_NAME = 'task'
+
+/** 新旧会话兼容：子智能体工具已从 task 改名为 subagent，历史消息仍存旧值。 */
+export function isSubagentToolName(toolName?: string | null): boolean {
+  const name = String(toolName || '').trim()
+  return name === SUBAGENT_TOOL_NAME || name === LEGACY_SUBAGENT_TOOL_NAME
+}
+
+const canonicalToolName = (toolName?: string | null): string => {
+  const name = String(toolName || '').trim()
+  return isSubagentToolName(name) ? SUBAGENT_TOOL_NAME : name
+}
+
 /** /config 下发后注入；后端声明是工具展示名的唯一来源。 */
 export function setToolDisplayNames(names?: Record<string, string> | null): void {
   backendToolDisplayNames.value = names && typeof names === 'object' ? { ...names } : {}
 }
 
 export function getToolDisplayName(toolName?: string | null, args: ToolArgs = {}): string {
-  const name = String(toolName || '').trim()
+  const name = canonicalToolName(toolName)
   if (!name) return '工具调用'
   // mcp_tool_call 的展示对象是目标工具，不能被静态“调用 MCP 工具”覆盖。
   if (name === 'mcp_tool_call') {
     const target = typeof args.name === 'string' ? args.name.trim() : ''
     return target ? `调用 MCP 工具：${target.replace(/^mcp_/, '')}` : '调用 MCP 工具'
   }
-  const taskActionName = name === 'task' ? getTaskActionDisplayName(args) : ''
+  const taskActionName = name === SUBAGENT_TOOL_NAME ? getTaskActionDisplayName(args) : ''
   if (taskActionName) return taskActionName
   const backendName = backendToolDisplayNames.value[name]
   if (backendName) return backendName
@@ -181,7 +195,7 @@ const TOOL_DESCRIPTION_BUILDERS: Record<string, DescriptionBuilder> = {
   calculator_tool: calculatorDescription,
   officecli_run: args => Array.isArray(args.command_args) ? compactInlineText(args.command_args.join(' ')) : '',
   bash_run: args => compactInlineText(args.command),
-  task: taskDescription,
+  subagent: taskDescription,
   write_todos: args => {
     const todos = Array.isArray(args.todos) ? args.todos : []
     const done = todos.filter(item => item?.status === 'completed').length
@@ -320,7 +334,7 @@ export function getToolTechnicalDescription(
   toolName?: string | null,
   args: ToolArgs = {},
 ): string {
-  const name = String(toolName || '').trim()
+  const name = canonicalToolName(toolName)
   return TOOL_DESCRIPTION_BUILDERS[name]?.(args) || ''
 }
 

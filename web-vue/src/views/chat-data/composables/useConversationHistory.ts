@@ -202,7 +202,7 @@ const readExecutionTiming = (payload: unknown): Pick<ToolCallInfo, 'started_at_m
   return { started_at_ms: started, ended_at_ms: ended }
 }
 
-// 子智能体过程快照：随 task 的 tool_result payload 持久化（后端盖在
+// 子智能体过程快照：随 subagent 的 tool_result payload 持久化（后端盖在
 // additional_kwargs.subagent_trail），历史回放时据此还原「子智能体内部逻辑」。
 // 逐条目校验，坏数据丢弃条目而不是整块丢弃。
 const normalizeSubagentTrail = (value: unknown): SubagentTrailItem[] | undefined => {
@@ -253,8 +253,8 @@ const normalizeSubagentTrail = (value: unknown): SubagentTrailItem[] | undefined
   return trail.length > 0 ? trail : undefined
 }
 
-// 子智能体上下文用量快照：随 task 的 tool_result payload 持久化（后端盖在
-// additional_kwargs.subagent_context_usage），历史回放时 task 卡片标题行还原用量徽标。
+// 子智能体上下文用量快照：随 subagent 的 tool_result payload 持久化（后端盖在
+// additional_kwargs.subagent_context_usage），历史回放时 subagent 卡片标题行还原用量徽标。
 const normalizeSubagentContextUsage = (value: unknown): SubagentContextUsage | undefined => {
   if (!value || typeof value !== 'object') return undefined
   const raw = value as Record<string, unknown>
@@ -285,7 +285,7 @@ const normalizeSubagentContextUsage = (value: unknown): SubagentContextUsage | u
   }
 }
 
-// 子图上下文压缩记录：随 task 的 tool_result payload 持久化，历史回放还原「已压缩 N 次」
+// 子图上下文压缩记录：随 subagent 的 tool_result payload 持久化，历史回放还原「已压缩 N 次」
 const normalizeSubagentCompactions = (value: unknown): SubagentCompaction[] | undefined => {
   if (!Array.isArray(value)) return undefined
   const records: SubagentCompaction[] = []
@@ -317,7 +317,7 @@ const normalizeSubagentTokenUsageDetail = (value: unknown): ChatDataTokenUsage |
   return Number.isFinite(Number(usage.used)) && Number.isFinite(Number(usage.total)) ? usage : undefined
 }
 
-// 子智能体 token 用量（billing 口径）：随 task 的 tool_result payload 持久化，历史回放还原
+// 子智能体 token 用量（billing 口径）：随 subagent 的 tool_result payload 持久化，历史回放还原
 const normalizeSubagentTokenUsage = (value: unknown): SubagentTokenUsage | undefined => {
   if (!value || typeof value !== 'object') return undefined
   const raw = value as Record<string, unknown>

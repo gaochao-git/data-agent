@@ -281,7 +281,7 @@ def _build_enabled_tools(context: ToolBuildContext, *, skip_user_interaction: bo
 EXPLORE_SUBAGENT_NAME = "explore"
 EXPLORE_SUBAGENT_DESCRIPTION = (
     "只读事实收集：遍历语义模型/多表/多指标做批量盘点、口径确认与数据核对，"
-    "只回传结构化事实清单，不写文件、不下最终结论。"
+    "只回传结构化事实清单，不写文件、不下最终结论，不能调用 MCP 工具。"
     "适合需要跨多模型/多表摸底数据事实的场景。"
 )
 
@@ -289,7 +289,8 @@ GENERAL_SUBAGENT_NAME = "general"
 GENERAL_SUBAGENT_DESCRIPTION = (
     "通用执行：按任务书完成可读写的多步任务——读取与整理文件、查询分析数据、"
     "用办公技能产出文档/报告等交付物，并回传结论与产出路径。"
-    "默认继承主智能体可用工具（含 MCP 实体工具），适合已明确要做、需要落盘产出的委派任务。"
+    "默认继承主智能体可用工具，可调用已接入的 MCP 实体工具，适合已明确要做、"
+    "需要落盘产出或依赖 MCP 数据的委派任务。"
     "子智能体与主智能体共享技能清单，但看不到主对话历史：任务相关的技能（尤其"
     "用户自定义技能）建议在任务书中写明技能名称与 skill_file 路径。"
 )
@@ -323,7 +324,7 @@ SUBAGENT_TOOL_DENYLISTS: dict[str, frozenset[str]] = {
             "present_artifacts",
             "write_todos",
             # 禁止嵌套派发子智能体，也禁止子智能体绕过登记使用通用脚本执行器。
-            "task",
+            "subagent",
             "bash_run",
             # MCP 检索网关依赖主图发现中间件与可见性过滤，子图直接继承实体工具。
             "mcp_tool_search",

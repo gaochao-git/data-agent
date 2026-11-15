@@ -42,7 +42,7 @@ export const buildSubagentCompactionTrailItem = (record: SubagentCompaction): Su
   compressed_messages: record.compressed_messages,
 })
 
-/** 把压缩记录合进 task 调用：列表去重 + 过程 trail 插入分隔卡；无变化返回 null。 */
+/** 把压缩记录合进 subagent 调用：列表去重 + 过程 trail 插入分隔卡；无变化返回 null。 */
 export const applySubagentCompactionToTool = (
   tool: ToolCallInfo,
   record: SubagentCompaction,
