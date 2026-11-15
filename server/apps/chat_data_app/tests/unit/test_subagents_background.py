@@ -45,9 +45,10 @@ class _FakeEventService:
         self.events.append(kwargs)
 
 
-def _settings(max_active: int = 20):
+def _settings(max_active: int = 20, max_sessions: int = 20):
     values = {
         "CHAT_DATA_SUBAGENT_TASK_MAX_ACTIVE": max_active,
+        "CHAT_DATA_SUBAGENT_MAX_SESSIONS_PER_CONVERSATION": max_sessions,
         "CHAT_DATA_SUBAGENT_TASK_LEASE_SECONDS": 30,
         "CHAT_DATA_SUBAGENT_TASK_TIMEOUT_SECONDS": 60,
     }
@@ -491,6 +492,66 @@ async def test_capacity_guard_serializes_active_tasks(harness, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_session_capacity_counts_distinct_agents_and_allows_follow_up(harness, monkeypatch):
+    """主对话子会话总数有新开上限；追问复用原会话不占新额度。"""
+    monkeypatch.setattr(
+        service_module,
+        "get_runtime_setting",
+        _settings(max_active=20, max_sessions=2),
+    )
+    await harness.create_conversation()
+    first = await _create_task(harness)
+    await harness.service.finish_task(
+        first.task_id,
+        first.owner_token or "",
+        status="completed",
+        report="第一份结论",
+    )
+    second = await harness.service.create_task(
+        conversation_id=CONV,
+        user_id=USER,
+        parent_run_id="run-parent",
+        subagent_type="explore",
+        description="另一个独立盘点任务",
+        label="独立任务",
+        parent_tool_call_id="call-second",
+        parent_owner_token="parent-owner",
+        timeout_seconds=60,
+        operator_name="用户一",
+    )
+    await harness.service.finish_task(
+        second.task_id,
+        second.owner_token or "",
+        status="completed",
+        report="第二份结论",
+    )
+
+    with pytest.raises(SubagentTaskCapacityError, match="达到上限"):
+        await _create_task(harness)
+    async with harness.get_session() as session:
+        assert await harness.service._dao.count_sessions(session, CONV, USER) == 2
+
+    follow_up = await harness.service.create_task(
+        conversation_id=CONV,
+        user_id=USER,
+        parent_run_id="run-parent",
+        subagent_type="explore",
+        description="在第二份结论上补充渠道拆分",
+        label=None,
+        parent_tool_call_id="call-follow-up",
+        parent_owner_token="parent-owner",
+        timeout_seconds=60,
+        operator_name="用户一",
+        parent_task_id=second.task_id,
+        agent_session_id=second.agent_session_id,
+    )
+    assert follow_up.agent_session_id == second.agent_session_id
+    assert follow_up.turn_index == 2
+    async with harness.get_session() as session:
+        assert await harness.service._dao.count_sessions(session, CONV, USER) == 2
+
+
+@pytest.mark.asyncio
 async def test_reap_expired_running_task_marks_lost(harness):
     await harness.create_conversation()
     record = await _create_task(harness)
@@ -718,6 +779,7 @@ async def test_sync_task_path_still_returns_tool_message(monkeypatch):
     )
     tool = build_task_tool([_spec()])
     result = await tool.coroutine(
+        background=False,
         description="同步任务",
         subagent_type="explore",
         runtime=_fake_runtime(tool_call_id="call_sync"),

@@ -1,4 +1,4 @@
-"""后台子智能体：task 工具 background=true 的持久任务账本与配套工具。
+"""后台子智能体：task 工具默认 background=true 的持久任务账本与配套工具。
 
 与 ``middleware/subagents.py`` 的分工：本模块负责任务登记、稳定 task_id、
 check/list/wait/cancel 工具；子图执行体（``_run_background_task``）留在

@@ -146,6 +146,7 @@ async def test_task_tool_without_usage_meta_omits_context_usage_snapshot(monkeyp
     tool = build_task_tool([_spec()])
 
     result = await tool.coroutine(
+        background=False,
         description="分析",
         subagent_type="explore",
         runtime=SimpleNamespace(state={"user_id": "u1"}, tool_call_id="call-1"),

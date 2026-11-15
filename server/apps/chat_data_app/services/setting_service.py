@@ -328,6 +328,16 @@ SETTING_REGISTRY: dict[str, SettingSpec] = {
         effect=EFFECT_IMMEDIATE,
         description="单个会话同时执行中的后台子智能体上限",
     ),
+    "CHAT_DATA_SUBAGENT_MAX_SESSIONS_PER_CONVERSATION": SettingSpec(
+        key="CHAT_DATA_SUBAGENT_MAX_SESSIONS_PER_CONVERSATION",
+        value_type="int",
+        default=20,
+        category="agent",
+        minimum=1,
+        maximum=200,
+        effect=EFFECT_IMMEDIATE,
+        description="单个主对话可创建的子智能体会话总数上限；追问复用原会话不占新额度",
+    ),
     "CHAT_DATA_SCHEDULE_POLL_SECONDS": SettingSpec(
         key="CHAT_DATA_SCHEDULE_POLL_SECONDS",
         value_type="int",

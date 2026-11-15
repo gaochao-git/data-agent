@@ -193,21 +193,25 @@ SUBAGENT_REPORT_MAX_TOKEN_RATIO = 0.08
 SUBAGENT_REPORT_MIN_TOKEN_LIMIT = 1000
 SUBAGENT_REPORT_PREVIEW_CHARS = 2000
 
-_TASK_TOOL_DESCRIPTION_TEMPLATE = """派发隔离上下文的子智能体处理复杂多步任务，只把最终结论带回主对话（大量文件/数据读取留在子图消化，保护主对话上下文）。同一个工具也负责后台任务管理。
+_TASK_TOOL_DESCRIPTION_TEMPLATE = """派发隔离上下文的子智能体处理复杂多步任务，只把最终结论带回主对话（过程留在子图，保护主上下文）。兼管后台任务。
 
 可用子智能体类型：
 {available_agents}
 
 要求：
-- action="start"（默认）派发子智能体；后台任务管理用 action="list"/"check"/"wait"/"cancel"；对已结束的子智能体继续追问用 action="follow_up"（传 task_id + message），会沿用同一子会话历史，不需要重复背景。
-- 子智能体看不到主对话历史：任务书必须自带 ① 目标 ② 已知事实与文件路径 ③ 交付格式 ④ 约束与禁止项，并写明任务意图（研究盘点 / 分析 / 产出交付物）。
-- 适合：多文件或大体量数据的盘点调研、可并行的独立子任务；不适合：单点查询、需要向用户提问或展示过程的步骤（直接自己做）。
-- 大块背景先用 file_write 落盘，任务书给路径；只存在于对话里的信息子智能体拿不到。
-- explore 只读不写盘；需要落盘交付物时派 general（可读写工作区），或由主智能体收尾写。
-- 已派发任务不要重复执行；相互独立的子任务可在同一条消息里并行发起多个 task。
-- 耗时长且当轮不需要其结论的任务可传 background=true 转后台：立即返回持久 task_id（可配 label/timeout_seconds），期间继续其他工作或直接结束本轮；完成/失败/超时后会自动唤醒当前会话并注入通知。需要立即拿到先前任务结果时用 task(action="wait", task_ids=[...])；查单个任务用 task(action="check", task_id=...)；列任务用 task(action="list")；取消用 task(action="cancel", task_id=...)；已结束任务需要补充分析/修改结论时用 task(action="follow_up", task_id=..., message=...)，不要用 start 重复派发。
-- 运行中可管理：task(action="steer", task_id=..., message=...) 在下一个模型步注入补充说明；task(action="pause", task_id=...) 在安全点暂停；暂停或等待审批后用 task(action="resume"/"approve"/"reject", task_id=...) 继续。审批通知会给出待执行工具，主智能体必须先征得用户同意再 approve。
-- 回传是结论：向用户汇报时用自己的话转述关键结论与产物路径；产物由主智能体用 present_artifacts 展示。"""
+- action="start"（默认）派发；后台任务用 action="list"/"check"/"wait"/"cancel"；已结束任务追问用 action="follow_up"（task_id + message），沿用子会话历史。
+- 子智能体看不到主对话：任务书必须包含目标、任务意图（盘点/分析/产出）、已知事实与文件路径、交付格式、约束与禁止项。
+- 适合多文件/大体量盘点调研、可并行独立子任务；单点查询、需向用户提问或展示过程的步骤直接自己做。
+- 派发前先 task(action="list")：同类目标/范围/交付物已有子智能体时不要新开；运行中用 steer 或等结果，终态用 follow_up 续用 task_id。只有明确不同才 start。
+- 每个主对话的子智能体有上限；达到上限后 start 会被拒绝，只能 follow_up 复用已有子智能体。
+- 大块背景先用 file_write 落盘，任务书给路径；只存在于对话的信息子智能体拿不到。
+- explore 只读不写盘；需要落盘交付物时派 general（可读写工作区），或主智能体收尾写。
+- 相互独立的子任务可在同一条消息里并行发起多个 task。
+- 默认异步（background=true）：批量盘点/全量扫描、多份交付物、多个可并行独立子任务，或当轮不需要结论时使用；立即返回 task_id（可配 label/timeout_seconds），完成/失败/超时后自动唤醒会话。
+- 同步（background=false）：当前步骤必须拿到结论才能继续、用户要求当轮给出结果，或小范围核对/单点查询时使用；等待完成后返回结论。
+- 需要先前后台任务结果用 task(action="wait", task_ids=[...])；查单个用 task(action="check", task_id=...)、列任务用 task(action="list")、取消用 task(action="cancel", task_id=...)；已结束任务补充分析用 task(action="follow_up", task_id=..., message=...)，不要用 start 重复派发。
+- 运行中可管理：steer 在下个模型步注入说明；pause 在安全点暂停；resume/approve/reject 继续。审批通知会给出待执行工具，主智能体必须先征得用户同意再 approve。
+- 回传是结论：向用户转述关键结论与产物路径；产物由主智能体用 present_artifacts 展示。"""
 
 
 class ChatDataSubAgentState(AgentState, total=False):
@@ -267,10 +271,11 @@ class TaskToolArgs(BaseModel):
         description="action=start 时必填：子智能体类型，必须是工具描述中列出的类型之一。",
     )
     background: bool = Field(
-        default=False,
+        default=True,
         description=(
-            "true=后台执行：立即返回任务 ID 不阻塞，完成后报告自动注入对话；"
-            "适合耗时长且当轮不需要其结论的任务。false（默认）=等待完成后返回结论。"
+            "true（默认）=后台执行：立即返回任务 ID 不阻塞，完成后报告自动注入对话；"
+            "适合批量盘点/全量扫描、多份交付物、多个可并行独立子任务，"
+            "或当轮不需要其结论的任务。false=当前步骤依赖其结论时同步等待。"
         ),
     )
     label: str | None = Field(
@@ -1530,8 +1535,8 @@ def build_task_tool(specs: list[SubagentSpec], run_controls: Any = None) -> Stru
     """构建单一 ``task`` 工具：派发子智能体，并管理后台任务。
 
     ``action="start"``（默认）按 subagent_type 派发到隔离上下文的子图；
-    ``background=true`` 时转入后台执行。``action=list/check/wait/cancel``
-    操作已创建的后台任务。
+    默认 ``background=true`` 转入后台执行，传 ``background=false`` 同步等待。
+    ``action=list/check/wait/cancel`` 操作已创建的后台任务。
     """
     validate_subagent_specs(specs)
     compiled = {spec.name: _compile_subagent(spec, run_controls=run_controls) for spec in specs}
@@ -1545,7 +1550,7 @@ def build_task_tool(specs: list[SubagentSpec], run_controls: Any = None) -> Stru
         ] = "start",
         description: str | None = None,
         subagent_type: str | None = None,
-        background: bool = False,
+        background: bool = True,
         label: str | None = None,
         timeout_seconds: int | None = None,
         task_id: str | None = None,
@@ -1683,10 +1688,20 @@ def _default_system_prompt() -> str:
         "用户参与的任务才派发；简单查询和需要向用户提问、展示中间过程的工作"
         "直接自己完成。派发前必须先把子智能体需要的背景事实写入 workspace 文件，"
         "任务书里给文件路径——子智能体看不到对话历史，只存在于对话中的信息它拿不到。\n\n"
-        "## 后台子智能体\n\n"
-        "耗时长且当轮不需要其结论的任务（如批量盘点、多份成稿）传 background=true "
-        "转后台执行：立即返回持久 task_id，期间继续其他工作或直接结束本轮。任务完成、失败、"
-        "超时或租约失联都会自动通知当前会话；无需轮询。后台任务统一用 task 工具管理："
+        "## 子智能体复用与额度\n\n"
+        "每个主对话创建的子智能体总数有运行时上限。派发新任务前先用 "
+        'task(action="list") 检查已有子智能体：目标相同、数据范围相同，或交付物只是补充、'
+        '修订时不要新开：同类子智能体仍在执行时用 task(action="steer") 补充或等待；'
+        '已结束时对最近一个终态 task_id 用 task(action="follow_up", task_id=..., message=...)，'
+        '在同一子会话续写。只有目标、范围或交付物明确不同才 task(action="start") 新建。'
+        "达到上限后 start 会被拒绝，此时只能复用已有子智能体或由主智能体自己完成；"
+        "追问沿用原会话，不新增子智能体数量。\n\n"
+        "## 子智能体执行方式\n\n"
+        "默认异步：批量盘点/全量扫描、多份成稿/多交付物、多个可并行且彼此独立的子任务，"
+        "或当轮不需要其结论时，直接用 task 派发（默认 background=true）；立即返回持久 task_id，"
+        "期间继续其他工作或直接结束本轮，完成/失败/超时/租约失联都会自动通知当前会话。"
+        "只在当前步骤必须拿到结论才能继续、用户要求当轮给出结果，或只是小范围核对/单点查询时，"
+        "显式传 background=false 同步等待。后台任务统一用 task 工具管理："
         'task(action="list") 列任务、task(action="check", task_id=...) 查单个任务、'
         'task(action="wait", task_ids=[...]) 等一个/多个任务、'
         'task(action="cancel", task_id=...) 取消。'

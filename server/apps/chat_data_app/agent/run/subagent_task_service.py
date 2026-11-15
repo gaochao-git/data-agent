@@ -455,6 +455,7 @@ class SubagentTaskService:
         root_task_id: str | None = None,
     ) -> SubagentTaskRecord:
         max_active = int(await get_runtime_setting("CHAT_DATA_SUBAGENT_TASK_MAX_ACTIVE"))
+        max_sessions = int(await get_runtime_setting("CHAT_DATA_SUBAGENT_MAX_SESSIONS_PER_CONVERSATION"))
         lease_seconds = int(await get_runtime_setting("CHAT_DATA_SUBAGENT_TASK_LEASE_SECONDS"))
         effective_timeout = int(timeout_seconds or await get_runtime_setting("CHAT_DATA_SUBAGENT_TASK_TIMEOUT_SECONDS"))
         task_id = uuid4().hex
@@ -465,11 +466,14 @@ class SubagentTaskService:
             thread = await agent_inbox_dao.lock_thread(session, conversation_id, user_id)
             if thread is None:
                 raise AgentRunNotActiveError("会话不存在")
-            active = await self._dao.count_active(session, conversation_id, user_id, ACTIVE_TASK_STATUSES)
-            if active >= max_active:
-                raise SubagentTaskCapacityError(
-                    f"后台子智能体任务已达上限（{max_active} 个执行中），请等待任务完成或取消后再派发。"
-                )
+            await self._check_capacity(
+                session,
+                conversation_id=conversation_id,
+                user_id=user_id,
+                max_active=max_active,
+                max_sessions=max_sessions,
+                continuing=bool(parent_task_id or agent_session_id or root_task_id),
+            )
             root_task = str(agent_session_id or root_task_id or task_id)
             parent_task = str(parent_task_id or "")
             turn_index = 1
@@ -551,6 +555,32 @@ class SubagentTaskService:
             record = SubagentTaskRecord.from_row(row)
         await self.publish_task_update(record)
         return record
+
+    async def _check_capacity(
+        self,
+        session: Any,
+        *,
+        conversation_id: str,
+        user_id: str,
+        max_active: int,
+        max_sessions: int,
+        continuing: bool,
+    ) -> None:
+        """在会话行锁内校验并发额度与新子智能体会话总额度。"""
+        active = await self._dao.count_active(session, conversation_id, user_id, ACTIVE_TASK_STATUSES)
+        if active >= max_active:
+            raise SubagentTaskCapacityError(
+                f"后台子智能体任务已达上限（{max_active} 个执行中），请等待任务完成或取消后再派发。"
+            )
+        if continuing:
+            return
+        session_count = await self._dao.count_sessions(session, conversation_id, user_id)
+        if session_count >= max_sessions:
+            raise SubagentTaskCapacityError(
+                f"当前主对话已创建 {session_count} 个子智能体，达到上限（{max_sessions} 个）。"
+                '请先用 task(action="list") 查看已有子智能体；任务类似时用 '
+                'task(action="follow_up", task_id=..., message=...) 复用原会话，不要新开。'
+            )
 
     async def get_task(
         self,

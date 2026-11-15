@@ -209,6 +209,32 @@ class SubagentTaskDao:
         )
         return int(result.scalar() or 0)
 
+    async def count_sessions(
+        self,
+        session: AsyncSession,
+        conversation_id: str,
+        user_id: str,
+    ) -> int:
+        """按 agent_session_id 去重统计主对话已创建的子智能体数量。
+
+        ``agent_session_id`` 位于 JSON 文本里；这里只拉 message_id + meta，
+        不加载报告正文。任务行数量受会话内派发频率约束，按会话逐行解析足以
+        覆盖旧数据兼容（旧行没有 agent_session_id 时回退 task_id）。
+        """
+        result = await session.execute(
+            select(ChatDataAgentInbox.message_id, ChatDataAgentInbox.record_meta).where(
+                ChatDataAgentInbox.conversation_id == conversation_id,
+                ChatDataAgentInbox.user_id == user_id,
+                ChatDataAgentInbox.record_type == TASK_RECORD_TYPE,
+                ChatDataAgentInbox.delete_flag == 0,
+            )
+        )
+        session_ids: set[str] = set()
+        for task_id, meta_text in result.all():
+            meta = load_task_meta(meta_text)
+            session_ids.add(str(meta.get("agent_session_id") or meta.get("root_task_id") or task_id))
+        return len(session_ids)
+
     async def list_active_for_conversation(
         self,
         session: AsyncSession,

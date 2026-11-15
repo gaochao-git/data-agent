@@ -17,7 +17,7 @@ Standby/C 节点不参与 pending 轮询、过期 Run 回收、定时任务调�
 
 ## 后台子智能体任务
 
-`task(background=true)` 的任务真值落在 `chat_data_agent_inbox` 的 `record_type='task'` 行，
+`task`（默认 `background=true`）的任务真值落在 `chat_data_agent_inbox` 的 `record_type='task'` 行，
 进程内只保留 asyncio 执行句柄。任务状态：`pending → running → completed/failed/timeout/
 cancelled/interrupted/lost`；`cancelling` 是跨 worker 的取消请求，执行节点在下一次心跳
 （固定 5 秒）停止协程并收口。租约过期由
@@ -53,6 +53,9 @@ cancelled/interrupted/lost`；`cancelling` 是跨 worker 的取消请求，执�
   任务发起，同一子会话同时只能有一个活跃轮次。运行中需要补充说明用
   `task(action="steer", task_id=..., message=...)`，停止仍用
   `task(action="cancel", task_id=...)`。
+- 每个主对话新建子智能体的总数受 `CHAT_DATA_SUBAGENT_MAX_SESSIONS_PER_CONVERSATION`
+  约束，按 `agent_session_id` 去重；追问复用原会话不占新额度。该限制只兜底“无限新开”，
+  相似任务是否合并由提示词约束主智能体判断，不在后端硬编码任务相似度。
 - 即使用户从旧任务卡发起追问，后端也会锚定该子会话最新一轮作为 `parent_task_id`，上下文
   取当前会话快照，保证轮次与任务链不分叉。
 - 会话历史单条封顶 100k 字符、总量封顶 2M 字符；超限时从旧到新丢弃并插入省略说明。旧任务

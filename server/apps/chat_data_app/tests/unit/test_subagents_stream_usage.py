@@ -181,7 +181,7 @@ async def test_task_tool_streamed_deltas_exclude_markup(monkeypatch):
     monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
     tool = build_task_tool([_spec()])
 
-    await tool.coroutine(description="盘点", subagent_type="explore", runtime=_fake_runtime())
+    await tool.coroutine(background=False, description="盘点", subagent_type="explore", runtime=_fake_runtime())
 
     deltas = [payload["event"] for payload in written if payload["event"]["event_type"] == "subagent_message_delta"]
     joined = "".join(event["delta"] for event in deltas)
@@ -209,7 +209,9 @@ async def test_task_tool_emits_context_usage_events_and_stamps_tool_message(monk
     monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
     tool = build_task_tool([_spec()])
 
-    result = await tool.coroutine(description="盘点", subagent_type="explore", runtime=_fake_runtime())
+    result = await tool.coroutine(
+        background=False, description="盘点", subagent_type="explore", runtime=_fake_runtime()
+    )
 
     usage_events = [
         payload["event"]
@@ -307,7 +309,9 @@ async def test_task_tool_prepends_budget_notice_when_forced_to_wrap_up(monkeypat
     monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
     tool = build_task_tool([_spec()])
 
-    result = await tool.coroutine(description="盘点", subagent_type="explore", runtime=_fake_runtime())
+    result = await tool.coroutine(
+        background=False, description="盘点", subagent_type="explore", runtime=_fake_runtime()
+    )
 
     message = result.update["messages"][0]
     assert message.content.startswith("【子智能体预算提示】")
@@ -352,7 +356,7 @@ async def test_task_tool_offloads_report_over_parent_budget(monkeypatch):
         }
     )
 
-    result = await tool.coroutine(description="盘点", subagent_type="explore", runtime=runtime)
+    result = await tool.coroutine(background=False, description="盘点", subagent_type="explore", runtime=runtime)
 
     message = result.update["messages"][0]
     assert message.content.startswith("[tool_result_offloaded]")
@@ -380,7 +384,7 @@ async def test_task_tool_keeps_report_within_parent_budget(monkeypatch):
     tool = build_task_tool([_spec()])
     runtime = _fake_runtime(state={"token_usage": {"hard_input_limit_tokens": 1_000_000}})
 
-    result = await tool.coroutine(description="盘点", subagent_type="explore", runtime=runtime)
+    result = await tool.coroutine(background=False, description="盘点", subagent_type="explore", runtime=runtime)
 
     message = result.update["messages"][0]
     assert message.content == "简短结论"
@@ -403,7 +407,9 @@ async def test_task_tool_keeps_report_without_parent_usage(monkeypatch):
     monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
     tool = build_task_tool([_spec()])
 
-    result = await tool.coroutine(description="盘点", subagent_type="explore", runtime=_fake_runtime())
+    result = await tool.coroutine(
+        background=False, description="盘点", subagent_type="explore", runtime=_fake_runtime()
+    )
 
     message = result.update["messages"][0]
     assert message.content == "结论" * 3000
@@ -559,7 +565,7 @@ async def test_task_tool_keeps_report_when_offload_fails(monkeypatch):
         }
     )
 
-    result = await tool.coroutine(description="盘点", subagent_type="explore", runtime=runtime)
+    result = await tool.coroutine(background=False, description="盘点", subagent_type="explore", runtime=runtime)
 
     message = result.update["messages"][0]
     assert message.content == "关键结论" * 3000
