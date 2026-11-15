@@ -33,7 +33,7 @@ const assistantEvent = (sequenceNo: number, turnId: string, id: string, content:
   },
 })
 
-const historyResponse = (events: unknown[], hasMore: boolean) => ({
+const historyResponse = (events: unknown[], hasMore: boolean, turnOffset = 0) => ({
   ok: true,
   json: async () => ({
     status: 'success',
@@ -41,6 +41,7 @@ const historyResponse = (events: unknown[], hasMore: boolean) => ({
       history_events: events,
       has_more: hasMore,
       has_more_turns: hasMore,
+      turn_offset: turnOffset,
       earliest_sequence_no: events.length
         ? (events[0] as { sequence_no: number }).sequence_no
         : null,
@@ -78,6 +79,19 @@ describe('useConversationHistory 分页', () => {
     })
     expect(messages.value.map(item => item.content)).toEqual(['问题3', '回答3'])
     expect(history.hasMoreHistory.value).toBe(true)
+  })
+
+  it('记录窗口前的真实轮次数，向上翻页后按后端 offset 回退', async () => {
+    apiMocks.getConversationHistory
+      .mockResolvedValueOnce(historyResponse([event(5, '问题3'), event(6, '回答3')], true, 2))
+      .mockResolvedValueOnce(historyResponse([event(3, '问题2'), event(4, '回答2')], false, 0))
+
+    const { history } = setup()
+    await vi.waitFor(() => expect(history.isLoadingHistory.value).toBe(false))
+    expect(history.turnOffset.value).toBe(2)
+
+    await history.loadEarlierHistory()
+    expect(history.turnOffset.value).toBe(0)
   })
 
   it('并发翻页合流：在途请求未完成时重复触发复用同一请求，不重复打接口', async () => {

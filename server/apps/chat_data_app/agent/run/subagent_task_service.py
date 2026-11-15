@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -69,6 +70,10 @@ from .subagent_task_event_service import (
 )
 
 logger = get_logger(__name__)
+
+# 任务卡推送失败后的静默期：任务过程流与前端 3.5s 列表轮询各自兜底，
+# 没必要每个心跳（5s）都重试一次并刷一行日志。
+_TASK_PUSH_DEGRADED_SECONDS = 30.0
 
 __all__ = [
     "ACTIVE_TASK_STATUSES",
@@ -385,6 +390,8 @@ class SubagentTaskService:
         self._inbox = inbox
         self._event_service = event_service
         self._local_tasks: dict[str, asyncio.Task] = {}
+        # 任务卡推送降级截止时间（monotonic），避免失败后每个心跳重复重试。
+        self._push_degraded_until: dict[str, float] = {}
 
     def register_local_task(self, task_id: str, task: asyncio.Task) -> None:
         self._local_tasks[task_id] = task
@@ -672,12 +679,16 @@ class SubagentTaskService:
 
     async def publish_task_update(self, task: SubagentTaskRecord) -> None:
         """向当前活跃 Run 的 SSE 推送紧凑任务快照；失败只降级为前端轮询。"""
+        now = time.monotonic()
+        if self._push_degraded_until.get(task.task_id, 0.0) > now:
+            return
         parent_owner_token = str(task.meta.get("parent_owner_token") or "")
         if (
             task.parent_run_id
             and parent_owner_token
             and await self._append_task_event(task, task.parent_run_id, parent_owner_token)
         ):
+            self._push_degraded_until.pop(task.task_id, None)
             return
         active = await self._load_active_run_target(task)
         if active is None:
@@ -685,7 +696,11 @@ class SubagentTaskService:
         run_id, owner_token = active
         if run_id == task.parent_run_id and owner_token == parent_owner_token:
             return
-        await self._append_task_event(task, run_id, owner_token)
+        if await self._append_task_event(task, run_id, owner_token):
+            self._push_degraded_until.pop(task.task_id, None)
+            return
+        self._push_degraded_until = {key: until for key, until in self._push_degraded_until.items() if until > now}
+        self._push_degraded_until[task.task_id] = now + _TASK_PUSH_DEGRADED_SECONDS
 
     async def _load_active_run_target(self, task: SubagentTaskRecord) -> tuple[str, str] | None:
         try:
@@ -995,6 +1010,10 @@ class SubagentTaskService:
             meta["resumed_at"] = now.isoformat()
             meta["pending_interrupt"] = None
             meta.pop("pause_requested_at", None)
+            # 暂停前的父 Run owner token 已随原 Run 收口失效；恢复后继续拿它推送
+            # 必然 owner mismatch（每 5 秒刷一行失败日志）。清空后直接回落到
+            # 当前活跃 Run，找不到就静默交给前端列表轮询兜底。
+            meta["parent_owner_token"] = ""
             progress = meta.get("progress")
             progress = dict(progress) if isinstance(progress, dict) else {}
             progress.update({"phase": "resumed", "running_tools": 0})

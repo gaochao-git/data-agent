@@ -1083,6 +1083,8 @@ async def test_history_turn_window_returns_complete_turns_only(conversation_even
     assert {event["turn_id"] for event in first["history_events"]} == {"turn-3", "turn-4"}
     assert first["has_more_turns"] is True
     assert first["earliest_turn_sequence"] == 6
+    # 尾部窗口之前已有 2 轮：导航要显示“第 3/4 次提问”，不能从 1 重新编号
+    assert first["turn_offset"] == 2
 
     older = await service.load_history_with_recovery(
         conversation_id="conv-turn-page",
@@ -1092,6 +1094,49 @@ async def test_history_turn_window_returns_complete_turns_only(conversation_even
     )
     assert [event["payload"]["content"] for event in older["history_events"]] == ["问题1", "回答1", "问题2", "回答2"]
     assert older["has_more_turns"] is False
+    assert older["turn_offset"] == 0
+
+
+@pytest.mark.asyncio
+async def test_history_turn_offset_ignores_notification_only_turns(conversation_event_service):
+    """后台通知轮只有助手消息，不占轮次导航的“第 N 次提问”。"""
+    service, create_thread, _get_session = conversation_event_service
+    await create_thread("conv-turn-offset", "user-1")
+    await _persist_qa_turn(
+        service,
+        conversation_id="conv-turn-offset",
+        turn_id="turn-1",
+        question="问题1",
+        answer="回答1",
+    )
+    hidden_notice = HumanMessage(
+        content="后台任务通知",
+        id="hidden-notice",
+        additional_kwargs={"hide_from_ui": True},
+    )
+    await service.persist_turn(
+        conversation_id="conv-turn-offset",
+        user_id="user-1",
+        operator_name="用户一",
+        turn_id="turn-notice",
+        messages=[hidden_notice, AIMessage(content="后台任务简报", id="assistant-notice")],
+        reasoning_segments=[],
+    )
+    await _persist_qa_turn(
+        service,
+        conversation_id="conv-turn-offset",
+        turn_id="turn-2",
+        question="问题2",
+        answer="回答2",
+    )
+
+    page = await service.load_history_with_recovery(
+        conversation_id="conv-turn-offset",
+        user_id="user-1",
+        limit_turns=1,
+    )
+    assert {event["turn_id"] for event in page["history_events"]} == {"turn-2"}
+    assert page["turn_offset"] == 1
 
 
 @pytest.mark.asyncio

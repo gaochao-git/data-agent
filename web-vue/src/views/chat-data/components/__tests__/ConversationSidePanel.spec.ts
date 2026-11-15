@@ -87,3 +87,40 @@ describe('ConversationSidePanel 贴底跟随', () => {
     plain.wrapper.unmount()
   })
 })
+
+
+describe('ConversationSidePanel 关闭兜底', () => {
+  afterEach(() => {
+    document.body.innerHTML = ''
+  })
+
+  it('Esc 关闭面板，输入框内的 Esc 留给控件自己处理', async () => {
+    const wrapper = mount(ConversationSidePanel, {
+      props: { open: true, showTrigger: false, showClose: false },
+      slots: { default: '<div><input data-test-input /></div>' },
+      attachTo: document.body,
+    })
+    await flush()
+
+    const input = wrapper.find('[data-test-input]').element as HTMLInputElement
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    expect(wrapper.emitted('close')).toBeUndefined()
+
+    document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    expect(wrapper.emitted('close')).toHaveLength(1)
+    wrapper.unmount()
+  })
+
+  it('面板关闭时 Esc 不触发关闭事件', async () => {
+    const wrapper = mount(ConversationSidePanel, {
+      props: { open: false, showTrigger: false, showClose: false },
+      slots: { default: '<div>内容</div>' },
+      attachTo: document.body,
+    })
+    await flush()
+
+    document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    expect(wrapper.emitted('close')).toBeUndefined()
+    wrapper.unmount()
+  })
+})

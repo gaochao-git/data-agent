@@ -751,6 +751,8 @@ export function useConversationHistory({
   const historyEvents = ref<unknown[]>([])
   const hasMoreHistory = ref(false)
   const isLoadingEarlierHistory = ref(false)
+  // 当前窗口之前已有多少轮：轮次导航显示真实序号，不按已加载窗口从 1 重新编号
+  const turnOffset = ref(0)
   // 按轮次接口返回的最早轮次游标；不能直接用事件最小 sequence（会被并发长轮次骗过）
   const earliestTurnSequence = ref<number | null>(null)
 
@@ -795,6 +797,7 @@ export function useConversationHistory({
           isFirstMessage.value = messages.value.length === 0
         }
         hasMoreHistory.value = Boolean(data.data?.has_more_turns ?? data.data?.has_more)
+        turnOffset.value = Math.max(Number(data.data?.turn_offset) || 0, 0)
         const nextCursor = Number(data.data?.earliest_turn_sequence)
         earliestTurnSequence.value = Number.isFinite(nextCursor) ? nextCursor : null
       }
@@ -842,6 +845,18 @@ export function useConversationHistory({
           const data = await response.json()
           const olderEvents = Array.isArray(data.data?.history_events) ? data.data.history_events : []
           hasMoreHistory.value = Boolean(data.data?.has_more_turns ?? data.data?.has_more)
+          // 后端按页返回窗口前的轮次数；旧后端没有该字段时按本页轮次数回退扣减
+          const responseOffset = Number(data.data?.turn_offset)
+          if (Number.isFinite(responseOffset)) {
+            turnOffset.value = Math.max(responseOffset, 0)
+          } else {
+            const olderTurnIds = new Set(
+              (olderEvents as Array<{ turn_id?: unknown } | null | undefined>)
+                .map(item => String(item?.turn_id || '').trim())
+                .filter(Boolean),
+            )
+            turnOffset.value = Math.max(turnOffset.value - olderTurnIds.size, 0)
+          }
           const nextCursor = Number(data.data?.earliest_turn_sequence)
           earliestTurnSequence.value = Number.isFinite(nextCursor) ? nextCursor : null
           if (olderEvents.length === 0) return 'loaded'
@@ -902,6 +917,7 @@ export function useConversationHistory({
     historyEvents.value = []
     hasMoreHistory.value = false
     earliestTurnSequence.value = null
+    turnOffset.value = 0
   }
 
   return {
@@ -913,6 +929,7 @@ export function useConversationHistory({
     hasMoreHistory,
     isLoadingEarlierHistory,
     loadEarlierHistory,
+    turnOffset,
   }
 }
 

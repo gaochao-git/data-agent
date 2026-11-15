@@ -1282,6 +1282,7 @@ const {
   hasMoreHistory,
   isLoadingEarlierHistory,
   loadEarlierHistory,
+  turnOffset,
 } = useConversationHistory({
   conversationId: conversationIdRef,
   messages,
@@ -3130,7 +3131,11 @@ const handleKeyDown = (event: KeyboardEvent) => {
         :accept="ACCEPTED_FILE_TYPES.join(',')"
         @change="handleFileSelected"
       />
-      <ConversationTurnNavigator :messages="messages" :container="chatContainerRef" />
+      <ConversationTurnNavigator
+        :messages="messages"
+        :container="chatContainerRef"
+        :turn-offset="turnOffset"
+      />
     </div>
 
     <ConversationWorkspacePanel

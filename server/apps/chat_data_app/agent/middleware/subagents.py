@@ -23,7 +23,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack, suppress
 from dataclasses import dataclass, field
-from typing import Annotated, Any, Literal, cast
+from typing import Annotated, Any, Literal, NoReturn, cast
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import AgentMiddleware, AgentState, ModelCallResult, ModelRequest, ToolErrorMiddleware
@@ -791,7 +791,7 @@ async def _build_task_tool_impl(
     runnable = compiled.get(subagent_type)
     if runnable is None:
         allowed = ", ".join(f"`{name}`" for name in compiled)
-        return f"无法调用子智能体 {subagent_type}：类型不存在，可用类型为 {allowed}"
+        _raise_tool_error(f"无法调用子智能体 {subagent_type}：类型不存在，可用类型为 {allowed}")
     spec = next(item for item in specs if item.name == subagent_type)
     writer = stream_writer or _get_subagent_stream_writer(stream_events, get_stream_writer)
     collected: list = []
@@ -1285,6 +1285,17 @@ async def _follow_up_task_action(
     )
 
 
+def _raise_tool_error(message: str) -> NoReturn:
+    """把工具自身的失败（参数缺失/类型不存在）变成 error 状态的工具结果。
+
+    直接 return 字符串时，框架会包成 ``status=success`` 的工具消息，前端卡片
+    显示绿色成功、模型也难以区分"已派发"和"被拒绝"。这里沿用仓库既有约定：
+    工具层只 raise ValueError，由最内层 ToolErrorMiddleware 统一转
+    ``status="error"`` 并按"预期校验错误"降级日志。
+    """
+    raise ValueError(message)
+
+
 async def _start_task_action(
     *,
     description: str | None,
@@ -1299,12 +1310,12 @@ async def _start_task_action(
     background_cache: _BackgroundRunnableCache,
 ) -> Command | str:
     if not description or not description.strip():
-        return 'action="start" 需要提供 description（任务书）。'
+        _raise_tool_error('action="start" 需要提供 description（任务书）。')
     if not subagent_type or not subagent_type.strip():
-        return 'action="start" 需要提供 subagent_type。'
+        _raise_tool_error('action="start" 需要提供 subagent_type。')
     if background and compiled.get(subagent_type) is None:
         allowed = ", ".join(f"`{name}`" for name in compiled)
-        return f"无法调用子智能体 {subagent_type}：类型不存在，可用类型为 {allowed}"
+        _raise_tool_error(f"无法调用子智能体 {subagent_type}：类型不存在，可用类型为 {allowed}")
     if not background:
         return await _build_task_tool_impl(specs, compiled, subagent_type, description, runtime)
     background_runnables = background_cache.get()

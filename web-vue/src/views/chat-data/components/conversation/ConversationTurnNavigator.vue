@@ -16,6 +16,11 @@ const props = defineProps({
     type: Object as PropType<HTMLElement | null>,
     default: null,
   },
+  /** 当前消息窗口之前已有的轮次数：序号 = turnOffset + 窗口内位置 */
+  turnOffset: {
+    type: Number,
+    default: 0,
+  },
 })
 
 const activeTurnId = ref('')
@@ -138,7 +143,7 @@ onBeforeUnmount(() => {
         ]"
         @click="scrollToTurn(turn.id)"
       >
-        <span class="min-w-0 truncate">{{ turn.content || `第 ${index + 1} 次提问` }}</span>
+        <span class="min-w-0 truncate">{{ turn.content || `第 ${turnOffset + index + 1} 次提问` }}</span>
         <span
           :class="[
             'h-0.5 w-3 shrink-0 rounded-full',
@@ -156,8 +161,8 @@ onBeforeUnmount(() => {
           'flex h-3 shrink-0 items-center justify-end border-none bg-transparent p-0',
           activeTurnId === turn.id ? 'cursor-default' : 'cursor-pointer',
         ]"
-        :aria-label="`定位到第 ${index + 1} 次提问：${turn.content || '空消息'}`"
-        :title="turn.content || `第 ${index + 1} 次提问`"
+        :aria-label="`定位到第 ${turnOffset + index + 1} 次提问：${turn.content || '空消息'}`"
+        :title="turn.content || `第 ${turnOffset + index + 1} 次提问`"
         @click="scrollToTurn(turn.id)"
       >
         <span

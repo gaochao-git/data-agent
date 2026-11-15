@@ -769,10 +769,11 @@ def test_iter_subagent_stream_events_coerces_string_args():
 async def test_task_tool_rejects_unknown_subagent_type():
     tool = build_task_tool([_spec()])
 
-    result = await tool.coroutine(description="分析", subagent_type="no-such-agent", runtime=_fake_runtime())
+    with pytest.raises(ValueError) as exc_info:
+        await tool.coroutine(description="分析", subagent_type="no-such-agent", runtime=_fake_runtime())
 
-    assert "类型不存在" in result
-    assert "explore" in result
+    assert "类型不存在" in str(exc_info.value)
+    assert "explore" in str(exc_info.value)
 
 
 def test_middleware_appends_system_prompt_as_system_message():

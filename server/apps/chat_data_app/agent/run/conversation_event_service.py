@@ -307,8 +307,14 @@ class ConversationEventService:
         """
         async with self._dao.session_context() as session:
             earliest_turn_sequence: int | None = None
+            turn_offset = 0
             if limit_turns is not None:
-                rows, has_more, earliest_turn_sequence = await self._dao.list_visible_turn_window_in_session(
+                (
+                    rows,
+                    has_more,
+                    earliest_turn_sequence,
+                    turn_offset,
+                ) = await self._dao.list_visible_turn_window_in_session(
                     session,
                     conversation_id=conversation_id,
                     user_id=user_id,
@@ -348,6 +354,7 @@ class ConversationEventService:
                 "has_more_turns": has_more,
                 "earliest_sequence_no": int(rows[0].sequence_no) if rows else None,
                 "earliest_turn_sequence": earliest_turn_sequence,
+                "turn_offset": turn_offset,
             }
 
     @staticmethod

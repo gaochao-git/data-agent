@@ -118,8 +118,26 @@ const syncFollow = async () => {
   if (bodyNearBottom.value) scheduleFollowScroll()
 }
 
-onMounted(() => { void syncFollow() })
-onBeforeUnmount(stopFollow)
+// Esc 兜底关闭：钻到工具详情层后，头部入口可能被遮挡或不可达；
+// 输入框/可编辑区里的 Esc 留给控件自己处理，避免误关面板。
+const handleWindowKeydown = (event: KeyboardEvent) => {
+  if (!props.open || event.key !== 'Escape' || event.defaultPrevented) return
+  const target = event.target
+  if (target instanceof HTMLElement) {
+    const tag = target.tagName
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable) return
+  }
+  emit('close')
+}
+
+onMounted(() => {
+  window.addEventListener('keydown', handleWindowKeydown)
+  void syncFollow()
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', handleWindowKeydown)
+  stopFollow()
+})
 watch([() => props.autoFollow, () => props.open], () => { void syncFollow() }, { flush: 'post' })
 const isResizing = ref(false)
 const panelRef = ref<HTMLElement | null>(null)

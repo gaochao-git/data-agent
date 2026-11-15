@@ -174,10 +174,10 @@ async def _spawn_background_task(
     """登记持久任务并立即返回；执行体在独立 asyncio task 中运行。"""
     conversation_id, user_id, operator_name, parent_run_id = _read_conversation_context(runtime, run_controls)
     if not user_id:
-        return "无法启动后台子智能体：当前会话缺少用户身份。"
+        raise ValueError("无法启动后台子智能体：当前会话缺少用户身份。")
     service = _task_service()
     if service is None:
-        return "后台子智能体启动失败：任务账本服务未初始化。"
+        raise ValueError("后台子智能体启动失败：任务账本服务未初始化。")
     try:
         record = await service.create_task(
             conversation_id=conversation_id,
@@ -192,12 +192,12 @@ async def _spawn_background_task(
             operator_name=operator_name,
         )
     except SubagentTaskCapacityError as exc:
-        return str(exc)
-    except Exception:
+        raise ValueError(str(exc)) from exc
+    except Exception as exc:
         logger.error(
             "[tools] 后台任务登记失败: conversation_id=%s type=%s", conversation_id, subagent_type, exc_info=True
         )
-        return "后台子智能体启动失败：任务登记未成功，请稍后重试或改为同步执行。"
+        raise ValueError("后台子智能体启动失败：任务登记未成功，请稍后重试或改为同步执行。") from exc
 
     _launch_task_runner(service, record, runtime, runner_factory)
     logger.info(

@@ -6,12 +6,14 @@ from collections.abc import Callable, Iterable
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy import update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from utils.database import get_session as default_get_session
 from utils.models import ChatDataConversationEvent, UserThread
+
+_EVENT_USER_MESSAGE = "user_message"
 
 
 class ConversationEventDao:
@@ -298,12 +300,15 @@ class ConversationEventDao:
         user_id: str,
         limit_turns: int,
         before_turn_sequence: int | None = None,
-    ) -> tuple[list[ChatDataConversationEvent], bool, int | None]:
-        """按完整轮次读取历史窗口，返回 (事件, 是否还有更早轮次, 游标)。
+    ) -> tuple[list[ChatDataConversationEvent], bool, int | None, int]:
+        """按完整轮次读取历史窗口，返回 (事件, 是否还有更早轮次, 游标, 更早轮次数)。
 
         以 turn_id 为分页原子单位：先按每个 turn 的最大 sequence_no 取最新 N 轮，
         再返回这些轮次的全部事件。即使并发事件与其他轮次交错，也不会把一轮拆到两页。
         每页允许一个超长轮次完整返回，不按事件条数截断。
+
+        ``older_turn_count`` 是当前窗口之前可见轮次的数量，前端据此给轮次导航
+        标注真实序号，避免只加载尾部窗口时从 1 重新编号。
         """
         filters = self._visible_event_filters(conversation_id=conversation_id, user_id=user_id)
         turn_conditions = [*filters, ChatDataConversationEvent.turn_id != ""]
@@ -324,7 +329,7 @@ class ConversationEventDao:
         )
         turn_tail = list(turn_rows.all())
         if not turn_tail:
-            return [], False, None
+            return [], False, None, 0
         selected_turn_ids = [str(row.turn_id) for row in turn_tail]
         earliest_turn_sequence = min(int(row.last_seq) for row in turn_tail)
         event_result = await session.execute(
@@ -333,18 +338,31 @@ class ConversationEventDao:
             .order_by(ChatDataConversationEvent.sequence_no.asc(), ChatDataConversationEvent.id.asc())
         )
         rows = list(event_result.scalars().all())
-        older_turn = await session.scalar(
-            select(ChatDataConversationEvent.turn_id)
-            .where(
-                *filters,
-                ChatDataConversationEvent.turn_id != "",
-                ChatDataConversationEvent.turn_id.notin_(selected_turn_ids),
+        # 按「轮次最大序号 < 窗口游标」计数：不能直接按 sequence_no < 游标筛，
+        # 否则窗口首轮的早期事件会被误算成更早轮次。
+        # 只统计含用户提问的轮次：后台任务通知轮只有助手消息，不能占“第 N 次提问”。
+        # 注意不能先用 event_type 过滤再分组——那样 max(sequence_no) 只取到提问事件，
+        # 永远小于窗口游标，窗口首轮自己也会被算成“更早轮次”。
+        has_user_message = func.max(
+            case(
+                (
+                    ChatDataConversationEvent.event_type == _EVENT_USER_MESSAGE,
+                    ChatDataConversationEvent.sequence_no,
+                )
             )
-            .group_by(ChatDataConversationEvent.turn_id)
-            .having(func.max(ChatDataConversationEvent.sequence_no) < earliest_turn_sequence)
-            .limit(1)
+        ).is_not(None)
+        older_turn_count = await session.scalar(
+            select(func.count()).select_from(
+                select(ChatDataConversationEvent.turn_id)
+                .where(*filters, ChatDataConversationEvent.turn_id != "")
+                .group_by(ChatDataConversationEvent.turn_id)
+                .having(func.max(ChatDataConversationEvent.sequence_no) < earliest_turn_sequence)
+                .having(has_user_message)
+                .subquery()
+            )
         )
-        return rows, older_turn is not None, earliest_turn_sequence
+        older_turn_count = int(older_turn_count or 0)
+        return rows, older_turn_count > 0, earliest_turn_sequence, older_turn_count
 
     async def _expand_cutoff_to_turn_closure(
         self,

@@ -668,13 +668,14 @@ async def test_background_task_compiles_without_parent_run_fence(harness, monkey
 async def test_background_tool_unknown_type_does_not_write_task(harness):
     await harness.create_conversation()
     tool = build_task_tool([_spec()])
-    result = await tool.coroutine(
-        description="x",
-        subagent_type="不存在",
-        runtime=_fake_runtime(),
-        background=True,
-    )
-    assert "类型不存在" in result
+    with pytest.raises(ValueError) as exc_info:
+        await tool.coroutine(
+            description="x",
+            subagent_type="不存在",
+            runtime=_fake_runtime(),
+            background=True,
+        )
+    assert "类型不存在" in str(exc_info.value)
     records = await harness.service.list_tasks(CONV, USER)
     assert records == []
 
@@ -1212,6 +1213,8 @@ async def test_pause_request_suspends_and_resume_rotates_owner(harness):
     assert resumed_record.owner_token and resumed_record.owner_token != record.owner_token
     assert resume_value == {"kind": "subagent_pause", "action": "resume"}
     assert resumed_record.meta.get("pending_interrupt") is None
+    # 旧父 Run owner 已失效，恢复后不能再拿它推送
+    assert resumed_record.meta.get("parent_owner_token") == ""
 
 
 @pytest.mark.asyncio
@@ -1267,3 +1270,32 @@ def test_approval_resume_value_shapes_single_and_batch():
             {"id": "c2", "selected": ["拒绝"]},
         ]
     }
+
+
+@pytest.mark.asyncio
+async def test_task_push_failure_backs_off_between_heartbeats(monkeypatch):
+    from apps.chat_data_app.agent.run.subagent_task_service import SubagentTaskService
+
+    service = SubagentTaskService(dao=object(), inbox=object(), event_service=object())
+    calls: list[tuple[str, str]] = []
+
+    async def fail_append(task, run_id, owner_token):
+        calls.append((run_id, owner_token))
+        return False
+
+    async def active_target(task):
+        return ("run-1", "token-1")
+
+    monkeypatch.setattr(service, "_append_task_event", fail_append)
+    monkeypatch.setattr(service, "_load_active_run_target", active_target)
+
+    task = SimpleNamespace(
+        task_id="task-1",
+        parent_run_id="run-parent",
+        meta={"parent_owner_token": "parent-token"},
+    )
+    await service.publish_task_update(task)
+    await service.publish_task_update(task)
+
+    # 第一次：父 Run 旧 token + 活跃 Run 各失败一次；第二次命中静默期不再重试
+    assert calls == [("run-parent", "parent-token"), ("run-1", "token-1")]

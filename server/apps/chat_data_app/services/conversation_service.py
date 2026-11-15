@@ -468,6 +468,8 @@ async def get_detail(
         "has_more_turns": bool(event_history.get("has_more_turns")),
         "earliest_sequence_no": event_history.get("earliest_sequence_no"),
         "earliest_turn_sequence": event_history.get("earliest_turn_sequence"),
+        # 窗口之前已有多少轮：前端轮次导航用真实序号，不按已加载窗口重新编号
+        "turn_offset": int(event_history.get("turn_offset") or 0),
         "is_favorited": is_favorited,
     }
 

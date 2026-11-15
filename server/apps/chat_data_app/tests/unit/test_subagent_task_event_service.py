@@ -93,3 +93,24 @@ async def test_task_stream_writer_disables_without_claim():
     assert service.published == []
     assert service.claimed == []
     assert service.released == []
+
+
+class _ClaimBus:
+    def __init__(self):
+        self.claimed: list[tuple[str, str]] = []
+
+    async def claim_run_owner(self, task_id, owner_token):
+        self.claimed.append((task_id, owner_token))
+
+
+@pytest.mark.asyncio
+async def test_task_stream_claim_generation_increases_between_runs():
+    bus = _ClaimBus()
+    service = SubagentTaskEventService(bus=bus)
+
+    first = await service.claim_stream("t1")
+    second = await service.claim_stream("t1")
+
+    assert int(first.split(":")[0]) > 1
+    assert int(second.split(":")[0]) > int(first.split(":")[0])
+    assert [token for _, token in bus.claimed] == [first, second]

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 from uuid import uuid4
@@ -53,8 +54,12 @@ class SubagentTaskEventService:
 
         复用 Run 事件流的 owner 脚本，但 token 使用 ``generation:uuid`` 形态；
         task_id 与 run_id 都是随机 UUID，实际不会碰撞。
+
+        代际必须单调递增：任务暂停/取消时会释放 owner key，但进程被强杀等异常
+        路径可能残留旧 key（TTL 1 小时）。若这里写死 ``1:``，恢复执行时同代际
+        claim 会被 owner 脚本拒绝，过程流会静默禁用、只剩列表轮询。
         """
-        owner_token = f"1:{uuid4().hex}"
+        owner_token = f"{time.time_ns()}:{uuid4().hex}"
         await self._bus.claim_run_owner(task_id, owner_token)
         return owner_token
 
