@@ -13,6 +13,12 @@ const TrailStub = defineComponent({
   template: '<div data-subagent-trail-stub :data-result="toolCall.result" :data-description="toolCall.args.description" :data-background="String(toolCall.args.background)" />',
 })
 
+const ToolDetailStub = defineComponent({
+  name: 'ToolCallDetailPanel',
+  props: { toolCall: { type: Object, required: true } },
+  template: '<div data-tool-detail-stub :data-result="toolCall.result" :data-description="toolCall.args.description" />',
+})
+
 const turn = (overrides: Partial<SubagentTaskRecord> = {}): SubagentTaskRecord => ({
   task_id: 'task-1',
   conversation_id: 'conv-1',
@@ -79,5 +85,52 @@ describe('SubagentTaskProcessView', () => {
     })
 
     expect(wrapper.find('[data-subagent-trail-stub]').attributes('data-background')).toBe('false')
+  })
+
+  it('工具模式按轮展示派发参数与结果', () => {
+    const first = turn()
+    const second = turn({
+      task_id: 'task-2',
+      parent_task_id: first.task_id,
+      turn_index: 2,
+      description: '第二轮任务书',
+      report: '第二轮报告',
+    })
+    const wrapper = mount(SubagentTaskProcessView, {
+      props: {
+        task: second,
+        sessionTasks: [first, second],
+        conversationId: 'conv-1',
+        viewMode: 'generic',
+      },
+      global: { stubs: { SubagentTrail: TrailStub, ToolCallDetailPanel: ToolDetailStub } },
+    })
+
+    const details = wrapper.findAll('[data-tool-detail-stub]')
+    expect(details).toHaveLength(2)
+    expect(details.map(item => item.attributes('data-description'))).toEqual(['盘点语义模型目录', '第二轮任务书'])
+    expect(details.map(item => item.attributes('data-result'))).toEqual(['第一轮报告', '第二轮报告'])
+    expect(wrapper.text()).toContain('第 1 轮')
+    expect(wrapper.text()).toContain('第 2 轮')
+  })
+
+  it('工具模式在失败任务中展示错误信息而不是执行中占位', () => {
+    const failed = turn({
+      status: 'failed',
+      status_label: '执行失败',
+      report: '',
+      error: '模型调用超时',
+    })
+    const wrapper = mount(SubagentTaskProcessView, {
+      props: {
+        task: failed,
+        sessionTasks: [failed],
+        conversationId: 'conv-1',
+        viewMode: 'generic',
+      },
+      global: { stubs: { SubagentTrail: TrailStub, ToolCallDetailPanel: ToolDetailStub } },
+    })
+
+    expect(wrapper.find('[data-tool-detail-stub]').attributes('data-result')).toBe('错误：模型调用超时')
   })
 })

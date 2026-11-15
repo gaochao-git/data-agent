@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, watch } from 'vue'
 import type { PropType } from 'vue'
 import type { SubagentTaskRecord } from '../../types'
 import { groupSubagentTaskSessions, type SubagentTaskSession } from '../../composables/useSubagentTasks'
@@ -8,6 +8,7 @@ import SubagentTaskRow from './SubagentTaskRow.vue'
 const props = defineProps({
   tasks: { type: Array as PropType<SubagentTaskRecord[]>, default: () => [] },
   cancellingTaskIds: { type: Array as PropType<string[]>, default: () => [] },
+  loadTaskDetail: { type: Function as PropType<(taskId: string, refresh?: boolean) => Promise<SubagentTaskRecord | null>>, default: null },
 })
 
 const emit = defineEmits<{
@@ -17,10 +18,32 @@ const emit = defineEmits<{
 
 const cancellingIds = computed(() => new Set(props.cancellingTaskIds))
 const sessions = computed(() => groupSubagentTaskSessions(props.tasks))
+const requestedDetailKeys = new Set<string>()
+const taskStatusById = new Map<string, string>()
 const sessionCardTask = (session: SubagentTaskSession): SubagentTaskRecord => ({
   ...session.latestTask,
   label: session.label,
 })
+
+// 管理卡要汇总上下文用量，而列表接口不带 result_meta；按会话只预取最新任务详情，
+// 状态变化时再刷新一次，确保完成/取消后能拿到最终快照。会话上限为 5，请求量可控。
+watch(
+  () => sessions.value.map(session => `${session.latestTask.task_id}:${session.latestTask.status}`),
+  () => {
+    if (!props.loadTaskDetail) return
+    for (const session of sessions.value) {
+      const task = session.latestTask
+      const key = `${task.task_id}:${task.status}`
+      if (requestedDetailKeys.has(key)) continue
+      requestedDetailKeys.add(key)
+      const previousStatus = taskStatusById.get(task.task_id)
+      taskStatusById.set(task.task_id, task.status)
+      void props.loadTaskDetail(task.task_id, Boolean(previousStatus && previousStatus !== task.status))
+        .catch(() => { requestedDetailKeys.delete(key) })
+    }
+  },
+  { immediate: true },
+)
 </script>
 
 <template>
@@ -31,6 +54,7 @@ const sessionCardTask = (session: SubagentTaskSession): SubagentTaskRecord => ({
         :key="session.sessionId"
         :task="sessionCardTask(session)"
         :session-turn-count="session.turnCount"
+        :session-tasks="session.tasks"
         :cancelling="cancellingIds.has(session.latestTask.task_id)"
         @open="emit('open', $event)"
         @cancel="emit('cancel', $event)"

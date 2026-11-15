@@ -4,10 +4,14 @@ import type { PropType } from 'vue'
 import type { SubagentTaskRecord } from '../../types'
 import { isSubagentTaskActive } from '../../composables/useSubagentTasks'
 import { useToolTiming } from '../../composables/useToolTiming'
+import { formatDateTimeValue } from '../../utils'
+import { formatTokenCount } from '../../utils/subagentUsage'
 
 const props = defineProps({
   task: { type: Object as PropType<SubagentTaskRecord>, required: true },
   sessionTurnCount: { type: Number, default: 1 },
+  /** 同一子会话的全部轮次，用于汇总工具调用次数与首末时间。 */
+  sessionTasks: { type: Array as PropType<SubagentTaskRecord[]>, default: () => [] },
   cancelling: { type: Boolean, default: false },
 })
 
@@ -29,6 +33,67 @@ const endedAt = computed(() => {
 const { durationText } = useToolTiming(() => startedAt.value, () => endedAt.value)
 
 const taskTitle = computed(() => props.task.label?.trim() || props.task.description?.trim() || '子智能体任务')
+const sessionTimeline = computed(() => (props.sessionTasks.length ? props.sessionTasks : [props.task]))
+const sessionToolCallCount = computed(() => sessionTimeline.value.reduce(
+  (total, item) => total + Math.max(Number(item.progress?.tool_calls) || 0, 0),
+  0,
+))
+const sessionCreatedAt = computed(() => {
+  const first = sessionTimeline.value[0]
+  return formatDateTimeValue(first?.created_at || first?.started_at)
+})
+const sessionFinishedAt = computed(() => {
+  const latest = sessionTimeline.value[sessionTimeline.value.length - 1]
+  if (!latest || isSubagentTaskActive(latest)) return ''
+  return formatDateTimeValue(latest.finished_at || latest.updated_at)
+})
+const metaTime = (value: string): string => value.slice(0, 16)
+const formatContextTokens = (value: number): string => formatTokenCount(value).replace(/\.0([km])$/, '$1')
+const contextUsage = computed(() => {
+  const latest = sessionTimeline.value[sessionTimeline.value.length - 1]
+  const detail = latest?.result_meta?.subagent_token_usage_detail
+  if (detail && Number.isFinite(detail.used)) {
+    const total = Number(detail.total) || 0
+    return {
+      used: Number(detail.current_input_tokens ?? detail.input_tokens ?? detail.used),
+      total,
+      percentage: Number.isFinite(detail.percentage)
+        ? Number(detail.percentage)
+        : total > 0 ? (detail.used / total) * 100 : null,
+      compressionTriggerTokens: Number(detail.compression_trigger_tokens),
+      contextWindow: Number(detail.context_window),
+    }
+  }
+  const snapshot = latest?.result_meta?.subagent_context_usage
+  if (!snapshot || !Number.isFinite(snapshot.used_tokens)) return null
+  const total = Number(snapshot.context_window || snapshot.threshold_tokens) || 0
+  return {
+    used: snapshot.used_tokens,
+    total,
+    percentage: Number.isFinite(snapshot.percent)
+      ? Number(snapshot.percent)
+      : total > 0 ? (snapshot.used_tokens / total) * 100 : null,
+    compressionTriggerTokens: Number(snapshot.threshold_tokens),
+    contextWindow: Number(snapshot.context_window),
+  }
+})
+const contextUsageText = computed(() => {
+  const usage = contextUsage.value
+  if (!usage || !Number.isFinite(usage.percentage)) return '—'
+  return `${Math.round(Math.max(0, Math.min(100, Number(usage.percentage))))}%`
+})
+const contextUsageTitle = computed(() => {
+  const usage = contextUsage.value
+  if (!usage) return '上下文用量加载中'
+  return [
+    ['当前输入', usage.used],
+    ['压缩阈值', usage.compressionTriggerTokens],
+    ['上下文窗口', usage.contextWindow],
+  ]
+    .filter(([, value]) => Number.isFinite(value))
+    .map(([label, value]) => `${label} ${formatContextTokens(value as number)}`)
+    .join(' · ') || '上下文用量加载中'
+})
 
 const statusLabel = computed(() => {
   const label = props.task.status_label?.trim()
@@ -91,7 +156,6 @@ const progressText = computed(() => {
     data-subagent-task-card
     role="button"
     tabindex="0"
-    :title="task.description"
     @click="emit('open', task)"
     @keydown.enter.prevent="emit('open', task)"
   >
@@ -101,21 +165,15 @@ const progressText = computed(() => {
       <div class="flex items-start justify-between gap-3">
         <h3
           class="m-0 line-clamp-2 min-w-0 flex-1 text-[14px] font-semibold leading-5 text-slate-800"
-          :title="`${task.subagent_type} - ${taskTitle}`"
           data-subagent-task-title
         >
-          <span class="text-[12px] font-semibold text-sky-600">{{ task.subagent_type }}</span>
-          <span
-            v-if="sessionTurnCount > 1"
-            class="ml-1 rounded bg-sky-50 px-1 py-0.5 align-middle text-[9px] font-medium text-sky-600"
-            data-subagent-task-turn
-          >追问 {{ sessionTurnCount - 1 }}</span>
+          <span class="text-[14px] font-bold text-sky-600">{{ task.subagent_type }}</span>
           <span class="mx-1 font-normal text-slate-300">-</span>
           <span>{{ taskTitle }}</span>
         </h3>
 
         <button
-          v-if="active && task.execution_mode !== 'sync'"
+          v-if="active"
           type="button"
           class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-slate-300 opacity-70 transition-all hover:bg-rose-50 hover:text-rose-500 group-hover:opacity-100"
           :disabled="cancelling"
@@ -127,14 +185,31 @@ const progressText = computed(() => {
         </button>
       </div>
 
-      <div
-        v-if="task.status === 'completed' && task.report"
-        class="mt-2.5 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-[10.5px] text-slate-400"
-      >
-        <span class="inline-flex shrink-0 items-center gap-1 text-emerald-600">
-          <i class="fa-regular fa-file-lines text-[9px]"></i>
-          报告已生成
-        </span>
+      <div class="mt-2.5 flex flex-col gap-1 text-[10.5px] text-slate-400" data-subagent-task-meta>
+        <div class="flex min-w-0 items-center gap-x-3" data-subagent-task-meta-row>
+          <span class="inline-flex shrink-0 items-center gap-1" data-subagent-task-rounds>
+            <i class="fa-regular fa-comments text-[9px]"></i>
+            {{ sessionTurnCount }} 轮问答
+          </span>
+          <span class="inline-flex shrink-0 items-center gap-1" data-subagent-task-tool-count>
+            <i class="fa-solid fa-screwdriver-wrench text-[9px]"></i>
+            {{ sessionToolCallCount }} 次工具调用
+          </span>
+          <span class="inline-flex min-w-0 items-center gap-1" :title="contextUsageTitle" data-subagent-task-context>
+            <i class="fa-solid fa-chart-pie text-[9px]"></i>
+            <span class="truncate">上下文 {{ contextUsageText }}</span>
+          </span>
+        </div>
+        <div class="flex min-w-0 items-center gap-x-3" data-subagent-task-meta-row>
+          <span v-if="sessionCreatedAt" class="inline-flex shrink-0 items-center gap-1" data-subagent-task-created>
+            <i class="fa-regular fa-clock text-[9px]"></i>
+            创建 {{ metaTime(sessionCreatedAt) }}
+          </span>
+          <span class="inline-flex shrink-0 items-center gap-1" data-subagent-task-finished>
+            <i class="fa-solid fa-flag-checkered text-[9px]"></i>
+            结束 {{ sessionFinishedAt ? metaTime(sessionFinishedAt) : (active ? '进行中' : '—') }}
+          </span>
+        </div>
       </div>
 
       <div

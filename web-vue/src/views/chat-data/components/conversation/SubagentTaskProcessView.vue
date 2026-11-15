@@ -13,6 +13,7 @@ import { isSubagentTaskActive } from '../../composables/useSubagentTasks'
 import { useSubagentTaskStream } from '../../composables/useSubagentTaskStream'
 import { useToolTiming } from '../../composables/useToolTiming'
 import SubagentTrail from './SubagentTrail.vue'
+import ToolCallDetailPanel from './ToolCallDetailPanel.vue'
 
 const props = defineProps({
   task: { type: Object as PropType<SubagentTaskRecord>, required: true },
@@ -20,6 +21,8 @@ const props = defineProps({
   sessionTasks: { type: Array as PropType<SubagentTaskRecord[]>, default: () => [] },
   conversationId: { type: String as PropType<string | null>, default: null },
   activeToolCallId: { type: String as PropType<string | null>, default: null },
+  /** agent=按多轮聊天过程展示；generic=按工具调用展示每轮请求参数与结果。 */
+  viewMode: { type: String as PropType<'agent' | 'generic'>, default: 'agent' },
 })
 
 const emit = defineEmits<{
@@ -101,6 +104,15 @@ const usageForPanel = computed<ChatDataTokenUsage | null>(() => {
     estimated: true,
   }
 })
+const taskResultText = (task: SubagentTaskRecord): string => {
+  const report = String(task.report || '').trim()
+  const error = String(task.error || '').trim()
+  if (report && error && task.status !== 'completed') return `${report}\n\n错误：${error}`
+  if (report) return report
+  if (error) return `错误：${error}`
+  if (isSubagentTaskActive(task)) return ''
+  return `任务${task.status_label?.trim() || task.status}，无结果内容。`
+}
 const toolCallForTask = (task: SubagentTaskRecord): ToolCallInfo => ({
   tool_call_id: task.parent_tool_call_id || task.task_id,
   tool_name: 'subagent',
@@ -111,7 +123,7 @@ const toolCallForTask = (task: SubagentTaskRecord): ToolCallInfo => ({
     background: task.execution_mode !== 'sync',
     label: task.label,
   },
-  result: task.report || '',
+  result: taskResultText(task),
   started_at_ms: startedAtMs(task),
   ended_at_ms: endedAtMs(task),
   subagentTrail: trailForTask(task),
@@ -133,12 +145,13 @@ onMounted(() => emit('usageUpdated', props.task.task_id, usageForPanel.value))
   <div class="flex flex-col gap-3" data-subagent-task-detail>
     <template v-if="hasConversation">
       <div
-        v-for="turn in sessionTasks"
+        v-for="(turn, index) in sessionTasks"
         :key="turn.task_id"
         class="flex flex-col gap-3"
         data-subagent-turn
       >
         <SubagentTrail
+          v-if="viewMode === 'agent'"
           :tool-call="toolCallForTask(turn)"
           :conversation-id="conversationId"
           :active-tool-call-id="activeToolCallId"
@@ -148,6 +161,15 @@ onMounted(() => emit('usageUpdated', props.task.task_id, usageForPanel.value))
           show-without-trail
           @select-tool="emit('selectTool', $event)"
         />
+        <div v-else class="flex flex-col gap-2" data-subagent-task-tool-detail>
+          <div v-if="sessionTasks.length > 1" class="px-1 text-[11px] font-medium text-slate-400">
+            第 {{ turn.turn_index || index + 1 }} 轮
+          </div>
+          <ToolCallDetailPanel
+            :tool-call="toolCallForTask(turn)"
+            :conversation-id="conversationId || ''"
+          />
+        </div>
       </div>
     </template>
     <div v-else class="flex items-center gap-2 rounded-xl border border-dashed border-slate-200 px-3.5 py-4 text-[12px] text-slate-500">

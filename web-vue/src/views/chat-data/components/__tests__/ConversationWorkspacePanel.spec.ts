@@ -1,6 +1,6 @@
 import { mount } from '@vue/test-utils'
 import { defineComponent } from 'vue'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import ConversationWorkspacePanel from '../conversation/ConversationWorkspacePanel.vue'
 import AgentProcessView from '../conversation/AgentProcessView.vue'
 import ConversationSidePanel from '../conversation/ConversationSidePanel.vue'
@@ -266,12 +266,14 @@ describe('ConversationWorkspacePanel tab 容器', () => {
   })
 
   it('同一子会话的多轮追问在管理页只显示一张智能体卡片', async () => {
+    const loadTaskDetail = vi.fn().mockResolvedValue(null)
     const wrapper = mountPanel({
       subagentTasks: [backgroundTask, followUpBackgroundTask],
       subagentTaskDetails: {
         [backgroundTask.task_id]: backgroundTask,
         [followUpBackgroundTask.task_id]: followUpBackgroundTask,
       },
+      loadSubagentTaskDetail: loadTaskDetail,
     })
     const vm = wrapper.vm as unknown as { openSubagentManager: () => void }
 
@@ -281,7 +283,9 @@ describe('ConversationWorkspacePanel tab 容器', () => {
     const cards = wrapper.findAll('[data-subagent-task-card]')
     expect(cards).toHaveLength(1)
     expect(cards[0]!.find('[data-subagent-task-title]').text()).toContain('入金趋势')
-    expect(cards[0]!.find('[data-subagent-task-turn]').text()).toContain('追问 1')
+    expect(cards[0]!.find('[data-subagent-task-rounds]').text()).toContain('2 轮问答')
+    expect(cards[0]!.text()).not.toContain('追问 1')
+    expect(loadTaskDetail).toHaveBeenCalledWith(followUpBackgroundTask.task_id, false)
 
     await cards[0]!.trigger('click')
     await wrapper.vm.$nextTick()
@@ -340,6 +344,27 @@ describe('ConversationWorkspacePanel tab 容器', () => {
     expect(status.attributes('title')).toBe('执行中')
     expect(subheader.text()).not.toContain('最近调用')
     expect(subheader.text()).not.toContain('已调用')
+  })
+
+  it('任务详情支持聊天/工具模式切换，工具模式停止自动贴底', async () => {
+    const wrapper = mountPanel({
+      subagentTasks: [backgroundTask],
+      subagentTaskDetails: { [backgroundTask.task_id]: backgroundTask },
+    })
+    const vm = wrapper.vm as unknown as { openSubagentTask: (task: SubagentTaskRecord) => void }
+
+    vm.openSubagentTask(backgroundTask)
+    await wrapper.vm.$nextTick()
+
+    const detail = wrapper.findComponent({ name: 'SubagentTaskProcessView' })
+    expect(detail.props('viewMode')).toBe('agent')
+    expect(wrapper.findComponent(ConversationSidePanel).props('autoFollow')).toBe(true)
+
+    await wrapper.find('[data-subagent-view-generic]').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    expect(detail.props('viewMode')).toBe('generic')
+    expect(wrapper.findComponent(ConversationSidePanel).props('autoFollow')).toBe(false)
   })
 
   it('后台任务运行中实时用量回传后，副标题展示上下文占用环', async () => {

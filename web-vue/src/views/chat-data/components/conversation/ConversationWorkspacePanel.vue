@@ -105,7 +105,7 @@ const props = defineProps({
   subagentTasks: { type: Array as PropType<SubagentTaskRecord[]>, default: () => [] },
   subagentTaskDetails: { type: Object as PropType<Record<string, SubagentTaskRecord>>, default: () => ({}) },
   subagentTaskCancellingIds: { type: Array as PropType<string[]>, default: () => [] },
-  loadSubagentTaskDetail: { type: Function as PropType<(taskId: string) => Promise<SubagentTaskRecord | null>>, default: null },
+  loadSubagentTaskDetail: { type: Function as PropType<(taskId: string, refresh?: boolean) => Promise<SubagentTaskRecord | null>>, default: null },
   cancelSubagentTask: { type: Function as PropType<(task: SubagentTaskRecord) => Promise<void>>, default: null },
 })
 
@@ -397,16 +397,20 @@ const toolViewMode = ref<'agent' | 'generic'>('agent')
 /** 过程类 tab 是否开启贴底跟随：后台任务详情始终跟随；前台子智能体按聊天模式跟随。 */
 const panelAutoFollow = computed(() => (
   isToolTabActive.value
+  && toolViewMode.value === 'agent'
   && (
     displayTabIsSubagentTask.value
-    || (toolViewMode.value === 'agent' && Boolean(subagentTaskCall.value))
+    || Boolean(subagentTaskCall.value)
   )
 ))
 
-watch(() => displayToolCall.value?.tool_call_id, () => {
-  // 每次选中新的子智能体任务默认回到聊天方式；普通工具不涉及该状态
-  if (subagentTaskCall.value) toolViewMode.value = 'agent'
-})
+watch(
+  [() => displayToolCall.value?.tool_call_id, () => displaySubagentTask.value?.task_id],
+  () => {
+    // 每次选中新的子智能体任务默认回到聊天方式；普通工具不涉及该状态
+    if (subagentTaskCall.value || displaySubagentTask.value) toolViewMode.value = 'agent'
+  },
+)
 
 const selectedConsoleFilePath = ref<string | null>(null)
 // 默认只收起 uploads / workspace，outputs 保持展开——理由见 consoleFileTree.ts 里的常量注释。
@@ -1492,6 +1496,30 @@ defineExpose({
             :title="displaySubagentTaskCompactions.map(item => `${item.timestamp || ''} ${item.estimated_tokens_before ?? 0} → ${item.estimated_tokens_after ?? 0} tokens，压缩 ${item.compressed_messages ?? 0} 条`).join('\n')"
           >已压缩 {{ displaySubagentTaskCompactions.length }} 次</span>
         </div>
+        <div class="inline-flex shrink-0 rounded-lg border border-slate-200 bg-slate-50 p-0.5 text-[11px]">
+          <button
+            type="button"
+            class="inline-flex items-center gap-1 rounded-md px-1.5 py-1 transition-colors"
+            :class="toolViewMode === 'agent' ? 'bg-white text-[#1f82d9] shadow-sm' : 'text-slate-500 hover:text-slate-700'"
+            title="聊天模式：按多轮对话查看子智能体过程"
+            data-subagent-view-agent
+            @click="toolViewMode = 'agent'"
+          >
+            <i class="fa-solid fa-robot text-[10px]"></i>
+            <span>聊天</span>
+          </button>
+          <button
+            type="button"
+            class="inline-flex items-center gap-1 rounded-md px-1.5 py-1 transition-colors"
+            :class="toolViewMode === 'generic' ? 'bg-white text-[#1f82d9] shadow-sm' : 'text-slate-500 hover:text-slate-700'"
+            title="工具模式：查看每轮派发的请求参数与结果"
+            data-subagent-view-generic
+            @click="toolViewMode = 'generic'"
+          >
+            <i class="fa-solid fa-wrench text-[10px]"></i>
+            <span>工具</span>
+          </button>
+        </div>
       </div>
       <div v-else-if="isToolTabActive && subagentTaskCall" class="flex w-full items-center justify-between gap-2">
         <ConversationTokenUsage
@@ -1513,6 +1541,7 @@ defineExpose({
             class="inline-flex items-center gap-1 rounded-md px-1.5 py-1 transition-colors"
             :class="toolViewMode === 'agent' ? 'bg-white text-[#1f82d9] shadow-sm' : 'text-slate-500 hover:text-slate-700'"
             title="聊天模式：按聊天方式查看子智能体过程"
+            data-subagent-view-agent
             @click="toolViewMode = 'agent'"
           >
             <i class="fa-solid fa-robot text-[10px]"></i>
@@ -1523,6 +1552,7 @@ defineExpose({
             class="inline-flex items-center gap-1 rounded-md px-1.5 py-1 transition-colors"
             :class="toolViewMode === 'generic' ? 'bg-white text-[#1f82d9] shadow-sm' : 'text-slate-500 hover:text-slate-700'"
             title="工具模式：与普通工具一致，只查看参数与结果"
+            data-subagent-view-generic
             @click="toolViewMode = 'generic'"
           >
             <i class="fa-solid fa-wrench text-[10px]"></i>
@@ -1546,8 +1576,9 @@ defineExpose({
 
     <div v-show="isSubagentManagerTabActive" class="min-h-0">
       <SubagentManagerTab
-        :tasks="subagentTasks"
+        :tasks="allSubagentTasks"
         :cancelling-task-ids="subagentTaskCancellingIds"
+        :load-task-detail="loadSubagentTaskDetail"
         @open="openSubagentTaskPanelTab"
         @cancel="cancelSubagentTaskFromManager"
       />
@@ -1570,6 +1601,7 @@ defineExpose({
           :session-tasks="subagentTasksForTab(taskTab)"
           :conversation-id="conversationId"
           :active-tool-call-id="activeToolCall?.tool_call_id || null"
+          :view-mode="toolViewMode"
           class="mb-3"
           @select-tool="emit('selectTool', $event)"
           @usage-updated="handleSubagentTaskUsageUpdated"
