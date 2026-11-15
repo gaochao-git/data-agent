@@ -641,22 +641,26 @@ def _forward_subagent_compression_started(
     payload: Any,
     writer: Any,
     parent_tool_call_id: str | None,
-) -> bool:
+    stream_state: _SubagentStreamState | None = None,
+) -> None:
     """把子图 custom 流里的「压缩中」占位转发为 subagent_context_compression。
 
     压缩 middleware 的 started 事件只走 custom channel、不写检查点，因此历史
     回放不会残留占位；完成态仍由 ``_forward_subagent_compaction_events`` 从
     updates 转发。子图 custom 流里的其它事件一律忽略，避免污染主对话帧。
-    返回是否确实转发了 started，供调用方标记运行期「正在压缩」状态。
+    有效 started 同时把运行期「正在压缩」标记写进 stream_state，让心跳里的
+    progress 带上 compressing，任务卡不必等任务收口才知道正在压缩。
     """
     if not isinstance(payload, dict) or payload.get("type") != "context_compression":
-        return False
+        return
     event = payload.get("event")
     if not isinstance(event, dict) or event.get("phase") != "started":
-        return False
+        return
     event_id = str(event.get("id") or "").strip()
     if not event_id:
-        return False
+        return
+    if stream_state is not None:
+        stream_state.compressing = True
     _emit_subagent_tool_event(
         writer,
         {
@@ -667,7 +671,6 @@ def _forward_subagent_compression_started(
             "timestamp": str(event.get("timestamp") or ""),
         },
     )
-    return True
 
 
 def _process_subagent_chunk(
@@ -682,8 +685,7 @@ def _process_subagent_chunk(
             stream_state.emit_messages_chunk(payload[0], writer)
         return False
     if mode == "custom":
-        if _forward_subagent_compression_started(payload, writer, parent_tool_call_id):
-            stream_state.compressing = True
+        _forward_subagent_compression_started(payload, writer, parent_tool_call_id, stream_state)
         return False
     if mode != "updates" or not isinstance(payload, dict):
         return False

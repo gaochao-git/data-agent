@@ -649,6 +649,7 @@ def test_forward_subagent_compression_started_emits_phase_started_frame():
     from apps.chat_data_app.agent.middleware import subagent_stream as stream_module
     from apps.chat_data_app.sse_protocol import SSE_EVENT_SUBAGENT_CONTEXT_COMPRESSION
 
+    state = subagents_module._SubagentStreamState("call-1")
     written = []
     stream_module._forward_subagent_compression_started(
         {
@@ -661,7 +662,9 @@ def test_forward_subagent_compression_started_emits_phase_started_frame():
         },
         written.append,
         "call_1",
+        state,
     )
+    assert state.compressing is True
     assert len(written) == 1
     event = written[0]["event"]
     assert event["event_type"] == SSE_EVENT_SUBAGENT_CONTEXT_COMPRESSION
@@ -680,7 +683,7 @@ def test_process_subagent_chunk_routes_custom_chunk(monkeypatch):
     monkeypatch.setattr(
         stream_module,
         "_forward_subagent_compression_started",
-        lambda payload, writer, parent: seen.append((payload, parent)),
+        lambda payload, writer, parent, state: seen.append((payload, parent)),
     )
     is_updates = stream_module._process_subagent_chunk(
         ("custom", {"type": "context_compression"}), object(), None, "call_1"
