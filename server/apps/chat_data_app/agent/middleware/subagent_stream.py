@@ -420,6 +420,10 @@ class _SubagentStreamState:
         # 子图上下文压缩事件（压缩节点 updates 里的 context_compression_events）
         self.compression_events: list[dict[str, Any]] = []
         self.seen_compression_ids: set[str] = set()
+        # 已收到 started、还没收到 completed：随心跳落进 progress，让运行中
+        # 的任务卡显示「正在压缩」。心跳 5s 采样，跳过摘要的百毫秒压缩天然
+        # 不会被采样到，只有真正调用摘要模型的长压缩才会出现，不会闪一下。
+        self.compressing: bool = False
         # 压缩发生前最后一条过程条目的 id：与 _build_trail_snapshot 的条目 id
         # 同源，历史回放按它把分隔卡插回真实位置，避免多条压缩挤成一堆。
         self.last_trail_anchor: str = ""
@@ -620,6 +624,9 @@ def _forward_subagent_compaction_events(
             if stream_state.last_trail_anchor:
                 record["anchor_message_id"] = stream_state.last_trail_anchor
             stream_state.compression_events.append(record)
+            # completed 到达即收起「正在压缩」：重复帧被 seen_compression_ids 挡掉，
+            # 不会误清；异常中断没收到 completed 时由终态 progress 归一兜底。
+            stream_state.compressing = False
             _emit_subagent_tool_event(
                 writer,
                 {
@@ -634,21 +641,22 @@ def _forward_subagent_compression_started(
     payload: Any,
     writer: Any,
     parent_tool_call_id: str | None,
-) -> None:
+) -> bool:
     """把子图 custom 流里的「压缩中」占位转发为 subagent_context_compression。
 
     压缩 middleware 的 started 事件只走 custom channel、不写检查点，因此历史
     回放不会残留占位；完成态仍由 ``_forward_subagent_compaction_events`` 从
     updates 转发。子图 custom 流里的其它事件一律忽略，避免污染主对话帧。
+    返回是否确实转发了 started，供调用方标记运行期「正在压缩」状态。
     """
     if not isinstance(payload, dict) or payload.get("type") != "context_compression":
-        return
+        return False
     event = payload.get("event")
     if not isinstance(event, dict) or event.get("phase") != "started":
-        return
+        return False
     event_id = str(event.get("id") or "").strip()
     if not event_id:
-        return
+        return False
     _emit_subagent_tool_event(
         writer,
         {
@@ -659,6 +667,7 @@ def _forward_subagent_compression_started(
             "timestamp": str(event.get("timestamp") or ""),
         },
     )
+    return True
 
 
 def _process_subagent_chunk(
@@ -673,7 +682,8 @@ def _process_subagent_chunk(
             stream_state.emit_messages_chunk(payload[0], writer)
         return False
     if mode == "custom":
-        _forward_subagent_compression_started(payload, writer, parent_tool_call_id)
+        if _forward_subagent_compression_started(payload, writer, parent_tool_call_id):
+            stream_state.compressing = True
         return False
     if mode != "updates" or not isinstance(payload, dict):
         return False
@@ -866,6 +876,9 @@ def _subagent_progress_snapshot(
         # 运行中还没有 result_meta，压缩次数只能随心跳落 progress，任务卡才不会
         # 一直显示 0；终态由 SubagentTaskRecord.compaction_count 以结果快照为准。
         "compaction_count": len(stream_state.compression_events),
+        # 只有 started 已到、completed 未到的窗口内为 True，任务卡据此显示
+        # 「正在压缩上下文」；心跳 5s 采样，百毫秒级跳过摘要不会闪一下。
+        "compressing": stream_state.compressing,
     }
     if context_usage:
         # 上下文快照随心跳落进任务账本的 progress：列表接口不返回 result_meta，

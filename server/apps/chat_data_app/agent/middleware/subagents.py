@@ -61,7 +61,6 @@ from ..context.context_budget import (
 )
 from ..context.runtime import ContextRuntime
 from ..contracts.subagent_task import (
-    ACTIVE_TASK_STATUSES,
     SUSPENDED_TASK_STATUSES,
     TASK_STATUS_CANCELLED,
     TASK_STATUS_COMPLETED,
@@ -94,7 +93,6 @@ from .subagent_async import (
     _spawn_follow_up_task,
     _truncate_text,
     _watch_background_task,
-    format_active_subagent_summary,
     manage_async_task,
 )
 from .subagent_config import build_subagent_invocation_config
@@ -198,21 +196,12 @@ _TASK_TOOL_DESCRIPTION_TEMPLATE = """派发隔离子智能体处理复杂多步�
 可用子智能体类型：
 {available_agents}
 
-要求：
-- action="start"（默认）派发；任务用 action="list"/"check"/"wait"/"cancel"；已结束任务追问用 action="follow_up"（task_id + message），沿用子会话历史。
-- 子智能体看不到主对话：任务书必须包含目标、任务意图（盘点/分析/产出）、已知事实与文件路径、交付格式、约束与禁止项。
-- 适合多文件/大体量盘点调研、可并行独立子任务；单点查询、需向用户提问或展示过程的步骤直接自己做。
-- 派发前先 subagent(action="list")：同类目标/范围/交付物已有子智能体时不要新开；运行中用 steer 或等结果，终态用 follow_up 续用 task_id。只有明确不同才 start。
-- 每个主对话的子智能体有上限；达到上限后 start 会被拒绝，只能 follow_up 复用已有子智能体。
-- 大块背景先 file_write 落盘给路径；只在对话里的信息子智能体拿不到。
-- explore 只读不写盘；需要落盘交付物时派 general（可读写工作区），或主智能体收尾写。
-- 相互独立的子任务可在同一条消息里并行发起多个 subagent。
-- 默认异步（background=true）：批量盘点/全量扫描、多份交付物、多个可并行独立子任务，或当轮不需要结论时使用；立即返回 task_id（可配 label/timeout_seconds），完成/失败/超时后自动唤醒会话。
-- 同步（background=false）：当前步骤必须拿到结论才能继续、用户要求当轮给出结果，或小范围核对/单点查询时使用；等待完成后返回结论。
-- 需要先等任务结果用 subagent(action="wait", task_ids=[...])；查单个用 subagent(action="check", task_id=...)、列子智能体用 subagent(action="list")、取消用 subagent(action="cancel", task_id=...)；查看某个 agent_id 名下的任务 ID 用 subagent(action="list", agent_id=...)；已结束任务补充分析用 subagent(action="follow_up", task_id=..., message=...)，不要用 start 重复派发。
-- 身份口径：agent_id 是稳定子智能体 ID（同一子智能体追问不变），task_id 是单轮任务 ID；管理动作传 task_id，向用户汇报子智能体身份用 agent_id。
-- 运行中可管理：steer 在下个模型步注入说明；pause 在安全点暂停；resume/approve/reject 继续。审批通知给出待执行工具，须经用户同意再 approve。
-- 回传是结论：向用户转述关键结论与产物路径，产物用 present_artifacts 展示。"""
+参数：
+- 动作：subagent(action="start") 派发；subagent(action="list") 列表；subagent(action="check", task_id=...) 查询；subagent(action="wait", task_ids=[...]) 等待；subagent(action="cancel", task_id=...) 取消；subagent(action="follow_up", task_id=..., message=...) 在已结束子会话续写。
+- 分层查询：先 action="list" 看 agent_id 与最近 task_id，再传 agent_id 下钻该智能体全部任务。
+- 身份：agent_id 是稳定子智能体 ID，task_id 是单轮任务 ID；管理动作传 task_id，向用户汇报身份用 agent_id。
+- background 默认 true（异步，立即返回 task_id，终态自动唤醒会话）；false 同步等结果；start 可配 label/timeout_seconds。
+- 运行中用 steer/pause/resume/approve/reject 控制；派发策略与复用规则见系统提示。"""
 
 
 class ChatDataSubAgentState(AgentState, total=False):
@@ -1786,35 +1775,9 @@ class SubagentMiddleware(AgentMiddleware):
     async def awrap_model_call(
         self, request: ModelRequest, handler: Callable[[ModelRequest], Awaitable[ModelCallResult]]
     ) -> ModelCallResult:
-        extra = self.system_prompt
-        try:
-            activity = await self._current_activity_summary(request)
-        except Exception:
-            # 数量摘要只是增强上下文，数据库抖动不能阻断主模型调用。
-            logger.warning("[tools] 读取子智能体活跃数量失败，跳过动态摘要", exc_info=True)
-            activity = ""
-        return await handler(_append_system_prompt(request, f"{extra}\n\n{activity}" if activity else extra))
-
-    async def _current_activity_summary(self, request: ModelRequest) -> str:
-        """按当前会话身份查询活跃子智能体，供主模型每轮直接感知数量。"""
-        state = getattr(request, "state", None)
-        if not isinstance(state, dict):
-            return ""
-        conversation_id = str(state.get("conversation_id") or "").strip()
-        user_id = str(state.get("user_id") or "").strip()
-        if not conversation_id or not user_id:
-            return ""
-        service = get_subagent_task_service()
-        if service is None:
-            return ""
-        records = await service.list_tasks(
-            conversation_id,
-            user_id,
-            statuses=set(ACTIVE_TASK_STATUSES),
-            # 与 CHAT_DATA_SUBAGENT_TASK_MAX_ACTIVE 的配置上限一致；额度内任务足以算准活跃数。
-            limit=200,
-        )
-        return "## 当前子智能体状态\n" + format_active_subagent_summary(records)
+        # 提示词保持静态：动态子智能体状态不拼进 system，避免每轮改写前缀导致
+        # provider 前缀缓存整段失效；数量与任务明细由 subagent(action="list") 现查。
+        return await handler(_append_system_prompt(request, self.system_prompt))
 
 
 def _append_system_prompt(request: ModelRequest, extra: str) -> ModelRequest:
@@ -1838,7 +1801,7 @@ def _default_system_prompt() -> str:
         "只有子智能体的最终结论会回到对话。可用类型：\n\n{available_agents}\n\n"
         "派发判断：预计需要多轮工具调用（如批量盘点、成稿写作）且过程中无需"
         "用户参与的任务才派发；简单查询和需要向用户提问、展示中间过程的工作"
-        "直接自己完成。派发前必须先把子智能体需要的背景事实写入 workspace 文件，"
+        "直接自己完成。派发前必须先用 file_write 把子智能体需要的背景事实写入 workspace，"
         "任务书里给文件路径——子智能体看不到对话历史，只存在于对话中的信息它拿不到。\n\n"
         "类型边界：general 默认继承主智能体工具，可调用已接入的 MCP 实体工具；explore "
         "只有只读查询/文件工具，不挂 MCP。依赖 MCP 数据或需要落盘产出的任务派 general，"
@@ -1858,13 +1821,8 @@ def _default_system_prompt() -> str:
         "期间继续其他工作或直接结束本轮，完成/失败/超时/租约失联都会自动通知当前会话。"
         "只在当前步骤必须拿到结论才能继续、用户要求当轮给出结果，或只是小范围核对/单点查询时，"
         "显式传 background=false 同步等待；已结束子智能体的 follow_up 同样支持该参数。"
-        "子智能体任务统一用 subagent 工具管理："
-        'subagent(action="list") 先列子智能体（agent_id + 最近 task_id），'
-        '再传 agent_id 下钻该智能体的任务 ID；subagent(action="check", task_id=...) 查单个任务、'
-        'subagent(action="wait", task_ids=[...]) 等一个/多个任务、'
-        'subagent(action="cancel", task_id=...) 取消。'
-        "系统会在每轮模型调用前附带当前活跃子智能体数量；用户问数量时直接依据该摘要回答，"
-        '需要任务明细或历史任务时再调用 subagent(action="list")。'
-        "给任务写清 label，便于用户在任务列表识别。用户询问「之前的子智能体任务怎么样了」时，"
-        '先用 subagent(action="list")，再按需 subagent(action="check", task_id=...)。'
+        "任务统一用 subagent 工具管理，动作与参数见工具说明；查询按 list → agent_id → task_id 分层。"
+        "用户问数量或进展时现查，不要凭记忆回答；问之前的任务先 list，再按需 check。"
+        "给任务写清 label，便于用户在任务列表识别。"
+        "子智能体产出的交付物，用 present_artifacts 展示给用户。"
     )

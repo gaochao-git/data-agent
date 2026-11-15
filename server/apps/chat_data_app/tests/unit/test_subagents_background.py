@@ -849,9 +849,11 @@ def test_system_prompt_documents_background_and_subagent_tools():
     middleware = subagents_module.SubagentMiddleware([_spec()])
     assert "background=true" in middleware.system_prompt
     assert 'subagent(action="list")' in middleware.system_prompt
-    assert 'subagent(action="check"' in middleware.system_prompt
-    assert 'subagent(action="wait"' in middleware.system_prompt
-    assert 'subagent(action="cancel"' in middleware.system_prompt
+    assert "list → agent_id → task_id" in middleware.system_prompt
+    # 精确动作语法只写在工具描述里，系统提示不重复一遍。
+    description = middleware.tools[0].description
+    for action in ("start", "list", "check", "wait", "cancel", "follow_up"):
+        assert f'action="{action}"' in description
     assert "async_task" not in middleware.system_prompt
     assert "list_async_tasks" not in middleware.system_prompt
     assert "check_async_task" not in middleware.system_prompt
@@ -1128,6 +1130,31 @@ async def test_follow_up_can_switch_from_sync_to_background(harness, monkeypatch
         "第 1 轮结论",
         "后台补充渠道 Top3",
     ]
+
+
+def test_task_progress_drops_compressing_flag_in_terminal_state():
+    """异常中断可能收不到 completed；终态读取时不能残留「正在压缩」。"""
+    record = SubagentTaskRecord(
+        task_id="task-terminal",
+        conversation_id=CONV,
+        user_id=USER,
+        parent_run_id="run-parent",
+        owner_token=None,
+        status="completed",
+        report="",
+        result_meta={},
+        meta={"progress": {"phase": "running", "compressing": True, "compaction_count": 1}},
+        created_at=datetime.now(),
+        updated_at=None,
+        started_at=None,
+        finished_at=None,
+        notified_at=None,
+        lease_expire_time=None,
+    )
+
+    assert "compressing" not in record.progress
+    assert record.progress["phase"] == "completed"
+    assert record.progress["compaction_count"] == 1
 
 
 def test_task_identity_falls_back_for_legacy_meta():

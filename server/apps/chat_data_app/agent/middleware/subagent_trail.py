@@ -176,9 +176,7 @@ def _trail_anchor_index(trail: list[dict[str, Any]], anchor: str) -> int:
     return -1
 
 
-def _compaction_targets(
-    trail: list[dict[str, Any]], compactions: list[Any]
-) -> list[tuple[int, dict[str, Any]]]:
+def _compaction_targets(trail: list[dict[str, Any]], compactions: list[Any]) -> list[tuple[int, dict[str, Any]]]:
     """按发生顺序算出每张压缩卡的目标位置，再按位置升序返回。
 
     快照是事后从最终消息重建的，压缩会删掉旧消息，所以早期压缩的锚点在

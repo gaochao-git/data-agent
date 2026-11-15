@@ -635,6 +635,10 @@ export interface SubagentTaskProgress {
   running_tools?: number
   message_count?: number
   last_tool?: string
+  /** 运行期「正在压缩上下文」标记：started 已到、completed 未到才为 true。 */
+  compressing?: boolean
+  /** 运行期已完成压缩次数；终态以记录上的 compaction_count 为准。 */
+  compaction_count?: number
   /** 运行期上下文快照；列表接口不返回 result_meta，卡片用它展示实时占比。 */
   context_usage?: SubagentContextUsage
   updated_at?: string

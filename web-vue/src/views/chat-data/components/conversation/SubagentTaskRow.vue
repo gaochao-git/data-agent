@@ -147,6 +147,9 @@ const accentLineTone = computed(() => {
 const progressText = computed(() => {
   const phase = String(props.task.progress?.phase || '').trim()
   const lastTool = String(props.task.progress?.last_tool || '').trim()
+  // 压缩中优先于工具名：真正调用摘要模型的压缩可能持续十几秒，此时继续
+  // 显示「正在使用 XX」会让用户以为卡在工具上；短压缩由心跳采样天然过滤。
+  if (props.task.progress?.compressing) return '正在压缩上下文，整理已用信息'
   if (lastTool) return `正在使用 ${lastTool}`
   if (phase === 'starting') return '正在初始化任务上下文'
   return '正在分析任务并规划执行步骤'

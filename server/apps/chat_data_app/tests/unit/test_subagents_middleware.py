@@ -11,7 +11,6 @@ from apps.chat_data_app.agent.middleware import subagents as subagents_module
 from apps.chat_data_app.agent.middleware.subagent_async import (
     _format_task_status,
     _list_async_tasks,
-    format_active_subagent_summary,
     format_subagent_agent_list,
     format_subagent_agent_tasks,
     format_subagent_task_list_summary,
@@ -698,29 +697,33 @@ async def test_subagent_tool_streams_compression_started_and_completed(monkeypat
 
     class FakeRunnable:
         async def astream(self, _state, _config, *, stream_mode):
-            yield "custom", {
-                "type": "context_compression",
-                "event": {"id": "started-1", "phase": "started", "timestamp": "2026-11-15 20:30:00"},
-            }
-            yield "updates", {
-                "compress": {
-                    "context_compression_events": [
-                        {
-                            "id": "done-1",
-                            "phase": "completed",
-                            "estimated_tokens_before": 900,
-                            "estimated_tokens_after": 300,
-                            "compressed_messages": 4,
-                        }
-                    ]
-                }
-            }
+            yield (
+                "custom",
+                {
+                    "type": "context_compression",
+                    "event": {"id": "started-1", "phase": "started", "timestamp": "2026-11-15 20:30:00"},
+                },
+            )
+            yield (
+                "updates",
+                {
+                    "compress": {
+                        "context_compression_events": [
+                            {
+                                "id": "done-1",
+                                "phase": "completed",
+                                "estimated_tokens_before": 900,
+                                "estimated_tokens_after": 300,
+                                "compressed_messages": 4,
+                            }
+                        ]
+                    }
+                },
+            )
 
     monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
     tool = build_task_tool([_spec()])
-    await tool.coroutine(
-        background=False, description="盘点", subagent_type="explore", runtime=_fake_runtime()
-    )
+    await tool.coroutine(background=False, description="盘点", subagent_type="explore", runtime=_fake_runtime())
     frames = [
         payload["event"]
         for payload in written
@@ -907,6 +910,66 @@ def test_progress_snapshot_carries_running_compaction_count():
     assert subagents_module._subagent_progress_snapshot(state)["compaction_count"] == 2
 
 
+def test_progress_snapshot_marks_compressing_only_between_started_and_completed():
+    """任务卡「正在压缩」只在 started 已到、completed 未到的窗口内为 True。"""
+    state = subagents_module._SubagentStreamState("call-1")
+    assert subagents_module._subagent_progress_snapshot(state)["compressing"] is False
+
+    subagents_module._process_subagent_chunk(
+        (
+            "custom",
+            {
+                "type": "context_compression",
+                "event": {"id": "started-1", "phase": "started", "timestamp": "2026-11-15 22:30:00"},
+            },
+        ),
+        state,
+        None,
+        "call-1",
+    )
+    snapshot = subagents_module._subagent_progress_snapshot(state)
+    assert snapshot["compressing"] is True
+    # 占位不计入完成次数，否则任务卡会提前显示「压缩 1 次」。
+    assert snapshot["compaction_count"] == 0
+
+    subagents_module._process_subagent_chunk(
+        (
+            "updates",
+            {
+                "compress": {
+                    "context_compression_events": [
+                        {
+                            "id": "done-1",
+                            "phase": "completed",
+                            "estimated_tokens_before": 900,
+                            "estimated_tokens_after": 300,
+                            "compressed_messages": 4,
+                        }
+                    ]
+                }
+            },
+        ),
+        state,
+        None,
+        "call-1",
+    )
+    snapshot = subagents_module._subagent_progress_snapshot(state)
+    assert snapshot["compressing"] is False
+    assert snapshot["compaction_count"] == 1
+
+
+def test_progress_snapshot_ignores_invalid_started_chunk():
+    """无 id 的 started 帧不转发，也不能把任务卡钉在「正在压缩」。"""
+    state = subagents_module._SubagentStreamState("call-1")
+    subagents_module._process_subagent_chunk(
+        ("custom", {"type": "context_compression", "event": {"phase": "started"}}),
+        state,
+        None,
+        "call-1",
+    )
+    assert subagents_module._subagent_progress_snapshot(state)["compressing"] is False
+
+
 @pytest.mark.asyncio
 async def test_progress_snapshot_carries_lightweight_context_usage():
     """运行期进度必须带上下文快照，列表/取消/失联任务才不显示「—」。"""
@@ -1028,19 +1091,6 @@ def test_middleware_creates_system_message_when_request_has_none():
 
     assert isinstance(merged.system_message, SystemMessage)
     assert "## 子智能体委派" in merged.system_message.content
-
-
-def test_active_subagent_summary_counts_sessions_and_statuses():
-    records = [
-        SimpleNamespace(task_id="t1", agent_session_id="s1", status="running"),
-        SimpleNamespace(task_id="t2", agent_session_id="s2", status="waiting_approval"),
-        SimpleNamespace(task_id="t3", agent_session_id="s3", status="paused"),
-    ]
-
-    summary = format_active_subagent_summary(records)
-
-    assert summary == "当前会话有 3 个活跃子智能体（执行中 1、等待审批 1、已暂停 1）。"
-    assert format_active_subagent_summary([]) == "当前会话没有活跃的子智能体。"
 
 
 def test_task_list_summary_reports_tasks_sessions_and_active_count():
@@ -1186,23 +1236,13 @@ async def test_agent_id_is_rejected_for_non_list_actions():
 
 
 @pytest.mark.asyncio
-async def test_subagent_middleware_injects_current_active_activity_summary(monkeypatch):
+async def test_subagent_middleware_keeps_system_prompt_static_for_prefix_cache(monkeypatch):
+    """动态子智能体状态不进 system：每轮改写前缀会让 provider 缓存整段失效。"""
     middleware = SubagentMiddleware([_spec()])
-    records = [
-        SimpleNamespace(task_id="t1", agent_session_id="s1", status="running"),
-        SimpleNamespace(task_id="t2", agent_session_id="s2", status="waiting_approval"),
-    ]
-    calls = {}
 
     class _ActivityService:
-        async def list_tasks(self, conversation_id, user_id, *, statuses, limit):
-            calls.update(
-                conversation_id=conversation_id,
-                user_id=user_id,
-                statuses=statuses,
-                limit=limit,
-            )
-            return records
+        async def list_tasks(self, *_args, **_kwargs):
+            raise AssertionError("构建 system prompt 不应查询任务表")
 
     monkeypatch.setattr(subagents_module, "get_subagent_task_service", lambda: _ActivityService())
     request = SimpleNamespace(
@@ -1218,38 +1258,9 @@ async def test_subagent_middleware_injects_current_active_activity_summary(monke
 
     assert await middleware.awrap_model_call(request, handler) == "handled"
     content = seen["request"].system_message.content
-    assert "## 子智能体委派" in content
-    assert "## 当前子智能体状态" in content
-    assert "当前会话有 2 个活跃子智能体（执行中 1、等待审批 1）" in content
-    assert calls["conversation_id"] == "conv-1"
-    assert calls["user_id"] == "u1"
-    assert "running" in calls["statuses"]
-
-
-@pytest.mark.asyncio
-async def test_subagent_middleware_activity_query_failure_does_not_block_prompt(monkeypatch):
-    middleware = SubagentMiddleware([_spec()])
-
-    class _BrokenService:
-        async def list_tasks(self, *_args, **_kwargs):
-            raise RuntimeError("db down")
-
-    monkeypatch.setattr(subagents_module, "get_subagent_task_service", lambda: _BrokenService())
-    request = SimpleNamespace(
-        system_message=SystemMessage(content="主提示词"),
-        state={"conversation_id": "conv-1", "user_id": "u1"},
-        override=lambda **kwargs: SimpleNamespace(**kwargs),
-    )
-    seen = {}
-
-    async def handler(current):
-        seen["request"] = current
-        return "handled"
-
-    assert await middleware.awrap_model_call(request, handler) == "handled"
-    content = seen["request"].system_message.content
-    assert "## 子智能体委派" in content
+    assert content == f"主提示词\n\n{middleware.system_prompt}"
     assert "## 当前子智能体状态" not in content
+    assert 'subagent(action="list")' in content
 
 
 def test_middleware_registers_single_subagent_tool_with_agent_catalog():
@@ -1565,9 +1576,9 @@ def test_build_trail_snapshot_spreads_compaction_cards_by_anchor():
     """多次压缩分别插回各自发生位置，不叠成连续三张卡。"""
     messages: list = []
     for i in range(1, 7):
-        messages.append(AIMessage(content=f"第{i}遍", id=f"m{i}", tool_calls=[
-            {"id": f"t{i}", "name": "file_read", "args": {}}
-        ]))
+        messages.append(
+            AIMessage(content=f"第{i}遍", id=f"m{i}", tool_calls=[{"id": f"t{i}", "name": "file_read", "args": {}}])
+        )
         messages.append(ToolMessage(content="ok", tool_call_id=f"t{i}"))
 
     trail = subagents_module._build_trail_snapshot(
@@ -1582,14 +1593,12 @@ def test_build_trail_snapshot_keeps_compaction_cards_apart_on_repeated_anchor():
     """锚点重复时退化插入也要隔开真实过程条目，历史回放才不会挤成一团。"""
     messages: list = []
     for i in range(1, 7):
-        messages.append(AIMessage(content=f"第{i}遍", id=f"m{i}", tool_calls=[
-            {"id": f"t{i}", "name": "file_read", "args": {}}
-        ]))
+        messages.append(
+            AIMessage(content=f"第{i}遍", id=f"m{i}", tool_calls=[{"id": f"t{i}", "name": "file_read", "args": {}}])
+        )
         messages.append(ToolMessage(content="ok", tool_call_id=f"t{i}"))
 
-    trail = subagents_module._build_trail_snapshot(
-        messages, [_compression_record(i, "t2") for i in range(1, 4)]
-    )
+    trail = subagents_module._build_trail_snapshot(messages, [_compression_record(i, "t2") for i in range(1, 4)])
     positions = [i for i, item in enumerate(trail) if item["kind"] == "compaction"]
     assert len(positions) == 3
     assert all(after - before >= 2 for before, after in zip(positions, positions[1:], strict=False))
@@ -1600,9 +1609,9 @@ def test_build_trail_snapshot_handles_partially_missing_anchors():
     """早期压缩的锚点被后续压缩删掉时，卡仍按发生顺序分散，不能全堆末尾。"""
     messages: list = []
     for i in range(1, 9):
-        messages.append(AIMessage(content=f"第{i}遍", id=f"m{i}", tool_calls=[
-            {"id": f"t{i}", "name": "file_read", "args": {}}
-        ]))
+        messages.append(
+            AIMessage(content=f"第{i}遍", id=f"m{i}", tool_calls=[{"id": f"t{i}", "name": "file_read", "args": {}}])
+        )
         messages.append(ToolMessage(content="ok", tool_call_id=f"t{i}"))
 
     trail = subagents_module._build_trail_snapshot(
@@ -1624,14 +1633,12 @@ def test_build_trail_snapshot_spreads_cards_when_all_anchors_missing():
     """全部锚点失效时均匀铺在过程尾部，保持发生顺序且不叠成连续卡。"""
     messages: list = []
     for i in range(1, 9):
-        messages.append(AIMessage(content=f"第{i}遍", id=f"m{i}", tool_calls=[
-            {"id": f"t{i}", "name": "file_read", "args": {}}
-        ]))
+        messages.append(
+            AIMessage(content=f"第{i}遍", id=f"m{i}", tool_calls=[{"id": f"t{i}", "name": "file_read", "args": {}}])
+        )
         messages.append(ToolMessage(content="ok", tool_call_id=f"t{i}"))
 
-    trail = subagents_module._build_trail_snapshot(
-        messages, [_compression_record(i, "") for i in range(1, 4)]
-    )
+    trail = subagents_module._build_trail_snapshot(messages, [_compression_record(i, "") for i in range(1, 4)])
     positions = [i for i, item in enumerate(trail) if item["kind"] == "compaction"]
     assert len(positions) == 3
     assert all(after - before >= 2 for before, after in zip(positions, positions[1:], strict=False))

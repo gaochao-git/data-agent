@@ -167,6 +167,26 @@ describe('SubagentTaskRow', () => {
     expect(cancelledWrapper.find('[data-subagent-task-context]').text()).toContain('上下文 30%')
   })
 
+  it('shows the compressing state while a summary pass is in progress', () => {
+    const compressing = task({
+      status: 'running',
+      progress: { compressing: true, last_tool: 'file_read', compaction_count: 1 },
+    })
+    const wrapper = mount(SubagentTaskRow, { props: { task: compressing } })
+
+    expect(wrapper.find('[data-subagent-task-progress]').text()).toContain('正在压缩上下文，整理已用信息')
+  })
+
+  it('falls back to the active tool text once compression has completed', () => {
+    const running = task({
+      status: 'running',
+      progress: { compressing: false, last_tool: 'file_read' },
+    })
+    const wrapper = mount(SubagentTaskRow, { props: { task: running } })
+
+    expect(wrapper.find('[data-subagent-task-progress]').text()).toContain('正在使用 file_read')
+  })
+
   it('context percentage prefers the live context snapshot over token detail', () => {
     const staleDetail = task({
       status: 'running',

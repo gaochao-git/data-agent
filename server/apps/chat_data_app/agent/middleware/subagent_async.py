@@ -27,10 +27,6 @@ from ..contracts.subagent_task import (
     TASK_STATUS_CANCELLED,
     TASK_STATUS_CANCELLING,
     TASK_STATUS_LABELS,
-    TASK_STATUS_PAUSED,
-    TASK_STATUS_PENDING,
-    TASK_STATUS_RUNNING,
-    TASK_STATUS_WAITING_APPROVAL,
     TERMINAL_TASK_STATUSES,
     SubagentTaskCapacityError,
     SubagentTaskPort,
@@ -114,26 +110,6 @@ def _task_session_id(record: SubagentTaskView) -> str:
 def _task_agent_id(record: SubagentTaskView) -> str:
     """任务所属子智能体的稳定 ID；兼容旧记录回退到子会话或任务 ID。"""
     return str(getattr(record, "agent_id", "") or _task_session_id(record))
-
-
-def format_active_subagent_summary(records: Sequence[SubagentTaskView]) -> str:
-    """把活跃任务压成主智能体可读的一行摘要，按子会话去重。"""
-    session_statuses = {_task_session_id(record): record.status for record in records}
-    if not session_statuses:
-        return "当前会话没有活跃的子智能体。"
-    executing = sum(
-        1
-        for status in session_statuses.values()
-        if status in {TASK_STATUS_PENDING, TASK_STATUS_RUNNING, TASK_STATUS_CANCELLING}
-    )
-    waiting = sum(1 for status in session_statuses.values() if status == TASK_STATUS_WAITING_APPROVAL)
-    paused = sum(1 for status in session_statuses.values() if status == TASK_STATUS_PAUSED)
-    parts = [f"执行中 {executing}"] if executing else []
-    if waiting:
-        parts.append(f"等待审批 {waiting}")
-    if paused:
-        parts.append(f"已暂停 {paused}")
-    return f"当前会话有 {len(session_statuses)} 个活跃子智能体（{'、'.join(parts)}）。"
 
 
 def format_subagent_task_list_summary(records: Sequence[SubagentTaskView]) -> str:
@@ -552,9 +528,7 @@ async def _list_async_tasks(
     if not records:
         return "当前会话没有匹配的后台子智能体任务。"
     truncated_note = (
-        f"\n注：仅扫描最近 {limit} 条任务；更早记录请加 status 或 agent_id 缩小范围。"
-        if len(records) >= limit
-        else ""
+        f"\n注：仅扫描最近 {limit} 条任务；更早记录请加 status 或 agent_id 缩小范围。" if len(records) >= limit else ""
     )
     normalized_agent_id = str(agent_id or "").strip()
     if normalized_agent_id:

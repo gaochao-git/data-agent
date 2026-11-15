@@ -211,6 +211,9 @@ class SubagentTaskRecord:
         if self.status in TERMINAL_TASK_STATUSES:
             snapshot["phase"] = self.status
             snapshot["running_tools"] = 0
+            # 「正在压缩」是纯运行态标记：异常中断可能收不到 completed，
+            # 终态统一剥掉，避免历史详情/工具输出里残留一个永不结束的状态。
+            snapshot.pop("compressing", None)
         return snapshot
 
     @property
@@ -289,9 +292,7 @@ class SubagentTaskRecord:
         compactions = self.result_meta.get("subagent_compactions")
         result_count = len(compactions) if isinstance(compactions, list) else 0
         running = self.progress.get("compaction_count")
-        running_count = (
-            running if isinstance(running, int) and not isinstance(running, bool) and running > 0 else 0
-        )
+        running_count = running if isinstance(running, int) and not isinstance(running, bool) and running > 0 else 0
         return max(result_count, running_count)
 
     def as_dict(self, *, include_report: bool = True) -> dict[str, Any]:
