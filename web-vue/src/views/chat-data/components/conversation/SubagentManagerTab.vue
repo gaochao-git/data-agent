@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import type { PropType } from 'vue'
 import type { SubagentTaskRecord } from '../../types'
+import { groupSubagentTaskSessions, type SubagentTaskSession } from '../../composables/useSubagentTasks'
 import SubagentTaskRow from './SubagentTaskRow.vue'
 
 const props = defineProps({
@@ -15,16 +16,22 @@ const emit = defineEmits<{
 }>()
 
 const cancellingIds = computed(() => new Set(props.cancellingTaskIds))
+const sessions = computed(() => groupSubagentTaskSessions(props.tasks))
+const sessionCardTask = (session: SubagentTaskSession): SubagentTaskRecord => ({
+  ...session.latestTask,
+  label: session.label,
+})
 </script>
 
 <template>
   <section class="flex min-h-0 flex-col" data-subagent-manager>
-    <div v-if="tasks.length" class="subagent-task-grid">
+    <div v-if="sessions.length" class="subagent-task-grid">
       <SubagentTaskRow
-        v-for="task in tasks"
-        :key="task.task_id"
-        :task="task"
-        :cancelling="cancellingIds.has(task.task_id)"
+        v-for="session in sessions"
+        :key="session.sessionId"
+        :task="sessionCardTask(session)"
+        :session-turn-count="session.turnCount"
+        :cancelling="cancellingIds.has(session.latestTask.task_id)"
         @open="emit('open', $event)"
         @cancel="emit('cancel', $event)"
       />

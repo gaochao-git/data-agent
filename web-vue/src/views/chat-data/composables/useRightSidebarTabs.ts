@@ -5,7 +5,7 @@
  * - 首页常驻不可关，进入文件管理/子智能体管理后仍可一键回到首页；
  * - tab 有稳定 id：`home`、`workspace`、`file:<path>`、`tool:<tool_call_id>`、
  *   `agent:<tool_call_id>`、`subagent-manager`、`subagent-task:<task_id>`；
- * - 同 id 再次打开 = 激活已有 tab，不替换其他内容；
+ * - 同 id 再次打开 = 激活已有 tab，并刷新元数据（例如子会话切到最新一轮）；
  * - 滚动位置按 tab id 记忆，由调用方在切换前/后读写（宿主组件持有真实滚动容器）。
  */
 import { computed, ref, watch } from 'vue'
@@ -67,12 +67,15 @@ export const useRightSidebarTabs = () => {
 
   const ensureTab = (tab: RightSidebarTab): RightSidebarTab => {
     const existing = tabs.value.find(item => item.id === tab.id)
-    if (existing) return existing
+    if (existing) {
+      Object.assign(existing, tab)
+      return existing
+    }
     tabs.value.push({ ...tab })
     return tabs.value[tabs.value.length - 1]!
   }
 
-  /** 打开/激活：同 id 只激活，不替换其他 tab。 */
+  /** 打开/激活：同 id 复用页签，同时把详情定位刷新到本次打开的轮次。 */
   const activateTab = (tab: RightSidebarTab) => {
     ensureTab(tab)
     activeTabId.value = tab.id

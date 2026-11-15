@@ -32,13 +32,13 @@ from ..agent.run.agent_run_event_service import agent_run_event_service
 from ..agent.run.agent_run_runtime import agent_run_runtime
 from ..agent.run.completion_options import parse_file_selections, parse_quoted_snippets
 from ..agent.run.conversation_event_service import conversation_event_service
+from ..agent.run.subagent_task_event_service import subagent_task_event_service
 from ..agent.run.subagent_task_service import (
     TASK_STATUS_LABELS,
     TERMINAL_TASK_STATUSES,
     parse_task_status_filter,
     subagent_task_service,
 )
-from ..agent.run.subagent_task_event_service import subagent_task_event_service
 from ..agent.workspace.runtime_skill_snapshot import build_runtime_skill_snapshot_async
 from ..agent_run_support import (
     materialize_conversation_semantic_models,

@@ -36,6 +36,7 @@ from apps.chat_data_app.agent.middleware import message_integrity as integrity
 from apps.chat_data_app.agent.middleware import subagents
 from apps.chat_data_app.agent.middleware.context_compression import ContextInputLimitExceededError
 from apps.chat_data_app.agent.middleware.mcp_tool_discovery import MCPToolDiscoveryMiddleware
+from apps.chat_data_app.agent.middleware.subagent_text import TOOL_CALL_OPENER
 from apps.chat_data_app.agent.middleware.subagents import SubagentMiddleware, SubagentSpec
 
 
@@ -269,7 +270,7 @@ async def test_subagent_middleware_awrap_model_call_appends_prompt():
 
 def test_streaming_tool_call_filter_flushes_full_opener_marker():
     markup_filter = subagents._StreamingToolCallMarkupFilter()
-    markup_filter._pending = subagents._TOOL_CALL_OPENER
+    markup_filter._pending = TOOL_CALL_OPENER
 
     assert markup_filter.flush() == ""
 

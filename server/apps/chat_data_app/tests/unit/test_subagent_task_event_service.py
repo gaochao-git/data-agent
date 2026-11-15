@@ -42,7 +42,7 @@ class _WriterService:
 
 @pytest.mark.asyncio
 async def test_task_event_stream_replays_then_stops_on_terminal():
-    payload = "event: subagent_message_delta\ndata: {\"delta\":\"hi\"}\n\n"
+    payload = 'event: subagent_message_delta\ndata: {"delta":"hi"}\n\n'
     bus = _ReplayBus([{"stream_id": "1-0", "payload": payload}])
     service = SubagentTaskEventService(bus=bus)
 

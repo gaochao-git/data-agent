@@ -596,9 +596,11 @@ def test_build_tool_message_payload_skips_args_without_tool_call_id():
 def test_reconcile_state_messages_cancels_announced_but_unexecuted_tool_calls():
     """流式播报过、但最终 AIMessage 不包含的工具调用要收口为「未执行」，不能一直转。"""
     state = agent_stream._ToolStreamState()
-    state.handle_tool_call_chunks([
-        {"id": "ghost-1", "name": "officecli_run", "index": 0, "args": '{"intent":"验证 OfficeCLI 可用"}'},
-    ])
+    state.handle_tool_call_chunks(
+        [
+            {"id": "ghost-1", "name": "officecli_run", "index": 0, "args": '{"intent":"验证 OfficeCLI 可用"}'},
+        ]
+    )
     final_ai = AIMessage(
         content="",
         tool_calls=[{"id": "real-1", "name": "file_read", "args": {"path": "/a"}}],
@@ -658,9 +660,11 @@ def _adapter_with(**kwargs) -> agent_stream._AgentSseStreamAdapter:
 async def test_values_stream_event_reconciles_ghost_tool_cards():
     """values 快照到达时要把未执行的 running 占位转成 tool_failed 下发。"""
     adapter = _adapter_with()
-    adapter.tool_stream_state.handle_tool_call_chunks([
-        {"id": "ghost-1", "name": "write_todos", "index": 0, "args": '{"todos":[]}'},
-    ])
+    adapter.tool_stream_state.handle_tool_call_chunks(
+        [
+            {"id": "ghost-1", "name": "write_todos", "index": 0, "args": '{"todos":[]}'},
+        ]
+    )
     final_ai = AIMessage(
         content="",
         tool_calls=[{"id": "real-1", "name": "file_read", "args": {"path": "/a"}}],

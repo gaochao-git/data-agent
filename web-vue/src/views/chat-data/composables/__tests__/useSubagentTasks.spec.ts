@@ -10,7 +10,7 @@ const apiMocks = vi.hoisted(() => ({
 
 vi.mock('../../api', () => apiMocks)
 
-import { mergeSubagentTasks, useSubagentTasks } from '../useSubagentTasks'
+import { groupSubagentTaskSessions, mergeSubagentTasks, useSubagentTasks } from '../useSubagentTasks'
 import type { SubagentTaskRecord } from '../../types'
 
 const task = (overrides: Partial<SubagentTaskRecord> = {}): SubagentTaskRecord => ({
@@ -54,6 +54,47 @@ describe('mergeSubagentTasks', () => {
     ])
 
     expect(merged.map(item => item.task_id)).toEqual(['run-new', 'done-new', 'done-old'])
+  })
+})
+
+describe('groupSubagentTaskSessions', () => {
+  it('同一子会话的追问归并为一个智能体，保留首轮名称并统计轮次', () => {
+    const sessions = groupSubagentTaskSessions([
+      task({ task_id: 'follow-1', parent_task_id: 'root-1', root_task_id: 'root-1', turn_index: 2, label: '补充分析', status: 'completed' }),
+      task({ task_id: 'root-1', root_task_id: 'root-1', turn_index: 1, label: '语义模型目录盘点', status: 'completed' }),
+    ])
+
+    expect(sessions).toHaveLength(1)
+    expect(sessions[0]!.sessionId).toBe('root-1')
+    expect(sessions[0]!.label).toBe('语义模型目录盘点')
+    expect(sessions[0]!.turnCount).toBe(2)
+    expect(sessions[0]!.latestTask.task_id).toBe('follow-1')
+  })
+
+  it('新数据优先按 agent_session_id 聚合，root_task_id 只做兼容兜底', () => {
+    const sessions = groupSubagentTaskSessions([
+      task({
+        task_id: 'root-1',
+        agent_id: 'agent-1',
+        agent_session_id: 'agent-1',
+        root_task_id: 'legacy-root',
+        turn_index: 1,
+        status: 'completed',
+      }),
+      task({
+        task_id: 'follow-1',
+        agent_id: 'agent-1',
+        agent_session_id: 'agent-1',
+        root_task_id: 'legacy-root',
+        parent_task_id: 'root-1',
+        turn_index: 2,
+        status: 'completed',
+      }),
+    ])
+
+    expect(sessions).toHaveLength(1)
+    expect(sessions[0]!.sessionId).toBe('agent-1')
+    expect(sessions[0]!.turnCount).toBe(2)
   })
 })
 

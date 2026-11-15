@@ -3,7 +3,8 @@
 参考 deepagents ``SubAgentMiddleware`` 的三个核心机制（单 task 工具、状态裁剪
 透传、Command 回传结论），并按 ChatData 的事件流与状态设计做了裁剪：
 
-- 子智能体是无状态的一次性调用：只看到任务书（HumanMessage），不继承主对话历史。
+- 首轮是隔离上下文调用：子智能体只看到任务书（HumanMessage），不继承主对话历史；
+  ``follow_up`` 会在同一子会话内恢复历史消息后继续执行，但仍不读取主对话正文。
 - 仅白名单状态键进入子智能体（身份/数据域/工作区），主图的压缩账本与 token
   用量不透传，子图消息永远不回流——主对话上下文只增加一条 ToolMessage 结论。
   子图内部挂载与主图同源的压缩中间件（见 ``_compile_subagent``）：上下文逼近
@@ -14,69 +15,64 @@
   展示调用过程。文本与思考以 ``messages`` 模式做 token 级增量转发
   （``subagent_message_delta`` / ``subagent_thinking_delta``），工具生命周期
   仍以 ``updates`` 模式为准。
-- 子智能体不注册 ``ask_user_question``，第一版不支持嵌套人工中断。
+- 子智能体不注册 ``ask_user_question``；但后台任务可把暂停/审批中断冒泡到
+  主会话，并通过 ``steer/pause/resume/approve/reject`` 在安全点恢复。
 """
 
 import asyncio
-import re
-import time
 from collections.abc import Awaitable, Callable
-from contextlib import suppress
+from contextlib import AsyncExitStack, suppress
 from dataclasses import dataclass, field
-from itertools import count
 from typing import Annotated, Any, Literal, cast
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import AgentMiddleware, AgentState, ModelCallResult, ModelRequest, ToolErrorMiddleware
 from langchain.tools import ToolRuntime
-from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, RemoveMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import RemoveMessage as RemoveMessage  # noqa: F401 - 兼容 re-export
 from langchain_core.tools import StructuredTool
 from langgraph.config import get_stream_writer
-from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.types import Command
 from pydantic import BaseModel, Field
 
 from apps.chat_data_app.services.runtime_config import (
     SUBAGENT_BUDGET_ALERT_TRIGGER_RATIO,
-    SUBAGENT_MESSAGE_PREVIEW_MAX_CHARS,
     SUBAGENT_RESULT_PREVIEW_MAX_CHARS,
-    SUBAGENT_THINKING_PREVIEW_MAX_CHARS,
     TOOL_RESULT_OFFLOAD_SIZE,
 )
-from apps.chat_data_app.services.setting_service import get_runtime_setting
-from apps.chat_data_app.sse_protocol import (
-    SSE_EVENT_SUBAGENT_CONTEXT_COMPRESSION,
-    SSE_EVENT_SUBAGENT_CONTEXT_USAGE,
-    SSE_EVENT_SUBAGENT_MESSAGE,
-    SSE_EVENT_SUBAGENT_MESSAGE_DELTA,
-    SSE_EVENT_SUBAGENT_THINKING_DELTA,
-    SSE_EVENT_TOOL_COMPLETED,
-    SSE_EVENT_TOOL_FAILED,
-    SSE_EVENT_TOOL_STARTED,
+from apps.chat_data_app.services.runtime_config import (
+    SUBAGENT_MESSAGE_PREVIEW_MAX_CHARS as SUBAGENT_MESSAGE_PREVIEW_MAX_CHARS,  # noqa: F401 - 兼容 re-export
 )
+from apps.chat_data_app.services.runtime_config import (
+    SUBAGENT_THINKING_PREVIEW_MAX_CHARS as SUBAGENT_THINKING_PREVIEW_MAX_CHARS,  # noqa: F401 - 兼容 re-export
+)
+from apps.chat_data_app.services.setting_service import get_runtime_setting
+from utils.checkpoint import get_checkpointer
 from utils.logger import get_logger
-from utils.tool_call_args import coerce_tool_call_args
 
 from ..agent_runtime import on_tool_error
-from ..agent_state import merge_context_compression_events, merge_loaded_skill_names
+from ..agent_state import merge_context_compression_events, merge_loaded_skill_names, replace_approval_decisions
+from ..approval_policy import ask_tool_names, resolve_approval_policies
 from ..context.context_budget import (
     ContextBudget,
     ContextRequestBudget,
-    compact_context_usage_for_history,
     count_messages_tokens,
     count_tools_tokens,
     estimate_text_tokens,
     get_model_context_budget,
     inject_runtime_context_summary,
-    sanitize_context_usage_for_response,
 )
 from ..context.runtime import ContextRuntime
 from ..contracts.subagent_task import (
+    SUSPENDED_TASK_STATUSES,
     TASK_STATUS_CANCELLED,
     TASK_STATUS_COMPLETED,
     TASK_STATUS_FAILED,
     TASK_STATUS_INTERRUPTED,
+    TASK_STATUS_LABELS,
+    TASK_STATUS_PAUSED,
     TASK_STATUS_TIMEOUT,
+    TASK_STATUS_WAITING_APPROVAL,
     SubagentTaskPort,
     SubagentTaskView,
     get_subagent_task_service,
@@ -91,12 +87,88 @@ from .subagent_async import (
     MAX_WAIT_TASKS,
     _append_partial_report,
     _get_subagent_stream_writer,
+    _launch_task_runner,
+    _read_conversation_context,
     _spawn_background_task,
+    _spawn_follow_up_task,
     _truncate_text,
     _watch_background_task,
     manage_async_task,
 )
 from .subagent_config import build_subagent_invocation_config
+from .subagent_control import create_subagent_control_middleware
+from .subagent_history import (
+    deserialize_subagent_messages,
+    serialize_subagent_messages,
+)
+from .subagent_history import (
+    legacy_session_history as _legacy_session_history,
+)
+from .subagent_stream import (
+    SUBAGENT_STATE_PASSTHROUGH_KEYS as SUBAGENT_STATE_PASSTHROUGH_KEYS,
+)
+from .subagent_stream import (
+    SubagentSuspended,
+    _build_subagent_state,
+    _resolve_subagent_usage_detail,
+    _run_subagent_with_events,
+    _subagent_process_snapshot,
+)
+from .subagent_stream import (
+    _aggregate_subagent_token_usage as _aggregate_subagent_token_usage,
+)
+from .subagent_stream import (
+    _emit_subagent_tool_event as _emit_subagent_tool_event,
+)
+from .subagent_stream import (
+    _extract_interrupt_payload as _extract_interrupt_payload,
+)
+from .subagent_stream import (
+    _iter_chunk_stream_events as _iter_chunk_stream_events,
+)
+from .subagent_stream import (
+    _iter_subagent_stream_events as _iter_subagent_stream_events,
+)
+from .subagent_stream import (
+    _process_subagent_chunk as _process_subagent_chunk,
+)
+from .subagent_stream import (
+    _StreamCapState as _StreamCapState,
+)
+from .subagent_stream import (
+    _subagent_message_event as _subagent_message_event,
+)
+from .subagent_stream import (
+    _subagent_progress_snapshot as _subagent_progress_snapshot,
+)
+from .subagent_stream import (
+    _subagent_tool_result_event as _subagent_tool_result_event,
+)
+from .subagent_stream import (
+    _SubagentStreamState as _SubagentStreamState,
+)
+from .subagent_text import (
+    StreamingToolCallMarkupFilter as _StreamingToolCallMarkupFilter,  # noqa: F401 - 兼容 re-export
+)
+from .subagent_text import (
+    chunk_reasoning_text as _chunk_reasoning_text,  # noqa: F401 - 兼容 re-export
+)
+from .subagent_text import (
+    chunk_text_delta as _chunk_text_delta,  # noqa: F401 - 兼容 re-export
+)
+from .subagent_text import (
+    plain_text as _plain_text,
+)
+from .subagent_text import (
+    sanitize_report_text as _sanitize_report_text,
+)
+from .subagent_trail import (
+    _build_trail_snapshot,
+    _collect_subagent_tool_results,  # noqa: F401 - 兼容 re-export
+    _trail_orphan_tool_entry,  # noqa: F401 - 兼容 re-export
+    _trail_tool_entry,  # noqa: F401 - 兼容 re-export
+)
+from .tool_approval import create_tool_approval_middleware
 from .tool_call_normalizer import create_tool_call_name_normalizer_middleware
 from .tool_execution_fence import create_tool_execution_fence_middleware
 from .tool_result import create_tool_result_middleware, externalize_tool_text
@@ -104,26 +176,11 @@ from .tool_timing import create_tool_timing_middleware
 
 logger = get_logger(__name__)
 
+
 # 过程外发上限的口径说明见 services/runtime_config.py：工具结果上限与
 # TOOL_RESULT_OFFLOAD_SIZE 对齐（子图同样挂载 ToolResultMiddleware，超限内容
 # 已被替换成信封），正文/思考单独配置。三者都保留截断逻辑作为安全兜底，
 # 正常路径下不会触发——过程区的意图就是让用户看到子智能体实际做了什么。
-
-SUBAGENT_STATE_PASSTHROUGH_KEYS = frozenset(
-    {
-        "user_id",
-        "operator_name",
-        "conversation_id",
-        "execution_context",
-        "workspace",
-    }
-)
-"""允许从主对话复制进子智能体的状态键白名单（身份/数据域/工作区上下文）。
-
-主图的压缩账本（context_compression_events / context_summary）、token_usage
-等一律不透传：前者带自定义 reducer，回流会污染主对话的流重试去重；后者是
-主对话的记账口径。子图挂压缩/用量中间件后在 ``ChatDataSubAgentState`` 里
-维护自己的压缩账本与 token_usage，与主图互不影响。"""
 
 TASK_TOOL_NAME = "task"
 
@@ -134,20 +191,20 @@ SUBAGENT_REPORT_MAX_TOKEN_RATIO = 0.08
 SUBAGENT_REPORT_MIN_TOKEN_LIMIT = 1000
 SUBAGENT_REPORT_PREVIEW_CHARS = 2000
 
-
 _TASK_TOOL_DESCRIPTION_TEMPLATE = """派发隔离上下文的子智能体处理复杂多步任务，只把最终结论带回主对话（大量文件/数据读取留在子图消化，保护主对话上下文）。同一个工具也负责后台任务管理。
 
 可用子智能体类型：
 {available_agents}
 
 要求：
-- action="start"（默认）派发子智能体；后台任务管理用 action="list"/"check"/"wait"/"cancel"，不需要传 description/subagent_type。
+- action="start"（默认）派发子智能体；后台任务管理用 action="list"/"check"/"wait"/"cancel"；对已结束的子智能体继续追问用 action="follow_up"（传 task_id + message），会沿用同一子会话历史，不需要重复背景。
 - 子智能体看不到主对话历史：任务书必须自带 ① 目标 ② 已知事实与文件路径 ③ 交付格式 ④ 约束与禁止项，并写明任务意图（研究盘点 / 分析 / 产出交付物）。
 - 适合：多文件或大体量数据的盘点调研、可并行的独立子任务；不适合：单点查询、需要向用户提问或展示过程的步骤（直接自己做）。
 - 大块背景先用 file_write 落盘，任务书给路径；只存在于对话里的信息子智能体拿不到。
 - explore 只读不写盘；需要落盘的交付物由主智能体收尾写。
 - 已派发任务不要重复执行；相互独立的子任务可在同一条消息里并行发起多个 task。
-- 耗时长且当轮不需要其结论的任务可传 background=true 转后台：立即返回持久 task_id（可配 label/timeout_seconds），期间继续其他工作或直接结束本轮；完成/失败/超时后会自动唤醒当前会话并注入通知。需要立即拿到先前任务结果时用 task(action="wait", task_ids=[...])；查单个任务用 task(action="check", task_id=...)；列任务用 task(action="list")；取消用 task(action="cancel", task_id=...)。
+- 耗时长且当轮不需要其结论的任务可传 background=true 转后台：立即返回持久 task_id（可配 label/timeout_seconds），期间继续其他工作或直接结束本轮；完成/失败/超时后会自动唤醒当前会话并注入通知。需要立即拿到先前任务结果时用 task(action="wait", task_ids=[...])；查单个任务用 task(action="check", task_id=...)；列任务用 task(action="list")；取消用 task(action="cancel", task_id=...)；已结束任务需要补充分析/修改结论时用 task(action="follow_up", task_id=..., message=...)，不要用 start 重复派发。
+- 运行中可管理：task(action="steer", task_id=..., message=...) 在下一个模型步注入补充说明；task(action="pause", task_id=...) 在安全点暂停；暂停或等待审批后用 task(action="resume"/"approve"/"reject", task_id=...) 继续。审批通知会给出待执行工具，主智能体必须先征得用户同意再 approve。
 - 回传是结论：向用户汇报时用自己的话转述关键结论与产物路径；产物由主智能体用 present_artifacts 展示。"""
 
 
@@ -173,16 +230,25 @@ class ChatDataSubAgentState(AgentState, total=False):
     # （含 breakdown），调用方从 updates 捕获。必须在此声明 channel，否则
     # Command(update=...) 会被 LangGraph 丢弃，前端只能看到汇总、无明细。
     token_usage: dict[str, Any] | None
+    # 审批决策：与主图同构，供子图内 ToolApprovalMiddleware 消费。
+    approval_decisions: Annotated[dict[str, str], replace_approval_decisions]
+    # 后台任务控制身份：仅用于中间件读取账本，不进入模型上下文。
+    subagent_task_id: str | None
+    subagent_owner_token: str | None
 
 
 class TaskToolArgs(BaseModel):
     """``task`` 工具入参。"""
 
-    action: Literal["start", "list", "check", "wait", "cancel"] = Field(
+    action: Literal[
+        "start", "list", "check", "wait", "cancel", "follow_up", "steer", "pause", "resume", "approve", "reject"
+    ] = Field(
         default="start",
         description=(
             "start=派发子智能体（默认）；list=列后台任务；check=查单个任务；"
-            "wait=等待一个或多个任务终态；cancel=取消任务。"
+            "wait=等待一个或多个任务终态；cancel=取消任务；"
+            "follow_up=对已结束的后台子智能体继续追问；steer=给运行中的子智能体插话；"
+            "pause=请求在下一个安全点暂停；resume=恢复已暂停任务；approve/reject=审批子智能体待执行工具。"
         ),
     )
     description: str | None = Field(
@@ -219,7 +285,16 @@ class TaskToolArgs(BaseModel):
     task_id: str | None = Field(
         default=None,
         max_length=64,
-        description="action=check/cancel 时要查询或取消的任务 ID。",
+        description="action=check/cancel/follow_up 时要查询、取消或追问的任务 ID。",
+    )
+    message: str | None = Field(
+        default=None,
+        max_length=8000,
+        description=("action=follow_up 时必填：追问内容。action=steer 时必填：给运行中子智能体的补充说明。"),
+    )
+    decision: Literal["allow", "deny"] = Field(
+        default="allow",
+        description="action=approve/reject 时使用：allow=允许本轮所有待审批工具，deny=全部拒绝。",
     )
     task_ids: list[str] | None = Field(
         default=None,
@@ -231,7 +306,6 @@ class TaskToolArgs(BaseModel):
         max_length=64,
         description="action=list 时的可选过滤：active、terminal，或单个状态（如 running/completed/failed/cancelled）。",
     )
-    limit: int = Field(default=20, ge=1, le=50, description="action=list 时最多返回条数。")
     wait_seconds: int = Field(
         default=DEFAULT_WAIT_TIMEOUT_SECONDS,
         ge=1,
@@ -284,95 +358,6 @@ def validate_subagent_specs(specs: list[SubagentSpec]) -> None:
     duplicated = {name for name in names if names.count(name) > 1}
     if duplicated:
         raise ValueError(f"子智能体名称重复: {', '.join(sorted(duplicated))}")
-
-
-# 模型在无工具轮次把「本来要发的工具调用」当正文输出的残留标记（Qwen 系
-# 在 tools=[] 请求下的已知退化形态，实测见 2026-09-20 强制收尾首验）：
-# <tool_call>...</tool_call> 整块，或只有开头没有结尾的悬空块。
-_TOOL_CALL_MARKUP_RE = re.compile(r"<tool_call\b[^>]*>.*?(?:</tool_call>|$)", re.DOTALL)
-
-
-def _sanitize_report_text(text: str) -> str:
-    """剥掉正文里的裸工具调用标记，避免垃圾 XML 混进回传主智能体的报告。"""
-    return _TOOL_CALL_MARKUP_RE.sub("", str(text or "")).strip()
-
-
-_TOOL_CALL_OPENER = "<tool_call"
-_TOOL_CALL_CLOSER = "</tool_call>"
-
-
-class _StreamingToolCallMarkupFilter:
-    """流式剥除正文增量里的裸 ``<tool_call>`` 标记（整段版 ``_sanitize_report_text``
-    的流式对应物）。
-
-    硬线摘工具轮次模型会把待发工具调用退化成正文标记（Qwen 系已知形态），
-    该文本会经 ``subagent_message_delta`` 逐 token 流给前端——标记可能被切成
-    任意小的碎片（``<`` / ``<tool`` / ``_call>``…），必须跨增量缓冲匹配。
-
-    状态机三态：
-    - normal：正常透传，遇到 ``<`` 进入 partial 判定；
-    - partial：缓冲尾巴可能是 opener 前缀，暂扣不发；确认非 opener 后原样补发；
-    - inside：确认进入标记块，静默吞掉直到 closer 完整出现（closer 自身可能
-      被切碎，同样用后缀缓冲容忍）。
-
-    消息结束 ``flush``：partial 未决说明只是普通 ``<`` 文本，原样补发；inside
-    未闭合按悬空块处理吞到末尾（与整段版口径一致）。已知取舍：flush 出的
-    残片不再作为增量补发（最多丢 opener 前缀长度的普通文本，且仅发生在
-    标记被切碎的退化轮次），换取直播内容零垃圾 XML。
-    """
-
-    def __init__(self) -> None:
-        self._inside = False
-        self._pending = ""
-
-    @staticmethod
-    def _partial_suffix(text: str, token: str) -> str:
-        """返回 text 末尾与 token 前缀重合的最长后缀（可能被切碎的 token 暂扣）。"""
-        for length in range(min(len(text), len(token) - 1), 0, -1):
-            if text.endswith(token[:length]):
-                return text[-length:]
-        return ""
-
-    def feed(self, delta: str) -> str:
-        out: list[str] = []
-        text = self._pending + delta if self._pending else delta
-        self._pending = ""
-        while text:
-            if self._inside:
-                idx = text.find(_TOOL_CALL_CLOSER)
-                if idx == -1:
-                    self._pending = self._partial_suffix(text, _TOOL_CALL_CLOSER)
-                    text = ""
-                else:
-                    text = text[idx + len(_TOOL_CALL_CLOSER) :]
-                    self._inside = False
-                continue
-            idx = text.find("<")
-            if idx == -1:
-                out.append(text)
-                break
-            out.append(text[:idx])
-            text = text[idx:]
-            if _TOOL_CALL_OPENER.startswith(text):
-                # 可能是 opener 的前缀（如 "<"、"<tool"），暂扣等下一个增量裁决
-                self._pending = text
-                text = ""
-            elif text.startswith(_TOOL_CALL_OPENER):
-                self._inside = True
-                text = text[len(_TOOL_CALL_OPENER) :]
-            else:
-                # 与 opener 无关的普通 "<" 文本，透传后继续扫描
-                out.append("<")
-                text = text[1:]
-        return "".join(out)
-
-    def flush(self) -> str:
-        pending, self._pending = self._pending, ""
-        if self._inside:
-            return ""  # 悬空标记块：吞到末尾
-        if len(pending) >= len(_TOOL_CALL_OPENER):
-            return ""  # 正好停在 opener 全串上，按标记块开头处理
-        return pending
 
 
 def _extract_final_report(messages: list) -> str:
@@ -597,7 +582,7 @@ def _safe_subagent_budget_meta(
         return None
 
 
-def _compile_subagent(spec: SubagentSpec, run_controls: Any = None) -> Any:
+def _compile_subagent(spec: SubagentSpec, run_controls: Any = None, *, control_enabled: bool = False) -> Any:
     """把 spec 编译成独立 langgraph runnable。
 
     ``run_controls`` 完整时为子图挂上与主图相同的租约围栏：租约丢失/被接管后
@@ -660,6 +645,14 @@ def _compile_subagent(spec: SubagentSpec, run_controls: Any = None) -> Any:
         create_tool_result_middleware(),
         ToolErrorMiddleware(on_tool_error),
     ]
+    if control_enabled:
+        # 控制中间件放最前：暂停中断与插话注入先于压缩，插话不会被摘要吞掉。
+        middleware.insert(0, create_subagent_control_middleware())
+        approval_policies = resolve_approval_policies(tools)
+        if ask_tool_names(approval_policies):
+            # 审批只在后台任务启用（有独立 checkpointer 才能中断/恢复）；
+            # 前台同步派发保持原有行为，不引入无法恢复的悬挂中断。
+            middleware.insert(1, create_tool_approval_middleware(tools, approval_policies=approval_policies))
     if spec.sandbox_renewal is not None:
         middleware.append(create_sandbox_renewal_middleware(spec.sandbox_renewal))
     if run_controls is not None and run_controls.is_complete():
@@ -691,877 +684,9 @@ def _compile_subagent(spec: SubagentSpec, run_controls: Any = None) -> Any:
     )
 
 
-def _plain_text(content: Any) -> str:
-    """把消息 content 归一化成纯文本（多模态 list 按行拼接）。"""
-    if isinstance(content, list):
-        return "\n".join(part if isinstance(part, str) else str(part) for part in content)
-    return content if isinstance(content, str) else str(content or "")
-
-
 def _truncate_subagent_result(content: Any) -> str:
     """把内层工具结果压成 SSE 可安全外发的文本预览。"""
     return _truncate_text(_plain_text(content), SUBAGENT_RESULT_PREVIEW_MAX_CHARS)
-
-
-def _chunk_text_delta(content: Any) -> str:
-    """从流式 chunk 的 content 里取纯文本增量。
-
-    ``str`` 直接返回；content blocks 形式只取 ``text`` 块，其余块（工具调用
-    等结构化载荷）不参与文本增量，避免 dict 被 ``str()`` 成调试噪音。
-    """
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts = []
-        for block in content:
-            if isinstance(block, str):
-                parts.append(block)
-            elif isinstance(block, dict) and block.get("type") == "text" and isinstance(block.get("text"), str):
-                parts.append(block["text"])
-        return "".join(parts)
-    return ""
-
-
-def _chunk_reasoning_text(chunk: Any) -> str:
-    """从流式 chunk 提取思考增量。
-
-    口径与 handlers ``_extract_reasoning_content`` 一致（OpenAI compatible
-    的 ``reasoning_content`` / ``reasoning`` / ``reasoning_text``），但此处
-    面向 middleware 层、不依赖 handlers；展示名替换只在 handlers 出口做。
-    """
-    for attr in ("additional_kwargs", "response_metadata"):
-        value = getattr(chunk, attr, None)
-        if not isinstance(value, dict):
-            continue
-        for key in ("reasoning_content", "reasoning", "reasoning_text"):
-            reasoning = value.get(key)
-            if isinstance(reasoning, str) and reasoning:
-                return reasoning
-    return ""
-
-
-class _StreamCapState:
-    """单个流式键（正文或思考）的累计字符数与封顶标记。"""
-
-    __slots__ = ("chars", "capped")
-
-    def __init__(self) -> None:
-        self.chars = 0
-        self.capped = False
-
-    def take(self, delta: str, max_chars: int) -> tuple[str | None, bool]:
-        """返回 ``(允许外发的增量片段, 本次是否触发封顶截断)``；封顶后为 ``(None, False)``。"""
-        if self.capped or not delta:
-            return None, False
-        remaining = max_chars - self.chars
-        if remaining <= 0:
-            self.capped = True
-            return None, False
-        if len(delta) <= remaining:
-            self.chars += len(delta)
-            return delta, False
-        self.chars = max_chars
-        self.capped = True
-        return delta[:remaining] + "\n…[内容过长已截断]", True
-
-
-def _iter_chunk_stream_events(
-    chunk: Any,
-    parent_tool_call_id: str | None,
-    text_caps: dict[str, _StreamCapState],
-    think_caps: dict[str, _StreamCapState],
-    markup_filters: dict[str, "_StreamingToolCallMarkupFilter"] | None = None,
-) -> list[dict[str, Any]]:
-    """把 ``messages`` 模式的 ``AIMessageChunk`` 翻译成 token 级增量事件。
-
-    - 正文增量 → ``subagent_message_delta``（先经 ``markup_filters`` 流式剥除
-      裸 ``<tool_call>`` 标记，再计封顶——封顶口径按用户实际看到的文本算）
-    - 思考增量 → ``subagent_thinking_delta``
-    - 无 ``message_id`` 的 chunk 不增量转发（无法与 updates 的完整消息收敛，
-      由完整消息事件兜底）
-
-    带 ``tool_call_chunks`` 的 chunk **不能整块跳过**：OpenAI 兼容实现里正文与
-    工具调用是两个独立字段，同一个 chunk 完全可以「文本 + 工具增量」同时到达。
-    一旦跳过，这段文本永远补不回来——该消息已因先前的 delta 进入
-    ``streamed_text_ids``，完整消息事件按收敛策略只补标记、不再携带 content。
-    工具参数不会漏进正文：``_chunk_text_delta`` 只取 ``str`` 与 ``type=="text"``
-    的内容块，结构化块（工具调用等）不参与文本增量。
-    """
-    if not isinstance(chunk, AIMessageChunk):
-        return []
-    message_id = getattr(chunk, "id", None)
-    if not message_id:
-        return []
-
-    events: list[dict[str, Any]] = []
-    text = _chunk_text_delta(getattr(chunk, "content", ""))
-    if text:
-        if markup_filters is not None:
-            text = markup_filters.setdefault(message_id, _StreamingToolCallMarkupFilter()).feed(text)
-        if text:
-            cap = text_caps.setdefault(message_id, _StreamCapState())
-            allowed, was_capped = cap.take(text, SUBAGENT_MESSAGE_PREVIEW_MAX_CHARS)
-            if allowed:
-                events.append(
-                    {
-                        "event_type": SSE_EVENT_SUBAGENT_MESSAGE_DELTA,
-                        "message_id": message_id,
-                        "delta": allowed,
-                        "truncated": was_capped,
-                        "parent_tool_call_id": parent_tool_call_id,
-                    }
-                )
-    reasoning = _chunk_reasoning_text(chunk)
-    if reasoning:
-        cap = think_caps.setdefault(message_id, _StreamCapState())
-        allowed, was_capped = cap.take(reasoning, SUBAGENT_THINKING_PREVIEW_MAX_CHARS)
-        if allowed:
-            events.append(
-                {
-                    "event_type": SSE_EVENT_SUBAGENT_THINKING_DELTA,
-                    "message_id": message_id,
-                    "delta": allowed,
-                    "truncated": was_capped,
-                    "parent_tool_call_id": parent_tool_call_id,
-                }
-            )
-    return events
-
-
-def _emit_subagent_tool_event(writer: Any, event: dict[str, Any]) -> None:
-    """把子智能体内层工具事件写入父图 custom 流（writer 不可用时静默跳过）。"""
-    if writer is None:
-        return
-    try:
-        writer({"type": "subagent_tool", "event": event})
-    except Exception:
-        logger.warning("转发子智能体工具事件失败", exc_info=True)
-
-
-def _iter_subagent_stream_events(
-    messages: list,
-    parent_tool_call_id: str | None = None,
-    streamed_text_ids: set[str] | None = None,
-    streamed_think_ids: set[str] | None = None,
-    id_resolver: Callable[[Any], str] | None = None,
-    tool_started_at: dict[str, int] | None = None,
-) -> list[dict[str, Any]]:
-    """把子图节点更新里的消息翻译成子智能体内部过程事件序列。
-
-    - AIMessage.content（非空文本）→ ``subagent_message``，即子智能体的中间
-      叙述/分析结论，用 ``message_id`` 去重
-    - AIMessage.tool_calls → ``tool_started``（args 尽力规整为 dict）
-    - ToolMessage → ``tool_completed`` / ``tool_failed``（结果截断为预览）
-    - 每个事件都挂 ``parent_tool_call_id`` 指向所属外层 task 调用，便于前端
-      把内部过程挂在 task 卡片下、而不是当作顶层调用渲染。
-
-    收敛策略（只补标记不覆盖）：``messages`` 模式已增量转发过文本/思考的
-    消息（命中 ``streamed_text_ids`` / ``streamed_think_ids``），完整消息事件
-    不再携带 content（前端已拼出全文），只补 ``truncated`` 标记。
-
-    同一条 AIMessage 既有文本又有工具调用时按「先说后做」输出，保证前端拿到的
-    顺序与子智能体真实执行顺序一致。
-
-    ``id_resolver`` 为缺失 ``id`` 的消息生成稳定兜底 id：前端以 message_id 作
-    为 trail 条目主键，空 id 会被整条丢弃——不能把「中间文本是否可见」押在
-    provider 一定返回 chunk id 上。
-    """
-    streamed_text_ids = streamed_text_ids or set()
-    streamed_think_ids = streamed_think_ids or set()
-    events: list[dict[str, Any]] = []
-    for message in messages:
-        if isinstance(message, AIMessage):
-            message_id = getattr(message, "id", None) or (id_resolver(message) if id_resolver else None)
-            text = _plain_text(getattr(message, "content", ""))
-            if text.strip():
-                events.append(
-                    _subagent_message_event(
-                        message_id,
-                        text,
-                        parent_tool_call_id,
-                        already_streamed=bool(message_id and message_id in streamed_text_ids),
-                    )
-                )
-            events.extend(_subagent_tool_started_events(message, parent_tool_call_id, tool_started_at))
-        elif isinstance(message, ToolMessage):
-            events.append(_subagent_tool_result_event(message, parent_tool_call_id, tool_started_at))
-    return events
-
-
-def _subagent_message_event(
-    message_id: str | None,
-    text: str,
-    parent_tool_call_id: str | None,
-    already_streamed: bool,
-) -> dict[str, Any]:
-    """生成 subagent_message 事件。
-
-    已流式转发过的消息（``already_streamed``）不再携带 content（前端已拼出
-    全文），只补 ``truncated`` 标记——只补标记不覆盖。两个分支都显式带
-    ``streamed``：前端按布尔值判断收敛，不区分「字段缺失」与「未流式」。
-
-    文本先过 ``_sanitize_report_text``：完整消息事件（尤其历史回放路径）
-    不允许携带裸 ``<tool_call>`` 标记（硬线摘工具轮次的退化形态）。
-    """
-    text = _sanitize_report_text(text)
-    truncated = len(text) > SUBAGENT_MESSAGE_PREVIEW_MAX_CHARS
-    if already_streamed:
-        return {
-            "event_type": SSE_EVENT_SUBAGENT_MESSAGE,
-            "message_id": message_id,
-            "content": "",
-            "streamed": True,
-            "truncated": truncated,
-            "parent_tool_call_id": parent_tool_call_id,
-        }
-    return {
-        "event_type": SSE_EVENT_SUBAGENT_MESSAGE,
-        "message_id": message_id,
-        "content": _truncate_text(text, SUBAGENT_MESSAGE_PREVIEW_MAX_CHARS, "内容"),
-        "streamed": False,
-        "truncated": truncated,
-        "parent_tool_call_id": parent_tool_call_id,
-    }
-
-
-def _subagent_tool_started_events(
-    message: AIMessage,
-    parent_tool_call_id: str | None,
-    tool_started_at: dict[str, int] | None = None,
-) -> list[dict[str, Any]]:
-    """把 AIMessage 的 tool_calls 翻译成 tool_started 事件（args 尽力规整为 dict）。
-
-    ``tool_started_at`` 仅直播路径传入：记录每个内层工具开始的后端时间，供完成事件
-    在 ToolTimingMiddleware 未盖章（被技能前置等外层中间件拒绝）时兜底计时。
-    """
-    events: list[dict[str, Any]] = []
-    for tool_call in getattr(message, "tool_calls", None) or []:
-        if not isinstance(tool_call, dict):
-            continue
-        tool_call_id = str(tool_call.get("id") or "")
-        event: dict[str, Any] = {
-            "event_type": SSE_EVENT_TOOL_STARTED,
-            "tool_call_id": tool_call.get("id"),
-            "tool_name": tool_call.get("name"),
-            "args": coerce_tool_call_args(tool_call.get("args")) or {},
-            "parent_tool_call_id": parent_tool_call_id,
-        }
-        if tool_started_at is not None and tool_call_id:
-            started_at_ms = tool_started_at.setdefault(tool_call_id, int(time.time() * 1000))
-            event["started_at_ms"] = started_at_ms
-        events.append(event)
-    return events
-
-
-def _read_tool_timing(message: ToolMessage) -> dict[str, int]:
-    """读取 ToolTimingMiddleware 盖在 ToolMessage 上的起止时间（epoch 毫秒）。"""
-    additional_kwargs = getattr(message, "additional_kwargs", None) or {}
-    timing: dict[str, int] = {}
-    for key in ("started_at_ms", "ended_at_ms"):
-        value = additional_kwargs.get(key)
-        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-            continue
-        timing[key] = value
-    return timing
-
-
-def _non_negative_int(value: Any) -> int:
-    """非负整数安全转换：布尔/负数/非数字一律按 0 处理。"""
-    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-        return 0
-    return value
-
-
-def _usage_totals_from_metadata(usage: Any) -> dict[str, int] | None:
-    """单次模型调用的 usage_metadata → 统一 token 计数；无有效用量返回 None。"""
-    if not isinstance(usage, dict):
-        return None
-    input_tokens = _non_negative_int(usage.get("input_tokens"))
-    output_tokens = _non_negative_int(usage.get("output_tokens"))
-    total_tokens = _non_negative_int(usage.get("total_tokens")) or input_tokens + output_tokens
-    if total_tokens <= 0:
-        return None
-    input_details = usage.get("input_token_details")
-    output_details = usage.get("output_token_details")
-    input_details = input_details if isinstance(input_details, dict) else {}
-    output_details = output_details if isinstance(output_details, dict) else {}
-    return {
-        "input_tokens": input_tokens,
-        "output_tokens": output_tokens,
-        "total_tokens": total_tokens,
-        "cache_read_input_tokens": _non_negative_int(input_details.get("cache_read")),
-        "cache_creation_input_tokens": _non_negative_int(input_details.get("cache_creation")),
-        "reasoning_tokens": _non_negative_int(output_details.get("reasoning")),
-    }
-
-
-def _aggregate_subagent_token_usage(messages: list) -> dict[str, int]:
-    """汇总子图内每次模型调用的 token 用量（billing 口径，不是上下文占用估算）。
-
-    子图 ``callbacks=[]`` 且不挂主图 ContextUsageMiddleware，主对话 token 统计看不到
-    这部分；这里按消息上的 ``usage_metadata`` 累加，随 task 结果持久化供前端展示。
-    """
-    totals = {
-        "input_tokens": 0,
-        "output_tokens": 0,
-        "total_tokens": 0,
-        "cache_read_input_tokens": 0,
-        "cache_creation_input_tokens": 0,
-        "reasoning_tokens": 0,
-    }
-    for message in messages or []:
-        part = _usage_totals_from_metadata(getattr(message, "usage_metadata", None))
-        if part is None:
-            continue
-        for key, value in part.items():
-            totals[key] += value
-    return totals if totals["total_tokens"] > 0 else {}
-
-
-def _subagent_process_snapshot(
-    messages: list, context_usage: Any, compactions: Any = None, token_detail: Any = None
-) -> dict[str, Any]:
-    """task 结果上附带的子过程快照：上下文用量 + 子图 token 用量 + 压缩事件。"""
-    snapshot: dict[str, Any] = {}
-    if isinstance(context_usage, dict) and context_usage:
-        snapshot["subagent_context_usage"] = context_usage
-    if isinstance(compactions, list) and compactions:
-        snapshot["subagent_compactions"] = compactions
-    if isinstance(token_detail, dict) and token_detail:
-        # 压缩落库体积在 middleware 层完成（run 层不允许直接依赖 context 包）
-        snapshot["subagent_token_usage_detail"] = compact_context_usage_for_history(token_detail)
-    # 子图 token 用量（billing 口径）：主对话统计不含子智能体消耗，这里单独随结果持久化
-    token_usage = _aggregate_subagent_token_usage(messages)
-    if token_usage:
-        snapshot["subagent_token_usage"] = token_usage
-    return snapshot
-
-
-def _subagent_tool_result_event(
-    message: ToolMessage,
-    parent_tool_call_id: str | None,
-    tool_started_at: dict[str, int] | None = None,
-) -> dict[str, Any]:
-    """把 ToolMessage 翻译成 tool_completed / tool_failed 事件（结果截断为预览）。"""
-    raw = _plain_text(getattr(message, "content", ""))
-    status = str(getattr(message, "status", "") or "")
-    event: dict[str, Any] = {
-        "event_type": SSE_EVENT_TOOL_FAILED if status == "error" else SSE_EVENT_TOOL_COMPLETED,
-        "tool_call_id": getattr(message, "tool_call_id", None),
-        "tool_name": getattr(message, "name", None),
-        "content": _truncate_text(raw, SUBAGENT_RESULT_PREVIEW_MAX_CHARS),
-        "truncated": len(raw) > SUBAGENT_RESULT_PREVIEW_MAX_CHARS,
-        "parent_tool_call_id": parent_tool_call_id,
-        **_read_tool_timing(message),
-    }
-    if tool_started_at is not None:
-        tool_call_id = str(event.get("tool_call_id") or "")
-        started_at_ms = event.get("started_at_ms") or tool_started_at.get(tool_call_id)
-        if tool_call_id and started_at_ms:
-            ended_at_ms = event.get("ended_at_ms") or int(time.time() * 1000)
-            event["started_at_ms"] = started_at_ms
-            event["ended_at_ms"] = max(int(ended_at_ms), int(started_at_ms))
-            tool_started_at.pop(tool_call_id, None)
-    return event
-
-
-class _SubagentStreamState:
-    """子图直播的状态载体：去重、增量转发达标与匿名 id 兜底。"""
-
-    def __init__(self, parent_tool_call_id: str | None) -> None:
-        self.parent_tool_call_id = parent_tool_call_id
-        self.seen_ids: set[str] = set()
-        self.text_caps: dict[str, _StreamCapState] = {}
-        self.think_caps: dict[str, _StreamCapState] = {}
-        # 按消息隔离的流式标记剥除器：硬线摘工具轮次的退化文本不允许进直播
-        self.text_markup_filters: dict[str, _StreamingToolCallMarkupFilter] = {}
-        self.streamed_text_ids: set[str] = set()
-        self.streamed_think_ids: set[str] = set()
-        self.anonymous_seq = count(1)
-        self.anonymous_ids: dict[int, str] = {}
-        self.collected: list = []
-        # 内层工具开始的后端时间：完成事件缺少工具计时盖章时兜底（每个内层工具都有耗时）
-        self.tool_started_at: dict[str, int] = {}
-        # 累计工具 id→name（完成也保留）：tool_started_at 只放正在执行的。
-        self.tool_history: dict[str, str] = {}
-        # 子图上下文压缩事件（压缩节点 updates 里的 context_compression_events）
-        self.compression_events: list[dict[str, Any]] = []
-        self.seen_compression_ids: set[str] = set()
-
-    def resolve_anonymous_id(self, message: Any) -> str:
-        """给缺失 id 的消息生成稳定 id。
-
-        按对象身份缓存：同一条消息（无 id）可能出现在多个节点的 updates 里，
-        必须收敛到同一个 id，否则 seen_ids 去重失效、前端会渲染出重复条目。
-        消息对象在 collected 中持有强引用，``id()`` 作为 key 不会被复用。
-        """
-        key = id(message)
-        generated = self.anonymous_ids.get(key)
-        if generated is None:
-            generated = f"{self.parent_tool_call_id or 'subagent'}:anon-{next(self.anonymous_seq)}"
-            self.anonymous_ids[key] = generated
-        return generated
-
-    def emit_messages_chunk(self, chunk_obj: Any, writer: Any) -> None:
-        """messages 模式：正文/思考增量转发并记录已达标的 message id。"""
-        for event in _iter_chunk_stream_events(
-            chunk_obj,
-            self.parent_tool_call_id,
-            self.text_caps,
-            self.think_caps,
-            self.text_markup_filters,
-        ):
-            if event["event_type"] == "subagent_message_delta":
-                self.streamed_text_ids.add(event["message_id"])
-            else:
-                self.streamed_think_ids.add(event["message_id"])
-            _emit_subagent_tool_event(writer, event)
-
-    def collect_update_messages(self, update: dict[str, Any]) -> list:
-        """updates 模式：收集本节点新增消息（去重后），返回给事件提取。
-
-        子图压缩（``ContextCompressionMiddleware.before_model`` 是独立图节点，
-        其 state 更新会作为节点更新出现在 updates 流）以
-        ``[RemoveMessage(REMOVE_ALL_MESSAGES), *compressed]`` 整体替换消息列表：
-        此时 ``collected``/``seen_ids`` 必须按压缩后列表重建，否则会滞留已被
-        丢弃的旧消息——用量徽标虚高、trail 混入已压缩内容、最终报告取到旧文。
-        压缩保留的是早先已见过的同一批消息对象，重建时不再作为「新增」外发，
-        避免前端收到重复的 message / tool_started 条目。
-        """
-        new_messages: list = []
-        for node_result in update.values():
-            if not isinstance(node_result, dict):
-                continue
-            node_messages = node_result.get("messages") or []
-            if isinstance(node_messages, dict):
-                # 带 reducer 指令的消息更新（如 REMOVE_ALL_MESSAGES），跳过
-                continue
-            if any(isinstance(message, RemoveMessage) for message in node_messages):
-                self._apply_message_removals(node_messages, new_messages)
-                continue
-            for message in node_messages:
-                if isinstance(message, dict):
-                    continue
-                self._collect_new_message(message, new_messages)
-        return new_messages
-
-    def _collect_new_message(self, message: Any, new_messages: list) -> None:
-        """正常节点更新的单条消息收集：按 id 去重后入 collected 并标记为新增。"""
-        message_id = getattr(message, "id", None) or self.resolve_anonymous_id(message)
-        if message_id in self.seen_ids:
-            return
-        self.seen_ids.add(message_id)
-        self.collected.append(message)
-        new_messages.append(message)
-
-    @staticmethod
-    def _parse_removal_update(node_messages: list) -> tuple[bool, set[str]]:
-        """解析移除更新：返回（是否全量替换, 定点删除的消息 id 集合）。"""
-        full_reset = any(
-            isinstance(message, RemoveMessage) and getattr(message, "id", None) == REMOVE_ALL_MESSAGES
-            for message in node_messages
-        )
-        targeted_ids = {
-            str(message.id)
-            for message in node_messages
-            if isinstance(message, RemoveMessage) and getattr(message, "id", None) != REMOVE_ALL_MESSAGES
-        }
-        return full_reset, targeted_ids
-
-    def _drop_collected_messages(self, targeted_ids: set[str]) -> None:
-        """从记账与已收集列表中就地摘除定点删除的消息。
-
-        collected 可能被调用方持有引用（失败路径 trail 快照依赖它），
-        必须原地修改而非重新绑定。
-        """
-        for removed_id in targeted_ids:
-            self.seen_ids.discard(removed_id)
-            self.collected[:] = [
-                message for message in self.collected if str(getattr(message, "id", "") or "") != removed_id
-            ]
-
-    def _apply_message_removals(self, node_messages: list, new_messages: list) -> None:
-        """处理压缩节点的消息移除更新，重建 collected/seen_ids 记账。
-
-        - ``RemoveMessage(REMOVE_ALL_MESSAGES)``：全量替换——collected 清空后
-          按更新里携带的保留消息（compressed 列表）重建；
-        - 按 id 的定点 ``RemoveMessage``：只从记账里摘除对应消息，其余消息
-          沿用既有记账（同一节点更新里未删除的消息不重复入 collected）。
-        """
-        previous_ids = set(self.seen_ids)
-        full_reset, targeted_ids = self._parse_removal_update(node_messages)
-        if full_reset:
-            self.collected.clear()
-            self.seen_ids.clear()
-        else:
-            self._drop_collected_messages(targeted_ids)
-        for message in node_messages:
-            if isinstance(message, (RemoveMessage, dict)):
-                continue
-            message_id = getattr(message, "id", None) or self.resolve_anonymous_id(message)
-            if str(message_id) in targeted_ids or message_id in self.seen_ids:
-                continue
-            self.seen_ids.add(message_id)
-            self.collected.append(message)
-            if message_id not in previous_ids:
-                new_messages.append(message)
-
-
-def _subagent_usage_snapshot(usage_meta: dict[str, int], collected: list) -> dict[str, int]:
-    """按静态口径+已收集消息估算当前子图上下文用量快照。
-
-    两个百分比口径明确分工：
-    - ``percent``：占**模型上下文窗口**比例，与主对话「上下文 N%」同口径，可直接对比；
-    - ``budget_percent``：占**收尾阈值**（窗口 × 压缩触发比例）比例，100% 触发提前收尾，
-      前端用它做告警色/tooltip。
-    """
-    used = usage_meta["static_tokens"] + count_messages_tokens(collected)
-    threshold_tokens = max(usage_meta["threshold_tokens"], 1)
-    context_window = max(int(usage_meta.get("context_window") or threshold_tokens), 1)
-    return {
-        "used_tokens": used,
-        "threshold_tokens": threshold_tokens,
-        "context_window": context_window,
-        "percent": min(int(used * 100 / context_window), 999),
-        "budget_percent": min(int(used * 100 / threshold_tokens), 999),
-    }
-
-
-def _compaction_record_from_event(compaction: Any, seen_ids: set[str]) -> dict[str, Any] | None:
-    """校验并归一一条压缩事件；完成态且首次出现才返回记录。"""
-    if not isinstance(compaction, dict) or compaction.get("phase") != "completed":
-        return None
-    compaction_id = str(compaction.get("id") or "").strip()
-    if not compaction_id or compaction_id in seen_ids:
-        return None
-    seen_ids.add(compaction_id)
-    return {
-        "id": compaction_id,
-        "timestamp": str(compaction.get("timestamp") or ""),
-        "anchor_message_id": str(compaction.get("anchor_message_id") or ""),
-        "estimated_tokens_before": int(compaction.get("estimated_tokens_before") or 0),
-        "estimated_tokens_after": int(compaction.get("estimated_tokens_after") or 0),
-        "estimated_cleared_tokens": int(compaction.get("estimated_cleared_tokens") or 0),
-        "compressed_messages": int(compaction.get("compressed_messages") or 0),
-    }
-
-
-def _forward_subagent_compaction_events(
-    payload: dict,
-    stream_state: "_SubagentStreamState",
-    writer: Any,
-    parent_tool_call_id: str | None,
-) -> None:
-    """把压缩节点更新里的 completed 事件转发为 subagent_context_compression（去重 + 记录）。"""
-    for node_result in payload.values():
-        if not isinstance(node_result, dict):
-            continue
-        for compaction in node_result.get("context_compression_events") or []:
-            record = _compaction_record_from_event(compaction, stream_state.seen_compression_ids)
-            if record is None:
-                continue
-            stream_state.compression_events.append(record)
-            _emit_subagent_tool_event(
-                writer,
-                {
-                    "event_type": SSE_EVENT_SUBAGENT_CONTEXT_COMPRESSION,
-                    "parent_tool_call_id": parent_tool_call_id,
-                    **record,
-                },
-            )
-
-
-def _process_subagent_chunk(
-    chunk: Any, stream_state: "_SubagentStreamState", writer: Any, parent_tool_call_id: str | None
-) -> bool:
-    """消费子图流 chunk；返回是否为 updates 模式。"""
-    if not (isinstance(chunk, tuple) and len(chunk) == 2):
-        return False
-    mode, payload = chunk
-    if mode == "messages":
-        if isinstance(payload, tuple) and len(payload) == 2:
-            stream_state.emit_messages_chunk(payload[0], writer)
-        return False
-    if mode != "updates" or not isinstance(payload, dict):
-        return False
-    new_messages = stream_state.collect_update_messages(payload)
-    _forward_subagent_compaction_events(payload, stream_state, writer, parent_tool_call_id)
-    for event in _iter_subagent_stream_events(
-        new_messages,
-        parent_tool_call_id,
-        stream_state.streamed_text_ids,
-        stream_state.streamed_think_ids,
-        stream_state.resolve_anonymous_id,
-        stream_state.tool_started_at,
-    ):
-        _track_subagent_tool_event(stream_state, event)
-        _emit_subagent_tool_event(writer, event)
-    return True
-
-
-def _track_subagent_tool_event(stream_state: "_SubagentStreamState", event: dict[str, Any]) -> None:
-    """记录累计工具（完成后仍保留），避免进度只剩正在执行的工具数。"""
-    if event.get("event_type") != SSE_EVENT_TOOL_STARTED:
-        return
-    tool_call_id = str(event.get("tool_call_id") or "")
-    if tool_call_id:
-        stream_state.tool_history[tool_call_id] = str(event.get("tool_name") or "")
-
-
-def _resolve_subagent_usage_detail(captured: dict[str, Any] | None) -> dict[str, Any] | None:
-    """从 updates 捕获的 state 明细（已含 breakdown）取最近一次 usage。"""
-    detail = captured.get("token_usage_detail") if isinstance(captured, dict) else None
-    return sanitize_context_usage_for_response(detail) if isinstance(detail, dict) and detail else None
-
-
-def _capture_subagent_token_usage(chunk: Any, captured: dict[str, Any] | None) -> None:
-    """从子图 updates 里抓最近一次 token_usage 明细（ContextUsageMiddleware 写入）。"""
-    if captured is None or not (isinstance(chunk, tuple) and len(chunk) == 2):
-        return
-    mode, payload = chunk
-    if mode != "updates" or not isinstance(payload, dict):
-        return
-    for node_result in payload.values():
-        if not isinstance(node_result, dict):
-            continue
-        detail = node_result.get("token_usage")
-        if isinstance(detail, dict) and detail:
-            captured["token_usage_detail"] = detail
-
-
-async def _run_subagent_with_events(
-    runnable: Any,
-    state: dict[str, Any],
-    config: dict[str, Any],
-    writer: Any,
-    parent_tool_call_id: str | None = None,
-    collected: list | None = None,
-    captured: dict[str, Any] | None = None,
-    usage_meta: dict[str, int] | None = None,
-    on_progress: Callable[[dict[str, Any]], None] | None = None,
-) -> list:
-    """流式运行子图：转发内层事件并返回完整消息列表。
-
-    ``collected`` / ``captured`` / ``usage_meta`` 分别承载已收集消息（失败路径
-    trail 快照）、上下文用量（写入 ToolMessage 供回放）与实时
-    ``subagent_context_usage`` 推送（口径与预算告警共用 ``_subagent_budget_meta``）。
-
-    双模式：``messages`` 转发 token 增量；``updates`` 负责工具生命周期与最终报告，
-    已增量转发的消息只补截断标记（见 ``_iter_subagent_stream_events``）。
-    """
-    stream_state = _SubagentStreamState(parent_tool_call_id)
-    if collected is not None:
-        stream_state.collected = collected
-
-    def _emit_context_usage(*, emit: bool = True) -> dict[str, Any] | None:
-        if usage_meta is None:
-            return None
-        usage: dict[str, Any] = dict(_subagent_usage_snapshot(usage_meta, stream_state.collected))
-        detail = _resolve_subagent_usage_detail(captured)
-        if detail:
-            usage["token_usage_detail"] = detail
-        if emit:
-            _emit_subagent_tool_event(
-                writer,
-                {
-                    "event_type": SSE_EVENT_SUBAGENT_CONTEXT_USAGE,
-                    "parent_tool_call_id": parent_tool_call_id,
-                    **usage,
-                },
-            )
-        return usage
-
-    try:
-        async for chunk in runnable.astream(state, config, stream_mode=["updates", "messages"]):
-            _capture_subagent_token_usage(chunk, captured)
-            if _process_subagent_chunk(chunk, stream_state, writer, parent_tool_call_id):
-                _emit_context_usage()
-            if on_progress is not None:
-                on_progress(_subagent_progress_snapshot(stream_state))
-    finally:
-        # 用量只重算不外发（直播期最后一次已随节点更新发出，避免重复事件），
-        # 异常路径同样交给调用方（失败 ToolMessage 也带用量快照）。
-        if captured is not None:
-            captured["context_usage"] = _emit_context_usage(emit=False)
-            captured["compactions"] = list(stream_state.compression_events)
-    return stream_state.collected
-
-
-def _subagent_progress_snapshot(stream_state: "_SubagentStreamState") -> dict[str, Any]:
-    """后台任务心跳落库用的轻量进度：不携带正文，避免任务账本膨胀。"""
-    last_tool = next(reversed(stream_state.tool_history.values()), "")
-    return {
-        "phase": "running",
-        "message_count": len(stream_state.collected),
-        "tool_calls": len(stream_state.tool_history),
-        "running_tools": len(stream_state.tool_started_at),
-        "last_tool": last_tool,
-    }
-
-
-def _build_subagent_state(runtime: ToolRuntime, description: str) -> dict[str, Any]:
-    state = {key: value for key, value in dict(runtime.state or {}).items() if key in SUBAGENT_STATE_PASSTHROUGH_KEYS}
-    state["messages"] = [HumanMessage(content=description)]
-    return state
-
-
-def _collect_subagent_tool_results(messages: list) -> dict[str, dict[str, Any]]:
-    tool_results: dict[str, dict[str, Any]] = {}
-    for message in messages:
-        if not isinstance(message, ToolMessage):
-            continue
-        tool_call_id = str(getattr(message, "tool_call_id", "") or "")
-        if not tool_call_id:
-            continue
-        raw = _plain_text(getattr(message, "content", ""))
-        tool_results[tool_call_id] = {
-            "status": "error" if str(getattr(message, "status", "") or "") == "error" else "completed",
-            "result": _truncate_text(raw, SUBAGENT_RESULT_PREVIEW_MAX_CHARS),
-            **_read_tool_timing(message),
-        }
-    return tool_results
-
-
-def _trail_message_entry(message: AIMessage, message_id: str) -> dict[str, Any]:
-    text = _sanitize_report_text(_plain_text(getattr(message, "content", "")))
-    thinking = _chunk_reasoning_text(message)
-    return {
-        "kind": "message",
-        "id": message_id,
-        "content": _truncate_text(text, SUBAGENT_MESSAGE_PREVIEW_MAX_CHARS, "内容") if text.strip() else "",
-        "truncated": len(text) > SUBAGENT_MESSAGE_PREVIEW_MAX_CHARS,
-        "thinking": _truncate_text(thinking, SUBAGENT_THINKING_PREVIEW_MAX_CHARS, "思考") if thinking.strip() else "",
-        "thinkingTruncated": len(thinking) > SUBAGENT_THINKING_PREVIEW_MAX_CHARS,
-    }
-
-
-def _trail_tool_entry(tool_call: dict[str, Any], tool_results: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    tool_call_id = str(tool_call.get("id") or "")
-    outcome = tool_results.get(tool_call_id) or {}
-    entry = {
-        "kind": "tool",
-        "id": tool_call_id,
-        "tool_name": str(tool_call.get("name") or ""),
-        "args": coerce_tool_call_args(tool_call.get("args")) or {},
-        "result": outcome.get("result", ""),
-        "status": outcome.get("status", "completed"),
-    }
-    for key in ("started_at_ms", "ended_at_ms"):
-        if isinstance(outcome.get(key), int):
-            entry[key] = outcome[key]
-    return entry
-
-
-def _trail_orphan_tool_entry(
-    message: ToolMessage,
-    tool_results: dict[str, dict[str, Any]],
-) -> dict[str, Any]:
-    tool_call_id = str(getattr(message, "tool_call_id", "") or "")
-    outcome = tool_results[tool_call_id]
-    entry = {
-        "kind": "tool",
-        "id": tool_call_id,
-        "tool_name": str(getattr(message, "name", "") or ""),
-        "args": {},
-        "result": outcome["result"],
-        "status": outcome["status"],
-    }
-    for key in ("started_at_ms", "ended_at_ms"):
-        if isinstance(outcome.get(key), int):
-            entry[key] = outcome[key]
-    return entry
-
-
-def _append_ai_message_trail(
-    message: AIMessage,
-    tool_results: dict[str, dict[str, Any]],
-    trail: list[dict[str, Any]],
-    seen_ids: set[str],
-    anonymous_seq: count,
-) -> None:
-    message_id = str(getattr(message, "id", "") or "") or f"trail-anon-{next(anonymous_seq)}"
-    text = _plain_text(getattr(message, "content", ""))
-    thinking = _chunk_reasoning_text(message)
-    if (text.strip() or thinking.strip()) and message_id not in seen_ids:
-        seen_ids.add(message_id)
-        trail.append(_trail_message_entry(message, message_id))
-    for tool_call in getattr(message, "tool_calls", None) or []:
-        if not isinstance(tool_call, dict):
-            continue
-        tool_call_id = str(tool_call.get("id") or "")
-        if not tool_call_id or tool_call_id in seen_ids:
-            continue
-        seen_ids.add(tool_call_id)
-        trail.append(_trail_tool_entry(tool_call, tool_results))
-
-
-def _build_trail_snapshot(messages: list, compactions: Any = None) -> list[dict[str, Any]]:
-    """把子图消息序列化成与前端 ``SubagentTrailItem`` 同构的过程快照。
-
-    用于历史回放：直播时过程经 SSE custom 流逐条转发，刷新/看历史后由
-    task ToolMessage 的 ``subagent_trail`` 还原。截断口径与 SSE 预览共用
-    同一套常量，保证用户看到的直播内容与历史内容一致。
-
-    - AIMessage → ``message`` 条目（content + reasoning 合并为一条，text 与
-      tool_calls 按「先说后做」输出，顺序与 ``_iter_subagent_stream_events``
-      一致）
-    - ToolMessage → 回填对应内层工具的终态 status 与结果预览
-    """
-    tool_results = _collect_subagent_tool_results(messages)
-
-    trail: list[dict[str, Any]] = []
-    seen_ids: set[str] = set()
-    anonymous_seq = count(1)
-    for message in messages:
-        if isinstance(message, AIMessage):
-            _append_ai_message_trail(message, tool_results, trail, seen_ids, anonymous_seq)
-        elif isinstance(message, ToolMessage):
-            # 内层工具先产生 ToolMessage 后才出现对应 tool_calls 的情形不
-            # 应发生（OpenAI 协议要求先声明后调用）；此处只为容忍乱序输入。
-            tool_call_id = str(getattr(message, "tool_call_id", "") or "")
-            if tool_call_id and tool_call_id not in seen_ids:
-                seen_ids.add(tool_call_id)
-                trail.append(_trail_orphan_tool_entry(message, tool_results))
-    return _insert_trail_compactions(trail, compactions)
-
-
-def _compaction_trail_entry(compaction: Any) -> dict[str, Any] | None:
-    """压缩事件 → 过程快照里的分隔卡条目。"""
-    if not isinstance(compaction, dict):
-        return None
-    return {
-        "kind": "compaction",
-        "id": str(compaction.get("id") or ""),
-        "timestamp": str(compaction.get("timestamp") or ""),
-        "estimated_tokens_before": int(compaction.get("estimated_tokens_before") or 0),
-        "estimated_tokens_after": int(compaction.get("estimated_tokens_after") or 0),
-        "estimated_cleared_tokens": int(compaction.get("estimated_cleared_tokens") or 0),
-        "compressed_messages": int(compaction.get("compressed_messages") or 0),
-        "anchor_message_id": str(compaction.get("anchor_message_id") or ""),
-    }
-
-
-def _trail_insert_index(trail: list[dict[str, Any]], anchor: str) -> int:
-    """锚点消息之后插入；找不到锚点则放在末尾（压缩发生在最新内容附近）。"""
-    if not anchor:
-        return len(trail)
-    for index, item in enumerate(trail):
-        if str(item.get("id") or "") == anchor:
-            return index + 1
-    return len(trail)
-
-
-def _insert_trail_compactions(trail: list[dict[str, Any]], compactions: Any) -> list[dict[str, Any]]:
-    """把压缩事件按锚点消息位置插进过程快照，历史回放与主对话一样在流程中看到分隔卡。"""
-    if not isinstance(compactions, list) or not compactions:
-        return trail
-    merged = list(trail)
-    for compaction in compactions:
-        entry = _compaction_trail_entry(compaction)
-        if entry is None:
-            continue
-        merged.insert(_trail_insert_index(merged, entry["anchor_message_id"]), entry)
-    return merged
 
 
 def _subagent_report_token_limit(runtime: ToolRuntime) -> int | None:
@@ -1628,6 +753,19 @@ def _build_task_result_artifacts(
     return artifacts
 
 
+@dataclass(frozen=True)
+class _TaskExecution:
+    """子图执行的可选控制参数：后台任务、追问、恢复共用一组上下文。"""
+
+    background_task_id: str | None = None
+    background_agent_session_id: str | None = None
+    background_owner_token: str | None = None
+    history: list[Any] | None = None
+    checkpointer: Any = None
+    resume: bool = False
+    resume_value: Any = None
+
+
 async def _build_task_tool_impl(
     specs: list[SubagentSpec],
     compiled: dict[str, Any],
@@ -1640,13 +778,14 @@ async def _build_task_tool_impl(
     offload_report: bool = True,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
     state_sink: dict[str, Any] | None = None,
-    background_task_id: str | None = None,
+    execution: _TaskExecution | None = None,
 ) -> Any:
     """执行单一 task 工具调用：派发子图、收集过程、产出 Command 更新。
 
     ``stream_events=False`` 用于后台子智能体：父级 task 调用已先行返回
     （卡片已关闭），子图过程不再往父流转发，静默执行只留最终报告。
     """
+    execution = execution or _TaskExecution()
     runnable = compiled.get(subagent_type)
     if runnable is None:
         allowed = ", ".join(f"`{name}`" for name in compiled)
@@ -1667,7 +806,7 @@ async def _build_task_tool_impl(
         collected=collected,
         captured=captured,
         progress_callback=progress_callback,
-        background_task_id=background_task_id,
+        execution=execution,
     )
     context_usage = captured.get("context_usage")
     if tool_status == "success" and context_usage and int(context_usage.get("percent", 0) or 0) >= 100:
@@ -1711,18 +850,49 @@ async def _invoke_task_subagent(
     collected: list,
     captured: dict[str, Any],
     progress_callback: Callable[[dict[str, Any]], None] | None,
-    background_task_id: str | None = None,
+    execution: _TaskExecution | None = None,
 ) -> tuple[list, str, str]:
     """运行子图并归一成功/失败结果，失败也保留已收集的过程。"""
+    execution = execution or _TaskExecution()
+    background_task_id = execution.background_task_id
+    background_agent_session_id = execution.background_agent_session_id
+    background_owner_token = execution.background_owner_token
+    history = execution.history
+    checkpointer = execution.checkpointer
+    resume = execution.resume
+    resume_value = execution.resume_value
+    config = build_subagent_invocation_config(
+        spec,
+        default_recursion_limit=await get_runtime_setting("CHAT_DATA_AGENT_RECURSION_LIMIT"),
+        background_task_id=background_task_id,
+        agent_session_id=background_agent_session_id,
+        checkpointer=checkpointer,
+    )
+    initial_messages: list[Any] | None = None
+    if resume:
+        # 恢复时从检查点取完整消息，既不重复注入历史，也让本轮 trail/报告
+        # 能包含中断前的消息。
+        graph_input: Any = Command(resume=resume_value)
+        try:
+            snapshot = await runnable.aget_state(config)
+            values = getattr(snapshot, "values", None)
+            initial_messages = list((values or {}).get("messages") or []) if isinstance(values, dict) else []
+        except Exception:
+            logger.warning("[tools] 读取子图检查点失败，恢复后过程快照可能不完整", exc_info=True)
+            initial_messages = []
+    else:
+        graph_input = _build_subagent_state(
+            runtime,
+            description,
+            history,
+            task_id=background_task_id,
+            owner_token=background_owner_token,
+        )
     try:
         messages = await _run_subagent_with_events(
             runnable,
-            _build_subagent_state(runtime, description),
-            build_subagent_invocation_config(
-                spec,
-                default_recursion_limit=await get_runtime_setting("CHAT_DATA_AGENT_RECURSION_LIMIT"),
-                background_task_id=background_task_id,
-            ),
+            graph_input,
+            config,
             writer,
             runtime.tool_call_id,
             collected=collected,
@@ -1733,7 +903,10 @@ async def _invoke_task_subagent(
                 system_prompt=_subagent_system_prompt(spec),
             ),
             on_progress=progress_callback,
+            initial_messages=initial_messages,
         )
+    except SubagentSuspended:
+        raise
     except Exception as exc:
         # 失败路径同样盖 trail 快照：直播时内层过程已通过 SSE 转发给用户，
         # 若异常直接抛给 tool_error 中间件（无 additional_kwargs），历史里
@@ -1753,55 +926,159 @@ async def _run_background_task(
     runtime: Any,
     specs: list[SubagentSpec],
     compiled: dict[str, Any],
+    *,
+    resumed: bool = False,
+    resume: bool = False,
+    resume_value: Any = None,
 ) -> None:
     """后台子智能体执行体：租约 + 心跳 + 超时 + 取消收口。"""
     service = get_subagent_task_service()
     if service is None:
         logger.error("[tools] 后台任务账本服务未初始化，无法执行: task_id=%s", record.task_id)
         return
-    started = await service.start_task(record.task_id, record.owner_token or "")
-    if started is None:
-        logger.info("[tools] 后台任务已取消或归属变化，跳过执行: task_id=%s", record.task_id)
-        return
+    if not resumed:
+        started = await service.start_task(record.task_id, record.owner_token or "")
+        if started is None:
+            logger.info("[tools] 后台任务已取消或归属变化，跳过执行: task_id=%s", record.task_id)
+            return
+    history = [] if resume else await _load_background_history(service, record)
     progress: dict[str, Any] = {"phase": "running"}
     partial_state: dict[str, Any] = {}
     event_writer = service.create_event_writer(record)
     await event_writer.start()
-    watcher = asyncio.create_task(
-        _watch_background_task(
+    outcome, suspended = await _execute_background_attempt(
+        record,
+        runtime,
+        specs,
+        compiled,
+        progress,
+        partial_state,
+        event_writer,
+        history,
+        resume=resume,
+        resume_value=resume_value,
+    )
+    if suspended is not None:
+        status = (
+            TASK_STATUS_PAUSED if suspended.payload.get("kind") == "subagent_pause" else TASK_STATUS_WAITING_APPROVAL
+        )
+        await service.suspend_task(
             record.task_id,
             record.owner_token or "",
-            progress,
-            asyncio.current_task(),
-            service,
-        ),
-        name=f"chatdata-subagent-watch-{record.task_id}",
+            status=status,
+            interrupt_payload=suspended.payload,
+        )
+        return
+    assert outcome is not None
+    await _finish_background_task(service, record, history, partial_state, outcome)
+
+
+async def _load_background_history(service: SubagentTaskPort, record: SubagentTaskView) -> list[Any]:
+    """追问轮次的前置历史；快照缺失时退回上一轮任务书+报告。"""
+    if not record.parent_task_id:
+        return []
+    payloads = await service.load_session_messages(
+        record.agent_session_id,
+        conversation_id=record.conversation_id,
+        user_id=record.user_id,
+        # 追问第 N 轮前，快照至少应覆盖到第 N-1 轮；落后说明上一轮写入失败。
+        expected_turn_index=max(record.turn_index - 1, 0),
     )
-    try:
-        try:
-            outcome = await _run_background_attempt(
-                record,
-                runtime,
-                specs,
-                compiled,
-                progress,
-                partial_state,
-                stream_writer=event_writer,
+    if not payloads:
+        parent = await service.get_task(
+            record.parent_task_id,
+            conversation_id=record.conversation_id,
+            user_id=record.user_id,
+        )
+        if parent is not None:
+            payloads = _legacy_session_history(parent)
+            logger.info(
+                "[tools] 追问任务缺少会话快照，使用上一轮任务书+报告兜底: task_id=%s parent=%s",
+                record.task_id,
+                record.parent_task_id,
             )
-        except asyncio.CancelledError:
+    return deserialize_subagent_messages(payloads)
+
+
+async def _execute_background_attempt(
+    record: SubagentTaskView,
+    runtime: Any,
+    specs: list[SubagentSpec],
+    compiled: dict[str, Any],
+    progress: dict[str, Any],
+    partial_state: dict[str, Any],
+    event_writer: Any,
+    history: list[Any],
+    *,
+    resume: bool,
+    resume_value: Any,
+) -> tuple[tuple[str, str, str, dict[str, Any]] | None, SubagentSuspended | None]:
+    """在独立检查点内跑一次执行体；返回正常结果或中断载荷。"""
+    service = get_subagent_task_service()
+    assert service is not None
+    async with AsyncExitStack() as stack:
+        checkpointer = await _open_subgraph_checkpointer(stack, record.task_id)
+        watcher = asyncio.create_task(
+            _watch_background_task(
+                record.task_id,
+                record.owner_token or "",
+                progress,
+                asyncio.current_task(),
+                service,
+            ),
+            name=f"chatdata-subagent-watch-{record.task_id}",
+        )
+        try:
+            try:
+                return await _run_background_attempt(
+                    record,
+                    runtime,
+                    specs,
+                    compiled,
+                    progress,
+                    partial_state,
+                    stream_writer=event_writer,
+                    history=history,
+                    checkpointer=checkpointer,
+                    resume=resume,
+                    resume_value=resume_value,
+                ), None
+            except SubagentSuspended as exc:
+                return None, exc
+            except asyncio.CancelledError:
+                await _finish_cancelled_background_task(service, record, partial_state, history=history)
+                raise
+        finally:
             await event_writer.aclose()
-            await _finish_cancelled_background_task(service, record, partial_state)
-            raise
-        except Exception:
-            await event_writer.aclose()
-            raise
-        else:
-            await event_writer.aclose()
-    finally:
-        watcher.cancel()
-        with suppress(asyncio.CancelledError):
-            await watcher
+            watcher.cancel()
+            with suppress(asyncio.CancelledError):
+                await watcher
+
+
+async def _open_subgraph_checkpointer(stack: AsyncExitStack, task_id: str) -> Any:
+    """检查点生命周期跟随执行体；初始化失败降级为无检查点。"""
+    try:
+        # 子图检查点不继承父 Run；多 worker 也能从数据库恢复同一
+        # agent_session + task 命名空间。
+        return await stack.enter_async_context(get_checkpointer())
+    except Exception:
+        logger.warning(
+            "[tools] 子图检查点初始化失败，暂停/审批将不可用，按无检查点执行: task_id=%s",
+            task_id,
+            exc_info=True,
+        )
+        return None
+
+
+async def _finish_background_task(
+    service: SubagentTaskPort,
+    record: SubagentTaskView,
+    history: list[Any],
+    partial_state: dict[str, Any],
+    outcome: tuple[str, str, str, dict[str, Any]],
+) -> None:
     status, report, error, result_meta = outcome
+    history_payload = _session_history_payload(record, history, partial_state)
     await service.finish_task(
         record.task_id,
         record.owner_token or "",
@@ -1809,6 +1086,7 @@ async def _run_background_task(
         report=report,
         error=error,
         result_meta=result_meta,
+        history=history_payload,
     )
     try:
         await service.dispatch_pending_notifications(limit=1)
@@ -1825,6 +1103,10 @@ async def _run_background_attempt(
     partial_state: dict[str, Any],
     *,
     stream_writer: Callable[[Any], None] | None = None,
+    history: list[Any] | None = None,
+    checkpointer: Any = None,
+    resume: bool = False,
+    resume_value: Any = None,
 ) -> tuple[str, str, str, dict[str, Any]]:
     try:
         command = await asyncio.wait_for(
@@ -1841,12 +1123,22 @@ async def _run_background_attempt(
                 offload_report=False,
                 progress_callback=lambda snapshot: progress.update(snapshot),
                 state_sink=partial_state,
-                background_task_id=record.task_id,
+                execution=_TaskExecution(
+                    background_task_id=record.task_id,
+                    background_agent_session_id=getattr(record, "agent_session_id", None),
+                    background_owner_token=getattr(record, "owner_token", None),
+                    history=history,
+                    checkpointer=checkpointer,
+                    resume=resume,
+                    resume_value=resume_value,
+                ),
             ),
             timeout=record.timeout_seconds,
         )
     except TimeoutError:
         return _timeout_background_outcome(record, partial_state)
+    except SubagentSuspended:
+        raise
     except Exception as exc:
         return _failed_background_outcome(record, exc, partial_state)
     status, report, error, result_meta = _extract_background_result(command)
@@ -1884,6 +1176,8 @@ async def _finish_cancelled_background_task(
     service: SubagentTaskPort,
     record: SubagentTaskView,
     partial_state: dict[str, Any],
+    *,
+    history: list[Any] | None = None,
 ) -> None:
     """取消/进程中断时先落终态再继续向上抛，保留中断前过程。"""
     current_record = await service.get_task(record.task_id)
@@ -1898,7 +1192,25 @@ async def _finish_cancelled_background_task(
         report=_append_partial_report(report, partial_report),
         error=str(current_record.error if current_record else ""),
         result_meta=result_meta,
+        history=_session_history_payload(record, history or [], partial_state),
     )
+
+
+def _session_history_payload(
+    record: SubagentTaskView,
+    history: list[Any],
+    partial_state: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """收口时落会话快照：优先用最终状态追踪结果，缺失时用“历史+本轮新增”兜底。"""
+    captured = partial_state.get("captured")
+    final_messages = captured.get("final_messages") if isinstance(captured, dict) else None
+    if not isinstance(final_messages, list) or not final_messages:
+        final_messages = [
+            *history,
+            HumanMessage(content=record.description),
+            *list(partial_state.get("messages") or []),
+        ]
+    return serialize_subagent_messages(list(final_messages))
 
 
 def _capture_partial_background_result(state_sink: dict[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -1937,6 +1249,270 @@ def _extract_background_result(command: Any) -> tuple[str, str, str, dict[str, A
     return TASK_STATUS_COMPLETED, report, "", result_meta
 
 
+class _BackgroundRunnableCache:
+    """后台/追问共用一套独立子图；首次需要时编译，避免前台每轮重复占用。"""
+
+    def __init__(self, specs: list[SubagentSpec]) -> None:
+        self._specs = specs
+        self._compiled: dict[str, Any] | None = None
+
+    def get(self) -> dict[str, Any]:
+        if self._compiled is None:
+            # 后台/追问走独立检查点，需要控制与审批中间件；前台同步派发仍用
+            # build_task_tool 里未启用控制的编译结果。
+            self._compiled = {spec.name: _compile_subagent(spec, control_enabled=True) for spec in self._specs}
+        return self._compiled
+
+
+async def _follow_up_task_action(
+    *,
+    task_id: str | None,
+    message: str | None,
+    runtime: ToolRuntime,
+    run_controls: Any,
+    specs: list[SubagentSpec],
+    background_runnables: dict[str, Any],
+) -> str:
+    return await _spawn_follow_up_task(
+        task_id=task_id,
+        message=message,
+        available_types=set(background_runnables),
+        runtime=runtime,
+        run_controls=run_controls,
+        runner_factory=lambda record, snapshot: _run_background_task(record, snapshot, specs, background_runnables),
+    )
+
+
+async def _start_task_action(
+    *,
+    description: str | None,
+    subagent_type: str | None,
+    background: bool,
+    label: str | None,
+    timeout_seconds: int | None,
+    runtime: ToolRuntime,
+    run_controls: Any,
+    specs: list[SubagentSpec],
+    compiled: dict[str, Any],
+    background_cache: _BackgroundRunnableCache,
+) -> Command | str:
+    if not description or not description.strip():
+        return 'action="start" 需要提供 description（任务书）。'
+    if not subagent_type or not subagent_type.strip():
+        return 'action="start" 需要提供 subagent_type。'
+    if background and compiled.get(subagent_type) is None:
+        allowed = ", ".join(f"`{name}`" for name in compiled)
+        return f"无法调用子智能体 {subagent_type}：类型不存在，可用类型为 {allowed}"
+    if not background:
+        return await _build_task_tool_impl(specs, compiled, subagent_type, description, runtime)
+    background_runnables = background_cache.get()
+    return await _spawn_background_task(
+        subagent_type=subagent_type,
+        description=description,
+        label=label,
+        timeout_seconds=timeout_seconds,
+        runtime=runtime,
+        run_controls=run_controls,
+        runner_factory=lambda record, snapshot: _run_background_task(record, snapshot, specs, background_runnables),
+    )
+
+
+def _build_approval_resume_value(pending: Any, decision: str) -> dict[str, Any] | None:
+    """把主智能体的 allow/deny 归一成审批中间件期望的 answers 结构。"""
+    label = "拒绝" if decision == "deny" else "允许"
+    items = pending.get("approval_items") if isinstance(pending, dict) else None
+    if isinstance(items, list) and len(items) > 1:
+        answers = [
+            {"id": str(item.get("call_id") or ""), "selected": [label]}
+            for item in items
+            if isinstance(item, dict) and item.get("call_id")
+        ]
+        return {"answers": answers} if answers else None
+    if isinstance(pending, dict) and pending.get("kind") == "approval":
+        return {"answers": [{"id": "approval", "selected": [label]}]}
+    return None
+
+
+async def _control_task_action(
+    *,
+    action: str,
+    task_id: str | None,
+    message: str | None,
+    decision: str,
+    runtime: ToolRuntime,
+    run_controls: Any,
+    specs: list[SubagentSpec],
+    background_runnables: dict[str, Any],
+) -> str:
+    service = get_subagent_task_service()
+    if service is None:
+        return "子智能体控制失败：任务账本服务未初始化。"
+    normalized = str(task_id or "").strip()
+    if not normalized:
+        return f'action="{action}" 需要提供 task_id。'
+    conversation_id, user_id, operator_name, _ = _read_conversation_context(runtime, run_controls)
+    if not user_id:
+        return "无法操作子智能体：当前会话缺少用户身份。"
+    target = await service.get_task(normalized, conversation_id=conversation_id, user_id=user_id)
+    if target is None:
+        return f'子智能体任务 {normalized} 不存在。可用 task(action="list") 查看当前会话任务。'
+    if action == "steer":
+        return await _control_steer(
+            service,
+            target,
+            normalized,
+            conversation_id=conversation_id,
+            user_id=user_id,
+            message=message,
+            operator_name=operator_name,
+        )
+    if action == "pause":
+        return await _control_pause(
+            service,
+            target,
+            normalized,
+            conversation_id=conversation_id,
+            user_id=user_id,
+            operator_name=operator_name,
+        )
+    return await _control_resume(
+        action,
+        service,
+        target,
+        normalized,
+        decision=decision,
+        conversation_id=conversation_id,
+        user_id=user_id,
+        runtime=runtime,
+        specs=specs,
+        background_runnables=background_runnables,
+    )
+
+
+async def _control_steer(
+    service: SubagentTaskPort,
+    target: SubagentTaskView,
+    task_id: str,
+    *,
+    conversation_id: str,
+    user_id: str,
+    message: str | None,
+    operator_name: str,
+) -> str:
+    status_label = TASK_STATUS_LABELS.get(target.status, target.status)
+    if target.is_terminal:
+        return f"任务已是{status_label}，不能再插话；需要继续分析请用 follow_up。"
+    if not str(message or "").strip():
+        return 'action="steer" 需要提供 message。'
+    record = await service.enqueue_steer_message(
+        task_id,
+        conversation_id=conversation_id,
+        user_id=user_id,
+        message=str(message),
+        operator_name=operator_name,
+    )
+    if record is None:
+        return "插话未送达：任务已结束或状态已变化。"
+    if record.status in SUSPENDED_TASK_STATUSES:
+        return "插话已排队，将在任务恢复后、下一次模型调用前注入。"
+    return "插话已排队，将在子智能体下一次模型调用前注入。"
+
+
+async def _control_pause(
+    service: SubagentTaskPort,
+    target: SubagentTaskView,
+    task_id: str,
+    *,
+    conversation_id: str,
+    user_id: str,
+    operator_name: str,
+) -> str:
+    if target.is_terminal:
+        status_label = TASK_STATUS_LABELS.get(target.status, target.status)
+        return f"任务已是{status_label}，无需暂停。"
+    record = await service.request_pause(
+        task_id,
+        conversation_id=conversation_id,
+        user_id=user_id,
+        operator_name=operator_name,
+    )
+    if record is None:
+        return "暂停请求未生效：任务不存在或状态已变化。"
+    if record.status == TASK_STATUS_PAUSED:
+        return f'子智能体已暂停（task_id={task_id}）。可用 task(action="resume", task_id=...) 恢复。'
+    return "暂停请求已提交：子智能体会在下一个模型调用前中断，届时状态变为已暂停。"
+
+
+async def _control_resume(
+    action: str,
+    service: SubagentTaskPort,
+    target: SubagentTaskView,
+    task_id: str,
+    *,
+    decision: str,
+    conversation_id: str,
+    user_id: str,
+    runtime: ToolRuntime,
+    specs: list[SubagentSpec],
+    background_runnables: dict[str, Any],
+) -> str:
+    status_label = TASK_STATUS_LABELS.get(target.status, target.status)
+    if target.status not in SUSPENDED_TASK_STATUSES:
+        return (
+            f"任务当前为{status_label}，不需要 {action}。"
+            "只有 paused / waiting_approval 状态可用 resume/approve/reject。"
+        )
+    pending = target.meta.get("pending_interrupt")
+    resume_value, verdict, error = _prepare_resume(action, target.status, pending, decision)
+    if error:
+        return error
+    resumed = await service.resume_task(
+        task_id,
+        conversation_id=conversation_id,
+        user_id=user_id,
+        resume_value=resume_value,
+    )
+    if resumed is None:
+        return "恢复失败：任务状态已变化，请先 check 最新状态。"
+    record, value = resumed
+    _launch_task_runner(
+        service,
+        record,
+        runtime,
+        lambda resumed_record, snapshot: _run_background_task(
+            resumed_record,
+            snapshot,
+            specs,
+            background_runnables,
+            resumed=True,
+            resume=bool(pending),
+            resume_value=value,
+        ),
+    )
+    return f"子智能体任务 {task_id} {verdict}，已在后台继续执行；完成/失败仍会按原方式通知当前会话。"
+
+
+def _prepare_resume(
+    action: str,
+    status: str,
+    pending: Any,
+    decision: str,
+) -> tuple[dict[str, Any] | None, str, str]:
+    """校验挂起状态并构造恢复值；返回 (resume_value, verdict, error)。"""
+    status_label = TASK_STATUS_LABELS.get(status, status)
+    if action in {"approve", "reject"}:
+        if status != TASK_STATUS_WAITING_APPROVAL:
+            return None, "", f"任务当前为{status_label}，没有待审批操作。"
+        effective_decision = "deny" if action == "reject" else ("allow" if action == "approve" else decision)
+        resume_value = _build_approval_resume_value(pending, effective_decision)
+        if resume_value is None:
+            return None, "", "待审批载荷缺失或格式异常，无法恢复；可取消后重新派发。"
+        return resume_value, "已拒绝" if effective_decision == "deny" else "已批准", ""
+    if status != TASK_STATUS_PAUSED:
+        return None, "", f"任务当前为{status_label}，不需要恢复。"
+    return {"kind": "subagent_pause", "action": "resume"}, "已恢复", ""
+
+
 def build_task_tool(specs: list[SubagentSpec], run_controls: Any = None) -> StructuredTool:
     """构建单一 ``task`` 工具：派发子智能体，并管理后台任务。
 
@@ -1946,59 +1522,68 @@ def build_task_tool(specs: list[SubagentSpec], run_controls: Any = None) -> Stru
     """
     validate_subagent_specs(specs)
     compiled = {spec.name: _compile_subagent(spec, run_controls=run_controls) for spec in specs}
-    background_compiled: dict[str, Any] | None = None
+    background_cache = _BackgroundRunnableCache(specs)
     available = "\n".join(f"- {spec.name}: {spec.description}" for spec in specs)
 
     async def atask(
         runtime: ToolRuntime,
-        action: Literal["start", "list", "check", "wait", "cancel"] = "start",
+        action: Literal[
+            "start", "list", "check", "wait", "cancel", "follow_up", "steer", "pause", "resume", "approve", "reject"
+        ] = "start",
         description: str | None = None,
         subagent_type: str | None = None,
         background: bool = False,
         label: str | None = None,
         timeout_seconds: int | None = None,
         task_id: str | None = None,
+        message: str | None = None,
+        decision: Literal["allow", "deny"] = "allow",
         task_ids: list[str] | None = None,
         status: str | None = None,
-        limit: int = 20,
         wait_seconds: int = DEFAULT_WAIT_TIMEOUT_SECONDS,
     ) -> Command | str:
+        if action == "follow_up":
+            return await _follow_up_task_action(
+                task_id=task_id,
+                message=message,
+                runtime=runtime,
+                run_controls=run_controls,
+                specs=specs,
+                background_runnables=background_cache.get(),
+            )
+        if action in {"steer", "pause", "resume", "approve", "reject"}:
+            return await _control_task_action(
+                action=action,
+                task_id=task_id,
+                message=message,
+                decision=decision,
+                runtime=runtime,
+                run_controls=run_controls,
+                specs=specs,
+                background_runnables=background_cache.get(),
+            )
         if action != "start":
             return await manage_async_task(
-                action,
+                cast(Literal["list", "check", "wait", "cancel"], action),
                 runtime=runtime,
                 task_id=task_id,
                 task_ids=task_ids,
                 status=status,
-                limit=limit,
+                limit=20,
                 wait_seconds=wait_seconds,
             )
-        if not description or not description.strip():
-            return 'action="start" 需要提供 description（任务书）。'
-        if not subagent_type or not subagent_type.strip():
-            return 'action="start" 需要提供 subagent_type。'
-        if background and compiled.get(subagent_type) is None:
-            allowed = ", ".join(f"`{name}`" for name in compiled)
-            return f"无法调用子智能体 {subagent_type}：类型不存在，可用类型为 {allowed}"
-        if background:
-            nonlocal background_compiled
-            if background_compiled is None:
-                # 后台任务的生命周期独立于派发它的父 Run：不能挂父 Run 的
-                # 执行围栏（owner_token 会随父 Run 收口失效），否则任务在
-                # 后台继续跑时每个内层工具都会被判成「租约丢失」。
-                background_compiled = {spec.name: _compile_subagent(spec) for spec in specs}
-            return await _spawn_background_task(
-                subagent_type=subagent_type,
-                description=description,
-                label=label,
-                timeout_seconds=timeout_seconds,
-                runtime=runtime,
-                run_controls=run_controls,
-                runner_factory=lambda record, snapshot: _run_background_task(
-                    record, snapshot, specs, background_compiled
-                ),
-            )
-        return await _build_task_tool_impl(specs, compiled, subagent_type, description, runtime)
+        return await _start_task_action(
+            description=description,
+            subagent_type=subagent_type,
+            background=background,
+            label=label,
+            timeout_seconds=timeout_seconds,
+            runtime=runtime,
+            run_controls=run_controls,
+            specs=specs,
+            compiled=compiled,
+            background_cache=background_cache,
+        )
 
     return StructuredTool.from_function(
         name=TASK_TOOL_NAME,

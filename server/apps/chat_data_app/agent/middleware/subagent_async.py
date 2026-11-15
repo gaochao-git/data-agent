@@ -88,7 +88,9 @@ def _task_progress_text(record: SubagentTaskView) -> str:
 
 def _format_task_status(record: SubagentTaskView) -> str:
     label = TASK_STATUS_LABELS.get(record.status, record.status)
-    prefix = f"[{label}] task_id={record.task_id} 类型={record.subagent_type} 任务={record.label}"
+    turn_index = int(getattr(record, "turn_index", 1) or 1)
+    turn = f" 轮次={turn_index}" if turn_index > 1 else ""
+    prefix = f"[{label}] task_id={record.task_id}{turn} 类型={record.subagent_type} 任务={record.label}"
     if record.is_terminal:
         return prefix
     return f"{prefix}\n  {_task_progress_text(record)}"
@@ -97,9 +99,11 @@ def _format_task_status(record: SubagentTaskView) -> str:
 def _format_task_report(record: SubagentTaskView) -> str:
     """终态任务报告：有落盘路径返回路径+预览，否则直接返回完整正文。"""
     body = record.report or record.error or "（无报告正文）"
+    session_id = str(getattr(record, "agent_session_id", "") or getattr(record, "root_task_id", "") or record.task_id)
+    turn_index = int(getattr(record, "turn_index", 1) or 1)
     lines = [
         f"[{TASK_STATUS_LABELS.get(record.status, record.status)}] task_id={record.task_id} "
-        f"类型={record.subagent_type}",
+        f"类型={record.subagent_type} 子会话={session_id} 轮次={turn_index}",
         f"任务：{record.label}",
     ]
     report_path = str(getattr(record, "report_path", "") or "")
@@ -113,6 +117,8 @@ def _format_task_report(record: SubagentTaskView) -> str:
         )
     else:
         lines.append(f"报告：{body}")
+    if record.is_terminal:
+        lines.append(f'可基于同一子会话继续追问：task(action="follow_up", task_id="{record.task_id}", message="...")。')
     return "\n".join(lines)
 
 
@@ -154,6 +160,27 @@ async def _spawn_background_task(
         )
         return "后台子智能体启动失败：任务登记未成功，请稍后重试或改为同步执行。"
 
+    _launch_task_runner(service, record, runtime, runner_factory)
+    logger.info(
+        "[tools] 子智能体已转入后台执行: task_id=%s type=%s conversation_id=%s",
+        record.task_id,
+        subagent_type,
+        conversation_id,
+    )
+    return (
+        f"子智能体已在后台启动（task_id={record.task_id}，类型={subagent_type}）。"
+        f"超时={record.timeout_seconds} 秒。任务不会阻塞当前对话：完成/失败/超时后系统会自动唤醒"
+        "一条隐藏通知（不需要等用户先发消息）；期间可继续其他工作，也可用 "
+        'task 查询：action="list" 列任务，action="check" 查单个，action="wait" 等结果。'
+    )
+
+
+def _launch_task_runner(
+    service: SubagentTaskPort,
+    record: SubagentTaskView,
+    runtime: ToolRuntime,
+    runner_factory: Callable[[SubagentTaskView, Any], Coroutine[Any, Any, None]],
+) -> None:
     snapshot = service.snapshot_runtime(runtime)
     task = asyncio.create_task(
         runner_factory(record, snapshot),
@@ -169,17 +196,102 @@ async def _spawn_background_task(
             logger.error("[tools] 后台任务协程异常退出: task_id=%s", record.task_id, exc_info=exc)
 
     task.add_done_callback(_on_done)
+
+
+async def _spawn_follow_up_task(
+    *,
+    task_id: str | None,
+    message: str | None,
+    available_types: set[str],
+    runtime: ToolRuntime,
+    run_controls: Any,
+    runner_factory: Callable[[SubagentTaskView, Any], Coroutine[Any, Any, None]],
+) -> str:
+    """对已结束的子智能体发起下一轮；沿用同一子会话历史。"""
+    normalized = _clean_task_id(task_id)
+    content = str(message or "").strip()
+    if not normalized:
+        return "action=follow_up 需要提供 task_id（要追问的子智能体任务）。"
+    if not content:
+        return "action=follow_up 需要提供 message（追问内容）。"
+    conversation_id, user_id, operator_name, parent_run_id = _read_conversation_context(runtime, run_controls)
+    if not user_id:
+        return "无法追问子智能体：当前会话缺少用户身份。"
+    service = _task_service()
+    if service is None:
+        return "子智能体追问失败：任务账本服务未初始化。"
+    target = await service.get_task(
+        normalized,
+        conversation_id=conversation_id,
+        user_id=user_id,
+    )
+    if target is None:
+        return f'子智能体任务 {normalized} 不存在。可用 task(action="list") 查看当前会话任务。'
+    if not target.is_terminal:
+        return (
+            f"子智能体任务 {normalized} 仍在执行（{TASK_STATUS_LABELS.get(target.status, target.status)}），"
+            '不能追问；可先用 task(action="wait") 等结果，或 task(action="cancel") 取消后再开始新一轮。'
+        )
+    if target.subagent_type not in available_types:
+        return f"子智能体类型 {target.subagent_type} 当前未启用，无法追问。"
+    active = await service.find_active_task_in_session(
+        target.agent_session_id,
+        conversation_id=conversation_id,
+        user_id=user_id,
+    )
+    if active is not None:
+        return (
+            f"该子智能体已有进行中的追问任务 {active.task_id}（{TASK_STATUS_LABELS.get(active.status, active.status)}），"
+            "请等待其结束或先取消，再发起下一轮。"
+        )
+    # 用户可能从任意历史任务卡发起追问；子会话应始终从最新一轮线性续写，
+    # 避免 parent/turn_index 指回旧分支，而上下文却是最新快照。
+    base = await service.get_latest_task_in_session(
+        target.agent_session_id,
+        conversation_id=conversation_id,
+        user_id=user_id,
+    )
+    if base is None or base.turn_index < target.turn_index:
+        # 快照更新失败时 latest_task_id 可能仍指向旧轮次；宁可锚定用户指定的
+        # 终态任务，也不能把新追问接到更早的 parent 上。
+        base = target
+    try:
+        record = await service.create_task(
+            conversation_id=conversation_id,
+            user_id=user_id,
+            parent_run_id=parent_run_id,
+            subagent_type=target.subagent_type,
+            description=content,
+            label=None,
+            parent_tool_call_id=str(getattr(runtime, "tool_call_id", "") or ""),
+            parent_owner_token=str(getattr(run_controls, "owner_token", None) or ""),
+            timeout_seconds=None,
+            operator_name=operator_name,
+            parent_task_id=base.task_id,
+            agent_session_id=base.agent_session_id,
+        )
+    except SubagentTaskCapacityError as exc:
+        return str(exc)
+    except Exception:
+        logger.error(
+            "[tools] 子智能体追问任务登记失败: task_id=%s parent=%s",
+            normalized,
+            target.task_id,
+            exc_info=True,
+        )
+        return "子智能体追问失败：任务登记未成功，请稍后重试。"
+    _launch_task_runner(service, record, runtime, runner_factory)
     logger.info(
-        "[tools] 子智能体已转入后台执行: task_id=%s type=%s conversation_id=%s",
+        "[tools] 子智能体追问已转入后台: task_id=%s parent=%s session=%s",
         record.task_id,
-        subagent_type,
-        conversation_id,
+        base.task_id,
+        base.agent_session_id,
     )
     return (
-        f"子智能体已在后台启动（task_id={record.task_id}，类型={subagent_type}）。"
-        f"超时={record.timeout_seconds} 秒。任务不会阻塞当前对话：完成/失败/超时后系统会自动唤醒"
-        "一条隐藏通知（不需要等用户先发消息）；期间可继续其他工作，也可用 "
-        'task 查询：action="list" 列任务，action="check" 查单个，action="wait" 等结果。'
+        f"已向子智能体 {target.subagent_type} 发起第 {record.turn_index} 轮追问"
+        f"（task_id={record.task_id}，子会话={record.agent_session_id}，上一轮={base.task_id}）。"
+        "任务在后台执行，会沿用该子会话的完整消息历史；完成后自动唤醒并注入通知，"
+        f'也可用 task(action="check", task_id="{record.task_id}") 查询。'
     )
 
 

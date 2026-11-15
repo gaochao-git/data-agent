@@ -248,6 +248,7 @@ def test_build_subagent_middleware_plan_keeps_only_inventory_tools(monkeypatch, 
         SimpleNamespace(name="file_read"),
         SimpleNamespace(name="file_write"),
         SimpleNamespace(name="bash_run"),
+        SimpleNamespace(name="task"),
         SimpleNamespace(name="officecli_run"),
         SimpleNamespace(name="ask_user_question"),
         SimpleNamespace(name="present_artifacts"),
@@ -291,6 +292,9 @@ def test_build_subagent_middleware_supports_all_specs(monkeypatch, tmp_path):
     plan_tools = [tool.name for tool in middleware.specs[1].tools]
     assert explore_tools == ["file_read"]
     assert plan_tools == ["file_read", "file_write"]
+    # 即使主图工具列表里带了 task，也不能透传给子图——否则会形成无限嵌套派发。
+    assert "task" not in explore_tools
+    assert "task" not in plan_tools
     # task 工具描述中列出全部类型
     assert "explore" in middleware.tools[0].description
     assert "plan" in middleware.tools[0].description

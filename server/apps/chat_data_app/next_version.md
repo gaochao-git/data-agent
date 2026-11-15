@@ -1,79 +1,20 @@
-# 下一版本变更
+# 下一版本数据库变更
 
-## 数据库变更
+以下 DDL 由发布流程/DBA 在上线前手工执行，应用启动不会自动建表。
+
+## 子智能体多轮会话快照
 
 上线前执行：
 
 ```sql
-CREATE TABLE `chat_data_meta_global_enum` (
-  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键ID',
-  `business_domain` varchar(128) NOT NULL DEFAULT '' COMMENT '业务域（如支付业务、信贷业务），空为通用域；不同域同名枚举互相隔离',
-  `enum_name` varchar(128) NOT NULL COMMENT '全局枚举名，仅字母数字下划线，域内唯一',
-  `enum_desc` varchar(512) NOT NULL DEFAULT '' COMMENT '枚举说明',
-  `enum_json` text NOT NULL COMMENT '枚举值JSON文本: [{"value":"...","label":"..."}]',
-  `delete_flag` tinyint NOT NULL DEFAULT '0' COMMENT '删除标识: 0-未删除, 1-已删除',
-  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  `create_by` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人ID',
-  `create_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人名称',
-  `update_by` varchar(100) NOT NULL DEFAULT '' COMMENT '修改人ID',
-  `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '修改人名称',
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `uniq_domain_enum_name` (`business_domain`,`enum_name`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='全局枚举表';
-
-CREATE TABLE `chat_data_setting` (
-  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键ID',
-  `setting_key` varchar(128) NOT NULL COMMENT '变量名，与 env 同名',
-  `setting_value` varchar(2048) NOT NULL COMMENT '变量值（字符串存储，按注册类型解析）',
-  `delete_flag` tinyint NOT NULL DEFAULT '0' COMMENT '删除标识 0未删除 1已删除（即重置回退）',
-  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  `create_by` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人ID',
-  `create_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人名称',
-  `update_by` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人ID',
-  `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人名称',
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `uniq_setting_key` (`setting_key`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ChatData 后台配置变量表';
-
-CREATE TABLE `chat_data_conversation_event` (
-  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键ID',
-  `conversation_id` varchar(255) NOT NULL COMMENT '会话ID',
+CREATE TABLE `chat_data_subagent_session` (
+  `id` bigint(20) NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `session_id` varchar(64) NOT NULL COMMENT '子智能体会话ID（agent_session_id；当前等于首轮 task_id）',
+  `conversation_id` varchar(255) NOT NULL COMMENT '父会话ID',
   `user_id` varchar(255) NOT NULL COMMENT '业务归属用户ID',
-  `turn_id` varchar(64) NOT NULL DEFAULT '' COMMENT '用户轮次ID',
-  `sequence_no` bigint NOT NULL COMMENT '会话内严格递增事件序号',
-  `event_key` varchar(255) NOT NULL COMMENT '幂等事件键',
-  `event_type` varchar(32) NOT NULL COMMENT '事件类型',
-  `payload` mediumtext NOT NULL COMMENT '事件JSON文本',
-  `delete_flag` tinyint NOT NULL DEFAULT '0' COMMENT '删除标识 0未删除 1已删除',
-  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  `create_by` varchar(255) NOT NULL DEFAULT '' COMMENT '创建人ID',
-  `create_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人名称',
-  `update_by` varchar(255) NOT NULL DEFAULT '' COMMENT '修改人ID',
-  `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '修改人名称',
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `uniq_conv_event_key` (`conversation_id`,`event_key`),
-  KEY `idx_conv_event_seq` (`conversation_id`,`sequence_no`),
-  KEY `idx_conv_event_turn` (`conversation_id`,`turn_id`)
-) ENGINE=InnoDB AUTO_INCREMENT=1 DEFAULT CHARSET=utf8mb4 COMMENT='ChatData会话原始事件历史';
-
-CREATE TABLE `chat_data_agent_inbox` (
-  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键ID',
-  `conversation_id` varchar(255) NOT NULL COMMENT '会话ID',
-  `user_id` varchar(255) NOT NULL COMMENT '业务归属用户ID',
-  `run_id` varchar(64) NOT NULL COMMENT '运行ID',
-  `owner_token` varchar(64) DEFAULT NULL COMMENT '当前运行者 fencing token',
-  `message_id` varchar(64) NOT NULL DEFAULT '' COMMENT '消息ID，运行记录等于运行ID',
-  `record_type` varchar(16) NOT NULL COMMENT '记录类型: run/message',
-  `queue_type` varchar(16) NOT NULL DEFAULT 'next-step' COMMENT '队列类型: next-step-下个模型步骤注入, next-turn-下一轮处理',
-  `record_content` mediumtext NOT NULL COMMENT '记录内容：消息行为追加消息文本，运行行为运行状态JSON',
-  `record_meta` text COMMENT '排队消息随行元数据JSON: {file_selections, file_ids}',
-  `record_status` varchar(16) NOT NULL COMMENT '运行或消息状态',
-  `claimed_time` datetime DEFAULT NULL COMMENT '消息领取时间',
-  `consumed_time` datetime DEFAULT NULL COMMENT '消息注入时间',
-  `lease_expire_time` datetime DEFAULT NULL COMMENT '领取租约过期时间',
+  `latest_task_id` varchar(64) NOT NULL COMMENT '最近一轮任务ID',
+  `turn_count` int NOT NULL DEFAULT '1' COMMENT '已完成的对话轮次',
+  `messages_json` mediumtext NOT NULL COMMENT '完整消息历史JSON（每次收口整体覆盖）',
   `delete_flag` tinyint NOT NULL DEFAULT '0' COMMENT '删除标识: 0-未删除, 1-已删除',
   `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
@@ -82,182 +23,7 @@ CREATE TABLE `chat_data_agent_inbox` (
   `update_by` varchar(255) NOT NULL DEFAULT '' COMMENT '更新人',
   `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人名称',
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uniq_agent_inbox_msg` (`record_type`,`message_id`),
-  KEY `idx_agent_inbox_conv` (`conversation_id`,`user_id`,`record_type`,`record_status`),
-  KEY `idx_agent_inbox_run` (`run_id`,`record_type`,`record_status`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ChatData运行消息收件箱';
-
--- 智能体定时任务：任务定义 + 触发实例（需在全局唯一写主库执行；模块说明见 apps/chat_data_app/services/agent_schedule/README.md）
-CREATE TABLE `chat_data_agent_schedule` (
-  `id` bigint(20) NOT NULL AUTO_INCREMENT COMMENT '主键ID',
-  `job_id` varchar(64) NOT NULL DEFAULT '' COMMENT '任务业务ID',
-  `user_id` varchar(100) NOT NULL DEFAULT '' COMMENT '业务归属用户ID',
-  `conversation_id` varchar(64) NOT NULL DEFAULT '' COMMENT '绑定的会话ID，conversation_mode=new_each_run 时为空',
-  `conversation_mode` varchar(16) NOT NULL DEFAULT 'fixed' COMMENT '会话绑定方式：fixed-指定会话，new_each_run-每次执行新建会话',
-  `job_title` varchar(100) NOT NULL DEFAULT '' COMMENT '任务标题',
-  `job_prompt` text NOT NULL COMMENT '任务指令（提示词）',
-  `schedule_type` varchar(16) NOT NULL DEFAULT 'cron' COMMENT '调度类型：cron-周期，once-单次',
-  `cron_expr` varchar(64) NOT NULL DEFAULT '' COMMENT '五字段 cron 表达式（分 时 日 月 周），schedule_type=cron 时有效',
-  `plan_time` datetime DEFAULT NULL COMMENT '单次任务执行时间，schedule_type=once 时有效',
-  `effective_end_time` datetime DEFAULT NULL COMMENT '有效期结束时间，NULL 表示长期有效',
-  `enabled_flag` smallint(6) NOT NULL DEFAULT '1' COMMENT '启用状态：1-启用，0-停用',
-  `next_trigger_time` datetime DEFAULT NULL COMMENT '下一次计划触发时间，NULL 表示无计划触发',
-  `last_trigger_time` datetime DEFAULT NULL COMMENT '最近一次计划触发的计划时间点',
-  `options_json` text COMMENT '运行选项 JSON（与智能问数 options 口径一致），服务端解析校验',
-  `delete_flag` smallint(6) NOT NULL DEFAULT '0' COMMENT '删除标记：0-未删除，1-已删除',
-  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  `create_by` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人',
-  `create_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人名称',
-  `update_by` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人',
-  `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人名称',
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `uniq_schedule_job_id` (`job_id`),
-  KEY `idx_schedule_user` (`user_id`, `delete_flag`),
-  KEY `idx_schedule_next_trigger` (`enabled_flag`, `delete_flag`, `next_trigger_time`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='智能体定时任务定义表';
-
-CREATE TABLE `chat_data_agent_schedule_run` (
-  `id` bigint(20) NOT NULL AUTO_INCREMENT COMMENT '主键ID',
-  `job_id` varchar(64) NOT NULL DEFAULT '' COMMENT '任务业务ID',
-  `user_id` varchar(100) NOT NULL DEFAULT '' COMMENT '业务归属用户ID',
-  `conversation_id` varchar(64) NOT NULL DEFAULT '' COMMENT '执行的会话ID',
-  `plan_time` datetime NOT NULL COMMENT '计划触发时间点',
-  `trigger_status` varchar(16) NOT NULL DEFAULT 'pending' COMMENT '状态：pending-待派发，claimed-已抢占，dispatched-已提交Run，succeeded/failed/cancelled-终态，skipped-跳过',
-  `trigger_type` varchar(16) NOT NULL DEFAULT 'schedule' COMMENT '触发来源：schedule-计划触发，manual-手动立即执行',
-  `attempt_count` int(11) NOT NULL DEFAULT '0' COMMENT '派发尝试次数',
-  `owner_node` varchar(128) NOT NULL DEFAULT '' COMMENT '抢占节点标识（hostname:pid），仅排查用',
-  `run_id` varchar(64) NOT NULL DEFAULT '' COMMENT '派发的 Agent Run ID（chat_data_agent_inbox.run_id）',
-  `error_message` varchar(1000) NOT NULL DEFAULT '' COMMENT '失败/跳过原因',
-  `claimed_time` datetime DEFAULT NULL COMMENT '抢占时间',
-  `dispatched_time` datetime DEFAULT NULL COMMENT '提交 Agent Run 时间',
-  `finished_time` datetime DEFAULT NULL COMMENT '进入终态时间',
-  `delete_flag` smallint(6) NOT NULL DEFAULT '0' COMMENT '删除标记：0-未删除，1-已删除',
-  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  `create_by` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人',
-  `create_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人名称',
-  `update_by` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人',
-  `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人名称',
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `uniq_schedule_job_plan` (`job_id`, `plan_time`),
-  KEY `idx_schedule_run_scan` (`trigger_status`, `plan_time`),
-  KEY `idx_schedule_run_job` (`job_id`, `create_time`),
-  KEY `idx_schedule_run_user` (`user_id`, `trigger_status`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='智能体定时任务触发实例表';
-
--- 智能体定时任务全局控制表（固定单行，后台一键暂停入口；缺行时服务端会惰性补建）
-CREATE TABLE `chat_data_schedule_control` (
-  `id` bigint(20) NOT NULL AUTO_INCREMENT COMMENT '主键ID，固定为1',
-  `paused_flag` smallint(6) NOT NULL DEFAULT '0' COMMENT '全局暂停：0-正常，1-暂停所有调度',
-  `pause_reason` varchar(255) NOT NULL DEFAULT '' COMMENT '暂停原因',
-  `delete_flag` smallint(6) NOT NULL DEFAULT '0' COMMENT '删除标记：0-未删除，1-已删除',
-  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  `create_by` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人',
-  `create_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人名称',
-  `update_by` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人',
-  `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人名称',
-  PRIMARY KEY (`id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='智能体定时任务全局控制表';
-
-CREATE TABLE `chat_data_plugin` (
-  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键ID',
-  `plugin_name` varchar(64) NOT NULL DEFAULT '' COMMENT '插件名(目录名/资源id)',
-  `version` varchar(32) NOT NULL DEFAULT '' COMMENT '插件版本',
-  `display_name` varchar(64) NOT NULL DEFAULT '' COMMENT '展示名',
-  `description` varchar(500) NOT NULL DEFAULT '' COMMENT '描述',
-  `enabled_flag` tinyint NOT NULL DEFAULT '1' COMMENT '启用标识: 0-禁用, 1-启用',
-  `manifest_text` text COMMENT 'plugin.json 原文(JSON文本)',
-  `delete_flag` tinyint NOT NULL DEFAULT '0' COMMENT '删除标识: 0-未删除, 1-已删除',
-  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  `create_by` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人',
-  `create_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人名称',
-  `update_by` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人',
-  `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人名称',
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `uniq_plugin_name` (`plugin_name`),
-  KEY `idx_plugin_enabled_delete` (`enabled_flag`,`delete_flag`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ChatData 插件状态表';
-
-ALTER TABLE datasource_table ADD COLUMN indexes_json TEXT NULL COMMENT '表级物理索引和手工索引 JSON';
-ALTER TABLE user_threads ADD COLUMN datasource_id varchar(255) NOT NULL DEFAULT '' COMMENT '会话绑定数据源组ID' after agent_id;
-
--- 唯一索引改造
--- 清理后复查应返回空，再建索引
-DELETE FROM semantic_config WHERE id NOT IN (SELECT min_id FROM (SELECT MIN(id) AS min_id FROM semantic_config GROUP BY group_id, semantic_config_name, delete_flag) t);
-ALTER TABLE semantic_config ADD UNIQUE KEY uniq_grp_id_cfg_name_del_flag (group_id, semantic_config_name,delete_flag);
-
--- CHANGE 一步完成改名+改注释（RENAME COLUMN 不会更新列注释）
-ALTER TABLE semantic_config CHANGE COLUMN ontology_rules business_notes text COMMENT '业务说明';
-
--- 技能表清理废弃字段：skill_scope 从未使用；root_dir/version_dir 已由推导规则替代
-ALTER TABLE chat_data_skill DROP COLUMN skill_scope;
-ALTER TABLE chat_data_skill DROP COLUMN skill_root_dir;
-ALTER TABLE chat_data_skill_version DROP COLUMN skill_version_dir;
-
--- 模型注册表：智能问数模型清单页面化管理（替代 CHAT_DATA_MODELS_FILE JSON 文件）
--- 除身份/连接/状态列外，全部模型参数收在 params_json（JSON 文本），扩参不改表结构
--- 注册键 model_key：服务端自动生成的唯一引用键（格式 {请求名slug}-{8位随机hex}，URL 安全；
--- 存量含 # / 等老键继续可用，管理端写接口用 body/query 传键不走 URL 路径）；
--- model_id 是上游请求名；业务唯一性=(provider, model_id, delete_flag)，软删行请求名
--- 改写墓碑名（{原名}__d{id}_{日期}）不占用组合，重加同名生成全新行
--- 【适用范围】新装库只跑本 CREATE TABLE；已建过旧版表的存量库跳过 CREATE，只执行下方「存量库迁移」的 ALTER 序列，两者不可都跑（列/键会重复报错）
-CREATE TABLE chat_data_model_registry (
-  id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键',
-  model_key varchar(128) NOT NULL DEFAULT '' COMMENT '注册键（服务端自动生成的唯一引用标识）',
-  model_id varchar(128) NOT NULL DEFAULT '' COMMENT '模型请求名（发给上游 API 的 model 参数）',
-  provider varchar(128) NOT NULL DEFAULT '' COMMENT '提供商（与请求名组成业务唯一键，如 DeepSeek/阿里云/本地 vLLM）',
-  display_name varchar(128) NOT NULL DEFAULT '' COMMENT '显示名（空则用 model_id）',
-  base_url varchar(500) NOT NULL DEFAULT '' COMMENT 'API Base URL（连接信息只以模型行为准）',
-  api_key_cipher text NOT NULL COMMENT 'API Key SM4 密文（base64:base64，管理端只接受密文；空则该模型未配置鉴权）',
-  params_json text NOT NULL COMMENT '模型参数 JSON（temperature/context_window/max_output_tokens/vlm/thinking 等，扩参不改表）',
-  is_default smallint NOT NULL DEFAULT 0 COMMENT '唯一默认模型标志（1=默认）',
-  enabled_flag smallint NOT NULL DEFAULT 1 COMMENT '启用标志（1=启用 0=停用）',
-  remark_text varchar(500) NOT NULL DEFAULT '' COMMENT '备注',
-  delete_flag smallint NOT NULL DEFAULT 0 COMMENT '软删标志（0=未删，非 0=已删；软删行请求名改写墓碑名）',
-  create_time datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-  update_time datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-  create_by varchar(100) NOT NULL DEFAULT '' COMMENT '创建人ID',
-  create_by_name varchar(100) NOT NULL DEFAULT '' COMMENT '创建人姓名',
-  update_by varchar(100) NOT NULL DEFAULT '' COMMENT '更新人ID',
-  update_by_name varchar(100) NOT NULL DEFAULT '' COMMENT '更新人姓名',
-  PRIMARY KEY (id),
-  UNIQUE KEY uniq_model_key (model_key),
-  UNIQUE KEY uniq_provider_model_del (provider, model_id, delete_flag),
-  KEY idx_model_enabled_delete (enabled_flag, delete_flag)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ChatData 模型注册表';
+  UNIQUE KEY `uniq_subagent_session_id` (`session_id`),
+  KEY `idx_subagent_session_conv` (`conversation_id`, `user_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='后台子智能体多轮会话快照';
 ```
-
-## 依赖变更
-
-上线前执行：
-
-```bash
-python -m pip install opensandbox==0.1.15
-python -m pip install redis==7.0.1
-```
-
-apache-ossie 离线 wheel 已重打（commit 7c03c46e：根形状平铺 + Ossie* 换名 + 严格校验）。**存量机器上 `pip install -r requirements.txt` 会因版本号未变（仍 0.2.0.dev0）静默跳过该 wheel，必须单独强制重装**：
-
-```bash
-python -m pip install --force-reinstall --no-deps wheels/apache_ossie-0.2.0.dev0-py3-none-any.whl
-# 验证：应输出 <class 'ossie.models.OssieDocument'>（旧包是 OSI 前缀类名，装到旧包说明没换成功）
-python -c "import ossie; print(ossie.OssieDocument)"
-```
-
-Redis 配置（密码为 SM4 密文，加密方式：`CHAT_DATA_ENV=dev python scripts/crypto.py encrypt <明文密码>`）：
-
-```env
-CHAT_DATA_REDIS_SENTINELS=62.234.152.217:26380
-CHAT_DATA_REDIS_MASTER_NAME=chatdata-master
-CHAT_DATA_REDIS_PASSWORD="<base64(iv):base64(ciphertext)>"
-CHAT_DATA_REDIS_STREAM_TTL_SECONDS=3600
-```
-
-Run 实时事件使用 Redis Streams：
-
-- `chatdata:run:{run_id}:events`：前端 SSE 实时订阅和断线续传（TTL 内唯一可重放事件源，Run 事件不落 MySQL）。
-- 问答恢复的持久兜底在 `chat_data_agent_inbox` Run 行 `content.terminal_event`（done 发布成功后写入其 Redis 游标）。
-- `chat_data_conversation_event` 保存用户消息以及每次模型调用完成后的会话展示快照；同一消息通过 `event_key` 幂等更新，整轮结束时再做最终收口。LangGraph checkpoint 只保存 Agent 执行状态。

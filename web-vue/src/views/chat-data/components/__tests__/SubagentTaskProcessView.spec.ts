@@ -1,0 +1,73 @@
+import { mount } from '@vue/test-utils'
+import { defineComponent } from 'vue'
+import { describe, expect, it } from 'vitest'
+import SubagentTaskProcessView from '../conversation/SubagentTaskProcessView.vue'
+import type { SubagentTaskRecord } from '../../types'
+
+const TrailStub = defineComponent({
+  name: 'SubagentTrail',
+  props: {
+    toolCall: { type: Object, required: true },
+  },
+  emits: ['selectTool'],
+  template: '<div data-subagent-trail-stub :data-result="toolCall.result" :data-description="toolCall.args.description" />',
+})
+
+const turn = (overrides: Partial<SubagentTaskRecord> = {}): SubagentTaskRecord => ({
+  task_id: 'task-1',
+  conversation_id: 'conv-1',
+  parent_run_id: 'run-1',
+  parent_tool_call_id: 'call-1',
+  root_task_id: 'task-1',
+  turn_index: 1,
+  subagent_type: 'explore',
+  label: '语义模型目录盘点',
+  description: '盘点语义模型目录',
+  status: 'completed',
+  status_label: '已完成',
+  progress: {},
+  created_at: '2026-11-15T10:00:00',
+  updated_at: '2026-11-15T10:01:00',
+  started_at: '2026-11-15T10:00:00',
+  finished_at: '2026-11-15T10:01:00',
+  notified_at: null,
+  timeout_seconds: 60,
+  report: '第一轮报告',
+  ...overrides,
+})
+
+describe('SubagentTaskProcessView', () => {
+  it('同一子会话按轮次连续渲染多轮问答', () => {
+    const first = turn()
+    const second = turn({
+      task_id: 'task-2',
+      parent_task_id: first.task_id,
+      turn_index: 2,
+      label: '先给自己起一个响亮的名字',
+      description: '先给自己起一个响亮的名字',
+      report: '第二轮报告',
+      created_at: '2026-11-15T10:02:00',
+      updated_at: '2026-11-15T10:03:00',
+      started_at: '2026-11-15T10:02:00',
+      finished_at: '2026-11-15T10:03:00',
+    })
+
+    const wrapper = mount(SubagentTaskProcessView, {
+      props: {
+        task: second,
+        sessionTasks: [first, second],
+        conversationId: 'conv-1',
+      },
+      global: { stubs: { SubagentTrail: TrailStub } },
+    })
+
+    const turns = wrapper.findAll('[data-subagent-turn]')
+    expect(turns).toHaveLength(2)
+    expect(turns.map(item => item.find('[data-subagent-trail-stub]').attributes('data-result'))).toEqual([
+      '第一轮报告',
+      '第二轮报告',
+    ])
+    expect(turns[0]!.find('[data-subagent-trail-stub]').attributes('data-description')).toBe('盘点语义模型目录')
+    expect(turns[1]!.find('[data-subagent-trail-stub]').attributes('data-description')).toBe('先给自己起一个响亮的名字')
+  })
+})

@@ -96,6 +96,8 @@ def test_subagent_allowlists_are_explicit_and_registered():
         assert "ask_user_question" not in allowed
         assert "present_artifacts" not in allowed
         assert "bash_run" not in allowed
+        # 子智能体不能再派子智能体：task 工具只能由主智能体持有。
+        assert "task" not in allowed
 
 
 def test_built_tools_are_declared_in_provides(tmp_path):

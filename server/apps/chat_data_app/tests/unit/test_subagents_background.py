@@ -15,10 +15,11 @@ from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from apps.chat_data_app.agent.middleware import subagent_history as subagent_history_module
 from apps.chat_data_app.agent.middleware import subagents as subagents_module
 from apps.chat_data_app.agent.middleware.subagent_async import _format_task_report
 from apps.chat_data_app.agent.middleware.subagents import build_task_tool
@@ -26,6 +27,7 @@ from apps.chat_data_app.agent.run import subagent_task_service as service_module
 from apps.chat_data_app.agent.run.agent_inbox_service import AgentRunConflictError, agent_inbox_service
 from apps.chat_data_app.agent.run.subagent_task_service import (
     SubagentTaskCapacityError,
+    SubagentTaskRecord,
     notification_message_id,
     subagent_task_service,
 )
@@ -212,8 +214,19 @@ async def test_create_task_persists_snapshot_and_publishes_compact_sse(harness):
     assert record.subagent_type == "explore"
     assert record.label == "入金趋势"
     assert record.progress == {}
+    assert record.agent_id == record.task_id
+    assert record.agent_session_id == record.task_id
+    assert record.root_task_id == record.task_id
+    assert record.parent_agent_id == ""
+    assert record.root_agent_id == record.task_id
+    assert record.depth == 1
     payload = record.as_dict(include_report=False)
     assert payload["task_id"] == record.task_id
+    assert payload["agent_id"] == record.task_id
+    assert payload["agent_session_id"] == record.task_id
+    assert payload["parent_agent_id"] is None
+    assert payload["root_agent_id"] == record.task_id
+    assert payload["depth"] == 1
     assert "report" not in payload
     assert "result_meta" not in payload
 
@@ -439,7 +452,7 @@ async def test_cancel_pending_and_running_tasks(harness):
 @pytest.mark.asyncio
 async def test_task_tool_dispatches_management_actions(harness, monkeypatch):
     await harness.create_conversation()
-    monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: object())
+    monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None, **kwargs: object())
     record = await _create_task(harness)
     await _start(harness, record)
     await harness.service.finish_task(
@@ -592,7 +605,7 @@ async def test_background_tool_spawns_persisted_task_and_notifies(harness, monke
     monkeypatch.setattr(
         subagents_module,
         "_compile_subagent",
-        lambda spec, run_controls=None: _runnable("盘点结论：近 30 天平稳"),
+        lambda spec, run_controls=None, **kwargs: _runnable("盘点结论：近 30 天平稳"),
     )
     calls: list[dict] = []
 
@@ -632,7 +645,7 @@ async def test_background_task_compiles_without_parent_run_fence(harness, monkey
     compiled_with: list[object] = []
     parent_controls = SimpleNamespace(run_id="run-parent", owner_token="parent-owner")
 
-    def fake_compile(spec, run_controls=None):
+    def fake_compile(spec, run_controls=None, **kwargs):
         compiled_with.append(run_controls)
         return _runnable("盘点结论")
 
@@ -672,7 +685,7 @@ async def test_background_timeout_keeps_partial_report(harness, monkeypatch):
     monkeypatch.setattr(
         subagents_module,
         "_compile_subagent",
-        lambda spec, run_controls=None: _runnable("中断前的中间结论", delay_after_yield=5),
+        lambda spec, run_controls=None, **kwargs: _runnable("中断前的中间结论", delay_after_yield=5),
     )
     tool = build_task_tool([_spec()])
     result = await tool.coroutine(
@@ -700,7 +713,7 @@ async def test_sync_task_path_still_returns_tool_message(monkeypatch):
     monkeypatch.setattr(
         subagents_module,
         "_compile_subagent",
-        lambda spec, run_controls=None: _runnable("同步结论"),
+        lambda spec, run_controls=None, **kwargs: _runnable("同步结论"),
     )
     tool = build_task_tool([_spec()])
     result = await tool.coroutine(
@@ -724,3 +737,533 @@ def test_system_prompt_documents_background_and_task_tools():
     assert "async_task" not in middleware.system_prompt
     assert "list_async_tasks" not in middleware.system_prompt
     assert "check_async_task" not in middleware.system_prompt
+
+
+@pytest.mark.asyncio
+async def test_finish_task_persists_session_history(harness):
+    await harness.create_conversation()
+    record = await _create_task(harness)
+    await _start(harness, record)
+    history = [
+        {"type": "human", "content": "盘点近 30 天入金趋势"},
+        {"type": "ai", "content": "结论：整体平稳"},
+    ]
+    finished = await harness.service.finish_task(
+        record.task_id,
+        record.owner_token or "",
+        status="completed",
+        report="结论：整体平稳",
+        history=history,
+    )
+
+    assert finished is not None
+    assert finished.root_task_id == record.task_id
+    assert finished.turn_index == 1
+    assert (
+        await harness.service.load_session_messages(
+            record.task_id,
+            conversation_id=CONV,
+            user_id=USER,
+        )
+        == history
+    )
+    assert (
+        await harness.service.load_session_messages(
+            record.task_id,
+            conversation_id=CONV,
+            user_id=USER,
+            expected_turn_index=2,
+        )
+        == []
+    )
+
+
+@pytest.mark.asyncio
+async def test_load_session_history_degrades_when_table_unavailable(harness, monkeypatch):
+    """会话表未迁移时不能阻断追问；读取失败按空历史处理。"""
+
+    async def broken_get(*_args, **_kwargs):
+        raise RuntimeError("table chat_data_subagent_session does not exist")
+
+    monkeypatch.setattr(service_module.subagent_session_dao, "get", broken_get)
+
+    assert (
+        await harness.service.load_session_messages(
+            "session-missing-table",
+            conversation_id=CONV,
+            user_id=USER,
+        )
+        == []
+    )
+
+
+@pytest.mark.asyncio
+async def test_follow_up_reuses_session_history(harness, monkeypatch):
+    await harness.create_conversation()
+    captured_states: list[dict] = []
+
+    class _Runnable:
+        async def astream(self, state, _config, *, stream_mode):
+            captured_states.append(dict(state))
+            yield "updates", {"model": {"messages": [AIMessage(content=f"第 {len(captured_states)} 轮结论")]}}
+
+    monkeypatch.setattr(
+        subagents_module,
+        "_compile_subagent",
+        lambda spec, run_controls=None, **kwargs: _Runnable(),
+    )
+    tool = build_task_tool([_spec()])
+    first = await tool.coroutine(
+        description="盘点近 30 天入金趋势",
+        subagent_type="explore",
+        runtime=_fake_runtime(tool_call_id="call_bg_first"),
+        background=True,
+        label="入金趋势",
+    )
+    first_record = await _wait_terminal(harness, _task_id_from_text(first))
+    assert first_record.status == "completed"
+    assert captured_states[0]["messages"][0].content == "盘点近 30 天入金趋势"
+
+    follow = await tool.coroutine(
+        action="follow_up",
+        task_id=first_record.task_id,
+        message="再按渠道拆一下，结论附上渠道 Top3",
+        runtime=_fake_runtime(tool_call_id="call_bg_follow"),
+    )
+    assert "第 2 轮追问" in follow
+    second_record = await _wait_terminal(harness, _task_id_from_text(follow))
+    assert second_record.status == "completed"
+    assert second_record.parent_task_id == first_record.task_id
+    assert second_record.root_task_id == first_record.task_id
+    assert second_record.agent_id == first_record.agent_id
+    assert second_record.agent_session_id == first_record.agent_session_id
+    assert second_record.parent_agent_id == ""
+    assert second_record.root_agent_id == first_record.agent_id
+    assert second_record.depth == 1
+    assert second_record.turn_index == 2
+
+    second_messages = captured_states[1]["messages"]
+    assert [message.type for message in second_messages] == ["human", "ai", "human"]
+    assert second_messages[0].content == "盘点近 30 天入金趋势"
+    assert second_messages[1].content == "第 1 轮结论"
+    assert second_messages[2].content == "再按渠道拆一下，结论附上渠道 Top3"
+    session = await harness.service.load_session_messages(
+        first_record.task_id,
+        conversation_id=CONV,
+        user_id=USER,
+    )
+    assert [item["type"] for item in session] == ["human", "ai", "human", "ai"]
+    assert session[-1]["content"] == "第 2 轮结论"
+
+
+def test_task_identity_falls_back_for_legacy_meta():
+    """旧任务行没有 agent_* 字段时按 root_task_id 推导，历史数据无需回填。"""
+    record = SubagentTaskRecord(
+        task_id="turn-2",
+        conversation_id=CONV,
+        user_id=USER,
+        parent_run_id="run-parent",
+        owner_token=None,
+        status="completed",
+        report="",
+        result_meta={},
+        meta={
+            "parent_task_id": "turn-1",
+            "root_task_id": "session-1",
+            "turn_index": 2,
+        },
+        created_at=datetime.now(),
+        updated_at=None,
+        started_at=None,
+        finished_at=None,
+        notified_at=None,
+        lease_expire_time=None,
+    )
+
+    assert record.root_task_id == "session-1"
+    assert record.agent_session_id == "session-1"
+    assert record.agent_id == "session-1"
+    assert record.parent_agent_id == ""
+    assert record.root_agent_id == "session-1"
+    assert record.depth == 1
+
+
+@pytest.mark.asyncio
+async def test_follow_up_rejected_while_task_running(harness):
+    await harness.create_conversation()
+    record = await _create_task(harness)
+    await _start(harness, record)
+    tool = build_task_tool([_spec()])
+
+    result = await tool.coroutine(
+        action="follow_up",
+        task_id=record.task_id,
+        message="补充渠道拆分",
+        runtime=_fake_runtime(),
+    )
+
+    assert "仍在执行" in result
+    records = await harness.service.list_tasks(CONV, USER)
+    assert len(records) == 1
+
+
+@pytest.mark.asyncio
+async def test_create_task_rejects_second_active_turn_in_same_session(harness):
+    """前置查询与建任务之间存在窗口，建任务事务内必须再挡一次并行追问。"""
+    await harness.create_conversation()
+    first = await _create_task(harness)
+    await _start(harness, first)
+    await harness.service.finish_task(
+        first.task_id,
+        first.owner_token or "",
+        status="completed",
+        report="第一轮结论",
+    )
+    second = await harness.service.create_task(
+        conversation_id=CONV,
+        user_id=USER,
+        parent_run_id="run-parent",
+        subagent_type="explore",
+        description="第二轮",
+        label=None,
+        parent_tool_call_id="call-follow-1",
+        parent_owner_token="parent-owner",
+        timeout_seconds=60,
+        operator_name="用户一",
+        parent_task_id=first.task_id,
+        root_task_id=first.task_id,
+    )
+
+    with pytest.raises(SubagentTaskCapacityError, match="已有进行中的追问任务"):
+        await harness.service.create_task(
+            conversation_id=CONV,
+            user_id=USER,
+            parent_run_id="run-parent",
+            subagent_type="explore",
+            description="重复的第三轮",
+            label=None,
+            parent_tool_call_id="call-follow-2",
+            parent_owner_token="parent-owner",
+            timeout_seconds=60,
+            operator_name="用户一",
+            parent_task_id=first.task_id,
+            root_task_id=first.task_id,
+        )
+
+    assert second.turn_index == 2
+
+
+@pytest.mark.asyncio
+async def test_follow_up_from_old_turn_anchors_to_latest_session_turn(harness, monkeypatch):
+    """从旧任务卡追问也要线性续写：parent 指向最新一轮，轮次不重复。"""
+    await harness.create_conversation()
+    responses = iter(["第 1 轮", "第 2 轮", "第 3 轮", "第 4 轮"])
+
+    class _Runnable:
+        async def astream(self, _state, _config, *, stream_mode):
+            yield "updates", {"model": {"messages": [AIMessage(content=next(responses))]}}
+
+    monkeypatch.setattr(
+        subagents_module,
+        "_compile_subagent",
+        lambda spec, run_controls=None, **kwargs: _Runnable(),
+    )
+    tool = build_task_tool([_spec()])
+    first = await tool.coroutine(
+        description="第一轮",
+        subagent_type="explore",
+        runtime=_fake_runtime(tool_call_id="call_turn_1"),
+        background=True,
+    )
+    first_record = await _wait_terminal(harness, _task_id_from_text(first))
+
+    second = await tool.coroutine(
+        action="follow_up",
+        task_id=first_record.task_id,
+        message="第二轮",
+        runtime=_fake_runtime(tool_call_id="call_turn_2"),
+    )
+    second_record = await _wait_terminal(harness, _task_id_from_text(second))
+    third = await tool.coroutine(
+        action="follow_up",
+        task_id=second_record.task_id,
+        message="第三轮",
+        runtime=_fake_runtime(tool_call_id="call_turn_3"),
+    )
+    third_record = await _wait_terminal(harness, _task_id_from_text(third))
+
+    stale = await tool.coroutine(
+        action="follow_up",
+        task_id=first_record.task_id,
+        message="从旧卡片继续",
+        runtime=_fake_runtime(tool_call_id="call_turn_4"),
+    )
+    fourth_record = await _wait_terminal(harness, _task_id_from_text(stale))
+
+    assert fourth_record.parent_task_id == third_record.task_id
+    assert fourth_record.root_task_id == first_record.task_id
+    assert fourth_record.turn_index == 4
+
+
+@pytest.mark.asyncio
+async def test_follow_up_ignores_stale_latest_task_when_snapshot_write_failed(harness, monkeypatch):
+    """快照写失败时 latest_task_id 可能停在旧轮次，追问必须锚定用户指定的新任务。"""
+    await harness.create_conversation()
+    responses = iter(["第 1 轮结论", "第 2 轮结论", "兜底追问结论"])
+
+    class _Runnable:
+        async def astream(self, _state, _config, *, stream_mode):
+            yield "updates", {"model": {"messages": [AIMessage(content=next(responses))]}}
+
+    monkeypatch.setattr(
+        subagents_module,
+        "_compile_subagent",
+        lambda spec, run_controls=None, **kwargs: _Runnable(),
+    )
+    tool = build_task_tool([_spec()])
+    first = await tool.coroutine(
+        description="第一轮",
+        subagent_type="explore",
+        runtime=_fake_runtime(tool_call_id="call_stale_1"),
+        background=True,
+    )
+    first_record = await _wait_terminal(harness, _task_id_from_text(first))
+    second = await tool.coroutine(
+        action="follow_up",
+        task_id=first_record.task_id,
+        message="第二轮",
+        runtime=_fake_runtime(tool_call_id="call_stale_2"),
+    )
+    second_record = await _wait_terminal(harness, _task_id_from_text(second))
+
+    async def stale_latest(*_args, **_kwargs):
+        return first_record
+
+    monkeypatch.setattr(harness.service, "get_latest_task_in_session", stale_latest)
+    third = await tool.coroutine(
+        action="follow_up",
+        task_id=second_record.task_id,
+        message="在第二轮基础上继续",
+        runtime=_fake_runtime(tool_call_id="call_stale_3"),
+    )
+    third_record = await _wait_terminal(harness, _task_id_from_text(third))
+
+    assert third_record.parent_task_id == second_record.task_id
+    assert third_record.turn_index == 3
+
+
+@pytest.mark.asyncio
+async def test_follow_up_falls_back_to_legacy_report_when_snapshot_missing(harness, monkeypatch):
+    await harness.create_conversation()
+    captured_states: list[dict] = []
+
+    class _Runnable:
+        async def astream(self, state, _config, *, stream_mode):
+            captured_states.append(dict(state))
+            yield "updates", {"model": {"messages": [AIMessage(content="追问结论")]}}
+
+    monkeypatch.setattr(
+        subagents_module,
+        "_compile_subagent",
+        lambda spec, run_controls=None, **kwargs: _Runnable(),
+    )
+    record = await _create_task(harness)
+    await _start(harness, record)
+    await harness.service.finish_task(
+        record.task_id,
+        record.owner_token or "",
+        status="completed",
+        report="旧任务结论",
+    )
+    tool = build_task_tool([_spec()])
+    result = await tool.coroutine(
+        action="follow_up",
+        task_id=record.task_id,
+        message="在旧结论基础上补充说明",
+        runtime=_fake_runtime(),
+    )
+
+    assert "第 2 轮追问" in result
+    second = await _wait_terminal(harness, _task_id_from_text(result))
+    assert second.status == "completed"
+    messages = captured_states[0]["messages"]
+    assert [message.content for message in messages] == [
+        "深度分析近 30 天入金趋势",
+        "旧任务结论",
+        "在旧结论基础上补充说明",
+    ]
+
+
+def test_history_roundtrip_keeps_tool_calls_and_tool_results(monkeypatch):
+    monkeypatch.setattr(subagent_history_module, "SUBAGENT_HISTORY_TOTAL_MAX_CHARS", 10_000)
+    original = [
+        HumanMessage(content="查一下入金", id="u1"),
+        AIMessage(
+            content="",
+            id="a1",
+            tool_calls=[{"name": "sql_query", "args": {"sql": "select 1"}, "id": "call-1", "type": "tool_call"}],
+        ),
+        ToolMessage(content="1 行结果", tool_call_id="call-1", status="success", id="t1"),
+        AIMessage(content="结论：正常", id="a2"),
+    ]
+
+    payloads = subagents_module.serialize_subagent_messages(original)
+    restored = subagents_module.deserialize_subagent_messages(payloads)
+
+    assert [message.type for message in restored] == ["human", "ai", "tool", "ai"]
+    assert restored[1].tool_calls[0]["id"] == "call-1"
+    assert restored[2].tool_call_id == "call-1"
+    assert restored[-1].content == "结论：正常"
+
+
+def test_history_serialization_drops_incomplete_tool_call_group():
+    """超时/取消停在工具中途时，快照不能留下没有 ToolMessage 的 tool_calls。"""
+    original = [
+        HumanMessage(content="查一下入金", id="u1"),
+        AIMessage(
+            content="正在查询",
+            id="a1",
+            tool_calls=[{"name": "sql_query", "args": {"sql": "select 1"}, "id": "call-1", "type": "tool_call"}],
+        ),
+    ]
+
+    payloads = subagents_module.serialize_subagent_messages(original)
+    restored = subagents_module.deserialize_subagent_messages(payloads)
+
+    assert [message.type for message in restored] == ["human"]
+
+
+def test_history_trimming_drops_orphans_and_notes_truncation(monkeypatch):
+    monkeypatch.setattr(subagent_history_module, "SUBAGENT_HISTORY_TOTAL_MAX_CHARS", 60)
+    messages = [
+        HumanMessage(content="很早的任务书"),
+        AIMessage(content="x" * 60),
+        ToolMessage(content="y" * 60, tool_call_id="c1"),
+        HumanMessage(content="最近的问题"),
+        AIMessage(content="最近结论"),
+    ]
+
+    payloads = subagents_module.serialize_subagent_messages(messages)
+
+    assert payloads[0] == {"type": "human", "content": subagent_history_module.SUBAGENT_HISTORY_TRUNCATED_NOTE}
+    assert payloads[-1]["content"] == "最近结论"
+
+
+def test_state_message_tracker_applies_full_reset_and_dedup():
+    tracker = subagents_module._SubagentStreamState("call-1")
+    tracker.prime_state_messages([HumanMessage(content="任务", id="u1")])
+    tracker.track_state_messages({"model": {"messages": [AIMessage(content="第一版", id="a1")]}})
+    tracker.track_state_messages({"model": {"messages": [AIMessage(content="修正版", id="a1")]}})
+    assert [message.content for message in tracker.state_messages] == ["任务", "修正版"]
+
+    from langchain_core.messages import RemoveMessage
+    from langgraph.graph.message import REMOVE_ALL_MESSAGES
+
+    tracker.track_state_messages(
+        {
+            "compact": {
+                "messages": [
+                    RemoveMessage(id=REMOVE_ALL_MESSAGES),
+                    SystemMessage(content="摘要"),
+                    HumanMessage(content="最近问题", id="u2"),
+                ]
+            }
+        }
+    )
+    assert [message.content for message in tracker.state_messages] == ["摘要", "最近问题"]
+
+
+@pytest.mark.asyncio
+async def test_pause_request_suspends_and_resume_rotates_owner(harness):
+    await harness.create_conversation()
+    record = await _create_task(harness)
+    await _start(harness, record)
+
+    paused = await harness.service.request_pause(
+        record.task_id,
+        conversation_id=CONV,
+        user_id=USER,
+        operator_name="用户一",
+    )
+    assert paused is not None
+    assert paused.status == "running"
+    assert await harness.service.is_pause_requested(record.task_id, record.owner_token or "") is True
+
+    suspended = await harness.service.suspend_task(
+        record.task_id,
+        record.owner_token or "",
+        status="paused",
+        interrupt_payload={"kind": "subagent_pause"},
+    )
+    assert suspended is not None
+    assert suspended.status == "paused"
+    assert suspended.owner_token is None
+    assert suspended.meta["pending_interrupt"] == {"kind": "subagent_pause"}
+
+    resumed = await harness.service.resume_task(
+        record.task_id,
+        conversation_id=CONV,
+        user_id=USER,
+        resume_value={"kind": "subagent_pause", "action": "resume"},
+    )
+    assert resumed is not None
+    resumed_record, resume_value = resumed
+    assert resumed_record.status == "running"
+    assert resumed_record.owner_token and resumed_record.owner_token != record.owner_token
+    assert resume_value == {"kind": "subagent_pause", "action": "resume"}
+    assert resumed_record.meta.get("pending_interrupt") is None
+
+
+@pytest.mark.asyncio
+async def test_steer_queue_is_claimed_once_by_owner(harness):
+    await harness.create_conversation()
+    record = await _create_task(harness)
+    await _start(harness, record)
+
+    queued = await harness.service.enqueue_steer_message(
+        record.task_id,
+        conversation_id=CONV,
+        user_id=USER,
+        message="补充：只看华东区",
+        operator_name="用户一",
+    )
+    assert queued is not None
+    assert await harness.service.claim_steer_messages(record.task_id, "wrong-owner") == []
+    messages = await harness.service.claim_steer_messages(record.task_id, record.owner_token or "")
+    assert messages == ["补充：只看华东区"]
+    assert await harness.service.claim_steer_messages(record.task_id, record.owner_token or "") == []
+
+
+@pytest.mark.asyncio
+async def test_suspended_task_can_be_cancelled_without_local_runner(harness):
+    await harness.create_conversation()
+    record = await _create_task(harness)
+    await _start(harness, record)
+    await harness.service.suspend_task(
+        record.task_id,
+        record.owner_token or "",
+        status="waiting_approval",
+        interrupt_payload={"kind": "approval", "approval_items": []},
+    )
+
+    cancelled = await harness.service.cancel_task(CONV, USER, record.task_id, "用户一")
+    assert cancelled is not None
+    assert cancelled.status == "cancelled"
+    assert cancelled.meta.get("pending_interrupt") is None
+
+
+def test_approval_resume_value_shapes_single_and_batch():
+    single = subagents_module._build_approval_resume_value(
+        {"kind": "approval", "approval_items": [{"call_id": "c1"}]}, "allow"
+    )
+    assert single == {"answers": [{"id": "approval", "selected": ["允许"]}]}
+
+    batch = subagents_module._build_approval_resume_value(
+        {"kind": "approval", "approval_items": [{"call_id": "c1"}, {"call_id": "c2"}]}, "deny"
+    )
+    assert batch == {
+        "answers": [
+            {"id": "c1", "selected": ["拒绝"]},
+            {"id": "c2", "selected": ["拒绝"]},
+        ]
+    }

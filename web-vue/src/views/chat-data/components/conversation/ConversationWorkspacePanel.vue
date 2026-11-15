@@ -35,7 +35,12 @@ import {
   useRightSidebarTabs,
   type RightSidebarTab,
 } from '../../composables/useRightSidebarTabs'
-import { isSubagentTaskActive } from '../../composables/useSubagentTasks'
+import {
+  groupSubagentTaskSessions,
+  isSubagentTaskActive,
+  mergeSubagentTasks,
+  subagentTaskSessionId,
+} from '../../composables/useSubagentTasks'
 import {
   deleteConversationWorkspaceFile,
   getConversationWorkspaceFileContent,
@@ -151,11 +156,23 @@ const displayTabIsSubagentTask = computed(() => displayToolTab.value?.kind === '
 // 每个子智能体 tab 各渲染一份过程视图（v-for 常驻）：多开时内容不串、展开态与位置各自保留
 const agentProcessTabs = computed(() => panelTabs.value.filter(tab => tab.kind === 'agentProcess'))
 const subagentTaskTabs = computed(() => panelTabs.value.filter(tab => tab.kind === 'subagentTask'))
+const allSubagentTasks = computed(() => mergeSubagentTasks(props.subagentTasks, Object.values(props.subagentTaskDetails)))
+const subagentSessions = computed(() => groupSubagentTaskSessions(allSubagentTasks.value))
+const subagentSessionCount = computed(() => subagentSessions.value.length)
 
 const subagentTaskForTab = (tab: RightSidebarTab | null | undefined): SubagentTaskRecord | null => {
   const taskId = tab?.taskId
   if (!taskId) return null
-  return props.subagentTaskDetails[taskId] || props.subagentTasks.find(task => task.task_id === taskId) || null
+  const current = props.subagentTaskDetails[taskId] || props.subagentTasks.find(task => task.task_id === taskId) || null
+  if (!current) return null
+  const sessionId = subagentTaskSessionId(current)
+  return subagentSessions.value.find(session => session.sessionId === sessionId)?.latestTask || current
+}
+const subagentTasksForTab = (tab: RightSidebarTab | null | undefined): SubagentTaskRecord[] => {
+  const task = subagentTaskForTab(tab)
+  if (!task) return []
+  const sessionId = subagentTaskSessionId(task)
+  return subagentSessions.value.find(session => session.sessionId === sessionId)?.tasks || [task]
 }
 const displaySubagentTask = computed(() => subagentTaskForTab(displayToolTab.value))
 // 运行中任务来自详情 SSE 的实时占用；列表快照不含 result_meta，不能作为顶部唯一来源
@@ -165,6 +182,8 @@ const subagentTaskStatusIcon = (task: SubagentTaskRecord): string => {
     case 'pending': return 'fa-clock'
     case 'running': return 'fa-spinner fa-spin'
     case 'cancelling': return 'fa-circle-notch fa-spin'
+    case 'paused': return 'fa-pause'
+    case 'waiting_approval': return 'fa-user-clock'
     case 'completed': return 'fa-check'
     case 'failed': return 'fa-xmark'
     case 'cancelled': return 'fa-ban'
@@ -175,6 +194,8 @@ const subagentTaskStatusIcon = (task: SubagentTaskRecord): string => {
   }
 }
 const subagentTaskStatusTone = (task: SubagentTaskRecord): string => {
+  if (task.status === 'paused') return 'border-slate-200 bg-slate-50 text-slate-600'
+  if (task.status === 'waiting_approval') return 'border-amber-200 bg-amber-50 text-amber-700'
   if (isSubagentTaskActive(task)) return 'border-sky-200 bg-sky-50 text-sky-700'
   if (task.status === 'completed') return 'border-emerald-200 bg-emerald-50 text-emerald-700'
   if (task.status === 'failed' || task.status === 'timeout' || task.status === 'lost') {
@@ -253,7 +274,9 @@ const selectPanelTab = (tabId: string, fromTabStrip = false) => {
     void loadWorkspaceFileContent(props.conversationId, tab.path)
   }
   if (tab?.kind === 'subagentTask' && tab.taskId) {
-    void props.loadSubagentTaskDetail?.(tab.taskId)
+    for (const task of subagentTasksForTab(tab)) {
+      void props.loadSubagentTaskDetail?.(task.task_id)
+    }
   }
   selectTab(tabId)
   emit('update:open', true)
@@ -346,14 +369,17 @@ const openFilePanelTab = (path: string) => {
   selectPanelTab(`file:${path}`)
 }
 
-/** 后台任务独立 tab：同一 task_id 只激活已有 tab，滚动位置与展开态各自保留。 */
+/** 后台任务独立 tab：同一子会话只保留一个 tab，追问时切到最新一轮。 */
 const openSubagentTaskPanelTab = (task: SubagentTaskRecord) => {
-  const tabId = `subagent-task:${task.task_id}`
+  const sessionId = subagentTaskSessionId(task)
+  const sessionRoot = props.subagentTasks.find(item => item.task_id === sessionId)
+    || props.subagentTaskDetails[sessionId]
+  const tabId = `subagent-task:${sessionId}`
   rememberActivePanelScroll()
   activateTab({
     id: tabId,
     kind: 'subagentTask',
-    title: task.label || task.description || '后台任务',
+    title: sessionRoot?.label?.trim() || task.label || task.description || '后台任务',
     taskId: task.task_id,
   })
   selectPanelTab(tabId)
@@ -1510,7 +1536,7 @@ defineExpose({
         :file-count="producedFiles.length"
         :used-bytes="workspaceUsage.used_bytes"
         :limit-bytes="workspaceUsage.limit_bytes"
-        :task-count="subagentTasks.length"
+        :task-count="subagentSessionCount"
         :active-task-count="subagentTasks.filter(isSubagentTaskActive).length"
         @open-files="openWorkspacePanelTab"
         @open-subagents="openSubagentManagerPanelTab"
@@ -1540,6 +1566,7 @@ defineExpose({
           v-if="subagentTaskForTab(taskTab)"
           v-show="displayToolTab?.id === taskTab.id"
           :task="subagentTaskForTab(taskTab) as SubagentTaskRecord"
+          :session-tasks="subagentTasksForTab(taskTab)"
           :conversation-id="conversationId"
           :active-tool-call-id="activeToolCall?.tool_call_id || null"
           class="mb-3"

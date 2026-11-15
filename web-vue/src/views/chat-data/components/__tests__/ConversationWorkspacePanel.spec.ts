@@ -49,6 +49,18 @@ const backgroundTask: SubagentTaskRecord = {
   timeout_seconds: 60,
 }
 
+const followUpBackgroundTask: SubagentTaskRecord = {
+  ...backgroundTask,
+  task_id: 'bg-task-2',
+  parent_task_id: backgroundTask.task_id,
+  root_task_id: backgroundTask.task_id,
+  turn_index: 2,
+  label: '先给自己起一个响亮的名字',
+  description: '先给自己起一个响亮的名字，然后告诉我你叫什么。',
+  updated_at: '2026-11-15T10:02:00',
+  finished_at: '2026-11-15T10:02:00',
+}
+
 const mountPanel = (
   overrides: Record<string, unknown> = {},
   options: { stubs?: Record<string, unknown> } = {},
@@ -182,6 +194,73 @@ describe('ConversationWorkspacePanel tab 容器', () => {
     vm.openSubagentTask(backgroundTask)
     await wrapper.vm.$nextTick()
     expect(tabTitles(wrapper)).toHaveLength(2)
+  })
+
+  it('任务详情只展示过程，不提供用户直接追问的输入框', async () => {
+    const wrapper = mountPanel({
+      conversationId: 'conv-1',
+      subagentTasks: [backgroundTask],
+      subagentTaskDetails: { [backgroundTask.task_id]: backgroundTask },
+    })
+    const vm = wrapper.vm as unknown as { openSubagentTask: (task: SubagentTaskRecord) => void }
+
+    vm.openSubagentTask(backgroundTask)
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('[data-subagent-follow-up]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('发送追问')
+  })
+
+  it('同一子会话的多轮追问在管理页只显示一张智能体卡片', async () => {
+    const wrapper = mountPanel({
+      subagentTasks: [backgroundTask, followUpBackgroundTask],
+      subagentTaskDetails: {
+        [backgroundTask.task_id]: backgroundTask,
+        [followUpBackgroundTask.task_id]: followUpBackgroundTask,
+      },
+    })
+    const vm = wrapper.vm as unknown as { openSubagentManager: () => void }
+
+    vm.openSubagentManager()
+    await wrapper.vm.$nextTick()
+
+    const cards = wrapper.findAll('[data-subagent-task-card]')
+    expect(cards).toHaveLength(1)
+    expect(cards[0]!.find('[data-subagent-task-title]').text()).toContain('入金趋势')
+    expect(cards[0]!.find('[data-subagent-task-turn]').text()).toContain('追问 1')
+
+    await cards[0]!.trigger('click')
+    await wrapper.vm.$nextTick()
+    expect(tabTitles(wrapper)).toEqual(['工作台', '子智能体管理', '入金趋势'])
+  })
+
+  it('同一子会话的追问复用任务 tab，并切换到最新一轮', async () => {
+    const wrapper = mountPanel({
+      subagentTasks: [backgroundTask],
+      subagentTaskDetails: { [backgroundTask.task_id]: backgroundTask },
+    })
+    const vm = wrapper.vm as unknown as { openSubagentTask: (task: SubagentTaskRecord) => void }
+
+    vm.openSubagentTask(backgroundTask)
+    await wrapper.vm.$nextTick()
+    expect(tabTitles(wrapper)).toEqual(['工作台', '入金趋势'])
+
+    await wrapper.setProps({
+      subagentTasks: [backgroundTask, followUpBackgroundTask],
+      subagentTaskDetails: {
+        [backgroundTask.task_id]: backgroundTask,
+        [followUpBackgroundTask.task_id]: followUpBackgroundTask,
+      },
+    })
+    await wrapper.vm.$nextTick()
+    expect(tabTitles(wrapper)).toEqual(['工作台', '入金趋势'])
+
+    const detail = wrapper.findComponent({ name: 'SubagentTaskProcessView' })
+    expect((detail.props('task') as SubagentTaskRecord).task_id).toBe(followUpBackgroundTask.task_id)
+    expect((detail.props('sessionTasks') as SubagentTaskRecord[]).map(task => task.task_id)).toEqual([
+      backgroundTask.task_id,
+      followUpBackgroundTask.task_id,
+    ])
   })
 
   it('任务详情副标题不重复展示最近工具调用', async () => {

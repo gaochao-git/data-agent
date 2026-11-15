@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
+from apps.chat_data_app.agent.contracts.subagent_task import ACTIVE_TASK_STATUSES
 from apps.chat_data_app.routers import conversations as conversation_router
 from auth import AuthenticationError
 from utils.error_codes import ErrorCode
@@ -727,7 +728,7 @@ async def test_subagent_task_routes_list_detail_and_cancel(router_state, monkeyp
             limit=5,
         )
     )
-    assert calls == [("conv_1", "u1", {"pending", "running", "cancelling"}, 5)]
+    assert calls == [("conv_1", "u1", set(ACTIVE_TASK_STATUSES), 5)]
     assert body["data"]["count"] == 1
     assert body["data"]["tasks"][0]["task_id"] == "t1"
     assert "report" not in body["data"]["tasks"][0]
@@ -765,7 +766,7 @@ async def test_subagent_task_event_stream_route(router_state, monkeypatch):
     async def stream_events(**_kwargs):
         yield {
             "stream_id": "1-0",
-            "payload": "event: subagent_message_delta\ndata: {\"delta\":\"hi\"}\n\n",
+            "payload": 'event: subagent_message_delta\ndata: {"delta":"hi"}\n\n',
         }
 
     monkeypatch.setattr(conversation_router.subagent_task_service, "get_task", get_task)

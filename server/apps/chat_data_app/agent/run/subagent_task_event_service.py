@@ -99,18 +99,16 @@ class SubagentTaskEventService:
             if await _resolve_check(is_disconnected):
                 return
             events = await self._read_batch(task_id, cursor)
+            if events:
+                for event in events:
+                    cursor = event["stream_id"]
+                    yield event
+                continue
+            if await _resolve_check(is_terminal):
+                return
             if events is None:
-                if await _resolve_check(is_terminal):
-                    return
+                # 读取异常时退避，避免 Redis 抖动期间空转；读到空批次仍立即重试。
                 await asyncio.sleep(0.5)
-                continue
-            if not events:
-                if await _resolve_check(is_terminal):
-                    return
-                continue
-            for event in events:
-                cursor = event["stream_id"]
-                yield event
 
     async def _read_batch(self, task_id: str, cursor: str) -> list[dict[str, str]] | None:
         try:

@@ -39,3 +39,60 @@ cancelled/interrupted/lost`；`cancelling` 是跨 worker 的取消请求，执�
 - 实时推送走 SSE `subagent_task_updated`（只带紧凑快照，不带报告）；断线、空闲或刷新后由
   `GET /conversations/{id}/subagent-tasks` 轮询/列表恢复。详情接口返回完整报告与
   `result_meta`（过程快照、上下文/token 用量、压缩记录），列表接口不返回大字段。
+
+### 多轮追问（follow_up）
+
+子智能体按“独立子会话 + 每轮一条任务”组织，不是把上一轮报告拼进新任务书：
+
+- 首轮 `task_id` 同时是 `root_task_id`（兼容字段）与 `agent_session_id`；追问生成新的
+  `task_id`，通过 `parent_task_id` 指向子会话最新一轮，`turn_index` 从 1 线性递增。
+- 完整消息历史保存在 `chat_data_subagent_session`：`session_id` 唯一，`messages_json`
+  在每轮收口时整体覆盖，避免按轮次追加造成 O(n²) 增长。任务账本仍每轮一行，便于审计、
+  取消和追溯报告。
+- 主智能体统一用 `task(action="follow_up", task_id=..., message=...)` 续聊；只允许对终态
+  任务发起，同一子会话同时只能有一个活跃轮次。运行中需要补充说明用
+  `task(action="steer", task_id=..., message=...)`，停止仍用
+  `task(action="cancel", task_id=...)`。
+- 即使用户从旧任务卡发起追问，后端也会锚定该子会话最新一轮作为 `parent_task_id`，上下文
+  取当前会话快照，保证轮次与任务链不分叉。
+- 会话历史单条封顶 100k 字符、总量封顶 2M 字符；超限时从旧到新丢弃并插入省略说明。旧任务
+  没有快照时退回“上一轮任务书 + 最终报告”，仍可继续追问一轮。
+- 新增表 DDL 只维护在 `server/apps/chat_data_app/next_version.md`，由发布流程/DBA 上线前
+  手工执行；应用启动不会自动建表。生产库未执行建表时，任务收口与读取都会降级为无快照模式，
+  不阻断主任务；但追问只能使用任务书+报告兜底，部署时应先建表。
+
+### 身份语义（任务 / 会话 / 智能体分层）
+
+任务账本同时承载三种身份，修改字段前必须区分清楚，不能互相复用：
+
+- `conversation_id`：用户可见的主对话，顶层作用域。
+- `agent_id`：子智能体实例身份。当前固定一层：`depth=1`、`parent_agent_id` 为空、
+  `root_agent_id` 指向自身；这些字段只做稳定标识与审计，不代表支持嵌套派发。
+- `agent_session_id`：该智能体的记忆容器，同一智能体的所有轮次共享；等于
+  `chat_data_subagent_session.session_id`。
+- `task_id`：一次执行轮次，承载租约、取消、审计与报告；`turn_index` 是该智能体内的轮次。
+
+`parent_task_id` 只表示“任务链上一轮”，**不是**父智能体；父子智能体关系看
+`parent_agent_id` / `root_agent_id` / `depth`。旧任务没有新字段时按
+`agent_session_id → root_task_id → task_id`、`agent_id → agent_session_id`、
+`depth → 1` 的顺序回退，历史数据不需要回填。
+
+### 明确非目标：子智能体不得再派发
+
+- 子图工具白名单不包含 `task`，`SubagentMiddleware` 只挂主图；即使主图工具列表
+  误带 `task`，也会被白名单过滤。相关回归见 `test_tools_registry.py` 与
+  `test_data_agent_graph_flow.py`。
+- 因此不建设嵌套派发、树形 UI、子树取消、树级预算/查询；`depth` /
+  `parent_agent_id` 仅作身份元数据，当前恒为 1 / 空。
+
+后续只做单层模型内的能力增强：
+
+- 已实现：子图独立 checkpointer（线程按 `agent_session_id`、命名空间按
+  `task_id`），以及 `paused/waiting_approval` 状态与统一的
+  `steer/pause/resume/approve/reject/cancel` 控制命令。账本仍是业务真值，
+  checkpoint 只负责执行恢复；暂停与审批都落在模型调用前的安全点，恢复用
+  `Command(resume=...)`。等待审批时会主动向主会话冒泡一条内部通知，用户
+  明确允许/拒绝后由主智能体调用 `task(action="approve"/"reject")` 继续。
+- 阶段 2：通知聚合、全局/节点容量、运行期子智能体类型注册与预算配置。
+- 阶段 3：单层任务的查询/可观测性增强；API 只暴露智能体视图，不把 inbox
+  扁平行泄露给前端。

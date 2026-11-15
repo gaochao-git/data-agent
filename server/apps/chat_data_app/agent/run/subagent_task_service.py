@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from types import SimpleNamespace
@@ -20,6 +21,7 @@ from typing import Any
 from uuid import uuid4
 
 from apps.chat_data_app.daos.agent_inbox_dao import agent_inbox_dao
+from apps.chat_data_app.daos.subagent_session_dao import subagent_session_dao
 from apps.chat_data_app.daos.subagent_task_dao import (
     SubagentTaskDao,
     load_task_meta,
@@ -33,6 +35,8 @@ from utils.models import ChatDataAgentInbox
 
 from ..contracts.subagent_task import (
     ACTIVE_TASK_STATUSES,
+    EXECUTING_TASK_STATUSES,
+    SUSPENDED_TASK_STATUSES,
     TASK_HEARTBEAT_SECONDS,
     TASK_STATUS_CANCELLED,
     TASK_STATUS_CANCELLING,
@@ -41,9 +45,11 @@ from ..contracts.subagent_task import (
     TASK_STATUS_INTERRUPTED,
     TASK_STATUS_LABELS,
     TASK_STATUS_LOST,
+    TASK_STATUS_PAUSED,
     TASK_STATUS_PENDING,
     TASK_STATUS_RUNNING,
     TASK_STATUS_TIMEOUT,
+    TASK_STATUS_WAITING_APPROVAL,
     TERMINAL_TASK_STATUSES,
     SubagentTaskCapacityError,
     SubagentTaskView,
@@ -186,6 +192,59 @@ class SubagentTaskRecord:
         return str(self.result_meta.get("report_path") or "")
 
     @property
+    def parent_task_id(self) -> str:
+        """上一轮任务 ID；空表示这是子会话首轮。
+
+        注意：它只表达“任务链上一轮”，不表达“父智能体”。树形派生的父子
+        关系见 ``parent_agent_id``。
+        """
+        return str(self.meta.get("parent_task_id") or "")
+
+    @property
+    def agent_session_id(self) -> str:
+        """子智能体的记忆容器 ID，同一智能体的所有轮次共享。
+
+        新数据写 ``agent_session_id``；旧数据没有该字段时复用历史
+        ``root_task_id``（首轮 task_id），再回退到当前 task_id。
+        """
+        return str(self.meta.get("agent_session_id") or self.meta.get("root_task_id") or self.task_id)
+
+    @property
+    def agent_id(self) -> str:
+        """子智能体实例 ID；当前固定一层，旧数据与子会话同 ID。"""
+        return str(self.meta.get("agent_id") or self.agent_session_id)
+
+    @property
+    def parent_agent_id(self) -> str:
+        """父智能体 ID；当前固定为空（子智能体由主智能体直接派生）。"""
+        return str(self.meta.get("parent_agent_id") or "")
+
+    @property
+    def root_agent_id(self) -> str:
+        """子智能体根标识；当前固定等于自身。"""
+        return str(self.meta.get("root_agent_id") or self.agent_id)
+
+    @property
+    def depth(self) -> int:
+        """层级深度；当前固定为 1（子智能体不再派发）。"""
+        try:
+            return max(int(self.meta.get("depth") or 1), 1)
+        except (TypeError, ValueError):
+            return 1
+
+    @property
+    def root_task_id(self) -> str:
+        """兼容字段：历史调用方用它当子会话 ID；新代码请用 ``agent_session_id``。"""
+        return self.agent_session_id
+
+    @property
+    def turn_index(self) -> int:
+        try:
+            return max(int(self.meta.get("turn_index") or 1), 1)
+        except (TypeError, ValueError):
+            return 1
+
+    @property
     def is_terminal(self) -> bool:
         return self.status in TERMINAL_TASK_STATUSES
 
@@ -196,6 +255,14 @@ class SubagentTaskRecord:
             "conversation_id": self.conversation_id,
             "parent_run_id": self.parent_run_id,
             "parent_tool_call_id": self.parent_tool_call_id,
+            "parent_task_id": self.parent_task_id or None,
+            "root_task_id": self.root_task_id,
+            "agent_id": self.agent_id,
+            "agent_session_id": self.agent_session_id,
+            "parent_agent_id": self.parent_agent_id or None,
+            "root_agent_id": self.root_agent_id,
+            "depth": self.depth,
+            "turn_index": self.turn_index,
             "subagent_type": self.subagent_type,
             "label": self.label,
             "description": self.description,
@@ -214,6 +281,8 @@ class SubagentTaskRecord:
             payload["report_path"] = self.report_path
             payload["error"] = self.error
             payload["result_meta"] = self.result_meta
+            payload["pending_interrupt"] = self.meta.get("pending_interrupt")
+            payload["pause_requested"] = bool(self.meta.get("pause_requested_at"))
         return payload
 
 
@@ -278,6 +347,29 @@ def _preview(text: str, max_chars: int = NOTIFICATION_REPORT_PREVIEW_CHARS) -> s
 
 def notification_message_id(task_id: str) -> str:
     return f"ntf-{task_id}"
+
+
+def _suspension_notification_text(task: SubagentTaskRecord) -> str:
+    """等待审批的冒泡文本：只陈述待审批操作，不代替用户做决定。"""
+    payload = task.meta.get("pending_interrupt")
+    items = payload.get("approval_items") if isinstance(payload, dict) else None
+    lines: list[str] = []
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get("label") or item.get("tool_name") or "工具调用")
+        intent = str(item.get("intent") or "").strip()
+        lines.append(f"- {label}" + (f"：{intent}" if intent else ""))
+    detail = "\n".join(lines) if lines else "- 子智能体请求执行需要审批的工具（详情见任务详情）"
+    return (
+        "## 后台子智能体等待审批（内部消息）\n"
+        f"task_id={task.task_id}\n"
+        f"类型={task.subagent_type}；任务={task.label}\n\n"
+        f"待审批操作：\n{detail}\n\n"
+        "请先把上述操作转述给用户并等待用户明确允许或拒绝；用户确认后调用 "
+        f'task(action="approve" 或 "reject", task_id="{task.task_id}")。'
+        "在用户明确表态前不要自行批准，也不要重复派发同一任务。"
+    )
 
 
 class SubagentTaskService:
@@ -351,6 +443,9 @@ class SubagentTaskService:
         parent_owner_token: str | None,
         timeout_seconds: int | None,
         operator_name: str,
+        parent_task_id: str | None = None,
+        agent_session_id: str | None = None,
+        root_task_id: str | None = None,
     ) -> SubagentTaskRecord:
         max_active = int(await get_runtime_setting("CHAT_DATA_SUBAGENT_TASK_MAX_ACTIVE"))
         lease_seconds = int(await get_runtime_setting("CHAT_DATA_SUBAGENT_TASK_LEASE_SECONDS"))
@@ -368,12 +463,61 @@ class SubagentTaskService:
                 raise SubagentTaskCapacityError(
                     f"后台子智能体任务已达上限（{max_active} 个执行中），请等待任务完成或取消后再派发。"
                 )
+            root_task = str(agent_session_id or root_task_id or task_id)
+            parent_task = str(parent_task_id or "")
+            turn_index = 1
+            agent_id = root_task
+            agent_session = root_task
+            parent_agent_id = ""
+            root_agent_id = agent_id
+            depth = 1
+            if parent_task:
+                # 会话行锁已把同会话的 create_task 串行化；在这里再查一次活跃轮次，
+                # 拦住主智能体同一轮并行发出的多个 follow_up（前置查询无法原子挡）。
+                session_active = await self._dao.list_active_for_conversation(
+                    session,
+                    conversation_id,
+                    user_id,
+                    ACTIVE_TASK_STATUSES,
+                )
+                if any(
+                    SubagentTaskRecord.from_row(row, include_content=False).root_task_id == root_task
+                    for row in session_active
+                ):
+                    raise SubagentTaskCapacityError("该子智能体已有进行中的追问任务，请等待其结束或先取消。")
+                parent_row = await self._dao.get(
+                    session,
+                    parent_task,
+                    conversation_id=conversation_id,
+                    user_id=user_id,
+                )
+                parent_record = SubagentTaskRecord.from_row(parent_row, include_content=False) if parent_row else None
+                if parent_record is not None:
+                    turn_index = parent_record.turn_index + 1
+                    # 追问沿用同一智能体身份与同一份会话快照；parent_task_id 只是
+                    # 任务链上一轮，不代表新的智能体。
+                    agent_id = parent_record.agent_id
+                    agent_session = parent_record.agent_session_id
+                    parent_agent_id = parent_record.parent_agent_id
+                    root_agent_id = parent_record.root_agent_id
+                    depth = parent_record.depth
+                    root_task = agent_session
+                else:
+                    turn_index = 2
             meta = {
                 "subagent_type": subagent_type,
                 "description": description,
                 "label": (label or description.splitlines()[0][:80]).strip(),
                 "parent_tool_call_id": parent_tool_call_id,
                 "parent_owner_token": str(parent_owner_token or ""),
+                "parent_task_id": parent_task,
+                "root_task_id": root_task,
+                "agent_id": agent_id,
+                "agent_session_id": agent_session,
+                "parent_agent_id": parent_agent_id,
+                "root_agent_id": root_agent_id,
+                "depth": depth,
+                "turn_index": turn_index,
                 "operator_name": operator_name,
                 "timeout_seconds": effective_timeout,
                 "progress": {},
@@ -434,6 +578,97 @@ class SubagentTaskService:
                 limit=limit,
             )
             return [SubagentTaskRecord.from_row(row, include_content=False) for row in rows]
+
+    async def load_session_messages(
+        self,
+        session_id: str,
+        *,
+        conversation_id: str,
+        user_id: str,
+        expected_turn_index: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """读取子会话的完整消息历史；缺失或损坏时返回空列表。"""
+        try:
+            async with get_session() as session:
+                row = await subagent_session_dao.get(
+                    session,
+                    session_id,
+                    conversation_id=conversation_id,
+                    user_id=user_id,
+                )
+        except Exception:
+            # 新表尚未迁移/数据库暂时不可用不能阻断追问：退化为“任务书+报告”
+            # 兜底，任务本身仍可继续执行。
+            logger.warning("子智能体会话历史读取失败，按空历史处理: session_id=%s", session_id, exc_info=True)
+            return []
+        if row is None or not row.messages_json:
+            return []
+        if expected_turn_index is not None and int(row.turn_count or 0) < expected_turn_index:
+            # 本轮快照写入失败时表里仍是旧轮次。不能用旧历史冒充当前上下文，
+            # 交给调用方退回“上一轮任务书+报告”兜底。
+            logger.warning(
+                "子智能体会话快照落后于当前任务轮次，按空历史处理: session_id=%s expected=%s actual=%s",
+                session_id,
+                expected_turn_index,
+                row.turn_count,
+            )
+            return []
+        try:
+            loaded = json.loads(row.messages_json)
+        except (TypeError, ValueError):
+            logger.warning("子智能体会话历史损坏，按空历史处理: session_id=%s", session_id, exc_info=True)
+            return []
+        if not isinstance(loaded, list):
+            return []
+        return [item for item in loaded if isinstance(item, dict)]
+
+    async def find_active_task_in_session(
+        self,
+        session_id: str,
+        *,
+        conversation_id: str,
+        user_id: str,
+    ) -> SubagentTaskRecord | None:
+        """同一子会话只允许一个活跃轮次，避免两轮追问并发改写同一份历史。"""
+        async with get_session() as session:
+            rows = await self._dao.list_active_for_conversation(
+                session,
+                conversation_id,
+                user_id,
+                ACTIVE_TASK_STATUSES,
+            )
+        for row in rows:
+            record = SubagentTaskRecord.from_row(row, include_content=False)
+            if record.root_task_id == session_id:
+                return record
+        return None
+
+    async def get_latest_task_in_session(
+        self,
+        session_id: str,
+        *,
+        conversation_id: str,
+        user_id: str,
+    ) -> SubagentTaskRecord | None:
+        """返回子会话最新一轮任务，保证追问的 parent/turn_index 始终线性推进。"""
+        try:
+            async with get_session() as session:
+                snapshot = await subagent_session_dao.get(
+                    session,
+                    session_id,
+                    conversation_id=conversation_id,
+                    user_id=user_id,
+                )
+        except Exception:
+            logger.warning("子智能体会话最新任务读取失败，回退到指定任务: session_id=%s", session_id, exc_info=True)
+            return None
+        if snapshot is None or not snapshot.latest_task_id:
+            return None
+        return await self.get_task(
+            snapshot.latest_task_id,
+            conversation_id=conversation_id,
+            user_id=user_id,
+        )
 
     async def publish_task_update(self, task: SubagentTaskRecord) -> None:
         """向当前活跃 Run 的 SSE 推送紧凑任务快照；失败只降级为前端轮询。"""
@@ -532,6 +767,248 @@ class SubagentTaskService:
         await self.publish_task_update(record)
         return record.status
 
+    async def request_pause(
+        self,
+        task_id: str,
+        *,
+        conversation_id: str,
+        user_id: str,
+        operator_name: str,
+    ) -> SubagentTaskRecord | None:
+        """请求在下一个安全点暂停；真正停下由子图中间件在模型调用前完成。
+
+        运行中的任务只打标记、不直接改状态：执行体仍持有租约并继续心跳，
+        等中间件在模型调用前 ``interrupt`` 后才落 ``paused``。排队中的任务
+        没有执行体，直接暂停并释放租约。
+        """
+        async with get_session() as session:
+            now = await self._dao.now(session)
+            row = await self._dao.get(
+                session,
+                task_id,
+                conversation_id=conversation_id,
+                user_id=user_id,
+                for_update=True,
+            )
+            if row is None:
+                return None
+            if row.record_status in TERMINAL_TASK_STATUSES:
+                return SubagentTaskRecord.from_row(row)
+            meta = load_task_meta(row.record_meta)
+            meta["pause_requested_at"] = now.isoformat()
+            progress = meta.get("progress")
+            progress = dict(progress) if isinstance(progress, dict) else {}
+            if row.record_status in SUSPENDED_TASK_STATUSES:
+                return SubagentTaskRecord.from_row(row)
+            if row.record_status == TASK_STATUS_PENDING:
+                progress.update({"phase": TASK_STATUS_PAUSED, "running_tools": 0})
+                meta["suspended_at"] = now.isoformat()
+                row.record_status = TASK_STATUS_PAUSED
+                row.owner_token = None
+                row.lease_expire_time = None
+            else:
+                progress.update({"phase": "pause_requested"})
+            meta["progress"] = progress
+            row.record_meta = _task_meta_text(meta)
+            row.update_time = now
+            row.update_by = user_id
+            row.update_by_name = operator_name
+            record = SubagentTaskRecord.from_row(row)
+        await self.publish_task_update(record)
+        logger.info("后台子智能体暂停请求: task_id=%s status=%s", task_id, record.status)
+        return record
+
+    async def is_pause_requested(self, task_id: str, owner_token: str) -> bool:
+        """子图在模型调用前查询暂停标记（只读单行，不加锁）。"""
+        async with get_session() as session:
+            row = await self._dao.get(session, task_id)
+            if row is None or row.owner_token != owner_token:
+                return False
+            if row.record_status != TASK_STATUS_RUNNING:
+                return False
+            meta = load_task_meta(row.record_meta)
+            return bool(meta.get("pause_requested_at"))
+
+    async def enqueue_steer_message(
+        self,
+        task_id: str,
+        *,
+        conversation_id: str,
+        user_id: str,
+        message: str,
+        operator_name: str,
+    ) -> SubagentTaskRecord | None:
+        """把主智能体的插话排入子任务队列，由子图在下次模型调用前领取。"""
+        content = str(message or "").strip()
+        if not content:
+            return None
+        async with get_session() as session:
+            now = await self._dao.now(session)
+            row = await self._dao.get(
+                session,
+                task_id,
+                conversation_id=conversation_id,
+                user_id=user_id,
+                for_update=True,
+            )
+            if row is None or row.record_status in TERMINAL_TASK_STATUSES:
+                return None
+            meta = load_task_meta(row.record_meta)
+            queue = meta.get("steer_queue")
+            queue = list(queue) if isinstance(queue, list) else []
+            queue.append({"message": content[:2000], "enqueued_at": now.isoformat()})
+            meta["steer_queue"] = queue[-20:]
+            row.record_meta = _task_meta_text(meta)
+            row.update_time = now
+            row.update_by = user_id
+            row.update_by_name = operator_name
+            record = SubagentTaskRecord.from_row(row)
+        await self.publish_task_update(record)
+        return record
+
+    async def claim_steer_messages(self, task_id: str, owner_token: str) -> list[str]:
+        """原子领取并清空插话队列；只有当前执行者能领取。"""
+        async with get_session() as session:
+            row = await self._dao.get(session, task_id, for_update=True)
+            if row is None or row.owner_token != owner_token:
+                return []
+            if row.record_status != TASK_STATUS_RUNNING:
+                return []
+            meta = load_task_meta(row.record_meta)
+            queue = meta.pop("steer_queue", [])
+            if not isinstance(queue, list) or not queue:
+                return []
+            row.record_meta = _task_meta_text(meta)
+            row.update_time = await self._dao.now(session)
+        return [str(item.get("message") or "") for item in queue if isinstance(item, dict) and item.get("message")]
+
+    async def suspend_task(
+        self,
+        task_id: str,
+        owner_token: str,
+        *,
+        status: str,
+        interrupt_payload: dict[str, Any] | None = None,
+    ) -> SubagentTaskRecord | None:
+        """执行体在 interrupt 后把任务落到暂停/等待审批，并释放租约。"""
+        if status not in SUSPENDED_TASK_STATUSES:
+            raise ValueError(f"不支持的挂起状态: {status}")
+        async with get_session() as session:
+            now = await self._dao.now(session)
+            row = await self._dao.get(session, task_id, for_update=True)
+            if row is None or row.owner_token != owner_token:
+                return None
+            if row.record_status in TERMINAL_TASK_STATUSES or row.record_status == TASK_STATUS_CANCELLING:
+                return SubagentTaskRecord.from_row(row)
+            meta = load_task_meta(row.record_meta)
+            meta["suspended_at"] = now.isoformat()
+            meta["pending_interrupt"] = interrupt_payload
+            meta.pop("pause_requested_at", None)
+            progress = meta.get("progress")
+            progress = dict(progress) if isinstance(progress, dict) else {}
+            progress.update({"phase": status, "running_tools": 0})
+            meta["progress"] = progress
+            row.record_status = status
+            row.owner_token = None
+            row.lease_expire_time = None
+            row.record_meta = _task_meta_text(meta)
+            row.update_time = now
+            record = SubagentTaskRecord.from_row(row)
+        await self.publish_task_update(record)
+        logger.info("后台子智能体已挂起: task_id=%s status=%s", task_id, status)
+        if status == TASK_STATUS_WAITING_APPROVAL:
+            await self._announce_suspended_task(record)
+        return record
+
+    async def _announce_suspended_task(self, task: SubagentTaskRecord) -> None:
+        """等待审批时主动冒泡到主会话：不依赖用户先轮询任务详情。"""
+        notif_id = f"subagent-approval-{task.task_id}"
+        content = _suspension_notification_text(task)
+        async with get_session() as session:
+            now = await self._dao.now(session)
+            existing = await agent_inbox_dao.get_message_by_id(
+                session,
+                task.conversation_id,
+                task.user_id,
+                notif_id,
+            )
+            if existing is not None and existing.record_status in {"claimed", "consumed"}:
+                return
+            active = await agent_inbox_dao.get_active_run_snapshot(
+                session,
+                task.conversation_id,
+                task.user_id,
+            )
+            if active is not None:
+                if existing is None:
+                    await self._dao.create_notification_message(
+                        session,
+                        conversation_id=task.conversation_id,
+                        user_id=task.user_id,
+                        run_id=active.run_id,
+                        message_id=notif_id,
+                        content=content,
+                        record_meta=self._notification_meta(task),
+                        now=now,
+                        operator_name=self._operator_name(task),
+                    )
+                else:
+                    await self._dao.attach_pending_message(session, existing, active.run_id, now)
+                return
+            if existing is None:
+                await self._dao.create_notification_message(
+                    session,
+                    conversation_id=task.conversation_id,
+                    user_id=task.user_id,
+                    run_id=task.parent_run_id,
+                    message_id=notif_id,
+                    content=content,
+                    record_meta=self._notification_meta(task),
+                    now=now,
+                    operator_name=self._operator_name(task),
+                )
+        # 审批冒泡不能标记 task.consumed_time：任务恢复后仍需发送完成通知。
+        await self._start_notification_run(task, selected_message_id=notif_id, mark_notified=False)
+
+    async def resume_task(
+        self,
+        task_id: str,
+        *,
+        conversation_id: str,
+        user_id: str,
+        resume_value: Any,
+    ) -> tuple[SubagentTaskRecord, Any] | None:
+        """把挂起任务重新置为运行中并返回新的执行者身份与恢复值。"""
+        async with get_session() as session:
+            now = await self._dao.now(session)
+            lease_seconds = int(await get_runtime_setting("CHAT_DATA_SUBAGENT_TASK_LEASE_SECONDS"))
+            row = await self._dao.get(
+                session,
+                task_id,
+                conversation_id=conversation_id,
+                user_id=user_id,
+                for_update=True,
+            )
+            if row is None or row.record_status not in SUSPENDED_TASK_STATUSES:
+                return None
+            meta = load_task_meta(row.record_meta)
+            meta["resumed_at"] = now.isoformat()
+            meta["pending_interrupt"] = None
+            meta.pop("pause_requested_at", None)
+            progress = meta.get("progress")
+            progress = dict(progress) if isinstance(progress, dict) else {}
+            progress.update({"phase": "resumed", "running_tools": 0})
+            meta["progress"] = progress
+            row.record_status = TASK_STATUS_RUNNING
+            row.owner_token = uuid4().hex
+            row.lease_expire_time = now + timedelta(seconds=lease_seconds)
+            row.record_meta = _task_meta_text(meta)
+            row.update_time = now
+            record = SubagentTaskRecord.from_row(row)
+        await self.publish_task_update(record)
+        logger.info("后台子智能体恢复执行: task_id=%s", task_id)
+        return record, resume_value
+
     async def finish_task(
         self,
         task_id: str,
@@ -541,6 +1018,7 @@ class SubagentTaskService:
         report: str,
         error: str = "",
         result_meta: dict[str, Any] | None = None,
+        history: Sequence[dict[str, Any]] | None = None,
     ) -> SubagentTaskRecord | None:
         async with get_session() as session:
             now = await self._dao.now(session)
@@ -583,8 +1061,66 @@ class SubagentTaskService:
             row.update_time = now
             logger.info("后台子智能体任务收口: task_id=%s status=%s", task_id, final_status)
             record = SubagentTaskRecord.from_row(row)
+        if history is not None:
+            # 会话快照单独事务：新表未上线/写失败不能让任务收口回滚，否则任务
+            # 只能等租约过期变 lost。历史缺失时追问会走“任务书+报告”兜底。
+            try:
+                async with get_session() as history_session:
+                    history_now = await self._dao.now(history_session)
+                    await self._save_session_history(
+                        history_session,
+                        meta,
+                        history,
+                        history_now,
+                        conversation_id=record.conversation_id,
+                        user_id=record.user_id,
+                        task_id=task_id,
+                    )
+            except Exception:
+                logger.error(
+                    "子智能体会话快照写入失败，任务已正常收口: task_id=%s session_id=%s",
+                    task_id,
+                    str(meta.get("agent_session_id") or meta.get("root_task_id") or task_id),
+                    exc_info=True,
+                )
         await self.publish_task_update(record)
         return record
+
+    async def _save_session_history(
+        self,
+        session: Any,
+        meta: dict[str, Any],
+        history: Sequence[dict[str, Any]],
+        now: datetime,
+        *,
+        conversation_id: str,
+        user_id: str,
+        task_id: str,
+    ) -> None:
+        """把本轮结束时的完整消息历史整体写入子会话快照。"""
+        session_id = str(meta.get("agent_session_id") or meta.get("root_task_id") or "").strip()
+        if not session_id:
+            return
+        try:
+            messages_json = json.dumps(list(history), ensure_ascii=False)
+        except (TypeError, ValueError):
+            logger.warning("子智能体会话历史序列化失败，跳过持久化: session_id=%s", session_id, exc_info=True)
+            return
+        try:
+            turn_count = max(int(meta.get("turn_index") or 1), 1)
+        except (TypeError, ValueError):
+            turn_count = 1
+        await subagent_session_dao.upsert(
+            session,
+            session_id=session_id,
+            conversation_id=conversation_id,
+            user_id=user_id,
+            latest_task_id=task_id,
+            turn_count=turn_count,
+            messages_json=messages_json,
+            now=now,
+            operator_name=str(meta.get("operator_name") or ""),
+        )
 
     async def cancel_task(
         self,
@@ -614,13 +1150,14 @@ class SubagentTaskService:
             # 标记 consumed 只抑制通知，不影响任务详情与取消收口。
             if row.consumed_time is None:
                 row.consumed_time = now
-            if row.record_status == TASK_STATUS_PENDING:
+            if row.record_status in (TASK_STATUS_PENDING, *SUSPENDED_TASK_STATUSES):
                 meta["finished_at"] = now.isoformat()
                 meta["phase"] = TASK_STATUS_CANCELLED
                 progress = meta.get("progress")
                 progress = dict(progress) if isinstance(progress, dict) else {}
                 progress.update({"phase": TASK_STATUS_CANCELLED, "running_tools": 0})
                 meta["progress"] = progress
+                meta.pop("pending_interrupt", None)
                 row.record_status = TASK_STATUS_CANCELLED
                 row.record_content = "任务在开始执行前已取消。"
                 row.owner_token = None
@@ -672,7 +1209,8 @@ class SubagentTaskService:
         reaped_ids: list[str] = []
         async with get_session() as session:
             now = await self._dao.now(session)
-            rows = await self._dao.list_expired(session, set(ACTIVE_TASK_STATUSES), now, limit=limit)
+            # 暂停 / 等待审批没有执行体与租约，不能被当成「执行节点失联」回收。
+            rows = await self._dao.list_expired(session, set(EXECUTING_TASK_STATUSES), now, limit=limit)
             if not rows:
                 return 0
             reaped = 0
@@ -789,8 +1327,15 @@ class SubagentTaskService:
             return True
         return await self._start_notification_run(task)
 
-    async def _start_notification_run(self, task: SubagentTaskRecord) -> bool:
+    async def _start_notification_run(
+        self,
+        task: SubagentTaskRecord,
+        *,
+        selected_message_id: str | None = None,
+        mark_notified: bool = True,
+    ) -> bool:
         runtime_context = await self._notification_runtime_context(task)
+        message_id = selected_message_id or notification_message_id(task.task_id)
         try:
             await self._inbox.start_run(
                 task.conversation_id,
@@ -798,10 +1343,12 @@ class SubagentTaskService:
                 self._operator_name(task),
                 runtime_context,
                 adopt_pending_messages=False,
-                selected_message_id=notification_message_id(task.task_id),
+                selected_message_id=message_id,
             )
         except AgentRunConflictError:
-            return await self._attach_notification_to_active_run(task)
+            return await self._attach_notification_to_active_run(
+                task, message_id=message_id, mark_notified=mark_notified
+            )
         except AgentRunNotActiveError:
             logger.warning("后台任务通知 Run 无法创建：会话不存在 task_id=%s", task.task_id)
             await self._mark_notified(task)
@@ -809,11 +1356,18 @@ class SubagentTaskService:
         except Exception:
             logger.error("后台任务通知 Run 创建失败，下轮重试: task_id=%s", task.task_id, exc_info=True)
             return False
-        await self._mark_notified(task)
+        if mark_notified:
+            await self._mark_notified(task)
         logger.info("后台任务完成通知 Run 已创建: task_id=%s", task.task_id)
         return True
 
-    async def _attach_notification_to_active_run(self, task: SubagentTaskRecord) -> bool:
+    async def _attach_notification_to_active_run(
+        self,
+        task: SubagentTaskRecord,
+        *,
+        message_id: str | None = None,
+        mark_notified: bool = True,
+    ) -> bool:
         async with get_session() as session:
             now = await self._dao.now(session)
             active = await agent_inbox_dao.get_active_run_snapshot(
@@ -825,11 +1379,12 @@ class SubagentTaskService:
                 session,
                 task.conversation_id,
                 task.user_id,
-                notification_message_id(task.task_id),
+                message_id or notification_message_id(task.task_id),
             )
             if active is not None and message is not None:
                 await self._dao.attach_pending_message(session, message, active.run_id, now)
-            await self._mark_notified_in_session(session, task.task_id, now)
+            if mark_notified:
+                await self._mark_notified_in_session(session, task.task_id, now)
         return True
 
     async def _notification_runtime_context(self, task: SubagentTaskRecord) -> dict[str, Any]:
@@ -899,6 +1454,7 @@ class SubagentTaskService:
                 else 'task(action="check") 会返回完整正文，不要只凭预览下结论。'
             )
             + "如报告中提到产物文件，用 present_artifacts 展示。"
+            + f'需要基于同一子会话继续分析/修改结论时，用 task(action="follow_up", task_id="{task.task_id}", message="...")。'
         )
 
 

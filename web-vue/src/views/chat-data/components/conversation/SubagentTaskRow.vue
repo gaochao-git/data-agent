@@ -7,6 +7,7 @@ import { useToolTiming } from '../../composables/useToolTiming'
 
 const props = defineProps({
   task: { type: Object as PropType<SubagentTaskRecord>, required: true },
+  sessionTurnCount: { type: Number, default: 1 },
   cancelling: { type: Boolean, default: false },
 })
 
@@ -36,6 +37,8 @@ const statusLabel = computed(() => {
     case 'pending': return '等待中'
     case 'running': return '执行中'
     case 'cancelling': return '取消中'
+    case 'paused': return '已暂停'
+    case 'waiting_approval': return '等待审批'
     case 'completed': return '已完成'
     case 'cancelled': return '已取消'
     case 'timeout': return '已超时'
@@ -53,6 +56,8 @@ const statusTextTone = computed(() => {
     case 'timeout':
     case 'cancelled':
     case 'interrupted': return 'text-amber-600'
+    case 'waiting_approval': return 'text-amber-600'
+    case 'paused': return 'text-slate-500'
     default: return 'text-sky-600'
   }
 })
@@ -65,6 +70,8 @@ const accentLineTone = computed(() => {
     case 'timeout':
     case 'cancelled':
     case 'interrupted': return 'from-amber-400 via-amber-300/70 to-transparent'
+    case 'waiting_approval': return 'from-amber-400 via-amber-300/70 to-transparent'
+    case 'paused': return 'from-slate-400 via-slate-300/70 to-transparent'
     default: return 'from-sky-400 via-indigo-300/70 to-transparent'
   }
 })
@@ -98,6 +105,11 @@ const progressText = computed(() => {
           data-subagent-task-title
         >
           <span class="text-[12px] font-semibold text-sky-600">{{ task.subagent_type }}</span>
+          <span
+            v-if="sessionTurnCount > 1"
+            class="ml-1 rounded bg-sky-50 px-1 py-0.5 align-middle text-[9px] font-medium text-sky-600"
+            data-subagent-task-turn
+          >追问 {{ sessionTurnCount - 1 }}</span>
           <span class="mx-1 font-normal text-slate-300">-</span>
           <span>{{ taskTitle }}</span>
         </h3>

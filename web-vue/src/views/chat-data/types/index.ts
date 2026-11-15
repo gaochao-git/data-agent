@@ -618,6 +618,8 @@ export type SubagentTaskStatus =
   | 'pending'
   | 'running'
   | 'cancelling'
+  | 'paused'
+  | 'waiting_approval'
   | 'completed'
   | 'failed'
   | 'cancelled'
@@ -652,11 +654,29 @@ export interface SubagentTaskRecord {
   conversation_id: string
   parent_run_id: string
   parent_tool_call_id: string
+  /** 上一轮任务 ID；空表示子会话首轮。 */
+  parent_task_id?: string | null
+  /** 兼容字段：子会话 ID（等于首轮 task_id）；新代码优先用 agent_session_id。 */
+  root_task_id?: string
+  /** 智能体树节点 ID；当前扁平模型下与子会话同 ID。 */
+  agent_id?: string
+  /** 子智能体记忆容器 ID，同一智能体的所有追问共享。 */
+  agent_session_id?: string
+  /** 派生该智能体的父节点；空表示由主智能体直接派生。 */
+  parent_agent_id?: string | null
+  /** 所在智能体树的根节点 ID。 */
+  root_agent_id?: string
+  /** 智能体树深度；主智能体直接派生的子智能体为 1。 */
+  depth?: number
+  /** 第几轮对话，首轮为 1。 */
+  turn_index?: number
   subagent_type: string
   label: string
   description: string
   status: SubagentTaskStatus
   status_label: string
+  pending_interrupt?: Record<string, unknown> | null
+  pause_requested?: boolean
   progress: SubagentTaskProgress
   created_at: string | null
   updated_at: string | null

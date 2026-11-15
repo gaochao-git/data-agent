@@ -14,11 +14,11 @@ from langchain_core.messages import (
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 
+from apps.chat_data_app.agent.middleware.subagent_trail import _collect_subagent_tool_results
 from apps.chat_data_app.agent.middleware.subagents import (
     _build_trail_snapshot,
     _chunk_reasoning_text,
     _chunk_text_delta,
-    _collect_subagent_tool_results,
     _extract_final_report,
     _iter_chunk_stream_events,
     _iter_subagent_stream_events,

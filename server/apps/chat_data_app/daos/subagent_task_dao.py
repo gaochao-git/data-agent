@@ -209,6 +209,28 @@ class SubagentTaskDao:
         )
         return int(result.scalar() or 0)
 
+    async def list_active_for_conversation(
+        self,
+        session: AsyncSession,
+        conversation_id: str,
+        user_id: str,
+        active_statuses: Collection[str],
+    ) -> list[ChatDataAgentInbox]:
+        """列出会话内活跃任务；活跃任务数量受上限约束，调用方可在内存里按子会话过滤。"""
+        result = await session.execute(
+            select(ChatDataAgentInbox)
+            .options(defer(ChatDataAgentInbox.record_content))
+            .where(
+                ChatDataAgentInbox.conversation_id == conversation_id,
+                ChatDataAgentInbox.user_id == user_id,
+                ChatDataAgentInbox.record_type == TASK_RECORD_TYPE,
+                ChatDataAgentInbox.record_status.in_(sorted(active_statuses)),
+                ChatDataAgentInbox.delete_flag == 0,
+            )
+            .order_by(ChatDataAgentInbox.id.desc())
+        )
+        return list(result.scalars().all())
+
     async def create_notification_message(
         self,
         session: AsyncSession,

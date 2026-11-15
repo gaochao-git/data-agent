@@ -14,6 +14,8 @@ export const ACTIVE_SUBAGENT_TASK_STATUSES: ReadonlySet<SubagentTaskStatus> = ne
   'pending',
   'running',
   'cancelling',
+  'paused',
+  'waiting_approval',
 ])
 export const SUBAGENT_TASK_POLL_MS = 3500
 
@@ -30,6 +32,50 @@ const sortTasks = (tasks: SubagentTaskRecord[]): SubagentTaskRecord[] => [...tas
   if (activeDelta !== 0) return activeDelta
   return taskTime(b) - taskTime(a)
 })
+
+export interface SubagentTaskSession {
+  sessionId: string
+  tasks: SubagentTaskRecord[]
+  rootTask: SubagentTaskRecord
+  latestTask: SubagentTaskRecord
+  label: string
+  turnCount: number
+}
+
+const taskTurnIndex = (task: SubagentTaskRecord): number => Math.max(Number(task.turn_index) || 1, 1)
+export const subagentTaskSessionId = (task: SubagentTaskRecord): string =>
+  task.agent_session_id || task.agent_id || task.root_task_id || task.task_id
+
+/** 任务账本按轮次落记录；管理页按子会话聚合，避免追问被展示成新的智能体。 */
+export const groupSubagentTaskSessions = (tasks: SubagentTaskRecord[]): SubagentTaskSession[] => {
+  const grouped = new Map<string, SubagentTaskRecord[]>()
+  for (const task of tasks) {
+    const sessionId = subagentTaskSessionId(task)
+    const bucket = grouped.get(sessionId)
+    if (bucket) bucket.push(task)
+    else grouped.set(sessionId, [task])
+  }
+
+  const sessions = [...grouped.entries()].map(([sessionId, sessionTasks]) => {
+    const ordered = [...sessionTasks].sort((a, b) => taskTurnIndex(a) - taskTurnIndex(b) || taskTime(a) - taskTime(b))
+    const rootTask = ordered[0]!
+    const latestTask = ordered[ordered.length - 1]!
+    return {
+      sessionId,
+      tasks: ordered,
+      rootTask,
+      latestTask,
+      label: rootTask.label?.trim() || rootTask.description?.trim() || latestTask.label?.trim() || '后台任务',
+      turnCount: Math.max(ordered.length, ...ordered.map(taskTurnIndex)),
+    }
+  })
+
+  return sessions.sort((a, b) => {
+    const activeDelta = Number(b.tasks.some(isSubagentTaskActive)) - Number(a.tasks.some(isSubagentTaskActive))
+    if (activeDelta !== 0) return activeDelta
+    return taskTime(b.latestTask) - taskTime(a.latestTask)
+  })
+}
 
 /** 合并任务快照：SSE 列表帧不带 report，保留已加载详情，按 task_id 避免重复。 */
 export const mergeSubagentTasks = (

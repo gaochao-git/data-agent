@@ -460,6 +460,50 @@ class _ToolStreamState:
         self.active_tool_call_id = _finish_running_tool(self.running_tool_ids, self.active_tool_call_id, tool_call_id)
         return msg_data
 
+    @staticmethod
+    def _latest_ai_index(messages: list[Any]) -> int:
+        for index in range(len(messages) - 1, -1, -1):
+            if getattr(messages[index], "type", "") == "ai":
+                return index
+        return -1
+
+    def _missing_tool_events(self, messages: list[Any], latest_ai_index: int) -> list[str]:
+        """补发只出现在 values 快照里的 ToolMessage。"""
+        events: list[str] = []
+        for message in messages[latest_ai_index + 1 :]:
+            if getattr(message, "type", "") != "tool":
+                continue
+            tool_call_id = str(getattr(message, "tool_call_id", "") or "").strip()
+            if (
+                not tool_call_id
+                or tool_call_id in self.finished_tool_ids
+                or tool_call_id not in self.emitted_running_tool_ids
+            ):
+                continue
+            payload = self.build_tool_message_payload(message)
+            events.append(self.build_completion_event(payload))
+            events.append(_format_sse(SSE_EVENT_TOOL, payload))
+        return events
+
+    @staticmethod
+    def _actual_tool_ids(latest_ai: Any) -> set[str]:
+        actual_ids = {
+            str(tool_call.get("id") or "").strip()
+            for tool_call in (getattr(latest_ai, "tool_calls", None) or [])
+            if isinstance(tool_call, dict)
+        }
+        actual_ids.discard("")
+        return actual_ids
+
+    def _orphan_tool_ids(self, actual_ids: set[str]) -> list[str]:
+        return [
+            tool_call_id
+            for tool_call_id in list(self.running_tool_ids)
+            if tool_call_id not in actual_ids
+            and tool_call_id not in self.finished_tool_ids
+            and tool_call_id not in self.cancelled_tool_ids
+        ]
+
     def reconcile_state_messages(self, messages: Any) -> list[str]:
         """用 LangGraph values 快照收口工具生命周期。
 
@@ -474,43 +518,13 @@ class _ToolStreamState:
         if not isinstance(messages, list) or not messages:
             return []
 
-        latest_ai_index = -1
-        for index in range(len(messages) - 1, -1, -1):
-            if getattr(messages[index], "type", "") == "ai":
-                latest_ai_index = index
-                break
+        latest_ai_index = self._latest_ai_index(messages)
         if latest_ai_index < 0:
             return []
 
-        latest_ai = messages[latest_ai_index]
-        events: list[str] = []
-        # 1) 补发 values 里才出现的 ToolMessage（如 after_model 的拒绝消息）
-        for message in messages[latest_ai_index + 1 :]:
-            if getattr(message, "type", "") != "tool":
-                continue
-            tool_call_id = str(getattr(message, "tool_call_id", "") or "").strip()
-            if (
-                not tool_call_id
-                or tool_call_id in self.finished_tool_ids
-                or tool_call_id not in self.emitted_running_tool_ids
-            ):
-                continue
-            payload = self.build_tool_message_payload(message)
-            events.append(self.build_completion_event(payload))
-            events.append(_format_sse(SSE_EVENT_TOOL, payload))
-
-        # 2) 最新 AIMessage 是权威调用集：不在其中的 running 占位从未执行
-        actual_ids = {
-            str(tool_call.get("id") or "").strip()
-            for tool_call in (getattr(latest_ai, "tool_calls", None) or [])
-            if isinstance(tool_call, dict)
-        }
-        actual_ids.discard("")
-        for tool_call_id in list(self.running_tool_ids):
-            if tool_call_id in actual_ids or tool_call_id in self.finished_tool_ids:
-                continue
-            if tool_call_id in self.cancelled_tool_ids:
-                continue
+        events = self._missing_tool_events(messages, latest_ai_index)
+        actual_ids = self._actual_tool_ids(messages[latest_ai_index])
+        for tool_call_id in self._orphan_tool_ids(actual_ids):
             events.append(self._cancel_orphaned_tool(tool_call_id))
         return events
 

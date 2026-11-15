@@ -118,6 +118,38 @@ class ChatDataAgentInbox(Base):
     )
 
 
+class ChatDataSubagentSession(Base):
+    """后台子智能体多轮会话快照。
+
+    一个子智能体会话（``session_id`` 等于该智能体的 ``agent_session_id``；
+    当前首轮等于 ``task_id``）只保留一行“当前完整消息历史”。每次追问收口时
+    整体覆盖，避免按轮次追加导致历史呈 O(n²) 增长；追问直接复用这份快照继续
+    对话。任务账本仍按轮次各保留一行，便于审计与取消。
+    """
+
+    __tablename__ = "chat_data_subagent_session"
+
+    id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
+    session_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    conversation_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    user_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    latest_task_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    turn_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    messages_json: Mapped[str] = mapped_column(MediumTextType, nullable=False, default="[]", server_default="[]")
+    delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
+    create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    update_time: Mapped[datetime | None] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+    create_by: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
+    create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
+    update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+
+    __table_args__ = (
+        UniqueConstraint("session_id", name="uniq_subagent_session_id"),
+        Index("idx_subagent_session_conv", "conversation_id", "user_id"),
+    )
+
+
 class UploadedFile(Base):
     """上传文件表"""
 
