@@ -1690,12 +1690,15 @@ def build_task_tool(specs: list[SubagentSpec], run_controls: Any = None) -> Stru
         timeout_seconds: int | None = None,
         task_id: str | None = None,
         message: str | None = None,
-        decision: Literal["allow", "deny"] = "allow",
         task_ids: list[str] | None = None,
         agent_id: str | None = None,
-        status: str | None = None,
         wait_seconds: int = DEFAULT_WAIT_TIMEOUT_SECONDS,
+        **kwargs: Any,
     ) -> Command | str:
+        # status / decision 属于 TaskToolArgs 但只在少数 action 分支用到，收进 kwargs
+        # 以守住「单方法形参 ≤13」红线；args_schema 不变，LLM 可见字段与行为完全一致。
+        status = kwargs.get("status")
+        decision = kwargs.get("decision", "allow")
         if agent_id and action != "list":
             return 'agent_id 仅用于 action="list" 查询任务明细；check/cancel/follow_up 等动作请传 task_id。'
         if action == "follow_up":
