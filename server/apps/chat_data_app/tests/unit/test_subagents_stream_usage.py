@@ -152,6 +152,21 @@ def test_full_message_events_and_trail_sanitize_markup():
     assert trail[0]["content"].startswith("由于部分文件较长")
 
 
+def test_streamed_message_event_keeps_content_for_late_joiners():
+    """快照晚加入的订阅者没有收到增量，完整消息帧必须自带正文与思考。"""
+    event = subagents_module._subagent_message_event(
+        "m1",
+        "最终正文",
+        "call_1",
+        already_streamed=True,
+        thinking="思考全文",
+    )
+    assert event["streamed"] is True
+    assert event["content"] == "最终正文"
+    assert event["thinking"] == "思考全文"
+    assert event["thinking_truncated"] is False
+
+
 @pytest.mark.asyncio
 async def test_subagent_tool_streamed_deltas_exclude_markup(monkeypatch):
     """硬线摘工具轮次的退化文本流经增量通道时同样被剥除（直播路径）。"""

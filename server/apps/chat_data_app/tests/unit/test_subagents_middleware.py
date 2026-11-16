@@ -1286,10 +1286,10 @@ async def test_subagent_tool_streams_text_and_thinking_deltas(monkeypatch):
     assert thinking_delta["message_id"] == "m1"
     assert thinking_delta["parent_tool_call_id"] == "call_1"
     assert [payload["event"]["delta"] for payload in written[1:3]] == ["结论是", "上升"]
-    # 收敛：完整消息事件不再带内容，仅标记已流出
+    # 收敛：完整消息事件标记已流出，但仍带正文供未收到增量的订阅者补齐
     final_event = written[3]["event"]
     assert final_event["streamed"] is True
-    assert final_event["content"] == ""
+    assert final_event["content"] == "结论是上升"
     assert final_event["truncated"] is False
 
 
@@ -1404,6 +1404,8 @@ async def test_subagent_tool_keeps_text_when_chunk_carries_tool_call(monkeypatch
     # 复刻前端收敛口径：streamed 为真时展示增量拼出的全文
     shown = "".join(deltas) if final["streamed"] else final["content"]
     assert shown == "我需要先读取配置文件"
+    # 晚加入的订阅者没有增量，完整消息帧仍要能补齐正文
+    assert final["content"] == "我需要先读取配置文件"
 
 
 @pytest.mark.asyncio

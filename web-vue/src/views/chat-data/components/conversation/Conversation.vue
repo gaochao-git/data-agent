@@ -96,6 +96,8 @@ const emit = defineEmits<{
   dashboardCreated: [dashboard: Dashboard]
   /** 控制台面板可见性广播：页面右上角的控制台开关按钮据此切换图标与提示。 */
   consoleVisibilityChanged: [visible: boolean]
+  /** 运行中子智能体数量广播：右上角开关角标据此展示，用户无需展开侧栏也能感知后台任务。 */
+  subagentActiveCountChanged: [count: number]
   /** 工作区 yaml 一键导入：由页面层直接打开 Ossie 导入弹窗并预置文件 */
   importSemanticYaml: [files: SemanticYamlFile[]]
 }>()
@@ -748,6 +750,7 @@ const conversationIdRef = toRef(props, 'conversationId')
 // 后台任务状态源：列表/轮询恢复真值，SSE 只负责把快照合进来。
 const {
   tasks: subagentTasks,
+  activeCount: activeSubagentCount,
   details: subagentTaskDetails,
   setConversation: setSubagentTasksConversation,
   applyTaskUpdate: applySubagentTaskUpdate,
@@ -771,6 +774,9 @@ watch(
   (nextId) => { void setSubagentTasksConversation(nextId) },
   { immediate: true },
 )
+
+// 页面右上角开关只做展示，数量口径完全复用任务真值源；切会话时列表重置会自然归零。
+watch(activeSubagentCount, (count) => emit('subagentActiveCountChanged', count), { immediate: true })
 
 const cancelSubagentTask = async (task: SubagentTaskRecord) => {
   if (cancellingTaskIds.value.includes(task.task_id)) return

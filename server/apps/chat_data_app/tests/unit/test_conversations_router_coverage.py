@@ -784,3 +784,70 @@ async def test_subagent_task_event_stream_route(router_state, monkeypatch):
 
     missing = await conversation_router.stream_subagent_task_events("conv_1", "missing", FakeRequest())
     assert missing.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_subagent_task_trail_snapshot_route(router_state, monkeypatch):
+    monkeypatch.setattr(conversation_router, "_get_current_user_identity", identity_sync)
+
+    def live_record(status="running"):
+        return SimpleNamespace(
+            task_id="t1",
+            status=status,
+            is_terminal=status in {"completed", "failed", "cancelled", "timeout", "interrupted", "lost"},
+            agent_session_id="sess-1",
+        )
+
+    async def get_task(task_id, *, conversation_id=None, user_id=None):
+        return None if task_id == "missing" else live_record()
+
+    async def load_snapshot(*, task_id, agent_session_id):
+        assert task_id == "t1"
+        assert agent_session_id == "sess-1"
+        return {
+            "trail": [{"kind": "message", "id": "ai-1", "content": "已完成步骤"}],
+            "compactions": [],
+        }
+
+    async def latest_event_id(task_id):
+        return "12-0"
+
+    monkeypatch.setattr(conversation_router.subagent_task_service, "get_task", get_task)
+    monkeypatch.setattr(conversation_router, "load_live_trail_snapshot", load_snapshot)
+    monkeypatch.setattr(conversation_router.subagent_task_event_service, "latest_event_id", latest_event_id)
+
+    body = payload(await conversation_router.get_subagent_task_trail("conv_1", "t1", FakeRequest()))
+    assert body["data"] == {
+        "available": True,
+        "trail": [{"kind": "message", "id": "ai-1", "content": "已完成步骤"}],
+        "compactions": [],
+        "cursor": "12-0",
+    }
+
+    async def no_snapshot(*, task_id, agent_session_id):
+        return None
+
+    monkeypatch.setattr(conversation_router, "load_live_trail_snapshot", no_snapshot)
+    body = payload(await conversation_router.get_subagent_task_trail("conv_1", "t1", FakeRequest()))
+    assert body["data"] == {"available": False}
+
+    async def no_cursor(task_id):
+        return None
+
+    monkeypatch.setattr(conversation_router, "load_live_trail_snapshot", load_snapshot)
+    monkeypatch.setattr(conversation_router.subagent_task_event_service, "latest_event_id", no_cursor)
+    body = payload(await conversation_router.get_subagent_task_trail("conv_1", "t1", FakeRequest()))
+    assert body["data"] == {"available": False}
+
+    monkeypatch.setattr(conversation_router.subagent_task_event_service, "latest_event_id", latest_event_id)
+
+    async def terminal_task(task_id, *, conversation_id=None, user_id=None):
+        return live_record(status="completed")
+
+    monkeypatch.setattr(conversation_router.subagent_task_service, "get_task", terminal_task)
+    body = payload(await conversation_router.get_subagent_task_trail("conv_1", "t1", FakeRequest()))
+    assert body["data"] == {"available": False}
+
+    monkeypatch.setattr(conversation_router.subagent_task_service, "get_task", get_task)
+    missing = await conversation_router.get_subagent_task_trail("conv_1", "missing", FakeRequest())
+    assert missing.status_code == 404

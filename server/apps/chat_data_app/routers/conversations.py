@@ -39,6 +39,7 @@ from ..agent.run.subagent_task_service import (
     parse_task_status_filter,
     subagent_task_service,
 )
+from ..agent.run.subagent_trail_snapshot import load_live_trail_snapshot
 from ..agent.workspace.runtime_skill_snapshot import build_runtime_skill_snapshot_async
 from ..agent_run_support import (
     materialize_conversation_semantic_models,
@@ -1156,6 +1157,53 @@ async def cancel_subagent_task(conversation_id: str, task_id: str, req: Request)
             status="error",
             http_status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
+
+
+@router.get("/{conversation_id}/subagent-tasks/{task_id}/trail")
+async def get_subagent_task_trail(conversation_id: str, task_id: str, req: Request) -> JSONResponse:
+    """返回运行中任务的检查点快照与续传游标，供详情页秒开；不可用时由前端回退全量重放。"""
+    try:
+        user_id, _username = _get_current_user_identity(req)
+        record = await subagent_task_service.get_task(
+            task_id,
+            conversation_id=conversation_id,
+            user_id=user_id,
+        )
+        if record is None:
+            return business_response(
+                msg="后台任务不存在",
+                code=ErrorCode.CHATDATA_NOT_FOUND,
+                status="error",
+                http_status_code=http_status.HTTP_404_NOT_FOUND,
+            )
+        if record.is_terminal:
+            return business_response(data={"available": False}, msg="ok")
+        snapshot = await load_live_trail_snapshot(
+            task_id=record.task_id,
+            agent_session_id=record.agent_session_id,
+        )
+        cursor = await subagent_task_event_service.latest_event_id(record.task_id)
+        if snapshot is None or not cursor:
+            return business_response(data={"available": False}, msg="ok")
+        return business_response(
+            data={
+                "available": True,
+                "trail": snapshot["trail"],
+                "compactions": snapshot["compactions"],
+                "cursor": cursor,
+            },
+            msg="ok",
+        )
+    except AuthenticationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+    except Exception:
+        logger.error(
+            "读取后台子智能体任务过程快照失败: conversation_id=%s task_id=%s",
+            conversation_id,
+            task_id,
+            exc_info=True,
+        )
+        return business_response(data={"available": False}, msg="ok")
 
 
 @router.get("/{conversation_id}/subagent-tasks/{task_id}/events", responses=SSE_RESPONSES)

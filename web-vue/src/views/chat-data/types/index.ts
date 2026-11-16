@@ -851,8 +851,11 @@ export interface ToolLifecycleEventData extends ToolEventData {
   truncated?: boolean
   // 流式增量（subagent_message_delta / subagent_thinking_delta）
   delta?: string
-  // 完整消息已通过增量流出：收敛时前端只补截断标记，不覆盖内容
+  // 完整消息已通过增量流出：收敛时前端按「更长者优先」补齐，截断预览不覆盖更长全文
   streamed?: boolean
+  // 完整消息事件携带的思考全文：晚加入的订阅者没收到增量时用来补齐 thinking
+  thinking?: string
+  thinking_truncated?: boolean
   // tool_progress：file_write/file_edit 流式生成时的实时行数
   content_lines?: number
   // tool_progress：file_edit 整段替换口径下的被移除行数（old_content）

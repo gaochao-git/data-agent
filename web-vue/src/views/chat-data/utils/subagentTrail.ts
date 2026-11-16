@@ -36,18 +36,52 @@ export const applySubagentTrailEvent = (
     const entryId = event.message_id
     if (!entryId) return trail
     const content = event.content || ''
+    const thinking = event.thinking || ''
     const next = [...trail]
     const idx = next.findIndex(item => item.id === entryId && item.kind === 'message')
     if (idx >= 0) {
       const prev = next[idx]
       if (!prev) return trail
-      // 收敛策略「只补标记不覆盖」：增量已拼出全文时，完整消息只补截断标记；
-      // 未走增量（如后端降级路径）才写入完整内容。
+      // 收敛策略「更长者优先」：完整帧带完整预览，晚加入者可能因快照与游标
+      // 非原子读取只收到尾部增量，需要靠这帧补齐；直播订阅者由增量拼出的
+      // 全文不会短于截断预览，因此不会被误覆盖。思考同理。
+      const nextContent = content && content.length >= (prev.content || '').length
+        ? content
+        : prev.content
+      const nextThinking = thinking && thinking.length >= (prev.thinking || '').length
+        ? thinking
+        : prev.thinking
       next[idx] = event.streamed
-        ? { ...prev, truncated: Boolean(event.truncated) || Boolean(prev.truncated) }
-        : { ...prev, content: content || prev.content || '', truncated: Boolean(event.truncated) }
+        ? {
+            ...prev,
+            ...(nextContent !== undefined ? { content: nextContent } : {}),
+            ...(nextThinking
+              ? {
+                  thinking: nextThinking,
+                  thinkingTruncated: Boolean(event.thinking_truncated) || Boolean(prev.thinkingTruncated),
+                }
+              : {}),
+            truncated: Boolean(event.truncated) || Boolean(prev.truncated),
+          }
+        : {
+            ...prev,
+            content: nextContent || '',
+            ...(nextThinking
+              ? {
+                  thinking: nextThinking,
+                  thinkingTruncated: Boolean(event.thinking_truncated) || Boolean(prev.thinkingTruncated),
+                }
+              : {}),
+            truncated: Boolean(event.truncated),
+          }
     } else {
-      next.push({ kind: 'message', id: entryId, content, truncated: Boolean(event.truncated) })
+      next.push({
+        kind: 'message',
+        id: entryId,
+        content,
+        truncated: Boolean(event.truncated),
+        ...(thinking ? { thinking, thinkingTruncated: Boolean(event.thinking_truncated) } : {}),
+      })
     }
     return next
   }

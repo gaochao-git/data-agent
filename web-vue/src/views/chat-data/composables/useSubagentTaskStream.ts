@@ -5,12 +5,11 @@
  * 思考、工具生命周期、上下文用量与压缩事件。父 Run 是否已经结束不影响订阅。
  */
 import { onBeforeUnmount, ref, watch } from 'vue'
-import { streamSubagentTaskEvents } from '../api'
+import { getSubagentTaskTrail, streamSubagentTaskEvents } from '../api'
 import type {
   ChatDataTokenUsage,
   SubagentCompaction,
   SubagentContextUsage,
-  SubagentTaskRecord,
   SubagentTrailItem,
   ToolLifecycleEventData,
 } from '../types'
@@ -35,6 +34,12 @@ export const useSubagentTaskStream = (
   let controller: AbortController | null = null
   let generation = 0
   let lastEventId = '0-0'
+  let snapshotLoaded = false
+  // 检查点快照里的 message 是已完结的完整消息。事件流由后台泵异步写 Redis，
+  // 可能落后于检查点：从快照游标续传时会重放同一条消息的 token 增量，若照常
+  // 拼接就会把正文/思考重复追加一遍，且「更长者优先」的完整帧反而更短、纠正不了。
+  // 这些 id 的增量一律丢弃，内容以快照为准。
+  const closedMessageIds = new Set<string>()
 
   const stop = () => {
     generation += 1
@@ -49,11 +54,19 @@ export const useSubagentTaskStream = (
     compactions.value = []
     tokenUsageDetail.value = undefined
     lastEventId = '0-0'
+    snapshotLoaded = false
+    closedMessageIds.clear()
   }
 
   const applyEvent = (raw: Record<string, unknown>, eventName?: string) => {
     const type = eventName || String(raw.event_type || raw.type || '')
     if (!type || type === 'heartbeat') return
+    // 检查点快照可能领先于事件流：从游标续传会重放已完结消息的增量，
+    // 无条件拼接会把正文/思考重复追加一遍（完整帧按「更长者优先」纠正不了）。
+    if (
+      (type === 'subagent_message_delta' || type === 'subagent_thinking_delta')
+      && closedMessageIds.has(String(raw.message_id || ''))
+    ) return
     const event = { ...raw, type } as ToolLifecycleEventData
     if (type === 'subagent_context_usage') {
       if (typeof event.used_tokens !== 'number') return
@@ -89,8 +102,35 @@ export const useSubagentTaskStream = (
     trail.value = applySubagentTrailEvent(trail.value, event)
   }
 
+  /**
+   * 首连先取检查点快照：运行中任务不再从 0-0 重放整段 token 流。
+   * 快照不可用（无检查点/无事件）时保持 0-0，沿用原来的全量重放兜底。
+   */
+  const hydrateSnapshot = async (task: string, conversation: string, runGeneration: number) => {
+    snapshotLoaded = true
+    try {
+      const snapshot = await getSubagentTaskTrail(conversation, task)
+      if (runGeneration !== generation) return
+      if (!snapshot?.available || !snapshot.cursor) return
+      if (Array.isArray(snapshot.trail) && snapshot.trail.length) {
+        trail.value = snapshot.trail
+        for (const item of snapshot.trail) {
+          if (item.kind === 'message') closedMessageIds.add(item.id)
+        }
+      }
+      if (Array.isArray(snapshot.compactions)) compactions.value = snapshot.compactions
+      lastEventId = snapshot.cursor
+    } catch {
+      // 快照读取失败不阻断实时流，按原逻辑从 0-0 全量重放。
+    }
+  }
+
   const connect = async (runGeneration: number, task: string, conversation: string) => {
     while (runGeneration === generation && isActive()) {
+      if (!snapshotLoaded && lastEventId === '0-0') {
+        await hydrateSnapshot(task, conversation, runGeneration)
+        if (runGeneration !== generation || !isActive()) return
+      }
       controller = new AbortController()
       try {
         const response = await streamSubagentTaskEvents(conversation, task, lastEventId, controller.signal)

@@ -66,6 +66,14 @@ class SubagentTaskEventService:
     async def release_stream(self, task_id: str, owner_token: str) -> None:
         await self._bus.release_run_owner(task_id, owner_token)
 
+    async def latest_event_id(self, task_id: str) -> str | None:
+        """读取任务事件流当前尾部游标；快照订阅从这里之后续传，避免全量重放。"""
+        try:
+            return await self._bus.latest_run_event_id(task_id)
+        except Exception:
+            logger.debug("读取后台子智能体事件流尾游标失败: task_id=%s", task_id, exc_info=True)
+            return None
+
     async def publish_event(
         self,
         *,

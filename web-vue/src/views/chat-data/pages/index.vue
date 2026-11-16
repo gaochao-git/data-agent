@@ -507,6 +507,8 @@ const conversationRef = ref<InstanceType<typeof Conversation> | null>(null)
 // 右侧栏可见性：由 Conversation 广播（面板内的 ✕ 也会触发），
 // 右上角开关按钮的图标与提示都读它，不自己另存状态。
 const conversationConsoleVisible = ref(false)
+// 运行中子智能体数量：同样由 Conversation 广播，收起侧栏时在开关按钮上显示角标。
+const conversationSubagentActiveCount = ref(0)
 
 const toggleConversationConsole = () => {
   conversationRef.value?.toggleConsolePanel()
@@ -1408,13 +1410,23 @@ onMounted(async () => {
         <div class="relative shrink-0 flex items-center gap-2">
           <button
             v-if="viewMode === 'conversation'"
-            class="w-8 h-8 flex shrink-0 items-center justify-center rounded-lg border-0 bg-transparent text-slate-500 cursor-pointer transition-colors hover:bg-slate-200/70 hover:text-slate-700"
-            :title="conversationConsoleVisible ? '收起右侧栏' : '展开右侧栏'"
-            :aria-label="conversationConsoleVisible ? '收起右侧栏' : '展开右侧栏'"
+            class="relative w-8 h-8 flex shrink-0 items-center justify-center rounded-lg border-0 bg-transparent text-slate-500 cursor-pointer transition-colors hover:bg-slate-200/70 hover:text-slate-700"
+            :title="conversationConsoleVisible ? '收起右侧栏' : (conversationSubagentActiveCount > 0 ? `${conversationSubagentActiveCount} 个子智能体执行中，展开右侧栏查看` : '展开右侧栏')"
+            :aria-label="conversationConsoleVisible ? '收起右侧栏' : (conversationSubagentActiveCount > 0 ? `${conversationSubagentActiveCount} 个子智能体执行中，展开右侧栏查看` : '展开右侧栏')"
             :aria-expanded="conversationConsoleVisible"
             data-conversation-console-toggle="true"
             @click="toggleConversationConsole"
           >
+            <span
+              v-if="conversationSubagentActiveCount > 0 && !conversationConsoleVisible"
+              class="subagent-activity-badge absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-[#1677FF] px-1 text-[9px] font-semibold leading-none text-white"
+              data-conversation-subagent-badge
+              aria-hidden="true"
+            >
+              <!-- 运行中呼吸光晕：与输入框停止按钮同款节奏，提示任务仍在后台推进。 -->
+              <span class="subagent-activity-halo" aria-hidden="true"></span>
+              <span class="relative">{{ conversationSubagentActiveCount }}</span>
+            </span>
             <!-- 面板 + 折叠箭头（与主流产品的侧栏开关同形）：面板近正方、细描边，
                  箭头为线性 chevron（非实心三角），展开时朝左、收起时朝右。 -->
             <svg class="h-[18px] w-[18px]" viewBox="0 0 16 16" aria-hidden="true">
@@ -1780,6 +1792,7 @@ onMounted(async () => {
                   @run-status-changed="handleConversationRunStatusChanged"
                   @conversation-title-changed="handleUpdateConversationTitle"
                   @console-visibility-changed="conversationConsoleVisible = $event"
+                  @subagent-active-count-changed="conversationSubagentActiveCount = $event"
                   @update:selected-member-datasource-ids="conversationMemberDatasourceIds = $event"
                   @dashboard-created="handleDashboardCreatedFromConversation"
                 />
@@ -2084,4 +2097,44 @@ body.is-resizing {
   z-index: var(--z-messagebox-overlay) !important;
 }
 
+</style>
+
+<style scoped>
+/*
+ * 右上角子智能体运行角标：柔和呼吸光晕，节奏对齐输入框停止按钮（ChatInputBox 的 breathe），
+ * 半径按角标尺寸收小，避免在 16px 圆点上扩散过大。
+ */
+.subagent-activity-badge {
+  animation: subagent-badge-breathe 1.8s ease-in-out infinite;
+}
+
+@keyframes subagent-badge-breathe {
+  0%, 100% {
+    box-shadow: 0 1px 4px rgba(22, 119, 255, 0.45), 0 0 0 0 rgba(22, 119, 255, 0.45);
+  }
+  50% {
+    box-shadow: 0 1px 6px rgba(22, 119, 255, 0.55), 0 0 0 5px rgba(22, 119, 255, 0.18);
+  }
+}
+
+/* 外层扩散光晕：从角标边缘向外缓慢放大并淡出，形成明显的呼吸圈。 */
+.subagent-activity-halo {
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  background: rgba(22, 119, 255, 0.55);
+  pointer-events: none;
+  animation: subagent-activity-ping 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+
+@keyframes subagent-activity-ping {
+  0% {
+    transform: scale(1);
+    opacity: 0.5;
+  }
+  75%, 100% {
+    transform: scale(1.7);
+    opacity: 0;
+  }
+}
 </style>

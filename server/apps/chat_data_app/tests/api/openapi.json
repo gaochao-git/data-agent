@@ -10013,6 +10013,63 @@
         ]
       }
     },
+    "/api/chatdata/conversations/{conversation_id}/subagent-tasks/{task_id}/trail": {
+      "get": {
+        "description": "返回运行中任务的检查点快照与续传游标，供详情页秒开；不可用时由前端回退全量重放。",
+        "operationId": "get_subagent_task_trail_api_chatdata_conversations__conversation_id__subagent_tasks__task_id__trail_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Get Subagent Task Trail",
+        "tags": [
+          "ChatData 会话"
+        ]
+      }
+    },
     "/api/chatdata/conversations/{conversation_id}/title": {
       "post": {
         "description": "自动生成会话标题\n\nPOST /api/chatdata/conversations/{id}/title\n\n返回：\n{\n    \"status\": \"success\",\n    \"data\": {\"id\": \"...\", \"title\": \"...\"}\n}",

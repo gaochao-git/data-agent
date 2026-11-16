@@ -37,7 +37,9 @@ import type {
   MetaGlobalEnum,
   MetaGlobalEnumRef,
   MetaGlobalEnumValueItem,
+  SubagentCompaction,
   SubagentTaskRecord,
+  SubagentTrailItem,
 } from '../types'
 import type { Dashboard } from './dashboard'
 
@@ -1718,6 +1720,25 @@ export async function cancelSubagentTask(conversationId: string, taskId: string)
     method: 'post',
   })
   return response.data as SubagentTaskRecord
+}
+
+export interface SubagentTaskTrailSnapshot {
+  available: boolean
+  trail?: SubagentTrailItem[]
+  compactions?: SubagentCompaction[]
+  cursor?: string
+}
+
+/** 读取运行中任务的过程快照与续传游标；不可用时返回 available=false，由调用方回退全量重放。 */
+export async function getSubagentTaskTrail(
+  conversationId: string,
+  taskId: string,
+): Promise<SubagentTaskTrailSnapshot> {
+  const response = await request({
+    url: `/agents/api/chatdata/conversations/${conversationId}/subagent-tasks/${taskId}/trail`,
+    method: 'get',
+  })
+  return (response.data || { available: false }) as SubagentTaskTrailSnapshot
 }
 
 /** 订阅后台子智能体的实时过程事件；父 Run 结束后仍可继续接收。 */

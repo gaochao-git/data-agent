@@ -5,7 +5,7 @@ import { applySubagentTrailEvent } from '../subagentTrail'
 const event = (value: Record<string, unknown>) => value as unknown as ToolLifecycleEventData
 
 describe('applySubagentTrailEvent', () => {
-  it('拼接正文增量并用完整消息只补截断标记', () => {
+  it('直播增量已拼出全文时，截断预览不覆盖更长正文', () => {
     let trail: SubagentTrailItem[] = []
     trail = applySubagentTrailEvent(trail, event({
       type: 'subagent_message_delta',
@@ -15,18 +15,60 @@ describe('applySubagentTrailEvent', () => {
     trail = applySubagentTrailEvent(trail, event({
       type: 'subagent_message_delta',
       message_id: 'm1',
-      delta: '，世界',
+      delta: '，世界，这是完整正文',
     }))
     trail = applySubagentTrailEvent(trail, event({
       type: 'subagent_message',
       message_id: 'm1',
-      content: '不应覆盖增量全文',
+      content: '你好，世界…',
       streamed: true,
       truncated: true,
     }))
 
     expect(trail).toEqual([
-      { kind: 'message', id: 'm1', content: '你好，世界', truncated: true },
+      { kind: 'message', id: 'm1', content: '你好，世界，这是完整正文', truncated: true },
+    ])
+  })
+
+  it('晚加入只收到尾部增量时，完整帧补齐正文与思考', () => {
+    let trail = applySubagentTrailEvent([], event({
+      type: 'subagent_message_delta',
+      message_id: 'm1',
+      delta: '尾部片段',
+    }))
+    trail = applySubagentTrailEvent(trail, event({
+      type: 'subagent_message',
+      message_id: 'm1',
+      content: '开头被游标跳过的完整正文，尾部片段',
+      streamed: true,
+      thinking: '完整思考过程',
+      thinking_truncated: false,
+    }))
+
+    expect(trail).toEqual([
+      {
+        kind: 'message',
+        id: 'm1',
+        content: '开头被游标跳过的完整正文，尾部片段',
+        truncated: false,
+        thinking: '完整思考过程',
+        thinkingTruncated: false,
+      },
+    ])
+  })
+
+  it('快照晚加入时用完整消息帧补齐正文与思考', () => {
+    const trail = applySubagentTrailEvent([], event({
+      type: 'subagent_message',
+      message_id: 'm1',
+      content: '最终正文',
+      streamed: true,
+      thinking: '思考全文',
+      thinking_truncated: false,
+    }))
+
+    expect(trail).toEqual([
+      { kind: 'message', id: 'm1', content: '最终正文', truncated: false, thinking: '思考全文', thinkingTruncated: false },
     ])
   })
 

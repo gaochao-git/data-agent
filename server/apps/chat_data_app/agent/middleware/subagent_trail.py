@@ -60,7 +60,11 @@ def _trail_message_entry(message: AIMessage, message_id: str) -> dict[str, Any]:
     }
 
 
-def _trail_tool_entry(tool_call: dict[str, Any], tool_results: dict[str, dict[str, Any]]) -> dict[str, Any]:
+def _trail_tool_entry(
+    tool_call: dict[str, Any],
+    tool_results: dict[str, dict[str, Any]],
+    pending_status: str = "completed",
+) -> dict[str, Any]:
     tool_call_id = str(tool_call.get("id") or "")
     outcome = tool_results.get(tool_call_id) or {}
     entry = {
@@ -69,7 +73,7 @@ def _trail_tool_entry(tool_call: dict[str, Any], tool_results: dict[str, dict[st
         "tool_name": str(tool_call.get("name") or ""),
         "args": coerce_tool_call_args(tool_call.get("args")) or {},
         "result": outcome.get("result", ""),
-        "status": outcome.get("status", "completed"),
+        "status": outcome.get("status", pending_status),
     }
     for key in ("started_at_ms", "ended_at_ms"):
         if isinstance(outcome.get(key), int):
@@ -103,6 +107,7 @@ def _append_ai_message_trail(
     trail: list[dict[str, Any]],
     seen_ids: set[str],
     anonymous_seq: count,
+    pending_tool_status: str = "completed",
 ) -> None:
     message_id = str(getattr(message, "id", "") or "") or f"trail-anon-{next(anonymous_seq)}"
     text = plain_text(getattr(message, "content", ""))
@@ -117,10 +122,15 @@ def _append_ai_message_trail(
         if not tool_call_id or tool_call_id in seen_ids:
             continue
         seen_ids.add(tool_call_id)
-        trail.append(_trail_tool_entry(tool_call, tool_results))
+        trail.append(_trail_tool_entry(tool_call, tool_results, pending_tool_status))
 
 
-def _build_trail_snapshot(messages: list, compactions: Any = None) -> list[dict[str, Any]]:
+def _build_trail_snapshot(
+    messages: list,
+    compactions: Any = None,
+    *,
+    pending_tool_status: str = "completed",
+) -> list[dict[str, Any]]:
     """把子图消息序列化成与前端 ``SubagentTrailItem`` 同构的过程快照。
 
     用于历史回放：直播时过程经 SSE custom 流逐条转发，刷新/看历史后由
@@ -139,7 +149,7 @@ def _build_trail_snapshot(messages: list, compactions: Any = None) -> list[dict[
     anonymous_seq = count(1)
     for message in messages:
         if isinstance(message, AIMessage):
-            _append_ai_message_trail(message, tool_results, trail, seen_ids, anonymous_seq)
+            _append_ai_message_trail(message, tool_results, trail, seen_ids, anonymous_seq, pending_tool_status)
         elif isinstance(message, ToolMessage):
             # 内层工具先产生 ToolMessage 后才出现对应 tool_calls 的情形不
             # 应发生（OpenAI 协议要求先声明后调用）；此处只为容忍乱序输入。

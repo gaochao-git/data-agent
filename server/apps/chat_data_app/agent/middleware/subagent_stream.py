@@ -128,7 +128,8 @@ def _iter_chunk_stream_events(
     带 ``tool_call_chunks`` 的 chunk **不能整块跳过**：OpenAI 兼容实现里正文与
     工具调用是两个独立字段，同一个 chunk 完全可以「文本 + 工具增量」同时到达。
     一旦跳过，这段文本永远补不回来——该消息已因先前的 delta 进入
-    ``streamed_text_ids``，完整消息事件按收敛策略只补标记、不再携带 content。
+    ``streamed_text_ids``，完整消息事件虽仍携带预览内容供晚加入者补齐，但
+    直播端按「更长者优先」收敛，不会用截断预览覆盖已拼出的全文。
     工具参数不会漏进正文：``_chunk_text_delta`` 只取 ``str`` 与 ``type=="text"``
     的内容块，结构化块（工具调用等）不参与文本增量。
     """
@@ -200,9 +201,10 @@ def _iter_subagent_stream_events(
     - 每个事件都挂 ``parent_tool_call_id`` 指向所属外层 subagent 调用，便于前端
       把内部过程挂在 subagent 卡片下、而不是当作顶层调用渲染。
 
-    收敛策略（只补标记不覆盖）：``messages`` 模式已增量转发过文本/思考的
-    消息（命中 ``streamed_text_ids`` / ``streamed_think_ids``），完整消息事件
-    不再携带 content（前端已拼出全文），只补 ``truncated`` 标记。
+    收敛策略（更长者优先）：``messages`` 模式已增量转发过正文的消息
+    （命中 ``streamed_text_ids``），完整消息事件仍携带内容预览：快照与游标
+    非原子窗口内晚加入的订阅者可能只收到尾部增量，需要
+    靠这帧补齐；直播端不会用截断预览覆盖已拼出的更长全文。
 
     同一条 AIMessage 既有文本又有工具调用时按「先说后做」输出，保证前端拿到的
     顺序与子智能体真实执行顺序一致。
@@ -225,6 +227,7 @@ def _iter_subagent_stream_events(
                         text,
                         parent_tool_call_id,
                         already_streamed=bool(message_id and message_id in streamed_text_ids),
+                        thinking=_chunk_reasoning_text(message),
                     )
                 )
             events.extend(_subagent_tool_started_events(message, parent_tool_call_id, tool_started_at))
@@ -238,35 +241,34 @@ def _subagent_message_event(
     text: str,
     parent_tool_call_id: str | None,
     already_streamed: bool,
+    thinking: str = "",
 ) -> dict[str, Any]:
     """生成 subagent_message 事件。
 
-    已流式转发过的消息（``already_streamed``）不再携带 content（前端已拼出
-    全文），只补 ``truncated`` 标记——只补标记不覆盖。两个分支都显式带
-    ``streamed``：前端按布尔值判断收敛，不区分「字段缺失」与「未流式」。
+    已流式转发过的消息（``already_streamed``）前端已拼出全文，但仍携带 content：
+    从检查点快照晚加入的订阅者没有收到增量，需要靠这帧补齐当前正文；已有条目
+    的客户端按「更长者优先」收敛，不会用截断预览覆盖已拼出的更长全文。两个分支
+    都显式带 ``streamed``：前端按布尔值判断是否保留直播累积的截断标记，
+    不区分「字段缺失」与「未流式」。
 
     文本先过 ``_sanitize_report_text``：完整消息事件（尤其历史回放路径）
     不允许携带裸 ``<tool_call>`` 标记（硬线摘工具轮次的退化形态）。
     """
     text = _sanitize_report_text(text)
     truncated = len(text) > SUBAGENT_MESSAGE_PREVIEW_MAX_CHARS
-    if already_streamed:
-        return {
-            "event_type": SSE_EVENT_SUBAGENT_MESSAGE,
-            "message_id": message_id,
-            "content": "",
-            "streamed": True,
-            "truncated": truncated,
-            "parent_tool_call_id": parent_tool_call_id,
-        }
-    return {
+    thinking = thinking or ""
+    payload: dict[str, Any] = {
         "event_type": SSE_EVENT_SUBAGENT_MESSAGE,
         "message_id": message_id,
         "content": _truncate_text(text, SUBAGENT_MESSAGE_PREVIEW_MAX_CHARS, "内容"),
-        "streamed": False,
+        "streamed": already_streamed,
         "truncated": truncated,
         "parent_tool_call_id": parent_tool_call_id,
     }
+    if thinking.strip():
+        payload["thinking"] = _truncate_text(thinking, SUBAGENT_THINKING_PREVIEW_MAX_CHARS, "思考")
+        payload["thinking_truncated"] = len(thinking) > SUBAGENT_THINKING_PREVIEW_MAX_CHARS
+    return payload
 
 
 def _subagent_tool_started_events(
@@ -773,7 +775,8 @@ async def _run_subagent_with_events(
     ``subagent_context_usage`` 推送（口径与压缩阈值共用 ``_subagent_budget_meta``）。
 
     双模式：``messages`` 转发 token 增量；``updates`` 负责工具生命周期与最终报告，
-    已增量转发的消息只补截断标记（见 ``_iter_subagent_stream_events``）。
+    已增量转发的消息仍带完整内容供晚加入者补齐，前端按「更长者优先」收敛
+    （见 ``_iter_subagent_stream_events``）。
     """
     stream_state = _SubagentStreamState(parent_tool_call_id)
     seed_messages = initial_messages if initial_messages is not None else list(state.get("messages") or [])
