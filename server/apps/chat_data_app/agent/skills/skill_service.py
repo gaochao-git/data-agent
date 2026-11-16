@@ -1261,10 +1261,10 @@ class SkillService:
                     file_size += len(chunk)
                     if file_size > max_upload_size:
                         raise ValueError(f"文件大小不能超过{max_upload_size_mb}MB")
-                    output.write(chunk)
-                output.flush()
-                os.fsync(output.fileno())
-            os.replace(temporary_path, target)
+                    await asyncio.to_thread(output.write, chunk)
+                await asyncio.to_thread(output.flush)
+                await asyncio.to_thread(os.fsync, output.fileno())
+            await asyncio.to_thread(os.replace, temporary_path, target)
         finally:
             temporary_path.unlink(missing_ok=True)
         clear_metadata_cache()

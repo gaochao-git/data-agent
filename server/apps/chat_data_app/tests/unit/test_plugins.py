@@ -625,3 +625,60 @@ def test_mcp_server_admission_view_reports_ok_and_errors():
     invalid = plugin_service._mcp_server_admission_view({"id": "x", "transport": "websocket"})
     assert invalid["ok"] is False
     assert invalid["errors"]
+
+
+@pytest.mark.asyncio
+async def test_plugin_service_keeps_blocking_io_off_event_loop(monkeypatch):
+    """解包、递归删除与磁盘扫描都是同步 IO，必须跑在事件循环线程之外。"""
+    import threading
+    from types import SimpleNamespace
+
+    loop_thread = threading.get_ident()
+    seen: dict[str, int] = {}
+    manifest = SimpleNamespace(
+        name="demo",
+        version="1.0.0",
+        display_name="Demo",
+        description="",
+        to_dict=lambda: {"name": "demo", "version": "1.0.0"},
+    )
+
+    def fake_install(_data: bytes):
+        seen["install"] = threading.get_ident()
+        return manifest
+
+    def fake_uninstall(_name: str):
+        seen["uninstall"] = threading.get_ident()
+        return manifest
+
+    def fake_metadata():
+        seen["scan"] = threading.get_ident()
+        return {}
+
+    class _Dao:
+        async def upsert_installed(self, **_kwargs):
+            return None
+
+        async def mark_deleted(self, **_kwargs):
+            return None
+
+        async def list_active(self):
+            return []
+
+    async def _noop_refresh():
+        return None
+
+    monkeypatch.setattr(plugin_service.installer, "install_plugin_from_zip_bytes", fake_install)
+    monkeypatch.setattr(plugin_service.installer, "uninstall_plugin", fake_uninstall)
+    monkeypatch.setattr(plugin_service, "load_plugins_metadata", fake_metadata)
+    monkeypatch.setattr(plugin_service, "PluginDao", lambda: _Dao())
+    monkeypatch.setattr(plugin_service, "refresh_plugin_state", _noop_refresh)
+    monkeypatch.setattr(plugin_service, "_reset_runtime_caches", lambda: None)
+
+    await plugin_service.install_plugin(b"zip", operator_id="u1", operator_name="张三")
+    await plugin_service.uninstall_plugin("demo", operator_id="u1", operator_name="张三")
+    await plugin_service.list_plugins()
+
+    assert seen["install"] != loop_thread
+    assert seen["uninstall"] != loop_thread
+    assert seen["scan"] != loop_thread

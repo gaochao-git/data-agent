@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import shutil
 from typing import Any
@@ -64,7 +65,9 @@ async def list_plugins(*, limit: int = 50, offset: int = 0) -> dict[str, Any]:
     分页口径与定时任务一致（limit 已由 router 收敛到 [1, 200]）。
     """
     await refresh_plugin_state()
-    items = [item.to_dict() for item in load_plugins_metadata().values()]
+    # 磁盘扫描读 manifest 属同步 IO；变更后缓存被清空，首次列表必然全盘扫描。
+    metadata = await asyncio.to_thread(load_plugins_metadata)
+    items = [item.to_dict() for item in metadata.values()]
     for item in items:
         item["mcp_servers"] = [
             {**server, "admission": _mcp_server_admission_view(server)} for server in item.get("mcp_servers") or []
@@ -98,7 +101,8 @@ async def install_plugin(
 
     DB 写失败时回滚已解包目录，避免磁盘与 DB 不一致。
     """
-    manifest = installer.install_plugin_from_zip_bytes(zip_bytes)
+    # zip 解析、成员校验与安全解压（解压上限 200MB）全为同步 IO，放线程池避免阻塞事件循环。
+    manifest = await asyncio.to_thread(installer.install_plugin_from_zip_bytes, zip_bytes)
     try:
         await PluginDao().upsert_installed(
             plugin_name=manifest.name,
@@ -112,7 +116,7 @@ async def install_plugin(
     except Exception:
         rollback_dir = plugin_dir(manifest.name)
         if rollback_dir.is_dir():
-            shutil.rmtree(rollback_dir, ignore_errors=True)
+            await asyncio.to_thread(shutil.rmtree, rollback_dir, ignore_errors=True)
         clear_metadata_cache()
         logger.error("插件安装写库失败，已回滚解包目录: %s", manifest.name, exc_info=True)
         raise
@@ -135,7 +139,7 @@ async def _reconcile_orphan(
     命中即按 ``upsert_installed`` 复活/新建行，再落本次启停值；磁盘上没有则返回 False。
     列表展示不做写操作（读接口保持纯读），孤儿插件的启停开关自然触发补建。
     """
-    metadata = load_plugins_metadata().get(name)
+    metadata = (await asyncio.to_thread(load_plugins_metadata)).get(name)
     if metadata is None:
         return False
     manifest = metadata.manifest
@@ -203,7 +207,8 @@ async def uninstall_plugin(
     删盘成功但 DB 软删失败，会残留一条"活跃但无内容"的行——列表按磁盘扫描不会展示它，
     重装时按 plugin_name 复活同一行自愈，不影响正确性。
     """
-    manifest = installer.uninstall_plugin(name)
+    # 卸载会递归删除整个插件目录树，同样属于同步 IO。
+    manifest = await asyncio.to_thread(installer.uninstall_plugin, name)
     await PluginDao().mark_deleted(
         plugin_name=name,
         operator_id=operator_id,

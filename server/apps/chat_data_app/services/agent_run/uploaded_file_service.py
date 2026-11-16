@@ -135,24 +135,26 @@ class UploadedFileService:
             with temporary_path.open("xb") as output:
                 if encryption_enabled():
                     nonce, encryptor = new_stream_encryptor()
-                    output.write(MAGIC)
-                    output.write(nonce)
+                    await asyncio.to_thread(output.write, MAGIC)
+                    await asyncio.to_thread(output.write, nonce)
                 while chunk := await file.read(UPLOAD_CHUNK_SIZE):
                     file_size += len(chunk)
                     if file_size > max_upload_size:
                         raise ValueError(f"文件大小不能超过{max_upload_size_mb}MB")
                     if workspace_used + file_size > max_workspace_size:
                         raise ValueError(f"会话工作区总大小不能超过{max_workspace_size_mb}MB")
-                    output.write(encryptor.update(chunk) if encryptor is not None else chunk)
+                    data = encryptor.update(chunk) if encryptor is not None else chunk
+                    await asyncio.to_thread(output.write, data)
                 if encryptor is not None:
-                    output.write(encryptor.finalize())
-                    output.write(encryptor.tag)
-                output.flush()
-                os.fsync(output.fileno())
+                    await asyncio.to_thread(output.write, encryptor.finalize())
+                    await asyncio.to_thread(output.write, encryptor.tag)
+                await asyncio.to_thread(output.flush)
+                await asyncio.to_thread(os.fsync, output.fileno())
             # 加密会额外写入头部/tag；最终占用按临时文件真实字节复核，确保硬上限。
-            if workspace_used + temporary_path.stat().st_size > max_workspace_size:
+            actual_size = (await asyncio.to_thread(temporary_path.stat)).st_size
+            if workspace_used + actual_size > max_workspace_size:
                 raise ValueError(f"会话工作区总大小不能超过{max_workspace_size_mb}MB")
-            os.replace(temporary_path, full_path)
+            await asyncio.to_thread(os.replace, temporary_path, full_path)
             replaced = True
             try:
                 await self.dao.create_file(
