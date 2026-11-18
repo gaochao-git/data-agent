@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from apps.chat_data_app.agent.run import subagent_trail_snapshot as snapshot_module
+from apps.chat_data_app.agent.middleware import subagent_trail_snapshot as snapshot_module
 
 
 class _FakeCheckpointer:

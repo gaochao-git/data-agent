@@ -22,7 +22,7 @@ from typing import Any
 from utils.checkpoint import get_checkpointer
 from utils.logger import get_logger
 
-from ..middleware.subagent_trail import _build_trail_snapshot
+from .subagent_trail import _build_trail_snapshot
 
 logger = get_logger(__name__)
 

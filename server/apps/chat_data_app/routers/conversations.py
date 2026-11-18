@@ -19,6 +19,7 @@ from utils.response import business_response
 
 from .. import AGENT_ID
 from ..agent.context.context_budget import strip_context_usage_content_for_history
+from ..agent.middleware.subagent_trail_snapshot import load_live_trail_snapshot
 from ..agent.run.agent_inbox_service import (
     AgentQuestionNotFoundError,
     AgentQuestionNotWaitingError,
@@ -39,7 +40,6 @@ from ..agent.run.subagent_task_service import (
     parse_task_status_filter,
     subagent_task_service,
 )
-from ..agent.run.subagent_trail_snapshot import load_live_trail_snapshot
 from ..agent.workspace.runtime_skill_snapshot import build_runtime_skill_snapshot_async
 from ..agent_run_support import (
     materialize_conversation_semantic_models,
