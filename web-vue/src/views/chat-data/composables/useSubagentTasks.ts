@@ -14,7 +14,6 @@ export const ACTIVE_SUBAGENT_TASK_STATUSES: ReadonlySet<SubagentTaskStatus> = ne
   'pending',
   'running',
   'cancelling',
-  'paused',
   'waiting_approval',
 ])
 export const SUBAGENT_TASK_POLL_MS = 3500

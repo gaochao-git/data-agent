@@ -26,7 +26,7 @@ from .tool_timing import create_tool_timing_middleware
 # tests/unit/test_subagent_middleware_ordering.py 枚举校验。
 SUBAGENT_MIDDLEWARE_CANONICAL_ORDER: tuple[str, ...] = (
     "ToolExecutionFenceMiddleware",  # 租约围栏必须最外层，错误不能被内层转成普通工具失败
-    "SubagentControlMiddleware",  # 暂停/插话先于压缩，插话不会被摘要吞掉
+    "SubagentControlMiddleware",  # 插话注入先于压缩，避免补充说明被摘要吞掉
     "ToolApprovalMiddleware",  # 审批在围栏内、任何工具副作用之前
     "ContextCompressionMiddleware",  # 压缩是 before_model 节点，先于模型调用改写 state
     "ContextUsageMiddleware",  # 用量口径与压缩共用同一请求预算
@@ -39,7 +39,7 @@ SUBAGENT_MIDDLEWARE_CANONICAL_ORDER: tuple[str, ...] = (
 )
 
 # 注：围栏只挂 wrap_tool_call，不参与 before_model / after_model；控制中间件
-# 仍是第一个 before_model 钩子，暂停与插话注入依旧先于上下文压缩。
+# 仍是第一个 before_model 钩子，插话注入依旧先于上下文压缩。
 
 
 def assemble_subagent_middleware(

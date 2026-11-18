@@ -1,6 +1,6 @@
 """子智能体生命周期事件 outbox 的统一投递。
 
-所有需要主智能体感知的事件（审批、终态、暂停/恢复、未来的用户直聊）
+所有需要主智能体感知的事件（审批、终态、审批恢复、未来的用户直聊）
 都写入 ``chat_data_subagent_event``，由本模块统一负责：
 
 - ``wake``：会话空闲时创建隐藏通知 Run 自动唤醒，忙时挂当前 Run；
@@ -38,7 +38,6 @@ logger = get_logger(__name__)
 
 EVENT_WAITING_APPROVAL = "waiting_approval"
 EVENT_TERMINAL = "terminal"
-EVENT_PAUSED = "paused"
 EVENT_RESUMED = "resumed"
 EVENT_USER_MESSAGE = "user_message"
 
@@ -47,7 +46,7 @@ WAKE_POLICY_ATTACH = "attach"
 WAKE_POLICY_SILENT = "silent"
 
 TERMINAL_NOTIFICATION_EVENTS = frozenset({EVENT_TERMINAL})
-SUSPENSION_NOTIFICATION_EVENTS = frozenset({EVENT_WAITING_APPROVAL, EVENT_PAUSED})
+APPROVAL_NOTIFICATION_EVENTS = frozenset({EVENT_WAITING_APPROVAL})
 
 
 def terminal_event_id(task_id: str) -> str:
@@ -56,7 +55,7 @@ def terminal_event_id(task_id: str) -> str:
 
 
 def lifecycle_event_id(event_type: str, task_id: str, now: datetime) -> str:
-    """同一任务可能多次暂停/恢复，用毫秒时间戳区分同一类型事件。"""
+    """同一任务可能发生多次生命周期事件，用毫秒时间戳区分同一类型事件。"""
     return f"{event_type}:{task_id}:{int(now.timestamp() * 1000)}"
 
 
@@ -293,12 +292,11 @@ def build_event_meta(**values: Any) -> dict[str, Any]:
 
 
 __all__ = [
-    "EVENT_PAUSED",
+    "APPROVAL_NOTIFICATION_EVENTS",
     "EVENT_RESUMED",
     "EVENT_TERMINAL",
     "EVENT_USER_MESSAGE",
     "EVENT_WAITING_APPROVAL",
-    "SUSPENSION_NOTIFICATION_EVENTS",
     "TERMINAL_NOTIFICATION_EVENTS",
     "WAKE_POLICY_ATTACH",
     "WAKE_POLICY_SILENT",

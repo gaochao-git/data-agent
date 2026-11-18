@@ -55,7 +55,7 @@ class SubagentTaskEventService:
         复用 Run 事件流的 owner 脚本，但 token 使用 ``generation:uuid`` 形态；
         task_id 与 run_id 都是随机 UUID，实际不会碰撞。
 
-        代际必须单调递增：任务暂停/取消时会释放 owner key，但进程被强杀等异常
+        代际必须单调递增：任务转入等待审批或取消时会释放 owner key，但进程被强杀等异常
         路径可能残留旧 key（TTL 1 小时）。若这里写死 ``1:``，恢复执行时同代际
         claim 会被 owner 脚本拒绝，过程流会静默禁用、只剩列表轮询。
         """

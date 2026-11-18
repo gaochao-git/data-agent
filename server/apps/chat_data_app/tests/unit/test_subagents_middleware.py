@@ -186,52 +186,38 @@ def test_background_invocation_config_injects_own_checkpointer():
 
 
 @pytest.mark.asyncio
-async def test_control_middleware_pause_interrupts_and_resumes(monkeypatch):
-    """暂停落在模型调用前的安全点，恢复后继续同一检查点。"""
+async def test_control_middleware_injects_steer_messages(monkeypatch):
+    """主智能体的插话在模型调用前注入子图消息。"""
     from langchain.agents import create_agent
     from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
-    from langgraph.checkpoint.memory import MemorySaver
-    from langgraph.types import Command
 
     from apps.chat_data_app.agent.middleware import subagent_control as control_module
     from apps.chat_data_app.agent.middleware.subagent_control import SubagentControlMiddleware
     from apps.chat_data_app.agent.middleware.subagents import ChatDataSubAgentState
 
     class _ControlService:
-        def __init__(self) -> None:
-            self.paused = True
-
-        async def is_pause_requested(self, _task_id: str, _owner: str) -> bool:
-            return self.paused
-
         async def claim_steer_messages(self, _task_id: str, _owner: str) -> list[str]:
-            return []
+            return ["补充说明：优先分析华东区"]
 
     service = _ControlService()
     monkeypatch.setattr(control_module, "get_subagent_task_service", lambda: service)
-    model = FakeMessagesListChatModel(responses=[AIMessage(content="恢复后完成")])
+    model = FakeMessagesListChatModel(responses=[AIMessage(content="已按补充说明处理")])
     graph = create_agent(
         model=model,
         tools=[],
         system_prompt="test",
         middleware=[SubagentControlMiddleware()],
         state_schema=ChatDataSubAgentState,
-        checkpointer=MemorySaver(),
     )
-    config = {"configurable": {"thread_id": "control-pause"}}
     state = {
         "messages": [HumanMessage(content="分析")],
         "subagent_task_id": "task-1",
         "subagent_owner_token": "owner-1",
     }
 
-    interrupted = await graph.ainvoke(state, config)
-    assert interrupted["__interrupt__"][0].value == {"kind": "subagent_pause", "task_id": "task-1"}
-    assert all(message.content != "恢复后完成" for message in interrupted["messages"])
-
-    service.paused = False
-    resumed = await graph.ainvoke(Command(resume={"kind": "subagent_pause"}), config)
-    assert resumed["messages"][-1].content == "恢复后完成"
+    result = await graph.ainvoke(state)
+    assert result["messages"][-1].content == "已按补充说明处理"
+    assert any(message.content == "补充说明：优先分析华东区" for message in result["messages"])
 
 
 def test_process_subagent_chunk_captures_interrupt_payload():

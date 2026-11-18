@@ -13,7 +13,6 @@ from apps.chat_data_app.agent.run import subagent_event_service as event_service
 from apps.chat_data_app.agent.run import subagent_task_service as service_module
 from apps.chat_data_app.agent.run.agent_inbox_service import agent_inbox_service
 from apps.chat_data_app.agent.run.subagent_event_service import (
-    EVENT_PAUSED,
     EVENT_RESUMED,
     EVENT_TERMINAL,
     EVENT_USER_MESSAGE,
@@ -237,20 +236,3 @@ async def test_user_message_event_is_attached_without_waking_idle_session(harnes
     assert event.delivery_status == "delivered"
     assert calls == []
     assert "帮我补充华东区渠道" in event.event_content
-
-
-@pytest.mark.asyncio
-async def test_paused_lifecycle_event_is_audited_even_without_active_run(harness):
-    await _create_conversation(harness)
-    record = await _create_task(harness)
-    await _start(harness, record)
-    await harness.service.suspend_task(
-        record.task_id,
-        record.owner_token or "",
-        status="paused",
-        interrupt_payload={"kind": "subagent_pause"},
-    )
-
-    event = await _event(harness, record.task_id, EVENT_PAUSED)
-    assert event.wake_policy == "attach"
-    assert event.delivery_status == "delivered"

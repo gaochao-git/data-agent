@@ -77,7 +77,7 @@ SUBAGENT_STATE_PASSTHROUGH_KEYS = frozenset(
 
 
 class SubagentSuspended(RuntimeError):
-    """子图在安全点中断（暂停 / 等待审批），调用方负责挂起任务而非收口。"""
+    """子图在安全点中断等待审批，调用方负责挂起任务而非收口。"""
 
     def __init__(self, payload: dict[str, Any], messages: list[Any]) -> None:
         super().__init__(str(payload.get("kind") or "subagent_suspended"))
@@ -432,7 +432,7 @@ class _SubagentStreamState:
         # 续聊快照用的“当前完整状态消息”。collected 只记本轮新增，且压缩后会
         # 重建；追问需要的是包含历史在内的最终状态，因此单独按 reducer 维护。
         self.state_messages: list[Any] = []
-        # 子图中断（暂停 / 待审批）载荷：由调用方决定挂起并持久化。
+        # 子图中断（待审批）载荷：由调用方决定挂起并持久化。
         self.interrupt_payload: dict[str, Any] | None = None
 
     def prime_state_messages(self, messages: list[Any]) -> None:

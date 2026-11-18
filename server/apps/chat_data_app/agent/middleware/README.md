@@ -37,3 +37,10 @@ steering 插话、工具计时与单会话调用频率告警、历史消息时�
 `agent_session_id` 去重，追问沿用原会话不占新额度。任务相似时，提示词要求主智能体
 先 `subagent(action="list")` 找到已有子智能体并用 `follow_up` 续写；相似度不做代码层
 匹配，避免误合并不同目标或交付物。
+
+并发写采用软控制：会写 workspace 的任务在 `start/follow_up` 通过 `write_scopes` 声明
+工作区相对文件或目录前缀（例如 `outputs/word`、`outputs/ppt`），`workspace:*` 表示
+shell、git、构建等全局独占操作。任务账本保存该声明，`list` 会展示活跃任务的写范围及
+重叠提示；主智能体据此决定并行还是串行。系统不建写租约、不加全局文件锁，也不阻断
+重叠派发，最终合并与 diff review 由主智能体负责。未声明写范围的写任务视为可能冲突，
+不应与其他写任务并行。

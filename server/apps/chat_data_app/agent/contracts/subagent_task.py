@@ -13,7 +13,6 @@ from typing import Any, Protocol
 TASK_STATUS_PENDING = "pending"
 TASK_STATUS_RUNNING = "running"
 TASK_STATUS_CANCELLING = "cancelling"
-TASK_STATUS_PAUSED = "paused"
 TASK_STATUS_WAITING_APPROVAL = "waiting_approval"
 TASK_STATUS_COMPLETED = "completed"
 TASK_STATUS_FAILED = "failed"
@@ -22,11 +21,11 @@ TASK_STATUS_TIMEOUT = "timeout"
 TASK_STATUS_INTERRUPTED = "interrupted"
 TASK_STATUS_LOST = "lost"
 
-# 「活动」用于容量与同会话互斥：暂停/等待审批的任务仍占住该子会话，
-# 不允许主智能体在未处理前再开一轮，否则追问链会分叉。
-SUSPENDED_TASK_STATUSES = frozenset({TASK_STATUS_PAUSED, TASK_STATUS_WAITING_APPROVAL})
+# 等待审批的任务仍占住该子会话，不允许主智能体在审批完成前再开一轮，
+# 否则同一子智能体的追问链会分叉。
+WAITING_APPROVAL_TASK_STATUSES = frozenset({TASK_STATUS_WAITING_APPROVAL})
 EXECUTING_TASK_STATUSES = frozenset({TASK_STATUS_PENDING, TASK_STATUS_RUNNING, TASK_STATUS_CANCELLING})
-ACTIVE_TASK_STATUSES = EXECUTING_TASK_STATUSES | SUSPENDED_TASK_STATUSES
+ACTIVE_TASK_STATUSES = EXECUTING_TASK_STATUSES | WAITING_APPROVAL_TASK_STATUSES
 TERMINAL_TASK_STATUSES = frozenset(
     {
         TASK_STATUS_COMPLETED,
@@ -41,7 +40,6 @@ TASK_STATUS_LABELS = {
     TASK_STATUS_PENDING: "排队中",
     TASK_STATUS_RUNNING: "执行中",
     TASK_STATUS_CANCELLING: "正在取消",
-    TASK_STATUS_PAUSED: "已暂停",
     TASK_STATUS_WAITING_APPROVAL: "等待审批",
     TASK_STATUS_COMPLETED: "已完成",
     TASK_STATUS_FAILED: "失败",
@@ -51,6 +49,47 @@ TASK_STATUS_LABELS = {
     TASK_STATUS_LOST: "执行节点失联",
 }
 TASK_HEARTBEAT_SECONDS = 5
+WORKSPACE_WRITE_SCOPE = "workspace:*"
+READ_ONLY_SUBAGENT_TYPES = frozenset({"explore"})
+
+
+def normalize_write_scope(raw: str) -> str:
+    """把 workspace 相对写范围归一成稳定前缀；非法值返回空串。"""
+    value = str(raw or "").strip().replace("\\", "/")
+    if not value:
+        return ""
+    if value.lower() in {"*", "workspace", "workspace/*", "workspace:*"}:
+        return WORKSPACE_WRITE_SCOPE
+    while value.startswith("./"):
+        value = value[2:]
+    parts = [part for part in value.strip("/").split("/") if part not in {"", "."}]
+    if not parts or ".." in parts:
+        return ""
+    return "/".join(parts)
+
+
+def normalize_write_scopes(values: Sequence[str] | None) -> list[str]:
+    """归一化并去重写范围；保持参数顺序。"""
+    if isinstance(values, str):
+        values = [values]
+    normalized: list[str] = []
+    for item in values or ():
+        scope = normalize_write_scope(item)
+        if scope and scope not in normalized:
+            normalized.append(scope)
+    return normalized
+
+
+def write_scopes_overlap(left: str, right: str) -> bool:
+    """两个 workspace 相对前缀是否重叠；workspace:* 与任意写范围冲突。"""
+    if left == WORKSPACE_WRITE_SCOPE or right == WORKSPACE_WRITE_SCOPE:
+        return True
+    return left == right or left.startswith(f"{right}/") or right.startswith(f"{left}/")
+
+
+def is_write_capable_subagent(subagent_type: str) -> bool:
+    """按类型判断是否可能写 workspace；explore 是只读类型。"""
+    return str(subagent_type or "").strip().lower() not in READ_ONLY_SUBAGENT_TYPES
 
 
 class SubagentTaskCapacityError(RuntimeError):
@@ -64,8 +103,6 @@ def parse_task_status_filter(raw: str | None) -> set[str] | None:
         return None
     if value == "active":
         return set(ACTIVE_TASK_STATUSES)
-    if value == "suspended":
-        return set(SUSPENDED_TASK_STATUSES)
     if value == "terminal":
         return set(TERMINAL_TASK_STATUSES)
     statuses = {item.strip() for item in value.split(",") if item.strip()}
@@ -148,6 +185,9 @@ class SubagentTaskView(Protocol):
     def notify_on_finish(self) -> bool: ...
 
     @property
+    def write_scopes(self) -> Sequence[str]: ...
+
+    @property
     def is_terminal(self) -> bool: ...
 
 
@@ -180,6 +220,13 @@ class SubagentTaskPort(Protocol):
         execution_mode: str,
     ) -> SubagentTaskView | None: ...
 
+    async def set_task_write_scopes(
+        self,
+        task_id: str,
+        owner_token: str,
+        write_scopes: Sequence[str],
+    ) -> SubagentTaskView | None: ...
+
     async def get_task(
         self,
         task_id: str,
@@ -205,17 +252,6 @@ class SubagentTaskPort(Protocol):
         owner_token: str,
         progress: dict[str, Any],
     ) -> str | None: ...
-
-    async def request_pause(
-        self,
-        task_id: str,
-        *,
-        conversation_id: str,
-        user_id: str,
-        operator_name: str,
-    ) -> SubagentTaskView | None: ...
-
-    async def is_pause_requested(self, task_id: str, owner_token: str) -> bool: ...
 
     async def enqueue_steer_message(
         self,

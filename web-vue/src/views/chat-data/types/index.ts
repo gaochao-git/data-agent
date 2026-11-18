@@ -620,7 +620,6 @@ export type SubagentTaskStatus =
   | 'pending'
   | 'running'
   | 'cancelling'
-  | 'paused'
   | 'waiting_approval'
   | 'completed'
   | 'failed'
@@ -688,7 +687,6 @@ export interface SubagentTaskRecord {
   /** 本任务已完成的上下文压缩次数（列表接口摘要字段，不含完整 result_meta）。 */
   compaction_count?: number
   pending_interrupt?: Record<string, unknown> | null
-  pause_requested?: boolean
   progress: SubagentTaskProgress
   created_at: string | null
   updated_at: string | null

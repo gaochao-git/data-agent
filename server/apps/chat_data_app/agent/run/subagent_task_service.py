@@ -4,7 +4,7 @@
 - 进程内只保留 asyncio 执行句柄，任务状态以 MySQL 为唯一真值；
 - worker 每 5 秒续租并写进度，取消请求先落 ``cancelling``，执行 worker 通过
   心跳观察后停止本地协程，因而跨 worker 也能取消；
-- 生命周期变化（终态、审批、暂停/恢复、未来用户直聊）写入
+- 生命周期变化（终态、审批、审批恢复、未来用户直聊）写入
   ``chat_data_subagent_event`` outbox；统一 dispatcher 按 wake/attach/silent
   策略投递，事件 ID 与隐藏消息 ID 都幂等，重复派发不会重复注入。
 """
@@ -37,7 +37,6 @@ from utils.models import ChatDataAgentInbox
 from ..contracts.subagent_task import (
     ACTIVE_TASK_STATUSES,
     EXECUTING_TASK_STATUSES,
-    SUSPENDED_TASK_STATUSES,
     TASK_HEARTBEAT_SECONDS,
     TASK_STATUS_CANCELLED,
     TASK_STATUS_CANCELLING,
@@ -46,14 +45,14 @@ from ..contracts.subagent_task import (
     TASK_STATUS_INTERRUPTED,
     TASK_STATUS_LABELS,
     TASK_STATUS_LOST,
-    TASK_STATUS_PAUSED,
     TASK_STATUS_PENDING,
     TASK_STATUS_RUNNING,
     TASK_STATUS_TIMEOUT,
-    TASK_STATUS_WAITING_APPROVAL,
     TERMINAL_TASK_STATUSES,
+    WAITING_APPROVAL_TASK_STATUSES,
     SubagentTaskCapacityError,
     SubagentTaskView,
+    normalize_write_scopes,
     parse_task_status_filter,
 )
 from .agent_inbox_service import (
@@ -62,12 +61,11 @@ from .agent_inbox_service import (
 )
 from .agent_run_event_service import agent_run_event_service
 from .subagent_event_service import (
-    EVENT_PAUSED,
+    APPROVAL_NOTIFICATION_EVENTS,
     EVENT_RESUMED,
     EVENT_TERMINAL,
     EVENT_USER_MESSAGE,
     EVENT_WAITING_APPROVAL,
-    SUSPENSION_NOTIFICATION_EVENTS,
     WAKE_POLICY_ATTACH,
     WAKE_POLICY_WAKE,
     build_event_meta,
@@ -200,6 +198,11 @@ class SubagentTaskRecord:
         return True if value is None else bool(value)
 
     @property
+    def write_scopes(self) -> tuple[str, ...]:
+        """主智能体声明的工作区相对写范围；空表示未声明。"""
+        return tuple(normalize_write_scopes(self.meta.get("write_scopes")))
+
+    @property
     def progress(self) -> dict[str, Any]:
         progress = self.meta.get("progress")
         if not isinstance(progress, dict):
@@ -323,6 +326,7 @@ class SubagentTaskRecord:
             "timeout_seconds": self.timeout_seconds,
             "execution_mode": self.execution_mode,
             "compaction_count": self.compaction_count,
+            "write_scopes": list(self.write_scopes),
         }
         if include_report:
             payload["report"] = self.report
@@ -330,7 +334,6 @@ class SubagentTaskRecord:
             payload["error"] = self.error
             payload["result_meta"] = self.result_meta
             payload["pending_interrupt"] = self.meta.get("pending_interrupt")
-            payload["pause_requested"] = bool(self.meta.get("pause_requested_at"))
         return payload
 
 
@@ -426,19 +429,9 @@ def _suspension_notification_text(task: SubagentTaskRecord) -> str:
     )
 
 
-def _paused_notification_text(task: SubagentTaskRecord) -> str:
-    return (
-        "## 后台子智能体已暂停（内部消息）\n"
-        f"task_id={task.task_id}\n"
-        f"类型={task.subagent_type}；任务={task.label}\n\n"
-        f'需要继续时调用 subagent(action="resume", task_id="{task.task_id}")；'
-        '不需要继续时调用 subagent(action="cancel", task_id=...)。'
-    )
-
-
 def _resumed_notification_text(task: SubagentTaskRecord) -> str:
     return (
-        "## 后台子智能体已恢复（内部消息）\n"
+        "## 后台子智能体审批完成并恢复执行（内部消息）\n"
         f"task_id={task.task_id}\n"
         f"类型={task.subagent_type}；任务={task.label}\n\n"
         "后续终态仍会另行通知，不要因为恢复而重复派发同一任务。"
@@ -656,6 +649,27 @@ class SubagentTaskService:
             meta = load_task_meta(row.record_meta)
             meta["execution_mode"] = normalized_mode
             meta["notify_on_finish"] = normalized_mode != "sync"
+            row.record_meta = _task_meta_text(meta)
+            row.update_time = now
+            record = SubagentTaskRecord.from_row(row)
+        await self.publish_task_update(record)
+        return record
+
+    async def set_task_write_scopes(
+        self,
+        task_id: str,
+        owner_token: str,
+        write_scopes: Sequence[str],
+    ) -> SubagentTaskRecord | None:
+        """在任务启动前写入软写范围；只用于主智能体并发分发提示。"""
+        normalized = normalize_write_scopes(write_scopes)
+        async with get_session() as session:
+            now = await self._dao.now(session)
+            row = await self._dao.get(session, task_id, for_update=True)
+            if row is None or row.owner_token != owner_token or row.record_status != TASK_STATUS_PENDING:
+                return None
+            meta = load_task_meta(row.record_meta)
+            meta["write_scopes"] = normalized
             row.record_meta = _task_meta_text(meta)
             row.update_time = now
             record = SubagentTaskRecord.from_row(row)
@@ -918,68 +932,6 @@ class SubagentTaskService:
         await self.publish_task_update(record)
         return record.status
 
-    async def request_pause(
-        self,
-        task_id: str,
-        *,
-        conversation_id: str,
-        user_id: str,
-        operator_name: str,
-    ) -> SubagentTaskRecord | None:
-        """请求在下一个安全点暂停；真正停下由子图中间件在模型调用前完成。
-
-        运行中的任务只打标记、不直接改状态：执行体仍持有租约并继续心跳，
-        等中间件在模型调用前 ``interrupt`` 后才落 ``paused``。排队中的任务
-        没有执行体，直接暂停并释放租约。
-        """
-        async with get_session() as session:
-            now = await self._dao.now(session)
-            row = await self._dao.get(
-                session,
-                task_id,
-                conversation_id=conversation_id,
-                user_id=user_id,
-                for_update=True,
-            )
-            if row is None:
-                return None
-            if row.record_status in TERMINAL_TASK_STATUSES:
-                return SubagentTaskRecord.from_row(row)
-            meta = load_task_meta(row.record_meta)
-            meta["pause_requested_at"] = now.isoformat()
-            progress = meta.get("progress")
-            progress = dict(progress) if isinstance(progress, dict) else {}
-            if row.record_status in SUSPENDED_TASK_STATUSES:
-                return SubagentTaskRecord.from_row(row)
-            if row.record_status == TASK_STATUS_PENDING:
-                progress.update({"phase": TASK_STATUS_PAUSED, "running_tools": 0})
-                meta["suspended_at"] = now.isoformat()
-                row.record_status = TASK_STATUS_PAUSED
-                row.owner_token = None
-                row.lease_expire_time = None
-            else:
-                progress.update({"phase": "pause_requested"})
-            meta["progress"] = progress
-            row.record_meta = _task_meta_text(meta)
-            row.update_time = now
-            row.update_by = user_id
-            row.update_by_name = operator_name
-            record = SubagentTaskRecord.from_row(row)
-        await self.publish_task_update(record)
-        logger.info("后台子智能体暂停请求: task_id=%s status=%s", task_id, record.status)
-        return record
-
-    async def is_pause_requested(self, task_id: str, owner_token: str) -> bool:
-        """子图在模型调用前查询暂停标记（只读单行，不加锁）。"""
-        async with get_session() as session:
-            row = await self._dao.get(session, task_id)
-            if row is None or row.owner_token != owner_token:
-                return False
-            if row.record_status != TASK_STATUS_RUNNING:
-                return False
-            meta = load_task_meta(row.record_meta)
-            return bool(meta.get("pause_requested_at"))
-
     async def enqueue_steer_message(
         self,
         task_id: str,
@@ -1041,8 +993,8 @@ class SubagentTaskService:
         status: str,
         interrupt_payload: dict[str, Any] | None = None,
     ) -> SubagentTaskRecord | None:
-        """执行体在 interrupt 后把任务落到暂停/等待审批，并释放租约。"""
-        if status not in SUSPENDED_TASK_STATUSES:
+        """执行体在审批 interrupt 后把任务落到等待审批，并释放租约。"""
+        if status not in WAITING_APPROVAL_TASK_STATUSES:
             raise ValueError(f"不支持的挂起状态: {status}")
         notification_event_id: str | None = None
         async with get_session() as session:
@@ -1053,9 +1005,8 @@ class SubagentTaskService:
             if row.record_status in TERMINAL_TASK_STATUSES or row.record_status == TASK_STATUS_CANCELLING:
                 return SubagentTaskRecord.from_row(row)
             meta = load_task_meta(row.record_meta)
-            meta["suspended_at"] = now.isoformat()
+            meta["waiting_approval_at"] = now.isoformat()
             meta["pending_interrupt"] = interrupt_payload
-            meta.pop("pause_requested_at", None)
             progress = meta.get("progress")
             progress = dict(progress) if isinstance(progress, dict) else {}
             progress.update({"phase": status, "running_tools": 0})
@@ -1066,12 +1017,11 @@ class SubagentTaskService:
             row.record_meta = _task_meta_text(meta)
             row.update_time = now
             record = SubagentTaskRecord.from_row(row)
-            event_type = EVENT_WAITING_APPROVAL if status == TASK_STATUS_WAITING_APPROVAL else EVENT_PAUSED
-            notification_event_id = lifecycle_event_id(event_type, task_id, now)
+            notification_event_id = lifecycle_event_id(EVENT_WAITING_APPROVAL, task_id, now)
             await self._notification_service.cancel_pending_in_session(
                 session,
                 task_id,
-                SUSPENSION_NOTIFICATION_EVENTS,
+                APPROVAL_NOTIFICATION_EVENTS,
                 now,
             )
             await self._emit_event_in_session(
@@ -1079,13 +1029,9 @@ class SubagentTaskService:
                 record,
                 now,
                 event_id=notification_event_id,
-                event_type=event_type,
-                wake_policy=WAKE_POLICY_WAKE if event_type == EVENT_WAITING_APPROVAL else WAKE_POLICY_ATTACH,
-                content=(
-                    _suspension_notification_text(record)
-                    if event_type == EVENT_WAITING_APPROVAL
-                    else _paused_notification_text(record)
-                ),
+                event_type=EVENT_WAITING_APPROVAL,
+                wake_policy=WAKE_POLICY_WAKE,
+                content=_suspension_notification_text(record),
             )
         await self.publish_task_update(record)
         logger.info("后台子智能体已挂起: task_id=%s status=%s", task_id, status)
@@ -1100,7 +1046,7 @@ class SubagentTaskService:
         user_id: str,
         resume_value: Any,
     ) -> tuple[SubagentTaskRecord, Any] | None:
-        """把挂起任务重新置为运行中并返回新的执行者身份与恢复值。"""
+        """把等待审批的任务重新置为运行中并返回新的执行者身份与审批结果。"""
         notification_event_id: str | None = None
         async with get_session() as session:
             now = await self._dao.now(session)
@@ -1112,13 +1058,12 @@ class SubagentTaskService:
                 user_id=user_id,
                 for_update=True,
             )
-            if row is None or row.record_status not in SUSPENDED_TASK_STATUSES:
+            if row is None or row.record_status not in WAITING_APPROVAL_TASK_STATUSES:
                 return None
             meta = load_task_meta(row.record_meta)
             meta["resumed_at"] = now.isoformat()
             meta["pending_interrupt"] = None
-            meta.pop("pause_requested_at", None)
-            # 暂停前的父 Run owner token 已随原 Run 收口失效；恢复后继续拿它推送
+            # 审批前的父 Run owner token 已随原 Run 收口失效；恢复后继续拿它推送
             # 必然 owner mismatch（每 5 秒刷一行失败日志）。清空后直接回落到
             # 当前活跃 Run，找不到就静默交给前端列表轮询兜底。
             meta["parent_owner_token"] = ""
@@ -1135,7 +1080,7 @@ class SubagentTaskService:
             await self._notification_service.cancel_pending_in_session(
                 session,
                 task_id,
-                SUSPENSION_NOTIFICATION_EVENTS,
+                APPROVAL_NOTIFICATION_EVENTS,
                 now,
             )
             notification_event_id = lifecycle_event_id(EVENT_RESUMED, task_id, now)
@@ -1149,7 +1094,7 @@ class SubagentTaskService:
                 content=_resumed_notification_text(record),
             )
         await self.publish_task_update(record)
-        logger.info("后台子智能体恢复执行: task_id=%s", task_id)
+        logger.info("后台子智能体审批后恢复执行: task_id=%s", task_id)
         await self._dispatch_event_best_effort(notification_event_id)
         return record, resume_value
 
@@ -1209,11 +1154,11 @@ class SubagentTaskService:
             row.update_time = now
             logger.info("后台子智能体任务收口: task_id=%s status=%s", task_id, final_status)
             record = SubagentTaskRecord.from_row(row)
-            # 审批/暂停已不再成立，先撤回尚未投递的旧事件，避免终态之后又冒泡。
+            # 待审批已不再成立，先撤回尚未投递的旧事件，避免终态之后又冒泡。
             await self._notification_service.cancel_pending_in_session(
                 session,
                 task_id,
-                SUSPENSION_NOTIFICATION_EVENTS,
+                APPROVAL_NOTIFICATION_EVENTS,
                 now,
             )
             if record.notify_on_finish:
@@ -1226,28 +1171,28 @@ class SubagentTaskService:
                     wake_policy=WAKE_POLICY_WAKE,
                     content=self._notification_text(record),
                 )
-        if history is not None:
-            # 会话快照单独事务：新表未上线/写失败不能让任务收口回滚，否则任务
-            # 只能等租约过期变 lost。历史缺失时追问会走“任务书+报告”兜底。
-            try:
-                async with get_session() as history_session:
-                    history_now = await self._dao.now(history_session)
-                    await self._save_session_history(
-                        history_session,
-                        meta,
-                        history,
-                        history_now,
-                        conversation_id=record.conversation_id,
-                        user_id=record.user_id,
-                        task_id=task_id,
+            if history is not None:
+                # 快照与终态同事务提交，避免“任务已 terminal、latest_task_id 仍指向
+                # 上一轮”的追问竞态；保存点保证新表未上线/写失败时只丢快照，
+                # 不会把任务收口回滚成等待租约回收。
+                try:
+                    async with session.begin_nested():
+                        await self._save_session_history(
+                            session,
+                            meta,
+                            history,
+                            now,
+                            conversation_id=record.conversation_id,
+                            user_id=record.user_id,
+                            task_id=task_id,
+                        )
+                except Exception:
+                    logger.error(
+                        "子智能体会话快照写入失败，任务已正常收口: task_id=%s session_id=%s",
+                        task_id,
+                        str(meta.get("agent_session_id") or meta.get("root_task_id") or task_id),
+                        exc_info=True,
                     )
-            except Exception:
-                logger.error(
-                    "子智能体会话快照写入失败，任务已正常收口: task_id=%s session_id=%s",
-                    task_id,
-                    str(meta.get("agent_session_id") or meta.get("root_task_id") or task_id),
-                    exc_info=True,
-                )
         await self.publish_task_update(record)
         return record
 
@@ -1313,7 +1258,7 @@ class SubagentTaskService:
             meta["cancel_requested_at"] = now.isoformat()
             # 取消同样要告知主智能体：运行中的任务在下次心跳才真正停下，
             # 调用方只拿到「已提交」；终态通知才是主智能体继续编排的依据。
-            if row.record_status in (TASK_STATUS_PENDING, *SUSPENDED_TASK_STATUSES):
+            if row.record_status in (TASK_STATUS_PENDING, *WAITING_APPROVAL_TASK_STATUSES):
                 meta["finished_at"] = now.isoformat()
                 meta["phase"] = TASK_STATUS_CANCELLED
                 progress = meta.get("progress")
@@ -1336,7 +1281,7 @@ class SubagentTaskService:
             await self._notification_service.cancel_pending_in_session(
                 session,
                 task_id,
-                SUSPENSION_NOTIFICATION_EVENTS,
+                APPROVAL_NOTIFICATION_EVENTS,
                 now,
             )
             if record.status == TASK_STATUS_CANCELLED and record.notify_on_finish:
@@ -1378,7 +1323,7 @@ class SubagentTaskService:
             await self._notification_service.cancel_pending_in_session(
                 session,
                 row.message_id,
-                SUSPENSION_NOTIFICATION_EVENTS | {EVENT_TERMINAL},
+                APPROVAL_NOTIFICATION_EVENTS | {EVENT_TERMINAL},
                 now,
             )
             notification = await agent_inbox_dao.get_message_by_id(
@@ -1397,7 +1342,7 @@ class SubagentTaskService:
         reaped_ids: list[str] = []
         async with get_session() as session:
             now = await self._dao.now(session)
-            # 暂停 / 等待审批没有执行体与租约，不能被当成「执行节点失联」回收。
+            # 等待审批没有执行体与租约，不能被当成「执行节点失联」回收。
             rows = await self._dao.list_expired(session, set(EXECUTING_TASK_STATUSES), now, limit=limit)
             if not rows:
                 return 0
@@ -1458,7 +1403,7 @@ class SubagentTaskService:
                 await self._notification_service.cancel_pending_in_session(
                     session,
                     record.task_id,
-                    SUSPENSION_NOTIFICATION_EVENTS,
+                    APPROVAL_NOTIFICATION_EVENTS,
                     now,
                 )
                 await self._emit_event_in_session(

@@ -15,8 +15,8 @@
   展示调用过程。文本与思考以 ``messages`` 模式做 token 级增量转发
   （``subagent_message_delta`` / ``subagent_thinking_delta``），工具生命周期
   仍以 ``updates`` 模式为准。
-- 子智能体不注册 ``ask_user_question``；但后台任务可把暂停/审批中断冒泡到
-  主会话，并通过 ``steer/pause/resume/approve/reject`` 在安全点恢复。
+- 子智能体不注册 ``ask_user_question``；但后台任务可把审批中断冒泡到
+  主会话，并通过 ``steer/approve/reject`` 在安全点继续。
 """
 
 import asyncio
@@ -60,19 +60,20 @@ from ..context.context_budget import (
 )
 from ..context.runtime import ContextRuntime
 from ..contracts.subagent_task import (
-    SUSPENDED_TASK_STATUSES,
     TASK_STATUS_CANCELLED,
     TASK_STATUS_COMPLETED,
     TASK_STATUS_FAILED,
     TASK_STATUS_INTERRUPTED,
     TASK_STATUS_LABELS,
-    TASK_STATUS_PAUSED,
     TASK_STATUS_TIMEOUT,
     TASK_STATUS_WAITING_APPROVAL,
+    WAITING_APPROVAL_TASK_STATUSES,
     SubagentTaskCapacityError,
     SubagentTaskPort,
     SubagentTaskView,
     get_subagent_task_service,
+    normalize_write_scope,
+    normalize_write_scopes,
 )
 from .context_compression import create_context_compression_middleware
 from .context_usage import create_context_usage_middleware
@@ -82,6 +83,7 @@ from .subagent_async import (
     DEFAULT_WAIT_TIMEOUT_SECONDS,
     MAX_WAIT_TASKS,
     _append_partial_report,
+    _apply_task_write_scopes,
     _close_aborted_sync_task,
     _get_subagent_stream_writer,
     _launch_task_runner,
@@ -196,8 +198,9 @@ _TASK_TOOL_DESCRIPTION_TEMPLATE = """派发隔离子智能体处理复杂多步�
 - 动作：subagent(action="start") 派发；subagent(action="list") 列表；subagent(action="check", task_id=...) 查询；subagent(action="wait", task_ids=[...]) 等待；subagent(action="cancel", task_id=...) 取消；subagent(action="follow_up", task_id=..., message=...) 在已结束子会话续写。
 - 分层查询：先 action="list" 看 agent_id 与最近 task_id，再传 agent_id 下钻该智能体全部任务。
 - 身份：agent_id 是稳定子智能体 ID，task_id 是单轮任务 ID；管理动作传 task_id，向用户汇报身份用 agent_id。
+- 写范围：start/follow_up 可传 write_scopes（workspace 相对文件或目录前缀，如 outputs/word）；并发分发规则见系统提示。
 - background 默认 true（异步，立即返回 task_id，终态自动唤醒会话）；false 同步等结果；start 可配 label/timeout_seconds。
-- 运行中用 steer/pause/resume/approve/reject 控制；派发策略与复用规则见系统提示。"""
+- 运行中用 steer/approve/reject 控制；派发策略与复用规则见系统提示。"""
 
 
 class ChatDataSubAgentState(AgentState, total=False):
@@ -232,15 +235,13 @@ class ChatDataSubAgentState(AgentState, total=False):
 class TaskToolArgs(BaseModel):
     """``subagent`` 工具入参。"""
 
-    action: Literal[
-        "start", "list", "check", "wait", "cancel", "follow_up", "steer", "pause", "resume", "approve", "reject"
-    ] = Field(
+    action: Literal["start", "list", "check", "wait", "cancel", "follow_up", "steer", "approve", "reject"] = Field(
         default="start",
         description=(
             "start=派发子智能体（默认）；list=列子智能体任务；check=查单个任务；"
             "wait=等待一个或多个任务终态；cancel=取消任务；"
             "follow_up=对已结束的子智能体继续追问（可同步或后台）；steer=给运行中的子智能体插话；"
-            "pause=请求在下一个安全点暂停；resume=恢复已暂停任务；approve/reject=审批子智能体待执行工具。"
+            "approve/reject=审批子智能体待执行工具并继续执行。"
         ),
     )
     description: str | None = Field(
@@ -268,6 +269,14 @@ class TaskToolArgs(BaseModel):
         default=None,
         max_length=120,
         description="子智能体任务列表里展示的短标题；不传时取任务书首行。",
+    )
+    write_scopes: list[str] | None = Field(
+        default=None,
+        max_length=20,
+        description=(
+            "action=start/follow_up 时可选：声明本任务会写的工作区相对文件或目录前缀，"
+            "例如 outputs/word；follow_up 不传时继承上一轮范围，具体并发分发规则见系统提示。"
+        ),
     )
     timeout_seconds: int | None = Field(
         default=None,
@@ -826,9 +835,7 @@ async def _run_background_task(
         resume_value=resume_value,
     )
     if suspended is not None:
-        status = (
-            TASK_STATUS_PAUSED if suspended.payload.get("kind") == "subagent_pause" else TASK_STATUS_WAITING_APPROVAL
-        )
+        status = TASK_STATUS_WAITING_APPROVAL
         await service.suspend_task(
             record.task_id,
             record.owner_token or "",
@@ -930,7 +937,7 @@ async def _open_subgraph_checkpointer(stack: AsyncExitStack, task_id: str) -> An
         return await stack.enter_async_context(get_checkpointer())
     except Exception:
         logger.warning(
-            "[tools] 子图检查点初始化失败，暂停/审批将不可用，按无检查点执行: task_id=%s",
+            "[tools] 子图检查点初始化失败，审批恢复将不可用，按无检查点执行: task_id=%s",
             task_id,
             exc_info=True,
         )
@@ -1144,6 +1151,7 @@ async def _follow_up_task_action(
     run_controls: Any,
     specs: list[SubagentSpec],
     background: bool,
+    write_scopes: list[str] | None,
     compiled: dict[str, Any],
     background_runnables: dict[str, Any],
 ) -> Command | str:
@@ -1169,6 +1177,7 @@ async def _follow_up_task_action(
         runtime=runtime,
         run_controls=run_controls,
         background=background,
+        write_scopes=_validate_tool_write_scopes(write_scopes),
         runner_factory=lambda record, snapshot: _run_background_task(record, snapshot, specs, background_runnables),
         sync_runner=_sync_runner,
     )
@@ -1183,6 +1192,16 @@ def _raise_tool_error(message: str) -> NoReturn:
     ``status="error"`` 并按"预期校验错误"降级日志。
     """
     raise ValueError(message)
+
+
+def _validate_tool_write_scopes(write_scopes: list[str] | None) -> list[str] | None:
+    """校验工具边界的写范围声明；None 表示追问继承原范围。"""
+    if write_scopes is None:
+        return None
+    invalid = [item for item in write_scopes if not normalize_write_scope(item)]
+    if invalid:
+        _raise_tool_error("write_scopes 必须是工作区相对文件或目录前缀，例如 outputs/word；不能为空或包含 ..。")
+    return normalize_write_scopes(write_scopes)
 
 
 def _tee_stream_writers(*writers: Any) -> Callable[[Any], None] | None:
@@ -1245,6 +1264,7 @@ async def _register_sync_task(
     description: str,
     subagent_type: str,
     label: str | None,
+    write_scopes: list[str] | None,
     runtime: ToolRuntime,
     run_controls: Any,
 ) -> tuple[SubagentTaskPort, SubagentTaskView] | None:
@@ -1281,6 +1301,7 @@ async def _register_sync_task(
             exc_info=True,
         )
         return None
+    record = await _apply_task_write_scopes(service, record, write_scopes, log_label="同步子智能体")
     try:
         configured = await service.configure_task_execution(
             record.task_id,
@@ -1399,6 +1420,7 @@ async def _run_sync_task(
     description: str,
     subagent_type: str,
     label: str | None,
+    write_scopes: list[str] | None,
     runtime: ToolRuntime,
     run_controls: Any,
     specs: list[SubagentSpec],
@@ -1409,6 +1431,7 @@ async def _run_sync_task(
         description=description,
         subagent_type=subagent_type,
         label=label,
+        write_scopes=write_scopes,
         runtime=runtime,
         run_controls=run_controls,
     )
@@ -1432,6 +1455,7 @@ async def _start_task_action(
     subagent_type: str | None,
     background: bool,
     label: str | None,
+    write_scopes: list[str] | None,
     timeout_seconds: int | None,
     runtime: ToolRuntime,
     run_controls: Any,
@@ -1451,6 +1475,7 @@ async def _start_task_action(
             description=description,
             subagent_type=subagent_type,
             label=label,
+            write_scopes=write_scopes,
             runtime=runtime,
             run_controls=run_controls,
             specs=specs,
@@ -1461,6 +1486,7 @@ async def _start_task_action(
         subagent_type=subagent_type,
         description=description,
         label=label,
+        write_scopes=write_scopes,
         timeout_seconds=timeout_seconds,
         runtime=runtime,
         run_controls=run_controls,
@@ -1517,15 +1543,6 @@ async def _control_task_action(
             message=message,
             operator_name=operator_name,
         )
-    if action == "pause":
-        return await _control_pause(
-            service,
-            target,
-            normalized,
-            conversation_id=conversation_id,
-            user_id=user_id,
-            operator_name=operator_name,
-        )
     return await _control_resume(
         action,
         service,
@@ -1564,34 +1581,9 @@ async def _control_steer(
     )
     if record is None:
         return "插话未送达：任务已结束或状态已变化。"
-    if record.status in SUSPENDED_TASK_STATUSES:
-        return "插话已排队，将在任务恢复后、下一次模型调用前注入。"
+    if record.status in WAITING_APPROVAL_TASK_STATUSES:
+        return "插话已排队，将在审批完成并继续执行后、下一次模型调用前注入。"
     return "插话已排队，将在子智能体下一次模型调用前注入。"
-
-
-async def _control_pause(
-    service: SubagentTaskPort,
-    target: SubagentTaskView,
-    task_id: str,
-    *,
-    conversation_id: str,
-    user_id: str,
-    operator_name: str,
-) -> str:
-    if target.is_terminal:
-        status_label = TASK_STATUS_LABELS.get(target.status, target.status)
-        return f"任务已是{status_label}，无需暂停。"
-    record = await service.request_pause(
-        task_id,
-        conversation_id=conversation_id,
-        user_id=user_id,
-        operator_name=operator_name,
-    )
-    if record is None:
-        return "暂停请求未生效：任务不存在或状态已变化。"
-    if record.status == TASK_STATUS_PAUSED:
-        return f'子智能体已暂停（task_id={task_id}）。可用 subagent(action="resume", task_id=...) 恢复。'
-    return "暂停请求已提交：子智能体会在下一个模型调用前中断，届时状态变为已暂停。"
 
 
 async def _control_resume(
@@ -1608,11 +1600,8 @@ async def _control_resume(
     background_runnables: dict[str, Any],
 ) -> str:
     status_label = TASK_STATUS_LABELS.get(target.status, target.status)
-    if target.status not in SUSPENDED_TASK_STATUSES:
-        return (
-            f"任务当前为{status_label}，不需要 {action}。"
-            "只有 paused / waiting_approval 状态可用 resume/approve/reject。"
-        )
+    if target.status not in WAITING_APPROVAL_TASK_STATUSES:
+        return f"任务当前为{status_label}，不需要 {action}。只有 waiting_approval 状态可用 approve/reject。"
     pending = target.meta.get("pending_interrupt")
     resume_value, verdict, error = _prepare_resume(action, target.status, pending, decision)
     if error:
@@ -1649,19 +1638,17 @@ def _prepare_resume(
     pending: Any,
     decision: str,
 ) -> tuple[dict[str, Any] | None, str, str]:
-    """校验挂起状态并构造恢复值；返回 (resume_value, verdict, error)。"""
+    """校验待审批状态并构造恢复值；返回 (resume_value, verdict, error)。"""
     status_label = TASK_STATUS_LABELS.get(status, status)
-    if action in {"approve", "reject"}:
-        if status != TASK_STATUS_WAITING_APPROVAL:
-            return None, "", f"任务当前为{status_label}，没有待审批操作。"
-        effective_decision = "deny" if action == "reject" else ("allow" if action == "approve" else decision)
-        resume_value = _build_approval_resume_value(pending, effective_decision)
-        if resume_value is None:
-            return None, "", "待审批载荷缺失或格式异常，无法恢复；可取消后重新派发。"
-        return resume_value, "已拒绝" if effective_decision == "deny" else "已批准", ""
-    if status != TASK_STATUS_PAUSED:
-        return None, "", f"任务当前为{status_label}，不需要恢复。"
-    return {"kind": "subagent_pause", "action": "resume"}, "已恢复", ""
+    if action not in {"approve", "reject"}:
+        return None, "", f"不支持的控制动作：{action}。"
+    if status != TASK_STATUS_WAITING_APPROVAL:
+        return None, "", f"任务当前为{status_label}，没有待审批操作。"
+    effective_decision = "deny" if action == "reject" else ("allow" if action == "approve" else decision)
+    resume_value = _build_approval_resume_value(pending, effective_decision)
+    if resume_value is None:
+        return None, "", "待审批载荷缺失或格式异常，无法恢复；可取消后重新派发。"
+    return resume_value, "已拒绝" if effective_decision == "deny" else "已批准", ""
 
 
 def build_task_tool(specs: list[SubagentSpec], run_controls: Any = None) -> StructuredTool:
@@ -1679,7 +1666,7 @@ def build_task_tool(specs: list[SubagentSpec], run_controls: Any = None) -> Stru
     async def atask(
         runtime: ToolRuntime,
         action: Literal[
-            "start", "list", "check", "wait", "cancel", "follow_up", "steer", "pause", "resume", "approve", "reject"
+            "start", "list", "check", "wait", "cancel", "follow_up", "steer", "approve", "reject"
         ] = "start",
         description: str | None = None,
         subagent_type: str | None = None,
@@ -1697,6 +1684,7 @@ def build_task_tool(specs: list[SubagentSpec], run_controls: Any = None) -> Stru
         # 以守住「单方法形参 ≤13」红线；args_schema 不变，LLM 可见字段与行为完全一致。
         status = kwargs.get("status")
         decision = kwargs.get("decision", "allow")
+        write_scopes = kwargs.get("write_scopes")
         if agent_id and action != "list":
             return 'agent_id 仅用于 action="list" 查询任务明细；check/cancel/follow_up 等动作请传 task_id。'
         if action == "follow_up":
@@ -1707,10 +1695,11 @@ def build_task_tool(specs: list[SubagentSpec], run_controls: Any = None) -> Stru
                 run_controls=run_controls,
                 specs=specs,
                 background=background,
+                write_scopes=write_scopes,
                 compiled=compiled,
                 background_runnables=background_cache.get(),
             )
-        if action in {"steer", "pause", "resume", "approve", "reject"}:
+        if action in {"steer", "approve", "reject"}:
             return await _control_task_action(
                 action=action,
                 task_id=task_id,
@@ -1737,6 +1726,7 @@ def build_task_tool(specs: list[SubagentSpec], run_controls: Any = None) -> Stru
             subagent_type=subagent_type,
             background=background,
             label=label,
+            write_scopes=_validate_tool_write_scopes(write_scopes),
             timeout_seconds=timeout_seconds,
             runtime=runtime,
             run_controls=run_controls,
@@ -1815,6 +1805,14 @@ def _default_system_prompt() -> str:
         '只有目标、范围或交付物明确不同才 subagent(action="start") 新建。'
         "达到上限后 start 会被拒绝，此时只能复用已有子智能体或由主智能体自己完成；"
         "追问沿用原会话，不新增子智能体数量。\n\n"
+        "## 并发写与任务分发\n\n"
+        "并发写由你负责任务分发，不依赖系统写锁。会写 workspace 的 general 任务，"
+        "start/follow_up 必须用 write_scopes 声明工作区相对文件或目录前缀，例如 "
+        "outputs/word、outputs/ppt；explore 只读，不声明写范围。并行派发前先 "
+        'subagent(action="list") 查看活跃任务的写范围：范围不相交才可并行；重叠或任一任务'
+        "未声明写范围时按可能冲突处理，改为串行。shell、git、依赖安装、构建、打包等全局"
+        "写操作传 workspace:*，同一时间只跑一个。子智能体必须只改声明范围；任务完成后"
+        "由你检查产出、review diff 并承担最终合并责任。\n\n"
         "## 子智能体执行方式\n\n"
         "默认异步：批量盘点/全量扫描、多份成稿/多交付物、多个可并行且彼此独立的子任务，"
         "或当轮不需要其结论时，直接用 subagent 派发（默认 background=true）；立即返回持久 task_id，"

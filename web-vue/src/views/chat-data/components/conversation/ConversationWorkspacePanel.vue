@@ -186,7 +186,6 @@ const subagentTaskStatusIcon = (task: SubagentTaskRecord): string => {
     case 'pending': return 'fa-clock'
     case 'running': return 'fa-spinner fa-spin'
     case 'cancelling': return 'fa-circle-notch fa-spin'
-    case 'paused': return 'fa-pause'
     case 'waiting_approval': return 'fa-user-clock'
     case 'completed': return 'fa-check'
     case 'failed': return 'fa-xmark'
@@ -198,7 +197,6 @@ const subagentTaskStatusIcon = (task: SubagentTaskRecord): string => {
   }
 }
 const subagentTaskStatusTone = (task: SubagentTaskRecord): string => {
-  if (task.status === 'paused') return 'border-slate-200 bg-slate-50 text-slate-600'
   if (task.status === 'waiting_approval') return 'border-amber-200 bg-amber-50 text-amber-700'
   if (isSubagentTaskActive(task)) return 'border-sky-200 bg-sky-50 text-sky-700'
   if (task.status === 'completed') return 'border-emerald-200 bg-emerald-50 text-emerald-700'

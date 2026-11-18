@@ -105,7 +105,6 @@ const statusLabel = computed(() => {
     case 'pending': return '等待中'
     case 'running': return '执行中'
     case 'cancelling': return '取消中'
-    case 'paused': return '已暂停'
     case 'waiting_approval': return '等待审批'
     case 'completed': return '已完成'
     case 'cancelled': return '已取消'
@@ -125,7 +124,6 @@ const statusTextTone = computed(() => {
     case 'cancelled':
     case 'interrupted': return 'text-amber-600'
     case 'waiting_approval': return 'text-amber-600'
-    case 'paused': return 'text-slate-500'
     default: return 'text-sky-600'
   }
 })
@@ -139,7 +137,6 @@ const accentLineTone = computed(() => {
     case 'cancelled':
     case 'interrupted': return 'from-amber-400 via-amber-300/70 to-transparent'
     case 'waiting_approval': return 'from-amber-400 via-amber-300/70 to-transparent'
-    case 'paused': return 'from-slate-400 via-slate-300/70 to-transparent'
     default: return 'from-sky-400 via-indigo-300/70 to-transparent'
   }
 })

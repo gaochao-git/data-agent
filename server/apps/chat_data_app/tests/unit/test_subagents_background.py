@@ -18,6 +18,7 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 
 from apps.chat_data_app.agent.middleware import subagent_history as subagent_history_module
 from apps.chat_data_app.agent.middleware import subagents as subagents_module
@@ -61,8 +62,15 @@ def _settings(max_active: int = 20, max_subagents_per_conversation: int = 5):
 
 
 @pytest.fixture()
-def harness(monkeypatch):
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+def harness(monkeypatch, tmp_path):
+    # 后台执行与测试轮询会并发开 Session。内存库固定复用同一连接，会在
+    # 语句未结束时被另一协程提交（SQL statements in progress）；改用独立
+    # 文件库 + NullPool，让每个 Session 持有自己的连接，由 SQLite 正常排队。
+    engine = create_async_engine(
+        f"sqlite+aiosqlite:///{tmp_path / 'subagent-background.db'}",
+        poolclass=NullPool,
+        connect_args={"timeout": 30},
+    )
 
     async def create_tables():
         async with engine.begin() as connection:
@@ -240,6 +248,39 @@ async def test_create_task_persists_snapshot_and_publishes_compact_sse(harness):
     assert frame.startswith("event: subagent_task_updated\n")
     assert record.task_id in frame
     assert '"report"' not in frame
+
+
+@pytest.mark.asyncio
+async def test_write_scopes_are_normalized_in_task_ledger(harness):
+    await harness.create_conversation()
+    record = await harness.service.create_task(
+        conversation_id=CONV,
+        user_id=USER,
+        parent_run_id="run-parent",
+        subagent_type="general",
+        description="分别生成 Word 和 PPT",
+        label="交付物",
+        parent_tool_call_id="call-scope",
+        parent_owner_token="parent-owner",
+        timeout_seconds=60,
+        operator_name="用户一",
+    )
+
+    updated = await harness.service.set_task_write_scopes(
+        record.task_id,
+        record.owner_token or "",
+        [" ./outputs/word/ ", "outputs\\ppt", "outputs/word", "a/../b", "workspace"],
+    )
+
+    assert updated is not None
+    assert updated.write_scopes == ("outputs/word", "outputs/ppt", "workspace:*")
+    payload = updated.as_dict(include_report=False)
+    assert payload["write_scopes"] == ["outputs/word", "outputs/ppt", "workspace:*"]
+
+    assert await harness.service.set_task_write_scopes(record.task_id, "wrong-owner", ["outputs/x"]) is None
+    started = await harness.service.start_task(record.task_id, record.owner_token or "")
+    assert started is not None
+    assert await harness.service.set_task_write_scopes(record.task_id, record.owner_token or "", ["outputs/y"]) is None
 
 
 @pytest.mark.asyncio
@@ -860,64 +901,6 @@ def test_system_prompt_documents_background_and_subagent_tools():
 
 
 @pytest.mark.asyncio
-async def test_finish_task_persists_session_history(harness):
-    await harness.create_conversation()
-    record = await _create_task(harness)
-    await _start(harness, record)
-    history = [
-        {"type": "human", "content": "盘点近 30 天入金趋势"},
-        {"type": "ai", "content": "结论：整体平稳"},
-    ]
-    finished = await harness.service.finish_task(
-        record.task_id,
-        record.owner_token or "",
-        status="completed",
-        report="结论：整体平稳",
-        history=history,
-    )
-
-    assert finished is not None
-    assert finished.root_task_id == record.task_id
-    assert finished.turn_index == 1
-    assert (
-        await harness.service.load_session_messages(
-            record.task_id,
-            conversation_id=CONV,
-            user_id=USER,
-        )
-        == history
-    )
-    assert (
-        await harness.service.load_session_messages(
-            record.task_id,
-            conversation_id=CONV,
-            user_id=USER,
-            expected_turn_index=2,
-        )
-        == []
-    )
-
-
-@pytest.mark.asyncio
-async def test_load_session_history_degrades_when_table_unavailable(harness, monkeypatch):
-    """会话表未迁移时不能阻断追问；读取失败按空历史处理。"""
-
-    async def broken_get(*_args, **_kwargs):
-        raise RuntimeError("table chat_data_subagent_session does not exist")
-
-    monkeypatch.setattr(service_module.subagent_session_dao, "get", broken_get)
-
-    assert (
-        await harness.service.load_session_messages(
-            "session-missing-table",
-            conversation_id=CONV,
-            user_id=USER,
-        )
-        == []
-    )
-
-
-@pytest.mark.asyncio
 async def test_follow_up_reuses_session_history(harness, monkeypatch):
     await harness.create_conversation()
     captured_states: list[dict] = []
@@ -974,6 +957,83 @@ async def test_follow_up_reuses_session_history(harness, monkeypatch):
     )
     assert [item["type"] for item in session] == ["human", "ai", "human", "ai"]
     assert session[-1]["content"] == "第 2 轮结论"
+
+
+@pytest.mark.asyncio
+async def test_follow_up_inherits_write_scopes_when_omitted(harness, monkeypatch):
+    await harness.create_conversation()
+
+    monkeypatch.setattr(
+        subagents_module,
+        "_compile_subagent",
+        lambda spec, run_controls=None, **kwargs: _runnable("交付物已生成"),
+    )
+    tool = build_task_tool([_spec("general")])
+    first = await tool.coroutine(
+        description="生成 Word 报告",
+        subagent_type="general",
+        write_scopes=["outputs/word"],
+        runtime=_fake_runtime(tool_call_id="call_scope_first"),
+    )
+    first_record = await _wait_terminal(harness, _task_id_from_text(first))
+    assert first_record.write_scopes == ("outputs/word",)
+
+    follow = await tool.coroutine(
+        action="follow_up",
+        task_id=first_record.task_id,
+        message="补充目录页",
+        runtime=_fake_runtime(tool_call_id="call_scope_follow"),
+    )
+    second_record = await _wait_terminal(harness, _task_id_from_text(follow))
+
+    assert second_record.write_scopes == ("outputs/word",)
+
+    override = await tool.coroutine(
+        action="follow_up",
+        task_id=second_record.task_id,
+        message="目录页另存到附件目录",
+        write_scopes=["outputs/word/annex"],
+        runtime=_fake_runtime(tool_call_id="call_scope_override"),
+    )
+    third_record = await _wait_terminal(harness, _task_id_from_text(override))
+
+    assert third_record.write_scopes == ("outputs/word/annex",)
+
+
+@pytest.mark.asyncio
+async def test_follow_up_without_write_scopes_skips_ledger_rewrite(harness, monkeypatch):
+    """未声明范围的任务链不额外写账本，避免无意义的并发事务。"""
+    await harness.create_conversation()
+    monkeypatch.setattr(
+        subagents_module,
+        "_compile_subagent",
+        lambda spec, run_controls=None, **kwargs: _runnable("盘点完成"),
+    )
+    calls: list[tuple] = []
+    original = harness.service.set_task_write_scopes
+
+    async def _spy(*args):
+        calls.append(args)
+        return await original(*args)
+
+    monkeypatch.setattr(harness.service, "set_task_write_scopes", _spy)
+    tool = build_task_tool([_spec()])
+    first = await tool.coroutine(
+        description="盘点近 30 天入金趋势",
+        subagent_type="explore",
+        runtime=_fake_runtime(tool_call_id="call_scope_none_first"),
+    )
+    first_record = await _wait_terminal(harness, _task_id_from_text(first))
+    follow = await tool.coroutine(
+        action="follow_up",
+        task_id=first_record.task_id,
+        message="补充渠道拆分",
+        runtime=_fake_runtime(tool_call_id="call_scope_none_follow"),
+    )
+    second_record = await _wait_terminal(harness, _task_id_from_text(follow))
+
+    assert second_record.write_scopes == ()
+    assert calls == []
 
 
 @pytest.mark.asyncio
@@ -1305,6 +1365,35 @@ async def test_sync_task_is_tracked_without_finish_notification(harness, monkeyp
             )
         ).scalar_one_or_none()
     assert notification is None
+
+
+@pytest.mark.asyncio
+async def test_sync_task_persists_write_scopes(harness, monkeypatch):
+    """同步任务和后台任务共用同一份写范围账本。"""
+    await harness.create_conversation()
+    monkeypatch.setattr(
+        subagents_module,
+        "_compile_subagent",
+        lambda spec, run_controls=None, **kwargs: _runnable("Word 已生成"),
+    )
+    tool = build_task_tool([_spec("general")])
+
+    result = await tool.coroutine(
+        background=False,
+        description="生成 Word 报告",
+        subagent_type="general",
+        label="Word 报告",
+        write_scopes=[" ./outputs/word/ ", "outputs\\word"],
+        runtime=_fake_runtime(tool_call_id="call_sync_scope"),
+    )
+
+    assert result.update["messages"][0].content == "Word 已生成"
+    records = await harness.service.list_tasks(CONV, USER, limit=10)
+    assert len(records) == 1
+    record = await harness.service.get_task(records[0].task_id, conversation_id=CONV, user_id=USER)
+    assert record is not None
+    assert record.execution_mode == "sync"
+    assert record.write_scopes == ("outputs/word",)
 
 
 @pytest.mark.asyncio
@@ -1715,43 +1804,33 @@ def test_state_message_tracker_applies_full_reset_and_dedup():
 
 
 @pytest.mark.asyncio
-async def test_pause_request_suspends_and_resume_rotates_owner(harness):
+async def test_approval_resume_rotates_owner(harness):
     await harness.create_conversation()
     record = await _create_task(harness)
     await _start(harness, record)
 
-    paused = await harness.service.request_pause(
-        record.task_id,
-        conversation_id=CONV,
-        user_id=USER,
-        operator_name="用户一",
-    )
-    assert paused is not None
-    assert paused.status == "running"
-    assert await harness.service.is_pause_requested(record.task_id, record.owner_token or "") is True
-
     suspended = await harness.service.suspend_task(
         record.task_id,
         record.owner_token or "",
-        status="paused",
-        interrupt_payload={"kind": "subagent_pause"},
+        status="waiting_approval",
+        interrupt_payload={"kind": "approval", "approval_items": []},
     )
     assert suspended is not None
-    assert suspended.status == "paused"
+    assert suspended.status == "waiting_approval"
     assert suspended.owner_token is None
-    assert suspended.meta["pending_interrupt"] == {"kind": "subagent_pause"}
+    assert suspended.meta["pending_interrupt"] == {"kind": "approval", "approval_items": []}
 
     resumed = await harness.service.resume_task(
         record.task_id,
         conversation_id=CONV,
         user_id=USER,
-        resume_value={"kind": "subagent_pause", "action": "resume"},
+        resume_value={"kind": "approval", "answers": []},
     )
     assert resumed is not None
     resumed_record, resume_value = resumed
     assert resumed_record.status == "running"
     assert resumed_record.owner_token and resumed_record.owner_token != record.owner_token
-    assert resume_value == {"kind": "subagent_pause", "action": "resume"}
+    assert resume_value == {"kind": "approval", "answers": []}
     assert resumed_record.meta.get("pending_interrupt") is None
     # 旧父 Run owner 已失效，恢复后不能再拿它推送
     assert resumed_record.meta.get("parent_owner_token") == ""

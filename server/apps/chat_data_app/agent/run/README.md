@@ -26,12 +26,12 @@ cancelled/interrupted/lost`；`cancelling` 是跨 worker 的取消请求，执�
 活动节点的 `agent_run_runtime` 统一回收为 `lost`，避免多副本重复判断。
 
 - 所有需要主智能体感知的生命周期变化统一写入 `chat_data_subagent_event` outbox：
-  `terminal`、`waiting_approval`、`paused`、`resumed`，以及未来用户直聊子智能体的
+  `terminal`、`waiting_approval`、`resumed`，以及未来用户直聊子智能体的
   `user_message`。状态变更与事件同一事务落库，投递状态按事件独立记录，不再受
   「一任务一通知」限制，也不再依赖任务行的 `consumed_time` 表达全部语义。
 - 事件有三种投递策略：`wake` 在会话空闲时创建隐藏通知 Run 自动唤醒，忙时挂当前 Run；
   `attach` 只挂活跃 Run，不唤醒空闲会话；`silent` 只留审计。审批和终态用 `wake`，
-  暂停/恢复与用户直聊事件用 `attach`。
+  审批恢复与用户直聊事件用 `attach`。
 - 通知写成隐藏的 `next-step` inbox 消息（`message_id=evt-<hash>`，`hide_from_ui=true`）；
   会话空闲时用 `adopt_pending_messages=False + selected_message_id` 创建通知 Run，只领取
   自己的通知，不劫持用户排队消息。隐藏消息不进用户历史/气泡。
@@ -40,7 +40,7 @@ cancelled/interrupted/lost`；`cancelling` 是跨 worker 的取消请求，执�
   模型轮次但不产生用户气泡；会话忙时挂到当前 Run 的下一轮消息。用户不发消息也会推进。
 - 投递成功后事件标记 `delivered` 并维持终态任务 `consumed_time/notified_at` 口径；失败保留
   `pending` 由调度重试，超过重试上限标记 `failed`。`subagent(action="check/wait")` 已读到
-  终态会取消尚未投递的终态事件和尚未消费的隐藏消息；恢复/取消会让旧的审批或暂停事件失效。
+  终态会取消尚未投递的终态事件和尚未消费的隐藏消息；恢复/取消会让旧的审批事件失效。
 - 同步任务仍在当前轮返回，不生成终态事件或唤醒 Run。
 - 任务结论始终先落在账本的 `record_content`；通知里只是预览。终态任务用
   `subagent(action="check", task_id=...)` 一次读取完整报告。
@@ -92,6 +92,12 @@ cancelled/interrupted/lost`；`cancelling` 是跨 worker 的取消请求，执�
   `chat_data_subagent_session.session_id`。
 - `task_id`：一次执行轮次，承载租约、取消、审计与报告；`turn_index` 是该智能体内的轮次。
 
+任务 `record_meta` 还保存 `write_scopes`：主智能体在派发会写 workspace 的子任务时声明的
+工作区相对文件/目录前缀。它只用于主智能体并发分发判断，不是锁：不阻止重叠任务启动，
+不参与租约，也不会自动串行。`list`/`check` 返回该声明及活跃任务重叠提示；
+`workspace:*` 表示全局写操作。未声明写范围的写任务按可能冲突处理，由主智能体在派发前
+自行串行并承担最终整合。
+
 `parent_task_id` 只表示“任务链上一轮”，**不是**父智能体；父子智能体关系看
 `parent_agent_id` / `root_agent_id` / `depth`。旧任务没有新字段时按
 `agent_session_id → root_task_id → task_id`、`agent_id → agent_session_id`、
@@ -108,10 +114,10 @@ cancelled/interrupted/lost`；`cancelling` 是跨 worker 的取消请求，执�
 后续只做单层模型内的能力增强：
 
 - 已实现：子图独立 checkpointer（线程按 `agent_session_id`、命名空间按
-  `task_id`），以及 `paused/waiting_approval` 状态与统一的
-  `steer/pause/resume/approve/reject/cancel` 控制命令。账本仍是业务真值，
-  checkpoint 只负责执行恢复；暂停与审批都落在模型调用前的安全点，恢复用
-  `Command(resume=...)`。等待审批、暂停和恢复都会写生命周期事件，按
+  `task_id`），以及 `waiting_approval` 状态与统一的
+  `steer/approve/reject/cancel` 控制命令。账本仍是业务真值，
+  checkpoint 只负责执行恢复；审批落在模型调用前的安全点，恢复用
+  `Command(resume=...)`。等待审批和审批恢复都会写生命周期事件，按
   wake/attach 策略同步给主会话；用户明确允许/拒绝后由主智能体调用
   `subagent(action="approve"/"reject")` 继续。
 - 阶段 2：通知聚合、全局/节点容量、运行期子智能体类型注册与预算配置。
