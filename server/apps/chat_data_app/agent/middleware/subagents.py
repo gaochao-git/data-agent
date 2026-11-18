@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from typing import Annotated, Any, Literal, NoReturn, cast
 
 from langchain.agents import create_agent
-from langchain.agents.middleware import AgentMiddleware, AgentState, ModelCallResult, ModelRequest, ToolErrorMiddleware
+from langchain.agents.middleware import AgentMiddleware, AgentState, ModelCallResult, ModelRequest
 from langchain.tools import ToolRuntime
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.messages import RemoveMessage as RemoveMessage  # noqa: F401 - 兼容 re-export
@@ -49,7 +49,6 @@ from apps.chat_data_app.services.setting_service import get_runtime_setting
 from utils.checkpoint import get_checkpointer
 from utils.logger import get_logger
 
-from ..agent_runtime import on_tool_error
 from ..agent_state import merge_context_compression_events, merge_loaded_skill_names, replace_approval_decisions
 from ..approval_policy import ask_tool_names, resolve_approval_policies
 from ..context.context_budget import (
@@ -75,11 +74,10 @@ from ..contracts.subagent_task import (
     SubagentTaskView,
     get_subagent_task_service,
 )
-from ..tools.registry import TOOL_REQUIRED_SKILLS
 from .context_compression import create_context_compression_middleware
 from .context_usage import create_context_usage_middleware
 from .sandbox_renewal import create_sandbox_renewal_middleware
-from .skill_prerequisite import SkillPrerequisiteMiddleware
+from .subagent_assembly import assemble_subagent_middleware
 from .subagent_async import (
     DEFAULT_WAIT_TIMEOUT_SECONDS,
     MAX_WAIT_TASKS,
@@ -169,10 +167,8 @@ from .subagent_trail import (
     _trail_tool_entry,  # noqa: F401 - 兼容 re-export
 )
 from .tool_approval import create_tool_approval_middleware
-from .tool_call_normalizer import create_tool_call_name_normalizer_middleware
 from .tool_execution_fence import create_tool_execution_fence_middleware
-from .tool_result import create_tool_result_middleware, externalize_tool_text
-from .tool_timing import create_tool_timing_middleware
+from .tool_result import externalize_tool_text
 
 logger = get_logger(__name__)
 
@@ -489,15 +485,38 @@ def _compile_subagent(spec: SubagentSpec, run_controls: Any = None, *, control_e
         name="SubagentContextUsageMiddleware",
         store_full_usage=True,
     )
-    # 相对顺序与主图 MIDDLEWARE_CANONICAL_ORDER 对齐：出口处理链（归一化→结果→
-    # 错误）的次序保持不变。压缩中间件是 before_model 节点（独立图节点，先于
-    # 模型调用改写 state）；上下文计量负责把压缩摘要注入当轮请求。
+    # 中间件顺序由 SUBAGENT_MIDDLEWARE_CANONICAL_ORDER 唯一决定：出口处理链
+    # （归一化→结果→错误）的次序与主图保持一致；压缩中间件是 before_model
+    # 节点（独立图节点，先于模型调用改写 state），上下文计量负责把压缩摘要
+    # 注入当轮请求。
     # 注意：子图不挂 TodoListMiddleware——子智能体不给规划/进度类工具，
     # 进度与完成情况由收尾协议直接写进最终报告。
-    middleware = [
+    control_middleware = None
+    approval_middleware = None
+    if control_enabled:
+        control_middleware = create_subagent_control_middleware()
+        approval_policies = resolve_approval_policies(tools)
+        if ask_tool_names(approval_policies):
+            # 审批只在后台任务启用（有独立 checkpointer 才能中断/恢复）；
+            # 前台同步派发保持原有行为，不引入无法恢复的悬挂中断。
+            approval_middleware = create_tool_approval_middleware(tools, approval_policies=approval_policies)
+    sandbox_renewal_middleware = (
+        create_sandbox_renewal_middleware(spec.sandbox_renewal) if spec.sandbox_renewal is not None else None
+    )
+    execution_fence_middleware = (
+        create_tool_execution_fence_middleware(
+            run_id=run_controls.run_id,
+            owner_token=run_controls.owner_token,
+            inbox_service=run_controls.inbox_service,
+        )
+        if run_controls is not None and run_controls.is_complete()
+        else None
+    )
+    middleware = assemble_subagent_middleware(
+        tools,
         # 与主图同源的上下文压缩：trigger=窗口 70% 时摘要/引用外置/确定性收缩
         # 压到 30%，模型该调工具照常调（不改工具面），压缩后可继续执行。
-        create_context_compression_middleware(
+        context_compression_middleware=create_context_compression_middleware(
             system_prompt=effective_system_prompt,
             tools=tools,
             model_id=spec.model_id,
@@ -507,33 +526,12 @@ def _compile_subagent(spec: SubagentSpec, run_controls: Any = None, *, control_e
         # 与主图同源的上下文计量：产出 cache/breakdown 明细（前端「上下文占用明细」用）；
         # 子图虽订阅 custom 流，但只挑选压缩 started 占位转发，token_usage 依旧
         # 不会透传到主对话。
-        context_usage_middleware,
-        SkillPrerequisiteMiddleware(TOOL_REQUIRED_SKILLS),
-        # 与主图同源的工具计时：ToolMessage 上盖 started_at_ms / ended_at_ms，
-        # 过程事件与持久化 trail 都能带上内层工具耗时（顺序同主图：在结果/错误包装外层）。
-        create_tool_timing_middleware(),
-        create_tool_call_name_normalizer_middleware(tools),
-        create_tool_result_middleware(),
-        ToolErrorMiddleware(on_tool_error),
-    ]
-    if control_enabled:
-        # 控制中间件放最前：暂停中断与插话注入先于压缩，插话不会被摘要吞掉。
-        middleware.insert(0, create_subagent_control_middleware())
-        approval_policies = resolve_approval_policies(tools)
-        if ask_tool_names(approval_policies):
-            # 审批只在后台任务启用（有独立 checkpointer 才能中断/恢复）；
-            # 前台同步派发保持原有行为，不引入无法恢复的悬挂中断。
-            middleware.insert(1, create_tool_approval_middleware(tools, approval_policies=approval_policies))
-    if spec.sandbox_renewal is not None:
-        middleware.append(create_sandbox_renewal_middleware(spec.sandbox_renewal))
-    if run_controls is not None and run_controls.is_complete():
-        middleware.append(
-            create_tool_execution_fence_middleware(
-                run_id=run_controls.run_id,
-                owner_token=run_controls.owner_token,
-                inbox_service=run_controls.inbox_service,
-            )
-        )
+        context_usage_middleware=context_usage_middleware,
+        control_middleware=control_middleware,
+        approval_middleware=approval_middleware,
+        sandbox_renewal_middleware=sandbox_renewal_middleware,
+        execution_fence_middleware=execution_fence_middleware,
+    )
     return create_agent(
         spec.model,
         tools=tools,

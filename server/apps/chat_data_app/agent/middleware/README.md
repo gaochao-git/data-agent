@@ -7,6 +7,11 @@ steering 插话、工具计时与单会话调用频率告警、历史消息时�
 约定：中间件不直接触达工作区文件系统，统一经 `agent.workspace.runtime` 的运行时门面；
 新增中间件需评估与 `tool_result`、`context_usage` 的先后依赖。
 
+装配统一走 `assembly.py` 的「规范顺序表 + 槽位」原语：主图用
+`MIDDLEWARE_CANONICAL_ORDER`，子图用 `SUBAGENT_MIDDLEWARE_CANONICAL_ORDER`。
+新增中间件只需在对应顺序表登记，不再手写 `insert` / `append`；子图的租约围栏
+固定在序列最外层，避免租约丢失被 `ToolErrorMiddleware` 转成普通工具失败。
+
 工具调用频率告警（`tool_call_rate_alert.py`）按会话维护滑动窗口计数，窗口内调用数超过
 `CHAT_DATA_TOOL_CALL_RATE_ALERT_THRESHOLD`（默认 100 次 / 60 秒）时写 alarm 日志，同一窗口
 内每个会话最多一条；只统计通过租约围栏的真实调用，且任何统计异常都不影响工具执行。

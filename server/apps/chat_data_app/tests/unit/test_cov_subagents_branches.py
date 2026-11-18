@@ -7,6 +7,7 @@ from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
 
 from apps.chat_data_app.agent.context import context_budget as cb
+from apps.chat_data_app.agent.middleware import subagent_assembly as sa
 from apps.chat_data_app.agent.middleware import subagents as sm
 from apps.chat_data_app.agent.middleware.subagents import (
     SubagentSpec,
@@ -36,7 +37,7 @@ def test_stream_filter_flush_drops_exact_opener_pending():
     assert markup_filter.flush() == ""
 
 
-def test_compile_subagent_appends_fence_when_run_controls_complete(monkeypatch):
+def test_compile_subagent_keeps_fence_outermost_when_run_controls_complete(monkeypatch):
     captured = {}
     monkeypatch.setattr(sm, "_subagent_system_prompt", lambda spec: "系统提示词")
     monkeypatch.setattr(
@@ -44,10 +45,10 @@ def test_compile_subagent_appends_fence_when_run_controls_complete(monkeypatch):
         "create_context_compression_middleware",
         lambda **kwargs: captured.setdefault("compression", kwargs) or "compression",
     )
-    monkeypatch.setattr(sm, "SkillPrerequisiteMiddleware", lambda *_a: "skill")
-    monkeypatch.setattr(sm, "create_tool_call_name_normalizer_middleware", lambda _tools: "normalizer")
-    monkeypatch.setattr(sm, "create_tool_result_middleware", lambda: "result")
-    monkeypatch.setattr(sm, "ToolErrorMiddleware", lambda *_a: "error")
+    monkeypatch.setattr(sa, "SkillPrerequisiteMiddleware", lambda *_a: "skill")
+    monkeypatch.setattr(sa, "create_tool_call_name_normalizer_middleware", lambda _tools: "normalizer")
+    monkeypatch.setattr(sa, "create_tool_result_middleware", lambda: "result")
+    monkeypatch.setattr(sa, "ToolErrorMiddleware", lambda *_a: "error")
     monkeypatch.setattr(
         sm, "create_tool_execution_fence_middleware", lambda **kwargs: captured.setdefault("fence", kwargs)
     )
@@ -65,7 +66,8 @@ def test_compile_subagent_appends_fence_when_run_controls_complete(monkeypatch):
     assert spec._context_request_budget is not None
     assert captured["compression"]["context_runtime"].request_budget is spec._context_request_budget
     assert captured["fence"] == {"run_id": "run-1", "owner_token": "token", "inbox_service": "inbox"}
-    assert captured["fence"] in captured["agent"]["middleware"]
+    # 围栏必须最外层：否则 ToolErrorMiddleware 会把租约丢失转成普通工具失败。
+    assert captured["agent"]["middleware"][0] is captured["fence"]
 
 
 def test_collect_update_skips_duplicate_message_in_same_removal_update():

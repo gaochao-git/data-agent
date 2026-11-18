@@ -55,7 +55,6 @@ from ..contracts.subagent_task import (
     SubagentTaskCapacityError,
     SubagentTaskView,
     parse_task_status_filter,
-    register_subagent_task_service,
 )
 from .agent_inbox_service import (
     AgentRunNotActiveError,
@@ -1600,5 +1599,3 @@ def _expired_status_and_report(current_status: str) -> tuple[str, str]:
 
 
 subagent_task_service = SubagentTaskService()
-
-register_subagent_task_service(subagent_task_service)

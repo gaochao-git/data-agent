@@ -141,3 +141,11 @@ def test_explicit_port_configuration_is_idempotent():
     assert get_skill_source() is not None
     assert get_skill_snapshot_source() is not None
     assert get_workspace_preview_source() is not None
+
+
+def test_app_startup_binds_subagent_task_service_port():
+    """子任务账本服务由应用启动入口显式绑定，不依赖实现模块 import 副作用。"""
+    from apps.chat_data_app.agent.contracts.subagent_task import get_subagent_task_service
+    from apps.chat_data_app.agent.run.subagent_task_service import subagent_task_service
+
+    assert get_subagent_task_service() is subagent_task_service

@@ -18,6 +18,7 @@ from langchain_core.messages import AIMessage
 from utils.logger import get_logger
 
 from ..services.llm_config import get_chat_data_llm
+from .middleware.assembly import assemble_middleware
 from .middleware.skill_prerequisite import SkillPrerequisiteMiddleware
 from .middleware.tool_call_normalizer import (
     create_tool_call_name_normalizer_middleware,
@@ -231,4 +232,4 @@ def build_standard_agent_middleware(
         "ToolResultMiddleware": tool_result_middleware,
         "ToolErrorMiddleware": ToolErrorMiddleware(on_tool_error),
     }
-    return [slots[name] for name in MIDDLEWARE_CANONICAL_ORDER if slots[name] is not None]
+    return assemble_middleware(MIDDLEWARE_CANONICAL_ORDER, slots)
