@@ -22,7 +22,7 @@ from apps.chat_data_app.agent.middleware import subagents as subagents_module
 from apps.chat_data_app.agent.middleware.subagent_async import _format_task_report
 from apps.chat_data_app.agent.middleware.subagents import build_task_tool
 from apps.chat_data_app.agent.run import subagent_task_service as service_module
-from apps.chat_data_app.agent.run.agent_inbox_service import agent_inbox_service
+from apps.chat_data_app.agent.run.agent_inbox_service import AgentRunLeaseLostError, agent_inbox_service
 from apps.chat_data_app.agent.run.subagent_task_service import (
     SubagentTaskCapacityError,
     SubagentTaskRecord,
@@ -1800,7 +1800,7 @@ async def test_task_push_failure_backs_off_between_heartbeats(monkeypatch):
 
     async def fail_append(task, run_id, owner_token):
         calls.append((run_id, owner_token))
-        return False
+        return "failed"
 
     async def active_target(task):
         return ("run-1", "token-1")
@@ -1818,3 +1818,110 @@ async def test_task_push_failure_backs_off_between_heartbeats(monkeypatch):
 
     # 第一次：父 Run 旧 token + 活跃 Run 各失败一次；第二次命中静默期不再重试
     assert calls == [("run-parent", "parent-token"), ("run-1", "token-1")]
+
+
+@pytest.mark.asyncio
+async def test_task_push_skips_stale_parent_token_after_owner_mismatch(monkeypatch):
+    from apps.chat_data_app.agent.run.subagent_task_service import SubagentTaskService
+
+    class Clock:
+        def __init__(self, *values: float) -> None:
+            self._values = iter(values)
+
+        def monotonic(self) -> float:
+            return next(self._values)
+
+    service = SubagentTaskService(dao=object(), inbox=object(), event_service=object())
+    calls: list[tuple[str, str]] = []
+
+    async def lease_lost(task, run_id, owner_token):
+        calls.append((run_id, owner_token))
+        return "lease_lost"
+
+    async def no_active_run(task):
+        return None
+
+    monkeypatch.setattr(service_module, "time", Clock(0.0, 31.0))
+    monkeypatch.setattr(service, "_append_task_event", lease_lost)
+    monkeypatch.setattr(service, "_load_active_run_target", no_active_run)
+
+    task = SimpleNamespace(
+        task_id="task-1",
+        parent_run_id="run-parent",
+        meta={"parent_owner_token": "parent-token"},
+    )
+    await service.publish_task_update(task)
+    await service.publish_task_update(task)
+
+    # 父 Run token 已失配：静默期过后也只回退查询活跃 Run，不再重试旧 token
+    assert calls == [("run-parent", "parent-token")]
+
+
+@pytest.mark.asyncio
+async def test_task_push_failure_without_active_run_backs_off(monkeypatch):
+    from apps.chat_data_app.agent.run.subagent_task_service import SubagentTaskService
+
+    class Clock:
+        def __init__(self, *values: float) -> None:
+            self._values = iter(values)
+
+        def monotonic(self) -> float:
+            return next(self._values)
+
+    service = SubagentTaskService(dao=object(), inbox=object(), event_service=object())
+    calls: list[tuple[str, str]] = []
+
+    async def fail_append(task, run_id, owner_token):
+        calls.append((run_id, owner_token))
+        return "failed"
+
+    async def no_active_run(task):
+        return None
+
+    monkeypatch.setattr(service_module, "time", Clock(0.0, 1.0))
+    monkeypatch.setattr(service, "_append_task_event", fail_append)
+    monkeypatch.setattr(service, "_load_active_run_target", no_active_run)
+
+    task = SimpleNamespace(
+        task_id="task-1",
+        parent_run_id="run-parent",
+        meta={"parent_owner_token": "parent-token"},
+    )
+    await service.publish_task_update(task)
+    await service.publish_task_update(task)
+
+    # 没有活跃 Run 时也要进入静默期，避免每个心跳都重复失败
+    assert calls == [("run-parent", "parent-token")]
+
+
+@pytest.mark.asyncio
+async def test_task_push_event_maps_owner_mismatch_to_lease_lost():
+    from apps.chat_data_app.agent.run.subagent_task_service import SubagentTaskService
+
+    class FailingEventService:
+        def __init__(self, exc: Exception) -> None:
+            self._exc = exc
+
+        async def append(self, **kwargs):
+            raise self._exc
+
+    task = SimpleNamespace(
+        task_id="task-1",
+        conversation_id="conv-1",
+        user_id="user-1",
+        as_dict=lambda **kwargs: {"task_id": "task-1"},
+    )
+
+    lease_lost_service = SubagentTaskService(
+        dao=object(),
+        inbox=object(),
+        event_service=FailingEventService(AgentRunLeaseLostError("lost")),
+    )
+    assert await lease_lost_service._append_task_event(task, "run-1", "token-1") == "lease_lost"
+
+    failed_service = SubagentTaskService(
+        dao=object(),
+        inbox=object(),
+        event_service=FailingEventService(RuntimeError("redis down")),
+    )
+    assert await failed_service._append_task_event(task, "run-1", "token-1") == "failed"

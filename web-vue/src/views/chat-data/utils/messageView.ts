@@ -574,6 +574,8 @@ export const buildSubagentMessages = (toolCall: ToolCallInfo): Message[] => {
           thinkingSegments: [...(assistant.thinkingSegments || [])],
           isStreaming: false,
           forceWorkProcess: true,
+          // 终态错误只属于本轮最后一条助手消息，压缩切出的历史段不重复展示。
+          error: undefined,
           timestamp: parseMessageTimestamp(block.compaction.timestamp) ?? endedAt,
         })
       }

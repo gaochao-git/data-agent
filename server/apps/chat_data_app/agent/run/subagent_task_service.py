@@ -18,7 +18,7 @@ from collections.abc import Callable, Coroutine, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from apps.chat_data_app.daos.agent_inbox_dao import agent_inbox_dao
@@ -62,6 +62,7 @@ from ..contracts.subagent_task import (
     parse_task_status_filter,
 )
 from .agent_inbox_service import (
+    AgentRunLeaseLostError,
     AgentRunNotActiveError,
     agent_inbox_service,
 )
@@ -99,6 +100,11 @@ logger = get_logger(__name__)
 # 任务卡推送失败后的静默期：任务过程流与前端 3.5s 列表轮询各自兜底，
 # 没必要每个心跳（5s）都重试一次并刷一行日志。
 _TASK_PUSH_DEGRADED_SECONDS = 30.0
+
+# owner 失配是可预期的失效 token，和普通网络/Redis 失败分开处理。
+_PUSH_RESULT_OK: Literal["ok"] = "ok"
+_PUSH_RESULT_LEASE_LOST: Literal["lease_lost"] = "lease_lost"
+_PUSH_RESULT_FAILED: Literal["failed"] = "failed"
 
 __all__ = [
     "ACTIVE_TASK_STATUSES",
@@ -523,6 +529,8 @@ class SubagentTaskService:
         self._task_recovery_runners: dict[str, Callable[[SubagentTaskView, Any], Coroutine[Any, Any, None]]] = {}
         # 任务卡推送降级截止时间（monotonic），避免失败后每个心跳重复重试。
         self._push_degraded_until: dict[str, float] = {}
+        # 父 Run 收口后 Redis owner 已删除；记住失效 token，后续心跳跳过父 Run。
+        self._stale_parent_push_tokens: dict[str, str] = {}
 
     def register_recovery_runner(
         self,
@@ -1142,23 +1150,25 @@ class SubagentTaskService:
         if self._push_degraded_until.get(task.task_id, 0.0) > now:
             return
         parent_owner_token = str(task.meta.get("parent_owner_token") or "")
-        if (
-            task.parent_run_id
-            and parent_owner_token
-            and await self._append_task_event(task, task.parent_run_id, parent_owner_token)
-        ):
-            self._push_degraded_until.pop(task.task_id, None)
-            return
+        parent_token_stale = self._stale_parent_push_tokens.get(task.task_id) == parent_owner_token
+        if task.parent_run_id and parent_owner_token and not parent_token_stale:
+            parent_result = await self._append_task_event(task, task.parent_run_id, parent_owner_token)
+            if parent_result == _PUSH_RESULT_OK:
+                self._push_degraded_until.pop(task.task_id, None)
+                return
+            if parent_result == _PUSH_RESULT_LEASE_LOST:
+                self._stale_parent_push_tokens[task.task_id] = parent_owner_token
         active = await self._load_active_run_target(task)
         if active is None:
+            self._push_degraded_until[task.task_id] = now + _TASK_PUSH_DEGRADED_SECONDS
             return
         run_id, owner_token = active
         if run_id == task.parent_run_id and owner_token == parent_owner_token:
+            self._push_degraded_until[task.task_id] = now + _TASK_PUSH_DEGRADED_SECONDS
             return
-        if await self._append_task_event(task, run_id, owner_token):
+        if await self._append_task_event(task, run_id, owner_token) == _PUSH_RESULT_OK:
             self._push_degraded_until.pop(task.task_id, None)
             return
-        self._push_degraded_until = {key: until for key, until in self._push_degraded_until.items() if until > now}
         self._push_degraded_until[task.task_id] = now + _TASK_PUSH_DEGRADED_SECONDS
 
     async def _load_active_run_target(self, task: SubagentTaskRecord) -> tuple[str, str] | None:
@@ -1176,7 +1186,9 @@ class SubagentTaskService:
             return None
         return active.run_id, active.owner_token
 
-    async def _append_task_event(self, task: SubagentTaskRecord, run_id: str, owner_token: str) -> bool:
+    async def _append_task_event(
+        self, task: SubagentTaskRecord, run_id: str, owner_token: str
+    ) -> Literal["ok", "lease_lost", "failed"]:
         payload = format_sse(
             SSE_EVENT_SUBAGENT_TASK_UPDATED,
             {"task": task.as_dict(include_report=False)},
@@ -1190,10 +1202,13 @@ class SubagentTaskService:
                 payload=payload,
                 owner_token=owner_token,
             )
+        except AgentRunLeaseLostError:
+            logger.debug("后台任务推送目标 Run 已失效: task_id=%s run_id=%s", task.task_id, run_id)
+            return _PUSH_RESULT_LEASE_LOST
         except Exception:
             logger.debug("后台任务实时事件推送失败，等待列表轮询兜底: task_id=%s", task.task_id, exc_info=True)
-            return False
-        return True
+            return _PUSH_RESULT_FAILED
+        return _PUSH_RESULT_OK
 
     async def start_task(self, task_id: str, owner_token: str) -> SubagentTaskRecord | None:
         lease_seconds = int(await get_runtime_setting("CHAT_DATA_SUBAGENT_TASK_LEASE_SECONDS"))

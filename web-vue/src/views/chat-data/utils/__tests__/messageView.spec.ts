@@ -382,6 +382,24 @@ describe('子智能体过程 → 主对话消息投影', () => {
     expect(settled[1]!.isStreaming).toBe(false)
   })
 
+  it('终态错误只挂在最后一条助手消息，不随压缩分段重复', () => {
+    const messages = buildSubagentMessages(taskCall({
+      status: 'error',
+      subagentError: '任务超过 3600 秒未完成',
+      subagentTrail: [
+        { kind: 'message', id: 'msg-1', content: '第一段' },
+        { kind: 'compaction', id: 'compact-1', timestamp: '2026-11-19T16:25:19+08:00' },
+        { kind: 'message', id: 'msg-2', content: '第二段' },
+        { kind: 'compaction', id: 'compact-2', timestamp: '2026-11-19T16:42:14+08:00' },
+        { kind: 'message', id: 'msg-3', content: '第三段' },
+      ],
+    }))
+
+    const assistants = messages.filter(message => message.role === 'assistant')
+    expect(assistants.map(message => Boolean(message.error))).toEqual([false, false, true])
+    expect(assistants[assistants.length - 1]?.error).toBe('任务超过 3600 秒未完成')
+  })
+
   it('工具先于消息出现时仍合并进同一条助手消息；无 trail 时任务书 + 报告气泡', () => {
     const toolFirst = buildSubagentMessages(taskCall({
       subagentTrail: [
