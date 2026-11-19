@@ -1,9 +1,12 @@
 <script setup lang="ts">
 /**
- * 助手消息底栏：复制 + 生成统计（速率/用时）+ AI 生成声明 + 时间戳。
+ * 助手消息底栏（主对话与子智能体过程共用）：复制 + 生成统计/子智能体用量 +
+ * 可选 AI 生成声明 + 时间戳。子智能体不展示 AI 声明，时长来自任务耗时，
+ * 用量来自子智能体 billing 统计；其余布局与交互保持同一套。
  * 复制内容由投影层算好（getAssistantCopyText），这里只负责交互。
  */
 import type { PropType } from 'vue'
+import { computed } from 'vue'
 import { ElTooltip } from 'element-plus'
 import AssistantMessageFooter from '../../AssistantMessageFooter.vue'
 import type { MessageGenerationStats } from '../../../types'
@@ -14,7 +17,14 @@ const props = defineProps({
   timestamp: { type: String, default: '' },
   stats: { type: Object as PropType<MessageGenerationStats>, default: undefined },
   copyText: { type: String, default: '' },
+  /** 子智能体任务耗时；主对话优先使用 stats.totalDurationMs */
+  durationMs: { type: Number as PropType<number | null>, default: null },
+  /** 子智能体 billing 用量摘要；主对话为空 */
+  usageText: { type: String, default: '' },
+  showAiNotice: { type: Boolean, default: true },
 })
+
+const displayDurationMs = computed(() => props.stats?.totalDurationMs ?? props.durationMs)
 
 const handleCopy = async () => {
   if (!props.copyText) return
@@ -23,10 +33,11 @@ const handleCopy = async () => {
 </script>
 
 <template>
-  <AssistantMessageFooter :timestamp="timestamp">
+  <AssistantMessageFooter :timestamp="timestamp" :show-ai-notice="showAiNotice">
     <button
       type="button"
       class="inline-flex h-[26px] min-w-[58px] shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md bg-transparent px-2 text-[11px] text-gray-500 transition-all duration-200 hover:bg-blue-500/5 hover:text-blue-500"
+      data-message-copy
       @click="handleCopy"
     >
       <i class="fa-regular fa-copy text-[11px]"></i>
@@ -65,11 +76,26 @@ const handleCopy = async () => {
       </span>
     </ElTooltip>
     <span
-      v-if="stats?.totalDurationMs"
+      v-if="displayDurationMs"
       class="inline-flex items-center gap-1 whitespace-nowrap text-[11px] text-gray-400"
+      data-message-duration
     >
       <i class="fa-regular fa-clock text-[10px]"></i>
-      用时 {{ formatTotalDurationLabel(stats.totalDurationMs) }}
+      用时 {{ formatTotalDurationLabel(displayDurationMs) }}
     </span>
+    <ElTooltip v-if="usageText" effect="light" placement="top" :show-arrow="true">
+      <template #content>
+        <div class="min-w-[220px] py-0.5 text-[11px] leading-[22px]">{{ usageText }}</div>
+      </template>
+      <span
+        class="inline-flex cursor-help items-center gap-1 whitespace-nowrap text-[11px] text-gray-400 transition-colors hover:text-blue-500"
+        :aria-label="usageText"
+        data-message-tokens
+      >
+        <i class="fa-solid fa-coins text-[10px]"></i>
+        tokens
+        <i class="fa-solid fa-circle-info text-[9px]"></i>
+      </span>
+    </ElTooltip>
   </AssistantMessageFooter>
 </template>

@@ -13,17 +13,20 @@
  */
 import type { PropType } from 'vue'
 import { computed } from 'vue'
-import type { SubagentTokenUsage, ToolCallInfo } from '../../types'
+import type { ExecutionTargetOption, SubagentTokenUsage, ToolCallInfo } from '../../types'
 import { buildSubagentMessages, getAssistantCopyText, hasSubagentTrail } from '../../utils/messageView'
 import { shouldInlineRenderQueryResult } from '../../utils/semanticTool'
 import { formatDateTimeValue } from '../../utils'
 import { buildSubagentTokenUsageText } from '../../utils/subagentUsage'
 import MessageItem from './messages/MessageItem.vue'
-import SubagentMessageFooter from './SubagentMessageFooter.vue'
+import MessageFooter from './messages/MessageFooter.vue'
 
 const props = defineProps({
   toolCall: { type: Object as PropType<ToolCallInfo>, required: true },
   conversationId: { type: String as PropType<string | null>, default: null },
+  datasourceId: { type: String, default: '' },
+  executionTargets: { type: Array as PropType<ExecutionTargetOption[]>, default: () => [] },
+  onSave: { type: Function as PropType<(sql: string, chartType: string, memberDatasourceId?: string, memberDatasourceIds?: string[]) => void>, default: undefined },
   activeToolCallId: { type: String as PropType<string | null>, default: null },
   /** 子智能体已执行耗时（毫秒，后端 started_at 起算）；运行中进状态行，完成后落一行「用时」 */
   elapsedMs: { type: Number as PropType<number | null>, default: null },
@@ -63,17 +66,21 @@ const showFooterFor = (message: { id: string; role: string; isStreaming?: boolea
         :message="message"
         :show-footer="false"
         :conversation-id="conversationId"
+        :datasource-id="datasourceId"
+        :execution-targets="executionTargets"
+        :on-save="onSave"
         :active-tool-call-id="activeToolCallId"
         :should-inline-render-result="shouldInlineRenderQueryResult"
         :live-elapsed-ms="timingRunning ? elapsedMs : null"
         @select-tool="emit('selectTool', $event)"
       />
-      <SubagentMessageFooter
+      <MessageFooter
         v-if="showFooterFor(message)"
         :timestamp="formatDateTimeValue(message.timestamp)"
         :copy-text="getAssistantCopyText(message)"
         :duration-ms="timingRunning ? null : elapsedMs"
         :usage-text="tokenUsageText"
+        :show-ai-notice="false"
       />
     </div>
   </div>

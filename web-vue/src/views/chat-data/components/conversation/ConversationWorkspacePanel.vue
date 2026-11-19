@@ -15,7 +15,7 @@
  */
 import { computed, nextTick, onMounted, onUnmounted, provide, ref, watch } from 'vue'
 import type { PropType } from 'vue'
-import type { ChatDataTokenUsage } from '../../types'
+import type { ChatDataTokenUsage, ExecutionTargetOption } from '../../types'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { SemanticYamlFile, SubagentTaskRecord, ToolCallInfo } from '../../types'
 import ConversationSidePanel from './ConversationSidePanel.vue'
@@ -90,6 +90,10 @@ const props = defineProps({
   resolveToolCall: { type: Function as PropType<(toolCallId: string) => ToolCallInfo | null>, default: null },
   /** Run 执行中禁用删除（沙箱回写冲突），与父级 runBusy 同源 */
   runBusy: { type: Boolean, default: false },
+  /** 子智能体过程里的查询结果保存到看板：与主对话同一回调与数据源上下文 */
+  datasourceId: { type: String, default: '' },
+  executionTargets: { type: Array as PropType<ExecutionTargetOption[]>, default: () => [] },
+  onSave: { type: Function as PropType<(sql: string, chartType: string, memberDatasourceId?: string, memberDatasourceIds?: string[]) => void>, default: undefined },
   /** 是否显示「导入为语义模型」行操作（管理员权限，与配置入口同源） */
   canImportSemanticModel: { type: Boolean, default: false },
   formatText: { type: Function as PropType<(value: string) => string>, default: (value: string) => value },
@@ -1759,6 +1763,9 @@ defineExpose({
           :task="subagentTaskForTab(taskTab) as SubagentTaskRecord"
           :session-tasks="subagentTasksForTab(taskTab)"
           :conversation-id="conversationId"
+          :datasource-id="datasourceId"
+          :execution-targets="executionTargets"
+          :on-save="onSave"
           :active-tool-call-id="activeToolCall?.tool_call_id || null"
           :view-mode="toolViewMode"
           class="mb-3"
@@ -1780,6 +1787,9 @@ defineExpose({
         v-show="displayToolTab?.id === processTab.id && toolViewMode === 'agent'"
         :tool-call="toolCallForTab(processTab) as ToolCallInfo"
         :conversation-id="conversationId"
+        :datasource-id="datasourceId"
+        :execution-targets="executionTargets"
+        :on-save="onSave"
         :active-tool-call-id="displayToolCall?.tool_call_id || null"
         class="mb-3"
         @select-tool="emit('selectTool', $event)"

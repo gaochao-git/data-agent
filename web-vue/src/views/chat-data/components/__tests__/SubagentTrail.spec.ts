@@ -64,6 +64,23 @@ describe('SubagentTrail（右侧聊天式完整过程）', () => {
     }
   })
 
+  it('查询结果保存能力与主对话一致：数据源、执行目标和保存回调透传到消息组件', () => {
+    const onSave = () => {}
+    const executionTargets = [{ member_datasource_id: 'target-1', label: '默认执行机构' }]
+    const wrapper = mountTrail(taskCall([
+      { kind: 'message', id: 'msg-1', content: '结论：已盘点' },
+    ], 'completed'), {
+      datasourceId: 'ds-1',
+      executionTargets,
+      onSave,
+    })
+
+    const assistant = wrapper.findAllComponents(MessageItemStub)[1]!
+    expect(assistant.props('datasourceId')).toBe('ds-1')
+    expect(assistant.props('executionTargets')).toEqual(executionTargets)
+    expect(assistant.props('onSave')).toBe(onSave)
+  })
+
   it('用户与助手气泡带任务起止时间，与主对话一致', () => {
     const completed = mountTrail({
       ...taskCall([{ kind: 'message', id: 'msg-1', content: '结论：已完成' }], 'completed'),
@@ -73,10 +90,10 @@ describe('SubagentTrail（右侧聊天式完整过程）', () => {
     const items = completed.findAllComponents(MessageItemStub)
     expect(items[0]!.props('message').timestamp).toEqual(new Date('2026-11-15T10:00:00'))
     expect(items[1]!.props('message').timestamp).toEqual(new Date('2026-11-15T10:02:30'))
-    // footer 由子智能体自己的底栏渲染（复制 + 用时 + tokens + 时间），不再走 MessageItem 内建 footer
+    // footer 复用主对话 MessageFooter（复制 + 用时 + tokens + 时间），仅隐藏 AI 声明
     expect(items.map(item => item.props('showFooter'))).toEqual([false, false])
-    expect(completed.find('[data-subagent-message-footer]').exists()).toBe(true)
-    expect(completed.find('[data-subagent-timestamp]').text()).toContain('2026-11-15')
+    expect(completed.find('[data-message-footer]').exists()).toBe(true)
+    expect(completed.find('[data-message-timestamp]').text()).toContain('2026-11-15')
 
     // 运行中只给用户气泡派发时间，助手气泡等收口后再出 footer
     const running = mountTrail({
@@ -134,15 +151,15 @@ describe('SubagentTrail（右侧聊天式完整过程）', () => {
       { kind: 'message', id: 'msg-1', content: '过程', thinking: '思考' },
     ], 'running'), { elapsedMs: 5_000, timingRunning: true })
     expect(running.findAllComponents(MessageItemStub)[1]!.props('liveElapsedMs')).toBe(5_000)
-    expect(running.find('[data-subagent-duration]').exists()).toBe(false)
+    expect(running.find('[data-message-duration]').exists()).toBe(false)
 
     const finished = mountTrail(taskCall([
       { kind: 'message', id: 'msg-1', content: '结论：已完成' },
     ], 'completed'), { elapsedMs: 90_000, timingRunning: false })
     expect(finished.findAllComponents(MessageItemStub)[1]!.props('liveElapsedMs')).toBeNull()
-    expect(finished.find('[data-subagent-message-footer]').exists()).toBe(true)
-    expect(finished.find('[data-subagent-copy]').exists()).toBe(true)
-    expect(finished.find('[data-subagent-duration]').text()).toContain('用时 1 分 30 秒')
+    expect(finished.find('[data-message-footer]').exists()).toBe(true)
+    expect(finished.find('[data-message-copy]').exists()).toBe(true)
+    expect(finished.find('[data-message-duration]').text()).toContain('用时 1 分 30 秒')
   })
 
   it('完成态在用量行展示子智能体 token 用量', () => {
@@ -153,7 +170,7 @@ describe('SubagentTrail（右侧聊天式完整过程）', () => {
       timingRunning: false,
       tokenUsage: { input_tokens: 12_345, output_tokens: 678, cache_read_input_tokens: 4_000 },
     })
-    const tokens = wrapper.find('[data-subagent-tokens]')
+    const tokens = wrapper.find('[data-message-tokens]')
     expect(tokens.text()).toContain('tokens')
     expect(tokens.attributes('aria-label')).toBe('tokens 输入 12.3k · 输出 678 · 缓存命中 32%')
   })

@@ -8,7 +8,7 @@
  */
 import { computed, onMounted, watch } from 'vue'
 import type { PropType } from 'vue'
-import type { ChatDataTokenUsage, SubagentTaskRecord, SubagentTokenUsage, ToolCallInfo } from '../../types'
+import type { ChatDataTokenUsage, ExecutionTargetOption, SubagentTaskRecord, SubagentTokenUsage, ToolCallInfo } from '../../types'
 import { isSubagentTaskActive } from '../../composables/useSubagentTasks'
 import { useSubagentTaskStream } from '../../composables/useSubagentTaskStream'
 import { useToolTiming } from '../../composables/useToolTiming'
@@ -22,6 +22,9 @@ const props = defineProps({
   /** 同一子会话的全部轮次，按轮次升序；缺省时只展示当前任务。 */
   sessionTasks: { type: Array as PropType<SubagentTaskRecord[]>, default: () => [] },
   conversationId: { type: String as PropType<string | null>, default: null },
+  datasourceId: { type: String, default: '' },
+  executionTargets: { type: Array as PropType<ExecutionTargetOption[]>, default: () => [] },
+  onSave: { type: Function as PropType<(sql: string, chartType: string, memberDatasourceId?: string, memberDatasourceIds?: string[]) => void>, default: undefined },
   activeToolCallId: { type: String as PropType<string | null>, default: null },
   /** agent=按多轮聊天过程展示；generic=按工具调用展示每轮请求参数与结果。 */
   viewMode: { type: String as PropType<'agent' | 'generic'>, default: 'agent' },
@@ -154,6 +157,9 @@ onMounted(() => emit('usageUpdated', props.task.task_id, usageForPanel.value))
           v-if="viewMode === 'agent'"
           :tool-call="toolCallForTask(turn)"
           :conversation-id="conversationId"
+          :datasource-id="datasourceId"
+          :execution-targets="executionTargets"
+          :on-save="onSave"
           :active-tool-call-id="activeToolCallId"
           :elapsed-ms="elapsedForTask(turn)"
           :timing-running="isRunning && turn.task_id === task.task_id"
