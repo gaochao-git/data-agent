@@ -19,6 +19,7 @@ from utils.response import business_response
 
 from .. import AGENT_ID
 from ..agent.context.context_budget import strip_context_usage_content_for_history
+from ..agent.contracts.subagent_task import SubagentSessionActiveError
 from ..agent.middleware.subagent_trail_snapshot import load_live_trail_snapshot
 from ..agent.run.agent_inbox_service import (
     AgentQuestionNotFoundError,
@@ -1081,8 +1082,20 @@ async def list_subagent_tasks(
             statuses=parse_task_status_filter(status_filter),
             limit=limit,
         )
+        states = await subagent_task_service.list_session_states(
+            [getattr(record, "agent_session_id", "") or record.task_id for record in records],
+            conversation_id=conversation_id,
+            user_id=user_id,
+        )
+        tasks_payload = []
+        for record in records:
+            payload = record.as_dict(include_report=False)
+            state = states.get(getattr(record, "agent_session_id", "") or record.task_id)
+            payload["session_status"] = state.status if state else "open"
+            payload["session_closed_at"] = state.closed_at.isoformat() if state and state.closed_at else None
+            tasks_payload.append(payload)
         return business_response(
-            data={"tasks": [record.as_dict(include_report=False) for record in records], "count": len(records)},
+            data={"tasks": tasks_payload, "count": len(records)},
             msg="ok",
         )
     except AuthenticationError as exc:
@@ -1114,7 +1127,15 @@ async def get_subagent_task(conversation_id: str, task_id: str, req: Request) ->
                 status="error",
                 http_status_code=http_status.HTTP_404_NOT_FOUND,
             )
-        return business_response(data=record.as_dict(), msg="ok")
+        state = await subagent_task_service.get_session_state(
+            getattr(record, "agent_session_id", "") or record.task_id,
+            conversation_id=conversation_id,
+            user_id=user_id,
+        )
+        payload = record.as_dict()
+        payload["session_status"] = state.status if state else "open"
+        payload["session_closed_at"] = state.closed_at.isoformat() if state and state.closed_at else None
+        return business_response(data=payload, msg="ok")
     except AuthenticationError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
     except Exception:
@@ -1153,6 +1174,64 @@ async def cancel_subagent_task(conversation_id: str, task_id: str, req: Request)
         logger.error("取消后台子智能体任务失败: conversation_id=%s task_id=%s", conversation_id, task_id, exc_info=True)
         return business_response(
             msg="取消后台任务失败，请稍后重试",
+            code=ErrorCode.CHATDATA_BAD_REQUEST,
+            status="error",
+            http_status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@router.post("/{conversation_id}/subagent-tasks/{task_id}/close-session")
+async def close_subagent_session(conversation_id: str, task_id: str, req: Request) -> JSONResponse:
+    """用户关闭终态子智能体会话，释放当前主对话的子智能体额度；历史仍可查看。"""
+    try:
+        user_id, username = _get_current_user_identity(req)
+        state = await subagent_task_service.close_session(
+            task_id,
+            conversation_id=conversation_id,
+            user_id=user_id,
+            operator_name=username,
+        )
+        if state is None:
+            return business_response(
+                msg="子智能体任务不存在",
+                code=ErrorCode.CHATDATA_NOT_FOUND,
+                status="error",
+                http_status_code=http_status.HTTP_404_NOT_FOUND,
+            )
+        return business_response(
+            data={
+                "task_id": task_id,
+                "session_id": state.session_id,
+                "session_status": state.status,
+                "session_closed_at": state.closed_at.isoformat() if state.closed_at else None,
+            },
+            msg="子智能体会话已关闭，额度已释放",
+        )
+    except SubagentSessionActiveError as exc:
+        return business_response(
+            msg=str(exc),
+            code=ErrorCode.CHATDATA_BAD_REQUEST,
+            status="error",
+            http_status_code=http_status.HTTP_409_CONFLICT,
+        )
+    except AgentRunNotActiveError as exc:
+        return business_response(
+            msg=str(exc),
+            code=ErrorCode.CHATDATA_NOT_FOUND,
+            status="error",
+            http_status_code=http_status.HTTP_404_NOT_FOUND,
+        )
+    except AuthenticationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+    except Exception:
+        logger.error(
+            "关闭子智能体会话失败: conversation_id=%s task_id=%s",
+            conversation_id,
+            task_id,
+            exc_info=True,
+        )
+        return business_response(
+            msg="关闭子智能体失败，请稍后重试",
             code=ErrorCode.CHATDATA_BAD_REQUEST,
             status="error",
             http_status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,

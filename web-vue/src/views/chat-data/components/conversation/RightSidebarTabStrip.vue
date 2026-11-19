@@ -18,7 +18,7 @@ const tabIcon = (tab: RightSidebarTab): string => {
   if (tab.kind === 'workspace') return 'fa-folder'
   if (tab.kind === 'file') return 'fa-file-lines'
   if (tab.kind === 'agentProcess') return 'fa-robot'
-  if (tab.kind === 'subagentManager' || tab.kind === 'subagentTask') return 'fa-robot'
+  if (tab.kind === 'subagentManager' || tab.kind === 'subagentTask') return 'fa-diagram-project'
   return 'fa-wrench'
 }
 </script>

@@ -6,6 +6,7 @@ const apiMocks = vi.hoisted(() => ({
   listSubagentTasks: vi.fn(),
   getSubagentTask: vi.fn(),
   cancelSubagentTask: vi.fn(),
+  closeSubagentSession: vi.fn(),
 }))
 
 vi.mock('../../api', () => apiMocks)
@@ -125,6 +126,34 @@ describe('useSubagentTasks', () => {
     expect(apiMocks.cancelSubagentTask).toHaveBeenCalledWith('conv-1', 'task-1')
     expect(updated?.status).toBe('cancelling')
     expect(state.tasks.value[0]!.status).toBe('cancelling')
+    wrapper.unmount()
+  })
+
+  it('关闭子会话后把同一会话所有轮次标记为 closed', async () => {
+    const first = task({ task_id: 'root-1', agent_session_id: 'agent-1', turn_index: 1, status: 'completed' })
+    const second = task({ task_id: 'follow-1', agent_session_id: 'agent-1', parent_task_id: 'root-1', turn_index: 2, status: 'completed' })
+    apiMocks.listSubagentTasks
+      .mockResolvedValueOnce([first, second])
+      .mockResolvedValueOnce([
+        { ...first, session_status: 'closed' },
+        { ...second, session_status: 'closed' },
+      ])
+    apiMocks.closeSubagentSession.mockResolvedValue({
+      task_id: 'follow-1',
+      session_id: 'agent-1',
+      session_status: 'closed',
+      session_closed_at: '2026-11-18T10:00:00',
+    })
+
+    const { state, wrapper } = mountComposable()
+    await state.setConversation('conv-1')
+    const result = await state.closeSession('follow-1')
+    await new Promise(resolve => setTimeout(resolve, 0))
+
+    expect(apiMocks.closeSubagentSession).toHaveBeenCalledWith('conv-1', 'follow-1')
+    expect(result?.session_status).toBe('closed')
+    expect(state.tasks.value.map(item => item.session_status)).toEqual(['closed', 'closed'])
+    expect(state.tasks.value.every(item => item.session_closed_at === '2026-11-18T10:00:00')).toBe(true)
     wrapper.unmount()
   })
 

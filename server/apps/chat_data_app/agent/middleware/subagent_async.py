@@ -21,13 +21,16 @@ from langchain.tools import ToolRuntime
 
 from utils.logger import get_logger
 
+from ..contracts.subagent_capabilities import resolve_task_capabilities
 from ..contracts.subagent_task import (
     ACTIVE_TASK_STATUSES,
+    SESSION_STATUS_CLOSED,
     TASK_HEARTBEAT_SECONDS,
     TASK_STATUS_CANCELLED,
     TASK_STATUS_CANCELLING,
     TASK_STATUS_LABELS,
     TERMINAL_TASK_STATUSES,
+    SubagentSessionClosedError,
     SubagentTaskCapacityError,
     SubagentTaskPort,
     SubagentTaskView,
@@ -37,6 +40,7 @@ from ..contracts.subagent_task import (
     parse_task_status_filter,
     write_scopes_overlap,
 )
+from .subagent_config import SUBAGENT_STATE_PASSTHROUGH_KEYS
 
 logger = get_logger(__name__)
 
@@ -92,17 +96,18 @@ def _task_progress_text(record: SubagentTaskView) -> str:
     return "；".join(pieces) or "暂无进度明细"
 
 
-def _format_task_status(record: SubagentTaskView) -> str:
+def _format_task_status(record: SubagentTaskView, *, session_status: str | None = None) -> str:
     label = TASK_STATUS_LABELS.get(record.status, record.status)
     turn_index = int(getattr(record, "turn_index", 1) or 1)
     turn = f" 轮次={turn_index}" if turn_index > 1 else ""
+    capabilities = resolve_task_capabilities(record, session_status=session_status)
     prefix = (
         f"[{label}] agent_id={_task_agent_id(record)} task_id={record.task_id}{turn} "
         f"类型={record.subagent_type} 写范围={_task_write_scope_text(record)} 任务={record.label}"
     )
     if record.is_terminal:
-        return prefix
-    return f"{prefix}\n  {_task_progress_text(record)}"
+        return f"{prefix}\n  {capabilities.describe()}"
+    return f"{prefix}\n  {capabilities.describe()}\n  {_task_progress_text(record)}"
 
 
 def _task_session_id(record: SubagentTaskView) -> str:
@@ -175,7 +180,12 @@ def format_subagent_task_list_summary(records: Sequence[SubagentTaskView]) -> st
     return f"子智能体（共 {len(agent_ids)} 个，任务 {len(records)} 条，活跃 {active} 条）："
 
 
-def format_subagent_agent_list(records: Sequence[SubagentTaskView], *, status_filtered: bool = False) -> str:
+def format_subagent_agent_list(
+    records: Sequence[SubagentTaskView],
+    *,
+    status_filtered: bool = False,
+    session_statuses: dict[str, str] | None = None,
+) -> str:
     """按智能体分组展示最近状态；任务 ID 明细留到二次查询。"""
     grouped: dict[str, list[SubagentTaskView]] = {}
     for record in records:
@@ -189,14 +199,22 @@ def format_subagent_agent_list(records: Sequence[SubagentTaskView], *, status_fi
         lines.append(
             f"- agent_id={agent_id} 类型={latest.subagent_type} 轮次={turn_index} "
             f"{latest_label}={latest.task_id} 状态={status} 写范围={_task_write_scope_text(latest)} "
+            f"可操作={resolve_task_capabilities(latest, session_status=_session_status(latest, session_statuses)).actions_text()} "
             f"任务={_truncate_text(latest.label, 100, '任务标题')}"
         )
+        if _session_closed(latest, session_statuses):
+            lines.append("  会话状态：已关闭（不可再追问）")
         lines.extend(f"  写范围提示：{item}" for item in _task_write_scope_conflicts(latest, records))
     lines.append('查看某个子智能体的任务 ID：subagent(action="list", agent_id="<agent_id>")。')
     return "\n".join(lines)
 
 
-def format_subagent_agent_tasks(agent_id: str, records: Sequence[SubagentTaskView]) -> str:
+def format_subagent_agent_tasks(
+    agent_id: str,
+    records: Sequence[SubagentTaskView],
+    *,
+    session_statuses: dict[str, str] | None = None,
+) -> str:
     """某个智能体名下的任务 ID 明细，供二次下钻查询。"""
     if not records:
         return f"没有找到子智能体 {agent_id} 的任务。"
@@ -207,14 +225,17 @@ def format_subagent_agent_tasks(agent_id: str, records: Sequence[SubagentTaskVie
         turn_index = int(getattr(record, "turn_index", 1) or 1)
         lines.append(
             f"- task_id={record.task_id} 状态={status} 轮次={turn_index} 写范围={_task_write_scope_text(record)} "
+            f"可操作={resolve_task_capabilities(record, session_status=_session_status(record, session_statuses)).actions_text()} "
             f"任务={_truncate_text(record.label, 100, '任务标题')}"
         )
+        if _session_closed(record, session_statuses):
+            lines.append("  会话状态：已关闭（不可再追问）")
         lines.extend(f"  写范围提示：{item}" for item in _task_write_scope_conflicts(record, records))
-    lines.append("check/cancel/follow_up 使用上面的 task_id；agent_id 只用于识别子智能体。")
+    lines.append("check/cancel/follow_up/steer/approve/reject 使用上面的 task_id；agent_id 只用于识别子智能体。")
     return "\n".join(lines)
 
 
-def _format_task_report(record: SubagentTaskView) -> str:
+def _format_task_report(record: SubagentTaskView, *, session_status: str | None = None) -> str:
     """终态任务报告：有落盘路径返回路径+预览，否则直接返回完整正文。"""
     body = record.report or record.error or "（无报告正文）"
     turn_index = int(getattr(record, "turn_index", 1) or 1)
@@ -235,11 +256,23 @@ def _format_task_report(record: SubagentTaskView) -> str:
         )
     else:
         lines.append(f"报告：{body}")
-    if record.is_terminal:
+    if record.is_terminal and session_status != SESSION_STATUS_CLOSED:
         lines.append(
             f'可基于同一子会话继续追问：subagent(action="follow_up", task_id="{record.task_id}", message="...")。'
         )
+    elif session_status == SESSION_STATUS_CLOSED:
+        lines.append("该子智能体会话已关闭，不能继续追问；如需同类任务请重新派发新的子智能体。")
     return "\n".join(lines)
+
+
+def _session_status(record: SubagentTaskView, statuses: dict[str, str] | None) -> str | None:
+    if not statuses:
+        return None
+    return statuses.get(_task_session_id(record))
+
+
+def _session_closed(record: SubagentTaskView, statuses: dict[str, str] | None) -> bool:
+    return _session_status(record, statuses) == SESSION_STATUS_CLOSED
 
 
 async def _apply_task_write_scopes(
@@ -302,7 +335,7 @@ async def _spawn_background_task(
 
     record = await _apply_task_write_scopes(service, record, write_scopes, log_label="后台子智能体")
 
-    _launch_task_runner(service, record, runtime, runner_factory)
+    await _launch_task_runner_with_recovery(service, record, runtime, runner_factory)
     logger.info(
         "[tools] 子智能体已转入后台执行: task_id=%s type=%s conversation_id=%s",
         record.task_id,
@@ -316,6 +349,38 @@ async def _spawn_background_task(
         "一条隐藏通知（不需要等用户先发消息）；期间可继续其他工作，也可用 "
         'subagent 查询：action="list" 列任务，action="check" 查单个，action="wait" 等结果。'
     )
+
+
+async def _launch_task_runner_with_recovery(
+    service: SubagentTaskPort,
+    record: SubagentTaskView,
+    runtime: ToolRuntime,
+    runner_factory: Callable[[SubagentTaskView, Any], Coroutine[Any, Any, None]],
+) -> None:
+    state = {
+        key: value
+        for key, value in dict(getattr(runtime, "state", None) or {}).items()
+        if key in SUBAGENT_STATE_PASSTHROUGH_KEYS
+    }
+    try:
+        persisted = await service.save_task_recovery_runtime(
+            record.task_id,
+            record.owner_token or "",
+            state=state,
+            tool_call_id=str(getattr(runtime, "tool_call_id", "") or ""),
+        )
+    except Exception as exc:
+        logger.error("[tools] 后台任务恢复上下文保存失败: task_id=%s", record.task_id, exc_info=True)
+        await service.finish_task(
+            record.task_id,
+            record.owner_token or "",
+            status="failed",
+            report="后台子智能体启动失败：恢复上下文未能保存，请重新派发。",
+            error="恢复上下文保存失败",
+        )
+        raise ValueError("后台子智能体启动失败：恢复上下文未能保存，请重新派发。") from exc
+    service.register_recovery_runner(runner_factory, task_id=record.task_id)
+    _launch_task_runner(service, persisted or record, runtime, runner_factory)
 
 
 def _launch_task_runner(
@@ -369,7 +434,16 @@ async def _resolve_follow_up_target(
     target = await service.get_task(task_id, conversation_id=conversation_id, user_id=user_id)
     if target is None:
         return f'子智能体任务 {task_id} 不存在。可用 subagent(action="list") 查看当前会话任务。'
-    if not target.is_terminal:
+    session_state = await service.get_session_state(
+        target.agent_session_id,
+        conversation_id=conversation_id,
+        user_id=user_id,
+    )
+    if session_state is not None and session_state.status == SESSION_STATUS_CLOSED:
+        return "该子智能体会话已关闭，不能继续追问；如需同类任务请重新派发新的子智能体。"
+    if not resolve_task_capabilities(
+        target, session_status=session_state.status if session_state else None
+    ).can_follow_up:
         return (
             f"子智能体任务 {task_id} 仍在执行（{TASK_STATUS_LABELS.get(target.status, target.status)}），"
             '不能追问；可先用 subagent(action="wait") 等结果，或 subagent(action="cancel") 取消后再开始新一轮。'
@@ -504,7 +578,7 @@ async def _spawn_follow_up_task(
             parent_task_id=base.task_id,
             agent_session_id=base.agent_session_id,
         )
-    except SubagentTaskCapacityError as exc:
+    except (SubagentTaskCapacityError, SubagentSessionClosedError) as exc:
         return str(exc)
     except Exception:
         logger.error(
@@ -523,7 +597,7 @@ async def _spawn_follow_up_task(
     if not background:
         assert sync_runner is not None
         return await sync_runner(service, record)
-    _launch_task_runner(service, record, runtime, runner_factory)
+    await _launch_task_runner_with_recovery(service, record, runtime, runner_factory)
     logger.info(
         "[tools] 子智能体追问已转入后台: task_id=%s parent=%s session=%s",
         record.task_id,
@@ -563,10 +637,15 @@ async def _check_async_task(
     )
     if record is None:
         return f'子智能体任务 {normalized} 不存在。可用 subagent(action="list") 查看当前会话任务。'
+    state = await service.get_session_state(
+        _task_session_id(record),
+        conversation_id=conversation_id,
+        user_id=user_id,
+    )
     if record.is_terminal:
         await service.mark_viewed(record)
-        return _format_task_report(record)
-    return _format_task_status(record)
+        return _format_task_report(record, session_status=state.status if state else None)
+    return _format_task_status(record, session_status=state.status if state else None)
 
 
 async def _cancel_async_task(
@@ -619,13 +698,26 @@ async def _list_async_tasks(
         f"\n注：仅扫描最近 {limit} 条任务；更早记录请加 status 或 agent_id 缩小范围。" if len(records) >= limit else ""
     )
     normalized_agent_id = str(agent_id or "").strip()
+    states = await service.list_session_states(
+        [_task_session_id(item) for item in records],
+        conversation_id=conversation_id,
+        user_id=user_id,
+    )
+    session_statuses = {session_id: state.status for session_id, state in states.items()}
     if normalized_agent_id:
         matched = [item for item in records if _task_agent_id(item) == normalized_agent_id]
-        return format_subagent_agent_tasks(normalized_agent_id, matched) + truncated_note
+        return (
+            format_subagent_agent_tasks(normalized_agent_id, matched, session_statuses=session_statuses)
+            + truncated_note
+        )
     return (
         format_subagent_task_list_summary(records)
         + "\n"
-        + format_subagent_agent_list(records, status_filtered=bool(str(status or "").strip()))
+        + format_subagent_agent_list(
+            records,
+            status_filtered=bool(str(status or "").strip()),
+            session_statuses=session_statuses,
+        )
         + truncated_note
     )
 
@@ -727,7 +819,15 @@ async def _wait_for_task_views(
         if all(item.is_terminal for item in records):
             for item in records:
                 await service.mark_viewed(item)
-            return "\n\n".join(_format_task_report(item) for item in records)
+            states = await service.list_session_states(
+                [_task_session_id(item) for item in records],
+                conversation_id=conversation_id,
+                user_id=user_id,
+            )
+            statuses = {session_id: state.status for session_id, state in states.items()}
+            return "\n\n".join(
+                _format_task_report(item, session_status=_session_status(item, statuses)) for item in records
+            )
         if time.monotonic() >= deadline:
             return "等待超时，任务仍在执行：\n" + "\n".join(_format_task_status(item) for item in records)
         await asyncio.sleep(WAIT_POLL_SECONDS)

@@ -39,6 +39,7 @@ from ..context.context_budget import (
     sanitize_context_usage_for_response,
 )
 from .subagent_async import _truncate_text
+from .subagent_config import SUBAGENT_STATE_PASSTHROUGH_KEYS
 from .subagent_history import apply_state_message_update as _apply_state_message_update
 from .subagent_text import (
     StreamingToolCallMarkupFilter as _StreamingToolCallMarkupFilter,
@@ -55,25 +56,9 @@ from .subagent_text import (
 from .subagent_text import (
     sanitize_report_text as _sanitize_report_text,
 )
-from .subagent_trail import _read_tool_timing
+from .subagent_trail import AnonymousMessageIdAllocator, _read_tool_timing
 
 logger = get_logger(__name__)
-
-SUBAGENT_STATE_PASSTHROUGH_KEYS = frozenset(
-    {
-        "user_id",
-        "operator_name",
-        "conversation_id",
-        "execution_context",
-        "workspace",
-    }
-)
-"""允许从主对话复制进子智能体的状态键白名单（身份/数据域/工作区上下文）。
-
-主图的压缩账本（context_compression_events / context_summary）、token_usage
-等一律不透传：前者带自定义 reducer，回流会污染主对话的流重试去重；后者是
-主对话的记账口径。子图挂压缩/用量中间件后在 ``ChatDataSubAgentState`` 里
-维护自己的压缩账本与 token_usage，与主图互不影响。"""
 
 
 class SubagentSuspended(RuntimeError):
@@ -414,6 +399,7 @@ class _SubagentStreamState:
         self.streamed_think_ids: set[str] = set()
         self.anonymous_seq = count(1)
         self.anonymous_ids: dict[int, str] = {}
+        self.anonymous_ai_ids = AnonymousMessageIdAllocator()
         self.collected: list = []
         # 内层工具开始的后端时间：完成事件缺少工具计时盖章时兜底（每个内层工具都有耗时）
         self.tool_started_at: dict[str, int] = {}
@@ -437,6 +423,9 @@ class _SubagentStreamState:
 
     def prime_state_messages(self, messages: list[Any]) -> None:
         self.state_messages = list(messages)
+        # 追问的历史消息不带 id；先按历史出现次数预占分配器序号，否则新一轮
+        # 同内容消息会拿到与历史相同的 key，被最终快照按 seen_ids 吞掉。
+        self.anonymous_ai_ids.prime(self.state_messages)
 
     def track_state_messages(self, update: dict[str, Any]) -> None:
         """按 LangGraph add_messages 语义应用节点更新，得到最终完整消息列表。"""
@@ -454,11 +443,17 @@ class _SubagentStreamState:
         按对象身份缓存：同一条消息（无 id）可能出现在多个节点的 updates 里，
         必须收敛到同一个 id，否则 seen_ids 去重失效、前端会渲染出重复条目。
         消息对象在 collected 中持有强引用，``id()`` 作为 key 不会被复用。
+        AIMessage 与快照共用同一个分配器：内容指纹保证跨对象对齐，同内容
+        出现序号避免两条相同消息被误合并；生成的 ID 回写消息供检查点复用。
+        其它类型不进入 trail，用带调用前缀的序号即可。
         """
         key = id(message)
         generated = self.anonymous_ids.get(key)
         if generated is None:
-            generated = f"{self.parent_tool_call_id or 'subagent'}:anon-{next(self.anonymous_seq)}"
+            if isinstance(message, AIMessage):
+                generated = self.anonymous_ai_ids.resolve(message)
+            else:
+                generated = f"{self.parent_tool_call_id or 'subagent'}:anon-{next(self.anonymous_seq)}"
             self.anonymous_ids[key] = generated
         return generated
 

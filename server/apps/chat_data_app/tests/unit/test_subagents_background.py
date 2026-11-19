@@ -10,123 +10,26 @@ import asyncio
 import json
 import re
 import time
-from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from sqlalchemy.pool import NullPool
 
 from apps.chat_data_app.agent.middleware import subagent_history as subagent_history_module
 from apps.chat_data_app.agent.middleware import subagents as subagents_module
 from apps.chat_data_app.agent.middleware.subagent_async import _format_task_report
 from apps.chat_data_app.agent.middleware.subagents import build_task_tool
-from apps.chat_data_app.agent.run import subagent_event_service as event_service_module
 from apps.chat_data_app.agent.run import subagent_task_service as service_module
-from apps.chat_data_app.agent.run.agent_inbox_service import AgentRunConflictError, agent_inbox_service
+from apps.chat_data_app.agent.run.agent_inbox_service import agent_inbox_service
 from apps.chat_data_app.agent.run.subagent_task_service import (
     SubagentTaskCapacityError,
     SubagentTaskRecord,
     notification_message_id,
-    subagent_task_service,
 )
-from utils.models import Base, ChatDataAgentInbox, UserThread
-
-CONV = "conv-bg-test"
-USER = "u1"
-
-
-class _FakeEventService:
-    def __init__(self) -> None:
-        self.events: list[dict] = []
-
-    async def append(self, **kwargs):
-        self.events.append(kwargs)
-
-
-def _settings(max_active: int = 20, max_subagents_per_conversation: int = 5):
-    values = {
-        "CHAT_DATA_SUBAGENT_TASK_MAX_ACTIVE": max_active,
-        "CHAT_DATA_SUBAGENT_MAX_PER_CONVERSATION": max_subagents_per_conversation,
-        "CHAT_DATA_SUBAGENT_TASK_LEASE_SECONDS": 30,
-        "CHAT_DATA_SUBAGENT_TASK_TIMEOUT_SECONDS": 60,
-    }
-
-    async def _get(key: str) -> int:
-        return values.get(key, 60)
-
-    return _get
-
-
-@pytest.fixture()
-def harness(monkeypatch, tmp_path):
-    # 后台执行与测试轮询会并发开 Session。内存库固定复用同一连接，会在
-    # 语句未结束时被另一协程提交（SQL statements in progress）；改用独立
-    # 文件库 + NullPool，让每个 Session 持有自己的连接，由 SQLite 正常排队。
-    engine = create_async_engine(
-        f"sqlite+aiosqlite:///{tmp_path / 'subagent-background.db'}",
-        poolclass=NullPool,
-        connect_args={"timeout": 30},
-    )
-
-    async def create_tables():
-        async with engine.begin() as connection:
-            await connection.run_sync(Base.metadata.create_all)
-
-    asyncio.run(create_tables())
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
-
-    @asynccontextmanager
-    async def get_test_session():
-        async with session_factory() as session:
-            try:
-                yield session
-                await session.commit()
-            except Exception:
-                await session.rollback()
-                raise
-
-    monkeypatch.setattr(service_module, "get_session", get_test_session)
-    monkeypatch.setattr(event_service_module, "get_session", get_test_session)
-    monkeypatch.setattr(service_module, "get_runtime_setting", _settings())
-    fake_events = _FakeEventService()
-    monkeypatch.setattr(subagent_task_service, "_event_service", fake_events)
-
-    async def conflict_start_run(*_args, **_kwargs):
-        raise AgentRunConflictError("会话占用")
-
-    monkeypatch.setattr(agent_inbox_service, "start_run", conflict_start_run)
-
-    async def create_conversation(conversation_id: str = CONV, user_id: str = USER) -> None:
-        async with get_test_session() as session:
-            session.add(
-                UserThread(
-                    user_id=user_id,
-                    thread_id=conversation_id,
-                    agent_id="chat_data",
-                    delete_flag=0,
-                    create_time=datetime.now(),
-                    create_by=user_id,
-                    create_by_name=user_id,
-                    update_by=user_id,
-                    update_by_name=user_id,
-                )
-            )
-
-    yield SimpleNamespace(
-        engine=engine,
-        get_session=get_test_session,
-        events=fake_events,
-        create_conversation=create_conversation,
-        service=subagent_task_service,
-    )
-    for task in list(subagent_task_service._local_tasks.values()):
-        task.cancel()
-    subagent_task_service._local_tasks.clear()
-    asyncio.run(engine.dispose())
+from apps.chat_data_app.tests.unit.subagent_test_support import CONV, USER, _settings
+from utils.models import ChatDataAgentInbox
 
 
 async def _create_task(harness, *, parent_run_id="run-parent", capacity_owner="parent-owner"):
@@ -148,6 +51,24 @@ async def _start(harness, record):
     started = await harness.service.start_task(record.task_id, record.owner_token or "")
     assert started is not None
     return started
+
+
+async def _expire_task(harness, task_id: str) -> None:
+    async with harness.get_session() as session:
+        row = (
+            await session.execute(select(ChatDataAgentInbox).where(ChatDataAgentInbox.message_id == task_id))
+        ).scalar_one()
+        row.lease_expire_time = datetime.now() - timedelta(seconds=1)
+
+
+async def _save_recovery_runtime(harness, record) -> None:
+    saved = await harness.service.save_task_recovery_runtime(
+        record.task_id,
+        record.owner_token or "",
+        state={"conversation_id": CONV, "user_id": USER, "workspace": {"workspace_root": "/tmp/workspace"}},
+        tool_call_id="call-parent",
+    )
+    assert saved is not None
 
 
 async def _wait_terminal(harness, task_id: str, timeout: float = 6.0):
@@ -645,27 +566,6 @@ async def test_subagent_capacity_counts_distinct_agents_and_allows_follow_up(har
     assert follow_up.turn_index == 2
     async with harness.get_session() as session:
         assert await harness.service._dao.count_subagents(session, CONV, USER) == 2
-
-
-@pytest.mark.asyncio
-async def test_reap_expired_running_task_marks_lost(harness):
-    await harness.create_conversation()
-    record = await _create_task(harness)
-    await _start(harness, record)
-
-    async with harness.get_session() as session:
-        row = (
-            await session.execute(select(ChatDataAgentInbox).where(ChatDataAgentInbox.message_id == record.task_id))
-        ).scalar_one()
-        row.lease_expire_time = datetime.now() - timedelta(seconds=1)
-
-    assert await harness.service.reap_expired_tasks() == 1
-    reaped = await harness.service.get_task(record.task_id)
-    assert reaped is not None
-    assert reaped.status == "lost"
-    assert reaped.error == "执行节点租约过期"
-    assert "可重新派发" in reaped.report
-    assert reaped.owner_token is None
 
 
 @pytest.mark.asyncio

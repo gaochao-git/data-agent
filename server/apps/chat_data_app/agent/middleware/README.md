@@ -32,11 +32,40 @@ steering 插话、工具计时与单会话调用频率告警、历史消息时�
 `parent_task_id` 与 `turn_index`。同步过程事件同时写父对话流与任务详情流，父 Run 内
 打开的详情页不会出现空过程。
 
+同步任务不挂子图 checkpointer：每次同步派发都写检查点会拖慢主链路，而同步任务本身
+没有暂停/审批的恢复需求。因此运行中详情页首连拿不到检查点快照，会回退到事件流全量
+重放；收口后的历史过程仍由 `result_meta.subagent_trail` 还原。后台任务保持独立
+checkpointer，运行中首连走快照 + 游标续传。
+
+后台执行器同时按任务注册为失联恢复 runner（生命周期限于创建它的进程）。pending 任务启动
+前会把身份、数据域和工作区白名单上下文持久化到任务行；running 任务租约过期后从同一
+`agent_session_id + task_id` 的检查点续跑，并通过 `Command(update=...)` 轮换子图 owner。
+进程重启后没有该任务的 runner，回收器等待 120 秒后按 `lost` 收口。审批恢复也会同时更新 owner。后台子图
+使用自己的 task owner 工具围栏，不依赖已经结束的父 Run；旧执行体失去归属后不能继续调用
+工具。写型任务若停在工具结果尚未落入检查点的位置，副作用是否发生无法确定，任务会以
+`lost` fail-closed，不会盲目重放；explore 的只读工具可以重放。恢复失败且没有完整最终消息时
+保留原有子会话快照，不用本轮任务书覆盖历史。
+
+控制动作是否可用由 `contracts/subagent_capabilities.py` 按「执行模式 × 状态」统一推导，
+`list`/`check` 输出会带「可操作」。同步任务只支持取消（打断当前轮）和终态追问，不支持
+插话/审批；后台任务按状态开放取消、插话、审批与追问。工具分支不再各自硬编码状态判断。
+
+所有 `subagent` 动作用 `subagent_orchestrator.py` 的单一门面分发：`atask` 只把模型参数归一成
+`SubagentCommand`，门面负责动作边界与命令族路由，执行体仍沿用现有同步/后台适配器。
+门面统一的是“命令进入与能力边界”，不重写同步/后台各自的终态收口语义。
+
+关闭子智能体是**用户侧动作**，不是 `subagent` 工具能力：用户在管理面板关闭终态且无活跃
+轮次的逻辑子会话后，历史仍可读，但 `follow_up` 会拒绝，能力矩阵不再显示追问；关闭同时
+释放当前主对话的一个子智能体额度，供后续新派发使用。会话状态来自
+`chat_data_subagent_session`，不是任务状态，不能用取消代替关闭。主智能体只能提示用户
+关闭不再使用的子智能体，不能自行关闭。
+
 每个主对话创建的子智能体总数（同步与后台任务都计入）由
-`CHAT_DATA_SUBAGENT_MAX_PER_CONVERSATION` 限制；该额度按
-`agent_session_id` 去重，追问沿用原会话不占新额度。任务相似时，提示词要求主智能体
-先 `subagent(action="list")` 找到已有子智能体并用 `follow_up` 续写；相似度不做代码层
-匹配，避免误合并不同目标或交付物。
+`CHAT_DATA_SUBAGENT_MAX_PER_CONVERSATION` 限制，活跃任务数由
+`CHAT_DATA_SUBAGENT_TASK_MAX_ACTIVE` 限制；子智能体总额度按 `agent_session_id` 去重，
+追问沿用原会话不占新额度，已关闭会话不计入总额度。任务相似时，提示词要求主智能体先 `subagent(action="list")`
+找到已有子智能体并用 `follow_up` 续写；相似度不做代码层匹配，避免误合并不同目标或交付物。
+两项限制都只作用于当前主对话，不同主对话互不影响。
 
 并发写采用软控制：会写 workspace 的任务在 `start/follow_up` 通过 `write_scopes` 声明
 工作区相对文件或目录前缀（例如 `outputs/word`、`outputs/ppt`），`workspace:*` 表示

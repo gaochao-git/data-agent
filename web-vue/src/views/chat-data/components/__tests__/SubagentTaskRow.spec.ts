@@ -84,6 +84,31 @@ describe('SubagentTaskRow', () => {
     expect(button.attributes('disabled')).toBeDefined()
   })
 
+  it('shows close for a terminal open session and emits closeSession', async () => {
+    const completed = task({ status: 'completed', status_label: '已完成', session_status: 'open' })
+    const wrapper = mount(SubagentTaskRow, { props: { task: completed } })
+    const button = wrapper.find('[data-subagent-task-close-session]')
+
+    expect(button.exists()).toBe(true)
+    expect(button.text()).toContain('关闭')
+    await button.trigger('click')
+    expect(wrapper.emitted('closeSession')?.[0]?.[0]).toEqual(completed)
+  })
+
+  it('hides close while closing and after the session is closed', () => {
+    const closingWrapper = mount(SubagentTaskRow, {
+      props: { task: task({ status: 'completed', session_status: 'open' }), closing: true },
+    })
+    const closing = closingWrapper.find('[data-subagent-task-close-session]')
+    expect(closing.text()).toContain('关闭中')
+    expect(closing.attributes('disabled')).toBeDefined()
+
+    const closedWrapper = mount(SubagentTaskRow, {
+      props: { task: task({ status: 'completed', session_status: 'closed' }) },
+    })
+    expect(closedWrapper.find('[data-subagent-task-close-session]').exists()).toBe(false)
+  })
+
   it('shows session-level rounds, tool calls and first/last timestamps', () => {
     const first = task({
       task_id: 'task-1',
@@ -213,5 +238,21 @@ describe('SubagentTaskRow', () => {
 
     expect(context.text()).toContain('上下文 16%')
     expect(context.attributes('title')).toBe('当前输入 20k · 压缩阈值 64k · 上下文窗口 128k')
+  })
+
+  it('marks a permanently closed session without changing task status', () => {
+    const wrapper = mount(SubagentTaskRow, {
+      props: {
+        task: task({
+          status: 'completed',
+          status_label: '已完成',
+          session_status: 'closed',
+          finished_at: '2026-11-15T10:03:00',
+        }),
+      },
+    })
+
+    expect(wrapper.find('[data-subagent-task-status]').text()).toContain('已完成')
+    expect(wrapper.find('[data-subagent-session-closed]').text()).toBe('已关闭')
   })
 })

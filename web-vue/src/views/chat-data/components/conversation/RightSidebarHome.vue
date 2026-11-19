@@ -58,7 +58,7 @@ const workspaceUsage = computed(() => {
         >
           <span class="flex items-center gap-3">
             <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-sky-500 to-indigo-500 text-white shadow-sm">
-              <i class="fa-solid fa-robot text-sm" aria-hidden="true"></i>
+              <i class="fa-solid fa-diagram-project text-xs" aria-hidden="true"></i>
             </span>
             <span class="flex min-w-0 flex-wrap items-center gap-2 text-[14px] font-semibold text-slate-800">
               子智能体管理

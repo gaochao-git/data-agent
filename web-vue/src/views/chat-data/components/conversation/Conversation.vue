@@ -4,7 +4,7 @@
  * 左侧展示流式消息与工具调用，右侧展示当前工具结果和工作区产物预览。
  */
 import { computed, nextTick, onMounted, onUnmounted, ref, toRef, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import type { ChatDataContextCompressionEvent, ChatDataTokenUsage, DashboardSpecPayload, DataSource, DocumentAnnotation, ExecutionTargetOption, LangGraphMessage, Message, MessageAttachment, PendingUserQuestion, SemanticYamlFile, SkillInfo, SubagentCompaction, SubagentContextUsage, SubagentTaskRecord, SubagentTrailItem, ThinkingSegment, ToolCallInfo, ToolLifecycleEventData, UserQuestionAnswer } from '../../types'
 import { useSqlGenerator, type RunDoneStatus } from '../../composables/useSqlGenerator'
 import { useConversationHistory } from '../../composables/useConversationHistory'
@@ -756,8 +756,10 @@ const {
   applyTaskUpdate: applySubagentTaskUpdate,
   loadTaskDetail: loadSubagentTaskDetail,
   cancelTask: cancelSubagentTaskRequest,
+  closeSession: closeSubagentSessionRequest,
 } = useSubagentTasks()
 const cancellingTaskIds = ref<string[]>([])
+const closingTaskIds = ref<string[]>([])
 
 // 后台任务收口后服务端可能新建隐藏通知 Run；空闲会话在这里自动接上它的 SSE，
 // 不再要求用户重新进入会话才能看到主智能体的后续工作。
@@ -791,6 +793,31 @@ const cancelSubagentTask = async (task: SubagentTaskRecord) => {
     else ElMessage.success('已请求取消，任务会在下一次心跳后停止')
   } finally {
     cancellingTaskIds.value = cancellingTaskIds.value.filter(id => id !== task.task_id)
+  }
+}
+
+const closeSubagentSession = async (task: SubagentTaskRecord) => {
+  if (closingTaskIds.value.includes(task.task_id)) return
+  const title = task.label?.trim() || task.description?.trim() || '该子智能体'
+  try {
+    await ElMessageBox.confirm(
+      `关闭「${title}」后将不能再追问，但历史仍可查看，并会释放当前主对话的一个子智能体额度。`,
+      '关闭子智能体',
+      { confirmButtonText: '关闭', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch {
+    return
+  }
+  closingTaskIds.value = [...closingTaskIds.value, task.task_id]
+  try {
+    const result = await closeSubagentSessionRequest(task.task_id)
+    if (!result) {
+      ElMessage.error('关闭子智能体失败，请稍后重试')
+      return
+    }
+    ElMessage.success('子智能体已关闭，额度已释放')
+  } finally {
+    closingTaskIds.value = closingTaskIds.value.filter(id => id !== task.task_id)
   }
 }
 // 切换会话同样重置思考意图：显式选择不跨会话记忆（默认永远以注册表配置为准）
@@ -3165,8 +3192,10 @@ const handleKeyDown = (event: KeyboardEvent) => {
       :subagent-tasks="subagentTasks"
       :subagent-task-details="subagentTaskDetails"
       :subagent-task-cancelling-ids="cancellingTaskIds"
+      :subagent-task-closing-ids="closingTaskIds"
       :load-subagent-task-detail="loadSubagentTaskDetail"
       :cancel-subagent-task="cancelSubagentTask"
+      :close-subagent-session="closeSubagentSession"
       @conversation-created="handlePanelConversationCreated"
       @import-semantic-yaml="emit('importSemanticYaml', $event)"
       @select-tool="selectToolCall"

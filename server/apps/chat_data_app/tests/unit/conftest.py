@@ -11,6 +11,16 @@ import time
 
 import pytest
 
+
+@pytest.fixture()
+def harness(monkeypatch, tmp_path):
+    """子智能体账本测试环境；仅在用例显式声明 ``harness`` 时创建。"""
+    from apps.chat_data_app.tests.unit.subagent_test_support import create_subagent_harness
+
+    with create_subagent_harness(monkeypatch, tmp_path) as environment:
+        yield environment
+
+
 _DEFAULT_MODELS = [
     {
         "id": "gpt-4o-mini",

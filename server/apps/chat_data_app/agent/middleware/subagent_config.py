@@ -13,7 +13,18 @@ from langgraph.constants import CONFIG_KEY_CHECKPOINTER
 if TYPE_CHECKING:
     from .subagents import SubagentSpec
 
-__all__ = ["build_subagent_invocation_config"]
+__all__ = ["SUBAGENT_STATE_PASSTHROUGH_KEYS", "build_subagent_invocation_config"]
+
+SUBAGENT_STATE_PASSTHROUGH_KEYS = frozenset(
+    {
+        "user_id",
+        "operator_name",
+        "conversation_id",
+        "execution_context",
+        "workspace",
+    }
+)
+"""允许从主对话复制进子智能体的身份、数据域与工作区上下文。"""
 
 
 def build_subagent_invocation_config(

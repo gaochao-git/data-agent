@@ -136,6 +136,8 @@ class ChatDataSubagentSession(Base):
     latest_task_id: Mapped[str] = mapped_column(String(64), nullable=False)
     turn_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
     messages_json: Mapped[str] = mapped_column(MediumTextType, nullable=False, default="[]", server_default="[]")
+    session_status: Mapped[str] = mapped_column(String(16), nullable=False, default="open", server_default="open")
+    closed_time: Mapped[datetime | None] = mapped_column(DateTime)
     delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     update_time: Mapped[datetime | None] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())

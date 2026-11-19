@@ -32,6 +32,18 @@ CREATE TABLE `chat_data_subagent_session` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='后台子智能体多轮会话快照';
 ```
 
+子智能体会话永久关闭（已有环境执行；新环境先执行上方 CREATE 再执行本 ALTER）：
+
+```sql
+ALTER TABLE `chat_data_subagent_session`
+  ADD COLUMN `session_status` varchar(16) NOT NULL DEFAULT 'open' COMMENT '会话状态: open-可追问, closed-已永久关闭' AFTER `messages_json`,
+  ADD COLUMN `closed_time` datetime DEFAULT NULL COMMENT '永久关闭时间' AFTER `session_status`;
+```
+
+关闭只阻断后续追问，不删除历史消息；关闭行仍按 `session_id` 可读。关闭是用户侧操作，
+释放当前主对话的一个子智能体额度；主智能体没有关闭工具，只会在额度打满时提示用户处理。
+已有数据默认 `open`，无需回填。
+
 ### 子智能体生命周期事件 outbox
 
 统一承载审批、取消、终态以及后续用户直聊等需要同步给主智能体的通知；
@@ -74,7 +86,7 @@ CREATE TABLE `chat_data_subagent_event` (
 以 `server/.env.example` 为对照，把以下变更同步到生产 `server/conf/.env-<环境>`（示例文件本身不参与运行）：
 
 - 子智能体收敛为 explore / general：`CHAT_DATA_DEFAULT_PLAN_SUBAGENT_ENABLED` 已无对应实现，生产若残留可删除；新增 `CHAT_DATA_DEFAULT_GENERAL_SUBAGENT_ENABLED=false`（默认关闭，按需开启）。
-- 新增 4 个后台任务控制项：`CHAT_DATA_SUBAGENT_TASK_TIMEOUT_SECONDS=1800`、`CHAT_DATA_SUBAGENT_TASK_LEASE_SECONDS=30`、`CHAT_DATA_SUBAGENT_TASK_MAX_ACTIVE=20`、`CHAT_DATA_SUBAGENT_MAX_PER_CONVERSATION=5`。最后一项是**单个主对话内子智能体总数上限**，长会话容易撞到，若线上同步派发较多需按实际评估后调大。
+- 新增 4 个后台任务控制项：`CHAT_DATA_SUBAGENT_TASK_TIMEOUT_SECONDS=1800`、`CHAT_DATA_SUBAGENT_TASK_LEASE_SECONDS=30`、`CHAT_DATA_SUBAGENT_TASK_MAX_ACTIVE=20`、`CHAT_DATA_SUBAGENT_MAX_PER_CONVERSATION=5`。最后一项是**单个主对话内当前可用子智能体总数上限**；已关闭会话不计入，用户可在管理面板关闭不再使用的终态子智能体释放额度。
 - 旧名 `CHAT_DATA_SUBAGENT_MAX_SESSIONS_PER_CONVERSATION` 已统一为 `CHAT_DATA_SUBAGENT_MAX_PER_CONVERSATION`，旧名不再读取；生产配置若残留请直接删除。子智能体预算告警软约束 `CHAT_DATA_SUBAGENT_BUDGET_ALERT_TRIGGER_RATIO` 已无实现，残留配置同样可删除。
 
 ## 依赖升级（LangChain / LangGraph 全家桶）

@@ -1052,6 +1052,7 @@ def test_agent_list_shows_latest_task_without_dumping_all_task_ids():
     assert "最近 task_id=task-latest" in output
     assert "最近匹配 task_id" not in output
     assert "task-old" not in output
+    assert "可操作=取消、插话" in output
     assert 'subagent(action="list", agent_id="<agent_id>")' in output
 
     filtered_output = format_subagent_agent_list(records, status_filtered=True)
@@ -1083,7 +1084,8 @@ def test_agent_task_list_drills_down_all_task_ids_for_one_agent():
     assert "agent_id=agent-stable" in output
     assert "task_id=task-latest" in output
     assert "task_id=task-old" in output
-    assert "check/cancel/follow_up 使用上面的 task_id" in output
+    assert "check/cancel/follow_up/steer/approve/reject 使用上面的 task_id" in output
+    assert "agent_id 只用于识别子智能体" in output
 
 
 def test_task_list_line_separates_agent_id_from_task_id():
@@ -1103,6 +1105,7 @@ def test_task_list_line_separates_agent_id_from_task_id():
     assert "agent_id=agent-stable" in line
     assert "task_id=task-current" in line
     assert "轮次=3" in line
+    assert "可操作：追问" in line
 
 
 @pytest.mark.asyncio
@@ -1131,6 +1134,9 @@ async def test_agent_list_marks_scan_limit():
     class _Service:
         async def list_tasks(self, *_args, **_kwargs):
             return records
+
+        async def list_session_states(self, *_args, **_kwargs):
+            return {}
 
     output = await _list_async_tasks(
         _Service(),
@@ -1421,9 +1427,12 @@ async def test_subagent_tool_assigns_fallback_id_to_messages_without_id(monkeypa
     finals = [payload["event"] for payload in written if payload["event"]["event_type"] == "subagent_message"]
     # 同一对象收敛到同一个兜底 id，去重后只发一次
     assert len(finals) == 1
-    assert finals[0]["message_id"] == "call_1:anon-1"
+    assert finals[0]["message_id"].startswith("anon-")
     assert finals[0]["content"] == "无id完整"
     assert finals[0]["streamed"] is False
+    # 直播与历史快照必须生成同一个 key，否则晚加入者按快照关闭增量后仍会重复渲染
+    trail = subagents_module._build_trail_snapshot([shared_message])
+    assert trail[0]["id"] == finals[0]["message_id"]
 
 
 def test_stream_cap_state_returns_none_after_cap():
@@ -1461,7 +1470,7 @@ def test_build_trail_snapshot_mirrors_sse_shape():
 
     assert [item["kind"] for item in trail] == ["message", "tool", "message"]
     first = trail[0]
-    assert first["id"].startswith("trail-anon-")  # 无 id 的 AIMessage 也要有稳定 key
+    assert first["id"].startswith("anon-")  # 无 id 的 AIMessage 也要有稳定 key
     assert first["content"] == "先算一下"
     assert first["thinking"] == "需要精确计算"
     assert first["truncated"] is False and first["thinkingTruncated"] is False

@@ -9953,6 +9953,63 @@
         ]
       }
     },
+    "/api/chatdata/conversations/{conversation_id}/subagent-tasks/{task_id}/close-session": {
+      "post": {
+        "description": "用户关闭终态子智能体会话，释放当前主对话的子智能体额度；历史仍可查看。",
+        "operationId": "close_subagent_session_api_chatdata_conversations__conversation_id__subagent_tasks__task_id__close_session_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Close Subagent Session",
+        "tags": [
+          "ChatData 会话"
+        ]
+      }
+    },
     "/api/chatdata/conversations/{conversation_id}/subagent-tasks/{task_id}/events": {
       "get": {
         "description": "订阅后台子智能体的过程消息；父 Run 结束后仍可实时查看。",

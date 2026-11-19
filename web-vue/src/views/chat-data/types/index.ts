@@ -682,6 +682,9 @@ export interface SubagentTaskRecord {
   description: string
   status: SubagentTaskStatus
   status_label: string
+  /** 子智能体逻辑会话状态：closed 后历史仍可查看，但不能继续追问。 */
+  session_status?: 'open' | 'closed'
+  session_closed_at?: string | null
   /** sync=当前轮同步等待；background=后台独立执行。旧接口缺省按后台处理。 */
   execution_mode?: 'sync' | 'background'
   /** 本任务已完成的上下文压缩次数（列表接口摘要字段，不含完整 result_meta）。 */

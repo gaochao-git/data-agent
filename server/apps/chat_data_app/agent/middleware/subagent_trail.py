@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from itertools import count
+import hashlib
+import json
 from typing import Any
 
 from langchain_core.messages import AIMessage, ToolMessage
@@ -16,6 +17,85 @@ from utils.tool_call_args import coerce_tool_call_args
 
 from .subagent_async import _truncate_text
 from .subagent_text import chunk_reasoning_text, plain_text, sanitize_report_text
+
+
+def anonymous_message_id(message: Any) -> str:
+    """生成匿名消息的内容指纹；重复消息由分配器追加出现序号区分。"""
+    tool_calls: list[dict[str, Any]] = []
+    for call in getattr(message, "tool_calls", None) or []:
+        if isinstance(call, dict):
+            tool_calls.append(
+                {
+                    "id": str(call.get("id") or ""),
+                    "name": str(call.get("name") or ""),
+                    "args": call.get("args") or {},
+                }
+            )
+    payload = json.dumps(
+        {
+            "type": str(getattr(message, "type", "") or ""),
+            "content": plain_text(getattr(message, "content", "")),
+            "thinking": chunk_reasoning_text(message),
+            "tool_calls": tool_calls,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+    )
+    return f"anon-{hashlib.sha1(payload.encode('utf-8')).hexdigest()[:16]}"
+
+
+class AnonymousMessageIdAllocator:
+    """按同内容出现次序分配稳定 ID，并回写消息供后续检查点复用。"""
+
+    def __init__(self) -> None:
+        self._occurrences: dict[str, int] = {}
+        self._used_ids: set[str] = set()
+        self._by_object: dict[int, str] = {}
+
+    def prime(self, messages: list[Any]) -> None:
+        """预占历史中无 id 消息的出现序号，保证追问新消息与最终快照对齐。"""
+        self._occurrences.clear()
+        self._used_ids.clear()
+        self._by_object.clear()
+        for message in messages:
+            if not isinstance(message, AIMessage):
+                continue
+            existing = str(getattr(message, "id", "") or "")
+            if existing:
+                self._used_ids.add(existing)
+                self._by_object[id(message)] = existing
+                continue
+            fingerprint = anonymous_message_id(message)
+            occurrence = self._occurrences.get(fingerprint, 0) + 1
+            self._occurrences[fingerprint] = occurrence
+            message_id = fingerprint if occurrence == 1 else f"{fingerprint}-{occurrence}"
+            self._used_ids.add(message_id)
+            self._by_object[id(message)] = message_id
+
+    def resolve(self, message: AIMessage) -> str:
+        primed = self._by_object.get(id(message))
+        if primed:
+            if not str(getattr(message, "id", "") or ""):
+                message.id = primed
+            return primed
+        existing = str(getattr(message, "id", "") or "")
+        if existing:
+            self._used_ids.add(existing)
+            self._by_object[id(message)] = existing
+            return existing
+        fingerprint = anonymous_message_id(message)
+        occurrence = self._occurrences.get(fingerprint, 0)
+        while True:
+            occurrence += 1
+            message_id = fingerprint if occurrence == 1 else f"{fingerprint}-{occurrence}"
+            if message_id not in self._used_ids:
+                break
+        self._occurrences[fingerprint] = occurrence
+        self._used_ids.add(message_id)
+        self._by_object[id(message)] = message_id
+        message.id = message_id
+        return message_id
 
 
 def _read_tool_timing(message: ToolMessage) -> dict[str, int]:
@@ -106,10 +186,10 @@ def _append_ai_message_trail(
     tool_results: dict[str, dict[str, Any]],
     trail: list[dict[str, Any]],
     seen_ids: set[str],
-    anonymous_seq: count,
+    anonymous_ids: AnonymousMessageIdAllocator,
     pending_tool_status: str = "completed",
 ) -> None:
-    message_id = str(getattr(message, "id", "") or "") or f"trail-anon-{next(anonymous_seq)}"
+    message_id = anonymous_ids.resolve(message)
     text = plain_text(getattr(message, "content", ""))
     thinking = chunk_reasoning_text(message)
     if (text.strip() or thinking.strip()) and message_id not in seen_ids:
@@ -146,10 +226,10 @@ def _build_trail_snapshot(
 
     trail: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
-    anonymous_seq = count(1)
+    anonymous_ids = AnonymousMessageIdAllocator()
     for message in messages:
         if isinstance(message, AIMessage):
-            _append_ai_message_trail(message, tool_results, trail, seen_ids, anonymous_seq, pending_tool_status)
+            _append_ai_message_trail(message, tool_results, trail, seen_ids, anonymous_ids, pending_tool_status)
         elif isinstance(message, ToolMessage):
             # 内层工具先产生 ToolMessage 后才出现对应 tool_calls 的情形不
             # 应发生（OpenAI 协议要求先声明后调用）；此处只为容忍乱序输入。

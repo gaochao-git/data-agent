@@ -1722,6 +1722,25 @@ export async function cancelSubagentTask(conversationId: string, taskId: string)
   return response.data as SubagentTaskRecord
 }
 
+export interface CloseSubagentSessionResult {
+  task_id: string
+  session_id: string
+  session_status: 'open' | 'closed'
+  session_closed_at: string | null
+}
+
+/** 用户关闭终态子智能体会话，释放当前主对话的子智能体额度；历史仍可查看。 */
+export async function closeSubagentSession(
+  conversationId: string,
+  taskId: string,
+): Promise<CloseSubagentSessionResult> {
+  const response = await request({
+    url: `/agents/api/chatdata/conversations/${conversationId}/subagent-tasks/${taskId}/close-session`,
+    method: 'post',
+  })
+  return response.data as CloseSubagentSessionResult
+}
+
 export interface SubagentTaskTrailSnapshot {
   available: boolean
   trail?: SubagentTrailItem[]

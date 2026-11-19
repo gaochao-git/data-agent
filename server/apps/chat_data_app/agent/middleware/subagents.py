@@ -59,12 +59,14 @@ from ..context.context_budget import (
     get_model_context_budget,
 )
 from ..context.runtime import ContextRuntime
+from ..contracts.subagent_capabilities import resolve_task_capabilities
 from ..contracts.subagent_task import (
     TASK_STATUS_CANCELLED,
     TASK_STATUS_COMPLETED,
     TASK_STATUS_FAILED,
     TASK_STATUS_INTERRUPTED,
     TASK_STATUS_LABELS,
+    TASK_STATUS_LOST,
     TASK_STATUS_TIMEOUT,
     TASK_STATUS_WAITING_APPROVAL,
     WAITING_APPROVAL_TASK_STATUSES,
@@ -72,6 +74,7 @@ from ..contracts.subagent_task import (
     SubagentTaskPort,
     SubagentTaskView,
     get_subagent_task_service,
+    is_write_capable_subagent,
     normalize_write_scope,
     normalize_write_scopes,
 )
@@ -103,6 +106,11 @@ from .subagent_history import (
 )
 from .subagent_history import (
     legacy_session_history as _legacy_session_history,
+)
+from .subagent_orchestrator import (
+    SubagentCommand,
+    SubagentCommandHandlers,
+    SubagentOrchestrator,
 )
 from .subagent_stream import (
     SUBAGENT_STATE_PASSTHROUGH_KEYS as SUBAGENT_STATE_PASSTHROUGH_KEYS,
@@ -167,9 +175,10 @@ from .subagent_trail import (
     _collect_subagent_tool_results,  # noqa: F401 - 兼容 re-export
     _trail_orphan_tool_entry,  # noqa: F401 - 兼容 re-export
     _trail_tool_entry,  # noqa: F401 - 兼容 re-export
+    anonymous_message_id,  # noqa: F401 - 兼容 re-export
 )
 from .tool_approval import create_tool_approval_middleware
-from .tool_execution_fence import create_tool_execution_fence_middleware
+from .tool_execution_fence import create_subagent_execution_fence_middleware, create_tool_execution_fence_middleware
 from .tool_result import externalize_tool_text
 
 logger = get_logger(__name__)
@@ -200,7 +209,9 @@ _TASK_TOOL_DESCRIPTION_TEMPLATE = """派发隔离子智能体处理复杂多步�
 - 身份：agent_id 是稳定子智能体 ID，task_id 是单轮任务 ID；管理动作传 task_id，向用户汇报身份用 agent_id。
 - 写范围：start/follow_up 可传 write_scopes（workspace 相对文件或目录前缀，如 outputs/word）；并发分发规则见系统提示。
 - background 默认 true（异步，立即返回 task_id，终态自动唤醒会话）；false 同步等结果；start 可配 label/timeout_seconds。
-- 运行中用 steer/approve/reject 控制；派发策略与复用规则见系统提示。"""
+- 后台任务运行中可用 steer/approve/reject 控制；同步任务阻塞当前轮，不支持 steer/审批。
+- 子智能体由用户在管理面板关闭；关闭后历史仍可查看，但不能继续 follow_up，如需同类任务请重新派发。
+- 派发策略与复用规则见系统提示。"""
 
 
 class ChatDataSubAgentState(AgentState, total=False):
@@ -288,7 +299,8 @@ class TaskToolArgs(BaseModel):
         default=None,
         max_length=64,
         description=(
-            "action=check/cancel/follow_up 时要查询、取消或追问的任务 ID（list 返回的 task_id）；"
+            "action=check/cancel/follow_up/steer/approve/reject 时要操作的任务 ID"
+            "（list 返回的 task_id）；"
             "不要传稳定的 agent_id。"
         ),
     )
@@ -519,7 +531,7 @@ def _compile_subagent(spec: SubagentSpec, run_controls: Any = None, *, control_e
             inbox_service=run_controls.inbox_service,
         )
         if run_controls is not None and run_controls.is_complete()
-        else None
+        else (create_subagent_execution_fence_middleware() if control_enabled else None)
     )
     middleware = assemble_subagent_middleware(
         tools,
@@ -638,10 +650,12 @@ class _TaskExecution:
     background_task_id: str | None = None
     background_agent_session_id: str | None = None
     background_owner_token: str | None = None
+    background_subagent_type: str | None = None
     history: list[Any] | None = None
     checkpointer: Any = None
     resume: bool = False
     resume_value: Any = None
+    recover: bool = False
 
 
 async def _build_task_tool_impl(
@@ -716,6 +730,97 @@ async def _build_task_tool_impl(
     )
 
 
+class SubagentRecoveryRejected(RuntimeError):
+    """当前检查点不能证明自动重放安全，任务必须 fail-closed。"""
+
+
+async def _prepare_crash_recovery_input(
+    runnable: Any,
+    config: dict[str, Any],
+    runtime: Any,
+    *,
+    task_id: str,
+    owner_token: str,
+    subagent_type: str,
+) -> tuple[Command[Any], list[Any]]:
+    try:
+        snapshot = await runnable.aget_state(config)
+    except Exception as exc:
+        raise SubagentRecoveryRejected("子图检查点读取失败，无法安全续跑") from exc
+    values = getattr(snapshot, "values", None)
+    if not isinstance(values, dict) or not values.get("messages"):
+        raise SubagentRecoveryRejected("子图检查点缺失，无法安全续跑")
+    if _checkpoint_has_uncertain_tool_side_effect(snapshot, subagent_type):
+        raise SubagentRecoveryRejected("任务停在工具副作用尚未确认的位置，需要人工核查后再处理")
+    runtime.state = {
+        **values,
+        "subagent_task_id": task_id,
+        "subagent_owner_token": owner_token,
+    }
+    update = {
+        "subagent_task_id": task_id,
+        "subagent_owner_token": owner_token,
+    }
+    return Command(update=update), list(values.get("messages") or [])
+
+
+def _checkpoint_has_uncertain_tool_side_effect(snapshot: Any, subagent_type: str) -> bool:
+    if not is_write_capable_subagent(subagent_type) or "tools" not in tuple(getattr(snapshot, "next", ()) or ()):
+        return False
+    tasks = tuple(getattr(snapshot, "tasks", ()) or ())
+    return not any(tuple(getattr(task, "interrupts", ()) or ()) for task in tasks)
+
+
+async def _approval_resume_input(
+    runnable: Any,
+    config: dict[str, Any],
+    execution: _TaskExecution,
+) -> tuple[Command[Any], list[Any]]:
+    graph_input: Command[Any] = Command(
+        update={
+            "subagent_task_id": execution.background_task_id,
+            "subagent_owner_token": execution.background_owner_token,
+        },
+        resume=execution.resume_value,
+    )
+    try:
+        snapshot = await runnable.aget_state(config)
+        values = getattr(snapshot, "values", None)
+        messages = list((values or {}).get("messages") or []) if isinstance(values, dict) else []
+        return graph_input, messages
+    except Exception:
+        logger.warning("[tools] 读取子图检查点失败，恢复后过程快照可能不完整", exc_info=True)
+        return graph_input, []
+
+
+async def _resolve_task_graph_input(
+    runnable: Any,
+    spec: SubagentSpec,
+    description: str,
+    runtime: ToolRuntime,
+    execution: _TaskExecution,
+    config: dict[str, Any],
+) -> tuple[Any, list[Any] | None]:
+    if execution.recover:
+        return await _prepare_crash_recovery_input(
+            runnable,
+            config,
+            runtime,
+            task_id=execution.background_task_id or "",
+            owner_token=execution.background_owner_token or "",
+            subagent_type=execution.background_subagent_type or spec.name,
+        )
+    if execution.resume:
+        return await _approval_resume_input(runnable, config, execution)
+    return _build_subagent_state(
+        runtime,
+        description,
+        execution.history,
+        task_id=execution.background_task_id,
+        owner_token=execution.background_owner_token,
+    ), None
+
+
 async def _invoke_task_subagent(
     runnable: Any,
     spec: SubagentSpec,
@@ -730,40 +835,21 @@ async def _invoke_task_subagent(
 ) -> tuple[list, str, str]:
     """运行子图并归一成功/失败结果，失败也保留已收集的过程。"""
     execution = execution or _TaskExecution()
-    background_task_id = execution.background_task_id
-    background_agent_session_id = execution.background_agent_session_id
-    background_owner_token = execution.background_owner_token
-    history = execution.history
-    checkpointer = execution.checkpointer
-    resume = execution.resume
-    resume_value = execution.resume_value
     config = build_subagent_invocation_config(
         spec,
         default_recursion_limit=await get_runtime_setting("CHAT_DATA_AGENT_RECURSION_LIMIT"),
-        background_task_id=background_task_id,
-        agent_session_id=background_agent_session_id,
-        checkpointer=checkpointer,
+        background_task_id=execution.background_task_id,
+        agent_session_id=execution.background_agent_session_id,
+        checkpointer=execution.checkpointer,
     )
-    initial_messages: list[Any] | None = None
-    if resume:
-        # 恢复时从检查点取完整消息，既不重复注入历史，也让本轮 trail/报告
-        # 能包含中断前的消息。
-        graph_input: Any = Command(resume=resume_value)
-        try:
-            snapshot = await runnable.aget_state(config)
-            values = getattr(snapshot, "values", None)
-            initial_messages = list((values or {}).get("messages") or []) if isinstance(values, dict) else []
-        except Exception:
-            logger.warning("[tools] 读取子图检查点失败，恢复后过程快照可能不完整", exc_info=True)
-            initial_messages = []
-    else:
-        graph_input = _build_subagent_state(
-            runtime,
-            description,
-            history,
-            task_id=background_task_id,
-            owner_token=background_owner_token,
-        )
+    graph_input, initial_messages = await _resolve_task_graph_input(
+        runnable,
+        spec,
+        description,
+        runtime,
+        execution,
+        config,
+    )
     try:
         messages = await _run_subagent_with_events(
             runnable,
@@ -806,18 +892,29 @@ async def _run_background_task(
     resumed: bool = False,
     resume: bool = False,
     resume_value: Any = None,
+    recovered: bool = False,
 ) -> None:
     """后台子智能体执行体：租约 + 心跳 + 超时 + 取消收口。"""
     service = get_subagent_task_service()
     if service is None:
         logger.error("[tools] 后台任务账本服务未初始化，无法执行: task_id=%s", record.task_id)
         return
-    if not resumed:
+    # 恢复执行器在认领任务时已经把行推进到 running 并换发了 owner；
+    # 此时不能再调用 start_task（它只接受 pending），否则恢复协程会
+    # 在进入执行前静默返回，任务停在 running 直到下一次租约过期。
+    # 只在本轮不是「审批后恢复」时，才把账本里的 recovery_count 解释为
+    # 租约接管；审批恢复必须走 Command(resume=...)，不能误走检查点重放。
+    recovered = recovered or (not resumed and int(record.meta.get("recovery_count") or 0) > 0)
+    if not resumed and not recovered:
         started = await service.start_task(record.task_id, record.owner_token or "")
         if started is None:
             logger.info("[tools] 后台任务已取消或归属变化，跳过执行: task_id=%s", record.task_id)
+            # 本进程不再持有该任务的执行权，释放绑定的恢复执行器，避免
+            # 旧闭包在租约回收时被误用。
+            service.register_recovery_runner(None, task_id=record.task_id)
             return
-    history = [] if resume else await _load_background_history(service, record)
+    crash_recovery = recovered and not resume and record.meta.get("recovery_kind") == "checkpoint"
+    history = None if resume or crash_recovery else await _load_background_history(service, record)
     progress: dict[str, Any] = {"phase": "running"}
     partial_state: dict[str, Any] = {}
     event_writer = service.create_event_writer(record)
@@ -833,6 +930,7 @@ async def _run_background_task(
         history,
         resume=resume,
         resume_value=resume_value,
+        recover=crash_recovery,
     )
     if suspended is not None:
         status = TASK_STATUS_WAITING_APPROVAL
@@ -882,10 +980,11 @@ async def _execute_background_attempt(
     progress: dict[str, Any],
     partial_state: dict[str, Any],
     event_writer: Any,
-    history: list[Any],
+    history: list[Any] | None,
     *,
     resume: bool,
     resume_value: Any,
+    recover: bool = False,
 ) -> tuple[tuple[str, str, str, dict[str, Any]] | None, SubagentSuspended | None]:
     """在独立检查点内跑一次执行体；返回正常结果或中断载荷。"""
     service = get_subagent_task_service()
@@ -916,6 +1015,7 @@ async def _execute_background_attempt(
                     checkpointer=checkpointer,
                     resume=resume,
                     resume_value=resume_value,
+                    recover=recover,
                 ), None
             except SubagentSuspended as exc:
                 return None, exc
@@ -947,7 +1047,7 @@ async def _open_subgraph_checkpointer(stack: AsyncExitStack, task_id: str) -> An
 async def _finish_background_task(
     service: SubagentTaskPort,
     record: SubagentTaskView,
-    history: list[Any],
+    history: list[Any] | None,
     partial_state: dict[str, Any],
     outcome: tuple[str, str, str, dict[str, Any]],
 ) -> None:
@@ -981,6 +1081,7 @@ async def _run_background_attempt(
     checkpointer: Any = None,
     resume: bool = False,
     resume_value: Any = None,
+    recover: bool = False,
 ) -> tuple[str, str, str, dict[str, Any]]:
     try:
         command = await asyncio.wait_for(
@@ -1001,10 +1102,12 @@ async def _run_background_attempt(
                     background_task_id=record.task_id,
                     background_agent_session_id=getattr(record, "agent_session_id", None),
                     background_owner_token=getattr(record, "owner_token", None),
+                    background_subagent_type=record.subagent_type,
                     history=history,
                     checkpointer=checkpointer,
                     resume=resume,
                     resume_value=resume_value,
+                    recover=recover,
                 ),
             ),
             timeout=record.timeout_seconds,
@@ -1013,6 +1116,10 @@ async def _run_background_attempt(
         return _timeout_background_outcome(record, partial_state)
     except SubagentSuspended:
         raise
+    except SubagentRecoveryRejected as exc:
+        report = f"后台子智能体无法安全自动续跑：{exc}。请检查已产生的副作用后重新派发或追问。"
+        logger.warning("[tools] 后台子智能体恢复被拒绝: task_id=%s reason=%s", record.task_id, exc)
+        return TASK_STATUS_LOST, report, str(exc), {}
     except Exception as exc:
         return _failed_background_outcome(record, exc, partial_state)
     status, report, error, result_meta = _extract_background_result(command)
@@ -1066,7 +1173,7 @@ async def _finish_cancelled_background_task(
         report=_append_partial_report(report, partial_report),
         error=str(current_record.error if current_record else ""),
         result_meta=result_meta,
-        history=_session_history_payload(record, history or [], partial_state),
+        history=_session_history_payload(record, history, partial_state),
     )
     try:
         # 用户取消后同样通知主智能体；空闲会话由通知 Run 自动唤醒。
@@ -1077,13 +1184,15 @@ async def _finish_cancelled_background_task(
 
 def _session_history_payload(
     record: SubagentTaskView,
-    history: list[Any],
+    history: list[Any] | None,
     partial_state: dict[str, Any],
-) -> list[dict[str, Any]]:
-    """收口时落会话快照：优先用最终状态追踪结果，缺失时用“历史+本轮新增”兜底。"""
+) -> list[dict[str, Any]] | None:
+    """收口时落会话快照；恢复执行缺少完整最终消息时保留原快照。"""
     captured = partial_state.get("captured")
     final_messages = captured.get("final_messages") if isinstance(captured, dict) else None
     if not isinstance(final_messages, list) or not final_messages:
+        if history is None:
+            return None
         final_messages = [
             *history,
             HumanMessage(content=record.description),
@@ -1568,8 +1677,15 @@ async def _control_steer(
     operator_name: str,
 ) -> str:
     status_label = TASK_STATUS_LABELS.get(target.status, target.status)
-    if target.is_terminal:
+    capabilities = resolve_task_capabilities(target)
+    if capabilities.can_follow_up:
         return f"任务已是{status_label}，不能再插话；需要继续分析请用 follow_up。"
+    if not capabilities.can_steer and str(getattr(target, "execution_mode", "") or "") == "sync":
+        # 同步任务使用前台编译版子图，没有 SubagentControlMiddleware；排队后永远
+        # 不会被消费，必须直接拒绝，避免主智能体误以为插话已生效。
+        return "同步任务在父 Run 内阻塞执行，不支持 steer；请等待本轮结果，结束后用 follow_up 续写。"
+    if not capabilities.can_steer:
+        return f"任务当前为{status_label}，不能插话；请等待状态变化后重试。"
     if not str(message or "").strip():
         return 'action="steer" 需要提供 message。'
     record = await service.enqueue_steer_message(
@@ -1600,7 +1716,8 @@ async def _control_resume(
     background_runnables: dict[str, Any],
 ) -> str:
     status_label = TASK_STATUS_LABELS.get(target.status, target.status)
-    if target.status not in WAITING_APPROVAL_TASK_STATUSES:
+    capabilities = resolve_task_capabilities(target)
+    if not (capabilities.can_approve or capabilities.can_reject):
         return f"任务当前为{status_label}，不需要 {action}。只有 waiting_approval 状态可用 approve/reject。"
     pending = target.meta.get("pending_interrupt")
     resume_value, verdict, error = _prepare_resume(action, target.status, pending, decision)
@@ -1615,6 +1732,15 @@ async def _control_resume(
     if resumed is None:
         return "恢复失败：任务状态已变化，请先 check 最新状态。"
     record, value = resumed
+    service.register_recovery_runner(
+        lambda resumed_record, snapshot: _run_background_task(
+            resumed_record,
+            snapshot,
+            specs,
+            background_runnables,
+        ),
+        task_id=record.task_id,
+    )
     _launch_task_runner(
         service,
         record,
@@ -1663,11 +1789,72 @@ def build_task_tool(specs: list[SubagentSpec], run_controls: Any = None) -> Stru
     background_cache = _BackgroundRunnableCache(specs)
     available = "\n".join(f"- {spec.name}: {spec.description}" for spec in specs)
 
+    async def _handle_start(command: SubagentCommand) -> Command | str:
+        return await _start_task_action(
+            description=command.description,
+            subagent_type=command.subagent_type,
+            background=command.background,
+            label=command.label,
+            write_scopes=_validate_tool_write_scopes(command.write_scopes),
+            timeout_seconds=command.timeout_seconds,
+            runtime=command.runtime,
+            run_controls=run_controls,
+            specs=specs,
+            compiled=compiled,
+            background_cache=background_cache,
+        )
+
+    async def _handle_follow_up(command: SubagentCommand) -> Command | str:
+        return await _follow_up_task_action(
+            task_id=command.task_id,
+            message=command.message,
+            runtime=command.runtime,
+            run_controls=run_controls,
+            specs=specs,
+            background=command.background,
+            write_scopes=command.write_scopes,
+            compiled=compiled,
+            background_runnables=background_cache.get(),
+        )
+
+    async def _handle_control(command: SubagentCommand) -> str:
+        return await _control_task_action(
+            action=command.action,
+            task_id=command.task_id,
+            message=command.message,
+            decision=command.decision,
+            runtime=command.runtime,
+            run_controls=run_controls,
+            specs=specs,
+            background_runnables=background_cache.get(),
+        )
+
+    async def _handle_admin(command: SubagentCommand) -> str:
+        return await manage_async_task(
+            cast(Literal["list", "check", "wait", "cancel"], command.action),
+            runtime=command.runtime,
+            task_id=command.task_id,
+            task_ids=command.task_ids,
+            agent_id=command.agent_id,
+            status=command.status,
+            limit=200,
+            wait_seconds=command.wait_seconds,
+        )
+
+    orchestrator = SubagentOrchestrator(
+        SubagentCommandHandlers(
+            start=_handle_start,
+            follow_up=_handle_follow_up,
+            task_admin=_handle_admin,
+            control=_handle_control,
+        )
+    )
+
     async def atask(
         runtime: ToolRuntime,
-        action: Literal[
-            "start", "list", "check", "wait", "cancel", "follow_up", "steer", "approve", "reject"
-        ] = "start",
+        action: Literal["start", "list", "check", "wait", "cancel", "follow_up", "steer", "approve", "reject"] = (
+            "start"
+        ),
         description: str | None = None,
         subagent_type: str | None = None,
         background: bool = True,
@@ -1685,54 +1872,24 @@ def build_task_tool(specs: list[SubagentSpec], run_controls: Any = None) -> Stru
         status = kwargs.get("status")
         decision = kwargs.get("decision", "allow")
         write_scopes = kwargs.get("write_scopes")
-        if agent_id and action != "list":
-            return 'agent_id 仅用于 action="list" 查询任务明细；check/cancel/follow_up 等动作请传 task_id。'
-        if action == "follow_up":
-            return await _follow_up_task_action(
-                task_id=task_id,
-                message=message,
-                runtime=runtime,
-                run_controls=run_controls,
-                specs=specs,
-                background=background,
-                write_scopes=write_scopes,
-                compiled=compiled,
-                background_runnables=background_cache.get(),
-            )
-        if action in {"steer", "approve", "reject"}:
-            return await _control_task_action(
+        return await orchestrator.execute(
+            SubagentCommand(
                 action=action,
+                description=description,
+                subagent_type=subagent_type,
+                background=background,
+                label=label,
+                timeout_seconds=timeout_seconds,
                 task_id=task_id,
                 message=message,
-                decision=decision,
-                runtime=runtime,
-                run_controls=run_controls,
-                specs=specs,
-                background_runnables=background_cache.get(),
-            )
-        if action != "start":
-            return await manage_async_task(
-                cast(Literal["list", "check", "wait", "cancel"], action),
-                runtime=runtime,
-                task_id=task_id,
                 task_ids=task_ids,
                 agent_id=agent_id,
                 status=status,
-                limit=200,
+                decision=decision,
+                write_scopes=write_scopes,
                 wait_seconds=wait_seconds,
+                runtime=runtime,
             )
-        return await _start_task_action(
-            description=description,
-            subagent_type=subagent_type,
-            background=background,
-            label=label,
-            write_scopes=_validate_tool_write_scopes(write_scopes),
-            timeout_seconds=timeout_seconds,
-            runtime=runtime,
-            run_controls=run_controls,
-            specs=specs,
-            compiled=compiled,
-            background_cache=background_cache,
         )
 
     return StructuredTool.from_function(
@@ -1799,11 +1956,13 @@ def _default_system_prompt() -> str:
         "## 子智能体复用与额度\n\n"
         "每个主对话创建的子智能体总数有运行时上限。派发新任务前先用 "
         'subagent(action="list") 检查已有子智能体：目标相同、数据范围相同，或交付物只是补充、'
-        '修订时不要新开：同类子智能体仍在执行时用 subagent(action="steer") 补充或等待；'
+        '修订时不要新开：同类子智能体仍在执行时，后台任务用 subagent(action="steer") 补充或等待；'
+        "同步任务阻塞当前轮，不能 steer，等结果返回后再 follow_up；"
         '已结束时对最近一个终态 task_id 用 subagent(action="follow_up", task_id=..., message=...)，'
         "在同一子会话续写；当前轮必须拿到追问结论时传 background=false。"
         '只有目标、范围或交付物明确不同才 subagent(action="start") 新建。'
-        "达到上限后 start 会被拒绝，此时只能复用已有子智能体或由主智能体自己完成；"
+        "达到上限后 start 会被拒绝，此时复用已有子智能体、由主智能体自己完成，"
+        "或提示用户在子智能体管理面板关闭不再使用的终态子智能体以腾出额度；"
         "追问沿用原会话，不新增子智能体数量。\n\n"
         "## 并发写与任务分发\n\n"
         "并发写由你负责任务分发，不依赖系统写锁。会写 workspace 的 general 任务，"
@@ -1820,6 +1979,7 @@ def _default_system_prompt() -> str:
         "只在当前步骤必须拿到结论才能继续、用户要求当轮给出结果，或只是小范围核对/单点查询时，"
         "显式传 background=false 同步等待；已结束子智能体的 follow_up 同样支持该参数。"
         "任务统一用 subagent 工具管理，动作与参数见工具说明；查询按 list → agent_id → task_id 分层。"
+        "list/check 会返回「可操作」，只调用其中列出的控制动作；同步任务不支持插话和审批。"
         "用户问数量或进展时现查，不要凭记忆回答；问之前的任务先 list，再按需 check。"
         "给任务写清 label，便于用户在任务列表识别。"
         "子智能体产出的交付物，用 present_artifacts 展示给用户。"

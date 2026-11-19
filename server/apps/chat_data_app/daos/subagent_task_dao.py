@@ -16,7 +16,7 @@ from sqlalchemy import CursorResult, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer
 
-from utils.models import ChatDataAgentInbox
+from utils.models import ChatDataAgentInbox, ChatDataSubagentSession
 
 TASK_RECORD_TYPE = "task"
 TASK_QUEUE_TYPE = "background"
@@ -212,15 +212,17 @@ class SubagentTaskDao:
         active_statuses: Collection[str],
     ) -> int:
         result = await session.execute(
-            select(func.count(ChatDataAgentInbox.id)).where(
+            select(ChatDataAgentInbox.id)
+            .where(
                 ChatDataAgentInbox.conversation_id == conversation_id,
                 ChatDataAgentInbox.user_id == user_id,
                 ChatDataAgentInbox.record_type == TASK_RECORD_TYPE,
                 ChatDataAgentInbox.record_status.in_(sorted(active_statuses)),
                 ChatDataAgentInbox.delete_flag == 0,
             )
+            .with_for_update()
         )
-        return int(result.scalar() or 0)
+        return len(result.scalars().all())
 
     async def count_subagents(
         self,
@@ -228,25 +230,53 @@ class SubagentTaskDao:
         conversation_id: str,
         user_id: str,
     ) -> int:
-        """按 agent_session_id 去重统计主对话已创建的子智能体数量。
+        """统计主对话当前仍可用的子智能体数量（已关闭会话不计入）。
 
         ``agent_session_id`` 位于 JSON 文本里；这里只拉 message_id + meta，
         不加载报告正文。任务行数量受会话内派发频率约束，按会话逐行解析足以
-        覆盖旧数据兼容（旧行没有 agent_session_id 时回退 task_id）。
+        覆盖旧数据兼容（旧行没有 agent_session_id 时回退 task_id）。会话关闭后
+        释放额度，用户可关闭不再使用的子智能体为新派发腾出空间。
         """
+        session_ids = await self.list_subagent_session_ids(
+            session,
+            conversation_id,
+            user_id,
+        )
+        if not session_ids:
+            return 0
+        closed = await session.execute(
+            select(ChatDataSubagentSession.session_id).where(
+                ChatDataSubagentSession.session_id.in_(sorted(session_ids)),
+                ChatDataSubagentSession.conversation_id == conversation_id,
+                ChatDataSubagentSession.user_id == user_id,
+                ChatDataSubagentSession.session_status == "closed",
+                ChatDataSubagentSession.delete_flag == 0,
+            )
+        )
+        return len(session_ids - set(closed.scalars().all()))
+
+    async def list_subagent_session_ids(
+        self,
+        session: AsyncSession,
+        conversation_id: str,
+        user_id: str,
+    ) -> set[str]:
+        """列出主对话内出现过的子智能体会话 ID；容量降级与正常统计共用。"""
         result = await session.execute(
-            select(ChatDataAgentInbox.message_id, ChatDataAgentInbox.record_meta).where(
+            select(ChatDataAgentInbox.message_id, ChatDataAgentInbox.record_meta)
+            .where(
                 ChatDataAgentInbox.conversation_id == conversation_id,
                 ChatDataAgentInbox.user_id == user_id,
                 ChatDataAgentInbox.record_type == TASK_RECORD_TYPE,
                 ChatDataAgentInbox.delete_flag == 0,
             )
+            .with_for_update()
         )
         session_ids: set[str] = set()
         for task_id, meta_text in result.all():
             meta = load_task_meta(meta_text)
             session_ids.add(str(meta.get("agent_session_id") or meta.get("root_task_id") or task_id))
-        return len(session_ids)
+        return session_ids
 
     async def list_active_for_conversation(
         self,
@@ -356,6 +386,33 @@ class SubagentTaskDao:
                 ChatDataAgentInbox.message_id == task_id,
                 ChatDataAgentInbox.record_type == TASK_RECORD_TYPE,
                 ChatDataAgentInbox.record_status.in_(sorted(allowed_statuses)),
+                ChatDataAgentInbox.delete_flag == 0,
+            )
+            .values(**values)
+        )
+        return int(cast(CursorResult[Any], result).rowcount or 0)
+
+    async def update_expired(
+        self,
+        session: AsyncSession,
+        task_id: str,
+        *,
+        owner_token: str,
+        record_status: str,
+        lease_expire_time: datetime,
+        now: datetime,
+        values: dict[str, Any],
+    ) -> int:
+        """只有扫描后的旧租约仍未变化时才回收，封住扫描与续租之间的竞争窗口。"""
+        result = await session.execute(
+            update(ChatDataAgentInbox)
+            .where(
+                ChatDataAgentInbox.message_id == task_id,
+                ChatDataAgentInbox.record_type == TASK_RECORD_TYPE,
+                ChatDataAgentInbox.owner_token == owner_token,
+                ChatDataAgentInbox.record_status == record_status,
+                ChatDataAgentInbox.lease_expire_time == lease_expire_time,
+                ChatDataAgentInbox.lease_expire_time < now,
                 ChatDataAgentInbox.delete_flag == 0,
             )
             .values(**values)

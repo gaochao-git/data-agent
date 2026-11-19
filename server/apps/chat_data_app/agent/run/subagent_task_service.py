@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Coroutine, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from types import SimpleNamespace
@@ -32,11 +32,13 @@ from apps.chat_data_app.services.setting_service import get_runtime_setting
 from apps.chat_data_app.sse_protocol import SSE_EVENT_SUBAGENT_TASK_UPDATED, format_sse
 from utils.database import get_session
 from utils.logger import get_logger
-from utils.models import ChatDataAgentInbox
+from utils.models import ChatDataAgentInbox, ChatDataSubagentSession
 
 from ..contracts.subagent_task import (
     ACTIVE_TASK_STATUSES,
     EXECUTING_TASK_STATUSES,
+    SESSION_STATUS_CLOSED,
+    SESSION_STATUS_OPEN,
     TASK_HEARTBEAT_SECONDS,
     TASK_STATUS_CANCELLED,
     TASK_STATUS_CANCELLING,
@@ -50,7 +52,11 @@ from ..contracts.subagent_task import (
     TASK_STATUS_TIMEOUT,
     TERMINAL_TASK_STATUSES,
     WAITING_APPROVAL_TASK_STATUSES,
+    SubagentSessionActiveError,
+    SubagentSessionClosedError,
+    SubagentSessionState,
     SubagentTaskCapacityError,
+    SubagentTaskLeaseLostError,
     SubagentTaskView,
     normalize_write_scopes,
     parse_task_status_filter,
@@ -74,6 +80,15 @@ from .subagent_event_service import (
     subagent_event_service,
     terminal_event_id,
 )
+from .subagent_recovery import (
+    MAX_TASK_RECOVERY_ATTEMPTS,
+    TASK_RECOVERY_RUNNER_WAIT_SECONDS,
+    defer_or_expire_missing_runner,
+    execution_attempt,
+    recovery_candidate,
+    recovery_count,
+    recovery_runtime,
+)
 from .subagent_task_event_service import (
     SubagentTaskStreamWriter,
     subagent_task_event_service,
@@ -87,11 +102,13 @@ _TASK_PUSH_DEGRADED_SECONDS = 30.0
 
 __all__ = [
     "ACTIVE_TASK_STATUSES",
+    "MAX_TASK_RECOVERY_ATTEMPTS",
     "NOTIFICATION_REPORT_PREVIEW_CHARS",
     "SubagentTaskCapacityError",
     "SubagentTaskRecord",
     "SubagentTaskService",
     "TASK_HEARTBEAT_SECONDS",
+    "TASK_RECOVERY_RUNNER_WAIT_SECONDS",
     "TASK_STATUS_CANCELLED",
     "TASK_STATUS_CANCELLING",
     "TASK_STATUS_COMPLETED",
@@ -337,6 +354,20 @@ class SubagentTaskRecord:
         return payload
 
 
+@dataclass(frozen=True)
+class _TaskLineage:
+    """一次任务在子会话/任务链上的稳定身份，创建任务前一次性解析。"""
+
+    root_task: str
+    parent_task: str
+    turn_index: int
+    agent_id: str
+    agent_session: str
+    parent_agent_id: str
+    root_agent_id: str
+    depth: int
+
+
 def _iso(value: datetime | None) -> str | None:
     return value.isoformat() if value else None
 
@@ -348,6 +379,28 @@ def _parse_datetime(value: Any) -> datetime | None:
         return datetime.fromisoformat(value)
     except ValueError:
         return None
+
+
+_SCHEMA_MISSING_MYSQL_CODES = frozenset({1054, 1146})  # unknown column / table doesn't exist
+
+
+def _is_session_schema_missing(exc: BaseException) -> bool:
+    """判断异常是否只是会话表/关闭列尚未迁移；其余数据库故障不允许降级。"""
+    orig = getattr(exc, "orig", None)
+    args = getattr(orig, "args", None) or getattr(exc, "args", ())
+    code = args[0] if args else None
+    if isinstance(code, int) and code in _SCHEMA_MISSING_MYSQL_CODES:
+        return True
+    message = str(orig or exc).lower()
+    return any(token in message for token in ("no such column", "no such table", "unknown column", "doesn't exist"))
+
+
+def _session_state(row: ChatDataSubagentSession) -> SubagentSessionState:
+    return SubagentSessionState(
+        session_id=row.session_id,
+        status=row.session_status or SESSION_STATUS_OPEN,
+        closed_at=row.closed_time,
+    )
 
 
 def _task_meta_text(meta: dict[str, Any]) -> str:
@@ -463,17 +516,49 @@ class SubagentTaskService:
         self._inbox = inbox
         self._event_service = event_service
         self._notification_service = notification_service
-        self._local_tasks: dict[str, asyncio.Task] = {}
+        self._local_tasks: dict[str, asyncio.Task[None]] = {}
+        self._recovery_runner: Callable[[SubagentTaskView, Any], Coroutine[Any, Any, None]] | None = None
+        # 后台任务由创建它的 Agent 装配上下文执行；恢复必须复用同一任务绑定的
+        # runner，不能用进程内最后一次装配的 runner 猜测用户身份与工作区。
+        self._task_recovery_runners: dict[str, Callable[[SubagentTaskView, Any], Coroutine[Any, Any, None]]] = {}
         # 任务卡推送降级截止时间（monotonic），避免失败后每个心跳重复重试。
         self._push_degraded_until: dict[str, float] = {}
 
-    def register_local_task(self, task_id: str, task: asyncio.Task) -> None:
+    def register_recovery_runner(
+        self,
+        runner: Callable[[SubagentTaskView, Any], Coroutine[Any, Any, None]] | None,
+        *,
+        task_id: str | None = None,
+    ) -> None:
+        """由子图装配层注入恢复执行器，run 层只负责认领与调度。
+
+        生产路径按 task_id 绑定，防止多用户会话共用进程级单例时串用工具与
+        数据源；无 task_id 的默认 runner 仅供测试或兼容旧调用。
+        """
+        if task_id is not None:
+            if runner is None:
+                self._task_recovery_runners.pop(task_id, None)
+            else:
+                self._task_recovery_runners[task_id] = runner
+            return
+        self._recovery_runner = runner
+        if runner is None:
+            self._task_recovery_runners.clear()
+
+    def register_local_task(self, task_id: str, task: asyncio.Task[None]) -> None:
         self._local_tasks[task_id] = task
 
-        def _forget_task(_task: asyncio.Task) -> None:
-            self._local_tasks.pop(task_id, None)
+        def _forget_task(completed: asyncio.Task[None]) -> None:
+            if self._local_tasks.get(task_id) is completed:
+                self._local_tasks.pop(task_id, None)
+                # 不能在这里立即释放恢复执行器：协程可能异常退出但任务仍停在
+                # running，租约过期后需要同一 runner 继续接管。runner 只在
+                # 任务确认进入终态时清理。
 
         task.add_done_callback(_forget_task)
+
+    def _recovery_runner_for(self, task_id: str) -> Callable[[SubagentTaskView, Any], Coroutine[Any, Any, None]] | None:
+        return self._task_recovery_runners.get(task_id) or self._recovery_runner
 
     def create_event_writer(self, task: SubagentTaskView) -> Any:
         """由 run 层构造实时事件 writer，避免 middleware 反向依赖 run。"""
@@ -511,6 +596,113 @@ class SubagentTaskService:
             tool_call_id=getattr(runtime, "tool_call_id", None),
         )
 
+    async def _resolve_task_lineage(
+        self,
+        session: Any,
+        *,
+        task_id: str,
+        conversation_id: str,
+        user_id: str,
+        parent_task_id: str | None,
+        agent_session_id: str | None,
+        root_task_id: str | None,
+    ) -> _TaskLineage:
+        """解析新任务或追问在子会话中的身份，并原子拦截并行的活跃追问。"""
+        root_task = str(agent_session_id or root_task_id or task_id)
+        parent_task = str(parent_task_id or "")
+        turn_index = 1
+        agent_id = root_task
+        agent_session = root_task
+        parent_agent_id = ""
+        root_agent_id = agent_id
+        depth = 1
+        if root_task == task_id:
+            return _TaskLineage(
+                root_task=root_task,
+                parent_task=parent_task,
+                turn_index=turn_index,
+                agent_id=agent_id,
+                agent_session=agent_session,
+                parent_agent_id=parent_agent_id,
+                root_agent_id=root_agent_id,
+                depth=depth,
+            )
+        # 会话行锁已把同会话的 create_task 串行化；在这里再查一次活跃轮次，
+        # 拦住主智能体同一轮并行发出的多个 follow_up（前置查询无法原子挡）。
+        session_active = await self._dao.list_active_for_conversation(
+            session,
+            conversation_id,
+            user_id,
+            ACTIVE_TASK_STATUSES,
+        )
+        if any(
+            SubagentTaskRecord.from_row(row, include_content=False).root_task_id == root_task for row in session_active
+        ):
+            raise SubagentTaskCapacityError("该子智能体已有进行中的追问任务，请等待其结束或先取消。")
+        parent_row = await self._dao.get(
+            session,
+            parent_task,
+            conversation_id=conversation_id,
+            user_id=user_id,
+        )
+        parent_record = SubagentTaskRecord.from_row(parent_row, include_content=False) if parent_row else None
+        if parent_record is None:
+            return _TaskLineage(
+                root_task=root_task,
+                parent_task=parent_task,
+                turn_index=2,
+                agent_id=agent_id,
+                agent_session=agent_session,
+                parent_agent_id=parent_agent_id,
+                root_agent_id=root_agent_id,
+                depth=depth,
+            )
+        # 追问沿用同一智能体身份与同一份会话快照；parent_task_id 只是任务链
+        # 上一轮，不代表新的智能体。
+        return _TaskLineage(
+            root_task=parent_record.agent_session_id,
+            parent_task=parent_task,
+            turn_index=parent_record.turn_index + 1,
+            agent_id=parent_record.agent_id,
+            agent_session=parent_record.agent_session_id,
+            parent_agent_id=parent_record.parent_agent_id,
+            root_agent_id=parent_record.root_agent_id,
+            depth=parent_record.depth,
+        )
+
+    async def _ensure_session_open(
+        self,
+        session: Any,
+        session_id: str,
+        *,
+        current_task_id: str,
+        conversation_id: str,
+        user_id: str,
+    ) -> None:
+        """首轮无需检查；追问前拒绝已永久关闭的会话。
+
+        只有会话表/关闭列尚未迁移时允许降级为“未关闭”，其它数据库异常必须
+        向上抛出（fail-closed），避免永久关闭被瞬时故障绕过。
+        """
+        if session_id == current_task_id:
+            return
+        try:
+            snapshot = await subagent_session_dao.get(
+                session,
+                session_id,
+                conversation_id=conversation_id,
+                user_id=user_id,
+            )
+        except Exception as exc:
+            if not _is_session_schema_missing(exc):
+                raise
+            # 会话表/关闭列尚未迁移时不能阻断原有追问；历史读取与收口写入
+            # 已有各自的降级路径。
+            logger.warning("子智能体会话表/关闭列尚未迁移，按未关闭处理: session_id=%s", session_id, exc_info=True)
+            return
+        if snapshot is not None and snapshot.session_status == SESSION_STATUS_CLOSED:
+            raise SubagentSessionClosedError("该子智能体会话已关闭，不能继续追问；如需同类任务请重新派发。")
+
     async def create_task(
         self,
         *,
@@ -540,6 +732,22 @@ class SubagentTaskService:
             thread = await agent_inbox_dao.lock_thread(session, conversation_id, user_id)
             if thread is None:
                 raise AgentRunNotActiveError("会话不存在")
+            lineage = await self._resolve_task_lineage(
+                session,
+                task_id=task_id,
+                conversation_id=conversation_id,
+                user_id=user_id,
+                parent_task_id=parent_task_id,
+                agent_session_id=agent_session_id,
+                root_task_id=root_task_id,
+            )
+            await self._ensure_session_open(
+                session,
+                lineage.root_task,
+                current_task_id=task_id,
+                conversation_id=conversation_id,
+                user_id=user_id,
+            )
             await self._check_capacity(
                 session,
                 conversation_id=conversation_id,
@@ -548,61 +756,20 @@ class SubagentTaskService:
                 max_subagents_per_conversation=max_subagents_per_conversation,
                 continuing=bool(parent_task_id or agent_session_id or root_task_id),
             )
-            root_task = str(agent_session_id or root_task_id or task_id)
-            parent_task = str(parent_task_id or "")
-            turn_index = 1
-            agent_id = root_task
-            agent_session = root_task
-            parent_agent_id = ""
-            root_agent_id = agent_id
-            depth = 1
-            if parent_task:
-                # 会话行锁已把同会话的 create_task 串行化；在这里再查一次活跃轮次，
-                # 拦住主智能体同一轮并行发出的多个 follow_up（前置查询无法原子挡）。
-                session_active = await self._dao.list_active_for_conversation(
-                    session,
-                    conversation_id,
-                    user_id,
-                    ACTIVE_TASK_STATUSES,
-                )
-                if any(
-                    SubagentTaskRecord.from_row(row, include_content=False).root_task_id == root_task
-                    for row in session_active
-                ):
-                    raise SubagentTaskCapacityError("该子智能体已有进行中的追问任务，请等待其结束或先取消。")
-                parent_row = await self._dao.get(
-                    session,
-                    parent_task,
-                    conversation_id=conversation_id,
-                    user_id=user_id,
-                )
-                parent_record = SubagentTaskRecord.from_row(parent_row, include_content=False) if parent_row else None
-                if parent_record is not None:
-                    turn_index = parent_record.turn_index + 1
-                    # 追问沿用同一智能体身份与同一份会话快照；parent_task_id 只是
-                    # 任务链上一轮，不代表新的智能体。
-                    agent_id = parent_record.agent_id
-                    agent_session = parent_record.agent_session_id
-                    parent_agent_id = parent_record.parent_agent_id
-                    root_agent_id = parent_record.root_agent_id
-                    depth = parent_record.depth
-                    root_task = agent_session
-                else:
-                    turn_index = 2
             meta = {
                 "subagent_type": subagent_type,
                 "description": description,
                 "label": (label or description.splitlines()[0][:80]).strip(),
                 "parent_tool_call_id": parent_tool_call_id,
                 "parent_owner_token": str(parent_owner_token or ""),
-                "parent_task_id": parent_task,
-                "root_task_id": root_task,
-                "agent_id": agent_id,
-                "agent_session_id": agent_session,
-                "parent_agent_id": parent_agent_id,
-                "root_agent_id": root_agent_id,
-                "depth": depth,
-                "turn_index": turn_index,
+                "parent_task_id": lineage.parent_task,
+                "root_task_id": lineage.root_task,
+                "agent_id": lineage.agent_id,
+                "agent_session_id": lineage.agent_session,
+                "parent_agent_id": lineage.parent_agent_id,
+                "root_agent_id": lineage.root_agent_id,
+                "depth": lineage.depth,
+                "turn_index": lineage.turn_index,
                 "operator_name": operator_name,
                 "timeout_seconds": effective_timeout,
                 "execution_mode": "background",
@@ -676,6 +843,30 @@ class SubagentTaskService:
         await self.publish_task_update(record)
         return record
 
+    async def save_task_recovery_runtime(
+        self,
+        task_id: str,
+        owner_token: str,
+        *,
+        state: dict[str, Any],
+        tool_call_id: str | None,
+    ) -> SubagentTaskRecord | None:
+        """在启动前持久化最小恢复上下文，pending 任务不依赖原进程内存重建。"""
+        async with get_session() as session:
+            now = await self._dao.now(session)
+            row = await self._dao.get(session, task_id, for_update=True)
+            if row is None or row.owner_token != owner_token or row.record_status != TASK_STATUS_PENDING:
+                return None
+            meta = load_task_meta(row.record_meta)
+            meta["recovery_runtime"] = {"state": state, "tool_call_id": tool_call_id or ""}
+            meta["execution_attempt"] = 1
+            meta["recovery_count"] = 0
+            row.record_meta = _task_meta_text(meta)
+            row.update_time = now
+            record = SubagentTaskRecord.from_row(row)
+        await self.publish_task_update(record)
+        return record
+
     async def _check_capacity(
         self,
         session: Any,
@@ -686,7 +877,7 @@ class SubagentTaskService:
         max_subagents_per_conversation: int,
         continuing: bool,
     ) -> None:
-        """在会话行锁内校验并发额度与新子智能体总额度。"""
+        """在会话行锁内校验当前主对话的并发与新子智能体总额度。"""
         active = await self._dao.count_active(session, conversation_id, user_id, ACTIVE_TASK_STATUSES)
         if active >= max_active:
             raise SubagentTaskCapacityError(
@@ -694,12 +885,21 @@ class SubagentTaskService:
             )
         if continuing:
             return
-        subagent_count = await self._dao.count_subagents(session, conversation_id, user_id)
+        try:
+            subagent_count = await self._dao.count_subagents(session, conversation_id, user_id)
+        except Exception as exc:
+            if not _is_session_schema_missing(exc):
+                raise
+            # 会话表/关闭列尚未迁移时只失去“关闭后释放额度”的能力，不能把
+            # 新派发全部阻断；退回旧口径：任务里出现过的子会话都计入。
+            logger.warning("子智能体会话表/关闭列尚未迁移，容量按未关闭会话统计", exc_info=True)
+            subagent_count = len(await self._dao.list_subagent_session_ids(session, conversation_id, user_id))
         if subagent_count >= max_subagents_per_conversation:
             raise SubagentTaskCapacityError(
-                f"当前主对话已创建 {subagent_count} 个子智能体，达到上限（{max_subagents_per_conversation} 个）。"
+                f"当前主对话已有 {subagent_count} 个可用子智能体，达到上限（{max_subagents_per_conversation} 个）。"
                 '请先用 subagent(action="list") 查看已有子智能体；任务类似时用 '
                 'subagent(action="follow_up", task_id=..., message=...) 复用原会话，不要新开。'
+                "如果已有智能体不再使用，请提示用户在子智能体管理面板关闭它们以腾出额度。"
             )
 
     async def get_task(
@@ -827,6 +1027,115 @@ class SubagentTaskService:
             user_id=user_id,
         )
 
+    async def get_session_state(
+        self,
+        session_id: str,
+        *,
+        conversation_id: str,
+        user_id: str,
+    ) -> SubagentSessionState | None:
+        """读取子智能体逻辑会话状态；缺失快照按未关闭处理。"""
+        try:
+            async with get_session() as session:
+                row = await subagent_session_dao.get(
+                    session,
+                    session_id,
+                    conversation_id=conversation_id,
+                    user_id=user_id,
+                )
+        except Exception:
+            logger.warning("子智能体会话状态读取失败，按未关闭处理: session_id=%s", session_id, exc_info=True)
+            return None
+        return _session_state(row) if row is not None else None
+
+    async def list_session_states(
+        self,
+        session_ids: Sequence[str],
+        *,
+        conversation_id: str,
+        user_id: str,
+    ) -> dict[str, SubagentSessionState]:
+        """批量读取会话状态；list 页面用一次查询标注哪些会话已关闭。"""
+        try:
+            async with get_session() as session:
+                rows = await subagent_session_dao.list_by_session_ids(
+                    session,
+                    list(session_ids),
+                    conversation_id=conversation_id,
+                    user_id=user_id,
+                )
+        except Exception:
+            logger.warning("子智能体会话状态批量读取失败，按未关闭处理", exc_info=True)
+            return {}
+        return {row.session_id: _session_state(row) for row in rows}
+
+    async def close_session(
+        self,
+        task_id: str,
+        *,
+        conversation_id: str,
+        user_id: str,
+        operator_name: str,
+    ) -> SubagentSessionState | None:
+        """永久关闭任务所属子会话；已关闭幂等返回，有活跃轮次时拒绝。"""
+        async with get_session() as session:
+            now = await self._dao.now(session)
+            thread = await agent_inbox_dao.lock_thread(session, conversation_id, user_id)
+            if thread is None:
+                raise AgentRunNotActiveError("会话不存在")
+            target_row = await self._dao.get(
+                session,
+                task_id,
+                conversation_id=conversation_id,
+                user_id=user_id,
+                for_update=True,
+            )
+            if target_row is None:
+                return None
+            target = SubagentTaskRecord.from_row(target_row, include_content=False)
+            session_id = target.agent_session_id
+            active_rows = await self._dao.list_active_for_conversation(
+                session,
+                conversation_id,
+                user_id,
+                ACTIVE_TASK_STATUSES,
+            )
+            if any(
+                SubagentTaskRecord.from_row(row, include_content=False).root_task_id == session_id
+                for row in active_rows
+            ):
+                raise SubagentSessionActiveError("该子智能体仍有进行中的任务，请先等待完成或取消，再关闭会话。")
+            snapshot = await subagent_session_dao.get(
+                session,
+                session_id,
+                conversation_id=conversation_id,
+                user_id=user_id,
+                for_update=True,
+            )
+            snapshot_turn_count = int(snapshot.turn_count or 1) if snapshot is not None else 0
+            # 收口时快照写失败会只丢快照，此时 snapshot 可能落后于已终态的最新任务；
+            # 从更新的一轮关闭时必须锚定目标任务，避免 turn_count 前进而
+            # latest_task_id 退回旧轮。从旧任务关闭仍保留快照里的最新指针。
+            latest_task_id = (
+                snapshot.latest_task_id
+                if snapshot is not None and target.turn_index <= snapshot_turn_count
+                else target.task_id
+            )
+            turn_count = max(snapshot_turn_count or 1, target.turn_index)
+            row = await subagent_session_dao.close(
+                session,
+                session_id=session_id,
+                conversation_id=conversation_id,
+                user_id=user_id,
+                latest_task_id=latest_task_id,
+                turn_count=turn_count,
+                now=now,
+                operator_name=operator_name,
+            )
+            state = _session_state(row)
+        logger.info("子智能体会话已关闭: session_id=%s task_id=%s", state.session_id, task_id)
+        return state
+
     async def publish_task_update(self, task: SubagentTaskRecord) -> None:
         """向当前活跃 Run 的 SSE 推送紧凑任务快照；失败只降级为前端轮询。"""
         now = time.monotonic()
@@ -931,6 +1240,13 @@ class SubagentTaskService:
             record = SubagentTaskRecord.from_row(row)
         await self.publish_task_update(record)
         return record.status
+
+    async def assert_task_owner(self, task_id: str, owner_token: str) -> None:
+        """工具副作用前的硬围栏；旧执行体即使恢复调度也不能继续调工具。"""
+        async with get_session() as session:
+            row = await self._dao.get(session, task_id)
+            if row is None or row.owner_token != owner_token or row.record_status != TASK_STATUS_RUNNING:
+                raise SubagentTaskLeaseLostError("子智能体任务已结束或已由其他 Worker 接管")
 
     async def enqueue_steer_message(
         self,
@@ -1115,7 +1431,9 @@ class SubagentTaskService:
             if row is None or row.owner_token != owner_token:
                 return None
             if row.record_status in TERMINAL_TASK_STATUSES:
-                return SubagentTaskRecord.from_row(row)
+                record = SubagentTaskRecord.from_row(row)
+                self._task_recovery_runners.pop(task_id, None)
+                return record
             final_status = TASK_STATUS_CANCELLED if row.record_status == TASK_STATUS_CANCELLING else status
             meta = load_task_meta(row.record_meta)
             # 结果快照（过程 trail / token 用量）动辄上百 KB，record_meta 是
@@ -1193,6 +1511,7 @@ class SubagentTaskService:
                         str(meta.get("agent_session_id") or meta.get("root_task_id") or task_id),
                         exc_info=True,
                     )
+        self._task_recovery_runners.pop(task_id, None)
         await self.publish_task_update(record)
         return record
 
@@ -1295,6 +1614,8 @@ class SubagentTaskService:
                     wake_policy=WAKE_POLICY_WAKE,
                     content=self._notification_text(record),
                 )
+            if record.is_terminal:
+                self._task_recovery_runners.pop(task_id, None)
         if cancelled_running:
             self.cancel_local_task(task_id)
         await self.publish_task_update(record)
@@ -1339,7 +1660,9 @@ class SubagentTaskService:
             row.update_time = now
 
     async def reap_expired_tasks(self, *, limit: int = 20) -> int:
-        reaped_ids: list[str] = []
+        recovered_ids: list[str] = []
+        terminal_ids: list[str] = []
+        lease_seconds = int(await get_runtime_setting("CHAT_DATA_SUBAGENT_TASK_LEASE_SECONDS"))
         async with get_session() as session:
             now = await self._dao.now(session)
             # 等待审批没有执行体与租约，不能被当成「执行节点失联」回收。
@@ -1348,50 +1671,165 @@ class SubagentTaskService:
                 return 0
             reaped = 0
             for row in rows:
-                status, report = _expired_status_and_report(row.record_status)
-                meta = load_task_meta(row.record_meta)
-                meta.update(
-                    {
-                        "finished_at": now.isoformat(),
-                        "phase": status,
-                        "error": "执行节点租约过期",
-                    }
-                )
-                progress = meta.get("progress")
-                progress = dict(progress) if isinstance(progress, dict) else {}
-                progress.update({"phase": status, "running_tools": 0})
-                meta["progress"] = progress
-                updated = await self._dao.update_any(
-                    session,
-                    row.message_id,
-                    allowed_statuses=ACTIVE_TASK_STATUSES,
-                    values={
-                        "record_status": status,
-                        "record_content": report,
-                        "record_meta": _task_meta_text(meta),
-                        "owner_token": None,
-                        "lease_expire_time": None,
-                        **({"consumed_time": now} if not bool(meta.get("notify_on_finish", True)) else {}),
-                        "update_time": now,
-                        "update_by": "system",
-                        "update_by_name": "system",
-                    },
-                )
-                reaped += updated
-                if updated:
-                    reaped_ids.append(row.message_id)
-                    logger.warning(
-                        "后台子智能体任务租约过期回收: task_id=%s old_status=%s new_status=%s",
-                        row.message_id,
-                        row.record_status,
-                        status,
-                    )
-        for task_id in reaped_ids:
-            record = await self.get_task(task_id)
-            if record is not None:
-                await self.publish_task_update(record)
-                await self._notify_reaped_terminal(record)
+                record = SubagentTaskRecord.from_row(row, include_content=False)
+                outcome = await self._reap_expired_record(session, record, now, lease_seconds)
+                if outcome == "recovered":
+                    recovered_ids.append(record.task_id)
+                    reaped += 1
+                elif outcome == "terminal":
+                    terminal_ids.append(record.task_id)
+                    reaped += 1
+        for task_id in recovered_ids:
+            recovered_record = await self.get_task(task_id)
+            if recovered_record is not None:
+                await self.publish_task_update(recovered_record)
+                await self._launch_recovered_task(recovered_record)
+        for task_id in terminal_ids:
+            terminal_record = await self.get_task(task_id)
+            if terminal_record is not None:
+                await self.publish_task_update(terminal_record)
+                await self._notify_reaped_terminal(terminal_record)
         return reaped
+
+    async def _reap_expired_record(
+        self,
+        session: Any,
+        record: SubagentTaskRecord,
+        now: datetime,
+        lease_seconds: int,
+    ) -> str:
+        if recovery_candidate(record):
+            # 同一进程内协程异常退出时，绑定的 runner 仍在，可直接接管；
+            # 进程重启后没有该任务的 runner，允许一个短暂宽限期等待装配，
+            # 超过后必须 fail-closed 标记 lost，不能让任务无限期停在 running。
+            if self._recovery_runner_for(record.task_id) is None:
+                return await defer_or_expire_missing_runner(self, session, record, now)
+            updated = await self._claim_expired_for_recovery(session, record, now, lease_seconds)
+            return "recovered" if updated else ""
+        updated = await self._mark_expired_terminal(session, record, now)
+        return "terminal" if updated else ""
+
+    async def _claim_expired_for_recovery(
+        self,
+        session: Any,
+        record: SubagentTaskRecord,
+        now: datetime,
+        lease_seconds: int,
+    ) -> int:
+        meta = dict(record.meta)
+        recovery_kind = "pending_start" if record.status == TASK_STATUS_PENDING else "checkpoint"
+        meta.update(
+            {
+                "execution_attempt": execution_attempt(meta) + 1,
+                "recovery_count": recovery_count(meta) + 1,
+                "last_recovery_at": now.isoformat(),
+                "last_recovery_reason": "lease_expired",
+                "recovery_kind": recovery_kind,
+                "parent_owner_token": "",
+            }
+        )
+        meta.pop("recovery_wait_started_at", None)
+        if record.status == TASK_STATUS_PENDING:
+            meta["started_at"] = now.isoformat()
+        progress = dict(record.progress)
+        progress.update({"phase": "recovering", "running_tools": 0, "updated_at": now.isoformat()})
+        meta["progress"] = progress
+        updated = await self._dao.update_expired(
+            session,
+            record.task_id,
+            owner_token=record.owner_token or "",
+            record_status=record.status,
+            lease_expire_time=record.lease_expire_time or now,
+            now=now,
+            values={
+                "record_status": TASK_STATUS_RUNNING,
+                "owner_token": uuid4().hex,
+                "lease_expire_time": now + timedelta(seconds=lease_seconds),
+                "record_meta": _task_meta_text(meta),
+                **({"claimed_time": now} if record.status == TASK_STATUS_PENDING else {}),
+                "update_time": now,
+                "update_by": "system",
+                "update_by_name": "system",
+            },
+        )
+        if updated:
+            logger.warning(
+                "后台子智能体失联任务已原子接管: task_id=%s kind=%s attempt=%s",
+                record.task_id,
+                recovery_kind,
+                meta["execution_attempt"],
+            )
+        return updated
+
+    async def _mark_expired_terminal(
+        self,
+        session: Any,
+        record: SubagentTaskRecord,
+        now: datetime,
+    ) -> int:
+        status, report = _expired_status_and_report(record.status)
+        meta = dict(record.meta)
+        meta.update({"finished_at": now.isoformat(), "phase": status, "error": "执行节点租约过期"})
+        progress = dict(record.progress)
+        progress.update({"phase": status, "running_tools": 0})
+        meta["progress"] = progress
+        updated = await self._dao.update_expired(
+            session,
+            record.task_id,
+            owner_token=record.owner_token or "",
+            record_status=record.status,
+            lease_expire_time=record.lease_expire_time or now,
+            now=now,
+            values={
+                "record_status": status,
+                "record_content": report,
+                "record_meta": _task_meta_text(meta),
+                "owner_token": None,
+                "lease_expire_time": None,
+                **({"consumed_time": now} if not record.notify_on_finish else {}),
+                "update_time": now,
+                "update_by": "system",
+                "update_by_name": "system",
+            },
+        )
+        if updated:
+            self._task_recovery_runners.pop(record.task_id, None)
+            logger.warning(
+                "后台子智能体任务租约过期回收: task_id=%s old_status=%s new_status=%s",
+                record.task_id,
+                record.status,
+                status,
+            )
+        return updated
+
+    async def _launch_recovered_task(self, record: SubagentTaskRecord) -> None:
+        runner = self._recovery_runner_for(record.task_id)
+        if runner is None:
+            return
+        runtime = recovery_runtime(record)
+        if runtime is None and record.meta.get("recovery_kind") == "pending_start":
+            await self.finish_task(
+                record.task_id,
+                record.owner_token or "",
+                status=TASK_STATUS_LOST,
+                report="任务启动前的恢复上下文缺失，已停止自动接管；请重新派发。",
+                error="pending 恢复上下文缺失",
+            )
+            return
+        task: asyncio.Task[None] = asyncio.create_task(
+            runner(record, runtime),
+            name=f"chatdata-subagent-recovery-{record.task_id}",
+        )
+        self.register_local_task(record.task_id, task)
+
+        def _on_done(completed: asyncio.Task[None]) -> None:
+            if completed.cancelled():
+                return
+            exc = completed.exception()
+            if exc is not None:
+                logger.error("后台子智能体恢复协程异常退出: task_id=%s", record.task_id, exc_info=exc)
+
+        task.add_done_callback(_on_done)
 
     async def _notify_reaped_terminal(self, record: SubagentTaskRecord) -> None:
         if not record.notify_on_finish:

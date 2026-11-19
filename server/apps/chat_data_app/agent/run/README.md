@@ -22,8 +22,13 @@ Standby/C 节点不参与 pending 轮询、过期 Run 回收、定时任务调�
 同样落一行，但 `execution_mode=sync`、`notify_on_finish=false`，结果直接回到当前轮，不创建
 完成通知 Run。任务状态：`pending → running → completed/failed/timeout/
 cancelled/interrupted/lost`；`cancelling` 是跨 worker 的取消请求，执行节点在下一次心跳
-（固定 5 秒）停止协程并收口。租约过期由
-活动节点的 `agent_run_runtime` 统一回收为 `lost`，避免多副本重复判断。
+（固定 5 秒）停止协程并收口。租约过期由活动节点的 `agent_run_runtime` 统一扫描，避免多副本
+重复判断。后台 pending/running 任务通过「旧 owner + 旧状态 + 旧租约」原子认领后自动接管，
+同一 `task_id` 最多恢复两次，并在 meta 记录 `execution_attempt/recovery_count`。恢复执行器
+按任务绑定在创建它的进程内；进程重启后没有该 runner，最多等待 120 秒，超时仍无执行器
+则收口为 `lost`，不会让任务无限期停在 running。pending 使用启动前持久化的白名单上下文
+重新启动，running 从独立检查点续跑；缺失检查点、超过恢复上限或无法确认工具副作用时仍收口为 `lost`。
+同步任务、cancelling、waiting_approval 和普通终态不进入自动崩溃恢复。
 
 - 所有需要主智能体感知的生命周期变化统一写入 `chat_data_subagent_event` outbox：
   `terminal`、`waiting_approval`、`resumed`，以及未来用户直聊子智能体的
@@ -73,6 +78,8 @@ cancelled/interrupted/lost`；`cancelling` 是跨 worker 的取消请求，执�
 - 每个主对话新建子智能体的总数受 `CHAT_DATA_SUBAGENT_MAX_PER_CONVERSATION`
   约束，按 `agent_session_id` 去重；追问复用原会话不占新额度。该限制只兜底“无限新开”，
   相似任务是否合并由提示词约束主智能体判断，不在后端硬编码任务相似度。
+- 单个主对话的活跃任务数受 `CHAT_DATA_SUBAGENT_TASK_MAX_ACTIVE` 约束。创建任务时先锁定
+  当前主对话行，再在该事务内完成容量检查与任务写入；不同主对话互不影响，不设全局或节点容量。
 - 即使用户从旧任务卡发起追问，后端也会锚定该子会话最新一轮作为 `parent_task_id`，上下文
   取当前会话快照，保证轮次与任务链不分叉。
 - 会话历史单条封顶 100k 字符、总量封顶 2M 字符；超限时从旧到新丢弃并插入省略说明。旧任务
@@ -80,6 +87,18 @@ cancelled/interrupted/lost`；`cancelling` 是跨 worker 的取消请求，执�
 - 新增表 DDL 只维护在 `server/apps/chat_data_app/next_version.md`，由发布流程/DBA 上线前
   手工执行；应用启动不会自动建表。生产库未执行建表时，任务收口与读取都会降级为无快照模式，
   不阻断主任务；但追问只能使用任务书+报告兜底，部署时应先建表。
+
+### 用户关闭子会话
+
+- 关闭由用户在子智能体管理面板发起，通过
+  `POST /conversations/{conversation_id}/subagent-tasks/{task_id}/close-session` 把该任务所属的
+  `chat_data_subagent_session` 置为 `session_status=closed` 并记录 `closed_time`；关闭是幂等的。
+- 只允许终态且没有活跃轮次的子会话关闭。仍有 `pending/running/cancelling/waiting_approval`
+  轮次时拒绝，用户应先等待或取消。关闭后释放当前主对话的一个子智能体额度。
+- 关闭不删除历史：`messages_json`、任务账本、报告和过程快照仍可查询；但 `follow_up`
+  会在创建新一轮前被拒绝，如需同类任务必须 `start` 新子智能体。
+- 关闭状态是会话级事实，不是任务状态；任务卡仍展示各自的终态，能力矩阵在会话关闭后
+  不再给出「追问」。主智能体没有关闭工具，只能在额度打满时提示用户去管理面板操作。
 
 ### 身份语义（任务 / 会话 / 智能体分层）
 
@@ -119,7 +138,9 @@ cancelled/interrupted/lost`；`cancelling` 是跨 worker 的取消请求，执�
   checkpoint 只负责执行恢复；审批落在模型调用前的安全点，恢复用
   `Command(resume=...)`。等待审批和审批恢复都会写生命周期事件，按
   wake/attach 策略同步给主会话；用户明确允许/拒绝后由主智能体调用
-  `subagent(action="approve"/"reject")` 继续。
-- 阶段 2：通知聚合、全局/节点容量、运行期子智能体类型注册与预算配置。
+  `subagent(action="approve"/"reject")` 继续。普通崩溃恢复使用
+  `Command(update={subagent_owner_token: ...})`，与审批 resume 是不同语义；两种恢复都会轮换
+  子图 owner，后台工具围栏只认当前 task owner，不认旧执行体或父 Run owner。
+- 阶段 2：通知聚合、运行期子智能体类型注册与预算配置。
 - 阶段 3：单层任务的查询/可观测性增强；API 只暴露智能体视图，不把 inbox
   扁平行泄露给前端。

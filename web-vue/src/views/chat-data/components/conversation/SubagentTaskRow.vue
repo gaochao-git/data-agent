@@ -14,11 +14,13 @@ const props = defineProps({
   /** 同一子会话的全部轮次，用于汇总工具调用次数与首末时间。 */
   sessionTasks: { type: Array as PropType<SubagentTaskRecord[]>, default: () => [] },
   cancelling: { type: Boolean, default: false },
+  closing: { type: Boolean, default: false },
 })
 
 const emit = defineEmits<{
   open: [task: SubagentTaskRecord]
   cancel: [task: SubagentTaskRecord]
+  closeSession: [task: SubagentTaskRecord]
 }>()
 
 const active = computed(() => isSubagentTaskActive(props.task))
@@ -128,6 +130,9 @@ const statusTextTone = computed(() => {
   }
 })
 
+const sessionClosed = computed(() => props.task.session_status === 'closed')
+const canCloseSession = computed(() => !active.value && !sessionClosed.value)
+
 const accentLineTone = computed(() => {
   switch (props.task.status) {
     case 'completed': return 'from-emerald-400 via-emerald-300/70 to-transparent'
@@ -205,6 +210,18 @@ const progressText = computed(() => {
             <i :class="cancelling ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-stop'" class="text-[9px]"></i>
             <span>{{ cancelling ? '取消中' : '取消' }}</span>
           </button>
+          <button
+            v-else-if="canCloseSession"
+            type="button"
+            class="inline-flex h-6 shrink-0 items-center gap-1 whitespace-nowrap rounded-md border border-slate-200 bg-white px-1.5 text-[11px] font-medium text-slate-500 transition-colors hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+            :disabled="closing"
+            data-subagent-task-close-session
+            :title="closing ? '正在关闭子智能体会话' : '关闭子智能体会话并释放额度'"
+            @click.stop="emit('closeSession', task)"
+          >
+            <i :class="closing ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-xmark'" class="text-[9px]"></i>
+            <span>{{ closing ? '关闭中' : '关闭' }}</span>
+          </button>
         </div>
       </div>
 
@@ -261,6 +278,12 @@ const progressText = computed(() => {
             <span class="h-1.5 w-1.5 rounded-full bg-current"></span>
             {{ statusLabel }}
           </span>
+          <span
+            v-if="sessionClosed"
+            class="inline-flex shrink-0 items-center rounded-sm bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500"
+            title="会话已永久关闭，历史仍可查看，不能继续追问"
+            data-subagent-session-closed
+          >已关闭</span>
           <template v-if="durationText">
             <span class="h-1 w-1 shrink-0 rounded-full bg-slate-300"></span>
             <span class="shrink-0 tabular-nums">{{ durationText }}</span>

@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Sequence
+from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Protocol
 
 TASK_STATUS_PENDING = "pending"
@@ -51,6 +53,8 @@ TASK_STATUS_LABELS = {
 TASK_HEARTBEAT_SECONDS = 5
 WORKSPACE_WRITE_SCOPE = "workspace:*"
 READ_ONLY_SUBAGENT_TYPES = frozenset({"explore"})
+SESSION_STATUS_OPEN = "open"
+SESSION_STATUS_CLOSED = "closed"
 
 
 def normalize_write_scope(raw: str) -> str:
@@ -94,6 +98,27 @@ def is_write_capable_subagent(subagent_type: str) -> bool:
 
 class SubagentTaskCapacityError(RuntimeError):
     """当前会话子智能体任务已达到并发或子智能体总数上限。"""
+
+
+class SubagentTaskLeaseLostError(RuntimeError):
+    """当前子任务执行代次已失去 owner，禁止继续产生工具副作用。"""
+
+
+class SubagentSessionClosedError(RuntimeError):
+    """子智能体会话已永久关闭，不能再创建追问轮次。"""
+
+
+class SubagentSessionActiveError(RuntimeError):
+    """子智能体会话仍有活跃任务，不能关闭。"""
+
+
+@dataclass(frozen=True)
+class SubagentSessionState:
+    """子智能体逻辑会话的生命周期状态。"""
+
+    session_id: str
+    status: str
+    closed_at: datetime | None = None
 
 
 def parse_task_status_filter(raw: str | None) -> set[str] | None:
@@ -227,6 +252,15 @@ class SubagentTaskPort(Protocol):
         write_scopes: Sequence[str],
     ) -> SubagentTaskView | None: ...
 
+    async def save_task_recovery_runtime(
+        self,
+        task_id: str,
+        owner_token: str,
+        *,
+        state: dict[str, Any],
+        tool_call_id: str | None,
+    ) -> SubagentTaskView | None: ...
+
     async def get_task(
         self,
         task_id: str,
@@ -252,6 +286,8 @@ class SubagentTaskPort(Protocol):
         owner_token: str,
         progress: dict[str, Any],
     ) -> str | None: ...
+
+    async def assert_task_owner(self, task_id: str, owner_token: str) -> None: ...
 
     async def enqueue_steer_message(
         self,
@@ -320,6 +356,22 @@ class SubagentTaskPort(Protocol):
         user_id: str,
     ) -> SubagentTaskView | None: ...
 
+    async def get_session_state(
+        self,
+        session_id: str,
+        *,
+        conversation_id: str,
+        user_id: str,
+    ) -> SubagentSessionState | None: ...
+
+    async def list_session_states(
+        self,
+        session_ids: Sequence[str],
+        *,
+        conversation_id: str,
+        user_id: str,
+    ) -> dict[str, SubagentSessionState]: ...
+
     async def cancel_task(
         self,
         conversation_id: str,
@@ -338,6 +390,8 @@ class SubagentTaskPort(Protocol):
 
     def create_event_writer(self, task: SubagentTaskView) -> Any: ...
 
+    def register_recovery_runner(self, runner: Any, *, task_id: str | None = None) -> None: ...
+
 
 _service: SubagentTaskPort | None = None
 
@@ -354,7 +408,13 @@ def get_subagent_task_service() -> SubagentTaskPort | None:
 
 __all__ = [
     "ACTIVE_TASK_STATUSES",
+    "SESSION_STATUS_CLOSED",
+    "SESSION_STATUS_OPEN",
+    "SubagentSessionActiveError",
+    "SubagentSessionClosedError",
+    "SubagentSessionState",
     "SubagentTaskCapacityError",
+    "SubagentTaskLeaseLostError",
     "SubagentTaskPort",
     "SubagentTaskView",
     "TASK_HEARTBEAT_SECONDS",

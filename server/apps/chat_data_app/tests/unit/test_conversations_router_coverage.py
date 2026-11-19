@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
-from apps.chat_data_app.agent.contracts.subagent_task import ACTIVE_TASK_STATUSES
+from apps.chat_data_app.agent.contracts.subagent_task import ACTIVE_TASK_STATUSES, SubagentSessionActiveError
 from apps.chat_data_app.routers import conversations as conversation_router
 from auth import AuthenticationError
 from utils.error_codes import ErrorCode
@@ -754,6 +754,38 @@ async def test_subagent_task_routes_list_detail_and_cancel(router_state, monkeyp
     body = payload(await conversation_router.cancel_subagent_task("conv_1", "t1", FakeRequest()))
     assert body["msg"] == "已提交取消请求"
     assert body["data"]["status"] == "cancelling"
+
+
+@pytest.mark.asyncio
+async def test_close_subagent_session_route_releases_quota_and_rejects_active(router_state, monkeypatch):
+    monkeypatch.setattr(conversation_router, "_get_current_user_identity", identity_sync)
+    calls = []
+
+    async def close_session(task_id, *, conversation_id, user_id, operator_name):
+        calls.append((task_id, conversation_id, user_id, operator_name))
+        if task_id == "active":
+            raise SubagentSessionActiveError("该子智能体仍有进行中的任务")
+        if task_id == "missing":
+            return None
+        return SimpleNamespace(session_id="agent-1", status="closed", closed_at=None)
+
+    monkeypatch.setattr(conversation_router.subagent_task_service, "close_session", close_session)
+
+    body = payload(await conversation_router.close_subagent_session("conv_1", "t1", FakeRequest()))
+    assert calls == [("t1", "conv_1", "u1", "用户一")]
+    assert body["data"] == {
+        "task_id": "t1",
+        "session_id": "agent-1",
+        "session_status": "closed",
+        "session_closed_at": None,
+    }
+    assert body["msg"] == "子智能体会话已关闭，额度已释放"
+
+    missing = await conversation_router.close_subagent_session("conv_1", "missing", FakeRequest())
+    assert missing.status_code == 404
+    active = await conversation_router.close_subagent_session("conv_1", "active", FakeRequest())
+    assert active.status_code == 409
+    assert payload(active)["msg"] == "该子智能体仍有进行中的任务"
 
 
 @pytest.mark.asyncio

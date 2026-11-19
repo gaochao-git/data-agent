@@ -7,7 +7,13 @@
  * - 有活跃任务时低频轮询，空闲 Run 也能看到进度，不依赖父 Run 一直在线。
  */
 import { computed, onBeforeUnmount, ref } from 'vue'
-import { cancelSubagentTask, getSubagentTask, listSubagentTasks } from '../api'
+import {
+  cancelSubagentTask,
+  closeSubagentSession,
+  getSubagentTask,
+  listSubagentTasks,
+  type CloseSubagentSessionResult,
+} from '../api'
 import type { SubagentTaskRecord, SubagentTaskStatus } from '../types'
 
 export const ACTIVE_SUBAGENT_TASK_STATUSES: ReadonlySet<SubagentTaskStatus> = new Set([
@@ -102,6 +108,9 @@ export const mergeSubagentTasks = (
       report: task.report ?? existing?.report,
       error: task.error ?? existing?.error,
       result_meta: task.result_meta ?? existing?.result_meta,
+      // 会话关闭是会话级事实，SSE 任务帧不带该字段；缺少时保留列表/详情已取到的值。
+      session_status: task.session_status ?? existing?.session_status,
+      session_closed_at: task.session_closed_at ?? existing?.session_closed_at,
     })
   }
   return sortTasks([...merged.values()])
@@ -225,6 +234,38 @@ export const useSubagentTasks = () => {
     }
   }
 
+  const markSessionClosed = (sessionId: string, closedAt: string | null) => {
+    if (!sessionId) return
+    const closeRow = (task: SubagentTaskRecord): SubagentTaskRecord =>
+      subagentTaskSessionId(task) === sessionId
+        ? { ...task, session_status: 'closed', session_closed_at: closedAt }
+        : task
+    tasks.value = tasks.value.map(closeRow)
+    const nextDetails = { ...details.value }
+    for (const [taskId, detail] of Object.entries(nextDetails)) {
+      nextDetails[taskId] = closeRow(detail)
+    }
+    details.value = nextDetails
+  }
+
+  const closeSession = async (taskId: string): Promise<CloseSubagentSessionResult | null> => {
+    const currentConversationId = conversationId
+    if (!currentConversationId) return null
+    const task = tasks.value.find(item => item.task_id === taskId) || details.value[taskId]
+    const knownSessionId = task ? subagentTaskSessionId(task) : ''
+    try {
+      const result = await closeSubagentSession(currentConversationId, taskId)
+      if (currentConversationId === conversationId) {
+        markSessionClosed(result.session_id || knownSessionId, result.session_closed_at)
+        void loadTasks(false)
+      }
+      return result
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : '关闭子智能体失败'
+      return null
+    }
+  }
+
   const setConversation = async (nextConversationId: string | null) => {
     const normalized = nextConversationId || null
     if (normalized === conversationId) {
@@ -254,6 +295,7 @@ export const useSubagentTasks = () => {
     applyTaskUpdate,
     loadTaskDetail,
     cancelTask,
+    closeSession,
     stopPolling,
   }
 }
