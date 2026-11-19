@@ -147,12 +147,17 @@ const {
 
 const sidePanelRef = ref<InstanceType<typeof ConversationSidePanel> | null>(null)
 
+// 最近一次点击打开的工具对象。内层工具只存在于任务详情 trail，父级按 id
+// 可能解析不到；此时直接以打开 tab 时拿到的对象为准，避免详情页空白。
+const openedToolCalls = new Map<string, ToolCallInfo>()
+
 const toolCallForTab = (tab: RightSidebarTab | null | undefined): ToolCallInfo | null => {
   const toolCallId = tab?.toolCallId
   if (!toolCallId) return null
   const resolved = props.resolveToolCall?.(toolCallId)
   if (resolved) return resolved
-  return props.activeToolCall?.tool_call_id === toolCallId ? props.activeToolCall : null
+  if (props.activeToolCall?.tool_call_id === toolCallId) return props.activeToolCall
+  return openedToolCalls.get(toolCallId) || null
 }
 
 const displayToolCall = computed(() => toolCallForTab(displayToolTab.value))
@@ -341,6 +346,7 @@ const findSubagentTaskByToolCall = (toolCallId: string): SubagentTaskRecord | nu
 }
 
 const openToolPanelTab = (toolCall: ToolCallInfo) => {
+  openedToolCalls.set(toolCall.tool_call_id, toolCall)
   // subagent 调用的工具结果只是「已开始/已结束」，真正过程与报告在任务账本里；
   // 能按 parent_tool_call_id 找到任务时直接进任务详情页（与「子智能体管理」
   // 同一个页面），避免同步与异步出现两套展示。
@@ -1432,6 +1438,7 @@ watch(
     if (prevId && nextId) {
       selectedConsoleFilePath.value = null
       knownNestedDirectories.clear()
+      openedToolCalls.clear()
       collapsedConsoleDirectories.value = new Set(DEFAULT_COLLAPSED_CONSOLE_DIRECTORIES)
       // 会话切换：面板 tab 回到工作区根，不把上个会话的工具/文件 tab 带过来
       resetTabs()

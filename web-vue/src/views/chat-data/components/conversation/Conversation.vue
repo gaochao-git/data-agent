@@ -733,6 +733,9 @@ const resetTokenUsagePanel = (clearUsage = true) => {
 // 详情查找经 findToolCallById 的 trail 兜底完成。
 const toolCallsMap = ref<Map<string, ToolCallInfo>>(new Map())
 const activeToolCallId = ref<string | null>(null)
+// 点击时带过来的工具对象：内层工具只存在于任务详情 trail 里，顶层 map / 消息
+// 都查不到。没有这份兜底时，详情 tab 会按 id 解析为空而整页空白，行内高亮也会丢。
+const selectedToolCall = ref<ToolCallInfo | null>(null)
 const sidePanelOpen = ref(false)
 // 右侧管理面板整体拆到 ConversationWorkspacePanel.vue：管理首页、文件列表/树/预览、子智能体任务
 // 与刷新调度都在子组件内闭环，父级只通过 ref 调用刷新与打开入口。
@@ -1061,7 +1064,9 @@ const findToolCallById = (id: string | null) => {
 
 const activeToolCall = computed(() => {
   const id = activeToolCallId.value
+  if (!id) return null
   return findToolCallById(id)
+    || (selectedToolCall.value?.tool_call_id === id ? selectedToolCall.value : null)
 })
 
 // 查询结果渲染口径统一在 utils/semanticTool（主对话 / 子智能体过程共用）
@@ -1202,6 +1207,7 @@ const handleCreateDashboardFromPreview = async (message: Message, tool: ToolCall
 
 const selectToolCall = (toolCall: ToolCallInfo) => {
   // 右侧面板是 tab 容器：点工具只负责打开/激活对应 tab，不再抢占其他 tab 的内容。
+  selectedToolCall.value = toolCall
   activeToolCallId.value = toolCall.tool_call_id
   sidePanelOpen.value = true
   workspacePanelRef.value?.openTool(toolCall)
@@ -1601,6 +1607,7 @@ watch(
       loadedPresentedArtifactKeys.value = new Set()
       loadingPresentedArtifactKeys.value = new Set()
       activeToolCallId.value = null
+      selectedToolCall.value = null
       sidePanelOpen.value = false
           activeAssistantMessageId.value = null
       resetTokenUsagePanel()
@@ -2096,6 +2103,7 @@ const submitAnalysisQuery = async (
   isGenerating.value = true
   startLiveElapsedTicker(options.elapsedSeedMs)
   activeToolCallId.value = null
+  selectedToolCall.value = null
   let startedRunId: string | null = null
   let completedNextRunId: string | null = null
   let completedRunStatus: RunDoneStatus | null = null

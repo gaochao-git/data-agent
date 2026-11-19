@@ -544,4 +544,55 @@ describe('ConversationWorkspacePanel tab 容器', () => {
     expect(tabTitles(wrapper)).toEqual(['工作台'])
     expect(wrapper.find('[data-right-sidebar-home]').exists()).toBe(true)
   })
+
+  it('任务详情里点内层工具时，即使父级按 id 解析不到，也展示点击对象的参数和结果', async () => {
+    const innerToolCall: ToolCallInfo = {
+      tool_call_id: 'inner-tool-1',
+      tool_name: 'file_read',
+      status: 'completed',
+      args: { path: 'reports/入金趋势.md' },
+      result: '近 30 天入金趋势已核对',
+    }
+    const detailedTask: SubagentTaskRecord = {
+      ...backgroundTask,
+      result_meta: {
+        subagent_trail: [
+          { kind: 'message', id: 'm1', content: '先读取报告文件' },
+          {
+            kind: 'tool',
+            id: innerToolCall.tool_call_id,
+            tool_name: innerToolCall.tool_name,
+            args: innerToolCall.args,
+            result: innerToolCall.result,
+            status: 'completed',
+          },
+        ],
+      },
+    }
+    const wrapper = mountPanel({
+      subagentTasks: [detailedTask],
+      subagentTaskDetails: { [detailedTask.task_id]: detailedTask },
+      // 复现父对话的真实状态：内层工具不在顶层工具表/trail 里，按 id 查不到；
+      // activeToolCall 也是查不到后的 null，只能依赖点击时带过来的对象。
+      activeToolCall: null,
+      resolveToolCall: () => null,
+    })
+    const vm = wrapper.vm as unknown as {
+      openSubagentTask: (task: SubagentTaskRecord) => void
+      openTool: (call: ToolCallInfo) => void
+    }
+
+    vm.openSubagentTask(detailedTask)
+    await wrapper.vm.$nextTick()
+    vm.openTool(innerToolCall)
+    await wrapper.vm.$nextTick()
+
+    const detail = wrapper.findComponent({ name: 'ToolCallDetailPanel' })
+    expect(detail.exists()).toBe(true)
+    expect(detail.props('toolCall')).toMatchObject({
+      tool_call_id: 'inner-tool-1',
+      args: { path: 'reports/入金趋势.md' },
+      result: '近 30 天入金趋势已核对',
+    })
+  })
 })
