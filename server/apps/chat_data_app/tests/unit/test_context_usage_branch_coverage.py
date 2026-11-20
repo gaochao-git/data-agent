@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "..
 from apps.chat_data_app.agent.middleware import context_usage as cu
 from apps.chat_data_app.agent.middleware.context_usage import (
     ModelResponse,
+    _add_actual_input_usage,
     _add_cache_hit_rate,
     _add_cached_input_usage,
     _cached_tokens_from_details,
@@ -109,7 +110,6 @@ def test_add_cached_input_usage_without_current_cached_tokens():
     )
     assert "current_cached_input_tokens" not in payload
     assert payload["cumulative_cached_input_tokens"] == 5
-    assert payload["cumulative_actual_input_tokens"] == 10
     assert payload["cumulative_cache_hit_rate"] == 50.0
 
 
@@ -159,11 +159,48 @@ def test_add_cached_input_usage_clamps_anomalous_cache_to_input():
         {"cached_input_tokens": 50, "actual_input_tokens": 20},
     )
     assert payload["current_cached_input_tokens"] == 20
-    assert payload["current_actual_input_tokens"] == 20
     assert payload["current_cache_hit_rate"] == 100.0
     assert payload["cumulative_cached_input_tokens"] == 20
-    assert payload["cumulative_actual_input_tokens"] == 20
     assert payload["cumulative_cache_hit_rate"] == 100.0
+
+
+def test_add_actual_input_usage_is_independent_from_cache_reporting():
+    """实际输入 token 不依赖缓存字段：完整覆盖时标记 actual。"""
+    payload = {}
+    _add_actual_input_usage(
+        payload,
+        [
+            {"actual_input_tokens": 120},
+            {"actual_input_tokens": 400},
+        ],
+        {"actual_input_tokens": 400},
+    )
+
+    assert payload["current_actual_input_tokens"] == 400
+    assert payload["actual_input_calls"] == 2
+    assert payload["cumulative_actual_input_tokens"] == 520
+    assert payload["input_tokens_source"] == "actual"
+
+
+def test_add_actual_input_usage_marks_partial_or_missing_as_estimated():
+    """任一调用缺实际值时不把已上报部分冒充完整输入账单。"""
+    partial = {}
+    _add_actual_input_usage(
+        partial,
+        [
+            {"actual_input_tokens": 120},
+            {"input_tokens": 300},
+        ],
+        {"input_tokens": 300},
+    )
+    assert partial["actual_input_calls"] == 1
+    assert partial["cumulative_actual_input_tokens"] == 120
+    assert partial["input_tokens_source"] == "estimated"
+    assert "current_actual_input_tokens" not in partial
+
+    missing = {}
+    _add_actual_input_usage(missing, [{"input_tokens": 300}], {"input_tokens": 300})
+    assert missing == {"input_tokens_source": "estimated"}
 
 
 # ---------------------------------------------------------------------------

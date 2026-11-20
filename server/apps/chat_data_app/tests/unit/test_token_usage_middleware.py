@@ -651,6 +651,22 @@ def test_build_usage_from_llm_calls_includes_cache_metrics_only_when_reported():
     assert "current_cache_hit_rate" not in unsupported_usage
 
 
+def test_build_usage_from_llm_calls_exposes_actual_input_without_cache():
+    """实际输入累计不依赖缓存字段，完整上报时可直接作为展示口径。"""
+    usage = build_usage_from_llm_calls(
+        [
+            {"index": 1, "input_tokens": 100, "actual_input_tokens": 120, "output_tokens": 10},
+            {"index": 2, "input_tokens": 300, "actual_input_tokens": 400, "output_tokens": 20},
+        ],
+        1000,
+    )
+
+    assert usage["actual_input_calls"] == 2
+    assert usage["cumulative_actual_input_tokens"] == 520
+    assert usage["input_tokens_source"] == "actual"
+    assert "cumulative_cached_input_tokens" not in usage
+
+
 def test_build_usage_from_llm_calls_returns_none_for_empty_calls():
     assert build_usage_from_llm_calls([], 1000) is None
 

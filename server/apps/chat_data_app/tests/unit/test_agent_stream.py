@@ -66,6 +66,32 @@ def test_resolve_active_tool_call_id_prefers_chunk_id():
     assert _resolve_active_tool_call_id("tool_c", "tool_b", running) == "tool_c"
 
 
+def test_usage_aux_stats_prefers_complete_actual_input_tokens():
+    usage = {
+        "cumulative_input_tokens": 600,
+        "cumulative_actual_input_tokens": 720,
+        "input_tokens_source": "actual",
+        "output_tokens": 60,
+    }
+
+    stats = agent_stream_module._usage_aux_stats(usage)
+
+    assert stats["input_tokens"] == 720
+
+
+def test_usage_aux_stats_falls_back_to_estimated_input_tokens():
+    usage = {
+        "cumulative_input_tokens": 600,
+        "cumulative_actual_input_tokens": 120,
+        "input_tokens_source": "estimated",
+        "output_tokens": 60,
+    }
+
+    stats = agent_stream_module._usage_aux_stats(usage)
+
+    assert stats["input_tokens"] == 600
+
+
 def test_resolve_active_tool_call_id_uses_current_active_when_chunk_id_missing():
     running = ["tool_a", "tool_b"]
     assert _resolve_active_tool_call_id(None, "tool_b", running) == "tool_b"

@@ -246,8 +246,10 @@ _STATE_USAGE_FIELDS = (
     "estimated",
     "current_cached_input_tokens",
     "current_actual_input_tokens",
+    "actual_input_calls",
     "cumulative_cached_input_tokens",
     "cumulative_actual_input_tokens",
+    "input_tokens_source",
     "current_cache_hit_rate",
     "cumulative_cache_hit_rate",
 )
@@ -494,6 +496,7 @@ def build_usage_from_llm_calls(calls: list[dict[str, Any]], budget: ContextBudge
             "breakdown": list(current_call.get("breakdown") or []),
         }
     )
+    _add_actual_input_usage(payload, calls, current_call)
     _add_cached_input_usage(payload, calls, current_call)
     return payload
 
@@ -745,7 +748,6 @@ def _add_cached_input_usage(
             scope="current",
         )
         payload["current_cached_input_tokens"] = current_cached_tokens
-        payload["current_actual_input_tokens"] = current_actual_input_tokens
         _add_cache_hit_rate(
             payload,
             "current_cache_hit_rate",
@@ -769,7 +771,6 @@ def _add_cached_input_usage(
         )
         cumulative_actual_input_tokens += actual_input_tokens
     payload["cumulative_cached_input_tokens"] = cumulative_cached_tokens
-    payload["cumulative_actual_input_tokens"] = cumulative_actual_input_tokens
     _add_cache_hit_rate(
         payload,
         "cumulative_cache_hit_rate",
@@ -777,6 +778,35 @@ def _add_cached_input_usage(
         cumulative_actual_input_tokens,
         has_reported_input=cumulative_actual_input_tokens > 0,
     )
+
+
+def _add_actual_input_usage(
+    payload: dict[str, Any],
+    calls: list[dict[str, Any]],
+    current_call: dict[str, Any],
+) -> None:
+    """暴露 provider 实际输入 token；全部调用都有实际值时才可作为展示口径。
+
+    实际输入累计不能依赖缓存字段：不支持缓存上报的 provider 同样会返回
+    ``usage_metadata.input_tokens``。``input_tokens_source`` 明确标记实际值是否
+    覆盖整轮调用，调用方据此在“实际值”和上下文估算值之间选择，避免部分调用
+    缺少 usage 时静默少算。
+    """
+    current_actual = _optional_non_negative_int(current_call.get("actual_input_tokens"))
+    if current_actual is not None:
+        payload["current_actual_input_tokens"] = current_actual
+
+    actual_calls = [
+        call for call in calls if _optional_non_negative_int(call.get("actual_input_tokens")) is not None
+    ]
+    if not actual_calls:
+        payload["input_tokens_source"] = "estimated"
+        return
+    payload["actual_input_calls"] = len(actual_calls)
+    payload["cumulative_actual_input_tokens"] = sum(
+        _optional_non_negative_int(call.get("actual_input_tokens")) or 0 for call in actual_calls
+    )
+    payload["input_tokens_source"] = "actual" if len(actual_calls) == len(calls) else "estimated"
 
 
 def _add_cache_hit_rate(

@@ -442,8 +442,15 @@ def _usage_aux_stats(usage: Any | None, *, model_name: str | None = None) -> dic
     if not isinstance(usage, dict):
         return {}
     aux: dict[str, Any] = {}
-    # 输入总 token：本轮全部模型调用的输入累计。
-    input_tokens = int(usage.get("cumulative_input_tokens") or usage.get("input_tokens") or 0)
+    # 输入总 token：provider 实际值覆盖本轮全部调用时用实际值；部分调用缺少
+    # usage 时回退上下文估算，避免把“已上报部分”误当成完整账单。
+    actual_input_tokens = int(usage.get("cumulative_actual_input_tokens") or 0)
+    use_actual_input = usage.get("input_tokens_source") == "actual" and actual_input_tokens > 0
+    input_tokens = (
+        actual_input_tokens
+        if use_actual_input
+        else int(usage.get("cumulative_input_tokens") or usage.get("input_tokens") or 0)
+    )
     if input_tokens > 0:
         aux["input_tokens"] = input_tokens
     # 缓存命中：本轮全部模型调用的缓存输入累计（命中率随行，仅在输入可报时存在）。
