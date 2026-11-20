@@ -6,6 +6,7 @@ import pytest
 from langchain_core.messages import AIMessage, AIMessageChunk, RemoveMessage, ToolMessage
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
 
+from apps.chat_data_app.agent.middleware import subagent_stream as subagent_stream_module
 from apps.chat_data_app.agent.middleware import subagents as subagents_module
 from apps.chat_data_app.agent.middleware.subagents import (
     SubagentSpec,
@@ -293,6 +294,153 @@ async def test_subagent_usage_detail_flows_from_state_update_to_sse_and_snapshot
         subagents_module._resolve_subagent_usage_detail(captured),
     )
     assert snapshot["subagent_token_usage_detail"]["breakdown"]
+
+
+@pytest.mark.asyncio
+async def test_subagent_live_context_event_carries_accumulated_billing_tokens():
+    """运行中的上下文事件同时携带已累计的 billing token，前端无需等任务收口。"""
+    written = []
+
+    class FakeRunnable:
+        async def astream(self, _state, _config, *, stream_mode):
+            yield (
+                "updates",
+                {
+                    "model": {
+                        "messages": [
+                            AIMessage(
+                                content="第一步结论",
+                                id="m1",
+                                usage_metadata={
+                                    "input_tokens": 1_200,
+                                    "output_tokens": 120,
+                                    "total_tokens": 1_320,
+                                    "input_token_details": {"cache_read": 600},
+                                    "output_token_details": {"reasoning": 80},
+                                },
+                                additional_kwargs={
+                                    "started_at_ms": 1_700_000_000_000,
+                                    "ended_at_ms": 1_700_000_001_000,
+                                },
+                            )
+                        ]
+                    }
+                },
+            )
+            yield (
+                "updates",
+                {
+                    "model": {
+                        "messages": [
+                            AIMessage(
+                                content="最终结论",
+                                id="m2",
+                                usage_metadata={
+                                    "input_tokens": 2_000,
+                                    "output_tokens": 200,
+                                    "total_tokens": 2_200,
+                                    "input_token_details": {"cache_read": 1_000},
+                                },
+                                additional_kwargs={
+                                    "started_at_ms": 1_700_000_001_000,
+                                    "ended_at_ms": 1_700_000_003_000,
+                                },
+                            )
+                        ],
+                        "token_usage": {
+                            "llm_calls": [{"model": "SenseNova-Loop-9B-MLX-6bit"}],
+                        },
+                    }
+                },
+            )
+
+    captured: dict = {}
+    collected = await subagents_module._run_subagent_with_events(
+        FakeRunnable(),
+        {},
+        {},
+        written.append,
+        collected=[],
+        captured=captured,
+        usage_meta={"static_tokens": 0, "threshold_tokens": 32_000, "context_window": 64_000},
+    )
+
+    usage_events = [
+        payload["event"] for payload in written if payload["event"]["event_type"] == "subagent_context_usage"
+    ]
+    assert len(usage_events) == 2
+    assert usage_events[0]["subagent_token_usage"] == {
+        "input_tokens": 1_200,
+        "output_tokens": 120,
+        "total_tokens": 1_320,
+        "cache_read_input_tokens": 600,
+        "cache_creation_input_tokens": 0,
+        "reasoning_tokens": 80,
+    }
+    assert usage_events[1]["subagent_token_usage"] == {
+        "model": "SenseNova-Loop-9B-MLX-6bit",
+        "input_tokens": 3_200,
+        "output_tokens": 320,
+        "total_tokens": 3_520,
+        "cache_read_input_tokens": 1_600,
+        "cache_creation_input_tokens": 0,
+        "reasoning_tokens": 80,
+    }
+    snapshot = subagents_module._subagent_process_snapshot(
+        collected,
+        captured["context_usage"],
+        model_name=captured.get("model"),
+    )
+    assert snapshot["subagent_token_usage"] == usage_events[1]["subagent_token_usage"]
+
+
+def test_aggregate_subagent_token_usage_uses_decode_window_and_deducts_tools():
+    """完成态速率与主对话同口径：首 token→流结束，扣工具时间，TTFT 不进分母。"""
+    messages = [
+        AIMessage(
+            content="结论",
+            id="m1",
+            usage_metadata={"input_tokens": 100, "output_tokens": 200, "total_tokens": 300},
+        )
+    ]
+
+    usage = subagents_module._aggregate_subagent_token_usage(
+        messages,
+        {
+            "first_token_wall_ms": 1_000,
+            "stream_ended_wall_ms": 3_000,
+            "tool_duration_ms": 500,
+        },
+    )
+
+    assert usage["output_tokens"] == 200
+    assert usage["tokens_per_second"] == 133  # 200 / ((3000 - 1000 - 500) / 1000)
+
+
+def test_iter_chunk_stream_events_samples_speed_before_preview_cap(monkeypatch):
+    """实时速率采样使用封顶前的完整可见文本，避免超过预览上限后冻结。"""
+    monkeypatch.setattr(subagent_stream_module, "SUBAGENT_MESSAGE_PREVIEW_MAX_CHARS", 5)
+    speed_chunks: list[str] = []
+    text_caps: dict = {}
+
+    first_events = subagents_module._iter_chunk_stream_events(
+        AIMessageChunk(content="abcdef", id="m1"),
+        "p1",
+        text_caps,
+        {},
+        speed_chunks=speed_chunks,
+    )
+    second_events = subagents_module._iter_chunk_stream_events(
+        AIMessageChunk(content="ghij", id="m1"),
+        "p1",
+        text_caps,
+        {},
+        speed_chunks=speed_chunks,
+    )
+
+    assert first_events[0]["truncated"] is True
+    assert second_events == []
+    assert speed_chunks == ["abcdef", "ghij"]
 
 
 @pytest.mark.asyncio

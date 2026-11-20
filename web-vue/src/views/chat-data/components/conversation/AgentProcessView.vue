@@ -41,6 +41,7 @@ const { elapsedMs, isRunning } = useToolTiming(
     :elapsed-ms="elapsedMs"
     :timing-running="isRunning"
     :token-usage="toolCall.subagentTokenUsage || null"
+    :live-speed="toolCall.subagentLiveSpeed || null"
     @select-tool="emit('selectTool', $event)"
   />
 </template>

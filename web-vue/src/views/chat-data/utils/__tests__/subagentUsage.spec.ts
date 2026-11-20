@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildSubagentTokenUsageText, formatTokenCount, resolveSubagentContextUsage } from '../subagentUsage'
+import { buildSubagentTokenUsageRows, buildSubagentTokenUsageText, formatTokenCount, resolveSubagentContextUsage } from '../subagentUsage'
 
 describe('subagentUsage', () => {
   it('token 数紧凑展示', () => {
@@ -15,10 +15,26 @@ describe('subagentUsage', () => {
       input_tokens: 3_000,
       output_tokens: 300,
       cache_read_input_tokens: 1_000,
-    })).toBe('tokens 输入 3.0k · 输出 300 · 缓存命中 33%')
+    })).toBe('tokens 输入 3k · 输出 300 · 缓存命中 33.3%')
     expect(buildSubagentTokenUsageText({ output_tokens: 50 })).toBe('tokens 输出 50')
     expect(buildSubagentTokenUsageText(null)).toBe('')
     expect(buildSubagentTokenUsageText({})).toBe('')
+  })
+
+  it('用量浮层按主对话口径生成模型与分组明细', () => {
+    expect(buildSubagentTokenUsageRows({
+      model: 'SenseNova-Loop-9B-MLX-6bit',
+      input_tokens: 19_600,
+      output_tokens: 450,
+      cache_read_input_tokens: 18_600,
+      tokens_per_second: 7,
+    })).toEqual([
+      { label: '输入总token', value: '19.6k' },
+      { label: '缓存命中', value: '94.9%' },
+      { label: '输出总token', value: '450' },
+      { label: 'token速率', value: '7 tok/s' },
+    ])
+    expect(buildSubagentTokenUsageRows(null)).toEqual([])
   })
 
   it('上下文快照优先于计量明细，明细只补充 breakdown', () => {

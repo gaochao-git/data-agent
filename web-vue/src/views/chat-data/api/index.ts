@@ -1851,8 +1851,8 @@ export function getConversationTokenUsageDetail(conversationId: string): Promise
   })
 }
 
-/** 获取历史会话绑定的数据源组。 */
-export function getConversationContext(conversationId: string): Promise<ApiResponse<{ conversation_id: string; datasource_id?: string | null }>> {
+/** 获取历史会话绑定的数据源组与实际使用模型。 */
+export function getConversationContext(conversationId: string): Promise<ApiResponse<{ conversation_id: string; datasource_id?: string | null; model_id?: string | null }>> {
   return request({
     url: `/agents/api/chatdata/conversations/${conversationId}/context`,
     method: 'get',

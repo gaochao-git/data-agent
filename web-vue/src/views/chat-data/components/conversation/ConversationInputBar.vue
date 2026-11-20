@@ -90,9 +90,16 @@ const emit = defineEmits<{
   blur: []
   'update:input': [value: string]
   'update:selectedModel': [value: string]
+  /** 用户从模型菜单手选（区别于父组件回填历史/运行中模型），供页面记住最后选择。 */
+  modelPicked: [value: string]
   'update:enableDeepThinking': [value: boolean]
   'update:thinkingEffort': [value: string]
 }>()
+
+const handleModelUpdate = (value: string) => {
+  emit('update:selectedModel', value)
+  emit('modelPicked', value)
+}
 
 const handleDocumentClick = (event: MouseEvent) => {
   const target = event.target
@@ -259,7 +266,7 @@ onBeforeUnmount(() => {
         :enable-deep-thinking="enableDeepThinking"
         :thinking-effort="thinkingEffort"
         :is-generating="isGenerating"
-        @update:selected-model="emit('update:selectedModel', $event)"
+        @update:selected-model="handleModelUpdate"
         @update:enable-deep-thinking="emit('update:enableDeepThinking', $event)"
         @update:thinking-effort="emit('update:thinkingEffort', $event)"
       >

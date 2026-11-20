@@ -43,6 +43,34 @@ describe('ConversationInputBar actions', () => {
 
     expect(wrapper.emitted('pasteFiles')?.[0]).toEqual([[file]])
   })
+
+  it('只把手选模型标记为 modelPicked，供页面记住新会话的模型', async () => {
+    const wrapper = mount(ConversationInputBar, {
+      props: {
+        input: '',
+        placeholder: '输入问题',
+        selectedModel: 'model-a',
+        modelOptions: [
+          { id: 'model-a', label: '模型 A' },
+          { id: 'model-b', label: '模型 B' },
+        ],
+        enableDeepThinking: false,
+        thinkingEffort: null,
+        isGenerating: false,
+        canSubmit: false,
+      },
+    })
+
+    await wrapper.find('[title="模型设置"]').trigger('click')
+    const modelsEntry = wrapper.findAll('button')
+      .find(button => button.attributes('title') !== '模型设置' && button.text().startsWith('模型'))!
+    await modelsEntry.trigger('click')
+    const optionB = wrapper.findAll('button').find(button => button.text() === '模型 B')!
+    await optionB.trigger('click')
+
+    expect(wrapper.emitted('update:selectedModel')?.[0]).toEqual(['model-b'])
+    expect(wrapper.emitted('modelPicked')?.[0]).toEqual(['model-b'])
+  })
 })
 
 describe('ConversationInputBar thinking level menu', () => {

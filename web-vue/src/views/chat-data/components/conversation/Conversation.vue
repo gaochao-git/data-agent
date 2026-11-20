@@ -93,6 +93,8 @@ const emit = defineEmits<{
   conversationTitleChanged: [conversationId: string, title: string]
   'update:selectedMemberDatasourceIds': [value: string[]]
   'update:selectedModelId': [value: string]
+  /** 用户手选模型（不含历史/运行中回填），页面据此更新新会话的默认选择。 */
+  modelPicked: [value: string]
   dashboardCreated: [dashboard: Dashboard]
   /** 控制台面板可见性广播：页面右上角的控制台开关按钮据此切换图标与提示。 */
   consoleVisibilityChanged: [visible: boolean]
@@ -1331,6 +1333,8 @@ const {
     activeRunStatus.value = (activeRun?.status || null) as RunActiveStatus | null
     activeRunTurnId.value = activeRun?.turn_id || null
     activeRunIsContinuation.value = Boolean(activeRun?.is_continuation)
+    // 运行中模型选择器展示当前 Run 实际使用的模型；后端已归一成注册表 ID。
+    if (activeRun?.model_id) selectedModel.value = activeRun.model_id
     activeRunResumeRunId.value = activeRun?.run_id || null
     activeRunEventId.value = activeRun?.history_checkpoint?.stream_id || '0-0'
     activeRunStartedAtMs.value = activeRun?.stream_started_wall_ms ?? null
@@ -1549,10 +1553,11 @@ const startSkillCreation = async () => {
   inputBarRef.value?.focus()
 }
 
-// 当前选中模型不在注册表中时回填默认模型（如配置变更后）
-watch(modelOptions, (models) => {
+// 空选择 = 新会话；无效选择 = 注册表变更后的残留。两者都回填默认模型；
+// 历史会话回填的真实模型已在列表中，不会被覆盖。
+watch([modelOptions, selectedModel], ([models, currentModel]) => {
   const defaultModel = models.find(item => item.is_default)?.id || models[0]?.id || ''
-  if (defaultModel && !models.some(item => item.id === selectedModel.value)) {
+  if (defaultModel && (!currentModel || !models.some(item => item.id === currentModel))) {
     selectedModel.value = defaultModel
   }
 }, { immediate: true })
@@ -1879,6 +1884,14 @@ const upsertSubagentTrailItem = (event: ToolLifecycleEventData) => {
 
   if (event.type === 'subagent_context_compression') {
     upsertSubagentCompaction(event)
+    return
+  }
+
+  if (event.type === 'subagent_generation_speed') {
+    const speed = Number(event.tokens_per_second)
+    if (Number.isFinite(speed) && speed > 0) {
+      applySubagentToolPatch(parentId, tool => ({ ...tool, subagentLiveSpeed: speed }))
+    }
     return
   }
 
@@ -3110,6 +3123,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
             :submit-title="replayArmed ? '回车开始回放' : (!selectedDatasource ? '请先选择数据源' : '发送 (Enter)')"
             @submit="handleSubmit"
             @stop="handleStop"
+            @model-picked="emit('modelPicked', $event)"
             @clear-skill="clearSelectedSkill"
             @clear-mention-file="handleMentionFileClear"
             @remove-quote-snippet="removeQuotedSnippet"

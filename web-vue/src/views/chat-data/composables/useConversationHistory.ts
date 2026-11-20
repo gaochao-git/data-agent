@@ -326,12 +326,14 @@ const normalizeSubagentTokenUsage = (value: unknown): SubagentTokenUsage | undef
     return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : undefined
   }
   const usage: SubagentTokenUsage = {
+    model: typeof raw.model === 'string' && raw.model.trim() ? raw.model.trim() : undefined,
     input_tokens: toNonNegativeInt(raw.input_tokens),
     output_tokens: toNonNegativeInt(raw.output_tokens),
     total_tokens: toNonNegativeInt(raw.total_tokens),
     cache_read_input_tokens: toNonNegativeInt(raw.cache_read_input_tokens),
     cache_creation_input_tokens: toNonNegativeInt(raw.cache_creation_input_tokens),
     reasoning_tokens: toNonNegativeInt(raw.reasoning_tokens),
+    tokens_per_second: Number(raw.tokens_per_second) > 0 ? Number(raw.tokens_per_second) : undefined,
   }
   return Object.values(usage).some(item => item !== undefined) ? usage : undefined
 }
@@ -718,6 +720,7 @@ interface UseConversationHistoryOptions {
     status: string
     turn_id?: string | null
     is_continuation?: boolean
+    model_id?: string | null
     stream_started_wall_ms?: number | null
     history_checkpoint?: { run_id?: string; stream_id?: string } | null
   } | null) => void
@@ -938,6 +941,7 @@ const normalizeActiveRun = (value: unknown): {
   status: string
   turn_id?: string | null
   is_continuation?: boolean
+  model_id?: string | null
   stream_started_wall_ms?: number | null
   history_checkpoint?: { run_id?: string; stream_id?: string } | null
 } | null => {
@@ -956,6 +960,7 @@ const normalizeActiveRun = (value: unknown): {
     status,
     turn_id: String(raw.turn_id || '').trim() || null,
     is_continuation: raw.is_continuation === true,
+    model_id: String(raw.model_id || '').trim() || null,
     stream_started_wall_ms: Number.isFinite(Number(raw.stream_started_wall_ms)) && Number(raw.stream_started_wall_ms) > 0
       ? Number(raw.stream_started_wall_ms)
       : null,

@@ -1268,8 +1268,12 @@ async def test_subagent_tool_streams_text_and_thinking_deltas(monkeypatch):
     )
 
     assert result.update["messages"][0].content == "结论是上升"
-    # 用量事件（每个 updates 后一条）与过程事件同通道，序列断言先滤掉
-    written = [payload for payload in written if payload["event"].get("event_type") != "subagent_context_usage"]
+    # 用量与实时速率事件也走同通道，序列断言先滤掉
+    written = [
+        payload
+        for payload in written
+        if payload["event"].get("event_type") not in {"subagent_context_usage", "subagent_generation_speed"}
+    ]
     assert [payload["event"]["event_type"] for payload in written] == [
         "subagent_thinking_delta",
         "subagent_message_delta",

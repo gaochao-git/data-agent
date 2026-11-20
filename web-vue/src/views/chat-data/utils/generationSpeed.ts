@@ -41,7 +41,7 @@ export const toGenerationStats = (raw: unknown): MessageGenerationStats | null =
   }
 }
 
-const formatCompactTokens = (value: number): string => {
+export const formatCompactTokens = (value: number): string => {
   if (value >= 1_000_000) {
     const scaled = value / 1_000_000
     return `${scaled >= 100 ? scaled.toFixed(0) : scaled.toFixed(1).replace(/\.0$/, '')}m`

@@ -3,7 +3,6 @@
 import asyncio
 import re
 import time
-from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import suppress
 from dataclasses import dataclass
@@ -125,6 +124,21 @@ from .agent_stream_events import (  # noqa: F401  # 部分为有意重导出，�
     _resolve_active_tool_call_id,
     _ToolStreamState,
     _visible_tool_count,
+)
+from .generation_speed import (
+    SPEED_EMIT_INTERVAL_MS as _SPEED_EMIT_INTERVAL_MS,  # noqa: F401  # 测试按模块属性读取
+)
+from .generation_speed import (
+    SPEED_MIN_SPAN_MS as _SPEED_MIN_SPAN_MS,  # noqa: F401  # 测试按模块属性读取
+)
+from .generation_speed import (
+    SPEED_WINDOW_MS as _SPEED_WINDOW_MS,  # noqa: F401  # 测试按模块属性读取
+)
+from .generation_speed import (
+    GenerationSpeedSampler,
+    decode_duration_ms,
+    decode_tokens_per_second,
+    estimate_stream_tokens,
 )
 from .services import conversation_service as conversation
 from .services.agent_run.message_compose import (
@@ -391,14 +405,21 @@ def _generation_stats_from_usage(
         return None
     ended_wall_ms = int(stream_ended_wall_ms or time.time() * 1000)
     tool_duration_ms = _tool_duration_in_window((usage or {}).get("breakdown"), first_token_wall_ms, ended_wall_ms)
-    duration_ms = (ended_wall_ms - first_token_wall_ms) - tool_duration_ms
-    if duration_ms <= 0:
+    duration_ms = decode_duration_ms(
+        first_token_wall_ms=first_token_wall_ms,
+        stream_ended_wall_ms=ended_wall_ms,
+        tool_duration_ms=tool_duration_ms,
+    )
+    if duration_ms is None:
+        return None
+    tokens_per_second = decode_tokens_per_second(output_tokens=output_tokens, duration_ms=duration_ms)
+    if tokens_per_second is None:
         return None
     stats = {
         "first_token_ms": first_token_ms,
         "duration_ms": duration_ms,
         "output_tokens": output_tokens,
-        "tokens_per_second": round(output_tokens / (duration_ms / 1000)),
+        "tokens_per_second": tokens_per_second,
     }
     # 模型侧首 token：覆盖首 token 的那次调用起点 → 首 token 的等待（首 token 不
     # 落在任何调用窗口内则省略，不硬凑）。
@@ -439,28 +460,9 @@ def _usage_aux_stats(usage: Any | None, *, model_name: str | None = None) -> dic
     return aux
 
 
-# 实时生成速率（generation_speed SSE）：滑窗口径的「当前速率」，与收口的整体平均
-# （generation_stats）是两个指标。滑窗 = 最近 N 毫秒内流出的模型输出粗估 token ÷
-# 活跃跨度；窗口静默（工具执行、调用间隙）不推送，前端保持上次值自然冻结。
-_SPEED_WINDOW_MS = 2000
-_SPEED_EMIT_INTERVAL_MS = 500
-_SPEED_MIN_SPAN_MS = 300
-# 与前端 estimateTokensFromText 同口径：CJK 字符 1 token/字，其余非空白 4 字符/token
-_SPEED_CJK_CHAR_REGEX = re.compile(r"[\u3400-\u9fff\uf900-\ufaff\u3000-\u303f\uff01-\uff5e]")
-
-
 def _estimate_stream_tokens(text: str) -> int:
-    """流式文本的 token 粗估（与前端实时估算同公式），仅用于生成中的实时速率展示。"""
-    cjk_count = 0
-    other_count = 0
-    for char in text:
-        if char.isspace():
-            continue
-        if _SPEED_CJK_CHAR_REGEX.match(char):
-            cjk_count += 1
-        else:
-            other_count += 1
-    return cjk_count + (other_count + 3) // 4
+    """兼容旧调用点：实时速率 token 粗估统一走 generation_speed。"""
+    return estimate_stream_tokens(text)
 
 
 def _validate_workspace_file_selections(file_selections: list[str], workspace_root: str) -> list[str]:
@@ -618,10 +620,21 @@ class _AgentSseStreamAdapter:
         self._resolve_inherited_duration = relay.resolve_inherited_duration
         self._on_interrupt_finalize = relay.on_interrupt_finalize
         self._inherited_durations: dict[str, int] | None = None
-        # 实时生成速率（generation_speed）：滑窗 token 样本 (墙钟ms, 粗估token)，
-        # 仅本轮流内有效；节流推送，窗口静默不推送。
-        self._speed_samples: deque[tuple[int, int]] = deque()
-        self._last_speed_emit_ms = 0
+        # 实时生成速率（generation_speed）：主对话与子智能体共用同一滑窗实现。
+        self._speed_sampler = GenerationSpeedSampler()
+
+    @property
+    def _speed_samples(self) -> Any:
+        """兼容旧测试/调试读取：滑窗样本直接指向共用采样器。"""
+        return self._speed_sampler.samples
+
+    @property
+    def _last_speed_emit_ms(self) -> int:
+        return self._speed_sampler.last_emit_ms
+
+    @_last_speed_emit_ms.setter
+    def _last_speed_emit_ms(self, value: int) -> None:
+        self._speed_sampler.last_emit_ms = int(value)
 
     def set_input_state(self, input_state: dict[str, Any]) -> None:
         """设置下一次 graph 调用的增量输入。"""
@@ -1016,28 +1029,13 @@ class _AgentSseStreamAdapter:
 
     def _sample_generation_speed(self, text: str) -> None:
         """把一段流式模型输出按 token 粗估记入滑窗样本（墙钟毫秒戳）。"""
-        tokens = _estimate_stream_tokens(text)
-        if tokens > 0:
-            self._speed_samples.append((int(time.time() * 1000), tokens))
+        self._speed_sampler.observe(text, now_ms=int(time.time() * 1000))
 
     def _maybe_emit_generation_speed(self) -> str | None:
         """节流推送实时生成速率（generation_speed）；窗口静默返回 None，前端保持上次值。"""
         now_ms = int(time.time() * 1000)
-        if now_ms - self._last_speed_emit_ms < _SPEED_EMIT_INTERVAL_MS:
-            return None
-        window_start_ms = now_ms - _SPEED_WINDOW_MS
-        while self._speed_samples and self._speed_samples[0][0] <= window_start_ms:
-            self._speed_samples.popleft()
-        if not self._speed_samples:
-            return None
-        window_tokens = sum(tokens for _, tokens in self._speed_samples)
-        earliest_ms = min(timestamp for timestamp, _ in self._speed_samples)
-        span_ms = max(now_ms - earliest_ms, _SPEED_MIN_SPAN_MS)
-        self._last_speed_emit_ms = now_ms
-        return _format_sse(
-            SSE_EVENT_GENERATION_SPEED,
-            {"tokens_per_second": round(window_tokens / (span_ms / 1000), 1), "window_ms": _SPEED_WINDOW_MS},
-        )
+        payload = self._speed_sampler.maybe_snapshot(now_ms=now_ms)
+        return _format_sse(SSE_EVENT_GENERATION_SPEED, payload) if payload else None
 
     def _resolve_end_usage(self, prefer_latest_usage: bool) -> Any | None:
         state_usage = None

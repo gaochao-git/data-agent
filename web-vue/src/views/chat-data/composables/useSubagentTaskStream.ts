@@ -10,6 +10,7 @@ import type {
   ChatDataTokenUsage,
   SubagentCompaction,
   SubagentContextUsage,
+  SubagentTokenUsage,
   SubagentTrailItem,
   ToolLifecycleEventData,
 } from '../types'
@@ -28,6 +29,8 @@ export const useSubagentTaskStream = (
   const contextUsage = ref<SubagentContextUsage | null>(null)
   const compactions = ref<SubagentCompaction[]>([])
   const tokenUsageDetail = ref<ChatDataTokenUsage | undefined>()
+  const tokenUsage = ref<SubagentTokenUsage | undefined>()
+  const liveSpeed = ref<number | null>(null)
   const connected = ref(false)
 
   let currentTaskId: string | null = null
@@ -53,6 +56,8 @@ export const useSubagentTaskStream = (
     contextUsage.value = null
     compactions.value = []
     tokenUsageDetail.value = undefined
+    tokenUsage.value = undefined
+    liveSpeed.value = null
     lastEventId = '0-0'
     snapshotLoaded = false
     closedMessageIds.clear()
@@ -69,6 +74,7 @@ export const useSubagentTaskStream = (
     ) return
     const event = { ...raw, type } as ToolLifecycleEventData
     if (type === 'subagent_context_usage') {
+      if (event.subagent_token_usage) tokenUsage.value = event.subagent_token_usage
       if (typeof event.used_tokens !== 'number') return
       contextUsage.value = {
         used_tokens: event.used_tokens,
@@ -78,6 +84,11 @@ export const useSubagentTaskStream = (
         budget_percent: event.budget_percent,
       }
       if (event.token_usage_detail) tokenUsageDetail.value = event.token_usage_detail
+      return
+    }
+    if (type === 'subagent_generation_speed') {
+      const speed = Number(event.tokens_per_second)
+      if (Number.isFinite(speed) && speed > 0) liveSpeed.value = speed
       return
     }
     if (type === 'subagent_context_compression') {
@@ -189,6 +200,8 @@ export const useSubagentTaskStream = (
     contextUsage,
     compactions,
     tokenUsageDetail,
+    tokenUsage,
+    liveSpeed,
     connected,
   }
 }

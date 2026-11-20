@@ -53,6 +53,7 @@ SSE_EVENT_TOOL_FAILED = "tool_failed"
 SSE_EVENT_SUBAGENT_MESSAGE = "subagent_message"
 SSE_EVENT_SUBAGENT_MESSAGE_DELTA = "subagent_message_delta"
 SSE_EVENT_SUBAGENT_THINKING_DELTA = "subagent_thinking_delta"
+SSE_EVENT_SUBAGENT_GENERATION_SPEED = "subagent_generation_speed"
 SSE_EVENT_SUBAGENT_CONTEXT_USAGE = "subagent_context_usage"
 SSE_EVENT_SUBAGENT_CONTEXT_COMPRESSION = "subagent_context_compression"
 # 后台子智能体任务账本的实时快照：随父 Run SSE 下发，断线/空闲时由任务列表接口兜底
@@ -80,6 +81,7 @@ SSE_EVENT_NAMES: frozenset[str] = frozenset(
         SSE_EVENT_SUBAGENT_MESSAGE,
         SSE_EVENT_SUBAGENT_MESSAGE_DELTA,
         SSE_EVENT_SUBAGENT_THINKING_DELTA,
+        SSE_EVENT_SUBAGENT_GENERATION_SPEED,
         SSE_EVENT_SUBAGENT_CONTEXT_USAGE,
         SSE_EVENT_SUBAGENT_CONTEXT_COMPRESSION,
         SSE_EVENT_SUBAGENT_TASK_UPDATED,

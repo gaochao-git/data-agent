@@ -21,6 +21,7 @@ from apps.chat_data_app.agent.run.agent_inbox_service import (
 from apps.chat_data_app.agent.run.agent_inbox_service import load_run_content as _load_run_content
 from apps.chat_data_app.daos.agent_inbox_dao import AgentInboxDao, agent_inbox_dao
 from apps.chat_data_app.daos.conversation_event_dao import ConversationEventDao
+from apps.chat_data_app.services.llm_config import get_chat_data_model_config, get_default_chat_data_model
 from utils.database import get_session
 from utils.db_failover import is_mysql_connection_error
 from utils.logger import get_logger
@@ -36,6 +37,25 @@ EVENT_CONTEXT_COMPRESSION = "context_compression"
 EVENT_TOKEN_USAGE = "token_usage"
 EVENT_APPEND_MAX_ATTEMPTS = 3
 EVENT_APPEND_RETRY_DELAY_SECONDS = 0.05
+
+
+def _resolve_registered_model_id(model: str | None) -> str:
+    """把请求模型名归一成前端模型选择器使用的注册表 ID。
+
+    ``generation_stats.model`` 来自上游模型调用记录，可能是 ``request_model``
+    而不是注册键；前端只认注册键。空值（旧会话没有模型字段、无人值守 Run
+    未显式传模型）回退当前默认模型，与实际执行落点一致。
+    """
+    raw = str(model or "").strip()
+    try:
+        if not raw:
+            return get_default_chat_data_model()
+        config = get_chat_data_model_config(raw)
+        return str(config.get("id") or raw)
+    except Exception:
+        # 注册表不可用时不能拖垮会话打开；原值仍比空串更接近真实使用模型。
+        logger.warning("归一会话模型 ID 失败: model=%r", raw, exc_info=True)
+        return raw
 
 
 def _compare_stream_ids(left: str, right: str) -> int:
@@ -395,11 +415,17 @@ class ConversationEventService:
             return None
         content = _load_run_content(run.record_content)
         started_wall_ms = content.get("stream_started_wall_ms")
+        runtime_context = content.get("runtime_context")
+        raw_model_id = (
+            str((runtime_context or {}).get("model_id") or "").strip() if isinstance(runtime_context, dict) else ""
+        )
+        model_id = _resolve_registered_model_id(raw_model_id)
         return {
             "run_id": run.run_id,
             "status": run.record_status,
             "turn_id": str(content.get("turn_id") or "") or None,
             "is_continuation": content.get("run_kind") == "continuation",
+            "model_id": model_id or None,
             "stream_started_wall_ms": (
                 int(started_wall_ms) if isinstance(started_wall_ms, (int, float)) and int(started_wall_ms) > 0 else None
             ),
@@ -415,6 +441,26 @@ class ConversationEventService:
                 user_id=user_id,
             )
         return _load_payload(raw_payload)
+
+    async def get_latest_model_id(self, *, conversation_id: str, user_id: str) -> str:
+        """读取会话实际使用的模型：运行中取当前 Run，否则取最后一条助手回复。"""
+        async with self._dao.session_context() as session:
+            active_run = await self._inbox_dao.get_active_run_snapshot(session, conversation_id, user_id)
+            if active_run is not None:
+                runtime_context = _load_run_content(active_run.record_content).get("runtime_context")
+                if isinstance(runtime_context, dict):
+                    return _resolve_registered_model_id(runtime_context.get("model_id"))
+                return _resolve_registered_model_id(None)
+            raw_payload = await self._dao.get_latest_assistant_payload_in_session(
+                session,
+                conversation_id=conversation_id,
+                user_id=user_id,
+            )
+        payload = _load_payload(raw_payload) or {}
+        generation_stats = payload.get("generation_stats")
+        if not isinstance(generation_stats, dict):
+            return _resolve_registered_model_id(None)
+        return _resolve_registered_model_id(generation_stats.get("model"))
 
     async def get_first_user_message(self, *, conversation_id: str, user_id: str) -> str | None:
         """读取首条有效用户消息正文，不加载完整会话历史。"""

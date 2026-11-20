@@ -1,4 +1,5 @@
 import type { ChatDataTokenUsage, SubagentContextUsage, SubagentTokenUsage } from '../types'
+import { formatCompactTokens, formatGenerationSpeed } from './generationSpeed'
 
 const toNonNegativeNumber = (value: unknown): number | null => {
   const number = Number(value)
@@ -68,9 +69,7 @@ export const resolveSubagentContextUsage = (
 /** token 数紧凑展示：1234 → 1.2k，1234567 → 1.2m（面板窄，不展示完整数字）。 */
 export const formatTokenCount = (value?: number): string => {
   const count = Math.max(0, Math.floor(Number(value) || 0))
-  if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}m`
-  if (count >= 1_000) return `${(count / 1_000).toFixed(1)}k`
-  return String(count)
+  return formatCompactTokens(count)
 }
 
 /**
@@ -85,6 +84,33 @@ export const buildSubagentTokenUsageText = (usage?: SubagentTokenUsage | null): 
   const parts: string[] = []
   if (input > 0) parts.push(`输入 ${formatTokenCount(input)}`)
   if (output > 0) parts.push(`输出 ${formatTokenCount(output)}`)
-  if (cacheRead > 0 && input > 0) parts.push(`缓存命中 ${Math.round((cacheRead / input) * 100)}%`)
+  if (cacheRead > 0 && input > 0) parts.push(`缓存命中 ${formatSubagentCacheHitRate(cacheRead, input)}%`)
   return parts.length > 0 ? `tokens ${parts.join(' · ')}` : ''
+}
+
+export interface SubagentTokenUsageRow {
+  label: string
+  value: string
+}
+
+/** 子智能体 token 明细行：与主对话生成统计浮层同序、同标签口径。 */
+export const buildSubagentTokenUsageRows = (usage?: SubagentTokenUsage | null): SubagentTokenUsageRow[] => {
+  if (!usage) return []
+  const input = Math.max(0, Number(usage.input_tokens) || 0)
+  const output = Math.max(0, Number(usage.output_tokens) || 0)
+  const cacheRead = Math.max(0, Number(usage.cache_read_input_tokens) || 0)
+  const speed = Math.max(0, Number(usage.tokens_per_second) || 0)
+  const rows: SubagentTokenUsageRow[] = []
+  if (input > 0) rows.push({ label: '输入总token', value: formatTokenCount(input) })
+  if (cacheRead > 0 && input > 0) {
+    rows.push({ label: '缓存命中', value: `${formatSubagentCacheHitRate(cacheRead, input)}%` })
+  }
+  if (output > 0) rows.push({ label: '输出总token', value: formatTokenCount(output) })
+  if (speed > 0) rows.push({ label: 'token速率', value: formatGenerationSpeed({ tokensPerSecond: speed }) })
+  return rows
+}
+
+const formatSubagentCacheHitRate = (cached: number, input: number): number => {
+  const bounded = Math.min(Math.max(cached, 0), Math.max(input, 0))
+  return Math.round((bounded / input) * 1000) / 10
 }

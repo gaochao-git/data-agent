@@ -31,7 +31,7 @@ def build_subagent_tool(specs, run_controls=None):
 
 
 async def invoke_subagent_tool(tool, operation: str, *, runtime, **kwargs):
-    """按真实嵌套 schema 校验参数后调用 subagent 工具。"""
+    """走工具真实解析路径，覆盖 LangGraph 注入 runtime 的参数校验。"""
     schema = {
         "dispatch": DispatchArgs,
         "send": SendArgs,
@@ -39,7 +39,7 @@ async def invoke_subagent_tool(tool, operation: str, *, runtime, **kwargs):
         "decide": DecideArgs,
     }[operation]
     params = schema(**kwargs)
-    return await tool.coroutine(runtime=runtime, **{operation: params})
+    return await tool.ainvoke({operation: params, "runtime": runtime})
 
 
 class _FakeEventService:

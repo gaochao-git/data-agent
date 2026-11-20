@@ -15,6 +15,11 @@ from langchain.tools import ToolRuntime
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, RemoveMessage, ToolMessage
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
 
+from apps.chat_data_app.generation_speed import (
+    GenerationSpeedSampler,
+    decode_duration_ms,
+    decode_tokens_per_second,
+)
 from apps.chat_data_app.services.runtime_config import (
     SUBAGENT_MESSAGE_PREVIEW_MAX_CHARS,
     SUBAGENT_RESULT_PREVIEW_MAX_CHARS,
@@ -23,6 +28,7 @@ from apps.chat_data_app.services.runtime_config import (
 from apps.chat_data_app.sse_protocol import (
     SSE_EVENT_SUBAGENT_CONTEXT_COMPRESSION,
     SSE_EVENT_SUBAGENT_CONTEXT_USAGE,
+    SSE_EVENT_SUBAGENT_GENERATION_SPEED,
     SSE_EVENT_SUBAGENT_MESSAGE,
     SSE_EVENT_SUBAGENT_MESSAGE_DELTA,
     SSE_EVENT_SUBAGENT_THINKING_DELTA,
@@ -36,6 +42,7 @@ from utils.tool_call_args import coerce_tool_call_args
 from ..context.context_budget import (
     compact_context_usage_for_history,
     count_messages_tokens,
+    latest_model_name_from_usage,
     sanitize_context_usage_for_response,
 )
 from .subagent_async import _truncate_text
@@ -101,6 +108,7 @@ def _iter_chunk_stream_events(
     text_caps: dict[str, _StreamCapState],
     think_caps: dict[str, _StreamCapState],
     markup_filters: dict[str, _StreamingToolCallMarkupFilter] | None = None,
+    speed_chunks: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """把 ``messages`` 模式的 ``AIMessageChunk`` 翻译成 token 级增量事件。
 
@@ -117,6 +125,10 @@ def _iter_chunk_stream_events(
     直播端按「更长者优先」收敛，不会用截断预览覆盖已拼出的全文。
     工具参数不会漏进正文：``_chunk_text_delta`` 只取 ``str`` 与 ``type=="text"``
     的内容块，结构化块（工具调用等）不参与文本增量。
+
+    ``speed_chunks`` 收集截断前、标记过滤后的可见增量，供实时速率采样。速率
+    必须看完整输出；若直接采样已封顶的 ``delta``，超过预览上限后窗口会停止
+    增长，速率冻结在封顶瞬间。
     """
     if not isinstance(chunk, AIMessageChunk):
         return []
@@ -124,39 +136,61 @@ def _iter_chunk_stream_events(
     if not message_id:
         return []
 
-    events: list[dict[str, Any]] = []
     text = _chunk_text_delta(getattr(chunk, "content", ""))
-    if text:
-        if markup_filters is not None:
-            text = markup_filters.setdefault(message_id, _StreamingToolCallMarkupFilter()).feed(text)
-        if text:
-            cap = text_caps.setdefault(message_id, _StreamCapState())
-            allowed, was_capped = cap.take(text, SUBAGENT_MESSAGE_PREVIEW_MAX_CHARS)
-            if allowed:
-                events.append(
-                    {
-                        "event_type": SSE_EVENT_SUBAGENT_MESSAGE_DELTA,
-                        "message_id": message_id,
-                        "delta": allowed,
-                        "truncated": was_capped,
-                        "parent_tool_call_id": parent_tool_call_id,
-                    }
-                )
+    if text and markup_filters is not None:
+        text = markup_filters.setdefault(message_id, _StreamingToolCallMarkupFilter()).feed(text)
+    events = []
+    message_event = _stream_delta_event(
+        text,
+        event_type=SSE_EVENT_SUBAGENT_MESSAGE_DELTA,
+        message_id=message_id,
+        parent_tool_call_id=parent_tool_call_id,
+        caps=text_caps,
+        max_chars=SUBAGENT_MESSAGE_PREVIEW_MAX_CHARS,
+        speed_chunks=speed_chunks,
+    )
+    if message_event is not None:
+        events.append(message_event)
     reasoning = _chunk_reasoning_text(chunk)
-    if reasoning:
-        cap = think_caps.setdefault(message_id, _StreamCapState())
-        allowed, was_capped = cap.take(reasoning, SUBAGENT_THINKING_PREVIEW_MAX_CHARS)
-        if allowed:
-            events.append(
-                {
-                    "event_type": SSE_EVENT_SUBAGENT_THINKING_DELTA,
-                    "message_id": message_id,
-                    "delta": allowed,
-                    "truncated": was_capped,
-                    "parent_tool_call_id": parent_tool_call_id,
-                }
-            )
+    thinking_event = _stream_delta_event(
+        reasoning,
+        event_type=SSE_EVENT_SUBAGENT_THINKING_DELTA,
+        message_id=message_id,
+        parent_tool_call_id=parent_tool_call_id,
+        caps=think_caps,
+        max_chars=SUBAGENT_THINKING_PREVIEW_MAX_CHARS,
+        speed_chunks=speed_chunks,
+    )
+    if thinking_event is not None:
+        events.append(thinking_event)
     return events
+
+
+def _stream_delta_event(
+    delta: str,
+    *,
+    event_type: str,
+    message_id: str,
+    parent_tool_call_id: str | None,
+    caps: dict[str, _StreamCapState],
+    max_chars: int,
+    speed_chunks: list[str] | None,
+) -> dict[str, Any] | None:
+    """生成单个正文/思考增量事件；空增量或已封顶时返回 None。"""
+    if not delta:
+        return None
+    if speed_chunks is not None:
+        speed_chunks.append(delta)
+    allowed, was_capped = caps.setdefault(message_id, _StreamCapState()).take(delta, max_chars)
+    if not allowed:
+        return None
+    return {
+        "event_type": event_type,
+        "message_id": message_id,
+        "delta": allowed,
+        "truncated": was_capped,
+        "parent_tool_call_id": parent_tool_call_id,
+    }
 
 
 def _emit_subagent_tool_event(writer: Any, event: dict[str, Any]) -> None:
@@ -292,6 +326,35 @@ def _non_negative_int(value: Any) -> int:
     return value
 
 
+def _tool_duration_in_window(
+    intervals: list[tuple[int, int]],
+    window_start_ms: int,
+    window_end_ms: int,
+) -> int:
+    """工具执行区间与解码窗口的交集时长；重叠区间先合并，避免重复扣除。"""
+    clipped: list[tuple[int, int]] = []
+    for raw_start, raw_end in intervals:
+        start = max(int(raw_start), int(window_start_ms))
+        end = min(int(raw_end), int(window_end_ms))
+        if end > start:
+            clipped.append((start, end))
+    clipped.sort()
+    total = 0
+    merged_start: int | None = None
+    merged_end: int | None = None
+    for start, end in clipped:
+        if merged_start is None or merged_end is None:
+            merged_start, merged_end = start, end
+        elif start <= merged_end:
+            merged_end = max(merged_end, end)
+        else:
+            total += merged_end - merged_start
+            merged_start, merged_end = start, end
+    if merged_start is not None and merged_end is not None:
+        total += merged_end - merged_start
+    return total
+
+
 def _usage_totals_from_metadata(usage: Any) -> dict[str, int] | None:
     """单次模型调用的 usage_metadata → 统一 token 计数；无有效用量返回 None。"""
     if not isinstance(usage, dict):
@@ -315,13 +378,15 @@ def _usage_totals_from_metadata(usage: Any) -> dict[str, int] | None:
     }
 
 
-def _aggregate_subagent_token_usage(messages: list) -> dict[str, int]:
+def _aggregate_subagent_token_usage(messages: list, timing: dict[str, Any] | None = None) -> dict[str, Any]:
     """汇总子图内每次模型调用的 token 用量（billing 口径，不是上下文占用估算）。
 
     子图 ``callbacks=[]`` 且不挂主图 ContextUsageMiddleware，主对话 token 统计看不到
     这部分；这里按消息上的 ``usage_metadata`` 累加，随 subagent 结果持久化供前端展示。
+    速率与主对话共用解码窗口口径：首 token → 流结束，扣除窗口内工具执行时间，
+    TTFT 不进分母；旧任务没有计时印章时省略速率，不用模型调用总时长冒充。
     """
-    totals = {
+    totals: dict[str, Any] = {
         "input_tokens": 0,
         "output_tokens": 0,
         "total_tokens": 0,
@@ -335,11 +400,28 @@ def _aggregate_subagent_token_usage(messages: list) -> dict[str, int]:
             continue
         for key, value in part.items():
             totals[key] += value
+    if isinstance(timing, dict):
+        duration_ms = decode_duration_ms(
+            first_token_wall_ms=_non_negative_int(timing.get("first_token_wall_ms")) or None,
+            stream_ended_wall_ms=_non_negative_int(timing.get("stream_ended_wall_ms")) or None,
+            tool_duration_ms=_non_negative_int(timing.get("tool_duration_ms")),
+        )
+        tokens_per_second = decode_tokens_per_second(
+            output_tokens=int(totals["output_tokens"]),
+            duration_ms=duration_ms,
+        )
+        if tokens_per_second is not None:
+            totals["tokens_per_second"] = tokens_per_second
     return totals if totals["total_tokens"] > 0 else {}
 
 
 def _subagent_process_snapshot(
-    messages: list, context_usage: Any, compactions: Any = None, token_detail: Any = None
+    messages: list,
+    context_usage: Any,
+    compactions: Any = None,
+    token_detail: Any = None,
+    model_name: str | None = None,
+    timing: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """subagent 结果上附带的子过程快照：上下文用量 + 子图 token 用量 + 压缩事件。"""
     snapshot: dict[str, Any] = {}
@@ -351,8 +433,10 @@ def _subagent_process_snapshot(
         # 压缩落库体积在 middleware 层完成（run 层不允许直接依赖 context 包）
         snapshot["subagent_token_usage_detail"] = compact_context_usage_for_history(token_detail)
     # 子图 token 用量（billing 口径）：主对话统计不含子智能体消耗，这里单独随结果持久化
-    token_usage = _aggregate_subagent_token_usage(messages)
+    token_usage = _aggregate_subagent_token_usage(messages, timing)
     if token_usage:
+        if model_name:
+            token_usage["model"] = model_name
         snapshot["subagent_token_usage"] = token_usage
     return snapshot
 
@@ -403,6 +487,10 @@ class _SubagentStreamState:
         self.collected: list = []
         # 内层工具开始的后端时间：完成事件缺少工具计时盖章时兜底（每个内层工具都有耗时）
         self.tool_started_at: dict[str, int] = {}
+        # 与主对话共用的实时速率滑窗，以及完成态解码窗口锚点。
+        self.speed_sampler = GenerationSpeedSampler()
+        self.stream_ended_wall_ms: int | None = None
+        self.tool_intervals: dict[str, tuple[int, int]] = {}
         # 累计工具 id→name（完成也保留）：tool_started_at 只放正在执行的。
         self.tool_history: dict[str, str] = {}
         # 子图上下文压缩事件（压缩节点 updates 里的 context_compression_events）
@@ -459,18 +547,63 @@ class _SubagentStreamState:
 
     def emit_messages_chunk(self, chunk_obj: Any, writer: Any) -> None:
         """messages 模式：正文/思考增量转发并记录已达标的 message id。"""
+        now_ms = int(time.time() * 1000)
+        speed_chunks: list[str] = []
         for event in _iter_chunk_stream_events(
             chunk_obj,
             self.parent_tool_call_id,
             self.text_caps,
             self.think_caps,
             self.text_markup_filters,
+            speed_chunks,
         ):
             if event["event_type"] == "subagent_message_delta":
                 self.streamed_text_ids.add(event["message_id"])
             else:
                 self.streamed_think_ids.add(event["message_id"])
             _emit_subagent_tool_event(writer, event)
+        for speed_chunk in speed_chunks:
+            self.speed_sampler.observe(speed_chunk, now_ms=now_ms)
+        speed = self.speed_sampler.maybe_snapshot(now_ms=now_ms)
+        if speed:
+            _emit_subagent_tool_event(
+                writer,
+                {
+                    "event_type": SSE_EVENT_SUBAGENT_GENERATION_SPEED,
+                    "parent_tool_call_id": self.parent_tool_call_id,
+                    **speed,
+                },
+            )
+
+    def record_tool_event(self, event: dict[str, Any]) -> None:
+        """记录内层工具的真实执行区间，供完成态解码窗口扣除。"""
+        if event.get("event_type") not in {SSE_EVENT_TOOL_COMPLETED, SSE_EVENT_TOOL_FAILED}:
+            return
+        tool_call_id = str(event.get("tool_call_id") or "")
+        started_at_ms = _non_negative_int(event.get("started_at_ms")) or self.tool_started_at.get(tool_call_id, 0)
+        ended_at_ms = _non_negative_int(event.get("ended_at_ms"))
+        if tool_call_id and started_at_ms > 0 and ended_at_ms > 0:
+            self.tool_intervals[tool_call_id] = (started_at_ms, max(ended_at_ms, started_at_ms))
+
+    def generation_timing(self, *, now_ms: int | None = None) -> dict[str, int | None]:
+        """生成统计锚点：首可见 token、流结束、窗口内工具耗时。"""
+        ended_ms = self.stream_ended_wall_ms or now_ms or int(time.time() * 1000)
+        first_token_wall_ms = self.speed_sampler.first_visible_token_wall_ms
+        intervals = list(self.tool_intervals.values())
+        intervals.extend(
+            (started_at_ms, ended_ms)
+            for tool_call_id, started_at_ms in self.tool_started_at.items()
+            if tool_call_id not in self.tool_intervals
+        )
+        return {
+            "first_token_wall_ms": first_token_wall_ms,
+            "stream_ended_wall_ms": ended_ms,
+            "tool_duration_ms": _tool_duration_in_window(
+                intervals,
+                first_token_wall_ms or 0,
+                ended_ms,
+            ),
+        }
 
     def collect_update_messages(self, update: dict[str, Any]) -> list:
         """updates 模式：收集本节点新增消息（去重后），返回给事件提取。
@@ -686,6 +819,17 @@ def _process_subagent_chunk(
         return False
     if mode != "updates" or not isinstance(payload, dict):
         return False
+    _process_subagent_update(payload, stream_state, writer, parent_tool_call_id)
+    return True
+
+
+def _process_subagent_update(
+    payload: dict[str, Any],
+    stream_state: _SubagentStreamState,
+    writer: Any,
+    parent_tool_call_id: str | None,
+) -> None:
+    """处理一条 updates 载荷：消息收敛、工具事件与压缩事件转发。"""
     interrupt_payload = _extract_interrupt_payload(payload.get("__interrupt__"))
     if interrupt_payload is not None:
         stream_state.interrupt_payload = interrupt_payload
@@ -701,11 +845,11 @@ def _process_subagent_chunk(
         stream_state.tool_started_at,
     ):
         _track_subagent_tool_event(stream_state, event)
+        stream_state.record_tool_event(event)
         _emit_subagent_tool_event(writer, event)
         anchor = str(event.get("tool_call_id") or event.get("message_id") or "").strip()
         if anchor:
             stream_state.last_trail_anchor = anchor
-    return True
 
 
 def _extract_interrupt_payload(raw: Any) -> dict[str, Any] | None:
@@ -749,6 +893,9 @@ def _capture_subagent_token_usage(chunk: Any, captured: dict[str, Any] | None) -
         detail = node_result.get("token_usage")
         if isinstance(detail, dict) and detail:
             captured["token_usage_detail"] = detail
+            model_name = latest_model_name_from_usage(detail)
+            if model_name:
+                captured["model"] = model_name
 
 
 async def _run_subagent_with_events(
@@ -791,6 +938,8 @@ async def _run_subagent_with_events(
             on_progress,
         )
     finally:
+        stream_state.stream_ended_wall_ms = int(time.time() * 1000)
+        generation_timing = stream_state.generation_timing(now_ms=stream_state.stream_ended_wall_ms)
         if captured is not None:
             captured["context_usage"] = _emit_context_usage_snapshot(
                 writer=writer,
@@ -798,10 +947,12 @@ async def _run_subagent_with_events(
                 usage_meta=usage_meta,
                 collected=stream_state.collected,
                 captured=captured,
+                timing=generation_timing,
                 emit=False,
             )
             captured["compactions"] = list(stream_state.compression_events)
             captured["final_messages"] = list(stream_state.state_messages)
+            captured["generation_timing"] = generation_timing
     if stream_state.interrupt_payload is not None:
         raise SubagentSuspended(stream_state.interrupt_payload, list(stream_state.collected))
     return stream_state.collected
@@ -828,6 +979,7 @@ async def _consume_subagent_stream(
                 usage_meta=usage_meta,
                 collected=stream_state.collected,
                 captured=captured,
+                timing=stream_state.generation_timing(),
             )
         if on_progress is not None:
             on_progress(_subagent_progress_snapshot(stream_state, context_usage))
@@ -840,6 +992,7 @@ def _emit_context_usage_snapshot(
     usage_meta: dict[str, int] | None,
     collected: list,
     captured: dict[str, Any] | None,
+    timing: dict[str, Any] | None = None,
     emit: bool = True,
 ) -> dict[str, Any] | None:
     """计算（并按需外发）上下文用量；直播与失败快照共用同一口径。"""
@@ -850,13 +1003,20 @@ def _emit_context_usage_snapshot(
     if detail:
         usage["token_usage_detail"] = detail
     if emit:
+        event = {
+            "event_type": SSE_EVENT_SUBAGENT_CONTEXT_USAGE,
+            "parent_tool_call_id": parent_tool_call_id,
+            **usage,
+        }
+        token_usage = _aggregate_subagent_token_usage(collected, timing)
+        if token_usage:
+            model_name = str(captured.get("model") or "") if isinstance(captured, dict) else ""
+            if model_name:
+                token_usage["model"] = model_name
+            event["subagent_token_usage"] = token_usage
         _emit_subagent_tool_event(
             writer,
-            {
-                "event_type": SSE_EVENT_SUBAGENT_CONTEXT_USAGE,
-                "parent_tool_call_id": parent_tool_call_id,
-                **usage,
-            },
+            event,
         )
     return usage
 

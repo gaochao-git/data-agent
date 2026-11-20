@@ -13,6 +13,11 @@ import type { MessageGenerationStats } from '../../../types'
 import { formatGenerationSpeed, formatTotalDurationLabel, generationStatsRows } from '../../../utils'
 import { copyTextToClipboard } from '../../../utils/clipboard'
 
+interface UsageDetailRow {
+  label: string
+  value: string
+}
+
 const props = defineProps({
   timestamp: { type: String, default: '' },
   stats: { type: Object as PropType<MessageGenerationStats>, default: undefined },
@@ -21,10 +26,19 @@ const props = defineProps({
   durationMs: { type: Number as PropType<number | null>, default: null },
   /** 子智能体 billing 用量摘要；主对话为空 */
   usageText: { type: String, default: '' },
+  /** 子智能体 token 明细浮层的模型名；主对话为空 */
+  usageModel: { type: String, default: '' },
+  /** 子智能体 token 明细行；主对话为空 */
+  usageRows: { type: Array as PropType<UsageDetailRow[]>, default: () => [] },
+  /** 子智能体模型调用速率；有值时底栏与主对话一样显示 tok/s */
+  usageSpeed: { type: Number, default: 0 },
   showAiNotice: { type: Boolean, default: true },
 })
 
 const displayDurationMs = computed(() => props.stats?.totalDurationMs ?? props.durationMs)
+const usageSpeedText = computed(() => (
+  props.usageSpeed > 0 ? formatGenerationSpeed({ tokensPerSecond: props.usageSpeed }) : ''
+))
 
 const handleCopy = async () => {
   if (!props.copyText) return
@@ -75,6 +89,45 @@ const handleCopy = async () => {
         {{ formatGenerationSpeed(stats) }}
       </span>
     </ElTooltip>
+    <ElTooltip v-if="usageText || usageRows.length" effect="light" placement="top" :show-arrow="true">
+      <template #content>
+        <div class="min-w-[224px] py-0.5 text-[11px] leading-[26px]">
+          <div
+            v-if="usageModel"
+            class="mb-1 flex items-center justify-between gap-8 border-b border-gray-200 pb-1"
+          >
+            <span class="text-gray-400">模型</span>
+            <span class="max-w-[180px] truncate font-medium text-gray-800" :title="usageModel">{{ usageModel }}</span>
+          </div>
+          <div
+            v-for="row in usageRows"
+            :key="row.label"
+            class="flex items-center justify-between gap-8"
+          >
+            <span class="text-gray-400">{{ row.label }}</span>
+            <span class="font-medium tabular-nums text-gray-800">{{ row.value }}</span>
+          </div>
+          <div v-if="!usageRows.length" class="whitespace-nowrap">{{ usageText }}</div>
+        </div>
+      </template>
+      <span
+        v-if="usageSpeedText"
+        class="inline-flex items-center gap-1 whitespace-nowrap text-[11px] text-gray-400"
+        data-message-speed
+      >
+        <i class="fa-solid fa-bolt text-[10px]"></i>
+        {{ usageSpeedText }}
+      </span>
+      <span
+        v-else
+        class="inline-flex items-center gap-1 whitespace-nowrap text-[11px] text-gray-400"
+        :aria-label="usageText"
+        data-message-tokens
+      >
+        <i class="fa-solid fa-bolt text-[10px]"></i>
+        -- tok/s
+      </span>
+    </ElTooltip>
     <span
       v-if="displayDurationMs"
       class="inline-flex items-center gap-1 whitespace-nowrap text-[11px] text-gray-400"
@@ -83,19 +136,5 @@ const handleCopy = async () => {
       <i class="fa-regular fa-clock text-[10px]"></i>
       用时 {{ formatTotalDurationLabel(displayDurationMs) }}
     </span>
-    <ElTooltip v-if="usageText" effect="light" placement="top" :show-arrow="true">
-      <template #content>
-        <div class="min-w-[220px] py-0.5 text-[11px] leading-[22px]">{{ usageText }}</div>
-      </template>
-      <span
-        class="inline-flex cursor-help items-center gap-1 whitespace-nowrap text-[11px] text-gray-400 transition-colors hover:text-blue-500"
-        :aria-label="usageText"
-        data-message-tokens
-      >
-        <i class="fa-solid fa-coins text-[10px]"></i>
-        tokens
-        <i class="fa-solid fa-circle-info text-[9px]"></i>
-      </span>
-    </ElTooltip>
   </AssistantMessageFooter>
 </template>

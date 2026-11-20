@@ -149,8 +149,17 @@ describe('SubagentTrail（右侧聊天式完整过程）', () => {
   it('已用时与主对话一致：运行中进助手状态行，完成后在气泡下方显示用时', () => {
     const running = mountTrail(taskCall([
       { kind: 'message', id: 'msg-1', content: '过程', thinking: '思考' },
-    ], 'running'), { elapsedMs: 5_000, timingRunning: true })
+    ], 'running'), {
+      elapsedMs: 5_000,
+      timingRunning: true,
+      liveSpeed: 25,
+      tokenUsage: {
+        input_tokens: 1_200,
+        output_tokens: 120,
+      },
+    })
     expect(running.findAllComponents(MessageItemStub)[1]!.props('liveElapsedMs')).toBe(5_000)
+    expect(running.findAllComponents(MessageItemStub)[1]!.props('liveGenerationSpeed')).toBe(25)
     expect(running.find('[data-message-duration]').exists()).toBe(false)
 
     const finished = mountTrail(taskCall([
@@ -171,8 +180,35 @@ describe('SubagentTrail（右侧聊天式完整过程）', () => {
       tokenUsage: { input_tokens: 12_345, output_tokens: 678, cache_read_input_tokens: 4_000 },
     })
     const tokens = wrapper.find('[data-message-tokens]')
-    expect(tokens.text()).toContain('tokens')
-    expect(tokens.attributes('aria-label')).toBe('tokens 输入 12.3k · 输出 678 · 缓存命中 32%')
+    expect(tokens.text()).toContain('-- tok/s')
+    expect(tokens.find('.fa-bolt').exists()).toBe(true)
+    expect(tokens.find('.fa-coins').exists()).toBe(false)
+    expect(tokens.find('.fa-circle-info').exists()).toBe(false)
+    expect(tokens.attributes('aria-label')).toBe('tokens 输入 12.3k · 输出 678 · 缓存命中 32.4%')
+    const footer = wrapper.find('[data-message-footer]').element
+    const tokensElement = tokens.element
+    const durationElement = wrapper.find('[data-message-duration]').element
+    expect(tokensElement.compareDocumentPosition(durationElement) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(footer).toBeTruthy()
+  })
+
+  it('有模型调用速率时与主对话一样显示 tok/s', () => {
+    const wrapper = mountTrail(taskCall([
+      { kind: 'message', id: 'msg-1', content: '结论' },
+    ], 'completed'), {
+      elapsedMs: 90_000,
+      timingRunning: false,
+      tokenUsage: {
+        model: 'SenseNova-Loop-9B-MLX-6bit',
+        input_tokens: 19_600,
+        output_tokens: 450,
+        cache_read_input_tokens: 18_600,
+        tokens_per_second: 7,
+      },
+    })
+
+    expect(wrapper.find('[data-message-speed]').text()).toContain('7 tok/s')
+    expect(wrapper.find('[data-message-tokens]').exists()).toBe(false)
   })
 
   it('完成态默认收起工作过程，只留最终报告（与主对话口径一致）', () => {

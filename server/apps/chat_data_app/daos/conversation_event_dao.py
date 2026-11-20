@@ -438,6 +438,27 @@ class ConversationEventDao:
         )
         return result.scalar_one_or_none()
 
+    async def get_latest_assistant_payload_in_session(
+        self,
+        session: AsyncSession,
+        *,
+        conversation_id: str,
+        user_id: str,
+    ) -> str | None:
+        """读取最后一条助手消息 payload，供恢复该会话最近使用的模型。"""
+        result = await session.execute(
+            select(ChatDataConversationEvent.payload)
+            .where(
+                ChatDataConversationEvent.conversation_id == conversation_id,
+                ChatDataConversationEvent.user_id == user_id,
+                ChatDataConversationEvent.event_type == "assistant_message",
+                ChatDataConversationEvent.delete_flag == 0,
+            )
+            .order_by(ChatDataConversationEvent.sequence_no.desc(), ChatDataConversationEvent.id.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
     async def get_first_user_message_payload(self, *, conversation_id: str, user_id: str) -> str | None:
         """只读取首条用户消息，供标题生成使用。"""
         async with self._session_context() as session:

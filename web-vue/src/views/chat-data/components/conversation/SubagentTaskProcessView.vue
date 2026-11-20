@@ -84,9 +84,11 @@ const tokenUsageDetailForTask = (task: SubagentTaskRecord) => (
     ? (stream.tokenUsageDetail.value || task.result_meta?.subagent_token_usage_detail)
     : task.result_meta?.subagent_token_usage_detail
 )
-const tokenUsageForTask = (task: SubagentTaskRecord): SubagentTokenUsage | null => (
-  task.result_meta?.subagent_token_usage || null
-)
+const tokenUsageForTask = (task: SubagentTaskRecord): SubagentTokenUsage | null => {
+  const persisted = task.result_meta?.subagent_token_usage
+  if (isCurrentTask(task) && active.value && stream.tokenUsage.value) return stream.tokenUsage.value
+  return persisted || (isCurrentTask(task) ? stream.tokenUsage.value || null : null)
+}
 const elapsedForTask = (task: SubagentTaskRecord): number | null => {
   if (isCurrentTask(task)) return elapsedMs.value
   const started = startedAtMs(task)
@@ -166,6 +168,7 @@ onMounted(() => emit('usageUpdated', props.task.task_id, usageForPanel.value))
           :elapsed-ms="elapsedForTask(turn)"
           :timing-running="isRunning && turn.task_id === task.task_id"
           :token-usage="tokenUsageForTask(turn)"
+          :live-speed="isCurrentTask(turn) ? stream.liveSpeed.value : null"
           show-without-trail
           @select-tool="emit('selectTool', $event)"
         />

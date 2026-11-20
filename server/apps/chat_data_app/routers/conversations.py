@@ -1532,8 +1532,18 @@ async def get_conversation_context(conversation_id: str, req: Request) -> JSONRe
             return business_response(msg="对话不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
 
         datasource_id = await conversation.get_datasource_id(conversation_id, user_id)
+        try:
+            model_id = await conversation_event_service.get_latest_model_id(
+                conversation_id=conversation_id,
+                user_id=user_id,
+            )
+        except Exception:
+            # 模型名只是选择器展示信息，读取失败不能阻断历史会话打开。
+            logger.warning("读取会话最近模型失败: conversation_id=%s", conversation_id, exc_info=True)
+            model_id = ""
         return business_response(
-            data={"conversation_id": conversation_id, "datasource_id": datasource_id}, msg="获取成功"
+            data={"conversation_id": conversation_id, "datasource_id": datasource_id, "model_id": model_id or None},
+            msg="获取成功",
         )
     except AuthenticationError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message) from e

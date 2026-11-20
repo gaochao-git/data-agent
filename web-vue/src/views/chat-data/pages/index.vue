@@ -476,18 +476,17 @@ const currentConversationTitle = ref<string>('新会话')
 const currentConversationDatasourceId = ref<string | null>(null)
 const conversationPageSize = 20
 const conversationKey = ref(0)
-// 模型选择跟随当前浏览器标签页（对话窗口）：刷新/路由切换后保持；新建任务/换组新建
-// 任务显式清空，回到注册表最新默认模型。用 sessionStorage 而非 localStorage，
-// 避免新开标签页或下次打开系统时继承上一次的临时选择。
+// 新会话优先沿用用户在当前标签页最后一次手选的模型；没有缓存才由对话组件
+// 回填注册表默认模型。只记录用户手选，历史会话/运行中回填的模型不写入缓存。
 const SELECTED_MODEL_SESSION_KEY = 'chatdata.current_window_model_id'
-const readWindowSelectedModel = (): string => {
+const readCachedModelId = (): string => {
   try {
     return sessionStorage.getItem(SELECTED_MODEL_SESSION_KEY) || ''
   } catch {
     return ''
   }
 }
-const rememberWindowSelectedModel = (value: string) => {
+const rememberCachedModelId = (value: string) => {
   try {
     if (value) sessionStorage.setItem(SELECTED_MODEL_SESSION_KEY, value)
     else sessionStorage.removeItem(SELECTED_MODEL_SESSION_KEY)
@@ -495,10 +494,9 @@ const rememberWindowSelectedModel = (value: string) => {
     // storage 被宿主禁用时只丢失记忆，不影响功能
   }
 }
-const selectedConversationModelId = ref(readWindowSelectedModel())
-watch(selectedConversationModelId, (value) => {
-  rememberWindowSelectedModel(value || '')
-})
+const selectedConversationModelId = ref(readCachedModelId())
+// 会话切换令牌：快速连点/切会话后再新建时，晚返回的旧 context 不得覆盖最后操作。
+let conversationSelectionSeq = 0
 
 // SqlEditor 组件引用
 const sqlEditorRef = ref<InstanceType<typeof SqlEditor> | null>(null)
@@ -672,28 +670,42 @@ watch(visibleModes, () => {
 
 // 新建会话（只清空状态；选数据源确认时创建会话，发送消息兜底创建）
 const handleNewConversation = () => {
+  conversationSelectionSeq++
   currentConversationId.value = null
   currentConversationTitle.value = '新会话'
   currentConversationDatasourceId.value = null
   conversationKey.value++ // 强制重新渲染以清空消息
-  // 模型注册表是模块级会话期缓存，后端改配置后本页不会自动感知；
-  // 新建会话时强制重拉 /config（后台静默），并清空显式模型选择——
-  // 新会话一律回到注册表最新默认模型（is_default），由 Conversation
-  // 内的 watch(modelOptions) 在数据到达后回填。
-  selectedConversationModelId.value = ''
+  // 模型注册表是模块级会话期缓存，后端改配置后本页不会自动感知；新建会话
+  // 时强制重拉 /config（后台静默）。新会话优先沿用当前标签页最后一次手选
+  // 的模型；无缓存时由 Conversation 内的 watch(modelOptions) 回填默认模型。
+  selectedConversationModelId.value = readCachedModelId()
   loadModelOptions(true)
 }
 
-const loadConversationDatasourceId = async (conversationId: string): Promise<string | null | undefined> => {
+const loadConversationContext = async (
+  conversationId: string,
+): Promise<{ datasourceId: string | null; modelId: string | null } | undefined> => {
   try {
     const response = await getConversationContext(conversationId)
     if (response.status !== 'success') {
       throw new Error(response.msg || '读取历史会话上下文失败')
     }
-    return String(response.data?.datasource_id || '').trim() || null
+    return {
+      datasourceId: String(response.data?.datasource_id || '').trim() || null,
+      modelId: String(response.data?.model_id || '').trim() || null,
+    }
   } catch (error) {
     console.error('读取历史会话上下文失败:', error)
     return undefined
+  }
+}
+
+// 运行中模型以服务端当前 Run 为准：本窗口、别的窗口或刷新恢复都不能停留在
+// 上一次的模型。只同步当前会话，异步返回后再校验一次，避免切会话竞态。
+const syncConversationModelFromContext = async (conversationId: string): Promise<void> => {
+  const context = await loadConversationContext(conversationId)
+  if (currentConversationId.value === conversationId && context?.modelId) {
+    selectedConversationModelId.value = context.modelId
   }
 }
 
@@ -701,11 +713,14 @@ const loadConversationDatasourceId = async (conversationId: string): Promise<str
 const selectConversation = async (id: string): Promise<boolean> => {
   const conv = conversations.value.find(c => c.id === id)
   if (!conv) return false
-  const conversationDatasourceId = await loadConversationDatasourceId(id)
-  if (conversationDatasourceId === undefined) {
+  const selectionSeq = ++conversationSelectionSeq
+  const context = await loadConversationContext(id)
+  if (selectionSeq !== conversationSelectionSeq) return false
+  if (context === undefined) {
     ElMessage.error('读取历史会话上下文失败')
     return false
   }
+  const conversationDatasourceId = context.datasourceId
   if (conversationDatasourceId) {
     if (!datasources.value.some(datasource => datasource.id === conversationDatasourceId)) {
       ElMessage.warning('该历史会话关联的数据源组已不可用，仅可查看历史内容')
@@ -716,6 +731,9 @@ const selectConversation = async (id: string): Promise<boolean> => {
   currentConversationId.value = id
   currentConversationTitle.value = conv?.title || '会话'
   currentConversationDatasourceId.value = conversationDatasourceId || null
+  // 历史会话显示最近一次实际使用的模型；新会话走手选缓存/默认模型。
+  // 运行中由后端 context 优先返回当前 Run 的模型，避免显示成上一次的模型。
+  selectedConversationModelId.value = context.modelId || ''
   markHistoryConversationRead(id)
   conversationKey.value++ // 强制重新渲染以加载历史
   return true
@@ -824,6 +842,15 @@ const pollRunStatuses = async () => {
   try {
     await refreshConversationsPreservingPages()
     syncCurrentConversationTitleFromList()
+    const currentId = currentConversationId.value
+    const currentRunStatus = conversations.value.find(item => item.id === currentId)?.run_status
+    if (
+      currentId
+      && currentRunStatus
+      && (ACTIVE_CONVERSATION_RUN_STATUSES.has(currentRunStatus) || currentRunStatus === 'waiting_user')
+    ) {
+      await syncConversationModelFromContext(currentId)
+    }
   } finally {
     runStatusPollInFlight = false
   }
@@ -853,9 +880,13 @@ const handleFirstMessageStarted = (convId: string) => {
     updated_at: new Date().toISOString(),
   })
   invalidateInactiveView()
-  void loadConversationDatasourceId(convId).then(boundDatasourceId => {
+  void loadConversationContext(convId).then(context => {
+    const boundDatasourceId = context?.datasourceId
     if (currentConversationId.value === convId && boundDatasourceId) {
       currentConversationDatasourceId.value = boundDatasourceId
+    }
+    if (currentConversationId.value === convId && context?.modelId) {
+      selectedConversationModelId.value = context.modelId
     }
     if (boundDatasourceId) {
       upsertHistoryConversation({
@@ -1196,12 +1227,13 @@ const handleConfirmContextSelector = () => {
     if (isGroupSwitchNewTask.value) {
       // 换组 = 基于新组新建任务：重置会话态（已有会话保留在历史），新任务在
       // 首次使用会话工作区（发送首条消息 / 输入 @）时兜底创建；模型选择同
-      // 「新建任务」口径——清空显式选择，回到注册表最新默认模型
+      // 「新建任务」口径——沿用当前标签页最后一次手选，无缓存才回默认模型
+      conversationSelectionSeq++
       currentConversationId.value = null
       currentConversationTitle.value = '新会话'
       currentConversationDatasourceId.value = null
       conversationKey.value++
-      selectedConversationModelId.value = ''
+      selectedConversationModelId.value = readCachedModelId()
       loadModelOptions(true)
     }
     conversationMemberDatasourceIds.value = nextIds
@@ -1334,6 +1366,11 @@ const LEGACY_STORAGE_KEYS = [
 const cleanupLegacyStorageKeys = () => {
   try {
     LEGACY_STORAGE_KEYS.forEach(key => localStorage.removeItem(key))
+    // 旧版按用户记忆模型的 localStorage 键已由 sessionStorage 手选缓存取代；
+    // 不清理会在 DevTools 里留下看似仍生效的孤立配置。
+    Object.keys(localStorage)
+      .filter(key => key === 'chatdata:conversation-model' || key.startsWith('chatdata:conversation-model:'))
+      .forEach(key => localStorage.removeItem(key))
     sessionStorage.removeItem('chatdata-active-run-conversation')
   } catch {
     // storage 不可用（如宿主禁用）时清理失败无影响
@@ -1785,6 +1822,7 @@ onMounted(async () => {
                   :execution-target-multiple="true"
                   :selected-member-datasource-ids="conversationMemberDatasourceIds"
                   v-model:selected-model-id="selectedConversationModelId"
+                  @model-picked="rememberCachedModelId"
                   :can-import-semantic-model="canManageDatasource"
                   @import-semantic-yaml="handleImportSemanticYamlFromConversation"
                   class="h-full"

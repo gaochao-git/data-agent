@@ -541,6 +541,8 @@ export interface ToolCallInfo {
   subagentContextUsage?: SubagentContextUsage
   // 子智能体 token 用量（billing 口径，主对话统计不含它）：随 subagent 结果持久化
   subagentTokenUsage?: SubagentTokenUsage
+  /** 子智能体运行中的实时滑窗速率（与主对话同算法） */
+  subagentLiveSpeed?: number
   // 子图上下文压缩事件（静默压缩的可视化记录）
   subagentCompactions?: SubagentCompaction[]
   // 子智能体任务错误（后台任务账本的 task.error；主对话助手气泡同款错误行）
@@ -568,12 +570,16 @@ export interface SubagentContextUsage {
  * 主对话的 token 统计只算主图模型调用，这是一份独立的子智能体消耗汇总。
  */
 export interface SubagentTokenUsage {
+  /** 最后一次子图模型调用的模型名（后端 usage 记录提取） */
+  model?: string
   input_tokens?: number
   output_tokens?: number
   total_tokens?: number
   cache_read_input_tokens?: number
   cache_creation_input_tokens?: number
   reasoning_tokens?: number
+  /** 输出 token ÷ 子图模型调用时长；模型未盖章起止时间时省略 */
+  tokens_per_second?: number
 }
 
 /** 子图上下文压缩记录（每条一次完成的压缩）。 */
@@ -777,7 +783,7 @@ export interface ChatDataOptions {
 export type SidebarTab = 'dashboards' | 'config' | 'history'
 
 // SSE 事件类型
-export type SSEEventType = 'message' | 'message_end' | 'heartbeat' | 'token_usage' | 'generation_speed' | 'context_compression' | 'conversation_title_updated' | 'thinking' | 'tool' | 'tool_started' | 'tool_progress' | 'tool_completed' | 'tool_failed' | 'subagent_message' | 'subagent_message_delta' | 'subagent_thinking_delta' | 'subagent_context_usage' | 'subagent_context_compression' | 'subagent_task_updated' | 'inbox_admitted' | 'question_requested' | 'error' | 'done' | 'dashboard_spec'
+export type SSEEventType = 'message' | 'message_end' | 'heartbeat' | 'token_usage' | 'generation_speed' | 'context_compression' | 'conversation_title_updated' | 'thinking' | 'tool' | 'tool_started' | 'tool_progress' | 'tool_completed' | 'tool_failed' | 'subagent_message' | 'subagent_message_delta' | 'subagent_thinking_delta' | 'subagent_generation_speed' | 'subagent_context_usage' | 'subagent_context_compression' | 'subagent_task_updated' | 'inbox_admitted' | 'question_requested' | 'error' | 'done' | 'dashboard_spec'
 
 export interface UserQuestionOption {
   label: string
@@ -840,7 +846,7 @@ export interface ToolEventData {
 }
 
 export interface ToolLifecycleEventData extends ToolEventData {
-  type: 'tool_started' | 'tool_progress' | 'tool_completed' | 'tool_failed' | 'subagent_message' | 'subagent_message_delta' | 'subagent_thinking_delta' | 'subagent_context_usage' | 'subagent_context_compression'
+  type: 'tool_started' | 'tool_progress' | 'tool_completed' | 'tool_failed' | 'subagent_message' | 'subagent_message_delta' | 'subagent_thinking_delta' | 'subagent_generation_speed' | 'subagent_context_usage' | 'subagent_context_compression'
   progress?: number
   accumulated_args?: Record<string, unknown>
   content?: string
@@ -874,6 +880,9 @@ export interface ToolLifecycleEventData extends ToolEventData {
   threshold_tokens?: number
   /** subagent 完成事件：子图 token 用量（billing 口径） */
   subagent_token_usage?: SubagentTokenUsage
+  /** subagent_generation_speed：与主对话同口径的实时滑窗速率 */
+  tokens_per_second?: number
+  window_ms?: number
   /** subagent_context_usage：子图上下文计量明细（与主对话 token_usage 同结构） */
   token_usage_detail?: ChatDataTokenUsage
   /** subagent_context_compression：一次完成的子图压缩记录 */

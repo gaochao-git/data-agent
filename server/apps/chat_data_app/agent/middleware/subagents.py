@@ -548,6 +548,8 @@ def _build_task_result_artifacts(
             context_usage,
             captured.get("compactions"),
             _resolve_subagent_usage_detail(captured),
+            captured.get("model"),
+            captured.get("generation_timing"),
         )
     )
     return artifacts
@@ -745,6 +747,8 @@ async def _invoke_task_subagent(
 ) -> tuple[list, str, str]:
     """运行子图并归一成功/失败结果，失败也保留已收集的过程。"""
     execution = execution or _TaskExecution()
+    if spec.model_id:
+        captured.setdefault("model", spec.model_id)
     config = build_subagent_invocation_config(
         spec,
         default_recursion_limit=await get_runtime_setting("CHAT_DATA_AGENT_RECURSION_LIMIT"),
@@ -1802,6 +1806,23 @@ async def _route_subagent_tool(
     return await _tool_decide(ctx, runtime, decide)
 
 
+class _SubagentStructuredTool(StructuredTool):
+    """允许 LangGraph 注入运行时参数，同时保持模型参数 schema 严格。"""
+
+    def _parse_input(self, tool_input: str | dict[str, Any], tool_call_id: str | None) -> str | dict[str, Any]:
+        if not isinstance(tool_input, dict):
+            return super()._parse_input(tool_input, tool_call_id)
+        injected_keys = self._injected_args_keys
+        injected = {key: tool_input[key] for key in injected_keys if key in tool_input}
+        parsed = super()._parse_input(
+            {key: value for key, value in tool_input.items() if key not in injected_keys},
+            tool_call_id,
+        )
+        if isinstance(parsed, dict):
+            parsed.update(injected)
+        return parsed
+
+
 def build_task_tool(specs: list[SubagentSpec], run_controls: Any = None) -> StructuredTool:
     """构建单一 ``subagent`` 工具：四组主参数按生命周期分层。"""
     validate_subagent_specs(specs)
@@ -1823,7 +1844,7 @@ def build_task_tool(specs: list[SubagentSpec], run_controls: Any = None) -> Stru
     ) -> Command | str:
         return await _route_subagent_tool(ctx, runtime, dispatch, send, manage, decide)
 
-    return StructuredTool.from_function(
+    return _SubagentStructuredTool.from_function(
         name=SUBAGENT_TOOL_NAME,
         coroutine=subagent,
         description=_SUBAGENT_TOOL_DESCRIPTION_TEMPLATE.replace("{available_agents}", available),

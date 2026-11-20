@@ -3,12 +3,15 @@
 import pytest
 from pydantic import ValidationError
 
+from apps.chat_data_app.agent.middleware import subagents as subagents_module
 from apps.chat_data_app.agent.middleware.subagents import (
     DecideArgs,
     DispatchArgs,
     ManageArgs,
     SendArgs,
+    SubagentSpec,
     SubagentToolArgs,
+    build_task_tool,
 )
 
 
@@ -87,3 +90,60 @@ def test_decide_requires_explicit_decision():
         DecideArgs(task_id="t1")
     with pytest.raises(ValidationError):
         DecideArgs(task_id="t1", decision="maybe")
+
+
+def _spec():
+    return SubagentSpec(
+        name="explore",
+        description="只读盘点子智能体",
+        system_prompt="你是只读盘点子智能体",
+        tools=[],
+        model=object(),
+    )
+
+
+def test_tool_schema_keeps_runtime_injected_and_hidden_from_model():
+    tool = build_task_tool([_spec()])
+
+    assert tool._injected_args_keys == frozenset({"runtime"})
+    assert set(tool.args_schema.model_json_schema()["properties"]) == {"dispatch", "send", "manage", "decide"}
+    assert "runtime" not in tool.get_input_schema().model_json_schema()["properties"]
+
+
+@pytest.mark.asyncio
+async def test_tool_invocation_accepts_langgraph_runtime_injection(monkeypatch):
+    seen = {}
+
+    async def fake_route(_ctx, runtime, dispatch=None, send=None, manage=None, decide=None):
+        seen.update(runtime=runtime, dispatch=dispatch, send=send, manage=manage, decide=decide)
+        return "ok"
+
+    monkeypatch.setattr(subagents_module, "_route_subagent_tool", fake_route)
+    tool = build_task_tool([_spec()])
+    runtime = object()
+
+    result = await tool.ainvoke(
+        {
+            "dispatch": {"description": "盘点工作区", "subagent_type": "explore"},
+            "runtime": runtime,
+        }
+    )
+
+    assert result == "ok"
+    assert seen["runtime"] is runtime
+    assert isinstance(seen["dispatch"], DispatchArgs)
+    assert seen["dispatch"].description == "盘点工作区"
+
+
+@pytest.mark.asyncio
+async def test_tool_invocation_still_rejects_unknown_model_fields():
+    tool = build_task_tool([_spec()])
+
+    with pytest.raises(ValidationError, match="extra_forbidden"):
+        await tool.ainvoke(
+            {
+                "dispatch": {"description": "盘点工作区", "subagent_type": "explore"},
+                "unknown": True,
+                "runtime": object(),
+            }
+        )

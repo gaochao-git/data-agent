@@ -17,7 +17,7 @@ import type { ExecutionTargetOption, SubagentTokenUsage, ToolCallInfo } from '..
 import { buildSubagentMessages, getAssistantCopyText, hasSubagentTrail } from '../../utils/messageView'
 import { shouldInlineRenderQueryResult } from '../../utils/semanticTool'
 import { formatDateTimeValue } from '../../utils'
-import { buildSubagentTokenUsageText } from '../../utils/subagentUsage'
+import { buildSubagentTokenUsageRows, buildSubagentTokenUsageText } from '../../utils/subagentUsage'
 import MessageItem from './messages/MessageItem.vue'
 import MessageFooter from './messages/MessageFooter.vue'
 
@@ -33,6 +33,8 @@ const props = defineProps({
   timingRunning: { type: Boolean, default: false },
   /** 子智能体 token 用量（billing 口径）：完成后与「用时」同一行展示 */
   tokenUsage: { type: Object as PropType<SubagentTokenUsage | null>, default: null },
+  /** 运行中实时滑窗速率（与主对话同算法）；完成后改用 tokenUsage.tokens_per_second */
+  liveSpeed: { type: Number as PropType<number | null>, default: null },
   /** 后台任务详情没有 trail 时也要展示任务书/报告；前台工具详情保持原口径 */
   showWithoutTrail: { type: Boolean, default: false },
 })
@@ -43,6 +45,7 @@ const emit = defineEmits<{
 
 const messages = computed(() => buildSubagentMessages(props.toolCall))
 const tokenUsageText = computed(() => buildSubagentTokenUsageText(props.tokenUsage))
+const tokenUsageRows = computed(() => buildSubagentTokenUsageRows(props.tokenUsage))
 /** 每轮只在最后一条助手消息上挂 footer，压缩切出的中间段不重复展示整轮统计。 */
 const lastAssistantId = computed(() => (
   [...messages.value].reverse().find(message => message.role === 'assistant')?.id || ''
@@ -71,6 +74,7 @@ const showFooterFor = (message: { id: string; role: string; isStreaming?: boolea
         :on-save="onSave"
         :active-tool-call-id="activeToolCallId"
         :should-inline-render-result="shouldInlineRenderQueryResult"
+        :live-generation-speed="timingRunning ? liveSpeed : null"
         :live-elapsed-ms="timingRunning ? elapsedMs : null"
         @select-tool="emit('selectTool', $event)"
       />
@@ -80,6 +84,9 @@ const showFooterFor = (message: { id: string; role: string; isStreaming?: boolea
         :copy-text="getAssistantCopyText(message)"
         :duration-ms="timingRunning ? null : elapsedMs"
         :usage-text="tokenUsageText"
+        :usage-model="tokenUsage?.model || ''"
+        :usage-rows="tokenUsageRows"
+        :usage-speed="tokenUsage?.tokens_per_second || 0"
         :show-ai-notice="false"
       />
     </div>

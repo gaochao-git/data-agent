@@ -502,7 +502,7 @@ async def test_get_conversation_context_returns_business_datasource(router_state
     monkeypatch.setattr(conversation_router.conversation, "get_datasource_id", get_datasource_id)
 
     result = payload(await conversation_router.get_conversation_context("conv", request))
-    assert result["data"] == {"conversation_id": "conv", "datasource_id": "ds_a"}
+    assert result["data"] == {"conversation_id": "conv", "datasource_id": "ds_a", "model_id": None}
 
 
 @pytest.mark.asyncio

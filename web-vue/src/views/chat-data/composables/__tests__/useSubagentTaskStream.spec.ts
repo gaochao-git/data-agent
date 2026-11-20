@@ -107,4 +107,34 @@ describe('useSubagentTaskStream 检查点快照', () => {
     ])
     wrapper.unmount()
   })
+
+  it('运行中的上下文事件同步累计 token 用量', async () => {
+    vi.mocked(getSubagentTaskTrail).mockResolvedValue({ available: false })
+    const frames = 'id: 1-0\nevent: subagent_context_usage\ndata: ' + JSON.stringify({
+      used_tokens: 4_400,
+      threshold_tokens: 96_000,
+      context_window: 128_000,
+      percent: 3,
+      subagent_token_usage: {
+        input_tokens: 15_700,
+        output_tokens: 1_200,
+        total_tokens: 16_900,
+        cache_read_input_tokens: 9_900,
+      },
+    }) + '\n\n'
+    vi.mocked(streamSubagentTaskEvents).mockImplementation(() => Promise.resolve(new Response(frames)))
+
+    const { wrapper, stream } = mountStream()
+    await flushPromises()
+    await nextTick()
+
+    expect(stream.contextUsage.value?.used_tokens).toBe(4_400)
+    expect(stream.tokenUsage.value).toEqual({
+      input_tokens: 15_700,
+      output_tokens: 1_200,
+      total_tokens: 16_900,
+      cache_read_input_tokens: 9_900,
+    })
+    wrapper.unmount()
+  })
 })
