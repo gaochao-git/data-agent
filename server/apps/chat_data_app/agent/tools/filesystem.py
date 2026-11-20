@@ -483,11 +483,10 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
         intent: str = "",
     ) -> str:
         """
-        读取当前会话的 /mnt/user-data/{workspace,outputs,uploads} 文本文件，或有权访问的技能只读 /mnt/skills 路径。
+        读取文件。
 
         返回头中的 total_lines 是文件真实总行数：大文件先按 total_lines 评估规模，优先用
         file_grep 定位或按 offset 精确分页，不要从文件头开始逐页翻完整个大文件。
-        workspace/.system/query_result 与 workspace/.system/tool-offload 是系统写入的结果文件，用户前端可见、可下载，但不能通过其它文件工具修改、复制、移动或删除。
 
         Args:
             file_path: 要读取的文件路径。
@@ -505,12 +504,12 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
         intent: str = "",
     ) -> str:
         """
-        精确修改 /mnt/user-data/workspace/ 或 /mnt/user-data/outputs/ 下已有文本文件的一处内容。
+        修改已有文本文件的一处内容。
 
         修改前必须先用 file_read 获取最新内容。old_content 必须是文件中完整、非空且唯一的一段原文；
-        找不到或匹配多处时会失败，不会修改文件。new_content 与 old_content 相同时同样会失败。
-        新建文件或整体覆盖请使用 file_write。
-        追加内容时同样用本工具：取文件末尾一段唯一原文作 old_content，new_content 为这段原文加换行再加新增内容。
+        找不到、匹配多处或 new_content 与 old_content 相同时都会失败，不修改文件。
+        新建或整体重写用 file_write；追加也用本工具：取文件末尾一段唯一原文作 old_content，
+        new_content 为这段原文加换行再加新增内容。
 
         Args:
             file_path: 要修改的文件路径。
@@ -529,14 +528,12 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
         intent: str = "",
     ) -> str:
         """
-        在 /mnt/user-data/workspace/ 或 /mnt/user-data/outputs/ 新建文本文件。
+        新建文本文件，或整体重写已有文件。
 
-        优先使用 file_edit 修改已有文件：目标文件已存在且只需局部修改或追加时，
-        不要用本工具整体覆盖，必须用 file_edit 精确替换。仅当文件不存在、或确需
-        整份重写（如合并淘汰后重写 memory.md）时才使用本工具。
-        注意：单次 content 受模型单轮输出上限约束，过长会在生成阶段被截断成半截文件；
-        超过约 8000 字符的文本必须分块写入——先用本工具写前段，再用 file_edit 逐段追加
-        （以文件当前末尾的唯一内容作 old_content，new_content 为该段原文接续新增内容）。
+        已有文件只需局部修改或追加时用 file_edit，不要整体覆盖。
+        单次 content 受模型单轮输出上限约束，过长会在生成阶段被截断成半截文件；
+        超过约 8000 字符必须分块写入：先用本工具写前段，再用 file_edit 逐段追加
+        （以文件当前末尾的唯一内容作 old_content，new_content 为这段原文接续新增内容）。
 
         Args:
             file_path: 新建或覆盖的目标文件路径。
@@ -547,29 +544,29 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
 
     @tool("file_move", parse_docstring=True)
     async def file_move(source_path: str, destination_path: str, intent: str = "") -> str:
-        """移动或重命名 /mnt/user-data/workspace、/mnt/user-data/outputs 下的文件或目录。目标路径不得存在，且其父目录必须已存在。
+        """移动或重命名文件/目录。目标路径不得存在，且其父目录必须已存在。
 
         Args:
             source_path: 源文件或目录路径。
-            destination_path: 目标路径，不得已存在，父目录必须已存在。
+            destination_path: 目标路径，不得存在，父目录必须已存在。
             intent: 一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示。
         """
         return await _file_move_impl(workspace_runtime, source_path=source_path, destination_path=destination_path)
 
     @tool("file_copy", parse_docstring=True)
     async def file_copy(source_path: str, destination_path: str, intent: str = "") -> str:
-        """复制 /mnt/user-data/{uploads,workspace,outputs} 或只读 /mnt/skills 技能路径下的单个文件到 /mnt/user-data/{workspace,outputs}。目标路径不得存在，且其父目录必须已存在。
+        """复制单个文件（不支持目录）。目标路径不得存在，且其父目录必须已存在。
 
         Args:
             source_path: 源文件路径，仅支持单个文件。
-            destination_path: 目标文件路径，不得已存在，父目录必须已存在。
+            destination_path: 目标文件路径，不得存在，父目录必须已存在。
             intent: 一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示。
         """
         return await _file_copy_impl(workspace_runtime, source_path=source_path, destination_path=destination_path)
 
     @tool("file_delete", parse_docstring=True)
     async def file_delete(file_path: str, intent: str = "") -> str:
-        """删除 /mnt/user-data/workspace 或 /mnt/user-data/outputs 下的单个文件。不能删除目录、根目录或隐藏工具结果缓存。
+        """删除单个文件。不能删除目录或根目录；workspace/.system 下的系统结果文件不可删改。
 
         Args:
             file_path: 要删除的文件路径。
@@ -607,7 +604,7 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
         intent: str = "",
     ) -> str:
         """
-        在文本文件中查找内容，默认递归搜索 /mnt/user-data/workspace。pattern 可用 | 分隔多个关键词做 OR 匹配（如 error|warn|fail）；use_regex=true 时 pattern 按正则解释（如 `def \\w+_impl`）；glob 可限定文件范围，例如 `**/*.md`。
+        在文本文件中查找内容，默认递归搜索 /mnt/user-data/workspace。
 
         最多返回 200 条匹配，每条最多 500 字符，整体正文受 CHAT_DATA_FILE_READ_MAX_CHARS 限制；二进制文件和超过 2 MiB 的文件会跳过。
         大结果集先用 output_mode="files_with_matches" 看哪些文件命中，再用 output_mode="count" 看热点分布，最后收敛 path/glob 后取 content。
@@ -655,7 +652,7 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
 
     @tool("dir_create", parse_docstring=True)
     async def dir_create(path: str, intent: str = "") -> str:
-        """在 /mnt/user-data/workspace 或 /mnt/user-data/outputs 下创建目录。不能创建根目录或操作隐藏工具结果缓存。
+        """创建目录。不能创建根目录，也不能在 workspace/.system 下创建。
 
         Args:
             path: 要创建的目录路径。
@@ -668,7 +665,7 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
         """
         列出当前会话目录内容。path 必须是规范形式：/mnt/user-data/workspace、/mnt/user-data/outputs、/mnt/user-data/uploads 之一，或只读技能路径 /mnt/skills/<技能名>/...。
 
-        max_depth 默认 2，范围 1-5；workspace/.system 下的系统结果目录会出现在结果中，但只读、不可删改。
+        max_depth 默认 2，范围 1-5。
 
         Args:
             path: 要列出的目录路径，必须使用规范形式。
@@ -679,7 +676,7 @@ def create_filesystem_tools(workspace_runtime: ConversationWorkspaceRuntime) -> 
 
     @tool("dir_delete", parse_docstring=True)
     async def dir_delete(path: str, recursive: bool = False, intent: str = "") -> str:
-        """删除 /mnt/user-data/workspace 或 /mnt/user-data/outputs 下的目录。非空目录必须显式设置 recursive=true，不能删除根目录。
+        """删除目录。非空目录必须显式设置 recursive=true，不能删除根目录。
 
         Args:
             path: 要删除的目录路径。
