@@ -78,7 +78,7 @@ import { evictWorkspaceFileCache } from '../../utils/workspacePreviewCache'
 import { IMAGE_PREVIEW_EXTENSIONS, IMAGE_PREVIEW_MIME, OFFICE_HTML_PREVIEW_EXTENSIONS, isBinaryPreviewPath } from '../../utils'
 import { formatToolTableCell, parseChartSpecValue, replaceVisiblePathsForDisplay } from '../../utils/messageArtifacts'
 import ConversationTokenUsage from './ConversationTokenUsage.vue'
-import { extractChangedFilePathsFromResult, extractWrittenFilePathCandidates, getSubagentOperationArgs, isSubagentToolName } from '../../utils/toolDisplay'
+import { extractChangedFilePathsFromResult, extractWrittenFilePathCandidates, getSubagentDispatchArgs, isSubagentToolName } from '../../utils/toolDisplay'
 import { resolveSubagentContextUsage } from '../../utils/subagentUsage'
 import { ACCEPTED_FILE_TYPES, MAX_FILE_SIZE } from '../../utils/uploadLimits'
 
@@ -362,7 +362,7 @@ const openToolPanelTab = (toolCall: ToolCallInfo) => {
     }
   }
   const isTask = isSubagentToolName(toolCall.tool_name) && (toolCall.subagentTrail?.length ?? 0) > 0
-  const dispatchArgs = getSubagentOperationArgs(toolCall.args || {})?.args
+  const dispatchArgs = getSubagentDispatchArgs(toolCall.tool_name, toolCall.args || {})
   const subagentType = typeof dispatchArgs?.subagent_type === 'string' ? dispatchArgs.subagent_type.trim() : ''
   rememberActivePanelScroll()
   activateTab({

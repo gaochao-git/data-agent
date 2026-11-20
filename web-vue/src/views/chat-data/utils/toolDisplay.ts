@@ -10,9 +10,19 @@ export interface SubagentOperationArgs {
   args: ToolArgs
 }
 
-/** 子智能体单工具：三组主参数共享过程卡片、参数标签和结果渲染。 */
+const SUBAGENT_TOOL_NAME = 'subagent'
+// 单工具收敛前的历史工具名：旧会话仍持久化 task，只做展示兼容。
+const LEGACY_SUBAGENT_TOOL_NAME = 'task'
+
+/** 是否为收敛前的旧子智能体工具名。 */
+export function isLegacySubagentToolName(toolName?: string | null): boolean {
+  return String(toolName || '').trim() === LEGACY_SUBAGENT_TOOL_NAME
+}
+
+/** 子智能体工具：新单工具与旧 task 历史调用共享过程卡片、参数标签和结果渲染。 */
 export function isSubagentToolName(toolName?: string | null): boolean {
-  return String(toolName || '').trim() === 'subagent'
+  const name = String(toolName || '').trim()
+  return name === SUBAGENT_TOOL_NAME || name === LEGACY_SUBAGENT_TOOL_NAME
 }
 
 /** 取出当前调用的主参数分组；流式参数未完整时返回 null。 */
@@ -24,6 +34,15 @@ export function getSubagentOperationArgs(args: ToolArgs = {}): SubagentOperation
     }
   }
   return null
+}
+
+/** 取派发参数：新工具取 dispatch 组；旧 task 的 start（含默认 action）就是扁平参数本身。 */
+export function getSubagentDispatchArgs(toolName?: string | null, args: ToolArgs = {}): ToolArgs | null {
+  const operation = getSubagentOperationArgs(args)
+  if (operation?.operation === 'dispatch') return operation.args
+  if (!isLegacySubagentToolName(toolName)) return null
+  const action = String(args.action || 'start').trim()
+  return action === 'start' ? args : null
 }
 
 /** /config 下发后注入；后端声明是工具展示名的唯一来源。 */
@@ -162,10 +181,26 @@ const TASK_ACTION_NAMES: Record<string, string> = {
   cancel: '取消子智能体任务',
 }
 
+const LEGACY_TASK_ACTION_NAMES: Record<string, string> = {
+  ...TASK_ACTION_NAMES,
+  follow_up: '向子智能体发送消息',
+  steer: '向子智能体发送消息',
+  approve: '批准子智能体操作',
+  reject: '拒绝子智能体操作',
+}
+
+/** 旧 task 的扁平 action → 展示名；start/缺省 action 表示派发。 */
+const legacyTaskActionDisplayName = (args: ToolArgs): string => {
+  const action = String(args.action || 'start').trim()
+  if (action === 'start') return '派发子智能体'
+  return LEGACY_TASK_ACTION_NAMES[action] || ''
+}
+
 /** 子智能体工具内按动作细分的展示名；无需细分时沿用后端静态展示名。 */
 export function getSubagentActionDisplayName(toolName?: string | null, args: ToolArgs = {}): string {
   const name = String(toolName || '').trim()
-  if (name !== 'subagent') return ''
+  if (name === LEGACY_SUBAGENT_TOOL_NAME) return legacyTaskActionDisplayName(args)
+  if (name !== SUBAGENT_TOOL_NAME) return ''
   const operation = getSubagentOperationArgs(args)
   if (!operation) return ''
   if (operation.operation === 'dispatch') return '派发子智能体'
@@ -202,6 +237,17 @@ const followUpTaskDescription: DescriptionBuilder = (args) => {
   return taskId && message ? `${taskId} · ${message}` : taskId || message
 }
 
+const legacyTaskDescription: DescriptionBuilder = (args) => {
+  const action = String(args.action || 'start').trim()
+  if (action === 'check' || action === 'cancel' || action === 'approve' || action === 'reject') {
+    return compactInlineText(args.task_id)
+  }
+  if (action === 'list') return compactInlineText(args.agent_id || args.status)
+  if (action === 'wait') return taskDescription(args)
+  if (action === 'follow_up' || action === 'steer') return followUpTaskDescription(args)
+  return startTaskDescription(args)
+}
+
 const subagentDescription: DescriptionBuilder = (args) => {
   const operation = getSubagentOperationArgs(args)
   if (!operation) return ''
@@ -231,6 +277,7 @@ const TOOL_DESCRIPTION_BUILDERS: Record<string, DescriptionBuilder> = {
   officecli_run: args => Array.isArray(args.command_args) ? compactInlineText(args.command_args.join(' ')) : '',
   bash_run: args => compactInlineText(args.command),
   subagent: subagentDescription,
+  task: legacyTaskDescription,
   write_todos: args => {
     const todos = Array.isArray(args.todos) ? args.todos : []
     const done = todos.filter(item => item?.status === 'completed').length

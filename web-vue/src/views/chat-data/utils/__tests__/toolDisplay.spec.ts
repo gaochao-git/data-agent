@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { extractChangedFilePathsFromResult, extractWrittenFilePathCandidates, getDataAnalyzingActionName, getSubagentActionDisplayName, getToolCompactDescription, getToolDisplayName, getToolTechnicalDescription, isFileDiffOffloaded, isSubagentToolName, setToolDisplayNames, splitFileDiffLines } from '../toolDisplay'
+import { extractChangedFilePathsFromResult, extractWrittenFilePathCandidates, getDataAnalyzingActionName, getToolCompactDescription, getToolDisplayName, getToolTechnicalDescription, isFileDiffOffloaded, isSubagentToolName, setToolDisplayNames, splitFileDiffLines } from '../toolDisplay'
 
 describe('toolDisplay', () => {
   it('maps every current ChatData tool to a user-facing name', () => {
@@ -59,9 +59,20 @@ describe('toolDisplay', () => {
     expect(getToolDisplayName('subagent', { send: { task_id: 't1', message: '继续' } })).toBe('向子智能体发送消息')
   })
 
-  it('recognizes only the single subagent tool', () => {
+  it('keeps legacy task calls on the subagent card path', () => {
+    expect(getToolDisplayName('task')).toBe('派发子智能体')
+    expect(getToolDisplayName('task', { action: 'list' })).toBe('查看子智能体任务')
+    expect(getToolDisplayName('task', { action: 'check', task_id: 't1' })).toBe('查看子智能体任务')
+    expect(getToolDisplayName('task', { action: 'wait', task_ids: ['t1'] })).toBe('等待子智能体任务')
+    expect(getToolDisplayName('task', { action: 'cancel', task_id: 't1' })).toBe('取消子智能体任务')
+    expect(getToolDisplayName('task', { action: 'follow_up', task_id: 't1', message: '继续' })).toBe('向子智能体发送消息')
+    expect(getToolDisplayName('task', { action: 'steer', task_id: 't1', message: '补充' })).toBe('向子智能体发送消息')
+  })
+
+  it('recognizes the current subagent tool and the legacy task name', () => {
     expect(isSubagentToolName('subagent')).toBe(true)
-    for (const toolName of ['subagent_start', 'subagent_follow_up', 'subagent_task', 'subagent_control', 'task']) {
+    expect(isSubagentToolName('task')).toBe(true)
+    for (const toolName of ['subagent_start', 'subagent_follow_up', 'subagent_task', 'subagent_control']) {
       expect(isSubagentToolName(toolName)).toBe(false)
     }
   })
@@ -151,6 +162,19 @@ describe('toolDisplay', () => {
     })).toBe('t1')
     expect(getToolCompactDescription('subagent', {
       send: { task_id: 't1', message: '继续补充渠道拆分' },
+    })).toBe('t1 · 继续补充渠道拆分')
+    expect(getToolCompactDescription('task', {
+      subagent_type: 'data-explore',
+      description: '分析近 30 天入金金额趋势并给出结论',
+    })).toBe('data-explore · 分析近 30 天入金金额趋势并给出结论')
+    expect(getToolCompactDescription('task', {
+      action: 'check',
+      task_id: 't1',
+    })).toBe('t1')
+    expect(getToolCompactDescription('task', {
+      action: 'follow_up',
+      task_id: 't1',
+      message: '继续补充渠道拆分',
     })).toBe('t1 · 继续补充渠道拆分')
     expect(getToolCompactDescription('unknown_tool', { query: '不展示' })).toBe('')
   })

@@ -10,7 +10,7 @@ import type { ExecutionTargetOption, ToolCallInfo } from '../types'
 import QueryResultPanel from './QueryResultPanel.vue'
 import SaveToPanelModal from './SaveToPanelModal.vue'
 import { extractGeneratedSqlFromToolCall, extractQueryResultPayload, extractSemanticDslFromArgs, getQueryResultError, parseQueryResultEnvelope } from '../utils/semanticTool'
-import { compactInlineText, getSubagentActionDisplayName, getSubagentOperationArgs, getToolDisplayName, getToolTechnicalDescription, formatToolTimingText, isSubagentToolName, parseFileDiffResult, isFileDiffOffloaded } from '../utils/toolDisplay'
+import { compactInlineText, getSubagentActionDisplayName, getSubagentDispatchArgs, getSubagentOperationArgs, getToolDisplayName, getToolTechnicalDescription, formatToolTimingText, isSubagentToolName, parseFileDiffResult, isFileDiffOffloaded } from '../utils/toolDisplay'
 import FileDiffViewer from './FileDiffViewer.vue'
 import { useSaveToPanel } from '../composables/useSaveToPanel'
 import { useToolTiming } from '../composables/useToolTiming'
@@ -142,7 +142,8 @@ const displayName = computed(() => {
 })
 // 只有真正派发子智能体用机器人图标；subagent 的查询/等待/取消保持扳手。
 const toolIconClass = computed(() => {
-  return isSubagentToolName(props.toolCall.tool_name) && Boolean((props.toolCall.args || {}).dispatch)
+  return isSubagentToolName(props.toolCall.tool_name)
+    && getSubagentDispatchArgs(props.toolCall.tool_name, props.toolCall.args || {}) !== null
     ? 'fa-robot'
     : 'fa-wrench'
 })

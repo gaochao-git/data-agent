@@ -185,6 +185,24 @@ describe('ToolCallCard', () => {
     expect(wrapper.find('.fa-robot').exists()).toBe(true)
   })
 
+  it('renders legacy flat task dispatch with the subagent icon', () => {
+    const wrapper = mount(ToolCallCard, {
+      props: {
+        isExpanded: true,
+        toolCall: {
+          tool_call_id: 'call-legacy-task',
+          tool_name: 'task',
+          args: { description: '历史任务书', subagent_type: 'explore' },
+          status: 'running',
+        },
+      },
+    })
+
+    expect(wrapper.text()).toContain('派发子智能体')
+    expect(wrapper.text()).toContain('历史任务书')
+    expect(wrapper.find('.fa-robot').exists()).toBe(true)
+  })
+
   it('shows streaming intent while args are not yet parsed', () => {
     const wrapper = mount(ToolCallCard, {
       props: {
