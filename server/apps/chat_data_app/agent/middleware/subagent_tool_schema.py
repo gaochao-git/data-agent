@@ -46,11 +46,6 @@ class DispatchArgs(_SubagentToolArgs):
         max_length=120,
         description="子智能体任务列表里展示的短标题；不传时取任务书首行。",
     )
-    write_scopes: list[str] | None = Field(
-        default=None,
-        max_length=20,
-        description="可选：声明本任务会写的工作区相对文件或目录前缀，例如 outputs/word。",
-    )
 
 
 class SendArgs(_SubagentToolArgs):

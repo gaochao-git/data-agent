@@ -1206,6 +1206,18 @@ def test_middleware_registers_single_grouped_subagent_tool_with_agent_catalog():
     assert "manage" in middleware.tools[0].description
 
 
+def test_middleware_expands_available_agents_only_for_custom_prompt():
+    """默认提示词不重复类型清单；自定义模板显式带占位符时才展开。"""
+    default_middleware = SubagentMiddleware([_spec()])
+    assert "{available_agents}" not in default_middleware.system_prompt
+    assert "深度分析子智能体" not in default_middleware.system_prompt
+
+    custom_middleware = SubagentMiddleware([_spec()], system_prompt="可用类型：\n{available_agents}")
+    assert "可用类型：" in custom_middleware.system_prompt
+    assert "- explore: 深度分析子智能体" in custom_middleware.system_prompt
+    assert "{available_agents}" not in custom_middleware.system_prompt
+
+
 def test_passthrough_keys_cover_subagent_state_schema_fields():
     """白名单必须覆盖子智能体状态 schema 的全部透传业务字段。
 

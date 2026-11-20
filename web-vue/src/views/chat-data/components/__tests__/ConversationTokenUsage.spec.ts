@@ -1,6 +1,12 @@
-import { describe, expect, it } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { describe, expect, it, vi } from 'vitest'
+import { flushPromises, mount } from '@vue/test-utils'
 import ConversationTokenUsage from '../conversation/ConversationTokenUsage.vue'
+import { getConversationTokenUsageDetail } from '../../api'
+
+vi.mock('../../api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../api')>()
+  return { ...actual, getConversationTokenUsageDetail: vi.fn() }
+})
 
 const cacheUsage = {
   used: 12000,
@@ -237,6 +243,103 @@ describe('ConversationTokenUsage', () => {
     }
     await detailRow.trigger('click')
     expect(wrapper.text()).toContain('销量共 1234 件')
+    wrapper.unmount()
+  })
+
+  it('loads full detail when timeline stripped tool schema content', async () => {
+    const detail = {
+      data: {
+        used: 100,
+        total: 1000,
+        breakdown: [{
+          key: 'tool_schema',
+          label: '工具定义',
+          tokens: 19,
+          children: [{
+            key: 'tool_schema_0',
+            label: '工具定义 · subagent',
+            role: 'tool_schema',
+            tokens: 19,
+            content: '{"name":"subagent","parameters":{"full":true}}',
+            description: '{"name":"subagent","parameters":{"full":tr',
+          }],
+        }],
+      },
+    }
+    const mockedDetail = vi.mocked(getConversationTokenUsageDetail)
+    mockedDetail.mockReset()
+    mockedDetail.mockResolvedValue(detail as unknown as Awaited<ReturnType<typeof getConversationTokenUsageDetail>>)
+
+    const wrapper = mount(ConversationTokenUsage, {
+      props: {
+        conversationId: 'conv-history',
+        usage: {
+          used: 100,
+          total: 1000,
+          breakdown: [{
+            key: 'tool_schema',
+            label: '工具定义',
+            tokens: 19,
+            children: [{
+              key: 'tool_schema_0',
+              label: '工具定义 · subagent',
+              role: 'tool_schema',
+              tokens: 19,
+              description: '{"name":"subagent","parameters":{"full":tr',
+            }],
+          }],
+        },
+      },
+      attachTo: document.body,
+      global: { stubs: { teleport: true } },
+    })
+
+    await wrapper.get('button').trigger('click')
+    await flushPromises()
+
+    expect(mockedDetail).toHaveBeenCalledWith('conv-history')
+    const parentRow = wrapper.findAll('button[class*="grid"]')[0]
+    if (!parentRow) throw new Error('未渲染工具定义父行')
+    await parentRow.trigger('click')
+    const childRow = wrapper.findAll('button').find(button => button.text().includes('subagent'))
+    if (!childRow) throw new Error('未渲染工具定义子行')
+    await childRow.trigger('click')
+    expect(wrapper.text()).toContain('"full":true')
+    wrapper.unmount()
+  })
+
+  it('does not request detail when live usage already carries tool schema content', async () => {
+    const mockedDetail = vi.mocked(getConversationTokenUsageDetail)
+    mockedDetail.mockReset()
+
+    const wrapper = mount(ConversationTokenUsage, {
+      props: {
+        conversationId: 'conv-live',
+        usage: {
+          used: 100,
+          total: 1000,
+          breakdown: [{
+            key: 'tool_schema',
+            label: '工具定义',
+            tokens: 19,
+            children: [{
+              key: 'tool_schema_0',
+              label: '工具定义 · subagent',
+              role: 'tool_schema',
+              tokens: 19,
+              content: '{"name":"subagent"}',
+            }],
+          }],
+        },
+      },
+      attachTo: document.body,
+      global: { stubs: { teleport: true } },
+    })
+
+    await wrapper.get('button').trigger('click')
+    await flushPromises()
+
+    expect(mockedDetail).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 })

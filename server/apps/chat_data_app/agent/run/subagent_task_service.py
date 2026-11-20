@@ -58,7 +58,6 @@ from ..contracts.subagent_task import (
     SubagentTaskCapacityError,
     SubagentTaskLeaseLostError,
     SubagentTaskView,
-    normalize_write_scopes,
     parse_task_status_filter,
 )
 from .agent_inbox_service import (
@@ -221,11 +220,6 @@ class SubagentTaskRecord:
         return True if value is None else bool(value)
 
     @property
-    def write_scopes(self) -> tuple[str, ...]:
-        """主智能体声明的工作区相对写范围；空表示未声明。"""
-        return tuple(normalize_write_scopes(self.meta.get("write_scopes")))
-
-    @property
     def progress(self) -> dict[str, Any]:
         progress = self.meta.get("progress")
         if not isinstance(progress, dict):
@@ -349,7 +343,6 @@ class SubagentTaskRecord:
             "timeout_seconds": self.timeout_seconds,
             "execution_mode": self.execution_mode,
             "compaction_count": self.compaction_count,
-            "write_scopes": list(self.write_scopes),
         }
         if include_report:
             payload["report"] = self.report
@@ -505,7 +498,7 @@ def _user_message_notification_text(task: SubagentTaskRecord, excerpt: str) -> s
         f"类型={task.subagent_type}；任务={task.label}\n\n"
         f"用户消息：{excerpt}\n\n"
         "这是用户与子智能体的独立对话，不要把它当成新的派发指令；"
-        '如需继续管理该子会话，先调用 '
+        "如需继续管理该子会话，先调用 "
         'subagent({"manage":{"action":"check","task_id":"..."}}) 获取最新状态。'
     )
 
@@ -826,27 +819,6 @@ class SubagentTaskService:
             meta = load_task_meta(row.record_meta)
             meta["execution_mode"] = normalized_mode
             meta["notify_on_finish"] = normalized_mode != "sync"
-            row.record_meta = _task_meta_text(meta)
-            row.update_time = now
-            record = SubagentTaskRecord.from_row(row)
-        await self.publish_task_update(record)
-        return record
-
-    async def set_task_write_scopes(
-        self,
-        task_id: str,
-        owner_token: str,
-        write_scopes: Sequence[str],
-    ) -> SubagentTaskRecord | None:
-        """在任务启动前写入软写范围；只用于主智能体并发分发提示。"""
-        normalized = normalize_write_scopes(write_scopes)
-        async with get_session() as session:
-            now = await self._dao.now(session)
-            row = await self._dao.get(session, task_id, for_update=True)
-            if row is None or row.owner_token != owner_token or row.record_status != TASK_STATUS_PENDING:
-                return None
-            meta = load_task_meta(row.record_meta)
-            meta["write_scopes"] = normalized
             row.record_meta = _task_meta_text(meta)
             row.update_time = now
             record = SubagentTaskRecord.from_row(row)
@@ -1961,7 +1933,7 @@ class SubagentTaskService:
         header = "后台子智能体任务状态通知" if cancelled else "后台子智能体完成通知"
         guidance = (
             "任务已被取消，不需要汇报完成结论；如中断前已有结论可简要告知用户。"
-            f'需要基于同一子会话继续时调用 '
+            f"需要基于同一子会话继续时调用 "
             f'subagent({{"send":{{"task_id":"{task.task_id}","message":"..."}}}})，'
             "或重新派发新任务。"
             if cancelled
@@ -1985,7 +1957,7 @@ class SubagentTaskService:
                         else 'subagent({"manage":{"action":"check","task_id":"..."}}) 会返回完整正文，不要只凭预览下结论。'
                     )
                     + "如报告中提到产物文件，用 present_artifacts 展示。"
-                    + '需要基于同一子会话继续分析/修改结论时，用 '
+                    + "需要基于同一子会话继续分析/修改结论时，用 "
                     + f'subagent({{"send":{{"task_id":"{task.task_id}","message":"..."}}}})。'
                 )
             )

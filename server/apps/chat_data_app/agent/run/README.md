@@ -110,11 +110,9 @@ cancelled/interrupted/lost`；`cancelling` 是跨 worker 的取消请求，执�
   `chat_data_subagent_session.session_id`。
 - `task_id`：一次执行轮次，承载租约、取消、审计与报告；`turn_index` 是该智能体内的轮次。
 
-任务 `record_meta` 还保存 `write_scopes`：主智能体在派发会写 workspace 的子任务时声明的
-工作区相对文件/目录前缀。它只用于主智能体并发分发判断，不是锁：不阻止重叠任务启动，
-不参与租约，也不会自动串行。`list`/`check` 返回该声明及活跃任务重叠提示；
-`workspace:*` 表示全局写操作。未声明写范围的写任务按可能冲突处理，由主智能体在派发前
-自行串行并承担最终整合。
+任务 `record_meta` 不保存写范围。并发写由主智能体按写目标判断：同一文件、同一份交付物
+或同一目录下会互相覆盖的任务串行，写目标不同的任务可以并行。任务账本不提供写锁或
+重叠检测，最终整合由主智能体负责。
 
 `parent_task_id` 只表示“任务链上一轮”，**不是**父智能体；父子智能体关系看
 `parent_agent_id` / `root_agent_id` / `depth`。旧任务没有新字段时按

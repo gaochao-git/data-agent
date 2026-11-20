@@ -96,14 +96,6 @@ def test_legacy_decide_is_rejected_as_unknown_group():
         SubagentToolArgs.model_validate({"decide": {"task_id": "t1", "decision": "allow"}})
 
 
-def test_send_has_no_write_scopes_and_rejects_legacy_field():
-    """写范围只在 dispatch 声明；send 固定继承上一轮范围。"""
-    assert "write_scopes" in DispatchArgs.model_fields
-    assert "write_scopes" not in SendArgs.model_fields
-    with pytest.raises(ValidationError, match="write_scopes"):
-        SendArgs(task_id="t1", message="继续", write_scopes=["outputs/a.md"])
-
-
 def _spec():
     return SubagentSpec(
         name="explore",
@@ -129,8 +121,7 @@ def test_tool_description_explains_nested_argument_shape():
     assert '"manage":{"action":"list"}}' in description
     assert '"dispatch":{"subagent_type":"explore"' in description
     assert '"send":{"task_id":"任务 ID"' in description
-    assert "错误示例（会因顶层未知字段被拒绝）" in description
-    assert '{"action":"list"}' in description
+    assert "禁止顶层平铺 action/task_id" in description
     assert '"intent":"盘点报告目录"' in description
 
 
@@ -148,7 +139,6 @@ def test_tool_description_and_system_prompt_split_contract_from_policy():
         assert phrase not in description
 
     assert "仅异步任务运行中可插话" in description
-    assert "事实文件路径" in description
     assert "先 file_write 到 workspace" in prompt
     assert "目标、要求和交付格式直接写进任务书" in prompt
 
@@ -156,8 +146,17 @@ def test_tool_description_and_system_prompt_split_contract_from_policy():
 def test_parameter_descriptions_keep_field_semantics_only():
     """参数描述只讲字段含义，不重复系统提示里的并发与异步策略。"""
     assert "所有必要上下文" not in DispatchArgs.model_fields["description"].description
-    assert "并发分发规则见系统提示" not in DispatchArgs.model_fields["write_scopes"].description
     assert "任务 ID 不阻塞" not in DispatchArgs.model_fields["background"].description
+
+
+def test_write_scope_feature_is_removed():
+    """并发写由系统提示约束，不再暴露 write_scopes 参数或账本字段。"""
+    assert "write_scopes" not in DispatchArgs.model_fields
+    description = str(build_task_tool([_spec()]).description or "")
+    prompt = subagents_module._default_system_prompt()
+    assert "write_scopes" not in description
+    assert "write_scopes" not in prompt
+    assert "写目标不同的任务可以并行" in prompt
 
 
 @pytest.mark.asyncio

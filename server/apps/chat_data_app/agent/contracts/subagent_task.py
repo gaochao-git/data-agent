@@ -51,44 +51,9 @@ TASK_STATUS_LABELS = {
     TASK_STATUS_LOST: "执行节点失联",
 }
 TASK_HEARTBEAT_SECONDS = 5
-WORKSPACE_WRITE_SCOPE = "workspace:*"
 READ_ONLY_SUBAGENT_TYPES = frozenset({"explore"})
 SESSION_STATUS_OPEN = "open"
 SESSION_STATUS_CLOSED = "closed"
-
-
-def normalize_write_scope(raw: str) -> str:
-    """把 workspace 相对写范围归一成稳定前缀；非法值返回空串。"""
-    value = str(raw or "").strip().replace("\\", "/")
-    if not value:
-        return ""
-    if value.lower() in {"*", "workspace", "workspace/*", "workspace:*"}:
-        return WORKSPACE_WRITE_SCOPE
-    while value.startswith("./"):
-        value = value[2:]
-    parts = [part for part in value.strip("/").split("/") if part not in {"", "."}]
-    if not parts or ".." in parts:
-        return ""
-    return "/".join(parts)
-
-
-def normalize_write_scopes(values: Sequence[str] | None) -> list[str]:
-    """归一化并去重写范围；保持参数顺序。"""
-    if isinstance(values, str):
-        values = [values]
-    normalized: list[str] = []
-    for item in values or ():
-        scope = normalize_write_scope(item)
-        if scope and scope not in normalized:
-            normalized.append(scope)
-    return normalized
-
-
-def write_scopes_overlap(left: str, right: str) -> bool:
-    """两个 workspace 相对前缀是否重叠；workspace:* 与任意写范围冲突。"""
-    if left == WORKSPACE_WRITE_SCOPE or right == WORKSPACE_WRITE_SCOPE:
-        return True
-    return left == right or left.startswith(f"{right}/") or right.startswith(f"{left}/")
 
 
 def is_write_capable_subagent(subagent_type: str) -> bool:
@@ -210,9 +175,6 @@ class SubagentTaskView(Protocol):
     def notify_on_finish(self) -> bool: ...
 
     @property
-    def write_scopes(self) -> Sequence[str]: ...
-
-    @property
     def is_terminal(self) -> bool: ...
 
 
@@ -242,13 +204,6 @@ class SubagentTaskPort(Protocol):
         owner_token: str,
         *,
         execution_mode: str,
-    ) -> SubagentTaskView | None: ...
-
-    async def set_task_write_scopes(
-        self,
-        task_id: str,
-        owner_token: str,
-        write_scopes: Sequence[str],
     ) -> SubagentTaskView | None: ...
 
     async def save_task_recovery_runtime(

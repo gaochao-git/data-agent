@@ -177,38 +177,6 @@ async def test_create_task_persists_snapshot_and_publishes_compact_sse(harness):
 
 
 @pytest.mark.asyncio
-async def test_write_scopes_are_normalized_in_task_ledger(harness):
-    await harness.create_conversation()
-    record = await harness.service.create_task(
-        conversation_id=CONV,
-        user_id=USER,
-        parent_run_id="run-parent",
-        subagent_type="general",
-        description="分别生成 Word 和 PPT",
-        label="交付物",
-        parent_tool_call_id="call-scope",
-        parent_owner_token="parent-owner",
-        operator_name="用户一",
-    )
-
-    updated = await harness.service.set_task_write_scopes(
-        record.task_id,
-        record.owner_token or "",
-        [" ./outputs/word/ ", "outputs\\ppt", "outputs/word", "a/../b", "workspace"],
-    )
-
-    assert updated is not None
-    assert updated.write_scopes == ("outputs/word", "outputs/ppt", "workspace:*")
-    payload = updated.as_dict(include_report=False)
-    assert payload["write_scopes"] == ["outputs/word", "outputs/ppt", "workspace:*"]
-
-    assert await harness.service.set_task_write_scopes(record.task_id, "wrong-owner", ["outputs/x"]) is None
-    started = await harness.service.start_task(record.task_id, record.owner_token or "")
-    assert started is not None
-    assert await harness.service.set_task_write_scopes(record.task_id, record.owner_token or "", ["outputs/y"]) is None
-
-
-@pytest.mark.asyncio
 async def test_start_heartbeat_and_finish_round_trip(harness):
     await harness.create_conversation()
     record = await _create_task(harness)
@@ -888,80 +856,6 @@ async def test_follow_up_reuses_session_history(harness, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_follow_up_inherits_write_scopes(harness, monkeypatch):
-    await harness.create_conversation()
-
-    monkeypatch.setattr(
-        subagents_module,
-        "_compile_subagent",
-        lambda spec, run_controls=None, **kwargs: _runnable("交付物已生成"),
-    )
-    start_tool = build_subagent_tool([_spec("general")])
-    follow_tool = build_subagent_tool([_spec("general")])
-    first = await invoke_subagent_tool(
-        start_tool,
-        "dispatch",
-        description="生成 Word 报告",
-        subagent_type="general",
-        write_scopes=["outputs/word"],
-        runtime=_fake_runtime(tool_call_id="call_scope_first"),
-    )
-    first_record = await _wait_terminal(harness, _task_id_from_text(first))
-    assert first_record.write_scopes == ("outputs/word",)
-
-    follow = await invoke_subagent_tool(
-        follow_tool,
-        "send",
-        task_id=first_record.task_id,
-        message="补充目录页",
-        runtime=_fake_runtime(tool_call_id="call_scope_follow"),
-    )
-    second_record = await _wait_terminal(harness, _task_id_from_text(follow))
-
-    assert second_record.write_scopes == ("outputs/word",)
-
-
-@pytest.mark.asyncio
-async def test_follow_up_without_write_scopes_skips_ledger_rewrite(harness, monkeypatch):
-    """未声明范围的任务链不额外写账本，避免无意义的并发事务。"""
-    await harness.create_conversation()
-    monkeypatch.setattr(
-        subagents_module,
-        "_compile_subagent",
-        lambda spec, run_controls=None, **kwargs: _runnable("盘点完成"),
-    )
-    calls: list[tuple] = []
-    original = harness.service.set_task_write_scopes
-
-    async def _spy(*args):
-        calls.append(args)
-        return await original(*args)
-
-    monkeypatch.setattr(harness.service, "set_task_write_scopes", _spy)
-    tool = build_subagent_tool([_spec()])
-    follow_tool = build_subagent_tool([_spec()])
-    first = await invoke_subagent_tool(
-        tool,
-        "dispatch",
-        description="盘点近 30 天入金趋势",
-        subagent_type="explore",
-        runtime=_fake_runtime(tool_call_id="call_scope_none_first"),
-    )
-    first_record = await _wait_terminal(harness, _task_id_from_text(first))
-    follow = await invoke_subagent_tool(
-        follow_tool,
-        "send",
-        task_id=first_record.task_id,
-        message="补充渠道拆分",
-        runtime=_fake_runtime(tool_call_id="call_scope_none_follow"),
-    )
-    second_record = await _wait_terminal(harness, _task_id_from_text(follow))
-
-    assert second_record.write_scopes == ()
-    assert calls == []
-
-
-@pytest.mark.asyncio
 async def test_follow_up_can_switch_from_background_to_sync(harness, monkeypatch):
     """后台首轮完成后，当前轮可用同步追问直接拿结论；历史与会话身份保持不变。"""
     await harness.create_conversation()
@@ -1304,37 +1198,6 @@ async def test_sync_task_is_tracked_without_finish_notification(harness, monkeyp
             )
         ).scalar_one_or_none()
     assert notification is None
-
-
-@pytest.mark.asyncio
-async def test_sync_task_persists_write_scopes(harness, monkeypatch):
-    """同步任务和后台任务共用同一份写范围账本。"""
-    await harness.create_conversation()
-    monkeypatch.setattr(
-        subagents_module,
-        "_compile_subagent",
-        lambda spec, run_controls=None, **kwargs: _runnable("Word 已生成"),
-    )
-    tool = build_subagent_tool([_spec("general")])
-
-    result = await invoke_subagent_tool(
-        tool,
-        "dispatch",
-        background=False,
-        description="生成 Word 报告",
-        subagent_type="general",
-        label="Word 报告",
-        write_scopes=[" ./outputs/word/ ", "outputs\\word"],
-        runtime=_fake_runtime(tool_call_id="call_sync_scope"),
-    )
-
-    assert result.update["messages"][0].content == "Word 已生成"
-    records = await harness.service.list_tasks(CONV, USER, limit=10)
-    assert len(records) == 1
-    record = await harness.service.get_task(records[0].task_id, conversation_id=CONV, user_id=USER)
-    assert record is not None
-    assert record.execution_mode == "sync"
-    assert record.write_scopes == ("outputs/word",)
 
 
 @pytest.mark.asyncio

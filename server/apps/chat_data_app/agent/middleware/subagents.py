@@ -76,8 +76,6 @@ from ..contracts.subagent_task import (
     SubagentTaskView,
     get_subagent_task_service,
     is_write_capable_subagent,
-    normalize_write_scope,
-    normalize_write_scopes,
 )
 from .context_compression import create_context_compression_middleware
 from .context_usage import create_context_usage_middleware
@@ -85,7 +83,6 @@ from .sandbox_renewal import create_sandbox_renewal_middleware
 from .subagent_assembly import assemble_subagent_middleware
 from .subagent_async import (
     _append_partial_report,
-    _apply_task_write_scopes,
     _close_aborted_sync_task,
     _get_subagent_stream_writer,
     _launch_task_runner,
@@ -205,21 +202,14 @@ _SUBAGENT_TOOL_DESCRIPTION_TEMPLATE = """派发并管理隔离子智能体：过
 可用子智能体类型：
 {available_agents}
 
-每次调用必须且只能选择 dispatch、send、manage 之一：
-- dispatch：派发新任务；任务书写清目标、必要背景、交付格式和事实文件路径。
-- send：向已有子会话发消息；仅异步任务运行中可插话，已结束自动开启下一轮追问。
-- manage：list/check/wait/cancel 子智能体任务。
-
-参数必须嵌套在所选操作键下，不能把 action、task_id、description 等字段放到顶层；
-唯一例外是可选的顶层 intent（一句中文说明本次调用目的，不超过 50 字，会作为卡片标题展示）：
-- {"intent":"盘点报告目录","dispatch":{"subagent_type":"explore","description":"完整任务书","background":true}}
-- {"intent":"追问缺失章节","send":{"task_id":"任务 ID","message":"追问内容"}}
-- {"intent":"查看进行中的任务","manage":{"action":"list"}}
-- {"intent":"确认任务状态","manage":{"action":"check","task_id":"任务 ID"}}
-错误示例（会因顶层未知字段被拒绝）：{"action":"list"}、{"task_id":"...","message":"..."}
-
-background 默认 true；write_scopes 为可选声明，dispatch 声明后 send 续写沿用；未声明时按可能冲突处理。
-子智能体由用户在管理面板关闭；关闭后不能再 send，如需同类任务请重新 dispatch。"""
+dispatch、send、manage 必须且只能选一组，并嵌套在对应键下（禁止顶层平铺 action/task_id）：
+- dispatch：派发新任务
+- send：向已有子会话发消息；仅异步任务运行中可插话，已结束则续写下一轮
+- manage：list/check/wait/cancel 任务
+示例：
+{"intent":"盘点报告目录","dispatch":{"subagent_type":"explore","description":"完整任务书"}}
+{"intent":"追问缺失章节","send":{"task_id":"任务 ID","message":"追问内容"}}
+{"intent":"查看任务","manage":{"action":"list"}}"""
 
 
 class ChatDataSubAgentState(AgentState, total=False):
@@ -1220,16 +1210,6 @@ def _raise_tool_error(message: str) -> NoReturn:
     raise ValueError(message)
 
 
-def _validate_tool_write_scopes(write_scopes: list[str] | None) -> list[str] | None:
-    """校验工具边界的写范围声明；None 表示追问继承原范围。"""
-    if write_scopes is None:
-        return None
-    invalid = [item for item in write_scopes if not normalize_write_scope(item)]
-    if invalid:
-        _raise_tool_error("write_scopes 必须是工作区相对文件或目录前缀，例如 outputs/word；不能为空或包含 ..。")
-    return normalize_write_scopes(write_scopes)
-
-
 def _tee_stream_writers(*writers: Any) -> Callable[[Any], None] | None:
     """一路过程同时写父对话流与任务详情流；单路失败不影响另一条链路。"""
     active = tuple(writer for writer in writers if callable(writer))
@@ -1290,7 +1270,6 @@ async def _register_sync_task(
     description: str,
     subagent_type: str,
     label: str | None,
-    write_scopes: list[str] | None,
     runtime: ToolRuntime,
     run_controls: Any,
 ) -> tuple[SubagentTaskPort, SubagentTaskView] | None:
@@ -1326,7 +1305,6 @@ async def _register_sync_task(
             exc_info=True,
         )
         return None
-    record = await _apply_task_write_scopes(service, record, write_scopes, log_label="同步子智能体")
     try:
         configured = await service.configure_task_execution(
             record.task_id,
@@ -1445,7 +1423,6 @@ async def _run_sync_task(
     description: str,
     subagent_type: str,
     label: str | None,
-    write_scopes: list[str] | None,
     runtime: ToolRuntime,
     run_controls: Any,
     specs: list[SubagentSpec],
@@ -1456,7 +1433,6 @@ async def _run_sync_task(
         description=description,
         subagent_type=subagent_type,
         label=label,
-        write_scopes=write_scopes,
         runtime=runtime,
         run_controls=run_controls,
     )
@@ -1480,7 +1456,6 @@ async def _start_task_action(
     subagent_type: str | None,
     background: bool,
     label: str | None,
-    write_scopes: list[str] | None,
     runtime: ToolRuntime,
     run_controls: Any,
     specs: list[SubagentSpec],
@@ -1499,7 +1474,6 @@ async def _start_task_action(
             description=description,
             subagent_type=subagent_type,
             label=label,
-            write_scopes=write_scopes,
             runtime=runtime,
             run_controls=run_controls,
             specs=specs,
@@ -1510,7 +1484,6 @@ async def _start_task_action(
         subagent_type=subagent_type,
         description=description,
         label=label,
-        write_scopes=write_scopes,
         runtime=runtime,
         run_controls=run_controls,
         runner_factory=lambda record, snapshot: _run_background_task(record, snapshot, specs, background_runnables),
@@ -1705,7 +1678,6 @@ async def _tool_dispatch(ctx: _TaskToolContext, runtime: ToolRuntime, args: Disp
         subagent_type=args.subagent_type,
         background=args.background,
         label=args.label,
-        write_scopes=_validate_tool_write_scopes(args.write_scopes),
         runtime=runtime,
         run_controls=ctx.run_controls,
         specs=ctx.specs,
@@ -1849,9 +1821,13 @@ class SubagentMiddleware(AgentMiddleware):
         self.specs = list(specs)
         self.subagent_names = frozenset(spec.name for spec in specs)
         self.tools = [build_task_tool(specs, run_controls=run_controls)]
-        agents_desc = "\n".join(f"- {spec.name}: {spec.description}" for spec in specs)
+        prompt = system_prompt or _default_system_prompt()
+        # 默认提示词只指路、不重复类型清单；自定义模板显式带占位符时才展开。
         # 用 replace 而不是 format：提示词里的调用示例含花括号，format 会误解析。
-        self.system_prompt = (system_prompt or _default_system_prompt()).replace("{available_agents}", agents_desc)
+        if "{available_agents}" in prompt:
+            agents_desc = "\n".join(f"- {spec.name}: {spec.description}" for spec in specs)
+            prompt = prompt.replace("{available_agents}", agents_desc)
+        self.system_prompt = prompt
 
     def wrap_model_call(
         self, request: ModelRequest, handler: Callable[[ModelRequest], ModelCallResult]
@@ -1888,7 +1864,8 @@ def _default_system_prompt() -> str:
         "派发判断：预计需要多轮工具调用（如批量盘点、成稿写作）且过程中无需"
         "用户参与的任务才派发；简单查询和需要向用户提问、展示中间过程的工作"
         "直接自己完成。子智能体看不到对话历史：对话中的事实材料先 file_write 到 workspace，"
-        "任务书里给文件路径；目标、要求和交付格式直接写进任务书。\n\n"
+        "任务书里给文件路径；目标、要求和交付格式直接写进任务书。"
+        "子智能体与主智能体共享技能清单，需要特定技能时在任务书写明技能名称。\n\n"
         "类型选择：依赖 MCP 数据或需要落盘产出的任务派 general，纯数据事实核对才派 "
         "explore，不要选错类型。\n\n"
         "## 子智能体复用与额度\n\n"
@@ -1901,15 +1878,12 @@ def _default_system_prompt() -> str:
         "只有目标、范围或交付物明确不同才用 dispatch 新建。"
         "达到上限后 dispatch 会被拒绝，此时复用已有子智能体、由主智能体自己完成，"
         "或提示用户在子智能体管理面板关闭不再使用的终态子智能体以腾出额度；"
-        "send 续写沿用原会话，不新增子智能体数量。\n\n"
+        "send 续写沿用原会话，不新增子智能体数量；已关闭的子智能体不能再 send，需重新 dispatch。\n\n"
         "## 并发写与任务分发\n\n"
-        "并发写由你负责任务分发，不依赖系统写锁。会写 workspace 的 general 任务，"
-        "dispatch 时可用 write_scopes 声明工作区相对文件或目录前缀（可选），例如 "
-        "outputs/word、outputs/ppt；send 续写沿用上一轮范围，范围需要变化时重新 dispatch；"
-        "explore 只读，不声明写范围。并行派发前先 "
-        'subagent({"manage":{"action":"list"}}) 查看活跃任务的写范围：范围不相交才可并行；重叠或任一任务'
-        "未声明写范围时按可能冲突处理，改为串行。shell、git、依赖安装、构建、打包等全局"
-        "写操作传 workspace:*，同一时间只跑一个。子智能体必须只改声明范围；任务完成后"
+        "多个子智能体并行写 workspace 时，只有写同一个目标才需要串行：同一个文件、"
+        "同一份交付物或同一目录下会互相覆盖的产出，由你协调一次只派发一个；"
+        "写目标不同的任务可以并行，不需要排队。"
+        "shell、git、依赖安装、构建、打包等全局写操作同一时间只跑一个。任务完成后"
         "由你检查产出、review diff 并承担最终合并责任。\n\n"
         "## 子智能体执行方式\n\n"
         "默认异步：批量盘点/全量扫描、多份成稿/多交付物、多个可并行且彼此独立的子任务，"

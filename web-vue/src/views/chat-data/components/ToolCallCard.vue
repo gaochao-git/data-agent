@@ -107,7 +107,6 @@ const PARAM_LABELS: Record<string, string> = {
   wait_seconds: '等待秒数',
   background: '后台执行',
   label: '任务标题',
-  write_scopes: '写范围',
   decision: '审批决定',
   action: '操作',
   message: '消息'

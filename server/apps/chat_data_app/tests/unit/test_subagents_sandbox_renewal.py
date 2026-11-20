@@ -27,8 +27,8 @@ def _rendered_tool_description() -> str:
 def test_subagent_description_is_compact_chinese():
     """subagent 是常驻注入工具：按真实类型渲染后也必须收敛，避免挤占上下文。"""
     rendered = _rendered_tool_description()
-    assert len(rendered) <= 1400
-    for keyword in ("explore", "general", "background", "write_scopes", "dispatch", "send"):
+    assert len(rendered) <= 800
+    for keyword in ("explore", "general", "dispatch", "send", "manage"):
         assert keyword in rendered
 
 
@@ -36,8 +36,6 @@ def test_subagent_tool_defaults_to_background_execution():
     """默认异步：模型不显式传 background 时走后台任务，同步需显式关闭。"""
     args = DispatchArgs(description="盘点全部模型", subagent_type="explore")
     assert args.background is True
-    rendered = _rendered_tool_description()
-    assert "background 默认 true" in rendered
     assert "同步等待" in DispatchArgs.model_fields["background"].description
 
 
@@ -49,6 +47,7 @@ def test_subagent_reuse_guidance_prefers_follow_up_over_new_session():
     assert 'subagent({"manage":{"action":"list"}})' in prompt
     assert "decide" not in prompt
     assert "达到上限后 dispatch 会被拒绝" in prompt
+    assert "已关闭的子智能体不能再 send" in prompt
 
 
 def test_subagent_tool_description_does_not_repeat_system_prompt_policy():

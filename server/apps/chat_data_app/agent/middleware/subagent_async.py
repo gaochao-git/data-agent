@@ -35,10 +35,7 @@ from ..contracts.subagent_task import (
     SubagentTaskPort,
     SubagentTaskView,
     get_subagent_task_service,
-    is_write_capable_subagent,
-    normalize_write_scopes,
     parse_task_status_filter,
-    write_scopes_overlap,
 )
 from .subagent_config import SUBAGENT_STATE_PASSTHROUGH_KEYS
 
@@ -103,7 +100,7 @@ def _format_task_status(record: SubagentTaskView, *, session_status: str | None 
     capabilities = resolve_task_capabilities(record, session_status=session_status)
     prefix = (
         f"[{label}] agent_id={_task_agent_id(record)} task_id={record.task_id}{turn} "
-        f"类型={record.subagent_type} 写范围={_task_write_scope_text(record)} 任务={record.label}"
+        f"类型={record.subagent_type} 任务={record.label}"
     )
     if record.is_terminal:
         return f"{prefix}\n  {capabilities.describe()}"
@@ -118,57 +115,6 @@ def _task_session_id(record: SubagentTaskView) -> str:
 def _task_agent_id(record: SubagentTaskView) -> str:
     """任务所属子智能体的稳定 ID；兼容旧记录回退到子会话或任务 ID。"""
     return str(getattr(record, "agent_id", "") or _task_session_id(record))
-
-
-def _task_write_scopes(record: SubagentTaskView) -> tuple[str, ...]:
-    """读取任务声明的写范围；旧记录没有该字段时视为未声明。"""
-    value = getattr(record, "write_scopes", None)
-    if value is None:
-        meta = getattr(record, "meta", None)
-        value = meta.get("write_scopes") if isinstance(meta, dict) else None
-    if isinstance(value, str):
-        value = [value]
-    elif not isinstance(value, (list, tuple)):
-        value = []
-    return tuple(normalize_write_scopes(value))
-
-
-def _task_write_scope_text(record: SubagentTaskView) -> str:
-    scopes = _task_write_scopes(record)
-    return "、".join(scopes) if scopes else "未声明"
-
-
-def _write_scope_conflict_message(
-    record: SubagentTaskView,
-    other: SubagentTaskView,
-    scopes: Sequence[str],
-) -> str:
-    """返回单个活跃写任务与当前任务的冲突提示；无冲突返回空串。"""
-    if other.task_id == record.task_id or other.status not in ACTIVE_TASK_STATUSES:
-        return ""
-    if _task_session_id(other) == _task_session_id(record):
-        return ""
-    if not is_write_capable_subagent(other.subagent_type):
-        return ""
-    other_scopes = _task_write_scopes(other)
-    label = f"agent_id={_task_agent_id(other)} task_id={other.task_id}"
-    if not scopes or not other_scopes:
-        return f"{label} 未完整声明写范围，无法判断并行安全"
-    if any(write_scopes_overlap(left, right) for left in scopes for right in other_scopes):
-        return f"{label} 写范围重叠"
-    return ""
-
-
-def _task_write_scope_conflicts(
-    record: SubagentTaskView,
-    records: Sequence[SubagentTaskView],
-) -> list[str]:
-    """列出与当前活跃任务可能冲突的其他写任务；仅提示，不阻断派发。"""
-    if record.status not in ACTIVE_TASK_STATUSES or not is_write_capable_subagent(record.subagent_type):
-        return []
-    scopes = _task_write_scopes(record)
-    messages = (_write_scope_conflict_message(record, other, scopes) for other in records)
-    return list(dict.fromkeys(message for message in messages if message))
 
 
 def format_subagent_task_list_summary(records: Sequence[SubagentTaskView]) -> str:
@@ -198,17 +144,13 @@ def format_subagent_agent_list(
         latest_label = "最近匹配 task_id" if status_filtered else "最近 task_id"
         lines.append(
             f"- agent_id={agent_id} 类型={latest.subagent_type} 轮次={turn_index} "
-            f"{latest_label}={latest.task_id} 状态={status} 写范围={_task_write_scope_text(latest)} "
+            f"{latest_label}={latest.task_id} 状态={status} "
             f"可操作={resolve_task_capabilities(latest, session_status=_session_status(latest, session_statuses)).actions_text()} "
             f"任务={_truncate_text(latest.label, 100, '任务标题')}"
         )
         if _session_closed(latest, session_statuses):
             lines.append("  会话状态：已关闭（不可再追问）")
-        lines.extend(f"  写范围提示：{item}" for item in _task_write_scope_conflicts(latest, records))
-    lines.append(
-        '查看某个子智能体的任务 ID：'
-        'subagent({"manage":{"action":"list","agent_id":"<agent_id>"}})。'
-    )
+    lines.append('查看某个子智能体的任务 ID：subagent({"manage":{"action":"list","agent_id":"<agent_id>"}})。')
     return "\n".join(lines)
 
 
@@ -227,13 +169,12 @@ def format_subagent_agent_tasks(
         status = TASK_STATUS_LABELS.get(record.status, record.status)
         turn_index = int(getattr(record, "turn_index", 1) or 1)
         lines.append(
-            f"- task_id={record.task_id} 状态={status} 轮次={turn_index} 写范围={_task_write_scope_text(record)} "
+            f"- task_id={record.task_id} 状态={status} 轮次={turn_index} "
             f"可操作={resolve_task_capabilities(record, session_status=_session_status(record, session_statuses)).actions_text()} "
             f"任务={_truncate_text(record.label, 100, '任务标题')}"
         )
         if _session_closed(record, session_statuses):
             lines.append("  会话状态：已关闭（不可再追问）")
-        lines.extend(f"  写范围提示：{item}" for item in _task_write_scope_conflicts(record, records))
     lines.append("check/cancel/follow_up/steer/approve/reject 使用上面的 task_id；agent_id 只用于识别子智能体。")
     return "\n".join(lines)
 
@@ -245,7 +186,7 @@ def _format_task_report(record: SubagentTaskView, *, session_status: str | None 
     lines = [
         f"[{TASK_STATUS_LABELS.get(record.status, record.status)}] "
         f"agent_id={_task_agent_id(record)} task_id={record.task_id} "
-        f"类型={record.subagent_type} 轮次={turn_index} 写范围={_task_write_scope_text(record)}",
+        f"类型={record.subagent_type} 轮次={turn_index}",
         f"任务：{record.label}",
     ]
     report_path = str(getattr(record, "report_path", "") or "")
@@ -261,8 +202,7 @@ def _format_task_report(record: SubagentTaskView, *, session_status: str | None 
         lines.append(f"报告：{body}")
     if record.is_terminal and session_status != SESSION_STATUS_CLOSED:
         lines.append(
-            '可基于同一子会话继续追问：'
-            f'subagent({{"send":{{"task_id":"{record.task_id}","message":"..."}}}})。'
+            f'可基于同一子会话继续追问：subagent({{"send":{{"task_id":"{record.task_id}","message":"..."}}}})。'
         )
     elif session_status == SESSION_STATUS_CLOSED:
         lines.append("该子智能体会话已关闭，不能继续追问；如需同类任务请重新派发新的子智能体。")
@@ -279,31 +219,11 @@ def _session_closed(record: SubagentTaskView, statuses: dict[str, str] | None) -
     return _session_status(record, statuses) == SESSION_STATUS_CLOSED
 
 
-async def _apply_task_write_scopes(
-    service: SubagentTaskPort,
-    record: SubagentTaskView,
-    write_scopes: Sequence[str] | None,
-    *,
-    log_label: str,
-) -> SubagentTaskView:
-    """把软写范围写入任务账本；声明缺失或写入失败都不阻断执行。"""
-    setter = getattr(service, "set_task_write_scopes", None)
-    if write_scopes is None or not callable(setter):
-        return record
-    try:
-        scoped = await setter(record.task_id, record.owner_token or "", write_scopes)
-    except Exception:
-        logger.warning("%s写范围写入失败，继续按未声明处理: task_id=%s", log_label, record.task_id, exc_info=True)
-        return record
-    return scoped or record
-
-
 async def _spawn_background_task(
     *,
     subagent_type: str,
     description: str,
     label: str | None,
-    write_scopes: Sequence[str] | None,
     runtime: ToolRuntime,
     run_controls: Any,
     runner_factory: Callable[[SubagentTaskView, Any], Coroutine[Any, Any, None]],
@@ -335,8 +255,6 @@ async def _spawn_background_task(
         )
         raise ValueError("后台子智能体启动失败：任务登记未成功，请稍后重试或改为同步执行。") from exc
 
-    record = await _apply_task_write_scopes(service, record, write_scopes, log_label="后台子智能体")
-
     await _launch_task_runner_with_recovery(service, record, runtime, runner_factory)
     logger.info(
         "[tools] 子智能体已转入后台执行: task_id=%s type=%s conversation_id=%s",
@@ -346,7 +264,7 @@ async def _spawn_background_task(
     )
     return (
         f"子智能体已在后台启动（agent_id={record.agent_id}，task_id={record.task_id}，类型={subagent_type}）。"
-        f"写范围={_task_write_scope_text(record)}；超时={record.timeout_seconds} 秒。"
+        f"超时={record.timeout_seconds} 秒。"
         "任务不会阻塞当前对话：完成/失败/超时后系统会自动唤醒"
         "一条隐藏通知（不需要等用户先发消息）；期间可继续其他工作，也可用 "
         "subagent 查询：manage 的 action=list 列任务、check 查单个、wait 等结果。"
@@ -435,10 +353,7 @@ async def _resolve_follow_up_target(
         return "子智能体追问失败：任务账本服务未初始化。"
     target = await service.get_task(task_id, conversation_id=conversation_id, user_id=user_id)
     if target is None:
-        return (
-            f'子智能体任务 {task_id} 不存在。'
-            '可用 subagent({"manage":{"action":"list"}}) 查看当前会话任务。'
-        )
+        return f'子智能体任务 {task_id} 不存在。可用 subagent({{"manage":{{"action":"list"}}}}) 查看当前会话任务。'
     session_state = await service.get_session_state(
         target.agent_session_id,
         conversation_id=conversation_id,
@@ -592,9 +507,6 @@ async def _spawn_follow_up_task(
             exc_info=True,
         )
         return "子智能体追问失败：任务登记未成功，请稍后重试。"
-    inherited = _task_write_scopes(base)
-    scopes_to_set: Sequence[str] | None = inherited or None
-    record = await _apply_task_write_scopes(service, record, scopes_to_set, log_label="追问任务")
     if not background:
         assert sync_runner is not None
         return await sync_runner(service, record)
@@ -607,8 +519,7 @@ async def _spawn_follow_up_task(
     )
     return (
         f"已向子智能体 {target.subagent_type} 发起第 {record.turn_index} 轮追问"
-        f"（agent_id={record.agent_id}，task_id={record.task_id}，上一轮 task_id={base.task_id}，"
-        f"写范围={_task_write_scope_text(record)}）。"
+        f"（agent_id={record.agent_id}，task_id={record.task_id}，上一轮 task_id={base.task_id}）。"
         "任务在后台执行，会沿用该子会话的完整消息历史；完成后自动唤醒并注入通知，"
         f'也可用 subagent({{"manage":{{"action":"check","task_id":"{record.task_id}"}}}}) 查询。'
     )
@@ -637,10 +548,7 @@ async def _check_async_task(
         user_id=user_id,
     )
     if record is None:
-        return (
-            f'子智能体任务 {normalized} 不存在。'
-            '可用 subagent({"manage":{"action":"list"}}) 查看当前会话任务。'
-        )
+        return f'子智能体任务 {normalized} 不存在。可用 subagent({{"manage":{{"action":"list"}}}}) 查看当前会话任务。'
     state = await service.get_session_state(
         _task_session_id(record),
         conversation_id=conversation_id,
