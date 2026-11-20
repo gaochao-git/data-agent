@@ -1095,7 +1095,7 @@ async def test_subagent_middleware_keeps_system_prompt_static_for_prefix_cache(m
     content = seen["request"].system_message.content
     assert content == f"主提示词\n\n{middleware.system_prompt}"
     assert "## 当前子智能体状态" not in content
-    assert 'subagent({"manage":{"action":"list"}})' in content
+    assert 'subagent({"action":"list"})' in content
 
 
 def test_middleware_registers_single_grouped_subagent_tool_with_agent_catalog():
@@ -1106,7 +1106,7 @@ def test_middleware_registers_single_grouped_subagent_tool_with_agent_catalog():
     assert "explore" in middleware.tools[0].description
     assert "report-writer" in middleware.tools[0].description
     assert "dispatch" in middleware.tools[0].description
-    assert "manage" in middleware.tools[0].description
+    assert "list" in middleware.tools[0].description
 
 
 def test_middleware_expands_available_agents_only_for_custom_prompt():

@@ -28,7 +28,7 @@ def test_subagent_description_is_compact_chinese():
     """subagent 是常驻注入工具：按真实类型渲染后也必须收敛，避免挤占上下文。"""
     rendered = _rendered_tool_description()
     assert len(rendered) <= 800
-    for keyword in ("explore", "general", "dispatch", "send", "manage"):
+    for keyword in ("explore", "general", "dispatch", "send", "list", "check", "wait", "cancel"):
         assert keyword in rendered
 
 
@@ -43,8 +43,8 @@ def test_subagent_reuse_guidance_prefers_follow_up_over_new_session():
     """复用策略写在系统提示，工具描述只留参数语法，两处不重复。"""
     prompt = _default_system_prompt()
     assert "{available_agents}" not in prompt
-    assert 'subagent({"send":' in prompt
-    assert 'subagent({"manage":{"action":"list"}})' in prompt
+    assert 'subagent({"action":"send"' in prompt
+    assert 'subagent({"action":"list"})' in prompt
     assert "decide" not in prompt
     assert "达到上限后 dispatch 会被拒绝" in prompt
     assert "已关闭的子智能体不能再 send" in prompt

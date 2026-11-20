@@ -27,12 +27,17 @@ export function isSubagentToolName(toolName?: string | null): boolean {
 
 /** 取出当前调用的主参数分组；流式参数未完整时返回 null。 */
 export function getSubagentOperationArgs(args: ToolArgs = {}): SubagentOperationArgs | null {
+  // 旧会话：收敛前的分组嵌套参数，仍按 dispatch/send/manage 展示。
   for (const operation of ['dispatch', 'send', 'manage'] as const) {
     const value = args[operation]
     if (value && typeof value === 'object' && !Array.isArray(value)) {
       return { operation, args: value as ToolArgs }
     }
   }
+  // 新格式：action 平铺；list/check/wait/cancel 统一归到 manage 展示。
+  const action = String(args.action || '').trim()
+  if (action === 'dispatch' || action === 'send') return { operation: action, args }
+  if (['list', 'check', 'wait', 'cancel'].includes(action)) return { operation: 'manage', args }
   return null
 }
 

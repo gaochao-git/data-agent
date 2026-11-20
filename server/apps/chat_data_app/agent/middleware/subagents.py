@@ -1,4 +1,4 @@
-"""ChatData 子智能体：单个 subagent 工具（dispatch/send/manage 分层）+ 上下文隔离。
+"""ChatData 子智能体：单个 subagent 工具（扁平 action 参数）+ 上下文隔离。
 
 参考 deepagents ``SubAgentMiddleware`` 的核心机制（工具入口、状态裁剪
 透传、Command 回传结论），并按 ChatData 的事件流与状态设计做了裁剪：
@@ -165,6 +165,7 @@ from .subagent_tool_schema import (
     DispatchArgs,
     ManageArgs,
     SendArgs,
+    SubagentAction,
     SubagentToolArgs,
 )
 from .subagent_trail import (
@@ -202,14 +203,17 @@ _SUBAGENT_TOOL_DESCRIPTION_TEMPLATE = """派发并管理隔离子智能体：过
 可用子智能体类型：
 {available_agents}
 
-dispatch、send、manage 必须且只能选一组，并嵌套在对应键下（禁止顶层平铺 action/task_id）：
-- dispatch：派发新任务
-- send：向已有子会话发消息；仅异步任务运行中可插话，已结束则续写下一轮
-- manage：list/check/wait/cancel 任务
+action 决定本次调用，其余参数平铺在顶层，只填该 action 对应的字段：
+- dispatch：派发新任务，必填 description、subagent_type；可选 background、label
+- send：向已有子会话发消息；仅异步任务运行中可插话，已结束则续写下一轮。必填 task_id、message；可选 background
+- list：列出任务，可选 agent_id、status
+- check：查询单个任务，必填 task_id
+- wait：等待任务终态，必填 task_ids；可选 wait_seconds
+- cancel：取消任务，必填 task_id
 示例：
-{"intent":"盘点报告目录","dispatch":{"subagent_type":"explore","description":"完整任务书"}}
-{"intent":"追问缺失章节","send":{"task_id":"任务 ID","message":"追问内容"}}
-{"intent":"查看任务","manage":{"action":"list"}}"""
+{"intent":"盘点报告目录","action":"dispatch","subagent_type":"explore","description":"完整任务书"}
+{"intent":"追问缺失章节","action":"send","task_id":"任务 ID","message":"追问内容"}
+{"intent":"查看任务","action":"list"}"""
 
 
 class ChatDataSubAgentState(AgentState, total=False):
@@ -1702,7 +1706,7 @@ async def _tool_send(ctx: _TaskToolContext, runtime: ToolRuntime, args: SendArgs
     if target.status in WAITING_APPROVAL_TASK_STATUSES:
         _raise_tool_error(
             f"任务当前为{status_label}，子智能体不支持审批操作；"
-            f'请用 subagent({{"manage":{{"action":"cancel","task_id":"{normalized}"}}}}) 取消后重新派发。'
+            f'请用 subagent({{"action":"cancel","task_id":"{normalized}"}}) 取消后重新派发。'
         )
     if target.status in TERMINAL_TASK_STATUSES:
         return await _follow_up_task_action(
@@ -1761,7 +1765,7 @@ async def _route_subagent_tool(
         return await _tool_send(ctx, runtime, send)
     if manage is not None:
         return await _tool_manage(ctx, runtime, manage)
-    raise ValueError("subagent 必须提供 dispatch、send、manage 中的一组参数。")
+    raise ValueError("subagent 参数归一后必须落到 dispatch、send、manage 之一。")
 
 
 class _SubagentStructuredTool(StructuredTool):
@@ -1782,7 +1786,7 @@ class _SubagentStructuredTool(StructuredTool):
 
 
 def build_task_tool(specs: list[SubagentSpec], run_controls: Any = None) -> StructuredTool:
-    """构建单一 ``subagent`` 工具：三组主参数按生命周期分层。"""
+    """构建单一 ``subagent`` 工具：``action`` 平铺参数，执行层再归一成分组模型。"""
     validate_subagent_specs(specs)
     compiled = {spec.name: _compile_subagent(spec, run_controls=run_controls) for spec in specs}
     ctx = _TaskToolContext(
@@ -1796,12 +1800,44 @@ def build_task_tool(specs: list[SubagentSpec], run_controls: Any = None) -> Stru
     async def subagent(
         runtime: ToolRuntime,
         intent: str = "",
-        dispatch: DispatchArgs | None = None,
-        send: SendArgs | None = None,
-        manage: ManageArgs | None = None,
+        action: SubagentAction | None = None,
+        description: str | None = None,
+        subagent_type: str | None = None,
+        background: bool | None = None,
+        label: str | None = None,
+        task_id: str | None = None,
+        message: str | None = None,
+        task_ids: list[str] | None = None,
+        agent_id: str | None = None,
+        status: str | None = None,
+        wait_seconds: int | None = None,
     ) -> Command | str:
         del intent
-        return await _route_subagent_tool(ctx, runtime, dispatch, send, manage)
+        parsed = SubagentToolArgs.model_validate(
+            {
+                name: value
+                for name, value in {
+                    "action": action,
+                    "description": description,
+                    "subagent_type": subagent_type,
+                    "background": background,
+                    "label": label,
+                    "task_id": task_id,
+                    "message": message,
+                    "task_ids": task_ids,
+                    "agent_id": agent_id,
+                    "status": status,
+                    "wait_seconds": wait_seconds,
+                }.items()
+                if value is not None
+            }
+        )
+        _, payload = parsed.to_operation()
+        if isinstance(payload, DispatchArgs):
+            return await _route_subagent_tool(ctx, runtime, dispatch=payload)
+        if isinstance(payload, SendArgs):
+            return await _route_subagent_tool(ctx, runtime, send=payload)
+        return await _route_subagent_tool(ctx, runtime, manage=payload)
 
     return _SubagentStructuredTool.from_function(
         name=SUBAGENT_TOOL_NAME,
@@ -1859,7 +1895,7 @@ def _append_system_prompt(request: ModelRequest, extra: str) -> ModelRequest:
 def _default_system_prompt() -> str:
     return (
         "## 子智能体委派\n\n"
-        "你可以通过 subagent 工具的 dispatch 参数把复杂多步任务派发给隔离上下文的子智能体，"
+        '你可以通过 subagent 工具的 action="dispatch" 把复杂多步任务派发给隔离上下文的子智能体，'
         "只有子智能体的最终结论会回到对话。可用类型、能力边界和参数见 subagent 工具说明。\n\n"
         "派发判断：预计需要多轮工具调用（如批量盘点、成稿写作）且过程中无需"
         "用户参与的任务才派发；简单查询和需要向用户提问、展示中间过程的工作"
@@ -1870,8 +1906,8 @@ def _default_system_prompt() -> str:
         "explore，不要选错类型。\n\n"
         "## 子智能体复用与额度\n\n"
         "每个主对话创建的子智能体总数有运行时上限。派发新任务前先用 "
-        'subagent({"manage":{"action":"list"}}) 检查已有子智能体：目标相同、数据范围相同，或交付物只是补充、'
-        '修订时不要新开：同类子智能体仍在执行时，用 subagent({"send":{"task_id":"...","message":"..."}}) 补充或等待；'
+        'subagent({"action":"list"}) 检查已有子智能体：目标相同、数据范围相同，或交付物只是补充、'
+        '修订时不要新开：同类子智能体仍在执行时，用 subagent({"action":"send","task_id":"...","message":"..."}) 补充或等待；'
         "同步任务阻塞当前轮，不能发送运行中消息，等结果返回后再 send 续写；"
         "任务已结束时 send 会对最近一个终态 task_id 开启下一轮，沿用同一子会话；"
         "当前轮必须拿到追问结论时传 background=false。"

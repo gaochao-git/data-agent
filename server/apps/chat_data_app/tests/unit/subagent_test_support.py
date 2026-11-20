@@ -9,9 +9,6 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from apps.chat_data_app.agent.middleware.subagents import (
-    DispatchArgs,
-    ManageArgs,
-    SendArgs,
     build_task_tool,
 )
 from apps.chat_data_app.agent.run import subagent_event_service as event_service_module
@@ -31,13 +28,13 @@ def build_subagent_tool(specs, run_controls=None):
 
 async def invoke_subagent_tool(tool, operation: str, *, runtime, **kwargs):
     """走工具真实解析路径，覆盖 LangGraph 注入 runtime 的参数校验。"""
-    schema = {
-        "dispatch": DispatchArgs,
-        "send": SendArgs,
-        "manage": ManageArgs,
-    }[operation]
-    params = schema(**kwargs)
-    return await tool.ainvoke({operation: params, "runtime": runtime})
+    if operation == "manage":
+        action = kwargs.get("action")
+        if action is None:
+            raise AssertionError("manage 调用必须显式传 action")
+    else:
+        action = operation
+    return await tool.ainvoke({**kwargs, "action": action, "runtime": runtime})
 
 
 class _FakeEventService:

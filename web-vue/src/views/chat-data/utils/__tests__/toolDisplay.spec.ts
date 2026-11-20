@@ -51,6 +51,15 @@ describe('toolDisplay', () => {
   })
 
   it('labels the three lifecycle operations of the single subagent tool', () => {
+    expect(getToolDisplayName('subagent', { action: 'dispatch' })).toBe('派发子智能体')
+    expect(getToolDisplayName('subagent', { action: 'send', task_id: 't1', message: '继续' })).toBe('向子智能体发送消息')
+    expect(getToolDisplayName('subagent', { action: 'list' })).toBe('查看子智能体任务')
+    expect(getToolDisplayName('subagent', { action: 'check', task_id: 't1' })).toBe('查看子智能体任务')
+    expect(getToolDisplayName('subagent', { action: 'wait', task_ids: ['t1'] })).toBe('等待子智能体任务')
+    expect(getToolDisplayName('subagent', { action: 'cancel', task_id: 't1' })).toBe('取消子智能体任务')
+  })
+
+  it('keeps recognizing legacy nested subagent arguments', () => {
     expect(getToolDisplayName('subagent', { dispatch: {} })).toBe('派发子智能体')
     expect(getToolDisplayName('subagent', { manage: { action: 'list' } })).toBe('查看子智能体任务')
     expect(getToolDisplayName('subagent', { manage: { action: 'check', task_id: 't1' } })).toBe('查看子智能体任务')
@@ -140,6 +149,24 @@ describe('toolDisplay', () => {
     expect(getToolCompactDescription('read_image', {
       file_path: '/mnt/user-data/uploads/登录页面.png',
     })).toBe('/mnt/user-data/uploads/登录页面.png')
+    expect(getToolCompactDescription('subagent', {
+      action: 'dispatch',
+      subagent_type: 'data-explore',
+      description: '分析近 30 天入金金额趋势并给出结论',
+    })).toBe('data-explore · 分析近 30 天入金金额趋势并给出结论')
+    expect(getToolCompactDescription('subagent', {
+      action: 'check',
+      task_id: 't1',
+    })).toBe('t1')
+    expect(getToolCompactDescription('subagent', {
+      action: 'wait',
+      task_ids: ['t1', 't2'],
+    })).toBe('t1 等 2 个任务')
+    expect(getToolCompactDescription('subagent', {
+      action: 'send',
+      task_id: 't1',
+      message: '继续补充渠道拆分',
+    })).toBe('t1 · 继续补充渠道拆分')
     expect(getToolCompactDescription('subagent', {
       dispatch: {
         subagent_type: 'data-explore',

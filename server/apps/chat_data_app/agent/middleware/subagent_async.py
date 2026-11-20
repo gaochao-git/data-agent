@@ -150,7 +150,7 @@ def format_subagent_agent_list(
         )
         if _session_closed(latest, session_statuses):
             lines.append("  会话状态：已关闭（不可再追问）")
-    lines.append('查看某个子智能体的任务 ID：subagent({"manage":{"action":"list","agent_id":"<agent_id>"}})。')
+    lines.append('查看某个子智能体的任务 ID：subagent({"action":"list","agent_id":"<agent_id>"})。')
     return "\n".join(lines)
 
 
@@ -202,7 +202,7 @@ def _format_task_report(record: SubagentTaskView, *, session_status: str | None 
         lines.append(f"报告：{body}")
     if record.is_terminal and session_status != SESSION_STATUS_CLOSED:
         lines.append(
-            f'可基于同一子会话继续追问：subagent({{"send":{{"task_id":"{record.task_id}","message":"..."}}}})。'
+            f'可基于同一子会话继续追问：subagent({{"action":"send","task_id":"{record.task_id}","message":"..."}})。'
         )
     elif session_status == SESSION_STATUS_CLOSED:
         lines.append("该子智能体会话已关闭，不能继续追问；如需同类任务请重新派发新的子智能体。")
@@ -353,7 +353,7 @@ async def _resolve_follow_up_target(
         return "子智能体追问失败：任务账本服务未初始化。"
     target = await service.get_task(task_id, conversation_id=conversation_id, user_id=user_id)
     if target is None:
-        return f'子智能体任务 {task_id} 不存在。可用 subagent({{"manage":{{"action":"list"}}}}) 查看当前会话任务。'
+        return f'子智能体任务 {task_id} 不存在。可用 subagent({{"action":"list"}}) 查看当前会话任务。'
     session_state = await service.get_session_state(
         target.agent_session_id,
         conversation_id=conversation_id,
@@ -366,8 +366,8 @@ async def _resolve_follow_up_target(
     ).can_follow_up:
         return (
             f"子智能体任务 {task_id} 仍在执行（{TASK_STATUS_LABELS.get(target.status, target.status)}），"
-            '不能追问；可先用 subagent({"manage":{"action":"wait","task_ids":["..."]}}) 等结果，'
-            '或 subagent({"manage":{"action":"cancel","task_id":"..."}}) 取消后再开始新一轮。'
+            '不能追问；可先用 subagent({"action":"wait","task_ids":["..."]}) 等结果，'
+            '或 subagent({"action":"cancel","task_id":"..."}) 取消后再开始新一轮。'
         )
     if target.subagent_type not in available_types:
         return f"子智能体类型 {target.subagent_type} 当前未启用，无法追问。"
@@ -521,7 +521,7 @@ async def _spawn_follow_up_task(
         f"已向子智能体 {target.subagent_type} 发起第 {record.turn_index} 轮追问"
         f"（agent_id={record.agent_id}，task_id={record.task_id}，上一轮 task_id={base.task_id}）。"
         "任务在后台执行，会沿用该子会话的完整消息历史；完成后自动唤醒并注入通知，"
-        f'也可用 subagent({{"manage":{{"action":"check","task_id":"{record.task_id}"}}}}) 查询。'
+        f'也可用 subagent({{"action":"check","task_id":"{record.task_id}"}}) 查询。'
     )
 
 
@@ -548,7 +548,7 @@ async def _check_async_task(
         user_id=user_id,
     )
     if record is None:
-        return f'子智能体任务 {normalized} 不存在。可用 subagent({{"manage":{{"action":"list"}}}}) 查看当前会话任务。'
+        return f'子智能体任务 {normalized} 不存在。可用 subagent({{"action":"list"}}) 查看当前会话任务。'
     state = await service.get_session_state(
         _task_session_id(record),
         conversation_id=conversation_id,
@@ -582,7 +582,7 @@ async def _cancel_async_task(
     return (
         f"已提交取消请求（agent_id={_task_agent_id(record)}，task_id={normalized}）。"
         "执行节点会在下一次心跳时停止任务，"
-        f'最终状态可稍后 subagent({{"manage":{{"action":"check","task_id":"{normalized}"}}}}) 查询。'
+        f'最终状态可稍后 subagent({{"action":"check","task_id":"{normalized}"}}) 查询。'
     )
 
 

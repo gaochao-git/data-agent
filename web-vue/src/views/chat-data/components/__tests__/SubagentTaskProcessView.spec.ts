@@ -13,13 +13,13 @@ const TrailStub = defineComponent({
     onSave: { type: Function, default: undefined },
   },
   emits: ['selectTool'],
-  template: '<div data-subagent-trail-stub :data-result="toolCall.result" :data-description="toolCall.args.dispatch.description" :data-background="String(toolCall.args.dispatch.background)" />',
+  template: '<div data-subagent-trail-stub :data-result="toolCall.result" :data-description="toolCall.args.description" :data-background="String(toolCall.args.background)" />',
 })
 
 const ToolDetailStub = defineComponent({
   name: 'ToolCallDetailPanel',
   props: { toolCall: { type: Object, required: true } },
-  template: '<div data-tool-detail-stub :data-result="toolCall.result" :data-description="toolCall.args.dispatch.description" />',
+  template: '<div data-tool-detail-stub :data-result="toolCall.result" :data-description="toolCall.args.description" />',
 })
 
 const turn = (overrides: Partial<SubagentTaskRecord> = {}): SubagentTaskRecord => ({

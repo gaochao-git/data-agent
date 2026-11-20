@@ -92,7 +92,8 @@ def test_grouped_tool_schemas_keep_manage_status(monkeypatch):
     monkeypatch.setattr(subagents_module, "manage_async_task", fake_manage)
     result = asyncio.run(
         tool.coroutine(
-            manage=subagents_module.ManageArgs(action="list", status="completed"),
+            action="list",
+            status="completed",
             runtime=SimpleNamespace(state={}, tool_call_id="call_1"),
         )
     )

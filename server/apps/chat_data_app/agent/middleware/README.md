@@ -20,7 +20,7 @@ steering 插话、工具计时与单会话调用频率告警、历史消息时�
 
 `subagent` 工具默认 `background=true`，转入持久任务账本（见 `agent/run/README.md`），立即返回
 `task_id`；执行体在独立 asyncio task 中做子图心跳、超时与取消观察。同一个 `subagent` 工具
-用 `manage.action` 统一管理后台任务：`list` 列任务、`check` 查单个、`wait` 等终态、`cancel` 取消；
+用 `action` 统一管理后台任务：`list` 列任务、`check` 查单个、`wait` 等终态、`cancel` 取消；
 都按当前会话与用户隔离读取账本，不依赖进程内注册表。`check` 对终态任务返回完整
 报告；超长报告会落盘并返回 `result_path`，可直接用 `file_read` 读取完整正文，
 不对报告做分页。通知里的报告只是预览，不代表任务结论被截断。
@@ -51,9 +51,10 @@ checkpointer，运行中首连走快照 + 游标续传。
 插话；后台任务按状态开放取消、插话与追问。审批中断/恢复只保留内部能力，不再作为
 模型可见参数；等待审批的存量任务只能取消后重新派发。
 
-所有 `subagent` 动作用 `subagent_tool_schema.py` 的三组互斥参数契约分发：`SubagentToolArgs`
-校验器强制必选且只选一组（`dispatch`/`send`/`manage`），执行体沿用现有同步/后台
-适配器。契约层统一的是“命令进入与能力边界”，不重写同步/后台各自的终态收口语义。
+所有 `subagent` 动作用 `subagent_tool_schema.py` 的扁平 action 契约分发：`action` 取
+`dispatch`/`send`/`list`/`check`/`wait`/`cancel`，校验器按动作白名单校验字段，
+`to_operation()` 再归一成内部三组模型；执行体沿用现有同步/后台适配器。契约层统一的
+是“命令进入与能力边界”，不重写同步/后台各自的终态收口语义。
 
 关闭子智能体是**用户侧动作**，不是 `subagent` 工具能力：用户在管理面板关闭终态且无活跃
 轮次的逻辑子会话后，历史仍可读，但 `send` 会拒绝，能力矩阵不再显示追问；关闭同时
@@ -64,7 +65,7 @@ checkpointer，运行中首连走快照 + 游标续传。
 每个主对话创建的子智能体总数（同步与后台任务都计入）由
 `CHAT_DATA_SUBAGENT_MAX_PER_CONVERSATION` 限制，活跃任务数由
 `CHAT_DATA_SUBAGENT_TASK_MAX_ACTIVE` 限制；子智能体总额度按 `agent_session_id` 去重，
-追问沿用原会话不占新额度，已关闭会话不计入总额度。任务相似时，提示词要求主智能体先 `subagent(manage={"action": "list"})`
+追问沿用原会话不占新额度，已关闭会话不计入总额度。任务相似时，提示词要求主智能体先 `subagent({"action":"list"})`
 找到已有子智能体并用 `send` 续写；相似度不做代码层匹配，避免误合并不同目标或交付物。
 两项限制都只作用于当前主对话，不同主对话互不影响。
 

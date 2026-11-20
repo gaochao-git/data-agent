@@ -43,6 +43,7 @@
 - 决定性数据：`document.hasFocus()` = false（窗口失焦期）；rAF 阵发停滞（同页 setTimeout 正常）；rAF 恢复后残留遮罩自动清理（两次复现均自愈，无需刷新——昨晚结论「唯一恢复=刷新」修正为「等待或刷新」）。
 - **统一解释昨晚全部症状**：①「MessageBox 按钮全失活」= 过渡死锁（点击其实生效、状态已翻、DOM 不动）；②「后续整页点击全灭」= 残留隐形遮罩（pointer-events:auto）吃掉所有点击；③「右栏按钮 Playwright locator click 全超时但 CUA 能点」= Playwright 点击的 stability 检查依赖 rAF，rAF 停滞期必超时。
 - **已落地修复（2026-11-21，走「不依赖动画完成」的路子）**：`web-vue/src/utils/overlayClickGuard.ts` + `App.vue` onMounted 安装——窗口 focus/visibilitychange 时扫描全部 `.el-overlay`，把 opacity<0.01 的遮罩强制 pointer-events:none，恢复可见时还原内联覆盖（不误伤正常弹窗淡入淡出）；一次覆盖全站 20+ 处 ElMessageBox。单测 5 过（overlayClickGuard.spec.ts）。**注：曾考虑的「把过渡时长压到毫秒级」方案机制上无效已弃**——卡住的是 Vue nextFrame 回调本身（等下一帧），时长再短也要等帧。
+- **修复浏览器实测（2026-11-21 06:45，Vite 已加载看守代码）**：①看守安装生效——注入假僵尸（opacity:0）触发 focus 即被强制 pointer-events:none，恢复可见还原，未触发看守的对照组不受影响；②**真实僵尸现场修复验证**——打开真实确认框时再次自发触发过渡死锁（失焦期 rAF 停滞、enter-from+enter-active 残留、opacity 0），看守把它强制 pointer-events:none 后页面点击穿透恢复（elementFromPoint 命中下层任务卡而非遮罩），正是修复目标症状；③恢复路径——过渡完成后看守还原内联覆盖，弹窗恢复可交互、取消可达；④残余边界（符合 P3 预期）：rAF 停滞期 leave 也可能卡住→弹窗冻结为可见态（正常 modal 行为、handleAction 已生效），rAF 恢复自愈，看守不干预可见弹窗；⑤无数据损害（ca251f 卡片仍「已完成」）。
 - 两次复现均无数据损害（未发 API，卡片状态正常）。
 
 ### P3（2026-11-21 复验修正定性）：qwen3.6 嵌套参数生成不稳定，非错误消息问题

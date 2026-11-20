@@ -123,12 +123,11 @@ const toolCallForTask = (task: SubagentTaskRecord): ToolCallInfo => ({
   tool_name: 'subagent',
   status: isSubagentTaskActive(task) ? 'running' : task.status === 'completed' ? 'completed' : 'error',
   args: {
-    dispatch: {
-      subagent_type: task.subagent_type,
-      description: task.description,
-      background: task.execution_mode !== 'sync',
-      label: task.label,
-    },
+    action: 'dispatch',
+    subagent_type: task.subagent_type,
+    description: task.description,
+    background: task.execution_mode !== 'sync',
+    label: task.label,
   },
   result: taskResultText(task),
   started_at_ms: startedAtMs(task),

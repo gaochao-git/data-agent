@@ -9,14 +9,14 @@ import type { SubagentTaskRecord, ToolCallInfo } from '../../types'
 const SubagentTrailStub = defineComponent({
   name: 'SubagentTrail',
   props: { toolCall: { type: Object, required: true } },
-  template: '<div data-subagent-trail-stub :data-background="String(toolCall.args.dispatch.background)" />',
+  template: '<div data-subagent-trail-stub :data-background="String(toolCall.args.background)" />',
 })
 
 const taskCall: ToolCallInfo = {
   tool_call_id: 'task-1',
   tool_name: 'subagent',
   status: 'completed',
-  args: { dispatch: { subagent_type: 'explore' } },
+  args: { action: 'dispatch', subagent_type: 'explore' },
   result: '报告',
   subagentTrail: [{ kind: 'message', id: 'm1', content: '结论' }],
 }
@@ -24,7 +24,7 @@ const taskCall2: ToolCallInfo = {
   tool_call_id: 'task-2',
   tool_name: 'subagent',
   status: 'completed',
-  args: { dispatch: { subagent_type: 'general' } },
+  args: { action: 'dispatch', subagent_type: 'general' },
   result: '第二份报告',
   subagentTrail: [{ kind: 'message', id: 'm2', content: '第二个结论' }],
 }

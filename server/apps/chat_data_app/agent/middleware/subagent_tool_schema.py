@@ -1,10 +1,11 @@
-"""``subagent`` 单工具的分层参数契约。
+"""``subagent`` 单工具的扁平参数契约。
 
-三组主参数对应一次调用的生命周期阶段，必须且只能选一组；
-所有层级都禁止未知字段，避免模型自行发明参数（例如 timeout_seconds）。
+一次调用只描述一个 ``action``，所有参数平铺在顶层：小模型不需要生成嵌套
+JSON，避免 ``send`` 值写成字符串或 task_id 平铺到顶层这类结构错误。
+执行层仍在 ``to_operation`` 里归一成 DispatchArgs/SendArgs/ManageArgs。
 """
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -14,8 +15,11 @@ __all__ = [
     "DispatchArgs",
     "ManageArgs",
     "SendArgs",
+    "SubagentAction",
     "SubagentToolArgs",
 ]
+
+SubagentAction = Literal["dispatch", "send", "list", "check", "wait", "cancel"]
 
 
 class _SubagentToolArgs(BaseModel):
@@ -108,29 +112,152 @@ class ManageArgs(_SubagentToolArgs):
         return self
 
 
+_ACTION_ALLOWED_FIELDS: dict[str, set[str]] = {
+    "dispatch": {"action", "intent", "description", "subagent_type", "background", "label"},
+    "send": {"action", "intent", "task_id", "message", "background"},
+    "list": {"action", "intent", "agent_id", "status"},
+    "check": {"action", "intent", "task_id"},
+    "wait": {"action", "intent", "task_ids", "wait_seconds"},
+    "cancel": {"action", "intent", "task_id"},
+}
+
+_ACTION_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
+    "dispatch": ("description", "subagent_type"),
+    "send": ("task_id", "message"),
+    "list": (),
+    "check": ("task_id",),
+    "wait": ("task_ids",),
+    "cancel": ("task_id",),
+}
+
+
 class SubagentToolArgs(_SubagentToolArgs):
-    """单工具三组主参数：必须且只能选择其中一组。"""
+    """单工具扁平参数：``action`` 决定本次调用，其余字段按动作白名单校验。"""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _explain_legacy_nested_shape(cls, data: Any) -> Any:
+        """模型沿用旧嵌套写法时，直接给出可照抄的扁平示例。"""
+        if isinstance(data, dict):
+            for legacy in ("dispatch", "send", "manage"):
+                if legacy in data:
+                    raise ValueError(
+                        "subagent 参数已改为扁平 action 写法，不要再嵌套 dispatch/send/manage；"
+                        '例如 {"action":"send","task_id":"...","message":"..."}。'
+                    )
+        return data
 
     intent: str = Field(
         default="",
         description="一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示。",
     )
-    dispatch: DispatchArgs | None = Field(
-        default=None,
-        description="派发新的隔离子智能体任务。",
+    action: SubagentAction = Field(
+        description="dispatch=派发新任务；send=向已有子会话发消息；list/check/wait/cancel=管理任务。",
     )
-    send: SendArgs | None = Field(
+    description: str | None = Field(
         default=None,
-        description="向已有子会话发送消息；运行中插话，已结束继续追问。",
+        min_length=1,
+        max_length=8000,
+        description="dispatch 必填：给子智能体的任务书，含目标、背景、交付格式和事实文件路径。",
     )
-    manage: ManageArgs | None = Field(
+    subagent_type: str | None = Field(
         default=None,
-        description="查询、等待或取消子智能体任务。",
+        min_length=1,
+        max_length=64,
+        description="dispatch 必填：子智能体类型，必须是工具描述中列出的类型之一。",
+    )
+    background: bool | None = Field(
+        default=None,
+        description=(
+            "dispatch 默认 true（后台执行，立即返回 task_id）；"
+            "send 仅目标任务已结束时有效：true=后台执行下一轮，false=当前步骤同步等待；目标运行中不要传。"
+        ),
+    )
+    label: str | None = Field(
+        default=None,
+        max_length=120,
+        description="dispatch 可选：任务列表里展示的短标题；不传时取任务书首行。",
+    )
+    task_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=64,
+        description="send/check/cancel 必填：目标子会话最近一轮的任务 ID，不要传 agent_id。",
+    )
+    message: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=8000,
+        description="send 必填：发给子智能体的消息。",
+    )
+    task_ids: list[str] | None = Field(
+        default=None,
+        max_length=MAX_WAIT_TASKS,
+        description="wait 必填：要等待的任务 ID 列表（最多 10 个）。",
+    )
+    agent_id: str | None = Field(
+        default=None,
+        max_length=64,
+        description="list 可选：只列出该稳定子智能体 ID 名下的任务 ID。",
+    )
+    status: str | None = Field(
+        default=None,
+        max_length=64,
+        description="list 可选：active、terminal，或 running/completed/failed/cancelled 等具体状态。",
+    )
+    wait_seconds: int | None = Field(
+        default=None,
+        ge=1,
+        le=60,
+        description="wait 可选：最长等待秒数；超时返回当前状态，不取消任务。",
     )
 
+    def _reject_unexpected_fields(self) -> None:
+        allowed = _ACTION_ALLOWED_FIELDS[self.action]
+        unexpected = sorted(name for name in self.model_fields_set - allowed if getattr(self, name) is not None)
+        if unexpected:
+            raise ValueError(f'action="{self.action}" 不支持参数：{", ".join(unexpected)}。')
+
+    def _require_field(self, field: str) -> None:
+        value = getattr(self, field)
+        if field == "task_ids":
+            present = any(str(item).strip() for item in (value or []))
+        else:
+            present = bool(str(value or "").strip())
+        if present:
+            return
+        if field == "task_ids":
+            raise ValueError('action="wait" 需要提供 task_ids（至少一个任务 ID）。')
+        raise ValueError(f'action="{self.action}" 需要提供 {field}。')
+
     @model_validator(mode="after")
-    def _exactly_one_operation(self) -> "SubagentToolArgs":
-        selected = [name for name in ("dispatch", "send", "manage") if getattr(self, name) is not None]
-        if len(selected) != 1:
-            raise ValueError("subagent 必须且只能提供 dispatch、send、manage 中的一组参数。")
+    def _validate_action_fields(self) -> "SubagentToolArgs":
+        self._reject_unexpected_fields()
+        for field in _ACTION_REQUIRED_FIELDS[self.action]:
+            self._require_field(field)
         return self
+
+    def to_operation(self) -> tuple[str, DispatchArgs | SendArgs | ManageArgs]:
+        """把扁平参数归一成执行层使用的三组内部模型。"""
+        if self.action == "dispatch":
+            dispatch_kwargs: dict[str, Any] = {
+                "description": self.description or "",
+                "subagent_type": self.subagent_type or "",
+            }
+            if self.background is not None:
+                dispatch_kwargs["background"] = self.background
+            if self.label is not None:
+                dispatch_kwargs["label"] = self.label
+            return "dispatch", DispatchArgs(**dispatch_kwargs)
+        if self.action == "send":
+            return "send", SendArgs(
+                task_id=self.task_id or "",
+                message=self.message or "",
+                background=self.background,
+            )
+        manage_kwargs: dict[str, Any] = {"action": self.action}
+        for name in ("task_id", "task_ids", "agent_id", "status", "wait_seconds"):
+            value = getattr(self, name)
+            if value is not None:
+                manage_kwargs[name] = value
+        return "manage", ManageArgs(**manage_kwargs)

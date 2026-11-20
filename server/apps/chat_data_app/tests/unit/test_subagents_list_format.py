@@ -48,7 +48,7 @@ def test_agent_list_shows_latest_task_without_dumping_all_task_ids():
     assert "最近匹配 task_id" not in output
     assert "task-old" not in output
     assert "可操作=取消、插话" in output
-    assert 'subagent({"manage":{"action":"list","agent_id":"<agent_id>"}})' in output
+    assert 'subagent({"action":"list","agent_id":"<agent_id>"})' in output
 
     filtered_output = format_subagent_agent_list(records, status_filtered=True)
     assert "最近匹配 task_id=task-latest" in filtered_output
