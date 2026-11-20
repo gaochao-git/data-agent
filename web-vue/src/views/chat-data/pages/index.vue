@@ -1363,13 +1363,19 @@ const LEGACY_STORAGE_KEYS = [
   'chatdata-conversation-view-mode',
   'chat_data_sql_ai_conversation_history',
 ]
+// 已删除功能按用户/数据源留存的旧前缀；同名键可能带 :user 或 :datasource:user 后缀。
+const LEGACY_STORAGE_PREFIXES = [
+  'chatdata:conversation-model',
+  'chatdata:conversation-semantic-config',
+  'chatdata:sql-ai-history',
+]
 const cleanupLegacyStorageKeys = () => {
   try {
     LEGACY_STORAGE_KEYS.forEach(key => localStorage.removeItem(key))
-    // 旧版按用户记忆模型的 localStorage 键已由 sessionStorage 手选缓存取代；
-    // 不清理会在 DevTools 里留下看似仍生效的孤立配置。
+    // 旧版模型记忆、语义模型选择、SQL 助手会话都已迁移或删除；不清理会在
+    // DevTools 里留下看似仍生效的孤立配置，SQL 助手历史还会长期占用体积。
     Object.keys(localStorage)
-      .filter(key => key === 'chatdata:conversation-model' || key.startsWith('chatdata:conversation-model:'))
+      .filter(key => LEGACY_STORAGE_PREFIXES.some(prefix => key === prefix || key.startsWith(`${prefix}:`)))
       .forEach(key => localStorage.removeItem(key))
     sessionStorage.removeItem('chatdata-active-run-conversation')
   } catch {
