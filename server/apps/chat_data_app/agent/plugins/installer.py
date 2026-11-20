@@ -7,6 +7,8 @@
 - 禁止符号链接成员（防把管理域外内容带进插件目录）；
 - manifest 必须存在且合法，``manifest.name`` 即插件目录名，目录名不一致拒绝安装；
 - 插件声明的 ``mcp_servers`` 必须通过 ``mcp/admission.py`` 准入检查，否则拒绝安装。
+- 解包在隐藏且唯一的临时目录完成，``rename`` 原子落盘：多节点/多 worker 同时安装
+  同名插件不会互相覆盖；超时未被改动的残留临时目录会在下次安装时清理。
 
 卸载直接删除插件目录。启停不落磁盘标记：由 ``services/plugin_service`` 经
 ``daos/plugin_dao`` 写 DB 表 ``chat_data_plugin``（唯一真值，见 ``loader`` 模块 docstring）。
@@ -16,6 +18,8 @@ from __future__ import annotations
 
 import io
 import shutil
+import time
+import uuid
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -42,6 +46,11 @@ PLUGIN_ZIP_MAX_UNCOMPRESSED_BYTES = 200 * 1024 * 1024
 PLUGIN_ZIP_MAX_MEMBERS = 5000
 # 解压限流的读取块大小：真实字节预算按块扣减，超限即中止（误差不超过一个块）
 _PLUGIN_ZIP_CHUNK_BYTES = 1024 * 1024
+# 解包临时目录：以 "." 开头（扫描器忽略目录名以 "." 开头的条目）且带随机后缀，
+# 多节点/多 worker 同时安装同名插件时互不覆盖。
+_STAGING_PREFIX = ".installing-"
+# 残留临时目录的清理阈值：只删超时未被改动的目录，避免误删其他节点正在解包的任务。
+_STALE_STAGING_SECONDS = 3600
 
 
 class PluginInstallError(ValueError):
@@ -64,6 +73,33 @@ def _find_zip_root(members: list[zipfile.ZipInfo]) -> str:
     if len(top_names) == 1 and f"{next(iter(top_names))}/{PLUGIN_MANIFEST_FILENAME}" in all_names:
         return next(iter(top_names)) + "/"
     raise PluginInstallError(f"zip 根目录下必须包含 {PLUGIN_MANIFEST_FILENAME}（或仅有一个包含它的顶层目录）")
+
+
+def _new_staging_dir(target: Path) -> Path:
+    """本次安装独占的临时目录：隐藏命名 + 随机后缀，跨节点不会撞名。"""
+    return target.parent / f"{_STAGING_PREFIX}{target.name}-{uuid.uuid4().hex}"
+
+
+def _cleanup_stale_staging(target: Path) -> None:
+    """清理超过阈值仍未被改动的残留临时目录。
+
+    兼容旧版本固定名 ``<name>.installing``；新版本 ``.installing-<name>-*`` 只在
+    超时后删除，避免滚动发布期间误删其他节点正在解包的目录。
+    """
+    parent = target.parent
+    candidates = [parent / f"{target.name}.installing", *parent.glob(f"{_STAGING_PREFIX}{target.name}-*")]
+    cutoff = time.time() - _STALE_STAGING_SECONDS
+    for entry in candidates:
+        try:
+            if not entry.is_dir() or entry.stat().st_mtime >= cutoff:
+                continue
+        except OSError:
+            continue
+        try:
+            shutil.rmtree(entry)
+            logger.warning("清理残留插件解包目录: %s", entry)
+        except OSError as err:
+            logger.warning("清理残留插件解包目录失败 %s: %s", entry, err)
 
 
 def _validate_zip_members(archive: zipfile.ZipFile) -> None:
@@ -278,15 +314,20 @@ def install_plugin_from_zip_bytes(data: bytes) -> PluginManifest:
         if target.exists():
             raise PluginInstallError(f"插件已存在，请先卸载再安装: {manifest.name}")
         target.parent.mkdir(parents=True, exist_ok=True)
-        staging = target.with_name(f"{target.name}.installing")
-        if staging.exists():
-            shutil.rmtree(staging)
+        _cleanup_stale_staging(target)
+        staging = _new_staging_dir(target)
         staging.mkdir(parents=True)
         try:
             _safe_extract(archive, members, staging, zip_root)
             if not (staging / PLUGIN_MANIFEST_FILENAME).is_file():
                 raise PluginInstallError(f"解压结果缺少 {PLUGIN_MANIFEST_FILENAME}")
-            staging.rename(target)
+            try:
+                staging.rename(target)
+            except OSError as err:
+                # 并发安装时先到者已落盘：报“已存在”，不再覆盖对方目录。
+                if target.exists():
+                    raise PluginInstallError(f"插件已存在，请先卸载再安装: {manifest.name}") from err
+                raise
         except BaseException:
             shutil.rmtree(staging, ignore_errors=True)
             raise

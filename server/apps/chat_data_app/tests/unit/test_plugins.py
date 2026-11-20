@@ -173,7 +173,40 @@ def test_install_plugin_from_zip_bytes_happy_path():
     assert (root / "ops-readonly" / "plugin.json").is_file()
     assert (root / "ops-readonly" / "skills" / "fault-analysis" / "SKILL.md").is_file()
     assert not list(root.glob("*.installing"))
+    assert not list(root.glob(".installing-*"))
     assert manifest.name == "ops-readonly"
+
+
+def test_install_uses_unique_hidden_staging_dir(monkeypatch):
+    """每次安装独占一个隐藏临时目录：多节点/多 worker 并发安装不会互相覆盖。"""
+    seen = []
+    real_extract = plugin_installer._safe_extract
+
+    def _spy(archive, members, staging, zip_root):
+        seen.append(staging)
+        real_extract(archive, members, staging, zip_root)
+
+    monkeypatch.setattr(plugin_installer, "_safe_extract", _spy)
+    install_plugin_from_zip_bytes(_build_zip(VALID_MANIFEST))
+    uninstall_plugin("ops-readonly")
+    install_plugin_from_zip_bytes(_build_zip(VALID_MANIFEST))
+
+    assert len(seen) == 2
+    assert seen[0] != seen[1]
+    assert all(path.name.startswith(".installing-") for path in seen)
+    assert not any(path.exists() for path in seen)
+
+
+def test_install_keeps_fresh_staging_from_another_node():
+    """别的节点正在解包（未超时）的临时目录不能被本节点顺手删掉。"""
+    root = plugin_loader.plugins_root()
+    root.mkdir(parents=True, exist_ok=True)
+    other = root / ".installing-ops-readonly-othernode"
+    other.mkdir()
+
+    install_plugin_from_zip_bytes(_build_zip(VALID_MANIFEST))
+
+    assert other.is_dir()
 
 
 def test_install_plugin_wrapped_in_single_top_dir():
@@ -331,6 +364,24 @@ def test_plugin_loader_skips_dir_name_mismatch():
     (target / "plugin.json").write_text(json.dumps(VALID_MANIFEST, ensure_ascii=False), encoding="utf-8")
     clear_metadata_cache()
     assert load_plugins_metadata() == {}
+
+
+def test_manifest_edit_invalidates_disk_cache_without_restart():
+    """原地改 ``plugin.json`` 后下一轮扫描就要生效（多 worker 不依赖广播/重启）。"""
+    target = plugin_loader.plugins_root() / "ops-readonly"
+    target.mkdir(parents=True)
+    manifest_path = target / "plugin.json"
+    manifest_path.write_text(json.dumps(VALID_MANIFEST, ensure_ascii=False), encoding="utf-8")
+    assert load_plugins_metadata()["ops-readonly"].manifest.version == "1.0.0"
+
+    before = manifest_path.stat()
+    manifest_path.write_text(
+        json.dumps({**VALID_MANIFEST, "version": "1.1.0"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    # 同一纳秒内写完时 mtime 可能不变，显式推进时间戳让测试不依赖文件系统精度。
+    os.utime(manifest_path, ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000))
+    assert load_plugins_metadata()["ops-readonly"].manifest.version == "1.1.0"
 
 
 # ============ refresh_plugin_state（DB 快照刷新）============

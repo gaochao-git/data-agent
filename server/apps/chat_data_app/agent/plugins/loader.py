@@ -6,7 +6,8 @@
 本模块维护一份进程内 ``_enabled_state`` 快照，由 :func:`refresh_plugin_state` 从 DB
 异步刷新；每个需要插件状态的入口（会话装配、技能快照、管理端列表）先 await 刷新，
 同步读取方（``enabled_plugins`` 等）消费该快照。DB 读失败按不可用处理（快照清空、
-fail-closed），不兜底旧值。磁盘缓存只存内容（manifest+目录），启停在读取时叠加。
+fail-closed），不兜底旧值。磁盘缓存只存内容（manifest+目录+manifest 文件指纹），
+启停在读取时叠加；指纹逐轮校验，``plugin.json`` 一旦变化即重读，不依赖安装/卸载回调。
 """
 
 from __future__ import annotations
@@ -58,14 +59,29 @@ class PluginMetadata:
         }
 
 
-# 磁盘内容缓存（manifest+目录），与启停解耦；启停来自 _enabled_state。
-_disk_cache: dict[str, tuple[PluginManifest, Path]] | None = None
+@dataclass(frozen=True)
+class _CachedPlugin:
+    """一条磁盘缓存：manifest、插件目录与 ``plugin.json`` 文件指纹。"""
+
+    manifest: PluginManifest
+    dir: Path
+    fingerprint: tuple[int, int, int]
+
+
+# 磁盘内容缓存（manifest+目录+指纹），与启停解耦；启停来自 _enabled_state。
+# 指纹取 ``plugin.json`` 的 (mtime_ns, ctime_ns, size)：每轮扫描逐插件 stat，文件一变就重读。
+# 带上 ctime 是为了覆盖“内容改了但 mtime 被 rsync/touch 原样保留”的同步场景。
+# 这样不依赖安装/卸载回调，也不依赖跨进程广播（gunicorn 多 worker 各自失效）。
+_disk_cache: dict[str, _CachedPlugin] | None = None
 # DB 启停快照：None 表示本进程尚未成功刷新；frozenset() 表示已刷新且无启用项。
 _enabled_state: frozenset[str] | None = None
 
 
 def clear_metadata_cache() -> None:
-    """清理磁盘内容缓存（安装/卸载后调用，让下一轮扫描看到新目录）。"""
+    """立即清空磁盘内容缓存（安装/卸载后调用，让目录增删马上生效）。
+
+    原地修改 ``plugin.json`` 不依赖本函数：下一轮扫描会按文件指纹自动重读。
+    """
     global _disk_cache
     _disk_cache = None
 
@@ -84,19 +100,34 @@ async def refresh_plugin_state() -> None:
         _enabled_state = frozenset()
 
 
-def _scan_disk_plugins(*, force_refresh: bool = False) -> dict[str, tuple[PluginManifest, Path]]:
-    """扫描插件目录，返回 ``{插件名: (manifest, 目录)}``（带进程级磁盘缓存）。
+def _manifest_fingerprint(entry: Path) -> tuple[int, int, int]:
+    """``plugin.json`` 的文件指纹；缺失或不可读时返回哨兵值，交由解析层告警。"""
+    try:
+        stat = (entry / PLUGIN_MANIFEST_FILENAME).stat()
+    except OSError:
+        return (-1, -1, -1)
+    return (stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size)
 
-    单个插件 manifest 损坏、目录名与 manifest.name 不一致、或为符号链接，只告警跳过。
+
+def _scan_disk_plugins(*, force_refresh: bool = False) -> dict[str, _CachedPlugin]:
+    """扫描插件目录，返回 ``{插件名: 缓存项}``。
+
+    ``plugin.json`` 的 mtime/size 未变时复用上一轮解析结果；文件被原地修改、
+    新增目录或删除目录都会在下一轮扫描生效。单个插件 manifest 损坏、目录名与
+    manifest.name 不一致、或为符号链接，只告警跳过。
     """
     global _disk_cache
-    if _disk_cache is not None and not force_refresh:
-        return _disk_cache
+    previous = _disk_cache or {}
+    found: dict[str, _CachedPlugin] = {}
     root = plugins_root()
-    found: dict[str, tuple[PluginManifest, Path]] = {}
     if root.is_dir():
         for entry in sorted(root.iterdir()):
             if not entry.is_dir() or entry.is_symlink() or entry.name.startswith("."):
+                continue
+            fingerprint = _manifest_fingerprint(entry)
+            cached = previous.get(entry.name)
+            if not force_refresh and cached is not None and cached.dir == entry and cached.fingerprint == fingerprint:
+                found[entry.name] = cached
                 continue
             try:
                 manifest = load_plugin_manifest(entry)
@@ -110,7 +141,7 @@ def _scan_disk_plugins(*, force_refresh: bool = False) -> dict[str, tuple[Plugin
                     manifest.name,
                 )
                 continue
-            found[manifest.name] = (manifest, entry)
+            found[manifest.name] = _CachedPlugin(manifest=manifest, dir=entry, fingerprint=fingerprint)
     _disk_cache = found
     return found
 
@@ -123,8 +154,8 @@ def load_plugins_metadata(*, force_refresh: bool = False) -> dict[str, PluginMet
     """
     enabled = _enabled_state if _enabled_state is not None else frozenset()
     return {
-        name: PluginMetadata(manifest=manifest, dir=directory, enabled=name in enabled)
-        for name, (manifest, directory) in _scan_disk_plugins(force_refresh=force_refresh).items()
+        name: PluginMetadata(manifest=cached.manifest, dir=cached.dir, enabled=name in enabled)
+        for name, cached in _scan_disk_plugins(force_refresh=force_refresh).items()
     }
 
 

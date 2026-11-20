@@ -53,6 +53,10 @@ CHAT_DATA_HOME/plugins/<name>/
 | `skills` | `loader.enabled_plugin_skill_sources()` → `skill_service.list_runtime_skill_sources_async()` → 会话 runtime-skills 快照 | 新会话/下一次快照重建（技能指纹变更自动触发）；与系统/用户技能同名时跳过并告警 |
 | `mcp_servers` | `loader.enabled_plugin_mcp_servers()` → `mcp/config.load_mcp_server_configs()` → agent 装配 | 下一次 agent 装配（新运行） |
 
+磁盘 manifest 按 ``plugin.json`` 的 ``(mtime_ns, size)`` 指纹缓存：每轮扫描逐插件
+``stat``，文件被原地修改后下一轮即生效，不需要重启或跨 worker 广播；安装/卸载路径
+仍会显式清空缓存。
+
 启停读取链路：`loader.refresh_plugin_state()` 从 DB 拉启用名集合写入进程内快照
 `_enabled_state`，装配/技能快照/管理列表三个入口都先 `await` 它。DB 读失败按
 fail-closed 处理（快照清空、当轮全部按禁用，不兜底旧值），因此**表不可用 = 插件静默
@@ -70,7 +74,8 @@ fail-closed 处理（快照清空、当轮全部按禁用，不兜底旧值）�
 - `GET  /api/chatdata/admin/plugins/{plugin_id}/mcp-servers/{server_id}/tools`：临时连接 MCP server 探测工具清单（不执行工具、不落库）；
 - `GET  /api/chatdata/admin/plugins`：列出已安装插件（含审计字段，分页 limit∈[1,200]）；
 - `POST /api/chatdata/admin/plugins/install`：上传 zip 安装（≤50MB，manifest 校验、
-  zip-slip/符号链接/解压总量防护，同名拒绝）；
+  zip-slip/符号链接/解压总量防护，同名拒绝；隐藏唯一临时目录 + rename 原子落盘，
+  多节点并发安装同名插件互不覆盖）；
 - `PUT  /api/chatdata/admin/plugins/{plugin_id}/enabled`：启用/禁用（写 DB
   `enabled_flag`，立即影响新会话快照与新装配）；
 - `DELETE /api/chatdata/admin/plugins/{plugin_id}`：卸载（删磁盘目录 + 软删 DB 行）。

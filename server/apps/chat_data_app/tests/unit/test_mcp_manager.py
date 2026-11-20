@@ -346,6 +346,31 @@ async def test_list_tools_async_tools_config_and_fallback():
     assert by_qualified["mcp_srv_greet"].configured is False
 
 
+@pytest.mark.asyncio
+async def test_list_tools_async_invalidates_on_config_change():
+    """工具策略（approval）变化后，TTL 未到也要重新枚举，不能继续吐旧档位。"""
+    state = {"approval": "allow"}
+
+    def config_loader():
+        return [
+            MCPServerConfig(
+                server_id="srv",
+                transport="streamable_http",
+                url="https://mcp.example.com/mcp",
+                tools={"echo": MCPToolPolicy(approval=state["approval"])},
+            ),
+        ]
+
+    manager, opens = _make_manager(config_loader=config_loader)
+    first = {t.qualified_name: t for t in await manager.list_tools_async()}
+    assert first["mcp_srv_echo"].approval == "allow"
+
+    state["approval"] = "ask"
+    second = {t.qualified_name: t for t in await manager.list_tools_async()}
+    assert second["mcp_srv_echo"].approval == "ask"
+    assert opens["count"] == 2
+
+
 def test_session_timeout_covers_longest_tool_timeout():
     manager = MCPToolManager(
         tool_timeout_seconds=10,
