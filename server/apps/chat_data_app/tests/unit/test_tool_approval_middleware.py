@@ -152,6 +152,55 @@ async def test_mcp_tool_without_metadata_falls_back_to_qualified_name(monkeypatc
     assert "mcp_srv_do" in payloads[0]["questions"][0]["question"]
 
 
+@pytest.mark.asyncio
+async def test_unknown_tool_name_does_not_trigger_approval(monkeypatch):
+    """模型把参数名幻觉成工具名时不应弹审批：执行器会返回工具不存在。"""
+
+    def failing_interrupt(_payload):
+        raise AssertionError("未知工具名不应触发审批")
+
+    monkeypatch.setattr(tool_approval, "interrupt", failing_interrupt)
+    middleware = create_tool_approval_middleware(
+        [SimpleNamespace(name="file_delete", metadata={})],
+        approval_policies={"file_delete": "ask"},
+    )
+    state = {
+        "messages": [
+            _ai_message(
+                [
+                    {
+                        "id": "c1",
+                        "type": "tool_call",
+                        "name": "subagent_type",
+                        "args": {"subagent_type": "explore"},
+                    }
+                ]
+            )
+        ]
+    }
+
+    update = await middleware.aafter_model(state, None)
+
+    assert update == {"approval_decisions": {}}
+
+
+@pytest.mark.asyncio
+async def test_unknown_tool_call_passes_through_without_interrupt(monkeypatch):
+    monkeypatch.setattr(tool_approval, "interrupt", lambda _payload: (_ for _ in ()).throw(AssertionError("不应审批")))
+    middleware = create_tool_approval_middleware(
+        [SimpleNamespace(name="file_delete", metadata={})],
+        approval_policies={"file_delete": "ask"},
+    )
+    request = SimpleNamespace(
+        tool_call={"id": "c1", "name": "subagent_type", "args": {"subagent_type": "explore"}},
+        tool=None,
+    )
+
+    result = await middleware.awrap_tool_call(request, _ok_handler)
+
+    assert result.content == "done"
+
+
 # ============ 单次审批（无持久授权） ============
 
 
@@ -562,6 +611,7 @@ def test_mcp_tool_call_invalid_target_skips_approval():
 
 def test_tool_approval_policy_matrix():
     tools = [
+        SimpleNamespace(name="file_delete", metadata={}),
         SimpleNamespace(name="mcp_allow", metadata={"approval": "allow"}),
         SimpleNamespace(name="mcp_ask", metadata={"approval": "ask"}),
         SimpleNamespace(name="mcp_default", metadata={}),
@@ -571,6 +621,10 @@ def test_tool_approval_policy_matrix():
     assert middleware._needs_approval("mcp_ask") is True
     assert middleware._needs_approval("mcp_default") is True
     assert middleware._needs_approval("file_delete") is True
+    # 未装配的名字（例如把参数名 subagent_type 当成工具名）不可能执行，不弹审批。
+    assert middleware._needs_approval("subagent_type") is False
+    # 没有工具表时保留原有的 fail-closed 兜底。
+    assert create_tool_approval_middleware()._needs_approval("file_delete") is True
 
 
 def test_resolve_batch_answers_unknown_label_fails_closed():

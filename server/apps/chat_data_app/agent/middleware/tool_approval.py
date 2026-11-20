@@ -82,9 +82,9 @@ class ToolApprovalMiddleware(AgentMiddleware):
 
     def _needs_approval(self, tool_name: str) -> bool:
         """只查统一策略映射；allow/deny 直行到 wrap 阶段，ask 中断。"""
-        # 直连幻觉 MCP 名（不在本次装配工具表里）不弹审批：先让框架返回工具不存在，
-        # 避免用户白批一次；代理到不存在目标同理。
-        if tool_name.startswith(_MCP_TOOL_PREFIX) and tool_name not in self._tool_labels:
+        # 不在本次装配工具表里的名字一律不弹审批：模型可能把参数名（如 subagent_type）
+        # 幻觉成工具名，先让执行器返回“工具不存在”，避免用户批准一个不存在的操作。
+        if self._tool_labels and tool_name not in self._tool_labels:
             return False
         return self._decision(tool_name) == "ask"
 
