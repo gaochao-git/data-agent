@@ -179,7 +179,7 @@ def test_tool_description_and_system_prompt_split_contract_from_policy():
     assert "只读盘点子智能体" in description
     assert "只读盘点子智能体" not in prompt
     assert "{available_agents}" not in prompt
-    assert "可用类型、能力边界和参数见 subagent 工具说明" in prompt
+    assert "派发判断" in prompt
     assert 'subagent({"action":"list"})' in prompt
     assert 'subagent({"action":"send"' in prompt
 
@@ -188,7 +188,7 @@ def test_tool_description_and_system_prompt_split_contract_from_policy():
 
     assert "仅异步任务运行中可插话" in description
     assert "先 file_write 到 workspace" in prompt
-    assert "目标、要求和交付格式直接写进任务书" in prompt
+    assert "任务书写清文件路径、目标、交付格式" in prompt
 
 
 def test_parameter_descriptions_keep_field_semantics_only():
@@ -205,7 +205,7 @@ def test_write_scope_feature_is_removed():
     prompt = subagents_module._default_system_prompt()
     assert "write_scopes" not in description
     assert "write_scopes" not in prompt
-    assert "写目标不同的任务可以并行" in prompt
+    assert "写目标不同可并行" in prompt
 
 
 @pytest.mark.asyncio

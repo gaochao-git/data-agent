@@ -483,11 +483,9 @@ def _mcp_tool_reminder(mcp_tools: list) -> str:
         listed += f"\n- …其余 {len(names) - 50} 个"
     return (
         "<system-reminder>\n"
-        "以下 MCP 工具可用（当前未加载 schema）：\n"
+        "以下 MCP 工具可用（schema 未加载）：先 mcp_tool_search 取 input_schema，"
+        "再通过 mcp_tool_call({name,input}) 调用，不要直接调用目标工具名。\n"
         f"{listed}\n"
-        "先调用 mcp_tool_search，query 传完整工具名（多个用 | 分隔）获取 input_schema；"
-        "不知道工具名时再用 search 参数（多个关键词也用 | 分隔）做关键词模糊检索。"
-        "拿到 input_schema 后再通过 mcp_tool_call({name,input}) 调用；不要直接调用目标工具名。\n"
         "</system-reminder>"
     )
 

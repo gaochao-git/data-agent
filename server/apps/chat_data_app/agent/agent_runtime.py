@@ -38,9 +38,6 @@ TODO_TOOL_DESCRIPTION = (
     "每完成一项立即标记 completed。"
 )
 TODO_SYSTEM_PROMPT = """## write_todos
-- 多步任务先维护待办清单并展示进度；简单单步任务不要用。
-- 开始前为每个具体步骤建一条 todo；未完成期间保持正在处理的 todo 为 in_progress（并行时可有多个）。
-- 完成一项立即标记 completed，不要批量补记。
 - 最终回答写在最后一次 write_todos 之后的正文里，不能只靠更新 todos 交付。"""
 
 

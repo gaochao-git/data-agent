@@ -316,7 +316,9 @@ def test_write_todos_middleware_uses_compact_chinese_prompt():
     assert "in_progress" in description
     assert "completed" in description
     assert len(system_prompt) <= 400
-    assert "多步任务" in system_prompt
+    assert "write_todos" in system_prompt
+    # 多步任务/in_progress/completed 已由工具描述承担，系统提示不重复
+    assert "多步任务" not in system_prompt
 
 
 def test_sandbox_renewal_callback_only_for_sandbox_backend():

@@ -252,7 +252,7 @@ def test_subagent_middleware_wrap_model_call_appends_prompt():
         return "handled"
 
     assert middleware.wrap_model_call(_prompt_request(), handler) == "handled"
-    assert "## 子智能体委派" in seen["request"].system_message.content
+    assert "## 子智能体" in seen["request"].system_message.content
 
 
 @pytest.mark.asyncio
@@ -265,7 +265,7 @@ async def test_subagent_middleware_awrap_model_call_appends_prompt():
         return "handled"
 
     assert await middleware.awrap_model_call(_prompt_request(), handler) == "handled"
-    assert "## 子智能体委派" in seen["request"].system_message.content
+    assert "## 子智能体" in seen["request"].system_message.content
 
 
 def test_streaming_tool_call_filter_flushes_full_opener_marker():
