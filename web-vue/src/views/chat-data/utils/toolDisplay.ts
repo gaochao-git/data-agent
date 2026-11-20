@@ -173,8 +173,7 @@ export function getSubagentActionDisplayName(toolName?: string | null, args: Too
   if (operation.operation === 'manage') {
     return TASK_ACTION_NAMES[String(operation.args.action || '').trim()] || ''
   }
-  const decision = String(operation.args.decision || '').trim()
-  return decision === 'deny' ? '拒绝子智能体操作' : decision === 'allow' ? '批准子智能体操作' : ''
+  return ''
 }
 
 const taskDescription: DescriptionBuilder = (args) => {

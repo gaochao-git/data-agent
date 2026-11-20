@@ -35,7 +35,7 @@ def test_subagent_tool_exposes_write_scopes_and_dispatch_prompt():
 
     assert "write_scopes" in middleware.tools[0].description
     schema = middleware.tools[0].args_schema.model_json_schema()
-    assert set(schema["properties"]) == {"dispatch", "send", "manage"}
+    assert set(schema["properties"]) == {"intent", "dispatch", "send", "manage"}
     assert "write_scopes" in schema["$defs"]["DispatchArgs"]["properties"]
     # 写范围只在 dispatch 声明；send 续写固定继承上一轮，不能再覆盖。
     assert "write_scopes" not in schema["$defs"]["SendArgs"]["properties"]

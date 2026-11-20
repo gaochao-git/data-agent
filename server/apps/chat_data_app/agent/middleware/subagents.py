@@ -210,11 +210,12 @@ _SUBAGENT_TOOL_DESCRIPTION_TEMPLATE = """派发并管理隔离子智能体：过
 - send：向已有子会话发消息；仅异步任务运行中可插话，已结束自动开启下一轮追问。
 - manage：list/check/wait/cancel 子智能体任务。
 
-参数必须嵌套在所选操作键下，不能把 action、task_id、description 等字段放到顶层：
-- {"dispatch":{"subagent_type":"explore","description":"完整任务书","background":true}}
-- {"send":{"task_id":"任务 ID","message":"追问内容"}}
-- {"manage":{"action":"list"}}
-- {"manage":{"action":"check","task_id":"任务 ID"}}
+参数必须嵌套在所选操作键下，不能把 action、task_id、description 等字段放到顶层；
+唯一例外是可选的顶层 intent（一句中文说明本次调用目的，不超过 50 字，会作为卡片标题展示）：
+- {"intent":"盘点报告目录","dispatch":{"subagent_type":"explore","description":"完整任务书","background":true}}
+- {"intent":"追问缺失章节","send":{"task_id":"任务 ID","message":"追问内容"}}
+- {"intent":"查看进行中的任务","manage":{"action":"list"}}
+- {"intent":"确认任务状态","manage":{"action":"check","task_id":"任务 ID"}}
 错误示例（会因顶层未知字段被拒绝）：{"action":"list"}、{"task_id":"...","message":"..."}
 
 background 默认 true；write_scopes 为可选声明，dispatch 声明后 send 续写沿用；未声明时按可能冲突处理。
@@ -1822,10 +1823,12 @@ def build_task_tool(specs: list[SubagentSpec], run_controls: Any = None) -> Stru
 
     async def subagent(
         runtime: ToolRuntime,
+        intent: str = "",
         dispatch: DispatchArgs | None = None,
         send: SendArgs | None = None,
         manage: ManageArgs | None = None,
     ) -> Command | str:
+        del intent
         return await _route_subagent_tool(ctx, runtime, dispatch, send, manage)
 
     return _SubagentStructuredTool.from_function(

@@ -116,6 +116,10 @@ class ManageArgs(_SubagentToolArgs):
 class SubagentToolArgs(_SubagentToolArgs):
     """单工具三组主参数：必须且只能选择其中一组。"""
 
+    intent: str = Field(
+        default="",
+        description="一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示。",
+    )
     dispatch: DispatchArgs | None = Field(
         default=None,
         description="派发新的隔离子智能体任务。",

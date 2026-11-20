@@ -31,6 +31,15 @@ def test_group_nests_into_typed_model():
     assert args.manage is None
 
 
+def test_top_level_intent_is_optional_and_not_an_operation_group():
+    """intent 与其它工具同口径：顶层可选、面向用户展示，不参与三组互斥校验。"""
+    args = SubagentToolArgs.model_validate({"intent": "查看进行中的任务", "manage": {"action": "list"}})
+    assert args.intent == "查看进行中的任务"
+    assert SubagentToolArgs.model_validate({"manage": {"action": "list"}}).intent == ""
+    with pytest.raises(ValidationError, match="必须且只能"):
+        SubagentToolArgs.model_validate({"intent": "只有目的，没有操作"})
+
+
 def test_rejects_legacy_flat_arguments():
     with pytest.raises(ValidationError):
         SubagentToolArgs.model_validate({"action": "start", "description": "盘点", "subagent_type": "explore"})
@@ -109,7 +118,7 @@ def test_tool_schema_keeps_runtime_injected_and_hidden_from_model():
     tool = build_task_tool([_spec()])
 
     assert tool._injected_args_keys == frozenset({"runtime"})
-    assert set(tool.args_schema.model_json_schema()["properties"]) == {"dispatch", "send", "manage"}
+    assert set(tool.args_schema.model_json_schema()["properties"]) == {"intent", "dispatch", "send", "manage"}
     assert "runtime" not in tool.get_input_schema().model_json_schema()["properties"]
 
 
@@ -117,11 +126,12 @@ def test_tool_description_explains_nested_argument_shape():
     """工具描述必须给出可直接照抄的嵌套 JSON，避免小模型退回旧平铺参数。"""
     description = str(build_task_tool([_spec()]).description or "")
 
-    assert '{"manage":{"action":"list"}}' in description
-    assert '{"dispatch":{"subagent_type":"explore"' in description
-    assert '{"send":{"task_id":"任务 ID"' in description
+    assert '"manage":{"action":"list"}}' in description
+    assert '"dispatch":{"subagent_type":"explore"' in description
+    assert '"send":{"task_id":"任务 ID"' in description
     assert "错误示例（会因顶层未知字段被拒绝）" in description
     assert '{"action":"list"}' in description
+    assert '"intent":"盘点报告目录"' in description
 
 
 def test_tool_description_and_system_prompt_split_contract_from_policy():
@@ -164,6 +174,7 @@ async def test_tool_invocation_accepts_langgraph_runtime_injection(monkeypatch):
 
     result = await tool.ainvoke(
         {
+            "intent": "盘点工作区",
             "dispatch": {"description": "盘点工作区", "subagent_type": "explore"},
             "runtime": runtime,
         }
