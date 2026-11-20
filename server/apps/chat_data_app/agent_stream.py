@@ -38,9 +38,9 @@ from .agent import (
 )
 from .agent.context.context_budget import (
     ContextInputLimitExceededError,
-    latest_model_name_from_usage,
     sanitize_context_usage_for_response,
 )
+from .agent.middleware.context_usage import _usage_aux_stats
 from .agent.middleware.steering import SteeringMessageTracker
 from .agent.plugins.loader import refresh_plugin_state
 from .agent.run.agent_inbox_service import AgentRunLeaseLostError, agent_inbox_service
@@ -428,43 +428,6 @@ def _generation_stats_from_usage(
         stats["model_first_token_ms"] = model_first_token_ms
     stats.update(_usage_aux_stats(usage, model_name=model_name))
     return stats
-
-
-def _usage_aux_stats(usage: Any | None, *, model_name: str | None = None) -> dict[str, Any]:
-    """从 usage 提取辅助统计字段：输入总 token、缓存命中与模型名；缺失时省略不硬凑。
-
-    model_name：adapter 在 sanitize 前从 llm_calls 提取的最后一次调用模型名，
-    显式传入优先——收口时的 usage 可能已被 sanitize（llm_calls 剥离）。
-    缓存命中：cumulative_cached_input_tokens / cumulative_cache_hit_rate 由
-    context_usage 侧按模型实际上报聚合（未上报缓存信息的模型不产出，与
-    ConversationTokenUsage 面板的「模型缓存」累计口径同源）。
-    """
-    if not isinstance(usage, dict):
-        return {}
-    aux: dict[str, Any] = {}
-    # 输入总 token：provider 实际值覆盖本轮全部调用时用实际值；部分调用缺少
-    # usage 时回退上下文估算，避免把“已上报部分”误当成完整账单。
-    actual_input_tokens = int(usage.get("cumulative_actual_input_tokens") or 0)
-    use_actual_input = usage.get("input_tokens_source") == "actual" and actual_input_tokens > 0
-    input_tokens = (
-        actual_input_tokens
-        if use_actual_input
-        else int(usage.get("cumulative_input_tokens") or usage.get("input_tokens") or 0)
-    )
-    if input_tokens > 0:
-        aux["input_tokens"] = input_tokens
-    # 缓存命中：本轮全部模型调用的缓存输入累计（命中率随行，仅在输入可报时存在）。
-    cached_input_tokens = int(usage.get("cumulative_cached_input_tokens") or 0)
-    if cached_input_tokens > 0:
-        aux["cached_input_tokens"] = cached_input_tokens
-        cache_hit_rate = usage.get("cumulative_cache_hit_rate")
-        if isinstance(cache_hit_rate, (int, float)) and cache_hit_rate > 0:
-            aux["cache_hit_rate"] = round(float(cache_hit_rate), 1)
-    # 模型名：多工具来回时以最终回复的调用为准。
-    resolved_model_name = model_name or latest_model_name_from_usage(usage)
-    if resolved_model_name:
-        aux["model"] = resolved_model_name
-    return aux
 
 
 def _estimate_stream_tokens(text: str) -> int:

@@ -109,10 +109,35 @@ def _manifest_fingerprint(entry: Path) -> tuple[int, int, int]:
     return (stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size)
 
 
+def _scan_plugin_entry(entry: Path, cached: _CachedPlugin | None, *, force_refresh: bool) -> _CachedPlugin | None:
+    """扫描单个插件目录；返回缓存项，目录非法或 manifest 不可用时返回 ``None``。
+
+    ``plugin.json`` 指纹未变且未强制刷新时直接复用 ``cached``，否则重新解析。
+    """
+    if not entry.is_dir() or entry.is_symlink() or entry.name.startswith("."):
+        return None
+    fingerprint = _manifest_fingerprint(entry)
+    if not force_refresh and cached is not None and cached.dir == entry and cached.fingerprint == fingerprint:
+        return cached
+    try:
+        manifest = load_plugin_manifest(entry)
+    except PluginManifestError as err:
+        logger.warning("忽略非法插件 %s: %s", entry.name, err)
+        return None
+    if manifest.name != entry.name:
+        logger.warning(
+            "忽略目录名与 manifest.name 不一致的插件: dir=%s manifest=%s",
+            entry.name,
+            manifest.name,
+        )
+        return None
+    return _CachedPlugin(manifest=manifest, dir=entry, fingerprint=fingerprint)
+
+
 def _scan_disk_plugins(*, force_refresh: bool = False) -> dict[str, _CachedPlugin]:
     """扫描插件目录，返回 ``{插件名: 缓存项}``。
 
-    ``plugin.json`` 的 mtime/size 未变时复用上一轮解析结果；文件被原地修改、
+    ``plugin.json`` 的指纹未变时复用上一轮解析结果；文件被原地修改、
     新增目录或删除目录都会在下一轮扫描生效。单个插件 manifest 损坏、目录名与
     manifest.name 不一致、或为符号链接，只告警跳过。
     """
@@ -122,26 +147,9 @@ def _scan_disk_plugins(*, force_refresh: bool = False) -> dict[str, _CachedPlugi
     root = plugins_root()
     if root.is_dir():
         for entry in sorted(root.iterdir()):
-            if not entry.is_dir() or entry.is_symlink() or entry.name.startswith("."):
-                continue
-            fingerprint = _manifest_fingerprint(entry)
-            cached = previous.get(entry.name)
-            if not force_refresh and cached is not None and cached.dir == entry and cached.fingerprint == fingerprint:
-                found[entry.name] = cached
-                continue
-            try:
-                manifest = load_plugin_manifest(entry)
-            except PluginManifestError as err:
-                logger.warning("忽略非法插件 %s: %s", entry.name, err)
-                continue
-            if manifest.name != entry.name:
-                logger.warning(
-                    "忽略目录名与 manifest.name 不一致的插件: dir=%s manifest=%s",
-                    entry.name,
-                    manifest.name,
-                )
-                continue
-            found[manifest.name] = _CachedPlugin(manifest=manifest, dir=entry, fingerprint=fingerprint)
+            scanned = _scan_plugin_entry(entry, previous.get(entry.name), force_refresh=force_refresh)
+            if scanned is not None:
+                found[scanned.manifest.name] = scanned
     _disk_cache = found
     return found
 
