@@ -38,24 +38,27 @@ def test_subagent_tool_defaults_to_background_execution():
     assert args.background is True
     rendered = _rendered_tool_description()
     assert "background 默认 true" in rendered
-    assert "false 同步等待" in rendered
+    assert "同步等待" in DispatchArgs.model_fields["background"].description
 
 
 def test_subagent_reuse_guidance_prefers_follow_up_over_new_session():
     """复用策略写在系统提示，工具描述只留参数语法，两处不重复。"""
-    prompt = _default_system_prompt().replace("{available_agents}", "- explore: 只读")
+    prompt = _default_system_prompt()
+    assert "{available_agents}" not in prompt
     assert 'subagent({"send":' in prompt
     assert 'subagent({"manage":{"action":"list"}})' in prompt
-    assert "审批用 decide" in prompt
+    assert "decide" not in prompt
     assert "达到上限后 dispatch 会被拒绝" in prompt
 
 
 def test_subagent_tool_description_does_not_repeat_system_prompt_policy():
     """工具描述只讲参数机制；任务书、复用与额度策略只写在系统提示里。"""
-    prompt = _default_system_prompt().replace("{available_agents}", "- explore: 只读")
+    prompt = _default_system_prompt()
     for phrase in ("达到上限后 dispatch 会被拒绝", "present_artifacts", "file_write"):
         assert phrase not in _SUBAGENT_TOOL_DESCRIPTION_TEMPLATE
         assert phrase in prompt
+    assert "仅异步任务运行中可插话" in _SUBAGENT_TOOL_DESCRIPTION_TEMPLATE
+    assert "并发规则见系统提示" not in _SUBAGENT_TOOL_DESCRIPTION_TEMPLATE
 
 
 def test_sandbox_renewal_middleware_renews_before_and_after_model():

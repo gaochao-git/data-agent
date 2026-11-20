@@ -326,8 +326,8 @@ def test_subagent_type_descriptions_explain_mcp_boundary():
 
     assert "不能调用 MCP 工具" in EXPLORE_SUBAGENT_DESCRIPTION
     assert "可调用已接入的 MCP 实体工具" in GENERAL_SUBAGENT_DESCRIPTION
-    prompt = _default_system_prompt().replace("{available_agents}", "- explore: 只读")
-    # MCP 能力边界由上方类型列表承载，提示词只留选型判断，避免同义重复。
+    prompt = _default_system_prompt()
+    # MCP 能力边界由工具描述里的类型清单承载，提示词只留选型判断，避免同义重复。
     assert "依赖 MCP 数据或需要落盘产出的任务派 general" in prompt
     assert "纯数据事实核对才派 explore" in prompt
     assert "需要 general 子智能体" in EXPLORE_SUBAGENT_PROMPT

@@ -1,6 +1,6 @@
 """``subagent`` 单工具的分层参数契约。
 
-四组主参数对应一次调用的生命周期阶段，必须且只能选一组；
+三组主参数对应一次调用的生命周期阶段，必须且只能选一组；
 所有层级都禁止未知字段，避免模型自行发明参数（例如 timeout_seconds）。
 """
 
@@ -11,7 +11,6 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from .subagent_async import DEFAULT_WAIT_TIMEOUT_SECONDS, MAX_WAIT_TASKS
 
 __all__ = [
-    "DecideArgs",
     "DispatchArgs",
     "ManageArgs",
     "SendArgs",
@@ -31,10 +30,7 @@ class DispatchArgs(_SubagentToolArgs):
     description: str = Field(
         min_length=1,
         max_length=8000,
-        description=(
-            "给子智能体的完整任务书：背景、要做什么、期望的交付格式。"
-            "子智能体看不到主对话，所有必要上下文都必须写在里面。"
-        ),
+        description=("给子智能体的任务书：目标、必要背景、交付格式和事实文件路径。子智能体看不到主对话。"),
     )
     subagent_type: str = Field(
         min_length=1,
@@ -43,10 +39,7 @@ class DispatchArgs(_SubagentToolArgs):
     )
     background: bool = Field(
         default=True,
-        description=(
-            "true（默认）=后台执行：立即返回任务 ID 不阻塞，完成后报告自动注入对话；"
-            "false=当前步骤依赖其结论时同步等待。"
-        ),
+        description="true（默认）=后台执行，立即返回 task_id；false=同步等待。",
     )
     label: str | None = Field(
         default=None,
@@ -56,7 +49,7 @@ class DispatchArgs(_SubagentToolArgs):
     write_scopes: list[str] | None = Field(
         default=None,
         max_length=20,
-        description=("可选：声明本任务会写的工作区相对文件或目录前缀，例如 outputs/word；并发分发规则见系统提示。"),
+        description="可选：声明本任务会写的工作区相对文件或目录前缀，例如 outputs/word。",
     )
 
 
@@ -70,11 +63,6 @@ class SendArgs(_SubagentToolArgs):
         description=(
             "仅目标任务已结束时有效：true=后台执行下一轮（默认）；false=当前步骤同步等待。目标仍在运行时不要传。"
         ),
-    )
-    write_scopes: list[str] | None = Field(
-        default=None,
-        max_length=20,
-        description="仅目标任务已结束、开启下一轮时有效；不传时继承上一轮范围。",
     )
 
 
@@ -125,17 +113,8 @@ class ManageArgs(_SubagentToolArgs):
         return self
 
 
-class DecideArgs(_SubagentToolArgs):
-    """处理子智能体的待审批操作。"""
-
-    task_id: str = Field(min_length=1, max_length=64, description="等待审批的任务 ID。")
-    decision: Literal["allow", "deny"] = Field(
-        description="allow=批准本轮待审批工具；deny=全部拒绝。",
-    )
-
-
 class SubagentToolArgs(_SubagentToolArgs):
-    """单工具四组主参数：必须且只能选择其中一组。"""
+    """单工具三组主参数：必须且只能选择其中一组。"""
 
     dispatch: DispatchArgs | None = Field(
         default=None,
@@ -149,14 +128,10 @@ class SubagentToolArgs(_SubagentToolArgs):
         default=None,
         description="查询、等待或取消子智能体任务。",
     )
-    decide: DecideArgs | None = Field(
-        default=None,
-        description="批准或拒绝子智能体的待审批操作。",
-    )
 
     @model_validator(mode="after")
     def _exactly_one_operation(self) -> "SubagentToolArgs":
-        selected = [name for name in ("dispatch", "send", "manage", "decide") if getattr(self, name) is not None]
+        selected = [name for name in ("dispatch", "send", "manage") if getattr(self, name) is not None]
         if len(selected) != 1:
-            raise ValueError("subagent 必须且只能提供 dispatch、send、manage、decide 中的一组参数。")
+            raise ValueError("subagent 必须且只能提供 dispatch、send、manage 中的一组参数。")
         return self

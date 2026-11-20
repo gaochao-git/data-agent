@@ -545,7 +545,6 @@ async def _spawn_follow_up_task(
     runtime: ToolRuntime,
     run_controls: Any,
     background: bool,
-    write_scopes: Sequence[str] | None,
     runner_factory: Callable[[SubagentTaskView, Any], Coroutine[Any, Any, None]],
     sync_runner: Callable[[SubagentTaskPort, SubagentTaskView], Coroutine[Any, Any, Any]] | None = None,
 ) -> Any:
@@ -593,11 +592,8 @@ async def _spawn_follow_up_task(
             exc_info=True,
         )
         return "子智能体追问失败：任务登记未成功，请稍后重试。"
-    if write_scopes is not None:
-        scopes_to_set: Sequence[str] | None = write_scopes
-    else:
-        inherited = _task_write_scopes(base)
-        scopes_to_set = inherited or None
+    inherited = _task_write_scopes(base)
+    scopes_to_set: Sequence[str] | None = inherited or None
     record = await _apply_task_write_scopes(service, record, scopes_to_set, log_label="追问任务")
     if not background:
         assert sync_runner is not None

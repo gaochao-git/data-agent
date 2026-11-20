@@ -1,4 +1,4 @@
-"""``subagent(send=...)`` 与 ``subagent(decide=...)`` 的状态分流。"""
+"""``subagent(send=...)`` 的状态分流。"""
 
 from types import SimpleNamespace
 
@@ -74,7 +74,8 @@ async def test_send_to_running_task_becomes_steer(harness):
 
 
 @pytest.mark.asyncio
-async def test_send_to_waiting_approval_requires_decide(harness):
+async def test_send_to_waiting_approval_points_to_cancel(harness):
+    """等待审批是历史/非标准状态；模型侧只能取消后重新派发。"""
     await harness.create_conversation()
     record = await _create_task(harness)
     await _start(harness, record)
@@ -86,7 +87,7 @@ async def test_send_to_waiting_approval_requires_decide(harness):
     )
     tool = build_subagent_tool([_spec()])
 
-    with pytest.raises(ValueError, match="decide"):
+    with pytest.raises(ValueError, match="取消"):
         await invoke_subagent_tool(
             tool, "send", task_id=record.task_id, message="补充渠道拆分", runtime=_fake_runtime()
         )
@@ -108,56 +109,3 @@ async def test_send_rejects_round_options_while_task_running(harness):
             background=True,
             runtime=_fake_runtime(),
         )
-    with pytest.raises(ValueError, match="write_scopes"):
-        await invoke_subagent_tool(
-            tool,
-            "send",
-            task_id=record.task_id,
-            message="补充",
-            write_scopes=["outputs/a.md"],
-            runtime=_fake_runtime(),
-        )
-
-
-@pytest.mark.asyncio
-async def test_decide_maps_allow_and_deny_to_approval_resume(harness, monkeypatch):
-    launched = []
-    monkeypatch.setattr(
-        subagents_module,
-        "_launch_task_runner",
-        lambda *args, **kwargs: launched.append(args),
-    )
-    tool = build_subagent_tool([_spec()])
-    await harness.create_conversation()
-    captured_values = []
-    original_resume = harness.service.resume_task
-
-    async def spy(task_id, **kwargs):
-        captured_values.append(kwargs["resume_value"])
-        return await original_resume(task_id, **kwargs)
-
-    monkeypatch.setattr(harness.service, "resume_task", spy)
-
-    for decision, label, selected in (
-        ("allow", "已批准", "允许"),
-        ("deny", "已拒绝", "拒绝"),
-    ):
-        record = await _create_task(harness)
-        await _start(harness, record)
-        await harness.service.suspend_task(
-            record.task_id,
-            record.owner_token or "",
-            status="waiting_approval",
-            interrupt_payload={"kind": "approval", "approval_items": []},
-        )
-
-        result = await invoke_subagent_tool(
-            tool, "decide", task_id=record.task_id, decision=decision, runtime=_fake_runtime()
-        )
-
-        assert label in result
-        assert captured_values[-1] == {"answers": [{"id": "approval", "selected": [selected]}]}
-        refreshed = await harness.service.get_task(record.task_id, conversation_id=CONV, user_id=USER)
-        assert refreshed is not None and refreshed.status == "running"
-
-    assert len(launched) == 2

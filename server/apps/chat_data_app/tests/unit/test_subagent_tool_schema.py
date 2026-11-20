@@ -1,11 +1,10 @@
-"""单工具 ``subagent`` 的四组主参数契约。"""
+"""单工具 ``subagent`` 的三组主参数契约。"""
 
 import pytest
 from pydantic import ValidationError
 
 from apps.chat_data_app.agent.middleware import subagents as subagents_module
 from apps.chat_data_app.agent.middleware.subagents import (
-    DecideArgs,
     DispatchArgs,
     ManageArgs,
     SendArgs,
@@ -30,7 +29,6 @@ def test_group_nests_into_typed_model():
     assert isinstance(args.send, SendArgs)
     assert args.dispatch is None
     assert args.manage is None
-    assert args.decide is None
 
 
 def test_rejects_legacy_flat_arguments():
@@ -41,7 +39,7 @@ def test_rejects_legacy_flat_arguments():
 
 
 def test_timeout_seconds_is_not_a_tool_parameter_anywhere():
-    for model in (SubagentToolArgs, DispatchArgs, SendArgs, ManageArgs, DecideArgs):
+    for model in (SubagentToolArgs, DispatchArgs, SendArgs, ManageArgs):
         assert "timeout_seconds" not in model.model_fields
     with pytest.raises(ValidationError, match="timeout_seconds"):
         DispatchArgs(description="盘点", subagent_type="explore", timeout_seconds=1)
@@ -57,7 +55,6 @@ def test_timeout_seconds_is_not_a_tool_parameter_anywhere():
         {"dispatch": {"description": "盘点", "subagent_type": "explore", "unknown": 1}},
         {"send": {"task_id": "t1", "message": "继续", "unknown": 1}},
         {"manage": {"action": "list", "unknown": 1}},
-        {"decide": {"task_id": "t1", "decision": "allow", "unknown": 1}},
         {"dispatch": {"description": "盘点", "subagent_type": "explore"}, "unknown": 1},
     ],
 )
@@ -84,12 +81,18 @@ def test_manage_allows_only_action_specific_fields():
         ManageArgs(action="cancel", task_id="t1", status="running")
 
 
-def test_decide_requires_explicit_decision():
-    assert DecideArgs(task_id="t1", decision="allow").decision == "allow"
-    with pytest.raises(ValidationError):
-        DecideArgs(task_id="t1")
-    with pytest.raises(ValidationError):
-        DecideArgs(task_id="t1", decision="maybe")
+def test_legacy_decide_is_rejected_as_unknown_group():
+    """审批入口已从模型可见契约移除；旧调用不能再通过校验。"""
+    with pytest.raises(ValidationError, match="decide"):
+        SubagentToolArgs.model_validate({"decide": {"task_id": "t1", "decision": "allow"}})
+
+
+def test_send_has_no_write_scopes_and_rejects_legacy_field():
+    """写范围只在 dispatch 声明；send 固定继承上一轮范围。"""
+    assert "write_scopes" in DispatchArgs.model_fields
+    assert "write_scopes" not in SendArgs.model_fields
+    with pytest.raises(ValidationError, match="write_scopes"):
+        SendArgs(task_id="t1", message="继续", write_scopes=["outputs/a.md"])
 
 
 def _spec():
@@ -106,7 +109,7 @@ def test_tool_schema_keeps_runtime_injected_and_hidden_from_model():
     tool = build_task_tool([_spec()])
 
     assert tool._injected_args_keys == frozenset({"runtime"})
-    assert set(tool.args_schema.model_json_schema()["properties"]) == {"dispatch", "send", "manage", "decide"}
+    assert set(tool.args_schema.model_json_schema()["properties"]) == {"dispatch", "send", "manage"}
     assert "runtime" not in tool.get_input_schema().model_json_schema()["properties"]
 
 
@@ -121,12 +124,38 @@ def test_tool_description_explains_nested_argument_shape():
     assert '{"action":"list"}' in description
 
 
+def test_tool_description_and_system_prompt_split_contract_from_policy():
+    """类型清单只在工具描述完整出现；策略只在系统提示，避免两处同义重复。"""
+    description = str(build_task_tool([_spec()]).description or "")
+    prompt = subagents_module._default_system_prompt()
+
+    assert "只读盘点子智能体" in description
+    assert "只读盘点子智能体" not in prompt
+    assert "{available_agents}" not in prompt
+    assert "可用类型、能力边界和参数见 subagent 工具说明" in prompt
+
+    for phrase in ("达到上限后 dispatch 会被拒绝", "present_artifacts", "file_write", "并发规则见系统提示"):
+        assert phrase not in description
+
+    assert "仅异步任务运行中可插话" in description
+    assert "事实文件路径" in description
+    assert "先 file_write 到 workspace" in prompt
+    assert "目标、要求和交付格式直接写进任务书" in prompt
+
+
+def test_parameter_descriptions_keep_field_semantics_only():
+    """参数描述只讲字段含义，不重复系统提示里的并发与异步策略。"""
+    assert "所有必要上下文" not in DispatchArgs.model_fields["description"].description
+    assert "并发分发规则见系统提示" not in DispatchArgs.model_fields["write_scopes"].description
+    assert "任务 ID 不阻塞" not in DispatchArgs.model_fields["background"].description
+
+
 @pytest.mark.asyncio
 async def test_tool_invocation_accepts_langgraph_runtime_injection(monkeypatch):
     seen = {}
 
-    async def fake_route(_ctx, runtime, dispatch=None, send=None, manage=None, decide=None):
-        seen.update(runtime=runtime, dispatch=dispatch, send=send, manage=manage, decide=decide)
+    async def fake_route(_ctx, runtime, dispatch=None, send=None, manage=None):
+        seen.update(runtime=runtime, dispatch=dispatch, send=send, manage=manage)
         return "ok"
 
     monkeypatch.setattr(subagents_module, "_route_subagent_tool", fake_route)

@@ -50,15 +50,13 @@ describe('toolDisplay', () => {
     expect(getToolDisplayName('mcp_tool_search')).toBe('搜索 MCP 工具')
   })
 
-  it('labels the four lifecycle operations of the single subagent tool', () => {
+  it('labels the three lifecycle operations of the single subagent tool', () => {
     expect(getToolDisplayName('subagent', { dispatch: {} })).toBe('派发子智能体')
     expect(getToolDisplayName('subagent', { manage: { action: 'list' } })).toBe('查看子智能体任务')
     expect(getToolDisplayName('subagent', { manage: { action: 'check', task_id: 't1' } })).toBe('查看子智能体任务')
     expect(getToolDisplayName('subagent', { manage: { action: 'wait', task_ids: ['t1'] } })).toBe('等待子智能体任务')
     expect(getToolDisplayName('subagent', { manage: { action: 'cancel', task_id: 't1' } })).toBe('取消子智能体任务')
     expect(getToolDisplayName('subagent', { send: { task_id: 't1', message: '继续' } })).toBe('向子智能体发送消息')
-    expect(getSubagentActionDisplayName('subagent', { decide: { decision: 'allow' } })).toBe('批准子智能体操作')
-    expect(getSubagentActionDisplayName('subagent', { decide: { decision: 'deny' } })).toBe('拒绝子智能体操作')
   })
 
   it('recognizes only the single subagent tool', () => {
@@ -154,9 +152,6 @@ describe('toolDisplay', () => {
     expect(getToolCompactDescription('subagent', {
       send: { task_id: 't1', message: '继续补充渠道拆分' },
     })).toBe('t1 · 继续补充渠道拆分')
-    expect(getToolCompactDescription('subagent', {
-      decide: { task_id: 't1', decision: 'deny' },
-    })).toBe('t1 · 拒绝')
     expect(getToolCompactDescription('unknown_tool', { query: '不展示' })).toBe('')
   })
 

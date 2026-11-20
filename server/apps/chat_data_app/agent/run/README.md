@@ -132,12 +132,11 @@ cancelled/interrupted/lost`；`cancelling` 是跨 worker 的取消请求，执�
 后续只做单层模型内的能力增强：
 
 - 已实现：子图独立 checkpointer（线程按 `agent_session_id`、命名空间按
-  `task_id`），以及 `waiting_approval` 状态与统一的
+  `task_id`），以及 `waiting_approval` 状态与内部的
   `steer/approve/reject/cancel` 控制命令。账本仍是业务真值，
   checkpoint 只负责执行恢复；审批落在模型调用前的安全点，恢复用
   `Command(resume=...)`。等待审批和审批恢复都会写生命周期事件，按
-  wake/attach 策略同步给主会话；用户明确允许/拒绝后由主智能体调用
-  `subagent(decide={"task_id": ..., "decision": "allow"/"deny"})` 继续。普通崩溃恢复使用
+  wake/attach 策略同步给主会话；审批恢复只保留内部入口，不再向模型暴露审批参数。普通崩溃恢复使用
   `Command(update={subagent_owner_token: ...})`，与审批 resume 是不同语义；两种恢复都会轮换
   子图 owner，后台工具围栏只认当前 task owner，不认旧执行体或父 Run owner。
 - 阶段 2：通知聚合、运行期子智能体类型注册与预算配置。

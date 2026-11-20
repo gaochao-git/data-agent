@@ -25,8 +25,6 @@ class SubagentTaskCapabilities:
 
     can_cancel: bool
     can_steer: bool
-    can_approve: bool
-    can_reject: bool
     can_follow_up: bool
 
     def labels(self) -> tuple[str, ...]:
@@ -35,10 +33,6 @@ class SubagentTaskCapabilities:
             labels.append("取消")
         if self.can_steer:
             labels.append("插话")
-        if self.can_approve:
-            labels.append("批准")
-        if self.can_reject:
-            labels.append("拒绝")
         if self.can_follow_up:
             labels.append("追问")
         return tuple(labels)
@@ -67,8 +61,7 @@ def resolve_task_capabilities(
     waiting_approval = status == TASK_STATUS_WAITING_APPROVAL
     return SubagentTaskCapabilities(
         can_cancel=not session_closed and active and not settled,
-        can_steer=not session_closed and background and active and not settled,
-        can_approve=not session_closed and background and waiting_approval,
-        can_reject=not session_closed and background and waiting_approval,
+        # 等待审批的任务只能取消：审批入口不再暴露给模型，也不支持插话。
+        can_steer=not session_closed and background and active and not settled and not waiting_approval,
         can_follow_up=not session_closed and terminal,
     )

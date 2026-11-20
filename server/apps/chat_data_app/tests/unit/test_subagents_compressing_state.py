@@ -77,12 +77,11 @@ def test_progress_snapshot_ignores_invalid_started_chunk():
     assert subagents_module._subagent_progress_snapshot(state)["compressing"] is False
 
 
-def test_grouped_tool_schemas_keep_status_and_decision(monkeypatch):
-    """manage 保留 status，decide 保留 decision，并各自透传到执行分支。"""
+def test_grouped_tool_schemas_keep_manage_status(monkeypatch):
+    """manage 保留 status 并透传到执行分支。"""
     spec = subagents_module.SubagentSpec(name="explore", description="d", system_prompt="s", tools=[], model=object())
     tool = subagents_module.build_task_tool([spec])
     assert "status" in subagents_module.ManageArgs.model_fields
-    assert "decision" in subagents_module.DecideArgs.model_fields
 
     captured: dict = {}
 

@@ -48,10 +48,11 @@ checkpointer，运行中首连走快照 + 游标续传。
 
 控制动作是否可用由 `contracts/subagent_capabilities.py` 按「执行模式 × 状态」统一推导，
 `list`/`check` 输出会带「可操作」。同步任务只支持取消（打断当前轮）和终态追问，不支持
-插话/审批；后台任务按状态开放取消、插话、审批与追问。工具分支不再各自硬编码状态判断。
+插话；后台任务按状态开放取消、插话与追问。审批中断/恢复只保留内部能力，不再作为
+模型可见参数；等待审批的存量任务只能取消后重新派发。
 
-所有 `subagent` 动作用 `subagent_tool_schema.py` 的四组互斥参数契约分发：`SubagentToolArgs`
-校验器强制必选且只选一组（`dispatch`/`send`/`manage`/`decide`），执行体沿用现有同步/后台
+所有 `subagent` 动作用 `subagent_tool_schema.py` 的三组互斥参数契约分发：`SubagentToolArgs`
+校验器强制必选且只选一组（`dispatch`/`send`/`manage`），执行体沿用现有同步/后台
 适配器。契约层统一的是“命令进入与能力边界”，不重写同步/后台各自的终态收口语义。
 
 关闭子智能体是**用户侧动作**，不是 `subagent` 工具能力：用户在管理面板关闭终态且无活跃
@@ -67,8 +68,9 @@ checkpointer，运行中首连走快照 + 游标续传。
 找到已有子智能体并用 `send` 续写；相似度不做代码层匹配，避免误合并不同目标或交付物。
 两项限制都只作用于当前主对话，不同主对话互不影响。
 
-并发写采用软控制：会写 workspace 的任务在 `dispatch/send`（仅终态追问）通过 `write_scopes` 声明
-工作区相对文件或目录前缀（例如 `outputs/word`、`outputs/ppt`），`workspace:*` 表示
+并发写采用软控制：会写 workspace 的任务在 `dispatch` 时可选声明 `write_scopes`
+（工作区相对文件或目录前缀，例如 `outputs/word`、`outputs/ppt`）；终态追问沿用上一轮范围，
+不支持在 `send` 中改写，范围变化应重新 `dispatch`。`workspace:*` 表示
 shell、git、构建等全局独占操作。任务账本保存该声明，`list` 会展示活跃任务的写范围及
 重叠提示；主智能体据此决定并行还是串行。系统不建写租约、不加全局文件锁，也不阻断
 重叠派发，最终合并与 diff review 由主智能体负责。未声明写范围的写任务视为可能冲突，

@@ -9,7 +9,6 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from apps.chat_data_app.agent.middleware.subagents import (
-    DecideArgs,
     DispatchArgs,
     ManageArgs,
     SendArgs,
@@ -36,7 +35,6 @@ async def invoke_subagent_tool(tool, operation: str, *, runtime, **kwargs):
         "dispatch": DispatchArgs,
         "send": SendArgs,
         "manage": ManageArgs,
-        "decide": DecideArgs,
     }[operation]
     params = schema(**kwargs)
     return await tool.ainvoke({operation: params, "runtime": runtime})

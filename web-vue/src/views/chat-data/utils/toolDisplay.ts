@@ -3,21 +3,21 @@ import { shallowRef } from 'vue'
 // 工具展示名唯一来源是后端 /config 的 tool_display_names；前端不再维护第二张表。
 const backendToolDisplayNames = shallowRef<Record<string, string>>({})
 
-export type SubagentOperation = 'dispatch' | 'send' | 'manage' | 'decide'
+export type SubagentOperation = 'dispatch' | 'send' | 'manage'
 
 export interface SubagentOperationArgs {
   operation: SubagentOperation
   args: ToolArgs
 }
 
-/** 子智能体单工具：四组主参数共享过程卡片、参数标签和结果渲染。 */
+/** 子智能体单工具：三组主参数共享过程卡片、参数标签和结果渲染。 */
 export function isSubagentToolName(toolName?: string | null): boolean {
   return String(toolName || '').trim() === 'subagent'
 }
 
 /** 取出当前调用的主参数分组；流式参数未完整时返回 null。 */
 export function getSubagentOperationArgs(args: ToolArgs = {}): SubagentOperationArgs | null {
-  for (const operation of ['dispatch', 'send', 'manage', 'decide'] as const) {
+  for (const operation of ['dispatch', 'send', 'manage'] as const) {
     const value = args[operation]
     if (value && typeof value === 'object' && !Array.isArray(value)) {
       return { operation, args: value as ToolArgs }
@@ -203,20 +203,12 @@ const followUpTaskDescription: DescriptionBuilder = (args) => {
   return taskId && message ? `${taskId} · ${message}` : taskId || message
 }
 
-const decideTaskDescription: DescriptionBuilder = (args) => {
-  const taskId = compactInlineText(args.task_id)
-  const decision = String(args.decision || '').trim()
-  const verdict = decision === 'deny' ? '拒绝' : decision === 'allow' ? '批准' : ''
-  return taskId && verdict ? `${taskId} · ${verdict}` : taskId || verdict
-}
-
 const subagentDescription: DescriptionBuilder = (args) => {
   const operation = getSubagentOperationArgs(args)
   if (!operation) return ''
   if (operation.operation === 'dispatch') return startTaskDescription(operation.args)
   if (operation.operation === 'send') return followUpTaskDescription(operation.args)
-  if (operation.operation === 'manage') return taskDescription(operation.args)
-  return decideTaskDescription(operation.args)
+  return taskDescription(operation.args)
 }
 
 const TOOL_DESCRIPTION_BUILDERS: Record<string, DescriptionBuilder> = {

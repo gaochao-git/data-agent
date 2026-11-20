@@ -24,7 +24,7 @@ def _task(status: str, *, mode: str = "background", terminal: bool = False):
     [
         (TASK_STATUS_RUNNING, "background", False, ("取消", "插话")),
         (TASK_STATUS_RUNNING, "sync", False, ("取消",)),
-        (TASK_STATUS_WAITING_APPROVAL, "background", False, ("取消", "插话", "批准", "拒绝")),
+        (TASK_STATUS_WAITING_APPROVAL, "background", False, ("取消",)),
         (TASK_STATUS_CANCELLING, "background", False, ()),
         (TASK_STATUS_COMPLETED, "background", True, ("追问",)),
         (TASK_STATUS_CANCELLED, "sync", True, ("追问",)),

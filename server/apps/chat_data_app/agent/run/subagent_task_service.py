@@ -483,10 +483,9 @@ def _suspension_notification_text(task: SubagentTaskRecord) -> str:
         f"task_id={task.task_id}\n"
         f"类型={task.subagent_type}；任务={task.label}\n\n"
         f"待审批操作：\n{detail}\n\n"
-        "请先把上述操作转述给用户并等待用户明确允许或拒绝；用户确认后调用 "
-        f'subagent({{"decide":{{"task_id":"{task.task_id}","decision":"allow"}}}})，'
-        '拒绝时把 decision 改为 "deny"。'
-        "在用户明确表态前不要自行批准，也不要重复派发同一任务。"
+        "子智能体不支持审批参数，该状态只会出现在历史或非标准装配任务中。"
+        f'请用 subagent({{"manage":{{"action":"cancel","task_id":"{task.task_id}"}}}}) '
+        "取消后重新派发；不要重复派发同一任务。"
     )
 
 

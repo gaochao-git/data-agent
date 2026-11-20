@@ -817,7 +817,7 @@ def test_system_prompt_documents_background_and_subagent_tools():
     assert "list → agent_id → task_id" in middleware.system_prompt
     # 精确动作语法只写在工具描述里，系统提示不重复一遍。
     description = middleware.tools[0].description
-    for keyword in ("dispatch", "send", "manage", "decide", "list/check/wait/cancel"):
+    for keyword in ("dispatch", "send", "manage", "list/check/wait/cancel"):
         assert keyword in description
     assert "async_task" not in middleware.system_prompt
     assert "list_async_tasks" not in middleware.system_prompt
@@ -888,7 +888,7 @@ async def test_follow_up_reuses_session_history(harness, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_follow_up_inherits_write_scopes_when_omitted(harness, monkeypatch):
+async def test_follow_up_inherits_write_scopes(harness, monkeypatch):
     await harness.create_conversation()
 
     monkeypatch.setattr(
@@ -919,18 +919,6 @@ async def test_follow_up_inherits_write_scopes_when_omitted(harness, monkeypatch
     second_record = await _wait_terminal(harness, _task_id_from_text(follow))
 
     assert second_record.write_scopes == ("outputs/word",)
-
-    override = await invoke_subagent_tool(
-        follow_tool,
-        "send",
-        task_id=second_record.task_id,
-        message="目录页另存到附件目录",
-        write_scopes=["outputs/word/annex"],
-        runtime=_fake_runtime(tool_call_id="call_scope_override"),
-    )
-    third_record = await _wait_terminal(harness, _task_id_from_text(override))
-
-    assert third_record.write_scopes == ("outputs/word/annex",)
 
 
 @pytest.mark.asyncio
