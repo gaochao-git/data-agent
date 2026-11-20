@@ -1,6 +1,6 @@
-"""ChatData 子智能体：单一 ``subagent`` 工具 + 上下文隔离。
+"""ChatData 子智能体：单个 subagent 工具（dispatch/send/manage/decide 分层）+ 上下文隔离。
 
-参考 deepagents ``SubAgentMiddleware`` 的三个核心机制（单 subagent 工具、状态裁剪
+参考 deepagents ``SubAgentMiddleware`` 的核心机制（工具入口、状态裁剪
 透传、Command 回传结论），并按 ChatData 的事件流与状态设计做了裁剪：
 
 - 首轮是隔离上下文调用：子智能体只看到任务书（HumanMessage），不继承主对话历史；
@@ -23,7 +23,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack, suppress
 from dataclasses import dataclass, field
-from typing import Annotated, Any, Literal, NoReturn, cast
+from typing import Annotated, Any, NoReturn
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import AgentMiddleware, AgentState, ModelCallResult, ModelRequest
@@ -33,7 +33,6 @@ from langchain_core.messages import RemoveMessage as RemoveMessage  # noqa: F401
 from langchain_core.tools import StructuredTool
 from langgraph.config import get_stream_writer
 from langgraph.types import Command
-from pydantic import BaseModel, Field
 
 from apps.chat_data_app.services.runtime_config import (
     SUBAGENT_MESSAGE_PREVIEW_MAX_CHARS as SUBAGENT_MESSAGE_PREVIEW_MAX_CHARS,  # noqa: F401 - 兼容 re-export
@@ -61,6 +60,7 @@ from ..context.context_budget import (
 from ..context.runtime import ContextRuntime
 from ..contracts.subagent_capabilities import resolve_task_capabilities
 from ..contracts.subagent_task import (
+    ACTIVE_TASK_STATUSES,
     TASK_STATUS_CANCELLED,
     TASK_STATUS_COMPLETED,
     TASK_STATUS_FAILED,
@@ -69,6 +69,7 @@ from ..contracts.subagent_task import (
     TASK_STATUS_LOST,
     TASK_STATUS_TIMEOUT,
     TASK_STATUS_WAITING_APPROVAL,
+    TERMINAL_TASK_STATUSES,
     WAITING_APPROVAL_TASK_STATUSES,
     SubagentTaskCapacityError,
     SubagentTaskPort,
@@ -83,8 +84,6 @@ from .context_usage import create_context_usage_middleware
 from .sandbox_renewal import create_sandbox_renewal_middleware
 from .subagent_assembly import assemble_subagent_middleware
 from .subagent_async import (
-    DEFAULT_WAIT_TIMEOUT_SECONDS,
-    MAX_WAIT_TASKS,
     _append_partial_report,
     _apply_task_write_scopes,
     _close_aborted_sync_task,
@@ -106,11 +105,6 @@ from .subagent_history import (
 )
 from .subagent_history import (
     legacy_session_history as _legacy_session_history,
-)
-from .subagent_orchestrator import (
-    SubagentCommand,
-    SubagentCommandHandlers,
-    SubagentOrchestrator,
 )
 from .subagent_stream import (
     SUBAGENT_STATE_PASSTHROUGH_KEYS as SUBAGENT_STATE_PASSTHROUGH_KEYS,
@@ -170,6 +164,13 @@ from .subagent_text import (
 from .subagent_text import (
     sanitize_report_text as _sanitize_report_text,
 )
+from .subagent_tool_schema import (
+    DecideArgs,
+    DispatchArgs,
+    ManageArgs,
+    SendArgs,
+    SubagentToolArgs,
+)
 from .subagent_trail import (
     _build_trail_snapshot,
     _collect_subagent_tool_results,  # noqa: F401 - 兼容 re-export
@@ -190,6 +191,8 @@ logger = get_logger(__name__)
 # 正常路径下不会触发——过程区的意图就是让用户看到子智能体实际做了什么。
 
 SUBAGENT_TOOL_NAME = "subagent"
+# 工具结果外置时记录的逻辑来源，用于标识“来自子智能体报告”，不是模型工具名。
+SUBAGENT_RESULT_SOURCE = "subagent"
 
 # 子智能体报告进入父上下文前的封顶：报告是结论而非过程，单次派发不应把父
 # 上下文推过压缩线。阈值按父 state 的硬上限占比算（32k 与 128k 窗口的合理
@@ -198,20 +201,20 @@ SUBAGENT_REPORT_MAX_TOKEN_RATIO = 0.08
 SUBAGENT_REPORT_MIN_TOKEN_LIMIT = 1000
 SUBAGENT_REPORT_PREVIEW_CHARS = 2000
 
-_TASK_TOOL_DESCRIPTION_TEMPLATE = """派发隔离子智能体处理复杂多步任务，只把结论带回主对话（过程留在子图，保护上下文）。兼管任务。
+_SUBAGENT_TOOL_DESCRIPTION_TEMPLATE = """派发并管理隔离子智能体：只把最终结论带回主对话，过程留在子图以保护上下文。
 
 可用子智能体类型：
 {available_agents}
 
-参数：
-- 动作：subagent(action="start") 派发；subagent(action="list") 列表；subagent(action="check", task_id=...) 查询；subagent(action="wait", task_ids=[...]) 等待；subagent(action="cancel", task_id=...) 取消；subagent(action="follow_up", task_id=..., message=...) 在已结束子会话续写。
-- 分层查询：先 action="list" 看 agent_id 与最近 task_id，再传 agent_id 下钻该智能体全部任务。
-- 身份：agent_id 是稳定子智能体 ID，task_id 是单轮任务 ID；管理动作传 task_id，向用户汇报身份用 agent_id。
-- 写范围：start/follow_up 可传 write_scopes（workspace 相对文件或目录前缀，如 outputs/word）；并发分发规则见系统提示。
-- background 默认 true（异步，立即返回 task_id，终态自动唤醒会话）；false 同步等结果；start 可配 label/timeout_seconds。
-- 后台任务运行中可用 steer/approve/reject 控制；同步任务阻塞当前轮，不支持 steer/审批。
-- 子智能体由用户在管理面板关闭；关闭后历史仍可查看，但不能继续 follow_up，如需同类任务请重新派发。
-- 派发策略与复用规则见系统提示。"""
+每次调用必须且只能选择 dispatch、send、manage、decide 之一：
+- dispatch：派发新任务；任务书必须包含全部背景、要求和交付格式。
+- send：向已有子会话发消息；运行中自动插话，已结束自动开启下一轮追问。
+- manage：list/check/wait/cancel 子智能体任务。
+- decide：对 waiting_approval 任务执行 allow/deny 审批。
+
+background 默认 true（异步返回 task_id，终态自动唤醒会话）；false 同步等待。
+会写 workspace 的 general 任务必须在 dispatch/send 中声明 write_scopes；并发规则见系统提示。
+子智能体由用户在管理面板关闭；关闭后不能再 send，如需同类任务请重新 dispatch。"""
 
 
 class ChatDataSubAgentState(AgentState, total=False):
@@ -241,99 +244,6 @@ class ChatDataSubAgentState(AgentState, total=False):
     # 后台任务控制身份：仅用于中间件读取账本，不进入模型上下文。
     subagent_task_id: str | None
     subagent_owner_token: str | None
-
-
-class TaskToolArgs(BaseModel):
-    """``subagent`` 工具入参。"""
-
-    action: Literal["start", "list", "check", "wait", "cancel", "follow_up", "steer", "approve", "reject"] = Field(
-        default="start",
-        description=(
-            "start=派发子智能体（默认）；list=列子智能体任务；check=查单个任务；"
-            "wait=等待一个或多个任务终态；cancel=取消任务；"
-            "follow_up=对已结束的子智能体继续追问（可同步或后台）；steer=给运行中的子智能体插话；"
-            "approve/reject=审批子智能体待执行工具并继续执行。"
-        ),
-    )
-    description: str | None = Field(
-        default=None,
-        max_length=8000,
-        description=(
-            "action=start 时必填：给子智能体的完整任务书：背景、要做什么、期望的交付格式。"
-            "子智能体看不到主对话，所有必要上下文都必须写在里面。"
-        ),
-    )
-    subagent_type: str | None = Field(
-        default=None,
-        max_length=64,
-        description="action=start 时必填：子智能体类型，必须是工具描述中列出的类型之一。",
-    )
-    background: bool = Field(
-        default=True,
-        description=(
-            "action=start/follow_up 时生效。true（默认）=后台执行：立即返回任务 ID 不阻塞，完成后报告自动注入对话；"
-            "适合批量盘点/全量扫描、多份交付物、多个可并行独立子任务，"
-            "或当轮不需要其结论的任务。false=当前步骤依赖其结论时同步等待。"
-        ),
-    )
-    label: str | None = Field(
-        default=None,
-        max_length=120,
-        description="子智能体任务列表里展示的短标题；不传时取任务书首行。",
-    )
-    write_scopes: list[str] | None = Field(
-        default=None,
-        max_length=20,
-        description=(
-            "action=start/follow_up 时可选：声明本任务会写的工作区相对文件或目录前缀，"
-            "例如 outputs/word；follow_up 不传时继承上一轮范围，具体并发分发规则见系统提示。"
-        ),
-    )
-    timeout_seconds: int | None = Field(
-        default=None,
-        ge=30,
-        le=86400,
-        description="action=start 且 background=true 时生效：任务超时秒数；不传使用运行配置默认值。",
-    )
-    task_id: str | None = Field(
-        default=None,
-        max_length=64,
-        description=(
-            "action=check/cancel/follow_up/steer/approve/reject 时要操作的任务 ID"
-            "（list 返回的 task_id）；"
-            "不要传稳定的 agent_id。"
-        ),
-    )
-    message: str | None = Field(
-        default=None,
-        max_length=8000,
-        description=("action=follow_up 时必填：追问内容。action=steer 时必填：给运行中子智能体的补充说明。"),
-    )
-    decision: Literal["allow", "deny"] = Field(
-        default="allow",
-        description="action=approve/reject 时使用：allow=允许本轮所有待审批工具，deny=全部拒绝。",
-    )
-    task_ids: list[str] | None = Field(
-        default=None,
-        max_length=MAX_WAIT_TASKS,
-        description="action=wait 时要等待的任务 ID 列表（最多 10 个）。",
-    )
-    agent_id: str | None = Field(
-        default=None,
-        max_length=64,
-        description="action=list 时可选：只列出该稳定子智能体 ID 名下的任务 ID。",
-    )
-    status: str | None = Field(
-        default=None,
-        max_length=64,
-        description="action=list 时的可选过滤：active、terminal，或单个状态（如 running/completed/failed/cancelled）。",
-    )
-    wait_seconds: int = Field(
-        default=DEFAULT_WAIT_TIMEOUT_SECONDS,
-        ge=1,
-        le=60,
-        description="action=wait 时最长等待秒数；超时返回当前状态，不取消任务。",
-    )
 
 
 @dataclass(frozen=True)
@@ -601,7 +511,7 @@ async def _offload_subagent_report(report: str, runtime: ToolRuntime) -> tuple[s
     state = getattr(runtime, "state", None)
     envelope, recovery = await externalize_tool_text(
         report,
-        source_tool=SUBAGENT_TOOL_NAME,
+        source_tool=SUBAGENT_RESULT_SOURCE,
         state=dict(state) if isinstance(state, dict) else {},
         suffix=".md",
         preview_chars=SUBAGENT_REPORT_PREVIEW_CHARS,
@@ -672,7 +582,7 @@ async def _build_task_tool_impl(
     state_sink: dict[str, Any] | None = None,
     execution: _TaskExecution | None = None,
 ) -> Any:
-    """执行单一 subagent 工具调用：派发子图、收集过程、产出 Command 更新。
+    """执行一次子智能体派发：运行子图、收集过程、产出 Command 更新。
 
     ``stream_events=False`` 用于后台子智能体：父级 subagent 调用已先行返回
     （卡片已关闭），子图过程不再往父流转发，静默执行只留最终报告。
@@ -1124,7 +1034,7 @@ async def _run_background_attempt(
         return _failed_background_outcome(record, exc, partial_state)
     status, report, error, result_meta = _extract_background_result(command)
     if status == TASK_STATUS_COMPLETED:
-        # 账本保留全文；超长时额外落一份隐藏文件，通知与 subagent(action="check")
+        # 账本保留全文；超长时额外落一份隐藏文件，通知与 subagent(manage={"action": "check"})
         # 会带 result_path，主智能体可直接用 file_read 读取完整报告。
         _delivered, recovery = await _offload_subagent_report(report, runtime)
         if recovery:
@@ -1396,7 +1306,6 @@ async def _register_sync_task(
             label=label,
             parent_tool_call_id=str(getattr(runtime, "tool_call_id", "") or ""),
             parent_owner_token=str(getattr(run_controls, "owner_token", None) or ""),
-            timeout_seconds=None,
             operator_name=operator_name,
         )
     except SubagentTaskCapacityError as exc:
@@ -1565,7 +1474,6 @@ async def _start_task_action(
     background: bool,
     label: str | None,
     write_scopes: list[str] | None,
-    timeout_seconds: int | None,
     runtime: ToolRuntime,
     run_controls: Any,
     specs: list[SubagentSpec],
@@ -1573,9 +1481,9 @@ async def _start_task_action(
     background_cache: _BackgroundRunnableCache,
 ) -> Command | str:
     if not description or not description.strip():
-        _raise_tool_error('action="start" 需要提供 description（任务书）。')
+        _raise_tool_error("dispatch 需要提供 description（任务书）。")
     if not subagent_type or not subagent_type.strip():
-        _raise_tool_error('action="start" 需要提供 subagent_type。')
+        _raise_tool_error("dispatch 需要提供 subagent_type。")
     if compiled.get(subagent_type) is None:
         allowed = ", ".join(f"`{name}`" for name in compiled)
         _raise_tool_error(f"无法调用子智能体 {subagent_type}：类型不存在，可用类型为 {allowed}")
@@ -1596,7 +1504,6 @@ async def _start_task_action(
         description=description,
         label=label,
         write_scopes=write_scopes,
-        timeout_seconds=timeout_seconds,
         runtime=runtime,
         run_controls=run_controls,
         runner_factory=lambda record, snapshot: _run_background_task(record, snapshot, specs, background_runnables),
@@ -1635,13 +1542,13 @@ async def _control_task_action(
         return "子智能体控制失败：任务账本服务未初始化。"
     normalized = str(task_id or "").strip()
     if not normalized:
-        return f'action="{action}" 需要提供 task_id。'
+        return f"{action} 需要提供 task_id。"
     conversation_id, user_id, operator_name, _ = _read_conversation_context(runtime, run_controls)
     if not user_id:
         return "无法操作子智能体：当前会话缺少用户身份。"
     target = await service.get_task(normalized, conversation_id=conversation_id, user_id=user_id)
     if target is None:
-        return f'子智能体任务 {normalized} 不存在。可用 subagent(action="list") 查看当前会话任务。'
+        return f'子智能体任务 {normalized} 不存在。可用 subagent(manage={{"action": "list"}}) 查看当前会话任务。'
     if action == "steer":
         return await _control_steer(
             service,
@@ -1679,15 +1586,15 @@ async def _control_steer(
     status_label = TASK_STATUS_LABELS.get(target.status, target.status)
     capabilities = resolve_task_capabilities(target)
     if capabilities.can_follow_up:
-        return f"任务已是{status_label}，不能再插话；需要继续分析请用 follow_up。"
+        return f"任务已是{status_label}，不能再插话；需要继续分析请用 send。"
     if not capabilities.can_steer and str(getattr(target, "execution_mode", "") or "") == "sync":
         # 同步任务使用前台编译版子图，没有 SubagentControlMiddleware；排队后永远
         # 不会被消费，必须直接拒绝，避免主智能体误以为插话已生效。
-        return "同步任务在父 Run 内阻塞执行，不支持 steer；请等待本轮结果，结束后用 follow_up 续写。"
+        return "同步任务在父 Run 内阻塞执行，不支持插话；请等待本轮结果，结束后用 send 续写。"
     if not capabilities.can_steer:
         return f"任务当前为{status_label}，不能插话；请等待状态变化后重试。"
     if not str(message or "").strip():
-        return 'action="steer" 需要提供 message。'
+        return "send 需要提供 message。"
     record = await service.enqueue_steer_message(
         task_id,
         conversation_id=conversation_id,
@@ -1718,7 +1625,7 @@ async def _control_resume(
     status_label = TASK_STATUS_LABELS.get(target.status, target.status)
     capabilities = resolve_task_capabilities(target)
     if not (capabilities.can_approve or capabilities.can_reject):
-        return f"任务当前为{status_label}，不需要 {action}。只有 waiting_approval 状态可用 approve/reject。"
+        return f"任务当前为{status_label}，不需要 {action}。只有 waiting_approval 状态可用 decide。"
     pending = target.meta.get("pending_interrupt")
     resume_value, verdict, error = _prepare_resume(action, target.status, pending, decision)
     if error:
@@ -1777,131 +1684,155 @@ def _prepare_resume(
     return resume_value, "已拒绝" if effective_decision == "deny" else "已批准", ""
 
 
-def build_task_tool(specs: list[SubagentSpec], run_controls: Any = None) -> StructuredTool:
-    """构建单一 ``subagent`` 工具：派发子智能体，并管理后台任务。
+@dataclass(frozen=True)
+class _TaskToolContext:
+    """单工具运行期共享依赖；把闭包提到模块级，避免 build_task_tool 复杂度堆叠。"""
 
-    ``action="start"``（默认）按 subagent_type 派发到隔离上下文的子图；
-    默认 ``background=true`` 转入后台执行，传 ``background=false`` 同步等待。
-    ``action=list/check/wait/cancel`` 操作已创建的后台任务。
-    """
-    validate_subagent_specs(specs)
-    compiled = {spec.name: _compile_subagent(spec, run_controls=run_controls) for spec in specs}
-    background_cache = _BackgroundRunnableCache(specs)
-    available = "\n".join(f"- {spec.name}: {spec.description}" for spec in specs)
+    specs: list[SubagentSpec]
+    compiled: dict[str, Any]
+    background_cache: _BackgroundRunnableCache
+    run_controls: Any
 
-    async def _handle_start(command: SubagentCommand) -> Command | str:
-        return await _start_task_action(
-            description=command.description,
-            subagent_type=command.subagent_type,
-            background=command.background,
-            label=command.label,
-            write_scopes=_validate_tool_write_scopes(command.write_scopes),
-            timeout_seconds=command.timeout_seconds,
-            runtime=command.runtime,
-            run_controls=run_controls,
-            specs=specs,
-            compiled=compiled,
-            background_cache=background_cache,
-        )
 
-    async def _handle_follow_up(command: SubagentCommand) -> Command | str:
-        return await _follow_up_task_action(
-            task_id=command.task_id,
-            message=command.message,
-            runtime=command.runtime,
-            run_controls=run_controls,
-            specs=specs,
-            background=command.background,
-            write_scopes=command.write_scopes,
-            compiled=compiled,
-            background_runnables=background_cache.get(),
-        )
-
-    async def _handle_control(command: SubagentCommand) -> str:
-        return await _control_task_action(
-            action=command.action,
-            task_id=command.task_id,
-            message=command.message,
-            decision=command.decision,
-            runtime=command.runtime,
-            run_controls=run_controls,
-            specs=specs,
-            background_runnables=background_cache.get(),
-        )
-
-    async def _handle_admin(command: SubagentCommand) -> str:
-        return await manage_async_task(
-            cast(Literal["list", "check", "wait", "cancel"], command.action),
-            runtime=command.runtime,
-            task_id=command.task_id,
-            task_ids=command.task_ids,
-            agent_id=command.agent_id,
-            status=command.status,
-            limit=200,
-            wait_seconds=command.wait_seconds,
-        )
-
-    orchestrator = SubagentOrchestrator(
-        SubagentCommandHandlers(
-            start=_handle_start,
-            follow_up=_handle_follow_up,
-            task_admin=_handle_admin,
-            control=_handle_control,
-        )
+async def _tool_dispatch(ctx: _TaskToolContext, runtime: ToolRuntime, args: DispatchArgs) -> Command | str:
+    return await _start_task_action(
+        description=args.description,
+        subagent_type=args.subagent_type,
+        background=args.background,
+        label=args.label,
+        write_scopes=_validate_tool_write_scopes(args.write_scopes),
+        runtime=runtime,
+        run_controls=ctx.run_controls,
+        specs=ctx.specs,
+        compiled=ctx.compiled,
+        background_cache=ctx.background_cache,
     )
 
-    async def atask(
-        runtime: ToolRuntime,
-        action: Literal["start", "list", "check", "wait", "cancel", "follow_up", "steer", "approve", "reject"] = (
-            "start"
-        ),
-        description: str | None = None,
-        subagent_type: str | None = None,
-        background: bool = True,
-        label: str | None = None,
-        timeout_seconds: int | None = None,
-        task_id: str | None = None,
-        message: str | None = None,
-        task_ids: list[str] | None = None,
-        agent_id: str | None = None,
-        wait_seconds: int = DEFAULT_WAIT_TIMEOUT_SECONDS,
-        **kwargs: Any,
-    ) -> Command | str:
-        # status / decision 属于 TaskToolArgs 但只在少数 action 分支用到，收进 kwargs
-        # 以守住「单方法形参 ≤13」红线；args_schema 不变，LLM 可见字段与行为完全一致。
-        status = kwargs.get("status")
-        decision = kwargs.get("decision", "allow")
-        write_scopes = kwargs.get("write_scopes")
-        return await orchestrator.execute(
-            SubagentCommand(
-                action=action,
-                description=description,
-                subagent_type=subagent_type,
-                background=background,
-                label=label,
-                timeout_seconds=timeout_seconds,
-                task_id=task_id,
-                message=message,
-                task_ids=task_ids,
-                agent_id=agent_id,
-                status=status,
-                decision=decision,
-                write_scopes=write_scopes,
-                wait_seconds=wait_seconds,
-                runtime=runtime,
-            )
+
+async def _tool_send(ctx: _TaskToolContext, runtime: ToolRuntime, args: SendArgs) -> Command | str:
+    """统一 follow_up 与 steer：按任务当前状态自动分流。"""
+    service = get_subagent_task_service()
+    if service is None:
+        return "子智能体消息发送失败：任务账本服务未初始化。"
+    normalized = str(args.task_id or "").strip()
+    conversation_id, user_id, _operator_name, _parent_run_id = _read_conversation_context(runtime, ctx.run_controls)
+    if not user_id:
+        return "无法向子智能体发送消息：当前会话缺少用户身份。"
+    target = await service.get_task(normalized, conversation_id=conversation_id, user_id=user_id)
+    if target is None:
+        return f'子智能体任务 {normalized} 不存在。可用 subagent(manage={{"action": "list"}}) 查看当前会话任务。'
+    status_label = TASK_STATUS_LABELS.get(target.status, target.status)
+    if target.status in WAITING_APPROVAL_TASK_STATUSES:
+        _raise_tool_error(f"任务当前为{status_label}，请先用 subagent(decide={{...}}) 批准或拒绝待执行工具。")
+    if target.status in TERMINAL_TASK_STATUSES:
+        return await _follow_up_task_action(
+            task_id=normalized,
+            message=args.message,
+            runtime=runtime,
+            run_controls=ctx.run_controls,
+            specs=ctx.specs,
+            background=True if args.background is None else args.background,
+            write_scopes=args.write_scopes,
+            compiled=ctx.compiled,
+            background_runnables=ctx.background_cache.get(),
         )
+    if target.status in ACTIVE_TASK_STATUSES:
+        if args.background is not None:
+            _raise_tool_error("目标子智能体仍在运行，send 不能传 background；运行中消息会直接转为插话。")
+        if args.write_scopes is not None:
+            _raise_tool_error("目标子智能体仍在运行，send 不能传 write_scopes；写范围只在任务结束后开启下一轮时使用。")
+        return await _control_task_action(
+            action="steer",
+            task_id=normalized,
+            message=args.message,
+            decision="allow",
+            runtime=runtime,
+            run_controls=ctx.run_controls,
+            specs=ctx.specs,
+            background_runnables=ctx.background_cache.get(),
+        )
+    _raise_tool_error(
+        f'任务当前为{status_label}，不支持发送消息；请先用 subagent(manage={{"action": "check"}}) 确认状态。'
+    )
+
+
+async def _tool_manage(_ctx: _TaskToolContext, runtime: ToolRuntime, args: ManageArgs) -> str:
+    if args.agent_id and args.action != "list":
+        return 'agent_id 仅用于 manage action="list" 查询任务明细；check/cancel 等动作请传 task_id。'
+    return await manage_async_task(
+        args.action,
+        runtime=runtime,
+        task_id=args.task_id,
+        task_ids=args.task_ids,
+        agent_id=args.agent_id,
+        status=args.status,
+        limit=200,
+        wait_seconds=args.wait_seconds,
+    )
+
+
+async def _tool_decide(ctx: _TaskToolContext, runtime: ToolRuntime, args: DecideArgs) -> str:
+    return await _control_task_action(
+        action="approve" if args.decision == "allow" else "reject",
+        task_id=args.task_id,
+        message=None,
+        decision=args.decision,
+        runtime=runtime,
+        run_controls=ctx.run_controls,
+        specs=ctx.specs,
+        background_runnables=ctx.background_cache.get(),
+    )
+
+
+async def _route_subagent_tool(
+    ctx: _TaskToolContext,
+    runtime: ToolRuntime,
+    dispatch: DispatchArgs | None = None,
+    send: SendArgs | None = None,
+    manage: ManageArgs | None = None,
+    decide: DecideArgs | None = None,
+) -> Command | str:
+    if dispatch is not None:
+        return await _tool_dispatch(ctx, runtime, dispatch)
+    if send is not None:
+        return await _tool_send(ctx, runtime, send)
+    if manage is not None:
+        return await _tool_manage(ctx, runtime, manage)
+    assert decide is not None
+    return await _tool_decide(ctx, runtime, decide)
+
+
+def build_task_tool(specs: list[SubagentSpec], run_controls: Any = None) -> StructuredTool:
+    """构建单一 ``subagent`` 工具：四组主参数按生命周期分层。"""
+    validate_subagent_specs(specs)
+    compiled = {spec.name: _compile_subagent(spec, run_controls=run_controls) for spec in specs}
+    ctx = _TaskToolContext(
+        specs=specs,
+        compiled=compiled,
+        background_cache=_BackgroundRunnableCache(specs),
+        run_controls=run_controls,
+    )
+    available = "\n".join(f"- {spec.name}: {spec.description}" for spec in specs)
+
+    async def subagent(
+        runtime: ToolRuntime,
+        dispatch: DispatchArgs | None = None,
+        send: SendArgs | None = None,
+        manage: ManageArgs | None = None,
+        decide: DecideArgs | None = None,
+    ) -> Command | str:
+        return await _route_subagent_tool(ctx, runtime, dispatch, send, manage, decide)
 
     return StructuredTool.from_function(
         name=SUBAGENT_TOOL_NAME,
-        coroutine=atask,
-        description=_TASK_TOOL_DESCRIPTION_TEMPLATE.format(available_agents=available),
-        args_schema=TaskToolArgs,
+        coroutine=subagent,
+        description=_SUBAGENT_TOOL_DESCRIPTION_TEMPLATE.replace("{available_agents}", available),
+        args_schema=SubagentToolArgs,
     )
 
 
 class SubagentMiddleware(AgentMiddleware):
-    """向主智能体注册 ``subagent`` 工具，并在系统提示追加子智能体使用说明。"""
+    """向主智能体注册子智能体工具，并在系统提示追加使用说明。"""
 
     def __init__(
         self, specs: list[SubagentSpec], *, system_prompt: str | None = None, run_controls: Any = None
@@ -1911,9 +1842,8 @@ class SubagentMiddleware(AgentMiddleware):
         self.subagent_names = frozenset(spec.name for spec in specs)
         self.tools = [build_task_tool(specs, run_controls=run_controls)]
         agents_desc = "\n".join(f"- {spec.name}: {spec.description}" for spec in specs)
-        self.system_prompt = (system_prompt or _default_system_prompt()).format(
-            available_agents=agents_desc,
-        )
+        # 用 replace 而不是 format：提示词里的调用示例含花括号，format 会误解析。
+        self.system_prompt = (system_prompt or _default_system_prompt()).replace("{available_agents}", agents_desc)
 
     def wrap_model_call(
         self, request: ModelRequest, handler: Callable[[ModelRequest], ModelCallResult]
@@ -1924,7 +1854,7 @@ class SubagentMiddleware(AgentMiddleware):
         self, request: ModelRequest, handler: Callable[[ModelRequest], Awaitable[ModelCallResult]]
     ) -> ModelCallResult:
         # 提示词保持静态：动态子智能体状态不拼进 system，避免每轮改写前缀导致
-        # provider 前缀缓存整段失效；数量与任务明细由 subagent(action="list") 现查。
+        # provider 前缀缓存整段失效；数量与任务明细由 subagent(manage=...) 现查。
         return await handler(_append_system_prompt(request, self.system_prompt))
 
 
@@ -1945,7 +1875,7 @@ def _append_system_prompt(request: ModelRequest, extra: str) -> ModelRequest:
 def _default_system_prompt() -> str:
     return (
         "## 子智能体委派\n\n"
-        "你可以通过 subagent 工具把复杂多步任务派发给隔离上下文的子智能体，"
+        "你可以通过 subagent 工具的 dispatch 参数把复杂多步任务派发给隔离上下文的子智能体，"
         "只有子智能体的最终结论会回到对话。可用类型：\n\n{available_agents}\n\n"
         "派发判断：预计需要多轮工具调用（如批量盘点、成稿写作）且过程中无需"
         "用户参与的任务才派发；简单查询和需要向用户提问、展示中间过程的工作"
@@ -1955,31 +1885,32 @@ def _default_system_prompt() -> str:
         "explore，不要选错类型。\n\n"
         "## 子智能体复用与额度\n\n"
         "每个主对话创建的子智能体总数有运行时上限。派发新任务前先用 "
-        'subagent(action="list") 检查已有子智能体：目标相同、数据范围相同，或交付物只是补充、'
-        '修订时不要新开：同类子智能体仍在执行时，后台任务用 subagent(action="steer") 补充或等待；'
-        "同步任务阻塞当前轮，不能 steer，等结果返回后再 follow_up；"
-        '已结束时对最近一个终态 task_id 用 subagent(action="follow_up", task_id=..., message=...)，'
-        "在同一子会话续写；当前轮必须拿到追问结论时传 background=false。"
-        '只有目标、范围或交付物明确不同才 subagent(action="start") 新建。'
-        "达到上限后 start 会被拒绝，此时复用已有子智能体、由主智能体自己完成，"
+        'subagent(manage={action:"list"}) 检查已有子智能体：目标相同、数据范围相同，或交付物只是补充、'
+        "修订时不要新开：同类子智能体仍在执行时，用 subagent(send={task_id, message}) 补充或等待；"
+        "同步任务阻塞当前轮，不能发送运行中消息，等结果返回后再 send 续写；"
+        "任务已结束时 send 会对最近一个终态 task_id 开启下一轮，沿用同一子会话；"
+        "当前轮必须拿到追问结论时传 background=false。"
+        "只有目标、范围或交付物明确不同才用 dispatch 新建。"
+        "达到上限后 dispatch 会被拒绝，此时复用已有子智能体、由主智能体自己完成，"
         "或提示用户在子智能体管理面板关闭不再使用的终态子智能体以腾出额度；"
-        "追问沿用原会话，不新增子智能体数量。\n\n"
+        "send 续写沿用原会话，不新增子智能体数量。\n\n"
         "## 并发写与任务分发\n\n"
         "并发写由你负责任务分发，不依赖系统写锁。会写 workspace 的 general 任务，"
-        "start/follow_up 必须用 write_scopes 声明工作区相对文件或目录前缀，例如 "
+        "dispatch 或任务结束后 send 开启下一轮时必须用 write_scopes 声明工作区相对文件或目录前缀，例如 "
         "outputs/word、outputs/ppt；explore 只读，不声明写范围。并行派发前先 "
-        'subagent(action="list") 查看活跃任务的写范围：范围不相交才可并行；重叠或任一任务'
+        'subagent(manage={action:"list"}) 查看活跃任务的写范围：范围不相交才可并行；重叠或任一任务'
         "未声明写范围时按可能冲突处理，改为串行。shell、git、依赖安装、构建、打包等全局"
         "写操作传 workspace:*，同一时间只跑一个。子智能体必须只改声明范围；任务完成后"
         "由你检查产出、review diff 并承担最终合并责任。\n\n"
         "## 子智能体执行方式\n\n"
         "默认异步：批量盘点/全量扫描、多份成稿/多交付物、多个可并行且彼此独立的子任务，"
-        "或当轮不需要其结论时，直接用 subagent 派发（默认 background=true）；立即返回持久 task_id，"
+        "或当轮不需要其结论时，直接用 dispatch 派发（默认 background=true）；立即返回持久 task_id，"
         "期间继续其他工作或直接结束本轮，完成/失败/超时/租约失联都会自动通知当前会话。"
         "只在当前步骤必须拿到结论才能继续、用户要求当轮给出结果，或只是小范围核对/单点查询时，"
-        "显式传 background=false 同步等待；已结束子智能体的 follow_up 同样支持该参数。"
-        "任务统一用 subagent 工具管理，动作与参数见工具说明；查询按 list → agent_id → task_id 分层。"
-        "list/check 会返回「可操作」，只调用其中列出的控制动作；同步任务不支持插话和审批。"
+        "显式传 background=false 同步等待；已结束子智能体的 send 同样支持该参数。"
+        "任务查询、等待和取消用 manage；给已有子会话发消息用 send；审批用 decide。"
+        "查询按 list → agent_id → task_id 分层。"
+        "manage 的 check/list 会返回「可操作」，只执行其中列出的动作；同步任务不支持运行中插话和审批。"
         "用户问数量或进展时现查，不要凭记忆回答；问之前的任务先 list，再按需 check。"
         "给任务写清 label，便于用户在任务列表识别。"
         "子智能体产出的交付物，用 present_artifacts 展示给用户。"

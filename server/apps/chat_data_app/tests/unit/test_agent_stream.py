@@ -145,9 +145,9 @@ def test_reasoning_and_thinking_helper_branches():
     assert "data_analyzing_tool" not in tool_thinking_event
     assert _format_reasoning_for_display("调用 data_analyzing_tool") == "调用 数据分析"
     assert _format_reasoning_for_display("调用 get_current_time") == "调用 获取当前时间"
-    # 短工具名（task）只按词边界替换，不能命中 subtask / task_id / tasks 等长词的子串
-    assert _format_reasoning_for_display("派发 subagent 处理") == "派发 派发子智能体 处理"
-    assert _format_reasoning_for_display("派发 task 处理") == "派发 派发子智能体 处理"
+    # 工具名只按词边界替换，不能命中 subtask / task_id / tasks 等长词的子串
+    assert _format_reasoning_for_display("派发 subagent 处理") == "派发 子智能体 处理"
+    assert _format_reasoning_for_display("派发 task 处理") == "派发 task 处理"
     assert _format_reasoning_for_display("拆成 3 个 subtask 分别处理") == "拆成 3 个 subtask 分别处理"
     assert _format_reasoning_for_display("先记录 task_id，再调用工具") == "先记录 task_id，再调用工具"
     assert _format_reasoning_for_display("这些 tasks 是独立的") == "这些 tasks 是独立的"
@@ -294,6 +294,17 @@ def test_parse_tool_args_buffer_unwraps_double_encoded_json():
 
     assert _parse_tool_args_buffer(json.dumps(json.dumps({"sql": "select 3"})), fallback) == {"sql": "select 3"}
     assert _parse_tool_args_buffer("raw-string", fallback) == fallback
+
+
+def test_parse_tool_args_buffer_keeps_fallback_fields_missing_from_stream():
+    """流式碎片缺的字段由完整 tool_call 兜底补齐，不能整块替换掉权威参数。"""
+    fallback = {"subagent_type": "general", "timeout_seconds": 120}
+
+    assert _parse_tool_args_buffer('{"subagent_type":"general","label":"统计脚本"}', fallback) == {
+        "subagent_type": "general",
+        "timeout_seconds": 120,
+        "label": "统计脚本",
+    }
 
 
 def test_is_tool_result_error_ignores_plain_text_errors():

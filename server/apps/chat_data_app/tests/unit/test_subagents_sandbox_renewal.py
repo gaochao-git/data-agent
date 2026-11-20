@@ -7,8 +7,8 @@ from langchain_core.messages import AIMessage
 
 from apps.chat_data_app.agent.middleware.sandbox_renewal import create_sandbox_renewal_middleware
 from apps.chat_data_app.agent.middleware.subagents import (
-    _TASK_TOOL_DESCRIPTION_TEMPLATE,
-    TaskToolArgs,
+    _SUBAGENT_TOOL_DESCRIPTION_TEMPLATE,
+    DispatchArgs,
     _default_system_prompt,
 )
 
@@ -21,43 +21,40 @@ def _rendered_tool_description() -> str:
     )
 
     agents = f"- explore: {EXPLORE_SUBAGENT_DESCRIPTION}\n- general: {GENERAL_SUBAGENT_DESCRIPTION}"
-    return _TASK_TOOL_DESCRIPTION_TEMPLATE.format(available_agents=agents)
+    return _SUBAGENT_TOOL_DESCRIPTION_TEMPLATE.replace("{available_agents}", agents)
 
 
-def test_subagent_tool_description_is_compact_chinese():
+def test_subagent_description_is_compact_chinese():
     """subagent 是常驻注入工具：按真实类型渲染后也必须收敛，避免挤占上下文。"""
     rendered = _rendered_tool_description()
-    assert len(rendered) <= 1200
-    for keyword in ("explore", "general", "agent_id", "task_id", "follow_up"):
+    assert len(rendered) <= 1400
+    for keyword in ("explore", "general", "background", "write_scopes", "dispatch", "send"):
         assert keyword in rendered
 
 
 def test_subagent_tool_defaults_to_background_execution():
     """默认异步：模型不显式传 background 时走后台任务，同步需显式关闭。"""
-    args = TaskToolArgs(description="盘点全部模型", subagent_type="explore")
+    args = DispatchArgs(description="盘点全部模型", subagent_type="explore")
     assert args.background is True
     rendered = _rendered_tool_description()
     assert "background 默认 true" in rendered
-    assert "false 同步等结果" in rendered
+    assert "false 同步等待" in rendered
 
 
 def test_subagent_reuse_guidance_prefers_follow_up_over_new_session():
     """复用策略写在系统提示，工具描述只留参数语法，两处不重复。"""
-    prompt = _default_system_prompt().format(available_agents="- explore: 只读")
-    rendered = _rendered_tool_description()
-    for text in (prompt, rendered):
-        assert "follow_up" in text
-    assert 'subagent(action="list")' in prompt
-    assert 'subagent(action="list")' in rendered
-    assert 'subagent(action="steer")' in prompt
-    assert "达到上限后 start 会被拒绝" in prompt
+    prompt = _default_system_prompt().replace("{available_agents}", "- explore: 只读")
+    assert "subagent(send=" in prompt
+    assert 'subagent(manage={action:"list"})' in prompt
+    assert "审批用 decide" in prompt
+    assert "达到上限后 dispatch 会被拒绝" in prompt
 
 
 def test_subagent_tool_description_does_not_repeat_system_prompt_policy():
     """工具描述只讲参数机制；任务书、复用与额度策略只写在系统提示里。"""
-    prompt = _default_system_prompt().format(available_agents="- explore: 只读")
-    for phrase in ("任务书", "达到上限后 start 会被拒绝", "present_artifacts", "file_write"):
-        assert phrase not in _TASK_TOOL_DESCRIPTION_TEMPLATE
+    prompt = _default_system_prompt().replace("{available_agents}", "- explore: 只读")
+    for phrase in ("达到上限后 dispatch 会被拒绝", "present_artifacts", "file_write"):
+        assert phrase not in _SUBAGENT_TOOL_DESCRIPTION_TEMPLATE
         assert phrase in prompt
 
 

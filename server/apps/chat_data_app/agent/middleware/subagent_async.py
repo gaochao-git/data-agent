@@ -1,4 +1,4 @@
-"""后台子智能体：subagent 工具默认 background=true 的持久任务账本与配套工具。
+"""后台子智能体：subagent(dispatch=...) 默认 background=true 的持久任务账本与配套工具。
 
 与 ``middleware/subagents.py`` 的分工：本模块负责任务登记、稳定 task_id、
 check/list/wait/cancel 工具；子图执行体（``_run_background_task``）留在
@@ -205,7 +205,7 @@ def format_subagent_agent_list(
         if _session_closed(latest, session_statuses):
             lines.append("  会话状态：已关闭（不可再追问）")
         lines.extend(f"  写范围提示：{item}" for item in _task_write_scope_conflicts(latest, records))
-    lines.append('查看某个子智能体的任务 ID：subagent(action="list", agent_id="<agent_id>")。')
+    lines.append('查看某个子智能体的任务 ID：subagent(manage={action:"list", agent_id:"<agent_id>"})。')
     return "\n".join(lines)
 
 
@@ -257,9 +257,7 @@ def _format_task_report(record: SubagentTaskView, *, session_status: str | None 
     else:
         lines.append(f"报告：{body}")
     if record.is_terminal and session_status != SESSION_STATUS_CLOSED:
-        lines.append(
-            f'可基于同一子会话继续追问：subagent(action="follow_up", task_id="{record.task_id}", message="...")。'
-        )
+        lines.append(f'可基于同一子会话继续追问：subagent(send={{task_id:"{record.task_id}", message:"..."}})。')
     elif session_status == SESSION_STATUS_CLOSED:
         lines.append("该子智能体会话已关闭，不能继续追问；如需同类任务请重新派发新的子智能体。")
     return "\n".join(lines)
@@ -300,7 +298,6 @@ async def _spawn_background_task(
     description: str,
     label: str | None,
     write_scopes: Sequence[str] | None,
-    timeout_seconds: int | None,
     runtime: ToolRuntime,
     run_controls: Any,
     runner_factory: Callable[[SubagentTaskView, Any], Coroutine[Any, Any, None]],
@@ -322,7 +319,6 @@ async def _spawn_background_task(
             label=label,
             parent_tool_call_id=str(getattr(runtime, "tool_call_id", "") or ""),
             parent_owner_token=str(getattr(run_controls, "owner_token", None) or ""),
-            timeout_seconds=timeout_seconds,
             operator_name=operator_name,
         )
     except SubagentTaskCapacityError as exc:
@@ -347,7 +343,7 @@ async def _spawn_background_task(
         f"写范围={_task_write_scope_text(record)}；超时={record.timeout_seconds} 秒。"
         "任务不会阻塞当前对话：完成/失败/超时后系统会自动唤醒"
         "一条隐藏通知（不需要等用户先发消息）；期间可继续其他工作，也可用 "
-        'subagent 查询：action="list" 列任务，action="check" 查单个，action="wait" 等结果。'
+        "subagent 查询：manage 的 action=list 列任务、check 查单个、wait 等结果。"
     )
 
 
@@ -433,7 +429,7 @@ async def _resolve_follow_up_target(
         return "子智能体追问失败：任务账本服务未初始化。"
     target = await service.get_task(task_id, conversation_id=conversation_id, user_id=user_id)
     if target is None:
-        return f'子智能体任务 {task_id} 不存在。可用 subagent(action="list") 查看当前会话任务。'
+        return f'子智能体任务 {task_id} 不存在。可用 subagent(manage={{action:"list"}}) 查看当前会话任务。'
     session_state = await service.get_session_state(
         target.agent_session_id,
         conversation_id=conversation_id,
@@ -446,7 +442,8 @@ async def _resolve_follow_up_target(
     ).can_follow_up:
         return (
             f"子智能体任务 {task_id} 仍在执行（{TASK_STATUS_LABELS.get(target.status, target.status)}），"
-            '不能追问；可先用 subagent(action="wait") 等结果，或 subagent(action="cancel") 取消后再开始新一轮。'
+            '不能追问；可先用 subagent(manage={action:"wait"}) 等结果，'
+            '或 subagent(manage={action:"cancel"}) 取消后再开始新一轮。'
         )
     if target.subagent_type not in available_types:
         return f"子智能体类型 {target.subagent_type} 当前未启用，无法追问。"
@@ -547,9 +544,9 @@ async def _spawn_follow_up_task(
     normalized = _clean_task_id(task_id)
     content = str(message or "").strip()
     if not normalized:
-        return "action=follow_up 需要提供 task_id（要追问的子智能体任务）。"
+        return "subagent(send=...) 需要提供 task_id（要追问的子智能体任务）。"
     if not content:
-        return "action=follow_up 需要提供 message（追问内容）。"
+        return "subagent(send=...) 需要提供 message（追问内容）。"
     if not background and sync_runner is None:
         return "子智能体追问失败：同步执行器未初始化。"
     resolved = await _resolve_follow_up_target(
@@ -573,7 +570,6 @@ async def _spawn_follow_up_task(
             label=None,
             parent_tool_call_id=str(getattr(runtime, "tool_call_id", "") or ""),
             parent_owner_token=str(getattr(run_controls, "owner_token", None) or ""),
-            timeout_seconds=None,
             operator_name=resolved.operator_name,
             parent_task_id=base.task_id,
             agent_session_id=base.agent_session_id,
@@ -609,7 +605,7 @@ async def _spawn_follow_up_task(
         f"（agent_id={record.agent_id}，task_id={record.task_id}，上一轮 task_id={base.task_id}，"
         f"写范围={_task_write_scope_text(record)}）。"
         "任务在后台执行，会沿用该子会话的完整消息历史；完成后自动唤醒并注入通知，"
-        f'也可用 subagent(action="check", task_id="{record.task_id}") 查询。'
+        f'也可用 subagent(manage={{action:"check", task_id:"{record.task_id}"}}) 查询。'
     )
 
 
@@ -627,7 +623,7 @@ async def _check_async_task(
     """按 task_id 查状态与最终报告。"""
     normalized = _clean_task_id(task_id)
     if not normalized:
-        return "action=check 需要提供 task_id。"
+        return "manage action=check 需要提供 task_id。"
     if not user_id:
         return "当前会话缺少用户身份。"
     record = await service.get_task(
@@ -636,7 +632,7 @@ async def _check_async_task(
         user_id=user_id,
     )
     if record is None:
-        return f'子智能体任务 {normalized} 不存在。可用 subagent(action="list") 查看当前会话任务。'
+        return f'子智能体任务 {normalized} 不存在。可用 subagent(manage={{action:"list"}}) 查看当前会话任务。'
     state = await service.get_session_state(
         _task_session_id(record),
         conversation_id=conversation_id,
@@ -659,7 +655,7 @@ async def _cancel_async_task(
     """跨 worker 请求取消子智能体任务。"""
     normalized = _clean_task_id(task_id)
     if not normalized:
-        return "action=cancel 需要提供 task_id。"
+        return "manage action=cancel 需要提供 task_id。"
     if not user_id:
         return "无法取消：当前会话缺少用户身份。"
     record = await service.cancel_task(conversation_id, user_id, normalized, operator_name)
@@ -670,7 +666,7 @@ async def _cancel_async_task(
     return (
         f"已提交取消请求（agent_id={_task_agent_id(record)}，task_id={normalized}）。"
         "执行节点会在下一次心跳时停止任务，"
-        f'最终状态可稍后 subagent(action="check", task_id="{normalized}") 查询。'
+        f'最终状态可稍后 subagent(manage={{action:"check", task_id:"{normalized}"}}) 查询。'
     )
 
 
@@ -735,7 +731,7 @@ async def _wait_async_tasks(
         return "当前会话缺少用户身份。"
     normalized = list(dict.fromkeys(str(item).strip() for item in (task_ids or []) if str(item).strip()))
     if not normalized:
-        return "action=wait 需要提供 task_ids（至少一个任务 ID）。"
+        return "manage action=wait 需要提供 task_ids（至少一个任务 ID）。"
     return await _wait_for_task_views(
         service,
         normalized,

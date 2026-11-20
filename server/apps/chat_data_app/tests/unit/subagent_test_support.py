@@ -8,6 +8,13 @@ from types import SimpleNamespace
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from apps.chat_data_app.agent.middleware.subagents import (
+    DecideArgs,
+    DispatchArgs,
+    ManageArgs,
+    SendArgs,
+    build_task_tool,
+)
 from apps.chat_data_app.agent.run import subagent_event_service as event_service_module
 from apps.chat_data_app.agent.run import subagent_task_service as service_module
 from apps.chat_data_app.agent.run.agent_inbox_service import AgentRunConflictError, agent_inbox_service
@@ -18,6 +25,23 @@ CONV = "conv-bg-test"
 USER = "u1"
 
 
+def build_subagent_tool(specs, run_controls=None):
+    """构建单工具入口；测试始终通过真实分组 schema 调用。"""
+    return build_task_tool(specs, run_controls=run_controls)
+
+
+async def invoke_subagent_tool(tool, operation: str, *, runtime, **kwargs):
+    """按真实嵌套 schema 校验参数后调用 subagent 工具。"""
+    schema = {
+        "dispatch": DispatchArgs,
+        "send": SendArgs,
+        "manage": ManageArgs,
+        "decide": DecideArgs,
+    }[operation]
+    params = schema(**kwargs)
+    return await tool.coroutine(runtime=runtime, **{operation: params})
+
+
 class _FakeEventService:
     def __init__(self) -> None:
         self.events: list[dict] = []
@@ -26,12 +50,16 @@ class _FakeEventService:
         self.events.append(kwargs)
 
 
-def _settings(max_active: int = 20, max_subagents_per_conversation: int = 5):
+def _settings(
+    max_active: int = 20,
+    max_subagents_per_conversation: int = 5,
+    timeout_seconds: int = 60,
+):
     values = {
         "CHAT_DATA_SUBAGENT_TASK_MAX_ACTIVE": max_active,
         "CHAT_DATA_SUBAGENT_MAX_PER_CONVERSATION": max_subagents_per_conversation,
         "CHAT_DATA_SUBAGENT_TASK_LEASE_SECONDS": 30,
-        "CHAT_DATA_SUBAGENT_TASK_TIMEOUT_SECONDS": 60,
+        "CHAT_DATA_SUBAGENT_TASK_TIMEOUT_SECONDS": timeout_seconds,
     }
 
     async def _get(key: str) -> int:

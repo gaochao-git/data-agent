@@ -9,14 +9,14 @@ import type { SubagentTaskRecord, ToolCallInfo } from '../../types'
 const SubagentTrailStub = defineComponent({
   name: 'SubagentTrail',
   props: { toolCall: { type: Object, required: true } },
-  template: '<div data-subagent-trail-stub :data-background="String(toolCall.args.background)" />',
+  template: '<div data-subagent-trail-stub :data-background="String(toolCall.args.dispatch.background)" />',
 })
 
 const taskCall: ToolCallInfo = {
   tool_call_id: 'task-1',
   tool_name: 'subagent',
   status: 'completed',
-  args: { subagent_type: 'explore' },
+  args: { dispatch: { subagent_type: 'explore' } },
   result: '报告',
   subagentTrail: [{ kind: 'message', id: 'm1', content: '结论' }],
 }
@@ -24,7 +24,7 @@ const taskCall2: ToolCallInfo = {
   tool_call_id: 'task-2',
   tool_name: 'subagent',
   status: 'completed',
-  args: { subagent_type: 'general' },
+  args: { dispatch: { subagent_type: 'general' } },
   result: '第二份报告',
   subagentTrail: [{ kind: 'message', id: 'm2', content: '第二个结论' }],
 }
@@ -166,7 +166,7 @@ describe('ConversationWorkspacePanel tab 容器', () => {
       tool_call_id: 'call-bg-1',
       tool_name: 'subagent',
       status: 'completed',
-      args: { subagent_type: 'explore', background: true },
+      args: { dispatch: { subagent_type: 'explore', background: true } },
       result: '子智能体已在后台启动',
     }
     const wrapper = mountPanel({
@@ -188,7 +188,7 @@ describe('ConversationWorkspacePanel tab 容器', () => {
       tool_call_id: 'call-sync-1',
       tool_name: 'subagent',
       status: 'completed',
-      args: { subagent_type: 'explore', background: false },
+      args: { dispatch: { subagent_type: 'explore', background: false } },
       result: '同步核对结论',
     }
     const wrapper = mountPanel({
@@ -206,16 +206,15 @@ describe('ConversationWorkspacePanel tab 容器', () => {
     expect(wrapper.find('[data-subagent-trail-stub]').attributes('data-background')).toBe('false')
   })
 
-  it('历史 task 工具卡仍打开子智能体过程页', async () => {
-    const legacyCall: ToolCallInfo = {
+  it('无任务账本记录的 subagent 工具卡也打开子智能体过程页', async () => {
+    const processCall: ToolCallInfo = {
       ...taskCall,
-      tool_call_id: 'legacy-task-1',
-      tool_name: 'task',
+      tool_call_id: 'process-task-1',
     }
-    const wrapper = mountPanel({ resolveToolCall: () => legacyCall })
+    const wrapper = mountPanel({ resolveToolCall: () => processCall })
     const vm = wrapper.vm as unknown as { openTool: (call: ToolCallInfo) => void }
 
-    vm.openTool(legacyCall)
+    vm.openTool(processCall)
     await wrapper.vm.$nextTick()
 
     expect(tabTitles(wrapper)).toEqual(['工作台', 'explore 子智能体'])

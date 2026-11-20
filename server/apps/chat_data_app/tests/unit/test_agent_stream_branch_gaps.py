@@ -644,6 +644,134 @@ def test_reconcile_state_messages_backfills_tool_message_missing_from_stream():
     assert state.reconcile_state_messages([ai, rejected]) == []
 
 
+def test_reconcile_state_messages_publishes_authoritative_args_from_ai_message():
+    """最终 AIMessage 参数是权威口径：补发完整快照，替换流式中间版本。"""
+    state = agent_stream._ToolStreamState()
+    state.handle_tool_call_chunks(
+        [
+            {
+                "id": "sub-1",
+                "name": "subagent",
+                "index": 0,
+                "args": '{"subagent_type":"general","label":"统计脚本","background":false,"timeout_seconds":60}',
+            }
+        ]
+    )
+    # 流式阶段已经下发过一版参数（含最终调用没有的 background、且 timeout 是旧值）
+    state.args_fallback["sub-1"] = {
+        "subagent_type": "general",
+        "label": "统计脚本",
+        "background": False,
+        "timeout_seconds": 60,
+    }
+    ai = AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "id": "sub-1",
+                "name": "subagent",
+                "args": {
+                    "action": "start",
+                    "subagent_type": "general",
+                    "label": "统计脚本",
+                    "timeout_seconds": 120,
+                },
+            }
+        ],
+    )
+
+    events = state.reconcile_state_messages([ai])
+
+    assert len(events) == 1
+    assert "tool_progress" in events[0]
+    data = json.loads(events[0].split("data:", 1)[1])
+    assert data["tool_call_id"] == "sub-1"
+    assert data["args"]["timeout_seconds"] == 120
+    assert "background" not in data["args"]
+    assert data.get("replace_args") is True
+    assert state.args_fallback["sub-1"]["timeout_seconds"] == 120
+    # 同一快照重复到达不重复补发
+    assert state.reconcile_state_messages([ai]) == []
+
+
+def test_tool_completion_keeps_authoritative_args_missing_from_stream():
+    """完成事件整体使用最终参数，不能把流式旧值或多余字段带回来。"""
+    state = agent_stream._ToolStreamState()
+    state.handle_tool_call_chunks(
+        [
+            {
+                "id": "sub-2",
+                "name": "subagent",
+                "index": 0,
+                "args": '{"subagent_type":"general","label":"统计脚本","background":false,"timeout_seconds":60}',
+            }
+        ]
+    )
+    ai = AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "id": "sub-2",
+                "name": "subagent",
+                "args": {
+                    "subagent_type": "general",
+                    "label": "统计脚本",
+                    "timeout_seconds": 120,
+                },
+            }
+        ],
+    )
+    state.reconcile_state_messages([ai])
+
+    payload = state.build_tool_message_payload(ToolMessageChunk(content="结果", tool_call_id="sub-2"))
+
+    assert payload["accumulated_args"]["timeout_seconds"] == 120
+    assert payload["accumulated_args"]["label"] == "统计脚本"
+    assert "background" not in payload["accumulated_args"]
+
+
+def test_reconcile_publishes_authoritative_args_after_tool_completed():
+    """ToolMessage 比最终 AIMessage 先到：完成后再用最终参数纠正一次，且不重复。"""
+    state = agent_stream._ToolStreamState()
+    state.handle_tool_call_chunks(
+        [
+            {
+                "id": "sub-3",
+                "name": "subagent",
+                "index": 0,
+                "args": '{"subagent_type":"general","label":"统计脚本","background":false,"timeout_seconds":60}',
+            }
+        ]
+    )
+    payload = state.build_tool_message_payload(ToolMessageChunk(content="结果", tool_call_id="sub-3"))
+    assert payload["accumulated_args"]["timeout_seconds"] == 60
+
+    ai = AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "id": "sub-3",
+                "name": "subagent",
+                "args": {
+                    "action": "start",
+                    "subagent_type": "general",
+                    "label": "统计脚本",
+                    "timeout_seconds": 120,
+                },
+            }
+        ],
+    )
+
+    events = state.reconcile_state_messages([ai])
+
+    assert len(events) == 1
+    data = json.loads(events[0].split("data:", 1)[1])
+    assert data["args"]["timeout_seconds"] == 120
+    assert "background" not in data["args"]
+    assert data.get("replace_args") is True
+    assert state.reconcile_state_messages([ai]) == []
+
+
 # --------------------------------------------------------------------------- #
 # _resolve_end_usage / _parse_stream_event
 # --------------------------------------------------------------------------- #

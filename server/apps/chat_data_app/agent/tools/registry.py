@@ -151,7 +151,14 @@ TOOL_BUILD_GROUPS: tuple[ToolBuildGroup, ...] = (
 )
 
 
-MIDDLEWARE_INJECTED_APPROVAL_TOOLS = frozenset({"write_todos", "subagent", "mcp_tool_search", "mcp_tool_call"})
+MIDDLEWARE_INJECTED_APPROVAL_TOOLS = frozenset(
+    {
+        "write_todos",
+        "subagent",
+        "mcp_tool_search",
+        "mcp_tool_call",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -216,7 +223,7 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
         enabled=False,
     ),
     "write_todos": ToolDefinition(approval="allow", risk="low", display_name="更新任务计划"),
-    "subagent": ToolDefinition(approval="allow", risk="low", display_name="派发子智能体"),
+    "subagent": ToolDefinition(approval="allow", risk="low", display_name="子智能体"),
     "mcp_tool_search": ToolDefinition(approval="allow", risk="medium", display_name="搜索 MCP 工具"),
     "mcp_tool_call": ToolDefinition(approval="allow", risk="high", display_name="调用 MCP 工具"),
 }

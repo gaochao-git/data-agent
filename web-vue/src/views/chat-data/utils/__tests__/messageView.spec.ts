@@ -350,7 +350,7 @@ describe('子智能体过程 → 主对话消息投影', () => {
   const taskCall = (patch: Partial<ToolCallInfo> = {}): ToolCallInfo => toolCall({
     tool_call_id: 'call-task',
     tool_name: 'subagent',
-    args: { description: '盘点语义模型中的指标', subagent_type: 'explore' },
+    args: { dispatch: { description: '盘点语义模型中的指标', subagent_type: 'explore' } },
     result: '报告',
     status: 'running',
     ...patch,
@@ -423,7 +423,7 @@ describe('子智能体过程投影', () => {
   const taskCall = (patch: Partial<ToolCallInfo> = {}): ToolCallInfo => toolCall({
     tool_call_id: 'call-task',
     tool_name: 'subagent',
-    args: { description: '任务书' },
+    args: { dispatch: { description: '任务书' } },
     result: '结论',
     status: 'running',
     ...patch,
@@ -547,14 +547,15 @@ describe('子智能体过程投影', () => {
     expect(messages[1]?.segments).toEqual([])
   })
 
-  it('新旧子智能体工具名都识别过程区，普通工具或无 trail 不算', () => {
+  it('只识别 subagent 工具的过程区，普通工具或无 trail 不算', () => {
     const call = taskCall({
       subagentTrail: [
         { kind: 'tool', id: 'inner-1', tool_name: 'calculator_tool', args: {}, status: 'running' },
       ],
     })
     expect(hasSubagentTrail(call)).toBe(true)
-    expect(hasSubagentTrail({ ...call, tool_name: 'task' })).toBe(true)
+    expect(hasSubagentTrail({ ...call, tool_name: 'task' })).toBe(false)
+    expect(hasSubagentTrail({ ...call, tool_name: 'subagent_start' })).toBe(false)
     expect(hasSubagentTrail({ ...call, tool_name: 'calculator_tool' })).toBe(false)
     expect(hasSubagentTrail({ ...call, subagentTrail: [] })).toBe(false)
   })

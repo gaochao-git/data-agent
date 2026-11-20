@@ -10,7 +10,7 @@ import type { ExecutionTargetOption, ToolCallInfo } from '../types'
 import QueryResultPanel from './QueryResultPanel.vue'
 import SaveToPanelModal from './SaveToPanelModal.vue'
 import { extractGeneratedSqlFromToolCall, extractQueryResultPayload, extractSemanticDslFromArgs, getQueryResultError, parseQueryResultEnvelope } from '../utils/semanticTool'
-import { compactInlineText, getTaskActionDisplayName, getToolDisplayName, getToolTechnicalDescription, formatToolTimingText, isSubagentToolName, parseFileDiffResult, isFileDiffOffloaded } from '../utils/toolDisplay'
+import { compactInlineText, getSubagentActionDisplayName, getSubagentOperationArgs, getToolDisplayName, getToolTechnicalDescription, formatToolTimingText, isSubagentToolName, parseFileDiffResult, isFileDiffOffloaded } from '../utils/toolDisplay'
 import FileDiffViewer from './FileDiffViewer.vue'
 import { useSaveToPanel } from '../composables/useSaveToPanel'
 import { useToolTiming } from '../composables/useToolTiming'
@@ -100,7 +100,17 @@ const PARAM_LABELS: Record<string, string> = {
   datasource_id: '数据源',
   member_datasource_id: '执行机构',
   member_datasource_ids: '执行机构',
-  subagent_type: '子智能体类型'
+  subagent_type: '子智能体类型',
+  task_id: '任务 ID',
+  task_ids: '任务 ID 列表',
+  agent_id: '子智能体 ID',
+  wait_seconds: '等待秒数',
+  background: '后台执行',
+  label: '任务标题',
+  write_scopes: '写范围',
+  decision: '审批决定',
+  action: '操作',
+  message: '消息'
 }
 
 // 个别工具的参数名与通用语义冲突（如 subagent 的 description 是「任务书」，
@@ -110,8 +120,7 @@ const TOOL_PARAM_LABEL_OVERRIDES: Record<string, Record<string, string>> = {
 }
 
 const paramLabel = (key: string): string => {
-  const toolName = isSubagentToolName(props.toolCall.tool_name) ? 'subagent' : props.toolCall.tool_name
-  return TOOL_PARAM_LABEL_OVERRIDES[toolName]?.[key] ?? PARAM_LABELS[key] ?? key
+  return TOOL_PARAM_LABEL_OVERRIDES[props.toolCall.tool_name]?.[key] ?? PARAM_LABELS[key] ?? key
 }
 
 // DSL 参数标签颜色
@@ -126,15 +135,16 @@ const DSL_TAG_COLORS: Record<string, { bg: string; text: string }> = {
 // 标题链：subagent 管理动作的专用名 → 后端展示名（MCP tools.<name>.label）→ 内置映射表/限定名兜底
 const displayName = computed(() => {
   const args = props.toolCall.args || {}
-  const taskActionName = isSubagentToolName(props.toolCall.tool_name) ? getTaskActionDisplayName(args) : ''
+  const taskActionName = getSubagentActionDisplayName(props.toolCall.tool_name, args)
   return taskActionName
     || props.toolCall.display_name?.trim()
     || getToolDisplayName(props.toolCall.tool_name, args)
 })
 // 只有真正派发子智能体用机器人图标；subagent 的查询/等待/取消保持扳手。
 const toolIconClass = computed(() => {
-  const action = String(props.toolCall.args?.action || 'start').trim()
-  return isSubagentToolName(props.toolCall.tool_name) && action === 'start' ? 'fa-robot' : 'fa-wrench'
+  return isSubagentToolName(props.toolCall.tool_name) && Boolean((props.toolCall.args || {}).dispatch)
+    ? 'fa-robot'
+    : 'fa-wrench'
 })
 
 // 状态
@@ -263,7 +273,11 @@ const todoItems = computed<TodoItem[]>(() => {
 })
 
 const displayParams = computed<DisplayParam[]>(() => {
-  const args = props.toolCall.args || {}
+  const rawArgs = props.toolCall.args || {}
+  const subagentOperation = isSubagentToolName(props.toolCall.tool_name)
+    ? getSubagentOperationArgs(rawArgs)
+    : null
+  const args = subagentOperation?.args || rawArgs
   const entries: DisplayParam[] = Object.entries(args).filter(([key, value]) => {
     if (key === 'visualization' || (props.toolCall.tool_name === 'write_todos' && key === 'todos')) return false
     if (value === null || value === undefined) return false

@@ -77,11 +77,12 @@ def test_progress_snapshot_ignores_invalid_started_chunk():
     assert subagents_module._subagent_progress_snapshot(state)["compressing"] is False
 
 
-def test_task_tool_schema_and_kwargs_keep_status_and_decision(monkeypatch):
-    """形参收敛到 ≤13 后，LLM 可见字段不变，status/decision 仍能透传到动作分支。"""
+def test_grouped_tool_schemas_keep_status_and_decision(monkeypatch):
+    """manage 保留 status，decide 保留 decision，并各自透传到执行分支。"""
     spec = subagents_module.SubagentSpec(name="explore", description="d", system_prompt="s", tools=[], model=object())
     tool = subagents_module.build_task_tool([spec])
-    assert {"status", "decision"} <= set(tool.args)
+    assert "status" in subagents_module.ManageArgs.model_fields
+    assert "decision" in subagents_module.DecideArgs.model_fields
 
     captured: dict = {}
 
@@ -92,11 +93,18 @@ def test_task_tool_schema_and_kwargs_keep_status_and_decision(monkeypatch):
     monkeypatch.setattr(subagents_module, "manage_async_task", fake_manage)
     result = asyncio.run(
         tool.coroutine(
-            action="list",
-            status="completed",
-            decision="deny",
+            manage=subagents_module.ManageArgs(action="list", status="completed"),
             runtime=SimpleNamespace(state={}, tool_call_id="call_1"),
         )
     )
     assert result == "ok"
     assert captured["status"] == "completed"
+
+
+def test_subagent_tool_schema_does_not_expose_timeout_seconds():
+    """子任务超时只认全局配置，工具参数不向模型暴露 timeout_seconds。"""
+    spec = subagents_module.SubagentSpec(name="explore", description="d", system_prompt="s", tools=[], model=object())
+    tool = subagents_module.build_task_tool([spec])
+
+    assert "timeout_seconds" not in repr(tool.args_schema.model_json_schema())
+    assert "timeout_seconds" not in tool.description

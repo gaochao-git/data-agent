@@ -20,12 +20,12 @@ steering 插话、工具计时与单会话调用频率告警、历史消息时�
 
 `subagent` 工具默认 `background=true`，转入持久任务账本（见 `agent/run/README.md`），立即返回
 `task_id`；执行体在独立 asyncio task 中做子图心跳、超时与取消观察。同一个 `subagent` 工具
-用 `action` 统一管理后台任务：`list` 列任务、`check` 查单个、`wait` 等终态、`cancel` 取消；
+用 `manage.action` 统一管理后台任务：`list` 列任务、`check` 查单个、`wait` 等终态、`cancel` 取消；
 都按当前会话与用户隔离读取账本，不依赖进程内注册表。`check` 对终态任务返回完整
 报告；超长报告会落盘并返回 `result_path`，可直接用 `file_read` 读取完整正文，
 不对报告做分页。通知里的报告只是预览，不代表任务结论被截断。
 
-同步模式（`start` 或 `follow_up` 传 `background=false`）同样登记 `execution_mode=sync`
+同步模式（`dispatch` 或 `send` 开启新轮时传 `background=false`）同样登记 `execution_mode=sync`
 的任务行，并在任务详情中展示与后台任务一致的过程、报告、上下文与 token 用量；区别只在
 执行体阻塞当前轮、结果直接作为 ToolMessage 返回，并且收口后不生成完成通知、不自动唤醒
 主会话。追问的同步/后台模式可逐轮切换，但始终沿用同一 `agent_session_id`、线性
@@ -50,12 +50,12 @@ checkpointer，运行中首连走快照 + 游标续传。
 `list`/`check` 输出会带「可操作」。同步任务只支持取消（打断当前轮）和终态追问，不支持
 插话/审批；后台任务按状态开放取消、插话、审批与追问。工具分支不再各自硬编码状态判断。
 
-所有 `subagent` 动作用 `subagent_orchestrator.py` 的单一门面分发：`atask` 只把模型参数归一成
-`SubagentCommand`，门面负责动作边界与命令族路由，执行体仍沿用现有同步/后台适配器。
-门面统一的是“命令进入与能力边界”，不重写同步/后台各自的终态收口语义。
+所有 `subagent` 动作用 `subagent_tool_schema.py` 的四组互斥参数契约分发：`SubagentToolArgs`
+校验器强制必选且只选一组（`dispatch`/`send`/`manage`/`decide`），执行体沿用现有同步/后台
+适配器。契约层统一的是“命令进入与能力边界”，不重写同步/后台各自的终态收口语义。
 
 关闭子智能体是**用户侧动作**，不是 `subagent` 工具能力：用户在管理面板关闭终态且无活跃
-轮次的逻辑子会话后，历史仍可读，但 `follow_up` 会拒绝，能力矩阵不再显示追问；关闭同时
+轮次的逻辑子会话后，历史仍可读，但 `send` 会拒绝，能力矩阵不再显示追问；关闭同时
 释放当前主对话的一个子智能体额度，供后续新派发使用。会话状态来自
 `chat_data_subagent_session`，不是任务状态，不能用取消代替关闭。主智能体只能提示用户
 关闭不再使用的子智能体，不能自行关闭。
@@ -63,11 +63,11 @@ checkpointer，运行中首连走快照 + 游标续传。
 每个主对话创建的子智能体总数（同步与后台任务都计入）由
 `CHAT_DATA_SUBAGENT_MAX_PER_CONVERSATION` 限制，活跃任务数由
 `CHAT_DATA_SUBAGENT_TASK_MAX_ACTIVE` 限制；子智能体总额度按 `agent_session_id` 去重，
-追问沿用原会话不占新额度，已关闭会话不计入总额度。任务相似时，提示词要求主智能体先 `subagent(action="list")`
-找到已有子智能体并用 `follow_up` 续写；相似度不做代码层匹配，避免误合并不同目标或交付物。
+追问沿用原会话不占新额度，已关闭会话不计入总额度。任务相似时，提示词要求主智能体先 `subagent(manage={"action": "list"})`
+找到已有子智能体并用 `send` 续写；相似度不做代码层匹配，避免误合并不同目标或交付物。
 两项限制都只作用于当前主对话，不同主对话互不影响。
 
-并发写采用软控制：会写 workspace 的任务在 `start/follow_up` 通过 `write_scopes` 声明
+并发写采用软控制：会写 workspace 的任务在 `dispatch/send`（仅终态追问）通过 `write_scopes` 声明
 工作区相对文件或目录前缀（例如 `outputs/word`、`outputs/ppt`），`workspace:*` 表示
 shell、git、构建等全局独占操作。任务账本保存该声明，`list` 会展示活跃任务的写范围及
 重叠提示；主智能体据此决定并行还是串行。系统不建写租约、不加全局文件锁，也不阻断

@@ -85,4 +85,4 @@ async def test_steer_rejects_sync_task_before_enqueue():
         operator_name="tester",
     )
 
-    assert "不支持 steer" in result
+    assert "不支持插话" in result

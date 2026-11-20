@@ -28,7 +28,7 @@ const stubs = { MessageItem: MessageItemStub }
 const taskCall = (trail: SubagentTrailItem[], status: ToolCallInfo['status'] = 'running'): ToolCallInfo => ({
   tool_call_id: 'call-task',
   tool_name: 'subagent',
-  args: { description: '盘点语义模型中的指标与维度', subagent_type: 'explore' },
+  args: { dispatch: { description: '盘点语义模型中的指标与维度', subagent_type: 'explore' } },
   status,
   subagentTrail: trail,
 })

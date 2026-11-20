@@ -71,10 +71,14 @@ def _format_tool_progress_event(
     content_lines: int | None,
     removed_lines: int | None,
     intent: str | None = None,
+    args: dict[str, Any] | None = None,
+    replace_args: bool = False,
 ) -> str:
     """工具执行中推送进度事件：file_write/file_edit 的实时行数（+N / -M）、通用 intent 预渲染。
 
     行数与 intent 字段按需携带：非行数统计工具的事件只带 intent，避免前端把 0 当成有效行数。
+    args 用于补发完整工具参数：流式碎片可能缺省字段，最终 AIMessage 才是权威口径。
+    replace_args=True 表示 args 是最终调用参数的完整快照，前端应整份替换而不是合并。
     """
     data: dict[str, Any] = {
         "type": SSE_EVENT_TOOL_PROGRESS,
@@ -88,6 +92,10 @@ def _format_tool_progress_event(
         data["removed_lines"] = removed_lines
     if intent:
         data["intent"] = intent
+    if args:
+        data["args"] = args
+        if replace_args:
+            data["replace_args"] = True
     return _format_sse(SSE_EVENT_TOOL_PROGRESS, data)
 
 

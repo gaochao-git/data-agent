@@ -121,7 +121,7 @@ if _raw_workspace_backend not in ("local", "sandbox"):
     _raw_workspace_backend = "local"
 # 上面已做合法性校验回退，此处收紧为 Literal 供 AgentRuntimeOptions 使用
 CHAT_DATA_DEFAULT_WORKSPACE_BACKEND = cast('Literal["local", "sandbox"]', _raw_workspace_backend)
-# 是否注册 explore 子智能体（只读事实收集）；任一子智能体启用即注册 subagent 工具。
+# 是否注册 explore 子智能体（只读事实收集）；任一子智能体启用即注册子智能体工具组。
 CHAT_DATA_DEFAULT_EXPLORE_SUBAGENT_ENABLED = read_bool_env("CHAT_DATA_DEFAULT_EXPLORE_SUBAGENT_ENABLED", False)
 # 是否注册 general 子智能体（可读写执行：整理文件、查询分析、产出交付物）。
 CHAT_DATA_DEFAULT_GENERAL_SUBAGENT_ENABLED = read_bool_env("CHAT_DATA_DEFAULT_GENERAL_SUBAGENT_ENABLED", False)

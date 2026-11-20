@@ -20,9 +20,9 @@ from apps.chat_data_app.agent.middleware.subagents import (
     SubagentMiddleware,
     SubagentSpec,
     build_subagent_invocation_config,
-    build_task_tool,
     validate_subagent_specs,
 )
+from apps.chat_data_app.tests.unit.subagent_test_support import build_subagent_tool, invoke_subagent_tool
 
 
 def _spec(name="explore", **overrides):
@@ -317,9 +317,11 @@ async def test_subagent_tool_returns_final_report_as_tool_message(monkeypatch):
             yield "updates", {"model": {"messages": [AIMessage(content="近30天入金呈上升趋势")]}}
 
     monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
-    tool = build_task_tool([_spec()])
+    tool = build_subagent_tool([_spec()])
 
-    result = await tool.coroutine(
+    result = await invoke_subagent_tool(
+        tool,
+        "dispatch",
         background=False,
         description="分析入金趋势",
         subagent_type="explore",
@@ -341,10 +343,10 @@ async def test_subagent_tool_falls_back_when_subagent_returns_empty_report(monke
             yield "updates", {"model": {"messages": []}}
 
     monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
-    tool = build_task_tool([_spec()])
+    tool = build_subagent_tool([_spec()])
 
-    result = await tool.coroutine(
-        background=False, description="分析", subagent_type="explore", runtime=_fake_runtime()
+    result = await invoke_subagent_tool(
+        tool, "dispatch", background=False, description="分析", subagent_type="explore", runtime=_fake_runtime()
     )
 
     assert "未产出有效结论" in result.update["messages"][0].content
@@ -380,10 +382,10 @@ async def test_subagent_tool_forwards_inner_tool_events_to_parent_stream(monkeyp
             yield "updates", {"model": {"messages": [AIMessage(content="1 + 1 = 2")]}}
 
     monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
-    tool = build_task_tool([_spec()])
+    tool = build_subagent_tool([_spec()])
 
-    result = await tool.coroutine(
-        background=False, description="算一下 1+1", subagent_type="explore", runtime=_fake_runtime()
+    result = await invoke_subagent_tool(
+        tool, "dispatch", background=False, description="算一下 1+1", subagent_type="explore", runtime=_fake_runtime()
     )
 
     assert result.update["messages"][0].content == "1 + 1 = 2"
@@ -430,10 +432,10 @@ async def test_subagent_tool_survives_missing_stream_writer(monkeypatch):
             yield "updates", {"model": {"messages": [AIMessage(content="结论")]}}
 
     monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
-    tool = build_task_tool([_spec()])
+    tool = build_subagent_tool([_spec()])
 
-    result = await tool.coroutine(
-        background=False, description="分析", subagent_type="explore", runtime=_fake_runtime()
+    result = await invoke_subagent_tool(
+        tool, "dispatch", background=False, description="分析", subagent_type="explore", runtime=_fake_runtime()
     )
 
     assert result.update["messages"][0].content == "结论"
@@ -512,10 +514,10 @@ async def test_subagent_tool_forwards_and_stamps_subagent_compactions(monkeypatc
             )
 
     monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
-    tool = build_task_tool([_spec()])
+    tool = build_subagent_tool([_spec()])
 
-    result = await tool.coroutine(
-        background=False, description="盘点", subagent_type="explore", runtime=_fake_runtime()
+    result = await invoke_subagent_tool(
+        tool, "dispatch", background=False, description="盘点", subagent_type="explore", runtime=_fake_runtime()
     )
 
     compaction_events = [
@@ -585,10 +587,10 @@ async def test_multiple_compactions_stamp_distinct_realtime_anchors(monkeypatch)
                 )
 
     monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
-    tool = build_task_tool([_spec()])
+    tool = build_subagent_tool([_spec()])
 
-    result = await tool.coroutine(
-        background=False, description="盘点", subagent_type="explore", runtime=_fake_runtime()
+    result = await invoke_subagent_tool(
+        tool, "dispatch", background=False, description="盘点", subagent_type="explore", runtime=_fake_runtime()
     )
     tool_message = result.update["messages"][0]
     compactions = tool_message.additional_kwargs["subagent_compactions"]
@@ -711,8 +713,10 @@ async def test_subagent_tool_streams_compression_started_and_completed(monkeypat
             )
 
     monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
-    tool = build_task_tool([_spec()])
-    await tool.coroutine(background=False, description="盘点", subagent_type="explore", runtime=_fake_runtime())
+    tool = build_subagent_tool([_spec()])
+    await invoke_subagent_tool(
+        tool, "dispatch", background=False, description="盘点", subagent_type="explore", runtime=_fake_runtime()
+    )
     frames = [
         payload["event"]
         for payload in written
@@ -784,10 +788,10 @@ async def test_subagent_tool_stamps_subagent_token_usage(monkeypatch):
             )
 
     monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
-    tool = build_task_tool([_spec()])
+    tool = build_subagent_tool([_spec()])
 
-    result = await tool.coroutine(
-        background=False, description="盘点", subagent_type="explore", runtime=_fake_runtime()
+    result = await invoke_subagent_tool(
+        tool, "dispatch", background=False, description="盘点", subagent_type="explore", runtime=_fake_runtime()
     )
 
     tool_message = result.update["messages"][0]
@@ -980,11 +984,16 @@ def test_iter_subagent_stream_events_coerces_string_args():
 
 @pytest.mark.asyncio
 async def test_subagent_tool_rejects_unknown_subagent_type():
-    tool = build_task_tool([_spec()])
+    tool = build_subagent_tool([_spec()])
 
     with pytest.raises(ValueError) as exc_info:
-        await tool.coroutine(
-            background=False, description="分析", subagent_type="no-such-agent", runtime=_fake_runtime()
+        await invoke_subagent_tool(
+            tool,
+            "dispatch",
+            background=False,
+            description="分析",
+            subagent_type="no-such-agent",
+            runtime=_fake_runtime(),
         )
 
     assert "类型不存在" in str(exc_info.value)
@@ -1053,7 +1062,7 @@ def test_agent_list_shows_latest_task_without_dumping_all_task_ids():
     assert "最近匹配 task_id" not in output
     assert "task-old" not in output
     assert "可操作=取消、插话" in output
-    assert 'subagent(action="list", agent_id="<agent_id>")' in output
+    assert 'subagent(manage={action:"list", agent_id:"<agent_id>"})' in output
 
     filtered_output = format_subagent_agent_list(records, status_filtered=True)
     assert "最近匹配 task_id=task-latest" in filtered_output
@@ -1152,15 +1161,10 @@ async def test_agent_list_marks_scan_limit():
 
 @pytest.mark.asyncio
 async def test_agent_id_is_rejected_for_non_list_actions():
-    tool = build_task_tool([_spec()])
+    tool = build_subagent_tool([_spec()])
 
-    result = await tool.coroutine(
-        action="check",
-        agent_id="agent-stable",
-        runtime=_fake_runtime(),
-    )
-
-    assert 'agent_id 仅用于 action="list"' in result
+    with pytest.raises(ValueError, match="agent_id"):
+        await invoke_subagent_tool(tool, "manage", action="check", agent_id="agent-stable", runtime=_fake_runtime())
 
 
 @pytest.mark.asyncio
@@ -1188,19 +1192,18 @@ async def test_subagent_middleware_keeps_system_prompt_static_for_prefix_cache(m
     content = seen["request"].system_message.content
     assert content == f"主提示词\n\n{middleware.system_prompt}"
     assert "## 当前子智能体状态" not in content
-    assert 'subagent(action="list")' in content
+    assert 'subagent(manage={action:"list"})' in content
 
 
-def test_middleware_registers_single_subagent_tool_with_agent_catalog():
+def test_middleware_registers_single_grouped_subagent_tool_with_agent_catalog():
     middleware = SubagentMiddleware([_spec(), _spec(name="report-writer")])
 
-    # 单一 subagent 工具同时承担派发与后台任务管理
     assert [tool.name for tool in middleware.tools] == ["subagent"]
     assert middleware.subagent_names == {"explore", "report-writer"}
     assert "explore" in middleware.tools[0].description
     assert "report-writer" in middleware.tools[0].description
-    assert 'action="start"' in middleware.tools[0].description
-    assert 'action="check"' in middleware.tools[0].description
+    assert "dispatch" in middleware.tools[0].description
+    assert "manage" in middleware.tools[0].description
 
 
 def test_passthrough_keys_cover_subagent_state_schema_fields():
@@ -1258,10 +1261,10 @@ async def test_subagent_tool_streams_text_and_thinking_deltas(monkeypatch):
             yield "updates", {"model": {"messages": [AIMessage(content="结论是上升", id="m1")]}}
 
     monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
-    tool = build_task_tool([_spec()])
+    tool = build_subagent_tool([_spec()])
 
-    result = await tool.coroutine(
-        background=False, description="分析", subagent_type="explore", runtime=_fake_runtime()
+    result = await invoke_subagent_tool(
+        tool, "dispatch", background=False, description="分析", subagent_type="explore", runtime=_fake_runtime()
     )
 
     assert result.update["messages"][0].content == "结论是上升"
@@ -1301,10 +1304,10 @@ async def test_subagent_tool_delta_streaming_caps_cumulative_text(monkeypatch):
             yield "updates", {"model": {"messages": [AIMessage(content="x" * cap + "yyyyyyyy", id="m1")]}}
 
     monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
-    tool = build_task_tool([_spec()])
+    tool = build_subagent_tool([_spec()])
 
-    result = await tool.coroutine(
-        background=False, description="分析", subagent_type="explore", runtime=_fake_runtime()
+    result = await invoke_subagent_tool(
+        tool, "dispatch", background=False, description="分析", subagent_type="explore", runtime=_fake_runtime()
     )
 
     assert result.update["messages"][0].content == "x" * cap + "yyyyyyyy"
@@ -1386,10 +1389,11 @@ async def test_subagent_tool_keeps_text_when_chunk_carries_tool_call(monkeypatch
             yield "updates", {"model": {"messages": [AIMessage(content="我需要先读取配置文件", id="m1")]}}
 
     monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
-    tool = build_task_tool([_spec()])
+    tool = build_subagent_tool([_spec()])
 
-    await tool.coroutine(background=False, description="分析", subagent_type="explore", runtime=_fake_runtime())
-
+    await invoke_subagent_tool(
+        tool, "dispatch", background=False, description="分析", subagent_type="explore", runtime=_fake_runtime()
+    )
     events = [payload["event"] for payload in written]
     deltas = [event["delta"] for event in events if event["event_type"] == "subagent_message_delta"]
     final = next(event for event in events if event["event_type"] == "subagent_message")
@@ -1420,10 +1424,11 @@ async def test_subagent_tool_assigns_fallback_id_to_messages_without_id(monkeypa
             yield "updates", {"tools": {"messages": [shared_message]}}
 
     monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
-    tool = build_task_tool([_spec()])
+    tool = build_subagent_tool([_spec()])
 
-    await tool.coroutine(background=False, description="分析", subagent_type="explore", runtime=_fake_runtime())
-
+    await invoke_subagent_tool(
+        tool, "dispatch", background=False, description="分析", subagent_type="explore", runtime=_fake_runtime()
+    )
     finals = [payload["event"] for payload in written if payload["event"]["event_type"] == "subagent_message"]
     # 同一对象收敛到同一个兜底 id，去重后只发一次
     assert len(finals) == 1
@@ -1651,10 +1656,10 @@ async def test_subagent_tool_stamps_trail_snapshot_on_tool_message(monkeypatch):
             yield "updates", {"model": {"messages": [AIMessage(content="1 + 1 = 2", id="m-final")]}}
 
     monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
-    tool = build_task_tool([_spec()])
+    tool = build_subagent_tool([_spec()])
 
-    result = await tool.coroutine(
-        background=False, description="算一下 1+1", subagent_type="explore", runtime=_fake_runtime()
+    result = await invoke_subagent_tool(
+        tool, "dispatch", background=False, description="算一下 1+1", subagent_type="explore", runtime=_fake_runtime()
     )
 
     tool_message = result.update["messages"][0]
@@ -1673,10 +1678,10 @@ async def test_subagent_tool_omits_trail_when_no_inner_activity(monkeypatch):
             yield "updates", {"model": {"messages": []}}
 
     monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
-    tool = build_task_tool([_spec()])
+    tool = build_subagent_tool([_spec()])
 
-    result = await tool.coroutine(
-        background=False, description="分析", subagent_type="explore", runtime=_fake_runtime()
+    result = await invoke_subagent_tool(
+        tool, "dispatch", background=False, description="分析", subagent_type="explore", runtime=_fake_runtime()
     )
 
     tool_message = result.update["messages"][0]
@@ -1692,10 +1697,10 @@ async def test_subagent_tool_trail_includes_final_message_like_live_stream(monke
             yield "updates", {"model": {"messages": [AIMessage(content="直接给出结论", id="m1")]}}
 
     monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
-    tool = build_task_tool([_spec()])
+    tool = build_subagent_tool([_spec()])
 
-    result = await tool.coroutine(
-        background=False, description="分析", subagent_type="explore", runtime=_fake_runtime()
+    result = await invoke_subagent_tool(
+        tool, "dispatch", background=False, description="分析", subagent_type="explore", runtime=_fake_runtime()
     )
 
     tool_message = result.update["messages"][0]
@@ -1752,10 +1757,10 @@ async def test_subagent_tool_stamps_trail_on_failure(monkeypatch):
             raise RuntimeError("Recursion limit of 40 reached without hitting a stop condition.")
 
     monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
-    tool = build_task_tool([_spec()])
+    tool = build_subagent_tool([_spec()])
 
-    result = await tool.coroutine(
-        background=False, description="分析订单", subagent_type="explore", runtime=_fake_runtime()
+    result = await invoke_subagent_tool(
+        tool, "dispatch", background=False, description="分析订单", subagent_type="explore", runtime=_fake_runtime()
     )
 
     tool_message = result.update["messages"][0]
@@ -1778,10 +1783,10 @@ async def test_subagent_tool_failure_without_inner_activity_omits_trail(monkeypa
             yield  # pragma: no cover
 
     monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
-    tool = build_task_tool([_spec()])
+    tool = build_subagent_tool([_spec()])
 
-    result = await tool.coroutine(
-        background=False, description="分析", subagent_type="explore", runtime=_fake_runtime()
+    result = await invoke_subagent_tool(
+        tool, "dispatch", background=False, description="分析", subagent_type="explore", runtime=_fake_runtime()
     )
 
     tool_message = result.update["messages"][0]
@@ -1872,9 +1877,11 @@ async def test_compiled_subagent_mounts_tool_result_middleware(monkeypatch, tmp_
     )
 
     spec = _spec(tools=[query_tool], model=model)
-    tool = build_task_tool([spec])
+    tool = build_subagent_tool([spec])
 
-    result = await tool.coroutine(
+    result = await invoke_subagent_tool(
+        tool,
+        "dispatch",
         background=False,
         description="统计总量",
         subagent_type="explore",
@@ -1946,9 +1953,11 @@ async def test_compiled_subagent_survives_raising_tool(monkeypatch, tmp_path):
     )
 
     spec = _spec(tools=[broken_tool], model=model)
-    tool = build_task_tool([spec])
+    tool = build_subagent_tool([spec])
 
-    result = await tool.coroutine(
+    result = await invoke_subagent_tool(
+        tool,
+        "dispatch",
         background=False,
         description="统计总量",
         subagent_type="explore",

@@ -91,7 +91,6 @@ async def _create_task(harness):
         label="入金趋势",
         parent_tool_call_id="call-parent",
         parent_owner_token="parent-owner",
-        timeout_seconds=60,
         operator_name="用户一",
     )
 

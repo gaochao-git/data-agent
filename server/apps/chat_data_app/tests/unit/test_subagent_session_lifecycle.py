@@ -123,7 +123,6 @@ async def _create_task(harness, *, conversation_id: str = CONV):
         label="会话测试",
         parent_tool_call_id="call-parent",
         parent_owner_token="parent-owner",
-        timeout_seconds=60,
         operator_name="用户一",
     )
 
@@ -177,7 +176,6 @@ async def test_close_session_blocks_follow_up_but_preserves_history(harness):
             label=None,
             parent_tool_call_id="call-follow",
             parent_owner_token="parent-owner",
-            timeout_seconds=60,
             operator_name="用户一",
             parent_task_id=finished.task_id,
             agent_session_id=finished.agent_session_id,
@@ -214,7 +212,6 @@ async def test_close_from_old_task_keeps_session_latest_pointer(harness):
         label=None,
         parent_tool_call_id="call-follow",
         parent_owner_token="parent-owner",
-        timeout_seconds=60,
         operator_name="用户一",
         parent_task_id=first.task_id,
         agent_session_id=first.agent_session_id,
@@ -306,7 +303,6 @@ async def _create_follow_up(harness, finished):
         label=None,
         parent_tool_call_id="call-follow",
         parent_owner_token="parent-owner",
-        timeout_seconds=60,
         operator_name="用户一",
         parent_task_id=finished.task_id,
         agent_session_id=finished.agent_session_id,

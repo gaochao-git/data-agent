@@ -14,8 +14,8 @@ from apps.chat_data_app.agent.middleware.subagents import (
     _StreamingToolCallMarkupFilter,
     _subagent_report_token_limit,
     _SubagentStreamState,
-    build_task_tool,
 )
+from apps.chat_data_app.tests.unit.subagent_test_support import build_subagent_tool, invoke_subagent_tool
 
 
 def _spec(name="explore", **overrides):
@@ -120,9 +120,11 @@ async def test_task_tool_without_usage_meta_omits_context_usage_snapshot(monkeyp
 
     monkeypatch.setattr(sm, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
     monkeypatch.setattr(sm, "_safe_subagent_budget_meta", lambda *a, **k: None)
-    tool = build_task_tool([_spec()])
+    tool = build_subagent_tool([_spec()])
 
-    result = await tool.coroutine(
+    result = await invoke_subagent_tool(
+        tool,
+        "dispatch",
         background=False,
         description="分析",
         subagent_type="explore",

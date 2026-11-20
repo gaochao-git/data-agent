@@ -2236,18 +2236,26 @@ const submitAnalysisQuery = async (
           const existing = toolCallsMap.value.get(event.tool_call_id)
           const isFailed = event.type === 'tool_failed'
           const isCompleted = event.type === 'tool_completed'
+          // tool_progress/tool_started 也可能只用于补发完整参数（values 快照里的最终
+          // AIMessage 参数）。已进入终态的工具只合并参数，不能把状态倒回 running。
+          const keepTerminalStatus = existing !== undefined
+            && existing.status !== 'running'
+            && (event.type === 'tool_progress' || event.type === 'tool_started')
+          const activeStatus = keepTerminalStatus ? existing.status : 'running'
           const toolInfo: ToolCallInfo = {
             tool_call_id: event.tool_call_id,
             tool_name: event.tool_name || existing?.tool_name || 'tool_call',
             display_name: event.display_name || existing?.display_name,
-            args: { ...(existing?.args || {}), ...(event.args || {}) },
+            args: event.replace_args && event.args
+              ? { ...event.args }
+              : { ...(existing?.args || {}), ...(event.args || {}) },
             result: event.content || event.result || existing?.result,
             progressMessage: event.message || existing?.progressMessage,
             progress: typeof event.progress === 'number' ? event.progress : existing?.progress,
             contentLines: typeof event.content_lines === 'number' ? event.content_lines : existing?.contentLines,
             removedLines: typeof event.removed_lines === 'number' ? event.removed_lines : existing?.removedLines,
             streamingIntent: typeof event.intent === 'string' && event.intent ? event.intent : existing?.streamingIntent,
-            status: isFailed ? 'error' : isCompleted ? 'completed' : 'running',
+            status: isFailed ? 'error' : isCompleted ? 'completed' : activeStatus,
             subagentTrail: existing?.subagentTrail,
             subagentTokenUsage: event.subagent_token_usage || existing?.subagentTokenUsage, subagentContextUsage: existing?.subagentContextUsage, subagentCompactions: existing?.subagentCompactions, subagentTokenUsageDetail: existing?.subagentTokenUsageDetail,
             started_at_ms: event.started_at_ms ?? existing?.started_at_ms ?? null,

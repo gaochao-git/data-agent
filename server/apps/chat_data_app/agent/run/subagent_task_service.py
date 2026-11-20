@@ -451,7 +451,7 @@ def _preview(text: str, max_chars: int = NOTIFICATION_REPORT_PREVIEW_CHARS) -> s
         return normalized
     return normalized[:max_chars] + (
         f"\n…[报告共 {len(normalized)} 字符，当前只展示预览；"
-        '完整内容请调用 subagent(action="check", task_id=...)；超长报告会落盘并返回 result_path]'
+        '完整内容请调用 subagent(manage={action:"check", task_id:...})；超长报告会落盘并返回 result_path]'
     )
 
 
@@ -483,7 +483,7 @@ def _suspension_notification_text(task: SubagentTaskRecord) -> str:
         f"类型={task.subagent_type}；任务={task.label}\n\n"
         f"待审批操作：\n{detail}\n\n"
         "请先把上述操作转述给用户并等待用户明确允许或拒绝；用户确认后调用 "
-        f'subagent(action="approve" 或 "reject", task_id="{task.task_id}")。'
+        f'subagent(decide={{task_id:"{task.task_id}", decision:"allow"}}) 或 decision="deny"。'
         "在用户明确表态前不要自行批准，也不要重复派发同一任务。"
     )
 
@@ -504,7 +504,7 @@ def _user_message_notification_text(task: SubagentTaskRecord, excerpt: str) -> s
         f"类型={task.subagent_type}；任务={task.label}\n\n"
         f"用户消息：{excerpt}\n\n"
         "这是用户与子智能体的独立对话，不要把它当成新的派发指令；"
-        '如需继续管理该子会话，先调用 subagent(action="check", task_id=...) 获取最新状态。'
+        '如需继续管理该子会话，先调用 subagent(manage={action:"check", task_id:...}) 获取最新状态。'
     )
 
 
@@ -722,7 +722,6 @@ class SubagentTaskService:
         label: str | None,
         parent_tool_call_id: str,
         parent_owner_token: str | None,
-        timeout_seconds: int | None,
         operator_name: str,
         parent_task_id: str | None = None,
         agent_session_id: str | None = None,
@@ -731,7 +730,8 @@ class SubagentTaskService:
         max_active = int(await get_runtime_setting("CHAT_DATA_SUBAGENT_TASK_MAX_ACTIVE"))
         max_subagents_per_conversation = int(await get_runtime_setting("CHAT_DATA_SUBAGENT_MAX_PER_CONVERSATION"))
         lease_seconds = int(await get_runtime_setting("CHAT_DATA_SUBAGENT_TASK_LEASE_SECONDS"))
-        effective_timeout = int(timeout_seconds or await get_runtime_setting("CHAT_DATA_SUBAGENT_TASK_TIMEOUT_SECONDS"))
+        # 子任务超时统一由全局配置控制：模型不可按单次调用覆盖，避免生成过短超时。
+        effective_timeout = int(await get_runtime_setting("CHAT_DATA_SUBAGENT_TASK_TIMEOUT_SECONDS"))
         task_id = uuid4().hex
         owner_token = uuid4().hex
         record: SubagentTaskRecord | None = None
@@ -905,8 +905,8 @@ class SubagentTaskService:
         if subagent_count >= max_subagents_per_conversation:
             raise SubagentTaskCapacityError(
                 f"当前主对话已有 {subagent_count} 个可用子智能体，达到上限（{max_subagents_per_conversation} 个）。"
-                '请先用 subagent(action="list") 查看已有子智能体；任务类似时用 '
-                'subagent(action="follow_up", task_id=..., message=...) 复用原会话，不要新开。'
+                '请先用 subagent(manage={action:"list"}) 查看已有子智能体；任务类似时用 '
+                "subagent(send={task_id:..., message:...}) 复用原会话，不要新开。"
                 "如果已有智能体不再使用，请提示用户在子智能体管理面板关闭它们以腾出额度。"
             )
 
@@ -1959,7 +1959,7 @@ class SubagentTaskService:
         header = "后台子智能体任务状态通知" if cancelled else "后台子智能体完成通知"
         guidance = (
             "任务已被取消，不需要汇报完成结论；如中断前已有结论可简要告知用户。"
-            f'需要基于同一子会话继续时调用 subagent(action="follow_up", task_id="{task.task_id}", message="...")，'
+            f'需要基于同一子会话继续时调用 subagent(send={{task_id:"{task.task_id}", message:"..."}})，'
             "或重新派发新任务。"
             if cancelled
             else "请根据报告向用户简要汇报结论（不要重复执行任务）；"
@@ -1975,14 +1975,14 @@ class SubagentTaskService:
                 ""
                 if cancelled
                 else (
-                    f'需要完整报告或最新状态时调用 subagent(action="check", task_id="{task.task_id}")；'
+                    f'需要完整报告或最新状态时调用 subagent(manage={{action:"check", task_id:"{task.task_id}"}})；'
                     + (
                         "完整报告已落盘，请优先用 file_read 读取 result_path，不要只凭预览下结论。"
                         if report_path
-                        else 'subagent(action="check") 会返回完整正文，不要只凭预览下结论。'
+                        else 'subagent(manage={action:"check"}) 会返回完整正文，不要只凭预览下结论。'
                     )
                     + "如报告中提到产物文件，用 present_artifacts 展示。"
-                    + f'需要基于同一子会话继续分析/修改结论时，用 subagent(action="follow_up", task_id="{task.task_id}", message="...")。'
+                    + f'需要基于同一子会话继续分析/修改结论时，用 subagent(send={{task_id:"{task.task_id}", message:"..."}})。'
                 )
             )
         )

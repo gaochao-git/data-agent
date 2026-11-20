@@ -34,7 +34,9 @@ def test_subagent_tool_exposes_write_scopes_and_dispatch_prompt():
     )
 
     assert "write_scopes" in middleware.tools[0].description
-    assert "write_scopes" in middleware.tools[0].args_schema.model_json_schema()["properties"]
+    schema = middleware.tools[0].args_schema.model_json_schema()
+    assert set(schema["properties"]) == {"dispatch", "send", "manage", "decide"}
+    assert "write_scopes" in schema["$defs"]["DispatchArgs"]["properties"]
     assert "## 并发写与任务分发" in middleware.system_prompt
 
 

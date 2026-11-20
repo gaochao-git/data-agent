@@ -3,18 +3,27 @@ import { shallowRef } from 'vue'
 // 工具展示名唯一来源是后端 /config 的 tool_display_names；前端不再维护第二张表。
 const backendToolDisplayNames = shallowRef<Record<string, string>>({})
 
-const SUBAGENT_TOOL_NAME = 'subagent'
-const LEGACY_SUBAGENT_TOOL_NAME = 'task'
+export type SubagentOperation = 'dispatch' | 'send' | 'manage' | 'decide'
 
-/** 新旧会话兼容：子智能体工具已从 task 改名为 subagent，历史消息仍存旧值。 */
-export function isSubagentToolName(toolName?: string | null): boolean {
-  const name = String(toolName || '').trim()
-  return name === SUBAGENT_TOOL_NAME || name === LEGACY_SUBAGENT_TOOL_NAME
+export interface SubagentOperationArgs {
+  operation: SubagentOperation
+  args: ToolArgs
 }
 
-const canonicalToolName = (toolName?: string | null): string => {
-  const name = String(toolName || '').trim()
-  return isSubagentToolName(name) ? SUBAGENT_TOOL_NAME : name
+/** 子智能体单工具：四组主参数共享过程卡片、参数标签和结果渲染。 */
+export function isSubagentToolName(toolName?: string | null): boolean {
+  return String(toolName || '').trim() === 'subagent'
+}
+
+/** 取出当前调用的主参数分组；流式参数未完整时返回 null。 */
+export function getSubagentOperationArgs(args: ToolArgs = {}): SubagentOperationArgs | null {
+  for (const operation of ['dispatch', 'send', 'manage', 'decide'] as const) {
+    const value = args[operation]
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      return { operation, args: value as ToolArgs }
+    }
+  }
+  return null
 }
 
 /** /config 下发后注入；后端声明是工具展示名的唯一来源。 */
@@ -23,14 +32,14 @@ export function setToolDisplayNames(names?: Record<string, string> | null): void
 }
 
 export function getToolDisplayName(toolName?: string | null, args: ToolArgs = {}): string {
-  const name = canonicalToolName(toolName)
+  const name = String(toolName || '').trim()
   if (!name) return '工具调用'
   // mcp_tool_call 的展示对象是目标工具，不能被静态“调用 MCP 工具”覆盖。
   if (name === 'mcp_tool_call') {
     const target = typeof args.name === 'string' ? args.name.trim() : ''
     return target ? `调用 MCP 工具：${target.replace(/^mcp_/, '')}` : '调用 MCP 工具'
   }
-  const taskActionName = name === SUBAGENT_TOOL_NAME ? getTaskActionDisplayName(args) : ''
+  const taskActionName = isSubagentToolName(toolName) ? getSubagentActionDisplayName(toolName, args) : ''
   if (taskActionName) return taskActionName
   const backendName = backendToolDisplayNames.value[name]
   if (backendName) return backendName
@@ -153,16 +162,25 @@ const TASK_ACTION_NAMES: Record<string, string> = {
   cancel: '取消子智能体任务',
 }
 
-/** task 的管理动作展示名；start（默认派发）返回空串，沿用后端展示名。 */
-export function getTaskActionDisplayName(args: ToolArgs = {}): string {
-  const action = String(args.action || 'start').trim()
-  return TASK_ACTION_NAMES[action] || ''
+/** 子智能体工具内按动作细分的展示名；无需细分时沿用后端静态展示名。 */
+export function getSubagentActionDisplayName(toolName?: string | null, args: ToolArgs = {}): string {
+  const name = String(toolName || '').trim()
+  if (name !== 'subagent') return ''
+  const operation = getSubagentOperationArgs(args)
+  if (!operation) return ''
+  if (operation.operation === 'dispatch') return '派发子智能体'
+  if (operation.operation === 'send') return '向子智能体发送消息'
+  if (operation.operation === 'manage') {
+    return TASK_ACTION_NAMES[String(operation.args.action || '').trim()] || ''
+  }
+  const decision = String(operation.args.decision || '').trim()
+  return decision === 'deny' ? '拒绝子智能体操作' : decision === 'allow' ? '批准子智能体操作' : ''
 }
 
 const taskDescription: DescriptionBuilder = (args) => {
-  const action = String(args.action || 'start').trim()
+  const action = String(args.action || '').trim()
   if (action === 'check' || action === 'cancel') return compactInlineText(args.task_id)
-  if (action === 'list') return compactInlineText(args.status)
+  if (action === 'list') return compactInlineText(args.agent_id || args.status)
   if (action === 'wait') {
     const ids = Array.isArray(args.task_ids)
       ? args.task_ids.map(item => compactInlineText(item)).filter(Boolean)
@@ -170,9 +188,35 @@ const taskDescription: DescriptionBuilder = (args) => {
     if (ids.length === 0) return ''
     return ids.length === 1 ? ids[0]! : `${ids[0]} 等 ${ids.length} 个任务`
   }
+  return ''
+}
+
+const startTaskDescription: DescriptionBuilder = (args) => {
   const type = String(args.subagent_type || '').trim()
   const summary = compactInlineText(args.description, 80)
   return type && summary ? `${type} · ${summary}` : type || summary
+}
+
+const followUpTaskDescription: DescriptionBuilder = (args) => {
+  const taskId = compactInlineText(args.task_id)
+  const message = compactInlineText(args.message, 80)
+  return taskId && message ? `${taskId} · ${message}` : taskId || message
+}
+
+const decideTaskDescription: DescriptionBuilder = (args) => {
+  const taskId = compactInlineText(args.task_id)
+  const decision = String(args.decision || '').trim()
+  const verdict = decision === 'deny' ? '拒绝' : decision === 'allow' ? '批准' : ''
+  return taskId && verdict ? `${taskId} · ${verdict}` : taskId || verdict
+}
+
+const subagentDescription: DescriptionBuilder = (args) => {
+  const operation = getSubagentOperationArgs(args)
+  if (!operation) return ''
+  if (operation.operation === 'dispatch') return startTaskDescription(operation.args)
+  if (operation.operation === 'send') return followUpTaskDescription(operation.args)
+  if (operation.operation === 'manage') return taskDescription(operation.args)
+  return decideTaskDescription(operation.args)
 }
 
 const TOOL_DESCRIPTION_BUILDERS: Record<string, DescriptionBuilder> = {
@@ -195,7 +239,7 @@ const TOOL_DESCRIPTION_BUILDERS: Record<string, DescriptionBuilder> = {
   calculator_tool: calculatorDescription,
   officecli_run: args => Array.isArray(args.command_args) ? compactInlineText(args.command_args.join(' ')) : '',
   bash_run: args => compactInlineText(args.command),
-  subagent: taskDescription,
+  subagent: subagentDescription,
   write_todos: args => {
     const todos = Array.isArray(args.todos) ? args.todos : []
     const done = todos.filter(item => item?.status === 'completed').length
@@ -334,7 +378,7 @@ export function getToolTechnicalDescription(
   toolName?: string | null,
   args: ToolArgs = {},
 ): string {
-  const name = canonicalToolName(toolName)
+  const name = String(toolName || '').trim()
   return TOOL_DESCRIPTION_BUILDERS[name]?.(args) || ''
 }
 

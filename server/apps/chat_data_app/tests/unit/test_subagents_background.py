@@ -15,12 +15,12 @@ from types import SimpleNamespace
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from pydantic import ValidationError
 from sqlalchemy import select
 
 from apps.chat_data_app.agent.middleware import subagent_history as subagent_history_module
 from apps.chat_data_app.agent.middleware import subagents as subagents_module
 from apps.chat_data_app.agent.middleware.subagent_async import _format_task_report
-from apps.chat_data_app.agent.middleware.subagents import build_task_tool
 from apps.chat_data_app.agent.run import subagent_task_service as service_module
 from apps.chat_data_app.agent.run.agent_inbox_service import AgentRunLeaseLostError, agent_inbox_service
 from apps.chat_data_app.agent.run.subagent_task_service import (
@@ -28,7 +28,13 @@ from apps.chat_data_app.agent.run.subagent_task_service import (
     SubagentTaskRecord,
     notification_message_id,
 )
-from apps.chat_data_app.tests.unit.subagent_test_support import CONV, USER, _settings
+from apps.chat_data_app.tests.unit.subagent_test_support import (
+    CONV,
+    USER,
+    _settings,
+    build_subagent_tool,
+    invoke_subagent_tool,
+)
 from utils.models import ChatDataAgentInbox
 
 
@@ -42,7 +48,6 @@ async def _create_task(harness, *, parent_run_id="run-parent", capacity_owner="p
         label="入金趋势",
         parent_tool_call_id="call-parent",
         parent_owner_token=capacity_owner,
-        timeout_seconds=60,
         operator_name="用户一",
     )
 
@@ -183,7 +188,6 @@ async def test_write_scopes_are_normalized_in_task_ledger(harness):
         label="交付物",
         parent_tool_call_id="call-scope",
         parent_owner_token="parent-owner",
-        timeout_seconds=60,
         operator_name="用户一",
     )
 
@@ -479,23 +483,29 @@ async def test_subagent_tool_dispatches_management_actions(harness, monkeypatch)
         status="completed",
         report="完整盘点结论",
     )
-    tool = build_task_tool([_spec()])
+    tool = build_subagent_tool([_spec()])
     runtime = _fake_runtime()
 
-    listed = await tool.coroutine(action="list", runtime=runtime)
+    listed = await invoke_subagent_tool(tool, "manage", action="list", runtime=runtime)
     assert record.task_id in listed
 
-    checked = await tool.coroutine(action="check", runtime=runtime, task_id=record.task_id)
+    checked = await invoke_subagent_tool(tool, "manage", action="check", runtime=runtime, task_id=record.task_id)
     assert "完整盘点结论" in checked
 
-    waited = await tool.coroutine(action="wait", runtime=runtime, task_ids=[record.task_id])
+    waited = await invoke_subagent_tool(tool, "manage", action="wait", runtime=runtime, task_ids=[record.task_id])
     assert "完整盘点结论" in waited
 
-    cancelled = await tool.coroutine(action="cancel", runtime=runtime, task_id=record.task_id)
+    cancelled = await invoke_subagent_tool(tool, "manage", action="cancel", runtime=runtime, task_id=record.task_id)
     assert "无需取消" in cancelled
 
-    assert "task_id" in await tool.coroutine(action="check", runtime=runtime)
-    assert "task_ids" in await tool.coroutine(action="wait", runtime=runtime)
+    for kwargs in (
+        {"action": "check"},
+        {"action": "cancel"},
+        {"action": "wait"},
+        {"action": "list", "task_id": record.task_id},
+    ):
+        with pytest.raises(ValidationError):
+            await invoke_subagent_tool(tool, "manage", runtime=runtime, **kwargs)
 
 
 @pytest.mark.asyncio
@@ -533,7 +543,6 @@ async def test_subagent_capacity_counts_distinct_agents_and_allows_follow_up(har
         label="独立任务",
         parent_tool_call_id="call-second",
         parent_owner_token="parent-owner",
-        timeout_seconds=60,
         operator_name="用户一",
     )
     await harness.service.finish_task(
@@ -557,7 +566,6 @@ async def test_subagent_capacity_counts_distinct_agents_and_allows_follow_up(har
         label=None,
         parent_tool_call_id="call-follow-up",
         parent_owner_token="parent-owner",
-        timeout_seconds=60,
         operator_name="用户一",
         parent_task_id=second.task_id,
         agent_session_id=second.agent_session_id,
@@ -672,8 +680,10 @@ async def test_background_tool_spawns_persisted_task_and_notifies(harness, monke
 
     monkeypatch.setattr(agent_inbox_service, "start_run", start_run)
 
-    tool = build_task_tool([_spec()])
-    result = await tool.coroutine(
+    tool = build_subagent_tool([_spec()])
+    result = await invoke_subagent_tool(
+        tool,
+        "dispatch",
         description="盘点近 30 天入金趋势",
         subagent_type="explore",
         runtime=_fake_runtime(tool_call_id="call_bg_1"),
@@ -707,8 +717,10 @@ async def test_background_task_compiles_without_parent_run_fence(harness, monkey
         return _runnable("盘点结论")
 
     monkeypatch.setattr(subagents_module, "_compile_subagent", fake_compile)
-    tool = build_task_tool([_spec()], run_controls=parent_controls)
-    result = await tool.coroutine(
+    tool = build_subagent_tool([_spec()], run_controls=parent_controls)
+    result = await invoke_subagent_tool(
+        tool,
+        "dispatch",
         description="盘点语义模型目录",
         subagent_type="explore",
         runtime=_fake_runtime(tool_call_id="call_bg_fence"),
@@ -724,13 +736,10 @@ async def test_background_task_compiles_without_parent_run_fence(harness, monkey
 @pytest.mark.asyncio
 async def test_background_tool_unknown_type_does_not_write_task(harness):
     await harness.create_conversation()
-    tool = build_task_tool([_spec()])
+    tool = build_subagent_tool([_spec()])
     with pytest.raises(ValueError) as exc_info:
-        await tool.coroutine(
-            description="x",
-            subagent_type="不存在",
-            runtime=_fake_runtime(),
-            background=True,
+        await invoke_subagent_tool(
+            tool, "dispatch", description="x", subagent_type="不存在", runtime=_fake_runtime(), background=True
         )
     assert "类型不存在" in str(exc_info.value)
     records = await harness.service.list_tasks(CONV, USER)
@@ -740,18 +749,20 @@ async def test_background_tool_unknown_type_does_not_write_task(harness):
 @pytest.mark.asyncio
 async def test_background_timeout_keeps_partial_report(harness, monkeypatch):
     await harness.create_conversation()
+    monkeypatch.setattr(service_module, "get_runtime_setting", _settings(timeout_seconds=1))
     monkeypatch.setattr(
         subagents_module,
         "_compile_subagent",
         lambda spec, run_controls=None, **kwargs: _runnable("中断前的中间结论", delay_after_yield=5),
     )
-    tool = build_task_tool([_spec()])
-    result = await tool.coroutine(
+    tool = build_subagent_tool([_spec()])
+    result = await invoke_subagent_tool(
+        tool,
+        "dispatch",
         description="很慢的任务",
         subagent_type="explore",
         runtime=_fake_runtime(tool_call_id="call_timeout"),
         background=True,
-        timeout_seconds=1,
     )
     task_id = _task_id_from_text(result)
     local_task = harness.service._local_tasks.get(task_id)
@@ -760,10 +771,21 @@ async def test_background_timeout_keeps_partial_report(harness, monkeypatch):
     record = await harness.service.get_task(task_id)
     assert record is not None
     assert record.status == "timeout"
+    assert record.timeout_seconds == 1
     assert "执行超时" in record.report
     assert "中断前的中间结论" in record.report
     assert record.result_meta.get("tool_status") == "error"
     assert record.result_meta.get("subagent_trail")
+
+
+def test_start_schema_rejects_model_supplied_timeout():
+    """超时只由全局配置控制，模型硬塞 timeout_seconds 必须被参数校验拒绝。"""
+    with pytest.raises(ValueError, match="timeout_seconds"):
+        subagents_module.DispatchArgs(
+            description="快速任务",
+            subagent_type="explore",
+            timeout_seconds=1,
+        )
 
 
 @pytest.mark.asyncio
@@ -773,8 +795,10 @@ async def test_sync_task_path_still_returns_tool_message(monkeypatch):
         "_compile_subagent",
         lambda spec, run_controls=None, **kwargs: _runnable("同步结论"),
     )
-    tool = build_task_tool([_spec()])
-    result = await tool.coroutine(
+    tool = build_subagent_tool([_spec()])
+    result = await invoke_subagent_tool(
+        tool,
+        "dispatch",
         background=False,
         description="同步任务",
         subagent_type="explore",
@@ -789,12 +813,12 @@ async def test_sync_task_path_still_returns_tool_message(monkeypatch):
 def test_system_prompt_documents_background_and_subagent_tools():
     middleware = subagents_module.SubagentMiddleware([_spec()])
     assert "background=true" in middleware.system_prompt
-    assert 'subagent(action="list")' in middleware.system_prompt
+    assert 'subagent(manage={action:"list"})' in middleware.system_prompt
     assert "list → agent_id → task_id" in middleware.system_prompt
     # 精确动作语法只写在工具描述里，系统提示不重复一遍。
     description = middleware.tools[0].description
-    for action in ("start", "list", "check", "wait", "cancel", "follow_up"):
-        assert f'action="{action}"' in description
+    for keyword in ("dispatch", "send", "manage", "decide", "list/check/wait/cancel"):
+        assert keyword in description
     assert "async_task" not in middleware.system_prompt
     assert "list_async_tasks" not in middleware.system_prompt
     assert "check_async_task" not in middleware.system_prompt
@@ -815,8 +839,11 @@ async def test_follow_up_reuses_session_history(harness, monkeypatch):
         "_compile_subagent",
         lambda spec, run_controls=None, **kwargs: _Runnable(),
     )
-    tool = build_task_tool([_spec()])
-    first = await tool.coroutine(
+    tool = build_subagent_tool([_spec()])
+    follow_tool = build_subagent_tool([_spec()])
+    first = await invoke_subagent_tool(
+        tool,
+        "dispatch",
         description="盘点近 30 天入金趋势",
         subagent_type="explore",
         runtime=_fake_runtime(tool_call_id="call_bg_first"),
@@ -827,8 +854,9 @@ async def test_follow_up_reuses_session_history(harness, monkeypatch):
     assert first_record.status == "completed"
     assert captured_states[0]["messages"][0].content == "盘点近 30 天入金趋势"
 
-    follow = await tool.coroutine(
-        action="follow_up",
+    follow = await invoke_subagent_tool(
+        follow_tool,
+        "send",
         task_id=first_record.task_id,
         message="再按渠道拆一下，结论附上渠道 Top3",
         runtime=_fake_runtime(tool_call_id="call_bg_follow"),
@@ -868,8 +896,11 @@ async def test_follow_up_inherits_write_scopes_when_omitted(harness, monkeypatch
         "_compile_subagent",
         lambda spec, run_controls=None, **kwargs: _runnable("交付物已生成"),
     )
-    tool = build_task_tool([_spec("general")])
-    first = await tool.coroutine(
+    start_tool = build_subagent_tool([_spec("general")])
+    follow_tool = build_subagent_tool([_spec("general")])
+    first = await invoke_subagent_tool(
+        start_tool,
+        "dispatch",
         description="生成 Word 报告",
         subagent_type="general",
         write_scopes=["outputs/word"],
@@ -878,8 +909,9 @@ async def test_follow_up_inherits_write_scopes_when_omitted(harness, monkeypatch
     first_record = await _wait_terminal(harness, _task_id_from_text(first))
     assert first_record.write_scopes == ("outputs/word",)
 
-    follow = await tool.coroutine(
-        action="follow_up",
+    follow = await invoke_subagent_tool(
+        follow_tool,
+        "send",
         task_id=first_record.task_id,
         message="补充目录页",
         runtime=_fake_runtime(tool_call_id="call_scope_follow"),
@@ -888,8 +920,9 @@ async def test_follow_up_inherits_write_scopes_when_omitted(harness, monkeypatch
 
     assert second_record.write_scopes == ("outputs/word",)
 
-    override = await tool.coroutine(
-        action="follow_up",
+    override = await invoke_subagent_tool(
+        follow_tool,
+        "send",
         task_id=second_record.task_id,
         message="目录页另存到附件目录",
         write_scopes=["outputs/word/annex"],
@@ -917,15 +950,19 @@ async def test_follow_up_without_write_scopes_skips_ledger_rewrite(harness, monk
         return await original(*args)
 
     monkeypatch.setattr(harness.service, "set_task_write_scopes", _spy)
-    tool = build_task_tool([_spec()])
-    first = await tool.coroutine(
+    tool = build_subagent_tool([_spec()])
+    follow_tool = build_subagent_tool([_spec()])
+    first = await invoke_subagent_tool(
+        tool,
+        "dispatch",
         description="盘点近 30 天入金趋势",
         subagent_type="explore",
         runtime=_fake_runtime(tool_call_id="call_scope_none_first"),
     )
     first_record = await _wait_terminal(harness, _task_id_from_text(first))
-    follow = await tool.coroutine(
-        action="follow_up",
+    follow = await invoke_subagent_tool(
+        follow_tool,
+        "send",
         task_id=first_record.task_id,
         message="补充渠道拆分",
         runtime=_fake_runtime(tool_call_id="call_scope_none_follow"),
@@ -952,8 +989,11 @@ async def test_follow_up_can_switch_from_background_to_sync(harness, monkeypatch
         "_compile_subagent",
         lambda spec, run_controls=None, **kwargs: _Runnable(),
     )
-    tool = build_task_tool([_spec()])
-    first = await tool.coroutine(
+    tool = build_subagent_tool([_spec()])
+    follow_tool = build_subagent_tool([_spec()])
+    first = await invoke_subagent_tool(
+        tool,
+        "dispatch",
         description="后台盘点近 30 天入金趋势",
         subagent_type="explore",
         runtime=_fake_runtime(tool_call_id="call_bg_to_sync_1"),
@@ -962,8 +1002,9 @@ async def test_follow_up_can_switch_from_background_to_sync(harness, monkeypatch
     first_record = await _wait_terminal(harness, _task_id_from_text(first))
     await harness.service.mark_viewed(first_record)
 
-    follow = await tool.coroutine(
-        action="follow_up",
+    follow = await invoke_subagent_tool(
+        follow_tool,
+        "send",
         task_id=first_record.task_id,
         message="同步补充渠道 Top3",
         runtime=_fake_runtime(tool_call_id="call_bg_to_sync_2"),
@@ -1013,8 +1054,11 @@ async def test_sync_follow_up_failure_preserves_prior_history(harness, monkeypat
         "_compile_subagent",
         lambda spec, run_controls=None, **kwargs: _Runnable(),
     )
-    tool = build_task_tool([_spec()])
-    first = await tool.coroutine(
+    tool = build_subagent_tool([_spec()])
+    follow_tool = build_subagent_tool([_spec()])
+    first = await invoke_subagent_tool(
+        tool,
+        "dispatch",
         description="first task",
         subagent_type="explore",
         runtime=_fake_runtime(tool_call_id="call_sync_history_1"),
@@ -1023,8 +1067,9 @@ async def test_sync_follow_up_failure_preserves_prior_history(harness, monkeypat
     first_record = await _wait_terminal(harness, _task_id_from_text(first))
 
     fail_follow_up = True
-    follow = await tool.coroutine(
-        action="follow_up",
+    follow = await invoke_subagent_tool(
+        follow_tool,
+        "send",
         task_id=first_record.task_id,
         message="follow-up task",
         runtime=_fake_runtime(tool_call_id="call_sync_history_2"),
@@ -1060,8 +1105,11 @@ async def test_follow_up_can_switch_from_sync_to_background(harness, monkeypatch
         "_compile_subagent",
         lambda spec, run_controls=None, **kwargs: _Runnable(),
     )
-    tool = build_task_tool([_spec()])
-    first = await tool.coroutine(
+    tool = build_subagent_tool([_spec()])
+    follow_tool = build_subagent_tool([_spec()])
+    first = await invoke_subagent_tool(
+        tool,
+        "dispatch",
         description="同步盘点近 30 天入金趋势",
         subagent_type="explore",
         runtime=_fake_runtime(tool_call_id="call_sync_to_bg_1"),
@@ -1071,8 +1119,9 @@ async def test_follow_up_can_switch_from_sync_to_background(harness, monkeypatch
     records = await harness.service.list_tasks(CONV, USER, limit=10)
     first_record = next(item for item in records if item.execution_mode == "sync")
 
-    follow = await tool.coroutine(
-        action="follow_up",
+    follow = await invoke_subagent_tool(
+        follow_tool,
+        "send",
         task_id=first_record.task_id,
         message="后台补充渠道 Top3",
         runtime=_fake_runtime(tool_call_id="call_sync_to_bg_2"),
@@ -1229,9 +1278,11 @@ async def test_sync_task_is_tracked_without_finish_notification(harness, monkeyp
         "_compile_subagent",
         lambda spec, run_controls=None, **kwargs: _runnable("同步任务结论"),
     )
-    tool = build_task_tool([_spec()])
+    tool = build_subagent_tool([_spec()])
 
-    result = await tool.coroutine(
+    result = await invoke_subagent_tool(
+        tool,
+        "dispatch",
         background=False,
         description="当前轮同步核对",
         subagent_type="explore",
@@ -1276,9 +1327,11 @@ async def test_sync_task_persists_write_scopes(harness, monkeypatch):
         "_compile_subagent",
         lambda spec, run_controls=None, **kwargs: _runnable("Word 已生成"),
     )
-    tool = build_task_tool([_spec("general")])
+    tool = build_subagent_tool([_spec("general")])
 
-    result = await tool.coroutine(
+    result = await invoke_subagent_tool(
+        tool,
+        "dispatch",
         background=False,
         description="生成 Word 报告",
         subagent_type="general",
@@ -1397,9 +1450,11 @@ async def test_sync_task_start_failure_does_not_leave_pending_row(harness, monke
         raise RuntimeError("模拟启动失败")
 
     monkeypatch.setattr(harness.service, "start_task", fail_start)
-    tool = build_task_tool([_spec()])
+    tool = build_subagent_tool([_spec()])
 
-    result = await tool.coroutine(
+    result = await invoke_subagent_tool(
+        tool,
+        "dispatch",
         background=False,
         description="启动失败降级核对",
         subagent_type="explore",
@@ -1416,25 +1471,6 @@ async def test_sync_task_start_failure_does_not_leave_pending_row(harness, monke
     assert record.notify_on_finish is False
     assert record.notified_at is not None
     assert await harness.service.dispatch_pending_notifications(limit=10) == 0
-
-
-@pytest.mark.asyncio
-async def test_follow_up_rejected_while_task_running(harness):
-    await harness.create_conversation()
-    record = await _create_task(harness)
-    await _start(harness, record)
-    tool = build_task_tool([_spec()])
-
-    result = await tool.coroutine(
-        action="follow_up",
-        task_id=record.task_id,
-        message="补充渠道拆分",
-        runtime=_fake_runtime(),
-    )
-
-    assert "仍在执行" in result
-    records = await harness.service.list_tasks(CONV, USER)
-    assert len(records) == 1
 
 
 @pytest.mark.asyncio
@@ -1458,7 +1494,6 @@ async def test_create_task_rejects_second_active_turn_in_same_session(harness):
         label=None,
         parent_tool_call_id="call-follow-1",
         parent_owner_token="parent-owner",
-        timeout_seconds=60,
         operator_name="用户一",
         parent_task_id=first.task_id,
         root_task_id=first.task_id,
@@ -1474,7 +1509,6 @@ async def test_create_task_rejects_second_active_turn_in_same_session(harness):
             label=None,
             parent_tool_call_id="call-follow-2",
             parent_owner_token="parent-owner",
-            timeout_seconds=60,
             operator_name="用户一",
             parent_task_id=first.task_id,
             root_task_id=first.task_id,
@@ -1498,8 +1532,11 @@ async def test_follow_up_from_old_turn_anchors_to_latest_session_turn(harness, m
         "_compile_subagent",
         lambda spec, run_controls=None, **kwargs: _Runnable(),
     )
-    tool = build_task_tool([_spec()])
-    first = await tool.coroutine(
+    tool = build_subagent_tool([_spec()])
+    follow_tool = build_subagent_tool([_spec()])
+    first = await invoke_subagent_tool(
+        tool,
+        "dispatch",
         description="第一轮",
         subagent_type="explore",
         runtime=_fake_runtime(tool_call_id="call_turn_1"),
@@ -1507,23 +1544,26 @@ async def test_follow_up_from_old_turn_anchors_to_latest_session_turn(harness, m
     )
     first_record = await _wait_terminal(harness, _task_id_from_text(first))
 
-    second = await tool.coroutine(
-        action="follow_up",
+    second = await invoke_subagent_tool(
+        follow_tool,
+        "send",
         task_id=first_record.task_id,
         message="第二轮",
         runtime=_fake_runtime(tool_call_id="call_turn_2"),
     )
     second_record = await _wait_terminal(harness, _task_id_from_text(second))
-    third = await tool.coroutine(
-        action="follow_up",
+    third = await invoke_subagent_tool(
+        follow_tool,
+        "send",
         task_id=second_record.task_id,
         message="第三轮",
         runtime=_fake_runtime(tool_call_id="call_turn_3"),
     )
     third_record = await _wait_terminal(harness, _task_id_from_text(third))
 
-    stale = await tool.coroutine(
-        action="follow_up",
+    stale = await invoke_subagent_tool(
+        follow_tool,
+        "send",
         task_id=first_record.task_id,
         message="从旧卡片继续",
         runtime=_fake_runtime(tool_call_id="call_turn_4"),
@@ -1550,16 +1590,20 @@ async def test_follow_up_ignores_stale_latest_task_when_snapshot_write_failed(ha
         "_compile_subagent",
         lambda spec, run_controls=None, **kwargs: _Runnable(),
     )
-    tool = build_task_tool([_spec()])
-    first = await tool.coroutine(
+    tool = build_subagent_tool([_spec()])
+    follow_tool = build_subagent_tool([_spec()])
+    first = await invoke_subagent_tool(
+        tool,
+        "dispatch",
         description="第一轮",
         subagent_type="explore",
         runtime=_fake_runtime(tool_call_id="call_stale_1"),
         background=True,
     )
     first_record = await _wait_terminal(harness, _task_id_from_text(first))
-    second = await tool.coroutine(
-        action="follow_up",
+    second = await invoke_subagent_tool(
+        follow_tool,
+        "send",
         task_id=first_record.task_id,
         message="第二轮",
         runtime=_fake_runtime(tool_call_id="call_stale_2"),
@@ -1570,8 +1614,9 @@ async def test_follow_up_ignores_stale_latest_task_when_snapshot_write_failed(ha
         return first_record
 
     monkeypatch.setattr(harness.service, "get_latest_task_in_session", stale_latest)
-    third = await tool.coroutine(
-        action="follow_up",
+    third = await invoke_subagent_tool(
+        follow_tool,
+        "send",
         task_id=second_record.task_id,
         message="在第二轮基础上继续",
         runtime=_fake_runtime(tool_call_id="call_stale_3"),
@@ -1605,12 +1650,9 @@ async def test_follow_up_falls_back_to_legacy_report_when_snapshot_missing(harne
         status="completed",
         report="旧任务结论",
     )
-    tool = build_task_tool([_spec()])
-    result = await tool.coroutine(
-        action="follow_up",
-        task_id=record.task_id,
-        message="在旧结论基础上补充说明",
-        runtime=_fake_runtime(),
+    tool = build_subagent_tool([_spec()])
+    result = await invoke_subagent_tool(
+        tool, "send", task_id=record.task_id, message="在旧结论基础上补充说明", runtime=_fake_runtime()
     )
 
     assert "第 2 轮追问" in result

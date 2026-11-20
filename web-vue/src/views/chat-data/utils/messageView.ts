@@ -15,7 +15,7 @@ import type {
   ThinkingSegment,
   ToolCallInfo,
 } from '../types'
-import { getToolCompactDescription, getToolDisplayName, getToolTechnicalDescription, isSubagentToolName } from './toolDisplay'
+import { getSubagentOperationArgs, getToolCompactDescription, getToolDisplayName, getToolTechnicalDescription, isSubagentToolName } from './toolDisplay'
 import { normalizeToolCallForDisplay, shouldInlineRenderQueryResult } from './semanticTool'
 
 /** 思考收起态尾部预览长度（主对话与子智能体共用口径）。 */
@@ -547,7 +547,7 @@ export const buildSubagentMessages = (toolCall: ToolCallInfo): Message[] => {
   // 运行中不出 footer（时间尚未确定，且与主对话的流式口径一致）。
   const startedAt = parseMessageTimestamp(toolCall.started_at_ms)
   const endedAt = parentRunning ? undefined : parseMessageTimestamp(toolCall.ended_at_ms)
-  const prompt = String(toolCall.args?.description || '').trim()
+  const prompt = String(getSubagentOperationArgs(toolCall.args || {})?.args.description || '').trim()
   if (prompt) {
     messages.push({ id: `${toolCall.tool_call_id}-task`, role: 'user', content: prompt, timestamp: startedAt })
   }

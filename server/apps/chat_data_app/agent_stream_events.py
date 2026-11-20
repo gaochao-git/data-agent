@@ -8,6 +8,7 @@ agent_stream 以 re-export 方式引用，既有模块属性引用（含测试�
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import time
@@ -55,8 +56,7 @@ REASONING_TOOL_DISPLAY_NAMES = {
     "get_current_time": "获取当前时间",
     "present_artifacts": "展示文件",
     "ask_user_question": "询问用户",
-    "task": "派发子智能体",
-    "subagent": "派发子智能体",
+    "subagent": "子智能体",
 }
 
 
@@ -213,8 +213,19 @@ def _coerce_tool_args(value: Any) -> dict[str, Any] | None:
     return coerce_tool_call_args(value)
 
 
+def _args_signature(args: dict[str, Any]) -> str:
+    """参数内容指纹：只用于判断前端当前版本是否变化，不保留整份参数（可能含大文件内容）。"""
+    payload = json.dumps(args, sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.blake2b(payload.encode("utf-8"), digest_size=16).hexdigest()
+
+
 def _parse_tool_args_buffer(args_buffer: str, fallback: dict[str, Any] | None = None) -> dict[str, Any]:
-    """解析流式工具参数，解析失败时回退到已知结构化参数。"""
+    """解析流式工具参数，并用已知结构化参数补齐流式碎片缺省的字段。
+
+    fallback 来自完整 tool_call 的结构化 args，可能是比流式 buffer 更新的权威快照；
+    流式 buffer 解析成功时也不能直接替换它，否则模型后补的字段（例如 timeout_seconds）
+    会在完成事件里丢失。同名键以流式值为准，只补 buffer 里没有的键。
+    """
     fallback_args = fallback or {}
     if not args_buffer:
         return fallback_args
@@ -222,7 +233,7 @@ def _parse_tool_args_buffer(args_buffer: str, fallback: dict[str, Any] | None = 
     if parsed is None:
         logger.warning("无法解析工具参数，使用兜底参数: %s", args_buffer[:200])
         return fallback_args
-    return parsed
+    return {**fallback_args, **parsed}
 
 
 def _is_tool_result_error(content: Any, native_status: Any = None) -> bool:
@@ -292,6 +303,11 @@ class _ToolStreamState:
         self.tool_names: dict[str, str] = {}
         self.args_buffer: dict[str, str] = {}
         self.args_fallback: dict[str, dict[str, Any]] = {}
+        # values 快照里最终 AIMessage.tool_calls 的参数：执行侧真正使用的口径。
+        # 流式 buffer / fallback 都可能只是中间版本，完成事件必须以这份为准。
+        self.authoritative_args: dict[str, dict[str, Any]] = {}
+        # 已经下发给前端的参数指纹，用于判断是否需要补发替换；不保留参数正文。
+        self.sent_args_signature: dict[str, str] = {}
         self.index_map: dict[int, str] = {}
         self.running_tool_ids: list[str] = []
         self.emitted_running_tool_ids: set[str] = set()
@@ -450,12 +466,16 @@ class _ToolStreamState:
         if tool_call_id:
             self.finished_tool_ids.add(tool_call_id)
             self.cancelled_tool_ids.discard(tool_call_id)
-            msg_data["accumulated_args"] = _parse_tool_args_buffer(
-                self.args_buffer.get(tool_call_id, ""),
-                self.args_fallback.get(tool_call_id),
+            msg_data["accumulated_args"] = self.authoritative_args.get(tool_call_id) or _parse_tool_args_buffer(
+                self.args_buffer.get(tool_call_id, ""), self.args_fallback.get(tool_call_id)
             )
             self.args_buffer.pop(tool_call_id, None)
             self.args_fallback.pop(tool_call_id, None)
+            # 完成事件里的参数就是前端当前看到的版本；保留它用于后续 values 快照
+            # 比对。若最终 AIMessage 比 ToolMessage 晚到（after_model 等中间件场景），
+            # 仍可补发一次替换，且同一快照不会重复下发。
+            self.sent_args_signature[tool_call_id] = _args_signature(msg_data["accumulated_args"])
+            self.authoritative_args.pop(tool_call_id, None)
             self.progress_line_counts.pop(tool_call_id, None)
             self.progress_intents.pop(tool_call_id, None)
         self.active_tool_call_id = _finish_running_tool(self.running_tool_ids, self.active_tool_call_id, tool_call_id)
@@ -523,10 +543,48 @@ class _ToolStreamState:
         if latest_ai_index < 0:
             return []
 
-        events = self._missing_tool_events(messages, latest_ai_index)
+        events = self._publish_authoritative_tool_args(messages[latest_ai_index])
+        events.extend(self._missing_tool_events(messages, latest_ai_index))
         actual_ids = self._actual_tool_ids(messages[latest_ai_index])
         for tool_call_id in self._orphan_tool_ids(actual_ids):
             events.append(self._cancel_orphaned_tool(tool_call_id))
+        return events
+
+    def _publish_authoritative_tool_args(self, latest_ai: Any) -> list[str]:
+        """把最终 AIMessage 的完整参数补发给已播报的工具，作为整份替换快照。
+
+        流式 args_buffer 只包含模型逐字生成的片段，模型在调用参数之外补写的字段
+        （例如由服务端补默认值、或分片丢字）不会进入 buffer；完成事件若只信 buffer，
+        工具详情就会展示缺字段的参数。values 快照里的 AIMessage.tool_calls 是最终
+        口径；这里与已下发参数比较，变化时补一条带 replace_args 的 tool_progress，
+        前端整份替换参数，既不保留流式中间版本的多余字段，也不改变生命周期状态。
+        """
+        events: list[str] = []
+        for tool_call in getattr(latest_ai, "tool_calls", None) or []:
+            if not isinstance(tool_call, dict):
+                continue
+            tool_call_id = str(tool_call.get("id") or "").strip()
+            args = _coerce_tool_args(tool_call.get("args"))
+            if not tool_call_id or not args or tool_call_id not in self.emitted_running_tool_ids:
+                continue
+            signature = _args_signature(args)
+            if self.sent_args_signature.get(tool_call_id) == signature:
+                self.authoritative_args[tool_call_id] = args
+                continue
+            self.authoritative_args[tool_call_id] = args
+            self.args_fallback[tool_call_id] = args
+            self.sent_args_signature[tool_call_id] = signature
+            events.append(
+                _format_tool_progress_event(
+                    tool_call_id,
+                    self.tool_names.get(tool_call_id, ""),
+                    None,
+                    None,
+                    None,
+                    args,
+                    replace_args=True,
+                )
+            )
         return events
 
     def _cancel_orphaned_tool(self, tool_call_id: str) -> str:
@@ -539,7 +597,7 @@ class _ToolStreamState:
             "tool_call_id": tool_call_id,
             "display_name": get_mcp_tool_display_name(tool_name),
             "status": "error",
-            "args": self.args_fallback.get(tool_call_id) or {},
+            "args": self.authoritative_args.get(tool_call_id) or self.args_fallback.get(tool_call_id) or {},
             "content": "本次工具调用未执行：模型重新规划了调用。",
             "message": "未执行",
             "started_at_ms": started_at_ms,
@@ -552,6 +610,8 @@ class _ToolStreamState:
         self.progress_intents.pop(tool_call_id, None)
         self.args_buffer.pop(tool_call_id, None)
         self.args_fallback.pop(tool_call_id, None)
+        self.authoritative_args.pop(tool_call_id, None)
+        self.sent_args_signature.pop(tool_call_id, None)
         self.cancelled_tool_ids.add(tool_call_id)
         return _format_tool_lifecycle_event(SSE_EVENT_TOOL_FAILED, payload)
 
@@ -588,6 +648,7 @@ class _ToolStreamState:
         if tool_call_id in self.emitted_running_tool_ids:
             return []
         self.emitted_running_tool_ids.add(tool_call_id)
+        self.sent_args_signature[tool_call_id] = _args_signature(args or {})
         started_at_ms = int(time.time() * 1000)
         self.tool_started_at.setdefault(tool_call_id, started_at_ms)
         payload = {

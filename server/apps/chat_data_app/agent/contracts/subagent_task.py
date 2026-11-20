@@ -230,7 +230,6 @@ class SubagentTaskPort(Protocol):
         label: str | None,
         parent_tool_call_id: str,
         parent_owner_token: str | None,
-        timeout_seconds: int | None,
         operator_name: str,
         parent_task_id: str | None = None,
         agent_session_id: str | None = None,
