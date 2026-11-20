@@ -1062,7 +1062,7 @@ def test_agent_list_shows_latest_task_without_dumping_all_task_ids():
     assert "最近匹配 task_id" not in output
     assert "task-old" not in output
     assert "可操作=取消、插话" in output
-    assert 'subagent(manage={action:"list", agent_id:"<agent_id>"})' in output
+    assert 'subagent({"manage":{"action":"list","agent_id":"<agent_id>"}})' in output
 
     filtered_output = format_subagent_agent_list(records, status_filtered=True)
     assert "最近匹配 task_id=task-latest" in filtered_output
@@ -1192,7 +1192,7 @@ async def test_subagent_middleware_keeps_system_prompt_static_for_prefix_cache(m
     content = seen["request"].system_message.content
     assert content == f"主提示词\n\n{middleware.system_prompt}"
     assert "## 当前子智能体状态" not in content
-    assert 'subagent(manage={action:"list"})' in content
+    assert 'subagent({"manage":{"action":"list"}})' in content
 
 
 def test_middleware_registers_single_grouped_subagent_tool_with_agent_catalog():

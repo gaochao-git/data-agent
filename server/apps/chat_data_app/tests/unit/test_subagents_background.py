@@ -813,7 +813,7 @@ async def test_sync_task_path_still_returns_tool_message(monkeypatch):
 def test_system_prompt_documents_background_and_subagent_tools():
     middleware = subagents_module.SubagentMiddleware([_spec()])
     assert "background=true" in middleware.system_prompt
-    assert 'subagent(manage={action:"list"})' in middleware.system_prompt
+    assert 'subagent({"manage":{"action":"list"}})' in middleware.system_prompt
     assert "list → agent_id → task_id" in middleware.system_prompt
     # 精确动作语法只写在工具描述里，系统提示不重复一遍。
     description = middleware.tools[0].description

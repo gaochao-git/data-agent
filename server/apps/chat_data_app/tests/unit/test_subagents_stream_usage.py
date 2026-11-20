@@ -443,6 +443,29 @@ def test_iter_chunk_stream_events_samples_speed_before_preview_cap(monkeypatch):
     assert speed_chunks == ["abcdef", "ghij"]
 
 
+def test_emit_messages_chunk_keeps_speed_events_after_preview_cap(monkeypatch):
+    """预览已达上限后，速率滑窗仍按封顶前文本持续产出事件。"""
+    monkeypatch.setattr(subagent_stream_module, "SUBAGENT_MESSAGE_PREVIEW_MAX_CHARS", 5)
+    now_ms = {"value": 1_000}
+    monkeypatch.setattr(subagent_stream_module.time, "time", lambda: now_ms["value"] / 1000)
+
+    state = subagent_stream_module._SubagentStreamState("parent-1")
+    emitted: list[dict] = []
+
+    state.emit_messages_chunk(AIMessageChunk(content="abcdef", id="m1"), emitted.append)
+    now_ms["value"] += 600
+    state.emit_messages_chunk(AIMessageChunk(content="ghij", id="m1"), emitted.append)
+
+    speed_events = [
+        item["event"]
+        for item in emitted
+        if item.get("type") == "subagent_tool"
+        and item.get("event", {}).get("event_type") == "subagent_generation_speed"
+    ]
+    assert len(speed_events) == 2
+    assert speed_events[1]["tokens_per_second"] > 0
+
+
 @pytest.mark.asyncio
 async def test_subagent_tool_keeps_report_without_budget_notice(monkeypatch):
     """上下文超过窗口口径时不再改写报告正文，执行链路只依赖压缩机制。"""

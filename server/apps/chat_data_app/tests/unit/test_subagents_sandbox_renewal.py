@@ -44,8 +44,8 @@ def test_subagent_tool_defaults_to_background_execution():
 def test_subagent_reuse_guidance_prefers_follow_up_over_new_session():
     """复用策略写在系统提示，工具描述只留参数语法，两处不重复。"""
     prompt = _default_system_prompt().replace("{available_agents}", "- explore: 只读")
-    assert "subagent(send=" in prompt
-    assert 'subagent(manage={action:"list"})' in prompt
+    assert 'subagent({"send":' in prompt
+    assert 'subagent({"manage":{"action":"list"}})' in prompt
     assert "审批用 decide" in prompt
     assert "达到上限后 dispatch 会被拒绝" in prompt
 

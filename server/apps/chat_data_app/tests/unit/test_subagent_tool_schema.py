@@ -110,6 +110,17 @@ def test_tool_schema_keeps_runtime_injected_and_hidden_from_model():
     assert "runtime" not in tool.get_input_schema().model_json_schema()["properties"]
 
 
+def test_tool_description_explains_nested_argument_shape():
+    """工具描述必须给出可直接照抄的嵌套 JSON，避免小模型退回旧平铺参数。"""
+    description = str(build_task_tool([_spec()]).description or "")
+
+    assert '{"manage":{"action":"list"}}' in description
+    assert '{"dispatch":{"subagent_type":"explore"' in description
+    assert '{"send":{"task_id":"任务 ID"' in description
+    assert "错误示例（会因顶层未知字段被拒绝）" in description
+    assert '{"action":"list"}' in description
+
+
 @pytest.mark.asyncio
 async def test_tool_invocation_accepts_langgraph_runtime_injection(monkeypatch):
     seen = {}

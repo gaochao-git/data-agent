@@ -212,6 +212,14 @@ _SUBAGENT_TOOL_DESCRIPTION_TEMPLATE = """派发并管理隔离子智能体：只
 - manage：list/check/wait/cancel 子智能体任务。
 - decide：对 waiting_approval 任务执行 allow/deny 审批。
 
+参数必须嵌套在所选操作键下，不能把 action、task_id、description 等字段放到顶层：
+- {"dispatch":{"subagent_type":"explore","description":"完整任务书","background":true}}
+- {"send":{"task_id":"任务 ID","message":"追问内容"}}
+- {"manage":{"action":"list"}}
+- {"manage":{"action":"check","task_id":"任务 ID"}}
+- {"decide":{"task_id":"任务 ID","decision":"allow"}}
+错误示例（会因顶层未知字段被拒绝）：{"action":"list"}、{"task_id":"...","message":"..."}
+
 background 默认 true（异步返回 task_id，终态自动唤醒会话）；false 同步等待。
 会写 workspace 的 general 任务必须在 dispatch/send 中声明 write_scopes；并发规则见系统提示。
 子智能体由用户在管理面板关闭；关闭后不能再 send，如需同类任务请重新 dispatch。"""
@@ -1906,8 +1914,8 @@ def _default_system_prompt() -> str:
         "explore，不要选错类型。\n\n"
         "## 子智能体复用与额度\n\n"
         "每个主对话创建的子智能体总数有运行时上限。派发新任务前先用 "
-        'subagent(manage={action:"list"}) 检查已有子智能体：目标相同、数据范围相同，或交付物只是补充、'
-        "修订时不要新开：同类子智能体仍在执行时，用 subagent(send={task_id, message}) 补充或等待；"
+        'subagent({"manage":{"action":"list"}}) 检查已有子智能体：目标相同、数据范围相同，或交付物只是补充、'
+        '修订时不要新开：同类子智能体仍在执行时，用 subagent({"send":{"task_id":"...","message":"..."}}) 补充或等待；'
         "同步任务阻塞当前轮，不能发送运行中消息，等结果返回后再 send 续写；"
         "任务已结束时 send 会对最近一个终态 task_id 开启下一轮，沿用同一子会话；"
         "当前轮必须拿到追问结论时传 background=false。"
@@ -1919,7 +1927,7 @@ def _default_system_prompt() -> str:
         "并发写由你负责任务分发，不依赖系统写锁。会写 workspace 的 general 任务，"
         "dispatch 或任务结束后 send 开启下一轮时必须用 write_scopes 声明工作区相对文件或目录前缀，例如 "
         "outputs/word、outputs/ppt；explore 只读，不声明写范围。并行派发前先 "
-        'subagent(manage={action:"list"}) 查看活跃任务的写范围：范围不相交才可并行；重叠或任一任务'
+        'subagent({"manage":{"action":"list"}}) 查看活跃任务的写范围：范围不相交才可并行；重叠或任一任务'
         "未声明写范围时按可能冲突处理，改为串行。shell、git、依赖安装、构建、打包等全局"
         "写操作传 workspace:*，同一时间只跑一个。子智能体必须只改声明范围；任务完成后"
         "由你检查产出、review diff 并承担最终合并责任。\n\n"
