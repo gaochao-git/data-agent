@@ -43,6 +43,14 @@ FIG_SIZE = (12.0, 6.0)
 FIG_DPI = 120
 # 日期轴最多 13 个刻度：12 个月加上年边界，保证月粒度的 01~12 不被隔月抽稀
 MAX_DATE_TICKS = 13
+# 曲线样式：Okabe-Ito 色盲友好配色 + 线型双重编码，避免仅靠红绿辨线。
+# 稀疏数据加 marker；线宽略高于默认值，保证图片被视觉模型缩放后仍可辨认。
+_SERIES_COLORS = ("#0072B2", "#E69F00", "#009E73", "#D55E00", "#CC79A7")
+_SERIES_LINESTYLES = ("-", "--", "-.", ":", (0, (7, 2, 1, 2)))
+_SERIES_MARKERS = ("o", "s", "^", "D", "v")
+_SERIES_LINEWIDTH = 2.0
+_SPARSE_SERIES_MAX_POINTS = 30
+_ZERO_BASELINE_GID = "data2image-zero-baseline"
 
 # matplotlib 的 rcParams 与字体缓存是进程级全局状态；渲染在线程池执行，
 # 用模块锁把同一进程内的并发渲染串行化，避免 rc_context 互相覆盖。
@@ -308,8 +316,9 @@ def _render_group_png(group: list[dict[str, Any]], *, title: str, font_family: s
         figure = Figure(figsize=FIG_SIZE, dpi=FIG_DPI)
         FigureCanvasAgg(figure)
         axis = figure.add_subplot(1, 1, 1)
-        for item in group:
-            _plot_series(axis, item)
+        for index, item in enumerate(group):
+            _plot_series(axis, item, index)
+        _draw_zero_baseline(axis, group)
         _decorate_axis(axis, title=title, font=font)
         axis.legend(loc="best", prop=font)
         buffer = io.BytesIO()
@@ -342,6 +351,8 @@ def _x_datetimes(axis: Axes) -> list[datetime]:
     """读取轴上已绘制的 X 值并还原为 datetime；非日期值忽略。"""
     values: list[datetime] = []
     for line in axis.lines:
+        if line.get_gid() == _ZERO_BASELINE_GID:
+            continue
         for raw_x in line.get_xdata():  # type: ignore[union-attr]  # matplotlib get_xdata 桩类型宽松，运行时为数值/日期数组
             if isinstance(raw_x, datetime):
                 values.append(raw_x.replace(tzinfo=None))
@@ -364,11 +375,32 @@ def _is_same_year_month_points(points: list[datetime]) -> bool:
     return all(point.day == 1 and point.hour == 0 and point.minute == 0 and point.second == 0 for point in points)
 
 
-def _plot_series(axis: Axes, item: dict[str, Any]) -> None:
-    """画单条时间序列曲线。"""
+def _plot_series(axis: Axes, item: dict[str, Any], index: int) -> None:
+    """画单条时间序列曲线；颜色、线型与稀疏点标记共同编码身份。"""
     points = item.get("points", [])
     ys = [value for _, value in points]
-    axis.plot(_parsed_dates(points), ys, linewidth=1.6, label=item["name"])  # type: ignore[arg-type]  # matplotlib 桩类型不含 datetime 轴，运行时经 mdates 支持
+    sparse = len(points) <= _SPARSE_SERIES_MAX_POINTS
+    style_index = index % len(_SERIES_COLORS)
+    axis.plot(
+        _parsed_dates(points),  # type: ignore[arg-type]  # matplotlib 桩类型不含 datetime 轴，运行时经 mdates 支持
+        ys,
+        color=_SERIES_COLORS[style_index],
+        linestyle=_SERIES_LINESTYLES[style_index],
+        linewidth=_SERIES_LINEWIDTH,
+        marker=_SERIES_MARKERS[style_index] if sparse else None,
+        markersize=4.5,
+        label=item["name"],
+        zorder=3,
+    )
+
+
+def _draw_zero_baseline(axis: Axes, group: list[dict[str, Any]]) -> None:
+    """数据跨越正负值时画零基线；全正或全负时不额外干扰趋势判断。"""
+    values = [value for item in group for _, value in item.get("points", [])]
+    if not values or not (min(values) < 0 < max(values)):
+        return
+    line = axis.axhline(0, color="#666666", linewidth=0.9, linestyle=(0, (4, 2)), alpha=0.8, zorder=2)
+    line.set_gid(_ZERO_BASELINE_GID)
 
 
 def _parsed_dates(points: list[tuple[str, float]]) -> list[datetime]:
@@ -395,6 +427,8 @@ def _decorate_axis(
     axis.set_title(title_text)
     axis.set_ylabel("数值" if font is not None else "Value")
     axis.grid(True, alpha=0.3)
+    # 时间轴不留横向默认 5% 空白：月底日数据会因此越到下个月，产生错误月份偏移标签。
+    axis.margins(x=0)
     points = _x_datetimes(axis)
     if _is_same_year_month_points(points):
         axis.xaxis.set_major_locator(mdates.MonthLocator())

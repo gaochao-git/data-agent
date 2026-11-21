@@ -285,6 +285,95 @@ def test_time_axis_uses_numeric_months():
     assert not any(label in {"Mar", "May", "Jul", "Sep", "Nov"} for label in labels)
 
 
+def test_daily_axis_at_month_end_does_not_show_next_month_offset():
+    """月底日数据不能因默认留白越到下个月，导致偏移标签显示错误月份。"""
+    from datetime import datetime
+
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib.figure import Figure
+
+    figure = Figure(figsize=chart_render_module.FIG_SIZE, dpi=chart_render_module.FIG_DPI)
+    FigureCanvasAgg(figure)
+    axis = figure.add_subplot(1, 1, 1)
+    axis.plot([datetime(2026, 1, day) for day in range(1, 32)], list(range(31)))
+
+    chart_render_module._decorate_axis(axis, title="月底", font=None)
+    figure.canvas.draw()
+
+    assert axis.xaxis.get_offset_text().get_text() == "2026-01"
+    assert "02" not in [label.get_text() for label in axis.get_xticklabels()[1:]]
+
+
+def test_plot_series_uses_color_linestyle_and_sparse_markers():
+    """五条曲线同时用配色与线型编码，稀疏数据再加不同 marker。"""
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib.figure import Figure
+
+    figure = Figure(figsize=chart_render_module.FIG_SIZE, dpi=chart_render_module.FIG_DPI)
+    FigureCanvasAgg(figure)
+    axis = figure.add_subplot(1, 1, 1)
+    points = [("2026-11-01", 1.0), ("2026-11-02", 2.0), ("2026-11-03", 3.0)]
+    for index in range(5):
+        chart_render_module._plot_series(axis, {"name": f"指标{index}", "points": points}, index)
+
+    colors = [line.get_color().lower() for line in axis.lines]
+    assert colors == [color.lower() for color in chart_render_module._SERIES_COLORS]
+    dash_patterns = [repr(getattr(line, "_unscaled_dash_pattern", None)) for line in axis.lines]
+    assert len(set(dash_patterns)) == 5
+    assert [line.get_marker() for line in axis.lines] == list(chart_render_module._SERIES_MARKERS)
+    assert all(line.get_linewidth() == chart_render_module._SERIES_LINEWIDTH for line in axis.lines)
+
+
+def test_plot_series_omits_markers_for_dense_series():
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib.figure import Figure
+
+    figure = Figure(figsize=chart_render_module.FIG_SIZE, dpi=chart_render_module.FIG_DPI)
+    FigureCanvasAgg(figure)
+    axis = figure.add_subplot(1, 1, 1)
+    points = [(f"2026-01-{day:02d}", float(day)) for day in range(1, 32)]
+    chart_render_module._plot_series(axis, {"name": "密集指标", "points": points}, 0)
+
+    assert axis.lines[0].get_marker() in {None, "", "None"}
+
+
+def test_draw_zero_baseline_only_when_values_cross_zero():
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib.figure import Figure
+
+    figure = Figure(figsize=chart_render_module.FIG_SIZE, dpi=chart_render_module.FIG_DPI)
+    FigureCanvasAgg(figure)
+    axis = figure.add_subplot(1, 1, 1)
+
+    chart_render_module._draw_zero_baseline(axis, [{"name": "全正", "points": [("2026-11-01", 1.0)]}])
+    assert len(axis.lines) == 0
+
+    chart_render_module._draw_zero_baseline(
+        axis,
+        [{"name": "跨零", "points": [("2026-11-01", -1.0), ("2026-11-02", 1.0)]}],
+    )
+    assert len(axis.lines) == 1
+    assert axis.lines[0].get_color().lower() == "#666666"
+
+
+def test_zero_baseline_does_not_pollute_time_axis_detection():
+    """零基线是辅助线，不能被识别成 1970 年的时间数据。"""
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib.figure import Figure
+
+    figure = Figure(figsize=chart_render_module.FIG_SIZE, dpi=chart_render_module.FIG_DPI)
+    FigureCanvasAgg(figure)
+    axis = figure.add_subplot(1, 1, 1)
+    points = [(f"2026-{month:02d}", float(month - 6)) for month in range(1, 13)]
+    chart_render_module._plot_series(axis, {"name": "跨零指标", "points": points}, 0)
+    chart_render_module._draw_zero_baseline(axis, [{"name": "跨零指标", "points": points}])
+
+    dates = chart_render_module._x_datetimes(axis)
+
+    assert len(dates) == 12
+    assert {point.year for point in dates} == {2026}
+
+
 # ---------------------------------------------------------------------------
 # data2image 工具
 # ---------------------------------------------------------------------------
