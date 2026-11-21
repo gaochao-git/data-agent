@@ -329,7 +329,7 @@ async def test_subagent_tool_returns_final_report_as_tool_message(monkeypatch):
     assert captured["state"]["messages"][0].content == "分析入金趋势"
     assert captured["state"]["user_id"] == "u1"
     assert captured["config"]["callbacks"] == []
-    assert captured["stream_mode"] == ["updates", "messages", "custom"]
+    assert captured["stream_mode"] == ["values", "updates", "messages", "custom"]
 
 
 @pytest.mark.asyncio
@@ -1166,7 +1166,7 @@ async def test_subagent_tool_streams_text_and_thinking_deltas(monkeypatch):
 
     class FakeRunnable:
         async def astream(self, _state, _config, *, stream_mode):
-            assert stream_mode == ["updates", "messages", "custom"]
+            assert stream_mode == ["values", "updates", "messages", "custom"]
             yield (
                 "messages",
                 (AIMessageChunk(content="", additional_kwargs={"reasoning_content": "先查数据"}, id="m1"), {}),

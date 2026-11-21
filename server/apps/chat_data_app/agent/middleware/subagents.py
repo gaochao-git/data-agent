@@ -549,6 +549,8 @@ def _build_task_result_artifacts(
             _resolve_subagent_usage_detail(captured),
             captured.get("model"),
             captured.get("generation_timing"),
+            captured.get("supersteps"),
+            captured.get("recursion_limit"),
         )
     )
     return artifacts
@@ -1141,6 +1143,8 @@ def _extract_background_result(command: Any) -> tuple[str, str, str, dict[str, A
         "subagent_token_usage",
         "subagent_token_usage_detail",
         "subagent_compactions",
+        "subagent_supersteps",
+        "subagent_recursion_limit",
     ):
         value = additional.get(key)
         if value:

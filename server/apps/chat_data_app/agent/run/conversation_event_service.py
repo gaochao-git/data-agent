@@ -1022,6 +1022,12 @@ def _serialize_subagent_artifacts(message: ToolMessage) -> dict[str, Any]:
     token_detail = additional_kwargs.get("subagent_token_usage_detail")
     if isinstance(token_detail, dict) and token_detail:
         artifacts["subagent_token_usage_detail"] = token_detail
+    supersteps = additional_kwargs.get("subagent_supersteps")
+    if isinstance(supersteps, int) and supersteps > 0:
+        artifacts["subagent_supersteps"] = supersteps
+    recursion_limit = additional_kwargs.get("subagent_recursion_limit")
+    if isinstance(recursion_limit, int) and recursion_limit > 0:
+        artifacts["subagent_recursion_limit"] = recursion_limit
     return artifacts
 
 

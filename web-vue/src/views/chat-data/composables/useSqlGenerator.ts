@@ -48,6 +48,7 @@ const TOOL_LIFECYCLE_EVENTS = new Set<SSEEventType>([
   'subagent_message',
   'subagent_message_delta',
   'subagent_thinking_delta',
+  'subagent_steps',
   'subagent_context_usage',
   'subagent_context_compression',
 ])
@@ -126,6 +127,8 @@ export function useSqlGenerator() {
       onTokenUsage?: (payload: ChatDataTokenUsage) => void
       /** 后端滑窗口径推送的当前生成速率（generation_speed 事件）；窗口静默不推送，前端保持上次值 */
       onGenerationSpeed?: (tokensPerSecond: number) => void
+      /** 本轮已推进的图步数与递归上限（run_steps 事件，每步一条） */
+      onRunSteps?: (supersteps: number, recursionLimit?: number) => void
       fileSelections?: string[]
       /** 划选引用片段（[{text}]）：模型可见标记块由服务端统一追加，前端只透传。 */
       quotedSnippets?: Array<{ text: string }>
@@ -166,6 +169,7 @@ export function useSqlGenerator() {
       onMessageEnd,
       onTokenUsage,
       onGenerationSpeed,
+      onRunSteps,
       fileSelections,
       quotedSnippets,
       documentAnnotations,
@@ -374,6 +378,23 @@ export function useSqlGenerator() {
               }
             } catch (err) {
               console.error('解析 generation_speed 数据失败:', err, dataStr)
+            }
+            continue
+          }
+
+          if (event === 'run_steps') {
+            try {
+              const data = JSON.parse(dataStr)
+              const supersteps = Number(data?.supersteps)
+              const recursionLimit = Number(data?.recursion_limit)
+              if (Number.isFinite(supersteps) && supersteps > 0) {
+                onRunSteps?.(
+                  Math.floor(supersteps),
+                  Number.isFinite(recursionLimit) && recursionLimit > 0 ? Math.floor(recursionLimit) : undefined,
+                )
+              }
+            } catch (err) {
+              console.error('解析 run_steps 数据失败:', err, dataStr)
             }
             continue
           }

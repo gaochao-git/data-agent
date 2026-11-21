@@ -31,6 +31,7 @@ from apps.chat_data_app.sse_protocol import (
     SSE_EVENT_SUBAGENT_GENERATION_SPEED,
     SSE_EVENT_SUBAGENT_MESSAGE,
     SSE_EVENT_SUBAGENT_MESSAGE_DELTA,
+    SSE_EVENT_SUBAGENT_STEPS,
     SSE_EVENT_SUBAGENT_THINKING_DELTA,
     SSE_EVENT_TOOL_COMPLETED,
     SSE_EVENT_TOOL_FAILED,
@@ -201,6 +202,29 @@ def _emit_subagent_tool_event(writer: Any, event: dict[str, Any]) -> None:
         writer({"type": "subagent_tool", "event": event})
     except Exception:
         logger.warning("转发子智能体工具事件失败", exc_info=True)
+
+
+def _track_subagent_superstep(
+    payload: dict[str, Any],
+    stream_state: _SubagentStreamState,
+    writer: Any,
+    parent_tool_call_id: str | None,
+) -> None:
+    """累计子图推进次数并外发 ``subagent_steps``（首条 values 是输入回显）。"""
+    if "__interrupt__" in payload:
+        return
+    if not stream_state.values_echo_seen:
+        stream_state.values_echo_seen = True
+        return
+    stream_state.supersteps += 1
+    event: dict[str, Any] = {
+        "event_type": SSE_EVENT_SUBAGENT_STEPS,
+        "parent_tool_call_id": parent_tool_call_id,
+        "supersteps": stream_state.supersteps,
+    }
+    if stream_state.superstep_limit is not None:
+        event["recursion_limit"] = stream_state.superstep_limit
+    _emit_subagent_tool_event(writer, event)
 
 
 def _iter_subagent_stream_events(
@@ -422,6 +446,8 @@ def _subagent_process_snapshot(
     token_detail: Any = None,
     model_name: str | None = None,
     timing: dict[str, Any] | None = None,
+    supersteps: Any = None,
+    recursion_limit: Any = None,
 ) -> dict[str, Any]:
     """subagent 结果上附带的子过程快照：上下文用量 + 子图 token 用量 + 压缩事件。"""
     snapshot: dict[str, Any] = {}
@@ -438,6 +464,11 @@ def _subagent_process_snapshot(
         if model_name:
             token_usage["model"] = model_name
         snapshot["subagent_token_usage"] = token_usage
+    # 子图本次派发的图推进次数（每次派发从 0 起），与主图 run_steps 同口径。
+    if isinstance(supersteps, int) and supersteps > 0:
+        snapshot["subagent_supersteps"] = supersteps
+        if isinstance(recursion_limit, int) and recursion_limit > 0:
+            snapshot["subagent_recursion_limit"] = recursion_limit
     return snapshot
 
 
@@ -508,6 +539,11 @@ class _SubagentStreamState:
         self.state_messages: list[Any] = []
         # 子图中断（待审批）载荷：由调用方决定挂起并持久化。
         self.interrupt_payload: dict[str, Any] | None = None
+        # 本次派发的图推进次数（values 流每条一次；首条为输入回显），
+        # 与主图 run_steps 同口径，按子图 invoke 归零。
+        self.supersteps: int = 0
+        self.superstep_limit: int | None = None
+        self.values_echo_seen: bool = False
 
     def prime_state_messages(self, messages: list[Any]) -> None:
         self.state_messages = list(messages)
@@ -810,6 +846,10 @@ def _process_subagent_chunk(
     if not (isinstance(chunk, tuple) and len(chunk) == 2):
         return False
     mode, payload = chunk
+    if mode == "values":
+        if isinstance(payload, dict):
+            _track_subagent_superstep(payload, stream_state, writer, parent_tool_call_id)
+        return False
     if mode == "messages":
         if isinstance(payload, tuple) and len(payload) == 2:
             stream_state.emit_messages_chunk(payload[0], writer)
@@ -953,6 +993,8 @@ async def _run_subagent_with_events(
             captured["compactions"] = list(stream_state.compression_events)
             captured["final_messages"] = list(stream_state.state_messages)
             captured["generation_timing"] = generation_timing
+            captured["supersteps"] = stream_state.supersteps
+            captured["recursion_limit"] = stream_state.superstep_limit
     if stream_state.interrupt_payload is not None:
         raise SubagentSuspended(stream_state.interrupt_payload, list(stream_state.collected))
     return stream_state.collected
@@ -969,7 +1011,9 @@ async def _consume_subagent_stream(
     usage_meta: dict[str, int] | None,
     on_progress: Callable[[dict[str, Any]], None] | None,
 ) -> None:
-    async for chunk in runnable.astream(state, config, stream_mode=["updates", "messages", "custom"]):
+    limit = config.get("recursion_limit") if isinstance(config, dict) else None
+    stream_state.superstep_limit = limit if isinstance(limit, int) and limit > 0 else None
+    async for chunk in runnable.astream(state, config, stream_mode=["values", "updates", "messages", "custom"]):
         _capture_subagent_token_usage(chunk, captured)
         context_usage = None
         if _process_subagent_chunk(chunk, stream_state, writer, parent_tool_call_id):
@@ -1036,10 +1080,15 @@ def _subagent_progress_snapshot(
         # 运行中还没有 result_meta，压缩次数只能随心跳落 progress，任务卡才不会
         # 一直显示 0；终态由 SubagentTaskRecord.compaction_count 以结果快照为准。
         "compaction_count": len(stream_state.compression_events),
+        # 运行中当前派发已推进的图步数；与终态 result_meta 的
+        # subagent_supersteps 同口径（每次派发归零）。
+        "supersteps": stream_state.supersteps,
         # 只有 started 已到、completed 未到的窗口内为 True，任务卡据此显示
         # 「正在压缩上下文」；心跳 5s 采样，百毫秒级跳过摘要不会闪一下。
         "compressing": stream_state.compressing,
     }
+    if stream_state.superstep_limit is not None:
+        snapshot["recursion_limit"] = stream_state.superstep_limit
     if context_usage:
         # 上下文快照随心跳落进任务账本的 progress：列表接口不返回 result_meta，
         # 运行中/取消/失联状态也能从统一进度里展示占比；明细体积大，只留计数。

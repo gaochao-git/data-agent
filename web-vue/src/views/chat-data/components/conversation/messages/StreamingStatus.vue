@@ -3,14 +3,18 @@
  * 流式状态行：九宫格像素动画 + 「工作中」+ 实时速率/用时 + 等待期知识轮播。
  * 只在消息流式中渲染，挂载即活跃。
  */
-import { formatTotalDurationLabel } from '../../../utils'
+import { formatSuperstepsLabel, formatTotalDurationLabel } from '../../../utils'
 import WaitingTip from '../WaitingTip.vue'
 
 withDefaults(defineProps<{
   liveGenerationSpeed?: number | null
+  liveSupersteps?: number | null
+  liveSuperstepLimit?: number | null
   liveElapsedMs?: number | null
 }>(), {
   liveGenerationSpeed: null,
+  liveSupersteps: null,
+  liveSuperstepLimit: null,
   liveElapsedMs: null,
 })
 
@@ -40,6 +44,7 @@ const loadingPixelStyle = (index: number): Record<string, string> => (
     </span>
     <span class="shrink-0 whitespace-nowrap font-medium">工作中</span>
     <span v-if="liveGenerationSpeed" class="shrink-0 whitespace-nowrap text-[11px] text-slate-400">~{{ liveGenerationSpeed }} tok/s</span>
+    <span v-if="liveSupersteps" class="shrink-0 whitespace-nowrap text-[11px] text-slate-400">{{ formatSuperstepsLabel(liveSupersteps, liveSuperstepLimit ?? undefined) }}</span>
     <span v-if="liveElapsedMs" class="shrink-0 whitespace-nowrap text-[11px] text-slate-400">用时 {{ formatTotalDurationLabel(liveElapsedMs) }}</span>
     <!-- 等待期知识轮播：内联在用时之后，不额外占一行；容器过窄时直接不展示，
          避免把状态行（工作中/速率/用时）挤到换行或竖排。 -->

@@ -158,10 +158,12 @@ from .sse_protocol import (
     SSE_EVENT_GENERATION_SPEED,
     SSE_EVENT_INBOX_ADMITTED,
     SSE_EVENT_MESSAGE,
+    SSE_EVENT_RUN_STEPS,
     SSE_EVENT_SUBAGENT_CONTEXT_COMPRESSION,
     SSE_EVENT_SUBAGENT_CONTEXT_USAGE,
     SSE_EVENT_SUBAGENT_MESSAGE,
     SSE_EVENT_SUBAGENT_MESSAGE_DELTA,
+    SSE_EVENT_SUBAGENT_STEPS,
     SSE_EVENT_SUBAGENT_THINKING_DELTA,
     SSE_EVENT_TOKEN_USAGE,
     SSE_EVENT_TOOL,
@@ -470,6 +472,7 @@ _SUBAGENT_TOOL_EVENT_TYPES = {
     SSE_EVENT_SUBAGENT_MESSAGE,
     SSE_EVENT_SUBAGENT_MESSAGE_DELTA,
     SSE_EVENT_SUBAGENT_THINKING_DELTA,
+    SSE_EVENT_SUBAGENT_STEPS,
     SSE_EVENT_SUBAGENT_CONTEXT_USAGE,
     SSE_EVENT_SUBAGENT_CONTEXT_COMPRESSION,
 }
@@ -592,6 +595,9 @@ class _AgentSseStreamAdapter:
         self._inherited_durations: dict[str, int] | None = None
         # 实时生成速率（generation_speed）：主对话与子智能体共用同一滑窗实现。
         self._speed_sampler = GenerationSpeedSampler()
+        # 本轮 run 的图推进次数（values 每条一次推进，首条输入回显；按 invoke 归零）。
+        self.supersteps = 0
+        self._values_echo_seen = False
 
     @property
     def _speed_samples(self) -> Any:
@@ -667,6 +673,9 @@ class _AgentSseStreamAdapter:
                 self.state_values = payload
                 for sse_event in self.tool_stream_state.reconcile_state_messages(payload.get("messages")):
                     yield sse_event
+                steps_event = self._track_superstep(payload)
+                if steps_event:
+                    yield steps_event
             return
         if event_kind == "custom":
             for sse_event in self._handle_custom_payload(payload):
@@ -700,6 +709,24 @@ class _AgentSseStreamAdapter:
         speed_event = self._maybe_emit_generation_speed()
         if speed_event:
             yield speed_event
+
+    def _track_superstep(self, payload: dict[str, Any]) -> str | None:
+        """values 每个超步一条；首条输入回显与 interrupt 帧不计，每次推进下发 run_steps。"""
+        if "__interrupt__" in payload:
+            return None
+        if not self._values_echo_seen:
+            self._values_echo_seen = True
+            return None
+        self.supersteps += 1
+        data: dict[str, int] = {"supersteps": self.supersteps}
+        limit = self._recursion_limit()
+        if limit is not None:
+            data["recursion_limit"] = limit
+        return _format_sse(SSE_EVENT_RUN_STEPS, data)
+
+    def _recursion_limit(self) -> int | None:
+        raw = self.config.get("recursion_limit") if isinstance(self.config, dict) else None
+        return raw if isinstance(raw, int) and raw > 0 else None
 
     def _stream_state_has_pending_tool_call(self) -> bool:
         """最后一条是带 tool_calls 的 AI 消息时，可能正在 interrupt，必须回读 checkpoint。"""
@@ -736,6 +763,11 @@ class _AgentSseStreamAdapter:
         if durations:
             stats = dict(stats or {})
             stats.update(durations)
+        # 本轮图推进次数与额度：与 token 统计相互独立，usage 缺失时同样随消息持久化。
+        if self.supersteps > 0:
+            stats = dict(stats or {}, supersteps=self.supersteps)
+            if (limit := self._recursion_limit()) is not None:
+                stats["recursion_limit"] = limit
         if persist_latest_ai_timestamp:
             self.state = await _persist_latest_ai_message_timestamp(
                 self.agent,

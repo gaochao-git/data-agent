@@ -95,6 +95,17 @@ const elapsedForTask = (task: SubagentTaskRecord): number | null => {
   const ended = endedAtMs(task)
   return started !== null && ended !== null ? Math.max(ended - started, 0) : null
 }
+const superstepsForTask = (task: SubagentTaskRecord): number => (
+  task.result_meta?.subagent_supersteps ?? task.progress?.supersteps ?? 0
+)
+const recursionLimitForTask = (task: SubagentTaskRecord): number => (
+  task.result_meta?.subagent_recursion_limit
+  ?? task.progress?.recursion_limit
+  ?? (isCurrentTask(task) ? stream.recursionLimit.value || 0 : 0)
+)
+const liveSuperstepsForTask = (task: SubagentTaskRecord): number | null => (
+  isCurrentTask(task) ? stream.liveSupersteps.value : null
+)
 const hasConversationForTask = (task: SubagentTaskRecord): boolean => Boolean(
   task.description
   || task.report
@@ -168,6 +179,9 @@ onMounted(() => emit('usageUpdated', props.task.task_id, usageForPanel.value))
           :timing-running="isRunning && turn.task_id === task.task_id"
           :token-usage="tokenUsageForTask(turn)"
           :live-speed="isCurrentTask(turn) ? stream.liveSpeed.value : null"
+          :supersteps="superstepsForTask(turn)"
+          :recursion-limit="recursionLimitForTask(turn)"
+          :live-supersteps="liveSuperstepsForTask(turn)"
           show-without-trail
           @select-tool="emit('selectTool', $event)"
         />

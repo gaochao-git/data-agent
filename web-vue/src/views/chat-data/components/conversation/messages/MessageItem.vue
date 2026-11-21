@@ -23,6 +23,8 @@ defineProps({
   isCurrentRun: { type: Boolean, default: false },
   showFooter: { type: Boolean, default: false },
   liveGenerationSpeed: { type: Number as PropType<number | null>, default: null },
+  liveSupersteps: { type: Number as PropType<number | null>, default: null },
+  liveSuperstepLimit: { type: Number as PropType<number | null>, default: null },
   liveElapsedMs: { type: Number as PropType<number | null>, default: null },
   resolveToolCall: {
     type: Function as PropType<(message: Message, toolCallId: string) => ToolCallInfo | null>,
@@ -73,6 +75,8 @@ const emit = defineEmits<{
         :is-current-run="isCurrentRun"
         :show-footer="showFooter"
         :live-generation-speed="liveGenerationSpeed"
+        :live-supersteps="liveSupersteps"
+        :live-superstep-limit="liveSuperstepLimit"
         :live-elapsed-ms="liveElapsedMs"
         :resolve-tool-call="resolveToolCall"
         :should-inline-render-result="shouldInlineRenderResult"

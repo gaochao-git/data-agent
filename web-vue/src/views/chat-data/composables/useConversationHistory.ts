@@ -142,6 +142,8 @@ interface HistoryMessagePayload {
   subagent_token_usage?: unknown
   subagent_compactions?: unknown
   subagent_token_usage_detail?: unknown
+  subagent_supersteps?: unknown
+  subagent_recursion_limit?: unknown
   generation_stats?: unknown
 }
 
@@ -338,6 +340,12 @@ const normalizeSubagentTokenUsage = (value: unknown): SubagentTokenUsage | undef
   return Object.values(usage).some(item => item !== undefined) ? usage : undefined
 }
 
+/** 子智能体本次派发步数 / 递归上限：历史 payload 只接受正整数。 */
+const normalizeSubagentStepCount = (value: unknown): number | undefined => {
+  const parsed = Math.floor(Number(value))
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined
+}
+
 const withHistoryToolResult = (
   toolCall: ToolCallInfo,
   result: string,
@@ -347,6 +355,8 @@ const withHistoryToolResult = (
   subagentTokenUsage?: SubagentTokenUsage,
   subagentCompactions?: SubagentCompaction[],
   subagentTokenUsageDetail?: ChatDataTokenUsage,
+  subagentSupersteps?: number,
+  subagentRecursionLimit?: number,
 ): ToolCallInfo => {
   let renderId: string | undefined
   let renderType: ToolCallInfo['renderType']
@@ -377,6 +387,8 @@ const withHistoryToolResult = (
     subagentTokenUsage: subagentTokenUsage ?? toolCall.subagentTokenUsage,
     subagentCompactions: subagentCompactions ?? toolCall.subagentCompactions,
     subagentTokenUsageDetail: subagentTokenUsageDetail ?? toolCall.subagentTokenUsageDetail,
+    subagentSupersteps: subagentSupersteps ?? toolCall.subagentSupersteps,
+    subagentRecursionLimit: subagentRecursionLimit ?? toolCall.subagentRecursionLimit,
     started_at_ms: timing?.started_at_ms ?? toolCall.started_at_ms ?? null,
     ended_at_ms: timing?.ended_at_ms ?? toolCall.ended_at_ms ?? null,
   }
@@ -513,9 +525,11 @@ export const buildHistoryMessagesFromEvents = (historyEvents: unknown): Message[
     const subagentTokenUsage = normalizeSubagentTokenUsage(messagePayload.subagent_token_usage)
     const subagentCompactions = normalizeSubagentCompactions(messagePayload.subagent_compactions)
     const subagentTokenUsageDetail = normalizeSubagentTokenUsageDetail(messagePayload.subagent_token_usage_detail)
+    const subagentSupersteps = normalizeSubagentStepCount(messagePayload.subagent_supersteps)
+    const subagentRecursionLimit = normalizeSubagentStepCount(messagePayload.subagent_recursion_limit)
     target.toolCalls = target.toolCalls.map(toolCall => (
       toolCall.tool_call_id === toolCallId
-        ? withHistoryToolResult(toolCall, result, subagentTrail, timing, subagentContextUsage, subagentTokenUsage, subagentCompactions, subagentTokenUsageDetail)
+        ? withHistoryToolResult(toolCall, result, subagentTrail, timing, subagentContextUsage, subagentTokenUsage, subagentCompactions, subagentTokenUsageDetail, subagentSupersteps, subagentRecursionLimit)
         : toolCall
     ))
   }
@@ -650,9 +664,11 @@ export const buildHistoryMessages = (
     const subagentTokenUsage = normalizeSubagentTokenUsage(rawMessage.subagent_token_usage)
     const subagentCompactions = normalizeSubagentCompactions(rawMessage.subagent_compactions)
     const subagentTokenUsageDetail = normalizeSubagentTokenUsageDetail(rawMessage.subagent_token_usage_detail)
+    const subagentSupersteps = normalizeSubagentStepCount(rawMessage.subagent_supersteps)
+    const subagentRecursionLimit = normalizeSubagentStepCount(rawMessage.subagent_recursion_limit)
     target.toolCalls = target.toolCalls.map(toolCall => (
       toolCall.tool_call_id === toolCallId
-        ? withHistoryToolResult(toolCall, result, subagentTrail, timing, subagentContextUsage, subagentTokenUsage, subagentCompactions, subagentTokenUsageDetail)
+        ? withHistoryToolResult(toolCall, result, subagentTrail, timing, subagentContextUsage, subagentTokenUsage, subagentCompactions, subagentTokenUsageDetail, subagentSupersteps, subagentRecursionLimit)
         : toolCall
     ))
   }

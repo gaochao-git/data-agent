@@ -42,6 +42,9 @@ const { elapsedMs, isRunning } = useToolTiming(
     :timing-running="isRunning"
     :token-usage="toolCall.subagentTokenUsage || null"
     :live-speed="toolCall.subagentLiveSpeed || null"
+    :supersteps="toolCall.subagentSupersteps || 0"
+    :recursion-limit="toolCall.subagentRecursionLimit || 0"
+    :live-supersteps="toolCall.subagentLiveSteps || null"
     @select-tool="emit('selectTool', $event)"
   />
 </template>

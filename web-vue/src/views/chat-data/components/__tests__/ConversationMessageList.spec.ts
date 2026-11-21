@@ -49,6 +49,26 @@ const getWorkProcessButton = (wrapper: ReturnType<typeof mountList>) =>
   wrapper.findAll('button').find(button => button.text().includes('工作过程'))!
 
 describe('ConversationMessageList', () => {
+  it('renders persisted supersteps in footer and live supersteps in streaming row', () => {
+    const finished: Message = {
+      id: 'assistant-steps',
+      role: 'assistant',
+      content: '完成',
+      segments: [{ type: 'text', content: '完成' }],
+      timestamp: new Date('2026-11-21T12:00:00'),
+      generationStats: { totalDurationMs: 42_000, supersteps: 23, recursionLimit: 1000 },
+    }
+    const finishedWrapper = mountList([finished])
+    expect(finishedWrapper.find('[data-message-steps]').text()).toContain('23 / 1000 步')
+
+    const liveWrapper = mountList([streamingAssistantMessage], {
+      runActive: true,
+      liveSupersteps: 5,
+      liveSuperstepLimit: 1000,
+    })
+    expect(liveWrapper.text()).toContain('5 / 1000 步')
+  })
+
   it('keeps streaming thinking segments collapsed by default with a single-line tail preview', () => {
     const wrapper = mountList([streamingAssistantMessage])
 

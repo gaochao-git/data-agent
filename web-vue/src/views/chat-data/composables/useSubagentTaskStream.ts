@@ -31,6 +31,8 @@ export const useSubagentTaskStream = (
   const tokenUsageDetail = ref<ChatDataTokenUsage | undefined>()
   const tokenUsage = ref<SubagentTokenUsage | undefined>()
   const liveSpeed = ref<number | null>(null)
+  const liveSupersteps = ref<number | null>(null)
+  const recursionLimit = ref<number | null>(null)
   const connected = ref(false)
 
   let currentTaskId: string | null = null
@@ -58,6 +60,8 @@ export const useSubagentTaskStream = (
     tokenUsageDetail.value = undefined
     tokenUsage.value = undefined
     liveSpeed.value = null
+    liveSupersteps.value = null
+    recursionLimit.value = null
     lastEventId = '0-0'
     snapshotLoaded = false
     closedMessageIds.clear()
@@ -89,6 +93,13 @@ export const useSubagentTaskStream = (
     if (type === 'subagent_generation_speed') {
       const speed = Number(event.tokens_per_second)
       if (Number.isFinite(speed) && speed > 0) liveSpeed.value = speed
+      return
+    }
+    if (type === 'subagent_steps') {
+      const steps = Number(event.supersteps)
+      if (Number.isFinite(steps) && steps > 0) liveSupersteps.value = Math.floor(steps)
+      const limit = Number(event.recursion_limit)
+      if (Number.isFinite(limit) && limit > 0) recursionLimit.value = Math.floor(limit)
       return
     }
     if (type === 'subagent_context_compression') {
@@ -202,6 +213,8 @@ export const useSubagentTaskStream = (
     tokenUsageDetail,
     tokenUsage,
     liveSpeed,
+    liveSupersteps,
+    recursionLimit,
     connected,
   }
 }

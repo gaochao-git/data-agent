@@ -10,7 +10,7 @@ import { computed } from 'vue'
 import { ElTooltip } from 'element-plus'
 import AssistantMessageFooter from '../../AssistantMessageFooter.vue'
 import type { MessageGenerationStats } from '../../../types'
-import { formatGenerationSpeed, formatTotalDurationLabel, generationStatsRows } from '../../../utils'
+import { formatGenerationSpeed, formatSuperstepsLabel, formatTotalDurationLabel, generationStatsRows } from '../../../utils'
 import { copyTextToClipboard } from '../../../utils/clipboard'
 
 interface UsageDetailRow {
@@ -32,12 +32,19 @@ const props = defineProps({
   usageRows: { type: Array as PropType<UsageDetailRow[]>, default: () => [] },
   /** 子智能体模型调用速率；有值时底栏与主对话一样显示 tok/s */
   usageSpeed: { type: Number, default: 0 },
+  /** 本轮/本次派发已推进的图步数：主对话优先取 stats，子智能体显式传入 */
+  supersteps: { type: Number, default: 0 },
+  recursionLimit: { type: Number, default: 0 },
   showAiNotice: { type: Boolean, default: true },
 })
 
 const displayDurationMs = computed(() => props.stats?.totalDurationMs ?? props.durationMs)
 const usageSpeedText = computed(() => (
   props.usageSpeed > 0 ? formatGenerationSpeed({ tokensPerSecond: props.usageSpeed }) : ''
+))
+const superstepsText = computed(() => formatSuperstepsLabel(
+  props.stats?.supersteps ?? props.supersteps,
+  props.stats?.recursionLimit ?? props.recursionLimit,
 ))
 
 const handleCopy = async () => {
@@ -135,6 +142,14 @@ const handleCopy = async () => {
     >
       <i class="fa-regular fa-clock text-[10px]"></i>
       用时 {{ formatTotalDurationLabel(displayDurationMs) }}
+    </span>
+    <span
+      v-if="superstepsText"
+      class="inline-flex items-center gap-1 whitespace-nowrap text-[11px] text-gray-400"
+      data-message-steps
+    >
+      <i class="fa-solid fa-diagram-project text-[10px]"></i>
+      {{ superstepsText }}
     </span>
   </AssistantMessageFooter>
 </template>

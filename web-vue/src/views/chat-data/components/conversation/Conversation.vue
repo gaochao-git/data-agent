@@ -1697,11 +1697,15 @@ const attachGenerationStats = (messageId: string, rawStats: unknown) => {
 // 执行耗时是前端本地 ticker：从本轮发起起算的墙钟实时递增，message_end 收口后由
 // generation_stats.totalDurationMs（服务端总墙钟，随消息持久化）接管，二者是两个来源。
 const liveGenerationSpeed = ref<number | null>(null)
+const liveSupersteps = ref<number | null>(null)
+const liveSuperstepLimit = ref<number | null>(null)
 const liveElapsedMs = ref<number | null>(null)
 let elapsedTickerId: ReturnType<typeof setInterval> | null = null
 
 const stopLiveGenerationSpeed = () => {
   liveGenerationSpeed.value = null
+  liveSupersteps.value = null
+  liveSuperstepLimit.value = null
   if (elapsedTickerId !== null) {
     clearInterval(elapsedTickerId)
     elapsedTickerId = null
@@ -1891,6 +1895,19 @@ const upsertSubagentTrailItem = (event: ToolLifecycleEventData) => {
     const speed = Number(event.tokens_per_second)
     if (Number.isFinite(speed) && speed > 0) {
       applySubagentToolPatch(parentId, tool => ({ ...tool, subagentLiveSpeed: speed }))
+    }
+    return
+  }
+
+  if (event.type === 'subagent_steps') {
+    const steps = Number(event.supersteps)
+    if (Number.isFinite(steps) && steps > 0) {
+      const limit = Number(event.recursion_limit)
+      applySubagentToolPatch(parentId, tool => ({
+        ...tool,
+        subagentLiveSteps: Math.floor(steps),
+        ...(Number.isFinite(limit) && limit > 0 ? { subagentRecursionLimit: Math.floor(limit) } : {}),
+      }))
     }
     return
   }
@@ -2229,6 +2246,10 @@ const submitAnalysisQuery = async (
         onGenerationSpeed: (tokensPerSecond) => {
           liveGenerationSpeed.value = tokensPerSecond
         },
+        onRunSteps: (supersteps, recursionLimit) => {
+          liveSupersteps.value = supersteps
+          if (recursionLimit) liveSuperstepLimit.value = recursionLimit
+        },
         fileSelections: mentionFileSelections,
         quotedSnippets: quotedSnippetsSnapshot,
         documentAnnotations: toDocumentAnnotationRequests(documentAnnotationsSnapshot),
@@ -2271,6 +2292,8 @@ const submitAnalysisQuery = async (
             status: isFailed ? 'error' : isCompleted ? 'completed' : activeStatus,
             subagentTrail: existing?.subagentTrail,
             subagentTokenUsage: event.subagent_token_usage || existing?.subagentTokenUsage, subagentContextUsage: existing?.subagentContextUsage, subagentCompactions: existing?.subagentCompactions, subagentTokenUsageDetail: existing?.subagentTokenUsageDetail,
+            subagentSupersteps: event.subagent_supersteps ?? existing?.subagentSupersteps,
+            subagentRecursionLimit: event.subagent_recursion_limit ?? existing?.subagentRecursionLimit,
             started_at_ms: event.started_at_ms ?? existing?.started_at_ms ?? null,
             ended_at_ms: event.ended_at_ms ?? existing?.ended_at_ms ?? null,
           }
@@ -2835,6 +2858,8 @@ const handleKeyDown = (event: KeyboardEvent) => {
           :should-inline-render-result="shouldInlineRenderToolCall"
           :run-active="replayGroup ? replayPlayer.status.value !== 'finished' : (isGenerating || hasActiveRun)"
           :live-generation-speed="liveGenerationSpeed"
+          :live-supersteps="liveSupersteps"
+          :live-superstep-limit="liveSuperstepLimit"
           :live-elapsed-ms="liveElapsedMs"
           @select-tool="selectToolCall"
           @open-attachment="handleOpenAttachment"

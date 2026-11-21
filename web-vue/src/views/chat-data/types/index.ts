@@ -459,6 +459,10 @@ export interface MessageGenerationStats {
   totalDurationMs?: number
   /** llm 首 token 耗时（毫秒，覆盖首 token 的模型调用起点 → 首个可见 payload；缺失时省略） */
   modelFirstTokenMs?: number
+  /** 本轮图推进次数（每次 run 从 0 起；与 recursion_limit 同一口径） */
+  supersteps?: number
+  /** 本轮递归上限（运行期配置值；缺失时只显示步数） */
+  recursionLimit?: number
 }
 
 // 用户消息附件（文件卡片展示用）
@@ -545,6 +549,12 @@ export interface ToolCallInfo {
   subagentTokenUsage?: SubagentTokenUsage
   /** 子智能体运行中的实时滑窗速率（与主对话同算法） */
   subagentLiveSpeed?: number
+  /** 子智能体运行中已推进的图步数（每次派发从 0 起） */
+  subagentLiveSteps?: number
+  /** 子智能体本次派发的图推进次数（完成后随结果持久化） */
+  subagentSupersteps?: number
+  /** 子智能体本次派发的递归上限（与主图同一配置） */
+  subagentRecursionLimit?: number
   // 子图上下文压缩事件（静默压缩的可视化记录）
   subagentCompactions?: SubagentCompaction[]
   // 子智能体任务错误（后台任务账本的 task.error；主对话助手气泡同款错误行）
@@ -646,6 +656,9 @@ export interface SubagentTaskProgress {
   compressing?: boolean
   /** 运行期已完成压缩次数；终态以记录上的 compaction_count 为准。 */
   compaction_count?: number
+  /** 当前派发已推进的图步数（每次派发归零）；终态以 result_meta 同名字段为准。 */
+  supersteps?: number
+  recursion_limit?: number
   /** 运行期上下文快照；列表接口不返回 result_meta，卡片用它展示实时占比。 */
   context_usage?: SubagentContextUsage
   updated_at?: string
@@ -660,6 +673,8 @@ export interface SubagentTaskResultMeta {
   subagent_token_usage?: SubagentTokenUsage
   subagent_token_usage_detail?: ChatDataTokenUsage
   subagent_compactions?: SubagentCompaction[]
+  subagent_supersteps?: number
+  subagent_recursion_limit?: number
   [key: string]: unknown
 }
 
@@ -785,7 +800,7 @@ export interface ChatDataOptions {
 export type SidebarTab = 'dashboards' | 'config' | 'history'
 
 // SSE 事件类型
-export type SSEEventType = 'message' | 'message_end' | 'heartbeat' | 'token_usage' | 'generation_speed' | 'context_compression' | 'conversation_title_updated' | 'thinking' | 'tool' | 'tool_started' | 'tool_progress' | 'tool_completed' | 'tool_failed' | 'subagent_message' | 'subagent_message_delta' | 'subagent_thinking_delta' | 'subagent_generation_speed' | 'subagent_context_usage' | 'subagent_context_compression' | 'subagent_task_updated' | 'inbox_admitted' | 'question_requested' | 'error' | 'done' | 'dashboard_spec'
+export type SSEEventType = 'message' | 'message_end' | 'heartbeat' | 'token_usage' | 'generation_speed' | 'run_steps' | 'context_compression' | 'conversation_title_updated' | 'thinking' | 'tool' | 'tool_started' | 'tool_progress' | 'tool_completed' | 'tool_failed' | 'subagent_message' | 'subagent_message_delta' | 'subagent_thinking_delta' | 'subagent_generation_speed' | 'subagent_steps' | 'subagent_context_usage' | 'subagent_context_compression' | 'subagent_task_updated' | 'inbox_admitted' | 'question_requested' | 'error' | 'done' | 'dashboard_spec'
 
 export interface UserQuestionOption {
   label: string
@@ -848,7 +863,7 @@ export interface ToolEventData {
 }
 
 export interface ToolLifecycleEventData extends ToolEventData {
-  type: 'tool_started' | 'tool_progress' | 'tool_completed' | 'tool_failed' | 'subagent_message' | 'subagent_message_delta' | 'subagent_thinking_delta' | 'subagent_generation_speed' | 'subagent_context_usage' | 'subagent_context_compression'
+  type: 'tool_started' | 'tool_progress' | 'tool_completed' | 'tool_failed' | 'subagent_message' | 'subagent_message_delta' | 'subagent_thinking_delta' | 'subagent_generation_speed' | 'subagent_steps' | 'subagent_context_usage' | 'subagent_context_compression'
   progress?: number
   accumulated_args?: Record<string, unknown>
   content?: string
@@ -882,8 +897,14 @@ export interface ToolLifecycleEventData extends ToolEventData {
   threshold_tokens?: number
   /** subagent 完成事件：子图 token 用量（billing 口径） */
   subagent_token_usage?: SubagentTokenUsage
+  /** subagent 完成事件：本次派发的图推进次数与递归上限 */
+  subagent_supersteps?: number
+  subagent_recursion_limit?: number
   /** subagent_generation_speed：与主对话同口径的实时滑窗速率 */
   tokens_per_second?: number
+  /** subagent_steps：当前派发已推进的图步数（每次派发从 0 起） */
+  supersteps?: number
+  recursion_limit?: number
   window_ms?: number
   /** subagent_context_usage：子图上下文计量明细（与主对话 token_usage 同结构） */
   token_usage_detail?: ChatDataTokenUsage

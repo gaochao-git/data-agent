@@ -463,6 +463,13 @@ class _ToolStreamState:
         subagent_token_usage = tool_additional_kwargs.get("subagent_token_usage")
         if isinstance(subagent_token_usage, dict) and subagent_token_usage:
             msg_data["subagent_token_usage"] = subagent_token_usage
+        # subagent 本次派发的图推进次数：随完成事件下发，历史回放走 tool_result artifacts。
+        subagent_supersteps = tool_additional_kwargs.get("subagent_supersteps")
+        if isinstance(subagent_supersteps, int) and subagent_supersteps > 0:
+            msg_data["subagent_supersteps"] = subagent_supersteps
+        subagent_recursion_limit = tool_additional_kwargs.get("subagent_recursion_limit")
+        if isinstance(subagent_recursion_limit, int) and subagent_recursion_limit > 0:
+            msg_data["subagent_recursion_limit"] = subagent_recursion_limit
         if tool_call_id:
             self.finished_tool_ids.add(tool_call_id)
             self.cancelled_tool_ids.discard(tool_call_id)

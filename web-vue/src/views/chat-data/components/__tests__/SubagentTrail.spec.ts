@@ -16,6 +16,8 @@ const MessageItemStub = {
     'executionTargets',
     'onSave',
     'liveGenerationSpeed',
+    'liveSupersteps',
+    'liveSuperstepLimit',
     'liveElapsedMs',
     'resolveToolCall',
   ],
@@ -23,7 +25,10 @@ const MessageItemStub = {
   template: '<div class="message-item-stub" :data-role="message.role" :data-id="message.id"></div>',
 }
 
-const stubs = { MessageItem: MessageItemStub }
+const stubs = {
+  MessageItem: MessageItemStub,
+  ElTooltip: { template: '<div><slot /><slot name="content" /></div>' },
+}
 
 const taskCall = (trail: SubagentTrailItem[], status: ToolCallInfo['status'] = 'running'): ToolCallInfo => ({
   tool_call_id: 'call-task',
@@ -39,6 +44,27 @@ const mountTrail = (toolCall: ToolCallInfo, extraProps: Record<string, unknown> 
 })
 
 describe('SubagentTrail（右侧聊天式完整过程）', () => {
+  it('运行中透出实时步数，完成后 footer 展示本次派发步数', () => {
+    const trail: SubagentTrailItem[] = [
+      { kind: 'message', id: 'msg-1', content: '先看目录', thinking: '思考一' },
+      { kind: 'message', id: 'msg-2', content: '结论：已盘点' },
+    ]
+
+    const running = mountTrail(taskCall(trail), {
+      timingRunning: true,
+      liveSupersteps: 5,
+      recursionLimit: 1000,
+    })
+    expect(running.findComponent(MessageItemStub).props('liveSupersteps')).toBe(5)
+    expect(running.findComponent(MessageItemStub).props('liveSuperstepLimit')).toBe(1000)
+
+    const completed = mountTrail(taskCall(trail, 'completed'), {
+      supersteps: 23,
+      recursionLimit: 1000,
+    })
+    expect(completed.find('[data-message-steps]').text()).toContain('23 / 1000 步')
+  })
+
   it('过程投影成主对话消息，直接复用 MessageItem：任务书 user + 子智能体 assistant', () => {
     const wrapper = mountTrail(taskCall([
       { kind: 'message', id: 'msg-1', content: '先看目录', thinking: '思考一' },

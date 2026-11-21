@@ -35,6 +35,11 @@ const props = defineProps({
   tokenUsage: { type: Object as PropType<SubagentTokenUsage | null>, default: null },
   /** 运行中实时滑窗速率（与主对话同算法）；完成后改用 tokenUsage.tokens_per_second */
   liveSpeed: { type: Number as PropType<number | null>, default: null },
+  /** 本次派发已推进的图步数（完成后随结果持久化；每次派发从 0 起） */
+  supersteps: { type: Number, default: 0 },
+  recursionLimit: { type: Number, default: 0 },
+  /** 运行中实时步数（subagent_steps 事件） */
+  liveSupersteps: { type: Number as PropType<number | null>, default: null },
   /** 后台任务详情没有 trail 时也要展示任务书/报告；前台工具详情保持原口径 */
   showWithoutTrail: { type: Boolean, default: false },
 })
@@ -75,6 +80,8 @@ const showFooterFor = (message: { id: string; role: string; isStreaming?: boolea
         :active-tool-call-id="activeToolCallId"
         :should-inline-render-result="shouldInlineRenderQueryResult"
         :live-generation-speed="timingRunning ? liveSpeed : null"
+        :live-supersteps="timingRunning ? liveSupersteps : null"
+        :live-superstep-limit="recursionLimit || null"
         :live-elapsed-ms="timingRunning ? elapsedMs : null"
         @select-tool="emit('selectTool', $event)"
       />
@@ -87,6 +94,8 @@ const showFooterFor = (message: { id: string; role: string; isStreaming?: boolea
         :usage-model="tokenUsage?.model || ''"
         :usage-rows="tokenUsageRows"
         :usage-speed="tokenUsage?.tokens_per_second || 0"
+        :supersteps="supersteps"
+        :recursion-limit="recursionLimit"
         :show-ai-notice="false"
       />
     </div>
