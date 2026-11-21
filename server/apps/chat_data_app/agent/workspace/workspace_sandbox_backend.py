@@ -27,6 +27,7 @@ from apps.chat_data_app.agent.workspace.workspace_ops import (
     sandbox_render_office_html,
     sandbox_replace_text_file,
     sandbox_search_files,
+    sandbox_write_binary_file,
     sandbox_write_internal_text_files,
     sandbox_write_text_file,
     sandbox_write_tool_result,
@@ -211,6 +212,17 @@ class SandboxWorkspaceBackend:
     ) -> dict[str, Any]:
         return await sandbox_write_text_file(
             session_ref=await self._session_ref(runtime), file_path=file_path, content=content, mode=mode
+        )
+
+    async def write_binary_file(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        file_path: str,
+        data: bytes,
+    ) -> dict[str, Any]:
+        return await sandbox_write_binary_file(
+            session_ref=await self._session_ref(runtime), file_path=file_path, data=data
         )
 
     async def write_internal_text_files(

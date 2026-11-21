@@ -30,6 +30,7 @@ from .ask_user_question import ask_user_question_tool
 from .bash_run import create_bash_run_tool
 from .calculator import calculator_tool
 from .current_time import get_current_time_tool
+from .data2image import create_data2image_tool
 from .data_analyzing import create_data_analyzing_tool
 from .filesystem import create_filesystem_tools
 from .officecli_run import create_officecli_run_tool
@@ -100,6 +101,11 @@ TOOL_BUILD_GROUPS: tuple[ToolBuildGroup, ...] = (
         provides=("read_image",),
         build=lambda ctx: create_read_image_tool(ctx.workspace_runtime),
         note="读取工作区图片供多模态模型查看",
+    ),
+    ToolBuildGroup(
+        provides=("data2image",),
+        build=lambda ctx: create_data2image_tool(ctx.workspace_runtime),
+        note="结果文件转折线图 PNG 供视觉分析降上下文",
     ),
     ToolBuildGroup(
         provides=("present_artifacts",),
@@ -190,6 +196,7 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
     "dir_delete": ToolDefinition(approval="allow", risk="high", display_name="删除目录"),
     "parse_document": ToolDefinition(approval="allow", risk="low", display_name="解析文档"),
     "read_image": ToolDefinition(approval="allow", risk="low", display_name="读取图片"),
+    "data2image": ToolDefinition(approval="allow", risk="low", display_name="数据转折线图"),
     "present_artifacts": ToolDefinition(
         approval="allow",
         risk="low",

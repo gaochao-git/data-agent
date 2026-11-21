@@ -70,6 +70,7 @@ def test_assemble_tools_skips_disabled_bash(tmp_path):
         "dir_delete",
         "parse_document",
         "read_image",
+        "data2image",
         "present_artifacts",
         "get_current_time",
         "load_skill",

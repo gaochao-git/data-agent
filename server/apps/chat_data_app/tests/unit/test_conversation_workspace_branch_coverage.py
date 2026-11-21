@@ -84,6 +84,10 @@ class StubBackend:
         self.calls.append(("write_text_file", kwargs))
         return {"written": True}
 
+    async def write_binary_file(self, runtime, **kwargs):
+        self.calls.append(("write_binary_file", kwargs))
+        return {"written": True}
+
     async def replace_text_file(self, runtime, **kwargs):
         self.calls.append(("replace_text_file", kwargs))
         return {"replaced": True}

@@ -148,6 +148,9 @@ async def test_runtime_rejects_execution_for_file_only_backend(tmp_path):
         async def write_text_file(self, *_args, **_kwargs):
             return {}
 
+        async def write_binary_file(self, *_args, **_kwargs):
+            return {}
+
         async def replace_text_file(self, *_args, **_kwargs):
             return {}
 
@@ -1391,6 +1394,9 @@ async def test_file_read_delegates_to_runtime_backend():
 
         async def write_text_file(self, *_args, **_kwargs):
             raise AssertionError("unexpected write")
+
+        async def write_binary_file(self, *_args, **_kwargs):
+            raise AssertionError("unexpected binary write")
 
         async def write_internal_text_files(self, *_args, **_kwargs):
             raise AssertionError("unexpected internal semantic model write")

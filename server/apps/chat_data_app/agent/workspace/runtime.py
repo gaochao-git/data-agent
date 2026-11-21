@@ -86,6 +86,14 @@ class WorkspaceBackend(Protocol):
         mode: str,
     ) -> dict[str, Any]: ...
 
+    async def write_binary_file(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        file_path: str,
+        data: bytes,
+    ) -> dict[str, Any]: ...
+
     async def replace_text_file(
         self,
         runtime: ConversationWorkspaceRuntime,
@@ -308,6 +316,10 @@ class ConversationWorkspaceRuntime:
 
     async def write_text_file(self, *, file_path: str, content: str, mode: str) -> dict[str, Any]:
         return await self._resolved_backend.write_text_file(self, file_path=file_path, content=content, mode=mode)
+
+    async def write_binary_file(self, *, file_path: str, data: bytes) -> dict[str, Any]:
+        """Persist binary content (e.g. generated chart PNG) through the active backend."""
+        return await self._resolved_backend.write_binary_file(self, file_path=file_path, data=data)
 
     async def write_internal_text_files(self, entries: list[tuple[str, str]]) -> list[dict[str, Any]]:
         """Write system-owned semantic files to local cache, then sync sandbox copies."""

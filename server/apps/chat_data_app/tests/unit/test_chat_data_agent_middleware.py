@@ -1130,6 +1130,7 @@ def test_tool_error_middleware_and_chat_data_agent_create_agent(monkeypatch):
         "dir_delete",
         "parse_document",
         "read_image",
+        "data2image",
         "present_artifacts",
         "get_current_time",
         "load_skill",

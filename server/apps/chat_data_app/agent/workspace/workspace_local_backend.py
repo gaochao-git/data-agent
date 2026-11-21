@@ -338,6 +338,35 @@ def _write_local_text_file(
     }
 
 
+def _write_local_binary_file(workspace_root: str, file_path: str, data: bytes) -> dict[str, Any]:
+    """覆盖式写入二进制内容（如 data2image 生成的图表 PNG）；与文本写入同一套原子替换。"""
+    target = resolve_workspace_path(workspace_root, file_path, writable=True)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=target.parent,
+            prefix=f".{target.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as file_obj:
+            temporary_path = Path(file_obj.name)
+            file_obj.write(data)
+            file_obj.flush()
+            os.fsync(file_obj.fileno())
+        os.replace(temporary_path, target)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+    return {
+        "operation": "write",
+        "file_path": to_visible_path(workspace_root, target),
+        "bytes": len(data),
+    }
+
+
 def write_local_workspace_text_file(workspace_root: str, file_path: str, content: str) -> dict[str, Any]:
     """覆盖应用侧已存在的文本文件（人侧在线编辑入口）。
 
@@ -1088,6 +1117,15 @@ class LocalWorkspaceBackend:
         mode: str,
     ) -> dict[str, Any]:
         return await asyncio.to_thread(_write_local_text_file, runtime.workspace_root, file_path, content, mode)
+
+    async def write_binary_file(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        file_path: str,
+        data: bytes,
+    ) -> dict[str, Any]:
+        return await asyncio.to_thread(_write_local_binary_file, runtime.workspace_root, file_path, data)
 
     async def write_internal_text_files(
         self,
