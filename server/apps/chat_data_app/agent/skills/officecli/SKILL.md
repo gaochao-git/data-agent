@@ -1,7 +1,7 @@
 ---
 name: officecli
 title: Office 文档处理
-description: 使用沙箱内预装的 OfficeCLI 创建、检查和修改 Word、Excel、PowerPoint 文件。
+description: 使用预装的 OfficeCLI 创建、检查和修改 Word、Excel、PowerPoint 文件。
 metadata:
   domain: 文档处理
   category: office_document
