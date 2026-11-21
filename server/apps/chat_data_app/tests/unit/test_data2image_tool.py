@@ -283,10 +283,11 @@ def test_time_axis_uses_numeric_months():
     assert labels == [f"{month:02d}" for month in range(1, 13)]
     assert axis.get_xlabel() == "2026"
     assert not any(label in {"Mar", "May", "Jul", "Sep", "Nov"} for label in labels)
+    assert all(label.get_rotation() == 90 for label in axis.get_xticklabels())
 
 
 def test_daily_axis_at_month_end_does_not_show_next_month_offset():
-    """月底日数据不能因默认留白越到下个月，导致偏移标签显示错误月份。"""
+    """月底日数据不能因默认留白越到下个月；年月放在 xlabel，日刻度只显示 DD。"""
     from datetime import datetime
 
     from matplotlib.backends.backend_agg import FigureCanvasAgg
@@ -300,8 +301,34 @@ def test_daily_axis_at_month_end_does_not_show_next_month_offset():
     chart_render_module._decorate_axis(axis, title="月底", font=None)
     figure.canvas.draw()
 
-    assert axis.xaxis.get_offset_text().get_text() == "2026-01"
-    assert "02" not in [label.get_text() for label in axis.get_xticklabels()[1:]]
+    labels = [label.get_text() for label in axis.get_xticklabels() if label.get_text()]
+    assert axis.get_xlabel() == "2026-01"
+    assert axis.xaxis.get_offset_text().get_text() == ""
+    assert labels == [f"{day:02d}" for day in range(1, 32, 2)]
+    assert all(label.get_rotation() == 90 for label in axis.get_xticklabels())
+
+
+def test_dense_multi_year_axis_uses_more_matplotlib_ticks():
+    """长跨度的月粒度刻度应稳定收敛到 25 个，并保持数字月份。"""
+    from datetime import datetime, timedelta
+
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib.figure import Figure
+
+    figure = Figure(figsize=chart_render_module.FIG_SIZE, dpi=chart_render_module.FIG_DPI)
+    FigureCanvasAgg(figure)
+    axis = figure.add_subplot(1, 1, 1)
+    dates = [datetime(2024, 1, 1) + timedelta(days=index) for index in range(1000)]
+    axis.plot(dates, list(range(len(dates))))
+
+    chart_render_module._decorate_axis(axis, title="多年", font=None)
+    figure.canvas.draw()
+
+    labels = [label.get_text() for label in axis.get_xticklabels() if label.get_text()]
+    assert len(labels) == 25
+    assert labels[0] == "2024"
+    assert not any(label in {"Mar", "May", "Jul", "Sep", "Nov"} for label in labels)
+    assert all(label.get_rotation() == 90 for label in axis.get_xticklabels())
 
 
 def test_plot_series_uses_color_linestyle_and_sparse_markers():

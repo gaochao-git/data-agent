@@ -29,6 +29,7 @@ from matplotlib.axes import Axes  # noqa: E402
 from matplotlib.backends.backend_agg import FigureCanvasAgg  # noqa: E402
 from matplotlib.figure import Figure  # noqa: E402
 from matplotlib.font_manager import FontProperties  # noqa: E402
+from matplotlib.ticker import FixedLocator  # noqa: E402
 
 __all__ = [
     "ChartRenderError",
@@ -41,14 +42,26 @@ MAX_LINES_PER_CHART = 5
 # 单图尺寸（英寸）与 DPI：12x6@120 ≈ 1440x720，read_image 5MB 上限内
 FIG_SIZE = (12.0, 6.0)
 FIG_DPI = 120
-# 日期轴最多 13 个刻度：12 个月加上年边界，保证月粒度的 01~12 不被隔月抽稀
-MAX_DATE_TICKS = 13
+# 日期轴刻度上限：matplotlib 默认月粒度约 12 个、日粒度约 11 个；
+# 12x6@120 的画布足够容纳更密的时间标签，这里按频率分别抬高。
+MAX_DATE_TICKS = {
+    mdates.YEARLY: 18,
+    mdates.MONTHLY: 33,
+    mdates.DAILY: 20,
+    mdates.HOURLY: 18,
+    mdates.MINUTELY: 16,
+    mdates.SECONDLY: 16,
+    mdates.MICROSECONDLY: 8,
+}
+# AutoDateLocator 的月间隔只能取 1/2/3/4/6 个月，无法直接得到 25 个；
+# 先按每月生成完整日历刻度，再等距限制到 25 个，避免跳到 17 个或 33 个。
+MAX_VISIBLE_DATE_TICKS = 25
 # 曲线样式：Okabe-Ito 色盲友好配色 + 线型双重编码，避免仅靠红绿辨线。
-# 稀疏数据加 marker；线宽略高于默认值，保证图片被视觉模型缩放后仍可辨认。
+# 日粒度折线高频抖动，线宽过大会糊成带状；1.0pt 保持轻量且仍可辨认。
 _SERIES_COLORS = ("#0072B2", "#E69F00", "#009E73", "#D55E00", "#CC79A7")
 _SERIES_LINESTYLES = ("-", "--", "-.", ":", (0, (7, 2, 1, 2)))
 _SERIES_MARKERS = ("o", "s", "^", "D", "v")
-_SERIES_LINEWIDTH = 2.0
+_SERIES_LINEWIDTH = 1.0
 _SPARSE_SERIES_MAX_POINTS = 30
 _ZERO_BASELINE_GID = "data2image-zero-baseline"
 
@@ -90,9 +103,10 @@ _TIME_FORMAT_HINT = (
 )
 
 # 月份统一使用两位数字，避免中英文混排时出现 Mar/May/Nov；日、时、分、秒也保持数字格式。
-_DATE_FORMATS = ("%Y", "%m", "%d", "%H:%M", "%H:%M", "%S")
-_DATE_ZERO_FORMATS = ("", "%Y", "%m", "%m-%d", "%H:%M", "%H:%M")
-_DATE_OFFSET_FORMATS = ("", "%Y", "%Y-%m", "%Y-%m-%d", "%Y-%m-%d", "%Y-%m-%d %H:%M")
+# 跨月日刻度直接显示 MM-DD，不依赖 offset，避免 60 天数据只能显示最后一个月作为偏移。
+_DATE_FORMATS = ("%Y", "%m", "%m-%d", "%H:%M", "%H:%M", "%S")
+_DATE_ZERO_FORMATS = ("", "%Y", "%m-%d", "%m-%d", "%H:%M", "%H:%M")
+_DATE_OFFSET_FORMATS = ("", "%Y", "", "", "", "")
 
 
 class ChartRenderError(ValueError):
@@ -347,6 +361,22 @@ def _build_date_formatter(locator: mdates.DateLocator) -> mdates.ConciseDateForm
     )
 
 
+def _set_auto_date_axis(axis: Axes, points: list[datetime]) -> None:
+    """安装 matplotlib 自动日期轴，并把超过上限的日历刻度等距收敛到 25 个。"""
+    locator = mdates.AutoDateLocator(maxticks=MAX_DATE_TICKS)
+    ticks = list(locator.tick_values(points[0], points[-1]))
+    if len(ticks) > MAX_VISIBLE_DATE_TICKS:
+        indices = {
+            round(index * (len(ticks) - 1) / (MAX_VISIBLE_DATE_TICKS - 1))
+            for index in range(MAX_VISIBLE_DATE_TICKS)
+        }
+        ticks = [ticks[index] for index in sorted(indices)]
+        axis.xaxis.set_major_locator(FixedLocator(ticks))
+    else:
+        axis.xaxis.set_major_locator(locator)
+    axis.xaxis.set_major_formatter(_build_date_formatter(locator))
+
+
 def _x_datetimes(axis: Axes) -> list[datetime]:
     """读取轴上已绘制的 X 值并还原为 datetime；非日期值忽略。"""
     values: list[datetime] = []
@@ -373,6 +403,15 @@ def _is_same_year_month_points(points: list[datetime]) -> bool:
     if len({(point.year, point.month) for point in points}) < 2:
         return False
     return all(point.day == 1 and point.hour == 0 and point.minute == 0 and point.second == 0 for point in points)
+
+
+def _is_same_calendar_month_daily(points: list[datetime]) -> bool:
+    """判断是否为同一自然月内的日粒度数据；此类数据用 DD 标签加 xlabel 显示年月。"""
+    if not points:
+        return False
+    if len({(point.year, point.month) for point in points}) != 1:
+        return False
+    return all((point.hour, point.minute, point.second) == (0, 0, 0) for point in points)
 
 
 def _plot_series(axis: Axes, item: dict[str, Any], index: int) -> None:
@@ -435,10 +474,15 @@ def _decorate_axis(
         axis.xaxis.set_major_formatter(mdates.DateFormatter("%m"))
         year = points[0].year
         axis.set_xlabel(f"{year}年" if font is not None else str(year))
-    else:
+    elif _is_same_calendar_month_daily(points):
         locator = mdates.AutoDateLocator(maxticks=MAX_DATE_TICKS)
         axis.xaxis.set_major_locator(locator)
-        axis.xaxis.set_major_formatter(_build_date_formatter(locator))
+        axis.xaxis.set_major_formatter(mdates.DateFormatter("%d"))
+        month = f"{points[0].year}-{points[0].month:02d}"
+        axis.set_xlabel(month)
+    else:
+        _set_auto_date_axis(axis, points)
+    axis.tick_params(axis="x", labelrotation=90, labelsize=9)
     _apply_font(axis, font)
 
 
