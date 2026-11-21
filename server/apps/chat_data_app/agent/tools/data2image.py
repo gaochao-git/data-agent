@@ -5,8 +5,8 @@
   （同 read_image 的设计：避免 checkpoint 膨胀）；
 - 生成后模型用 ``read_image`` 读取图片，由 ``ImageInjectionMiddleware`` 注入视觉上下文。
 
-来源无关：不关心文件是 SQL 查询卸载、接口返回还是脚本产物，只看数据形状——
-行字典数组 / ChatData 结果集（columns+data）/ CSV 表格，由模型指定 X/Y 字段名。
+输入只接受系统工具生成的结果文件（query_result/tool-offload），不接受模型生成、
+改写或上传的中间数据文件：模型只传 result_path，不把行数据带进上下文。
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ from typing import Any
 from langchain_core.tools import tool
 
 from apps.chat_data_app.agent.workspace.runtime import ConversationWorkspaceRuntime, resolve_workspace_path
+from apps.chat_data_app.agent.workspace.workspace_path_policy import WORKSPACE_PATH_POLICY
 from utils.logger import get_logger
 
 from .common import tool_result_payload
@@ -34,12 +35,25 @@ _MAX_Y_FIELDS = 5
 _OUTPUT_DIR = "/mnt/user-data/outputs"
 # 文件名清洗：保留安全字符与中文（APFS/ext4 均支持中文文件名），其余替换为下划线
 _FILENAME_SAFE_PATTERN = re.compile(r"[^0-9A-Za-z_\-\u4e00-\u9fff]+")
+_QUERY_RETRY_NEXT_STEP = (
+    "不要读取、改写、新建中间数据文件，也不要自己生成行数据。"
+    "请调整 SQL，让查询结果直接包含一个时间列（x_field）和 1~5 个数值列（y_fields），"
+    "重新执行 data_analyzing_tool 后，用新回执的 result_path 再次调用 data2image。"
+)
 
 
 def _safe_filename_stem(title: str) -> str:
     """标题转文件名安全片段；清洗后为空则回退 'data'。"""
     cleaned = _FILENAME_SAFE_PATTERN.sub("_", title.strip())[:40].strip("_")
     return cleaned or "data"
+
+
+def _failure(error: str, *, retry_query: bool = True) -> str:
+    """统一的失败回执；查询结果不满足时明确要求调整 SQL，而不是改数据。"""
+    payload: dict[str, Any] = {"success": False, "error": error}
+    if retry_query:
+        payload["next_step"] = _QUERY_RETRY_NEXT_STEP
+    return tool_result_payload("data2image", payload)
 
 
 def create_data2image_tool(workspace_runtime: ConversationWorkspaceRuntime) -> list:
@@ -54,17 +68,17 @@ def create_data2image_tool(workspace_runtime: ConversationWorkspaceRuntime) -> l
         intent: str = "",
     ) -> str:
         """
-        把工作区内的结果文件（JSON/CSV 表格）渲染成折线图 PNG 存到 outputs，供视觉分析降低上下文消耗。
+        把系统查询结果文件（JSON/CSV 表格）渲染成折线图 PNG 存到 outputs，供视觉分析降低上下文消耗。
 
-        典型用法：data_analyzing_tool 查询结果已自动保存为
-        /mnt/user-data/workspace/.system/query_result/<result_id>.json（工具回执里的 result_path），
-        直接把该路径传给本工具的 file_path 即可，**不要先读取或重写数据文件**——
-        本工具在服务端读完整文件，能解析嵌套结果集（columns+data / results 信封 / 行数组 / CSV）。
-        这样原始数据全程不进上下文，是本工具的核心价值。
+        只接受系统工具生成的结果文件：/mnt/user-data/workspace/.system/query_result/ 或
+        tool-offload/ 下、由工具回执给出的 result_path。禁止先用 file_read 读取数据、
+        再用 file_write/file_edit 生成或改写中间 JSON/CSV，再把新文件传进来。
+        本工具在服务端直接读 result_path，原始数据不进入上下文。
 
-        适用：大结果文件的时间趋势分析或多指标随时间的对比。
-        不适用：需要精确取值或逐行核对的问题——请继续用 file_read 分页读取。
-        生成成功后用 read_image 读取图片进行视觉分析（转图与读图分两步）。
+        查询结果必须直接满足绘图要求，否则本工具不渲染：x_field 是实际存在的时间列，
+        y_fields 是 1~5 个实际存在的数值列。字段名、时间格式或数值类型不匹配时，
+        应调整 SQL（别名、日期格式化、聚合或类型转换）后重新查询，而不是改写查询结果。
+        生成成功后用 read_image 读取图片；需要精确取值或逐行核对时继续用 file_read。
 
         X 轴只接受时间列，格式必须为：YYYY、YYYY-MM、YYYY-MM-DD、YYYY-MM-DD HH:MM[:SS]、
         斜杠分隔的 YYYY/MM、YYYY/MM/DD 或 YYYY/MM/DD HH:MM[:SS]，或 ISO 8601
@@ -72,9 +86,9 @@ def create_data2image_tool(workspace_runtime: ConversationWorkspaceRuntime) -> l
         中文日期、DD/MM/YYYY、季度（YYYY-Qn）和自然语言日期。
 
         Args:
-            file_path: 结果文件路径（/mnt/user-data/workspace/.system/query_result/、/mnt/user-data/{workspace,outputs}/ 下的 JSON 或 CSV），支持嵌套结果集，无需预先提取。
+            file_path: 系统工具回执中的 result_path，必须位于 workspace/.system/{query_result,tool-offload}/，JSON 或 CSV。
             x_field: X 轴时间字段名，必填；必须符合上述时间格式，无法解析会报错并列出可用格式。
-            y_fields: Y 轴字段名列表（数值列），1~5 个；超过 5 条不自动拆图，会报错并要求分批调用。
+            y_fields: Y 轴字段名列表（数值列），1~5 个；不满足时调整 SQL 后重新查询。
             title: 图表标题。
             intent: 一句中文说明本次调用目的（不超过50字，写目的不写动作），面向用户展示。
         """
@@ -101,17 +115,11 @@ async def _data2image_impl(
     cleaned_fields = [str(field or "").strip() for field in (y_fields or [])]
     cleaned_fields = [field for field in cleaned_fields if field]
     if not cleaned_fields:
-        return tool_result_payload("data2image", {"success": False, "error": "y_fields 不能为空；请传 1~5 个数值列名"})
+        return _failure("y_fields 不能为空；查询结果需直接包含 1~5 个数值列")
     if len(cleaned_fields) > _MAX_Y_FIELDS:
-        return tool_result_payload(
-            "data2image",
-            {
-                "success": False,
-                "error": f"y_fields 一次最多 {_MAX_Y_FIELDS} 个字段；请拆成多次调用，每张图最多 5 条曲线",
-            },
-        )
+        return _failure(f"单张图最多 {_MAX_Y_FIELDS} 个数值列；请调整 SQL 控制返回列数")
     if not str(x_field or "").strip():
-        return tool_result_payload("data2image", {"success": False, "error": "x_field 不能为空；请传时间列名"})
+        return _failure("x_field 不能为空；查询结果需直接包含时间列")
 
     def _build_charts() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         """同步 IO + CPU 渲染，交给线程池执行，避免阻塞事件循环。"""
@@ -135,10 +143,10 @@ async def _data2image_impl(
     try:
         series, charts = await asyncio.to_thread(_build_charts)
     except ValueError as exc:
-        return tool_result_payload("data2image", {"success": False, "error": str(exc)})
+        return _failure(str(exc))
     except OSError as exc:
         logger.error("data2image 读文件失败: %s", exc, exc_info=True)
-        return tool_result_payload("data2image", {"success": False, "error": "结果文件读取失败"})
+        return _failure("结果文件读取失败")
 
     saved_images: list[dict[str, Any]] = []
     try:
@@ -156,7 +164,7 @@ async def _data2image_impl(
             )
     except (OSError, ValueError) as exc:
         logger.error("data2image 图片落盘失败: %s", exc, exc_info=True)
-        return tool_result_payload("data2image", {"success": False, "error": f"图表 PNG 写入 outputs 失败: {exc}"})
+        return _failure(f"图表 PNG 写入 outputs 失败: {exc}", retry_query=False)
 
     skipped_total = sum(int(item.get("skipped_rows", 0)) for item in series)
     logger.info(
@@ -178,14 +186,20 @@ async def _data2image_impl(
 
 
 def _read_result_text(workspace_runtime: ConversationWorkspaceRuntime, file_path: str) -> str:
-    """读取结果文件文本；仅会话工作区可读，带大小上限。"""
+    """读取系统结果文件文本；拒绝模型生成/上传的文件，带大小上限。"""
     from apps.chat_data_app.agent.workspace.chart_render import ChartRenderError
 
+    logical_path = WORKSPACE_PATH_POLICY.parse(file_path)
+    if not logical_path.is_system_result:
+        raise ChartRenderError(
+            "data2image 只接受系统工具生成的结果文件（workspace/.system/query_result/ 或 tool-offload/）；"
+            "请直接使用查询回执里的 result_path，不要生成或改写中间数据文件"
+        )
     root = workspace_runtime.workspace_root
     physical = resolve_workspace_path(root, file_path, writable=False)
     if physical.suffix.lower() not in {".json", ".csv"}:
         raise ChartRenderError(f"仅支持 JSON/CSV 结果文件，当前后缀: {physical.suffix or '(无)'}")
     size_bytes = physical.stat().st_size
     if size_bytes > _MAX_RESULT_FILE_BYTES:
-        raise ChartRenderError(f"结果文件过大（{size_bytes} 字节 > {_MAX_RESULT_FILE_BYTES}），请先缩减数据范围")
+        raise ChartRenderError(f"结果文件过大（{size_bytes} 字节 > {_MAX_RESULT_FILE_BYTES}），请调整 SQL 缩减结果范围")
     return physical.read_text(encoding="utf-8")

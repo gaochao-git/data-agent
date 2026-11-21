@@ -59,6 +59,13 @@ def _write_workspace_file(paths, name: str, content: str) -> str:
     return f"/mnt/user-data/workspace/{name}"
 
 
+def _write_result_file(paths, name: str, content: str) -> str:
+    target = Path(paths["workspace"]) / ".system" / "query_result" / name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content, encoding="utf-8")
+    return f"/mnt/user-data/workspace/.system/query_result/{name}"
+
+
 def _assert_valid_png(png_bytes: bytes) -> None:
     assert png_bytes.startswith(b"\x89PNG")
     image = Image.open(io.BytesIO(png_bytes))
@@ -286,7 +293,7 @@ def test_time_axis_uses_numeric_months():
 @pytest.mark.asyncio
 async def test_data2image_success_saves_png_to_outputs(monkeypatch, tmp_path):
     paths = _init_workspace(monkeypatch, tmp_path)
-    file_path = _write_workspace_file(paths, "result.json", _rows_json(_ROWS))
+    file_path = _write_result_file(paths, "result.json", _rows_json(_ROWS))
 
     tool = data2image_module.create_data2image_tool(_runtime(paths))[0]
     result = _payload(
@@ -335,7 +342,7 @@ async def test_data2image_reads_tool_offload_json(monkeypatch, tmp_path):
 @pytest.mark.asyncio
 async def test_data2image_rejects_empty_and_missing_fields(monkeypatch, tmp_path):
     paths = _init_workspace(monkeypatch, tmp_path)
-    file_path = _write_workspace_file(paths, "result.json", _rows_json(_ROWS))
+    file_path = _write_result_file(paths, "result.json", _rows_json(_ROWS))
     tool = data2image_module.create_data2image_tool(_runtime(paths))[0]
 
     empty_fields = _payload(await tool.ainvoke({"file_path": file_path, "x_field": "日期", "y_fields": []}))
@@ -344,6 +351,8 @@ async def test_data2image_rejects_empty_and_missing_fields(monkeypatch, tmp_path
     missing_field = _payload(await tool.ainvoke({"file_path": file_path, "x_field": "日期", "y_fields": ["不存在"]}))
     assert missing_field["success"] is False
     assert "可用字段" in missing_field["error"]
+    assert "调整 SQL" in missing_field["next_step"]
+    assert list(Path(paths["outputs"]).iterdir()) == []
 
     missing_x = _payload(await tool.ainvoke({"file_path": file_path, "x_field": "", "y_fields": ["订单量"]}))
     assert missing_x["success"] is False
@@ -353,7 +362,7 @@ async def test_data2image_rejects_empty_and_missing_fields(monkeypatch, tmp_path
 async def test_data2image_rejects_more_than_five_y_fields(monkeypatch, tmp_path):
     paths = _init_workspace(monkeypatch, tmp_path)
     rows = [{"日期": "2026-11-01", **{f"m{index}": index for index in range(1, 7)}}]
-    file_path = _write_workspace_file(paths, "result.json", _rows_json(rows))
+    file_path = _write_result_file(paths, "result.json", _rows_json(rows))
     tool = data2image_module.create_data2image_tool(_runtime(paths))[0]
 
     result = _payload(
@@ -363,15 +372,15 @@ async def test_data2image_rejects_more_than_five_y_fields(monkeypatch, tmp_path)
     )
 
     assert result["success"] is False
-    assert "最多 5 个字段" in result["error"]
-    assert "拆成多次调用" in result["error"]
+    assert "最多 5 个数值列" in result["error"]
+    assert "调整 SQL" in result["next_step"]
 
 
 @pytest.mark.asyncio
 async def test_data2image_rejects_non_time_x_axis(monkeypatch, tmp_path):
     paths = _init_workspace(monkeypatch, tmp_path)
     rows = [{"地区": "华东", "订单量": 10}, {"地区": "华北", "订单量": 20}]
-    file_path = _write_workspace_file(paths, "result.json", _rows_json(rows))
+    file_path = _write_result_file(paths, "result.json", _rows_json(rows))
     tool = data2image_module.create_data2image_tool(_runtime(paths))[0]
 
     result = _payload(await tool.ainvoke({"file_path": file_path, "x_field": "地区", "y_fields": ["订单量"]}))
@@ -386,6 +395,24 @@ async def test_data2image_rejects_non_time_x_axis(monkeypatch, tmp_path):
     assert "季度（YYYY-Qn）" in result["error"]
     assert "不支持毫秒/小数秒" in result["error"]
     assert "时区（Z 或 ±HH:MM）" in result["error"]
+    assert "调整 SQL" in result["next_step"]
+    assert list(Path(paths["outputs"]).iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_data2image_rejects_model_generated_workspace_file(monkeypatch, tmp_path):
+    """模型自建中间数据文件会被拒绝，必须回到 SQL 重新查询。"""
+    paths = _init_workspace(monkeypatch, tmp_path)
+    file_path = _write_workspace_file(paths, "model-generated.json", _rows_json(_ROWS))
+    tool = data2image_module.create_data2image_tool(_runtime(paths))[0]
+
+    result = _payload(await tool.ainvoke({"file_path": file_path, "x_field": "日期", "y_fields": ["订单量"]}))
+
+    assert result["success"] is False
+    assert "只接受系统工具生成的结果文件" in result["error"]
+    assert "不要读取、改写、新建中间数据文件" in result["next_step"]
+    assert "调整 SQL" in result["next_step"]
+    assert list(Path(paths["outputs"]).iterdir()) == []
 
 
 @pytest.mark.asyncio
@@ -400,7 +427,7 @@ async def test_data2image_rejects_escape_and_bad_suffix(monkeypatch, tmp_path):
         bad_suffix = _payload(
             await tool.ainvoke(
                 {
-                    "file_path": _write_workspace_file(paths, name, content),
+                    "file_path": _write_result_file(paths, name, content),
                     "x_field": "日期",
                     "y_fields": ["订单量"],
                 }
@@ -418,7 +445,7 @@ async def test_data2image_counts_skipped_non_numeric_rows(monkeypatch, tmp_path)
         {"日期": "2026-11-02", "订单量": "N/A"},
         {"日期": "2026-11-03", "订单量": 30},
     ]
-    file_path = _write_workspace_file(paths, "result.json", _rows_json(rows))
+    file_path = _write_result_file(paths, "result.json", _rows_json(rows))
     tool = data2image_module.create_data2image_tool(_runtime(paths))[0]
 
     result = _payload(await tool.ainvoke({"file_path": file_path, "x_field": "日期", "y_fields": ["订单量"]}))

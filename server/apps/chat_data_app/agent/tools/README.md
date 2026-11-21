@@ -9,7 +9,7 @@
 |---|---|---|
 | `file_read`/`file_write`/`file_edit`/`file_move`/`file_copy`/`file_delete`/`dir_create`/`dir_list`/`file_glob`/`file_grep` | `filesystem.py` | 会话工作区文件操作（统一由 `create_filesystem_tools` 构建） |
 | `read_image` | `read_image.py` | 图片读入视觉上下文（下一轮注入） |
-| `data2image` | `data2image.py` | 结果文件转折线图 PNG；X 轴仅时间，单图最多 5 条，超过报错不自动拆图 |
+| `data2image` | `data2image.py` | 系统查询结果转 PNG；只读 result_path，不接受模型生成数据；X 轴仅时间、单图最多 5 条，不满足报错并要求调整 SQL |
 | `parse_document` | `parse_document.py` | 上传文件解析为 Markdown 写入工作区 |
 | `bash_run` | `bash_run.py` | 受限命令执行；**由 `ToolDefinition.enabled` 控制注册（默认关）** |
 | `officecli_run` | `officecli_run.py` | OfficeCLI 文档解析/编辑（argv 直 execve，非通用执行器） |
