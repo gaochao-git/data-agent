@@ -23,6 +23,7 @@ from typing import Any
 from langchain_core.language_models import BaseChatModel
 
 from utils.crypto import decrypt_password
+from utils.database import get_isolated_session
 from utils.llm import get_llm
 from utils.logger import get_logger
 
@@ -444,8 +445,12 @@ def _registry_row_to_config(row: dict[str, Any]) -> dict[str, Any]:
 
 
 async def load_registry_from_db() -> list[dict[str, Any]]:
-    """从 DB 读取启用模型配置；表为空即空清单（不回源任何文件，管理员页面手动添加）。"""
-    dao = ModelRegistryDao()
+    """从 DB 读取启用模型配置；表为空即空清单（不回源任何文件，管理员页面手动添加）。
+
+    注册表缓存是进程级快照，必须用独立会话读取：本函数会被后台刷新任务调用，
+    而任务上下文可能继承调用方的事务绑定，复用该会话会被 database 守卫拒绝。
+    """
+    dao = ModelRegistryDao(session_context=get_isolated_session)
     rows = await dao.list_rows(enabled_only=True)
     return [_registry_row_to_config(row) for row in rows]
 

@@ -152,6 +152,68 @@ async def test_event_history_is_ordered_and_idempotent_across_turns(conversation
 
 
 @pytest.mark.asyncio
+async def test_turn_error_is_persisted_after_messages_and_is_idempotent(conversation_event_service):
+    """失败提示进历史事件、排在已产生消息之后，同一轮重复收口只保留一条。"""
+    service, create_thread, _get_session = conversation_event_service
+    await create_thread("conv-error", "user-1")
+
+    user_message = HumanMessage(
+        content="分析订单", id="turn-error", additional_kwargs={"timestamp": "2026-11-21 10:00:00"}
+    )
+    await service.persist_user_message(
+        conversation_id="conv-error",
+        user_id="user-1",
+        operator_name="用户一",
+        message=user_message,
+    )
+    await service.persist_turn(
+        conversation_id="conv-error",
+        user_id="user-1",
+        operator_name="用户一",
+        turn_id="turn-error",
+        messages=[user_message, AIMessage(content="已查询部分订单", id="assistant-error")],
+        reasoning_segments=[],
+    )
+    error_payload = {
+        "error": "本轮执行已达到 7 步上限，任务被中止。",
+        "error_type": "GraphRecursionError",
+        "supersteps": 7,
+        "recursion_limit": 7,
+    }
+    for _ in range(2):
+        await service.persist_turn_error(
+            conversation_id="conv-error",
+            user_id="user-1",
+            operator_name="用户一",
+            turn_id="turn-error",
+            run_id="run-1",
+            **error_payload,
+        )
+    await service.persist_turn_error(
+        conversation_id="conv-error",
+        user_id="user-1",
+        operator_name="用户一",
+        turn_id="turn-error",
+        run_id="run-2",
+        **error_payload,
+    )
+
+    history = await service.load_history_with_recovery(conversation_id="conv-error", user_id="user-1")
+
+    error_events = [event for event in history["history_events"] if event["event_type"] == "turn_error"]
+    # 同一 Run 重复收口仍只有一条；重试是新 Run，追加在后。
+    assert len(error_events) == 2
+    assert history["history_events"][-1]["event_type"] == "turn_error"
+    persisted_payload = error_events[0]["payload"]
+    assert persisted_payload["error"] == error_payload["error"]
+    assert persisted_payload["error_type"] == error_payload["error_type"]
+    assert persisted_payload["supersteps"] == error_payload["supersteps"]
+    assert persisted_payload["recursion_limit"] == error_payload["recursion_limit"]
+    assert persisted_payload["timestamp"]
+    assert [message["content"] for message in history["messages"]] == ["分析订单", "已查询部分订单"]
+
+
+@pytest.mark.asyncio
 async def test_persist_user_message_touches_thread_update_time_but_turn_does_not(conversation_event_service):
     """用户提问刷新会话行 update_time（侧栏「最近更新」排序依据），助手轮次不刷新。"""
     service, create_thread, get_session = conversation_event_service

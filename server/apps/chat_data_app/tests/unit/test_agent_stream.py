@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import httpx
 import openai
+from langgraph.errors import GraphRecursionError
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
@@ -440,6 +441,17 @@ def test_model_failure_user_message_maps_friendly_text():
     )
     # 其他异常一律兜底通用文案，不透出原始错误
     assert _model_failure_user_message(ValueError("raw internal detail")) == "智能问数执行失败，请稍后重试。"
+
+
+def test_model_failure_user_message_maps_graph_recursion_limit():
+    exc = GraphRecursionError("Recursion limit of 7 reached without hitting a stop condition.")
+    message = _model_failure_user_message(exc)
+    assert "7 步上限" in message
+    assert "智能问数执行失败，请稍后重试。" not in message
+
+    message_without_limit = _model_failure_user_message(GraphRecursionError("recursion limit exceeded"))
+    assert "步数上限" in message_without_limit
+    assert "智能问数执行失败" not in message_without_limit
 
 
 def test_model_failure_user_message_passthrough_provider_message():
@@ -1431,6 +1443,13 @@ def test_generate_chat_data_stream_projects_selected_member_scope_from_shared_co
 def test_generate_chat_data_stream_emits_error_when_graph_fails(monkeypatch):
     import asyncio
 
+    persisted: dict = {}
+
+    async def fake_persist(_req, _callbacks, exc, error):
+        persisted.update(error=error, error_type=exc.__class__.__name__)
+        return _format_sse("error", {"error": error})
+
+    monkeypatch.setattr("apps.chat_data_app.agent_stream._persist_agent_failure", fake_persist)
     monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr(
         "apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: _FakeGraph(raise_on_stream=True)
@@ -1455,10 +1474,60 @@ def test_generate_chat_data_stream_emits_error_when_graph_fails(monkeypatch):
     assert "event: done" not in joined  # done 由 Runtime 统一发布，生成器不再输出
     # 失败异常必须抛给 Runtime（由其 finish_run("failed") 收口），不能被 Handler 吞掉。
     assert failure is not None
+    assert persisted["error"] == "智能问数执行失败，请稍后重试。"
+    assert persisted["error_type"] == "RuntimeError"
+
+
+def test_generate_chat_data_stream_reports_graph_recursion_limit(monkeypatch):
+    import asyncio
+
+    persisted: dict = {}
+
+    async def fake_persist(_req, _callbacks, exc, error):
+        persisted.update(error=error, error_type=exc.__class__.__name__)
+        return _format_sse("error", {"error": error})
+
+    class RecursionLimitGraph(_FakeGraph):
+        async def astream(self, initial_state, config=None, stream_mode=None):
+            _ = initial_state, config, stream_mode
+            raise GraphRecursionError("Recursion limit of 7 reached without hitting a stop condition.")
+            yield  # pragma: no cover - keeps this an async generator for the stream adapter
+
+    monkeypatch.setattr("apps.chat_data_app.agent_stream._persist_agent_failure", fake_persist)
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
+    monkeypatch.setattr(
+        "apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: RecursionLimitGraph()
+    )
+
+    events, failure = asyncio.run(
+        _collect_async_iter_until_failure(
+            _generate_chat_data_stream(
+                ChatDataStreamRequest(
+                    user_id="u_test",
+                    thread_id="conv_recursion_limit",
+                    user_query="查订单数",
+                    datasource_id="ds_a",
+                )
+            )
+        )
+    )
+
+    joined = "".join(events)
+    assert "本轮执行已达到 7 步上限，任务被中止。" in joined
+    assert "智能问数执行失败，请稍后重试。" not in joined
+    assert failure is not None
+    assert persisted["error"] == "本轮执行已达到 7 步上限，任务被中止。请缩小任务范围、拆分任务，或新开会话后重试。"
+    assert persisted["error_type"] == "GraphRecursionError"
 
 
 def test_generate_chat_data_stream_keeps_context_limit_error_actionable(monkeypatch):
     import asyncio
+
+    persisted: dict = {}
+
+    async def fake_persist(_req, _callbacks, exc, error):
+        persisted.update(error=error, error_type=exc.__class__.__name__)
+        return _format_sse("error", {"error": error})
 
     class ContextLimitGraph(_FakeGraph):
         async def astream(self, initial_state, config=None, stream_mode=None):
@@ -1466,6 +1535,7 @@ def test_generate_chat_data_stream_keeps_context_limit_error_actionable(monkeypa
             raise ContextInputLimitExceededError("当前输入内容过长，请拆分问题后重试。")
             yield  # pragma: no cover - keeps this an async generator for the stream adapter
 
+    monkeypatch.setattr("apps.chat_data_app.agent_stream._persist_agent_failure", fake_persist)
     monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr(
         "apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: ContextLimitGraph()
@@ -1489,6 +1559,8 @@ def test_generate_chat_data_stream_keeps_context_limit_error_actionable(monkeypa
     assert "智能问数执行失败，请稍后重试。" not in joined
     assert "event: done" not in joined  # done 由 Runtime 统一发布，生成器不再输出
     assert failure is not None  # 失败异常抛给 Runtime 收口
+    assert persisted["error"] == "当前输入内容过长，请拆分问题后重试。"
+    assert persisted["error_type"] == "ContextInputLimitExceededError"
 
 
 def test_generate_chat_data_stream_semantic_config_missing(monkeypatch):

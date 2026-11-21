@@ -122,6 +122,63 @@ describe('buildHistoryMessages', () => {
     ])
   })
 
+  it('restores a persisted turn error on the assistant message', () => {
+    const messages = buildHistoryMessagesFromEvents([
+      { sequence_no: 1, turn_id: 'turn-1', event_type: 'user_message', payload: { id: 'user-1', content: '分析订单' } },
+      { sequence_no: 2, turn_id: 'turn-1', event_type: 'assistant_message', payload: { id: 'assistant-1', content: '已查询部分订单' } },
+      {
+        sequence_no: 3,
+        turn_id: 'turn-1',
+        event_type: 'turn_error',
+        payload: {
+          error: '本轮执行已达到 7 步上限，任务被中止。',
+          error_type: 'GraphRecursionError',
+          supersteps: 7,
+          recursion_limit: 7,
+        },
+      },
+    ])
+
+    expect(messages).toHaveLength(2)
+    expect(messages[1]).toMatchObject({
+      role: 'assistant',
+      content: '已查询部分订单',
+      error: '本轮执行已达到 7 步上限，任务被中止。',
+    })
+  })
+
+  it('creates an error-only assistant bubble when failure happens before any assistant message', () => {
+    const messages = buildHistoryMessagesFromEvents([
+      { sequence_no: 1, turn_id: 'turn-1', event_type: 'user_message', payload: { id: 'user-1', content: '分析订单' } },
+      {
+        sequence_no: 2,
+        turn_id: 'turn-1',
+        event_type: 'turn_error',
+        payload: { error: '当前输入内容过长，请拆分问题后重试。', error_type: 'ContextInputLimitExceededError' },
+      },
+    ])
+
+    expect(messages).toHaveLength(2)
+    expect(messages[1]).toMatchObject({
+      role: 'assistant',
+      content: '',
+      error: '当前输入内容过长，请拆分问题后重试。',
+    })
+  })
+
+  it('clears a stale turn error when a later assistant message proves the retry succeeded', () => {
+    const messages = buildHistoryMessagesFromEvents([
+      { sequence_no: 1, turn_id: 'turn-1', event_type: 'user_message', payload: { id: 'user-1', content: '分析订单' } },
+      { sequence_no: 2, turn_id: 'turn-1', event_type: 'assistant_message', payload: { id: 'assistant-1', content: '已查询部分订单' } },
+      { sequence_no: 3, turn_id: 'turn-1', event_type: 'turn_error', payload: { error: '本轮执行已达到 7 步上限，任务被中止。' } },
+      { sequence_no: 4, turn_id: 'turn-1', event_type: 'assistant_message', payload: { id: 'assistant-2', content: '重试完成，已生成结论。' } },
+    ])
+
+    expect(messages).toHaveLength(2)
+    expect(messages[1]!.error).toBeUndefined()
+    expect(messages[1]!.content).toContain('重试完成，已生成结论。')
+  })
+
   it('restores annotation chip from selection marker blocks and hides internal instructions', () => {
     const content = [
       '这段话的来源是哪里',

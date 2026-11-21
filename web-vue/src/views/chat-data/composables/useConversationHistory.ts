@@ -145,6 +145,8 @@ interface HistoryMessagePayload {
   subagent_supersteps?: unknown
   subagent_recursion_limit?: unknown
   generation_stats?: unknown
+  error?: unknown
+  error_type?: unknown
 }
 
 interface HistoryEventPayload {
@@ -486,8 +488,20 @@ export const buildHistoryMessagesFromEvents = (historyEvents: unknown): Message[
       continue
     }
 
+    if (eventType === 'turn_error') {
+      const errorMessage = String(messagePayload.error || '').trim()
+      if (!errorMessage) continue
+      const assistant = ensureActiveAssistant(messagePayload, turnId)
+      assistant.error = errorMessage
+      assistant.isStreaming = false
+      continue
+    }
+
     if (eventType === 'assistant_message') {
       const assistant = ensureActiveAssistant(messagePayload, turnId)
+      // 同一轮重试成功后，后续助手消息清除旧失败标记；若本次仍失败，
+      // 新的 turn_error 会在其后重新写入。
+      assistant.error = undefined
       assistant.timestamp = parseHistoryTimestamp(messagePayload.timestamp) || assistant.timestamp
       // 生成统计随 assistant_message 持久化（服务端口径），与本轮直播口径同源
       const generationStats = toGenerationStats(messagePayload.generation_stats)

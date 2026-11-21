@@ -35,6 +35,7 @@ EVENT_ASSISTANT_MESSAGE = "assistant_message"
 EVENT_TOOL_RESULT = "tool_result"
 EVENT_CONTEXT_COMPRESSION = "context_compression"
 EVENT_TOKEN_USAGE = "token_usage"
+EVENT_TURN_ERROR = "turn_error"
 EVENT_APPEND_MAX_ATTEMPTS = 3
 EVENT_APPEND_RETRY_DELAY_SECONDS = 0.05
 
@@ -168,6 +169,52 @@ class ConversationEventService:
         if persisted_signatures is not None:
             for event in events:
                 persisted_signatures[str(event.get("event_key") or "").strip()] = _event_signature(event)
+
+    async def persist_turn_error(
+        self,
+        *,
+        conversation_id: str,
+        user_id: str,
+        operator_name: str,
+        turn_id: str,
+        error: str,
+        error_type: str | None = None,
+        run_id: str | None = None,
+        supersteps: int | None = None,
+        recursion_limit: int | None = None,
+    ) -> None:
+        """持久化本轮终止原因，供刷新后回放失败提示。
+
+        turn_error 只进入历史事件，不进入模型消息，因此不会污染下一轮上下文；
+        event_key 按 Run 固定，保证同一 Run 重复收口只保留一条错误，重试产生的
+        新错误则追加在后，由前端以最后一条状态为准。
+        """
+        if not turn_id or not error:
+            logger.warning("跳过无轮次或无文案的失败事件: conversation_id=%s", conversation_id)
+            return
+        payload: dict[str, Any] = {
+            "error": error,
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        if error_type:
+            payload["error_type"] = error_type
+        if isinstance(supersteps, int) and supersteps > 0:
+            payload["supersteps"] = supersteps
+        if isinstance(recursion_limit, int) and recursion_limit > 0:
+            payload["recursion_limit"] = recursion_limit
+        await self._append_events(
+            conversation_id=conversation_id,
+            user_id=user_id,
+            operator_name=operator_name,
+            events=[
+                _event(
+                    turn_id=turn_id,
+                    event_key=f"turn_error:{turn_id}:{run_id or 'run'}",
+                    event_type=EVENT_TURN_ERROR,
+                    payload=payload,
+                )
+            ],
+        )
 
     async def _commit_turn_checkpoint_once(
         self,

@@ -1,7 +1,7 @@
 """本轮图推进次数（supersteps）计数与持久化单测。
 
-口径：values 流每条 = 一次图推进；首条是输入回显，``__interrupt__`` 帧不算；
-每次 invoke 从 0 重新计，与 recursion_limit 的额度口径一致。
+口径：LangGraph 节点回调 metadata.langgraph_step = 真实引擎步；每次 invoke
+以首个节点回调为基线从 0 起算，与 recursion_limit 的额度口径一致。
 """
 
 import os
@@ -13,9 +13,14 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain.agents import create_agent
+from langchain.agents.middleware import AgentMiddleware
+from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langgraph.errors import GraphRecursionError
 
 from apps.chat_data_app import agent_run_support
 from apps.chat_data_app import agent_stream as agent_stream_module
@@ -37,23 +42,80 @@ async def _collect(adapter, event):
 
 
 @pytest.mark.asyncio
-async def test_run_steps_counts_values_excluding_echo_and_interrupt():
+async def test_run_steps_use_langgraph_node_step_excluding_nested_subgraph():
     adapter = _adapter()
+    tracker = adapter._graph_step_tracker
 
     assert await _collect(adapter, ("values", {"messages": []})) == []
     assert adapter.supersteps == 0
 
-    first = await _collect(adapter, ("values", {"messages": []}))
+    # 新 thread 首步可能是 1；同 thread 续跑可能从 8 起，回调步数都要归一到本轮 1。
+    await tracker.on_chain_start(
+        {},
+        {},
+        run_id=uuid4(),
+        metadata={"langgraph_node": "model", "langgraph_step": 8, "langgraph_checkpoint_ns": "model:id"},
+    )
+    first = list(adapter._sync_graph_steps())
     assert len(first) == 1
     assert "event: run_steps" in first[0]
     assert '"supersteps": 1' in first[0]
     assert '"recursion_limit": 1000' in first[0]
-
-    assert await _collect(adapter, ("values", {"__interrupt__": [{"value": "ok"}]})) == []
     assert adapter.supersteps == 1
 
-    second = await _collect(adapter, ("values", {"messages": []}))
+    # 子图 callback 的 step 不能覆盖主图。
+    await tracker.on_chain_start(
+        {},
+        {},
+        run_id=uuid4(),
+        metadata={"langgraph_node": "model", "langgraph_step": 99, "langgraph_checkpoint_ns": "tools:id|subgraph"},
+    )
+    assert list(adapter._sync_graph_steps()) == []
+
+    await tracker.on_chain_start(
+        {},
+        {},
+        run_id=uuid4(),
+        metadata={"langgraph_node": "after", "langgraph_step": 9, "langgraph_checkpoint_ns": "after:id"},
+    )
+    second = list(adapter._sync_graph_steps())
     assert '"supersteps": 2' in second[0]
+    assert list(adapter._sync_graph_steps()) == []
+
+
+@pytest.mark.asyncio
+async def test_adapter_stream_emits_true_graph_steps_at_recursion_limit():
+    def before_hook(name):
+        async def hook(self, state, runtime):
+            return None
+
+        return type(name, (AgentMiddleware,), {"abefore_model": hook})
+
+    def after_hook(name):
+        async def hook(self, state, runtime):
+            return None
+
+        return type(name, (AgentMiddleware,), {"aafter_model": hook})
+
+    model = GenericFakeChatModel(messages=iter([AIMessage(content="ok")]))
+    middleware = [before_hook(f"B{i}")() for i in range(3)]
+    middleware += [after_hook(f"A{i}")() for i in range(3)]
+    agent = create_agent(model=model, tools=[], middleware=middleware)
+    adapter = agent_stream_module._AgentSseStreamAdapter(
+        agent=agent,
+        initial_state={"messages": [HumanMessage(content="hi")]},
+        config={"recursion_limit": 7},
+    )
+
+    events = []
+    with pytest.raises(GraphRecursionError):
+        async for event in adapter.stream_events():
+            events.append(event)
+
+    run_steps = [event for event in events if isinstance(event, str) and event.startswith("event: run_steps\n")]
+    assert '"supersteps": 4, "recursion_limit": 7' in run_steps[0]
+    assert '"supersteps": 7, "recursion_limit": 7' in run_steps[-1]
+    assert adapter.supersteps == 7
 
 
 @pytest.mark.asyncio

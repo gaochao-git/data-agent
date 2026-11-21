@@ -1,7 +1,6 @@
 """ChatData completion handler."""
 
 import asyncio
-import re
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import suppress
@@ -10,7 +9,6 @@ from functools import partial
 from typing import Any
 from uuid import uuid4
 
-import openai
 from fastapi import Request
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import (
@@ -86,6 +84,7 @@ from .agent_run_support import (
     _mark_agent_resume_checkpointed,
     _merge_message_snapshots,
     _offload_oversized_user_input,
+    _persist_agent_failure,
     _persist_agent_model_snapshot,
     _persist_agent_partial_history,
     _persist_agent_turn_history_snapshot,
@@ -113,12 +112,17 @@ from .agent_stream_events import (  # noqa: F401  # 部分为有意重导出，�
     _compile_reasoning_tool_name_patterns,
     _extract_reasoning_content,
     _extract_reasoning_from_candidates,
+    _extract_status_error_message,
     _finish_running_tool,
     _format_reasoning_for_display,
     _format_thinking_event,
     _format_tool_event,
     _format_tool_lifecycle_event,
+    _graph_recursion_failure_message,
+    _GraphStepTracker,
+    _is_omlx_prefill_memory_rejected,
     _is_tool_result_error,
+    _model_failure_user_message,
     _parse_tool_args_buffer,
     _register_running_tool,
     _resolve_active_tool_call_id,
@@ -187,71 +191,6 @@ AGENT_ID = "chat_data"
 
 class AgentRunStreamFailedError(RuntimeError):
     """SSE 已发送用户可见错误，外层只需按失败状态收口 Run。"""
-
-
-def _is_omlx_prefill_memory_rejected(exc: Exception) -> bool:
-    """识别 oMLX 内存护栏拒绝（prefill_memory_exceeded）。
-
-    openai SDK 已把 400 响应体解析进 ``APIStatusError.body``，按结构取 code；
-    body 缺失或形状变化时按 message 关键字兜底。命中时重试无效——上下文
-    体量不变则服务端仍会拒绝。
-    """
-    body = getattr(exc, "body", None)
-    if isinstance(body, dict):
-        error = body.get("error")
-        payload = error if isinstance(error, dict) else body
-        code = str(payload.get("omlx_code") or payload.get("code") or "")
-        if code == "prefill_memory_exceeded":
-            return True
-    return "prefill_memory_exceeded" in str(exc)
-
-
-def _extract_status_error_message(exc: Exception) -> str | None:
-    """从 APIStatusError 提取服务商 message 文本用于用户透出。
-
-    只取 body.error.message（body 为字符串时取原文），剥离 request_id 噪音；
-    空值或超长（>200 字符，防服务商透出大段内部诊断）返回 None，由调用方走
-    兜底文案。永不透出堆栈与响应原文全文。
-    """
-    body = getattr(exc, "body", None)
-    if isinstance(body, dict):
-        error = body.get("error")
-        payload = error if isinstance(error, dict) else body
-        message = str(payload.get("message") or "").strip()
-    elif isinstance(body, str):
-        message = body.strip()
-    else:
-        return None
-    message = re.sub(r"\s*\(request_id[:：][^)]*\)", "", message, flags=re.IGNORECASE).strip()
-    return message if 0 < len(message) <= 200 else None
-
-
-def _model_failure_user_message(exc: Exception) -> str:
-    """将模型服务异常映射为用户可读文案；不向用户透出原始错误细节。"""
-    if isinstance(exc, openai.APITimeoutError):
-        return "模型服务响应超时，请点击继续重试。"
-    if isinstance(exc, openai.AuthenticationError):
-        return "模型服务认证失败，请检查模型服务 API Key 配置后重试。"
-    if isinstance(exc, openai.RateLimitError):
-        return "模型服务当前繁忙，请稍后点击继续重试，或更换其他模型。"
-    if isinstance(exc, openai.APIConnectionError):
-        return "模型服务连接中断，请点击继续重试。"
-    if isinstance(exc, TimeoutError):
-        # 含 langchain-openai StreamChunkTimeoutError（其为内置 TimeoutError 子类）：
-        # TCP 连接存活但长时间无任何流式内容返回（模型服务挂起/过载），由分块超时看门狗主动中断
-        return "模型服务长时间未返回内容，请点击继续重试，或稍后再试。"
-    if _is_omlx_prefill_memory_rejected(exc):
-        # oMLX 内存护栏拒绝的 400：上下文体量超服务端推理内存上限，重试无效，
-        # 引导用户缩减上下文而不是反复点击重试
-        return "本轮对话上下文超出模型服务的内存上限，请新开会话，或减少本条消息引用的文件后重试。"
-    if isinstance(exc, openai.APIStatusError):
-        # 非枚举状态码（402 余额不足、403 配额、404 模型下线、5xx 网关错等）：
-        # 透出服务商 message（提取+护栏），取不到时走兜底。具体子类
-        # （超时/认证/限流）已在上方命中，不会进入本分支。
-        detail = _extract_status_error_message(exc)
-        if detail:
-            return f"模型服务返回错误：{detail}"
-    return "智能问数执行失败，请稍后重试。"
 
 
 def _build_user_message(
@@ -554,6 +493,8 @@ class _AgentSseStreamAdapter:
         self.agent = agent
         self.initial_state = initial_state
         self.config = config
+        self._graph_step_tracker = _GraphStepTracker()
+        self._stream_config = self._graph_step_tracker.wrap_config(config)
         self.request = request
         self.visible_message_filter = visible_message_filter
         log = disconnect_log or _DisconnectLog()
@@ -595,9 +536,8 @@ class _AgentSseStreamAdapter:
         self._inherited_durations: dict[str, int] | None = None
         # 实时生成速率（generation_speed）：主对话与子智能体共用同一滑窗实现。
         self._speed_sampler = GenerationSpeedSampler()
-        # 本轮 run 的图推进次数（values 每条一次推进，首条输入回显；按 invoke 归零）。
+        # 本轮 run 的 LangGraph 真实引擎步数（由节点回调 metadata.langgraph_step 提取）。
         self.supersteps = 0
-        self._values_echo_seen = False
 
     @property
     def _speed_samples(self) -> Any:
@@ -631,7 +571,11 @@ class _AgentSseStreamAdapter:
         try:
             async for sse_event in self._iter_agent_stream_events(started_at):
                 yield sse_event
+            for step_event in self._sync_graph_steps():
+                yield step_event
         except Exception as exc:
+            for step_event in self._sync_graph_steps():
+                yield step_event
             if not self._first_visible_payload_seen:
                 self._emit_first_token_timeout_if_needed(
                     started_at, ext2={"error_type": exc.__class__.__name__, "error": str(exc)}
@@ -655,7 +599,7 @@ class _AgentSseStreamAdapter:
         stream_started = False
         async for event in self.agent.astream(
             self.initial_state,
-            config=self.config,
+            config=self._stream_config,
             stream_mode=["messages", "custom", "values"],
         ):
             if not stream_started:
@@ -665,6 +609,8 @@ class _AgentSseStreamAdapter:
                 return
             async for sse_event in self._process_stream_event(event, started_at):
                 yield sse_event
+            for step_event in self._sync_graph_steps():
+                yield step_event
 
     async def _process_stream_event(self, event: Any, started_at: float) -> AsyncIterator[dict[str, Any] | str]:
         event_kind, payload = parse_agent_stream_event(event)
@@ -673,9 +619,6 @@ class _AgentSseStreamAdapter:
                 self.state_values = payload
                 for sse_event in self.tool_stream_state.reconcile_state_messages(payload.get("messages")):
                     yield sse_event
-                steps_event = self._track_superstep(payload)
-                if steps_event:
-                    yield steps_event
             return
         if event_kind == "custom":
             for sse_event in self._handle_custom_payload(payload):
@@ -710,19 +653,14 @@ class _AgentSseStreamAdapter:
         if speed_event:
             yield speed_event
 
-    def _track_superstep(self, payload: dict[str, Any]) -> str | None:
-        """values 每个超步一条；首条输入回显与 interrupt 帧不计，每次推进下发 run_steps。"""
-        if "__interrupt__" in payload:
-            return None
-        if not self._values_echo_seen:
-            self._values_echo_seen = True
-            return None
-        self.supersteps += 1
-        data: dict[str, int] = {"supersteps": self.supersteps}
+    def _sync_graph_steps(self) -> Iterator[str]:
+        """把回调捕获的真实引擎步数转成 run_steps；同一值只发一次。"""
+        if self._graph_step_tracker.supersteps <= self.supersteps:
+            return
+        self.supersteps = self._graph_step_tracker.supersteps
         limit = self._recursion_limit()
-        if limit is not None:
-            data["recursion_limit"] = limit
-        return _format_sse(SSE_EVENT_RUN_STEPS, data)
+        data = {"supersteps": self.supersteps, **({"recursion_limit": limit} if limit is not None else {})}
+        yield _format_sse(SSE_EVENT_RUN_STEPS, data)
 
     def _recursion_limit(self) -> int | None:
         raw = self.config.get("recursion_limit") if isinstance(self.config, dict) else None
@@ -1578,6 +1516,7 @@ async def _run_chat_data_agent_stream(
     # 无人值守运行（定时轮派发）：工具装配剔除 ask_user_question
     disable_user_interaction = req.disable_user_interaction
     selected_files = parse_file_selections(file_selections)
+    callbacks: _AgentRunStreamCallbacks | None = None
     try:
         # 无依赖的准备项一次并行：语义上下文（含数据源校验）/ 子智能体热默认 /
         # 会话创建日期 / 附件解析。语义上下文失败仍按 _AgentRunPreparationError
@@ -1613,7 +1552,7 @@ async def _run_chat_data_agent_stream(
         )
         log_phase("workspace_runtime")
     except _AgentRunPreparationError as exc:
-        yield _format_sse(SSE_EVENT_ERROR, {"error": exc.message})
+        yield await _persist_agent_failure(req, None, exc, exc.message)
         raise AgentRunStreamFailedError from None
     # 引用文件校验必须在 workspace 就绪之后：@ 菜单可引用的文件以工作区实际内容为准。
     valid_file_selections = _validate_workspace_file_selections(selected_files, workspace_paths["root"])
@@ -1820,11 +1759,11 @@ async def _run_chat_data_agent_stream(
 
     except ContextInputLimitExceededError as exc:
         logger.info("智能问数上下文超出输入容量: conversation_id=%s", thread_id)
-        yield _format_sse(SSE_EVENT_ERROR, {"error": str(exc)})
+        yield await _persist_agent_failure(req, callbacks, exc, str(exc))
         raise AgentRunStreamFailedError from None
     except Exception as exc:
         logger.error("智能问数执行失败: conversation_id=%s", thread_id, exc_info=True)
-        yield _format_sse(SSE_EVENT_ERROR, {"error": _model_failure_user_message(exc)})
+        yield await _persist_agent_failure(req, callbacks, exc, _model_failure_user_message(exc))
         raise AgentRunStreamFailedError from None
 
 

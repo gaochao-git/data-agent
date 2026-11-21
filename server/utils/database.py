@@ -228,21 +228,8 @@ def get_session_factory() -> async_sessionmaker[AsyncSession]:
 
 
 @asynccontextmanager
-async def get_session() -> AsyncGenerator[AsyncSession, None]:
-    """获取数据库会话（上下文管理器）。
-
-    事务上下文内（transaction_scope 已绑定会话）直接复用同一会话，不再新开连接；
-    若在事务的子 asyncio 任务中并发调用则拒绝，避免多个协程共享 AsyncSession。
-    """
-    active_session = _ACTIVE_SESSION.get()
-    if active_session is not None:
-        owner = _ACTIVE_SESSION_OWNER.get()
-        current_task = asyncio.current_task()
-        if owner is not None and current_task is not None and owner is not current_task:
-            raise RuntimeError("事务内禁止并发使用同一数据库会话：请在事务外并发，或让子任务自行开启会话")
-        yield active_session
-        return
-
+async def _session_scope() -> AsyncGenerator[AsyncSession, None]:
+    """打开一个新会话并完成提交/回滚；不读取外层事务绑定。"""
     endpoint = _endpoint_selector.current()
     factory = get_session_factory()
     async with factory() as session:
@@ -264,6 +251,38 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
             raise
         finally:
             reset_active_session(tokens)
+
+
+@asynccontextmanager
+async def get_session() -> AsyncGenerator[AsyncSession, None]:
+    """获取数据库会话（上下文管理器）。
+
+    事务上下文内（transaction_scope 已绑定会话）直接复用同一会话，不再新开连接；
+    若在事务的子 asyncio 任务中并发调用则拒绝，避免多个协程共享 AsyncSession。
+    """
+    active_session = _ACTIVE_SESSION.get()
+    if active_session is not None:
+        owner = _ACTIVE_SESSION_OWNER.get()
+        current_task = asyncio.current_task()
+        if owner is not None and current_task is not None and owner is not current_task:
+            raise RuntimeError("事务内禁止并发使用同一数据库会话：请在事务外并发，或让子任务自行开启会话")
+        yield active_session
+        return
+
+    async with _session_scope() as session:
+        yield session
+
+
+@asynccontextmanager
+async def get_isolated_session() -> AsyncGenerator[AsyncSession, None]:
+    """始终新开独立会话，忽略 transaction_scope 绑定的会话。
+
+    供后台任务使用。ContextVar 会复制到子任务，子任务若走 get_session 会因
+    owner 不一致被拒绝；需要读库的后台刷新应显式使用本入口，不能复用调用方
+    事务中的 AsyncSession。
+    """
+    async with _session_scope() as session:
+        yield session
 
 
 async def init_database() -> None:

@@ -13,6 +13,11 @@ import json
 import re
 import time
 from typing import Any
+from uuid import UUID
+
+import openai
+from langchain_core.callbacks import AsyncCallbackHandler
+from langgraph.errors import GraphRecursionError
 
 from utils.logger import get_logger
 from utils.tool_call_args import coerce_tool_call_args
@@ -58,6 +63,125 @@ REASONING_TOOL_DISPLAY_NAMES = {
     "ask_user_question": "询问用户",
     "subagent": "子智能体",
 }
+
+
+class _GraphStepTracker(AsyncCallbackHandler):
+    """从 LangGraph 节点回调提取本轮真实引擎步数（同一步的并行节点只计一次）。"""
+
+    def __init__(self) -> None:
+        self.supersteps = 0
+        self._first_step: int | None = None
+
+    def wrap_config(self, config: dict[str, Any]) -> dict[str, Any]:
+        """复制一份 astream 配置并追加步数回调，不改动原始 config。"""
+        stream_config = dict(config)
+        callbacks = config.get("callbacks")
+        if callbacks is None:
+            stream_config["callbacks"] = [self]
+        elif isinstance(callbacks, (list, tuple)):
+            stream_config["callbacks"] = [*callbacks, self]
+        else:
+            stream_config["callbacks"] = [callbacks, self]
+        return stream_config
+
+    async def on_chain_start(
+        self,
+        serialized: dict[str, Any],
+        inputs: dict[str, Any],
+        *,
+        run_id: UUID,
+        parent_run_id: UUID | None = None,
+        tags: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        _ = serialized, inputs, run_id, parent_run_id, tags, kwargs
+        if not isinstance(metadata, dict) or not metadata.get("langgraph_node"):
+            return
+        # 子图 callback 的 namespace 含 ``|``，不能用它的 step 覆盖主图步数。
+        if "|" in str(metadata.get("langgraph_checkpoint_ns") or ""):
+            return
+        step = metadata.get("langgraph_step")
+        if not isinstance(step, int):
+            return
+        if self._first_step is None:
+            self._first_step = step
+        self.supersteps = max(self.supersteps, step - self._first_step + 1)
+
+
+def _graph_recursion_failure_message(exc: Exception) -> str | None:
+    """将 LangGraph 超步中断转成可展示文案；其他异常返回 None。"""
+    if not isinstance(exc, GraphRecursionError):
+        return None
+    match = re.search(r"Recursion limit of (\d+)", str(exc))
+    if match:
+        return f"本轮执行已达到 {match.group(1)} 步上限，任务被中止。请缩小任务范围、拆分任务，或新开会话后重试。"
+    return "本轮执行已达到步数上限，任务被中止。请缩小任务范围、拆分任务，或新开会话后重试。"
+
+
+def _is_omlx_prefill_memory_rejected(exc: Exception) -> bool:
+    """识别 oMLX 内存护栏拒绝（prefill_memory_exceeded）。
+
+    openai SDK 已把 400 响应体解析进 ``APIStatusError.body``，按结构取 code；
+    body 缺失或形状变化时按 message 关键字兜底。命中时重试无效——上下文
+    体量不变则服务端仍会拒绝。
+    """
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        error = body.get("error")
+        payload = error if isinstance(error, dict) else body
+        code = str(payload.get("omlx_code") or payload.get("code") or "")
+        if code == "prefill_memory_exceeded":
+            return True
+    return "prefill_memory_exceeded" in str(exc)
+
+
+def _extract_status_error_message(exc: Exception) -> str | None:
+    """从 APIStatusError 提取服务商 message 文本用于用户透出。
+
+    只取 body.error.message（body 为字符串时取原文），剥离 request_id 噪音；
+    空值或超长（>200 字符，防服务商透出大段内部诊断）返回 None，由调用方走
+    兜底文案。永不透出堆栈与响应原文全文。
+    """
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        error = body.get("error")
+        payload = error if isinstance(error, dict) else body
+        message = str(payload.get("message") or "").strip()
+    elif isinstance(body, str):
+        message = body.strip()
+    else:
+        return None
+    message = re.sub(r"\s*\(request_id[:：][^)]*\)", "", message, flags=re.IGNORECASE).strip()
+    return message if 0 < len(message) <= 200 else None
+
+
+def _model_failure_user_message(exc: Exception) -> str:
+    """将模型服务异常映射为用户可读文案；不向用户透出原始错误细节。"""
+    if isinstance(exc, openai.APITimeoutError):
+        return "模型服务响应超时，请点击继续重试。"
+    if isinstance(exc, openai.AuthenticationError):
+        return "模型服务认证失败，请检查模型服务 API Key 配置后重试。"
+    if isinstance(exc, openai.RateLimitError):
+        return "模型服务当前繁忙，请稍后点击继续重试，或更换其他模型。"
+    if isinstance(exc, openai.APIConnectionError):
+        return "模型服务连接中断，请点击继续重试。"
+    if isinstance(exc, TimeoutError):
+        # 含 langchain-openai StreamChunkTimeoutError（其为内置 TimeoutError 子类）：
+        # TCP 连接存活但长时间无任何流式内容返回（模型服务挂起/过载），由分块超时看门狗主动中断
+        return "模型服务长时间未返回内容，请点击继续重试，或稍后再试。"
+    if _is_omlx_prefill_memory_rejected(exc):
+        # oMLX 内存护栏拒绝的 400：上下文体量超服务端推理内存上限，重试无效，
+        # 引导用户缩减上下文而不是反复点击重试
+        return "本轮对话上下文超出模型服务的内存上限，请新开会话，或减少本条消息引用的文件后重试。"
+    if isinstance(exc, openai.APIStatusError):
+        # 非枚举状态码（402 余额不足、403 配额、404 模型下线、5xx 网关错等）：
+        # 透出服务商 message（提取+护栏），取不到时走兜底。具体子类
+        # （超时/认证/限流）已在上方命中，不会进入本分支。
+        detail = _extract_status_error_message(exc)
+        if detail:
+            return f"模型服务返回错误：{detail}"
+    return _graph_recursion_failure_message(exc) or "智能问数执行失败，请稍后重试。"
 
 
 def _collect_reasoning_candidates(message_chunk: Any, msg_data: dict[str, Any] | None) -> list[Any]:

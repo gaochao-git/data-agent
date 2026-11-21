@@ -14,7 +14,7 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from functools import partial
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 from uuid import uuid4
 
 from fastapi import Request
@@ -46,7 +46,7 @@ from .services.semantic.run.semantic_conversation_context import (
     prepare_semantic_conversation_context,
 )
 from .services.semantic.run.semantic_materializer import prematerialize_enabled_semantic_models
-from .sse_protocol import SSE_EVENT_CONVERSATION_TITLE_UPDATED, format_sse
+from .sse_protocol import SSE_EVENT_CONVERSATION_TITLE_UPDATED, SSE_EVENT_ERROR, format_sse
 
 if TYPE_CHECKING:
     from .agent_stream import _AgentSseStreamAdapter
@@ -1028,6 +1028,60 @@ async def _persist_agent_partial_history(callbacks: _AgentRunStreamCallbacks) ->
         and not callbacks.stream_adapter.pending_interrupt()
     ):
         await agent_inbox_service.mark_question_resume_started(callbacks.run_id, callbacks.owner_token)
+
+
+class _TurnFailureRequest(Protocol):
+    """失败收口只需要请求里的会话与轮次定位字段。"""
+
+    @property
+    def thread_id(self) -> str: ...
+
+    @property
+    def user_id(self) -> str: ...
+
+    @property
+    def username(self) -> str | None: ...
+
+    @property
+    def turn_id(self) -> str | None: ...
+
+    @property
+    def resume_turn_id(self) -> str | None: ...
+
+    @property
+    def run_id(self) -> str | None: ...
+
+
+async def _persist_agent_failure(
+    req: _TurnFailureRequest,
+    callbacks: _AgentRunStreamCallbacks | None,
+    exc: Exception,
+    error: str,
+) -> str:
+    """尽力持久化本轮终止原因，并返回下发的 error SSE；落库失败不阻断原始异常。"""
+    adapter = callbacks.stream_adapter if callbacks is not None else None
+    stats = _failure_generation_stats(adapter)
+    turn_id = callbacks.effective_turn_id if callbacks is not None else (req.turn_id or req.resume_turn_id or "")
+    try:
+        await conversation_event_service.persist_turn_error(
+            conversation_id=req.thread_id,
+            user_id=req.user_id,
+            operator_name=req.username or req.user_id,
+            turn_id=turn_id,
+            error=error,
+            error_type=exc.__class__.__name__,
+            run_id=req.run_id,
+            supersteps=stats.get("supersteps"),
+            recursion_limit=stats.get("recursion_limit"),
+        )
+    except Exception:
+        logger.warning(
+            "失败轮次错误事件落库失败: conversation_id=%s turn_id=%s",
+            req.thread_id,
+            turn_id,
+            exc_info=True,
+        )
+    return format_sse(SSE_EVENT_ERROR, {"error": error})
 
 
 async def _mark_agent_resume_checkpointed(callbacks: _AgentRunStreamCallbacks) -> None:

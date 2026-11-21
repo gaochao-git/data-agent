@@ -230,6 +230,39 @@ async def test_persist_agent_partial_history_skips_mark_when_interrupt_pending(m
 
 
 @pytest.mark.asyncio
+async def test_persist_agent_failure_forwards_stats_and_returns_error_sse(monkeypatch):
+    captured: dict = {}
+
+    async def fake_persist(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(agent_run_support.conversation_event_service, "persist_turn_error", fake_persist)
+    adapter = SimpleNamespace(supersteps=7, config={"recursion_limit": 7})
+    req = SimpleNamespace(
+        thread_id="conv-1", user_id="user-1", username=None, turn_id="turn-1", resume_turn_id=None, run_id="run-1"
+    )
+    callbacks = SimpleNamespace(effective_turn_id="turn-1", stream_adapter=adapter)
+
+    event = await agent_run_support._persist_agent_failure(
+        req,
+        callbacks,
+        RuntimeError("graph failed"),
+        "本轮执行已达到 7 步上限，任务被中止。",
+    )
+
+    assert captured["conversation_id"] == "conv-1"
+    assert captured["operator_name"] == "user-1"
+    assert captured["turn_id"] == "turn-1"
+    assert captured["run_id"] == "run-1"
+    assert captured["error"] == "本轮执行已达到 7 步上限，任务被中止。"
+    assert captured["error_type"] == "RuntimeError"
+    assert captured["supersteps"] == 7
+    assert captured["recursion_limit"] == 7
+    assert "event: error" in event
+    assert "本轮执行已达到 7 步上限" in event
+
+
+@pytest.mark.asyncio
 async def test_persist_agent_turn_history_snapshot_without_adapter_is_noop():
     callbacks = SimpleNamespace(model_snapshot_writer=None, stream_adapter=None)
     await agent_run_support._persist_agent_turn_history_snapshot(callbacks)  # type: ignore[arg-type]
