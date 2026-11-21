@@ -1702,6 +1702,17 @@ const liveSuperstepLimit = ref<number | null>(null)
 const liveElapsedMs = ref<number | null>(null)
 let elapsedTickerId: ReturnType<typeof setInterval> | null = null
 
+// 失败轮次没有 message_end 收口：把实时步数落到当前助手气泡，再由 stopLive 清理实时值。
+const attachLiveSuperstepsOnFailure = () => {
+  if (!liveSupersteps.value) return
+  const message = ensureAssistantMessage()
+  message.generationStats = {
+    ...(message.generationStats || {}),
+    supersteps: liveSupersteps.value,
+    ...(liveSuperstepLimit.value ? { recursionLimit: liveSuperstepLimit.value } : {}),
+  }
+}
+
 const stopLiveGenerationSpeed = () => {
   liveGenerationSpeed.value = null
   liveSupersteps.value = null
@@ -2210,6 +2221,7 @@ const submitAnalysisQuery = async (
             return
           }
           finalizeUnfinishedToolCalls('error', error)
+          attachLiveSuperstepsOnFailure()
           setActiveAssistantError(error)
           if (startedRunId) {
             startSseReconnect()
@@ -2351,6 +2363,7 @@ const submitAnalysisQuery = async (
     )
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : '发送失败'
+    attachLiveSuperstepsOnFailure()
     setActiveAssistantError(errorMessage)
   } finally {
     isGenerating.value = false

@@ -286,6 +286,41 @@ def _resolve_history_stream_id(
     return stream_event_id_provider() if stream_event_id_provider else None
 
 
+def _merge_generation_stats_into_latest_ai(
+    messages: list[BaseMessage],
+    generation_stats: dict[str, int] | None,
+) -> list[BaseMessage]:
+    """把失败轮次的统计补到最后一条 AI 消息，供部分历史回放展示。"""
+    if not generation_stats:
+        return messages
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if not isinstance(message, AIMessage):
+            continue
+        additional_kwargs = dict(getattr(message, "additional_kwargs", None) or {})
+        existing = additional_kwargs.get("generation_stats")
+        additional_kwargs["generation_stats"] = {
+            **(existing if isinstance(existing, dict) else {}),
+            **generation_stats,
+        }
+        patched = message.model_copy(update={"additional_kwargs": additional_kwargs})
+        return [*messages[:index], patched, *messages[index + 1 :]]
+    return messages
+
+
+def _failure_generation_stats(stream_adapter: Any | None) -> dict[str, int]:
+    """失败轮次可观测统计：仅取已经完成推进的图步数，不补造未完成步骤。"""
+    supersteps = getattr(stream_adapter, "supersteps", 0)
+    if not isinstance(supersteps, int) or supersteps <= 0:
+        return {}
+    stats = {"supersteps": supersteps}
+    config = getattr(stream_adapter, "config", None)
+    recursion_limit = config.get("recursion_limit") if isinstance(config, dict) else None
+    if isinstance(recursion_limit, int) and recursion_limit > 0:
+        stats["recursion_limit"] = recursion_limit
+    return stats
+
+
 async def _persist_agent_turn_history(
     stream_adapter: "_AgentSseStreamAdapter",
     *,
@@ -298,6 +333,7 @@ async def _persist_agent_turn_history(
     owner_token: str | None = None,
     stream_event_id_provider: Callable[[], str | None] | None = None,
     snapshot_stream_id: str | None = None,
+    generation_stats: dict[str, int] | None = None,
 ) -> None:
     """将本轮完整消息、工具结果和思考分段追加到独立历史。"""
     values = state_override
@@ -311,6 +347,7 @@ async def _persist_agent_turn_history(
         state_messages,
         turn_id=turn_id,
     )
+    messages = _merge_generation_stats_into_latest_ai(messages, generation_stats)
     turn_ids = _resolve_history_turn_ids(messages, turn_id)
     usage = _resolve_history_usage(values, stream_adapter)
     history_signatures = getattr(stream_adapter, "history_event_signatures", None)
@@ -475,6 +512,7 @@ async def _persist_partial_agent_turn_history(
     try:
         if stream_adapter.state is None and hasattr(stream_adapter.agent, "aget_state"):
             stream_adapter.state = await stream_adapter.agent.aget_state(stream_adapter.config)
+        generation_stats = _failure_generation_stats(stream_adapter)
         await _persist_agent_turn_history(
             stream_adapter,
             conversation_id=conversation_id,
@@ -484,6 +522,7 @@ async def _persist_partial_agent_turn_history(
             run_id=run_id,
             owner_token=owner_token,
             stream_event_id_provider=stream_event_id_provider,
+            generation_stats=generation_stats,
         )
     except Exception:
         logger.warning("流异常后的会话历史补写失败: conversation_id=%s", conversation_id, exc_info=True)

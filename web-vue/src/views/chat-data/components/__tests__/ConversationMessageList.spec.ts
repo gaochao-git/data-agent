@@ -67,6 +67,15 @@ describe('ConversationMessageList', () => {
       liveSuperstepLimit: 1000,
     })
     expect(liveWrapper.text()).toContain('5 / 1000 步')
+
+    const failed: Message = {
+      id: 'assistant-failed',
+      role: 'assistant',
+      content: '部分回答',
+      error: '智能问数执行失败，请稍后重试。',
+      generationStats: { supersteps: 1, recursionLimit: 1000 },
+    }
+    expect(mountList([failed]).find('[data-message-steps]').text()).toContain('1 / 1000 步')
   })
 
   it('keeps streaming thinking segments collapsed by default with a single-line tail preview', () => {

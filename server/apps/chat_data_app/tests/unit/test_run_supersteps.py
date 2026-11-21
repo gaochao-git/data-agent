@@ -15,8 +15,9 @@ os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 from types import SimpleNamespace
 
 import pytest
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import AIMessage, ToolMessage
 
+from apps.chat_data_app import agent_run_support
 from apps.chat_data_app import agent_stream as agent_stream_module
 from apps.chat_data_app.agent.middleware import subagent_stream
 from apps.chat_data_app.agent.middleware.subagents import _build_task_result_artifacts
@@ -139,3 +140,36 @@ def test_subagent_artifacts_survive_tool_message_roundtrip():
 
     assert serialized["subagent_supersteps"] == 4
     assert serialized["subagent_recursion_limit"] == 1000
+
+
+@pytest.mark.asyncio
+async def test_partial_history_keeps_failure_supersteps(monkeypatch):
+    class _StateAgent:
+        async def aget_state(self, config):
+            assert config == {"recursion_limit": 1000}
+            return SimpleNamespace(values={"messages": [AIMessage(content="部分回答", id="assistant-1")]})
+
+    adapter = SimpleNamespace(
+        agent=_StateAgent(),
+        config={"recursion_limit": 1000},
+        state=None,
+        supersteps=2,
+        reasoning_segments=[],
+    )
+    persisted = []
+
+    async def persist_turn(**kwargs):
+        persisted.append(kwargs)
+
+    monkeypatch.setattr(agent_stream_module.conversation_event_service, "persist_turn", persist_turn)
+
+    await agent_run_support._persist_partial_agent_turn_history(
+        adapter,
+        conversation_id="conv-failed",
+        user_id="user-1",
+        username="用户一",
+        turn_id="turn-1",
+    )
+
+    generation_stats = persisted[0]["messages"][0].additional_kwargs["generation_stats"]
+    assert generation_stats == {"supersteps": 2, "recursion_limit": 1000}
