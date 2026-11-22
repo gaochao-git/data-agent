@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import ToolCallDetailPanel from '../conversation/ToolCallDetailPanel.vue'
 
 describe('ToolCallDetailPanel', () => {
-  it('shows the raw args preview instead of empty params while generating', () => {
+  it('recognizes the file early and streams formatted content while generating', async () => {
     const wrapper = mount(ToolCallDetailPanel, {
       props: {
         toolCall: {
@@ -18,6 +18,15 @@ describe('ToolCallDetailPanel', () => {
       },
     })
 
+    expect(wrapper.find('[data-file-write-preview]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('report.html')
+    expect(wrapper.text()).toContain('HTML')
+    expect(wrapper.text()).toContain('生成中')
+    expect(wrapper.text()).toContain('<html>')
+
+    await wrapper.find('[data-file-write-view-params]').trigger('click')
+
+    expect(wrapper.find('[data-file-write-preview]').exists()).toBe(false)
     expect(wrapper.text()).toContain('"content": "<html>')
     expect(wrapper.text()).not.toContain('参数生成中')
     expect(wrapper.text()).not.toContain('{ }')
@@ -115,5 +124,31 @@ describe('ToolCallDetailPanel', () => {
       },
     })
     expect(malformed.findAll('pre')[1]?.text()).toBe('{"broken": json')
+  })
+
+  it('shows formatted write content and switches back to the untouched raw params', async () => {
+    const wrapper = mount(ToolCallDetailPanel, {
+      props: {
+        toolCall: {
+          tool_call_id: 'call-write-json',
+          tool_name: 'file_write',
+          args: {
+            file_path: '/mnt/user-data/outputs/result.json',
+            content: '{"ok":true,"count":2}',
+          },
+          status: 'completed',
+          result: '{"success": true}',
+        },
+      },
+    })
+
+    expect(wrapper.find('[data-file-write-preview]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('JSON')
+    expect(wrapper.findAll('.cm-line').map(line => line.text()).join('\n')).toContain('"ok": true')
+
+    await wrapper.find('[data-file-write-view-params]').trigger('click')
+
+    expect(wrapper.find('[data-file-write-preview]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('"content": "{\\"ok\\":true,\\"count\\":2}"')
   })
 })

@@ -11,7 +11,10 @@ import QueryResultPanel from './QueryResultPanel.vue'
 import SaveToPanelModal from './SaveToPanelModal.vue'
 import { extractGeneratedSqlFromToolCall, extractQueryResultPayload, extractSemanticDslFromArgs, getQueryResultError, parseQueryResultEnvelope } from '../utils/semanticTool'
 import { compactInlineText, getSubagentActionDisplayName, getSubagentDispatchArgs, getSubagentOperationArgs, getSubagentSendMessage, getToolDisplayName, getToolTechnicalDescription, formatToolTimingText, isSubagentDisplayToolName, parseFileDiffResult, isFileDiffOffloaded } from '../utils/toolDisplay'
+import { extractFileWritePreview, extractStreamingFileWritePreview } from '../utils/fileWritePreview'
 import FileDiffViewer from './FileDiffViewer.vue'
+import FileWritePreview from './conversation/FileWritePreview.vue'
+import FileWriteViewToggle from './conversation/FileWriteViewToggle.vue'
 import MarkdownBlock from './conversation/messages/MarkdownBlock.vue'
 import { useSaveToPanel } from '../composables/useSaveToPanel'
 import { useToolTiming } from '../composables/useToolTiming'
@@ -157,6 +160,23 @@ const isCancelled = computed(() => props.toolCall.status === 'cancelled')
 const isArgsStreaming = computed(() => Boolean(props.toolCall.argsStreaming && props.toolCall.argsText))
 const argsPreviewText = computed(() => props.toolCall.argsText || '')
 
+// 写入类工具：保留原有参数视图，额外提供按文件类型渲染的「格式化」内容视图。
+// 生成中直接从半截 JSON 提前取 file_path/content，文件名与格式无需等参数收口。
+const writePreview = computed(() => extractFileWritePreview(props.toolCall.tool_name, props.toolCall.args || {}))
+const streamingWritePreview = computed(() => (
+  isArgsStreaming.value
+    ? extractStreamingFileWritePreview(props.toolCall.tool_name, argsPreviewText.value)
+    : null
+))
+const activeWritePreview = computed(() => writePreview.value || streamingWritePreview.value)
+const writeViewMode = ref<'formatted' | 'params'>('formatted')
+const showWriteViewToggle = computed(() => Boolean(activeWritePreview.value))
+const streamingWritePath = computed(() => streamingWritePreview.value?.path || '')
+watch(
+  () => props.toolCall.tool_call_id,
+  () => { writeViewMode.value = 'formatted' },
+)
+
 /** 参数预览统一走 Markdown 的 json 代码块；围栏长度按正文里最长反引号串自适应。 */
 const toJsonFence = (text: string): string => {
   const longestTicks = (text.match(/`+/g) || []).reduce((max, run) => Math.max(max, run.length), 0)
@@ -210,6 +230,8 @@ const compactDescription = computed(() => {
   // 追问与派发同口径：主对话框展示真正发出去的正文，而不是只展示 intent。
   const sendMessage = compactInlineText(getSubagentSendMessage(props.toolCall.tool_name, props.toolCall.args || {}), 80)
   if (sendMessage) return sendMessage
+  // 文件写入生成中：file_path 通常先于 content 输出，提前把目标文件显示出来。
+  if (streamingWritePath.value) return compactInlineText(streamingWritePath.value, 80)
   // 流式 intent：args 未解析完成时由 tool_progress 提前推送，长耗时工具执行中即可展示目的
   const args = props.toolCall.args || {}
   const intent = compactInlineText(args.intent, 80) || props.toolCall.streamingIntent || ''
@@ -626,13 +648,29 @@ function getSqlTokenClass(type: string): string {
           </div>
         </div>
       </div>
+      <!-- 写入类工具：格式化内容 / 原始参数两种视图；参数视图沿用原有结构 -->
+      <div v-if="showWriteViewToggle" class="mb-2 flex items-center justify-between gap-2">
+        <span class="text-xs font-medium text-gray-500">显示方式</span>
+        <FileWriteViewToggle v-model="writeViewMode" />
+      </div>
       <!-- 参数生成中的原始 JSON 预览：不解析半截 JSON，生成结束后切回结构化参数 -->
-      <div v-if="isArgsStreaming" class="mb-3 last:mb-0">
+      <div v-if="isArgsStreaming && (!activeWritePreview || writeViewMode === 'params')" class="mb-3 last:mb-0">
         <div v-if="toolCall.argsTruncated" class="mb-1.5 text-[11px] text-gray-400">预览已截断</div>
         <div class="tool-args-preview max-h-60 max-w-full overflow-auto rounded-lg border border-slate-200 bg-slate-50">
           <MarkdownBlock :content="fullArgsMarkdown" />
         </div>
       </div>
+      <!-- 写入内容格式化视图：Markdown/JSON/SQL/YAML/代码/纯文本按需渲染 -->
+      <FileWritePreview
+        v-else-if="activeWritePreview && writeViewMode === 'formatted'"
+        class="mb-3 last:mb-0"
+        :path="activeWritePreview.path"
+        :content="activeWritePreview.content"
+        :action="activeWritePreview.action"
+        :streaming="isArgsStreaming"
+        :truncated="Boolean(toolCall.argsTruncated)"
+        height="15rem"
+      />
       <!-- 参数区（可折叠） -->
       <div v-else-if="displayParams.length > 0" class="mb-3 last:mb-0">
         <button

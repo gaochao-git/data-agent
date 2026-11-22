@@ -496,4 +496,122 @@ describe('ToolCallCard', () => {
     // identical 不显示 +N -M 统计
     expect(wrapper.text()).not.toContain('+0')
   })
+
+  it('renders write content by file type and keeps the raw params view', async () => {
+    const wrapper = mount(ToolCallCard, {
+      props: {
+        isExpanded: true,
+        toolCall: {
+          tool_call_id: 'call-write-markdown',
+          tool_name: 'file_write',
+          args: {
+            file_path: '/mnt/user-data/outputs/report.md',
+            content: '# 月度报告\n\n正文内容',
+          },
+          status: 'completed',
+        },
+      },
+    })
+
+    expect(wrapper.find('[data-file-write-preview]').exists()).toBe(true)
+    expect(wrapper.find('h1').text()).toContain('月度报告')
+    expect(wrapper.text()).toContain('Markdown')
+
+    await wrapper.find('[data-file-write-view-params]').trigger('click')
+
+    expect(wrapper.find('[data-file-write-preview]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('文件路径')
+    expect(wrapper.text()).toContain('/mnt/user-data/outputs/report.md')
+    expect(wrapper.text()).toContain('正文内容')
+  })
+
+  it('renders code writes with line numbers instead of a raw JSON string', async () => {
+    const wrapper = mount(ToolCallCard, {
+      props: {
+        isExpanded: true,
+        toolCall: {
+          tool_call_id: 'call-write-python',
+          tool_name: 'file_write',
+          args: {
+            file_path: '/mnt/user-data/outputs/analyze.py',
+            content: 'import pandas as pd\n\nprint(pd)',
+          },
+          status: 'completed',
+        },
+      },
+    })
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).toContain('Python')
+    expect(wrapper.find('.cm-editor').exists()).toBe(true)
+    expect(wrapper.findAll('.cm-line').length).toBeGreaterThan(0)
+  })
+
+  it('recognizes the file name early and streams formatted content before args finish', async () => {
+    const wrapper = mount(ToolCallCard, {
+      props: {
+        isExpanded: true,
+        toolCall: {
+          tool_call_id: 'call-write-streaming-preview',
+          tool_name: 'file_write',
+          args: {},
+          status: 'generating',
+          argsStreaming: true,
+          argsText: '{"file_path":"/mnt/user-data/outputs/notes.md","content":"# 标题\\n正文还在生成',
+        },
+      },
+    })
+
+    expect(wrapper.find('[data-file-write-preview]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('notes.md')
+    expect(wrapper.text()).toContain('Markdown')
+    expect(wrapper.text()).toContain('生成中')
+    expect(wrapper.text()).toContain('标题')
+    expect(wrapper.text()).toContain('正文还在生成')
+
+    await wrapper.find('[data-file-write-view-params]').trigger('click')
+
+    expect(wrapper.find('[data-file-write-preview]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('"file_path":"/mnt/user-data/outputs/notes.md"')
+  })
+
+  it('shows the target file path in compact rows before args finish', () => {
+    const wrapper = mount(ToolCallCard, {
+      props: {
+        compact: true,
+        toolCall: {
+          tool_call_id: 'call-write-streaming-path',
+          tool_name: 'file_write',
+          args: {},
+          status: 'generating',
+          argsStreaming: true,
+          argsText: '{"file_path":"/mnt/user-data/workspace/draft.txt","content":"第一行',
+        },
+      },
+    })
+
+    expect(wrapper.text()).toContain('写入文件')
+    expect(wrapper.text()).toContain('draft.txt')
+  })
+
+  it('still streams readable content when content arrives before file_path', () => {
+    const wrapper = mount(ToolCallCard, {
+      props: {
+        isExpanded: true,
+        toolCall: {
+          tool_call_id: 'call-write-streaming-content-first',
+          tool_name: 'file_write',
+          args: {},
+          status: 'generating',
+          argsStreaming: true,
+          argsText: '{"content":"先写正文，文件路径还没出现',
+        },
+      },
+    })
+
+    expect(wrapper.find('[data-file-write-preview]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('先写正文，文件路径还没出现')
+    expect(wrapper.text()).toContain('文件路径生成中')
+    expect(wrapper.text()).not.toContain('"content":')
+  })
 })
