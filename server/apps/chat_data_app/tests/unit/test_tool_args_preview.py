@@ -1,7 +1,7 @@
 """工具参数生成过程预览（tool_args_delta）单测。
 
 覆盖：
-- 预览缓冲按 32 字符合并、8000 字符封顶/截断标记
+- 预览缓冲首片立即发、16ms 窗口内合并、8000 字符封顶/截断标记
 - 主图 ``_ToolStreamState.handle_tool_call_chunks`` 发出生成中事件
 - 子图 ``_SubagentStreamState.emit_messages_chunk`` 按 index 反查 id/name 并发事件
 - values 快照即使参数口径未变，也补发一次 replace_args 作为「生成结束」收口信号
@@ -23,22 +23,36 @@ def sse_event_payload(event: str) -> dict:
     return json.loads(event.split("\ndata: ", 1)[1].rsplit("\n", 2)[0])
 
 
-def test_args_preview_buffer_flushes_at_threshold():
-    buffer = tool_args_preview.ToolArgsPreviewBuffer()
+def test_args_preview_buffer_coalesces_within_16ms_window():
+    now = 0.0
+    buffer = tool_args_preview.ToolArgsPreviewBuffer(clock=lambda: now)
 
-    assert buffer.take("call-1", "x" * 31) is None
-    assert not buffer.has_preview("call-1")
-    assert buffer.take("call-1", "y") == ("x" * 31 + "y", False)
+    assert buffer.take("call-1", "x") == ("x", False)
     assert buffer.has_preview("call-1")
+    now = 0.005
+    assert buffer.take("call-1", "y") is None
+    now = 0.010
+    assert buffer.take("call-1", "z") is None
+    now = 0.017
+    assert buffer.take("call-1", "w") == ("yzw", False)
+
+
+def test_args_preview_buffer_does_not_delay_slow_stream():
+    now = 0.0
+    buffer = tool_args_preview.ToolArgsPreviewBuffer(clock=lambda: now)
+
+    assert buffer.take("call-1", "x") == ("x", False)
+    now = 0.030
+    assert buffer.take("call-1", "y") == ("y", False)
 
 
 def test_args_preview_buffer_caps_and_marks_truncated(monkeypatch):
     monkeypatch.setattr(tool_args_preview, "TOOL_ARGS_PREVIEW_MAX_CHARS", 5)
-    monkeypatch.setattr(tool_args_preview, "TOOL_ARGS_PREVIEW_FLUSH_CHARS", 3)
+    monkeypatch.setattr(tool_args_preview, "TOOL_ARGS_PREVIEW_WINDOW_MS", 0)
     buffer = tool_args_preview.ToolArgsPreviewBuffer()
 
-    assert buffer.take("call-1", "ab") is None
-    assert buffer.take("call-1", "cd") == ("abcd", False)
+    assert buffer.take("call-1", "ab") == ("ab", False)
+    assert buffer.take("call-1", "cd") == ("cd", False)
     assert buffer.take("call-1", "ef") == ("e", True)
     assert not buffer.take("call-1", "g")
 
@@ -55,6 +69,23 @@ def test_main_stream_emits_args_delta_with_generating_status():
     assert payload["tool_name"] == "file_read"
     assert payload["status"] == "generating"
     assert payload["delta"] == "x" * 32
+
+
+def test_main_stream_flushes_pending_tail_before_authoritative_args():
+    """收口时先补发 16ms 窗口内未发出的尾片，避免最后一段参数丢失。"""
+    state = agent_stream._ToolStreamState()
+    state.handle_tool_call_chunks([{"id": "call-1", "name": "file_read", "index": 0, "args": '{"a":'}])
+    # 同一时间窗内的后续分片挂起，等待窗口到期或收口 flush。
+    state.handle_tool_call_chunks([{"id": "", "name": "", "index": 0, "args": "1}"}])
+    ai = AIMessage(content="", tool_calls=[{"id": "call-1", "name": "file_read", "args": {"a": 1}}])
+
+    events = state.reconcile_state_messages([ai])
+
+    deltas = [event for event in events if sse_event_name(event) == "tool_args_delta"]
+    assert deltas
+    tail = sse_event_payload(deltas[0])
+    assert tail["tool_call_id"] == "call-1"
+    assert tail["delta"] == "1}"
 
 
 def test_subagent_stream_emits_args_delta_with_parent_id():
@@ -100,7 +131,12 @@ def test_subagent_stream_resolves_index_only_args_chunk():
     ]
     assert len(events) == 1
     assert events[0]["tool_call_id"] == "tool-1"
-    assert events[0]["delta"] == "a" * 20 + "b" * 20
+    assert events[0]["delta"] == "a" * 20
+
+    flushed = state.flush_tool_args_previews()
+    assert len(flushed) == 1
+    assert flushed[0]["tool_call_id"] == "tool-1"
+    assert flushed[0]["delta"] == "b" * 20
 
 
 def test_reconcile_marks_args_complete_even_when_args_unchanged():

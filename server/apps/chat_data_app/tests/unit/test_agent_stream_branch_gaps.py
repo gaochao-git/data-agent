@@ -508,12 +508,14 @@ def test_handle_tool_call_chunks_skips_non_dict_entries():
 
 
 def test_handle_tool_call_chunks_without_name_keeps_id_only():
-    """有 id 没 name 时不写入工具名，也因拿不到工具名而不发 running 事件（740->742、747->750）。"""
+    """有 id 没 name 时不写入工具名、不发 running；首片参数仍按新语义立即预览。"""
     state = agent_stream._ToolStreamState()
 
     events = state.handle_tool_call_chunks([{"id": "call-9", "args": "{}"}])
 
-    assert events == []
+    assert len(events) == 1
+    assert "event: tool_args_delta" in events[0]
+    assert "running" not in events[0]
     assert state.active_tool_call_id == "call-9"
     assert "call-9" not in state.tool_names
 
@@ -532,8 +534,11 @@ def test_handle_tool_call_chunks_records_index_and_emits_running():
     assert state.tool_names["call-x"] == "file_read"
     assert state.args_buffer["call-x"] == '{"pa'
     # _running_event 一次补发「工具开始」+「工具执行中」两条事件
-    assert len(events) == 2
-    assert all("running" in event and "file_read" in event for event in events)
+    running_events = [event for event in events if "running" in event]
+    assert len(running_events) == 2
+    assert all("file_read" in event for event in running_events)
+    # 首片参数立即预览，不再等 32 字符阈值
+    assert len([event for event in events if "event: tool_args_delta" in event]) == 1
 
 
 def test_handle_tool_call_chunks_resolves_id_from_index_map():

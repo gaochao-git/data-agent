@@ -1331,7 +1331,10 @@ async def test_generate_chat_data_stream_tool_call_duplicate_missing_name_and_em
     text = "".join(chunks)
 
     duplicate_blocks = [block for block in text.split("\n\n") if '"tool_call_id": "tc_dup"' in block]
-    assert [sse_event_name(block) for block in duplicate_blocks] == ["tool_started", "tool"]
+    lifecycle_events = [
+        sse_event_name(block) for block in duplicate_blocks if sse_event_name(block) != "tool_args_delta"
+    ]
+    assert lifecycle_events == ["tool_started", "tool"]
     assert "fresh done" in text
     assert "message_end" in text
 

@@ -721,6 +721,17 @@ class _ToolStreamState:
             already_finalized = tool_call_id in self.args_finalized
             self.authoritative_args[tool_call_id] = args
             preview_needs_finalize = self.tool_args_preview.has_preview(tool_call_id) and not already_finalized
+            flushed_preview = self.tool_args_preview.flush(tool_call_id)
+            if flushed_preview is not None:
+                preview_delta, truncated = flushed_preview
+                events.append(
+                    format_tool_args_delta_event(
+                        tool_call_id,
+                        self.tool_names.get(tool_call_id, ""),
+                        preview_delta,
+                        truncated=truncated,
+                    )
+                )
             if not signature_changed and not preview_needs_finalize:
                 continue
             if signature_changed:

@@ -657,25 +657,46 @@ class _SubagentStreamState:
             if preview is None:
                 continue
             preview_delta, truncated = preview
-            payload = build_tool_args_delta_payload(
-                resolved_id,
-                tool_name,
-                preview_delta,
-                truncated=truncated,
-                parent_tool_call_id=self.parent_tool_call_id,
-            )
-            counts, intent = _extract_streaming_progress_inputs(
-                self.tool_args_buffer[resolved_id],
-                _STREAMING_LINE_COUNT_TOOLS.get(tool_name),
-            )
-            if counts is not None and self.tool_progress_counts.get(resolved_id) != counts:
-                payload["content_lines"], payload["removed_lines"] = counts
-                self.tool_progress_counts[resolved_id] = counts
-            if intent and self.tool_progress_intents.get(resolved_id) != intent:
-                payload["intent"] = intent
-                self.tool_progress_intents[resolved_id] = intent
-            events.append(payload)
+            events.append(self._build_tool_args_delta_event(resolved_id, tool_name, preview_delta, truncated))
         return events
+
+    def flush_tool_args_previews(self) -> list[dict[str, Any]]:
+        """工具参数生成收口前，把时间窗内尚未发送的尾部分片补发出去。"""
+        events: list[dict[str, Any]] = []
+        for tool_call_id in self.tool_args_preview.pending_tool_call_ids():
+            preview = self.tool_args_preview.flush(tool_call_id)
+            if preview is None:
+                continue
+            preview_delta, truncated = preview
+            tool_name = self.tool_args_names.get(tool_call_id, "")
+            events.append(self._build_tool_args_delta_event(tool_call_id, tool_name, preview_delta, truncated))
+        return events
+
+    def _build_tool_args_delta_event(
+        self,
+        tool_call_id: str,
+        tool_name: str,
+        preview_delta: str,
+        truncated: bool,
+    ) -> dict[str, Any]:
+        payload = build_tool_args_delta_payload(
+            tool_call_id,
+            tool_name,
+            preview_delta,
+            truncated=truncated,
+            parent_tool_call_id=self.parent_tool_call_id,
+        )
+        counts, intent = _extract_streaming_progress_inputs(
+            self.tool_args_buffer.get(tool_call_id, ""),
+            _STREAMING_LINE_COUNT_TOOLS.get(tool_name),
+        )
+        if counts is not None and self.tool_progress_counts.get(tool_call_id) != counts:
+            payload["content_lines"], payload["removed_lines"] = counts
+            self.tool_progress_counts[tool_call_id] = counts
+        if intent and self.tool_progress_intents.get(tool_call_id) != intent:
+            payload["intent"] = intent
+            self.tool_progress_intents[tool_call_id] = intent
+        return payload
 
     def _resolve_tool_args_chunk(self, raw: Any) -> tuple[str, str, str] | None:
         """解析一个 chunk 的 id/name/args；chunk 常常只有 index，需要按索引反查。"""
@@ -982,6 +1003,8 @@ def _process_subagent_update(
     stream_state.track_state_messages(payload)
     new_messages = stream_state.collect_update_messages(payload)
     _forward_subagent_compaction_events(payload, stream_state, writer, parent_tool_call_id)
+    for event in stream_state.flush_tool_args_previews():
+        _emit_subagent_tool_event(writer, event)
     for event in _iter_subagent_stream_events(
         new_messages,
         parent_tool_call_id,
