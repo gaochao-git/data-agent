@@ -374,6 +374,14 @@ describe('子智能体过程 → 主对话消息投影', () => {
     expect(messages[1]!.isStreaming).toBe(true)
   })
 
+  it('父 task 结束后单条过程消息不再标记流式', () => {
+    const settled = buildSubagentMessages(taskCall({
+      status: 'completed',
+      subagentTrail: [{ kind: 'message', id: 'msg-1', content: '报告', thinking: '思考' }],
+    }))
+    expect(settled[1]!.isStreaming).toBe(false)
+  })
+
   it('旧 task 的扁平参数同样投影任务书', () => {
     const messages = buildSubagentMessages(taskCall({
       tool_name: 'task',
@@ -381,14 +389,6 @@ describe('子智能体过程 → 主对话消息投影', () => {
     }))
 
     expect(messages[0]).toMatchObject({ role: 'user', content: '盘点语义模型中的指标' })
-  })
-
-  it('父 task 结束后单条过程消息不再标记流式', () => {
-    const settled = buildSubagentMessages(taskCall({
-      status: 'completed',
-      subagentTrail: [{ kind: 'message', id: 'msg-1', content: '报告', thinking: '思考' }],
-    }))
-    expect(settled[1]!.isStreaming).toBe(false)
   })
 
   it('终态错误只挂在最后一条助手消息，不随压缩分段重复', () => {
@@ -514,6 +514,26 @@ describe('子智能体过程投影', () => {
     expect(messages[1]!.toolCalls?.[0]).toMatchObject({ started_at_ms: 1_000, ended_at_ms: 1_250 })
   })
 
+  it('内层文件工具行数随 trail 进入工具卡（与主对话 +N / -M 同口径）', () => {
+    const blocks = buildSubagentTrailBlocks(taskCall({
+      subagentTrail: [{
+        kind: 'tool',
+        id: 'inner-edit',
+        tool_name: 'file_edit',
+        args: { file_path: '/a.html' },
+        status: 'completed',
+        result: '已修改',
+        contentLines: 12,
+        removedLines: 3,
+      }],
+    }))
+
+    expect((blocks[0] as { toolCall: ToolCallInfo }).toolCall).toMatchObject({
+      contentLines: 12,
+      removedLines: 3,
+    })
+  })
+
   it('内层查询工具派生可渲染结果面板（renderId/语义参数），普通工具不派生', () => {
     const envelope = JSON.stringify({ type: 'query_result', status: 'succeeded', data: null, meta: { result_id: 'q1' } })
     const blocks = buildSubagentTrailBlocks(taskCall({
@@ -556,7 +576,7 @@ describe('子智能体过程投影', () => {
     expect(messages[1]?.segments).toEqual([])
   })
 
-  it('识别新旧子智能体工具的过程区，普通工具或无 trail 不算', () => {
+  it('识别统一子智能体工具和旧 task 历史的过程区，普通工具或无 trail 不算', () => {
     const call = taskCall({
       subagentTrail: [
         { kind: 'tool', id: 'inner-1', tool_name: 'calculator_tool', args: {}, status: 'running' },

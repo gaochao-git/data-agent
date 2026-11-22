@@ -137,4 +137,49 @@ describe('useSubagentTaskStream 检查点快照', () => {
     })
     wrapper.unmount()
   })
+
+  it('连续正文增量逐段拼接，运行中即可看到打字过程', async () => {
+    vi.mocked(getSubagentTaskTrail).mockResolvedValue({ available: false })
+    const frames = [
+      'id: 1-0\nevent: subagent_message_delta\ndata: ' + JSON.stringify({ message_id: 'ai-live', delta: '我先查看' }) + '\n\n',
+      'id: 2-0\nevent: subagent_message_delta\ndata: ' + JSON.stringify({ message_id: 'ai-live', delta: '工作区。' }) + '\n\n',
+    ].join('')
+    vi.mocked(streamSubagentTaskEvents).mockImplementation(() => Promise.resolve(new Response(frames)))
+
+    const { wrapper, stream } = mountStream()
+    await flushPromises()
+    await nextTick()
+
+    expect(stream.trail.value).toEqual([
+      { kind: 'message', id: 'ai-live', content: '我先查看工作区。', truncated: false },
+    ])
+    wrapper.unmount()
+  })
+
+  it('任务离开运行态时收口未完成的内层工具，避免停止后一直转圈', async () => {
+    vi.mocked(getSubagentTaskTrail).mockResolvedValue({ available: false })
+    const frames = 'id: 1-0\nevent: tool_started\ndata: ' + JSON.stringify({
+      tool_call_id: 'tool-1',
+      tool_name: 'sql_query',
+      args: { sql: 'select 1' },
+      started_at_ms: 100,
+    }) + '\n\n'
+    vi.mocked(streamSubagentTaskEvents).mockImplementation(() => Promise.resolve(new Response(frames)))
+
+    const { wrapper, stream, isActive } = mountStream()
+    await flushPromises()
+    await nextTick()
+    expect(stream.trail.value[0]).toMatchObject({ id: 'tool-1', status: 'running' })
+
+    isActive.value = false
+    await nextTick()
+
+    expect(stream.trail.value[0]).toMatchObject({
+      id: 'tool-1',
+      status: 'cancelled',
+      result: '任务已停止，工具未执行完成。',
+      ended_at_ms: expect.any(Number),
+    })
+    wrapper.unmount()
+  })
 })

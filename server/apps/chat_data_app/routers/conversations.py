@@ -19,7 +19,7 @@ from utils.response import business_response
 
 from .. import AGENT_ID
 from ..agent.context.context_budget import strip_context_usage_content_for_history
-from ..agent.contracts.subagent_task import SubagentSessionActiveError
+from ..agent.contracts.subagent_task import CANCEL_ORIGIN_USER, SubagentSessionActiveError
 from ..agent.middleware.subagent_trail_snapshot import load_live_trail_snapshot
 from ..agent.run.agent_inbox_service import (
     AgentQuestionNotFoundError,
@@ -1155,7 +1155,9 @@ async def cancel_subagent_task(conversation_id: str, task_id: str, req: Request)
     """用户手动取消后台子智能体任务；执行节点下一次心跳停止协程。"""
     try:
         user_id, username = _get_current_user_identity(req)
-        record = await subagent_task_service.cancel_task(conversation_id, user_id, task_id, username)
+        record = await subagent_task_service.cancel_task(
+            conversation_id, user_id, task_id, username, origin=CANCEL_ORIGIN_USER
+        )
         if record is None:
             return business_response(
                 msg="后台任务不存在",

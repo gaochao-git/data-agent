@@ -11,12 +11,21 @@ withDefaults(defineProps<{
   liveSupersteps?: number | null
   liveSuperstepLimit?: number | null
   liveElapsedMs?: number | null
+  /** 仅子智能体任务流启用：主对话的停止入口在输入区，不重复出现 */
+  cancellable?: boolean
+  cancelling?: boolean
 }>(), {
   liveGenerationSpeed: null,
   liveSupersteps: null,
   liveSuperstepLimit: null,
   liveElapsedMs: null,
+  cancellable: false,
+  cancelling: false,
 })
+
+const emit = defineEmits<{
+  cancel: []
+}>()
 
 // 「工作中」九宫格像素动画（参考 ZCode 同款指示器）：中心块（index 4）恒暗，
 // 其余 8 块按螺旋顺序 110ms 错峰闪烁；时长与 keyframes 在 styles/loading-pixel.css。
@@ -51,5 +60,17 @@ const loadingPixelStyle = (index: number): Record<string, string> => (
     <span class="@max-[520px]:hidden">
       <WaitingTip :active="true" />
     </span>
+    <button
+      v-if="cancellable"
+      type="button"
+      class="ml-auto inline-flex h-6 shrink-0 items-center gap-1 whitespace-nowrap rounded-md border border-rose-100 bg-rose-50 px-1.5 text-[11px] font-medium text-rose-500 transition-colors hover:border-rose-200 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
+      :disabled="cancelling"
+      data-subagent-stream-cancel
+      :title="cancelling ? '正在取消子智能体任务' : '取消正在运行的子智能体任务'"
+      @click.stop="emit('cancel')"
+    >
+      <i :class="cancelling ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-stop'" class="text-[9px]"></i>
+      <span>{{ cancelling ? '取消中' : '取消' }}</span>
+    </button>
   </div>
 </template>

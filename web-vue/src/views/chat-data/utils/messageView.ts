@@ -15,7 +15,7 @@ import type {
   ThinkingSegment,
   ToolCallInfo,
 } from '../types'
-import { getSubagentDispatchArgs, getToolCompactDescription, getToolDisplayName, getToolTechnicalDescription, isSubagentToolName } from './toolDisplay'
+import { getSubagentDispatchArgs, getToolCompactDescription, getToolDisplayName, getToolTechnicalDescription, isSubagentDisplayToolName } from './toolDisplay'
 import { normalizeToolCallForDisplay, shouldInlineRenderQueryResult } from './semanticTool'
 
 /** 思考收起态尾部预览长度（主对话与子智能体共用口径）。 */
@@ -464,6 +464,12 @@ const buildTrailToolCall = (item: SubagentTrailItem): ToolCallInfo => ({
   args: item.args || {},
   result: item.result,
   status: item.status || 'running',
+  argsText: item.argsText,
+  argsStreaming: item.argsStreaming,
+  argsTruncated: item.argsTruncated,
+  contentLines: item.contentLines,
+  removedLines: item.removedLines,
+  streamingIntent: item.streamingIntent,
   started_at_ms: item.started_at_ms ?? null,
   ended_at_ms: item.ended_at_ms ?? null,
 })
@@ -497,7 +503,7 @@ export const buildSubagentTrailBlocks = (toolCall: ToolCallInfo): SubagentTrailB
         displayName: getToolDisplayName(toolCallItem.tool_name, toolCallItem.args),
         compactDescription: getToolCompactDescription(toolCallItem.tool_name, toolCallItem.args || {}),
         technicalDescription: getToolTechnicalDescription(toolCallItem.tool_name || '', toolCallItem.args),
-        isRunning: item.status === 'running',
+        isRunning: item.status === 'running' || item.status === 'generating',
         isError: item.status === 'error',
         queryResultToolCall: shouldInlineRenderQueryResult(toolCallItem) ? toolCallItem : null,
       }
@@ -634,5 +640,5 @@ export const buildSubagentMessages = (toolCall: ToolCallInfo): Message[] => {
 
 /** 子智能体过程区是否有可渲染内容。 */
 export const hasSubagentTrail = (toolCall: ToolCallInfo): boolean => (
-  isSubagentToolName(toolCall.tool_name) && Boolean(toolCall.subagentTrail?.length)
+  isSubagentDisplayToolName(toolCall.tool_name) && Boolean(toolCall.subagentTrail?.length)
 )

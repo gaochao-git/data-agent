@@ -607,6 +607,15 @@ def test_subagent_compression_frame_is_registered_on_both_streams():
     assert SSE_EVENT_SUBAGENT_CONTEXT_COMPRESSION in agent_stream_module._SUBAGENT_TOOL_EVENT_TYPES
 
 
+def test_tool_args_delta_frame_is_registered_on_both_streams():
+    """参数增量帧既要过主 Run 白名单，也要过后台任务 Redis 事件白名单。"""
+    from apps.chat_data_app import agent_stream as agent_stream_module
+    from apps.chat_data_app.sse_protocol import SSE_EVENT_NAMES, SSE_EVENT_TOOL_ARGS_DELTA
+
+    assert SSE_EVENT_TOOL_ARGS_DELTA in SSE_EVENT_NAMES
+    assert SSE_EVENT_TOOL_ARGS_DELTA in agent_stream_module._SUBAGENT_TOOL_EVENT_TYPES
+
+
 @pytest.mark.parametrize(
     "payload",
     [
@@ -1415,6 +1424,62 @@ def test_build_trail_snapshot_mirrors_sse_shape():
         "thinking": "",
         "thinkingTruncated": False,
     }
+
+
+def test_subagent_args_delta_carries_file_edit_line_counts():
+    """子智能体参数增量与主对话同口径携带 +N / -M 行数。"""
+    state = subagents_module._SubagentStreamState("call-parent")
+    chunk = AIMessageChunk(
+        content="",
+        id="m1",
+        tool_call_chunks=[
+            {
+                "id": "edit-1",
+                "name": "file_edit",
+                "index": 0,
+                "type": "tool_call_chunk",
+                "args": json.dumps(
+                    {
+                        "file_path": "/mnt/user-data/workspace/task-board.html",
+                        "new_content": "a\nb\nc",
+                        "old_content": "a\n",
+                    }
+                ),
+            }
+        ],
+    )
+
+    events = state._tool_args_delta_events(chunk)
+
+    payload = next(item for item in events if item["event_type"] == "tool_args_delta")
+    assert payload["content_lines"] == 3
+    assert payload["removed_lines"] == 1
+
+
+def test_build_trail_snapshot_keeps_file_edit_line_counts_for_history():
+    """历史快照用完整参数重算行数，刷新后子智能体工具卡仍显示 +N / -M。"""
+    messages = [
+        AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "id": "edit-1",
+                    "name": "file_edit",
+                    "args": {
+                        "file_path": "/mnt/user-data/workspace/task-board.html",
+                        "new_content": "a\nb\nc\nd",
+                        "old_content": "a\nb\n",
+                    },
+                }
+            ],
+        ),
+        ToolMessage(content="已修改", tool_call_id="edit-1", name="file_edit"),
+    ]
+
+    trail = subagents_module._build_trail_snapshot(messages)
+
+    assert trail[0]["contentLines"] == 4
+    assert trail[0]["removedLines"] == 2
 
 
 def _compression_record(index: int, anchor: str) -> dict:

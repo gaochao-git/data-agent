@@ -26,6 +26,8 @@ defineProps({
   liveSupersteps: { type: Number as PropType<number | null>, default: null },
   liveSuperstepLimit: { type: Number as PropType<number | null>, default: null },
   liveElapsedMs: { type: Number as PropType<number | null>, default: null },
+  streamingCancellable: { type: Boolean, default: false },
+  streamingCancelling: { type: Boolean, default: false },
   resolveToolCall: {
     type: Function as PropType<(message: Message, toolCallId: string) => ToolCallInfo | null>,
     default: undefined,
@@ -39,6 +41,7 @@ defineProps({
 const emit = defineEmits<{
   selectTool: [toolCall: ToolCallInfo]
   openAttachment: [attachment: MessageAttachment]
+  cancelStreaming: []
 }>()
 </script>
 
@@ -78,9 +81,12 @@ const emit = defineEmits<{
         :live-supersteps="liveSupersteps"
         :live-superstep-limit="liveSuperstepLimit"
         :live-elapsed-ms="liveElapsedMs"
+        :streaming-cancellable="streamingCancellable"
+        :streaming-cancelling="streamingCancelling"
         :resolve-tool-call="resolveToolCall"
         :should-inline-render-result="shouldInlineRenderResult"
         @select-tool="emit('selectTool', $event)"
+        @cancel-streaming="emit('cancelStreaming')"
       >
         <template #assistant-extra="slotProps">
           <slot name="assistant-extra" v-bind="slotProps" />

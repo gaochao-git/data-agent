@@ -1943,6 +1943,7 @@ const finalizeUnfinishedToolCalls = (status: 'completed' | 'error', result?: str
       ...tool,
       status,
       result: result || tool.result,
+      argsStreaming: false,
     }))
   }
   toolCallsMap.value = nextMap
@@ -1955,6 +1956,7 @@ const finalizeUnfinishedToolCalls = (status: 'completed' | 'error', result?: str
         ...tool,
         status,
         result: result || tool.result,
+        argsStreaming: false,
       })
     })
   }
@@ -2280,14 +2282,54 @@ const submitAnalysisQuery = async (
           }
           if (!event.tool_call_id) return
           const existing = toolCallsMap.value.get(event.tool_call_id)
+          // 参数生成中：只累积预览文本，不解析半截 JSON；完整参数仍由 tool_started /
+          // replace_args 快照下发后再走结构化展示。
+          if (event.type === 'tool_args_delta') {
+            const isTerminal = existing?.status === 'completed' || existing?.status === 'error'
+            if (isTerminal) return
+            if (event.done) {
+              if (!existing) return
+              upsertToolMessage({
+                ...existing,
+                argsStreaming: false,
+                argsText: undefined,
+                argsTruncated: undefined,
+                status: 'running',
+              })
+              return
+            }
+            upsertToolMessage({
+              ...(existing || {}),
+              tool_call_id: event.tool_call_id,
+              tool_name: event.tool_name || existing?.tool_name || 'tool_call',
+              display_name: event.display_name || existing?.display_name,
+              args: existing?.args || {},
+              status: 'generating',
+              argsText: `${existing?.argsText || ''}${event.delta || ''}`,
+              argsStreaming: true,
+              argsTruncated: Boolean(event.truncated) || Boolean(existing?.argsTruncated),
+            })
+            return
+          }
           const isFailed = event.type === 'tool_failed'
           const isCompleted = event.type === 'tool_completed'
           // tool_progress/tool_started 也可能只用于补发完整参数（values 快照里的最终
           // AIMessage 参数）。已进入终态的工具只合并参数，不能把状态倒回 running。
-          const keepTerminalStatus = existing !== undefined
-            && existing.status !== 'running'
+          const keepTerminalStatus = (existing?.status === 'completed' || existing?.status === 'error')
             && (event.type === 'tool_progress' || event.type === 'tool_started')
-          const activeStatus = keepTerminalStatus ? existing.status : 'running'
+          // 参数生成期间的非收口 tool_progress（intent/行数）不能把 generating 倒回 running
+          const keepGenerating = existing?.status === 'generating'
+            && event.type === 'tool_progress'
+            && !event.replace_args
+          const activeStatus = keepTerminalStatus
+            ? existing?.status || 'running'
+            : keepGenerating
+              ? 'generating'
+              : 'running'
+          // replace_args = 参数生成结束的完整快照：从预览切回结构化参数
+          const argsStreaming = event.type === 'tool_progress' && !event.replace_args
+            ? existing?.argsStreaming
+            : false
           const toolInfo: ToolCallInfo = {
             tool_call_id: event.tool_call_id,
             tool_name: event.tool_name || existing?.tool_name || 'tool_call',
@@ -2302,6 +2344,9 @@ const submitAnalysisQuery = async (
             removedLines: typeof event.removed_lines === 'number' ? event.removed_lines : existing?.removedLines,
             streamingIntent: typeof event.intent === 'string' && event.intent ? event.intent : existing?.streamingIntent,
             status: isFailed ? 'error' : isCompleted ? 'completed' : activeStatus,
+            argsText: event.replace_args ? undefined : existing?.argsText,
+            argsStreaming,
+            argsTruncated: event.replace_args ? undefined : existing?.argsTruncated,
             subagentTrail: existing?.subagentTrail,
             subagentTokenUsage: event.subagent_token_usage || existing?.subagentTokenUsage, subagentContextUsage: existing?.subagentContextUsage, subagentCompactions: existing?.subagentCompactions, subagentTokenUsageDetail: existing?.subagentTokenUsageDetail,
             subagentSupersteps: event.subagent_supersteps ?? existing?.subagentSupersteps,

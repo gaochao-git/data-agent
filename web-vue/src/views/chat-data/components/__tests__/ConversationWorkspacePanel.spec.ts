@@ -352,6 +352,35 @@ describe('ConversationWorkspacePanel tab 容器', () => {
     expect(subheader.text()).not.toContain('已调用')
   })
 
+  it('运行中任务的取消入口放在详情页顶部，并复用父级取消回调', async () => {
+    const runningTask: SubagentTaskRecord = {
+      ...backgroundTask,
+      status: 'running',
+      status_label: '执行中',
+      finished_at: null,
+      progress: { phase: 'running' },
+    }
+    const cancelSubagentTask = vi.fn()
+    const wrapper = mountPanel({
+      subagentTasks: [runningTask],
+      subagentTaskDetails: { [runningTask.task_id]: runningTask },
+      cancelSubagentTask,
+    })
+    const vm = wrapper.vm as unknown as { openSubagentTask: (task: SubagentTaskRecord) => void }
+
+    vm.openSubagentTask(runningTask)
+    await wrapper.vm.$nextTick()
+
+    const subheader = wrapper.find('[data-subagent-task-subheader]')
+    const cancelButton = subheader.find('[data-subagent-task-cancel]')
+    expect(cancelButton.exists()).toBe(true)
+    expect(cancelButton.text()).toContain('取消')
+    expect(wrapper.find('[data-subagent-stream-cancel]').exists()).toBe(false)
+
+    await cancelButton.trigger('click')
+    expect(cancelSubagentTask).toHaveBeenCalledWith(runningTask)
+  })
+
   it('任务详情支持聊天/工具模式切换，工具模式停止自动贴底', async () => {
     const wrapper = mountPanel({
       subagentTasks: [backgroundTask],

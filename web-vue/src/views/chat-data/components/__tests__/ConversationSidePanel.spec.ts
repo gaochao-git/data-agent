@@ -86,6 +86,28 @@ describe('ConversationSidePanel 贴底跟随', () => {
     expect(plain.getScrollTop()).toBe(0)
     plain.wrapper.unmount()
   })
+
+  it('用户上翻后出现「回到最新」，点击回到底部并恢复贴底跟随', async () => {
+    const { wrapper, body, getScrollTop } = await mountPanel(true)
+    // 走无平滑动画的兜底路径，避免 jsdom 未实现 scrollTo 影响断言
+    Object.defineProperty(body, 'scrollTo', { value: undefined, configurable: true })
+    const grow = body.querySelector<HTMLElement>('.grow')!
+
+    body.scrollTop = 100
+    body.dispatchEvent(new Event('scroll'))
+    await flush()
+    expect(wrapper.find('[data-side-panel-latest]').exists()).toBe(true)
+
+    await wrapper.find('[data-side-panel-latest]').trigger('click')
+    expect(getScrollTop()).toBe(1_000)
+    expect(wrapper.find('[data-side-panel-latest]').exists()).toBe(false)
+
+    // 回底后恢复跟随：后续流式增长继续贴底
+    grow.textContent = '回底后继续增长的过程内容'
+    await flush()
+    expect(getScrollTop()).toBe(1_000)
+    wrapper.unmount()
+  })
 })
 
 

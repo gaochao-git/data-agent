@@ -171,6 +171,7 @@ from .sse_protocol import (
     SSE_EVENT_SUBAGENT_THINKING_DELTA,
     SSE_EVENT_TOKEN_USAGE,
     SSE_EVENT_TOOL,
+    SSE_EVENT_TOOL_ARGS_DELTA,
     SSE_EVENT_TOOL_COMPLETED,
     SSE_EVENT_TOOL_FAILED,
     SSE_EVENT_TOOL_PROGRESS,
@@ -406,6 +407,7 @@ def _validate_workspace_file_selections(file_selections: list[str], workspace_ro
 # event_type（属不信任输入），未知类型记 WARNING 后丢弃，不参与帧名派生。
 _SUBAGENT_TOOL_EVENT_TYPES = {
     SSE_EVENT_TOOL_STARTED,
+    SSE_EVENT_TOOL_ARGS_DELTA,
     SSE_EVENT_TOOL_COMPLETED,
     SSE_EVENT_TOOL_FAILED,
     SSE_EVENT_SUBAGENT_MESSAGE,

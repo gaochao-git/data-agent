@@ -529,7 +529,13 @@ export interface ToolCallInfo {
   removedLines?: number
   // 流式提取的调用意图（args 未解析前由 tool_progress 事件提前推送，长耗时工具执行中即可展示）
   streamingIntent?: string
-  status: 'generating' | 'running' | 'completed' | 'error'
+  status: 'generating' | 'running' | 'completed' | 'error' | 'cancelled'
+  // 工具参数生成过程的原始 JSON 增量（tool_args_delta），仅在 argsStreaming=true 时展示
+  argsText?: string
+  // 是否正在生成参数：结束后切回 args 的结构化展示
+  argsStreaming?: boolean
+  // 预览是否因长度上限被截断（后端最多下发 8000 字符）
+  argsTruncated?: boolean
   // 关联的渲染内容
   renderId?: string
   renderType?: 'queryResult' | 'chart'
@@ -614,7 +620,16 @@ export interface SubagentTrailItem {
   tool_name?: string
   args?: Record<string, unknown>
   result?: string
-  status?: 'running' | 'completed' | 'error'
+  status?: 'generating' | 'running' | 'completed' | 'error' | 'cancelled'
+  // tool：参数生成过程的原始 JSON 增量（tool_args_delta 拼接）
+  argsText?: string
+  argsStreaming?: boolean
+  argsTruncated?: boolean
+  // file_write / file_edit：流式参数统计的写入/移除行数（与主对话工具卡同口径）
+  contentLines?: number
+  removedLines?: number
+  // 参数生成期间提前推送的工具意图，args 尚未解析完成时用于展示
+  streamingIntent?: string
   // 文本条目
   content?: string
   truncated?: boolean
@@ -800,7 +815,7 @@ export interface ChatDataOptions {
 export type SidebarTab = 'dashboards' | 'config' | 'history'
 
 // SSE 事件类型
-export type SSEEventType = 'message' | 'message_end' | 'heartbeat' | 'token_usage' | 'generation_speed' | 'run_steps' | 'context_compression' | 'conversation_title_updated' | 'thinking' | 'tool' | 'tool_started' | 'tool_progress' | 'tool_completed' | 'tool_failed' | 'subagent_message' | 'subagent_message_delta' | 'subagent_thinking_delta' | 'subagent_generation_speed' | 'subagent_steps' | 'subagent_context_usage' | 'subagent_context_compression' | 'subagent_task_updated' | 'inbox_admitted' | 'question_requested' | 'error' | 'done' | 'dashboard_spec'
+export type SSEEventType = 'message' | 'message_end' | 'heartbeat' | 'token_usage' | 'generation_speed' | 'run_steps' | 'context_compression' | 'conversation_title_updated' | 'thinking' | 'tool' | 'tool_started' | 'tool_args_delta' | 'tool_progress' | 'tool_completed' | 'tool_failed' | 'subagent_message' | 'subagent_message_delta' | 'subagent_thinking_delta' | 'subagent_generation_speed' | 'subagent_steps' | 'subagent_context_usage' | 'subagent_context_compression' | 'subagent_task_updated' | 'inbox_admitted' | 'question_requested' | 'error' | 'done' | 'dashboard_spec'
 
 export interface UserQuestionOption {
   label: string
@@ -844,7 +859,7 @@ export interface UserQuestionAnswer {
 }
 
 // 工具状态
-export type ToolStatus = 'running' | 'completed' | 'error'
+export type ToolStatus = 'generating' | 'running' | 'completed' | 'error'
 
 // 工具事件数据
 export interface ToolEventData {
@@ -863,7 +878,7 @@ export interface ToolEventData {
 }
 
 export interface ToolLifecycleEventData extends ToolEventData {
-  type: 'tool_started' | 'tool_progress' | 'tool_completed' | 'tool_failed' | 'subagent_message' | 'subagent_message_delta' | 'subagent_thinking_delta' | 'subagent_generation_speed' | 'subagent_steps' | 'subagent_context_usage' | 'subagent_context_compression'
+  type: 'tool_started' | 'tool_args_delta' | 'tool_progress' | 'tool_completed' | 'tool_failed' | 'subagent_message' | 'subagent_message_delta' | 'subagent_thinking_delta' | 'subagent_generation_speed' | 'subagent_steps' | 'subagent_context_usage' | 'subagent_context_compression'
   progress?: number
   accumulated_args?: Record<string, unknown>
   content?: string
@@ -875,6 +890,8 @@ export interface ToolLifecycleEventData extends ToolEventData {
   truncated?: boolean
   // 流式增量（subagent_message_delta / subagent_thinking_delta）
   delta?: string
+  // tool_args_delta：参数生成结束的轻量收口标记（无 delta，不重复下发完整参数）
+  done?: boolean
   // 完整消息已通过增量流出：收敛时前端按「更长者优先」补齐，截断预览不覆盖更长全文
   streamed?: boolean
   // 完整消息事件携带的思考全文：晚加入的订阅者没收到增量时用来补齐 thinking

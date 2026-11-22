@@ -10,7 +10,7 @@ import {
 
 const tool = (trail: SubagentTrailItem[] = []): ToolCallInfo => ({
   tool_call_id: 'call_1',
-  tool_name: 'task',
+  tool_name: 'subagent',
   args: {},
   status: 'running',
   subagentTrail: trail,

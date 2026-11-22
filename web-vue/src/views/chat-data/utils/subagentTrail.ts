@@ -2,9 +2,35 @@ import type { SubagentTrailItem, ToolLifecycleEventData } from '../types'
 
 const isToolEvent = (event: ToolLifecycleEventData): boolean =>
   event.type === 'tool_started'
+  || event.type === 'tool_args_delta'
   || event.type === 'tool_progress'
   || event.type === 'tool_completed'
   || event.type === 'tool_failed'
+
+/**
+ * 任务离开运行态后收口仍在转圈的内层工具。
+ *
+ * 取消/停止时事件流可能直接断开，最后一条 ``tool_completed``/``tool_failed``
+ * 不会到达前端；保留 running/generating 会让工具卡永久转圈、计时继续走。
+ * 这里只改未完成条目，已完成/失败的结果原样保留。
+ */
+export const finalizeSubagentTrailOnStop = (trail: SubagentTrailItem[]): SubagentTrailItem[] => {
+  let changed = false
+  const endedAt = Date.now()
+  const next = trail.map((item) => {
+    if (item.kind !== 'tool') return item
+    if (item.status !== 'generating' && item.status !== 'running') return item
+    changed = true
+    return {
+      ...item,
+      status: 'cancelled' as const,
+      argsStreaming: false,
+      result: item.result || '任务已停止，工具未执行完成。',
+      ended_at_ms: item.ended_at_ms ?? endedAt,
+    }
+  })
+  return changed ? next : trail
+}
 
 /** 把一条子智能体过程事件归并进 trail；返回新数组，未消费的事件原样返回。 */
 export const applySubagentTrailEvent = (
@@ -89,6 +115,47 @@ export const applySubagentTrailEvent = (
   if (!isToolEvent(event)) return trail
   const entryId = event.tool_call_id
   if (!entryId) return trail
+  const progressPatch: Partial<SubagentTrailItem> = {
+    ...(typeof event.content_lines === 'number' ? { contentLines: event.content_lines } : {}),
+    ...(typeof event.removed_lines === 'number' ? { removedLines: event.removed_lines } : {}),
+    ...(typeof event.intent === 'string' && event.intent ? { streamingIntent: event.intent } : {}),
+  }
+  if (event.type === 'tool_args_delta') {
+    const delta = event.delta || ''
+    const next = [...trail]
+    const idx = next.findIndex(item => item.id === entryId)
+    const prev = idx >= 0 ? next[idx] : undefined
+    if (prev && (prev.status === 'completed' || prev.status === 'error')) return trail
+    if (event.done) {
+      if (!prev) return trail
+      next[idx] = {
+        ...prev,
+        status: prev.status === 'generating' ? 'running' : prev.status,
+        argsStreaming: false,
+        argsText: undefined,
+        argsTruncated: undefined,
+      }
+      return next
+    }
+    const entry: SubagentTrailItem = {
+      ...(prev || {}),
+      kind: 'tool',
+      id: entryId,
+      tool_name: event.tool_name || prev?.tool_name || 'tool_call',
+      args: prev?.args || {},
+      status: 'generating',
+      argsText: `${prev?.argsText || ''}${delta}`,
+      argsStreaming: true,
+      argsTruncated: Boolean(event.truncated) || Boolean(prev?.argsTruncated),
+      ...progressPatch,
+      started_at_ms: prev?.started_at_ms ?? null,
+      ended_at_ms: prev?.ended_at_ms ?? null,
+    }
+    if (idx >= 0) next[idx] = entry
+    else next.push(entry)
+    return next
+  }
+  const previous = trail.find(item => item.id === entryId)
   const entry: SubagentTrailItem = {
     kind: 'tool',
     id: entryId,
@@ -96,6 +163,11 @@ export const applySubagentTrailEvent = (
     args: { ...(event.args || {}) },
     result: event.content || event.result,
     status: event.type === 'tool_failed' ? 'error' : event.type === 'tool_completed' ? 'completed' : 'running',
+    // 非增量生命周期事件（tool_started/完成）意味着参数生成结束：保留预览文本但停止展示
+    argsText: previous?.argsText,
+    argsStreaming: false,
+    argsTruncated: previous?.argsTruncated,
+    ...progressPatch,
     started_at_ms: event.started_at_ms ?? null,
     ended_at_ms: event.ended_at_ms ?? null,
   }

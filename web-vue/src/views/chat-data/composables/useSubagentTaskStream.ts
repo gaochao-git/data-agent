@@ -16,7 +16,7 @@ import type {
 } from '../types'
 import { parseSseChunk } from '../utils/sse'
 import { buildSubagentCompactionRecord, buildSubagentCompactionStartedTrail, buildSubagentCompactionTrailItem, clearSubagentCompactionPlaceholders, replaceSubagentCompactionPlaceholder } from '../utils/subagentCompaction'
-import { applySubagentTrailEvent } from '../utils/subagentTrail'
+import { applySubagentTrailEvent, finalizeSubagentTrailOnStop } from '../utils/subagentTrail'
 
 const RECONNECT_DELAY_MS = 800
 
@@ -197,6 +197,9 @@ export const useSubagentTaskStream = (
       reset()
     }
     stop()
+    // 任务已收口/被人工停止：事件流可能不会再补最后的工具完成帧，
+    // 先把仍在 generating/running 的内层工具收口，避免一直转圈。
+    if (!isActive()) trail.value = finalizeSubagentTrailOnStop(trail.value)
     const conversation = conversationId()
     if (!nextTaskId || !conversation || !isActive()) return
     const runGeneration = generation

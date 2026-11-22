@@ -263,7 +263,7 @@ describe('subagent trail replay', () => {
       },
       {
         sequence_no: 3, turn_id: 'turn-1', event_type: 'tool_result',
-        payload: { id: 'tool-result-1', role: 'tool', tool_call_id: 'task-1', tool_name: 'task', content: '1 + 1 = 2', subagent_trail: trail },
+        payload: { id: 'tool-result-1', role: 'tool', tool_call_id: 'task-1', tool_name: 'subagent', content: '1 + 1 = 2', subagent_trail: trail },
       },
       {
         sequence_no: 4, turn_id: 'turn-1', event_type: 'assistant_message',
@@ -303,7 +303,7 @@ describe('subagent trail replay', () => {
       {
         sequence_no: 3, turn_id: 'turn-1', event_type: 'tool_result',
         payload: {
-          id: 'tool-result-1', role: 'tool', tool_call_id: 'task-1', tool_name: 'task', content: '报告',
+          id: 'tool-result-1', role: 'tool', tool_call_id: 'task-1', tool_name: 'subagent', content: '报告',
           subagent_token_usage: {
             input_tokens: 3_000,
             output_tokens: 300,
@@ -334,7 +334,7 @@ describe('subagent trail replay', () => {
       {
         sequence_no: 3, turn_id: 'turn-1', event_type: 'tool_result',
         payload: {
-          id: 'tool-result-1', role: 'tool', tool_call_id: 'task-1', tool_name: 'task', content: '报告',
+          id: 'tool-result-1', role: 'tool', tool_call_id: 'task-1', tool_name: 'subagent', content: '报告',
           started_at_ms: 10_000, ended_at_ms: 190_000,
         },
       },
@@ -354,7 +354,7 @@ describe('subagent trail replay', () => {
       {
         sequence_no: 3, turn_id: 'turn-1', event_type: 'tool_result',
         payload: {
-          id: 'tool-result-1', role: 'tool', tool_call_id: 'task-1', tool_name: 'task', content: '结论',
+          id: 'tool-result-1', role: 'tool', tool_call_id: 'task-1', tool_name: 'subagent', content: '结论',
           subagent_trail: [{
             kind: 'tool', id: 'inner-1', tool_name: 'calculator_tool', args: {},
             result: '2', status: 'completed', started_at_ms: 1_000, ended_at_ms: 1_250,
@@ -379,7 +379,7 @@ describe('subagent trail replay', () => {
       {
         sequence_no: 3, turn_id: 'turn-1', event_type: 'tool_result',
         payload: {
-          id: 'tool-result-1', role: 'tool', tool_call_id: 'task-1', tool_name: 'task', content: '结论',
+          id: 'tool-result-1', role: 'tool', tool_call_id: 'task-1', tool_name: 'subagent', content: '结论',
           subagent_context_usage: usage,
         },
       },

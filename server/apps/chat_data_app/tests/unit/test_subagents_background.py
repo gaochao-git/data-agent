@@ -374,7 +374,7 @@ async def test_cancel_pending_and_running_tasks(harness, monkeypatch):
     cancelled = await harness.service.cancel_task(CONV, USER, pending.task_id, "用户一")
     assert cancelled is not None
     assert cancelled.status == "cancelled"
-    assert cancelled.report == "任务在开始执行前已取消。"
+    assert cancelled.report == "任务在开始执行前已取消（用户主动停止）。"
     assert cancelled.owner_token is None
     # 排队中任务取消即终态：立刻通知并唤醒主智能体。
     assert len(calls) == 1
@@ -390,6 +390,10 @@ async def test_cancel_pending_and_running_tasks(harness, monkeypatch):
         ).scalar_one()
     assert "不需要汇报完成结论" in notification.record_content
     assert "任务在开始执行前已取消" in notification.record_content
+    assert "用户手动停止后台子智能体" in notification.record_content
+    assert "取消来源=用户主动停止" in notification.record_content
+    assert "不要重新派发" in notification.record_content
+    assert cancelled.meta.get("cancel_origin") == "user"
 
     running = await _create_task(harness)
     await _start(harness, running)
@@ -414,6 +418,49 @@ async def test_cancel_pending_and_running_tasks(harness, monkeypatch):
     assert len(calls) == 2
     assert calls[1]["subagent_notification_task_id"] == running.task_id
     assert calls[1]["subagent_notification_status"] == "cancelled"
+    assert calls[1]["subagent_notification_cancel_origin"] == "user"
+    assert settled.meta.get("cancel_origin") == "user"
+    async with harness.get_session() as session:
+        running_notification = (
+            await session.execute(
+                select(ChatDataAgentInbox).where(
+                    ChatDataAgentInbox.message_id == notification_message_id(running.task_id)
+                )
+            )
+        ).scalar_one()
+    assert "用户手动停止后台子智能体" in running_notification.record_content
+    assert "不要继续执行该任务" in running_notification.record_content
+
+
+@pytest.mark.asyncio
+async def test_agent_origin_cancellation_keeps_continuation_allowed(harness, monkeypatch):
+    await harness.create_conversation()
+    calls: list[dict] = []
+
+    async def start_run(conversation_id, user_id, operator_name, runtime_context, **kwargs):
+        calls.append(runtime_context)
+        return "run-notification"
+
+    monkeypatch.setattr(agent_inbox_service, "start_run", start_run)
+    pending = await _create_task(harness)
+
+    cancelled = await harness.service.cancel_task(
+        CONV, USER, pending.task_id, "主智能体", origin=service_module.CANCEL_ORIGIN_AGENT
+    )
+    assert cancelled is not None and cancelled.status == "cancelled"
+    assert cancelled.meta.get("cancel_origin") == "agent"
+    assert calls[0]["subagent_notification_cancel_origin"] == "agent"
+    async with harness.get_session() as session:
+        notification = (
+            await session.execute(
+                select(ChatDataAgentInbox).where(
+                    ChatDataAgentInbox.message_id == notification_message_id(pending.task_id)
+                )
+            )
+        ).scalar_one()
+    assert "用户手动停止后台子智能体" not in notification.record_content
+    assert "不要重新派发" not in notification.record_content
+    assert "取消来源=主智能体" in notification.record_content
 
 
 @pytest.mark.asyncio
@@ -437,6 +484,26 @@ async def test_cancelled_background_runner_dispatches_wakeup_notification():
 
     assert calls[0] == ("finish", "cancelled")
     assert calls[1] == ("dispatch", 1)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_background_runner_reports_user_stop():
+    finished: dict[str, object] = {}
+
+    class _Service:
+        async def get_task(self, _task_id):
+            return SimpleNamespace(status="cancelling", error="", meta={"cancel_origin": "user"})
+
+        async def finish_task(self, *_args, **kwargs):
+            finished.update(report=kwargs.get("report"))
+
+        async def dispatch_pending_notifications(self, *, limit=10):
+            return 0
+
+    record = SimpleNamespace(task_id="task-user-cancel", owner_token="owner-1", description="用户停止核对")
+    await subagents_module._finish_cancelled_background_task(_Service(), record, {}, history=[])
+
+    assert "用户主动停止" in str(finished["report"])
 
 
 @pytest.mark.asyncio
@@ -594,6 +661,8 @@ async def test_completion_notification_claims_only_its_own_message(harness, monk
     assert message.record_type == "message"
     assert message.record_status == "pending"
     assert "完整盘点结论" in message.record_content
+    assert "subagent(manage=" not in message.record_content
+    assert f'subagent({{"action":"check","task_id":"{record.task_id}"}})' in message.record_content
     assert json.loads(message.record_meta)["hide_from_ui"] is True
 
     notified = await harness.service.get_task(record.task_id)

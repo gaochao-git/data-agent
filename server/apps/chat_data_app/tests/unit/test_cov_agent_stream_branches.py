@@ -192,6 +192,28 @@ def test_subagent_delta_payload_without_delta_is_dropped():
     assert result == []
 
 
+def test_subagent_tool_args_delta_payload_is_forwarded():
+    """子图参数增量既要过入站白名单，也必须原样转发给前端。"""
+    adapter = _adapter()
+
+    result = adapter._handle_subagent_tool_payload(
+        {
+            "event": {
+                "event_type": agent_stream.SSE_EVENT_TOOL_ARGS_DELTA,
+                "tool_call_id": "tool-1",
+                "tool_name": "file_read",
+                "status": "generating",
+                "delta": '{"file_path":',
+                "parent_tool_call_id": "parent-1",
+            }
+        }
+    )
+
+    assert len(result) == 1
+    assert "event: tool_args_delta" in result[0]
+    assert '"parent_tool_call_id": "parent-1"' in result[0]
+
+
 def test_record_first_visible_payload_falls_back_to_perf_clock(monkeypatch):
     monkeypatch.setattr(agent_stream, "emit_llm_first_token_timeout_alarm", lambda *a, **k: None)
     adapter = _adapter()

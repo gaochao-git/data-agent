@@ -42,6 +42,7 @@ import type {
  */
 const TOOL_LIFECYCLE_EVENTS = new Set<SSEEventType>([
   'tool_started',
+  'tool_args_delta',
   'tool_progress',
   'tool_completed',
   'tool_failed',
@@ -56,7 +57,7 @@ const TOOL_LIFECYCLE_EVENTS = new Set<SSEEventType>([
 /**
  * Set.has() 不触发类型窄化，这里用 type-guard 把「集合内容恰好是
  * ToolLifecycleEventData['type'] 全集」这一不变量写进类型（块内 event
- * 随即窄化为那 9 个字面量）。
+ * 随即窄化为工具生命周期那组字面量）。
  */
 const isToolLifecycleEvent = (e: SSEEventType): e is ToolLifecycleEventData['type'] =>
   TOOL_LIFECYCLE_EVENTS.has(e)

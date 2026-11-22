@@ -11,9 +11,11 @@ const TrailStub = defineComponent({
     datasourceId: { type: String, default: '' },
     executionTargets: { type: Array, default: () => [] },
     onSave: { type: Function, default: undefined },
+    cancellable: { type: Boolean, default: false },
+    cancelling: { type: Boolean, default: false },
   },
-  emits: ['selectTool'],
-  template: '<div data-subagent-trail-stub :data-result="toolCall.result" :data-description="toolCall.args.description" :data-background="String(toolCall.args.background)" />',
+  emits: ['selectTool', 'cancel'],
+  template: '<div data-subagent-trail-stub :data-result="toolCall.result" :data-description="toolCall.args.description" :data-background="String(toolCall.args.background)" :data-cancellable="String(cancellable)" :data-cancelling="String(cancelling)" />',
 })
 
 const ToolDetailStub = defineComponent({
@@ -173,5 +175,24 @@ describe('SubagentTaskProcessView', () => {
     const usage = emitted[emitted.length - 1]?.[1] as { used: number; percentage?: number } | undefined
     expect(usage?.used).toBe(20_000)
     expect(usage?.percentage).toBe(16)
+  })
+
+  it('消息流不再重复渲染取消入口，取消统一由详情页顶部承载', () => {
+    const running = turn({
+      status: 'running',
+      status_label: '执行中',
+      finished_at: null,
+    })
+    const wrapper = mount(SubagentTaskProcessView, {
+      props: {
+        task: running,
+        sessionTasks: [running],
+        conversationId: 'conv-1',
+      },
+      global: { stubs: { SubagentTrail: TrailStub } },
+    })
+
+    const trail = wrapper.findComponent(TrailStub)
+    expect(trail.props('cancellable')).toBe(false)
   })
 })

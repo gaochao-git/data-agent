@@ -78,7 +78,7 @@ import { evictWorkspaceFileCache } from '../../utils/workspacePreviewCache'
 import { IMAGE_PREVIEW_EXTENSIONS, IMAGE_PREVIEW_MIME, OFFICE_HTML_PREVIEW_EXTENSIONS, isBinaryPreviewPath } from '../../utils'
 import { formatToolTableCell, parseChartSpecValue, replaceVisiblePathsForDisplay } from '../../utils/messageArtifacts'
 import ConversationTokenUsage from './ConversationTokenUsage.vue'
-import { extractChangedFilePathsFromResult, extractWrittenFilePathCandidates, getSubagentDispatchArgs, isSubagentToolName } from '../../utils/toolDisplay'
+import { extractChangedFilePathsFromResult, extractWrittenFilePathCandidates, getSubagentDispatchArgs, isSubagentDisplayToolName } from '../../utils/toolDisplay'
 import { resolveSubagentContextUsage } from '../../utils/subagentUsage'
 import { ACCEPTED_FILE_TYPES, MAX_FILE_SIZE } from '../../utils/uploadLimits'
 
@@ -229,6 +229,14 @@ const displaySubagentTaskUsage = computed<ChatDataTokenUsage | null>(() => {
     meta?.subagent_token_usage_detail,
   )
 })
+const displaySubagentTaskCancellable = computed(() => {
+  const task = displaySubagentTask.value
+  return Boolean(task && isSubagentTaskActive(task) && props.cancelSubagentTask)
+})
+const displaySubagentTaskCancelling = computed(() => {
+  const task = displaySubagentTask.value
+  return Boolean(task && (props.subagentTaskCancellingIds.includes(task.task_id) || task.status === 'cancelling'))
+})
 const handleSubagentTaskUsageUpdated = (taskId: string, usage: ChatDataTokenUsage | null) => {
   if (usage) {
     liveSubagentTaskUsage.value = { ...liveSubagentTaskUsage.value, [taskId]: usage }
@@ -257,7 +265,7 @@ const displaySubagentTaskCompactionTurns = computed(() => displaySubagentTaskSes
 const subagentTaskCall = computed(() => {
   const toolCall = displayToolCall.value
   if (!toolCall) return null
-  return isSubagentToolName(toolCall.tool_name) && (toolCall.subagentTrail?.length ?? 0) > 0 ? toolCall : null
+  return isSubagentDisplayToolName(toolCall.tool_name) && (toolCall.subagentTrail?.length ?? 0) > 0 ? toolCall : null
 })
 
 /** 切换 tab：保存旧 tab 滚动位置、按需恢复新 tab 内容/位置（滚动读写由本组件持有）。 */
@@ -339,6 +347,12 @@ const cancelSubagentTaskFromManager = (task: SubagentTaskRecord) => {
   void props.cancelSubagentTask?.(task)
 }
 
+const cancelDisplaySubagentTask = () => {
+  const task = displaySubagentTask.value
+  if (!task || !isSubagentTaskActive(task)) return
+  cancelSubagentTaskFromManager(task)
+}
+
 const closeSubagentSessionFromManager = (task: SubagentTaskRecord) => {
   void props.closeSubagentSession?.(task)
 }
@@ -354,14 +368,14 @@ const openToolPanelTab = (toolCall: ToolCallInfo) => {
   // subagent 调用的工具结果只是「已开始/已结束」，真正过程与报告在任务账本里；
   // 能按 parent_tool_call_id 找到任务时直接进任务详情页（与「子智能体管理」
   // 同一个页面），避免同步与异步出现两套展示。
-  if (isSubagentToolName(toolCall.tool_name)) {
+  if (isSubagentDisplayToolName(toolCall.tool_name)) {
     const task = findSubagentTaskByToolCall(toolCall.tool_call_id)
     if (task) {
       openSubagentTaskPanelTab(task)
       return
     }
   }
-  const isTask = isSubagentToolName(toolCall.tool_name) && (toolCall.subagentTrail?.length ?? 0) > 0
+  const isTask = isSubagentDisplayToolName(toolCall.tool_name) && (toolCall.subagentTrail?.length ?? 0) > 0
   const dispatchArgs = getSubagentDispatchArgs(toolCall.tool_name, toolCall.args || {})
   const subagentType = typeof dispatchArgs?.subagent_type === 'string' ? dispatchArgs.subagent_type.trim() : ''
   rememberActivePanelScroll()
@@ -1657,6 +1671,18 @@ defineExpose({
               ...displaySubagentTaskCompactions.map(item => `${item.timestamp || ''} ${item.estimated_tokens_before ?? 0} → ${item.estimated_tokens_after ?? 0} tokens，压缩 ${item.compressed_messages ?? 0} 条`),
             ].join('\n')"
           >已压缩 {{ displaySubagentTaskCompactionCount }} 次</span>
+          <button
+            v-if="displaySubagentTaskCancellable"
+            type="button"
+            class="inline-flex h-6 shrink-0 items-center gap-1 whitespace-nowrap rounded-md border border-rose-100 bg-rose-50 px-2 text-[11px] font-medium text-rose-500 transition-colors hover:border-rose-200 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
+            :disabled="displaySubagentTaskCancelling"
+            data-subagent-task-cancel
+            :title="displaySubagentTaskCancelling ? '正在取消子智能体任务' : '取消正在运行的子智能体任务'"
+            @click.stop="cancelDisplaySubagentTask"
+          >
+            <i :class="displaySubagentTaskCancelling ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-stop'" class="text-[9px]"></i>
+            <span>{{ displaySubagentTaskCancelling ? '取消中' : '取消' }}</span>
+          </button>
         </div>
         <div class="inline-flex shrink-0 rounded-lg border border-slate-200 bg-slate-50 p-0.5 text-[11px]">
           <button

@@ -47,6 +47,7 @@ SSE_EVENT_QUESTION_REQUESTED = "question_requested"
 # 前端按 tool_call_id 在顶层 tool 帧里去重（同一工具的完整快照已由细粒度帧先行分发）。
 SSE_EVENT_TOOL = "tool"
 SSE_EVENT_TOOL_STARTED = "tool_started"
+SSE_EVENT_TOOL_ARGS_DELTA = "tool_args_delta"
 SSE_EVENT_TOOL_PROGRESS = "tool_progress"
 SSE_EVENT_TOOL_COMPLETED = "tool_completed"
 SSE_EVENT_TOOL_FAILED = "tool_failed"
@@ -78,6 +79,7 @@ SSE_EVENT_NAMES: frozenset[str] = frozenset(
         SSE_EVENT_QUESTION_REQUESTED,
         SSE_EVENT_TOOL,
         SSE_EVENT_TOOL_STARTED,
+        SSE_EVENT_TOOL_ARGS_DELTA,
         SSE_EVENT_TOOL_PROGRESS,
         SSE_EVENT_TOOL_COMPLETED,
         SSE_EVENT_TOOL_FAILED,

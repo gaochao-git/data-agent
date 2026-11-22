@@ -4,6 +4,26 @@ import { describe, expect, it } from 'vitest'
 import ToolCallDetailPanel from '../conversation/ToolCallDetailPanel.vue'
 
 describe('ToolCallDetailPanel', () => {
+  it('shows the raw args preview instead of empty params while generating', () => {
+    const wrapper = mount(ToolCallDetailPanel, {
+      props: {
+        toolCall: {
+          tool_call_id: 'call-streaming',
+          tool_name: 'file_write',
+          args: {},
+          status: 'generating',
+          argsStreaming: true,
+          argsText: '{"file_path": "/mnt/user-data/outputs/report.html", "content": "<html>',
+        },
+      },
+    })
+
+    expect(wrapper.text()).toContain('"content": "<html>')
+    expect(wrapper.text()).not.toContain('参数生成中')
+    expect(wrapper.text()).not.toContain('{ }')
+    expect(wrapper.text()).not.toContain('执行中...')
+  })
+
   it('uses the shared display name and primary argument in the detail header', () => {
     const wrapper = mount(ToolCallDetailPanel, {
       props: {

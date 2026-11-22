@@ -244,6 +244,7 @@ class SubagentEventService:
             message.update_time = now
 
     async def _runtime_context(self, event: Any) -> dict[str, Any]:
+        event_meta = self._load_meta(event)
         parent_context: dict[str, Any] = {}
         if event.parent_run_id:
             async with get_session() as session:
@@ -260,6 +261,7 @@ class SubagentEventService:
             "subagent_notification_event_type": event.event_type,
             "subagent_notification_task_id": event.task_id,
             "subagent_notification_status": event.task_status,
+            "subagent_notification_cancel_origin": event_meta.get("cancel_origin") or "",
         }
 
     @staticmethod

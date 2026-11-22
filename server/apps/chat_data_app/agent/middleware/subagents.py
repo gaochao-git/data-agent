@@ -61,6 +61,7 @@ from ..context.runtime import ContextRuntime
 from ..contracts.subagent_capabilities import resolve_task_capabilities
 from ..contracts.subagent_task import (
     ACTIVE_TASK_STATUSES,
+    CANCEL_ORIGIN_USER,
     TASK_STATUS_CANCELLED,
     TASK_STATUS_COMPLETED,
     TASK_STATUS_FAILED,
@@ -1078,7 +1079,14 @@ async def _finish_cancelled_background_task(
     partial_report, result_meta = _capture_partial_background_result(partial_state)
     cancelled = current_record is not None and current_record.status in {"cancelling", TASK_STATUS_CANCELLED}
     status = TASK_STATUS_CANCELLED if cancelled else TASK_STATUS_INTERRUPTED
-    report = "任务已被用户或主智能体取消。" if cancelled else "任务因执行节点中断而停止；可重新派发。"
+    cancel_meta = (getattr(current_record, "meta", None) or {}) if current_record else {}
+    cancel_origin = str(cancel_meta.get("cancel_origin") or "")
+    if cancelled and cancel_origin == CANCEL_ORIGIN_USER:
+        report = "任务已被用户主动停止，不再继续执行。"
+    elif cancelled:
+        report = "任务已被主智能体取消。"
+    else:
+        report = "任务因执行节点中断而停止；可重新派发。"
     await service.finish_task(
         record.task_id,
         record.owner_token or "",

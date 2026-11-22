@@ -24,6 +24,7 @@ from utils.logger import get_logger
 from ..contracts.subagent_capabilities import resolve_task_capabilities
 from ..contracts.subagent_task import (
     ACTIVE_TASK_STATUSES,
+    CANCEL_ORIGIN_AGENT,
     SESSION_STATUS_CLOSED,
     TASK_HEARTBEAT_SECONDS,
     TASK_STATUS_CANCELLED,
@@ -574,7 +575,7 @@ async def _cancel_async_task(
         return "manage action=cancel 需要提供 task_id。"
     if not user_id:
         return "无法取消：当前会话缺少用户身份。"
-    record = await service.cancel_task(conversation_id, user_id, normalized, operator_name)
+    record = await service.cancel_task(conversation_id, user_id, normalized, operator_name, origin=CANCEL_ORIGIN_AGENT)
     if record is None:
         return f"子智能体任务 {normalized} 不存在。"
     if record.status in TERMINAL_TASK_STATUSES:

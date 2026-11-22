@@ -6,9 +6,9 @@
 generation_speed 滑窗采样负责（原 stream_stats 参数字符上报已随前端本地估算下线）。
 """
 
+import time
 from typing import Any
 
-from .agent_run_support import _get_timestamp
 from .sse_protocol import SSE_EVENT_TOOL_PROGRESS
 from .sse_protocol import format_sse as _format_sse
 
@@ -65,6 +65,23 @@ def _count_text_lines(text: str) -> int:
     return text.count("\n") + (0 if text.endswith("\n") else 1)
 
 
+def extract_tool_line_counts(tool_name: str, args: dict[str, Any]) -> tuple[int, int] | None:
+    """从完整工具参数计算 file_write/file_edit 的 (写入行数, 移除行数)。
+
+    直播阶段按流式 args 统计；工具开始与历史快照拿到的已经是完整参数，
+    统一走这里，避免两套口径。非行数统计工具返回 None。
+    """
+    fields = _STREAMING_LINE_COUNT_TOOLS.get(str(tool_name or "").strip())
+    if not fields:
+        return None
+    added = args.get(fields["added_field"])
+    removed = args.get(fields["removed_field"]) if fields.get("removed_field") else ""
+    return (
+        _count_text_lines(added if isinstance(added, str) else ""),
+        _count_text_lines(removed if isinstance(removed, str) else ""),
+    )
+
+
 def _format_tool_progress_event(
     tool_call_id: str,
     tool_name: str,
@@ -84,7 +101,7 @@ def _format_tool_progress_event(
         "type": SSE_EVENT_TOOL_PROGRESS,
         "tool_call_id": tool_call_id,
         "tool_name": tool_name,
-        "timestamp": _get_timestamp(),
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
     if content_lines is not None:
         data["content_lines"] = content_lines

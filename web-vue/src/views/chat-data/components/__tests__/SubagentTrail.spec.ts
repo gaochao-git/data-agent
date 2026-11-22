@@ -19,9 +19,11 @@ const MessageItemStub = {
     'liveSupersteps',
     'liveSuperstepLimit',
     'liveElapsedMs',
+    'streamingCancellable',
+    'streamingCancelling',
     'resolveToolCall',
   ],
-  emits: ['selectTool', 'openAttachment'],
+  emits: ['selectTool', 'openAttachment', 'cancelStreaming'],
   template: '<div class="message-item-stub" :data-role="message.role" :data-id="message.id"></div>',
 }
 
@@ -195,6 +197,38 @@ describe('SubagentTrail（右侧聊天式完整过程）', () => {
     expect(finished.find('[data-message-footer]').exists()).toBe(true)
     expect(finished.find('[data-message-copy]').exists()).toBe(true)
     expect(finished.find('[data-message-duration]').text()).toContain('用时 1 分 30 秒')
+  })
+
+  it('运行中消息流状态行可取消，取消事件上抛', async () => {
+    const wrapper = mount(SubagentTrail, {
+      props: {
+        toolCall: taskCall([{ kind: 'message', id: 'msg-1', content: '过程', thinking: '思考中' }], 'running'),
+        conversationId: 'conv-1',
+        elapsedMs: 5_000,
+        timingRunning: true,
+        cancellable: true,
+      },
+      global: {
+        stubs: {
+          MarkdownBlock: { props: ['content'], template: '<div>{{ content }}</div>' },
+          ThinkingBlock: true,
+          ToolCallList: true,
+          QueryResultPanel: true,
+          WaitingTip: true,
+        },
+      },
+    })
+
+    const button = wrapper.find('[data-subagent-stream-cancel]')
+    expect(button.exists()).toBe(true)
+    expect(button.text()).toContain('取消')
+
+    await button.trigger('click')
+    expect(wrapper.emitted('cancel')).toHaveLength(1)
+
+    await wrapper.setProps({ cancelling: true })
+    expect(wrapper.find('[data-subagent-stream-cancel]').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('[data-subagent-stream-cancel]').text()).toContain('取消中')
   })
 
   it('完成态在用量行展示子智能体 token 用量', () => {

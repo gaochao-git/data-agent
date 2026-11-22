@@ -11,18 +11,22 @@ export interface SubagentOperationArgs {
 }
 
 const SUBAGENT_TOOL_NAME = 'subagent'
-// 单工具收敛前的历史工具名：旧会话仍持久化 task，只做展示兼容。
+// 单工具收敛前的历史工具名：旧会话仍持久化 task，仅用于历史回放展示，不再作为可调用工具。
 const LEGACY_SUBAGENT_TOOL_NAME = 'task'
+
+/** 子智能体工具：只认统一后的 subagent 工具名（新调用入口）。 */
+export function isSubagentToolName(toolName?: string | null): boolean {
+  return String(toolName || '').trim() === SUBAGENT_TOOL_NAME
+}
 
 /** 是否为收敛前的旧子智能体工具名。 */
 export function isLegacySubagentToolName(toolName?: string | null): boolean {
   return String(toolName || '').trim() === LEGACY_SUBAGENT_TOOL_NAME
 }
 
-/** 子智能体工具：新单工具与旧 task 历史调用共享过程卡片、参数标签和结果渲染。 */
-export function isSubagentToolName(toolName?: string | null): boolean {
-  const name = String(toolName || '').trim()
-  return name === SUBAGENT_TOOL_NAME || name === LEGACY_SUBAGENT_TOOL_NAME
+/** 子智能体展示面：新工具与旧 task 历史调用共享过程卡片；不代表 task 仍可调用。 */
+export function isSubagentDisplayToolName(toolName?: string | null): boolean {
+  return isSubagentToolName(toolName) || isLegacySubagentToolName(toolName)
 }
 
 /** 取出当前调用的主参数分组；流式参数未完整时返回 null。 */
@@ -50,6 +54,22 @@ export function getSubagentDispatchArgs(toolName?: string | null, args: ToolArgs
   return action === 'start' ? args : null
 }
 
+/**
+ * 取子智能体追问正文：send（新格式）或 follow_up/steer（旧 task 历史调用）。
+ *
+ * 主对话卡片与派发展示「任务书」对齐：派发看 description，追问看真正发给
+ * 子智能体的 message，而不是只展示一句 intent。
+ */
+export function getSubagentSendMessage(toolName?: string | null, args: ToolArgs = {}): string {
+  if (!isSubagentDisplayToolName(toolName)) return ''
+  const operation = getSubagentOperationArgs(args)
+  if (operation?.operation === 'send') return String(operation.args.message || '').trim()
+  if (!isLegacySubagentToolName(toolName)) return ''
+  const action = String(args.action || '').trim()
+  if (action === 'follow_up' || action === 'steer') return String(args.message || '').trim()
+  return ''
+}
+
 /** /config 下发后注入；后端声明是工具展示名的唯一来源。 */
 export function setToolDisplayNames(names?: Record<string, string> | null): void {
   backendToolDisplayNames.value = names && typeof names === 'object' ? { ...names } : {}
@@ -63,7 +83,7 @@ export function getToolDisplayName(toolName?: string | null, args: ToolArgs = {}
     const target = typeof args.name === 'string' ? args.name.trim() : ''
     return target ? `调用 MCP 工具：${target.replace(/^mcp_/, '')}` : '调用 MCP 工具'
   }
-  const taskActionName = isSubagentToolName(toolName) ? getSubagentActionDisplayName(toolName, args) : ''
+  const taskActionName = isSubagentDisplayToolName(toolName) ? getSubagentActionDisplayName(toolName, args) : ''
   if (taskActionName) return taskActionName
   const backendName = backendToolDisplayNames.value[name]
   if (backendName) return backendName
@@ -204,7 +224,7 @@ const legacyTaskActionDisplayName = (args: ToolArgs): string => {
 /** 子智能体工具内按动作细分的展示名；无需细分时沿用后端静态展示名。 */
 export function getSubagentActionDisplayName(toolName?: string | null, args: ToolArgs = {}): string {
   const name = String(toolName || '').trim()
-  if (name === LEGACY_SUBAGENT_TOOL_NAME) return legacyTaskActionDisplayName(args)
+  if (isLegacySubagentToolName(name)) return legacyTaskActionDisplayName(args)
   if (name !== SUBAGENT_TOOL_NAME) return ''
   const operation = getSubagentOperationArgs(args)
   if (!operation) return ''

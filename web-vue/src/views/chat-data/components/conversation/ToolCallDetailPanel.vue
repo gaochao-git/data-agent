@@ -43,6 +43,10 @@ const toolDescription = computed(() => {
   return toolCall ? getToolCompactDescription(toolCall.tool_name, toolCall.args || {}) : ''
 })
 
+const isGenerating = computed(() => props.toolCall?.status === 'generating')
+const argsStreaming = computed(() => Boolean(props.toolCall?.argsStreaming && props.toolCall?.argsText))
+const argsPreviewText = computed(() => props.toolCall?.argsText || '')
+
 const paramsExpanded = ref(true)
 const resultExpanded = ref(true)
 
@@ -66,7 +70,11 @@ const diffViewerVisible = ref(false)
 const toolResult = computed(() => {
   const toolCall = props.toolCall
   if (!toolCall) return ''
-  const fallback = toolCall.status === 'completed' ? '已完成，工具未返回文本内容。' : '执行中...'
+  const fallback = toolCall.status === 'completed'
+    ? '已完成，工具未返回文本内容。'
+    : toolCall.status === 'cancelled'
+      ? '任务已停止，工具未返回完成结果。'
+      : '执行中...'
   return props.formatText(prettyJsonIfPossible(toolCall.result || fallback))
 })
 
@@ -76,6 +84,7 @@ const STATUS_META: Record<ToolCallInfo['status'], { label: string; className: st
   running: { label: '执行中', className: 'text-[#1f82d9]' },
   completed: { label: '已完成', className: 'text-emerald-600' },
   error: { label: '执行失败', className: 'text-red-500' },
+  cancelled: { label: '已停止', className: 'text-slate-500' },
 }
 const statusMeta = computed(() => STATUS_META[props.toolCall?.status || 'running'])
 const { durationText } = useToolTiming(() => props.toolCall?.started_at_ms, () => props.toolCall?.ended_at_ms)
@@ -106,11 +115,12 @@ const hasTiming = computed(() => Boolean(props.toolCall?.started_at_ms || props.
           ></i>
         </button>
         <div v-if="paramsExpanded" class="px-4 pb-4">
-          <pre class="m-0 max-h-[40vh] overflow-auto whitespace-pre-wrap break-words rounded-lg bg-slate-50 p-3 text-xs leading-relaxed text-slate-700">{{ formatJson(toolCall.args) }}</pre>
+          <div v-if="argsStreaming && toolCall.argsTruncated" class="mb-2 text-[11px] text-slate-400">预览已截断</div>
+          <pre class="m-0 max-h-[40vh] overflow-auto whitespace-pre-wrap break-words rounded-lg bg-slate-50 p-3 text-xs leading-relaxed text-slate-700">{{ argsStreaming ? argsPreviewText : formatJson(toolCall.args) }}</pre>
         </div>
       </section>
 
-      <section>
+      <section v-if="!isGenerating">
         <button
           type="button"
           class="flex w-full items-center justify-between gap-3 px-4 py-3 text-left text-xs font-medium text-slate-500 transition-colors hover:bg-slate-50"

@@ -36,6 +36,8 @@ from utils.models import ChatDataAgentInbox, ChatDataSubagentSession
 
 from ..contracts.subagent_task import (
     ACTIVE_TASK_STATUSES,
+    CANCEL_ORIGIN_AGENT,
+    CANCEL_ORIGIN_USER,
     EXECUTING_TASK_STATUSES,
     SESSION_STATUS_CLOSED,
     SESSION_STATUS_OPEN,
@@ -79,6 +81,19 @@ from .subagent_event_service import (
     lifecycle_event_id,
     subagent_event_service,
     terminal_event_id,
+)
+from .subagent_notification_text import (
+    NOTIFICATION_REPORT_PREVIEW_CHARS,
+    terminal_notification_text,
+)
+from .subagent_notification_text import (
+    resumed_notification_text as _resumed_notification_text,
+)
+from .subagent_notification_text import (
+    suspension_notification_text as _suspension_notification_text,
+)
+from .subagent_notification_text import (
+    user_message_notification_text as _user_message_notification_text,
 )
 from .subagent_recovery import (
     MAX_TASK_RECOVERY_ATTEMPTS,
@@ -129,8 +144,6 @@ __all__ = [
     "parse_task_status_filter",
     "subagent_task_service",
 ]
-
-NOTIFICATION_REPORT_PREVIEW_CHARS = 1600
 
 
 @dataclass(frozen=True)
@@ -438,17 +451,6 @@ def _decode_task_content(content: str | None) -> tuple[str, dict[str, Any]]:
     )
 
 
-def _preview(text: str, max_chars: int = NOTIFICATION_REPORT_PREVIEW_CHARS) -> str:
-    normalized = (text or "").strip()
-    if len(normalized) <= max_chars:
-        return normalized
-    return normalized[:max_chars] + (
-        f"\n…[报告共 {len(normalized)} 字符，当前只展示预览；"
-        '完整内容请调用 subagent({"action":"check","task_id":"..."}) 查看；'
-        "超长报告会落盘并返回 result_path]"
-    )
-
-
 def notification_message_id(task_id: str) -> str:
     """兼容旧调用方的完成通知消息 ID；统一走事件哈希，保证列宽稳定。"""
     return event_message_id(terminal_event_id(task_id))
@@ -459,48 +461,14 @@ def _legacy_notification_message_id(task_id: str) -> str:
     return f"ntf-{task_id}"
 
 
-def _suspension_notification_text(task: SubagentTaskRecord) -> str:
-    """等待审批的冒泡文本：只陈述待审批操作，不代替用户做决定。"""
-    payload = task.meta.get("pending_interrupt")
-    items = payload.get("approval_items") if isinstance(payload, dict) else None
-    lines: list[str] = []
-    for item in items or []:
-        if not isinstance(item, dict):
-            continue
-        label = str(item.get("label") or item.get("tool_name") or "工具调用")
-        intent = str(item.get("intent") or "").strip()
-        lines.append(f"- {label}" + (f"：{intent}" if intent else ""))
-    detail = "\n".join(lines) if lines else "- 子智能体请求执行需要审批的工具（详情见任务详情）"
-    return (
-        "## 后台子智能体等待审批（内部消息）\n"
-        f"task_id={task.task_id}\n"
-        f"类型={task.subagent_type}；任务={task.label}\n\n"
-        f"待审批操作：\n{detail}\n\n"
-        "子智能体不支持审批参数，该状态只会出现在历史或非标准装配任务中。"
-        f'请用 subagent({{"action":"cancel","task_id":"{task.task_id}"}}) '
-        "取消后重新派发；不要重复派发同一任务。"
-    )
-
-
-def _resumed_notification_text(task: SubagentTaskRecord) -> str:
-    return (
-        "## 后台子智能体审批完成并恢复执行（内部消息）\n"
-        f"task_id={task.task_id}\n"
-        f"类型={task.subagent_type}；任务={task.label}\n\n"
-        "后续终态仍会另行通知，不要因为恢复而重复派发同一任务。"
-    )
-
-
-def _user_message_notification_text(task: SubagentTaskRecord, excerpt: str) -> str:
-    return (
-        "## 用户直接联系了子智能体（内部消息）\n"
-        f"task_id={task.task_id}\n"
-        f"类型={task.subagent_type}；任务={task.label}\n\n"
-        f"用户消息：{excerpt}\n\n"
-        "这是用户与子智能体的独立对话，不要把它当成新的派发指令；"
-        "如需继续管理该子会话，先调用 "
-        'subagent({"action":"check","task_id":"..."}) 获取最新状态。'
-    )
+def _resolve_cancel_origin(meta: dict[str, Any], origin: str) -> str:
+    """用户来源优先，避免用户停止后被主智能体的后续 cancel 覆盖。"""
+    existing = str(meta.get("cancel_origin") or "")
+    if origin == CANCEL_ORIGIN_USER or existing == CANCEL_ORIGIN_USER:
+        return CANCEL_ORIGIN_USER
+    if origin == CANCEL_ORIGIN_AGENT:
+        return CANCEL_ORIGIN_AGENT
+    return existing or origin
 
 
 class SubagentTaskService:
@@ -1546,6 +1514,8 @@ class SubagentTaskService:
         user_id: str,
         task_id: str,
         operator_name: str,
+        *,
+        origin: str = CANCEL_ORIGIN_USER,
     ) -> SubagentTaskRecord | None:
         cancelled_running = False
         notification_event_id: str | None = None
@@ -1564,6 +1534,10 @@ class SubagentTaskService:
                 return SubagentTaskRecord.from_row(row)
             meta = load_task_meta(row.record_meta)
             meta["cancel_requested_at"] = now.isoformat()
+            # 用户优先级最高：同一任务先被用户停止、后又被主智能体 cancel 时，
+            # 终态通知仍必须按“用户主动停止”处理，不能被覆盖成可继续执行。
+            cancel_origin = _resolve_cancel_origin(meta, origin)
+            meta["cancel_origin"] = cancel_origin
             # 取消同样要告知主智能体：运行中的任务在下次心跳才真正停下，
             # 调用方只拿到「已提交」；终态通知才是主智能体继续编排的依据。
             if row.record_status in (TASK_STATUS_PENDING, *WAITING_APPROVAL_TASK_STATUSES):
@@ -1575,7 +1549,11 @@ class SubagentTaskService:
                 meta["progress"] = progress
                 meta.pop("pending_interrupt", None)
                 row.record_status = TASK_STATUS_CANCELLED
-                row.record_content = "任务在开始执行前已取消。"
+                row.record_content = (
+                    "任务在开始执行前已取消（用户主动停止）。"
+                    if cancel_origin == CANCEL_ORIGIN_USER
+                    else "任务在开始执行前已取消。"
+                )
                 row.owner_token = None
                 row.lease_expire_time = None
             else:
@@ -1913,6 +1891,7 @@ class SubagentTaskService:
             execution_mode=task.execution_mode,
             turn_index=task.turn_index,
             label=task.label,
+            cancel_origin=task.meta.get("cancel_origin"),
         )
 
     @staticmethod
@@ -1921,47 +1900,7 @@ class SubagentTaskService:
 
     @staticmethod
     def _notification_text(task: SubagentTaskRecord) -> str:
-        outcome = TASK_STATUS_LABELS.get(task.status, task.status)
-        cancelled = task.status == TASK_STATUS_CANCELLED
-        report = _preview(task.report or task.error or "无报告正文")
-        report_path = task.report_path
-        path_line = (
-            f"完整报告已落盘：result_path={report_path}（{len(task.report)} 字符，可用 file_read 读取）。\n"
-            if report_path
-            else ""
-        )
-        header = "后台子智能体任务状态通知" if cancelled else "后台子智能体完成通知"
-        guidance = (
-            "任务已被取消，不需要汇报完成结论；如中断前已有结论可简要告知用户。"
-            f"需要基于同一子会话继续时调用 "
-            f'subagent({{"action":"send","task_id":"{task.task_id}","message":"..."}})，'
-            "或重新派发新任务。"
-            if cancelled
-            else "请根据报告向用户简要汇报结论（不要重复执行任务）；"
-        )
-        return (
-            f"## {header}（内部消息）\n"
-            f"task_id={task.task_id}\n"
-            f"类型={task.subagent_type}；状态={outcome}\n"
-            f"任务={task.label}\n\n"
-            f"{'中断前内容预览' if cancelled else '报告预览'}：\n{report}\n\n{path_line}"
-            f"{guidance}"
-            + (
-                ""
-                if cancelled
-                else (
-                    f'需要完整报告或最新状态时调用 subagent(manage={{action:"check", task_id:"{task.task_id}"}})；'
-                    + (
-                        "完整报告已落盘，请优先用 file_read 读取 result_path，不要只凭预览下结论。"
-                        if report_path
-                        else 'subagent({"action":"check","task_id":"..."}) 会返回完整正文，不要只凭预览下结论。'
-                    )
-                    + "如报告中提到产物文件，用 present_artifacts 展示。"
-                    + "需要基于同一子会话继续分析/修改结论时，用 "
-                    + f'subagent({{"action":"send","task_id":"{task.task_id}","message":"..."}})。'
-                )
-            )
-        )
+        return terminal_notification_text(task)
 
 
 def _expired_status_and_report(current_status: str) -> tuple[str, str]:

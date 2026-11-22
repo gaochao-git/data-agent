@@ -51,6 +51,10 @@ TASK_STATUS_LABELS = {
     TASK_STATUS_LOST: "执行节点失联",
 }
 TASK_HEARTBEAT_SECONDS = 5
+# 取消发起方：用户在工作台点停止，还是主智能体主动 cancel。终态通知的
+# 指令必须区分二者——用户手动停止后主智能体不得自行续跑或重新派发。
+CANCEL_ORIGIN_USER = "user"
+CANCEL_ORIGIN_AGENT = "agent"
 READ_ONLY_SUBAGENT_TYPES = frozenset({"explore"})
 SESSION_STATUS_OPEN = "open"
 SESSION_STATUS_CLOSED = "closed"
@@ -332,6 +336,8 @@ class SubagentTaskPort(Protocol):
         user_id: str,
         task_id: str,
         operator_name: str,
+        *,
+        origin: str = CANCEL_ORIGIN_USER,
     ) -> SubagentTaskView | None: ...
 
     async def mark_viewed(self, record: SubagentTaskView) -> None: ...
@@ -362,6 +368,8 @@ def get_subagent_task_service() -> SubagentTaskPort | None:
 
 __all__ = [
     "ACTIVE_TASK_STATUSES",
+    "CANCEL_ORIGIN_AGENT",
+    "CANCEL_ORIGIN_USER",
     "SESSION_STATUS_CLOSED",
     "SESSION_STATUS_OPEN",
     "SubagentSessionActiveError",

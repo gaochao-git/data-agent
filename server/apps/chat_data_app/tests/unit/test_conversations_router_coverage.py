@@ -747,7 +747,8 @@ async def test_subagent_task_routes_list_detail_and_cancel(router_state, monkeyp
     assert missing.status_code == 404
     assert payload(missing)["msg"] == "后台任务不存在"
 
-    async def cancel_task(conversation_id, user_id, task_id, operator_name):
+    async def cancel_task(conversation_id, user_id, task_id, operator_name, *, origin):
+        assert origin == "user"
         return _subagent_task_record(status="cancelling", report="")
 
     monkeypatch.setattr(conversation_router.subagent_task_service, "cancel_task", cancel_task)

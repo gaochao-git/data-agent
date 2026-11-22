@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { SubagentTrailItem, ToolLifecycleEventData } from '../../types'
-import { applySubagentTrailEvent } from '../subagentTrail'
+import { applySubagentTrailEvent, finalizeSubagentTrailOnStop } from '../subagentTrail'
 
 const event = (value: Record<string, unknown>) => value as unknown as ToolLifecycleEventData
 
@@ -100,6 +100,81 @@ describe('applySubagentTrailEvent', () => {
     })
   })
 
+  it('参数生成增量先建 trail，tool_started 收口后停止预览', () => {
+    let trail: SubagentTrailItem[] = []
+    trail = applySubagentTrailEvent(trail, event({
+      type: 'tool_args_delta',
+      tool_call_id: 'tool1',
+      tool_name: 'file_read',
+      status: 'generating',
+      delta: '{"file_path": "/a.md"',
+    }))
+    trail = applySubagentTrailEvent(trail, event({
+      type: 'tool_args_delta',
+      tool_call_id: 'tool1',
+      tool_name: 'file_read',
+      status: 'generating',
+      delta: '}',
+    }))
+
+    expect(trail[0]).toMatchObject({
+      kind: 'tool',
+      id: 'tool1',
+      status: 'generating',
+      argsStreaming: true,
+      argsText: '{"file_path": "/a.md"}',
+    })
+
+    trail = applySubagentTrailEvent(trail, event({
+      type: 'tool_started',
+      tool_call_id: 'tool1',
+      tool_name: 'file_read',
+      args: { file_path: '/a.md' },
+    }))
+
+    expect(trail[0]).toMatchObject({
+      status: 'running',
+      args: { file_path: '/a.md' },
+      argsStreaming: false,
+      argsText: '{"file_path": "/a.md"}',
+    })
+  })
+
+  it('文件工具的 +N / -M 与 intent 从参数增量保留到执行完成', () => {
+    let trail: SubagentTrailItem[] = []
+    trail = applySubagentTrailEvent(trail, event({
+      type: 'tool_args_delta',
+      tool_call_id: 'edit-1',
+      tool_name: 'file_edit',
+      status: 'generating',
+      delta: '{"file_path":"/a.html","new_content":"a\\nb\\nc"',
+      content_lines: 3,
+      removed_lines: 1,
+      intent: '补全页面结构',
+    }))
+    trail = applySubagentTrailEvent(trail, event({
+      type: 'tool_started',
+      tool_call_id: 'edit-1',
+      tool_name: 'file_edit',
+      args: { file_path: '/a.html' },
+    }))
+    trail = applySubagentTrailEvent(trail, event({
+      type: 'tool_completed',
+      tool_call_id: 'edit-1',
+      tool_name: 'file_edit',
+      content: '已修改',
+    }))
+
+    expect(trail[0]).toMatchObject({
+      kind: 'tool',
+      id: 'edit-1',
+      status: 'completed',
+      contentLines: 3,
+      removedLines: 1,
+      streamingIntent: '补全页面结构',
+    })
+  })
+
   it('非 trail 事件保持原数组不变', () => {
     const trail: SubagentTrailItem[] = []
     const next = applySubagentTrailEvent(trail, event({
@@ -107,5 +182,59 @@ describe('applySubagentTrailEvent', () => {
       used_tokens: 10,
     }))
     expect(next).toBe(trail)
+  })
+})
+
+describe('finalizeSubagentTrailOnStop', () => {
+  it('把仍在运行/生成参数的内层工具收口为已停止，已完成条目保持原样', () => {
+    const completed: SubagentTrailItem = {
+      kind: 'tool',
+      id: 'tool-done',
+      tool_name: 'file_read',
+      status: 'completed',
+      result: 'ok',
+      ended_at_ms: 180,
+    }
+    const running: SubagentTrailItem = {
+      kind: 'tool',
+      id: 'tool-running',
+      tool_name: 'sql_query',
+      status: 'running',
+      args: { sql: 'select 1' },
+      started_at_ms: 200,
+    }
+    const generating: SubagentTrailItem = {
+      kind: 'tool',
+      id: 'tool-generating',
+      tool_name: 'file_write',
+      status: 'generating',
+      argsText: '{"path":',
+      argsStreaming: true,
+    }
+
+    const result = finalizeSubagentTrailOnStop([completed, running, generating])
+
+    expect(result[0]).toBe(completed)
+    expect(result[1]).toMatchObject({
+      id: 'tool-running',
+      status: 'cancelled',
+      result: '任务已停止，工具未执行完成。',
+      started_at_ms: 200,
+      ended_at_ms: expect.any(Number),
+    })
+    expect(result[2]).toMatchObject({
+      id: 'tool-generating',
+      status: 'cancelled',
+      argsStreaming: false,
+      argsText: '{"path":',
+    })
+  })
+
+  it('没有未完成工具时返回原数组，避免无意义的重渲染', () => {
+    const trail: SubagentTrailItem[] = [
+      { kind: 'message', id: 'm1', content: '正文' },
+      { kind: 'tool', id: 'tool1', tool_name: 'file_read', status: 'completed', result: 'ok' },
+    ]
+    expect(finalizeSubagentTrailOnStop(trail)).toBe(trail)
   })
 })

@@ -40,12 +40,16 @@ const props = defineProps({
   recursionLimit: { type: Number, default: 0 },
   /** 运行中实时步数（subagent_steps 事件） */
   liveSupersteps: { type: Number as PropType<number | null>, default: null },
+  /** 运行中在消息流状态行展示取消入口；仅当前活跃任务开启 */
+  cancellable: { type: Boolean, default: false },
+  cancelling: { type: Boolean, default: false },
   /** 后台任务详情没有 trail 时也要展示任务书/报告；前台工具详情保持原口径 */
   showWithoutTrail: { type: Boolean, default: false },
 })
 
 const emit = defineEmits<{
   selectTool: [toolCall: ToolCallInfo]
+  cancel: []
 }>()
 
 const messages = computed(() => buildSubagentMessages(props.toolCall))
@@ -83,7 +87,10 @@ const showFooterFor = (message: { id: string; role: string; isStreaming?: boolea
         :live-supersteps="timingRunning ? liveSupersteps : null"
         :live-superstep-limit="recursionLimit || null"
         :live-elapsed-ms="timingRunning ? elapsedMs : null"
+        :streaming-cancellable="timingRunning && cancellable"
+        :streaming-cancelling="cancelling"
         @select-tool="emit('selectTool', $event)"
+        @cancel-streaming="emit('cancel')"
       />
       <MessageFooter
         v-if="showFooterFor(message)"

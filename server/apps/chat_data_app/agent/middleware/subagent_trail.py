@@ -15,6 +15,7 @@ from apps.chat_data_app.services.runtime_config import (
 )
 from utils.tool_call_args import coerce_tool_call_args
 
+from ...tool_stream_progress import extract_tool_line_counts
 from .subagent_async import _truncate_text
 from .subagent_text import chunk_reasoning_text, plain_text, sanitize_report_text
 
@@ -147,14 +148,19 @@ def _trail_tool_entry(
 ) -> dict[str, Any]:
     tool_call_id = str(tool_call.get("id") or "")
     outcome = tool_results.get(tool_call_id) or {}
+    tool_name = str(tool_call.get("name") or "")
+    args = coerce_tool_call_args(tool_call.get("args")) or {}
     entry = {
         "kind": "tool",
         "id": tool_call_id,
-        "tool_name": str(tool_call.get("name") or ""),
-        "args": coerce_tool_call_args(tool_call.get("args")) or {},
+        "tool_name": tool_name,
+        "args": args,
         "result": outcome.get("result", ""),
         "status": outcome.get("status", pending_status),
     }
+    line_counts = extract_tool_line_counts(tool_name, args)
+    if line_counts is not None:
+        entry["contentLines"], entry["removedLines"] = line_counts
     for key in ("started_at_ms", "ended_at_ms"):
         if isinstance(outcome.get(key), int):
             entry[key] = outcome[key]

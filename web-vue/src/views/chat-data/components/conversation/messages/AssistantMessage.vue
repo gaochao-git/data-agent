@@ -41,6 +41,8 @@ const props = defineProps({
   liveSupersteps: { type: Number as PropType<number | null>, default: null },
   liveSuperstepLimit: { type: Number as PropType<number | null>, default: null },
   liveElapsedMs: { type: Number as PropType<number | null>, default: null },
+  streamingCancellable: { type: Boolean, default: false },
+  streamingCancelling: { type: Boolean, default: false },
   resolveToolCall: {
     type: Function as PropType<(message: Message, toolCallId: string) => ToolCallInfo | null>,
     default: undefined,
@@ -53,6 +55,7 @@ const props = defineProps({
 
 const emit = defineEmits<{
   selectTool: [toolCall: ToolCallInfo]
+  cancelStreaming: []
 }>()
 
 const blocks = computed(() => buildMessageBlocks(props.message, {
@@ -185,5 +188,8 @@ const toggleWorkProcess = () => {
     :live-supersteps="liveSupersteps"
     :live-superstep-limit="liveSuperstepLimit"
     :live-elapsed-ms="liveElapsedMs"
+    :cancellable="streamingCancellable"
+    :cancelling="streamingCancelling"
+    @cancel="emit('cancelStreaming')"
   />
 </template>

@@ -40,6 +40,12 @@ from apps.chat_data_app.sse_protocol import (
 from utils.logger import get_logger
 from utils.tool_call_args import coerce_tool_call_args
 
+from ...tool_args_preview import ToolArgsPreviewBuffer, build_tool_args_delta_payload
+from ...tool_stream_progress import (
+    _STREAMING_LINE_COUNT_TOOLS,
+    _extract_streaming_progress_inputs,
+    extract_tool_line_counts,
+)
 from ..context.context_budget import (
     compact_context_usage_for_history,
     count_messages_tokens,
@@ -329,13 +335,18 @@ def _subagent_tool_started_events(
         if not isinstance(tool_call, dict):
             continue
         tool_call_id = str(tool_call.get("id") or "")
+        tool_name = str(tool_call.get("name") or "")
+        args = coerce_tool_call_args(tool_call.get("args")) or {}
         event: dict[str, Any] = {
             "event_type": SSE_EVENT_TOOL_STARTED,
             "tool_call_id": tool_call.get("id"),
-            "tool_name": tool_call.get("name"),
-            "args": coerce_tool_call_args(tool_call.get("args")) or {},
+            "tool_name": tool_name,
+            "args": args,
             "parent_tool_call_id": parent_tool_call_id,
         }
+        line_counts = extract_tool_line_counts(tool_name, args)
+        if line_counts is not None:
+            event["content_lines"], event["removed_lines"] = line_counts
         if tool_started_at is not None and tool_call_id:
             started_at_ms = tool_started_at.setdefault(tool_call_id, int(time.time() * 1000))
             event["started_at_ms"] = started_at_ms
@@ -528,6 +539,16 @@ class _SubagentStreamState:
         self.tool_intervals: dict[str, tuple[int, int]] = {}
         # 累计工具 id→name（完成也保留）：tool_started_at 只放正在执行的。
         self.tool_history: dict[str, str] = {}
+        # 工具参数生成过程预览：chunk 常常只有 index，先按 index 反查 id/name。
+        self.tool_args_preview = ToolArgsPreviewBuffer()
+        self.tool_args_names: dict[str, str] = {}
+        self.tool_args_ids_by_index: dict[int, str] = {}
+        self.tool_args_names_by_index: dict[int, str] = {}
+        self.tool_args_active_id: str | None = None
+        # 行数进度按完整流式参数统计；预览只负责下发，不能拿 8000 字符截断值算行数。
+        self.tool_args_buffer: dict[str, str] = {}
+        self.tool_progress_counts: dict[str, tuple[int, int]] = {}
+        self.tool_progress_intents: dict[str, str] = {}
         # 子图上下文压缩事件（压缩节点 updates 里的 context_compression_events）
         self.compression_events: list[dict[str, Any]] = []
         self.seen_compression_ids: set[str] = set()
@@ -602,6 +623,8 @@ class _SubagentStreamState:
             else:
                 self.streamed_think_ids.add(event["message_id"])
             _emit_subagent_tool_event(writer, event)
+        for event in self._tool_args_delta_events(chunk_obj):
+            _emit_subagent_tool_event(writer, event)
         for speed_chunk in speed_chunks:
             self.speed_sampler.observe(speed_chunk, now_ms=now_ms)
         speed = self.speed_sampler.maybe_snapshot(now_ms=now_ms)
@@ -615,6 +638,77 @@ class _SubagentStreamState:
                 },
             )
 
+    def _tool_args_delta_events(self, chunk_obj: Any) -> list[dict[str, Any]]:
+        """把 messages chunk 里的 tool_call_chunks 转成参数增量预览事件。"""
+        if not isinstance(chunk_obj, AIMessageChunk):
+            return []
+        events: list[dict[str, Any]] = []
+        for raw in getattr(chunk_obj, "tool_call_chunks", None) or []:
+            resolved = self._resolve_tool_args_chunk(raw)
+            if resolved is None:
+                continue
+            resolved_id, tool_name, delta = resolved
+            self.tool_args_buffer[resolved_id] = self.tool_args_buffer.get(resolved_id, "") + delta
+            preview = self.tool_args_preview.take(resolved_id, delta)
+            if preview is None:
+                continue
+            preview_delta, truncated = preview
+            payload = build_tool_args_delta_payload(
+                resolved_id,
+                tool_name,
+                preview_delta,
+                truncated=truncated,
+                parent_tool_call_id=self.parent_tool_call_id,
+            )
+            counts, intent = _extract_streaming_progress_inputs(
+                self.tool_args_buffer[resolved_id],
+                _STREAMING_LINE_COUNT_TOOLS.get(tool_name),
+            )
+            if counts is not None and self.tool_progress_counts.get(resolved_id) != counts:
+                payload["content_lines"], payload["removed_lines"] = counts
+                self.tool_progress_counts[resolved_id] = counts
+            if intent and self.tool_progress_intents.get(resolved_id) != intent:
+                payload["intent"] = intent
+                self.tool_progress_intents[resolved_id] = intent
+            events.append(payload)
+        return events
+
+    def _resolve_tool_args_chunk(self, raw: Any) -> tuple[str, str, str] | None:
+        """解析一个 chunk 的 id/name/args；chunk 常常只有 index，需要按索引反查。"""
+        if not isinstance(raw, dict):
+            return None
+        chunk_index = raw.get("index")
+        chunk_id = str(raw.get("id") or "").strip()
+        chunk_name = str(raw.get("name") or "").strip()
+        self._remember_tool_args_identity(chunk_id, chunk_name, chunk_index)
+        resolved_id = chunk_id or self._tool_args_id_by_index(chunk_index) or self.tool_args_active_id
+        if not resolved_id:
+            return None
+        if chunk_name:
+            self.tool_args_names[resolved_id] = chunk_name
+        tool_name = (
+            chunk_name or self.tool_args_names.get(resolved_id, "") or self._tool_args_name_by_index(chunk_index)
+        )
+        return resolved_id, tool_name, str(raw.get("args") or "")
+
+    def _remember_tool_args_identity(self, chunk_id: str, chunk_name: str, chunk_index: Any) -> None:
+        """登记 chunk 的 id/name，供后续只带 index 或省略 name 的分片复用。"""
+        if isinstance(chunk_index, int):
+            if chunk_id:
+                self.tool_args_ids_by_index[chunk_index] = chunk_id
+            if chunk_name:
+                self.tool_args_names_by_index[chunk_index] = chunk_name
+        if chunk_id:
+            self.tool_args_active_id = chunk_id
+            if chunk_name:
+                self.tool_args_names[chunk_id] = chunk_name
+
+    def _tool_args_id_by_index(self, chunk_index: Any) -> str | None:
+        return self.tool_args_ids_by_index.get(chunk_index) if isinstance(chunk_index, int) else None
+
+    def _tool_args_name_by_index(self, chunk_index: Any) -> str:
+        return self.tool_args_names_by_index.get(chunk_index, "") if isinstance(chunk_index, int) else ""
+
     def record_tool_event(self, event: dict[str, Any]) -> None:
         """记录内层工具的真实执行区间，供完成态解码窗口扣除。"""
         if event.get("event_type") not in {SSE_EVENT_TOOL_COMPLETED, SSE_EVENT_TOOL_FAILED}:
@@ -624,6 +718,10 @@ class _SubagentStreamState:
         ended_at_ms = _non_negative_int(event.get("ended_at_ms"))
         if tool_call_id and started_at_ms > 0 and ended_at_ms > 0:
             self.tool_intervals[tool_call_id] = (started_at_ms, max(ended_at_ms, started_at_ms))
+        if tool_call_id:
+            self.tool_args_buffer.pop(tool_call_id, None)
+            self.tool_progress_counts.pop(tool_call_id, None)
+            self.tool_progress_intents.pop(tool_call_id, None)
 
     def generation_timing(self, *, now_ms: int | None = None) -> dict[str, int | None]:
         """生成统计锚点：首可见 token、流结束、窗口内工具耗时。"""

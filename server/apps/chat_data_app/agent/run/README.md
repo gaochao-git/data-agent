@@ -43,6 +43,9 @@ cancelled/interrupted/lost`；`cancelling` 是跨 worker 的取消请求，执�
 - 通知 Run 的 `runtime_context` 携带 `subagent_notification_event_id/event_type/task_id/status`，
   会话空闲时由调度器直接创建（`query` 为空、`disable_user_interaction=true`），会占用一次
   模型轮次但不产生用户气泡；会话忙时挂到当前 Run 的下一轮消息。用户不发消息也会推进。
+- 取消终态额外携带 `cancel_origin`（`user`/`agent`）。用户在工作台点停止时，通知会明确告诉
+  主智能体“这是用户主动停止”，不得继续执行、重新派发或 `send` 续写；只有用户下一条消息
+  明确要求继续时才恢复。主智能体自己 `manage cancel` 仍按普通取消处理。
 - 投递成功后事件标记 `delivered` 并维持终态任务 `consumed_time/notified_at` 口径；失败保留
   `pending` 由调度重试，超过重试上限标记 `failed`。`subagent(manage={"action": "check"/"wait"})` 已读到
   终态会取消尚未投递的终态事件和尚未消费的隐藏消息；恢复/取消会让旧的审批事件失效。

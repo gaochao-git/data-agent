@@ -31,6 +31,7 @@ from .sse_protocol import (
     SSE_EVENT_TOOL_FAILED,
     SSE_EVENT_TOOL_STARTED,
 )
+from .tool_args_preview import ToolArgsPreviewBuffer, format_tool_args_delta_event
 from .tool_stream_progress import (
     _STREAMING_LINE_COUNT_TOOLS,
     _extract_streaming_progress_inputs,
@@ -440,6 +441,11 @@ class _ToolStreamState:
         self.progress_line_counts: dict[str, tuple[int, int]] = {}
         # 已推送的流式 intent，用于 intent 未变化时去重
         self.progress_intents: dict[str, str] = {}
+        # 工具参数生成过程预览：按工具合并/截断，最终参数仍以 tool_started 为准。
+        self.tool_args_preview = ToolArgsPreviewBuffer()
+        # 参数生成已结束的工具：values 快照到达后补发一次完整参数快照作为收口信号，
+        # 前端据此从「生成参数中」切回结构化参数；同一工具只发一次。
+        self.args_finalized: set[str] = set()
         # 工具开始运行的后端时间（tool_started 事件时刻）：完成事件缺失 ToolTimingMiddleware
         # 盖章时（如被技能前置/审批等外层中间件拦下的失败）用它兜底，保证每个工具都有耗时。
         self.tool_started_at: dict[str, int] = {}
@@ -557,8 +563,19 @@ class _ToolStreamState:
             current_tool_call_id = self._resolve_chunk_tool_call_id(chunk_id, chunk_index)
             if current_tool_call_id and chunk_args:
                 self.args_buffer[current_tool_call_id] = self.args_buffer.get(current_tool_call_id, "") + chunk_args
-                # file_write / file_edit 生成 content 期间实时统计行数，前端工具卡片显示 "+N -M"
                 tool_name = self.tool_names.get(current_tool_call_id, "")
+                args_preview = self.tool_args_preview.take(current_tool_call_id, chunk_args)
+                if args_preview is not None:
+                    preview_delta, truncated = args_preview
+                    events.append(
+                        format_tool_args_delta_event(
+                            current_tool_call_id,
+                            tool_name,
+                            preview_delta,
+                            truncated=truncated,
+                        )
+                    )
+                # file_write / file_edit 生成 content 期间实时统计行数，前端工具卡片显示 "+N -M"
                 events.extend(
                     self._streaming_progress_events(
                         current_tool_call_id,
@@ -687,8 +704,9 @@ class _ToolStreamState:
         流式 args_buffer 只包含模型逐字生成的片段，模型在调用参数之外补写的字段
         （例如由服务端补默认值、或分片丢字）不会进入 buffer；完成事件若只信 buffer，
         工具详情就会展示缺字段的参数。values 快照里的 AIMessage.tool_calls 是最终
-        口径；这里与已下发参数比较，变化时补一条带 replace_args 的 tool_progress，
-        前端整份替换参数，既不保留流式中间版本的多余字段，也不改变生命周期状态。
+        口径；这里在参数生成结束时补一条带 replace_args 的 tool_progress（参数口径
+        有变化时同样补发），前端整份替换参数并从「生成参数中」切回结构化展示，
+        既不保留流式中间版本的多余字段，也不改变生命周期状态。
         """
         events: list[str] = []
         for tool_call in getattr(latest_ai, "tool_calls", None) or []:
@@ -699,23 +717,37 @@ class _ToolStreamState:
             if not tool_call_id or not args or tool_call_id not in self.emitted_running_tool_ids:
                 continue
             signature = _args_signature(args)
-            if self.sent_args_signature.get(tool_call_id) == signature:
-                self.authoritative_args[tool_call_id] = args
-                continue
+            signature_changed = self.sent_args_signature.get(tool_call_id) != signature
+            already_finalized = tool_call_id in self.args_finalized
             self.authoritative_args[tool_call_id] = args
-            self.args_fallback[tool_call_id] = args
-            self.sent_args_signature[tool_call_id] = signature
-            events.append(
-                _format_tool_progress_event(
-                    tool_call_id,
-                    self.tool_names.get(tool_call_id, ""),
-                    None,
-                    None,
-                    None,
-                    args,
-                    replace_args=True,
+            preview_needs_finalize = self.tool_args_preview.has_preview(tool_call_id) and not already_finalized
+            if not signature_changed and not preview_needs_finalize:
+                continue
+            if signature_changed:
+                self.args_fallback[tool_call_id] = args
+                self.sent_args_signature[tool_call_id] = signature
+                events.append(
+                    _format_tool_progress_event(
+                        tool_call_id,
+                        self.tool_names.get(tool_call_id, ""),
+                        None,
+                        None,
+                        None,
+                        args,
+                        replace_args=True,
+                    )
                 )
-            )
+            else:
+                # 参数口径未变，只发轻量收口标记，避免大文件参数重复传输
+                events.append(
+                    format_tool_args_delta_event(
+                        tool_call_id,
+                        self.tool_names.get(tool_call_id, ""),
+                        "",
+                        done=True,
+                    )
+                )
+            self.args_finalized.add(tool_call_id)
         return events
 
     def _cancel_orphaned_tool(self, tool_call_id: str) -> str:
@@ -743,6 +775,7 @@ class _ToolStreamState:
         self.args_fallback.pop(tool_call_id, None)
         self.authoritative_args.pop(tool_call_id, None)
         self.sent_args_signature.pop(tool_call_id, None)
+        self.args_finalized.discard(tool_call_id)
         self.cancelled_tool_ids.add(tool_call_id)
         return _format_tool_lifecycle_event(SSE_EVENT_TOOL_FAILED, payload)
 

@@ -3,6 +3,205 @@ import { mount } from '@vue/test-utils'
 import ToolCallCard from '../ToolCallCard.vue'
 
 describe('ToolCallCard', () => {
+  it('renders the raw argument preview while args are streaming', () => {
+    const wrapper = mount(ToolCallCard, {
+      props: {
+        isExpanded: true,
+        toolCall: {
+          tool_call_id: 'call-streaming',
+          tool_name: 'file_read',
+          args: {},
+          status: 'generating',
+          argsStreaming: true,
+          argsText: '{"file_path": "/mnt/user-data/workspace/report.md"',
+        },
+      },
+    })
+
+    expect(wrapper.text()).toContain('{"file_path": "/mnt/user-data/workspace/report.md"')
+    expect(wrapper.text()).not.toContain('生成参数中')
+    expect(wrapper.text()).not.toContain('执行中...')
+  })
+
+  it('keeps non-subagent streaming args out of compact chat rows', () => {
+    const wrapper = mount(ToolCallCard, {
+      props: {
+        compact: true,
+        toolCall: {
+          tool_call_id: 'call-compact-streaming',
+          tool_name: 'sql_query',
+          args: {},
+          status: 'generating',
+          argsStreaming: true,
+          argsText: '{"sql": "select count(*) from orders',
+        },
+      },
+    })
+
+    expect(wrapper.text()).not.toContain('select count(*) from orders')
+    expect(wrapper.find('.tool-args-preview').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('生成参数中')
+  })
+
+  it('shows only the subagent description markdown in compact chat rows', () => {
+    const wrapper = mount(ToolCallCard, {
+      props: {
+        compact: true,
+        toolCall: {
+          tool_call_id: 'call-subagent-streaming',
+          tool_name: 'subagent',
+          args: {},
+          status: 'generating',
+          argsStreaming: true,
+          argsText: '{"dispatch":{"description":"## 任务\\n先看工作区","subagent_type":"general"}}',
+        },
+      },
+    })
+
+    expect(wrapper.text()).toContain('任务')
+    expect(wrapper.text()).toContain('先看工作区')
+    expect(wrapper.find('h2').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('subagent_type')
+  })
+
+  it('shows only the task description in the compact subagent row', () => {
+    const wrapper = mount(ToolCallCard, {
+      props: {
+        compact: true,
+        toolCall: {
+          tool_call_id: 'call-subagent-done',
+          tool_name: 'subagent',
+          args: { dispatch: { description: '盘点语义模型', subagent_type: 'general' } },
+          status: 'running',
+        },
+      },
+    })
+
+    expect(wrapper.text()).toContain('盘点语义模型')
+    expect(wrapper.text()).not.toContain('general')
+    expect(wrapper.text()).not.toContain('subagent_type')
+  })
+
+  it('shows the follow-up message rather than only the intent in the compact subagent row', () => {
+    const wrapper = mount(ToolCallCard, {
+      props: {
+        compact: true,
+        toolCall: {
+          tool_call_id: 'call-subagent-send',
+          tool_name: 'subagent',
+          args: {
+            action: 'send',
+            task_id: 'task-1',
+            message: '请补齐渠道拆分并核对第三个页面',
+            intent: '续写失联的子任务',
+          },
+          status: 'completed',
+        },
+      },
+    })
+
+    expect(wrapper.text()).toContain('向子智能体发送消息')
+    expect(wrapper.text()).toContain('请补齐渠道拆分并核对第三个页面')
+    expect(wrapper.text()).not.toContain('续写失联的子任务')
+    expect(wrapper.text()).not.toContain('task-1')
+  })
+
+  it('shows file edit line deltas in compact mode', () => {
+    const wrapper = mount(ToolCallCard, {
+      props: {
+        compact: true,
+        toolCall: {
+          tool_call_id: 'call-edit',
+          tool_name: 'file_edit',
+          args: { file_path: '/mnt/user-data/workspace/a.html' },
+          status: 'completed',
+          contentLines: 12,
+          removedLines: 3,
+        },
+      },
+    })
+
+    expect(wrapper.text()).toContain('+12')
+    expect(wrapper.text()).toContain('-3')
+  })
+
+  it('streams the follow-up message body in the compact subagent row', () => {
+    const wrapper = mount(ToolCallCard, {
+      props: {
+        compact: true,
+        toolCall: {
+          tool_call_id: 'call-subagent-send-streaming',
+          tool_name: 'subagent',
+          args: {},
+          status: 'generating',
+          argsStreaming: true,
+          argsText: '{"action":"send","task_id":"task-1","message":"继续补充渠道拆分',
+        },
+      },
+    })
+
+    expect(wrapper.text()).toContain('继续补充渠道拆分')
+    expect(wrapper.text()).not.toContain('task_id')
+  })
+
+  it('keeps long non-subagent args out of compact mode', () => {
+    const wrapper = mount(ToolCallCard, {
+      props: {
+        compact: true,
+        toolCall: {
+          tool_call_id: 'call-compact-long',
+          tool_name: 'file_write',
+          args: {},
+          status: 'generating',
+          argsStreaming: true,
+          argsText: `${'x'.repeat(2_000)}LATEST`,
+        },
+      },
+    })
+
+    expect(wrapper.text()).not.toContain('LATEST')
+    expect(wrapper.find('.tool-args-preview').exists()).toBe(false)
+  })
+
+  it('falls back to structured params after args streaming ends', () => {
+    const wrapper = mount(ToolCallCard, {
+      props: {
+        isExpanded: true,
+        toolCall: {
+          tool_call_id: 'call-final',
+          tool_name: 'file_read',
+          args: { file_path: '/mnt/user-data/workspace/report.md' },
+          status: 'running',
+          argsStreaming: false,
+          argsText: '{"file_path": "/mnt/user-data/workspace/report.md"}',
+        },
+      },
+    })
+
+    expect(wrapper.text()).toContain('执行中...')
+    expect(wrapper.text()).not.toContain('生成参数中')
+    expect(wrapper.text()).toContain('/mnt/user-data/workspace/report.md')
+  })
+
+  it('renders a stopped tool neutrally instead of an error', () => {
+    const wrapper = mount(ToolCallCard, {
+      props: {
+        isExpanded: true,
+        toolCall: {
+          tool_call_id: 'call-stopped',
+          tool_name: 'sql_query',
+          args: { sql: 'select 1' },
+          status: 'cancelled',
+          result: '任务已停止，工具未执行完成。',
+        },
+      },
+    })
+
+    expect(wrapper.text()).toContain('任务已停止，工具未执行完成。')
+    expect(wrapper.text()).not.toContain('错误')
+    expect(wrapper.text()).not.toContain('执行中...')
+  })
+
   it('shows the normalized full path for compact file tools', () => {
     const wrapper = mount(ToolCallCard, {
       props: {
@@ -185,21 +384,21 @@ describe('ToolCallCard', () => {
     expect(wrapper.find('.fa-robot').exists()).toBe(true)
   })
 
-  it('renders legacy flat task dispatch with the subagent icon', () => {
+  it('keeps legacy task history on the subagent card path', () => {
     const wrapper = mount(ToolCallCard, {
       props: {
         isExpanded: true,
         toolCall: {
           tool_call_id: 'call-legacy-task',
           tool_name: 'task',
-          args: { description: '历史任务书', subagent_type: 'explore' },
+          args: { description: '旧任务书', subagent_type: 'explore' },
           status: 'running',
         },
       },
     })
 
     expect(wrapper.text()).toContain('派发子智能体')
-    expect(wrapper.text()).toContain('历史任务书')
+    expect(wrapper.text()).toContain('旧任务书')
     expect(wrapper.find('.fa-robot').exists()).toBe(true)
   })
 
