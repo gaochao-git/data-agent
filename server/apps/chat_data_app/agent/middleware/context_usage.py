@@ -67,9 +67,12 @@ def create_context_usage_middleware(
     state_schema: Any | None = None,
     sandbox_renewal: Callable[[], Awaitable[None]] | None = None,
     name: str = "ContextUsageMiddleware",
-    store_full_usage: bool = False,
 ) -> Any:
-    """创建统一的上下文计量与 token usage middleware。"""
+    """创建统一的上下文计量与 token usage middleware。
+
+    state 只写紧凑统计，完整 breakdown 通过 custom ``token_usage`` 事件输出。
+    两者混用会让每个 checkpoint 重复保存 prompt、消息正文和工具 schema。
+    """
     records: list[dict[str, Any]] = []
     model_id, tools, context_request_budget = _resolve_usage_runtime(
         model_id=model_id,
@@ -162,7 +165,7 @@ def create_context_usage_middleware(
         await _renew_sandbox_if_configured(sandbox_renewal)
         return ExtendedModelResponse(
             model_response=_ensure_model_response(response),
-            command=Command(update={"token_usage": _state_usage_payload(usage, store_full_usage)}),
+            command=Command(update={"token_usage": _state_usage_payload(usage)}),
         )
 
     def get_context_usage() -> dict[str, Any] | None:
@@ -173,9 +176,9 @@ def create_context_usage_middleware(
     return context_usage_middleware
 
 
-def _state_usage_payload(usage: dict[str, Any] | None, store_full_usage: bool) -> dict[str, Any] | None:
-    """写回 state 的 usage：主图压缩体积，子图保留明细（由 updates 捕获）。"""
-    return sanitize_context_usage_for_response(usage) if store_full_usage else compact_token_usage_for_state(usage)
+def _state_usage_payload(usage: dict[str, Any] | None) -> dict[str, Any] | None:
+    """写回 state 的 usage 只保留统计值；完整明细不得进入 checkpoint。"""
+    return compact_token_usage_for_state(usage)
 
 
 def create_request_context_usage_middleware(

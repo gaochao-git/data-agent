@@ -293,7 +293,55 @@ async def test_subagent_usage_detail_flows_from_state_update_to_sse_and_snapshot
         None,
         subagents_module._resolve_subagent_usage_detail(captured),
     )
+    assert "token_usage_detail" not in snapshot["subagent_context_usage"]
     assert snapshot["subagent_token_usage_detail"]["breakdown"]
+
+
+@pytest.mark.asyncio
+async def test_subagent_usage_detail_prefers_custom_event_over_compact_state_update():
+    """完整 breakdown 从 custom 捕获；同一调用的紧凑 updates 不能覆盖明细。"""
+    written = []
+    full_detail = {
+        "used": 2048,
+        "input_tokens": 2048,
+        "total_tokens": 2048,
+        "breakdown": [
+            {
+                "key": "tool_schema_0",
+                "role": "tool_schema",
+                "label": "工具定义 · query_data",
+                "tokens": 2048,
+                "content": '{"name":"query_data"}',
+            }
+        ],
+    }
+    compact_detail = {"input_tokens": 2048, "total_tokens": 2048}
+
+    class FakeRunnable:
+        async def astream(self, _state, _config, *, stream_mode):
+            yield "custom", {"type": "token_usage", "usage": full_detail, "model": "qwen-test"}
+            yield (
+                "updates",
+                {"model": {"messages": [AIMessage(content="结论", id="m1")], "token_usage": compact_detail}},
+            )
+
+    captured: dict = {}
+    await subagents_module._run_subagent_with_events(
+        FakeRunnable(),
+        {},
+        {},
+        written.append,
+        collected=[],
+        captured=captured,
+        usage_meta={"static_tokens": 0, "threshold_tokens": 32000, "context_window": 64000},
+    )
+
+    usage_events = [
+        payload["event"] for payload in written if payload["event"]["event_type"] == "subagent_context_usage"
+    ]
+    assert captured["token_usage_detail"]["breakdown"][0]["role"] == "tool_schema"
+    assert captured["model"] == "qwen-test"
+    assert usage_events[-1]["token_usage_detail"]["breakdown"][0]["label"] == "工具定义 · query_data"
 
 
 @pytest.mark.asyncio

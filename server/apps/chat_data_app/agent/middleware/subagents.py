@@ -234,9 +234,9 @@ class ChatDataSubAgentState(AgentState, total=False):
     context_compression: dict[str, Any] | None
     context_compression_events: Annotated[list[dict[str, Any]], merge_context_compression_events]
     loaded_skills: Annotated[list[str], merge_loaded_skill_names]
-    # 子图自有记账：SubagentContextUsageMiddleware 每次模型调用后写回全量明细
-    # （含 breakdown），调用方从 updates 捕获。必须在此声明 channel，否则
-    # Command(update=...) 会被 LangGraph 丢弃，前端只能看到汇总、无明细。
+    # 子图自有记账：state 只写紧凑统计，完整 breakdown 走 custom token_usage
+    # 事件由调用方捕获。必须在此声明 channel，否则 Command(update=...) 会被
+    # LangGraph 丢弃；明细不能写进这里，否则每个 checkpoint 都会重复保存正文。
     token_usage: dict[str, Any] | None
     # 审批决策：与主图同构，供子图内 ToolApprovalMiddleware 消费。
     approval_decisions: Annotated[dict[str, str], replace_approval_decisions]
@@ -406,14 +406,13 @@ def _compile_subagent(spec: SubagentSpec, run_controls: Any = None, *, control_e
         static_input_tokens=subagent_static_tokens,
     )
     object.__setattr__(spec, "_context_request_budget", subagent_runtime.request_budget)
-    # 主图同款上下文计量实例：子图把全量 usage（含 breakdown）写进 state，
-    # 由调用方从 updates 里按 run 捕获——不依赖跨 run 共享的 middleware 实例状态。
+    # 主图同款上下文计量实例：state 只写紧凑统计；完整 usage（含 breakdown）
+    # 通过 custom token_usage 事件由调用方按 run 捕获，避免 checkpoint 膨胀。
     context_usage_middleware = create_context_usage_middleware(
         context_runtime=subagent_runtime,
         tools=tools,
         state_schema=ChatDataSubAgentState,
         name="SubagentContextUsageMiddleware",
-        store_full_usage=True,
     )
     # 中间件顺序由 SUBAGENT_MIDDLEWARE_CANONICAL_ORDER 唯一决定：出口处理链
     # （归一化→结果→错误）的次序与主图保持一致；压缩中间件是 before_model
@@ -453,9 +452,8 @@ def _compile_subagent(spec: SubagentSpec, run_controls: Any = None, *, control_e
             context_runtime=subagent_runtime,
             state_schema=ChatDataSubAgentState,
         ),
-        # 与主图同源的上下文计量：产出 cache/breakdown 明细（前端「上下文占用明细」用）；
-        # 子图虽订阅 custom 流，但只挑选压缩 started 占位转发，token_usage 依旧
-        # 不会透传到主对话。
+        # 与主图同源的上下文计量：完整 breakdown 只走 custom 流供子图捕获，
+        # 不落 checkpoint，也不会直接透传到主对话。
         context_usage_middleware=context_usage_middleware,
         control_middleware=control_middleware,
         approval_middleware=approval_middleware,

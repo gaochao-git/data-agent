@@ -452,7 +452,11 @@ def _subagent_process_snapshot(
     """subagent 结果上附带的子过程快照：上下文用量 + 子图 token 用量 + 压缩事件。"""
     snapshot: dict[str, Any] = {}
     if isinstance(context_usage, dict) and context_usage:
-        snapshot["subagent_context_usage"] = context_usage
+        # 明细单独走下方 compact 后的 subagent_token_usage_detail；汇总里再带一份
+        # 完整 breakdown 会随 ToolMessage 进入 messages checkpoint，造成重复落库。
+        snapshot["subagent_context_usage"] = {
+            key: value for key, value in context_usage.items() if key != "token_usage_detail"
+        }
     if isinstance(compactions, list) and compactions:
         snapshot["subagent_compactions"] = compactions
     if isinstance(token_detail, dict) and token_detail:
@@ -915,27 +919,76 @@ def _track_subagent_tool_event(stream_state: _SubagentStreamState, event: dict[s
 
 
 def _resolve_subagent_usage_detail(captured: dict[str, Any] | None) -> dict[str, Any] | None:
-    """从 updates 捕获的 state 明细（已含 breakdown）取最近一次 usage。"""
+    """取最近一次 usage 明细：优先 custom 全量事件，updates 紧凑值仅兜底。"""
     detail = captured.get("token_usage_detail") if isinstance(captured, dict) else None
     return sanitize_context_usage_for_response(detail) if isinstance(detail, dict) and detail else None
 
 
-def _capture_subagent_token_usage(chunk: Any, captured: dict[str, Any] | None) -> None:
-    """从子图 updates 里抓最近一次 token_usage 明细（ContextUsageMiddleware 写入）。"""
-    if captured is None or not (isinstance(chunk, tuple) and len(chunk) == 2):
+def _subagent_usage_total(detail: dict[str, Any]) -> int:
+    """取 usage 的单调累计值，用于区分「同一次调用的紧凑兜底」与「下一次调用」。"""
+    for key in ("total_tokens", "total", "cumulative_input_tokens"):
+        try:
+            value = int(detail.get(key) or 0)
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            return value
+    return 0
+
+
+def _store_subagent_usage_detail(
+    captured: dict[str, Any],
+    detail: dict[str, Any],
+    *,
+    model_name: Any = "",
+    replace_same_total: bool = False,
+) -> None:
+    """写入 usage 明细；updates 兜底不得覆盖同一次调用的 custom 全量值。"""
+    detail_total = _subagent_usage_total(detail)
+    current_total = int(captured.get("_token_usage_detail_total") or 0)
+    if not replace_same_total and current_total and detail_total <= current_total:
         return
-    mode, payload = chunk
-    if mode != "updates" or not isinstance(payload, dict):
+    captured["token_usage_detail"] = detail
+    captured["_token_usage_detail_total"] = detail_total
+    resolved_model = str(model_name or latest_model_name_from_usage(detail) or "").strip()
+    if resolved_model:
+        captured["model"] = resolved_model
+
+
+def _capture_custom_subagent_usage(payload: Any, captured: dict[str, Any]) -> None:
+    """从 custom token_usage 事件抓完整明细。"""
+    if not isinstance(payload, dict) or payload.get("type") != "token_usage":
         return
+    detail = payload.get("usage")
+    if not isinstance(detail, dict) or not detail:
+        return
+    _store_subagent_usage_detail(captured, detail, model_name=payload.get("model"), replace_same_total=True)
+
+
+def _capture_update_subagent_usage(payload: dict[str, Any], captured: dict[str, Any]) -> None:
+    """从 updates 的紧凑 state 兜底，只在新一次调用时替换。"""
     for node_result in payload.values():
         if not isinstance(node_result, dict):
             continue
         detail = node_result.get("token_usage")
         if isinstance(detail, dict) and detail:
-            captured["token_usage_detail"] = detail
-            model_name = latest_model_name_from_usage(detail)
-            if model_name:
-                captured["model"] = model_name
+            _store_subagent_usage_detail(captured, detail)
+
+
+def _capture_subagent_token_usage(chunk: Any, captured: dict[str, Any] | None) -> None:
+    """抓最近一次 token_usage 明细。
+
+    完整 breakdown 只从 custom ``token_usage`` 事件获取；updates 里的 state
+    已改为紧凑统计，仅在 custom 缺失时兜底，且不能覆盖同一次调用的完整明细。
+    """
+    if captured is None or not (isinstance(chunk, tuple) and len(chunk) == 2):
+        return
+    mode, payload = chunk
+    if mode == "custom":
+        _capture_custom_subagent_usage(payload, captured)
+        return
+    if mode == "updates" and isinstance(payload, dict):
+        _capture_update_subagent_usage(payload, captured)
 
 
 async def _run_subagent_with_events(
