@@ -94,10 +94,65 @@ describe('applySubagentTrailEvent', () => {
       kind: 'tool',
       id: 'tool1',
       status: 'completed',
+      args: { file_path: '/a.md' },
       result: 'ok',
       started_at_ms: 100,
       ended_at_ms: 180,
     })
+  })
+
+  it('重连重放 tool_started 不会把已完成工具打回运行中', () => {
+    let trail: SubagentTrailItem[] = []
+    trail = applySubagentTrailEvent(trail, event({
+      type: 'tool_started',
+      tool_call_id: 'tool1',
+      tool_name: 'file_read',
+      args: { file_path: '/a.md' },
+      replace_args: true,
+      started_at_ms: 100,
+    }))
+    trail = applySubagentTrailEvent(trail, event({
+      type: 'tool_completed',
+      tool_call_id: 'tool1',
+      tool_name: 'file_read',
+      content: 'ok',
+      ended_at_ms: 180,
+    }))
+
+    const replayed = applySubagentTrailEvent(trail, event({
+      type: 'tool_started',
+      tool_call_id: 'tool1',
+      tool_name: 'file_read',
+      args: { file_path: '/a.md' },
+      replace_args: true,
+      started_at_ms: 100,
+    }))
+
+    expect(replayed).toBe(trail)
+    expect(replayed[0]).toMatchObject({
+      status: 'completed',
+      result: 'ok',
+      args: { file_path: '/a.md' },
+      ended_at_ms: 180,
+    })
+  })
+
+  it('tool_started 声明 replace_args 时按权威快照整份替换参数', () => {
+    let trail = applySubagentTrailEvent([], event({
+      type: 'tool_started',
+      tool_call_id: 'tool1',
+      tool_name: 'file_read',
+      args: { file_path: '/a.md', stale: true },
+    }))
+    trail = applySubagentTrailEvent(trail, event({
+      type: 'tool_started',
+      tool_call_id: 'tool1',
+      tool_name: 'file_read',
+      args: { file_path: '/b.md' },
+      replace_args: true,
+    }))
+
+    expect(trail[0]?.args).toEqual({ file_path: '/b.md' })
   })
 
   it('参数生成增量先建 trail，tool_started 收口后停止预览', () => {

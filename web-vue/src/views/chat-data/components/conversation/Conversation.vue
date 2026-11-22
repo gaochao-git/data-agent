@@ -43,6 +43,7 @@ import { deriveAnalysisTodos, shouldShowAnalysisProgress } from '../../utils/ana
 import { createTopReachTracker } from '../../utils/scrollReach'
 import { applySubagentCompactionStartedToTool, applySubagentCompactionToTool, buildSubagentCompactionRecord } from '../../utils/subagentCompaction'
 import { applySubagentTrailEvent } from '../../utils/subagentTrail'
+import { mergeToolCallFromMessage } from '../../utils/messageView'
 import { isScrolledToBottom } from '../../utils/scrollFollow'
 import { normalizeVisiblePath } from '../../utils/consoleFileTree'
 import {
@@ -2037,17 +2038,8 @@ const handleLangGraphMessage = (msg: LangGraphMessage) => {
     for (const tc of msg.tool_calls) {
       if (!tc.id || !tc.name) continue
       const existing = toolCallsMap.value.get(tc.id)
-      const toolInfo: ToolCallInfo = {
-        tool_call_id: tc.id,
-        tool_name: tc.name,
-        display_name: tc.display_name || existing?.display_name,
-        args: { ...(existing?.args || {}), ...(tc.args || {}) },
-        result: existing?.result,
-        status: existing?.status || 'generating',
-        started_at_ms: existing?.started_at_ms ?? null,
-        ended_at_ms: existing?.ended_at_ms ?? null,
-      }
-      upsertToolMessage(toolInfo)
+      // 收口消息只补身份与参数，必须保留 tool_progress 已归并的 +N/-M、intent 等展示字段。
+      upsertToolMessage(mergeToolCallFromMessage(existing, tc))
     }
   }
 

@@ -122,6 +122,35 @@ describe('buildHistoryMessages', () => {
     ])
   })
 
+  it('历史工具调用读取后端补齐的 +N/-M', () => {
+    const messages = buildHistoryMessagesFromEvents([
+      { sequence_no: 1, turn_id: 'turn-1', event_type: 'user_message', payload: { id: 'user-1', content: '改一下文件' } },
+      {
+        sequence_no: 2,
+        turn_id: 'turn-1',
+        event_type: 'assistant_message',
+        payload: {
+          id: 'assistant-1',
+          content: '',
+          tool_calls: [{
+            id: 'tool-1',
+            name: 'file_edit',
+            args: { file_path: '/a.txt', new_content: 'a\nb', old_content: 'a\nb\nc' },
+            content_lines: 2,
+            removed_lines: 3,
+          }],
+        },
+      },
+      { sequence_no: 3, turn_id: 'turn-1', event_type: 'tool_result', payload: { id: 'result-1', tool_call_id: 'tool-1', content: '已修改' } },
+    ])
+
+    expect(messages[1]!.toolCalls?.[0]).toMatchObject({
+      tool_call_id: 'tool-1',
+      contentLines: 2,
+      removedLines: 3,
+    })
+  })
+
   it('restores a persisted turn error on the assistant message', () => {
     const messages = buildHistoryMessagesFromEvents([
       { sequence_no: 1, turn_id: 'turn-1', event_type: 'user_message', payload: { id: 'user-1', content: '分析订单' } },

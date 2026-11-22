@@ -1259,11 +1259,15 @@ async def get_subagent_task_trail(conversation_id: str, task_id: str, req: Reque
             )
         if record.is_terminal:
             return business_response(data={"available": False}, msg="ok")
+        # 先取游标再读快照：快照来自检查点、游标来自 Redis 事件流，两者异步推进。
+        # 若先读快照后取游标，两步之间写入的完成帧会落在游标之前，续传时被跳过，
+        # 快照里的 running 工具就会一直转圈。游标前置可保证「游标之后」的事件
+        # 至少和快照同时或更新，前端只补放快照之后发生的变化。
+        cursor = await subagent_task_event_service.latest_event_id(record.task_id)
         snapshot = await load_live_trail_snapshot(
             task_id=record.task_id,
             agent_session_id=record.agent_session_id,
         )
-        cursor = await subagent_task_event_service.latest_event_id(record.task_id)
         if snapshot is None or not cursor:
             return business_response(data={"available": False}, msg="ok")
         return business_response(

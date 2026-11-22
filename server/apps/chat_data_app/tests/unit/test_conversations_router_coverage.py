@@ -834,7 +834,10 @@ async def test_subagent_task_trail_snapshot_route(router_state, monkeypatch):
     async def get_task(task_id, *, conversation_id=None, user_id=None):
         return None if task_id == "missing" else live_record()
 
+    call_order: list[str] = []
+
     async def load_snapshot(*, task_id, agent_session_id):
+        call_order.append("snapshot")
         assert task_id == "t1"
         assert agent_session_id == "sess-1"
         return {
@@ -843,6 +846,7 @@ async def test_subagent_task_trail_snapshot_route(router_state, monkeypatch):
         }
 
     async def latest_event_id(task_id):
+        call_order.append("cursor")
         return "12-0"
 
     monkeypatch.setattr(conversation_router.subagent_task_service, "get_task", get_task)
@@ -856,6 +860,8 @@ async def test_subagent_task_trail_snapshot_route(router_state, monkeypatch):
         "compactions": [],
         "cursor": "12-0",
     }
+    # 游标必须先于快照读取：否则两步之间写入的完成帧会被续传跳过，卡片停在 running。
+    assert call_order == ["cursor", "snapshot"]
 
     async def no_snapshot(*, task_id, agent_session_id):
         return None

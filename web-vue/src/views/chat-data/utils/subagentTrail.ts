@@ -156,6 +156,15 @@ export const applySubagentTrailEvent = (
     return next
   }
   const previous = trail.find(item => item.id === entryId)
+  // 检查点快照之后重连续传时，事件流可能重放快照里已经完成的工具。
+  // 终态优先：非终态事件不得把 completed/error 打回 running，否则会一直转圈。
+  if (
+    previous
+    && (previous.status === 'completed' || previous.status === 'error')
+    && (event.type === 'tool_started' || event.type === 'tool_progress')
+  ) {
+    return trail
+  }
   const entry: SubagentTrailItem = {
     kind: 'tool',
     id: entryId,
@@ -179,7 +188,9 @@ export const applySubagentTrailEvent = (
     next[idx] = {
       ...prev,
       ...entry,
-      args: { ...(prev.args || {}), ...(entry.args || {}) },
+      // tool_started 声明了 replace_args 时按权威快照整份替换；其余生命周期事件
+      // （如不带 args 的 tool_completed）仍合并，保留开始时的参数。
+      args: event.replace_args ? { ...(entry.args || {}) } : { ...(prev.args || {}), ...(entry.args || {}) },
       // tool_started 事件不带计时，完成事件才补齐：缺省时保留已有值
       started_at_ms: entry.started_at_ms ?? prev.started_at_ms ?? null,
       ended_at_ms: entry.ended_at_ms ?? prev.ended_at_ms ?? null,

@@ -327,6 +327,9 @@ def _subagent_tool_started_events(
 ) -> list[dict[str, Any]]:
     """把 AIMessage 的 tool_calls 翻译成 tool_started 事件（args 尽力规整为 dict）。
 
+    ``replace_args=True`` 声明本帧携带的是权威参数快照：前端据此整份替换，
+    而不是与参数增量阶段可能残留的字段合并。
+
     ``tool_started_at`` 仅直播路径传入：记录每个内层工具开始的后端时间，供完成事件
     在 ToolTimingMiddleware 未盖章（被技能前置等外层中间件拒绝）时兜底计时。
     """
@@ -342,6 +345,7 @@ def _subagent_tool_started_events(
             "tool_call_id": tool_call.get("id"),
             "tool_name": tool_name,
             "args": args,
+            "replace_args": True,
             "parent_tool_call_id": parent_tool_call_id,
         }
         line_counts = extract_tool_line_counts(tool_name, args)

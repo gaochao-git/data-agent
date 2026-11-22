@@ -9,6 +9,7 @@
  */
 import type {
   DocumentAnnotation,
+  LangGraphMessage,
   Message,
   MessageAttachment,
   SubagentTrailItem,
@@ -26,6 +27,28 @@ export const USER_MESSAGE_SCROLL_LINE_THRESHOLD = 10
 export const USER_MESSAGE_SCROLL_MAX_HEIGHT = '240px'
 
 export type TextNormalizer = (content: string) => string
+
+/**
+ * 完整 AIMessage 的 tool_calls 只更新身份与参数，保留流式阶段已归并的展示字段。
+ *
+ * 模型收口时会再发一条带完整 tool_calls 的 message 帧；若在这里重新构造
+ * ToolCallInfo，会把 tool_progress 已写入的 contentLines/removedLines、
+ * streamingIntent 等展示字段冲掉（本轮 file_write 的 +100 就是这样丢的）。
+ */
+export const mergeToolCallFromMessage = (
+  existing: ToolCallInfo | undefined,
+  call: NonNullable<LangGraphMessage['tool_calls']>[number],
+): ToolCallInfo => ({
+  ...(existing || {}),
+  tool_call_id: call.id,
+  tool_name: call.name,
+  display_name: call.display_name || existing?.display_name,
+  args: { ...(existing?.args || {}), ...(call.args || {}) },
+  result: existing?.result,
+  status: existing?.status || 'generating',
+  started_at_ms: existing?.started_at_ms ?? null,
+  ended_at_ms: existing?.ended_at_ms ?? null,
+})
 
 const defaultNormalizeText: TextNormalizer = content => String(content || '').trim()
 

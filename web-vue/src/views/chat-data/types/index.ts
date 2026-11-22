@@ -903,7 +903,7 @@ export interface ToolLifecycleEventData extends ToolEventData {
   removed_lines?: number
   // tool_progress：流式提取的调用意图（args 未解析前提前推送，长耗时工具执行中即可展示）
   intent?: string
-  // tool_progress：args 是最终调用参数的完整快照，前端整份替换而不是合并
+  // tool_progress / 子图 tool_started：args 是最终调用参数的完整快照，前端整份替换而不是合并
   replace_args?: boolean
   /** subagent_context_compression：压缩记录 id（去重） */
   id?: string

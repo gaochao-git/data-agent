@@ -404,6 +404,7 @@ async def test_subagent_tool_forwards_inner_tool_events_to_parent_stream(monkeyp
     assert started_event["tool_call_id"] == "inner-1"
     assert started_event["tool_name"] == "calculator_tool"
     assert started_event["args"] == {"expression": "1 + 1"}
+    assert started_event["replace_args"] is True
     assert started_event["parent_tool_call_id"] == "call_1"
     assert completed["type"] == "subagent_tool"
     event = completed["event"]
@@ -867,6 +868,7 @@ def test_iter_subagent_stream_events_emits_text_before_tool_calls():
     assert events[0]["parent_tool_call_id"] == "call_1"
     assert events[0]["message_id"] == message.id
     assert events[1]["tool_call_id"] == "inner-1"
+    assert events[1]["replace_args"] is True
 
 
 def test_progress_snapshot_counts_completed_tools_and_running_tools_separately():

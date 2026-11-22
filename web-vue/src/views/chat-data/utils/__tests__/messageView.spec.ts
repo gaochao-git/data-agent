@@ -18,6 +18,7 @@ import {
   hasSubagentTrail,
   hasVisibleAssistantContent,
   isLongUserMessage,
+  mergeToolCallFromMessage,
   parseAttachmentPlaceholders,
   parseDocumentAnnotationBlocks,
   resolveActiveRunStartIndex,
@@ -32,6 +33,52 @@ const assistant = (patch: Partial<Message> = {}): Message => ({
   role: 'assistant',
   content: '',
   ...patch,
+})
+
+describe('mergeToolCallFromMessage', () => {
+  it('完整 AIMessage 收口时保留流式阶段写入的 +N/-M 与 intent', () => {
+    const existing: ToolCallInfo = {
+      tool_call_id: 'call-1',
+      tool_name: 'file_write',
+      args: { intent: '写入100行随机内容的文档' },
+      status: 'running',
+      contentLines: 100,
+      removedLines: 0,
+      streamingIntent: '写入100行随机内容的文档',
+      argsStreaming: false,
+    }
+
+    const merged = mergeToolCallFromMessage(existing, {
+      id: 'call-1',
+      name: 'file_write',
+      args: { file_path: '/mnt/user-data/workspace/百行随笔.txt', content: '第一行\n第二行' },
+    })
+
+    expect(merged).toMatchObject({
+      tool_call_id: 'call-1',
+      tool_name: 'file_write',
+      status: 'running',
+      contentLines: 100,
+      removedLines: 0,
+      streamingIntent: '写入100行随机内容的文档',
+    })
+    expect(merged.args).toMatchObject({
+      file_path: '/mnt/user-data/workspace/百行随笔.txt',
+      content: '第一行\n第二行',
+    })
+  })
+
+  it('没有既有工具卡时按生成中占位，不臆造行数', () => {
+    const merged = mergeToolCallFromMessage(undefined, {
+      id: 'call-2',
+      name: 'file_write',
+      args: { content: 'hello' },
+    })
+
+    expect(merged).toMatchObject({ tool_call_id: 'call-2', status: 'generating' })
+    expect(merged.contentLines).toBeUndefined()
+    expect(merged.removedLines).toBeUndefined()
+  })
 })
 
 const toolCall = (patch: Partial<ToolCallInfo> = {}): ToolCallInfo => ({

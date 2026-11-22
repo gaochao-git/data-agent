@@ -179,7 +179,14 @@ const normalizeContextCompressionEvent = (value: unknown): ChatDataContextCompre
 
 const getHistoryToolCall = (value: unknown): ToolCallInfo | null => {
   if (!value || typeof value !== 'object') return null
-  const toolCall = value as { id?: unknown; name?: unknown; args?: unknown; display_name?: unknown }
+  const toolCall = value as {
+    id?: unknown
+    name?: unknown
+    args?: unknown
+    display_name?: unknown
+    content_lines?: unknown
+    removed_lines?: unknown
+  }
   const toolCallId = String(toolCall.id || '').trim()
   const toolName = String(toolCall.name || '').trim()
   if (!toolCallId || !toolName) return null
@@ -189,6 +196,9 @@ const getHistoryToolCall = (value: unknown): ToolCallInfo | null => {
     display_name: String(toolCall.display_name || '').trim() || undefined,
     args: toolCall.args && typeof toolCall.args === 'object' ? toolCall.args as Record<string, unknown> : {},
     status: 'completed',
+    // 后端历史读取时按 args 现算补齐（老事件没有这两个字段）
+    contentLines: typeof toolCall.content_lines === 'number' ? toolCall.content_lines : undefined,
+    removedLines: typeof toolCall.removed_lines === 'number' ? toolCall.removed_lines : undefined,
   }
 }
 

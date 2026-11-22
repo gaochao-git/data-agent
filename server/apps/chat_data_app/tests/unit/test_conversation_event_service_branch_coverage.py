@@ -349,6 +349,40 @@ def test_build_history_payload_can_skip_derived_lists():
     assert payload["token_usage"] is None
 
 
+def test_build_history_payload_backfills_file_tool_line_counts_from_args():
+    """老历史没有行数字段，读取时按 args 现算，file_write/file_edit 都能恢复 +N/-M。"""
+    rows = [
+        _row(
+            1,
+            "assistant_message",
+            json.dumps(
+                {
+                    "id": "assistant-1",
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {"id": "c1", "name": "file_write", "args": {"file_path": "/a.txt", "content": "a\nb\nc"}},
+                        {
+                            "id": "c2",
+                            "name": "file_edit",
+                            "args": {"file_path": "/a.txt", "new_content": "a\nb", "old_content": "a\nb\nc"},
+                        },
+                        {"id": "c3", "name": "file_read", "args": {"file_path": "/a.txt"}},
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+        ),
+    ]
+
+    payload = _build_history_payload(rows, None, include_derived=True)
+    calls = payload["history_events"][0]["payload"]["tool_calls"]
+
+    assert calls[0]["content_lines"] == 3 and calls[0]["removed_lines"] == 0
+    assert calls[1]["content_lines"] == 2 and calls[1]["removed_lines"] == 3
+    assert "content_lines" not in calls[2]
+
+
 def test_build_history_payload_tolerates_empty_rows():
     payload = _build_history_payload([], None, include_derived=True)
     assert payload["messages"] == [] and payload["history_events"] == []

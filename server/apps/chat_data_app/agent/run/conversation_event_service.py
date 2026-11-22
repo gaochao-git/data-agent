@@ -22,6 +22,7 @@ from apps.chat_data_app.agent.run.agent_inbox_service import load_run_content as
 from apps.chat_data_app.daos.agent_inbox_dao import AgentInboxDao, agent_inbox_dao
 from apps.chat_data_app.daos.conversation_event_dao import ConversationEventDao
 from apps.chat_data_app.services.llm_config import get_chat_data_model_config, get_default_chat_data_model
+from apps.chat_data_app.tool_stream_progress import extract_tool_line_counts
 from utils.database import get_session
 from utils.db_failover import is_mysql_connection_error
 from utils.logger import get_logger
@@ -437,6 +438,8 @@ class ConversationEventService:
             payload = _load_payload(row.payload)
             if not payload:
                 continue
+            if row.event_type == EVENT_ASSISTANT_MESSAGE:
+                payload = _with_history_tool_line_counts(payload)
             history_events.append(
                 {
                     "sequence_no": int(row.sequence_no),
@@ -1104,6 +1107,30 @@ def _extract_reasoning_content(message: AIMessage) -> str:
             if isinstance(value, str) and value:
                 return value
     return ""
+
+
+def _with_history_tool_line_counts(payload: dict[str, Any]) -> dict[str, Any]:
+    """历史回放补齐 file_write/file_edit 的 +N/-M。
+
+    旧事件只持久化了 tool_calls.args，没有行数字段；这里统一按参数现算，
+    避免前端为历史另写一套统计口径，老会话也能恢复行数。
+    """
+    tool_calls = payload.get("tool_calls")
+    if not isinstance(tool_calls, list):
+        return payload
+    for tool_call in tool_calls:
+        if not isinstance(tool_call, dict):
+            continue
+        args = tool_call.get("args")
+        counts = extract_tool_line_counts(
+            str(tool_call.get("name") or ""),
+            args if isinstance(args, dict) else {},
+        )
+        if counts is None:
+            continue
+        tool_call.setdefault("content_lines", counts[0])
+        tool_call.setdefault("removed_lines", counts[1])
+    return payload
 
 
 def _load_payload(raw_payload: str | None) -> dict[str, Any] | None:
