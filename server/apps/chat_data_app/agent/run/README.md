@@ -22,6 +22,13 @@ Run 级运行时服务：事件流（Redis Stream 直播 + MySQL 消息级快照
 `task_source` 时保持兼容。子智能体任务账本（`subagent_task_service.create_task`）与 Run 生命周期
 不同，仍走独立入口，不并入本契约。
 
+新增入口检查清单（四条缺一不可）：
+
+1. 在 `RunSource` 增加来源值，禁止直接写字符串；
+2. 用户/定时入口用 `build_run_context`，派生入口用 `inherit_run_context`，禁止手拼 dict；
+3. 统一调用 `agent_inbox_service.start_run` 建 Run，不绕过活跃 Run 检查；
+4. 冲突策略（409 / 重试 / 挂载）由入口显式实现，不要塞进上下文构造器。
+
 ## 多机房执行准入
 
 用户对话和定时任务共用 `executor_gate.py` 的同一套判断，不允许各自复制白名单解析：
