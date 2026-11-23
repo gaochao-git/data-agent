@@ -41,6 +41,7 @@ from utils.logger import get_logger
 from utils.tool_call_args import coerce_tool_call_args
 
 from ...tool_args_preview import ToolArgsPreviewBuffer, build_tool_args_delta_payload
+from ...tool_call_chunks import ToolCallChunkIndex
 from ...tool_stream_progress import (
     _STREAMING_LINE_COUNT_TOOLS,
     _extract_streaming_progress_inputs,
@@ -545,10 +546,7 @@ class _SubagentStreamState:
         self.tool_history: dict[str, str] = {}
         # 工具参数生成过程预览：chunk 常常只有 index，先按 index 反查 id/name。
         self.tool_args_preview = ToolArgsPreviewBuffer()
-        self.tool_args_names: dict[str, str] = {}
-        self.tool_args_ids_by_index: dict[int, str] = {}
-        self.tool_args_names_by_index: dict[int, str] = {}
-        self.tool_args_active_id: str | None = None
+        self.tool_index = ToolCallChunkIndex()
         # 行数进度按完整流式参数统计；预览只负责下发，不能拿 8000 字符截断值算行数。
         self.tool_args_buffer: dict[str, str] = {}
         self.tool_progress_counts: dict[str, tuple[int, int]] = {}
@@ -573,6 +571,22 @@ class _SubagentStreamState:
         self.supersteps: int = 0
         self.superstep_limit: int | None = None
         self.values_echo_seen: bool = False
+
+    @property
+    def tool_args_names(self) -> dict[str, str]:
+        return self.tool_index.names_by_id
+
+    @property
+    def tool_args_ids_by_index(self) -> dict[int, str]:
+        return self.tool_index.ids_by_index
+
+    @property
+    def tool_args_names_by_index(self) -> dict[int, str]:
+        return self.tool_index.names_by_index
+
+    @property
+    def tool_args_active_id(self) -> str | None:
+        return self.tool_index.active_id
 
     def prime_state_messages(self, messages: list[Any]) -> None:
         self.state_messages = list(messages)
@@ -705,34 +719,18 @@ class _SubagentStreamState:
         chunk_index = raw.get("index")
         chunk_id = str(raw.get("id") or "").strip()
         chunk_name = str(raw.get("name") or "").strip()
-        self._remember_tool_args_identity(chunk_id, chunk_name, chunk_index)
-        resolved_id = chunk_id or self._tool_args_id_by_index(chunk_index) or self.tool_args_active_id
+        self.tool_index.remember(chunk_id, chunk_name, chunk_index)
+        resolved_id = self.tool_index.resolve_id(chunk_id, chunk_index, fallback=self.tool_index.active_id)
         if not resolved_id:
             return None
         if chunk_name:
-            self.tool_args_names[resolved_id] = chunk_name
-        tool_name = (
-            chunk_name or self.tool_args_names.get(resolved_id, "") or self._tool_args_name_by_index(chunk_index)
+            self.tool_index.remember_name(resolved_id, chunk_name)
+        tool_name = self.tool_index.resolve_name(
+            resolved_id,
+            chunk_name=chunk_name,
+            chunk_index=chunk_index,
         )
         return resolved_id, tool_name, str(raw.get("args") or "")
-
-    def _remember_tool_args_identity(self, chunk_id: str, chunk_name: str, chunk_index: Any) -> None:
-        """登记 chunk 的 id/name，供后续只带 index 或省略 name 的分片复用。"""
-        if isinstance(chunk_index, int):
-            if chunk_id:
-                self.tool_args_ids_by_index[chunk_index] = chunk_id
-            if chunk_name:
-                self.tool_args_names_by_index[chunk_index] = chunk_name
-        if chunk_id:
-            self.tool_args_active_id = chunk_id
-            if chunk_name:
-                self.tool_args_names[chunk_id] = chunk_name
-
-    def _tool_args_id_by_index(self, chunk_index: Any) -> str | None:
-        return self.tool_args_ids_by_index.get(chunk_index) if isinstance(chunk_index, int) else None
-
-    def _tool_args_name_by_index(self, chunk_index: Any) -> str:
-        return self.tool_args_names_by_index.get(chunk_index, "") if isinstance(chunk_index, int) else ""
 
     def record_tool_event(self, event: dict[str, Any]) -> None:
         """记录内层工具的真实执行区间，供完成态解码窗口扣除。"""

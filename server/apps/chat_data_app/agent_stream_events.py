@@ -32,6 +32,7 @@ from .sse_protocol import (
     SSE_EVENT_TOOL_STARTED,
 )
 from .tool_args_preview import ToolArgsPreviewBuffer, format_tool_args_delta_event
+from .tool_call_chunks import ToolCallChunkIndex
 from .tool_stream_progress import (
     _STREAMING_LINE_COUNT_TOOLS,
     _extract_streaming_progress_inputs,
@@ -425,7 +426,7 @@ class _ToolStreamState:
     """维护 LangGraph 流式工具调用状态，统一 running 和完成事件字段。"""
 
     def __init__(self) -> None:
-        self.tool_names: dict[str, str] = {}
+        self.tool_index = ToolCallChunkIndex()
         self.args_buffer: dict[str, str] = {}
         self.args_fallback: dict[str, dict[str, Any]] = {}
         # values 快照里最终 AIMessage.tool_calls 的参数：执行侧真正使用的口径。
@@ -433,10 +434,8 @@ class _ToolStreamState:
         self.authoritative_args: dict[str, dict[str, Any]] = {}
         # 已经下发给前端的参数指纹，用于判断是否需要补发替换；不保留参数正文。
         self.sent_args_signature: dict[str, str] = {}
-        self.index_map: dict[int, str] = {}
         self.running_tool_ids: list[str] = []
         self.emitted_running_tool_ids: set[str] = set()
-        self.active_tool_call_id: str | None = None
         # 已推送的实时行数 (added, removed)，用于行数未变化时去重，避免 SSE 事件洪峰
         self.progress_line_counts: dict[str, tuple[int, int]] = {}
         # 已推送的流式 intent，用于 intent 未变化时去重
@@ -453,6 +452,22 @@ class _ToolStreamState:
         self.finished_tool_ids: set[str] = set()
         # 已被判定「模型最终没有真正调用」的占位工具，避免重复下发取消事件。
         self.cancelled_tool_ids: set[str] = set()
+
+    @property
+    def tool_names(self) -> dict[str, str]:
+        return self.tool_index.names_by_id
+
+    @property
+    def index_map(self) -> dict[int, str]:
+        return self.tool_index.ids_by_index
+
+    @property
+    def active_tool_call_id(self) -> str | None:
+        return self.tool_index.active_id
+
+    @active_tool_call_id.setter
+    def active_tool_call_id(self, value: str | None) -> None:
+        self.tool_index.active_id = value
 
     def visible_tool_count(self) -> int:
         return _visible_tool_count(self.tool_names)
@@ -496,20 +511,16 @@ class _ToolStreamState:
         """登记 chunk 的身份信息，返回本次应播报的 running 工具名（无则 None）。"""
         if not chunk_id:
             return None
-        if chunk_name:
-            self.tool_names[chunk_id] = chunk_name
-        self.active_tool_call_id = chunk_id
-        if isinstance(chunk_index, int):
-            self.index_map[chunk_index] = chunk_id
+        self.tool_index.remember(chunk_id, chunk_name, chunk_index)
         self.args_buffer.setdefault(chunk_id, "")
         running_tool_name = chunk_name or self.tool_names.get(chunk_id, "")
         return running_tool_name or None
 
     def _resolve_chunk_tool_call_id(self, chunk_id: str, chunk_index: Any) -> str | None:
-        return (
-            chunk_id
-            or (self.index_map.get(chunk_index) if isinstance(chunk_index, int) else None)
-            or _resolve_active_tool_call_id(None, self.active_tool_call_id, self.running_tool_ids)
+        return self.tool_index.resolve_id(
+            chunk_id,
+            chunk_index,
+            fallback=_resolve_active_tool_call_id(None, self.active_tool_call_id, self.running_tool_ids),
         )
 
     def _streaming_progress_events(self, tool_call_id: str, tool_name: str, args_text: str) -> list[str]:
