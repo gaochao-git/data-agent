@@ -617,6 +617,15 @@ def test_tool_args_delta_frame_is_registered_on_both_streams():
     assert SSE_EVENT_TOOL_ARGS_DELTA in agent_stream_module._SUBAGENT_TOOL_EVENT_TYPES
 
 
+def test_subagent_generation_speed_frame_is_registered_on_both_streams():
+    """生成速率帧必须同时进协议表与主 Run 入站白名单，否则会被静默丢弃。"""
+    from apps.chat_data_app import agent_stream as agent_stream_module
+    from apps.chat_data_app.sse_protocol import SSE_EVENT_NAMES, SSE_EVENT_SUBAGENT_GENERATION_SPEED
+
+    assert SSE_EVENT_SUBAGENT_GENERATION_SPEED in SSE_EVENT_NAMES
+    assert SSE_EVENT_SUBAGENT_GENERATION_SPEED in agent_stream_module._SUBAGENT_TOOL_EVENT_TYPES
+
+
 @pytest.mark.parametrize(
     "payload",
     [

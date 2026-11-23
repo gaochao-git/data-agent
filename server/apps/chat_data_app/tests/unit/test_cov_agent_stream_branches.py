@@ -214,6 +214,25 @@ def test_subagent_tool_args_delta_payload_is_forwarded():
     assert '"parent_tool_call_id": "parent-1"' in result[0]
 
 
+def test_subagent_generation_speed_payload_is_forwarded():
+    """子图实时生成速率必须过入站白名单并转发给前端。"""
+    adapter = _adapter()
+
+    result = adapter._handle_subagent_tool_payload(
+        {
+            "event": {
+                "event_type": agent_stream.SSE_EVENT_SUBAGENT_GENERATION_SPEED,
+                "parent_tool_call_id": "parent-1",
+                "tokens_per_second": 36.6,
+            }
+        }
+    )
+
+    assert len(result) == 1
+    assert "event: subagent_generation_speed" in result[0]
+    assert '"tokens_per_second": 36.6' in result[0]
+
+
 def test_record_first_visible_payload_falls_back_to_perf_clock(monkeypatch):
     monkeypatch.setattr(agent_stream, "emit_llm_first_token_timeout_alarm", lambda *a, **k: None)
     adapter = _adapter()
