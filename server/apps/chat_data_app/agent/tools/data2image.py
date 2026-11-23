@@ -166,20 +166,20 @@ async def _data2image_impl(
         logger.error("data2image 图片落盘失败: %s", exc, exc_info=True)
         return _failure(f"图表 PNG 写入 outputs 失败: {exc}", retry_query=False)
 
-    skipped_total = sum(int(item.get("skipped_rows", 0)) for item in series)
+    skipped_points_total = sum(int(item.get("skipped_points", 0)) for item in series)
     logger.info(
-        "[data2image] 生成 %d 张折线图: file=%s series=%d skipped_rows=%d",
+        "[data2image] 生成 %d 张折线图: file=%s series=%d skipped_points=%d",
         len(saved_images),
         file_path,
         len(series),
-        skipped_total,
+        skipped_points_total,
     )
     return tool_result_payload(
         "data2image",
         {
             "success": True,
             "images": saved_images,
-            "skipped_rows": skipped_total,
+            "skipped_points": skipped_points_total,
             "next_step": "用 read_image 读取上述 file_path，看图分析趋势形态后回答用户；需要精确数值时按图上范围渐近取数：用 file_path 分页读取原始结果文件，或用 SQL 对对应区间重新精确查询",
         },
     )

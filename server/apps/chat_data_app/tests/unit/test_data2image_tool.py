@@ -554,7 +554,7 @@ async def test_data2image_rejects_escape_and_bad_suffix(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_data2image_counts_skipped_non_numeric_rows(monkeypatch, tmp_path):
+async def test_data2image_counts_skipped_non_numeric_points(monkeypatch, tmp_path):
     paths = _init_workspace(monkeypatch, tmp_path)
     rows = [
         {"日期": "2026-11-01", "订单量": 10},
@@ -567,5 +567,23 @@ async def test_data2image_counts_skipped_non_numeric_rows(monkeypatch, tmp_path)
     result = _payload(await tool.ainvoke({"file_path": file_path, "x_field": "日期", "y_fields": ["订单量"]}))
 
     assert result["success"] is True
-    assert result["skipped_rows"] == 1
+    assert result["skipped_points"] == 1
     assert result["images"][0]["stats"][0]["data_points"] == 2
+
+
+@pytest.mark.asyncio
+async def test_data2image_counts_invalid_points_across_series(monkeypatch, tmp_path):
+    """多列共享同一行时按「无效点」累计，不再用有歧义的 skipped_rows。"""
+    paths = _init_workspace(monkeypatch, tmp_path)
+    rows = [
+        {"日期": "2026-11-01", "订单量": "N/A", "退款量": "N/A"},
+        {"日期": "2026-11-02", "订单量": 10, "退款量": 2},
+    ]
+    file_path = _write_result_file(paths, "result.json", _rows_json(rows))
+    tool = data2image_module.create_data2image_tool(_runtime(paths))[0]
+
+    result = _payload(await tool.ainvoke({"file_path": file_path, "x_field": "日期", "y_fields": ["订单量", "退款量"]}))
+
+    assert result["success"] is True
+    assert result["skipped_points"] == 2
+    assert [item["data_points"] for item in result["images"][0]["stats"]] == [1, 1]

@@ -57,6 +57,36 @@ def test_args_preview_buffer_caps_and_marks_truncated(monkeypatch):
     assert not buffer.take("call-1", "g")
 
 
+def test_args_preview_buffer_exact_cap_is_not_reported_as_truncated(monkeypatch):
+    """刚好填满上限时没有丢字符，不能提前显示「预览已截断」。"""
+    monkeypatch.setattr(tool_args_preview, "TOOL_ARGS_PREVIEW_MAX_CHARS", 5)
+    monkeypatch.setattr(tool_args_preview, "TOOL_ARGS_PREVIEW_WINDOW_MS", 0)
+    buffer = tool_args_preview.ToolArgsPreviewBuffer()
+
+    assert buffer.take("call-1", "ab") == ("ab", False)
+    assert buffer.take("call-1", "cd") == ("cd", False)
+    assert buffer.take("call-1", "e") == ("e", False)
+    assert buffer.flush("call-1") is None
+
+    # 下一片确认还有内容被丢弃时，才补发一次截断信号；空增量刷新前端截断标记。
+    assert buffer.take("call-1", "f") == ("", True)
+    assert buffer.take("call-1", "g") is None
+
+
+def test_args_preview_buffer_flushes_pending_exact_cap_with_truncation(monkeypatch):
+    """窗口内 pending 刚好填满时先补发尾片，再标记截断，避免最后一段丢失。"""
+    now = 0.0
+    monkeypatch.setattr(tool_args_preview, "TOOL_ARGS_PREVIEW_MAX_CHARS", 5)
+    monkeypatch.setattr(tool_args_preview, "TOOL_ARGS_PREVIEW_WINDOW_MS", 16)
+    buffer = tool_args_preview.ToolArgsPreviewBuffer(clock=lambda: now)
+
+    assert buffer.take("call-1", "ab") == ("ab", False)
+    now = 0.005
+    assert buffer.take("call-1", "cde") is None
+    now = 0.006
+    assert buffer.take("call-1", "f") == ("cde", True)
+
+
 def test_main_stream_emits_args_delta_with_generating_status():
     state = agent_stream._ToolStreamState()
     events = state.handle_tool_call_chunks([{"id": "call-1", "name": "file_read", "index": 0, "args": ""}])

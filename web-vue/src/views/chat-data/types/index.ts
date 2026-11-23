@@ -513,6 +513,9 @@ export interface VisualizationConfig {
   y_field?: string
 }
 
+// 工具状态：主对话工具卡、子智能体过程条目与后端工具事件共用同一口径
+export type ToolStatus = 'generating' | 'running' | 'completed' | 'error' | 'cancelled'
+
 // 工具调用信息
 export interface ToolCallInfo {
   tool_call_id: string
@@ -529,7 +532,7 @@ export interface ToolCallInfo {
   removedLines?: number
   // 流式提取的调用意图（args 未解析前由 tool_progress 事件提前推送，长耗时工具执行中即可展示）
   streamingIntent?: string
-  status: 'generating' | 'running' | 'completed' | 'error' | 'cancelled'
+  status: ToolStatus
   // 工具参数生成过程的原始 JSON 增量（tool_args_delta），仅在 argsStreaming=true 时展示
   argsText?: string
   // 是否正在生成参数：结束后切回 args 的结构化展示
@@ -620,7 +623,7 @@ export interface SubagentTrailItem {
   tool_name?: string
   args?: Record<string, unknown>
   result?: string
-  status?: 'generating' | 'running' | 'completed' | 'error' | 'cancelled'
+  status?: ToolStatus
   // tool：参数生成过程的原始 JSON 增量（tool_args_delta 拼接）
   argsText?: string
   argsStreaming?: boolean
@@ -857,9 +860,6 @@ export interface UserQuestionAnswer {
   custom: string
   skipped?: boolean
 }
-
-// 工具状态
-export type ToolStatus = 'generating' | 'running' | 'completed' | 'error'
 
 // 工具事件数据
 export interface ToolEventData {

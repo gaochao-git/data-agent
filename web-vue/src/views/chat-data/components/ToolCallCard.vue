@@ -564,7 +564,8 @@ function getSqlTokenClass(type: string): string {
       class="inline-flex max-w-full items-center gap-2 rounded-md border px-2.5 py-1.5 text-xs transition-all duration-200 cursor-pointer"
       :class="[
         'border-transparent bg-transparent text-slate-400 hover:text-slate-600',
-        isError ? 'border-red-200 bg-red-50 text-red-600' : ''
+        isError ? 'border-red-200 bg-red-50 text-red-600' : '',
+        isCancelled ? 'border-slate-200 bg-slate-50 text-slate-500' : ''
       ]"
       @click="emit('select')"
     >
@@ -580,6 +581,11 @@ function getSqlTokenClass(type: string): string {
         class="shrink-0 font-mono text-[11px] text-slate-400 transition-colors duration-200 group-hover:text-slate-600"
         :title="timingTitle"
       >{{ durationText }}</span>
+      <span
+        v-if="isCancelled"
+        class="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500"
+        :title="toolCall.result || '任务已停止'"
+      >已停止</span>
       <i v-if="isRunning && showRunningIndicator" class="fa-solid fa-spinner fa-spin text-[11px] text-slate-400"></i>
       <i class="fa-solid fa-chevron-right text-[10px] text-slate-400 opacity-0 transition-all duration-200 group-hover:text-slate-600 group-hover:opacity-100"></i>
     </div>

@@ -29,28 +29,30 @@ class ToolArgsPreviewBuffer:
         self._emitted: set[str] = set()
 
     def take(self, tool_call_id: str, delta: str) -> tuple[str, bool] | None:
-        """并入一个参数分片；窗口到期或封顶时返回 ``(预览增量, 是否截断)``。"""
+        """并入一个参数分片；窗口到期或确认溢出时返回 ``(预览增量, 是否截断)``。"""
         if not tool_call_id or not delta or tool_call_id in self._truncated:
             return None
         sent = self._sent_chars.get(tool_call_id, 0)
         remaining = TOOL_ARGS_PREVIEW_MAX_CHARS - sent
         if remaining <= 0:
+            # 上一片刚好填满上限时不能提前报截断；本片确认还有内容被丢弃，才补发一次信号。
             self._truncated.add(tool_call_id)
-            return None
+            pending = self._pending.pop(tool_call_id, "")
+            self._last_emit_at[tool_call_id] = self._clock()
+            if pending:
+                self._emitted.add(tool_call_id)
+            return pending, True
         accepted = delta[:remaining]
         self._sent_chars[tool_call_id] = sent + len(accepted)
         pending_before = self._pending.get(tool_call_id, "")
         now = self._clock()
         self._pending[tool_call_id] = pending_before + accepted
-        truncated = len(accepted) < len(delta) or self._sent_chars[tool_call_id] >= TOOL_ARGS_PREVIEW_MAX_CHARS
+        truncated = len(accepted) < len(delta)
         if truncated:
             self._truncated.add(tool_call_id)
         pending = self._pending[tool_call_id]
         last_emit_at = self._last_emit_at.get(tool_call_id)
-        in_window = (
-            last_emit_at is not None
-            and (now - last_emit_at) * 1000 < TOOL_ARGS_PREVIEW_WINDOW_MS
-        )
+        in_window = last_emit_at is not None and (now - last_emit_at) * 1000 < TOOL_ARGS_PREVIEW_WINDOW_MS
         # 首片立即发；上次发送后 16ms 内的后续分片合并，避免慢流被窗口拖住。
         if in_window and not truncated:
             return None

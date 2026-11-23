@@ -129,7 +129,7 @@ def load_series_from_text(text: str, *, file_name: str, x_field: str, y_fields: 
     for y_field in y_fields:
         points, skipped = _coerce_points(rows, x_field=x_field, y_field=y_field)
         if points:
-            series.append({"name": y_field, "points": _sort_time_points(points), "skipped_rows": skipped})
+            series.append({"name": y_field, "points": _sort_time_points(points), "skipped_points": skipped})
     if not series:
         raise ChartRenderError(f"字段 {y_fields} 在数据行里没有可绘制的数值；请检查 y_fields 是否为数值列")
     return series
@@ -246,7 +246,7 @@ def _assert_fields_present(rows: list[dict[str, Any]], *, x_field: str, y_fields
 
 
 def _coerce_points(rows: list[dict[str, Any]], *, x_field: str, y_field: str) -> tuple[list[tuple[str, float]], int]:
-    """把行数据整理为 (原始X, 数值Y) 点序列；非数值行跳过并计数。"""
+    """把行数据整理为 (原始X, 数值Y) 点序列；非数值点跳过并计数。"""
     points: list[tuple[str, float]] = []
     skipped = 0
     for row in rows:
@@ -367,8 +367,7 @@ def _set_auto_date_axis(axis: Axes, points: list[datetime]) -> None:
     ticks = list(locator.tick_values(points[0], points[-1]))
     if len(ticks) > MAX_VISIBLE_DATE_TICKS:
         indices = {
-            round(index * (len(ticks) - 1) / (MAX_VISIBLE_DATE_TICKS - 1))
-            for index in range(MAX_VISIBLE_DATE_TICKS)
+            round(index * (len(ticks) - 1) / (MAX_VISIBLE_DATE_TICKS - 1)) for index in range(MAX_VISIBLE_DATE_TICKS)
         }
         ticks = [ticks[index] for index in sorted(indices)]
         axis.xaxis.set_major_locator(FixedLocator(ticks))

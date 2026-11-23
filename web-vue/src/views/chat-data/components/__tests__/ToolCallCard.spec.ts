@@ -202,6 +202,25 @@ describe('ToolCallCard', () => {
     expect(wrapper.text()).not.toContain('执行中...')
   })
 
+  it('marks a stopped tool in compact chat rows', () => {
+    const wrapper = mount(ToolCallCard, {
+      props: {
+        compact: true,
+        toolCall: {
+          tool_call_id: 'call-compact-stopped',
+          tool_name: 'sql_query',
+          args: { sql: 'select 1' },
+          status: 'cancelled',
+          result: '任务已停止，工具未执行完成。',
+        },
+      },
+    })
+
+    expect(wrapper.text()).toContain('已停止')
+    expect(wrapper.text()).not.toContain('错误')
+    expect(wrapper.find('.fa-spinner').exists()).toBe(false)
+  })
+
   it('shows the normalized full path for compact file tools', () => {
     const wrapper = mount(ToolCallCard, {
       props: {
