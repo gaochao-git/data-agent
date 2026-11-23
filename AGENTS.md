@@ -26,6 +26,12 @@
 - 依赖：`web-vue/package.json`
 - 环境变量示例：`web-vue/.env.example`
 
+### 2.3 本地进程重载（macOS）
+- 本地 gunicorn **不要用 SIGHUP 重载**（`kill -HUP <master>`）：SIGHUP 只重启 worker、不更换 master；在 macOS 上 fork 新 worker 还可能触发 ObjC/Swift 的 fork 安全检查，worker 直接 SIGABRT，日志关键字为 `objc_initializeAfterForkError`。
+- 正确方式：Ctrl+C 等 master 完全退出后重新执行启动命令；脚本中用 `kill -TERM <master_pid>` 停止后再拉起。
+- 确认 `server/gunicorn.conf.py` 的 `preload_app = False`，启动命令不要加 `--preload`，也不要通过 `GUNICORN_CMD_ARGS` 注入 preload。
+- 仅本地临时调试可设置 `export OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES` 绕过检查；该变量只是规避崩溃，不是根因修复，生产环境不要设置。
+
 详细步骤参考：
 - `server/README.md`
 - `web-vue/README.md`
