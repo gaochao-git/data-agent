@@ -95,15 +95,17 @@ CREATE TABLE `chat_data_subagent_event` (
 
 | 包 | 原版本 | 新版本 |
 | --- | --- | --- |
-| `langchain` | 1.4.6 | 1.5.0 |
-| `langchain-core` | 1.6.12 | 1.8.0 |
-| `langgraph` | 1.2.16 | 1.2.22 |
+| `langchain` | 1.4.6 | 1.5.2 |
+| `langchain-core` | 1.6.12 | 1.8.4 |
+| `langgraph` | 1.2.16 | 1.2.24 |
 | `langchain-openai` | 1.7.2 | 1.8.0 |
 | `langgraph-checkpoint` | 4.3.0 | 4.3.2 |
 | `langgraph-checkpoint-sqlite` | 3.0.3 | 3.1.3 |
 | `tiktoken` | 0.12.0 | 0.14.0 |
 | `langchain-experimental` | 0.4.1 | 移除 |
 | `langgraph-checkpoint-postgres` | 3.0.5 | 移除 |
+
+补丁版本要点：`langchain 1.5.2` 修复 warning filter 竞争并为合成 HITL tool 消息补 source metadata；`langchain-core 1.8.4` 标准化 finish reason 并同步 HITL tool 消息 metadata；`langgraph 1.2.24` 修复 `DeltaChannel` 遇到 `None` checkpoint 以及 `_messages_delta_reducer` 对 `REMOVE_ALL_MESSAGES` 的处理，与本项目 `DeltaChannel(snapshot_frequency=25)` + 压缩整体替换消息的用法直接相关。
 
 `openai==3.51.0`、`httpx2==2.16.0`、`langgraph-checkpoint-mysql==3.0.0` 已在 `master` 钉版，本版本不变；开发环境中若仍为旧版，本次 `pip install` 会一并补齐。
 
