@@ -144,24 +144,31 @@ async def test_start_creates_dispatcher_when_absent():
 
 
 @pytest.mark.asyncio
-async def test_stop_cancels_owned_tasks_without_touching_db_lease():
+async def test_stop_cancels_owned_tasks_and_bounds_drain(monkeypatch):
     runtime = _runtime()
     started = asyncio.Event()
+    release = asyncio.Event()
 
     async def long_run(**_kwargs):
         started.set()
-        await asyncio.sleep(30)
+        try:
+            await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            await release.wait()
 
     task = asyncio.create_task(long_run())
     runtime._tasks["run-a"] = task
     runtime._owned_runs.add("run-a")
     await started.wait()
 
+    monkeypatch.setattr("apps.chat_data_app.agent.run.agent_run_runtime.RUN_SHUTDOWN_DRAIN_SECONDS", 0.01)
     await runtime.stop()
 
-    assert task.cancelled() or task.done()
+    assert not task.done()  # 超过有界等待后不强杀，留给进程退出/租约回收
     assert runtime._tasks == {}
     assert runtime._owned_runs == set()
+    release.set()
+    await task
 
 
 # ---------------------------------------------------------------------------
@@ -196,6 +203,16 @@ async def test_submit_skips_running_run_and_replaces_finished_one():
     assert "run-done" not in runtime._tasks
     running.cancel()
     await runtime.stop()
+
+
+@pytest.mark.asyncio
+async def test_stop_refuses_new_submissions_during_drain():
+    runtime = _runtime()
+    runtime._stopping = True
+
+    runtime.submit(run_id="run-late", conversation_id="c", user_id="u", operator_name="n")
+
+    assert runtime._tasks == {}
 
 
 @pytest.mark.asyncio

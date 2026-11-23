@@ -12,6 +12,7 @@ from datetime import datetime
 from uuid import uuid4
 
 from apps.chat_data_app.services.setting_service import get_runtime_setting
+from shutdown_config import RUN_SHUTDOWN_DRAIN_SECONDS
 from utils.logger import get_logger
 
 from .agent_inbox_service import AgentInboxService, AgentRunLeaseLostError, agent_inbox_service
@@ -84,12 +85,14 @@ class AgentRunRuntime:
         self._tasks: dict[str, asyncio.Task] = {}
         self._owned_runs: set[str] = set()
         self._poll_task: asyncio.Task | None = None
+        self._stopping = False
 
     def set_stream_generator(self, stream_generator: Callable[..., AsyncIterator[str]]) -> None:
         """由上层（handlers）在启动装配时注入 Run 流生成器，避免服务层反向 import。"""
         self._stream_generator = stream_generator
 
     async def start(self) -> None:
+        self._stopping = False
         await self._event_bus.start()
         if self._poll_task is None or self._poll_task.done():
             self._poll_task = asyncio.create_task(self._poll_pending_runs(), name="chatdata-agent-run-dispatcher")
@@ -102,6 +105,9 @@ class AgentRunRuntime:
         user_id: str,
         operator_name: str,
     ) -> None:
+        if self._stopping:
+            logger.info("ChatData Agent Run 停机中，拒绝开始新执行: run_id=%s", run_id)
+            return
         existing = self._tasks.get(run_id)
         if existing is not None and not existing.done():
             return
@@ -207,18 +213,33 @@ class AgentRunRuntime:
                     logger.warning("ChatData Run 取消发布 owner 清理失败: run_id=%s", run_id, exc_info=True)
 
     async def stop(self) -> None:
+        self._stopping = True
         if self._poll_task:
             self._poll_task.cancel()
             with suppress(asyncio.CancelledError):
                 await self._poll_task
             self._poll_task = None
         tasks = list(self._tasks.values())
+        if tasks:
+            logger.info("ChatData Agent Run 停机收口开始: tasks=%d", len(tasks))
         for task in tasks:
-            # Shutdown is not an explicit user cancellation. Leave the DB
-            # lease so another process can recover the Run after restart.
+            # 停机取消由执行任务自己收口（interrupted + done + 释放 owner）；
+            # 外部只负责发出信号并做有界等待，避免与 finally 重复发布终态。
             task.cancel("runtime_shutdown")
         if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+            _, pending = await asyncio.wait(tasks, timeout=RUN_SHUTDOWN_DRAIN_SECONDS)
+            logger.info(
+                "ChatData Agent Run 停机收口等待结束: drained=%d pending=%d",
+                len(tasks) - len(pending),
+                len(pending),
+            )
+            if pending:
+                # 超时任务不强杀：进程即将退出，未收口 Run 由租约过期 reaper 兜底。
+                logger.warning(
+                    "ChatData Agent Run 停机收口超时，剩余任务交由租约回收: pending=%s timeout_s=%.1f",
+                    sorted(task.get_name() for task in pending),
+                    RUN_SHUTDOWN_DRAIN_SECONDS,
+                )
         self._tasks.clear()
         self._owned_runs.clear()
         await subagent_task_service.shutdown_local_tasks()
@@ -444,6 +465,38 @@ class AgentRunRuntime:
             state.terminal_payload = format_terminal_done(finished_status)
             state.terminal_ready = True
 
+    async def _finalize_interrupted_run(self, state: _RunExecutionState, prepared: dict | None) -> None:
+        """进程正常停机：把未完成 Run 收口为 interrupted，并让其正常发布 done。"""
+        if prepared is None:
+            return
+        try:
+            finished_status = await self._inbox_service.finish_run(
+                state.run_id,
+                "interrupted",
+                state.user_id,
+                state.operator_name,
+                prepared["owner_token"],
+            )
+        except AgentRunLeaseLostError:
+            logger.info("ChatData Agent Run 停机收口时租约已丢失: run_id=%s", state.run_id)
+            return
+        except Exception:
+            logger.warning("ChatData Agent Run 停机收口失败: run_id=%s", state.run_id, exc_info=True)
+            return
+        if finished_status:
+            logger.info("ChatData Agent Run 停机收口: run_id=%s status=%s", state.run_id, finished_status)
+            state.terminal_payload = format_terminal_done(finished_status)
+            state.terminal_ready = True
+
+    async def _finalize_cancellation(
+        self, state: _RunExecutionState, prepared: dict | None, exc: asyncio.CancelledError
+    ) -> None:
+        """按取消原因收口：用户停止落 cancelled，进程停机落 interrupted。"""
+        if exc.args and exc.args[0] == "runtime_shutdown":
+            await self._finalize_interrupted_run(state, prepared)
+            return
+        await self._finalize_cancelled_run(state, prepared, exc)
+
     async def _finalize_failed_run(self, state: _RunExecutionState, prepared: dict) -> None:
         try:
             finished_status = await self._inbox_service.finish_run(
@@ -579,7 +632,7 @@ class AgentRunRuntime:
                 state.terminal_ready = True
             except asyncio.CancelledError as exc:
                 prepared = state.cancelled_prepared or prepared
-                await self._finalize_cancelled_run(state, prepared, exc)
+                await self._finalize_cancellation(state, prepared, exc)
                 raise
             except Exception as exc:
                 if isinstance(exc, AgentRunLeaseLostError):

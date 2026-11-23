@@ -1,3 +1,4 @@
+import asyncio
 import time
 
 import pytest
@@ -5,6 +6,7 @@ import pytest
 from apps.chat_data_app.agent.run.agent_inbox_service import (
     AgentRunCancellationResult,
     AgentRunCompletionResult,
+    AgentRunLeaseLostError,
     AgentRunReapResult,
 )
 from apps.chat_data_app.agent.run.agent_run_runtime import AgentRunRuntime
@@ -910,3 +912,196 @@ def test_build_stream_factory_passes_unattended_flag():
     factory = runtime._build_stream_factory(prepared)
     next(iter(factory()), None)
     assert captured["request"].disable_user_interaction is False
+
+
+@pytest.mark.asyncio
+async def test_runtime_shutdown_interrupts_run_and_publishes_terminal(monkeypatch):
+    """正常停机：未完成 Run 收口 interrupted，再发布 done 并释放 owner。"""
+    order = []
+    published_done = []
+    streaming = asyncio.Event()
+
+    class Inbox(_ActiveInbox):
+        async def prepare_pending_run(self, _run_id):
+            return _prepared()
+
+        async def finish_run(self, _run_id, status, *_args, **_kwargs):
+            order.append(f"run_{status}")
+            return status
+
+        async def record_terminal_event(self, _run_id, _stream_id):
+            order.append("terminal_recorded")
+
+    class Events:
+        bus = _EventBus()
+
+        async def claim_owner(self, _run_id, _owner_token):
+            order.append("owner_claimed")
+
+        async def release_owner(self, _run_id, _owner_token):
+            order.append("owner_released")
+
+        async def append(self, **kwargs):
+            if "event: done" in kwargs["payload"]:
+                order.append("done_published")
+                published_done.append(kwargs["payload"])
+                return "done-stream-0"
+            return "message-stream-0"
+
+    async def stream():
+        streaming.set()
+        await asyncio.sleep(30)
+        yield "event: message\ndata: {}\n\n"  # pragma: no cover
+
+    runtime = AgentRunRuntime(
+        inbox_service=Inbox(),
+        event_service=Events(),
+        event_bus=Events.bus,
+    )
+    monkeypatch.setattr(runtime, "_build_stream_factory", lambda _prepared: stream)
+
+    task = asyncio.create_task(runtime._execute(run_id="run-1", conversation_id="", user_id="", operator_name=""))
+    await streaming.wait()
+    task.cancel("runtime_shutdown")
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert order == [
+        "owner_claimed",
+        "run_interrupted",
+        "done_published",
+        "terminal_recorded",
+        "owner_released",
+    ]
+    assert '"status": "interrupted"' in published_done[0]
+
+
+@pytest.mark.asyncio
+async def test_runtime_shutdown_skips_terminal_when_lease_lost(monkeypatch):
+    """停机收口遇到租约丢失：不覆盖新 Worker，也不发布旧终态。"""
+    order = []
+    streaming = asyncio.Event()
+
+    class Inbox(_ActiveInbox):
+        async def prepare_pending_run(self, _run_id):
+            return _prepared()
+
+        async def finish_run(self, *_args, **_kwargs):
+            order.append("lease_lost")
+            raise AgentRunLeaseLostError("当前运行已由其他 Worker 接管")
+
+    class Events:
+        bus = _EventBus()
+
+        async def claim_owner(self, _run_id, _owner_token):
+            order.append("owner_claimed")
+
+        async def release_owner(self, _run_id, _owner_token):
+            order.append("owner_released")
+
+        async def append(self, **_kwargs):  # pragma: no cover - 不应发布终态
+            raise AssertionError("租约丢失后不得发布旧终态")
+
+    async def stream():
+        streaming.set()
+        await asyncio.sleep(30)
+        yield "event: message\ndata: {}\n\n"  # pragma: no cover
+
+    runtime = AgentRunRuntime(
+        inbox_service=Inbox(),
+        event_service=Events(),
+        event_bus=Events.bus,
+    )
+    monkeypatch.setattr(runtime, "_build_stream_factory", lambda _prepared: stream)
+
+    task = asyncio.create_task(runtime._execute(run_id="run-1", conversation_id="", user_id="", operator_name=""))
+    await streaming.wait()
+    task.cancel("runtime_shutdown")
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert order == ["owner_claimed", "lease_lost", "owner_released"]
+
+
+@pytest.mark.asyncio
+async def test_runtime_shutdown_before_claim_skips_terminal(monkeypatch):
+    """claim 完成前收到停机：没有 owner 也没有终态可收口，不得发布任何事件。"""
+    claiming = asyncio.Event()
+    order = []
+
+    class Events:
+        bus = _EventBus()
+
+        async def claim_owner(self, *_args, **_kwargs):  # pragma: no cover - 不应执行
+            order.append("owner_claimed")
+
+        async def release_owner(self, *_args, **_kwargs):  # pragma: no cover - 不应执行
+            order.append("owner_released")
+
+        async def append(self, **_kwargs):  # pragma: no cover - 不应执行
+            order.append("event_appended")
+            return "stream-0"
+
+    runtime = AgentRunRuntime(inbox_service=object(), event_service=Events(), event_bus=Events.bus)
+
+    async def claim(_state):
+        claiming.set()
+        await asyncio.sleep(30)
+
+    monkeypatch.setattr(runtime, "_claim_pending_run", claim)
+    task = asyncio.create_task(runtime._execute(run_id="run-1", conversation_id="", user_id="", operator_name=""))
+    await claiming.wait()
+    task.cancel("runtime_shutdown")
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert order == []
+
+
+@pytest.mark.asyncio
+async def test_runtime_shutdown_finalize_failure_does_not_publish_terminal(monkeypatch):
+    """停机收口自身失败：记日志后放弃终态，只释放 owner，交给租约/后续流程兜底。"""
+    streaming = asyncio.Event()
+    order = []
+
+    class Inbox(_ActiveInbox):
+        async def prepare_pending_run(self, _run_id):
+            return _prepared()
+
+        async def finish_run(self, *_args, **_kwargs):
+            order.append("finish_failed")
+            raise RuntimeError("db unavailable")
+
+    class Events:
+        bus = _EventBus()
+
+        async def claim_owner(self, _run_id, _owner_token):
+            order.append("owner_claimed")
+
+        async def release_owner(self, _run_id, _owner_token):
+            order.append("owner_released")
+
+        async def append(self, **kwargs):  # pragma: no cover - 不应发布终态
+            if "event: done" in kwargs["payload"]:
+                order.append("done_published")
+            return "stream-0"
+
+    async def stream():
+        streaming.set()
+        await asyncio.sleep(30)
+        yield "event: message\ndata: {}\n\n"  # pragma: no cover
+
+    runtime = AgentRunRuntime(
+        inbox_service=Inbox(),
+        event_service=Events(),
+        event_bus=Events.bus,
+    )
+    monkeypatch.setattr(runtime, "_build_stream_factory", lambda _prepared: stream)
+
+    task = asyncio.create_task(runtime._execute(run_id="run-1", conversation_id="", user_id="", operator_name=""))
+    await streaming.wait()
+    task.cancel("runtime_shutdown")
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert order == ["owner_claimed", "finish_failed", "owner_released"]

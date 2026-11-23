@@ -33,7 +33,9 @@ bind = f"0.0.0.0:{os.getenv('PORT', '5001')}"
 backlog = _env_int("GUNICORN_BACKLOG", 2048)
 
 workers = _env_int("GUNICORN_WORKERS", 4)
-worker_class = "uvicorn_worker.UvicornWorker"
+# 自定义 worker 给 SSE 请求任务设置有界排空，确保 gunicorn SIGKILL 前一定进入
+# lifespan shutdown，执行 Agent Run 的 interrupted 收口。
+worker_class = "chatdata_uvicorn_worker.ChatDataUvicornWorker"
 worker_connections = _env_int("GUNICORN_WORKER_CONNECTIONS", 1000)
 
 # Agent, LLM, SQL, and sandbox requests can be long-running.

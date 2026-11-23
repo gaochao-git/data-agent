@@ -703,9 +703,13 @@ class AgentInboxService:
                 # mark_waiting_for_user 之后）：不重复收口、不回退队列，
                 # 回报权威状态让调用方发布与之一致的 done。
                 return RUN_STATUS_WAITING_USER
+            if run and run.record_status == RUN_STATUS_CANCELLING and status == RUN_STATUS_INTERRUPTED:
+                # 用户取消与进程停机竞争时，已进入 cancelling 的 Run 必须保持
+                # 用户可见的 cancelled 语义，不能降级成 interrupted。
+                status = RUN_STATUS_CANCELLED
             if run and run.record_status in {RUN_STATUS_PENDING, RUN_STATUS_ACTIVE, RUN_STATUS_CANCELLING}:
                 self._assert_owner(run, owner_token)
-                if status in {RUN_STATUS_FAILED, RUN_STATUS_CANCELLED}:
+                if status in {RUN_STATUS_FAILED, RUN_STATUS_CANCELLED, RUN_STATUS_INTERRUPTED}:
                     await self._dao.requeue_messages(session, run_id, now)
                 content = self._load_run_content(run.record_content)
                 self._restore_unstarted_question(content)

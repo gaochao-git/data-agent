@@ -279,9 +279,17 @@ async def test_reap_expired_runs_drops_candidates_nobody_can_close():
 
 
 @pytest.mark.asyncio
-async def test_finish_run_requeues_only_terminal_failures():
+async def test_finish_run_requeues_terminal_failures():
     service = _service(get_run_by_id_for_update=_run(record_status="active"))
     assert await service.finish_run("r1", "failed", "user-1", "用户一", "tok-1") == "failed"
+    assert "requeue_messages" in service._dao.calls
+
+    service = _service(get_run_by_id_for_update=_run(record_status="active"))
+    assert await service.finish_run("r1", "interrupted", "user-1", "用户一", "tok-1") == "interrupted"
+    assert "requeue_messages" in service._dao.calls
+
+    service = _service(get_run_by_id_for_update=_run(record_status="cancelling"))
+    assert await service.finish_run("r1", "interrupted", "user-1", "用户一", "tok-1") == "cancelled"
     assert "requeue_messages" in service._dao.calls
 
     service = _service(get_run_by_id_for_update=_run(record_status="active"))

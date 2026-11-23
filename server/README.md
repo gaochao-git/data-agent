@@ -38,12 +38,12 @@ PORT=5002 python server/main.py
 也可以使用 uvicorn 单进程运行：
 
 ```bash
-uvicorn main:app --app-dir server --host 0.0.0.0 --port 5001
+uvicorn main:app --app-dir server --host 0.0.0.0 --port 5001 --timeout-graceful-shutdown 5
 ```
 
 ## 生产运行
 
-生产环境推荐使用 Gunicorn 管理多进程，UvicornWorker 负责运行 FastAPI ASGI 应用：
+生产环境推荐使用 Gunicorn 管理多进程，`ChatDataUvicornWorker` 负责运行 FastAPI ASGI 应用：
 
 ```bash
 gunicorn main:app -c server/gunicorn.conf.py
@@ -56,6 +56,13 @@ gunicorn main:app -c server/gunicorn.conf.py
 - `GUNICORN_TIMEOUT`：worker 超时时间，默认 `900` 秒，适配智能体、SQL 和沙箱长请求
 - `GUNICORN_GRACEFUL_TIMEOUT`：优雅退出等待时间，默认 `30` 秒
 - `GUNICORN_KEEPALIVE`：keepalive 时间，默认 `5` 秒
+
+`ChatDataUvicornWorker` 会把 SSE 请求任务的排空上限设为 `5` 秒。uvicorn 的停机顺序是
+「等待请求结束 → lifespan shutdown」；没有这个上限时，长连接会让进程一直等到 gunicorn
+宽限期结束并被 SIGKILL，Agent Run 的 `interrupted` 收口不会执行。因此
+`GUNICORN_GRACEFUL_TIMEOUT` 必须明显大于「请求排空 + Run 收口」的合计时间。
+这两段预算统一在 `server/shutdown_config.py` 维护，Gunicorn worker、单进程
+`main.py` 与 Run Runtime 共用，避免三处各自硬编码。
 
 多机房单活执行：
 
