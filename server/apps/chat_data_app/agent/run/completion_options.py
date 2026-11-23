@@ -27,8 +27,8 @@ class CompletionRunOptions:
     annotations: list[dict[str, Any]]
     # 无人值守运行（评测/批量等内部调用方经 options 显式置 True）：工具装配
     # 剔除 ask_user_question（用户不在场，提问只会悬挂在 waiting_user）。
-    # chat 入口不传恒为 False；定时轮派发链路不走本解析（直接在 runtime_context
-    # 打标），两条入口的标记来源互不干扰。
+    # chat 入口从 options 读取；定时入口在 build_run_context 里显式置 True，
+    # 不依赖任务保存的 options，避免历史任务漏标。
     disable_user_interaction: bool
 
 

@@ -33,6 +33,7 @@ from .agent_inbox_service import (
     agent_inbox_service,
     load_run_content,
 )
+from .run_context import RunContext, RunSource, inherit_run_context
 
 logger = get_logger(__name__)
 
@@ -243,7 +244,7 @@ class SubagentEventService:
             message.delete_flag = 1
             message.update_time = now
 
-    async def _runtime_context(self, event: Any) -> dict[str, Any]:
+    async def _runtime_context(self, event: Any) -> RunContext:
         event_meta = self._load_meta(event)
         parent_context: dict[str, Any] = {}
         if event.parent_run_id:
@@ -253,16 +254,19 @@ class SubagentEventService:
                     loaded = load_run_content(parent.record_content).get("runtime_context")
                     if isinstance(loaded, dict):
                         parent_context = dict(loaded)
-        return {
-            **parent_context,
-            "query": "",
-            "disable_user_interaction": True,
-            "subagent_notification_event_id": event.event_id,
-            "subagent_notification_event_type": event.event_type,
-            "subagent_notification_task_id": event.task_id,
-            "subagent_notification_status": event.task_status,
-            "subagent_notification_cancel_origin": event_meta.get("cancel_origin") or "",
-        }
+        return inherit_run_context(
+            parent_context,
+            source=RunSource.SUBAGENT,
+            overrides={
+                "query": "",
+                "disable_user_interaction": True,
+                "subagent_notification_event_id": event.event_id,
+                "subagent_notification_event_type": event.event_type,
+                "subagent_notification_task_id": event.task_id,
+                "subagent_notification_status": event.task_status,
+                "subagent_notification_cancel_origin": event_meta.get("cancel_origin") or "",
+            },
+        )
 
     @staticmethod
     def _load_meta(event: Any) -> dict[str, Any]:

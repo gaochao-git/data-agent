@@ -58,6 +58,7 @@ from .agent.run.conversation_runtime import (
     TurnResourceOptions,
     stream_agent_turn,
 )
+from .agent.run.run_context import RunSource, build_run_context
 from .agent.run.sse_heartbeat import stream_sse_with_heartbeat
 from .agent.run.user_message_suffixes import (
     document_annotations_suffix as _document_annotations_suffix,
@@ -1815,27 +1816,16 @@ async def sql_completion_handler(
 
     # 保持懒创建会话；数据源组在生成流开始时写入业务会话表并校验。
     await conversation.get_or_create_conversation(AGENT_ID, conversation_id, user_id)
-    runtime_context = {
+    runtime_context = build_run_context(
+        source=RunSource.USER,
+        run_options=run_options,
         # 明确执行队列消息时，模型输入来自 adopted_messages，不能再把
         # completion 的展示文本作为第二条当前用户消息注入。
-        "query": "" if queued_message_id else query,
-        "datasource_id": run_options.datasource_id,
-        "member_datasource_ids": run_options.member_datasource_ids,
-        "semantic_config_id": run_options.semantic_config_id,
-        "model_id": run_options.model_id,
-        "file_selections": run_options.file_selections,
-        "quoted_snippets": run_options.quoted_snippets,
-        "annotations": run_options.annotations,
-        "enable_thinking": run_options.enable_thinking,
-        "thinking_effort": run_options.thinking_effort,
-        "skill_names": run_options.skill_names,
-        "operator_name": username or user_id,
-        "options": options or {},
-        "file_ids": file_ids or [],
-        # 无人值守标记（评测/批量等内部调用方经 options 传入）：装配剔除
-        # ask_user_question；chat 入口恒 False
-        "disable_user_interaction": run_options.disable_user_interaction,
-    }
+        query="" if queued_message_id else query,
+        operator_name=username or user_id,
+        raw_options=options,
+        file_ids=file_ids,
+    )
     run_id, adopted_messages = await agent_inbox_service.start_run(
         conversation_id,
         user_id,

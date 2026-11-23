@@ -4,6 +4,24 @@ Run 级运行时服务：事件流（Redis Stream 直播 + MySQL 消息级快照
 会话事件服务、运行参数解析（`completion_options.py`，sql options → CompletionRunOptions）。持久化分层、游标协议与断点恢复矩阵的规格契约见
 `services/agent_run/README.md`——修改事件流相关代码前先读该规格。
 
+## 任务入口契约
+
+`run_context.py` 是入口期 `runtime_context` 的唯一契约：`RunContext` 定义必填/可选字段，
+`build_run_context` 负责从 `CompletionRunOptions` 构造，`inherit_run_context` 负责通知 Run
+继承父上下文。入口只做「协议 → 运行参数」的翻译，不再各自拼 dict。
+
+统一的是「上下文形状与构造」，不是「入口行为」：
+
+| 入口 | 提交方式 | 会话忙时的策略 |
+| --- | --- | --- |
+| 用户 completion | `agent_stream` → `start_run` | 返回 409（`AgentRunConflictError`） |
+| 定时任务 | `AgentScheduleRuntime` → `start_run` | 释放回 pending，下轮重试 |
+| 子智能体通知 | `SubagentEventService` → `start_run` | 挂到当前活跃 Run，不丢事件 |
+
+所有新入口必须带 `task_source`，`start_run` 会对带该字段的上下文做必填校验；旧调用不带
+`task_source` 时保持兼容。子智能体任务账本（`subagent_task_service.create_task`）与 Run 生命周期
+不同，仍走独立入口，不并入本契约。
+
 ## 多机房执行准入
 
 用户对话和定时任务共用 `executor_gate.py` 的同一套判断，不允许各自复制白名单解析：

@@ -35,6 +35,7 @@ from apps.chat_data_app.agent.run.agent_inbox_service import (
 from apps.chat_data_app.agent.run.agent_run_runtime import agent_run_runtime
 from apps.chat_data_app.agent.run.completion_options import parse_completion_run_options
 from apps.chat_data_app.agent.run.executor_gate import configured_node_id, is_executor_allowed
+from apps.chat_data_app.agent.run.run_context import RunContext, RunSource, build_run_context
 from apps.chat_data_app.daos.agent_schedule_dao import (
     RUN_STATUS_TO_TRIGGER_STATUS,
     SCHEDULE_RUN_STATUS_CLAIMED,
@@ -413,28 +414,22 @@ class AgentScheduleRuntime:
                 "job_title": job.job_title,
             }
 
-    def _build_runtime_context(self, job: dict) -> dict:
+    def _build_runtime_context(self, job: dict) -> RunContext:
         # 复用 chat 完成链路的 options 解析，保证运行参数字段口径一致。
         options = job_options(job.get("options_json"))
         run_options = parse_completion_run_options(options)
-        return {
-            "query": job["job_prompt"],
-            "datasource_id": run_options.datasource_id,
-            "member_datasource_ids": run_options.member_datasource_ids,
-            "semantic_config_id": run_options.semantic_config_id,
-            "model_id": run_options.model_id,
-            "file_selections": run_options.file_selections,
-            "quoted_snippets": run_options.quoted_snippets,
-            "enable_thinking": run_options.enable_thinking,
-            "thinking_effort": run_options.thinking_effort,
-            "skill_names": run_options.skill_names,
-            "operator_name": job["create_by_name"] or "",
-            "options": options,
-            "file_ids": [],
+        return build_run_context(
+            source=RunSource.SCHEDULE,
+            run_options=run_options,
+            query=job["job_prompt"],
+            operator_name=job["create_by_name"] or "",
+            raw_options=options,
             # 无人值守标记：工具装配剔除 ask_user_question（用户不在场，
             # 提问后无人应答会让轮次悬挂在 waiting_user 等待）
-            "disable_user_interaction": True,
-        }
+            disable_user_interaction=True,
+            # 定时入口历史口径不携带 annotations，保持行为不变。
+            include_annotations=False,
+        )
 
     async def _mark_dispatched(self, trigger_id: int, run_id: str, conversation_id: str | None = None) -> None:
         async with get_session() as session:

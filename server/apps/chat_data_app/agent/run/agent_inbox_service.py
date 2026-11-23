@@ -19,6 +19,7 @@ from utils.logger import get_logger
 from utils.models import ChatDataAgentInbox
 
 from ...services.setting_service import get_runtime_setting
+from .run_context import RunContext, validate_run_context
 
 logger = get_logger(__name__)
 
@@ -159,7 +160,7 @@ class AgentInboxService:
         conversation_id: str,
         user_id: str,
         operator_name: str,
-        runtime_context: dict[str, Any] | None = None,
+        runtime_context: RunContext | dict[str, Any] | None = None,
         *,
         adopt_pending_messages: bool = True,
         selected_message_id: str | None = None,
@@ -180,6 +181,8 @@ class AgentInboxService:
           旧队列留在 pending，由当前 Run 结束后的 continuation 按 FIFO 接走；
         - selected_message_id：单条队列执行，只迁移指定消息，其余继续排队。
         """
+        if runtime_context and "task_source" in runtime_context:
+            validate_run_context(runtime_context)
         async with get_session() as session:
             now = await self._dao.now(session)
             thread = await self._dao.lock_thread(session, conversation_id, user_id)
