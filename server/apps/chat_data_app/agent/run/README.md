@@ -29,6 +29,10 @@ Run 级运行时服务：事件流（Redis Stream 直播 + MySQL 消息级快照
 3. 统一调用 `agent_inbox_service.start_run` 建 Run，不绕过活跃 Run 检查；
 4. 冲突策略（409 / 重试 / 挂载）由入口显式实现，不要塞进上下文构造器。
 
+续跑 Run（`complete_run` 生成 `run_kind=continuation`）不经过 `start_run`，
+但上下文同样走 `inherit_run_context`：只覆盖 `query=""`，保留父 Run 的
+`task_source` 与模型/数据源选择。
+
 ## 多机房执行准入
 
 用户对话和定时任务共用 `executor_gate.py` 的同一套判断，不允许各自复制白名单解析：

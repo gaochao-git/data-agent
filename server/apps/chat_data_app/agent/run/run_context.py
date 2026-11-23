@@ -101,7 +101,7 @@ def build_run_context(
 def inherit_run_context(
     parent: Mapping[str, Any],
     *,
-    source: RunSource,
+    source: RunSource | None = None,
     overrides: Mapping[str, Any],
 ) -> RunContext:
     """从父 Run 继承上下文，只覆盖来源自己的字段。
@@ -109,11 +109,15 @@ def inherit_run_context(
     通知 Run 需要保留父 Run 的模型/数据源/技能等选择，同时把 ``query``
     置空并写入通知元数据；这里固定覆盖顺序为「父上下文 → 本次覆盖 →
     task_source」，避免不同字段的覆盖先后漂移。
+
+    ``source`` 不传时保留父上下文的 ``task_source``，用于续跑 Run 等
+    不应改变来源的场景；父上下文是旧契约（无 ``task_source``）时也原样保留。
     """
 
     context: dict[str, Any] = dict(parent)
     context.update(overrides)
-    context["task_source"] = source.value
+    if source is not None:
+        context["task_source"] = source.value
     return cast(RunContext, context)
 
 

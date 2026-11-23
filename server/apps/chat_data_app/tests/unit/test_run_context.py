@@ -105,6 +105,31 @@ def test_inherit_context_keeps_parent_choices_and_overrides_source():
     validate_run_context(context)
 
 
+def test_inherit_context_without_source_keeps_parent_task_source():
+    parent = {
+        "task_source": "schedule",
+        "query": "定时问题",
+        "disable_user_interaction": True,
+    }
+    context = inherit_run_context(parent, overrides={"query": ""})
+
+    assert context["task_source"] == "schedule"
+    assert context["query"] == ""
+    validate_run_context(context)
+
+
+def test_inherit_context_without_parent_task_source_keeps_it_absent():
+    parent = {
+        "query": "旧契约问题",
+        "disable_user_interaction": False,
+    }
+    context = inherit_run_context(parent, overrides={"query": ""})
+
+    assert "task_source" not in context
+    assert context["query"] == ""
+    assert context["disable_user_interaction"] is False
+
+
 def test_validate_context_rejects_missing_required_keys():
     with pytest.raises(ValueError, match="disable_user_interaction"):
         validate_run_context({"task_source": "user", "query": "问题"})

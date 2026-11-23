@@ -173,6 +173,20 @@ async def test_agent_question_wait_and_answer_is_atomic(inbox_service):
 
 
 @pytest.mark.asyncio
+async def test_start_run_rejects_task_source_context_missing_required_keys(inbox_service):
+    service, create_thread, _get_session, _owners = inbox_service
+    await create_thread()
+
+    with pytest.raises(ValueError, match="disable_user_interaction"):
+        await service.start_run(
+            "conv-1",
+            "user-1",
+            "用户一",
+            {"task_source": "user", "query": "查询订单"},
+        )
+
+
+@pytest.mark.asyncio
 async def test_finish_run_reports_waiting_user_when_question_already_asked(inbox_service):
     """异常/取消发生在问题落库之后：回报权威状态 waiting_user，队列保持挂载。"""
     service, create_thread, get_session, owners = inbox_service

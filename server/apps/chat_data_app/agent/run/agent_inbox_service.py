@@ -19,7 +19,7 @@ from utils.logger import get_logger
 from utils.models import ChatDataAgentInbox
 
 from ...services.setting_service import get_runtime_setting
-from .run_context import RunContext, validate_run_context
+from .run_context import RunContext, inherit_run_context, validate_run_context
 
 logger = get_logger(__name__)
 
@@ -779,7 +779,7 @@ class AgentInboxService:
                 # The original user query was already persisted in this Run. The
                 # next Run must execute only its inbox messages, otherwise a
                 # refresh/queued turn would submit the original query twice.
-                runtime_context = {**runtime_context, "query": ""}
+                runtime_context = inherit_run_context(runtime_context, overrides={"query": ""})
                 await self._dao.adopt_pending_messages(
                     session,
                     run.conversation_id,
