@@ -198,6 +198,9 @@ SUBAGENT_RESULT_SOURCE = "subagent"
 SUBAGENT_REPORT_MAX_TOKEN_RATIO = 0.08
 SUBAGENT_REPORT_MIN_TOKEN_LIMIT = 1000
 SUBAGENT_REPORT_PREVIEW_CHARS = 2000
+# 心跳 watcher 只负责续租与观察取消；收口时不能让它拖住终态落库。
+TASK_WATCHER_SHUTDOWN_TIMEOUT_SECONDS = 1.0
+TASK_LEASE_READ_TIMEOUT_SECONDS = 1.0
 
 _SUBAGENT_TOOL_DESCRIPTION_TEMPLATE = """派发并管理隔离子智能体：过程留在子图，只把最终结论带回主对话。
 
@@ -797,6 +800,78 @@ async def _invoke_task_subagent(
     return messages, report, "success"
 
 
+async def _read_task_lease_seconds() -> float | None:
+    """读取子任务租约；配置不可用时返回 None，由 watcher 使用保守默认值。"""
+    try:
+        value = await asyncio.wait_for(
+            get_runtime_setting("CHAT_DATA_SUBAGENT_TASK_LEASE_SECONDS"),
+            timeout=TASK_LEASE_READ_TIMEOUT_SECONDS,
+        )
+        return max(1.0, float(value))
+    except Exception:
+        logger.warning("[tools] 读取子智能体任务租约失败，按默认值继续执行", exc_info=True)
+        return None
+
+
+def _consume_task_result(task: asyncio.Task) -> None:
+    with suppress(asyncio.CancelledError, Exception):
+        task.result()
+
+
+async def _stop_watcher(watcher: asyncio.Task | None) -> None:
+    """停止心跳 watcher 并做有界等待，慢 I/O 不能拖住终态收口。"""
+    if watcher is None:
+        return
+    if watcher.done():
+        _consume_task_result(watcher)
+        return
+    watcher.cancel()
+    done, pending = await asyncio.wait({watcher}, timeout=TASK_WATCHER_SHUTDOWN_TIMEOUT_SECONDS)
+    for task in done:
+        _consume_task_result(task)
+    if not pending:
+        return
+    logger.warning(
+        "[tools] 子智能体心跳 watcher 未在 %.1fs 内退出，交由事件循环回收",
+        TASK_WATCHER_SHUTDOWN_TIMEOUT_SECONDS,
+    )
+    watcher.add_done_callback(_consume_task_result)
+
+
+async def _close_subagent_event_writer(event_writer: Any, task_id: str, *, scope: str) -> None:
+    """关闭子智能体过程流；收口阶段只告警，不覆盖真正的取消/失败原因。"""
+    if event_writer is None:
+        return
+    try:
+        await event_writer.aclose()
+    except Exception:
+        logger.warning("[tools] %s子智能体过程流关闭失败: task_id=%s", scope, task_id, exc_info=True)
+
+
+async def _finish_cancelled_background_execution(
+    service: SubagentTaskPort,
+    record: SubagentTaskView,
+    partial_state: dict[str, Any],
+    *,
+    history: list[Any] | None,
+    watcher: asyncio.Task,
+    event_writer: Any,
+    attempt_started: bool,
+) -> Any:
+    """后台任务被取消时先停心跳、关过程流，再落终态。"""
+    await _stop_watcher(watcher)
+    if not attempt_started:
+        await _close_subagent_event_writer(event_writer, record.task_id, scope="后台")
+        event_writer = None
+    await _finish_cancelled_background_task(service, record, partial_state, history=history)
+    return event_writer
+
+
+def _is_background_recovery(record: SubagentTaskView, *, resumed: bool, recovered: bool) -> bool:
+    """审批恢复不复用租约接管；其余路径按账本 recovery_count 判定是否为接管。"""
+    return recovered or (not resumed and int(record.meta.get("recovery_count") or 0) > 0)
+
+
 async def _run_background_task(
     record: SubagentTaskView,
     runtime: Any,
@@ -813,12 +888,13 @@ async def _run_background_task(
     if service is None:
         logger.error("[tools] 后台任务账本服务未初始化，无法执行: task_id=%s", record.task_id)
         return
+    lease_started_at = asyncio.get_running_loop().time()
     # 恢复执行器在认领任务时已经把行推进到 running 并换发了 owner；
     # 此时不能再调用 start_task（它只接受 pending），否则恢复协程会
     # 在进入执行前静默返回，任务停在 running 直到下一次租约过期。
     # 只在本轮不是「审批后恢复」时，才把账本里的 recovery_count 解释为
     # 租约接管；审批恢复必须走 Command(resume=...)，不能误走检查点重放。
-    recovered = recovered or (not resumed and int(record.meta.get("recovery_count") or 0) > 0)
+    recovered = _is_background_recovery(record, resumed=resumed, recovered=recovered)
     if not resumed and not recovered:
         started = await service.start_task(record.task_id, record.owner_token or "")
         if started is None:
@@ -827,25 +903,63 @@ async def _run_background_task(
             # 旧闭包在租约回收时被误用。
             service.register_recovery_runner(None, task_id=record.task_id)
             return
-    crash_recovery = recovered and not resume and record.meta.get("recovery_kind") == "checkpoint"
-    history = None if resume or crash_recovery else await _load_background_history(service, record)
+        lease_started_at = asyncio.get_running_loop().time()
     progress: dict[str, Any] = {"phase": "running"}
     partial_state: dict[str, Any] = {}
-    event_writer = service.create_event_writer(record)
-    await event_writer.start()
-    outcome, suspended = await _execute_background_attempt(
-        record,
-        runtime,
-        specs,
-        compiled,
-        progress,
-        partial_state,
-        event_writer,
-        history,
-        resume=resume,
-        resume_value=resume_value,
-        recover=crash_recovery,
+    lease_seconds = await _read_task_lease_seconds()
+    watcher = asyncio.create_task(
+        _watch_background_task(
+            record.task_id,
+            record.owner_token or "",
+            progress,
+            asyncio.current_task(),
+            service,
+            lease_seconds=lease_seconds,
+            lease_started_at=lease_started_at,
+        ),
+        name=f"chatdata-subagent-watch-{record.task_id}",
     )
+    history: list[Any] | None = None
+    event_writer: Any = None
+    attempt_started = False
+    try:
+        crash_recovery = recovered and not resume and record.meta.get("recovery_kind") == "checkpoint"
+        if not resume and not crash_recovery:
+            history = await _load_background_history(service, record)
+        event_writer = service.create_event_writer(record)
+        await event_writer.start()
+        attempt_started = True
+        outcome, suspended = await _execute_background_attempt(
+            record,
+            runtime,
+            specs,
+            compiled,
+            progress,
+            partial_state,
+            event_writer,
+            history,
+            resume=resume,
+            resume_value=resume_value,
+            recover=crash_recovery,
+        )
+    except asyncio.CancelledError:
+        # 启动阶段（历史加载、事件流初始化）也可能被租约 watcher 取消；
+        # 这里统一落终态，不能只停协程把 running 行留给租约回收。
+        # 先停 watcher，避免收口清空 owner 后心跳再次 cancel 当前协程。
+        event_writer = await _finish_cancelled_background_execution(
+            service,
+            record,
+            partial_state,
+            history=history,
+            watcher=watcher,
+            event_writer=event_writer,
+            attempt_started=attempt_started,
+        )
+        raise
+    finally:
+        await _stop_watcher(watcher)
+        if not attempt_started:
+            await _close_subagent_event_writer(event_writer, record.task_id, scope="后台")
     if suspended is not None:
         status = TASK_STATUS_WAITING_APPROVAL
         await service.suspend_task(
@@ -901,21 +1015,9 @@ async def _execute_background_attempt(
     recover: bool = False,
 ) -> tuple[tuple[str, str, str, dict[str, Any]] | None, SubagentSuspended | None]:
     """在独立检查点内跑一次执行体；返回正常结果或中断载荷。"""
-    service = get_subagent_task_service()
-    assert service is not None
     async with AsyncExitStack() as stack:
-        checkpointer = await _open_subgraph_checkpointer(stack, record.task_id)
-        watcher = asyncio.create_task(
-            _watch_background_task(
-                record.task_id,
-                record.owner_token or "",
-                progress,
-                asyncio.current_task(),
-                service,
-            ),
-            name=f"chatdata-subagent-watch-{record.task_id}",
-        )
         try:
+            checkpointer = await _open_subgraph_checkpointer(stack, record.task_id)
             try:
                 return await _run_background_attempt(
                     record,
@@ -933,14 +1035,8 @@ async def _execute_background_attempt(
                 ), None
             except SubagentSuspended as exc:
                 return None, exc
-            except asyncio.CancelledError:
-                await _finish_cancelled_background_task(service, record, partial_state, history=history)
-                raise
         finally:
             await event_writer.aclose()
-            watcher.cancel()
-            with suppress(asyncio.CancelledError):
-                await watcher
 
 
 async def _open_subgraph_checkpointer(stack: AsyncExitStack, task_id: str) -> Any:
@@ -1264,6 +1360,9 @@ def _sync_task_failure_outcome(
     """同步执行被取消或基础设施异常时，仍按统一终态收口。"""
     partial_report, result_meta = _capture_partial_background_result(partial_state)
     if isinstance(exc, asyncio.CancelledError):
+        if str(exc) == "subagent_lease_lost":
+            report = "同步子智能体执行租约已失效，已停止；请重新派发。"
+            return TASK_STATUS_LOST, _append_partial_report(report, partial_report), str(exc), result_meta
         return TASK_STATUS_CANCELLED, _append_partial_report("同步子智能体已取消。", partial_report), "", result_meta
     error = str(exc) or exc.__class__.__name__
     report = f"同步子智能体执行异常：{_truncate_text(error, 300)}"
@@ -1271,7 +1370,7 @@ def _sync_task_failure_outcome(
     return TASK_STATUS_FAILED, _append_partial_report(report, partial_report), error, result_meta
 
 
-_SYNC_TASK_CANCEL_REASONS = frozenset({"subagent_task_cancelled", "subagent_task_closed"})
+_SYNC_TASK_CANCEL_REASONS = frozenset({"subagent_task_cancelled", "subagent_task_closed", "subagent_lease_lost"})
 
 
 def _is_sync_task_cancellation(exc: BaseException) -> bool:
@@ -1351,26 +1450,32 @@ async def _run_registered_sync_task(
 ) -> Any:
     """执行已登记的同步任务：过程双写、心跳续租、统一收口。"""
 
-    event_writer = service.create_event_writer(started)
-    await event_writer.start()
-    parent_writer = _get_subagent_stream_writer(True, get_stream_writer)
-    writer = _tee_stream_writers(event_writer, parent_writer)
+    lease_started_at = asyncio.get_running_loop().time()
     progress: dict[str, Any] = {"phase": "running"}
     partial_state: dict[str, Any] = {}
-    heartbeat = asyncio.create_task(
-        _watch_background_task(
-            started.task_id,
-            started.owner_token or "",
-            progress,
-            asyncio.current_task(),
-            service,
-        ),
-        name=f"chatdata-subagent-sync-watch-{started.task_id}",
-    )
+    heartbeat: asyncio.Task | None = None
+    event_writer: Any = None
     command: Any = None
     failure: BaseException | None = None
     history: list[Any] | None = None
     try:
+        lease_seconds = await _read_task_lease_seconds()
+        heartbeat = asyncio.create_task(
+            _watch_background_task(
+                started.task_id,
+                started.owner_token or "",
+                progress,
+                asyncio.current_task(),
+                service,
+                lease_seconds=lease_seconds,
+                lease_started_at=lease_started_at,
+            ),
+            name=f"chatdata-subagent-sync-watch-{started.task_id}",
+        )
+        event_writer = service.create_event_writer(started)
+        await event_writer.start()
+        parent_writer = _get_subagent_stream_writer(True, get_stream_writer)
+        writer = _tee_stream_writers(event_writer, parent_writer)
         if history_loader is not None:
             history = await history_loader()
         command = await _build_task_tool_impl(
@@ -1395,13 +1500,8 @@ async def _run_registered_sync_task(
     except BaseException as exc:
         failure = exc
     finally:
-        heartbeat.cancel()
-        with suppress(asyncio.CancelledError):
-            await heartbeat
-        try:
-            await event_writer.aclose()
-        except Exception:
-            logger.warning("[tools] 同步子智能体过程流关闭失败: task_id=%s", started.task_id, exc_info=True)
+        await _stop_watcher(heartbeat)
+        await _close_subagent_event_writer(event_writer, started.task_id, scope="同步")
 
     if failure is None:
         status, report, error, result_meta = _sync_task_outcome(command, partial_state)

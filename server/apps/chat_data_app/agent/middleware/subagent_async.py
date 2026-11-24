@@ -779,24 +779,92 @@ def _append_partial_report(report: str, partial_report: str) -> str:
     return f"{report}\n\n中断前已产出的内容：\n{partial_report}"
 
 
+def _cancel_running_task(running_task: asyncio.Task | None, reason: str) -> None:
+    if running_task is not None and not running_task.done():
+        running_task.cancel(reason)
+
+
+def _normalize_lease_seconds(lease_seconds: float | None) -> float:
+    return max(float(TASK_HEARTBEAT_SECONDS), float(lease_seconds or TASK_HEARTBEAT_SECONDS * 6))
+
+
+def _lease_budget(lease_seconds: float) -> tuple[float, float]:
+    """返回「本地判定租约丢失的时长」和单次心跳超时。"""
+    interval = max(0.05, float(TASK_HEARTBEAT_SECONDS))
+    margin = min(interval, max(0.5, lease_seconds * 0.2))
+    return max(interval, lease_seconds - margin), interval
+
+
+def _should_stop_heartbeat(status: str | None) -> bool:
+    return status is None or status == TASK_STATUS_CANCELLING or status in TERMINAL_TASK_STATUSES
+
+
+def _heartbeat_cancel_reason(status: str | None) -> str:
+    return "subagent_task_cancelled" if status == TASK_STATUS_CANCELLING else "subagent_task_closed"
+
+
+async def _heartbeat_once(
+    task_id: str,
+    owner_token: str,
+    progress: dict[str, Any],
+    service: SubagentTaskPort,
+    *,
+    timeout: float,
+) -> tuple[bool, str | None]:
+    """执行单次心跳；返回 (是否成功, 账本状态)。失败时不更新本地续租时间。"""
+    try:
+        status = await asyncio.wait_for(
+            service.heartbeat_task(task_id, owner_token, dict(progress)),
+            timeout=timeout,
+        )
+    except TimeoutError:
+        logger.warning("[tools] 后台任务心跳超时，等待下轮重试: task_id=%s timeout_s=%.1f", task_id, timeout)
+        return False, None
+    except Exception:
+        logger.warning("[tools] 后台任务心跳失败，下轮重试: task_id=%s", task_id, exc_info=True)
+        return False, None
+    return True, status
+
+
 async def _watch_background_task(
     task_id: str,
     owner_token: str,
     progress: dict[str, Any],
     running_task: asyncio.Task | None,
     service: SubagentTaskPort,
+    *,
+    lease_seconds: float | None = None,
+    lease_started_at: float | None = None,
 ) -> None:
-    """心跳续租并观察跨 worker 取消；租约丢失/终态时停止本地执行。"""
+    """心跳续租并观察跨 worker 取消；本地租约到期/租约丢失时停止执行。"""
+    loop = asyncio.get_running_loop()
+    last_ok_at = lease_started_at if lease_started_at is not None else loop.time()
+    lease_seconds = _normalize_lease_seconds(lease_seconds)
+    lease_lost_after, heartbeat_timeout = _lease_budget(lease_seconds)
+
     while True:
-        await asyncio.sleep(TASK_HEARTBEAT_SECONDS)
-        try:
-            status = await service.heartbeat_task(task_id, owner_token, dict(progress))
-        except Exception:
-            logger.warning("[tools] 后台任务心跳失败，下轮重试: task_id=%s", task_id, exc_info=True)
-            continue
-        if status is None or status == TASK_STATUS_CANCELLING or status in TERMINAL_TASK_STATUSES:
-            if running_task is not None and not running_task.done():
-                running_task.cancel(
-                    "subagent_task_cancelled" if status == TASK_STATUS_CANCELLING else "subagent_task_closed"
-                )
+        remaining = lease_lost_after - (loop.time() - last_ok_at)
+        if remaining > 0:
+            ok, status = await _heartbeat_once(
+                task_id,
+                owner_token,
+                progress,
+                service,
+                # 单次心跳不能越过本地租约截止时间，否则慢查询会吃掉余量。
+                timeout=min(heartbeat_timeout, remaining),
+            )
+            if ok:
+                last_ok_at = loop.time()
+                if _should_stop_heartbeat(status):
+                    _cancel_running_task(running_task, _heartbeat_cancel_reason(status))
+                    return
+            remaining = lease_lost_after - (loop.time() - last_ok_at)
+        if remaining <= 0:
+            logger.error(
+                "[tools] 后台任务本地租约已到期，停止执行: task_id=%s lease_s=%.1f",
+                task_id,
+                lease_seconds,
+            )
+            _cancel_running_task(running_task, "subagent_lease_lost")
             return
+        await asyncio.sleep(min(float(TASK_HEARTBEAT_SECONDS), remaining))
