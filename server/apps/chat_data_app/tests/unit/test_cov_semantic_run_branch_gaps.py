@@ -300,53 +300,17 @@ async def test_prepare_context_without_datasource_returns_empty_context(monkeypa
     context = await context_module.prepare_semantic_conversation_context(
         datasource_id="  ",
         semantic_config_id="cfg",
-        member_datasource_ids=["m1"],
         user_id="u",
-        username="n",
-        user_query="查询订单",
     )
 
     assert context.datasource_id is None
     assert context.semantic_config_error == "未找到可用指标集: cfg"
-    assert context.selected_member_datasource_ids == ["m1"]
 
 
 def test_semantic_config_error_reports_disabled_config():
     assert context_module._semantic_config_error(semantic_config_id="cfg", resolved_config={"enabled": False}) == (
         "当前指标集未启用: cfg"
     )
-
-
-@pytest.mark.asyncio
-async def test_load_authorized_targets_falls_back_without_datasource_meta():
-    class _Manager:
-        async def get_authorized_execution_datasources_async(self, datasource_id, member_ids, *, user_id, username):
-            assert datasource_id == "ds"
-            return [{"member_datasource_id": member_ids[0], "user_id": user_id, "user": username}, "junk"]
-
-    targets = await context_module._load_authorized_execution_targets(
-        manager=_Manager(),
-        datasource_id="ds",
-        datasource_meta=None,
-        member_datasource_ids=["m1"],
-        user_id="u",
-        username="n",
-    )
-
-    assert targets == [{"member_datasource_id": "m1", "user_id": "u", "user": "n"}]
-
-
-def test_match_execution_targets_skips_target_without_id_and_overlapping_span():
-    targets = [
-        {"member_datasource_id": "", "member_name": "无编号机构"},
-        {"member_datasource_id": "m1", "member_name": "ab"},
-        {"member_datasource_id": "m2", "member_name": "bc"},
-    ]
-
-    assert context_module.match_execution_targets_from_query(targets, "abc") == ["m1"]
-
-
-# ---------------------------------------------------------------- ai / bi adapters
 
 
 @pytest.fixture

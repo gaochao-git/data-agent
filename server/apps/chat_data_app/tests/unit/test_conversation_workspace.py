@@ -217,16 +217,11 @@ def _analysis_query_state(
     paths,
     *,
     datasource_id: str | None = "ds_1",
-    member_datasource_ids: list[str] | None = None,
     conversation_id: str | None = None,
     user_query: str = "统计销售额",
 ) -> dict:
     return {
-        "execution_context": {
-            "datasource_id": datasource_id,
-            "available_member_datasource_ids": member_datasource_ids or ["m1"],
-            "matched_member_datasource_ids": [],
-        },
+        "execution_context": {"datasource_id": datasource_id},
         "user_id": "system",
         "conversation_id": conversation_id,
         "workspace": {"workspace_root": paths["root"], "workspace_backend": "local"},

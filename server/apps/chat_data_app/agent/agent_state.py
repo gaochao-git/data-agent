@@ -76,11 +76,9 @@ def merge_string_names(
 
 
 class ExecutionContext(TypedDict, total=False):
-    """工具执行所需的数据源和执行对象范围。"""
+    """工具执行所需的数据源；成员范围与权限统一由业务层在执行时判定。"""
 
     datasource_id: str | None
-    available_member_datasource_ids: list[str]
-    matched_member_datasource_ids: list[str]
 
 
 class ConversationWorkspaceContext(TypedDict, total=False):

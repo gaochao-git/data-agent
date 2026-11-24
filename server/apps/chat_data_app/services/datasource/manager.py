@@ -704,7 +704,9 @@ class DataSourceManager:
         normalized_selected_ids = self._normalize_selected_member_ids(datasource, member_datasource_ids, member_map)
         invalid_ids = [member_id for member_id in normalized_selected_ids if member_id not in member_map]
         if invalid_ids:
-            raise ValueError(f"成员数据源不存在或不属于当前组: {', '.join(invalid_ids)}")
+            raise ValueError(
+                f"成员数据源不存在或不属于当前组: {', '.join(invalid_ids)}；当前可用执行对象: {', '.join(member_map)}"
+            )
         return [
             self._build_execution_target(datasource, member_id, member_map[member_id])
             for member_id in normalized_selected_ids

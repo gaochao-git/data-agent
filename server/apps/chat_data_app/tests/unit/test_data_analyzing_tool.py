@@ -53,16 +53,12 @@ def _internal_query_payload(result: str) -> dict:
 def _semantic_query_state(
     *,
     datasource_id: str = "ds_a",
-    available_member_datasource_ids: list[str] | None = None,
-    matched_member_datasource_ids: list[str] | None = None,
     **state: object,
 ) -> dict:
     return {
         **state,
         "execution_context": {
             "datasource_id": datasource_id,
-            "available_member_datasource_ids": available_member_datasource_ids or [],
-            "matched_member_datasource_ids": matched_member_datasource_ids or [],
         },
     }
 
@@ -219,7 +215,6 @@ def test_execute_query_returns_query_result_or_error(monkeypatch):
         return {"success": False, "error": "表不存在"}
 
     state = _semantic_query_state(
-        available_member_datasource_ids=["m1"],
         user_id="user_a",
         operator_name="测试用户",
         semantic_config_id="cfg_a",
@@ -308,7 +303,6 @@ def test_execute_query_allows_model_selected_member_ids(monkeypatch):
         return {"success": True, "columns": ["id"], "data": [{"id": 1}], "total_count": 1}
 
     state = _semantic_query_state(
-        available_member_datasource_ids=["org_b", "org_c"],
         semantic_config_id="cfg_a",
         messages=[HumanMessage(content="查指定机构订单")],
     )
@@ -337,7 +331,7 @@ def test_execute_query_allows_model_selected_member_ids(monkeypatch):
     assert captured["member_datasource_ids"] == ["org_b", "org_c"]
 
 
-def test_execute_query_allows_member_ids_from_available_scope(monkeypatch):
+def test_execute_query_accepts_member_ids_without_state_snapshot(monkeypatch):
     from langchain_core.messages import HumanMessage
 
     class FakeGenerator:
@@ -357,7 +351,6 @@ def test_execute_query_allows_member_ids_from_available_scope(monkeypatch):
         return {"success": True, "columns": ["id"], "data": [{"id": 1}], "total_count": 1}
 
     state = _semantic_query_state(
-        available_member_datasource_ids=["org_a", "org_b"],
         semantic_config_id="cfg_a",
         messages=[HumanMessage(content="查 org_b 订单")],
     )
@@ -403,7 +396,6 @@ def test_execute_query_does_not_default_to_state_member_ids(monkeypatch):
         raise AssertionError("member_datasource_ids must be a tool parameter")
 
     state = _semantic_query_state(
-        available_member_datasource_ids=["org_a", "org_b"],
         semantic_config_id="cfg_a",
         messages=[HumanMessage(content="查订单")],
     )
@@ -423,140 +415,6 @@ def test_execute_query_does_not_default_to_state_member_ids(monkeypatch):
                 state=state,
             )
         )
-
-
-def test_execute_query_rejects_member_ids_outside_available_scope(monkeypatch):
-    from langchain_core.messages import HumanMessage
-
-    class FakeGenerator:
-        def __init__(self, config):
-            assert config["id"] == "cfg_a"
-
-        def generate_sql(self, **_kwargs):
-            return {"success": True, "sql": "select 1"}
-
-    async def fake_load_config(*_args, **_kwargs):
-        return {"id": "cfg_a", "metrics": [], "dimensions": []}
-
-    async def fail_execute_sql_real(*_args, **_kwargs):
-        raise AssertionError("should not execute unavailable member id")
-
-    state = _semantic_query_state(
-        available_member_datasource_ids=["org_a", "org_b"],
-        semantic_config_id="cfg_a",
-        messages=[HumanMessage(content="查指定机构订单")],
-    )
-
-    tool = data_analyzing.create_data_analyzing_tool()
-    monkeypatch.setattr(data_analyzing, "load_runtime_semantic_config", fake_load_config)
-    monkeypatch.setattr(data_analyzing, "_execute_sql_real", fail_execute_sql_real)
-    from apps.chat_data_app.services.semantic.run import semantic_query_service
-
-    monkeypatch.setattr(semantic_query_service, "SemanticAIQueryAdapter", FakeGenerator)
-
-    with pytest.raises(ValueError, match="本次查询包含不可用的执行对象 org_c"):
-        asyncio.run(
-            tool.ainvoke(
-                {
-                    **_execute_payload(
-                        dsl={"metrics": ["订单数"]},
-                        semantic_config_id="cfg_a",
-                        member_datasource_ids=["org_b", "org_c"],
-                    ),
-                    "state": state,
-                }
-            )
-        )
-
-
-def test_execute_query_rejects_member_ids_outside_available_member_scope(monkeypatch):
-    from langchain_core.messages import HumanMessage
-
-    class FakeGenerator:
-        def __init__(self, config):
-            assert config["id"] == "cfg_a"
-
-        def generate_sql(self, **_kwargs):
-            return {"success": True, "sql": "select 1"}
-
-    async def fake_load_config(*_args, **_kwargs):
-        return {"id": "cfg_a", "metrics": [], "dimensions": []}
-
-    async def fail_execute_sql_real(*_args, **_kwargs):
-        raise AssertionError("should not execute unavailable member id")
-
-    state = _semantic_query_state(
-        available_member_datasource_ids=["org_a", "org_b"],
-        semantic_config_id="cfg_a",
-        messages=[HumanMessage(content="查指定机构订单")],
-    )
-
-    tool = data_analyzing.create_data_analyzing_tool()
-    monkeypatch.setattr(data_analyzing, "load_runtime_semantic_config", fake_load_config)
-    monkeypatch.setattr(data_analyzing, "_execute_sql_real", fail_execute_sql_real)
-    from apps.chat_data_app.services.semantic.run import semantic_query_service
-
-    monkeypatch.setattr(semantic_query_service, "SemanticAIQueryAdapter", FakeGenerator)
-
-    with pytest.raises(ValueError, match="本次查询包含不可用的执行对象 org_c"):
-        asyncio.run(
-            tool.ainvoke(
-                {
-                    **_execute_payload(
-                        dsl={"metrics": ["订单数"]},
-                        semantic_config_id="cfg_a",
-                        member_datasource_ids=["org_c"],
-                    ),
-                    "state": state,
-                }
-            )
-        )
-
-
-def test_execute_query_rejects_member_ids_conflicting_with_matched_scope(monkeypatch):
-    from langchain_core.messages import HumanMessage
-
-    class FakeGenerator:
-        def __init__(self, config):
-            assert config["id"] == "cfg_a"
-
-        def generate_sql(self, **_kwargs):
-            return {"success": True, "sql": "select 1"}
-
-    async def fake_load_config(*_args, **_kwargs):
-        return {"id": "cfg_a", "metrics": [], "dimensions": []}
-
-    async def fail_execute_sql_real(*_args, **_kwargs):
-        raise AssertionError("should not execute member id that conflicts with exact query match")
-
-    state = _semantic_query_state(
-        available_member_datasource_ids=["org_a", "org_b"],
-        matched_member_datasource_ids=["org_b"],
-        semantic_config_id="cfg_a",
-        messages=[HumanMessage(content="查机构B订单")],
-    )
-
-    tool = data_analyzing.create_data_analyzing_tool()
-    monkeypatch.setattr(data_analyzing, "load_runtime_semantic_config", fake_load_config)
-    monkeypatch.setattr(data_analyzing, "_execute_sql_real", fail_execute_sql_real)
-    from apps.chat_data_app.services.semantic.run import semantic_query_service
-
-    monkeypatch.setattr(semantic_query_service, "SemanticAIQueryAdapter", FakeGenerator)
-
-    with pytest.raises(ValueError, match="与用户问题中指定的机构不一致") as exc_info:
-        asyncio.run(
-            tool.ainvoke(
-                {
-                    **_execute_payload(
-                        dsl={"metrics": ["订单数"]},
-                        semantic_config_id="cfg_a",
-                        member_datasource_ids=["org_a"],
-                    ),
-                    "state": state,
-                }
-            )
-        )
-    assert "org_b" in str(exc_info.value)
 
 
 def test_execute_query_requires_member_ids(monkeypatch):
@@ -576,7 +434,6 @@ def test_execute_query_requires_member_ids(monkeypatch):
         raise AssertionError("should not execute without explicit member ids")
 
     state = _semantic_query_state(
-        available_member_datasource_ids=["m1", "m2"],
         semantic_config_id="cfg_a",
         messages=[HumanMessage(content="查订单")],
     )
@@ -594,50 +451,6 @@ def test_execute_query_requires_member_ids(monkeypatch):
                 action="execute_query",
                 action_payload={"dsl": {"metrics": ["订单数"]}, "semantic_config_id": "cfg_a"},
                 state=state,
-            )
-        )
-
-
-def test_execute_query_rejects_empty_available_member_scope(monkeypatch):
-    from langchain_core.messages import HumanMessage
-
-    class FakeGenerator:
-        def __init__(self, config):
-            assert config["id"] == "cfg_a"
-
-        def generate_sql(self, **_kwargs):
-            return {"success": True, "sql": "select 1"}
-
-    async def fake_load_config(*_args, **_kwargs):
-        return {"id": "cfg_a", "metrics": [], "dimensions": []}
-
-    async def fail_execute_sql_real(*_args, **_kwargs):
-        raise AssertionError("should not execute without request-visible member ids")
-
-    state = _semantic_query_state(
-        available_member_datasource_ids=[],
-        semantic_config_id="cfg_a",
-        messages=[HumanMessage(content="查订单")],
-    )
-
-    tool = data_analyzing.create_data_analyzing_tool()
-    monkeypatch.setattr(data_analyzing, "load_runtime_semantic_config", fake_load_config)
-    monkeypatch.setattr(data_analyzing, "_execute_sql_real", fail_execute_sql_real)
-    from apps.chat_data_app.services.semantic.run import semantic_query_service
-
-    monkeypatch.setattr(semantic_query_service, "SemanticAIQueryAdapter", FakeGenerator)
-
-    with pytest.raises(ValueError, match="本次请求没有可用执行对象"):
-        asyncio.run(
-            tool.ainvoke(
-                {
-                    **_execute_payload(
-                        dsl={"metrics": ["订单数"]},
-                        semantic_config_id="cfg_a",
-                        member_datasource_ids=["org_a"],
-                    ),
-                    "state": state,
-                }
             )
         )
 
@@ -659,7 +472,6 @@ def test_execute_query_rejects_sql_inside_dsl(monkeypatch):
         return {"success": True, "sql": sql, "columns": ["v"], "data": [{"v": 1}], "total_count": 1}
 
     state = _semantic_query_state(
-        available_member_datasource_ids=["m1"],
         semantic_config_id="cfg_a",
         messages=[
             HumanMessage(content="上一轮问题"),
@@ -744,7 +556,6 @@ def test_execute_query_executes_top_level_sql_in_sql_mode(monkeypatch):
         return {"success": True, "columns": ["v"], "data": [{"v": 1}], "total_count": 1}
 
     state = _semantic_query_state(
-        available_member_datasource_ids=["org_a"],
         semantic_config_id="cfg_a",
         user_id="user_a",
         operator_name="测试用户",
@@ -829,7 +640,6 @@ def test_execute_query_validation_and_compile_error_branches(monkeypatch):
                         member_datasource_ids=["m1"],
                     ),
                     "state": _semantic_query_state(
-                        available_member_datasource_ids=["m1"],
                         semantic_config_id="cfg_a",
                     ),
                 }
@@ -845,7 +655,6 @@ def test_execute_query_validation_and_compile_error_branches(monkeypatch):
                         member_datasource_ids=["m1"],
                     ),
                     "state": _semantic_query_state(
-                        available_member_datasource_ids=["m1"],
                         semantic_config_id="cfg_a",
                     ),
                 }
@@ -899,7 +708,6 @@ def test_execute_query_returns_large_internal_result_for_middleware(monkeypatch)
         }
 
     state = _semantic_query_state(
-        available_member_datasource_ids=["m1"],
         user_id="user_a",
         operator_name="测试用户",
         semantic_config_id="cfg_a",
@@ -1492,22 +1300,6 @@ def test_list_execution_targets_requires_datasource():
                     "state": {},
                 }
             )
-        )
-
-
-def test_validate_member_scope_error_includes_available_list():
-    """member 范围报错必须带当前可用执行对象清单，模型可自行纠正而不是再问一轮。"""
-    with pytest.raises(ValueError, match="当前可用执行对象: m1, m2"):
-        data_analyzing._validate_member_scope(
-            requested_member_datasource_ids=[],
-            available_member_datasource_ids=["m1", "m2"],
-            matched_member_datasource_ids=[],
-        )
-    with pytest.raises(ValueError, match="当前可用执行对象: m1, m2"):
-        data_analyzing._validate_member_scope(
-            requested_member_datasource_ids=["m3"],
-            available_member_datasource_ids=["m1", "m2"],
-            matched_member_datasource_ids=[],
         )
 
 

@@ -42,7 +42,6 @@ class RunContext(_RunContextRequired, total=False):
     """
 
     datasource_id: str | None
-    member_datasource_ids: list[Any]
     semantic_config_id: str | None
     model_id: Any
     file_selections: list[str]
@@ -78,7 +77,6 @@ def build_run_context(
         "task_source": source.value,
         "query": query,
         "datasource_id": run_options.datasource_id,
-        "member_datasource_ids": run_options.member_datasource_ids,
         "semantic_config_id": run_options.semantic_config_id,
         "model_id": run_options.model_id,
         "file_selections": run_options.file_selections,

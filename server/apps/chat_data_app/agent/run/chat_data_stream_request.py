@@ -35,7 +35,6 @@ class ChatDataStreamRequest:
     user_id: str
     datasource_id: str | None = None
     username: str | None = None
-    member_datasource_ids: list[str] | None = None
     semantic_config_id: str | None = None
     request: Request | None = None
     model_id: str | None = None

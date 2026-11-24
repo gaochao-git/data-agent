@@ -1333,113 +1333,6 @@ def test_generate_chat_data_stream_emits_tool_message_usage_and_done(monkeypatch
     assert fake_graph.initial_state["operator_name"] == "测试用户"
 
 
-def test_generate_chat_data_stream_projects_visible_members_from_shared_context(monkeypatch):
-    import asyncio
-
-    captured_agent_kwargs = {}
-    fake_graph = _FakeGraph(
-        events=[(_FakeMessageChunk(content="已完成"), {"langgraph_node": "model"})],
-        state=SimpleNamespace(tasks=[], values={}),
-    )
-
-    monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
-
-    def create_agent(_runtime_options, **kwargs):
-        captured_agent_kwargs.update(kwargs)
-        return fake_graph
-
-    monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", create_agent)
-
-    asyncio.run(
-        _collect_async_iter(
-            _generate_chat_data_stream(
-                ChatDataStreamRequest(
-                    thread_id="conv_query_members",
-                    user_query="查询所有机构订单数",
-                    datasource_id="ds_a",
-                    user_id="user_a",
-                    member_datasource_ids=["m1"],
-                    semantic_config_id="cfg_a",
-                )
-            )
-        )
-    )
-
-    assert fake_graph.initial_state["execution_context"]["available_member_datasource_ids"] == ["m1"]
-    assert fake_graph.initial_state["execution_context"]["matched_member_datasource_ids"] == ["m1"]
-
-
-def test_generate_chat_data_stream_keeps_empty_member_scope_from_shared_context(monkeypatch):
-    import asyncio
-
-    captured_agent_kwargs = {}
-    fake_graph = _FakeGraph(
-        events=[(_FakeMessageChunk(content="已完成"), {"langgraph_node": "model"})],
-        state=SimpleNamespace(tasks=[], values={}),
-    )
-
-    monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
-
-    def create_agent(_runtime_options, **kwargs):
-        captured_agent_kwargs.update(kwargs)
-        return fake_graph
-
-    monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", create_agent)
-
-    asyncio.run(
-        _collect_async_iter(
-            _generate_chat_data_stream(
-                ChatDataStreamRequest(
-                    thread_id="conv_query_members",
-                    user_query="查询所有机构订单数",
-                    datasource_id="ds_a",
-                    user_id="user_a",
-                    member_datasource_ids=[],
-                    semantic_config_id="cfg_a",
-                )
-            )
-        )
-    )
-
-    assert fake_graph.initial_state["execution_context"]["available_member_datasource_ids"] == []
-    assert fake_graph.initial_state["execution_context"]["matched_member_datasource_ids"] == []
-
-
-def test_generate_chat_data_stream_projects_selected_member_scope_from_shared_context(monkeypatch):
-    import asyncio
-
-    captured_agent_kwargs = {}
-    fake_graph = _FakeGraph(
-        events=[(_FakeMessageChunk(content="已完成"), {"langgraph_node": "model"})],
-        state=SimpleNamespace(tasks=[], values={}),
-    )
-
-    monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
-
-    def create_agent(_runtime_options, **kwargs):
-        captured_agent_kwargs.update(kwargs)
-        return fake_graph
-
-    monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", create_agent)
-
-    asyncio.run(
-        _collect_async_iter(
-            _generate_chat_data_stream(
-                ChatDataStreamRequest(
-                    thread_id="conv_query_member_selected",
-                    user_query="查询订单数",
-                    datasource_id="ds_a",
-                    user_id="user_a",
-                    member_datasource_ids=["m1"],
-                    semantic_config_id="cfg_a",
-                )
-            )
-        )
-    )
-
-    assert fake_graph.initial_state["execution_context"]["available_member_datasource_ids"] == ["m1"]
-
-
 def test_generate_chat_data_stream_emits_error_when_graph_fails(monkeypatch):
     import asyncio
 
@@ -1717,7 +1610,7 @@ def test_sql_completion_handler_wraps_stream(monkeypatch):
     assert any("event: heartbeat" in chunk for chunk in chunks)
     runtime_context = captured["start_run_args"][3]
     assert captured["start_run_args"][:3] == ("conv_sql", "u1", "测试用户")
-    assert runtime_context["member_datasource_ids"] == ["m1"]
+    assert "member_datasource_ids" not in runtime_context
     assert runtime_context["semantic_config_id"] == "cfg"
     assert runtime_context["model_id"] == "m1"
     # 请求到达墙钟随 Run 行透传（harness 首 token / 任务总耗时起点）

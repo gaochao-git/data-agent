@@ -562,21 +562,15 @@ async def _resolve_workspace_created_date(thread_id: str, user_id: str | None) -
 async def _prepare_agent_semantic_context(
     *,
     thread_id: str,
-    user_query: str,
     datasource_id: str | None,
     user_id: str | None,
-    username: str | None,
-    member_datasource_ids: list[str] | None,
     semantic_config_id: str | None,
 ) -> SemanticConversationContext:
     """准备语义会话上下文并校验数据源绑定；致命失败抛 _AgentRunPreparationError。"""
     semantic_context = await prepare_semantic_conversation_context(
         datasource_id=datasource_id,
         semantic_config_id=semantic_config_id,
-        member_datasource_ids=member_datasource_ids,
         user_id=user_id,
-        username=username,
-        user_query=user_query,
     )
     if semantic_context.semantic_config_error:
         logger.warning("智能问数指标集准备失败: %s", semantic_context.semantic_config_error)
@@ -770,11 +764,7 @@ def _resolve_agent_initial_state(
         operator_name=operator_name,
         conversation_id=conversation_id,
         messages=[*(adopted_messages or []), *([user_message] if user_message else [])],
-        execution_context={
-            "datasource_id": datasource_id,
-            "available_member_datasource_ids": semantic_context.available_member_datasource_ids,
-            "matched_member_datasource_ids": semantic_context.matched_member_datasource_ids,
-        },
+        execution_context={"datasource_id": datasource_id},
         workspace={
             "workspace_root": workspace_root,
             "workspace_backend": runtime_options.workspace_backend,

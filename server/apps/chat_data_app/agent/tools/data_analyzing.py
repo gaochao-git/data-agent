@@ -101,8 +101,6 @@ class _ResolvedToolContext:
     operator_name: str | None
     conversation_id: str | None
     member_datasource_ids: list[str]
-    available_member_datasource_ids: list[str]
-    matched_member_datasource_ids: list[str]
 
 
 @dataclass(frozen=True)
@@ -139,13 +137,6 @@ def _get_datasource_id_from_state(state: dict | None) -> str | None:
     context = _get_execution_context(state)
     datasource_id = str(context.get("datasource_id") or "").strip()
     return datasource_id or None
-
-
-def _get_member_scope_from_state(state: dict | None) -> tuple[list[str], list[str]]:
-    context = _get_execution_context(state)
-    available_member_ids = normalize_member_datasource_ids(context.get("available_member_datasource_ids"))
-    matched_member_ids = normalize_member_datasource_ids(context.get("matched_member_datasource_ids"))
-    return available_member_ids, matched_member_ids
 
 
 def _prepare_tool_request(
@@ -189,7 +180,6 @@ async def _resolve_tool_context(
 
     query_text = _latest_human_query(state.get("messages") or [])
     requested_member_datasource_ids = normalize_member_datasource_ids(member_datasource_ids)
-    available_member_datasource_ids, matched_member_datasource_ids = _get_member_scope_from_state(state)
 
     return _ResolvedToolContext(
         state=state,
@@ -200,44 +190,7 @@ async def _resolve_tool_context(
         operator_name=str(state.get("operator_name") or "").strip() or None,
         conversation_id=str(state.get("conversation_id") or "").strip() or None,
         member_datasource_ids=requested_member_datasource_ids,
-        available_member_datasource_ids=available_member_datasource_ids,
-        matched_member_datasource_ids=matched_member_datasource_ids,
     )
-
-
-def _validate_member_scope(
-    *,
-    requested_member_datasource_ids: list[str],
-    available_member_datasource_ids: list[str],
-    matched_member_datasource_ids: list[str],
-) -> None:
-    if not available_member_datasource_ids:
-        raise ValueError("本次请求没有可用执行对象，请先选择有权限的数据源后再查询")
-    if not requested_member_datasource_ids:
-        raise ValueError(
-            "缺少 member_datasource_ids，请从当前可用执行对象中明确选择本次查询范围；"
-            f"当前可用执行对象: {', '.join(available_member_datasource_ids)}"
-        )
-    if matched_member_datasource_ids:
-        invalid_matched_member_ids = [
-            member_id for member_id in requested_member_datasource_ids if member_id not in matched_member_datasource_ids
-        ]
-        if invalid_matched_member_ids:
-            raise ValueError(
-                "本次查询的执行对象与用户问题中指定的机构不一致；"
-                f"请只使用用户问题精确匹配到的 member_datasource_ids: {', '.join(matched_member_datasource_ids)}"
-            )
-
-    invalid_member_ids = [
-        member_id for member_id in requested_member_datasource_ids if member_id not in available_member_datasource_ids
-    ]
-    if invalid_member_ids:
-        raise ValueError(
-            f"本次查询包含不可用的执行对象 {', '.join(invalid_member_ids)}；"
-            "请只使用可用执行对象中的 member_datasource_ids，"
-            f"当前可用执行对象: {', '.join(available_member_datasource_ids)}"
-        )
-    return None
 
 
 async def _compile_tool_query(
@@ -325,7 +278,7 @@ async def _run_execute_query(
     member_datasource_ids: list[str] | None = None,
     state: dict | None = None,
 ) -> str:
-    """执行查询动作的主体：编译 -> 执行对象范围校验 -> 执行 -> 内部协议返回。"""
+    """执行查询动作的主体：编译 -> 执行（成员权限由业务层在执行时判定）-> 内部协议返回。"""
     prepared_request = _prepare_tool_request(dsl=dsl, sql=sql)
 
     context = await _resolve_tool_context(
@@ -335,11 +288,6 @@ async def _run_execute_query(
     )
 
     query = await _compile_tool_query(request=prepared_request, context=context)
-    _validate_member_scope(
-        requested_member_datasource_ids=context.member_datasource_ids,
-        available_member_datasource_ids=context.available_member_datasource_ids,
-        matched_member_datasource_ids=context.matched_member_datasource_ids,
-    )
 
     query_result = await _execute_tool_query(context, query)
 

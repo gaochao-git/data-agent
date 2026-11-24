@@ -45,9 +45,6 @@ def _stub_datasource_binding(monkeypatch):
 def _semantic_context_from_request(**kwargs) -> SemanticConversationContext:
     datasource_id = str(kwargs.get("datasource_id") or "").strip() or None
     semantic_config_id = str(kwargs.get("semantic_config_id") or "").strip() or None
-    selected_member_ids = list(
-        dict.fromkeys(str(item).strip() for item in kwargs.get("member_datasource_ids") or [] if str(item).strip())
-    )
     semantic_config = (
         {"id": semantic_config_id, "name": semantic_config_id, "metrics": [], "dimensions": []}
         if semantic_config_id
@@ -58,10 +55,6 @@ def _semantic_context_from_request(**kwargs) -> SemanticConversationContext:
         datasource_meta={"query_context": ""} if datasource_id else None,
         semantic_config_id=semantic_config_id,
         semantic_config=semantic_config,
-        execution_targets=[],
-        available_member_datasource_ids=selected_member_ids,
-        matched_member_datasource_ids=[],
-        selected_member_datasource_ids=selected_member_ids,
     )
 
 

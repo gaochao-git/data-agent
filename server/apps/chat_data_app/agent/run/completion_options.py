@@ -18,7 +18,6 @@ class CompletionRunOptions:
     model_id: Any
     enable_thinking: Any
     thinking_effort: Any
-    member_datasource_ids: list
     file_selections: list[str]
     skill_names: list[str]
     quoted_snippets: list[dict[str, str]]
@@ -209,7 +208,6 @@ def parse_completion_run_options(options: dict[str, Any] | None) -> CompletionRu
         model_id=options_data.get("model_id"),
         enable_thinking=normalize_enable_thinking(options_data.get("enable_thinking")),
         thinking_effort=normalize_thinking_effort(options_data.get("thinking_effort")),
-        member_datasource_ids=options_data.get("member_datasource_ids") or [],
         file_selections=parse_file_selections(options_data.get("file_selections")),
         skill_names=skill_names,
         quoted_snippets=parse_quoted_snippets(options_data.get("quoted_snippets")),

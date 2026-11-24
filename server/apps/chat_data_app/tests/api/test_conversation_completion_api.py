@@ -78,7 +78,6 @@ def _stub_conversation_event_writes(monkeypatch):
                         datasource_id=context.get("datasource_id"),
                         user_id=user_id,
                         username=operator_name,
-                        member_datasource_ids=context.get("member_datasource_ids") or [],
                         semantic_config_id=context.get("semantic_config_id"),
                         request=None,
                         model_id=context.get("model_id"),

@@ -1020,7 +1020,6 @@ async def _generate_chat_data_stream(
     datasource_id = req.datasource_id
     user_id = req.user_id
     username = req.username
-    member_datasource_ids = req.member_datasource_ids
     semantic_config_id = req.semantic_config_id
     request = req.request
     model_id = req.model_id
@@ -1077,7 +1076,6 @@ async def _generate_chat_data_stream(
                 datasource_id=datasource_id,
                 user_id=user_id,
                 username=username,
-                member_datasource_ids=member_datasource_ids,
                 semantic_config_id=semantic_config_id,
                 request=request,
                 model_id=model_id,
@@ -1499,7 +1497,6 @@ async def _run_chat_data_agent_stream(
     datasource_id = req.datasource_id
     user_id = req.user_id
     username = req.username
-    member_datasource_ids = req.member_datasource_ids
     semantic_config_id = req.semantic_config_id
     request = req.request
     model_id = req.model_id
@@ -1529,11 +1526,8 @@ async def _run_chat_data_agent_stream(
         semantic_context, hot_defaults, created_date, file_attachments = await asyncio.gather(
             _prepare_agent_semantic_context(
                 thread_id=thread_id,
-                user_query=user_query,
                 datasource_id=datasource_id,
                 user_id=user_id,
-                username=username,
-                member_datasource_ids=member_datasource_ids,
                 semantic_config_id=semantic_config_id,
             ),
             get_subagent_hot_defaults(),

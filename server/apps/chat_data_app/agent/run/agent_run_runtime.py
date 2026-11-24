@@ -333,7 +333,6 @@ class AgentRunRuntime:
                     datasource_id=context.get("datasource_id"),
                     user_id=prepared["user_id"],
                     username=prepared.get("operator_name") or prepared["user_id"],
-                    member_datasource_ids=context.get("member_datasource_ids") or [],
                     # 请求到达墙钟：优先取 completion/claim 写入 Run 行的盖章
                     # （用户气泡对齐口径）；缺失（定时任务/continuation）回退
                     # 派发时刻，保持原行为。

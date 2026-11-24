@@ -30,29 +30,6 @@ async def test_resolve_context_requires_semantic_config_and_datasource():
         await da._resolve_tool_context(state={}, semantic_config_id="sc-1", member_datasource_ids=None)
 
 
-def test_validate_member_scope_rejects_conflicting_and_unavailable_members():
-    with pytest.raises(ValueError, match="与用户问题中指定的机构不一致"):
-        da._validate_member_scope(
-            requested_member_datasource_ids=["m2"],
-            available_member_datasource_ids=["m1", "m2"],
-            matched_member_datasource_ids=["m1"],
-        )
-    with pytest.raises(ValueError, match="包含不可用的执行对象"):
-        da._validate_member_scope(
-            requested_member_datasource_ids=["m9"],
-            available_member_datasource_ids=["m1"],
-            matched_member_datasource_ids=[],
-        )
-
-
-def test_validate_member_scope_accepts_requested_subset_of_matched():
-    da._validate_member_scope(
-        requested_member_datasource_ids=["m1"],
-        available_member_datasource_ids=["m1", "m2"],
-        matched_member_datasource_ids=["m1"],
-    )
-
-
 @pytest.mark.asyncio
 async def test_validate_dashboard_accepts_list_with_card_config(monkeypatch):
     async def _validate(**_kwargs):

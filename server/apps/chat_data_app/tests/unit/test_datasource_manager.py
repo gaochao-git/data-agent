@@ -420,7 +420,10 @@ def test_authorized_execution_datasources_apply_same_org_filter(monkeypatch):
     targets = asyncio.run(manager.get_authorized_execution_datasources_async("ds_a", user_id="u1", username="用户1"))
     assert [target["member_datasource_id"] for target in targets] == ["m_http_allowed"]
     assert targets[0]["member_name"] == "HTTP机构A"
-    with pytest.raises(ValueError, match="成员数据源不存在或不属于当前组"):
+    with pytest.raises(
+        ValueError,
+        match="成员数据源不存在或不属于当前组: m_http_denied；当前可用执行对象: m_http_allowed",
+    ):
         asyncio.run(
             manager.get_authorized_execution_datasources_async(
                 "ds_a", ["m_http_denied"], user_id="u1", username="用户1"
@@ -1638,6 +1641,19 @@ def test_datasource_manager_async_crud_paths(monkeypatch):
         _execution_config_resolver({"user": "u", "password": "p"}),
     )
     asyncio.run(run_checks())
+
+
+def test_normalize_selected_member_ids_falls_back_to_template_or_first_member():
+    """业务层唯一兜底：未指定成员时用模板成员，模板缺失时用首个成员；显式传值则原样归一化。"""
+    member_map = {"m1": {}, "m2": {}}
+    assert DataSourceManager._normalize_selected_member_ids({"template_datasource_id": "m2"}, None, member_map) == [
+        "m2"
+    ]
+    assert DataSourceManager._normalize_selected_member_ids({"template_datasource_id": "m2"}, [], member_map) == ["m2"]
+    assert DataSourceManager._normalize_selected_member_ids({}, [], member_map) == ["m1"]
+    assert DataSourceManager._normalize_selected_member_ids(
+        {"template_datasource_id": "missing"}, [" m1 ", "m1", ""], member_map
+    ) == ["m1"]
 
 
 def test_datasource_manager_get_schema_cache_mysql_hive_http_and_errors(monkeypatch):
