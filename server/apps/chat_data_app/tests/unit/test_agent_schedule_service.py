@@ -494,7 +494,7 @@ async def test_list_job_runs_pagination(harness):
                     user_id="user-1",
                     conversation_id="conv-1",
                     plan_time=now - timedelta(minutes=i + 1),
-                    trigger_status="succeeded",
+                    trigger_status="finished",
                     delete_flag=0,
                     create_time=now,
                 )

@@ -19,6 +19,8 @@ CREATE TABLE `chat_data_subagent_session` (
   `latest_task_id` varchar(64) NOT NULL COMMENT '最近一轮任务ID',
   `turn_count` int NOT NULL DEFAULT '1' COMMENT '已完成的对话轮次',
   `messages_json` mediumtext NOT NULL DEFAULT '[]' COMMENT '完整消息历史JSON（每次收口整体覆盖）',
+  `session_status` varchar(16) NOT NULL DEFAULT 'open' COMMENT '会话状态: open-可追问, closed-已永久关闭',
+  `closed_time` datetime DEFAULT NULL COMMENT '永久关闭时间',
   `delete_flag` tinyint NOT NULL DEFAULT '0' COMMENT '删除标识: 0-未删除, 1-已删除',
   `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
@@ -32,17 +34,9 @@ CREATE TABLE `chat_data_subagent_session` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='后台子智能体多轮会话快照';
 ```
 
-子智能体会话永久关闭（已有环境执行；新环境先执行上方 CREATE 再执行本 ALTER）：
-
-```sql
-ALTER TABLE `chat_data_subagent_session`
-  ADD COLUMN `session_status` varchar(16) NOT NULL DEFAULT 'open' COMMENT '会话状态: open-可追问, closed-已永久关闭' AFTER `messages_json`,
-  ADD COLUMN `closed_time` datetime DEFAULT NULL COMMENT '永久关闭时间' AFTER `session_status`;
-```
-
 关闭只阻断后续追问，不删除历史消息；关闭行仍按 `session_id` 可读。关闭是用户侧操作，
 释放当前主对话的一个子智能体额度；主智能体没有关闭工具，只会在额度打满时提示用户处理。
-已有数据默认 `open`，无需回填。
+新建会话默认 `open`，无需额外回填。
 
 ### 子智能体生命周期事件 outbox
 

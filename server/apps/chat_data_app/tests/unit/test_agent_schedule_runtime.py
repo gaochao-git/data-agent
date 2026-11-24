@@ -326,8 +326,58 @@ async def test_finalize_closes_dispatched_trigger_with_run_terminal_state(harnes
 
     async with harness.session_factory() as session:
         trigger = (await session.execute(select(ChatDataAgentScheduleRun))).scalar_one()
-    assert trigger.trigger_status == "succeeded"
+    assert trigger.trigger_status == "finished"
     assert trigger.finished_time is not None
+
+
+@pytest.mark.asyncio
+async def test_finalize_marks_interrupted_run(harness):
+    now = datetime(2026, 9, 12, 9, 0)
+    await harness.seed_job(next_trigger_time=now + timedelta(minutes=10))
+    runtime = harness.make_runtime()
+
+    async with harness.session_factory() as session:
+        session.add(
+            ChatDataAgentScheduleRun(
+                job_id="job-1",
+                user_id=USER_ID,
+                conversation_id=CONVERSATION_ID,
+                plan_time=now - timedelta(minutes=1),
+                trigger_status="dispatched",
+                run_id="run-1",
+                delete_flag=0,
+                create_time=now,
+            )
+        )
+        session.add(
+            ChatDataAgentInbox(
+                conversation_id=CONVERSATION_ID,
+                user_id=USER_ID,
+                run_id="run-1",
+                message_id="run-1",
+                record_type="run",
+                record_content="{}",
+                record_status="interrupted",
+                delete_flag=0,
+                create_time=now,
+            )
+        )
+
+    await runtime.tick(now=now)
+
+    async with harness.session_factory() as session:
+        trigger = (await session.execute(select(ChatDataAgentScheduleRun))).scalar_one()
+    assert trigger.trigger_status == "interrupted"
+    assert trigger.finished_time is not None
+    assert trigger.attempt_count == 0
+
+    # 终态收口后不得回退 pending；再次 tick 也不能产生新的派发。
+    await runtime.tick(now=now)
+    async with harness.session_factory() as session:
+        trigger = (await session.execute(select(ChatDataAgentScheduleRun))).scalar_one()
+    assert trigger.trigger_status == "interrupted"
+    assert trigger.attempt_count == 0
+    assert harness.started == []
 
 
 @pytest.mark.asyncio
@@ -417,7 +467,7 @@ async def test_paused_control_freezes_plan_and_dispatch(harness):
         triggers = list((await session.execute(select(ChatDataAgentScheduleRun))).scalars())
         job = (await session.execute(select(ChatDataAgentSchedule))).scalar_one()
     # 暂停期间不产生新触发实例、不派发，但在途触发照常收口
-    assert [trigger.trigger_status for trigger in triggers] == ["succeeded"]
+    assert [trigger.trigger_status for trigger in triggers] == ["finished"]
     assert job.next_trigger_time == datetime(2026, 9, 12, 8, 59)
     assert len(harness.started) == 0
 

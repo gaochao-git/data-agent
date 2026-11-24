@@ -1049,7 +1049,8 @@ class ChatDataAgentScheduleRun(Base):
     conversation_id: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
     plan_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     # pending-待派发 claimed-已抢占 dispatched-已提交 Agent Run
-    # succeeded/failed/cancelled-随 Run 终态收口 skipped-重试耗尽或窗口过期
+    # finished/failed/cancelled/interrupted-随 Run 终态收口 skipped-重试耗尽或窗口过期
+    # 历史 succeeded 保留原值；业务层读取时统一映射为 finished
     trigger_status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending", server_default="pending")
     trigger_type: Mapped[str] = mapped_column(String(16), nullable=False, default="schedule", server_default="schedule")
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")

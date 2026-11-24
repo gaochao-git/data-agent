@@ -13,7 +13,15 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.chat_data_app.daos.agent_schedule_dao import (
+    SCHEDULE_RUN_STATUS_CANCELLED,
+    SCHEDULE_RUN_STATUS_CLAIMED,
+    SCHEDULE_RUN_STATUS_DISPATCHED,
+    SCHEDULE_RUN_STATUS_FAILED,
+    SCHEDULE_RUN_STATUS_FINISHED,
+    SCHEDULE_RUN_STATUS_INTERRUPTED,
+    SCHEDULE_RUN_STATUS_LEGACY_SUCCEEDED,
     SCHEDULE_RUN_STATUS_PENDING,
+    SCHEDULE_RUN_STATUS_SKIPPED,
     TRIGGER_TYPE_MANUAL,
     AgentScheduleDao,
     agent_schedule_dao,
@@ -64,6 +72,18 @@ logger = get_logger(__name__)
 CONVERSATION_MODE_FIXED = "fixed"
 CONVERSATION_MODE_NEW_EACH_RUN = "new_each_run"
 CONVERSATION_MODES = (CONVERSATION_MODE_FIXED, CONVERSATION_MODE_NEW_EACH_RUN)
+
+
+def _normalize_trigger_status(status: str | None) -> str | None:
+    """业务层统一状态口径：历史 ``succeeded`` 读取时映射为 ``finished``，不回填数据库。"""
+    return SCHEDULE_RUN_STATUS_FINISHED if status == SCHEDULE_RUN_STATUS_LEGACY_SUCCEEDED else status
+
+
+def _serialize_schedule_run(run: ChatDataAgentScheduleRun, run_status: str | None) -> dict[str, Any]:
+    item = run.to_dict(run_status=run_status)
+    item["status"] = _normalize_trigger_status(item["status"])
+    return item
+
 
 # 单个用户可创建的定时任务上限（CHAT_DATA_SCHEDULE_MAX_JOBS_PER_USER）走运行时
 # 热值（get_runtime_setting：表覆盖 > env > 注册默认），改配置无需重启。
@@ -476,7 +496,7 @@ class AgentScheduleService:
                 [run.run_id for run in runs if run.run_id],
             )
             return {
-                "runs": [run.to_dict(run_status=run_statuses.get(run.run_id)) for run in runs],
+                "runs": [_serialize_schedule_run(run, run_statuses.get(run.run_id)) for run in runs],
                 "total": total,
             }
 
@@ -542,13 +562,15 @@ class AgentScheduleService:
                 "total_jobs": total_jobs,
                 "enabled_jobs": enabled_jobs,
                 "total_runs": sum(status_counts.values()),
-                "succeeded_runs": status_counts.get("succeeded", 0),
-                "failed_runs": status_counts.get("failed", 0),
-                "cancelled_runs": status_counts.get("cancelled", 0),
-                "skipped_runs": status_counts.get("skipped", 0),
-                "running_runs": status_counts.get("dispatched", 0)
-                + status_counts.get("claimed", 0)
-                + status_counts.get("pending", 0),
+                "succeeded_runs": status_counts.get(SCHEDULE_RUN_STATUS_FINISHED, 0)
+                + status_counts.get(SCHEDULE_RUN_STATUS_LEGACY_SUCCEEDED, 0),
+                "failed_runs": status_counts.get(SCHEDULE_RUN_STATUS_FAILED, 0),
+                "cancelled_runs": status_counts.get(SCHEDULE_RUN_STATUS_CANCELLED, 0),
+                "interrupted_runs": status_counts.get(SCHEDULE_RUN_STATUS_INTERRUPTED, 0),
+                "skipped_runs": status_counts.get(SCHEDULE_RUN_STATUS_SKIPPED, 0),
+                "running_runs": status_counts.get(SCHEDULE_RUN_STATUS_DISPATCHED, 0)
+                + status_counts.get(SCHEDULE_RUN_STATUS_CLAIMED, 0)
+                + status_counts.get(SCHEDULE_RUN_STATUS_PENDING, 0),
                 "runs_last_24h": runs_last_24h,
             }
 
@@ -612,7 +634,7 @@ class AgentScheduleService:
         last_run = latest_runs.get(job.job_id)
         if last_run is not None:
             last_time = last_run.finished_time or last_run.dispatched_time or last_run.plan_time
-            item["last_run_status"] = last_run.trigger_status
+            item["last_run_status"] = _normalize_trigger_status(last_run.trigger_status)
             item["last_run_time"] = last_time.isoformat() if last_time else None
         else:
             item["last_run_status"] = None
@@ -702,7 +724,7 @@ class AgentScheduleService:
                 [run.run_id for run in runs if run.run_id],
             )
             return {
-                "runs": [run.to_dict(run_status=run_statuses.get(run.run_id)) for run in runs],
+                "runs": [_serialize_schedule_run(run, run_statuses.get(run.run_id)) for run in runs],
                 "total": total,
             }
 

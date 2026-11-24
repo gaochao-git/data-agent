@@ -25,20 +25,23 @@ logger = get_logger(__name__)
 SCHEDULE_RUN_STATUS_PENDING = "pending"
 SCHEDULE_RUN_STATUS_CLAIMED = "claimed"
 SCHEDULE_RUN_STATUS_DISPATCHED = "dispatched"
-SCHEDULE_RUN_STATUS_SUCCEEDED = "succeeded"
+SCHEDULE_RUN_STATUS_FINISHED = "finished"
+SCHEDULE_RUN_STATUS_LEGACY_SUCCEEDED = "succeeded"
 SCHEDULE_RUN_STATUS_FAILED = "failed"
 SCHEDULE_RUN_STATUS_CANCELLED = "cancelled"
+SCHEDULE_RUN_STATUS_INTERRUPTED = "interrupted"
 SCHEDULE_RUN_STATUS_SKIPPED = "skipped"
 
 # 触发来源（chat_data_agent_schedule_run.trigger_type）
 TRIGGER_TYPE_SCHEDULE = "schedule"
 TRIGGER_TYPE_MANUAL = "manual"
 
-# Agent Run 终态 -> 触发实例终态映射；waiting_user 等非终态不在映射内
+# Agent Run 终态 -> 触发实例终态映射；waiting_user 等非终态、定时链路不可达的状态不在映射内
 RUN_STATUS_TO_TRIGGER_STATUS = {
-    "finished": SCHEDULE_RUN_STATUS_SUCCEEDED,
+    "finished": SCHEDULE_RUN_STATUS_FINISHED,
     "failed": SCHEDULE_RUN_STATUS_FAILED,
     "cancelled": SCHEDULE_RUN_STATUS_CANCELLED,
+    "interrupted": SCHEDULE_RUN_STATUS_INTERRUPTED,
 }
 
 
@@ -444,13 +447,21 @@ class AgentScheduleDao:
         expired: bool | None = None,
         now: datetime | None = None,
     ) -> list[tuple[ChatDataAgentSchedule, dict]]:
-        """全量任务分页列表，附每个任务的执行统计（次数/成功/失败/最近执行）。"""
+        """全量任务分页列表，附每个任务的执行统计（次数/成功/失败/取消/中断/最近执行）。"""
         stats = (
             select(
                 ChatDataAgentScheduleRun.job_id.label("job_id"),
                 func.count().label("total_count"),
                 func.sum(
-                    case((ChatDataAgentScheduleRun.trigger_status == SCHEDULE_RUN_STATUS_SUCCEEDED, 1), else_=0)
+                    case(
+                        (
+                            ChatDataAgentScheduleRun.trigger_status.in_(
+                                (SCHEDULE_RUN_STATUS_FINISHED, SCHEDULE_RUN_STATUS_LEGACY_SUCCEEDED)
+                            ),
+                            1,
+                        ),
+                        else_=0,
+                    )
                 ).label("succeeded_count"),
                 func.sum(
                     case((ChatDataAgentScheduleRun.trigger_status == SCHEDULE_RUN_STATUS_FAILED, 1), else_=0)
@@ -458,6 +469,9 @@ class AgentScheduleDao:
                 func.sum(
                     case((ChatDataAgentScheduleRun.trigger_status == SCHEDULE_RUN_STATUS_CANCELLED, 1), else_=0)
                 ).label("cancelled_count"),
+                func.sum(
+                    case((ChatDataAgentScheduleRun.trigger_status == SCHEDULE_RUN_STATUS_INTERRUPTED, 1), else_=0)
+                ).label("interrupted_count"),
                 func.sum(
                     case((ChatDataAgentScheduleRun.trigger_status == SCHEDULE_RUN_STATUS_SKIPPED, 1), else_=0)
                 ).label("skipped_count"),
@@ -479,6 +493,8 @@ class AgentScheduleDao:
                 stats.c.total_count,
                 stats.c.succeeded_count,
                 stats.c.failed_count,
+                stats.c.cancelled_count,
+                stats.c.interrupted_count,
                 stats.c.skipped_count,
                 stats.c.last_plan_time,
             )
@@ -489,7 +505,16 @@ class AgentScheduleDao:
             .limit(max(limit, 1))
         )
         rows: list[tuple[ChatDataAgentSchedule, dict]] = []
-        for job, total_count, succeeded_count, failed_count, skipped_count, last_plan_time in result.all():
+        for (
+            job,
+            total_count,
+            succeeded_count,
+            failed_count,
+            cancelled_count,
+            interrupted_count,
+            skipped_count,
+            last_plan_time,
+        ) in result.all():
             rows.append(
                 (
                     job,
@@ -497,6 +522,8 @@ class AgentScheduleDao:
                         "total_count": int(total_count or 0),
                         "succeeded_count": int(succeeded_count or 0),
                         "failed_count": int(failed_count or 0),
+                        "cancelled_count": int(cancelled_count or 0),
+                        "interrupted_count": int(interrupted_count or 0),
                         "skipped_count": int(skipped_count or 0),
                         "last_plan_time": last_plan_time,
                     },

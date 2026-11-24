@@ -1179,6 +1179,7 @@ export interface AgentScheduleItem {
   succeeded_count?: number
   failed_count?: number
   cancelled_count?: number
+  interrupted_count?: number
   skipped_count?: number
   last_plan_time?: string | null
   last_run_status?: string | null
@@ -1191,7 +1192,7 @@ export interface AgentScheduleRunItem {
   user_id: string
   conversation_id: string
   plan_time: string | null
-  status: 'pending' | 'claimed' | 'dispatched' | 'succeeded' | 'failed' | 'cancelled' | 'skipped'
+  status: 'pending' | 'claimed' | 'dispatched' | 'finished' | 'failed' | 'cancelled' | 'interrupted' | 'skipped'
   trigger_type: 'schedule' | 'manual'
   run_id: string
   run_status: string | null
@@ -1213,6 +1214,7 @@ export interface AgentScheduleOverview {
   succeeded_runs: number
   failed_runs: number
   cancelled_runs: number
+  interrupted_runs: number
   skipped_runs: number
   running_runs: number
   runs_last_24h: number

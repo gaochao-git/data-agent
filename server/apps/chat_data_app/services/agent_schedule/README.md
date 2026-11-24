@@ -47,12 +47,12 @@
 - **停用/删除清退**：任务停用或删除时，其 pending/claimed 触发实例批量置为 cancelled，不产生僵尸。
 - **并发闸门**：派发前按用户检查在途（dispatched 未收口）数量，超过 `CHAT_DATA_SCHEDULE_USER_MAX_CONCURRENCY` 释放回 pending 排队；派发批次受 `CHAT_DATA_SCHEDULE_DISPATCH_BATCH_SIZE` 限制；执行侧并发由 agent_run_runtime 的信号量统一约束。
 - **可重试错误**：会话已有运行中任务（AgentRunConflictError）释放回 pending 重试，`CHAT_DATA_SCHEDULE_MAX_DISPATCH_ATTEMPTS` 次耗尽置 `skipped`；会话不存在等永久错误直接置 `failed`。
-- **终态收口**：dispatched 状态的触发实例随 Agent Run 终态映射（finished→succeeded、failed→failed、cancelled→cancelled）；`waiting_user` 视为未收口，需要用户到会话里回答问题。
+- **终态收口**：dispatched 状态的触发实例随 Agent Run 终态映射（finished→finished、failed→failed、cancelled→cancelled、interrupted→interrupted）；定时任务设置 `disable_user_interaction=True`，不会进入 `waiting_user`。历史 `succeeded` 不回填，业务层读取时统一映射为 `finished`；历史 `dispatched + interrupted` 由调度器 finalize 自动收口。
 
 ## 触发实例状态机
 
 ```
-pending --抢占(行锁)--> claimed --start_run成功--> dispatched --Run终态--> succeeded/failed/cancelled
+pending --抢占(行锁)--> claimed --start_run成功--> dispatched --Run终态--> finished/failed/cancelled/interrupted
    ^                      |                                |
    |                      +--冲突释放回 pending（重试耗尽-> skipped）
    +---------------- 会话不存在等永久错误 --> failed
@@ -94,6 +94,6 @@ pending --抢占(行锁)--> claimed --start_run成功--> dispatched --Run终态-
 
 ## 已知边界
 
-- 定时 Run 触发智能体反问（waiting_user）时会挂起等待用户到会话回答；任务指令应尽量要求直接作答。
+- 定时 Run 禁止用户交互，工具装配会剔除提问类工具，不会进入 `waiting_user`。
 - 单次任务触发完后靠 `next_trigger_time=NULL` 停止计划（`enabled_flag` 保持 1，保证派发重试不受影响）；编辑执行时间即重新武装。
 - 执行历史关联的 Run 状态为派发后快照读，不在派发链路内强同步 Run 结果。
