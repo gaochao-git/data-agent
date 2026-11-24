@@ -1104,7 +1104,7 @@ def test_tool_error_middleware_and_chat_data_agent_create_agent(monkeypatch):
     agent = data_agent.create_data_agent(
         checkpointer="ckpt",
         identity_context=data_agent.IdentityContext(user_id="u1"),
-        datasource_context=data_agent.DatasourceContext(datasource_id="ds_a"),
+        business_context=data_agent.BusinessContext(values={"datasource_id": "ds_a"}),
         model_invocation=data_agent.ModelInvocationConfig(system_prompt="智能问数系统提示词", model_id="m1"),
     )
 

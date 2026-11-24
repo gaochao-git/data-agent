@@ -12,8 +12,8 @@ os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 
+from apps.chat_data_app.agent.contracts.business_context import BusinessContext  # noqa: E402
 from apps.chat_data_app.agent.data_agent import (  # noqa: E402
-    DatasourceContext,
     IdentityContext,
     assemble_tools,
 )
@@ -69,7 +69,7 @@ def _tool_names(tmp_path):
             options,
             runtime,
             identity_context=IdentityContext(user_id="u1", operator_name="测试用户"),
-            datasource_context=DatasourceContext(datasource_id="ds_a"),
+            business_context=BusinessContext(values={"datasource_id": "ds_a"}),
         )
     ]
 

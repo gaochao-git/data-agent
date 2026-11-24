@@ -13,11 +13,11 @@ ChatData 只有一个 Agent；运行选项只决定工作区后端及 Bash 是�
 from utils.checkpoint import DB_PATH, get_checkpointer
 
 from .agent_state import ChatDataAgentState
+from .contracts.business_context import BusinessContext
 from .data_agent import (
     CHAT_DATA_AGENT_SPEC,
     AgentAssemblySpec,
     AgentRunControls,
-    DatasourceContext,
     IdentityContext,
     ModelInvocationConfig,
     create_agent_from_spec,
@@ -43,7 +43,7 @@ __all__ = [
     "AgentAssemblySpec",
     "AgentRunControls",
     "CHAT_DATA_AGENT_SPEC",
-    "DatasourceContext",
+    "BusinessContext",
     "IdentityContext",
     "ModelInvocationConfig",
     "get_chat_data_default_runtime_options",

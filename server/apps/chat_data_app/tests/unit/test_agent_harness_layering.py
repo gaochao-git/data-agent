@@ -35,6 +35,9 @@ KNOWN_EDGES = {
     # 运行技能源枚举包含插件提供的技能（skill_service._append_runtime_user_skill_source
     # 读取 plugins.loader 的启用清单）；方向 skills→plugins 为有意设计，反向禁止。
     ("skills", "plugins"),
+    # 工具构建上下文携带通用业务上下文（BusinessContext），tools 只读取不解释；
+    # contracts 为最底层纯类型，方向 tools→contracts 为有意设计。
+    ("tools", "contracts"),
     ("tools", "workspace"),
     ("workspace", "contracts"),
 }

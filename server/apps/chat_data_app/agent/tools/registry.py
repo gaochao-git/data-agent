@@ -6,7 +6,7 @@
 
 - ``TOOL_BUILD_GROUPS``：有哪些工具、按什么顺序注册（顺序即模型看到的工具顺序）、
   各自提供哪些工具名（``provides``，与 ``@tool`` 注册名一致，供权限排除匹配）；
-- ``ToolBuildContext``：一次装配的上下文（运行选项、工作区运行时、身份与数据源）；
+- ``ToolBuildContext``：一次装配的上下文（运行选项、工作区运行时、身份与业务上下文）；
 - 子智能体工具面：explore 由 ``data_agent.SUBAGENT_TOOL_ALLOWLISTS`` 只读白名单
   兜底；general 默认继承主图可用工具，由 ``SUBAGENT_TOOL_DENYLISTS`` 显式剔除。
   配套 ``provided_tool_names()`` 与 ``tests/unit/test_tools_registry.py`` 护栏。
@@ -40,7 +40,8 @@ from .read_image import create_read_image_tool
 from .skill import create_skill_tool
 
 if TYPE_CHECKING:
-    from ..data_agent import DatasourceContext, IdentityContext, ModelInvocationConfig
+    from ..contracts.business_context import BusinessContext
+    from ..data_agent import IdentityContext, ModelInvocationConfig
     from ..runtime_options import AgentRuntimeOptions
     from ..workspace.runtime import ConversationWorkspaceRuntime
 
@@ -49,14 +50,14 @@ if TYPE_CHECKING:
 class ToolBuildContext:
     """一次工具装配的上下文，由 ``data_agent.assemble_tools`` 解析后传入。
 
-    身份/数据源/模型调用三个上下文类型定义在 ``data_agent``（调用方也从此导入），
+    身份/业务上下文/模型调用三个上下文类型分属 ``data_agent`` 与 ``contracts``，
     这里仅作类型标注引用，避免模块级循环导入。
     """
 
     runtime_options: AgentRuntimeOptions
     workspace_runtime: ConversationWorkspaceRuntime
     identity: IdentityContext
-    datasource: DatasourceContext
+    business: BusinessContext
     model_invocation: ModelInvocationConfig
 
 
@@ -126,7 +127,7 @@ TOOL_BUILD_GROUPS: tuple[ToolBuildGroup, ...] = (
         provides=("data_analyzing_tool",),
         build=lambda ctx: [
             create_data_analyzing_tool(
-                ctx.datasource.datasource_id,
+                ctx.business.get("datasource_id"),
                 user_id=ctx.identity.user_id or "system",
                 operator_name=ctx.identity.operator_name,
                 workspace_runtime=ctx.workspace_runtime,

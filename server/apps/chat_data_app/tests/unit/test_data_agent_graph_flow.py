@@ -12,8 +12,8 @@ from langchain_core.messages import AIMessage
 
 from apps.chat_data_app.agent import data_agent
 from apps.chat_data_app.agent.agent_state import ChatDataAgentState
+from apps.chat_data_app.agent.contracts.business_context import BusinessContext
 from apps.chat_data_app.agent.data_agent import (
-    DatasourceContext,
     IdentityContext,
     ModelInvocationConfig,
     assemble_tools,
@@ -52,7 +52,7 @@ def test_assemble_tools_skips_disabled_bash(tmp_path):
             options,
             runtime,
             identity_context=IdentityContext(user_id="u1", operator_name="测试用户"),
-            datasource_context=DatasourceContext(datasource_id="ds_a"),
+            business_context=BusinessContext(values={"datasource_id": "ds_a"}),
         )
     ]
     assert tool_names == [
@@ -108,7 +108,7 @@ def test_create_data_agent_uses_standard_middleware_without_model_fallback(monke
         options,
         workspace_runtime=runtime,
         identity_context=IdentityContext(),
-        datasource_context=DatasourceContext(datasource_id="ds_a"),
+        business_context=BusinessContext(values={"datasource_id": "ds_a"}),
         model_invocation=ModelInvocationConfig(system_prompt="system", model_id="primary-model"),
     )
 
@@ -149,7 +149,7 @@ def test_create_data_agent_registers_after_model_history_middleware(monkeypatch,
         options,
         workspace_runtime=runtime,
         identity_context=IdentityContext(),
-        datasource_context=DatasourceContext(datasource_id="ds_a"),
+        business_context=BusinessContext(values={"datasource_id": "ds_a"}),
         model_invocation=ModelInvocationConfig(system_prompt="system", model_id="primary-model"),
         persist_model_snapshot=persist_snapshot,
     )
@@ -188,7 +188,7 @@ def test_create_data_agent_registers_subagent_middleware_when_enabled(monkeypatc
         options,
         workspace_runtime=runtime,
         identity_context=IdentityContext(),
-        datasource_context=DatasourceContext(datasource_id="ds_a"),
+        business_context=BusinessContext(values={"datasource_id": "ds_a"}),
         model_invocation=ModelInvocationConfig(system_prompt="system", model_id="primary-model"),
     )
 
@@ -491,7 +491,7 @@ def test_create_data_agent_registers_mcp_search_and_proxy(monkeypatch, tmp_path)
         options,
         workspace_runtime=runtime,
         identity_context=IdentityContext(),
-        datasource_context=DatasourceContext(datasource_id="ds_a"),
+        business_context=BusinessContext(values={"datasource_id": "ds_a"}),
         model_invocation=ModelInvocationConfig(system_prompt="system", model_id="primary-model"),
     )
 
@@ -518,7 +518,7 @@ def test_create_data_agent_unattended_keeps_allow_system_tools(monkeypatch, tmp_
         options,
         workspace_runtime=runtime,
         identity_context=IdentityContext(),
-        datasource_context=DatasourceContext(datasource_id="ds_a"),
+        business_context=BusinessContext(values={"datasource_id": "ds_a"}),
         model_invocation=ModelInvocationConfig(system_prompt="system", model_id="primary-model"),
         run_controls=AgentRunControls(disable_user_interaction=True),
     )
@@ -539,7 +539,7 @@ def test_describe_agent_assembly_exposes_resolved_tools_and_middleware(monkeypat
         data_agent.CHAT_DATA_AGENT_SPEC,
         options,
         identity_context=IdentityContext(user_id="u1"),
-        datasource_context=DatasourceContext(datasource_id="ds_a"),
+        business_context=BusinessContext(values={"datasource_id": "ds_a"}),
         model_invocation=ModelInvocationConfig(system_prompt="system"),
         workspace_runtime=runtime,
     )

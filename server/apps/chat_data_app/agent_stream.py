@@ -25,7 +25,7 @@ from utils.tool_call_markup import sanitize_message_payload
 
 from .agent import (
     AgentRunControls,
-    DatasourceContext,
+    BusinessContext,
     IdentityContext,
     ModelInvocationConfig,
     build_unified_system_prompt,
@@ -1690,9 +1690,11 @@ async def _run_chat_data_agent_stream(
                     user_id=user_id,
                     operator_name=username,
                 ),
-                datasource_context=DatasourceContext(
-                    datasource_id=datasource_id,
-                    source_type=str((semantic_context.datasource_meta or {}).get("source_type") or ""),
+                business_context=BusinessContext(
+                    values={
+                        "datasource_id": datasource_id,
+                        "source_type": str((semantic_context.datasource_meta or {}).get("source_type") or ""),
+                    }
                 ),
                 model_invocation=ModelInvocationConfig(
                     system_prompt=system_prompt,

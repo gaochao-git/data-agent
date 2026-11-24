@@ -18,7 +18,8 @@ from pathlib import Path
 import pytest
 from langchain_core.messages import HumanMessage
 
-from apps.chat_data_app.agent.data_agent import DatasourceContext, assemble_tools
+from apps.chat_data_app.agent.contracts.business_context import BusinessContext
+from apps.chat_data_app.agent.data_agent import assemble_tools
 from apps.chat_data_app.agent.runtime_options import AgentRuntimeOptions
 from apps.chat_data_app.agent.tools.common import normalize_json_like_payload
 from apps.chat_data_app.agent.workspace import runtime as workspace_runtime_module
@@ -206,7 +207,7 @@ def _create_local_workspace_tools(_monkeypatch, paths, **kwargs):
         for tool in assemble_tools(
             AgentRuntimeOptions(),
             runtime,
-            datasource_context=DatasourceContext(datasource_id=kwargs.pop("datasource_id", None)),
+            business_context=BusinessContext(values={"datasource_id": kwargs.pop("datasource_id", None)}),
             **kwargs,
         )
     }

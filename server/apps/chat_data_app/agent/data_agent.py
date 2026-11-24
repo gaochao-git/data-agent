@@ -28,6 +28,7 @@ from .agent_runtime import (
 )
 from .agent_state import ChatDataAgentState
 from .approval_policy import ask_tool_names, resolve_approval_policies
+from .contracts.business_context import BusinessContext
 from .middleware.after_model_history import create_after_model_history_middleware
 from .middleware.context_compression import create_context_compression_middleware
 from .middleware.context_usage import create_request_context_usage_middleware
@@ -96,14 +97,6 @@ class IdentityContext:
 
     user_id: str | None = None
     operator_name: str | None = None
-
-
-@dataclass(frozen=True)
-class DatasourceContext:
-    """问哪个数据域——ChatData 业务概念，每轮请求可变。"""
-
-    datasource_id: str | None = None
-    source_type: str | None = None
 
 
 @dataclass(frozen=True)
@@ -235,7 +228,7 @@ def assemble_tools(
     workspace_runtime: ConversationWorkspaceRuntime,
     *,
     identity_context: IdentityContext | None = None,
-    datasource_context: DatasourceContext | None = None,
+    business_context: BusinessContext | None = None,
     model_invocation: ModelInvocationConfig | None = None,
     spec: AgentAssemblySpec | None = None,
     run_controls: "AgentRunControls | None" = None,
@@ -251,7 +244,7 @@ def assemble_tools(
         runtime_options=runtime_options,
         workspace_runtime=workspace_runtime,
         identity=identity_context or IdentityContext(),
-        datasource=datasource_context or DatasourceContext(),
+        business=business_context or BusinessContext(),
         model_invocation=model_invocation or ModelInvocationConfig(),
     )
     skip_user_interaction = bool(run_controls and run_controls.disable_user_interaction)
@@ -625,7 +618,7 @@ class _AgentAssemblyInputs:
     spec: AgentAssemblySpec
     options: AgentRuntimeOptions
     identity: IdentityContext
-    datasource: DatasourceContext
+    business: BusinessContext
     invocation: ModelInvocationConfig
     model_id: str | None
     runtime: ConversationWorkspaceRuntime
@@ -653,7 +646,7 @@ def _resolve_assembly_inputs(
     checkpointer: BaseCheckpointSaver | None,
     conversation_id: str | None,
     identity_context: IdentityContext | None,
-    datasource_context: DatasourceContext | None,
+    business_context: BusinessContext | None,
     model_invocation: ModelInvocationConfig | None,
     workspace_runtime: ConversationWorkspaceRuntime | None,
     run_controls: AgentRunControls | None,
@@ -662,7 +655,7 @@ def _resolve_assembly_inputs(
     validate_agent_assembly_spec(spec)
     options = runtime_options or get_chat_data_default_runtime_options()
     identity = identity_context or IdentityContext()
-    datasource = datasource_context or DatasourceContext()
+    business = business_context or BusinessContext()
     invocation = model_invocation or ModelInvocationConfig()
     model_id = _normalize_model_id(invocation.model_id)
     runtime = _resolve_workspace_runtime(workspace_runtime, options, identity.user_id)
@@ -670,7 +663,7 @@ def _resolve_assembly_inputs(
         spec=spec,
         options=options,
         identity=identity,
-        datasource=datasource,
+        business=business,
         invocation=invocation,
         model_id=model_id,
         runtime=runtime,
@@ -686,7 +679,7 @@ def _assemble_tools(inputs: _AgentAssemblyInputs) -> _AssembledTools:
         inputs.options,
         inputs.runtime,
         identity_context=inputs.identity,
-        datasource_context=inputs.datasource,
+        business_context=inputs.business,
         model_invocation=inputs.invocation,
         spec=inputs.spec,
         run_controls=inputs.run_controls,
@@ -878,7 +871,7 @@ def create_agent_from_spec(
     checkpointer: BaseCheckpointSaver | None = None,
     conversation_id: str | None = None,
     identity_context: IdentityContext | None = None,
-    datasource_context: DatasourceContext | None = None,
+    business_context: BusinessContext | None = None,
     model_invocation: ModelInvocationConfig | None = None,
     workspace_runtime: ConversationWorkspaceRuntime | None = None,
     run_controls: AgentRunControls | None = None,
@@ -886,8 +879,8 @@ def create_agent_from_spec(
 ) -> CompiledStateGraph:
     """按声明式规格装配一个 LangGraph agent。
 
-    参数按关注点分组：``identity_context``（谁在问）、``datasource_context``
-    （问哪个数据域）、``model_invocation``（模型怎么调）、``run_controls``
+    参数按关注点分组：``identity_context``（谁在问）、``business_context``
+    （业务域上下文，内核不解释其含义）、``model_invocation``（模型怎么调）、``run_controls``
     （run 怎么管）；新增参数必须先归入其中一组或说明为何单列。
     explore 只使用只读白名单；general 默认继承主图可用工具（含 MCP 实体工具），
     再由 ``SUBAGENT_TOOL_DENYLISTS`` 剔除不可安全承载的工具。
@@ -901,7 +894,7 @@ def create_agent_from_spec(
         checkpointer=checkpointer,
         conversation_id=conversation_id,
         identity_context=identity_context,
-        datasource_context=datasource_context,
+        business_context=business_context,
         model_invocation=model_invocation,
         workspace_runtime=workspace_runtime,
         run_controls=run_controls,
@@ -929,7 +922,7 @@ def describe_agent_assembly(
     *,
     conversation_id: str | None = None,
     identity_context: IdentityContext | None = None,
-    datasource_context: DatasourceContext | None = None,
+    business_context: BusinessContext | None = None,
     model_invocation: ModelInvocationConfig | None = None,
     workspace_runtime: ConversationWorkspaceRuntime | None = None,
     run_controls: AgentRunControls | None = None,
@@ -946,7 +939,7 @@ def describe_agent_assembly(
         checkpointer=None,
         conversation_id=conversation_id,
         identity_context=identity_context,
-        datasource_context=datasource_context,
+        business_context=business_context,
         model_invocation=model_invocation,
         workspace_runtime=workspace_runtime,
         run_controls=run_controls,
