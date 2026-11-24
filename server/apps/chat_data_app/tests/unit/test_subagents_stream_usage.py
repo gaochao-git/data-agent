@@ -6,6 +6,7 @@ import pytest
 from langchain_core.messages import AIMessage, AIMessageChunk, RemoveMessage, ToolMessage
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
 
+from apps.chat_data_app.agent.middleware import subagent_report as subagent_report_module
 from apps.chat_data_app.agent.middleware import subagent_stream as subagent_stream_module
 from apps.chat_data_app.agent.middleware import subagents as subagents_module
 from apps.chat_data_app.agent.middleware.subagents import (
@@ -559,7 +560,7 @@ async def test_subagent_tool_offloads_report_over_parent_budget(monkeypatch):
         )
         return "[tool_result_offloaded]\nsource_tool=subagent", {"source_tool": "subagent"}
 
-    monkeypatch.setattr(subagents_module, "externalize_tool_text", fake_externalize)
+    monkeypatch.setattr(subagent_report_module, "externalize_tool_text", fake_externalize)
 
     class FakeRunnable:
         async def astream(self, _state, _config, *, stream_mode):
@@ -598,7 +599,7 @@ async def test_subagent_tool_keeps_report_within_parent_budget(monkeypatch):
     async def fake_externalize(*_args, **_kwargs):
         raise AssertionError("未超预算时不应触发外置")
 
-    monkeypatch.setattr(subagents_module, "externalize_tool_text", fake_externalize)
+    monkeypatch.setattr(subagent_report_module, "externalize_tool_text", fake_externalize)
 
     class FakeRunnable:
         async def astream(self, _state, _config, *, stream_mode):
@@ -628,7 +629,7 @@ async def test_subagent_tool_keeps_report_without_parent_usage(monkeypatch):
     async def fake_externalize(*_args, **_kwargs):
         raise AssertionError("缺少父用量时不应触发外置")
 
-    monkeypatch.setattr(subagents_module, "externalize_tool_text", fake_externalize)
+    monkeypatch.setattr(subagent_report_module, "externalize_tool_text", fake_externalize)
 
     class FakeRunnable:
         async def astream(self, _state, _config, *, stream_mode):
@@ -708,7 +709,7 @@ async def test_subagent_tool_keeps_report_when_offload_fails(monkeypatch):
     async def failed_externalize(*_args, **_kwargs):
         return "[tool_result_truncated]", None
 
-    monkeypatch.setattr(subagents_module, "externalize_tool_text", failed_externalize)
+    monkeypatch.setattr(subagent_report_module, "externalize_tool_text", failed_externalize)
 
     class FakeRunnable:
         async def astream(self, _state, _config, *, stream_mode):

@@ -28,7 +28,7 @@ from typing import Annotated, Any, NoReturn
 from langchain.agents import create_agent
 from langchain.agents.middleware import AgentMiddleware, AgentState, ModelCallResult, ModelRequest
 from langchain.tools import ToolRuntime
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langchain_core.messages import RemoveMessage as RemoveMessage  # noqa: F401 - 兼容 re-export
 from langchain_core.tools import StructuredTool
 from langgraph.config import get_stream_writer
@@ -38,11 +38,13 @@ from apps.chat_data_app.services.runtime_config import (
     SUBAGENT_MESSAGE_PREVIEW_MAX_CHARS as SUBAGENT_MESSAGE_PREVIEW_MAX_CHARS,  # noqa: F401 - 兼容 re-export
 )
 from apps.chat_data_app.services.runtime_config import (
-    SUBAGENT_RESULT_PREVIEW_MAX_CHARS,
-    TOOL_RESULT_OFFLOAD_SIZE,
+    SUBAGENT_RESULT_PREVIEW_MAX_CHARS as SUBAGENT_RESULT_PREVIEW_MAX_CHARS,  # noqa: F401 - 兼容 re-export
 )
 from apps.chat_data_app.services.runtime_config import (
     SUBAGENT_THINKING_PREVIEW_MAX_CHARS as SUBAGENT_THINKING_PREVIEW_MAX_CHARS,  # noqa: F401 - 兼容 re-export
+)
+from apps.chat_data_app.services.runtime_config import (
+    TOOL_RESULT_OFFLOAD_SIZE as TOOL_RESULT_OFFLOAD_SIZE,  # noqa: F401 - 兼容 re-export
 )
 from apps.chat_data_app.services.setting_service import get_runtime_setting
 from utils.checkpoint import get_checkpointer
@@ -104,6 +106,28 @@ from .subagent_history import (
 from .subagent_history import (
     legacy_session_history as _legacy_session_history,
 )
+from .subagent_report import (
+    SUBAGENT_REPORT_MAX_TOKEN_RATIO as SUBAGENT_REPORT_MAX_TOKEN_RATIO,  # noqa: F401 - 兼容 re-export
+)
+from .subagent_report import (
+    SUBAGENT_REPORT_MIN_TOKEN_LIMIT as SUBAGENT_REPORT_MIN_TOKEN_LIMIT,  # noqa: F401 - 兼容 re-export
+)
+from .subagent_report import (
+    SUBAGENT_REPORT_PREVIEW_CHARS as SUBAGENT_REPORT_PREVIEW_CHARS,  # noqa: F401 - 兼容 re-export
+)
+from .subagent_report import (
+    SUBAGENT_RESULT_SOURCE as SUBAGENT_RESULT_SOURCE,  # noqa: F401 - 兼容 re-export
+)
+from .subagent_report import (
+    _extract_final_report,
+    _offload_subagent_report,
+)
+from .subagent_report import (
+    _subagent_report_token_limit as _subagent_report_token_limit,  # noqa: F401 - 兼容 re-export
+)
+from .subagent_report import (
+    _truncate_subagent_result as _truncate_subagent_result,  # noqa: F401 - 兼容 re-export
+)
 from .subagent_stream import (
     SUBAGENT_STATE_PASSTHROUGH_KEYS as SUBAGENT_STATE_PASSTHROUGH_KEYS,
 )
@@ -157,10 +181,10 @@ from .subagent_text import (
     chunk_text_delta as _chunk_text_delta,  # noqa: F401 - 兼容 re-export
 )
 from .subagent_text import (
-    plain_text as _plain_text,
+    plain_text as _plain_text,  # noqa: F401 - 兼容 re-export
 )
 from .subagent_text import (
-    sanitize_report_text as _sanitize_report_text,
+    sanitize_report_text as _sanitize_report_text,  # noqa: F401 - 兼容 re-export
 )
 from .subagent_tool_schema import (
     DispatchArgs,
@@ -178,7 +202,6 @@ from .subagent_trail import (
 )
 from .tool_approval import create_tool_approval_middleware
 from .tool_execution_fence import create_subagent_execution_fence_middleware, create_tool_execution_fence_middleware
-from .tool_result import externalize_tool_text
 
 logger = get_logger(__name__)
 
@@ -189,15 +212,6 @@ logger = get_logger(__name__)
 # 正常路径下不会触发——过程区的意图就是让用户看到子智能体实际做了什么。
 
 SUBAGENT_TOOL_NAME = "subagent"
-# 工具结果外置时记录的逻辑来源，用于标识“来自子智能体报告”，不是模型工具名。
-SUBAGENT_RESULT_SOURCE = "subagent"
-
-# 子智能体报告进入父上下文前的封顶：报告是结论而非过程，单次派发不应把父
-# 上下文推过压缩线。阈值按父 state 的硬上限占比算（32k 与 128k 窗口的合理
-# 字节数不同，不写死字符数），超过后复用工具结果同一条落盘/信封通路。
-SUBAGENT_REPORT_MAX_TOKEN_RATIO = 0.08
-SUBAGENT_REPORT_MIN_TOKEN_LIMIT = 1000
-SUBAGENT_REPORT_PREVIEW_CHARS = 2000
 # 心跳 watcher 只负责续租与观察取消；收口时不能让它拖住终态落库。
 TASK_WATCHER_SHUTDOWN_TIMEOUT_SECONDS = 1.0
 TASK_LEASE_READ_TIMEOUT_SECONDS = 1.0
@@ -291,17 +305,6 @@ def validate_subagent_specs(specs: list[SubagentSpec]) -> None:
     duplicated = {name for name in names if names.count(name) > 1}
     if duplicated:
         raise ValueError(f"子智能体名称重复: {', '.join(sorted(duplicated))}")
-
-
-def _extract_final_report(messages: list) -> str:
-    """取子图最后一个非空 AIMessage 文本作为回传结论。"""
-    for message in reversed(messages or []):
-        if not isinstance(message, AIMessage):
-            continue
-        text = _sanitize_report_text(getattr(message, "text", "") or "")
-        if text:
-            return text
-    return ""
 
 
 # 子图技能目录段的引导语与 XML 拼装：目录与主智能体同一份 <available_skills>，
@@ -483,54 +486,6 @@ def _compile_subagent(spec: SubagentSpec, run_controls: Any = None, *, control_e
         # ToolMessage，子智能体可读取错误详情自行纠正。
         middleware=middleware,
     )
-
-
-def _truncate_subagent_result(content: Any) -> str:
-    """把内层工具结果压成 SSE 可安全外发的文本预览。"""
-    return _truncate_text(_plain_text(content), SUBAGENT_RESULT_PREVIEW_MAX_CHARS)
-
-
-def _subagent_report_token_limit(runtime: ToolRuntime) -> int | None:
-    """报告封顶阈值 = 父上下文硬上限的固定占比，避免父上下文被单次报告推过压缩线。"""
-    state = getattr(runtime, "state", None)
-    usage = state.get("token_usage") if isinstance(state, dict) else None
-    if not isinstance(usage, dict):
-        return None
-    hard_limit = int(usage.get("hard_input_limit_tokens") or 0)
-    if hard_limit <= 0:
-        return None
-    return max(int(hard_limit * SUBAGENT_REPORT_MAX_TOKEN_RATIO), SUBAGENT_REPORT_MIN_TOKEN_LIMIT)
-
-
-async def _offload_subagent_report(report: str, runtime: ToolRuntime) -> tuple[str, dict[str, Any] | None]:
-    """超长报告落盘：前台用信封保护上下文，后台只取 recovery 元数据。"""
-    limit = _subagent_report_token_limit(runtime)
-    report_tokens = estimate_text_tokens(report)
-    over_token_budget = limit is not None and report_tokens > limit
-    if not over_token_budget and len(report) <= TOOL_RESULT_OFFLOAD_SIZE:
-        return report, None
-    state = getattr(runtime, "state", None)
-    envelope, recovery = await externalize_tool_text(
-        report,
-        source_tool=SUBAGENT_RESULT_SOURCE,
-        state=dict(state) if isinstance(state, dict) else {},
-        suffix=".md",
-        preview_chars=SUBAGENT_REPORT_PREVIEW_CHARS,
-    )
-    if recovery is None:
-        # 报告是昂贵且不可复现的结论：落盘失败时保留原文，不能静默换成无内容的截断信封。
-        logger.warning(
-            "[tools] 子智能体报告落盘失败，保留原文: limit_tokens=%s report_tokens=%s",
-            limit,
-            report_tokens,
-        )
-        return report, None
-    logger.info(
-        "[tools] 子智能体报告超过父上下文预算，已落盘外置: limit_tokens=%s report_tokens=%s",
-        limit,
-        report_tokens,
-    )
-    return envelope, recovery
 
 
 def _build_task_result_artifacts(

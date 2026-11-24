@@ -723,42 +723,15 @@ class _ToolStreamState:
         for tool_call in getattr(latest_ai, "tool_calls", None) or []:
             if not isinstance(tool_call, dict):
                 continue
-            tool_call_id = str(tool_call.get("id") or "").strip()
-            args = _coerce_tool_args(tool_call.get("args"))
-            if not tool_call_id or not args or tool_call_id not in self.emitted_running_tool_ids:
+            pending = self._record_authoritative_args(tool_call)
+            if pending is None:
                 continue
-            signature = _args_signature(args)
-            signature_changed = self.sent_args_signature.get(tool_call_id) != signature
-            already_finalized = tool_call_id in self.args_finalized
-            self.authoritative_args[tool_call_id] = args
-            preview_needs_finalize = self.tool_args_preview.has_preview(tool_call_id) and not already_finalized
-            flushed_preview = self.tool_args_preview.flush(tool_call_id)
-            if flushed_preview is not None:
-                preview_delta, truncated = flushed_preview
-                events.append(
-                    format_tool_args_delta_event(
-                        tool_call_id,
-                        self.tool_names.get(tool_call_id, ""),
-                        preview_delta,
-                        truncated=truncated,
-                    )
-                )
+            tool_call_id, args, signature, signature_changed, preview_needs_finalize = pending
+            self._flush_authoritative_preview(tool_call_id, events)
             if not signature_changed and not preview_needs_finalize:
                 continue
             if signature_changed:
-                self.args_fallback[tool_call_id] = args
-                self.sent_args_signature[tool_call_id] = signature
-                events.append(
-                    _format_tool_progress_event(
-                        tool_call_id,
-                        self.tool_names.get(tool_call_id, ""),
-                        None,
-                        None,
-                        None,
-                        args,
-                        replace_args=True,
-                    )
-                )
+                self._append_authoritative_args_replacement(tool_call_id, args, signature, events)
             else:
                 # 参数口径未变，只发轻量收口标记，避免大文件参数重复传输
                 events.append(
@@ -771,6 +744,54 @@ class _ToolStreamState:
                 )
             self.args_finalized.add(tool_call_id)
         return events
+
+    def _record_authoritative_args(
+        self, tool_call: dict[str, Any]
+    ) -> tuple[str, dict[str, Any], str, bool, bool] | None:
+        """记录单条工具调用的权威参数，返回收口所需判定；不满足播报条件时返回 None。"""
+        tool_call_id = str(tool_call.get("id") or "").strip()
+        args = _coerce_tool_args(tool_call.get("args"))
+        if not tool_call_id or not args or tool_call_id not in self.emitted_running_tool_ids:
+            return None
+        signature = _args_signature(args)
+        signature_changed = self.sent_args_signature.get(tool_call_id) != signature
+        already_finalized = tool_call_id in self.args_finalized
+        self.authoritative_args[tool_call_id] = args
+        preview_needs_finalize = self.tool_args_preview.has_preview(tool_call_id) and not already_finalized
+        return tool_call_id, args, signature, signature_changed, preview_needs_finalize
+
+    def _flush_authoritative_preview(self, tool_call_id: str, events: list[str]) -> None:
+        """补发缓冲区里最后一段参数增量，保证收口前已生成的片段不丢。"""
+        flushed_preview = self.tool_args_preview.flush(tool_call_id)
+        if flushed_preview is None:
+            return
+        preview_delta, truncated = flushed_preview
+        events.append(
+            format_tool_args_delta_event(
+                tool_call_id,
+                self.tool_names.get(tool_call_id, ""),
+                preview_delta,
+                truncated=truncated,
+            )
+        )
+
+    def _append_authoritative_args_replacement(
+        self, tool_call_id: str, args: dict[str, Any], signature: str, events: list[str]
+    ) -> None:
+        """参数口径变化时补发整份替换快照，并登记已发送签名。"""
+        self.args_fallback[tool_call_id] = args
+        self.sent_args_signature[tool_call_id] = signature
+        events.append(
+            _format_tool_progress_event(
+                tool_call_id,
+                self.tool_names.get(tool_call_id, ""),
+                None,
+                None,
+                None,
+                args,
+                replace_args=True,
+            )
+        )
 
     def _cancel_orphaned_tool(self, tool_call_id: str) -> str:
         """关闭「播报过但模型最终没有真正调用」的占位工具卡。"""

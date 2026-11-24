@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, SystemMessage, ToolMessage
 
+from apps.chat_data_app.agent.middleware import subagent_report as subagent_report_module
 from apps.chat_data_app.agent.middleware import subagents as subagents_module
 from apps.chat_data_app.agent.middleware.subagent_async import (
     _list_async_tasks,
@@ -950,7 +951,7 @@ async def test_offload_subagent_report_returns_recovery_for_long_report(monkeypa
             "result_size_chars": len(content),
         }
 
-    monkeypatch.setattr(subagents_module, "externalize_tool_text", fake_externalize)
+    monkeypatch.setattr(subagent_report_module, "externalize_tool_text", fake_externalize)
     runtime = SimpleNamespace(state={"token_usage": {"hard_input_limit_tokens": 1_000}})
     report = "x" * (subagents_module.TOOL_RESULT_OFFLOAD_SIZE + 1)
 
