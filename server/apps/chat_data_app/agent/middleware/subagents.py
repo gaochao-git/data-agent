@@ -472,7 +472,8 @@ def _compile_subagent(spec: SubagentSpec, run_controls: Any = None, *, control_e
         tools=tools,
         system_prompt=effective_system_prompt,
         state_schema=ChatDataSubAgentState,
-        name=f"subagent_{spec.name}",
+        # 同主图：create_agent 的 name 会写进每条 AIMessage 并被原样发给
+        # OpenAI 兼容服务端，严格模板会因 assistant name 与 tool call 名不符拒单。
         # 内层模型与主智能体同一 vLLM，同样可能返回重复工具名/字符串 args，
         # 必须挂同一归一化 middleware，否则内层工具会以原始形态执行。
         # ToolResultMiddleware 必须同样挂载：查询工具返回的是内部协议 JSON，

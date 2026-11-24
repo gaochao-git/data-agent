@@ -1114,7 +1114,9 @@ def test_tool_error_middleware_and_chat_data_agent_create_agent(monkeypatch):
     assert captured["checkpointer"] == "ckpt"
     assert captured["system_prompt"] == "智能问数系统提示词"
     assert captured["state_schema"] is data_agent.ChatDataAgentState
-    assert captured["name"] == "chat_data_agent"
+    # 不向 create_agent 传 name：该 name 会写进每条 AIMessage 并原样进入 OpenAI
+    # 请求体，严格模板（assistant name 必须等于 tool call 名）会直接 400。
+    assert "name" not in captured
     assert [getattr(tool, "name", tool) for tool in captured["tools"]] == [
         "file_read",
         "file_edit",

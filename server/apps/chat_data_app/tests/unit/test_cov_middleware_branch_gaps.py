@@ -300,6 +300,7 @@ def test_compile_subagent_appends_fence_when_run_controls_complete(monkeypatch):
 
     def fake_create_agent(_model, **kwargs):
         captured["middleware"] = kwargs["middleware"]
+        captured["kwargs"] = kwargs
         return "compiled"
 
     monkeypatch.setattr(subagents, "create_agent", fake_create_agent)
@@ -314,6 +315,9 @@ def test_compile_subagent_appends_fence_when_run_controls_complete(monkeypatch):
 
     assert subagents._compile_subagent(spec, run_controls=run_controls) == "compiled"
     assert "fence" in captured["middleware"]
+    # 不传 name：它会被 LangChain 写进每条 AIMessage，进而以 assistant name
+    # 进入 OpenAI 请求体，被严格校验的模板拒绝（assistant name 与工具名不符）。
+    assert "name" not in captured["kwargs"]
 
 
 # ---------------------------------------------------------------------------

@@ -905,6 +905,10 @@ def create_agent_from_spec(
     context_runtime = _assemble_context_runtime(inputs, system_prompt, assembled.tools)
     model = _assemble_model(inputs)
     middleware = _assemble_middleware(inputs, assembled, system_prompt, context_runtime, model)
+    # 不传 name：LangChain 1.x 会把 name 写到每条 AIMessage 上，langchain-openai
+    # 又原样序列化进 OpenAI 请求体；严格校验的兼容模板（如 sensenova/mlx）要求
+    # assistant 的 name 等于其 tool call 名，多出的 agent 名会让工具调用后的续请求
+    # 直接 400。我们不接 LangSmith，这个名字只剩副作用。
     return create_agent(
         model=model,
         tools=assembled.tools,
@@ -912,7 +916,6 @@ def create_agent_from_spec(
         middleware=middleware,
         state_schema=ChatDataAgentState,
         checkpointer=inputs.checkpointer,
-        name=spec.agent_name,
     )
 
 
