@@ -582,6 +582,10 @@ class _AgentSseStreamAdapter:
         except Exception as exc:
             for step_event in self._sync_graph_steps():
                 yield step_event
+            # 异常收口：窗口内未发出的参数尾片也要补发，否则上游断开时已生成的
+            # 部分会在前端凭空缺一段（与正常收口口径不一致）。
+            for preview_event in self.tool_stream_state.flush_pending_previews():
+                yield preview_event
             if not self._first_visible_payload_seen:
                 self._emit_first_token_timeout_if_needed(
                     started_at, ext2={"error_type": exc.__class__.__name__, "error": str(exc)}

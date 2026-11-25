@@ -110,6 +110,59 @@ async def test_error_turn_raises_while_streaming():
             pass
 
 
+@pytest.mark.asyncio
+async def test_stream_interrupts_after_partial_tool_args():
+    args = {"path": "/tmp/partial.md", "limit": 50}
+    turn = tool_call_turn("file_read", args, arg_pieces=3).interrupt_after(2, ConnectionError("upstream closed"))
+    model = ScriptedChatModel(turns=[turn])
+
+    received = []
+    with pytest.raises(ConnectionError, match="upstream closed"):
+        async for chunk in model.astream([HumanMessage(content="读文件")]):
+            received.append(chunk)
+
+    arg_chunks = [chunk for chunk in received if chunk.tool_call_chunks]
+    assert len(arg_chunks) == 2
+    partial = "".join(chunk.tool_call_chunks[0]["args"] for chunk in arg_chunks)
+    assert json.dumps(args, ensure_ascii=False, separators=(",", ":")).startswith(partial)
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(partial)
+
+
+@pytest.mark.asyncio
+async def test_adapter_keeps_partial_args_and_propagates_stream_interrupt():
+    @tool
+    def record_path(path: str) -> str:
+        """记录收到的路径。"""
+        return "ok"
+
+    args = {"path": "/tmp/broken.md"}
+    turn = tool_call_turn("record_path", args, arg_pieces=3).interrupt_after(2, ConnectionError("upstream closed"))
+    model = ScriptedChatModel(turns=[turn])
+    graph = create_agent(model=model, tools=[record_path])
+    adapter = agent_stream._AgentSseStreamAdapter(
+        agent=graph,
+        initial_state={"messages": [HumanMessage(content="读文件")]},
+        config={"recursion_limit": 1000},
+        visible_message_filter=agent_stream._is_chat_data_visible_stream_message,
+    )
+
+    frames = []
+    with pytest.raises(ConnectionError, match="upstream closed"):
+        async for frame in adapter.stream_events():
+            frames.append(frame)
+
+    parsed = [_parse_sse(frame) for frame in frames if isinstance(frame, str) and frame.startswith("event: ")]
+    deltas = [payload for event, payload in parsed if event == "tool_args_delta"]
+    assert deltas
+    partial = "".join(payload["delta"] for payload in deltas)
+    assert json.dumps(args, ensure_ascii=False, separators=(",", ":")).startswith(partial)
+    # 异常收口要补发窗口内尾片：收到的是「已到达适配器的全部分片」，不是少一片的残段。
+    assert partial == "".join(chunk["tool_call_chunks"][0]["args"] for chunk in turn.chunks[:2])
+    assert all(payload["tool_call_id"] == "call-1" for payload in deltas)
+    assert not [payload for event, payload in parsed if event == "tool_progress"]
+
+
 def test_custom_chunk_without_content_defaults_to_empty_string():
     model = ScriptedChatModel(
         turns=[chunks_turn([{"tool_call_chunks": [{"name": "ping", "args": "{}", "id": "call-2", "index": 0}]}])]

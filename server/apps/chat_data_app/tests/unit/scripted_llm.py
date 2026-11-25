@@ -28,10 +28,29 @@ from pydantic import Field, PrivateAttr
 
 @dataclass
 class FakeTurn:
-    """一轮模型调用：按顺序产出的 chunk，或一个待抛出的异常。"""
+    """一轮模型调用：按顺序产出的 chunk，或一个待抛出的异常。
+
+    ``error_after_chunks`` 仅对流式生效：先吐出指定数量的 chunk 再抛 ``error``，
+    用于模拟上游在参数流到一半时断开。非流式调用无法部分交付，仍直接抛错。
+    """
 
     chunks: list[dict[str, Any]] = field(default_factory=list)
     error: BaseException | None = None
+    error_after_chunks: int | None = None
+
+    def interrupt_after(self, count: int, error: BaseException) -> FakeTurn:
+        """流式吐出 ``count`` 个 chunk 后抛 ``error``，模拟上游中途断开。"""
+        self.error_after_chunks = count
+        self.error = error
+        return self
+
+
+def _deliverable_chunks(turn: FakeTurn) -> list[dict[str, Any]]:
+    """流式可交付的 chunk：上游在 ``error_after_chunks`` 处断开时只交付其之前的部分。"""
+    if turn.error is None:
+        return turn.chunks
+    limit = turn.error_after_chunks if turn.error_after_chunks is not None else 0
+    return turn.chunks[: max(0, limit)]
 
 
 def _split_text(text: str, pieces: int) -> list[str]:
@@ -179,13 +198,13 @@ class ScriptedChatModel(BaseChatModel):
         **kwargs: Any,
     ) -> Iterator[ChatGenerationChunk]:
         turn = self._next_turn(messages)
-        if turn.error is not None:
-            raise turn.error
-        for spec in turn.chunks:
+        for spec in _deliverable_chunks(turn):
             chunk = ChatGenerationChunk(message=_make_chunk(spec))
             if run_manager is not None:
                 run_manager.on_llm_new_token(chunk.text, chunk=chunk)
             yield chunk
+        if turn.error is not None:
+            raise turn.error
 
     async def _astream(
         self,
@@ -195,10 +214,10 @@ class ScriptedChatModel(BaseChatModel):
         **kwargs: Any,
     ) -> AsyncIterator[ChatGenerationChunk]:
         turn = self._next_turn(messages)
-        if turn.error is not None:
-            raise turn.error
-        for spec in turn.chunks:
+        for spec in _deliverable_chunks(turn):
             chunk = ChatGenerationChunk(message=_make_chunk(spec))
             if run_manager is not None:
                 await run_manager.on_llm_new_token(chunk.text, chunk=chunk)
             yield chunk
+        if turn.error is not None:
+            raise turn.error

@@ -775,6 +775,13 @@ class _ToolStreamState:
             )
         )
 
+    def flush_pending_previews(self) -> list[str]:
+        """异常收口：把窗口内尚未发出的参数尾片补发出去，避免已生成内容被丢掉。"""
+        events: list[str] = []
+        for tool_call_id in self.tool_args_preview.pending_tool_call_ids():
+            self._flush_authoritative_preview(tool_call_id, events)
+        return events
+
     def _append_authoritative_args_replacement(
         self, tool_call_id: str, args: dict[str, Any], signature: str, events: list[str]
     ) -> None:
