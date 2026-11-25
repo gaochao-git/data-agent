@@ -58,7 +58,7 @@ class _FakeGraph:
     async def aget_state(self, config):
         return self.state
 
-    async def astream(self, initial_state, config=None, stream_mode=None):
+    async def astream(self, initial_state, config=None, stream_mode=None, context=None):
         self.initial_state = initial_state
         if self.raise_on_stream:
             raise RuntimeError("graph failed")

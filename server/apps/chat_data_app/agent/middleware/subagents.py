@@ -50,7 +50,12 @@ from apps.chat_data_app.services.setting_service import get_runtime_setting
 from utils.checkpoint import get_checkpointer
 from utils.logger import get_logger
 
-from ..agent_state import merge_context_compression_events, merge_loaded_skill_names, replace_approval_decisions
+from ..agent_state import (
+    ChatDataRunContext,
+    merge_context_compression_events,
+    merge_loaded_skill_names,
+    replace_approval_decisions,
+)
 from ..approval_policy import ask_tool_names, resolve_approval_policies
 from ..context.context_budget import (
     ContextBudget,
@@ -243,10 +248,7 @@ class ChatDataSubAgentState(AgentState, total=False):
     （见 ``SUBAGENT_STATE_PASSTHROUGH_KEYS``），回传也只带最终结论。
     """
 
-    user_id: str | None
-    operator_name: str | None
     conversation_id: str | None
-    execution_context: dict[str, Any]
     workspace: dict[str, Any]
     context_summary: str | None
     context_compression: dict[str, Any] | None
@@ -472,6 +474,7 @@ def _compile_subagent(spec: SubagentSpec, run_controls: Any = None, *, control_e
         tools=tools,
         system_prompt=effective_system_prompt,
         state_schema=ChatDataSubAgentState,
+        context_schema=ChatDataRunContext,
         # 同主图：create_agent 的 name 会写进每条 AIMessage 并被原样发给
         # OpenAI 兼容服务端，严格模板会因 assistant name 与 tool call 名不符拒单。
         # 内层模型与主智能体同一 vLLM，同样可能返回重复工具名/字符串 args，
@@ -739,6 +742,7 @@ async def _invoke_task_subagent(
             ),
             on_progress=progress_callback,
             initial_messages=initial_messages,
+            context=getattr(runtime, "context", None),
         )
     except SubagentSuspended:
         raise

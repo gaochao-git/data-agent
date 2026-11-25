@@ -25,9 +25,13 @@ def test_prepare_request_rejects_non_object_and_embedded_sql():
 @pytest.mark.asyncio
 async def test_resolve_context_requires_semantic_config_and_datasource():
     with pytest.raises(ValueError, match="缺少指标集ID"):
-        await da._resolve_tool_context(state={}, semantic_config_id=" ", member_datasource_ids=None)
+        await da._resolve_tool_context(
+            state={}, datasource_id="ds-1", semantic_config_id=" ", member_datasource_ids=None
+        )
     with pytest.raises(ValueError, match="未绑定数据源"):
-        await da._resolve_tool_context(state={}, semantic_config_id="sc-1", member_datasource_ids=None)
+        await da._resolve_tool_context(
+            state={}, datasource_id="", semantic_config_id="sc-1", member_datasource_ids=None
+        )
 
 
 @pytest.mark.asyncio

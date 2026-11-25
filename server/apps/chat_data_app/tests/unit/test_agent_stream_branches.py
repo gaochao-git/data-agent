@@ -539,7 +539,7 @@ def test_agent_sse_stream_adapter_alarm_context_carries_user_id(monkeypatch):
         initial_state={"messages": []},
         config={"configurable": {"thread_id": "conv_user", "checkpoint_ns": ""}},
         debug_label="AI Content from model",
-        user_id="10001",
+        run_context={"user_id": "10001"},
     )
 
     adapter._emit_first_token_timeout_if_needed(agent_stream.time.perf_counter() - 61)
@@ -1158,7 +1158,7 @@ async def test_generate_chat_data_stream_initial_state_uses_context_groups(monke
 
     assert "query answer" in "".join(chunks)
     assert [message.content for message in graph.initial_state["messages"]] == ["查订单"]
-    assert graph.initial_state["execution_context"]["datasource_id"] == "ds_a"
+    assert "execution_context" not in graph.initial_state
     assert "prompt_context" not in graph.initial_state
     assert "tables_ddl_info" not in graph.initial_state
     assert "loaded_table_names" not in graph.initial_state

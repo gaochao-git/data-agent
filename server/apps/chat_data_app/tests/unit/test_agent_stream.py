@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import sys
@@ -1329,8 +1330,9 @@ def test_generate_chat_data_stream_emits_tool_message_usage_and_done(monkeypatch
     assert '"usage": {"total_tokens": 12}' in joined
     assert '"timestamp":' in joined
     assert "event: done" not in joined  # done 由 Runtime 统一发布，生成器不再输出
-    assert fake_graph.initial_state["execution_context"]["datasource_id"] == "ds_a"
-    assert fake_graph.initial_state["operator_name"] == "测试用户"
+    assert "execution_context" not in fake_graph.initial_state
+    assert "user_id" not in fake_graph.initial_state
+    assert "operator_name" not in fake_graph.initial_state
 
 
 def test_generate_chat_data_stream_emits_error_when_graph_fails(monkeypatch):
@@ -1381,7 +1383,7 @@ def test_generate_chat_data_stream_reports_graph_recursion_limit(monkeypatch):
         return _format_sse("error", {"error": error})
 
     class RecursionLimitGraph(_FakeGraph):
-        async def astream(self, initial_state, config=None, stream_mode=None):
+        async def astream(self, initial_state, config=None, stream_mode=None, context=None):
             _ = initial_state, config, stream_mode
             raise GraphRecursionError("Recursion limit of 7 reached without hitting a stop condition.")
             yield  # pragma: no cover - keeps this an async generator for the stream adapter
@@ -1423,7 +1425,7 @@ def test_generate_chat_data_stream_keeps_context_limit_error_actionable(monkeypa
         return _format_sse("error", {"error": error})
 
     class ContextLimitGraph(_FakeGraph):
-        async def astream(self, initial_state, config=None, stream_mode=None):
+        async def astream(self, initial_state, config=None, stream_mode=None, context=None):
             _ = initial_state, config, stream_mode
             raise ContextInputLimitExceededError("当前输入内容过长，请拆分问题后重试。")
             yield  # pragma: no cover - keeps this an async generator for the stream adapter
@@ -1799,3 +1801,30 @@ def _async_return(value):
         return value
 
     return _reader
+
+
+def test_stream_adapter_passes_run_context_to_astream():
+    """主图每次 astream 都带 run context：resume 也走同一处，不会漏传身份。"""
+    captured = {}
+
+    class FakeAgent:
+        async def astream(self, _state, config=None, stream_mode=None, context=None):
+            captured["context"] = context
+            if False:  # pragma: no cover - 保持异步生成器形态
+                yield None
+
+    adapter = agent_stream_module._AgentSseStreamAdapter(
+        agent=FakeAgent(),
+        initial_state={"messages": []},
+        config={"configurable": {"thread_id": "conv_ctx"}},
+        run_context={"user_id": "u1", "operator_name": "测试用户"},
+    )
+
+    asyncio.run(_drain(adapter._iter_agent_stream_events(0.0)))
+
+    assert captured["context"] == {"user_id": "u1", "operator_name": "测试用户"}
+
+
+async def _drain(iterator):
+    async for _ in iterator:
+        pass

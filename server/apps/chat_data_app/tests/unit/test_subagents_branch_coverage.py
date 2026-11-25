@@ -110,7 +110,7 @@ class _FakeRunnable:
     def __init__(self, chunks):
         self._chunks = chunks
 
-    async def astream(self, state, config, stream_mode=None):
+    async def astream(self, state, config, stream_mode=None, context=None):
         for chunk in self._chunks:
             yield chunk
 

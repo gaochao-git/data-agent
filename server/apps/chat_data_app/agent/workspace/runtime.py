@@ -510,8 +510,15 @@ class ConversationWorkspaceRuntime:
         return await self._executable_backend().run_officecli(self, args=args, cwd=cwd, timeout_seconds=timeout_seconds)
 
 
-def workspace_runtime_from_state(state: Mapping[str, Any] | None) -> ConversationWorkspaceRuntime:
-    """Rebuild a workspace runtime from serializable AgentState fields."""
+def workspace_runtime_from_state(
+    state: Mapping[str, Any] | None,
+    *,
+    user_id: str | None = None,
+) -> ConversationWorkspaceRuntime:
+    """Rebuild a workspace runtime from serializable AgentState fields.
+
+    身份来自 run context（由调用方显式传入），state 只保存会话与工作区。
+    """
     values = state if isinstance(state, Mapping) else {}
     workspace = values.get("workspace")
     context = workspace if isinstance(workspace, Mapping) else {}
@@ -521,7 +528,7 @@ def workspace_runtime_from_state(state: Mapping[str, Any] | None) -> Conversatio
     backend_name = str(context.get("workspace_backend") or "local").strip().lower() or "local"
     return ConversationWorkspaceRuntime(
         workspace_root=workspace_root,
-        user_id=str(values.get("user_id") or "system").strip() or "system",
+        user_id=str(user_id or "system").strip() or "system",
         backend=backend_name,
     )
 

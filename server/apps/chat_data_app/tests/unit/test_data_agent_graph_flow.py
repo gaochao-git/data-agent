@@ -31,10 +31,10 @@ def _runtime(tmp_path):
     ), AgentRuntimeOptions(workspace_backend="local")
 
 
-def test_chat_data_agent_state_exposes_execution_and_workspace_context():
+def test_chat_data_agent_state_exposes_workspace_context_only():
     annotations = ChatDataAgentState.__annotations__
 
-    assert "execution_context" in annotations
+    assert "execution_context" not in annotations
     assert "workspace" in annotations
     assert "semantic_config_id" not in annotations
     assert "conversation_id" in annotations

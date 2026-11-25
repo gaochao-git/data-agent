@@ -115,7 +115,7 @@ def test_subagent_report_token_limit_returns_none_for_zero_hard_limit():
 @pytest.mark.asyncio
 async def test_task_tool_without_usage_meta_omits_context_usage_snapshot(monkeypatch):
     class FakeRunnable:
-        async def astream(self, _state, _config, *, stream_mode):
+        async def astream(self, _state, _config, *, stream_mode, context=None):
             yield "updates", {"model": {"messages": [AIMessage(content="分析完成")]}}
 
     monkeypatch.setattr(sm, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())

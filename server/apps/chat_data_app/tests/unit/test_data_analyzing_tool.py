@@ -50,17 +50,8 @@ def _internal_query_payload(result: str) -> dict:
     return payload["payload"]
 
 
-def _semantic_query_state(
-    *,
-    datasource_id: str = "ds_a",
-    **state: object,
-) -> dict:
-    return {
-        **state,
-        "execution_context": {
-            "datasource_id": datasource_id,
-        },
-    }
+def _agent_state(**state: object) -> dict:
+    return dict(state)
 
 
 # ---------------------------------------------------------------------------
@@ -214,15 +205,13 @@ def test_execute_query_returns_query_result_or_error(monkeypatch):
     async def fake_execute_sql_real_failed(*_args, **_kwargs):
         return {"success": False, "error": "表不存在"}
 
-    state = _semantic_query_state(
-        user_id="user_a",
-        operator_name="测试用户",
+    state = _agent_state(
         semantic_config_id="cfg_a",
         conversation_id="conv_a",
         messages=[HumanMessage(content="查订单")],
     )
 
-    tool = data_analyzing.create_data_analyzing_tool()
+    tool = data_analyzing.create_data_analyzing_tool("ds_a", user_id="user_a", operator_name="测试用户")
     monkeypatch.setattr(data_analyzing, "load_runtime_semantic_config", fake_load_config)
     monkeypatch.setattr(data_analyzing, "_execute_sql_real", fake_execute_sql_real)
     from apps.chat_data_app.services.semantic.run import semantic_query_service
@@ -281,6 +270,48 @@ def test_execute_query_returns_query_result_or_error(monkeypatch):
     assert failed_payload["error"] == "表不存在"
 
 
+def test_execute_query_ignores_datasource_in_state(monkeypatch):
+    """数据源只认建图时绑定值：state 里即便残留同名字段也不能改变执行目标。"""
+
+    class FakeGenerator:
+        def __init__(self, config):
+            assert config["id"] == "cfg_a"
+
+        def generate_sql(self, **_kwargs):
+            return {"success": True, "sql": "select 1"}
+
+    async def fake_load_config(*_args, **_kwargs):
+        return {"id": "cfg_a", "metrics": [], "dimensions": []}
+
+    captured = {}
+
+    async def fake_execute_sql_real(sql, datasource_id, *_args, **_kwargs):
+        captured["datasource_id"] = datasource_id
+        return {"success": True, "columns": ["id"], "data": [{"id": 1}], "total_count": 1}
+
+    tool = data_analyzing.create_data_analyzing_tool("ds_bound")
+    monkeypatch.setattr(data_analyzing, "load_runtime_semantic_config", fake_load_config)
+    monkeypatch.setattr(data_analyzing, "_execute_sql_real", fake_execute_sql_real)
+    from apps.chat_data_app.services.semantic.run import semantic_query_service
+
+    monkeypatch.setattr(semantic_query_service, "SemanticAIQueryAdapter", FakeGenerator)
+
+    asyncio.run(
+        tool.ainvoke(
+            {
+                **_execute_payload(
+                    dsl={"metrics": ["订单数"]},
+                    semantic_config_id="cfg_a",
+                    member_datasource_ids=["m1"],
+                ),
+                "state": {"execution_context": {"datasource_id": "ds_evil"}},
+            }
+        )
+    )
+
+    assert captured["datasource_id"] == "ds_bound"
+
+
 def test_execute_query_allows_model_selected_member_ids(monkeypatch):
     from langchain_core.messages import HumanMessage
 
@@ -302,12 +333,12 @@ def test_execute_query_allows_model_selected_member_ids(monkeypatch):
         captured["member_datasource_ids"] = member_datasource_ids
         return {"success": True, "columns": ["id"], "data": [{"id": 1}], "total_count": 1}
 
-    state = _semantic_query_state(
+    state = _agent_state(
         semantic_config_id="cfg_a",
         messages=[HumanMessage(content="查指定机构订单")],
     )
 
-    tool = data_analyzing.create_data_analyzing_tool()
+    tool = data_analyzing.create_data_analyzing_tool("ds_a")
     monkeypatch.setattr(data_analyzing, "load_runtime_semantic_config", fake_load_config)
     monkeypatch.setattr(data_analyzing, "_execute_sql_real", fake_execute_sql_real)
     from apps.chat_data_app.services.semantic.run import semantic_query_service
@@ -350,12 +381,12 @@ def test_execute_query_accepts_member_ids_without_state_snapshot(monkeypatch):
         captured["member_datasource_ids"] = member_datasource_ids
         return {"success": True, "columns": ["id"], "data": [{"id": 1}], "total_count": 1}
 
-    state = _semantic_query_state(
+    state = _agent_state(
         semantic_config_id="cfg_a",
         messages=[HumanMessage(content="查 org_b 订单")],
     )
 
-    tool = data_analyzing.create_data_analyzing_tool()
+    tool = data_analyzing.create_data_analyzing_tool("ds_a")
     monkeypatch.setattr(data_analyzing, "load_runtime_semantic_config", fake_load_config)
     monkeypatch.setattr(data_analyzing, "_execute_sql_real", fake_execute_sql_real)
     from apps.chat_data_app.services.semantic.run import semantic_query_service
@@ -395,12 +426,12 @@ def test_execute_query_does_not_default_to_state_member_ids(monkeypatch):
     async def fail_execute_sql_real(*_args, **_kwargs):
         raise AssertionError("member_datasource_ids must be a tool parameter")
 
-    state = _semantic_query_state(
+    state = _agent_state(
         semantic_config_id="cfg_a",
         messages=[HumanMessage(content="查订单")],
     )
 
-    tool = data_analyzing.create_data_analyzing_tool()
+    tool = data_analyzing.create_data_analyzing_tool("ds_a")
     monkeypatch.setattr(data_analyzing, "load_runtime_semantic_config", fake_load_config)
     monkeypatch.setattr(data_analyzing, "_execute_sql_real", fail_execute_sql_real)
     from apps.chat_data_app.services.semantic.run import semantic_query_service
@@ -433,12 +464,12 @@ def test_execute_query_requires_member_ids(monkeypatch):
     async def fail_execute_sql_real(*_args, **_kwargs):
         raise AssertionError("should not execute without explicit member ids")
 
-    state = _semantic_query_state(
+    state = _agent_state(
         semantic_config_id="cfg_a",
         messages=[HumanMessage(content="查订单")],
     )
 
-    tool = data_analyzing.create_data_analyzing_tool()
+    tool = data_analyzing.create_data_analyzing_tool("ds_a")
     monkeypatch.setattr(data_analyzing, "load_runtime_semantic_config", fake_load_config)
     monkeypatch.setattr(data_analyzing, "_execute_sql_real", fail_execute_sql_real)
     from apps.chat_data_app.services.semantic.run import semantic_query_service
@@ -471,7 +502,7 @@ def test_execute_query_rejects_sql_inside_dsl(monkeypatch):
     async def fake_execute_sql_real(sql, *_args, **_kwargs):
         return {"success": True, "sql": sql, "columns": ["v"], "data": [{"v": 1}], "total_count": 1}
 
-    state = _semantic_query_state(
+    state = _agent_state(
         semantic_config_id="cfg_a",
         messages=[
             HumanMessage(content="上一轮问题"),
@@ -480,7 +511,7 @@ def test_execute_query_rejects_sql_inside_dsl(monkeypatch):
         ],
     )
 
-    tool = data_analyzing.create_data_analyzing_tool()
+    tool = data_analyzing.create_data_analyzing_tool("ds_a")
     monkeypatch.setattr(data_analyzing, "load_runtime_semantic_config", fake_load_config)
     monkeypatch.setattr(data_analyzing, "_execute_sql_real", fake_execute_sql_real)
     from apps.chat_data_app.services.semantic.run import semantic_query_service
@@ -555,15 +586,13 @@ def test_execute_query_executes_top_level_sql_in_sql_mode(monkeypatch):
         )
         return {"success": True, "columns": ["v"], "data": [{"v": 1}], "total_count": 1}
 
-    state = _semantic_query_state(
+    state = _agent_state(
         semantic_config_id="cfg_a",
-        user_id="user_a",
-        operator_name="测试用户",
         conversation_id="conv_a",
         messages=[HumanMessage(content="用复杂 SQL 查询")],
     )
 
-    tool = data_analyzing.create_data_analyzing_tool()
+    tool = data_analyzing.create_data_analyzing_tool("ds_a", user_id="user_a", operator_name="测试用户")
     monkeypatch.setattr(data_analyzing, "load_runtime_semantic_config", fake_load_config)
     monkeypatch.setattr(data_analyzing, "_execute_sql_real", fake_execute_sql_real)
     from apps.chat_data_app.services.semantic.run import semantic_query_service
@@ -601,7 +630,7 @@ def test_execute_query_executes_top_level_sql_in_sql_mode(monkeypatch):
 def test_execute_query_validation_and_compile_error_branches(monkeypatch):
     assert data_analyzing._latest_human_query([type("Msg", (), {"type": "human", "content": "伪用户消息"})()]) == ""
 
-    tool = data_analyzing.create_data_analyzing_tool()
+    tool = data_analyzing.create_data_analyzing_tool("ds_a")
 
     with pytest.raises(ValueError, match="semantic_config_id"):
         asyncio.run(
@@ -639,7 +668,7 @@ def test_execute_query_validation_and_compile_error_branches(monkeypatch):
                         semantic_config_id="cfg_a",
                         member_datasource_ids=["m1"],
                     ),
-                    "state": _semantic_query_state(
+                    "state": _agent_state(
                         semantic_config_id="cfg_a",
                     ),
                 }
@@ -654,7 +683,7 @@ def test_execute_query_validation_and_compile_error_branches(monkeypatch):
                         semantic_config_id="cfg_a",
                         member_datasource_ids=["m1"],
                     ),
-                    "state": _semantic_query_state(
+                    "state": _agent_state(
                         semantic_config_id="cfg_a",
                     ),
                 }
@@ -666,7 +695,7 @@ def test_execute_query_reports_missing_runtime_config(monkeypatch):
     async def fake_load_config(*_args, **_kwargs):
         return None
 
-    tool = data_analyzing.create_data_analyzing_tool()
+    tool = data_analyzing.create_data_analyzing_tool("ds_a")
     monkeypatch.setattr(data_analyzing, "load_runtime_semantic_config", fake_load_config)
 
     with pytest.raises(ValueError, match="未找到可用指标集 cfg_missing"):
@@ -678,7 +707,7 @@ def test_execute_query_reports_missing_runtime_config(monkeypatch):
                         semantic_config_id="cfg_missing",
                         member_datasource_ids=["m1"],
                     ),
-                    "state": _semantic_query_state(semantic_config_id="cfg_missing"),
+                    "state": _agent_state(semantic_config_id="cfg_missing"),
                 }
             )
         )
@@ -707,15 +736,13 @@ def test_execute_query_returns_large_internal_result_for_middleware(monkeypatch)
             "sql": "select content from big_table",
         }
 
-    state = _semantic_query_state(
-        user_id="user_a",
-        operator_name="测试用户",
+    state = _agent_state(
         semantic_config_id="cfg_a",
         conversation_id="conv_a",
         messages=[HumanMessage(content="查大结果")],
     )
 
-    tool = data_analyzing.create_data_analyzing_tool()
+    tool = data_analyzing.create_data_analyzing_tool("ds_a", user_id="user_a", operator_name="测试用户")
     monkeypatch.setattr(data_analyzing, "load_runtime_semantic_config", fake_load_config)
     monkeypatch.setattr(data_analyzing, "_execute_sql_real", fake_execute_sql_real)
     from apps.chat_data_app.services.semantic.run import semantic_query_service
@@ -757,7 +784,7 @@ def test_resolve_semantic_query_config_loads_explicit_config_id(monkeypatch):
 
     config = asyncio.run(
         data_analyzing._resolve_semantic_query_config(
-            {"user_id": "user_a"},
+            "user_a",
             datasource_id="ds_a",
             semantic_config_id="cfg_a",
         )
@@ -1214,12 +1241,13 @@ _DATASOURCE_META_FIXTURE = {
 def _invoke_list_targets(monkeypatch, *, tool_kwargs=None, state=None, meta=_DATASOURCE_META_FIXTURE):
     manager = _FakeTargetsManager(_TARGETS_FIXTURE, meta=meta)
     monkeypatch.setattr(data_analyzing, "get_datasource_manager", lambda: manager)
+    kwargs = {"datasource_id": "ds_a", **(tool_kwargs or {})}
     raw = asyncio.run(
-        data_analyzing.create_data_analyzing_tool(**(tool_kwargs or {})).ainvoke(
+        data_analyzing.create_data_analyzing_tool(**kwargs).ainvoke(
             {
                 "action": "list_execution_targets",
                 "action_payload": {},
-                "state": state if state is not None else _semantic_query_state(),
+                "state": state if state is not None else _agent_state(),
             }
         )
     )
@@ -1232,10 +1260,10 @@ def test_input_list_execution_targets_accepts_empty_payload():
 
 
 def test_list_execution_targets_returns_sanitized_entries(monkeypatch):
-    """清单只透出名称/ID/机构编码，不透出连接信息；身份取自 state 会话上下文。"""
+    """清单只透出名称/ID/机构编码，不透出连接信息；身份取自工具绑定的会话上下文。"""
     payload, manager = _invoke_list_targets(
         monkeypatch,
-        state=_semantic_query_state(datasource_id="ds_a", user_id="user_a", operator_name="测试用户"),
+        tool_kwargs={"user_id": "user_a", "operator_name": "测试用户"},
     )
     assert payload["success"] is True
     assert payload["count"] == 2
@@ -1256,7 +1284,7 @@ def test_list_execution_targets_returns_datasource_overview(monkeypatch):
     """
     payload, manager = _invoke_list_targets(
         monkeypatch,
-        state=_semantic_query_state(datasource_id="ds_a"),
+        state=_agent_state(),
     )
     assert payload["source_type"] == "hive"
     assert payload["dialect"] == "Hive"
@@ -1271,7 +1299,7 @@ def test_list_execution_targets_overview_defaults_when_meta_missing(monkeypatch)
     """meta 缺失（组刚被删等）时概览字段留空，方言回落 Hive，不报错。"""
     payload, _ = _invoke_list_targets(
         monkeypatch,
-        state=_semantic_query_state(datasource_id="ds_a"),
+        state=_agent_state(),
         meta=None,
     )
     assert payload["source_type"] == ""
@@ -1279,12 +1307,12 @@ def test_list_execution_targets_overview_defaults_when_meta_missing(monkeypatch)
     assert payload["query_context"] == ""
 
 
-def test_list_execution_targets_falls_back_to_bound_context(monkeypatch):
-    """state 缺数据源/身份时回落到工具绑定的会话上下文。"""
+def test_list_execution_targets_uses_bound_context(monkeypatch):
+    """执行对象清单只认工具绑定的会话数据源与身份，state 不参与。"""
     payload, manager = _invoke_list_targets(
         monkeypatch,
         tool_kwargs={"datasource_id": "ds_bound", "user_id": "bound_u", "operator_name": "绑定用户"},
-        state={"execution_context": {}},
+        state={},
     )
     # datasource_id 不透出，但清单按绑定数据源解析（captured 可见）
     assert manager.captured == {"datasource_id": "ds_bound", "user_id": "bound_u", "username": "绑定用户"}
@@ -1321,3 +1349,80 @@ def test_tool_schema_defers_payload_contract_to_skill_docs():
     assert "member_datasource_ids" not in description
     assert len(payload_description) <= 120
     assert "技能" in payload_description
+
+
+def test_resolve_run_identity_reads_run_context_only():
+    """身份只认 run context：调用方传入的 state 不再参与身份解析。"""
+    runtime = type("RT", (), {"context": {"user_id": "ctx_user", "operator_name": "上下文用户"}})()
+
+    user_id, operator_name = data_analyzing._resolve_run_identity(runtime)
+
+    assert (user_id, operator_name) == ("ctx_user", "上下文用户")
+
+
+def test_resolve_run_identity_returns_none_without_runtime():
+    """没有 run context 时返回空身份，不回退 state、不静默伪造用户。"""
+    assert data_analyzing._resolve_run_identity(None) == (None, None)
+    assert data_analyzing._resolve_run_identity(type("RT", (), {"context": {}})()) == (None, None)
+
+
+def test_execute_query_identity_comes_from_run_context(monkeypatch):
+    """端到端：经官方 ToolRuntime 注入的 context 覆盖 state 里的身份。"""
+    from langchain_core.messages import AIMessage
+    from langgraph.graph import END, START, StateGraph
+    from langgraph.graph.message import MessagesState
+    from langgraph.prebuilt import ToolNode
+
+    from apps.chat_data_app.agent.agent_state import ChatDataRunContext
+    from apps.chat_data_app.services.semantic.run import semantic_query_service
+
+    class FakeGenerator:
+        def __init__(self, config):
+            pass
+
+        def generate_sql(self, **_kwargs):
+            return {"success": True, "sql": "select 1"}
+
+    async def fake_load_config(*_args, **_kwargs):
+        return {"id": "cfg_a", "metrics": [], "dimensions": []}
+
+    captured: dict = {}
+
+    async def fake_execute_sql_real(*_args, **kwargs):
+        captured["user_id"] = kwargs.get("user_id")
+        return {"success": True, "columns": ["id"], "data": [{"id": 1}], "total_count": 1}
+
+    monkeypatch.setattr(data_analyzing, "load_runtime_semantic_config", fake_load_config)
+    monkeypatch.setattr(data_analyzing, "_execute_sql_real", fake_execute_sql_real)
+    monkeypatch.setattr(semantic_query_service, "SemanticAIQueryAdapter", FakeGenerator)
+
+    tool = data_analyzing.create_data_analyzing_tool("ds_a")
+    graph = StateGraph(MessagesState, context_schema=ChatDataRunContext)
+    graph.add_node("tools", ToolNode([tool]))
+    graph.add_edge(START, "tools")
+    graph.add_edge("tools", END)
+    app = graph.compile()
+
+    message = AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "name": data_analyzing.DATA_ANALYZING_TOOL_NAME,
+                "args": _execute_payload(
+                    dsl={"metrics": ["订单数"]},
+                    semantic_config_id="cfg_a",
+                    member_datasource_ids=["m1"],
+                ),
+                "id": "call_ctx",
+            }
+        ],
+    )
+
+    asyncio.run(
+        app.ainvoke(
+            {"messages": [message], "user_id": "state_user"},
+            context={"user_id": "ctx_user", "operator_name": "上下文用户"},
+        )
+    )
+
+    assert captured["user_id"] == "ctx_user"

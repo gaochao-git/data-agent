@@ -25,10 +25,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Annotated, Any
 
+from langchain.tools import ToolRuntime
 from langchain_core.messages import HumanMessage
 from langchain_core.tools import BaseTool, tool
 from langgraph.prebuilt import InjectedState
 
+from apps.chat_data_app.agent.agent_state import ChatDataRunContext
 from apps.chat_data_app.agent.workspace.runtime import ConversationWorkspaceRuntime
 from apps.chat_data_app.services.dashboard.spec_service import (
     remove_mixed_raw_metrics_for_aggregate_dsl,
@@ -117,26 +119,23 @@ def _latest_human_query(messages: list[Any] | None) -> str:
     return ""
 
 
+def _resolve_run_identity(
+    runtime: ToolRuntime[ChatDataRunContext] | None,
+) -> tuple[str | None, str | None]:
+    """身份只取 invoke 注入的 run context；缺失即视为未认证，不回退 state。"""
+    context = getattr(runtime, "context", None) or {}
+    user_id = str(context.get("user_id") or "").strip() or None
+    operator_name = str(context.get("operator_name") or "").strip() or None
+    return user_id, operator_name
+
+
 async def _resolve_semantic_query_config(
-    state: dict,
+    user_id: str | None,
     datasource_id: str | None,
     semantic_config_id: str | None,
 ) -> dict[str, Any] | None:
     """按模型显式传入的指标集 ID读取当前用户可用的运行时配置。"""
-    user_id = str(state.get("user_id") or "").strip() or None
     return await load_runtime_semantic_config(datasource_id, semantic_config_id, user_id=user_id)
-
-
-def _get_execution_context(state: dict | None) -> dict[str, Any]:
-    """读取统一的工具执行上下文。"""
-    context = (state or {}).get("execution_context")
-    return context if isinstance(context, dict) else {}
-
-
-def _get_datasource_id_from_state(state: dict | None) -> str | None:
-    context = _get_execution_context(state)
-    datasource_id = str(context.get("datasource_id") or "").strip()
-    return datasource_id or None
 
 
 def _prepare_tool_request(
@@ -167,11 +166,14 @@ def _prepare_tool_request(
 async def _resolve_tool_context(
     *,
     state: dict | None,
+    datasource_id: str | None,
     semantic_config_id: str | None,
     member_datasource_ids: list[str] | None,
+    user_id: str | None = None,
+    operator_name: str | None = None,
 ) -> _ResolvedToolContext:
     state = state or {}
-    datasource_id = _get_datasource_id_from_state(state)
+    datasource_id = str(datasource_id or "").strip() or None
     normalized_semantic_config_id = str(semantic_config_id or "").strip()
     if not normalized_semantic_config_id:
         raise ValueError(f"缺少指标集ID，请先{SEMANTIC_MODEL_DISCOVERY_HINT}后显式传入 semantic_config_id")
@@ -186,8 +188,8 @@ async def _resolve_tool_context(
         datasource_id=datasource_id,
         semantic_config_id=normalized_semantic_config_id,
         query_text=query_text,
-        user_id=str(state.get("user_id") or "").strip() or None,
-        operator_name=str(state.get("operator_name") or "").strip() or None,
+        user_id=user_id,
+        operator_name=operator_name,
         conversation_id=str(state.get("conversation_id") or "").strip() or None,
         member_datasource_ids=requested_member_datasource_ids,
     )
@@ -200,7 +202,7 @@ async def _compile_tool_query(
 ) -> _CompiledToolQuery:
     query_mode = "sql" if not request.has_dsl else "dsl"
     config = await _resolve_semantic_query_config(
-        context.state,
+        context.user_id,
         context.datasource_id,
         context.semantic_config_id,
     )
@@ -274,17 +276,23 @@ async def _run_execute_query(
     *,
     dsl: Any = None,
     sql: str | None = None,
+    datasource_id: str | None,
     semantic_config_id: str | None = None,
     member_datasource_ids: list[str] | None = None,
     state: dict | None = None,
+    user_id: str | None = None,
+    operator_name: str | None = None,
 ) -> str:
     """执行查询动作的主体：编译 -> 执行（成员权限由业务层在执行时判定）-> 内部协议返回。"""
     prepared_request = _prepare_tool_request(dsl=dsl, sql=sql)
 
     context = await _resolve_tool_context(
         state=state,
+        datasource_id=datasource_id,
         semantic_config_id=semantic_config_id,
         member_datasource_ids=member_datasource_ids,
+        user_id=user_id,
+        operator_name=operator_name,
     )
 
     query = await _compile_tool_query(request=prepared_request, context=context)
@@ -575,10 +583,11 @@ def _datasource_overview(meta: dict) -> dict:
 
 async def _run_list_execution_targets(
     *,
-    state: dict | None,
     bound_datasource_id: str,
     bound_user_id: str,
     bound_operator_name: str | None,
+    identity_user_id: str | None,
+    identity_operator_name: str | None,
 ) -> str:
     """实时查询当前用户在会话数据源组下有权限执行的全部成员数据源。
 
@@ -586,12 +595,11 @@ async def _run_list_execution_targets(
     复用 manager 的全量授权清单入口，与系统提示词注入的执行对象同一套权限口径。
     方言与智能问数说明（query_context）随本返回透出。
     """
-    state = state or {}
-    datasource_id = _get_datasource_id_from_state(state) or bound_datasource_id
+    datasource_id = bound_datasource_id
     if not datasource_id:
         raise ValueError("当前会话未绑定数据源")
-    user_id = str(state.get("user_id") or "").strip() or bound_user_id
-    operator_name = str(state.get("operator_name") or "").strip() or bound_operator_name
+    user_id = identity_user_id or bound_user_id
+    operator_name = identity_operator_name or bound_operator_name
     manager = get_datasource_manager()
     targets = await manager.list_authorized_execution_targets_async(
         datasource_id,
@@ -624,11 +632,13 @@ async def _run_data_analyzing_impl(
     bound_user_id: str,
     bound_operator_name: str | None,
     workspace_runtime: ConversationWorkspaceRuntime | None,
+    runtime: ToolRuntime[ChatDataRunContext] | None = None,
 ) -> str:
     """按 action 分发到对应的 DSL 校验 / 查询执行 / YAML 自检实现。"""
     # payload 校验必须在函数体内做（不能用 args_schema 的 model_validator）：
     # langgraph 会把 model_validator 抛出的校验错误过滤成空白消息，模型看不到原因
     payload = validate_data_analyzing_payload(action, action_payload)
+    identity_user_id, identity_operator_name = _resolve_run_identity(runtime)
 
     if action == "validate_dsl":
         if not bound_datasource_id:
@@ -654,16 +664,21 @@ async def _run_data_analyzing_impl(
         return await _run_execute_query(
             dsl=payload.dsl,
             sql=payload.sql,
+            datasource_id=bound_datasource_id,
             semantic_config_id=payload.semantic_config_id,
             member_datasource_ids=payload.member_datasource_ids,
             state=state,
+            # 生产链路 context 必到；直调（测试/脚本）没有 runtime 时用建图时绑定值。
+            user_id=identity_user_id or bound_user_id,
+            operator_name=identity_operator_name or bound_operator_name,
         )
     if action == "list_execution_targets":
         return await _run_list_execution_targets(
-            state=state,
             bound_datasource_id=bound_datasource_id,
             bound_user_id=bound_user_id,
             bound_operator_name=bound_operator_name,
+            identity_user_id=identity_user_id,
+            identity_operator_name=identity_operator_name,
         )
     # check_yaml
     if not bound_datasource_id:
@@ -691,6 +706,9 @@ def create_data_analyzing_tool(
         action: str,
         action_payload: dict,
         state: Annotated[dict | None, InjectedState] = None,
+        # ToolNode 只认精确的 ToolRuntime 注解（写成 ``| None`` 会静默不注入），
+        # 默认 None 仅用于不经 agent 的直调路径（测试/脚本）。
+        runtime: ToolRuntime[ChatDataRunContext] = None,  # type: ignore[assignment]
         intent: str = "",
     ) -> str:
         """
@@ -708,6 +726,7 @@ def create_data_analyzing_tool(
             bound_user_id,
             bound_operator_name,
             workspace_runtime,
+            runtime,
         )
 
     return data_analyzing_tool

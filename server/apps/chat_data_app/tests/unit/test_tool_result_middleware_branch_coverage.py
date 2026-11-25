@@ -31,13 +31,13 @@ def _request(
     return SimpleNamespace(
         state={
             "conversation_id": conversation_id,
-            "user_id": user_id,
             "messages": [HumanMessage(content="查询结果")],
             "workspace": {
                 "workspace_root": workspace_root or "",
                 "workspace_backend": "local",
             },
         },
+        runtime=SimpleNamespace(context={"user_id": user_id}),
         tool_call=tool_call,
     )
 
@@ -127,7 +127,9 @@ def test_replace_tool_message_without_updates_returns_same_instance():
 @pytest.mark.asyncio
 async def test_write_private_tool_result_requires_workspace_root():
     with pytest.raises(ValueError, match="缺少会话工作区"):
-        await tool_result._write_private_tool_result(content="结果", suffix=".txt", state=_request().state)
+        await tool_result._write_private_tool_result(
+            content="结果", suffix=".txt", user_id="user_a", state=_request().state
+        )
 
 
 @pytest.mark.asyncio
@@ -140,6 +142,7 @@ async def test_externalize_tool_text_reuses_offload_envelope(monkeypatch, tmp_pa
         text,
         source_tool="subagent",
         state=request.state,
+        user_id=request.runtime.context["user_id"],
         suffix=".md",
         preview_chars=100,
     )

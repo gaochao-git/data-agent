@@ -27,11 +27,10 @@ def _fake_runtime(conversation_id=CONV, tool_call_id="call_bg_1"):
     return SimpleNamespace(
         state={
             "conversation_id": conversation_id,
-            "user_id": USER,
-            "operator_name": "用户一",
             "run_id": "run-parent",
         },
         tool_call_id=tool_call_id,
+        context={"user_id": USER, "operator_name": "用户一"},
     )
 
 

@@ -565,6 +565,7 @@ class SubagentTaskService:
         return SimpleNamespace(
             state=dict(getattr(runtime, "state", None) or {}),
             tool_call_id=getattr(runtime, "tool_call_id", None),
+            context=dict(getattr(runtime, "context", None) or {}),
         )
 
     async def _resolve_task_lineage(

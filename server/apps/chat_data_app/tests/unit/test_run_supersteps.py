@@ -170,7 +170,7 @@ def test_subagent_steps_event_and_snapshot_fields():
 @pytest.mark.asyncio
 async def test_subagent_stream_wires_values_counting_into_captured():
     class _FakeRunnable:
-        async def astream(self, state, config, stream_mode):
+        async def astream(self, state, config, stream_mode, context=None):
             assert stream_mode == ["values", "updates", "messages", "custom"]
             assert config["recursion_limit"] == 1000
             yield ("values", {"messages": []})

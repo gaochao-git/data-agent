@@ -135,17 +135,11 @@ async def materialize_conversation_semantic_models(
 
 def _build_agent_context_state(
     *,
-    user_id: str | None,
-    operator_name: str | None,
     conversation_id: str,
     **extra_state: Any,
 ) -> dict[str, Any]:
     """构造单一 Agent 的状态字段。"""
-    state = {
-        "user_id": user_id,
-        "operator_name": operator_name or "",
-        "conversation_id": conversation_id,
-    }
+    state = {"conversation_id": conversation_id}
     state.update(extra_state)
     return state
 
@@ -746,12 +740,9 @@ async def _offload_oversized_user_input(
 def _resolve_agent_initial_state(
     *,
     resume_answer: dict[str, Any] | None,
-    user_id: str | None,
-    operator_name: str | None,
     conversation_id: str,
     adopted_messages: list[HumanMessage] | None,
     user_message: HumanMessage | None,
-    datasource_id: str | None,
     semantic_context: SemanticConversationContext,
     runtime_options: AgentRuntimeOptions,
     workspace_root: str,
@@ -760,11 +751,8 @@ def _resolve_agent_initial_state(
     if resume_answer is not None:
         return Command(resume=resume_answer)
     return _build_agent_context_state(
-        user_id=user_id,
-        operator_name=operator_name,
         conversation_id=conversation_id,
         messages=[*(adopted_messages or []), *([user_message] if user_message else [])],
-        execution_context={"datasource_id": datasource_id},
         workspace={
             "workspace_root": workspace_root,
             "workspace_backend": runtime_options.workspace_backend,

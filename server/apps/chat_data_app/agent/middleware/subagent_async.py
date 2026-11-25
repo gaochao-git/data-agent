@@ -62,9 +62,10 @@ def _truncate_text(text: str, max_chars: int, label: str = "结果") -> str:
 def _read_conversation_context(runtime: ToolRuntime, run_controls: Any = None) -> tuple[str, str | None, str, str]:
     """读取会话身份与父 Run；缺 conversation_id 时仍生成隔离桶，避免串会话。"""
     state = getattr(runtime, "state", None) or {}
+    context = getattr(runtime, "context", None) or {}
     conversation_id = str(state.get("conversation_id") or "").strip()
-    user_id = str(state.get("user_id") or "").strip() or None
-    operator_name = str(state.get("operator_name") or "").strip() or user_id or "系统"
+    user_id = str(context.get("user_id") or "").strip() or None
+    operator_name = str(context.get("operator_name") or "").strip() or user_id or "系统"
     parent_run_id = str(
         getattr(run_controls, "run_id", None) or state.get("run_id") or state.get("parent_run_id") or ""
     ).strip()

@@ -268,7 +268,7 @@ async def test_running_recovery_resumes_checkpoint_with_new_owner(harness, monke
                 tasks=(),
             )
 
-        async def astream(self, state, _config, *, stream_mode):
+        async def astream(self, state, _config, *, stream_mode, context=None):
             inputs.append(state)
             yield "updates", {"model": {"messages": [AIMessage(content="检查点恢复结论")]}}
 
@@ -304,7 +304,7 @@ async def test_approval_resume_after_recovery_does_not_replay_checkpoint(harness
                 tasks=(),
             )
 
-        async def astream(self, state, _config, *, stream_mode):
+        async def astream(self, state, _config, *, stream_mode, context=None):
             inputs.append(state)
             yield "updates", {"model": {"messages": [AIMessage(content="审批后继续完成")]}}
 
@@ -341,8 +341,9 @@ async def test_approval_resume_after_recovery_does_not_replay_checkpoint(harness
     await subagents_module._run_background_task(
         resumed_record,
         SimpleNamespace(
-            state={"conversation_id": CONV, "user_id": USER, "operator_name": "用户一", "run_id": "run-parent"},
+            state={"conversation_id": CONV, "run_id": "run-parent"},
             tool_call_id="call-parent",
+            context={"user_id": USER, "operator_name": "用户一"},
         ),
         specs,
         compiled,

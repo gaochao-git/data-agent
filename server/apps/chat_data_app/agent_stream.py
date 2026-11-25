@@ -491,13 +491,14 @@ class _AgentSseStreamAdapter:
         on_first_message: Callable[[], None] | None = None,
         on_stream_started: Callable[[], Awaitable[None]] | None = None,
         debug_label: str | None = None,
-        user_id: str | None = None,
+        run_context: dict[str, Any] | None = None,
         reasoning_turn_id: str | None = None,
         duration_relay: _DurationRelayHooks | None = None,
     ) -> None:
         self.agent = agent
         self.initial_state = initial_state
         self.config = config
+        self.run_context = run_context or {}
         self._graph_step_tracker = _GraphStepTracker()
         self._stream_config = self._graph_step_tracker.wrap_config(config)
         self.request = request
@@ -509,7 +510,7 @@ class _AgentSseStreamAdapter:
         self.on_first_message = on_first_message
         self.on_stream_started = on_stream_started
         self.debug_label = debug_label
-        self.user_id = user_id
+        self.user_id = str(self.run_context.get("user_id") or "").strip() or None
         self.reasoning_turn_id = reasoning_turn_id
         self.tool_stream_state = _ToolStreamState()
         self.reasoning_segments: list[dict[str, Any]] = []
@@ -605,6 +606,7 @@ class _AgentSseStreamAdapter:
         async for event in self.agent.astream(
             self.initial_state,
             config=self._stream_config,
+            context=self.run_context,
             stream_mode=["messages", "custom", "values"],
         ):
             if not stream_started:
@@ -1190,11 +1192,11 @@ def _create_agent_stream_adapter(
         agent=agent,
         initial_state=initial_state,
         config=config,
+        run_context={"user_id": callbacks.user_id, "operator_name": callbacks.username or ""},
         request=request,
         visible_message_filter=_is_chat_data_visible_stream_message,
         disconnect_log=_DisconnectLog(id=callbacks.thread_id),
         debug_label="AI Content from model",
-        user_id=callbacks.user_id,
         include_empty_tool_messages=True,
         on_first_message=partial(callbacks.log_phase, "first_model_chunk"),
         on_stream_started=on_stream_started,
@@ -1414,10 +1416,7 @@ async def _resolve_agent_turn_inputs(
     adopted_messages = user_input.adopted_messages
     resume_answer = resume.resume_answer
     turn_id = resume.turn_id
-    user_id = runtime.user_id
-    username = runtime.username
     thread_id = runtime.thread_id
-    datasource_id = runtime.datasource_id
     semantic_context = runtime.semantic_context
     runtime_options = runtime.runtime_options
     workspace_root = runtime.workspace_root
@@ -1443,12 +1442,9 @@ async def _resolve_agent_turn_inputs(
         )
     initial_state = _resolve_agent_initial_state(
         resume_answer=resume_answer,
-        user_id=user_id,
-        operator_name=username,
         conversation_id=thread_id,
         adopted_messages=adopted_messages,
         user_message=user_message,
-        datasource_id=datasource_id,
         semantic_context=semantic_context,
         runtime_options=runtime_options,
         workspace_root=workspace_root,

@@ -87,12 +87,12 @@ def _isolated_workspace(
 def test_workspace_runtime_from_state_rebuilds_runtime_context(tmp_path):
     runtime = workspace_runtime_from_state(
         {
-            "user_id": "u1",
             "workspace": {
                 "workspace_root": str(tmp_path),
                 "workspace_backend": "local",
             },
-        }
+        },
+        user_id="u1",
     )
 
     assert runtime.workspace_root == str(tmp_path)
@@ -216,12 +216,10 @@ def _create_local_workspace_tools(_monkeypatch, paths, **kwargs):
 def _analysis_query_state(
     paths,
     *,
-    datasource_id: str | None = "ds_1",
     conversation_id: str | None = None,
     user_query: str = "统计销售额",
 ) -> dict:
     return {
-        "execution_context": {"datasource_id": datasource_id},
         "user_id": "system",
         "conversation_id": conversation_id,
         "workspace": {"workspace_root": paths["root"], "workspace_backend": "local"},
@@ -2070,7 +2068,7 @@ async def test_semantic_query_tool_leaves_large_result_for_middleware(monkeypatc
 async def test_semantic_query_tool_rejects_missing_datasource_and_invalid_requests(monkeypatch):
     paths = ensure_conversation_workspace(f"conv_workspace_exec_reject_{uuid.uuid4().hex}")
     tools_without_datasource = _create_local_workspace_tools(monkeypatch, paths)
-    state_without_datasource = _analysis_query_state(paths, datasource_id=None)
+    state_without_datasource = _analysis_query_state(paths)
 
     with pytest.raises(ValueError, match="当前会话未绑定数据源"):
         await tools_without_datasource["data_analyzing_tool"].ainvoke(
@@ -2105,7 +2103,7 @@ async def test_semantic_query_tool_rejects_missing_datasource_and_invalid_reques
         )
 
     with pytest.raises(ValueError, match="semantic_config_id"):
-        await sql_tool_module.create_data_analyzing_tool().ainvoke(
+        await sql_tool_module.create_data_analyzing_tool("ds_1").ainvoke(
             {
                 "action": "execute_query",
                 "action_payload": {

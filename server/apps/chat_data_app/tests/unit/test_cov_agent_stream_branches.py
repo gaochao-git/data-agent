@@ -36,13 +36,13 @@ def _adapter(*, agent=None, **attrs):
 
 
 class _EmptyAgent:
-    async def astream(self, _state, config=None, stream_mode=None):
+    async def astream(self, _state, config=None, stream_mode=None, context=None):
         for _ in ():
             yield _
 
 
 class _ExplodingAgent:
-    async def astream(self, _state, config=None, stream_mode=None):
+    async def astream(self, _state, config=None, stream_mode=None, context=None):
         raise RuntimeError("boom")
         yield  # pragma: no cover - 保持异步生成器形态
 

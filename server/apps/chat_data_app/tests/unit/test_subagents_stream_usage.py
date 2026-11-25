@@ -28,7 +28,13 @@ def _spec(name="explore", **overrides):
 
 
 def _fake_runtime(state=None, tool_call_id="call_1"):
-    return SimpleNamespace(state=state or {}, tool_call_id=tool_call_id)
+    """测试运行时：身份进 context，其余进 state，与生产注入口径一致。"""
+    values = dict(state or {})
+    context = {}
+    for key in ("user_id", "operator_name"):
+        if key in values:
+            context[key] = values.pop(key)
+    return SimpleNamespace(state=values, tool_call_id=tool_call_id, context=context)
 
 
 def test_extract_final_report_strips_tool_call_markup():
@@ -177,7 +183,7 @@ async def test_subagent_tool_streamed_deltas_exclude_markup(monkeypatch):
     markup = _RAW_MARKUP_MESSAGE
 
     class FakeRunnable:
-        async def astream(self, _state, _config, *, stream_mode):
+        async def astream(self, _state, _config, *, stream_mode, context=None):
             # 标记在增量边界被切碎（真实流式形态）
             yield "messages", (AIMessageChunk(content=markup[:40], id="m1"), {})
             yield "messages", (AIMessageChunk(content=markup[40:], id="m1"), {})
@@ -208,7 +214,7 @@ async def test_subagent_tool_emits_context_usage_events_and_stamps_tool_message(
     )
 
     class FakeRunnable:
-        async def astream(self, _state, _config, *, stream_mode):
+        async def astream(self, _state, _config, *, stream_mode, context=None):
             yield "updates", {"model": {"messages": [AIMessage(content="第一步结论", id="m1")]}}
             yield "updates", {"model": {"messages": [AIMessage(content="最终结论", id="m2")]}}
 
@@ -259,7 +265,7 @@ async def test_subagent_usage_detail_flows_from_state_update_to_sse_and_snapshot
     }
 
     class FakeRunnable:
-        async def astream(self, _state, _config, *, stream_mode):
+        async def astream(self, _state, _config, *, stream_mode, context=None):
             yield (
                 "updates",
                 {
@@ -319,7 +325,7 @@ async def test_subagent_usage_detail_prefers_custom_event_over_compact_state_upd
     compact_detail = {"input_tokens": 2048, "total_tokens": 2048}
 
     class FakeRunnable:
-        async def astream(self, _state, _config, *, stream_mode):
+        async def astream(self, _state, _config, *, stream_mode, context=None):
             yield "custom", {"type": "token_usage", "usage": full_detail, "model": "qwen-test"}
             yield (
                 "updates",
@@ -351,7 +357,7 @@ async def test_subagent_live_context_event_carries_accumulated_billing_tokens():
     written = []
 
     class FakeRunnable:
-        async def astream(self, _state, _config, *, stream_mode):
+        async def astream(self, _state, _config, *, stream_mode, context=None):
             yield (
                 "updates",
                 {
@@ -527,7 +533,7 @@ async def test_subagent_tool_keeps_report_without_budget_notice(monkeypatch):
     )
 
     class FakeRunnable:
-        async def astream(self, _state, _config, *, stream_mode):
+        async def astream(self, _state, _config, *, stream_mode, context=None):
             yield "updates", {"model": {"messages": [AIMessage(content="提前收尾的盘点结论", id="m1")]}}
 
     monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
@@ -548,7 +554,7 @@ async def test_subagent_tool_offloads_report_over_parent_budget(monkeypatch):
     """报告超过父上下文预算占比时落盘外置，正文换成统一信封。"""
     calls: list[dict] = []
 
-    async def fake_externalize(content, *, source_tool, state, suffix, preview_chars):
+    async def fake_externalize(content, *, source_tool, state, user_id, suffix, preview_chars):
         calls.append(
             {
                 "content": content,
@@ -563,7 +569,7 @@ async def test_subagent_tool_offloads_report_over_parent_budget(monkeypatch):
     monkeypatch.setattr(subagent_report_module, "externalize_tool_text", fake_externalize)
 
     class FakeRunnable:
-        async def astream(self, _state, _config, *, stream_mode):
+        async def astream(self, _state, _config, *, stream_mode, context=None):
             yield "updates", {"model": {"messages": [AIMessage(content="结论" * 3000, id="m1")]}}
 
     monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
@@ -602,7 +608,7 @@ async def test_subagent_tool_keeps_report_within_parent_budget(monkeypatch):
     monkeypatch.setattr(subagent_report_module, "externalize_tool_text", fake_externalize)
 
     class FakeRunnable:
-        async def astream(self, _state, _config, *, stream_mode):
+        async def astream(self, _state, _config, *, stream_mode, context=None):
             yield "updates", {"model": {"messages": [AIMessage(content="简短结论", id="m1")]}}
 
     monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
@@ -632,7 +638,7 @@ async def test_subagent_tool_keeps_report_without_parent_usage(monkeypatch):
     monkeypatch.setattr(subagent_report_module, "externalize_tool_text", fake_externalize)
 
     class FakeRunnable:
-        async def astream(self, _state, _config, *, stream_mode):
+        async def astream(self, _state, _config, *, stream_mode, context=None):
             yield "updates", {"model": {"messages": [AIMessage(content="结论" * 3000, id="m1")]}}
 
     monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
@@ -712,7 +718,7 @@ async def test_subagent_tool_keeps_report_when_offload_fails(monkeypatch):
     monkeypatch.setattr(subagent_report_module, "externalize_tool_text", failed_externalize)
 
     class FakeRunnable:
-        async def astream(self, _state, _config, *, stream_mode):
+        async def astream(self, _state, _config, *, stream_mode, context=None):
             yield "updates", {"model": {"messages": [AIMessage(content="关键结论" * 3000, id="m1")]}}
 
     monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())

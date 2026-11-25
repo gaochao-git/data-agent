@@ -39,7 +39,15 @@ def recovery_runtime(record: Any) -> SimpleNamespace | None:
         if record.meta.get("recovery_kind") == "pending_start":
             return None
         state = {}
-    return SimpleNamespace(state=dict(state), tool_call_id=payload.get("tool_call_id") or None)
+    context = {"user_id": str(getattr(record, "user_id", "") or "")}
+    operator_name = str((record.meta or {}).get("operator_name") or "").strip()
+    if operator_name:
+        context["operator_name"] = operator_name
+    return SimpleNamespace(
+        state=dict(state),
+        tool_call_id=payload.get("tool_call_id") or None,
+        context=context,
+    )
 
 
 def recovery_candidate(record: Any) -> bool:

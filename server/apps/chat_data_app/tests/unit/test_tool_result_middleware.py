@@ -29,13 +29,13 @@ def _request(
     return SimpleNamespace(
         state={
             "conversation_id": conversation_id,
-            "user_id": user_id,
             "messages": [HumanMessage(content="查询结果")],
             "workspace": {
                 "workspace_root": workspace_root or "",
                 "workspace_backend": "local",
             },
-        }
+        },
+        runtime=SimpleNamespace(context={"user_id": user_id}),
     )
 
 

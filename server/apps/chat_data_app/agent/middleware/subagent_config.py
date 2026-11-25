@@ -17,14 +17,14 @@ __all__ = ["SUBAGENT_STATE_PASSTHROUGH_KEYS", "build_subagent_invocation_config"
 
 SUBAGENT_STATE_PASSTHROUGH_KEYS = frozenset(
     {
-        "user_id",
-        "operator_name",
         "conversation_id",
-        "execution_context",
         "workspace",
     }
 )
-"""允许从主对话复制进子智能体的身份、数据域与工作区上下文。"""
+"""允许从主对话复制进子智能体的会话与工作区上下文。
+
+身份走 run context；数据源等执行域信息由工具在装配时绑定，均不随 state 透传。
+"""
 
 
 def build_subagent_invocation_config(

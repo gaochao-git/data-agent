@@ -35,7 +35,13 @@ def _spec(name="explore", **overrides):
 
 
 def _fake_runtime(state=None, tool_call_id="call_1"):
-    return SimpleNamespace(state=state or {}, tool_call_id=tool_call_id)
+    """测试运行时：身份进 context，其余进 state，与生产注入口径一致。"""
+    values = dict(state or {})
+    context = {}
+    for key in ("user_id", "operator_name"):
+        if key in values:
+            context[key] = values.pop(key)
+    return SimpleNamespace(state=values, tool_call_id=tool_call_id, context=context)
 
 
 def test_validate_subagent_specs_rejects_empty_and_duplicates():
@@ -120,7 +126,8 @@ def test_build_subagent_state_only_passes_whitelisted_keys():
 
     state = subagents_module._build_subagent_state(runtime, "分析入金趋势")
 
-    assert state["user_id"] == "u1"
+    # 身份改走 run context，不再随 state 复制进子图
+    assert "user_id" not in state
     assert state["workspace"] == {"root": "/mnt/user-data"}
     assert "token_usage" not in state
     assert "context_summary" not in state
@@ -307,7 +314,7 @@ async def test_subagent_tool_returns_final_report_as_tool_message(monkeypatch):
     captured = {}
 
     class FakeRunnable:
-        async def astream(self, state, config, stream_mode):
+        async def astream(self, state, config, stream_mode, context=None):
             captured["state"] = state
             captured["config"] = config
             captured["stream_mode"] = stream_mode
@@ -328,7 +335,7 @@ async def test_subagent_tool_returns_final_report_as_tool_message(monkeypatch):
     assert isinstance(result.update["messages"][0], ToolMessage)
     assert result.update["messages"][0].content == "近30天入金呈上升趋势"
     assert captured["state"]["messages"][0].content == "分析入金趋势"
-    assert captured["state"]["user_id"] == "u1"
+    assert "user_id" not in captured["state"]
     assert captured["config"]["callbacks"] == []
     assert captured["stream_mode"] == ["values", "updates", "messages", "custom"]
 
@@ -336,7 +343,7 @@ async def test_subagent_tool_returns_final_report_as_tool_message(monkeypatch):
 @pytest.mark.asyncio
 async def test_subagent_tool_falls_back_when_subagent_returns_empty_report(monkeypatch):
     class FakeRunnable:
-        async def astream(self, _state, _config, *, stream_mode):
+        async def astream(self, _state, _config, *, stream_mode, context=None):
             yield "updates", {"model": {"messages": []}}
 
     monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
@@ -356,7 +363,7 @@ async def test_subagent_tool_forwards_inner_tool_events_to_parent_stream(monkeyp
     monkeypatch.setattr(subagents_module, "get_stream_writer", lambda: written.append)
 
     class FakeRunnable:
-        async def astream(self, _state, _config, *, stream_mode):
+        async def astream(self, _state, _config, *, stream_mode, context=None):
             message = AIMessage.model_construct(
                 content="",
                 tool_calls=[{"id": "inner-1", "name": "calculator_tool", "args": '{"expression": "1 + 1"}'}],
@@ -426,7 +433,7 @@ async def test_subagent_tool_survives_missing_stream_writer(monkeypatch):
     monkeypatch.setattr(subagents_module, "get_stream_writer", _raise)
 
     class FakeRunnable:
-        async def astream(self, _state, _config, *, stream_mode):
+        async def astream(self, _state, _config, *, stream_mode, context=None):
             yield "updates", {"model": {"messages": [AIMessage(content="结论")]}}
 
     monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
@@ -490,7 +497,7 @@ async def test_subagent_tool_forwards_and_stamps_subagent_compactions(monkeypatc
     monkeypatch.setattr(subagents_module, "get_stream_writer", lambda: written.append)
 
     class FakeRunnable:
-        async def astream(self, _state, _config, *, stream_mode):
+        async def astream(self, _state, _config, *, stream_mode, context=None):
             yield "updates", {"model": {"messages": [AIMessage(content="结论", id="m1")]}}
             yield (
                 "updates",
@@ -559,7 +566,7 @@ async def test_multiple_compactions_stamp_distinct_realtime_anchors(monkeypatch)
         }
 
     class FakeRunnable:
-        async def astream(self, _state, _config, *, stream_mode):
+        async def astream(self, _state, _config, *, stream_mode, context=None):
             for index in (1, 2):
                 yield (
                     "updates",
@@ -703,7 +710,7 @@ async def test_subagent_tool_streams_compression_started_and_completed(monkeypat
     monkeypatch.setattr(subagents_module, "get_stream_writer", lambda: written.append)
 
     class FakeRunnable:
-        async def astream(self, _state, _config, *, stream_mode):
+        async def astream(self, _state, _config, *, stream_mode, context=None):
             yield (
                 "custom",
                 {
@@ -788,7 +795,7 @@ async def test_subagent_tool_stamps_subagent_token_usage(monkeypatch):
     """subagent 结果附带子图 token 用量，供前端任务卡/过程面板展示。"""
 
     class FakeRunnable:
-        async def astream(self, _state, _config, *, stream_mode):
+        async def astream(self, _state, _config, *, stream_mode, context=None):
             yield (
                 "updates",
                 {
@@ -918,7 +925,7 @@ async def test_progress_snapshot_carries_lightweight_context_usage():
     """运行期进度必须带上下文快照，列表/取消/失联任务才不显示「—」。"""
 
     class FakeRunnable:
-        async def astream(self, _state, _config, *, stream_mode):
+        async def astream(self, _state, _config, *, stream_mode, context=None):
             yield "updates", {"model": {"messages": [AIMessage(content="分析完成")]}}
 
     snapshots: list[dict] = []
@@ -944,7 +951,7 @@ async def test_progress_snapshot_carries_lightweight_context_usage():
 async def test_offload_subagent_report_returns_recovery_for_long_report(monkeypatch):
     """超长报告复用统一落盘通道，返回 recovery 供后台任务记录路径。"""
 
-    async def fake_externalize(content, *, source_tool, state, suffix, preview_chars):
+    async def fake_externalize(content, *, source_tool, state, user_id, suffix, preview_chars):
         return "offloaded-envelope", {
             "source_tool": source_tool,
             "result_path": "/mnt/user-data/workspace/.system/tool-results/report.md",
@@ -1186,7 +1193,7 @@ async def test_subagent_tool_streams_text_and_thinking_deltas(monkeypatch):
     monkeypatch.setattr(subagents_module, "get_stream_writer", lambda: written.append)
 
     class FakeRunnable:
-        async def astream(self, _state, _config, *, stream_mode):
+        async def astream(self, _state, _config, *, stream_mode, context=None):
             assert stream_mode == ["values", "updates", "messages", "custom"]
             yield (
                 "messages",
@@ -1236,7 +1243,7 @@ async def test_subagent_tool_delta_streaming_caps_cumulative_text(monkeypatch):
     cap = subagents_module.SUBAGENT_MESSAGE_PREVIEW_MAX_CHARS
 
     class FakeRunnable:
-        async def astream(self, _state, _config, *, stream_mode):
+        async def astream(self, _state, _config, *, stream_mode, context=None):
             yield "messages", (AIMessageChunk(content="x" * (cap - 5), id="m1"), {})
             # 最后一小段触发封顶：只外发剩余 5 字符 + 截断标记
             yield "messages", (AIMessageChunk(content="yyyyyyyy", id="m1"), {})
@@ -1310,7 +1317,7 @@ async def test_subagent_tool_keeps_text_when_chunk_carries_tool_call(monkeypatch
     monkeypatch.setattr(subagents_module, "get_stream_writer", lambda: written.append)
 
     class FakeRunnable:
-        async def astream(self, _state, _config, *, stream_mode):
+        async def astream(self, _state, _config, *, stream_mode, context=None):
             yield "messages", (AIMessageChunk(content="我需要先读取", id="m1"), {})
             # 文本与工具增量同时到达（OpenAI 兼容实现常见）
             yield (
@@ -1356,7 +1363,7 @@ async def test_subagent_tool_assigns_fallback_id_to_messages_without_id(monkeypa
     shared_message = AIMessage(content="无id完整")
 
     class FakeRunnable:
-        async def astream(self, _state, _config, *, stream_mode):
+        async def astream(self, _state, _config, *, stream_mode, context=None):
             # 无 id 的增量不转发
             yield "messages", (AIMessageChunk(content="无id增量"), {})
             # 同一条无 id 消息出现在两个节点的 updates 里
@@ -1619,7 +1626,7 @@ async def test_subagent_tool_stamps_trail_snapshot_on_tool_message(monkeypatch):
     """task ToolMessage 携带过程快照，随消息持久化供历史回放还原。"""
 
     class FakeRunnable:
-        async def astream(self, _state, _config, *, stream_mode):
+        async def astream(self, _state, _config, *, stream_mode, context=None):
             yield (
                 "updates",
                 {
@@ -1670,7 +1677,7 @@ async def test_subagent_tool_omits_trail_when_no_inner_activity(monkeypatch):
     """子图完全无可见输出时不塞空快照；仅有最终结论时快照与直播一致（含该消息）。"""
 
     class FakeRunnable:
-        async def astream(self, _state, _config, *, stream_mode):
+        async def astream(self, _state, _config, *, stream_mode, context=None):
             yield "updates", {"model": {"messages": []}}
 
     monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
@@ -1689,7 +1696,7 @@ async def test_subagent_tool_trail_includes_final_message_like_live_stream(monke
     """最终结论消息在直播中本就作为 subagent_message 出现在 trail 尾部，快照保持一致。"""
 
     class FakeRunnable:
-        async def astream(self, _state, _config, *, stream_mode):
+        async def astream(self, _state, _config, *, stream_mode, context=None):
             yield "updates", {"model": {"messages": [AIMessage(content="直接给出结论", id="m1")]}}
 
     monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
@@ -1722,7 +1729,7 @@ async def test_subagent_tool_stamps_trail_on_failure(monkeypatch):
     """
 
     class FakeRunnable:
-        async def astream(self, _state, _config, *, stream_mode):
+        async def astream(self, _state, _config, *, stream_mode, context=None):
             yield (
                 "updates",
                 {
@@ -1774,7 +1781,7 @@ async def test_subagent_tool_failure_without_inner_activity_omits_trail(monkeypa
     """异常发生在任何可见输出之前时不塞空快照，与成功路径口径一致。"""
 
     class FakeRunnable:
-        async def astream(self, _state, _config, *, stream_mode):
+        async def astream(self, _state, _config, *, stream_mode, context=None):
             raise RuntimeError("模型连接失败")
             yield  # pragma: no cover
 

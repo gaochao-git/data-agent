@@ -71,10 +71,12 @@ async def _offload_subagent_report(report: str, runtime: ToolRuntime) -> tuple[s
     if not over_token_budget and len(report) <= TOOL_RESULT_OFFLOAD_SIZE:
         return report, None
     state = getattr(runtime, "state", None)
+    context = getattr(runtime, "context", None)
     envelope, recovery = await externalize_tool_text(
         report,
         source_tool=SUBAGENT_RESULT_SOURCE,
         state=dict(state) if isinstance(state, dict) else {},
+        user_id=str(context.get("user_id") or "").strip() if isinstance(context, dict) else "",
         suffix=".md",
         preview_chars=SUBAGENT_REPORT_PREVIEW_CHARS,
     )

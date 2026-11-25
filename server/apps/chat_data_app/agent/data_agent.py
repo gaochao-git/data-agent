@@ -26,7 +26,7 @@ from .agent_runtime import (
     build_standard_agent_middleware,
     create_streaming_chat_model,
 )
-from .agent_state import ChatDataAgentState
+from .agent_state import ChatDataAgentState, ChatDataRunContext
 from .approval_policy import ask_tool_names, resolve_approval_policies
 from .contracts.business_context import BusinessContext
 from .middleware.after_model_history import create_after_model_history_middleware
@@ -915,6 +915,7 @@ def create_agent_from_spec(
         system_prompt=system_prompt,
         middleware=middleware,
         state_schema=ChatDataAgentState,
+        context_schema=ChatDataRunContext,
         checkpointer=inputs.checkpointer,
     )
 

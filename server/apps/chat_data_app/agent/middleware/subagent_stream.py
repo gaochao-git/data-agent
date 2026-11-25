@@ -1125,6 +1125,7 @@ async def _run_subagent_with_events(
     usage_meta: dict[str, int] | None = None,
     on_progress: Callable[[dict[str, Any]], None] | None = None,
     initial_messages: list[Any] | None = None,
+    context: dict[str, Any] | None = None,
 ) -> list:
     """流式运行子图：转发内层事件并返回完整消息列表。
 
@@ -1152,6 +1153,7 @@ async def _run_subagent_with_events(
             captured,
             usage_meta,
             on_progress,
+            context=context,
         )
     finally:
         stream_state.stream_ended_wall_ms = int(time.time() * 1000)
@@ -1186,10 +1188,17 @@ async def _consume_subagent_stream(
     captured: dict[str, Any] | None,
     usage_meta: dict[str, int] | None,
     on_progress: Callable[[dict[str, Any]], None] | None,
+    *,
+    context: dict[str, Any] | None = None,
 ) -> None:
     limit = config.get("recursion_limit") if isinstance(config, dict) else None
     stream_state.superstep_limit = limit if isinstance(limit, int) and limit > 0 else None
-    async for chunk in runnable.astream(state, config, stream_mode=["values", "updates", "messages", "custom"]):
+    async for chunk in runnable.astream(
+        state,
+        config,
+        stream_mode=["values", "updates", "messages", "custom"],
+        context=context,
+    ):
         _capture_subagent_token_usage(chunk, captured)
         context_usage = None
         if _process_subagent_chunk(chunk, stream_state, writer, parent_tool_call_id):

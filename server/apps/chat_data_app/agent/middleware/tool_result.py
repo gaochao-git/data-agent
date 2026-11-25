@@ -67,7 +67,12 @@ async def _finalize_tool_message(
         return message
     if len(text) <= TOOL_RESULT_OFFLOAD_SIZE:
         return message
-    externalized, recovery = await _externalize_generic_text(text, tool_name, _request_state(request))
+    externalized, recovery = await _externalize_generic_text(
+        text,
+        tool_name,
+        _request_state(request),
+        _request_user_id(request),
+    )
     return _replace_tool_message(message, content=externalized, recovery=recovery)
 
 
@@ -98,6 +103,7 @@ async def _finalize_query_result(
             suffix=".json",
             directory_name=QUERY_RESULT_DIR_NAME,
             state=_request_state(request),
+            user_id=_request_user_id(request),
         )
     except Exception as exc:
         logger.error("保存查询工具结果恢复副本失败: %s", exc, exc_info=True)
@@ -142,6 +148,7 @@ async def _externalize_generic_text(
     content: str,
     tool_name: str,
     state: dict[str, Any],
+    user_id: str,
     *,
     suffix: str = ".txt",
     preview_chars: int = 512,
@@ -151,6 +158,7 @@ async def _externalize_generic_text(
             content=content,
             suffix=suffix,
             state=state,
+            user_id=user_id,
         )
     except Exception as exc:
         logger.error("卸载工具结果失败: tool=%s error=%s", tool_name, exc, exc_info=True)
@@ -174,6 +182,7 @@ async def externalize_tool_text(
     *,
     source_tool: str,
     state: dict[str, Any],
+    user_id: str,
     suffix: str = ".txt",
     preview_chars: int = 512,
 ) -> tuple[str, dict[str, Any] | None]:
@@ -186,6 +195,7 @@ async def externalize_tool_text(
         content,
         source_tool,
         state,
+        user_id,
         suffix=suffix,
         preview_chars=preview_chars,
     )
@@ -235,6 +245,7 @@ async def _write_private_tool_result(
     *,
     content: str,
     suffix: str,
+    user_id: str,
     directory_name: str = TOOL_OFFLOAD_DIR_NAME,
     state: dict[str, Any],
 ) -> ToolResultRecord:
@@ -245,7 +256,8 @@ async def _write_private_tool_result(
     allowing a direct local-store fallback would reintroduce a second write path.
     """
     conversation_id = _required_state_field(state, "conversation_id")
-    user_id = _required_state_field(state, "user_id")
+    if not str(user_id or "").strip():
+        raise ValueError("缺少工具结果归属字段: user_id")
     workspace = _state_workspace(state)
     workspace_root = str(workspace.get("workspace_root") or "").strip()
     if not workspace_root:
@@ -258,7 +270,7 @@ async def _write_private_tool_result(
         user_id=user_id,
         directory_name=directory_name,
     )
-    runtime = workspace_runtime_from_state(state)
+    runtime = workspace_runtime_from_state(state, user_id=user_id)
     await runtime.write_tool_result(file_path=record.virtual_path, content=content)
     return record
 
@@ -281,6 +293,12 @@ def _clip_text_to_chars(content: str, char_limit: int) -> str:
 def _request_state(request: Any) -> dict[str, Any]:
     state = getattr(request, "state", None)
     return state if isinstance(state, dict) else {}
+
+
+def _request_user_id(request: Any) -> str:
+    """归属用户只读 run context；state 不再承载身份。"""
+    context = getattr(getattr(request, "runtime", None), "context", None)
+    return str(context.get("user_id") or "").strip() if isinstance(context, dict) else ""
 
 
 def _state_workspace(state: dict[str, Any]) -> dict[str, Any]:

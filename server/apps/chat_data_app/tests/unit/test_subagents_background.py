@@ -70,7 +70,7 @@ async def _save_recovery_runtime(harness, record) -> None:
     saved = await harness.service.save_task_recovery_runtime(
         record.task_id,
         record.owner_token or "",
-        state={"conversation_id": CONV, "user_id": USER, "workspace": {"workspace_root": "/tmp/workspace"}},
+        state={"conversation_id": CONV, "workspace": {"workspace_root": "/tmp/workspace"}},
         tool_call_id="call-parent",
     )
     assert saved is not None
@@ -100,17 +100,16 @@ def _fake_runtime(conversation_id=CONV, tool_call_id="call_bg_1"):
     return SimpleNamespace(
         state={
             "conversation_id": conversation_id,
-            "user_id": USER,
-            "operator_name": "用户一",
             "run_id": "run-parent",
         },
         tool_call_id=tool_call_id,
+        context={"user_id": USER, "operator_name": "用户一"},
     )
 
 
 def _runnable(report: str, *, delay_after_yield: float = 0.0):
     class _Runnable:
-        async def astream(self, _state, _config, *, stream_mode):
+        async def astream(self, _state, _config, *, stream_mode, context=None):
             yield "updates", {"model": {"messages": [AIMessage(content=report)]}}
             if delay_after_yield:
                 await asyncio.sleep(delay_after_yield)
@@ -867,7 +866,7 @@ async def test_follow_up_reuses_session_history(harness, monkeypatch):
     captured_states: list[dict] = []
 
     class _Runnable:
-        async def astream(self, state, _config, *, stream_mode):
+        async def astream(self, state, _config, *, stream_mode, context=None):
             captured_states.append(dict(state))
             yield "updates", {"model": {"messages": [AIMessage(content=f"第 {len(captured_states)} 轮结论")]}}
 
@@ -931,7 +930,7 @@ async def test_follow_up_can_switch_from_background_to_sync(harness, monkeypatch
     captured_states: list[dict] = []
 
     class _Runnable:
-        async def astream(self, state, _config, *, stream_mode):
+        async def astream(self, state, _config, *, stream_mode, context=None):
             captured_states.append(dict(state))
             yield "updates", {"model": {"messages": [AIMessage(content=f"第 {len(captured_states)} 轮结论")]}}
 
@@ -995,7 +994,7 @@ async def test_sync_follow_up_failure_preserves_prior_history(harness, monkeypat
     fail_follow_up = False
 
     class _Runnable:
-        async def astream(self, state, _config, *, stream_mode):
+        async def astream(self, state, _config, *, stream_mode, context=None):
             if fail_follow_up:
                 raise RuntimeError("sync follow-up failure")
             yield "updates", {"model": {"messages": [AIMessage(content="first answer")]}}
@@ -1047,7 +1046,7 @@ async def test_follow_up_can_switch_from_sync_to_background(harness, monkeypatch
     captured_states: list[dict] = []
 
     class _Runnable:
-        async def astream(self, state, _config, *, stream_mode):
+        async def astream(self, state, _config, *, stream_mode, context=None):
             captured_states.append(dict(state))
             yield "updates", {"model": {"messages": [AIMessage(content=f"第 {len(captured_states)} 轮结论")]}}
 
@@ -1444,7 +1443,7 @@ async def test_follow_up_from_old_turn_anchors_to_latest_session_turn(harness, m
     responses = iter(["第 1 轮", "第 2 轮", "第 3 轮", "第 4 轮"])
 
     class _Runnable:
-        async def astream(self, _state, _config, *, stream_mode):
+        async def astream(self, _state, _config, *, stream_mode, context=None):
             yield "updates", {"model": {"messages": [AIMessage(content=next(responses))]}}
 
     monkeypatch.setattr(
@@ -1502,7 +1501,7 @@ async def test_follow_up_ignores_stale_latest_task_when_snapshot_write_failed(ha
     responses = iter(["第 1 轮结论", "第 2 轮结论", "兜底追问结论"])
 
     class _Runnable:
-        async def astream(self, _state, _config, *, stream_mode):
+        async def astream(self, _state, _config, *, stream_mode, context=None):
             yield "updates", {"model": {"messages": [AIMessage(content=next(responses))]}}
 
     monkeypatch.setattr(
@@ -1553,7 +1552,7 @@ async def test_follow_up_falls_back_to_legacy_report_when_snapshot_missing(harne
     captured_states: list[dict] = []
 
     class _Runnable:
-        async def astream(self, state, _config, *, stream_mode):
+        async def astream(self, state, _config, *, stream_mode, context=None):
             captured_states.append(dict(state))
             yield "updates", {"model": {"messages": [AIMessage(content="追问结论")]}}
 
