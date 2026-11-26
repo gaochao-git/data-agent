@@ -37,7 +37,7 @@ def build_service(monkeypatch, rows=None, owner_row=None, system_meta=None, plug
     service._dao = FakeDao(rows, owner_row)
     monkeypatch.setattr(service_module, "get_skill_source", lambda: None)
     monkeypatch.setattr(service_module, "load_metadata", lambda: system_meta or {})
-    monkeypatch.setattr(service_module, "_plugin_skill_rows", lambda existing_names: plugin_rows or [])
+    monkeypatch.setattr(service_module, "_plugin_skill_rows", lambda **_kwargs: plugin_rows or [])
     monkeypatch.setattr(service_module, "_plugin_name_by_skill", lambda: plugin_names or {})
     return service
 
@@ -199,7 +199,7 @@ class FakeAdminService:
         self.calls.append(("owner", name))
         return "" if name.startswith("plugin:") or name == "officecli" else "u2"
 
-    async def get_skill_async(self, name, include_draft=False, user_id=""):
+    async def get_skill_async(self, name, include_draft=False, user_id="", **_kwargs):
         self.calls.append(("detail", name, include_draft, user_id))
         if name == "missing":
             return None

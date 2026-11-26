@@ -322,6 +322,23 @@ async def test_admit_inbox_messages_replaces_and_persists_each_message(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_persist_admitted_inbox_messages_does_not_put_user_id_in_operator_name(monkeypatch):
+    captured: dict = {}
+
+    async def fake_persist(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(agent_stream.conversation_event_service, "persist_user_message", fake_persist)
+    callbacks = SimpleNamespace(thread_id="conv-1", user_id="u1", username=None)
+    message = HumanMessage(content="排队消息", id="m1")
+
+    await agent_stream._persist_admitted_inbox_messages(callbacks, [message])
+
+    assert captured["user_id"] == "u1"
+    assert captured["operator_name"] == ""
+
+
+@pytest.mark.asyncio
 async def test_mark_waiting_for_user_skips_without_run_id(monkeypatch):
     calls = []
 
@@ -365,6 +382,54 @@ async def test_mark_waiting_for_user_sets_turn_and_calls_service(monkeypatch):
 
     assert question["turn_id"] == "turn-2"
     assert calls == [("run-1", question, "u1", "张三", "token")]
+
+
+@pytest.mark.asyncio
+async def test_mark_waiting_for_user_does_not_put_user_id_in_operator_name(monkeypatch):
+    calls = []
+
+    async def fake_mark(*args):
+        calls.append(args)
+
+    monkeypatch.setattr(agent_stream.agent_inbox_service, "mark_waiting_for_user", fake_mark)
+    callbacks = SimpleNamespace(
+        run_id="run-1",
+        effective_turn_id="turn-2",
+        user_id="u1",
+        username=None,
+        owner_token="token",
+    )
+    question = {"question": "继续吗"}
+
+    await _mark_agent_waiting_for_user(callbacks, question)
+
+    assert calls == [("run-1", question, "u1", "", "token")]
+
+
+@pytest.mark.asyncio
+async def test_restore_question_answer_does_not_put_user_id_in_operator_name(monkeypatch):
+    calls = []
+
+    class _DisconnectedRequest:
+        async def is_disconnected(self):
+            return True
+
+    async def fake_restore(*args):
+        calls.append(args)
+
+    monkeypatch.setattr(agent_stream.agent_inbox_service, "restore_question_answer", fake_restore)
+    callbacks = SimpleNamespace(
+        request=_DisconnectedRequest(),
+        resume_answer={"answers": []},
+        run_id="run-1",
+        user_id="u1",
+        username=None,
+        owner_token="token",
+        thread_id="conv-1",
+    )
+
+    assert await agent_stream._before_agent_stream(callbacks) is False
+    assert calls == [("run-1", "u1", "", "token")]
 
 
 @pytest.mark.asyncio

@@ -1064,7 +1064,7 @@ async def test_persist_turn_history_uses_checkpoint_writer_when_run_id_present(m
     assert captured["owner_token"] == "tok"
     assert captured["stream_id"] == "stream-9"
     assert captured["turn_id"] == "turn-1"
-    assert captured["operator_name"] == "u1"
+    assert captured["operator_name"] == ""
 
 
 @pytest.mark.asyncio

@@ -413,6 +413,7 @@ CREATE TABLE `chat_data_plugin` (
   `display_name` varchar(64) NOT NULL DEFAULT '' COMMENT '展示名',
   `description` varchar(500) NOT NULL DEFAULT '' COMMENT '描述',
   `enabled_flag` tinyint NOT NULL DEFAULT '1' COMMENT '启用标识: 0-禁用, 1-启用',
+  `scope_type` varchar(20) NOT NULL DEFAULT 'all' COMMENT '权限范围: all-全部用户, selected-指定用户',
   `manifest_text` text COMMENT 'plugin.json 原文(JSON文本)',
   `delete_flag` tinyint NOT NULL DEFAULT '0' COMMENT '删除标识: 0-未删除, 1-已删除',
   `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
@@ -425,6 +426,24 @@ CREATE TABLE `chat_data_plugin` (
   UNIQUE KEY `uniq_plugin_name` (`plugin_name`),
   KEY `idx_plugin_enabled_delete` (`enabled_flag`, `delete_flag`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ChatData 插件状态表';
+"""
+
+MYSQL_CHAT_DATA_PLUGIN_PERMISSION_TABLE = """
+CREATE TABLE `chat_data_plugin_permission` (
+  `id` bigint(20) NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `plugin_name` varchar(64) NOT NULL DEFAULT '' COMMENT '插件名',
+  `user_name` varchar(100) NOT NULL DEFAULT '' COMMENT '授权用户名',
+  `delete_flag` tinyint NOT NULL DEFAULT '0' COMMENT '删除标识: 0-未删除, 1-已删除',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `create_by` varchar(255) NOT NULL DEFAULT '' COMMENT '创建人',
+  `create_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人名称',
+  `update_by` varchar(255) NOT NULL DEFAULT '' COMMENT '更新人',
+  `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人名称',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_plugin_permission` (`plugin_name`, `user_name`),
+  KEY `idx_plugin_permission_user` (`user_name`, `plugin_name`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ChatData 插件人员权限表';
 """
 
 MYSQL_CHAT_DATA_SQL_RESULT_CACHE_TABLE = """
@@ -592,6 +611,7 @@ MYSQL_TABLES = [
     MYSQL_CHAT_DATA_EVAL_RUN_TABLE,
     MYSQL_CHAT_DATA_EVAL_RUN_CASE_TABLE,
     MYSQL_CHAT_DATA_PLUGIN_TABLE,
+    MYSQL_CHAT_DATA_PLUGIN_PERMISSION_TABLE,
 ]
 
 

@@ -75,6 +75,9 @@ class _CachedPlugin:
 _disk_cache: dict[str, _CachedPlugin] | None = None
 # DB 启停快照：None 表示本进程尚未成功刷新；frozenset() 表示已刷新且无启用项。
 _enabled_state: frozenset[str] | None = None
+# 与启停同批刷新的权限快照；_enabled_state 仍是启停唯一集合，
+# 这里只补充每个启用插件的 scope 与授权 username。
+_access_state: dict[str, tuple[str, frozenset[str]]] | None = None
 
 
 def clear_metadata_cache() -> None:
@@ -87,17 +90,20 @@ def clear_metadata_cache() -> None:
 
 
 async def refresh_plugin_state() -> None:
-    """从 DB 刷新插件启停快照。
+    """从 DB 刷新插件启停与人员权限快照。
 
     读失败即视为不可用：快照清空、当轮所有插件按禁用处理（fail-closed，不兜底旧值），
     并记录真实错误。调用方在会话装配、技能快照、管理端列表等入口先 await 本函数。
     """
-    global _enabled_state
+    global _access_state, _enabled_state
     try:
-        _enabled_state = frozenset(await PluginDao().list_enabled_names())
+        access = await PluginDao().list_enabled_access()
+        _enabled_state = frozenset(access)
+        _access_state = dict(access)
     except Exception as err:
-        logger.error("刷新插件启停状态失败，本轮所有插件按不可用处理: %s", err, exc_info=True)
+        logger.error("刷新插件启停与权限状态失败，本轮所有插件按不可用处理: %s", err, exc_info=True)
         _enabled_state = frozenset()
+        _access_state = {}
 
 
 def _manifest_fingerprint(entry: Path) -> tuple[int, int, int]:
@@ -172,10 +178,32 @@ def enabled_plugins() -> list[PluginMetadata]:
     return [item for item in load_plugins_metadata().values() if item.enabled]
 
 
-def enabled_plugin_skill_sources() -> list[tuple[str, Path]]:
-    """已启用插件声明的技能源 ``(技能名, 技能目录)``，供会话技能快照纳入。"""
+def _effective_access_state() -> dict[str, tuple[str, frozenset[str]]]:
+    """按启停集合读取权限元数据；测试或兼容直接设置 ``_enabled_state`` 时按全量可见。"""
+    cached = _access_state or {}
+    return {name: cached.get(name, ("all", frozenset())) for name in (_enabled_state or frozenset())}
+
+
+def _can_access_plugin(access: tuple[str, frozenset[str]], username: str) -> bool:
+    scope_type, authorized_user_names = access
+    if scope_type == "all":
+        return True
+    normalized_username = str(username or "").strip()
+    return bool(normalized_username and normalized_username in authorized_user_names)
+
+
+def is_plugin_visible_to_user(plugin_name: str, username: str = "") -> bool:
+    """判断插件对指定 username 是否可见；selected 在 username 为空时 fail-closed。"""
+    access = _effective_access_state().get(plugin_name)
+    if access is None:
+        return False
+    return _can_access_plugin(access, username)
+
+
+def _enabled_plugin_skill_sources(plugins: list[PluginMetadata]) -> list[tuple[str, Path]]:
+    """把给定插件声明的技能目录展开为 ``(技能名, 技能目录)``。"""
     sources: list[tuple[str, Path]] = []
-    for plugin in enabled_plugins():
+    for plugin in plugins:
         for skill_name in plugin.manifest.skills:
             skill_path = plugin.dir / "skills" / skill_name
             if not skill_path.is_dir() or skill_path.is_symlink():
@@ -188,8 +216,31 @@ def enabled_plugin_skill_sources() -> list[tuple[str, Path]]:
     return sources
 
 
+def enabled_plugin_skill_sources(username: str = "") -> list[tuple[str, Path]]:
+    """当前 username 可用的插件技能源；selected 插件按授权用户名过滤。"""
+    access_state = _access_state or {}
+    return _enabled_plugin_skill_sources(
+        [
+            plugin
+            for plugin in enabled_plugins()
+            if _can_access_plugin(
+                access_state.get(plugin.manifest.name, ("all", frozenset())),
+                username,
+            )
+        ]
+    )
+
+
+def enabled_plugin_skill_sources_for_admin() -> list[tuple[str, Path]]:
+    """管理端技能总览使用：返回全部已启用插件技能，不受当前管理员授权影响。"""
+    return _enabled_plugin_skill_sources(enabled_plugins())
+
+
 def enabled_plugin_mcp_servers() -> list[dict[str, Any]]:
-    """已启用插件声明的 MCP server 配置（原始 dict，交给 mcp/config.py 校验解析）。"""
+    """已启用插件声明的 MCP server 配置。
+
+    MCP 后续使用独立权限表；此处刻意不叠加插件人员权限，避免把两类授权耦合。
+    """
     entries: list[dict[str, Any]] = []
     for plugin in enabled_plugins():
         for entry in plugin.manifest.mcp_servers:
@@ -200,8 +251,11 @@ def enabled_plugin_mcp_servers() -> list[dict[str, Any]]:
 class PluginSkillSource:
     """把 plugins.loader 的现有函数适配成 SkillSourcePort。"""
 
-    def enabled_plugin_skill_sources(self) -> list[tuple[str, Path]]:
-        return enabled_plugin_skill_sources()
+    def enabled_plugin_skill_sources(self, username: str = "") -> list[tuple[str, Path]]:
+        return enabled_plugin_skill_sources(username)
+
+    def enabled_plugin_skill_sources_for_admin(self) -> list[tuple[str, Path]]:
+        return enabled_plugin_skill_sources_for_admin()
 
     async def refresh_plugin_state(self) -> None:
         await refresh_plugin_state()
@@ -223,7 +277,9 @@ __all__ = [
     "clear_metadata_cache",
     "enabled_plugin_mcp_servers",
     "enabled_plugin_skill_sources",
+    "enabled_plugin_skill_sources_for_admin",
     "enabled_plugins",
+    "is_plugin_visible_to_user",
     "load_plugins_metadata",
     "plugin_dir",
     "plugins_root",

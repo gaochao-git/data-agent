@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "..
 
 from apps.chat_data_app.daos import plugin_dao  # noqa: E402
 from apps.chat_data_app.daos.plugin_dao import PluginDao  # noqa: E402
-from utils.models import Base, ChatDataPlugin  # noqa: E402
+from utils.models import Base, ChatDataPlugin, ChatDataPluginPermission  # noqa: E402
 
 
 @pytest.fixture()
@@ -28,7 +28,10 @@ def plugin_db(monkeypatch):
     async def create_tables():
         async with engine.begin() as conn:
             await conn.run_sync(
-                lambda sync_conn: Base.metadata.create_all(sync_conn, tables=[ChatDataPlugin.__table__])
+                lambda sync_conn: Base.metadata.create_all(
+                    sync_conn,
+                    tables=[ChatDataPlugin.__table__, ChatDataPluginPermission.__table__],
+                )
             )
 
     asyncio.run(create_tables())
@@ -99,5 +102,93 @@ def test_uninstall_soft_delete_then_reactivate(plugin_db):
         assert [r.plugin_name for r in active] == ["ops"]
         assert active[0].delete_flag == 0 and active[0].enabled_flag == 1
         assert await dao.list_enabled_names() == {"ops"}
+
+    asyncio.run(run())
+
+
+def test_replace_permissions_soft_delete_and_revive(plugin_db):
+    async def run():
+        dao = PluginDao()
+        await _install(dao)
+
+        assert await dao.replace_permissions(
+            plugin_name="ops",
+            scope_type="selected",
+            user_names=["张三", "李四"],
+            operator_id="admin",
+            operator_name="管理员",
+        )
+        assert await dao.list_enabled_access() == {"ops": ("selected", frozenset({"张三", "李四"}))}
+        assert await dao.list_active_permissions() == {"ops": ["张三", "李四"]}
+
+        # 取消李四：软删而不是物理删；再次授权时复活原行。
+        assert await dao.replace_permissions(
+            plugin_name="ops",
+            scope_type="selected",
+            user_names=["张三"],
+            operator_id="admin",
+            operator_name="管理员",
+        )
+        assert await dao.list_active_permissions() == {"ops": ["张三"]}
+        assert await dao.replace_permissions(
+            plugin_name="ops",
+            scope_type="selected",
+            user_names=["张三", "李四"],
+            operator_id="admin",
+            operator_name="管理员",
+        )
+        assert await dao.list_active_permissions() == {"ops": ["张三", "李四"]}
+
+        # 切回全部用户会软删所有人员授权。
+        assert await dao.replace_permissions(
+            plugin_name="ops",
+            scope_type="all",
+            user_names=[],
+            operator_id="admin",
+            operator_name="管理员",
+        )
+        assert await dao.list_enabled_access() == {"ops": ("all", frozenset())}
+        assert await dao.list_active_permissions() == {}
+
+    asyncio.run(run())
+
+
+def test_mark_deleted_also_soft_deletes_permissions(plugin_db):
+    async def run():
+        dao = PluginDao()
+        await _install(dao)
+        await dao.replace_permissions(
+            plugin_name="ops",
+            scope_type="selected",
+            user_names=["张三"],
+            operator_id="admin",
+            operator_name="管理员",
+        )
+
+        assert await dao.mark_deleted(plugin_name="ops", operator_id="admin", operator_name="管理员")
+        assert await dao.list_active_permissions() == {}
+        assert await dao.list_enabled_access() == {}
+
+    asyncio.run(run())
+
+
+def test_reinstall_keeps_scope_and_requires_authorization_again(plugin_db):
+    async def run():
+        dao = PluginDao()
+        await _install(dao)
+        await dao.replace_permissions(
+            plugin_name="ops",
+            scope_type="selected",
+            user_names=["张三"],
+            operator_id="admin",
+            operator_name="管理员",
+        )
+
+        assert await dao.mark_deleted(plugin_name="ops", operator_id="admin", operator_name="管理员")
+        await _install(dao)
+
+        # 保留 selected，但卸载时的软删授权不会自动恢复，必须重新授权。
+        assert await dao.list_enabled_access() == {"ops": ("selected", frozenset())}
+        assert await dao.list_active_permissions() == {}
 
     asyncio.run(run())

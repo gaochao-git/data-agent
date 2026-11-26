@@ -73,14 +73,19 @@ async def list_plugins(*, limit: int = 50, offset: int = 0) -> dict[str, Any]:
             {**server, "admission": _mcp_server_admission_view(server)} for server in item.get("mcp_servers") or []
         ]
     audit_by_name: dict[str, ChatDataPlugin] = {}
+    permissions_by_plugin: dict[str, list[str]] = {}
     try:
-        audit_by_name = {row.plugin_name: row for row in await PluginDao().list_active()}
+        dao = PluginDao()
+        audit_by_name = {row.plugin_name: row for row in await dao.list_active()}
+        permissions_by_plugin = await dao.list_active_permissions()
     except Exception as err:
-        logger.warning("读取插件审计字段失败，列表将不展示创建人/创建时间: %s", err)
+        logger.warning("读取插件审计或权限字段失败，列表将降级展示: %s", err)
     for item in items:
         row = audit_by_name.get(item["name"])
         item["create_by_name"] = str(row.create_by_name or "") if row is not None else ""
         item["create_time"] = _format_db_time(row.create_time) if row is not None else ""
+        item["scope_type"] = str(row.scope_type or "all") if row is not None else "all"
+        item["user_names"] = permissions_by_plugin.get(item["name"], []) if item["scope_type"] == "selected" else []
     # 磁盘扫描本身按目录名排序（稳定），此处仅做分页切片
     ordered = sorted(items, key=lambda item: item["name"])
     return {"plugins": ordered[offset : offset + limit], "total": len(ordered)}
@@ -220,9 +225,62 @@ async def uninstall_plugin(
     return manifest
 
 
+def _normalize_plugin_permission_scope(scope_type: str) -> str:
+    normalized = str(scope_type or "").strip().lower()
+    if normalized not in {"all", "selected"}:
+        raise ValueError("权限范围只能是 all 或 selected")
+    return normalized
+
+
+def _normalize_plugin_permission_user_names(user_names: list[str]) -> list[str]:
+    """按 username 精确去重并保留大小写；空白项或超长值直接拒绝。"""
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw in user_names:
+        user_name = str(raw or "").strip()
+        if not user_name:
+            raise ValueError("授权用户名不能为空")
+        if len(user_name) > 100:
+            raise ValueError("授权用户名不能超过 100 个字符")
+        if user_name not in seen:
+            seen.add(user_name)
+            normalized.append(user_name)
+    if not normalized:
+        raise ValueError("指定用户授权至少需要选择一个 username")
+    return normalized
+
+
+async def set_plugin_permissions(
+    name: str,
+    *,
+    scope_type: str,
+    user_names: list[str],
+    operator_id: str,
+    operator_name: str,
+) -> dict[str, Any] | None:
+    """替换插件人员授权；插件不存在时返回 ``None``，否则返回落库结果。"""
+    if not PLUGIN_NAME_PATTERN.fullmatch(name):
+        raise ValueError(f"插件名非法: {name!r}")
+    normalized_scope = _normalize_plugin_permission_scope(scope_type)
+    normalized_users = _normalize_plugin_permission_user_names(user_names) if normalized_scope == "selected" else []
+    updated = await PluginDao().replace_permissions(
+        plugin_name=name,
+        scope_type=normalized_scope,
+        user_names=normalized_users,
+        operator_id=operator_id,
+        operator_name=operator_name,
+    )
+    if updated:
+        await refresh_plugin_state()
+    if not updated:
+        return None
+    return {"scope_type": normalized_scope, "user_names": normalized_users}
+
+
 __all__ = [
     "install_plugin",
     "list_plugins",
+    "set_plugin_permissions",
     "set_plugin_enabled",
     "uninstall_plugin",
 ]

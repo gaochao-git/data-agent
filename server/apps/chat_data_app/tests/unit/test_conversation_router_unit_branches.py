@@ -58,10 +58,14 @@ def test_registration_and_auth_helpers(router_state, monkeypatch):
     assert conversation_router.get_agent_config("agent_a")["get_graph"] is not None
 
     monkeypatch.setattr(
-        conversation_router, "get_forwarded_user", lambda _request: SimpleNamespace(username="name-only")
+        conversation_router, "get_forwarded_user", lambda _request: SimpleNamespace(user_id="", username="name-only")
     )
     assert conversation_router._get_user_id(FakeRequest()) == "name-only"
     assert conversation_router._get_current_user_identity(FakeRequest()) == ("name-only", "name-only")
+    monkeypatch.setattr(
+        conversation_router, "get_forwarded_user", lambda _request: SimpleNamespace(user_id="u1", username="")
+    )
+    assert conversation_router._get_current_user_identity(FakeRequest()) == ("u1", "")
 
     def raise_auth(_request):
         raise AuthenticationError("bad token", status_code=401)

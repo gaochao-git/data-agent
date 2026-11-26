@@ -351,7 +351,7 @@ async def _persist_agent_turn_history(
         persist_kwargs = {
             "conversation_id": conversation_id,
             "user_id": user_id,
-            "operator_name": username or user_id,
+            "operator_name": username or "",
             "turn_id": current_turn_id,
             "messages": messages,
             "reasoning_segments": stream_adapter.reasoning_segments,
@@ -592,6 +592,7 @@ async def _prepare_agent_workspace_runtime(
     thread_id: str,
     datasource_id: str | None,
     user_id: str | None,
+    username: str | None,
     semantic_context: SemanticConversationContext,
     runtime_options: AgentRuntimeOptions,
     created_date: str | None,
@@ -608,6 +609,7 @@ async def _prepare_agent_workspace_runtime(
         workspace_root=workspace_paths["root"],
         user_id=user_id_str,
         backend=runtime_options.workspace_backend,
+        username=str(username or "").strip(),
     )
     # 语义目录预物化：agent 循环前把全部启用模型写好，模型可不经 semantic_search
     # 直接 dir_list/file_grep/file_read 检索 /mnt/user-data/workspace/.system/semantic/。
@@ -930,7 +932,7 @@ async def _persist_agent_user_message(callbacks: _AgentRunStreamCallbacks) -> No
     await conversation_event_service.persist_user_message(
         conversation_id=callbacks.thread_id,
         user_id=callbacks.user_id,
-        operator_name=callbacks.username or callbacks.user_id,
+        operator_name=callbacks.username or "",
         message=callbacks.user_message,
     )
     # 标题是会话元数据：用户消息落库后再异步生成，不阻塞主回答。
@@ -1044,7 +1046,7 @@ async def _persist_agent_failure(
         await conversation_event_service.persist_turn_error(
             conversation_id=req.thread_id,
             user_id=req.user_id,
-            operator_name=req.username or req.user_id,
+            operator_name=req.username or "",
             turn_id=turn_id,
             error=error,
             error_type=exc.__class__.__name__,

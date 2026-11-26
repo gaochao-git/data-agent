@@ -2163,6 +2163,31 @@
         "title": "PluginEnabledRequest",
         "type": "object"
       },
+      "PluginPermissionRequest": {
+        "description": "插件人员授权请求；username 唯一且保留大小写。",
+        "properties": {
+          "scope_type": {
+            "enum": [
+              "all",
+              "selected"
+            ],
+            "title": "Scope Type",
+            "type": "string"
+          },
+          "user_names": {
+            "items": {
+              "type": "string"
+            },
+            "title": "User Names",
+            "type": "array"
+          }
+        },
+        "required": [
+          "scope_type"
+        ],
+        "title": "PluginPermissionRequest",
+        "type": "object"
+      },
       "QueryFavoriteCreateRequest": {
         "description": "创建查询收藏请求",
         "properties": {
@@ -7515,6 +7540,64 @@
           }
         ],
         "summary": "探测插件声明的 MCP server 工具（admin）",
+        "tags": [
+          "ChatData 插件管理（Admin）"
+        ]
+      }
+    },
+    "/api/chatdata/admin/plugins/{plugin_id}/permissions": {
+      "put": {
+        "description": "设置插件对全部用户或指定 username 可用；只影响插件及其技能。",
+        "operationId": "update_plugin_permissions_api_chatdata_admin_plugins__plugin_id__permissions_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plugin_id",
+            "required": true,
+            "schema": {
+              "title": "Plugin Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PluginPermissionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Update Plugin Permissions",
         "tags": [
           "ChatData 插件管理（Admin）"
         ]

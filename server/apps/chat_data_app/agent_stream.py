@@ -1291,7 +1291,7 @@ async def _persist_admitted_inbox_messages(
         await conversation_event_service.persist_user_message(
             conversation_id=callbacks.thread_id,
             user_id=callbacks.user_id or "system",
-            operator_name=callbacks.username or callbacks.user_id or "system",
+            operator_name=callbacks.username or "",
             message=message,
         )
 
@@ -1330,7 +1330,7 @@ async def _mark_agent_waiting_for_user(
         callbacks.run_id,
         question,
         callbacks.user_id or "system",
-        callbacks.username or callbacks.user_id or "system",
+        callbacks.username or "",
         callbacks.owner_token,
     )
 
@@ -1351,7 +1351,7 @@ async def _before_agent_stream(callbacks: _AgentRunStreamCallbacks) -> bool:
             await agent_inbox_service.restore_question_answer(
                 callbacks.run_id,
                 callbacks.user_id or "system",
-                callbacks.username or callbacks.user_id or "system",
+                callbacks.username or "",
                 callbacks.owner_token,
             )
         return False
@@ -1545,6 +1545,7 @@ async def _run_chat_data_agent_stream(
             thread_id=thread_id,
             datasource_id=datasource_id,
             user_id=user_id,
+            username=username,
             semantic_context=semantic_context,
             runtime_options=runtime_options,
             created_date=created_date,
@@ -1820,21 +1821,21 @@ async def sql_completion_handler(
         # 明确执行队列消息时，模型输入来自 adopted_messages，不能再把
         # completion 的展示文本作为第二条当前用户消息注入。
         query="" if queued_message_id else query,
-        operator_name=username or user_id,
+        operator_name=username or "",
         raw_options=options,
         file_ids=file_ids,
     )
     run_id, adopted_messages = await agent_inbox_service.start_run(
         conversation_id,
         user_id,
-        username or user_id,
+        username or "",
         runtime_context,
         adopt_pending_messages=not queued_message_id and not preserve_queued_messages,
         selected_message_id=queued_message_id,
         stream_started_wall_ms=stream_started_wall_ms,
     )
     await _persist_early_user_message_if_needed(
-        conversation_id, user_id, username or user_id, run_id, query, queued_message_id, preserve_queued_messages
+        conversation_id, user_id, username or "", run_id, query, queued_message_id, preserve_queued_messages
     )
 
     logger.info(
@@ -1848,7 +1849,7 @@ async def sql_completion_handler(
         run_id=run_id,
         conversation_id=conversation_id,
         user_id=user_id,
-        operator_name=username or user_id,
+        operator_name=username or "",
     )
     logger.info(
         "ChatData 阶段耗时: conversation_id=%s phase=completion.handler_done elapsed_ms=%d total_ms=%d",

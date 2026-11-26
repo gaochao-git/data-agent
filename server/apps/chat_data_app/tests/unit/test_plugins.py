@@ -50,6 +50,7 @@ def _plugin_root(tmp_path, monkeypatch):
     monkeypatch.setattr(plugin_loader, "plugins_root", lambda chat_data_home=None: root)
     monkeypatch.setattr(plugin_installer, "plugin_dir", lambda name, chat_data_home=None: root / name)
     monkeypatch.setattr(plugin_loader, "_enabled_state", None)
+    monkeypatch.setattr(plugin_loader, "_access_state", None)
     clear_metadata_cache()
     yield root
     clear_metadata_cache()
@@ -357,6 +358,31 @@ def test_enabled_views_exclude_disabled_plugins():
     assert enabled_plugin_mcp_servers() == []
 
 
+def test_selected_plugin_skills_are_filtered_by_username_without_coupling_mcp():
+    _install_default_plugin()
+    _set_enabled_snapshot({"ops-readonly"})
+    plugin_loader._access_state = {
+        "ops-readonly": ("selected", frozenset({"张三"})),
+    }
+
+    assert enabled_plugin_skill_sources("张三")
+    assert enabled_plugin_skill_sources("李四") == []
+    assert enabled_plugin_skill_sources("") == []
+    # selected 只约束插件及插件技能；MCP 未来走独立权限表，当前枚举保持原语义。
+    assert enabled_plugin_mcp_servers()
+
+
+def test_admin_plugin_skill_sources_ignore_current_user_permission():
+    _install_default_plugin()
+    _set_enabled_snapshot({"ops-readonly"})
+    plugin_loader._access_state = {
+        "ops-readonly": ("selected", frozenset({"张三"})),
+    }
+
+    assert enabled_plugin_skill_sources("") == []
+    assert plugin_loader.enabled_plugin_skill_sources_for_admin()
+
+
 def test_plugin_loader_skips_dir_name_mismatch():
     root = plugin_loader.plugins_root()
     target = root / "other-name"
@@ -390,18 +416,19 @@ def test_manifest_edit_invalidates_disk_cache_without_restart():
 @pytest.mark.asyncio
 async def test_refresh_plugin_state_populates_from_dao(monkeypatch):
     class _Dao:
-        async def list_enabled_names(self):
-            return {"ops-readonly"}
+        async def list_enabled_access(self):
+            return {"ops-readonly": ("all", frozenset())}
 
     monkeypatch.setattr(plugin_loader, "PluginDao", lambda *a, **k: _Dao())
     await refresh_plugin_state()
     assert plugin_loader._enabled_state == frozenset({"ops-readonly"})
+    assert plugin_loader._access_state == {"ops-readonly": ("all", frozenset())}
 
 
 @pytest.mark.asyncio
 async def test_refresh_plugin_state_fail_closed_on_db_error(monkeypatch):
     class _Dao:
-        async def list_enabled_names(self):
+        async def list_enabled_access(self):
             raise RuntimeError("db down")
 
     monkeypatch.setattr(plugin_loader, "PluginDao", lambda *a, **k: _Dao())
@@ -409,6 +436,7 @@ async def test_refresh_plugin_state_fail_closed_on_db_error(monkeypatch):
     await refresh_plugin_state()
     # DB 读失败：清空快照、不兜底旧值
     assert plugin_loader._enabled_state == frozenset()
+    assert plugin_loader._access_state == {}
 
 
 # ============ service 编排（install / 启停 / 卸载）============
@@ -423,8 +451,8 @@ async def test_service_install_writes_db_and_refreshes(monkeypatch):
             calls["upsert"] = kw
 
     class _RefreshDao:
-        async def list_enabled_names(self):
-            return {"ops-readonly"}
+        async def list_enabled_access(self):
+            return {"ops-readonly": ("all", frozenset())}
 
     monkeypatch.setattr(plugin_service, "PluginDao", lambda *a, **k: _ServiceDao())
     monkeypatch.setattr(plugin_loader, "PluginDao", lambda *a, **k: _RefreshDao())
@@ -471,8 +499,8 @@ async def test_service_set_enabled_calls_dao_and_refreshes(monkeypatch):
             seen.update(kw)
             return True
 
-        async def list_enabled_names(self):
-            return set()
+        async def list_enabled_access(self):
+            return {}
 
     monkeypatch.setattr(plugin_service, "PluginDao", lambda *a, **k: _Dao())
     monkeypatch.setattr(plugin_loader, "PluginDao", lambda *a, **k: _Dao())
@@ -504,8 +532,8 @@ async def test_service_set_enabled_reconciles_orphan_plugin(monkeypatch):
         async def upsert_installed(self, **kw):
             calls["upsert"] = kw
 
-        async def list_enabled_names(self):
-            return {"ops-readonly"}
+        async def list_enabled_access(self):
+            return {"ops-readonly": ("all", frozenset())}
 
     monkeypatch.setattr(plugin_service, "PluginDao", lambda *a, **k: _Dao())
     monkeypatch.setattr(plugin_loader, "PluginDao", lambda *a, **k: _Dao())
@@ -537,8 +565,8 @@ async def test_service_set_enabled_returns_false_when_missing_on_disk_and_db(mon
         async def upsert_installed(self, **kw):  # pragma: no cover - 不应被调用
             raise AssertionError("磁盘上没有插件时不应补建行")
 
-        async def list_enabled_names(self):
-            return set()
+        async def list_enabled_access(self):
+            return {}
 
     monkeypatch.setattr(plugin_service, "PluginDao", lambda *a, **k: _Dao())
     monkeypatch.setattr(plugin_loader, "PluginDao", lambda *a, **k: _Dao())
@@ -563,8 +591,8 @@ async def test_service_uninstall_removes_files_and_marks_deleted(monkeypatch):
             seen.update(kw)
             return True
 
-        async def list_enabled_names(self):
-            return set()
+        async def list_enabled_access(self):
+            return {}
 
     monkeypatch.setattr(plugin_service, "PluginDao", lambda *a, **k: _Dao())
     monkeypatch.setattr(plugin_loader, "PluginDao", lambda *a, **k: _Dao())
@@ -593,6 +621,7 @@ async def test_service_list_merges_db_audit_fields(monkeypatch):
 
     db_row = _types.SimpleNamespace(
         plugin_name="ops-readonly",
+        scope_type="all",
         create_by_name="张三",
         create_time=datetime(2026, 9, 22, 10, 0, 0),
     )
@@ -601,8 +630,14 @@ async def test_service_list_merges_db_audit_fields(monkeypatch):
         async def list_active(self):
             return [db_row]
 
-        async def list_enabled_names(self):
-            return {"ops-readonly", "ops-orphan"}
+        async def list_active_permissions(self):
+            return {}
+
+        async def list_enabled_access(self):
+            return {
+                "ops-readonly": ("all", frozenset()),
+                "ops-orphan": ("all", frozenset()),
+            }
 
     monkeypatch.setattr(plugin_service, "PluginDao", lambda *a, **k: _Dao())
     monkeypatch.setattr(plugin_loader, "PluginDao", lambda *a, **k: _Dao())
@@ -635,8 +670,11 @@ async def test_service_list_paginates_sorted_by_name(monkeypatch):
         async def list_active(self):
             return []
 
-        async def list_enabled_names(self):
-            return set()
+        async def list_active_permissions(self):
+            return {}
+
+        async def list_enabled_access(self):
+            return {}
 
     monkeypatch.setattr(plugin_service, "PluginDao", lambda *a, **k: _Dao())
     monkeypatch.setattr(plugin_loader, "PluginDao", lambda *a, **k: _Dao())

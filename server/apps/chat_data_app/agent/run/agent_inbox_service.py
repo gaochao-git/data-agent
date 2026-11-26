@@ -336,7 +336,7 @@ class AgentInboxService:
                 "owner_token": owner_token,
                 "conversation_id": run.conversation_id,
                 "user_id": run.user_id,
-                "operator_name": content.get("runtime_context", {}).get("operator_name") or run.user_id,
+                "operator_name": str(content.get("runtime_context", {}).get("operator_name") or "").strip(),
                 "runtime_context": content.get("runtime_context") or {},
                 "turn_id": str(content.get("turn_id") or run_id),
                 "stream_started_wall_ms": content.get("stream_started_wall_ms"),

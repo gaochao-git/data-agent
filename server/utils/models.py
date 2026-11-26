@@ -1163,6 +1163,7 @@ class ChatDataPlugin(Base):
     display_name: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
     description: Mapped[str] = mapped_column(String(500), nullable=False, default="", server_default="")
     enabled_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=1, server_default="1")
+    scope_type: Mapped[str] = mapped_column(String(20), nullable=False, default="all", server_default="all")
     manifest_text: Mapped[str | None] = mapped_column(Text)
     delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
@@ -1177,6 +1178,34 @@ class ChatDataPlugin(Base):
     __table_args__ = (
         UniqueConstraint("plugin_name", name="uniq_plugin_name"),
         Index("idx_plugin_enabled_delete", "enabled_flag", "delete_flag"),
+    )
+
+
+class ChatDataPluginPermission(Base):
+    """ChatData 插件人员权限表。
+
+    仅约束插件及其随插件安装的技能。MCP 后续使用独立权限表，不读取本表。
+    生产库无 DELETE 权限，撤销授权统一软删；重新授权必须复活原唯一键行。
+    """
+
+    __tablename__ = "chat_data_plugin_permission"
+
+    id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
+    plugin_name: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
+    user_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
+    create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
+    update_time: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+    create_by: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
+    create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
+    update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+
+    __table_args__ = (
+        UniqueConstraint("plugin_name", "user_name", name="uniq_plugin_permission"),
+        Index("idx_plugin_permission_user", "user_name", "plugin_name"),
     )
 
 

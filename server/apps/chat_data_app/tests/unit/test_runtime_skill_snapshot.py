@@ -85,6 +85,27 @@ def test_shared_snapshot_reused_across_conversations_and_users(tmp_path, monkeyp
     assert first.is_relative_to(tmp_path / "threads" / "u1" / "runtime" / "skills")
 
 
+def test_build_snapshot_forwards_authenticated_username(tmp_path, monkeypatch):
+    """插件 selected 授权依赖可信 username，快照构建必须原样传到技能源。"""
+    monkeypatch.setattr(storage_paths_module, "THREADS_DIR", tmp_path / "threads")
+    calls: list[tuple[str, str]] = []
+
+    class FakeSkillService:
+        async def list_runtime_skill_sources_async(self, user_id, username=""):
+            calls.append((user_id, username))
+            return []
+
+    monkeypatch.setattr(
+        skill_service_module.skill_service,
+        "list_runtime_skill_sources_async",
+        FakeSkillService().list_runtime_skill_sources_async,
+    )
+
+    asyncio.run(snapshot_module.build_runtime_skill_snapshot_async("u1", "c1", username="张三"))
+
+    assert calls == [("u1", "张三")]
+
+
 def test_runtime_skills_dir_is_pinned_for_one_runtime(tmp_path, monkeypatch):
     """同一 Runtime 内固定一个技能目录，不因技能变化中途切换。"""
     skill_dir = _make_skill(tmp_path / "mgmt", "skill-a")

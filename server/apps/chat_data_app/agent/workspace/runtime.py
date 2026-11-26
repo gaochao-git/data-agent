@@ -205,6 +205,8 @@ class ConversationWorkspaceRuntime:
     workspace_root: str
     user_id: str
     backend: WorkspaceBackend | str = "local"
+    # 可信认证身份中的唯一 username；插件 selected 授权与用户技能归属不是同一概念。
+    username: str = ""
     # 当前用户有权访问的全部技能名（由请求入口按 user_id 解析得到）。
     # 仅用于说明/调试，不作为本地读取的前置条件。
     available_skill_names: list[str] = field(default_factory=list)
@@ -241,7 +243,11 @@ class ConversationWorkspaceRuntime:
         if self._runtime_skills_dir is not None and is_runtime_skill_snapshot_ready(self._runtime_skills_dir):
             return self._runtime_skills_dir
         cid = Path(self.workspace_root).resolve().parent.name
-        self._runtime_skills_dir = await build_runtime_skill_snapshot_async(self.user_id, cid)
+        self._runtime_skills_dir = await build_runtime_skill_snapshot_async(
+            self.user_id,
+            cid,
+            username=self.username,
+        )
         return self._runtime_skills_dir
 
     def activate_semantic_cache(self, *, datasource_id: str) -> Path:
@@ -270,7 +276,12 @@ class ConversationWorkspaceRuntime:
         # 快照目录直接由工作区根推导（self.runtime_skills_dir），不从路径反推 uid。
         cid = Path(self.workspace_root).resolve().parent.name
         try:
-            await build_runtime_skill_snapshot_async(self.user_id, cid, target_dir=snapshot_dir)
+            await build_runtime_skill_snapshot_async(
+                self.user_id,
+                cid,
+                username=self.username,
+                target_dir=snapshot_dir,
+            )
         except Exception as err:
             logger.warning("惰性构建技能快照失败，技能读取可能不可用: %s", err)
 
@@ -514,6 +525,7 @@ def workspace_runtime_from_state(
     state: Mapping[str, Any] | None,
     *,
     user_id: str | None = None,
+    username: str | None = None,
 ) -> ConversationWorkspaceRuntime:
     """Rebuild a workspace runtime from serializable AgentState fields.
 
@@ -530,6 +542,7 @@ def workspace_runtime_from_state(
         workspace_root=workspace_root,
         user_id=str(user_id or "system").strip() or "system",
         backend=backend_name,
+        username=str(username or "").strip(),
     )
 
 

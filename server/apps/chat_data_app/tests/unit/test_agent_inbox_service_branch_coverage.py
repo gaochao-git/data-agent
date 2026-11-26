@@ -255,6 +255,23 @@ async def test_prepare_pending_run_returns_none_for_ineligible_runs():
 
 
 @pytest.mark.asyncio
+async def test_prepare_pending_run_does_not_fallback_to_user_id_for_username():
+    """Run 缺 username 时保持空值，插件 selected 授权必须 fail-closed。"""
+    run = _run(record_status="pending")
+    service = _service(
+        get_run_by_id=run,
+        lock_thread=SimpleNamespace(),
+        get_run_by_id_for_update=run,
+        get_active_run=None,
+    )
+
+    prepared = await service.prepare_pending_run("r1")
+
+    assert prepared is not None
+    assert prepared["operator_name"] == ""
+
+
+@pytest.mark.asyncio
 async def test_reap_expired_runs_skips_missing_and_collects():
     assert await _service(list_expired_runs=[_run()]).reap_expired_runs() == []
 

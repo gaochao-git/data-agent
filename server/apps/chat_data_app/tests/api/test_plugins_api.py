@@ -8,6 +8,7 @@ import io
 import json
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -34,11 +35,20 @@ def _fake_plugin_db(monkeypatch):
     store: dict[str, dict] = {}
 
     class _FakeDao:
-        async def list_enabled_names(self):
-            return {n for n, v in store.items() if v["enabled"] and not v["deleted"]}
+        async def list_enabled_access(self):
+            return {
+                n: (v.get("scope_type", "all"), frozenset(v.get("user_names", [])))
+                for n, v in store.items()
+                if v["enabled"] and not v["deleted"]
+            }
 
         async def upsert_installed(self, *, plugin_name, **_kw):
-            store[plugin_name] = {"enabled": True, "deleted": False}
+            current = store.setdefault(
+                plugin_name,
+                {"enabled": True, "deleted": False, "scope_type": "all", "user_names": []},
+            )
+            current["enabled"] = True
+            current["deleted"] = False
 
         async def set_enabled(self, *, plugin_name, enabled, **_kw):
             row = store.get(plugin_name)
@@ -53,6 +63,34 @@ def _fake_plugin_db(monkeypatch):
                 return False
             row["deleted"] = True
             row["enabled"] = False
+            row["user_names"] = []
+            return True
+
+        async def list_active(self):
+            return [
+                SimpleNamespace(
+                    plugin_name=name,
+                    scope_type=row.get("scope_type", "all"),
+                    create_by_name="管理员",
+                    create_time=None,
+                )
+                for name, row in store.items()
+                if not row["deleted"]
+            ]
+
+        async def list_active_permissions(self):
+            return {
+                name: list(row.get("user_names", []))
+                for name, row in store.items()
+                if not row["deleted"] and row.get("scope_type") == "selected"
+            }
+
+        async def replace_permissions(self, *, plugin_name, scope_type, user_names, **_kw):
+            row = store.get(plugin_name)
+            if not row or row["deleted"]:
+                return False
+            row["scope_type"] = scope_type
+            row["user_names"] = list(user_names) if scope_type == "selected" else []
             return True
 
     monkeypatch.setattr(plugin_service, "PluginDao", lambda *a, **k: _FakeDao())
@@ -80,12 +118,32 @@ def test_plugin_routes_full_lifecycle(client, auth_headers, plugin_root: Path):
     assert install_response.status_code == 200
     assert install_response.json()["status"] == "success"
     assert install_response.json()["data"]["plugin"]["name"] == "ops-readonly"
+    assert install_response.json()["data"]["plugin"]["enabled"] is True
+    assert install_response.json()["data"]["plugin"]["scope_type"] == "all"
+    assert install_response.json()["data"]["plugin"]["user_names"] == []
 
     list_response = client.get("/api/chatdata/admin/plugins", headers=auth_headers)
     assert list_response.status_code == 200
     plugins = list_response.json()["data"]["plugins"]
     assert [item["name"] for item in plugins] == ["ops-readonly"]
     assert plugins[0]["enabled"] is True
+    assert plugins[0]["scope_type"] == "all"
+
+    permission_response = client.put(
+        "/api/chatdata/admin/plugins/ops-readonly/permissions",
+        json={"scope_type": "selected", "user_names": [" 张三 ", "李四", "张三"]},
+        headers=auth_headers,
+    )
+    assert permission_response.status_code == 200
+    assert permission_response.json()["status"] == "success"
+    assert permission_response.json()["data"] == {
+        "name": "ops-readonly",
+        "scope_type": "selected",
+        "user_names": ["张三", "李四"],
+    }
+    permission_plugins = client.get("/api/chatdata/admin/plugins", headers=auth_headers).json()["data"]["plugins"]
+    assert permission_plugins[0]["scope_type"] == "selected"
+    assert permission_plugins[0]["user_names"] == ["张三", "李四"]
 
     disable_response = client.put(
         "/api/chatdata/admin/plugins/ops-readonly/enabled",
@@ -147,6 +205,97 @@ def test_plugin_enable_invalid_name_returns_manifest_invalid(client, auth_header
         headers=auth_headers,
     )
     assert response.json()["code"] == ErrorCode.CHATDATA_PLUGIN_MANIFEST_INVALID
+
+
+def test_plugin_permission_validation_and_all_clears_users(client, auth_headers, plugin_root):
+    installed = client.post(
+        "/api/chatdata/admin/plugins/install",
+        files={"file": ("p.zip", _plugin_zip(), "application/zip")},
+        headers=auth_headers,
+    )
+    assert installed.json()["status"] == "success"
+
+    empty_selected = client.put(
+        "/api/chatdata/admin/plugins/ops-readonly/permissions",
+        json={"scope_type": "selected", "user_names": []},
+        headers=auth_headers,
+    )
+    assert empty_selected.json()["code"] == ErrorCode.CHATDATA_PLUGIN_PERMISSION_INVALID
+
+    blank_user = client.put(
+        "/api/chatdata/admin/plugins/ops-readonly/permissions",
+        json={"scope_type": "selected", "user_names": ["  "]},
+        headers=auth_headers,
+    )
+    assert blank_user.json()["code"] == ErrorCode.CHATDATA_PLUGIN_PERMISSION_INVALID
+
+    long_user = client.put(
+        "/api/chatdata/admin/plugins/ops-readonly/permissions",
+        json={"scope_type": "selected", "user_names": ["x" * 101]},
+        headers=auth_headers,
+    )
+    assert long_user.json()["code"] == ErrorCode.CHATDATA_PLUGIN_PERMISSION_INVALID
+
+    all_users = client.put(
+        "/api/chatdata/admin/plugins/ops-readonly/permissions",
+        json={"scope_type": "all", "user_names": ["ignored"]},
+        headers=auth_headers,
+    )
+    assert all_users.json()["data"]["user_names"] == []
+    listed = client.get("/api/chatdata/admin/plugins", headers=auth_headers).json()["data"]["plugins"]
+    assert listed[0]["scope_type"] == "all"
+    assert listed[0]["user_names"] == []
+
+    missing = client.put(
+        "/api/chatdata/admin/plugins/ghost/permissions",
+        json={"scope_type": "all", "user_names": []},
+        headers=auth_headers,
+    )
+    assert missing.json()["code"] == ErrorCode.CHATDATA_PLUGIN_NOT_FOUND
+
+
+def test_selected_plugin_skill_permission_end_to_end(
+    client,
+    auth_headers,
+    plugin_root,
+    monkeypatch,
+):
+    from apps.chat_data_app.agent.skills import skill_service as skill_service_module
+
+    installed = client.post(
+        "/api/chatdata/admin/plugins/install",
+        files={"file": ("p.zip", _plugin_zip(), "application/zip")},
+        headers=auth_headers,
+    )
+    assert installed.json()["status"] == "success"
+
+    async def no_user_skills(*_args, **_kwargs):
+        return []
+
+    monkeypatch.setattr(skill_service_module.skill_service.dao, "list_skills_async", no_user_skills)
+    unauthorized_headers = {**auth_headers, "X-Username": "未授权用户".encode()}
+
+    all_users = client.get("/api/chatdata/skills", headers=unauthorized_headers).json()["data"]["skills"]
+    assert "plugin:fault-analysis" in {item["skill_id"] for item in all_users}
+
+    updated = client.put(
+        "/api/chatdata/admin/plugins/ops-readonly/permissions",
+        json={"scope_type": "selected", "user_names": ["测试用户"]},
+        headers=auth_headers,
+    )
+    assert updated.json()["status"] == "success"
+
+    authorized = client.get("/api/chatdata/skills", headers=auth_headers).json()["data"]["skills"]
+    assert "plugin:fault-analysis" in {item["skill_id"] for item in authorized}
+    unauthorized = client.get("/api/chatdata/skills", headers=unauthorized_headers).json()["data"]["skills"]
+    assert "plugin:fault-analysis" not in {item["skill_id"] for item in unauthorized}
+
+    assert client.get("/api/chatdata/skills/plugin:fault-analysis", headers=auth_headers).json()["status"] == "success"
+    denied_detail = client.get("/api/chatdata/skills/plugin:fault-analysis", headers=unauthorized_headers)
+    assert denied_detail.json()["code"] == ErrorCode.CHATDATA_NOT_FOUND
+
+    admin_detail = client.get("/api/chatdata/admin/skills/plugin:fault-analysis", headers=unauthorized_headers)
+    assert admin_detail.json()["status"] == "success"
 
 
 def test_plugin_changes_invalidate_mcp_tool_cache(client, auth_headers, plugin_root, monkeypatch):

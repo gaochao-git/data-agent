@@ -16,15 +16,19 @@ _REQ = cast(Request, None)
 
 class FakeSkillService:
     def __init__(self):
+        self.list_kwargs = None
+        self.get_kwargs = None
         self.created_payload = None
         self.updated_payload = None
         self.deleted = None
         self.favorite_state = None
 
     async def list_skills_async(self, **kwargs):
+        self.list_kwargs = kwargs
         return [{"skill_id": "skill_a", "skill_name": "analysis", "scope": kwargs.get("scope")}]
 
     async def get_skill_async(self, skill_name, **kwargs):
+        self.get_kwargs = kwargs
         if skill_name != "analysis":
             return None
         return {"skill_id": "skill_a", "skill_name": skill_name, "skill_title": "分析技能"}
@@ -113,6 +117,8 @@ def test_list_and_get_skills_api_contract(client, auth_headers, monkeypatch):
     assert list_response.json()["data"]["skills"][0]["scope"] == "mine"
     assert detail_response.status_code == 200
     assert detail_response.json()["data"]["skill_name"] == "analysis"
+    assert fake_service.list_kwargs["username"] == "测试用户"
+    assert fake_service.get_kwargs["username"] == "测试用户"
 
 
 def test_create_update_delete_skill_api_contract(client, auth_headers, monkeypatch):

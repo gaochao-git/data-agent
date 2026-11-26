@@ -741,6 +741,31 @@ def test_set_stream_generator_is_used_by_stream_factory():
     stream.aclose()
 
 
+def test_build_stream_factory_does_not_fallback_to_user_id_for_username():
+    """插件人员权限只认认证 username；缺失时向执行流传空值并 fail-closed。"""
+    captured = {}
+
+    def fake_stream_generator(request):
+        captured["username"] = request.username
+
+        async def stream():
+            yield "event: message\ndata: {}\n\n"
+
+        return stream()
+
+    runtime = AgentRunRuntime(
+        inbox_service=object(),
+        event_service=type("Events", (), {"bus": _EventBus()})(),
+        event_bus=_EventBus(),
+    )
+    runtime.set_stream_generator(fake_stream_generator)
+    prepared = _prepared()
+    prepared.pop("operator_name")
+    stream = runtime._build_stream_factory(prepared)()
+    assert captured["username"] == ""
+    stream.aclose()
+
+
 def test_build_stream_factory_prefers_run_row_arrival_stamp():
     """Run 行带的请求到达墙钟原样透传（用户气泡对齐口径）。"""
     captured = {}

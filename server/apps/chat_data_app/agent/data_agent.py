@@ -578,6 +578,7 @@ def _resolve_workspace_runtime(
     runtime: ConversationWorkspaceRuntime | None,
     options: AgentRuntimeOptions,
     user_id: str | None,
+    username: str | None,
 ) -> ConversationWorkspaceRuntime:
     """未显式传入时构造历史回放工作区；独立函数控制装配函数复杂度。"""
     if runtime is not None:
@@ -587,6 +588,7 @@ def _resolve_workspace_runtime(
         workspace_root=workspace_paths["root"],
         user_id=user_id or "system",
         backend=options.workspace_backend,
+        username=str(username or "").strip(),
     )
 
 
@@ -658,7 +660,12 @@ def _resolve_assembly_inputs(
     business = business_context or BusinessContext()
     invocation = model_invocation or ModelInvocationConfig()
     model_id = _normalize_model_id(invocation.model_id)
-    runtime = _resolve_workspace_runtime(workspace_runtime, options, identity.user_id)
+    runtime = _resolve_workspace_runtime(
+        workspace_runtime,
+        options,
+        identity.user_id,
+        identity.operator_name,
+    )
     return _AgentAssemblyInputs(
         spec=spec,
         options=options,

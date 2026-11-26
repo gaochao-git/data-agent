@@ -310,11 +310,11 @@ def _get_user_id(request: Request) -> str:
 
 
 def _get_current_user_identity(request: Request) -> tuple[str, str]:
-    """获取当前用户ID和展示名称。"""
+    """获取当前用户 ID 与可信 username；username 缺失时不回退为 user_id。"""
     user = _get_current_user(request)
     user_id = getattr(user, "user_id", None) or getattr(user, "username", None) or "system"
-    username = getattr(user, "username", None) or user_id
-    return str(user_id), str(username)
+    username = str(getattr(user, "username", "") or "").strip()
+    return str(user_id), username
 
 
 # ============ 路由 ============

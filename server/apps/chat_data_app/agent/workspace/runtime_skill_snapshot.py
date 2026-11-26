@@ -424,6 +424,7 @@ async def build_runtime_skill_snapshot_async(
     user_id: str,
     conversation_id: str,
     *,
+    username: str = "",
     target_dir: Path | None = None,
 ) -> Path:
     """按管理域当前状态构建（指纹一致时复用）该用户的 runtime-skills 快照。
@@ -439,7 +440,12 @@ async def build_runtime_skill_snapshot_async(
     target = Path(target_dir) if target_dir is not None else runtime_skills_cache_dir(user_id)
     was_ready = is_runtime_skill_snapshot_ready(target)
     source = get_skill_snapshot_source()
-    sources = await source.list_runtime_skill_sources_async(user_id) if source is not None else []
+    if source is None:
+        sources = []
+    elif username:
+        sources = await source.list_runtime_skill_sources_async(user_id, username=username)
+    else:
+        sources = await source.list_runtime_skill_sources_async(user_id)
     current_fingerprints = compute_skill_fingerprints(sources)
     if was_ready and _read_snapshot_fingerprints(target) == current_fingerprints:
         return target

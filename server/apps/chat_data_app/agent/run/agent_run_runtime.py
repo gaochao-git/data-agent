@@ -332,7 +332,7 @@ class AgentRunRuntime:
                     user_query=str(context.get("query") or ""),
                     datasource_id=context.get("datasource_id"),
                     user_id=prepared["user_id"],
-                    username=prepared.get("operator_name") or prepared["user_id"],
+                    username=str(prepared.get("operator_name") or "").strip(),
                     # 请求到达墙钟：优先取 completion/claim 写入 Run 行的盖章
                     # （用户气泡对齐口径）；缺失（定时任务/continuation）回退
                     # 派发时刻，保持原行为。
@@ -370,7 +370,7 @@ class AgentRunRuntime:
             return None
         state.conversation_id = prepared["conversation_id"]
         state.user_id = prepared["user_id"]
-        state.operator_name = prepared.get("operator_name") or state.operator_name or state.user_id
+        state.operator_name = str(prepared.get("operator_name") or "").strip()
         try:
             await self._event_service.claim_owner(state.run_id, prepared["owner_token"])
         except Exception:

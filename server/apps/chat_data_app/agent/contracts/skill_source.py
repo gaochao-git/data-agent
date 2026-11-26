@@ -9,7 +9,9 @@ from typing import Protocol
 class SkillSourcePort(Protocol):
     """已启用插件声明的技能源。"""
 
-    def enabled_plugin_skill_sources(self) -> list[tuple[str, Path]]: ...
+    def enabled_plugin_skill_sources(self, username: str = "") -> list[tuple[str, Path]]: ...
+
+    def enabled_plugin_skill_sources_for_admin(self) -> list[tuple[str, Path]]: ...
 
     async def refresh_plugin_state(self) -> None: ...
 
@@ -33,7 +35,11 @@ __all__ = ["SkillSourcePort", "get_skill_source", "register_skill_source"]
 class SkillSnapshotPort(Protocol):
     """workspace 构建会话技能快照所需的技能源。"""
 
-    async def list_runtime_skill_sources_async(self, user_id: str) -> list[tuple[str, Path]]: ...
+    async def list_runtime_skill_sources_async(
+        self,
+        user_id: str,
+        username: str = "",
+    ) -> list[tuple[str, Path]]: ...
 
 
 _snapshot_source: SkillSnapshotPort | None = None

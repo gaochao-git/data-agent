@@ -2027,6 +2027,19 @@ export function setAdminPluginEnabled(pluginId: string, enabled: boolean): Promi
   })
 }
 
+/** 后台：设置插件人员授权（全部用户或指定 username；仅影响插件与插件技能）。 */
+export function setAdminPluginPermissions(
+  pluginId: string,
+  scopeType: 'all' | 'selected',
+  userNames: string[]
+): Promise<ApiResponse<{ name: string; scope_type: 'all' | 'selected'; user_names: string[] }>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/plugins/${pluginId}/permissions`,
+    method: 'put',
+    data: { scope_type: scopeType, user_names: userNames }
+  })
+}
+
 /** 后台：卸载插件并删除其目录 */
 export function uninstallPlugin(pluginId: string): Promise<ApiResponse<{ name: string; version: string }>> {
   return request({

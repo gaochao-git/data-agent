@@ -103,7 +103,7 @@ async def test_persist_agent_user_message_schedules_title_after_persistence(monk
     phases: list[str] = []
 
     async def fake_persist(**kwargs):
-        calls.append(("persist", kwargs["conversation_id"]))
+        calls.append(("persist", kwargs))
 
     def fake_schedule(**kwargs):
         calls.append(("title", kwargs))
@@ -123,7 +123,9 @@ async def test_persist_agent_user_message_schedules_title_after_persistence(monk
 
     await agent_run_support._persist_agent_user_message(callbacks)  # type: ignore[arg-type]
 
-    assert calls[0] == ("persist", "conv-1")
+    assert calls[0][0] == "persist"
+    assert calls[0][1]["conversation_id"] == "conv-1"
+    assert calls[0][1]["operator_name"] == "用户一"
     assert calls[1][0] == "title"
     schedule_kwargs = calls[1][1]
     assert schedule_kwargs["conversation_id"] == "conv-1"
@@ -131,6 +133,32 @@ async def test_persist_agent_user_message_schedules_title_after_persistence(monk
     assert schedule_kwargs["model_id"] == "model-1"
     assert callable(schedule_kwargs["on_updated"])
     assert phases == ["persist_user_message"]
+
+
+@pytest.mark.asyncio
+async def test_persist_agent_user_message_does_not_put_user_id_in_operator_name(monkeypatch):
+    captured: dict = {}
+
+    async def fake_persist(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(agent_run_support.conversation_event_service, "persist_user_message", fake_persist)
+    monkeypatch.setattr(agent_run_support.conversation, "schedule_title_generation", lambda **_kwargs: None)
+    callbacks = SimpleNamespace(
+        user_message=HumanMessage(content="分析销售额", id="turn-1"),
+        thread_id="conv-1",
+        user_id="u1",
+        username=None,
+        run_id="run-1",
+        owner_token="owner-1",
+        model_id="model-1",
+        log_phase=lambda _phase: None,
+    )
+
+    await agent_run_support._persist_agent_user_message(callbacks)  # type: ignore[arg-type]
+
+    assert captured["user_id"] == "u1"
+    assert captured["operator_name"] == ""
 
 
 @pytest.mark.asyncio
@@ -251,7 +279,7 @@ async def test_persist_agent_failure_forwards_stats_and_returns_error_sse(monkey
     )
 
     assert captured["conversation_id"] == "conv-1"
-    assert captured["operator_name"] == "user-1"
+    assert captured["operator_name"] == ""
     assert captured["turn_id"] == "turn-1"
     assert captured["run_id"] == "run-1"
     assert captured["error"] == "本轮执行已达到 7 步上限，任务被中止。"

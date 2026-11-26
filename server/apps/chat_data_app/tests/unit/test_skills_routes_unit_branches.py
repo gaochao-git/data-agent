@@ -172,7 +172,15 @@ class FakeSkillService:
             raise RuntimeError("favorite down")
         return {"skill_id": skill_id, "favorite": favorite}
 
-    async def get_skill_async(self, skill_name, include_draft=False, user_id="", user_names=None):
+    async def get_skill_async(
+        self,
+        skill_name,
+        include_draft=False,
+        user_id="",
+        user_names=None,
+        username="",
+        **_kwargs,
+    ):
         self._record("get_skill_async", skill_name, include_draft=include_draft, user_id=user_id, user_names=user_names)
         if skill_name == "missing":
             return None

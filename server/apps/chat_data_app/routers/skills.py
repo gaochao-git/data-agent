@@ -36,6 +36,7 @@ async def list_skills(
             user_id=user_id,
             scope=normalized_scope,
             user_names=_current_user_names(user),
+            username=str(user.username or "").strip(),
         )
         return business_response(data={"skills": skills, "total": len(skills)}, msg="获取成功")
     except HTTPException:
@@ -144,7 +145,12 @@ async def get_admin_skill(skill_name: str, request: Request) -> JSONResponse:
     try:
         _get_current_user(request)
         owner = await skill_service.get_skill_owner_for_admin_async(skill_name)
-        skill = await skill_service.get_skill_async(skill_name, include_draft=True, user_id=owner)
+        skill = await skill_service.get_skill_async(
+            skill_name,
+            include_draft=True,
+            user_id=owner,
+            include_all_plugin_skills=True,
+        )
         if not skill:
             return business_response(msg=f"技能不存在: {skill_name}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
         return business_response(data=skill, msg="获取成功")
@@ -559,7 +565,11 @@ async def get_skill(skill_name: str, request: Request) -> JSONResponse:
         user = _get_current_user(request)
         user_id = str(user.user_id).strip()
         skill = await skill_service.get_skill_async(
-            skill_name, include_draft=True, user_id=user_id, user_names=_current_user_names(user)
+            skill_name,
+            include_draft=True,
+            user_id=user_id,
+            user_names=_current_user_names(user),
+            username=str(user.username or "").strip(),
         )
         if not skill:
             return business_response(msg=f"技能不存在: {skill_name}", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")

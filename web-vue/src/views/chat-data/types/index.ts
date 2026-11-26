@@ -1295,6 +1295,8 @@ export interface PluginManifestInfo {
 // 后台插件列表条目（manifest + 运行状态 + DB 审计字段）
 export interface PluginInfo extends PluginManifestInfo {
   enabled: boolean
+  scope_type: 'all' | 'selected'
+  user_names: string[]
   create_by_name?: string
   create_time?: string
 }

@@ -6,6 +6,36 @@
 
 ## 数据库变更
 
+### 插件人员权限
+
+存量插件通过 `scope_type` 默认值 `all` 保持原行为；新表仅用于插件及其随插件安装的
+技能授权，不用于 MCP 授权。上线前执行：
+
+```sql
+ALTER TABLE `chat_data_plugin`
+  ADD COLUMN `scope_type` varchar(20) NOT NULL DEFAULT 'all'
+  COMMENT '权限范围: all-全部用户, selected-指定用户';
+
+CREATE TABLE `chat_data_plugin_permission` (
+  `id` bigint(20) NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `plugin_name` varchar(64) NOT NULL DEFAULT '' COMMENT '插件名',
+  `user_name` varchar(100) NOT NULL DEFAULT '' COMMENT '授权用户名',
+  `delete_flag` tinyint NOT NULL DEFAULT '0' COMMENT '删除标识: 0-未删除, 1-已删除',
+  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `create_by` varchar(255) NOT NULL DEFAULT '' COMMENT '创建人',
+  `create_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '创建人名称',
+  `update_by` varchar(255) NOT NULL DEFAULT '' COMMENT '更新人',
+  `update_by_name` varchar(100) NOT NULL DEFAULT '' COMMENT '更新人名称',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_plugin_permission` (`plugin_name`, `user_name`),
+  KEY `idx_plugin_permission_user` (`user_name`, `plugin_name`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='ChatData 插件人员权限表';
+```
+
+`chat_data_plugin_permission` 的唯一键不含 `delete_flag`。生产库账号无 DELETE 权限，
+撤销授权只能软删；重新授权必须复活同一行，不能插新行。
+
 ### 子智能体多轮会话快照
 
 上线前执行：
